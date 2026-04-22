@@ -8340,14 +8340,48 @@ static ant_value_t builtin_array_join(ant_t *js, ant_value_t *args, int nargs) {
   free(result); return ret;
 }
 
-static inline bool array_includes_same_value_zero(ant_t *js, ant_value_t val, ant_value_t search) {
-  return (
-    vtype(val) == T_NUM &&
-    vtype(search) == T_NUM &&
-    isnan(tod(val)) && 
-    isnan(tod(search))
-  ) || strict_eq_values(js, val, search);
+typedef struct {
+  ant_value_t search;
+  double search_num;
+  uint8_t search_type;
+  uint8_t mode;
+} array_includes_query_t;
+
+enum {
+  ARRAY_INCLUDES_MATCH_GENERIC = 0,
+  ARRAY_INCLUDES_MATCH_NUM     = 1,
+  ARRAY_INCLUDES_MATCH_NAN     = 2,
+  ARRAY_INCLUDES_MATCH_ID      = 3,
+};
+
+static inline array_includes_query_t array_includes_prepare_query(ant_value_t search) {
+  array_includes_query_t q = {
+    .search = search,
+    .search_num = 0.0,
+    .search_type = vtype(search),
+    .mode = ARRAY_INCLUDES_MATCH_GENERIC,
+  };
+
+  if (q.search_type == T_NUM) {
+    q.search_num = tod(search);
+    q.mode = isnan(q.search_num) 
+      ? ARRAY_INCLUDES_MATCH_NAN 
+      : ARRAY_INCLUDES_MATCH_NUM;
+  } else if (
+    q.search_type != T_STR &&
+    q.search_type != T_BIGINT
+  ) q.mode = ARRAY_INCLUDES_MATCH_ID;
+
+  return q;
 }
+
+static inline bool array_includes_matches(ant_t *js, const array_includes_query_t *q, ant_value_t val) {
+switch (q->mode) {
+  case ARRAY_INCLUDES_MATCH_NUM: return vtype(val) == T_NUM && tod(val) == q->search_num;
+  case ARRAY_INCLUDES_MATCH_NAN: return vtype(val) == T_NUM && isnan(tod(val));
+  case ARRAY_INCLUDES_MATCH_ID:  return vtype(val) == q->search_type && vdata(val) == vdata(q->search);
+  default: return strict_eq_values(js, val, q->search);
+}}
 
 static inline ant_offset_t array_includes_length_from_number(double len_num) {
   if (isnan(len_num) || len_num <= 0) return 0;
@@ -8370,8 +8404,53 @@ static inline ant_offset_t array_includes_start_index(ant_t *js, ant_value_t *ar
   return (ant_offset_t)start;
 }
 
+static ant_value_t array_includes_length_value(ant_t *js, ant_value_t arr) {
+  if (array_obj_ptr(arr) && !is_proxy(arr)) return tov((double)get_array_length(js, arr));
+  if (is_proxy(arr)) return proxy_get(js, arr, "length", 6);
+
+  ant_offset_t off = lkp(js, arr, "length", 6);
+  if (off != 0) {
+    const ant_shape_prop_t *prop_meta = prop_shape_meta(js, off);
+    if (prop_meta && prop_meta->has_getter) {
+      ant_value_t accessor_result;
+      if (try_accessor_getter(js, arr, "length", 6, &accessor_result)) return accessor_result;
+    }
+    return propref_load(js, off);
+  }
+
+  if (lkp_proto(js, arr, "length", 6) == 0) return js_mkundef();
+  return js_getprop_super(js, get_proto(js, arr), arr, "length");
+}
+
+static ant_value_t array_includes_get_index_value(
+  ant_t *js, ant_value_t arr, ant_offset_t idx, char *idxstr, size_t idxlen
+) {
+  if (is_proxy(arr)) return proxy_get(js, arr, idxstr, idxlen);
+
+  if (array_obj_ptr(arr)) {
+    if (arr_has(js, arr, idx)) return arr_get(js, arr, idx);
+    if (lkp_proto(js, arr, idxstr, idxlen) == 0) return js_mkundef();
+    idxstr[idxlen] = '\0';
+    return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
+  }
+
+  ant_offset_t off = lkp(js, arr, idxstr, idxlen);
+  if (off != 0) {
+    const ant_shape_prop_t *prop_meta = prop_shape_meta(js, off);
+    if (prop_meta && prop_meta->has_getter) {
+      ant_value_t accessor_result;
+      if (try_accessor_getter(js, arr, idxstr, idxlen, &accessor_result)) return accessor_result;
+    }
+    return propref_load(js, off);
+  }
+
+  if (lkp_proto(js, arr, idxstr, idxlen) == 0) return js_mkundef();
+  idxstr[idxlen] = '\0';
+  return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
+}
+
 static ant_value_t array_includes_dense_fast(
-  ant_t *js, ant_value_t arr, ant_value_t search, ant_value_t *args, int nargs
+  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_value_t *args, int nargs
 ) {
   if (!array_obj_ptr(arr) || is_proxy(arr)) return js_mkundef();
 
@@ -8380,6 +8459,9 @@ static ant_value_t array_includes_dense_fast(
 
   ant_offset_t doff = get_dense_buf(arr);
   if (!doff) return js_mkundef();
+  
+  ant_value_t *dense = dense_data(doff);
+  if (!dense) return js_mkundef();
 
   ant_offset_t dense_len = dense_iterable_length(js, arr);
   if (dense_len != len) return js_mkundef();
@@ -8388,18 +8470,18 @@ static ant_value_t array_includes_dense_fast(
   if (start >= len) return mkval(T_BOOL, 0);
 
   for (ant_offset_t i = start; i < len; i++) {
-    ant_value_t val = dense_get(doff, i);
+    ant_value_t val = dense[i];
     if (is_empty_slot(val)) return js_mkundef();
-    if (array_includes_same_value_zero(js, val, search)) return mkval(T_BOOL, 1);
+    if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
   }
 
   return mkval(T_BOOL, 0);
 }
 
 static ant_value_t array_includes_generic(
-  ant_t *js, ant_value_t arr, ant_value_t search, ant_value_t *args, int nargs
+  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_value_t *args, int nargs
 ) {
-  ant_value_t len_val = js_getprop_fallback(js, arr, "length");
+  ant_value_t len_val = array_includes_length_value(js, arr);
   if (is_err(len_val)) return len_val;
 
   ant_offset_t len = array_includes_length_from_number(js_to_number(js, len_val));
@@ -8409,13 +8491,12 @@ static ant_value_t array_includes_generic(
   if (start >= len) return mkval(T_BOOL, 0);
 
   for (ant_offset_t i = start; i < len; i++) {
-    char idxstr[24];
+    char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-    idxstr[idxlen] = '\0';
 
-    ant_value_t val = js_getprop_fallback(js, arr, idxstr);
+    ant_value_t val = array_includes_get_index_value(js, arr, i, idxstr, idxlen);
     if (is_err(val)) return val;
-    if (array_includes_same_value_zero(js, val, search)) return mkval(T_BOOL, 1);
+    if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
   }
   
   return mkval(T_BOOL, 0);
@@ -8427,12 +8508,14 @@ static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int narg
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "includes called on non-array");
   
-  ant_value_t search = (nargs > 0) ? args[0] : js_mkundef();
+  array_includes_query_t query = array_includes_prepare_query(
+    (nargs > 0) ? args[0] : js_mkundef()
+  );
 
-  ant_value_t fast = array_includes_dense_fast(js, arr, search, args, nargs);
+  ant_value_t fast = array_includes_dense_fast(js, arr, &query, args, nargs);
   if (vtype(fast) != T_UNDEF) return fast;
 
-  return array_includes_generic(js, arr, search, args, nargs);
+  return array_includes_generic(js, arr, &query, args, nargs);
 }
 
 static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) {
