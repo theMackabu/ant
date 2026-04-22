@@ -1191,20 +1191,20 @@ compat-table/es6/well-known.toStringTag.js: OK
 compat-table/es6/well-known.toStringTag.misc-builtins.js: OK
 compat-table/es6/well-known.toStringTag.new-builtins.js: failed
 compat-table/es6/well-known.unscopables.js: OK
-compat-table/es2016/Array.prototype.includes.generic.js: failed
+compat-table/es2016/Array.prototype.includes.generic.js: OK
 compat-table/es2016/Array.prototype.includes.js: OK
-compat-table/es2016/Array.prototype.includes.sparse.js: failed
-compat-table/es2016/Array.prototype.includes.typed-array.js: TypeError: undefined is not a function
+compat-table/es2016/Array.prototype.includes.sparse.js: OK
+compat-table/es2016/Array.prototype.includes.typed-array.js: OK
 compat-table/es2016/exponentiation.assignment.js: OK
 compat-table/es2016/exponentiation.basic.js: OK
 compat-table/es2016/exponentiation.unary-negation-error.js: OK
-compat-table/es2016/misc.Proxy-Array-includes.js: failed
+compat-table/es2016/misc.Proxy-Array-includes.js: OK
 compat-table/es2016/misc.Proxy-enumerate-removed.js: OK
 compat-table/es2016/misc.generator-no-new.js: OK
 compat-table/es2016/misc.generator-throw-inner.js: OK
 compat-table/es2016/misc.nested-rest-destructuring-decl.js: OK
 compat-table/es2016/misc.nested-rest-destructuring-params.js: OK
-compat-table/es2016/misc.strict-fn-non-simple-params-error.js: failed
+compat-table/es2016/misc.strict-fn-non-simple-params-error.js: OK
 compat-table/es2017/Atomics.add.js: OK
 compat-table/es2017/Atomics.and.js: OK
 compat-table/es2017/Atomics.compareExchange.js: OK

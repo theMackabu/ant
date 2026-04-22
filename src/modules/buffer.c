@@ -2230,6 +2230,69 @@ static ant_value_t js_typedarray_indexOf(ant_t *js, ant_value_t *args, int nargs
   return js_mknum(-1);
 }
 
+static ant_value_t js_typedarray_includes(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  
+  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached) {
+    return js_mkerr(js, "Invalid TypedArray");
+  }
+
+  size_t len = ta_data->length;
+  ant_value_t search = (nargs > 0) ? args[0] : js_mkundef();
+  
+  if (len == 0) return js_false;
+  int64_t from_index = 0;
+  
+  if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
+  double from_index_num = js_to_number(js, args[1]);
+  if (!isnan(from_index_num)) from_index = (int64_t)from_index_num;
+  if (from_index < 0) {
+    from_index += (int64_t)len;
+    if (from_index < 0) from_index = 0;
+  }}
+
+  if ((size_t)from_index >= len) return js_false;
+
+  if (ta_data->type == TYPED_ARRAY_BIGINT64) {
+    int64_t needle = 0;
+    if (vtype(search) == T_BIGINT) {
+      if (!bigint_to_int64_wrapping(js, search, &needle)) return js_false;
+    } else needle = (int64_t)js_to_number(js, search);
+    
+    int64_t *data = (int64_t *)(ta_data->buffer->data + ta_data->byte_offset);
+    for (size_t i = (size_t)from_index; i < len; i++) {
+      if (data[i] == needle) return js_true;
+    }
+    
+    return js_false;
+  }
+
+  if (ta_data->type == TYPED_ARRAY_BIGUINT64) {
+    uint64_t needle = 0;
+    if (vtype(search) == T_BIGINT) {
+      if (!bigint_to_uint64_wrapping(js, search, &needle)) return js_false;
+    } else needle = (uint64_t)js_to_number(js, search);
+    
+    uint64_t *data = (uint64_t *)(ta_data->buffer->data + ta_data->byte_offset);
+    for (size_t i = (size_t)from_index; i < len; i++) {
+      if (data[i] == needle) return js_true;
+    }
+    
+    return js_false;
+  }
+
+  double needle = js_to_number(js, search);
+  for (size_t i = (size_t)from_index; i < len; i++) {
+    double value = 0;
+    if (!typedarray_read_number(ta_data, i, &value)) return js_false;
+    if (isnan(value) && isnan(needle)) return js_true;
+    if (value == needle) return js_true;
+  }
+
+  return js_false;
+}
+
 // Buffer.prototype.toString(encoding)
 static ant_value_t js_buffer_slice(ant_t *js, ant_value_t *args, int nargs) {
   return js_typedarray_subarray(js, args, nargs);
@@ -2698,6 +2761,7 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "toString", js_mkfun(js_typedarray_toString));
   js_set(js, typedarray_proto, "join", js_mkfun(js_typedarray_join));
   js_set(js, typedarray_proto, "indexOf", js_mkfun(js_typedarray_indexOf));
+  js_set(js, typedarray_proto, "includes", js_mkfun(js_typedarray_includes));
   js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
 
   g_typedarray_iter_proto = js_mkobj(js);
@@ -2710,6 +2774,7 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "entries", js_mkfun(ta_entries));
   js_set_sym(js, typedarray_proto, get_iterator_sym(), js_get(js, typedarray_proto, "values"));
   
+  // TODO: find a better way of doing this, macro is code smell
   #define SETUP_TYPEDARRAY(name) \
     do { \
       ant_value_t name##_ctor_obj = js_mkobj(js); \

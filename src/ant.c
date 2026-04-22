@@ -8340,33 +8340,99 @@ static ant_value_t builtin_array_join(ant_t *js, ant_value_t *args, int nargs) {
   free(result); return ret;
 }
 
+static inline bool array_includes_same_value_zero(ant_t *js, ant_value_t val, ant_value_t search) {
+  return (
+    vtype(val) == T_NUM &&
+    vtype(search) == T_NUM &&
+    isnan(tod(val)) && 
+    isnan(tod(search))
+  ) || strict_eq_values(js, val, search);
+}
+
+static inline ant_offset_t array_includes_length_from_number(double len_num) {
+  if (isnan(len_num) || len_num <= 0) return 0;
+  if (len_num >= (double)UINT32_MAX) return UINT32_MAX;
+  return (ant_offset_t)len_num;
+}
+
+static inline ant_offset_t array_includes_start_index(ant_t *js, ant_value_t *args, int nargs, ant_offset_t len) {
+  int64_t start = 0;
+  
+  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
+  double from_index_num = js_to_number(js, args[1]);
+  if (!isnan(from_index_num)) start = (int64_t)from_index_num;
+  if (start < 0) {
+    start += (int64_t)len;
+    if (start < 0) start = 0;
+  }}
+
+  if ((uint64_t)start >= (uint64_t)len) return len;
+  return (ant_offset_t)start;
+}
+
+static ant_value_t array_includes_dense_fast(
+  ant_t *js, ant_value_t arr, ant_value_t search, ant_value_t *args, int nargs
+) {
+  if (!array_obj_ptr(arr) || is_proxy(arr)) return js_mkundef();
+
+  ant_offset_t len = get_array_length(js, arr);
+  if (len == 0) return mkval(T_BOOL, 0);
+
+  ant_offset_t doff = get_dense_buf(arr);
+  if (!doff) return js_mkundef();
+
+  ant_offset_t dense_len = dense_iterable_length(js, arr);
+  if (dense_len != len) return js_mkundef();
+
+  ant_offset_t start = array_includes_start_index(js, args, nargs, len);
+  if (start >= len) return mkval(T_BOOL, 0);
+
+  for (ant_offset_t i = start; i < len; i++) {
+    ant_value_t val = dense_get(doff, i);
+    if (is_empty_slot(val)) return js_mkundef();
+    if (array_includes_same_value_zero(js, val, search)) return mkval(T_BOOL, 1);
+  }
+
+  return mkval(T_BOOL, 0);
+}
+
+static ant_value_t array_includes_generic(
+  ant_t *js, ant_value_t arr, ant_value_t search, ant_value_t *args, int nargs
+) {
+  ant_value_t len_val = js_getprop_fallback(js, arr, "length");
+  if (is_err(len_val)) return len_val;
+
+  ant_offset_t len = array_includes_length_from_number(js_to_number(js, len_val));
+  if (len == 0) return mkval(T_BOOL, 0);
+  
+  ant_offset_t start = array_includes_start_index(js, args, nargs, len);
+  if (start >= len) return mkval(T_BOOL, 0);
+
+  for (ant_offset_t i = start; i < len; i++) {
+    char idxstr[24];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+    idxstr[idxlen] = '\0';
+
+    ant_value_t val = js_getprop_fallback(js, arr, idxstr);
+    if (is_err(val)) return val;
+    if (array_includes_same_value_zero(js, val, search)) return mkval(T_BOOL, 1);
+  }
+  
+  return mkval(T_BOOL, 0);
+}
+
 static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "includes called on non-array");
   
-  if (nargs == 0) return mkval(T_BOOL, 0);
-  ant_value_t search = args[0];
-  
-  ant_offset_t len = get_array_length(js, arr);
-  if (len == 0) return mkval(T_BOOL, 0);
-  
-  ant_offset_t start = 0;
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    int s = (int) tod(args[1]);
-    if (s < 0) s = (int)len + s;
-    if (s < 0) s = 0;
-    start = (ant_offset_t) s;
-  }
-  
-  for (ant_offset_t i = start; i < len; i++) {
-    ant_value_t val = arr_get(js, arr, i);
-    if (vtype(val) == T_NUM && vtype(search) == T_NUM && isnan(tod(val)) && isnan(tod(search))) return mkval(T_BOOL, 1);
-    if (strict_eq_values(js, val, search)) return mkval(T_BOOL, 1);
-  }
-  
-  return mkval(T_BOOL, 0);
+  ant_value_t search = (nargs > 0) ? args[0] : js_mkundef();
+
+  ant_value_t fast = array_includes_dense_fast(js, arr, search, args, nargs);
+  if (vtype(fast) != T_UNDEF) return fast;
+
+  return array_includes_generic(js, arr, search, args, nargs);
 }
 
 static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) {

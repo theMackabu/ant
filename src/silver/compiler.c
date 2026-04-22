@@ -4303,6 +4303,13 @@ sv_func_t *compile_function_body(
     sv_ast_t *p = node->args.items[i];
     if (p->type != N_IDENT) { has_non_simple_params = true; break; }
   }
+
+  if (comp.is_strict && has_non_simple_params) {
+    js_mkerr_typed(
+      comp.js, JS_ERR_SYNTAX,
+      "Illegal 'use strict' directive in function with non-simple parameter list");
+    return NULL;
+  }
   
   bool repl_top = is_repl_top_level(&comp);
   if (!has_non_simple_params && node->body) {
