@@ -907,6 +907,16 @@ static inline ant_object_t *array_obj_ptr(ant_value_t obj) {
   return (ptr && ptr->type_tag == T_ARR) ? ptr : NULL;
 }
 
+static inline bool array_may_have_holes(ant_value_t obj) {
+  ant_object_t *ptr = array_obj_ptr(obj);
+  return ptr ? ptr->may_have_holes : true;
+}
+
+static inline void array_mark_may_have_holes(ant_value_t obj) {
+  ant_object_t *ptr = array_obj_ptr(obj);
+  if (ptr) ptr->may_have_holes = 1;
+}
+
 static inline void array_define_or_set_index(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
   if (!key) return;
   if (!array_obj_ptr(obj)) return;
@@ -914,8 +924,11 @@ static inline void array_define_or_set_index(ant_t *js, ant_value_t obj, const c
   unsigned long idx = 0;
   if (!parse_array_index(key, klen, ANT_ARRAY_INDEX_EXCLUSIVE, &idx)) return;
 
+  ant_offset_t cur_len = get_array_length(js, obj);
   ant_offset_t next_len = (ant_offset_t)idx + 1;
-  if (next_len > get_array_length(js, obj)) {
+  
+  if (next_len > cur_len) {
+    if ((ant_offset_t)idx > cur_len) array_mark_may_have_holes(obj);
     array_len_set(js, obj, next_len);
   }
 }
@@ -2704,12 +2717,15 @@ static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_val
       if (doff == 0) goto sparse;
     }
     
+    if (idx > len) array_mark_may_have_holes(arr);
     for (ant_offset_t i = len; i < idx; i++) {
       ant_value_t v = dense_get(doff, i);
       if (!is_empty_slot(v) && vtype(v) == T_UNDEF) dense_set(js, doff, i, T_EMPTY);
     }
+    
     dense_set(js, doff, idx, val);
     array_len_set(js, arr, idx + 1);
+    
     return;
   }
   
@@ -2906,6 +2922,8 @@ void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_
 static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_offset_t semantic_len = get_array_length(js, arr);
   if (idx >= semantic_len) return;
+  
+  array_mark_may_have_holes(arr);
   ant_offset_t doff = get_dense_buf(arr);
   
   if (doff) {
@@ -2915,6 +2933,7 @@ static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
+  
   js_delete_prop(js, arr, idxstr, idxlen);
 }
 
@@ -3000,10 +3019,12 @@ static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
   if (obj->u.array.data) {
     for (uint32_t i = 0; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->fast_array = 1;
+    obj->may_have_holes = 0;
   } else {
     obj->u.array.cap = 0;
     obj->u.array.len = 0;
     obj->fast_array = 0;
+    obj->may_have_holes = 1;
   }
 
   return arr;
@@ -3959,18 +3980,21 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
   if (array_obj_ptr(obj) && is_length_key(key, klen)) {
     ant_value_t err = validate_array_length(js, v);
     if (is_err(err)) return err;
+    
     ant_offset_t doff = get_dense_buf(obj);
+    ant_offset_t cur_len = get_array_length(js, obj);
     ant_offset_t new_len_val = (ant_offset_t) tod(v);
+    
     if (doff) {
       ant_offset_t cap = dense_capacity(doff);
-      ant_offset_t cur_len = get_array_length(js, obj);
       ant_offset_t clear_to = (cur_len < cap) ? cur_len : cap;
-      if (new_len_val < clear_to) {
-        for (ant_offset_t i = new_len_val; i < clear_to; i++)
-          dense_set(js, doff, i, T_EMPTY);
-      }
+      if (new_len_val < clear_to) 
+        for (ant_offset_t i = new_len_val; i < clear_to; i++) dense_set(js, doff, i, T_EMPTY);
     }
+    
+    if (new_len_val > cur_len) array_mark_may_have_holes(obj);
     array_len_set(js, obj, new_len_val);
+    
     return v;
   }
   
@@ -5036,6 +5060,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
     ant_offset_t doff = get_dense_buf(original_obj);
     unsigned long del_idx = 0;
     if (doff && parse_array_index(key, len, get_array_length(js, original_obj), &del_idx)) {
+      array_mark_may_have_holes(original_obj);
       ant_offset_t dense_len = dense_iterable_length(js, original_obj);
       if ((ant_offset_t)del_idx < dense_len) dense_set(js, doff, (ant_offset_t)del_idx, T_EMPTY);
     }
@@ -5775,13 +5800,12 @@ static ant_value_t builtin_Array(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(err)) return err;
     ant_offset_t new_len = (ant_offset_t)tod(args[0]);
     ant_offset_t doff = get_dense_buf(arr);
-    if (doff && new_len <= 1024) {
+    if (doff && new_len <= 1024) 
       if (new_len > dense_capacity(doff)) doff = dense_grow(js, arr, new_len);
-    }
+    if (new_len > 0) array_mark_may_have_holes(arr);
     array_len_set(js, arr, new_len);
-  } else if (nargs > 0) {
-    for (int i = 0; i < nargs; i++) arr_set(js, arr, (ant_offset_t)i, args[i]);
-  }
+  } else if (nargs > 0) for (int i = 0; i < nargs; i++) 
+    arr_set(js, arr, (ant_offset_t)i, args[i]);
 
   ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, array_proto);
@@ -7020,13 +7044,16 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
         for (ant_offset_t i = new_len; i < clear_to; i++) dense_set(js, doff, i, T_EMPTY);
       }
     }
-
+    
+    if (new_len > get_array_length(js, as_obj)) array_mark_may_have_holes(as_obj);
     array_len_set(js, as_obj, new_len);
+    
     return obj;
   }
   
   ant_offset_t existing_off = sym_key ? lkp_sym(js, as_obj, sym_off) : lkp(js, as_obj, prop_str, prop_len);
   prop_meta_t existing_sym_meta;
+  
   bool has_existing_sym_meta = sym_key && lookup_symbol_prop_meta(as_obj, sym_off, &existing_sym_meta);
   bool has_existing_prop = (existing_off > 0) || has_existing_sym_meta;
   ant_object_t *obj_ptr = js_obj_ptr(as_obj);
@@ -8094,6 +8121,7 @@ static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
       }
+      if (is_empty_slot(args[i])) array_mark_may_have_holes(arr);
       dense_set(js, doff, len, args[i]);
       len++;
     }
@@ -8124,6 +8152,7 @@ void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
       doff = dense_grow(js, arr, len + 1);
       if (doff == 0) return;
     }
+    if (is_empty_slot(val)) array_mark_may_have_holes(arr);
     dense_set(js, doff, len, val);
     array_len_set(js, arr, len + 1);
     return;
@@ -8449,13 +8478,20 @@ static ant_value_t array_includes_get_index_value(
   return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
 }
 
+static ant_value_t array_includes_get_array_index_value(
+  ant_t *js, ant_value_t arr, ant_offset_t 
+  idx, char *idxstr, size_t idxlen
+) {
+  if (arr_has(js, arr, idx)) return arr_get(js, arr, idx);
+  if (lkp_proto(js, arr, idxstr, idxlen) == 0) return js_mkundef();
+  idxstr[idxlen] = '\0';
+  return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
+}
+
 static ant_value_t array_includes_dense_fast(
-  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_value_t *args, int nargs
+  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_offset_t len, ant_offset_t start
 ) {
   if (!array_obj_ptr(arr) || is_proxy(arr)) return js_mkundef();
-
-  ant_offset_t len = get_array_length(js, arr);
-  if (len == 0) return mkval(T_BOOL, 0);
 
   ant_offset_t doff = get_dense_buf(arr);
   if (!doff) return js_mkundef();
@@ -8466,12 +8502,30 @@ static ant_value_t array_includes_dense_fast(
   ant_offset_t dense_len = dense_iterable_length(js, arr);
   if (dense_len != len) return js_mkundef();
 
-  ant_offset_t start = array_includes_start_index(js, args, nargs, len);
-  if (start >= len) return mkval(T_BOOL, 0);
+  if (!array_may_have_holes(arr)) {
+    for (ant_offset_t i = start; i < len; i++) 
+      if (array_includes_matches(js, query, dense[i])) return mkval(T_BOOL, 1);
+    return mkval(T_BOOL, 0);
+  }
 
   for (ant_offset_t i = start; i < len; i++) {
     ant_value_t val = dense[i];
     if (is_empty_slot(val)) return js_mkundef();
+    if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
+  }
+
+  return mkval(T_BOOL, 0);
+}
+
+static ant_value_t array_includes_array_slow(
+  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_offset_t len, ant_offset_t start
+) {
+  for (ant_offset_t i = start; i < len; i++) {
+    char idxstr[16];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+
+    ant_value_t val = array_includes_get_array_index_value(js, arr, i, idxstr, idxlen);
+    if (is_err(val)) return val;
     if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
   }
 
@@ -8512,8 +8566,18 @@ static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int narg
     (nargs > 0) ? args[0] : js_mkundef()
   );
 
-  ant_value_t fast = array_includes_dense_fast(js, arr, &query, args, nargs);
-  if (vtype(fast) != T_UNDEF) return fast;
+  if (array_obj_ptr(arr) && !is_proxy(arr)) {
+    ant_offset_t len = get_array_length(js, arr);
+    if (len == 0) return mkval(T_BOOL, 0);
+    
+    ant_offset_t start = array_includes_start_index(js, args, nargs, len);
+    if (start >= len) return mkval(T_BOOL, 0);
+    
+    ant_value_t fast = array_includes_dense_fast(js, arr, &query, len, start);
+    if (vtype(fast) != T_UNDEF) return fast;
+    
+    return array_includes_array_slow(js, arr, &query, len, start);
+  }
 
   return array_includes_generic(js, arr, &query, args, nargs);
 }

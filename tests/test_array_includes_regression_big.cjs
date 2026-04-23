@@ -18,6 +18,10 @@ function assertArrayIncludesRegressionSurface() {
   assert.strictEqual(holey.includes("tail"), true);
   assert.strictEqual(holey.includes("tail", 4), false);
 
+  const grown = [1];
+  grown.length = 3;
+  assert.strictEqual(grown.includes(undefined), true);
+
   let steps = 0;
   const generic = {
     get length() {
