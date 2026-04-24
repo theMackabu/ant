@@ -402,7 +402,6 @@ static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg) {
 }
 
 static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
-  (void)js;
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .save <filename>\n");
     return CMD_OK;

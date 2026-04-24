@@ -717,7 +717,6 @@ typedef struct {
 } iter_collect_ctx_t;
 
 static bool iter_collect_callback(ant_t *js, ant_value_t value, void *udata) {
-  (void)js;
   iter_collect_ctx_t *ctx = (iter_collect_ctx_t *)udata;
   if (ctx->length >= ctx->capacity) {
     ctx->capacity *= 2;

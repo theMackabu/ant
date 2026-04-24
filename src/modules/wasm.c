@@ -373,7 +373,6 @@ static ant_value_t wasm_wrap_module(ant_t *js, wasm_store_t *store, wasm_module_
 }
 
 static void wasm_module_finalize(ant_t *js, ant_object_t *obj) {
-  (void)js;
   if (!obj->extra_slots) return;
 
   ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
@@ -398,7 +397,6 @@ static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle,
 }
 
 static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
-  (void)js;
   if (!obj->extra_slots) return;
 
   ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
@@ -440,7 +438,6 @@ static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t ki
 }
 
 static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
-  (void)js;
   if (!obj->extra_slots) return;
 
   ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;

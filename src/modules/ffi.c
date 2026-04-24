@@ -784,7 +784,6 @@ static ant_value_t ffi_make_function(ant_t *js, ffi_library_handle_t *library, c
 
 void ffi_library_finalize(ant_t *js, ant_object_t *obj) {
   ffi_library_handle_t *library;
-  (void)js;
   if (obj->native.tag != FFI_LIBRARY_NATIVE_TAG) return;
   
   library = (ffi_library_handle_t *)obj->native.ptr;
@@ -799,7 +798,6 @@ void ffi_library_finalize(ant_t *js, ant_object_t *obj) {
 
 void ffi_function_finalize(ant_t *js, ant_object_t *obj) {
   ffi_function_handle_t *handle;
-  (void)js;
   if (obj->native.tag != FFI_FUNCTION_NATIVE_TAG) return;
   
   handle = (ffi_function_handle_t *)obj->native.ptr;
@@ -814,7 +812,6 @@ void ffi_function_finalize(ant_t *js, ant_object_t *obj) {
 
 void ffi_pointer_finalize(ant_t *js, ant_object_t *obj) {
   ffi_pointer_handle_t *handle;
-  (void)js;
   if (obj->native.tag != FFI_POINTER_NATIVE_TAG) return;
   
   handle = (ffi_pointer_handle_t *)obj->native.ptr;
@@ -828,7 +825,6 @@ void ffi_pointer_finalize(ant_t *js, ant_object_t *obj) {
 
 void ffi_callback_finalize(ant_t *js, ant_object_t *obj) {
   ffi_callback_handle_t *handle;
-  (void)js;
   if (obj->native.tag != FFI_CALLBACK_NATIVE_TAG) return;
   
   handle = (ffi_callback_handle_t *)obj->native.ptr;

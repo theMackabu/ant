@@ -127,8 +127,7 @@ static ant_value_t js_sessionstorage_removeItem(ant_t *js, ant_value_t *args, in
 }
 
 // sessionStorage.clear()
-static ant_value_t js_sessionstorage_clear(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t js_sessionstorage_clear(ant_params_t) {
   storage_clear();
   return js_mkundef();
 }
@@ -155,8 +154,7 @@ static ant_value_t js_sessionstorage_key(ant_t *js, ant_value_t *args, int nargs
 }
 
 // sessionStorage.length
-static ant_value_t js_sessionstorage_length(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t js_sessionstorage_length(ant_params_t) {
   return js_mknum((double)storage_length());
 }
 

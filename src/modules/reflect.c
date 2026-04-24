@@ -288,7 +288,6 @@ static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
@@ -303,7 +302,6 @@ static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];

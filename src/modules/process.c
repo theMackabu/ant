@@ -1112,8 +1112,7 @@ static ant_value_t process_kill(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t process_abort(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t process_abort(ant_params_t) {
   abort();
   return js_mkundef();
 }

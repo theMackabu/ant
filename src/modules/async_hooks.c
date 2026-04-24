@@ -26,7 +26,7 @@ static ant_value_t async_hooks_call_with_tail_args(
   return result;
 }
 
-static ant_value_t async_local_storage_run(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t async_local_storage_run(ant_params_t) {
   if (nargs < 2 || !is_callable(args[1])) {
     return js_mkerr(js, "AsyncLocalStorage.run(store, callback, ...args) requires a callback");
   }
@@ -43,7 +43,7 @@ static ant_value_t async_local_storage_run(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t async_local_storage_exit(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t async_local_storage_exit(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "AsyncLocalStorage.exit(callback, ...args) requires a callback");
   }
@@ -60,7 +60,7 @@ static ant_value_t async_local_storage_exit(ant_t *js, ant_value_t *args, int na
   return result;
 }
 
-static ant_value_t async_local_storage_enterWith(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t async_local_storage_enterWith(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!is_object_type(this_obj)) {
     return js_mkerr(js, "AsyncLocalStorage.enterWith() requires an AsyncLocalStorage instance");
@@ -69,21 +69,19 @@ static ant_value_t async_local_storage_enterWith(ant_t *js, ant_value_t *args, i
   return js_mkundef();
 }
 
-static ant_value_t async_local_storage_getStore(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_local_storage_getStore(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!is_object_type(this_obj)) return js_mkundef();
   return js_get_slot(this_obj, SLOT_DATA);
 }
 
-static ant_value_t async_local_storage_disable(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_local_storage_disable(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (is_object_type(this_obj)) js_set_slot_wb(js, this_obj, SLOT_DATA, js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t async_resource_runInAsyncScope(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t async_resource_runInAsyncScope(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "AsyncResource.runInAsyncScope(fn[, thisArg, ...args]) requires a function");
   }
@@ -91,51 +89,42 @@ static ant_value_t async_resource_runInAsyncScope(ant_t *js, ant_value_t *args, 
   return async_hooks_call_with_tail_args(js, args[0], this_arg, args, nargs, 2);
 }
 
-static ant_value_t async_resource_emitDestroy(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_resource_emitDestroy(ant_params_t) {
   return js_getthis(js);
 }
 
-static ant_value_t async_resource_asyncId(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t async_resource_asyncId(ant_params_t) {
   return js_mknum(0);
 }
 
-static ant_value_t async_resource_triggerAsyncId(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t async_resource_triggerAsyncId(ant_params_t) {
   return js_mknum(0);
 }
 
-static ant_value_t async_hook_enable(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_hook_enable(ant_params_t) {
   return js_getthis(js);
 }
 
-static ant_value_t async_hook_disable(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_hook_disable(ant_params_t) {
   return js_getthis(js);
 }
 
-static ant_value_t async_hooks_createHook(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_hooks_createHook(ant_params_t) {
   ant_value_t hook = js_mkobj(js);
   js_set(js, hook, "enable", js_mkfun(async_hook_enable));
   js_set(js, hook, "disable", js_mkfun(async_hook_disable));
   return hook;
 }
 
-static ant_value_t async_hooks_executionAsyncId(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t async_hooks_executionAsyncId(ant_params_t) {
   return js_mknum(1);
 }
 
-static ant_value_t async_hooks_triggerAsyncId(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
+static ant_value_t async_hooks_triggerAsyncId(ant_params_t) {
   return js_mknum(0);
 }
 
-static ant_value_t async_hooks_executionAsyncResource(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t async_hooks_executionAsyncResource(ant_params_t) {
   return js_mkobj(js);
 }
 

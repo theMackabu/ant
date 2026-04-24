@@ -305,41 +305,37 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, weakset_entry_t **ws_he
   return js_mkundef();
 }
 
-map_entry_t **get_map_from_obj(ant_t *js, ant_value_t obj) {
-  (void)js;
+map_entry_t **get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_MAP) return NULL;
   return (map_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
-set_entry_t **get_set_from_obj(ant_t *js, ant_value_t obj) {
-  (void)js;
+set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_SET) return NULL;
   return (set_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
-static weakmap_entry_t **get_weakmap_from_obj(ant_t *js, ant_value_t obj) {
-  (void)js;
+static weakmap_entry_t **get_weakmap_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
   return (weakmap_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
-static weakset_entry_t **get_weakset_from_obj(ant_t *js, ant_value_t obj) {
-  (void)js;
+static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;
   return (weakset_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
-static map_iterator_state_t *get_map_iter_state(ant_t *js, ant_value_t obj) {
+static map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
   ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return NULL;
   return (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
 }
 
-static set_iterator_state_t *get_set_iter_state(ant_t *js, ant_value_t obj) {
+static set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
   ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return NULL;
   return (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
@@ -349,7 +345,7 @@ static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Map.set() requires 2 arguments");
   
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mkerr(js, "Invalid Map object");
   
   ant_value_t key_val = normalize_map_key(args[0]);
@@ -369,7 +365,7 @@ static ant_value_t map_get(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Map.get() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mkundef();
 
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
@@ -380,7 +376,7 @@ static ant_value_t map_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Map.has() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   
   if (!map_ptr) return js_false;
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
@@ -391,7 +387,7 @@ static ant_value_t map_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Map.delete() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   
   if (!map_ptr) return js_false;
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
@@ -406,7 +402,7 @@ static ant_value_t map_delete(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t map_clear(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mkundef();
   
   map_entry_t *entry, *tmp;
@@ -422,7 +418,7 @@ static ant_value_t map_clear(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t map_size(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   if (!map_ptr) return js_mknum(0);
   
   return js_mknum((double)HASH_COUNT(*map_ptr));
@@ -430,7 +426,7 @@ static ant_value_t map_size(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
   
   if (nargs < 1 || vtype(args[0]) != T_FUNC)
     return js_mkerr(js, "forEach requires a callback function");
@@ -450,7 +446,7 @@ static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out) {
-  map_iterator_state_t *state = get_map_iter_state(js, it->iterator);
+  map_iterator_state_t *state = get_map_iter_state(it->iterator);
   if (!state || !state->current) return false;
 
   map_entry_t *entry = state->current;
@@ -482,7 +478,7 @@ static ant_value_t map_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
-  map_entry_t **map_ptr = get_map_from_obj(js, map_obj);
+  map_entry_t **map_ptr = get_map_from_obj(map_obj);
   
   map_iterator_state_t *state = ant_calloc(sizeof(map_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
@@ -514,7 +510,7 @@ static ant_value_t map_entries(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out) {
-  set_iterator_state_t *state = get_set_iter_state(js, it->iterator);
+  set_iterator_state_t *state = get_set_iter_state(it->iterator);
   if (!state || !state->current) return false;
 
   set_entry_t *entry = state->current;
@@ -536,7 +532,7 @@ static ant_value_t set_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {
-  set_entry_t **set_ptr = get_set_from_obj(js, set_obj);
+  set_entry_t **set_ptr = get_set_from_obj(set_obj);
   
   set_iterator_state_t *state = ant_calloc(sizeof(set_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
@@ -556,7 +552,7 @@ static ant_value_t set_add(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Set.add() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_mkerr(js, "Invalid Set object");
   
   if (!set_store_entry(js, set_ptr, args[0]))
@@ -572,7 +568,7 @@ static ant_value_t set_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Set.has() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_false;
 
   set_entry_t *entry = set_find_entry(js, set_ptr, args[0]);
@@ -583,7 +579,7 @@ static ant_value_t set_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Set.delete() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_false;
 
   set_entry_t *entry = set_find_entry(js, set_ptr, args[0]);
@@ -600,7 +596,7 @@ static ant_value_t set_delete(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t set_clear(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_mkundef();
   
   set_entry_t *entry, *tmp;
@@ -617,7 +613,7 @@ static ant_value_t set_clear(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t set_size(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   if (!set_ptr) return js_mknum(0);
   
   return js_mknum((double)HASH_COUNT(*set_ptr));
@@ -635,7 +631,7 @@ static ant_value_t set_entries(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  set_entry_t **set_ptr = get_set_from_obj(this_val);
   
   if (nargs < 1 || vtype(args[0]) != T_FUNC)
     return js_mkerr(js, "forEach requires a callback function");
@@ -658,7 +654,7 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "WeakMap.set() requires 2 arguments");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
   if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
   
   if (!is_object_type(args[0]))
@@ -691,7 +687,7 @@ static ant_value_t weakmap_get(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.get() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
   if (!wm_ptr) return js_mkundef();
   if (!is_object_type(args[0])) return js_mkundef();
   
@@ -705,7 +701,7 @@ static ant_value_t weakmap_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.has() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
   if (!wm_ptr) return js_false;
   if (!is_object_type(args[0])) return js_false;
   
@@ -719,7 +715,7 @@ static ant_value_t weakmap_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.delete() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
   if (!wm_ptr) return js_false;
   if (!is_object_type(args[0])) return js_false;
   
@@ -738,7 +734,7 @@ static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakSet.add() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
   if (!ws_ptr) return js_mkerr(js, "Invalid WeakSet object");
   
   if (!is_object_type(args[0]))
@@ -763,7 +759,7 @@ static ant_value_t weakset_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakSet.has() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
   if (!ws_ptr) return js_false;
   if (!is_object_type(args[0])) return js_false;
   
@@ -777,7 +773,7 @@ static ant_value_t weakset_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakSet.delete() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
   if (!ws_ptr) return js_false;
   if (!is_object_type(args[0])) return js_false;
   

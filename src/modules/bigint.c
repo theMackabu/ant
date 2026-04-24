@@ -71,8 +71,7 @@ static void bigint_normalize_limbs(uint32_t *limbs, size_t *count) {
   while (*count > 1 && limbs[*count - 1] == 0) (*count)--;
 }
 
-static inline const bigint_payload_t *bigint_payload(ant_t *js, ant_value_t v) {
-  (void)js;
+static inline const bigint_payload_t *bigint_payload(ant_value_t v) {
   return (const bigint_payload_t *)(uintptr_t)vdata(v);
 }
 
@@ -81,11 +80,11 @@ static inline bool limbs_is_zero(const uint32_t *limbs, size_t count) {
 }
 
 bool bigint_is_negative(ant_t *js, ant_value_t v) {
-  return bigint_payload(js, v)->sign == 1;
+  return bigint_payload(v)->sign == 1;
 }
 
 static const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
-  const bigint_payload_t *payload = bigint_payload(js, v);
+  const bigint_payload_t *payload = bigint_payload(v);
   size_t limb_count = payload->limb_count;
   if (limb_count == 0) limb_count = 1;
   if (count) *count = limb_count;

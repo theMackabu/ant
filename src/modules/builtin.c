@@ -79,7 +79,6 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
   if (vtype(args[0]) != T_FUNC) return js_mkerr(js, "constructor must be a function");
 
 #ifndef ANT_JIT
-  (void)js;
   return js_mkerr(js, "constructor property feedback requires ANT_JIT");
 #else
   ant_value_t ctor = args[0];

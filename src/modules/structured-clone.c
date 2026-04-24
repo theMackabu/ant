@@ -193,7 +193,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     js_set_slot(clone, SLOT_DATA, ANT_PTR(new_head));
     sc_add(seen, val, clone);
     
-    map_entry_t **src_head = get_map_from_obj(js, val);
+    map_entry_t **src_head = get_map_from_obj(val);
     if (src_head && *src_head) {
     map_entry_t *e, *tmp;
     HASH_ITER(hh, *src_head, e, tmp) {
@@ -229,7 +229,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     js_set_slot(clone, SLOT_DATA, ANT_PTR(new_head));
     sc_add(seen, val, clone);
 
-    set_entry_t **src_head = get_set_from_obj(js, val);
+    set_entry_t **src_head = get_set_from_obj(val);
     if (src_head && *src_head) {
     set_entry_t *e, *tmp;
     HASH_ITER(hh, *src_head, e, tmp) {
