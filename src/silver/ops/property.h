@@ -306,7 +306,7 @@ static inline ant_value_t sv_prop_get_at(
 
   if (vtype(sym_prim) == T_SYMBOL && len == 11 &&
       memcmp(str, "description", 11) == 0) {
-    const char *desc = js_sym_desc(js, sym_prim);
+    const char *desc = js_sym_desc(sym_prim);
     if (desc) return js_mkstr(js, desc, strlen(desc));
     return js_mkundef();
   }

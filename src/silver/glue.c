@@ -915,7 +915,7 @@ ant_value_t jit_helper_new(
 
   if (vtype(func) == T_OBJ && is_proxy(func))
     return js_proxy_construct(js, func, args, argc, new_target);
-  if (!js_is_constructor(js, func))
+  if (!js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();

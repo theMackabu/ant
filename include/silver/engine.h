@@ -631,7 +631,7 @@ static inline ant_value_t sv_prepare_call(
     return js_mkundef();
   }
 
-  if (is_construct_call && !js_is_constructor(js, func))
+  if (is_construct_call && !js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {

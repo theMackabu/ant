@@ -450,7 +450,6 @@ typedef struct {
 } error_frame_errbuf_ctx_t;
 
 static bool error_visit_frame_append_errbuf(ant_t *js, const js_vm_frame_view_t *view, void *ctx) {
-  (void)js;
   error_frame_errbuf_ctx_t *c = (error_frame_errbuf_ctx_t *)ctx;
   *c->n = append_errbuf_fmt(
     c->eb, *c->n,

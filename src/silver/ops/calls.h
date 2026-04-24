@@ -70,7 +70,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     vm->stack[vm->sp++] = result;
     return result;
   }
-  if (!js_is_constructor(js, func)) {
+  if (!js_is_constructor(func)) {
     vm->sp -= argc + 2;
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   }
@@ -163,7 +163,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     vm->stack[vm->sp++] = result;
     return result;
   }
-  if (!js_is_constructor(js, func)) {
+  if (!js_is_constructor(func)) {
     sv_call_args_release(&call);
     vm->sp -= argc + 2;
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");

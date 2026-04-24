@@ -1998,8 +1998,7 @@ static size_t strnum(ant_value_t value, char *buf, size_t len) {
   return cpy(buf, len, temp, strlen(temp));
 }
 
-static inline ant_offset_t assert_flat_string_len(ant_t *js, ant_value_t value, const char **out_ptr) {
-  (void)js;
+static inline ant_offset_t assert_flat_string_len(ant_value_t value, const char **out_ptr) {
   ant_flat_string_t *flat = ant_str_flat_ptr(value);
   assert(flat != NULL);
   ant_offset_t len = flat->len;
@@ -2075,7 +2074,7 @@ static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset
   
   if (!str_is_heap_rope(str)) {
     const char *sptr;
-    ant_offset_t slen = assert_flat_string_len(js, str, &sptr);
+    ant_offset_t slen = assert_flat_string_len(str, &sptr);
     memcpy(dest + *pos, sptr, slen);
     *pos += slen; return;
   }
@@ -2083,7 +2082,7 @@ static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset
   ant_value_t cached = rope_cached_flat(str);
   if (vtype(cached) == T_STR && !str_is_heap_rope(cached)) {
     const char *cptr;
-    ant_offset_t clen = assert_flat_string_len(js, cached, &cptr);
+    ant_offset_t clen = assert_flat_string_len(cached, &cptr);
     memcpy(dest + *pos, cptr, clen);
     *pos += clen; return;
   }
@@ -2097,7 +2096,7 @@ static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset
     
     if (!str_is_heap_rope(node)) {
       const char *sptr;
-      ant_offset_t slen = assert_flat_string_len(js, node, &sptr);
+      ant_offset_t slen = assert_flat_string_len(node, &sptr);
       memcpy(dest + *pos, sptr, slen);
       *pos += slen; continue;
     }
@@ -2105,7 +2104,7 @@ static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset
     ant_value_t c = rope_cached_flat(node);
     if (vtype(c) == T_STR && !str_is_heap_rope(c)) {
       const char *cptr;
-      ant_offset_t clen = assert_flat_string_len(js, c, &cptr);
+      ant_offset_t clen = assert_flat_string_len(c, &cptr);
       memcpy(dest + *pos, cptr, clen);
       *pos += clen; continue;
     }
@@ -2223,7 +2222,7 @@ ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len) {
   }
   
   const char *ptr = NULL;
-  ant_offset_t slen = assert_flat_string_len(js, value, &ptr);
+  ant_offset_t slen = assert_flat_string_len(value, &ptr);
   if (len) *len = slen;
   return (ant_offset_t)(uintptr_t)ptr;
 }
@@ -2438,7 +2437,7 @@ static size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
     }
     
     case T_SYMBOL: {
-      const char *desc = js_sym_desc(js, value);
+      const char *desc = js_sym_desc(value);
       if (desc) return (size_t) snprintf(buf, len, "Symbol(%s)", desc);
       return ANT_COPY(buf, len, "Symbol()");
     }
@@ -4280,27 +4279,23 @@ static inline ant_symbol_heap_t *sym_ptr(ant_value_t v) {
   return (ant_symbol_heap_t *)(uintptr_t)vdata(v);
 }
 
-static inline uint32_t sym_get_id(ant_t *js, ant_value_t v) {
-  (void)js;
+static inline uint32_t sym_get_id(ant_value_t v) {
   ant_symbol_heap_t *ptr = sym_ptr(v);
   return ptr ? ptr->id : 0;
 }
 
-static inline uint32_t sym_get_flags(ant_t *js, ant_value_t v) {
-  (void)js;
+static inline uint32_t sym_get_flags(ant_value_t v) {
   ant_symbol_heap_t *ptr = sym_ptr(v);
   return ptr ? ptr->flags : 0;
 }
 
-static inline uintptr_t sym_get_key_ptr(ant_t *js, ant_value_t v) {
-  (void)js;
+static inline uintptr_t sym_get_key_ptr(ant_value_t v) {
   ant_symbol_heap_t *ptr = sym_ptr(v);
   return ptr ? (uintptr_t)ptr->key : 0;
 }
 
-static const char *sym_get_desc(ant_t *js, ant_value_t v) {
-  (void)js;
-  ant_symbol_heap_t *ptr = sym_ptr(v);
+const inline char *js_sym_desc(ant_value_t sym) {
+  ant_symbol_heap_t *ptr = sym_ptr(sym);
   if (!ptr || ptr->desc_len == 0) return NULL;
   return ptr->desc;
 }
@@ -4334,14 +4329,9 @@ ant_value_t js_mksym_for(ant_t *js, const char *key) {
 
 const char *js_sym_key(ant_value_t sym) {
   if (vtype(sym) != T_SYMBOL) return NULL;
-  ant_t *js = rt->js;
-  uint32_t flags = sym_get_flags(js, sym);
+  uint32_t flags = sym_get_flags(sym);
   if (!(flags & SYM_FLAG_GLOBAL) || (flags & SYM_FLAG_WELL_KNOWN)) return NULL;
-  return (const char *)sym_get_key_ptr(js, sym);
-}
-
-const inline char *js_sym_desc(ant_t *js, ant_value_t sym) {
-  return sym_get_desc(js, sym);
+  return (const char *)sym_get_key_ptr(sym);
 }
 
 static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
@@ -4791,7 +4781,7 @@ ant_offset_t str_len_fast(ant_t *js, ant_value_t str) {
   if (vtype(str) != T_STR) return 0;
   if (str_is_heap_rope(str)) return rope_len(str);
   if (str_is_heap_builder(str)) return builder_len(str);
-  return assert_flat_string_len(js, str, NULL);
+  return assert_flat_string_len(str, NULL);
 }
 
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
@@ -5206,7 +5196,7 @@ static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t
 }
 
 ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym) {
-  const char *desc = js_sym_desc(js, sym);
+  const char *desc = js_sym_desc(sym);
   if (!desc) return js_mkstr(js, "Symbol()", 8);
   
   size_t desc_len = strlen(desc);
@@ -5714,7 +5704,7 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t proto_setup = setup_func_prototype(js, bound);
     if (is_err(proto_setup)) return proto_setup;
 
-    js_mark_constructor(bound_func, js_is_constructor(js, func));
+    js_mark_constructor(bound_func, js_is_constructor(func));
     
     return bound;
   }
@@ -5794,7 +5784,7 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   ant_value_t proto_setup = setup_func_prototype(js, bound);
   
   if (is_err(proto_setup)) return proto_setup;
-  js_mark_constructor(bound_func, js_is_constructor(js, func));
+  js_mark_constructor(bound_func, js_is_constructor(func));
   
   return bound;
 }
@@ -6964,7 +6954,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
   
   if (sym_key) {
     sym_off = (ant_offset_t)vdata(prop);
-    const char *desc = js_sym_desc(js, prop);
+    const char *desc = js_sym_desc(prop);
     prop_str = desc ? desc : "symbol";
     prop_len = (ant_offset_t)strlen(prop_str);
   } else {
@@ -7557,7 +7547,7 @@ static ant_value_t builtin_object_getOwnPropertyDescriptor(ant_t *js, ant_value_
   
   bool is_sym = (vtype(key) == T_SYMBOL);
   if (is_sym) {
-    const char *d = js_sym_desc(js, key);
+    const char *d = js_sym_desc(key);
     key_str = d ? d : "symbol";
     key_len = (ant_offset_t)strlen(key_str);
   } else if (vtype(key) == T_STR) {
@@ -9881,8 +9871,7 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
   return ret;
 }
 
-static ant_value_t builtin_Array_isArray(ant_t *js, ant_value_t *args, int nargs) {
-  (void) js;
+static ant_value_t builtin_Array_isArray(ant_params_t) {
   if (nargs == 0) return mkval(T_BOOL, 0);
   return mkval(T_BOOL, vtype(args[0]) == T_ARR ? 1 : 0);
 }
@@ -11886,7 +11875,6 @@ ant_value_t js_promise_assimilate_awaitable(ant_t *js, ant_value_t value) {
 }
 
 void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
-  (void)js;
   if (vtype(promise) != T_PROMISE || !coro) return;
 
   ant_promise_state_t *pd = get_promise_data(js, promise, false);
@@ -13330,7 +13318,7 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   bool is_sym = (vtype(key) == T_SYMBOL);
   
   if (is_sym) {
-    const char *d = js_sym_desc(js, key);
+    const char *d = js_sym_desc(key);
     prop_name = d ? d : "symbol";
     prop_len = (ant_offset_t)strlen(prop_name);
   } else if (vtype(key) == T_NUM) {
@@ -13701,8 +13689,7 @@ bool is_proxy(ant_value_t obj) {
   return get_proxy_data(obj) != NULL;
 }
 
-static bool js_is_constructor_impl(ant_t *js, ant_value_t value) {
-  (void)js;
+bool js_is_constructor(ant_value_t value) {
   ant_value_t slow = value;
   ant_value_t fast = value;
 
@@ -13734,10 +13721,6 @@ static bool js_is_constructor_impl(ant_t *js, ant_value_t value) {
 
     if (same_object_identity(slow, fast)) return false;
   }
-}
-
-bool js_is_constructor(ant_t *js, ant_value_t value) {
-  return js_is_constructor_impl(js, value);
 }
 
 static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj) {
@@ -14186,7 +14169,7 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
   ant_value_t target = data->target;
   ant_value_t handler = data->handler;
 
-  if (!js_is_constructor(js, target))
+  if (!js_is_constructor(target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   if (vtype(target) == T_OBJ && is_proxy(target))
     return js_proxy_construct(js, target, args, argc, new_target);
@@ -14234,7 +14217,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   data->revoked = false;
 
   proxy_ptr->is_exotic = 1;
-  js_mark_constructor(proxy_obj, js_is_constructor(js, target));
+  js_mark_constructor(proxy_obj, js_is_constructor(target));
   proxy_ptr->proxy_state = data;
   return proxy_obj;
 }

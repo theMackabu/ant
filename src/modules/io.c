@@ -836,7 +836,7 @@ void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_
   }
   
   if (t == T_SYMBOL) {
-    const char *desc = js_sym_desc(js, val);
+    const char *desc = js_sym_desc(val);
     fprintf(stream, "Symbol(%s)", desc ? desc : "");
     return;
   }

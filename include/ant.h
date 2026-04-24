@@ -92,7 +92,7 @@ bool js_iter(
   void *udata
 );
 
-const char *js_sym_desc(ant_t *js, ant_value_t sym);
+const char *js_sym_desc(ant_value_t sym);
 const char *js_sym_key(ant_value_t sym);
 
 ant_value_t js_mksym_for(ant_t *, const char *key);
@@ -160,7 +160,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value);
 
 uint8_t vtype(ant_value_t val);
 size_t vdata(ant_value_t val);
-bool js_is_constructor(ant_t *js, ant_value_t value);
+bool js_is_constructor(ant_value_t value);
 
 ant_object_t *js_obj_ptr(ant_value_t val);
 ant_value_t js_obj_from_ptr(ant_object_t *obj);
