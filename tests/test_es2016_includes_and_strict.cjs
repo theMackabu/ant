@@ -73,4 +73,14 @@ try {
 }
 assert.strictEqual(threw, true);
 
+assert.doesNotThrow(() => {
+  const fn = Function('"use strict"; return function(a = 1) { return a; };')();
+  assert.strictEqual(fn(), 1);
+});
+
+assert.doesNotThrow(() => {
+  const fn = Function('"use strict"; return function(...a) { return a.length; };')();
+  assert.strictEqual(fn(1, 2), 2);
+});
+
 console.log("ES2016 includes and strict-mode regressions pass");

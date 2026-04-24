@@ -4243,13 +4243,16 @@ sv_func_t *compile_function_body(
 
   comp.param_locals = comp.local_count;
 
-  if (!comp.is_strict && node->body && node->body->type == N_BLOCK) {
-  for (int i = 0; i < node->body->args.count; i++) {
+  bool has_own_use_strict = false;
+  if (node->body && node->body->type == N_BLOCK) for (int i = 0; i < node->body->args.count; i++) {
     sv_ast_t *stmt = node->body->args.items[i];
     if (!stmt || stmt->type == N_EMPTY) continue;
     if (stmt->type != N_STRING) break;
-    if (sv_ast_is_use_strict(comp.js, stmt)) comp.is_strict = true;
-  }}
+    if (sv_ast_is_use_strict(comp.js, stmt)) {
+      has_own_use_strict = true;
+      comp.is_strict = true;
+    }
+  }
 
   if (comp.is_strict) {
     const char *param_names[256];
@@ -4304,7 +4307,7 @@ sv_func_t *compile_function_body(
     if (p->type != N_IDENT) { has_non_simple_params = true; break; }
   }
 
-  if (comp.is_strict && has_non_simple_params) {
+  if (has_own_use_strict && has_non_simple_params) {
     js_mkerr_typed(
       comp.js, JS_ERR_SYNTAX,
       "Illegal 'use strict' directive in function with non-simple parameter list");
