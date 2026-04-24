@@ -15449,7 +15449,7 @@ bool js_iter(ant_t *js, ant_value_t iterable, bool (*callback)(ant_t *js, ant_va
 }
 
 char *js_getstr(ant_t *js, ant_value_t value, size_t *len) {
-  (void)js;
+  (void)js; // TODO: remove
   if (vtype(value) != T_STR) return NULL;
   ant_offset_t n, off = vstr(js, value, &n);
   if (len != NULL) *len = n;

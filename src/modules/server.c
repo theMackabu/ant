@@ -345,6 +345,12 @@ static void server_abort_request(server_request_t *req, const char *message) {
 static bool server_response_chunk(server_request_t *req, ant_value_t value, const uint8_t **out, size_t *len) {
   TypedArrayData *ta = buffer_get_typedarray_data(value);
 
+  if (vtype(value) == T_STR) {
+    *out = (const uint8_t *)js_getstr(req->server->js, value, len);
+    if (!*out) *len = 0;
+    return true;
+  }
+
   if (!ta || ta->type != TYPED_ARRAY_UINT8) return false;
   if (!ta->buffer || ta->buffer->is_detached) {
     *out = NULL;
@@ -496,7 +502,10 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
     ant_conn_close(req->conn);
     return;
   }
-  if (!body_is_stream && !head_only && resp->body_size > 0) ant_http1_buffer_append(&buf, resp->body_data, resp->body_size);
+  
+  if (!body_is_stream && !head_only && resp->body_size > 0) 
+    ant_http1_buffer_append(&buf, resp->body_data, resp->body_size);
+  
   if (buf.failed) {
     ant_http1_buffer_free(&buf);
     ant_conn_close(req->conn);
@@ -506,16 +515,12 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   out = ant_http1_buffer_take(&buf, &out_len);
   ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
   
-  if (body_is_stream) {
-    if (!server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_STREAM_READ)) return;
-    if (head_only) ant_conn_close(req->conn);
-    return;
-  }
-
   server_queue_write(
     req->conn,
     req, out, out_len,
-    req->keep_alive ? SERVER_WRITE_KEEP_ALIVE : SERVER_WRITE_CLOSE_CLIENT
+    body_is_stream && !head_only
+      ? SERVER_WRITE_STREAM_READ
+      : (req->keep_alive ? SERVER_WRITE_KEEP_ALIVE : SERVER_WRITE_CLOSE_CLIENT)
   );
 }
 
