@@ -2215,6 +2215,28 @@ static bool compile_call_is_proto_intrinsic(
   return true;
 }
 
+static bool compile_call_array_includes_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count > UINT16_MAX) return false;
+  sv_ast_t *callee = node->left;
+  
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "includes", 8))
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  for (int i = 0; i < node->args.count; i++)
+    compile_expr(c, node->args.items[i]);
+  emit_op(c, OP_CALL_ARRAY_INCLUDES);
+  emit_u16(c, (uint16_t)node->args.count);
+  
+  return true;
+}
+
 static bool compile_regexp_exec_truthy_intrinsic(
   sv_compiler_t *c, sv_ast_t *node
 ) {
@@ -2310,6 +2332,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (compile_call_is_proto_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_call_array_includes_intrinsic(c, node, has_spread))
     return;
 
   if (

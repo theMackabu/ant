@@ -87,6 +87,7 @@ typedef struct ant_object {
   uint8_t is_constructor: 1;
   uint8_t fast_array: 1;
   uint8_t may_have_holes: 1;
+  uint8_t may_have_dense_elements: 1;
   uint8_t gc_permanent: 1;
   uint8_t generation: 1;
   uint8_t in_remember_set: 1;

@@ -534,6 +534,16 @@ ant_value_t jit_helper_call_is_proto(
   return sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, false);
 }
 
+ant_value_t jit_helper_call_array_includes(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc
+) {
+  if (js_is_array_includes_builtin(call_func))
+    return js_array_includes_call(js, call_this, args, argc);
+  return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
+}
+
 // TODO: dont bail out
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   return SV_JIT_BAILOUT;

@@ -1408,6 +1408,26 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_ARRAY_INCLUDES: {
+    uint16_t call_argc = sv_get_u16(ip + 1);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
+    ant_value_t call_result;
+
+    frame->ip = ip;
+    if (js_is_array_includes_builtin(call_func)) {
+      call_result = js_array_includes_call(js, call_this, call_args, call_argc);
+    } else call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, false);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    
+    vm->sp -= call_argc + 2;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    
+    NEXT(3);
+  }
+
   L_CALL_IS_PROTO: {
     ant_value_t call_arg  = vm->stack[vm->sp - 1];
     ant_value_t call_func = vm->stack[vm->sp - 2];

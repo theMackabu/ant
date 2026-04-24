@@ -162,6 +162,7 @@ OP_DEF(  JMP_TRUE8,         2,   1,   0, label8)    /* short conditional */
 OP_DEF(  CALL,              3,   1,   1, npop)      /* func args... -> result */
 OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> result */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
+OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
 OP_DEF(  RE_EXEC_TRUTHY,    1,   3,   1, none)      /* this func arg -> bool */
 OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)

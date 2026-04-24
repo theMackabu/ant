@@ -60,6 +60,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_ge);
   LOAD_EXT(jit_helper_call);
   LOAD_EXT(jit_helper_call_method);
+  LOAD_EXT(jit_helper_call_array_includes);
   LOAD_EXT(jit_helper_apply);
   LOAD_EXT(jit_helper_rest);
   LOAD_EXT(jit_helper_special_obj);
@@ -1919,7 +1920,7 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
       case OP_POST_INC:
         f.needs_inc_local = true; 
         break;
-      case OP_CALL: case OP_CALL_METHOD:
+      case OP_CALL: case OP_CALL_METHOD: case OP_CALL_ARRAY_INCLUDES:
       case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
       case OP_ARRAY: case OP_NEW:
       case OP_APPLY: case OP_NEW_APPLY:
@@ -1991,7 +1992,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_JMP_TRUE:   case OP_JMP_TRUE8:
       case OP_JMP_FALSE_PEEK: case OP_JMP_TRUE_PEEK:
       case OP_CALL: case OP_CALL_METHOD:
-      case OP_CALL_IS_PROTO:
+      case OP_CALL_IS_PROTO: case OP_CALL_ARRAY_INCLUDES:
       case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
       case OP_APPLY: case OP_NEW_APPLY:
       case OP_GET_GLOBAL: case OP_GET_GLOBAL_UNDEF:
@@ -2401,6 +2402,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_ge    = MIR_new_import(ctx, "jit_helper_ge");
   MIR_item_t imp_call  = MIR_new_import(ctx, "jit_helper_call");
   MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
+  MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
   MIR_item_t imp_rest  = MIR_new_import(ctx, "jit_helper_rest");
   MIR_item_t imp_special_obj = MIR_new_import(ctx, "jit_helper_special_obj");
@@ -7521,6 +7523,76 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         } else {
           MIR_append_insn(ctx, jit_func,
             MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_new_res)));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
+        break;
+      }
+
+      case OP_CALL_ARRAY_INCLUDES: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        uint16_t call_argc = sv_get_u16(ip + 1);
+        if (call_argc > 16 || vs.sp < (int)call_argc + 2) { ok = false; break; }
+
+        MIR_reg_t r_arg_arr = r_args_buf;
+        for (int i = (int)call_argc - 1; i >= 0; i--) {
+          MIR_reg_t areg = vstack_pop(&vs);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                r_arg_arr, 0, 1),
+              MIR_new_reg_op(ctx, areg)));
+        }
+
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_reg_t r_call_res = vstack_push(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 9,
+            MIR_new_ref_op(ctx, call_proto),
+            MIR_new_ref_op(ctx, imp_call_array_includes),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_reg_op(ctx, r_arg_arr),
+            MIR_new_int_op(ctx, (int64_t)call_argc)));
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, r_call_res)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_call_res)));
         }
         MIR_append_insn(ctx, jit_func, no_err);
         break;

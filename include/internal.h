@@ -469,6 +469,10 @@ bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
 
+bool js_is_array_includes_builtin(ant_value_t func);
+ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
+ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
+
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
 

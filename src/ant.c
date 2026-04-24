@@ -912,6 +912,11 @@ static inline bool array_may_have_holes(ant_value_t obj) {
   return ptr ? ptr->may_have_holes : true;
 }
 
+static inline bool array_may_have_dense_elements(ant_value_t obj) {
+  ant_object_t *ptr = array_obj_ptr(obj);
+  return ptr ? ptr->may_have_dense_elements : true;
+}
+
 static inline void array_mark_may_have_holes(ant_value_t obj) {
   ant_object_t *ptr = array_obj_ptr(obj);
   if (ptr) ptr->may_have_holes = 1;
@@ -2653,6 +2658,7 @@ static inline void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant
   ant_object_t *ptr = dense_obj(doff);
   if (!ptr || idx >= ptr->u.array.cap) return;
   ptr->u.array.data[idx] = val;
+  if (!is_empty_slot(val)) ptr->may_have_dense_elements = 1;
   gc_write_barrier(js, ptr, val);
 }
 
@@ -3020,11 +3026,13 @@ static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
     for (uint32_t i = 0; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->fast_array = 1;
     obj->may_have_holes = 0;
+    obj->may_have_dense_elements = 0;
   } else {
     obj->u.array.cap = 0;
     obj->u.array.len = 0;
     obj->fast_array = 0;
     obj->may_have_holes = 1;
+    obj->may_have_dense_elements = 1;
   }
 
   return arr;
@@ -8478,14 +8486,90 @@ static ant_value_t array_includes_get_index_value(
   return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
 }
 
+static bool array_includes_get_dense_index_value(
+  ant_value_t obj, ant_offset_t idx, ant_value_t *out
+) {
+  ant_value_t arr = (vtype(obj) == T_FUNC) ? js_func_obj(obj) : obj;
+  if (vtype(arr) != T_ARR) return false;
+
+  ant_offset_t doff = get_dense_buf(arr);
+  if (!doff || idx >= dense_capacity(doff)) return false;
+
+  ant_value_t val = dense_get(doff, idx);
+  if (is_empty_slot(val)) return false;
+
+  *out = val;
+  return true;
+}
+
+static bool array_includes_get_proto_dense_index_value(
+  ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t *out
+) {
+  ant_value_t proto = get_proto(js, arr);
+  for (int depth = 0; is_object_type(proto) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (array_includes_get_dense_index_value(proto, idx, out)) return true;
+    proto = get_proto(js, proto);
+  }
+
+  return false;
+}
+
 static ant_value_t array_includes_get_array_index_value(
-  ant_t *js, ant_value_t arr, ant_offset_t 
-  idx, char *idxstr, size_t idxlen
+  ant_t *js, ant_value_t arr, ant_offset_t idx, char *idxstr, size_t idxlen
 ) {
   if (arr_has(js, arr, idx)) return arr_get(js, arr, idx);
+  ant_value_t proto_dense_val = js_mkundef();
+  if (array_includes_get_proto_dense_index_value(js, arr, idx, &proto_dense_val))
+    return proto_dense_val;
   if (lkp_proto(js, arr, idxstr, idxlen) == 0) return js_mkundef();
   idxstr[idxlen] = '\0';
   return js_getprop_super(js, get_proto(js, arr), arr, idxstr);
+}
+
+static bool array_includes_object_may_have_indexed_props(
+  ant_t *js, ant_value_t obj, bool include_dense
+) {
+  if (!is_object_type(obj) || is_proxy(obj)) return is_proxy(obj);
+
+  ant_value_t as_obj = (vtype(obj) == T_FUNC) ? js_func_obj(obj) : obj;
+  ant_object_t *ptr = js_obj_ptr(as_obj);
+  if (!ptr) return false;
+  if (ptr->is_exotic) return true;
+
+  if (include_dense && vtype(as_obj) == T_ARR) {
+    ant_offset_t doff = get_dense_buf(as_obj);
+    if (doff) {
+      ant_offset_t dense_len = dense_capacity(doff);
+      for (ant_offset_t i = 0; i < dense_len; i++) 
+        if (!is_empty_slot(dense_get(doff, i))) return true;
+    }
+  }
+
+  if (!ptr->shape) return false;
+  uint32_t shape_count = ant_shape_count(ptr->shape);
+  for (uint32_t i = 0; i < shape_count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop || prop->type == ANT_SHAPE_KEY_SYMBOL) continue;
+    if (i >= ptr->prop_count) continue;
+    
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    if (is_array_index(key, (ant_offset_t)key_len)) return true;
+  }
+
+  return false;
+}
+
+static bool array_includes_can_skip_hole_lookups(ant_t *js, ant_value_t arr) {
+  if (array_includes_object_may_have_indexed_props(js, arr, false)) return false;
+
+  ant_value_t proto = get_proto(js, arr);
+  for (int depth = 0; is_object_type(proto) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    if (array_includes_object_may_have_indexed_props(js, proto, true)) return false;
+    proto = get_proto(js, proto);
+  }
+
+  return true;
 }
 
 static ant_value_t array_includes_dense_fast(
@@ -8520,12 +8604,40 @@ static ant_value_t array_includes_dense_fast(
 static ant_value_t array_includes_array_slow(
   ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_offset_t len, ant_offset_t start
 ) {
+  bool skip_hole_lookups =
+    query->search_type != T_UNDEF && 
+    array_includes_can_skip_hole_lookups(js, arr);
+  
+  ant_value_t *dense = NULL;
+  ant_offset_t dense_len = 0;
+
+  if (skip_hole_lookups) {
+    if (!array_may_have_dense_elements(arr)) return mkval(T_BOOL, 0);
+    
+    ant_offset_t doff = get_dense_buf(arr);
+    if (doff) {
+      dense = dense_data(doff);
+      dense_len = dense_iterable_length(js, arr);
+    }
+    
+    if (dense) for (ant_offset_t i = start; i < dense_len; i++) {
+      ant_value_t val = dense[i];
+      if (is_empty_slot(val)) continue;
+      if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
+    }
+    
+    return mkval(T_BOOL, 0);
+  }
+
   for (ant_offset_t i = start; i < len; i++) {
+    ant_value_t val;
+    
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-
-    ant_value_t val = array_includes_get_array_index_value(js, arr, i, idxstr, idxlen);
+    
+    val = array_includes_get_array_index_value(js, arr, i, idxstr, idxlen);
     if (is_err(val)) return val;
+    
     if (array_includes_matches(js, query, val)) return mkval(T_BOOL, 1);
   }
 
@@ -8556,9 +8668,7 @@ static ant_value_t array_includes_generic(
   return mkval(T_BOOL, 0);
 }
 
-static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t arr = js->this_val;
-  
+ant_value_t js_array_includes_call(ant_t *js, ant_value_t arr, ant_value_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "includes called on non-array");
   
@@ -8580,6 +8690,14 @@ static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int narg
   }
 
   return array_includes_generic(js, arr, &query, args, nargs);
+}
+
+bool js_is_array_includes_builtin(ant_value_t func) {
+  return vtype(func) == T_CFUNC && js_cfunc_same_entrypoint(func, builtin_array_includes);
+}
+
+ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs) {
+  return js_array_includes_call(js, js->this_val, args, nargs);
 }
 
 static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) {

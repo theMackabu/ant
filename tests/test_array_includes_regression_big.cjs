@@ -22,6 +22,31 @@ function assertArrayIncludesRegressionSurface() {
   grown.length = 3;
   assert.strictEqual(grown.includes(undefined), true);
 
+  try {
+    Array.prototype[1] = "from-array-proto";
+    assert.strictEqual(Array(3).includes("from-array-proto"), true);
+    assert.strictEqual(Array(3).includes("missing"), false);
+  } finally {
+    delete Array.prototype[1];
+  }
+
+  const customIncludes = {
+    includes(value) {
+      return value === "custom";
+    }
+  };
+  assert.strictEqual(customIncludes.includes("custom"), true);
+
+  const originalIncludes = Array.prototype.includes;
+  try {
+    Array.prototype.includes = function(value) {
+      return value === "patched";
+    };
+    assert.strictEqual([1, 2, 3].includes("patched"), true);
+  } finally {
+    Array.prototype.includes = originalIncludes;
+  }
+
   let steps = 0;
   const generic = {
     get length() {
