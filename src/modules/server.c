@@ -504,6 +504,8 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   }
 
   out = ant_http1_buffer_take(&buf, &out_len);
+  ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
+  
   if (body_is_stream) {
     if (!server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_STREAM_READ)) return;
     if (head_only) ant_conn_close(req->conn);
@@ -626,6 +628,8 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
     }
     
     out = ant_http1_buffer_take(&buf, &out_len);
+    ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
+    
     server_queue_write(
       req->conn,
       req, out, out_len,
@@ -652,8 +656,11 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
   }
 
   out = ant_http1_buffer_take(&buf, &out_len);
+  ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
+  
   server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_STREAM_READ);
   server_request_release(req);
+  
   return js_mkundef();
 }
 
@@ -969,16 +976,18 @@ static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_expor
     ant_value_t port = js_get(js, default_export, "port");
     ant_value_t hostname = js_get(js, default_export, "hostname");
     ant_value_t idle_timeout = js_get(js, default_export, "idleTimeout");
+    ant_value_t request_timeout = js_get(js, default_export, "requestTimeout");
     ant_value_t unix_path = js_get(js, default_export, "unix");
     ant_value_t tls = js_get(js, default_export, "tls");
 
     *looks_like_config =
-      vtype(fetch)        != T_UNDEF ||
-      vtype(port)         != T_UNDEF ||
-      vtype(hostname)     != T_UNDEF ||
-      vtype(idle_timeout) != T_UNDEF ||
-      vtype(unix_path)    != T_UNDEF ||
-      vtype(tls)          != T_UNDEF;
+      vtype(fetch)           != T_UNDEF ||
+      vtype(port)            != T_UNDEF ||
+      vtype(hostname)        != T_UNDEF ||
+      vtype(idle_timeout)    != T_UNDEF ||
+      vtype(request_timeout) != T_UNDEF ||
+      vtype(unix_path)       != T_UNDEF ||
+      vtype(tls)             != T_UNDEF;
   }
 
   return false;
@@ -1013,7 +1022,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   
   ant_value_t port_v = 0;
   ant_value_t hostname_v = 0;
-  ant_value_t timeout_v = 0;
+  ant_value_t idle_timeout_v = 0;
+  ant_value_t request_timeout_v = 0;
   ant_value_t unix_v = 0;
   ant_value_t tls_v = 0;
   
@@ -1033,8 +1043,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     .hostname = strdup("0.0.0.0"),
     .unix_path = NULL,
     .port = 3000,
-    .request_timeout_ms = 5000,
-    .idle_timeout_ms = 5000,
+    .request_timeout_ms = 30000,
+    .idle_timeout_ms = 30000,
     .loop = uv_default_loop(),
   };
 
@@ -1070,7 +1080,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
 
   port_v = js_get(js, default_export, "port");
   hostname_v = js_get(js, default_export, "hostname");
-  timeout_v = js_get(js, default_export, "idleTimeout");
+  idle_timeout_v = js_get(js, default_export, "idleTimeout");
+  request_timeout_v = js_get(js, default_export, "requestTimeout");
 
   if (vtype(port_v) != T_UNDEF && vtype(port_v) != T_NULL) {
     if (vtype(port_v) != T_NUM) {
@@ -1107,23 +1118,42 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     server->hostname = next_hostname;
   }
 
-  if (vtype(timeout_v) != T_UNDEF && vtype(timeout_v) != T_NULL) {
+  if (vtype(idle_timeout_v) != T_UNDEF && vtype(idle_timeout_v) != T_NULL) {
     double timeout = 0;
-    if (vtype(timeout_v) != T_NUM) {
+    if (vtype(idle_timeout_v) != T_NUM) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server idleTimeout must be a number");
     }
-    timeout = js_getnum(timeout_v);
+    timeout = js_getnum(idle_timeout_v);
     if (timeout < 0) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_RANGE, "server idleTimeout must be >= 0");
     }
+    server->idle_timeout_ms = (uint64_t)(timeout * 1000.0);
+  }
+
+  if (vtype(request_timeout_v) != T_UNDEF && vtype(request_timeout_v) != T_NULL) {
+    double timeout = 0;
+    if (vtype(request_timeout_v) != T_NUM) {
+      free(server->unix_path);
+      free(server->hostname);
+      free(server);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "server requestTimeout must be a number");
+    }
+    
+    timeout = js_getnum(request_timeout_v);
+    if (timeout < 0) {
+      free(server->unix_path);
+      free(server->hostname);
+      free(server);
+      return js_mkerr_typed(js, JS_ERR_RANGE, "server requestTimeout must be >= 0");
+    }
+    
     server->request_timeout_ms = (uint64_t)(timeout * 1000.0);
-    server->idle_timeout_ms = server->request_timeout_ms;
   }
 
   uv_signal_init(server->loop, &server->sigint_handle);
