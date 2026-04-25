@@ -1,6 +1,6 @@
-import { html, raw } from 'hono/html';
 import { crashDetail } from './format';
 import type { CrashReport } from './schema';
+import { html as honoHtml, raw } from 'hono/html';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
 import resvgWasm from '@resvg/resvg-wasm/index_bg.wasm';
 
@@ -16,9 +16,15 @@ function truncate(value: string, maxLength: number): string {
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
-function text(x: number, y: number, value: string, className = ''): string {
-  if (className) return String(html`<text x="${x}" y="${y}" class="${className}">${value}</text>`);
-  return String(html`<text x="${x}" y="${y}">${value}</text>`);
+type SvgChunk = ReturnType<typeof raw>;
+
+function html(strings: TemplateStringsArray, ...values: unknown[]): SvgChunk {
+  return honoHtml(strings, ...values) as SvgChunk;
+}
+
+function text(x: number, y: number, value: string, className = ''): SvgChunk {
+  if (className) return html`<text x="${x}" y="${y}" class="${className}">${value}</text>`;
+  return html`<text x="${x}" y="${y}">${value}</text>`;
 }
 
 function renderOgSvg(report: CrashReport, logoDataUrl: string): string {
@@ -30,8 +36,8 @@ function renderOgSvg(report: CrashReport, logoDataUrl: string): string {
     .map((frame, index) => {
       const y = 402 + index * 28;
       return [
-        text(46, y, `${index + 1}.`, 'frame-index'),
-        text(94, y, truncate(frame, 96), 'frame'),
+        String(text(46, y, `${index + 1}.`, 'frame-index')),
+        String(text(94, y, truncate(frame, 96), 'frame')),
       ].join('');
     })
     .join('');
@@ -84,9 +90,9 @@ function renderOgSvg(report: CrashReport, logoDataUrl: string): string {
       ${text(46, 149, `${report.reason}.`, 'title')}
       ${text(46, 196, `${detail} at ${report.addr}`, 'subtitle muted')}
       ${text(46, 256, 'Runtime:', 'meta label')}
-      ${text(196, 256, `Ant ${truncate(report.version, 40)}`, 'meta')}
+      ${text(180, 256, `Ant ${truncate(report.version, 40)}`, 'meta')}
       ${text(46, 294, 'Platform:', 'meta label')}
-      ${text(196, 294, `${truncate(report.os, 36)} ${report.arch}`, 'meta')}
+      ${text(180, 294, `${truncate(report.os, 36)} ${report.arch}`, 'meta')}
       ${text(46, 352, 'Native backtrace:', 'meta')} ${raw(frameSvg)}
       <rect x="46" y="540" width="1108" height="64" fill="url(#backtrace-fade)" />
     </svg>`,
