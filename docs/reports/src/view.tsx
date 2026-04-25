@@ -29,6 +29,16 @@ function crashDetail(code: string): string {
   }
 }
 
+function renderFrames(frames: string[]): Child {
+  if (!frames.length) return 'No native frames were captured.';
+  return frames.map((frame, index) => (
+    <>
+      <span class="frame-index">{index + 1}.</span> {frame}
+      {index < frames.length - 1 ? '\n' : ''}
+    </>
+  ));
+}
+
 const Shell = ({ title, children }: { title: string; children: Child }) => (
   <html lang="en">
     <head>
@@ -36,6 +46,7 @@ const Shell = ({ title, children }: { title: string; children: Child }) => (
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <link rel="icon" type="image/x-icon" href="/favicon.ico" />
       <link rel="stylesheet" href="/assets/report.css" />
+      <script src="/assets/report.js" defer></script>
       <title>{title}</title>
     </head>
     <body>{children}</body>
@@ -104,24 +115,18 @@ const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => {
 
       <div class="meta">
         <i>Native backtrace:</i>
-        <ol class="frames">
-          {report.frames.length ? (
-            report.frames.map(frame => (
-              <li>
-                <code>{frame}</code>
-              </li>
-            ))
-          ) : (
-            <li>
-              <ins>No native frames were captured.</ins>
-            </li>
-          )}
-        </ol>
+        <pre class="frames" tabindex={0}>
+          <code>{renderFrames(report.frames)}</code>
+        </pre>
       </div>
 
       <p class="url">
-        <span class="label">This report URL:</span> <a href={url}>{url}</a>
+        <span class="label">This report URL:</span>{' '}
+        <a href={url} class="copy-url" data-copy-url={url}>
+          {url}
+        </a>
       </p>
+
       <ReportFooter />
     </Shell>
   );

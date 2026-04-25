@@ -1,3 +1,8 @@
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('/assets/BerkeleyMono-Regular.woff2') format('woff2');
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -18,7 +23,7 @@ html {
 
 body {
   margin: 7% auto 0;
-  max-width: 405px;
+  max-width: 410px;
   min-height: 180px;
   padding: 30px 0 15px;
 }
@@ -42,19 +47,8 @@ a {
 }
 
 code {
-  background: #f8f8f8;
-  border: 1px solid #eee;
-  border-radius: 2px;
-  padding: 0 3px;
-}
-
-ol {
-  margin: 11px 0 22px 22px;
-}
-
-li {
-  margin: 3px 0;
-  overflow-wrap: anywhere;
+  padding: 2px 5px;
+  background-color: #f2f2f2;
 }
 
 #logo {
@@ -83,14 +77,32 @@ li {
   color: #777;
 }
 
-.frames code {
-  background: transparent;
-  border: 0;
-  padding: 0;
+.frames {
+  padding-inline: 0.7rem;
+  padding-block: 0.3rem;
+  color: #333;
+  background-color: #fcfcfc !important;
+  font-family: 'Berkeley Mono', monospace;
+  margin: 5px 0 11px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.frames > code {
+  all: unset;
+}
+
+.frame-index {
+  color: #999;
 }
 
 .url {
   overflow-wrap: anywhere;
+}
+
+.copy-url {
+  cursor: copy;
 }
 
 .footer {
