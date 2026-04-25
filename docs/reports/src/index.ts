@@ -167,6 +167,13 @@ async function getReport(db: ReturnType<typeof drizzle>, id: string): Promise<Cr
 app.get('/og/:image', async c => {
   const db = drizzle(c.env.DB);
   const id = ogImageId(c.req.param('image'));
+
+  const cache = caches.default;
+  const cacheKey = new Request(publicOgImageUrl(c.req.url, id), { method: 'GET' });
+
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
   const report = await getReport(db, id);
   if (!report) return c.notFound();
 
@@ -176,10 +183,13 @@ app.get('/og/:image', async c => {
     await getOgFontBytes(c.env, c.req.url),
   );
 
-  return c.body(png, 200, {
+  const response = c.body(png, 200, {
     'Content-Type': 'image/png',
-    'Cache-Control': 'public, max-age=3600',
+    'Cache-Control': 'public, max-age=2592000, immutable',
   });
+
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
 app.get('/:id', async c => {
