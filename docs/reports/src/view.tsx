@@ -48,13 +48,24 @@ const Logo = () => (
   </a>
 );
 
+const ReportFooter = () => (
+  <p class="footer">
+    <a href="https://github.com/theMackabu/ant">Ant</a>
+    <ins> · </ins>
+    <a href="https://github.com/theMackabu/ant/issues/new">Report this on GitHub</a>
+  </p>
+);
+
 const BlankPage = () => (
   <Shell title="js.report">
     <Logo />
     <p>
       <b>404.</b> <ins>That's an error.</ins>
     </p>
-    <p>If you were given a report link, check the URL and try again.</p>
+    <p style="margin-top: -10px">If you were given a report link, check the URL and try again.</p>
+    <p class="footer">
+      <a href="https://github.com/theMackabu/ant">Ant on GitHub</a>
+    </p>
   </Shell>
 );
 
@@ -111,6 +122,7 @@ const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => {
       <p class="url">
         <span class="label">This report URL:</span> <a href={url}>{url}</a>
       </p>
+      <ReportFooter />
     </Shell>
   );
 };

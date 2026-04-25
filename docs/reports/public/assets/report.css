@@ -93,6 +93,10 @@ li {
   overflow-wrap: anywhere;
 }
 
+.footer {
+  margin-top: 33px;
+}
+
 @media screen and (max-width: 772px) {
   body {
     background: none;
