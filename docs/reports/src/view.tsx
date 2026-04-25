@@ -121,7 +121,8 @@ const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => {
       </div>
 
       <p class="url">
-        <span class="label">This report URL:</span>{' '}
+        <span class="label">This report URL:</span>
+        <br />
         <a href={url} class="copy-url" data-copy-url={url}>
           {url}
         </a>
