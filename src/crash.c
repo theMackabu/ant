@@ -13,6 +13,7 @@
 #include "crash.h"
 #include "internal.h"
 #include "reactor.h"
+#include "cli/version.h"
 
 #include "silver/engine.h"
 #include "modules/assert.h"
@@ -61,6 +62,9 @@ bool ant_crash_is_internal_report(int argc, char **argv) {
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sys/utsname.h>
 #endif
 
 #if defined(__APPLE__) || defined(__linux__) || defined(__GLIBC__)
@@ -221,6 +225,44 @@ static const char *os_name(void) {
 #endif
 }
 
+static const char *os_version(void) {
+  static char version[128];
+  if (version[0]) return version;
+
+#ifdef _WIN32
+  OSVERSIONINFOEXA info;
+  memset(&info, 0, sizeof(info));
+  info.dwOSVersionInfoSize = sizeof(info);
+  if (GetVersionExA((OSVERSIONINFOA *)&info)) {
+    snprintf(
+      version, sizeof(version), "%lu.%lu.%lu",
+      (unsigned long)info.dwMajorVersion,
+      (unsigned long)info.dwMinorVersion,
+      (unsigned long)info.dwBuildNumber
+    );
+    return version;
+  }
+#elif defined(__APPLE__)
+  size_t len = sizeof(version);
+  if (sysctlbyname("kern.osproductversion", version, &len, NULL, 0) == 0 && version[0])
+    return version;
+#elif defined(__linux__)
+  struct utsname info;
+  if (uname(&info) == 0 && info.release[0]) {
+    snprintf(version, sizeof(version), "%s", info.release);
+    return version;
+  }
+#endif
+  snprintf(version, sizeof(version), "unknown");
+  return version;
+}
+
+static const char *os_display_name(void) {
+  static char display[160];
+  if (!display[0]) snprintf(display, sizeof(display), "%s v%s", os_name(), os_version());
+  return display;
+}
+
 static const char *arch_name(void) {
 #if defined(__aarch64__) || defined(_M_ARM64)
   return "arm64";
@@ -341,7 +383,6 @@ static void format_native_frame(char *out, size_t out_cap, uintptr_t addr) {
   if (base && GetModuleFileNameA((HMODULE)(uintptr_t)base, module_path, (DWORD)sizeof(module_path)) > 0)
     image = path_basename_const(module_path);
 
-  // TODO: make dry
   union {
     SYMBOL_INFO info;
     char storage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
@@ -405,7 +446,7 @@ static size_t build_report_payload(
   cb_puts(&p, ",\"target\":");
   cb_put_json_string(&p, ANT_TARGET_TRIPLE);
   cb_puts(&p, ",\"os\":");
-  cb_put_json_string(&p, os_name());
+  cb_put_json_string(&p, os_display_name());
   cb_puts(&p, ",\"arch\":");
   cb_put_json_string(&p, arch_name());
   cb_puts(&p, ",\"kind\":");
@@ -533,21 +574,23 @@ static void spawn_reporter(const char *payload, size_t payload_len) {
 }
 #endif
 
+static void crash_report_print_upload_failed(void) {
+  if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
+  else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+}
+
+static void crash_report_print_upload_error(const char *message) {
+  crash_report_print_upload_failed();
+  if (message && *message) fprintf(stderr, "%s\n", message);
+}
+
 static ant_value_t crash_report_noop(ant_t *js, ant_value_t *args, int nargs) {
   if (crash_report_status_printed) return js_mkundef();
   crash_report_status_printed = true;
 
-  // TODO: make dry
-  if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-  else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
-  
-  if (args && nargs > 0) {
-  const char *message = js_str(js, args[0]);
-  if (message && *message) {
-    fputs(message, stderr);
-    fputc('\n', stderr);
-  }}
-  
+  if (args && nargs > 0) crash_report_print_upload_error(js_str(js, args[0]));
+  else crash_report_print_upload_failed();
+
   return js_mkundef();
 }
 
@@ -560,9 +603,7 @@ static ant_value_t crash_report_print_url(ant_t *js, ant_value_t *args, int narg
   if (!s || len == 0) {
     if (!crash_report_status_printed) {
       crash_report_status_printed = true;
-      // TODO: make dry
-      if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-      else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+      crash_report_print_upload_failed();
     }
     return js_mkundef();
   }
@@ -581,9 +622,7 @@ static ant_value_t crash_report_response_text(ant_t *js, ant_value_t *args, int 
   if (!is_callable(text_fn)) {
     if (!crash_report_status_printed) {
       crash_report_status_printed = true;
-      // TODO: make dry
-      if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-      else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+      crash_report_print_upload_failed();
       fputs("Response.text is not available.\n", stderr);
     }
     return js_mkundef();
@@ -749,13 +788,6 @@ static void crash_print_frames(ant_t *js, ant_value_t report) {
 }
 
 static void crash_print_report_summary(ant_t *js, ant_value_t report, ant_value_t argv, bool upload, bool trace, unsigned long long pid) {
-  crprintf_var("version", ANT_VERSION);
-  crprintf_var("target", ANT_TARGET_TRIPLE);
-  crprintf_var("git_hash", ANT_GIT_HASH);
-
-  crprintf_var("os_name", os_name());
-  crprintf_var("os_version", "os_version");
-
   size_t code_len = 0, addr_len = 0, reason_len = 0;
   
   const char *code = crash_get_string(js, report, "code", &code_len, "SIGNAL");
@@ -771,18 +803,17 @@ static void crash_print_report_summary(ant_t *js, ant_value_t report, ant_value_
   char peak_rss_text[32];
   crash_format_bytes(peak_rss_text, sizeof(peak_rss_text), peak_rss);
 
-  fprintf(stderr, "=== (%llu) ===================================================\n", pid);  
-  
-  // TODO: Ant v<version> (<git_hash>) <arch>
-  crfprintf(stderr, "<dim>Ant {version} {git_hash} {target}\n");
-  crfprintf(stderr, "<dim>{os_name} {os_version}\n");
-  
+  fprintf(stderr, "=== (%llu) ===================================================\n", pid);
+
+  crfprintf(stderr, "<dim>Ant v%s (%s) %s</>\n", ant_semver(), ANT_GIT_HASH, ANT_TARGET_TRIPLE);
+  crfprintf(stderr, "<dim>%s</>\n", os_display_name());
+
   crash_print_args(js, argv);
-  
-  crfprintf(stderr, "<dim>Summary: %s (%.*s) with signal %d\n", detail, code_len, code, signal_number);
-  crfprintf(stderr, "<dim>Elapsed: %llums | RSS Peak: %s\n\n", elapsed, peak_rss_text);
-  crfprintf(stderr, "<red>panic</red><dim>(main thread):</> %.*s at address %.*s \n", reason_len, reason, addr_len, addr);
-  
+
+  crfprintf(stderr, "<dim>Summary: %s (%.*s) with signal %d</>\n", detail, (int)code_len, code, signal_number);
+  crfprintf(stderr, "<dim>Elapsed: %llums | RSS Peak: %s</>\n\n", elapsed, peak_rss_text);
+  crfprintf(stderr, "<red>panic</red><dim>(main thread):</> %.*s at address %.*s \n", (int)reason_len, reason, (int)addr_len, addr);
+
   crfprintf(stderr, "oh no<dim>:</> Ant has crashed. This indicates a bug in Ant, not your code.\n\n");
   if (trace) crash_print_frames(js, report);
 
@@ -805,17 +836,16 @@ int ant_crash_run_internal_report(ant_t *js) {
 
   ant_value_t wrapper_json = js_mkstr(js, payload, payload_len);
   ant_value_t wrapper = json_parse_value(js, wrapper_json);
-  
+
   if (is_err(wrapper) || !is_object_type(wrapper)) {
-    // TODO: make this dry
-    crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+    crash_report_print_upload_failed();
     free(payload);
     return EXIT_FAILURE;
   }
 
   ant_value_t report = crash_get(js, wrapper, "report");
   if (!is_object_type(report)) {
-    crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+    crash_report_print_upload_failed();
     free(payload);
     return EXIT_FAILURE;
   }
@@ -836,9 +866,7 @@ int ant_crash_run_internal_report(ant_t *js) {
 
   ant_value_t report_json = js_json_stringify(js, &report, 1);
   if (vtype(report_json) != T_STR) {
-    // TODO: make this dry
-    if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-    else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+    crash_report_print_upload_failed();
     free(payload);
     return EXIT_FAILURE;
   }
@@ -846,8 +874,7 @@ int ant_crash_run_internal_report(ant_t *js) {
   size_t report_payload_len = 0;
   const char *report_payload = js_getstr(js, report_json, &report_payload_len);
   if (!report_payload) {
-    if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-    else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
+    crash_report_print_upload_failed();
     free(payload);
     return EXIT_FAILURE;
   }
@@ -866,13 +893,10 @@ int ant_crash_run_internal_report(ant_t *js) {
 
   ant_value_t fetch_args[2] = { js_mkstr(js, url, strlen(url)), init };
   ant_value_t fetch_promise = ant_fetch(js, fetch_args, 2);
-  
+
   if (is_err(fetch_promise)) {
     crash_report_status_printed = true;
-    if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-    else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
-    const char *message = js_str(js, fetch_promise);
-    if (message && *message) fprintf(stderr, "%s\n", message);
+    crash_report_print_upload_error(js_str(js, fetch_promise));
     free(payload);
     return EXIT_FAILURE;
   }
@@ -882,19 +906,15 @@ int ant_crash_run_internal_report(ant_t *js) {
     js_mkfun(crash_report_response_text),
     js_mkfun(crash_report_noop)
   );
-  
+
   promise_mark_handled(fetch_promise);
   if (is_err(report_promise)) {
     crash_report_status_printed = true;
-    // TODO: make this dry
-    if (crash_report_status_inline) crfprintf(stderr, "\r\033[2K <red>Crash report upload failed.</red>\n");
-    else crfprintf(stderr, "<red>Crash report upload failed.</red>\n");
-    const char *message = js_str(js, report_promise);
-    if (message && *message) fprintf(stderr, "%s\n", message);
+    crash_report_print_upload_error(js_str(js, report_promise));
     free(payload);
     return EXIT_FAILURE;
   }
-  
+
   promise_mark_handled(report_promise);
   js_run_event_loop(js);
   free(payload);
@@ -1087,50 +1107,6 @@ static int collect_windows_frames(EXCEPTION_POINTERS *exc, uintptr_t *frames, in
     if (!ok || (frame.AddrPC.Offset == prev_pc && frame.AddrStack.Offset == prev_sp)) break;
   }
   return count;
-}
-
-static void print_windows_backtrace(EXCEPTION_POINTERS *exc) {
-  if (!exc || !exc->ContextRecord) {
-    fprintf(stderr, "  (no exception context available)\n");
-    return;
-  }
-
-  HANDLE process = GetCurrentProcess();
-  SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-  if (!SymInitialize(process, NULL, TRUE)) {
-    fprintf(stderr, "  (SymInitialize failed: %lu)\n", GetLastError());
-    return;
-  }
-
-  uintptr_t frames[ANT_CRASH_FRAME_MAX] = {0};
-  int frame_count = collect_windows_frames(exc, frames, ANT_CRASH_FRAME_MAX);
-  
-  union {
-    SYMBOL_INFO info;
-    char storage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
-  } symbol_buf;
-  
-  SYMBOL_INFO *symbol = &symbol_buf.info;
-  memset(&symbol_buf, 0, sizeof(symbol_buf));
-  symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-  symbol->MaxNameLen = MAX_SYM_NAME;
-
-  for (int i = 0; i < frame_count; i++) {
-    DWORD64 addr = (DWORD64)frames[i];
-    DWORD64 displacement = 0;
-    
-    fprintf(stderr, "%d   0x%016llx", i, (unsigned long long)addr);
-    if (SymFromAddr(process, addr, &displacement, symbol))
-      fprintf(stderr, " %s + %llu", symbol->Name, (unsigned long long)displacement);
-
-    IMAGEHLP_LINE64 line;
-    DWORD line_disp = 0;
-    memset(&line, 0, sizeof(line));
-    line.SizeOfStruct = sizeof(line);
-    if (SymGetLineFromAddr64(process, addr, &line_disp, &line))
-      fprintf(stderr, " (%s:%lu)", line.FileName, line.LineNumber);
-    fputc('\n', stderr);
-  }
 }
 
 static LONG WINAPI windows_crash_handler(EXCEPTION_POINTERS *exc) {
