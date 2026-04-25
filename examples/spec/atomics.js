@@ -5,6 +5,10 @@ console.log('Atomics Tests\n');
 const sab = new SharedArrayBuffer(16);
 const int32 = new Int32Array(sab);
 
+test('SharedArrayBuffer Symbol.species', SharedArrayBuffer[Symbol.species], SharedArrayBuffer);
+test('SharedArrayBuffer.prototype.byteLength exists', 'byteLength' in SharedArrayBuffer.prototype, true);
+test('SharedArrayBuffer byteLength getter', sab.byteLength, 16);
+
 Atomics.store(int32, 0, 42);
 test('Atomics.store/load', Atomics.load(int32, 0), 42);
 

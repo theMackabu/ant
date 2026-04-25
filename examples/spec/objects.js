@@ -116,6 +116,10 @@ test('descriptors symbol value', descriptors[descriptorSymbol].value, 'symbol va
 const arrayDescriptors = Object.getOwnPropertyDescriptors(['item']);
 test('array descriptor index value', arrayDescriptors[0].value, 'item');
 test('array descriptor length value', arrayDescriptors.length.value, 1);
+const proxyUndefinedDescriptor = new Proxy({ a: 1 }, {
+  getOwnPropertyDescriptor() {}
+});
+test('Object.getOwnPropertyDescriptors skips undefined proxy descriptors', Object.getOwnPropertyDescriptors(proxyUndefinedDescriptor).hasOwnProperty('a'), false);
 testThrows('Object.getOwnPropertyDescriptors throws without argument', () => Object.getOwnPropertyDescriptors());
 testThrows('Object.getOwnPropertyDescriptors throws on null', () => Object.getOwnPropertyDescriptors(null));
 test('Object.getOwnPropertyDescriptors boxes number primitive', typeof Object.getOwnPropertyDescriptors(1), 'object');

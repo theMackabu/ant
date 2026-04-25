@@ -76,6 +76,16 @@ typedef struct {
 #define NEXT()       sv_lexer_next(&p->lx)
 #define LA()         sv_lexer_lookahead(&p->lx)
 
+static bool lookahead_crosses_line_terminator(P) {
+  sv_lexer_state_t saved;
+  sv_lexer_save_state(&p->lx, &saved);
+  CONSUMED = 1;
+  (void)NEXT();
+  bool had_newline = HAD_NEWLINE;
+  sv_lexer_restore_state(&p->lx, &saved);
+  return had_newline;
+}
+
 static sv_ast_t *parse_stmt(P);
 static sv_ast_t *parse_expr(P);
 static sv_ast_t *parse_paren_expr(P);
@@ -556,13 +566,15 @@ static sv_ast_t *parse_primary(P) {
   l_async: {
     uint32_t async_off = (uint32_t)TOFF;
     CONSUME();
-    if (LA() == TOK_FUNC) {
+    bool has_line_term = lookahead_crosses_line_terminator(p);
+    if (!has_line_term && LA() == TOK_FUNC) {
       NEXT(); CONSUME();
       sv_ast_t *fn = parse_func(p);
       fn->flags |= FN_ASYNC;
       fn->src_off = async_off;
       return fn;
     }
+    if (has_line_term) return mk_ident_from_tok(p);
     sv_ast_t *arrow = try_parse_async_arrow(p);
     if (arrow) return arrow;
     return mk_ident_from_tok(p);
@@ -1664,7 +1676,7 @@ static sv_ast_t *parse_export_stmt(P) {
     CONSUME();
     decl->flags |= EX_DEFAULT;
 
-    if (NEXT() == TOK_ASYNC && LA() == TOK_FUNC) {
+    if (NEXT() == TOK_ASYNC && LA() == TOK_FUNC && !lookahead_crosses_line_terminator(p)) {
       uint32_t async_off = (uint32_t)TOFF;
       CONSUME();
       NEXT(); CONSUME();
@@ -1692,7 +1704,7 @@ static sv_ast_t *parse_export_stmt(P) {
     return decl;
   }
 
-  if (TOK == TOK_ASYNC && LA() == TOK_FUNC) {
+  if (TOK == TOK_ASYNC && LA() == TOK_FUNC && !lookahead_crosses_line_terminator(p)) {
     decl->flags |= EX_DECL;
     uint32_t async_off = (uint32_t)TOFF;
     CONSUME();
@@ -2088,7 +2100,7 @@ static sv_ast_t *parse_stmt(P) {
   l_async: {
     uint8_t la = LA();
     uint32_t async_off = (uint32_t)TOFF;
-    if (la == TOK_FUNC) {
+    if (la == TOK_FUNC && !lookahead_crosses_line_terminator(p)) {
       CONSUME();
       NEXT(); CONSUME();
       sv_ast_t *fn = parse_func(p);

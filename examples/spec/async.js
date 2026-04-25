@@ -10,6 +10,24 @@ async function basicAsync() {
 basicAsync().then(v => {
   results.basic = v;
 });
+test('async functions have no prototype property', basicAsync.hasOwnProperty('prototype'), false);
+test('async function prototype Symbol.toStringTag', Object.getPrototypeOf(async function () {})[Symbol.toStringTag], 'AsyncFunction');
+test('async function no line break before function', (() => {
+  try {
+    Function('async\n function a() {await 0}')();
+    return false;
+  } catch (e) {
+    return true;
+  }
+})(), true);
+test('async function cannot await in parameters', (() => {
+  try {
+    Function('(async function a(b = await Promise.resolve()) {}())')();
+    return false;
+  } catch (e) {
+    return true;
+  }
+})(), true);
 
 const arrowAsync = async () => 'arrow result';
 arrowAsync().then(v => {

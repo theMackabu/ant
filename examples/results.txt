@@ -1219,12 +1219,12 @@ compat-table/es2017/Atomics.wait.js: OK
 compat-table/es2017/Atomics.xor.js: OK
 compat-table/es2017/Object.entries.js: OK
 compat-table/es2017/Object.getOwnPropertyDescriptors.js: OK
-compat-table/es2017/Object.getOwnPropertyDescriptors.no-undefined.js: TypeError: undefined is not a function
+compat-table/es2017/Object.getOwnPropertyDescriptors.no-undefined.js: OK
 compat-table/es2017/Object.values.js: OK
-compat-table/es2017/SharedArrayBuffer.Symbol.species.js: failed
+compat-table/es2017/SharedArrayBuffer.Symbol.species.js: OK
 compat-table/es2017/SharedArrayBuffer.js: OK
 compat-table/es2017/SharedArrayBuffer.prototype.Symbol.toStringTag.js: OK
-compat-table/es2017/SharedArrayBuffer.prototype.byteLength.js: failed
+compat-table/es2017/SharedArrayBuffer.prototype.byteLength.js: OK
 compat-table/es2017/SharedArrayBuffer.prototype.slice.js: OK
 compat-table/es2017/String.prototype.padEnd.js: OK
 compat-table/es2017/String.prototype.padStart.js: OK
@@ -1249,7 +1249,7 @@ compat-table/es2017/annex-b.Proxy.__defineSetter__.js: OK
 compat-table/es2017/annex-b.Proxy.__lookupGetter__.js: OK
 compat-table/es2017/annex-b.Proxy.__lookupSetter__.js: OK
 compat-table/es2017/annex-b.for-in-assignment-non-strict.js: OK
-compat-table/es2017/async.Symbol.toStringTag.js: failed
+compat-table/es2017/async.Symbol.toStringTag.js: OK
 compat-table/es2017/async.arrow-in-class.js: OK
 compat-table/es2017/async.arrow.js: OK
 compat-table/es2017/async.await-non-promise.js: OK
@@ -1259,9 +1259,9 @@ compat-table/es2017/async.constructor.js: OK
 compat-table/es2017/async.methods-class.js: OK
 compat-table/es2017/async.methods-object.js: OK
 compat-table/es2017/async.must-await-value.js: OK
-compat-table/es2017/async.no-await-in-params.js: failed
-compat-table/es2017/async.no-line-break.js: failed
-compat-table/es2017/async.no-prototype.js: failed
+compat-table/es2017/async.no-await-in-params.js: OK
+compat-table/es2017/async.no-line-break.js: OK
+compat-table/es2017/async.no-prototype.js: OK
 compat-table/es2017/async.prototype-chain.js: OK
 compat-table/es2017/async.return.js: OK
 compat-table/es2017/async.throw.js: OK

@@ -624,7 +624,7 @@ ant_value_t jit_helper_closure(
   closure->func_obj = func_obj;
   ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, mkval(T_FUNC, (uintptr_t)parent_closure));
   
-  js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator);
+  js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator && !child->is_async);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));
   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
   
@@ -632,7 +632,7 @@ ant_value_t jit_helper_closure(
     js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  if (!child->is_arrow && !child->is_method) {
+  if (!child->is_arrow && !child->is_method && !child->is_async) {
     ant_value_t parent_proto = child->is_generator ? js->sym.generator_proto : js->sym.object_proto;
     sv_setup_function_prototype_with_parent(js, func_obj, func_val, parent_proto);
   }

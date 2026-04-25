@@ -346,6 +346,9 @@ void init_symbol_module(void) {
   ant_value_t promise_proto = js_get(js, promise_ctor, "prototype");
   js_set_sym(js, promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
 
+  ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
+  js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));
+
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
 }

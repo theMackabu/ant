@@ -5372,11 +5372,15 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
       ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
       if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
     }
-    set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
     
+    set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
     ant_value_t func = js_obj_to_func(func_obj);
-    ant_value_t proto_setup = setup_func_prototype(js, func);
-    if (is_err(proto_setup)) return proto_setup;
+    
+    if (!is_async) {
+      ant_value_t proto_setup = setup_func_prototype(js, func);
+      if (is_err(proto_setup)) return proto_setup;
+    }
+    
     return func;
   }
   
@@ -5468,8 +5472,11 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
   }
 
   ant_value_t func = mkval(T_FUNC, (uintptr_t)closure);
-  ant_value_t proto_setup = setup_func_prototype(js, func);
-  if (is_err(proto_setup)) return proto_setup;
+  if (!is_async) {
+    ant_value_t proto_setup = setup_func_prototype(js, func);
+    if (is_err(proto_setup)) return proto_setup;
+  }
+  
   if (is_generator) {
     ant_value_t prototype = js_get(js, func, "prototype");
     if (is_object_type(prototype) && is_object_type(js->sym.generator_proto))
@@ -7777,6 +7784,8 @@ static ant_value_t object_add_descriptors_for_keys(
 
 static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_mkobj(js);
+  
+  if (is_object_type(js->sym.object_proto)) js_set_proto_init(result, js->sym.object_proto);
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
   }

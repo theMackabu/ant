@@ -483,6 +483,14 @@ static ant_value_t js_arraybuffer_detached_getter(ant_t *js, ant_value_t *args, 
   return js_bool(data->is_detached);
 }
 
+static ant_value_t js_arraybuffer_byteLength_getter(ant_t *js, ant_value_t *args, int nargs) {
+  (void)args; (void)nargs;
+  ant_value_t this_val = js_getthis(js);
+  ArrayBufferData *data = buffer_get_arraybuffer_data(this_val);
+  if (!data || data->is_detached) return js_mknum(0);
+  return js_mknum((double)data->length);
+}
+
 // ArrayBuffer.isView(value)
 static ant_value_t js_arraybuffer_isView(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
@@ -2732,6 +2740,7 @@ void init_buffer_module() {
   js_set(js, arraybuffer_proto, "transfer", js_mkfun(js_arraybuffer_transfer));
   js_set(js, arraybuffer_proto, "transferToFixedLength", js_mkfun(js_arraybuffer_transferToFixedLength));
   js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_E);
+  js_set_getter_desc(js, arraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
   js_set_sym(js, arraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
@@ -2846,12 +2855,14 @@ void init_buffer_module() {
   js_set_proto_init(sharedarraybuffer_proto, object_proto);
   
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
+  js_set_getter_desc(js, sharedarraybuffer_proto, "byteLength", 10, js_mkfun(js_arraybuffer_byteLength_getter), JS_DESC_C);
   js_set_sym(js, sharedarraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "name", 4, ANT_STRING("SharedArrayBuffer"));
   js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
+  js_define_species_getter(js, sharedarraybuffer_ctor_obj);
   
   ant_value_t sharedarraybuffer_ctor = js_obj_to_func(sharedarraybuffer_ctor_obj);
   js_set(js, sharedarraybuffer_proto, "constructor", sharedarraybuffer_ctor);
