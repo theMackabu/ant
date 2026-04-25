@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #ifndef _WIN32
 #include <signal.h>
+#include <unistd.h>
 
 #define ANT_CRASH_ALT_STACK_SIZE (64 * 1024)
 
@@ -142,8 +142,158 @@ void ant_crash_init(void) {
 
 #else // _WIN32
 
+#include <dbghelp.h>
+#include <process.h>
+
+static LPTOP_LEVEL_EXCEPTION_FILTER previous_filter;
+static volatile LONG crash_in_progress;
+
+static const char *exception_name(DWORD code) {
+switch (code) {
+  case EXCEPTION_ACCESS_VIOLATION: return "EXCEPTION_ACCESS_VIOLATION";
+  case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
+  case EXCEPTION_BREAKPOINT: return "EXCEPTION_BREAKPOINT";
+  case EXCEPTION_DATATYPE_MISALIGNMENT: return "EXCEPTION_DATATYPE_MISALIGNMENT";
+  case EXCEPTION_FLT_DENORMAL_OPERAND: return "EXCEPTION_FLT_DENORMAL_OPERAND";
+  case EXCEPTION_FLT_DIVIDE_BY_ZERO: return "EXCEPTION_FLT_DIVIDE_BY_ZERO";
+  case EXCEPTION_FLT_INEXACT_RESULT: return "EXCEPTION_FLT_INEXACT_RESULT";
+  case EXCEPTION_FLT_INVALID_OPERATION: return "EXCEPTION_FLT_INVALID_OPERATION";
+  case EXCEPTION_FLT_OVERFLOW: return "EXCEPTION_FLT_OVERFLOW";
+  case EXCEPTION_FLT_STACK_CHECK: return "EXCEPTION_FLT_STACK_CHECK";
+  case EXCEPTION_FLT_UNDERFLOW: return "EXCEPTION_FLT_UNDERFLOW";
+  case EXCEPTION_ILLEGAL_INSTRUCTION: return "EXCEPTION_ILLEGAL_INSTRUCTION";
+  case EXCEPTION_IN_PAGE_ERROR: return "EXCEPTION_IN_PAGE_ERROR";
+  case EXCEPTION_INT_DIVIDE_BY_ZERO: return "EXCEPTION_INT_DIVIDE_BY_ZERO";
+  case EXCEPTION_INT_OVERFLOW: return "EXCEPTION_INT_OVERFLOW";
+  case EXCEPTION_INVALID_DISPOSITION: return "EXCEPTION_INVALID_DISPOSITION";
+  case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "EXCEPTION_NONCONTINUABLE_EXCEPTION";
+  case EXCEPTION_PRIV_INSTRUCTION: return "EXCEPTION_PRIV_INSTRUCTION";
+  case EXCEPTION_STACK_OVERFLOW: return "EXCEPTION_STACK_OVERFLOW";
+  default: return "fatal exception";
+}}
+
+static DWORD64 exception_fault_address(EXCEPTION_RECORD *record) {
+  if (!record) return 0;
+  if ((
+    record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || 
+    record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) 
+    && record->NumberParameters >= 2
+  ) return (DWORD64)record->ExceptionInformation[1];
+  return (DWORD64)(uintptr_t)record->ExceptionAddress;
+}
+
+static BOOL init_stack_frame(CONTEXT *ctx, STACKFRAME64 *frame, DWORD *machine) {
+  memset(frame, 0, sizeof(*frame));
+
+#if defined(_M_X64) || defined(__x86_64__)
+  *machine = IMAGE_FILE_MACHINE_AMD64;
+  frame->AddrPC.Offset = ctx->Rip;
+  frame->AddrFrame.Offset = ctx->Rbp;
+  frame->AddrStack.Offset = ctx->Rsp;
+#elif defined(_M_IX86) || defined(__i386__)
+  *machine = IMAGE_FILE_MACHINE_I386;
+  frame->AddrPC.Offset = ctx->Eip;
+  frame->AddrFrame.Offset = ctx->Ebp;
+  frame->AddrStack.Offset = ctx->Esp;
+#elif defined(_M_ARM64) || defined(__aarch64__)
+  *machine = IMAGE_FILE_MACHINE_ARM64;
+  frame->AddrPC.Offset = ctx->Pc;
+  frame->AddrFrame.Offset = ctx->Fp;
+  frame->AddrStack.Offset = ctx->Sp;
+#else
+  return FALSE;
+#endif
+  frame->AddrPC.Mode = AddrModeFlat;
+  frame->AddrFrame.Mode = AddrModeFlat;
+  frame->AddrStack.Mode = AddrModeFlat;
+  return TRUE;
+}
+
+static void print_windows_backtrace(EXCEPTION_POINTERS *exc) {
+  if (!exc || !exc->ContextRecord) {
+    fprintf(stderr, "  (no exception context available)\n");
+    return;
+  }
+
+  HANDLE process = GetCurrentProcess();
+  HANDLE thread = GetCurrentThread();
+
+  SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+  if (!SymInitialize(process, NULL, TRUE)) {
+    fprintf(stderr, "  (SymInitialize failed: %lu)\n", GetLastError());
+    return;
+  }
+
+  CONTEXT ctx = *exc->ContextRecord;
+  STACKFRAME64 frame;
+  DWORD machine;
+  if (!init_stack_frame(&ctx, &frame, &machine)) {
+    fprintf(stderr, "  (unsupported Windows architecture for StackWalk64)\n");
+    return;
+  }
+
+  union {
+    SYMBOL_INFO info;
+    char storage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
+  } symbol_buf;
+  
+  SYMBOL_INFO *symbol = &symbol_buf.info;
+  memset(&symbol_buf, 0, sizeof(symbol_buf));
+  symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+  symbol->MaxNameLen = MAX_SYM_NAME;
+
+  for (int i = 0; i < 64; i++) {
+    DWORD64 addr = frame.AddrPC.Offset;
+    if (addr == 0) break;
+    DWORD64 displacement = 0;
+    
+    fprintf(stderr, "%d   0x%016llx", i, (unsigned long long)addr);
+    if (SymFromAddr(process, addr, &displacement, symbol)) 
+      fprintf(stderr, " %s + %llu", symbol->Name, (unsigned long long)displacement);
+    
+    IMAGEHLP_LINE64 line;
+    DWORD line_disp = 0;
+    memset(&line, 0, sizeof(line));
+    line.SizeOfStruct = sizeof(line);
+    if (SymGetLineFromAddr64(process, addr, &line_disp, &line)) 
+      fprintf(stderr, " (%s:%lu)", line.FileName, line.LineNumber);
+    
+    fputc('\n', stderr);
+    DWORD64 prev_pc = frame.AddrPC.Offset;
+    DWORD64 prev_sp = frame.AddrStack.Offset;
+    BOOL ok = StackWalk64(
+      machine, process, thread, &frame, &ctx, NULL,
+      SymFunctionTableAccess64, SymGetModuleBase64, NULL
+    );
+    if (!ok || (frame.AddrPC.Offset == prev_pc && frame.AddrStack.Offset == prev_sp)) break;
+  }
+}
+
+static LONG WINAPI windows_crash_handler(EXCEPTION_POINTERS *exc) {
+  if (InterlockedExchange(&crash_in_progress, 1) != 0) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  EXCEPTION_RECORD *record = exc ? exc->ExceptionRecord : NULL;
+  DWORD code = record ? record->ExceptionCode : 0;
+
+  fprintf(stderr, "\n=== ant crashed: %s (0x%08lx) ===\n", exception_name(code), (unsigned long)code);
+  fprintf(stderr, "  fault address: 0x%016llx\n", (unsigned long long)exception_fault_address(record));
+  fprintf(stderr, "  ant version: " ANT_VERSION "\n");
+  fprintf(stderr, "  pid: %lu\n\n", (unsigned long)_getpid());
+  fprintf(stderr, "Native backtrace:\n");
+  print_windows_backtrace(exc);
+  
+  fprintf(stderr,
+    "\nPlease report this at https://github.com/themackabu/ant/issues\n"
+    "Include the backtrace above and a minimal reproducer if possible.\n\n");
+
+  if (previous_filter) return previous_filter(exc);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
 void ant_crash_init(void) {
-  // TODO: SetUnhandledExceptionFilter + StackWalk64 / dbghelp
+  previous_filter = SetUnhandledExceptionFilter(windows_crash_handler);
 }
 
 #endif

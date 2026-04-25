@@ -42,7 +42,8 @@ if host_machine.system() == 'windows'
   ws2_32_dep = cc.find_library('ws2_32', required: true)
   iphlpapi_dep = cc.find_library('iphlpapi', required: true)
   pathcch_dep = cc.find_library('pathcch', required: true)
-  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep, pathcch_dep]
+  dbghelp_dep = cc.find_library('dbghelp', required: true)
+  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep, pathcch_dep, dbghelp_dep]
 elif host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
   win_deps = []
