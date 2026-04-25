@@ -1,49 +1,47 @@
-import type { Child } from 'hono/jsx';
 import type { CrashReport } from './schema';
-
-function formatBytes(value: number | null): string {
-  if (!value || !Number.isFinite(value)) return 'unknown';
-  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 1024)}mb`;
-  if (value >= 1024) return `${Math.round(value / 1024)}kb`;
-  return `${value}b`;
-}
-
-function crashDetail(code: string): string {
-  switch (code) {
-    case 'SIGSEGV':
-    case 'EXCEPTION_ACCESS_VIOLATION':
-      return 'Invalid memory access';
-    case 'SIGBUS':
-      return 'Bus error';
-    case 'SIGFPE':
-      return 'Floating point exception';
-    case 'SIGILL':
-    case 'EXCEPTION_ILLEGAL_INSTRUCTION':
-      return 'Illegal instruction';
-    case 'SIGABRT':
-      return 'Abort';
-    case 'EXCEPTION_STACK_OVERFLOW':
-      return 'Stack overflow';
-    default:
-      return 'Fatal error';
-  }
-}
+import { Fragment, type Child } from 'hono/jsx';
+import { crashDetail, formatBytes } from './format';
 
 function renderFrames(frames: string[]): Child {
   if (!frames.length) return 'No native frames were captured.';
   return frames.map((frame, index) => (
-    <>
+    <Fragment>
       <span class="frame-index">{index + 1}.</span> {frame}
       {index < frames.length - 1 ? '\n' : ''}
-    </>
+    </Fragment>
   ));
 }
 
-const Shell = ({ title, children }: { title: string; children: Child }) => (
+type Meta = {
+  url: string;
+  title: string;
+  description: string;
+  image?: string;
+};
+
+const Shell = ({ title, meta, children }: { title: string; meta: Meta; children: Child }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
+      <meta property="og:url" content={meta.url} />
+      <meta property="og:type" content="website" />
+      <meta property="og:title" content={meta.title} />
+      <meta property="og:description" content={meta.description} />
+      {meta.image ? (
+        <>
+          <meta property="og:image" content={meta.image} />
+          <meta property="og:image:type" content="image/png" />
+          <meta property="og:image:width" content="1200" />
+          <meta property="og:image:height" content="630" />
+        </>
+      ) : null}
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta property="twitter:domain" content="js.report" />
+      <meta property="twitter:url" content={meta.url} />
+      <meta name="twitter:title" content={meta.title} />
+      <meta name="twitter:description" content={meta.description} />
+      {meta.image ? <meta name="twitter:image" content={meta.image} /> : null}
       <link rel="icon" type="image/x-icon" href="/favicon.ico" />
       <link rel="stylesheet" href="/assets/report.css" />
       <script src="/assets/report.js" defer></script>
@@ -68,7 +66,14 @@ const ReportFooter = () => (
 );
 
 const BlankPage = () => (
-  <Shell title="js.report">
+  <Shell
+    title="js.report"
+    meta={{
+      url: 'https://js.report',
+      title: 'js.report',
+      description: 'Crash reports for JavaScript runtimes.',
+    }}
+  >
     <Logo />
     <p>
       <b>404.</b> <ins>That's an error.</ins>
@@ -80,11 +85,27 @@ const BlankPage = () => (
   </Shell>
 );
 
-const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => {
+const ReportPage = ({
+  report,
+  url,
+  imageUrl,
+}: {
+  report: CrashReport;
+  url: string;
+  imageUrl: string;
+}) => {
   const detail = crashDetail(report.code);
 
   return (
-    <Shell title={`Ant crash report | ${detail}`}>
+    <Shell
+      title={`Ant crash report | ${detail}`}
+      meta={{
+        url,
+        title: `${report.reason}. ${detail} at ${report.addr}`,
+        description: `Ant ${report.version} crashed on ${report.os} ${report.arch}.`,
+        image: imageUrl,
+      }}
+    >
       <Logo />
       <p>
         <b>{report.reason}.</b>{' '}
@@ -137,6 +158,6 @@ export function renderBlank(): string {
   return `<!doctype html>${(<BlankPage />)}`;
 }
 
-export function renderReport(report: CrashReport, url: string): string {
-  return `<!doctype html>${(<ReportPage report={report} url={url} />)}`;
+export function renderReport(report: CrashReport, url: string, imageUrl: string): string {
+  return `<!doctype html>${(<ReportPage report={report} url={url} imageUrl={imageUrl} />)}`;
 }

@@ -1,9 +1,15 @@
+CREATE TABLE `frames` (
+	`hash` text PRIMARY KEY NOT NULL,
+	`frame` text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `report_frames` (
 	`report_id` text NOT NULL,
 	`frame_index` integer NOT NULL,
-	`frame` text NOT NULL,
+	`frame_hash` text NOT NULL,
 	PRIMARY KEY(`report_id`, `frame_index`),
-	FOREIGN KEY (`report_id`) REFERENCES `reports`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`report_id`) REFERENCES `reports`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`frame_hash`) REFERENCES `frames`(`hash`) ON UPDATE no action ON DELETE restrict
 );
 --> statement-breakpoint
 CREATE TABLE `reports` (

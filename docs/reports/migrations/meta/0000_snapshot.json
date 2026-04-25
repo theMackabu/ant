@@ -1,9 +1,33 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "74f454aa-26ab-4ce9-816d-b14eec7662d2",
+  "id": "f888823f-8746-428a-894d-7a6e8578f8d2",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
+    "frames": {
+      "name": "frames",
+      "columns": {
+        "hash": {
+          "name": "hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "frame": {
+          "name": "frame",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "report_frames": {
       "name": "report_frames",
       "columns": {
@@ -21,8 +45,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "frame": {
-          "name": "frame",
+        "frame_hash": {
+          "name": "frame_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -42,6 +66,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "report_frames_frame_hash_frames_hash_fk": {
+          "name": "report_frames_frame_hash_frames_hash_fk",
+          "tableFrom": "report_frames",
+          "tableTo": "frames",
+          "columnsFrom": [
+            "frame_hash"
+          ],
+          "columnsTo": [
+            "hash"
+          ],
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },

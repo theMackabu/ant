@@ -47,6 +47,11 @@ export const reports = sqliteTable('reports', {
   expiresAt: text('expires_at').notNull(),
 });
 
+export const frames = sqliteTable('frames', {
+  hash: text('hash').primaryKey(),
+  frame: text('frame').notNull(),
+});
+
 export const reportFrames = sqliteTable(
   'report_frames',
   {
@@ -54,7 +59,9 @@ export const reportFrames = sqliteTable(
       .notNull()
       .references(() => reports.id, { onDelete: 'cascade' }),
     frameIndex: integer('frame_index').notNull(),
-    frame: text('frame').notNull(),
+    frameHash: text('frame_hash')
+      .notNull()
+      .references(() => frames.hash, { onDelete: 'restrict' }),
   },
   table => [primaryKey({ columns: [table.reportId, table.frameIndex] })],
 );

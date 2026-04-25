@@ -12,7 +12,8 @@
     "hono": "^4.12.15",
     "drizzle-orm": "^0.45.2",
     "short-uuid": "^6.0.3",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@resvg/resvg-wasm": "^2.6.2"
   },
   "devDependencies": {
     "wrangler": "^4.4.0",
