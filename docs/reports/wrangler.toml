@@ -1,0 +1,23 @@
+name = "js-report"
+main = "src/index.ts"
+
+workers_dev = false
+compatibility_date = "2026-04-25"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "js_report"
+database_id = "aed7ba56-b1f0-41f0-ad77-e4ef981aad4f"
+remote = true
+
+[[routes]]
+pattern = "js.report"
+custom_domain = true

@@ -847,11 +847,13 @@ static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ant_fetch(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t input = (nargs >= 1) ? args[0] : js_mkundef();
   ant_value_t init = (nargs >= 2) ? args[1] : js_mkundef();
+  
   ant_value_t promise = js_mkpromise(js);
   ant_value_t request_obj = 0;
+  
   request_data_t *request = NULL;
   fetch_request_t *req = NULL;
   ant_value_t signal = 0;
@@ -903,7 +905,7 @@ static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
 
 void init_fetch_module() {
   utarray_new(pending_requests, &ut_ptr_icd);
-  js_set(rt->js, rt->js->global, "fetch", js_mkfun_flags(js_fetch, CFUNC_HAS_PROTOTYPE));
+  js_set(rt->js, rt->js->global, "fetch", js_mkfun_flags(ant_fetch, CFUNC_HAS_PROTOTYPE));
 }
 
 int has_pending_fetches(void) {

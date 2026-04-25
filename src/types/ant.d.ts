@@ -163,6 +163,7 @@ interface AntStatic {
 
   raw: AntRaw;
   stats(): AntStatsResult;
+  suppressReporting(): void;
 
   sleep(seconds: number): void;
   msleep(milliseconds: number): void;

@@ -16,6 +16,7 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "crash.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -160,6 +161,12 @@ static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.usleep() requires 1 argument");
   useconds_t us = (useconds_t)js_getnum(args[0]);
   usleep(us);
+  return js_mkundef();
+}
+
+// Ant.suppressReporting()
+static ant_value_t js_suppress_reporting(ant_t *js, ant_value_t *args, int nargs) {
+  ant_crash_suppress_reporting();
   return js_mkundef();
 }
 
@@ -457,6 +464,7 @@ void init_builtin_module() {
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));
   js_set(js, ant_obj, "msleep", js_mkfun(js_msleep));
   js_set(js, ant_obj, "usleep", js_mkfun(js_usleep));
+  js_set(js, ant_obj, "suppressReporting", js_mkfun(js_suppress_reporting));
   
   ant_value_t hl_obj = js_newobj(js);
   ant_value_t hl_fn = js_obj_to_func(hl_obj);

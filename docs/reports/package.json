@@ -1,0 +1,30 @@
+{
+  "name": "js.report",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate": "wrangler d1 migrations apply js_report --remote",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "hono": "^4.12.15",
+    "drizzle-orm": "^0.45.2",
+    "short-uuid": "^6.0.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "wrangler": "^4.4.0",
+    "drizzle-kit": "^0.31.10"
+  },
+  "trustedDependencies": [
+    "workerd",
+    "sharp",
+    "sha3",
+    "keccak",
+    "core-js",
+    "secp256k1",
+    "scrypt"
+  ]
+}

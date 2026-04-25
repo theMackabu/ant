@@ -379,7 +379,10 @@ static int execute_module(ant_t *js, const char *filename) {
 }
 
 int main(int argc, char *argv[]) {
-  if (!getenv("ANT_NO_CRASH_HANDLER")) ant_crash_init();
+  bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
+  
+  if (internal_crash_report_mode) argc = 1;
+  if (!internal_crash_report_mode && !getenv("ANT_NO_CRASH_HANDLER")) ant_crash_init(argc, argv);
   
   setup_console_colors();
   parse_ant_debug_flags();
@@ -688,7 +691,11 @@ int main(int argc, char *argv[]) {
     crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   }
 
-  if (eval->count > 0) {
+  if (internal_crash_report_mode) {
+    js_result = ant_crash_run_internal_report(js);
+  }
+
+  else if (eval->count > 0) {
     const char *script = eval->sval[0];
     eval_code(js, script, strlen(script), "[eval]", print->count > 0);
   }
