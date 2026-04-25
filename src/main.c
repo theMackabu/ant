@@ -10,6 +10,7 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "crash.h"
 #include "repl.h"
 #include "debug.h"
 #include "utils.h"
@@ -378,6 +379,8 @@ static int execute_module(ant_t *js, const char *filename) {
 }
 
 int main(int argc, char *argv[]) {
+  if (!getenv("ANT_NO_CRASH_HANDLER")) ant_crash_init();
+  
   setup_console_colors();
   parse_ant_debug_flags();
   
