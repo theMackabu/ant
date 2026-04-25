@@ -8,6 +8,27 @@ function formatBytes(value: number | null): string {
   return `${value}b`;
 }
 
+function crashDetail(code: string): string {
+  switch (code) {
+    case 'SIGSEGV':
+    case 'EXCEPTION_ACCESS_VIOLATION':
+      return 'Invalid memory access';
+    case 'SIGBUS':
+      return 'Bus error';
+    case 'SIGFPE':
+      return 'Floating point exception';
+    case 'SIGILL':
+    case 'EXCEPTION_ILLEGAL_INSTRUCTION':
+      return 'Illegal instruction';
+    case 'SIGABRT':
+      return 'Abort';
+    case 'EXCEPTION_STACK_OVERFLOW':
+      return 'Stack overflow';
+    default:
+      return 'Fatal error';
+  }
+}
+
 const Shell = ({ title, children }: { title: string; children: Child }) => (
   <html lang="en">
     <head>
@@ -37,58 +58,62 @@ const BlankPage = () => (
   </Shell>
 );
 
-const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => (
-  <Shell title={`${report.reason} at ${report.addr}`}>
-    <Logo />
-    <p>
-      <b>{report.reason}.</b>{' '}
-      <ins>
-        {report.code} at {report.addr}
-      </ins>
-      <br />
-      <span>Ant crashed and sent a redacted report.</span>
-    </p>
+const ReportPage = ({ report, url }: { report: CrashReport; url: string }) => {
+  const detail = crashDetail(report.code);
 
-    <div class="meta">
+  return (
+    <Shell title={`Ant crash report | ${detail}`}>
+      <Logo />
       <p>
-        <span class="label">Runtime:</span> Ant {report.version}
+        <b>{report.reason}.</b>{' '}
+        <ins>
+          {detail} at {report.addr}
+        </ins>
+        <br />
+        <span>Ant crashed and sent a redacted report.</span>
       </p>
-      <p>
-        <span class="label">Platform:</span> {report.os} {report.arch}
-      </p>
-      <p>
-        <span class="label">Target:</span> <code>{report.target}</code>
-      </p>
-      <p>
-        <span class="label">Elapsed:</span> {report.elapsedMs ?? 'unknown'}ms
-      </p>
-      <p>
-        <span class="label">Peak RSS:</span> {formatBytes(report.peakRss)}
-      </p>
-    </div>
 
-    <div class="meta">
-      <i>Native backtrace:</i>
-      <ol class="frames">
-        {report.frames.length ? (
-          report.frames.map(frame => (
+      <div class="meta">
+        <p>
+          <span class="label">Runtime:</span> Ant {report.version}
+        </p>
+        <p>
+          <span class="label">Platform:</span> {report.os} {report.arch}
+        </p>
+        <p>
+          <span class="label">Target:</span> <code>{report.target}</code>
+        </p>
+        <p>
+          <span class="label">Elapsed:</span> {report.elapsedMs ?? 'unknown'}ms
+        </p>
+        <p>
+          <span class="label">Peak RSS:</span> {formatBytes(report.peakRss)}
+        </p>
+      </div>
+
+      <div class="meta">
+        <i>Native backtrace:</i>
+        <ol class="frames">
+          {report.frames.length ? (
+            report.frames.map(frame => (
+              <li>
+                <code>{frame}</code>
+              </li>
+            ))
+          ) : (
             <li>
-              <code>{frame}</code>
+              <ins>No native frames were captured.</ins>
             </li>
-          ))
-        ) : (
-          <li>
-            <ins>No native frames were captured.</ins>
-          </li>
-        )}
-      </ol>
-    </div>
+          )}
+        </ol>
+      </div>
 
-    <p class="url">
-      <span class="label">This report URL:</span> <a href={url}>{url}</a>
-    </p>
-  </Shell>
-);
+      <p class="url">
+        <span class="label">This report URL:</span> <a href={url}>{url}</a>
+      </p>
+    </Shell>
+  );
+};
 
 export function renderBlank(): string {
   return `<!doctype html>${(<BlankPage />)}`;
