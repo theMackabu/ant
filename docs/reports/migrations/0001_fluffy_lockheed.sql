@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `reports_trace_unique` ON `reports` (`trace`);

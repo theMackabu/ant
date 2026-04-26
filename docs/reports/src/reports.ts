@@ -1,6 +1,6 @@
 import { sha256 } from './helpers';
-import { asc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
+import { asc, eq, sql } from 'drizzle-orm';
 import { generate as generateShortUuid } from 'short-uuid';
 import { frames as frameTable, reportFrames, reports, type CrashReport } from './schema';
 
@@ -127,29 +127,59 @@ export async function getRawReport(db: ReportDb, id: string): Promise<RawReport 
 export async function createReport(db: ReportDb, report: CrashReport): Promise<string> {
   const id = generateShortUuid();
   const trace = await reportTrace(report);
+
   const now = new Date();
   const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-  await db.insert(reports).values({
-    id,
-    trace,
-    hitCount: 1,
-    runtime: report.runtime,
-    version: report.version,
-    kind: report.kind,
-    reason: report.reason,
-    code: report.code,
-    target: report.target,
-    os: report.os,
-    arch: report.arch,
-    faultAddress: report.addr,
-    elapsedMs: report.elapsedMs,
-    peakRss: report.peakRss,
-    firstSeenAt: now.toISOString(),
-    lastSeenAt: now.toISOString(),
-    expiresAt: expires.toISOString(),
-  });
+  const nowIso = now.toISOString();
+  const expiresIso = expires.toISOString();
 
-  await insertReportFrames(db, id, report.frames);
-  return id;
+  await db
+    .insert(reports)
+    .values({
+      id,
+      trace,
+      hitCount: 1,
+      runtime: report.runtime,
+      version: report.version,
+      kind: report.kind,
+      reason: report.reason,
+      code: report.code,
+      target: report.target,
+      os: report.os,
+      arch: report.arch,
+      faultAddress: report.addr,
+      elapsedMs: report.elapsedMs,
+      peakRss: report.peakRss,
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso,
+      expiresAt: expiresIso,
+    })
+    .onConflictDoNothing({ target: reports.trace });
+
+  const [row] = await db
+    .select({
+      id: reports.id,
+      hitCount: reports.hitCount,
+    })
+    .from(reports)
+    .where(eq(reports.trace, trace))
+    .limit(1);
+
+  if (!row) return id;
+  if (row.id === id) {
+    await insertReportFrames(db, id, report.frames);
+    return id;
+  }
+
+  await db
+    .update(reports)
+    .set({
+      hitCount: sql`${reports.hitCount} + 1`,
+      lastSeenAt: nowIso,
+      expiresAt: expiresIso,
+    })
+    .where(eq(reports.id, row.id));
+
+  return row.id;
 }
