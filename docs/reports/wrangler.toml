@@ -1,5 +1,5 @@
 name = "js-report"
-main = "src/index.ts"
+main = "src/routes.ts"
 
 workers_dev = false
 compatibility_date = "2026-04-25"
