@@ -128,7 +128,7 @@ const PrivacyPage = () => (
       </p>
     </div>
     <p class="footer">
-      <a href="/">js.report</a>
+      <a href="https://github.com/theMackabu/ant/tree/master/docs/reports">js.report source</a>
       <ins> · </ins>
       <a href="https://github.com/theMackabu/ant">Ant on GitHub</a>
     </p>
