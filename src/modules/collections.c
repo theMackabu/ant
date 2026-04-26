@@ -637,17 +637,408 @@ static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "forEach requires a callback function");
   
   ant_value_t callback = args[0];
-  
   if (set_ptr && *set_ptr) {
-    set_entry_t *entry, *tmp;
-    HASH_ITER(hh, *set_ptr, entry, tmp) {
-      ant_value_t call_args[3] = { entry->value, entry->value, this_val };
-      ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
-      if (is_err(result)) return result;
-    }
-  }
+  set_entry_t *entry, *tmp;
+  
+  HASH_ITER(hh, *set_ptr, entry, tmp) {
+    ant_value_t call_args[3] = { entry->value, entry->value, this_val };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
+    if (is_err(result)) return result;
+  }}
   
   return js_mkundef();
+}
+
+static ant_value_t make_set_result(ant_t *js, set_entry_t ***out_set) {
+  ant_value_t set_obj = js_mkobj(js);
+  if (is_err(set_obj)) return set_obj;
+  js_obj_ptr(set_obj)->type_tag = T_SET;
+
+  ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
+  if (is_special_object(set_proto)) js_set_proto_init(set_obj, set_proto);
+
+  set_entry_t **set_head = ant_calloc(sizeof(set_entry_t *));
+  if (!set_head) return js_mkerr(js, "out of memory");
+  *set_head = NULL;
+  
+  js_set_slot(set_obj, SLOT_DATA, ANT_PTR(set_head));
+  if (out_set) *out_set = set_head;
+  
+  return set_obj;
+}
+
+static bool set_result_add(ant_t *js, ant_value_t set_obj, set_entry_t **set_ptr, ant_value_t value) {
+  if (!set_store_entry(js, set_ptr, value)) return false;
+  ant_object_t *obj = js_obj_ptr(set_obj);
+  if (obj) gc_write_barrier(js, obj, value);
+  return true;
+}
+
+static void set_result_delete(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
+  set_entry_t *entry = set_find_entry(js, set_ptr, value);
+  if (!entry) return;
+  HASH_DEL(*set_ptr, entry);
+  free(entry->key);
+  free(entry);
+}
+
+typedef struct {
+  ant_value_t obj;
+  ant_value_t has;
+  ant_value_t keys;
+  double size;
+} set_record_t;
+
+typedef ant_value_t (*set_key_cb)(
+  ant_t *js,
+  ant_value_t value,
+  void *ctx,
+  bool *stop
+);
+
+static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *method, set_record_t *out) {
+  if (!is_object_type(value))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a set-like object", method);
+
+  ant_value_t size = js_getprop_fallback(js, value, "size");
+  if (is_err(size)) return size;
+  
+  if (vtype(size) == T_BIGINT || vtype(size) == T_SYMBOL)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a numeric size", method);
+  double num_size = js_to_number(js, size);
+  if (isnan(num_size))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a numeric size", method);
+  double int_size = (num_size == 0.0 || !isfinite(num_size))
+    ? num_size
+    : (num_size < 0 ? -floor(-num_size) : floor(num_size));
+  if (int_size < 0)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Set.%s() requires a non-negative size", method);
+
+  ant_value_t has = js_getprop_fallback(js, value, "has");
+  if (is_err(has)) return has;
+  if (!is_callable(has))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a callable has method", method);
+
+  ant_value_t keys = js_getprop_fallback(js, value, "keys");
+  if (is_err(keys)) return keys;
+  if (!is_callable(keys))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a callable keys method", method);
+
+  out->obj = value;
+  out->has = has;
+  out->keys = keys;
+  out->size = int_size;
+  
+  return js_mkundef();
+}
+
+static ant_value_t set_record_has(ant_t *js, set_record_t *record, ant_value_t value, bool *out) {
+  ant_value_t result = sv_vm_call(js->vm, js, record->has, record->obj, &value, 1, NULL, false);
+  if (is_err(result)) return result;
+  *out = js_truthy(js, result);
+  return js_mkundef();
+}
+
+static ant_value_t set_record_close_keys_iterator(ant_t *js, ant_value_t iterator) {
+  ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
+  if (is_err(return_fn)) return return_fn;
+  if (!is_callable(return_fn)) return js_mkundef();
+  return sv_vm_call(js->vm, js, return_fn, iterator, NULL, 0, NULL, false);
+}
+
+static ant_value_t set_record_for_each_key(ant_t *js, set_record_t *record, set_key_cb cb, void *ctx) {
+  ant_value_t iterator = sv_vm_call(js->vm, js, record->keys, record->obj, NULL, 0, NULL, false);
+  if (is_err(iterator)) return iterator;
+  if (!is_object_type(iterator))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set keys() result is not an iterator");
+
+  ant_value_t next_fn = js_getprop_fallback(js, iterator, "next");
+  if (is_err(next_fn)) return next_fn;
+  if (!is_callable(next_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set keys() iterator has no callable next method");
+
+  while (true) {
+    ant_value_t next = sv_vm_call(js->vm, js, next_fn, iterator, NULL, 0, NULL, false);
+    if (is_err(next)) return next;
+    if (!is_object_type(next))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Set keys() iterator result is not an object");
+    
+    ant_value_t done = js_getprop_fallback(js, next, "done");
+    if (is_err(done)) return done;
+    if (js_truthy(js, done)) return js_mkundef();
+    
+    ant_value_t value = js_getprop_fallback(js, next, "value");
+    if (is_err(value)) return value;
+    
+    bool stop = false;
+    ant_value_t result = cb(js, value, ctx, &stop);
+    if (is_err(result)) {
+      ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
+      return is_err(close_result) ? close_result : result;
+    }
+    if (stop) {
+      ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
+      return is_err(close_result) ? close_result : js_mkundef();
+    }
+  }
+}
+
+typedef struct {
+  ant_value_t out;
+  set_entry_t **out_set;
+} set_build_ctx_t;
+
+static ant_value_t set_add_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_build_ctx_t *build = (set_build_ctx_t *)ctx;
+  if (!set_result_add(js, build->out, build->out_set, value))
+    return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
+static ant_value_t set_union(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.union() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "union", &other);
+  if (is_err(rec)) return rec;
+
+  set_entry_t **out_set = NULL;
+  ant_value_t out = make_set_result(js, &out_set);
+  if (is_err(out)) return out;
+  set_build_ctx_t build = { out, out_set };
+
+  set_entry_t *entry, *tmp;
+  HASH_ITER(hh, *this_set, entry, tmp) 
+    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+  ant_value_t result = set_record_for_each_key(js, &other, set_add_key_cb, &build);
+  
+  return is_err(result) ? result : out;
+}
+
+typedef struct {
+  ant_value_t out;
+  set_entry_t **out_set;
+  set_entry_t **this_set;
+} set_compare_build_ctx_t;
+
+static ant_value_t set_intersection_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_compare_build_ctx_t *build = (set_compare_build_ctx_t *)ctx;
+  if (
+    set_find_entry(js, build->this_set, value) && 
+    !set_result_add(js, build->out, build->out_set, value)
+  ) return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
+static ant_value_t set_intersection(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.intersection() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "intersection", &other);
+  if (is_err(rec)) return rec;
+
+  set_entry_t **out_set = NULL;
+  ant_value_t out = make_set_result(js, &out_set);
+  if (is_err(out)) return out;
+
+  double this_size = (double)HASH_COUNT(*this_set);
+  if (this_size <= other.size) {
+    set_entry_t *entry, *tmp;
+    HASH_ITER(hh, *this_set, entry, tmp) {
+      bool has = false;
+      ant_value_t result = set_record_has(js, &other, entry->value, &has);
+      if (is_err(result)) return result;
+      if (has && !set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+    }
+    return out;
+  }
+
+  set_compare_build_ctx_t build = { out, out_set, this_set };
+  ant_value_t result = set_record_for_each_key(js, &other, set_intersection_key_cb, &build);
+  
+  return is_err(result) ? result : out;
+}
+
+typedef struct {
+  set_record_t *other;
+  ant_value_t out;
+  set_entry_t **out_set;
+} set_difference_ctx_t;
+
+static ant_value_t set_difference_key_cb(ant_t *js, ant_value_t value, void *ctx) {
+  set_difference_ctx_t *build = (set_difference_ctx_t *)ctx;
+  bool has = false;
+  ant_value_t result = set_record_has(js, build->other, value, &has);
+  if (is_err(result)) return result;
+  if (!has && !set_result_add(js, build->out, build->out_set, value)) return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
+static ant_value_t set_delete_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_build_ctx_t *build = (set_build_ctx_t *)ctx;
+  set_result_delete(js, build->out_set, value);
+  return js_mkundef();
+}
+
+static ant_value_t set_difference(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.difference() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "difference", &other);
+  if (is_err(rec)) return rec;
+
+  set_entry_t **out_set = NULL;
+  ant_value_t out = make_set_result(js, &out_set);
+  if (is_err(out)) return out;
+
+  set_entry_t *entry, *tmp;
+  if ((double)HASH_COUNT(*this_set) <= other.size) {
+    set_difference_ctx_t diff = { &other, out, out_set };
+    HASH_ITER(hh, *this_set, entry, tmp) {
+      ant_value_t result = set_difference_key_cb(js, entry->value, &diff);
+      if (is_err(result)) return result;
+    }
+    return out;
+  }
+
+  HASH_ITER(hh, *this_set, entry, tmp) {
+    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+  }
+
+  set_build_ctx_t build = { out, out_set };
+  ant_value_t result = set_record_for_each_key(js, &other, set_delete_key_cb, &build);
+  
+  return is_err(result) ? result : out;
+}
+
+typedef struct {
+  ant_value_t out;
+  set_entry_t **out_set;
+  set_entry_t **this_set;
+} set_symdiff_ctx_t;
+
+static ant_value_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_symdiff_ctx_t *build = (set_symdiff_ctx_t *)ctx;
+  if (set_find_entry(js, build->this_set, value)) {
+    set_result_delete(js, build->out_set, value);
+  } else if (!set_find_entry(js, build->out_set, value))
+    if (!set_result_add(js, build->out, build->out_set, value)) return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
+static ant_value_t set_symmetricDifference(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.symmetricDifference() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "symmetricDifference", &other);
+  if (is_err(rec)) return rec;
+
+  set_entry_t **out_set = NULL;
+  ant_value_t out = make_set_result(js, &out_set);
+  if (is_err(out)) return out;
+
+  set_entry_t *entry, *tmp;
+  HASH_ITER(hh, *this_set, entry, tmp) {
+    if (!set_result_add(js, out, out_set, entry->value)) return js_mkerr(js, "out of memory");
+  }
+  set_symdiff_ctx_t build = { out, out_set, this_set };
+  ant_value_t result = set_record_for_each_key(js, &other, set_symmetric_difference_key_cb, &build);
+  return is_err(result) ? result : out;
+}
+
+static ant_value_t set_isSubsetOf(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isSubsetOf() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "isSubsetOf", &other);
+  
+  if (is_err(rec)) return rec;
+  if ((double)HASH_COUNT(*this_set) > other.size) return js_false;
+
+  set_entry_t *entry, *tmp;
+  HASH_ITER(hh, *this_set, entry, tmp) {
+    bool has = false;
+    ant_value_t result = set_record_has(js, &other, entry->value, &has);
+    if (is_err(result)) return result;
+    if (!has) return js_false;
+  }
+  return js_true;
+}
+
+typedef struct {
+  set_entry_t **this_set;
+  bool result;
+} set_predicate_ctx_t;
+
+static ant_value_t set_superset_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
+  if (!set_find_entry(js, pred->this_set, value)) {
+    pred->result = false;
+    *stop = true;
+  }
+  return js_mkundef();
+}
+
+static ant_value_t set_isSupersetOf(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isSupersetOf() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "isSupersetOf", &other);
+  if (is_err(rec)) return rec;
+  if ((double)HASH_COUNT(*this_set) < other.size) return js_false;
+
+  set_predicate_ctx_t pred = { this_set, true };
+  ant_value_t result = set_record_for_each_key(js, &other, set_superset_key_cb, &pred);
+  if (is_err(result)) return result;
+  return js_bool(pred.result);
+}
+
+static ant_value_t set_disjoint_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+  set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
+  if (set_find_entry(js, pred->this_set, value)) {
+    pred->result = false;
+    *stop = true;
+  }
+  return js_mkundef();
+}
+
+static ant_value_t set_isDisjointFrom(ant_t *js, ant_value_t *args, int nargs) {
+  set_entry_t **this_set = get_set_from_obj(js->this_val);
+  if (!this_set) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Set.isDisjointFrom() requires a set-like object");
+  
+  set_record_t other;
+  ant_value_t rec = get_set_record(js, args[0], "isDisjointFrom", &other);
+  if (is_err(rec)) return rec;
+
+  if ((double)HASH_COUNT(*this_set) <= other.size) {
+    set_entry_t *entry, *tmp;
+    HASH_ITER(hh, *this_set, entry, tmp) {
+      bool has = false;
+      ant_value_t result = set_record_has(js, &other, entry->value, &has);
+      if (is_err(result)) return result;
+      if (has) return js_false;
+    }
+    return js_true;
+  }
+
+  set_predicate_ctx_t pred = { this_set, true };
+  ant_value_t result = set_record_for_each_key(js, &other, set_disjoint_key_cb, &pred);
+  if (is_err(result)) return result;
+  
+  return js_bool(pred.result);
 }
 
 static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
@@ -661,12 +1052,10 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "WeakMap key must be an object");
   
   ant_value_t key_obj = args[0];
-  
   weakmap_entry_t *entry;
   HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
-  if (entry) {
-    entry->value = args[1];
-  } else {
+  
+  if (entry) entry->value = args[1]; else {
     entry = ant_calloc(sizeof(weakmap_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->key_obj = key_obj;
@@ -1115,6 +1504,13 @@ void init_collections_module(void) {
   js_set_exact(js, set_proto, "keys", js_get(js, set_proto, "values"));
   js_set(js, set_proto, "entries", js_mkfun(set_entries));
   js_set(js, set_proto, "forEach", js_mkfun(set_forEach));
+  js_set(js, set_proto, "union", js_mkfun(set_union));
+  js_set(js, set_proto, "intersection", js_mkfun(set_intersection));
+  js_set(js, set_proto, "difference", js_mkfun(set_difference));
+  js_set(js, set_proto, "symmetricDifference", js_mkfun(set_symmetricDifference));
+  js_set(js, set_proto, "isSubsetOf", js_mkfun(set_isSubsetOf));
+  js_set(js, set_proto, "isSupersetOf", js_mkfun(set_isSupersetOf));
+  js_set(js, set_proto, "isDisjointFrom", js_mkfun(set_isDisjointFrom));
   js_set_sym(js, set_proto, iter_sym, js_get(js, set_proto, "values"));
   js_set_sym(js, set_proto, tag_sym, js_mkstr(js, "Set", 3));
   

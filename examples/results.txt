@@ -1430,13 +1430,13 @@ compat-table/es2025/Iterator.prototype.take.js: OK
 compat-table/es2025/Iterator.prototype.toArray.js: OK
 compat-table/es2025/Promise.try.js: OK
 compat-table/es2025/RegExp.escape.js: OK
-compat-table/es2025/Set.prototype.difference.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.intersection.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.isDisjointFrom.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.isSubsetOf.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.isSupersetOf.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.symmetricDifference.js: TypeError: undefined is not a function
-compat-table/es2025/Set.prototype.union.js: TypeError: undefined is not a function
+compat-table/es2025/Set.prototype.difference.js: OK
+compat-table/es2025/Set.prototype.intersection.js: OK
+compat-table/es2025/Set.prototype.isDisjointFrom.js: OK
+compat-table/es2025/Set.prototype.isSubsetOf.js: OK
+compat-table/es2025/Set.prototype.isSupersetOf.js: OK
+compat-table/es2025/Set.prototype.symmetricDifference.js: OK
+compat-table/es2025/Set.prototype.union.js: OK
 compat-table/es2025/regex.duplicate-named-groups.js: OK
 compat-table/es2025/regex.pattern-modifiers.i.js: OK
 compat-table/es2025/regex.pattern-modifiers.m.js: OK

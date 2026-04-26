@@ -41,4 +41,90 @@ test('set chaining has c', set.has('c'), true);
 
 test('set delete nonexistent', set.delete('nonexistent'), false);
 
+const setLike = {
+  size: 2,
+  has(value) {
+    return value === 2 || value === 3;
+  },
+  keys() {
+    return [2, 3][Symbol.iterator]();
+  }
+};
+
+test('set union accepts set-like object', [...new Set([1, 2]).union(setLike)].join(','), '1,2,3');
+test('set intersection accepts set-like object', [...new Set([1, 2]).intersection(setLike)].join(','), '2');
+test('set difference accepts set-like object', [...new Set([1, 2]).difference(setLike)].join(','), '1');
+test('set isSubsetOf accepts set-like object', new Set([2]).isSubsetOf(setLike), true);
+
+const duplicateKeysSetLike = {
+  size: 3,
+  has(value) {
+    return value === 2 || value === 3;
+  },
+  keys() {
+    return [2, 3, 3][Symbol.iterator]();
+  }
+};
+
+test('set symmetricDifference ignores duplicate set-like keys', [...new Set([1, 2]).symmetricDifference(duplicateKeysSetLike)].join(','), '1,3');
+
+const directIteratorSetLike = {
+  size: 2,
+  has(value) {
+    return value === 2 || value === 4;
+  },
+  keys() {
+    const values = [2, 4];
+    let index = 0;
+    return {
+      next() {
+        return index < values.length ? { value: values[index++], done: false } : { done: true };
+      }
+    };
+  }
+};
+
+test('set union accepts direct keys iterator', [...new Set([1, 2]).union(directIteratorSetLike)].join(','), '1,2,4');
+
+let closedKeysIterator = false;
+const nonSubsetSetLike = {
+  size: 1,
+  has() {
+    return false;
+  },
+  keys() {
+    return {
+      next() {
+        return { value: 2, done: false };
+      },
+      return() {
+        closedKeysIterator = true;
+        return {};
+      }
+    };
+  }
+};
+
+test('set isSupersetOf closes keys iterator on early false', new Set([1]).isSupersetOf(nonSubsetSetLike), false);
+test('set isSupersetOf called keys iterator return', closedKeysIterator, true);
+
+const getSetRecordOrder = [];
+try {
+  new Set().union({
+    get size() {
+      getSetRecordOrder.push('size');
+      return NaN;
+    },
+    get has() {
+      getSetRecordOrder.push('has');
+      return () => true;
+    },
+    keys() {
+      return [][Symbol.iterator]();
+    }
+  });
+} catch (e) {}
+
+test('set GetSetRecord rejects NaN size before reading has', getSetRecordOrder.join(','), 'size');
+
 summary();
