@@ -73,7 +73,7 @@ const BlankPage = () => (
     meta={{
       url: 'https://js.report',
       title: 'js.report',
-      description: 'Crash reports for JavaScript runtimes.',
+      description: 'Crash reports for the Ant runtime.',
     }}
   >
     <Logo />
@@ -103,10 +103,14 @@ const PrivacyPage = () => (
       <b>Privacy.</b> <ins>Crash report storage policy.</ins>
     </p>
     <div class="policy">
-      <p>js.report does not store IP addresses in its database.</p>
       <p>
         The database stores the crash report JSON submitted by Ant, plus server metadata needed to
-        render, deduplicate, and expire reports.
+        render, deduplicate, and expire reports. Crash report dumps are retained for 30 days, then
+        deleted.
+      </p>
+      <p>
+        Ant does not upload personal information. It also does not store IP addresses in its
+        database. It uploads only the crash fields listed below.
       </p>
       <p>
         <span class="label">Submitted report fields:</span>

@@ -22,6 +22,7 @@
 
 #include "modules/assert.h"
 #include "modules/abort.h"
+#include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/headers.h"
 #include "modules/request.h"
@@ -343,7 +344,7 @@ static void server_abort_request(server_request_t *req, const char *message) {
 }
 
 static bool server_response_chunk(server_request_t *req, ant_value_t value, const uint8_t **out, size_t *len) {
-  TypedArrayData *ta = buffer_get_typedarray_data(value);
+  blob_data_t *blob = NULL;
 
   if (vtype(value) == T_STR) {
     *out = (const uint8_t *)js_getstr(req->server->js, value, len);
@@ -351,16 +352,36 @@ static bool server_response_chunk(server_request_t *req, ant_value_t value, cons
     return true;
   }
 
-  if (!ta || ta->type != TYPED_ARRAY_UINT8) return false;
-  if (!ta->buffer || ta->buffer->is_detached) {
-    *out = NULL;
-    *len = 0;
+  if (is_object_type(value) && blob_is_blob(req->server->js, value)) {
+    blob = blob_get_data(value);
+    *out = blob ? blob->data : NULL;
+    *len = blob ? blob->size : 0;
     return true;
   }
 
-  *out = ta->buffer->data + ta->byte_offset;
-  *len = ta->byte_length;
-  return true;
+  return buffer_source_get_bytes(req->server->js, value, out, len);
+}
+
+static void server_cancel_response_body(server_request_t *req, const char *message) {
+  ant_t *js = NULL;
+  
+  ant_value_t stream = 0;
+  ant_value_t reason = 0;
+  ant_value_t result = 0;
+
+  if (!req || !req->server || !is_object_type(req->response_obj)) return;
+
+  js = req->server->js;
+  stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+  if (!rs_is_stream(stream)) return;
+
+  reason = make_dom_exception(
+    js, message ? message : "The response body was canceled",
+    "AbortError"
+  );
+  
+  result = readable_stream_cancel(js, stream, reason);
+  if (vtype(result) == T_PROMISE) promise_mark_handled(result);
 }
 
 static void server_start_stream_read(server_request_t *req);
@@ -426,6 +447,24 @@ static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *da
   }
 
   return true;
+}
+
+static bool server_queue_final_chunk(server_request_t *req, server_write_action_t action) {
+  ant_http1_buffer_t buf;
+  char *out = NULL;
+  size_t out_len = 0;
+
+  if (!req || !req->conn || ant_conn_is_closing(req->conn)) return false;
+
+  ant_http1_buffer_init(&buf);
+  if (!ant_http1_write_final_chunk(&buf)) {
+    ant_http1_buffer_free(&buf);
+    ant_conn_close(req->conn);
+    return false;
+  }
+
+  out = ant_http1_buffer_take(&buf, &out_len);
+  return server_queue_write(req->conn, req, out, out_len, action);
 }
 
 static void server_send_basic_response(
@@ -515,6 +554,10 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   out = ant_http1_buffer_take(&buf, &out_len);
   ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
   
+  if (body_is_stream && head_only) server_cancel_response_body(
+    req, "The response body was canceled for a HEAD request"
+  );
+  
   server_queue_write(
     req->conn,
     req, out, out_len,
@@ -594,7 +637,7 @@ static ant_value_t server_stream_read_reject(ant_t *js, ant_value_t *args, int n
   if (!req) return js_mkundef();
   
   req->response_read_promise = js_mkundef();
-  if (req->conn && !ant_conn_is_closing(req->conn)) ant_conn_close(req->conn);
+  server_queue_final_chunk(req, SERVER_WRITE_CLOSE_CLIENT);
   server_request_release(req);
   
   return js_mkundef();
@@ -624,21 +667,11 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
 
   done = js_get(js, result, "done");
   if (done == js_true) {
-    ant_http1_buffer_init(&buf);
-    if (!ant_http1_write_final_chunk(&buf)) {
-      ant_http1_buffer_free(&buf);
-      ant_conn_close(req->conn);
-      server_request_release(req);
-      return js_mkundef();
-    }
-    
-    out = ant_http1_buffer_take(&buf, &out_len);
     ant_conn_set_timeout_ms(req->conn, req->server->idle_timeout_ms);
-    
-    server_queue_write(
-      req->conn,
-      req, out, out_len,
-      req->keep_alive ? SERVER_WRITE_KEEP_ALIVE : SERVER_WRITE_CLOSE_CLIENT
+    server_queue_final_chunk(
+      req, req->keep_alive 
+        ? SERVER_WRITE_KEEP_ALIVE 
+        : SERVER_WRITE_CLOSE_CLIENT
     );
     
     server_request_release(req);
@@ -647,7 +680,9 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
 
   value = js_get(js, result, "value");
   if (!server_response_chunk(req, value, &chunk, &chunk_len)) {
-    ant_conn_close(req->conn);
+    fprintf(stderr, "Response body stream chunk must be a string, Blob, ArrayBuffer, DataView, or TypedArray\n");
+    server_cancel_response_body(req, "Invalid response body chunk");
+    server_queue_final_chunk(req, SERVER_WRITE_CLOSE_CLIENT);
     server_request_release(req);
     return js_mkundef();
   }
@@ -920,6 +955,7 @@ static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
       uv_close((uv_handle_t *)&cs->drain_timer, server_on_drain_timer_close);
     if (cs->active_req) {
       server_abort_request(cs->active_req, "Client disconnected");
+      server_cancel_response_body(cs->active_req, "Client disconnected");
       cs->active_req->conn = NULL;
       cs->active_req = NULL;
       server_request_release(&cs->request);
