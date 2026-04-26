@@ -17,10 +17,10 @@ document.addEventListener('click', event => {
   copyText(url)
     .then(() => {
       const original = link.textContent;
-      link.textContent = 'Copied URL to clipboard.';
+      link.textContent = 'Copied URL to clipboard';
       window.setTimeout(() => {
         link.textContent = original;
-      }, 1200);
+      }, 2000);
     })
     .catch(() => (window.location.href = url));
 });
