@@ -383,6 +383,46 @@ static ant_value_t map_has(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(entry != NULL);
 }
 
+static ant_value_t map_upsert(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 3) return js_mkerr(js, "Map.upsert() requires 3 arguments");
+
+  ant_value_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(this_val);
+  if (!map_ptr) return js_mkerr(js, "Invalid Map object");
+
+  ant_value_t update_fn = args[1];
+  ant_value_t insert_fn = args[2];
+  if (!is_callable(update_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert update callback must be callable");
+  if (!is_callable(insert_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map.upsert insert callback must be callable");
+
+  map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
+  ant_value_t value;
+
+  if (entry) {
+    ant_value_t call_args[3] = { entry->value, args[0], this_val };
+    value = sv_vm_call(js->vm, js, update_fn, js_mkundef(), call_args, 3, NULL, false);
+  } else {
+    ant_value_t call_args[2] = { args[0], this_val };
+    value = sv_vm_call(js->vm, js, insert_fn, js_mkundef(), call_args, 2, NULL, false);
+  }
+
+  if (is_err(value)) return value;
+
+  ant_value_t key_val = normalize_map_key(args[0]);
+  if (!map_store_entry(js, map_ptr, args[0], key_val, value))
+    return js_mkerr(js, "out of memory");
+
+  ant_object_t *map_obj = js_obj_ptr(this_val);
+  if (map_obj) {
+    gc_write_barrier(js, map_obj, key_val);
+    gc_write_barrier(js, map_obj, value);
+  }
+
+  return value;
+}
+
 static ant_value_t map_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Map.delete() requires 1 argument");
   
@@ -1107,6 +1147,56 @@ static ant_value_t weakmap_has(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(entry != NULL);
 }
 
+static ant_value_t weakmap_upsert(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 3) return js_mkerr(js, "WeakMap.upsert() requires 3 arguments");
+
+  ant_value_t this_val = js->this_val;
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
+  if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
+
+  if (!is_object_type(args[0]))
+    return js_mkerr(js, "WeakMap key must be an object");
+
+  ant_value_t update_fn = args[1];
+  ant_value_t insert_fn = args[2];
+  if (!is_callable(update_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.upsert update callback must be callable");
+  if (!is_callable(insert_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.upsert insert callback must be callable");
+
+  ant_value_t key_obj = args[0];
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
+
+  ant_value_t value;
+  if (entry) {
+    ant_value_t call_args[3] = { entry->value, key_obj, this_val };
+    value = sv_vm_call(js->vm, js, update_fn, js_mkundef(), call_args, 3, NULL, false);
+  } else {
+    ant_value_t call_args[2] = { key_obj, this_val };
+    value = sv_vm_call(js->vm, js, insert_fn, js_mkundef(), call_args, 2, NULL, false);
+  }
+
+  if (is_err(value)) return value;
+
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
+  if (entry) entry->value = value; else {
+    entry = ant_calloc(sizeof(weakmap_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->key_obj = key_obj;
+    entry->value = value;
+    HASH_ADD(hh, *wm_ptr, key_obj, sizeof(ant_value_t), entry);
+  }
+
+  ant_object_t *wm_obj = js_obj_ptr(this_val);
+  if (wm_obj) {
+    gc_write_barrier(js, wm_obj, key_obj);
+    gc_write_barrier(js, wm_obj, value);
+  }
+
+  return value;
+}
+
 static ant_value_t weakmap_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.delete() requires 1 argument");
   
@@ -1481,6 +1571,7 @@ void init_collections_module(void) {
   js_set(js, map_proto, "set", js_mkfun(map_set));
   js_set(js, map_proto, "get", js_mkfun(map_get));
   js_set(js, map_proto, "has", js_mkfun(map_has));
+  js_set(js, map_proto, "upsert", js_mkfun(map_upsert));
   js_set(js, map_proto, "delete", js_mkfun(map_delete));
   js_set(js, map_proto, "clear", js_mkfun(map_clear));
   js_set_getter_desc(js, map_proto, "size", 4, js_mkfun(map_size), JS_DESC_C);
@@ -1534,6 +1625,7 @@ void init_collections_module(void) {
   js_set(js, weakmap_proto, "set", js_mkfun(weakmap_set));
   js_set(js, weakmap_proto, "get", js_mkfun(weakmap_get));
   js_set(js, weakmap_proto, "has", js_mkfun(weakmap_has));
+  js_set(js, weakmap_proto, "upsert", js_mkfun(weakmap_upsert));
   js_set(js, weakmap_proto, "delete", js_mkfun(weakmap_delete));
   js_set_sym(js, weakmap_proto, tag_sym, js_mkstr(js, "WeakMap", 7));
   

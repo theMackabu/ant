@@ -1489,7 +1489,7 @@ compat-table/next/AsyncIterator.prototype.some.js: TIMEOUT: >5s
 compat-table/next/AsyncIterator.prototype.take.js: failed
 compat-table/next/AsyncIterator.prototype.toArray.js: TIMEOUT: >5s
 compat-table/next/DisposableStack.js: ReferenceError: 'DisposableStack' is not defined
-compat-table/next/Map.prototype.upsert.js: TypeError: undefined is not a function
+compat-table/next/Map.prototype.upsert.js: OK
 compat-table/next/RegExp.1-9.js: OK
 compat-table/next/RegExp.lastMatch.js: OK
 compat-table/next/ShadowRealm.js: failed
@@ -1501,7 +1501,7 @@ compat-table/next/Uint8Array.setFromBase64.js: TypeError: undefined is not a fun
 compat-table/next/Uint8Array.setFromHex.js: TypeError: undefined is not a function
 compat-table/next/Uint8Array.toBase64.js: TypeError: undefined is not a function
 compat-table/next/Uint8Array.toHex.js: TypeError: undefined is not a function
-compat-table/next/WeakMap.prototype.upsert.js: TypeError: undefined is not a function
+compat-table/next/WeakMap.prototype.upsert.js: OK
 compat-table/next/await-using.for-of.js: ReferenceError: 'using' is not defined
 compat-table/next/await-using.js: ReferenceError: 'using' is not defined
 compat-table/next/class-decorators.js: failed
