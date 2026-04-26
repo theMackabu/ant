@@ -5,6 +5,22 @@ import { generate as generateShortUuid } from 'short-uuid';
 import { frames as frameTable, reportFrames, reports, type CrashReport } from './schema';
 
 type ReportDb = ReturnType<typeof drizzle>;
+type ReportFrameRow = {
+  frame: string;
+  frameHash: string;
+  frameIndex: number;
+};
+
+export type RawReport = {
+  id: string;
+  trace: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  hitCount: number;
+  expiresAt: string;
+  report: CrashReport;
+  frames: ReportFrameRow[];
+};
 
 async function reportTrace(report: CrashReport): Promise<string> {
   const traceInput = JSON.stringify({
@@ -24,7 +40,7 @@ async function reportTrace(report: CrashReport): Promise<string> {
 
 const reportFromRows = (
   row: typeof reports.$inferSelect,
-  frameRows: { frame: string }[],
+  frameRows: ReportFrameRow[],
 ): CrashReport => ({
   schema: 1,
   runtime: 'ant',
@@ -64,10 +80,12 @@ async function insertReportFrames(db: ReportDb, reportId: string, frames: string
   );
 }
 
-async function getReportFrames(db: ReportDb, reportId: string): Promise<{ frame: string }[]> {
+async function getReportFrames(db: ReportDb, reportId: string): Promise<ReportFrameRow[]> {
   return db
     .select({
       frame: frameTable.frame,
+      frameHash: reportFrames.frameHash,
+      frameIndex: reportFrames.frameIndex,
     })
     .from(reportFrames)
     .innerJoin(frameTable, eq(reportFrames.frameHash, frameTable.hash))
@@ -75,12 +93,35 @@ async function getReportFrames(db: ReportDb, reportId: string): Promise<{ frame:
     .orderBy(asc(reportFrames.frameIndex));
 }
 
-export async function getReport(db: ReportDb, id: string): Promise<CrashReport | null> {
+async function getReportRow(db: ReportDb, id: string): Promise<typeof reports.$inferSelect | null> {
   const [row] = await db.select().from(reports).where(eq(reports.id, id)).limit(1);
+  return row ?? null;
+}
+
+export async function getReport(db: ReportDb, id: string): Promise<CrashReport | null> {
+  const row = await getReportRow(db, id);
 
   if (!row) return null;
   const frames = await getReportFrames(db, row.id);
   return reportFromRows(row, frames);
+}
+
+export async function getRawReport(db: ReportDb, id: string): Promise<RawReport | null> {
+  const row = await getReportRow(db, id);
+
+  if (!row) return null;
+  const frames = await getReportFrames(db, row.id);
+
+  return {
+    id: row.id,
+    trace: row.trace,
+    firstSeenAt: row.firstSeenAt,
+    lastSeenAt: row.lastSeenAt,
+    hitCount: row.hitCount,
+    expiresAt: row.expiresAt,
+    report: reportFromRows(row, frames),
+    frames,
+  };
 }
 
 export async function createReport(db: ReportDb, report: CrashReport): Promise<string> {

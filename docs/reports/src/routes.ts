@@ -4,7 +4,7 @@ import type { Bindings } from './env';
 import { drizzle } from 'drizzle-orm/d1';
 import { CrashReportSchema } from './schema';
 import { renderBlank, renderReport } from './view';
-import { createReport, getReport } from './reports';
+import { createReport, getRawReport, getReport } from './reports';
 
 import {
   getAntLogoDataUrl,
@@ -48,7 +48,15 @@ app.get('/og/:image', async c => {
 
 app.get('/:id', async c => {
   const db = drizzle(c.env.DB);
-  const id = c.req.param('id');
+  const pathId = c.req.param('id');
+
+  if (pathId.endsWith('.json')) {
+    const report = await getRawReport(db, pathId.slice(0, -5));
+    if (!report) return c.json({ error: 'not found' }, 404);
+    return c.json(report, 200);
+  }
+
+  const id = pathId;
   const report = await getReport(db, id);
 
   if (!report) return c.html(renderBlank(), 404);
