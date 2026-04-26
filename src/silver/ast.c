@@ -36,6 +36,7 @@ void sv_ast_list_push(sv_ast_list_t *list, sv_ast_t *node) {
 
 bool sv_ast_can_be_expression_statement(const sv_ast_t *node) {
   if (!node) return false;
+  if ((node->type == N_FUNC || node->type == N_CLASS) && (node->flags & FN_PAREN)) return true;
 
   static const uint8_t expr_stmt_nodes[N__COUNT] = {
     [N_NUMBER] = 1, [N_STRING] = 1, [N_BIGINT] = 1, [N_BOOL] = 1,
@@ -269,6 +270,11 @@ static sv_ast_t *parse_arrow_body(P) {
   return parse_assign(p);
 }
 
+static inline uint32_t node_src_end(P, sv_ast_t *node) {
+  if (node && node->src_end > node->src_off) return node->src_end;
+  return (uint32_t)(TOFF + TLEN);
+}
+
 static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx) {
   bool strict_mode = p->lx.strict;
   bool saved_lexer_strict = p->lx.strict;
@@ -416,7 +422,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
         fn->flags = FN_ARROW | FN_ASYNC;
         fn->body = parse_arrow_body(p);
         fn->src_off = async_off;
-        fn->src_end = (uint32_t)(TOFF + TLEN);
+        fn->src_end = node_src_end(p, fn->body);
         return fn;
       }
     }
@@ -431,7 +437,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       push_arrow_params_from_expr(fn, expr);
       fn->body = parse_arrow_body(p);
       fn->src_off = async_off;
-      fn->src_end = (uint32_t)(TOFF + TLEN);
+      fn->src_end = node_src_end(p, fn->body);
       return fn;
     }
     sv_lexer_restore_state(&p->lx, &saved);
@@ -450,7 +456,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
       sv_ast_list_push(&fn->args, id);
       fn->body = parse_arrow_body(p);
       fn->src_off = async_off;
-      fn->src_end = (uint32_t)(TOFF + TLEN);
+      fn->src_end = node_src_end(p, fn->body);
       return fn;
     }
     sv_lexer_restore_state(&p->lx, &saved);
@@ -550,7 +556,7 @@ static sv_ast_t *parse_primary(P) {
     sv_ast_t *expr = parse_paren_expr(p);
     expect(p, TOK_RPAREN);
     expr->flags |= FN_PAREN;
-    expr->src_off = paren_off;
+    if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_off = paren_off;
     return expr;
   }
 
@@ -559,8 +565,11 @@ static sv_ast_t *parse_primary(P) {
   l_func:   { CONSUME(); return parse_func(p); }
 
   l_class: {
+    uint32_t class_off = (uint32_t)TOFF;
     CONSUME();
-    return parse_class(p);
+    sv_ast_t *cls = parse_class(p);
+    cls->src_off = class_off;
+    return cls;
   }
 
   l_async: {
@@ -883,6 +892,7 @@ static sv_ast_t *parse_object(P) {
 
       prop->right = parse_func(p);
       prop->right->flags |= FN_GENERATOR | FN_METHOD;
+      prop->right->src_off = prop->src_off;
       sv_ast_list_push(&n->args, prop);
       if (NEXT() == TOK_COMMA) CONSUME();
       continue;
@@ -917,6 +927,7 @@ static sv_ast_t *parse_object(P) {
 
         prop->right = parse_func(p);
         prop->right->flags |= FN_METHOD;
+        prop->right->src_off = prop->src_off;
         sv_ast_list_push(&n->args, prop);
         if (NEXT() == TOK_COMMA) CONSUME();
         continue;
@@ -958,6 +969,7 @@ static sv_ast_t *parse_object(P) {
         prop->right->flags |= FN_ASYNC | FN_METHOD;
         if (prop->flags & FN_GENERATOR)
           prop->right->flags |= FN_GENERATOR;
+        prop->right->src_off = prop->src_off;
         sv_ast_list_push(&n->args, prop);
         if (NEXT() == TOK_COMMA) CONSUME();
         continue;
@@ -991,6 +1003,7 @@ static sv_ast_t *parse_object(P) {
     } else if (TOK == TOK_LPAREN) {
       prop->right = parse_func(p);
       prop->right->flags |= FN_METHOD;
+      prop->right->src_off = prop->src_off;
     } else {
       prop->right = mk_ident(prop->left->str, prop->left->len);
       if (NEXT() == TOK_ASSIGN) {
@@ -1219,7 +1232,7 @@ static sv_ast_t *parse_assign(P) {
       return mk(N_EMPTY);
     }
     fn->body = parse_arrow_body(p);
-    fn->src_end = (uint32_t)(TOFF + TLEN);
+    fn->src_end = node_src_end(p, fn->body);
     return fn;
   }
   if (is_assign_op(op)) {
@@ -1478,6 +1491,7 @@ static sv_ast_t *parse_class(P) {
     sv_ast_list_push(&cls->args, method);
   }
   expect(p, TOK_RBRACE);
+  cls->src_end = (uint32_t)(TOFF + TLEN);
   return cls;
 }
 
@@ -1693,8 +1707,10 @@ static sv_ast_t *parse_export_stmt(P) {
       return decl;
     }
     if (TOK == TOK_CLASS) {
+      uint32_t class_off = (uint32_t)TOFF;
       CONSUME();
       decl->left = parse_class(p);
+      decl->left->src_off = class_off;
       if (NEXT() == TOK_SEMICOLON) CONSUME();
       return decl;
     }
@@ -1727,8 +1743,10 @@ static sv_ast_t *parse_export_stmt(P) {
   }
   if (TOK == TOK_CLASS) {
     decl->flags |= EX_DECL;
+    uint32_t class_off = (uint32_t)TOFF;
     CONSUME();
     decl->left = parse_class(p);
+    decl->left->src_off = class_off;
     if (!decl->left->str || decl->left->len == 0)
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "exported class declarations require a name");
     return decl;
@@ -2093,8 +2111,11 @@ static sv_ast_t *parse_stmt(P) {
   }
 
   l_class: {
+    uint32_t class_off = (uint32_t)TOFF;
     CONSUME();
-    return parse_class(p);
+    sv_ast_t *cls = parse_class(p);
+    cls->src_off = class_off;
+    return cls;
   }
 
   l_async: {

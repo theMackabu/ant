@@ -1845,9 +1845,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_APPEND:              { sv_op_append(vm, js);                   NEXT(1); }
   L_COPY_DATA_PROPS:     { sv_op_copy_data_props(vm, js, ip);      NEXT(2); }
 
-  L_DEFINE_CLASS:       { sv_op_define_class(vm, js, func, ip);       NEXT(6); }
-  L_DEFINE_CLASS_COMP:  { sv_op_define_class_comp(vm, js, func, ip);  NEXT(6); }
-  L_ADD_BRAND:          { sv_op_add_brand(vm);                        NEXT(1); }
+  L_DEFINE_CLASS:       { sv_op_define_class(vm, js, func, ip);       NEXT(14); }
+  L_DEFINE_CLASS_COMP:  { sv_op_define_class_comp(vm, js, func, ip);  NEXT(14); }
+  L_ADD_BRAND:          { sv_op_add_brand(vm);                        NEXT(1);  }
 
   L_TO_OBJECT:   { VM_CHECK(sv_op_to_object(vm, js));  NEXT(1); }
   L_TO_PROPKEY:  { sv_op_to_propkey(vm, js);           NEXT(1); }

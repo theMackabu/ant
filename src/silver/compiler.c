@@ -4200,6 +4200,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_u32(c, 0);
     emit(c, 0);
   }
+  
+  emit_u32(c, node->src_off);
+  emit_u32(c, node->src_end);
 
   int proto_local = add_local(c, "", 0, false, c->scope_depth);
   int ctor_local = add_local(c, "", 0, false, c->scope_depth);

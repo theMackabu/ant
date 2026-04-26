@@ -226,6 +226,9 @@ static inline void sv_op_define_class(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   uint8_t cls_flags = sv_get_u8(ip + 5);
   
+  uint32_t source_start = sv_get_u32(ip + 6);
+  uint32_t source_end = sv_get_u32(ip + 10);
+  
   bool has_name = (cls_flags & 1) && (int)atom_idx < func->atom_count;
   sv_atom_t *a = has_name ? &func->atoms[atom_idx] : NULL;
   ant_value_t ctor = vm->stack[vm->sp - 1];
@@ -269,9 +272,19 @@ static inline void sv_op_define_class(
   }
 
   if (vtype(ctor) == T_FUNC) js_mark_constructor(js_func_obj(ctor), true);
+  
+  if (
+    vtype(ctor) == T_FUNC && func->source &&
+    source_end > source_start && source_end <= (uint32_t)func->source_len
+  ) {
+    js_set_slot(ctor, SLOT_CODE, mkval(T_NTARG, (uintptr_t)(func->source + source_start)));
+    js_set_slot(ctor, SLOT_CODE_LEN, tov((double)(source_end - source_start)));
+  }
+  
   setprop_interned(js, proto, "constructor", 11, ctor);
   ant_value_t ctor_obj = (vtype(ctor) == T_FUNC) ? js_func_obj(ctor) : ctor;
   js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
+  
   if (a && a->len > 0)
     setprop_cstr(js, ctor, "name", 4, js_mkstr(js, a->str, a->len));
 

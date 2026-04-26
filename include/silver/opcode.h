@@ -217,8 +217,8 @@ OP_DEF(  SET_HOME_OBJ,      1,   2,   2, none)      /* func home -> func home */
 OP_DEF(  APPEND,            1,   3,   2, none)      /* append to array, update length */
 OP_DEF(  COPY_DATA_PROPS,   2,   3,   3, u8)        /* Object.assign-like */
 
-OP_DEF(  DEFINE_CLASS,      6,   2,   2, atom_u8)   /* parent ctor -> ctor proto */
-OP_DEF(  DEFINE_CLASS_COMP, 6,   3,   3, atom_u8)   /* computed name variant */
+OP_DEF(  DEFINE_CLASS,      14,  2,   2, atom_u8)   /* parent ctor -> ctor proto */
+OP_DEF(  DEFINE_CLASS_COMP, 14,  3,   3, atom_u8)   /* computed name variant */
 OP_DEF(  ADD_BRAND,         1,   2,   0, none)      /* this_obj home_obj -> (private brand) */
 
 OP_DEF(  TO_OBJECT,         1,   1,   1, none)      /* coerce to object wrapper */

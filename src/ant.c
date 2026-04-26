@@ -4237,8 +4237,11 @@ static ant_value_t js_setprop_readonly_nonconfigurable(ant_t *js, ant_value_t ob
   return result;
 }
 
-#define SYM_FLAG_GLOBAL      1u
-#define SYM_FLAG_WELL_KNOWN  2u
+enum {
+  SYM_FLAG_GLOBAL     = 1u,
+  SYM_FLAG_WELL_KNOWN = 2u,
+  SYM_FLAG_HAS_DESC   = 4u,
+};
 
 typedef struct sym_registry_entry {
   const char *key;
@@ -4248,18 +4251,22 @@ typedef struct sym_registry_entry {
 
 ant_value_t js_mksym(ant_t *js, const char *desc) {
   uint32_t id = (uint32_t)(++js->sym.counter);
-  size_t desc_len = (desc && *desc) ? strlen(desc) : 0;
-  size_t total = sizeof(ant_symbol_heap_t) + (desc_len ? desc_len + 1 : 0);
+  bool has_desc = desc != NULL;
+  
+  size_t desc_len = has_desc ? strlen(desc) : 0;
+  size_t total = sizeof(ant_symbol_heap_t) + (has_desc ? desc_len + 1 : 0);
+  
   ant_symbol_heap_t *sym_ptr = (ant_symbol_heap_t *)js_type_alloc(
-    js, ANT_ALLOC_SYMBOL, total, _Alignof(ant_symbol_heap_t)
-  );
-  if (!sym_ptr) return js_mkerr(js, "oom");
+    js, ANT_ALLOC_SYMBOL, total, 
+    _Alignof(ant_symbol_heap_t)
+  ); if (!sym_ptr) return js_mkerr(js, "oom");
 
   sym_ptr->id = id;
-  sym_ptr->flags = 0;
+  sym_ptr->flags = has_desc ? SYM_FLAG_HAS_DESC : 0;
   sym_ptr->key = NULL;
   sym_ptr->desc_len = (uint32_t)desc_len;
-  if (desc_len) {
+  
+  if (has_desc) {
     memcpy(sym_ptr->desc, desc, desc_len);
     sym_ptr->desc[desc_len] = '\0';
   }
@@ -4296,7 +4303,7 @@ static inline uintptr_t sym_get_key_ptr(ant_value_t v) {
 
 const inline char *js_sym_desc(ant_value_t sym) {
   ant_symbol_heap_t *ptr = sym_ptr(sym);
-  if (!ptr || ptr->desc_len == 0) return NULL;
+  if (!ptr || !(ptr->flags & SYM_FLAG_HAS_DESC)) return NULL;
   return ptr->desc;
 }
 
@@ -5706,11 +5713,11 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
       memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
       bc->bound_argc = bound_argc;
     }
-    js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     
+    js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     ant_value_t proto_setup = setup_func_prototype(js, bound);
+    
     if (is_err(proto_setup)) return proto_setup;
-
     js_mark_constructor(bound_func, js_is_constructor(func));
     
     return bound;
@@ -10662,7 +10669,6 @@ static ant_value_t builtin_string_toUpperCase(ant_t *js, ant_value_t *args, int 
 }
 
 static ant_value_t builtin_string_trim(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trim called on non-string");
   
@@ -10677,7 +10683,6 @@ static ant_value_t builtin_string_trim(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t builtin_string_trimStart(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trimStart called on non-string");
   
@@ -10691,7 +10696,6 @@ static ant_value_t builtin_string_trimStart(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t builtin_string_trimEnd(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trimEnd called on non-string");
   
@@ -14422,6 +14426,8 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, string_proto, "trim", 4, js_mkfun(builtin_string_trim));
   defmethod(js, string_proto, "trimStart", 9, js_mkfun(builtin_string_trimStart));
   defmethod(js, string_proto, "trimEnd", 7, js_mkfun(builtin_string_trimEnd));
+  defmethod(js, string_proto, "trimLeft", 8, js_mkfun(builtin_string_trimStart));
+  defmethod(js, string_proto, "trimRight", 9, js_mkfun(builtin_string_trimEnd));
   defmethod(js, string_proto, "repeat", 6, js_mkfun(builtin_string_repeat));
   defmethod(js, string_proto, "padStart", 8, js_mkfun(builtin_string_padStart));
   defmethod(js, string_proto, "padEnd", 6, js_mkfun(builtin_string_padEnd));
