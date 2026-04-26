@@ -22,6 +22,10 @@ export type RawReport = {
   frames: ReportFrameRow[];
 };
 
+function dedupeFrame(frame: string): string {
+  return frame.replace(/\b0x[0-9a-fA-F]+\b/g, '0x');
+}
+
 async function reportTrace(report: CrashReport): Promise<string> {
   const traceInput = JSON.stringify({
     runtime: report.runtime,
@@ -32,7 +36,7 @@ async function reportTrace(report: CrashReport): Promise<string> {
     code: report.code,
     reason: report.reason,
     addr: report.addr,
-    frames: report.frames,
+    frames: report.frames.map(dedupeFrame),
   });
 
   return sha256(traceInput);
