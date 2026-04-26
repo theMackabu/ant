@@ -3,7 +3,7 @@ import { renderOgPng } from './og';
 import type { Bindings } from './env';
 import { drizzle } from 'drizzle-orm/d1';
 import { CrashReportSchema } from './schema';
-import { renderBlank, renderReport } from './view';
+import { renderBlank, renderPrivacy, renderReport } from './view';
 import { createReport, getRawReport, getReport } from './reports';
 
 import {
@@ -17,6 +17,7 @@ import {
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.get('/', c => c.html(renderBlank(), 404));
+app.get('/privacy', c => c.html(renderPrivacy()));
 
 app.get('/og/:image', async c => {
   const db = drizzle(c.env.DB);

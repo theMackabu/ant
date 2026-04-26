@@ -62,6 +62,8 @@ const ReportFooter = () => (
     <a href="https://github.com/theMackabu/ant">Ant</a>
     <ins> · </ins>
     <a href="https://github.com/theMackabu/ant/issues/new">Report this on GitHub</a>
+    <ins> · </ins>
+    <a href="/privacy">Privacy</a>
   </p>
 );
 
@@ -81,6 +83,54 @@ const BlankPage = () => (
     <p style="margin-top: -10px">If you were given a report link, check the URL and try again.</p>
     <p class="footer">
       <a href="https://github.com/theMackabu/ant">Ant on GitHub</a>
+      <ins> · </ins>
+      <a href="/privacy">Privacy</a>
+    </p>
+  </Shell>
+);
+
+const PrivacyPage = () => (
+  <Shell
+    title="Privacy | js.report"
+    meta={{
+      url: 'https://js.report/privacy',
+      title: 'Privacy | js.report',
+      description: 'What js.report stores for Ant crash reports.',
+    }}
+  >
+    <Logo />
+    <p>
+      <b>Privacy.</b> <ins>Crash report storage policy.</ins>
+    </p>
+    <div class="policy">
+      <p>js.report does not store IP addresses in its database.</p>
+      <p>
+        The database stores the crash report JSON submitted by Ant, plus server metadata needed to
+        render, deduplicate, and expire reports.
+      </p>
+      <p>
+        <span class="label">Submitted report fields:</span>
+        <br />
+        <code>schema</code>, <code>runtime</code>, <code>version</code>, <code>target</code>,{' '}
+        <code>os</code>, <code>arch</code>, <code>kind</code>, <code>code</code>,{' '}
+        <code>reason</code>, <code>addr</code>, <code>elapsedMs</code>, <code>peakRss</code>,{' '}
+        <code>frames</code>
+      </p>
+      <p>
+        <span class="label">Stored server fields:</span>
+        <br />
+        <code>id</code>, <code>trace</code>, <code>firstSeenAt</code>, <code>lastSeenAt</code>,{' '}
+        <code>hitCount</code>, <code>expiresAt</code>, and per-frame hashes used for deduplication.
+      </p>
+      <p>
+        Crash report links are public to anyone with the URL. Raw JSON is available by adding{' '}
+        <code>.json</code> to a report URL.
+      </p>
+    </div>
+    <p class="footer">
+      <a href="/">js.report</a>
+      <ins> · </ins>
+      <a href="https://github.com/theMackabu/ant">Ant on GitHub</a>
     </p>
   </Shell>
 );
@@ -98,7 +148,7 @@ const ReportPage = ({
 
   return (
     <Shell
-      title={`Ant crash report | ${detail}`}
+      title={`${detail} | js.report`}
       meta={{
         url,
         title: `${report.reason}. ${detail} at ${report.addr}`,
@@ -156,6 +206,10 @@ const ReportPage = ({
 
 export function renderBlank(): string {
   return `<!doctype html>${(<BlankPage />)}`;
+}
+
+export function renderPrivacy(): string {
+  return `<!doctype html>${(<PrivacyPage />)}`;
 }
 
 export function renderReport(report: CrashReport, url: string, imageUrl: string): string {

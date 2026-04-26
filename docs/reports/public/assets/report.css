@@ -73,6 +73,10 @@ code {
   margin: 0;
 }
 
+.policy p {
+  overflow: visible;
+}
+
 .label {
   color: #777;
 }
