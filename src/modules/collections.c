@@ -689,11 +689,16 @@ typedef struct {
   double size;
 } set_record_t;
 
-typedef ant_value_t (*set_key_cb)(
+typedef enum {
+  SET_KEY_CONTINUE,
+  SET_KEY_STOP,
+} set_key_status_t;
+
+typedef set_key_status_t (*set_key_cb)(
   ant_t *js,
   ant_value_t value,
-  void *ctx,
-  bool *stop
+  ant_value_t *result,
+  void *ctx
 );
 
 static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *method, set_record_t *out) {
@@ -770,13 +775,15 @@ static ant_value_t set_record_for_each_key(ant_t *js, set_record_t *record, set_
     ant_value_t value = js_getprop_fallback(js, next, "value");
     if (is_err(value)) return value;
     
-    bool stop = false;
-    ant_value_t result = cb(js, value, ctx, &stop);
+    ant_value_t result = js_mkundef();
+    set_key_status_t status = cb(js, value, &result, ctx);
+    
     if (is_err(result)) {
       ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
       return is_err(close_result) ? close_result : result;
     }
-    if (stop) {
+    
+    if (status == SET_KEY_STOP) {
       ant_value_t close_result = set_record_close_keys_iterator(js, iterator);
       return is_err(close_result) ? close_result : js_mkundef();
     }
@@ -788,11 +795,11 @@ typedef struct {
   set_entry_t **out_set;
 } set_build_ctx_t;
 
-static ant_value_t set_add_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_add_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_build_ctx_t *build = (set_build_ctx_t *)ctx;
   if (!set_result_add(js, build->out, build->out_set, value))
-    return js_mkerr(js, "out of memory");
-  return js_mkundef();
+    *result = js_mkerr(js, "out of memory");
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_union(ant_t *js, ant_value_t *args, int nargs) {
@@ -823,13 +830,13 @@ typedef struct {
   set_entry_t **this_set;
 } set_compare_build_ctx_t;
 
-static ant_value_t set_intersection_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_intersection_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_compare_build_ctx_t *build = (set_compare_build_ctx_t *)ctx;
   if (
     set_find_entry(js, build->this_set, value) && 
     !set_result_add(js, build->out, build->out_set, value)
-  ) return js_mkerr(js, "out of memory");
-  return js_mkundef();
+  ) *result = js_mkerr(js, "out of memory");
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_intersection(ant_t *js, ant_value_t *args, int nargs) {
@@ -878,10 +885,10 @@ static ant_value_t set_difference_key_cb(ant_t *js, ant_value_t value, void *ctx
   return js_mkundef();
 }
 
-static ant_value_t set_delete_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_delete_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_build_ctx_t *build = (set_build_ctx_t *)ctx;
   set_result_delete(js, build->out_set, value);
-  return js_mkundef();
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_difference(ant_t *js, ant_value_t *args, int nargs) {
@@ -923,13 +930,13 @@ typedef struct {
   set_entry_t **this_set;
 } set_symdiff_ctx_t;
 
-static ant_value_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_symmetric_difference_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_symdiff_ctx_t *build = (set_symdiff_ctx_t *)ctx;
   if (set_find_entry(js, build->this_set, value)) {
     set_result_delete(js, build->out_set, value);
   } else if (!set_find_entry(js, build->out_set, value))
-    if (!set_result_add(js, build->out, build->out_set, value)) return js_mkerr(js, "out of memory");
-  return js_mkundef();
+    if (!set_result_add(js, build->out, build->out_set, value)) *result = js_mkerr(js, "out of memory");
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_symmetricDifference(ant_t *js, ant_value_t *args, int nargs) {
@@ -980,13 +987,13 @@ typedef struct {
   bool result;
 } set_predicate_ctx_t;
 
-static ant_value_t set_superset_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_superset_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
   if (!set_find_entry(js, pred->this_set, value)) {
     pred->result = false;
-    *stop = true;
+    return SET_KEY_STOP;
   }
-  return js_mkundef();
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_isSupersetOf(ant_t *js, ant_value_t *args, int nargs) {
@@ -1005,13 +1012,13 @@ static ant_value_t set_isSupersetOf(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(pred.result);
 }
 
-static ant_value_t set_disjoint_key_cb(ant_t *js, ant_value_t value, void *ctx, bool *stop) {
+static set_key_status_t set_disjoint_key_cb(ant_t *js, ant_value_t value, ant_value_t *result, void *ctx) {
   set_predicate_ctx_t *pred = (set_predicate_ctx_t *)ctx;
   if (set_find_entry(js, pred->this_set, value)) {
     pred->result = false;
-    *stop = true;
+    return SET_KEY_STOP;
   }
-  return js_mkundef();
+  return SET_KEY_CONTINUE;
 }
 
 static ant_value_t set_isDisjointFrom(ant_t *js, ant_value_t *args, int nargs) {
