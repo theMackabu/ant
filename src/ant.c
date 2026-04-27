@@ -6243,21 +6243,11 @@ static ant_value_t builtin_DisposableStack_dispose(ant_t *js, ant_value_t *args,
   set_slot(js_as_obj(stack), SLOT_SETTLED, js_true);
 
   ant_offset_t len = vtype(entries) == T_ARR ? js_arr_len(js, entries) : 0;
-  for (ant_offset_t i = len; i > 0; i--) {
-    ant_value_t record = js_arr_get(js, entries, i - 1);
-    GC_ROOT_PIN(js, record);
-    ant_value_t result = sv_disposal_record_call(js, record);
-    
-    if (is_err(result) || js->thrown_exists) {
-      ant_value_t error = sv_disposal_error_value(js, result);
-      GC_ROOT_PIN(js, error);
-      completion = sv_suppress_disposal_error(js, error, completion);
-      
-      if (is_err(completion)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return completion;
-      }
-    }
+  if (len > 0) completion = sv_dispose_records_sync(js, entries, len, &completion, false);
+
+  if (is_err(completion)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return completion;
   }
 
   set_slot(js_as_obj(stack), SLOT_ENTRIES, js_mkarr(js));

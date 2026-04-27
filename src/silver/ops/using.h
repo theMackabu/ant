@@ -158,6 +158,39 @@ static inline ant_value_t sv_using_push(
   return resource;
 }
 
+static inline ant_value_t sv_dispose_records_sync(
+  ant_t *js, ant_value_t records, ant_offset_t len,
+  ant_value_t *completion, bool throw_completion
+) {
+  for (ant_offset_t i = len; i > 0; i--) {
+    GC_ROOT_SAVE(iter_mark, js);
+    ant_value_t record = js_arr_get(js, records, i - 1);
+    
+    GC_ROOT_PIN(js, record);
+    ant_value_t result = sv_disposal_record_call(js, record);
+    
+    if (is_err(result) || js->thrown_exists) {
+    ant_value_t error = sv_disposal_error_value(js, result);
+    
+    GC_ROOT_PIN(js, error);
+    *completion = sv_suppress_disposal_error(js, error, *completion);
+    
+    if (is_err(*completion)) {
+      GC_ROOT_RESTORE(js, iter_mark);
+      return *completion;
+    }}
+    
+    GC_ROOT_RESTORE(js, iter_mark);
+  }
+
+  if (throw_completion && vtype(*completion) != T_UNDEF) {
+    ant_value_t thrown = js_throw(js, *completion);
+    return thrown;
+  }
+
+  return *completion;
+}
+
 static inline ant_value_t sv_using_dispose_sync(
   ant_t *js, ant_value_t entries, ant_value_t completion, bool throw_completion
 ) {
@@ -185,37 +218,12 @@ static inline ant_value_t sv_using_dispose_sync(
   }
   
   sv_using_array_clear(entries);
-  len = js_arr_len(js, work);
+  ant_value_t result = sv_dispose_records_sync(
+    js, work, js_arr_len(js, work), &completion, throw_completion
+  );
   
-  for (ant_offset_t i = len; i > 0; i--) {
-    GC_ROOT_SAVE(iter_mark, js);
-    ant_value_t record = js_arr_get(js, work, i - 1);
-    
-    GC_ROOT_PIN(js, record);
-    ant_value_t result = sv_disposal_record_call(js, record);
-    
-    if (is_err(result) || js->thrown_exists) {
-      ant_value_t error = sv_disposal_error_value(js, result);
-      GC_ROOT_PIN(js, error);
-      completion = sv_suppress_disposal_error(js, error, completion);
-      
-      if (is_err(completion)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return completion;
-      }
-    }
-    
-    GC_ROOT_RESTORE(js, iter_mark);
-  }
-
-  if (throw_completion && vtype(completion) != T_UNDEF) {
-    ant_value_t thrown = js_throw(js, completion);
-    GC_ROOT_RESTORE(js, root_mark);
-    return thrown;
-  }
-
   GC_ROOT_RESTORE(js, root_mark);
-  return completion;
+  return result;
 }
 
 static inline ant_value_t sv_async_dispose_continue(
@@ -225,12 +233,7 @@ static inline ant_value_t sv_async_dispose_continue(
   ant_value_t reason
 );
 
-static inline ant_value_t sv_async_dispose_on_fulfilled(
-  ant_t *js,
-  ant_value_t *args,
-  int nargs
-) {
-  (void)args; (void)nargs;
+static inline ant_value_t sv_async_dispose_on_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   return sv_async_dispose_continue(js, state, false, js_mkundef());
 }
