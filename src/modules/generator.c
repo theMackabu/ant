@@ -476,18 +476,45 @@ static ant_value_t generator_throw(ant_t *js, ant_value_t *args, int nargs) {
   return generator_is_async(gen) ? generator_async_wrap_result(js, result) : result;
 }
 
+static ant_value_t generator_async_dispose(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t gen = js->this_val;
+  if (vtype(gen) != T_GENERATOR || !generator_is_async(gen)) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "AsyncGenerator.prototype[Symbol.asyncDispose] called on incompatible receiver"
+  );
+
+  return generator_return(js, NULL, 0);
+}
+
 void init_generator_module(void) {
   ant_t *js = rt->js;
   ant_value_t proto = js_mkobj(js);
   
   js->sym.generator_proto = proto;
   js_set_proto_init(proto, js->sym.iterator_proto);
-  js_set_proto_wb(js, js->sym.async_iterator_proto, proto);
   
   js_set(js, proto, "next", js_mkfun(generator_next));
   js_set(js, proto, "return", js_mkfun(generator_return));
   js_set(js, proto, "throw", js_mkfun(generator_throw));
   js_set_sym(js, proto, get_toStringTag_sym(), js_mkstr(js, "Generator", 9));
+
+  ant_value_t async_proto = js_mkobj(js);
+  js->sym.async_generator_proto = async_proto;
+  js_set_proto_init(async_proto, js->sym.async_iterator_proto);
+  js_set(js, async_proto, "next", js_mkfun(generator_next));
+  js_set(js, async_proto, "return", js_mkfun(generator_return));
+  js_set(js, async_proto, "throw", js_mkfun(generator_throw));
+  js_set_sym(js, async_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncGenerator", 14));
+  js_set_sym(js, async_proto, get_asyncDispose_sym(), js_mkfun(generator_async_dispose));
+
+  ant_value_t async_generator_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
+  if (is_object_type(async_generator_func_proto)) {
+    js_set(js, async_generator_func_proto, "prototype", async_proto);
+    js_set_descriptor(js, js_as_obj(async_generator_func_proto), "prototype", 9, JS_DESC_C);
+    js_set(js, async_proto, "constructor", async_generator_func_proto);
+    js_set_descriptor(js, async_proto, "constructor", 11, JS_DESC_C);
+  }
+  
   init_async_iterator_helpers();
 }
 
@@ -577,12 +604,10 @@ ant_value_t sv_call_generator_closure_dispatch(
   js_set_native_tag(gen, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
 
-  if (data->is_async && is_object_type(js->sym.async_iterator_proto)) 
-    js_set_proto_wb(js, gen, js->sym.async_iterator_proto);
-  else {
-    ant_value_t instance_proto = js_get(js, callee_func, "prototype");
-    if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
-  }
+  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
+  if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
+  else if (data->is_async && is_object_type(js->sym.async_generator_proto))
+    js_set_proto_wb(js, gen, js->sym.async_generator_proto);
 
   return gen;
 }

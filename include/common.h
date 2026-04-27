@@ -16,6 +16,7 @@
   X(SLOT_FUNC_PROTO)              \
   X(SLOT_ASYNC_PROTO)             \
   X(SLOT_GENERATOR_PROTO)         \
+  X(SLOT_ASYNC_GENERATOR_PROTO)   \
   X(SLOT_AUX)                     \
   X(SLOT_TARGET_FUNC)             \
   X(SLOT_MODULE_CTX)              \

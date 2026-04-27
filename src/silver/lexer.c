@@ -305,6 +305,7 @@ uint8_t sv_parsekeyword(const char *buf, size_t len) {
       break;
     case 'u':
       K("undefined", TOK_UNDEF);
+      K("using", TOK_USING);
       break;
     case 'v':
       K("var", TOK_VAR);
@@ -1144,4 +1145,3 @@ uint8_t sv_lexer_lookahead(sv_lexer_t *lx) {
   
   return tok;
 }
-

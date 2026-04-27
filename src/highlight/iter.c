@@ -6,7 +6,11 @@
 #include "highlight/regex.h"
 #include "silver/lexer.h"
 
-typedef struct { const char *op; int len; hl_token_class cls; } op_entry_t;
+typedef struct { 
+  const char *op;
+  int len;
+  hl_token_class cls;
+} op_entry_t;
 
 static const op_entry_t operators[] = {
   { "===", 3, HL_OPERATOR },
@@ -169,22 +173,22 @@ static bool has_declaration_keyword_before(const char *input, size_t ident_start
   wstart = i;
   wlen = wend - i;
 
-  return (wlen == 5 && memcmp(input + wstart, "const", 5) == 0) ||
-         (wlen == 3 && memcmp(input + wstart, "let", 3) == 0) ||
-         (wlen == 3 && memcmp(input + wstart, "var", 3) == 0);
+  return 
+    (wlen == 5 && memcmp(input + wstart, "const", 5) == 0) ||
+    (wlen == 3 && memcmp(input + wstart, "let", 3) == 0)   ||
+    (wlen == 5 && memcmp(input + wstart, "using", 5) == 0) ||
+    (wlen == 3 && memcmp(input + wstart, "var", 3) == 0);
 }
 
 static bool is_assigned_arrow_function(const char *input, size_t input_len, size_t ident_start, size_t ident_end) {
   if (!has_declaration_keyword_before(input, ident_start)) return false;
-
   size_t i = skip_inline_ws_forward(input, input_len, ident_end);
+  
   if (i >= input_len || input[i] != '=') return false;
   if (i + 1 < input_len && input[i + 1] == '>') return false;
-  i++;
-
-  i = skip_inline_ws_forward(input, input_len, i);
+  i++; i = skip_inline_ws_forward(input, input_len, i);
+  
   if (i >= input_len) return false;
-
   if (is_arrow_after(input, input_len, i)) return false;
 
   if (is_ident_begin((unsigned char)input[i])) {

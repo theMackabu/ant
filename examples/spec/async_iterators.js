@@ -5,6 +5,44 @@ console.log('Async Iterator Tests\n');
 test('AsyncIterator global exists', typeof AsyncIterator, 'function');
 test('AsyncIterator prototype async iterator tag', AsyncIterator.prototype[Symbol.toStringTag], 'AsyncIterator');
 
+async function* protoShapeAsyncGen() {
+  yield 1;
+}
+const AsyncGeneratorFunction = protoShapeAsyncGen.constructor;
+const protoShapeAsyncIter = protoShapeAsyncGen();
+const ownAsyncGeneratorProto = Object.getPrototypeOf(protoShapeAsyncIter);
+const sharedAsyncGeneratorProto = Object.getPrototypeOf(ownAsyncGeneratorProto);
+const inheritedAsyncIteratorProto = Object.getPrototypeOf(sharedAsyncGeneratorProto);
+test('async generator function has prototype property', protoShapeAsyncGen.hasOwnProperty('prototype'), true);
+test('async generator function constructor name', AsyncGeneratorFunction.name, 'AsyncGeneratorFunction');
+test('async generator function prototype chain', Object.getPrototypeOf(protoShapeAsyncGen), AsyncGeneratorFunction.prototype);
+test('async generator function prototype tag', AsyncGeneratorFunction.prototype[Symbol.toStringTag], 'AsyncGeneratorFunction');
+test('async generator function prototype prototype', AsyncGeneratorFunction.prototype.prototype, sharedAsyncGeneratorProto);
+test(
+  'new async generator function throws',
+  (() => {
+    try {
+      new protoShapeAsyncGen();
+      return false;
+    } catch (err) {
+      return true;
+    }
+  })(),
+  true
+);
+test('async generator instance uses function prototype', ownAsyncGeneratorProto, protoShapeAsyncGen.prototype);
+test('async generator shared prototype tag', sharedAsyncGeneratorProto[Symbol.toStringTag], 'AsyncGenerator');
+test('async generator shared prototype has next', sharedAsyncGeneratorProto.hasOwnProperty('next'), true);
+test('async generator shared prototype inherits AsyncIterator', inheritedAsyncIteratorProto, AsyncIterator.prototype);
+test('async generator Symbol.asyncIterator inherited from AsyncIterator', protoShapeAsyncIter[Symbol.asyncIterator](), protoShapeAsyncIter);
+test('async generator inherits AsyncIterator helpers', typeof protoShapeAsyncIter.map, 'function');
+
+const dynamicAsyncGen = AsyncGeneratorFunction('yield 4;');
+const dynamicAsyncIter = dynamicAsyncGen();
+test('AsyncGeneratorFunction constructs async generator function', Object.getPrototypeOf(dynamicAsyncGen), AsyncGeneratorFunction.prototype);
+test('AsyncGeneratorFunction instance uses function prototype', Object.getPrototypeOf(dynamicAsyncIter), dynamicAsyncGen.prototype);
+test('AsyncGeneratorFunction yielded value', (await dynamicAsyncIter.next()).value, 4);
+
 class CustomAsyncIterator extends AsyncIterator {
   constructor(values) {
     super();
@@ -57,7 +95,7 @@ const syncReturnSource = {
   },
   [Symbol.iterator]() {
     return this;
-  },
+  }
 };
 test('AsyncIterator.from sync return awaits value', (await AsyncIterator.from(syncReturnSource).return()).value, 7);
 
@@ -70,7 +108,7 @@ const syncThrowSource = {
   },
   [Symbol.iterator]() {
     return this;
-  },
+  }
 };
 test('AsyncIterator.from sync throw awaits value', (await AsyncIterator.from(syncThrowSource).throw(new Error('x'))).value, 8);
 
@@ -145,7 +183,7 @@ function closableAsyncIterator(log) {
     },
     [Symbol.asyncIterator]() {
       return this;
-    },
+    }
   };
 }
 
@@ -193,7 +231,7 @@ const syncAsyncLike = {
   },
   [Symbol.asyncIterator]() {
     return this;
-  },
+  }
 };
 test('async iterator handles sync next results without recursive stack growth', (await AsyncIterator.from(syncAsyncLike).toArray()).length, 5000);
 

@@ -192,10 +192,11 @@ static inline const char *decode_ident_into_arena(const char *src, uint32_t len,
 
 static inline bool is_contextual_ident_tok(uint8_t tok) {
   return 
-    tok == TOK_AS
-    || tok == TOK_FROM
-    || tok == TOK_OF
-    || tok == TOK_ASYNC;
+    tok == TOK_AS    || 
+    tok == TOK_FROM  || 
+    tok == TOK_OF    ||
+    tok == TOK_ASYNC ||
+    tok == TOK_USING;
 }
 
 static inline const char *tok_ident_str(P, uint32_t *out_len) {
@@ -208,10 +209,6 @@ static inline bool is_ident_like_tok(uint8_t tok) {
 
 static inline bool is_private_ident_like_tok(uint8_t tok) {
   return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
-}
-
-static inline bool is_using_tok(P) {
-  return TOK == TOK_IDENTIFIER && TLEN == 5 && memcmp(tok_str(p), "using", 5) == 0;
 }
 
 static inline bool sv_strict_forbidden_binding_ident(const char *s, uint32_t len) {
@@ -486,6 +483,7 @@ static sv_ast_t *parse_primary(P) {
     [TOK_AS]         = &&l_ident,
     [TOK_FROM]       = &&l_ident,
     [TOK_OF]         = &&l_ident,
+    [TOK_USING]      = &&l_ident,
     [TOK_LPAREN]     = &&l_paren,
     [TOK_LBRACKET]   = &&l_array,
     [TOK_LBRACE]     = &&l_object,
@@ -1880,7 +1878,7 @@ static sv_ast_t *parse_stmt(P) {
     [TOK_IMPORT]    = &&l_import,
   };
 
-  if (is_using_tok(p)) {
+  if (TOK == TOK_USING) {
     CONSUME();
     sv_ast_t *n = parse_var_decl(p, SV_VAR_USING, false);
     if (NEXT() == TOK_SEMICOLON) CONSUME();
@@ -1892,7 +1890,7 @@ static sv_ast_t *parse_stmt(P) {
     sv_lexer_save_state(&p->lx, &saved);
     CONSUME();
     NEXT();
-    if (is_using_tok(p)) {
+    if (TOK == TOK_USING) {
       CONSUME();
       sv_ast_t *n = parse_var_decl(p, SV_VAR_AWAIT_USING, false);
       if (NEXT() == TOK_SEMICOLON) CONSUME();
@@ -1979,7 +1977,7 @@ static sv_ast_t *parse_stmt(P) {
       sv_lexer_save_state(&p->lx, &saved);
       CONSUME();
       NEXT();
-      if (is_using_tok(p)) {
+      if (TOK == TOK_USING) {
         CONSUME();
         p->no_in = true;
         init_node = parse_var_decl(p, SV_VAR_AWAIT_USING, true);
@@ -1987,7 +1985,7 @@ static sv_ast_t *parse_stmt(P) {
       } else sv_lexer_restore_state(&p->lx, &saved);
     }
     
-    if (!init_node && is_using_tok(p)) {
+    if (!init_node && TOK == TOK_USING) {
       CONSUME();
       p->no_in = true;
       init_node = parse_var_decl(p, SV_VAR_USING, true);

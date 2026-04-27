@@ -5220,7 +5220,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   );
   
   const char *prefix = is_async
-    ? "(async function"
+    ? (is_generator ? "(async function*" : "(async function")
     : (is_generator ? "(function*" : "(function");
     
   size_t prefix_len = strlen(prefix);

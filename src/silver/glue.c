@@ -632,19 +632,31 @@ ant_value_t jit_helper_closure(
     js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  if (!child->is_arrow && !child->is_method && !child->is_async) {
-    ant_value_t parent_proto = child->is_generator ? js->sym.generator_proto : js->sym.object_proto;
+  if (!child->is_arrow && !child->is_method && (!child->is_async || child->is_generator)) {
+    ant_value_t parent_proto = child->is_async
+      ? js->sym.async_generator_proto
+      : (child->is_generator ? js->sym.generator_proto : js->sym.object_proto);
     sv_setup_function_prototype_with_parent(js, func_obj, func_val, parent_proto);
   }
   
-  if (child->is_async) {
+  if (child->is_async && child->is_generator) {
+    js_set_slot(func_obj, SLOT_ASYNC, js_true);
+    ant_value_t async_generator_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
+    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
+  }
+  
+  else if (child->is_async) {
     js_set_slot(func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
-  } else if (child->is_generator) {
+  }
+  
+  else if (child->is_generator) {
     ant_value_t generator_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
     if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
-  } else {
+  }
+  
+  else {
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
   }

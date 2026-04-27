@@ -5373,14 +5373,24 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
     if (is_err(func_obj)) return func_obj;
     
     set_func_code_ptr(js, func_obj, "(){}", 4);
-    if (is_async) {
+    if (is_async && is_generator) {
+      set_slot(func_obj, SLOT_ASYNC, js_true);
+      ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
+      if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
+    } 
+    
+    else if (is_async) {
       set_slot(func_obj, SLOT_ASYNC, js_true);
       ant_value_t async_proto = get_slot(js_glob(js), SLOT_ASYNC_PROTO);
       if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
-    } else if (is_generator) {
+    } 
+    
+    else if (is_generator) {
       ant_value_t generator_proto = get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
       if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
-    } else {
+    } 
+    
+    else {
       ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
       ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
       if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
@@ -5389,9 +5399,17 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
     set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
     ant_value_t func = js_obj_to_func(func_obj);
     
-    if (!is_async) {
-      ant_value_t proto_setup = setup_func_prototype(js, func);
+    if (!is_async || is_generator) {
+      ant_value_t proto_setup = is_generator
+        ? setup_func_prototype_property(js, func, false)
+        : setup_func_prototype(js, func);
       if (is_err(proto_setup)) return proto_setup;
+    }
+
+    if (is_generator) {
+      ant_value_t prototype = js_get(js, func, "prototype");
+      ant_value_t parent_proto = is_async ? js->sym.async_generator_proto : js->sym.generator_proto;
+      if (is_object_type(prototype) && is_object_type(parent_proto)) js_set_proto_wb(js, prototype, parent_proto);
     }
     
     return func;
@@ -5466,34 +5484,48 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
   memcpy(display + n, "\n) {\n", 5);                    n += 5;
   memcpy(display + n, code_buf + 1 + params_len + 2, (size_t)body_len); n += (size_t)body_len;
   memcpy(display + n, "\n}", 2);                        n += 2;
+  
   display[n] = '\0';
   set_func_code(js, func_obj, display, display_len);
+  
   free(display);
   free(code_buf);
   
-  if (is_async) {
+  if (is_async && is_generator) {
+    set_slot(func_obj, SLOT_ASYNC, js_true);
+    ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
+    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
+  }
+  
+  else if (is_async) {
     set_slot(func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = get_slot(js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
-  } else if (is_generator) {
+  }
+  
+  else if (is_generator) {
     ant_value_t generator_proto = get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
     if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
-  } else {
+  }
+  
+  else {
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
     if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
   }
 
   ant_value_t func = mkval(T_FUNC, (uintptr_t)closure);
-  if (!is_async) {
-    ant_value_t proto_setup = setup_func_prototype(js, func);
+  if (!is_async || is_generator) {
+    ant_value_t proto_setup = is_generator
+      ? setup_func_prototype_property(js, func, false)
+      : setup_func_prototype(js, func);
     if (is_err(proto_setup)) return proto_setup;
   }
   
   if (is_generator) {
     ant_value_t prototype = js_get(js, func, "prototype");
-    if (is_object_type(prototype) && is_object_type(js->sym.generator_proto))
-      js_set_proto_wb(js, prototype, js->sym.generator_proto);
+    ant_value_t parent_proto = is_async ? js->sym.async_generator_proto : js->sym.generator_proto;
+    if (is_object_type(prototype) && is_object_type(parent_proto)) js_set_proto_wb(js, prototype, parent_proto);
   }
   
   return func;
@@ -5505,6 +5537,15 @@ static ant_value_t builtin_Function(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_AsyncFunction(ant_t *js, ant_value_t *args, int nargs) {
   return build_dynamic_function(js, args, nargs, true, false);
+}
+
+static ant_value_t builtin_AsyncGeneratorFunction(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs == 0) {
+    ant_value_t empty = js_mkstr(js, "", 0);
+    if (is_err(empty)) return empty;
+    return build_dynamic_function(js, &empty, 1, true, true);
+  }
+  return build_dynamic_function(js, args, nargs, true, true);
 }
 
 static ant_value_t builtin_GeneratorFunction(ant_t *js, ant_value_t *args, int nargs) {
@@ -14978,6 +15019,25 @@ ant_t *js_create(void *buf, size_t len) {
 
   js_setprop(js, generator_func_proto_obj, js_mkstr(js, "constructor", 11), generator_func_ctor);
   js_set_descriptor(js, generator_func_proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
+
+  ant_value_t async_generator_func_proto_obj = js_mkobj(js);
+  set_proto(js, async_generator_func_proto_obj, function_proto);
+  set_slot(async_generator_func_proto_obj, SLOT_ASYNC, js_true);
+  
+  ant_value_t async_generator_func_proto = js_obj_to_func(async_generator_func_proto_obj);
+  set_slot(glob, SLOT_ASYNC_GENERATOR_PROTO, async_generator_func_proto);
+
+  ant_value_t async_generator_func_ctor_obj = mkobj(js, 0);
+  set_proto(js, async_generator_func_ctor_obj, function_proto);
+  set_slot(async_generator_func_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_AsyncGeneratorFunction));
+  js_setprop_nonconfigurable(js, async_generator_func_ctor_obj, "prototype", 9, async_generator_func_proto);
+  js_setprop(js, async_generator_func_ctor_obj, js->length_str, tov(1.0));
+  js_set_descriptor(js, async_generator_func_ctor_obj, "length", 6, JS_DESC_C);
+  js_setprop(js, async_generator_func_ctor_obj, ANT_STRING("name"), ANT_STRING("AsyncGeneratorFunction"));
+  
+  ant_value_t async_generator_func_ctor = js_obj_to_func(async_generator_func_ctor_obj);
+  js_setprop(js, async_generator_func_proto_obj, js_mkstr(js, "constructor", 11), async_generator_func_ctor);
+  js_set_descriptor(js, async_generator_func_proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   ant_value_t str_ctor_obj = mkobj(js, 0);
   set_proto(js, str_ctor_obj, function_proto);
@@ -14987,6 +15047,7 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, str_ctor_obj, "fromCodePoint", 13, js_mkfun(builtin_string_fromCodePoint));
   defmethod(js, str_ctor_obj, "raw", 3, js_mkfun(builtin_string_raw));
   js_setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
+  
   ant_value_t str_ctor_func = js_obj_to_func(str_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "String", 6), str_ctor_func);
   
@@ -15251,6 +15312,10 @@ static bool js_cfunc_has_prototype(ant_value_t cfunc) {
 }
 
 static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bool mark_constructor) {
+  ant_value_t func_obj = (vtype(func) == T_FUNC) 
+    ? js_func_obj(func) 
+    : js_as_obj(func);
+  
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
   
@@ -15267,11 +15332,17 @@ static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bo
   ant_value_t prototype_key = js_mkstr(js, "prototype", 9);
   if (is_err(prototype_key)) return prototype_key;
   
-  res = js_setprop(js, func, prototype_key, proto_obj);
-  if (is_err(res)) return res;
-  js_set_descriptor(js, js_as_obj(func), "prototype", 9, JS_DESC_W);
-
-  if (mark_constructor) js_mark_constructor(func, true);
+  ant_offset_t existing = lkp(js, func_obj, "prototype", 9);
+  if (existing > 0) {
+    if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
+    js_saveval(js, existing, proto_obj);
+  } else {
+    res = mkprop(js, func_obj, prototype_key, proto_obj, 0);
+    if (is_err(res)) return res;
+  }
+  
+  js_set_descriptor(js, func_obj, "prototype", 9, JS_DESC_W);
+  if (mark_constructor) js_mark_constructor(func_obj, true);
   
   return js_mkundef();
 }

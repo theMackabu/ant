@@ -305,12 +305,14 @@ void init_symbol_module(void) {
   js->sym.array_iterator_proto = js_mkundef();
   js->sym.string_iterator_proto = js_mkundef();
   js->sym.generator_proto = js_mkundef();
+  js->sym.async_generator_proto = js_mkundef();
   js->sym.async_iterator_proto = js_mkundef();
   
   gc_register_root(&js->sym.iterator_proto);
   gc_register_root(&js->sym.array_iterator_proto);
   gc_register_root(&js->sym.string_iterator_proto);
   gc_register_root(&js->sym.generator_proto);
+  gc_register_root(&js->sym.async_generator_proto);
   gc_register_root(&js->sym.async_iterator_proto);
 
   #define INIT_SYM(name, desc) g_##name = js_mksym_well_known(js, desc);
@@ -372,6 +374,9 @@ void init_symbol_module(void) {
 
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
   js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));
+  
+  ant_value_t async_generator_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
+  js_set_sym(js, async_generator_func_proto, g_toStringTag, js_mkstr(js, "AsyncGeneratorFunction", 22));
 
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
@@ -382,6 +387,7 @@ void gc_mark_symbols(ant_t *js, gc_mark_fn mark) {
   mark(js, js->sym.array_iterator_proto);
   mark(js, js->sym.string_iterator_proto);
   mark(js, js->sym.generator_proto);
+  mark(js, js->sym.async_generator_proto);
   mark(js, js->sym.async_iterator_proto);
 
   #define GC_SYM(name, _desc) mark(js, g_##name);
