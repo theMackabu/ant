@@ -632,6 +632,32 @@ static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, doubl
   W_FAIL:    return false;
 }
 
+static ant_value_t js_typedarray_every(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_callable(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray.prototype.every requires a callable");
+
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  if (!ta_data->buffer || ta_data->buffer->is_detached)
+    return js_mkerr(js, "Cannot operate on a detached TypedArray");
+
+  ant_value_t callback = args[0];
+  ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
+
+  for (size_t i = 0; i < ta_data->length; i++) {
+    ant_value_t value = js_mkundef();
+    if (!typedarray_read_value(js, ta_data, i, &value)) return js_false;
+
+    ant_value_t call_args[3] = { value, js_mknum((double)i), this_val };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    if (is_err(result)) return result;
+    if (!js_truthy(js, result)) return js_false;
+  }
+
+  return js_true;
+}
+
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   ant_value_t ab_obj = js_mkobj(js);
   ant_value_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
@@ -1977,19 +2003,179 @@ static uint8_t *hex_decode(const char *data, size_t len, size_t *out_len) {
   if (len % 2 != 0) return NULL;
   
   size_t decoded_len = len / 2;
-  uint8_t *decoded = malloc(decoded_len);
+  size_t alloc_len = decoded_len;
+  
+  if (alloc_len == 0) alloc_len = 1;
+  uint8_t *decoded = malloc(alloc_len);
   if (!decoded) return NULL;
   
   for (size_t i = 0; i < decoded_len; i++) {
-    unsigned int byte;
-    if (sscanf(data + i * 2, "%2x", &byte) != 1) {
-      free(decoded); return NULL;
-    }
-    decoded[i] = (uint8_t)byte;
+    unsigned char hi_ch = (unsigned char)data[i * 2];
+    unsigned char lo_ch = (unsigned char)data[i * 2 + 1];
+    int hi; int lo;
+    
+    if (hi_ch >= '0' && hi_ch <= '9') { hi = hi_ch - '0'; goto have_hi; }
+    if (hi_ch >= 'a' && hi_ch <= 'f') { hi = hi_ch - 'a' + 10; goto have_hi; }
+    if (hi_ch >= 'A' && hi_ch <= 'F') { hi = hi_ch - 'A' + 10; goto have_hi; }
+    goto fail;
+    
+  have_hi:
+    if (lo_ch >= '0' && lo_ch <= '9') { lo = lo_ch - '0'; goto have_lo; }
+    if (lo_ch >= 'a' && lo_ch <= 'f') { lo = lo_ch - 'a' + 10; goto have_lo; }
+    if (lo_ch >= 'A' && lo_ch <= 'F') { lo = lo_ch - 'A' + 10; goto have_lo; }
+    goto fail;
+    
+  have_lo:
+    decoded[i] = (uint8_t)((hi << 4) | lo);
   }
   
   *out_len = decoded_len;
   return decoded;
+
+fail:
+  free(decoded);
+  return NULL;
+}
+
+static ant_value_t uint8array_from_bytes(ant_t *js, const uint8_t *bytes, size_t len) {
+  ArrayBufferData *buffer = create_array_buffer_data(len);
+  if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+  if (len > 0) memcpy(buffer->data, bytes, len);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Uint8Array");
+}
+
+static ant_value_t js_uint8array_fromHex(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t source = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
+  if (is_err(source)) return source;
+
+  size_t len = 0;
+  char *str = js_getstr(js, source, &len);
+  
+  size_t decoded_len = 0;
+  uint8_t *decoded = hex_decode(str, len, &decoded_len);
+  if (!decoded) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid hex string");
+
+  ant_value_t result = uint8array_from_bytes(js, decoded, decoded_len);
+  free(decoded);
+  
+  return result;
+}
+
+static ant_value_t js_uint8array_fromBase64(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t source = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
+  if (is_err(source)) return source;
+
+  size_t len = 0;
+  char *str = js_getstr(js, source, &len);
+  
+  size_t decoded_len = 0;
+  uint8_t *decoded = ant_base64_decode(str, len, &decoded_len);
+  if (!decoded) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid base64 string");
+
+  ant_value_t result = uint8array_from_bytes(js, decoded, decoded_len);
+  free(decoded);
+  
+  return result;
+}
+
+static ant_value_t js_uint8array_toHex(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  
+  if (!ta_data || ta_data->type != TYPED_ARRAY_UINT8)
+    return js_mkerr(js, "Uint8Array.prototype.toHex called on incompatible receiver");
+  if (!ta_data->buffer || ta_data->buffer->is_detached)
+    return js_mkerr(js, "Cannot read from detached Uint8Array");
+
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  size_t len = ta_data->byte_length;
+  char *hex = malloc(len * 2 + 1);
+  
+  if (!hex) return js_mkerr(js, "Failed to allocate hex string");
+  for (size_t i = 0; i < len; i++) snprintf(hex + i * 2, 3, "%02x", data[i]);
+
+  ant_value_t result = js_mkstr(js, hex, len * 2);
+  free(hex);
+  
+  return result;
+}
+
+static ant_value_t js_uint8array_toBase64(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  
+  if (!ta_data || ta_data->type != TYPED_ARRAY_UINT8)
+    return js_mkerr(js, "Uint8Array.prototype.toBase64 called on incompatible receiver");
+  if (!ta_data->buffer || ta_data->buffer->is_detached)
+    return js_mkerr(js, "Cannot read from detached Uint8Array");
+
+  size_t out_len = 0;
+  char *encoded = ant_base64_encode(
+    ta_data->buffer->data + ta_data->byte_offset,
+    ta_data->byte_length, &out_len
+  );
+  
+  if (!encoded) return js_mkerr(js, "Failed to encode base64");
+  ant_value_t result = js_mkstr(js, encoded, out_len);
+  free(encoded);
+  
+  return result;
+}
+
+static ant_value_t uint8array_set_result(ant_t *js, size_t read, size_t written) {
+  ant_value_t result = js_mkobj(js);
+  js_set(js, result, "read", js_mknum((double)read));
+  js_set(js, result, "written", js_mknum((double)written));
+  return result;
+}
+
+static ant_value_t uint8array_set_bytes(ant_t *js, const uint8_t *bytes, size_t byte_len, size_t read) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
+  
+  if (!ta_data || ta_data->type != TYPED_ARRAY_UINT8)
+    return js_mkerr(js, "Uint8Array setFrom called on incompatible receiver");
+  if (!ta_data->buffer || ta_data->buffer->is_detached)
+    return js_mkerr(js, "Cannot write to detached Uint8Array");
+  if (byte_len > ta_data->byte_length)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Decoded data does not fit in Uint8Array");
+
+  if (byte_len > 0) memcpy(ta_data->buffer->data + ta_data->byte_offset, bytes, byte_len);
+  return uint8array_set_result(js, read, byte_len);
+}
+
+static ant_value_t js_uint8array_setFromHex(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t source = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
+  if (is_err(source)) return source;
+
+  size_t len = 0;
+  char *str = js_getstr(js, source, &len);
+  size_t decoded_len = 0;
+  
+  uint8_t *decoded = hex_decode(str, len, &decoded_len);
+  if (!decoded) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid hex string");
+
+  ant_value_t result = uint8array_set_bytes(js, decoded, decoded_len, len);
+  free(decoded);
+  
+  return result;
+}
+
+static ant_value_t js_uint8array_setFromBase64(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t source = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
+  if (is_err(source)) return source;
+
+  size_t len = 0;
+  char *str = js_getstr(js, source, &len);
+  size_t decoded_len = 0;
+  
+  uint8_t *decoded = ant_base64_decode(str, len, &decoded_len);
+  if (!decoded) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid base64 string");
+
+  ant_value_t result = uint8array_set_bytes(js, decoded, decoded_len, len);
+  free(decoded);
+  
+  return result;
 }
 
 typedef enum {
@@ -2770,6 +2956,7 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "join", js_mkfun(js_typedarray_join));
   js_set(js, typedarray_proto, "indexOf", js_mkfun(js_typedarray_indexOf));
   js_set(js, typedarray_proto, "includes", js_mkfun(js_typedarray_includes));
+  js_set(js, typedarray_proto, "every", js_mkfun(js_typedarray_every));
   js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
 
   g_typedarray_iter_proto = js_mkobj(js);
@@ -2813,6 +3000,15 @@ void init_buffer_module() {
   SETUP_TYPEDARRAY(Float64Array);
   SETUP_TYPEDARRAY(BigInt64Array);
   SETUP_TYPEDARRAY(BigUint64Array);
+
+  ant_value_t uint8array_codec_ctor = js_get(js, glob, "Uint8Array");
+  ant_value_t uint8array_codec_proto = js_get(js, uint8array_codec_ctor, "prototype");
+  js_set(js, uint8array_codec_ctor, "fromHex", js_mkfun(js_uint8array_fromHex));
+  js_set(js, uint8array_codec_ctor, "fromBase64", js_mkfun(js_uint8array_fromBase64));
+  js_set(js, uint8array_codec_proto, "toHex", js_mkfun(js_uint8array_toHex));
+  js_set(js, uint8array_codec_proto, "toBase64", js_mkfun(js_uint8array_toBase64));
+  js_set(js, uint8array_codec_proto, "setFromHex", js_mkfun(js_uint8array_setFromHex));
+  js_set(js, uint8array_codec_proto, "setFromBase64", js_mkfun(js_uint8array_setFromBase64));
   
   ant_value_t dataview_ctor_obj = js_mkobj(js);
   ant_value_t dataview_proto = js_mkobj(js);
