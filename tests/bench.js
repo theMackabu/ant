@@ -575,7 +575,7 @@ function bigint_shift_floor(n) {
     for (i = 0; i < 500; i++) {
       x = (x << BigInt(3)) - BigInt(7);
       y += x >> BigInt(5);
-      y += (-x) >> BigInt(7);
+      y += -x >> BigInt(7);
     }
   }
   global_res = x + y;
@@ -931,6 +931,12 @@ function save_result(filename, obj) {
   f.close();
 }
 
+function get_cli_args(argc, argv) {
+  if (argv && argc > 0) return Array.prototype.slice.call(argv, 1, argc);
+  if (typeof process !== 'undefined' && process && process.argv) return process.argv.slice(2);
+  return [];
+}
+
 function main(argc, argv, g) {
   var test_list = [
     empty_loop,
@@ -979,7 +985,8 @@ function main(argc, argv, g) {
     string_to_float
   ];
   var tests = [];
-  var i, j, n, f, name, found;
+  var args = get_cli_args(argc, argv);
+  var i, j, n, f, name, found, exact;
 
   if (typeof BigInt == 'function') {
     /* BigInt test */
@@ -988,14 +995,14 @@ function main(argc, argv, g) {
     test_list.push(bigint_shift_floor);
   }
 
-  for (i = 1; i < argc; ) {
-    name = argv[i++];
+  for (i = 0; i < args.length; ) {
+    name = args[i++];
     if (name == '-a') {
       sort_bench.verbose = true;
       continue;
     }
     if (name == '-t') {
-      name = argv[i++];
+      name = args[i++];
       sort_bench.array_type = g[name];
       if (typeof sort_bench.array_type != 'function') {
         console.log('unknown array type: ' + name);
@@ -1004,9 +1011,23 @@ function main(argc, argv, g) {
       continue;
     }
     if (name == '-n') {
-      sort_bench.array_size = +argv[i++];
+      sort_bench.array_size = +args[i++];
       continue;
     }
+
+    exact = null;
+    for (j = 0; j < test_list.length; j++) {
+      f = test_list[j];
+      if (f.name === name) {
+        exact = f;
+        break;
+      }
+    }
+    if (exact) {
+      tests.push(exact);
+      continue;
+    }
+
     for (j = 0, found = false; j < test_list.length; j++) {
       f = test_list[j];
       if (f.name.slice(0, name.length) === name) {
