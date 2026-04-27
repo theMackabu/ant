@@ -41,6 +41,12 @@ typedef struct {
 } sv_deferred_export_t;
 
 typedef struct {
+  int stack_local;
+  int scope_depth;
+  bool is_async;
+} sv_using_cleanup_t;
+
+typedef struct {
   int loop_start;
   sv_patch_list_t breaks;
   sv_patch_list_t continues;
@@ -116,6 +122,12 @@ typedef struct sv_compiler {
   int strict_args_local;
   int new_target_local;
   int super_local;
+  int using_stack_local;
+  int using_cleanup_count;
+  int using_cleanup_cap;
+  
+  bool using_stack_async;
+  sv_using_cleanup_t *using_cleanups;
 
   const char *pending_label;
   uint32_t pending_label_len;

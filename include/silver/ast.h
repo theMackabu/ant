@@ -84,6 +84,8 @@ typedef enum {
   SV_VAR_VAR,
   SV_VAR_LET,
   SV_VAR_CONST,
+  SV_VAR_USING,
+  SV_VAR_AWAIT_USING,
 } sv_var_kind_t;
 
 enum {

@@ -1164,7 +1164,10 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     if (!decl_node) continue;
 
     if (decl_node->type == N_VAR && decl_node->var_kind != SV_VAR_VAR) {
-      bool is_const = (decl_node->var_kind == SV_VAR_CONST);
+      bool is_const = 
+        (decl_node->var_kind == SV_VAR_CONST ||
+        decl_node->var_kind == SV_VAR_USING ||
+        decl_node->var_kind == SV_VAR_AWAIT_USING);
       int lb = c->local_count;
       for (int j = 0; j < decl_node->args.count; j++) {
         sv_ast_t *decl = decl_node->args.items[j];
@@ -1503,6 +1506,11 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
         else emit_op(c, OP_UNDEF);
         emit_op(c, OP_YIELD);
       }
+      break;
+
+    case N_THROW:
+      compile_expr(c, node->right);
+      emit_op(c, OP_THROW);
       break;
 
     case N_TAGGED_TEMPLATE: {
@@ -2777,23 +2785,59 @@ static void compile_destructure_pattern(
   if (consume_source) emit_op(c, OP_POP);
 }
 
-void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat,
-                                      bool keep) {
+void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat, bool keep) {
   compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
 
-void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat,
-                                       bool keep) {
+void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat, bool keep) {
   compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
 
 static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
   if (c->try_depth > 0) return false;
+  if (c->using_cleanup_count > 0) return false;
   if (node->type != N_CALL) return false;
   if (call_has_spread_arg(node)) return false;
+  
   sv_ast_t *callee = node->left;
-  if (callee->type == N_IDENT && callee->len == 5 && memcmp(callee->str, "super", 5) == 0) return false;
+  if (
+    callee->type == N_IDENT && 
+    callee->len == 5 && memcmp(callee->str, "super", 5) == 0
+  ) return false;
+  
   return true;
+}
+
+static void emit_using_dispose_call(
+  sv_compiler_t *c,
+  int stack_local,
+  int completion_local,
+  bool is_async,
+  bool suppressed_completion
+) {
+  emit_get_local(c, stack_local);
+  if (suppressed_completion) {
+    emit_get_local(c, completion_local);
+  }
+  if (is_async && suppressed_completion) emit_op(c, OP_USING_DISPOSE_ASYNC_SUPPRESSED);
+  else if (is_async) emit_op(c, OP_USING_DISPOSE_ASYNC);
+  else if (suppressed_completion) emit_op(c, OP_USING_DISPOSE_SUPPRESSED);
+  else emit_op(c, OP_USING_DISPOSE);
+  if (is_async) emit_op(c, OP_AWAIT);
+}
+
+static void emit_using_cleanups_to_depth(sv_compiler_t *c, int target_depth) {
+for (int i = c->using_cleanup_count - 1; i >= 0; i--) {
+  sv_using_cleanup_t *cleanup = &c->using_cleanups[i];
+  if (cleanup->scope_depth <= target_depth) break;
+  emit_using_dispose_call(c, cleanup->stack_local, -1, cleanup->is_async, false);
+  emit_op(c, OP_POP);
+}}
+
+static void emit_return_from_stack(sv_compiler_t *c) {
+  emit_using_cleanups_to_depth(c, -1);
+  emit_close_upvals(c);
+  emit_op(c, OP_RETURN);
 }
 
 static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
@@ -2801,8 +2845,7 @@ static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
 
   if (callee->type == N_OPTIONAL) {
     compile_call(c, node);
-    emit_close_upvals(c);
-    emit_op(c, OP_RETURN);
+    emit_return_from_stack(c);
     return;
   }
 
@@ -2826,10 +2869,10 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
     return;
   }
 
-  if (expr->type == N_AWAIT && c->is_async && c->try_depth == 0 && !c->is_tla) {
+  if (expr->type == N_AWAIT && c->is_async && c->try_depth == 0 && !c->is_tla &&
+      c->using_cleanup_count == 0) {
     compile_expr(c, expr->right);
-    emit_close_upvals(c);
-    emit_op(c, OP_RETURN);
+    emit_return_from_stack(c);
     return;
   }
 
@@ -2839,13 +2882,120 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
   }
 
   compile_expr(c, expr);
-  emit_close_upvals(c);
-  emit_op(c, OP_RETURN);
+  emit_return_from_stack(c);
 }
 
 void compile_stmts(sv_compiler_t *c, sv_ast_list_t *list) {
-  for (int i = 0; i < list->count; i++)
-    compile_stmt(c, list->items[i]);
+  for (int i = 0; i < list->count; i++) compile_stmt(c, list->items[i]);
+}
+
+static bool stmt_list_has_using_decl(sv_ast_list_t *list, bool *has_await_using) {
+  bool found = false;
+  for (int i = 0; i < list->count; i++) {
+    sv_ast_t *node = list->items[i];
+    if (!node) continue;
+    
+    sv_ast_t *decl = (node->type == N_EXPORT) ? node->left : node;
+    if (!decl || decl->type != N_VAR) continue;
+    
+    if (decl->var_kind == SV_VAR_USING || decl->var_kind == SV_VAR_AWAIT_USING) {
+      if (decl->var_kind == SV_VAR_AWAIT_USING && has_await_using) *has_await_using = true;
+      found = true;
+    }
+  }
+  
+  return found;
+}
+
+static void emit_empty_disposal_stack(sv_compiler_t *c) {
+  emit_op(c, OP_ARRAY);
+  emit_u16(c, 0);
+}
+
+static void emit_using_push(sv_compiler_t *c, bool is_async) {
+  emit_op(c, is_async ? OP_USING_PUSH_ASYNC : OP_USING_PUSH);
+}
+
+static void pop_using_cleanup(sv_compiler_t *c) {
+  if (c->using_cleanup_count > 0) c->using_cleanup_count--;
+}
+
+static void emit_dispose_resource(sv_compiler_t *c, bool is_async) {
+  emit_op(c, is_async ? OP_DISPOSE_RESOURCE_ASYNC : OP_DISPOSE_RESOURCE);
+  if (is_async) emit_op(c, OP_AWAIT);
+}
+
+static void push_using_cleanup(
+  sv_compiler_t *c,
+  int stack_local,
+  int scope_depth,
+  bool is_async
+) {
+  if (c->using_cleanup_count >= c->using_cleanup_cap) {
+    int cap = c->using_cleanup_cap ? c->using_cleanup_cap * 2 : 4;
+    c->using_cleanups = realloc(c->using_cleanups, (size_t)cap * sizeof(sv_using_cleanup_t));
+    c->using_cleanup_cap = cap;
+  }
+
+  c->using_cleanups[c->using_cleanup_count++] = (sv_using_cleanup_t){
+    .stack_local = stack_local,
+    .scope_depth = scope_depth,
+    .is_async = is_async,
+  };
+}
+
+static void compile_block_with_using(sv_compiler_t *c, sv_ast_t *node) {
+  bool has_await_using = false;
+  bool has_using = stmt_list_has_using_decl(&node->args, &has_await_using);
+
+  begin_scope(c);
+  hoist_lexical_decls(c, &node->args);
+  hoist_func_decls(c, &node->args);
+
+  if (!has_using) {
+    compile_stmts(c, &node->args);
+    end_scope(c);
+    return;
+  }
+
+  emit_empty_disposal_stack(c);
+  int stack_local = add_local(c, "", 0, false, c->scope_depth);
+  
+  emit_put_local(c, stack_local);
+  int err_local = add_local(c, "", 0, false, c->scope_depth);
+
+  int old_using_stack = c->using_stack_local;
+  bool old_using_async = c->using_stack_async;
+  
+  c->using_stack_local = stack_local;
+  c->using_stack_async = has_await_using;
+  push_using_cleanup(c, stack_local, c->scope_depth, has_await_using);
+
+  c->try_depth++;
+  int try_jump = emit_jump(c, OP_TRY_PUSH);
+  compile_stmts(c, &node->args);
+  emit_op(c, OP_TRY_POP);
+  c->try_depth--;
+
+  emit_using_dispose_call(c, stack_local, -1, has_await_using, false);
+  emit_op(c, OP_POP);
+  int end_jump = emit_jump(c, OP_JMP);
+
+  patch_jump(c, try_jump);
+  int catch_tag = emit_jump(c, OP_CATCH);
+  
+  emit_put_local(c, err_local);
+  emit_using_dispose_call(c, stack_local, err_local, has_await_using, true);
+  
+  if (!has_await_using) emit_op(c, OP_THROW);
+  patch_jump(c, catch_tag);
+  patch_jump(c, end_jump);
+
+  c->using_stack_local = old_using_stack;
+  c->using_stack_async = old_using_async;
+  
+  pop_using_cleanup(c);
+  end_scope(c);
 }
 
 void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
@@ -2858,11 +3008,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_BLOCK:
-      begin_scope(c);
-      hoist_lexical_decls(c, &node->args);
-      hoist_func_decls(c, &node->args);
-      compile_stmts(c, &node->args);
-      end_scope(c);
+      compile_block_with_using(c, node);
       break;
 
     case N_VAR:
@@ -2910,8 +3056,8 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       if (node->right) {
         compile_tail_return_expr(c, node->right);
       } else {
-        emit_close_upvals(c);
-        emit_op(c, OP_RETURN_UNDEF);
+        emit_op(c, OP_UNDEF);
+        emit_return_from_stack(c);
       }
       break;
 
@@ -3187,7 +3333,9 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
 
 void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   sv_var_kind_t kind = node->var_kind;
-  bool is_const = (kind == SV_VAR_CONST);
+  bool is_using = (kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING);
+  bool is_await_using = (kind == SV_VAR_AWAIT_USING);
+  bool is_const = (kind == SV_VAR_CONST || is_using);
   bool repl_top = is_repl_top_level(c);
 
   for (int i = 0; i < node->args.count; i++) {
@@ -3237,6 +3385,17 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         if (decl->right || !is_const) {
           emit_put_local_typed(c, idx, init_type);
           c->locals[idx].is_tdz = false;
+          if (is_using) {
+            if (c->using_stack_local >= 0) {
+              emit_get_local(c, c->using_stack_local);
+              emit_get_local(c, idx);
+              emit_using_push(c, is_await_using);
+            } else {
+              emit_get_local(c, idx);
+              emit_dispose_resource(c, is_await_using);
+            }
+            emit_op(c, OP_POP);
+          }
         }
       } else {
         if (decl->right) {
@@ -3517,7 +3676,9 @@ static void compile_for_each_assign_target(sv_compiler_t *c, sv_ast_t *lhs) {
     if (target->type == N_IDENT) {
       int loc = resolve_local(c, target->str, target->len);
       if (loc == -1) {
-        bool is_const = (lhs->var_kind == SV_VAR_CONST);
+        bool is_const = (lhs->var_kind == SV_VAR_CONST ||
+                         lhs->var_kind == SV_VAR_USING ||
+                         lhs->var_kind == SV_VAR_AWAIT_USING);
         loc = add_local(c, target->str, target->len, is_const, c->scope_depth);
       }
       emit_put_local(c, loc);
@@ -3538,6 +3699,37 @@ static void compile_for_each_assign_target(sv_compiler_t *c, sv_ast_t *lhs) {
   compile_lhs_set(c, lhs, false);
 }
 
+static void compile_using_dispose_target(sv_compiler_t *c, sv_ast_t *lhs) {
+  if (!lhs || lhs->type != N_VAR) return;
+  bool is_await_using = lhs->var_kind == SV_VAR_AWAIT_USING;
+  if (lhs->var_kind != SV_VAR_USING && !is_await_using) return;
+  if (lhs->args.count == 0) return;
+
+  sv_ast_t *decl = lhs->args.items[0];
+  if (!decl || decl->type != N_VARDECL || !decl->left || decl->left->type != N_IDENT) return;
+
+  emit_get_var(c, decl->left->str, decl->left->len);
+  emit_dispose_resource(c, is_await_using);
+  emit_op(c, OP_POP);
+}
+
+static bool compile_using_push_target(sv_compiler_t *c, sv_ast_t *lhs, int stack_local) {
+  if (!lhs || lhs->type != N_VAR) return false;
+  bool is_await_using = lhs->var_kind == SV_VAR_AWAIT_USING;
+  if (lhs->var_kind != SV_VAR_USING && !is_await_using) return false;
+  if (lhs->args.count == 0) return false;
+
+  sv_ast_t *decl = lhs->args.items[0];
+  if (!decl || decl->type != N_VARDECL || !decl->left || decl->left->type != N_IDENT) return false;
+
+  emit_get_local(c, stack_local);
+  emit_get_var(c, decl->left->str, decl->left->len);
+  emit_using_push(c, is_await_using);
+  emit_op(c, OP_POP);
+  
+  return true;
+}
+
 static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   begin_scope(c);
 
@@ -3547,7 +3739,10 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
   if (node->left && node->left->type == N_VAR &&
       node->left->var_kind != SV_VAR_VAR) {
-    bool is_const = (node->left->var_kind == SV_VAR_CONST);
+    bool is_const = 
+      (node->left->var_kind == SV_VAR_CONST ||
+       node->left->var_kind == SV_VAR_USING ||
+       node->left->var_kind == SV_VAR_AWAIT_USING);
     int lb = c->local_count;
     for (int i = 0; i < node->left->args.count; i++) {
       sv_ast_t *decl = node->left->args.items[i];
@@ -3588,11 +3783,23 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   int iter_err_local = -1;
   int break_close_slot = -1;
   int iter_inner_start = -1;
+  int using_stack_local = -1;
 
   bool is_for_await = (node->type == N_FOR_AWAIT_OF);
+  bool is_using_loop = node->left && node->left->type == N_VAR &&
+    (node->left->var_kind == SV_VAR_USING || node->left->var_kind == SV_VAR_AWAIT_USING);
+  bool is_await_using_loop = is_using_loop && node->left->var_kind == SV_VAR_AWAIT_USING;
+  int old_using_stack = c->using_stack_local;
+  bool old_using_async = c->using_stack_async;
   uint8_t iter_hint = 0;
   if (is_for_of && !is_for_await)
     iter_hint = iter_hint_for_type(infer_expr_type(c, node->right));
+
+  if (is_using_loop) {
+    emit_empty_disposal_stack(c);
+    using_stack_local = add_local(c, "", 0, false, c->scope_depth);
+    emit_put_local(c, using_stack_local);
+  }
 
   compile_expr(c, node->right);
   if (is_for_of) {
@@ -3612,6 +3819,11 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
+
+  if (is_using_loop) {
+    emit_empty_disposal_stack(c);
+    emit_put_local(c, using_stack_local);
+  }
 
   if (is_for_of) {
     if (is_for_await) {
@@ -3648,11 +3860,26 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     }
   }
 
-  compile_stmt(c, node->body);
+  if (is_using_loop) {
+    c->using_stack_local = using_stack_local;
+    c->using_stack_async = is_await_using_loop;
+    push_using_cleanup(c, using_stack_local, c->scope_depth, is_await_using_loop);
+    compile_using_push_target(c, node->left, using_stack_local);
+  }
 
+  compile_stmt(c, node->body);
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
+
+  if (is_using_loop) {
+    emit_using_dispose_call(c, using_stack_local, -1, is_await_using_loop, false);
+    emit_op(c, OP_POP);
+
+    c->using_stack_local = old_using_stack;
+    c->using_stack_async = old_using_async;
+    pop_using_cleanup(c);
+  } else compile_using_dispose_target(c, node->left);
 
   if (iter_count > 0) {
     for (int i = 0; i < iter_count; i++) {
@@ -3694,7 +3921,13 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
     patch_jump(c, try_jump_for_of);
     int catch_tag = emit_jump(c, OP_CATCH);
-    emit_put_local(c, iter_err_local);  
+    emit_put_local(c, iter_err_local);
+    
+    if (is_using_loop) {
+      emit_using_dispose_call(c, using_stack_local, iter_err_local, is_await_using_loop, true);
+      emit_put_local(c, iter_err_local);
+    }
+    
     emit_op(c, OP_ITER_CLOSE);          
     emit_get_local(c, iter_err_local);  
     emit_op(c, OP_THROW);              
@@ -3734,40 +3967,39 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   if (c->loop_count == 0) return;
 
   int target = c->loop_count - 1;
-  if (node->str) {
-    for (int i = c->loop_count - 1; i >= 0; i--) {
-      if (c->loops[i].label &&
-          c->loops[i].label_len == node->len &&
-          memcmp(c->loops[i].label, node->str, node->len) == 0) {
-        target = i;
-        break;
-      }
-    }
-  }
+  if (node->str) for (int i = c->loop_count - 1; i >= 0; i--) if (
+    c->loops[i].label &&
+    c->loops[i].label_len == node->len &&
+    memcmp(c->loops[i].label, node->str, node->len) == 0
+  ) { target = i; break;  }
 
   emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
+  emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
+  
   int offset = emit_jump(c, OP_JMP);
   patch_list_add(&c->loops[target].breaks, offset);
 }
 
 
 void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
-  for (int i = c->loop_count - 1; i >= 0; i--) {
-  if (node->str) {
+  for (int i = c->loop_count - 1; i >= 0; i--) if (node->str) {
     if (
       c->loops[i].label &&
       c->loops[i].label_len == node->len &&
-      memcmp(c->loops[i].label, node->str, node->len) == 0) {
+      memcmp(c->loops[i].label, node->str, node->len) == 0
+    ) {
       emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
+      emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
       patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
       return;
     }
   } else if (!c->loops[i].is_switch) {
     emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
+    emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
     patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
     return;
   }
-}}
+}
 
 static void compile_finally_block(sv_compiler_t *c, sv_ast_t *finally_body) {
   int finally_jump = emit_jump(c, OP_FINALLY);
@@ -4576,6 +4808,28 @@ sv_func_t *compile_function_body(
     emit_field_inits(&comp, enclosing->field_inits, enclosing->field_init_count);
   }
 
+  bool body_has_await_using = false;
+  bool body_has_using = node->body && node->body->type == N_BLOCK &&
+    stmt_list_has_using_decl(&node->body->args, &body_has_await_using);
+  int body_using_try_jump = -1;
+  int body_using_err_local = -1;
+  int old_using_stack = comp.using_stack_local;
+  bool old_using_async = comp.using_stack_async;
+
+  if (body_has_using) {
+    emit_empty_disposal_stack(&comp);
+    int body_using_stack = add_local(&comp, "", 0, false, comp.scope_depth);
+    emit_put_local(&comp, body_using_stack);
+    body_using_err_local = add_local(&comp, "", 0, false, comp.scope_depth);
+
+    comp.using_stack_local = body_using_stack;
+    comp.using_stack_async = body_has_await_using;
+    push_using_cleanup(&comp, body_using_stack, comp.scope_depth, body_has_await_using);
+
+    comp.try_depth++;
+    body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);
+  }
+
   if (node->body) {
     if (node->body->type == N_BLOCK) {
       int last_expr_idx = -1;
@@ -4584,16 +4838,12 @@ sv_func_t *compile_function_body(
         if (sv_ast_can_be_expression_statement(last))
           last_expr_idx = node->body->args.count - 1;
       }
-
       for (int i = 0; i < node->body->args.count; i++) {
         sv_ast_t *stmt = node->body->args.items[i];
         if (i == last_expr_idx) {
           compile_expr(&comp, stmt);
-          emit_close_upvals(&comp);
-          emit_op(&comp, OP_RETURN);
-        } else {
-          compile_stmt(&comp, stmt);
-        }
+          emit_return_from_stack(&comp);
+        } else compile_stmt(&comp, stmt);
       }
     } else compile_tail_return_expr(&comp, node->body);
   }
@@ -4602,7 +4852,29 @@ sv_func_t *compile_function_body(
     sv_deferred_export_t *e = &comp.deferred_exports[i];
     compile_export_emit(&comp, e->name, e->len);
   }
+
+  if (body_has_using) {
+    emit_op(&comp, OP_TRY_POP);
+    comp.try_depth--;
+
+    emit_using_dispose_call(&comp, comp.using_stack_local, -1, body_has_await_using, false);
+    emit_op(&comp, OP_POP);
+    int end_jump = emit_jump(&comp, OP_JMP);
+
+    patch_jump(&comp, body_using_try_jump);
+    int catch_tag = emit_jump(&comp, OP_CATCH);
+    emit_put_local(&comp, body_using_err_local);
+    emit_using_dispose_call(&comp, comp.using_stack_local, body_using_err_local, body_has_await_using, true);
+    if (!body_has_await_using) emit_op(&comp, OP_THROW);
+    patch_jump(&comp, catch_tag);
+    patch_jump(&comp, end_jump);
+
+    pop_using_cleanup(&comp);
+    comp.using_stack_local = old_using_stack;
+    comp.using_stack_async = old_using_async;
+  }
   
+  emit_using_cleanups_to_depth(&comp, -1);
   emit_close_upvals(&comp);
   emit_op(&comp, OP_RETURN_UNDEF);
 

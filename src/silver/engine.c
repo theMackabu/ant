@@ -25,6 +25,7 @@
 #include "ops/exceptions.h"
 #include "ops/async.h"
 #include "ops/iteration.h"
+#include "ops/using.h"
 #include "ops/objects.h"
 #include "ops/coercion.h"
 
@@ -1680,7 +1681,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_TRY_POP:     { sv_op_try_pop(vm);                    NEXT(1); }
   L_CATCH:       { sv_op_catch(vm, sv_err, ip);          NEXT(5); }
   L_FINALLY:     { VM_CHECK(sv_op_finally(vm, js, ip));  NEXT(5); }
-  
+  L_NIP_CATCH:   { sv_op_nip_catch(vm);                  NEXT(1); }
+
   L_FINALLY_RET: {
     uint8_t *resume_ip = NULL;
     ant_value_t completion = js_mkundef();
@@ -1712,7 +1714,15 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     DISPATCH();
   }
   
-  L_NIP_CATCH:        { sv_op_nip_catch(vm);                      NEXT(1); }
+  L_USING_PUSH:                     { VM_CHECK(sv_op_using_push(vm, js, false));          NEXT(1); }
+  L_USING_PUSH_ASYNC:               { VM_CHECK(sv_op_using_push(vm, js, true));           NEXT(1); }
+  L_DISPOSE_RESOURCE:               { VM_CHECK(sv_op_dispose_resource(vm, js, false));    NEXT(1); }
+  L_DISPOSE_RESOURCE_ASYNC:         { VM_CHECK(sv_op_dispose_resource(vm, js, true));     NEXT(1); }
+  L_USING_DISPOSE:                  { VM_CHECK(sv_op_using_dispose(vm, js, false, false)); NEXT(1); }
+  L_USING_DISPOSE_ASYNC:            { VM_CHECK(sv_op_using_dispose(vm, js, true, false));  NEXT(1); }
+  L_USING_DISPOSE_SUPPRESSED:       { VM_CHECK(sv_op_using_dispose(vm, js, false, true));  NEXT(1); }
+  L_USING_DISPOSE_ASYNC_SUPPRESSED: { VM_CHECK(sv_op_using_dispose(vm, js, true, true));   NEXT(1); }
+
   L_FOR_IN:           { VM_CHECK(sv_op_for_in(vm, js));           NEXT(1); }
   L_FOR_OF:           { VM_CHECK(sv_op_for_of(vm, js));           NEXT(1); }
   L_FOR_AWAIT_OF:     { VM_CHECK(sv_op_for_await_of(vm, js));     NEXT(1); }

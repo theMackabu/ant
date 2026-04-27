@@ -11,6 +11,7 @@
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/generator.h"
+#include "modules/iterator.h"
 #include "modules/symbol.h"
 
 enum { GENERATOR_NATIVE_TAG = 0x47454e52u }; // GENR
@@ -481,11 +482,13 @@ void init_generator_module(void) {
   
   js->sym.generator_proto = proto;
   js_set_proto_init(proto, js->sym.iterator_proto);
+  js_set_proto_wb(js, js->sym.async_iterator_proto, proto);
   
   js_set(js, proto, "next", js_mkfun(generator_next));
   js_set(js, proto, "return", js_mkfun(generator_return));
   js_set(js, proto, "throw", js_mkfun(generator_throw));
   js_set_sym(js, proto, get_toStringTag_sym(), js_mkstr(js, "Generator", 9));
+  init_async_iterator_helpers();
 }
 
 ant_value_t sv_call_generator_closure_dispatch(
@@ -574,10 +577,12 @@ ant_value_t sv_call_generator_closure_dispatch(
   js_set_native_tag(gen, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
 
-  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
-  if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
-  if (data->is_async)
-    js_set_sym(js, gen, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  if (data->is_async && is_object_type(js->sym.async_iterator_proto)) 
+    js_set_proto_wb(js, gen, js->sym.async_iterator_proto);
+  else {
+    ant_value_t instance_proto = js_get(js, callee_func, "prototype");
+    if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
+  }
 
   return gen;
 }

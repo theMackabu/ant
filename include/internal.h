@@ -199,6 +199,7 @@ struct ant_isolate_t {
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;
     ant_value_t generator_proto;
+    ant_value_t async_iterator_proto;
   } sym;
   
   ant_offset_t max_size;

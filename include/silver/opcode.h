@@ -187,6 +187,16 @@ OP_DEF(  FINALLY,           5,   0,   0, label)     /* enter finally block */
 OP_DEF(  FINALLY_RET,       1,   1,   0, none)      /* return from finally */
 OP_DEF(  NIP_CATCH,         1,   2,   1, none)      /* catch ... a -> a */
 
+OP_DEF(  USING_PUSH,             1, 2, 1, none)   /* entries resource -> resource */
+OP_DEF(  USING_PUSH_ASYNC,       1, 2, 1, none)   /* entries resource -> resource */
+OP_DEF(  DISPOSE_RESOURCE,       1, 1, 1, none)   /* resource -> completion */
+OP_DEF(  DISPOSE_RESOURCE_ASYNC, 1, 1, 1, none)   /* resource -> promise/completion */
+
+OP_DEF(  USING_DISPOSE,                  1, 1, 1, none)  /* entries -> completion */
+OP_DEF(  USING_DISPOSE_ASYNC,            1, 1, 1, none)  /* entries -> promise/completion */
+OP_DEF(  USING_DISPOSE_SUPPRESSED,       1, 2, 1, none)  /* entries completion -> completion */
+OP_DEF(  USING_DISPOSE_ASYNC_SUPPRESSED, 1, 2, 1, none)  /* entries completion -> promise/completion */
+
 OP_DEF(  FOR_IN,            1,   1,   1, none)      /* obj -> iterator */
 OP_DEF(  FOR_OF,            1,   1,   3, none)      /* iterable -> iter next catch_off */
 OP_DEF(  FOR_AWAIT_OF,      1,   1,   3, none)      /* async iterable -> iter next catch_off */

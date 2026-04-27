@@ -1141,7 +1141,7 @@ compat-table/es6/typed-arrays.of.js: failed
 compat-table/es6/typed-arrays.prototype.Symbol.iterator.js: OK
 compat-table/es6/typed-arrays.prototype.copyWithin.js: OK
 compat-table/es6/typed-arrays.prototype.entries.js: OK
-compat-table/es6/typed-arrays.prototype.every.js: failed
+compat-table/es6/typed-arrays.prototype.every.js: OK
 compat-table/es6/typed-arrays.prototype.fill.js: OK
 compat-table/es6/typed-arrays.prototype.filter.js: failed
 compat-table/es6/typed-arrays.prototype.findIndex.js: failed
@@ -1470,45 +1470,45 @@ compat-table/intl/Number.prototype.toLocaleString.js: OK
 compat-table/intl/Object.prototype.toLocaleString.js: OK
 compat-table/intl/String.prototype.localeCompare.js: OK
 compat-table/next/Array.isTemplateObject.js: TypeError: undefined is not a function
-compat-table/next/AsyncDisposableStack.js: ReferenceError: 'AsyncDisposableStack' is not defined
-compat-table/next/AsyncIterator.extends.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.from.async-iterable.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.from.iterable.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.from.iterator.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.instanceof.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.prototype.Symbol.toStringTag.js: ReferenceError: 'AsyncIterator' is not defined
-compat-table/next/AsyncIterator.prototype.drop.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.every.js: TypeError: undefined is not a function
-compat-table/next/AsyncIterator.prototype.filter.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.find.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.flatMap.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.forEach.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.map.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.reduce.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.some.js: TIMEOUT: >5s
-compat-table/next/AsyncIterator.prototype.take.js: failed
-compat-table/next/AsyncIterator.prototype.toArray.js: TIMEOUT: >5s
-compat-table/next/DisposableStack.js: ReferenceError: 'DisposableStack' is not defined
+compat-table/next/AsyncDisposableStack.js: OK
+compat-table/next/AsyncIterator.extends.js: OK
+compat-table/next/AsyncIterator.from.async-iterable.js: OK
+compat-table/next/AsyncIterator.from.iterable.js: OK
+compat-table/next/AsyncIterator.from.iterator.js: OK
+compat-table/next/AsyncIterator.instanceof.js: OK
+compat-table/next/AsyncIterator.prototype.Symbol.toStringTag.js: OK
+compat-table/next/AsyncIterator.prototype.drop.js: OK
+compat-table/next/AsyncIterator.prototype.every.js: OK
+compat-table/next/AsyncIterator.prototype.filter.js: OK
+compat-table/next/AsyncIterator.prototype.find.js: OK
+compat-table/next/AsyncIterator.prototype.flatMap.js: OK
+compat-table/next/AsyncIterator.prototype.forEach.js: OK
+compat-table/next/AsyncIterator.prototype.map.js: OK
+compat-table/next/AsyncIterator.prototype.reduce.js: OK
+compat-table/next/AsyncIterator.prototype.some.js: OK
+compat-table/next/AsyncIterator.prototype.take.js: OK
+compat-table/next/AsyncIterator.prototype.toArray.js: OK
+compat-table/next/DisposableStack.js: OK
 compat-table/next/Map.prototype.upsert.js: OK
 compat-table/next/RegExp.1-9.js: OK
 compat-table/next/RegExp.lastMatch.js: OK
 compat-table/next/ShadowRealm.js: failed
-compat-table/next/SuppressedError.js: ReferenceError: 'SuppressedError' is not defined
-compat-table/next/Symbol.dispose.bound.js: ReferenceError: 'using' is not defined
-compat-table/next/Uint8Array.fromBase64.js: TypeError: undefined is not a function
-compat-table/next/Uint8Array.fromHex.js: TypeError: undefined is not a function
-compat-table/next/Uint8Array.setFromBase64.js: TypeError: undefined is not a function
-compat-table/next/Uint8Array.setFromHex.js: TypeError: undefined is not a function
-compat-table/next/Uint8Array.toBase64.js: TypeError: undefined is not a function
-compat-table/next/Uint8Array.toHex.js: TypeError: undefined is not a function
+compat-table/next/SuppressedError.js: OK
+compat-table/next/Symbol.dispose.bound.js: OK
+compat-table/next/Uint8Array.fromBase64.js: OK
+compat-table/next/Uint8Array.fromHex.js: OK
+compat-table/next/Uint8Array.setFromBase64.js: OK
+compat-table/next/Uint8Array.setFromHex.js: OK
+compat-table/next/Uint8Array.toBase64.js: OK
+compat-table/next/Uint8Array.toHex.js: OK
 compat-table/next/WeakMap.prototype.upsert.js: OK
-compat-table/next/await-using.for-of.js: ReferenceError: 'using' is not defined
-compat-table/next/await-using.js: ReferenceError: 'using' is not defined
+compat-table/next/await-using.for-of.js: OK
+compat-table/next/await-using.js: OK
 compat-table/next/class-decorators.js: failed
 compat-table/next/function.sent.js: failed
-compat-table/next/throw-expr.arrow.js: SyntaxError: Unexpected token 'throw'
-compat-table/next/throw-expr.conditional.js: SyntaxError: Unexpected token 'throw'
-compat-table/next/throw-expr.logical.js: SyntaxError: Unexpected token 'throw'
-compat-table/next/throw-expr.param-init.js: SyntaxError: Unexpected token 'throw'
-compat-table/next/using.for-of.js: ReferenceError: 'using' is not defined
-compat-table/next/using.js: ReferenceError: 'using' is not defined
+compat-table/next/throw-expr.arrow.js: OK
+compat-table/next/throw-expr.conditional.js: OK
+compat-table/next/throw-expr.logical.js: OK
+compat-table/next/throw-expr.param-init.js: OK
+compat-table/next/using.for-of.js: OK
+compat-table/next/using.js: OK

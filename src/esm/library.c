@@ -13,6 +13,7 @@ typedef struct ant_library_entry {
   ant_library_init_fn init_fn;
   ant_value_t cached_ns;
   bool ns_initialized;
+  bool root_registered;
   struct ant_library_entry *canonical;
   UT_hash_handle hh;
 } ant_library_entry_t;
@@ -80,10 +81,15 @@ ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, siz
     if (loaded) *loaded = false;
     return js_mkundef();
   }
-  if (loaded) *loaded = true;
 
+  if (loaded) *loaded = true;
   ant_library_entry_t *canon = lib->canonical;
   if (canon->ns_initialized) return canon->cached_ns;
+
+  if (!canon->root_registered) {
+    gc_register_root(&canon->cached_ns);
+    canon->root_registered = true;
+  }
 
   canon->cached_ns = canon->init_fn(js);
   if (is_object_type(canon->cached_ns)) {
@@ -94,7 +100,5 @@ ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, siz
   }
 
   canon->ns_initialized = true;
-  gc_register_root(&canon->cached_ns);
-  
   return canon->cached_ns;
 }

@@ -41,6 +41,7 @@ void sv_compile_ctx_init_root(
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->using_stack_local = -1;
   ctx->line_table = line_table;
 }
 
@@ -65,6 +66,7 @@ void sv_compile_ctx_init_child(
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
+  ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
 }
 
@@ -79,6 +81,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->srcpos);
   free(ctx->slot_types);
   free(ctx->deferred_exports);
+  free(ctx->using_cleanups);
 
   const_dedup_entry_t *entry;
   const_dedup_entry_t *tmp;

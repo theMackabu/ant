@@ -210,6 +210,10 @@ static inline bool is_private_ident_like_tok(uint8_t tok) {
   return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
 }
 
+static inline bool is_using_tok(P) {
+  return TOK == TOK_IDENTIFIER && TLEN == 5 && memcmp(tok_str(p), "using", 5) == 0;
+}
+
 static inline bool sv_strict_forbidden_binding_ident(const char *s, uint32_t len) {
   return is_eval_or_arguments_name(s, len) || is_strict_reserved_name(s, len);
 }
@@ -1172,6 +1176,12 @@ static sv_ast_t *parse_unary(P) {
     n->flags = 1;
     return n;
   }
+  if (la == TOK_THROW) {
+    CONSUME();
+    sv_ast_t *n = mk(N_THROW);
+    n->right = parse_assign(p);
+    return n;
+  }
   return parse_postfix(p);
 }
 
@@ -1524,11 +1534,10 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
       sv_strict_check_binding_ident(p, decl->left->str, decl->left->len);
       CONSUME();
     }
-
     if (NEXT() == TOK_ASSIGN) {
       CONSUME();
       decl->right = parse_assign(p);
-    } else if (kind == SV_VAR_CONST && !allow_uninit_const) {
+    } else if ((kind == SV_VAR_CONST || kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING) && !allow_uninit_const) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Missing initializer in const declaration");
     }
     sv_ast_list_push(&var->args, decl);
@@ -1871,6 +1880,27 @@ static sv_ast_t *parse_stmt(P) {
     [TOK_IMPORT]    = &&l_import,
   };
 
+  if (is_using_tok(p)) {
+    CONSUME();
+    sv_ast_t *n = parse_var_decl(p, SV_VAR_USING, false);
+    if (NEXT() == TOK_SEMICOLON) CONSUME();
+    return n;
+  }
+  
+  if (TOK == TOK_AWAIT) {
+    sv_lexer_state_t saved;
+    sv_lexer_save_state(&p->lx, &saved);
+    CONSUME();
+    NEXT();
+    if (is_using_tok(p)) {
+      CONSUME();
+      sv_ast_t *n = parse_var_decl(p, SV_VAR_AWAIT_USING, false);
+      if (NEXT() == TOK_SEMICOLON) CONSUME();
+      return n;
+    }
+    sv_lexer_restore_state(&p->lx, &saved);
+  }
+
   if (TOK < TOK_MAX && dispatch[TOK])
     goto *dispatch[TOK];
   goto l_expr_stmt;
@@ -1944,7 +1974,25 @@ static sv_ast_t *parse_stmt(P) {
     sv_ast_t *init_node = NULL;
 
     NEXT();
-    if (TOK == TOK_VAR || TOK == TOK_LET || TOK == TOK_CONST) {
+    if (TOK == TOK_AWAIT) {
+      sv_lexer_state_t saved;
+      sv_lexer_save_state(&p->lx, &saved);
+      CONSUME();
+      NEXT();
+      if (is_using_tok(p)) {
+        CONSUME();
+        p->no_in = true;
+        init_node = parse_var_decl(p, SV_VAR_AWAIT_USING, true);
+        p->no_in = false;
+      } else sv_lexer_restore_state(&p->lx, &saved);
+    }
+    
+    if (!init_node && is_using_tok(p)) {
+      CONSUME();
+      p->no_in = true;
+      init_node = parse_var_decl(p, SV_VAR_USING, true);
+      p->no_in = false;
+    } else if (!init_node && (TOK == TOK_VAR || TOK == TOK_LET || TOK == TOK_CONST)) {
       sv_var_kind_t kind = (
         TOK == TOK_VAR) ? SV_VAR_VAR :
         (TOK == TOK_LET) ? SV_VAR_LET : SV_VAR_CONST;
@@ -1952,7 +2000,7 @@ static sv_ast_t *parse_stmt(P) {
       p->no_in = true;
       init_node = parse_var_decl(p, kind, true);
       p->no_in = false;
-    } else if (TOK != TOK_SEMICOLON) {
+    } else if (!init_node && TOK != TOK_SEMICOLON) {
       p->no_in = true;
       init_node = parse_expr(p);
       p->no_in = false;
@@ -1979,7 +2027,10 @@ static sv_ast_t *parse_stmt(P) {
       return n;
     }
 
-    if (init_node && init_node->type == N_VAR && init_node->var_kind == SV_VAR_CONST) {
+    if (init_node && init_node->type == N_VAR && (
+        init_node->var_kind == SV_VAR_CONST ||
+        init_node->var_kind == SV_VAR_USING ||
+        init_node->var_kind == SV_VAR_AWAIT_USING)) {
       for (int i = 0; i < init_node->args.count; i++) {
         sv_ast_t *decl = init_node->args.items[i];
         if (decl && decl->type == N_VARDECL && !decl->right) {

@@ -129,7 +129,9 @@ typedef enum {
   BRAND_MODULE_NAMESPACE,
   BRAND_ABORT_SIGNAL,
   BRAND_EVENTEMITTER,
-  BRAND_EVENTTARGET
+  BRAND_EVENTTARGET,
+  BRAND_DISPOSABLE_STACK,
+  BRAND_ASYNC_DISPOSABLE_STACK
 } object_brand_id_t;
 
 static inline void *mantissa_chk(void *p, const char *func) {
