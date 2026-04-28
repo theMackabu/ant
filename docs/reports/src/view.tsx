@@ -161,13 +161,11 @@ const ReportPage = ({
       }}
     >
       <Logo />
-      <p>
-        <b>{report.reason}.</b>{' '}
-        <ins>
-          {detail} at {report.addr}
-        </ins>
+      <p class="title">Ant crashed and sent a redacted report.</p>
+      <p style="margin-top:-3px">
+        {report.reason}.
         <br />
-        <span>Ant crashed and sent a redacted report.</span>
+        {detail} at <span class="addr">{report.addr}</span>
       </p>
 
       <div class="meta">
