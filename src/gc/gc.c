@@ -87,6 +87,23 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
   }
 }
 
+static bool gc_rope_candidate_is_valid(ant_rope_heap_t *rope) {
+  if (!rope || !gc_ropes_mark(rope)) return false;
+  if (rope->depth >= ROPE_MAX_DEPTH) return false;
+  if (rope->len >= ROPE_FLATTEN_THRESHOLD) return false;
+  return true;
+}
+
+static bool gc_builder_candidate_is_valid(ant_string_builder_t *builder) {
+  if (!builder || !gc_ropes_mark(builder)) return false;
+  if (builder->tail_len > STR_BUILDER_TAIL_CAP) return false;
+  if (builder->ascii_state > STR_ASCII_NO) return false;
+  if (!builder->head && builder->chunk_tail) return false;
+  if (builder->head && !gc_ropes_mark(builder->head)) return false;
+  if (builder->chunk_tail && !gc_ropes_mark(builder->chunk_tail)) return false;
+  return true;
+}
+
 static void gc_mark_str(ant_t *js, ant_value_t v) {
   static const void *dispatch[] = {
     [STR_HEAP_TAG_FLAT] = &&l_flat,
@@ -107,7 +124,7 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!rope || !gc_ropes_mark(rope)) return;
+    if (!gc_rope_candidate_is_valid(rope)) return;
     gc_mark_str(js, rope->left);
     gc_mark_str(js, rope->right);
     gc_mark_str(js, rope->cached);
@@ -116,10 +133,13 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_builder: {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!builder || !gc_ropes_mark(builder)) return;
+    if (!gc_builder_candidate_is_valid(builder)) return;
     gc_mark_value(js, builder->cached);
-    for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
-      if (gc_ropes_mark(chunk)) gc_mark_value(js, chunk->value);
+    for (ant_builder_chunk_t *chunk = builder->head; chunk;) {
+      if (!gc_ropes_mark(chunk)) return;
+      ant_builder_chunk_t *next = chunk->next;
+      gc_mark_value(js, chunk->value);
+      chunk = next;
     }
     return;
   }
