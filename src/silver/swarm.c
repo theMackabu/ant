@@ -1558,6 +1558,20 @@ static MIR_label_t inl_label_lookup(inl_label_map_t *lm, int bc_off, int *out_sp
 }
 
 static bool jit_inline_body_feasible(sv_func_t *callee) {
+  if (!callee) return false;
+  int max_stack = callee->max_stack > 0 ? callee->max_stack : 4;
+  int n_locals = callee->max_locals > 0 ? callee->max_locals : 1;
+  uint8_t stack_types[max_stack];
+  uint8_t local_types[n_locals];
+  memset(stack_types, SLOT_BOXED, sizeof(stack_types));
+  memset(local_types, SLOT_BOXED, sizeof(local_types));
+  int sp = 0;
+  bool side_effect_seen = false;
+
+#define FEAS_POP(n) do { if (sp < (n)) return false; sp -= (n); } while (0)
+#define FEAS_PUSH(t) do { if (sp >= max_stack) return false; stack_types[sp++] = (t); } while (0)
+#define FEAS_GUARD_AFTER_EFFECT() do { if (side_effect_seen) return false; } while (0)
+
   uint8_t *ip  = callee->code;
   uint8_t *end = callee->code + callee->code_len;
   while (ip < end) {
@@ -1565,10 +1579,180 @@ static bool jit_inline_body_feasible(sv_func_t *callee) {
     int sz = sv_op_size[op];
     if (sz == 0) return false;
     switch (op) {
-      default: break;
+      case OP_GET_ARG:
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_CONST_I8:
+        FEAS_PUSH(SLOT_NUM);
+        break;
+      case OP_CONST: {
+        uint32_t idx = sv_get_u32(ip + 1);
+        if (idx >= (uint32_t)callee->const_count) return false;
+        FEAS_PUSH(vtype(callee->constants[idx]) == T_NUM ? SLOT_NUM : SLOT_BOXED);
+        break;
+      }
+      case OP_CONST8: {
+        uint8_t idx = sv_get_u8(ip + 1);
+        if (idx >= (uint8_t)callee->const_count) return false;
+        FEAS_PUSH(vtype(callee->constants[idx]) == T_NUM ? SLOT_NUM : SLOT_BOXED);
+        break;
+      }
+      case OP_UNDEF: case OP_NULL: case OP_TRUE: case OP_FALSE:
+      case OP_THIS:
+      case OP_GET_UPVAL:
+      case OP_GET_GLOBAL:
+      case OP_SPECIAL_OBJ:
+        if (side_effect_seen && (op == OP_GET_GLOBAL || op == OP_SPECIAL_OBJ))
+          return false;
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_GET_LOCAL: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        if (idx >= (uint16_t)n_locals) return false;
+        FEAS_PUSH(local_types[idx]);
+        break;
+      }
+      case OP_GET_LOCAL8: {
+        uint8_t idx = sv_get_u8(ip + 1);
+        if (idx >= (uint8_t)n_locals) return false;
+        FEAS_PUSH(local_types[idx]);
+        break;
+      }
+      case OP_PUT_LOCAL: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        if (idx >= (uint16_t)n_locals || sp < 1) return false;
+        local_types[idx] = stack_types[--sp];
+        break;
+      }
+      case OP_PUT_LOCAL8: {
+        uint8_t idx = sv_get_u8(ip + 1);
+        if (idx >= (uint8_t)n_locals || sp < 1) return false;
+        local_types[idx] = stack_types[--sp];
+        break;
+      }
+      case OP_SET_LOCAL: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        if (idx >= (uint16_t)n_locals || sp < 1) return false;
+        local_types[idx] = stack_types[sp - 1];
+        break;
+      }
+      case OP_SET_LOCAL8: {
+        uint8_t idx = sv_get_u8(ip + 1);
+        if (idx >= (uint8_t)n_locals || sp < 1) return false;
+        local_types[idx] = stack_types[sp - 1];
+        break;
+      }
+      case OP_SET_LOCAL_UNDEF: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        if (idx >= (uint16_t)n_locals) return false;
+        local_types[idx] = SLOT_BOXED;
+        break;
+      }
+      case OP_POP:
+        FEAS_POP(1);
+        break;
+      case OP_DUP:
+        if (sp < 1) return false;
+        { uint8_t top_type = stack_types[sp - 1]; FEAS_PUSH(top_type); }
+        break;
+      case OP_DUP2: {
+        if (sp < 2) return false;
+        uint8_t a = stack_types[sp - 2];
+        uint8_t b = stack_types[sp - 1];
+        FEAS_PUSH(a);
+        FEAS_PUSH(b);
+        break;
+      }
+      case OP_INSERT2: {
+        if (sp < 2) return false;
+        uint8_t a = stack_types[sp - 1];
+        uint8_t obj = stack_types[sp - 2];
+        stack_types[sp - 2] = a;
+        stack_types[sp - 1] = obj;
+        FEAS_PUSH(a);
+        break;
+      }
+      case OP_INSERT3: {
+        if (sp < 3) return false;
+        uint8_t a = stack_types[sp - 1];
+        uint8_t prop = stack_types[sp - 2];
+        uint8_t obj = stack_types[sp - 3];
+        stack_types[sp - 3] = a;
+        stack_types[sp - 2] = obj;
+        stack_types[sp - 1] = prop;
+        FEAS_PUSH(a);
+        break;
+      }
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM: {
+        if (sp < 2) return false;
+        bool known_num =
+          stack_types[sp - 1] == SLOT_NUM && stack_types[sp - 2] == SLOT_NUM;
+        if (!known_num) FEAS_GUARD_AFTER_EFFECT();
+        sp -= 2;
+        FEAS_PUSH(SLOT_NUM);
+        break;
+      }
+      case OP_MOD:
+        FEAS_GUARD_AFTER_EFFECT();
+        FEAS_POP(2);
+        FEAS_PUSH(SLOT_NUM);
+        break;
+      case OP_NEG:
+        if (sp < 1) return false;
+        FEAS_GUARD_AFTER_EFFECT();
+        stack_types[sp - 1] = SLOT_NUM;
+        break;
+      case OP_LT: case OP_LE: case OP_GT: case OP_GE:
+        FEAS_GUARD_AFTER_EFFECT();
+        FEAS_POP(2);
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_SEQ: case OP_SNE: case OP_EQ: case OP_NE:
+        FEAS_POP(2);
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_IS_UNDEF: case OP_IS_NULL:
+        if (sp < 1) return false;
+        stack_types[sp - 1] = SLOT_BOXED;
+        break;
+      case OP_JMP:
+      case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
+        break;
+      case OP_JMP_TRUE: case OP_JMP_FALSE:
+      case OP_JMP_TRUE8: case OP_JMP_FALSE8:
+        FEAS_POP(1);
+        break;
+      case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
+        if (sp < 1) return false;
+        break;
+      case OP_RETURN:
+        FEAS_POP(1);
+        break;
+      case OP_RETURN_UNDEF:
+        break;
+      case OP_GET_FIELD:
+        if (side_effect_seen) return false;
+        FEAS_POP(1);
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_GET_FIELD2:
+        if (side_effect_seen) return false;
+        if (sp < 1) return false;
+        FEAS_PUSH(SLOT_BOXED);
+        break;
+      case OP_PUT_FIELD:
+        FEAS_POP(2);
+        side_effect_seen = true;
+        break;
+      default:
+        return false;
     }
     ip += sz;
   }
+#undef FEAS_GUARD_AFTER_EFFECT
+#undef FEAS_PUSH
+#undef FEAS_POP
   return true;
 }
 
@@ -1923,16 +2107,17 @@ static bool jit_emit_inline_body(
 
       case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
       case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM: {
+        bool l_known_num = inl_slot_type[isp - 2] == SLOT_NUM;
+        bool r_known_num = inl_slot_type[isp - 1] == SLOT_NUM;
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         int dst_i = isp;
         MIR_reg_t rd = inl_vs[isp++];
 
-        if (!(op == OP_ADD_NUM || op == OP_SUB_NUM ||
-              op == OP_MUL_NUM || op == OP_DIV_NUM)) {
+        if (!l_known_num)
           mir_emit_is_num_guard(ctx, jit_func, r_bool, rl, slow);
+        if (!r_known_num)
           mir_emit_is_num_guard(ctx, jit_func, r_bool, rr, slow);
-        }
 
         if (!*p_d_slot) {
           *p_d_slot = MIR_new_func_reg(ctx, jit_func->u.func,
