@@ -119,7 +119,7 @@ void sv_jit_init(ant_t *js) {
   if (!jc) return;
   jc->ctx = MIR_init();
   MIR_gen_init(jc->ctx);
-  MIR_gen_set_optimize_level(jc->ctx, 2);
+  MIR_gen_set_optimize_level(jc->ctx, 3);
   jit_load_externals_once(jc);
   jit_ctx_set(js, jc);
 }
