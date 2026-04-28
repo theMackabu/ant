@@ -82,7 +82,7 @@ jobs:
         run: |
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
             musl-dev \
-            util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
+            util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static xz-static \
             py3-tomli tar xz zstd jq bash
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 

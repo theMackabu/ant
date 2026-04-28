@@ -138,7 +138,7 @@ Installation via package manager:
   ```sh
   apk add clang lld llvm meson ninja cmake pkgconf nodejs npm \
     musl-dev \
-    util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static
+    util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static xz-static
   ```
 
 You will also need Rust and Zig installed. The recommended approach:

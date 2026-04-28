@@ -52,7 +52,7 @@ else
 endif
 
 crash_deps = []
-if host_machine.system() == 'linux'
+if host_machine.system() == 'linux' and not cc.has_header('execinfo.h')
   libunwind_dep = dependency('libunwind', required: false, static: is_static)
   if libunwind_dep.found() and cc.has_header('libunwind.h', dependencies: libunwind_dep)
     crash_deps += [libunwind_dep]
