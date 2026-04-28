@@ -72,10 +72,33 @@ bool ant_crash_is_internal_report(int argc, char **argv) {
 #include <execinfo.h>
 #endif
 
-#ifdef ANT_CRASH_HAVE_LIBUNWIND
-#define UNW_LOCAL_ONLY
-#include <libunwind.h>
+#if !defined(ANT_CRASH_HAVE_EXECINFO) && defined(__has_include)
+#if __has_include(<unwind.h>)
+#define ANT_CRASH_HAVE_UNWIND_BACKTRACE 1
+#include <unwind.h>
 #endif
+#endif
+#endif
+
+#ifdef ANT_CRASH_HAVE_UNWIND_BACKTRACE
+typedef struct {
+  uintptr_t *frames;
+  int frame_count;
+  int skip;
+} crash_unwind_state_t;
+
+static _Unwind_Reason_Code collect_unwind_frame(struct _Unwind_Context *ctx, void *arg) {
+  crash_unwind_state_t *state = arg;
+  uintptr_t ip = (uintptr_t)_Unwind_GetIP(ctx);
+  if (!ip) return _URC_NO_REASON;
+  if (state->skip > 0) {
+    state->skip--;
+    return _URC_NO_REASON;
+  }
+  if (state->frame_count >= ANT_CRASH_FRAME_MAX) return _URC_END_OF_STACK;
+  state->frames[state->frame_count++] = ip;
+  return _URC_NO_REASON;
+}
 #endif
 
 typedef struct {
@@ -970,34 +993,11 @@ static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
   int skip = n > 1 ? 1 : 0;
   for (int i = skip; i < n && frame_count < ANT_CRASH_FRAME_MAX; i++)
     frames[frame_count++] = (uintptr_t)raw_frames[i];
-#elif defined(ANT_CRASH_HAVE_LIBUNWIND)
-  unw_cursor_t cursor;
-  bool cursor_ready = false;
-  bool include_current_frame = false;
-
-#ifdef UNW_INIT_SIGNAL_FRAME
-  if (ucontext && unw_init_local2(&cursor, (unw_context_t *)ucontext, UNW_INIT_SIGNAL_FRAME) == 0) {
-    cursor_ready = true;
-    include_current_frame = true;
-  }
-#endif
-
-  unw_context_t context;
-  if (!cursor_ready && unw_getcontext(&context) == 0 && unw_init_local(&cursor, &context) == 0)
-    cursor_ready = true;
-
-  if (cursor_ready) {
-    if (include_current_frame) {
-      unw_word_t ip = 0;
-      if (unw_get_reg(&cursor, UNW_REG_IP, &ip) == 0 && ip)
-        frames[frame_count++] = (uintptr_t)ip;
-    }
-    while (frame_count < ANT_CRASH_FRAME_MAX && unw_step(&cursor) > 0) {
-      unw_word_t ip = 0;
-      if (unw_get_reg(&cursor, UNW_REG_IP, &ip) == 0 && ip)
-        frames[frame_count++] = (uintptr_t)ip;
-    }
-  }
+#elif defined(ANT_CRASH_HAVE_UNWIND_BACKTRACE)
+  (void)ucontext;
+  crash_unwind_state_t state = { frames, 0, 1 };
+  _Unwind_Backtrace(collect_unwind_frame, &state);
+  frame_count = state.frame_count;
 #endif
 
   uint64_t fault_addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
