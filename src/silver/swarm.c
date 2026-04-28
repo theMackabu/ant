@@ -20,6 +20,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define MCO_API extern
+#include <minicoro.h>
+
 static const char *sv_op_name[] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = #name,
 #include "silver/opcode.h"
@@ -27,6 +30,9 @@ static const char *sv_op_name[] = {
 
 typedef struct {
   MIR_context_t ctx;
+  MIR_item_t *func_items;
+  size_t func_items_len;
+  size_t func_items_cap;
   bool externals_loaded;
 } sv_jit_ctx_t;
 
@@ -40,6 +46,19 @@ static void jit_ctx_set(ant_t *js, sv_jit_ctx_t *ctx) {
 
 static void jit_ctx_remove(ant_t *js) {
   js->jit_ctx = NULL;
+}
+
+static bool jit_ctx_add_func(sv_jit_ctx_t *jc, MIR_item_t item) {
+  if (!jc || !item) return false;
+  if (jc->func_items_len == jc->func_items_cap) {
+    size_t new_cap = jc->func_items_cap ? jc->func_items_cap * 2 : 64;
+    MIR_item_t *new_items = realloc(jc->func_items, new_cap * sizeof(*new_items));
+    if (!new_items) return false;
+    jc->func_items = new_items;
+    jc->func_items_cap = new_cap;
+  }
+  jc->func_items[jc->func_items_len++] = item;
+  return true;
 }
 
 static void jit_load_externals_once(sv_jit_ctx_t *jc) {
@@ -129,8 +148,69 @@ void sv_jit_destroy(ant_t *js) {
   if (!jc) return;
   MIR_gen_finish(jc->ctx);
   MIR_finish(jc->ctx);
+  free(jc->func_items);
   free(jc);
   jit_ctx_remove(js);
+}
+
+typedef struct {
+  ant_t *js;
+  void (*mark)(ant_t *, ant_value_t);
+} jit_gc_mark_ctx_t;
+
+static void jit_gc_mark_root(void *root_addr, void *data) {
+  jit_gc_mark_ctx_t *ctx = (jit_gc_mark_ctx_t *)data;
+  if (!root_addr || !ctx || !ctx->mark) return;
+  ctx->mark(ctx->js, *(ant_value_t *)root_addr);
+}
+
+static bool jit_get_stack_bounds(ant_t *js, uintptr_t sp, uintptr_t *lo, uintptr_t *hi) {
+  uintptr_t base = 0;
+  mco_coro *running = mco_running();
+  if (running && running->stack_base && running->stack_size > 0)
+    base = (uintptr_t)running->stack_base + running->stack_size;
+  else if (js)
+    base = (uintptr_t)js->cstk.base;
+
+  if (!base || !sp) return false;
+  uintptr_t minp = sp < base ? sp : base;
+  uintptr_t maxp = sp < base ? base : sp;
+  minp = (minp + sizeof(void *) - 1u) & ~(uintptr_t)(sizeof(void *) - 1u);
+  maxp &= ~(uintptr_t)(sizeof(void *) - 1u);
+  if (minp >= maxp) return false;
+  *lo = minp;
+  *hi = maxp;
+  return true;
+}
+
+static bool jit_frame_in_bounds(void **fp, uintptr_t lo, uintptr_t hi) {
+  uintptr_t addr = (uintptr_t)fp;
+  return fp && (addr & (sizeof(void *) - 1u)) == 0
+    && addr >= lo && addr + 2 * sizeof(void *) <= hi;
+}
+
+void sv_jit_mark_roots(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
+  sv_jit_ctx_t *jc = jit_ctx_get(js);
+  if (!jc || !mark || jc->func_items_len == 0) return;
+
+  jit_gc_mark_ctx_t mark_ctx = { js, mark };
+  volatile uint8_t sp_marker = 0;
+  uintptr_t stack_lo, stack_hi;
+  if (!jit_get_stack_bounds(js, (uintptr_t)&sp_marker, &stack_lo, &stack_hi)) return;
+
+  void **fp = __builtin_frame_address(0);
+  for (int depth = 0; fp && depth < 256; depth++) {
+    if (!jit_frame_in_bounds(fp, stack_lo, stack_hi)) break;
+    void **next_fp = (void **)fp[0];
+    void *return_pc = fp[1];
+
+    for (size_t i = 0; i < jc->func_items_len; i++)
+      MIR_visit_gc_roots(jc->ctx, jc->func_items[i], return_pc, fp, jit_gc_mark_root, &mark_ctx);
+
+    if (!jit_frame_in_bounds(next_fp, stack_lo, stack_hi)) break;
+    if (next_fp <= fp) break;
+    fp = next_fp;
+  }
 }
 
 
@@ -208,7 +288,7 @@ static MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
 }
 
 
-#define MIR_JSVAL MIR_T_I64
+#define MIR_JSVAL MIR_T_GC
 
 #define JIT_ERR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | T_ERR)
 
@@ -264,6 +344,16 @@ static void vstack_flush_to_boxed(jit_vstack_t *vs,
                                   MIR_reg_t d_slot) {
   if (!vs->slot_type) return;
   for (int i = 0; i < vs->sp; i++)
+    vstack_ensure_boxed(vs, i, ctx, fn, d_slot);
+}
+
+static void vstack_flush_range_to_boxed(jit_vstack_t *vs, int start, int end,
+                                        MIR_context_t ctx, MIR_item_t fn,
+                                        MIR_reg_t d_slot) {
+  if (!vs->slot_type) return;
+  if (start < 0) start = 0;
+  if (end > vs->sp) end = vs->sp;
+  for (int i = start; i < end; i++)
     vstack_ensure_boxed(vs, i, ctx, fn, d_slot);
 }
 
@@ -4703,10 +4793,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_TAIL_CALL:
       case OP_CALL: {
-        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         bool is_tail = (op == OP_TAIL_CALL);
         uint16_t call_argc = sv_get_u16(ip + 1);
         if (call_argc > 16 || vs.sp < (int)call_argc + 1) { ok = false; break; }
+        int call_base = vs.sp - (int)call_argc - 1;
+        if (is_tail)
+          vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        else
+          vstack_flush_range_to_boxed(&vs, call_base, vs.sp, ctx, jit_func, r_d_slot);
 
         if (!is_tail) {
           sv_func_t *inline_callee = vs.known_func[vs.sp - call_argc - 1];
@@ -8221,7 +8315,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   func->jit_compiled_tfb_ver = func->tfb_version;
   func->jit_compiling = false;
-  return MIR_gen(ctx, jit_func);
+  sv_jit_func_t compiled = MIR_gen(ctx, jit_func);
+  if (!compiled) return NULL;
+  func->jit_mir_item = jit_func;
+  if (!jit_ctx_add_func(jc, jit_func)) {
+    func->jit_code = NULL;
+    func->jit_mir_item = NULL;
+    return NULL;
+  }
+  return compiled;
 }
 
 static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {

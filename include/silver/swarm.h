@@ -8,6 +8,7 @@
 
 void sv_jit_init(ant_t *js);
 void sv_jit_destroy(ant_t *js);
+void sv_jit_mark_roots(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 sv_jit_func_t sv_jit_compile(
   ant_t *js, sv_func_t *func, 

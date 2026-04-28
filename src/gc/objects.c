@@ -5,6 +5,9 @@
 #include "gc/modules.h"
 #include "sugar.h"
 #include "silver/engine.h"
+#ifdef ANT_JIT
+#include "silver/swarm.h"
+#endif
 #include "shapes.h"
 #include "runtime.h"
 #include "modules/collections.h"
@@ -487,6 +490,9 @@ static void gc_mark_roots(ant_t *js) {
     gc_mark_value(js, js->cfunc_promote_cache.promoted[i]);
 
   gc_visit_roots(js, gc_mark_value);
+#ifdef ANT_JIT
+  sv_jit_mark_roots(js, gc_mark_value);
+#endif
   gc_mark_timers(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
   gc_mark_fetch(js, gc_mark_value);

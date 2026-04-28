@@ -172,6 +172,7 @@ struct sv_func {
   
 #ifdef ANT_JIT
   void *jit_code;
+  void *jit_mir_item;
   
   uint32_t call_count;
   uint32_t back_edge_count;
