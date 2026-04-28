@@ -51,6 +51,15 @@ else
   win_deps = []
 endif
 
+crash_deps = []
+if host_machine.system() == 'linux'
+  libunwind_dep = dependency('libunwind', required: false, static: is_static)
+  if libunwind_dep.found() and cc.has_header('libunwind.h', dependencies: libunwind_dep)
+    crash_deps += [libunwind_dep]
+    add_project_arguments('-DANT_CRASH_HAVE_LIBUNWIND', language: 'c')
+  endif
+endif
+
 deps_info = {
   'lmdb': {
     'dir': 'openldap-LMDB_0.9.33',
@@ -234,7 +243,7 @@ ant_deps = [
   uriparser_dep, utf8proc_dep, ssl_dep, crypto_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,
-] + win_deps
+] + win_deps + crash_deps
 
 if get_option('jit')
   mir_dep = subproject('mir').get_variable('mir_dep')

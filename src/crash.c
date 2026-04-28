@@ -67,9 +67,14 @@ bool ant_crash_is_internal_report(int argc, char **argv) {
 #include <sys/utsname.h>
 #endif
 
-#if defined(__APPLE__) || defined(__linux__) || defined(__GLIBC__)
+#if defined(__APPLE__) || defined(__GLIBC__)
 #define ANT_CRASH_HAVE_EXECINFO 1
 #include <execinfo.h>
+#endif
+
+#ifdef ANT_CRASH_HAVE_LIBUNWIND
+#define UNW_LOCAL_ONLY
+#include <libunwind.h>
 #endif
 #endif
 
@@ -965,6 +970,34 @@ static void crash_handler(int sig, siginfo_t *info, void *ucontext) {
   int skip = n > 1 ? 1 : 0;
   for (int i = skip; i < n && frame_count < ANT_CRASH_FRAME_MAX; i++)
     frames[frame_count++] = (uintptr_t)raw_frames[i];
+#elif defined(ANT_CRASH_HAVE_LIBUNWIND)
+  unw_cursor_t cursor;
+  bool cursor_ready = false;
+  bool include_current_frame = false;
+
+#ifdef UNW_INIT_SIGNAL_FRAME
+  if (ucontext && unw_init_local2(&cursor, (unw_context_t *)ucontext, UNW_INIT_SIGNAL_FRAME) == 0) {
+    cursor_ready = true;
+    include_current_frame = true;
+  }
+#endif
+
+  unw_context_t context;
+  if (!cursor_ready && unw_getcontext(&context) == 0 && unw_init_local(&cursor, &context) == 0)
+    cursor_ready = true;
+
+  if (cursor_ready) {
+    if (include_current_frame) {
+      unw_word_t ip = 0;
+      if (unw_get_reg(&cursor, UNW_REG_IP, &ip) == 0 && ip)
+        frames[frame_count++] = (uintptr_t)ip;
+    }
+    while (frame_count < ANT_CRASH_FRAME_MAX && unw_step(&cursor) > 0) {
+      unw_word_t ip = 0;
+      if (unw_get_reg(&cursor, UNW_REG_IP, &ip) == 0 && ip)
+        frames[frame_count++] = (uintptr_t)ip;
+    }
+  }
 #endif
 
   uint64_t fault_addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
