@@ -89,6 +89,12 @@ function makeSocketState(server, socket) {
   };
 }
 
+function closeSocket(socket) {
+  if (!socket || socket.destroyed) return;
+  if (typeof socket.destroy === 'function') socket.destroy();
+  else if (typeof socket.end === 'function') socket.end();
+}
+
 function appendSocketChunk(buffered, chunk) {
   const next = bufferFrom(chunk);
   if (buffered.length === 0) return next;
@@ -842,7 +848,7 @@ export class ServerResponse extends EventEmitter {
     this.emit('finish');
     this.emit('close');
 
-    keepAlive = this._shouldKeepAlive();
+    keepAlive = !this._socketState.server._closing && this._shouldKeepAlive();
     this._socketState.activeResponse = null;
     if (typeof callback === 'function') callback();
 
@@ -868,6 +874,8 @@ export class Server extends net.Server {
     this.requestTimeout = 300000;
     this.keepAliveTimeout = 5000;
     this.maxHeadersCount = 2000;
+    this._socketStates = new Set();
+    this._closing = false;
 
     this.on('connection', socket => {
       this._attachSocket(socket);
@@ -878,6 +886,7 @@ export class Server extends net.Server {
 
   _attachSocket(socket) {
     const state = makeSocketState(this, socket);
+    this._socketStates.add(state);
 
     if (this.timeout > 0 && socket.setTimeout) {
       socket.setTimeout(this.timeout, () => {
@@ -896,7 +905,35 @@ export class Server extends net.Server {
 
     socket.on('close', () => {
       state.closed = true;
+      this._socketStates.delete(state);
     });
+  }
+
+  listen(...args) {
+    this._closing = false;
+    return super.listen(...args);
+  }
+
+  close(callback) {
+    this._closing = true;
+    this.closeIdleConnections();
+    return super.close(callback);
+  }
+
+  closeAllConnections() {
+    for (const state of [...this._socketStates]) {
+      closeSocket(state.socket);
+    }
+    return this;
+  }
+
+  closeIdleConnections() {
+    for (const state of [...this._socketStates]) {
+      if (state.closed) continue;
+      if (state.activeResponse && !state.activeResponse.writableEnded) continue;
+      closeSocket(state.socket);
+    }
+    return this;
   }
 
   _drainSocket(socket, state) {
