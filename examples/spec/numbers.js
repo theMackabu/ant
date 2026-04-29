@@ -28,6 +28,8 @@ test('numeric separator', 1_000_000, 1000000);
 
 test('Number()', Number('42'), 42);
 test('Number() float', Number('3.14'), 3.14);
+test('Number() empty string', Number(''), 0);
+test('Number() signed hex invalid', Number.isNaN(Number('+0x10')), true);
 test('Number() invalid', Number.isNaN(Number('abc')), true);
 
 test('parseInt', parseInt('42'), 42);
@@ -60,6 +62,11 @@ test('Number.isSafeInteger true', Number.isSafeInteger(42), true);
 test('Number.isSafeInteger false', Number.isSafeInteger(9007199254740992), false);
 
 test('toFixed', (3.14159).toFixed(2), '3.14');
+test('decimal literal matches Number string parse', 0.7875 === Number('0.7875'), true);
+test('toFixed halfway below', (0.7875).toFixed(3), '0.787');
+test('toFixed halfway above', (0.7876).toFixed(3), '0.788');
+test('toFixed exposes correctly parsed double', (0.7875).toFixed(20), '0.78749999999999997780');
+test('toFixed binary midpoint', (2.675).toFixed(2), '2.67');
 test('toPrecision', (123.456).toPrecision(4), '123.5');
 test('toExponential', (12345).toExponential(2), '1.23e+4');
 test('toString', (255).toString(16), 'ff');
@@ -67,6 +74,9 @@ test('integer literal method access with double dot', 27..toString(), '27');
 test('integer literal method access with spaced dot', 27 .toString(), '27');
 test('exponent literal method access', 1e3.toString(), '1000');
 test('leading-dot literal method access', .5.toString(), '0.5');
+testEvalSyntaxError('missing exponent digits syntax error', '1e');
+testEvalSyntaxError('missing signed exponent digits syntax error', '1e+');
+testEvalSyntaxError('dot exponent without digits syntax error', '1.e');
 testEvalSyntaxError('integer literal dot identifier syntax error', '27.toString()');
 testEvalSyntaxError('integer literal dot property syntax error', '27.a');
 testEvalSyntaxError('leading-dot literal identifier syntax error', '.5foo');

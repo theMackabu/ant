@@ -126,6 +126,7 @@ minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 uriparser_dep = subproject('uriparser').get_variable('uriparser_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
+double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
 
 utf8proc_base_dep = subproject('utf8proc').get_variable('utf8proc_dep')
 utf8proc_dep = declare_dependency(
@@ -234,6 +235,7 @@ ant_deps = [
   uriparser_dep, utf8proc_dep, ssl_dep, crypto_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,
+  double_conversion_dep,
 ] + win_deps
 
 if get_option('jit')

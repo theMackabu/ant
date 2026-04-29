@@ -18,6 +18,7 @@
 #include "errors.h"
 #include "descriptors.h"
 #include "shapes.h"
+#include "numbers.h"
 
 #include "gc.h"
 #include "gc/objects.h"
@@ -1932,76 +1933,16 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   return n;
 }
 
-static size_t fix_exponent(char *buf, size_t n) {
-  char *e = strchr(buf, 'e');
-  if (!e) return n;
-  
-  char *src = e + 1;
-  char *dst = src;
-  
-  if (*src == '+' || *src == '-') {
-    dst++;
-    src++;
-  }
-  
-  while (*src == '0' && src[1] != '\0') src++;
-  
-  if (src != dst) {
-    memmove(dst, src, strlen(src) + 1);
-    return strlen(buf);
-  }
-  return n;
-}
-
-static size_t strnum_safe_integer(double dv, char *buf, size_t len) {
-  char temp[32];
-  size_t pos = sizeof(temp);
-  uint64_t value = 0;
-  bool negative = signbit(dv) != 0;
-
-  if (negative) dv = -dv;
-  value = (uint64_t)dv;
-
-  do {
-    temp[--pos] = (char)('0' + (value % 10u));
-    value /= 10u;
-  } while (value != 0);
-
-  if (negative) temp[--pos] = '-';
-  return cpy(buf, len, temp + pos, sizeof(temp) - pos);
-}
-
 static size_t strnum(ant_value_t value, char *buf, size_t len) {
   double dv = tod(value);
-  if (dv == 0.0) return cpy(buf, len, "0", 1);
 
   if (__builtin_expect(isnan(dv), 0)) 
     return cpy(buf, len, "NaN", 3);
+    
   if (__builtin_expect(isinf(dv), 0)) 
     return cpy(buf, len, dv > 0 ? "Infinity" : "-Infinity", dv > 0 ? 8 : 9);
-  
-  char temp[64];
-  int sign = dv < 0 ? 1 : 0;
-  double adv = sign ? -dv : dv;
-  
-  double iv;
-  double frac = modf(adv, &iv);
-  if (frac == 0.0 && adv < 9007199254740992.0) {
-    return strnum_safe_integer(dv, buf, len);
-  }
-  
-  for (int prec = 1; prec <= 17; prec++) {
-    int n = snprintf(temp, sizeof(temp), "%.*g", prec, dv);
-    double parsed = strtod(temp, NULL);
-    if (parsed == dv) {
-      fix_exponent(temp, (size_t)n);
-      return cpy(buf, len, temp, strlen(temp));
-    }
-  }
-  
-  int result = snprintf(temp, sizeof(temp), "%.17g", dv);
-  fix_exponent(temp, (size_t)result);
-  return cpy(buf, len, temp, strlen(temp));
+
+  return ant_number_to_shortest(dv, buf, len);
 }
 
 static inline ant_offset_t assert_flat_string_len(ant_value_t value, const char **out_ptr) {
@@ -3315,50 +3256,6 @@ static const char *get_func_code(ant_t *js, ant_value_t func_obj, ant_offset_t *
   return (const char *)(uintptr_t)vdata(code_val);
 }
 
-static inline bool js_is_trim_space(char ch) {
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
-}
-
-static inline bool js_try_parse_ascii_decimal_fast(const char *str, size_t len, double *out) {
-  size_t i = 0;
-  int sign = 1;
-  int int_digits = 0;
-  int frac_digits = 0;
-  
-  double value = 0.0;
-  double scale = 1.0;
-  bool saw_digit = false;
-
-  if (len == 0) return false;
-  if (str[i] == '+' || str[i] == '-') {
-    sign = (str[i] == '-') ? -1 : 1;
-    i++;
-    if (i == len) return false;
-  }
-
-  while (i < len && str[i] >= '0' && str[i] <= '9') {
-    if (int_digits >= 18) return false;
-    value = value * 10.0 + (double)(str[i] - '0');
-    saw_digit = true;
-    int_digits++; i++;
-  }
-
-  if (i < len && str[i] == '.') {
-  i++;
-  while (i < len && str[i] >= '0' && str[i] <= '9') {
-    if (frac_digits >= 18) return false;
-    scale *= 0.1;
-    value += (double)(str[i] - '0') * scale;
-    saw_digit = true;
-    frac_digits++; i++;
-  }}
-
-  if (!saw_digit || i != len) return false;
-  *out = (sign < 0) ? -value : value;
-  
-  return true;
-}
-
 double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_NULL) return 0.0;
   if (vtype(arg) == T_UNDEF) return JS_NAN;
@@ -3370,33 +3267,24 @@ double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_STR) {
     ant_flat_string_t *flat = ant_str_flat_ptr(arg);
     const char *base = NULL;
-    const char *s = NULL;
     const char *end = NULL;
 
     if (flat) {
       base = flat->bytes;
-      s = base;
       end = base + flat->len;
     } else {
       ant_offset_t len = 0;
       ant_offset_t off = vstr(js, arg, &len);
       base = (const char *)(uintptr_t)off;
-      s = base;
       end = base + len;
     }
     
-    while (s < end && js_is_trim_space(*s)) s++;
-    if (s == end) return 0.0;
+    double val = JS_NAN; if (
+      ant_number_parse(base, (size_t)(end - base), 
+      ANT_NUMBER_PARSE_JS_NUMBER, &val, NULL)
+    ) return val;
     
-    double fast_val = 0.0;
-    if (js_try_parse_ascii_decimal_fast(s, (size_t)(end - s), &fast_val))
-      return fast_val;
-      
-    char *parse_end = NULL;
-    double val = strtod(s, &parse_end);
-    while (parse_end < end && js_is_trim_space(*parse_end)) parse_end++;
-    
-    return (parse_end == s || parse_end != end) ? JS_NAN : val;
+    return JS_NAN;
   }
 
   if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {
@@ -11650,49 +11538,17 @@ static ant_value_t builtin_number_toFixed(ant_t *js, ant_value_t *args, int narg
     }
   }
   
-  bool negative = d < 0;
-  if (negative) d = -d;
-  
-  if (d >= 1e21) {
+  if (fabs(d) >= 1e21) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%.0f", negative ? -d : d);
-    return js_mkstr(js, buf, strlen(buf));
+    size_t len = strnum(num, buf, sizeof(buf));
+    return js_mkstr(js, buf, len);
   }
+
+  char buf[160];
+  size_t len = ant_number_to_fixed(d, digits, buf, sizeof(buf));
+  if (len == 0) return js_mkerr(js, "number formatting failed");
   
-  double scale = pow(10, digits);
-  double scaled = d * scale;
-  double rounded = floor(scaled + 0.5);
-  
-  char digit_buf[128];
-  snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-  int digit_len = (int)strlen(digit_buf);
-  
-  while (digit_len < digits + 1) {
-    memmove(digit_buf + 1, digit_buf, digit_len + 1);
-    digit_buf[0] = '0';
-    digit_len++;
-  }
-  
-  char buf[128];
-  int pos = 0;
-  
-  if (negative && rounded != 0) buf[pos++] = '-';
-  int int_digits = digit_len - digits;
-  if (int_digits <= 0) int_digits = 1;
-  
-  for (int i = 0; i < int_digits; i++) {
-    buf[pos++] = digit_buf[i];
-  }
-  
-  if (digits > 0) {
-    buf[pos++] = '.';
-    for (int i = int_digits; i < digit_len; i++) {
-      buf[pos++] = digit_buf[i];
-    }
-  }
-  
-  buf[pos] = '\0';
-  return js_mkstr(js, buf, pos);
+  return js_mkstr(js, buf, len);
 }
 
 static ant_value_t builtin_number_toPrecision(ant_t *js, ant_value_t *args, int nargs) {
@@ -11714,90 +11570,11 @@ static ant_value_t builtin_number_toPrecision(ant_t *js, ant_value_t *args, int 
     return js_mkerr_typed(js, JS_ERR_RANGE, "toPrecision() argument must be between 1 and 100");
   }
   
-  bool negative = d < 0;
-  if (negative) d = -d;
+  char buf[160];
+  size_t len = ant_number_to_precision(d, precision, buf, sizeof(buf));
+  if (len == 0) return js_mkerr(js, "number formatting failed");
   
-  if (d == 0) {
-    char buf[128];
-    int pos = 0;
-    if (negative) buf[pos++] = '-';
-    buf[pos++] = '0';
-    if (precision > 1) {
-      buf[pos++] = '.';
-      for (int i = 1; i < precision; i++) buf[pos++] = '0';
-    }
-    buf[pos] = '\0';
-    return js_mkstr(js, buf, pos);
-  }
-  
-  int exp = (int) floor(log10(d));
-  bool use_exp = (exp < -(precision - 1) - 1) || (exp >= precision);
-  
-  if (use_exp) {
-    double mantissa = d / pow(10, exp);
-    double scale = pow(10, precision - 1);
-    double rounded = floor(mantissa * scale + 0.5);
-    
-    if (rounded >= scale * 10) {
-      rounded /= 10;
-      exp++;
-    }
-    
-    char digit_buf[32];
-    snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-    int digit_len = (int)strlen(digit_buf);
-    
-    char buf[128];
-    int pos = 0;
-    if (negative) buf[pos++] = '-';
-    buf[pos++] = digit_buf[0];
-    if (precision > 1) {
-      buf[pos++] = '.';
-      for (int i = 1; i < precision; i++) {
-        buf[pos++] = (i < digit_len) ? digit_buf[i] : '0';
-      }
-    }
-    buf[pos++] = 'e';
-    buf[pos++] = (exp >= 0) ? '+' : '-';
-    if (exp < 0) exp = -exp;
-    snprintf(buf + pos, sizeof(buf) - pos, "%d", exp);
-    return js_mkstr(js, buf, strlen(buf));
-  } else {
-    int digits_after_point = precision - exp - 1;
-    if (digits_after_point < 0) digits_after_point = 0;
-    
-    double scale = pow(10, digits_after_point);
-    double rounded = floor(d * scale + 0.5);
-    
-    char digit_buf[64];
-    snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-    int digit_len = (int)strlen(digit_buf);
-    
-    while (digit_len < digits_after_point + 1) {
-      memmove(digit_buf + 1, digit_buf, digit_len + 1);
-      digit_buf[0] = '0';
-      digit_len++;
-    }
-    
-    char buf[128];
-    int pos = 0;
-    if (negative) buf[pos++] = '-';
-    
-    int int_digits = digit_len - digits_after_point;
-    for (int i = 0; i < int_digits; i++) {
-      buf[pos++] = digit_buf[i];
-    }
-    
-    if (digits_after_point > 0) {
-      buf[pos++] = '.';
-      for (int i = int_digits; i < digit_len; i++) {
-        buf[pos++] = digit_buf[i];
-      }
-    }
-    
-    buf[pos] = '\0';
-    return js_mkstr(js, buf, pos);
-  }
+  return js_mkstr(js, buf, len);
 }
 
 static ant_value_t builtin_number_toExponential(ant_t *js, ant_value_t *args, int nargs) {
@@ -11816,69 +11593,11 @@ static ant_value_t builtin_number_toExponential(ant_t *js, ant_value_t *args, in
     }
   }
   
-  bool negative = d < 0;
-  if (negative) d = -d;
+  char buf[160];
+  size_t len = ant_number_to_exponential(d, digits, buf, sizeof(buf));
+  if (len == 0) return js_mkerr(js, "number formatting failed");
   
-  int exp = 0;
-  if (d != 0) {
-    exp = (int) floor(log10(d));
-    double test = d / pow(10, exp);
-    if (test >= 10) { exp++; test /= 10; }
-    if (test < 1) { exp--; test *= 10; }
-  }
-  
-  if (digits < 0) {
-    char temp[32];
-    snprintf(temp, sizeof(temp), "%.15g", d);
-    int sig = 0;
-    for (int i = 0; temp[i] && temp[i] != 'e' && temp[i] != 'E'; i++) {
-      if (temp[i] == '.') continue;
-      if (temp[i] >= '0' && temp[i] <= '9') if (temp[i] != '0' || sig > 0) sig++;
-    }
-    digits = sig > 0 ? sig - 1 : 0;
-    if (digits > 20) digits = 20;
-  }
-  
-  double mantissa = d / pow(10, exp);
-  double scale = pow(10, digits);
-  double scaled = mantissa * scale;
-  double rounded = floor(scaled + 0.5);
-  
-  if (rounded >= scale * 10) {
-    rounded /= 10;
-    exp++;
-  }
-  
-  char buf[64];
-  int pos = 0;
-  
-  if (negative) buf[pos++] = '-';
-  
-  char digit_buf[32];
-  snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-  int digit_len = (int)strlen(digit_buf);
-  
-  while (digit_len < digits + 1) {
-    memmove(digit_buf + 1, digit_buf, digit_len + 1);
-    digit_buf[0] = '0';
-    digit_len++;
-  }
-  
-  buf[pos++] = digit_buf[0];
-  
-  if (digits > 0) {
-    buf[pos++] = '.';
-    for (int i = 1; i <= digits; i++) {
-      buf[pos++] = (i < digit_len) ? digit_buf[i] : '0';
-    }
-  }
-  
-  buf[pos++] = 'e';
-  buf[pos++] = (exp >= 0) ? '+' : '-';
-  if (exp < 0) exp = -exp;
-  snprintf(buf + pos, sizeof(buf) - pos, "%d", exp);
-  
-  return js_mkstr(js, buf, strlen(buf));
+  return js_mkstr(js, buf, len);
 }
 
 static ant_value_t builtin_number_valueOf(ant_t *js, ant_value_t *args, int nargs) {
@@ -12022,11 +11741,16 @@ static ant_value_t builtin_parseFloat(ant_t *js, ant_value_t *args, int nargs) {
   
   if (i >= str_len) return tov(JS_NAN);
   
-  char *end;
-  double result = strtod(&str[i], &end);
+  double result = JS_NAN;
+  size_t processed = 0;
   
-  if (end == &str[i]) return tov(JS_NAN);
-  
+  if (!ant_number_parse(
+    str + i,
+    (size_t)(str_len - i),
+    ANT_NUMBER_PARSE_FLOAT_PREFIX,
+    &result, &processed
+  ) || processed == 0) return tov(JS_NAN);
+
   return tov(result);
 }
 

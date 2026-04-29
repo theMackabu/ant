@@ -2,6 +2,7 @@
   "engine": {
     "patterns": [
       "src/*.c",
+      "src/*.cc",
       "src/gc/*.c",
       "src/highlight/*.c",
       "src/esm/*.c",

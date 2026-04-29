@@ -931,7 +931,7 @@ compat-table/es6/let.strict.no-statement.js: failed
 compat-table/es6/let.strict.shadow.js: OK
 compat-table/es6/let.strict.tdz.js: OK
 compat-table/es6/let.tdz.js: OK
-compat-table/es6/literals.binary.Number.js: failed
+compat-table/es6/literals.binary.Number.js: OK
 compat-table/es6/literals.binary.js: OK
 compat-table/es6/literals.object.computed-accessors.js: OK
 compat-table/es6/literals.object.computed-properties.js: OK
@@ -939,7 +939,7 @@ compat-table/es6/literals.object.computed-shorthand-methods.js: OK
 compat-table/es6/literals.object.shorthand-methods.js: OK
 compat-table/es6/literals.object.shorthand-properties.js: OK
 compat-table/es6/literals.object.string-keyed-shorthand-methods.js: OK
-compat-table/es6/literals.octal.Number.js: failed
+compat-table/es6/literals.octal.Number.js: OK
 compat-table/es6/literals.octal.js: OK
 compat-table/es6/misc.Invalid-Date.js: OK
 compat-table/es6/misc.Object.freeze.primitives.js: OK
@@ -1115,7 +1115,7 @@ compat-table/es6/template.permanent-caching.js: OK
 compat-table/es6/template.tagged.js: OK
 compat-table/es6/template.toString.js: OK
 compat-table/es6/typed-arrays.ArrayBuffer.Symbol.species.js: OK
-compat-table/es6/typed-arrays.DataView.Float32.js: failed
+compat-table/es6/typed-arrays.DataView.Float32.js: OK
 compat-table/es6/typed-arrays.DataView.Float64.js: OK
 compat-table/es6/typed-arrays.DataView.Int8.js: OK
 compat-table/es6/typed-arrays.DataView.Int16.js: OK
@@ -1123,7 +1123,7 @@ compat-table/es6/typed-arrays.DataView.Int32.js: OK
 compat-table/es6/typed-arrays.DataView.Uint8.js: OK
 compat-table/es6/typed-arrays.DataView.Uint16.js: OK
 compat-table/es6/typed-arrays.DataView.Uint32.js: OK
-compat-table/es6/typed-arrays.Float32Array.js: failed
+compat-table/es6/typed-arrays.Float32Array.js: OK
 compat-table/es6/typed-arrays.Float64Array.js: OK
 compat-table/es6/typed-arrays.Int8Array.js: OK
 compat-table/es6/typed-arrays.Int16Array.js: OK

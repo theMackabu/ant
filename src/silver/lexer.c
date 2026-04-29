@@ -5,9 +5,10 @@
 #include "tokens.h"
 #include "utf8.h"
 #include "errors.h"
+#include "numbers.h"
 
 #include <runtime.h>
-#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t clen, bool strict) {
@@ -561,59 +562,88 @@ slow_path_loop:;
   return sv_parsekeyword(buf, *tlen);
 }
 
-static inline ant_offset_t parse_decimal(const char *buf, ant_offset_t maxlen, double *out) {
-  uint64_t int_part = 0, frac_part = 0;
-  int frac_digits = 0;
-  ant_offset_t i = 0;
+static inline bool is_decimal_literal_char(char ch) {
+  return IS_DIGIT(ch) || ch == '_';
+}
 
-  while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
-    if (buf[i] != '_') int_part = int_part * 10 + (buf[i] - '0');
-    i++;
+static inline bool has_numeric_separator(const char *src, ant_offset_t len) {
+  return memchr(src, '_', (size_t)len) != NULL;
+}
+
+static inline const char *scan_decimal_literal_chars(const char *p, const char *end) {
+  while (p < end && is_decimal_literal_char(*p)) p++;
+  return p;
+}
+
+static inline ant_offset_t scan_decimal_literal(const char *buf, ant_offset_t maxlen) {
+  const char *start = buf;
+  const char *end = buf + maxlen;
+  const char *p = scan_decimal_literal_chars(buf, end);
+
+  if (p < end && *p == '.') {
+    p = scan_decimal_literal_chars(p + 1, end);
   }
 
-  if (i < maxlen && buf[i] == '.') {
-    i++;
-    while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
-      if (buf[i] != '_') { frac_part = frac_part * 10 + (buf[i] - '0'); frac_digits++; }
-      i++;
-    }
+  if (p < end && ((*p | 0x20) == 'e')) {
+    p++;
+    if (p < end && (*p == '+' || *p == '-')) p++;
+    p = scan_decimal_literal_chars(p, end);
   }
 
-  static const double neg_pow10[] = {
-    1e0,1e-1,1e-2,1e-3,1e-4,1e-5,1e-6,1e-7,1e-8,1e-9,1e-10,
-    1e-11,1e-12,1e-13,1e-14,1e-15,1e-16,1e-17,1e-18,1e-19,1e-20
-  };
+  return (ant_offset_t)(p - start);
+}
+
+static inline size_t copy_without_numeric_separators(const char *src, ant_offset_t len, char *dst) {
+  const char *end = src + len;
+  char *start = dst;
   
-  static const double pos_pow10[] = {
-    1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,
-    1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19,1e20
+  while (src < end) {
+    char ch = *src++;
+    if (ch != '_') *dst++ = ch;
+  }
+  
+  return (size_t)(dst - start);
+}
+
+typedef struct {
+  ant_offset_t len;
+  double value;
+  bool ok;
+} decimal_literal_t;
+
+static inline decimal_literal_t parse_decimal_literal(const char *buf, ant_offset_t maxlen) {
+  ant_offset_t toklen = scan_decimal_literal(buf, maxlen);
+  const char *digits = buf;
+  
+  size_t digits_len = (size_t)toklen;
+  char stack_buf[128];
+  char *clean = NULL;
+  
+  decimal_literal_t result = { 
+    .len = toklen,
+    .value = 0.0,
+    .ok = false
   };
 
-  double val = (double)int_part;
-  if (frac_digits > 0) {
-    val += (frac_digits <= 20) 
-      ? (double)frac_part * neg_pow10[frac_digits] 
-      : (double)frac_part * pow(10.0, -frac_digits);
+  if (has_numeric_separator(buf, toklen)) {
+    clean = stack_buf;
+    if (toklen > (ant_offset_t)sizeof(stack_buf)) {
+      clean = malloc((size_t)toklen);
+      if (!clean) return result;
+    }
+    
+    digits_len = copy_without_numeric_separators(buf, toklen, clean);
+    digits = clean;
   }
 
-  if (i < maxlen && (buf[i] == 'e' || buf[i] == 'E')) {
-    i++;
-    int exp_sign = 1, exp_val = 0;
-    if (i < maxlen && (buf[i] == '+' || buf[i] == '-')) {
-      exp_sign = (buf[i] == '-') ? -1 : 1;
-      i++;
-    }
-    while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
-      if (buf[i] != '_') exp_val = exp_val * 10 + (buf[i] - '0');
-      i++;
-    }
-    if (exp_val <= 20) {
-      val = (exp_sign > 0) ? val * pos_pow10[exp_val] : val * neg_pow10[exp_val];
-    } else val *= pow(10.0, exp_sign * exp_val);
-  }
+  result.ok = ant_number_parse(
+    digits, digits_len,
+    ANT_NUMBER_PARSE_DECIMAL,
+    &result.value, NULL
+  );
 
-  *out = val;
-  return i;
+  if (clean && clean != stack_buf) free(clean);
+  return result;
 }
 
 static inline ant_offset_t parse_binary(const char *buf, ant_offset_t maxlen, double *out) {
@@ -691,8 +721,26 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
         lx->st.tok = TOK_ERR;
         lx->st.tlen = 1;
         return TOK_ERR;
-    } else numlen = parse_decimal(buf, remaining, &value);
-  } else numlen = parse_decimal(buf, remaining, &value);
+    } else {
+      decimal_literal_t literal = parse_decimal_literal(buf, remaining);
+      numlen = literal.len;
+      if (!literal.ok) {
+        lx->st.tok = TOK_ERR;
+        lx->st.tlen = numlen;
+        return TOK_ERR;
+      }
+      value = literal.value;
+    }
+  } else {
+    decimal_literal_t literal = parse_decimal_literal(buf, remaining);
+    numlen = literal.len;
+    if (!literal.ok) {
+      lx->st.tok = TOK_ERR;
+      lx->st.tlen = numlen;
+      return TOK_ERR;
+    }
+    value = literal.value;
+  }
   
   lx->st.tval = tov(value);
   ant_offset_t toklen = numlen;
@@ -1042,18 +1090,19 @@ static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset
   case '.':
     if (MATCH3('.','.', '.')) { lx->st.tok = TOK_REST; lx->st.tlen = 3; }
     else if (rem > 1 && IS_DIGIT(buf[1])) {
-      double val;
-      ant_offset_t numlen = parse_decimal(buf, rem, &val);
-      if (number_literal_has_invalid_tail(buf, rem, numlen)) {
+      decimal_literal_t literal = parse_decimal_literal(buf, rem);
+      if (!literal.ok || number_literal_has_invalid_tail(buf, rem, literal.len)) {
         lx->st.tok = TOK_ERR;
-        lx->st.tlen = numlen;
+        lx->st.tlen = literal.len;
       } else {
-        lx->st.tlen = numlen;
-        lx->st.tval = tov(val);
+        lx->st.tlen = literal.len;
+        lx->st.tval = tov(literal.value);
         lx->st.tok = TOK_NUMBER;
       }
+    } else { 
+      lx->st.tok = TOK_DOT;
+      lx->st.tlen = 1; 
     }
-    else { lx->st.tok = TOK_DOT; lx->st.tlen = 1; }
     break;
 
   default:
