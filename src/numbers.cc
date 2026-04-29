@@ -29,14 +29,32 @@ static constexpr size_t kPrecisionBufferSize =
 static constexpr size_t kExponentialBufferSize =
   DoubleToStringConverter::kMaxExponentialDigits + 8 + 1;
 
+static const StringToDoubleConverter kDecimalStringConverter(
+  0, 0.0,
+  std::numeric_limits<double>::quiet_NaN(),
+  "Infinity", "NaN"
+);
+
+static const StringToDoubleConverter kJsNumberStringConverter(
+  StringToDoubleConverter::ALLOW_HEX, 0.0,
+  std::numeric_limits<double>::quiet_NaN(),
+  "Infinity", "NaN"
+);
+
+static const StringToDoubleConverter kParseFloatStringConverter(
+  StringToDoubleConverter::ALLOW_TRAILING_JUNK, 0.0,
+  std::numeric_limits<double>::quiet_NaN(),
+  "Infinity", "NaN"
+);
+
+static bool is_ascii_js_string_trim_byte(unsigned char ch) {
+  return 
+    ch ==  ' ' || ch == '\t' || ch == '\n' || 
+    ch == '\v' || ch == '\f' || ch == '\r';
+}
+
 #define JS_TRIM_TOKEN(bytes) { bytes, sizeof(bytes) - 1 }
 static constexpr JsTrimToken kJsStringTrimTokens[] = {
-  JS_TRIM_TOKEN("\t"),
-  JS_TRIM_TOKEN("\n"),
-  JS_TRIM_TOKEN("\v"),
-  JS_TRIM_TOKEN("\f"),
-  JS_TRIM_TOKEN("\r"),
-  JS_TRIM_TOKEN(" "),
   JS_TRIM_TOKEN("\xc2""\xa0"),
   JS_TRIM_TOKEN("\xe1""\x9a""\x80"),
   JS_TRIM_TOKEN("\xe2""\x80""\x80"),
@@ -60,12 +78,22 @@ static constexpr JsTrimToken kJsStringTrimTokens[] = {
 #undef JS_TRIM_TOKEN
 
 static size_t js_string_trim_prefix_len(const char *str, size_t len) {
+  if (len == 0) return 0;
+  
+  unsigned char first = (unsigned char)str[0];
+  if (first < 0x80) return is_ascii_js_string_trim_byte(first) ? 1 : 0;
+
   for (const JsTrimToken &token : kJsStringTrimTokens) 
     if (len >= token.len && std::memcmp(str, token.bytes, token.len) == 0) return token.len;
   return 0;
 }
 
 static size_t js_string_trim_suffix_len(const char *str, size_t len) {
+  if (len == 0) return 0;
+  
+  unsigned char last = (unsigned char)str[len - 1];
+  if (last < 0x80) return is_ascii_js_string_trim_byte(last) ? 1 : 0;
+
   for (const JsTrimToken &token : kJsStringTrimTokens) 
     if (len >= token.len && std::memcmp(str + len - token.len, token.bytes, token.len) == 0) return token.len;
   return 0;
@@ -158,25 +186,12 @@ extern "C" bool ant_number_parse(
     return true;
   }
 
-  int flags = 0;
-  if (mode == ANT_NUMBER_PARSE_JS_NUMBER)
-    flags = 
-      StringToDoubleConverter::ALLOW_HEX |
-      StringToDoubleConverter::ALLOW_LEADING_SPACES |
-      StringToDoubleConverter::ALLOW_TRAILING_SPACES;
-  else if (mode == ANT_NUMBER_PARSE_FLOAT_PREFIX) 
-    flags = 
-      StringToDoubleConverter::ALLOW_LEADING_SPACES | 
-      StringToDoubleConverter::ALLOW_TRAILING_JUNK;
-
-  StringToDoubleConverter converter(
-    flags, 0.0,
-    std::numeric_limits<double>::quiet_NaN(),
-    "Infinity", "NaN"
-  );
+  const StringToDoubleConverter *converter = &kDecimalStringConverter;
+  if (mode == ANT_NUMBER_PARSE_JS_NUMBER) converter = &kJsNumberStringConverter;
+  else if (mode == ANT_NUMBER_PARSE_FLOAT_PREFIX) converter = &kParseFloatStringConverter;
   
   int count = 0;
-  double value = converter.StringToDouble(str, (int)len, &count);
+  double value = converter->StringToDouble(str, (int)len, &count);
   
   if (count <= 0) return false;
   if (mode != ANT_NUMBER_PARSE_FLOAT_PREFIX && (size_t)count != len) return false;
