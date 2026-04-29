@@ -1,4 +1,5 @@
 import { test, testDeep, summary } from './helpers.js';
+import { inspect } from 'node:util';
 
 console.log('Generator Tests\n');
 
@@ -262,6 +263,12 @@ const protoShapeGen = protoShapeFn();
 const ownGeneratorProto = Object.getPrototypeOf(protoShapeGen);
 const sharedGeneratorProto = Object.getPrototypeOf(ownGeneratorProto);
 const iteratorProto = Object.getPrototypeOf(sharedGeneratorProto);
+const GeneratorFunction = protoShapeFn.constructor;
+test('generator function constructor name', GeneratorFunction.name, 'GeneratorFunction');
+test('generator function prototype chain', Object.getPrototypeOf(protoShapeFn), GeneratorFunction.prototype);
+test('generator function prototype tag', GeneratorFunction.prototype[Symbol.toStringTag], 'GeneratorFunction');
+test('generator function toStringTag', Object.prototype.toString.call(protoShapeFn), '[object GeneratorFunction]');
+test('generator function inspect tag', inspect(protoShapeFn), '[GeneratorFunction: protoShapeFn]');
 test('generator instance uses function prototype', ownGeneratorProto, protoShapeFn.prototype);
 test('generator shared prototype has next', sharedGeneratorProto.hasOwnProperty('next'), true);
 test('generator Symbol.iterator inherited from iterator prototype', iteratorProto.hasOwnProperty(Symbol.iterator), true);

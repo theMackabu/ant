@@ -375,6 +375,9 @@ void init_symbol_module(void) {
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
   js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));
   
+  ant_value_t generator_func_proto = js_get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
+  js_set_sym(js, generator_func_proto, g_toStringTag, js_mkstr(js, "GeneratorFunction", 17));
+  
   ant_value_t async_generator_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
   js_set_sym(js, async_generator_func_proto, g_toStringTag, js_mkstr(js, "AsyncGeneratorFunction", 22));
 

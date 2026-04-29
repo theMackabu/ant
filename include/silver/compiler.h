@@ -119,6 +119,7 @@ typedef struct sv_compiler {
   bool is_tla;
   int try_depth;
   int with_depth;
+  int completion_local;
   int strict_args_local;
   int new_target_local;
   int super_local;

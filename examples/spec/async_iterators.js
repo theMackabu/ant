@@ -1,4 +1,5 @@
 import { test, testDeep, summary } from './helpers.js';
+import { inspect } from 'node:util';
 
 console.log('Async Iterator Tests\n');
 
@@ -17,6 +18,7 @@ test('async generator function has prototype property', protoShapeAsyncGen.hasOw
 test('async generator function constructor name', AsyncGeneratorFunction.name, 'AsyncGeneratorFunction');
 test('async generator function prototype chain', Object.getPrototypeOf(protoShapeAsyncGen), AsyncGeneratorFunction.prototype);
 test('async generator function prototype tag', AsyncGeneratorFunction.prototype[Symbol.toStringTag], 'AsyncGeneratorFunction');
+test('async generator function inspect tag', inspect(protoShapeAsyncGen), '[AsyncGeneratorFunction: protoShapeAsyncGen]');
 test('async generator function prototype prototype', AsyncGeneratorFunction.prototype.prototype, sharedAsyncGeneratorProto);
 test(
   'new async generator function throws',

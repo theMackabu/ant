@@ -210,12 +210,23 @@ rbrace:
 
 lbrack:
   switch (p[1]) {
-    case 'A': if (memcmp(p + 2, "syncFunction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'A':
+      if (
+        memcmp(p + 2, "syncFunction", 7) == 0 ||
+        memcmp(p + 2, "syncGeneratorFunction", 21) == 0
+      ) { EMIT_UNTIL(']', JSON_FUNC) }
+      break;
     case 'b': if (memcmp(p + 2, "yte", 3) == 0 || memcmp(p + 2, "uffer]", 6) == 0) { EMIT_UNTIL(']', JSON_STRING) } break;
     case 'F': if (memcmp(p + 2, "unction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'n': if (memcmp(p + 2, "ative code", 10) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'C': if (memcmp(p + 2, "ircular", 7) == 0) { EMIT_UNTIL(']', JSON_REF) } break;
-    case 'G': if (memcmp(p + 2, "etter/Setter]", 13) == 0 || memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'G':
+      if (
+        memcmp(p + 2, "etter/Setter]", 13) == 0 ||
+        memcmp(p + 2, "etter]", 6) == 0 ||
+        memcmp(p + 2, "eneratorFunction", 16) == 0
+      ) { EMIT_UNTIL(']', JSON_FUNC) }
+      break;
     case 'S': if (memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'O': if (memcmp(p + 2, "bject: null prototype]", 22) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
     case 'M': if (memcmp(p + 2, "odule]", 6) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;

@@ -38,6 +38,7 @@ void sv_compile_ctx_init_root(
   ctx->source_len = source_len;
   ctx->mode = mode;
   ctx->is_strict = is_strict;
+  ctx->completion_local = -1;
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;
@@ -63,6 +64,7 @@ void sv_compile_ctx_init_child(
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
   ctx->is_strict = enclosing->is_strict;
   ctx->mode = mode;
+  ctx->completion_local = -1;
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
   ctx->super_local = -1;

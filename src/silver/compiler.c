@@ -387,6 +387,14 @@ static inline bool has_completion_value(const sv_compiler_t *c) {
   return c && (c->mode == SV_COMPILE_EVAL || c->mode == SV_COMPILE_REPL);
 }
 
+static inline bool is_completion_top_level(const sv_compiler_t *c) {
+  return has_completion_value(c) && c->enclosing && !c->enclosing->enclosing;
+}
+
+static inline bool has_completion_accumulator(const sv_compiler_t *c) {
+  return c && c->completion_local >= 0;
+}
+
 static inline bool has_module_import_binding(const sv_compiler_t *c) {
   for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
     if (cur->mode == SV_COMPILE_MODULE) return true;
@@ -902,6 +910,17 @@ static inline void emit_slot_op(sv_compiler_t *c, sv_op_t op, uint16_t slot) {
 
 static void emit_put_local(sv_compiler_t *c, int local_idx) {
   emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN);
+}
+
+static void emit_set_completion_from_stack(sv_compiler_t *c) {
+  if (has_completion_accumulator(c)) emit_put_local(c, c->completion_local);
+  else emit_op(c, OP_POP);
+}
+
+static void emit_set_completion_undefined(sv_compiler_t *c) {
+  if (!has_completion_accumulator(c)) return;
+  emit_op(c, OP_UNDEF);
+  emit_put_local(c, c->completion_local);
 }
 
 static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node);
@@ -3087,23 +3106,25 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_ASSIGN:
-      if (compile_self_append_stmt(c, node)) break;
+      if (!has_completion_accumulator(c) && compile_self_append_stmt(c, node)) break;
       compile_expr(c, node);
-      emit_op(c, OP_POP);
+      emit_set_completion_from_stack(c);
       break;
 
     case N_FUNC:
       if (node->str && !(node->flags & FN_ARROW)) break;
       compile_expr(c, node);
-      emit_op(c, OP_POP);
+      emit_set_completion_from_stack(c);
       break;
 
     case N_CLASS:
       compile_class(c, node);
-      emit_op(c, OP_POP);
+      if (node->flags & FN_PAREN) emit_set_completion_from_stack(c);
+      else emit_op(c, OP_POP);
       break;
 
     case N_WITH:
+      emit_set_completion_undefined(c);
       compile_expr(c, node->left);
       emit_op(c, OP_ENTER_WITH);
       c->with_depth++;
@@ -3114,7 +3135,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
 
     default:
       compile_expr(c, node);
-      emit_op(c, OP_POP);
+      emit_set_completion_from_stack(c);
       break;
   }
 }
@@ -3447,6 +3468,8 @@ static bool fold_static_typeof_compare(
 }
 
 void compile_if(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
+
   bool folded_truth = false;
   if (fold_static_typeof_compare(c, node->cond, &folded_truth)) {
     if (folded_truth) compile_stmt(c, node->left);
@@ -3468,6 +3491,8 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_while(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
+
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
 
@@ -3485,6 +3510,8 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
+
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
   compile_stmt(c, node->body);
@@ -3562,6 +3589,7 @@ static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var, int
 }
 
 void compile_for(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
   begin_scope(c);
 
   int *iter_slots = NULL;
@@ -3731,6 +3759,7 @@ static bool compile_using_push_target(sv_compiler_t *c, sv_ast_t *lhs, int stack
 }
 
 static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
+  emit_set_completion_undefined(c);
   begin_scope(c);
 
   int *iter_slots = NULL;
@@ -4023,6 +4052,8 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_try(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
+
   c->try_depth++;
   int try_jump = emit_jump(c, OP_TRY_PUSH);
 
@@ -4081,6 +4112,8 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
 
 
 void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
+  emit_set_completion_undefined(c);
+
   int case_count = node->args.count;
   int default_case = -1;
   int *match_to_stub = NULL;
@@ -4450,7 +4483,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     sv_ast_t *m = node->args.items[i];
     if (m->type == N_STATIC_BLOCK) {
       begin_scope(c);
+      int saved_completion_local = c->completion_local;
+      c->completion_local = -1;
       compile_stmts(c, &m->args);
+      c->completion_local = saved_completion_local;
       end_scope(c);
       continue;
     }
@@ -4830,21 +4866,17 @@ sv_func_t *compile_function_body(
     body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);
   }
 
+  bool completion_top = is_completion_top_level(&comp);
+  if (completion_top) {
+    emit_op(&comp, OP_UNDEF);
+    comp.completion_local = add_local(&comp, "", 0, false, comp.scope_depth);
+    emit_put_local(&comp, comp.completion_local);
+  }
+
   if (node->body) {
     if (node->body->type == N_BLOCK) {
-      int last_expr_idx = -1;
-      if (has_completion_value(&comp) && node->body->args.count > 0) {
-        sv_ast_t *last = node->body->args.items[node->body->args.count - 1];
-        if (sv_ast_can_be_expression_statement(last))
-          last_expr_idx = node->body->args.count - 1;
-      }
-      for (int i = 0; i < node->body->args.count; i++) {
-        sv_ast_t *stmt = node->body->args.items[i];
-        if (i == last_expr_idx) {
-          compile_expr(&comp, stmt);
-          emit_return_from_stack(&comp);
-        } else compile_stmt(&comp, stmt);
-      }
+      for (int i = 0; i < node->body->args.count; i++)
+        compile_stmt(&comp, node->body->args.items[i]);
     } else compile_tail_return_expr(&comp, node->body);
   }
 
@@ -4874,6 +4906,11 @@ sv_func_t *compile_function_body(
     comp.using_stack_async = old_using_async;
   }
   
+  if (completion_top) {
+    emit_get_local(&comp, comp.completion_local);
+    emit_return_from_stack(&comp);
+  }
+
   emit_using_cleanups_to_depth(&comp, -1);
   emit_close_upvals(&comp);
   emit_op(&comp, OP_RETURN_UNDEF);
