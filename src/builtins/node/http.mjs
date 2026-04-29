@@ -813,6 +813,11 @@ export class ServerResponse extends EventEmitter {
     let keepAlive = false;
 
     if (this.writableEnded) return this;
+    if (typeof chunk === 'function') {
+      callback = chunk;
+      chunk = undefined;
+      encoding = undefined;
+    }
     if (typeof encoding === 'function') {
       callback = encoding;
       encoding = undefined;
