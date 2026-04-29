@@ -44,9 +44,9 @@ static ant_value_t generator_resume_kind(
 );
 
 static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
-  ant_value_t result = js_mkobj(js);
-  js_set(js, result, "done", js_bool(done));
+  ant_value_t result = js_newobj(js);
   js_set(js, result, "value", value);
+  js_set(js, result, "done", js_bool(done));
   return result;
 }
 

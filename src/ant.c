@@ -2322,9 +2322,12 @@ struct func_format {
   size_t anon_len;
 };
 
+// TODO: migrate to Symbol.inspect
 static const struct func_format formats[] = {
-  [0] = { "[Function: ",      11, "[Function (anonymous)]",      22 },
-  [1] = { "[AsyncFunction: ", 16, "[AsyncFunction (anonymous)]", 27 },
+  [0] = { "[Function: ",               11, "[Function (anonymous)]",               22 },
+  [1] = { "[AsyncFunction: ",          16, "[AsyncFunction (anonymous)]",          27 },
+  [2] = { "[GeneratorFunction: ",      20, "[GeneratorFunction (anonymous)]",      31 },
+  [3] = { "[AsyncGeneratorFunction: ", 25, "[AsyncGeneratorFunction (anonymous)]", 36 },
 };
 
 // todo: make it work with bytecode NAME
@@ -2336,11 +2339,13 @@ static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
   ant_value_t code_slot = get_slot(func_obj, SLOT_CODE);
   ant_value_t builtin_slot = get_slot(func_obj, SLOT_BUILTIN);
   ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
+  sv_closure_t *closure = js_func_closure(value);
   
   bool is_async = (async_slot == js_true);
   bool has_code = (vtype(code_slot) == T_NTARG);
+  bool is_generator = closure != NULL && closure->func != NULL && closure->func->is_generator;
   
-  const struct func_format *fmt = &formats[is_async];
+  const struct func_format *fmt = &formats[(is_generator ? 2 : 0) | (is_async ? 1 : 0)];
   
   if (vtype(builtin_slot) == T_NUM) {
     if (name && name_len > 0) {
@@ -3053,8 +3058,7 @@ ant_value_t js_mkarr(ant_t *js) {
 
 ant_value_t js_newobj(ant_t *js) {
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = js->sym.object_proto;
-  if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
+  js_set_proto_init(obj, js->sym.object_proto);
   return obj;
 }
 
