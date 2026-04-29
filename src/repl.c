@@ -532,6 +532,7 @@ typedef struct {
   int template_count, template_cap;
   char string_char;
   bool in_string, escaped;
+  char last_code_char;
 } parse_state_t;
 
 static void push_template(parse_state_t *s) {
@@ -585,9 +586,14 @@ static bool is_incomplete_input(const char *code, size_t len) {
       case '[': s.bracket++; break; case ']': s.bracket--; break;
       case '{': s.brace++; break;   case '}': s.brace--; break;
     }
+    if (!isspace((unsigned char)c)) s.last_code_char = c;
   }
   
-  bool incomplete = s.in_string || s.template_count > 0 || s.paren > 0 || s.bracket > 0 || s.brace > 0;
+  bool incomplete =
+    s.in_string || s.template_count > 0 ||
+    s.paren > 0 || s.bracket > 0 || s.brace > 0 ||
+    s.last_code_char == ',';
+  
   free(s.templates);
   return incomplete;
 }

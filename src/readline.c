@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <stdint.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,13 +27,18 @@
 
 #define MAX_LINE_LENGTH 4096
 
+static const unsigned char HISTORY_FILE_MAGIC[] = {
+  0x61, 0x6E, 0x74, 0x72, 0x65, 0x70, 0x6C, 0x73,
+  0x63, 0x68, 0x65, 0x6D, 0x61, 0x32, 0x0A, 0x00
+};
+
 static volatile sig_atomic_t ctrl_c_pressed = 0;
 static crprintf_compiled *hl_prog = NULL;
+
 static highlight_state hl_line_state = HL_STATE_INIT;
 static int repl_last_cursor_row = 0;
 
 static void sigint_handler(int sig) {
-  (void)sig;
   ctrl_c_pressed++;
 }
 
@@ -118,34 +124,72 @@ static char *get_history_path(void) {
 
 void ant_history_load(ant_history_t *hist) {
   if (!hist || !hist->lines || hist->capacity <= 0) return;
+  
   char *path = get_history_path();
   if (!path) return;
 
   FILE *fp = fopen(path, "r");
   free(path);
+  
   if (!fp) return;
-
-  char line[MAX_LINE_LENGTH];
-  while (fgets(line, sizeof(line), fp)) {
-    size_t len = strlen(line);
-    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-    if (line[0]) ant_history_add(hist, line);
+  char header[sizeof(HISTORY_FILE_MAGIC)];
+  
+  if (
+    !fgets(header, sizeof(header), fp) ||
+    strcmp(header, (const char *)HISTORY_FILE_MAGIC) != 0
+  ) {
+    fclose(fp);
+    return;
   }
+
+  char lenbuf[32];
+  while (fgets(lenbuf, sizeof(lenbuf), fp)) {
+    char *end = NULL;
+    unsigned long long record_len = strtoull(lenbuf, &end, 10);
+    
+    if (end == lenbuf || (*end != '\n' && *end != '\0')) break;
+    if (record_len > (unsigned long long)SIZE_MAX - 1) break;
+    
+    size_t line_len = (size_t)record_len;
+    char *line = malloc(line_len + 1);
+    
+    if (!line) break;
+    
+    if (fread(line, 1, line_len, fp) != line_len) {
+      free(line);
+      break;
+    }
+    
+    line[line_len] = '\0';
+    if (line[0]) ant_history_add(hist, line);
+    free(line);
+
+    int sep = fgetc(fp);
+    if (sep != '\n' && sep != EOF) break;
+  }
+  
   fclose(fp);
 }
 
 void ant_history_save(const ant_history_t *hist) {
   if (!hist || !hist->lines) return;
+  
   char *path = get_history_path();
   if (!path) return;
 
   FILE *fp = fopen(path, "w");
   free(path);
+  
   if (!fp) return;
+  fputs((const char *)HISTORY_FILE_MAGIC, fp);
 
   for (int i = 0; i < hist->count; i++) {
-    fprintf(fp, "%s\n", hist->lines[i]);
+    size_t len = strlen(hist->lines[i]);
+    fprintf(fp, "%zu\n", len);
+    fwrite(hist->lines[i], 1, len, fp);
+    fputc('\n', fp);
   }
+  
   fclose(fp);
 }
 
