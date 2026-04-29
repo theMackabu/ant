@@ -1165,7 +1165,7 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
 
 static void annex_b_collect_funcs(sv_ast_t *node, sv_ast_list_t *out) {
   if (!node) return;
-  if (node->type == N_FUNC && node->str && !(node->flags & FN_ARROW)) {
+  if (node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN))) {
     sv_ast_list_push(out, node);
     return;
   }
@@ -1218,7 +1218,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         emit_op(c, OP_SET_LOCAL_UNDEF);
         emit_u16(c, (uint16_t)slot);
       }
-    } else if (decl_node->type == N_FUNC && decl_node->str && !(decl_node->flags & FN_ARROW)) {
+    } else if (decl_node->type == N_FUNC && decl_node->str && !(decl_node->flags & (FN_ARROW | FN_PAREN))) {
       ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
     }
     if (!c->is_strict && (decl_node->type == N_IF || decl_node->type == N_LABEL)) {
@@ -1254,7 +1254,7 @@ static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     if (node && node->type == N_EXPORT && node->left)
       node = node->left;
     if (!node) continue;
-    if (node->type == N_FUNC && node->str && !(node->flags & FN_ARROW)) {
+    if (node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN))) {
       hoist_one_func(c, node);
     }
     if (!c->is_strict && (node->type == N_IF || node->type == N_LABEL)) {
@@ -3112,7 +3112,7 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_FUNC:
-      if (node->str && !(node->flags & FN_ARROW)) break;
+      if (node->str && !(node->flags & (FN_ARROW | FN_PAREN))) break;
       compile_expr(c, node);
       emit_set_completion_from_stack(c);
       break;
