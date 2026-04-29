@@ -664,6 +664,10 @@ static inline ant_offset_t parse_hex(const char *buf, ant_offset_t maxlen, doubl
   return i;
 }
 
+static inline bool number_literal_has_invalid_tail(const char *buf, ant_offset_t remaining, ant_offset_t toklen) {
+  return toklen < remaining && is_ident_continue((unsigned char)buf[toklen]);
+}
+
 static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t remaining) {
   double value = 0;
   ant_offset_t numlen = 0;
@@ -691,13 +695,20 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t
   } else numlen = parse_decimal(buf, remaining, &value);
   
   lx->st.tval = tov(value);
-  if (numlen < remaining && buf[numlen] == 'n') {
+  ant_offset_t toklen = numlen;
+  
+  if (toklen < remaining && buf[toklen] == 'n') {
     lx->st.tok = TOK_BIGINT;
-    lx->st.tlen = numlen + 1;
-  } else {
-    lx->st.tok = TOK_NUMBER;
-    lx->st.tlen = numlen;
+    toklen++;
+  } else lx->st.tok = TOK_NUMBER;
+
+  if (number_literal_has_invalid_tail(buf, remaining, toklen)) {
+    lx->st.tok = TOK_ERR;
+    lx->st.tlen = toklen;
+    return TOK_ERR;
   }
+
+  lx->st.tlen = toklen;
   
   return lx->st.tok;
 }
@@ -1032,9 +1043,15 @@ static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset
     if (MATCH3('.','.', '.')) { lx->st.tok = TOK_REST; lx->st.tlen = 3; }
     else if (rem > 1 && IS_DIGIT(buf[1])) {
       double val;
-      lx->st.tlen = parse_decimal(buf, rem, &val);
-      lx->st.tval = tov(val);
-      lx->st.tok = TOK_NUMBER;
+      ant_offset_t numlen = parse_decimal(buf, rem, &val);
+      if (number_literal_has_invalid_tail(buf, rem, numlen)) {
+        lx->st.tok = TOK_ERR;
+        lx->st.tlen = numlen;
+      } else {
+        lx->st.tlen = numlen;
+        lx->st.tval = tov(val);
+        lx->st.tok = TOK_NUMBER;
+      }
     }
     else { lx->st.tok = TOK_DOT; lx->st.tlen = 1; }
     break;

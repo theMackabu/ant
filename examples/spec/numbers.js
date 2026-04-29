@@ -2,6 +2,16 @@ import { test, testApprox, summary } from './helpers.js';
 
 console.log('Number Tests\n');
 
+function testEvalSyntaxError(name, source) {
+  let actual = 'none';
+  try {
+    eval(source);
+  } catch (e) {
+    actual = e.name;
+  }
+  test(name, actual, 'SyntaxError');
+}
+
 test('integer literal', 42, 42);
 test('float literal', 3.14, 3.14);
 test('negative number', -5, -5);
@@ -53,6 +63,13 @@ test('toFixed', (3.14159).toFixed(2), '3.14');
 test('toPrecision', (123.456).toPrecision(4), '123.5');
 test('toExponential', (12345).toExponential(2), '1.23e+4');
 test('toString', (255).toString(16), 'ff');
+test('integer literal method access with double dot', 27..toString(), '27');
+test('integer literal method access with spaced dot', 27 .toString(), '27');
+test('exponent literal method access', 1e3.toString(), '1000');
+test('leading-dot literal method access', .5.toString(), '0.5');
+testEvalSyntaxError('integer literal dot identifier syntax error', '27.toString()');
+testEvalSyntaxError('integer literal dot property syntax error', '27.a');
+testEvalSyntaxError('leading-dot literal identifier syntax error', '.5foo');
 
 testApprox('addition', 0.1 + 0.2, 0.3, 1e-10);
 test('multiplication', 6 * 7, 42);
