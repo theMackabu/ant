@@ -266,6 +266,17 @@ static inline void sv_parse_unexpected_token(P) {
   );
 }
 
+static inline sv_ast_t *parse_dot_property_name(P) {
+  if (!is_private_ident_like_tok(TOK)) {
+    sv_parse_unexpected_token(p);
+    return NULL;
+  }
+
+  sv_ast_t *name = mk_ident_from_tok(p);
+  CONSUME();
+  return name;
+}
+
 static sv_ast_t *parse_arrow_body(P) {
   if (NEXT() == TOK_LBRACE) return parse_block(p, true);
   return parse_assign(p);
@@ -671,8 +682,8 @@ static sv_ast_t *parse_primary(P) {
         NEXT();
         sv_ast_t *mem = mk(N_MEMBER);
         mem->left = callee;
-        mem->right = mk_ident_from_tok(p);
-        CONSUME();
+        mem->right = parse_dot_property_name(p);
+        if (!mem->right) return mk(N_EMPTY);
         callee = mem;
       } else if (la == TOK_LBRACKET) {
         CONSUME();
@@ -1064,8 +1075,8 @@ static sv_ast_t *parse_call(P) {
         mem->right = mk_private_ident_from_tok(p);
         CONSUME();
       } else {
-        mem->right = mk_ident_from_tok(p);
-        CONSUME();
+        mem->right = parse_dot_property_name(p);
+        if (!mem->right) return mk(N_EMPTY);
       }
       n = mem;
     } else if (la == TOK_LBRACKET) {
@@ -1107,8 +1118,8 @@ static sv_ast_t *parse_call(P) {
         opt->right = mk_private_ident_from_tok(p);
         CONSUME();
       } else {
-        opt->right = mk_ident_from_tok(p);
-        CONSUME();
+        opt->right = parse_dot_property_name(p);
+        if (!opt->right) return mk(N_EMPTY);
       }
       n = opt;
     } else if (la == TOK_TEMPLATE) {
