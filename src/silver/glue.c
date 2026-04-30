@@ -14,13 +14,13 @@
 #include "ops/comparison.h"
 #include "ops/calls.h"
 
-bool jit_helper_stack_overflow(ant_t *js) {
+int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
   uintptr_t curr = (uintptr_t)&marker;
-  if (js->cstk.limit == 0 || js->cstk.base == NULL) return false;
+  if (js->cstk.limit == 0 || js->cstk.base == NULL) return 0;
   uintptr_t base = (uintptr_t)js->cstk.base;
   size_t used = (base > curr) ? (base - curr) : (curr - base);
-  return used > js->cstk.limit;
+  return used > js->cstk.limit ? 1 : 0;
 }
 
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
