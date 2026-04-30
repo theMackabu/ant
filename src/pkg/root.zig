@@ -32,6 +32,18 @@ fn getAbsoluteEnv(name: [:0]const u8) ?[]const u8 {
   return value;
 }
 
+fn getLegacyAntDirIfExists(allocator: std.mem.Allocator) !?[]const u8 {
+  const home = try getHomeDir(allocator);
+  defer allocator.free(home);
+
+  const dir = try std.fmt.allocPrint(allocator, "{s}/.ant", .{home});
+  std.fs.cwd().access(dir, .{}) catch {
+    allocator.free(dir);
+    return null;
+  };
+  return dir;
+}
+
 pub const PkgError = enum(c_int) {
   ok = 0,
   out_of_memory = -1,
@@ -249,6 +261,10 @@ pub const PkgContext = struct {
 
   fn getDefaultCacheDir(allocator: std.mem.Allocator) ![]const u8 {
     if (builtin.os.tag != .windows) {
+      if (try getLegacyAntDirIfExists(allocator)) |dir| {
+        defer allocator.free(dir);
+        return std.fmt.allocPrint(allocator, "{s}/pkg", .{dir});
+      }
       if (getAbsoluteEnv("XDG_CACHE_HOME")) |base| {
         return std.fmt.allocPrint(allocator, "{s}/ant/pkg", .{base});
       }
@@ -2958,6 +2974,10 @@ export fn pkg_exec_temp(
 
 fn getGlobalDir(allocator: std.mem.Allocator) ![]const u8 {
   if (builtin.os.tag != .windows) {
+    if (try getLegacyAntDirIfExists(allocator)) |dir| {
+      defer allocator.free(dir);
+      return std.fmt.allocPrint(allocator, "{s}/pkg/global", .{dir});
+    }
     if (getAbsoluteEnv("XDG_DATA_HOME")) |base| {
       return std.fmt.allocPrint(allocator, "{s}/ant/pkg/global", .{base});
     }
@@ -2975,6 +2995,10 @@ fn getGlobalBinDir(allocator: std.mem.Allocator) ![]const u8 {
   const home = try getHomeDir(allocator);
   defer allocator.free(home);
   if (builtin.os.tag != .windows) {
+    if (try getLegacyAntDirIfExists(allocator)) |dir| {
+      defer allocator.free(dir);
+      return std.fmt.allocPrint(allocator, "{s}/bin", .{dir});
+    }
     return std.fmt.allocPrint(allocator, "{s}/.local/bin", .{home});
   }
   return std.fmt.allocPrint(allocator, "{s}/.ant/bin", .{home});

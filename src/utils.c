@@ -58,6 +58,19 @@ static int ant_join_app_path(
   return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
 }
 
+static int ant_legacy_home_path(char *out, size_t out_size, const char *suffix) {
+  const char *home = ant_home_dir();
+  if (!home) return -1;
+  return ant_join_app_path(out, out_size, home, ".ant", suffix);
+}
+
+static bool ant_legacy_home_exists(void) {
+  char path[4096];
+  if (ant_legacy_home_path(path, sizeof(path), NULL) != 0) return false;
+  struct stat st;
+  return stat(path, &st) == 0;
+}
+
 static int ant_xdg_path(
   char *out, size_t out_size,
   const char *env_name,
@@ -69,6 +82,10 @@ static int ant_xdg_path(
   if (!home) return -1;
   return ant_join_app_path(out, out_size, home, ".ant", suffix);
 #else
+  if (ant_legacy_home_exists()) {
+    return ant_legacy_home_path(out, out_size, suffix);
+  }
+
   const char *base = ant_absolute_env(env_name);
   if (base) return ant_join_app_path(out, out_size, base, "ant", suffix);
 
@@ -126,6 +143,9 @@ int ant_user_bin_path(char *out, size_t out_size) {
 #ifdef _WIN32
   int written = snprintf(out, out_size, "%s/.ant/bin", home);
 #else
+  if (ant_legacy_home_exists()) {
+    return ant_legacy_home_path(out, out_size, "bin");
+  }
   int written = snprintf(out, out_size, "%s/.local/bin", home);
 #endif
   return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
