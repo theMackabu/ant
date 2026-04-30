@@ -2,16 +2,134 @@
 #include "messages.h"
 
 #include <oxc.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <crprintf.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define ANT_MKDIR(path) _mkdir(path)
+#else
+#define ANT_MKDIR(path) mkdir(path, 0755)
+#endif
 
 const char *const module_resolve_extensions[] = {
   ".js", ".mjs", ".cjs",
   ".ts", ".mts", ".cts",
   ".json", ".node", NULL
 };
+
+static const char *ant_home_dir(void) {
+#ifdef _WIN32
+  const char *home = getenv("USERPROFILE");
+  if (home && home[0]) return home;
+#else
+  const char *home = getenv("HOME");
+  if (home && home[0]) return home;
+#endif
+  return NULL;
+}
+
+static const char *ant_absolute_env(const char *name) {
+#ifdef _WIN32
+  return NULL;
+#else
+  const char *value = getenv(name);
+  if (!value || value[0] != '/') return NULL;
+  return value;
+#endif
+}
+
+static int ant_join_app_path(
+  char *out, size_t out_size,
+  const char *base,
+  const char *app,
+  const char *suffix
+) {
+  if (!out || out_size == 0 || !base || !base[0] || !app || !app[0]) return -1;
+  while (suffix && (*suffix == '/' || *suffix == '\\')) suffix++;
+
+  int written = 0;
+  if (suffix && suffix[0]) written = snprintf(out, out_size, "%s/%s/%s", base, app, suffix);
+  else written = snprintf(out, out_size, "%s/%s", base, app);
+  
+  return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
+}
+
+static int ant_xdg_path(
+  char *out, size_t out_size,
+  const char *env_name,
+  const char *home_suffix,
+  const char *suffix
+) {
+#ifdef _WIN32
+  const char *home = ant_home_dir();
+  if (!home) return -1;
+  return ant_join_app_path(out, out_size, home, ".ant", suffix);
+#else
+  const char *base = ant_absolute_env(env_name);
+  if (base) return ant_join_app_path(out, out_size, base, "ant", suffix);
+
+  const char *home = ant_home_dir();
+  if (!home) return -1;
+  char fallback[4096];
+  
+  int written = snprintf(fallback, sizeof(fallback), "%s/%s", home, home_suffix);
+  if (written < 0 || (size_t)written >= sizeof(fallback)) return -1;
+  
+  return ant_join_app_path(out, out_size, fallback, "ant", suffix);
+#endif
+}
+
+int ant_mkdir_p(const char *path) {
+  if (!path || !path[0]) return -1;
+
+  char tmp[4096];
+  size_t len = strlen(path);
+  
+  if (len >= sizeof(tmp)) return -1;
+  memcpy(tmp, path, len + 1);
+
+  while (
+    len > 1 && (tmp[len - 1] == '/' || 
+    tmp[len - 1] == '\\')
+  ) tmp[--len] = '\0';
+
+  for (char *p = tmp + 1; *p; p++) {
+    if (*p != '/' && *p != '\\') continue;
+    char sep = *p; *p = '\0';
+    if (ANT_MKDIR(tmp) != 0 && errno != EEXIST) return -1;
+    *p = sep;
+  }
+
+  if (ANT_MKDIR(tmp) != 0 && errno != EEXIST) return -1;
+  return 0;
+}
+
+int ant_xdg_cache_path(char *out, size_t out_size, const char *suffix) {
+  return ant_xdg_path(out, out_size, "XDG_CACHE_HOME", ".cache", suffix);
+}
+
+int ant_xdg_data_path(char *out, size_t out_size, const char *suffix) {
+  return ant_xdg_path(out, out_size, "XDG_DATA_HOME", ".local/share", suffix);
+}
+
+int ant_xdg_state_path(char *out, size_t out_size, const char *suffix) {
+  return ant_xdg_path(out, out_size, "XDG_STATE_HOME", ".local/state", suffix);
+}
+
+int ant_user_bin_path(char *out, size_t out_size) {
+  const char *home = ant_home_dir();
+  if (!home || !out || out_size == 0) return -1;
+#ifdef _WIN32
+  int written = snprintf(out, out_size, "%s/.ant/bin", home);
+#else
+  int written = snprintf(out, out_size, "%s/.local/bin", home);
+#endif
+  return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
+}
 
 int hex_digit(char c) {
   static const int8_t lookup[256] = {

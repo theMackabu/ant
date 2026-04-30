@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <crprintf.h>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -20,10 +21,10 @@
 #define mkdir_p(path) mkdir(path, 0755)
 #endif
 
-#include <crprintf.h>
-#include "highlight.h"
-#include "readline.h"
 #include "utf8.h"
+#include "utils.h"
+#include "readline.h"
+#include "highlight.h"
 
 #define MAX_LINE_LENGTH 4096
 
@@ -71,7 +72,11 @@ void ant_history_init(ant_history_t *hist, int capacity) {
 
 void ant_history_add(ant_history_t *hist, const char *line) {
   if (!hist || !hist->lines || hist->capacity <= 0 || !line || line[0] == '\0') return;
-  if (hist->count > 0 && strcmp(hist->lines[hist->count - 1], line) == 0) return;
+  
+  if (hist->count > 0 && strcmp(hist->lines[hist->count - 1], line) == 0) {
+    hist->current = hist->count;
+    return;
+  }
 
   if (hist->count >= hist->capacity) {
     free(hist->lines[0]);
@@ -110,15 +115,17 @@ void ant_history_free(ant_history_t *hist) {
 }
 
 static char *get_history_path(void) {
-  const char *home = getenv("HOME");
-  if (!home) home = getenv("USERPROFILE");
-  if (!home) return NULL;
+  char dir[4096];
+  
+  if (ant_xdg_state_path(dir, sizeof(dir), NULL) != 0) return NULL;
+  if (ant_mkdir_p(dir) != 0) return NULL;
 
-  size_t len = strlen(home) + 32;
+  size_t len = strlen(dir) + sizeof("/repl_history");
   char *path = malloc(len);
-  snprintf(path, len, "%s/.ant", home);
-  mkdir_p(path);
-  snprintf(path, len, "%s/.ant/repl_history", home);
+  
+  if (!path) return NULL;
+  snprintf(path, len, "%s/repl_history", dir);
+  
   return path;
 }
 

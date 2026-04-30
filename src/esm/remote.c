@@ -101,25 +101,6 @@ static void esm_url_fetch_close_cb(tlsuv_http_t *client) {
   ctx->completed = 1;
 }
 
-static const char *esm_get_home_dir(void) {
-#ifdef _WIN32
-  const char *home = getenv("USERPROFILE");
-  if (home) return home;
-  
-  const char *drive = getenv("HOMEDRIVE");
-  const char *path = getenv("HOMEPATH");
-  if (drive && path) {
-    static char win_home[MAX_PATH];
-    snprintf(win_home, sizeof(win_home), "%s%s", drive, path);
-    return win_home;
-  }
-#else
-  const char *home = getenv("HOME");
-  if (home) return home;
-#endif
-  return NULL;
-}
-
 static void esm_url_fetch_body_cb(tlsuv_http_req_t *http_req, char *body, ssize_t len) {
   esm_url_fetch_t *ctx = (esm_url_fetch_t *)http_req->data;
 
@@ -171,20 +152,20 @@ static void esm_url_fetch_resp_cb(tlsuv_http_resp_t *resp, void *data) {
 }
 
 static char *esm_get_cache_path(const char *url) {
-  const char *home = esm_get_home_dir();
-  if (!home) home = ".";
-
   uint64_t hash = hash_key(url, strlen(url));
+  
+  char suffix[64];
+  snprintf(suffix, sizeof(suffix), "remote/%016llx", (unsigned long long)hash);
 
-  size_t len = strlen(home) + 48;
+  size_t len = 4096;
   char *cache_path = malloc(len);
   if (!cache_path) return NULL;
 
-#ifdef _WIN32
-  snprintf(cache_path, len, "%s\\.ant\\remote\\%016llx", home, (unsigned long long)hash);
-#else
-  snprintf(cache_path, len, "%s/.ant/remote/%016llx", home, (unsigned long long)hash);
-#endif
+  if (ant_xdg_cache_path(cache_path, len, suffix) != 0) {
+    free(cache_path);
+    return NULL;
+  }
+  
   return cache_path;
 }
 

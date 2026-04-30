@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 typedef struct {
@@ -23,6 +24,13 @@ char *resolve_typescript_source_fallback(const char *filename);
 
 int hex_digit(char c);
 int is_typescript_file(const char *filename);
+
+int ant_mkdir_p(const char *path);
+int ant_user_bin_path(char *out, size_t out_size);
+
+int ant_xdg_cache_path(char *out, size_t out_size, const char *suffix);
+int ant_xdg_data_path(char *out, size_t out_size, const char *suffix);
+int ant_xdg_state_path(char *out, size_t out_size, const char *suffix);
 
 int strip_typescript_inplace(
   char **buffer,

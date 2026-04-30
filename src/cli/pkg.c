@@ -325,11 +325,20 @@ bool pkg_script_exists(const char *package_json_path, const char *script_name) {
 
 static const char *get_global_dir(void) {
   static char global_dir[4096] = {0};
-  if (global_dir[0] == '\0') {
-    const char *home = getenv("HOME");
-    if (home) snprintf(global_dir, sizeof(global_dir), "%s/.ant/pkg/global", home);
-  }
+  if (global_dir[0] == '\0') ant_xdg_data_path(global_dir, sizeof(global_dir), "pkg/global");
   return global_dir;
+}
+
+static const char *get_global_bin_dir(void) {
+  static char bin_dir[4096] = {0};
+  if (bin_dir[0] == '\0') ant_user_bin_path(bin_dir, sizeof(bin_dir));
+  return bin_dir;
+}
+
+static const char *get_cache_dir(void) {
+  static char cache_dir[4096] = {0};
+  if (cache_dir[0] == '\0') ant_xdg_cache_path(cache_dir, sizeof(cache_dir), "pkg");
+  return cache_dir;
 }
 
 static int cmd_add_global(const char *const *package_specs, int count) {
@@ -368,7 +377,7 @@ static int cmd_add_global(const char *const *package_specs, int count) {
       printf("\n%sinstalled globally%s %s%s%s\n", 
              C_GREEN, C_RESET, C_BOLD, package_specs[i], C_RESET);
     }
-    printf("  %s(binaries linked to ~/.ant/bin)%s\n", C_DIM, C_RESET);
+    printf("  %s(binaries linked to %s)%s\n", C_DIM, get_global_bin_dir(), C_RESET);
     printf("\n%s[%s", C_DIM, C_RESET);
     print_elapsed(result.elapsed_ms);
     printf("%s]%s done\n", C_DIM, C_RESET);
@@ -1057,7 +1066,7 @@ int pkg_cmd_install(int argc, char **argv) {
   if (help->count > 0) {
     printf("Usage: ant install [packages...] [-g] [-D] [--verbose]\n\n");
     printf("Install from lockfile, or add packages if specified.\n");
-    printf("\nOptions:\n  -g, --global      Install globally to ~/.ant/pkg/global\n");
+    printf("\nOptions:\n  -g, --global      Install globally to %s\n", get_global_dir());
     printf("  -D, --save-dev    Add as devDependency\n");
   } else if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant install");
@@ -1112,7 +1121,7 @@ int pkg_cmd_add(int argc, char **argv) {
   if (help->count > 0) {
     printf("Usage: ant add <package[@version]>... [options]\n\n");
     printf("Add packages to dependencies.\n");
-    printf("\nOptions:\n  -g, --global      Install globally to ~/.ant/pkg/global\n");
+    printf("\nOptions:\n  -g, --global      Install globally to %s\n", get_global_dir());
     printf("  -D, --save-dev    Add as devDependency\n");
   } else if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant add");
@@ -1643,7 +1652,7 @@ static int cmd_cache_info(void) {
   }
   
   char size_buf[64], db_buf[64];
-  printf("%sCache location:%s ~/.ant/pkg\n", C_BOLD, C_RESET);
+  printf("%sCache location:%s %s\n", C_BOLD, C_RESET, get_cache_dir());
   printf("%sPackages:%s      %u\n", C_BOLD, C_RESET, stats.package_count);
   printf("%sSize:%s          %s\n", C_BOLD, C_RESET, format_size(stats.total_size, size_buf, sizeof(size_buf)));
   printf("%sDB size:%s       %s\n", C_BOLD, C_RESET, format_size(stats.db_size, db_buf, sizeof(db_buf)));
