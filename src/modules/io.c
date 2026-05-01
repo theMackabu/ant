@@ -830,6 +830,167 @@ static void inspect_mark_visited(inspect_visited_t *v, uintptr_t off) {
   v->visited[v->count++] = off;
 }
 
+static const char *inspect_ascii_state(uint8_t state) {
+switch (state) {
+  case STR_ASCII_YES: return "yes";
+  case STR_ASCII_NO: return "no";
+  default: return "unknown";
+}}
+
+static void inspect_string_bytes(FILE *stream, const char *bytes, size_t len) {
+  size_t limit = len > 96 ? 96 : len;
+  fprintf(stream, "\"");
+  for (size_t i = 0; i < limit; i++) {
+    unsigned char c = (unsigned char)bytes[i];
+    switch (c) {
+      case '\n': fprintf(stream, "\\n"); break;
+      case '\r': fprintf(stream, "\\r"); break;
+      case '\t': fprintf(stream, "\\t"); break;
+      case '\\': fprintf(stream, "\\\\"); break;
+      case '"':  fprintf(stream, "\\\""); break;
+      default:
+        if (c < 0x20 || c == 0x7f) fprintf(stream, "\\x%02x", c);
+        else fputc(c, stream);
+        break;
+    }
+  }
+  if (limit < len) fprintf(stream, "...<%zu bytes truncated>", len - limit);
+  fprintf(stream, "\"");
+}
+
+static void inspect_string_value(
+  ant_t *js,
+  ant_value_t val,
+  FILE *stream,
+  int depth,
+  inspect_visited_t *visited
+) {
+  uint64_t raw_value = (uint64_t)val;
+  uint64_t raw_data = (uint64_t)vdata(val);
+  uintptr_t tag = (uintptr_t)(vdata(val) & STR_HEAP_TAG_MASK);
+
+  if (tag == STR_HEAP_TAG_FLAT) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(val);
+    fprintf(
+      stream,
+      "<String flat value=0x%016" PRIx64 " data=0x%012" PRIx64 " ptr=%p",
+      raw_value,
+      raw_data,
+      (void *)flat
+    );
+    if (!flat) {
+      fprintf(stream, ">");
+      return;
+    }
+
+    fprintf(
+      stream,
+      " len=%" PRIu64 " ascii=%s bytes=",
+      (uint64_t)flat->len,
+      inspect_ascii_state(flat->is_ascii)
+    );
+    inspect_string_bytes(stream, flat->bytes, (size_t)flat->len);
+    fprintf(stream, ">");
+    return;
+  }
+
+  if (tag == STR_HEAP_TAG_ROPE) {
+    ant_rope_heap_t *rope = ant_str_rope_ptr(val);
+    fprintf(
+      stream,
+      "<String rope value=0x%016" PRIx64 " data=0x%012" PRIx64 " ptr=%p",
+      raw_value,
+      raw_data,
+      (void *)rope
+    );
+    if (!rope) {
+      fprintf(stream, ">");
+      return;
+    }
+
+    fprintf(
+      stream,
+      " len=%" PRIu64 " depth=%u cached=",
+      (uint64_t)rope->len,
+      (unsigned)rope->depth
+    );
+    if (vtype(rope->cached) == T_UNDEF) fprintf(stream, "undefined");
+    else inspect_value(js, rope->cached, stream, depth + 1, visited);
+    fprintf(stream, "> {\n");
+
+    inspect_print_indent(stream, depth + 1);
+    fprintf(stream, "left: ");
+    if (depth > 10) fprintf(stream, "<String ...>");
+    else inspect_value(js, rope->left, stream, depth + 1, visited);
+    fprintf(stream, "\n");
+
+    inspect_print_indent(stream, depth + 1);
+    fprintf(stream, "right: ");
+    if (depth > 10) fprintf(stream, "<String ...>");
+    else inspect_value(js, rope->right, stream, depth + 1, visited);
+    fprintf(stream, "\n");
+
+    inspect_print_indent(stream, depth);
+    fprintf(stream, "}");
+    return;
+  }
+
+  if (tag == STR_HEAP_TAG_BUILDER) {
+    ant_string_builder_t *builder = ant_str_builder_ptr(val);
+    fprintf(
+      stream,
+      "<String builder value=0x%016" PRIx64 " data=0x%012" PRIx64 " ptr=%p",
+      raw_value,
+      raw_data,
+      (void *)builder
+    );
+    if (!builder) {
+      fprintf(stream, ">");
+      return;
+    }
+
+    fprintf(
+      stream,
+      " len=%" PRIu64 " ascii=%s head=%p chunk_tail=%p tail_len=%u cached=",
+      (uint64_t)builder->len,
+      inspect_ascii_state(builder->ascii_state),
+      (void *)builder->head,
+      (void *)builder->chunk_tail,
+      (unsigned)builder->tail_len
+    );
+    if (vtype(builder->cached) == T_UNDEF) fprintf(stream, "undefined");
+    else inspect_value(js, builder->cached, stream, depth + 1, visited);
+    fprintf(stream, "> {\n");
+
+    int chunk_index = 0;
+    for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+      if (chunk_index >= 64) {
+        inspect_print_indent(stream, depth + 1);
+        fprintf(stream, "...<builder chunks truncated>\n");
+        break;
+      }
+
+      inspect_print_indent(stream, depth + 1);
+      fprintf(stream, "chunk[%d] @%p next=%p value: ", chunk_index, (void *)chunk, (void *)chunk->next);
+      if (depth > 10) fprintf(stream, "<String ...>");
+      else inspect_value(js, chunk->value, stream, depth + 1, visited);
+      fprintf(stream, "\n");
+      chunk_index++;
+    }
+
+    inspect_print_indent(stream, depth + 1);
+    fprintf(stream, "tail: ");
+    inspect_string_bytes(stream, builder->tail, builder->tail_len);
+    fprintf(stream, "\n");
+
+    inspect_print_indent(stream, depth);
+    fprintf(stream, "}");
+    return;
+  }
+
+  fprintf(stream, "<String unknown-tag=%" PRIuPTR " value=0x%016" PRIx64 " data=0x%012" PRIx64 ">", tag, raw_value, raw_data);
+}
+
 void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_visited_t *visited) {
   int t = vtype(val);
   
@@ -840,9 +1001,7 @@ void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_
   if (t == T_ERR)   { fprintf(stream, "[Error]"); return; }
   
   if (t == T_STR) {
-    size_t len;
-    char *str = js_getstr(js, val, &len);
-    fprintf(stream, "\"%.*s\"", (int)len, str ? str : "");
+    inspect_string_value(js, val, stream, depth, visited);
     return;
   }
   
