@@ -344,19 +344,17 @@ static void net_socket_detach(net_socket_t *socket) {
 
   if (socket->server) {
     net_socket_t **it = NULL;
-    for (it = &socket->server->sockets; *it; it = &(*it)->next_in_server) {
-      if (*it == socket) {
-        *it = socket->next_in_server;
-        break;
-      }
+    for (it = &socket->server->sockets; *it; it = &(*it)->next_in_server) if (*it == socket) {
+      *it = socket->next_in_server;
+      break;
     }
     socket->next_in_server = NULL;
   }
 
   net_remove_active_socket(socket);
-  if (is_object_type(socket->obj)) {
-    js_set_native(socket->obj, NULL, 0);
-  }
+  if (is_object_type(socket->obj))
+    js_clear_native(socket->obj, NET_SOCKET_NATIVE_TAG);
+  
   net_server_maybe_finish_close(socket->server);
   free(socket);
 }
