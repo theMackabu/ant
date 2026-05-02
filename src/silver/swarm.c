@@ -3391,7 +3391,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_ADD:
       case OP_ADD_NUM: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool force_num_only = (op == OP_ADD_NUM);
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
@@ -3581,7 +3581,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_SUB:
       case OP_SUB_NUM: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool force_num_only = (op == OP_SUB_NUM);
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
@@ -3754,7 +3754,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_MUL:
       case OP_MUL_NUM: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool force_num_only = (op == OP_MUL_NUM);
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
@@ -3927,7 +3927,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_DIV:
       case OP_DIV_NUM: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool force_num_only = (op == OP_DIV_NUM);
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
@@ -4216,7 +4216,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_LT: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
@@ -4412,7 +4412,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_LE: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
@@ -7049,7 +7049,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_GT: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
@@ -7190,7 +7190,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_GE: {
-        uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
+        uint8_t fb = sv_func_type_feedback(func) ? sv_func_type_feedback(func)[bc_off] : 0;
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 

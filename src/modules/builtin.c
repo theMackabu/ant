@@ -92,16 +92,15 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
   sv_func_t *fn = closure->func;
 
   ant_value_t out = js_newobj(js);
-  js_set(js, out, "samples", js_mknum((double)fn->ctor_prop_samples));
+  js_set(js, out, "samples", js_mknum((double)sv_tfb_ctor_prop_samples(fn)));
   js_set(js, out, "overflowFrom", js_mknum((double)SV_TFB_CTOR_PROP_OVERFLOW_FROM));
   js_set(js, out, "inobjLimit", js_mknum((double)sv_tfb_ctor_inobj_limit(ctor)));
   js_set(js, out, "inobjLimitFrozen", js_bool(sv_tfb_ctor_inobj_limit_frozen(ctor)));
   js_set(js, out, "slackRemaining", js_mknum((double)sv_tfb_ctor_inobj_slack_remaining(ctor)));
 
   ant_value_t bins = js_mkarr(js);
-  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) {
-    js_arr_push(js, bins, js_mknum((double)fn->ctor_prop_hist[i]));
-  }
+  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) 
+    js_arr_push(js, bins, js_mknum((double)sv_tfb_ctor_prop_bin(fn, i)));
   js_set(js, out, "bins", bins);
 
   if (fn->name) js_set(js, out, "name", js_mkstr(js, fn->name, strlen(fn->name)));

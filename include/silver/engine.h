@@ -109,46 +109,76 @@ bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 
 #ifdef ANT_JIT
+
+#define SV_TFB_CTOR_PROP_BINS 17
+#define SV_TFB_CTOR_PROP_OVERFLOW_FROM (SV_TFB_CTOR_PROP_BINS - 1)
+
 typedef struct {
   uint16_t    bc_off;
   uint8_t     miss_count;
   uint8_t     disabled;
   sv_func_t  *target;
 } sv_call_target_fb_t;
+
+typedef struct {
+  uint64_t samples;
+  uint64_t hist[SV_TFB_CTOR_PROP_BINS];
+  uint8_t  inobj_limit;
+  uint8_t  inobj_frozen;
+} sv_ctor_prop_fb_t;
+
+typedef struct {
+  uint8_t *type_feedback;
+  sv_ctor_prop_fb_t ctor_prop_fb;
+} sv_func_sidecar_t;
 #endif
 
 struct sv_func {
   uint8_t *code;
-  int code_len;
-  
   ant_value_t *constants;
-  int const_count;
   
   struct sv_func **child_funcs;
-  int child_func_count;
-  
   uint32_t *gc_const_slots;
-  int gc_const_slot_count;
   
   sv_atom_t *atoms;
-  int atom_count;
-
   sv_ic_entry_t *ic_slots;
-  uint16_t ic_count;
-  
   sv_obj_site_cache_t *obj_sites;
-  uint16_t obj_site_count;
-  
   sv_upval_desc_t *upval_descs;
+  sv_type_info_t *local_types;
+  
+  const char *name;
+  const char *filename;
+  sv_srcpos_t *srcpos;
+  const char *source;
+
+#ifdef ANT_JIT
+  void *jit_code;
+  uint8_t *type_feedback;
+  uint8_t *local_type_feedback;
+  sv_call_target_fb_t *call_target_fb;
+#endif
+
+  uint64_t gc_epoch;
+
+  int code_len;
+  int const_count;
+  int child_func_count;
+  int gc_const_slot_count;
+  int atom_count;
   int max_locals;
   int max_stack;
-  
-  sv_type_info_t *local_types;
   int local_type_count;
-  
   int param_count;
   int upvalue_count;
-  
+  int srcpos_count;
+  int source_line;
+  int source_len;
+  int source_start;
+  int source_end;
+
+  uint16_t ic_count;
+  uint16_t obj_site_count;
+
   bool is_strict;
   bool is_arrow;
   bool is_async;
@@ -157,42 +187,19 @@ struct sv_func {
   bool is_method;
   bool is_static;
   bool is_tla;
-  uint64_t gc_epoch;
-  
-  const char *name;
-  const char *filename;
-  
-  sv_srcpos_t *srcpos;
-  int srcpos_count;
-  int source_line;
-  
-  const char *source;
-  int source_len;
-  int source_start;
-  int source_end;
-  
+
 #ifdef ANT_JIT
-  void *jit_code;
-  
   uint32_t call_count;
   uint32_t back_edge_count;
-  
-  bool jit_compile_failed;
-  bool jit_compiling;
-  
-  uint8_t jit_bailout_count;
   uint32_t jit_bailout_tfb_ver;
   uint32_t tfb_version;
   uint32_t jit_compiled_tfb_ver;
-  uint8_t *type_feedback;
-  uint8_t *local_type_feedback;
-  uint64_t ctor_prop_samples;
-  uint64_t ctor_prop_hist[17];
-  uint8_t ctor_inobj_limit;
-  uint8_t ctor_inobj_frozen;
 
-  sv_call_target_fb_t *call_target_fb;
+  uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
+  
+  bool jit_compile_failed;
+  bool jit_compiling;
 #endif
 };
 
@@ -847,8 +854,6 @@ static inline ant_value_t sv_call_closure(
 #define SV_TFB_BOOL  (1 << 2)
 #define SV_TFB_OTHER (1 << 3)
 
-#define SV_TFB_CTOR_PROP_BINS 17
-#define SV_TFB_CTOR_PROP_OVERFLOW_FROM (SV_TFB_CTOR_PROP_BINS - 1)
 #define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
 #define SV_TFB_INOBJ_P90_NUMERATOR 9
 #define SV_TFB_INOBJ_P90_DENOMINATOR 10
@@ -955,25 +960,71 @@ static inline uint8_t sv_tfb_classify(ant_value_t v) {
   return SV_TFB_OTHER;
 }
 
+static inline bool sv_func_has_sidecar(const sv_func_t *func) {
+  return func && (((uintptr_t)func->type_feedback & ant_sidecar) != 0);
+}
+
+static inline sv_func_sidecar_t *sv_func_sidecar(const sv_func_t *func) {
+  if (!sv_func_has_sidecar(func)) return NULL;
+  return (sv_func_sidecar_t *)((uintptr_t)func->type_feedback & ~ant_sidecar);
+}
+
+static inline uint8_t *sv_func_type_feedback(const sv_func_t *func) {
+  if (!func) return NULL;
+  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  return sidecar ? sidecar->type_feedback : func->type_feedback;
+}
+
+static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
+  if (!func) return NULL;
+
+  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
+  if (sidecar) return sidecar;
+
+  sidecar = (sv_func_sidecar_t *)calloc(1, sizeof(*sidecar));
+  if (!sidecar) return NULL;
+
+  sidecar->type_feedback = func->type_feedback;
+  func->type_feedback = (uint8_t *)((uintptr_t)sidecar | ant_sidecar);
+  
+  return sidecar;
+}
+
 static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
-if (func->type_feedback) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  
+  if (type_feedback) {
   int off = (int)(ip - func->code);
-  uint8_t old = func->type_feedback[off];
+  
+  uint8_t old = type_feedback[off];
   uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
-  if (neu != old) { func->type_feedback[off] = neu; func->tfb_version++; }
-}}
+  
+  if (neu != old) { 
+    type_feedback[off] = neu;
+    func->tfb_version++; 
+  }}
+}
 
 static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
-if (func->type_feedback) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  if (type_feedback) {
   int off = (int)(ip - func->code);
-  uint8_t old = func->type_feedback[off];
+  
+  uint8_t old = type_feedback[off];
   uint8_t neu = old | sv_tfb_classify(v);
-  if (neu != old) { func->type_feedback[off] = neu; func->tfb_version++; }
-}}
+  
+  if (neu != old) { 
+    type_feedback[off] = neu;
+    func->tfb_version++;
+  }}
+}
 
 static inline void sv_tfb_ensure(sv_func_t *fn) {
-  if (!fn->type_feedback && fn->code_len > 0)
-    fn->type_feedback = calloc((size_t)fn->code_len, 1);
+  if (!sv_func_type_feedback(fn) && fn->code_len > 0) {
+    uint8_t *type_feedback = calloc((size_t)fn->code_len, 1);
+    if (sv_func_has_sidecar(fn)) sv_func_sidecar(fn)->type_feedback = type_feedback;
+    else fn->type_feedback = type_feedback;
+  }
   if (!fn->local_type_feedback && fn->max_locals > 0)
     fn->local_type_feedback = calloc((size_t)fn->max_locals, 1);
 }
@@ -991,9 +1042,7 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
     if (fb[i].miss_count >= SV_CALL_FB_MISS_DISABLE) {
       fb[i].disabled = 1;
       fb[i].target = NULL;
-    } else {
-      fb[i].target = callee;
-    }
+    } else fb[i].target = callee;
     func->tfb_version++;
     return;
   }
@@ -1032,8 +1081,27 @@ static inline uint8_t sv_tfb_clamp_inobj_limit(uint32_t limit) {
   return (limit > ANT_INOBJ_MAX_SLOTS) ? (uint8_t)ANT_INOBJ_MAX_SLOTS : (uint8_t)limit;
 }
 
+static inline sv_ctor_prop_fb_t *sv_tfb_ctor_prop_fb(sv_func_t *func, bool create) {
+  if (!func) return NULL;
+  sv_func_sidecar_t *sidecar = create ? sv_func_ensure_sidecar(func) : sv_func_sidecar(func);
+  return sidecar ? &sidecar->ctor_prop_fb : NULL;
+}
+
+static inline uint64_t sv_tfb_ctor_prop_samples(const sv_func_t *func) {
+  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
+  return fb ? fb->samples : 0;
+}
+
+static inline uint64_t sv_tfb_ctor_prop_bin(const sv_func_t *func, uint32_t bin) {
+  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
+  if (!fb || bin >= SV_TFB_CTOR_PROP_BINS) return 0;
+  return fb->hist[bin];
+}
+
 static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t samples) {
   if (!func || samples == 0) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb((sv_func_t *)func, false);
+  if (!fb) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
 
   uint64_t target = (
     (samples * SV_TFB_INOBJ_P90_NUMERATOR)
@@ -1043,9 +1111,8 @@ static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t s
 
   uint64_t seen = 0;
   for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) {
-    seen += func->ctor_prop_hist[i];
+    seen += fb->hist[i];
     if (seen < target) continue;
-
     if (i >= SV_TFB_CTOR_PROP_OVERFLOW_FROM) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
     return sv_tfb_clamp_inobj_limit(i);
   }
@@ -1056,21 +1123,28 @@ static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t s
 static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
   if (vtype(ctor_func) != T_FUNC) return;
   if (!is_object_type(instance)) return;
+  
   sv_closure_t *closure = js_func_closure(ctor_func);
   if (!closure || !closure->func) return;
+  
   ant_object_t *obj = js_obj_ptr(js_as_obj(instance));
   if (!obj) return;
 
   sv_func_t *func = closure->func;
+  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, true);
+  if (!fb) return;
+
   uint32_t count = obj->prop_count;
   uint32_t bin = (count < SV_TFB_CTOR_PROP_OVERFLOW_FROM)
     ? count
     : SV_TFB_CTOR_PROP_OVERFLOW_FROM;
-  func->ctor_prop_hist[bin]++;
-  uint64_t samples = ++func->ctor_prop_samples;
-  if (!func->ctor_inobj_frozen && samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) {
-    func->ctor_inobj_limit = sv_tfb_infer_inobj_limit(func, samples);
-    func->ctor_inobj_frozen = 1;
+  
+  fb->hist[bin]++;
+  uint64_t samples = ++fb->samples;
+  
+  if (!fb->inobj_frozen && samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) {
+    fb->inobj_limit = sv_tfb_infer_inobj_limit(func, samples);
+    fb->inobj_frozen = 1;
   }
 }
 
@@ -1080,24 +1154,32 @@ static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
   if (!closure || !closure->func) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
 
   sv_func_t *func = closure->func;
-  if (!func->ctor_inobj_frozen) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  return sv_tfb_clamp_inobj_limit(func->ctor_inobj_limit);
+  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
+  
+  if (!fb || !fb->inobj_frozen) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  return sv_tfb_clamp_inobj_limit(fb->inobj_limit);
 }
 
 static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
   if (vtype(ctor_func) != T_FUNC) return false;
   sv_closure_t *closure = js_func_closure(ctor_func);
   if (!closure || !closure->func) return false;
-  return closure->func->ctor_inobj_frozen != 0;
+  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(closure->func, false);
+  return fb && fb->inobj_frozen != 0;
 }
 
 static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
   if (vtype(ctor_func) != T_FUNC) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
   sv_closure_t *closure = js_func_closure(ctor_func);
+  
   if (!closure || !closure->func) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
   sv_func_t *func = closure->func;
-  if (func->ctor_inobj_frozen || func->ctor_prop_samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) return 0;
-  return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - func->ctor_prop_samples);
+  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
+  
+  if (!fb) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
+  if (fb->inobj_frozen || fb->samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) return 0;
+  
+  return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - fb->samples);
 }
 #endif
 
