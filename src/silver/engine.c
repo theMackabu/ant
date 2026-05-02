@@ -1019,9 +1019,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));  NEXT(5); }
   L_GET_ELEM_OPT:   { VM_CHECK(sv_op_get_elem_opt(vm, js, func, ip));   NEXT(1); }
 
-  L_GET_PRIVATE:  { sv_op_get_private(vm, js);  NEXT(1); }
-  L_PUT_PRIVATE:  { sv_op_put_private(vm, js);  NEXT(1); }
-  L_DEF_PRIVATE:  { sv_op_def_private(vm, js);  NEXT(1); }
+  L_GET_PRIVATE:      { VM_CHECK(sv_op_get_private(vm, js));       NEXT(1); }
+  L_GET_PRIVATE_OPT:  { VM_CHECK(sv_op_get_private_opt(vm, js));   NEXT(1); }
+  L_PUT_PRIVATE:      { VM_CHECK(sv_op_put_private(vm, js));       NEXT(1); }
+  L_DEF_PRIVATE:      { VM_CHECK(sv_op_def_private(vm, js, ip));   NEXT(2); }
+  L_HAS_PRIVATE:      { VM_CHECK(sv_op_has_private(vm, js));       NEXT(1); }
 
   L_GET_SUPER:      { sv_op_get_super(vm, js);             NEXT(1); }
   L_GET_SUPER_VAL:  { sv_op_get_super_val(vm, js, frame);  NEXT(1); }
@@ -1857,7 +1859,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_DEFINE_CLASS:       { sv_op_define_class(vm, js, func, ip);       NEXT(14); }
   L_DEFINE_CLASS_COMP:  { sv_op_define_class_comp(vm, js, func, ip);  NEXT(14); }
-  L_ADD_BRAND:          { sv_op_add_brand(vm);                        NEXT(1);  }
 
   L_TO_OBJECT:   { VM_CHECK(sv_op_to_object(vm, js));  NEXT(1); }
   L_TO_PROPKEY:  { sv_op_to_propkey(vm, js);           NEXT(1); }

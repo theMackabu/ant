@@ -68,6 +68,24 @@ typedef struct sv_line_table {
   int count;
 } sv_line_table_t;
 
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint8_t kind;
+  bool is_static;
+  bool has_getter;
+  bool has_setter;
+  struct sv_compiler *owner;
+  int local;
+} sv_private_name_t;
+
+typedef struct sv_private_scope {
+  struct sv_private_scope *parent;
+  sv_private_name_t *names;
+  int count;
+  int cap;
+} sv_private_scope_t;
+
 typedef struct sv_compiler {
   ant_t *js;
   const char *filename;
@@ -151,6 +169,7 @@ typedef struct sv_compiler {
 
   const_dedup_entry_t *const_dedup;
   sv_line_table_t *line_table;
+  sv_private_scope_t *private_scope;
 } sv_compiler_t;
 
 

@@ -27,6 +27,7 @@
   X(SLOT_PROXY_REF)               \
   X(SLOT_BUILTIN)                 \
   X(SLOT_BRAND)                   \
+  X(SLOT_PRIVATE_ELEMENTS)        \
   X(SLOT_DATA)                    \
   X(SLOT_EVENT_MAX_LISTENERS)     \
   X(SLOT_CTOR)                    \

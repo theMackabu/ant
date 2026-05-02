@@ -44,6 +44,7 @@ void sv_compile_ctx_init_root(
   ctx->super_local = -1;
   ctx->using_stack_local = -1;
   ctx->line_table = line_table;
+  ctx->private_scope = NULL;
 }
 
 void sv_compile_ctx_init_child(
@@ -70,6 +71,7 @@ void sv_compile_ctx_init_child(
   ctx->super_local = -1;
   ctx->using_stack_local = -1;
   ctx->param_count = node ? node->args.count : 0;
+  ctx->private_scope = enclosing->private_scope;
 }
 
 void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {

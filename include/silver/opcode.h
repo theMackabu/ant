@@ -91,9 +91,11 @@ OP_DEF(  GET_LENGTH,        1,   1,   1, none)      /* obj -> length */
 OP_DEF(  GET_FIELD_OPT,    5,   1,   1, atom)       /* null-safe obj -> val */
 OP_DEF(  GET_ELEM_OPT,     1,   2,   1, none)       /* null-safe obj key -> val */
 
-OP_DEF(  GET_PRIVATE,      1,   2,   1, none)       /* obj prop -> value */
-OP_DEF(  PUT_PRIVATE,      1,   3,   0, none)       /* obj value prop -> */
-OP_DEF(  DEF_PRIVATE,      1,   3,   1, none)       /* obj prop value -> obj */
+OP_DEF(  GET_PRIVATE,      1,   2,   1, none)       /* obj private_name -> value */
+OP_DEF(  GET_PRIVATE_OPT,  1,   2,   1, none)       /* obj private_name -> value|undefined */
+OP_DEF(  PUT_PRIVATE,      1,   3,   1, none)       /* obj value private_name -> value */
+OP_DEF(  DEF_PRIVATE,      2,   3,   1, u8)         /* obj private_name value -> obj */
+OP_DEF(  HAS_PRIVATE,      1,   2,   1, none)       /* obj private_name -> bool */
 
 OP_DEF(  GET_SUPER,         1,   1,   1, none)      /* obj -> super */
 OP_DEF(  GET_SUPER_VAL,     1,   3,   1, none)      /* this obj prop -> value */
@@ -229,7 +231,6 @@ OP_DEF(  COPY_DATA_PROPS,   2,   3,   3, u8)        /* Object.assign-like */
 
 OP_DEF(  DEFINE_CLASS,      14,  2,   2, atom_u8)   /* parent ctor -> ctor proto */
 OP_DEF(  DEFINE_CLASS_COMP, 14,  3,   3, atom_u8)   /* computed name variant */
-OP_DEF(  ADD_BRAND,         1,   2,   0, none)      /* this_obj home_obj -> (private brand) */
 
 OP_DEF(  TO_OBJECT,         1,   1,   1, none)      /* coerce to object wrapper */
 OP_DEF(  TO_PROPKEY,        1,   1,   1, none)      /* coerce to string/symbol */

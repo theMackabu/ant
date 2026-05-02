@@ -302,8 +302,4 @@ static inline void sv_op_define_class_comp(
   vm->stack[vm->sp++] = name;
 }
 
-static inline void sv_op_add_brand(sv_vm_t *vm) {
-  vm->sp -= 2;
-}
-
 #endif

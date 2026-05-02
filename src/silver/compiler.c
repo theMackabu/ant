@@ -270,6 +270,135 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
   compile_expr(c, key);
 }
 
+enum {
+  SV_COMP_PRIVATE_FIELD = 0,
+  SV_COMP_PRIVATE_METHOD = 1,
+  SV_COMP_PRIVATE_GETTER = 3,
+  SV_COMP_PRIVATE_SETTER = 4
+};
+
+static int local_to_frame_slot(sv_compiler_t *c, int local_idx);
+static int add_upvalue(sv_compiler_t *c, uint16_t index, bool is_local, bool is_const);
+static void emit_get_local(sv_compiler_t *c, int local_idx);
+
+static inline bool is_private_name_node(const sv_ast_t *node) {
+  return node && node->type == N_IDENT && node->str && node->len > 0 && node->str[0] == '#';
+}
+
+static sv_private_name_t *private_scope_find_current(
+  sv_private_scope_t *scope, const char *name, uint32_t len
+) {
+  if (!scope || !name) return NULL;
+  for (int i = 0; i < scope->count; i++) {
+    sv_private_name_t *p = &scope->names[i];
+    if (p->len == len && memcmp(p->name, name, len) == 0) return p;
+  }
+  return NULL;
+}
+
+static sv_private_name_t *private_scope_resolve(
+  sv_compiler_t *c, const char *name, uint32_t len
+) {
+  for (sv_private_scope_t *scope = c->private_scope; scope; scope = scope->parent) {
+    sv_private_name_t *p = private_scope_find_current(scope, name, len);
+    if (p) return p;
+  }
+  return NULL;
+}
+
+static bool private_scope_add(
+  sv_compiler_t *c, sv_private_scope_t *scope,
+  sv_ast_t *name, uint8_t kind, bool is_static
+) {
+  if (!is_private_name_node(name)) return true;
+
+  if (name->len == 12 && memcmp(name->str, "#constructor", 12) == 0) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Classes may not declare private constructor names");
+    return false;
+  }
+
+  sv_private_name_t *existing = private_scope_find_current(scope, name->str, name->len);
+  bool is_accessor = kind == SV_COMP_PRIVATE_GETTER || kind == SV_COMP_PRIVATE_SETTER;
+  if (existing) {
+    bool existing_accessor = existing->kind == SV_COMP_PRIVATE_GETTER ||
+      existing->kind == SV_COMP_PRIVATE_SETTER;
+    if (!is_accessor || !existing_accessor || existing->is_static != is_static) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Duplicate private name '%.*s'", (int)name->len, name->str);
+      return false;
+    }
+    if ((kind == SV_COMP_PRIVATE_GETTER && existing->has_getter) ||
+        (kind == SV_COMP_PRIVATE_SETTER && existing->has_setter)) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Duplicate private accessor '%.*s'", (int)name->len, name->str);
+      return false;
+    }
+    if (kind == SV_COMP_PRIVATE_GETTER) existing->has_getter = true;
+    if (kind == SV_COMP_PRIVATE_SETTER) existing->has_setter = true;
+    return true;
+  }
+
+  if (scope->count >= scope->cap) {
+    int new_cap = scope->cap ? scope->cap * 2 : 8;
+    sv_private_name_t *new_names = realloc(scope->names, (size_t)new_cap * sizeof(*scope->names));
+    if (!new_names) return false;
+    scope->names = new_names;
+    scope->cap = new_cap;
+  }
+
+  sv_private_name_t *p = &scope->names[scope->count++];
+  *p = (sv_private_name_t){
+    .name = name->str,
+    .len = name->len,
+    .kind = kind,
+    .is_static = is_static,
+    .has_getter = kind == SV_COMP_PRIVATE_GETTER,
+    .has_setter = kind == SV_COMP_PRIVATE_SETTER,
+    .owner = NULL,
+    .local = -1
+  };
+  return true;
+}
+
+static int resolve_private_upvalue(sv_compiler_t *c, sv_private_name_t *p) {
+  if (!c->enclosing || !p || !p->owner || p->local < 0) return -1;
+
+  if (c->enclosing == p->owner) {
+    p->owner->locals[p->local].captured = true;
+    uint16_t slot = (uint16_t)local_to_frame_slot(p->owner, p->local);
+    return add_upvalue(c, slot, true, false);
+  }
+
+  int upvalue = resolve_private_upvalue(c->enclosing, p);
+  if (upvalue == -1) return -1;
+  return add_upvalue(c, (uint16_t)upvalue, false, false);
+}
+
+static bool emit_private_token(sv_compiler_t *c, sv_ast_t *name) {
+  sv_private_name_t *p = private_scope_resolve(c, name->str, name->len);
+  if (!p) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not declared", (int)name->len, name->str);
+    emit_op(c, OP_UNDEF);
+    return false;
+  }
+  if (!p->owner || p->local < 0) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not initialized", (int)name->len, name->str);
+    emit_op(c, OP_UNDEF);
+    return false;
+  }
+  if (p->owner == c) {
+    emit_get_local(c, p->local);
+    return true;
+  }
+  int upvalue = resolve_private_upvalue(c, p);
+  if (upvalue == -1) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private name '%.*s' is not in scope", (int)name->len, name->str);
+    emit_op(c, OP_UNDEF);
+    return false;
+  }
+  emit_op(c, OP_GET_UPVAL);
+  emit_u16(c, (uint16_t)upvalue);
+  return true;
+}
+
 static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   const char *interned = intern_string(str, (size_t)len);
   const char *stored = interned;
@@ -1429,6 +1558,11 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_IDENT:
+      if (is_private_name_node(node)) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Private names may only be used as class member names");
+        emit_op(c, OP_UNDEF);
+        break;
+      }
       emit_get_var(c, node->str, node->len);
       break;
 
@@ -1643,9 +1777,9 @@ void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
 
   if (op == TOK_IN && node->left->type == N_IDENT &&
       node->left->len > 0 && node->left->str[0] == '#') {
-    emit_constant(c, js_mkstr_permanent(c->js, node->left->str, node->left->len));
     compile_expr(c, node->right);
-    emit_op(c, OP_IN);
+    emit_private_token(c, node->left);
+    emit_op(c, OP_HAS_PRIVATE);
     return;
   }
 
@@ -1724,6 +1858,22 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
       emit_set_var(c, target->str, target->len, false);
     }
+  } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
+    compile_expr(c, target->left);
+    emit_op(c, OP_DUP);
+    emit_private_token(c, target->right);
+    emit_op(c, OP_GET_PRIVATE);
+    if (prefix) {
+      emit_op(c, is_inc ? OP_INC : OP_DEC);
+      emit_private_token(c, target->right);
+      emit_op(c, OP_PUT_PRIVATE);
+    } else {
+      emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
+      emit_op(c, OP_SWAP_UNDER);
+      emit_private_token(c, target->right);
+      emit_op(c, OP_PUT_PRIVATE);
+      emit_op(c, OP_POP);
+    }
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
@@ -1770,6 +1920,14 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   );
 
   if (op == TOK_ASSIGN) {
+    if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
+      compile_expr(c, target->left);
+      compile_expr(c, node->right);
+      emit_private_token(c, target->right);
+      emit_op(c, OP_PUT_PRIVATE);
+      return;
+    }
+
     if (target->type == N_MEMBER && !(target->flags & 1)) {
       int atom = add_atom(c, target->right->str, target->right->len);
       compile_expr(c, target->left);
@@ -1885,6 +2043,49 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       default: break;
     }
     emit_set_var(c, target->str, target->len, true);
+  } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
+    if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN ||
+        op == TOK_NULLISH_ASSIGN) {
+      compile_expr(c, target->left);
+      emit_op(c, OP_DUP);
+      emit_private_token(c, target->right);
+      emit_op(c, OP_GET_PRIVATE);
+      int skip = emit_jump(c,
+        op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
+        op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
+      emit_op(c, OP_POP);
+      compile_expr(c, node->right);
+      emit_private_token(c, target->right);
+      emit_op(c, OP_PUT_PRIVATE);
+      int end = emit_jump(c, OP_JMP);
+      patch_jump(c, skip);
+      emit_op(c, OP_NIP);
+      patch_jump(c, end);
+      return;
+    }
+
+    compile_expr(c, target->left);
+    emit_op(c, OP_DUP);
+    emit_private_token(c, target->right);
+    emit_op(c, OP_GET_PRIVATE);
+    compile_expr(c, node->right);
+    switch (op) {
+      case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
+      case TOK_MINUS_ASSIGN: emit_op(c, OP_SUB); break;
+      case TOK_MUL_ASSIGN:   emit_op(c, OP_MUL); break;
+      case TOK_DIV_ASSIGN:   emit_op(c, OP_DIV); break;
+      case TOK_REM_ASSIGN:   emit_op(c, OP_MOD); break;
+      case TOK_SHL_ASSIGN:   emit_op(c, OP_SHL); break;
+      case TOK_SHR_ASSIGN:   emit_op(c, OP_SHR); break;
+      case TOK_ZSHR_ASSIGN:  emit_op(c, OP_USHR); break;
+      case TOK_AND_ASSIGN:   emit_op(c, OP_BAND); break;
+      case TOK_XOR_ASSIGN:   emit_op(c, OP_BXOR); break;
+      case TOK_OR_ASSIGN:    emit_op(c, OP_BOR); break;
+      case TOK_EXP_ASSIGN:  emit_op(c, OP_EXP); break;
+      default: break;
+    }
+    emit_private_token(c, target->right);
+    emit_op(c, OP_PUT_PRIVATE);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
     int atom = add_atom(c, target->right->str, target->right->len);
 
@@ -1980,6 +2181,12 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
   if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);
+  } else if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
+    (void)keep;
+    compile_expr(c, target->left);
+    emit_op(c, OP_SWAP);
+    emit_private_token(c, target->right);
+    emit_op(c, OP_PUT_PRIVATE);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
     if (keep) emit_op(c, OP_DUP);
     compile_expr(c, target->left);
@@ -2069,6 +2276,12 @@ static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
 
 void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
+  if ((arg->type == N_MEMBER || arg->type == N_OPTIONAL) &&
+      arg->right && is_private_name_node(arg->right)) {
+    js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot delete private fields");
+    emit_op(c, OP_TRUE);
+    return;
+  }
   if (arg->type == N_OPTIONAL) {
     compile_delete_optional(c, arg);
   } else if (arg->type == N_MEMBER && sv_node_has_optional_base(arg->left)) {
@@ -2168,6 +2381,9 @@ static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
+  } else if (is_private_name_node(node->right)) {
+    emit_private_token(c, node->right);
+    emit_op(c, OP_GET_PRIVATE);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
@@ -2202,6 +2418,11 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
   }
 
   if (callee->type == N_MEMBER && is_ident_name(callee->left, "super")) {
+    if (!(callee->flags & 1) && is_private_name_node(callee->right)) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
+      emit_op(c, OP_UNDEF);
+      return SV_CALL_DIRECT;
+    }
     emit_op(c, OP_THIS);
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
@@ -2439,6 +2660,11 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
 
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (is_ident_name(node->left, "super")) {
+    if (!(node->flags & 1) && is_private_name_node(node->right)) {
+      js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
+      emit_op(c, OP_UNDEF);
+      return;
+    }
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
     if (node->flags & 1)
@@ -2461,6 +2687,9 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM);
+  } else if (is_private_name_node(node->right)) {
+    emit_private_token(c, node->right);
+    emit_op(c, OP_GET_PRIVATE);
   } else {
     if (node->right->len == 6 && memcmp(node->right->str, "length", 6) == 0)
       emit_op(c, OP_GET_LENGTH);
@@ -2477,6 +2706,9 @@ void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM_OPT);
+  } else if (is_private_name_node(node->right)) {
+    emit_private_token(c, node->right);
+    emit_op(c, OP_GET_PRIVATE_OPT);
   } else {
     emit_srcpos(c, node->right);
     emit_atom_op(c, OP_GET_FIELD_OPT, node->right->str, node->right->len);
@@ -4203,11 +4435,26 @@ void compile_label(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-
+static inline bool is_class_method_def(const sv_ast_t *m);
 static void emit_field_inits(sv_compiler_t *c, sv_ast_t **fields, int count) {
   sv_compiler_t *enc = c->enclosing;
   for (int i = 0; i < count; i++) {
     sv_ast_t *m = fields[i];
+    bool is_fn = is_class_method_def(m);
+    if (is_private_name_node(m->left)) {
+      emit_op(c, OP_THIS);
+      emit_private_token(c, m->left);
+      if (is_fn) compile_func_expr(c, m->right);
+      else if (m->right) compile_expr(c, m->right);
+      else emit_op(c, OP_UNDEF);
+      emit_op(c, OP_DEF_PRIVATE);
+      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
+      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
+      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+      emit_op(c, OP_POP);
+      continue;
+    }
+
     emit_op(c, OP_THIS);
     if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);
@@ -4282,6 +4529,23 @@ static void compile_class_method(
   emit_op(c, OP_POP);
 }
 
+static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ctor_local) {
+  bool is_fn = is_class_method_def(m);
+  emit_get_local(c, ctor_local);
+  emit_private_token(c, m->left);
+  if (is_fn) {
+    if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
+    compile_func_expr(c, m->right);
+  } else if (m->right) compile_expr(c, m->right);
+  else emit_op(c, OP_UNDEF);
+
+  emit_op(c, OP_DEF_PRIVATE);
+  if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
+  else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
+  else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+  emit_op(c, OP_POP);
+}
+
 static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_expr) {
   compile_expr(c, key_expr);
   int loc = add_local(c, "", 0, false, c->scope_depth);
@@ -4303,9 +4567,27 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (node->left) compile_expr(c, node->left);
   else emit_op(c, OP_UNDEF);
 
+  sv_private_scope_t private_scope = { .parent = c->private_scope };
+  sv_private_scope_t *saved_private_scope = c->private_scope;
+  c->private_scope = &private_scope;
+
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
     if (m->type != N_METHOD) continue;
+    bool is_fn = is_class_method_def(m);
+    bool is_private = is_private_name_node(m->left);
+
+    if (is_private) {
+      uint8_t private_kind = (m->flags & FN_GETTER) ? SV_COMP_PRIVATE_GETTER :
+        (m->flags & FN_SETTER) ? SV_COMP_PRIVATE_SETTER :
+        is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD;
+      if (!private_scope_add(c, &private_scope, m->left, private_kind, !!(m->flags & FN_STATIC))) {
+        c->private_scope = saved_private_scope;
+        free(private_scope.names);
+        emit_op(c, OP_UNDEF);
+        return;
+      }
+    }
     
     if (
       !(m->flags & FN_STATIC) &&
@@ -4323,9 +4605,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       memcmp(m->left->str, "name", 4) == 0
     ) has_static_name = true;
     
-    bool is_fn = is_class_method_def(m);
-    if (!(m->flags & FN_STATIC) && !is_fn) field_count++;
-    if (node->str && (m->flags & FN_COMPUTED) && (is_fn || (m->flags & FN_STATIC))) computed_method_count++;
+    if (!(m->flags & FN_STATIC) && (is_private || !is_fn)) field_count++;
+    if (!is_private && node->str && (m->flags & FN_COMPUTED) && (is_fn || (m->flags & FN_STATIC))) computed_method_count++;
   }
 
   sv_ast_t **field_inits = NULL;
@@ -4347,24 +4628,34 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type != N_METHOD || m == ctor_method) continue;
     
     bool is_fn = is_class_method_def(m);
-    bool is_instance_field = !(m->flags & FN_STATIC) && !is_fn;
+    bool is_private = is_private_name_node(m->left);
+    bool needs_instance_init = !(m->flags & FN_STATIC) && (is_private || !is_fn);
     
-    if (is_instance_field) {
+    if (needs_instance_init) {
       if (field_inits) field_inits[fi] = m;
-      if (computed_key_locals) computed_key_locals[fi] = (m->flags & FN_COMPUTED)
+      if (computed_key_locals) computed_key_locals[fi] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
       fi++;
       continue;
     }
     
-    if (!method_comp_keys || !(m->flags & FN_COMPUTED)) continue;
+    if (is_private || !method_comp_keys || !(m->flags & FN_COMPUTED)) continue;
     method_comp_keys[i] = compile_class_precompute_key(c, m->left);
   }}
 
   int inner_name_local = -1;
-  if (node->str) {
+  bool has_class_scope = node->str || private_scope.count > 0;
+  if (has_class_scope) {
     begin_scope(c);
-    inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
+    if (node->str)
+      inner_name_local = add_local(c, node->str, node->len, true, c->scope_depth);
+    for (int i = 0; i < private_scope.count; i++) {
+      sv_private_name_t *p = &private_scope.names[i];
+      p->owner = c;
+      p->local = add_local(c, "", 0, true, c->scope_depth);
+      emit_op(c, OP_OBJECT);
+      emit_put_local(c, p->local);
+    }
   }
 
   if (ctor_method && ctor_method->right) {
@@ -4493,6 +4784,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     if (m->type != N_METHOD) continue;
     if (m == ctor_method) continue;
+    if (is_private_name_node(m->left)) {
+      if (m->flags & FN_STATIC) compile_private_static_element(c, m, ctor_local);
+      continue;
+    }
     
     bool is_fn = is_class_method_def(m);
     if (!is_fn && !(m->flags & FN_STATIC)) continue;
@@ -4515,7 +4810,9 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->locals[outer_name_local].is_tdz = false;
   }
 
-  if (node->str) end_scope(c);
+  if (has_class_scope) end_scope(c);
+  c->private_scope = saved_private_scope;
+  free(private_scope.names);
 }
 
 static bool ast_contains_await_expr(const sv_ast_t *node) {

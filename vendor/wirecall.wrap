@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/theMackabu/wirecall.git
+revision = head
+depth = 1
+
+[provide]
+wirecall = wirecall_dep
