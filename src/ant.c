@@ -10152,6 +10152,11 @@ static ant_value_t builtin_Array_isArray(ant_params_t) {
   return mkval(T_BOOL, vtype(args[0]) == T_ARR ? 1 : 0);
 }
 
+static ant_value_t builtin_Array_isTemplateObject(ant_params_t) {
+  if (nargs == 0) return js_false;
+  return js_bool(vtype(args[0]) == T_ARR && js_check_brand(args[0], BRAND_TEMPLATE_OBJECT));
+}
+
 typedef struct {
   ant_value_t write_target;
   ant_value_t result;
@@ -14817,6 +14822,7 @@ ant_t *js_create(void *buf, size_t len) {
   set_slot(arr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Array));
   js_setprop_readonly_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
   defmethod(js, arr_ctor_obj, "isArray", 7, js_mkfun(builtin_Array_isArray));
+  defmethod(js, arr_ctor_obj, "isTemplateObject", 16, js_mkfun(builtin_Array_isTemplateObject));
   defmethod(js, arr_ctor_obj, "from", 4, js_mkfun(builtin_Array_from));
   defmethod(js, arr_ctor_obj, "of", 2, js_mkfun(builtin_Array_of));
   js_setprop(js, arr_ctor_obj, js->length_str, tov(1.0));

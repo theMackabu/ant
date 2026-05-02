@@ -133,7 +133,8 @@ typedef enum {
   BRAND_EVENTEMITTER,
   BRAND_EVENTTARGET,
   BRAND_DISPOSABLE_STACK,
-  BRAND_ASYNC_DISPOSABLE_STACK
+  BRAND_ASYNC_DISPOSABLE_STACK,
+  BRAND_TEMPLATE_OBJECT
 } object_brand_id_t;
 
 static inline void *mantissa_chk(void *p, const char *func) {

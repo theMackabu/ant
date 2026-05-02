@@ -86,6 +86,14 @@ static inline void sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->stack[vm->sp++] = arr;
 }
 
+static inline void sv_op_set_brand(sv_vm_t *vm, uint8_t *ip) {
+  if (vm->sp <= 0) return;
+  uint8_t brand = sv_get_u8(ip + 1);
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  if (is_object_type(obj))
+    js_set_slot(obj, SLOT_BRAND, js_mknum((double)brand));
+}
+
 // TODO: reduce duplication with regex.c
 static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   ant_value_t pattern = vm->stack[vm->sp - 2];

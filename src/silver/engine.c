@@ -952,19 +952,20 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
   DISPATCH();
 
-  L_CONST:     { sv_op_const(vm, func, ip);   NEXT(5); }
-  L_CONST_I8:  { sv_op_const_i8(vm, ip);      NEXT(2); }
-  L_CONST8:    { sv_op_const8(vm, func, ip);  NEXT(2); }
-  L_UNDEF:     { sv_op_undef(vm);             NEXT(1); }
-  L_NULL:      { sv_op_null(vm);              NEXT(1); }
-  L_TRUE:      { sv_op_true(vm);              NEXT(1); }
-  L_FALSE:     { sv_op_false(vm);             NEXT(1); }
-  L_THIS:      { sv_op_this(vm, frame);       NEXT(1); }
-  L_GLOBAL:    { sv_op_global(vm, js);        NEXT(1); }
-  L_OBJECT:    { sv_op_object(vm, js, func, ip);        NEXT(1); }
-  L_ARRAY:     { sv_op_array(vm, js, ip);     NEXT(3); }
+  L_CONST:     { sv_op_const(vm, func, ip);       NEXT(5); }
+  L_CONST_I8:  { sv_op_const_i8(vm, ip);          NEXT(2); }
+  L_CONST8:    { sv_op_const8(vm, func, ip);      NEXT(2); }
+  L_UNDEF:     { sv_op_undef(vm);                 NEXT(1); }
+  L_NULL:      { sv_op_null(vm);                  NEXT(1); }
+  L_TRUE:      { sv_op_true(vm);                  NEXT(1); }
+  L_FALSE:     { sv_op_false(vm);                 NEXT(1); }
+  L_THIS:      { sv_op_this(vm, frame);           NEXT(1); }
+  L_GLOBAL:    { sv_op_global(vm, js);            NEXT(1); }
+  L_OBJECT:    { sv_op_object(vm, js, func, ip);  NEXT(1); }
+  L_ARRAY:     { sv_op_array(vm, js, ip);         NEXT(3); }
+  L_SET_BRAND: { sv_op_set_brand(vm, ip);         NEXT(2); }
   
-  L_REGEXP:   { sv_op_regexp(vm, js);                    NEXT(1); }
+  L_REGEXP:   { sv_op_regexp(vm, js);                              NEXT(1); }
   L_CLOSURE:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));  NEXT(5); }
 
   L_POP:      { sv_op_pop(vm);      NEXT(1); }

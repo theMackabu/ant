@@ -1709,6 +1709,8 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(c, OP_ROT3L);
       emit_op(c, OP_CALL_METHOD);
       emit_u16(c, 1);
+      emit_op(c, OP_SET_BRAND);
+      emit(c, BRAND_TEMPLATE_OBJECT);
       emit_op(c, OP_DUP);
       emit_op(c, OP_PUT_CONST);
       emit_u32(c, (uint32_t)cache_idx);

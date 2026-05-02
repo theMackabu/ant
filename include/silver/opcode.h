@@ -38,6 +38,7 @@ OP_DEF(  THIS,              1,   0,   1, none)      /* push current 'this' */
 OP_DEF(  GLOBAL,            1,   0,   1, none)      /* push 'globalThis' (js->global) */
 OP_DEF(  OBJECT,            1,   0,   1, none)      /* push empty object {} */
 OP_DEF(  ARRAY,             3,   0,   1, npop)      /* push array from stack items */
+OP_DEF(  SET_BRAND,         2,   1,   1, u8)        /* obj -> obj (brand id) */
 OP_DEF(  REGEXP,            1,   2,   1, none)      /* pattern flags -> regexp */
 OP_DEF(  CLOSURE,           5,   0,   1, const)     /* push closure from func pool */
 

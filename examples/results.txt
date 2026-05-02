@@ -1469,7 +1469,7 @@ compat-table/intl/Intl.prototype.js: OK
 compat-table/intl/Number.prototype.toLocaleString.js: OK
 compat-table/intl/Object.prototype.toLocaleString.js: OK
 compat-table/intl/String.prototype.localeCompare.js: OK
-compat-table/next/Array.isTemplateObject.js: TypeError: undefined is not a function
+compat-table/next/Array.isTemplateObject.js: OK
 compat-table/next/AsyncDisposableStack.js: OK
 compat-table/next/AsyncIterator.extends.js: OK
 compat-table/next/AsyncIterator.from.async-iterable.js: OK
