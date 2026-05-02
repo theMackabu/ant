@@ -37,6 +37,21 @@ typedef struct {
 
 enum { CRYPTO_HASH_NATIVE_TAG = 0x48415348u }; // HASH
 
+static void crypto_hash_state_free(ant_hash_state_t *state) {
+  if (!state) return;
+  if (state->ctx) EVP_MD_CTX_free(state->ctx);
+  free(state);
+}
+
+static void crypto_hash_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  ant_hash_state_t *state = (ant_hash_state_t *)js_get_native(value, CRYPTO_HASH_NATIVE_TAG);
+
+  if (!state) return;
+  js_clear_native(value, CRYPTO_HASH_NATIVE_TAG);
+  crypto_hash_state_free(state);
+}
+
 int crypto_fill_random(void *buf, size_t len) {
   if (len == 0) return 0;
   if (len > (size_t)INT_MAX) return -1;
@@ -558,9 +573,9 @@ static ant_value_t js_crypto_create_hash(ant_t *js, ant_value_t *args, int nargs
 
   state->ctx = EVP_MD_CTX_new();
   state->md = md;
+  
   if (!state->ctx || EVP_DigestInit_ex(state->ctx, md, NULL) != 1) {
-    if (state->ctx) EVP_MD_CTX_free(state->ctx);
-    free(state);
+    crypto_hash_state_free(state);
     return js_mkerr(js, "Failed to initialize hash");
   }
 
@@ -569,6 +584,7 @@ static ant_value_t js_crypto_create_hash(ant_t *js, ant_value_t *args, int nargs
   js_set(js, obj, "digest", js_mkfun(js_hash_digest));
   
   js_set_native(obj, state, CRYPTO_HASH_NATIVE_TAG);
+  js_set_finalizer(obj, crypto_hash_finalize);
   js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Hash", 4));
   
   return obj;

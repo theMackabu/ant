@@ -78,13 +78,21 @@ typedef struct {
   UT_hash_handle  hh;
 } EventType;
 
-typedef struct emitter_reg {
-  EventType **events;
-  struct emitter_reg *next;
-} emitter_reg_t;
+static EventType *global_events = NULL;
 
-static EventType *global_events     = NULL;
-static emitter_reg_t *emitter_registry = NULL;
+static void free_event_type_table(EventType **events) {
+  if (!events) return;
+  
+  if (*events) {
+  EventType *evt, *tmp;
+  HASH_ITER(hh, *events, evt, tmp) {
+    HASH_DEL(*events, evt);
+    if (evt->listeners) utarray_free(evt->listeners);
+    free(evt);
+  }}
+  
+  free(events);
+}
 
 static EventType *make_event_type(ant_value_t js_key, const evt_key_t *ek) {
   EventType *evt = ant_calloc(sizeof(EventType) + ek->len);
@@ -159,13 +167,6 @@ static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj)
     events = ant_calloc(sizeof(EventType *));
     if (!events) return NULL;
     *events = NULL;
-
-    emitter_reg_t *reg = ant_calloc(sizeof(emitter_reg_t));
-    if (!reg) { free(events); return NULL; }
-    reg->events = events;
-    reg->next = emitter_registry;
-    emitter_registry = reg;
-
     js_set_native(this_obj, events, EVENT_EMITTER_NATIVE_TAG);
   }
   return events;
@@ -1372,9 +1373,7 @@ static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventType *eve
 
 void gc_mark_events(ant_t *js, gc_mark_fn mark) {
   mark_event_type_listeners(js, mark, global_events);
-  for (emitter_reg_t *reg = emitter_registry; reg; reg = reg->next) {
-    if (*reg->events) mark_event_type_listeners(js, mark, *reg->events);
-  }
+  
   if (g_isTrusted_getter)            mark(js, g_isTrusted_getter);
   if (g_eventemitter_ctor)           mark(js, g_eventemitter_ctor);
   if (g_eventemitter_proto)          mark(js, g_eventemitter_proto);
@@ -1383,4 +1382,24 @@ void gc_mark_events(ant_t *js, gc_mark_fn mark) {
   if (g_customevent_proto)           mark(js, g_customevent_proto);
   if (g_errorevent_proto)            mark(js, g_errorevent_proto);
   if (g_promiserejectionevent_proto) mark(js, g_promiserejectionevent_proto);
+}
+
+void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark) {
+  EventType **events = (EventType **)js_get_native(obj, EVENT_EMITTER_NATIVE_TAG);
+  if (events && *events) mark_event_type_listeners(js, mark, *events);
+}
+
+void gc_finalize_events_object(ant_t *js, ant_value_t obj) {
+  event_data_t *data = (event_data_t *)js_get_native(obj, EVENT_NATIVE_TAG);
+  EventType **events = (EventType **)js_get_native(obj, EVENT_EMITTER_NATIVE_TAG);
+
+  if (data) {
+    js_clear_native(obj, EVENT_NATIVE_TAG);
+    free(data);
+  }
+  
+  if (events) {
+    js_clear_native(obj, EVENT_EMITTER_NATIVE_TAG);
+    free_event_type_table(events);
+  }
 }
