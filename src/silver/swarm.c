@@ -20,11 +20,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static const char *sv_op_name[] = {
-#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = #name,
-#include "silver/opcode.h"
-};
-
 typedef struct {
   MIR_context_t ctx;
   bool externals_loaded;
@@ -2039,7 +2034,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       default:
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op %s in %s\n",
-                  (op < OP__COUNT && sv_op_name[op]) ? sv_op_name[op] : "???",
+                  (op < OP__COUNT && sv_op_names[op]) ? sv_op_names[op] : "???",
                   func->name ? func->name : "<anonymous>");
         eligible = false;
         break;
@@ -2518,10 +2513,21 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   vs.slot_type = calloc((size_t)vs.max, sizeof(uint8_t));
   vs.known_const = calloc((size_t)vs.max, sizeof(uint64_t));
   vs.has_const = calloc((size_t)vs.max, sizeof(bool));
+  
   if (!vs.regs || !vs.known_func || !vs.d_regs || !vs.slot_type || !vs.known_const || !vs.has_const) {
-    free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
-    free(vs.known_const); free(vs.has_const);
-    MIR_finish_func(ctx); MIR_finish_module(ctx); func->jit_compiling = false; return NULL;
+    free(vs.regs); 
+    free(vs.known_func);
+    free(vs.d_regs);
+    free(vs.slot_type);
+    free(vs.known_const);
+    free(vs.has_const);
+    
+    MIR_finish_func(ctx);
+    MIR_finish_module(ctx);
+    MIR_remove_module(ctx, mod);
+    
+    func->jit_compiling = false;
+    return NULL;
   }
 
   for (int i = 0; i < vs.max; i++) {
@@ -2545,12 +2551,27 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     local_d_regs = calloc((size_t)n_locals, sizeof(MIR_reg_t));
     known_func_locals = calloc((size_t)n_locals, sizeof(sv_func_t *));
     known_type_locals = calloc((size_t)n_locals, sizeof(uint8_t));
+    
     if (!local_regs || !local_d_regs || !known_func_locals || !known_type_locals) {
-      free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
-      free(vs.known_const); free(vs.has_const);
-      free(local_regs); free(local_d_regs); free(known_func_locals); free(known_type_locals);
-      MIR_finish_func(ctx); MIR_finish_module(ctx); return NULL;
+      free(vs.regs);
+      free(vs.known_func);
+      free(vs.d_regs);
+      free(vs.slot_type);
+      free(vs.known_const);
+      free(vs.has_const);
+      free(local_regs);
+      free(local_d_regs);
+      free(known_func_locals);
+      free(known_type_locals);
+      
+      MIR_finish_func(ctx);
+      MIR_finish_module(ctx);
+      MIR_remove_module(ctx, mod);
+      
+      func->jit_compiling = false;
+      return NULL;
     }
+    
     if (func->local_types && func->local_type_count > 0) {
       int ncopy = func->local_type_count < n_locals ? func->local_type_count : n_locals;
       for (int i = 0; i < ncopy; i++)
@@ -2668,11 +2689,27 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   int slotbuf_count = use_unified_slotbuf ? (param_count + n_locals) : param_count;
 
   if (has_captured_params && needs_bailout) {
-    free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
-    free(vs.known_const); free(vs.has_const);
-    free(local_regs); free(local_d_regs); free(known_func_locals); free(known_type_locals);
-    free(captured_params); free(captured_locals);
-    MIR_finish_func(ctx); MIR_finish_module(ctx); func->jit_compiling = false; return NULL;
+    free(vs.regs);
+    free(vs.known_func);
+    free(vs.d_regs);
+    free(vs.slot_type);
+    free(vs.known_const);
+    free(vs.has_const);
+    free(local_regs);
+    free(local_d_regs);
+    free(known_func_locals);
+    free(known_type_locals);
+    free(captured_params);
+    free(captured_locals);
+    
+    MIR_finish_func(ctx);
+    MIR_finish_module(ctx);
+    MIR_remove_module(ctx, mod);
+    
+    func->jit_compile_failed = true;
+    func->jit_compiling = false;
+    
+    return NULL;
   }
 
   MIR_reg_t r_slotbuf = r_tmp2;
@@ -7383,31 +7420,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_TYPEOF: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t rs = vstack_top(&vs);
-        for (int i = 0; i < vs.sp; i++)
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_MOV,
-              MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
-              MIR_new_reg_op(ctx, vs.regs[i])));
-        for (int i = 0; i < n_locals; i++)
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_MOV,
-              MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
-              MIR_new_reg_op(ctx, local_regs[i])));
         MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, r_bailout_off),
-            MIR_new_int_op(ctx, bc_off)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, r_bailout_sp),
-            MIR_new_int_op(ctx, vs.sp)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_JMP,
-            MIR_new_label_op(ctx, bailout_tramp)));
-        (void)rs; (void)imp_typeof;
+          MIR_new_call_insn(ctx, 6,
+            MIR_new_ref_op(ctx, helper1_proto),
+            MIR_new_ref_op(ctx, imp_typeof),
+            MIR_new_reg_op(ctx, rs),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, rs)));
         break;
       }
 
@@ -8214,7 +8236,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(captured_params);
   free(captured_locals);
 
-  if (!ok) return NULL;
+  if (!ok) {
+    MIR_remove_module(ctx, mod);
+    func->jit_compile_failed = true;
+    func->jit_compiling = false;
+    return NULL;
+  }
 
   MIR_load_module(ctx, mod);
   MIR_link(ctx, MIR_set_gen_interface, NULL);

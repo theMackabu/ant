@@ -5326,7 +5326,7 @@ sv_func_t *compile_function_body(
   return func;
 }
 
-static const char *sv_op_names[OP__COUNT] = {
+const char *const sv_op_names[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = #name,
 #include "silver/opcode.h"
 };

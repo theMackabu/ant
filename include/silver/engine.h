@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "runtime.h"
 #include "errors.h"
+#include "debug.h"
 #include "gc/objects.h"
 #include "modules/timer.h"
 
@@ -178,6 +179,9 @@ struct sv_func {
   
   bool jit_compile_failed;
   bool jit_compiling;
+  
+  uint8_t jit_bailout_count;
+  uint32_t jit_bailout_tfb_ver;
   uint32_t tfb_version;
   uint32_t jit_compiled_tfb_ver;
   uint8_t *type_feedback;
@@ -842,6 +846,7 @@ static inline ant_value_t sv_call_closure(
 #define SV_TFB_STR   (1 << 1)
 #define SV_TFB_BOOL  (1 << 2)
 #define SV_TFB_OTHER (1 << 3)
+
 #define SV_TFB_CTOR_PROP_BINS 17
 #define SV_TFB_CTOR_PROP_OVERFLOW_FROM (SV_TFB_CTOR_PROP_BINS - 1)
 #define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
@@ -852,7 +857,8 @@ static inline ant_value_t sv_call_closure(
 #define SV_JIT_RECOMPILE_DELAY 50
 #define SV_TFB_ALLOC_THRESHOLD 2
 
-#define SV_CALL_FB_MAX_SLOTS   32
+#define SV_CALL_FB_MAX_SLOTS    32
+#define SV_JIT_BAILOUT_LIMIT    5
 #define SV_CALL_FB_MISS_DISABLE 4
 
 #define SV_JIT_RETRY_INTERP    mkval(T_ERR, 1)
@@ -862,6 +868,8 @@ static inline ant_value_t sv_call_closure(
   (NANBOX_PREFIX \
     | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) \
     | SV_JIT_MAGIC)
+  
+extern const char *const sv_op_names[OP__COUNT];
   
 static inline bool sv_is_jit_bailout(ant_value_t v) { 
   return v == SV_JIT_BAILOUT;
@@ -875,10 +883,55 @@ static inline void sv_jit_leave(ant_t *js) {
   if (js && js->jit_active_depth > 0) js->jit_active_depth--;
 }
 
-static inline void sv_jit_on_bailout(sv_func_t *fn) {
+static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int bc_off) {
+  if (!fn) return;
+  
+  if (fn->jit_bailout_tfb_ver != fn->tfb_version) {
+    fn->jit_bailout_tfb_ver = fn->tfb_version;
+    fn->jit_bailout_count = 0;
+  }
+  
+  if (fn->jit_bailout_count < UINT8_MAX) 
+    fn->jit_bailout_count++;
+  
   fn->jit_code = NULL;
   fn->back_edge_count = 0;
+  
+  if (sv_jit_warn_unlikely) {
+    const char *op_name = "entry";
+    if (bc_off >= 0 && bc_off < fn->code_len) {
+      uint8_t op = fn->code[bc_off];
+      if (op < OP__COUNT && sv_op_names[op]) op_name = sv_op_names[op];
+    }
+    
+    uint32_t line = 0, col = 0;
+    (void)sv_lookup_srcpos(fn, bc_off, &line, &col);
+    
+    fprintf(stderr,
+      "jit: bailout %u/%u tfb=%u func=%s op=%s bc=%d at %s:%u:%u reason=%s\n",
+      (unsigned)fn->jit_bailout_count, (unsigned)SV_JIT_BAILOUT_LIMIT,
+      fn->tfb_version, fn->name ? fn->name : "<anonymous>",
+      op_name, bc_off, fn->filename ? fn->filename : "<unknown>",
+      line, col, reason ? reason : "unknown"
+    );
+  }
+  
+  if (fn->jit_bailout_count >= SV_JIT_BAILOUT_LIMIT) {
+    fn->jit_compile_failed = true;
+    fn->call_count = 0;
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: disabling %s after %u bailouts at tfb=%u\n",
+      fn->name ? fn->name : "<anonymous>",
+      (unsigned)fn->jit_bailout_count, fn->tfb_version
+    );
+    return;
+  }
+  
   fn->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
+}
+
+static inline void sv_jit_on_bailout(sv_func_t *fn) {
+  sv_jit_on_bailout_at(fn, "direct", -1);
 }
 
 typedef ant_value_t (*sv_jit_func_t)(

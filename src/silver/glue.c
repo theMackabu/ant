@@ -546,9 +546,9 @@ ant_value_t jit_helper_call_array_includes(
   return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
 }
 
-// TODO: dont bail out
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
-  return SV_JIT_BAILOUT;
+  const char *ts = typestr(vtype(v));
+  return js_mkstr(js, ts, strlen(ts));
 }
 
 int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
@@ -695,7 +695,7 @@ ant_value_t jit_helper_bailout_resume(
 ) {
   if (!closure || !closure->func) return mkval(T_ERR, 0);
   sv_func_t *fn = closure->func;
-  sv_jit_on_bailout(fn);
+  sv_jit_on_bailout_at(fn, "resume", (int)bc_offset);
 
   vm->jit_resume.active     = true;
   vm->jit_resume.ip_offset  = (int)bc_offset;
