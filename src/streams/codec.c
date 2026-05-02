@@ -86,9 +86,11 @@ static ant_value_t codec_flush_controller(ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
+  tes_state_t *st = js_check_native_tag(js->current_func, TES_NATIVE_TAG)
+    ? (tes_state_t *)js_get_native_ptr(js->current_func)
+    : NULL;
   
-  tes_state_t *st = (tes_state_t *)js_get_native_ptr(wrapper);
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -171,8 +173,11 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  tes_state_t *st = (tes_state_t *)js_get_native_ptr(wrapper);
+  tes_state_t *st = js_check_native_tag(js->current_func, TES_NATIVE_TAG)
+    ? (tes_state_t *)js_get_native_ptr(js->current_func)
+    : NULL;
+  
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   if (st->pending_len > 0) {
@@ -220,12 +225,9 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(obj, st, TES_NATIVE_TAG);
   js_set_finalizer(obj, tes_state_finalize);
 
-  ant_value_t wrapper = js_mkobj(js);
-  js_set_native(wrapper, st, TES_NATIVE_TAG);
-
   ant_value_t transformer = js_mkobj(js);
-  ant_value_t transform_fn = js_heavy_mkfun(js, tes_transform, wrapper);
-  ant_value_t flush_fn = js_heavy_mkfun(js, tes_flush, wrapper);
+  ant_value_t transform_fn = js_heavy_mkfun_native(js, tes_transform, st, TES_NATIVE_TAG);
+  ant_value_t flush_fn = js_heavy_mkfun_native(js, tes_flush, st, TES_NATIVE_TAG);
   js_set(js, transformer, "transform", transform_fn);
   js_set(js, transformer, "flush", flush_fn);
 
@@ -240,14 +242,16 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_err(ts_obj)) { free(st); return ts_obj; }
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
-  js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
 
   return obj;
 }
 
 static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  td_state_t *st = (td_state_t *)js_get_native_ptr(wrapper);
+  td_state_t *st = js_check_native_tag(js->current_func, TDS_NATIVE_TAG)
+    ? (td_state_t *)js_get_native_ptr(js->current_func)
+    : NULL;
+  
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -272,8 +276,11 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  td_state_t *st = (td_state_t *)js_get_native_ptr(wrapper);
+  td_state_t *st = js_check_native_tag(js->current_func, TDS_NATIVE_TAG)
+    ? (td_state_t *)js_get_native_ptr(js->current_func)
+    : NULL;
+  
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   ant_value_t result = td_decode(js, st, NULL, 0, false);
@@ -394,12 +401,10 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(obj, st, TDS_NATIVE_TAG);
   js_set_finalizer(obj, tds_state_finalize);
 
-  ant_value_t wrapper = js_mkobj(js);
-  js_set_native(wrapper, st, TDS_NATIVE_TAG);
-
   ant_value_t transformer = js_mkobj(js);
-  ant_value_t transform_fn = js_heavy_mkfun(js, tds_transform, wrapper);
-  ant_value_t flush_fn = js_heavy_mkfun(js, tds_flush, wrapper);
+  ant_value_t transform_fn = js_heavy_mkfun_native(js, tds_transform, st, TDS_NATIVE_TAG);
+  ant_value_t flush_fn = js_heavy_mkfun_native(js, tds_flush, st, TDS_NATIVE_TAG);
+  
   js_set(js, transformer, "transform", transform_fn);
   js_set(js, transformer, "flush", flush_fn);
 
@@ -415,9 +420,7 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js->this_val = saved_this;
 
   if (is_err(ts_obj)) { free(st); return ts_obj; }
-
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
-  js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
 
   return obj;
 }

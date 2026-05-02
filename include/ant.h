@@ -114,8 +114,8 @@ ant_value_t js_mksym_well_known(ant_t *, const char *desc);
 ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta);
 ant_value_t js_mkfun_dyn(ant_cfunc_t fn);
 
-ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
-ant_value_t js_heavy_mkfun_native(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), void *ptr, uint32_t tag);
+ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_params_t), ant_value_t data);
+ant_value_t js_heavy_mkfun_native(ant_t *js, ant_value_t (*fn)(ant_params_t), void *ptr, uint32_t tag);
 ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 // TODO: deprecate
