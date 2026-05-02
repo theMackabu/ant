@@ -70,7 +70,6 @@ static void fd_data_free(fd_data_t *d) {
 }
 
 static fd_data_t *get_fd_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, FORMDATA_NATIVE_TAG)) return NULL;
   return (fd_data_t *)js_get_native(obj, FORMDATA_NATIVE_TAG);
 }
 
@@ -379,10 +378,8 @@ static ant_value_t js_formdata_foreach(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  if (!js_check_native_tag(js->this_val, FORMDATA_ITER_NATIVE_TAG))
-    return js_iter_result(js, false, js_mkundef());
-
   fd_iter_t *st = (fd_iter_t *)js_get_native(js->this_val, FORMDATA_ITER_NATIVE_TAG);
+  if (!st) return js_iter_result(js, false, js_mkundef());
   ant_value_t fd_obj = js_get_slot(js->this_val, SLOT_DATA);
   fd_data_t *d = get_fd_data(fd_obj);
   if (!d) return js_iter_result(js, false, js_mkundef());

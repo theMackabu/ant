@@ -70,7 +70,6 @@ static void list_free(hdr_list_t *l) {
 }
 
 static hdr_list_t *get_list(ant_value_t obj) {
-  if (!js_check_native_tag(obj, HEADERS_NATIVE_TAG)) return NULL;
   return (hdr_list_t *)js_get_native(obj, HEADERS_NATIVE_TAG);
 }
 
@@ -479,8 +478,8 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
 }
 
 bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
-  if (!js_check_native_tag(it->iterator, HEADERS_ITER_NATIVE_TAG)) return false;
   hdr_iter_t *st = (hdr_iter_t *)js_get_native(it->iterator, HEADERS_ITER_NATIVE_TAG);
+  if (!st) return false;
 
   size_t count = 0;
   sorted_pair_t *view = build_sorted_view(st->list, &count);

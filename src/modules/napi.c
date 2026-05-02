@@ -481,8 +481,6 @@ static int napi_desc_flags(napi_property_attributes attributes) {
 
 static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current = js_getcurrentfunc(js);
-  if (!js_check_native_tag(current, NAPI_CALLBACK_NATIVE_TAG)) return js_mkundef();
-
   napi_callback_binding_t *binding = (napi_callback_binding_t *)js_get_native(current, NAPI_CALLBACK_NATIVE_TAG);
   if (!binding || !binding->cb) return js_mkundef();
 

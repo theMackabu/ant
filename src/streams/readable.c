@@ -50,12 +50,10 @@ bool rs_stream_unusable(ant_value_t stream_obj) {
 }
 
 rs_stream_t *rs_get_stream(ant_value_t obj) {
-  if (!js_check_native_tag(obj, RS_STREAM_NATIVE_TAG)) return NULL;
   return (rs_stream_t *)js_get_native(obj, RS_STREAM_NATIVE_TAG);
 }
 
 rs_controller_t *rs_get_controller(ant_value_t obj) {
-  if (!js_check_native_tag(obj, RS_CONTROLLER_NATIVE_TAG)) return NULL;
   return (rs_controller_t *)js_get_native(obj, RS_CONTROLLER_NATIVE_TAG);
 }
 

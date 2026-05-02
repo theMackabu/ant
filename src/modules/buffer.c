@@ -56,41 +56,34 @@ static void ta_meta_free(void *ptr, size_t size) {
 
 ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value) {
   if (!is_object_type(value) || buffer_is_dataview(value)) return NULL;
-  if (js_check_native_tag(value, BUFFER_ARRAYBUFFER_NATIVE_TAG))
-    return (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  return NULL;
+  return (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
 }
 
 TypedArrayData *buffer_get_typedarray_data(ant_value_t value) {
   if (vtype(value) == T_TYPEDARRAY)
     return (TypedArrayData *)js_gettypedarray(value);
   if (!is_object_type(value)) return NULL;
-  if (js_check_native_tag(value, BUFFER_TYPEDARRAY_NATIVE_TAG))
-    return (TypedArrayData *)js_get_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
-  return NULL;
+  return (TypedArrayData *)js_get_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
 }
 
 DataViewData *buffer_get_dataview_data(ant_value_t value) {
   if (!is_object_type(value)) return NULL;
-  if (js_check_native_tag(value, BUFFER_DATAVIEW_NATIVE_TAG))
-    return (DataViewData *)js_get_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
-  return NULL;
+  return (DataViewData *)js_get_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
 }
 
 static void arraybuffer_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  if (!js_check_native_tag(value, BUFFER_ARRAYBUFFER_NATIVE_TAG)) return;
   ArrayBufferData *data = (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  if (!data) return;
   js_clear_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
-  if (data) free_array_buffer_data(data);
+  free_array_buffer_data(data);
 }
 
 static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  if (!js_check_native_tag(value, BUFFER_TYPEDARRAY_NATIVE_TAG)) return;
   TypedArrayData *ta_data = (TypedArrayData *)js_get_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
-  js_clear_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
   if (!ta_data) return;
+  js_clear_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
 
   if (ta_data->buffer) free_array_buffer_data(ta_data->buffer);
   ta_meta_free(ta_data, sizeof(*ta_data));
@@ -98,10 +91,9 @@ static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
 
 static void dataview_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  if (!js_check_native_tag(value, BUFFER_DATAVIEW_NATIVE_TAG)) return;
   DataViewData *dv_data = (DataViewData *)js_get_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
-  js_clear_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
   if (!dv_data) return;
+  js_clear_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
 
   if (dv_data->buffer) free_array_buffer_data(dv_data->buffer);
   ta_meta_free(dv_data, sizeof(*dv_data));

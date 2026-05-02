@@ -309,38 +309,32 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, weakset_entry_t **ws_he
 map_entry_t **get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_MAP) return NULL;
-  if (!js_check_native_tag(obj, MAP_NATIVE_TAG)) return NULL;
   return (map_entry_t **)js_get_native(obj, MAP_NATIVE_TAG);
 }
 
 set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_SET) return NULL;
-  if (!js_check_native_tag(obj, SET_NATIVE_TAG)) return NULL;
   return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
 }
 
 static weakmap_entry_t **get_weakmap_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
-  if (!js_check_native_tag(obj, WEAKMAP_NATIVE_TAG)) return NULL;
   return (weakmap_entry_t **)js_get_native(obj, WEAKMAP_NATIVE_TAG);
 }
 
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;
-  if (!js_check_native_tag(obj, WEAKSET_NATIVE_TAG)) return NULL;
   return (weakset_entry_t **)js_get_native(obj, WEAKSET_NATIVE_TAG);
 }
 
 map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, MAP_ITER_NATIVE_TAG)) return NULL;
   return (map_iterator_state_t *)js_get_native(obj, MAP_ITER_NATIVE_TAG);
 }
 
 set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, SET_ITER_NATIVE_TAG)) return NULL;
   return (set_iterator_state_t *)js_get_native(obj, SET_ITER_NATIVE_TAG);
 }
 

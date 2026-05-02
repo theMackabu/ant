@@ -75,7 +75,6 @@ static ant_value_t pick_callback(ant_value_t *args, int nargs) {
 }
 
 static zlib_stream_t *zlib_stream_ptr(ant_value_t obj) {
-  if (!js_check_native_tag(obj, ZLIB_STREAM_TAG)) return NULL;
   return (zlib_stream_t *)js_get_native(obj, ZLIB_STREAM_TAG);
 }
 

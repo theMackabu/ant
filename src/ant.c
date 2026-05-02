@@ -2744,7 +2744,6 @@ typedef struct {
 } ant_arguments_state_t;
 
 static inline ant_arguments_state_t *js_arguments_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, ANT_ARGUMENTS_NATIVE_TAG)) return NULL;
   return (ant_arguments_state_t *)js_get_native(obj, ANT_ARGUMENTS_NATIVE_TAG);
 }
 

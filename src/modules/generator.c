@@ -51,7 +51,6 @@ static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
 }
 
 static generator_data_t *generator_data(ant_value_t gen) {
-  if (!js_check_native_tag(gen, GENERATOR_NATIVE_TAG)) return NULL;
   return (generator_data_t *)js_get_native(gen, GENERATOR_NATIVE_TAG);
 }
 

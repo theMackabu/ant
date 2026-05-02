@@ -34,7 +34,6 @@ static ant_value_t g_string_decoder_proto = 0;
 enum { STRING_DECODER_NATIVE_TAG = 0x53444543u }; // SDEC
 
 static sd_state_t *sd_get_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, STRING_DECODER_NATIVE_TAG)) return NULL;
   return (sd_state_t *)js_get_native(obj, STRING_DECODER_NATIVE_TAG);
 }
 

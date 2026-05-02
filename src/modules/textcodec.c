@@ -29,7 +29,6 @@ td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom) {
 }
 
 static td_state_t *td_get_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, TEXT_DECODER_NATIVE_TAG)) return NULL;
   return (td_state_t *)js_get_native(obj, TEXT_DECODER_NATIVE_TAG);
 }
 

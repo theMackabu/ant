@@ -101,12 +101,10 @@ enum {
 static ant_value_t net_not_implemented(ant_t *js, const char *what);
 
 static net_server_t *net_server_data(ant_value_t value) {
-  if (!js_check_native_tag(value, NET_SERVER_NATIVE_TAG)) return NULL;
   return (net_server_t *)js_get_native(value, NET_SERVER_NATIVE_TAG);
 }
 
 static net_socket_t *net_socket_data(ant_value_t value) {
-  if (!js_check_native_tag(value, NET_SOCKET_NATIVE_TAG)) return NULL;
   return (net_socket_t *)js_get_native(value, NET_SOCKET_NATIVE_TAG);
 }
 

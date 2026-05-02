@@ -222,7 +222,6 @@ static ant_value_t crypto_get_input_bytes(
 }
 
 static ant_hash_state_t *crypto_get_hash_state(ant_value_t value) {
-  if (!js_check_native_tag(value, CRYPTO_HASH_NATIVE_TAG)) return NULL;
   ant_hash_state_t *state = (ant_hash_state_t *)js_get_native(value, CRYPTO_HASH_NATIVE_TAG);
   return (state && state->ctx) ? state : NULL;
 }

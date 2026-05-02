@@ -890,7 +890,6 @@ static void async_terminal_state_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static inline async_terminal_state_t *async_terminal_state(ant_value_t state) {
-  if (!js_check_native_tag(state, ASYNC_TERMINAL_STATE_TAG)) return NULL;
   return (async_terminal_state_t *)js_get_native(state, ASYNC_TERMINAL_STATE_TAG);
 }
 

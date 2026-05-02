@@ -31,7 +31,6 @@ ant_value_t g_response_proto = 0;
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
 
 static response_data_t *get_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, RESPONSE_NATIVE_TAG)) return NULL;
   return (response_data_t *)js_get_native(obj, RESPONSE_NATIVE_TAG);
 }
 

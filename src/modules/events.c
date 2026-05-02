@@ -41,7 +41,6 @@ enum {
 };
 
 static event_data_t *get_event_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, EVENT_NATIVE_TAG)) return NULL;
   return (event_data_t *)js_get_native(obj, EVENT_NATIVE_TAG);
 }
 
@@ -155,8 +154,9 @@ static bool evt_key_init(ant_t *js, ant_value_t arg, evt_key_t *out) {
 }
 
 static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
-  if (!js_check_native_tag(this_obj, EVENT_EMITTER_NATIVE_TAG)) {
-    EventType **events = ant_calloc(sizeof(EventType *));
+  EventType **events = (EventType **)js_get_native(this_obj, EVENT_EMITTER_NATIVE_TAG);
+  if (!events) {
+    events = ant_calloc(sizeof(EventType *));
     if (!events) return NULL;
     *events = NULL;
 
@@ -167,9 +167,8 @@ static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj)
     emitter_registry = reg;
 
     js_set_native(this_obj, events, EVENT_EMITTER_NATIVE_TAG);
-    return events;
   }
-  return (EventType **)js_get_native(this_obj, EVENT_EMITTER_NATIVE_TAG);
+  return events;
 }
 
 static EventType *find_or_create_global_event_type(ant_t *js, ant_value_t js_key) {

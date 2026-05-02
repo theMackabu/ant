@@ -157,7 +157,6 @@ enum {
 };
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
-  if (!js_check_native_tag(value, FS_WATCHER_NATIVE_TAG)) return NULL;
   return (fs_watcher_t *)js_get_native(value, FS_WATCHER_NATIVE_TAG);
 }
 

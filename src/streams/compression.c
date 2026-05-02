@@ -106,10 +106,13 @@ static void zstate_inflate_finalize(ant_t *js, ant_object_t *obj) {
 
 static void brotli_state_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  uint32_t tag = js_check_native_tag(value, CS_BROTLI_NATIVE_TAG) 
-    ? CS_BROTLI_NATIVE_TAG 
-    : DS_BROTLI_NATIVE_TAG;
+  uint32_t tag = CS_BROTLI_NATIVE_TAG;
   brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native(value, tag);
+  if (!st) {
+    tag = DS_BROTLI_NATIVE_TAG;
+    st = (brotli_stream_state_t *)js_get_native(value, tag);
+  }
+  if (!st) return;
   brotli_stream_state_destroy(st);
   js_clear_native(value, tag);
 }

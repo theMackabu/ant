@@ -222,9 +222,8 @@ static ant_value_t wasi_handle_proc_exit(wasm_module_inst_t inst) {
 }
 
 static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
-  if (!js_check_native_tag(js->current_func, WASI_FUNC_TAG))
-    return js_mkerr(js, "Invalid WASI function");
   wasi_func_env_t *env = (wasi_func_env_t *)js_get_native(js->current_func, WASI_FUNC_TAG);
+  if (!env) return js_mkerr(js, "Invalid WASI function");
 
   uint32_t param_count = wasm_func_get_param_count(env->func, env->inst);
   uint32_t result_count = wasm_func_get_result_count(env->func, env->inst);

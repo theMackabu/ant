@@ -38,12 +38,10 @@ bool ws_is_controller(ant_value_t obj) {
 }
 
 ws_stream_t *ws_get_stream(ant_value_t obj) {
-  if (!js_check_native_tag(obj, WS_STREAM_NATIVE_TAG)) return NULL;
   return (ws_stream_t *)js_get_native(obj, WS_STREAM_NATIVE_TAG);
 }
 
 ws_controller_t *ws_get_controller(ant_value_t obj) {
-  if (!js_check_native_tag(obj, WS_CONTROLLER_NATIVE_TAG)) return NULL;
   return (ws_controller_t *)js_get_native(obj, WS_CONTROLLER_NATIVE_TAG);
 }
 

@@ -52,7 +52,6 @@ static inline unsigned int abort_array_len(UT_array *arr) {
 }
 
 static abort_signal_data_t *get_signal_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, ABORT_SIGNAL_NATIVE_TAG)) return NULL;
   return (abort_signal_data_t *)js_get_native(obj, ABORT_SIGNAL_NATIVE_TAG);
 }
 

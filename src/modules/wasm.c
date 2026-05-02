@@ -178,13 +178,11 @@ static wasm_valkind_t wasm_valkind_from_string(const char *name, size_t len, boo
 
 static wasm_module_handle_t *wasm_module_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_MODULE)) return NULL;
-  if (!js_check_native_tag(value, WASM_MODULE_NATIVE_TAG)) return NULL;
   return (wasm_module_handle_t *)js_get_native(value, WASM_MODULE_NATIVE_TAG);
 }
 
 static wasm_instance_handle_t *wasm_instance_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_INSTANCE)) return NULL;
-  if (!js_check_native_tag(value, WASM_INSTANCE_NATIVE_TAG)) return NULL;
   return (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
 }
 
@@ -195,7 +193,6 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
     return NULL;
   }
 
-  if (!js_check_native_tag(value, WASM_EXTERN_NATIVE_TAG)) return NULL;
   wasm_extern_handle_t *handle = (wasm_extern_handle_t *)js_get_native(value, WASM_EXTERN_NATIVE_TAG);
   return handle && handle->kind == kind ? handle : NULL;
 }
@@ -323,8 +320,7 @@ static bool js_value_to_wasm(ant_t *js, ant_value_t value, wasm_valkind_t kind, 
       }
       if (!is_callable(value)) return false;
       state = js_get_slot(value, SLOT_DATA);
-      if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
-        return false;
+      if (!is_object_type(state)) return false;
       handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
       if (!handle || !handle->func) return false;
       out->of.ref = wasm_func_as_ref(handle->func);
@@ -459,10 +455,9 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
   wasm_func_handle_t *handle;
   wasm_func_t *func;
 
-  if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
-    return js_mkerr(js, "Invalid WebAssembly function");
-
-  handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
+  handle = is_object_type(state) 
+    ? (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG)
+    : NULL;
   func = handle ? handle->func : NULL;
   if (!func) return js_mkerr(js, "Invalid WebAssembly function");
 
@@ -1212,10 +1207,9 @@ static ant_value_t js_wasm_table_set(ant_t *js, ant_value_t *args, int nargs) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
     
     state = js_get_slot(args[1], SLOT_DATA);
-    if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
-      return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
-    
-    func_handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
+    func_handle = is_object_type(state)
+      ? (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG)
+      : NULL;
     if (!func_handle || !func_handle->func)
       return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
     

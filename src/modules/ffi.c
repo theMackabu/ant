@@ -346,22 +346,18 @@ static ffi_marshaled_type_t ffi_infer_variadic_type(ant_value_t value) {
 }
 
 static ffi_library_handle_t *ffi_library_data(ant_value_t value) {
-  if (!js_check_native_tag(value, FFI_LIBRARY_NATIVE_TAG)) return NULL;
   return (ffi_library_handle_t *)js_get_native(value, FFI_LIBRARY_NATIVE_TAG);
 }
 
 static ffi_function_handle_t *ffi_function_data(ant_value_t value) {
-  if (!js_check_native_tag(value, FFI_FUNCTION_NATIVE_TAG)) return NULL;
   return (ffi_function_handle_t *)js_get_native(value, FFI_FUNCTION_NATIVE_TAG);
 }
 
 static ffi_pointer_handle_t *ffi_pointer_data(ant_value_t value) {
-  if (!js_check_native_tag(value, FFI_POINTER_NATIVE_TAG)) return NULL;
   return (ffi_pointer_handle_t *)js_get_native(value, FFI_POINTER_NATIVE_TAG);
 }
 
 static ffi_callback_handle_t *ffi_callback_data(ant_value_t value) {
-  if (!js_check_native_tag(value, FFI_CALLBACK_NATIVE_TAG)) return NULL;
   return (ffi_callback_handle_t *)js_get_native(value, FFI_CALLBACK_NATIVE_TAG);
 }
 

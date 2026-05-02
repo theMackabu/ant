@@ -40,7 +40,6 @@ static void tls_context_free(ant_tls_context_wrap_t *wrap) {
 }
 
 static ant_tls_context_wrap_t *tls_context_data(ant_value_t value) {
-  if (!js_check_native_tag(value, TLS_CONTEXT_NATIVE_TAG)) return NULL;
   return (ant_tls_context_wrap_t *)js_get_native(value, TLS_CONTEXT_NATIVE_TAG);
 }
 

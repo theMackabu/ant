@@ -31,7 +31,6 @@ ant_value_t g_request_proto = 0;
 enum { REQUEST_NATIVE_TAG = 0x52455153u }; // REQS
 
 static request_data_t *get_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, REQUEST_NATIVE_TAG)) return NULL;
   return (request_data_t *)js_get_native(obj, REQUEST_NATIVE_TAG);
 }
 

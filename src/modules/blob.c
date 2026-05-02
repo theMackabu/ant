@@ -29,7 +29,6 @@ bool blob_is_blob(ant_t *js, ant_value_t obj) {
 }
 
 blob_data_t *blob_get_data(ant_value_t obj) {
-  if (!js_check_native_tag(obj, BLOB_NATIVE_TAG)) return NULL;
   return (blob_data_t *)js_get_native(obj, BLOB_NATIVE_TAG);
 }
 

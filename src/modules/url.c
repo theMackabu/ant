@@ -30,7 +30,6 @@ enum {
 };
 
 url_state_t *url_get_state(ant_value_t obj) {
-  if (!js_check_native_tag(obj, URL_NATIVE_TAG)) return NULL;
   return (url_state_t *)js_get_native(obj, URL_NATIVE_TAG);
 }
 

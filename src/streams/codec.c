@@ -84,9 +84,7 @@ static ant_value_t codec_flush_controller(ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
-  tes_state_t *st = js_check_native_tag(js->current_func, TES_NATIVE_TAG)
-    ? (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG)
-    : NULL;
+  tes_state_t *st = (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
@@ -171,9 +169,7 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
-  tes_state_t *st = js_check_native_tag(js->current_func, TES_NATIVE_TAG)
-    ? (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG)
-    : NULL;
+  tes_state_t *st = (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
@@ -247,9 +243,7 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
-  td_state_t *st = js_check_native_tag(js->current_func, TDS_NATIVE_TAG)
-    ? (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG)
-    : NULL;
+  td_state_t *st = (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
@@ -276,9 +270,7 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
-  td_state_t *st = js_check_native_tag(js->current_func, TDS_NATIVE_TAG)
-    ? (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG)
-    : NULL;
+  td_state_t *st = (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
