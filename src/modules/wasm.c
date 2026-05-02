@@ -373,18 +373,17 @@ static ant_value_t wasm_wrap_module(ant_t *js, wasm_store_t *store, wasm_module_
 }
 
 static void wasm_module_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if (entries[i].slot != SLOT_DATA || vtype(entries[i].value) != T_NUM) continue;
-    wasm_module_handle_t *handle = (wasm_module_handle_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (!handle) return;
-    if (handle->module) wasm_module_delete(handle->module);
-    if (handle->store) wasm_store_delete(handle->store);
-    free(handle);
-    return;
-  }
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  
+  wasm_module_handle_t *handle = 
+    (wasm_module_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  
+  if (!handle) return;
+  if (handle->module) wasm_module_delete(handle->module);
+  if (handle->store) wasm_store_delete(handle->store);
+  
+  free(handle);
 }
 
 static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle, ant_value_t module_ref) {
@@ -397,21 +396,19 @@ static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle,
 }
 
 static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if (entries[i].slot != SLOT_DATA || vtype(entries[i].value) != T_NUM) continue;
-    wasm_instance_handle_t *handle = (wasm_instance_handle_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (!handle) return;
-    for (size_t j = 0; j < handle->host_func_count; j++) {
-      if (handle->host_funcs[j]) wasm_func_delete(handle->host_funcs[j]);
-    }
-    free(handle->host_funcs);
-    wasm_extern_vec_delete(&handle->exports);
-    free(handle);
-    return;
-  }
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  
+  wasm_instance_handle_t *handle = 
+    (wasm_instance_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+    
+  if (!handle) return;
+  for (size_t j = 0; j < handle->host_func_count; j++) 
+    if (handle->host_funcs[j]) wasm_func_delete(handle->host_funcs[j]);
+  
+  free(handle->host_funcs);
+  wasm_extern_vec_delete(&handle->exports);
+  free(handle);
 }
 
 static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t kind, ant_value_t proto, int brand, wasm_store_t *store, bool own_handle, void *ptr, ant_value_t owner) {
@@ -438,32 +435,29 @@ static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t ki
 }
 
 static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  
+  wasm_extern_handle_t *handle = 
+    (wasm_extern_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!handle) return;
 
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if (entries[i].slot != SLOT_DATA || vtype(entries[i].value) != T_NUM) continue;
-    wasm_extern_handle_t *handle = (wasm_extern_handle_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (!handle) return;
-
-    if (handle->own_handle) {
-      switch (handle->kind) {
-        case WASM_EXTERN_WRAP_GLOBAL:
-          if (handle->as.global) wasm_global_delete(handle->as.global);
-          break;
-        case WASM_EXTERN_WRAP_MEMORY:
-          if (handle->as.memory) wasm_memory_delete(handle->as.memory);
-          break;
-        case WASM_EXTERN_WRAP_TABLE:
-          if (handle->as.table) wasm_table_delete(handle->as.table);
-          break;
-      }
-      if (handle->store) wasm_store_delete(handle->store);
+  if (handle->own_handle) {
+  switch (handle->kind) {
+    case WASM_EXTERN_WRAP_GLOBAL:
+      if (handle->as.global) wasm_global_delete(handle->as.global);
+      break;
+    case WASM_EXTERN_WRAP_MEMORY:
+      if (handle->as.memory) wasm_memory_delete(handle->as.memory);
+      break;
+    case WASM_EXTERN_WRAP_TABLE:
+      if (handle->as.table) wasm_table_delete(handle->as.table);
+      break;
     }
-
-    free(handle);
-    return;
+    if (handle->store) wasm_store_delete(handle->store);
   }
+
+  free(handle);
 }
 
 static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {

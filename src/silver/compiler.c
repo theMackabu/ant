@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "tokens.h"
 #include "runtime.h"
+#include "utils.h"
 #include "ops/coercion.h"
 
 #include <stdlib.h>
@@ -345,16 +346,22 @@ static bool private_scope_add(
   }
 
   sv_private_name_t *p = &scope->names[scope->count++];
+  
+  uint64_t hash64 = hash_key(name->str, (size_t)name->len);
+  uint32_t hash = (uint32_t)(hash64 ^ (hash64 >> 32));
+  
   *p = (sv_private_name_t){
     .name = name->str,
     .len = name->len,
     .kind = kind,
+    .hash = hash,
     .is_static = is_static,
     .has_getter = kind == SV_COMP_PRIVATE_GETTER,
     .has_setter = kind == SV_COMP_PRIVATE_SETTER,
     .owner = NULL,
     .local = -1
   };
+  
   return true;
 }
 
@@ -4655,7 +4662,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       sv_private_name_t *p = &private_scope.names[i];
       p->owner = c;
       p->local = add_local(c, "", 0, true, c->scope_depth);
-      emit_op(c, OP_OBJECT);
+      emit_op(c, OP_PRIVATE_TOKEN);
+      emit_u32(c, p->hash);
       emit_put_local(c, p->local);
     }
   }

@@ -46,13 +46,9 @@ static void pipes_chain_promise(
 }
 
 static void pipe_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    free((pipe_state_t *)(uintptr_t)(size_t)js_getnum(entries[i].value));
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  free((pipe_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
 }
 
 static pipe_state_t *pipe_get_state(ant_value_t state) {
@@ -487,13 +483,9 @@ typedef struct {
 } tee_state_t;
 
 static void tee_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    free((tee_state_t *)(uintptr_t)(size_t)js_getnum(entries[i].value));
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  free((tee_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
 }
 
 static tee_state_t *tee_get_state(ant_value_t state) {

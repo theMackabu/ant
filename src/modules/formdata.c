@@ -74,15 +74,10 @@ static ant_value_t get_fd_values(ant_value_t obj) {
 }
 
 static void formdata_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    fd_data_t *d = (fd_data_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    fd_data_free(d);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  fd_data_t *d = (fd_data_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  fd_data_free(d);
 }
 
 static bool fd_append_str(fd_data_t *d, const char *name, const char *value) {
@@ -412,15 +407,10 @@ static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void formdata_iter_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_ITER_STATE && vtype(entries[i].value) == T_NUM) {
-    fd_iter_t *st = (fd_iter_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    free(st);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_ITER_STATE);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  fd_iter_t *st = (fd_iter_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  free(st);
 }
 
 static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {

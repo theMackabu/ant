@@ -240,38 +240,41 @@ void js_mark_constructor(ant_value_t value, bool is_constructor) {
   if (obj) obj->is_constructor = is_constructor ? 1u : 0u;
 }
 
-static inline ant_extra_slot_t *obj_extra_slots(ant_object_t *obj) {
-  return (ant_extra_slot_t *)obj->extra_slots;
-}
-
 static ant_value_t obj_extra_get(ant_object_t *obj, internal_slot_t slot) {
-  if (!obj || obj->extra_count == 0) return js_mkundef();
-  ant_extra_slot_t *entries = obj_extra_slots(obj);
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if ((internal_slot_t)entries[i].slot == slot) return entries[i].value;
-  }
-  return js_mkundef();
+  ant_extra_slot_t *entry = ant_object_extra_slot(obj, (uint8_t)slot);
+  return entry ? entry->value : js_mkundef();
 }
 
 static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t value) {
   if (!obj) return false;
-  ant_extra_slot_t *entries = obj_extra_slots(obj);
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if ((internal_slot_t)entries[i].slot == slot) {
-      entries[i].value = value;
-      return true;
-    }
+  
+  ant_extra_slot_t *entry = ant_object_extra_slot(obj, (uint8_t)slot);
+  if (entry) {
+    entry->value = value;
+    return true;
   }
-
-  if (obj->extra_count == UINT8_MAX) return false;
-  uint8_t next_count = (uint8_t)(obj->extra_count + 1);
+  
+  uint8_t count = 0;
+  ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
+  
+  if (count == UINT8_MAX) return false;
+  uint8_t next_count = (uint8_t)(count + 1);
+  
   ant_extra_slot_t *next = realloc(entries, sizeof(*next) * next_count);
   if (!next) return false;
 
-  next[obj->extra_count].slot = (uint8_t)slot;
-  next[obj->extra_count].value = value;
-  obj->extra_slots = (ant_value_t *)next;
-  obj->extra_count = next_count;
+  next[count].slot = (uint8_t)slot;
+  next[count].value = value;
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  
+  if (sidecar) {
+    sidecar->extra_slots = next;
+    sidecar->extra_count = next_count;
+  } else {
+    obj->extra_slots = next;
+    obj->extra_count = next_count;
+  }
+  
   return true;
 }
 
@@ -403,27 +406,47 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
 
   obj->type_tag = type_tag;
   obj->proto = js_mkundef();
+  obj->u.data.value = js_mkundef();
+  
   obj->shape = ant_shape_new_with_inobj_limit(inobj_limit);
+  if (!obj->shape) {
+    obj->mark_epoch = ANT_GC_DEAD;
+    fixed_arena_free_elem(&js->obj_arena, obj);
+    return NULL;
+  }
+  obj->inobj_limit = ant_shape_get_inobj_limit(obj->shape);
+  
   obj->overflow_prop = NULL;
   obj->overflow_cap = 0;
   obj->prop_count = 0;
-  obj->inobj_limit = ant_shape_get_inobj_limit(obj->shape);
-  for (uint32_t i = 0; i < ANT_INOBJ_MAX_SLOTS; i++) obj->inobj[i] = js_mkundef();
+  obj->propref_count = 0;
+  
+  for (uint32_t i = 0; i < ANT_INOBJ_MAX_SLOTS; i++) 
+    obj->inobj[i] = js_mkundef();
+  
+  obj->exotic_ops = NULL;
+  obj->exotic_keys = NULL;
+  obj->promise_state = NULL;
+  obj->extra_slots = NULL;
+  obj->extra_count = 0;
+  
+  obj->finalizer = NULL;
+  obj->gc_pending_next = NULL;
+  obj->gc_pending_rooted = false;
+  
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+  
+  obj->mark_epoch = 0;
   obj->extensible = 1;
   obj->frozen = 0;
   obj->sealed = 0;
   obj->is_exotic = 0;
   obj->is_constructor = 0;
   obj->fast_array = 0;
-  obj->exotic_ops = NULL;
-  obj->exotic_keys = NULL;
-  obj->promise_state = NULL;
-  obj->proxy_state = NULL;
-  obj->u.data.value = js_mkundef();
-  obj->extra_slots = NULL;
-  obj->extra_count = 0;
-  obj->gc_pending_next = NULL;
-  obj->gc_pending_rooted = false;
+  obj->may_have_holes = 0;
+  obj->may_have_dense_elements = 0;
+  obj->gc_permanent = 0;
   obj->generation = 0;
   obj->in_remember_set = 0;
 
@@ -13794,7 +13817,7 @@ void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx) {
 static ant_proxy_state_t *get_proxy_data(ant_value_t obj) {
   if (vtype(obj) != T_OBJ) return NULL;
   ant_object_t *ptr = js_obj_ptr(obj);
-  return ptr ? ptr->proxy_state : NULL;
+  return ptr ? ant_object_proxy_state(ptr) : NULL;
 }
 
 bool is_proxy(ant_value_t obj) {
@@ -14332,7 +14355,14 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
 
   proxy_ptr->is_exotic = 1;
   js_mark_constructor(proxy_obj, js_is_constructor(target));
-  proxy_ptr->proxy_state = data;
+  
+  ant_object_sidecar_t *sidecar = ant_object_ensure_sidecar(proxy_ptr);
+  if (!sidecar) {
+    free(data);
+    return js_mkerr(js, "out of memory");
+  }
+  
+  sidecar->proxy_state = data;
   return proxy_obj;
 }
 

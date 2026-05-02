@@ -83,40 +83,27 @@ ant_value_t ds_stream_writable(ant_value_t obj) {
 }
 
 static void zstate_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (st->initialized) deflateEnd(&st->strm);
-    free(st);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (st->initialized) deflateEnd(&st->strm);
+  free(st);
 }
 
 static void zstate_inflate_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (st->initialized) inflateEnd(&st->strm);
-    free(st);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (st->initialized) inflateEnd(&st->strm);
+  free(st);
 }
 
 static void brotli_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    brotli_stream_state_t *st =
-      (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    brotli_stream_state_destroy(st);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  brotli_stream_state_t *st =
+    (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  brotli_stream_state_destroy(st);
 }
 
 static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len) {

@@ -72,6 +72,7 @@ typedef struct {
   const char *name;
   uint32_t len;
   uint8_t kind;
+  uint32_t hash;
   bool is_static;
   bool has_getter;
   bool has_setter;

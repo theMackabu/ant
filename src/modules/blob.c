@@ -150,14 +150,10 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
 }
 
 static void blob_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    blob_data_t *bd = (blob_data_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  blob_data_t *bd = (blob_data_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
 }
 
 ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char *type) {

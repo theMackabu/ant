@@ -75,6 +75,13 @@ static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t
   vm->stack[vm->sp++] = obj;
 }
 
+static inline void sv_op_private_token(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  ant_value_t obj = mkobj(js, 0);
+  uint32_t hash = sv_get_u32(ip + 1);
+  js_set_slot(obj, SLOT_DATA, js_mknum((double)hash));
+  vm->stack[vm->sp++] = obj;
+}
+
 static inline void sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t n = sv_get_u16(ip + 1);
   ant_value_t arr = js_mkarr(js);

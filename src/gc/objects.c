@@ -266,15 +266,17 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   uint32_t count = ant_shape_count(obj->shape);
   for (uint32_t i = 0; i < count && i < obj->prop_count; i++)
     gc_mark_value(js, ant_object_prop_get_unchecked(obj, i));
+    
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
     if (prop && prop->has_getter) gc_mark_value(js, prop->getter);
     if (prop && prop->has_setter) gc_mark_value(js, prop->setter);
   }}
 
-  if (obj->extra_slots) {
-    ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-    for (uint8_t i = 0; i < obj->extra_count; i++) gc_mark_value(js, entries[i].value);
+  uint8_t extra_count = 0;
+  ant_extra_slot_t *extra_slots = ant_object_extra_slots(obj, &extra_count);
+  if (extra_slots) {
+    for (uint8_t i = 0; i < extra_count; i++) gc_mark_value(js, extra_slots[i].value);
   }
 
   if (obj->type_tag == T_ARR && obj->u.array.data) {
@@ -289,9 +291,20 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_promise_handlers(js, pd);
   }
 
-  if (obj->proxy_state) {
-    gc_mark_value(js, obj->proxy_state->target);
-    gc_mark_value(js, obj->proxy_state->handler);
+  ant_proxy_state_t *proxy_state = ant_object_proxy_state(obj);
+  if (proxy_state) {
+    gc_mark_value(js, proxy_state->target);
+    gc_mark_value(js, proxy_state->handler);
+  }
+
+  ant_private_table_t *table = ant_object_private_table(obj);
+  if (table && table->entries) for (uint32_t i = 0; i < table->cap; i++) {
+    ant_private_entry_t *entry = &table->entries[i];
+    if (!entry->occupied) continue;
+    gc_mark_value(js, entry->token);
+    gc_mark_value(js, entry->value);
+    gc_mark_value(js, entry->getter);
+    gc_mark_value(js, entry->setter);
   }
 
   gc_mark_abort_signal_object(
@@ -540,7 +553,16 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->shape = NULL;
   }
 
-  if (obj->extra_slots) {
+  if (ant_object_has_sidecar(obj)) {
+    ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+    free(sidecar->extra_slots);
+    free(sidecar->proxy_state);
+    free(sidecar->private_table.entries);
+    free(sidecar);
+    obj->extra_slots = NULL;
+  } 
+  
+  else if (obj->extra_slots) {
     free(obj->extra_slots);
     obj->extra_slots = NULL;
   }
@@ -553,11 +575,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       utarray_free(obj->promise_state->handlers);
     free(obj->promise_state);
     obj->promise_state = NULL;
-  }
-
-  if (obj->proxy_state) {
-    free(obj->proxy_state);
-    obj->proxy_state = NULL;
   }
 
   if (obj->type_tag == T_ARR && obj->u.array.data) {

@@ -36,6 +36,7 @@ typedef struct {
 ant_shape_t *ant_shape_new(void);
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit);
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape);
+
 bool ant_shape_is_shared(const ant_shape_t *shape);
 void ant_shape_retain(ant_shape_t *shape);
 void ant_shape_release(ant_shape_t *shape);
@@ -52,12 +53,13 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
 bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_from);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);
+uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
+
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot);
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot);
 
 bool ant_shape_set_attrs_interned(ant_shape_t *shape, const char *interned, uint8_t attrs);
 bool ant_shape_set_attrs_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attrs);
-uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 bool ant_shape_clear_accessor_slot(ant_shape_t *shape, uint32_t slot);
 
 void ant_gc_shapes_begin(void);

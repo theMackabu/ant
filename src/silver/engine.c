@@ -965,8 +965,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ARRAY:     { sv_op_array(vm, js, ip);         NEXT(3); }
   L_SET_BRAND: { sv_op_set_brand(vm, ip);         NEXT(2); }
   
-  L_REGEXP:   { sv_op_regexp(vm, js);                              NEXT(1); }
-  L_CLOSURE:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));  NEXT(5); }
+  L_REGEXP:        { sv_op_regexp(vm, js);                              NEXT(1); }
+  L_CLOSURE:       { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));  NEXT(5); }
+  L_PRIVATE_TOKEN: { sv_op_private_token(vm, js, ip);                   NEXT(5); }
 
   L_POP:      { sv_op_pop(vm);      NEXT(1); }
   L_DUP:      { sv_op_dup(vm);      NEXT(1); }

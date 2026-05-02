@@ -37,14 +37,10 @@ static sd_state_t *sd_get_state(ant_value_t obj) {
 }
 
 static void sd_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    sd_state_t *st = (sd_state_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    if (st) { free(st->td); free(st); }
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  sd_state_t *st = (sd_state_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (st) { free(st->td); free(st); }
 }
 
 static int sd_parse_encoding(const char *s, size_t len) {

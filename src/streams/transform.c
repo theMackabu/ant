@@ -54,47 +54,33 @@ ant_value_t ts_stream_writable(ant_value_t ts_obj) {
 }
 
 static void ts_ws_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    free((ws_stream_t *)(uintptr_t)(size_t)js_getnum(entries[i].value));
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  free((ws_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
 }
 
 static void ts_ws_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    ws_controller_t *ctrl = (ws_controller_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    free(ctrl->queue_sizes);
-    free(ctrl);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  ws_controller_t *ctrl = 
+    (ws_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  free(ctrl->queue_sizes);
+  free(ctrl);
 }
 
 static void ts_rs_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    free((rs_stream_t *)(uintptr_t)(size_t)js_getnum(entries[i].value));
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  free((rs_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
 }
 
 static void ts_rs_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj->extra_slots) return;
-  ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
-  for (uint8_t i = 0; i < obj->extra_count; i++) {
-  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    rs_controller_t *ctrl = (rs_controller_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-    free(ctrl->queue_sizes);
-    free(ctrl);
-    return;
-  }}
+  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
+  if (!slot || vtype(slot->value) != T_NUM) return;
+  rs_controller_t *ctrl = 
+    (rs_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  free(ctrl->queue_sizes);
+  free(ctrl);
 }
 
 static inline bool ts_get_backpressure(ant_value_t ts_obj) {
