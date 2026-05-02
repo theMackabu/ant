@@ -18,6 +18,7 @@ typedef struct {
 
 typedef struct {
   uv_shutdown_t req;
+  ant_conn_t *conn;
 } ant_conn_shutdown_req_t;
 
 static void ant_conn_restart_timer(ant_conn_t *conn);
@@ -26,12 +27,8 @@ static void ant_conn_close_cb(uv_handle_t *handle);
 static void ant_listener_remove_conn(ant_listener_t *listener, ant_conn_t *conn) {
   ant_conn_t **it = NULL;
   if (!listener || !conn) return;
-
-  for (it = &listener->connections; *it; it = &(*it)->next) {
-  if (*it == conn) {
-    *it = conn->next;
-    return;
-  }}
+  for (it = &listener->connections; *it; it = &(*it)->next) 
+    if (*it == conn) { *it = conn->next; return; }
 }
 
 static bool ant_conn_store_addr(
@@ -194,14 +191,16 @@ static void ant_conn_write_cb_impl(uv_write_t *req, int status) {
 
 static void ant_conn_shutdown_cb(uv_shutdown_t *req, int status) {
   ant_conn_shutdown_req_t *shutdown_req = (ant_conn_shutdown_req_t *)req;
+  ant_conn_t *conn = shutdown_req ? shutdown_req->conn : NULL;
   free(shutdown_req);
+  ant_conn_close(conn);
 }
 
 static void ant_conn_close_cb(uv_handle_t *handle) {
   ant_conn_t *conn = (ant_conn_t *)handle->data;
   ant_listener_t *listener = conn ? conn->listener : NULL;
+  
   if (!conn || !listener) return;
-
   if (--conn->close_handles > 0) return;
 
   ant_listener_remove_conn(listener, conn);
@@ -381,11 +380,9 @@ void ant_conn_shutdown(ant_conn_t *conn) {
     return;
   }
 
+  req->conn = conn;
   rc = uv_shutdown(&req->req, ant_conn_stream(conn), ant_conn_shutdown_cb);
-  if (rc != 0) {
-    free(req);
-    ant_conn_close(conn);
-  }
+  if (rc != 0) { free(req); ant_conn_close(conn); }
 }
 
 void ant_conn_ref(ant_conn_t *conn) {
