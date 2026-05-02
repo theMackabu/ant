@@ -33,6 +33,7 @@ void gc_mark_compression_streams(ant_t *js, gc_mark_fn mark);
 void gc_mark_zlib(ant_t *js, gc_mark_fn mark);
 void gc_mark_wasm(ant_t *js, gc_mark_fn mark);
 void gc_mark_napi(ant_t *js, gc_mark_fn mark);
+void gc_clear_napi_weak_refs(ant_t *js, bool minor);
 void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark);
 
 #endif

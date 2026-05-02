@@ -288,8 +288,7 @@ static void generator_finalize(ant_t *js, ant_object_t *obj) {
   
   if (!data) return;
   if (data->coro) generator_clear_coro(gen, data->coro);
-  
-  js_set_native(gen, NULL, 0);
+  js_clear_native(gen, GENERATOR_NATIVE_TAG);
   
   generator_free_queue(data);
   free(data);

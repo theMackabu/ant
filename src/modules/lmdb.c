@@ -77,8 +77,8 @@ enum {
 };
 
 static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env);
-static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db);
-static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn);
+static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db, ant_value_t env_obj);
+static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn, ant_value_t env_obj);
 
 static void list_remove_db(lmdb_env_handle_t *env, lmdb_db_handle_t *target) {
   if (!env || !target) return;
@@ -133,29 +133,12 @@ static void register_txn_ref(ant_value_t obj, lmdb_txn_handle_t *txn) {
   txn_refs = ref;
 }
 
-static lmdb_env_handle_t *find_env_by_obj(ant_value_t obj) {
-  for (lmdb_env_ref_t *ref = env_refs; ref; ref = ref->next)
-    if (ref->obj == obj) return ref->env;
-  return NULL;
-}
-
-static lmdb_db_handle_t *find_db_by_obj(ant_value_t obj) {
-  for (lmdb_db_ref_t *ref = db_refs; ref; ref = ref->next)
-    if (ref->obj == obj) return ref->db;
-  return NULL;
-}
-
-static lmdb_txn_handle_t *find_txn_by_obj(ant_value_t obj) {
-  for (lmdb_txn_ref_t *ref = txn_refs; ref; ref = ref->next)
-    if (ref->obj == obj) return ref->txn;
-  return NULL;
-}
-
 static void unregister_env_ref_by_obj(ant_value_t obj) {
   lmdb_env_ref_t **cur = &env_refs;
   while (*cur) {
     if ((*cur)->obj == obj) {
       lmdb_env_ref_t *next = (*cur)->next;
+      js_clear_native((*cur)->obj, LMDB_ENV_NATIVE_TAG);
       free(*cur);
       *cur = next;
       return;
@@ -169,6 +152,7 @@ static void unregister_db_ref_by_obj(ant_value_t obj) {
   while (*cur) {
     if ((*cur)->obj == obj) {
       lmdb_db_ref_t *next = (*cur)->next;
+      js_clear_native((*cur)->obj, LMDB_DB_NATIVE_TAG);
       free(*cur);
       *cur = next;
       return;
@@ -182,6 +166,7 @@ static void unregister_txn_ref_by_obj(ant_value_t obj) {
   while (*cur) {
     if ((*cur)->obj == obj) {
       lmdb_txn_ref_t *next = (*cur)->next;
+      js_clear_native((*cur)->obj, LMDB_TXN_NATIVE_TAG);
       free(*cur);
       *cur = next;
       return;
@@ -195,6 +180,7 @@ static void unregister_db_refs_by_env(lmdb_env_handle_t *env) {
   while (*cur) {
     if ((*cur)->db && (*cur)->db->env == env) {
       lmdb_db_ref_t *next = (*cur)->next;
+      js_clear_native((*cur)->obj, LMDB_DB_NATIVE_TAG);
       free(*cur);
       *cur = next;
       continue;
@@ -208,6 +194,7 @@ static void unregister_txn_refs_by_env(lmdb_env_handle_t *env) {
   while (*cur) {
     if ((*cur)->txn && (*cur)->txn->env == env) {
       lmdb_txn_ref_t *next = (*cur)->next;
+      js_clear_native((*cur)->obj, LMDB_TXN_NATIVE_TAG);
       free(*cur);
       *cur = next;
       continue;
@@ -249,24 +236,65 @@ static void env_handle_close(lmdb_env_handle_t *env) {
 }
 
 static lmdb_env_handle_t *get_env_handle(ant_t *js, ant_value_t obj, bool open_required) {
-  lmdb_env_handle_t *env = find_env_by_obj(obj);
+  lmdb_env_handle_t *env = (lmdb_env_handle_t *)js_get_native(obj, LMDB_ENV_NATIVE_TAG);
   if (!env) return NULL;
   if (open_required && env->closed) return NULL;
   return env;
 }
 
 static lmdb_db_handle_t *get_db_handle(ant_t *js, ant_value_t obj, bool open_required) {
-  lmdb_db_handle_t *db = find_db_by_obj(obj);
+  lmdb_db_handle_t *db = (lmdb_db_handle_t *)js_get_native(obj, LMDB_DB_NATIVE_TAG);
   if (!db) return NULL;
   if (open_required && (db->closed || !db->env || db->env->closed)) return NULL;
   return db;
 }
 
 static lmdb_txn_handle_t *get_txn_handle(ant_t *js, ant_value_t obj, bool open_required) {
-  lmdb_txn_handle_t *txn = find_txn_by_obj(obj);
+  lmdb_txn_handle_t *txn = (lmdb_txn_handle_t *)js_get_native(obj, LMDB_TXN_NATIVE_TAG);
   if (!txn) return NULL;
-  if (open_required && (txn->closed || !txn->txn)) return NULL;
+  if (open_required && (txn->closed || !txn->txn || !txn->env || txn->env->closed)) return NULL;
   return txn;
+}
+
+static void lmdb_env_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  lmdb_env_handle_t *env = 
+    (lmdb_env_handle_t *)js_get_native(value, LMDB_ENV_NATIVE_TAG);
+  if (!env) return;
+  env_handle_close(env);
+  unregister_env_ref_by_obj(value);
+  js_clear_native(value, LMDB_ENV_NATIVE_TAG);
+}
+
+static void lmdb_db_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  lmdb_db_handle_t *db = (lmdb_db_handle_t *)js_get_native(value, LMDB_DB_NATIVE_TAG);
+
+  if (!db) return;
+  if (!db->closed && db->env && !db->env->closed) {
+    mdb_dbi_close(db->env->env, db->dbi);
+    list_remove_db(db->env, db);
+  }
+  
+  db->closed = true;
+  unregister_db_ref_by_obj(value);
+  js_clear_native(value, LMDB_DB_NATIVE_TAG);
+}
+
+static void lmdb_txn_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  lmdb_txn_handle_t *txn = (lmdb_txn_handle_t *)js_get_native(value, LMDB_TXN_NATIVE_TAG);
+
+  (void)js;
+  if (!txn) return;
+  if (!txn->closed && txn->txn) {
+    mdb_txn_abort(txn->txn);
+    txn->txn = NULL;
+  }
+  txn->closed = true;
+  if (txn->env) list_remove_txn(txn->env, txn);
+  unregister_txn_ref_by_obj(value);
+  js_clear_native(value, LMDB_TXN_NATIVE_TAG);
 }
 
 static bool option_bool(ant_t *js, ant_value_t options, const char *key, bool fallback) {
@@ -516,7 +544,7 @@ static ant_value_t lmdb_env_open_db(ant_t *js, ant_value_t *args, int nargs) {
   db->next_global = db_handles;
   db_handles = db;
 
-  return make_db_obj(js, db);
+  return make_db_obj(js, db, js_getthis(js));
 }
 
 static ant_value_t lmdb_env_begin_txn(ant_t *js, ant_value_t *args, int nargs) {
@@ -550,7 +578,7 @@ static ant_value_t lmdb_env_begin_txn(ant_t *js, ant_value_t *args, int nargs) {
   handle->next_global = txn_handles;
   txn_handles = handle;
 
-  return make_txn_obj(js, handle);
+  return make_txn_obj(js, handle, js_getthis(js));
 }
 
 static ant_value_t lmdb_env_close_method(ant_t *js, ant_value_t *args, int nargs) {
@@ -1041,24 +1069,29 @@ static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
   js_set_native(obj, env, LMDB_ENV_NATIVE_TAG);
+  js_set_finalizer(obj, lmdb_env_finalize);
   register_env_ref(obj, env);
   if (is_special_object(lmdb_types.env_proto)) js_set_proto_init(obj, lmdb_types.env_proto);
   return obj;
 }
 
-static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db) {
+static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db, ant_value_t env_obj) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
   js_set_native(obj, db, LMDB_DB_NATIVE_TAG);
+  js_set_finalizer(obj, lmdb_db_finalize);
+  js_set_slot_wb(js, obj, SLOT_DATA, env_obj);
   register_db_ref(obj, db);
   if (is_special_object(lmdb_types.db_proto)) js_set_proto_init(obj, lmdb_types.db_proto);
   return obj;
 }
 
-static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn) {
+static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn, ant_value_t env_obj) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
   js_set_native(obj, txn, LMDB_TXN_NATIVE_TAG);
+  js_set_finalizer(obj, lmdb_txn_finalize);
+  js_set_slot_wb(js, obj, SLOT_DATA, env_obj);
   register_txn_ref(obj, txn);
   if (is_special_object(lmdb_types.txn_proto)) js_set_proto_init(obj, lmdb_types.txn_proto);
   return obj;
@@ -1110,9 +1143,6 @@ void gc_mark_lmdb(ant_t *js, gc_mark_fn mark) {
     mark(js, lmdb_types.db_proto);
     mark(js, lmdb_types.txn_proto);
   }
-  for (lmdb_env_ref_t *ref = env_refs; ref; ref = ref->next) mark(js, ref->obj);
-  for (lmdb_db_ref_t *ref = db_refs; ref; ref = ref->next) mark(js, ref->obj);
-  for (lmdb_txn_ref_t *ref = txn_refs; ref; ref = ref->next) mark(js, ref->obj);
 }
 
 void cleanup_lmdb_module(void) {
@@ -1169,18 +1199,21 @@ void cleanup_lmdb_module(void) {
 
   while (env_refs) {
     lmdb_env_ref_t *next = env_refs->next;
+    js_clear_native(env_refs->obj, LMDB_ENV_NATIVE_TAG);
     free(env_refs);
     env_refs = next;
   }
 
   while (db_refs) {
     lmdb_db_ref_t *next = db_refs->next;
+    js_clear_native(db_refs->obj, LMDB_DB_NATIVE_TAG);
     free(db_refs);
     db_refs = next;
   }
 
   while (txn_refs) {
     lmdb_txn_ref_t *next = txn_refs->next;
+    js_clear_native(txn_refs->obj, LMDB_TXN_NATIVE_TAG);
     free(txn_refs);
     txn_refs = next;
   }

@@ -48,6 +48,7 @@ typedef uint16_t char16_t;
 #include "modules/buffer.h"
 #include "modules/date.h"
 #include "modules/napi.h"
+#include "gc/objects.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
 #include "utf8.h"
@@ -315,16 +316,26 @@ void gc_mark_napi(ant_t *js, gc_mark_fn mark) {
   if (nenv->has_pending_exception)
     mark(js, (ant_value_t)nenv->pending_exception);
 
-  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
+  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) 
     if (r->refcount > 0) mark(js, r->ref_val);
-    mark(js, (ant_value_t)r->value);
-  }
 
   for (struct napi_deferred__ *d = nenv->deferreds; d; d = d->next) 
     if (!d->settled) mark(js, d->promise_val);
 
   for (struct napi_threadsafe_function__ *t = nenv->tsfns; t; t = t->next) mark(js, t->func_val);
   for (size_t i = 0; i < nenv->handle_slots_len; i++) mark(js, nenv->handle_slots[i]);
+}
+
+void gc_clear_napi_weak_refs(ant_t *js, bool minor) {
+  if (!g_napi_env || g_napi_env->js != js) return;
+  ant_napi_env_t *nenv = g_napi_env;
+  
+  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
+    if (r->refcount > 0 || !r->value) continue;
+    ant_value_t value = (ant_value_t)r->value;
+    ant_object_t *obj = is_object_type(value) ? js_obj_ptr(value) : NULL;
+    if (obj && (!minor || obj->generation == 0) && !gc_obj_is_marked(obj)) r->value = 0;
+  }
 }
 
 static inline napi_value napi_scope_pin(ant_napi_env_t *nenv, napi_value val) {
@@ -1535,7 +1546,14 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reference_ref(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
-  if (!nenv || !nenv->js || !r) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  
+  if (!nenv || !nenv->js || !r) 
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  
+  if (!r->value) {
+    if (result) *result = 0;
+    return napi_set_last(env, napi_ok, NULL);
+  }
 
   if (r->refcount == 0) r->ref_val = (ant_value_t)r->value;
   r->refcount++;
@@ -1571,7 +1589,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_reference_value(
   if (!nenv || !nenv->js || !r || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
   if (r->refcount > 0) *result = NAPI_RETURN(nenv, r->ref_val);
-  else *result = r->value;
+  else *result = r->value ? NAPI_RETURN(nenv, r->value) : 0;
 
   return napi_set_last(env, napi_ok, NULL);
 }

@@ -749,6 +749,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   }
 
   gc_mark_roots(js);
+  gc_clear_napi_weak_refs(js, false);
   gc_sweep_regex_cache();
   gc_sweep(js);
   
@@ -840,6 +841,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   
   js->remember_set_len = 0;
   gc_mark_roots(js);
+  gc_clear_napi_weak_refs(js, true);
   g_minor_gc = false;
 
   gc_sweep_regex_cache();

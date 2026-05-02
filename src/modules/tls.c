@@ -92,9 +92,8 @@ static ant_value_t tls_make_error(ant_t *js, tls_context *ctx, long code, const 
 static ant_value_t js_tls_context_close(ant_t *js, ant_value_t *args, int nargs) {
   ant_tls_context_wrap_t *wrap = tls_context_data(js_getthis(js));
   if (!wrap) return js_getthis(js);
-
   tls_context_free(wrap);
-  js_set_native(wrap->obj, NULL, 0);
+  js_clear_native(wrap->obj, TLS_CONTEXT_NATIVE_TAG);
   return js_getthis(js);
 }
 
