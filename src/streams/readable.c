@@ -51,29 +51,27 @@ bool rs_stream_unusable(ant_value_t stream_obj) {
 
 rs_stream_t *rs_get_stream(ant_value_t obj) {
   if (!js_check_native_tag(obj, RS_STREAM_NATIVE_TAG)) return NULL;
-  return (rs_stream_t *)js_get_native_ptr(obj);
+  return (rs_stream_t *)js_get_native(obj, RS_STREAM_NATIVE_TAG);
 }
 
 rs_controller_t *rs_get_controller(ant_value_t obj) {
   if (!js_check_native_tag(obj, RS_CONTROLLER_NATIVE_TAG)) return NULL;
-  return (rs_controller_t *)js_get_native_ptr(obj);
+  return (rs_controller_t *)js_get_native(obj, RS_CONTROLLER_NATIVE_TAG);
 }
 
 static void rs_stream_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != RS_STREAM_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, RS_STREAM_NATIVE_TAG));
+  js_clear_native(value, RS_STREAM_NATIVE_TAG);
 }
 
 static void rs_controller_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != RS_CONTROLLER_NATIVE_TAG) return;
-  rs_controller_t *ctrl = (rs_controller_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  rs_controller_t *ctrl = (rs_controller_t *)js_get_native(value, RS_CONTROLLER_NATIVE_TAG);
   if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, RS_CONTROLLER_NATIVE_TAG);
 }
 
 ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {

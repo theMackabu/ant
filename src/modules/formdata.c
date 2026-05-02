@@ -71,7 +71,7 @@ static void fd_data_free(fd_data_t *d) {
 
 static fd_data_t *get_fd_data(ant_value_t obj) {
   if (!js_check_native_tag(obj, FORMDATA_NATIVE_TAG)) return NULL;
-  return (fd_data_t *)js_get_native_ptr(obj);
+  return (fd_data_t *)js_get_native(obj, FORMDATA_NATIVE_TAG);
 }
 
 // TODO: compact
@@ -84,11 +84,10 @@ static ant_value_t get_fd_values(ant_value_t obj) {
 }
 
 static void formdata_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != FORMDATA_NATIVE_TAG) return;
-  fd_data_t *d = (fd_data_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  fd_data_t *d = (fd_data_t *)js_get_native(value, FORMDATA_NATIVE_TAG);
   fd_data_free(d);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, FORMDATA_NATIVE_TAG);
 }
 
 static bool fd_append_str(fd_data_t *d, const char *name, const char *value) {
@@ -383,7 +382,7 @@ static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
   if (!js_check_native_tag(js->this_val, FORMDATA_ITER_NATIVE_TAG))
     return js_iter_result(js, false, js_mkundef());
 
-  fd_iter_t *st = (fd_iter_t *)js_get_native_ptr(js->this_val);
+  fd_iter_t *st = (fd_iter_t *)js_get_native(js->this_val, FORMDATA_ITER_NATIVE_TAG);
   ant_value_t fd_obj = js_get_slot(js->this_val, SLOT_DATA);
   fd_data_t *d = get_fd_data(fd_obj);
   if (!d) return js_iter_result(js, false, js_mkundef());
@@ -418,10 +417,9 @@ static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void formdata_iter_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != FORMDATA_ITER_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, FORMDATA_ITER_NATIVE_TAG));
+  js_clear_native(value, FORMDATA_ITER_NATIVE_TAG);
 }
 
 static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {

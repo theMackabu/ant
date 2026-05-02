@@ -52,15 +52,14 @@ static void pipes_chain_promise(
 }
 
 static void pipe_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != PIPE_STATE_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, PIPE_STATE_NATIVE_TAG));
+  js_clear_native(value, PIPE_STATE_NATIVE_TAG);
 }
 
 static pipe_state_t *pipe_get_state(ant_value_t state) {
   if (!js_check_native_tag(state, PIPE_STATE_NATIVE_TAG)) return NULL;
-  return (pipe_state_t *)js_get_native_ptr(state);
+  return (pipe_state_t *)js_get_native(state, PIPE_STATE_NATIVE_TAG);
 }
 
 static ant_value_t pipe_state_source(ant_value_t state) {
@@ -489,15 +488,14 @@ typedef struct {
 } tee_state_t;
 
 static void tee_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != TEE_STATE_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, TEE_STATE_NATIVE_TAG));
+  js_clear_native(value, TEE_STATE_NATIVE_TAG);
 }
 
 static tee_state_t *tee_get_state(ant_value_t state) {
   if (!js_check_native_tag(state, TEE_STATE_NATIVE_TAG)) return NULL;
-  return (tee_state_t *)js_get_native_ptr(state);
+  return (tee_state_t *)js_get_native(state, TEE_STATE_NATIVE_TAG);
 }
 
 static ant_value_t tee_state_reader(ant_value_t state) {

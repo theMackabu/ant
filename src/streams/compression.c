@@ -87,31 +87,31 @@ ant_value_t ds_stream_writable(ant_value_t obj) {
 }
 
 static void zstate_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != CS_Z_NATIVE_TAG) return;
-  zstate_t *st = (zstate_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  zstate_t *st = (zstate_t *)js_get_native(value, CS_Z_NATIVE_TAG);
   if (!st) return;
   if (st->initialized) deflateEnd(&st->strm);
   free(st);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, CS_Z_NATIVE_TAG);
 }
 
 static void zstate_inflate_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != DS_Z_NATIVE_TAG) return;
-  zstate_t *st = (zstate_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  zstate_t *st = (zstate_t *)js_get_native(value, DS_Z_NATIVE_TAG);
   if (!st) return;
   if (st->initialized) inflateEnd(&st->strm);
   free(st);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, DS_Z_NATIVE_TAG);
 }
 
 static void brotli_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || (obj->native.tag != CS_BROTLI_NATIVE_TAG && obj->native.tag != DS_BROTLI_NATIVE_TAG)) return;
-  brotli_stream_state_t *st = (brotli_stream_state_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  uint32_t tag = js_check_native_tag(value, CS_BROTLI_NATIVE_TAG) 
+    ? CS_BROTLI_NATIVE_TAG 
+    : DS_BROTLI_NATIVE_TAG;
+  brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native(value, tag);
   brotli_stream_state_destroy(st);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, tag);
 }
 
 static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len) {
@@ -127,9 +127,6 @@ static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t
 #define ZCHUNK_SIZE 16384
 
 static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
-  uint32_t tag = js_get_native_tag(js->current_func);
-  zstate_t *st = (zstate_t *)js_get_native_ptr(js->current_func);
-  
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -141,12 +138,12 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
 
   if (!input || input_len == 0) return js_mkundef();
 
-  if (tag == CS_BROTLI_NATIVE_TAG) {
-    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(js->current_func);
+  brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native(js->current_func, CS_BROTLI_NATIVE_TAG);
+  if (brotli_st)
     return brotli_stream_transform(js, brotli_st, ctrl_obj, input, input_len);
-  }
   
-  if (tag != CS_Z_NATIVE_TAG || !st) 
+  zstate_t *st = (zstate_t *)js_get_native(js->current_func, CS_Z_NATIVE_TAG);
+  if (!st) 
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CompressionStream");
 
   st->strm.next_in = (Bytef *)input;
@@ -170,16 +167,14 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
-  uint32_t tag = js_get_native_tag(js->current_func);
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
 
-  if (tag == CS_BROTLI_NATIVE_TAG) {
-    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(js->current_func);
+  brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native(js->current_func, CS_BROTLI_NATIVE_TAG);
+  if (brotli_st)
     return brotli_stream_flush(js, brotli_st, ctrl_obj);
-  }
   
-  zstate_t *st = (zstate_t *)js_get_native_ptr(js->current_func);
-  if (tag != CS_Z_NATIVE_TAG || !st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CompressionStream");
+  zstate_t *st = (zstate_t *)js_get_native(js->current_func, CS_Z_NATIVE_TAG);
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CompressionStream");
 
   st->strm.next_in = NULL;
   st->strm.avail_in = 0;
@@ -274,13 +269,13 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
     return ts_obj;
   }
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
+  js_set_slot_wb(js, transform_fn, SLOT_ENTRIES, obj);
+  js_set_slot_wb(js, flush_fn, SLOT_ENTRIES, obj);
 
   return obj;
 }
 
 static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
-  uint32_t tag = js_get_native_tag(js->current_func);
-  zstate_t *st = (zstate_t *)js_get_native_ptr(js->current_func);
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -291,12 +286,12 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
 
   if (!input || input_len == 0) return js_mkundef();
-  if (tag == DS_BROTLI_NATIVE_TAG) {
-    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(js->current_func);
+  brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native(js->current_func, DS_BROTLI_NATIVE_TAG);
+  if (brotli_st)
     return brotli_stream_transform(js, brotli_st, ctrl_obj, input, input_len);
-  }
   
-  if (tag != DS_Z_NATIVE_TAG || !st)
+  zstate_t *st = (zstate_t *)js_get_native(js->current_func, DS_Z_NATIVE_TAG);
+  if (!st)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid DecompressionStream");
 
   st->strm.next_in = (Bytef *)input;
@@ -321,12 +316,10 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t ds_flush(ant_t *js, ant_value_t *args, int nargs) {
-  uint32_t tag = js_get_native_tag(js->current_func);
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
-  if (tag == DS_BROTLI_NATIVE_TAG) {
-    brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native_ptr(js->current_func);
+  brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native(js->current_func, DS_BROTLI_NATIVE_TAG);
+  if (st)
     return brotli_stream_flush(js, st, ctrl_obj);
-  }
   return js_mkundef();
 }
 
@@ -404,6 +397,8 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
+  js_set_slot_wb(js, transform_fn, SLOT_ENTRIES, obj);
+  js_set_slot_wb(js, flush_fn, SLOT_ENTRIES, obj);
   return obj;
 }
 

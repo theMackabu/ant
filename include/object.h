@@ -72,10 +72,18 @@ typedef struct {
 } ant_private_table_t;
 
 typedef struct {
+  void *ptr;
+  uint32_t tag;
+} ant_native_entry_t;
+
+typedef struct {
   ant_extra_slot_t *extra_slots;
+  ant_native_entry_t *native_entries;
   ant_private_table_t private_table;
   ant_proxy_state_t *proxy_state;
   
+  uint8_t native_count;
+  uint8_t native_cap;
   uint8_t extra_count;
   uint8_t flags;
 } ant_object_sidecar_t;
@@ -101,11 +109,7 @@ typedef struct ant_object {
   
   void (*finalizer)(ant_t *, struct ant_object *);
   ant_value_t inobj[ANT_INOBJ_MAX_SLOTS];
-  
-  struct {
-    void *ptr;
-    uint32_t tag;
-  } native;
+  ant_native_entry_t native;
 
   union {
     struct { ant_value_t *data; uint32_t len; uint32_t cap; } array;

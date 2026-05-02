@@ -37,6 +37,11 @@ typedef struct server_conn_state_s server_conn_state_t;
 
 static server_runtime_t *g_server = NULL;
 
+enum {
+  SERVER_REQUEST_NATIVE_TAG = 0x53524551u, // SREQ
+  SERVER_RUNTIME_NATIVE_TAG = 0x5352544du  // SRTM
+};
+
 typedef struct stop_waiter_s {
   ant_value_t promise;
   struct stop_waiter_s *next;
@@ -119,11 +124,11 @@ static inline void server_request_retain(server_request_t *req) {
 }
 
 static inline server_request_t *server_current_request(ant_t *js) {
-  return (server_request_t *)js_get_native_ptr(js->current_func);
+  return (server_request_t *)js_get_native(js->current_func, SERVER_REQUEST_NATIVE_TAG);
 }
 
 static inline server_runtime_t *server_current_runtime(ant_t *js) {
-  return (server_runtime_t *)js_get_native_ptr(js->current_func);
+  return (server_runtime_t *)js_get_native(js->current_func, SERVER_RUNTIME_NATIVE_TAG);
 }
 
 static ant_value_t server_mkreqfun(
@@ -132,7 +137,7 @@ static ant_value_t server_mkreqfun(
   server_request_t *req
 ) {
   ant_value_t func = js_heavy_mkfun(js, fn, js_mkundef());
-  js_set_native_ptr(func, req);
+  js_set_native(func, req, SERVER_REQUEST_NATIVE_TAG);
   return func;
 }
 
@@ -142,7 +147,7 @@ static ant_value_t server_mkruntimefun(
   server_runtime_t *server
 ) {
   ant_value_t func = js_heavy_mkfun(js, fn, js_mkundef());
-  js_set_native_ptr(func, server);
+  js_set_native(func, server, SERVER_RUNTIME_NATIVE_TAG);
   return func;
 }
 

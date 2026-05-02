@@ -31,7 +31,7 @@ enum {
 
 url_state_t *url_get_state(ant_value_t obj) {
   if (!js_check_native_tag(obj, URL_NATIVE_TAG)) return NULL;
-  return (url_state_t *)js_get_native_ptr(obj);
+  return (url_state_t *)js_get_native(obj, URL_NATIVE_TAG);
 }
 
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
@@ -51,10 +51,9 @@ void url_free_state(url_state_t *s) {
 }
 
 static void url_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != URL_NATIVE_TAG) return;
-  url_free_state((url_state_t *)obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  url_free_state((url_state_t *)js_get_native(value, URL_NATIVE_TAG));
+  js_clear_native(value, URL_NATIVE_TAG);
 }
 
 static int default_port_for(const char *proto) {

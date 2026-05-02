@@ -55,37 +55,33 @@ ant_value_t ts_stream_writable(ant_value_t ts_obj) {
 }
 
 static void ts_ws_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WS_STREAM_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, WS_STREAM_NATIVE_TAG));
+  js_clear_native(value, WS_STREAM_NATIVE_TAG);
 }
 
 static void ts_ws_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WS_CONTROLLER_NATIVE_TAG) return;
-  ws_controller_t *ctrl = (ws_controller_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  ws_controller_t *ctrl = (ws_controller_t *)js_get_native(value, WS_CONTROLLER_NATIVE_TAG);
   if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WS_CONTROLLER_NATIVE_TAG);
 }
 
 static void ts_rs_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != RS_STREAM_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, RS_STREAM_NATIVE_TAG));
+  js_clear_native(value, RS_STREAM_NATIVE_TAG);
 }
 
 static void ts_rs_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != RS_CONTROLLER_NATIVE_TAG) return;
-  rs_controller_t *ctrl = (rs_controller_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  rs_controller_t *ctrl = (rs_controller_t *)js_get_native(value, RS_CONTROLLER_NATIVE_TAG);
   if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, RS_CONTROLLER_NATIVE_TAG);
 }
 
 static inline bool ts_get_backpressure(ant_value_t ts_obj) {

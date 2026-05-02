@@ -52,7 +52,7 @@ static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
 
 static generator_data_t *generator_data(ant_value_t gen) {
   if (!js_check_native_tag(gen, GENERATOR_NATIVE_TAG)) return NULL;
-  return (generator_data_t *)js_get_native_ptr(gen);
+  return (generator_data_t *)js_get_native(gen, GENERATOR_NATIVE_TAG);
 }
 
 static generator_state_t generator_state(ant_value_t gen) {
@@ -285,13 +285,12 @@ bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t 
 
 static void generator_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t gen = js_obj_from_ptr(obj);
-  generator_data_t *data = (generator_data_t *)js_get_native_ptr(gen);
+  generator_data_t *data = (generator_data_t *)js_get_native(gen, GENERATOR_NATIVE_TAG);
   
   if (!data) return;
   if (data->coro) generator_clear_coro(gen, data->coro);
   
-  js_set_native_ptr(gen, NULL);
-  js_set_native_tag(gen, 0);
+  js_set_native(gen, NULL, 0);
   
   generator_free_queue(data);
   free(data);
@@ -600,8 +599,7 @@ ant_value_t sv_call_generator_closure_dispatch(
   coroutine_hold(coro, CORO_HOLD_GENERATOR);
   coroutine_release(coro);
 
-  js_set_native_ptr(gen, data);
-  js_set_native_tag(gen, GENERATOR_NATIVE_TAG);
+  js_set_native(gen, data, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
 
   ant_value_t instance_proto = js_get(js, callee_func, "prototype");

@@ -179,13 +179,13 @@ static wasm_valkind_t wasm_valkind_from_string(const char *name, size_t len, boo
 static wasm_module_handle_t *wasm_module_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_MODULE)) return NULL;
   if (!js_check_native_tag(value, WASM_MODULE_NATIVE_TAG)) return NULL;
-  return (wasm_module_handle_t *)js_get_native_ptr(value);
+  return (wasm_module_handle_t *)js_get_native(value, WASM_MODULE_NATIVE_TAG);
 }
 
 static wasm_instance_handle_t *wasm_instance_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_INSTANCE)) return NULL;
   if (!js_check_native_tag(value, WASM_INSTANCE_NATIVE_TAG)) return NULL;
-  return (wasm_instance_handle_t *)js_get_native_ptr(value);
+  return (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
 }
 
 static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_wrap_kind_t kind) {
@@ -196,7 +196,7 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
   }
 
   if (!js_check_native_tag(value, WASM_EXTERN_NATIVE_TAG)) return NULL;
-  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)js_get_native_ptr(value);
+  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)js_get_native(value, WASM_EXTERN_NATIVE_TAG);
   return handle && handle->kind == kind ? handle : NULL;
 }
 
@@ -325,7 +325,7 @@ static bool js_value_to_wasm(ant_t *js, ant_value_t value, wasm_valkind_t kind, 
       state = js_get_slot(value, SLOT_DATA);
       if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
         return false;
-      handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+      handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
       if (!handle || !handle->func) return false;
       out->of.ref = wasm_func_as_ref(handle->func);
       return out->of.ref != NULL;
@@ -375,15 +375,14 @@ static ant_value_t wasm_wrap_module(ant_t *js, wasm_store_t *store, wasm_module_
 }
 
 static void wasm_module_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WASM_MODULE_NATIVE_TAG) return;
-  wasm_module_handle_t *handle = (wasm_module_handle_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  wasm_module_handle_t *handle = (wasm_module_handle_t *)js_get_native(value, WASM_MODULE_NATIVE_TAG);
   if (!handle) return;
   if (handle->module) wasm_module_delete(handle->module);
   if (handle->store) wasm_store_delete(handle->store);
   
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WASM_MODULE_NATIVE_TAG);
 }
 
 static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle, ant_value_t module_ref) {
@@ -396,8 +395,8 @@ static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle,
 }
 
 static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WASM_INSTANCE_NATIVE_TAG) return;
-  wasm_instance_handle_t *handle = (wasm_instance_handle_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  wasm_instance_handle_t *handle = (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
   if (!handle) return;
   for (size_t j = 0; j < handle->host_func_count; j++) 
     if (handle->host_funcs[j]) wasm_func_delete(handle->host_funcs[j]);
@@ -405,8 +404,7 @@ static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
   free(handle->host_funcs);
   wasm_extern_vec_delete(&handle->exports);
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WASM_INSTANCE_NATIVE_TAG);
 }
 
 static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t kind, ant_value_t proto, int brand, wasm_store_t *store, bool own_handle, void *ptr, ant_value_t owner) {
@@ -433,8 +431,8 @@ static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t ki
 }
 
 static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WASM_EXTERN_NATIVE_TAG) return;
-  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)js_get_native(value, WASM_EXTERN_NATIVE_TAG);
   if (!handle) return;
 
   if (handle->own_handle) {
@@ -453,8 +451,7 @@ static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
   }
 
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WASM_EXTERN_NATIVE_TAG);
 }
 
 static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
@@ -465,7 +462,7 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
   if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
     return js_mkerr(js, "Invalid WebAssembly function");
 
-  handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+  handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
   func = handle ? handle->func : NULL;
   if (!func) return js_mkerr(js, "Invalid WebAssembly function");
 
@@ -531,15 +528,13 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
 }
 
 static void wasm_func_state_finalize(ant_t *js, ant_object_t *obj) {
-  if (obj->native.tag != WASM_FUNC_STATE_TAG) return;
-
-  wasm_func_handle_t *handle = (wasm_func_handle_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  wasm_func_handle_t *handle = (wasm_func_handle_t *)js_get_native(value, WASM_FUNC_STATE_TAG);
   if (!handle) return;
 
   if (handle->own_func && handle->func) wasm_func_delete(handle->func);
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WASM_FUNC_STATE_TAG);
 }
 
 static ant_value_t wasm_wrap_func(ant_t *js, wasm_func_t *func, ant_value_t owner, bool own_func) {
@@ -558,8 +553,7 @@ static ant_value_t wasm_wrap_func(ant_t *js, wasm_func_t *func, ant_value_t owne
   handle->own_func = own_func;
 
   state = js_mkobj(js);
-  js_set_native_ptr(state, handle);
-  js_set_native_tag(state, WASM_FUNC_STATE_TAG);
+  js_set_native(state, handle, WASM_FUNC_STATE_TAG);
   
   if (is_object_type(owner)) js_set_slot_wb(js, state, SLOT_ENTRIES, owner);
   js_set_finalizer(state, wasm_func_state_finalize);
@@ -1221,7 +1215,7 @@ static ant_value_t js_wasm_table_set(ant_t *js, ant_value_t *args, int nargs) {
     if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
       return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
     
-    func_handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+    func_handle = (wasm_func_handle_t *)js_get_native(state, WASM_FUNC_STATE_TAG);
     if (!func_handle || !func_handle->func)
       return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
     

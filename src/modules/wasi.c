@@ -224,7 +224,7 @@ static ant_value_t wasi_handle_proc_exit(wasm_module_inst_t inst) {
 static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
   if (!js_check_native_tag(js->current_func, WASI_FUNC_TAG))
     return js_mkerr(js, "Invalid WASI function");
-  wasi_func_env_t *env = (wasi_func_env_t *)js_get_native_ptr(js->current_func);
+  wasi_func_env_t *env = (wasi_func_env_t *)js_get_native(js->current_func, WASI_FUNC_TAG);
 
   uint32_t param_count = wasm_func_get_param_count(env->func, env->inst);
   uint32_t result_count = wasm_func_get_result_count(env->func, env->inst);
@@ -248,20 +248,19 @@ static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nar
 }
 
 static void wasi_func_finalize(ant_t *js, ant_object_t *obj) {
-  if (obj->native.tag != WASI_FUNC_TAG) return;
-
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, WASI_FUNC_TAG));
+  js_clear_native(value, WASI_FUNC_TAG);
 }
 
 static void wasi_instance_finalize(ant_t *js, ant_object_t *obj) {
-  if (obj->native.tag != WASI_INSTANCE_TAG) return;
-  wasi_instance_handle_t *handle = (wasi_instance_handle_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  wasi_instance_handle_t *handle = (wasi_instance_handle_t *)js_get_native(value, WASI_INSTANCE_TAG);
 
   if (!handle) return;
   if (handle->exec_env) wasm_runtime_destroy_exec_env(handle->exec_env);
   if (handle->inst) wasm_runtime_deinstantiate(handle->inst);
+  js_clear_native(value, WASI_INSTANCE_TAG);
   if (handle->module) wasm_runtime_unload(handle->module);
 
   free(handle->binary);
@@ -340,8 +339,7 @@ static void wasi_bind_func_export(
   GC_ROOT_PIN(js, obj);
   
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(wasi_exported_func_call));
-  js_set_native_ptr(obj, fenv);
-  js_set_native_tag(obj, WASI_FUNC_TAG);
+  js_set_native(obj, fenv, WASI_FUNC_TAG);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, instance_obj);
   js_set_finalizer(obj, wasi_func_finalize);
   js_set(js, exports_obj, name, js_obj_to_func(obj));
@@ -441,8 +439,7 @@ ant_value_t wasi_instantiate(
   ant_value_t instance_obj = js_mkobj(js);
   ant_value_t exports_obj = js_mkobj(js);
 
-  js_set_native_ptr(instance_obj, handle);
-  js_set_native_tag(instance_obj, WASI_INSTANCE_TAG);
+  js_set_native(instance_obj, handle, WASI_INSTANCE_TAG);
   js_set_slot_wb(js, instance_obj, SLOT_CTOR, module_obj);
   js_set_finalizer(instance_obj, wasi_instance_finalize);
 

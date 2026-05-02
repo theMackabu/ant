@@ -11,7 +11,6 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
 ) {
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
-  if (is_object_type(parent_proto)) js_set_proto_init(proto_obj, parent_proto);
 
   ant_value_t ctor_key = js_mkstr(js, "constructor", 11);
   if (is_err(ctor_key)) return ctor_key;
@@ -20,6 +19,8 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
   if (is_err(set_ctor)) return set_ctor;
   
   js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  if (is_object_type(parent_proto)) js_set_proto_init(proto_obj, parent_proto);
+
   ant_value_t proto_key = js_mkstr(js, "prototype", 9);
   if (is_err(proto_key)) return proto_key;
   

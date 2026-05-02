@@ -30,14 +30,13 @@ td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom) {
 
 static td_state_t *td_get_state(ant_value_t obj) {
   if (!js_check_native_tag(obj, TEXT_DECODER_NATIVE_TAG)) return NULL;
-  return (td_state_t *)js_get_native_ptr(obj);
+  return (td_state_t *)js_get_native(obj, TEXT_DECODER_NATIVE_TAG);
 }
 
 static void td_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != TEXT_DECODER_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, TEXT_DECODER_NATIVE_TAG));
+  js_clear_native(value, TEXT_DECODER_NATIVE_TAG);
 }
 
 static int resolve_encoding(const char *s, size_t len) {

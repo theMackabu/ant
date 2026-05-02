@@ -2745,7 +2745,7 @@ typedef struct {
 
 static inline ant_arguments_state_t *js_arguments_state(ant_value_t obj) {
   if (!js_check_native_tag(obj, ANT_ARGUMENTS_NATIVE_TAG)) return NULL;
-  return (ant_arguments_state_t *)js_get_native_ptr(obj);
+  return (ant_arguments_state_t *)js_get_native(obj, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
 static ant_value_t js_arguments_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
@@ -2801,10 +2801,9 @@ static bool js_arguments_deleter(ant_t *js, ant_value_t obj, const char *key, si
 }
 
 static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != ANT_ARGUMENTS_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, ANT_ARGUMENTS_NATIVE_TAG));
+  js_clear_native(value, ANT_ARGUMENTS_NATIVE_TAG);
 }
 
 ant_value_t js_create_arguments_object(
@@ -2849,8 +2848,7 @@ ant_value_t js_create_arguments_object(
     state->frame_index = (int)(frame - js->vm->frames);
     state->mapped_count = (uint32_t)mapped_count;
     
-    js_set_native_ptr(arr, state);
-    js_set_native_tag(arr, ANT_ARGUMENTS_NATIVE_TAG);
+    js_set_native(arr, state, ANT_ARGUMENTS_NATIVE_TAG);
     js_set_finalizer(arr, js_arguments_finalizer);
     js_set_getter(arr, js_arguments_getter);
     js_set_setter(arr, js_arguments_setter);

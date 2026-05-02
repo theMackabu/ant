@@ -884,13 +884,14 @@ static ant_value_t async_terminal_finish_callback(ant_t *js, ant_value_t state, 
 static void async_terminal_close_and_reject(ant_t *js, ant_value_t state, ant_value_t reason);
 
 static void async_terminal_state_finalize(ant_t *js, ant_object_t *obj) {
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, ASYNC_TERMINAL_STATE_TAG));
+  js_clear_native(value, ASYNC_TERMINAL_STATE_TAG);
 }
 
 static inline async_terminal_state_t *async_terminal_state(ant_value_t state) {
   if (!js_check_native_tag(state, ASYNC_TERMINAL_STATE_TAG)) return NULL;
-  return (async_terminal_state_t *)js_get_native_ptr(state);
+  return (async_terminal_state_t *)js_get_native(state, ASYNC_TERMINAL_STATE_TAG);
 }
 
 static inline int async_terminal_mode(ant_value_t state) {
@@ -1194,8 +1195,7 @@ static ant_value_t async_iter_terminal(ant_t *js, ant_value_t *args, int nargs, 
   st->index = 0;
   st->has_acc = (mode == ASYNC_TERM_REDUCE && nargs > 1);
   
-  js_set_native_tag(state, ASYNC_TERMINAL_STATE_TAG);
-  js_set_native_ptr(state, st);
+  js_set_native(state, st, ASYNC_TERMINAL_STATE_TAG);
   js_set_finalizer(state, async_terminal_state_finalize);
 
   js_set_slot_wb(js, state, SLOT_DATA, iter);

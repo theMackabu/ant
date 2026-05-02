@@ -52,7 +52,7 @@ static inline void stream_set_end_callback(ant_t *js, ant_value_t stream_obj, an
 
 static stream_private_state_t *stream_private_state(ant_value_t stream_obj) {
   if (!stream_is_instance(stream_obj)) return NULL;
-  return (stream_private_state_t *)js_get_native_ptr(stream_obj);
+  return (stream_private_state_t *)js_get_native(stream_obj, STREAM_NATIVE_TAG);
 }
 
 static ant_value_t stream_require_this(ant_t *js, ant_value_t value, const char *label) {
@@ -118,7 +118,7 @@ static void stream_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t stream_obj = js_obj_from_ptr(obj);
   stream_private_state_t *priv = stream_private_state(stream_obj);
   if (!priv) return;
-  js_set_native_ptr(stream_obj, NULL);
+  js_clear_native(stream_obj, STREAM_NATIVE_TAG);
   if (priv->attached_state && priv->attached_state_finalize)
     priv->attached_state_finalize(js, stream_obj, priv->attached_state);
   free(priv);
@@ -347,9 +347,7 @@ static ant_value_t stream_make_base_object(ant_t *js, ant_value_t proto) {
   stream_private_state_t *priv = calloc(1, sizeof(*priv));
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_native_tag(obj, STREAM_NATIVE_TAG);
-  
-  if (priv) js_set_native_ptr(obj, priv);
+  js_set_native(obj, priv, STREAM_NATIVE_TAG);
   js_set_slot(obj, SLOT_AUX, js_mkundef());
   js_set_finalizer(obj, stream_finalize);
   
@@ -1801,21 +1799,21 @@ ant_value_t stream_construct_writable(ant_t *js, ant_value_t base_proto, ant_val
 void stream_init_readable_object(ant_t *js, ant_value_t obj, ant_value_t options) {
   stream_init_constructors(js);
   if (!is_object_type(obj)) return;
-  js_set_native_tag(obj, STREAM_NATIVE_TAG);
+  js_set_native(obj, NULL, STREAM_NATIVE_TAG);
   stream_init_readable(js, obj, options);
 }
 
 void stream_init_writable_object(ant_t *js, ant_value_t obj, ant_value_t options) {
   stream_init_constructors(js);
   if (!is_object_type(obj)) return;
-  js_set_native_tag(obj, STREAM_NATIVE_TAG);
+  js_set_native(obj, NULL, STREAM_NATIVE_TAG);
   stream_init_writable(js, obj, options);
 }
 
 void stream_init_duplex_object(ant_t *js, ant_value_t obj, ant_value_t options) {
   stream_init_constructors(js);
   if (!is_object_type(obj)) return;
-  js_set_native_tag(obj, STREAM_NATIVE_TAG);
+  js_set_native(obj, NULL, STREAM_NATIVE_TAG);
   stream_init_readable(js, obj, options);
   stream_init_writable(js, obj, options);
 }

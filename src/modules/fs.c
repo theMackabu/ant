@@ -158,7 +158,7 @@ enum {
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
   if (!js_check_native_tag(value, FS_WATCHER_NATIVE_TAG)) return NULL;
-  return (fs_watcher_t *)js_get_native_ptr(value);
+  return (fs_watcher_t *)js_get_native(value, FS_WATCHER_NATIVE_TAG);
 }
 
 static void fs_add_active_watcher(fs_watcher_t *watcher) {
@@ -922,10 +922,10 @@ static ant_value_t js_fswatcher_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
 static void fs_watcher_finalize(ant_t *js, ant_object_t *obj) {
   fs_watcher_t *watcher = NULL;
-  if (!obj) return;
+  ant_value_t value = js_obj_from_ptr(obj);
 
-  watcher = (fs_watcher_t *)obj->native.ptr;
-  obj->native.ptr = NULL;
+  watcher = (fs_watcher_t *)js_get_native(value, FS_WATCHER_NATIVE_TAG);
+  js_clear_native(value, FS_WATCHER_NATIVE_TAG);
   if (!watcher) return;
 
   watcher->finalized = true;
@@ -1083,8 +1083,7 @@ static ant_value_t fs_watcher_make_object(ant_t *js, fs_watcher_t *watcher) {
 
   obj = js_mkobj(js);
   js_set_proto_init(obj, g_fswatcher_proto);
-  js_set_native_ptr(obj, watcher);
-  js_set_native_tag(obj, FS_WATCHER_NATIVE_TAG);
+  js_set_native(obj, watcher, FS_WATCHER_NATIVE_TAG);
   js_set_finalizer(obj, fs_watcher_finalize);
   watcher->obj = obj;
   
@@ -1587,7 +1586,7 @@ static ant_value_t builtin_fs_filehandle_writeFile(ant_t *js, ant_value_t *args,
 static void fs_init_filehandle_proto(ant_t *js) {
   if (is_object_type(g_filehandle_proto)) return;
   g_filehandle_proto = js_mkobj(js);
-  js_set_native_tag(g_filehandle_proto, FS_FILEHANDLE_NATIVE_TAG);
+  js_set_native(g_filehandle_proto, NULL, FS_FILEHANDLE_NATIVE_TAG);
   js_set(js, g_filehandle_proto, "close", js_mkfun(builtin_fs_filehandle_close));
   js_set(js, g_filehandle_proto, "stat", js_mkfun(builtin_fs_filehandle_stat));
   js_set(js, g_filehandle_proto, "sync", js_mkfun(builtin_fs_filehandle_sync));
@@ -1601,7 +1600,7 @@ static ant_value_t fs_make_filehandle(ant_t *js, int fd) {
   fs_init_filehandle_proto(js);
   ant_value_t handle = js_mkobj(js);
   
-  js_set_native_tag(handle, FS_FILEHANDLE_NATIVE_TAG);
+  js_set_native(handle, NULL, FS_FILEHANDLE_NATIVE_TAG);
   js_set_proto_init(handle, g_filehandle_proto);
   js_set_slot(handle, SLOT_DATA, js_mknum((double)fd));
   js_set(js, handle, "fd", js_mknum((double)fd));
@@ -4335,7 +4334,7 @@ static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
 
   rc = fs_watcher_start_event(watcher, path, opts.persistent, opts.recursive);
   if (rc != 0) {
-    js_set_native_ptr(watcher_obj, NULL);
+    js_clear_native(watcher_obj, FS_WATCHER_NATIVE_TAG);
     fs_watcher_free(watcher);
     return fs_watch_error(js, rc, path);
   }

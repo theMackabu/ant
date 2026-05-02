@@ -39,29 +39,27 @@ bool ws_is_controller(ant_value_t obj) {
 
 ws_stream_t *ws_get_stream(ant_value_t obj) {
   if (!js_check_native_tag(obj, WS_STREAM_NATIVE_TAG)) return NULL;
-  return (ws_stream_t *)js_get_native_ptr(obj);
+  return (ws_stream_t *)js_get_native(obj, WS_STREAM_NATIVE_TAG);
 }
 
 ws_controller_t *ws_get_controller(ant_value_t obj) {
   if (!js_check_native_tag(obj, WS_CONTROLLER_NATIVE_TAG)) return NULL;
-  return (ws_controller_t *)js_get_native_ptr(obj);
+  return (ws_controller_t *)js_get_native(obj, WS_CONTROLLER_NATIVE_TAG);
 }
 
 static void ws_stream_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WS_STREAM_NATIVE_TAG) return;
-  free(obj->native.ptr);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, WS_STREAM_NATIVE_TAG));
+  js_clear_native(value, WS_STREAM_NATIVE_TAG);
 }
 
 static void ws_controller_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != WS_CONTROLLER_NATIVE_TAG) return;
-  ws_controller_t *ctrl = (ws_controller_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  ws_controller_t *ctrl = (ws_controller_t *)js_get_native(value, WS_CONTROLLER_NATIVE_TAG);
   if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, WS_CONTROLLER_NATIVE_TAG);
 }
 
 ant_value_t ws_stream_controller(ant_value_t stream_obj) {

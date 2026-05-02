@@ -117,12 +117,12 @@ enum {
 
 static child_process_t *get_child_process(ant_value_t obj) {
   if (!js_check_native_tag(obj, CHILD_PROCESS_NATIVE_TAG)) return NULL;
-  return (child_process_t *)js_get_native_ptr(obj);
+  return (child_process_t *)js_get_native(obj, CHILD_PROCESS_NATIVE_TAG);
 }
 
 static child_stream_ctx_t *get_child_stream_ctx(ant_value_t obj) {
   if (!js_check_native_tag(obj, CHILD_STREAM_NATIVE_TAG)) return NULL;
-  return (child_stream_ctx_t *)js_get_native_ptr(obj);
+  return (child_stream_ctx_t *)js_get_native(obj, CHILD_STREAM_NATIVE_TAG);
 }
 static child_process_t *pending_children_tail = NULL;
 

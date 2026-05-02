@@ -57,7 +57,7 @@ static void ta_meta_free(void *ptr, size_t size) {
 ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value) {
   if (!is_object_type(value) || buffer_is_dataview(value)) return NULL;
   if (js_check_native_tag(value, BUFFER_ARRAYBUFFER_NATIVE_TAG))
-    return (ArrayBufferData *)js_get_native_ptr(value);
+    return (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   return NULL;
 }
 
@@ -66,32 +66,30 @@ TypedArrayData *buffer_get_typedarray_data(ant_value_t value) {
     return (TypedArrayData *)js_gettypedarray(value);
   if (!is_object_type(value)) return NULL;
   if (js_check_native_tag(value, BUFFER_TYPEDARRAY_NATIVE_TAG))
-    return (TypedArrayData *)js_get_native_ptr(value);
+    return (TypedArrayData *)js_get_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
   return NULL;
 }
 
 DataViewData *buffer_get_dataview_data(ant_value_t value) {
   if (!is_object_type(value)) return NULL;
   if (js_check_native_tag(value, BUFFER_DATAVIEW_NATIVE_TAG))
-    return (DataViewData *)js_get_native_ptr(value);
+    return (DataViewData *)js_get_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
   return NULL;
 }
 
 static void arraybuffer_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   if (!js_check_native_tag(value, BUFFER_ARRAYBUFFER_NATIVE_TAG)) return;
-  ArrayBufferData *data = (ArrayBufferData *)js_get_native_ptr(value);
-  js_set_native_ptr(value, NULL);
-  js_set_native_tag(value, 0);
+  ArrayBufferData *data = (ArrayBufferData *)js_get_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_clear_native(value, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   if (data) free_array_buffer_data(data);
 }
 
 static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   if (!js_check_native_tag(value, BUFFER_TYPEDARRAY_NATIVE_TAG)) return;
-  TypedArrayData *ta_data = (TypedArrayData *)js_get_native_ptr(value);
-  js_set_native_ptr(value, NULL);
-  js_set_native_tag(value, 0);
+  TypedArrayData *ta_data = (TypedArrayData *)js_get_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
+  js_clear_native(value, BUFFER_TYPEDARRAY_NATIVE_TAG);
   if (!ta_data) return;
 
   if (ta_data->buffer) free_array_buffer_data(ta_data->buffer);
@@ -101,9 +99,8 @@ static void typedarray_finalize(ant_t *js, ant_object_t *obj) {
 static void dataview_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   if (!js_check_native_tag(value, BUFFER_DATAVIEW_NATIVE_TAG)) return;
-  DataViewData *dv_data = (DataViewData *)js_get_native_ptr(value);
-  js_set_native_ptr(value, NULL);
-  js_set_native_tag(value, 0);
+  DataViewData *dv_data = (DataViewData *)js_get_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
+  js_clear_native(value, BUFFER_DATAVIEW_NATIVE_TAG);
   if (!dv_data) return;
 
   if (dv_data->buffer) free_array_buffer_data(dv_data->buffer);
@@ -386,8 +383,7 @@ static ant_value_t js_arraybuffer_constructor(ant_t *js, ant_value_t *args, int 
   ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
-  js_set_native_ptr(obj, data);
-  js_set_native_tag(obj, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set(js, obj, "byteLength", js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
 
@@ -420,8 +416,7 @@ static ant_value_t js_arraybuffer_slice(ant_t *js, ant_value_t *args, int nargs)
   ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
-  js_set_native_ptr(new_obj, new_data);
-  js_set_native_tag(new_obj, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
@@ -461,8 +456,7 @@ static ant_value_t js_arraybuffer_transfer(ant_t *js, ant_value_t *args, int nar
   ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
 
   if (is_special_object(proto)) js_set_proto_init(new_obj, proto);
-  js_set_native_ptr(new_obj, new_data);
-  js_set_native_tag(new_obj, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_set_native(new_obj, new_data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
   js_set_finalizer(new_obj, arraybuffer_finalize);
   
@@ -663,8 +657,7 @@ ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   ant_value_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   if (is_special_object(ab_proto)) js_set_proto_init(ab_obj, ab_proto);
   
-  js_set_native_ptr(ab_obj, buffer);
-  js_set_native_tag(ab_obj, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_set_native(ab_obj, buffer, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set(js, ab_obj, "byteLength", js_mknum((double)buffer->length));
   js_set_finalizer(ab_obj, arraybuffer_finalize);
   buffer->ref_count++;
@@ -691,8 +684,7 @@ ant_value_t create_typed_array_with_buffer(
   ant_value_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
-  js_set_native_ptr(obj, ta_data);
-  js_set_native_tag(obj, BUFFER_TYPEDARRAY_NATIVE_TAG);
+  js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
   js_set(js, obj, "length", js_mknum((double)length));
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
@@ -732,8 +724,7 @@ ant_value_t create_dataview_with_buffer(
   ant_value_t proto = js_get_ctor_proto(js, "DataView", 8);
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
 
-  js_set_native_ptr(obj, dv_data);
-  js_set_native_tag(obj, BUFFER_DATAVIEW_NATIVE_TAG);
+  js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
   js_mkprop_fast(js, obj, "buffer", 6, arraybuffer_obj);
   js_set_descriptor(js, obj, "buffer", 6, 0);
@@ -1435,8 +1426,7 @@ static ant_value_t js_dataview_constructor(ant_t *js, ant_value_t *args, int nar
   ant_value_t proto = js_get_ctor_proto(js, "DataView", 8);
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
-  js_set_native_ptr(obj, dv_data);
-  js_set_native_tag(obj, BUFFER_DATAVIEW_NATIVE_TAG);
+  js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
   js_mkprop_fast(js, obj, "buffer", 6, args[0]);
   js_set_descriptor(js, obj, "buffer", 6, 0);
@@ -2880,8 +2870,7 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_t *js, ant_value_t *args
   ant_value_t proto = js_get_ctor_proto(js, "SharedArrayBuffer", 17);
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
-  js_set_native_ptr(obj, data);
-  js_set_native_tag(obj, BUFFER_ARRAYBUFFER_NATIVE_TAG);
+  js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
   js_set(js, obj, "byteLength", js_mknum((double)length));
   js_set_finalizer(obj, arraybuffer_finalize);
   

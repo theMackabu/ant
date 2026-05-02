@@ -41,7 +41,7 @@ static void tls_context_free(ant_tls_context_wrap_t *wrap) {
 
 static ant_tls_context_wrap_t *tls_context_data(ant_value_t value) {
   if (!js_check_native_tag(value, TLS_CONTEXT_NATIVE_TAG)) return NULL;
-  return (ant_tls_context_wrap_t *)js_get_native_ptr(value);
+  return (ant_tls_context_wrap_t *)js_get_native(value, TLS_CONTEXT_NATIVE_TAG);
 }
 
 static bool tls_value_bytes(
@@ -95,8 +95,7 @@ static ant_value_t js_tls_context_close(ant_t *js, ant_value_t *args, int nargs)
   if (!wrap) return js_getthis(js);
 
   tls_context_free(wrap);
-  js_set_native_ptr(wrap->obj, NULL);
-  js_set_native_tag(wrap->obj, 0);
+  js_set_native(wrap->obj, NULL, 0);
   return js_getthis(js);
 }
 
@@ -214,8 +213,7 @@ static ant_value_t js_tls_create_context(ant_t *js, ant_value_t *args, int nargs
   js_set_proto_init(obj, g_tls_context_proto);
   wrap->obj = obj;
   
-  js_set_native_ptr(obj, wrap);
-  js_set_native_tag(obj, TLS_CONTEXT_NATIVE_TAG);
+  js_set_native(obj, wrap, TLS_CONTEXT_NATIVE_TAG);
   
   return obj;
 }

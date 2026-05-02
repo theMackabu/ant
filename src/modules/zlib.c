@@ -76,7 +76,7 @@ static ant_value_t pick_callback(ant_value_t *args, int nargs) {
 
 static zlib_stream_t *zlib_stream_ptr(ant_value_t obj) {
   if (!js_check_native_tag(obj, ZLIB_STREAM_TAG)) return NULL;
-  return (zlib_stream_t *)js_get_native_ptr(obj);
+  return (zlib_stream_t *)js_get_native(obj, ZLIB_STREAM_TAG);
 }
 
 static void zlib_add_active(zlib_stream_t *st) {
@@ -424,8 +424,7 @@ static ant_value_t zlib_create_stream(ant_t *js, zlib_kind_t kind) {
   ant_value_t obj = js_mkobj(js);
   if (is_object_type(g_transform_proto)) js_set_proto_init(obj, g_transform_proto);
 
-  js_set_native_ptr(obj, st);
-  js_set_native_tag(obj, ZLIB_STREAM_TAG);
+  js_set_native(obj, st, ZLIB_STREAM_TAG);
 
   js_set(js, obj, "readable", js_true);
   js_set(js, obj, "writable", js_true);

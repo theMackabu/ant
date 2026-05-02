@@ -102,12 +102,12 @@ static ant_value_t net_not_implemented(ant_t *js, const char *what);
 
 static net_server_t *net_server_data(ant_value_t value) {
   if (!js_check_native_tag(value, NET_SERVER_NATIVE_TAG)) return NULL;
-  return (net_server_t *)js_get_native_ptr(value);
+  return (net_server_t *)js_get_native(value, NET_SERVER_NATIVE_TAG);
 }
 
 static net_socket_t *net_socket_data(ant_value_t value) {
   if (!js_check_native_tag(value, NET_SOCKET_NATIVE_TAG)) return NULL;
-  return (net_socket_t *)js_get_native_ptr(value);
+  return (net_socket_t *)js_get_native(value, NET_SOCKET_NATIVE_TAG);
 }
 
 static void net_add_active_server(net_server_t *server) {
@@ -357,8 +357,7 @@ static void net_socket_detach(net_socket_t *socket) {
 
   net_remove_active_socket(socket);
   if (is_object_type(socket->obj)) {
-    js_set_native_ptr(socket->obj, NULL);
-    js_set_native_tag(socket->obj, 0);
+    js_set_native(socket->obj, NULL, 0);
   }
   net_server_maybe_finish_close(socket->server);
   free(socket);
@@ -383,8 +382,7 @@ static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open) {
   socket->encoding = js_mkundef();
   socket->allow_half_open = allow_half_open;
 
-  js_set_native_ptr(obj, socket);
-  js_set_native_tag(obj, NET_SOCKET_NATIVE_TAG);
+  js_set_native(obj, socket, NET_SOCKET_NATIVE_TAG);
   js_set(js, obj, "remoteAddress", js_mkundef());
   js_set(js, obj, "remotePort", js_mkundef());
   js_set(js, obj, "remoteFamily", js_mkundef());
@@ -431,8 +429,7 @@ static net_server_t *net_server_create(ant_t *js) {
     return NULL;
   }
 
-  js_set_native_ptr(obj, server);
-  js_set_native_tag(obj, NET_SERVER_NATIVE_TAG);
+  js_set_native(obj, server, NET_SERVER_NATIVE_TAG);
   net_server_sync_state(server);
   return server;
 }

@@ -658,7 +658,7 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
 
 static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int nargs) {
   fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
-    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    ? (fetch_request_t *)js_get_native(js->current_func, FETCH_REQUEST_NATIVE_TAG)
     : NULL;
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
 
@@ -678,7 +678,7 @@ static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int narg
 static void fetch_upload_schedule_next_read(fetch_request_t *req);
 static ant_value_t fetch_upload_on_read(ant_t *js, ant_value_t *args, int nargs) {
   fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
-    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    ? (fetch_request_t *)js_get_native(js->current_func, FETCH_REQUEST_NATIVE_TAG)
     : NULL;
   
   ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
@@ -839,7 +839,7 @@ static void fetch_start_http(fetch_request_t *req) {
 
 static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs) {
   fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
-    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    ? (fetch_request_t *)js_get_native(js->current_func, FETCH_REQUEST_NATIVE_TAG)
     : NULL;
   ant_value_t signal = 0;
   ant_value_t reason = 0;

@@ -347,22 +347,22 @@ static ffi_marshaled_type_t ffi_infer_variadic_type(ant_value_t value) {
 
 static ffi_library_handle_t *ffi_library_data(ant_value_t value) {
   if (!js_check_native_tag(value, FFI_LIBRARY_NATIVE_TAG)) return NULL;
-  return (ffi_library_handle_t *)js_get_native_ptr(value);
+  return (ffi_library_handle_t *)js_get_native(value, FFI_LIBRARY_NATIVE_TAG);
 }
 
 static ffi_function_handle_t *ffi_function_data(ant_value_t value) {
   if (!js_check_native_tag(value, FFI_FUNCTION_NATIVE_TAG)) return NULL;
-  return (ffi_function_handle_t *)js_get_native_ptr(value);
+  return (ffi_function_handle_t *)js_get_native(value, FFI_FUNCTION_NATIVE_TAG);
 }
 
 static ffi_pointer_handle_t *ffi_pointer_data(ant_value_t value) {
   if (!js_check_native_tag(value, FFI_POINTER_NATIVE_TAG)) return NULL;
-  return (ffi_pointer_handle_t *)js_get_native_ptr(value);
+  return (ffi_pointer_handle_t *)js_get_native(value, FFI_POINTER_NATIVE_TAG);
 }
 
 static ffi_callback_handle_t *ffi_callback_data(ant_value_t value) {
   if (!js_check_native_tag(value, FFI_CALLBACK_NATIVE_TAG)) return NULL;
-  return (ffi_callback_handle_t *)js_get_native_ptr(value);
+  return (ffi_callback_handle_t *)js_get_native(value, FFI_CALLBACK_NATIVE_TAG);
 }
 
 static void ffi_library_close_handle(ffi_library_handle_t *library) {
@@ -470,8 +470,7 @@ static ant_value_t ffi_make_pointer(ant_t *js, ffi_pointer_region_t *region, siz
   if (region) region->ref_count++;
 
   if (g_ffi_pointer_proto) js_set_proto_init(obj, g_ffi_pointer_proto);
-  js_set_native_ptr(obj, handle);
-  js_set_native_tag(obj, FFI_POINTER_NATIVE_TAG);
+  js_set_native(obj, handle, FFI_POINTER_NATIVE_TAG);
   js_set_finalizer(obj, ffi_pointer_finalize);
 
   return obj;
@@ -773,8 +772,7 @@ static ant_value_t ffi_make_function(ant_t *js, ffi_library_handle_t *library, c
 
   if (g_ffi_function_proto) js_set_proto_init(obj, g_ffi_function_proto);
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(ffi_function_call));
-  js_set_native_ptr(obj, handle);
-  js_set_native_tag(obj, FFI_FUNCTION_NATIVE_TAG);
+  js_set_native(obj, handle, FFI_FUNCTION_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, library ? library->obj : js_mkundef());
   js_set_finalizer(obj, ffi_function_finalize);
 
@@ -784,56 +782,52 @@ static ant_value_t ffi_make_function(ant_t *js, ffi_library_handle_t *library, c
 
 void ffi_library_finalize(ant_t *js, ant_object_t *obj) {
   ffi_library_handle_t *library;
-  if (obj->native.tag != FFI_LIBRARY_NATIVE_TAG) return;
+  ant_value_t value = js_obj_from_ptr(obj);
   
-  library = (ffi_library_handle_t *)obj->native.ptr;
+  library = (ffi_library_handle_t *)js_get_native(value, FFI_LIBRARY_NATIVE_TAG);
   if (!library) return;
   
   ffi_library_close_handle(library);
   free(library->path);
   free(library);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, FFI_LIBRARY_NATIVE_TAG);
 }
 
 void ffi_function_finalize(ant_t *js, ant_object_t *obj) {
   ffi_function_handle_t *handle;
-  if (obj->native.tag != FFI_FUNCTION_NATIVE_TAG) return;
+  ant_value_t value = js_obj_from_ptr(obj);
   
-  handle = (ffi_function_handle_t *)obj->native.ptr;
+  handle = (ffi_function_handle_t *)js_get_native(value, FFI_FUNCTION_NATIVE_TAG);
   if (!handle) return;
   
   free(handle->symbol_name);
   ffi_signature_cleanup(&handle->signature);
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, FFI_FUNCTION_NATIVE_TAG);
 }
 
 void ffi_pointer_finalize(ant_t *js, ant_object_t *obj) {
   ffi_pointer_handle_t *handle;
-  if (obj->native.tag != FFI_POINTER_NATIVE_TAG) return;
+  ant_value_t value = js_obj_from_ptr(obj);
   
-  handle = (ffi_pointer_handle_t *)obj->native.ptr;
+  handle = (ffi_pointer_handle_t *)js_get_native(value, FFI_POINTER_NATIVE_TAG);
   if (!handle) return;
   
   ffi_pointer_close_handle(handle, false);
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, FFI_POINTER_NATIVE_TAG);
 }
 
 void ffi_callback_finalize(ant_t *js, ant_object_t *obj) {
   ffi_callback_handle_t *handle;
-  if (obj->native.tag != FFI_CALLBACK_NATIVE_TAG) return;
+  ant_value_t value = js_obj_from_ptr(obj);
   
-  handle = (ffi_callback_handle_t *)obj->native.ptr;
+  handle = (ffi_callback_handle_t *)js_get_native(value, FFI_CALLBACK_NATIVE_TAG);
   if (!handle) return;
   
   ffi_callback_close_handle(handle);
   free(handle);
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, FFI_CALLBACK_NATIVE_TAG);
 }
 
 static bool ffi_callback_result_to_c(
@@ -1003,8 +997,7 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   obj = js_mkobj(js);
   if (g_ffi_library_proto) js_set_proto_init(obj, g_ffi_library_proto);
   library->obj = obj;
-  js_set_native_ptr(obj, library);
-  js_set_native_tag(obj, FFI_LIBRARY_NATIVE_TAG);
+  js_set_native(obj, library, FFI_LIBRARY_NATIVE_TAG);
   js_set_finalizer(obj, ffi_library_finalize);
   return obj;
 }
@@ -1402,8 +1395,7 @@ static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) 
   callback->owner_obj = obj;
   callback->owner_thread = pthread_self();
   callback->closed = false;
-  js_set_native_ptr(obj, callback);
-  js_set_native_tag(obj, FFI_CALLBACK_NATIVE_TAG);
+  js_set_native(obj, callback, FFI_CALLBACK_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_DATA, fn);
   js_set_finalizer(obj, ffi_callback_finalize);
   return obj;

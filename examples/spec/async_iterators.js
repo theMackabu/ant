@@ -44,6 +44,11 @@ const dynamicAsyncIter = dynamicAsyncGen();
 test('AsyncGeneratorFunction constructs async generator function', Object.getPrototypeOf(dynamicAsyncGen), AsyncGeneratorFunction.prototype);
 test('AsyncGeneratorFunction instance uses function prototype', Object.getPrototypeOf(dynamicAsyncIter), dynamicAsyncGen.prototype);
 test('AsyncGeneratorFunction yielded value', (await dynamicAsyncIter.next()).value, 4);
+test(
+  'strict async generator function expression has own prototype',
+  Function('"use strict"; return (async function* () {}).hasOwnProperty("prototype");')(),
+  true
+);
 
 class CustomAsyncIterator extends AsyncIterator {
   constructor(values) {

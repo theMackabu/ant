@@ -1,15 +1,18 @@
+#include "ptr.h"
+#include "sugar.h"
+#include "shapes.h"
+#include "runtime.h"
 #include "internal.h"
+
+#include "silver/engine.h"
+#include "modules/regex.h"
+#include "modules/generator.h"
+#include "modules/collections.h"
+
 #include "gc.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
-#include "sugar.h"
-#include "silver/engine.h"
-#include "shapes.h"
-#include "runtime.h"
-#include "modules/collections.h"
-#include "modules/generator.h"
-#include "modules/regex.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -245,8 +248,8 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->type_tag == T_MAP) {
-    map_entry_t **head = obj->native.tag == MAP_NATIVE_TAG 
-      ? (map_entry_t **)obj->native.ptr : NULL;
+    ant_value_t value = js_obj_from_ptr(obj);
+    map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
     if (head) {
     map_entry_t *e, *tmp;
     HASH_ITER(hh, *head, e, tmp) { 
@@ -256,8 +259,8 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   } 
   
   else if (obj->type_tag == T_WEAKMAP) {
-    weakmap_entry_t **head = obj->native.tag == WEAKMAP_NATIVE_TAG 
-      ? (weakmap_entry_t **)obj->native.ptr : NULL;
+    ant_value_t value = js_obj_from_ptr(obj);
+    weakmap_entry_t **head = (weakmap_entry_t **)js_get_native(value, WEAKMAP_NATIVE_TAG);
     if (head) {
     weakmap_entry_t *e, *tmp;
     HASH_ITER(hh, *head, e, tmp) {
@@ -267,8 +270,8 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   } 
   
   else if (obj->type_tag == T_SET) {
-    set_entry_t **head = obj->native.tag == SET_NATIVE_TAG 
-      ? (set_entry_t **)obj->native.ptr : NULL;
+    ant_value_t value = js_obj_from_ptr(obj);
+    set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
     if (head) {
       set_entry_t *e, *tmp;
       HASH_ITER(hh, *head, e, tmp) { gc_mark_value(js, e->value); }
@@ -568,20 +571,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->shape = NULL;
   }
 
-  if (ant_object_has_sidecar(obj)) {
-    ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-    free(sidecar->extra_slots);
-    free(sidecar->proxy_state);
-    free(sidecar->private_table.entries);
-    free(sidecar);
-    obj->extra_slots = NULL;
-  } 
-  
-  else if (obj->extra_slots) {
-    free(obj->extra_slots);
-    obj->extra_slots = NULL;
-  }
-
   if (obj->promise_state && obj->promise_state->gc_pending_rooted)
     gc_unroot_pending_promise(obj);
 
@@ -599,42 +588,65 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   switch (obj->type_tag) {
     case T_MAP: {
-      map_entry_t **head = obj->native.tag == MAP_NATIVE_TAG ? (map_entry_t **)obj->native.ptr : NULL;
+      ant_value_t value = js_obj_from_ptr(obj);
+      map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
       if (head) {
         map_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e->key); free(e); }
         free(head);
+        js_clear_native(value, MAP_NATIVE_TAG);
       }
       break;
     }
     case T_SET: {
-      set_entry_t **head = obj->native.tag == SET_NATIVE_TAG ? (set_entry_t **)obj->native.ptr : NULL;
+      ant_value_t value = js_obj_from_ptr(obj);
+      set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
       if (head) {
         set_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e->key); free(e); }
         free(head);
+        js_clear_native(value, SET_NATIVE_TAG);
       }
       break;
     }
     case T_WEAKMAP: {
-      weakmap_entry_t **head = obj->native.tag == WEAKMAP_NATIVE_TAG ? (weakmap_entry_t **)obj->native.ptr : NULL;
+      ant_value_t value = js_obj_from_ptr(obj);
+      weakmap_entry_t **head = (weakmap_entry_t **)js_get_native(value, WEAKMAP_NATIVE_TAG);
       if (head) {
         weakmap_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e); }
         free(head);
+        js_clear_native(value, WEAKMAP_NATIVE_TAG);
       }
       break;
     }
     case T_WEAKSET: {
-      weakset_entry_t **head = obj->native.tag == WEAKSET_NATIVE_TAG ? (weakset_entry_t **)obj->native.ptr : NULL;
+      ant_value_t value = js_obj_from_ptr(obj);
+      weakset_entry_t **head = (weakset_entry_t **)js_get_native(value, WEAKSET_NATIVE_TAG);
       if (head) {
         weakset_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e); }
         free(head);
+        js_clear_native(value, WEAKSET_NATIVE_TAG);
       }
       break;
     }
     default: break;
+  }
+
+  if (ant_object_has_sidecar(obj)) {
+    ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+    free(sidecar->extra_slots);
+    free(sidecar->native_entries);
+    free(sidecar->proxy_state);
+    free(sidecar->private_table.entries);
+    free(sidecar);
+    obj->extra_slots = NULL;
+  } 
+  
+  else if (obj->extra_slots) {
+    free(obj->extra_slots);
+    obj->extra_slots = NULL;
   }
 
   free(obj->overflow_prop);

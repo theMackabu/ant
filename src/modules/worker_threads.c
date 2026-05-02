@@ -94,7 +94,7 @@ static void wt_init_env_store(ant_t *js, bool is_worker) {
 static ant_worker_thread_t *wt_get_worker(ant_t *js, ant_value_t this_obj) {
   if (!is_object_type(this_obj)) return NULL;
   if (!js_check_native_tag(this_obj, WORKER_NATIVE_TAG)) return NULL;
-  return (ant_worker_thread_t *)js_get_native_ptr(this_obj);
+  return (ant_worker_thread_t *)js_get_native(this_obj, WORKER_NATIVE_TAG);
 }
 
 static bool wt_is_message_port(ant_t *js, ant_value_t obj) {

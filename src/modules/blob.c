@@ -30,7 +30,7 @@ bool blob_is_blob(ant_t *js, ant_value_t obj) {
 
 blob_data_t *blob_get_data(ant_value_t obj) {
   if (!js_check_native_tag(obj, BLOB_NATIVE_TAG)) return NULL;
-  return (blob_data_t *)js_get_native_ptr(obj);
+  return (blob_data_t *)js_get_native(obj, BLOB_NATIVE_TAG);
 }
 
 static blob_data_t *blob_data_new(const uint8_t *data, size_t size, const char *type) {
@@ -152,11 +152,10 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
 }
 
 static void blob_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != BLOB_NATIVE_TAG) return;
-  blob_data_t *bd = (blob_data_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  blob_data_t *bd = (blob_data_t *)js_get_native(value, BLOB_NATIVE_TAG);
   if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, BLOB_NATIVE_TAG);
 }
 
 ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char *type) {

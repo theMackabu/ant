@@ -35,15 +35,14 @@ enum { STRING_DECODER_NATIVE_TAG = 0x53444543u }; // SDEC
 
 static sd_state_t *sd_get_state(ant_value_t obj) {
   if (!js_check_native_tag(obj, STRING_DECODER_NATIVE_TAG)) return NULL;
-  return (sd_state_t *)js_get_native_ptr(obj);
+  return (sd_state_t *)js_get_native(obj, STRING_DECODER_NATIVE_TAG);
 }
 
 static void sd_finalize(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->native.tag != STRING_DECODER_NATIVE_TAG) return;
-  sd_state_t *st = (sd_state_t *)obj->native.ptr;
+  ant_value_t value = js_obj_from_ptr(obj);
+  sd_state_t *st = (sd_state_t *)js_get_native(value, STRING_DECODER_NATIVE_TAG);
   if (st) { free(st->td); free(st); }
-  obj->native.ptr = NULL;
-  obj->native.tag = 0;
+  js_clear_native(value, STRING_DECODER_NATIVE_TAG);
 }
 
 static int sd_parse_encoding(const char *s, size_t len) {
