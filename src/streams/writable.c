@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -37,30 +38,30 @@ bool ws_is_controller(ant_value_t obj) {
 }
 
 ws_stream_t *ws_get_stream(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (ws_stream_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, WS_STREAM_NATIVE_TAG)) return NULL;
+  return (ws_stream_t *)js_get_native_ptr(obj);
 }
 
 ws_controller_t *ws_get_controller(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (ws_controller_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, WS_CONTROLLER_NATIVE_TAG)) return NULL;
+  return (ws_controller_t *)js_get_native_ptr(obj);
 }
 
 static void ws_stream_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((ws_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != WS_STREAM_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void ws_controller_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  ws_controller_t *ctrl = 
-    (ws_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != WS_CONTROLLER_NATIVE_TAG) return;
+  ws_controller_t *ctrl = (ws_controller_t *)obj->native.ptr;
+  if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 ant_value_t ws_stream_controller(ant_value_t stream_obj) {
@@ -1075,7 +1076,7 @@ static ant_value_t setup_ws_default_controller(
   ant_value_t ctrl_obj = js_mkobj(js);
   js_set_proto_init(ctrl_obj, g_ws_controller_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_CONTROLLER));
-  js_set_slot(ctrl_obj, SLOT_DATA, ANT_PTR(ctrl));
+  js_set_native(ctrl_obj, ctrl, WS_CONTROLLER_NATIVE_TAG);
   js_set_slot(ctrl_obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(ctrl_obj, SLOT_WS_WRITE, write_fn);
   js_set_slot(ctrl_obj, SLOT_WS_CLOSE, close_fn);
@@ -1157,7 +1158,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, WS_STREAM_NATIVE_TAG);
   js_set_slot(obj, SLOT_SETTLED, js_mkarr(js));
   js_set_finalizer(obj, ws_stream_finalize);
 

@@ -25,7 +25,17 @@ bool formdata_is_empty(ant_value_t fd);
 bool formdata_is_formdata(ant_t *js, ant_value_t obj);
 
 ant_value_t formdata_create_empty(ant_t *js);
-ant_value_t formdata_append_string(ant_t *js, ant_value_t fd, ant_value_t name_v, ant_value_t value_v);
-ant_value_t formdata_append_file(ant_t *js, ant_value_t fd, ant_value_t name_v, ant_value_t blob_v, ant_value_t filename_v);
+fd_data_t *formdata_get_data(ant_value_t fd);
+
+ant_value_t formdata_append_string(
+  ant_t *js, ant_value_t fd,
+  ant_value_t name_v, ant_value_t value_v
+);
+
+ant_value_t formdata_append_file(
+  ant_t *js, ant_value_t fd,
+  ant_value_t name_v, ant_value_t blob_v, 
+  ant_value_t filename_v
+);
 
 #endif

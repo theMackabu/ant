@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -49,30 +50,30 @@ bool rs_stream_unusable(ant_value_t stream_obj) {
 }
 
 rs_stream_t *rs_get_stream(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (rs_stream_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, RS_STREAM_NATIVE_TAG)) return NULL;
+  return (rs_stream_t *)js_get_native_ptr(obj);
 }
 
 rs_controller_t *rs_get_controller(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (rs_controller_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, RS_CONTROLLER_NATIVE_TAG)) return NULL;
+  return (rs_controller_t *)js_get_native_ptr(obj);
 }
 
 static void rs_stream_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((rs_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != RS_STREAM_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void rs_controller_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  rs_controller_t *ctrl = 
-    (rs_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != RS_CONTROLLER_NATIVE_TAG) return;
+  rs_controller_t *ctrl = (rs_controller_t *)obj->native.ptr;
+  if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {
@@ -805,7 +806,7 @@ static ant_value_t setup_default_controller(
   ant_value_t ctrl_obj = js_mkobj(js);
   js_set_proto_init(ctrl_obj, g_controller_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_CONTROLLER));
-  js_set_slot(ctrl_obj, SLOT_DATA, ANT_PTR(ctrl));
+  js_set_native(ctrl_obj, ctrl, RS_CONTROLLER_NATIVE_TAG);
   js_set_slot(ctrl_obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(ctrl_obj, SLOT_RS_PULL, pull_fn);
   js_set_slot(ctrl_obj, SLOT_RS_CANCEL, cancel_fn);
@@ -879,7 +880,7 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(obj, rs_stream_finalize);
 
   if (is_bytes_source)
@@ -950,7 +951,7 @@ ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_rs_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(obj, rs_stream_finalize);
 
   ant_value_t ctrl_obj = setup_default_controller(js, obj, pull_fn, cancel_fn, js_mkundef(), hwm);

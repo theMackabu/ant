@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "base64.h"
 #include "errors.h"
 #include "internal.h"
@@ -30,17 +31,19 @@ typedef struct {
 
 static ant_value_t g_string_decoder_proto = 0;
 
+enum { STRING_DECODER_NATIVE_TAG = 0x53444543u }; // SDEC
+
 static sd_state_t *sd_get_state(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (sd_state_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, STRING_DECODER_NATIVE_TAG)) return NULL;
+  return (sd_state_t *)js_get_native_ptr(obj);
 }
 
 static void sd_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  sd_state_t *st = (sd_state_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != STRING_DECODER_NATIVE_TAG) return;
+  sd_state_t *st = (sd_state_t *)obj->native.ptr;
   if (st) { free(st->td); free(st); }
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static int sd_parse_encoding(const char *s, size_t len) {
@@ -225,7 +228,7 @@ ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
   ant_value_t proto = js_instance_proto_from_new_target(js, g_string_decoder_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, STRING_DECODER_NATIVE_TAG);
   js_set_finalizer(obj, sd_finalize);
 
   return obj;

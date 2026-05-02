@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -29,6 +30,11 @@ enum {
 static ant_value_t g_formdata_proto      = 0;
 static ant_value_t g_formdata_iter_proto = 0;
 static fd_data_t *get_fd_data(ant_value_t obj);
+
+enum {
+  FORMDATA_NATIVE_TAG = 0x46444154u,     // FDAT
+  FORMDATA_ITER_NATIVE_TAG = 0x46444954u // FDIT
+};
 
 bool formdata_is_formdata(ant_t *js, ant_value_t obj) {
   return js_check_brand(obj, BRAND_FORMDATA);
@@ -64,9 +70,13 @@ static void fd_data_free(fd_data_t *d) {
 }
 
 static fd_data_t *get_fd_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (fd_data_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, FORMDATA_NATIVE_TAG)) return NULL;
+  return (fd_data_t *)js_get_native_ptr(obj);
+}
+
+// TODO: compact
+fd_data_t *formdata_get_data(ant_value_t fd) {
+  return get_fd_data(fd);
 }
 
 static ant_value_t get_fd_values(ant_value_t obj) {
@@ -74,10 +84,11 @@ static ant_value_t get_fd_values(ant_value_t obj) {
 }
 
 static void formdata_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  fd_data_t *d = (fd_data_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != FORMDATA_NATIVE_TAG) return;
+  fd_data_t *d = (fd_data_t *)obj->native.ptr;
   fd_data_free(d);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static bool fd_append_str(fd_data_t *d, const char *name, const char *value) {
@@ -134,7 +145,7 @@ ant_value_t formdata_create_empty(ant_t *js) {
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_formdata_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(d));
+  js_set_native(obj, d, FORMDATA_NATIVE_TAG);
   
   ant_value_t vals = js_mkarr(js);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);
@@ -369,10 +380,10 @@ static ant_value_t js_formdata_foreach(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state_v = js_get_slot(js->this_val, SLOT_ITER_STATE);
-  if (vtype(state_v) != T_NUM) return js_iter_result(js, false, js_mkundef());
+  if (!js_check_native_tag(js->this_val, FORMDATA_ITER_NATIVE_TAG))
+    return js_iter_result(js, false, js_mkundef());
 
-  fd_iter_t *st = (fd_iter_t *)(uintptr_t)(size_t)js_getnum(state_v);
+  fd_iter_t *st = (fd_iter_t *)js_get_native_ptr(js->this_val);
   ant_value_t fd_obj = js_get_slot(js->this_val, SLOT_DATA);
   fd_data_t *d = get_fd_data(fd_obj);
   if (!d) return js_iter_result(js, false, js_mkundef());
@@ -407,10 +418,10 @@ static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void formdata_iter_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_ITER_STATE);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  fd_iter_t *st = (fd_iter_t *)(uintptr_t)(size_t)js_getnum(slot->value);
-  free(st);
+  if (!obj || obj->native.tag != FORMDATA_ITER_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {
@@ -420,7 +431,7 @@ static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {
 
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, g_formdata_iter_proto);
-  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(st));
+  js_set_native(iter, st, FORMDATA_ITER_NATIVE_TAG);
   js_set_slot_wb(js, iter, SLOT_DATA, fd_obj);
   js_set_finalizer(iter, formdata_iter_finalize);
   return iter;
@@ -452,7 +463,7 @@ static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(d));
+  js_set_native(obj, d, FORMDATA_NATIVE_TAG);
   
   ant_value_t vals = js_mkarr(js);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);

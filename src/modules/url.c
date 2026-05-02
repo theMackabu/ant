@@ -7,6 +7,7 @@
 #include <uriparser/Uri.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
@@ -20,6 +21,8 @@ static ant_value_t g_url_proto = 0;
 static ant_value_t g_usp_proto = 0;
 static ant_value_t g_usp_iter_proto = 0;
 
+enum { URL_NATIVE_TAG = 0x55524c53u }; // URLS
+
 enum {
   USP_ITER_ENTRIES = 0,
   USP_ITER_KEYS = 1,
@@ -27,9 +30,8 @@ enum {
 };
 
 url_state_t *url_get_state(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (url_state_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, URL_NATIVE_TAG)) return NULL;
+  return (url_state_t *)js_get_native_ptr(obj);
 }
 
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
@@ -49,9 +51,10 @@ void url_free_state(url_state_t *s) {
 }
 
 static void url_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  url_free_state((url_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != URL_NATIVE_TAG) return;
+  url_free_state((url_state_t *)obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static int default_port_for(const char *proto) {
@@ -979,7 +982,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_url_proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(s));
+  js_set_native(obj, s, URL_NATIVE_TAG);
   js_set_finalizer(obj, url_finalize);
 
   const char *query = (s->search && s->search[0] == '?') ? s->search + 1 : "";
@@ -992,7 +995,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t make_url_obj(ant_t *js, url_state_t *s) {
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_url_proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(s));
+  js_set_native(obj, s, URL_NATIVE_TAG);
   js_set_finalizer(obj, url_finalize);
   const char *query = (s->search && s->search[0] == '?') ? s->search + 1 : "";
   ant_value_t usp = make_usp_for_url(js, obj, query);

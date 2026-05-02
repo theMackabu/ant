@@ -51,10 +51,24 @@ typedef struct set_iterator_state {
   iter_type_t type;
 } set_iterator_state_t;
 
+enum {
+  MAP_NATIVE_TAG = 0x4d415050u, // MAPP
+  SET_NATIVE_TAG = 0x53455450u, // SETP
+  
+  WEAKMAP_NATIVE_TAG = 0x574d4150u, // WMAP
+  WEAKSET_NATIVE_TAG = 0x57534554u, // WSET
+  
+  MAP_ITER_NATIVE_TAG = 0x4d495452u, // MITR
+  SET_ITER_NATIVE_TAG = 0x53495452u  // SITR
+};
+
 void init_collections_module(void);
 
 map_entry_t **get_map_from_obj(ant_value_t obj);
 set_entry_t **get_set_from_obj(ant_value_t obj);
+
+map_iterator_state_t *get_map_iter_state(ant_value_t obj);
+set_iterator_state_t *get_set_iter_state(ant_value_t obj);
 
 extern ant_value_t g_map_iter_proto;
 extern ant_value_t g_set_iter_proto;

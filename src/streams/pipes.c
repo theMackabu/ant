@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
@@ -21,6 +22,11 @@ typedef struct {
   bool prevent_abort;
   bool prevent_cancel;
 } pipe_state_t;
+
+enum {
+  PIPE_STATE_NATIVE_TAG = 0x50495045u, // PIPE
+  TEE_STATE_NATIVE_TAG = 0x54454553u   // TEES
+};
 
 static void pipes_chain_promise(
   ant_t *js, ant_value_t value,
@@ -46,15 +52,15 @@ static void pipes_chain_promise(
 }
 
 static void pipe_state_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((pipe_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != PIPE_STATE_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static pipe_state_t *pipe_get_state(ant_value_t state) {
-  ant_value_t s = js_get_slot(state, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (pipe_state_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(state, PIPE_STATE_NATIVE_TAG)) return NULL;
+  return (pipe_state_t *)js_get_native_ptr(state);
 }
 
 static ant_value_t pipe_state_source(ant_value_t state) {
@@ -390,7 +396,7 @@ ant_value_t readable_stream_pipe_to(
 
   ant_value_t promise = js_mkpromise(js);
   ant_value_t state = js_mkobj(js);
-  js_set_slot(state, SLOT_DATA, ANT_PTR(pst));
+  js_set_native(state, pst, PIPE_STATE_NATIVE_TAG);
   js_set_slot(state, SLOT_ENTRIES, source);
   js_set_slot(state, SLOT_CTOR, dest);
   js_set_slot(state, SLOT_AUX, reader);
@@ -483,15 +489,15 @@ typedef struct {
 } tee_state_t;
 
 static void tee_state_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((tee_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != TEE_STATE_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static tee_state_t *tee_get_state(ant_value_t state) {
-  ant_value_t s = js_get_slot(state, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (tee_state_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(state, TEE_STATE_NATIVE_TAG)) return NULL;
+  return (tee_state_t *)js_get_native_ptr(state);
 }
 
 static ant_value_t tee_state_reader(ant_value_t state) {
@@ -740,7 +746,7 @@ static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t state = js_mkobj(js);
-  js_set_slot(state, SLOT_DATA, ANT_PTR(st));
+  js_set_native(state, st, TEE_STATE_NATIVE_TAG);
   js_set_slot(state, SLOT_ENTRIES, js->this_val);
   js_set_slot(state, SLOT_AUX, reader);
   js_set_slot(state, SLOT_RS_PULL, js_mkundef());

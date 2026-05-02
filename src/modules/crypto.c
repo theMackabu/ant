@@ -12,6 +12,7 @@
 #pragma GCC diagnostic pop
 
 #include "ant.h"
+#include "ptr.h"
 #include "base64.h"
 #include "errors.h"
 #include "runtime.h"
@@ -33,6 +34,8 @@ typedef struct {
   unsigned int digest_len;
   bool finalized;
 } ant_hash_state_t;
+
+enum { CRYPTO_HASH_NATIVE_TAG = 0x48415348u }; // HASH
 
 int crypto_fill_random(void *buf, size_t len) {
   if (len == 0) return 0;
@@ -219,10 +222,8 @@ static ant_value_t crypto_get_input_bytes(
 }
 
 static ant_hash_state_t *crypto_get_hash_state(ant_value_t value) {
-  ant_value_t slot = js_get_slot(value, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-
-  ant_hash_state_t *state = (ant_hash_state_t *)(uintptr_t)js_getnum(slot);
+  if (!js_check_native_tag(value, CRYPTO_HASH_NATIVE_TAG)) return NULL;
+  ant_hash_state_t *state = (ant_hash_state_t *)js_get_native_ptr(value);
   return (state && state->ctx) ? state : NULL;
 }
 
@@ -568,7 +569,7 @@ static ant_value_t js_crypto_create_hash(ant_t *js, ant_value_t *args, int nargs
   js_set(js, obj, "update", js_mkfun(js_hash_update));
   js_set(js, obj, "digest", js_mkfun(js_hash_digest));
   
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(state));
+  js_set_native(obj, state, CRYPTO_HASH_NATIVE_TAG);
   js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Hash", 4));
   
   return obj;

@@ -68,7 +68,12 @@ typedef struct {
   bool own_func;
 } wasm_func_handle_t;
 
-enum { WASM_FUNC_STATE_TAG = 0x57465354u }; // WFST
+enum {
+  WASM_FUNC_STATE_TAG = 0x57465354u, // WFST
+  WASM_MODULE_NATIVE_TAG = 0x574d4f44u, // WMOD
+  WASM_INSTANCE_NATIVE_TAG = 0x57494e53u, // WINS
+  WASM_EXTERN_NATIVE_TAG = 0x57455854u // WEXT
+};
 
 static size_t g_wasm_import_env_count = 0;
 static size_t g_wasm_import_env_cap   = 0;
@@ -173,16 +178,14 @@ static wasm_valkind_t wasm_valkind_from_string(const char *name, size_t len, boo
 
 static wasm_module_handle_t *wasm_module_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_MODULE)) return NULL;
-  ant_value_t slot = js_get_slot(value, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (wasm_module_handle_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(value, WASM_MODULE_NATIVE_TAG)) return NULL;
+  return (wasm_module_handle_t *)js_get_native_ptr(value);
 }
 
 static wasm_instance_handle_t *wasm_instance_handle(ant_value_t value) {
   if (!js_check_brand(value, BRAND_WASM_INSTANCE)) return NULL;
-  ant_value_t slot = js_get_slot(value, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (wasm_instance_handle_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(value, WASM_INSTANCE_NATIVE_TAG)) return NULL;
+  return (wasm_instance_handle_t *)js_get_native_ptr(value);
 }
 
 static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_wrap_kind_t kind) {
@@ -192,9 +195,8 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
     return NULL;
   }
 
-  ant_value_t slot = js_get_slot(value, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(value, WASM_EXTERN_NATIVE_TAG)) return NULL;
+  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)js_get_native_ptr(value);
   return handle && handle->kind == kind ? handle : NULL;
 }
 
@@ -368,40 +370,34 @@ static ant_value_t wasm_wrap_module(ant_t *js, wasm_store_t *store, wasm_module_
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_wasm_module_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WASM_MODULE));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(handle));
+  js_set_native(obj, handle, WASM_MODULE_NATIVE_TAG);
   return obj;
 }
 
 static void wasm_module_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  
-  wasm_module_handle_t *handle = 
-    (wasm_module_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
-  
+  if (!obj || obj->native.tag != WASM_MODULE_NATIVE_TAG) return;
+  wasm_module_handle_t *handle = (wasm_module_handle_t *)obj->native.ptr;
   if (!handle) return;
   if (handle->module) wasm_module_delete(handle->module);
   if (handle->store) wasm_store_delete(handle->store);
   
   free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle, ant_value_t module_ref) {
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_wasm_instance_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WASM_INSTANCE));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(handle));
+  js_set_native(obj, handle, WASM_INSTANCE_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_CTOR, module_ref);
   return obj;
 }
 
 static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  
-  wasm_instance_handle_t *handle = 
-    (wasm_instance_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
-    
+  if (!obj || obj->native.tag != WASM_INSTANCE_NATIVE_TAG) return;
+  wasm_instance_handle_t *handle = (wasm_instance_handle_t *)obj->native.ptr;
   if (!handle) return;
   for (size_t j = 0; j < handle->host_func_count; j++) 
     if (handle->host_funcs[j]) wasm_func_delete(handle->host_funcs[j]);
@@ -409,6 +405,8 @@ static void wasm_instance_finalize(ant_t *js, ant_object_t *obj) {
   free(handle->host_funcs);
   wasm_extern_vec_delete(&handle->exports);
   free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t kind, ant_value_t proto, int brand, wasm_store_t *store, bool own_handle, void *ptr, ant_value_t owner) {
@@ -429,17 +427,14 @@ static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t ki
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(brand));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(handle));
+  js_set_native(obj, handle, WASM_EXTERN_NATIVE_TAG);
   if (is_object_type(owner)) js_set_slot_wb(js, obj, SLOT_ENTRIES, owner);
   return obj;
 }
 
 static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  
-  wasm_extern_handle_t *handle = 
-    (wasm_extern_handle_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != WASM_EXTERN_NATIVE_TAG) return;
+  wasm_extern_handle_t *handle = (wasm_extern_handle_t *)obj->native.ptr;
   if (!handle) return;
 
   if (handle->own_handle) {
@@ -458,6 +453,8 @@ static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
   }
 
   free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {

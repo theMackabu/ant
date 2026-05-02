@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "modules/lmdb.h"
@@ -68,6 +69,12 @@ static lmdb_txn_handle_t *txn_handles = NULL;
 static lmdb_env_ref_t *env_refs = NULL;
 static lmdb_db_ref_t *db_refs = NULL;
 static lmdb_txn_ref_t *txn_refs = NULL;
+
+enum {
+  LMDB_ENV_NATIVE_TAG = 0x4c454e56u, // LENV
+  LMDB_DB_NATIVE_TAG = 0x4c444242u,  // LDBB
+  LMDB_TXN_NATIVE_TAG = 0x4c54584eu  // LTXN
+};
 
 static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env);
 static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db);
@@ -1033,7 +1040,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
 static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(env));
+  js_set_native(obj, env, LMDB_ENV_NATIVE_TAG);
   register_env_ref(obj, env);
   if (is_special_object(lmdb_types.env_proto)) js_set_proto_init(obj, lmdb_types.env_proto);
   return obj;
@@ -1042,7 +1049,7 @@ static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env) {
 static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(db));
+  js_set_native(obj, db, LMDB_DB_NATIVE_TAG);
   register_db_ref(obj, db);
   if (is_special_object(lmdb_types.db_proto)) js_set_proto_init(obj, lmdb_types.db_proto);
   return obj;
@@ -1051,7 +1058,7 @@ static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db) {
 static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(txn));
+  js_set_native(obj, txn, LMDB_TXN_NATIVE_TAG);
   register_txn_ref(obj, txn);
   if (is_special_object(lmdb_types.txn_proto)) js_set_proto_init(obj, lmdb_types.txn_proto);
   return obj;

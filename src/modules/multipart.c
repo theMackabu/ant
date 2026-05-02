@@ -530,14 +530,10 @@ uint8_t *formdata_serialize_multipart(
   ant_t *js, ant_value_t fd, size_t *out_size, char **out_boundary
 ) {
   ant_value_t values_arr = js_get_slot(fd, SLOT_ENTRIES);
-  ant_value_t data_slot = js_get_slot(fd, SLOT_DATA);
   char boundary[49];
   
   mp_buf_t b = {NULL, 0, 0};
-  fd_data_t *d = NULL;
-  
-  if (vtype(data_slot) != T_NUM) return NULL;
-  d = (fd_data_t *)(uintptr_t)(size_t)js_getnum(data_slot);
+  fd_data_t *d = formdata_get_data(fd);
   if (!d) return NULL;
 
   snprintf(

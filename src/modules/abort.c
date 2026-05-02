@@ -4,6 +4,7 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
@@ -44,14 +45,15 @@ static abort_timeout_entry_t *timeout_entries = NULL;
 static ant_value_t g_signal_proto = 0;
 static bool g_initialized = false;
 
+enum { ABORT_SIGNAL_NATIVE_TAG = 0x41534947u }; // ASIG
+
 static inline unsigned int abort_array_len(UT_array *arr) {
   return arr ? utarray_len(arr) : 0;
 }
 
 static abort_signal_data_t *get_signal_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (abort_signal_data_t *)(uintptr_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, ABORT_SIGNAL_NATIVE_TAG)) return NULL;
+  return (abort_signal_data_t *)js_get_native_ptr(obj);
 }
 
 static abort_signal_data_t *get_signal_data_if_signal_object(ant_value_t obj) {
@@ -186,7 +188,7 @@ static ant_value_t make_new_signal(ant_t *js) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(data));
+  js_set_native(obj, data, ABORT_SIGNAL_NATIVE_TAG);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_ABORT_SIGNAL));
   if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_signal_proto);
 

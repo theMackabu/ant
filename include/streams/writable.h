@@ -29,6 +29,11 @@ typedef struct {
   bool pending_abort_was_already_erroring;
 } ws_stream_t;
 
+enum {
+  WS_STREAM_NATIVE_TAG = 0x57535452u,    // WSTR
+  WS_CONTROLLER_NATIVE_TAG = 0x57534354u // WSCT
+};
+
 extern ant_value_t g_ws_proto;
 extern ant_value_t g_ws_writer_proto;
 extern ant_value_t g_ws_controller_proto;

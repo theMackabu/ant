@@ -31,6 +31,11 @@ typedef struct {
   bool disturbed;
 } rs_stream_t;
 
+enum {
+  RS_STREAM_NATIVE_TAG = 0x52535452u,    // RSTR
+  RS_CONTROLLER_NATIVE_TAG = 0x52534354u // RSCT
+};
+
 extern ant_value_t g_rs_proto;
 extern ant_value_t g_reader_proto;
 extern ant_value_t g_controller_proto;

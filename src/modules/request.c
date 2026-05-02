@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -27,10 +28,11 @@
 
 ant_value_t g_request_proto = 0;
 
+enum { REQUEST_NATIVE_TAG = 0x52455153u }; // REQS
+
 static request_data_t *get_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (request_data_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, REQUEST_NATIVE_TAG)) return NULL;
+  return (request_data_t *)js_get_native_ptr(obj);
 }
 
 request_data_t *request_get_data(ant_value_t obj) {
@@ -109,7 +111,7 @@ static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_val
 
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+  js_set_native(obj, req, REQUEST_NATIVE_TAG);
 
   headers_set_guard(hdrs,
     strcmp(req->mode, "no-cors") == 0
@@ -938,7 +940,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(nd));
+  js_set_native(obj, nd, REQUEST_NATIVE_TAG);
   
   js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, new_headers);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
@@ -1297,7 +1299,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   else js_set_proto_init(obj, g_request_proto);
   
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+  js_set_native(obj, req, REQUEST_NATIVE_TAG);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);
@@ -1375,7 +1377,7 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   obj = js_mkobj(js);
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+  js_set_native(obj, req, REQUEST_NATIVE_TAG);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);

@@ -27,15 +27,20 @@ typedef struct promise_handler {
 typedef struct {
   ant_value_t value;
   ant_value_t trigger_parent;
+  
+  struct ant_object *gc_pending_next;
   promise_handler_t inline_handler;
+  
   UT_array *handlers;
   uint32_t promise_id;
   uint16_t handler_count;
   uint8_t state;
+  
   bool trigger_queued;
   bool has_rejection_handler;
   bool processing;
   bool unhandled_reported;
+  bool gc_pending_rooted;
 } ant_promise_state_t;
 
 typedef struct {
@@ -94,7 +99,6 @@ typedef struct ant_object {
   ant_promise_state_t *promise_state;
   ant_extra_slot_t *extra_slots;
   
-  struct ant_object *gc_pending_next;
   void (*finalizer)(ant_t *, struct ant_object *);
   ant_value_t inobj[ANT_INOBJ_MAX_SLOTS];
   
@@ -116,6 +120,7 @@ typedef struct ant_object {
   uint8_t type_tag;
   uint8_t inobj_limit;
   uint8_t extra_count;
+  uint8_t overflow_cap;
 
   uint8_t extensible: 1;
   uint8_t frozen: 1;
@@ -128,9 +133,6 @@ typedef struct ant_object {
   uint8_t gc_permanent: 1;
   uint8_t generation: 1;
   uint8_t in_remember_set: 1;
-
-  bool gc_pending_rooted;
-  uint8_t overflow_cap;
 } ant_object_t;
 
 static inline bool ant_object_has_sidecar(const ant_object_t *obj) {

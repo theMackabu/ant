@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -27,10 +28,11 @@
 
 ant_value_t g_response_proto = 0;
 
+enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
+
 static response_data_t *get_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (response_data_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, RESPONSE_NATIVE_TAG)) return NULL;
+  return (response_data_t *)js_get_native_ptr(obj);
 }
 
 response_data_t *response_get_data(ant_value_t obj) {
@@ -725,7 +727,7 @@ static ant_value_t response_new(headers_guard_t guard) {
   obj = js_mkobj(js);
   js_set_proto_init(obj, g_response_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_RESPONSE));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(resp));
+  js_set_native(obj, resp, RESPONSE_NATIVE_TAG);
 
   headers = headers_create_empty(js);
   if (is_err(headers)) {
@@ -1053,7 +1055,7 @@ static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
   obj = js_mkobj(js);
   js_set_proto_init(obj, g_response_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_RESPONSE));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(nd));
+  js_set_native(obj, nd, RESPONSE_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, new_headers);
   js_set_slot_wb(js, obj, SLOT_RESPONSE_BODY_STREAM, js_mkundef());
 

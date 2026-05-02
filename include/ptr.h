@@ -1,5 +1,5 @@
-#ifndef ANT_PTR_H
-#define ANT_PTR_H
+#ifndef ANT_NATIVE_PTR_H
+#define ANT_NATIVE_PTR_H
 
 #include "types.h"
 #include "internal.h" // IWYU pragma: keep
@@ -19,6 +19,17 @@ static inline void js_set_native_tag(ant_value_t obj, uint32_t tag) {
   ant_object_t *o = js_obj_ptr(obj);
   if (!o) return;
   o->native.tag = tag;
+}
+
+static inline void js_set_native(ant_value_t obj, void *ptr, uint32_t tag) {
+  ant_object_t *o = js_obj_ptr(obj);
+  if (!o) return;
+  o->native.ptr = ptr;
+  o->native.tag = tag;
+}
+
+static inline void js_clear_native(ant_value_t obj) {
+  js_set_native(obj, NULL, 0);
 }
 
 static inline uint32_t js_get_native_tag(ant_value_t obj) {

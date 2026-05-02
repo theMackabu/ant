@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -45,6 +46,11 @@ enum {
 ant_value_t g_headers_proto      = 0;
 ant_value_t g_headers_iter_proto = 0;
 
+enum {
+  HEADERS_NATIVE_TAG = 0x48445253u, // HDRS
+  HEADERS_ITER_NATIVE_TAG = 0x48444954u // HDIT
+};
+
 static hdr_list_t *list_new(void) {
   hdr_list_t *l = ant_calloc(sizeof(hdr_list_t));
   if (!l) return NULL;
@@ -64,9 +70,8 @@ static void list_free(hdr_list_t *l) {
 }
 
 static hdr_list_t *get_list(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (hdr_list_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, HEADERS_NATIVE_TAG)) return NULL;
+  return (hdr_list_t *)js_get_native_ptr(obj);
 }
 
 static headers_guard_t get_guard(ant_value_t obj) {
@@ -474,9 +479,8 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
 }
 
 bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
-  ant_value_t state_val = js_get_slot(it->iterator, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return false;
-  hdr_iter_t *st = (hdr_iter_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  if (!js_check_native_tag(it->iterator, HEADERS_ITER_NATIVE_TAG)) return false;
+  hdr_iter_t *st = (hdr_iter_t *)js_get_native_ptr(it->iterator);
 
   size_t count = 0;
   sorted_pair_t *view = build_sorted_view(st->list, &count);
@@ -522,7 +526,7 @@ static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kin
 
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, g_headers_iter_proto);
-  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(st));
+  js_set_native(iter, st, HEADERS_ITER_NATIVE_TAG);
   return iter;
 }
 
@@ -812,7 +816,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(l));
+  js_set_native(obj, l, HEADERS_NATIVE_TAG);
   js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
   
   return obj;
@@ -825,7 +829,7 @@ ant_value_t headers_create_empty(ant_t *js) {
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_headers_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(l));
+  js_set_native(obj, l, HEADERS_NATIVE_TAG);
   js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
   
   return obj;

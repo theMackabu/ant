@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -16,6 +17,8 @@
 static ant_value_t g_textencoder_proto = 0;
 static ant_value_t g_textdecoder_proto = 0;
 
+enum { TEXT_DECODER_NATIVE_TAG = 0x54444543u }; // TDEC
+
 td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom) {
   td_state_t *st = calloc(1, sizeof(td_state_t));
   if (!st) return NULL;
@@ -26,15 +29,15 @@ td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom) {
 }
 
 static td_state_t *td_get_state(ant_value_t obj) {
-  ant_value_t s = js_get_slot(obj, SLOT_DATA);
-  if (vtype(s) != T_NUM) return NULL;
-  return (td_state_t *)(uintptr_t)(size_t)js_getnum(s);
+  if (!js_check_native_tag(obj, TEXT_DECODER_NATIVE_TAG)) return NULL;
+  return (td_state_t *)js_get_native_ptr(obj);
 }
 
 static void td_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((td_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != TEXT_DECODER_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static int resolve_encoding(const char *s, size_t len) {
@@ -426,7 +429,7 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t proto = js_instance_proto_from_new_target(js, g_textdecoder_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, TEXT_DECODER_NATIVE_TAG);
   js_set_finalizer(obj, td_finalize);
   
   return obj;

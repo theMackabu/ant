@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "gc.h"
 #include "errors.h"
 #include "runtime.h"
@@ -308,37 +309,39 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, weakset_entry_t **ws_he
 map_entry_t **get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_MAP) return NULL;
-  return (map_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
+  if (!js_check_native_tag(obj, MAP_NATIVE_TAG)) return NULL;
+  return (map_entry_t **)js_get_native_ptr(obj);
 }
 
 set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_SET) return NULL;
-  return (set_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
+  if (!js_check_native_tag(obj, SET_NATIVE_TAG)) return NULL;
+  return (set_entry_t **)js_get_native_ptr(obj);
 }
 
 static weakmap_entry_t **get_weakmap_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
-  return (weakmap_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
+  if (!js_check_native_tag(obj, WEAKMAP_NATIVE_TAG)) return NULL;
+  return (weakmap_entry_t **)js_get_native_ptr(obj);
 }
 
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;
-  return (weakset_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
+  if (!js_check_native_tag(obj, WEAKSET_NATIVE_TAG)) return NULL;
+  return (weakset_entry_t **)js_get_native_ptr(obj);
 }
 
-static map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
-  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return NULL;
-  return (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
+map_iterator_state_t *get_map_iter_state(ant_value_t obj) {
+  if (!js_check_native_tag(obj, MAP_ITER_NATIVE_TAG)) return NULL;
+  return (map_iterator_state_t *)js_get_native_ptr(obj);
 }
 
-static set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
-  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return NULL;
-  return (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
+set_iterator_state_t *get_set_iter_state(ant_value_t obj) {
+  if (!js_check_native_tag(obj, SET_ITER_NATIVE_TAG)) return NULL;
+  return (set_iterator_state_t *)js_get_native_ptr(obj);
 }
 
 static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
@@ -529,7 +532,7 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, g_map_iter_proto);
-  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(state));
+  js_set_native(iter, state, MAP_ITER_NATIVE_TAG);
   
   return iter;
 }
@@ -583,7 +586,7 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, g_set_iter_proto);
-  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(state));
+  js_set_native(iter, state, SET_ITER_NATIVE_TAG);
   
   return iter;
 }
@@ -701,7 +704,7 @@ static ant_value_t make_set_result(ant_t *js, set_entry_t ***out_set) {
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  js_set_slot(set_obj, SLOT_DATA, ANT_PTR(set_head));
+  js_set_native(set_obj, set_head, SET_NATIVE_TAG);
   if (out_set) *out_set = set_head;
   
   return set_obj;
@@ -1400,7 +1403,7 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
-  js_set_slot(map_obj, SLOT_DATA, ANT_PTR(map_head));
+  js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
   ant_offset_t len = js_arr_len(js, items);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -1448,7 +1451,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(map_obj, SLOT_CTOR, js->new_target);
-  js_set_slot(map_obj, SLOT_DATA, ANT_PTR(map_head));
+  js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return map_obj;
   ant_value_t init_result = map_init_from_iterable(js, map_head, args[0]);
@@ -1478,7 +1481,7 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(set_obj, SLOT_CTOR, js->new_target);
-  js_set_slot(set_obj, SLOT_DATA, ANT_PTR(set_head));
+  js_set_native(set_obj, set_head, SET_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return set_obj;
   ant_value_t init_result = set_init_from_iterable(js, set_head, args[0]);
@@ -1508,7 +1511,7 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
-  js_set_slot(wm_obj, SLOT_DATA, ANT_PTR(wm_head));
+  js_set_native(wm_obj, wm_head, WEAKMAP_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
   ant_value_t init_result = weakmap_init_from_iterable(js, wm_head, args[0]);
@@ -1538,7 +1541,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
-  js_set_slot(ws_obj, SLOT_DATA, ANT_PTR(ws_head));
+  js_set_native(ws_obj, ws_head, WEAKSET_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
   ant_value_t init_result = weakset_init_from_iterable(js, ws_head, args[0]);

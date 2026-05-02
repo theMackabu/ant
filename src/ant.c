@@ -431,9 +431,6 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->extra_count = 0;
   
   obj->finalizer = NULL;
-  obj->gc_pending_next = NULL;
-  obj->gc_pending_rooted = false;
-  
   obj->native.ptr = NULL;
   obj->native.tag = 0;
   
@@ -15231,12 +15228,22 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
   return promoted;
 }
 
-ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data) {
+ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_params_t), ant_value_t data) {
   ant_value_t cfunc = js_mkfun_dyn(fn);
   ant_value_t fn_obj = mkobj(js, 0);
   
   set_slot(fn_obj, SLOT_CFUNC, cfunc);
   set_slot(fn_obj, SLOT_DATA, data);
+  
+  return js_obj_to_func(fn_obj);
+}
+
+ant_value_t js_heavy_mkfun_native(ant_t *js, ant_value_t (*fn)(ant_params_t), void *ptr, uint32_t tag) {
+  ant_value_t cfunc = js_mkfun_dyn(fn);
+  ant_value_t fn_obj = mkobj(js, 0);
+  
+  set_slot(fn_obj, SLOT_CFUNC, cfunc);
+  js_set_native(fn_obj, ptr, tag);
   
   return js_obj_to_func(fn_obj);
 }

@@ -25,7 +25,6 @@ if (!(cond)) {                                                              \
 }})
 
 #define ANT_STRING(s)         js_mkstr(js, s, sizeof(s) - 1)
-#define ANT_PTR(ptr)          js_mknum((double)(uintptr_t)(ptr))
 #define ANT_COPY(buf, len, s) cpy(buf, len, s, sizeof(s) - 1)
 #define REMAIN(n, len)        ((n) >= (len) ? 0 : (len) - (n))
 
@@ -116,7 +115,10 @@ ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta);
 ant_value_t js_mkfun_dyn(ant_cfunc_t fn);
 
 ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
+ant_value_t js_heavy_mkfun_native(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), void *ptr, uint32_t tag);
 ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
+
+// TODO: deprecate
 ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 #define js_mkfun(fn) ({                                                 \

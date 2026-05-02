@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -54,33 +55,37 @@ ant_value_t ts_stream_writable(ant_value_t ts_obj) {
 }
 
 static void ts_ws_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((ws_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != WS_STREAM_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void ts_ws_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  ws_controller_t *ctrl = 
-    (ws_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != WS_CONTROLLER_NATIVE_TAG) return;
+  ws_controller_t *ctrl = (ws_controller_t *)obj->native.ptr;
+  if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void ts_rs_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((rs_stream_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != RS_STREAM_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void ts_rs_ctrl_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  rs_controller_t *ctrl = 
-    (rs_controller_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != RS_CONTROLLER_NATIVE_TAG) return;
+  rs_controller_t *ctrl = (rs_controller_t *)obj->native.ptr;
+  if (!ctrl) return;
   free(ctrl->queue_sizes);
   free(ctrl);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static inline bool ts_get_backpressure(ant_value_t ts_obj) {
@@ -956,7 +961,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rs_obj = js_mkobj(js);
   js_set_proto_init(rs_obj, g_rs_proto);
   js_set_slot(rs_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
-  js_set_slot(rs_obj, SLOT_DATA, ANT_PTR(rst));
+  js_set_native(rs_obj, rst, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(rs_obj, ts_rs_finalize);
 
   rs_controller_t *rcc = calloc(1, sizeof(rs_controller_t));
@@ -966,7 +971,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rs_ctrl_obj = js_mkobj(js);
   js_set_proto_init(rs_ctrl_obj, g_controller_proto);
   js_set_slot(rs_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_CONTROLLER));
-  js_set_slot(rs_ctrl_obj, SLOT_DATA, ANT_PTR(rcc));
+  js_set_native(rs_ctrl_obj, rcc, RS_CONTROLLER_NATIVE_TAG);
   js_set_slot(rs_ctrl_obj, SLOT_ENTRIES, rs_obj);
   js_set_slot(rs_ctrl_obj, SLOT_RS_PULL, source_pull);
   js_set_slot(rs_ctrl_obj, SLOT_RS_CANCEL, source_cancel);
@@ -984,7 +989,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ws_obj = js_mkobj(js);
   js_set_proto_init(ws_obj, g_ws_proto);
   js_set_slot(ws_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
-  js_set_slot(ws_obj, SLOT_DATA, ANT_PTR(wst));
+  js_set_native(ws_obj, wst, WS_STREAM_NATIVE_TAG);
   js_set_slot(ws_obj, SLOT_SETTLED, js_mkarr(js));
   js_set_finalizer(ws_obj, ts_ws_finalize);
 
@@ -1002,7 +1007,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ws_ctrl_obj = js_mkobj(js);
   js_set_proto_init(ws_ctrl_obj, g_ws_controller_proto);
   js_set_slot(ws_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_CONTROLLER));
-  js_set_slot(ws_ctrl_obj, SLOT_DATA, ANT_PTR(wc));
+  js_set_native(ws_ctrl_obj, wc, WS_CONTROLLER_NATIVE_TAG);
   js_set_slot(ws_ctrl_obj, SLOT_ENTRIES, ws_obj);
   js_set_slot(ws_ctrl_obj, SLOT_WS_WRITE, sink_write);
   js_set_slot(ws_ctrl_obj, SLOT_WS_CLOSE, sink_close);

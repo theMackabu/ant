@@ -4,6 +4,7 @@
 #include <uthash.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -190,7 +191,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     if (!new_head) return js_mkerr(js, "out of memory");
     
     *new_head = NULL;
-    js_set_slot(clone, SLOT_DATA, ANT_PTR(new_head));
+    js_set_native(clone, new_head, MAP_NATIVE_TAG);
     sc_add(seen, val, clone);
     
     map_entry_t **src_head = get_map_from_obj(val);
@@ -226,7 +227,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     set_entry_t **new_head = ant_calloc(sizeof(set_entry_t *));
     if (!new_head) return js_mkerr(js, "out of memory");
     *new_head = NULL;
-    js_set_slot(clone, SLOT_DATA, ANT_PTR(new_head));
+    js_set_native(clone, new_head, SET_NATIVE_TAG);
     sc_add(seen, val, clone);
 
     set_entry_t **src_head = get_set_from_obj(val);

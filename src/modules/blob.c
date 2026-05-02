@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -20,15 +21,16 @@
 ant_value_t g_blob_proto = 0;
 ant_value_t g_file_proto = 0;
 
+enum { BLOB_NATIVE_TAG = 0x424c4f42u }; // BLOB
+
 bool blob_is_blob(ant_t *js, ant_value_t obj) {
   int id = js_brand_id(obj);
   return id == BRAND_BLOB || id == BRAND_FILE;
 }
 
 blob_data_t *blob_get_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (blob_data_t *)(uintptr_t)(size_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, BLOB_NATIVE_TAG)) return NULL;
+  return (blob_data_t *)js_get_native_ptr(obj);
 }
 
 static blob_data_t *blob_data_new(const uint8_t *data, size_t size, const char *type) {
@@ -150,10 +152,11 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
 }
 
 static void blob_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  blob_data_t *bd = (blob_data_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != BLOB_NATIVE_TAG) return;
+  blob_data_t *bd = (blob_data_t *)obj->native.ptr;
   if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char *type) {
@@ -163,7 +166,7 @@ ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char 
   
   js_set_proto_init(obj, g_blob_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
+  js_set_native(obj, bd, BLOB_NATIVE_TAG);
   js_set_finalizer(obj, blob_finalize);
   
   return obj;
@@ -344,7 +347,7 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
+  js_set_native(obj, bd, BLOB_NATIVE_TAG);
   js_set_finalizer(obj, blob_finalize);
   
   return obj;
@@ -415,7 +418,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FILE));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
+  js_set_native(obj, bd, BLOB_NATIVE_TAG);
   js_set_finalizer(obj, blob_finalize);
   
   return obj;

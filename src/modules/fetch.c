@@ -9,6 +9,7 @@
 #include <utarray.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "common.h"
 #include "errors.h"
 #include "internal.h"
@@ -44,6 +45,8 @@ typedef struct fetch_request_s {
   bool restart_pending;
   bool response_started;
 } fetch_request_t;
+
+enum { FETCH_REQUEST_NATIVE_TAG = 0x46524551u }; // FREQ
 
 static UT_array *pending_requests = NULL;
 static const int k_fetch_max_redirects = 20;
@@ -654,7 +657,9 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
 }
 
 static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int nargs) {
-  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
+    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    : NULL;
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
 
   if (!req) return js_mkundef();
@@ -672,7 +677,9 @@ static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int narg
 
 static void fetch_upload_schedule_next_read(fetch_request_t *req);
 static ant_value_t fetch_upload_on_read(ant_t *js, ant_value_t *args, int nargs) {
-  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
+    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    : NULL;
   
   ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t done = 0;
@@ -732,8 +739,8 @@ static void fetch_upload_schedule_next_read(fetch_request_t *req) {
   next_p = rs_default_reader_read(js, req->upload_reader);
   req->upload_read_promise = next_p;
   
-  fulfill = js_heavy_mkfun(js, fetch_upload_on_read, ANT_PTR(req));
-  reject = js_heavy_mkfun(js, fetch_upload_on_reject, ANT_PTR(req));
+  fulfill = js_heavy_mkfun_native(js, fetch_upload_on_read, req, FETCH_REQUEST_NATIVE_TAG);
+  reject = js_heavy_mkfun_native(js, fetch_upload_on_reject, req, FETCH_REQUEST_NATIVE_TAG);
   
   fetch_request_retain(req);
   then_result = js_promise_then(js, next_p, fulfill, reject);
@@ -831,7 +838,9 @@ static void fetch_start_http(fetch_request_t *req) {
 }
 
 static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs) {
-  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  fetch_request_t *req = js_check_native_tag(js->current_func, FETCH_REQUEST_NATIVE_TAG)
+    ? (fetch_request_t *)js_get_native_ptr(js->current_func)
+    : NULL;
   ant_value_t signal = 0;
   ant_value_t reason = 0;
 
@@ -894,7 +903,7 @@ ant_value_t ant_fetch(ant_t *js, ant_value_t *args, int nargs) {
       return promise;
     }
     
-    req->abort_listener = js_heavy_mkfun(js, fetch_abort_listener, ANT_PTR(req));
+    req->abort_listener = js_heavy_mkfun_native(js, fetch_abort_listener, req, FETCH_REQUEST_NATIVE_TAG);
     abort_signal_add_listener(js, signal, req->abort_listener);
   }
 

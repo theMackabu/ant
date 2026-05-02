@@ -31,10 +31,7 @@ static inline bool sv_is_map_iter(
   if (vtype(obj) != T_OBJ) return false;
   if (!g_map_iter_proto || js_get_proto(js, obj) != g_map_iter_proto) return false;
   
-  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return false;
-  
-  map_iterator_state_t *st = (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
+  map_iterator_state_t *st = get_map_iter_state(obj);
   if (!st) return false;
   
   *out_state = st;
@@ -51,10 +48,7 @@ static inline bool sv_is_set_iter(
   if (vtype(obj) != T_OBJ) return false;
   if (!g_set_iter_proto || js_get_proto(js, obj) != g_set_iter_proto) return false;
   
-  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return false;
-  
-  set_iterator_state_t *st = (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
+  set_iterator_state_t *st = get_set_iter_state(obj);
   if (!st) return false;
   
   *out_state = st;
@@ -93,7 +87,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   map_iterator_state_t *map_st;
   iter_type_t map_type;
   if (sv_is_map_iter(js, iterator, &map_st, &map_type)) {
-    vm->stack[vm->sp++] = ANT_PTR(map_st);
+    vm->stack[vm->sp++] = iterator;
     vm->stack[vm->sp++] = tov((double)map_type);
     vm->stack[vm->sp++] = tov(SV_ITER_MAP);
     return tov(0);
@@ -102,7 +96,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   set_iterator_state_t *set_st;
   iter_type_t set_type;
   if (sv_is_set_iter(js, iterator, &set_st, &set_type)) {
-    vm->stack[vm->sp++] = ANT_PTR(set_st);
+    vm->stack[vm->sp++] = iterator;
     vm->stack[vm->sp++] = tov((double)set_type);
     vm->stack[vm->sp++] = tov(SV_ITER_SET);
     return tov(0);
@@ -180,8 +174,8 @@ static inline ant_value_t sv_iter_advance(
   }
 
   case SV_ITER_MAP: {
-    map_iterator_state_t *st =
-      (map_iterator_state_t *)(uintptr_t)js_getnum(vm->stack[vm->sp - 3]);
+    map_iterator_state_t *st = get_map_iter_state(vm->stack[vm->sp - 3]);
+    if (!st) return js_mkerr(js, "Invalid Map iterator");
     if (!st->current) {
       *out_value = js_mkundef();
       *out_done = true;
@@ -213,8 +207,8 @@ static inline ant_value_t sv_iter_advance(
   }
 
   case SV_ITER_SET: {
-    set_iterator_state_t *st =
-      (set_iterator_state_t *)(uintptr_t)js_getnum(vm->stack[vm->sp - 3]);
+    set_iterator_state_t *st = get_set_iter_state(vm->stack[vm->sp - 3]);
+    if (!st) return js_mkerr(js, "Invalid Set iterator");
     if (!st->current) {
       *out_value = js_mkundef();
       *out_done = true;

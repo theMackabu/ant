@@ -7,6 +7,7 @@
 #include <utarray.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -34,10 +35,14 @@ static ant_value_t g_customevent_proto           = 0;
 static ant_value_t g_errorevent_proto            = 0;
 static ant_value_t g_promiserejectionevent_proto = 0;
 
+enum {
+  EVENT_NATIVE_TAG = 0x45564e54u,        // EVNT
+  EVENT_EMITTER_NATIVE_TAG = 0x45454d54u // EEMT
+};
+
 static event_data_t *get_event_data(ant_value_t obj) {
-  ant_value_t slot = js_get_slot(obj, SLOT_DATA);
-  if (vtype(slot) != T_NUM) return NULL;
-  return (event_data_t *)(uintptr_t)js_getnum(slot);
+  if (!js_check_native_tag(obj, EVENT_NATIVE_TAG)) return NULL;
+  return (event_data_t *)js_get_native_ptr(obj);
 }
 
 static double get_timestamp_ms(void) {
@@ -150,8 +155,7 @@ static bool evt_key_init(ant_t *js, ant_value_t arg, evt_key_t *out) {
 }
 
 static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
-  ant_value_t slot = js_get_slot(this_obj, SLOT_DATA);
-  if (vtype(slot) == T_UNDEF) {
+  if (!js_check_native_tag(this_obj, EVENT_EMITTER_NATIVE_TAG)) {
     EventType **events = ant_calloc(sizeof(EventType *));
     if (!events) return NULL;
     *events = NULL;
@@ -162,10 +166,10 @@ static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj)
     reg->next = emitter_registry;
     emitter_registry = reg;
 
-    js_set_slot(this_obj, SLOT_DATA, ANT_PTR(events));
+    js_set_native(this_obj, events, EVENT_EMITTER_NATIVE_TAG);
     return events;
   }
-  return (EventType **)(uintptr_t)js_getnum(slot);
+  return (EventType **)js_get_native_ptr(this_obj);
 }
 
 static EventType *find_or_create_global_event_type(ant_t *js, ant_value_t js_key) {
@@ -290,7 +294,7 @@ static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, 
     js_set_accessor_desc(js, obj, "isTrusted", 9, g_isTrusted_getter, js_mkundef(), 0);
 
   event_data_t *data = ant_calloc(sizeof(event_data_t));
-  if (data) js_set_slot(obj, SLOT_DATA, ANT_PTR(data));
+  if (data) js_set_native(obj, data, EVENT_NATIVE_TAG);
 }
 
 static ant_value_t js_event_ctor(ant_t *js, ant_value_t *args, int nargs) {

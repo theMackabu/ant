@@ -94,21 +94,27 @@ bool gc_obj_is_marked(const ant_object_t *obj) {
 }
 
 void gc_root_pending_promise(ant_object_t *obj) {
-  if (!obj || obj->gc_pending_rooted) return;
-  obj->gc_pending_rooted = true;
-  obj->gc_pending_next = g_pending_promises;
+  ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
+  if (!pd || pd->gc_pending_rooted) return;
+  
+  pd->gc_pending_rooted = true;
+  pd->gc_pending_next = g_pending_promises;
   g_pending_promises = obj;
 }
 
 void gc_unroot_pending_promise(ant_object_t *obj) {
-  if (!obj || !obj->gc_pending_rooted) return;
-  obj->gc_pending_rooted = false;
+  ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
+  if (!pd || !pd->gc_pending_rooted) return;
+  
+  pd->gc_pending_rooted = false;
   ant_object_t **pp = &g_pending_promises;
   while (*pp) {
-    if (*pp == obj) { *pp = obj->gc_pending_next; break; }
-    pp = &(*pp)->gc_pending_next;
+    ant_promise_state_t *current = (*pp)->promise_state;
+    if (*pp == obj) { *pp = pd->gc_pending_next; break; }
+    if (!current) { *pp = NULL; break; }
+    pp = &current->gc_pending_next;
   }
-  obj->gc_pending_next = NULL;
+  pd->gc_pending_next = NULL;
 }
 
 void gc_remember_add(ant_t *js, ant_object_t *obj) {
@@ -239,23 +245,30 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->type_tag == T_MAP) {
-    map_entry_t **head = (map_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+    map_entry_t **head = obj->native.tag == MAP_NATIVE_TAG 
+      ? (map_entry_t **)obj->native.ptr : NULL;
     if (head) {
     map_entry_t *e, *tmp;
     HASH_ITER(hh, *head, e, tmp) { 
       gc_mark_value(js, e->key_val); 
       gc_mark_value(js, e->value); 
     }}
-  } else if (obj->type_tag == T_WEAKMAP) {
-    weakmap_entry_t **head = (weakmap_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+  } 
+  
+  else if (obj->type_tag == T_WEAKMAP) {
+    weakmap_entry_t **head = obj->native.tag == WEAKMAP_NATIVE_TAG 
+      ? (weakmap_entry_t **)obj->native.ptr : NULL;
     if (head) {
     weakmap_entry_t *e, *tmp;
     HASH_ITER(hh, *head, e, tmp) {
       gc_mark_value(js, e->key_obj);
       gc_mark_value(js, e->value);
     }}
-  } else if (obj->type_tag == T_SET) {
-    set_entry_t **head = (set_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+  } 
+  
+  else if (obj->type_tag == T_SET) {
+    set_entry_t **head = obj->native.tag == SET_NATIVE_TAG 
+      ? (set_entry_t **)obj->native.ptr : NULL;
     if (head) {
       set_entry_t *e, *tmp;
       HASH_ITER(hh, *head, e, tmp) { gc_mark_value(js, e->value); }
@@ -527,10 +540,12 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_wasm(js, gc_mark_value);
   gc_mark_napi(js, gc_mark_value);
 
-  for (
-    ant_object_t *obj = g_pending_promises; 
-    obj; obj = obj->gc_pending_next
-  ) gc_grey_obj(js, obj);
+  for (ant_object_t *obj = g_pending_promises; obj;) {
+    ant_promise_state_t *pd = obj->promise_state;
+    ant_object_t *next = pd ? pd->gc_pending_next : NULL;
+    gc_grey_obj(js, obj);
+    obj = next;
+  }
 
   gc_scan_current_stack(js);
   gc_scan_other_stacks(js);
@@ -567,7 +582,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->extra_slots = NULL;
   }
 
-  if (obj->gc_pending_rooted)
+  if (obj->promise_state && obj->promise_state->gc_pending_rooted)
     gc_unroot_pending_promise(obj);
 
   if (obj->promise_state) {
@@ -584,7 +599,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   switch (obj->type_tag) {
     case T_MAP: {
-      map_entry_t **head = (map_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+      map_entry_t **head = obj->native.tag == MAP_NATIVE_TAG ? (map_entry_t **)obj->native.ptr : NULL;
       if (head) {
         map_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e->key); free(e); }
@@ -593,7 +608,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       break;
     }
     case T_SET: {
-      set_entry_t **head = (set_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+      set_entry_t **head = obj->native.tag == SET_NATIVE_TAG ? (set_entry_t **)obj->native.ptr : NULL;
       if (head) {
         set_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e->key); free(e); }
@@ -602,7 +617,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       break;
     }
     case T_WEAKMAP: {
-      weakmap_entry_t **head = (weakmap_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+      weakmap_entry_t **head = obj->native.tag == WEAKMAP_NATIVE_TAG ? (weakmap_entry_t **)obj->native.ptr : NULL;
       if (head) {
         weakmap_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e); }
@@ -611,7 +626,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       break;
     }
     case T_WEAKSET: {
-      weakset_entry_t **head = (weakset_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+      weakset_entry_t **head = obj->native.tag == WEAKSET_NATIVE_TAG ? (weakset_entry_t **)obj->native.ptr : NULL;
       if (head) {
         weakset_entry_t *e, *tmp;
         HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e); }

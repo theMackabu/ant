@@ -39,6 +39,7 @@ typedef uint16_t char16_t;
 #endif
 
 #include "ant.h"
+#include "ptr.h"
 #include "descriptors.h"
 #include "errors.h"
 #include "internal.h"
@@ -221,18 +222,22 @@ typedef struct {
   uint32_t limbs[];
 } napi_bigint_payload_t;
 
+enum { NAPI_CALLBACK_NATIVE_TAG = 0x4e43424bu }; // NCBK
+
 static ant_napi_env_t *g_napi_env = NULL;
 static napi_external_entry_t *g_napi_externals = NULL;
 static napi_wrap_entry_t *g_napi_wraps = NULL;
+
 static uint64_t g_napi_external_next_id = 1;
 static uint64_t g_napi_wrap_next_id = 1;
+static int64_t g_napi_external_memory = 0;
+
 static napi_native_lib_t *g_napi_native_libs = NULL;
 static napi_module *g_pending_napi_module = NULL;
-static int64_t g_napi_external_memory = 0;
 
 static const napi_node_version g_napi_node_version = {
   .major = 25,
-  .minor = 0,
+  .minor = 9,
   .patch = 0,
   .release = "ant",
 };
@@ -476,10 +481,9 @@ static int napi_desc_flags(napi_property_attributes attributes) {
 
 static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current = js_getcurrentfunc(js);
-  ant_value_t data_slot = js_get_slot(current, SLOT_DATA);
-  if (vtype(data_slot) != T_NUM) return js_mkundef();
+  if (!js_check_native_tag(current, NAPI_CALLBACK_NATIVE_TAG)) return js_mkundef();
 
-  napi_callback_binding_t *binding = (napi_callback_binding_t *)(uintptr_t)js_getnum(data_slot);
+  napi_callback_binding_t *binding = (napi_callback_binding_t *)js_get_native_ptr(current);
   if (!binding || !binding->cb) return js_mkundef();
 
   ant_napi_env_t *nenv = binding->env ? binding->env : napi_get_or_create_env(js);
@@ -530,7 +534,7 @@ static napi_status napi_create_function_common(
   binding->cb = cb;
   binding->data = data;
 
-  ant_value_t fn = js_heavy_mkfun(nenv->js, napi_callback_trampoline, ANT_PTR(binding));
+  ant_value_t fn = js_heavy_mkfun_native(nenv->js, napi_callback_trampoline, binding, NAPI_CALLBACK_NATIVE_TAG);
   js_mark_constructor(fn, true);
   if (utf8name && utf8name[0]) {
     size_t nlen = (length == NAPI_AUTO_LENGTH) ? strlen(utf8name) : length;

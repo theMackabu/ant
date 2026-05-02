@@ -3,6 +3,7 @@
 #include <zlib.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -16,6 +17,14 @@
 
 ant_value_t g_cs_proto;
 ant_value_t g_ds_proto;
+
+enum {
+  CS_Z_NATIVE_TAG = 0x43535a53u, // CSZS
+  DS_Z_NATIVE_TAG = 0x44535a53u, // DSZS
+  
+  CS_BROTLI_NATIVE_TAG = 0x43534252u, // CSBR
+  DS_BROTLI_NATIVE_TAG = 0x44534252u  // DSBR
+};
 
 typedef struct {
   z_stream strm;
@@ -56,13 +65,13 @@ static zformat_t get_wrapper_format(ant_value_t wrapper) {
 
 bool cs_is_stream(ant_value_t obj) {
   return is_object_type(obj)
-    && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+    && (js_check_native_tag(obj, CS_Z_NATIVE_TAG) || js_check_native_tag(obj, CS_BROTLI_NATIVE_TAG))
     && ts_is_stream(get_ts(obj));
 }
 
 bool ds_is_stream(ant_value_t obj) {
   return is_object_type(obj)
-    && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+    && (js_check_native_tag(obj, DS_Z_NATIVE_TAG) || js_check_native_tag(obj, DS_BROTLI_NATIVE_TAG))
     && ts_is_stream(get_ts(obj));
 }
 
@@ -83,27 +92,31 @@ ant_value_t ds_stream_writable(ant_value_t obj) {
 }
 
 static void zstate_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != CS_Z_NATIVE_TAG) return;
+  zstate_t *st = (zstate_t *)obj->native.ptr;
+  if (!st) return;
   if (st->initialized) deflateEnd(&st->strm);
   free(st);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void zstate_inflate_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || obj->native.tag != DS_Z_NATIVE_TAG) return;
+  zstate_t *st = (zstate_t *)obj->native.ptr;
+  if (!st) return;
   if (st->initialized) inflateEnd(&st->strm);
   free(st);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void brotli_state_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  brotli_stream_state_t *st =
-    (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(slot->value);
+  if (!obj || (obj->native.tag != CS_BROTLI_NATIVE_TAG && obj->native.tag != DS_BROTLI_NATIVE_TAG)) return;
+  brotli_stream_state_t *st = (brotli_stream_state_t *)obj->native.ptr;
   brotli_stream_state_destroy(st);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len) {
@@ -120,9 +133,8 @@ static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t
 
 static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   
-  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  zstate_t *st = (zstate_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -135,8 +147,7 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
   if (!input || input_len == 0) return js_mkundef();
 
   if (get_wrapper_format(wrapper) == ZFMT_BROTLI) {
-    brotli_stream_state_t *brotli_st =
-      (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(wrapper);
     return brotli_stream_transform(js, brotli_st, ctrl_obj, input, input_len);
   }
 
@@ -162,14 +173,13 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
 
   if (get_wrapper_format(wrapper) == ZFMT_BROTLI) {
-    brotli_stream_state_t *brotli_st =
-      (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(wrapper);
     return brotli_stream_flush(js, brotli_st, ctrl_obj);
-  } zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  }
+  zstate_t *st = (zstate_t *)js_get_native_ptr(wrapper);
 
   st->strm.next_in = NULL;
   st->strm.avail_in = 0;
@@ -230,11 +240,11 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_cs_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, fmt == ZFMT_BROTLI ? ANT_PTR(brotli) : ANT_PTR(st));
+  js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? CS_BROTLI_NATIVE_TAG : CS_Z_NATIVE_TAG);
   js_set_finalizer(obj, fmt == ZFMT_BROTLI ? brotli_state_finalize : zstate_finalize);
 
   ant_value_t wrapper = js_mkobj(js);
-  js_set_slot(wrapper, SLOT_DATA, fmt == ZFMT_BROTLI ? ANT_PTR(brotli) : ANT_PTR(st));
+  js_set_native(wrapper, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? CS_BROTLI_NATIVE_TAG : CS_Z_NATIVE_TAG);
   js_set_slot(wrapper, SLOT_CTOR, js_mknum((double)fmt));
 
   ant_value_t transformer = js_mkobj(js);
@@ -265,8 +275,7 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
-  zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  zstate_t *st = (zstate_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -278,8 +287,7 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
 
   if (!input || input_len == 0) return js_mkundef();
   if (get_wrapper_format(wrapper) == ZFMT_BROTLI) {
-    brotli_stream_state_t *brotli_st =
-      (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+    brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native_ptr(wrapper);
     return brotli_stream_transform(js, brotli_st, ctrl_obj, input, input_len);
   }
 
@@ -306,11 +314,9 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t ds_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
   if (get_wrapper_format(wrapper) == ZFMT_BROTLI) {
-    brotli_stream_state_t *st =
-      (brotli_stream_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+    brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native_ptr(wrapper);
     return brotli_stream_flush(js, st, ctrl_obj);
   }
   return js_mkundef();
@@ -355,11 +361,11 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_ds_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, fmt == ZFMT_BROTLI ? ANT_PTR(brotli) : ANT_PTR(st));
+  js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? DS_BROTLI_NATIVE_TAG : DS_Z_NATIVE_TAG);
   js_set_finalizer(obj, fmt == ZFMT_BROTLI ? brotli_state_finalize : zstate_inflate_finalize);
 
   ant_value_t wrapper = js_mkobj(js);
-  js_set_slot(wrapper, SLOT_DATA, fmt == ZFMT_BROTLI ? ANT_PTR(brotli) : ANT_PTR(st));
+  js_set_native(wrapper, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? DS_BROTLI_NATIVE_TAG : DS_Z_NATIVE_TAG);
   js_set_slot(wrapper, SLOT_CTOR, js_mknum((double)fmt));
 
   ant_value_t transformer = js_mkobj(js);

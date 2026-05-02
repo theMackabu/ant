@@ -23,6 +23,7 @@ extern char **environ;
 #endif
 
 #include "ant.h"
+#include "ptr.h"
 #include "internal.h"
 #include "runtime.h"
 #include "descriptors.h"
@@ -61,6 +62,8 @@ typedef struct ant_worker_thread {
 
 static ant_worker_thread_t *active_workers_head = NULL;
 
+enum { WORKER_NATIVE_TAG = 0x57524b52u }; // WRKR
+
 static bool wt_is_worker_mode(void) {
   const char *mode = getenv(WT_ENV_MODE);
   return mode && strcmp(mode, "1") == 0;
@@ -90,9 +93,8 @@ static void wt_init_env_store(ant_t *js, bool is_worker) {
 
 static ant_worker_thread_t *wt_get_worker(ant_t *js, ant_value_t this_obj) {
   if (!is_object_type(this_obj)) return NULL;
-  ant_value_t data = js_get_slot(this_obj, SLOT_DATA);
-  if (vtype(data) != T_NUM) return NULL;
-  return (ant_worker_thread_t *)(uintptr_t)js_getnum(data);
+  if (!js_check_native_tag(this_obj, WORKER_NATIVE_TAG)) return NULL;
+  return (ant_worker_thread_t *)js_get_native_ptr(this_obj);
 }
 
 static bool wt_is_message_port(ant_t *js, ant_value_t obj) {
@@ -836,7 +838,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
 
   wt->js = js;
   wt->self_val = this_obj;
-  js_set_slot(this_obj, SLOT_DATA, ANT_PTR(wt));
+  js_set_native(this_obj, wt, WORKER_NATIVE_TAG);
 
   wt->prev = NULL;
   wt->next = active_workers_head;

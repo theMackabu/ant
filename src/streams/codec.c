@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -15,6 +16,11 @@
 
 ant_value_t g_tes_proto;
 ant_value_t g_tds_proto;
+
+enum {
+  TES_NATIVE_TAG = 0x54455354u, // TEST
+  TDS_NATIVE_TAG = 0x54445354u  // TDST
+};
 
 typedef struct {
   uint8_t pending[3];
@@ -31,13 +37,13 @@ static ant_value_t tds_get_ts(ant_value_t obj) {
 
 bool tes_is_stream(ant_value_t obj) {
   return is_object_type(obj)
-    && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+    && js_check_native_tag(obj, TES_NATIVE_TAG)
     && ts_is_stream(tes_get_ts(obj));
 }
 
 bool tds_is_stream(ant_value_t obj) {
   return is_object_type(obj)
-    && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+    && js_check_native_tag(obj, TDS_NATIVE_TAG)
     && ts_is_stream(tds_get_ts(obj));
 }
 
@@ -58,15 +64,17 @@ ant_value_t tds_stream_writable(ant_value_t obj) {
 }
 
 static void tes_state_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((tes_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != TES_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static void tds_state_finalize(ant_t *js, ant_object_t *obj) {
-  ant_extra_slot_t *slot = ant_object_extra_slot(obj, SLOT_DATA);
-  if (!slot || vtype(slot->value) != T_NUM) return;
-  free((td_state_t *)(uintptr_t)(size_t)js_getnum(slot->value));
+  if (!obj || obj->native.tag != TDS_NATIVE_TAG) return;
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
 }
 
 static ant_value_t codec_transform_controller(ant_value_t *args, int nargs) {
@@ -79,9 +87,8 @@ static ant_value_t codec_flush_controller(ant_value_t *args, int nargs) {
 
 static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   
-  tes_state_t *st = (tes_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  tes_state_t *st = (tes_state_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -165,8 +172,7 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
-  tes_state_t *st = (tes_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  tes_state_t *st = (tes_state_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   if (st->pending_len > 0) {
@@ -211,11 +217,11 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_tes_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, TES_NATIVE_TAG);
   js_set_finalizer(obj, tes_state_finalize);
 
   ant_value_t wrapper = js_mkobj(js);
-  js_set_slot(wrapper, SLOT_DATA, ANT_PTR(st));
+  js_set_native(wrapper, st, TES_NATIVE_TAG);
 
   ant_value_t transformer = js_mkobj(js);
   ant_value_t transform_fn = js_heavy_mkfun(js, tes_transform, wrapper);
@@ -241,8 +247,7 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
-  td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  td_state_t *st = (td_state_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -268,8 +273,7 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
-  td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  td_state_t *st = (td_state_t *)js_get_native_ptr(wrapper);
   ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   ant_value_t result = td_decode(js, st, NULL, 0, false);
@@ -287,8 +291,7 @@ static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_tds_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state_val = js_get_slot(js->this_val, SLOT_DATA);
-  td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  td_state_t *st = (td_state_t *)js_get_native_ptr(js->this_val);
   if (!st) return js_mkstr(js, "utf-8", 5);
   switch (st->encoding) {
     case TD_ENC_UTF16LE: return js_mkstr(js, "utf-16le", 8);
@@ -300,14 +303,12 @@ static ant_value_t js_tds_get_encoding(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t js_tds_get_fatal(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state_val = js_get_slot(js->this_val, SLOT_DATA);
-  td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  td_state_t *st = (td_state_t *)js_get_native_ptr(js->this_val);
   return (st && st->fatal) ? js_true : js_false;
 }
 
 static ant_value_t js_tds_get_ignore_bom(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state_val = js_get_slot(js->this_val, SLOT_DATA);
-  td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  td_state_t *st = (td_state_t *)js_get_native_ptr(js->this_val);
   return (st && st->ignore_bom) ? js_true : js_false;
 }
 
@@ -390,11 +391,11 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_tds_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
+  js_set_native(obj, st, TDS_NATIVE_TAG);
   js_set_finalizer(obj, tds_state_finalize);
 
   ant_value_t wrapper = js_mkobj(js);
-  js_set_slot(wrapper, SLOT_DATA, ANT_PTR(st));
+  js_set_native(wrapper, st, TDS_NATIVE_TAG);
 
   ant_value_t transformer = js_mkobj(js);
   ant_value_t transform_fn = js_heavy_mkfun(js, tds_transform, wrapper);

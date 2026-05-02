@@ -258,7 +258,8 @@ static ant_value_t jit_iter_advance_from_buf(
   }
 
   case SV_ITER_MAP: {
-    map_iterator_state_t *st = (map_iterator_state_t *)(uintptr_t)js_getnum(iter_buf[0]);
+    map_iterator_state_t *st = get_map_iter_state(iter_buf[0]);
+    if (!st) return js_mkerr(js, "Invalid Map iterator");
     if (!st->current) {
       *out_value = js_mkundef();
       *out_done = true;
@@ -291,7 +292,8 @@ static ant_value_t jit_iter_advance_from_buf(
   }
 
   case SV_ITER_SET: {
-    set_iterator_state_t *st = (set_iterator_state_t *)(uintptr_t)js_getnum(iter_buf[0]);
+    set_iterator_state_t *st = get_set_iter_state(iter_buf[0]);
+    if (!st) return js_mkerr(js, "Invalid Set iterator");
     if (!st->current) {
       *out_value = js_mkundef();
       *out_done = true;
@@ -441,7 +443,7 @@ ant_value_t jit_helper_for_of(
   map_iterator_state_t *map_st;
   iter_type_t map_type;
   if (sv_is_map_iter(js, iterator, &map_st, &map_type)) {
-    iter_buf[0] = ANT_PTR(map_st);
+    iter_buf[0] = iterator;
     iter_buf[1] = tov((double)map_type);
     iter_buf[2] = tov(SV_ITER_MAP);
     GC_ROOT_RESTORE(js, root_mark);
@@ -451,7 +453,7 @@ ant_value_t jit_helper_for_of(
   set_iterator_state_t *set_st;
   iter_type_t set_type;
   if (sv_is_set_iter(js, iterator, &set_st, &set_type)) {
-    iter_buf[0] = ANT_PTR(set_st);
+    iter_buf[0] = iterator;
     iter_buf[1] = tov((double)set_type);
     iter_buf[2] = tov(SV_ITER_SET);
     GC_ROOT_RESTORE(js, root_mark);
