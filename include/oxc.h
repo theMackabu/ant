@@ -19,4 +19,16 @@ char *OXC_strip_types_owned(
   size_t error_output_len
 );
 
+char *OXC_strip_types_with_hints_owned(
+  const char *input,
+  const char *filename,
+  int is_module,
+  size_t *out_len,
+  int *out_error,
+  char **out_hints,
+  size_t *out_hints_len,
+  char *error_output,
+  size_t error_output_len
+);
+
 #endif

@@ -21,6 +21,45 @@ const char *const module_resolve_extensions[] = {
   ".json", ".node", NULL
 };
 
+typedef struct ant_ts_hints_entry {
+  char *filename;
+  char *hints;
+  struct ant_ts_hints_entry *next;
+} ant_ts_hints_entry_t;
+
+static ant_ts_hints_entry_t *ant_ts_hints_head = NULL;
+
+void ant_ts_hints_store(const char *filename, const char *hints) {
+  if (!filename || !filename[0]) return;
+
+  for (ant_ts_hints_entry_t *entry = ant_ts_hints_head; entry; entry = entry->next) {
+    if (strcmp(entry->filename, filename) != 0) continue;
+    free(entry->hints);
+    entry->hints = (hints && hints[0]) ? strdup(hints) : NULL;
+    return;
+  }
+
+  ant_ts_hints_entry_t *entry = calloc(1, sizeof(*entry));
+  if (!entry) return;
+  entry->filename = strdup(filename);
+  entry->hints = (hints && hints[0]) ? strdup(hints) : NULL;
+  if (!entry->filename) {
+    free(entry->hints);
+    free(entry);
+    return;
+  }
+  entry->next = ant_ts_hints_head;
+  ant_ts_hints_head = entry;
+}
+
+const char *ant_ts_hints_find(const char *filename) {
+  if (!filename || !filename[0]) return NULL;
+  for (ant_ts_hints_entry_t *entry = ant_ts_hints_head; entry; entry = entry->next) {
+    if (strcmp(entry->filename, filename) == 0) return entry->hints;
+  }
+  return NULL;
+}
+
 static const char *ant_home_dir(void) {
 #ifdef _WIN32
   const char *home = getenv("USERPROFILE");
@@ -283,11 +322,14 @@ int strip_typescript_inplace(
   char *input = *buffer;
   char error_buf[256] = {0};
   size_t stripped_len = 0;
+  char *hints = NULL;
+  size_t hints_len = 0;
   
   int strip_error = OXC_ERR_TRANSFORM_FAILED;
-  char *stripped = OXC_strip_types_owned(
+  char *stripped = OXC_strip_types_with_hints_owned(
     input, filename, is_module,
     &stripped_len, &strip_error,
+    &hints, &hints_len,
     error_buf, sizeof(error_buf)
   );
 
@@ -315,6 +357,8 @@ int strip_typescript_inplace(
 
   memcpy(next, stripped, stripped_len + 1);
   free(stripped);
+  ant_ts_hints_store(filename, (hints && hints_len > 0) ? hints : NULL);
+  free(hints);
 
   *buffer = next;
   if (out_len) *out_len = stripped_len;

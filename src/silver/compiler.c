@@ -9,6 +9,7 @@
 #include "tokens.h"
 #include "runtime.h"
 #include "ops/coercion.h"
+#include "utils.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -657,6 +658,80 @@ static uint8_t iter_hint_for_type(uint8_t type) {
     case SV_TI_STR: return SV_ITER_HINT_STRING;
     default:        return SV_ITER_HINT_GENERIC;
   }
+}
+
+static uint8_t ts_hint_char_to_type(char hint) {
+  switch (hint) {
+    case 'N': return SV_TI_NUM;
+    case 'S': return SV_TI_STR;
+    case 'B': return SV_TI_BOOL;
+    case 'A': return SV_TI_ARR;
+    case 'O': return SV_TI_OBJ;
+    case 'V': return SV_TI_UNDEF;
+    case '0': return SV_TI_NULL;
+    default:  return SV_TI_UNKNOWN;
+  }
+}
+
+static const char *ts_hint_find_field(
+  const char *line, const char *line_end,
+  const char *field, size_t field_len,
+  const char **out_end
+) {
+  const char *p = line;
+  while (p < line_end) {
+    const char *next = memchr(p, '|', (size_t)(line_end - p));
+    if (!next) next = line_end;
+    if ((size_t)(next - p) >= field_len && memcmp(p, field, field_len) == 0) {
+      const char *value = p + field_len;
+      if (out_end) *out_end = next;
+      return value;
+    }
+    p = next < line_end ? next + 1 : line_end;
+  }
+  return NULL;
+}
+
+static bool lookup_ts_function_hints(
+  const char *filename,
+  const char *name,
+  uint32_t name_len,
+  int param_count,
+  sv_type_info_t *out_params,
+  uint8_t *out_return
+) {
+  const char *hints = ant_ts_hints_find(filename);
+  if (!hints || !name || name_len == 0) return false;
+
+  bool found = false;
+  for (const char *line = hints; *line;) {
+    const char *line_end = strchr(line, '\n');
+    if (!line_end) line_end = line + strlen(line);
+
+    const char *fn_end = NULL;
+    const char *fn = ts_hint_find_field(line, line_end, "fn:", 3, &fn_end);
+    if (fn && (uint32_t)(fn_end - fn) == name_len && memcmp(fn, name, name_len) == 0) {
+      const char *params_end = NULL;
+      const char *params = ts_hint_find_field(line, line_end, "p:", 2, &params_end);
+      const char *ret_end = NULL;
+      const char *ret = ts_hint_find_field(line, line_end, "r:", 2, &ret_end);
+
+      if (out_params && params) {
+        int n = (int)(params_end - params);
+        if (n > param_count) n = param_count;
+        for (int i = 0; i < n; i++)
+          out_params[i].type = ts_hint_char_to_type(params[i]);
+      }
+      if (out_return && ret && ret < ret_end)
+        *out_return = ts_hint_char_to_type(*ret);
+      found = true;
+      break;
+    }
+
+    line = *line_end == '\n' ? line_end + 1 : line_end;
+  }
+
+  return found;
 }
 
 static int ensure_local_at_depth(
@@ -5273,6 +5348,22 @@ sv_func_t *compile_function_body(
     if (comp.slot_types) {
       int ncopy = max_locals < comp.slot_type_cap ? max_locals : comp.slot_type_cap;
       memcpy(func->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
+    }
+  }
+  if (comp.param_count > 0 && node->str && node->len > 0) {
+    sv_type_info_t *param_hints = code_arena_bump((size_t)comp.param_count * sizeof(sv_type_info_t));
+    if (param_hints) {
+      memset(param_hints, 0, (size_t)comp.param_count * sizeof(sv_type_info_t));
+      uint8_t return_hint = SV_TI_UNKNOWN;
+      if (lookup_ts_function_hints(
+        enclosing->filename ? enclosing->filename : enclosing->js->filename,
+        node->str, node->len,
+        comp.param_count, param_hints, &return_hint
+      )) {
+        func->param_hints = param_hints;
+        func->param_hint_count = comp.param_count;
+        func->return_hint = return_hint;
+      }
     }
   }
   func->param_count = comp.param_count;

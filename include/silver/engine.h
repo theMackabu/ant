@@ -144,6 +144,9 @@ struct sv_func {
   
   sv_type_info_t *local_types;
   int local_type_count;
+  sv_type_info_t *param_hints;
+  int param_hint_count;
+  uint8_t return_hint;
   
   int param_count;
   int upvalue_count;
@@ -182,6 +185,7 @@ struct sv_func {
   uint32_t jit_compiled_tfb_ver;
   uint8_t *type_feedback;
   uint8_t *local_type_feedback;
+  uint8_t *param_type_feedback;
   uint64_t ctor_prop_samples;
   uint64_t ctor_prop_hist[17];
   uint8_t ctor_inobj_limit;
@@ -918,11 +922,45 @@ if (func->type_feedback) {
   if (neu != old) { func->type_feedback[off] = neu; func->tfb_version++; }
 }}
 
+static inline void sv_tfb_seed_param_hints(sv_func_t *fn) {
+  if (!fn->param_type_feedback || !fn->param_hints) return;
+  int n = fn->param_hint_count < fn->param_count
+    ? fn->param_hint_count : fn->param_count;
+  for (int i = 0; i < n; i++) {
+    if (fn->param_hints[i].type == SV_TI_NUM)
+      fn->param_type_feedback[i] |= SV_TFB_NUM;
+  }
+}
+
 static inline void sv_tfb_ensure(sv_func_t *fn) {
   if (!fn->type_feedback && fn->code_len > 0)
     fn->type_feedback = calloc((size_t)fn->code_len, 1);
   if (!fn->local_type_feedback && fn->max_locals > 0)
     fn->local_type_feedback = calloc((size_t)fn->max_locals, 1);
+  if (!fn->param_type_feedback && fn->param_count > 0) {
+    fn->param_type_feedback = calloc((size_t)fn->param_count, 1);
+    sv_tfb_seed_param_hints(fn);
+  }
+}
+
+static inline void sv_tfb_record_param(sv_func_t *func, int idx, ant_value_t v) {
+  if (func->param_type_feedback && idx >= 0 && idx < func->param_count) {
+    uint8_t old = func->param_type_feedback[idx];
+    uint8_t neu = old | sv_tfb_classify(v);
+    if (neu != old) { func->param_type_feedback[idx] = neu; func->tfb_version++; }
+  }
+}
+
+static inline bool sv_tfb_param_numeric_hint(const sv_func_t *func, int idx) {
+  if (!func || idx < 0 || idx >= func->param_count) return false;
+  uint8_t fb = func->param_type_feedback ? func->param_type_feedback[idx] : 0;
+  if (fb && (fb & ~SV_TFB_NUM)) return false;
+  if (fb == SV_TFB_NUM) return true;
+  return (
+    func->param_hints &&
+    idx < func->param_hint_count &&
+    func->param_hints[idx].type == SV_TI_NUM
+  );
 }
 
 static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {

@@ -41,6 +41,9 @@ int strip_typescript_inplace(
   const char **error_detail
 );
 
+void ant_ts_hints_store(const char *filename, const char *hints);
+const char *ant_ts_hints_find(const char *filename);
+
 void *try_oom(size_t size);
 void cstr_free(cstr_buf_t *buf);
 

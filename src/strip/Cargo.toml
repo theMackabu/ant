@@ -7,6 +7,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 oxc_allocator = "0.110.0"
+oxc_ast = "0.110.0"
 oxc_span = "0.110.0"
 oxc_transformer = "0.110.0"
 oxc_semantic = "0.110.0"

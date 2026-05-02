@@ -510,6 +510,10 @@ static inline ant_value_t sv_stage_frame_args(
     memmove(base, args, (size_t)argc * sizeof(ant_value_t));
   for (int i = argc; i < arg_slots; i++)
     base[i] = js_mkundef();
+  #ifdef ANT_JIT
+  for (int i = 0; i < func->param_count; i++)
+    sv_tfb_record_param(func, i, base[i]);
+  #endif
   if (func->max_locals > 0)
     for (int i = 0; i < func->max_locals; i++)
       (*out_lp)[i] = js_mkundef();

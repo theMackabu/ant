@@ -318,6 +318,43 @@ static void mir_emit_bailout_check(MIR_context_t ctx, MIR_item_t fn,
   MIR_append_insn(ctx, fn, no_bail);
 }
 
+static void mir_emit_bailout_jump(MIR_context_t ctx, MIR_item_t fn,
+                                  MIR_reg_t r_bailout_off, int bc_off,
+                                  MIR_reg_t r_bailout_sp,  int pre_op_sp,
+                                  MIR_label_t bailout_tramp,
+                                  MIR_reg_t r_args_buf,
+                                  jit_vstack_t *vs,
+                                  MIR_reg_t *local_regs, int n_locals,
+                                  MIR_reg_t r_lbuf,
+                                  MIR_reg_t r_d_slot) {
+  for (int i = 0; i < pre_op_sp; i++) {
+    if (vs->slot_type && vs->slot_type[i] == SLOT_NUM)
+      mir_d_to_i64(ctx, fn, vs->regs[i], vs->d_regs[i], r_d_slot);
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
+        MIR_new_reg_op(ctx, vs->regs[i])));
+  }
+  for (int i = 0; i < n_locals; i++)
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
+        MIR_new_reg_op(ctx, local_regs[i])));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_bailout_off),
+      MIR_new_int_op(ctx, bc_off)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_bailout_sp),
+      MIR_new_int_op(ctx, pre_op_sp)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP,
+      MIR_new_label_op(ctx, bailout_tramp)));
+}
+
 
 static void mir_load_imm(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst, uint64_t imm) {
@@ -1016,6 +1053,30 @@ static bool *scan_captured_params(sv_func_t *func) {
   }
 
   return captured;
+}
+
+static bool *scan_mutated_params(sv_func_t *func) {
+  int param_count = func ? func->param_count : 0;
+  if (param_count <= 0) return NULL;
+  bool *mutated = calloc((size_t)param_count, sizeof(bool));
+  if (!mutated) return NULL;
+
+  uint8_t *ip = func->code;
+  uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    int sz = sv_op_size[op];
+    if (sz == 0) break;
+
+    if (op == OP_PUT_ARG || op == OP_SET_ARG) {
+      uint16_t idx = sv_get_u16(ip + 1);
+      if (idx < (uint16_t)param_count) mutated[idx] = true;
+    }
+
+    ip += sz;
+  }
+
+  return mutated;
 }
 
 
@@ -1896,6 +1957,14 @@ typedef struct {
 
 static jit_features_t jit_prescan_features(sv_func_t *func) {
   jit_features_t f = {0};
+  if (func->param_count > 0) {
+    for (int i = 0; i < func->param_count; i++) {
+      if (sv_tfb_param_numeric_hint(func, i)) {
+        f.needs_bailout = true;
+        break;
+      }
+    }
+  }
   uint8_t *ip  = func->code;
   uint8_t *end = func->code + func->code_len;
   while (ip < end) {
@@ -2653,6 +2722,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   int param_count = func->param_count;
   bool *captured_params = scan_captured_params(func);
   bool *captured_locals = scan_captured_locals(func, n_locals);
+  bool *mutated_params = scan_mutated_params(func);
+  bool *entry_num_params = NULL;
+  MIR_reg_t *param_d_regs = NULL;
   bool has_captured_params = false;
   bool has_captures = false;
   if (captured_params) {
@@ -2667,11 +2739,66 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   bool use_unified_slotbuf = has_captured_slots && has_captures;
   int slotbuf_count = use_unified_slotbuf ? (param_count + n_locals) : param_count;
 
+  if (param_count > 0) {
+    entry_num_params = calloc((size_t)param_count, sizeof(bool));
+    param_d_regs = calloc((size_t)param_count, sizeof(MIR_reg_t));
+    if (!entry_num_params || !param_d_regs) {
+      free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
+      free(vs.known_const); free(vs.has_const);
+      free(local_regs); free(local_d_regs); free(known_func_locals); free(known_type_locals);
+      free(captured_params); free(captured_locals); free(mutated_params);
+      free(entry_num_params); free(param_d_regs);
+      MIR_finish_func(ctx); MIR_finish_module(ctx); func->jit_compiling = false; return NULL;
+    }
+
+    for (int i = 0; i < param_count; i++) {
+      if (!func->param_hints || i >= func->param_hint_count ||
+          func->param_hints[i].type != SV_TI_NUM) continue;
+      if (!sv_tfb_param_numeric_hint(func, i)) continue;
+      if (captured_params && captured_params[i]) continue;
+      if (mutated_params && mutated_params[i]) continue;
+
+      char dname[32];
+      snprintf(dname, sizeof(dname), "pd%d", i);
+      entry_num_params[i] = true;
+      param_d_regs[i] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_D, dname);
+
+      MIR_label_t in_range = MIR_new_label(ctx);
+      MIR_label_t is_num = MIR_new_label(ctx);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_UBGT,
+          MIR_new_label_op(ctx, in_range),
+          MIR_new_reg_op(ctx, r_argc),
+          MIR_new_int_op(ctx, (int64_t)i)));
+      mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_bailout_val)));
+      MIR_append_insn(ctx, jit_func, in_range);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_MOV,
+          MIR_new_reg_op(ctx, r_tmp),
+          MIR_new_mem_op(ctx, MIR_JSVAL,
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+            r_args, 0, 1)));
+      mir_emit_is_num_guard(ctx, jit_func, r_bool, r_tmp, is_num);
+      mir_i64_to_d(ctx, jit_func, param_d_regs[i], r_tmp, r_d_slot);
+      MIR_label_t guard_done = MIR_new_label(ctx);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, guard_done)));
+      MIR_append_insn(ctx, jit_func, is_num);
+      mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_bailout_val)));
+      MIR_append_insn(ctx, jit_func, guard_done);
+    }
+  }
+
   if (has_captured_params && needs_bailout) {
     free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
     free(vs.known_const); free(vs.has_const);
     free(local_regs); free(local_d_regs); free(known_func_locals); free(known_type_locals);
-    free(captured_params); free(captured_locals);
+    free(captured_params); free(captured_locals); free(mutated_params);
+    free(entry_num_params); free(param_d_regs);
     MIR_finish_func(ctx); MIR_finish_module(ctx); func->jit_compiling = false; return NULL;
   }
 
@@ -2921,6 +3048,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
+        if (entry_num_params && idx < (uint16_t)param_count && entry_num_params[idx]) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_DMOV,
+              MIR_new_reg_op(ctx, vs.d_regs[vs.sp - 1]),
+              MIR_new_reg_op(ctx, param_d_regs[idx])));
+          if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+          break;
+        }
         if (has_captured_params && captured_params && idx < (uint16_t)param_count && captured_params[idx]) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2947,6 +3082,21 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
                 r_args, 0, 1)));
           MIR_append_insn(ctx, jit_func, arg_done);
+        }
+        if (sv_tfb_param_numeric_hint(func, (int)idx)) {
+          MIR_label_t hint_bail = MIR_new_label(ctx);
+          MIR_label_t hint_done = MIR_new_label(ctx);
+          mir_emit_is_num_guard(ctx, jit_func, r_bool, dst, hint_bail);
+          mir_i64_to_d(ctx, jit_func, vs.d_regs[vs.sp - 1], dst, r_d_slot);
+          if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, hint_done)));
+          MIR_append_insn(ctx, jit_func, hint_bail);
+          mir_emit_bailout_jump(ctx, jit_func,
+            r_bailout_off, bc_off,
+            r_bailout_sp, vs.sp - 1, bailout_tramp,
+            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+          MIR_append_insn(ctx, jit_func, hint_done);
         }
         break;
       }
@@ -3356,11 +3506,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_ADD_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
         bool force_num_only = (op == OP_ADD_NUM);
-        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
-        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool hinted_num_only = l_is_num && r_is_num;
+        bool fb_num_only  = force_num_only || hinted_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && !hinted_num_only && fb && !(fb & SV_TFB_NUM);
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -3546,11 +3697,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_SUB_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
         bool force_num_only = (op == OP_SUB_NUM);
-        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
-        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool hinted_num_only = l_is_num && r_is_num;
+        bool fb_num_only  = force_num_only || hinted_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && !hinted_num_only && fb && !(fb & SV_TFB_NUM);
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -3719,11 +3871,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_MUL_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
         bool force_num_only = (op == OP_MUL_NUM);
-        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
-        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool hinted_num_only = l_is_num && r_is_num;
+        bool fb_num_only  = force_num_only || hinted_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && !hinted_num_only && fb && !(fb & SV_TFB_NUM);
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -3892,11 +4045,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_DIV_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
         bool force_num_only = (op == OP_DIV_NUM);
-        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
-        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool hinted_num_only = l_is_num && r_is_num;
+        bool fb_num_only  = force_num_only || hinted_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && !hinted_num_only && fb && !(fb & SV_TFB_NUM);
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -8213,6 +8367,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(known_type_locals);
   free(captured_params);
   free(captured_locals);
+  free(mutated_params);
+  free(entry_num_params);
+  free(param_d_regs);
 
   if (!ok) return NULL;
 
