@@ -73,6 +73,19 @@ static hdr_list_t *get_list(ant_value_t obj) {
   return (hdr_list_t *)js_get_native(obj, HEADERS_NATIVE_TAG);
 }
 
+static void headers_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  hdr_list_t *list = get_list(value);
+  list_free(list);
+  js_clear_native(value, HEADERS_NATIVE_TAG);
+}
+
+static void headers_iter_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  free(js_get_native(value, HEADERS_ITER_NATIVE_TAG));
+  js_clear_native(value, HEADERS_ITER_NATIVE_TAG);
+}
+
 static headers_guard_t get_guard(ant_value_t obj) {
   ant_value_t slot = js_get_slot(obj, SLOT_HEADERS_GUARD);
   if (vtype(slot) != T_NUM) return HEADERS_GUARD_NONE;
@@ -517,15 +530,20 @@ static ant_value_t headers_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kind) {
   hdr_list_t *l = get_list(headers_obj);
+  if (!l) return js_mkerr(js, "Invalid Headers object");
 
   hdr_iter_t *st = ant_calloc(sizeof(hdr_iter_t));
   if (!st) return js_mkerr(js, "out of memory");
-  st->list  = l ? l : list_new();
+  
+  st->list  = l;
   st->kind  = kind;
 
   ant_value_t iter = js_mkobj(js);
   js_set_proto_init(iter, g_headers_iter_proto);
   js_set_native(iter, st, HEADERS_ITER_NATIVE_TAG);
+  js_set_finalizer(iter, headers_iter_finalize);
+  js_set_slot_wb(js, iter, SLOT_AUX, headers_obj);
+  
   return iter;
 }
 
@@ -816,6 +834,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
   js_set_native(obj, l, HEADERS_NATIVE_TAG);
+  js_set_finalizer(obj, headers_finalize);
   js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
   
   return obj;
@@ -829,6 +848,7 @@ ant_value_t headers_create_empty(ant_t *js) {
   js_set_proto_init(obj, g_headers_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
   js_set_native(obj, l, HEADERS_NATIVE_TAG);
+  js_set_finalizer(obj, headers_finalize);
   js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
   
   return obj;

@@ -73,6 +73,18 @@ static void data_free(request_data_t *d) {
   free(d);
 }
 
+static void request_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  request_data_t *data = get_data(value);
+  data_free(data);
+  js_clear_native(value, REQUEST_NATIVE_TAG);
+}
+
+static void request_clear_and_free(ant_value_t obj, request_data_t *data) {
+  if (obj) js_clear_native(obj, REQUEST_NATIVE_TAG);
+  data_free(data);
+}
+
 static request_data_t *data_new_with(const char *method, const char *mode) {
   request_data_t *d = calloc(1, sizeof(request_data_t));
   if (!d) return NULL;
@@ -104,13 +116,20 @@ static request_data_t *data_new_server(const char *method) { return data_new_wit
 
 static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_value_t headers_obj, bool create_signal) {
   ant_value_t obj = js_mkobj(js);
+  
   ant_value_t hdrs = is_object_type(headers_obj)
     ? headers_obj
     : headers_create_empty(js);
 
+  if (is_err(hdrs)) {
+    data_free(req);
+    return hdrs;
+  }
+
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
+  js_set_finalizer(obj, request_finalize);
 
   headers_set_guard(hdrs,
     strcmp(req->mode, "no-cors") == 0
@@ -940,6 +959,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, nd, REQUEST_NATIVE_TAG);
+  js_set_finalizer(obj, request_finalize);
   
   js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, new_headers);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
@@ -1299,18 +1319,19 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
+  js_set_finalizer(obj, request_finalize);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);
-  if (is_err(signal)) { data_free(req); return signal; }
+  if (is_err(signal)) { request_clear_and_free(obj, req); return signal; }
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
 
   headers = request_create_ctor_headers(js, input);
-  if (is_err(headers)) { data_free(req); return headers; }
+  if (is_err(headers)) { request_clear_and_free(obj, req); return headers; }
   
   if (init_provided) {
     headers = request_apply_init_headers(js, init, headers);
-    if (is_err(headers)) { data_free(req); return headers; }
+    if (is_err(headers)) { request_clear_and_free(obj, req); return headers; }
   }
 
   headers_set_guard(headers,
@@ -1324,7 +1345,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   if (init_provided) {
     step = request_parse_duplex(js, init, &duplex_provided);
-    if (is_err(step)) { data_free(req); return step; }
+    if (is_err(step)) { request_clear_and_free(obj, req); return step; }
   }
 
   step = request_apply_ctor_body(
@@ -1333,7 +1354,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   );
   
   if (is_err(step)) {
-    data_free(req);
+    request_clear_and_free(obj, req);
     return step;
   }
 
@@ -1377,18 +1398,19 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
+  js_set_finalizer(obj, request_finalize);
   js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);
-  if (is_err(signal)) { data_free(req); return signal; }
+  if (is_err(signal)) { request_clear_and_free(obj, req); return signal; }
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
 
   headers = request_create_ctor_headers(js, input);
-  if (is_err(headers)) { data_free(req); return headers; }
+  if (is_err(headers)) { request_clear_and_free(obj, req); return headers; }
   
   if (init_provided) {
     headers = request_apply_init_headers(js, init, headers);
-    if (is_err(headers)) { data_free(req); return headers; }
+    if (is_err(headers)) { request_clear_and_free(obj, req); return headers; }
   }
 
   headers_set_guard(headers,
@@ -1401,12 +1423,12 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
 
   if (init_provided) {
     step = request_parse_duplex(js, init, &duplex_provided);
-    if (is_err(step)) { data_free(req); return step; }
+    if (is_err(step)) { request_clear_and_free(obj, req); return step; }
   }
 
   step = request_apply_ctor_body(js, obj, input, init, init_provided, duplex_provided, req, src, headers);
   if (is_err(step)) {
-    data_free(req);
+    request_clear_and_free(obj, req);
     return step;
   }
 
