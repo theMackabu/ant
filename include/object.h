@@ -88,6 +88,11 @@ typedef struct {
   uint8_t flags;
 } ant_object_sidecar_t;
 
+_Static_assert(
+  _Alignof(ant_object_sidecar_t) > ant_sidecar, 
+  "object sidecar pointer uses low-bit tag"
+);
+
 typedef struct ant_prop_ref {
   ant_object_t *obj;
   uint32_t slot;
@@ -150,14 +155,16 @@ static inline ant_object_sidecar_t *ant_object_sidecar(const ant_object_t *obj) 
 
 static inline ant_extra_slot_t *ant_object_extra_slots_ptr(const ant_object_t *obj) {
   if (!obj) return NULL;
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  return sidecar ? sidecar->extra_slots : obj->extra_slots;
+  uintptr_t raw = (uintptr_t)obj->extra_slots;
+  if ((raw & ant_sidecar) == 0) return obj->extra_slots;
+  return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_slots;
 }
 
 static inline uint8_t ant_object_extra_count(const ant_object_t *obj) {
   if (!obj) return 0;
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  return sidecar ? sidecar->extra_count : obj->extra_count;
+  uintptr_t raw = (uintptr_t)obj->extra_slots;
+  if ((raw & ant_sidecar) == 0) return obj->extra_count;
+  return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_count;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slots(const ant_object_t *obj, uint8_t *count) {
@@ -165,20 +172,30 @@ static inline ant_extra_slot_t *ant_object_extra_slots(const ant_object_t *obj, 
     if (count) *count = 0;
     return NULL;
   }
-  
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  if (sidecar) {
-    if (count) *count = sidecar->extra_count;
-    return sidecar->extra_slots;
+
+  uintptr_t raw = (uintptr_t)obj->extra_slots;
+  if ((raw & ant_sidecar) == 0) {
+    if (count) *count = obj->extra_count;
+    return obj->extra_slots;
   }
   
-  if (count) *count = obj->extra_count;
-  return obj->extra_slots;
+  ant_object_sidecar_t *sidecar = (ant_object_sidecar_t *)(raw & ~ant_sidecar);
+  if (count) *count = sidecar->extra_count;
+  return sidecar->extra_slots;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slot(const ant_object_t *obj, uint8_t slot) {
-  uint8_t count = 0;
-  ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
+  if (!obj) return NULL;
+
+  uint8_t count = obj->extra_count;
+  ant_extra_slot_t *entries = obj->extra_slots;
+
+  uintptr_t raw = (uintptr_t)obj->extra_slots;
+  if ((raw & ant_sidecar) != 0) {
+    ant_object_sidecar_t *sidecar = (ant_object_sidecar_t *)(raw & ~ant_sidecar);
+    count = sidecar->extra_count;
+    entries = sidecar->extra_slots;
+  }
   
   for (uint8_t i = 0; i < count; i++) 
     if (entries[i].slot == slot) return &entries[i];

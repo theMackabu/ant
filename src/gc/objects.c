@@ -323,8 +323,11 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_value(js, entry->setter);
   }
 
-  gc_mark_abort_signal_object(js, js_obj_from_ptr(obj), gc_mark_value);
-  gc_mark_eventemitter_object(js, js_obj_from_ptr(obj), gc_mark_value);
+  if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) {
+    ant_value_t value = js_obj_from_ptr(obj);
+    gc_mark_abort_signal_object(js, value, gc_mark_value);
+    gc_mark_eventemitter_object(js, value, gc_mark_value);
+  }
 }
 
 static void gc_drain_mark_stack(ant_t *js) {
@@ -564,7 +567,8 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
   if (obj->finalizer) obj->finalizer(js, obj);
   
-  gc_finalize_events_object(js, js_obj_from_ptr(obj));
+  if (obj->native.tag != 0 || ant_object_has_sidecar(obj))
+    gc_finalize_events_object(js, js_obj_from_ptr(obj));
   obj->mark_epoch = ANT_GC_DEAD;
 
   if (obj->shape) {

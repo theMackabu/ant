@@ -131,6 +131,12 @@ typedef struct {
   uint8_t *type_feedback;
   sv_ctor_prop_fb_t ctor_prop_fb;
 } sv_func_sidecar_t;
+
+_Static_assert(
+  _Alignof(sv_func_sidecar_t) > ant_sidecar,
+  "function sidecar pointer uses low-bit tag"
+);
+
 #endif
 
 struct sv_func {
@@ -965,23 +971,27 @@ static inline bool sv_func_has_sidecar(const sv_func_t *func) {
 }
 
 static inline sv_func_sidecar_t *sv_func_sidecar(const sv_func_t *func) {
-  if (!sv_func_has_sidecar(func)) return NULL;
-  return (sv_func_sidecar_t *)((uintptr_t)func->type_feedback & ~ant_sidecar);
+  if (!func) return NULL;
+  uintptr_t raw = (uintptr_t)func->type_feedback;
+  if ((raw & ant_sidecar) == 0) return NULL;
+  return (sv_func_sidecar_t *)(raw & ~ant_sidecar);
 }
 
 static inline uint8_t *sv_func_type_feedback(const sv_func_t *func) {
   if (!func) return NULL;
-  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
-  return sidecar ? sidecar->type_feedback : func->type_feedback;
+  uintptr_t raw = (uintptr_t)func->type_feedback;
+  if ((raw & ant_sidecar) == 0) return func->type_feedback;
+  return ((sv_func_sidecar_t *)(raw & ~ant_sidecar))->type_feedback;
 }
 
 static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
   if (!func) return NULL;
 
-  sv_func_sidecar_t *sidecar = sv_func_sidecar(func);
-  if (sidecar) return sidecar;
+  uintptr_t raw = (uintptr_t)func->type_feedback;
+  if ((raw & ant_sidecar) != 0)
+    return (sv_func_sidecar_t *)(raw & ~ant_sidecar);
 
-  sidecar = (sv_func_sidecar_t *)calloc(1, sizeof(*sidecar));
+  sv_func_sidecar_t *sidecar = (sv_func_sidecar_t *)calloc(1, sizeof(*sidecar));
   if (!sidecar) return NULL;
 
   sidecar->type_feedback = func->type_feedback;
