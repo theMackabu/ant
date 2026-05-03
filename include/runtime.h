@@ -32,6 +32,14 @@ code_arena_mark_t code_arena_mark(void);
 void code_arena_rewind(code_arena_mark_t mark);
 
 void code_arena_reset(void);
+size_t parse_arena_get_memory(void);
+
+code_arena_mark_t parse_arena_mark(void);
+void parse_arena_rewind(code_arena_mark_t mark);
+
+void parse_arena_reset(void);
+void *parse_arena_bump(size_t size);
+
 void destroy_runtime(ant_t *js);
 void *code_arena_bump(size_t size);
 

@@ -5579,8 +5579,14 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   wrapped[wrapped_len] = '\0';
   
   bool parse_strict = sv_vm_is_strict(js->vm);
+  code_arena_mark_t parse_mark = parse_arena_mark();
   sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)wrapped_len, parse_strict);
-  if (!program) { free(wrapped); return NULL; }
+  
+  if (!program) {
+    parse_arena_rewind(parse_mark);
+    free(wrapped);
+    return NULL;
+  }
 
   sv_ast_t *func_node = NULL;
   if (program->args.count > 0) {
@@ -5589,7 +5595,11 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
     else if (stmt && stmt->left && stmt->left->type == N_FUNC) func_node = stmt->left;
   }
 
-  if (!func_node) { free(wrapped); return NULL; }
+  if (!func_node) {
+    parse_arena_rewind(parse_mark);
+    free(wrapped);
+    return NULL;
+  }
 
   sv_compiler_t root;
   sv_compile_ctx_init_root(
@@ -5601,7 +5611,9 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)wrapped_len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
+  
   sv_compile_ctx_free_line_table(root.line_table);
+  parse_arena_rewind(parse_mark);
   free(wrapped);
 
   if (sv_compile_trace_unlikely) fprintf(
@@ -5632,8 +5644,13 @@ sv_func_t *sv_compile_function_with_params(
   }
 
   bool parse_strict = sv_vm_is_strict(js->vm);
+  code_arena_mark_t parse_mark = parse_arena_mark();
   sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, parse_strict);
-  if (!program) return NULL;
+  
+  if (!program) {
+    parse_arena_rewind(parse_mark);
+    return NULL;
+  }
 
   static const char *k_top_name_function = "<function>";
   static const char *k_top_name_async_function = "<async function>";
@@ -5658,7 +5675,10 @@ sv_func_t *sv_compile_function_with_params(
     }
 
     sv_ast_t *ident = sv_ast_new(N_IDENT);
-    if (!ident) return NULL;
+    if (!ident) {
+      parse_arena_rewind(parse_mark);
+      return NULL;
+    }
 
     ident->str = name;
     ident->len = (uint32_t)name_len;
@@ -5668,10 +5688,14 @@ sv_func_t *sv_compile_function_with_params(
   }
 
   top_fn.body = sv_ast_new(N_BLOCK);
-  if (!top_fn.body) return NULL;
+  if (!top_fn.body) {
+    parse_arena_rewind(parse_mark);
+    return NULL;
+  }
+  
   top_fn.body->args = program->args;
-
   sv_compiler_t root;
+  
   sv_compile_ctx_init_root(
     &root, js, js->filename,
     pin_source_text(body, (ant_offset_t)body_len),
@@ -5681,7 +5705,9 @@ sv_func_t *sv_compile_function_with_params(
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
+  
   sv_compile_ctx_free_line_table(root.line_table);
+  parse_arena_rewind(parse_mark);
   
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=function-with-params thrown=%d func=%p\n",

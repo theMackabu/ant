@@ -61,6 +61,20 @@ static abort_signal_data_t *get_signal_data_if_signal_object(ant_value_t obj) {
   return get_signal_data(obj);
 }
 
+static void abort_signal_data_free(abort_signal_data_t *data) {
+  if (!data) return;
+  if (data->listeners) utarray_free(data->listeners);
+  if (data->followers) utarray_free(data->followers);
+  free(data);
+}
+
+static void abort_signal_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  abort_signal_data_t *data = get_signal_data(value);
+  js_clear_native(value, ABORT_SIGNAL_NATIVE_TAG);
+  abort_signal_data_free(data);
+}
+
 static ant_value_t make_abort_error(ant_t *js) {
   return make_dom_exception(js, "signal is aborted without reason", "AbortError");
 }
@@ -188,6 +202,7 @@ static ant_value_t make_new_signal(ant_t *js) {
 
   ant_value_t obj = js_mkobj(js);
   js_set_native(obj, data, ABORT_SIGNAL_NATIVE_TAG);
+  js_set_finalizer(obj, abort_signal_finalize);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_ABORT_SIGNAL));
   if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_signal_proto);
 
@@ -331,7 +346,19 @@ ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source) {
 
 static void abort_timeout_close_cb(uv_handle_t *h) {
   abort_timeout_entry_t *entry = (abort_timeout_entry_t *)h->data;
-  if (entry) entry->closed = 1;
+  if (!entry) return;
+
+  abort_timeout_entry_t **it = &timeout_entries;
+  while (*it) {
+    if (*it == entry) {
+      *it = entry->next;
+      break;
+    }
+    it = &(*it)->next;
+  }
+
+  entry->closed = 1;
+  free(entry);
 }
 
 static void abort_timeout_fire_cb(uv_timer_t *handle) {

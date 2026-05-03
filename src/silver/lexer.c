@@ -74,7 +74,7 @@ sv_lex_string_t sv_lexer_str_literal(sv_lexer_t *lx) {
     outv.ok = true;
     return outv;
   }
-  uint8_t *out = code_arena_bump(cap);
+  uint8_t *out = parse_arena_bump(cap);
   if (!out) {
     (void)js_mkerr(js, "oom");
     return outv;

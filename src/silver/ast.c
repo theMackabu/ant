@@ -14,7 +14,7 @@
 #include <string.h>
 
 sv_ast_t *sv_ast_new(sv_node_type_t type) {
-  sv_ast_t *n = code_arena_bump(sizeof(sv_ast_t));
+  sv_ast_t *n = parse_arena_bump(sizeof(sv_ast_t));
   if (!n) return NULL;
   memset(n, 0, sizeof(sv_ast_t));
   n->type = type;
@@ -24,7 +24,7 @@ sv_ast_t *sv_ast_new(sv_node_type_t type) {
 void sv_ast_list_push(sv_ast_list_t *list, sv_ast_t *node) {
   if (list->count >= list->cap) {
     int new_cap = list->cap ? list->cap * 2 : 4;
-    sv_ast_t **new_items = code_arena_bump((size_t)new_cap * sizeof(sv_ast_t *));
+    sv_ast_t **new_items = parse_arena_bump((size_t)new_cap * sizeof(sv_ast_t *));
     if (!new_items) return;
     if (list->items)
       memcpy(new_items, list->items, (size_t)list->count * sizeof(sv_ast_t *));
@@ -167,7 +167,7 @@ static inline const char *decode_ident_into_arena(const char *src, uint32_t len,
     return src;
   }
 
-  char *dst = code_arena_bump((size_t)len + 1);
+  char *dst = parse_arena_bump((size_t)len + 1);
   if (!dst) {
     if (out_len) *out_len = len;
     return src;
@@ -371,7 +371,7 @@ static sv_tpl_cooked_t decode_template_segment(P, const uint8_t *in, size_t star
     return outv;
   }
 
-  uint8_t *out = code_arena_bump(raw_len);
+  uint8_t *out = parse_arena_bump(raw_len);
   if (!out) {
     (void)SV_MKERR(JS, "oom");
     outv.ok = false;

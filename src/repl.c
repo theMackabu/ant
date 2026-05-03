@@ -231,7 +231,7 @@ static bool repl_precheck_and_commit_lexicals(
 ) {
   if (!js || !reg || !code || len == 0) return true;
 
-  code_arena_mark_t mark = code_arena_mark();
+  code_arena_mark_t mark = parse_arena_mark();
   repl_decl_pending_t pending = {0};
   bool ok = true;
 
@@ -268,7 +268,7 @@ static bool repl_precheck_and_commit_lexicals(
   }
 
 done:
-  code_arena_rewind(mark);
+  parse_arena_rewind(mark);
   repl_decl_pending_free(&pending);
 
   if (ok && js->thrown_exists)

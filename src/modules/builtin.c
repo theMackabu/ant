@@ -289,11 +289,13 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
 
   size_t buffer_mem = buffer_get_external_memory();
   size_t code_mem = code_arena_get_memory();
-  size_t external_total = buffer_mem + code_mem;
+  size_t parse_mem = parse_arena_get_memory();
+  size_t external_total = buffer_mem + code_mem + parse_mem;
   
   ant_value_t ext = js_newobj(js);
   js_set(js, ext, "buffers", js_mknum((double)buffer_mem));
   js_set(js, ext, "code", js_mknum((double)code_mem));
+  js_set(js, ext, "parse", js_mknum((double)parse_mem));
   js_set(js, ext, "total", js_mknum((double)external_total));
   js_set(js, result, "external", ext);
   

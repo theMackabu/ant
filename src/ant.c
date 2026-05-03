@@ -15702,9 +15702,12 @@ bool js_chkargs(ant_value_t *args, int nargs, const char *spec) {
 
 static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_compile_mode_t mode, bool parse_strict) {
   if (len == (size_t)~0U) len = strlen(buf);
+  
+  code_arena_mark_t parse_mark = parse_arena_mark();
   sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, parse_strict);
 
   if (!program) {
+    parse_arena_rewind(parse_mark);
     if (js->thrown_exists) return mkval(T_ERR, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
   }
@@ -15715,6 +15718,7 @@ static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len,
   }
 
   sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len);
+  parse_arena_rewind(parse_mark);
   if (!func) {
     if (js->thrown_exists) return mkval(T_ERR, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");

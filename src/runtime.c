@@ -31,10 +31,12 @@ typedef struct code_block {
 
 static struct ant_runtime runtime = {0};
 struct ant_runtime *const rt = &runtime;
-
-static code_block_t *code_arena_head = NULL;
-static code_block_t *code_arena_current = NULL;
 static intern_entry_t *code_interns = NULL;
+
+static code_block_t *code_arena_head     = NULL;
+static code_block_t *code_arena_current  = NULL;
+static code_block_t *parse_arena_head    = NULL;
+static code_block_t *parse_arena_current = NULL;
 
 static void code_interns_prune_for_block_range(
   const code_block_t *block,
@@ -74,6 +76,72 @@ static code_block_t *code_arena_new_block(size_t min_size) {
   return block;
 }
 
+static void *arena_bump(
+  code_block_t **head,
+  code_block_t **current,
+  size_t size
+) {
+  size = (size + 7) & ~(size_t)7;
+  if (!*current || (*current)->used + size > (*current)->capacity) {
+    code_block_t *new_block = code_arena_new_block(size);
+    if (!new_block) return NULL;
+    if (!*head) *head = new_block;
+    else if (*current) (*current)->next = new_block;
+    *current = new_block;
+  }
+
+  void *ptr = &(*current)->data[(*current)->used];
+  (*current)->used += size;
+  return ptr;
+}
+
+static size_t arena_get_memory(code_block_t *head) {
+  size_t total = 0;
+  for (code_block_t *b = head; b; b = b->next)
+    total += sizeof(code_block_t) + b->capacity;
+  return total;
+}
+
+static code_arena_mark_t arena_mark(code_block_t *current) {
+  code_arena_mark_t mark = {0};
+  mark.block = current;
+  mark.used = current ? current->used : 0;
+  return mark;
+}
+
+static void arena_rewind_plain(
+  code_block_t **head,
+  code_block_t **current,
+  code_arena_mark_t mark
+) {
+  code_block_t *target = (code_block_t *)mark.block;
+
+  if (!target) {
+    code_block_t *block = *head;
+    while (block) {
+      code_block_t *next = block->next;
+      free(block);
+      block = next;
+    }
+    *head = NULL;
+    *current = NULL;
+    return;
+  }
+
+  size_t clamped_used = mark.used <= target->capacity ? mark.used : target->capacity;
+  target->used = clamped_used;
+
+  code_block_t *b = target->next;
+  while (b) {
+    code_block_t *next = b->next;
+    free(b);
+    b = next;
+  }
+
+  target->next = NULL;
+  *current = target;
+}
+
 const char *code_arena_alloc(const char *code, size_t len) {
   if (!code || len == 0) return NULL;
 
@@ -106,31 +174,15 @@ const char *code_arena_alloc(const char *code, size_t len) {
 }
 
 void *code_arena_bump(size_t size) {
-  size = (size + 7) & ~(size_t)7;
-  if (!code_arena_current || code_arena_current->used + size > code_arena_current->capacity) {
-    code_block_t *new_block = code_arena_new_block(size);
-    if (!new_block) return NULL;
-    if (!code_arena_head) code_arena_head = new_block;
-    else if (code_arena_current) code_arena_current->next = new_block;
-    code_arena_current = new_block;
-  }
-  void *ptr = &code_arena_current->data[code_arena_current->used];
-  code_arena_current->used += size;
-  return ptr;
+  return arena_bump(&code_arena_head, &code_arena_current, size);
 }
 
 size_t code_arena_get_memory(void) {
-  size_t total = 0;
-  for (code_block_t *b = code_arena_head; b; b = b->next)
-    total += sizeof(code_block_t) + b->capacity;
-  return total;
+  return arena_get_memory(code_arena_head);
 }
 
 code_arena_mark_t code_arena_mark(void) {
-  code_arena_mark_t mark = {0};
-  mark.block = code_arena_current;
-  mark.used = code_arena_current ? code_arena_current->used : 0;
-  return mark;
+  return arena_mark(code_arena_current);
 }
 
 void code_arena_rewind(code_arena_mark_t mark) {
@@ -167,6 +219,26 @@ void code_arena_rewind(code_arena_mark_t mark) {
   code_arena_current = target;
 }
 
+void *parse_arena_bump(size_t size) {
+  return arena_bump(&parse_arena_head, &parse_arena_current, size);
+}
+
+size_t parse_arena_get_memory(void) {
+  return arena_get_memory(parse_arena_head);
+}
+
+code_arena_mark_t parse_arena_mark(void) {
+  return arena_mark(parse_arena_current);
+}
+
+void parse_arena_rewind(code_arena_mark_t mark) {
+  arena_rewind_plain(&parse_arena_head, &parse_arena_current, mark);
+}
+
+void parse_arena_reset(void) {
+  parse_arena_rewind((code_arena_mark_t){0});
+}
+
 void code_arena_reset(void) {
   intern_entry_t *entry, *tmp;
   HASH_ITER(hh, code_interns, entry, tmp) {
@@ -184,6 +256,7 @@ void code_arena_reset(void) {
   
   code_arena_head = NULL;
   code_arena_current = NULL;
+  parse_arena_reset();
 }
 
 void destroy_runtime(ant_t *js) {
