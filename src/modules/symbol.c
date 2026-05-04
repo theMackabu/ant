@@ -57,11 +57,28 @@ static ant_value_t builtin_Symbol_keyFor(ant_t *js, ant_value_t *args, int nargs
 static ant_value_t builtin_Symbol_toString(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js_getthis(js);
   
+  if (vtype(this_val) != T_SYMBOL && is_object_type(this_val)) {
+    ant_value_t prim = js_get_slot(this_val, SLOT_PRIMITIVE);
+    if (vtype(prim) == T_SYMBOL) this_val = prim;
+  }
+
   if (vtype(this_val) != T_SYMBOL) {
     return js_mkerr(js, "Symbol.prototype.toString requires a symbol");
   }
   
   return js_symbol_to_string(js, this_val);
+}
+
+static ant_value_t builtin_Symbol_valueOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+
+  if (vtype(this_val) != T_SYMBOL && is_object_type(this_val)) {
+    ant_value_t prim = js_get_slot(this_val, SLOT_PRIMITIVE);
+    if (vtype(prim) == T_SYMBOL) return prim;
+  }
+
+  if (vtype(this_val) == T_SYMBOL) return this_val;
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.prototype.valueOf requires a symbol");
 }
 
 static ant_value_t builtin_Symbol_description(ant_t *js, ant_value_t *args, int nargs) {
@@ -324,6 +341,8 @@ void init_symbol_module(void) {
   
   if (is_object_type(object_proto)) js_set_proto_init(symbol_proto, object_proto);
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
+  js_set(js, symbol_proto, "valueOf", js_mkfun(builtin_Symbol_valueOf));
+  js_set_sym(js, symbol_proto, get_toPrimitive_sym(), js_mkfun(builtin_Symbol_valueOf));
   js_set_getter_desc(js, symbol_proto, "description", 11, js_mkfun(builtin_Symbol_description), JS_DESC_C);
   
   ant_value_t symbol_ctor = js_mkobj(js);

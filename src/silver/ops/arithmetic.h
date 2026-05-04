@@ -25,6 +25,9 @@ static inline ant_value_t sv_op_add(sv_vm_t *vm, ant_t *js) {
   if (vtype(lu) == T_BIGINT || vtype(ru) == T_BIGINT) {
     return js_mkerr(js, "Cannot mix BigInt value and other types");
   }
+  if (vtype(lu) == T_SYMBOL || vtype(ru) == T_SYMBOL) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value");
+  }
   if (is_non_numeric(lu) || is_non_numeric(ru)) {
     ant_value_t l_str = coerce_to_str_concat(js, l);
     if (is_err(l_str)) return l_str;

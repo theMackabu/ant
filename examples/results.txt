@@ -679,15 +679,15 @@ compat-table/es6/String.prototype.repeat.js: OK
 compat-table/es6/String.prototype.startsWith.js: OK
 compat-table/es6/String.prototype.startsWith.throws-regex.js: OK
 compat-table/es6/String.raw.js: OK
-compat-table/es6/Symbol.JSON.stringify.object.js: TypeError: Object.defineProperty called on non-object
+compat-table/es6/Symbol.JSON.stringify.object.js: OK
 compat-table/es6/Symbol.JSON.stringify.primitive.js: OK
-compat-table/es6/Symbol.Object.js: failed
+compat-table/es6/Symbol.Object.js: OK
 compat-table/es6/Symbol.String.js: OK
 compat-table/es6/Symbol.defineProperty.js: OK
 compat-table/es6/Symbol.global-registry.js: OK
 compat-table/es6/Symbol.hidden-keys.js: OK
 compat-table/es6/Symbol.js: OK
-compat-table/es6/Symbol.no-coerce.js: failed
+compat-table/es6/Symbol.no-coerce.js: OK
 compat-table/es6/Symbol.no-new.js: OK
 compat-table/es6/Symbol.prototype.js: OK
 compat-table/es6/Symbol.typeof.js: OK

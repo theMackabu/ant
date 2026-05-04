@@ -4583,7 +4583,7 @@ static ant_value_t getprop_any(ant_t *js, ant_value_t obj, const char *key, size
     if (js_try_get_string_index(js, obj, key, key_len, &indexed)) return indexed;
   }
   
-  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL) {
     ant_offset_t off = lkp_proto(js, obj, key, key_len);
     if (off != 0) return propref_load(js, off);
     return js_mkundef();
@@ -5330,7 +5330,7 @@ static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   uint8_t t = vtype(arg);
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return arg;
-  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL) {
     ant_value_t wrapper = js_mkobj(js);
     if (is_err(wrapper)) return wrapper;
     set_slot(wrapper, SLOT_PRIMITIVE, arg);
