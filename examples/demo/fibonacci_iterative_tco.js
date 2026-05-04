@@ -1,0 +1,12 @@
+function fib(n, a = 0, b = 1) {
+  if (n === 0) return a;
+  return fib(n - 1, b, a + b);
+}
+
+const start = performance.now();
+const n = 1476;
+const result = fib(n);
+const end = performance.now();
+
+console.log(`fibonacci(${n}) = ${result}`);
+console.log(`Time: ${(end - start).toFixed(4)} ms (${((end - start) * 1000).toFixed(2)} µs)`);
