@@ -219,6 +219,24 @@ static inline bool sv_is_strict_restricted_assign_target(P, sv_ast_t *n) {
   return p->lx.strict && n && n->type == N_IDENT && is_eval_or_arguments_name(n->str, n->len);
 }
 
+static inline bool is_lexical_decl_stmt(sv_ast_t *n) {
+  return n && n->type == N_VAR && (
+    n->var_kind == SV_VAR_LET ||
+    n->var_kind == SV_VAR_CONST ||
+    n->var_kind == SV_VAR_USING ||
+    n->var_kind == SV_VAR_AWAIT_USING
+  );
+}
+
+static inline bool var_decl_has_initializer(sv_ast_t *n) {
+  if (!n || n->type != N_VAR) return false;
+  for (int i = 0; i < n->args.count; i++) {
+    sv_ast_t *decl = n->args.items[i];
+    if (decl && decl->type == N_VARDECL && decl->right) return true;
+  }
+  return false;
+}
+
 static inline sv_ast_t *mk_ident_from_tok(P) {
   uint32_t len = 0;
   const char *name = tok_ident_str(p, &len);
@@ -1258,6 +1276,10 @@ static sv_ast_t *parse_assign(P) {
   sv_ast_t *left = parse_ternary(p);
   uint8_t op = NEXT();
   if (op == TOK_ARROW) {
+    if (HAD_NEWLINE) {
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Line terminator not allowed before arrow");
+      return mk(N_EMPTY);
+    }
     CONSUME();
     sv_ast_t *fn = mk(N_FUNC);
     fn->flags = FN_ARROW;
@@ -1971,9 +1993,17 @@ static sv_ast_t *parse_stmt(P) {
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->left = parse_stmt(p);
+    if (is_lexical_decl_stmt(n->left)) {
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+      return n;
+    }
     if (NEXT() == TOK_ELSE) {
       CONSUME();
       n->right = parse_stmt(p);
+      if (is_lexical_decl_stmt(n->right)) {
+        SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
+        return n;
+      }
     }
     return n;
   }
@@ -1985,6 +2015,8 @@ static sv_ast_t *parse_stmt(P) {
     n->cond = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->body = parse_stmt(p);
+    if (is_lexical_decl_stmt(n->body))
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     return n;
   }
 
@@ -1992,6 +2024,8 @@ static sv_ast_t *parse_stmt(P) {
     CONSUME();
     sv_ast_t *n = mk(N_DO_WHILE);
     n->body = parse_stmt(p);
+    if (is_lexical_decl_stmt(n->body))
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     expect(p, TOK_WHILE);
     expect(p, TOK_LPAREN);
     n->cond = parse_expr(p);
@@ -2051,6 +2085,10 @@ static sv_ast_t *parse_stmt(P) {
       n->right = parse_expr(p);
       expect(p, TOK_RPAREN);
       n->body = parse_stmt(p);
+      if (p->lx.strict && init_node && init_node->type == N_VAR && var_decl_has_initializer(init_node))
+        SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "for-in loop variable declaration may not have an initializer in strict mode");
+      if (is_lexical_decl_stmt(n->body))
+        SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
       return n;
     }
     if (la == TOK_OF || (la == TOK_IDENTIFIER && TLEN == 2 &&
@@ -2061,6 +2099,8 @@ static sv_ast_t *parse_stmt(P) {
       n->right = parse_assign(p);
       expect(p, TOK_RPAREN);
       n->body = parse_stmt(p);
+      if (is_lexical_decl_stmt(n->body))
+        SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
       return n;
     }
 
@@ -2087,6 +2127,8 @@ static sv_ast_t *parse_stmt(P) {
       n->update = parse_expr(p);
     expect(p, TOK_RPAREN);
     n->body = parse_stmt(p);
+    if (is_lexical_decl_stmt(n->body))
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Lexical declaration cannot appear in single-statement context");
     return n;
   }
 

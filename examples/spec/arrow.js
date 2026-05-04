@@ -1,4 +1,4 @@
-import { test, summary } from './helpers.js';
+import { test, testThrows, summary } from './helpers.js';
 
 console.log('Arrow Function Tests\n');
 
@@ -138,5 +138,7 @@ test('arrow returning arrow triple', triple(5), 15);
 
 const spreadArrow = (a, b, c) => a + b + c;
 test('arrow with spread call', spreadArrow(...[1, 2, 3]), 6);
+
+testThrows('arrow disallows line break before arrow', () => Function("x\n => 2"));
 
 summary();

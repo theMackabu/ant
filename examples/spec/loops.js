@@ -1,4 +1,4 @@
-import { test, testDeep, summary } from './helpers.js';
+import { test, testDeep, testThrows, summary } from './helpers.js';
 
 console.log('Loop Tests\n');
 
@@ -89,5 +89,10 @@ test('for-of string', forOfChars, 'abc');
 let largeSum = 0;
 for (let i = 0; i < 1000; i++) largeSum += i;
 test('large loop', largeSum, 499500);
+
+testThrows('let cannot be single-statement consequent', () => Function('if (true) let x = 1;'));
+testThrows('const cannot be single-statement consequent', () => Function('if (true) const x = 1;'));
+testThrows('strict for-in var initializer rejected', () => Function('"use strict"; for (var i = 0 in {}) {}'));
+testThrows('invalid unicode identifier start rejected', () => eval('var \u2e2f'));
 
 summary();

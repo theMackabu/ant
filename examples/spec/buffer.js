@@ -52,6 +52,14 @@ const u32 = new Uint32Array(2);
 test('Uint32Array length', u32.length, 2);
 test('Uint32Array BYTES_PER_ELEMENT', u32.BYTES_PER_ELEMENT, 4);
 
+const wrapI32 = new Int32Array(1);
+wrapI32[0] = 0x80000000;
+test('Int32Array wraps int32 writes', wrapI32[0], -0x80000000);
+
+const wrapU32 = new Uint32Array(1);
+wrapU32[0] = 0x100000000;
+test('Uint32Array wraps uint32 writes', wrapU32[0], 0);
+
 const f16 = new Float16Array(4);
 test('Float16Array length', f16.length, 4);
 test('Float16Array byteLength', f16.byteLength, 8);
@@ -69,6 +77,10 @@ test('Int8Array BYTES_PER_ELEMENT', i8.BYTES_PER_ELEMENT, 1);
 const u8c = new Uint8ClampedArray(8);
 test('Uint8ClampedArray length', u8c.length, 8);
 test('Uint8ClampedArray BYTES_PER_ELEMENT', u8c.BYTES_PER_ELEMENT, 1);
+
+const clampU8 = new Uint8ClampedArray(1);
+clampU8[0] = 0x100;
+test('Uint8ClampedArray clamps writes', clampU8[0], 0xff);
 
 const bi64 = new BigInt64Array(2);
 test('BigInt64Array length', bi64.length, 2);
@@ -142,6 +154,28 @@ test('TypedArray slice length', sliced.length, 6);
 const subarrayed = original.subarray(2, 8);
 test('TypedArray subarray length', subarrayed.length, 6);
 test('TypedArray subarray byteOffset', subarrayed.byteOffset, 2);
+
+test('Int8Array.of length', Int8Array.of(1, 2).length, 2);
+test('Int8Array.of value', Int8Array.of(1, 2)[1], 2);
+test('Int32Array prototype BYTES_PER_ELEMENT own',
+     Object.getOwnPropertyNames(Int32Array.prototype).includes('BYTES_PER_ELEMENT'), true);
+
+const methodSource = new Int8Array([3, 1, 2]);
+test('TypedArray map result', methodSource.map(x => x + 1).join(), '4,2,3');
+test('TypedArray filter result', methodSource.filter(x => x > 1).join(), '3,2');
+test('TypedArray find result', methodSource.find(x => x === 1), 1);
+test('TypedArray findIndex result', methodSource.findIndex(x => x === 2), 2);
+
+let typedForEachSum = 0;
+methodSource.forEach(x => typedForEachSum += x);
+test('TypedArray forEach result', typedForEachSum, 6);
+
+test('TypedArray reduce result', methodSource.reduce((prev, cur) => prev + cur, 0), 6);
+test('TypedArray reduceRight result', methodSource.reduceRight((prev, cur) => prev + String(cur), ''), '213');
+test('TypedArray some result', methodSource.some(x => x === 3), true);
+test('TypedArray lastIndexOf result', methodSource.lastIndexOf(1), 1);
+test('TypedArray reverse result', new Int8Array([3, 1, 2]).reverse().join(), '2,1,3');
+test('TypedArray sort result', new Int8Array([3, 1, 2]).sort().join(), '1,2,3');
 
 const f16Source = new Float16Array([1.5, -0.5, 2.25, 4.5]);
 const f16Sliced = f16Source.slice(1, 3);

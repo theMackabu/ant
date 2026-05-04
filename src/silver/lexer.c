@@ -445,6 +445,7 @@ static int parse_unicode_escape(const char *buf, ant_offset_t len, ant_offset_t 
 }
 
 static bool is_unicode_id_start(utf8proc_int32_t cp) {
+  if (cp == 0x2E2F) return false;
   utf8proc_category_t cat = utf8proc_category(cp);
   return 
     cat == UTF8PROC_CATEGORY_LU || cat == UTF8PROC_CATEGORY_LL ||
