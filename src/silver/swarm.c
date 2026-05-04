@@ -2255,8 +2255,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I32, "slot_count");
 
   MIR_item_t set_name_proto = MIR_new_proto(ctx, "sn_proto",
-    0, NULL, 5,
-    MIR_T_I64, "vm",
+    0, NULL, 4,
     MIR_T_I64, "js",
     MIR_JSVAL,  "fn",
     MIR_T_P,   "str",
@@ -8005,10 +8004,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_atom_t *atom = &func->atoms[atom_idx];
         MIR_reg_t fn_val = vstack_top(&vs);
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 7,
+          MIR_new_call_insn(ctx, 6,
             MIR_new_ref_op(ctx, set_name_proto),
             MIR_new_ref_op(ctx, imp_set_name),
-            MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, fn_val),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),

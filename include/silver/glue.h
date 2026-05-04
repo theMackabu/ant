@@ -128,7 +128,7 @@ void jit_helper_define_method_comp(
 );
 
 void jit_helper_set_name(
-  sv_vm_t *vm, ant_t *js, ant_value_t fn,
+  ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
 );
 

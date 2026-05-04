@@ -207,14 +207,24 @@ void jit_helper_define_method_comp(
   ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
 ) {
   ant_value_t desc_obj = js_as_obj(obj);
-  bool is_getter = (flags & 1) != 0;
-  bool is_setter = (flags & 2) != 0;
+  
+  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
+  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
+  
+  if (flags & SV_DEFINE_METHOD_SET_NAME) {
+    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
+    size_t prefix_len = is_getter || is_setter ? 4 : 0;
+    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
+    if (is_err(named)) return;
+  }
+  
   if (vtype(key) == T_SYMBOL) {
     if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
     if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
     js_set_sym(js, obj, key, fn);
     return;
   }
+  
   ant_value_t key_str = sv_key_to_propstr(js, key);
   if ((is_getter || is_setter) && vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
@@ -224,6 +234,7 @@ void jit_helper_define_method_comp(
     else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
     return;
   }
+  
   if (vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
@@ -718,34 +729,35 @@ void jit_helper_define_field(
     js_define_own_prop(js, obj, str, len, val);
 }
 
-
 void jit_helper_set_name(
-  sv_vm_t *vm, ant_t *js, ant_value_t fn,
+  ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
-) {
-  ant_value_t name = js_mkstr(js, str, len);
-  setprop_cstr(js, fn, "name", 4, name);
+) { 
+  js_set_function_name(js, fn, str, len);
 }
 
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
   if (vtype(obj) == T_ARR)
     return tov((double)(uint32_t)js_arr_len(js, obj));
+    
   if (vtype(obj) == T_STR) {
     ant_flat_string_t *flat = ant_str_flat_ptr(obj);
     if (flat) {
       const char *str_data = flat->bytes;
       ant_offset_t byte_len = flat->len;
-      return tov((double)(uint32_t)(
-        str_is_ascii(str_data) 
-          ? byte_len 
-          : utf16_strlen(str_data, byte_len)
+      return tov((double)(uint32_t)(str_is_ascii(str_data) 
+        ? byte_len 
+        : utf16_strlen(str_data, byte_len)
       ));
     }
+    
     ant_offset_t byte_len = 0;
     ant_offset_t off = vstr(js, obj, &byte_len);
+    
     const char *str_data = (const char *)(uintptr_t)(off);
     return tov((double)(uint32_t)utf16_strlen(str_data, byte_len));
   }
+  
   return js_getprop_fallback(js, obj, "length");
 }
 

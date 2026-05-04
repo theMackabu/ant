@@ -451,6 +451,28 @@ ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
 
+ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
+ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len);
+ant_value_t js_set_function_name(ant_t *js, ant_value_t fn, const char *name, size_t name_len);
+
+ant_value_t js_set_function_name_prefixed(
+  ant_t *js, ant_value_t fn,
+  const char *prefix, size_t prefix_len,
+  const char *name, size_t name_len
+);
+
+ant_value_t js_set_function_name_from_key(
+  ant_t *js, ant_value_t fn,
+  ant_value_t key,
+  const char *prefix, size_t prefix_len
+);
+
+ant_value_t js_maybe_set_function_name_from_key(
+  ant_t *js, ant_value_t fn,
+  ant_value_t key,
+  const char *prefix, size_t prefix_len
+);
+
 bool is_proxy(ant_value_t obj);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
@@ -627,9 +649,6 @@ static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t
   js_set(js, ctor_fn, "default", ctor_fn);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, ctor_fn);
 }
-
-ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
-ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len);
 
 static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc) {
   uintptr_t ptr = vdata(cfunc);

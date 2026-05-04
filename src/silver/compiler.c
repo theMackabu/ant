@@ -482,6 +482,32 @@ static inline void emit_set_function_name(
   emit_atom_op(c, OP_SET_NAME, name, len);
 }
 
+static inline bool node_needs_inferred_function_name(const sv_ast_t *node) {
+  return node && 
+    (node->type == N_FUNC || node->type == N_CLASS) &&
+    (!node->str || node->len == 0);
+}
+
+static void compile_expr_with_inferred_name(
+  sv_compiler_t *c, sv_ast_t *node,
+  const char *name, uint32_t len
+) {
+  if (!node_needs_inferred_function_name(node) || !name) {
+    compile_expr(c, node);
+    return;
+  }
+
+  const char *saved_name = c->inferred_name;
+  uint32_t saved_len = c->inferred_name_len;
+  
+  c->inferred_name = name;
+  c->inferred_name_len = len;
+  compile_expr(c, node);
+  
+  c->inferred_name = saved_name;
+  c->inferred_name_len = saved_len;
+}
+
 static void emit_const_assign_error(sv_compiler_t *c, const char *name, uint32_t len) {
   static const char prefix[] = "Assignment to constant variable '";
   static const char suffix[] = "'";
@@ -2778,8 +2804,9 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
     if (prop->flags & FN_GETTER || prop->flags & FN_SETTER) {
       compile_expr(c, prop->right);
       uint8_t flags = 0;
-      if (prop->flags & FN_GETTER) flags |= 1;
-      if (prop->flags & FN_SETTER) flags |= 2;
+      if (prop->flags & FN_GETTER) flags |= SV_DEFINE_METHOD_GETTER;
+      if (prop->flags & FN_SETTER) flags |= SV_DEFINE_METHOD_SETTER;
+      flags |= SV_DEFINE_METHOD_SET_NAME;
       if (prop->flags & FN_COMPUTED) compile_expr(c, prop->left);
       else compile_static_property_key(c, prop->left);
       emit_op(c, OP_SWAP);
@@ -2789,15 +2816,11 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, prop->left);
       compile_expr(c, prop->right);
       emit_op(c, OP_DEFINE_METHOD_COMP);
-      emit(c, 0);
+      emit(c, node_needs_inferred_function_name(prop->right) ? SV_DEFINE_METHOD_SET_NAME : 0);
     } else {
-      if (prop->right && (prop->right->type == N_FUNC || prop->right->type == N_CLASS) &&
-          (!prop->right->str || prop->right->len == 0) &&
-          prop->left && prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left)) {
-        c->inferred_name = prop->left->str;
-        c->inferred_name_len = prop->left->len;
-      }
-      compile_expr(c, prop->right);
+      if (prop->left && prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left))
+        compile_expr_with_inferred_name(c, prop->right, prop->left->str, prop->left->len);
+      else compile_expr(c, prop->right);
       if ((prop->flags & FN_COLON) &&
           prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left) &&
           is_ident_str(prop->left->str, prop->left->len, "__proto__", 9)) {
@@ -3595,6 +3618,7 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
 
 void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   sv_var_kind_t kind = node->var_kind;
+  
   bool is_using = (kind == SV_VAR_USING || kind == SV_VAR_AWAIT_USING);
   bool is_await_using = (kind == SV_VAR_AWAIT_USING);
   bool is_const = (kind == SV_VAR_CONST || is_using);
@@ -3608,38 +3632,33 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
     if (repl_top) {
       if (!decl->right && kind == SV_VAR_VAR) continue;
       if (decl->right) {
-        compile_expr(c, decl->right);
-      } else {
-        emit_op(c, OP_UNDEF);
-      }
+        if (target->type == N_IDENT)
+          compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
+        else compile_expr(c, decl->right);
+      } else emit_op(c, OP_UNDEF);
       if (target->type == N_IDENT) {
         emit_atom_op(c, OP_PUT_GLOBAL, target->str, target->len);
-      } else {
-        compile_destructure_pattern(c, target, false, true,
-                                    DESTRUCTURE_ASSIGN, kind);
-      }
+      } else compile_destructure_pattern(c, target, false, true, DESTRUCTURE_ASSIGN, kind);
     } else if (kind == SV_VAR_VAR) {
       if (decl->right) {
         uint8_t init_type = infer_expr_type(c, decl->right);
-        compile_expr(c, decl->right);
+        if (target->type == N_IDENT)
+          compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
+        else compile_expr(c, decl->right);
         if (target->type == N_IDENT) {
           int idx = resolve_local(c, target->str, target->len);
           if (idx >= 0 && c->locals[idx].depth != -1)
             emit_put_local_typed(c, idx, init_type);
-          else
-            compile_lhs_set(c, target, false);
-        } else {
-          compile_lhs_set(c, target, false);
-        }
+          else compile_lhs_set(c, target, false);
+        } else compile_lhs_set(c, target, false);
       }
     } else {
       if (target->type == N_IDENT) {
-        int idx = ensure_local_at_depth(c, target->str, target->len,
-                                        is_const, c->scope_depth);
+        int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
         uint8_t init_type = SV_TI_UNKNOWN;
         if (decl->right) {
           init_type = infer_expr_type(c, decl->right);
-          compile_expr(c, decl->right);
+          compile_expr_with_inferred_name(c, decl->right, target->str, target->len);
         } else if (!is_const) {
           emit_op(c, OP_UNDEF);
           init_type = SV_TI_UNDEF;
@@ -4525,13 +4544,15 @@ static void compile_class_method(
   }
 
   uint8_t method_flags = 0;
-  if (m->flags & FN_GETTER) method_flags |= 1;
-  if (m->flags & FN_SETTER) method_flags |= 2;
+  if (m->flags & FN_GETTER) method_flags |= SV_DEFINE_METHOD_GETTER;
+  if (m->flags & FN_SETTER) method_flags |= SV_DEFINE_METHOD_SETTER;
+  if (is_fn) method_flags |= SV_DEFINE_METHOD_SET_NAME;
 
   if (m->flags & FN_COMPUTED) {
     if (preeval_key >= 0) emit_get_local(c, preeval_key);
     else compile_expr(c, m->left);
   } else compile_static_property_key(c, m->left); 
+  
   emit_op(c, OP_SWAP);                          
   emit_op(c, OP_DEFINE_METHOD_COMP);
   emit(c, method_flags);                        
@@ -4756,8 +4777,20 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(computed_key_locals);
   c->computed_key_locals = NULL;
 
-  if (node->str && !has_static_name) {
-    int atom = add_atom(c, node->str, node->len);
+  const char *class_name = node->str;
+  uint32_t class_name_len = node->len;
+  bool consumed_inferred_name = false;
+  
+  if (!class_name && c->inferred_name) {
+    class_name = c->inferred_name;
+    class_name_len = c->inferred_name_len;
+    consumed_inferred_name = true;
+  }
+
+  if (!has_static_name) {
+    int atom = class_name
+      ? add_atom(c, class_name, class_name_len)
+      : add_atom(c, "", 0);
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, (uint32_t)atom);
     emit(c, 1);
@@ -4765,6 +4798,11 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
     emit(c, 0);
+  }
+  
+  if (consumed_inferred_name) {
+    c->inferred_name = NULL;
+    c->inferred_name_len = 0;
   }
   
   emit_u32(c, node->src_off);

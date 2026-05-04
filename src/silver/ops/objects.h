@@ -20,8 +20,16 @@ static inline void sv_op_define_method(
   ant_value_t obj = vm->stack[vm->sp - 1];
   ant_value_t desc_obj = js_as_obj(obj);
   
-  bool is_getter = (flags & 1) != 0;
-  bool is_setter = (flags & 2) != 0;
+  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
+  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
+  
+  if (flags & SV_DEFINE_METHOD_SET_NAME) {
+    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
+    size_t prefix_len = is_getter || is_setter ? 4 : 0;
+    ant_value_t key = js_mkstr(js, a->str, a->len);
+    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
+    if (is_err(named)) return;
+  }
   
   if (is_getter) {
     js_set_getter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_E | JS_DESC_C);
@@ -46,14 +54,24 @@ static inline void sv_op_define_method_comp(
   ant_value_t key = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
   ant_value_t desc_obj = js_as_obj(obj);
-  bool is_getter = (flags & 1) != 0;
-  bool is_setter = (flags & 2) != 0;
+  
+  bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
+  bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
+  
+  if (flags & SV_DEFINE_METHOD_SET_NAME) {
+    const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
+    size_t prefix_len = is_getter || is_setter ? 4 : 0;
+    ant_value_t named = js_maybe_set_function_name_from_key(js, fn, key, prefix, prefix_len);
+    if (is_err(named)) return;
+  }
+  
   if (vtype(key) == T_SYMBOL) {
     if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
     if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
     js_set_sym(js, obj, key, fn);
     return;
   }
+  
   ant_value_t key_str = sv_key_to_propstr(js, key);
   if ((is_getter || is_setter) && vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
@@ -63,6 +81,7 @@ static inline void sv_op_define_method_comp(
     else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
     return;
   }
+  
   if (vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
@@ -78,15 +97,13 @@ static inline void sv_op_set_name(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t fn = vm->stack[vm->sp - 1];
-  ant_value_t name = js_mkstr(js, a->str, a->len);
-  setprop_cstr(js, fn, "name", 4, name);
+  js_set_function_name(js, fn, a->str, a->len);
 }
 
 static inline void sv_op_set_name_comp(sv_vm_t *vm, ant_t *js) {
   ant_value_t key = vm->stack[vm->sp - 1];
   ant_value_t fn = vm->stack[vm->sp - 2];
-  ant_value_t name = coerce_to_str(js, key);
-  setprop_cstr(js, fn, "name", 4, name);
+  js_set_function_name_from_key(js, fn, key, "", 0);
 }
 
 static inline void sv_op_set_proto(sv_vm_t *vm, ant_t *js) {
@@ -263,15 +280,15 @@ static inline void sv_op_define_class(
       if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);
     }
   }
-  if (parent_is_callable) {
-    if (vtype(ctor) == T_FUNC) {
-      sv_closure_t *c = js_func_closure(ctor);
-      c->super_val = parent;
-      c->call_flags |= SV_CALL_HAS_SUPER;
-    }
+  
+  if (parent_is_callable) if (vtype(ctor) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(ctor);
+    c->super_val = parent;
+    c->call_flags |= SV_CALL_HAS_SUPER;
   }
 
-  if (vtype(ctor) == T_FUNC) js_mark_constructor(js_func_obj(ctor), true);
+  if (vtype(ctor) == T_FUNC)
+    js_mark_constructor(js_func_obj(ctor), true);
   
   if (
     vtype(ctor) == T_FUNC && func->source &&
@@ -285,8 +302,8 @@ static inline void sv_op_define_class(
   ant_value_t ctor_obj = (vtype(ctor) == T_FUNC) ? js_func_obj(ctor) : ctor;
   js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
   
-  if (a && a->len > 0)
-    setprop_cstr(js, ctor, "name", 4, js_mkstr(js, a->str, a->len));
+  if (has_name) 
+    js_set_function_name(js, ctor, a ? a->str : "", a ? a->len : 0);
 
   vm->stack[vm->sp - 2] = ctor;
   vm->stack[vm->sp - 1] = proto;

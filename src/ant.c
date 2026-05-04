@@ -5306,6 +5306,9 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
     }
     
     set_slot(func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
+    ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
+    
+    if (is_err(name_result)) return name_result;
     ant_value_t func = js_obj_to_func(func_obj);
     
     if (!is_async || is_generator) {
@@ -5396,6 +5399,13 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
   
   display[n] = '\0';
   set_func_code(js, func_obj, display, display_len);
+  
+  ant_value_t name_result = js_set_function_name(js, func_obj, "anonymous", 9);
+  if (is_err(name_result)) {
+    free(display);
+    free(code_buf);
+    return name_result;
+  }
   
   free(display);
   free(code_buf);
@@ -5652,6 +5662,25 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   int bound_length = orig_length - bound_argc;
   if (bound_length < 0) bound_length = 0;
 
+  const char *target_name = "";
+  size_t target_name_len = 0;
+  ant_value_t target_name_val = js_mkundef();
+  if (vtype(func) == T_CFUNC) {
+    const ant_cfunc_meta_t *meta = js_as_cfunc_meta(func);
+    if (meta && meta->name) {
+      target_name = meta->name;
+      target_name_len = strlen(meta->name);
+    }
+  } else {
+    target_name_val = js_getprop_fallback(js, func, "name");
+  }
+  if (vtype(target_name_val) == T_STR) {
+    ant_offset_t nlen = 0;
+    ant_offset_t noff = vstr(js, target_name_val, &nlen);
+    target_name = (const char *)(uintptr_t)noff;
+    target_name_len = (size_t)nlen;
+  }
+
   if (vtype(func) == T_CFUNC) {
     ant_value_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
@@ -5671,6 +5700,10 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     }
     
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+    ant_value_t name_result = js_set_function_name_prefixed(
+      js, bound_func, "bound ", 6, target_name, target_name_len
+    );
+    if (is_err(name_result)) return name_result;
     ant_value_t proto_setup = setup_func_prototype(js, bound);
     
     if (is_err(proto_setup)) return proto_setup;
@@ -5749,7 +5782,12 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   }
   
   js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+  ant_value_t name_result = js_set_function_name_prefixed(
+    js, bound_func, "bound ", 6, 
+    target_name, target_name_len
+  );
   
+  if (is_err(name_result)) return name_result;
   ant_value_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
   ant_value_t proto_setup = setup_func_prototype(js, bound);
   
@@ -15062,6 +15100,123 @@ static ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc) {
 
 static ant_value_t js_cfunc_length_value(ant_value_t cfunc) {
   return tov((double)js_cfunc_length(cfunc));
+}
+
+ant_value_t js_set_function_name(ant_t *js, ant_value_t fn, const char *name, size_t name_len) {
+  ant_value_t fn_obj = js_as_obj(fn);
+  ant_object_t *ptr = js_obj_ptr(fn_obj);
+  
+  if (!ptr) return js_mkundef();
+  if (!name) {
+    name = "";
+    name_len = 0;
+  }
+
+  const char *name_key = js->intern.name ? js->intern.name : intern_string("name", 4);
+  if (!name_key) return js_mkerr(js, "oom");
+
+  ant_value_t name_val = js_mkstr(js, name, name_len);
+  if (is_err(name_val)) return name_val;
+
+  return mkprop_interned_exact(
+    js, fn_obj, name_key, name_val, 
+    ANT_PROP_ATTR_CONFIGURABLE
+  );
+}
+
+ant_value_t js_set_function_name_prefixed(
+  ant_t *js, ant_value_t fn,
+  const char *prefix, size_t prefix_len,
+  const char *name, size_t name_len
+) {
+  if (!prefix || prefix_len == 0)
+    return js_set_function_name(js, fn, name, name_len);
+  
+  if (!name) {
+    name = "";
+    name_len = 0;
+  }
+
+  char stack_buf[128];
+  size_t total = prefix_len + name_len;
+  
+  char *buf = (total + 1 <= sizeof(stack_buf)) ? stack_buf : malloc(total + 1);
+  if (!buf) return js_mkerr(js, "oom");
+
+  memcpy(buf, prefix, prefix_len);
+  memcpy(buf + prefix_len, name, name_len);
+  buf[total] = '\0';
+
+  ant_value_t result = js_set_function_name(js, fn, buf, total);
+  if (buf != stack_buf) free(buf);
+  
+  return result;
+}
+
+ant_value_t js_set_function_name_from_key(
+  ant_t *js, ant_value_t fn,
+  ant_value_t key,
+  const char *prefix, size_t prefix_len
+) {
+  if (vtype(key) == T_SYMBOL) {
+    const char *desc = js_sym_desc(key);
+    if (!desc) return js_set_function_name_prefixed(js, fn, prefix, prefix_len, "", 0);
+    
+    size_t desc_len = strlen(desc);
+    char stack_buf[128];
+    
+    size_t bracketed_len = desc_len + 2;
+    char *buf = (bracketed_len + 1 <= sizeof(stack_buf)) ? stack_buf : malloc(bracketed_len + 1);
+    if (!buf) return js_mkerr(js, "oom");
+    
+    buf[0] = '[';
+    memcpy(buf + 1, desc, desc_len);
+    buf[bracketed_len - 1] = ']';
+    buf[bracketed_len] = '\0';
+    
+    ant_value_t result = js_set_function_name_prefixed(
+      js, fn, prefix, prefix_len, 
+      buf, bracketed_len
+    );
+    
+    if (buf != stack_buf) free(buf);
+    return result;
+  }
+
+  ant_value_t key_str = coerce_to_str(js, key);
+  if (is_err(key_str)) return key_str;
+  if (vtype(key_str) != T_STR)
+    return js_set_function_name_prefixed(js, fn, prefix, prefix_len, "", 0);
+
+  ant_offset_t key_len = 0;
+  ant_offset_t key_off = vstr(js, key_str, &key_len);
+  
+  const char *key_ptr = (const char *)(uintptr_t)key_off;
+  return js_set_function_name_prefixed(js, fn, prefix, prefix_len, key_ptr, (size_t)key_len);
+}
+
+static bool js_function_name_is_inferable(ant_t *js, ant_value_t fn) {
+  if (vtype(fn) != T_FUNC) return false;
+  
+  ant_value_t fn_obj = js_func_obj(fn);
+  ant_value_t existing = lkp_interned_val(js, fn_obj, js->intern.name);
+  
+  if (vtype(existing) == T_UNDEF) return true;
+  if (vtype(existing) != T_STR) return false;
+
+  ant_offset_t len = 0;
+  vstr(js, existing, &len);
+  
+  return len == 0;
+}
+
+ant_value_t js_maybe_set_function_name_from_key(
+  ant_t *js, ant_value_t fn,
+  ant_value_t key,
+  const char *prefix, size_t prefix_len
+) {
+  if (!js_function_name_is_inferable(js, fn)) return js_mkundef();
+  return js_set_function_name_from_key(js, fn, key, prefix, prefix_len);
 }
 
 static bool js_cfunc_has_prototype(ant_value_t cfunc) {

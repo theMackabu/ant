@@ -16,6 +16,12 @@
 #include <stdio.h>
 
 typedef enum {
+  SV_DEFINE_METHOD_GETTER   = 1u << 0,
+  SV_DEFINE_METHOD_SETTER   = 1u << 1,
+  SV_DEFINE_METHOD_SET_NAME = 1u << 2,
+} sv_define_method_flags_t;
+
+typedef enum {
 #define OP_DEF(name, size, n_pop, n_push, f) OP_##name,
 #include "silver/opcode.h"
   OP__COUNT
