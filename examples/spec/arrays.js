@@ -232,6 +232,11 @@ let spliceArr2 = [1, 2, 3];
 spliceArr2.splice(1, 0, 99, 100);
 testDeep('splice insert', spliceArr2, [1, 99, 100, 2, 3]);
 
+let spliceNoArgs = [1, 2];
+let spliceNoArgsRemoved = spliceNoArgs.splice();
+testDeep('splice no args leaves array', spliceNoArgs, [1, 2]);
+testDeep('splice no args removes nothing', spliceNoArgsRemoved, []);
+
 let entriesArr = ['a', 'b', 'c'];
 let entriesResult = [];
 for (let [i, v] of entriesArr.entries()) entriesResult.push([i, v]);

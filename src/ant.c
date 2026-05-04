@@ -9938,7 +9938,7 @@ static ant_value_t builtin_array_splice(ant_t *js, ant_value_t *args, int nargs)
     if (start > (int)len) start = (int)len;
   }
 
-  int deleteCount = (int)len - start;
+  int deleteCount = nargs == 0 ? 0 : (int)len - start;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     deleteCount = (int) tod(args[1]);
     if (deleteCount < 0) deleteCount = 0;
