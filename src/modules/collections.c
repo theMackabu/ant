@@ -150,7 +150,9 @@ static bool map_store_entry(
 }
 
 static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  ant_value_t stored_value = normalize_map_key(value); collection_key_t key;
+  ant_value_t stored_value = normalize_map_key(value);
+  
+  collection_key_t key;
   if (!collection_key_init(js, stored_value, &key)) return false;
 
   set_entry_t *entry = NULL;
@@ -181,129 +183,6 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
   collection_key_free(&key);
   
   return true;
-}
-
-static ant_value_t map_init_from_iterable(ant_t *js, map_entry_t **map_head, ant_value_t iterable) {
-  js_iter_t it;
-  if (!js_iter_open(js, iterable, &it)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor argument is not iterable");
-  }
-
-  ant_value_t entry;
-  while (js_iter_next(js, &it, &entry)) {
-  uint8_t entry_t = vtype(entry);
-  if (entry_t != T_ARR && entry_t != T_OBJ) {
-    js_iter_close(js, &it);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must be pair sequences");
-  }
-
-  ant_offset_t entry_len = js_arr_len(js, entry);
-  if (entry_len < 2) {
-    js_iter_close(js, &it);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must have at least 2 items");
-  }
-
-  ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
-  ant_value_t value = js_arr_get(js, entry, 1);
-  if (!map_store_entry(js, map_head, key, key, value)) {
-    js_iter_close(js, &it);
-    return js_mkerr(js, "out of memory");
-  }}
-
-  return js_mkundef();
-}
-
-static ant_value_t set_init_from_iterable(ant_t *js, set_entry_t **set_head, ant_value_t iterable) {
-  js_iter_t it;
-  if (!js_iter_open(js, iterable, &it)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor argument is not iterable");
-  }
-
-  ant_value_t value;
-  while (js_iter_next(js, &it, &value)) if (!set_store_entry(js, set_head, value)) {
-    js_iter_close(js, &it);
-    return js_mkerr(js, "out of memory");
-  }
-
-  return js_mkundef();
-}
-
-static ant_value_t weakmap_init_from_iterable(ant_t *js, weakmap_entry_t **wm_head, ant_value_t iterable) {
-  js_iter_t it;
-  if (!js_iter_open(js, iterable, &it)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor argument is not iterable");
-  }
-
-  ant_value_t entry;
-  while (js_iter_next(js, &it, &entry)) {
-    uint8_t entry_t = vtype(entry);
-    if (entry_t != T_ARR && entry_t != T_OBJ) {
-      js_iter_close(js, &it);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must be pair sequences");
-    }
-    
-    ant_offset_t entry_len = js_arr_len(js, entry);
-    if (entry_len < 2) {
-      js_iter_close(js, &it);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must have at least 2 items");
-    }
-    
-    ant_value_t key = js_arr_get(js, entry, 0);
-    ant_value_t value = js_arr_get(js, entry, 1);
-    if (!is_object_type(key)) {
-      js_iter_close(js, &it);
-      return js_mkerr(js, "WeakMap key must be an object");
-    }
-    
-    weakmap_entry_t *wm_entry;
-    HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
-    if (wm_entry) {
-      wm_entry->value = value;
-      continue;
-    }
-    
-    wm_entry = ant_calloc(sizeof(weakmap_entry_t));
-    if (!wm_entry) {
-      js_iter_close(js, &it);
-      return js_mkerr(js, "out of memory");
-    }
-    
-    wm_entry->key_obj = key;
-    wm_entry->value = value;
-    HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
-  }
-
-  return js_mkundef();
-}
-
-static ant_value_t weakset_init_from_iterable(ant_t *js, weakset_entry_t **ws_head, ant_value_t iterable) {
-  js_iter_t it;
-  if (!js_iter_open(js, iterable, &it)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor argument is not iterable");
-  }
-
-  ant_value_t value;
-  while (js_iter_next(js, &it, &value)) {
-    if (!is_object_type(value)) {
-      js_iter_close(js, &it);
-      return js_mkerr(js, "WeakSet value must be an object");
-    }
-    
-    weakset_entry_t *entry;
-    HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
-    if (entry) continue;
-    
-    entry = ant_calloc(sizeof(weakset_entry_t));
-    if (!entry) {
-      js_iter_close(js, &it);
-      return js_mkerr(js, "out of memory");
-    }
-    
-    entry->value_obj = value;
-    HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
-  }
-
-  return js_mkundef();
 }
 
 map_entry_t **get_map_from_obj(ant_value_t obj) {
@@ -1424,6 +1303,212 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   return map_obj;
 }
 
+static bool is_original_collection_adder(ant_value_t adder, ant_cfunc_t fn) {
+  return vtype(adder) == T_CFUNC && js_cfunc_same_entrypoint(adder, fn);
+}
+
+static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_entry_t **map_head, ant_value_t iterable) {
+  ant_value_t adder = js_getprop_fallback(js, map_obj, "set");
+  if (is_err(adder)) return adder;
+  if (!is_callable(adder))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor requires a callable set method");
+  
+  bool use_fast_path 
+    = is_original_collection_adder(adder, map_set);
+
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it)) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor argument is not iterable");
+
+  ant_value_t result = js_mkundef();
+  ant_value_t entry;
+  
+  while (js_iter_next(js, &it, &entry)) {
+    uint8_t entry_t = vtype(entry);
+    if (entry_t != T_ARR && entry_t != T_OBJ) {
+      result = js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must be pair sequences");
+      goto close_iter;
+    }
+    
+    ant_offset_t entry_len = js_arr_len(js, entry);
+    if (entry_len < 2) {
+      result = js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must have at least 2 items");
+      goto close_iter;
+    }
+    
+    if (use_fast_path) {
+      ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
+      ant_value_t value = js_arr_get(js, entry, 1);
+      if (!map_store_entry(js, map_head, key, key, value)) {
+        result = js_mkerr(js, "out of memory");
+        goto close_iter;
+      }
+      continue;
+    }
+    
+    ant_value_t call_args[2] = { js_arr_get(js, entry, 0), js_arr_get(js, entry, 1) };
+    result = sv_vm_call(js->vm, js, adder, map_obj, call_args, 2, NULL, false);
+    if (is_err(result)) goto close_iter;
+  }
+
+  return result;
+
+close_iter:
+  js_iter_close(js, &it);
+  return result;
+}
+
+static ant_value_t set_init_from_iterable(ant_t *js, ant_value_t set_obj, set_entry_t **set_head, ant_value_t iterable) {
+  ant_value_t adder = js_getprop_fallback(js, set_obj, "add");
+  if (is_err(adder)) return adder;
+  if (!is_callable(adder))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor requires a callable add method");
+  
+  bool use_fast_path 
+    = is_original_collection_adder(adder, set_add);
+
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor argument is not iterable");
+
+  ant_value_t result = js_mkundef();
+  ant_value_t value;
+  
+  while (js_iter_next(js, &it, &value)) {
+    if (use_fast_path) {
+      if (!set_store_entry(js, set_head, value)) {
+        result = js_mkerr(js, "out of memory");
+        goto close_iter;
+      }
+      continue;
+    }
+    
+    result = sv_vm_call(js->vm, js, adder, set_obj, &value, 1, NULL, false);
+    if (is_err(result)) goto close_iter;
+  }
+
+  return result;
+
+close_iter:
+  js_iter_close(js, &it);
+  return result;
+}
+
+static ant_value_t weakmap_init_from_iterable(ant_t *js, ant_value_t wm_obj, weakmap_entry_t **wm_head, ant_value_t iterable) {
+  ant_value_t adder = js_getprop_fallback(js, wm_obj, "set");
+  if (is_err(adder)) return adder;
+  if (!is_callable(adder))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor requires a callable set method");
+  
+  bool use_fast_path = is_original_collection_adder(adder, weakmap_set);
+
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor argument is not iterable");
+
+  ant_value_t result = js_mkundef();
+  ant_value_t entry;
+  
+  while (js_iter_next(js, &it, &entry)) {
+    uint8_t entry_t = vtype(entry);
+    if (entry_t != T_ARR && entry_t != T_OBJ) {
+      result = js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must be pair sequences");
+      goto close_iter;
+    }
+    
+    ant_offset_t entry_len = js_arr_len(js, entry);
+    if (entry_len < 2) {
+      result = js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must have at least 2 items");
+      goto close_iter;
+    }
+    
+    if (!use_fast_path) {
+      ant_value_t call_args[2] = { js_arr_get(js, entry, 0), js_arr_get(js, entry, 1) };
+      result = sv_vm_call(js->vm, js, adder, wm_obj, call_args, 2, NULL, false);
+      if (is_err(result)) goto close_iter;
+      continue;
+    }
+
+    ant_value_t key = js_arr_get(js, entry, 0);
+    ant_value_t value = js_arr_get(js, entry, 1);
+    if (!is_object_type(key)) {
+      result = js_mkerr(js, "WeakMap key must be an object");
+      goto close_iter;
+    }
+
+    weakmap_entry_t *wm_entry;
+    HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
+    if (wm_entry) {
+      wm_entry->value = value;
+      continue;
+    }
+    
+    wm_entry = ant_calloc(sizeof(weakmap_entry_t));
+    if (!wm_entry) {
+      result = js_mkerr(js, "out of memory");
+      goto close_iter;
+    }
+    
+    wm_entry->key_obj = key;
+    wm_entry->value = value;
+    HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
+  }
+
+  return result;
+
+close_iter:
+  js_iter_close(js, &it);
+  return result;
+}
+
+static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, weakset_entry_t **ws_head, ant_value_t iterable) {
+  ant_value_t adder = js_getprop_fallback(js, ws_obj, "add");
+  if (is_err(adder)) return adder;
+  if (!is_callable(adder))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor requires a callable add method");
+  
+  bool use_fast_path = is_original_collection_adder(adder, weakset_add);
+
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor argument is not iterable");
+
+  ant_value_t result = js_mkundef();
+  ant_value_t value;
+  
+  while (js_iter_next(js, &it, &value)) {
+    if (!use_fast_path) {
+      result = sv_vm_call(js->vm, js, adder, ws_obj, &value, 1, NULL, false);
+      if (is_err(result)) goto close_iter;
+      continue;
+    }
+    
+    if (!is_object_type(value)) {
+      result = js_mkerr(js, "WeakSet value must be an object");
+      goto close_iter;
+    }
+    
+    weakset_entry_t *entry;
+    HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
+    if (entry) continue;
+    
+    entry = ant_calloc(sizeof(weakset_entry_t));
+    if (!entry) {
+      result = js_mkerr(js, "out of memory");
+      goto close_iter;
+    }
+    
+    entry->value_obj = value;
+    HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
+  }
+
+  return result;
+
+close_iter:
+  js_iter_close(js, &it);
+  return result;
+}
+
 static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor requires 'new'");
@@ -1448,7 +1533,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return map_obj;
-  ant_value_t init_result = map_init_from_iterable(js, map_head, args[0]);
+  ant_value_t init_result = map_init_from_iterable(js, map_obj, map_head, args[0]);
   if (is_err(init_result)) return init_result;
   
   return map_obj;
@@ -1478,7 +1563,7 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(set_obj, set_head, SET_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return set_obj;
-  ant_value_t init_result = set_init_from_iterable(js, set_head, args[0]);
+  ant_value_t init_result = set_init_from_iterable(js, set_obj, set_head, args[0]);
   if (is_err(init_result)) return init_result;
   
   return set_obj;
@@ -1508,7 +1593,7 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(wm_obj, wm_head, WEAKMAP_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
-  ant_value_t init_result = weakmap_init_from_iterable(js, wm_head, args[0]);
+  ant_value_t init_result = weakmap_init_from_iterable(js, wm_obj, wm_head, args[0]);
   if (is_err(init_result)) return init_result;
   
   return wm_obj;
@@ -1538,7 +1623,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(ws_obj, ws_head, WEAKSET_NATIVE_TAG);
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
-  ant_value_t init_result = weakset_init_from_iterable(js, ws_head, args[0]);
+  ant_value_t init_result = weakset_init_from_iterable(js, ws_obj, ws_head, args[0]);
   if (is_err(init_result)) return init_result;
   
   return ws_obj;

@@ -534,7 +534,7 @@ compat-table/es6/Function.name.variable.js: OK
 compat-table/es6/Map.Symbol.species.js: OK
 compat-table/es6/Map.constructor-accepts-null.js: OK
 compat-table/es6/Map.constructor-arguments.js: OK
-compat-table/es6/Map.constructor-invokes-set.js: failed
+compat-table/es6/Map.constructor-invokes-set.js: OK
 compat-table/es6/Map.constructor-requires-new.js: OK
 compat-table/es6/Map.iterator-closing.js: OK
 compat-table/es6/Map.iterator-prototype-chain.js: OK
@@ -651,9 +651,9 @@ compat-table/es6/RegExp.prototype.flags.js: OK
 compat-table/es6/Set.Symbol.species.js: OK
 compat-table/es6/Set.constructor-accepts-null.js: OK
 compat-table/es6/Set.constructor-arguments.js: OK
-compat-table/es6/Set.constructor-invokes-add.js: failed
+compat-table/es6/Set.constructor-invokes-add.js: OK
 compat-table/es6/Set.constructor-requires-new.js: OK
-compat-table/es6/Set.iterator-closing.js: failed
+compat-table/es6/Set.iterator-closing.js: OK
 compat-table/es6/Set.iterator-prototype-chain.js: OK
 compat-table/es6/Set.js: OK
 compat-table/es6/Set.prototype-not-instance.js: OK
@@ -694,7 +694,7 @@ compat-table/es6/Symbol.typeof.js: OK
 compat-table/es6/WeakMap.accept-primitives.js: OK
 compat-table/es6/WeakMap.constructor-accepts-null.js: OK
 compat-table/es6/WeakMap.constructor-arguments.js: OK
-compat-table/es6/WeakMap.constructor-invokes-set.js: failed
+compat-table/es6/WeakMap.constructor-invokes-set.js: OK
 compat-table/es6/WeakMap.constructor-requires-new.js: OK
 compat-table/es6/WeakMap.frozen-keys.js: OK
 compat-table/es6/WeakMap.iterator-closing.js: OK
@@ -706,7 +706,7 @@ compat-table/es6/WeakMap.prototype.set-returns-this.js: OK
 compat-table/es6/WeakSet.accept-primitives.js: OK
 compat-table/es6/WeakSet.constructor-accepts-null.js: OK
 compat-table/es6/WeakSet.constructor-arguments.js: OK
-compat-table/es6/WeakSet.constructor-invokes-add.js: failed
+compat-table/es6/WeakSet.constructor-invokes-add.js: OK
 compat-table/es6/WeakSet.constructor-requires-new.js: OK
 compat-table/es6/WeakSet.iterator-closing.js: OK
 compat-table/es6/WeakSet.js: OK
