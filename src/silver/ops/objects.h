@@ -23,6 +23,14 @@ static inline void sv_op_define_method(
   bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
   bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
   
+  uint8_t data_attrs = (flags & SV_DEFINE_METHOD_NON_ENUM)
+    ? (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)
+    : ANT_PROP_ATTR_DEFAULT;
+  
+  uint8_t accessor_desc = (flags & SV_DEFINE_METHOD_NON_ENUM)
+    ? JS_DESC_C
+    : (JS_DESC_E | JS_DESC_C);
+  
   if (flags & SV_DEFINE_METHOD_SET_NAME) {
     const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
     size_t prefix_len = is_getter || is_setter ? 4 : 0;
@@ -32,17 +40,17 @@ static inline void sv_op_define_method(
   }
   
   if (is_getter) {
-    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_E | JS_DESC_C);
+    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, accessor_desc);
     return;
   }
   
   if (is_setter) {
-    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_E | JS_DESC_C);
+    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, accessor_desc);
     return;
   }
   
   ant_value_t key = js_mkstr(js, a->str, a->len);
-  mkprop(js, obj, key, fn, 0);
+  mkprop(js, obj, key, fn, data_attrs);
 }
 
 static inline void sv_op_define_method_comp(
@@ -58,6 +66,14 @@ static inline void sv_op_define_method_comp(
   bool is_getter = (flags & SV_DEFINE_METHOD_GETTER) != 0;
   bool is_setter = (flags & SV_DEFINE_METHOD_SETTER) != 0;
   
+  uint8_t data_attrs = (flags & SV_DEFINE_METHOD_NON_ENUM)
+    ? (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE)
+    : ANT_PROP_ATTR_DEFAULT;
+  
+  uint8_t accessor_desc = (flags & SV_DEFINE_METHOD_NON_ENUM)
+    ? JS_DESC_C
+    : (JS_DESC_E | JS_DESC_C);
+  
   if (flags & SV_DEFINE_METHOD_SET_NAME) {
     const char *prefix = is_getter ? "get " : is_setter ? "set " : "";
     size_t prefix_len = is_getter || is_setter ? 4 : 0;
@@ -66,9 +82,9 @@ static inline void sv_op_define_method_comp(
   }
   
   if (vtype(key) == T_SYMBOL) {
-    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
-    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
-    js_set_sym(js, obj, key, fn);
+    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
+    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
+    mkprop(js, obj, key, fn, data_attrs);
     return;
   }
   
@@ -77,8 +93,8 @@ static inline void sv_op_define_method_comp(
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
-    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
-    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
+    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
+    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, accessor_desc);
     return;
   }
   
@@ -86,8 +102,8 @@ static inline void sv_op_define_method_comp(
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
-    js_define_own_prop(js, obj, kptr, (size_t)klen, fn);
-  } else mkprop(js, obj, key_str, fn, 0);
+    mkprop(js, obj, js_mkstr(js, kptr, (size_t)klen), fn, data_attrs);
+  } else mkprop(js, obj, key_str, fn, data_attrs);
 }
 
 static inline void sv_op_set_name(

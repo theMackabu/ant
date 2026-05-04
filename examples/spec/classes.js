@@ -30,6 +30,7 @@ class Calculator {
 let calc = new Calculator(10);
 test('method add', calc.add(5), 15);
 test('method subtract', calc.subtract(3), 12);
+test('prototype method not enumerable', Calculator.prototype.propertyIsEnumerable('add'), false);
 
 class Point {
   setCoords(x, y) {
@@ -184,6 +185,8 @@ class Static {
 
 test('static property', Static.value, 42);
 test('static method', Static.method(), 'static');
+test('static method not enumerable', Static.propertyIsEnumerable('method'), false);
+test('static field enumerable', Static.propertyIsEnumerable('value'), true);
 
 class StaticNamedElements {
   static(value) {

@@ -4547,6 +4547,7 @@ static void compile_class_method(
   if (m->flags & FN_GETTER) method_flags |= SV_DEFINE_METHOD_GETTER;
   if (m->flags & FN_SETTER) method_flags |= SV_DEFINE_METHOD_SETTER;
   if (is_fn) method_flags |= SV_DEFINE_METHOD_SET_NAME;
+  if (is_fn || (m->flags & (FN_GETTER | FN_SETTER))) method_flags |= SV_DEFINE_METHOD_NON_ENUM;
 
   if (m->flags & FN_COMPUTED) {
     if (preeval_key >= 0) emit_get_local(c, preeval_key);
