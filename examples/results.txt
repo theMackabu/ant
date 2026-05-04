@@ -511,7 +511,7 @@ compat-table/es6/Array.prototype.fill.js: OK
 compat-table/es6/Array.prototype.findIndex.js: OK
 compat-table/es6/Array.prototype.find.js: OK
 compat-table/es6/Array.prototype.keys.js: OK
-compat-table/es6/Array.prototype.splice.js: failed
+compat-table/es6/Array.prototype.splice.js: OK
 compat-table/es6/Array.prototype.values.js: OK
 compat-table/es6/Date.prototype.Symbol.toPrimitive.js: OK
 compat-table/es6/Function.name.accessor.js: OK
