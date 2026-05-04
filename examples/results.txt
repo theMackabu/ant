@@ -716,9 +716,9 @@ compat-table/es6/WeakSet.prototype.add-returns-this.js: OK
 compat-table/es6/WeakSet.prototype.delete.js: OK
 compat-table/es6/annex-b.RegExp.prototype.compile.js: OK
 compat-table/es6/annex-b.RegExp.prototype.compile.returns-this.js: OK
-compat-table/es6/annex-b.String.prototype.html.existence.js: failed
-compat-table/es6/annex-b.String.prototype.html.lowercase.js: TypeError: undefined is not a function
-compat-table/es6/annex-b.String.prototype.html.quotes-escaped.js: TypeError: undefined is not a function
+compat-table/es6/annex-b.String.prototype.html.existence.js: OK
+compat-table/es6/annex-b.String.prototype.html.lowercase.js: OK
+compat-table/es6/annex-b.String.prototype.html.quotes-escaped.js: OK
 compat-table/es6/annex-b.function.hoisted-block-level.js: ReferenceError: 'g' is not defined
 compat-table/es6/annex-b.function.if-statement.js: OK
 compat-table/es6/annex-b.function.labeled.js: OK

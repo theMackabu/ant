@@ -10855,6 +10855,124 @@ static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nar
 #undef ENSURE_CAP
 }
 
+static size_t html_attr_escaped_len(const char *s, ant_offset_t len) {
+  size_t out = 0;
+  for (ant_offset_t i = 0; i < len; i++) out += (s[i] == '"') ? 6 : 1;
+  return out;
+}
+
+static void html_attr_append_escaped(char *out, size_t *pos, const char *s, ant_offset_t len) {
+  for (ant_offset_t i = 0; i < len; i++) if (s[i] == '"') {
+    memcpy(out + *pos, "&quot;", 6);
+    *pos += 6;
+  } else out[(*pos)++] = s[i];
+}
+
+static ant_value_t builtin_string_html(ant_t *js, ant_value_t *args, int nargs, const char *tag, const char *attr) {
+  ant_value_t str = js_tostring_val(js, unwrap_primitive(js, js->this_val));
+  if (is_err(str)) return str;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  
+  size_t tag_len = strlen(tag);
+  size_t attr_len = attr ? strlen(attr) : 0;
+  
+  ant_value_t attr_val = js_mkundef();
+  ant_offset_t value_len = 0;
+  
+  const char *value_ptr = NULL;
+  size_t escaped_len = 0;
+
+  if (attr) {
+    attr_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
+    if (is_err(attr_val)) return attr_val;
+    ant_offset_t value_off = vstr(js, attr_val, &value_len);
+    value_ptr = (const char *)(uintptr_t)value_off;
+    escaped_len = html_attr_escaped_len(value_ptr, value_len);
+  }
+
+  size_t total = 1 + tag_len + (attr 
+    ? (1 + attr_len + 2 + escaped_len + 1) 
+    : 0) + 1 + (size_t)str_len + 2 + tag_len + 1;
+  
+  char *buf = (char *)ant_calloc(total);
+  if (!buf) return js_mkerr(js, "oom");
+
+  size_t pos = 0;
+  buf[pos++] = '<';
+  memcpy(buf + pos, tag, tag_len); pos += tag_len;
+  
+  if (attr) {
+    buf[pos++] = ' ';
+    memcpy(buf + pos, attr, attr_len); pos += attr_len;
+    buf[pos++] = '=';
+    buf[pos++] = '"';
+    html_attr_append_escaped(buf, &pos, value_ptr, value_len);
+    buf[pos++] = '"';
+  }
+  
+  buf[pos++] = '>';
+  memcpy(buf + pos, str_ptr, (size_t)str_len); pos += (size_t)str_len;
+  buf[pos++] = '<';
+  buf[pos++] = '/';
+  memcpy(buf + pos, tag, tag_len); pos += tag_len;
+  buf[pos++] = '>';
+
+  ant_value_t out = js_mkstr(js, buf, pos);
+  free(buf);
+  
+  return out;
+}
+
+static ant_value_t builtin_string_anchor(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "a", "name");
+}
+
+static ant_value_t builtin_string_big(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "big", NULL);
+}
+
+static ant_value_t builtin_string_bold(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "b", NULL);
+}
+
+static ant_value_t builtin_string_fixed(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "tt", NULL);
+}
+
+static ant_value_t builtin_string_fontcolor(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "font", "color");
+}
+
+static ant_value_t builtin_string_fontsize(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "font", "size");
+}
+
+static ant_value_t builtin_string_italics(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "i", NULL);
+}
+
+static ant_value_t builtin_string_link(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "a", "href");
+}
+
+static ant_value_t builtin_string_small(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "small", NULL);
+}
+
+static ant_value_t builtin_string_strike(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "strike", NULL);
+}
+
+static ant_value_t builtin_string_sub(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "sub", NULL);
+}
+
+static ant_value_t builtin_string_sup(ant_t *js, ant_value_t *args, int nargs) {
+  return builtin_string_html(js, args, nargs, "sup", NULL);
+}
+
 static ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
@@ -14620,6 +14738,18 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, string_proto, "normalize", 9, js_mkfun(builtin_string_normalize));
   defmethod(js, string_proto, "valueOf", 7, js_mkfun(builtin_string_valueOf));
   defmethod(js, string_proto, "toString", 8, js_mkfun(builtin_string_toString));
+  defmethod(js, string_proto, "anchor", 6, js_mkfun(builtin_string_anchor));
+  defmethod(js, string_proto, "big", 3, js_mkfun(builtin_string_big));
+  defmethod(js, string_proto, "bold", 4, js_mkfun(builtin_string_bold));
+  defmethod(js, string_proto, "fixed", 5, js_mkfun(builtin_string_fixed));
+  defmethod(js, string_proto, "fontcolor", 9, js_mkfun(builtin_string_fontcolor));
+  defmethod(js, string_proto, "fontsize", 8, js_mkfun(builtin_string_fontsize));
+  defmethod(js, string_proto, "italics", 7, js_mkfun(builtin_string_italics));
+  defmethod(js, string_proto, "link", 4, js_mkfun(builtin_string_link));
+  defmethod(js, string_proto, "small", 5, js_mkfun(builtin_string_small));
+  defmethod(js, string_proto, "strike", 6, js_mkfun(builtin_string_strike));
+  defmethod(js, string_proto, "sub", 3, js_mkfun(builtin_string_sub));
+  defmethod(js, string_proto, "sup", 3, js_mkfun(builtin_string_sup));
 
   ant_value_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
