@@ -150,8 +150,8 @@ static bool map_store_entry(
 }
 
 static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
-  collection_key_t key;
-  if (!collection_key_init(js, value, &key)) return false;
+  ant_value_t stored_value = normalize_map_key(value); collection_key_t key;
+  if (!collection_key_init(js, stored_value, &key)) return false;
 
   set_entry_t *entry = NULL;
   HASH_FIND(hh, *set_ptr, key.bytes, key.len, entry);
@@ -175,7 +175,7 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
 
   memcpy(entry->key, key.bytes, key.len);
   entry->key_len = key.len;
-  entry->value = value;
+  entry->value = stored_value;
   
   HASH_ADD_KEYPTR(hh, *set_ptr, entry->key, entry->key_len, entry);
   collection_key_free(&key);

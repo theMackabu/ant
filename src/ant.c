@@ -4669,16 +4669,33 @@ static void string_builder_init(string_builder_t *sb, char *static_buf, size_t s
   sb->is_dynamic = false;
 }
 
+static void string_builder_dispose(string_builder_t *sb) {
+  if (sb->is_dynamic && sb->buffer) free(sb->buffer);
+  sb->buffer = NULL;
+  sb->capacity = 0;
+  sb->size = 0;
+  sb->is_dynamic = false;
+}
+
 static bool string_builder_append(string_builder_t *sb, const char *data, size_t len) {
-  if (sb->size + len > sb->capacity) {
-    size_t new_capacity = sb->capacity ? sb->capacity * 2 : 256;
-    while (new_capacity < sb->size + len) new_capacity *= 2;
+  if (len > SIZE_MAX - sb->size) return false;
+  size_t needed = sb->size + len;
+
+  if (needed > sb->capacity) {
+    size_t new_capacity = sb->capacity 
+      ? sb->capacity : 256;
     
-    char *new_buffer = (char *)ant_calloc(new_capacity);
+    while (new_capacity < needed) {
+      if (new_capacity > SIZE_MAX / 2) { new_capacity = needed; break; }
+      new_capacity *= 2;
+    }
+    
+    char *new_buffer = sb->is_dynamic
+      ? (char *)ant_realloc(sb->buffer, new_capacity)
+      : (char *)ant_calloc(new_capacity);
+      
     if (!new_buffer) return false;
-    
-    if (sb->size > 0) memcpy(new_buffer, sb->buffer, sb->size);
-    if (sb->is_dynamic) free(sb->buffer);
+    if (!sb->is_dynamic && sb->size > 0) memcpy(new_buffer, sb->buffer, sb->size);
     
     sb->buffer = new_buffer;
     sb->capacity = new_capacity;
@@ -4695,9 +4712,57 @@ static bool string_builder_append(string_builder_t *sb, const char *data, size_t
 
 static ant_value_t string_builder_finalize(ant_t *js, string_builder_t *sb) {
   ant_value_t result = js_mkstr(js, sb->buffer, sb->size);
-  if (sb->is_dynamic && sb->buffer) free(sb->buffer);
+  string_builder_dispose(sb);
   return result;
 }
+
+static bool string_builder_append_value(
+  ant_t *js, string_builder_t *sb, ant_value_t value, ant_value_t *err
+) {
+  ant_value_t s = js_tostring_val(js, value);
+  if (is_err(s)) {
+    if (err) *err = s;
+    return false;
+  }
+
+  ant_offset_t slen = 0;
+  ant_offset_t soff = vstr(js, s, &slen);
+  
+  if (string_builder_append(sb, 
+    (const char *)(uintptr_t)soff, 
+    (size_t)slen)
+  ) return true;
+
+  if (err) *err = js_mkerr(js, "oom");
+  return false;
+}
+
+static bool string_template_append_value(
+  ant_t *js, string_builder_t *sb, 
+  ant_value_t value, ant_value_t *err
+) {
+switch (vtype(value)) {
+  case T_STR: {
+    ant_offset_t len = 0;
+    ant_offset_t off = vstr(js, value, &len);
+    return string_builder_append(sb, (const char *)(uintptr_t)off, (size_t)len);
+  }
+  
+  case T_NUM: {
+    char buf[32];
+    size_t len = strnum(value, buf, sizeof(buf));
+    return string_builder_append(sb, buf, len);
+  }
+  
+  case T_BOOL: {
+    if (vdata(value)) return string_builder_append(sb, "true", 4);
+    return string_builder_append(sb, "false", 5);
+  }
+  
+  case T_NULL: return string_builder_append(sb, "null", 4);
+  case T_UNDEF: return string_builder_append(sb, "undefined", 9);
+  default: return string_builder_append_value(js, sb, value, err);
+}}
 
 ant_offset_t str_len_fast(ant_t *js, ant_value_t str) {
   if (vtype(str) != T_STR) return 0;
@@ -4747,7 +4812,10 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
       if (
         !string_builder_append(&sb, (char *)(uintptr_t)(off1), len1) ||
         !string_builder_append(&sb, (char *)(uintptr_t)(off2), len2)
-      ) return js_mkerr(js, "string concatenation failed");
+      ) {
+        string_builder_dispose(&sb);
+        return js_mkerr(js, "string concatenation failed");
+      }
       
       return string_builder_finalize(js, &sb);
     }
@@ -10787,6 +10855,8 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
+  
+  if (is_err(str)) return str;
   if (vtype(str) != T_STR) return js_mkerr(js, "template called on non-string");
   if (nargs < 1 || vtype(args[0]) != T_OBJ) return str;
   
@@ -10794,65 +10864,53 @@ static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nar
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   
-  size_t result_cap = str_len + 256;
-  size_t result_len = 0;
-  char *result = (char *)ant_calloc(result_cap);
-  if (!result) return js_mkerr(js, "oom");
-  ant_offset_t i = 0;
+  string_builder_t sb;
+  char static_buf[512];
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
 
-#define ENSURE_CAP(need) do { \
-  if (result_len + (need) >= result_cap) { \
-    result_cap = (result_len + (need) + 1) * 2; \
-    char *nr = (char *)ant_realloc(result, result_cap); \
-    if (!nr) return js_mkerr(js, "oom"); \
-    result = nr; \
-  } \
-} while(0)
+  ant_offset_t i = 0;
+  ant_offset_t literal_start = 0;
   
   while (i < str_len) {
-    if (i < str_len - 3 && str_ptr[i] == '{' && str_ptr[i + 1] == '{') {
-      ant_offset_t start = i + 2;
-      ant_offset_t end = start;
-      while (end < str_len - 1 && !(str_ptr[end] == '}' && str_ptr[end + 1] == '}')) {
-        end++;
-      }
-      if (end < str_len - 1 && str_ptr[end] == '}' && str_ptr[end + 1] == '}') {
-        ant_offset_t key_len = end - start;
-        ant_offset_t prop_off = lkp(js, data, str_ptr + start, key_len);
-        
-        if (prop_off != 0) {
-          ant_value_t value = propref_load(js, prop_off);
-          if (vtype(value) == T_STR) {
-            ant_offset_t val_len, val_off = vstr(js, value, &val_len);
-            ENSURE_CAP(val_len);
-            memcpy(result + result_len, (const void *)(uintptr_t)val_off, val_len);
-            result_len += val_len;
-          } else if (vtype(value) == T_NUM) {
-            char numstr[32];
-            snprintf(numstr, sizeof(numstr), "%g", tod(value));
-            size_t num_len = strlen(numstr);
-            ENSURE_CAP(num_len);
-            memcpy(result + result_len, numstr, num_len);
-            result_len += num_len;
-          } else if (vtype(value) == T_BOOL) {
-            const char *boolstr = vdata(value) ? "true" : "false";
-            size_t bool_len = strlen(boolstr);
-            ENSURE_CAP(bool_len);
-            memcpy(result + result_len, boolstr, bool_len);
-            result_len += bool_len;
-          }
-        }
-        i = end + 2;
-        continue;
+    if (i >= str_len - 3) goto next_char;
+    if (str_ptr[i] != '{' || str_ptr[i + 1] != '{') goto next_char;
+    
+    ant_offset_t key_start = i + 2;
+    ant_offset_t key_end = key_start;
+    
+    while (
+      key_end < str_len - 1 && 
+      !(str_ptr[key_end] == '}' && 
+      str_ptr[key_end + 1] == '}')
+    ) key_end++;
+    
+    if (key_end >= str_len - 1) goto next_char;
+    if (!string_builder_append(&sb, str_ptr + literal_start, (size_t)(i - literal_start))) goto oom;
+    
+    ant_offset_t prop_off = lkp(js, data, str_ptr + key_start, key_end - key_start);
+    if (prop_off != 0) {
+      ant_value_t err = js_mkundef();
+      ant_value_t value = propref_load(js, prop_off);
+      if (!string_template_append_value(js, &sb, value, &err)) {
+        string_builder_dispose(&sb);
+        return is_err(err) ? err : js_mkerr(js, "oom");
       }
     }
-    ENSURE_CAP(1);
-    result[result_len++] = str_ptr[i++];
+    
+    i = key_end + 2;
+    literal_start = i;
+    continue;
+
+  next_char:
+    i++;
   }
-  ant_value_t ret = js_mkstr(js, result, result_len);
-  free(result);
-  return ret;
-#undef ENSURE_CAP
+
+  if (!string_builder_append(&sb, str_ptr + literal_start, (size_t)(str_len - literal_start))) goto oom;
+  return string_builder_finalize(js, &sb);
+
+oom:
+  string_builder_dispose(&sb);
+  return js_mkerr(js, "oom");
 }
 
 static size_t html_attr_escaped_len(const char *s, ant_offset_t len) {
@@ -11562,39 +11620,6 @@ static ant_value_t builtin_string_fromCodePoint(ant_t *js, ant_value_t *args, in
   return ret;
 }
 
-static bool string_builder_append_value(
-  ant_t *js, char **buf,
-  size_t *len, size_t *cap,
-  ant_value_t value, ant_value_t *err
-) {
-  ant_value_t s = js_tostring_val(js, value);
-  if (is_err(s)) {
-    if (err) *err = s;
-    return false;
-  }
-
-  ant_offset_t slen = 0;
-  ant_offset_t soff = vstr(js, s, &slen);
-  
-  size_t need = *len + (size_t)slen + 1;
-  if (need > *cap) {
-    size_t next = (*cap == 0) ? 64 : *cap;
-    while (next < need) next *= 2;
-    char *grown = (char *)realloc(*buf, next);
-    if (!grown) {
-      if (err) *err = js_mkerr(js, "oom");
-      return false;
-    }
-    *buf = grown;
-    *cap = next;
-  }
-
-  if (slen > 0) memcpy(*buf + *len, (const void *)(uintptr_t)soff, (size_t)slen);
-  *len += (size_t)slen;
-  (*buf)[*len] = '\0';
-  return true;
-}
-
 static ant_value_t builtin_string_raw(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || is_null(args[0]) || is_undefined(args[0])) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "String.raw requires a template object");
@@ -11617,10 +11642,11 @@ static ant_value_t builtin_string_raw(ant_t *js, ant_value_t *args, int nargs) {
   size_t literal_count = (size_t)raw_len_num;
   if (literal_count == 0) return js_mkstr(js, "", 0);
 
-  char *buf = NULL;
-  size_t len = 0; size_t cap = 0;
+  string_builder_t sb;
+  char static_buf[256];
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+  
   ant_value_t err = js_mkundef();
-
   for (size_t i = 0; i < literal_count; i++) {
     ant_value_t chunk = js_mkundef();
     if (vtype(raw) == T_ARR) chunk = js_arr_get(js, raw, (ant_offset_t)i);
@@ -11629,23 +11655,20 @@ static ant_value_t builtin_string_raw(ant_t *js, ant_value_t *args, int nargs) {
       snprintf(key, sizeof(key), "%zu", i);
       chunk = js_get(js, raw, key);
     }
-
-    if (!string_builder_append_value(js, &buf, &len, &cap, chunk, &err)) {
-      free(buf);
+    
+    if (!string_builder_append_value(js, &sb, chunk, &err)) {
+      string_builder_dispose(&sb);
       return is_err(err) ? err : js_mkerr(js, "oom");
     }
-
-    if (i + 1 < literal_count && (int)(i + 1) < nargs) {
-      if (!string_builder_append_value(js, &buf, &len, &cap, args[i + 1], &err)) {
-        free(buf); return is_err(err) ? err : js_mkerr(js, "oom");
-      }
+    
+    if (i + 1 >= literal_count || (int)(i + 1) >= nargs) continue;
+    if (!string_builder_append_value(js, &sb, args[i + 1], &err)) {
+      string_builder_dispose(&sb);
+      return is_err(err) ? err : js_mkerr(js, "oom");
     }
   }
 
-  ant_value_t out = js_mkstr(js, buf ? buf : "", len);
-  free(buf);
-  
-  return out;
+  return string_builder_finalize(js, &sb);
 }
 
 static ant_value_t builtin_number_toString(ant_t *js, ant_value_t *args, int nargs) {
