@@ -4702,6 +4702,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->computed_key_locals = computed_key_locals;
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, c->mode);
+    comp.is_strict = true;
 
     if (node->left) {
       emit_op(&comp, OP_THIS);
@@ -4828,9 +4829,12 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type == N_STATIC_BLOCK) {
       begin_scope(c);
       int saved_completion_local = c->completion_local;
+      bool saved_strict = c->is_strict;
+      c->is_strict = true;
       c->completion_local = -1;
       compile_stmts(c, &m->args);
       c->completion_local = saved_completion_local;
+      c->is_strict = saved_strict;
       end_scope(c);
       continue;
     }
@@ -4838,17 +4842,25 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type != N_METHOD) continue;
     if (m == ctor_method) continue;
     if (is_private_name_node(m->left)) {
-      if (m->flags & FN_STATIC) compile_private_static_element(c, m, ctor_local);
+      if (m->flags & FN_STATIC) {
+        bool saved_strict = c->is_strict;
+        c->is_strict = true;
+        compile_private_static_element(c, m, ctor_local);
+        c->is_strict = saved_strict;
+      }
       continue;
     }
     
     bool is_fn = is_class_method_def(m);
     if (!is_fn && !(m->flags & FN_STATIC)) continue;
     
+    bool saved_strict = c->is_strict;
+    c->is_strict = true;
     compile_class_method(
       c, m, ctor_local, proto_local, 
       method_comp_keys ? method_comp_keys[i] : -1
     );
+    c->is_strict = saved_strict;
   }
 
   free(method_comp_keys);

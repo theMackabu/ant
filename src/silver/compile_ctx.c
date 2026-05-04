@@ -63,7 +63,7 @@ void sv_compile_ctx_init_child(
   ctx->scope_depth = 0;
   ctx->is_arrow = node && !!(node->flags & FN_ARROW);
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
-  ctx->is_strict = enclosing->is_strict;
+  ctx->is_strict = enclosing->is_strict || (node && !!(node->flags & FN_CLASS_BODY));
   ctx->mode = mode;
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;

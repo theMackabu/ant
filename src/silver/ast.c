@@ -1453,9 +1453,12 @@ static sv_ast_t *parse_class(P) {
       NEXT();
 
       if (TOK == TOK_LBRACE) {
+        bool saved_strict = p->lx.strict;
+        p->lx.strict = true;
         sv_ast_t *block = parse_block(p, false);
+        p->lx.strict = saved_strict;
         block->type = N_STATIC_BLOCK;
-        block->flags = FN_STATIC;
+        block->flags = FN_STATIC | FN_CLASS_BODY;
         sv_ast_list_push(&cls->args, block);
         continue;
       }
@@ -1516,9 +1519,12 @@ static sv_ast_t *parse_class(P) {
     }
 
     if (NEXT() == TOK_LPAREN) {
+      bool saved_strict = p->lx.strict;
+      p->lx.strict = true;
       method->right = parse_func(p);
+      p->lx.strict = saved_strict;
       if (!validate_accessor_params(p, method->right, method->flags)) return cls;
-      method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD;
+      method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD | FN_CLASS_BODY;
       method->right->src_off = method_src_off;
     } else if (TOK == TOK_ASSIGN) {
       CONSUME();

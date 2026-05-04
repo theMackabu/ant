@@ -104,6 +104,7 @@ enum {
   FN_PARSE_STRICT     = 1 << 12,
   FN_TEMPLATE_SEGMENT = 1 << 13,
   FN_USES_NEW_TARGET  = 1 << 14,
+  FN_CLASS_BODY       = 1 << 15,
 };
 
 enum {

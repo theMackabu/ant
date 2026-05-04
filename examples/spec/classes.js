@@ -188,6 +188,31 @@ test('static method', Static.method(), 'static');
 test('static method not enumerable', Static.propertyIsEnumerable('method'), false);
 test('static field enumerable', Static.propertyIsEnumerable('value'), true);
 
+class StrictStaticMethod {
+  static method() {
+    return this === undefined;
+  }
+}
+
+test('static class method implicit strict this', (0, StrictStaticMethod.method)(), true);
+
+class StrictClassMethod {
+  method() {
+    return this === undefined;
+  }
+}
+
+const strictClassMethod = new StrictClassMethod().method;
+test('class method implicit strict this', strictClassMethod(), true);
+
+let staticBlockStrict = false;
+try {
+  Function('class C { static { with ({}) {} } }')();
+} catch (e) {
+  staticBlockStrict = e instanceof SyntaxError;
+}
+test('class static block parses strict', staticBlockStrict, true);
+
 class StaticNamedElements {
   static(value) {
     return value + 1;

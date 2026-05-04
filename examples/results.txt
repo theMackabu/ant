@@ -769,7 +769,7 @@ compat-table/es6/class.expression.js: OK
 compat-table/es6/class.extends-expressions.js: OK
 compat-table/es6/class.extends-null.js: OK
 compat-table/es6/class.extends.js: OK
-compat-table/es6/class.implicit-strict.js: failed
+compat-table/es6/class.implicit-strict.js: OK
 compat-table/es6/class.lexical-name.js: OK
 compat-table/es6/class.methods-not-enumerable.js: OK
 compat-table/es6/class.new-target.js: OK
