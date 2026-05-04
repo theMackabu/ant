@@ -184,6 +184,7 @@ static ant_value_t get_array_iterator_prototype(ant_t *js) {
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.array_iterator_proto = js_mkobj(js);
   js_set(js, js->sym.array_iterator_proto, "next", js_mkfun(arr_iter_next));
+  js_set_sym(js, js->sym.array_iterator_proto, g_toStringTag, js_mkstr(js, "Array Iterator", 14));
   js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
 
   return js->sym.array_iterator_proto;
@@ -209,6 +210,7 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.string_iterator_proto = js_mkobj(js);
   js_set(js, js->sym.string_iterator_proto, "next", js_mkfun(str_iter_next));
+  js_set_sym(js, js->sym.string_iterator_proto, g_toStringTag, js_mkstr(js, "String Iterator", 15));
   js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
 
   return js->sym.string_iterator_proto;
@@ -343,6 +345,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
   js_set(js, symbol_proto, "valueOf", js_mkfun(builtin_Symbol_valueOf));
   js_set_sym(js, symbol_proto, get_toPrimitive_sym(), js_mkfun(builtin_Symbol_valueOf));
+  js_set_sym(js, symbol_proto, g_toStringTag, js_mkstr(js, "Symbol", 6));
   js_set_getter_desc(js, symbol_proto, "description", 11, js_mkfun(builtin_Symbol_description), JS_DESC_C);
   
   ant_value_t symbol_ctor = js_mkobj(js);

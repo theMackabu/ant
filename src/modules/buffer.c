@@ -336,6 +336,15 @@ const char *buffer_typedarray_type_name(TypedArrayType type) {
   return names[i];
 }
 
+static ant_value_t js_typedarray_toStringTag_getter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  TypedArrayData *ta = buffer_get_typedarray_data(this_val);
+  if (!ta) return js_mkundef();
+
+  const char *name = buffer_typedarray_type_name(ta->type);
+  return js_mkstr(js, name, strlen(name));
+}
+
 static ant_value_t create_typed_array_like(
   ant_t *js,
   ant_value_t this_val,
@@ -831,6 +840,10 @@ static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int n
   }
   
   return js_mkerr(js, "Invalid TypedArray constructor arguments");
+}
+
+static ant_value_t js_typedarray_base_constructor(ant_t *js, ant_value_t *args, int nargs) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray constructor is abstract");
 }
 
 // TypedArray.prototype.slice(begin, end)
@@ -2898,6 +2911,8 @@ void init_buffer_module() {
   
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
+  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
+  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
 
   ant_value_t arraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t arraybuffer_proto = js_mkobj(js);
@@ -2938,7 +2953,18 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "indexOf", js_mkfun(js_typedarray_indexOf));
   js_set(js, typedarray_proto, "includes", js_mkfun(js_typedarray_includes));
   js_set(js, typedarray_proto, "every", js_mkfun(js_typedarray_every));
-  js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
+  js_set_sym_getter_desc(js, typedarray_proto, get_toStringTag_sym(), js_mkfun(js_typedarray_toStringTag_getter), JS_DESC_C);
+
+  ant_value_t typedarray_ctor_obj = js_mkobj(js);
+  js_set_proto_init(typedarray_ctor_obj, function_proto);
+  js_set_slot(typedarray_ctor_obj, SLOT_CFUNC, js_mkfun(js_typedarray_base_constructor));
+  js_mkprop_fast(js, typedarray_ctor_obj, "prototype", 9, typedarray_proto);
+  js_mkprop_fast(js, typedarray_ctor_obj, "name", 4, ANT_STRING("TypedArray"));
+  js_set_descriptor(js, typedarray_ctor_obj, "name", 4, 0);
+  
+  ant_value_t typedarray_ctor = js_obj_to_func(typedarray_ctor_obj);
+  js_set(js, typedarray_proto, "constructor", typedarray_ctor);
+  js_set_descriptor(js, typedarray_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   g_typedarray_iter_proto = js_mkobj(js);
   js_set_proto_init(g_typedarray_iter_proto, js->sym.iterator_proto);
@@ -2955,6 +2981,7 @@ void init_buffer_module() {
     do { \
       ant_value_t name##_ctor_obj = js_mkobj(js); \
       ant_value_t name##_proto = js_mkobj(js); \
+      js_set_proto_init(name##_ctor_obj, typedarray_ctor); \
       js_set_proto_init(name##_proto, typedarray_proto); \
       js_set_sym(js, name##_proto, get_toStringTag_sym(), js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
@@ -3108,10 +3135,8 @@ void cleanup_buffer_module(void) {
 size_t buffer_get_external_memory(void) {
   size_t total = ta_metadata_bytes;
   
-  for (size_t i = 0; i < buffer_registry_count; i++) {
-    if (buffer_registry[i])
-      total += sizeof(ArrayBufferData) + buffer_registry[i]->capacity;
-  }
+  for (size_t i = 0; i < buffer_registry_count; i++) if (buffer_registry[i])
+    total += sizeof(ArrayBufferData) + buffer_registry[i]->capacity;
   total += buffer_registry_cap * sizeof(ArrayBufferData *);
   
   return total;

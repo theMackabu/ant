@@ -18,6 +18,12 @@ test('Uint8Array with new', new Uint8Array(5).length, 5);
 test('Uint8Array via Reflect.construct', Reflect.construct(Uint8Array, [5]).length, 5);
 testThrows('Uint8Array without new throws', () => Uint8Array(5));
 
+const typedArrayCtor = Object.getPrototypeOf(Int8Array);
+const typedArrayTagDesc = Object.getOwnPropertyDescriptor(typedArrayCtor.prototype, Symbol.toStringTag);
+test('TypedArray constructors share abstract parent', typedArrayCtor === Function.prototype, false);
+test('TypedArray shared toStringTag getter', typeof typedArrayTagDesc.get, 'function');
+test('TypedArray toStringTag value', new Int8Array(1)[Symbol.toStringTag], 'Int8Array');
+
 const i16 = new Int16Array(4);
 test('Int16Array length', i16.length, 4);
 test('Int16Array byteLength', i16.byteLength, 8);

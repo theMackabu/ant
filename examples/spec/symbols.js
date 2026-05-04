@@ -31,5 +31,19 @@ test('Symbol.hasInstance exists', typeof Symbol.hasInstance, 'symbol');
 
 const custom = { [Symbol.toStringTag]: 'MyCustomType' };
 test('Symbol.toStringTag custom', Object.prototype.toString.call(custom), '[object MyCustomType]');
+test('Symbol prototype toStringTag', Symbol.prototype[Symbol.toStringTag], 'Symbol');
+
+const iteratorTags = [
+  [String, 'String Iterator'],
+  [Array, 'Array Iterator'],
+  [Map, 'Map Iterator'],
+  [Set, 'Set Iterator'],
+];
+
+for (const [Ctor, tag] of iteratorTags) {
+  const iterProto = Object.getPrototypeOf(new Ctor()[Symbol.iterator]());
+  test(`${tag} own toStringTag`, iterProto.hasOwnProperty(Symbol.toStringTag), true);
+  test(`${tag} toStringTag value`, iterProto[Symbol.toStringTag], tag);
+}
 
 summary();

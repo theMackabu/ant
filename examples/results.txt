@@ -1189,7 +1189,7 @@ compat-table/es6/well-known.toPrimitive.js: OK
 compat-table/es6/well-known.toStringTag.existing-builtins.js: OK
 compat-table/es6/well-known.toStringTag.js: OK
 compat-table/es6/well-known.toStringTag.misc-builtins.js: OK
-compat-table/es6/well-known.toStringTag.new-builtins.js: failed
+compat-table/es6/well-known.toStringTag.new-builtins.js: OK
 compat-table/es6/well-known.unscopables.js: OK
 compat-table/es2016/Array.prototype.includes.generic.js: OK
 compat-table/es2016/Array.prototype.includes.js: OK

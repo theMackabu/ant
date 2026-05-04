@@ -1641,11 +1641,13 @@ void init_collections_module(void) {
   g_map_iter_proto = js_mkobj(js);
   js_set_proto_init(g_map_iter_proto, js->sym.iterator_proto);
   js_set(js, g_map_iter_proto, "next", js_mkfun(map_iter_next));
+  js_set_sym(js, g_map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
   js_iter_register_advance(g_map_iter_proto, advance_map);
   
   g_set_iter_proto = js_mkobj(js);
   js_set_proto_init(g_set_iter_proto, js->sym.iterator_proto);
   js_set(js, g_set_iter_proto, "next", js_mkfun(set_iter_next));
+  js_set_sym(js, g_set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
   js_iter_register_advance(g_set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
