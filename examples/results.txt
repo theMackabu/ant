@@ -666,7 +666,7 @@ compat-table/es6/Set.prototype.forEach.js: OK
 compat-table/es6/Set.prototype.keys.js: OK
 compat-table/es6/Set.prototype.size.js: OK
 compat-table/es6/Set.prototype.values.js: OK
-compat-table/es6/Set.zero-key.js: failed
+compat-table/es6/Set.zero-key.js: OK
 compat-table/es6/String.fromCodePoint.js: OK
 compat-table/es6/String.iterator-prototype-chain.js: OK
 compat-table/es6/String.prototype.Symbol.iterator.js: OK

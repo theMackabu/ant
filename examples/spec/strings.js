@@ -70,6 +70,28 @@ test('charAt astral trailing surrogate', '💙'.charAt(1).charCodeAt(0), 0xDC99)
 test('replace', 'hello world'.replace('world', 'there'), 'hello there');
 test('replaceAll', 'a-b-c'.replaceAll('-', '_'), 'a_b_c');
 
+test(
+  'template missing placeholders stay empty',
+  'Hello, {{name}}. Missing: {{missing}}.'.template({ name: 'Ant' }),
+  'Hello, Ant. Missing: .'
+);
+test(
+  'template placeholder values use normal string coercion',
+  '{{nil}}/{{undef}}/{{obj}}/{{arr}}/{{ok}}'.template({
+    nil: null,
+    undef: undefined,
+    obj: { toString() { return 'custom'; } },
+    arr: [1, 2],
+    ok: false
+  }),
+  'null/undefined/custom/1,2/false'
+);
+test(
+  'template unterminated placeholders remain literal',
+  'before {{name after'.template({ name: 'ignored' }),
+  'before {{name after'
+);
+
 testDeep('match', 'test123'.match(/\d+/), ['123']);
 
 test('at positive', 'hello'.at(1), 'e');
