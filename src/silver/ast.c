@@ -859,6 +859,26 @@ static sv_ast_t *parse_array(P) {
   return n;
 }
 
+static bool validate_accessor_params(P, sv_ast_t *fn, uint16_t flags) {
+  if (!(flags & (FN_GETTER | FN_SETTER)) || !fn) return true;
+
+  if ((flags & FN_GETTER) && fn->args.count != 0) {
+    SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Getter must not have parameters");
+    return false;
+  }
+
+  if (
+    (flags & FN_SETTER) && (
+    fn->args.count != 1 ||
+    (fn->args.count == 1 && fn->args.items[0] && fn->args.items[0]->type == N_REST))
+  ) {
+    SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Setter must have exactly one non-rest parameter");
+    return false;
+  }
+
+  return true;
+}
+
 static sv_ast_t *parse_object(P) {
   CONSUME();
   sv_ast_t *n = mk(N_OBJECT);
@@ -939,6 +959,7 @@ static sv_ast_t *parse_object(P) {
         }
 
         prop->right = parse_func(p);
+        if (!validate_accessor_params(p, prop->right, prop->flags)) return n;
         prop->right->flags |= FN_METHOD;
         prop->right->src_off = prop->src_off;
         sv_ast_list_push(&n->args, prop);
@@ -1496,6 +1517,7 @@ static sv_ast_t *parse_class(P) {
 
     if (NEXT() == TOK_LPAREN) {
       method->right = parse_func(p);
+      if (!validate_accessor_params(p, method->right, method->flags)) return cls;
       method->right->flags |= (flags & (FN_ASYNC | FN_GENERATOR)) | FN_METHOD;
       method->right->src_off = method_src_off;
     } else if (TOK == TOK_ASSIGN) {

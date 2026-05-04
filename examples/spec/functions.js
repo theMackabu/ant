@@ -34,6 +34,16 @@ function restParams(first, ...rest) {
   return first + rest.length;
 }
 test('rest params', restParams(1, 2, 3, 4), 4);
+test('rest params length excludes rest', restParams.length, 1);
+test('rest-only params length is zero', ((...rest) => rest.length).length, 0);
+
+let restSetterRejected = false;
+try {
+  eval('({ set value(...rest) {} })');
+} catch (e) {
+  restSetterRejected = true;
+}
+test('rest params rejected in setter', restSetterRejected, true);
 
 function spreadCall(a, b, c) {
   return a + b + c;

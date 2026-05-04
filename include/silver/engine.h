@@ -180,7 +180,6 @@ struct sv_func {
   int max_locals;
   int max_stack;
   int local_type_count;
-  int param_count;
   int upvalue_count;
   int srcpos_count;
   int source_line;
@@ -190,6 +189,8 @@ struct sv_func {
 
   uint16_t ic_count;
   uint16_t obj_site_count;
+  uint16_t param_count;
+  uint16_t function_length;
 
   bool is_strict;
   bool is_arrow;

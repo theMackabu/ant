@@ -4757,16 +4757,20 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
         memcpy(fn->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
       }
     }
-    fn->param_count = comp.param_count;
+    
+    fn->param_count = (uint16_t)comp.param_count;
+    fn->function_length = (uint16_t)comp.param_count;
     fn->is_strict = comp.is_strict;
     fn->filename = c->js->filename;
     fn->source_line = (int)node->line;
+    
     if (node->str && node->len > 0) {
       char *name = code_arena_bump(node->len + 1);
       memcpy(name, node->str, node->len);
       name[node->len] = '\0';
       fn->name = name;
     }
+    
     sv_compile_ctx_cleanup(&comp);
     int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
     emit_op(c, OP_CLOSURE);
@@ -4894,11 +4898,29 @@ static bool func_params_contain_await(const sv_ast_t *node) {
   return false;
 }
 
+static uint16_t function_length_from_params(const sv_ast_t *node) {
+  if (!node) return 0;
+  uint16_t length = 0;
+  for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *param = node->args.items[i];
+    if (!param || param->type == N_REST || param->type == N_ASSIGN_PAT) break;
+    length++;
+  }
+  return length;
+}
+
 sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
   sv_compile_mode_t mode
 ) {
+  if (node->args.count > UINT16_MAX) {
+    js_mkerr_typed(
+      enclosing->js, JS_ERR_SYNTAX,
+      "too many function parameters");
+    return NULL;
+  }
+
   if ((node->flags & FN_ASYNC) && func_params_contain_await(node)) {
     js_mkerr_typed(
       enclosing->js, JS_ERR_SYNTAX,
@@ -5321,7 +5343,9 @@ sv_func_t *compile_function_body(
       memcpy(func->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
     }
   }
-  func->param_count = comp.param_count;
+  
+  func->param_count = (uint16_t)comp.param_count;
+  func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
   func->is_arrow = comp.is_arrow;
   

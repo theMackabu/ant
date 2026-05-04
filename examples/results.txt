@@ -1047,9 +1047,9 @@ compat-table/es6/regex.flags.y.js: OK
 compat-table/es6/regex.flags.y.lastIndex.js: OK
 compat-table/es6/rest-params.arguments.js: OK
 compat-table/es6/rest-params.basic.js: OK
-compat-table/es6/rest-params.length.js: failed
+compat-table/es6/rest-params.length.js: OK
 compat-table/es6/rest-params.new-function.js: OK
-compat-table/es6/rest-params.no-setter.js: failed
+compat-table/es6/rest-params.no-setter.js: OK
 compat-table/es6/spread.array-call.js: OK
 compat-table/es6/spread.array-literal.js: OK
 compat-table/es6/spread.astral-call.js: OK
