@@ -83,6 +83,15 @@ let t6 = bench('local preservation', () => localPreservation(N));
 let t6_expected = 42 + 99 + N;
 console.log(`[test6] ${t6.name}: ${t6.elapsed}ms  result=${t6.result}  ok=${t6.result === t6_expected}`);
 
+function postIncrementLoop(n) {
+  let i = 0;
+  while (i < n) i++;
+  return i;
+}
+
+let t6b = bench('post-inc loop local', () => postIncrementLoop(N));
+console.log(`[test6b] ${t6b.name}:   ${t6b.elapsed}ms  result=${t6b.result}  ok=${t6b.result === N}`);
+
 function hotAdd(a, b) {
   return a + b;
 }
@@ -114,6 +123,7 @@ let allOk =
   t4.result === t4_expected &&
   t5.result === N &&
   t6.result === t6_expected &&
+  t6b.result === N &&
   t7_call.result === t7_osr.result;
 
 console.log('');
@@ -124,6 +134,7 @@ console.log(`  nested loops:         ${t3.elapsed}ms`);
 console.log(`  loop + JIT callee:    ${t4.elapsed}ms`);
 console.log(`  while loop:           ${t5.elapsed}ms`);
 console.log(`  local preservation:   ${t6.elapsed}ms`);
+console.log(`  post-inc loop local:  ${t6b.elapsed}ms`);
 console.log(`  hot fn (call JIT):    ${t7_call.elapsed}ms`);
 console.log(`  cold fn (OSR JIT):    ${t7_osr.elapsed}ms`);
 console.log('');

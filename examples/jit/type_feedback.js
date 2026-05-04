@@ -136,6 +136,46 @@ for (let i = 0; i < 200; i++) concatLoop('x', 3);
 let r13 = concatLoop('start', 5);
 console.log('[string concat loop]', r13, 'ok:', r13 === 'start.....');
 
+function numericInitThenString() {
+  let x = 0;
+  x = 'safe';
+  return x;
+}
+for (let i = 0; i < 200; i++) numericInitThenString();
+let r14 = numericInitThenString();
+console.log('[numeric init then string]', r14, 'ok:', r14 === 'safe');
+
+function numericInitBranchString(flag) {
+  let x = 0;
+  if (flag) x = 's';
+  return x + 1;
+}
+for (let i = 0; i < 200; i++) numericInitBranchString(false);
+let r15 = numericInitBranchString(true);
+let r16 = numericInitBranchString(false);
+console.log('[numeric init branch string]', r15, 'ok:', r15 === 's1');
+console.log('[numeric init branch number]', r16, 'ok:', r16 === 1);
+
+function conditionalLocalAdd(flag) {
+  let x = flag ? 'p' : 2;
+  return x + 1;
+}
+for (let i = 0; i < 200; i++) conditionalLocalAdd(false);
+let r17 = conditionalLocalAdd(true);
+let r18 = conditionalLocalAdd(false);
+console.log('[conditional local add bailout]', r17, 'ok:', r17 === 'p1');
+console.log('[conditional local add warm]', r18, 'ok:', r18 === 3);
+
+function conditionalLocalMul(flag) {
+  let x = flag ? 'p' : 2;
+  return x * 2;
+}
+for (let i = 0; i < 200; i++) conditionalLocalMul(false);
+let r19 = conditionalLocalMul(true);
+let r20 = conditionalLocalMul(false);
+console.log('[conditional local mul bailout]', r19, 'ok:', Number.isNaN(r19));
+console.log('[conditional local mul warm]', r20, 'ok:', r20 === 4);
+
 let allOk =
   r1 === 142 &&
   r2 === 42 &&
@@ -158,7 +198,14 @@ let allOk =
   r10 === expected &&
   r11 === 7 &&
   r12 === 49 &&
-  r13 === 'start.....';
+  r13 === 'start.....' &&
+  r14 === 'safe' &&
+  r15 === 's1' &&
+  r16 === 1 &&
+  r17 === 'p1' &&
+  r18 === 3 &&
+  Number.isNaN(r19) &&
+  r20 === 4;
 
 console.log('');
 console.log('all type feedback tests passed:', allOk);

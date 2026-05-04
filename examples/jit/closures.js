@@ -84,3 +84,19 @@ for (let i = 0; i < 110; i++) test8(10);
 let r8 = test8(1000);
 let e8 = (999 * 1000) / 2;
 console.log('[test8] hot closure call:', r8, 'ok:', r8 === e8);
+
+function test9() {
+  let x = 0;
+  let obj = {
+    m: function () {
+      x = 10;
+    }
+  };
+  for (let i = 0; i < 1; x++) {
+    obj.m();
+    i++;
+  }
+  return x;
+}
+for (let i = 0; i < 110; i++) test9();
+console.log('[test9] captured loop update:', test9(), 'ok:', test9() === 11);
