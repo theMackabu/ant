@@ -375,7 +375,7 @@ static ant_value_t map_has(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
   
-  if (!map_ptr) return js_false;
+  if (!map_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Map object");
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
   return js_bool(entry != NULL);
 }
@@ -606,7 +606,7 @@ static ant_value_t set_has(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
-  if (!set_ptr) return js_false;
+  if (!set_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Set object");
 
   set_entry_t *entry = set_find_entry(js, set_ptr, args[0]);
   return js_bool(entry != NULL);
@@ -1135,7 +1135,7 @@ static ant_value_t weakmap_has(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t this_val = js->this_val;
   weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_false;
+  if (!wm_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!is_object_type(args[0])) return js_false;
   
   ant_value_t key_obj = args[0];
@@ -1243,7 +1243,7 @@ static ant_value_t weakset_has(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(this_val);
-  if (!ws_ptr) return js_false;
+  if (!ws_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakSet object");
   if (!is_object_type(args[0])) return js_false;
   
   ant_value_t value_obj = args[0];
