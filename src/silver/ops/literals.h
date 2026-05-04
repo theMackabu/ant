@@ -145,7 +145,8 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   if (v) sorted[si++] = 'v';
   if (y) sorted[si++] = 'y';
 
-  js_mkprop_fast(js, regexp_obj, "flags", 5, js_mkstr(js, sorted, si));
+  ant_value_t flags_value = js_mkstr(js, sorted, si);
+  js_mkprop_fast(js, regexp_obj, "flags", 5, flags_value);
   js_mkprop_fast(js, regexp_obj, "hasIndices", 10, mkval(T_BOOL, d ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "global", 6, mkval(T_BOOL, g ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0));
@@ -155,6 +156,15 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   js_mkprop_fast(js, regexp_obj, "unicodeSets", 11, mkval(T_BOOL, v ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "lastIndex", 9, tov(0));
+  
+  js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_MASK, tov((double)(
+    (d ? 1 : 0)  | (g ? 2 : 0)  | (i ? 4 : 0)  |
+    (m ? 8 : 0)  | (s ? 16 : 0) | (u ? 32 : 0) |
+    (v ? 64 : 0) |(y ? 128 : 0)
+  )));
+  
+  js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
+  js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, js_mkundef());
 
   vm->stack[vm->sp++] = regexp_obj;
 }

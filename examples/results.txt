@@ -1036,7 +1036,7 @@ compat-table/es6/misc.property-order.Object.getOwnPropertyNames.js: failed
 compat-table/es6/misc.property-order.Object.keys.js: OK
 compat-table/es6/misc.property-order.Reflect.ownKeys.string.js: failed
 compat-table/es6/misc.property-order.Reflect.ownKeys.symbol.js: failed
-compat-table/es6/misc.prototypes-not-instances.js: failed
+compat-table/es6/misc.prototypes-not-instances.js: OK
 compat-table/es6/new-target.assignment-error.js: OK
 compat-table/es6/new-target.constructor.js: OK
 compat-table/es6/regex.flags.u.case-folding.js: OK

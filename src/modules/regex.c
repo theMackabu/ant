@@ -682,6 +682,11 @@ static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_reg
   return true;
 }
 
+static bool regexp_has_internal_slots(ant_t *js, ant_value_t value) {
+  if (!is_object_type(value)) return false;
+  return vtype(js_get_slot(value, SLOT_REGEXP_FLAGS_STRING)) == T_STR;
+}
+
 static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
   bool pattern_is_regexp = false;
   if (nargs > 0) {
@@ -934,7 +939,9 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
 static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t regexp = js->this_val;
-  if (vtype(regexp) != T_OBJ) return js_mkerr(js, "exec called on non-regexp");
+  if (!regexp_has_internal_slots(js, regexp))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.exec called on incompatible receiver");
+  
   if (nargs < 1) return js_mknull();
 
   ant_value_t str_arg = args[0];

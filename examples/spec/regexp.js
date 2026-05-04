@@ -33,6 +33,14 @@ testDeep('match groups', 'hello'.match(/(h)(e)/), ['he', 'h', 'e']);
 test('exec not null', /o/.exec('hello') !== null, true);
 test('exec match', /o/.exec('hello')[0], 'o');
 
+let regexpPrototypeExecThrows = false;
+try {
+  RegExp.prototype.exec();
+} catch (e) {
+  regexpPrototypeExecThrows = true;
+}
+test('RegExp prototype exec incompatible receiver', regexpPrototypeExecThrows, true);
+
 test('search found', 'hello world'.search(/world/), 6);
 test('search not found', 'hello world'.search(/xyz/), -1);
 
