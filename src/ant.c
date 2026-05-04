@@ -15102,26 +15102,104 @@ static ant_value_t js_cfunc_length_value(ant_value_t cfunc) {
   return tov((double)js_cfunc_length(cfunc));
 }
 
-ant_value_t js_set_function_name(ant_t *js, ant_value_t fn, const char *name, size_t name_len) {
+static ant_value_t js_define_function_name_value(ant_t *js, ant_value_t fn, ant_value_t name_val) {
   ant_value_t fn_obj = js_as_obj(fn);
   ant_object_t *ptr = js_obj_ptr(fn_obj);
   
   if (!ptr) return js_mkundef();
-  if (!name) {
-    name = "";
-    name_len = 0;
-  }
+  if (vtype(name_val) != T_STR) return js_mkerr(js, "function name must be a string");
 
   const char *name_key = js->intern.name ? js->intern.name : intern_string("name", 4);
   if (!name_key) return js_mkerr(js, "oom");
-
-  ant_value_t name_val = js_mkstr(js, name, name_len);
-  if (is_err(name_val)) return name_val;
 
   return mkprop_interned_exact(
     js, fn_obj, name_key, name_val, 
     ANT_PROP_ATTR_CONFIGURABLE
   );
+}
+
+static ant_value_t js_mkstr_concat2(
+  ant_t *js,
+  const char *left, size_t left_len,
+  const char *right, size_t right_len
+) {
+  if (!left) left_len = 0;
+  if (!right) right_len = 0;
+
+  if (SIZE_MAX - left_len < right_len) return js_mkerr(js, "oom");
+  size_t total = left_len + right_len;
+  ant_value_t out = js_mkstr(js, NULL, total);
+  if (is_err(out)) return out;
+
+  ant_flat_string_t *flat = ant_str_flat_ptr(out);
+  if (!flat) return js_mkerr(js, "oom");
+  if (left_len) memcpy(flat->bytes, left, left_len);
+  if (right_len) memcpy(flat->bytes + left_len, right, right_len);
+  
+  flat->bytes[total] = '\0';
+  flat->is_ascii = str_detect_ascii_bytes(flat->bytes, total);
+  
+  return out;
+}
+
+static ant_value_t js_mkstr_symbol_function_name(
+  ant_t *js,
+  const char *prefix, size_t prefix_len,
+  const char *desc
+) {
+  if (!prefix) prefix_len = 0;
+  if (!desc) return js_mkstr_concat2(js, prefix, prefix_len, "", 0);
+
+  size_t desc_len = strlen(desc);
+  if (SIZE_MAX - prefix_len < desc_len ||
+      SIZE_MAX - prefix_len - desc_len < 2) {
+    return js_mkerr(js, "oom");
+  }
+
+  size_t total = prefix_len + desc_len + 2;
+  ant_value_t out = js_mkstr(js, NULL, total);
+  if (is_err(out)) return out;
+
+  ant_flat_string_t *flat = ant_str_flat_ptr(out);
+  if (!flat) return js_mkerr(js, "oom");
+  if (prefix_len) memcpy(flat->bytes, prefix, prefix_len);
+  
+  flat->bytes[prefix_len] = '[';
+  memcpy(flat->bytes + prefix_len + 1, desc, desc_len);
+  
+  flat->bytes[total - 1] = ']';
+  flat->bytes[total] = '\0';
+  flat->is_ascii = str_detect_ascii_bytes(flat->bytes, total);
+  
+  return out;
+}
+
+ant_value_t js_set_function_name(ant_t *js, ant_value_t fn, const char *name, size_t name_len) {
+  if (!name) {
+    name = "";
+    name_len = 0;
+  }
+
+  ant_value_t name_val = js_mkstr(js, name, name_len);
+  if (is_err(name_val)) return name_val;
+  return js_define_function_name_value(js, fn, name_val);
+}
+
+static ant_value_t js_set_function_name_value_prefixed(
+  ant_t *js, ant_value_t fn,
+  const char *prefix, size_t prefix_len,
+  ant_value_t name_val
+) {
+  if (!prefix || prefix_len == 0)
+    return js_define_function_name_value(js, fn, name_val);
+
+  ant_offset_t name_len = 0;
+  ant_offset_t name_off = vstr(js, name_val, &name_len);
+  const char *name = (const char *)(uintptr_t)name_off;
+
+  ant_value_t prefixed = js_mkstr_concat2(js, prefix, prefix_len, name, (size_t)name_len);
+  if (is_err(prefixed)) return prefixed;
+  return js_define_function_name_value(js, fn, prefixed);
 }
 
 ant_value_t js_set_function_name_prefixed(
@@ -15131,26 +15209,15 @@ ant_value_t js_set_function_name_prefixed(
 ) {
   if (!prefix || prefix_len == 0)
     return js_set_function_name(js, fn, name, name_len);
-  
+
   if (!name) {
     name = "";
     name_len = 0;
   }
 
-  char stack_buf[128];
-  size_t total = prefix_len + name_len;
-  
-  char *buf = (total + 1 <= sizeof(stack_buf)) ? stack_buf : malloc(total + 1);
-  if (!buf) return js_mkerr(js, "oom");
-
-  memcpy(buf, prefix, prefix_len);
-  memcpy(buf + prefix_len, name, name_len);
-  buf[total] = '\0';
-
-  ant_value_t result = js_set_function_name(js, fn, buf, total);
-  if (buf != stack_buf) free(buf);
-  
-  return result;
+  ant_value_t prefixed = js_mkstr_concat2(js, prefix, prefix_len, name, name_len);
+  if (is_err(prefixed)) return prefixed;
+  return js_define_function_name_value(js, fn, prefixed);
 }
 
 ant_value_t js_set_function_name_from_key(
@@ -15160,27 +15227,9 @@ ant_value_t js_set_function_name_from_key(
 ) {
   if (vtype(key) == T_SYMBOL) {
     const char *desc = js_sym_desc(key);
-    if (!desc) return js_set_function_name_prefixed(js, fn, prefix, prefix_len, "", 0);
-    
-    size_t desc_len = strlen(desc);
-    char stack_buf[128];
-    
-    size_t bracketed_len = desc_len + 2;
-    char *buf = (bracketed_len + 1 <= sizeof(stack_buf)) ? stack_buf : malloc(bracketed_len + 1);
-    if (!buf) return js_mkerr(js, "oom");
-    
-    buf[0] = '[';
-    memcpy(buf + 1, desc, desc_len);
-    buf[bracketed_len - 1] = ']';
-    buf[bracketed_len] = '\0';
-    
-    ant_value_t result = js_set_function_name_prefixed(
-      js, fn, prefix, prefix_len, 
-      buf, bracketed_len
-    );
-    
-    if (buf != stack_buf) free(buf);
-    return result;
+    ant_value_t symbol_name = js_mkstr_symbol_function_name(js, prefix, prefix_len, desc);
+    if (is_err(symbol_name)) return symbol_name;
+    return js_define_function_name_value(js, fn, symbol_name);
   }
 
   ant_value_t key_str = coerce_to_str(js, key);
