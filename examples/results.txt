@@ -745,7 +745,7 @@ compat-table/es6/annex-b.__proto__.literals.not-shorthand-property.js: OK
 compat-table/es6/arrow.0-params.js: OK
 compat-table/es6/arrow.1-param.js: OK
 compat-table/es6/arrow.5-param.js: OK
-compat-table/es6/arrow.bind.js: failed
+compat-table/es6/arrow.bind.js: OK
 compat-table/es6/arrow.lexical-arguments.js: OK
 compat-table/es6/arrow.lexical-super.constructor.js: OK
 compat-table/es6/arrow.lexical-super.methods.js: OK

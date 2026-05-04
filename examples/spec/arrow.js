@@ -90,6 +90,14 @@ const context = {
 };
 test('arrow this binding', context.getValue(), 100);
 
+const boundContext = {
+  value: 'lexical',
+  make: function () {
+    return suffix => this.value + suffix;
+  }
+};
+test('arrow bind keeps lexical this', boundContext.make().bind({ value: 'bound' }, ' this')(), 'lexical this');
+
 const mapped = [1, 2, 3].map(x => x * 2);
 test('arrow in map [0]', mapped[0], 2);
 test('arrow in map [1]', mapped[1], 4);

@@ -5797,7 +5797,7 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->func = orig->func;
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
-  bound_closure->bound_this = this_arg;
+  bound_closure->bound_this = (orig->call_flags & SV_CALL_IS_ARROW) ? orig->bound_this : this_arg;
   bound_closure->bound_args = js_mkundef();
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
