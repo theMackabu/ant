@@ -107,11 +107,10 @@ static ant_value_t reflect_own_keys(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t keys_arr = js_mkarr(js);
   ant_iter_t iter = js_prop_iter_begin(js, target);
-  const char *key; size_t key_len; ant_value_t value;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    js_arr_push(js, keys_arr, js_mkstr(js, key, key_len));
-  }
+
+  ant_value_t key, value;  
+  while (js_prop_iter_next_val(&iter, &key, &value)) 
+    js_arr_push(js, keys_arr, key);
   
   js_prop_iter_end(&iter);
   return keys_arr;

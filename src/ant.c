@@ -6575,14 +6575,17 @@ static ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mod
 
 static ant_value_t builtin_object_keys(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
+  
   ant_value_t obj = args[0];
+  if (vtype(obj) == T_STR) return js_for_in_keys(js, obj);
+  
   if (vtype(obj) == T_CFUNC) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
     if (vtype(promoted) != T_FUNC) return mkarr(js);
     obj = promoted;
   }
-  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
   
   return object_enum(js, obj, OBJ_ENUM_KEYS);
@@ -7996,6 +7999,21 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_t *js, ant_value_t *ar
   if (nargs == 0) return mkarr(js);
   ant_value_t obj = args[0];
 
+  if (vtype(obj) == T_STR) {
+    ant_value_t arr = mkarr(js);
+    ant_offset_t idx = 0;
+    ant_offset_t slen = vstrlen(js, obj);
+    
+    for (ant_offset_t i = 0; i < slen; i++) {
+      char idxstr[16];
+      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+      arr_set(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
+    }
+    
+    arr_set(js, arr, idx++, js->length_str);
+    return mkval(T_ARR, vdata(arr));
+  }
+
   if (vtype(obj) == T_CFUNC) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
     if (vtype(promoted) == T_FUNC) obj = promoted;
@@ -8138,12 +8156,12 @@ static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_t *js, ant_value
 }
 
 static ant_value_t builtin_object_isExtensible(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs == 0) return js_true;
+  if (nargs == 0) return js_false;
   
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_true;
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_false;
   ant_value_t as_obj = js_as_obj(obj);
   
   ant_object_t *ptr = js_obj_ptr(as_obj);

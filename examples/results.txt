@@ -638,7 +638,7 @@ compat-table/es6/Reflect.get.js: OK
 compat-table/es6/Reflect.has.js: OK
 compat-table/es6/Reflect.isExtensible.js: OK
 compat-table/es6/Reflect.ownKeys.string.js: OK
-compat-table/es6/Reflect.ownKeys.symbol.js: failed
+compat-table/es6/Reflect.ownKeys.symbol.js: OK
 compat-table/es6/Reflect.preventExtensions.js: OK
 compat-table/es6/Reflect.setPrototypeOf.js: OK
 compat-table/es6/Reflect.set.js: OK
@@ -944,12 +944,12 @@ compat-table/es6/literals.octal.js: OK
 compat-table/es6/misc.Invalid-Date.js: OK
 compat-table/es6/misc.Object.freeze.primitives.js: OK
 compat-table/es6/misc.Object.getOwnPropertyDescriptor.primitives.js: OK
-compat-table/es6/misc.Object.getOwnPropertyNames.primitives.js: failed
+compat-table/es6/misc.Object.getOwnPropertyNames.primitives.js: OK
 compat-table/es6/misc.Object.getPrototypeOf.primitives.js: OK
-compat-table/es6/misc.Object.isExtensible.primitives.js: failed
+compat-table/es6/misc.Object.isExtensible.primitives.js: OK
 compat-table/es6/misc.Object.isFrozen.primitives.js: OK
 compat-table/es6/misc.Object.isSealed.primitives.js: OK
-compat-table/es6/misc.Object.keys.primitives.js: failed
+compat-table/es6/misc.Object.keys.primitives.js: OK
 compat-table/es6/misc.Object.preventExtensions.primitives.js: OK
 compat-table/es6/misc.Object.seal.primitives.js: OK
 compat-table/es6/misc.Proxy.defineProperty.SetIntegrityLevel.js: failed
