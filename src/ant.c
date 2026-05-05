@@ -5706,10 +5706,54 @@ static ant_value_t builtin_function_apply(ant_t *js, ant_value_t *args, int narg
   return result;
 }
 
+static bool proxy_callable_target(ant_value_t value) {
+  ant_value_t slow = value;
+  ant_value_t fast = value;
+
+  while (true) {
+    uint8_t t = vtype(slow);
+    if (t == T_FUNC || t == T_CFUNC) return true;
+    if (t != T_OBJ) return false;
+
+    ant_proxy_state_t *data = get_proxy_data(slow);
+    if (!data || data->revoked) return false;
+    slow = data->target;
+
+    for (int i = 0; i < 2; i++) {
+      if (vtype(fast) != T_OBJ) { fast = js_mknull(); break; }
+      ant_proxy_state_t *fdata = get_proxy_data(fast);
+      if (!fdata || fdata->revoked) { fast = js_mknull(); break; }
+      fast = fdata->target;
+    }
+
+    if (same_object_identity(slow, fast)) return false;
+  }
+}
+
+static ant_value_t builtin_bound_proxy_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t bound = js->current_func;
+  if (vtype(bound) != T_FUNC) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid bound proxy call");
+
+  ant_value_t target = js_get_slot(js_func_obj(bound), SLOT_TARGET_FUNC);
+  if (vtype(target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid bound proxy target");
+
+  if (vtype(js->new_target) != T_UNDEF) {
+    ant_value_t ctor_this = js->this_val;
+    return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, &ctor_this, true);
+  }
+
+  return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, NULL, false);
+}
+
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t func = js->this_val;
+  uint8_t func_type = vtype(func);
+  bool func_is_proxy = func_type == T_OBJ && is_proxy(func);
   
-  if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
+  if (func_type != T_FUNC && func_type != T_CFUNC && !func_is_proxy) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "bind requires a function");
+  }
+  if (func_is_proxy && !proxy_callable_target(func)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "bind requires a function");
   }
 
@@ -5720,7 +5764,13 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   int orig_length = 0;
   ant_value_t target_func_obj;
   
-  if (vtype(func) == T_CFUNC) orig_length = 0;
+  if (func_is_proxy) {
+    ant_value_t has_length = proxy_has_own(js, func, js->length_str);
+    if (is_err(has_length)) return has_length;
+    ant_value_t len_val = proxy_get(js, func, "length", 6);
+    if (is_err(len_val)) return len_val;
+    if (vtype(len_val) == T_NUM) orig_length = (int) tod(len_val);
+  } else if (func_type == T_CFUNC) orig_length = 0;
   else {
     target_func_obj = js_func_obj(func);
     ant_value_t len_val = lkp_interned_val(js, target_func_obj, js->intern.length);
@@ -5733,7 +5783,10 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   const char *target_name = "";
   size_t target_name_len = 0;
   ant_value_t target_name_val = js_mkundef();
-  if (vtype(func) == T_CFUNC) {
+  if (func_is_proxy) {
+    target_name_val = proxy_get(js, func, "name", 4);
+    if (is_err(target_name_val)) return target_name_val;
+  } else if (func_type == T_CFUNC) {
     const ant_cfunc_meta_t *meta = js_as_cfunc_meta(func);
     if (meta && meta->name) {
       target_name = meta->name;
@@ -5749,7 +5802,40 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     target_name_len = (size_t)nlen;
   }
 
-  if (vtype(func) == T_CFUNC) {
+  if (func_is_proxy) {
+    ant_value_t bound_func = mkobj(js, 0);
+    if (is_err(bound_func)) return bound_func;
+
+    set_slot(bound_func, SLOT_CFUNC, js_mkfun(builtin_bound_proxy_call));
+    set_slot(bound_func, SLOT_TARGET_FUNC, func);
+
+    ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
+
+    ant_value_t bound = js_obj_to_func_ex(bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    sv_closure_t *bc = js_func_closure(bound);
+    bc->bound_this = this_arg;
+    if (bound_argc > 0) {
+      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+      if (!bc->bound_argv) return js_mkerr(js, "oom");
+      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+      bc->bound_argc = bound_argc;
+    }
+
+    js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+    ant_value_t name_result = js_set_function_name_prefixed(
+      js, bound_func, "bound ", 6, target_name, target_name_len
+    );
+    if (is_err(name_result)) return name_result;
+
+    ant_value_t proto_setup = setup_func_prototype(js, bound);
+    if (is_err(proto_setup)) return proto_setup;
+    js_mark_constructor(bound_func, js_is_constructor(func));
+
+    return bound;
+  }
+
+  if (func_type == T_CFUNC) {
     ant_value_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
     
