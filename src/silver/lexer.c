@@ -133,6 +133,22 @@ static const uint8_t cc[128] = {
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
+static inline bool html_close_comment_at_line_start(const char *code, const char *p) {
+  while (p > code) {
+    char c = p[-1];
+    if (c == '\n' || c == '\r') return true;
+    if (c != ' ' && c != '\t' && c != '\f' && c != '\v') return false;
+    p--;
+  }
+  return true;
+}
+
+static inline const char *skip_html_line_comment(const char *p, const char *end, bool *saw_nl) {
+  while (p < end && *p != '\n') p++;
+  if (p < end) { *saw_nl = true; p++; }
+  return p;
+}
+
 static ant_offset_t sv_skiptonext(const char *code, ant_offset_t len, ant_offset_t n, bool *nl) {
   static const void *D[] = { &&L0, &&LS, &&LN, &&LSL, &&LH };
   bool saw_nl = false;
@@ -196,6 +212,23 @@ LH: {
 }
 
 L0:
+  if (__builtin_expect(p + 3 < end && p[0] == '<' && p[1] == '!' && p[2] == '-' && p[3] == '-', 0)) {
+    p = skip_html_line_comment(p + 4, end, &saw_nl);
+    if (__builtin_expect(p >= end, 0)) goto L_done;
+    c = (unsigned char)*p;
+    goto *D[c & 0x80 ? C_HI : cc[c]];
+  }
+  if (__builtin_expect(
+    p + 2 < end && p[0] == '-' && p[1] == '-' && p[2] == '>' &&
+    html_close_comment_at_line_start(code, p), 0
+  )) {
+    p = skip_html_line_comment(p + 3, end, &saw_nl);
+    if (__builtin_expect(p >= end, 0)) goto L_done;
+    c = (unsigned char)*p;
+    goto *D[c & 0x80 ? C_HI : cc[c]];
+  }
+
+L_done:
   if (nl) *nl = saw_nl;
   return (ant_offset_t)(p - code);
 }

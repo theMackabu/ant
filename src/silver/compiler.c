@@ -591,6 +591,18 @@ static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
   return -1;
 }
 
+static int resolve_local_at_depth(sv_compiler_t *c, const char *name, uint32_t len, int depth) {
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    sv_local_t *loc = &c->locals[i];
+    if (
+      loc->depth == depth &&
+      loc->name_len == len &&
+      memcmp(loc->name, name, len) == 0
+    ) return i;
+  }
+  return -1;
+}
+
 static int add_local(
   sv_compiler_t *c, const char *name, uint32_t len,
   bool is_const, int depth
@@ -1337,6 +1349,42 @@ static void annex_b_collect_funcs(sv_ast_t *node, sv_ast_list_t *out) {
   } else if (node->type == N_LABEL) annex_b_collect_funcs(node->body, out);
 }
 
+static void annex_b_collect_block_var_funcs(sv_ast_t *node, sv_ast_list_t *out) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return;
+  if (node->type == N_BLOCK) {
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *stmt = node->args.items[i];
+      if (!stmt) continue;
+      if (stmt->type == N_FUNC && stmt->str && !(stmt->flags & (FN_ARROW | FN_PAREN))) {
+        sv_ast_list_push(out, stmt);
+        continue;
+      }
+      annex_b_collect_block_var_funcs(stmt, out);
+    }
+    return;
+  }
+  if (node->type == N_IF) {
+    annex_b_collect_block_var_funcs(node->left, out);
+    annex_b_collect_block_var_funcs(node->right, out);
+  } else if (node->type == N_LABEL) {
+    annex_b_collect_block_var_funcs(node->body, out);
+  } else if (node->type == N_WHILE || node->type == N_DO_WHILE) {
+    annex_b_collect_block_var_funcs(node->body, out);
+  } else if (node->type == N_FOR || node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) {
+    annex_b_collect_block_var_funcs(node->body, out);
+  } else if (node->type == N_SWITCH) {
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *cas = node->args.items[i];
+      for (int j = 0; cas && j < cas->args.count; j++)
+        annex_b_collect_block_var_funcs(cas->args.items[j], out);
+    }
+  } else if (node->type == N_TRY) {
+    annex_b_collect_block_var_funcs(node->body, out);
+    annex_b_collect_block_var_funcs(node->catch_body, out);
+    annex_b_collect_block_var_funcs(node->finally_body, out);
+  }
+}
+
 static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
   for (int i = 0; i < stmts->count; i++) {
     sv_ast_t *node = stmts->items[i];
@@ -1392,22 +1440,34 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
           add_local(c, fn->str, fn->len, false, c->scope_depth);
       }
     }
+    if (!c->is_strict && decl_node->type == N_BLOCK) {
+      sv_ast_list_t funcs = {0};
+      annex_b_collect_block_var_funcs(decl_node, &funcs);
+      for (int j = 0; j < funcs.count; j++) {
+        sv_ast_t *fn = funcs.items[j];
+        if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1)
+          add_local(c, fn->str, fn->len, false, 0);
+      }
+    }
   }
 }
 
-static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node) {
+static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   sv_func_t *fn = compile_function_body(c, node, c->mode);
   if (!fn) return;
   int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
   emit_set_function_name(c, node->str, node->len);
+  int annex_var = annex_b_update_var ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
+  if (annex_var >= 0) emit_op(c, OP_DUP);
   if (is_repl_top_level(c)) {
     emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
   } else {
     int local = resolve_local(c, node->str, node->len);
     emit_put_local(c, local);
   }
+  if (annex_var >= 0) emit_put_local(c, annex_var);
 }
 
 static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
@@ -1417,13 +1477,13 @@ static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       node = node->left;
     if (!node) continue;
     if (node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN))) {
-      hoist_one_func(c, node);
+      hoist_one_func(c, node, !c->is_strict && c->scope_depth > 0);
     }
     if (!c->is_strict && (node->type == N_IF || node->type == N_LABEL)) {
       sv_ast_list_t funcs = {0};
       annex_b_collect_funcs(node, &funcs);
       for (int j = 0; j < funcs.count; j++)
-        hoist_one_func(c, funcs.items[j]);
+        hoist_one_func(c, funcs.items[j], false);
     }
   }
 }

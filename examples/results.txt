@@ -719,10 +719,10 @@ compat-table/es6/annex-b.RegExp.prototype.compile.returns-this.js: OK
 compat-table/es6/annex-b.String.prototype.html.existence.js: OK
 compat-table/es6/annex-b.String.prototype.html.lowercase.js: OK
 compat-table/es6/annex-b.String.prototype.html.quotes-escaped.js: OK
-compat-table/es6/annex-b.function.hoisted-block-level.js: ReferenceError: 'g' is not defined
+compat-table/es6/annex-b.function.hoisted-block-level.js: OK
 compat-table/es6/annex-b.function.if-statement.js: OK
 compat-table/es6/annex-b.function.labeled.js: OK
-compat-table/es6/annex-b.html-comments.js: SyntaxError: Unexpected token '>'
+compat-table/es6/annex-b.html-comments.js: OK
 compat-table/es6/annex-b.regex.backreferences-octal.js: OK
 compat-table/es6/annex-b.regex.hyphens.js: OK
 compat-table/es6/annex-b.regex.incomplete-patterns.js: OK
