@@ -497,7 +497,6 @@ static bool append_error_context(
   int error_line_no, int error_col, int error_span_cols
 ) {
   if (!src || src_len <= 0 || !n) return false;
-  if (src_pos < 0) src_pos = 0;
   if (src_pos > src_len) src_pos = src_len;
 
   ant_offset_t err_line_start = src_pos;
@@ -508,12 +507,17 @@ static bool append_error_context(
 
   ant_offset_t ctx_start = err_line_start;
   int first_line_no = error_line_no;
+  
   for (int i = 0; i < 5 && ctx_start > 0; i++) {
     ant_offset_t prev = ctx_start - 1;
-    if (src[prev] == '\n') prev--;
-    while (prev >= 0 && src[prev] != '\n') prev--;
+    if (src[prev] == '\n') {
+      if (prev == 0) { ctx_start = 0; break; }
+      prev--;
+    }
     
-    ctx_start = prev + 1;
+    while (prev > 0 && src[prev] != '\n') prev--;
+    ctx_start = (src[prev] == '\n') ? prev + 1 : 0;
+    
     first_line_no--;
     if (first_line_no < 1) { first_line_no = 1; break; }
   }

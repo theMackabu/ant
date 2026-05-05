@@ -16,6 +16,51 @@ Reflect.deleteProperty(obj, 'c');
 test('Reflect.deleteProperty', obj.c, undefined);
 
 testDeep('Reflect.ownKeys', Reflect.ownKeys({ x: 1, y: 2 }), ['x', 'y']);
+testDeep('Reflect.ownKeys array', Reflect.ownKeys([1]), ['0', 'length']);
+
+const ordered = {
+  2: true,
+  0: true,
+  1: true,
+  ' ': true,
+  9: true,
+  D: true,
+  B: true,
+  '-1': true
+};
+ordered.A = true;
+ordered[3] = true;
+'EFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(key => ordered[key] = true);
+Object.defineProperty(ordered, 'C', { value: true, enumerable: true });
+Object.defineProperty(ordered, '4', { value: true, enumerable: true });
+delete ordered[2];
+ordered[2] = true;
+test('Reflect.ownKeys string order', Reflect.ownKeys(ordered).join(''), '012349 DB-1AEFGHIJKLMNOPQRSTUVWXYZC');
+
+const sparseArray = [];
+Object.defineProperty(sparseArray, '2', { value: 2, enumerable: true });
+testDeep('Reflect.ownKeys sparse array', Reflect.ownKeys(sparseArray), ['2', 'length']);
+
+const overflowKeyOrder = { a: 1 };
+overflowKeyOrder['18446744073709551616'] = 2;
+test('Reflect.ownKeys overflow-like key order',
+     Reflect.ownKeys(overflowKeyOrder).join('|'), 'a|18446744073709551616');
+
+const sym1 = Symbol();
+const sym2 = Symbol();
+const sym3 = Symbol();
+const symbolOrder = { 1: true, A: true };
+symbolOrder.B = true;
+symbolOrder[sym1] = true;
+symbolOrder[2] = true;
+symbolOrder[sym2] = true;
+Object.defineProperty(symbolOrder, 'C', { value: true, enumerable: true });
+Object.defineProperty(symbolOrder, sym3, { value: true, enumerable: true });
+Object.defineProperty(symbolOrder, 'D', { value: true, enumerable: true });
+const symbolKeys = Reflect.ownKeys(symbolOrder);
+test('Reflect.ownKeys symbol order 1', symbolKeys[symbolKeys.length - 3], sym1);
+test('Reflect.ownKeys symbol order 2', symbolKeys[symbolKeys.length - 2], sym2);
+test('Reflect.ownKeys symbol order 3', symbolKeys[symbolKeys.length - 1], sym3);
 
 function Point(x, y) {
   this.x = x;

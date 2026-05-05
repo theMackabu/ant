@@ -448,6 +448,7 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_value_t str_materialize(ant_t *js, ant_value_t value);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
+ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
 

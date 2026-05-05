@@ -27,6 +27,74 @@ let merged = Object.assign({}, { a: 1 }, { b: 2 });
 test('Object.assign a', merged.a, 1);
 test('Object.assign b', merged.b, 2);
 
+const ordered = {
+  2: true,
+  0: true,
+  1: true,
+  ' ': true,
+  9: true,
+  D: true,
+  B: true,
+  '-1': true
+};
+ordered.A = true;
+ordered[3] = true;
+'EFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(key => ordered[key] = true);
+Object.defineProperty(ordered, 'C', { value: true, enumerable: true });
+Object.defineProperty(ordered, '4', { value: true, enumerable: true });
+delete ordered[2];
+ordered[2] = true;
+
+test('Object.getOwnPropertyNames order', Object.getOwnPropertyNames(ordered).join(''),
+     '012349 DB-1AEFGHIJKLMNOPQRSTUVWXYZC');
+
+const overflowNameOrder = { a: 1 };
+overflowNameOrder['18446744073709551616'] = 2;
+test('Object.getOwnPropertyNames overflow-like key order',
+     Object.getOwnPropertyNames(overflowNameOrder).join('|'), 'a|18446744073709551616');
+
+let assignOrder = '';
+const assignTarget = {};
+'012349 DBACEFGHIJKLMNOPQRST'.split('').concat(-1).forEach(key => {
+  Object.defineProperty(assignTarget, key, {
+    set() {
+      assignOrder += key;
+    }
+  });
+});
+const assignSource = { 2: 2, 0: 0, 1: 1, ' ': ' ', 9: 9, D: 'D', B: 'B', '-1': '-1' };
+Object.defineProperty(assignSource, 'A', { value: 'A', enumerable: true });
+Object.defineProperty(assignSource, '3', { value: '3', enumerable: true });
+Object.defineProperty(assignSource, 'C', { value: 'C', enumerable: true });
+Object.defineProperty(assignSource, '4', { value: '4', enumerable: true });
+delete assignSource[2];
+assignSource[2] = true;
+'EFGHIJKLMNOPQRST'.split('').forEach(key => assignSource[key] = key);
+Object.assign(assignTarget, assignSource);
+test('Object.assign property order', assignOrder, '012349 DB-1ACEFGHIJKLMNOPQRST');
+
+const assignedArray = Object.assign({}, [10, 20]);
+test('Object.assign dense array source 0', assignedArray[0], 10);
+test('Object.assign dense array source 1', assignedArray[1], 20);
+
+const sparseArraySource = [];
+Object.defineProperty(sparseArraySource, '2', { value: 2, enumerable: true });
+const assignedSparseArray = Object.assign({}, sparseArraySource);
+test('Object.assign sparse array source index', assignedSparseArray[2], 2);
+
+let overflowAssignOrder = '';
+const overflowAssignTarget = {};
+Object.defineProperty(overflowAssignTarget, 'a', { set() { overflowAssignOrder += 'a'; } });
+Object.defineProperty(overflowAssignTarget, '18446744073709551616', {
+  set() {
+    overflowAssignOrder += 'h';
+  }
+});
+const overflowAssignSource = { a: 1 };
+overflowAssignSource['18446744073709551616'] = 2;
+Object.assign(overflowAssignTarget, overflowAssignSource);
+test('Object.assign overflow-like key order', overflowAssignOrder, 'ah');
+
 let nested = { a: { b: { c: 1 } } };
 test('nested access', nested.a.b.c, 1);
 

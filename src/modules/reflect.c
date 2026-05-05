@@ -97,23 +97,14 @@ static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t reflect_own_keys(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkarr(js);
-  
   ant_value_t target = args[0];
   
   int t = vtype(target);
-  if (t != T_OBJ && t != T_FUNC) {
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
     return js_mkerr(js, "Reflect.ownKeys called on non-object");
   }
   
-  ant_value_t keys_arr = js_mkarr(js);
-  ant_iter_t iter = js_prop_iter_begin(js, target);
-
-  ant_value_t key, value;  
-  while (js_prop_iter_next_val(&iter, &key, &value)) 
-    js_arr_push(js, keys_arr, key);
-  
-  js_prop_iter_end(&iter);
-  return keys_arr;
+  return js_own_property_keys(js, target, true, false);
 }
 
 static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {

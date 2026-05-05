@@ -6505,6 +6505,253 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
   return mkval(T_ARR, vdata(arr));
 }
 
+typedef struct {
+  uint32_t slot;
+  unsigned long index;
+} own_index_key_t;
+
+static bool own_slot_list_push(uint32_t **slots, uint32_t *count, uint32_t *cap, uint32_t *stack, uint32_t slot) {
+  if (*count == *cap) {
+    uint32_t next_cap = *cap * 2;
+    uint32_t *next = NULL;
+    if (*slots == stack) {
+      next = calloc(next_cap, sizeof(*next));
+      if (next) memcpy(next, *slots, *count * sizeof(*next));
+    } else {
+      next = realloc(*slots, next_cap * sizeof(*next));
+    }
+    if (!next) return false;
+    *slots = next;
+    *cap = next_cap;
+  }
+  (*slots)[(*count)++] = slot;
+  return true;
+}
+
+static bool own_key_is_array_index(const char *key, size_t key_len, unsigned long *out_idx) {
+  if (key_len == 0) return false;
+  if (key[0] < '0' || key[0] > '9') return false;
+  if (key_len > 1 && key[0] == '0') return false;
+  if (key_len == 1) {
+    if (out_idx) *out_idx = (unsigned long)(key[0] - '0');
+    return true;
+  }
+  if (key_len > 10) return false;
+
+  unsigned long parsed = (unsigned long)(key[0] - '0');
+  for (size_t i = 1; i < key_len; i++) {
+    if (key[i] < '0' || key[i] > '9') return false;
+    unsigned digit = (unsigned)(key[i] - '0');
+    if (parsed > ((unsigned long)UINT32_MAX - digit) / 10UL) return false;
+    parsed = parsed * 10UL + digit;
+  }
+  if (parsed >= (unsigned long)UINT32_MAX) return false;
+  if (out_idx) *out_idx = parsed;
+  return true;
+}
+
+static bool own_key_is_dense_shadow(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  ant_offset_t doff = get_dense_buf(obj);
+  if (!doff) return false;
+
+  unsigned long idx = 0;
+  if (!own_key_is_array_index(key, key_len, &idx)) return false;
+  if (idx >= (unsigned long)dense_iterable_length(js, obj)) return false;
+  return !is_empty_slot(dense_get(doff, (ant_offset_t)idx));
+}
+
+static bool own_key_is_enumerable(ant_t *js, ant_value_t obj, ant_object_t *ptr, uint32_t slot) {
+  if (!ptr || !ptr->shape) return false;
+  bool enumerable = (ant_shape_get_attrs(ptr->shape, slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, slot);
+  if (!prop) return false;
+
+  if (prop->type == ANT_SHAPE_KEY_SYMBOL) {
+    prop_meta_t meta;
+    if (lookup_symbol_prop_meta(obj, prop->key.sym_off, &meta)) enumerable = meta.enumerable;
+    return enumerable;
+  }
+
+  if (ptr->is_exotic) {
+    descriptor_entry_t *desc = lookup_descriptor(js_as_obj(obj), prop->key.interned, strlen(prop->key.interned));
+    if (desc) enumerable = desc->enumerable;
+  }
+  return enumerable;
+}
+
+ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbols, bool enumerable_only) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
+
+  ant_value_t arr = mkarr(js);
+  GC_ROOT_PIN(js, arr);
+  ant_offset_t out_idx = 0;
+
+  if (vtype(obj) == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
+    if (vtype(promoted) == T_FUNC) obj = promoted;
+  }
+  if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) goto done;
+
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || !ptr->shape) goto done;
+
+  if (ptr->is_exotic && ptr->exotic_keys && !include_symbols) {
+    ant_value_t keys = ptr->exotic_keys(js, obj);
+    GC_ROOT_RESTORE(js, root_mark);
+    return keys;
+  }
+
+  bool is_arr = (vtype(obj) == T_ARR);
+  uint32_t count = ant_shape_count(ptr->shape);
+
+  if (!is_arr) {
+    bool has_index_key = false;
+    for (uint32_t i = 0; i < count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+      if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+      if (i >= ptr->prop_count) continue;
+      if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
+
+      const char *key = prop->key.interned;
+      size_t key_len = strlen(key);
+      if (own_key_is_array_index(key, key_len, NULL)) {
+        has_index_key = true;
+        break;
+      }
+      arr_set(js, arr, out_idx++, js_mkstr(js, key, key_len));
+    }
+
+    if (!has_index_key) {
+      if (include_symbols) {
+        for (uint32_t i = 0; i < count; i++) {
+          const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+          if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
+          if (i >= ptr->prop_count) continue;
+          if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
+          arr_set(js, arr, out_idx++, mkval(T_SYMBOL, prop->key.sym_off));
+        }
+      }
+      goto done;
+    }
+
+    arr = mkarr(js);
+    GC_ROOT_PIN(js, arr);
+    out_idx = 0;
+  }
+
+  if (is_arr) {
+    ant_offset_t doff = get_dense_buf(obj);
+    ant_offset_t dense_len = doff ? dense_iterable_length(js, obj) : 0;
+    for (ant_offset_t i = 0; i < dense_len; i++) {
+      if (is_empty_slot(dense_get(doff, i))) continue;
+      char idxstr[16];
+      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
+      arr_set(js, arr, out_idx++, js_mkstr(js, idxstr, idxlen));
+    }
+  }
+
+  own_index_key_t stack_indices[32];
+  own_index_key_t *indices = stack_indices;
+  uint32_t index_count = 0;
+  uint32_t index_cap = (uint32_t)(sizeof(stack_indices) / sizeof(stack_indices[0]));
+  uint32_t stack_string_slots[64];
+  uint32_t *string_slots = stack_string_slots;
+  uint32_t string_count = 0;
+  uint32_t string_cap = (uint32_t)(sizeof(stack_string_slots) / sizeof(stack_string_slots[0]));
+  ant_offset_t dense_shadow_len = is_arr && get_dense_buf(obj) ? dense_iterable_length(js, obj) : 0;
+  ant_offset_t dense_shadow_buf = is_arr ? get_dense_buf(obj) : 0;
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    if (i >= ptr->prop_count) continue;
+    if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
+
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    unsigned long parsed = 0;
+    if (!own_key_is_array_index(key, key_len, &parsed)) {
+      if (!own_slot_list_push(&string_slots, &string_count, &string_cap, stack_string_slots, i)) {
+        if (indices != stack_indices) free(indices);
+        if (string_slots != stack_string_slots) free(string_slots);
+        arr = js_mkerr(js, "oom");
+        goto done;
+      }
+      continue;
+    }
+
+    if (
+      dense_shadow_buf &&
+      parsed < (unsigned long)dense_shadow_len &&
+      !is_empty_slot(dense_get(dense_shadow_buf, (ant_offset_t)parsed))
+    ) continue;
+
+    if (index_count == index_cap) {
+      uint32_t next_cap = index_cap * 2;
+      own_index_key_t *next = NULL;
+      if (indices == stack_indices) {
+        next = calloc(next_cap, sizeof(*next));
+        if (next) memcpy(next, indices, index_count * sizeof(*next));
+      } else {
+        next = realloc(indices, next_cap * sizeof(*next));
+      }
+      if (!next) {
+        if (indices != stack_indices) free(indices);
+        if (string_slots != stack_string_slots) free(string_slots);
+        arr = js_mkerr(js, "oom");
+        goto done;
+      }
+      indices = next;
+      index_cap = next_cap;
+    }
+
+    uint32_t pos = index_count++;
+    while (pos > 0 && indices[pos - 1].index > parsed) {
+      indices[pos] = indices[pos - 1];
+      pos--;
+    }
+    indices[pos] = (own_index_key_t){ .slot = i, .index = parsed };
+  }
+
+  for (uint32_t i = 0; i < index_count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, indices[i].slot);
+    if (!prop) continue;
+    const char *key = prop->key.interned;
+    arr_set(js, arr, out_idx++, js_mkstr(js, key, strlen(key)));
+  }
+
+  if (is_arr && !enumerable_only) {
+    arr_set(js, arr, out_idx++, js->length_str);
+  }
+
+  for (uint32_t i = 0; i < string_count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, string_slots[i]);
+    if (!prop) continue;
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    arr_set(js, arr, out_idx++, js_mkstr(js, key, key_len));
+  }
+
+  if (include_symbols) {
+    for (uint32_t i = 0; i < count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+      if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
+      if (i >= ptr->prop_count) continue;
+      if (enumerable_only && !own_key_is_enumerable(js, obj, ptr, i)) continue;
+      arr_set(js, arr, out_idx++, mkval(T_SYMBOL, prop->key.sym_off));
+    }
+  }
+
+  if (indices != stack_indices) free(indices);
+  if (string_slots != stack_string_slots) free(string_slots);
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
+  return arr;
+}
+
 // TODO: reduce nesting
 static ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
   GC_ROOT_SAVE(root_mark, js);
@@ -6656,7 +6903,7 @@ static ant_value_t builtin_object_keys(ant_t *js, ant_value_t *args, int nargs) 
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (is_proxy(obj)) return proxy_enum(js, obj, OBJ_ENUM_KEYS);
   
-  return object_enum(js, obj, OBJ_ENUM_KEYS);
+  return js_own_property_keys(js, obj, false, true);
 }
 
 static ant_value_t for_in_keys_add(ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t key) {
@@ -6685,6 +6932,38 @@ done:
   return js_mkundef();
 }
 
+static ant_value_t for_in_keys_add_cstr(
+  ant_t *js, ant_value_t out, ant_value_t seen, const char *key, size_t key_len, bool enumerable
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, out);
+  GC_ROOT_PIN(js, seen);
+
+  const char *interned = intern_string(key, key_len);
+  if (!interned) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "oom");
+  }
+
+  if (lkp_interned(js, seen, interned, key_len) != 0) goto done;
+
+  ant_value_t mark = mkprop_interned(js, seen, interned, js_true, 0);
+  if (is_err(mark)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return mark;
+  }
+
+  if (enumerable && vtype(out) == T_ARR) {
+    ant_value_t key_val = js_mkstr(js, key, key_len);
+    GC_ROOT_PIN(js, key_val);
+    js_arr_push(js, out, key_val);
+  }
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
+  return js_mkundef();
+}
+
 static ant_value_t for_in_keys_add_string_indices(ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t str) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, out);
@@ -6707,6 +6986,130 @@ static ant_value_t for_in_keys_add_string_indices(ant_t *js, ant_value_t out, an
   return js_mkundef();
 }
 
+static ant_value_t for_in_keys_collect_ordinary_own(
+  ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj, ant_object_t *ptr
+) {
+  bool is_arr = (vtype(obj) == T_ARR);
+  uint32_t count = ant_shape_count(ptr->shape);
+  ant_value_t r = js_mkundef();
+
+  if (!is_arr) {
+    bool has_index_key = false;
+    for (uint32_t i = 0; i < count; i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+      if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+      if (i >= ptr->prop_count) continue;
+      const char *key = prop->key.interned;
+      if (own_key_is_array_index(key, strlen(key), NULL)) {
+        has_index_key = true;
+        break;
+      }
+    }
+
+    if (!has_index_key) {
+      for (uint32_t i = 0; i < count; i++) {
+        const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+        if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+        if (i >= ptr->prop_count) continue;
+        const char *key = prop->key.interned;
+        bool enumerable = own_key_is_enumerable(js, obj, ptr, i);
+        r = for_in_keys_add_cstr(js, out, seen, key, strlen(key), enumerable);
+        if (is_err(r)) return r;
+      }
+      return js_mkundef();
+    }
+  }
+
+  if (is_arr) {
+    ant_offset_t doff = get_dense_buf(obj);
+    ant_offset_t dense_len = doff ? dense_iterable_length(js, obj) : 0;
+    for (ant_offset_t i = 0; i < dense_len; i++) {
+      if (is_empty_slot(dense_get(doff, i))) continue;
+      char idxstr[16];
+      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
+      r = for_in_keys_add_cstr(js, out, seen, idxstr, idxlen, true);
+      if (is_err(r)) return r;
+    }
+  }
+
+  own_index_key_t stack_indices[32];
+  own_index_key_t *indices = stack_indices;
+  uint32_t index_count = 0;
+  uint32_t index_cap = (uint32_t)(sizeof(stack_indices) / sizeof(stack_indices[0]));
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    if (i >= ptr->prop_count) continue;
+
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    if (is_arr && own_key_is_dense_shadow(js, obj, key, key_len)) continue;
+
+    unsigned long parsed = 0;
+    if (!own_key_is_array_index(key, key_len, &parsed)) continue;
+
+    if (index_count == index_cap) {
+      uint32_t next_cap = index_cap * 2;
+      own_index_key_t *next = NULL;
+      if (indices == stack_indices) {
+        next = calloc(next_cap, sizeof(*next));
+        if (next) memcpy(next, indices, index_count * sizeof(*next));
+      } else {
+        next = realloc(indices, next_cap * sizeof(*next));
+      }
+      if (!next) {
+        if (indices != stack_indices) free(indices);
+        return js_mkerr(js, "oom");
+      }
+      indices = next;
+      index_cap = next_cap;
+    }
+
+    uint32_t pos = index_count++;
+    while (pos > 0 && indices[pos - 1].index > parsed) {
+      indices[pos] = indices[pos - 1];
+      pos--;
+    }
+    indices[pos] = (own_index_key_t){ .slot = i, .index = parsed };
+  }
+
+  for (uint32_t i = 0; i < index_count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, indices[i].slot);
+    if (!prop) continue;
+    const char *key = prop->key.interned;
+    bool enumerable = own_key_is_enumerable(js, obj, ptr, indices[i].slot);
+    r = for_in_keys_add_cstr(js, out, seen, key, strlen(key), enumerable);
+    if (is_err(r)) {
+      if (indices != stack_indices) free(indices);
+      return r;
+    }
+  }
+
+  if (indices != stack_indices) free(indices);
+
+  if (is_arr) {
+    r = for_in_keys_add_cstr(js, out, seen, "length", 6, false);
+    if (is_err(r)) return r;
+  }
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    if (i >= ptr->prop_count) continue;
+
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    if (own_key_is_array_index(key, key_len, NULL)) continue;
+
+    bool enumerable = own_key_is_enumerable(js, obj, ptr, i);
+    r = for_in_keys_add_cstr(js, out, seen, key, key_len, enumerable);
+    if (is_err(r)) return r;
+  }
+
+  return js_mkundef();
+}
+
 static inline ant_value_t for_in_keys_collect_chain(
   ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t obj
 ) {
@@ -6718,9 +7121,7 @@ static inline ant_value_t for_in_keys_collect_chain(
     ant_value_t as_cur = (vtype(cur) == T_FUNC) ? js_func_obj(cur) : cur;
     ant_object_t *cur_ptr = js_obj_ptr(as_cur);
     ant_value_t key, r, proto;
-    ant_offset_t doff, dense_len, klen;
-    bool is_arr;
-
+    
     if (!cur_ptr) goto next_proto;
     if (!cur_ptr->is_exotic || !cur_ptr->exotic_keys) goto shape_props;
 
@@ -6738,58 +7139,19 @@ static inline ant_value_t for_in_keys_collect_chain(
     }
     goto next_proto;
 
-shape_props:
+  shape_props:
     if (!cur_ptr->shape) goto next_proto;
-    is_arr = (vtype(as_cur) == T_ARR);
-    if (!is_arr) goto shape_iter;
+    r = for_in_keys_collect_ordinary_own(js, out, seen, as_cur, cur_ptr);
+    if (is_err(r)) goto err;
+    goto next_proto;
 
-    doff = get_dense_buf(as_cur);
-    dense_len = doff ? dense_iterable_length(js, as_cur) : 0;
-    for (ant_offset_t i = 0; i < dense_len; i++) {
-      if (is_empty_slot(dense_get(doff, i))) continue;
-      char idxstr[16];
-      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-      key = js_mkstr(js, idxstr, idxlen);
-      GC_ROOT_PIN(js, key);
-      r = for_in_keys_add(js, out, seen, key);
-      if (is_err(r)) goto err;
-    }
-
-shape_iter:
-    for (uint32_t i = 0; i < ant_shape_count(cur_ptr->shape); i++) {
-      const ant_shape_prop_t *prop = ant_shape_prop_at(cur_ptr->shape, i);
-      if (!prop || prop->type == ANT_SHAPE_KEY_SYMBOL) continue;
-      if (i >= cur_ptr->prop_count) continue;
-
-      const char *kstr = prop->key.interned;
-      klen = (ant_offset_t)strlen(kstr);
-      if (is_arr && is_array_index(kstr, klen)) {
-      doff = get_dense_buf(as_cur);
-      if (doff) {
-        unsigned long pidx = 0;
-        for (ant_offset_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (kstr[ci] - '0');
-        if (pidx < (unsigned long)dense_iterable_length(js, as_cur)) continue;
-      }}
-
-      bool enumerable = (ant_shape_get_attrs(cur_ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
-      if (cur_ptr->is_exotic) {
-        descriptor_entry_t *desc = lookup_descriptor(js_as_obj(as_cur), kstr, (size_t)klen);
-        if (desc) enumerable = desc->enumerable;
-      }
-
-      key = js_mkstr(js, kstr, (size_t)klen);
-      GC_ROOT_PIN(js, key);
-      r = for_in_keys_add(js, enumerable ? out : js_mkundef(), seen, key);
-      if (is_err(r)) goto err;
-    }
-
-next_proto:
+  next_proto:
     GC_ROOT_RESTORE(js, iter_mark);
     proto = js_get_proto(js, cur);
     if (!is_object_type(proto)) break;
     cur = proto;
     continue;
-err:
+  err:
     GC_ROOT_RESTORE(js, iter_mark);
     return r;
   }
@@ -7694,6 +8056,154 @@ bool js_is_own_enumerable_prop(
   return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
 }
 
+static ant_value_t object_assign_copy_slot(
+  ant_t *js, ant_value_t target, ant_object_t *source_ptr, uint32_t slot
+) {
+  const ant_shape_prop_t *prop = ant_shape_prop_at(source_ptr->shape, slot);
+  if (!prop) return js_mkundef();
+  if ((ant_shape_get_attrs(source_ptr->shape, slot) & ANT_PROP_ATTR_ENUMERABLE) == 0)
+    return js_mkundef();
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, target);
+  ant_value_t val = ant_object_prop_get_unchecked(source_ptr, slot);
+  GC_ROOT_PIN(js, val);
+  ant_value_t prop_key = js_mkundef();
+
+  if (prop->type == ANT_SHAPE_KEY_SYMBOL) {
+    prop_key = mkval(T_SYMBOL, prop->key.sym_off);
+  } else {
+    const char *key = prop->key.interned;
+    size_t key_len = strlen(key);
+    ant_value_t setter = js_mkundef();
+    bool has_setter = false;
+    uintptr_t existing = lkp_with_setter(js, target, key, key_len, &setter, &has_setter);
+    ant_object_t *target_ptr = js_obj_ptr(js_as_obj(target));
+    if (
+      existing == 0 && !has_setter && target_ptr &&
+      target_ptr->extensible && !target_ptr->frozen && !target_ptr->sealed && !target_ptr->is_exotic
+    ) {
+      const char *interned = intern_string(key, key_len);
+      ant_value_t result = interned
+        ? mkprop_interned_exact(js, target, interned, val, 0)
+        : js_mkerr(js, "oom");
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    prop_key = js_mkstr(js, key, key_len);
+  }
+  GC_ROOT_PIN(js, prop_key);
+
+  ant_value_t result = js_setprop(js, target, prop_key, val);
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
+static ant_value_t object_assign_fast_ordinary_source(
+  ant_t *js, ant_value_t target, ant_value_t source, bool *handled
+) {
+  *handled = false;
+  if (vtype(source) != T_OBJ) return js_mkundef();
+
+  ant_value_t source_obj = js_as_obj(source);
+  ant_object_t *source_ptr = js_obj_ptr(source_obj);
+  if (!source_ptr || !source_ptr->shape) {
+    *handled = true;
+    return js_mkundef();
+  }
+  if (source_ptr->is_exotic) return js_mkundef();
+
+  uint32_t count = ant_shape_count(source_ptr->shape);
+  own_index_key_t stack_indices[32];
+  own_index_key_t *indices = stack_indices;
+  uint32_t index_count = 0;
+  uint32_t index_cap = (uint32_t)(sizeof(stack_indices) / sizeof(stack_indices[0]));
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(source_ptr->shape, i);
+    if (!prop) continue;
+    if (i >= source_ptr->prop_count) continue;
+    if (prop->has_getter || prop->has_setter) {
+      if (indices != stack_indices) free(indices);
+      return js_mkundef();
+    }
+    if (prop->type == ANT_SHAPE_KEY_STRING) {
+      unsigned long parsed = 0;
+      const char *key = prop->key.interned;
+      if (!own_key_is_array_index(key, strlen(key), &parsed)) continue;
+
+      if (index_count == index_cap) {
+        uint32_t next_cap = index_cap * 2;
+        own_index_key_t *next = NULL;
+        if (indices == stack_indices) {
+          next = calloc(next_cap, sizeof(*next));
+          if (next) memcpy(next, indices, index_count * sizeof(*next));
+        } else {
+          next = realloc(indices, next_cap * sizeof(*next));
+        }
+        if (!next) {
+          if (indices != stack_indices) free(indices);
+          *handled = true;
+          return js_mkerr(js, "oom");
+        }
+        indices = next;
+        index_cap = next_cap;
+      }
+
+      uint32_t pos = index_count++;
+      while (pos > 0 && indices[pos - 1].index > parsed) {
+        indices[pos] = indices[pos - 1];
+        pos--;
+      }
+      indices[pos] = (own_index_key_t){ .slot = i, .index = parsed };
+    }
+  }
+
+  *handled = true;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, source_obj);
+
+  if (index_count > 0) for (uint32_t i = 0; i < index_count; i++) {
+    ant_value_t result = object_assign_copy_slot(js, target, source_ptr, indices[i].slot);
+    if (is_err(result)) {
+      if (indices != stack_indices) free(indices);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+  }
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(source_ptr->shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING) continue;
+    if (i >= source_ptr->prop_count) continue;
+    const char *key = prop->key.interned;
+    if (own_key_is_array_index(key, strlen(key), NULL)) continue;
+    ant_value_t result = object_assign_copy_slot(js, target, source_ptr, i);
+    if (is_err(result)) {
+      if (indices != stack_indices) free(indices);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+  }
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(source_ptr->shape, i);
+    if (!prop || prop->type != ANT_SHAPE_KEY_SYMBOL) continue;
+    if (i >= source_ptr->prop_count) continue;
+    ant_value_t result = object_assign_copy_slot(js, target, source_ptr, i);
+    if (is_err(result)) {
+      if (indices != stack_indices) free(indices);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+  }
+
+  if (indices != stack_indices) free(indices);
+  GC_ROOT_RESTORE(js, root_mark);
+  return js_mkundef();
+}
+
 static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.assign requires at least 1 argument");
   
@@ -7716,20 +8226,57 @@ static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs
     
     if (st == T_NULL || st == T_UNDEF) continue;
     if (st != T_OBJ && st != T_ARR && st != T_FUNC) continue;
+
+    bool fast_handled = false;
+    ant_value_t fast_result = object_assign_fast_ordinary_source(js, as_obj, source, &fast_handled);
+    if (is_err(fast_result)) return fast_result;
+    if (fast_handled) continue;
     
-    ant_iter_t iter = js_prop_iter_begin(js, source);
-    ant_object_t *source_ptr = js_obj_ptr(js_as_obj(source));
-    
-    ant_iter_key_t key = {0};
-    ant_value_t val = js_mkundef();
-    
-    while (js_prop_iter_next_key(&iter, &key, &val)) {
-      if (!js_is_own_enumerable_prop(js, source, source_ptr, &key)) continue;
-      ant_value_t prop_key = key.is_symbol ? mkval(T_SYMBOL, key.sym_off) : js_mkstr(js, key.str, key.key_len);
-      js_setprop(js, as_obj, prop_key, val);
+    GC_ROOT_SAVE(source_mark, js);
+    GC_ROOT_PIN(js, target);
+    GC_ROOT_PIN(js, as_obj);
+    GC_ROOT_PIN(js, source);
+
+    ant_value_t keys = js_own_property_keys(js, source, true, true);
+    GC_ROOT_PIN(js, keys);
+    if (is_err(keys)) {
+      GC_ROOT_RESTORE(js, source_mark);
+      return keys;
     }
-    
-    js_prop_iter_end(&iter);
+
+    ant_offset_t key_count = js_arr_len(js, keys);
+    for (ant_offset_t k = 0; k < key_count; k++) {
+      GC_ROOT_SAVE(key_mark, js);
+      ant_value_t prop_key = js_arr_get(js, keys, k);
+      GC_ROOT_PIN(js, prop_key);
+
+      ant_value_t val = js_mkundef();
+      if (vtype(prop_key) == T_SYMBOL) {
+        val = js_get_sym(js, source, prop_key);
+      } else {
+        ant_offset_t key_len = 0;
+        ant_offset_t key_off = vstr(js, prop_key, &key_len);
+        const char *key_str = (const char *)(uintptr_t)key_off;
+        unsigned long idx = 0;
+        if (
+          array_obj_ptr(source) &&
+          own_key_is_array_index(key_str, (size_t)key_len, &idx) &&
+          idx < (unsigned long)get_array_length(js, source) &&
+          arr_has(js, source, (ant_offset_t)idx)
+        ) {
+          val = arr_get(js, source, (ant_offset_t)idx);
+        } else {
+          ant_offset_t prop_off = lkp(js, source, key_str, (size_t)key_len);
+          val = prop_off ? propref_load(js, prop_off) : js_mkundef();
+        }
+      }
+      GC_ROOT_PIN(js, val);
+
+      js_setprop(js, as_obj, prop_key, val);
+      GC_ROOT_RESTORE(js, key_mark);
+    }
+
+    GC_ROOT_RESTORE(js, source_mark);
   }
   
   return target;
@@ -8103,6 +8650,7 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_t *js, ant_value_t *ar
   
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || !ptr->shape) return mkarr(js);
+  if (vtype(obj) != T_ARR) return js_own_property_keys(js, obj, false, false);
   bool is_arr_obj = (vtype(obj) == T_ARR);
   
   ant_value_t arr = mkarr(js);

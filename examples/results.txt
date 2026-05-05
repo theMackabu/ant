@@ -1030,12 +1030,12 @@ compat-table/es6/misc.identifier-syntax.no-escaped-reserved.js: OK
 compat-table/es6/misc.identifier-syntax.var-1.js: OK
 compat-table/es6/misc.identifier-syntax.var-2.js: OK
 compat-table/es6/misc.property-order.JSON.parse.js: OK
-compat-table/es6/misc.property-order.JSON.stringify.js: failed
-compat-table/es6/misc.property-order.Object.assign.js: failed
-compat-table/es6/misc.property-order.Object.getOwnPropertyNames.js: failed
+compat-table/es6/misc.property-order.JSON.stringify.js: OK
+compat-table/es6/misc.property-order.Object.assign.js: OK
+compat-table/es6/misc.property-order.Object.getOwnPropertyNames.js: OK
 compat-table/es6/misc.property-order.Object.keys.js: OK
-compat-table/es6/misc.property-order.Reflect.ownKeys.string.js: failed
-compat-table/es6/misc.property-order.Reflect.ownKeys.symbol.js: failed
+compat-table/es6/misc.property-order.Reflect.ownKeys.string.js: OK
+compat-table/es6/misc.property-order.Reflect.ownKeys.symbol.js: OK
 compat-table/es6/misc.prototypes-not-instances.js: OK
 compat-table/es6/new-target.assignment-error.js: OK
 compat-table/es6/new-target.constructor.js: OK

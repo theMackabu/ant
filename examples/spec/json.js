@@ -50,6 +50,26 @@ test('stringify bool true', withTypes.includes('true'), true);
 test('stringify bool false', withTypes.includes('false'), true);
 test('stringify null', withTypes.includes('null'), true);
 
+const ordered = {
+  2: true,
+  0: true,
+  1: true,
+  ' ': true,
+  9: true,
+  D: true,
+  B: true,
+  '-1': true
+};
+ordered.A = true;
+ordered[3] = true;
+'EFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(key => ordered[key] = true);
+Object.defineProperty(ordered, 'C', { value: true, enumerable: true });
+Object.defineProperty(ordered, '4', { value: true, enumerable: true });
+delete ordered[2];
+ordered[2] = true;
+test('stringify object property order', JSON.stringify(ordered),
+     '{"0":true,"1":true,"2":true,"3":true,"4":true,"9":true," ":true,"D":true,"B":true,"-1":true,"A":true,"E":true,"F":true,"G":true,"H":true,"I":true,"J":true,"K":true,"L":true,"M":true,"N":true,"O":true,"P":true,"Q":true,"R":true,"S":true,"T":true,"U":true,"V":true,"W":true,"X":true,"Y":true,"Z":true,"C":true}');
+
 let original = '{"count":5}';
 let parsed = JSON.parse(original);
 parsed.count = 10;
