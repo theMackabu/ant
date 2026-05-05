@@ -10264,17 +10264,29 @@ static ant_value_t builtin_array_reduce(ant_t *js, ant_value_t *args, int nargs)
   return accumulator;
 }
 
-static inline void flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, ant_offset_t *result_idx, int depth) {
+static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, ant_offset_t *result_idx, int depth) {
   ant_offset_t len = proxy_aware_length(js, arr);
-  if (len == 0) return;
+  if (len == 0) return js_mkundef();
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!arr_has(js, arr, i)) continue;
-    ant_value_t val = arr_get(js, arr, i);
-    
-    if (depth > 0 && vtype(val) == T_ARR) flat_helper(js, val, result, result_idx, depth - 1);
+    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t val = array_method_get_index(js, arr, i);
+    if (is_err(val)) return val;
+
+    bool val_is_array = false;
+    if (depth > 0) {
+      ant_value_t is_array_res = js_is_array_value_checked(js, val, &val_is_array);
+      if (is_err(is_array_res)) return is_array_res;
+    }
+
+    if (val_is_array) {
+      ant_value_t flat_res = flat_helper(js, val, result, result_idx, depth - 1);
+      if (is_err(flat_res)) return flat_res;
+    }
     else { arr_set(js, result, *result_idx, val); (*result_idx)++; }
   }
+
+  return js_mkundef();
 }
 
 static ant_value_t builtin_array_flat(ant_t *js, ant_value_t *args, int nargs) {
@@ -10293,7 +10305,8 @@ static ant_value_t builtin_array_flat(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(result)) return result;
   ant_offset_t result_idx = 0;
   
-  flat_helper(js, arr, result, &result_idx, depth);
+  ant_value_t flat_res = flat_helper(js, arr, result, &result_idx, depth);
+  if (is_err(flat_res)) return flat_res;
   return result;
 }
 
@@ -10485,11 +10498,20 @@ static ant_value_t builtin_array_flatMap(ant_t *js, ant_value_t *args, int nargs
   ant_offset_t result_idx = 0;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t elem = arr_get(js, arr, i);
+    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t elem = array_method_get_index(js, arr, i);
+    if (is_err(elem)) return elem;
     ant_value_t call_args[3] = { elem, tov((double)i), arr };
     ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(mapped)) return mapped;
-    if (vtype(mapped) == T_ARR) flat_helper(js, mapped, result, &result_idx, 0);
+    bool mapped_is_array = false;
+    ant_value_t is_array_res = js_is_array_value_checked(js, mapped, &mapped_is_array);
+    if (is_err(is_array_res)) return is_array_res;
+
+    if (mapped_is_array) {
+      ant_value_t flat_res = flat_helper(js, mapped, result, &result_idx, 0);
+      if (is_err(flat_res)) return flat_res;
+    }
     else arr_set(js, result, result_idx++, mapped);
   }
   
@@ -11371,9 +11393,10 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
   (void) args;
   (void) nargs;
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != T_ARR) return js_mkerr(js, "toLocaleString called on non-array");
+  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
+    return js_mkerr(js, "toLocaleString called on non-array");
   
-  ant_offset_t len = get_array_length(js, arr);
+  ant_offset_t len = proxy_aware_length(js, arr);
   if (len == 0) return js_mkstr(js, "", 0);
   
   char *result = NULL;
@@ -11394,8 +11417,9 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
       result[result_len++] = ',';
     }
     
-    if (!arr_has(js, arr, i)) continue;
-    ant_value_t elem = arr_get(js, arr, i);
+    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t elem = array_method_get_index(js, arr, i);
+    if (is_err(elem)) { free(result); return elem; }
     if (vtype(elem) == T_NULL || vtype(elem) == T_UNDEF) continue;
     
     char buf[64];
@@ -11420,7 +11444,10 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
 
 static ant_value_t builtin_Array_isArray(ant_params_t) {
   if (nargs == 0) return mkval(T_BOOL, 0);
-  return mkval(T_BOOL, is_array_value(args[0]) ? 1 : 0);
+  bool result = false;
+  ant_value_t is_array_res = js_is_array_value_checked(js, args[0], &result);
+  if (is_err(is_array_res)) return is_array_res;
+  return mkval(T_BOOL, result ? 1 : 0);
 }
 
 static ant_value_t builtin_Array_isTemplateObject(ant_params_t) {
@@ -14650,7 +14677,7 @@ static ant_value_t handle_proxy_instanceof(ant_t *js, ant_value_t l, ant_value_t
   return mkval(T_BOOL, proto_chain_contains_cycle_safe(js, current, proto_val) ? 1 : 0);
 }
 
-static ant_value_t handle_cfunc_instanceof(ant_value_t l, ant_value_t r, uint8_t ltype) {
+static ant_value_t handle_cfunc_instanceof(ant_t *js, ant_value_t l, ant_value_t r, uint8_t ltype) {
   ant_value_t (*fn)(ant_t *, ant_value_t *, int) = js_as_cfunc(r);
   
   if (fn == builtin_Object) return mkval(T_BOOL, ltype == T_OBJ ? 1 : 0);
@@ -14658,7 +14685,12 @@ static ant_value_t handle_cfunc_instanceof(ant_value_t l, ant_value_t r, uint8_t
   if (fn == builtin_String) return mkval(T_BOOL, ltype == T_STR ? 1 : 0);
   if (fn == builtin_Number) return mkval(T_BOOL, ltype == T_NUM ? 1 : 0);
   if (fn == builtin_Boolean) return mkval(T_BOOL, ltype == T_BOOL ? 1 : 0);
-  if (fn == builtin_Array) return mkval(T_BOOL, ltype == T_ARR ? 1 : 0);
+  if (fn == builtin_Array) {
+    bool result = false;
+    ant_value_t is_array_res = js_is_array_value_checked(js, l, &result);
+    if (is_err(is_array_res)) return is_array_res;
+    return mkval(T_BOOL, result ? 1 : 0);
+  }
   if (fn == builtin_Promise) return mkval(T_BOOL, ltype == T_PROMISE ? 1 : 0);
   
   return mkval(T_BOOL, 0);
@@ -14692,7 +14724,8 @@ static bool proto_chain_contains_cycle_safe(ant_t *js, ant_value_t start, ant_va
 }
 
 static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto) {
-  ant_value_t current = get_proto(js, l);
+  ant_value_t current = is_proxy(l) ? proxy_get_prototype_of(js, l) : get_proto(js, l);
+  if (is_err(current)) return current;
   return mkval(T_BOOL, proto_chain_contains_cycle_safe(js, current, ctor_proto) ? 1 : 0);
 }
 
@@ -14715,7 +14748,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   }
   
   if (rtype == T_CFUNC) {
-    return handle_cfunc_instanceof(l, r, ltype);
+    return handle_cfunc_instanceof(js, l, r, ltype);
   }
 
   ant_value_t func_obj = js_func_obj(r);
@@ -15192,6 +15225,17 @@ bool is_array_value(ant_value_t value) {
     value = data->target;
   }
   return vtype(value) == T_ARR;
+}
+
+ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out) {
+  while (is_proxy(value)) {
+    ant_proxy_state_t *data = get_proxy_data(value);
+    if (!data || data->revoked)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform IsArray on a revoked proxy");
+    value = data->target;
+  }
+  *out = vtype(value) == T_ARR;
+  return js_mkundef();
 }
 
 bool js_is_constructor(ant_value_t value) {
