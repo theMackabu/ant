@@ -236,7 +236,67 @@ static inline bool sv_with_binding_is_unscopable(
 ) {
   *abrupt = false;
 
-  ant_value_t unscopables = js_get_sym(js, with_obj, get_unscopables_sym());
+  ant_value_t unscopables_sym = get_unscopables_sym();
+  if (vtype(unscopables_sym) != T_SYMBOL) return false;
+
+  bool is_proxy_obj = is_proxy(js_as_obj(with_obj));
+  ant_value_t unscopables = js_mkundef();
+
+  if (!is_proxy_obj) {
+    ant_offset_t sym_off = (ant_offset_t)vdata(unscopables_sym);
+    ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
+    ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
+    ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
+
+    static ant_object_t *cached_no_base = NULL;
+    static void *cached_no_base_shape = NULL;
+    static ant_value_t cached_no_proto = 0;
+    static void *cached_no_proto_shape = NULL;
+
+    if (
+      base_ptr == cached_no_base &&
+      (void *)(base_ptr ? base_ptr->shape : NULL) == cached_no_base_shape &&
+      base_proto == cached_no_proto &&
+      (void *)(proto_ptr ? proto_ptr->shape : NULL) == cached_no_proto_shape
+    ) return false;
+
+    ant_offset_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
+    bool has_unscopables = unscopables_off != 0;
+    bool saw_exotic = base_ptr && base_ptr->is_exotic;
+
+    if (!has_unscopables) {
+      ant_value_t cur = with_obj;
+      while (is_object_type(cur)) {
+        ant_value_t cur_obj = js_as_obj(cur);
+        ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
+        if (cur_ptr && cur_ptr->is_exotic) saw_exotic = true;
+        prop_meta_t meta;
+        if (cur_ptr && cur_ptr->is_exotic && lookup_symbol_prop_meta(cur_obj, sym_off, &meta)) {
+          has_unscopables = true;
+          break;
+        }
+
+        ant_value_t proto = js_get_proto(js, cur_obj);
+        if (!is_object_type(proto)) break;
+        cur = proto;
+      }
+    }
+
+    if (!has_unscopables) {
+      ant_value_t proto_proto = (proto_ptr && is_object_type(proto_ptr->proto)) ? proto_ptr->proto : js_mknull();
+      if (!saw_exotic && !is_object_type(proto_proto)) {
+        cached_no_base = base_ptr;
+        cached_no_base_shape = (void *)(base_ptr ? base_ptr->shape : NULL);
+        cached_no_proto = base_proto;
+        cached_no_proto_shape = (void *)(proto_ptr ? proto_ptr->shape : NULL);
+      }
+      return false;
+    }
+    if (unscopables_off != 0) unscopables = js_propref_load(js, unscopables_off);
+  }
+
+  if (is_proxy_obj || vtype(unscopables) == T_UNDEF)
+    unscopables = js_get_sym(js, with_obj, unscopables_sym);
   if (is_err(unscopables)) {
     *out = unscopables;
     *abrupt = true;
@@ -245,7 +305,33 @@ static inline bool sv_with_binding_is_unscopable(
 
   if (!is_object_type(unscopables)) return false;
 
-  ant_value_t blocked = js_getprop_fallback(js, unscopables, a->str);
+  ant_value_t blocked = js_mkundef();
+  bool got_blocked_fast = false;
+
+  if (!is_proxy(js_as_obj(unscopables))) {
+    ant_value_t cur = unscopables;
+    while (is_object_type(cur)) {
+      ant_value_t cur_obj = js_as_obj(cur);
+      prop_meta_t meta;
+      if (lookup_string_prop_meta(js, cur_obj, a->str, a->len, &meta)) {
+        if (meta.has_getter || meta.has_setter) break;
+        ant_offset_t off = lkp(js, cur_obj, a->str, a->len);
+        blocked = off != 0 ? js_propref_load(js, off) : js_mkundef();
+        got_blocked_fast = true;
+        break;
+      }
+
+      ant_value_t proto = js_get_proto(js, cur_obj);
+      if (!is_object_type(proto)) {
+        got_blocked_fast = true;
+        break;
+      }
+      cur = proto;
+    }
+  }
+
+  if (!got_blocked_fast)
+    blocked = js_getprop_fallback(js, unscopables, a->str);
   if (is_err(blocked)) {
     *out = blocked;
     *abrupt = true;
