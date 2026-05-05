@@ -475,6 +475,7 @@ ant_value_t js_maybe_set_function_name_from_key(
 );
 
 bool is_proxy(ant_value_t obj);
+bool is_array_value(ant_value_t value);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 

@@ -2337,7 +2337,8 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
           emit_op(c, OP_SPECIAL_OBJ);
           emit(c, 0);
         }
-      } else emit_atom_op(c, OP_GET_GLOBAL_UNDEF, arg->str, arg->len);
+      } else if (c->with_depth > 0) emit_with_get(c, arg->str, arg->len, WITH_FB_GLOBAL_UNDEF, 0);
+      else emit_atom_op(c, OP_GET_GLOBAL_UNDEF, arg->str, arg->len);
     }
   } else compile_expr(c, arg);
   emit_op(c, OP_TYPEOF);

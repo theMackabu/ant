@@ -1,12 +1,14 @@
 #ifndef SV_COERCION_H
 #define SV_COERCION_H
 
-#include "silver/engine.h"
-#include "esm/loader.h"
 #include <string.h>
 
 #include "globals.h"
 #include "property.h"
+
+#include "esm/loader.h"
+#include "silver/engine.h"
+#include "modules/symbol.h"
 
 static inline ant_value_t sv_module_export_cstr(
   ant_t *js,
@@ -200,10 +202,11 @@ static inline void sv_op_exit_with(sv_vm_t *vm, sv_frame_t *frame) {
 }
 
 enum { 
-  WITH_FB_GLOBAL = 0,
-  WITH_FB_LOCAL  = 1,
-  WITH_FB_ARG    = 2,
-  WITH_FB_UPVAL  = 3 
+  WITH_FB_GLOBAL       = 0,
+  WITH_FB_LOCAL        = 1,
+  WITH_FB_ARG          = 2,
+  WITH_FB_UPVAL        = 3,
+  WITH_FB_GLOBAL_UNDEF = 4
 };
 
 static inline ant_value_t sv_with_fallback_get(
@@ -219,8 +222,38 @@ switch (kind) {
     sv_upvalue_t *uv = frame->upvalues[idx];
     return uv ? *uv->location : js_mkundef();
   }
+  case WITH_FB_GLOBAL_UNDEF:
+    return js_mkundef();
   default: return sv_global_get(js, NULL, 0);
 }}
+
+static inline bool sv_with_binding_is_unscopable(
+  ant_t *js,
+  ant_value_t with_obj,
+  const sv_atom_t *a,
+  ant_value_t *out,
+  bool *abrupt
+) {
+  *abrupt = false;
+
+  ant_value_t unscopables = js_get_sym(js, with_obj, get_unscopables_sym());
+  if (is_err(unscopables)) {
+    *out = unscopables;
+    *abrupt = true;
+    return false;
+  }
+
+  if (!is_object_type(unscopables)) return false;
+
+  ant_value_t blocked = js_getprop_fallback(js, unscopables, a->str);
+  if (is_err(blocked)) {
+    *out = blocked;
+    *abrupt = true;
+    return false;
+  }
+
+  return js_truthy(js, blocked);
+}
 
 static inline void sv_with_fallback_put(
   sv_vm_t *vm, ant_t *js,
@@ -254,13 +287,29 @@ static inline bool sv_try_get_with_bound_value(
   ant_object_t *ptr = is_object_type(with_obj) ? js_obj_ptr(js_as_obj(with_obj)) : NULL;
   const char *interned = intern_string(a->str, a->len);
 
+  if (ptr && is_proxy(js_as_obj(with_obj))) {
+    bool abrupt = false;
+    if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
+    if (abrupt) return true;
+    *out = js_getprop_fallback(js, with_obj, a->str);
+    return true;
+  }
+
   if (ptr && interned) {
     bool should_fallback = false;
-    if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) return true;
+    if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) {
+      bool abrupt = false;
+      if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
+      if (abrupt) return true;
+      return true;
+    }
     if (!should_fallback) return false;
   }
 
   if (lkp(js, with_obj, a->str, a->len) == 0) return false;
+  bool abrupt = false;
+  if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
+  if (abrupt) return true;
   *out = sv_getprop_fallback_len(js, with_obj, a->str, (ant_offset_t)a->len);
   
   return true;
@@ -284,9 +333,9 @@ static inline ant_value_t sv_op_with_get_var(
     return js_mkundef();
   }}
 
-  if (fb_kind == WITH_FB_GLOBAL) {
+  if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
     ant_value_t val = sv_global_get(js, a->str, a->len);
-    if (is_undefined(val))
+    if (is_undefined(val) && fb_kind == WITH_FB_GLOBAL)
       return js_mkerr_typed(
         js, JS_ERR_REFERENCE, "'%.*s' is not defined",
         (int)a->len, a->str);

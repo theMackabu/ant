@@ -219,10 +219,6 @@ static inline int key_matches(const char *a, size_t a_len, const char *b, size_t
   return a_len == b_len && memcmp(a, b, a_len) == 0;
 }
 
-static inline bool json_is_array(ant_value_t value) {
-  return vtype(value) == T_ARR;
-}
-
 static inline ant_value_t json_snapshot_keys(ant_t *js, ant_value_t value) {
   if (!is_special_object(value)) return js_mkarr(js);
   return js_for_in_keys(js, value);
@@ -443,7 +439,7 @@ static yyjson_mut_val *ant_value_to_yyjson_impl(ant_t *js, yyjson_mut_doc *doc, 
   if (json_cycle_check(ctx, val)) return NULL;
   json_cycle_push(ctx, val);
 
-  result = json_is_array(val)
+  result = is_array_value(val)
     ? json_array_to_yyjson(js, doc, val, ctx)
     : json_object_to_yyjson(js, doc, val, ctx);
 
@@ -542,7 +538,7 @@ static ant_value_t apply_reviver(
 ) {
   ant_value_t val = js_get(js, holder, key);
   
-  if (json_is_array(val)) apply_reviver_to_array(js, val, reviver, roots);
+  if (is_array_value(val)) apply_reviver_to_array(js, val, reviver, roots);
   else if (vtype(val) == T_OBJ) apply_reviver_to_object(js, val, reviver, roots);
 
   return apply_reviver_call(js, holder, key, reviver, roots);
