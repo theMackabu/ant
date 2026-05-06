@@ -48,13 +48,10 @@ curl -fsSL https://ant.themackabu.com/install | bash
 
 Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
 
-| Suite            | Pass rate | Notes                                      |
-| ---------------- | --------- | ------------------------------------------ |
-| js-zoo (ES1–ES5) | ~100%     |                                            |
-| js-zoo (ES6)     | ~82%      |                                            |
-| js-zoo (ES2016+) | ~86%      |                                            |
-| js-zoo (overall) | **88%**   | 1211/1368 passing                          |
-| test262          | ~50%      | Improving, focus is on real-world coverage |
+| Suite        | Pass rate | Notes                                      |
+| ------------ | --------- | ------------------------------------------ |
+| compat-table | **100%**  | 1511/1511 (ES1–ES5, ES6, ES2016+, ESNext)  |
+| test262      | ~64%      | Improving; focus is on real-world coverage |
 
 ## Benchmarks
 
