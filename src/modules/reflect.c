@@ -177,7 +177,7 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
   );
 
   ant_value_t result;
-  if (vtype(args_arr) == T_ARR || vtype(args_arr) == T_OBJ) {
+  if (is_object_type(args_arr)) {
     ant_value_t *call_args = NULL;
     int arg_count = 0;
     ant_value_t extracted = extract_array_args(js, args_arr, &call_args, &arg_count);
