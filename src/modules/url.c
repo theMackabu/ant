@@ -1348,6 +1348,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
   bool init_is_array = false;
   ant_value_t is_array_res = js_is_array_value_checked(js, init, &init_is_array);
   if (is_err(is_array_res)) return is_array_res;
+  if (js->thrown_exists) return mkval(T_ERR, 0);
 
   if (init_is_array) {
     ant_offset_t len = js_arr_len(js, init);
@@ -1356,6 +1357,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
       bool pair_is_array = false;
       is_array_res = js_is_array_value_checked(js, pair, &pair_is_array);
       if (is_err(is_array_res)) return is_array_res;
+      if (js->thrown_exists) return mkval(T_ERR, 0);
       if (!pair_is_array)
         return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'URLSearchParams': Each element must be an array.");

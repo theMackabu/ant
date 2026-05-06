@@ -2325,8 +2325,12 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
     } else {
       int upval = resolve_upvalue(c, arg->str, arg->len);
       if (upval != -1) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)upval);
+        if (c->with_depth > 0) {
+          emit_with_get(c, arg->str, arg->len, WITH_FB_UPVAL, (uint16_t)upval);
+        } else {
+          emit_op(c, OP_GET_UPVAL);
+          emit_u16(c, (uint16_t)upval);
+        }
       } else if (
           has_implicit_arguments_obj(c) &&
           is_ident_str(arg->str, arg->len, "arguments", 9)

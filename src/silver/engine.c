@@ -1878,8 +1878,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_EXIT_WITH:    { sv_op_exit_with(vm, frame);                 NEXT(1); }
 
   L_WITH_GET_VAR:  { VM_CHECK(sv_op_with_get_var(vm, js, frame, func, ip));  NEXT(8); }
-  L_WITH_PUT_VAR:  { sv_op_with_put_var(vm, js, frame, func, ip);            NEXT(8); }
-  L_WITH_DEL_VAR:  { sv_op_with_del_var(vm, js, frame, func, ip);            NEXT(5); }
+  L_WITH_PUT_VAR:  { VM_CHECK(sv_op_with_put_var(vm, js, frame, func, ip));  NEXT(8); }
+  L_WITH_DEL_VAR:  { VM_CHECK(sv_op_with_del_var(vm, js, frame, func, ip));  NEXT(5); }
 
   L_SPECIAL_OBJ:  { sv_op_special_obj(vm, js, frame, ip);                       NEXT(2); }
   L_EMPTY:        { vm->stack[vm->sp++] = T_EMPTY;                              NEXT(1); }

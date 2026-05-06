@@ -192,7 +192,7 @@ struct ant_isolate_t {
   struct {
     uint64_t counter;
     struct sym_registry_entry *registry;
-    
+
     ant_value_t object_proto;
     ant_value_t array_proto;
     ant_value_t iterator_proto;
@@ -261,6 +261,18 @@ struct ant_isolate_t {
     uint16_t len;
     uint16_t cap;
   } cfunc_name_cache;
+
+  struct {
+    ant_object_t *function_proto_obj;
+    ant_object_t *with_no_unscopables_base;
+    ant_object_t *with_no_unscopables_proto;
+
+    void *with_no_unscopables_base_shape;
+    void *with_no_unscopables_proto_shape;
+
+    uint32_t with_no_unscopables_epoch;
+    uint32_t function_proto_epoch;
+  } runtime_cache;
 
   bool owns_mem;
   bool fatal_error;

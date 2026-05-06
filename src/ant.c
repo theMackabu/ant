@@ -587,11 +587,18 @@ static ant_value_t make_data_cfunc(
 );
 
 static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj);
-static ant_offset_t proxy_aware_length(ant_t *js, ant_value_t obj);
+static ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *out_len);
 static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 static ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx);
 static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
+
+#define PROXY_AWARE_LENGTH_OR_RETURN(obj_expr, out_var) \
+  ant_offset_t out_var = 0; \
+  do { \
+    ant_value_t _len_result = proxy_aware_length(js, (obj_expr), &(out_var)); \
+    if (is_err(_len_result)) return _len_result; \
+  } while (0)
 
 static ant_offset_t get_dense_buf(ant_value_t arr);
 static ant_offset_t dense_capacity(ant_offset_t doff);
@@ -4997,7 +5004,7 @@ ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
     ant_value_t tp_sym = get_toPrimitive_sym();
     ant_value_t tp_fn = js_get_sym(js, value, tp_sym);
     if (is_err(tp_fn)) return tp_fn;
-    if (vtype(tp_fn) == T_UNDEF || vtype(tp_fn) == T_NULL)
+    if (vtype(tp_fn) == T_UNDEF)
       return try_ordinary_to_primitive(js, value, hint);
     if (vtype(tp_fn) != T_FUNC && vtype(tp_fn) != T_CFUNC)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.toPrimitive is not a function");
@@ -5609,7 +5616,13 @@ ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_arg
   *out_args = NULL;
   *out_count = 0;
 
-  int len = (int)(vtype(arr) == T_ARR ? get_array_length(js, arr) : proxy_aware_length(js, arr));
+  ant_offset_t raw_len = 0;
+  if (vtype(arr) == T_ARR) raw_len = get_array_length(js, arr);
+  else {
+    ant_value_t len_result = proxy_aware_length(js, arr, &raw_len);
+    if (is_err(len_result)) return len_result;
+  }
+  int len = (int)raw_len;
   if (len <= 0) return js_mkundef();
   
   ant_value_t *args_out = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * len);
@@ -8094,12 +8107,14 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     getter_val = proxy_get(js, descriptor, "get", 3);
     if (is_err(getter_val)) return getter_val;
     has_get = vtype(getter_val) != T_UNDEF;
-    if (has_get && vtype(getter_val) != T_FUNC) return js_mkerr(js, "Getter must be a function");
+    if (has_get && vtype(getter_val) != T_FUNC && vtype(getter_val) != T_CFUNC)
+      return js_mkerr(js, "Getter must be a function");
 
     setter_val = proxy_get(js, descriptor, "set", 3);
     if (is_err(setter_val)) return setter_val;
     has_set = vtype(setter_val) != T_UNDEF;
-    if (has_set && vtype(setter_val) != T_FUNC) return js_mkerr(js, "Setter must be a function");
+    if (has_set && vtype(setter_val) != T_FUNC && vtype(setter_val) != T_CFUNC)
+      return js_mkerr(js, "Setter must be a function");
   } else {
     ant_offset_t value_off = lkp(js, descriptor, "value", 5);
     if (value_off != 0) {
@@ -8111,7 +8126,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     if (get_off != 0) {
       has_get = true;
       getter_val = propref_load(js, get_off);
-      if (vtype(getter_val) != T_FUNC && vtype(getter_val) != T_UNDEF) {
+      if (vtype(getter_val) != T_FUNC && vtype(getter_val) != T_CFUNC && vtype(getter_val) != T_UNDEF) {
         return js_mkerr(js, "Getter must be a function");
       }
     }
@@ -8120,7 +8135,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     if (set_off != 0) {
       has_set = true;
       setter_val = propref_load(js, set_off);
-      if (vtype(setter_val) != T_FUNC && vtype(setter_val) != T_UNDEF) {
+      if (vtype(setter_val) != T_FUNC && vtype(setter_val) != T_CFUNC && vtype(setter_val) != T_UNDEF) {
         return js_mkerr(js, "Setter must be a function");
       }
     }
@@ -9518,12 +9533,7 @@ static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   if (is_proxy(arr)) {
-    ant_offset_t off = lkp_interned(js, arr, js->intern.length, 6);
-    ant_offset_t len = 0;
-    if (off != 0) {
-      ant_value_t len_val = propref_load(js, off);
-      if (vtype(len_val) == T_NUM) len = (ant_offset_t) tod(len_val);
-    }
+    PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
     for (int i = 0; i < nargs; i++) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
@@ -9537,7 +9547,7 @@ static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
     return len_val;
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t doff = get_dense_buf(arr);
   if (doff) {
@@ -9584,7 +9594,9 @@ void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
     return;
   }
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  ant_offset_t len = 0;
+  ant_value_t len_result = proxy_aware_length(js, arr, &len);
+  if (is_err(len_result)) return;
   
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
@@ -9600,7 +9612,7 @@ static ant_value_t builtin_array_pop(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   if (is_proxy(arr)) {
-    ant_offset_t len = proxy_aware_length(js, arr);
+    PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
     if (len == 0) {
       js_setprop(js, arr, js->length_str, tov(0.0));
       return js_mkundef();
@@ -9633,7 +9645,7 @@ static ant_value_t builtin_array_pop(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   pop_slow:
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
 
   if (len == 0) return js_mkundef();
   len--; char idxstr[16];
@@ -9722,7 +9734,7 @@ static ant_value_t builtin_array_join(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   if (len == 0) return js_mkstr(js, "", 0);
   
@@ -10135,7 +10147,7 @@ static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) 
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t has = array_method_has_index(js, arr, i);
@@ -10162,7 +10174,7 @@ static ant_value_t builtin_array_forEach(ant_t *js, ant_value_t *args, int nargs
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t has = array_method_has_index(js, arr, i);
@@ -10186,7 +10198,7 @@ static ant_value_t builtin_array_reverse(ant_t *js, ant_value_t *args, int nargs
     return js_mkerr(js, "reverse called on non-array");
 
   if (is_proxy(arr)) {
-    ant_offset_t len = proxy_aware_length(js, arr);
+    PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
     if (len <= 1) return arr;
     ant_value_t read_from = proxy_read_target(js, arr);
     ant_offset_t lower = 0;
@@ -10215,7 +10227,7 @@ static ant_value_t builtin_array_reverse(ant_t *js, ant_value_t *args, int nargs
     } return arr;
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len <= 1) return arr;
 
   ant_offset_t doff = get_dense_buf(arr);
@@ -10260,7 +10272,7 @@ static ant_value_t builtin_array_map(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
@@ -10289,7 +10301,7 @@ static ant_value_t builtin_array_filter(ant_t *js, ant_value_t *args, int nargs)
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
@@ -10321,7 +10333,7 @@ static ant_value_t builtin_array_reduce(ant_t *js, ant_value_t *args, int nargs)
   if (is_err(callback)) return callback;
   bool has_initial = (nargs >= 2);
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_value_t accumulator = has_initial ? args[1] : js_mkundef();
   bool first = !has_initial;
@@ -10344,7 +10356,11 @@ static ant_value_t builtin_array_reduce(ant_t *js, ant_value_t *args, int nargs)
 
 static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, ant_offset_t *result_idx, int depth) {
   bool input_is_array = vtype(arr) == T_ARR;
-  ant_offset_t len = input_is_array ? get_array_length(js, arr) : proxy_aware_length(js, arr);
+  ant_offset_t len = input_is_array ? get_array_length(js, arr) : 0;
+  if (!input_is_array) {
+    ant_value_t len_result = proxy_aware_length(js, arr, &len);
+    if (is_err(len_result)) return len_result;
+  }
   if (len == 0) return js_mkundef();
   
   for (ant_offset_t i = 0; i < len; i++) {
@@ -10457,7 +10473,7 @@ static ant_value_t builtin_array_at(ant_t *js, ant_value_t *args, int nargs) {
   
   if (nargs == 0 || vtype(args[0]) != T_NUM) return js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   int idx = (int) tod(args[0]);
   if (idx < 0) idx = (int)len + idx;
@@ -10474,7 +10490,7 @@ static ant_value_t builtin_array_fill(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t value = nargs >= 1 ? args[0] : js_mkundef();
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0, end = len;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -10509,7 +10525,7 @@ static ant_value_t array_find_impl(ant_t *js, ant_value_t *args, int nargs, bool
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   for (ant_offset_t i = 0; i < len; i++) {
@@ -10544,7 +10560,7 @@ static ant_value_t array_find_last_impl(ant_t *js, ant_value_t *args, int nargs,
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   for (ant_offset_t i = len; i > 0; i--) {
@@ -10581,7 +10597,11 @@ static ant_value_t builtin_array_flatMap(ant_t *js, ant_value_t *args, int nargs
   ant_value_t callback = args[0];
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   bool input_is_array = vtype(arr) == T_ARR;
-  ant_offset_t len = input_is_array ? get_array_length(js, arr) : proxy_aware_length(js, arr);
+  ant_offset_t len = input_is_array ? get_array_length(js, arr) : 0;
+  if (!input_is_array) {
+    ant_value_t len_result = proxy_aware_length(js, arr, &len);
+    if (is_err(len_result)) return len_result;
+  }
   
   ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
@@ -10658,7 +10678,7 @@ static ant_value_t builtin_array_indexOf(ant_t *js, ant_value_t *args, int nargs
   if (nargs == 0) return tov(-1);
   
   ant_value_t search = args[0];
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   ant_offset_t start = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -10689,7 +10709,7 @@ static ant_value_t builtin_array_lastIndexOf(ant_t *js, ant_value_t *args, int n
   if (nargs == 0) return tov(-1);
   
   ant_value_t search = args[0];
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   int start = (int)len - 1;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -10721,7 +10741,7 @@ static ant_value_t builtin_array_reduceRight(ant_t *js, ant_value_t *args, int n
   }
   
   ant_value_t callback = args[0];
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   
   int start_idx = (int)len - 1;
   ant_value_t accumulator;
@@ -10757,7 +10777,7 @@ static ant_value_t builtin_array_shift(ant_t *js, ant_value_t *args, int nargs) 
     return js_mkerr(js, "shift called on non-array");
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len == 0) return js_mkundef();
 
   if (is_proxy(arr)) {
@@ -10826,7 +10846,7 @@ static ant_value_t builtin_array_unshift(ant_t *js, ant_value_t *args, int nargs
     return js_mkerr(js, "unshift called on non-array");
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
 
   if (is_proxy(arr)) {
     ant_value_t read_from = proxy_read_target(js, arr);
@@ -10911,7 +10931,7 @@ static ant_value_t builtin_array_some(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   if (len == 0) return mkval(T_BOOL, 0);
   
   for (ant_offset_t i = 0; i < len; i++) {
@@ -11081,7 +11101,7 @@ static ant_value_t builtin_array_splice(ant_t *js, ant_value_t *args, int nargs)
     return js_mkerr(js, "splice called on non-array");
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
   int start = 0;
@@ -11261,7 +11281,7 @@ static ant_value_t builtin_array_copyWithin(ant_t *js, ant_value_t *args, int na
     return js_mkerr(js, "copyWithin called on non-array");
   }
 
-  ant_offset_t len = proxy_aware_length(js, arr);
+  PROXY_AWARE_LENGTH_OR_RETURN(arr, len);
   ant_value_t read_from = is_proxy(arr) ? proxy_read_target(js, arr) : arr;
 
   int target = 0, start = 0, end = (int)len;
@@ -11508,7 +11528,11 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
     return js_mkerr(js, "toLocaleString called on non-array");
   
   bool input_is_array = vtype(arr) == T_ARR;
-  ant_offset_t len = input_is_array ? get_array_length(js, arr) : proxy_aware_length(js, arr);
+  ant_offset_t len = input_is_array ? get_array_length(js, arr) : 0;
+  if (!input_is_array) {
+    ant_value_t len_result = proxy_aware_length(js, arr, &len);
+    if (is_err(len_result)) return len_result;
+  }
   if (len == 0) return js_mkstr(js, "", 0);
   
   char *result = NULL;
@@ -11679,7 +11703,7 @@ static ant_value_t builtin_Array_from(ant_t *js, ant_value_t *args, int nargs) {
 
     if (src_is_array && vtype(iter_method) == T_CFUNC) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_offset_t len = proxy_aware_length(js, src);
+      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
       for (ant_offset_t i = 0; i < len; i++) {
         ant_value_t unused;
         ant_value_t item = array_method_get_index(js, src, i);
@@ -11695,7 +11719,7 @@ static ant_value_t builtin_Array_from(ant_t *js, ant_value_t *args, int nargs) {
       if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double)ctx.index));
     } else if (vtype(src) == T_OBJ) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      ant_offset_t len = proxy_aware_length(js, src);
+      PROXY_AWARE_LENGTH_OR_RETURN(src, len);
       for (ant_offset_t i = 0; i < len; i++) {
         ant_value_t unused;
         ant_value_t item = array_method_get_index(js, src, i);
@@ -14863,11 +14887,19 @@ static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ct
 }
 
 static inline ant_object_t *cached_function_proto_obj(ant_t *js) {
-  static ant_object_t *cached = NULL;
-  if (cached) return cached;
+  uint32_t cache_epoch = ant_ic_epoch_counter;
+  if (
+    js->runtime_cache.function_proto_epoch == cache_epoch &&
+    js->runtime_cache.function_proto_obj
+  ) return js->runtime_cache.function_proto_obj;
+
   ant_value_t proto = get_ctor_proto(js, "Function", 8);
   if (!is_object_type(proto)) return NULL;
-  cached = js_obj_ptr(js_as_obj(proto));
+  
+  ant_object_t *cached = js_obj_ptr(js_as_obj(proto));
+  js->runtime_cache.function_proto_obj = cached;
+  js->runtime_cache.function_proto_epoch = cache_epoch;
+  
   return cached;
 }
 
@@ -15410,16 +15442,23 @@ static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj) {
   return data ? data->target : obj;
 }
 
-static ant_offset_t proxy_aware_length(ant_t *js, ant_value_t obj) {
+static ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *out_len) {
+  *out_len = 0;
   if (is_proxy(obj)) {
     ant_value_t len_val = proxy_get(js, obj, "length", 6);
-    return vtype(len_val) == T_NUM ? (ant_offset_t)tod(len_val) : 0;
+    if (is_err(len_val)) return len_val;
+    if (vtype(len_val) == T_NUM) *out_len = (ant_offset_t)tod(len_val);
+    return js_mkundef();
   }
-  if (vtype(obj) == T_ARR) return get_array_length(js, obj);
+  if (vtype(obj) == T_ARR) {
+    *out_len = get_array_length(js, obj);
+    return js_mkundef();
+  }
   ant_offset_t off = lkp_interned(js, obj, js->intern.length, 6);
-  if (off == 0) return 0;
+  if (off == 0) return js_mkundef();
   ant_value_t len_val = propref_load(js, off);
-  return vtype(len_val) == T_NUM ? (ant_offset_t)tod(len_val) : 0;
+  if (vtype(len_val) == T_NUM) *out_len = (ant_offset_t)tod(len_val);
+  return js_mkundef();
 }
 
 static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {

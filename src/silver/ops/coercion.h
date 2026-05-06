@@ -247,17 +247,14 @@ static inline bool sv_with_binding_is_unscopable(
     ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
-
-    static ant_object_t *cached_no_base = NULL;
-    static void *cached_no_base_shape = NULL;
-    static ant_value_t cached_no_proto = 0;
-    static void *cached_no_proto_shape = NULL;
+    uint32_t cache_epoch = ant_ic_epoch_counter;
 
     if (
-      base_ptr == cached_no_base &&
-      (void *)(base_ptr ? base_ptr->shape : NULL) == cached_no_base_shape &&
-      base_proto == cached_no_proto &&
-      (void *)(proto_ptr ? proto_ptr->shape : NULL) == cached_no_proto_shape
+      js->runtime_cache.with_no_unscopables_epoch == cache_epoch &&
+      base_ptr == js->runtime_cache.with_no_unscopables_base &&
+      (void *)(base_ptr ? base_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_base_shape &&
+      proto_ptr == js->runtime_cache.with_no_unscopables_proto &&
+      (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
     ) return false;
 
     ant_offset_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
@@ -285,10 +282,11 @@ static inline bool sv_with_binding_is_unscopable(
     if (!has_unscopables) {
       ant_value_t proto_proto = (proto_ptr && is_object_type(proto_ptr->proto)) ? proto_ptr->proto : js_mknull();
       if (!saw_exotic && !is_object_type(proto_proto)) {
-        cached_no_base = base_ptr;
-        cached_no_base_shape = (void *)(base_ptr ? base_ptr->shape : NULL);
-        cached_no_proto = base_proto;
-        cached_no_proto_shape = (void *)(proto_ptr ? proto_ptr->shape : NULL);
+        js->runtime_cache.with_no_unscopables_base = base_ptr;
+        js->runtime_cache.with_no_unscopables_base_shape = (void *)(base_ptr ? base_ptr->shape : NULL);
+        js->runtime_cache.with_no_unscopables_proto = proto_ptr;
+        js->runtime_cache.with_no_unscopables_proto_shape = (void *)(proto_ptr ? proto_ptr->shape : NULL);
+        js->runtime_cache.with_no_unscopables_epoch = cache_epoch;
       }
       return false;
     }
@@ -438,7 +436,7 @@ static inline ant_value_t sv_op_with_get_var(
   return js_mkundef();
 }
 
-static inline void sv_op_with_put_var(
+static inline ant_value_t sv_op_with_put_var(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
@@ -450,20 +448,24 @@ static inline void sv_op_with_put_var(
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t val = vm->stack[--vm->sp];
 
-  if (vtype(frame->with_obj) != T_UNDEF) {
-    if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      ant_value_t key = js_mkstr(js, a->str, a->len);
-      js_setprop(js, frame->with_obj, key, val);
-      return;
-    }
+  if (vtype(frame->with_obj) != T_UNDEF) if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
+    ant_value_t out = js_mkundef();
+    bool abrupt = false;
+    if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
+    if (abrupt) return out;
+    ant_value_t key = js_mkstr(js, a->str, a->len);
+    js_setprop(js, frame->with_obj, key, val);
+    return js_mkundef();
   }
 
-  if (fb_kind == WITH_FB_GLOBAL) {
+fallback:
+  if (fb_kind == WITH_FB_GLOBAL) 
     setprop_interned(js, js->global, a->str, a->len, val);
-  } else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
+  else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
+  return js_mkundef();
 }
 
-static inline void sv_op_with_del_var(
+static inline ant_value_t sv_op_with_del_var(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
@@ -471,17 +473,21 @@ static inline void sv_op_with_del_var(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
   
-  if (vtype(frame->with_obj) != T_UNDEF) {
-    if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
-      vm->stack[vm->sp++] = result;
-      return;
-    }
+  if (vtype(frame->with_obj) != T_UNDEF) if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
+    ant_value_t out = js_mkundef();
+    bool abrupt = false;
+    if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
+    if (abrupt) return out;
+    ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
+    vm->stack[vm->sp++] = result;
+    return js_mkundef();
   }
   
+fallback:
   ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
   bool ok = !is_err(result) && js_truthy(js, result);
   vm->stack[vm->sp++] = mkval(T_BOOL, ok);
+  return js_mkundef();
 }
 
 static inline void sv_op_special_obj(
