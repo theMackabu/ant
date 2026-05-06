@@ -4968,7 +4968,7 @@ static ant_value_t try_exotic_to_primitive(ant_t *js, ant_value_t value, int hin
   ant_value_t tp_fn = js_get_sym(js, value, tp_sym);
   uint8_t ft = vtype(tp_fn);
   
-  if (ft == T_UNDEF) return mkval(T_UNDEF, 0);
+  if (ft == T_UNDEF || ft == T_NULL) return mkval(T_UNDEF, 0);
   if (ft != T_FUNC && ft != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.toPrimitive is not a function");
   }
@@ -5004,7 +5004,7 @@ ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
     ant_value_t tp_sym = get_toPrimitive_sym();
     ant_value_t tp_fn = js_get_sym(js, value, tp_sym);
     if (is_err(tp_fn)) return tp_fn;
-    if (vtype(tp_fn) == T_UNDEF)
+    if (vtype(tp_fn) == T_UNDEF || vtype(tp_fn) == T_NULL)
       return try_ordinary_to_primitive(js, value, hint);
     if (vtype(tp_fn) != T_FUNC && vtype(tp_fn) != T_CFUNC)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.toPrimitive is not a function");
