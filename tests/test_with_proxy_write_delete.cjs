@@ -64,4 +64,44 @@ try {
 
 assert(propagated, "proxy with delete should propagate thrown delete errors");
 
+const throwingSetProxy = new Proxy({}, {
+  has(_target, key) {
+    return key === "x";
+  },
+  set() {
+    throw new Error("set boom");
+  },
+});
+
+propagated = false;
+try {
+  with (throwingSetProxy) {
+    x = 3;
+  }
+} catch (e) {
+  propagated = e.message === "set boom";
+}
+
+assert(propagated, "proxy with assignment should propagate thrown set errors");
+
+Object.defineProperty(globalThis, "withGlobalSetterThrow", {
+  configurable: true,
+  set() {
+    throw new Error("global setter boom");
+  },
+});
+
+propagated = false;
+try {
+  with ({}) {
+    withGlobalSetterThrow = 1;
+  }
+} catch (e) {
+  propagated = e.message === "global setter boom";
+} finally {
+  delete globalThis.withGlobalSetterThrow;
+}
+
+assert(propagated, "with global fallback assignment should propagate thrown setters");
+
 console.log("OK");

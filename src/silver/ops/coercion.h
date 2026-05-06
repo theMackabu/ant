@@ -462,15 +462,17 @@ static inline ant_value_t sv_op_with_put_var(
       if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
       if (abrupt) return out;
       ant_value_t key = js_mkstr(js, a->str, a->len);
-      js_setprop(js, frame->with_obj, key, val);
+      ant_value_t set_result = js_setprop(js, frame->with_obj, key, val);
+      if (is_err(set_result)) return set_result;
       return js_mkundef();
     }
   }
 
 fallback:
-  if (fb_kind == WITH_FB_GLOBAL) 
-    setprop_interned(js, js->global, a->str, a->len, val);
-  else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
+  if (fb_kind == WITH_FB_GLOBAL) {
+    ant_value_t set_result = setprop_interned(js, js->global, a->str, a->len, val);
+    if (is_err(set_result)) return set_result;
+  } else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
   return js_mkundef();
 }
 
