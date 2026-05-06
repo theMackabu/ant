@@ -47,7 +47,14 @@ static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) 
   ant_value_t length = js_get(js, arr, "length");
   if (is_err(length)) return length;
   if (js->thrown_exists) return mkval(T_ERR, 0);
-  if (vtype(length) == T_NUM) *out = (ant_offset_t)tod(length);
+  
+  double len_num = js_to_number(js, length);
+  if (js->thrown_exists) return mkval(T_ERR, 0);
+  
+  if (isnan(len_num) || !isfinite(len_num))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "URLSearchParams sequence length must be finite");
+  
+  *out = (ant_offset_t)js_to_uint32(len_num);
   return js_mkundef();
 }
 

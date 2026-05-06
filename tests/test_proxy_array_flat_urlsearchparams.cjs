@@ -31,6 +31,14 @@ assert(params.toString() === "a=b", "URLSearchParams should accept proxied array
 assert(sawOuterLength, "URLSearchParams should observe outer proxy length");
 assert(sawPairLength, "URLSearchParams should observe pair proxy length");
 
+const stringLengthParams = new URLSearchParams(new Proxy([pair], {
+  get(target, key, receiver) {
+    if (key === "length") return "1";
+    return Reflect.get(target, key, receiver);
+  },
+}));
+assert(stringLengthParams.toString() === "a=b", "URLSearchParams should convert proxy length with ToNumber");
+
 assertThrows(
   function () {
     new URLSearchParams(new Proxy([pair], {
@@ -68,6 +76,32 @@ assertThrows(
   },
   "pair value boom",
   "URLSearchParams should propagate pair proxy value errors"
+);
+
+assertThrows(
+  function () {
+    new URLSearchParams(new Proxy([pair], {
+      get(target, key, receiver) {
+        if (key === "length") return NaN;
+        return Reflect.get(target, key, receiver);
+      },
+    }));
+  },
+  "finite",
+  "URLSearchParams should reject NaN proxy lengths"
+);
+
+assertThrows(
+  function () {
+    new URLSearchParams(new Proxy([pair], {
+      get(target, key, receiver) {
+        if (key === "length") return { valueOf() { throw new Error("length convert boom"); } };
+        return Reflect.get(target, key, receiver);
+      },
+    }));
+  },
+  "length convert boom",
+  "URLSearchParams should propagate proxy length conversion errors"
 );
 
 console.log("OK");
