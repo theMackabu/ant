@@ -37,6 +37,27 @@ bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
   return js_check_brand(obj, BRAND_URLSEARCHPARAMS);
 }
 
+static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) {
+  *out = 0;
+  if (!is_proxy(arr)) {
+    *out = js_arr_len(js, arr);
+    return js_mkundef();
+  }
+
+  ant_value_t length = js_get(js, arr, "length");
+  if (is_err(length)) return length;
+  if (js->thrown_exists) return mkval(T_ERR, 0);
+  if (vtype(length) == T_NUM) *out = (ant_offset_t)tod(length);
+  return js_mkundef();
+}
+
+static ant_value_t usp_array_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  ant_value_t value = js_arr_get(js, arr, idx);
+  if (is_err(value)) return value;
+  if (js->thrown_exists) return mkval(T_ERR, 0);
+  return value;
+}
+
 void url_state_clear(url_state_t *s) {
   free(s->protocol); free(s->username); free(s->password);
   free(s->hostname); free(s->port);    free(s->pathname);
@@ -1353,34 +1374,46 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   if (init_is_array) {
-    ant_offset_t len = js_arr_len(js, init);
+    ant_offset_t len = 0;
+    ant_value_t len_res = usp_array_len(js, init, &len);
+    
+    if (is_err(len_res)) return len_res;
     for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t pair = js_arr_get(js, init, i);
+      ant_value_t pair = usp_array_get(js, init, i);
+      if (is_err(pair)) return pair;
+      
       bool pair_is_array = vtype(pair) == T_ARR;
       if (!pair_is_array && vtype(pair) == T_OBJ) {
         ant_value_t is_array_res = js_is_array_value_checked(js, pair, &pair_is_array);
         if (is_err(is_array_res)) return is_array_res;
         if (js->thrown_exists) return mkval(T_ERR, 0);
       }
+      
       if (!pair_is_array)
         return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'URLSearchParams': Each element must be an array.");
-        
-      ant_offset_t plen = js_arr_len(js, pair);
+      
+      ant_offset_t plen = 0;
+      ant_value_t plen_res = usp_array_len(js, pair, &plen);
+      
+      if (is_err(plen_res)) return plen_res;
       if (plen != 2)
         return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'URLSearchParams': Each pair must have exactly 2 elements.");
         
-      ant_value_t pk = js_arr_get(js, pair, 0);
-      ant_value_t pv = js_arr_get(js, pair, 1);
+      ant_value_t pk = usp_array_get(js, pair, 0);
+      if (is_err(pk)) return pk;
+      
+      ant_value_t pv = usp_array_get(js, pair, 1);
+      if (is_err(pv)) return pv;
+      
       ant_value_t ksv = (vtype(pk) == T_STR) ? pk : js_tostring_val(js, pk);
-      
       if (is_err(ksv)) return ksv;
+      
       ant_value_t vsv = (vtype(pv) == T_STR) ? pv : js_tostring_val(js, pv);
-      
       if (is_err(vsv)) return vsv;
-      ant_value_t entry = js_mkarr(js);
       
+      ant_value_t entry = js_mkarr(js);
       js_arr_push(js, entry, ksv);
       js_arr_push(js, entry, vsv);
       js_arr_push(js, entries, entry);

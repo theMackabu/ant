@@ -31,4 +31,56 @@ assert(params.toString() === "a=b", "URLSearchParams should accept proxied array
 assert(sawOuterLength, "URLSearchParams should observe outer proxy length");
 assert(sawPairLength, "URLSearchParams should observe pair proxy length");
 
+assertThrows(
+  function () {
+    new URLSearchParams(new Proxy([pair], {
+      get(target, key, receiver) {
+        if (key === "0") throw new Error("outer index boom");
+        return Reflect.get(target, key, receiver);
+      },
+    }));
+  },
+  "outer index boom",
+  "URLSearchParams should propagate outer proxy index errors"
+);
+
+assertThrows(
+  function () {
+    new URLSearchParams([new Proxy(["a", "b"], {
+      get(target, key, receiver) {
+        if (key === "length") throw new Error("pair length boom");
+        return Reflect.get(target, key, receiver);
+      },
+    })]);
+  },
+  "pair length boom",
+  "URLSearchParams should propagate pair proxy length errors"
+);
+
+assertThrows(
+  function () {
+    new URLSearchParams([new Proxy(["a", "b"], {
+      get(target, key, receiver) {
+        if (key === "1") throw new Error("pair value boom");
+        return Reflect.get(target, key, receiver);
+      },
+    })]);
+  },
+  "pair value boom",
+  "URLSearchParams should propagate pair proxy value errors"
+);
+
 console.log("OK");
+
+function assertThrows(fn, expected, message) {
+  try {
+    fn();
+  } catch (err) {
+    if (String(err && err.message).indexOf(expected) >= 0) return;
+    console.log("FAIL: " + message + ": wrong error " + String(err && err.message));
+    throw err;
+  }
+
+  console.log("FAIL: " + message + ": did not throw");
+  throw new Error(message);
+}
