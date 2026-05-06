@@ -15754,6 +15754,13 @@ static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size
   memcpy(key_buf, key, len);
   key_buf[len] = '\0';
   
+  if (vtype(target) == T_ARR) {
+    if (is_length_key(key_buf, len)) return js_true;
+    unsigned long idx = 0;
+    if (parse_array_index(key_buf, len, get_array_length(js, target), &idx))
+      return js_bool(arr_has(js, target, (ant_offset_t)idx));
+  }
+
   ant_offset_t off = lkp_proto(js, target, key_buf, len);
   return js_bool(off != 0);
 }
