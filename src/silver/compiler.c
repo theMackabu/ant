@@ -2396,7 +2396,7 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
-    emit_atom_op(c, OP_DELETE_VAR, arg->str, arg->len);
+    emit_atom_op(c, c->with_depth > 0 ? OP_WITH_DEL_VAR : OP_DELETE_VAR, arg->str, arg->len);
   } else {
     compile_expr(c, arg);
     emit_op(c, OP_POP);

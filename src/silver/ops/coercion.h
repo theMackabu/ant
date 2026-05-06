@@ -448,14 +448,23 @@ static inline ant_value_t sv_op_with_put_var(
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t val = vm->stack[--vm->sp];
 
-  if (vtype(frame->with_obj) != T_UNDEF) if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-    ant_value_t out = js_mkundef();
-    bool abrupt = false;
-    if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
-    if (abrupt) return out;
-    ant_value_t key = js_mkstr(js, a->str, a->len);
-    js_setprop(js, frame->with_obj, key, val);
-    return js_mkundef();
+  if (vtype(frame->with_obj) != T_UNDEF) {
+    bool has_binding = false;
+    if (is_proxy(js_as_obj(frame->with_obj))) {
+      ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
+      if (is_err(has)) return has;
+      has_binding = js_truthy(js, has);
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+
+    if (has_binding) {
+      ant_value_t out = js_mkundef();
+      bool abrupt = false;
+      if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
+      if (abrupt) return out;
+      ant_value_t key = js_mkstr(js, a->str, a->len);
+      js_setprop(js, frame->with_obj, key, val);
+      return js_mkundef();
+    }
   }
 
 fallback:
@@ -473,19 +482,30 @@ static inline ant_value_t sv_op_with_del_var(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
   
-  if (vtype(frame->with_obj) != T_UNDEF) if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-    ant_value_t out = js_mkundef();
-    bool abrupt = false;
-    if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
-    if (abrupt) return out;
-    ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
-    vm->stack[vm->sp++] = result;
-    return js_mkundef();
+  if (vtype(frame->with_obj) != T_UNDEF) {
+    bool has_binding = false;
+    if (is_proxy(js_as_obj(frame->with_obj))) {
+      ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
+      if (is_err(has)) return has;
+      has_binding = js_truthy(js, has);
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+
+    if (has_binding) {
+      ant_value_t out = js_mkundef();
+      bool abrupt = false;
+      if (sv_with_binding_is_unscopable(js, frame->with_obj, a, &out, &abrupt)) goto fallback;
+      if (abrupt) return out;
+      ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
+      if (is_err(result)) return result;
+      vm->stack[vm->sp++] = result;
+      return js_mkundef();
+    }
   }
   
 fallback:
   ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
-  bool ok = !is_err(result) && js_truthy(js, result);
+  if (is_err(result)) return result;
+  bool ok = js_truthy(js, result);
   vm->stack[vm->sp++] = mkval(T_BOOL, ok);
   return js_mkundef();
 }

@@ -2,6 +2,8 @@
   #pragma GCC optimize("O3,inline")
 #endif
 
+#include <limits.h>
+
 #include <compat.h> // IWYU pragma: keep
 
 #include "ant.h"
@@ -5621,6 +5623,9 @@ ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_arg
   else {
     ant_value_t len_result = proxy_aware_length(js, arr, &raw_len);
     if (is_err(len_result)) return len_result;
+  }
+  if (raw_len > (ant_offset_t)INT_MAX) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Argument list length exceeds engine limit");
   }
   int len = (int)raw_len;
   if (len <= 0) return js_mkundef();
