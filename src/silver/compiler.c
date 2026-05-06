@@ -2317,7 +2317,7 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (known) {
+      if (known && c->with_depth == 0) {
         emit_constant(c, js_mkstr_permanent(c->js, known, strlen(known)));
         return;
       }
@@ -2325,8 +2325,12 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
     } else {
       int upval = resolve_upvalue(c, arg->str, arg->len);
       if (upval != -1) {
-        emit_op(c, OP_GET_UPVAL);
-        emit_u16(c, (uint16_t)upval);
+        if (c->with_depth > 0) {
+          emit_with_get(c, arg->str, arg->len, WITH_FB_UPVAL, (uint16_t)upval);
+        } else {
+          emit_op(c, OP_GET_UPVAL);
+          emit_u16(c, (uint16_t)upval);
+        }
       } else if (
           has_implicit_arguments_obj(c) &&
           is_ident_str(arg->str, arg->len, "arguments", 9)
@@ -2337,7 +2341,8 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
           emit_op(c, OP_SPECIAL_OBJ);
           emit(c, 0);
         }
-      } else emit_atom_op(c, OP_GET_GLOBAL_UNDEF, arg->str, arg->len);
+      } else if (c->with_depth > 0) emit_with_get(c, arg->str, arg->len, WITH_FB_GLOBAL_UNDEF, 0);
+      else emit_atom_op(c, OP_GET_GLOBAL_UNDEF, arg->str, arg->len);
     }
   } else compile_expr(c, arg);
   emit_op(c, OP_TYPEOF);
@@ -2391,7 +2396,7 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
-    emit_atom_op(c, OP_DELETE_VAR, arg->str, arg->len);
+    emit_atom_op(c, c->with_depth > 0 ? OP_WITH_DEL_VAR : OP_DELETE_VAR, arg->str, arg->len);
   } else {
     compile_expr(c, arg);
     emit_op(c, OP_POP);

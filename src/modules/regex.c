@@ -1808,6 +1808,14 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
     ant_value_t result = maybe_call_symbol_method(js, args[0], get_replace_sym(), args[0], call_args, 2, &called);
     if (is_err(result)) return result;
     if (called) return result;
+    
+    ant_value_t coerced_search = js_to_primitive(js, args[0], 1);
+    if (is_err(coerced_search)) return coerced_search;
+    
+    coerced_search = js_tostring_val(js, coerced_search);
+    if (is_err(coerced_search)) return coerced_search;
+    
+    args[0] = coerced_search;
   }
   
   if (nargs < 2) return str;
@@ -1948,7 +1956,13 @@ static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs
 
   if (vtype(pattern) == T_OBJ) {
     ant_offset_t source_off = lkp(js, pattern, "source", 6);
-    if (source_off == 0) return tov(-1);
+    if (source_off == 0) {
+      pattern = js_to_primitive(js, pattern, 1);
+      if (is_err(pattern)) return pattern;
+      pattern = js_tostring_val(js, pattern);
+      if (is_err(pattern)) return pattern;
+      goto search_string_pattern;
+    }
     ant_value_t source_val = js_propref_load(js, source_off);
     if (vtype(source_val) != T_STR) return tov(-1);
 
@@ -1969,12 +1983,11 @@ static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs
       }
     }
   } else if (vtype(pattern) == T_STR) {
+search_string_pattern:;
     ant_offset_t poff;
     poff = vstr(js, pattern, &pattern_len);
     pattern_ptr = (char *)(uintptr_t)(poff);
-  } else {
-    return tov(-1);
-  }
+  } else return tov(-1);
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -2034,7 +2047,13 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
 
   if (vtype(pattern) == T_OBJ) {
     ant_offset_t source_off = lkp(js, pattern, "source", 6);
-    if (source_off == 0) return js_mknull();
+    if (source_off == 0) {
+      pattern = js_to_primitive(js, pattern, 1);
+      if (is_err(pattern)) return pattern;
+      pattern = js_tostring_val(js, pattern);
+      if (is_err(pattern)) return pattern;
+      goto match_string_pattern;
+    }
 
     ant_value_t source_val = js_propref_load(js, source_off);
     if (vtype(source_val) != T_STR) return js_mknull();
@@ -2056,6 +2075,7 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
       }}
     }
   } else if (vtype(pattern) == T_STR) {
+match_string_pattern:;
     ant_offset_t poff;
     poff = vstr(js, pattern, &pattern_len);
     pattern_ptr = (char *)(uintptr_t)(poff);

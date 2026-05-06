@@ -192,7 +192,7 @@ struct ant_isolate_t {
   struct {
     uint64_t counter;
     struct sym_registry_entry *registry;
-    
+
     ant_value_t object_proto;
     ant_value_t array_proto;
     ant_value_t iterator_proto;
@@ -261,6 +261,18 @@ struct ant_isolate_t {
     uint16_t len;
     uint16_t cap;
   } cfunc_name_cache;
+
+  struct {
+    ant_object_t *function_proto_obj;
+    ant_object_t *with_no_unscopables_base;
+    ant_object_t *with_no_unscopables_proto;
+
+    void *with_no_unscopables_base_shape;
+    void *with_no_unscopables_proto_shape;
+
+    uint32_t with_no_unscopables_epoch;
+    uint32_t function_proto_epoch;
+  } runtime_cache;
 
   bool owns_mem;
   bool fatal_error;
@@ -361,7 +373,8 @@ static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) 
 }
 
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
-int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args);
+ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args, int *out_count);
+ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 
 ant_value_t tov(double d);
 double tod(ant_value_t v);
@@ -475,6 +488,7 @@ ant_value_t js_maybe_set_function_name_from_key(
 );
 
 bool is_proxy(ant_value_t obj);
+bool is_array_value(ant_value_t value);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 
@@ -486,6 +500,7 @@ const char *typestr(uint8_t t);
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val);
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
+ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);

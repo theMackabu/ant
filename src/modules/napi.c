@@ -2466,7 +2466,12 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_array(
   bool *result
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = vtype((ant_value_t)value) == T_ARR;
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+  ant_value_t r = js_is_array_value_checked(nenv->js, (ant_value_t)value, result);
+  
+  if (is_err(r) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, r);
   return napi_set_last(env, napi_ok, NULL);
 }
 

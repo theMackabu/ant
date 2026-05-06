@@ -48,13 +48,10 @@ curl -fsSL https://ant.themackabu.com/install | bash
 
 Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
 
-| Suite            | Pass rate | Notes                                      |
-| ---------------- | --------- | ------------------------------------------ |
-| js-zoo (ES1–ES5) | ~100%     |                                            |
-| js-zoo (ES6)     | ~82%      |                                            |
-| js-zoo (ES2016+) | ~86%      |                                            |
-| js-zoo (overall) | **88%**   | 1211/1368 passing                          |
-| test262          | ~50%      | Improving, focus is on real-world coverage |
+| Suite        | Pass rate | Notes                                      |
+| ------------ | --------- | ------------------------------------------ |
+| compat-table | **100%**  | 1511/1511 (ES1–ES5, ES6, ES2016+, ESNext)  |
+| test262      | ~64%      | Improving; focus is on real-world coverage |
 
 ## Benchmarks
 
@@ -74,10 +71,10 @@ hyperfine --warmup 10 --runs 100 \
 
 | Runtime | Mean       | Min     | Max      | Relative     |
 | ------- | ---------- | ------- | -------- | ------------ |
-| **Ant** | **5.7 ms** | 5.0 ms  | 7.3 ms   | **1.00**     |
-| Bun     | 12.8 ms    | 11.6 ms | 16.4 ms  | 2.24× slower |
-| Deno    | 24.8 ms    | 22.2 ms | 29.4 ms  | 4.32× slower |
-| Node    | 31.1 ms    | 27.1 ms | 151.7 ms | 5.41× slower |
+| **Ant** | **5.4 ms** | 5.0 ms  | 7.1 ms   | **1.00**     |
+| Bun     | 12.8 ms    | 11.6 ms | 16.4 ms  | 2.37× slower |
+| Deno    | 24.8 ms    | 22.2 ms | 29.4 ms  | 4.59× slower |
+| Node    | 31.1 ms    | 27.1 ms | 151.7 ms | 5.76× slower |
 
 <details>
 <summary>Environment</summary>
@@ -86,7 +83,7 @@ hyperfine --warmup 10 --runs 100 \
 | -------- | --------------------------------- |
 | Hardware | Apple M4 Pro, 24 GB RAM, 14 cores |
 | OS       | macOS 15.7.5 (arm64)              |
-| Ant      | 0.9.1                             |
+| Ant      | 0.11.0                            |
 | Node     | 25.9.0                            |
 | Bun      | 1.3.13                            |
 | Deno     | 2.7.12                            |
@@ -104,7 +101,7 @@ For information on reporting security vulnerabilities in Ant, see [SECURITY.md](
 ## Community
 
 - [Discord](http://discord.gg/CH7YSjWGzY)
-- [Blog: Building Ant](https://s.tail.so/js-in-one-month)
+- [Blog: Working was the beginning](https://themackabu.dev/blog/ant-part-two)
 - [DeepWiki: Ant internals](https://deepwiki.com/theMackabu/ant)
 
 ## Contributing to Ant

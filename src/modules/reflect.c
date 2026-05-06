@@ -177,9 +177,11 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
   );
 
   ant_value_t result;
-  if (vtype(args_arr) == T_ARR) {
+  if (is_object_type(args_arr)) {
     ant_value_t *call_args = NULL;
-    int arg_count = extract_array_args(js, args_arr, &call_args);
+    int arg_count = 0;
+    ant_value_t extracted = extract_array_args(js, args_arr, &call_args, &arg_count);
+    if (is_err(extracted)) return extracted;
     result = sv_vm_call_explicit_this(
       js->vm, js, target, this_arg, 
       call_args, arg_count
@@ -187,32 +189,8 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
     if (call_args) free(call_args);
     return result;
   }
-  
-  ant_value_t length_val = js_get(js, args_arr, "length");
-  int arg_count = 0;
-  if (vtype(length_val) == T_NUM) {
-    arg_count = (int)js_getnum(length_val);
-  }
-  
-  ant_value_t *call_args = NULL;
-  if (arg_count > 0) {
-    call_args = malloc(arg_count * sizeof(ant_value_t));
-    if (!call_args) return js_mkerr(js, "Out of memory");
-    
-    for (int i = 0; i < arg_count; i++) {
-      char idx[16];
-      snprintf(idx, sizeof(idx), "%d", i);
-      call_args[i] = js_get(js, args_arr, idx);
-    }
-  }
-  
-  result = sv_vm_call_explicit_this(
-    js->vm, js, target, this_arg, 
-    call_args, arg_count
-  );
-  
-  if (call_args) free(call_args);
-  return result;
+
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.apply: third argument must be an array-like object");
 }
 
 static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *args, int nargs) {
