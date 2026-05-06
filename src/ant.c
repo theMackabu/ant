@@ -590,7 +590,7 @@ static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj);
 static ant_offset_t proxy_aware_length(ant_t *js, ant_value_t obj);
 static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 static ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t idx);
-static bool array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
+static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
 static ant_offset_t get_dense_buf(ant_value_t arr);
@@ -639,6 +639,7 @@ static ant_value_t proxy_set(ant_t *js, ant_value_t proxy, const char *key, size
 static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 static ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 static ant_value_t proxy_get_own_property_descriptor(ant_t *js, ant_value_t proxy, ant_value_t key_val);
+static bool descriptor_bool_value(ant_t *js, ant_value_t desc, const char *key, size_t key_len, bool default_value);
 static ant_value_t proxy_has_own(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 static ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 static ant_value_t proxy_delete_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
@@ -5604,23 +5605,31 @@ static ant_value_t builtin_function_call(ant_t *js, ant_value_t *args, int nargs
   return sv_vm_call_explicit_this(js->vm, js, func, this_arg, call_args, call_nargs);
 }
 
-int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args) {
+ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args, int *out_count) {
+  *out_args = NULL;
+  *out_count = 0;
+
   int len = (int)(vtype(arr) == T_ARR ? get_array_length(js, arr) : proxy_aware_length(js, arr));
-  if (len <= 0) return 0;
+  if (len <= 0) return js_mkundef();
   
   ant_value_t *args_out = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * len);
-  if (!args_out) return 0;
+  if (!args_out) return js_mkerr(js, "out of memory");
 
   if (vtype(arr) == T_ARR) {
     for (int i = 0; i < len; i++)
       args_out[i] = arr_get(js, arr, (ant_offset_t)i);
   } else for (int i = 0; i < len; i++) {
     ant_value_t item = array_method_get_index(js, arr, (ant_offset_t)i);
-    args_out[i] = is_err(item) ? js_mkundef() : item;
+    if (is_err(item)) {
+      free(args_out);
+      return item;
+    }
+    args_out[i] = item;
   }
   
   *out_args = args_out;
-  return len;
+  *out_count = len;
+  return js_mkundef();
 }
 
 static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int nargs) {
@@ -5741,7 +5750,8 @@ static ant_value_t builtin_function_apply(ant_t *js, ant_value_t *args, int narg
     ant_value_t arg_array = args[1];
     uint8_t t = vtype(arg_array);
     if (t == T_ARR || t == T_OBJ) {
-      call_nargs = extract_array_args(js, arg_array, &call_args);
+      ant_value_t extracted = extract_array_args(js, arg_array, &call_args, &call_nargs);
+      if (is_err(extracted)) return extracted;
     } else if (t != T_UNDEF && t != T_NULL) {}
   }
   
@@ -6924,6 +6934,113 @@ static bool proxy_target_key_is_nonconfigurable(ant_t *js, ant_value_t target, a
 
 static ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode);
 
+static ant_value_t proxy_own_keys_raw(ant_t *js, ant_value_t obj) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
+
+  ant_proxy_state_t *data = get_proxy_data(obj);
+  if (!data) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return mkarr(js);
+  }
+  if (data->revoked) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform 'ownKeys' on a proxy that has been revoked");
+  }
+
+  ant_value_t keys = mkarr(js);
+  GC_ROOT_PIN(js, keys);
+
+  ant_value_t trap = proxy_get_method(js, data->handler, "ownKeys");
+  if (is_err(trap)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return trap;
+  }
+  if (vtype(trap) == T_UNDEF) {
+    keys = js_own_property_keys(js, data->target, true, false);
+    GC_ROOT_RESTORE(js, root_mark);
+    return keys;
+  }
+
+  ant_value_t trap_args[1] = { data->target };
+  ant_value_t result = sv_vm_call(js->vm, js, trap, data->handler, trap_args, 1, NULL, false);
+  if (is_err(result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+  if (vtype(result) != T_ARR) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
+  }
+  GC_ROOT_PIN(js, result);
+
+  ant_offset_t len = get_array_length(js, result);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t ki = arr_get(js, result, i);
+    if (vtype(ki) != T_STR && vtype(ki) != T_SYMBOL) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
+    }
+    for (ant_offset_t j = 0; j < i; j++) {
+      ant_value_t kj = arr_get(js, result, j);
+      if (vtype(ki) != vtype(kj)) continue;
+      if (vtype(ki) == T_SYMBOL) {
+        if (vdata(ki) == vdata(kj)) {
+          GC_ROOT_RESTORE(js, root_mark);
+          return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must not contain duplicate entries");
+        }
+        continue;
+      }
+
+      ant_offset_t ki_len;
+      ant_offset_t ki_off = vstr(js, ki, &ki_len);
+      ant_offset_t kj_len;
+      ant_offset_t kj_off = vstr(js, kj, &kj_len);
+      if (ki_len == kj_len &&
+          memcmp((const void *)(uintptr_t)ki_off, (const void *)(uintptr_t)kj_off, ki_len) == 0) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must not contain duplicate entries");
+      }
+    }
+  }
+
+  ant_value_t target_keys = js_own_property_keys(js, data->target, true, false);
+  GC_ROOT_PIN(js, target_keys);
+  if (is_err(target_keys)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return target_keys;
+  }
+
+  ant_offset_t target_len = get_array_length(js, target_keys);
+  bool target_extensible = proxy_target_is_extensible(data->target);
+  for (ant_offset_t i = 0; i < target_len; i++) {
+    ant_value_t target_key = arr_get(js, target_keys, i);
+    if (proxy_target_key_is_nonconfigurable(js, data->target, target_key) &&
+        !proxy_keys_include(js, result, target_key)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result did not include non-configurable key");
+    }
+    if (!target_extensible && !proxy_keys_include(js, result, target_key)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result did not include all target keys");
+    }
+  }
+
+  if (!target_extensible) {
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t result_key = arr_get(js, result, i);
+      if (!proxy_keys_include(js, target_keys, result_key)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result included extra key for non-extensible target");
+      }
+    }
+  }
+
+  keys = result;
+  GC_ROOT_RESTORE(js, root_mark);
+  return keys;
+}
+
 static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool freeze) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
@@ -6938,7 +7055,7 @@ static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool fr
     return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy preventExtensions trap returned falsy");
   }
 
-  ant_value_t keys = proxy_enum(js, obj, OBJ_ENUM_KEYS);
+  ant_value_t keys = proxy_own_keys_raw(js, obj);
   GC_ROOT_PIN(js, keys);
   if (is_err(keys)) {
     GC_ROOT_RESTORE(js, root_mark);
@@ -6972,14 +7089,51 @@ static ant_value_t proxy_set_integrity_level(ant_t *js, ant_value_t obj, bool fr
 }
 
 static ant_value_t proxy_test_integrity_level(ant_t *js, ant_value_t obj, bool frozen) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
+
   ant_value_t extensible = proxy_is_extensible(js, obj);
-  if (is_err(extensible)) return extensible;
-  if (js_truthy(js, extensible)) return js_false;
+  if (is_err(extensible)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return extensible;
+  }
+  if (js_truthy(js, extensible)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_false;
+  }
 
-  ant_value_t keys = proxy_enum(js, obj, OBJ_ENUM_KEYS);
-  if (is_err(keys)) return keys;
+  ant_value_t keys = proxy_own_keys_raw(js, obj);
+  GC_ROOT_PIN(js, keys);
+  if (is_err(keys)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return keys;
+  }
 
-  (void)frozen;
+  ant_offset_t len = get_array_length(js, keys);
+  for (ant_offset_t i = 0; i < len; i++) {
+    GC_ROOT_SAVE(iter_mark, js);
+    ant_value_t key = arr_get(js, keys, i);
+    GC_ROOT_PIN(js, key);
+
+    ant_value_t desc = proxy_get_own_property_descriptor(js, obj, key);
+    GC_ROOT_PIN(js, desc);
+    if (is_err(desc)) {
+      GC_ROOT_RESTORE(js, iter_mark);
+      GC_ROOT_RESTORE(js, root_mark);
+      return desc;
+    }
+    if (vtype(desc) == T_UNDEF ||
+        descriptor_bool_value(js, desc, "configurable", 12, false) ||
+        (frozen && descriptor_bool_value(js, desc, "writable", 8, false))) {
+      GC_ROOT_RESTORE(js, iter_mark);
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_false;
+    }
+
+    GC_ROOT_RESTORE(js, iter_mark);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
   return js_true;
 }
 
@@ -6988,100 +7142,11 @@ static ant_value_t proxy_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mod
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
-  ant_proxy_state_t *data = get_proxy_data(obj);
-  if (!data) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return mkarr(js);
-  }
-  if (data->revoked) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform 'ownKeys' on a proxy that has been revoked");
-  }
-
-  ant_value_t keys = mkarr(js);
+  ant_value_t keys = proxy_own_keys_raw(js, obj);
   GC_ROOT_PIN(js, keys);
-
-  ant_value_t trap = proxy_get_method(js, data->handler, "ownKeys");
-  if (is_err(trap)) {
+  if (is_err(keys)) {
     GC_ROOT_RESTORE(js, root_mark);
-    return trap;
-  }
-  if (vtype(trap) == T_UNDEF) {
-    keys = object_enum(js, data->target, OBJ_ENUM_KEYS);
-  } else {
-      ant_value_t trap_args[1] = { data->target };
-      ant_value_t result = sv_vm_call(js->vm, js, trap, data->handler, trap_args, 1, NULL, false);
-      if (is_err(result)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return result;
-      }
-      if (vtype(result) != T_ARR) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
-      }
-
-      ant_offset_t len = get_array_length(js, result);
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t ki = arr_get(js, result, i);
-        if (vtype(ki) != T_STR && vtype(ki) != T_SYMBOL) {
-          GC_ROOT_RESTORE(js, root_mark);
-          return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
-        }
-        for (ant_offset_t j = 0; j < i; j++) {
-          ant_value_t kj = arr_get(js, result, j);
-          if (vtype(ki) != vtype(kj)) continue;
-          if (vtype(ki) == T_SYMBOL) {
-            if (vdata(ki) == vdata(kj)) {
-              GC_ROOT_RESTORE(js, root_mark);
-              return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must not contain duplicate entries");
-            }
-            continue;
-          }
-
-          ant_offset_t ki_len;
-          ant_offset_t ki_off = vstr(js, ki, &ki_len);
-          ant_offset_t kj_len;
-          ant_offset_t kj_off = vstr(js, kj, &kj_len);
-          if (ki_len == kj_len &&
-              memcmp((const void *)(uintptr_t)ki_off, (const void *)(uintptr_t)kj_off, ki_len) == 0) {
-            GC_ROOT_RESTORE(js, root_mark);
-            return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must not contain duplicate entries");
-          }
-        }
-      }
-
-      ant_value_t target_keys = js_own_property_keys(js, data->target, true, false);
-      GC_ROOT_PIN(js, target_keys);
-      if (is_err(target_keys)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return target_keys;
-      }
-
-      ant_offset_t target_len = get_array_length(js, target_keys);
-      bool target_extensible = proxy_target_is_extensible(data->target);
-      for (ant_offset_t i = 0; i < target_len; i++) {
-        ant_value_t target_key = arr_get(js, target_keys, i);
-        if (proxy_target_key_is_nonconfigurable(js, data->target, target_key) &&
-            !proxy_keys_include(js, result, target_key)) {
-          GC_ROOT_RESTORE(js, root_mark);
-          return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result did not include non-configurable key");
-        }
-        if (!target_extensible && !proxy_keys_include(js, result, target_key)) {
-          GC_ROOT_RESTORE(js, root_mark);
-          return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result did not include all target keys");
-        }
-      }
-
-      if (!target_extensible) {
-        for (ant_offset_t i = 0; i < len; i++) {
-          ant_value_t result_key = arr_get(js, result, i);
-          if (!proxy_keys_include(js, target_keys, result_key)) {
-            GC_ROOT_RESTORE(js, root_mark);
-            return js_mkerr_typed(js, JS_ERR_TYPE, "'ownKeys' on proxy: trap result included extra key for non-extensible target");
-          }
-        }
-      }
-      keys = result;
+    return keys;
   }
 
   ant_value_t out = mkarr(js);
@@ -10073,7 +10138,9 @@ static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) 
   ant_offset_t len = proxy_aware_length(js, arr);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
@@ -10098,7 +10165,9 @@ static ant_value_t builtin_array_forEach(ant_t *js, ant_value_t *args, int nargs
   ant_offset_t len = proxy_aware_length(js, arr);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
@@ -10196,7 +10265,9 @@ static ant_value_t builtin_array_map(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(result)) return result;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
@@ -10225,7 +10296,9 @@ static ant_value_t builtin_array_filter(ant_t *js, ant_value_t *args, int nargs)
   ant_offset_t result_idx = 0;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     ant_value_t call_args[3] = { val, tov((double)i), arr };
@@ -10254,7 +10327,9 @@ static ant_value_t builtin_array_reduce(ant_t *js, ant_value_t *args, int nargs)
   bool first = !has_initial;
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     if (first) { accumulator = val; first = false; continue; }
@@ -10275,7 +10350,11 @@ static inline ant_value_t flat_helper(ant_t *js, ant_value_t arr, ant_value_t re
   for (ant_offset_t i = 0; i < len; i++) {
     if (input_is_array) {
       if (!arr_has(js, arr, i)) continue;
-    } else if (!array_method_has_index(js, arr, i)) continue;
+    } else {
+      ant_value_t has = array_method_has_index(js, arr, i);
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+    }
 
     ant_value_t val = input_is_array ? arr_get(js, arr, i) : array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
@@ -10511,7 +10590,11 @@ static ant_value_t builtin_array_flatMap(ant_t *js, ant_value_t *args, int nargs
   for (ant_offset_t i = 0; i < len; i++) {
     if (input_is_array) {
       if (!arr_has(js, arr, i)) continue;
-    } else if (!array_method_has_index(js, arr, i)) continue;
+    } else {
+      ant_value_t has = array_method_has_index(js, arr, i);
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+    }
 
     ant_value_t elem = input_is_array ? arr_get(js, arr, i) : array_method_get_index(js, arr, i);
     if (is_err(elem)) return elem;
@@ -10588,7 +10671,11 @@ static ant_value_t builtin_array_indexOf(ant_t *js, ant_value_t *args, int nargs
   for (ant_offset_t i = start; i < len; i++) {
     ant_value_t elem = array_method_get_index(js, arr, i);
     if (is_err(elem)) return elem;
-    if (vtype(elem) == T_UNDEF && !array_method_has_index(js, arr, i)) continue;
+    if (vtype(elem) == T_UNDEF) {
+      ant_value_t has = array_method_has_index(js, arr, i);
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+    }
     if (strict_eq_values(js, elem, search)) return tov((double)i);
   }
   return tov(-1);
@@ -10614,7 +10701,11 @@ static ant_value_t builtin_array_lastIndexOf(ant_t *js, ant_value_t *args, int n
   for (int i = start; i >= 0; i--) {
     ant_value_t elem = array_method_get_index(js, arr, (ant_offset_t)i);
     if (is_err(elem)) return elem;
-    if (vtype(elem) == T_UNDEF && !array_method_has_index(js, arr, (ant_offset_t)i)) continue;
+    if (vtype(elem) == T_UNDEF) {
+      ant_value_t has = array_method_has_index(js, arr, (ant_offset_t)i);
+      if (is_err(has)) return has;
+      if (!js_truthy(js, has)) continue;
+    }
     if (strict_eq_values(js, elem, search)) return tov((double)i);
   }
   return tov(-1);
@@ -10645,7 +10736,9 @@ static ant_value_t builtin_array_reduceRight(ant_t *js, ant_value_t *args, int n
   }
   
   for (int i = start_idx; i >= 0; i--) {
-    if (!array_method_has_index(js, arr, (ant_offset_t)i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, (ant_offset_t)i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t elem = array_method_get_index(js, arr, (ant_offset_t)i);
     if (is_err(elem)) return elem;
     ant_value_t call_args[4] = { accumulator, elem, tov((double)i), arr };
@@ -10822,7 +10915,9 @@ static ant_value_t builtin_array_some(ant_t *js, ant_value_t *args, int nargs) {
   if (len == 0) return mkval(T_BOOL, 0);
   
   for (ant_offset_t i = 0; i < len; i++) {
-    if (!array_method_has_index(js, arr, i)) continue;
+    ant_value_t has = array_method_has_index(js, arr, i);
+    if (is_err(has)) return has;
+    if (!js_truthy(js, has)) continue;
     ant_value_t val = array_method_get_index(js, arr, i);
     if (is_err(val)) return val;
     
@@ -11436,7 +11531,11 @@ static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, in
     
     if (input_is_array) {
       if (!arr_has(js, arr, i)) continue;
-    } else if (!array_method_has_index(js, arr, i)) continue;
+    } else {
+      ant_value_t has = array_method_has_index(js, arr, i);
+      if (is_err(has)) { free(result); return has; }
+      if (!js_truthy(js, has)) continue;
+    }
 
     ant_value_t elem = input_is_array ? arr_get(js, arr, i) : array_method_get_index(js, arr, i);
     if (is_err(elem)) { free(result); return elem; }
@@ -15335,9 +15434,13 @@ static ant_value_t proxy_delete_index(ant_t *js, ant_value_t obj, ant_offset_t i
   return proxy_delete(js, obj, idxstr, idxlen);
 }
 
-static bool array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx) {
-  if (is_proxy(arr)) return true;
-  return arr_has(js, arr, idx);
+static ant_value_t array_method_has_index(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  if (is_proxy(arr)) {
+    char idxstr[16];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
+    return proxy_has(js, arr, idxstr, idxlen);
+  }
+  return js_bool(arr_has(js, arr, idx));
 }
 
 static ant_value_t array_method_get_index(ant_t *js, ant_value_t arr, ant_offset_t idx) {
@@ -15483,6 +15586,7 @@ static ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const c
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, proxy);
+  GC_ROOT_PIN(js, receiver);
   GC_ROOT_PIN(js, value);
   ant_value_t key_str = js_mkstr(js, key, key_len);
   GC_ROOT_PIN(js, key_str);
@@ -15517,7 +15621,43 @@ static ant_value_t proxy_set_with_receiver(ant_t *js, ant_value_t proxy, const c
     return define_trap;
   }
   if (vtype(define_trap) == T_UNDEF) {
-    ant_value_t set_result = js_setprop(js, target, key_str, value);
+    ant_value_t set_result;
+    if (same_object_identity(receiver, proxy)) {
+      set_result = js_setprop(js, target, key_str, value);
+    } else {
+      if (!is_object_type(receiver)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return js_false;
+      }
+
+      ant_offset_t existing = lkp(js, receiver, key, key_len);
+      if (existing > 0) {
+        if (is_const_prop(js, existing)) {
+          GC_ROOT_RESTORE(js, root_mark);
+          return js_false;
+        }
+        js_saveval(js, existing, value);
+        array_define_or_set_index(js, receiver, key, key_len);
+        GC_ROOT_RESTORE(js, root_mark);
+        return js_true;
+      }
+
+      ant_value_t extensible = check_object_extensibility(js, receiver);
+      if (is_err(extensible)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return extensible;
+      }
+      if (extensible == js_false) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return js_false;
+      }
+
+      const char *interned_key = intern_string(key, key_len);
+      set_result = interned_key
+        ? mkprop_interned_exact(js, receiver, interned_key, value, 0)
+        : js_mkerr(js, "oom");
+      if (!is_err(set_result)) array_define_or_set_index(js, receiver, key, key_len);
+    }
     GC_ROOT_RESTORE(js, root_mark);
     if (is_err(set_result)) return set_result;
     return js_true;
@@ -15572,6 +15712,10 @@ static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size
   
   ant_offset_t off = lkp_proto(js, target, key_buf, len);
   return js_bool(off != 0);
+}
+
+ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
+  return proxy_has(js, proxy, key, key_len);
 }
 
 static ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {

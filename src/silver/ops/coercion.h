@@ -374,10 +374,18 @@ static inline bool sv_try_get_with_bound_value(
   const char *interned = intern_string(a->str, a->len);
 
   if (ptr && is_proxy(js_as_obj(with_obj))) {
+    ant_value_t has = js_proxy_has(js, with_obj, a->str, a->len);
+    if (is_err(has)) {
+      *out = has;
+      return true;
+    }
+    if (!js_truthy(js, has)) return false;
+    
     bool abrupt = false;
     if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
     if (abrupt) return true;
     *out = js_getprop_fallback(js, with_obj, a->str);
+    
     return true;
   }
 

@@ -361,7 +361,8 @@ static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) 
 }
 
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
-int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args);
+ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args, int *out_count);
+ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 
 ant_value_t tov(double d);
 double tod(ant_value_t v);
