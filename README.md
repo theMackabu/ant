@@ -101,7 +101,7 @@ For information on reporting security vulnerabilities in Ant, see [SECURITY.md](
 ## Community
 
 - [Discord](http://discord.gg/CH7YSjWGzY)
-- [Blog: Building Ant](https://s.tail.so/js-in-one-month)
+- [Blog: Working was the beginning](https://themackabu.dev/blog/ant-part-two)
 - [DeepWiki: Ant internals](https://deepwiki.com/theMackabu/ant)
 
 ## Contributing to Ant
