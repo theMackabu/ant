@@ -352,6 +352,13 @@ bool process_has_event_listeners(const char *event_type) {
   return evt && evt->listener_count > 0;
 }
 
+static bool stdio_has_event_listener(ProcessEventType *events, const char *event_type) {
+  ProcessEventType *evt = NULL;
+  if (!event_type) return false;
+  HASH_FIND_STR(events, event_type, evt);
+  return evt && evt->listener_count > 0;
+}
+
 static void emit_stdio_event(ProcessEventType **events, const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
   ProcessEventType *evt = NULL;
@@ -632,7 +639,6 @@ static bool stdin_set_raw_mode(bool enable) {
 }
 
 static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  (void)handle;
   buf->base = malloc(suggested_size);
 #ifdef _WIN32
   buf->len = (ULONG)suggested_size;
@@ -641,21 +647,29 @@ static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_bu
 #endif
 }
 
+static inline void emit_stdin_data_event(const uv_buf_t *buf, ssize_t nread) {
+  ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
+  if (ab) memcpy(ab->data, buf->base, (size_t)nread);
+
+  ant_value_t raw_val = ab
+    ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
+    : js_mkstr(rt->js, buf->base, (size_t)nread);
+  
+  ant_value_t data_val = is_object_type(stdin_state.decoder)
+    ? string_decoder_decode_value(rt->js, stdin_state.decoder, raw_val, false)
+    : raw_val;
+
+  if (is_err(data_val)) data_val = raw_val;
+  emit_stdio_event(&stdin_events, "data", &data_val, 1);
+}
+
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  (void)stream;
-  if (nread > 0 && rt->js) {
-    ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
-    if (ab) memcpy(ab->data, buf->base, (size_t)nread);
-    ant_value_t raw_val = ab
-      ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
-      : js_mkstr(rt->js, buf->base, (size_t)nread);
-    ant_value_t data_val = is_object_type(stdin_state.decoder)
-      ? string_decoder_decode_value(rt->js, stdin_state.decoder, raw_val, false)
-      : raw_val;
-    if (is_err(data_val)) data_val = raw_val;
-    emit_stdio_event(&stdin_events, "data", &data_val, 1);
-    if (stdin_state.keypress_enabled) process_keypress_data(rt->js, buf->base, (size_t)nread);
-  }
+  if (nread <= 0 || !rt->js) goto cleanup;
+  if (stdio_has_event_listener(stdin_events, "data")) emit_stdin_data_event(buf, nread);
+  if (stdin_state.keypress_enabled && stdio_has_event_listener(stdin_events, "keypress"))
+    process_keypress_data(rt->js, buf->base, (size_t)nread);
+
+cleanup:
   if (buf->base) free(buf->base);
 }
 

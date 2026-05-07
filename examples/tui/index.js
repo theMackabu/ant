@@ -292,12 +292,13 @@ function drawSettings() {
   screen.write(2, 5 + settings.length + 1, colors.dim + '↑↓: Navigate  Enter/→: Change  ←: Change back' + codes.reset);
 }
 
+const RENDER_FRAME_MS = 16;
 let _renderPending = false;
 
 function render() {
   if (_renderPending) return;
   _renderPending = true;
-  queueMicrotask(() => {
+  setTimeout(() => {
     _renderPending = false;
     screen.clear();
     drawHeader();
@@ -319,7 +320,7 @@ function render() {
 
     drawFooter();
     screen.render();
-  });
+  }, RENDER_FRAME_MS);
 }
 
 function showHelp() {
@@ -468,30 +469,50 @@ function handleKey(key) {
 
     case keys.UP:
     case 'k':
-      if (state.view === 'tasks') taskList.selectPrev();
-      else if (state.view === 'logs') logList.selectPrev();
-      else if (state.view === 'settings') state.settingsIndex = Math.max(0, state.settingsIndex - 1);
-      render();
+      if (state.view === 'tasks') {
+        taskList.selectPrev();
+        render();
+      } else if (state.view === 'logs') {
+        logList.selectPrev();
+        render();
+      } else if (state.view === 'settings') {
+        state.settingsIndex = Math.max(0, state.settingsIndex - 1);
+        render();
+      }
       break;
 
     case keys.DOWN:
     case 'j':
-      if (state.view === 'tasks') taskList.selectNext();
-      else if (state.view === 'logs') logList.selectNext();
-      else if (state.view === 'settings') state.settingsIndex = Math.min(settings.length - 1, state.settingsIndex + 1);
-      render();
+      if (state.view === 'tasks') {
+        taskList.selectNext();
+        render();
+      } else if (state.view === 'logs') {
+        logList.selectNext();
+        render();
+      } else if (state.view === 'settings') {
+        state.settingsIndex = Math.min(settings.length - 1, state.settingsIndex + 1);
+        render();
+      }
       break;
 
     case keys.PAGE_UP:
-      if (state.view === 'tasks') taskList.pageUp();
-      else if (state.view === 'logs') logList.pageUp();
-      render();
+      if (state.view === 'tasks') {
+        taskList.pageUp();
+        render();
+      } else if (state.view === 'logs') {
+        logList.pageUp();
+        render();
+      }
       break;
 
     case keys.PAGE_DOWN:
-      if (state.view === 'tasks') taskList.pageDown();
-      else if (state.view === 'logs') logList.pageDown();
-      render();
+      if (state.view === 'tasks') {
+        taskList.pageDown();
+        render();
+      } else if (state.view === 'logs') {
+        logList.pageDown();
+        render();
+      }
       break;
 
     case keys.ENTER:
