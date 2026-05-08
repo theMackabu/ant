@@ -10,6 +10,17 @@ else
   wamr_platform = 'linux'
 endif
 
+wamr_enable_simd = true
+wamr_simd_define = wamr_enable_simd ? '1' : '0'
+wamr_simde_define = wamr_enable_simd ? '1' : '0'
+wamr_simde_deps = []
+if wamr_enable_simd
+  wamr_simde_deps = [subproject('simde', default_options: [
+    'tests=false',
+    'sleef=disabled',
+  ]).get_variable('simde_dep')]
+endif
+
 common_c_args = [
   '-DNDEBUG',
   '-DBH_MALLOC=wasm_runtime_malloc',
@@ -31,7 +42,8 @@ common_c_args = [
   '-DWASM_DISABLE_HW_BOUND_CHECK=1',
   '-DWASM_DISABLE_STACK_HW_BOUND_CHECK=1',
   '-DWASM_DISABLE_WAKEUP_BLOCKING_OP=0',
-  '-DWASM_ENABLE_SIMD=0',
+  '-DWASM_ENABLE_SIMD=' + wamr_simd_define,
+  '-DWASM_ENABLE_SIMDE=' + wamr_simde_define,
   '-DWASM_ENABLE_MODULE_INST_CONTEXT=1',
   '-DWASM_GLOBAL_HEAP_SIZE=' + (10 * 1024 * 1024).to_string(),
 ]
@@ -146,14 +158,12 @@ wamr_sources += files(
 )
 
 if host_machine.cpu_family() == 'aarch64'
-  if wamr_platform == 'darwin'
-    wamr_sources += files('core/iwasm/common/arch/invokeNative_aarch64.s')
-  else
-    wamr_sources += files('core/iwasm/common/arch/invokeNative_aarch64.s')
-  endif
+  wamr_sources += files(wamr_enable_simd ? 'core/iwasm/common/arch/invokeNative_aarch64_simd.s' : 'core/iwasm/common/arch/invokeNative_aarch64.s')
 elif host_machine.cpu_family() == 'x86_64'
   if wamr_platform == 'windows'
-    wamr_sources += files('core/iwasm/common/arch/invokeNative_mingw_x64.s')
+    wamr_sources += files(wamr_enable_simd ? 'core/iwasm/common/arch/invokeNative_mingw_x64_simd.s' : 'core/iwasm/common/arch/invokeNative_mingw_x64.s')
+  elif wamr_enable_simd
+    wamr_sources += files('core/iwasm/common/arch/invokeNative_em64_simd.s')
   else
     wamr_sources += files('core/iwasm/common/arch/invokeNative_em64.s')
   endif
@@ -174,6 +184,7 @@ wamr_lib = static_library(
   include_directories: wamr_inc,
   c_args: common_c_args,
   cpp_args: common_c_args,
+  dependencies: wamr_simde_deps,
 )
 
 wamr_link_deps = [dependency('threads')]
@@ -192,7 +203,8 @@ wamr_dep = declare_dependency(
     '-DWASM_ENABLE_BULK_MEMORY=1',
     '-DWASM_ENABLE_REF_TYPES=1',
     '-DWASM_ENABLE_SHARED_MEMORY=0',
-    '-DWASM_ENABLE_SIMD=0',
+    '-DWASM_ENABLE_SIMD=' + wamr_simd_define,
+    '-DWASM_ENABLE_SIMDE=' + wamr_simde_define,
     '-DWASM_ENABLE_AOT=0',
     '-DWASM_ENABLE_JIT=0',
     '-DWASM_ENABLE_FAST_JIT=0',
@@ -200,5 +212,5 @@ wamr_dep = declare_dependency(
     '-DWASM_ENABLE_TAGS=0',
     '-DWASM_CONFIGURABLE_BOUNDS_CHECKS=0',
   ],
-  dependencies: wamr_link_deps,
+  dependencies: wamr_link_deps + wamr_simde_deps,
 )

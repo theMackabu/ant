@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <pthread.h>
 
 #include "ant.h"
 #include "repl.h"
@@ -19,8 +20,6 @@
 #include "highlight.h"
 #include "highlight/regex.h"
 
-typedef ant_history_t history_t;
-
 typedef enum {
   CMD_OK,
   CMD_EXIT,
@@ -31,7 +30,11 @@ typedef struct {
   const char *name;
   const char *description;
   bool has_arg;
-  cmd_result_t (*handler)(ant_t *js, history_t *history, const char *arg);
+  cmd_result_t (*handler)(
+    ant_t *js,
+    ant_history_t *history,
+    const char *arg
+  );
 } repl_command_t;
 
 typedef struct {
@@ -53,6 +56,111 @@ typedef struct {
 } repl_decl_pending_t;
 
 static repl_decl_registry_t *g_repl_decl_registry = NULL;
+static void repl_read_wake_cb(uv_async_t *handle) { (void)handle; }
+static cmd_result_t cmd_help(ant_t *js, ant_history_t *history, const char *arg);
+
+typedef struct {
+  pthread_mutex_t mutex;
+  uv_async_t async;
+  ant_history_t *history;
+  const char *prompt;
+  highlight_state prefix_state;
+  ant_readline_result_t status;
+  char *line;
+  bool done;
+  bool async_initialized;
+} repl_read_job_t;
+
+static void repl_read_async_close_cb(uv_handle_t *handle) {
+  repl_read_job_t *job = (repl_read_job_t *)handle->data;
+  if (job) job->async_initialized = false;
+}
+
+static void *repl_read_thread_main(void *data) {
+  repl_read_job_t *job = (repl_read_job_t *)data;
+  char *line = NULL;
+  
+  ant_readline_result_t status = ant_readline(
+    job->history, job->prompt, 
+    job->prefix_state, &line
+  );
+
+  pthread_mutex_lock(&job->mutex);
+  job->status = status;
+  job->line = line;
+  job->done = true;
+  pthread_mutex_unlock(&job->mutex);
+
+  if (job->async_initialized) uv_async_send(&job->async);
+  return NULL;
+}
+
+static bool repl_read_job_is_done(repl_read_job_t *job) {
+  bool done;
+  pthread_mutex_lock(&job->mutex);
+  done = job->done;
+  pthread_mutex_unlock(&job->mutex);
+  return done;
+}
+
+static ant_readline_result_t repl_readline_async(
+  ant_t *js,
+  ant_history_t *history,
+  const char *prompt,
+  highlight_state prefix_state,
+  char **out_line
+) {
+  repl_read_job_t job = {
+    .history = history,
+    .prompt = prompt,
+    .prefix_state = prefix_state,
+    .status = ANT_READLINE_EOF,
+    .line = NULL,
+    .done = false,
+    .async_initialized = false,
+  };
+  pthread_t thread;
+
+  if (out_line) *out_line = NULL;
+  if (pthread_mutex_init(&job.mutex, NULL) != 0)
+    return ant_readline(history, prompt, prefix_state, out_line);
+
+  if (uv_async_init(uv_default_loop(), &job.async, repl_read_wake_cb) != 0) {
+    pthread_mutex_destroy(&job.mutex);
+    return ant_readline(history, prompt, prefix_state, out_line);
+  }
+  job.async.data = &job;
+  job.async_initialized = true;
+
+  if (pthread_create(&thread, NULL, repl_read_thread_main, &job) != 0) {
+    if (job.async_initialized)
+      uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
+    while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
+    pthread_mutex_destroy(&job.mutex);
+    return ant_readline(history, prompt, prefix_state, out_line);
+  }
+
+  while (!repl_read_job_is_done(&job)) {
+    js_reactor_pump_repl_nowait(js);
+    uv_run(uv_default_loop(), UV_RUN_ONCE);
+  }
+
+  pthread_join(thread, NULL);
+
+  if (job.async_initialized)
+    uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
+  while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
+
+  pthread_mutex_lock(&job.mutex);
+  ant_readline_result_t status = job.status;
+  char *line = job.line;
+  pthread_mutex_unlock(&job.mutex);
+  pthread_mutex_destroy(&job.mutex);
+
+  if (out_line) *out_line = line;
+  else free(line);
+  return status;
+}
 
 static inline void repl_clear_exception_state(ant_t *js) {
   js->thrown_exists = false;
@@ -74,12 +182,10 @@ static bool repl_decl_registry_contains(
   const char *name, uint32_t len
 ) {
   if (!reg || !name) return false;
-  for (size_t i = 0; i < reg->count; i++) {
-    if (
-      reg->items[i].len == (size_t)len 
-      && memcmp(reg->items[i].name, name, (size_t)len) == 0
-    ) return true;
-  }
+  for (size_t i = 0; i < reg->count; i++) if (
+    reg->items[i].len == (size_t)len 
+    && memcmp(reg->items[i].name, name, (size_t)len) == 0
+  ) return true;
   return false;
 }
 
@@ -295,7 +401,7 @@ static void repl_eval_chunk(
 
   repl_clear_exception_state(js);
   ant_value_t result = js_eval_bytecode_repl(js, code, len);
-  js_run_event_loop(js);
+  js_reactor_pump_repl_nowait(js);
 
   if (js->thrown_exists) {
     js_set(js, js_glob(js), "_error", js->thrown_value);
@@ -312,27 +418,6 @@ static void repl_eval_chunk(
   else if (vtype(result) != T_UNDEF) printf("%s\n", js_str(js, result));
 }
 
-static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_exit(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_clear(ant_t *js, history_t *history, const char *arg);
-static cmd_result_t cmd_history(ant_t *js, history_t *history, const char *arg);
-
-static const repl_command_t commands[] = {
-  { "help",    "Show this help message",                                     false, cmd_help },
-  { "exit",    "Exit the REPL",                                              false, cmd_exit },
-  { "clear",   "Clear the screen",                                           false, cmd_clear },
-  { "history", "Show command history",                                       false, cmd_history },
-  { "load",    "Load JS from a file into the REPL session",                  true, cmd_load },
-  { "save",    "Save all evaluated commands in this REPL session to a file", true, cmd_save },
-  { "stats",   "Show memory statistics",                                     false, cmd_stats },
-  { "copy",    "Evaluate expression and copy its value",                     true, cmd_copy },
-  { NULL, NULL, false, NULL }
-};
-
 static const char *repl_command_usage(const repl_command_t *cmd) {
   if (!cmd || !cmd->name) return "";
   if (strcmp(cmd->name, "copy") == 0)    return ".copy [expr]";
@@ -346,32 +431,11 @@ static const char *repl_command_usage(const repl_command_t *cmd) {
   return cmd->name;
 }
 
-static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg) {
-  printf("\n%sREPL Commands:%s\n", C_BOLD, C_RESET);
-  for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
-    const char *usage = repl_command_usage(cmd);
-    printf("  %s%-12s%s %s\n", C_CYAN, usage, C_RESET, cmd->description);
-  }
-  printf("\n%sKeybindings:%s\n", C_BOLD, C_RESET);
-  printf("  Ctrl+C       Abort current expression (press twice to exit)\n");
-  printf("  Left/Right   Move backward/forward one character\n");
-  printf("  Home/End     Jump to start/end of line\n");
-  printf("  Up/Down      Navigate history\n");
-  printf("  Backspace    Delete character backward\n");
-  printf("  Delete       Delete character under cursor\n");
-  printf("  Enter        Submit input\n");
-  printf("\n%sSpecial Variables:%s\n", C_BOLD, C_RESET);
-  printf("  %s_%s           Last expression result\n", C_CYAN, C_RESET);
-  printf("  %s_error%s      Last error\n\n", C_CYAN, C_RESET);
-  return CMD_OK;
-}
-
-static cmd_result_t cmd_exit(ant_t *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_exit(ant_t *js, ant_history_t *history, const char *arg) {
   return CMD_EXIT;
 }
 
-static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg) {
-  (void)history;
+static cmd_result_t cmd_load(ant_t *js, ant_history_t *history, const char *arg) {
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .load <filename>\n");
     return CMD_OK;
@@ -397,11 +461,12 @@ static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg) {
     );
     free(file_buffer);
   }
+  
   fclose(fp);
   return CMD_OK;
 }
 
-static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_save(ant_t *js, ant_history_t *history, const char *arg) {
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .save <filename>\n");
     return CMD_OK;
@@ -413,31 +478,31 @@ static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
     return CMD_OK;
   }
   
-  for (int i = 0; i < history->count; i++) {
+  for (int i = 0; i < history->count; i++) 
     fprintf(fp, "%s\n", history->lines[i]);
-  }
+  
   fclose(fp);
   printf("Session saved to %s\n", arg);
+  
   return CMD_OK;
 }
 
-static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_stats(ant_t *js, ant_history_t *history, const char *arg) {
   ant_value_t stats_fn = js_get(js, rt->ant_obj, "stats");
   ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_emit(js, false, NULL, &result, 1);
   return CMD_OK;
 }
 
-static cmd_result_t cmd_clear(ant_t *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_clear(ant_t *js, ant_history_t *history, const char *arg) {
   fputs("\033[2J\033[H", stdout);
   fflush(stdout);
   return CMD_OK;
 }
 
-static cmd_result_t cmd_history(ant_t *js, history_t *history, const char *arg) {
-  for (int i = 0; i < history->count; i++) {
+static cmd_result_t cmd_history(ant_t *js, ant_history_t *history, const char *arg) {
+  for (int i = 0; i < history->count; i++)
     printf("%4d  %s\n", i + 1, history->lines[i]);
-  }
   return CMD_OK;
 }
 
@@ -467,15 +532,13 @@ static bool repl_copy_with_command(const char *data, size_t len) {
     "xclip -selection clipboard",
     "xsel --clipboard --input",
   };
-  for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
+  for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++)
     if (repl_copy_with_single_command(cmds[i], data, len)) return true;
-  }
   return false;
 }
 #endif
 
-static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
-  (void)history;
+static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg) {
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .copy <expression>\n");
     return CMD_OK;
@@ -484,15 +547,13 @@ static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
   repl_clear_exception_state(js);
   ant_value_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
   
-  js_run_event_loop(js);
+  js_reactor_pump_repl_nowait(js);
   if (js->thrown_exists) {
     js_set(js, js_glob(js), "_error", js->thrown_value);
     if (print_uncaught_throw(js)) return CMD_OK;
   }
 
-  js_set(js, js_glob(js), "_", result);
-
-  char cbuf[512];
+  js_set(js, js_glob(js), "_", result); char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, result, cbuf, sizeof(cbuf));
   
   bool copied_command = repl_copy_with_command(cstr.ptr, cstr.len);
@@ -507,7 +568,39 @@ static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
   return CMD_OK;
 }
 
-static cmd_result_t execute_command(ant_t *js, history_t *history, const char *line) {
+static const repl_command_t commands[] = {
+  { "help",    "Show this help message",                                     false, cmd_help    },
+  { "exit",    "Exit the REPL",                                              false, cmd_exit    },
+  { "clear",   "Clear the screen",                                           false, cmd_clear   },
+  { "history", "Show command history",                                       false, cmd_history },
+  { "load",    "Load JS from a file into the REPL session",                  true,  cmd_load    },
+  { "save",    "Save all evaluated commands in this REPL session to a file", true,  cmd_save    },
+  { "stats",   "Show memory statistics",                                     false, cmd_stats   },
+  { "copy",    "Evaluate expression and copy its value",                     true,  cmd_copy    },
+  { NULL, NULL, false, NULL }
+};
+
+static cmd_result_t cmd_help(ant_t *js, ant_history_t *history, const char *arg) {
+  printf("\n%sREPL Commands:%s\n", C_BOLD, C_RESET);
+  for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
+    const char *usage = repl_command_usage(cmd);
+    printf("  %s%-12s%s %s\n", C_CYAN, usage, C_RESET, cmd->description);
+  }
+  printf("\n%sKeybindings:%s\n", C_BOLD, C_RESET);
+  printf("  Ctrl+C       Abort current expression (press twice to exit)\n");
+  printf("  Left/Right   Move backward/forward one character\n");
+  printf("  Home/End     Jump to start/end of line\n");
+  printf("  Up/Down      Navigate history\n");
+  printf("  Backspace    Delete character backward\n");
+  printf("  Delete       Delete character under cursor\n");
+  printf("  Enter        Submit input\n");
+  printf("\n%sSpecial Variables:%s\n", C_BOLD, C_RESET);
+  printf("  %s_%s           Last expression result\n", C_CYAN, C_RESET);
+  printf("  %s_error%s      Last error\n\n", C_CYAN, C_RESET);
+  return CMD_OK;
+}
+
+static cmd_result_t execute_command(ant_t *js, ant_history_t *history, const char *line) {
   const char *cmd_start = line + 1;
   
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
@@ -611,7 +704,7 @@ void ant_repl_run() {
     ANT_VERSION
   );
   
-  history_t history;
+  ant_history_t history;
   ant_history_init(&history, 512);
   ant_history_load(&history);
   
@@ -645,7 +738,7 @@ void ant_repl_run() {
 
     char *line = NULL;
     ant_readline_result_t readline_status =
-      ant_readline(&history, prompt, prefix_state, &line);
+      repl_readline_async(js, &history, prompt, prefix_state, &line);
 
     if (readline_status == ANT_READLINE_INTERRUPT) {
       if (multiline_buf) {
@@ -717,9 +810,9 @@ void ant_repl_run() {
       multiline_buf = realloc(multiline_buf, multiline_cap);
     }
     
-    if (multiline_len > 0) {
+    if (multiline_len > 0)
       multiline_buf[multiline_len++] = '\n';
-    }
+    
     memcpy(multiline_buf + multiline_len, line, line_len);
     multiline_len += line_len;
     multiline_buf[multiline_len] = '\0';

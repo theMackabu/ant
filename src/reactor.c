@@ -87,3 +87,11 @@ drain:
   
   if (event_loop_alive()) goto drain;
 }
+
+void js_reactor_pump_repl_nowait(ant_t *js) {
+  js_poll_events(js);
+  reap_retired_coroutines();
+  uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+  js_poll_events(js);
+  reap_retired_coroutines();
+}

@@ -29,5 +29,6 @@ void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data);
 
 void js_poll_events(ant_t *js);
 void js_run_event_loop(ant_t *js);
+void js_reactor_pump_repl_nowait(ant_t *js);
 
 #endif

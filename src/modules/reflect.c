@@ -197,28 +197,14 @@ static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *a
   if (nargs < 2) return js_mkundef();
   
   ant_value_t target = args[0];
-  ant_value_t key = args[1];
-  
-  int t = vtype(target);
-  if (t != T_OBJ && t != T_FUNC) return js_mkundef();
-  
-  if (vtype(key) != T_STR) return js_mkundef();
-  
-  size_t key_len;
-  char *key_str = js_getstr(js, key, &key_len);
-  if (!key_str) return js_mkundef();
-  
-  ant_offset_t off = lkp(js, target, key_str, key_len);
-  if (off <= 0) return js_mkundef();
-  
-  ant_value_t value = js_get(js, target, key_str);
-  ant_value_t desc = js_mkobj(js);
-  js_set(js, desc, "value", value);
-  js_set(js, desc, "writable", js_true);
-  js_set(js, desc, "enumerable", js_true);
-  js_set(js, desc, "configurable", js_true);
-  
-  return desc;
+  if (!is_object_type(target))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.getOwnPropertyDescriptor called on non-object");
+
+  ant_value_t object_ctor = js_get(js, js_glob(js), "Object");
+  ant_value_t get_desc = js_get(js, object_ctor, "getOwnPropertyDescriptor");
+  if (!is_callable(get_desc)) return js_mkundef();
+
+  return sv_vm_call(js->vm, js, get_desc, object_ctor, args, 2, NULL, false);
 }
 
 static ant_value_t reflect_define_property(ant_t *js, ant_value_t *args, int nargs) {

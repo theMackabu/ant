@@ -17545,7 +17545,7 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
 
   if (vtype(obj) == T_CFUNC) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) == T_FUNC) return js_try_get(js, promoted, key, out);
+    if (vtype(promoted) == T_FUNC && js_try_get(js, promoted, key, out)) return true;
     if (js_cfunc_try_get_own(js, obj, key, key_len, out)) return true;
     ant_offset_t off = lkp_proto(js, obj, key, key_len);
     if (off != 0) {

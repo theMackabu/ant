@@ -1,0 +1,10 @@
+[wrap-file]
+directory = simde-0.8.2
+source_url = https://github.com/simd-everywhere/simde/archive/refs/tags/v0.8.2.tar.gz
+source_filename = simde-0.8.2.tar.gz
+source_hash = ed2a3268658f2f2a9b5367628a85ccd4cf9516460ed8604eed369653d49b25fb
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/simde_0.8.2-1/simde-0.8.2.tar.gz
+wrapdb_version = 0.8.2-1
+
+[provide]
+dependency_names = simde
