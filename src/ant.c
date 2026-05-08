@@ -3558,11 +3558,11 @@ bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) 
   return false;
 }
 
-static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_value_t expected_proto) {
+static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val) {
   if (vtype(js->new_target) == T_UNDEF) return false;
   if (vtype(this_val) != T_OBJ) return false;
   if (vtype(get_slot(this_val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
-  return proto_chain_contains(js, this_val, expected_proto);
+  return true;
 }
 
 ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor) {
@@ -5345,8 +5345,7 @@ static ant_value_t builtin_String(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(sval)) return sval;
   }
   
-  ant_value_t string_proto = js_get_ctor_proto(js, "String", 6);
-  if (is_wrapper_ctor_target(js, js->this_val, string_proto)) {
+  if (is_wrapper_ctor_target(js, js->this_val)) {
     set_slot(js->this_val, SLOT_PRIMITIVE, sval);
     
     ant_offset_t byte_len;
@@ -5428,19 +5427,15 @@ static ant_value_t builtin_Number_isSafeInteger(ant_t *js, ant_value_t *args, in
 
 static ant_value_t builtin_Number(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t nval = tov(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
-  ant_value_t number_proto = js_get_ctor_proto(js, "Number", 6);
-  if (is_wrapper_ctor_target(js, js->this_val, number_proto)) {
+  if (is_wrapper_ctor_target(js, js->this_val))
     set_slot(js->this_val, SLOT_PRIMITIVE, nval);
-  }
   return nval;
 }
 
 static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
-  ant_value_t boolean_proto = js_get_ctor_proto(js, "Boolean", 7);
-  if (is_wrapper_ctor_target(js, js->this_val, boolean_proto)) {
+  if (is_wrapper_ctor_target(js, js->this_val))
     set_slot(js->this_val, SLOT_PRIMITIVE, bval);
-  }
   return bval;
 }
 
