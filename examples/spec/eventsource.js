@@ -52,13 +52,33 @@ const result = await new Promise(resolve => {
   };
 });
 
-server.kill('SIGTERM');
-
 test('EventSource opened', result.opened, true);
 test('EventSource event data', result.data, 'hello\nworld');
 test('EventSource last event id', result.lastEventId, '42');
 test('EventSource withCredentials', result.withCredentials, true);
 test('EventSource ready before close', result.readyStateBeforeClose, EventSource.OPEN);
 test('EventSource closed state', result.readyStateAfterClose, EventSource.CLOSED);
+
+const retryResult = await new Promise(resolve => {
+  const source = new EventSource(`http://127.0.0.1:${port}/retry`);
+  const seen = [];
+  const timeout = setTimeout(() => {
+    source.close();
+    resolve(seen.join(','));
+  }, 1000);
+
+  source.addEventListener('tick', event => {
+    seen.push(event.data);
+    if (event.data === 'second') {
+      clearTimeout(timeout);
+      source.close();
+      resolve(seen.join(','));
+    }
+  });
+});
+
+test('EventSource retry controls reconnect delay', retryResult, 'first,second');
+
+server.kill('SIGTERM');
 
 summary();

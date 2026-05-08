@@ -39,7 +39,7 @@ const result = await new Promise(resolve => {
 
   socket.addEventListener('message', event => {
     seen.push(event.data);
-    if (event.data === 'echo:hello') socket.send('close');
+    if (event.data === 'string:hello') socket.send('close');
   });
 
   socket.onclose = event => {
@@ -59,7 +59,7 @@ const result = await new Promise(resolve => {
 server.kill('SIGTERM');
 
 test('WebSocket opened', result.seen.includes('open'), true);
-test('WebSocket round trip', result.seen.includes('echo:hello'), true);
+test('WebSocket text send preserves opcode', result.seen.includes('string:hello'), true);
 test('WebSocket close code', result.code, 1000);
 test('WebSocket closed state', result.readyState, WebSocket.CLOSED);
 

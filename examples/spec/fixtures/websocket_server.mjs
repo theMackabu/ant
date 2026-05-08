@@ -11,7 +11,7 @@ export default {
     const { socket, response } = ctx.upgradeWebSocket(request);
     socket.onmessage = event => {
       const data = typeof event.data === 'string' ? event.data : decoder.decode(event.data);
-      socket.send('echo:' + data);
+      socket.send(typeof event.data + ':' + data);
       if (data === 'close') {
         socket.close(1000, 'done');
         setTimeout(() => ctx.stop(), 20);

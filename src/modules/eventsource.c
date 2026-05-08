@@ -255,7 +255,9 @@ static void eventsource_http_on_body(ant_http_request_t *req, const uint8_t *chu
   if (!ant_sse_parser_feed(&es->parser, (const char *)chunk, len, eventsource_on_message, es)) {
     eventsource_emit_error_once(es);
     ant_http_request_cancel(req);
+    return;
   }
+  if (es->parser.has_retry) es->retry_ms = es->parser.retry;
 }
 
 static void eventsource_http_on_complete(

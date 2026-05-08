@@ -248,7 +248,32 @@ static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const u
 
 static void websocket_write_cb(uv_write_t *req, int status) {
   (void)status;
+  free(req->data);
   free(req);
+}
+
+static int websocket_client_write_frame(websocket_state_t *ws, ant_ws_opcode_t opcode, const uint8_t *bytes, size_t len) {
+  if (!ws || !ws->client.tr || !ws->client.tr_write) return UV_ENOTCONN;
+
+  size_t frame_len = 0;
+  uint8_t *frame = ant_ws_encode_frame(opcode, bytes, len, true, &frame_len);
+  if (!frame) return UV_ENOMEM;
+
+  uv_write_t *wr = calloc(1, sizeof(*wr));
+  if (!wr) {
+    free(frame);
+    return UV_ENOMEM;
+  }
+
+  wr->data = frame;
+  uv_buf_t buf = uv_buf_init((char *)frame, (unsigned int)frame_len);
+  int rc = ws->client.tr_write(wr, ws->client.tr, &buf, 1, websocket_write_cb);
+  if (rc != 0) {
+    free(frame);
+    free(wr);
+  }
+  
+  return rc;
 }
 
 static void websocket_finalize(ant_t *js, ant_object_t *obj) {
@@ -350,14 +375,8 @@ static ant_value_t js_websocket_send(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket message");
 
   if (ws->is_client) {
-    uv_write_t *wr = calloc(1, sizeof(*wr));
-    if (!wr) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-    uv_buf_t buf = uv_buf_init((char *)bytes, (unsigned int)len);
-    int rc = tlsuv_websocket_write(wr, &ws->client, &buf, websocket_write_cb);
-    if (rc != 0) {
-      free(wr);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
-    }
+    int rc = websocket_client_write_frame(ws, binary ? ANT_WS_OPCODE_BINARY : ANT_WS_OPCODE_TEXT, bytes, len);
+    if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
     return js_mkundef();
   }
 
