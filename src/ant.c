@@ -70,6 +70,7 @@
 #include "modules/lmdb.h"
 #include "modules/regex.h"
 #include "modules/globals.h"
+#include "modules/rpc.h"
 
 #define D(x) ((double)(x))
 
@@ -16930,6 +16931,7 @@ void js_destroy(ant_t *js) {
   
   js_esm_cleanup_module_cache();
   code_arena_reset();
+  cleanup_rpc_module();
   cleanup_lmdb_module();
 
   ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
