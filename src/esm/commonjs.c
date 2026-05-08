@@ -12,6 +12,30 @@
 #include <string.h>
 #include <stdlib.h>
 
+static ant_value_t cjs_module_exports_getter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t state = js_get_slot(fn, SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+  return js_get(js, state, "value");
+}
+
+static ant_value_t cjs_module_exports_setter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t state = js_get_slot(fn, SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+
+  js_set(js, state, "value", value);
+
+  ant_value_t ns = js_get(js, state, "namespace");
+  if (is_object_type(ns)) {
+    js_set_slot_wb(js, ns, SLOT_DEFAULT, value);
+    setprop_cstr(js, ns, "default", 7, value);
+  }
+
+  return js_mkundef();
+}
+
 static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR)
     return js_mkerr(js, "require() expects a string specifier");
@@ -170,13 +194,31 @@ ant_value_t esm_load_commonjs_module(
   ant_value_t object_proto = js->sym.object_proto;
   ant_value_t module_obj = js_mkobj(js);
   ant_value_t exports_obj = js_mkobj(js);
+  ant_value_t exports_state = js_mkobj(js);
   
   if (is_object_type(object_proto)) {
     js_set_proto_init(module_obj, object_proto);
     js_set_proto_init(exports_obj, object_proto);
+    js_set_proto_init(exports_state, object_proto);
   }
   
-  js_set(js, module_obj, "exports", exports_obj);
+  js_set(js, exports_state, "value", exports_obj);
+  js_set(js, exports_state, "namespace", ns);
+  
+  js_set_getter_desc(
+    js, js_as_obj(module_obj), "exports", 7,
+    js_heavy_mkfun(js, cjs_module_exports_getter, exports_state),
+    JS_DESC_E | JS_DESC_C
+  );
+  
+  js_set_setter_desc(
+    js, js_as_obj(module_obj), "exports", 7,
+    js_heavy_mkfun(js, cjs_module_exports_setter, exports_state),
+    JS_DESC_E | JS_DESC_C
+  );
+  
+  js_set_slot_wb(js, ns, SLOT_DEFAULT, exports_obj);
+  setprop_cstr(js, ns, "default", 7, exports_obj);
   js_set(js, module_obj, "loaded", js_false);
   js_set(js, module_obj, "id", js_mkstr(js, module_path, strlen(module_path)));
   js_set(js, module_obj, "filename", js_mkstr(js, module_path, strlen(module_path)));
