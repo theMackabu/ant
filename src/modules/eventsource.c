@@ -27,7 +27,6 @@ typedef struct eventsource_timer_s {
   struct eventsource_state_s *source;
 } eventsource_timer_t;
 
-// TODO: optimize padding
 typedef struct eventsource_state_s {
   ant_t *js;
   ant_value_t obj;
@@ -38,12 +37,12 @@ typedef struct eventsource_state_s {
   char *last_event_id;
   struct eventsource_state_s *next;
   uint32_t retry_ms;
-  int ready_state;
-  bool with_credentials;
-  bool active;
-  bool closed;
-  bool opened_request;
-  bool error_emitted_for_request;
+  uint8_t ready_state;
+  bool with_credentials : 1;
+  bool active : 1;
+  bool closed : 1;
+  bool opened_request : 1;
+  bool error_emitted_for_request : 1;
 } eventsource_state_t;
 
 enum {

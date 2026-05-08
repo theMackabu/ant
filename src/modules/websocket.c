@@ -23,7 +23,6 @@
 #include "modules/websocket.h"
 #include "net/listener.h"
 
-// TODO: optimize padding
 typedef struct websocket_state_s {
   ant_t *js;
   ant_value_t obj;
@@ -36,11 +35,11 @@ typedef struct websocket_state_s {
   size_t fragment_len;
   size_t fragment_cap;
   ant_ws_opcode_t fragment_opcode;
-  int ready_state;
-  bool is_client;
-  bool close_emitted;
-  bool active;
-  bool fragmenting;
+  uint8_t ready_state;
+  bool is_client : 1;
+  bool close_emitted : 1;
+  bool active : 1;
+  bool fragmenting : 1;
 } websocket_state_t;
 
 enum {
@@ -467,6 +466,14 @@ void ant_websocket_server_open(ant_t *js, ant_value_t socket_obj) {
 }
 
 void ant_websocket_server_on_read(ant_t *js, ant_value_t socket_obj, ant_conn_t *conn) {
+  static const void *dispatch[] = {
+    [ANT_WS_OPCODE_CONTINUATION] = &&l_continuation,
+    [ANT_WS_OPCODE_TEXT]         = &&l_message,
+    [ANT_WS_OPCODE_BINARY]       = &&l_message,
+    [ANT_WS_OPCODE_CLOSE]        = &&l_close,
+    [ANT_WS_OPCODE_PING]         = &&l_ping,
+  };
+
   websocket_state_t *ws = websocket_data(socket_obj);
   if (!ws || !conn) return;
 
@@ -478,6 +485,7 @@ void ant_websocket_server_on_read(ant_t *js, ant_value_t socket_obj, ant_conn_t 
       true,
       &frame
     );
+    
     if (result == ANT_WS_FRAME_INCOMPLETE) return;
     if (result == ANT_WS_FRAME_PROTOCOL_ERROR) {
       websocket_emit_simple(ws, "error");
@@ -486,74 +494,64 @@ void ant_websocket_server_on_read(ant_t *js, ant_value_t socket_obj, ant_conn_t 
     }
 
     ant_conn_consume(conn, frame.consumed_len);
-    switch (frame.opcode) {
-      case ANT_WS_OPCODE_TEXT:
-      case ANT_WS_OPCODE_BINARY:
-        if (ws->fragmenting) {
-          websocket_emit_simple(ws, "error");
-          ant_ws_frame_clear(&frame);
-          ant_conn_close(conn);
-          return;
-        }
-        if (frame.fin) {
-          websocket_emit_message(ws, frame.payload, frame.payload_len, frame.opcode == ANT_WS_OPCODE_BINARY);
-        } else {
-          ws->fragmenting = true;
-          ws->fragment_opcode = frame.opcode;
-          if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) {
-            websocket_emit_simple(ws, "error");
-            ant_ws_frame_clear(&frame);
-            ant_conn_close(conn);
-            return;
-          }
-        }
-        break;
-      case ANT_WS_OPCODE_CONTINUATION:
-        if (!ws->fragmenting) {
-          websocket_emit_simple(ws, "error");
-          ant_ws_frame_clear(&frame);
-          ant_conn_close(conn);
-          return;
-        }
-        if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) {
-          websocket_emit_simple(ws, "error");
-          ant_ws_frame_clear(&frame);
-          ant_conn_close(conn);
-          return;
-        }
-        if (frame.fin) {
-          websocket_emit_message(ws, ws->fragment_buf, ws->fragment_len, ws->fragment_opcode == ANT_WS_OPCODE_BINARY);
-          websocket_fragment_clear(ws);
-        }
-        break;
-      case ANT_WS_OPCODE_PING: {
-        size_t out_len = 0;
-        uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_PONG, frame.payload, frame.payload_len, false, &out_len);
-        if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
-        break;
+    if (frame.opcode < sizeof(dispatch) / sizeof(*dispatch) && dispatch[frame.opcode])
+      goto *dispatch[frame.opcode];
+    goto l_done;
+
+    l_message:
+      if (ws->fragmenting) goto l_protocol_error;
+      if (frame.fin) {
+        websocket_emit_message(ws, frame.payload, frame.payload_len, frame.opcode == ANT_WS_OPCODE_BINARY);
+      } else {
+        ws->fragmenting = true;
+        ws->fragment_opcode = frame.opcode;
+        if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) goto l_protocol_error;
       }
-      case ANT_WS_OPCODE_CLOSE: {
-        uint16_t code = 1000;
-        const char *reason = "";
-        char reason_buf[124];
-        if (frame.payload_len >= 2) {
-          code = (uint16_t)(((uint16_t)frame.payload[0] << 8) | frame.payload[1]);
-          size_t reason_len = frame.payload_len - 2;
-          if (reason_len > sizeof(reason_buf) - 1) reason_len = sizeof(reason_buf) - 1;
-          if (reason_len > 0) memcpy(reason_buf, frame.payload + 2, reason_len);
-          reason_buf[reason_len] = '\0';
-          reason = reason_buf;
-        }
-        size_t out_len = 0;
-        uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_CLOSE, frame.payload, frame.payload_len, false, &out_len);
-        if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
-        websocket_emit_close(ws, code, reason, true);
-        ant_conn_shutdown(conn);
-        break;
+      goto l_done;
+
+    l_continuation:
+      if (!ws->fragmenting) goto l_protocol_error;
+      if (!websocket_fragment_append(ws, frame.payload, frame.payload_len)) goto l_protocol_error;
+      if (frame.fin) {
+        websocket_emit_message(ws, ws->fragment_buf, ws->fragment_len, ws->fragment_opcode == ANT_WS_OPCODE_BINARY);
+        websocket_fragment_clear(ws);
       }
-      default:
-        break;
+      goto l_done;
+
+    l_ping: {
+      size_t out_len = 0;
+      uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_PONG, frame.payload, frame.payload_len, false, &out_len);
+      if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
+      goto l_done;
     }
+
+    l_close: {
+      uint16_t code = 1000;
+      const char *reason = "";
+      char reason_buf[124];
+      if (frame.payload_len >= 2) {
+        code = (uint16_t)(((uint16_t)frame.payload[0] << 8) | frame.payload[1]);
+        size_t reason_len = frame.payload_len - 2;
+        if (reason_len > sizeof(reason_buf) - 1) reason_len = sizeof(reason_buf) - 1;
+        if (reason_len > 0) memcpy(reason_buf, frame.payload + 2, reason_len);
+        reason_buf[reason_len] = '\0';
+        reason = reason_buf;
+      }
+      size_t out_len = 0;
+      uint8_t *out = ant_ws_encode_frame(ANT_WS_OPCODE_CLOSE, frame.payload, frame.payload_len, false, &out_len);
+      if (out) ant_conn_write(conn, (char *)out, out_len, NULL, NULL);
+      websocket_emit_close(ws, code, reason, true);
+      ant_conn_shutdown(conn);
+      goto l_done;
+    }
+
+    l_protocol_error:
+      websocket_emit_simple(ws, "error");
+      ant_ws_frame_clear(&frame);
+      ant_conn_close(conn);
+      return;
+
+    l_done:
     ant_ws_frame_clear(&frame);
   }
 }
