@@ -4587,6 +4587,8 @@ static inline bool is_class_method_def(const sv_ast_t *m) {
     (m->right->flags & FN_METHOD);
 }
 
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local);
+
 static void compile_class_method(
   sv_compiler_t *c, sv_ast_t *m,
   int ctor_local, int proto_local,
@@ -4604,7 +4606,8 @@ static void compile_class_method(
     emit_op(c, OP_SWAP);              
   } else {
     emit_get_local(c, home_local);    
-    if (m->right) compile_expr(c, m->right);
+    if (is_static) compile_static_initializer_value(c, m->right, ctor_local);
+    else if (m->right) compile_expr(c, m->right);
     else emit_op(c, OP_UNDEF);        
   }
 
@@ -4632,7 +4635,8 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   if (is_fn) {
     if (m->flags & FN_STATIC) m->right->flags |= FN_STATIC;
     compile_func_expr(c, m->right);
-  } else if (m->right) compile_expr(c, m->right);
+  } else if ((m->flags & FN_STATIC)) compile_static_initializer_value(c, m->right, ctor_local);
+  else if (m->right) compile_expr(c, m->right);
   else emit_op(c, OP_UNDEF);
 
   emit_op(c, OP_DEF_PRIVATE);
@@ -4647,6 +4651,105 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   int loc = add_local(c, "", 0, false, c->scope_depth);
   emit_put_local(c, loc);
   return loc;
+}
+
+static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool returns_expr) {
+  sv_compiler_t comp;
+  sv_compile_ctx_init_child(&comp, c, NULL, c->mode);
+  comp.is_strict = true;
+
+  static const char sv_name[] = "\x01super";
+  comp.super_local = add_local(&comp, sv_name, sizeof(sv_name) - 1, false, comp.scope_depth);
+  emit_op(&comp, OP_SPECIAL_OBJ);
+  emit(&comp, 2);
+  emit_put_local(&comp, comp.super_local);
+
+  if (returns_expr) {
+    if (node) compile_expr(&comp, node);
+    else emit_op(&comp, OP_UNDEF);
+    emit_return_from_stack(&comp);
+  } else {
+    compile_stmts(&comp, &node->args);
+    emit_close_upvals(&comp);
+    emit_op(&comp, OP_RETURN_UNDEF);
+  }
+
+  sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
+  memset(fn, 0, sizeof(sv_func_t));
+  fn->code = code_arena_bump((size_t)comp.code_len);
+  memcpy(fn->code, comp.code, (size_t)comp.code_len);
+  fn->code_len = comp.code_len;
+  sv_func_init_obj_sites(fn);
+
+  if (comp.const_count > 0) {
+    fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+    memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
+    fn->const_count = comp.const_count;
+    build_gc_const_tables(fn);
+  }
+  if (comp.atom_count > 0) {
+    fn->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
+    memcpy(fn->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
+    fn->atom_count = comp.atom_count;
+  }
+  fn->ic_count = (uint16_t)comp.ic_count;
+  if (fn->ic_count > 0) {
+    fn->ic_slots = code_arena_bump((size_t)fn->ic_count * sizeof(sv_ic_entry_t));
+    memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
+  }
+  if (comp.upvalue_count > 0) {
+    fn->upval_descs = code_arena_bump((size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
+    memcpy(fn->upval_descs, comp.upval_descs, (size_t)comp.upvalue_count * sizeof(sv_upval_desc_t));
+    fn->upvalue_count = comp.upvalue_count;
+  }
+  if (comp.srcpos_count > 0) {
+    fn->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    memcpy(fn->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    fn->srcpos_count = comp.srcpos_count;
+  }
+
+  fn->max_locals = comp.max_local_count;
+  fn->max_stack = fn->max_locals + 64;
+  fn->local_type_count = fn->max_locals;
+  if (fn->max_locals > 0) {
+    fn->local_types = code_arena_bump((size_t)fn->max_locals * sizeof(sv_type_info_t));
+    memset(fn->local_types, 0, (size_t)fn->max_locals * sizeof(sv_type_info_t));
+    if (comp.slot_types) {
+      int ncopy = fn->max_locals < comp.slot_type_cap ? fn->max_locals : comp.slot_type_cap;
+      memcpy(fn->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
+    }
+  }
+  fn->param_count = 0;
+  fn->function_length = 0;
+  fn->is_strict = true;
+  fn->is_static = true;
+  fn->filename = c->filename ? c->filename : c->js->filename;
+  fn->source_line = node ? (int)node->line : 0;
+
+  sv_compile_ctx_cleanup(&comp);
+
+  return add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
+}
+
+static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_local) {
+  emit_op(c, OP_CLOSURE);
+  emit_u32(c, (uint32_t)func_idx);
+  emit_get_local(c, ctor_local);
+  emit_op(c, OP_SET_HOME_OBJ);
+  emit_op(c, OP_SWAP);
+  emit_op(c, OP_CALL_METHOD);
+  emit_u16(c, 0);
+}
+
+static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local) {
+  int idx = compile_static_child_function(c, expr, true);
+  emit_static_child_call(c, idx, ctor_local);
+}
+
+static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_local) {
+  int idx = compile_static_child_function(c, block, false);
+  emit_static_child_call(c, idx, ctor_local);
+  emit_op(c, OP_POP);
 }
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {
@@ -4892,15 +4995,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
     if (m->type == N_STATIC_BLOCK) {
-      begin_scope(c);
-      int saved_completion_local = c->completion_local;
-      bool saved_strict = c->is_strict;
-      c->is_strict = true;
-      c->completion_local = -1;
-      compile_stmts(c, &m->args);
-      c->completion_local = saved_completion_local;
-      c->is_strict = saved_strict;
-      end_scope(c);
+      compile_static_block(c, m, ctor_local);
       continue;
     }
     
