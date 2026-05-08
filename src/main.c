@@ -76,6 +76,8 @@
 #include "modules/http_metadata.h"
 #include "modules/http_parser.h"
 #include "modules/http_writer.h"
+#include "modules/websocket.h"
+#include "modules/eventsource.h"
 #include "modules/dns.h"
 #include "modules/assert.h"
 #include "modules/domexception.h"
@@ -631,11 +633,13 @@ int main(int argc, char *argv[]) {
   init_process_module();
   init_tty_module();
   init_events_module();
+  init_websocket_module();
   init_performance_module();
   init_uri_module();
   init_url_module();
   init_reflect_module();
   init_textcodec_module();
+  init_eventsource_module();
   init_sessionstorage_module();
   init_localstorage_module();
   init_navigator_module();

@@ -15,6 +15,8 @@ void gc_mark_process(ant_t *js, gc_mark_fn mark);
 void gc_mark_navigator(ant_t *js, gc_mark_fn mark);
 void gc_mark_net(ant_t *js, gc_mark_fn mark);
 void gc_mark_server(ant_t *js, gc_mark_fn mark);
+void gc_mark_websocket(ant_t *js, gc_mark_fn mark);
+void gc_mark_eventsource(ant_t *js, gc_mark_fn mark);
 void gc_mark_events(ant_t *js, gc_mark_fn mark);
 void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark);
 void gc_finalize_events_object(ant_t *js, ant_value_t obj);

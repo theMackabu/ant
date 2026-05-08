@@ -120,3 +120,10 @@ executable(
   dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
   build_by_default: false
 )
+
+executable(
+  'test-http-protocols',
+  files('tests/test_http_protocols.c'),
+  dependencies: libant_dep,
+  build_by_default: false
+)
