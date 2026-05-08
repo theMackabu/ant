@@ -4539,6 +4539,11 @@ static ant_value_t get_proto(ant_t *js, ant_value_t obj) {
 }
 
 void js_set_proto(ant_value_t obj, ant_value_t proto) {
+  if (vtype(obj) == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_promote(rt->js, obj);
+    if (is_err(promoted)) return;
+    obj = promoted;
+  }
   if (!is_object_type(obj)) return;
 
   ant_value_t as_obj = js_as_obj(obj);
@@ -4557,6 +4562,11 @@ void js_set_proto_init(ant_value_t obj, ant_value_t proto) {
 }
 
 static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
+  if (vtype(obj) == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_promote(js, obj);
+    if (is_err(promoted)) return;
+    obj = promoted;
+  }
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   js_set_proto(obj, proto);
   if (ptr) gc_write_barrier(js, ptr, proto);
@@ -5132,6 +5142,11 @@ static ant_value_t check_frozen_sealed(ant_t *js, ant_value_t obj, const char *a
 }
 
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len) {
+  if (vtype(obj) == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_promote(js, obj);
+    if (is_err(promoted)) return promoted;
+    obj = promoted;
+  }
   ant_value_t original_obj = obj;
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
@@ -5196,6 +5211,11 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
 }
 
 ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
+  if (vtype(obj) == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_promote(js, obj);
+    if (is_err(promoted)) return promoted;
+    obj = promoted;
+  }
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr) return js_true;
@@ -17582,6 +17602,11 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
       ant_value_t accessor_result;
       if (try_accessor_getter(js, obj, key, key_len, &accessor_result)) {
         *out = accessor_result;
+        return true;
+      }
+      off = lkp_proto(js, obj, key, key_len);
+      if (off != 0) {
+        *out = propref_load(js, off);
         return true;
       }
       return false;

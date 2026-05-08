@@ -1652,17 +1652,17 @@ void init_collections_module(void) {
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);
-  js_set(js, map_proto, "set", js_mkfun(map_set));
-  js_set(js, map_proto, "get", js_mkfun(map_get));
-  js_set(js, map_proto, "has", js_mkfun(map_has));
-  js_set(js, map_proto, "upsert", js_mkfun(map_upsert));
-  js_set(js, map_proto, "delete", js_mkfun(map_delete));
+  js_set(js, map_proto, "set", js_mkfun_arity(map_set, 2));
+  js_set(js, map_proto, "get", js_mkfun_arity(map_get, 1));
+  js_set(js, map_proto, "has", js_mkfun_arity(map_has, 1));
+  js_set(js, map_proto, "upsert", js_mkfun_arity(map_upsert, 3));
+  js_set(js, map_proto, "delete", js_mkfun_arity(map_delete, 1));
   js_set(js, map_proto, "clear", js_mkfun(map_clear));
   js_set_getter_desc(js, map_proto, "size", 4, js_mkfun(map_size), JS_DESC_C);
   js_set(js, map_proto, "entries", js_mkfun(map_entries));
   js_set(js, map_proto, "keys", js_mkfun(map_keys));
   js_set(js, map_proto, "values", js_mkfun(map_values));
-  js_set(js, map_proto, "forEach", js_mkfun(map_forEach));
+  js_set(js, map_proto, "forEach", js_mkfun_arity(map_forEach, 1));
   js_set_sym(js, map_proto, iter_sym, js_get(js, map_proto, "entries"));
   js_set_sym(js, map_proto, tag_sym, js_mkstr(js, "Map", 3));
   
@@ -1677,22 +1677,22 @@ void init_collections_module(void) {
   
   ant_value_t set_proto = js_mkobj(js);
   js_set_proto_init(set_proto, object_proto);
-  js_set(js, set_proto, "add", js_mkfun(set_add));
-  js_set(js, set_proto, "has", js_mkfun(set_has));
-  js_set(js, set_proto, "delete", js_mkfun(set_delete));
+  js_set(js, set_proto, "add", js_mkfun_arity(set_add, 1));
+  js_set(js, set_proto, "has", js_mkfun_arity(set_has, 1));
+  js_set(js, set_proto, "delete", js_mkfun_arity(set_delete, 1));
   js_set(js, set_proto, "clear", js_mkfun(set_clear));
   js_set_getter_desc(js, set_proto, "size", 4, js_mkfun(set_size), JS_DESC_C);
   js_set(js, set_proto, "values", js_mkfun(set_values));
   js_set_exact(js, set_proto, "keys", js_get(js, set_proto, "values"));
   js_set(js, set_proto, "entries", js_mkfun(set_entries));
-  js_set(js, set_proto, "forEach", js_mkfun(set_forEach));
-  js_set(js, set_proto, "union", js_mkfun(set_union));
-  js_set(js, set_proto, "intersection", js_mkfun(set_intersection));
-  js_set(js, set_proto, "difference", js_mkfun(set_difference));
-  js_set(js, set_proto, "symmetricDifference", js_mkfun(set_symmetricDifference));
-  js_set(js, set_proto, "isSubsetOf", js_mkfun(set_isSubsetOf));
-  js_set(js, set_proto, "isSupersetOf", js_mkfun(set_isSupersetOf));
-  js_set(js, set_proto, "isDisjointFrom", js_mkfun(set_isDisjointFrom));
+  js_set(js, set_proto, "forEach", js_mkfun_arity(set_forEach, 1));
+  js_set(js, set_proto, "union", js_mkfun_arity(set_union, 1));
+  js_set(js, set_proto, "intersection", js_mkfun_arity(set_intersection, 1));
+  js_set(js, set_proto, "difference", js_mkfun_arity(set_difference, 1));
+  js_set(js, set_proto, "symmetricDifference", js_mkfun_arity(set_symmetricDifference, 1));
+  js_set(js, set_proto, "isSubsetOf", js_mkfun_arity(set_isSubsetOf, 1));
+  js_set(js, set_proto, "isSupersetOf", js_mkfun_arity(set_isSupersetOf, 1));
+  js_set(js, set_proto, "isDisjointFrom", js_mkfun_arity(set_isDisjointFrom, 1));
   js_set_sym(js, set_proto, iter_sym, js_get(js, set_proto, "values"));
   js_set_sym(js, set_proto, tag_sym, js_mkstr(js, "Set", 3));
   
@@ -1706,11 +1706,11 @@ void init_collections_module(void) {
   
   ant_value_t weakmap_proto = js_mkobj(js);
   js_set_proto_init(weakmap_proto, object_proto);
-  js_set(js, weakmap_proto, "set", js_mkfun(weakmap_set));
-  js_set(js, weakmap_proto, "get", js_mkfun(weakmap_get));
-  js_set(js, weakmap_proto, "has", js_mkfun(weakmap_has));
-  js_set(js, weakmap_proto, "upsert", js_mkfun(weakmap_upsert));
-  js_set(js, weakmap_proto, "delete", js_mkfun(weakmap_delete));
+  js_set(js, weakmap_proto, "set", js_mkfun_arity(weakmap_set, 2));
+  js_set(js, weakmap_proto, "get", js_mkfun_arity(weakmap_get, 1));
+  js_set(js, weakmap_proto, "has", js_mkfun_arity(weakmap_has, 1));
+  js_set(js, weakmap_proto, "upsert", js_mkfun_arity(weakmap_upsert, 3));
+  js_set(js, weakmap_proto, "delete", js_mkfun_arity(weakmap_delete, 1));
   js_set_sym(js, weakmap_proto, tag_sym, js_mkstr(js, "WeakMap", 7));
   
   ant_value_t weakmap_ctor = js_mkobj(js);
@@ -1722,9 +1722,9 @@ void init_collections_module(void) {
   
   ant_value_t weakset_proto = js_mkobj(js);
   js_set_proto_init(weakset_proto, object_proto);
-  js_set(js, weakset_proto, "add", js_mkfun(weakset_add));
-  js_set(js, weakset_proto, "has", js_mkfun(weakset_has));
-  js_set(js, weakset_proto, "delete", js_mkfun(weakset_delete));
+  js_set(js, weakset_proto, "add", js_mkfun_arity(weakset_add, 1));
+  js_set(js, weakset_proto, "has", js_mkfun_arity(weakset_has, 1));
+  js_set(js, weakset_proto, "delete", js_mkfun_arity(weakset_delete, 1));
   js_set_sym(js, weakset_proto, tag_sym, js_mkstr(js, "WeakSet", 7));
   
   ant_value_t weakset_ctor = js_mkobj(js);

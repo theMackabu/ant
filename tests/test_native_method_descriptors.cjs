@@ -182,6 +182,19 @@ Object.defineProperty(fetch, nativeReproSym, {
   configurable: true,
   writable: true,
 });
+
+const originalFetchApply = fetch.apply;
+fetch.apply = undefined;
+if (fetch.apply !== undefined) {
+  console.log('FAIL: native function own properties should shadow prototype properties');
+  pass = false;
+}
+delete fetch.apply;
+if (fetch.apply !== originalFetchApply || fetch.apply !== Function.prototype.apply) {
+  console.log('FAIL: deleting native function own properties should restore prototype lookup');
+  pass = false;
+}
+
 Object.setPrototypeOf(fetch, customFetchProto);
 
 if (fetch.extra !== 'value-from-set' || fetch.defined !== 'value-from-defineProperty') {
