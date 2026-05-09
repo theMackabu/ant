@@ -1,3 +1,5 @@
+// TODO: unshim
+
 import net from 'node:net';
 import internalTls from 'ant:internal/tls';
 
@@ -17,6 +19,14 @@ function wrapSocket(socket) {
   defineTlsState(socket);
 
   if (!(socket instanceof TLSSocket)) {
+    const nativeProto = Object.getPrototypeOf(socket);
+    if (
+      nativeProto &&
+      nativeProto !== TLSSocket.prototype &&
+      Object.getPrototypeOf(TLSSocket.prototype) !== nativeProto
+    ) {
+      Object.setPrototypeOf(TLSSocket.prototype, nativeProto);
+    }
     Object.setPrototypeOf(socket, TLSSocket.prototype);
   }
 
@@ -24,8 +34,14 @@ function wrapSocket(socket) {
 }
 
 function createConnectionArgs(args) {
+  let callback;
+
+  if (typeof args[args.length - 1] === 'function') {
+    callback = args.pop();
+  }
+
   if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
-    return args[0];
+    return { options: args[0], callback };
   }
 
   const [port, host, options] = args;
@@ -34,7 +50,7 @@ function createConnectionArgs(args) {
   if (typeof port === 'number') normalized.port = port;
   if (typeof host === 'string') normalized.host = host;
   if (options && typeof options === 'object') Object.assign(normalized, options);
-  return normalized;
+  return { options: normalized, callback };
 }
 
 export class TLSSocket extends net.Socket {
@@ -97,8 +113,14 @@ export function getCiphers() {
 }
 
 export function createConnection(...args) {
-  const socket = net.connect(createConnectionArgs(args));
-  return wrapSocket(socket);
+  const { options, callback } = createConnectionArgs(args);
+  const tlsSocket = wrapSocket(internalTls.connect(options));
+
+  if (tlsSocket && typeof tlsSocket.once === 'function' && typeof callback === 'function') {
+    tlsSocket.once('secureConnect', callback);
+  }
+
+  return tlsSocket;
 }
 
 export function connect(...args) {

@@ -1,10 +1,13 @@
 import net from 'node:net';
+import tls from 'node:tls';
 
 import httpParser from 'ant:internal/http_parser';
 import httpWriter from 'ant:internal/http_writer';
 
 import { EventEmitter } from 'node:events';
 import { STATUS_CODES } from 'ant:internal/http_metadata';
+
+export const maxHeaderSize = 16 * 1024;
 
 function createHeadersObject() {
   return Object.create(null);
@@ -248,6 +251,63 @@ function getFetchBody(chunks) {
   return Buffer.concat(chunks);
 }
 
+function hasUpgradeHeader(headers) {
+  const value = headers && headers.upgrade;
+  return value !== undefined && value !== null;
+}
+
+function formatHostHeader(options) {
+  const host = options.host ?? options.hostname ?? 'localhost';
+  const port = options.port;
+  const protocol = options.protocol || 'http:';
+  const defaultPort = defaultPortForProtocol(protocol);
+
+  if (hostIncludesExplicitPort(host) || port === undefined || port === null || port === '' || Number(port) === defaultPort) {
+    return String(host);
+  }
+
+  return `${host}:${port}`;
+}
+
+function buildRawRequestHeaders(options, headers) {
+  const rawHeaders = [];
+  const seen = Object.create(null);
+
+  Object.keys(headers).forEach(name => {
+    seen[normalizeHeaderName(name)] = true;
+    appendRawHeader(rawHeaders, name, headers[name]);
+  });
+
+  if (!seen.host) appendRawHeader(rawHeaders, 'Host', formatHostHeader(options));
+
+  return rawHeaders;
+}
+
+function parseHttpResponseHead(head) {
+  const lines = String(head).split('\r\n');
+  const statusLine = lines.shift() || '';
+  const match = /^HTTP\/([0-9]+)\.([0-9]+)\s+(\d{3})(?:\s+(.*))?$/.exec(statusLine);
+  if (!match) throw new Error('Invalid HTTP response');
+
+  const rawHeaders = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const sep = line.indexOf(':');
+    if (sep === -1) continue;
+    rawHeaders.push(line.slice(0, sep), line.slice(sep + 1).trimStart());
+  }
+
+  return {
+    statusCode: Number(match[3]),
+    statusMessage: match[4] || STATUS_CODES[Number(match[3])] || '',
+    httpVersion: `${match[1]}.${match[2]}`,
+    httpVersionMajor: Number(match[1]),
+    httpVersionMinor: Number(match[2]),
+    rawHeaders,
+    headers: buildHeaders(rawHeaders)
+  };
+}
+
 // compatibility stub only
 function createAgentState() {
   return Object.create(null);
@@ -378,6 +438,9 @@ export class ClientRequest extends OutgoingMessage {
     this.hostname = options.hostname ?? options.host ?? 'localhost';
     this.port = options.port ?? defaultPortForProtocol(this.protocol);
     this.path = options.path || '/';
+    this.servername = options.servername;
+    this.ALPNProtocols = options.ALPNProtocols;
+    this.createConnection = options.createConnection;
     this.socket = null;
     this.connection = null;
     this.destroyed = false;
@@ -393,6 +456,8 @@ export class ClientRequest extends OutgoingMessage {
     this._requestUrl = buildRequestUrl(options);
     this._closeEmitted = false;
     this._timedOut = false;
+    this._socket = null;
+    this._upgradeBuffer = Buffer.alloc(0);
 
     if (options.headers) {
       Object.keys(options.headers).forEach(name => {
@@ -433,6 +498,11 @@ export class ClientRequest extends OutgoingMessage {
     this._dispatchStarted = true;
     this._armTimeoutTimer();
 
+    if (hasUpgradeHeader(this._headers)) {
+      this._dispatchUpgrade();
+      return;
+    }
+
     Promise.resolve()
       .then(async () => {
         const response = await fetch(this._requestUrl, {
@@ -464,6 +534,123 @@ export class ClientRequest extends OutgoingMessage {
         this.emit('error', error);
         this._emitClose();
       });
+  }
+
+  _dispatchUpgrade() {
+    const connectOptions = {
+      ...this.agent?.options,
+      host: this.hostname || this.host,
+      hostname: this.hostname || this.host,
+      port: this.port,
+      servername: this.servername,
+      ALPNProtocols: this.ALPNProtocols
+    };
+    const createConnection =
+      typeof this.createConnection === 'function'
+        ? this.createConnection
+        : this.protocol === 'https:'
+          ? tls.connect
+          : net.connect;
+
+    let socket;
+    try {
+      socket = createConnection(connectOptions);
+    } catch (error) {
+      this._clearTimeoutTimer();
+      this.emit('error', error);
+      this._emitClose();
+      return;
+    }
+
+    this._socket = socket;
+    this.socket = socket;
+    this.connection = socket;
+    this.emit('socket', socket);
+
+    const onConnect = () => {
+      if (this.destroyed) return;
+
+      const rawHeaders = buildRawRequestHeaders(this, this._headers);
+      let head = `${this.method} ${this.path || '/'} HTTP/1.1\r\n`;
+      for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+        head += `${rawHeaders[i]}: ${rawHeaders[i + 1]}\r\n`;
+      }
+      head += '\r\n';
+      socket.write(head);
+    };
+
+    const cleanup = () => {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+      socket.removeListener('end', onEnd);
+      socket.removeListener('close', onClose);
+      socket.removeListener('connect', onConnect);
+      socket.removeListener('secureConnect', onConnect);
+    };
+
+    const fail = (error) => {
+      this._clearTimeoutTimer();
+      if (this.destroyed) return;
+      this.destroyed = true;
+      cleanup();
+      this.emit('error', error);
+      this._emitClose();
+    };
+
+    const onError = (error) => fail(error);
+    const onEnd = () => fail(new Error('socket hang up'));
+    const onClose = () => {
+      if (!this.destroyed) fail(new Error('socket hang up'));
+    };
+
+    const onData = (chunk) => {
+      if (this.destroyed) return;
+
+      this._upgradeBuffer = appendSocketChunk(this._upgradeBuffer, chunk);
+      const headerEnd = this._upgradeBuffer.indexOf('\r\n\r\n');
+      if (headerEnd === -1) return;
+
+      const headText = this._upgradeBuffer.subarray(0, headerEnd).toString('latin1');
+      const rest = this._upgradeBuffer.subarray(headerEnd + 4);
+      this._upgradeBuffer = Buffer.alloc(0);
+      this._clearTimeoutTimer();
+      cleanup();
+
+      let response;
+      try {
+        response = parseHttpResponseHead(headText);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+
+      if (response.statusCode === 101) {
+        this.emit('upgrade', response, socket, rest);
+      } else {
+        const incoming = new FetchIncomingMessage({
+          status: response.statusCode,
+          statusText: response.statusMessage,
+          headers: new Map(Object.entries(response.headers)),
+          body: null,
+          url: this._requestUrl
+        });
+        incoming.rawHeaders = response.rawHeaders;
+        incoming.httpVersion = response.httpVersion;
+        incoming.httpVersionMajor = response.httpVersionMajor;
+        incoming.httpVersionMinor = response.httpVersionMinor;
+        socket.destroy();
+        this.emit('response', incoming);
+        incoming._pumpBody();
+      }
+    };
+
+    socket.on('data', onData);
+    socket.on('error', onError);
+    socket.on('end', onEnd);
+    socket.on('close', onClose);
+
+    if (this.protocol === 'https:') socket.once('secureConnect', onConnect);
+    else socket.once('connect', onConnect);
   }
 
   setHeader(name, value) {
@@ -538,6 +725,7 @@ export class ClientRequest extends OutgoingMessage {
     this.destroyed = true;
     this.aborted = true;
     this._clearTimeoutTimer();
+    if (this._socket && typeof this._socket.destroy === 'function') this._socket.destroy();
     if (this._controller) this._controller.abort(error || createAbortError('Request destroyed'));
     if (error) this.emit('error', error);
     this._emitClose();

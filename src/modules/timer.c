@@ -26,6 +26,7 @@ typedef struct timer_entry {
   int active;
   int closed;
   int is_interval;
+  uint64_t timeout_ms;
   struct timer_entry *next;
   struct timer_entry *prev;
 } timer_entry_t;
@@ -220,9 +221,29 @@ static void timer_callback(uv_timer_t *handle) {
   sv_vm_call(js->vm, js, entry->callback, js_mkundef(), entry->args, entry->nargs, NULL, false);
   process_microtasks(js);
   
-  if (!entry->is_interval) if (!uv_is_closing((uv_handle_t *)&entry->handle)) uv_close(
-    (uv_handle_t *)&entry->handle, timer_close_cb
+  if (!entry->is_interval && !entry->active)
+    if (!uv_is_closing((uv_handle_t *)&entry->handle)) uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
+}
+
+static ant_value_t js_timer_refresh(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  
+  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return this_obj;
+
+  if (!entry->active) {
+    entry->active = 1;
+    timer_state.active_timer_count++;
+  }
+
+  uv_timer_start(
+    &entry->handle,
+    timer_callback,
+    entry->timeout_ms,
+    entry->is_interval ? entry->timeout_ms : 0
   );
+  
+  return this_obj;
 }
 
 // setTimeout(callback, delay, ...args)
@@ -250,6 +271,7 @@ static ant_value_t js_set_timeout(ant_t *js, ant_value_t *args, int nargs) {
   entry->active = 1;
   entry->closed = 0;
   entry->is_interval = 0;
+  entry->timeout_ms = ms;
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
@@ -283,6 +305,7 @@ static ant_value_t js_set_interval(ant_t *js, ant_value_t *args, int nargs) {
   entry->active = 1;
   entry->closed = 0;
   entry->is_interval = 1;
+  entry->timeout_ms = ms;
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
@@ -801,6 +824,7 @@ void init_timer_module() {
   js_set(js, g_timeout_proto, "ref", js_mkfun(js_timer_ref));
   js_set(js, g_timeout_proto, "unref", js_mkfun(js_timer_unref));
   js_set(js, g_timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, g_timeout_proto, "refresh", js_mkfun(js_timer_refresh));
   js_set_sym(js, g_timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
   js_set_sym(js, g_timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 
@@ -808,6 +832,7 @@ void init_timer_module() {
   js_set(js, g_interval_proto, "ref", js_mkfun(js_timer_ref));
   js_set(js, g_interval_proto, "unref", js_mkfun(js_timer_unref));
   js_set(js, g_interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, g_interval_proto, "refresh", js_mkfun(js_timer_refresh));
   js_set_sym(js, g_interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
   js_set_sym(js, g_interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 

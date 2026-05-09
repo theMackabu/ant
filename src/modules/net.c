@@ -19,6 +19,7 @@
 
 #include "gc/roots.h"
 #include "gc/modules.h"
+#include "net/connection.h"
 #include "net/listener.h"
 #include "silver/engine.h"
 
@@ -31,19 +32,23 @@ typedef struct net_server_s net_server_t;
 typedef struct net_socket_s net_socket_t;
 
 typedef struct net_listen_args_s net_listen_args_t;
+typedef struct net_connect_args_s net_connect_args_t;
 typedef struct net_write_args_s  net_write_args_t;
 
 struct net_socket_s {
   ant_t *js;
   ant_value_t obj;
   ant_conn_t *conn;
+  ant_listener_t client_listener;
   net_server_t *server;
   ant_value_t encoding;
   struct net_socket_s *next_active;
   struct net_socket_s *next_in_server;
   bool allow_half_open;
   bool destroyed;
+  bool connecting;
   bool had_error;
+  bool active;
 };
 
 struct net_server_s {
@@ -75,6 +80,19 @@ struct net_listen_args_s {
   ant_value_t error;
 };
 
+struct net_connect_args_s {
+  const char *host;
+  const char *path;
+  int port;
+  uint64_t timeout_ms;
+  bool allow_half_open;
+  bool no_delay;
+  bool keep_alive;
+  unsigned int keep_alive_initial_delay_secs;
+  ant_value_t callback;
+  ant_value_t error;
+};
+
 struct net_write_args_s {
   const uint8_t *bytes;
   size_t len;
@@ -97,8 +115,6 @@ enum {
   NET_SERVER_NATIVE_TAG = 0x4e455453u, // NETS
   NET_SOCKET_NATIVE_TAG = 0x4e45544bu, // NETK
 };
-
-static ant_value_t net_not_implemented(ant_t *js, const char *what);
 
 static net_server_t *net_server_data(ant_value_t value) {
   return (net_server_t *)js_get_native(value, NET_SERVER_NATIVE_TAG);
@@ -124,6 +140,8 @@ static void net_remove_active_server(net_server_t *server) {
 }
 
 static void net_add_active_socket(net_socket_t *socket) {
+  if (!socket || socket->active) return;
+  socket->active = true;
   socket->next_active = g_active_sockets;
   g_active_sockets = socket;
 }
@@ -134,6 +152,7 @@ static void net_remove_active_socket(net_socket_t *socket) {
   if (*it == socket) {
     *it = socket->next_active;
     socket->next_active = NULL;
+    socket->active = false;
     return;
   }}
 }
@@ -286,6 +305,80 @@ static bool net_parse_listen_args(ant_t *js, ant_value_t *args, int nargs, net_l
   return true;
 }
 
+static bool net_parse_connect_args(ant_t *js, ant_value_t *args, int nargs, net_connect_args_t *out) {
+  ant_value_t value = 0;
+
+  if (!out) return false;
+  memset(out, 0, sizeof(*out));
+  out->host = "localhost";
+  out->callback = js_mkundef();
+  out->error = js_mkundef();
+  out->no_delay = true;
+
+  if (nargs == 0) {
+    out->error = js_mkerr_typed(js, JS_ERR_TYPE, "net.connect requires options, port, or path");
+    return false;
+  }
+
+  if (vtype(args[0]) == T_NUM) {
+    out->port = (int)js_getnum(args[0]);
+    if (nargs > 1 && vtype(args[1]) == T_STR) out->host = js_getstr(js, args[1], NULL);
+    if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
+    else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
+  }
+
+  if (vtype(args[0]) == T_STR) {
+    out->path = js_getstr(js, args[0], NULL);
+    if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
+  }
+
+  if (vtype(args[0]) == T_OBJ) {
+    value = js_get(js, args[0], "path");
+    if (vtype(value) == T_STR) out->path = js_getstr(js, value, NULL);
+
+    value = js_get(js, args[0], "socketPath");
+    if (!out->path && vtype(value) == T_STR) out->path = js_getstr(js, value, NULL);
+
+    value = js_get(js, args[0], "port");
+    if (vtype(value) == T_NUM) out->port = (int)js_getnum(value);
+
+    value = js_get(js, args[0], "host");
+    if (vtype(value) == T_STR) out->host = js_getstr(js, value, NULL);
+
+    value = js_get(js, args[0], "hostname");
+    if (vtype(value) == T_STR) out->host = js_getstr(js, value, NULL);
+
+    value = js_get(js, args[0], "allowHalfOpen");
+    if (vtype(value) != T_UNDEF) out->allow_half_open = js_truthy(js, value);
+
+    value = js_get(js, args[0], "timeout");
+    if (vtype(value) == T_NUM && js_getnum(value) > 0) out->timeout_ms = (uint64_t)js_getnum(value);
+
+    value = js_get(js, args[0], "noDelay");
+    if (vtype(value) != T_UNDEF) out->no_delay = js_truthy(js, value);
+
+    value = js_get(js, args[0], "keepAlive");
+    if (vtype(value) != T_UNDEF) out->keep_alive = js_truthy(js, value);
+
+    value = js_get(js, args[0], "keepAliveInitialDelay");
+    if (vtype(value) == T_NUM && js_getnum(value) > 0)
+      out->keep_alive_initial_delay_secs = (unsigned int)(js_getnum(value) / 1000.0);
+
+    if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
+  }
+
+  if (is_callable(args[0])) {
+    out->callback = args[0];
+    return true;
+  }
+
+  out->error = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.connect options");
+  return false;
+}
+
 static ant_value_t net_make_buffer_chunk(ant_t *js, const char *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
@@ -302,9 +395,10 @@ static void net_socket_sync_state(net_socket_t *socket) {
   if (!is_object_type(obj)) return;
 
   if (socket->destroyed) ready_state = "closed";
+  else if (socket->connecting) ready_state = "opening";
   js_set(socket->js, obj, "destroyed", js_bool(socket->destroyed));
   js_set(socket->js, obj, "pending", js_bool(socket->conn == NULL && !socket->destroyed));
-  js_set(socket->js, obj, "connecting", js_false);
+  js_set(socket->js, obj, "connecting", js_bool(socket->connecting));
   js_set(socket->js, obj, "readyState", js_mkstr(socket->js, ready_state, strlen(ready_state)));
   js_set(socket->js, obj, "bytesRead", js_mknum((double)(socket->conn ? ant_conn_bytes_read(socket->conn) : 0)));
   js_set(socket->js, obj, "bytesWritten", js_mknum((double)(socket->conn ? ant_conn_bytes_written(socket->conn) : 0)));
@@ -430,10 +524,6 @@ static net_server_t *net_server_create(ant_t *js) {
   return server;
 }
 
-static ant_value_t net_not_implemented(ant_t *js, const char *what) {
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not implemented yet", what);
-}
-
 static ant_value_t net_isIP(ant_t *js, ant_value_t *args, int nargs) {
   size_t len = 0;
   const char *host = NULL;
@@ -544,6 +634,25 @@ static void net_server_on_conn_close(ant_conn_t *conn, void *user_data) {
   net_emit(socket->js, socket->obj, "close", &arg, 1);
   ant_conn_set_user_data(conn, NULL);
   net_socket_detach(socket);
+}
+
+static void net_socket_on_connect(ant_conn_t *conn, int status, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)user_data;
+
+  if (!socket) return;
+  socket->connecting = false;
+
+  if (status != 0) {
+    socket->had_error = true;
+    net_socket_sync_state(socket);
+    net_socket_on_error(conn, status, user_data);
+    if (conn) ant_conn_close(conn);
+    return;
+  }
+
+  net_socket_attach_conn(socket, conn);
+  ant_conn_start(conn);
+  net_emit(socket->js, socket->obj, "connect", NULL, 0);
 }
 
 static void net_server_on_listener_close(ant_listener_t *listener, void *user_data) {
@@ -751,8 +860,68 @@ static ant_value_t js_net_socket_destroy(ant_t *js, ant_value_t *args, int nargs
   return js_getthis(js);
 }
 
+static ant_value_t net_socket_connect_parsed(ant_t *js, net_socket_t *socket, const net_connect_args_t *parsed) {
+  ant_conn_t *conn = NULL;
+  int rc = 0;
+
+  if (!socket || !parsed) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.Socket");
+  if (socket->conn || socket->connecting)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Socket is already connected or connecting");
+
+  memset(&socket->client_listener, 0, sizeof(socket->client_listener));
+  socket->client_listener.loop = uv_default_loop();
+  socket->client_listener.user_data = socket;
+  socket->client_listener.callbacks.on_read = net_socket_on_read;
+  socket->client_listener.callbacks.on_end = net_socket_on_end;
+  socket->client_listener.callbacks.on_error = net_socket_on_error;
+  socket->client_listener.callbacks.on_timeout = net_socket_on_timeout;
+  socket->client_listener.callbacks.on_conn_close = net_server_on_conn_close;
+  socket->client_listener.idle_timeout_ms = parsed->timeout_ms;
+
+  conn = parsed->path
+    ? ant_conn_create_pipe(&socket->client_listener, parsed->timeout_ms)
+    : ant_conn_create_tcp(&socket->client_listener, parsed->timeout_ms);
+  if (!conn) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+
+  socket->conn = conn;
+  socket->connecting = true;
+  socket->destroyed = false;
+  socket->had_error = false;
+  ant_conn_set_user_data(conn, socket);
+  net_add_active_socket(socket);
+  net_socket_sync_state(socket);
+
+  if (is_callable(parsed->callback))
+    net_add_listener(js, socket->obj, "connect", parsed->callback, true);
+
+  if (parsed->no_delay) ant_conn_set_no_delay(conn, true);
+  if (parsed->keep_alive)
+    ant_conn_set_keep_alive(conn, true, parsed->keep_alive_initial_delay_secs);
+
+  if (parsed->path)
+    rc = ant_conn_connect_pipe(conn, parsed->path, net_socket_on_connect, socket);
+  else
+    rc = ant_conn_connect_tcp(conn, parsed->host ? parsed->host : "localhost", parsed->port, net_socket_on_connect, socket);
+
+  if (rc != 0) {
+    socket->connecting = false;
+    socket->had_error = true;
+    net_socket_sync_state(socket);
+    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+    net_emit(js, socket->obj, "error", &err, 1);
+    ant_conn_close(conn);
+  }
+
+  return socket->obj;
+}
+
 static ant_value_t js_net_socket_connect(ant_t *js, ant_value_t *args, int nargs) {
-  return net_not_implemented(js, "net.Socket.connect");
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  net_connect_args_t parsed;
+
+  if (!socket) return js->thrown_value;
+  if (!net_parse_connect_args(js, args, nargs, &parsed)) return parsed.error;
+  return net_socket_connect_parsed(js, socket, &parsed);
 }
 
 static ant_value_t js_net_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
@@ -947,7 +1116,14 @@ static ant_value_t js_net_createServer(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t js_net_createConnection(ant_t *js, ant_value_t *args, int nargs) {
-  return net_not_implemented(js, "net.createConnection");
+  net_connect_args_t parsed;
+  net_socket_t *socket = NULL;
+
+  if (!net_parse_connect_args(js, args, nargs, &parsed)) return parsed.error;
+  socket = net_socket_create(js, parsed.allow_half_open);
+  if (!socket) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+
+  return net_socket_connect_parsed(js, socket, &parsed);
 }
 
 static ant_value_t js_net_connect(ant_t *js, ant_value_t *args, int nargs) {

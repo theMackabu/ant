@@ -1,5 +1,13 @@
 #include <compat.h> // IWYU pragma: keep
 
+#ifndef _WIN32
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,6 +28,13 @@ typedef struct {
   uv_shutdown_t req;
   ant_conn_t *conn;
 } ant_conn_shutdown_req_t;
+
+typedef struct {
+  uv_connect_t req;
+  ant_conn_t *conn;
+  ant_conn_connect_cb cb;
+  void *user_data;
+} ant_conn_connect_req_t;
 
 static void ant_conn_restart_timer(ant_conn_t *conn);
 static void ant_conn_close_cb(uv_handle_t *handle);
@@ -280,6 +295,109 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
   conn->listener->connections = conn;
   
   return 0;
+}
+
+static void ant_conn_connect_cb_impl(uv_connect_t *req, int status) {
+  ant_conn_connect_req_t *cr = (ant_conn_connect_req_t *)req;
+  ant_conn_t *conn = cr ? cr->conn : NULL;
+
+  if (conn && status == 0 && conn->kind == ANT_CONN_KIND_TCP) {
+    ant_conn_store_peer_addr(conn);
+    ant_conn_store_local_addr(conn);
+  }
+
+  if (cr && cr->cb) cr->cb(conn, status, cr->user_data);
+  free(cr);
+}
+
+static int sockaddr_from_hostname(const char *hostname, int port, struct sockaddr_storage *out) {
+  struct addrinfo hints = {0}, *res = NULL;
+  int rc = 0;
+
+  if (!hostname || !out) return UV_EINVAL;
+
+  memset(out, 0, sizeof(*out));
+  rc = uv_ip4_addr(hostname, port, (struct sockaddr_in *)out);
+  if (rc == 0) return 0;
+
+  rc = uv_ip6_addr(hostname, port, (struct sockaddr_in6 *)out);
+  if (rc == 0) return 0;
+
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  rc = getaddrinfo(hostname, NULL, &hints, &res);
+  if (rc != 0 || !res) return UV_ENOENT;
+
+  if (res->ai_family == AF_INET) {
+    struct sockaddr_in sa;
+    memcpy(&sa, res->ai_addr, sizeof(sa));
+    sa.sin_port = htons((uint16_t)port);
+    memcpy(out, &sa, sizeof(sa));
+    rc = 0;
+  } else if (res->ai_family == AF_INET6) {
+    struct sockaddr_in6 sa6;
+    memcpy(&sa6, res->ai_addr, sizeof(sa6));
+    sa6.sin6_port = htons((uint16_t)port);
+    memcpy(out, &sa6, sizeof(sa6));
+    rc = 0;
+  } else rc = UV_ENOENT;
+
+  freeaddrinfo(res);
+  return rc;
+}
+
+int ant_conn_connect_tcp(
+  ant_conn_t *conn,
+  const char *hostname,
+  int port,
+  ant_conn_connect_cb cb,
+  void *user_data
+) {
+  ant_conn_connect_req_t *req = NULL;
+  struct sockaddr_storage addr;
+  int rc = 0;
+
+  if (!conn || conn->kind != ANT_CONN_KIND_TCP || !hostname || port <= 0) return UV_EINVAL;
+
+  rc = sockaddr_from_hostname(hostname, port, &addr);
+  if (rc != 0) return rc;
+
+  req = calloc(1, sizeof(*req));
+  if (!req) return UV_ENOMEM;
+
+  req->conn = conn;
+  req->cb = cb;
+  req->user_data = user_data;
+
+  rc = uv_tcp_connect(&req->req, &conn->handle.tcp, (const struct sockaddr *)&addr, ant_conn_connect_cb_impl);
+  if (rc != 0) {
+    free(req);
+    return rc;
+  }
+
+  return 0;
+}
+
+int ant_conn_connect_pipe(
+  ant_conn_t *conn,
+  const char *path,
+  ant_conn_connect_cb cb,
+  void *user_data
+) {
+  ant_conn_connect_req_t *req = NULL;
+  int rc = 0;
+
+  if (!conn || conn->kind != ANT_CONN_KIND_PIPE || !path || !*path) return UV_EINVAL;
+
+  req = calloc(1, sizeof(*req));
+  if (!req) return UV_ENOMEM;
+
+  req->conn = conn;
+  req->cb = cb;
+  req->user_data = user_data;
+
+  uv_pipe_connect(&req->req, &conn->handle.pipe, path, ant_conn_connect_cb_impl);
+  return rc;
 }
 
 void ant_conn_start(ant_conn_t *conn) {

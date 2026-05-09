@@ -300,6 +300,7 @@ static ant_value_t websocket_create_object(ant_t *js) {
   if (is_object_type(g_websocket_proto)) js_set_proto_init(obj, g_websocket_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_EVENTTARGET));
   js_set(js, obj, "binaryType", js_mkstr(js, "arraybuffer", 11));
+  js_set_descriptor(js, obj, "binaryType", 10, JS_DESC_W | JS_DESC_C);
   js_set(js, obj, "bufferedAmount", js_mknum(0));
   js_set(js, obj, "extensions", js_mkstr(js, "", 0));
   js_set(js, obj, "protocol", js_mkstr(js, "", 0));

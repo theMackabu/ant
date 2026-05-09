@@ -300,8 +300,12 @@ static ant_value_t stream_buffer_shift(ant_t *js, ant_value_t stream_obj) {
 
   if (vtype(buffer) != T_ARR || head >= len) return js_mkundef();
   value = js_arr_get(js, buffer, head);
+  ant_value_t state = stream_readable_state(js, stream_obj);
+  
+  if (is_object_type(state)) js_set(js, state, "dataEmitted", js_true);
   stream_set_readable_buffer_head(js, stream_obj, head + 1);
   stream_compact_readable_buffer(js, stream_obj);
+  
   return value;
 }
 
@@ -380,6 +384,8 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   js_set(js, state, "objectMode", js_bool(object_mode));
   js_set(js, state, "ended", js_false);
   js_set(js, state, "endEmitted", js_false);
+  js_set(js, state, "endScheduled", js_false);
+  js_set(js, state, "dataEmitted", js_false);
   js_set(js, state, "flowing", js_false);
   js_set(js, state, "flowingReadScheduled", js_false);
   js_set(js, state, "reading", js_false);
@@ -438,6 +444,17 @@ static void stream_emit_error(ant_t *js, ant_value_t stream_obj, ant_value_t err
   eventemitter_emit_args(js, stream_obj, "error", args, 1);
 }
 
+static void stream_readable_schedule_flowing_tick(ant_t *js, ant_value_t stream_obj) {
+  ant_value_t state = stream_readable_state(js, stream_obj);
+
+  if (!is_object_type(state)) return;
+  if (!js_truthy(js, js_get(js, state, "flowing"))) return;
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return;
+  if (js_truthy(js, js_get(js, state, "flowingReadScheduled"))) return;
+  js_set(js, state, "flowingReadScheduled", js_true);
+  stream_schedule_microtask(js, stream_readable_continue_flowing, stream_obj);
+}
+
 static void stream_readable_schedule_continue_flowing(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
 
@@ -446,11 +463,9 @@ static void stream_readable_schedule_continue_flowing(ant_t *js, ant_value_t str
   if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return;
   if (js_truthy(js, js_get(js, state, "ended"))) return;
   if (stream_readable_buffer_len(js, stream_obj) > 0) return;
-  if (js_truthy(js, js_get(js, state, "flowingReadScheduled"))) return;
-
-  js_set(js, state, "flowingReadScheduled", js_true);
-  stream_schedule_microtask(js, stream_readable_continue_flowing, stream_obj);
+  stream_readable_schedule_flowing_tick(js, stream_obj);
 }
+
 
 static ant_value_t js_stream_pause(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "stream");
@@ -701,7 +716,6 @@ ant_value_t stream_readable_continue_flowing(ant_t *js, ant_value_t *args, int n
 
   if (!js_truthy(js, js_get(js, state, "flowing"))) return js_mkundef();
   if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_mkundef();
-  if (js_truthy(js, js_get(js, state, "ended"))) return js_mkundef();
 
   stream_readable_maybe_read(js, stream_obj);
   stream_readable_flush(js, stream_obj);
@@ -728,6 +742,43 @@ ant_value_t stream_readable_begin_flowing(ant_t *js, ant_value_t stream_obj) {
   return js_mkundef();
 }
 
+static ant_value_t stream_readable_emit_end(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = stream_readable_state(js, stream_obj);
+  ant_value_t tail = 0;
+
+  if (!is_object_type(state)) return js_mkundef();
+  js_set(js, state, "endScheduled", js_false);
+
+  if (!js_truthy(js, js_get(js, state, "flowing"))) return js_mkundef();
+  if (!js_truthy(js, js_get(js, state, "ended"))) return js_mkundef();
+  if (stream_readable_buffer_len(js, stream_obj) != 0) return js_mkundef();
+  if (js_truthy(js, js_get(js, state, "endEmitted"))) return js_mkundef();
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_mkundef();
+
+  tail = stream_readable_decode_chunk(js, stream_obj, js_mkundef(), true);
+  if (is_err(tail)) return tail;
+  if (!is_undefined(tail) && !stream_value_is_empty_string(js, tail)) {
+    js_set(js, state, "dataEmitted", js_true);
+    eventemitter_emit_args(js, stream_obj, "data", &tail, 1);
+  }
+  js_set(js, state, "endEmitted", js_true);
+  js_set(js, stream_obj, "readableEnded", js_true);
+  stream_emit_named(js, stream_obj, "end");
+  stream_emit_named(js, stream_obj, "close");
+
+  return js_mkundef();
+}
+
+static void stream_readable_schedule_end(ant_t *js, ant_value_t stream_obj) {
+  ant_value_t state = stream_readable_state(js, stream_obj);
+
+  if (!is_object_type(state)) return;
+  if (js_truthy(js, js_get(js, state, "endScheduled"))) return;
+  js_set(js, state, "endScheduled", js_true);
+  stream_schedule_microtask(js, stream_readable_emit_end, stream_obj);
+}
+
 ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
   bool emitted_data = false;
@@ -743,20 +794,12 @@ ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
   }
 
   if (
+    js_truthy(js, js_get(js, state, "flowing")) &&
     js_truthy(js, js_get(js, state, "ended")) &&
     stream_readable_buffer_len(js, stream_obj) == 0 &&
     !js_truthy(js, js_get(js, state, "endEmitted"))
   ) {
-    ant_value_t tail = stream_readable_decode_chunk(js, stream_obj, js_mkundef(), true);
-    if (is_err(tail)) return tail;
-    if (!is_undefined(tail) && !stream_value_is_empty_string(js, tail)) {
-      emitted_data = true;
-      eventemitter_emit_args(js, stream_obj, "data", &tail, 1);
-    }
-    js_set(js, state, "endEmitted", js_true);
-    js_set(js, stream_obj, "readableEnded", js_true);
-    stream_emit_named(js, stream_obj, "end");
-    stream_emit_named(js, stream_obj, "close");
+    stream_readable_schedule_end(js, stream_obj);
   } else if (emitted_data) stream_readable_schedule_continue_flowing(js, stream_obj);
 
   return js_mkundef();
@@ -832,6 +875,7 @@ static ant_value_t js_readable_read(ant_t *js, ant_value_t *args, int nargs) {
   if (!is_object_type(state)) return js_mknull();
 
   if (stream_readable_buffer_len(js, stream_obj) == 0) stream_readable_maybe_read(js, stream_obj);
+  if (nargs > 0 && vtype(args[0]) == T_NUM && tod(args[0]) == 0.0) return js_mknull();
   if (stream_readable_buffer_len(js, stream_obj) == 0) return js_mknull();
 
   chunk = stream_buffer_shift(js, stream_obj);
@@ -896,8 +940,7 @@ static ant_value_t js_readable_resume(ant_t *js, ant_value_t *args, int nargs) {
   if (is_object_type(state)) js_set(js, state, "flowing", js_true);
   
   js_stream_resume(js, NULL, 0);
-  stream_readable_maybe_read(js, stream_obj);
-  stream_readable_flush(js, stream_obj);
+  stream_readable_schedule_flowing_tick(js, stream_obj);
   
   return stream_obj;
 }
@@ -1839,6 +1882,43 @@ static ant_value_t js_stream_set_default_high_water_mark(ant_t *js, ant_value_t 
   return js_mkundef();
 }
 
+static ant_value_t js_stream_is_destroyed(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = nargs > 0 ? args[0] : js_mkundef();
+  if (!is_object_type(stream_obj)) return js_false;
+  return js_bool(js_truthy(js, js_get(js, stream_obj, "destroyed")));
+}
+
+static ant_value_t js_stream_is_disturbed(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t state = 0;
+
+  if (!is_object_type(stream_obj)) return js_false;
+  state = stream_readable_state(js, stream_obj);
+  if (is_object_type(state)) {
+    if (js_truthy(js, js_get(js, state, "dataEmitted"))) return js_true;
+  }
+  return js_bool(js_truthy(js, js_get(js, stream_obj, "destroyed")));
+}
+
+static ant_value_t js_stream_is_errored(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t state = 0;
+
+  if (!is_object_type(stream_obj)) return js_false;
+  state = stream_readable_state(js, stream_obj);
+  if (is_object_type(state) && js_truthy(js, js_get(js, state, "errored"))) return js_true;
+  state = stream_writable_state(js, stream_obj);
+  if (is_object_type(state) && js_truthy(js, js_get(js, state, "errored"))) return js_true;
+  return js_false;
+}
+
+static ant_value_t js_stream_is_readable(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = nargs > 0 ? args[0] : js_mkundef();
+  if (!is_object_type(stream_obj)) return js_false;
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_false;
+  return js_bool(js_truthy(js, js_get(js, stream_obj, "readable")));
+}
+
 static void stream_web_copy_global(ant_t *js, ant_value_t obj, const char *name) {
   ant_value_t value = js_get(js, js->global, name);
   if (is_err(value)) return;
@@ -1881,6 +1961,10 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, lib, "finished", js_mkfun(js_stream_finished));
   js_set(js, lib, "getDefaultHighWaterMark", js_mkfun(js_stream_get_default_high_water_mark));
   js_set(js, lib, "setDefaultHighWaterMark", js_mkfun(js_stream_set_default_high_water_mark));
+  js_set(js, lib, "isDestroyed", js_mkfun(js_stream_is_destroyed));
+  js_set(js, lib, "isDisturbed", js_mkfun(js_stream_is_disturbed));
+  js_set(js, lib, "isErrored", js_mkfun(js_stream_is_errored));
+  js_set(js, lib, "isReadable", js_mkfun(js_stream_is_readable));
   js_set(js, lib, "promises", promises);
 
   js_set(js, g_stream_ctor, "Readable", g_readable_ctor);
@@ -1892,6 +1976,10 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, g_stream_ctor, "finished", js_get(js, lib, "finished"));
   js_set(js, g_stream_ctor, "getDefaultHighWaterMark", js_get(js, lib, "getDefaultHighWaterMark"));
   js_set(js, g_stream_ctor, "setDefaultHighWaterMark", js_get(js, lib, "setDefaultHighWaterMark"));
+  js_set(js, g_stream_ctor, "isDestroyed", js_get(js, lib, "isDestroyed"));
+  js_set(js, g_stream_ctor, "isDisturbed", js_get(js, lib, "isDisturbed"));
+  js_set(js, g_stream_ctor, "isErrored", js_get(js, lib, "isErrored"));
+  js_set(js, g_stream_ctor, "isReadable", js_get(js, lib, "isReadable"));
   js_set(js, g_stream_ctor, "promises", promises);
 
   js_set(js, promises, "default", promises);

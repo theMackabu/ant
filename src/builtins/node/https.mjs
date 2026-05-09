@@ -90,10 +90,6 @@ function normalizeCreateServerArgs(options, requestListener) {
   };
 }
 
-function clientNotImplemented() {
-  throw new Error('node:https client transport is not implemented yet');
-}
-
 function createInvalidProtocolError(protocol) {
   const error = new TypeError(`Protocol "${protocol}" not supported. Expected "https:"`);
   error.code = 'ERR_INVALID_PROTOCOL';

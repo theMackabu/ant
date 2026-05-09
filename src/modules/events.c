@@ -35,6 +35,12 @@ static ant_value_t g_customevent_proto           = 0;
 static ant_value_t g_errorevent_proto            = 0;
 static ant_value_t g_promiserejectionevent_proto = 0;
 
+#define EVENTEMITTER_LIKE_CACHE_CAP 64
+static ant_value_t eventemitter_like_cache[EVENTEMITTER_LIKE_CACHE_CAP];
+
+static size_t eventemitter_like_cache_count = 0;
+static size_t eventemitter_like_cache_next = 0;
+
 enum {
   EVENT_NATIVE_TAG = 0x45564e54u,        // EVNT
   EVENT_EMITTER_NATIVE_TAG = 0x45454d54u // EEMT
@@ -219,6 +225,61 @@ static bool is_eventemitter_instance(ant_value_t target) {
 
 static bool is_eventtarget_instance(ant_value_t target) {
   return js_check_brand(target, BRAND_EVENTTARGET);
+}
+
+static bool eventemitter_like_cache_has(ant_value_t key) {
+  if (!is_object_type(key)) return false;
+  for (size_t i = 0; i < eventemitter_like_cache_count; i++)
+    if (eventemitter_like_cache[i] == key) return true;
+  return false;
+}
+
+static void eventemitter_like_cache_add(ant_value_t key) {
+  if (!is_object_type(key) || eventemitter_like_cache_has(key)) return;
+
+  size_t idx = eventemitter_like_cache_count < EVENTEMITTER_LIKE_CACHE_CAP
+    ? eventemitter_like_cache_count++
+    : eventemitter_like_cache_next;
+  
+  eventemitter_like_cache[idx] = key;
+  eventemitter_like_cache_next = (idx + 1) % EVENTEMITTER_LIKE_CACHE_CAP;
+}
+
+static bool is_eventemitter_like(ant_t *js, ant_value_t target) {
+  if (!is_object_type(target)) return false;
+
+  ant_value_t proto = js_get_proto(js, target);
+  ant_value_t ctor = is_object_type(proto)
+    ? js_getprop_fallback(js, proto, "constructor")
+    : js_mkundef();
+
+  if (
+    eventemitter_like_cache_has(proto) || 
+    eventemitter_like_cache_has(ctor)
+  ) return true;
+
+  static const char *required[] = {
+    "once",
+    "on",
+    "emit",
+    "addListener",
+    "removeListener",
+    "removeAllListeners",
+    "listeners",
+    "rawListeners",
+    "listenerCount",
+    "eventNames",
+  };
+
+  for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
+    ant_value_t method = js_getprop_fallback(js, target, required[i]);
+    if (!is_callable(method)) return false;
+  }
+
+  eventemitter_like_cache_add(proto);
+  eventemitter_like_cache_add(ctor);
+  
+  return true;
 }
 
 static int eventemitter_get_max_listeners_impl(ant_value_t target) {
@@ -1057,6 +1118,24 @@ static ant_value_t js_events_once_listener(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
+static void js_events_once_remove_listener_from_target(ant_t *js, ant_value_t state) {
+  ant_value_t target = js_get(js, state, "target");
+  ant_value_t key = js_get(js, state, "eventName");
+  ant_value_t listener = js_get(js, state, "listener");
+  if (!is_object_type(target) || !key || !is_callable(listener)) return;
+
+  if (is_eventemitter_instance(target)) {
+    eventemitter_remove_listener_val(js, target, key, listener);
+    return;
+  }
+
+  ant_value_t remove_method = js_getprop_fallback(js, target, "removeListener");
+  if (!is_callable(remove_method)) return;
+
+  ant_value_t call_args[2] = { key, listener };
+  eventemitter_call_listener(js, remove_method, target, call_args, 2);
+}
+
 static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_object_type(state)) return js_mkundef();
@@ -1072,6 +1151,7 @@ static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, i
   ant_value_t abort_listener = js_get(js, state, "abortListener");
   if (abort_signal_is_signal(signal) && is_callable(abort_listener))
     abort_signal_remove_listener(js, signal, abort_listener);
+  js_events_once_remove_listener_from_target(js, state);
     
   ant_value_t reason = abort_signal_get_reason(signal);
   if (vtype(reason) == T_UNDEF) reason = js_mkerr(js, "The operation was aborted");
@@ -1126,6 +1206,14 @@ static ant_value_t js_events_once_attach(
     return promise;
   }
 
+  if (is_eventemitter_like(js, target)) {
+    ant_value_t once_method = js_getprop_fallback(js, target, "once");
+    ant_value_t call_args[2] = { key, listener };
+    ant_value_t result = eventemitter_call_listener(js, once_method, target, call_args, 2);
+    if (is_err(result)) js_reject_promise(js, promise, result);
+    return promise;
+  }
+
   js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget"));
   return promise;
 }
@@ -1148,6 +1236,9 @@ static ant_value_t js_events_once(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t target = args[0];
   ant_value_t options = nargs >= 3 ? args[2] : js_mkundef();
   ant_value_t signal = js_mkundef();
+  js_set(js, state, "target", target);
+  js_set(js, state, "eventName", args[1]);
+  js_set(js, state, "listener", listener);
   
   if (is_object_type(options)) signal = js_get(js, options, "signal");
   if (abort_signal_is_signal(signal)) {
@@ -1238,6 +1329,11 @@ ant_value_t events_library(ant_t *js) {
   js_set(js, lib, "addAbortListener", js_mkfun(js_events_add_abort_listener));
   js_set(js, lib, "setMaxListeners", js_mkfun(js_events_set_max_listeners));
   js_set(js, lib, "getMaxListeners", js_mkfun(js_events_get_max_listeners));
+  js_set(js, g_eventemitter_ctor, "once", js_get(js, lib, "once"));
+  js_set(js, g_eventemitter_ctor, "on", js_get(js, lib, "on"));
+  js_set(js, g_eventemitter_ctor, "addAbortListener", js_get(js, lib, "addAbortListener"));
+  js_set(js, g_eventemitter_ctor, "setMaxListeners", js_get(js, lib, "setMaxListeners"));
+  js_set(js, g_eventemitter_ctor, "getMaxListeners", js_get(js, lib, "getMaxListeners"));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
   
   return lib;
@@ -1382,6 +1478,10 @@ void gc_mark_events(ant_t *js, gc_mark_fn mark) {
   if (g_customevent_proto)           mark(js, g_customevent_proto);
   if (g_errorevent_proto)            mark(js, g_errorevent_proto);
   if (g_promiserejectionevent_proto) mark(js, g_promiserejectionevent_proto);
+
+  for (size_t i = 0; i < eventemitter_like_cache_count; i++) {
+    if (is_object_type(eventemitter_like_cache[i])) mark(js, eventemitter_like_cache[i]);
+  }
 }
 
 void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark) {
