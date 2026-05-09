@@ -2940,14 +2940,19 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     return result;
   } else if (encoding == ENC_UCS2) {
     size_t char_count = len / 2;
-    char *str = malloc(char_count + 1);
+    char *str = malloc(char_count * 3 + 1);
     if (!str) return js_mkerr(js, "Failed to allocate string");
     
-    for (size_t i = 0; i < char_count; i++) str[i] = (char)data[i * 2];
-    str[char_count] = '\0';
+    size_t out_len = 0;
+    for (size_t i = 0; i < char_count; i++) {
+      uint32_t unit = (uint32_t)data[i * 2] | ((uint32_t)data[i * 2 + 1] << 8);
+      out_len += (size_t)utf8_encode(unit, str + out_len);
+    }
     
-    ant_value_t result = js_mkstr(js, str, char_count);
+    str[out_len] = '\0';
+    ant_value_t result = js_mkstr(js, str, out_len);
     free(str);
+    
     return result;
   } else {
     size_t out_cap = len * 3 + 1;
@@ -2989,7 +2994,23 @@ static ant_value_t js_buffer_utf8Slice(ant_t *js, ant_value_t *args, int nargs) 
   if (end > ta_data->byte_length) end = ta_data->byte_length;
   if (end < start) end = start;
 
-  return js_mkstr(js, (char *)ta_data->buffer->data + ta_data->byte_offset + start, end - start);
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset + start;
+  size_t len = end - start; size_t out_cap = len * 3 + 1;
+  
+  char *out = malloc(out_cap);
+  if (!out) return js_mkerr(js, "Failed to allocate string");
+
+  utf8_dec_t dec = { .bom_seen = true, .ignore_bom = true };
+  utf8proc_ssize_t out_len = utf8_whatwg_decode(&dec, data, len, out, false, false);
+  if (out_len < 0) {
+    free(out);
+    return js_mkerr(js, "Failed to decode buffer as UTF-8");
+  }
+
+  ant_value_t result = js_mkstr(js, out, (size_t)out_len);
+  free(out);
+  
+  return result;
 }
 
 // Buffer.prototype.toBase64()

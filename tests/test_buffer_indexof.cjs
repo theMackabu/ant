@@ -19,6 +19,8 @@ assert.strictEqual(Buffer.from('aabbcc', 'hex').indexOf('b', 0, 'hex'), 0);
 assert.strictEqual(Buffer.from('a\0b\0').indexOf('b', 0, 'ucs2'), 2);
 assert.strictEqual(Buffer.from([0xe9, 0]).indexOf('é', 0, 'ucs2'), 0);
 assert.deepStrictEqual([...Buffer.from('é', 'ucs2')], [0xe9, 0]);
+assert.strictEqual(Buffer.from([0xe9, 0]).toString('ucs2'), 'é');
+assert.strictEqual(Buffer.from('ĀΩ', 'ucs2').toString('ucs2'), 'ĀΩ');
 assert.strictEqual(Buffer.from([0x81, 0x7e]).readUInt16BE(0), 33150);
 
 const shortFrameHeader = Buffer.alloc(2);

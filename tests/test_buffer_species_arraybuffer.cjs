@@ -16,6 +16,8 @@ assert.strictEqual(shared.toString(), 'X-Test');
 source[17] = 'Y'.charCodeAt(0);
 assert.strictEqual(shared.toString(), 'Y-Test');
 assert.strictEqual(source.utf8Slice(13, 15), 'OK');
+assert.strictEqual(Buffer.from('aéz').utf8Slice(1, 3), 'é');
+assert.strictEqual(Buffer.from([0x61, 0xc3, 0x28, 0x62]).utf8Slice(0, 4), 'a�(b');
 assert(Buffer.isBuffer(Buffer.allocUnsafeSlow(4)));
 
 console.log('buffer:species-arraybuffer:ok');
