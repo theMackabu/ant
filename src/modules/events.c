@@ -1129,6 +1129,15 @@ static void js_events_once_remove_listener_from_target(ant_t *js, ant_value_t st
     return;
   }
 
+  if (is_eventtarget_instance(target)) {
+    ant_value_t remove_method = js_getprop_fallback(js, target, "removeEventListener");
+    if (!is_callable(remove_method)) return;
+
+    ant_value_t call_args[2] = { key, listener };
+    eventemitter_call_listener(js, remove_method, target, call_args, 2);
+    return;
+  }
+
   ant_value_t remove_method = js_getprop_fallback(js, target, "removeListener");
   if (!is_callable(remove_method)) return;
 
