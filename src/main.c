@@ -650,7 +650,6 @@ int main(int argc, char *argv[]) {
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
   
-  ant_register_library(internal_tls_library, "ant:internal/tls", NULL);
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata", NULL);
@@ -659,6 +658,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("util/types", util_types_library);
   ant_standard_library("console", console_library);
   ant_standard_library("net", net_library);
+  ant_standard_library("tls", tls_library);
   ant_standard_library("dns", dns_library);
   ant_standard_library("assert", assert_library);
   ant_standard_library("module", module_library);
