@@ -55,4 +55,34 @@ function assertThrowsTypeError(fn) {
 assertThrowsTypeError(() => Object.defineProperty(locked, 'x', { configurable: true }));
 assertThrowsTypeError(() => Object.defineProperty(locked, lockedSym, { configurable: true }));
 
+const accessorLocked = {};
+function originalGetter() { return 1; }
+function replacementGetter() { return 2; }
+function originalSetter(value) { this.value = value; }
+function replacementSetter(value) { this.value = value + 1; }
+
+Object.defineProperty(accessorLocked, 'x', {
+  get: originalGetter,
+  set: originalSetter,
+  configurable: false
+});
+
+Object.defineProperty(accessorLocked, 'x', { get: originalGetter });
+Object.defineProperty(accessorLocked, 'x', { set: originalSetter });
+assertThrowsTypeError(() => Object.defineProperty(accessorLocked, 'x', { get: replacementGetter }));
+assertThrowsTypeError(() => Object.defineProperty(accessorLocked, 'x', { set: replacementSetter }));
+assertThrowsTypeError(() => Object.defineProperty(accessorLocked, 'x', { value: 1 }));
+
+const dataLocked = {};
+Object.defineProperty(dataLocked, 'x', { value: 1, configurable: false });
+assertThrowsTypeError(() => Object.defineProperty(dataLocked, 'x', { get: originalGetter }));
+
+const accessorLockedSym = Symbol('locked-accessor');
+Object.defineProperty(locked, accessorLockedSym, {
+  get: originalGetter,
+  configurable: false
+});
+assertThrowsTypeError(() => Object.defineProperty(locked, accessorLockedSym, { get: replacementGetter }));
+assertThrowsTypeError(() => Object.defineProperty(locked, accessorLockedSym, { value: 1 }));
+
 console.log('object-define-property-generic-descriptor:ok');

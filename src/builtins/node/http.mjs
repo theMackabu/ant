@@ -158,6 +158,7 @@ function hostIncludesExplicitPort(host) {
   const value = String(host);
   const bracketEnd = value.lastIndexOf(']');
   const colonIndex = value.lastIndexOf(':');
+  if (!value.startsWith('[') && value.indexOf(':') !== colonIndex) return false;
   return colonIndex > bracketEnd;
 }
 
@@ -251,6 +252,102 @@ function getFetchBody(chunks) {
   return Buffer.concat(chunks);
 }
 
+function bodyLengthFromHeaders(headers) {
+  const value = headers && headers['content-length'];
+  if (value === undefined || value === null) return null;
+  const length = Number(value);
+  return Number.isFinite(length) && length >= 0 ? Math.trunc(length) : null;
+}
+
+function createSocketBodyReader(socket, initialBody, expectedLength, onDone) {
+  const queue = [];
+  let pending = null;
+  let received = 0;
+  let ended = false;
+  let failure = null;
+
+  const cleanup = () => {
+    socket.removeListener('data', onData);
+    socket.removeListener('end', onEnd);
+    socket.removeListener('close', onEnd);
+    socket.removeListener('error', onError);
+  };
+
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    cleanup();
+    if (typeof onDone === 'function') onDone();
+    settlePending();
+  };
+
+  const fail = error => {
+    if (ended) return;
+    failure = error;
+    ended = true;
+    cleanup();
+    if (typeof onDone === 'function') onDone();
+    settlePending();
+  };
+
+  const push = chunk => {
+    if (ended) return;
+    let bodyChunk = bufferFrom(chunk);
+    if (bodyChunk.length === 0) return;
+
+    if (expectedLength !== null) {
+      const remaining = expectedLength - received;
+      if (remaining <= 0) return finish();
+      if (bodyChunk.length > remaining) bodyChunk = bodyChunk.subarray(0, remaining);
+    }
+
+    received += bodyChunk.length;
+    queue.push(bodyChunk);
+    if (expectedLength !== null && received >= expectedLength) finish();
+    else settlePending();
+  };
+
+  function settlePending() {
+    if (!pending) return;
+    const { resolve, reject } = pending;
+    pending = null;
+
+    if (queue.length > 0) {
+      resolve({ done: false, value: queue.shift() });
+      return;
+    }
+    if (failure) reject(failure);
+    else if (ended) resolve({ done: true, value: undefined });
+    else pending = { resolve, reject };
+  }
+
+  const onData = chunk => push(chunk);
+  const onEnd = () => finish();
+  const onError = error => fail(error);
+
+  socket.on('data', onData);
+  socket.on('end', onEnd);
+  socket.on('close', onEnd);
+  socket.on('error', onError);
+  if (expectedLength === 0) finish();
+  else push(initialBody);
+
+  return {
+    read() {
+      if (queue.length > 0) return Promise.resolve({ done: false, value: queue.shift() });
+      if (failure) return Promise.reject(failure);
+      if (ended) return Promise.resolve({ done: true, value: undefined });
+      return new Promise((resolve, reject) => {
+        pending = { resolve, reject };
+      });
+    },
+    cancel(reason) {
+      fail(reason instanceof Error ? reason : new Error('socket body reader cancelled'));
+      return Promise.resolve();
+    }
+  };
+}
+
 function hasUpgradeHeader(headers) {
   const value = headers && headers.upgrade;
   return value !== undefined && value !== null;
@@ -261,12 +358,15 @@ function formatHostHeader(options) {
   const port = options.port;
   const protocol = options.protocol || 'http:';
   const defaultPort = defaultPortForProtocol(protocol);
+  const hostText = String(host);
+  const hasExplicitPort = hostIncludesExplicitPort(hostText);
+  const isUnbracketedIpv6Literal = hostText.includes(':') && !hostText.startsWith('[') && !hasExplicitPort;
 
-  if (hostIncludesExplicitPort(host) || port === undefined || port === null || port === '' || Number(port) === defaultPort) {
-    return String(host);
+  if (hasExplicitPort || port === undefined || port === null || port === '' || Number(port) === defaultPort) {
+    return hostText;
   }
 
-  return `${host}:${port}`;
+  return isUnbracketedIpv6Literal ? `[${hostText}]:${port}` : `${hostText}:${port}`;
 }
 
 function buildRawRequestHeaders(options, headers) {
@@ -546,11 +646,7 @@ export class ClientRequest extends OutgoingMessage {
       ALPNProtocols: this.ALPNProtocols
     };
     const createConnection =
-      typeof this.createConnection === 'function'
-        ? this.createConnection
-        : this.protocol === 'https:'
-          ? tls.connect
-          : net.connect;
+      typeof this.createConnection === 'function' ? this.createConnection : this.protocol === 'https:' ? tls.connect : net.connect;
 
     let socket;
     try {
@@ -588,27 +684,37 @@ export class ClientRequest extends OutgoingMessage {
       socket.removeListener('secureConnect', onConnect);
     };
 
-    const fail = (error) => {
+    const fail = error => {
       this._clearTimeoutTimer();
       if (this.destroyed) return;
       this.destroyed = true;
       cleanup();
+      this._upgradeBuffer = Buffer.alloc(0);
+      closeSocket(socket);
       this.emit('error', error);
       this._emitClose();
     };
 
-    const onError = (error) => fail(error);
+    const onError = error => fail(error);
     const onEnd = () => fail(new Error('socket hang up'));
     const onClose = () => {
       if (!this.destroyed) fail(new Error('socket hang up'));
     };
 
-    const onData = (chunk) => {
+    const onData = chunk => {
       if (this.destroyed) return;
 
       this._upgradeBuffer = appendSocketChunk(this._upgradeBuffer, chunk);
       const headerEnd = this._upgradeBuffer.indexOf('\r\n\r\n');
+      if (headerEnd === -1 && this._upgradeBuffer.length > maxHeaderSize) {
+        fail(new Error('HTTP response header exceeded maxHeaderSize'));
+        return;
+      }
       if (headerEnd === -1) return;
+      if (headerEnd + 4 > maxHeaderSize) {
+        fail(new Error('HTTP response header exceeded maxHeaderSize'));
+        return;
+      }
 
       const headText = this._upgradeBuffer.subarray(0, headerEnd).toString('latin1');
       const rest = this._upgradeBuffer.subarray(headerEnd + 4);
@@ -627,18 +733,20 @@ export class ClientRequest extends OutgoingMessage {
       if (response.statusCode === 101) {
         this.emit('upgrade', response, socket, rest);
       } else {
+        const bodyLength = bodyLengthFromHeaders(response.headers);
         const incoming = new FetchIncomingMessage({
           status: response.statusCode,
           statusText: response.statusMessage,
           headers: new Map(Object.entries(response.headers)),
-          body: null,
+          body: {
+            getReader: () => createSocketBodyReader(socket, rest, bodyLength, () => closeSocket(socket))
+          },
           url: this._requestUrl
         });
         incoming.rawHeaders = response.rawHeaders;
         incoming.httpVersion = response.httpVersion;
         incoming.httpVersionMajor = response.httpVersionMajor;
         incoming.httpVersionMinor = response.httpVersionMinor;
-        socket.destroy();
         this.emit('response', incoming);
         incoming._pumpBody();
       }

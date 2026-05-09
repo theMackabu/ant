@@ -8323,9 +8323,17 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
   }
 
   if (has_existing_prop) {
-    bool existing_nonconfig = has_existing_meta
-      ? !existing_meta.configurable
-      : ((existing_off > 0 && is_nonconfig_prop(js, existing_off)) || (obj_ptr && obj_ptr->frozen));
+    bool existing_accessor = has_existing_meta && (existing_meta.has_getter || existing_meta.has_setter);
+    bool new_accessor = has_get || has_set;
+    bool new_data = has_value || has_writable;
+    bool existing_nonconfig =
+      (has_existing_meta && !existing_meta.configurable) ||
+      (existing_off > 0 && is_nonconfig_prop(js, existing_off)) ||
+      (obj_ptr && (obj_ptr->sealed || obj_ptr->frozen));
+    bool existing_readonly =
+      (has_existing_meta && !existing_accessor && !existing_meta.writable) ||
+      (existing_off > 0 && is_const_prop(js, existing_off)) ||
+      (obj_ptr && obj_ptr->frozen);
     if (existing_nonconfig) {
       if (has_configurable && configurable) return js_mkerr(js,
         "Cannot redefine property %.*s: cannot change configurable from false to true",
@@ -8341,6 +8349,39 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
           "Cannot redefine property %.*s: cannot change writable from false to true",
           (int)prop_len, prop_str
         );
+      if (has_existing_meta && existing_accessor && new_data)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot convert accessor property to data property",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && !existing_accessor && new_accessor)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot convert data property to accessor property",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && existing_accessor && has_get) {
+        ant_value_t existing_getter = existing_meta.has_getter ? existing_meta.getter : js_mkundef();
+        if (getter_val != existing_getter)
+          return js_mkerr(js,
+            "Cannot redefine property %.*s: cannot replace getter of a non-configurable property",
+            (int)prop_len, prop_str
+          );
+      }
+      if (has_existing_meta && existing_accessor && has_set) {
+        ant_value_t existing_setter = existing_meta.has_setter ? existing_meta.setter : js_mkundef();
+        if (setter_val != existing_setter)
+          return js_mkerr(js,
+            "Cannot redefine property %.*s: cannot replace setter of a non-configurable property",
+            (int)prop_len, prop_str
+          );
+      }
+      if (existing_readonly && has_writable && writable)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot change writable from false to true",
+          (int)prop_len, prop_str
+        );
+      if (existing_readonly && has_value)
+        return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
     }
   }
 
