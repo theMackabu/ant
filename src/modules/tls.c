@@ -1,6 +1,3 @@
-// stub: node:tls implementation
-// just enough for tls routing
-
 #include <compat.h> // IWYU pragma: keep
 
 #include <stdbool.h>
@@ -82,7 +79,8 @@ typedef struct ant_tls_socket_s {
   bool destroyed;
   bool closing;
   bool had_error;
-  bool ended;
+  bool read_ended;
+  bool write_ended;
   bool read_drain_scheduled;
 } ant_tls_socket_t;
 
@@ -333,7 +331,7 @@ static void tls_socket_close(ant_tls_socket_t *socket) {
 
 static void tls_socket_maybe_emit_end(ant_tls_socket_t *socket) {
   ant_t *js = socket ? socket->js : NULL;
-  if (!socket || !js || !socket->ended || socket->read_len != 0 || socket->read_head) return;
+  if (!socket || !js || !socket->read_ended || socket->read_len != 0 || socket->read_head) return;
   tls_emit(js, socket->obj, "end", NULL, 0);
   tls_socket_close(socket);
 }
@@ -504,7 +502,7 @@ static void tls_write_remove(ant_tls_socket_t *socket, tls_write_req_t *write) {
 }
 
 static void tls_socket_maybe_close_after_writes(ant_tls_socket_t *socket) {
-  if (socket && socket->ended && !socket->writes) tls_socket_close(socket);
+  if (socket && socket->write_ended && !socket->writes) tls_socket_close(socket);
 }
 
 static void tls_socket_write_cb(uv_write_t *req, int status) {
@@ -571,7 +569,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
       tls_emit(js, socket->obj, "readable", NULL, 0);
     }
   } else if (nread == UV_EOF) {
-    socket->ended = true;
+    socket->read_ended = true;
     tls_socket_maybe_emit_end(socket);
   } else if (nread < 0) {
     ant_value_t err = tls_stream_error(socket, (int)nread, "TLS read failed");
@@ -725,7 +723,7 @@ static ant_value_t js_tls_socket_end(ant_t *js, ant_value_t *args, int nargs) {
     result = js_tls_socket_write(js, args, nargs);
     if (is_err(result)) return result;
   }
-  socket->ended = true;
+  socket->write_ended = true;
   tls_socket_maybe_close_after_writes(socket);
   return js_getthis(js);
 }
