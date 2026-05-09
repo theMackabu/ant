@@ -19,6 +19,7 @@
 
 typedef struct timer_entry {
   uv_timer_t handle;
+  ant_value_t obj;
   ant_value_t callback;
   ant_value_t *args;
   int nargs;
@@ -92,6 +93,8 @@ static void remove_timer_entry(timer_entry_t *entry) {
   if (entry->prev) entry->prev->next = entry->next;
   else timer_state.timers = entry->next;
   if (entry->next) entry->next->prev = entry->prev;
+  entry->next = NULL;
+  entry->prev = NULL;
 }
 
 static int timer_entry_is_registered(timer_entry_t *entry) {
@@ -206,32 +209,6 @@ static ant_value_t js_timer_has_ref(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
 }
 
-static ant_value_t timer_make_object(
-  ant_t *js,
-  int id,
-  double delay_ms,
-  int is_interval,
-  ant_value_t callback,
-  ant_value_t timer_args
-) {
-  ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = is_interval ? g_interval_proto : g_timeout_proto;
-
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
-  js_set(js, obj, "delay", js_mknum(delay_ms));
-  js_set(js, obj, "repeat", is_interval ? js_mknum(delay_ms) : js_mknull());
-  
-  js_set(js, obj, "callback", callback);
-  js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
-  
-  js_set_slot(obj, SLOT_DATA, js_mknum((double)id));
-  js_set_slot_wb(js, obj, SLOT_AUX, timer_args);
-  js_set_sym(js, obj, get_toPrimitive_sym(), js_mkfun(timer_to_primitive));
-
-  return obj;
-}
-
 static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_NUM) return (int)js_getnum(arg);
   return (int)js_getnum(js_get_slot(arg, SLOT_DATA));
@@ -239,14 +216,54 @@ static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
 
 static void timer_close_cb(uv_handle_t *h) {
   timer_entry_t *entry = (timer_entry_t *)h->data;
+  
   if (!entry) return;
-  if (entry->closed) return;
   if (timer_entry_is_registered(entry)) remove_timer_entry(entry);
+  
   entry->closed = 1;
   entry->active = 0;
+  entry->obj = js_mkundef();
   timer_release_callback_args(entry);
-  entry->next = NULL;
-  entry->prev = NULL;
+  free(entry);
+}
+
+static void timer_close_entry(timer_entry_t *entry) {
+  if (!entry || entry->closed) return;
+  if (entry->active) {
+    entry->active = 0;
+    timer_state.active_timer_count--;
+  }
+  if (!uv_is_closing((uv_handle_t *)&entry->handle))
+    uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
+}
+
+static void timer_object_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t timer_obj = js_obj_from_ptr(obj);
+  int timer_id = (int)js_getnum(js_get_slot(timer_obj, SLOT_DATA));
+  timer_entry_t *entry = find_timer_entry_by_id(timer_id);
+  if (entry) timer_close_entry(entry);
+}
+
+static ant_value_t timer_make_object(
+  ant_t *js, timer_entry_t *entry, 
+  double delay_ms, int is_interval, ant_value_t timer_args
+) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = is_interval ? g_interval_proto : g_timeout_proto;
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
+  js_set(js, obj, "delay", js_mknum(delay_ms));
+  js_set(js, obj, "repeat", is_interval ? js_mknum(delay_ms) : js_mknull());
+  js_set(js, obj, "callback", entry->callback);
+  js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
+  
+  js_set_slot(obj, SLOT_DATA, js_mknum((double)entry->timer_id));
+  js_set_slot_wb(js, obj, SLOT_AUX, timer_args);
+  js_set_sym(js, obj, get_toPrimitive_sym(), js_mkfun(timer_to_primitive));
+  js_set_finalizer(obj, timer_object_finalize);
+  entry->obj = obj;
+
+  return obj;
 }
 
 static void timer_callback(uv_timer_t *handle) {
@@ -328,7 +345,7 @@ static ant_value_t js_set_timeout(ant_t *js, ant_value_t *args, int nargs) {
   timer_state.active_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, 0);
 
-  return timer_make_object(js, entry->timer_id, delay_ms, 0, callback, timer_args);
+  return timer_make_object(js, entry, delay_ms, 0, timer_args);
 }
 
 // setInterval(callback, delay, ...args)
@@ -363,7 +380,7 @@ static ant_value_t js_set_interval(ant_t *js, ant_value_t *args, int nargs) {
   timer_state.active_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, ms);
 
-  return timer_make_object(js, entry->timer_id, delay_ms, 1, callback, timer_args);
+  return timer_make_object(js, entry, delay_ms, 1, timer_args);
 }
 
 // clearTimeout(timerId | timerObject)
@@ -373,11 +390,7 @@ static ant_value_t js_clear_timeout(ant_t *js, ant_value_t *args, int nargs) {
   
   for (timer_entry_t *entry = timer_state.timers; entry != NULL; entry = entry->next) {
   if (entry->timer_id == timer_id && !entry->closed) {
-    if (entry->active) {
-      entry->active = 0;
-      timer_state.active_timer_count--;
-    }
-    if (!uv_is_closing((uv_handle_t *)&entry->handle)) uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
+    timer_close_entry(entry);
     break;
   }}
   
@@ -924,6 +937,7 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   if (is_object_type(g_interval_proto)) mark(js, g_interval_proto);
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
     if (!t->active) continue;
+    if (is_object_type(t->obj)) mark(js, t->obj);
     mark(js, t->callback);
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);
   }

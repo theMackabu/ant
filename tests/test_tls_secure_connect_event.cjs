@@ -18,7 +18,10 @@ assert.strictEqual(tls.isSecureContext(context), true);
 assert.strictEqual(tls.isSecureContext(constructedContext), true);
 assert.strictEqual(tls.createContext, undefined);
 assert.strictEqual(tls.isContext, undefined);
-assert.strictEqual(tls.checkServerIdentity('localhost', {}), undefined);
+assert.throws(
+  () => tls.checkServerIdentity('localhost', {}),
+  /tls\.checkServerIdentity is not implemented/
+);
 assert.deepStrictEqual(tls.getCiphers(), []);
 assert.deepStrictEqual(tls.rootCertificates, []);
 assert.strictEqual(Object.isFrozen(tls.rootCertificates), true);

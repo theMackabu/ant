@@ -272,6 +272,72 @@ static void tls_socket_free_read_queue(ant_tls_socket_t *socket) {
   }
 }
 
+static ant_value_t tls_make_error(ant_t *js, tls_context *ctx, long code, const char *fallback) {
+  const char *message = fallback;
+  if (ctx && ctx->strerror) {
+    const char *detail = ctx->strerror(code);
+    if (detail && *detail) message = detail;
+  }
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", message ? message : "TLS error");
+}
+
+static void tls_socket_free_alpn(ant_tls_socket_t *socket) {
+  if (!socket || !socket->alpn_protocols) return;
+  for (int i = 0; i < socket->alpn_count; i++) free(socket->alpn_protocols[i]);
+  free(socket->alpn_protocols);
+  socket->alpn_protocols = NULL;
+  socket->alpn_count = 0;
+}
+
+static void tls_socket_free(ant_tls_socket_t *socket) {
+  if (!socket) return;
+  tls_remove_active_socket(socket);
+  
+  if (is_object_type(socket->obj)) 
+    js_clear_native(socket->obj, TLS_SOCKET_NATIVE_TAG);
+  tls_socket_free_read_queue(socket);
+  tls_socket_free_alpn(socket);
+  
+  if (socket->ctx_wrap) tls_context_release(socket->ctx_wrap);
+  if (socket->owns_ctx && socket->ctx && socket->ctx->free_ctx) 
+    socket->ctx->free_ctx(socket->ctx);
+  
+  free(socket->host);
+  free(socket->servername);
+  free(socket);
+}
+
+static void tls_socket_close_cb(uv_handle_t *handle) {
+  tlsuv_stream_t *tls_stream = (tlsuv_stream_t *)handle;
+  ant_tls_socket_t *socket = tls_stream ? (ant_tls_socket_t *)tls_stream->data : NULL;
+  
+  ant_t *js = socket ? socket->js : NULL;
+  ant_value_t had_error = 0;
+  if (!socket || !js) return;
+
+  socket->destroyed = true;
+  socket->connecting = false;
+  socket->closing = false;
+  
+  tls_socket_sync_state(socket);
+  had_error = js_bool(socket->had_error);
+  tls_emit(js, socket->obj, "close", &had_error, 1);
+  tls_socket_free(socket);
+}
+
+static void tls_socket_close(ant_tls_socket_t *socket) {
+  if (!socket || socket->closing || socket->destroyed) return;
+  socket->closing = true;
+  tlsuv_stream_close(&socket->stream, tls_socket_close_cb);
+}
+
+static void tls_socket_maybe_emit_end(ant_tls_socket_t *socket) {
+  ant_t *js = socket ? socket->js : NULL;
+  if (!socket || !js || !socket->ended || socket->read_len != 0 || socket->read_head) return;
+  tls_emit(js, socket->obj, "end", NULL, 0);
+  tls_socket_close(socket);
+}
+
 static ant_value_t tls_socket_drain_read_queue(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_tls_socket_t *socket = tls_socket_data(obj);
@@ -290,21 +356,22 @@ static ant_value_t tls_socket_drain_read_queue(ant_t *js, ant_value_t *args, int
       ? js_mkstr(js, chunk->data + chunk->off, len)
       : tls_make_buffer_chunk(js, chunk->data + chunk->off, len);
     
-    socket->read_head = chunk->next;
-    if (socket->read_tail == chunk) socket->read_tail = NULL;
-    socket->read_len -= len;
-    free(chunk->data);
-    free(chunk);
-    
     if (is_err(data)) {
       socket->had_error = true;
       tls_emit(js, obj, "error", &data, 1);
       return data;
     }
     
+    socket->read_head = chunk->next;
+    if (socket->read_tail == chunk) socket->read_tail = NULL;
+    socket->read_len -= len;
+    free(chunk->data);
+    free(chunk);
+    
     tls_emit(js, obj, "data", &data, 1);
   }
 
+  tls_socket_maybe_emit_end(socket);
   return js_mkundef();
 }
 
@@ -351,36 +418,6 @@ static bool tls_value_bytes(
   return true;
 }
 
-static ant_value_t tls_make_error(ant_t *js, tls_context *ctx, long code, const char *fallback) {
-  const char *message = fallback;
-  if (ctx && ctx->strerror) {
-    const char *detail = ctx->strerror(code);
-    if (detail && *detail) message = detail;
-  }
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", message ? message : "TLS error");
-}
-
-static void tls_socket_free_alpn(ant_tls_socket_t *socket) {
-  if (!socket || !socket->alpn_protocols) return;
-  for (int i = 0; i < socket->alpn_count; i++) free(socket->alpn_protocols[i]);
-  free(socket->alpn_protocols);
-  socket->alpn_protocols = NULL;
-  socket->alpn_count = 0;
-}
-
-static void tls_socket_free(ant_tls_socket_t *socket) {
-  if (!socket) return;
-  tls_remove_active_socket(socket);
-  if (is_object_type(socket->obj)) js_clear_native(socket->obj, TLS_SOCKET_NATIVE_TAG);
-  tls_socket_free_read_queue(socket);
-  tls_socket_free_alpn(socket);
-  if (socket->ctx_wrap) tls_context_release(socket->ctx_wrap);
-  if (socket->owns_ctx && socket->ctx && socket->ctx->free_ctx) socket->ctx->free_ctx(socket->ctx);
-  free(socket->host);
-  free(socket->servername);
-  free(socket);
-}
-
 static ant_value_t tls_stream_error(ant_tls_socket_t *socket, int status, const char *fallback) {
   const char *message = fallback;
   if (socket) {
@@ -389,29 +426,6 @@ static ant_value_t tls_stream_error(ant_tls_socket_t *socket, int status, const 
     else if (status < 0) message = uv_strerror(status);
   }
   return js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", message ? message : "TLS error");
-}
-
-static void tls_socket_close_cb(uv_handle_t *handle) {
-  tlsuv_stream_t *tls_stream = (tlsuv_stream_t *)handle;
-  ant_tls_socket_t *socket = tls_stream ? (ant_tls_socket_t *)tls_stream->data : NULL;
-  ant_t *js = socket ? socket->js : NULL;
-  ant_value_t had_error = 0;
-
-  if (!socket || !js) return;
-
-  socket->destroyed = true;
-  socket->connecting = false;
-  socket->closing = false;
-  tls_socket_sync_state(socket);
-  had_error = js_bool(socket->had_error);
-  tls_emit(js, socket->obj, "close", &had_error, 1);
-  tls_socket_free(socket);
-}
-
-static void tls_socket_close(ant_tls_socket_t *socket) {
-  if (!socket || socket->closing || socket->destroyed) return;
-  socket->closing = true;
-  tlsuv_stream_close(&socket->stream, tls_socket_close_cb);
 }
 
 static bool tls_parse_write_args(
@@ -558,8 +572,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
     }
   } else if (nread == UV_EOF) {
     socket->ended = true;
-    tls_emit(js, socket->obj, "end", NULL, 0);
-    tls_socket_close(socket);
+    tls_socket_maybe_emit_end(socket);
   } else if (nread < 0) {
     ant_value_t err = tls_stream_error(socket, (int)nread, "TLS read failed");
     socket->had_error = true;
@@ -639,6 +652,7 @@ static ant_value_t js_tls_socket_read(ant_t *js, ant_value_t *args, int nargs) {
     out = js_mkstr(js, data, copied);
   else out = tls_make_buffer_chunk(js, data, copied);
   free(data);
+  tls_socket_maybe_emit_end(socket);
   return out;
 }
 
@@ -1236,7 +1250,7 @@ static ant_value_t js_tls_connect(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_tls_check_server_identity(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mkundef();
+  return js_mkerr_typed(js, JS_ERR_TYPE, "tls.checkServerIdentity is not implemented");
 }
 
 static ant_value_t js_tls_get_ciphers(ant_t *js, ant_value_t *args, int nargs) {
