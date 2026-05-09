@@ -3298,7 +3298,11 @@ static ant_value_t js_buffer_writeUInt16BE(ant_t *js, ant_value_t *args, int nar
   TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
-  uint16_t value = (uint16_t)js_to_uint32(js_getnum(args[0]));
+  double number = js_to_number(js, args[0]);
+  if (!isfinite(number) || number < 0 || floor(number) != number || number > 0xffff)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "value out of range");
+
+  uint16_t value = (uint16_t)number;
   size_t offset = 0;
   if (!buffer_checked_byte_offset(nargs > 1 ? args[1] : js_mkundef(), ta->byte_length, 2, &offset))
     return js_mkerr(js, "Offset out of bounds");
@@ -3317,11 +3321,15 @@ static ant_value_t js_buffer_writeUIntBE(ant_t *js, ant_value_t *args, int nargs
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
   double number = js_to_number(js, args[0]);
-  uint64_t value = (uint64_t)(isnan(number) || number < 0 ? 0 : floor(number));
   size_t byte_length = (size_t)js_getnum(args[2]);
   size_t offset = 0;
 
   if (byte_length == 0 || byte_length > 6) return js_mkerr(js, "byteLength out of range");
+  uint64_t max = (1ULL << (byte_length * 8)) - 1;
+  if (!isfinite(number) || number < 0 || floor(number) != number || number > (double)max)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "value out of range");
+
+  uint64_t value = (uint64_t)number;
   if (!buffer_checked_byte_offset(args[1], ta->byte_length, byte_length, &offset))
     return js_mkerr(js, "Offset out of bounds");
 

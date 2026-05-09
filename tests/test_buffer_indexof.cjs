@@ -41,6 +41,16 @@ function assertThrowsTypeError(fn) {
   assert.fail('expected TypeError');
 }
 
+function assertThrowsRangeError(fn) {
+  try {
+    fn();
+  } catch (error) {
+    assert.strictEqual(error instanceof RangeError, true);
+    return;
+  }
+  assert.fail('expected RangeError');
+}
+
 function assertThrows(fn) {
   try {
     fn();
@@ -59,6 +69,16 @@ assertThrowsTypeError(() => Buffer.from('abc').indexOf('a', 0, 'not-an-encoding'
   assert.deepStrictEqual([...b], [0, 0]);
   assertThrows(() => b.writeUIntBE(0x1234, -1, 2));
   assertThrows(() => b.readUInt16BE(-1));
+}
+
+{
+  const b = Buffer.alloc(6);
+  assertThrowsRangeError(() => b.writeUInt16BE(0x10000, 0));
+  assertThrowsRangeError(() => b.writeUInt16BE(-1, 0));
+  assertThrowsRangeError(() => b.writeUIntBE(0x10000, 0, 2));
+  assertThrowsRangeError(() => b.writeUIntBE(-1, 0, 2));
+  assertThrowsRangeError(() => b.writeUIntBE(2 ** 48, 0, 6));
+  assert.deepStrictEqual([...b], [0, 0, 0, 0, 0, 0]);
 }
 
 console.log('buffer:indexof:ok');
