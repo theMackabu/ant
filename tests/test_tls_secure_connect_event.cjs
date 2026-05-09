@@ -38,7 +38,15 @@ const server = net.createServer((socket) => {
 
 server.listen(0, '127.0.0.1', () => {
   const address = server.address();
-  const socket = tls.connect(address.port, '127.0.0.1');
+  const secureContext = tls.createSecureContext();
+  const socket = tls.connect({
+    port: address.port,
+    host: '127.0.0.1',
+    secureContext,
+  });
+  assert.strictEqual(tls.isSecureContext(secureContext), true);
+  assert.strictEqual(secureContext.close(), secureContext);
+  assert.strictEqual(tls.isSecureContext(secureContext), false);
   assert(socket instanceof tls.TLSSocket);
   assert(socket instanceof net.Socket);
   assert.strictEqual(typeof socket.renegotiate, 'function');
@@ -46,6 +54,21 @@ server.listen(0, '127.0.0.1', () => {
   assert.strictEqual(socket.unref(), socket);
   assert.strictEqual(socket.cork(), socket);
   assert.strictEqual(socket.uncork(), socket);
+  assert.strictEqual(socket.setEncoding('utf8'), socket);
+  const badEncoding = {
+    toString() {
+      throw new Error('encoding coercion failed');
+    },
+  };
+  let sawEncodingError = false;
+  try {
+    socket.setEncoding(badEncoding);
+  } catch (err) {
+    sawEncodingError = true;
+    assert.match(err.message, /encoding coercion failed/);
+  }
+  assert.strictEqual(sawEncodingError, true);
+  assert.strictEqual(socket.setEncoding(), socket);
 
   socket.on('error', (err) => {
     sawError = true;

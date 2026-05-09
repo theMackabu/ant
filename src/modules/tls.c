@@ -34,6 +34,7 @@ typedef struct ant_tls_context_wrap_s {
   tls_context *ctx;
   tlsuv_private_key_t key;
   tlsuv_certificate_t cert;
+  unsigned refs;
   bool closed;
 } ant_tls_context_wrap_t;
 
@@ -60,6 +61,8 @@ typedef struct ant_tls_socket_s {
   tlsuv_stream_t stream;
   uv_connect_t connect_req;
   tls_context *ctx;
+  ant_tls_context_wrap_t *ctx_wrap;
+  ant_value_t secure_context;
   char *host;
   char *servername;
   int port;
@@ -94,9 +97,8 @@ static ant_value_t g_tls_socket_proto = 0;
 static ant_value_t g_tls_socket_ctor = 0;
 static ant_tls_socket_t *g_active_tls_sockets = NULL;
 
-static void tls_context_free(ant_tls_context_wrap_t *wrap) {
-  if (!wrap || wrap->closed) return;
-  wrap->closed = true;
+static void tls_context_dispose(ant_tls_context_wrap_t *wrap) {
+  if (!wrap) return;
 
   if (wrap->cert && wrap->cert->free) wrap->cert->free(wrap->cert);
   if (wrap->key && wrap->key->free) wrap->key->free(wrap->key);
@@ -105,6 +107,23 @@ static void tls_context_free(ant_tls_context_wrap_t *wrap) {
   wrap->cert = NULL;
   wrap->key = NULL;
   wrap->ctx = NULL;
+}
+
+static void tls_context_free(ant_tls_context_wrap_t *wrap) {
+  if (!wrap || wrap->closed) return;
+  wrap->closed = true;
+  if (wrap->refs > 0) return;
+  tls_context_dispose(wrap);
+}
+
+static void tls_context_retain(ant_tls_context_wrap_t *wrap) {
+  if (wrap) wrap->refs++;
+}
+
+static void tls_context_release(ant_tls_context_wrap_t *wrap) {
+  if (!wrap || wrap->refs == 0) return;
+  wrap->refs--;
+  if (wrap->refs == 0 && wrap->closed) tls_context_dispose(wrap);
 }
 
 static ant_tls_context_wrap_t *tls_context_data(ant_value_t value) {
@@ -355,6 +374,7 @@ static void tls_socket_free(ant_tls_socket_t *socket) {
   if (is_object_type(socket->obj)) js_clear_native(socket->obj, TLS_SOCKET_NATIVE_TAG);
   tls_socket_free_read_queue(socket);
   tls_socket_free_alpn(socket);
+  if (socket->ctx_wrap) tls_context_release(socket->ctx_wrap);
   if (socket->owns_ctx && socket->ctx && socket->ctx->free_ctx) socket->ctx->free_ctx(socket->ctx);
   free(socket->host);
   free(socket->servername);
@@ -720,8 +740,14 @@ static ant_value_t js_tls_socket_resume(ant_t *js, ant_value_t *args, int nargs)
 
 static ant_value_t js_tls_socket_setEncoding(ant_t *js, ant_value_t *args, int nargs) {
   ant_tls_socket_t *socket = tls_require_socket(js, js_getthis(js));
+  ant_value_t encoding = js_mkundef();
+
   if (!socket) return js->thrown_value;
-  socket->encoding = nargs > 0 && vtype(args[0]) != T_UNDEF ? js_tostring_val(js, args[0]) : js_mkundef();
+  if (nargs > 0 && vtype(args[0]) != T_UNDEF) {
+    encoding = js_tostring_val(js, args[0]);
+    if (is_err(encoding)) return encoding;
+  }
+  socket->encoding = encoding;
   return js_getthis(js);
 }
 
@@ -1131,6 +1157,7 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
 
   socket->js = js;
   socket->encoding = js_mkundef();
+  socket->secure_context = js_mkundef();
   socket->host = strdup(host ? host : "localhost");
   socket->servername = strdup(servername ? servername : (host ? host : "localhost"));
   socket->port = port > 0 ? port : 443;
@@ -1144,7 +1171,10 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   ctx_wrap = tls_context_data(value);
   if (ctx_wrap && !ctx_wrap->closed && ctx_wrap->ctx) {
     socket->ctx = ctx_wrap->ctx;
+    socket->ctx_wrap = ctx_wrap;
+    socket->secure_context = value;
     socket->owns_ctx = false;
+    tls_context_retain(ctx_wrap);
   } else {
     socket->ctx = default_tls_context(NULL, 0);
     socket->owns_ctx = true;
@@ -1270,6 +1300,7 @@ void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
   for (socket = g_active_tls_sockets; socket; socket = socket->next_active) {
     mark(js, socket->obj);
     if (vtype(socket->encoding) != T_UNDEF) mark(js, socket->encoding);
+    if (vtype(socket->secure_context) != T_UNDEF) mark(js, socket->secure_context);
     for (tls_write_req_t *write = socket->writes; write; write = write->next) 
       if (vtype(write->callback) != T_UNDEF) mark(js, write->callback);
   }

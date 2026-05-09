@@ -37,6 +37,7 @@ struct ant_conn_s {
   uint64_t bytes_written;
   
   int close_handles;
+  bool resolving;
   bool closing;
   bool read_paused;
   bool read_eof;

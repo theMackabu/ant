@@ -28,7 +28,28 @@ const selfRefreshing = setTimeout(() => {
   if (selfRefreshFired === 1) selfRefreshing.refresh();
 }, 5);
 
+let postFireRefreshFired = 0;
+const postFireRefresh = setTimeout(() => {
+  postFireRefreshFired++;
+}, 5);
+
+const postFireArgs = [];
+const postFireWithArgs = setTimeout((value) => {
+  postFireArgs.push(value);
+}, 5, 'kept-arg');
+
+setTimeout(() => {
+  assert.strictEqual(postFireRefreshFired, 1);
+  postFireRefresh.refresh();
+  assert.deepStrictEqual(postFireArgs, ['kept-arg']);
+  postFireWithArgs.refresh();
+}, 20);
+
 setTimeout(() => {
   assert.strictEqual(selfRefreshFired, 2);
+  assert.strictEqual(postFireRefreshFired, 2);
+  assert.deepStrictEqual(postFireArgs, ['kept-arg', 'kept-arg']);
+  clearTimeout(postFireRefresh);
+  clearTimeout(postFireWithArgs);
   console.log('timer:refresh:ok');
 }, 80);

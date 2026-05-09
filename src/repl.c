@@ -79,12 +79,14 @@ static void repl_read_async_close_cb(uv_handle_t *handle) {
 
 static void *repl_read_thread_main(void *data) {
   repl_read_job_t *job = (repl_read_job_t *)data;
-  sigset_t sigint_set;
   char *line = NULL;
 
+#ifndef _WIN32
+  sigset_t sigint_set;
   sigemptyset(&sigint_set);
   sigaddset(&sigint_set, SIGINT);
   pthread_sigmask(SIG_UNBLOCK, &sigint_set, NULL);
+#endif
   
   ant_readline_result_t status = ant_readline(
     job->history, job->prompt, 
@@ -127,9 +129,11 @@ static ant_readline_result_t repl_readline_async(
   };
   
   pthread_t thread;
+#ifndef _WIN32
   sigset_t sigint_set;
   sigset_t old_sigmask;
   bool sigint_blocked = false;
+#endif
 
   if (out_line) *out_line = NULL;
   if (pthread_mutex_init(&job.mutex, NULL) != 0)
@@ -142,12 +146,16 @@ static ant_readline_result_t repl_readline_async(
   job.async.data = &job;
   job.async_initialized = true;
 
+#ifndef _WIN32
   sigemptyset(&sigint_set);
   sigaddset(&sigint_set, SIGINT);
   sigint_blocked = pthread_sigmask(SIG_BLOCK, &sigint_set, &old_sigmask) == 0;
+#endif
 
   if (pthread_create(&thread, NULL, repl_read_thread_main, &job) != 0) {
+#ifndef _WIN32
     if (sigint_blocked) pthread_sigmask(SIG_SETMASK, &old_sigmask, NULL);
+#endif
     if (job.async_initialized)
       uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
     while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
@@ -161,7 +169,9 @@ static ant_readline_result_t repl_readline_async(
   }
 
   pthread_join(thread, NULL);
+#ifndef _WIN32
   if (sigint_blocked) pthread_sigmask(SIG_SETMASK, &old_sigmask, NULL);
+#endif
 
   if (job.async_initialized)
     uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);

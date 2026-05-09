@@ -5,8 +5,9 @@ let connected = false;
 let serverSawData = false;
 let clientSawData = false;
 let invalidHostError = false;
+let invalidPortError = false;
 const timeout = setTimeout(() => {
-  if (!connected || !serverSawData || !clientSawData || !invalidHostError) {
+  if (!connected || !serverSawData || !clientSawData || !invalidHostError || !invalidPortError) {
     throw new Error('net.createConnection timed out');
   }
 }, 2000);
@@ -15,6 +16,16 @@ function finishWithInvalidHostCheck() {
   const socket = net.connect({ host: '256.256.256.256', port: 80 });
   socket.on('error', (error) => {
     invalidHostError = true;
+    assert(error instanceof Error);
+    assert.strictEqual(typeof error.message, 'string');
+    finishWithInvalidPortCheck();
+  });
+}
+
+function finishWithInvalidPortCheck() {
+  const socket = net.connect({ host: '127.0.0.1', port: 65536 });
+  socket.on('error', (error) => {
+    invalidPortError = true;
     assert(error instanceof Error);
     assert.strictEqual(typeof error.message, 'string');
     clearTimeout(timeout);

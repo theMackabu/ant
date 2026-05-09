@@ -406,6 +406,7 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   js_set(js, state, "endEmitted", js_false);
   js_set(js, state, "endScheduled", js_false);
   js_set(js, state, "dataEmitted", js_false);
+  js_set(js, state, "errored", js_mkundef());
   js_set(js, state, "flowing", js_false);
   js_set(js, state, "flowingReadScheduled", js_false);
   js_set(js, state, "reading", js_false);
@@ -436,6 +437,7 @@ static void stream_init_writable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   js_set(js, state, "objectMode", js_bool(object_mode));
   js_set(js, state, "finished", js_false);
   js_set(js, state, "ended", js_false);
+  js_set(js, state, "errored", js_mkundef());
   js_set(js, obj, "_writableState", state);
 
   if (is_callable(write_fn)) js_set(js, obj, "_write", write_fn);
@@ -459,8 +461,17 @@ static ant_value_t stream_emit_named(ant_t *js, ant_value_t stream_obj, const ch
   return js_bool(eventemitter_emit_args(js, stream_obj, event_name, NULL, 0));
 }
 
+static void stream_set_errored(ant_t *js, ant_value_t stream_obj, ant_value_t error) {
+  ant_value_t state = stream_readable_state(js, stream_obj);
+  if (is_object_type(state)) js_set(js, state, "errored", error);
+
+  state = stream_writable_state(js, stream_obj);
+  if (is_object_type(state)) js_set(js, state, "errored", error);
+}
+
 static void stream_emit_error(ant_t *js, ant_value_t stream_obj, ant_value_t error) {
   ant_value_t args[1];
+  stream_set_errored(js, stream_obj, error);
   args[0] = error;
   eventemitter_emit_args(js, stream_obj, "error", args, 1);
 }
@@ -701,6 +712,7 @@ static ant_value_t js_stream_destroy(ant_t *js, ant_value_t *args, int nargs) {
   if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return stream_obj;
 
   js_set(js, stream_obj, "destroyed", js_true);
+  if (!is_undefined(error) && !is_null(error)) stream_set_errored(js, stream_obj, error);
 
   done_state = js_mkobj(js);
   js_set(js, done_state, "stream", stream_obj);
@@ -1059,6 +1071,7 @@ static ant_value_t stream_writable_write_impl(
     js_truthy(js, js_get(js, stream_obj, "destroyed"))
   ) {
     ant_value_t err = js_mkerr(js, "write after end");
+    stream_set_errored(js, stream_obj, err);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     else stream_emit_error(js, stream_obj, err);
     return js_false;
