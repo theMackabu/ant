@@ -1,13 +1,26 @@
 const net = require('node:net');
+const assert = require('node:assert');
 
 let connected = false;
 let serverSawData = false;
 let clientSawData = false;
+let invalidHostError = false;
 const timeout = setTimeout(() => {
-  if (!connected || !serverSawData || !clientSawData) {
+  if (!connected || !serverSawData || !clientSawData || !invalidHostError) {
     throw new Error('net.createConnection timed out');
   }
 }, 2000);
+
+function finishWithInvalidHostCheck() {
+  const socket = net.connect({ host: 'definitely.invalid.ant.local', port: 80 });
+  socket.on('error', (error) => {
+    invalidHostError = true;
+    assert(error instanceof Error);
+    assert.strictEqual(typeof error.message, 'string');
+    clearTimeout(timeout);
+    console.log('net:create-connection:ok');
+  });
+}
 
 const server = net.createServer((socket) => {
   socket.setEncoding('utf8');
@@ -41,8 +54,7 @@ server.listen(0, '127.0.0.1', () => {
       if (!connected || !serverSawData || !clientSawData) {
         throw new Error('net.createConnection did not complete the loopback exchange');
       }
-      clearTimeout(timeout);
-      console.log('net:create-connection:ok');
+      finishWithInvalidHostCheck();
     });
   });
 });

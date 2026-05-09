@@ -39,7 +39,24 @@ function assertThrowsTypeError(fn) {
   assert.fail('expected TypeError');
 }
 
+function assertThrows(fn) {
+  try {
+    fn();
+  } catch {
+    return;
+  }
+  assert.fail('expected throw');
+}
+
 assertThrowsTypeError(() => Buffer.from('abc').indexOf({}));
 assertThrowsTypeError(() => Buffer.from('abc').indexOf('a', 0, 'not-an-encoding'));
+
+{
+  const b = Buffer.alloc(2);
+  assertThrows(() => b.writeUInt16BE(0x1234, -1));
+  assert.deepStrictEqual([...b], [0, 0]);
+  assertThrows(() => b.writeUIntBE(0x1234, -1, 2));
+  assertThrows(() => b.readUInt16BE(-1));
+}
 
 console.log('buffer:indexof:ok');

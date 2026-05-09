@@ -3194,6 +3194,25 @@ static ant_value_t js_buffer_copy(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)copy_len);
 }
 
+static bool buffer_checked_byte_offset(
+  ant_value_t value,
+  size_t byte_length,
+  size_t width,
+  size_t *out
+) {
+  double offset_num = vtype(value) == T_NUM ? js_getnum(value) : 0.0;
+  if (!isfinite(offset_num) || offset_num < 0) return false;
+
+  offset_num = floor(offset_num);
+  if (offset_num > (double)byte_length) return false;
+
+  size_t offset = (size_t)offset_num;
+  if (width > byte_length || offset > byte_length - width) return false;
+
+  *out = offset;
+  return true;
+}
+
 static ant_value_t js_buffer_writeInt16BE(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "writeInt16BE requires a value");
 
@@ -3201,8 +3220,9 @@ static ant_value_t js_buffer_writeInt16BE(ant_t *js, ant_value_t *args, int narg
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
   int16_t value = (int16_t)js_to_int32(js_getnum(args[0]));
-  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
-  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 1 ? args[1] : js_mkundef(), ta->byte_length, 2, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   ptr[0] = (uint8_t)((value >> 8) & 0xff);
@@ -3218,8 +3238,9 @@ static ant_value_t js_buffer_writeInt32BE(ant_t *js, ant_value_t *args, int narg
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
   int32_t value = js_to_int32(js_getnum(args[0]));
-  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
-  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 1 ? args[1] : js_mkundef(), ta->byte_length, 4, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   ptr[0] = (uint8_t)((value >> 24) & 0xff);
@@ -3237,8 +3258,9 @@ static ant_value_t js_buffer_writeUInt32BE(ant_t *js, ant_value_t *args, int nar
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
   uint32_t value = js_to_uint32(js_getnum(args[0]));
-  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
-  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 1 ? args[1] : js_mkundef(), ta->byte_length, 4, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   ptr[0] = (uint8_t)((value >> 24) & 0xff);
@@ -3256,8 +3278,9 @@ static ant_value_t js_buffer_writeUInt16BE(ant_t *js, ant_value_t *args, int nar
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
   uint16_t value = (uint16_t)js_to_uint32(js_getnum(args[0]));
-  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
-  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 1 ? args[1] : js_mkundef(), ta->byte_length, 2, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   ptr[0] = (uint8_t)((value >> 8) & 0xff);
@@ -3274,11 +3297,12 @@ static ant_value_t js_buffer_writeUIntBE(ant_t *js, ant_value_t *args, int nargs
 
   double number = js_to_number(js, args[0]);
   uint64_t value = (uint64_t)(isnan(number) || number < 0 ? 0 : floor(number));
-  size_t offset = (size_t)js_getnum(args[1]);
   size_t byte_length = (size_t)js_getnum(args[2]);
+  size_t offset = 0;
 
   if (byte_length == 0 || byte_length > 6) return js_mkerr(js, "byteLength out of range");
-  if (offset + byte_length > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  if (!buffer_checked_byte_offset(args[1], ta->byte_length, byte_length, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   for (size_t i = byte_length; i > 0; i--) {
@@ -3293,8 +3317,9 @@ static ant_value_t js_buffer_readInt16BE(ant_t *js, ant_value_t *args, int nargs
   TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
-  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
-  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 0 ? args[0] : js_mkundef(), ta->byte_length, 2, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   int16_t value = (int16_t)((ptr[0] << 8) | ptr[1]);
@@ -3306,8 +3331,9 @@ static ant_value_t js_buffer_readUInt16BE(ant_t *js, ant_value_t *args, int narg
   TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
-  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
-  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 0 ? args[0] : js_mkundef(), ta->byte_length, 2, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   uint16_t value = (uint16_t)(((uint16_t)ptr[0] << 8) | (uint16_t)ptr[1]);
@@ -3319,8 +3345,9 @@ static ant_value_t js_buffer_readInt32BE(ant_t *js, ant_value_t *args, int nargs
   TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
-  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
-  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 0 ? args[0] : js_mkundef(), ta->byte_length, 4, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   int32_t value = (int32_t)(((uint32_t)ptr[0] << 24) | ((uint32_t)ptr[1] << 16) |
@@ -3333,8 +3360,9 @@ static ant_value_t js_buffer_readUInt32BE(ant_t *js, ant_value_t *args, int narg
   TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
   if (!ta) return js_mkerr(js, "Invalid Buffer");
 
-  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
-  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = 0;
+  if (!buffer_checked_byte_offset(nargs > 0 ? args[0] : js_mkundef(), ta->byte_length, 4, &offset))
+    return js_mkerr(js, "Offset out of bounds");
 
   uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
   uint32_t value = ((uint32_t)ptr[0] << 24) | ((uint32_t)ptr[1] << 16) |

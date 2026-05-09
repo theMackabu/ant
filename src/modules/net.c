@@ -27,6 +27,7 @@
 #include "modules/events.h"
 #include "modules/net.h"
 #include "modules/symbol.h"
+#include "modules/timer.h"
 
 typedef struct net_server_s net_server_t;
 typedef struct net_socket_s net_socket_t;
@@ -457,6 +458,34 @@ static void net_socket_emit_error(net_socket_t *socket, const char *message) {
   ant_value_t arg = js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", message);
   socket->had_error = true;
   net_emit(socket->js, socket->obj, "error", &arg, 1);
+}
+
+static ant_value_t net_socket_emit_connect_error(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t socket_obj = is_object_type(state) ? js_get(js, state, "socket") : js_mkundef();
+  ant_value_t status_val = is_object_type(state) ? js_get(js, state, "status") : js_mknum(UV_EIO);
+  
+  net_socket_t *socket = net_socket_data(socket_obj);
+  int status = vtype(status_val) == T_NUM ? (int)js_getnum(status_val) : UV_EIO;
+  
+  ant_value_t err = 0;
+  if (!socket) return js_mkundef();
+
+  socket->connecting = false;
+  socket->had_error = true;
+  net_socket_sync_state(socket);
+  err = js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(status));
+  net_emit(js, socket->obj, "error", &err, 1);
+  if (socket->conn) ant_conn_close(socket->conn);
+
+  return js_mkundef();
+}
+
+static void net_socket_schedule_connect_error(ant_t *js, net_socket_t *socket, int status) {
+  ant_value_t state = js_mkobj(js);
+  js_set(js, state, "socket", socket->obj);
+  js_set(js, state, "status", js_mknum((double)status));
+  queue_microtask(js, js_heavy_mkfun(js, net_socket_emit_connect_error, state));
 }
 
 static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open) {
@@ -907,9 +936,7 @@ static ant_value_t net_socket_connect_parsed(ant_t *js, net_socket_t *socket, co
     socket->connecting = false;
     socket->had_error = true;
     net_socket_sync_state(socket);
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
-    net_emit(js, socket->obj, "error", &err, 1);
-    ant_conn_close(conn);
+    net_socket_schedule_connect_error(js, socket, rc);
   }
 
   return socket->obj;
