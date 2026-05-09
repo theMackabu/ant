@@ -318,24 +318,27 @@ static ant_value_t js_eventemitter_once_wrapper(ant_t *js, ant_value_t *args, in
   return eventemitter_call_listener(js, listener, js->this_val, args, nargs);
 }
 
-static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key, bool raw) {
+static ant_value_t event_type_get_listeners_array(ant_t *js, EventType *evt, bool raw) {
   ant_value_t result = js_mkarr(js);
-  EventType *evt = NULL;
-
-  if (!is_object_type(target) || !key) return result;
-  evt = find_emitter_event_type(js, target, key);
   if (!evt) return result;
 
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
     if (!entry) continue;
-    js_arr_push(js, result, raw && entry->once && is_callable(entry->raw_callback) 
-      ? entry->raw_callback 
-      : entry->callback
+    
+    js_arr_push(js, result, raw 
+      && entry->once 
+      && is_callable(entry->raw_callback) 
+      ? entry->raw_callback : entry->callback
     );
   }
 
   return result;
+}
+
+static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key, bool raw) {
+  if (!is_object_type(target) || !key) return js_mkarr(js);
+  return event_type_get_listeners_array(js, find_emitter_event_type(js, target, key), raw);
 }
 
 static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, bool bubbles, bool cancelable) {
@@ -1323,6 +1326,25 @@ static ant_value_t js_events_get_max_listeners(ant_t *js, ant_value_t *args, int
   return js_mknum(eventemitter_get_max_listeners_impl(args[0]));
 }
 
+static ant_value_t js_events_get_event_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "target must be an EventEmitter or EventTarget");
+
+  ant_value_t target = args[0];
+  if (is_eventemitter_instance(target) || is_eventtarget_instance(target)) {
+    ant_value_t key = nargs >= 2 ? evt_key_from_arg(args[1]) : 0;
+    if (!key) return js_mkarr(js);
+    return event_type_get_listeners_array(js, find_emitter_event_type(js, target, key), false);
+  }
+
+  ant_value_t listeners_method = js_getprop_fallback(js, target, "listeners");
+  if (!is_callable(listeners_method))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "target must be an EventEmitter or EventTarget");
+
+  ant_value_t key = nargs >= 2 ? args[1] : js_mkundef();
+  return eventemitter_call_listener(js, listeners_method, target, &key, 1);
+}
+
 // TODO: fix stub
 static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "events.on async iterator is not implemented");
@@ -1338,11 +1360,13 @@ ant_value_t events_library(ant_t *js) {
   js_set(js, lib, "addAbortListener", js_mkfun(js_events_add_abort_listener));
   js_set(js, lib, "setMaxListeners", js_mkfun(js_events_set_max_listeners));
   js_set(js, lib, "getMaxListeners", js_mkfun(js_events_get_max_listeners));
+  js_set(js, lib, "getEventListeners", js_mkfun(js_events_get_event_listeners));
   js_set(js, g_eventemitter_ctor, "once", js_get(js, lib, "once"));
   js_set(js, g_eventemitter_ctor, "on", js_get(js, lib, "on"));
   js_set(js, g_eventemitter_ctor, "addAbortListener", js_get(js, lib, "addAbortListener"));
   js_set(js, g_eventemitter_ctor, "setMaxListeners", js_get(js, lib, "setMaxListeners"));
   js_set(js, g_eventemitter_ctor, "getMaxListeners", js_get(js, lib, "getMaxListeners"));
+  js_set(js, g_eventemitter_ctor, "getEventListeners", js_get(js, lib, "getEventListeners"));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
   
   return lib;

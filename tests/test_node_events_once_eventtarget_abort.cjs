@@ -1,6 +1,8 @@
 const assert = require('node:assert');
 const events = require('node:events');
 
+globalThis.onunhandledrejection = () => {};
+
 class ObservedEventTarget extends EventTarget {
   constructor() {
     super();
