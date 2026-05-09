@@ -22,6 +22,7 @@
 #include "modules/events.h"
 #include "modules/net.h"
 #include "modules/symbol.h"
+#include "modules/timer.h"
 #include "silver/engine.h"
 
 typedef struct
@@ -79,6 +80,7 @@ typedef struct ant_tls_socket_s {
   bool closing;
   bool had_error;
   bool ended;
+  bool read_drain_scheduled;
 } ant_tls_socket_t;
 
 enum {
@@ -249,6 +251,48 @@ static void tls_socket_free_read_queue(ant_tls_socket_t *socket) {
     socket->read_tail = NULL;
     socket->read_len = 0;
   }
+}
+
+static ant_value_t tls_socket_drain_read_queue(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_tls_socket_t *socket = tls_socket_data(obj);
+  
+  if (!socket) return js_mkundef();
+  socket->read_drain_scheduled = false;
+
+  while (
+    !socket->destroyed &&
+    socket->read_head &&
+    eventemitter_listener_count(js, obj, "data") > 0
+  ) {
+    tls_read_chunk_t *chunk = socket->read_head;
+    size_t len = chunk->len - chunk->off;
+    ant_value_t data = vtype(socket->encoding) == T_STR
+      ? js_mkstr(js, chunk->data + chunk->off, len)
+      : tls_make_buffer_chunk(js, chunk->data + chunk->off, len);
+    
+    socket->read_head = chunk->next;
+    if (socket->read_tail == chunk) socket->read_tail = NULL;
+    socket->read_len -= len;
+    free(chunk->data);
+    free(chunk);
+    
+    if (is_err(data)) {
+      socket->had_error = true;
+      tls_emit(js, obj, "error", &data, 1);
+      return data;
+    }
+    
+    tls_emit(js, obj, "data", &data, 1);
+  }
+
+  return js_mkundef();
+}
+
+static void tls_socket_schedule_read_drain(ant_tls_socket_t *socket) {
+  if (!socket || socket->read_drain_scheduled || socket->destroyed) return;
+  socket->read_drain_scheduled = true;
+  queue_microtask(socket->js, js_heavy_mkfun(socket->js, tls_socket_drain_read_queue, socket->obj));
 }
 
 static bool tls_value_bytes(
@@ -469,22 +513,23 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
 
   if (nread > 0) {
     ant_value_t chunk = 0;
-    if (!tls_socket_push_read(socket, buf->base, (size_t)nread, false)) {
-      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-      socket->had_error = true;
-      tls_emit(js, socket->obj, "error", &err, 1);
-      tls_socket_close(socket);
-      goto done;
-    }
-
     socket->bytes_read += (uint64_t)nread;
     tls_socket_sync_state(socket);
-    tls_emit(js, socket->obj, "readable", NULL, 0);
-
-    if (vtype(socket->encoding) == T_STR)
-      chunk = js_mkstr(js, buf->base, (size_t)nread);
-    else chunk = tls_make_buffer_chunk(js, buf->base, (size_t)nread);
-    if (!is_err(chunk)) tls_emit(js, socket->obj, "data", &chunk, 1);
+    if (eventemitter_listener_count(js, socket->obj, "data") > 0) {
+      if (vtype(socket->encoding) == T_STR)
+        chunk = js_mkstr(js, buf->base, (size_t)nread);
+      else chunk = tls_make_buffer_chunk(js, buf->base, (size_t)nread);
+      if (!is_err(chunk)) tls_emit(js, socket->obj, "data", &chunk, 1);
+    } else {
+      if (!tls_socket_push_read(socket, buf->base, (size_t)nread, false)) {
+        ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+        socket->had_error = true;
+        tls_emit(js, socket->obj, "error", &err, 1);
+        tls_socket_close(socket);
+        goto done;
+      }
+      tls_emit(js, socket->obj, "readable", NULL, 0);
+    }
   } else if (nread == UV_EOF) {
     socket->ended = true;
     tls_emit(js, socket->obj, "end", NULL, 0);
@@ -579,8 +624,11 @@ static ant_value_t js_tls_socket_unshift(ant_t *js, ant_value_t *args, int nargs
 
   if (!socket) return js->thrown_value;
   if (!tls_parse_write_args(js, args, nargs, &bytes, &len, NULL, &err)) return err;
-  if (len > 0 && !tls_socket_push_read(socket, (const char *)bytes, len, true))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  if (len > 0) {
+    if (!tls_socket_push_read(socket, (const char *)bytes, len, true))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+    tls_socket_schedule_read_drain(socket);
+  }
   return js_getthis(js);
 }
 

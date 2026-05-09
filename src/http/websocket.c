@@ -1,11 +1,10 @@
-#include <arpa/inet.h>
-#include <ctype.h>
+#include <compat.h> // IWYU pragma: keep
+
 #include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <uv.h>
 
 #include "base64.h"

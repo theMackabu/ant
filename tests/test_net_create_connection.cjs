@@ -39,8 +39,13 @@ server.listen(0, '127.0.0.1', () => {
   const address = server.address();
   const client = net.createConnection({ port: address.port, host: '127.0.0.1' }, () => {
     connected = true;
+    assert.strictEqual(client.pending, false);
+    assert.strictEqual(client.connecting, false);
     client.write('ping');
   });
+
+  assert.strictEqual(client.pending, true);
+  assert.strictEqual(client.connecting, true);
 
   client.setEncoding('utf8');
   client.on('error', (err) => {

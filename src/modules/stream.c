@@ -259,6 +259,14 @@ static ant_offset_t stream_readable_buffer_len(ant_t *js, ant_value_t stream_obj
   return len > head ? len - head : 0;
 }
 
+static double stream_chunk_size(ant_t *js, ant_value_t chunk, bool object_mode) {
+  const uint8_t *bytes = NULL;
+  size_t byte_len = 0;
+  if (object_mode) return 1;
+  if (buffer_source_get_bytes(js, chunk, &bytes, &byte_len)) return (double)byte_len;
+  return 1;
+}
+
 static void stream_compact_readable_buffer(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
   ant_value_t buffer = stream_readable_buffer(js, stream_obj);
@@ -287,9 +295,14 @@ static void stream_compact_readable_buffer(ant_t *js, ant_value_t stream_obj) {
 static void stream_buffer_push(ant_t *js, ant_value_t stream_obj, ant_value_t value) {
   ant_value_t state = stream_readable_state(js, stream_obj);
   ant_value_t buffer = stream_readable_buffer(js, stream_obj);
+  ant_value_t length = 0;
+  bool object_mode = false;
 
   if (!is_object_type(state) || vtype(buffer) != T_ARR) return;
   js_arr_push(js, buffer, value);
+  object_mode = js_truthy(js, js_get(js, state, "objectMode"));
+  length = js_get(js, state, "length");
+  js_set(js, state, "length", js_mknum((vtype(length) == T_NUM ? tod(length) : 0) + stream_chunk_size(js, value, object_mode)));
 }
 
 static ant_value_t stream_buffer_shift(ant_t *js, ant_value_t stream_obj) {
@@ -302,7 +315,14 @@ static ant_value_t stream_buffer_shift(ant_t *js, ant_value_t stream_obj) {
   value = js_arr_get(js, buffer, head);
   ant_value_t state = stream_readable_state(js, stream_obj);
   
-  if (is_object_type(state)) js_set(js, state, "dataEmitted", js_true);
+  if (is_object_type(state)) {
+    ant_value_t length = js_get(js, state, "length");
+    bool object_mode = js_truthy(js, js_get(js, state, "objectMode"));
+    double next_length = (vtype(length) == T_NUM ? tod(length) : 0) - stream_chunk_size(js, value, object_mode);
+    js_set(js, state, "length", js_mknum(next_length > 0 ? next_length : 0));
+    js_set(js, state, "dataEmitted", js_true);
+  }
+  
   stream_set_readable_buffer_head(js, stream_obj, head + 1);
   stream_compact_readable_buffer(js, stream_obj);
   
@@ -390,6 +410,7 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   js_set(js, state, "flowingReadScheduled", js_false);
   js_set(js, state, "reading", js_false);
   js_set(js, state, "highWaterMark", js_mknum(high_water_mark));
+  js_set(js, state, "length", js_mknum(0));
   js_set(js, state, "buffer", js_mkarr(js));
   js_set(js, state, "bufferHead", js_mknum(0));
   js_set(js, obj, "_readableState", state);
@@ -807,18 +828,25 @@ ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
 
 ant_value_t stream_readable_maybe_read(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
+  
   ant_value_t read_fn = 0;
   ant_value_t args[1];
+  ant_value_t hwm = 0;
+  ant_value_t length = 0;
 
   if (!is_object_type(state)) return js_mkundef();
   if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_mkundef();
   if (js_truthy(js, js_get(js, state, "reading"))) return js_mkundef();
   if (js_truthy(js, js_get(js, state, "ended"))) return js_mkundef();
-  if (stream_readable_buffer_len(js, stream_obj) > 0) return js_mkundef();
+
+  hwm = js_get(js, state, "highWaterMark");
+  length = js_get(js, state, "length");
+  if (vtype(hwm) == T_NUM && vtype(length) == T_NUM && tod(length) >= tod(hwm))
+    return js_mkundef();
 
   read_fn = js_getprop_fallback(js, stream_obj, "_read");
   js_set(js, state, "reading", js_true);
-  args[0] = js_get(js, state, "highWaterMark");
+  args[0] = hwm;
   
   if (is_callable(read_fn)) stream_call(js, read_fn, stream_obj, args, 1, false);
   js_set(js, state, "reading", js_false);
@@ -874,8 +902,12 @@ static ant_value_t js_readable_read(ant_t *js, ant_value_t *args, int nargs) {
   state = stream_readable_state(js, stream_obj);
   if (!is_object_type(state)) return js_mknull();
 
+  if (nargs > 0 && vtype(args[0]) == T_NUM && tod(args[0]) == 0.0) {
+    stream_readable_maybe_read(js, stream_obj);
+    return js_mknull();
+  }
+
   if (stream_readable_buffer_len(js, stream_obj) == 0) stream_readable_maybe_read(js, stream_obj);
-  if (nargs > 0 && vtype(args[0]) == T_NUM && tod(args[0]) == 0.0) return js_mknull();
   if (stream_readable_buffer_len(js, stream_obj) == 0) return js_mknull();
 
   chunk = stream_buffer_shift(js, stream_obj);
