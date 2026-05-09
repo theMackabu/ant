@@ -659,7 +659,12 @@ static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_reg
 
   int errcode;
   PCRE2_SIZE erroffset;
-  pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
+  pcre2_compile_context *compile_ctx = pcre2_compile_context_create(NULL);
+  
+  if (compile_ctx) pcre2_set_newline(compile_ctx, PCRE2_NEWLINE_ANYCRLF);
+  pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, compile_ctx);
+  
+  if (compile_ctx) pcre2_compile_context_free(compile_ctx);
   if (re == NULL) return false;
 
   pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
@@ -941,11 +946,9 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t regexp = js->this_val;
   if (!regexp_has_internal_slots(js, regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.exec called on incompatible receiver");
-  
-  if (nargs < 1) return js_mknull();
 
-  ant_value_t str_arg = args[0];
-  if (vtype(str_arg) != T_STR) return js_mknull();
+  ant_value_t str_arg = nargs > 0 ? coerce_to_str(js, args[0]) : js_mkstr(js, "undefined", 9);
+  if (is_err(str_arg)) return str_arg;
 
   return regexp_exec_internal(js, regexp, str_arg, false);
 }
@@ -1677,7 +1680,12 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
 
 ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
   char pcre2_pattern[4096];
-  size_t pcre2_len = js_to_pcre2_pattern(args.pattern_ptr, args.pattern_len, pcre2_pattern, sizeof(pcre2_pattern), false);
+  
+  size_t pcre2_len = js_to_pcre2_pattern(
+    args.pattern_ptr, args.pattern_len,
+    pcre2_pattern, sizeof(pcre2_pattern),
+    false
+  );
 
   uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
   if (args.ignore_case) options |= PCRE2_CASELESS;
