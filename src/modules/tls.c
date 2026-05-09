@@ -539,7 +539,13 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
       if (vtype(socket->encoding) == T_STR)
         chunk = js_mkstr(js, buf->base, (size_t)nread);
       else chunk = tls_make_buffer_chunk(js, buf->base, (size_t)nread);
-      if (!is_err(chunk)) tls_emit(js, socket->obj, "data", &chunk, 1);
+      if (is_err(chunk)) {
+        socket->had_error = true;
+        tls_emit(js, socket->obj, "error", &chunk, 1);
+        tls_socket_close(socket);
+        goto done;
+      }
+      tls_emit(js, socket->obj, "data", &chunk, 1);
     } else {
       if (!tls_socket_push_read(socket, buf->base, (size_t)nread, false)) {
         ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");

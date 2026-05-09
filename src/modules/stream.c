@@ -1959,8 +1959,20 @@ static ant_value_t js_stream_is_errored(ant_t *js, ant_value_t *args, int nargs)
 
 static ant_value_t js_stream_is_readable(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t state = 0;
+
   if (!is_object_type(stream_obj)) return js_false;
   if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_false;
+  if (js_truthy(js, js_get(js, stream_obj, "readableEnded"))) return js_false;
+  state = stream_readable_state(js, stream_obj);
+  
+  if (is_object_type(state)) {
+    if (js_truthy(js, js_get(js, state, "ended"))) return js_false;
+    if (js_truthy(js, js_get(js, state, "errored"))) return js_false;
+  }
+  
+  state = stream_writable_state(js, stream_obj);
+  if (is_object_type(state) && js_truthy(js, js_get(js, state, "errored"))) return js_false;
   return js_bool(js_truthy(js, js_get(js, stream_obj, "readable")));
 }
 
