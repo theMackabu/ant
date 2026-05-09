@@ -15,23 +15,13 @@ export default {
     const sink = { write(s) { buf += s; return true; } };
     const captured = new console.Console({ stdout: sink, stderr: sink });
 
-    const realConsole = globalThis.console;
-    globalThis.console = new Proxy(captured, {
-      get: (target, prop) => prop in target ? target[prop] : realConsole[prop],
-    });
-
-    let body;
     try {
-      const result = await eval(code);
-      captured.log(result);
-      body = '```ansi\n' + clip(buf, 1900) + '\n```';
+      await eval(`(async (console) => { ${code} })`)(captured);
     } catch (err) {
       captured.error(err?.stack ?? String(err));
-      body = '```ansi\n' + clip(buf, 1900) + '\n```';
-    } finally {
-      globalThis.console = realConsole;
     }
 
-    await i.reply({ content: body });
+    const content = buf ? '```ansi\n' + clip(buf, 1900) + '\n```' : '_(no output)_';
+    await i.reply({ content });
   }
 };
