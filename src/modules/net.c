@@ -455,7 +455,7 @@ static void net_socket_detach(net_socket_t *socket) {
 }
 
 static void net_socket_emit_error(net_socket_t *socket, const char *message) {
-  ant_value_t arg = js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", message);
+  ant_value_t arg = js_make_error_silent(socket->js, JS_ERR_TYPE, message);
   socket->had_error = true;
   net_emit(socket->js, socket->obj, "error", &arg, 1);
 }
@@ -474,7 +474,7 @@ static ant_value_t net_socket_emit_connect_error(ant_t *js, ant_value_t *args, i
   socket->connecting = false;
   socket->had_error = true;
   net_socket_sync_state(socket);
-  err = js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(status));
+  err = js_make_error_silent(js, JS_ERR_TYPE, uv_strerror(status));
   net_emit(js, socket->obj, "error", &err, 1);
   if (socket->conn) ant_conn_close(socket->conn);
 
@@ -640,7 +640,7 @@ static void net_socket_on_error(ant_conn_t *conn, int status, void *user_data) {
 
   if (!socket) return;
   socket->had_error = true; {
-    ant_value_t err = js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", uv_strerror(status));
+    ant_value_t err = js_make_error_silent(socket->js, JS_ERR_TYPE, uv_strerror(status));
     net_emit(socket->js, socket->obj, "error", &err, 1);
   }
 }

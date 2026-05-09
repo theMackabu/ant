@@ -12,7 +12,7 @@ const timeout = setTimeout(() => {
 }, 2000);
 
 function finishWithInvalidHostCheck() {
-  const socket = net.connect({ host: 'definitely.invalid.ant.local', port: 80 });
+  const socket = net.connect({ host: '256.256.256.256', port: 80 });
   socket.on('error', (error) => {
     invalidHostError = true;
     assert(error instanceof Error);
