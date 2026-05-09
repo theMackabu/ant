@@ -73,10 +73,16 @@ typedef struct {
   uint32_t cached_index;
   uint32_t epoch;
   uintptr_t cached_aux;
-  ant_shape_t *add_from_shape;
-  ant_shape_t *add_to_shape;
-  uint32_t add_slot;
-  uint32_t add_epoch;
+  // keep this union valid: each IC slot must belong to exactly one bytecode site/op
+  union {
+    ant_value_t receiver_proto;
+    struct {
+      ant_shape_t *from_shape;
+      ant_shape_t *to_shape;
+      uint32_t slot;
+      uint32_t epoch;
+    } add;
+  } guard;
   bool cached_is_own;
 } sv_ic_entry_t;
 

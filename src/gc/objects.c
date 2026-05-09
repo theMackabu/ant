@@ -527,6 +527,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_process(js, gc_mark_value);
   gc_mark_navigator(js, gc_mark_value);
   gc_mark_net(js, gc_mark_value);
+  gc_mark_tls(js, gc_mark_value);
   gc_mark_server(js, gc_mark_value);
   gc_mark_websocket(js, gc_mark_value);
   gc_mark_eventsource(js, gc_mark_value);

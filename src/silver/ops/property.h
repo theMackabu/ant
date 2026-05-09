@@ -169,6 +169,7 @@ static inline bool sv_ic_try_get_hit(
   } else {
     ant_object_t *holder = ic->cached_holder;
     if (!holder || holder->is_exotic || !holder->shape) return false;
+    if (receiver->proto != ic->guard.receiver_proto) return false;
     source = holder;
     prop_shape = holder->shape;
   }
@@ -423,6 +424,7 @@ static inline ant_value_t sv_prop_get_field_ic(
     if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &out)) {
       ic->cached_shape = ptr->shape;
       ic->cached_holder = holder;
+      ic->guard.receiver_proto = ptr->proto;
       ic->cached_index = prop_idx;
       ic->cached_is_own = (holder == ptr);
       ic->epoch = ant_ic_epoch_counter;
@@ -504,26 +506,26 @@ static inline void sv_ic_set_add_transition(
 ) {
   if (!ic) return;
 
-  if (ic->add_from_shape != from) {
-    if (ic->add_from_shape) ant_shape_release(ic->add_from_shape);
-    ic->add_from_shape = NULL;
+  if (ic->guard.add.from_shape != from) {
+    if (ic->guard.add.from_shape) ant_shape_release(ic->guard.add.from_shape);
+    ic->guard.add.from_shape = NULL;
     if (from) {
       ant_shape_retain(from);
-      ic->add_from_shape = from;
+      ic->guard.add.from_shape = from;
     }
   }
 
-  if (ic->add_to_shape != to) {
-    if (ic->add_to_shape) ant_shape_release(ic->add_to_shape);
-    ic->add_to_shape = NULL;
+  if (ic->guard.add.to_shape != to) {
+    if (ic->guard.add.to_shape) ant_shape_release(ic->guard.add.to_shape);
+    ic->guard.add.to_shape = NULL;
     if (to) {
       ant_shape_retain(to);
-      ic->add_to_shape = to;
+      ic->guard.add.to_shape = to;
     }
   }
 
-  ic->add_slot = slot;
-  ic->add_epoch = epoch;
+  ic->guard.add.slot = slot;
+  ic->guard.add.epoch = epoch;
 }
 
 static inline ant_value_t sv_op_put_field(
@@ -557,23 +559,23 @@ static inline ant_value_t sv_op_put_field(
       !ptr->frozen && !ptr->sealed && ptr->extensible &&
       ptr->type_tag != T_ARR &&
       !sv_is_proto_atom(a) &&
-      ic->add_epoch == ant_ic_epoch_counter &&
-      ic->add_from_shape == ptr->shape &&
-      ic->add_to_shape) {
+      ic->guard.add.epoch == ant_ic_epoch_counter &&
+      ic->guard.add.from_shape == ptr->shape &&
+      ic->guard.add.to_shape) {
     if (ant_shape_lookup_interned(ptr->shape, a->str) < 0) {
       ant_shape_t *old_shape = ptr->shape;
-      ant_shape_retain(ic->add_to_shape);
-      ptr->shape = ic->add_to_shape;
+      ant_shape_retain(ic->guard.add.to_shape);
+      ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
-      if (ic->add_slot >= ptr->prop_count &&
-          !js_obj_ensure_prop_capacity(ptr, ic->add_slot + 1)) {
+      if (ic->guard.add.slot >= ptr->prop_count &&
+          !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
         return js_mkerr(js, "oom");
       }
-      ant_object_prop_set_unchecked(ptr, ic->add_slot, val);
+      ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
       gc_write_barrier(js, ptr, val);
       ic->cached_shape = ptr->shape;
       ic->cached_holder = ptr;
-      ic->cached_index = ic->add_slot;
+      ic->cached_index = ic->guard.add.slot;
       ic->epoch = ant_ic_epoch_counter;
       return val;
     }

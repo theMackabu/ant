@@ -8096,6 +8096,29 @@ static ant_value_t builtin_object_groupBy(ant_t *js, ant_value_t *args, int narg
   return result;
 }
 
+static bool define_lookup_existing_meta(
+  ant_t *js, ant_value_t obj,
+  bool sym_key,
+  ant_offset_t sym_off,
+  const char *prop_str,
+  ant_offset_t prop_len,
+  ant_offset_t existing_off,
+  prop_meta_t *out
+) {
+  if (sym_key && lookup_symbol_prop_meta(obj, sym_off, out)) return true;
+  if (!sym_key && lookup_string_prop_meta(js, obj, prop_str, (size_t)prop_len, out)) return true;
+  if (existing_off <= 0) return false;
+
+  ant_prop_ref_t *ref = propref_get(js, existing_off);
+  if (!ref || !ref->obj || !ref->obj->shape) return false;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(ref->obj->shape, ref->slot);
+  if (!prop) return false;
+
+  prop_meta_from_shape(out, prop);
+  return true;
+}
+
 // TODO: decompose this huge function into small pieces
 static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 3) return js_mkerr(js, "Object.defineProperty requires 3 arguments");
@@ -8271,11 +8294,17 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     return obj;
   }
   
-  ant_offset_t existing_off = sym_key ? lkp_sym(js, as_obj, sym_off) : lkp(js, as_obj, prop_str, prop_len);
-  prop_meta_t existing_sym_meta;
+  ant_offset_t existing_off = sym_key 
+    ? lkp_sym(js, as_obj, sym_off) 
+    : lkp(js, as_obj, prop_str, prop_len);
   
-  bool has_existing_sym_meta = sym_key && lookup_symbol_prop_meta(as_obj, sym_off, &existing_sym_meta);
-  bool has_existing_prop = (existing_off > 0) || has_existing_sym_meta;
+  prop_meta_t existing_meta;
+  bool has_existing_meta = define_lookup_existing_meta(
+    js, as_obj, sym_key, sym_off, prop_str, 
+    prop_len, existing_off, &existing_meta
+  );
+  
+  bool has_existing_prop = existing_off > 0 || has_existing_meta;
   ant_object_t *obj_ptr = js_obj_ptr(as_obj);
   
   if (!has_existing_prop) {
@@ -8287,22 +8316,110 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
       return js_mkerr(js, "Cannot define property %.*s, object is not extensible", (int)prop_len, prop_str);
   }
   
-  if (has_existing_sym_meta) {
-    if (!has_writable) writable = existing_sym_meta.writable;
-    if (!has_enumerable) enumerable = existing_sym_meta.enumerable;
-    if (!has_configurable) configurable = existing_sym_meta.configurable;
-  } else if (existing_off > 0) {
-    ant_prop_ref_t *existing_ref = propref_get(js, existing_off);
-    if (existing_ref && existing_ref->obj && existing_ref->obj->shape) {
-      const ant_shape_prop_t *existing_prop =
-        ant_shape_prop_at(existing_ref->obj->shape, existing_ref->slot);
-      if (existing_prop) {
-        uint8_t existing_attrs = existing_prop->attrs;
-        if (!has_writable) writable = (existing_attrs & ANT_PROP_ATTR_WRITABLE) != 0;
-        if (!has_enumerable) enumerable = (existing_attrs & ANT_PROP_ATTR_ENUMERABLE) != 0;
-        if (!has_configurable) configurable = (existing_attrs & ANT_PROP_ATTR_CONFIGURABLE) != 0;
+  if (has_existing_meta) {
+    if (!has_writable) writable = existing_meta.writable;
+    if (!has_enumerable) enumerable = existing_meta.enumerable;
+    if (!has_configurable) configurable = existing_meta.configurable;
+  }
+
+  if (has_existing_prop) {
+    bool existing_accessor = has_existing_meta && (existing_meta.has_getter || existing_meta.has_setter);
+    bool new_accessor = has_get || has_set;
+    bool new_data = has_value || has_writable;
+    bool existing_nonconfig =
+      (has_existing_meta && !existing_meta.configurable) ||
+      (existing_off > 0 && is_nonconfig_prop(js, existing_off)) ||
+      (obj_ptr && (obj_ptr->sealed || obj_ptr->frozen));
+    bool existing_readonly =
+      (has_existing_meta && !existing_accessor && !existing_meta.writable) ||
+      (existing_off > 0 && is_const_prop(js, existing_off)) ||
+      (obj_ptr && obj_ptr->frozen);
+    if (existing_nonconfig) {
+      if (has_configurable && configurable) return js_mkerr(js,
+        "Cannot redefine property %.*s: cannot change configurable from false to true",
+        (int)prop_len, prop_str
+      );
+      if (has_existing_meta && has_enumerable && enumerable != existing_meta.enumerable)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot change enumerable of a non-configurable property",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && !existing_meta.writable && has_writable && writable)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot change writable from false to true",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && existing_accessor && new_data)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot convert accessor property to data property",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && !existing_accessor && new_accessor)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot convert data property to accessor property",
+          (int)prop_len, prop_str
+        );
+      if (has_existing_meta && existing_accessor && has_get) {
+        ant_value_t existing_getter = existing_meta.has_getter ? existing_meta.getter : js_mkundef();
+        if (getter_val != existing_getter)
+          return js_mkerr(js,
+            "Cannot redefine property %.*s: cannot replace getter of a non-configurable property",
+            (int)prop_len, prop_str
+          );
+      }
+      if (has_existing_meta && existing_accessor && has_set) {
+        ant_value_t existing_setter = existing_meta.has_setter ? existing_meta.setter : js_mkundef();
+        if (setter_val != existing_setter)
+          return js_mkerr(js,
+            "Cannot redefine property %.*s: cannot replace setter of a non-configurable property",
+            (int)prop_len, prop_str
+          );
+      }
+      if (existing_readonly && has_writable && writable)
+        return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot change writable from false to true",
+          (int)prop_len, prop_str
+        );
+      if (existing_readonly && has_value)
+        return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
+    }
+  }
+
+  if (!has_value && !has_writable && !has_get && !has_set && has_existing_prop) {
+    int desc_flags =
+      (writable ? JS_DESC_W : 0) |
+      (enumerable ? JS_DESC_E : 0) |
+      (configurable ? JS_DESC_C : 0);
+
+    if (has_existing_meta && (existing_meta.has_getter || existing_meta.has_setter)) {
+      if (sym_key) {
+        if (existing_meta.has_getter) js_set_sym_getter_desc(js, as_obj, prop, existing_meta.getter, desc_flags);
+        if (existing_meta.has_setter) js_set_sym_setter_desc(js, as_obj, prop, existing_meta.setter, desc_flags);
+      } else {
+        if (existing_meta.has_getter && existing_meta.has_setter)
+          js_set_accessor_desc(js, as_obj, prop_str, prop_len, existing_meta.getter, existing_meta.setter, desc_flags);
+        else if (existing_meta.has_getter)
+          js_set_getter_desc(js, as_obj, prop_str, prop_len, existing_meta.getter, desc_flags);
+        else
+          js_set_setter_desc(js, as_obj, prop_str, prop_len, existing_meta.setter, desc_flags);
+      }
+    } else if (!sym_key) {
+      js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
+    } else {
+      uint8_t attrs = 0;
+      if (writable) attrs |= ANT_PROP_ATTR_WRITABLE;
+      if (enumerable) attrs |= ANT_PROP_ATTR_ENUMERABLE;
+      if (configurable) attrs |= ANT_PROP_ATTR_CONFIGURABLE;
+
+      ant_prop_ref_t *ref = existing_off > 0 ? propref_get(js, existing_off) : NULL;
+      if (ref && ref->obj) {
+        if (!js_obj_ensure_unique_shape(ref->obj)) return js_mkerr(js, "oom");
+        ant_shape_set_attrs_symbol(ref->obj->shape, sym_off, attrs);
       }
     }
+
+    if (!sym_key) array_define_or_set_index(js, as_obj, prop_str, (size_t)prop_len);
+    return obj;
   }
 
   if (has_get || has_set) {

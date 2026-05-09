@@ -123,6 +123,8 @@ static inline int compat_unsetenv(const char *name) {
 #define timegm compat_timegm
 #define usleep compat_usleep
 #define sleep compat_sleep
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
 #define strndup compat_strndup
 #define memmem compat_memmem
 #define basename compat_basename
@@ -146,6 +148,7 @@ typedef unsigned int gid_t;
 #include <unistd.h>
 #include <libgen.h>
 #include <sys/time.h>
+#include <strings.h>
 #endif
 
 #endif

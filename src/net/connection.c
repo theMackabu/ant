@@ -1,5 +1,13 @@
 #include <compat.h> // IWYU pragma: keep
 
+#ifndef _WIN32
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,8 +29,18 @@ typedef struct {
   ant_conn_t *conn;
 } ant_conn_shutdown_req_t;
 
+typedef struct {
+  uv_connect_t connect_req;
+  uv_getaddrinfo_t resolver_req;
+  ant_conn_t *conn;
+  ant_conn_connect_cb cb;
+  void *user_data;
+  int port;
+} ant_conn_connect_req_t;
+
 static void ant_conn_restart_timer(ant_conn_t *conn);
 static void ant_conn_close_cb(uv_handle_t *handle);
+static void ant_conn_finish_close(ant_conn_t *conn);
 
 static void ant_listener_remove_conn(ant_listener_t *listener, ant_conn_t *conn) {
   ant_conn_t **it = NULL;
@@ -196,12 +214,10 @@ static void ant_conn_shutdown_cb(uv_shutdown_t *req, int status) {
   ant_conn_close(conn);
 }
 
-static void ant_conn_close_cb(uv_handle_t *handle) {
-  ant_conn_t *conn = (ant_conn_t *)handle->data;
+static void ant_conn_finish_close(ant_conn_t *conn) {
   ant_listener_t *listener = conn ? conn->listener : NULL;
   
   if (!conn || !listener) return;
-  if (--conn->close_handles > 0) return;
 
   ant_listener_remove_conn(listener, conn);
   if (listener->callbacks.on_conn_close)
@@ -209,6 +225,13 @@ static void ant_conn_close_cb(uv_handle_t *handle) {
 
   free(conn->buffer);
   free(conn);
+}
+
+static void ant_conn_close_cb(uv_handle_t *handle) {
+  ant_conn_t *conn = (ant_conn_t *)handle->data;
+  if (!conn) return;
+  if (--conn->close_handles > 0) return;
+  ant_conn_finish_close(conn);
 }
 
 ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms) {
@@ -280,6 +303,155 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
   conn->listener->connections = conn;
   
   return 0;
+}
+
+static void ant_conn_connect_cb_impl(uv_connect_t *req, int status) {
+  ant_conn_connect_req_t *cr = req ? (ant_conn_connect_req_t *)req->data : NULL;
+  ant_conn_t *conn = cr ? cr->conn : NULL;
+
+  if (conn && status == 0 && conn->kind == ANT_CONN_KIND_TCP) {
+    ant_conn_store_peer_addr(conn);
+    ant_conn_store_local_addr(conn);
+  }
+
+  if (cr && cr->cb) cr->cb(conn, status, cr->user_data);
+  free(cr);
+}
+
+static int sockaddr_from_addrinfo(const struct addrinfo *res, int port, struct sockaddr_storage *out) {
+  if (!res || !out) return UV_EINVAL;
+
+  memset(out, 0, sizeof(*out));
+  if (res->ai_family == AF_INET) {
+    struct sockaddr_in sa;
+    memcpy(&sa, res->ai_addr, sizeof(sa));
+    sa.sin_port = htons((uint16_t)port);
+    memcpy(out, &sa, sizeof(sa));
+    return 0;
+  }
+
+  if (res->ai_family == AF_INET6) {
+    struct sockaddr_in6 sa6;
+    memcpy(&sa6, res->ai_addr, sizeof(sa6));
+    sa6.sin6_port = htons((uint16_t)port);
+    memcpy(out, &sa6, sizeof(sa6));
+    return 0;
+  }
+  
+  return UV_ENOENT;
+}
+
+static int sockaddr_from_ip_literal(const char *hostname, int port, struct sockaddr_storage *out) {
+  int rc = 0;
+
+  if (!hostname || !out) return UV_EINVAL;
+  memset(out, 0, sizeof(*out));
+
+  rc = uv_ip4_addr(hostname, port, (struct sockaddr_in *)out);
+  if (rc == 0) return 0;
+
+  rc = uv_ip6_addr(hostname, port, (struct sockaddr_in6 *)out);
+  return rc;
+}
+
+static void ant_conn_resolved_cb(uv_getaddrinfo_t *resolver, int status, struct addrinfo *res) {
+  ant_conn_connect_req_t *cr = resolver ? (ant_conn_connect_req_t *)resolver->data : NULL;
+  ant_conn_t *conn = cr ? cr->conn : NULL;
+  struct sockaddr_storage addr;
+  int rc = status;
+
+  if (conn) conn->resolving = false;
+
+  if (conn && conn->closing) {
+    if (res) uv_freeaddrinfo(res);
+    free(cr);
+    if (--conn->close_handles == 0) ant_conn_finish_close(conn);
+    return;
+  }
+
+  if (status == 0) {
+    rc = sockaddr_from_addrinfo(res, cr ? cr->port : 0, &addr);
+    if (rc == 0) {
+      cr->connect_req.data = cr;
+      rc = uv_tcp_connect(&cr->connect_req, &conn->handle.tcp, (const struct sockaddr *)&addr, ant_conn_connect_cb_impl);
+    }
+  }
+
+  if (res) uv_freeaddrinfo(res);
+  if (rc != 0) {
+    if (cr && cr->cb) cr->cb(conn, rc, cr->user_data);
+    free(cr);
+  }
+}
+
+int ant_conn_connect_tcp(
+  ant_conn_t *conn,
+  const char *hostname,
+  int port,
+  ant_conn_connect_cb cb,
+  void *user_data
+) {
+  ant_conn_connect_req_t *req = NULL;
+  struct sockaddr_storage addr;
+  struct addrinfo hints = {0};
+  int rc = 0;
+
+  if (!conn || conn->kind != ANT_CONN_KIND_TCP || !hostname || port <= 0 || port > 65535) return UV_EINVAL;
+
+  req = calloc(1, sizeof(*req));
+  if (!req) return UV_ENOMEM;
+
+  req->conn = conn;
+  req->cb = cb;
+  req->user_data = user_data;
+  req->port = port;
+
+  rc = sockaddr_from_ip_literal(hostname, port, &addr);
+  if (rc == 0) {
+    req->connect_req.data = req;
+    rc = uv_tcp_connect(&req->connect_req, &conn->handle.tcp, (const struct sockaddr *)&addr, ant_conn_connect_cb_impl);
+    if (rc != 0) {
+      free(req);
+      return rc;
+    }
+    return 0;
+  }
+
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  conn->resolving = true;
+  req->resolver_req.data = req;
+  rc = uv_getaddrinfo(conn->listener ? conn->listener->loop : uv_default_loop(), &req->resolver_req, ant_conn_resolved_cb, hostname, NULL, &hints);
+  if (rc != 0) {
+    conn->resolving = false;
+    free(req);
+    return rc;
+  }
+
+  return 0;
+}
+
+int ant_conn_connect_pipe(
+  ant_conn_t *conn,
+  const char *path,
+  ant_conn_connect_cb cb,
+  void *user_data
+) {
+  ant_conn_connect_req_t *req = NULL;
+  int rc = 0;
+
+  if (!conn || conn->kind != ANT_CONN_KIND_PIPE || !path || !*path) return UV_EINVAL;
+
+  req = calloc(1, sizeof(*req));
+  if (!req) return UV_ENOMEM;
+
+  req->conn = conn;
+  req->cb = cb;
+  req->user_data = user_data;
+
+  req->connect_req.data = req;
+  uv_pipe_connect(&req->connect_req, &conn->handle.pipe, path, ant_conn_connect_cb_impl);
+  return rc;
 }
 
 void ant_conn_start(ant_conn_t *conn) {
@@ -437,7 +609,8 @@ void ant_conn_close(ant_conn_t *conn) {
     conn->close_handles++;
   }
 
-  if (conn->close_handles == 0) ant_conn_close_cb((uv_handle_t *)ant_conn_stream(conn));
+  if (conn->resolving) conn->close_handles++;
+  if (conn->close_handles == 0) ant_conn_finish_close(conn);
 }
 
 int ant_conn_write(ant_conn_t *conn, char *data, size_t len, ant_conn_write_cb cb, void *user_data) {

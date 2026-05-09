@@ -1,5 +1,5 @@
 import * as http from 'node:http';
-import tls from 'ant:internal/tls';
+import tls from 'node:tls';
 
 const kSecureContext = Symbol('ant.internal.https.secureContext');
 
@@ -73,7 +73,7 @@ function toContextOptions(options) {
 
 function maybeCreateSecureContext(options) {
   if (!options) return undefined;
-  return tls.createContext(toContextOptions(options));
+  return tls.createSecureContext(toContextOptions(options));
 }
 
 function normalizeCreateServerArgs(options, requestListener) {
@@ -88,10 +88,6 @@ function normalizeCreateServerArgs(options, requestListener) {
     serverOptions: options,
     requestListener
   };
-}
-
-function clientNotImplemented() {
-  throw new Error('node:https client transport is not implemented yet');
 }
 
 function createInvalidProtocolError(protocol) {
@@ -154,11 +150,11 @@ export class Agent extends http.Agent {
 export const globalAgent = new Agent();
 
 export function createSecureContext(options) {
-  return tls.createContext(options);
+  return tls.createSecureContext(options);
 }
 
 export function isSecureContext(value) {
-  return tls.isContext(value);
+  return tls.isSecureContext(value);
 }
 
 export function setConfigPath(path) {

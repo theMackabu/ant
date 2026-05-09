@@ -14,6 +14,7 @@ void gc_mark_readline(ant_t *js, gc_mark_fn mark);
 void gc_mark_process(ant_t *js, gc_mark_fn mark);
 void gc_mark_navigator(ant_t *js, gc_mark_fn mark);
 void gc_mark_net(ant_t *js, gc_mark_fn mark);
+void gc_mark_tls(ant_t *js, gc_mark_fn mark);
 void gc_mark_server(ant_t *js, gc_mark_fn mark);
 void gc_mark_websocket(ant_t *js, gc_mark_fn mark);
 void gc_mark_eventsource(ant_t *js, gc_mark_fn mark);
