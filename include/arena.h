@@ -67,6 +67,21 @@ static inline void *ant_mmap_low(size_t size, int prot, int extra_flags) {
 
 #ifdef _WIN32
 
+static inline size_t ant_arena_page_size(void) {
+  static size_t cached = 0;
+  if (cached) return cached;
+  SYSTEM_INFO info;
+  GetSystemInfo(&info);
+  cached = info.dwPageSize ? (size_t)info.dwPageSize : 4096u;
+  return cached;
+}
+
+static inline size_t ant_arena_round_up_page(size_t size) {
+  size_t page_size = ant_arena_page_size();
+  if (size == 0) return 0;
+  return ((size + page_size - 1) / page_size) * page_size;
+}
+
 static inline void *ant_arena_reserve(size_t max_size) {
   void *p = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
   return mantissa_chk(p, "VirtualAlloc");
@@ -74,7 +89,12 @@ static inline void *ant_arena_reserve(size_t max_size) {
 
 static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
   if (new_size <= old_size) return 0;
-  void *p = VirtualAlloc((char *)base + old_size, new_size - old_size, MEM_COMMIT, PAGE_READWRITE);
+  size_t old_pages = ant_arena_round_up_page(old_size);
+  size_t new_pages = ant_arena_round_up_page(new_size);
+  
+  if (new_pages <= old_pages) return 0;
+  void *p = VirtualAlloc((char *)base + old_pages, new_pages - old_pages, MEM_COMMIT, PAGE_READWRITE);
+  
   return p ? 0 : -1;
 }
 
@@ -88,8 +108,13 @@ static inline void *ant_os_alloc(size_t size) {
 
 static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {
   if (new_size >= old_size) return 0;
-  void *decommit_start = (char *)base + new_size;
-  size_t decommit_size = old_size - new_size;
+  size_t new_pages = ant_arena_round_up_page(new_size);
+  size_t old_pages = ant_arena_round_up_page(old_size);
+  
+  if (new_pages >= old_pages) return 0;
+  void *decommit_start = (char *)base + new_pages;
+  size_t decommit_size = old_pages - new_pages;
+  
   return VirtualFree(decommit_start, decommit_size, MEM_DECOMMIT) ? 0 : -1;
 }
 
