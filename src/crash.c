@@ -194,9 +194,9 @@ static void init_argv_strings(int argc, char **argv) {
 static void init_report_controls() {
   crash_print_trace = ant_env_bool(getenv("ANT_CRASH_TRACE"), false);
   const char *enabled = getenv("ANT_ENABLE_CRASH_REPORTING");
-  if (enabled) crash_reporting_enabled = ant_env_bool(enabled, true);
-  else crash_reporting_enabled = !ant_env_bool(getenv("DO_NOT_TRACK"), false);
-  if (getenv("ANT_CRASH_REPORT_URL") && !enabled) crash_reporting_enabled = true;
+  crash_reporting_enabled = enabled
+    ? ant_env_bool(enabled, true)
+    : !ant_env_bool(getenv("DO_NOT_TRACK"), false);
 }
 
 static void init_exe_path(int argc, char **argv) {
