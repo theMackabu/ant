@@ -27,13 +27,15 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
 
 #include "gc/modules.h"
-#include "modules/child_process.h"
+#include "silver/engine.h"
+
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/symbol.h"
+#include "modules/child_process.h"
+#include "modules/string_decoder.h"
 
 #define MAX_CHILD_LISTENERS 16
 #define PIPE_READ_BUF_SIZE 65536
@@ -218,6 +220,18 @@ static ant_value_t make_buffer_chunk(ant_t *js, const char *data, size_t len) {
   if (!ab) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
+}
+
+static ant_value_t child_stream_decode_chunk(
+  ant_t *js,
+  ant_value_t stream_obj,
+  ant_value_t chunk
+) {
+  if (vtype(stream_obj) != T_OBJ) return chunk;
+  ant_value_t decoder = js_get(js, stream_obj, "decoder");
+  if (!is_object_type(decoder)) return chunk;
+  ant_value_t decoded = string_decoder_decode_value(js, decoder, chunk, false);
+  return is_err(decoded) ? chunk : decoded;
 }
 
 static uv_pipe_t *child_pipe(child_process_t *cp, child_stream_kind_t kind) {
@@ -434,10 +448,11 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     ant_value_t text_data = js_mkstr(cp->js, buf->base, nread);
     ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stdout", text_args, 1);
-
-    ant_value_t byte_data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
-    ant_value_t byte_args[1] = { byte_data };
-    emit_stream_event(cp, CHILD_STREAM_STDOUT, "data", byte_args, 1);
+    
+    ant_value_t data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
+    data = child_stream_decode_chunk(cp->js, cp->stdout_obj, data);
+    ant_value_t data_args[1] = { data };
+    emit_stream_event(cp, CHILD_STREAM_STDOUT, "data", data_args, 1);
     
     if (vtype(cp->stdout_obj) == T_OBJ) js_set(
       cp->js, cp->stdout_obj, "length", 
@@ -484,9 +499,10 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stderr", text_args, 1);
 
-    ant_value_t byte_data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
-    ant_value_t byte_args[1] = { byte_data };
-    emit_stream_event(cp, CHILD_STREAM_STDERR, "data", byte_args, 1);
+    ant_value_t data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
+    data = child_stream_decode_chunk(cp->js, cp->stderr_obj, data);
+    ant_value_t data_args[1] = { data };
+    emit_stream_event(cp, CHILD_STREAM_STDERR, "data", data_args, 1);
     
     if (vtype(cp->stderr_obj) == T_OBJ) js_set(
       cp->js, cp->stderr_obj, "length",
@@ -783,6 +799,25 @@ static ant_value_t child_stream_destroy(ant_t *js, ant_value_t *args, int nargs)
   return this_obj;
 }
 
+static ant_value_t child_stream_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
+  if (!ctx || !ctx->cp) return this_obj;
+
+  ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
+  ant_value_t decoder = string_decoder_create(js, encoding);
+  if (is_err(decoder)) return decoder;
+
+  ant_value_t encoding_str = js_tostring_val(js, encoding);
+  if (is_err(encoding_str)) return encoding_str;
+
+  js_set(js, this_obj, "decoder", decoder);
+  js_set(js, this_obj, "encoding", encoding_str);
+  js_set(js, this_obj, "readableEncoding", encoding_str);
+  
+  return this_obj;
+}
+
 static ant_value_t child_stream_on(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "on() requires event name and callback");
@@ -869,7 +904,9 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
   js_set(js, obj, "ref", js_mkfun(child_stream_ref));
   js_set(js, obj, "unref", js_mkfun(child_stream_unref));
   js_set(js, obj, "destroy", js_mkfun(child_stream_destroy));
+  js_set(js, obj, "setEncoding", js_mkfun(child_stream_set_encoding));
   js_set(js, obj, "length", js_mknum(0));
+  js_set(js, obj, "readableEncoding", js_mkundef());
 
   if (kind == CHILD_STREAM_STDIN) {
     js_set(js, obj, "write", js_mkfun(child_stream_write));
