@@ -75,7 +75,6 @@ src/
 ├── pkg/        # Zig-based package manager
 ├── silver/     # Silver bytecode compiler and VM
 │   └── ops/    # Bytecode operation definitions
-├── strip/      # Rust-based type stripping (oxc)
 ├── tools/      # Code generation scripts (snapshot gen)
 ├── types/      # TypeScript type declarations
 include/        # C header files

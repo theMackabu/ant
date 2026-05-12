@@ -47,7 +47,7 @@ meant to answer "where should this change live?" before anyone starts editing.
 - `src/core/` stores TypeScript sources and runtime metadata that feed
   generation steps.
 - `src/pkg/` is the Zig package manager.
-- `src/strip/` is the Rust type-stripper used during builds.
+- TypeScript stripping is provided by the Skim Meson subproject.
 - `meson/` and the root [meson.build](meson.build) describe the build graph,
   dependency setup, and custom code generation targets.
 

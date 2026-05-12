@@ -7,10 +7,10 @@ Built to carry more than it weighs while delivering near-V8 speeds.
 
 ```bash
 $ ls -lh ant
--rwxr-xr-x⠀9.0M⠀ant*
+-rwxr-xr-x⠀8.7M⠀ant*
 
 # built with -Os
--rwxr-xr-x⠀6.5M⠀ant*
+-rwxr-xr-x⠀5.9M⠀ant*
 ```
 
 ## Table of contents

@@ -83,7 +83,6 @@ The following tools are required to build Ant regardless of platform:
 - **[CMake](https://cmake.org/)** (for the tlsuv subproject)
 - **pkg-config**
 - **Node.js** >= 22 (used to generate the JS snapshot at build time)
-- **[Rust](https://rustup.rs/)** toolchain (stable) with `cargo` (builds the OXC type-strip library)
 - **[Zig](https://ziglang.org/)** >= 0.15 (builds the package manager component)
 - **Git**
 
@@ -141,12 +140,9 @@ Installation via package manager:
     util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static
   ```
 
-You will also need Rust and Zig installed. The recommended approach:
+You will also need Zig installed. The recommended approach:
 
 ```bash
-# Rust (via rustup)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
 # Zig (download from https://ziglang.org/download/)
 # Or via package manager if available
 ```
@@ -165,10 +161,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   brew install meson ninja llvm node
   ```
 
-- Rust and Zig:
+- Zig:
 
   ```bash
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  # install 0.15.2
   brew install zig
   ```
 
@@ -375,9 +371,7 @@ Ant on Windows is built using the MSYS2 MINGW64 toolchain.
      mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake \
      mingw-w64-x86_64-lld mingw-w64-x86_64-nodejs git
    ```
-3. Install Rust via [rustup](https://rustup.rs/) (select the
-   `x86_64-pc-windows-gnu` target)
-4. Install [Zig](https://ziglang.org/download/)
+3. Install [Zig](https://ziglang.org/download/)
 
 #### Building Ant
 

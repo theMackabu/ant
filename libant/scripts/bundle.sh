@@ -19,7 +19,6 @@ bundle_lib() {
     ! -name 'libant.a' \
     ! -name 'libant-lto.a' \
     ! -name 'libpkg.a' \
-    ! -path '*/oxc-target/release/deps/*' \
     ! -path '*/.external/*' \
     2>/dev/null | grep -E -v "$EXCLUDE" | sort -u)
   

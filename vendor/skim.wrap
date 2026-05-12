@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://github.com/themackabu/skim.git
+revision = head
+depth = 1

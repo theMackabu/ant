@@ -1213,8 +1213,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
 
   if (!mod->embedded_code) {
   int strip_result = strip_typescript_inplace(
-    &content, size, mod->resolved_path,
-    mod->format != MODULE_EVAL_FORMAT_CJS,
+    &content, size, mod->resolved_path, 
     &js_len, &strip_detail
   );
 
@@ -1223,8 +1222,10 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
       js, "TypeScript error: strip failed (%d): %s",
       strip_result, strip_detail
     );
+    
     free(content);
     mod->is_loading = false;
+    
     return err;
   }}
   

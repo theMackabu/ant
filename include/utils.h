@@ -38,7 +38,6 @@ int strip_typescript_inplace(
   char **buffer,
   size_t len,
   const char *filename,
-  int is_module,
   size_t *out_len,
   const char **error_detail
 );

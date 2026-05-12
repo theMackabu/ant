@@ -81,7 +81,7 @@ pkg_dep = declare_dependency(
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: include,
-  dependencies: ant_deps + [oxc_dep, pkg_dep]
+  dependencies: ant_deps + [pkg_dep]
 )
 
 link_args = []

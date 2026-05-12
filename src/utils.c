@@ -1,12 +1,12 @@
 #include "utils.h"
 #include "messages.h"
 
-#include <oxc.h>
-#include <errno.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <sys/stat.h>
 #include <crprintf.h>
+#include <errno.h>
+#include <skim.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -20,6 +20,21 @@ const char *const module_resolve_extensions[] = {
   ".ts", ".mts", ".cts",
   ".json", ".node", NULL
 };
+
+static _Thread_local skim_context_t ts_strip_context;
+static _Thread_local bool ts_strip_context_ready;
+
+static int ensure_ts_strip_context(const char **error_detail) {
+  if (ts_strip_context_ready) return 0;
+
+  if (skim_context_init(&ts_strip_context) != 0) {
+    if (error_detail) *error_detail = "out of memory while initializing TypeScript stripper";
+    return SKIM_ERR_TRANSFORM_FAILED;
+  }
+
+  ts_strip_context_ready = true;
+  return 0;
+}
 
 static const char *ant_home_dir(void) {
 #ifdef _WIN32
@@ -278,11 +293,8 @@ int is_typescript_file(const char *filename) {
 }
 
 int strip_typescript_inplace(
-  char **buffer,
-  size_t len,
-  const char *filename,
-  int is_module,
-  size_t *out_len,
+  char **buffer, size_t len,
+  const char *filename, size_t *out_len,
   const char **error_detail
 ) {
   if (out_len) *out_len = len;
@@ -291,18 +303,23 @@ int strip_typescript_inplace(
 
   if (!buffer || !*buffer) {
     if (error_detail) *error_detail = "null input/output passed";
-    return OXC_ERR_NULL_INPUT;
+    return SKIM_ERR_NULL_INPUT;
   }
   
   char *input = *buffer;
   char error_buf[256] = {0};
   size_t stripped_len = 0;
-  
-  int strip_error = OXC_ERR_TRANSFORM_FAILED;
-  char *stripped = OXC_strip_types_owned(
-    input, filename, is_module,
-    &stripped_len, &strip_error,
-    error_buf, sizeof(error_buf)
+
+  int init_result = ensure_ts_strip_context(error_detail);
+  if (init_result < 0) return init_result;
+
+  skim_context_reset(&ts_strip_context);
+  skim_error_t strip_error = SKIM_ERR_TRANSFORM_FAILED;
+
+  const char *stripped = skim_strip_typescript_borrowed(
+    &ts_strip_context, input, len, filename, 
+    SKIM_SOURCE_AUTO, NULL,
+    &stripped_len, &strip_error, error_buf, sizeof(error_buf)
   );
 
   if (!stripped) {
@@ -312,27 +329,24 @@ int strip_typescript_inplace(
       memcpy(input, error_buf, copy_len);
       input[copy_len] = '\0';
     } else input[0] = '\0';
-
-    if (error_detail) {
-      *error_detail = input[0] != '\0' ? input : "unknown strip error";
-    }
     
-    return strip_error;
+    if (error_detail) 
+      *error_detail = input[0] != '\0' 
+      ? input : "unknown strip error";
+    
+    return (int)strip_error;
   }
 
   char *next = realloc(input, stripped_len + 1);
   if (!next) {
-    free(stripped);
     if (error_detail) *error_detail = "out of memory while resizing strip output buffer";
-    return OXC_ERR_OUTPUT_TOO_LARGE;
+    return SKIM_ERR_OUTPUT_TOO_LARGE;
   }
 
   memcpy(next, stripped, stripped_len + 1);
-  free(stripped);
-
   *buffer = next;
   if (out_len) *out_len = stripped_len;
-  
+
   return 0;
 }
 
@@ -432,11 +446,19 @@ char *resolve_typescript_source_fallback(const char *filename) {
 }
 
 typedef struct {
-  const char *repl; size_t repl_len; size_t *ri;
-  const char *matched; size_t matched_len;
-  const char *str; size_t str_len; size_t position;
-  const repl_capture_t *caps; int ncaptures;
-  char **buf; size_t *buf_len; size_t *buf_cap;
+  const char *repl;
+  size_t repl_len;
+  size_t *ri;
+  const char *matched;
+  size_t matched_len;
+  const char *str;
+  size_t str_len;
+  size_t position;
+  const repl_capture_t *caps;
+  int ncaptures;
+  char **buf;
+  size_t *buf_len;
+  size_t *buf_cap;
 } rt_ctx_t;
 
 static bool rt_append(rt_ctx_t *c, const char *data, size_t dlen) {

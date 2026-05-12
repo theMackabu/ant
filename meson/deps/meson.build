@@ -155,42 +155,17 @@ libffi_dep = subproject('libffi', default_options: [
 ]).get_variable('ffi_dep')
 
 pcre2_dep = subproject('pcre2', default_options: [
-  'optimization=s',
+  'optimization=3',
   'warning_level=0',
   'grep=false',
   'test=false'
 ]).get_variable('libpcre2_8')
 
-cargo = find_program('cargo', required: true)
-cp = find_program('cp', required: true)
+skim_dep = subproject('skim', default_options: [
+  'optimization=3',
+  'default_library=static',
+]).get_variable('skim_dep')
 
-oxc_lib_name = 'liboxc.a'
-oxc_output_name = 'liboxc.a'
-
-if host_machine.system() == 'windows'
-  rust_target = 'x86_64-pc-windows-gnu'
-  oxc_release_dir = meson.project_build_root() / 'oxc-target' / rust_target / 'release'
-  rust_target_arg = ' --target ' + rust_target
-else
-  oxc_release_dir = meson.project_build_root() / 'oxc-target' / 'release'
-  rust_target_arg = ''
-endif
-
-oxc_lib = custom_target(
-  'oxc_strip',
-  output: oxc_output_name,
-  command: [
-    'sh', '-c',
-    '"' + cargo.full_path() + '"' + ' build --release' + rust_target_arg + ' ' +
-    '--manifest-path "' + src_root / 'src' / 'strip' / 'Cargo.toml' + '" ' +
-    '--target-dir "' + meson.project_build_root() / 'oxc-target' + '"' +
-    ' && "' + cp.full_path() + '" "' + oxc_release_dir / oxc_lib_name + '" @OUTPUT@'
-  ],
-  build_by_default: true,
-  build_always_stale: true
-)
-
-oxc_dep = declare_dependency(link_with: oxc_lib)
 zig = find_program('zig', required: true)
 
 deps_info = {
@@ -241,7 +216,7 @@ ant_deps = [
   uriparser_dep, utf8proc_dep, ssl_dep, crypto_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,
-  double_conversion_dep, wirecall,
+  double_conversion_dep, wirecall, skim_dep,
 ] + win_deps
 
 if get_option('jit')

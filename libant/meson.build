@@ -33,7 +33,7 @@ libant_core = static_library(
   'ant_core',
   lib_sources + [snapshot_h, messages_h],
   include_directories: include,
-  dependencies: ant_deps + [oxc_dep],
+  dependencies: ant_deps,
 )
 
 if use_lto
@@ -41,7 +41,7 @@ if use_lto
     'ant_core_lto',
     lib_sources + [snapshot_h, messages_h],
     include_directories: include,
-    dependencies: ant_deps + [oxc_dep],
+    dependencies: ant_deps,
     c_args: ['-flto'],
   )
 endif

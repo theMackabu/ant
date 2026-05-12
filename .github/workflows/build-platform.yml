@@ -139,7 +139,6 @@ jobs:
           echo "os_type=$(echo $CONFIG | jq -r '.os_type')" >> $GITHUB_OUTPUT
           echo "arch=$(echo $CONFIG | jq -r '.arch')" >> $GITHUB_OUTPUT
           echo "zig_target=$(echo $CONFIG | jq -r '.zig_target')" >> $GITHUB_OUTPUT
-          echo "rust_target=$(echo $CONFIG | jq -r '.rust_target')" >> $GITHUB_OUTPUT
           echo "binary_name=$(echo $CONFIG | jq -r '.binary_name')" >> $GITHUB_OUTPUT
           echo "static_link=$(echo $CONFIG | jq -r '.static_link')" >> $GITHUB_OUTPUT
           echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
@@ -167,17 +166,6 @@ jobs:
         with:
           version: ${{ steps.config.outputs.llvm_version }}
           os_type: ${{ steps.config.outputs.os_type }}
-
-      # === SETUP RUST ===
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ steps.config.outputs.rust_target }}
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src/strip -> ../../build/oxc-target
 
       # === BUILD NATIVE DEPS ===
       - name: Build native dependencies
