@@ -388,7 +388,10 @@ int main(int argc, char *argv[]) {
   if (internal_crash_report_mode) argc = 1;
   if (!internal_crash_report_mode && !getenv("ANT_NO_CRASH_HANDLER")) ant_crash_init(argc, argv);
   
+  #ifdef _WIN32
   ant_output_init_console();
+  #endif
+  
   setup_console_colors();
   parse_ant_debug_flags();
   

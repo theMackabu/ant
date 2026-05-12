@@ -17,17 +17,17 @@
 static ant_output_stream_t g_stdout_writer = { .stream = NULL };
 static ant_output_stream_t g_stderr_writer = { .stream = NULL };
 
-void ant_output_init_console(void) {
 #ifdef _WIN32
+void ant_output_init_console(void) {
   DWORD mode = 0;
   bool has_console_output =
     GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) ||
     GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &mode);
-
+  
   if (has_console_output) SetConsoleOutputCP(CP_UTF8);
   if (GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode)) SetConsoleCP(CP_UTF8);
-#endif
 }
+#endif
 
 ant_output_stream_t *ant_output_stream(FILE *stream) {
   ant_output_stream_t *out = (stream == stderr) ? &g_stderr_writer : &g_stdout_writer;
