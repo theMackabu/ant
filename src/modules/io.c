@@ -7,12 +7,24 @@
 #include <ctype.h>
 #include <inttypes.h>
 #include <uv.h>
+#ifdef _WIN32
+#include <io.h>
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef STDERR_FILENO
+#define STDERR_FILENO 2
+#endif
+#else
+#include <unistd.h>
+#endif
 
 #include "common.h"
 #include "errors.h"
 #include "output.h"
 #include "internal.h"
 #include "runtime.h"
+#include "utils.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
@@ -22,6 +34,23 @@ bool io_no_color = false;
 
 static ant_value_t g_console_proto = 0;
 static ant_value_t g_console_ctor = 0;
+
+static bool io_fd_is_tty(int fd) {
+#ifdef _WIN32
+  return _isatty(fd) != 0;
+#else
+  return isatty(fd) != 0;
+#endif
+}
+
+static bool io_should_color_fd(int fd) {
+  if (io_no_color) return false;
+  const char *force_color = getenv("FORCE_COLOR");
+  if (force_color) return ant_env_bool(force_color, true);
+  const char *no_color = getenv("NO_COLOR");
+  if (no_color && *no_color) return false;
+  return io_fd_is_tty(fd);
+}
 
 #define JSON_KEY    "\x1b[0m"
 #define JSON_STRING "\x1b[32m"
@@ -533,11 +562,10 @@ static bool console_write_args_to_stream(
 
 static ant_value_t console_emit_to_output(
   ant_t *js, ant_value_t this_obj,
-  const char *prefix, ant_value_t *args,
-  int nargs,
-  ant_output_stream_t *out
+  const char *prefix, ant_value_t *args, int nargs,
+  ant_output_stream_t *out, bool use_stderr
 ) {
-  bool color_values = !io_no_color;
+  bool color_values = io_should_color_fd(use_stderr ? STDERR_FILENO : STDOUT_FILENO);
 
   int group_level = console_get_group_level(js, this_obj);
   int indent = console_get_group_indentation(js, this_obj);
@@ -563,7 +591,11 @@ static inline ant_value_t console_emit_with_this(
   ant_output_stream_t out = {0};
   ant_output_stream_begin(&out);
 
-  ant_value_t result = console_emit_to_output(js, this_obj, prefix, args, nargs, &out);
+  ant_value_t result = console_emit_to_output(
+    js, this_obj, prefix, args, nargs, 
+    &out, use_stderr
+  );
+  
   if (!is_err(result)) console_write_string(
     js, this_obj, use_stderr, 
     out.buffer.data ? out.buffer.data : "", out.buffer.len

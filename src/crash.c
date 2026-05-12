@@ -13,6 +13,7 @@
 #include "crash.h"
 #include "internal.h"
 #include "reactor.h"
+#include "utils.h"
 #include "cli/version.h"
 
 #include "silver/engine.h"
@@ -168,20 +169,6 @@ static void cb_put_json_string(crash_buf_t *b, const char *s) {
   cb_putc(b, '"');
 }
 
-static bool env_bool(const char *value, bool default_value) {
-  if (!value || !*value) return default_value;
-  if (
-    strcmp(value, "0") == 0     ||
-    strcmp(value, "false") == 0 ||
-    strcmp(value, "FALSE") == 0 ||
-    strcmp(value, "off") == 0   ||
-    strcmp(value, "OFF") == 0   ||
-    strcmp(value, "no") == 0    ||
-    strcmp(value, "NO") == 0
-  ) return false;
-  return true;
-}
-
 static const char *path_basename_const(const char *path) {
   if (!path) return "";
   const char *base = path;
@@ -205,10 +192,10 @@ static void init_argv_strings(int argc, char **argv) {
 }
 
 static void init_report_controls() {
-  crash_print_trace = env_bool(getenv("ANT_CRASH_TRACE"), false);
+  crash_print_trace = ant_env_bool(getenv("ANT_CRASH_TRACE"), false);
   const char *enabled = getenv("ANT_ENABLE_CRASH_REPORTING");
-  if (enabled) crash_reporting_enabled = env_bool(enabled, true);
-  else crash_reporting_enabled = !env_bool(getenv("DO_NOT_TRACK"), false);
+  if (enabled) crash_reporting_enabled = ant_env_bool(enabled, true);
+  else crash_reporting_enabled = !ant_env_bool(getenv("DO_NOT_TRACK"), false);
   if (getenv("ANT_CRASH_REPORT_URL") && !enabled) crash_reporting_enabled = true;
 }
 

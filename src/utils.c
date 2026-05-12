@@ -42,6 +42,20 @@ static const char *ant_absolute_env(const char *name) {
 #endif
 }
 
+bool ant_env_bool(const char *value, bool default_value) {
+  if (!value || !*value) return default_value;
+  if (
+    strcmp(value, "0") == 0     ||
+    strcmp(value, "false") == 0 ||
+    strcmp(value, "FALSE") == 0 ||
+    strcmp(value, "off") == 0   ||
+    strcmp(value, "OFF") == 0   ||
+    strcmp(value, "no") == 0    ||
+    strcmp(value, "NO") == 0
+  ) return false;
+  return true;
+}
+
 static int ant_join_app_path(
   char *out, size_t out_size,
   const char *base,

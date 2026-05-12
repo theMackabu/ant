@@ -19,6 +19,7 @@ let ownerId = null;
 
 client.once('clientReady', async () => {
   await client.rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  await client.rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
   const app = await client.application.fetch();
   ownerId = app.owner?.ownerId ?? app.owner?.id ?? app.owner?.members?.first()?.id ?? null;
   console.log(`logged in as ${client.user.tag}`);
