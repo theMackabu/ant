@@ -16,6 +16,7 @@
 #include "reactor.h"
 #include "utils.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,12 +75,64 @@ static int esm_dynamic_import_depth = 0;
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
 static char *esm_canonicalize_path(const char *path);
 
+static bool esm_is_path_sep(char ch) {
+  return ch == '/' || ch == '\\';
+}
+
+static bool esm_has_windows_drive_letter(const char *path) {
+  return
+    path &&
+    isalpha((unsigned char)path[0]) &&
+    path[1] == ':';
+}
+
+static bool esm_path_is_absolute(const char *path) {
+  if (!path || !path[0]) return false;
+#ifdef _WIN32
+  if (esm_is_path_sep(path[0])) return true;
+  return esm_has_windows_drive_letter(path) && esm_is_path_sep(path[2]);
+#else
+  return path[0] == '/';
+#endif
+}
+
+static bool esm_path_is_root(const char *path) {
+  if (!path || !path[0]) return false;
+  if (strcmp(path, "/") == 0 || strcmp(path, "\\") == 0) return true;
+#ifdef _WIN32
+  return
+    esm_has_windows_drive_letter(path) &&
+    (path[2] == '\0' || (esm_is_path_sep(path[2]) && path[3] == '\0'));
+#else
+  return false;
+#endif
+}
+
+static char *esm_path_last_sep(char *path) {
+  char *slash = strrchr(path, '/');
+  char *backslash = strrchr(path, '\\');
+  if (!slash) return backslash;
+  if (!backslash) return slash;
+  return backslash > slash ? backslash : slash;
+}
+
+static const char *esm_path_last_sep_const(const char *path) {
+  const char *slash = strrchr(path, '/');
+  const char *backslash = strrchr(path, '\\');
+  if (!slash) return backslash;
+  if (!backslash) return slash;
+  return backslash > slash ? backslash : slash;
+}
+
 static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
   if (!specifier || strncmp(specifier, "file:", 5) != 0) return NULL;
 
   const char *p = specifier + 5;
   if (strncmp(p, "///", 3) == 0) p += 2;
   else if (strncmp(p, "//localhost/", 12) == 0) p += 11;
+#ifdef _WIN32
+  else if (strncmp(p, "//", 2) == 0 && esm_has_windows_drive_letter(p + 2)) p += 2;
+#endif
 
   if (*p == '\0') return NULL;
 
@@ -88,8 +141,16 @@ static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
 
   size_t len = 0;
   char *str = js_getstr(js, decoded, &len);
-  
-  return str ? strndup(str, len) : NULL;
+  char *path = str ? strndup(str, len) : NULL;
+
+#ifdef _WIN32
+  if (path) {
+    if (path[0] == '/' && esm_has_windows_drive_letter(path + 1)) memmove(path, path + 1, strlen(path));
+    for (char *ch = path; *ch; ch++) if (*ch == '/') *ch = '\\';
+  }
+#endif
+
+  return path;
 }
 
 static char *esm_make_cache_key(const char *module_key) {
@@ -102,7 +163,7 @@ static char *esm_make_cache_key(const char *module_key) {
 
 static char *esm_get_extension(const char *path) {
   const char *dot = strrchr(path, '.');
-  const char *slash = strrchr(path, '/');
+  const char *slash = esm_path_last_sep_const(path);
 
   if (dot && (!slash || dot > slash)) {
     return strdup(dot);
@@ -115,12 +176,15 @@ static bool esm_is_relative_specifier(const char *specifier) {
     strcmp(specifier, ".") == 0 ||
     strcmp(specifier, "..") == 0 ||
     strncmp(specifier, "./", 2) == 0 ||
-    strncmp(specifier, "../", 3) == 0;
+    strncmp(specifier, "../", 3) == 0 ||
+    strncmp(specifier, ".\\", 2) == 0 ||
+    strncmp(specifier, "..\\", 3) == 0;
 }
 
 static char *esm_try_resolve(const char *dir, const char *spec, const char *suffix) {
   char path[PATH_MAX];
-  snprintf(path, PATH_MAX, "%s/%s%s", dir, spec, suffix);
+  if (!dir || !dir[0]) snprintf(path, PATH_MAX, "%s%s", spec, suffix);
+  else snprintf(path, PATH_MAX, "%s/%s%s", dir, spec, suffix);
   char *resolved = realpath(path, NULL);
   if (resolved) {
     struct stat st;
@@ -131,7 +195,7 @@ static char *esm_try_resolve(const char *dir, const char *spec, const char *suff
 }
 
 static bool esm_has_extension(const char *spec) {
-  const char *slash = strrchr(spec, '/');
+  const char *slash = esm_path_last_sep_const(spec);
   const char *dot = strrchr(slash ? slash : spec, '.');
   
   if (!dot) return false;
@@ -268,7 +332,7 @@ static char *esm_get_base_dir(const char *base_path) {
   }
 
   char candidate[PATH_MAX];
-  if (base_path[0] == '/') {
+  if (esm_path_is_absolute(base_path)) {
     snprintf(candidate, sizeof(candidate), "%s", base_path);
   } else {
     char cwd[PATH_MAX];
@@ -349,11 +413,12 @@ static char *esm_find_node_module_dir(const char *start_dir, const char *package
       return resolved ? resolved : strdup(candidate);
     }
 
-    if (strcmp(current, "/") == 0) break;
-    char *slash = strrchr(current, '/');
+    if (esm_path_is_root(current)) break;
+    char *slash = esm_path_last_sep(current);
     
     if (!slash) break;
     if (slash == current) current[1] = '\0';
+    else if (esm_has_windows_drive_letter(current) && slash == current + 2) slash[1] = '\0';
     else *slash = '\0';
   }
   
@@ -595,20 +660,19 @@ static char *esm_resolve_package_imports(const char *specifier, const char *base
       yyjson_val *root = yyjson_doc_get_root(doc);
       yyjson_val *imports = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "imports") : NULL;
       char *resolved = NULL;
-      if (imports && yyjson_is_obj(imports)) {
-        resolved = esm_resolve_package_map(
-          imports, specifier, current,
-          base_path, true, prefer_require
-        );
-      }
+      if (imports && yyjson_is_obj(imports)) resolved = esm_resolve_package_map(
+        imports, specifier, current,
+        base_path, true, prefer_require
+      );
       yyjson_doc_free(doc);
       return resolved;
     }
 
-    if (strcmp(current, "/") == 0) break;
-    char *slash = strrchr(current, '/');
+    if (esm_path_is_root(current)) break;
+    char *slash = esm_path_last_sep(current);
     if (!slash) break;
     if (slash == current) current[1] = '\0';
+    else if (esm_has_windows_drive_letter(current) && slash == current + 2) slash[1] = '\0';
     else *slash = '\0';
   }
 
@@ -680,7 +744,7 @@ static char *esm_resolve_relative_path(const char *specifier, const char *base_p
 static char *esm_resolve_path_cond(const char *specifier, const char *base_path, bool prefer_require) {
   if (!specifier || !specifier[0]) return NULL;
 
-  if (specifier[0] == '/') {
+  if (esm_path_is_absolute(specifier)) {
     return esm_resolve_absolute(specifier);
   }
 
@@ -799,11 +863,13 @@ static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_m
       if (is_module) *is_module = has_type && pkg_is_module;
       return true;
     }
-
-    if (strcmp(current, "/") == 0) break;
-    char *slash = strrchr(current, '/');
+    
+    if (esm_path_is_root(current)) break;
+    char *slash = esm_path_last_sep(current);
+    
     if (!slash) break;
     if (slash == current) current[1] = '\0';
+    else if (esm_has_windows_drive_letter(current) && slash == current + 2) slash[1] = '\0';
     else *slash = '\0';
   }
 
@@ -1431,11 +1497,37 @@ ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, const char *
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
   size_t path_len = strlen(path);
   size_t raw_len = 7 + path_len;
-  
-  char *raw = malloc(raw_len + 1);
-  if (!raw) return js_mkerr(js, "oom");
 
+#ifdef _WIN32
+  char *url_path = strdup(path);
+  if (!url_path) return js_mkerr(js, "oom");
+
+  for (char *ch = url_path; *ch; ch++) {
+    if (*ch == '\\') *ch = '/';
+  }
+
+  bool has_drive = esm_has_windows_drive_letter(url_path);
+  bool is_unc = url_path[0] == '/' && url_path[1] == '/';
+  raw_len = strlen(url_path) + (has_drive ? 8 : (is_unc ? 5 : 7));
+#endif
+
+  char *raw = malloc(raw_len + 1);
+  if (!raw) {
+#ifdef _WIN32
+    free(url_path);
+#endif
+    return js_mkerr(js, "oom");
+  }
+
+#ifdef _WIN32
+  if (has_drive) snprintf(raw, raw_len + 1, "file:///%s", url_path);
+  else if (is_unc) snprintf(raw, raw_len + 1, "file:%s", url_path);
+  else snprintf(raw, raw_len + 1, "file://%s", url_path);
+  free(url_path);
+#else
   snprintf(raw, raw_len + 1, "file://%s", path);
+#endif
+
   ant_value_t raw_val = js_mkstr(js, raw, raw_len);
   free(raw);
 
@@ -1461,6 +1553,13 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
   const char *spec_str = (const char *)(uintptr_t)(spec_off);
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
+
+  char *file_url_path = esm_file_url_to_path(js, spec_copy);
+  if (file_url_path) {
+    free(spec_copy);
+    spec_copy = file_url_path;
+    spec_len = strlen(spec_copy);
+  }
 
   bundle = esm_lookup_builtin_alias(spec_copy, (size_t)spec_len);
   if (bundle) {
@@ -1499,6 +1598,13 @@ ant_value_t js_esm_resolve_specifier_require(ant_t *js, ant_value_t specifier, c
   const char *spec_str = (const char *)(uintptr_t)(spec_off);
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
+
+  char *file_url_path = esm_file_url_to_path(js, spec_copy);
+  if (file_url_path) {
+    free(spec_copy);
+    spec_copy = file_url_path;
+    spec_len = strlen(spec_copy);
+  }
 
   bundle = esm_lookup_builtin_alias(spec_copy, (size_t)spec_len);
   if (bundle) {
