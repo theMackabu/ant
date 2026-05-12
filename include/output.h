@@ -19,6 +19,8 @@ typedef struct {
 } ant_output_stream_t;
 
 ant_output_stream_t *ant_output_stream(FILE *stream);
+
+void ant_output_init_console(void);
 void ant_output_stream_begin(ant_output_stream_t *out);
 
 bool ant_output_stream_reserve(ant_output_stream_t *out, size_t extra);

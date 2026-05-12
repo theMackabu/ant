@@ -17,6 +17,7 @@
 #include "watch.h"
 #include "reactor.h"
 #include "runtime.h"
+#include "output.h"
 #include "snapshot.h"
 #include "esm/loader.h"
 #include "esm/library.h"
@@ -387,6 +388,7 @@ int main(int argc, char *argv[]) {
   if (internal_crash_report_mode) argc = 1;
   if (!internal_crash_report_mode && !getenv("ANT_NO_CRASH_HANDLER")) ant_crash_init(argc, argv);
   
+  ant_output_init_console();
   setup_console_colors();
   parse_ant_debug_flags();
   

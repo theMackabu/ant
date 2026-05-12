@@ -5,12 +5,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "output.h"
 
 #define ANT_OUTPUT_INITIAL_CAP 65536
 
 static ant_output_stream_t g_stdout_writer = { .stream = NULL };
 static ant_output_stream_t g_stderr_writer = { .stream = NULL };
+
+void ant_output_init_console(void) {
+#ifdef _WIN32
+  DWORD mode = 0;
+  bool has_console_output =
+    GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) ||
+    GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &mode);
+
+  if (has_console_output) SetConsoleOutputCP(CP_UTF8);
+  if (GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode)) SetConsoleCP(CP_UTF8);
+#endif
+}
 
 ant_output_stream_t *ant_output_stream(FILE *stream) {
   ant_output_stream_t *out = (stream == stderr) ? &g_stderr_writer : &g_stdout_writer;
