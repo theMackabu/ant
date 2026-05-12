@@ -13149,17 +13149,23 @@ static ant_value_t builtin_string_normalize(ant_t *js, ant_value_t *args, int na
 static ant_value_t builtin_string_fromCharCode(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkstr(js, "", 0);
 
-  char *buf = (char *)ant_calloc(nargs + 1);
+  char *buf = (char *)ant_calloc((size_t)nargs * 3 + 1);
   if (!buf) return js_mkerr(js, "oom");
 
+  size_t len = 0;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) { buf[i] = 0; continue; }
-    int code = (int) tod(args[i]);
-    buf[i] = (char)(code & 0xFF);
-  }
-  buf[nargs] = '\0';
+    double d = js_to_number(js, args[i]);
+    uint32_t code_unit = isfinite(d) ? ((uint32_t)d & 0xFFFFu) : 0;
 
-  ant_value_t ret = js_mkstr(js, buf, nargs);
+    if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+      buf[len++] = (char)(0xE0 | (code_unit >> 12));
+      buf[len++] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
+      buf[len++] = (char)(0x80 | (code_unit & 0x3F));
+    } else len += (size_t)utf8_encode(code_unit, buf + len);
+  }
+  buf[len] = '\0';
+
+  ant_value_t ret = js_mkstr(js, buf, len);
   free(buf);
   return ret;
 }
