@@ -1629,6 +1629,98 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 #else
+static void close_if_valid(int fd) {
+  if (fd >= 0) close(fd);
+}
+
+static void child_redirect_stdio_to_devnull(int fd, int flags) {
+  int null_fd = open("/dev/null", flags);
+  if (null_fd < 0) _exit(127);
+  dup2(null_fd, fd);
+  close(null_fd);
+}
+
+static bool append_sync_output(char **buf, size_t *len, size_t *cap, const char *data, size_t data_len) {
+  if (data_len == 0) return true;
+
+  if (*cap == 0) {
+    *cap = 4096;
+    *buf = malloc(*cap);
+    if (!*buf) return false;
+  }
+
+  if (*len + data_len > *cap) {
+    size_t new_cap = *cap;
+    while (new_cap < *len + data_len) new_cap *= 2;
+    char *new_buf = realloc(*buf, new_cap);
+    if (!new_buf) return false;
+    *buf = new_buf;
+    *cap = new_cap;
+  }
+
+  memcpy(*buf + *len, data, data_len);
+  *len += data_len;
+  return true;
+}
+
+static bool read_sync_outputs(
+  int stdout_fd,
+  int stderr_fd,
+  char **stdout_buf,
+  size_t *stdout_len,
+  size_t *stdout_cap,
+  char **stderr_buf,
+  size_t *stderr_len,
+  size_t *stderr_cap
+) {
+  bool stdout_open = stdout_fd >= 0;
+  bool stderr_open = stderr_fd >= 0;
+  char buffer[4096];
+
+  while (stdout_open || stderr_open) {
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    int max_fd = -1;
+
+    if (stdout_open) {
+      FD_SET(stdout_fd, &readfds);
+      if (stdout_fd > max_fd) max_fd = stdout_fd;
+    }
+    if (stderr_open) {
+      FD_SET(stderr_fd, &readfds);
+      if (stderr_fd > max_fd) max_fd = stderr_fd;
+    }
+
+    int ready = select(max_fd + 1, &readfds, NULL, NULL, NULL);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+
+    if (stdout_open && FD_ISSET(stdout_fd, &readfds)) {
+      ssize_t n = read(stdout_fd, buffer, sizeof(buffer));
+      if (n > 0) {
+        if (!append_sync_output(stdout_buf, stdout_len, stdout_cap, buffer, (size_t)n)) return false;
+      } else {
+        close_if_valid(stdout_fd);
+        stdout_open = false;
+      }
+    }
+
+    if (stderr_open && FD_ISSET(stderr_fd, &readfds)) {
+      ssize_t n = read(stderr_fd, buffer, sizeof(buffer));
+      if (n > 0) {
+        if (!append_sync_output(stderr_buf, stderr_len, stderr_cap, buffer, (size_t)n)) return false;
+      } else {
+        close_if_valid(stderr_fd);
+        stderr_open = false;
+      }
+    }
+  }
+
+  return true;
+}
+
 static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
@@ -1639,8 +1731,12 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   
   char **spawn_args = NULL;
   int spawn_argc = 0;
+  char *cwd = NULL;
   char *input = NULL;
   size_t input_len = 0;
+  stdio_mode_t stdio_modes[3] = {
+    STDIO_PIPE, STDIO_PIPE, STDIO_PIPE
+  };
   
   if (nargs >= 2 && is_special_object(args[1])) {
     ant_value_t len_val = js_get(js, args[1], "length");
@@ -1650,15 +1746,26 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   if (nargs >= 3 && is_special_object(args[2])) {
+    ant_value_t cwd_val = js_get(js, args[2], "cwd");
+    if (vtype(cwd_val) == T_STR) {
+      size_t cwd_len;
+      char *cwd_str = js_getstr(js, cwd_val, &cwd_len);
+      cwd = strndup(cwd_str, cwd_len);
+    }
+
     ant_value_t input_val = js_get(js, args[2], "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
+
+    ant_value_t stdio_val = js_get(js, args[2], "stdio");
+    parse_stdio_option(js, stdio_val, stdio_modes);
   }
   
   char **exec_args = calloc(spawn_argc + 2, sizeof(char *));
   if (!exec_args) {
     free(cmd_str);
+    if (cwd) free(cwd);
     free_args_array(spawn_args, spawn_argc);
     return js_mkerr(js, "Out of memory");
   }
@@ -1669,10 +1776,24 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   }
   exec_args[spawn_argc + 1] = NULL;
   
-  int stdin_pipe[2], stdout_pipe[2], stderr_pipe[2];
-  if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
+  int stdin_pipe[2] = { -1, -1 };
+  int stdout_pipe[2] = { -1, -1 };
+  int stderr_pipe[2] = { -1, -1 };
+
+  if (
+    (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE && pipe(stdin_pipe) < 0) ||
+    (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_PIPE && pipe(stdout_pipe) < 0) ||
+    (stdio_modes[CHILD_STREAM_STDERR] == STDIO_PIPE && pipe(stderr_pipe) < 0)
+  ) {
+    close_if_valid(stdin_pipe[0]);
+    close_if_valid(stdin_pipe[1]);
+    close_if_valid(stdout_pipe[0]);
+    close_if_valid(stdout_pipe[1]);
+    close_if_valid(stderr_pipe[0]);
+    close_if_valid(stderr_pipe[1]);
     free(exec_args);
     free(cmd_str);
+    if (cwd) free(cwd);
     free_args_array(spawn_args, spawn_argc);
     return js_mkerr(js, "Failed to create pipes");
   }
@@ -1680,24 +1801,45 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   pid_t pid = fork();
   
   if (pid < 0) {
+    close_if_valid(stdin_pipe[0]);
+    close_if_valid(stdin_pipe[1]);
+    close_if_valid(stdout_pipe[0]);
+    close_if_valid(stdout_pipe[1]);
+    close_if_valid(stderr_pipe[0]);
+    close_if_valid(stderr_pipe[1]);
     free(exec_args);
     free(cmd_str);
+    if (cwd) free(cwd);
     free_args_array(spawn_args, spawn_argc);
     return js_mkerr(js, "Fork failed");
   }
   
   if (pid == 0) {
-    close(stdin_pipe[1]);
-    close(stdout_pipe[0]);
-    close(stderr_pipe[0]);
-    
-    dup2(stdin_pipe[0], STDIN_FILENO);
-    dup2(stdout_pipe[1], STDOUT_FILENO);
-    dup2(stderr_pipe[1], STDERR_FILENO);
-    
-    close(stdin_pipe[0]);
-    close(stdout_pipe[1]);
-    close(stderr_pipe[1]);
+    if (cwd && chdir(cwd) != 0) _exit(127);
+
+    if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE) {
+      close_if_valid(stdin_pipe[1]);
+      dup2(stdin_pipe[0], STDIN_FILENO);
+      close_if_valid(stdin_pipe[0]);
+    } else if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_IGNORE) {
+      child_redirect_stdio_to_devnull(STDIN_FILENO, O_RDONLY);
+    }
+
+    if (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_PIPE) {
+      close_if_valid(stdout_pipe[0]);
+      dup2(stdout_pipe[1], STDOUT_FILENO);
+      close_if_valid(stdout_pipe[1]);
+    } else if (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_IGNORE) {
+      child_redirect_stdio_to_devnull(STDOUT_FILENO, O_WRONLY);
+    }
+
+    if (stdio_modes[CHILD_STREAM_STDERR] == STDIO_PIPE) {
+      close_if_valid(stderr_pipe[0]);
+      dup2(stderr_pipe[1], STDERR_FILENO);
+      close_if_valid(stderr_pipe[1]);
+    } else if (stdio_modes[CHILD_STREAM_STDERR] == STDIO_IGNORE) {
+      child_redirect_stdio_to_devnull(STDERR_FILENO, O_WRONLY);
+    }
     
     execvp(exec_args[0], exec_args);
     _exit(127);
@@ -1705,52 +1847,40 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   
   free(exec_args);
   free(cmd_str);
+  if (cwd) free(cwd);
   free_args_array(spawn_args, spawn_argc);
   
-  close(stdin_pipe[0]);
-  close(stdout_pipe[1]);
-  close(stderr_pipe[1]);
+  close_if_valid(stdin_pipe[0]);
+  close_if_valid(stdout_pipe[1]);
+  close_if_valid(stderr_pipe[1]);
   
-  if (input && input_len > 0) {
+  if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE && input && input_len > 0) {
     write(stdin_pipe[1], input, input_len);
   }
-  close(stdin_pipe[1]);
+  close_if_valid(stdin_pipe[1]);
   
   char *stdout_buf = NULL;
   size_t stdout_len = 0;
-  size_t stdout_cap = 4096;
-  stdout_buf = malloc(stdout_cap);
+  size_t stdout_cap = 0;
   
   char *stderr_buf = NULL;
   size_t stderr_len = 0;
-  size_t stderr_cap = 4096;
-  stderr_buf = malloc(stderr_cap);
-  
-  char buffer[4096];
-  ssize_t n;
+  size_t stderr_cap = 0;
   int status = 0;
-  
-  while ((n = read(stdout_pipe[0], buffer, sizeof(buffer))) > 0) {
-    if (stdout_len + n >= stdout_cap) {
-      stdout_cap *= 2;
-      stdout_buf = realloc(stdout_buf, stdout_cap);
-    }
-    memcpy(stdout_buf + stdout_len, buffer, n);
-    stdout_len += n;
+
+  bool read_ok = read_sync_outputs(
+    stdout_pipe[0], stderr_pipe[0],
+    &stdout_buf, &stdout_len, &stdout_cap,
+    &stderr_buf, &stderr_len, &stderr_cap
+  );
+
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+
+  if (!read_ok) {
+    if (stdout_buf) free(stdout_buf);
+    if (stderr_buf) free(stderr_buf);
+    return js_mkerr(js, "Failed to read process output");
   }
-  close(stdout_pipe[0]);
-  
-  while ((n = read(stderr_pipe[0], buffer, sizeof(buffer))) > 0) {
-    if (stderr_len + n >= stderr_cap) {
-      stderr_cap *= 2;
-      stderr_buf = realloc(stderr_buf, stderr_cap);
-    }
-    memcpy(stderr_buf + stderr_len, buffer, n);
-    stderr_len += n;
-  }
-  close(stderr_pipe[0]);
-  
-  waitpid(pid, &status, 0);
   
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
   int signal_code = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
