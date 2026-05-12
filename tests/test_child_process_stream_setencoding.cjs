@@ -11,6 +11,8 @@ const child = spawn(process.execPath, [
 
 assert(child.stdout && typeof child.stdout.setEncoding === 'function', 'child.stdout.setEncoding should exist');
 assert(child.stderr && typeof child.stderr.setEncoding === 'function', 'child.stderr.setEncoding should exist');
+assert(child.stdout.readableEncoding === null, 'stdout readableEncoding should start as null');
+assert(child.stderr.readableEncoding === null, 'stderr readableEncoding should start as null');
 assert(child.stdout.setEncoding('utf8') === child.stdout, 'stdout.setEncoding should return stdout');
 assert(child.stderr.setEncoding('utf8') === child.stderr, 'stderr.setEncoding should return stderr');
 assert(child.stdout.readableEncoding === 'utf8', 'stdout readableEncoding should be utf8');

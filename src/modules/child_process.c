@@ -906,7 +906,8 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
   js_set(js, obj, "destroy", js_mkfun(child_stream_destroy));
   js_set(js, obj, "setEncoding", js_mkfun(child_stream_set_encoding));
   js_set(js, obj, "length", js_mknum(0));
-  js_set(js, obj, "readableEncoding", js_mkundef());
+  js_set(js, obj, "encoding", js_mknull());
+  js_set(js, obj, "readableEncoding", js_mknull());
 
   if (kind == CHILD_STREAM_STDIN) {
     js_set(js, obj, "write", js_mkfun(child_stream_write));
