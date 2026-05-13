@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
@@ -17,8 +18,8 @@
 #include "watch.h"
 #include "reactor.h"
 #include "runtime.h"
-#include "output.h"
 #include "snapshot.h"
+#include "inspector.h"
 #include "esm/loader.h"
 #include "esm/library.h"
 #include "esm/remote.h"
@@ -261,6 +262,38 @@ static argv_split_t build_process_argv(int argc, char **argv, const char *module
   return (argv_split_t){ total, out };
 }
 
+static void parse_inspector_spec(const char *spec, char *host, size_t host_len, int *port) {
+  if (!spec || !*spec) return;
+  bool all_digits = true;
+  
+  for (const char *p = spec; *p; p++) if (!isdigit((unsigned char)*p)) {
+    all_digits = false;
+    break;
+  }
+
+  if (all_digits) {
+    int parsed = atoi(spec);
+    if (parsed > 0) *port = parsed;
+    return;
+  }
+
+  const char *colon = strrchr(spec, ':');
+  if (colon && colon != spec && colon[1]) {
+    size_t len = (size_t)(colon - spec);
+    if (len >= host_len) len = host_len - 1;
+    
+    memcpy(host, spec, len);
+    host[len] = '\0';
+    
+    int parsed = atoi(colon + 1);
+    if (parsed > 0) *port = parsed;
+    
+    return;
+  }
+
+  snprintf(host, host_len, "%s", spec);
+}
+
 static char *read_stdin(size_t *len) {
   size_t cap = 4096;
   *len = 0;
@@ -394,6 +427,13 @@ int main(int argc, char *argv[]) {
   
   setup_console_colors();
   parse_ant_debug_flags();
+
+  ant_inspector_options_t inspector = {
+    .enabled = false,
+    .wait_for_session = false,
+    .host = "127.0.0.1",
+    .port = 9229,
+  };
   
   int filtered_argc = 0; int original_argc = argc;
   char **original_argv = argv;
@@ -412,11 +452,30 @@ int main(int argc, char *argv[]) {
     free(exec_argv); return exitcode;
   }
   
+  // TODO: only parse before script filename
   char **filtered_argv = try_oom(sizeof(char*) * argc);
   for (int i = 0; i < argc; i++) {
     if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
     else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
     else if (strncmp(argv[i], "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(argv[i] + 13);
+    else if (strcmp(argv[i], "--inspect") == 0) inspector.enabled = true;
+    
+    else if (strncmp(argv[i], "--inspect=", 10) == 0) {
+      inspector.enabled = true;
+      parse_inspector_spec(argv[i] + 10, inspector.host, sizeof(inspector.host), &inspector.port);
+    }
+    
+    else if (strcmp(argv[i], "--inspect-wait") == 0) {
+      inspector.enabled = true;
+      inspector.wait_for_session = true;
+    }
+    
+    else if (strncmp(argv[i], "--inspect-wait=", 15) == 0) {
+      inspector.enabled = true;
+      inspector.wait_for_session = true;
+      parse_inspector_spec(argv[i] + 15, inspector.host, sizeof(inspector.host), &inspector.port);
+    }
+    
     else filtered_argv[filtered_argc++] = argv[i];
   }
   
@@ -702,9 +761,27 @@ int main(int argc, char *argv[]) {
     crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   }
 
-  if (internal_crash_report_mode) {
-    js_result = ant_crash_run_internal_report(js);
+  if (inspector.enabled && !ant_inspector_start(js, &inspector)) {
+    fprintf(stderr, "Unable to start inspector on %s:%d\n", inspector.host, inspector.port);
+    js_result = EXIT_FAILURE;
+    goto cleanup;
   }
+
+  if (inspector.enabled && eval->count > 0) {
+    const char *script = eval->sval[0];
+    ant_inspector_register_script_source("[eval]", script, strlen(script), false);
+  }
+
+  if (inspector.enabled && eval->count == 0 && !repl_mode && !stdin_mode) for (
+  int fi = 0; fi < file->count; fi++) {
+    char *resolved_file = resolve_js_file(file->filename[fi]);
+    if (!resolved_file) continue;
+    ant_inspector_register_script_file(resolved_file, true);
+    free(resolved_file);
+  }
+  
+  if (inspector.wait_for_session) ant_inspector_wait_for_session();
+  if (internal_crash_report_mode) js_result = ant_crash_run_internal_report(js);
 
   else if (eval->count > 0) {
     const char *script = eval->sval[0];
@@ -721,6 +798,7 @@ int main(int argc, char *argv[]) {
       crfprintf(stderr, msg.ant_allocation_fatal);
       js_result = EXIT_FAILURE; goto cleanup; 
     }
+    if (inspector.enabled) ant_inspector_register_script_source("[stdin]", buf, len, false);
     eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);
   } 
   

@@ -10,6 +10,7 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "inspector.h"
 #include "internal.h"
 #include "ptr.h"
 
@@ -83,8 +84,12 @@ struct server_request_s {
   size_t consumed_len;
   
   int refs;
+  uint64_t network_request_id;
+  size_t network_encoded_length;
+  
   bool keep_alive;
   bool response_started;
+  bool network_finished;
 };
 
 struct server_conn_state_s {
@@ -230,6 +235,71 @@ static void server_request_release(server_request_t *req) {
   server_conn_state_maybe_free(req->conn_state);
 }
 
+static char *server_request_url(server_request_t *req) {
+  request_data_t *data = req && is_object_type(req->request_obj) ? request_get_data(req->request_obj) : NULL;
+  return data ? build_href(&data->url) : NULL;
+}
+
+static void server_network_start(server_request_t *req) {
+  request_data_t *data = req && is_object_type(req->request_obj) ? request_get_data(req->request_obj) : NULL;
+  char *url = server_request_url(req);
+  
+  if (!req || !data || !url) {
+    free(url);
+    return;
+  }
+  
+  req->network_request_id = ant_inspector_network_request(
+    data->method, url,
+    "Fetch", "Server",
+    data->has_body && data->body_data && data->body_size > 0,
+    req->raw_headers
+  );
+  
+  req->network_encoded_length = 0;
+  req->network_finished = false;
+  
+  if (data->has_body && data->body_data && data->body_size > 0) ant_inspector_network_set_request_body(
+    req->network_request_id, 
+    data->body_data, data->body_size
+  );
+  
+  free(url);
+}
+
+static void server_network_response(
+  server_request_t *req, int status,
+  const char *status_text,
+  const char *mime_type,
+  const ant_http_header_t *headers
+) {
+  char *url = server_request_url(req);
+  if (!req || !url) {
+    free(url);
+    return;
+  }
+  
+  ant_inspector_network_response(
+    req->network_request_id, url,
+    status, status_text,
+    mime_type, "Fetch", headers
+  );
+  
+  free(url);
+}
+
+static void server_network_finish(server_request_t *req) {
+  if (!req || req->network_finished) return;
+  ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
+  req->network_finished = true;
+}
+
+static void server_network_fail(server_request_t *req, const char *message) {
+  if (!req || req->network_finished) return;
+  ant_inspector_network_fail(req->network_request_id, message ? message : "server request failed", false, "Fetch");
+  req->network_finished = true;
+}
+
 static server_request_t *server_find_request(server_runtime_t *server, ant_value_t request_obj) {
   server_request_t *req = NULL;
   if (!server || !is_object_type(request_obj)) return NULL;
@@ -327,6 +397,66 @@ static ant_http_header_t *server_copy_raw_headers(const ant_http_header_t *heade
   }
 
   return head;
+}
+
+typedef struct {
+  ant_http_header_t *head;
+  ant_http_header_t **tail;
+  bool failed;
+} server_header_capture_t;
+
+static void server_capture_header(const char *name, const char *value, void *ctx) {
+  server_header_capture_t *capture = (server_header_capture_t *)ctx;
+  ant_http_header_t *header = NULL;
+
+  if (!capture || capture->failed || !name || !value) return;
+  header = calloc(1, sizeof(*header));
+  if (!header) {
+    capture->failed = true;
+    return;
+  }
+
+  header->name = strdup(name);
+  header->value = strdup(value);
+  
+  if (!header->name || !header->value) {
+    free(header->name);
+    free(header->value);
+    free(header);
+    capture->failed = true;
+    return;
+  }
+
+  *capture->tail = header;
+  capture->tail = &header->next;
+}
+
+static ant_http_header_t *server_capture_response_headers(
+  ant_value_t headers, bool body_is_stream, 
+  size_t body_size, bool keep_alive
+) {
+  server_header_capture_t capture = {0};
+  char content_length[64];
+
+  capture.tail = &capture.head;
+  headers_for_each(headers, server_capture_header, &capture);
+  
+  if (!capture.failed) {
+  if (body_is_stream) server_capture_header("transfer-encoding", "chunked", &capture);
+  else {
+    snprintf(content_length, sizeof(content_length), "%zu", body_size);
+    server_capture_header("content-length", content_length, &capture);
+  }}
+  
+  if (!capture.failed) 
+    server_capture_header("connection", keep_alive ? "keep-alive" : "close", &capture);
+
+  if (capture.failed) {
+    ant_http_headers_free(capture.head);
+    return NULL;
+  }
+  
+  return capture.head;
 }
 
 static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t request_obj) {
@@ -670,6 +800,7 @@ static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *da
   int rc = 0;
 
   if (!conn || ant_conn_is_closing(conn)) {
+    if (req) server_network_fail(req, "connection closed");
     free(data);
     return false;
   }
@@ -682,10 +813,13 @@ static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *da
   wr->request = req;
   wr->conn = conn;
   wr->action = action;
+  
   if (req) server_request_retain(req);
+  if (req) req->network_encoded_length += len;
 
   rc = ant_conn_write(conn, data, len, server_write_cb, wr);
   if (rc != 0) {
+    if (req) server_network_fail(req, uv_strerror(rc));
     if (req) server_request_release(req);
     free(wr);
     ant_conn_close(conn);
@@ -803,6 +937,34 @@ static inline void server_send_internal_error(ant_conn_t *conn, const char *body
   );
 }
 
+static void server_send_request_internal_error(server_request_t *req, const char *body) {
+  ant_http1_buffer_t buf;
+  char *out = NULL;
+  size_t out_len = 0;
+  
+  const char *text = body ? body : "Internal Server Error";
+  if (!req || !req->conn || ant_conn_is_closing(req->conn)) return;
+
+  server_network_response(req, 500, "Internal Server Error", "text/plain;charset=UTF-8", NULL);
+  ant_inspector_network_append_response_body(req->network_request_id, (const uint8_t *)text, strlen(text));
+  ant_http1_buffer_init(&buf);
+  
+  if (!ant_http1_write_basic_response(
+    &buf, 500,
+    "Internal Server Error",
+    "text/plain;charset=UTF-8",
+    (const uint8_t *)text, strlen(text), false
+  )) {
+    ant_http1_buffer_free(&buf);
+    server_network_fail(req, "failed to write internal error response");
+    ant_conn_close(req->conn);
+    return;
+  }
+
+  out = ant_http1_buffer_take(&buf, &out_len);
+  server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_CLOSE_CLIENT);
+}
+
 static void server_finish_with_response(server_request_t *req, ant_value_t response_obj) {
   response_data_t *resp = response_get_data(response_obj);
   ant_value_t headers = response_get_headers(response_obj);
@@ -812,6 +974,7 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   bool body_is_stream = resp && resp->body_is_stream && rs_is_stream(stream);
   bool head_only = false;
   
+  ant_http_header_t *network_headers = NULL;
   const char *status_text = NULL;
   ant_http1_buffer_t buf;
   
@@ -820,19 +983,28 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
 
   if (!req->conn || ant_conn_is_closing(req->conn)) return;
   if (!resp) {
-    server_send_internal_error(req->conn, "Invalid Response");
+    server_send_request_internal_error(req, "Invalid Response");
     return;
   }
 
   if (is_object_type(websocket_obj)) {
+    server_network_response(req, resp->status, "Switching Protocols", "", NULL);
     server_finish_websocket_upgrade(req, response_obj, websocket_obj);
     return;
   }
 
   req->response_obj = response_obj;
   req->response_started = true;
+  
   head_only = strcasecmp(request_get_data(req->request_obj)->method, "HEAD") == 0;
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : ant_http1_default_status_text(resp->status);
+  
+  network_headers = server_capture_response_headers(headers, body_is_stream && !head_only, resp->body_size, req->keep_alive);
+  server_network_response(req, resp->status, status_text, resp->body_type, network_headers);
+  ant_http_headers_free(network_headers);
+  
+  if (!body_is_stream && !head_only && resp->body_data && resp->body_size > 0)
+    ant_inspector_network_append_response_body(req->network_request_id, resp->body_data, resp->body_size);
 
   ant_http1_buffer_init(&buf);
   if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size, req->keep_alive)) {
@@ -876,7 +1048,7 @@ static ant_value_t server_on_response_reject(ant_t *js, ant_value_t *args, int n
 
   if (req->conn && !ant_conn_is_closing(req->conn)) {
     msg = js_str(js, reason);
-    server_send_internal_error(req->conn, msg);
+    server_send_request_internal_error(req, msg);
   }
 
   server_request_release(req);
@@ -892,10 +1064,8 @@ static ant_value_t server_on_response_fulfill(ant_t *js, ant_value_t *args, int 
 
   if (!response_get_data(value)) {
     if (req->conn && !ant_conn_is_closing(req->conn))
-      server_send_internal_error(req->conn, "fetch handler must return a Response");
-  } else if (req->conn && !ant_conn_is_closing(req->conn)) {
-    server_finish_with_response(req, value);
-  }
+      server_send_request_internal_error(req, "fetch handler must return a Response");
+  } else if (req->conn && !ant_conn_is_closing(req->conn)) server_finish_with_response(req, value);
 
   server_request_release(req);
   return js_mkundef();
@@ -907,7 +1077,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   if (is_err(result)) {
     ant_value_t reason = server_exception_reason(js, result);
     const char *msg = js_str(js, reason);
-    server_send_internal_error(req->conn, msg);
+    server_send_request_internal_error(req, msg);
     return;
   }
 
@@ -924,7 +1094,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   }
 
   if (!response_get_data(result)) {
-    server_send_internal_error(req->conn, "fetch handler must return a Response");
+    server_send_request_internal_error(req, "fetch handler must return a Response");
     return;
   }
 
@@ -985,6 +1155,7 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
     server_request_release(req);
     return js_mkundef();
   }
+  ant_inspector_network_append_response_body(req->network_request_id, chunk, chunk_len);
 
   ant_http1_buffer_init(&buf);
   if (!ant_http1_write_chunk(&buf, chunk, chunk_len)) {
@@ -1049,8 +1220,8 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   server_request_t *req = wr->request;
   server_conn_state_t *cs = conn ? (server_conn_state_t *)ant_conn_get_user_data(conn) : NULL;
 
-  if (status < 0 && conn && !ant_conn_is_closing(conn))
-    ant_conn_close(conn);
+  if (status < 0 && conn && !ant_conn_is_closing(conn)) ant_conn_close(conn);
+  if (status < 0 && req) server_network_fail(req, uv_strerror(status));
 
   if (status == 0 && conn && !ant_conn_is_closing(conn)) {
   switch (wr->action) {
@@ -1063,6 +1234,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
     break;
 
   case SERVER_WRITE_KEEP_ALIVE:
+    if (req) server_network_finish(req);
     if (cs && req) {
       ant_conn_consume(conn, req->consumed_len);
       ant_http1_conn_parser_reset(&cs->parser);
@@ -1075,6 +1247,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
     break;
 
   case SERVER_WRITE_WEBSOCKET_UPGRADE:
+    if (req) server_network_finish(req);
     if (cs && req) {
       ant_value_t websocket_obj = js_get(req->server->js, req->response_obj, "__antWebSocket");
       ant_conn_consume(conn, req->consumed_len);
@@ -1091,6 +1264,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
     break;
     
   case SERVER_WRITE_CLOSE_CLIENT:
+    if (req) server_network_finish(req);
     ant_conn_close(conn);
     break;
     
@@ -1229,6 +1403,7 @@ static void server_process_client_request(
   req->next = server->requests;
   server->requests = req;
   cs->active_req = req;
+  server_network_start(req);
   ant_conn_pause_read(conn);
   ant_conn_set_timeout_ms(conn, server->request_timeout_ms);
 

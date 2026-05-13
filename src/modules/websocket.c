@@ -12,6 +12,7 @@
 #include "ant.h"
 #include "common.h"
 #include "errors.h"
+#include "inspector.h"
 #include "internal.h"
 #include "ptr.h"
 #include "runtime.h"
@@ -30,6 +31,7 @@ typedef struct websocket_state_s {
   tlsuv_websocket_t client;
   uv_connect_t connect_req;
   ant_conn_t *server_conn;
+  uint64_t inspector_request_id;
   struct websocket_state_s *next;
   uint8_t *fragment_buf;
   size_t fragment_len;
@@ -195,6 +197,8 @@ static void websocket_emit_message(websocket_state_t *ws, const uint8_t *data, s
 
 static void websocket_emit_close(websocket_state_t *ws, uint16_t code, const char *reason, bool was_clean) {
   if (!ws || ws->close_emitted) return;
+  ant_inspector_websocket_closed(ws->inspector_request_id);
+  
   ws->close_emitted = true;
   ws->ready_state = WS_CLOSED;
   websocket_fragment_clear(ws);
@@ -219,13 +223,21 @@ static void websocket_client_connect_cb(uv_connect_t *req, int status) {
   if (!ws) return;
 
   if (status == 0) {
+    ant_http_header_t upgrade = { "Upgrade", "websocket", NULL };
+    ant_http_header_t connection = { "Connection", "Upgrade", &upgrade };
+    
+    ant_inspector_websocket_response(ws->inspector_request_id, 101, "Switching Protocols", &connection);
     ws->ready_state = WS_OPEN;
+    
     websocket_sync_state(ws);
     websocket_emit_simple(ws, "open");
+    
     return;
   }
 
   ws->ready_state = WS_CLOSED;
+  ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror(status));
+  
   websocket_sync_state(ws);
   websocket_emit_simple(ws, "error");
   websocket_emit_close(ws, 1006, "", false);
@@ -236,18 +248,21 @@ static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const u
   if (!ws) return;
 
   if (nread > 0) {
+    ant_inspector_websocket_frame_received(ws->inspector_request_id, (const uint8_t *)buf->base, (size_t)nread, false);
     websocket_emit_message(ws, (const uint8_t *)buf->base, (size_t)nread, false);
     return;
   }
 
   if (nread < 0) {
-    if (nread != UV_EOF) websocket_emit_simple(ws, "error");
+    if (nread != UV_EOF) {
+      ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror((int)nread));
+      websocket_emit_simple(ws, "error");
+    }
     websocket_emit_close(ws, nread == UV_EOF ? 1000 : 1006, "", nread == UV_EOF);
   }
 }
 
 static void websocket_write_cb(uv_write_t *req, int status) {
-  (void)status;
   free(req->data);
   free(req);
 }
@@ -330,16 +345,26 @@ static ant_value_t js_websocket_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_native(obj, ws, WS_NATIVE_TAG);
   js_set(js, obj, "url", url_val);
   websocket_sync_state(ws);
+  
+  ws->inspector_request_id = ant_inspector_websocket_created(url);
+  ant_inspector_websocket_request(ws->inspector_request_id, NULL);
 
   if (tlsuv_websocket_init(uv_default_loop(), &ws->client) != 0) {
     ws->ready_state = WS_CLOSED;
+    ant_inspector_websocket_error(ws->inspector_request_id, "WebSocket initialization failed");
     websocket_sync_state(ws);
     return obj;
   }
 
-  int rc = tlsuv_websocket_connect(&ws->connect_req, &ws->client, url, websocket_client_connect_cb, websocket_client_read_cb);
+  int rc = tlsuv_websocket_connect(
+    &ws->connect_req, &ws->client, url, 
+    websocket_client_connect_cb, websocket_client_read_cb
+  );
+  
   if (rc != 0) {
     ws->ready_state = WS_CLOSED;
+    ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror(rc));
+    
     websocket_sync_state(ws);
     websocket_emit_simple(ws, "error");
     websocket_emit_close(ws, 1006, "", false);
@@ -378,6 +403,7 @@ static ant_value_t js_websocket_send(ant_t *js, ant_value_t *args, int nargs) {
   if (ws->is_client) {
     int rc = websocket_client_write_frame(ws, binary ? ANT_WS_OPCODE_BINARY : ANT_WS_OPCODE_TEXT, bytes, len);
     if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+    ant_inspector_websocket_frame_sent(ws->inspector_request_id, bytes, len, binary);
     return js_mkundef();
   }
 

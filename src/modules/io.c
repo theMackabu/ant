@@ -25,6 +25,7 @@
 #include "internal.h"
 #include "runtime.h"
 #include "utils.h"
+#include "inspector.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
@@ -642,22 +643,27 @@ for (int i = 0; i < nargs; i++) {
 }}
 
 static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
+  ant_inspector_console_api_called(js, "log", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
 static ant_value_t js_console_error(ant_t *js, ant_value_t *args, int nargs) {
+  ant_inspector_console_api_called(js, "error", args, nargs);
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
 static ant_value_t js_console_warn(ant_t *js, ant_value_t *args, int nargs) {
+  ant_inspector_console_api_called(js, "warning", args, nargs);
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
 static ant_value_t js_console_info(ant_t *js, ant_value_t *args, int nargs) {
+  ant_inspector_console_api_called(js, "info", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
 static ant_value_t js_console_debug(ant_t *js, ant_value_t *args, int nargs) {
+  ant_inspector_console_api_called(js, "debug", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
@@ -665,11 +671,13 @@ static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
+  ant_inspector_console_api_called(js, "assert", args + 1, nargs - 1);
   return console_emit_current(js, true, "Assertion failed:", args + 1, nargs - 1);
 }
 
 static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = console_get_effective_this(js, js_getthis(js));
+  ant_inspector_console_api_called(js, "trace", args, nargs);
   console_emit_current(js, true, "Trace:", args, nargs);
   ant_value_t stack = js_capture_raw_stack(js);
   if (vtype(stack) == T_STR) {
@@ -1244,32 +1252,48 @@ static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int narg
   return console_obj;
 }
 
-ant_value_t console_library(ant_t *js) {
-  if (!g_console_ctor) {
-    g_console_proto = js_mkobj(js);
-    console_apply_methods(js, g_console_proto);
-    js_set_sym(js, g_console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
-    g_console_ctor = js_make_ctor(js, js_console_constructor, g_console_proto, "Console", 7);
-    gc_register_root(&g_console_proto);
-    gc_register_root(&g_console_ctor);
-  }
+static void console_ensure_constructor(ant_t *js) {
+  if (g_console_ctor) return;
+  
+  g_console_proto = js_mkobj(js);
+  console_apply_methods(js, g_console_proto);
+  
+  js_set_sym(js, g_console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  g_console_ctor = js_make_ctor(js, js_console_constructor, g_console_proto, "Console", 7);
+  
+  gc_register_root(&g_console_proto);
+  gc_register_root(&g_console_ctor);
+}
 
+static ant_value_t console_create_default(ant_t *js) {
+  console_ensure_constructor(js);
   ant_value_t console_obj = js_mkobj(js);
+  
   js_set_proto_init(console_obj, g_console_proto);
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_COUNTS, js_mkobj(js));
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_TIMERS, js_mkobj(js));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_INDENT, js_mknum(2));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_LEVEL, js_mknum(0));
+  js_set_sym(js, console_obj, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  
+  return console_obj;
+}
+
+ant_value_t console_library(ant_t *js) {
+  ant_value_t console_obj = console_create_default(js);
   
   js_set(js, console_obj, "Console", g_console_ctor);
   js_set(js, console_obj, "default", console_obj);
-  js_set_sym(js, console_obj, get_toStringTag_sym(), js_mkstr(js, "console", 7));
   
   return console_obj;
 }
 
 void init_console_module() {
   ant_t *js = rt->js;
-  ant_value_t console_obj = console_library(js);
+  
+  ant_value_t console_obj = console_create_default(js);
+  console_apply_methods(js, console_obj);
+  
+  js_set(js, console_obj, "Console", g_console_ctor);
   js_set(js, js_glob(js), "console", console_obj);
 }

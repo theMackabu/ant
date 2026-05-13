@@ -12,6 +12,7 @@
 #include "ptr.h"
 #include "common.h"
 #include "errors.h"
+#include "inspector.h"
 #include "internal.h"
 #include "runtime.h"
 #include "esm/remote.h"
@@ -40,10 +41,14 @@ typedef struct fetch_request_s {
   
   int refs;
   int redirect_count;
+  
   bool settled;
   bool aborted;
   bool restart_pending;
   bool response_started;
+  
+  uint64_t network_request_id;
+  size_t network_encoded_length;
 } fetch_request_t;
 
 enum { FETCH_REQUEST_NATIVE_TAG = 0x46524551u }; // FREQ
@@ -157,6 +162,11 @@ static const char *fetch_find_header_value(const ant_http_header_t *headers, con
     if (entry->name && strcasecmp(entry->name, name) == 0) return entry->value;
   }
   return NULL;
+}
+
+static const char *fetch_response_mime_type(const ant_http_response_t *resp) {
+  const char *content_type = resp ? fetch_find_header_value(resp->headers, "content-type") : NULL;
+  return content_type ? content_type : "";
 }
 
 static bool fetch_redirect_rewrites_to_get(int status, const char *method) {
@@ -462,6 +472,17 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
     return;
   }
 
+  url = fetch_build_request_url(request);
+  ant_inspector_network_response(
+    req->network_request_id, url,
+    resp->status, resp->status_text,
+    fetch_response_mime_type(resp),
+    "Fetch", resp->headers
+  );
+  
+  free(url);
+  url = NULL;
+
   if (fetch_is_redirect_status(resp->status)) {
     const char *location = fetch_find_header_value(resp->headers, "location");
     const char *redirect_mode = request->redirect ? request->redirect : "follow";
@@ -521,13 +542,15 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
 static void fetch_http_on_body(ant_http_request_t *http_req, const uint8_t *chunk, size_t len, void *user_data) {
   fetch_request_t *req = (fetch_request_t *)user_data;
   ant_t *js = req->js;
+  
   ant_value_t stream = 0;
   ant_value_t controller = 0;
   ant_value_t value = 0;
   ant_value_t step = 0;
 
-  (void)http_req;
   if (req->aborted || !is_object_type(req->response_obj)) return;
+  req->network_encoded_length += len;
+  ant_inspector_network_append_response_body(req->network_request_id, chunk, len);
 
   stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
   if (!rs_is_stream(stream)) return;
@@ -570,15 +593,26 @@ static void fetch_http_on_complete(
   req->http_req = NULL;
 
   if (req->restart_pending) {
+    ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
+    req->network_request_id = 0;
+    req->network_encoded_length = 0;
     req->restart_pending = false;
     fetch_start_http(req);
     return;
   }
 
   if (result != ANT_HTTP_RESULT_OK || error_code != 0) {
+    ant_inspector_network_fail(
+      req->network_request_id,
+      error_message ? error_message : "fetch failed",
+      result == ANT_HTTP_RESULT_ABORTED,
+      "Fetch"
+    );
+    
     reason = fetch_transport_reason(req, result, error_message);
     if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
     else fetch_reject(req, reason);
+    
     fetch_request_release(req);
     return;
   }
@@ -591,6 +625,7 @@ static void fetch_http_on_complete(
     }
   } else fetch_reject(req, fetch_type_error(js, "fetch completed without a response"));
 
+  ant_inspector_network_finish(req->network_request_id, req->network_encoded_length);
   fetch_request_release(req);
 }
 
@@ -814,6 +849,17 @@ static void fetch_start_http(fetch_request_t *req) {
   options.body = request->body_data;
   options.body_len = request->body_size;
   options.chunked_body = request->body_is_stream;
+  
+  req->network_encoded_length = 0;
+  req->network_request_id = ant_inspector_network_request(
+    request->method, url,
+    "Fetch", "Fetch",
+    request->has_body && !request->body_is_stream && request->body_data && request->body_size > 0,
+    headers
+  );
+  
+  if (request->has_body && !request->body_is_stream && request->body_data && request->body_size > 0)
+    ant_inspector_network_set_request_body(req->network_request_id, request->body_data, request->body_size);
 
   rc = ant_http_request_start(
     uv_default_loop(), &options,
@@ -825,6 +871,7 @@ static void fetch_start_http(fetch_request_t *req) {
   free(url);
 
   if (rc != 0) {
+    ant_inspector_network_fail(req->network_request_id, uv_strerror(rc), false, "Fetch");
     fetch_reject(req, fetch_type_error(req->js, uv_strerror(rc)));
     fetch_request_release(req);
     return;

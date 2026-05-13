@@ -62,10 +62,9 @@ static inline ant_value_t crypto_random_error(ant_t *js) {
   return js_mkerr(js, "secure random generation failed");
 }
 
-static ant_value_t crypto_format_uuid_v4(ant_t *js, const uint8_t uuid[16]) {
+static inline void crypto_format_uuid_v4(const uint8_t uuid[16], char out[37]) {
   static char lut[256][2];
   static bool lut_init = false;
-  char uuid_str[36];
 
   if (!lut_init) {
     static const char hex[] = "0123456789abcdef";
@@ -76,32 +75,42 @@ static ant_value_t crypto_format_uuid_v4(ant_t *js, const uint8_t uuid[16]) {
     lut_init = true;
   }
 
-  memcpy(uuid_str + 0,  lut[uuid[0]], 2);
-  memcpy(uuid_str + 2,  lut[uuid[1]], 2);
-  memcpy(uuid_str + 4,  lut[uuid[2]], 2);
-  memcpy(uuid_str + 6,  lut[uuid[3]], 2);
+  memcpy(out + 0,  lut[uuid[0]], 2);
+  memcpy(out + 2,  lut[uuid[1]], 2);
+  memcpy(out + 4,  lut[uuid[2]], 2);
+  memcpy(out + 6,  lut[uuid[3]], 2);
   
-  uuid_str[8] = '-';
-  memcpy(uuid_str + 9,  lut[uuid[4]], 2);
-  memcpy(uuid_str + 11, lut[uuid[5]], 2);
+  out[8] = '-';
+  memcpy(out + 9,  lut[uuid[4]], 2);
+  memcpy(out + 11, lut[uuid[5]], 2);
   
-  uuid_str[13] = '-';
-  memcpy(uuid_str + 14, lut[uuid[6]], 2);
-  memcpy(uuid_str + 16, lut[uuid[7]], 2);
+  out[13] = '-';
+  memcpy(out + 14, lut[uuid[6]], 2);
+  memcpy(out + 16, lut[uuid[7]], 2);
   
-  uuid_str[18] = '-';
-  memcpy(uuid_str + 19, lut[uuid[8]], 2);
-  memcpy(uuid_str + 21, lut[uuid[9]], 2);
+  out[18] = '-';
+  memcpy(out + 19, lut[uuid[8]], 2);
+  memcpy(out + 21, lut[uuid[9]], 2);
   
-  uuid_str[23] = '-';
-  memcpy(uuid_str + 24, lut[uuid[10]], 2);
-  memcpy(uuid_str + 26, lut[uuid[11]], 2);
-  memcpy(uuid_str + 28, lut[uuid[12]], 2);
-  memcpy(uuid_str + 30, lut[uuid[13]], 2);
-  memcpy(uuid_str + 32, lut[uuid[14]], 2);
-  memcpy(uuid_str + 34, lut[uuid[15]], 2);
+  out[23] = '-';
+  memcpy(out + 24, lut[uuid[10]], 2);
+  memcpy(out + 26, lut[uuid[11]], 2);
+  memcpy(out + 28, lut[uuid[12]], 2);
+  memcpy(out + 30, lut[uuid[13]], 2);
+  memcpy(out + 32, lut[uuid[14]], 2);
+  memcpy(out + 34, lut[uuid[15]], 2);
+  out[36] = '\0';
+}
 
-  return js_mkstr(js, uuid_str, sizeof(uuid_str));
+int crypto_random_uuid(char out[37]) {
+  uint8_t uuid[16];
+  if (!out || crypto_fill_random(uuid, sizeof(uuid)) < 0) return -1;
+
+  uuid[6] = (uint8_t)((uuid[6] & 0x0f) | 0x40);
+  uuid[8] = (uint8_t)((uuid[8] & 0x3f) | 0x80);
+
+  crypto_format_uuid_v4(uuid, out);
+  return 0;
 }
 
 static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len) {
@@ -351,13 +360,9 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
 
 // crypto.randomUUID()
 static ant_value_t js_crypto_random_uuid(ant_t *js, ant_value_t *args, int nargs) {
-  uint8_t uuid[16];
-  if (crypto_fill_random(uuid, sizeof(uuid)) < 0) return crypto_random_error(js);
-
-  uuid[6] = (uint8_t)((uuid[6] & 0x0f) | 0x40);
-  uuid[8] = (uint8_t)((uuid[8] & 0x3f) | 0x80);
-
-  return crypto_format_uuid_v4(js, uuid);
+  char uuid[37];
+  if (crypto_random_uuid(uuid) < 0) return crypto_random_error(js);
+  return js_mkstr(js, uuid, 36);
 }
 
 // crypto.randomUUIDv7()

@@ -9,11 +9,12 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "common.h"
 #include "errors.h"
-#include "internal.h"
-#include "ptr.h"
 #include "runtime.h"
+#include "internal.h"
+#include "inspector.h"
 #include "silver/engine.h"
 
 #include "http/eventsource.h"
@@ -32,6 +33,8 @@ typedef struct eventsource_state_s {
   ant_value_t obj;
   ant_http_request_t *request;
   eventsource_timer_t *timer;
+  uint64_t network_request_id;
+  size_t network_encoded_length;
   ant_sse_parser_t parser;
   char *url;
   char *last_event_id;
@@ -237,6 +240,14 @@ static void eventsource_http_on_response(ant_http_request_t *req, const ant_http
   const char *content_type = eventsource_find_header(resp->headers, "content-type");
 
   if (!es || es->closed) return;
+  
+  ant_inspector_network_response(
+    es->network_request_id, es->url,
+    resp->status, resp->status_text,
+    content_type ? content_type : "text/event-stream",
+    "EventSource", resp->headers
+  );
+  
   if (resp->status != 200 || !eventsource_content_type_ok(content_type)) {
     eventsource_emit_error_once(es);
     ant_http_request_cancel(req);
@@ -252,11 +263,16 @@ static void eventsource_http_on_response(ant_http_request_t *req, const ant_http
 static void eventsource_http_on_body(ant_http_request_t *req, const uint8_t *chunk, size_t len, void *user_data) {
   eventsource_state_t *es = (eventsource_state_t *)user_data;
   if (!es || es->closed || !es->opened_request) return;
+  
+  es->network_encoded_length += len;
+  ant_inspector_network_append_response_body(es->network_request_id, chunk, len);
+  
   if (!ant_sse_parser_feed(&es->parser, (const char *)chunk, len, eventsource_on_message, es)) {
     eventsource_emit_error_once(es);
     ant_http_request_cancel(req);
     return;
   }
+  
   if (es->parser.has_retry) es->retry_ms = es->parser.retry;
 }
 
@@ -275,6 +291,19 @@ static void eventsource_http_on_complete(
   if (!es) return;
   es->request = NULL;
   es->opened_request = false;
+  if (es->network_request_id) {
+    if (result == ANT_HTTP_RESULT_OK && error_code == 0) ant_inspector_network_finish(
+      es->network_request_id, 
+      es->network_encoded_length
+    ); else ant_inspector_network_fail(
+      es->network_request_id,
+      error_message ? error_message : (es->closed ? "EventSource closed" : "EventSource connection failed"),
+      es->closed || result == ANT_HTTP_RESULT_ABORTED,
+      "EventSource"
+    );
+    es->network_request_id = 0;
+    es->network_encoded_length = 0;
+  }
 
   if (!es->closed) {
     if (result != ANT_HTTP_RESULT_ABORTED) eventsource_emit_error_once(es);
@@ -303,6 +332,13 @@ static void eventsource_start_request(eventsource_state_t *es) {
     accept.next = &last_id;
   }
 
+  es->network_encoded_length = 0;
+  es->network_request_id = ant_inspector_network_request(
+    "GET", es->url,
+    "EventSource", "EventSource",
+    false, &accept
+  );
+
   options.method = "GET";
   options.url = es->url;
   options.headers = &accept;
@@ -316,6 +352,8 @@ static void eventsource_start_request(eventsource_state_t *es) {
   );
   
   if (rc != 0) {
+    ant_inspector_network_fail(es->network_request_id, uv_strerror(rc), false, "EventSource");
+    es->network_request_id = 0;
     es->request = NULL;
     eventsource_emit_error_once(es);
     es->error_emitted_for_request = false;
