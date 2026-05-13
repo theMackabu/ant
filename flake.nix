@@ -1,5 +1,5 @@
 {
-  description = "Ant JavaScript runtime";
+  description = "javascript for 🐜's, a tiny runtime with big ambitions";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
