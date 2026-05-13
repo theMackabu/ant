@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include "ant.h"
 #include "bind.h"
 #include "reactor.h"

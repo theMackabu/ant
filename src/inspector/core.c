@@ -3,6 +3,7 @@
 #include "json.h"
 
 #include <stdarg.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -125,6 +126,7 @@ static void inspector_write_free(uv_write_t *req, int status) {
 
 void inspector_send_raw(inspector_client_t *client, const char *data, size_t len) {
   if (!client || !data) return;
+  if (len > UINT_MAX) return;
   inspector_write_t *wr = calloc(1, sizeof(*wr));
   
   if (!wr) return;
@@ -136,7 +138,7 @@ void inspector_send_raw(inspector_client_t *client, const char *data, size_t len
   }
   
   memcpy(wr->buf.base, data, len);
-  wr->buf.len = len;
+  wr->buf = uv_buf_init(wr->buf.base, (unsigned int)len);
   
   if (uv_write(&wr->req, (uv_stream_t *)&client->handle, &wr->buf, 1, inspector_write_free) != 0) {
     free(wr->buf.base);

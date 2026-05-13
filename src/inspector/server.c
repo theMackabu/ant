@@ -5,6 +5,7 @@
 #include "json.h"
 #include "modules/crypto.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,8 +271,9 @@ static void inspector_process_http(inspector_client_t *client) {
 }
 
 static void inspector_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  buf->base = malloc(suggested_size);
-  buf->len = suggested_size;
+  size_t len = suggested_size > UINT_MAX ? UINT_MAX : suggested_size;
+  buf->base = malloc(len);
+  *buf = uv_buf_init(buf->base, buf->base ? (unsigned int)len : 0);
 }
 
 static void inspector_client_closed(uv_handle_t *handle) {
