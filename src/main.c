@@ -27,6 +27,10 @@
 #include "silver/vm.h"
 #include "messages.h"
 
+#ifdef _WIN32
+#include "output.h"
+#endif
+
 #include "cli/pkg.h"
 #include "cli/misc.h"
 #include "cli/version.h"
