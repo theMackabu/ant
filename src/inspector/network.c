@@ -7,6 +7,50 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void inspector_network_entry_free(inspector_network_entry_t *entry) {
+  if (!entry) return;
+  free(entry->request_body);
+  free(entry->response_body);
+  free(entry);
+}
+
+static void inspector_network_prune_entries(void) {
+  if (g_inspector.network_entry_count <= k_inspector_network_entry_limit) return;
+
+  size_t target = (k_inspector_network_entry_limit * 3) / 4;
+  if (target == 0) target = k_inspector_network_entry_limit;
+
+  inspector_network_entry_t *keep_tail = g_inspector.network_entries;
+  for (size_t i = 1; keep_tail && i < target; i++) keep_tail = keep_tail->next;
+
+  if (!keep_tail) {
+    g_inspector.network_entry_count = 0;
+    return;
+  }
+
+  inspector_network_entry_t *evict = keep_tail->next;
+  keep_tail->next = NULL;
+  while (evict) {
+    inspector_network_entry_t *next = evict->next;
+    inspector_network_entry_free(evict);
+    evict = next;
+  }
+  g_inspector.network_entry_count = target;
+}
+
+static bool inspector_network_client_ready(const inspector_client_t *client) {
+  return client &&
+         client->network_enabled &&
+         uv_stream_get_write_queue_size((const uv_stream_t *)&client->handle) <= k_inspector_network_write_queue_limit;
+}
+
+static bool inspector_network_has_ready_client(void) {
+  for (const inspector_client_t *c = g_inspector.clients; c; c = c->next) {
+    if (inspector_network_client_ready(c)) return true;
+  }
+  return false;
+}
+
 static inspector_network_entry_t *inspector_network_entry_for_id(uint64_t id, bool create) {
   if (id == 0) return NULL;
   for (inspector_network_entry_t *entry = g_inspector.network_entries; entry; entry = entry->next) {
@@ -19,6 +63,8 @@ static inspector_network_entry_t *inspector_network_entry_for_id(uint64_t id, bo
   entry->id = id;
   entry->next = g_inspector.network_entries;
   g_inspector.network_entries = entry;
+  g_inspector.network_entry_count++;
+  inspector_network_prune_entries();
   return entry;
 }
 
@@ -71,7 +117,8 @@ static void inspector_network_store_body(
 
 static void inspector_notify_network(const char *json) {
   for (inspector_client_t *c = g_inspector.clients; c; c = c->next) {
-    if (c->network_enabled) inspector_send_ws(c, json);
+    if (!inspector_network_client_ready(c)) continue;
+    inspector_send_ws(c, json);
   }
 }
 
@@ -198,7 +245,7 @@ uint64_t ant_inspector_network_request(
   bool has_post_data,
   const ant_http_header_t *headers
 ) {
-  if (!g_inspector.started || !g_inspector.attached) return 0;
+  if (!g_inspector.started || !g_inspector.attached || !inspector_network_has_ready_client()) return 0;
   uint64_t request_id = ++g_inspector.next_network_request_id;
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);
@@ -355,7 +402,7 @@ void ant_inspector_network_append_response_body(uint64_t request_id, const uint8
 }
 
 uint64_t ant_inspector_websocket_created(const char *url) {
-  if (!g_inspector.started || !g_inspector.attached) return 0;
+  if (!g_inspector.started || !g_inspector.attached || !inspector_network_has_ready_client()) return 0;
   uint64_t request_id = ++g_inspector.next_network_request_id;
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);

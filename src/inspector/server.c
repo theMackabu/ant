@@ -383,6 +383,7 @@ void ant_inspector_stop(void) {
     free(entry->response_body);
     free(entry);
   }
+  g_inspector.network_entry_count = 0;
   g_inspector.started = false;
 }
 

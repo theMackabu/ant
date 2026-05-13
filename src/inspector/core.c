@@ -11,6 +11,9 @@
 inspector_state_t g_inspector = {0};
 
 const size_t k_inspector_network_body_limit = 10 * 1024 * 1024;
+const size_t k_inspector_network_entry_limit = 1024;
+
+const size_t k_inspector_network_write_queue_limit = 4 * 1024 * 1024;
 const size_t k_inspector_console_event_limit = 200;
 
 static bool sbuf_reserve(sbuf_t *b, size_t extra) {

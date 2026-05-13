@@ -83,6 +83,7 @@ typedef struct {
   inspector_console_event_t *console_events_tail;
   inspector_script_t *scripts;
   size_t console_event_count;
+  size_t network_entry_count;
   uint32_t next_object_id;
   uint64_t next_network_request_id;
   int next_script_id;
@@ -95,7 +96,10 @@ typedef struct {
 } inspector_write_t;
 
 extern inspector_state_t g_inspector;
+
 extern const size_t k_inspector_network_body_limit;
+extern const size_t k_inspector_network_entry_limit;
+extern const size_t k_inspector_network_write_queue_limit;
 extern const size_t k_inspector_console_event_limit;
 
 bool sbuf_append_len(sbuf_t *b, const char *s, size_t len);
