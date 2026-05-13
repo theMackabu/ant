@@ -1,6 +1,7 @@
 #include "bind.h"
 #include "base64.h"
 #include "inspector.h"
+#include "json.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
@@ -145,31 +146,29 @@ void inspector_get_response_body(inspector_client_t *client, int id, yyjson_val 
   uint64_t request_id = inspector_request_id_param(params);
   inspector_network_entry_t *entry = inspector_network_entry_for_id(request_id, false);
   sbuf_t b = {0};
+  inspector_json_t json;
   size_t out_len = 0;
   char *encoded = NULL;
+  bool ok = false;
 
-  if (!entry || !entry->response_body || entry->response_body_len == 0) {
-    inspector_send_response_obj(client, id, "{\"body\":\"\",\"base64Encoded\":false}");
-    return;
+  if (!entry || !entry->response_body || entry->response_body_len == 0) out_len = 0; else {
+    encoded = ant_base64_encode(entry->response_body, entry->response_body_len, &out_len);
+    if (!encoded) { inspector_send_error(client, id, -32000, "Out of memory"); return; }
   }
 
-  encoded = ant_base64_encode(entry->response_body, entry->response_body_len, &out_len);
-  if (!encoded) {
-    inspector_send_error(client, id, -32000, "Out of memory");
-    return;
-  }
+  inspector_json_init(&json, &b);
+  if (!inspector_json_begin_object(&json)) goto done;
+  if (!inspector_json_key(&json, "body")) goto done;
+  if (!inspector_json_string_len(&json, encoded ? encoded : "", out_len)) goto done;
+  if (!inspector_json_key(&json, "base64Encoded")) goto done;
+  if (!inspector_json_bool(&json, encoded != NULL)) goto done;
+  if (!inspector_json_end_object(&json)) goto done;
+  ok = true;
 
-  if (!sbuf_append(&b, "{\"body\":") ||
-      !sbuf_json_string_len(&b, encoded, out_len) ||
-      !sbuf_append(&b, ",\"base64Encoded\":true}")) {
-    free(encoded);
-    free(b.data);
-    inspector_send_error(client, id, -32000, "Out of memory");
-    return;
-  }
-
+done:
+  if (ok) inspector_send_response_obj(client, id, b.data);
+  else inspector_send_error(client, id, -32000, "Out of memory");
   free(encoded);
-  inspector_send_response_obj(client, id, b.data);
   free(b.data);
 }
 
@@ -177,21 +176,18 @@ void inspector_get_request_post_data(inspector_client_t *client, int id, yyjson_
   uint64_t request_id = inspector_request_id_param(params);
   inspector_network_entry_t *entry = inspector_network_entry_for_id(request_id, false);
   sbuf_t b = {0};
+  inspector_json_t json;
+  inspector_json_init(&json, &b);
+  const char *body = entry && entry->request_body ? (const char *)entry->request_body : "";
+  size_t body_len = entry && entry->request_body ? entry->request_body_len : 0;
+  bool ok =
+    inspector_json_begin_object(&json) &&
+    inspector_json_key(&json, "postData") &&
+    inspector_json_string_len(&json, body, body_len) &&
+    inspector_json_end_object(&json);
 
-  if (!entry || !entry->request_body || entry->request_body_len == 0) {
-    inspector_send_response_obj(client, id, "{\"postData\":\"\"}");
-    return;
-  }
-
-  if (!sbuf_append(&b, "{\"postData\":") ||
-      !sbuf_json_string_len(&b, (const char *)entry->request_body, entry->request_body_len) ||
-      !sbuf_append(&b, "}")) {
-    free(b.data);
-    inspector_send_error(client, id, -32000, "Out of memory");
-    return;
-  }
-
-  inspector_send_response_obj(client, id, b.data);
+  if (ok) inspector_send_response_obj(client, id, b.data);
+  else inspector_send_error(client, id, -32000, "Out of memory");
   free(b.data);
 }
 uint64_t ant_inspector_network_request(

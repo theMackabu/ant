@@ -1,5 +1,6 @@
 #include "bind.h"
 #include "http/websocket.h"
+#include "json.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -151,8 +152,18 @@ void inspector_send_ws(inspector_client_t *client, const char *json) {
 
 void inspector_send_response_obj(inspector_client_t *client, int id, const char *result_obj) {
   sbuf_t b = {0};
-  if (sbuf_appendf(&b, "{\"id\":%d,\"result\":%s}", id, result_obj ? result_obj : "{}"))
+  inspector_json_t json;
+  inspector_json_init(&json, &b);
+  if (
+    inspector_json_begin_object(&json) &&
+    inspector_json_key(&json, "id") &&
+    inspector_json_int(&json, id) &&
+    inspector_json_key(&json, "result") &&
+    inspector_json_raw(&json, result_obj ? result_obj : "{}") &&
+    inspector_json_end_object(&json)
+  ) {
     inspector_send_ws(client, b.data);
+  }
   free(b.data);
 }
 
@@ -162,11 +173,23 @@ void inspector_send_empty_result(inspector_client_t *client, int id) {
 
 void inspector_send_error(inspector_client_t *client, int id, int code, const char *message) {
   sbuf_t b = {0};
+  inspector_json_t json;
+  inspector_json_init(&json, &b);
   if (
-    sbuf_appendf(&b, "{\"id\":%d,\"error\":{\"code\":%d,\"message\":", id, code) &&
-    sbuf_json_string(&b, message ? message : "Inspector error") &&
-    sbuf_append(&b, "}}")
-  ) inspector_send_ws(client, b.data);
+    inspector_json_begin_object(&json) &&
+    inspector_json_key(&json, "id") &&
+    inspector_json_int(&json, id) &&
+    inspector_json_key(&json, "error") &&
+    inspector_json_begin_object(&json) &&
+    inspector_json_key(&json, "code") &&
+    inspector_json_int(&json, code) &&
+    inspector_json_key(&json, "message") &&
+    inspector_json_string(&json, message ? message : "Inspector error") &&
+    inspector_json_end_object(&json) &&
+    inspector_json_end_object(&json)
+  ) {
+    inspector_send_ws(client, b.data);
+  }
   free(b.data);
 }
 

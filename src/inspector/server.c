@@ -2,6 +2,7 @@
 #include "internal.h"
 #include "inspector.h"
 #include "http/websocket.h"
+#include "json.h"
 #include "modules/crypto.h"
 
 #include <stdio.h>
@@ -104,16 +105,12 @@ static bool request_path_matches_uuid(const char *req) {
 
 static bool inspector_append_target_url(sbuf_t *b, const char *file) {
   if (!file || !*file || strcmp(file, "[repl]") == 0 || strcmp(file, "ant") == 0)
-    return sbuf_json_string(b, "file:///");
-  if (inspector_is_url_like(file)) return sbuf_json_string(b, file);
+    return sbuf_append(b, "file:///");
+  if (inspector_is_url_like(file)) return sbuf_append(b, file);
   if (file[0] == '/') {
-    if (!sbuf_append(b, "\"file://")) return false;
-    if (!sbuf_append(b, file)) return false;
-    return sbuf_append(b, "\"");
+    return sbuf_append(b, "file://") && sbuf_append(b, file);
   }
-  if (!sbuf_append(b, "\"file:///")) return false;
-  if (!sbuf_append(b, file)) return false;
-  return sbuf_append(b, "\"");
+  return sbuf_append(b, "file:///") && sbuf_append(b, file);
 }
 
 static bool inspector_append_devtools_url(sbuf_t *b) {
@@ -132,28 +129,54 @@ static bool inspector_append_browser_devtools_url(sbuf_t *b) {
 
 static char *json_list_response(void) {
   sbuf_t b = {0};
+  sbuf_t devtools = {0};
+  sbuf_t target = {0};
+  sbuf_t websocket = {0};
+  
   inspector_script_t *entry = inspector_entry_script();
   const char *file = entry && entry->url
     ? entry->url
     : (g_inspector.js && g_inspector.js->filename ? g_inspector.js->filename : "ant");
   uv_pid_t pid = uv_os_getpid();
-  if (!sbuf_append(&b, "[")) goto fail;
-  if (!sbuf_append(&b, "{\"description\":\"ant[")) goto fail;
-  if (!sbuf_appendf(&b, "%d", (int)pid)) goto fail;
-  if (!sbuf_append(&b, "]\",\"devtoolsFrontendUrl\":\"")) goto fail;
-  if (!inspector_append_devtools_url(&b)) goto fail;
-  if (!sbuf_append(&b, "\",\"id\":\"")) goto fail;
-  if (!sbuf_append(&b, g_inspector.uuid)) goto fail;
-  if (!sbuf_append(&b, "\",\"title\":\"ant[")) goto fail;
-  if (!sbuf_appendf(&b, "%d", (int)pid)) goto fail;
-  if (!sbuf_append(&b, "]\"")) goto fail;
-  if (!sbuf_append(&b, ",\"type\":\"node\",\"url\":")) goto fail;
-  if (!inspector_append_target_url(&b, file)) goto fail;
-  if (!sbuf_append(&b, ",\"webSocketDebuggerUrl\":\"ws://")) goto fail;
-  if (!sbuf_append(&b, g_inspector.host)) goto fail;
-  if (!sbuf_appendf(&b, ":%d/%s\"}]", g_inspector.port, g_inspector.uuid)) goto fail;
+
+  if (!inspector_append_devtools_url(&devtools)) goto fail;
+  if (!inspector_append_target_url(&target, file)) goto fail;
+  if (!sbuf_append(&websocket, "ws://")) goto fail;
+  if (!sbuf_append(&websocket, g_inspector.host)) goto fail;
+  if (!sbuf_appendf(&websocket, ":%d/%s", g_inspector.port, g_inspector.uuid)) goto fail;
+
+  char title[64];
+  snprintf(title, sizeof(title), "ant[%d]", (int)pid);
+
+  inspector_json_t json;
+  inspector_json_init(&json, &b);
+  if (!inspector_json_begin_array(&json)) goto fail;
+  if (!inspector_json_begin_object(&json)) goto fail;
+  if (!inspector_json_key(&json, "description")) goto fail;
+  if (!inspector_json_string(&json, title)) goto fail;
+  if (!inspector_json_key(&json, "devtoolsFrontendUrl")) goto fail;
+  if (!inspector_json_string(&json, devtools.data)) goto fail;
+  if (!inspector_json_key(&json, "id")) goto fail;
+  if (!inspector_json_string(&json, g_inspector.uuid)) goto fail;
+  if (!inspector_json_key(&json, "title")) goto fail;
+  if (!inspector_json_string(&json, title)) goto fail;
+  if (!inspector_json_key(&json, "type")) goto fail;
+  if (!inspector_json_string(&json, "node")) goto fail;
+  if (!inspector_json_key(&json, "url")) goto fail;
+  if (!inspector_json_string(&json, target.data)) goto fail;
+  if (!inspector_json_key(&json, "webSocketDebuggerUrl")) goto fail;
+  if (!inspector_json_string(&json, websocket.data)) goto fail;
+  if (!inspector_json_end_object(&json)) goto fail;
+  if (!inspector_json_end_array(&json)) goto fail;
+
+  free(devtools.data);
+  free(target.data);
+  free(websocket.data);
   return b.data;
 fail:
+  free(devtools.data);
+  free(target.data);
+  free(websocket.data);
   free(b.data);
   return NULL;
 }

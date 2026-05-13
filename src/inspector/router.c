@@ -1,6 +1,8 @@
 #include "bind.h"
 #include "gc.h"
+#include "json.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef void (*inspector_route_fn)(
@@ -66,10 +68,41 @@ static void route_get_isolate_id(inspector_client_t *client, int id, yyjson_val 
 }
 
 static void route_schema_domains(inspector_client_t *client, int id, yyjson_val *params) {
-  inspector_send_response_obj(
-    client, id,
-    "{\"domains\":[{\"name\":\"Runtime\",\"version\":\"1.3\"},{\"name\":\"Console\",\"version\":\"1.3\"},{\"name\":\"Debugger\",\"version\":\"1.3\"},{\"name\":\"Network\",\"version\":\"1.3\"},{\"name\":\"HeapProfiler\",\"version\":\"1.3\"},{\"name\":\"Profiler\",\"version\":\"1.3\"}]}"
-  );
+  static const char *domains[] = {
+    "Runtime",
+    "Console",
+    "Debugger",
+    "Network",
+    "HeapProfiler",
+    "Profiler",
+  };
+  
+  sbuf_t b = {0};
+  inspector_json_t json;
+  inspector_json_init(&json, &b);
+  bool ok = false;
+
+  if (!inspector_json_begin_object(&json)) goto done;
+  if (!inspector_json_key(&json, "domains")) goto done;
+  if (!inspector_json_begin_array(&json)) goto done;
+  
+  for (size_t i = 0; i < sizeof(domains) / sizeof(domains[0]); i++) {
+    if (!inspector_json_begin_object(&json)) goto done;
+    if (!inspector_json_key(&json, "name")) goto done;
+    if (!inspector_json_string(&json, domains[i])) goto done;
+    if (!inspector_json_key(&json, "version")) goto done;
+    if (!inspector_json_string(&json, "1.3")) goto done;
+    if (!inspector_json_end_object(&json)) goto done;
+  }
+  
+  if (!inspector_json_end_array(&json)) goto done;
+  if (!inspector_json_end_object(&json)) goto done;
+  ok = true;
+
+done:
+  if (ok) inspector_send_response_obj(client, id, b.data);
+  else inspector_send_error(client, id, -32000, "Out of memory");
+  free(b.data);
 }
 
 static void route_network_get_response_body(inspector_client_t *client, int id, yyjson_val *params) {
