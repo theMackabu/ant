@@ -101,7 +101,6 @@ static inline void sv_op_set_brand(sv_vm_t *vm, uint8_t *ip) {
     js_set_slot(obj, SLOT_BRAND, js_mknum((double)brand));
 }
 
-// TODO: reduce duplication with regex.c
 static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   ant_value_t pattern = vm->stack[vm->sp - 2];
   ant_value_t flags = vm->stack[vm->sp - 1];
@@ -112,6 +111,7 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   if (vtype(regexp_proto) == T_OBJ) js_set_proto_init(regexp_obj, regexp_proto);
 
   js_mkprop_fast(js, regexp_obj, "source", 6, pattern);
+  js_set_slot(regexp_obj, SLOT_DATA, pattern);
 
   ant_offset_t flen = 0;
   const char *fstr = "";
