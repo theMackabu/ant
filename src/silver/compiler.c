@@ -2015,6 +2015,17 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   );
 
   if (op == TOK_ASSIGN) {
+    if (
+      target->type == N_MEMBER && !(target->flags & 1) &&
+      target->right && target->right->str &&
+      is_ident_str(target->right->str, target->right->len, "exec", 4)
+    ) c->regexp_exec_write_seen = true;
+    if (
+      target->type == N_MEMBER && !(target->flags & 1) &&
+      target->right && target->right->str &&
+      is_ident_str(target->right->str, target->right->len, "replace", 7)
+    ) c->regexp_replace_write_seen = true;
+
     if (target->type == N_MEMBER && !(target->flags & 1) && is_private_name_node(target->right)) {
       compile_expr(c, target->left);
       compile_expr(c, node->right);
@@ -2585,6 +2596,70 @@ static bool compile_call_array_includes_intrinsic(
   return true;
 }
 
+static bool regexp_literal_exec_arg_is_simple(sv_compiler_t *c, sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_STRING:
+    case N_NUMBER:
+    case N_BOOL:
+    case N_NULL:
+    case N_UNDEF:
+    case N_THIS:
+      return true;
+    case N_IDENT:
+      return resolve_local(c, node->str, node->len) >= 0 ||
+             resolve_upvalue(c, node->str, node->len) >= 0;
+    default:
+      return false;
+  }
+}
+
+static bool compile_regexp_literal_exec_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count != 1) return false;
+  if (c->regexp_exec_write_seen) return false;
+
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "exec", 4)) return false;
+  if (!callee->left || callee->left->type != N_REGEXP) return false;
+  if (!regexp_literal_exec_arg_is_simple(c, node->args.items[0])) return false;
+
+  sv_ast_t *rx = callee->left;
+  emit_constant(c, js_mkstr_permanent(c->js, rx->str ? rx->str : "", rx->len));
+  emit_constant(c, js_mkstr_permanent(c->js, rx->aux ? rx->aux : "", rx->aux_len));
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_RE_LITERAL_EXEC);
+  return true;
+}
+
+static bool compile_string_regexp_literal_replace_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count != 2) return false;
+  if (c->regexp_replace_write_seen || c->regexp_exec_write_seen) return false;
+
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "replace", 7)) return false;
+  if (!regexp_literal_exec_arg_is_simple(c, callee->left)) return false;
+
+  sv_ast_t *rx = node->args.items[0];
+  sv_ast_t *replacement = node->args.items[1];
+  if (!rx || rx->type != N_REGEXP || !replacement || replacement->type != N_STRING) return false;
+  if (replacement->str && memchr(replacement->str, '$', replacement->len)) return false;
+
+  compile_expr(c, callee->left);
+  emit_constant(c, js_mkstr_permanent(c->js, rx->str ? rx->str : "", rx->len));
+  emit_constant(c, js_mkstr_permanent(c->js, rx->aux ? rx->aux : "", rx->aux_len));
+  compile_expr(c, replacement);
+  emit_op(c, OP_STR_RE_LITERAL_REPLACE);
+  return true;
+}
+
 static bool compile_regexp_exec_truthy_intrinsic(
   sv_compiler_t *c, sv_ast_t *node
 ) {
@@ -2683,6 +2758,12 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
 
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_regexp_literal_exec_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_string_regexp_literal_replace_intrinsic(c, node, has_spread))
     return;
 
   if (

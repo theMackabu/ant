@@ -35,6 +35,7 @@
 #include "silver/compiler.h"
 #include "silver/engine.h"
 #include "silver/ops/using.h"
+#include "modules/regex.h"
 
 #include <uv.h>
 #include <assert.h>
@@ -3973,6 +3974,11 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
 
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
+  
+  if (klen == 4 && memcmp(key, "exec", 4) == 0)
+    regexp_note_exec_property_write();
+  else if (klen == 7 && memcmp(key, "replace", 7) == 0)
+    regexp_note_replace_property_write();
 
   if (array_obj_ptr(obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {
     ant_arguments_state_t *args_state = js_arguments_state(obj);

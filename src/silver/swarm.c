@@ -2206,6 +2206,8 @@ static bool jit_is_eligible(sv_func_t *func) {
         if (vtype(cv) != T_NTARG) return false;
         break;
       }
+      case OP_RE_LITERAL_EXEC:
+      case OP_STR_RE_LITERAL_REPLACE:
       case OP_RE_EXEC_TRUTHY:
         eligible = false;
         break;

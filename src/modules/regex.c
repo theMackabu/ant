@@ -53,18 +53,34 @@ enum {
 
 static regex_cache_entry_t *regex_cache = NULL;
 static compiled_regex_cache_entry_t **compiled_regex_cache = NULL;
+
 static pcre2_match_context *regex_match_ctx = NULL;
 static pcre2_jit_stack *regex_jit_stack = NULL;
+
 static ant_value_t regexp_matchall_iter_proto_val = 0;
 static ant_value_t regexp_ctor_value = 0;
 static ant_value_t regexp_empty_string = 0;
 static ant_value_t regexp_static_values[11] = {0};
+
 static bool regexp_static_roots_registered = false;
+static bool regexp_exec_write_guard_armed = false;
+static bool regexp_exec_property_written = false;
+static bool regexp_replace_property_written = false;
 
 static size_t regex_cache_count = 0;
 static size_t regex_cache_cap = 0;
 static size_t compiled_regex_cache_count = 0;
 static size_t compiled_regex_cache_cap = 0;
+
+void regexp_note_exec_property_write(void) {
+  if (regexp_exec_write_guard_armed)
+    regexp_exec_property_written = true;
+}
+
+void regexp_note_replace_property_write(void) {
+  if (regexp_exec_write_guard_armed)
+    regexp_replace_property_written = true;
+}
 
 static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t flen) {
   uint8_t mask = 0;
@@ -1875,6 +1891,104 @@ static ant_value_t regexp_search_plain_literal_fast(
   return tov((double)ovector[0]);
 }
 
+static bool regexp_literal_exec_builtin_guard(ant_t *js) {
+  if (regexp_exec_property_written) return false;
+
+  ant_value_t ctor = js_getprop_fallback(js, js_glob(js), "RegExp");
+  if (is_err(ctor)) return false;
+  
+  ant_value_t proto = js_getprop_fallback(js, ctor, "prototype");
+  if (is_err(proto)) return false;
+  if (!is_object_type(proto)) return false;
+
+  ant_value_t exec_fn = js_getprop_fallback(js, proto, "exec");
+  if (is_err(exec_fn)) return false;
+  
+  return vtype(exec_fn) == T_CFUNC && js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec);
+}
+
+static bool regexp_literal_exec_fast_parts(
+  ant_t *js,
+  ant_value_t pattern,
+  ant_value_t flags,
+  const char **needle,
+  ant_offset_t *needle_len
+) {
+  if (vtype(pattern) != T_STR || vtype(flags) != T_STR) return false;
+
+  ant_offset_t flags_len, flags_off = vstr(js, flags, &flags_len);
+  uint8_t flags_mask = regexp_parse_flags_mask((const char *)(uintptr_t)flags_off, flags_len);
+  
+  if (
+    flags_mask & 
+    (REGEXP_FLAG_HAS_INDICES | REGEXP_FLAG_IGNORE_CASE | REGEXP_FLAG_STICKY | REGEXP_FLAG_UNICODE_SET)
+  ) return false;
+
+  ant_offset_t pattern_off = vstr(js, pattern, needle_len);
+  *needle = (const char *)(uintptr_t)pattern_off;
+  
+  return regex_source_is_plain_literal(*needle, *needle_len);
+}
+
+static ant_value_t regexp_literal_object(ant_t *js, ant_value_t pattern, ant_value_t flags) {
+  ant_value_t regexp_obj = mkobj(js, 0);
+  if (is_err(regexp_obj)) return regexp_obj;
+
+  ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
+  if (is_object_type(regexp_proto)) js_set_proto_init(regexp_obj, regexp_proto);
+
+  ant_offset_t pattern_len; vstr(js, pattern, &pattern_len);
+  if (is_err(js_mkprop_fast(js, regexp_obj, "source", 6, pattern))) return js_mkerr(js, "oom");
+  js_set_slot(regexp_obj, SLOT_DATA, pattern);
+
+  ant_offset_t flags_len, flags_off = vstr(js, flags, &flags_len);
+  regexp_init_flags(js, regexp_obj, (const char *)(uintptr_t)flags_off, flags_len, true);
+  
+  return regexp_obj;
+}
+
+ant_value_t regexp_literal_exec_call(
+  ant_t *js,
+  ant_value_t pattern,
+  ant_value_t flags,
+  ant_value_t arg
+) {
+  if (
+    vtype(arg) == T_STR &&
+    regexp_literal_exec_builtin_guard(js)
+  ) {
+    const char *needle;
+    ant_offset_t needle_len;
+    if (regexp_literal_exec_fast_parts(js, pattern, flags, &needle, &needle_len)) {
+      ant_offset_t str_len, str_off = vstr(js, arg, &str_len);
+      const char *str_ptr = (const char *)(uintptr_t)str_off;
+      const char *match = find_bytes(str_ptr, str_len, needle, needle_len);
+      if (!match) return js_mknull();
+
+      PCRE2_SIZE ovector[2];
+      ovector[0] = (PCRE2_SIZE)(match - str_ptr);
+      ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
+      update_regexp_statics(js, str_ptr, ovector, 1);
+
+      ant_value_t result_arr = js_mkarr(js);
+      if (is_err(result_arr)) return result_arr;
+
+      ant_value_t match_str = js_mkstr(js, match, needle_len);
+      if (is_err(match_str)) return match_str;
+      js_arr_push(js, result_arr, match_str);
+
+      if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+      if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
+      if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+      return result_arr;
+    }
+  }
+
+  ant_value_t regexp_obj = regexp_literal_object(js, pattern, flags);
+  if (is_err(regexp_obj)) return regexp_obj;
+  return regexp_exec_abstract(js, regexp_obj, arg);
+}
+
 static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
@@ -2456,6 +2570,99 @@ static ant_value_t builtin_string_replaceAll(ant_t *js, ant_value_t *args, int n
   return string_replace_impl(js, args, nargs, true);
 }
 
+static bool regexp_literal_replace_builtin_guard(ant_t *js) {
+  if (regexp_replace_property_written || regexp_exec_property_written) return false;
+
+  ant_value_t string_ctor = js_getprop_fallback(js, js_glob(js), "String");
+  if (is_err(string_ctor)) return false;
+  ant_value_t string_proto = js_getprop_fallback(js, string_ctor, "prototype");
+  if (is_err(string_proto) || !is_object_type(string_proto)) return false;
+  ant_value_t replace_fn = js_getprop_fallback(js, string_proto, "replace");
+  if (is_err(replace_fn) || !js_cfunc_same_entrypoint(replace_fn, builtin_string_replace)) return false;
+
+  ant_value_t regexp_ctor = js_getprop_fallback(js, js_glob(js), "RegExp");
+  if (is_err(regexp_ctor)) return false;
+  ant_value_t regexp_proto = js_getprop_fallback(js, regexp_ctor, "prototype");
+  if (is_err(regexp_proto) || !is_object_type(regexp_proto)) return false;
+  ant_value_t sym_replace = js_get_sym(js, regexp_proto, get_replace_sym());
+  if (is_err(sym_replace) || !js_cfunc_same_entrypoint(sym_replace, builtin_regexp_symbol_replace)) return false;
+
+  return true;
+}
+
+ant_value_t regexp_literal_replace_call(
+  ant_t *js,
+  ant_value_t str,
+  ant_value_t pattern,
+  ant_value_t flags,
+  ant_value_t replacement
+) {
+  if (
+    vtype(str) == T_STR &&
+    vtype(replacement) == T_STR &&
+    regexp_literal_replace_builtin_guard(js) &&
+    !replacement_has_substitution(js, replacement)
+  ) {
+    const char *needle;
+    ant_offset_t needle_len;
+    if (regexp_literal_exec_fast_parts(js, pattern, flags, &needle, &needle_len)) {
+      ant_offset_t flags_len, flags_off = vstr(js, flags, &flags_len);
+      uint8_t flags_mask = regexp_parse_flags_mask((const char *)(uintptr_t)flags_off, flags_len);
+      bool global = (flags_mask & REGEXP_FLAG_GLOBAL) != 0;
+
+      ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+      const char *str_ptr = (const char *)(uintptr_t)str_off;
+      ant_offset_t repl_len, repl_off = vstr(js, replacement, &repl_len);
+      const char *repl_ptr = (const char *)(uintptr_t)repl_off;
+      const char *first = find_bytes(str_ptr, str_len, needle, needle_len);
+      if (!first) return str;
+
+      size_t cap = str_len + repl_len + 256;
+      char *buf = ant_calloc(cap);
+      if (!buf) return js_mkerr(js, "oom");
+
+      size_t len = 0;
+      const char *scan = str_ptr;
+      const char *end = str_ptr + str_len;
+      const char *match = first;
+      PCRE2_SIZE ovector[2];
+
+      for (;;) {
+        if (!str_buf_append(&buf, &len, &cap, scan, (size_t)(match - scan)) ||
+            !str_buf_append(&buf, &len, &cap, repl_ptr, repl_len)) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
+
+        ovector[0] = (PCRE2_SIZE)(match - str_ptr);
+        ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
+        update_regexp_statics(js, str_ptr, ovector, 1);
+
+        scan = match + needle_len;
+        if (!global) break;
+        match = find_bytes(scan, (ant_offset_t)(end - scan), needle, needle_len);
+        if (!match) break;
+      }
+
+      if (!str_buf_append(&buf, &len, &cap, scan, (size_t)(end - scan))) {
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+
+      ant_value_t ret = js_mkstr(js, buf, len);
+      free(buf);
+      return ret;
+    }
+  }
+
+  ant_value_t regexp_obj = regexp_literal_object(js, pattern, flags);
+  if (is_err(regexp_obj)) return regexp_obj;
+  ant_value_t replace_fn = js_get(js, str, "replace");
+  if (is_err(replace_fn)) return replace_fn;
+  ant_value_t call_args[2] = { regexp_obj, replacement };
+  return sv_vm_call(js->vm, js, replace_fn, str, call_args, 2, NULL, false);
+}
+
 static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
@@ -2717,6 +2924,10 @@ void init_regex_module(void) {
   defmethod(js, string_proto, "matchAll", 8, js_mkfun(builtin_string_matchAll));
   defmethod(js, string_proto, "replace", 7, js_mkfun(builtin_string_replace));
   defmethod(js, string_proto, "replaceAll", 10, js_mkfun(builtin_string_replaceAll));
+  
+  regexp_exec_property_written = false;
+  regexp_replace_property_written = false;
+  regexp_exec_write_guard_armed = true;
 }
 
 void gc_sweep_regex_cache(void) {
@@ -2759,6 +2970,9 @@ void cleanup_regex_module(void) {
   regex_match_ctx = NULL;
   regexp_ctor_value = 0;
   regexp_empty_string = 0;
+  regexp_exec_write_guard_armed = false;
+  regexp_exec_property_written = false;
+  regexp_replace_property_written = false;
   for (size_t i = 0; i < sizeof(regexp_static_values) / sizeof(regexp_static_values[0]); i++)
     regexp_static_values[i] = 0;
 }

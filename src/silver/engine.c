@@ -1475,6 +1475,31 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(1);
   }
 
+  L_RE_LITERAL_EXEC: {
+    ant_value_t call_arg = vm->stack[vm->sp - 1];
+    ant_value_t flags = vm->stack[vm->sp - 2];
+    ant_value_t pattern = vm->stack[vm->sp - 3];
+    ant_value_t call_result = regexp_literal_exec_call(js, pattern, flags, call_arg);
+
+    vm->sp -= 3;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(1);
+  }
+
+  L_STR_RE_LITERAL_REPLACE: {
+    ant_value_t replacement = vm->stack[vm->sp - 1];
+    ant_value_t flags = vm->stack[vm->sp - 2];
+    ant_value_t pattern = vm->stack[vm->sp - 3];
+    ant_value_t str = vm->stack[vm->sp - 4];
+    ant_value_t call_result = regexp_literal_replace_call(js, str, pattern, flags, replacement);
+
+    vm->sp -= 4;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(1);
+  }
+
   L_TAIL_CALL: {
     uint16_t call_argc = sv_get_u16(ip + 1);
     ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];

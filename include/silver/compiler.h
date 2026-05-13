@@ -136,6 +136,9 @@ typedef struct sv_compiler {
   sv_compile_mode_t mode;
 
   bool is_tla;
+  bool regexp_exec_write_seen;
+  bool regexp_replace_write_seen;
+  
   int try_depth;
   int with_depth;
   int completion_local;
