@@ -17,6 +17,7 @@
 , importNpmLock
 , apple-sdk ? null
 , callPackage
+, gitRev ? "unknown"
 }:
 
 let
@@ -62,6 +63,13 @@ llvmPackages_18.stdenv.mkDerivation (finalAttrs: {
     chmod -R u+w "$sourceRoot/vendor"
     cp -rT --no-preserve=mode ${antVendor} "$sourceRoot/vendor"
     chmod -R u+w "$sourceRoot/vendor"
+  '';
+
+  postPatch = ''
+    substituteInPlace meson/version/meson.build \
+      --replace-fail \
+        "git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()" \
+        "git_hash = '${gitRev}'"
   '';
 
   preConfigure = ''

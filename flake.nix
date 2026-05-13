@@ -10,7 +10,9 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        ant = pkgs.callPackage ./nix/package.nix { };
+        ant = pkgs.callPackage ./nix/package.nix {
+          gitRev = self.shortRev or self.dirtyShortRev or "unknown";
+        };
       in {
         packages.default = ant;
         packages.ant = ant;
