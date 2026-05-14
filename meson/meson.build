@@ -37,5 +37,23 @@ endif
 
 subdir('deps')
 subdir('version')
+
+npm = find_program('npm', required: true)
+tools_npm_ci = custom_target(
+  'tools_npm_ci',
+  input: [
+    src_root / 'src' / 'tools' / 'package.json',
+    src_root / 'src' / 'tools' / 'npm-shrinkwrap.json',
+  ],
+  output: 'tools_npm_ci.stamp',
+  command: [
+    python,
+    files('npm_ci.py'),
+    npm.full_path(),
+    src_root / 'src' / 'tools',
+    '@OUTPUT@',
+  ],
+)
+
 subdir('snapshot')
 subdir('builtins')

@@ -82,7 +82,8 @@ The following tools are required to build Ant regardless of platform:
 - **[Meson](https://mesonbuild.com/)** build system (and Ninja backend)
 - **[CMake](https://cmake.org/)** (for the tlsuv subproject)
 - **pkg-config**
-- **Node.js** >= 22 (used to generate the JS snapshot at build time)
+- **Node.js** >= 22 and **npm** (used to generate bundled JavaScript sources at
+  build time)
 - **[Zig](https://ziglang.org/)** >= 0.15 (builds the package manager component)
 - **Git**
 
@@ -181,6 +182,9 @@ meson subprojects download
 meson setup build
 meson compile -C build
 ```
+
+Meson runs `npm ci` in `src/tools` automatically before generating the bundled
+JavaScript headers; no separate npm install step is needed.
 
 Alternatively, if you have [maid](https://github.com/exact-labs/maid) installed, <br>
 you can use the task runner:

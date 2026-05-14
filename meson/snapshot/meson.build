@@ -9,6 +9,7 @@ snapshot_h = custom_target(
   'snapshot',
   input: core_files,
   output: 'snapshot_data.h',
+  depends: tools_npm_ci,
   command: [
     node,
     src_root / 'src' / 'tools' / 'gen_snapshot.js',

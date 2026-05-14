@@ -9,6 +9,7 @@ builtin_bundle_h = custom_target(
   'builtin_bundle',
   input: builtin_files,
   output: 'builtin_bundle_data.h',
+  depends: tools_npm_ci,
   command: [
     node,
     src_root / 'src' / 'tools' / 'gen_builtin_bundle.js',
