@@ -2672,7 +2672,6 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
   obj->u.array.data = next;
   obj->u.array.cap = (uint32_t)new_cap;
-  if (obj->u.array.len > obj->u.array.cap) obj->u.array.len = obj->u.array.cap;
   obj->fast_array = 1;
   return (ant_offset_t)(uintptr_t)obj;
 }
@@ -2730,6 +2729,7 @@ shape_lookup:;
 }
 
 static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
+  ant_offset_t cur_len = get_array_length(js, arr);
   ant_offset_t doff = get_dense_buf(arr);
   
   if (doff) {
@@ -2756,7 +2756,7 @@ static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_val
     }
     
     dense_set(js, doff, idx, val);
-    array_len_set(js, arr, idx + 1);
+    if (idx >= cur_len) array_len_set(js, arr, idx + 1);
     
     return;
   }
