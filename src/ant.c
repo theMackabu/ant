@@ -11479,9 +11479,20 @@ static ant_value_t builtin_array_splice(ant_t *js, ant_value_t *args, int nargs)
     char src[16], dst[16];
     snprintf(src, sizeof(src), "%u", (unsigned)(start + i));
     snprintf(dst, sizeof(dst), "%u", (unsigned) i);
-    ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
-    if (elem_off != 0) {
-      ant_value_t elem = propref_load(js, elem_off);
+    bool has_elem = false;
+    ant_value_t elem = js_mkundef();
+    if (array_obj_ptr(read_from)) {
+      ant_offset_t src_idx = (ant_offset_t)(start + i);
+      has_elem = arr_has(js, read_from, src_idx);
+      if (has_elem) elem = arr_get(js, read_from, src_idx);
+    } else {
+      ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
+      if (elem_off != 0) {
+        has_elem = true;
+        elem = propref_load(js, elem_off);
+      }
+    }
+    if (has_elem) {
       ant_value_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, removed, key, elem);
     }
@@ -11495,21 +11506,35 @@ static ant_value_t builtin_array_splice(ant_t *js, ant_value_t *args, int nargs)
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
-      ant_value_t elem = elem_off ? propref_load(js, elem_off) : js_mkundef();
-      ant_value_t key = js_mkstr(js, dst, strlen(dst));
-      js_setprop(js, arr, key, elem);
+      if (array_obj_ptr(read_from)) {
+        if (arr_has(js, read_from, (ant_offset_t)i))
+          arr_set(js, arr, (ant_offset_t)(i + shift), arr_get(js, read_from, (ant_offset_t)i));
+        else arr_del(js, arr, (ant_offset_t)(i + shift));
+      } else {
+        ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
+        ant_value_t elem = elem_off ? propref_load(js, elem_off) : js_mkundef();
+        ant_value_t key = js_mkstr(js, dst, strlen(dst));
+        js_setprop(js, arr, key, elem);
+      }
     }
   } else if (shift < 0) {
     for (int i = start + deleteCount; i < (int)len; i++) {
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
-      ant_value_t elem = elem_off ? propref_load(js, elem_off) : js_mkundef();
-      ant_value_t key = js_mkstr(js, dst, strlen(dst));
-      js_setprop(js, arr, key, elem);
+      if (array_obj_ptr(read_from)) {
+        if (arr_has(js, read_from, (ant_offset_t)i))
+          arr_set(js, arr, (ant_offset_t)(i + shift), arr_get(js, read_from, (ant_offset_t)i));
+        else arr_del(js, arr, (ant_offset_t)(i + shift));
+      } else {
+        ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
+        ant_value_t elem = elem_off ? propref_load(js, elem_off) : js_mkundef();
+        ant_value_t key = js_mkstr(js, dst, strlen(dst));
+        js_setprop(js, arr, key, elem);
+      }
     }
+    if (array_obj_ptr(arr)) for (int i = (int)len + shift; i < (int)len; i++)
+      arr_del(js, arr, (ant_offset_t)i);
   }
   
   for (int i = 0; i < insertCount; i++) {

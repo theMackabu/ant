@@ -2657,7 +2657,7 @@ ant_value_t regexp_literal_replace_call(
 
   ant_value_t regexp_obj = regexp_literal_object(js, pattern, flags);
   if (is_err(regexp_obj)) return regexp_obj;
-  ant_value_t replace_fn = js_get(js, str, "replace");
+  ant_value_t replace_fn = js_getprop_fallback(js, str, "replace");
   if (is_err(replace_fn)) return replace_fn;
   ant_value_t call_args[2] = { regexp_obj, replacement };
   return sv_vm_call(js->vm, js, replace_fn, str, call_args, 2, NULL, false);
