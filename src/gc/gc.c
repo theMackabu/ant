@@ -136,7 +136,8 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!rope || !gc_ropes_mark(rope)) return;
+    if (!gc_ropes_contains(rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) return;
+    if (!gc_ropes_mark(rope)) return;
     gc_mark_str(js, rope->left);
     gc_mark_str(js, rope->right);
     gc_mark_str(js, rope->cached);
@@ -145,9 +146,11 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_builder: {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!builder || !gc_ropes_mark(builder)) return;
+    if (!gc_ropes_contains(builder, sizeof(*builder), _Alignof(ant_string_builder_t))) return;
+    if (!gc_ropes_mark(builder)) return;
     gc_mark_value(js, builder->cached);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+      if (!gc_ropes_contains(chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
       if (gc_ropes_mark(chunk)) gc_mark_value(js, chunk->value);
     }
     return;

@@ -67,6 +67,23 @@ bool gc_ropes_mark(const void *ptr) {
   return false;
 }
 
+bool gc_ropes_contains(const void *ptr, size_t size, size_t align) {
+  if (!ptr || size == 0 || g_rope_mark_count == 0) return false;
+  uintptr_t p = (uintptr_t)ptr;
+  if (align > 1 && (p & (align - 1u)) != 0) return false;
+
+  int lo = 0, hi = g_rope_mark_count - 1;
+  while (lo <= hi) {
+    int mid = lo + (hi - lo) / 2;
+    gc_rope_mark_t *m = &g_rope_marks[mid];
+    if (p < m->base) hi = mid - 1;
+    else if (p >= m->end) lo = mid + 1;
+    else return size <= m->end - p;
+  }
+
+  return false;
+}
+
 static void unlink_rope_block(ant_pool_t *pool, ant_pool_block_t *block) {
   if (block->prev) block->prev->next = block->next;
   else pool->head = block->next;
