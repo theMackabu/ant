@@ -659,6 +659,33 @@ void jit_helper_take_open_upvalues(
   }
 }
 
+void jit_helper_take_open_upvalues_rebase(
+  sv_vm_t *vm, sv_upvalue_t **open_upvalues,
+  ant_value_t *src_slots, ant_value_t *dst_slots, int slot_count
+) {
+  if (!vm || !open_upvalues || !src_slots || !dst_slots || slot_count <= 0) return;
+
+  ant_value_t *lo = src_slots;
+  ant_value_t *hi = src_slots + slot_count;
+  sv_upvalue_t **pp = &vm->open_upvalues;
+
+  while (*pp) {
+    sv_upvalue_t *uv = *pp;
+    ant_value_t *loc = uv->location;
+    if (loc < lo) break;
+    if (loc >= hi) { pp = &uv->next; continue; }
+
+    *pp = uv->next;
+    ant_value_t *dst_loc = dst_slots + (loc - src_slots);
+    uv->location = dst_loc;
+
+    sv_upvalue_t **dst = open_upvalues;
+    while (*dst && (*dst)->location > dst_loc) dst = &(*dst)->next;
+    uv->next = *dst;
+    *dst = uv;
+  }
+}
+
 ant_value_t jit_helper_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *parent_closure,
   ant_value_t this_val, ant_value_t *slots,
