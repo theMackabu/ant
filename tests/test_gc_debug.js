@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 console.log('=== Debug GC Test ===\n');
 
 // Test 1
@@ -84,3 +94,4 @@ console.log('  count:', counter.get());
 console.log('  OK\n');
 
 console.log('=== All tests passed ===');
+__gcPerfLog();

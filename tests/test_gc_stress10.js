@@ -1,5 +1,15 @@
 import { Screen, colors, codes, pad, truncate } from '../examples/tui/tuey.js';
 
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 const screen = new Screen({ fullscreen: false, hideCursor: false });
 
 const logs = [
@@ -39,3 +49,4 @@ const f = Ant.stats();
 const fmem = (f.pools.totalUsed + f.alloc.total) / 1024 / 1024;
 console.log(`Done: ${total}s, total ${fmem.toFixed(1)}MB, rss ${(f.rss / 1024 / 1024).toFixed(1)}MB`);
 console.log('OK');
+__gcPerfLog();

@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Test: GC compaction runs correctly inside coroutines.
 
 console.log('=== GC-in-coroutine test ===');
@@ -143,6 +153,7 @@ async function main() {
   trace('main: test5 complete');
 
   console.log('passed: ' + passed + ', failed: ' + failed);
+  __gcPerfLog();
   if (failed > 0) {
     console.log('FAIL');
     process.exit(1);

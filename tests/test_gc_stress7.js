@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Minimal crash: pad() + string concat in a nested loop
 function pad(s, n) {
   while (s.length < n) s += ' ';
@@ -13,3 +23,4 @@ for (let i = 0; i < 10000; i++) {
 }
 
 console.log('OK');
+__gcPerfLog();

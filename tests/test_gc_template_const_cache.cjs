@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 function makeChildHeavyFunction(childCount) {
   let src = 'return function run(seed) {\n';
   for (let i = 0; i < childCount; i++) src += `function child_${i}(x) { return x + ${i}; }\n`;
@@ -59,3 +69,4 @@ for (let r = 0; r < 22; r++) {
 
 if (checksum !== 2137740) throw new Error(`bad checksum: ${checksum}`);
 console.log('ok');
+__gcPerfLog();

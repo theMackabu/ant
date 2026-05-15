@@ -87,6 +87,12 @@ function runCase(name, factory, opts = {}) {
   console.log(`const_slots=${stats.constSlots}`);
   console.log(`mark_func_ms=${stats.timeMs.toFixed(3)}`);
   console.log(`checksum=${checksum}`);
+
+  if (opts.expectedChecksum !== undefined && checksum !== opts.expectedChecksum) {
+    throw new Error(
+      `${name} checksum mismatch: got ${checksum}, expected ${opts.expectedChecksum}`
+    );
+  }
 }
 
 Ant.raw.gcMarkProfileEnable(true);
@@ -96,14 +102,16 @@ runCase('child-func-heavy', () => makeChildHeavyFunction(160), {
   fnCount: 20,
   rounds: 22,
   garbageRounds: 72,
-  garbageWidth: 224
+  garbageWidth: 224,
+  expectedChecksum: 5601420
 });
 
 runCase('template-slot-heavy', () => makeTemplateHeavyFunction(160), {
   fnCount: 20,
   rounds: 22,
   garbageRounds: 72,
-  garbageWidth: 224
+  garbageWidth: 224,
+  expectedChecksum: 211200
 });
 
 runCase(
@@ -119,6 +127,7 @@ runCase(
     fnCount: 20,
     rounds: 22,
     garbageRounds: 72,
-    garbageWidth: 224
+    garbageWidth: 224,
+    expectedChecksum: 2137740
   }
 );

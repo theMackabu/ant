@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Timer GC stress: interval-driven allocation without coroutines
 
 function stripAnsi(str) {
@@ -52,5 +62,6 @@ const interval = setInterval(() => {
     clearInterval(interval);
     const a = Ant.stats();
     console.log(`done: total ${((a.pools.totalUsed + a.alloc.total) / 1024 / 1024).toFixed(1)}MB`);
+    __gcPerfLog();
   }
 }, 10);
