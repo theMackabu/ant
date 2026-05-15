@@ -28,7 +28,9 @@ typedef struct gc_func_mark_profile {
 void gc_run(ant_t *js);
 void gc_run_minor(ant_t *js);
 void gc_maybe(ant_t *js);
+
 void gc_remember_add(ant_t *js, ant_object_t *obj);
+void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value);
 
 size_t gc_live_major_threshold(ant_t *js);
 size_t gc_pool_major_threshold(ant_t *js);

@@ -17131,6 +17131,10 @@ void js_destroy(ant_t *js) {
   free(js->c_roots);
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
+
+  free(js->remembered_func_consts);
+  js->remembered_func_consts = NULL;
+  js->remembered_func_const_len = js->remembered_func_const_cap = 0;
   
   free(js->pending_rejections.items);
   js->pending_rejections.items = NULL;

@@ -133,6 +133,32 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   js->remember_set[js->remember_set_len++] = obj;
 }
 
+void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
+  if (!js || !func || value <= NANBOX_PREFIX) return;
+  uint8_t type = (value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  
+  if (type != T_FUNC) {
+    if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
+    ant_object_t *obj = (ant_object_t *)(uintptr_t)(value & NANBOX_DATA_MASK);
+    if (!obj || obj->flags.generation != 0) return;
+  }
+
+  for (size_t i = 0; i < js->remembered_func_const_len; i++) 
+    if (js->remembered_func_consts[i].func == func && js->remembered_func_consts[i].slot == slot) return;
+
+  if (js->remembered_func_const_len >= js->remembered_func_const_cap) {
+    size_t new_cap = js->remembered_func_const_cap ? js->remembered_func_const_cap * 2 : 64;
+    void *entries = realloc(js->remembered_func_consts, new_cap * sizeof(*js->remembered_func_consts));
+    if (!entries) return;
+    js->remembered_func_consts = entries;
+    js->remembered_func_const_cap = new_cap;
+  }
+
+  js->remembered_func_consts[js->remembered_func_const_len].func = func;
+  js->remembered_func_consts[js->remembered_func_const_len].slot = slot;
+  js->remembered_func_const_len++;
+}
+
 #define GC_MARK_STACK_INIT 4096
 
 static ant_object_t **gc_mark_stack = NULL;
@@ -189,6 +215,30 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
 
   if (prof && --g_gc_func_mark_profile_depth == 0)
     g_gc_func_mark_profile.time_ns += gc_now_ns() - g_gc_func_mark_profile_start_ns;
+}
+
+static void gc_mark_remembered_func_consts(ant_t *js) {
+for (size_t i = 0; i < js->remembered_func_const_len; i++) {
+  sv_func_t *func = js->remembered_func_consts[i].func;
+  uint32_t slot = js->remembered_func_consts[i].slot;
+  if (!func || !func->constants || slot >= (uint32_t)func->const_count) continue;
+  gc_mark_value(js, func->constants[slot]);
+}}
+
+static void gc_clear_remembered_func_consts(ant_t *js) {
+  js->remembered_func_const_len = 0;
+
+  if (js->remembered_func_const_cap > 512) {
+  size_t target = 256;
+  void *entries = realloc(
+    js->remembered_func_consts,
+    target * sizeof(*js->remembered_func_consts)
+  );
+  
+  if (entries) {
+    js->remembered_func_consts = entries;
+    js->remembered_func_const_cap = target;
+  }}
 }
 
 static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
@@ -750,6 +800,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
   js->remember_set_len = 0;
+  gc_clear_remembered_func_consts(js);
 
   if (js->remember_set_cap > 512) {
     ant_object_t **ns = realloc(js->remember_set, 256 * sizeof(*ns));
@@ -844,8 +895,13 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) gc_obj_epoch = 1;
   g_minor_gc = true;
 
-  for (size_t i = 0; i < js->remember_set_len; i++) gc_scan_obj(js, js->remember_set[i]);
-  for (size_t i = 0; i < js->remember_set_len; i++) js->remember_set[i]->flags.in_remember_set = 0;
+  for (size_t i = 0; i < js->remember_set_len; i++) 
+    gc_scan_obj(js, js->remember_set[i]);
+  
+  gc_mark_remembered_func_consts(js);
+  
+  for (size_t i = 0; i < js->remember_set_len; i++) 
+    js->remember_set[i]->flags.in_remember_set = 0;
   
   js->remember_set_len = 0;
   gc_mark_roots(js);
@@ -855,6 +911,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_sweep_regex_cache();
   gc_sweep_young(js);
   gc_promote_survivors(js);
+  gc_clear_remembered_func_consts(js);
   
   // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
   // property values on old objects are not scanned during minor GC (old objects

@@ -1921,7 +1921,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_SPECIAL_OBJ:  { sv_op_special_obj(vm, js, frame, ip);                       NEXT(2); }
   L_EMPTY:        { vm->stack[vm->sp++] = T_EMPTY;                              NEXT(1); }
-  L_PUT_CONST:    { func->constants[sv_get_u32(ip + 1)] = vm->stack[--vm->sp];  NEXT(5); }
+  
+  L_PUT_CONST: {
+    uint32_t idx = sv_get_u32(ip + 1);
+    ant_value_t cached = vm->stack[--vm->sp];
+    func->constants[idx] = cached;
+    gc_remember_func_const(js, func, idx, cached);
+    NEXT(5);
+  }
   
   L_DEBUGGER:  { NEXT(1); }
   L_NOP:       { NEXT(1); }
