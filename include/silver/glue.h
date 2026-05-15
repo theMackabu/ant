@@ -116,7 +116,7 @@ ant_value_t jit_helper_bailout_resume(
 );
 
 void jit_helper_close_upval(
-  sv_vm_t *vm, uint16_t slot_idx,
+  sv_vm_t *vm, int32_t slot_idx,
   ant_value_t *locals, int n_locals,
   sv_upvalue_t **open_upvalues
 );

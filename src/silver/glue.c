@@ -738,14 +738,14 @@ ant_value_t jit_helper_closure(
 }
 
 void jit_helper_close_upval(
-  sv_vm_t *vm, uint16_t slot_idx, ant_value_t *slots, int slot_count,
+  sv_vm_t *vm, int32_t slot_idx, ant_value_t *locals, int n_locals,
   sv_upvalue_t **open_upvalues
 ) {
-  if (!slots || slot_count <= 0) return;
-  if ((int)slot_idx >= slot_count) return;
+  if (!locals || n_locals <= 0) return;
+  if (slot_idx < 0 || slot_idx >= n_locals) return;
 
-  ant_value_t *lo = slots + slot_idx;
-  ant_value_t *hi = slots + slot_count;
+  ant_value_t *lo = locals + slot_idx;
+  ant_value_t *hi = locals + n_locals;
   sv_upvalue_t **pp = open_upvalues ? open_upvalues : &vm->open_upvalues;
   
   while (*pp) {

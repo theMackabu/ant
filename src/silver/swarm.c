@@ -2563,8 +2563,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     0, NULL, 5,
     MIR_T_I64, "vm",
     MIR_T_I32, "slot_idx",
-    MIR_T_P,   "slots",
-    MIR_T_I32, "slot_count",
+    MIR_T_P,   "locals",
+    MIR_T_I32, "n_locals",
     MIR_T_P,   "open_upvalues");
 
   MIR_item_t adopt_open_upvalues_proto = MIR_new_proto(ctx, "adopt_open_upvalues_proto",
