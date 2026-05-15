@@ -417,6 +417,40 @@ static void mir_emit_fill_param_slots_from_args(
   }
 }
 
+static void mir_emit_fill_uncaptured_param_slots_from_args(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t r_slotbuf, MIR_reg_t r_args, MIR_reg_t r_argc,
+  bool *captured_params, int param_count
+) {
+  if (!captured_params) return;
+  for (int i = 0; i < param_count; i++) {
+    if (captured_params[i]) continue;
+    MIR_label_t arg_present = MIR_new_label(ctx);
+    MIR_label_t arg_done = MIR_new_label(ctx);
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_UBGT,
+        MIR_new_label_op(ctx, arg_present),
+        MIR_new_reg_op(ctx, r_argc),
+        MIR_new_int_op(ctx, (int64_t)i)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_slotbuf, 0, 1),
+        MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_JMP,
+        MIR_new_label_op(ctx, arg_done)));
+    MIR_append_insn(ctx, fn, arg_present);
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_slotbuf, 0, 1),
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args, 0, 1)));
+    MIR_append_insn(ctx, fn, arg_done);
+  }
+}
+
 static void mir_emit_spill_child_captured_locals(
   MIR_context_t ctx, MIR_item_t fn,
   sv_func_t *parent_func, sv_func_t *child,
@@ -8185,6 +8219,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
     MIR_reg_t r_resume_res = MIR_new_func_reg(ctx, jit_func->u.func,
                                                MIR_JSVAL, "resume_res");
+    if (has_captured_params) {
+      mir_emit_fill_uncaptured_param_slots_from_args(
+        ctx, jit_func, r_slotbuf, r_args, r_argc, captured_params, param_count);
+    }
     MIR_append_insn(ctx, jit_func,
       MIR_new_call_insn(ctx, 15,
         MIR_new_ref_op(ctx, resume_proto),
