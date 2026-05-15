@@ -8369,9 +8369,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_load_module(ctx, mod);
   MIR_link(ctx, MIR_set_gen_interface, NULL);
 
-  func->jit_compiled_tfb_ver = func->tfb_version;
-  func->jit_compiling = false;
   sv_jit_func_t generated = MIR_gen(ctx, jit_func);
+  func->jit_compiling = false;
+  if (!generated) {
+    func->jit_compile_failed = true;
+    return NULL;
+  }
+
+  func->jit_compiled_tfb_ver = func->tfb_version;
   return generated;
 }
 

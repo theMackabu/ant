@@ -69,6 +69,7 @@ bool gc_ropes_mark(const void *ptr) {
 
 bool gc_ropes_contains(const void *ptr, size_t size, size_t align) {
   if (!ptr || size == 0 || g_rope_mark_count == 0) return false;
+  if (align > 1 && (align & (align - 1u)) != 0) return false;
   uintptr_t p = (uintptr_t)ptr;
   if (align > 1 && (p & (align - 1u)) != 0) return false;
 
