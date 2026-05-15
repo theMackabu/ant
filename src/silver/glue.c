@@ -6,6 +6,7 @@
 #include "utf8.h"
 #include "internal.h"
 #include "errors.h"
+#include "gc/roots.h"
 #include "tokens.h"
 #include "silver/glue.h"
 
@@ -32,7 +33,11 @@ ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) + tod(r));
   if (vtype(l) == T_STR && vtype(r) == T_STR) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, l);
+    GC_ROOT_PIN(js, r);
     ant_value_t res = do_string_op(js, TOK_PLUS, l, r);
+    GC_ROOT_RESTORE(js, root_mark);
     return is_err(res) ? SV_JIT_BAILOUT : res;
   }
   return SV_JIT_BAILOUT;
