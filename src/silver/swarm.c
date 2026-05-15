@@ -68,6 +68,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_bailout_resume);
   LOAD_EXT(jit_helper_close_upval);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
+  LOAD_EXT(jit_helper_take_open_upvalues);
   LOAD_EXT(jit_helper_closure);
   LOAD_EXT(jit_helper_in);
   LOAD_EXT(jit_helper_instanceof);
@@ -2524,6 +2525,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "vm",
     MIR_T_P,   "open_upvalues");
 
+  MIR_item_t take_open_upvalues_proto = MIR_new_proto(ctx, "take_open_upvalues_proto",
+    0, NULL, 4,
+    MIR_T_I64, "vm",
+    MIR_T_P,   "open_upvalues",
+    MIR_T_P,   "slots",
+    MIR_T_I32, "slot_count");
+
   MIR_item_t set_name_proto = MIR_new_proto(ctx, "sn_proto",
     0, NULL, 4,
     MIR_T_I64, "js",
@@ -2679,6 +2687,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_resume     = MIR_new_import(ctx, "jit_helper_bailout_resume");
   MIR_item_t imp_close_upval = MIR_new_import(ctx, "jit_helper_close_upval");
   MIR_item_t imp_adopt_open_upvalues = MIR_new_import(ctx, "jit_helper_adopt_open_upvalues");
+  MIR_item_t imp_take_open_upvalues = MIR_new_import(ctx, "jit_helper_take_open_upvalues");
   MIR_item_t imp_closure     = MIR_new_import(ctx, "jit_helper_closure");
   MIR_item_t imp_in          = MIR_new_import(ctx, "jit_helper_in");
   MIR_item_t imp_get_length  = MIR_new_import(ctx, "jit_helper_get_length");
@@ -3073,6 +3082,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_mem_op(ctx, MIR_T_P,
             osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, lp),
             r_vm, 0, 1)));
+      if (r_jit_open_upvalues) {
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 6,
+            MIR_new_ref_op(ctx, take_open_upvalues_proto),
+            MIR_new_ref_op(ctx, imp_take_open_upvalues),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_jit_open_upvalues),
+            MIR_new_reg_op(ctx, r_lbuf),
+            MIR_new_int_op(ctx, n_locals)));
+      }
     }
 
     MIR_append_insn(ctx, jit_func,

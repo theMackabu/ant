@@ -121,6 +121,11 @@ void jit_helper_close_upval(
   sv_upvalue_t **open_upvalues
 );
 
+void jit_helper_take_open_upvalues(
+  sv_vm_t *vm, sv_upvalue_t **open_upvalues,
+  ant_value_t *slots, int slot_count
+);
+
 void jit_helper_adopt_open_upvalues(
   sv_vm_t *vm,
   sv_upvalue_t **open_upvalues
