@@ -833,7 +833,7 @@ static ant_value_t js_zlib_crc32(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)(uint32_t)crc);
 }
 
-static void zlib_set_num(ant_t *js, ant_value_t obj, const char *name, double value) {
+static inline void zlib_set_num(ant_t *js, ant_value_t obj, const char *name, double value) {
   js_set(js, obj, name, js_mknum(value));
 }
 
