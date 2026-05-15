@@ -7,3 +7,7 @@ Owner: theMackabu
 Move finished execution plans here once the associated work has landed. Keep
 the final validation notes and follow-up references intact so future changes
 can reuse the decision history.
+
+## Plans
+
+- [Watch Supervisor](watch-supervisor.md)

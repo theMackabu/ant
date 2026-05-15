@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-05-15
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -29,6 +29,18 @@ scheduled.
   - Impact: Full redraw paths can clobber externally rendered prefixes, boxed prompts, or other same-line UI written before `question()` or `prompt()` starts editing.
   - Proposed fix: Track an explicit render origin / prompt anchor, separate logical prompt text from the screen position where input begins, and make redraws preserve external prefixes and custom prompt chrome.
   - Status: open
+
+- Area: `src/modules/process.c` / `src/modules/tty.c`
+  - Issue: Stdio TTY stream setup still has split ownership. `process.c` creates `process.stdout` / `process.stderr`, installs stdout `rows` / `columns`, and keeps its own terminal sizing helper; `tty.c` later reshapes the same streams, reinstalls `rows` / `columns`, and keeps a separate terminal sizing helper. The stale SIGWINCH setter path has already been removed, but the duplicated ownership that allowed it to drift remains.
+  - Impact: Future stdio or TTY changes can diverge between the process bootstrap path and the TTY module path, especially around descriptor shape, `getWindowSize()`, resize behavior, and platform-specific terminal sizing.
+  - Proposed fix: Make `tty.c` the single owner of TTY stream shape and terminal sizing for stdout/stderr, leaving `process.c` to create or expose process streams and wire process-specific event-emitter behavior. Share one sizing helper or module-level API so `rows`, `columns`, and `getWindowSize()` all use the same implementation.
+  - Status: backlog
+
+- Area: Node-style stream duck typing
+  - Issue: `src/modules/stream.c` still probes and calls arbitrary stream-like properties such as `.write`, `.end`, `.pause`, `.resume`, `.pipe`, `.read`, `.next`, `_read`, `_write`, `_transform`, and `.getReader`. Related ad-hoc stream/event probes also appear in `src/modules/fs.c` (`.destroy` / `.end`), `src/modules/zlib.c` (`.write` / `.end`), and `src/modules/child_process.c` (`.once`). Lower-confidence event-handler cases in `src/modules/worker_threads.c` (`.onmessage`) and `src/modules/abort.c` (`.onabort`) should be checked for consistent non-callable handling, but should not be treated as bugs without a concrete repro because handler properties are normal platform-style APIs.
+  - Impact: Each call site currently decides for itself which missing or non-callable methods are ignored, treated as compatibility no-ops, or allowed to fail later. That makes Node-stream compatibility behavior harder to reason about and can hide inconsistent errors across modules.
+  - Proposed fix: Start with `src/modules/stream.c`: add small helper gates such as `stream_get_callable_prop()`, `stream_is_node_writable_like()`, and `stream_is_reader_like()`, then make required-method errors and optional-method no-ops consistent. After that, route the `fs.c`, `zlib.c`, and `child_process.c` stream/event probes through shared helpers. Finally, audit `worker_threads.c` and `abort.c` only for consistent ignore-vs-call behavior on non-callable handler properties.
+  - Status: backlog
 
 - Area: Silver compiler
   - Issue: `sv_compiler_t` scratch storage is still allocated per compilation, so repeated compiles in a long-lived process pay allocator churn for locals, bytecode buffers, constants, atoms, upvalue descriptors, loops, srcpos data, and maybe slot-type scratch.

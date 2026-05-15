@@ -767,6 +767,10 @@ static char *esm_resolve_path_require(const char *specifier, const char *base_pa
   return esm_resolve_path_cond(specifier, base_path, true);
 }
 
+char *js_esm_resolve_path_for_watch(const char *specifier, const char *base_path, bool prefer_require) {
+  return esm_resolve(specifier, base_path, prefer_require ? esm_resolve_path_require : esm_resolve_path);
+}
+
 static bool esm_has_suffix(const char *path, const char *ext) {
   size_t len = strlen(path);
   size_t elen = strlen(ext);

@@ -32,6 +32,7 @@ If no module file is specified, {name} starts in REPL mode.<br=2/>\
 watch_spawn_failed = "{error}: <bold>Failed to spawn watched process:</> %s\n"
 watch_entrypoint_missing = "{error}: <bold>--watch requires a local file entrypoint.</>\n"
 watch_file_failed = "{error}: <bold>Failed to watch %s:</> %s\n"
+watch_file_warn = "{warn}: Failed to watch %s: %s\n"
 watch_child_error = "{error}: <bold>Failed to terminate child process:</> %s\n"
 
 watch_warn_normal = "{warn}: Watcher error on %s: %s\n"
