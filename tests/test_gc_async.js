@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Async GC stress: coroutine-heavy allocation without timers
 
 function stripAnsi(str) {
@@ -46,3 +56,4 @@ for (let count = 1; count <= 500; count++) {
 
 const a = Ant.stats();
 console.log(`done: total ${((a.pools.totalUsed + a.alloc.total) / 1024 / 1024).toFixed(1)}MB`);
+__gcPerfLog();

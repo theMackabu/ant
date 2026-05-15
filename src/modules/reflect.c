@@ -273,13 +273,13 @@ static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs
   
   ant_value_t target = args[0];
   int t = vtype(target);
-  
   if (t != T_OBJ && t != T_FUNC) return js_false;
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return js_false;
-  if (obj->frozen || obj->sealed) return js_false;
-  return js_bool(obj->extensible);
+  if (obj->flags.frozen || obj->flags.sealed) return js_false;
+  
+  return js_bool(obj->flags.extensible);
 }
 
 static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int nargs) {
@@ -287,12 +287,12 @@ static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int 
   
   ant_value_t target = args[0];
   int t = vtype(target);
-  
   if (t != T_OBJ && t != T_FUNC) return js_false;
 
   ant_object_t *obj = js_obj_ptr(js_as_obj(target));
   if (!obj) return js_false;
-  obj->extensible = 0;
+  obj->flags.extensible = 0;
+  
   return js_true;
 }
 

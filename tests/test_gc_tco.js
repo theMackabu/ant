@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Stress test: GC compaction during tail-call optimization
 // Verifies that tc.func, tc.closure_scope, and tc.args[] are properly
 // rooted so GC compaction doesn't corrupt them mid-trampoline.
@@ -187,3 +197,4 @@ if (failures === 0) {
 } else {
   console.log('Failures:', failures);
 }
+__gcPerfLog();

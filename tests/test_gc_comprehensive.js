@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 console.log('=== Comprehensive GC Test ===');
 console.log('Starting...\n');
 
@@ -190,4 +200,5 @@ async function testAsyncGC() {
 testAsyncGC().then(result => {
   console.log('  Result:', result);
   console.log('\n=== All Tests Complete ===');
+  __gcPerfLog();
 });

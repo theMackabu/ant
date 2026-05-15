@@ -2,8 +2,25 @@
 #define SV_UPVALUES_H
 
 #include "internal.h"
-#include "descriptors.h"
 #include "silver/engine.h"
+
+static inline ant_value_t sv_mkprop_interned_exact_key(
+  ant_t *js, ant_value_t obj,
+  const char *interned_key, const char *fallback_key,
+  size_t fallback_len, ant_value_t val, uint8_t attrs
+) {
+  if (!interned_key) interned_key = intern_string(fallback_key, fallback_len);
+  if (!interned_key) return js_mkerr(js, "oom");
+  return mkprop_interned_exact(js, obj, interned_key, val, attrs);
+}
+
+static inline ant_value_t sv_define_function_length(ant_t *js, ant_value_t func_obj, double length) {
+  return sv_mkprop_interned_exact_key(
+    js, func_obj,
+    js->intern.length, "length", 6,
+    tov(length), ANT_PROP_ATTR_CONFIGURABLE
+  );
+}
 
 static inline ant_value_t sv_setup_function_prototype_with_parent(
   ant_t *js, ant_value_t func_obj,
@@ -12,22 +29,22 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
 
-  ant_value_t ctor_key = js_mkstr(js, "constructor", 11);
-  if (is_err(ctor_key)) return ctor_key;
+  ant_value_t set_ctor = sv_mkprop_interned_exact_key(
+    js, proto_obj,
+    js->intern.constructor, "constructor", 11,
+    func_val, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
+  );
   
-  ant_value_t set_ctor = js_setprop(js, proto_obj, ctor_key, func_val);
   if (is_err(set_ctor)) return set_ctor;
-  
-  js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
   if (is_object_type(parent_proto)) js_set_proto_init(proto_obj, parent_proto);
 
-  ant_value_t proto_key = js_mkstr(js, "prototype", 9);
-  if (is_err(proto_key)) return proto_key;
+  ant_value_t set_proto = sv_mkprop_interned_exact_key(
+    js, func_obj,
+    js->intern.prototype, "prototype", 9,
+    proto_obj, ANT_PROP_ATTR_WRITABLE
+  );
   
-  ant_value_t set_proto = js_setprop(js, func_obj, proto_key, proto_obj);
   if (is_err(set_proto)) return set_proto;
-  js_set_descriptor(js, func_obj, "prototype", 9, JS_DESC_W);
-
   return js_mkundef();
 }
 
@@ -38,6 +55,56 @@ static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value
   }
 
   return js_module_eval_active_ctx(js);
+}
+
+static inline void sv_init_closure_function_object(
+  ant_t *js,
+  sv_closure_t *closure,
+  ant_value_t func_val,
+  ant_value_t module_ctx
+) {
+  sv_func_t *child = closure->func;
+  ant_value_t func_obj = mkobj(js, 0);
+  closure->func_obj = func_obj;
+  if (is_err(func_obj) || !child) return;
+
+  js_mark_constructor(
+    func_obj,
+    !child->is_arrow && !child->is_method && !child->is_generator && !child->is_async
+  );
+  (void)sv_define_function_length(js, func_obj, (double)child->function_length);
+
+  if (is_object_type(module_ctx))
+    js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
+
+  if (!child->is_arrow && !child->is_method && (!child->is_async || child->is_generator)) {
+    ant_value_t parent_proto = child->is_async
+      ? js->sym.async_generator_proto
+      : (child->is_generator ? js->sym.generator_proto : js->sym.object_proto);
+    (void)sv_setup_function_prototype_with_parent(js, func_obj, func_val, parent_proto);
+  }
+
+  if (child->is_async && child->is_generator) {
+    js_set_slot(func_obj, SLOT_ASYNC, js_true);
+    ant_value_t async_generator_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
+    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
+  }
+  
+  else if (child->is_async) {
+    js_set_slot(func_obj, SLOT_ASYNC, js_true);
+    ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
+    if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
+  }
+  
+  else if (child->is_generator) {
+    ant_value_t generator_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
+    if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
+  }
+  
+  else {
+    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
+  }
 }
 
 static inline ant_value_t sv_op_get_upval(
@@ -113,6 +180,8 @@ static inline ant_value_t sv_op_closure(
   sv_closure_t *closure = js_closure_alloc(js);
   closure->func = child;
   closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
+  closure->bound_argv = NULL;
+  closure->bound_argc = 0;
   closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
@@ -130,44 +199,8 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
-
-  ant_value_t func_obj = mkobj(js, 0);
-  closure->func_obj = func_obj;
   ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
-  
-  js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator && !child->is_async);
-  js_setprop(js, func_obj, js->length_str, tov((double)child->function_length));
-  js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
-  
-  if (is_object_type(module_ctx)) js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
-  if (!child->is_arrow && !child->is_method && (!child->is_async || child->is_generator)) {
-    ant_value_t parent_proto = child->is_async
-      ? js->sym.async_generator_proto
-      : (child->is_generator ? js->sym.generator_proto : js->sym.object_proto);
-    sv_setup_function_prototype_with_parent(js, func_obj, func_val, parent_proto);
-  }
-  
-  if (child->is_async && child->is_generator) {
-    js_set_slot(func_obj, SLOT_ASYNC, js_true);
-    ant_value_t async_generator_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
-    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
-  }
-  
-  else if (child->is_async) {
-    js_set_slot(func_obj, SLOT_ASYNC, js_true);
-    ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
-    if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
-  }
-  
-  else if (child->is_generator) {
-    ant_value_t generator_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
-    if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
-  }
-  
-  else {
-    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
-  }
+  sv_init_closure_function_object(js, closure, func_val, module_ctx);
   
   return js_mkundef();
 }

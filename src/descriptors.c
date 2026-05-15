@@ -30,7 +30,7 @@ static inline bool is_canonical_desc_obj(ant_value_t obj) {
 
 static inline bool is_exotic_desc_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  return ptr && ptr->is_exotic;
+  return ptr && ptr->flags.is_exotic;
 }
 
 static inline bool desc_registry_allowed(ant_value_t obj) {

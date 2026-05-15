@@ -386,6 +386,8 @@ struct sv_vm {
   struct {
     bool active;
     int64_t ip_offset;
+    ant_value_t *params;
+    int64_t n_params;
     ant_value_t *locals;
     int64_t n_locals;
     ant_value_t *vstack;
@@ -1255,7 +1257,7 @@ static inline ant_value_t sv_call_resolve_closure(
       uint32_t cc = ++fn->call_count;
       if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
         sv_tfb_ensure(fn);
-      if (cc > SV_JIT_THRESHOLD) {
+      if (!fn->jit_compile_failed && cc > SV_JIT_THRESHOLD) {
         ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
         if (result != SV_JIT_RETRY_INTERP) return result;
       }

@@ -253,6 +253,9 @@ static bool is_eventemitter_like(ant_t *js, ant_value_t target) {
     ? js_getprop_fallback(js, proto, "constructor")
     : js_mkundef();
 
+  if (proto == g_eventemitter_proto || proto == g_eventtarget_proto)
+    return false;
+
   if (
     eventemitter_like_cache_has(proto) || 
     eventemitter_like_cache_has(ctor)

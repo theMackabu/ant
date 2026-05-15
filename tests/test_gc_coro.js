@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 // Simulate TUI-like behavior: async handler with lots of string allocations
 
 function stripAnsi(str) {
@@ -57,6 +67,7 @@ const interval = setInterval(() => {
     setTimeout(() => {
       const a = Ant.stats();
       console.log(`done: total ${((a.pools.totalUsed + a.alloc.total) / 1024 / 1024).toFixed(1)}MB`);
+      __gcPerfLog();
     }, 10);
   }
 }, 10); // 500 * 10ms = 5 seconds

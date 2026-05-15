@@ -105,6 +105,19 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   return true;
 }
 
+#ifdef ANT_JIT
+static inline void sv_clear_jit_resume(sv_vm_t *vm) {
+  vm->jit_resume.active = false;
+  vm->jit_resume.ip_offset = 0;
+  vm->jit_resume.params = NULL;
+  vm->jit_resume.n_params = 0;
+  vm->jit_resume.locals = NULL;
+  vm->jit_resume.n_locals = 0;
+  vm->jit_resume.vstack = NULL;
+  vm->jit_resume.vstack_sp = 0;
+}
+#endif
+
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
   if (!func || !func->srcpos || func->srcpos_count <= 0) return false;
   int best = -1;
@@ -709,6 +722,7 @@ static inline ant_value_t sv_try_direct_closure_jit(
   }
 
   if (callee->is_generator) return SV_JIT_RETRY_INTERP;
+  if (callee->jit_compile_failed) return SV_JIT_RETRY_INTERP;
 
   uint32_t cc = ++callee->call_count;
   if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
@@ -806,6 +820,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   if (!resuming) {
   ant_value_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
   if (is_err(stage_err)) {
+    #ifdef ANT_JIT
+    if (vm->jit_resume.active) sv_clear_jit_resume(vm);
+    #endif
     vm_result = stage_err;
     goto sv_leave;
   }}
@@ -814,14 +831,26 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   if (!resuming && vm->jit_resume.active) {
     ip = func->code + vm->jit_resume.ip_offset;
     frame->ip = ip;
+    int64_t rp =
+      vm->jit_resume.n_params < func->param_count
+      ? vm->jit_resume.n_params : func->param_count;
+    for (int64_t i = 0; i < rp; i++)
+      entry_bp[i] = vm->jit_resume.params[i];
     int64_t rl = 
       vm->jit_resume.n_locals < func->max_locals
       ? vm->jit_resume.n_locals : func->max_locals;
     for (int64_t i = 0; i < rl; i++)
       entry_lp[i] = vm->jit_resume.locals[i];
-      
+
+    ant_value_t *old_bp = vm->jit_resume.params;
+    for (sv_upvalue_t *uv = vm->open_upvalues; old_bp && uv; uv = uv->next) {
+    if (uv->location >= old_bp && uv->location < old_bp + rp) {
+      ptrdiff_t slot = uv->location - old_bp;
+      uv->location = &entry_bp[slot];
+    }}
+
     ant_value_t *old_lp = vm->jit_resume.locals;
-    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
+    for (sv_upvalue_t *uv = vm->open_upvalues; old_lp && uv; uv = uv->next) {
     if (uv->location >= old_lp && uv->location < old_lp + rl) {
       ptrdiff_t slot = uv->location - old_lp;
       uv->location = &entry_lp[slot];
@@ -883,7 +912,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       }
     }
 
-    vm->jit_resume.active = false;
+    sv_clear_jit_resume(vm);
   }
   #endif
 
@@ -1908,7 +1937,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_SPECIAL_OBJ:  { sv_op_special_obj(vm, js, frame, ip);                       NEXT(2); }
   L_EMPTY:        { vm->stack[vm->sp++] = T_EMPTY;                              NEXT(1); }
-  L_PUT_CONST:    { func->constants[sv_get_u32(ip + 1)] = vm->stack[--vm->sp];  NEXT(5); }
+  
+  L_PUT_CONST: {
+    uint32_t idx = sv_get_u32(ip + 1);
+    ant_value_t cached = vm->stack[--vm->sp];
+    func->constants[idx] = cached;
+    gc_remember_func_const(js, func, idx, cached);
+    NEXT(5);
+  }
   
   L_DEBUGGER:  { NEXT(1); }
   L_NOP:       { NEXT(1); }

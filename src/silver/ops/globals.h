@@ -38,7 +38,7 @@ static inline bool sv_global_ic_try_get_hit(
   if (!ic || !interned) return false;
 
   ant_object_t *gptr = sv_global_obj_ptr(js);
-  if (!gptr || gptr->is_exotic || !gptr->shape) return false;
+  if (!gptr || gptr->flags.is_exotic || !gptr->shape) return false;
   if (ic->epoch != ant_ic_epoch_counter) return false;
   if (ic->cached_shape != gptr->shape) return false;
   if (ic->cached_index >= gptr->prop_count) return false;
@@ -61,7 +61,7 @@ static inline bool sv_global_ic_try_fill(
   if (!ic || !interned) return false;
 
   ant_object_t *gptr = sv_global_obj_ptr(js);
-  if (!gptr || gptr->is_exotic || !gptr->shape) return false;
+  if (!gptr || gptr->flags.is_exotic || !gptr->shape) return false;
 
   int32_t slot = ant_shape_lookup_interned(gptr->shape, interned);
   if (slot < 0) return false;

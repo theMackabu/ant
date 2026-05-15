@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 console.log('=== Minimal Test 8 ===');
 console.log('Starting...');
 
@@ -45,3 +55,4 @@ for (let i = 0; i < 5; i = i + 1) {
   cycleData['data' + i] = { value: i * 10 };
 }
 console.log('Done');
+__gcPerfLog();

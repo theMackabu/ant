@@ -1,5 +1,6 @@
 #include <gc.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 #include "shapes.h"
 
@@ -21,6 +22,7 @@ static uint32_t gc_major_pool_growth_x256 = 384;
 
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
+static bool gc_use_nursery_major_floor = true;
 
 static uint64_t gc_now_ms(void) {
   struct timespec ts;
@@ -34,14 +36,41 @@ static size_t gc_scaled_threshold(size_t base_live, uint32_t growth_x256, size_t
   return scaled;
 }
 
+static size_t gc_pool_live_bytes(ant_t *js) {
+  ant_pool_stats_t rope_stats = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t symbol_stats = js_pool_stats(&js->pool.symbol);
+  ant_pool_stats_t bigint_stats = js_class_pool_stats(&js->pool.bigint);
+  ant_string_pool_stats_t string_stats = js_string_pool_stats(&js->pool.string);
+
+  return rope_stats.used
+    + symbol_stats.used
+    + bigint_stats.used
+    + string_stats.total.used;
+}
+
 size_t gc_live_major_threshold(ant_t *js) {
-  size_t base_live = js ? js->gc_last_live : 0;
-  return gc_scaled_threshold(base_live, gc_major_live_growth_x256, 2048u);
+  size_t threshold = gc_scaled_threshold(
+    js->gc_last_live, 
+    gc_major_live_growth_x256, GC_MAJOR_SCALE
+  );
+
+  bool nursery_churn = gc_minor_surv_ewma <= 64;   // <= 25% young survival
+  bool nursery_sticky = gc_minor_surv_ewma >= 160; // >= 62.5% young survival
+  bool major_pays = gc_major_recl_ewma >= 51;      // >= 20% old-gen reclaim
+  bool major_wasteful = gc_major_recl_ewma <= 13;  // <= 5% old-gen reclaim
+
+  if (gc_use_nursery_major_floor) {
+    if (nursery_sticky || (major_pays && !nursery_churn)) gc_use_nursery_major_floor = false;
+  } else if (nursery_churn || major_wasteful) gc_use_nursery_major_floor = true;
+
+  if (!gc_use_nursery_major_floor) return threshold;
+  size_t nursery_floor = js->old_live_count + gc_nursery_threshold;
+  
+  return threshold < nursery_floor ? nursery_floor : threshold;
 }
 
 size_t gc_pool_major_threshold(ant_t *js) {
-  size_t base_live = js ? js->gc_pool_last_live : 0;
-  return gc_scaled_threshold(base_live, gc_major_pool_growth_x256, 4u * 1024u * 1024u);
+  return gc_scaled_threshold(js->gc_pool_last_live, gc_major_pool_growth_x256, GC_POOL_PRESSURE_FLOOR);
 }
 
 static void gc_adapt_nursery(size_t young_before, size_t survivors) {
@@ -107,7 +136,8 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!rope || !gc_ropes_mark(rope)) return;
+    if (!gc_ropes_contains(rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) return;
+    if (!gc_ropes_mark(rope)) return;
     gc_mark_str(js, rope->left);
     gc_mark_str(js, rope->right);
     gc_mark_str(js, rope->cached);
@@ -116,9 +146,11 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_builder: {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!builder || !gc_ropes_mark(builder)) return;
+    if (!gc_ropes_contains(builder, sizeof(*builder), _Alignof(ant_string_builder_t))) return;
+    if (!gc_ropes_mark(builder)) return;
     gc_mark_value(js, builder->cached);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+      if (!gc_ropes_contains(chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
       if (gc_ropes_mark(chunk)) gc_mark_value(js, chunk->value);
     }
     return;
@@ -148,8 +180,7 @@ void gc_run(ant_t *js) {
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count = 0;
 
-  ant_string_pool_stats_t pool_stats = js_string_pool_stats(&js->pool.string);
-  js->gc_pool_last_live = pool_stats.total.used;
+  js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
@@ -186,11 +217,23 @@ void gc_maybe(ant_t *js) {
   
   if (young_count >= gc_nursery_threshold) {
     gc_tick = 0;
+    size_t live_before_minor = js->obj_arena.live_count;
+    size_t major_threshold = gc_live_major_threshold(js);
+    size_t pool_threshold = gc_pool_major_threshold(js);
+
     gc_run_minor(js);
+    
     if (js->minor_gc_count >= gc_major_every_n) {
-      js->minor_gc_count = 0;
-      gc_run(js);
+      bool major_due = 
+        live_before_minor >= major_threshold ||
+        js->gc_pool_alloc >= pool_threshold;
+      
+      if (major_due) {
+        js->minor_gc_count = 0;
+        gc_run(js);
+      }
     }
+    
     return;
   }
 

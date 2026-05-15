@@ -1,18 +1,21 @@
 #ifdef ANT_JIT
 
 #include <math.h>
-#include "silver/glue.h"
+#include <stdlib.h>
 
 #include "utf8.h"
 #include "internal.h"
 #include "errors.h"
+#include "gc/roots.h"
+#include "tokens.h"
+#include "silver/glue.h"
 
+#include "ops/calls.h"
 #include "ops/globals.h"
 #include "ops/property.h"
 #include "ops/iteration.h"
 #include "ops/upvalues.h"
 #include "ops/comparison.h"
-#include "ops/calls.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
@@ -29,6 +32,14 @@ ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) + tod(r));
+  if (vtype(l) == T_STR && vtype(r) == T_STR) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, l);
+    GC_ROOT_PIN(js, r);
+    ant_value_t res = do_string_op(js, TOK_PLUS, l, r);
+    GC_ROOT_RESTORE(js, root_mark);
+    return is_err(res) ? SV_JIT_BAILOUT : res;
+  }
   return SV_JIT_BAILOUT;
 }
 
@@ -120,11 +131,13 @@ ant_value_t jit_helper_str_flush_local(
 
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) < tod(r));
+  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) < 0);
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_le(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) <= tod(r));
+  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) <= 0);
   return SV_JIT_BAILOUT;
 }
 
@@ -605,10 +618,80 @@ static inline sv_upvalue_t *jit_make_undef_upvalue(void) {
   return uv;
 }
 
+static sv_upvalue_t *jit_capture_upvalue(
+  sv_vm_t *vm, sv_upvalue_t **open_upvalues,
+  ant_value_t *slot
+) {
+  sv_upvalue_t **pp = open_upvalues ? open_upvalues : &vm->open_upvalues;
+
+  while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
+  if (*pp && (*pp)->location == slot) return *pp;
+
+  sv_upvalue_t *uv = js_upvalue_alloc();
+  uv->location = slot;
+  uv->next = *pp;
+  *pp = uv;
+
+  return uv;
+}
+
+void jit_helper_take_open_upvalues(
+  sv_vm_t *vm, sv_upvalue_t **open_upvalues,
+  ant_value_t *slots, int slot_count
+) {
+  if (!vm || !open_upvalues || !slots || slot_count <= 0) return;
+  
+  ant_value_t *lo = slots;
+  ant_value_t *hi = slots + slot_count;
+  sv_upvalue_t **pp = &vm->open_upvalues;
+  
+  while (*pp) {
+    sv_upvalue_t *uv = *pp;
+    ant_value_t *loc = uv->location;
+    if (loc < lo) break;
+    if (loc >= hi) { pp = &uv->next; continue; }
+    
+    *pp = uv->next;
+    sv_upvalue_t **dst = open_upvalues;
+    while (*dst && (*dst)->location > loc) dst = &(*dst)->next;
+    uv->next = *dst;
+    *dst = uv;
+  }
+}
+
+void jit_helper_take_open_upvalues_rebase(
+  sv_vm_t *vm, sv_upvalue_t **open_upvalues,
+  ant_value_t *src_slots, ant_value_t *dst_slots, int slot_count
+) {
+  if (!vm || !open_upvalues || !src_slots || !dst_slots || slot_count <= 0) return;
+
+  ant_value_t *lo = src_slots;
+  ant_value_t *hi = src_slots + slot_count;
+  sv_upvalue_t **pp = &vm->open_upvalues;
+
+  while (*pp) {
+    sv_upvalue_t *uv = *pp;
+    ant_value_t *loc = uv->location;
+    if (loc < lo) break;
+    if (loc >= hi) { pp = &uv->next; continue; }
+
+    *pp = uv->next;
+    ant_value_t *dst_loc = dst_slots + (loc - src_slots);
+    uv->location = dst_loc;
+
+    sv_upvalue_t **dst = open_upvalues;
+    while (*dst && (*dst)->location > dst_loc) dst = &(*dst)->next;
+    uv->next = *dst;
+    *dst = uv;
+  }
+}
+
 ant_value_t jit_helper_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *parent_closure,
   ant_value_t this_val, ant_value_t *slots,
-  int slot_base, int slot_count, uint32_t const_idx
+  int slot_base, int slot_count, uint32_t const_idx,
+  const char *name, uint32_t name_len,
+  sv_upvalue_t **open_upvalues
 ) {
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
@@ -618,6 +701,8 @@ ant_value_t jit_helper_closure(
 
   closure->func = child;
   closure->bound_this = child->is_arrow ? this_val : js_mkundef();
+  closure->bound_argv = NULL;
+  closure->bound_argc = 0;
   closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
@@ -638,60 +723,30 @@ ant_value_t jit_helper_closure(
       continue;
     }
     
-    closure->upvalues[i] = sv_capture_upvalue(vm, &slots[idx]);
+    closure->upvalues[i] = jit_capture_upvalue(vm, open_upvalues, &slots[idx]);
   }
-
-  ant_value_t func_obj = mkobj(js, 0);
-  closure->func_obj = func_obj;
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, mkval(T_FUNC, (uintptr_t)parent_closure));
-  
-  js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator && !child->is_async);
-  js_setprop(js, func_obj, js->length_str, tov((double)child->function_length));
-  js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
-  
-  if (is_object_type(module_ctx))
-    js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  if (!child->is_arrow && !child->is_method && (!child->is_async || child->is_generator)) {
-    ant_value_t parent_proto = child->is_async
-      ? js->sym.async_generator_proto
-      : (child->is_generator ? js->sym.generator_proto : js->sym.object_proto);
-    sv_setup_function_prototype_with_parent(js, func_obj, func_val, parent_proto);
-  }
+  ant_value_t module_ctx = sv_get_current_closure_module_ctx(
+    js, mkval(T_FUNC, (uintptr_t)parent_closure)
+  );
   
-  if (child->is_async && child->is_generator) {
-    js_set_slot(func_obj, SLOT_ASYNC, js_true);
-    ant_value_t async_generator_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
-    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
-  }
-  
-  else if (child->is_async) {
-    js_set_slot(func_obj, SLOT_ASYNC, js_true);
-    ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
-    if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
-  }
-  
-  else if (child->is_generator) {
-    ant_value_t generator_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
-    if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
-  }
-  
-  else {
-    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
-  }
+  sv_init_closure_function_object(js, closure, func_val, module_ctx);
+  if (name) js_set_function_name(js, func_val, name, name_len);
 
   return func_val;
 }
 
-void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *slots, int slot_count) {
-  if (!slots || slot_count <= 0) return;
-  if ((int)slot_idx >= slot_count) return;
+void jit_helper_close_upval(
+  sv_vm_t *vm, int32_t slot_idx, ant_value_t *locals, int n_locals,
+  sv_upvalue_t **open_upvalues
+) {
+  if (!locals || n_locals <= 0) return;
+  if (slot_idx < 0 || slot_idx >= n_locals) return;
 
-  ant_value_t *lo = slots + slot_idx;
-  ant_value_t *hi = slots + slot_count;
-  sv_upvalue_t **pp = &vm->open_upvalues;
+  ant_value_t *lo = locals + slot_idx;
+  ant_value_t *hi = locals + n_locals;
+  sv_upvalue_t **pp = open_upvalues ? open_upvalues : &vm->open_upvalues;
   
   while (*pp) {
     sv_upvalue_t *uv = *pp;
@@ -705,10 +760,33 @@ void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *slots, 
   }
 }
 
+void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
+  if (!vm || !open_upvalues || !*open_upvalues) return;
+
+  sv_upvalue_t *uv = *open_upvalues;
+  *open_upvalues = NULL;
+
+  while (uv) {
+    sv_upvalue_t *next = uv->next;
+    if (uv->location == &uv->closed) {
+      uv->next = NULL;
+      uv = next;
+      continue;
+    }
+    
+    sv_upvalue_t **pp = &vm->open_upvalues;
+    while (*pp && (*pp)->location > uv->location) pp = &(*pp)->next;
+    uv->next = *pp;
+    *pp = uv;
+    uv = next;
+  }
+}
+
 ant_value_t jit_helper_bailout_resume(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 ) {
@@ -718,14 +796,16 @@ ant_value_t jit_helper_bailout_resume(
 
   vm->jit_resume.active     = true;
   vm->jit_resume.ip_offset  = (int)bc_offset;
+  vm->jit_resume.params     = params;
+  vm->jit_resume.n_params   = n_params;
   vm->jit_resume.locals     = locals;
   vm->jit_resume.n_locals   = n_locals;
   vm->jit_resume.vstack     = vstack;
   vm->jit_resume.vstack_sp  = vstack_sp;
 
   return sv_execute_closure_entry(
-    vm, closure, closure->func_obj, js_mkundef(),
-    this_val, args, argc, NULL
+    vm, closure, mkval(T_FUNC, (uintptr_t)closure), 
+    js_mkundef(), this_val, args, argc, NULL
   );
 }
 
@@ -912,14 +992,14 @@ ant_value_t jit_helper_ushr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r
 }
 
 ant_value_t jit_helper_gt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM)
-    return js_bool(tod(l) > tod(r));
+  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) > tod(r));
+  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) > 0);
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_ge(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM)
-    return js_bool(tod(l) >= tod(r));
+  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) >= tod(r));
+  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) >= 0);
   return SV_JIT_BAILOUT;
 }
 

@@ -1,3 +1,13 @@
+const __gcPerfNow = () => (
+  typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+);
+const __gcPerfStart = __gcPerfNow();
+function __gcPerfLog() {
+  console.log(`[perf] runtime: ${(__gcPerfNow() - __gcPerfStart).toFixed(2)}ms`);
+}
+
 console.log('=== GC Test with Large Objects ===\n');
 
 function fmt(bytes) {
@@ -60,3 +70,4 @@ console.log('');
 
 console.log('If arenaSize stayed same, GC reclaimed memory for reuse!');
 console.log('=== Test Complete ===');
+__gcPerfLog();

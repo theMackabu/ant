@@ -233,6 +233,14 @@ struct ant_isolate_t {
   size_t remember_set_len;
   size_t remember_set_cap;
 
+  struct {
+    sv_func_t *func;
+    uint32_t slot;
+  } *remembered_func_consts;
+  
+  size_t remembered_func_const_len;
+  size_t remembered_func_const_cap;
+
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
   #endif
