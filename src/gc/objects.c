@@ -138,11 +138,13 @@ void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value
   uint8_t type = (value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
   
   if (type != T_FUNC) {
+    if (type == T_STR) goto remember;
     if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
     ant_object_t *obj = (ant_object_t *)(uintptr_t)(value & NANBOX_DATA_MASK);
     if (!obj || obj->flags.generation != 0) return;
   }
 
+remember:
   for (size_t i = 0; i < js->remembered_func_const_len; i++) 
     if (js->remembered_func_consts[i].func == func && js->remembered_func_consts[i].slot == slot) return;
 
