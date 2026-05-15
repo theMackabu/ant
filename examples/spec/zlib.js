@@ -13,6 +13,11 @@ test('Z_FINISH is 4', zlib.constants.Z_FINISH, 4);
 test('Z_DEFAULT_COMPRESSION is -1', zlib.constants.Z_DEFAULT_COMPRESSION, -1);
 test('Z_BEST_SPEED is 1', zlib.constants.Z_BEST_SPEED, 1);
 test('Z_BEST_COMPRESSION is 9', zlib.constants.Z_BEST_COMPRESSION, 9);
+test('top-level Z_FINISH alias', zlib.Z_FINISH, zlib.constants.Z_FINISH);
+test('top-level Z_DEFAULT_CHUNK alias', zlib.Z_DEFAULT_CHUNK, 16384);
+test('codes exists', typeof zlib.codes, 'object');
+test('codes maps Z_OK', zlib.codes.Z_OK, 0);
+test('codes maps numeric error', zlib.codes['-3'], 'Z_DATA_ERROR');
 
 test('createGzip is function', typeof zlib.createGzip, 'function');
 test('createGunzip is function', typeof zlib.createGunzip, 'function');
@@ -47,9 +52,16 @@ test('createGzip has end', typeof gz.end, 'function');
 test('createGzip has on', typeof gz.on, 'function');
 test('createGzip has pipe', typeof gz.pipe, 'function');
 test('createGzip has destroy', typeof gz.destroy, 'function');
+test('createGzip has flush', typeof gz.flush, 'function');
+test('createGzip has reset', typeof gz.reset, 'function');
+test('createGzip has close', typeof gz.close, 'function');
+test('createGzip has params', typeof gz.params, 'function');
 test('createGzip readable=true', gz.readable, true);
 test('createGzip writable=true', gz.writable, true);
 test('createGzip bytesWritten starts 0', gz.bytesWritten, 0);
+test('createGzip uses Gzip prototype', Object.getPrototypeOf(gz) === zlib.Gzip.prototype, true);
+test('Gzip prototype constructor', zlib.Gzip.prototype.constructor, zlib.Gzip);
+test('new Gzip uses Gzip prototype', Object.getPrototypeOf(new zlib.Gzip()) === zlib.Gzip.prototype, true);
 
 const gun = zlib.createGunzip();
 test('createGunzip has write', typeof gun.write, 'function');
@@ -104,6 +116,10 @@ test('gunzipSync string roundtrip', Buffer.from(fromStringBack).toString(), 'hel
 const repetitive = Buffer.from('a'.repeat(1000));
 const compressedRep = zlib.gzipSync(repetitive);
 test('gzip compresses repetitive data', compressedRep.length < repetitive.length, true);
+const storedRep = zlib.gzipSync(repetitive, { level: zlib.constants.Z_NO_COMPRESSION });
+const bestRep = zlib.gzipSync(repetitive, { level: zlib.constants.Z_BEST_COMPRESSION, chunkSize: 128 });
+test('gzipSync honors compression level option', storedRep.length > bestRep.length, true);
+test('gunzipSync accepts chunkSize option', Buffer.from(zlib.gunzipSync(bestRep, { chunkSize: 128 })).toString(), 'a'.repeat(1000));
 
 const crc0 = zlib.crc32('hello');
 test('crc32 returns number', typeof crc0, 'number');
@@ -179,6 +195,52 @@ function testTransformStream() {
   });
 }
 
+function concatChunks(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+function testGzipTransformFinish() {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const stream = zlib.createGzip({ level: zlib.constants.Z_BEST_SPEED, chunkSize: 128 });
+
+    stream.on('data', (chunk) => chunks.push(chunk));
+    stream.on('end', () => {
+      const compressed = concatChunks(chunks);
+      const out = zlib.gunzipSync(compressed);
+      test('gzip transform finish emits complete gzip', Buffer.from(out).toString(), 'Hello, zlib world!');
+      resolve();
+    });
+
+    stream.end(input);
+  });
+}
+
+function testStreamControlMethods() {
+  return new Promise((resolve) => {
+    const stream = zlib.createDeflate();
+    let flushCalled = false;
+    let paramsCalled = false;
+    let closeCalled = false;
+
+    stream.write(Buffer.from('abc'));
+    stream.flush(zlib.constants.Z_SYNC_FLUSH, () => { flushCalled = true; });
+    stream.params(zlib.constants.Z_BEST_SPEED, zlib.constants.Z_DEFAULT_STRATEGY, () => { paramsCalled = true; });
+    stream.reset();
+    stream.close(() => { closeCalled = true; });
+
+    test('flush callback called', flushCalled, true);
+    test('params callback called', paramsCalled, true);
+    test('close callback called', closeCalled, true);
+    resolve();
+  });
+}
+
 function testBytesWritten() {
   const stream = zlib.createDeflate();
   const data = Buffer.from('track bytes written');
@@ -192,5 +254,7 @@ await testAsyncGzip();
 await testAsyncDeflate();
 await testAsyncBrotli();
 await testTransformStream();
+await testGzipTransformFinish();
+await testStreamControlMethods();
 
 summary();

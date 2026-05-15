@@ -18,3 +18,4 @@
 /// <reference path="modules/shell.d.ts" />
 /// <reference path="modules/util.d.ts" />
 /// <reference path="modules/worker_threads.d.ts" />
+/// <reference path="modules/zlib.d.ts" />
