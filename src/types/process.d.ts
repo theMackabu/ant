@@ -13,6 +13,7 @@ interface Features {
 
 interface Versions {
   ant: string;
+  silver: string;
   node: string;
   brotli: string;
   llhttp: string;

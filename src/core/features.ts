@@ -11,6 +11,7 @@ process.version = 'v25.9.0';
 
 process.versions = {
   ant: import.meta.env.VERSION,
+  silver: import.meta.env.VERSION,
   node: '25.9.0',
   brotli: '1.1.0',
   llhttp: '9.3.1',
