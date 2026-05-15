@@ -811,10 +811,12 @@ ant_value_t jit_helper_bailout_resume(
 
 void jit_helper_define_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const char *str, uint32_t len
+  ant_value_t val, const char *str, uint32_t len,
+  sv_obj_site_cache_t *site
 ) {
   if (!sv_try_define_field_fast(js, obj, str, val))
     js_define_own_prop(js, obj, str, len, val);
+  sv_note_obj_site_shape(site, obj);
 }
 
 void jit_helper_set_name(
@@ -896,8 +898,23 @@ ant_value_t jit_helper_put_global(
   return js_setprop(js, js->global, key, val);
 }
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js) {
+ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js, sv_obj_site_cache_t *site) {
   ant_value_t obj = mkobj(js, 0);
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (ptr && ptr->shape && site) {
+    if (site->shared_shape) {
+      if (site->shared_shape != ptr->shape) {
+        ant_shape_retain(site->shared_shape);
+        ant_shape_release(ptr->shape);
+        ptr->shape = site->shared_shape;
+      }
+      uint32_t count = ant_shape_count(ptr->shape);
+      if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(ptr, count);
+    } else {
+      site->shared_shape = ptr->shape;
+      ant_shape_retain(site->shared_shape);
+    }
+  }
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;

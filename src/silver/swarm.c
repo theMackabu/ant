@@ -139,6 +139,7 @@ typedef struct {
   uint8_t     *slot_type;    
   uint64_t    *known_const;  
   bool        *has_const;    
+  sv_obj_site_cache_t **obj_site;
   int          sp;           
   int          max;
 } jit_vstack_t;
@@ -147,6 +148,7 @@ static MIR_reg_t vstack_push(jit_vstack_t *vs) {
   if (vs->known_func) vs->known_func[vs->sp] = NULL;
   if (vs->slot_type) vs->slot_type[vs->sp] = 0; 
   if (vs->has_const) vs->has_const[vs->sp] = false;
+  if (vs->obj_site) vs->obj_site[vs->sp] = NULL;
   return vs->regs[vs->sp++];
 }
 
@@ -154,6 +156,7 @@ static MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
   if (vs->known_func) vs->known_func[vs->sp] = NULL;
   if (vs->slot_type) vs->slot_type[vs->sp] = 0;
   if (vs->has_const) { vs->has_const[vs->sp] = true; vs->known_const[vs->sp] = val; }
+  if (vs->obj_site) vs->obj_site[vs->sp] = NULL;
   return vs->regs[vs->sp++];
 }
 
@@ -519,6 +522,14 @@ static void mir_emit_close_marked_slots(
       MIR_new_int_op(ctx, slot_count),
       r_open_upvalues ? MIR_new_reg_op(ctx, r_open_upvalues) : MIR_new_uint_op(ctx, 0)));
   MIR_append_insn(ctx, fn, no_open);
+}
+
+static sv_obj_site_cache_t *sv_jit_obj_site_for_bc_off(sv_func_t *func, int bc_off) {
+  if (!func || !func->obj_sites || func->obj_site_count == 0) return NULL;
+  for (uint16_t i = 0; i < func->obj_site_count; i++) {
+    if ((int)func->obj_sites[i].bc_off == bc_off) return &func->obj_sites[i];
+  }
+  return NULL;
 }
 
 static void mir_emit_exit_upvalue_cleanup(
@@ -2606,13 +2617,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "js");
 
   MIR_item_t define_field_proto = MIR_new_proto(ctx, "df_proto",
-    0, NULL, 6,
+    0, NULL, 7,
     MIR_T_I64, "vm",
     MIR_T_I64, "js",
     MIR_JSVAL,  "obj",
     MIR_JSVAL,  "val",
     MIR_T_P,   "str",
-    MIR_T_I32, "len");
+    MIR_T_I32, "len",
+    MIR_T_P,   "site");
 
   MIR_item_t define_method_comp_proto = MIR_new_proto(ctx, "dmc_proto",
     0, NULL, 5,
@@ -2653,9 +2665,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_type_t obj_ret = MIR_JSVAL;
   MIR_item_t object_proto = MIR_new_proto(ctx, "obj_proto",
-    1, &obj_ret, 2,
+    1, &obj_ret, 3,
     MIR_T_I64, "vm",
-    MIR_T_I64, "js");
+    MIR_T_I64, "js",
+    MIR_T_P,   "site");
 
   MIR_type_t arr_ret = MIR_JSVAL;
   MIR_item_t array_proto = MIR_new_proto(ctx, "arr_proto",
@@ -2848,14 +2861,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   vs.slot_type = calloc((size_t)vs.max, sizeof(uint8_t));
   vs.known_const = calloc((size_t)vs.max, sizeof(uint64_t));
   vs.has_const = calloc((size_t)vs.max, sizeof(bool));
+  vs.obj_site = calloc((size_t)vs.max, sizeof(sv_obj_site_cache_t *));
   
-  if (!vs.regs || !vs.known_func || !vs.d_regs || !vs.slot_type || !vs.known_const || !vs.has_const) {
+  if (!vs.regs || !vs.known_func || !vs.d_regs || !vs.slot_type || !vs.known_const || !vs.has_const || !vs.obj_site) {
     free(vs.regs); 
     free(vs.known_func);
     free(vs.d_regs);
     free(vs.slot_type);
     free(vs.known_const);
     free(vs.has_const);
+    free(vs.obj_site);
     
     MIR_finish_func(ctx);
     MIR_finish_module(ctx);
@@ -2894,6 +2909,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       free(vs.slot_type);
       free(vs.known_const);
       free(vs.has_const);
+      free(vs.obj_site);
       free(local_regs);
       free(local_d_regs);
       free(known_func_locals);
@@ -3273,6 +3289,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           memset(vs.slot_type, SLOT_BOXED, (size_t)vs.max);
         if (vs.has_const)
           memset(vs.has_const, 0, (size_t)vs.max * sizeof(bool));
+        if (vs.obj_site)
+          memset(vs.obj_site, 0, (size_t)vs.max * sizeof(sv_obj_site_cache_t *));
         if (known_type_locals && local_d_regs) {
           for (int li = 0; li < n_locals; li++)
             if (known_type_locals[li] == SV_TI_NUM
@@ -3698,10 +3716,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_func_t *kf = vs.known_func[vs.sp - 1];
         bool kc = vs.has_const && vs.has_const[vs.sp - 1];
         uint64_t kcv = kc ? vs.known_const[vs.sp - 1] : 0;
+        sv_obj_site_cache_t *site = vs.obj_site ? vs.obj_site[vs.sp - 1] : NULL;
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t top = vstack_top(&vs);
         MIR_reg_t dst = vstack_push(&vs);
         vs.known_func[vs.sp - 1] = kf;
+        if (vs.obj_site) vs.obj_site[vs.sp - 1] = site;
         if (kc && vs.has_const) { vs.has_const[vs.sp - 1] = true; vs.known_const[vs.sp - 1] = kcv; }
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
@@ -6166,10 +6186,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_atom_t *atom = &func->atoms[idx];
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        sv_obj_site_cache_t *site = vs.obj_site ? vs.obj_site[vs.sp - 2] : NULL;
         MIR_reg_t val = vstack_pop(&vs);
         MIR_reg_t obj = vstack_top(&vs); 
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 8,
+          MIR_new_call_insn(ctx, 9,
             MIR_new_ref_op(ctx, define_field_proto),
             MIR_new_ref_op(ctx, imp_define_field),
             MIR_new_reg_op(ctx, r_vm),
@@ -6177,7 +6198,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, obj),
             MIR_new_reg_op(ctx, val),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
-            MIR_new_uint_op(ctx, (uint64_t)atom->len)));
+            MIR_new_uint_op(ctx, (uint64_t)atom->len),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)site)));
         break;
       }
 
@@ -6510,13 +6532,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_OBJECT: {
         MIR_reg_t dst = vstack_push(&vs);
+        sv_obj_site_cache_t *site = sv_jit_obj_site_for_bc_off(func, (int)(ip - func->code));
+        if (vs.obj_site) vs.obj_site[vs.sp - 1] = site;
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 5,
+          MIR_new_call_insn(ctx, 6,
             MIR_new_ref_op(ctx, object_proto),
             MIR_new_ref_op(ctx, imp_object),
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, r_vm),
-            MIR_new_reg_op(ctx, r_js)));
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)site)));
         break;
       }
 
@@ -8352,6 +8377,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(vs.slot_type);
   free(vs.known_const);
   free(vs.has_const);
+  free(vs.obj_site);
   free(local_regs);
   free(local_d_regs);
   free(known_func_locals);

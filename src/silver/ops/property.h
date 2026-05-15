@@ -754,6 +754,16 @@ static inline bool sv_try_define_field_fast(
   return !is_err(mkprop_interned_exact(js, as_obj, interned_key, val, 0));
 }
 
+static inline void sv_note_obj_site_shape(sv_obj_site_cache_t *site, ant_value_t obj) {
+  if (!site || !is_object_type(obj)) return;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (!ptr || !ptr->shape || site->shared_shape == ptr->shape) return;
+
+  ant_shape_retain(ptr->shape);
+  if (site->shared_shape) ant_shape_release(site->shared_shape);
+  site->shared_shape = ptr->shape;
+}
+
 static inline void sv_op_define_field(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip

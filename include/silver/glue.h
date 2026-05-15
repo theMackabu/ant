@@ -13,7 +13,7 @@ ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js);
+ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js, sv_obj_site_cache_t *site);
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj);
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err);
 ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val);
@@ -138,7 +138,8 @@ void jit_helper_adopt_open_upvalues(
 
 void jit_helper_define_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const char *str, uint32_t len
+  ant_value_t val, const char *str, uint32_t len,
+  sv_obj_site_cache_t *site
 );
 
 void jit_helper_define_method_comp(
