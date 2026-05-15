@@ -1215,6 +1215,39 @@ static inline bool is_ident_name(sv_ast_t *node, const char *name) {
     && memcmp(node->str, name, n) == 0;
 }
 
+static sv_compiler_t *root_compiler(sv_compiler_t *c) {
+  while (c && c->enclosing) c = c->enclosing;
+  return c;
+}
+
+static bool is_free_name(sv_compiler_t *c, const char *name, uint32_t len) {
+  for (sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (resolve_local(cur, name, len) != -1) return false;
+  }
+  return true;
+}
+
+static void mark_module_syntax_seen(sv_compiler_t *c) {
+  sv_compiler_t *root = root_compiler(c);
+  if (root) root->module_syntax_seen = true;
+}
+
+static void request_commonjs_retry(sv_compiler_t *c) {
+  sv_compiler_t *root = root_compiler(c);
+  if (root && root->commonjs_retry_allowed && !root->module_syntax_seen)
+    root->commonjs_retry_requested = true;
+}
+
+static bool is_module_exports_member(sv_compiler_t *c, sv_ast_t *node) {
+  return node &&
+    node->type == N_MEMBER &&
+    !(node->flags & 1) &&
+    is_ident_name(node->left, "module") &&
+    node->right &&
+    is_ident_name(node->right, "exports") &&
+    is_free_name(c, "module", 6);
+}
+
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   if (!pat) return;
   switch (pat->type) {
@@ -2008,6 +2041,9 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   int append_local = -1;
   uint16_t append_slot = 0;
   sv_ast_t *append_rhs = NULL;
+
+  if (is_module_exports_member(c, target))
+    request_commonjs_retry(c);
   
   bool can_append_builder = match_self_append_local(
     c, node, &append_local, 
@@ -2749,6 +2785,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
 
+  if (is_ident_name(callee, "require") && is_free_name(c, "require", 7))
+    request_commonjs_retry(c);
+
   if (callee->type == N_OPTIONAL) {
     compile_call_optional(c, node, callee, has_spread);
     return;
@@ -2840,6 +2879,9 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
+  if (is_module_exports_member(c, node))
+    request_commonjs_retry(c);
+
   if (is_ident_name(node->left, "super")) {
     if (!(node->flags & 1) && is_private_name_node(node->right)) {
       js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Cannot access private member through super");
@@ -3445,10 +3487,12 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_IMPORT_DECL:
+      mark_module_syntax_seen(c);
       compile_import_decl(c, node);
       break;
 
     case N_EXPORT:
+      mark_module_syntax_seen(c);
       compile_export_decl(c, node);
       break;
 
@@ -5818,7 +5862,14 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   }}
 }
 
-sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
+sv_func_t *sv_compile_with_commonjs_retry(
+  ant_t *js, sv_ast_t *program,
+  sv_compile_mode_t mode,
+  const char *source, ant_offset_t source_len,
+  bool allow_commonjs_retry,
+  bool *out_retry_commonjs
+) {
+  if (out_retry_commonjs) *out_retry_commonjs = false;
   if (!program || program->type != N_PROGRAM) return NULL;
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] start kind=program mode=%d len=%u body=%d strict=%d\n",
@@ -5859,10 +5910,17 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
     source_len, mode,
     (program->flags & FN_PARSE_STRICT) != 0,  NULL
   );
+  root.commonjs_retry_allowed = allow_commonjs_retry && mode == SV_COMPILE_MODULE;
   
   root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
   sv_compile_ctx_free_line_table(root.line_table);
+
+  if (!js->thrown_exists && func &&
+      root.commonjs_retry_requested && !root.module_syntax_seen) {
+    if (out_retry_commonjs) *out_retry_commonjs = true;
+    return NULL;
+  }
   
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] end kind=program mode=%d thrown=%d func=%p\n",
@@ -5871,6 +5929,12 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   
   if (js->thrown_exists || !func) return NULL;
   return func;
+}
+
+sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
+  return sv_compile_with_commonjs_retry(
+    js, program, mode, source, source_len, false, NULL
+  );
 }
 
 sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool is_async, bool is_generator) {

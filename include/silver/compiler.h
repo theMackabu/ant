@@ -138,6 +138,9 @@ typedef struct sv_compiler {
   bool is_tla;
   bool regexp_exec_write_seen;
   bool regexp_replace_write_seen;
+  bool commonjs_retry_allowed;
+  bool commonjs_retry_requested;
+  bool module_syntax_seen;
   
   int try_depth;
   int with_depth;
@@ -184,6 +187,14 @@ sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program,
   sv_compile_mode_t mode,
   const char *source, ant_offset_t source_len
+);
+
+sv_func_t *sv_compile_with_commonjs_retry(
+  ant_t *js, sv_ast_t *program,
+  sv_compile_mode_t mode,
+  const char *source, ant_offset_t source_len,
+  bool allow_commonjs_retry,
+  bool *out_retry_commonjs
 );
 
 sv_func_t *sv_compile_function(

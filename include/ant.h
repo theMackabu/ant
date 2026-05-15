@@ -46,6 +46,7 @@ void js_mark_constructor(ant_value_t value, bool is_constructor);
 // TODO: improve naming
 ant_value_t js_eval_bytecode(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
+ant_value_t js_eval_bytecode_module_with_commonjs_retry(ant_t *, const char *, size_t, bool *);
 ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
 ant_value_t js_eval_bytecode_repl(ant_t *, const char *, size_t);

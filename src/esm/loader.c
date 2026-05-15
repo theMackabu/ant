@@ -815,6 +815,18 @@ static inline bool esm_is_esm_extension(const char *path) {
     esm_has_suffix(path, ".mts");
 }
 
+static bool esm_has_explicit_extension(const char *path) {
+  if (!path || !path[0]) return false;
+
+  const char *base = path;
+  for (const char *p = path; *p; p++) {
+    if (esm_is_path_sep(*p)) base = p + 1;
+  }
+
+  const char *dot = strrchr(base, '.');
+  return dot && dot != base;
+}
+
 static bool esm_path_contains_node_modules(const char *path) {
   if (!path) return false;
   if (strstr(path, "/node_modules/")) return true;
@@ -901,12 +913,24 @@ static ant_value_t esm_eval_module_with_format(
   const char *js_code,
   size_t js_len,
   ant_value_t ns,
-  ant_module_format_t format
+  ant_module_format_t *format
 ) {
-  if (format == MODULE_EVAL_FORMAT_CJS) {
+  if (format && *format == MODULE_EVAL_FORMAT_CJS) {
     return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns);
   }
-  return js_eval_bytecode_module(js, js_code, js_len);
+
+  bool retry_commonjs = false;
+  ant_value_t result = (!esm_is_url(resolved_path) && !esm_has_explicit_extension(resolved_path))
+    ? js_eval_bytecode_module_with_commonjs_retry(js, js_code, js_len, &retry_commonjs)
+    : js_eval_bytecode_module(js, js_code, js_len);
+
+  if (retry_commonjs) {
+    if (format) *format = MODULE_EVAL_FORMAT_CJS;
+    if (js->module) js->module->format = MODULE_EVAL_FORMAT_CJS;
+    return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns);
+  }
+
+  return result;
 }
 
 ant_value_t js_esm_eval_module_source(
@@ -927,7 +951,7 @@ ant_value_t js_esm_eval_module_source(
   
   ant_value_t result = esm_eval_module_with_format(
     js, resolved_path, js_code, 
-    js_len, ns, format
+    js_len, ns, &format
   );
 
   js_module_eval_ctx_pop(js, &eval_ctx);
@@ -1262,7 +1286,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   }
 
   ant_value_t result = esm_eval_module_with_format(
-    js, mod->resolved_path, js_code, js_len, ns, mod->format
+    js, mod->resolved_path, js_code, js_len, ns, &mod->format
   );
   
   free(content);

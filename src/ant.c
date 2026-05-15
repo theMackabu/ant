@@ -18057,7 +18057,16 @@ bool js_chkargs(ant_value_t *args, int nargs, const char *spec) {
   return ok;
 }
 
-static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_compile_mode_t mode, bool parse_strict) {
+static ant_value_t js_eval_bytecode_mode(
+  ant_t *js,
+  const char *buf,
+  size_t len,
+  sv_compile_mode_t mode,
+  bool parse_strict,
+  bool allow_commonjs_retry,
+  bool *out_retry_commonjs
+) {
+  if (out_retry_commonjs) *out_retry_commonjs = false;
   if (len == (size_t)~0U) len = strlen(buf);
   
   code_arena_mark_t parse_mark = parse_arena_mark();
@@ -18069,12 +18078,23 @@ static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len,
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
   }
 
+  bool retry_commonjs = false;
+  sv_func_t *func = sv_compile_with_commonjs_retry(
+    js, program, mode, buf, (ant_offset_t)len,
+    allow_commonjs_retry, &retry_commonjs
+  );
+  
+  if (retry_commonjs) {
+    parse_arena_rewind(parse_mark);
+    if (out_retry_commonjs) *out_retry_commonjs = true;
+    return js_mkundef();
+  }
+
   if (mode == SV_COMPILE_MODULE) {
     ant_value_t ns = js_module_eval_active_ns(js);
     if (is_object_type(ns)) esm_predeclare_exports(js, program, ns);
   }
 
-  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len);
   parse_arena_rewind(parse_mark);
   if (!func) {
     if (js->thrown_exists) return mkval(T_ERR, 0);
@@ -18095,23 +18115,27 @@ static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len,
 }
 
 ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_SCRIPT, false);
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_SCRIPT, false, false, NULL);
 }
 
 ant_value_t js_eval_bytecode_module(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false);
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false, false, NULL);
+}
+
+ant_value_t js_eval_bytecode_module_with_commonjs_retry(ant_t *js, const char *buf, size_t len, bool *out_retry_commonjs) {
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false, true, out_retry_commonjs);
 }
 
 ant_value_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, false);
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, false, false, NULL);
 }
 
 ant_value_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t len, bool inherit_strict) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, inherit_strict);
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, inherit_strict, false, NULL);
 }
 
 ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false);
+  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false, false, NULL);
 }
 
 static inline ant_value_t sv_call_cfunc(ant_params_t, ant_bind_t) {
