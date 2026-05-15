@@ -8,6 +8,7 @@
 #define NAPI_DLOPEN(name, flags) ((void*)LoadLibraryA(name))
 #define NAPI_DLSYM(handle, name) ((void*)GetProcAddress((HMODULE)(handle), (name)))
 #define NAPI_DLERROR() "LoadLibrary failed"
+#define NAPI_RTLD_LAZY 0
 #define NAPI_RTLD_NOW 0
 #define NAPI_RTLD_LOCAL 0
 #define NAPI_RTLD_GLOBAL 0
@@ -16,10 +17,13 @@
 #define NAPI_DLOPEN(name, flags) dlopen((name), (flags))
 #define NAPI_DLSYM(handle, name) dlsym((handle), (name))
 #define NAPI_DLERROR() dlerror()
+#define NAPI_RTLD_LAZY RTLD_LAZY
 #define NAPI_RTLD_NOW RTLD_NOW
 #define NAPI_RTLD_LOCAL RTLD_LOCAL
 #define NAPI_RTLD_GLOBAL RTLD_GLOBAL
 #endif
+
+#define NAPI_DEFAULT_DLOPEN_FLAGS NAPI_RTLD_LAZY
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -855,7 +859,7 @@ static void napi_async_work_after_cb(uv_work_t *req, int status) {
   if (work->delete_after_complete) free(work);
 }
 
-static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const char *filename) {
+static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const char *filename, int flags) {
   napi_env env = ant_napi_get_env(js);
   if (!env) return js_mkerr(js, "napi env allocation failed");
 
@@ -863,7 +867,7 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   if (!filename || !filename[0]) return js_mkerr(js, "process.dlopen filename must be a non-empty string");
 
   g_pending_napi_module = NULL;
-  void *handle = NAPI_DLOPEN(filename, NAPI_RTLD_NOW | NAPI_RTLD_GLOBAL | NAPI_RTLD_LOCAL);
+  void *handle = NAPI_DLOPEN(filename, flags);
   if (!handle) {
     const char *msg = NAPI_DLERROR();
     return js_mkerr(js, "Failed to load native module '%s': %s", filename, msg ? msg : "unknown");
@@ -911,12 +915,17 @@ ant_value_t napi_process_dlopen_js(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "process.dlopen(module, filename) requires 2 arguments");
   if (!is_object_type(args[0])) return js_mkerr(js, "process.dlopen module must be an object");
   if (vtype(args[1]) != T_STR) return js_mkerr(js, "process.dlopen filename must be a string");
+  if (nargs >= 3 && vtype(args[2]) != T_UNDEF && vtype(args[2]) != T_NUM)
+    return js_mkerr(js, "process.dlopen flags must be a number");
 
   size_t path_len = 0;
   const char *path = js_getstr(js, args[1], &path_len);
   if (!path || path_len == 0) return js_mkerr(js, "process.dlopen filename must be non-empty");
 
-  ant_value_t loaded = napi_dlopen_common(js, args[0], path);
+  int flags = NAPI_DEFAULT_DLOPEN_FLAGS;
+  if (nargs >= 3 && vtype(args[2]) == T_NUM) flags = (int)js_getnum(args[2]);
+
+  ant_value_t loaded = napi_dlopen_common(js, args[0], path, flags);
   if (is_err(loaded)) return loaded;
   return js_mkundef();
 }
@@ -939,7 +948,7 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
     ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, false);
     if (is_err(dl_res) || js->thrown_exists) return js_throw(js, js->thrown_value);
   } else {
-    ant_value_t load_res = napi_dlopen_common(js, module_obj, module_path);
+    ant_value_t load_res = napi_dlopen_common(js, module_obj, module_path, NAPI_DEFAULT_DLOPEN_FLAGS);
     if (is_err(load_res)) return load_res;
   }
 
