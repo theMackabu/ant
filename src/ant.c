@@ -8978,6 +8978,9 @@ ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   ptr->flags.frozen = 1;
+  ptr->flags.sealed = 1;
+  ptr->flags.extensible = 0;
+  
   return obj;
 }
 
@@ -9008,7 +9011,9 @@ static ant_value_t builtin_object_seal(ant_t *js, ant_value_t *args, int nargs) 
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || !ptr->shape) return obj;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
+  
   ptr->flags.sealed = 1;
+  ptr->flags.extensible = 0;
 
   uint32_t count = ant_shape_count(ptr->shape);
   for (uint32_t i = 0; i < count; i++) {
