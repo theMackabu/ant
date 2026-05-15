@@ -35,6 +35,18 @@ static size_t gc_scaled_threshold(size_t base_live, uint32_t growth_x256, size_t
   return scaled;
 }
 
+static size_t gc_pool_live_bytes(ant_t *js) {
+  ant_pool_stats_t rope_stats = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t symbol_stats = js_pool_stats(&js->pool.symbol);
+  ant_pool_stats_t bigint_stats = js_class_pool_stats(&js->pool.bigint);
+  ant_string_pool_stats_t string_stats = js_string_pool_stats(&js->pool.string);
+
+  return rope_stats.used
+    + symbol_stats.used
+    + bigint_stats.used
+    + string_stats.total.used;
+}
+
 // TODO: inline
 size_t gc_live_major_threshold(ant_t *js) {
   size_t threshold = gc_scaled_threshold(js->gc_last_live, gc_major_live_growth_x256, 2048u);
@@ -45,7 +57,7 @@ size_t gc_live_major_threshold(ant_t *js) {
 
 // TODO: reduce magic
 size_t gc_pool_major_threshold(ant_t *js) {
-  return gc_scaled_threshold(js->gc_pool_last_live, gc_major_pool_growth_x256, 64u * 1024u * 1024u);
+  return gc_scaled_threshold(js->gc_pool_last_live, gc_major_pool_growth_x256, GC_POOL_PRESSURE_FLOOR);
 }
 
 static void gc_adapt_nursery(size_t young_before, size_t survivors) {
@@ -152,8 +164,7 @@ void gc_run(ant_t *js) {
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count = 0;
 
-  ant_string_pool_stats_t pool_stats = js_string_pool_stats(&js->pool.string);
-  js->gc_pool_last_live = pool_stats.total.used;
+  js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
