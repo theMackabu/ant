@@ -105,6 +105,19 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   return true;
 }
 
+#ifdef ANT_JIT
+static inline void sv_clear_jit_resume(sv_vm_t *vm) {
+  vm->jit_resume.active = false;
+  vm->jit_resume.ip_offset = 0;
+  vm->jit_resume.params = NULL;
+  vm->jit_resume.n_params = 0;
+  vm->jit_resume.locals = NULL;
+  vm->jit_resume.n_locals = 0;
+  vm->jit_resume.vstack = NULL;
+  vm->jit_resume.vstack_sp = 0;
+}
+#endif
+
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
   if (!func || !func->srcpos || func->srcpos_count <= 0) return false;
   int best = -1;
@@ -807,6 +820,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   if (!resuming) {
   ant_value_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
   if (is_err(stage_err)) {
+    #ifdef ANT_JIT
+    if (vm->jit_resume.active) sv_clear_jit_resume(vm);
+    #endif
     vm_result = stage_err;
     goto sv_leave;
   }}
@@ -896,7 +912,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       }
     }
 
-    vm->jit_resume.active = false;
+    sv_clear_jit_resume(vm);
   }
   #endif
 
