@@ -1,30 +1,17 @@
 import { test, summary } from './helpers.js';
-import { spawn } from 'child_process';
+import { startServer } from './fixtures/server_ready.mjs';
 
 console.log('EventSource Tests\n');
 
 const port = 32188;
 const serverPath = new URL('./fixtures/eventsource_server.mjs', import.meta.url).pathname;
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function startServer(path) {
-  const child = spawn(process.execPath, [path, String(port)]);
-  child.on('stderr', data => {
-    if (String(data).trim()) console.log(String(data).trim());
-  });
-  return child;
-}
-
 test('EventSource global exists', typeof EventSource, 'function');
 test('EventSource CONNECTING constant', EventSource.CONNECTING, 0);
 test('EventSource OPEN constant', EventSource.OPEN, 1);
 test('EventSource CLOSED constant', EventSource.CLOSED, 2);
 
-const server = startServer(serverPath);
-await sleep(150);
+const server = await startServer(serverPath, port);
 
 const result = await new Promise(resolve => {
   const source = new EventSource(`http://127.0.0.1:${port}/events`, { withCredentials: true });

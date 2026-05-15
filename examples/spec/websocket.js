@@ -1,22 +1,10 @@
 import { test, summary } from './helpers.js';
-import { spawn } from 'child_process';
+import { startServer } from './fixtures/server_ready.mjs';
 
 console.log('WebSocket Tests\n');
 
 const port = 32187;
 const serverPath = new URL('./fixtures/websocket_server.mjs', import.meta.url).pathname;
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function startServer(path) {
-  const child = spawn(process.execPath, [path, String(port)]);
-  child.on('stderr', data => {
-    if (String(data).trim()) console.log(String(data).trim());
-  });
-  return child;
-}
 
 test('WebSocket global exists', typeof WebSocket, 'function');
 test('WebSocket CONNECTING constant', WebSocket.CONNECTING, 0);
@@ -24,8 +12,7 @@ test('WebSocket OPEN constant', WebSocket.OPEN, 1);
 test('MessageEvent global exists', typeof MessageEvent, 'function');
 test('CloseEvent global exists', typeof CloseEvent, 'function');
 
-const server = startServer(serverPath);
-await sleep(150);
+const server = await startServer(serverPath, port);
 
 const result = await new Promise(resolve => {
   const seen = [];
