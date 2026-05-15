@@ -201,15 +201,15 @@ void gc_maybe(ant_t *js) {
   
   if (young_count >= gc_nursery_threshold) {
     gc_tick = 0;
+    size_t live_before_minor = js->obj_arena.live_count;
+    size_t major_threshold = gc_live_major_threshold(js);
+    size_t pool_threshold = gc_pool_major_threshold(js);
+
     gc_run_minor(js);
     
     if (js->minor_gc_count >= gc_major_every_n) {
-      size_t live_after_minor = js->obj_arena.live_count;
-      size_t major_threshold = gc_live_major_threshold(js);
-      size_t pool_threshold = gc_pool_major_threshold(js);
-      
       bool major_due = 
-        live_after_minor >= major_threshold || 
+        live_before_minor >= major_threshold ||
         js->gc_pool_alloc >= pool_threshold;
       
       js->minor_gc_count = 0;
