@@ -225,8 +225,10 @@ void gc_maybe(ant_t *js) {
         live_before_minor >= major_threshold ||
         js->gc_pool_alloc >= pool_threshold;
       
-      js->minor_gc_count = 0;
-      if (major_due) gc_run(js);
+      if (major_due) {
+        js->minor_gc_count = 0;
+        gc_run(js);
+      }
     }
     
     return;
