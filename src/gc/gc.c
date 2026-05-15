@@ -48,11 +48,11 @@ static size_t gc_pool_live_bytes(ant_t *js) {
     + string_stats.total.used;
 }
 
-// TODO: inline
 size_t gc_live_major_threshold(ant_t *js) {
-  size_t base_live = js ? js->gc_last_live : 0;
-  size_t threshold = gc_scaled_threshold(base_live, gc_major_live_growth_x256, 2048u);
-  if (!js) return threshold;
+  size_t threshold = gc_scaled_threshold(
+    js->gc_last_live, 
+    gc_major_live_growth_x256, GC_MAJOR_SCALE
+  );
 
   bool nursery_churn = gc_minor_surv_ewma <= 64;   // <= 25% young survival
   bool nursery_sticky = gc_minor_surv_ewma >= 160; // >= 62.5% young survival
@@ -69,7 +69,6 @@ size_t gc_live_major_threshold(ant_t *js) {
   return threshold < nursery_floor ? nursery_floor : threshold;
 }
 
-// TODO: reduce magic
 size_t gc_pool_major_threshold(ant_t *js) {
   return gc_scaled_threshold(js->gc_pool_last_live, gc_major_pool_growth_x256, GC_POOL_PRESSURE_FLOOR);
 }
