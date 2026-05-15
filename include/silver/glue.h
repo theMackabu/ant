@@ -101,20 +101,29 @@ ant_value_t jit_helper_get_field(
 ant_value_t jit_helper_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *parent_closure,
   ant_value_t this_val, ant_value_t *slots,
-  int slot_base, int slot_count, uint32_t const_idx
+  int slot_base, int slot_count, uint32_t const_idx,
+  const char *name, uint32_t name_len,
+  sv_upvalue_t **open_upvalues
 );
 
 ant_value_t jit_helper_bailout_resume(
   sv_vm_t *vm, sv_closure_t *closure,
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t *vstack, int64_t vstack_sp,
+  ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 );
 
 void jit_helper_close_upval(
   sv_vm_t *vm, uint16_t slot_idx,
-  ant_value_t *locals, int n_locals
+  ant_value_t *locals, int n_locals,
+  sv_upvalue_t **open_upvalues
+);
+
+void jit_helper_adopt_open_upvalues(
+  sv_vm_t *vm,
+  sv_upvalue_t **open_upvalues
 );
 
 void jit_helper_define_field(

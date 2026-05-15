@@ -259,16 +259,16 @@ static inline bool sv_with_binding_is_unscopable(
 
     ant_offset_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
     bool has_unscopables = unscopables_off != 0;
-    bool saw_exotic = base_ptr && base_ptr->is_exotic;
+    bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;
 
     if (!has_unscopables) {
       ant_value_t cur = with_obj;
       while (is_object_type(cur)) {
         ant_value_t cur_obj = js_as_obj(cur);
         ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
-        if (cur_ptr && cur_ptr->is_exotic) saw_exotic = true;
+        if (cur_ptr && cur_ptr->flags.is_exotic) saw_exotic = true;
         prop_meta_t meta;
-        if (cur_ptr && cur_ptr->is_exotic && lookup_symbol_prop_meta(cur_obj, sym_off, &meta)) {
+        if (cur_ptr && cur_ptr->flags.is_exotic && lookup_symbol_prop_meta(cur_obj, sym_off, &meta)) {
           has_unscopables = true;
           break;
         }

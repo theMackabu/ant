@@ -121,7 +121,7 @@ void gc_unroot_pending_promise(ant_object_t *obj) {
 }
 
 void gc_remember_add(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->in_remember_set) return;
+  if (!obj || obj->flags.in_remember_set) return;
   if (js->remember_set_len >= js->remember_set_cap) {
     size_t new_cap = js->remember_set_cap ? js->remember_set_cap * 2 : 64;
     ant_object_t **ns = realloc(js->remember_set, new_cap * sizeof(*ns));
@@ -129,7 +129,7 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
     js->remember_set = ns;
     js->remember_set_cap = new_cap;
   }
-  obj->in_remember_set = 1;
+  obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
 }
 
@@ -155,7 +155,7 @@ static void gc_mark_stack_push(ant_object_t *obj) {
 static inline void gc_grey_obj(ant_t *js, ant_object_t *obj) {
   if (!obj || !fixed_arena_contains(&js->obj_arena, obj)) return;
   if (obj->mark_epoch == gc_obj_epoch || obj->mark_epoch == ANT_GC_DEAD) return;
-  if (g_minor_gc && obj->generation == 1) return;
+  if (g_minor_gc && obj->flags.generation == 1) return;
   obj->mark_epoch = gc_obj_epoch;
   gc_mark_stack_push(obj);
 }
@@ -679,7 +679,7 @@ static void gc_promote_survivors(ant_t *js) {
   ant_object_t *obj = js->objects;
   while (obj) {
     ant_object_t *next = obj->next;
-    obj->generation = 1;
+    obj->flags.generation = 1;
     obj->next = js->objects_old;
     js->objects_old = obj;
     obj = next;
@@ -710,8 +710,8 @@ void gc_pin_existing_objects(ant_t *js) {
 
   ant_object_t *tail = NULL;
   for (ant_object_t *obj = js->objects; obj; obj = obj->next) {
-    obj->gc_permanent = 1;
-    obj->generation = 1;
+    obj->flags.gc_permanent = 1;
+    obj->flags.generation = 1;
     tail = obj;
   }
   
@@ -723,7 +723,7 @@ void gc_pin_existing_objects(ant_t *js) {
   
   tail = NULL;
   for (ant_object_t *obj = js->objects_old; obj; obj = obj->next) {
-    obj->gc_permanent = 1;
+    obj->flags.gc_permanent = 1;
     tail = obj;
   }
   
@@ -748,7 +748,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
 
   ant_gc_shapes_begin();
   for (size_t i = 0; i < js->remember_set_len; i++)
-    js->remember_set[i]->in_remember_set = 0;
+    js->remember_set[i]->flags.in_remember_set = 0;
   js->remember_set_len = 0;
 
   if (js->remember_set_cap > 512) {
@@ -845,7 +845,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   g_minor_gc = true;
 
   for (size_t i = 0; i < js->remember_set_len; i++) gc_scan_obj(js, js->remember_set[i]);
-  for (size_t i = 0; i < js->remember_set_len; i++) js->remember_set[i]->in_remember_set = 0;
+  for (size_t i = 0; i < js->remember_set_len; i++) js->remember_set[i]->flags.in_remember_set = 0;
   
   js->remember_set_len = 0;
   gc_mark_roots(js);

@@ -709,6 +709,7 @@ static inline ant_value_t sv_try_direct_closure_jit(
   }
 
   if (callee->is_generator) return SV_JIT_RETRY_INTERP;
+  if (callee->jit_compile_failed) return SV_JIT_RETRY_INTERP;
 
   uint32_t cc = ++callee->call_count;
   if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
@@ -814,14 +815,26 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   if (!resuming && vm->jit_resume.active) {
     ip = func->code + vm->jit_resume.ip_offset;
     frame->ip = ip;
+    int64_t rp =
+      vm->jit_resume.n_params < func->param_count
+      ? vm->jit_resume.n_params : func->param_count;
+    for (int64_t i = 0; i < rp; i++)
+      entry_bp[i] = vm->jit_resume.params[i];
     int64_t rl = 
       vm->jit_resume.n_locals < func->max_locals
       ? vm->jit_resume.n_locals : func->max_locals;
     for (int64_t i = 0; i < rl; i++)
       entry_lp[i] = vm->jit_resume.locals[i];
-      
+
+    ant_value_t *old_bp = vm->jit_resume.params;
+    for (sv_upvalue_t *uv = vm->open_upvalues; old_bp && uv; uv = uv->next) {
+    if (uv->location >= old_bp && uv->location < old_bp + rp) {
+      ptrdiff_t slot = uv->location - old_bp;
+      uv->location = &entry_bp[slot];
+    }}
+
     ant_value_t *old_lp = vm->jit_resume.locals;
-    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
+    for (sv_upvalue_t *uv = vm->open_upvalues; old_lp && uv; uv = uv->next) {
     if (uv->location >= old_lp && uv->location < old_lp + rl) {
       ptrdiff_t slot = uv->location - old_lp;
       uv->location = &entry_lp[slot];

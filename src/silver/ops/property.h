@@ -85,7 +85,7 @@ static inline bool sv_try_get_shape_data_prop(
     *should_fallback = true;
     return false;
   }
-  if (ptr->is_exotic) {
+  if (ptr->flags.is_exotic) {
     *should_fallback = true;
     return false;
   }
@@ -171,7 +171,7 @@ static inline bool sv_ic_try_get_hit(
     prop_shape = receiver->shape;
   } else {
     ant_object_t *holder = ic->cached_holder;
-    if (!holder || holder->is_exotic || !holder->shape) return false;
+    if (!holder || holder->flags.is_exotic || !holder->shape) return false;
     if (receiver->proto != ic->guard.receiver_proto) return false;
     source = holder;
     prop_shape = holder->shape;
@@ -199,7 +199,7 @@ static inline bool sv_ic_probe_get_chain(
   sv_proto_guard_init(&guard);
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
-    if (!ptr || ptr->is_exotic) return false;
+    if (!ptr || ptr->flags.is_exotic) return false;
     if (!ptr->shape) {
       ant_value_t next = ptr->proto;
       if (!is_object_type(next)) break;
@@ -414,13 +414,13 @@ static inline ant_value_t sv_prop_get_field_ic(
   bool track_ic = ic && !is_length_key(a->str, a->len);
 
   ant_value_t hit = js_mkundef();
-  if (ic && ptr && !ptr->is_exotic && track_ic &&
+  if (ic && ptr && !ptr->flags.is_exotic && track_ic &&
       sv_ic_try_get_hit(ic, ptr, a, &hit)) {
     sv_gf_ic_note_success(ic);
     return hit;
   }
 
-  if (ic && ptr && !ptr->is_exotic && track_ic) {
+  if (ic && ptr && !ptr->flags.is_exotic && track_ic) {
     ant_object_t *holder = NULL;
     uint32_t prop_idx = 0;
     ant_value_t out = js_mkundef();
@@ -476,7 +476,7 @@ static inline bool sv_try_put_field_fast(
   if (!is_object_type(obj)) return false;
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (!ptr || ptr->is_exotic || !ptr->shape) return false;
+  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
   if (ptr->type_tag == T_ARR && is_length_key(a->str, a->len)) return false;
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
@@ -548,7 +548,7 @@ static inline ant_value_t sv_op_put_field(
   else if (a->len == 7 && memcmp(a->str, "replace", 7) == 0)
     regexp_note_replace_property_write();
 
-  if (ic && ptr && !ptr->is_exotic && ptr->shape && ic->epoch == ant_ic_epoch_counter &&
+  if (ic && ptr && !ptr->flags.is_exotic && ptr->shape && ic->epoch == ant_ic_epoch_counter &&
       ic->cached_shape == ptr->shape && ic->cached_holder == ptr &&
       ic->cached_index < ptr->prop_count) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, ic->cached_index);
@@ -564,8 +564,8 @@ static inline ant_value_t sv_op_put_field(
     }
   }
 
-  if (ic && ptr && !ptr->is_exotic && ptr->shape &&
-      !ptr->frozen && !ptr->sealed && ptr->extensible &&
+  if (ic && ptr && !ptr->flags.is_exotic && ptr->shape &&
+      !ptr->flags.frozen && !ptr->flags.sealed && ptr->flags.extensible &&
       ptr->type_tag != T_ARR &&
       !sv_is_proto_atom(a) &&
       ic->guard.add.epoch == ant_ic_epoch_counter &&
@@ -613,7 +613,7 @@ static inline ant_value_t sv_op_put_field(
     return out;
   }
 
-  if (ic && ptr && !ptr->is_exotic && ptr->shape) {
+  if (ic && ptr && !ptr->flags.is_exotic && ptr->shape) {
     int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
     if (slot >= 0) {
       uint32_t prop_idx = (uint32_t)slot;
@@ -632,9 +632,9 @@ static inline ant_value_t sv_op_put_field(
         if (old_shape &&
             old_shape != ptr->shape &&
             !sv_is_proto_atom(a) &&
-            !ptr->frozen &&
-            !ptr->sealed &&
-            ptr->extensible &&
+            !ptr->flags.frozen &&
+            !ptr->flags.sealed &&
+            ptr->flags.extensible &&
             ptr->type_tag != T_ARR &&
             prop->attrs == ANT_PROP_ATTR_DEFAULT) {
           sv_ic_set_add_transition(ic, old_shape, ptr->shape, prop_idx, ant_ic_epoch_counter);
@@ -733,9 +733,9 @@ static inline bool sv_try_define_field_fast(
 
   ant_value_t as_obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(as_obj);
-  if (!ptr || ptr->is_exotic || !ptr->shape) return false;
+  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
   if (ptr->type_tag == T_ARR) return false;
-  if (ptr->frozen || ptr->sealed || !ptr->extensible) return false;
+  if (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible) return false;
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, interned_key);
   if (slot >= 0) {

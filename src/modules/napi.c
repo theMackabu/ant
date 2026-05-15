@@ -334,7 +334,7 @@ void gc_clear_napi_weak_refs(ant_t *js, bool minor) {
     if (r->refcount > 0 || !r->value) continue;
     ant_value_t value = (ant_value_t)r->value;
     ant_object_t *obj = is_object_type(value) ? js_obj_ptr(value) : NULL;
-    if (obj && (!minor || obj->generation == 0) && !gc_obj_is_marked(obj)) r->value = 0;
+    if (obj && (!minor || obj->flags.generation == 0) && !gc_obj_is_marked(obj)) r->value = 0;
   }
 }
 

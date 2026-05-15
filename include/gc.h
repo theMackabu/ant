@@ -39,12 +39,12 @@ extern bool gc_disabled;
 gc_func_mark_profile_t gc_func_mark_profile_get(void);
 
 static inline void gc_write_barrier(ant_t *js, ant_object_t *writer_obj, ant_value_t new_val) {
-  if (writer_obj->generation != 1 || new_val <= NANBOX_PREFIX) return;
+  if (writer_obj->flags.generation != 1 || new_val <= NANBOX_PREFIX) return;
   uint8_t type = (new_val >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
   if (type == T_FUNC) gc_remember_add(js, writer_obj);
   else if ((1u << type) & GC_OBJ_TYPE_MASK) {
     ant_object_t *ref = (ant_object_t *)(uintptr_t)(new_val & NANBOX_DATA_MASK);
-    if (ref && ref->generation == 0) gc_remember_add(js, writer_obj);
+    if (ref && ref->flags.generation == 0) gc_remember_add(js, writer_obj);
   }
 }
 

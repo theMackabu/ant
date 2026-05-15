@@ -93,6 +93,28 @@ _Static_assert(
   "object sidecar pointer uses low-bit tag"
 );
 
+typedef union ant_object_flags {
+  struct {
+    uint8_t extensible: 1;
+    uint8_t frozen: 1;
+    uint8_t sealed: 1;
+    uint8_t is_exotic: 1;
+    uint8_t is_constructor: 1;
+    uint8_t fast_array: 1;
+    uint8_t may_have_holes: 1;
+    uint8_t may_have_dense_elements: 1;
+    uint8_t gc_permanent: 1;
+    uint8_t generation: 1;
+    uint8_t in_remember_set: 1;
+  };
+  uint8_t bytes[2];
+} ant_object_flags_t;
+
+_Static_assert(
+  sizeof(ant_object_flags_t) == 2,
+  "ant_object_flags_t must cover the packed object bitfields"
+);
+
 typedef struct ant_prop_ref {
   ant_object_t *obj;
   uint32_t slot;
@@ -131,17 +153,7 @@ typedef struct ant_object {
   uint8_t extra_count;
   uint8_t overflow_cap;
 
-  uint8_t extensible: 1;
-  uint8_t frozen: 1;
-  uint8_t sealed: 1;
-  uint8_t is_exotic: 1;
-  uint8_t is_constructor: 1;
-  uint8_t fast_array: 1;
-  uint8_t may_have_holes: 1;
-  uint8_t may_have_dense_elements: 1;
-  uint8_t gc_permanent: 1;
-  uint8_t generation: 1;
-  uint8_t in_remember_set: 1;
+  ant_object_flags_t flags;
 } ant_object_t;
 
 static inline bool ant_object_has_sidecar(const ant_object_t *obj) {
