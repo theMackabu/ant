@@ -56,6 +56,35 @@ function diff(after, before) {
   };
 }
 
+function memorySnapshot() {
+  const s = Ant.stats();
+  const pools = s.pools?.totalUsed ?? 0;
+  const alloc = s.alloc?.total ?? s.arenaUsed ?? 0;
+  return {
+    logical: pools + alloc,
+    pools,
+    alloc,
+    rss: s.rss ?? 0,
+    resident: s.residentSize ?? 0,
+    footprint: s.physFootprint ?? 0
+  };
+}
+
+function maxMemory(a, b) {
+  return {
+    logical: Math.max(a.logical, b.logical),
+    pools: Math.max(a.pools, b.pools),
+    alloc: Math.max(a.alloc, b.alloc),
+    rss: Math.max(a.rss, b.rss),
+    resident: Math.max(a.resident, b.resident),
+    footprint: Math.max(a.footprint, b.footprint)
+  };
+}
+
+function fmtMB(bytes) {
+  return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+}
+
 function runCase(name, factory, opts = {}) {
   const fnCount = opts.fnCount ?? 24;
   const rounds = opts.rounds ?? 24;
@@ -67,17 +96,22 @@ function runCase(name, factory, opts = {}) {
 
   Ant.raw.gcMarkProfileReset();
   const before = snapshot();
+  const memBefore = memorySnapshot();
+  let memPeak = memBefore;
 
   let checksum = 0;
   const start = now();
   for (let r = 0; r < rounds; r++) {
     for (let i = 0; i < fns.length; i++) checksum += fns[i](r);
     churnGarbage(garbageRounds, garbageWidth);
+    memPeak = maxMemory(memPeak, memorySnapshot());
   }
   const elapsed = now() - start;
 
   const after = snapshot();
   const stats = diff(after, before);
+  const memAfter = memorySnapshot();
+  memPeak = maxMemory(memPeak, memAfter);
 
   console.log(`\n[${name}]`);
   console.log(`elapsed_ms=${elapsed.toFixed(2)}`);
@@ -86,6 +120,12 @@ function runCase(name, factory, opts = {}) {
   console.log(`child_edges=${stats.childEdges}`);
   console.log(`const_slots=${stats.constSlots}`);
   console.log(`mark_func_ms=${stats.timeMs.toFixed(3)}`);
+  console.log(
+    `memory_before=${fmtMB(memBefore.logical)} memory_after=${fmtMB(memAfter.logical)} memory_peak=${fmtMB(memPeak.logical)}`
+  );
+  console.log(
+    `memory_parts_after=pools:${fmtMB(memAfter.pools)} alloc:${fmtMB(memAfter.alloc)} rss:${fmtMB(memAfter.rss)} resident:${fmtMB(memAfter.resident)} footprint:${fmtMB(memAfter.footprint)}`
+  );
   console.log(`checksum=${checksum}`);
 
   if (opts.expectedChecksum !== undefined && checksum !== opts.expectedChecksum) {

@@ -22,6 +22,7 @@ static uint32_t gc_major_pool_growth_x256 = 384;
 
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
+static bool gc_use_nursery_major_floor = true;
 
 static uint64_t gc_now_ms(void) {
   struct timespec ts;
@@ -49,10 +50,23 @@ static size_t gc_pool_live_bytes(ant_t *js) {
 
 // TODO: inline
 size_t gc_live_major_threshold(ant_t *js) {
-  size_t threshold = gc_scaled_threshold(js->gc_last_live, gc_major_live_growth_x256, 2048u);
+  size_t base_live = js ? js->gc_last_live : 0;
+  size_t threshold = gc_scaled_threshold(base_live, gc_major_live_growth_x256, 2048u);
+  if (!js) return threshold;
+
+  bool nursery_churn = gc_minor_surv_ewma <= 64;   // <= 25% young survival
+  bool nursery_sticky = gc_minor_surv_ewma >= 160; // >= 62.5% young survival
+  bool major_pays = gc_major_recl_ewma >= 51;      // >= 20% old-gen reclaim
+  bool major_wasteful = gc_major_recl_ewma <= 13;  // <= 5% old-gen reclaim
+
+  if (gc_use_nursery_major_floor) {
+    if (nursery_sticky || (major_pays && !nursery_churn)) gc_use_nursery_major_floor = false;
+  } else if (nursery_churn || major_wasteful) gc_use_nursery_major_floor = true;
+
+  if (!gc_use_nursery_major_floor) return threshold;
   size_t nursery_floor = js->old_live_count + gc_nursery_threshold;
-  if (threshold < nursery_floor) threshold = nursery_floor;
-  return threshold;
+  
+  return threshold < nursery_floor ? nursery_floor : threshold;
 }
 
 // TODO: reduce magic
