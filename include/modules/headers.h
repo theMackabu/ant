@@ -4,8 +4,6 @@
 #include "types.h"
 #include "modules/symbol.h"
 
-extern ant_value_t g_headers_iter_proto;
-extern ant_value_t g_headers_proto;
 
 typedef enum {
   HEADERS_GUARD_NONE = 0,

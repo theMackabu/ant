@@ -23,7 +23,6 @@ typedef struct {
   bool body_used;
 } response_data_t;
 
-extern ant_value_t g_response_proto;
 void init_response_module(void);
 
 response_data_t *response_get_data(ant_value_t obj);

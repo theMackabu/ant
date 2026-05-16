@@ -373,7 +373,7 @@ ant_value_t readable_stream_pipe_to(
   ant_value_t reader_args[1] = { source };
   ant_value_t saved = js->new_target;
   
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
   
@@ -732,7 +732,7 @@ static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t reader_args[1] = { js->this_val };
   ant_value_t saved = js->new_target;
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;

@@ -193,6 +193,25 @@ struct ant_isolate_t {
     uint64_t counter;
     struct sym_registry_entry *registry;
 
+    ant_value_t wks_iterator;
+    ant_value_t wks_asyncIterator;
+    ant_value_t wks_inspect;
+    ant_value_t wks_toStringTag;
+    ant_value_t wks_hasInstance;
+    ant_value_t wks_match;
+    ant_value_t wks_replace;
+    ant_value_t wks_search;
+    ant_value_t wks_split;
+    ant_value_t wks_matchAll;
+    ant_value_t wks_isConcatSpreadable;
+    ant_value_t wks_dispose;
+    ant_value_t wks_asyncDispose;
+    ant_value_t wks_observable;
+    ant_value_t wks_toPrimitive;
+    ant_value_t wks_species;
+    ant_value_t wks_unscopables;
+    ant_value_t wks_default;
+
     ant_value_t object_proto;
     ant_value_t array_proto;
     ant_value_t iterator_proto;
@@ -201,6 +220,148 @@ struct ant_isolate_t {
     ant_value_t generator_proto;
     ant_value_t async_generator_proto;
     ant_value_t async_iterator_proto;
+
+    ant_value_t regexp_matchall_iter_proto;
+    ant_value_t regexp_ctor;
+    ant_value_t regexp_empty_string;
+    ant_value_t regexp_static_values[11];
+
+    ant_value_t string_decoder_proto;
+
+    ant_value_t stream_proto;
+    ant_value_t stream_ctor;
+    ant_value_t stream_readable_proto;
+    ant_value_t stream_readable_ctor;
+    ant_value_t stream_writable_proto;
+    ant_value_t stream_writable_ctor;
+    ant_value_t stream_duplex_proto;
+    ant_value_t stream_duplex_ctor;
+    ant_value_t stream_transform_proto;
+    ant_value_t stream_transform_ctor;
+    ant_value_t stream_passthrough_proto;
+    ant_value_t stream_passthrough_ctor;
+
+    ant_value_t console_proto;
+    ant_value_t console_ctor;
+
+    ant_value_t zlib_transform_proto;
+    ant_value_t zlib_protos[16];
+
+    ant_value_t textencoder_proto;
+    ant_value_t textdecoder_proto;
+
+    ant_value_t request_proto;
+    ant_value_t response_proto;
+    ant_value_t headers_proto;
+    ant_value_t headers_iter_proto;
+    ant_value_t blob_proto;
+    ant_value_t file_proto;
+
+    ant_value_t wasm_module_proto;
+    ant_value_t wasm_instance_proto;
+    ant_value_t wasm_global_proto;
+    ant_value_t wasm_memory_proto;
+    ant_value_t wasm_table_proto;
+    ant_value_t wasm_tag_proto;
+    ant_value_t wasm_exception_proto;
+    ant_value_t wasm_compileerror_proto;
+    ant_value_t wasm_linkerror_proto;
+    ant_value_t wasm_runtimeerror_proto;
+    ant_value_t wasm_pending_import_throw;
+
+    ant_value_t rpc_server_proto;
+    ant_value_t rpc_server_ctor;
+    ant_value_t rpc_client_proto;
+    ant_value_t rpc_client_ctor;
+
+    ant_value_t domexception_proto;
+    ant_value_t eventsource_proto;
+    ant_value_t eventsource_ctor;
+
+    ant_value_t event_is_trusted_getter;
+    ant_value_t eventemitter_ctor;
+    ant_value_t eventemitter_proto;
+    ant_value_t eventtarget_proto;
+    ant_value_t event_proto;
+    ant_value_t customevent_proto;
+    ant_value_t errorevent_proto;
+    ant_value_t promiserejectionevent_proto;
+    ant_value_t eventemitter_like_cache[64];
+
+    ant_value_t cs_proto;
+    ant_value_t ds_proto;
+    ant_value_t tes_proto;
+    ant_value_t tds_proto;
+    ant_value_t ts_proto;
+    ant_value_t ts_ctrl_proto;
+    ant_value_t rs_proto;
+    ant_value_t reader_proto;
+    ant_value_t controller_proto;
+    ant_value_t rs_async_iter_proto;
+    ant_value_t ws_proto;
+    ant_value_t ws_writer_proto;
+    ant_value_t ws_controller_proto;
+    ant_value_t ws_close_sentinel;
+    ant_value_t count_qs_proto;
+    ant_value_t bytelength_qs_proto;
+
+    ant_value_t timeout_proto;
+    ant_value_t interval_proto;
+    ant_value_t formdata_proto;
+    ant_value_t formdata_iter_proto;
+    ant_value_t tls_context_proto;
+    ant_value_t tls_context_ctor;
+    ant_value_t tls_socket_proto;
+    ant_value_t tls_socket_ctor;
+    ant_value_t typedarray_iter_proto;
+    ant_value_t url_proto;
+    ant_value_t usp_proto;
+    ant_value_t usp_iter_proto;
+    ant_value_t intl_collator_proto;
+    ant_value_t intl_numberformat_proto;
+    ant_value_t intl_datetimeformat_proto;
+    ant_value_t intl_segmenter_proto;
+    ant_value_t signal_proto;
+    ant_value_t tty_readstream_proto;
+    ant_value_t tty_readstream_ctor;
+    ant_value_t tty_writestream_proto;
+    ant_value_t tty_writestream_ctor;
+    ant_value_t map_iter_proto;
+    ant_value_t set_iter_proto;
+    ant_value_t wrap_iter_proto;
+    ant_value_t async_wrap_iter_proto;
+    ant_value_t websocket_proto;
+    ant_value_t websocket_ctor;
+    ant_value_t message_event_proto;
+    ant_value_t close_event_proto;
+    ant_value_t ffi_library_proto;
+    ant_value_t ffi_function_proto;
+    ant_value_t ffi_pointer_proto;
+    ant_value_t ffi_callback_proto;
+    ant_value_t rl_async_iter_proto;
+    ant_value_t rl_interface_proto;
+    ant_value_t net_server_proto;
+    ant_value_t net_socket_proto;
+    ant_value_t net_server_ctor;
+    ant_value_t net_socket_ctor;
+    ant_value_t dirent_proto;
+    ant_value_t fswatcher_proto;
+    ant_value_t fswatcher_ctor;
+    ant_value_t filehandle_proto;
+    ant_value_t fs_readstream_proto;
+    ant_value_t fs_readstream_ctor;
+    ant_value_t fs_writestream_proto;
+    ant_value_t fs_writestream_ctor;
+    ant_value_t child_process_proto;
+    ant_value_t child_process_ctor;
+
+    ant_value_t stringify_stack[MAX_STRINGIFY_DEPTH];
+    int stringify_depth;
+    int stringify_indent;
+    ant_value_t multiref_objs[MAX_MULTIREF_OBJS];
+    int multiref_ids[MAX_MULTIREF_OBJS];
+    int multiref_count;
+    int multiref_next_id;
   } sym;
   
   ant_offset_t max_size;

@@ -126,8 +126,6 @@ static child_stream_ctx_t *get_child_stream_ctx(ant_value_t obj) {
 }
 static child_process_t *pending_children_tail = NULL;
 
-static ant_value_t g_child_process_proto = 0;
-static ant_value_t g_child_process_ctor = 0;
 
 static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
   if (vtype(s) != T_STR) {
@@ -699,7 +697,7 @@ static ant_value_t child_end(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t child_process_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t obj = js_mkobj(js);
-  if (is_object_type(g_child_process_proto)) js_set_proto_init(obj, g_child_process_proto);
+  if (is_object_type(js->sym.child_process_proto)) js_set_proto_init(obj, js->sym.child_process_proto);
 
   js_set(js, obj, "pid", js_mkundef());
   js_set(js, obj, "exitCode", js_mknull());
@@ -714,18 +712,18 @@ static ant_value_t child_process_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void child_process_init_constructor(ant_t *js) {
-  if (g_child_process_ctor && g_child_process_proto) return;
+  if (js->sym.child_process_ctor && js->sym.child_process_proto) return;
   ant_value_t ee_proto = eventemitter_prototype(js);
 
-  g_child_process_proto = js_mkobj(js);
-  if (is_object_type(ee_proto)) js_set_proto_init(g_child_process_proto, ee_proto);
-  js_set(js, g_child_process_proto, "kill", js_mkfun(child_kill));
-  js_set(js, g_child_process_proto, "ref", js_mkfun(child_ref));
-  js_set(js, g_child_process_proto, "unref", js_mkfun(child_unref));
+  js->sym.child_process_proto = js_mkobj(js);
+  if (is_object_type(ee_proto)) js_set_proto_init(js->sym.child_process_proto, ee_proto);
+  js_set(js, js->sym.child_process_proto, "kill", js_mkfun(child_kill));
+  js_set(js, js->sym.child_process_proto, "ref", js_mkfun(child_ref));
+  js_set(js, js->sym.child_process_proto, "unref", js_mkfun(child_unref));
 
-  g_child_process_ctor = js_make_ctor(
+  js->sym.child_process_ctor = js_make_ctor(
     js, child_process_ctor,
-    g_child_process_proto, "ChildProcess", 12
+    js->sym.child_process_proto, "ChildProcess", 12
   );
 }
 
@@ -919,7 +917,7 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
 
 static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   ant_value_t obj = js_mkobj(js);
-  if (is_object_type(g_child_process_proto)) js_set_proto_init(obj, g_child_process_proto);
+  if (is_object_type(js->sym.child_process_proto)) js_set_proto_init(obj, js->sym.child_process_proto);
   
   js_set_native(obj, cp, CHILD_PROCESS_NATIVE_TAG);
   js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
@@ -2090,7 +2088,7 @@ ant_value_t child_process_library(ant_t *js) {
     js_heavy_mkfun(js, exec_file_promisified_call, exec_file_fn)
   );
   
-  js_set(js, lib, "ChildProcess", g_child_process_ctor);
+  js_set(js, lib, "ChildProcess", js->sym.child_process_ctor);
   js_set(js, lib, "spawn", js_mkfun(builtin_spawn));
   js_set(js, lib, "exec", exec_fn);
   js_set(js, lib, "execFile", exec_file_fn);

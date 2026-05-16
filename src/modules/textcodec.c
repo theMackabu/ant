@@ -14,8 +14,6 @@
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
-static ant_value_t g_textencoder_proto = 0;
-static ant_value_t g_textdecoder_proto = 0;
 
 enum { TEXT_DECODER_NATIVE_TAG = 0x54444543u }; // TDEC
 
@@ -175,7 +173,7 @@ static ant_value_t js_textencoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextEncoder constructor requires 'new'");
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_textencoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.textencoder_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -424,7 +422,7 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_textdecoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.textdecoder_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TEXT_DECODER_NATIVE_TAG);
@@ -437,24 +435,24 @@ void init_textcodec_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);
 
-  g_textencoder_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_textencoder_proto, "encoding", 8, js_mkfun(js_textencoder_get_encoding), JS_DESC_C);
-  js_set(js, g_textencoder_proto, "encode",     js_mkfun(js_textencoder_encode));
-  js_set(js, g_textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
-  js_set_sym(js, g_textencoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
+  js->sym.textencoder_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.textencoder_proto, "encoding", 8, js_mkfun(js_textencoder_get_encoding), JS_DESC_C);
+  js_set(js, js->sym.textencoder_proto, "encode",     js_mkfun(js_textencoder_encode));
+  js_set(js, js->sym.textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
+  js_set_sym(js, js->sym.textencoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
   
-  ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, g_textencoder_proto, "TextEncoder", 11);
+  ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, js->sym.textencoder_proto, "TextEncoder", 11);
   js_set(js, g, "TextEncoder", te_ctor);
   js_set_descriptor(js, g, "TextEncoder", 11, JS_DESC_W | JS_DESC_C);
 
-  g_textdecoder_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_textdecoder_proto, "encoding",  8, js_mkfun(js_textdecoder_get_encoding),  JS_DESC_C);
-  js_set_getter_desc(js, g_textdecoder_proto, "fatal",     5, js_mkfun(js_textdecoder_get_fatal),     JS_DESC_C);
-  js_set_getter_desc(js, g_textdecoder_proto, "ignoreBOM", 9, js_mkfun(js_textdecoder_get_ignore_bom), JS_DESC_C);
-  js_set(js, g_textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
-  js_set_sym(js, g_textdecoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
+  js->sym.textdecoder_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.textdecoder_proto, "encoding",  8, js_mkfun(js_textdecoder_get_encoding),  JS_DESC_C);
+  js_set_getter_desc(js, js->sym.textdecoder_proto, "fatal",     5, js_mkfun(js_textdecoder_get_fatal),     JS_DESC_C);
+  js_set_getter_desc(js, js->sym.textdecoder_proto, "ignoreBOM", 9, js_mkfun(js_textdecoder_get_ignore_bom), JS_DESC_C);
+  js_set(js, js->sym.textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
+  js_set_sym(js, js->sym.textdecoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
   
-  ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, g_textdecoder_proto, "TextDecoder", 11);
+  ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, js->sym.textdecoder_proto, "TextDecoder", 11);
   js_set(js, g, "TextDecoder", td_ctor);
   js_set_descriptor(js, g, "TextDecoder", 11, JS_DESC_W | JS_DESC_C);
 }

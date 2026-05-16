@@ -122,10 +122,6 @@ typedef union {
   ffi_arg raw;
 } ffi_value_box_t;
 
-static ant_value_t g_ffi_library_proto  = 0;
-static ant_value_t g_ffi_function_proto = 0;
-static ant_value_t g_ffi_pointer_proto  = 0;
-static ant_value_t g_ffi_callback_proto = 0;
 
 static inline bool ffi_is_nullish(ant_value_t value) {
   return is_null(value) || is_undefined(value);
@@ -465,7 +461,7 @@ static ant_value_t ffi_make_pointer(ant_t *js, ffi_pointer_region_t *region, siz
   handle->byte_offset = byte_offset;
   if (region) region->ref_count++;
 
-  if (g_ffi_pointer_proto) js_set_proto_init(obj, g_ffi_pointer_proto);
+  if (js->sym.ffi_pointer_proto) js_set_proto_init(obj, js->sym.ffi_pointer_proto);
   js_set_native(obj, handle, FFI_POINTER_NATIVE_TAG);
   js_set_finalizer(obj, ffi_pointer_finalize);
 
@@ -766,7 +762,7 @@ static ant_value_t ffi_make_function(ant_t *js, ffi_library_handle_t *library, c
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to prepare FFI call interface");
   }
 
-  if (g_ffi_function_proto) js_set_proto_init(obj, g_ffi_function_proto);
+  if (js->sym.ffi_function_proto) js_set_proto_init(obj, js->sym.ffi_function_proto);
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(ffi_function_call));
   js_set_native(obj, handle, FFI_FUNCTION_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, library ? library->obj : js_mkundef());
@@ -911,44 +907,44 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
 static void ffi_init_prototypes(ant_t *js) {
   ant_value_t function_proto = 0;
 
-  if (g_ffi_library_proto) return;
+  if (js->sym.ffi_library_proto) return;
 
   function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
   if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
 
-  g_ffi_library_proto = js_mkobj(js);
-  g_ffi_function_proto = js_mkobj(js);
-  g_ffi_pointer_proto = js_mkobj(js);
-  g_ffi_callback_proto = js_mkobj(js);
+  js->sym.ffi_library_proto = js_mkobj(js);
+  js->sym.ffi_function_proto = js_mkobj(js);
+  js->sym.ffi_pointer_proto = js_mkobj(js);
+  js->sym.ffi_callback_proto = js_mkobj(js);
 
   if (is_object_type(js->sym.object_proto)) {
-    js_set_proto_init(g_ffi_library_proto, js->sym.object_proto);
-    js_set_proto_init(g_ffi_pointer_proto, js->sym.object_proto);
-    js_set_proto_init(g_ffi_callback_proto, js->sym.object_proto);
+    js_set_proto_init(js->sym.ffi_library_proto, js->sym.object_proto);
+    js_set_proto_init(js->sym.ffi_pointer_proto, js->sym.object_proto);
+    js_set_proto_init(js->sym.ffi_callback_proto, js->sym.object_proto);
   }
 
-  if (is_object_type(function_proto)) js_set_proto_init(g_ffi_function_proto, function_proto);
+  if (is_object_type(function_proto)) js_set_proto_init(js->sym.ffi_function_proto, function_proto);
 
-  js_set_sym(js, g_ffi_library_proto, get_toStringTag_sym(), ANT_STRING("FFILibrary"));
-  js_set_sym(js, g_ffi_function_proto, get_toStringTag_sym(), ANT_STRING("FFIFunction"));
-  js_set_sym(js, g_ffi_pointer_proto, get_toStringTag_sym(), ANT_STRING("FFIPointer"));
-  js_set_sym(js, g_ffi_callback_proto, get_toStringTag_sym(), ANT_STRING("FFICallback"));
+  js_set_sym(js, js->sym.ffi_library_proto, get_toStringTag_sym(), ANT_STRING("FFILibrary"));
+  js_set_sym(js, js->sym.ffi_function_proto, get_toStringTag_sym(), ANT_STRING("FFIFunction"));
+  js_set_sym(js, js->sym.ffi_pointer_proto, get_toStringTag_sym(), ANT_STRING("FFIPointer"));
+  js_set_sym(js, js->sym.ffi_callback_proto, get_toStringTag_sym(), ANT_STRING("FFICallback"));
 
-  js_set(js, g_ffi_library_proto, "define", js_mkfun(ffi_library_define));
-  js_set(js, g_ffi_library_proto, "call", js_mkfun(ffi_library_call));
-  js_set(js, g_ffi_library_proto, "close", js_mkfun(ffi_library_close));
+  js_set(js, js->sym.ffi_library_proto, "define", js_mkfun(ffi_library_define));
+  js_set(js, js->sym.ffi_library_proto, "call", js_mkfun(ffi_library_call));
+  js_set(js, js->sym.ffi_library_proto, "close", js_mkfun(ffi_library_close));
 
-  js_set(js, g_ffi_pointer_proto, "address", js_mkfun(ffi_pointer_address));
-  js_set(js, g_ffi_pointer_proto, "isNull", js_mkfun(ffi_pointer_is_null));
-  js_set(js, g_ffi_pointer_proto, "read", js_mkfun(ffi_pointer_read));
-  js_set(js, g_ffi_pointer_proto, "write", js_mkfun(ffi_pointer_write));
-  js_set(js, g_ffi_pointer_proto, "offset", js_mkfun(ffi_pointer_offset));
-  js_set(js, g_ffi_pointer_proto, "free", js_mkfun(ffi_pointer_free));
+  js_set(js, js->sym.ffi_pointer_proto, "address", js_mkfun(ffi_pointer_address));
+  js_set(js, js->sym.ffi_pointer_proto, "isNull", js_mkfun(ffi_pointer_is_null));
+  js_set(js, js->sym.ffi_pointer_proto, "read", js_mkfun(ffi_pointer_read));
+  js_set(js, js->sym.ffi_pointer_proto, "write", js_mkfun(ffi_pointer_write));
+  js_set(js, js->sym.ffi_pointer_proto, "offset", js_mkfun(ffi_pointer_offset));
+  js_set(js, js->sym.ffi_pointer_proto, "free", js_mkfun(ffi_pointer_free));
 
-  js_set(js, g_ffi_callback_proto, "address", js_mkfun(ffi_callback_address));
-  js_set(js, g_ffi_callback_proto, "close", js_mkfun(ffi_callback_close));
+  js_set(js, js->sym.ffi_callback_proto, "address", js_mkfun(ffi_callback_address));
+  js_set(js, js->sym.ffi_callback_proto, "close", js_mkfun(ffi_callback_close));
 
-  js_set(js, g_ffi_function_proto, "address", js_mkfun(ffi_function_address));
+  js_set(js, js->sym.ffi_function_proto, "address", js_mkfun(ffi_function_address));
 }
 
 static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
@@ -991,7 +987,7 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   library->closed = false;
 
   obj = js_mkobj(js);
-  if (g_ffi_library_proto) js_set_proto_init(obj, g_ffi_library_proto);
+  if (js->sym.ffi_library_proto) js_set_proto_init(obj, js->sym.ffi_library_proto);
   library->obj = obj;
   js_set_native(obj, library, FFI_LIBRARY_NATIVE_TAG);
   js_set_finalizer(obj, ffi_library_finalize);
@@ -1386,7 +1382,7 @@ static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) 
   }
 
   obj = js_mkobj(js);
-  if (g_ffi_callback_proto) js_set_proto_init(obj, g_ffi_callback_proto);
+  if (js->sym.ffi_callback_proto) js_set_proto_init(obj, js->sym.ffi_callback_proto);
   callback->js = js;
   callback->owner_obj = obj;
   callback->owner_thread = pthread_self();

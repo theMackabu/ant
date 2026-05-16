@@ -750,14 +750,13 @@ size_t uint_to_str(char *buf, size_t bufsize, uint64_t val) {
   return len;
 }
 
-static ant_value_t stringify_stack[MAX_STRINGIFY_DEPTH];
-static int stringify_depth = 0;
-static int stringify_indent = 0;
-
-static ant_value_t multiref_objs[MAX_MULTIREF_OBJS];
-static int multiref_ids[MAX_MULTIREF_OBJS];
-static int multiref_count = 0;
-static int multiref_next_id = 0;
+#define stringify_stack  (rt->js->sym.stringify_stack)
+#define stringify_depth  (rt->js->sym.stringify_depth)
+#define stringify_indent (rt->js->sym.stringify_indent)
+#define multiref_objs    (rt->js->sym.multiref_objs)
+#define multiref_ids     (rt->js->sym.multiref_ids)
+#define multiref_count   (rt->js->sym.multiref_count)
+#define multiref_next_id (rt->js->sym.multiref_next_id)
 
 static void scan_refs(ant_t *js, ant_value_t value);
 static ant_value_t strobj_call_custom_inspect(ant_t *js, ant_value_t obj);

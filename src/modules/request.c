@@ -26,7 +26,6 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-ant_value_t g_request_proto = 0;
 
 enum { REQUEST_NATIVE_TAG = 0x52455153u }; // REQS
 
@@ -126,7 +125,7 @@ static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_val
     return hdrs;
   }
 
-  js_set_proto_init(obj, g_request_proto);
+  js_set_proto_init(obj, js->sym.request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
   js_set_finalizer(obj, request_finalize);
@@ -593,7 +592,7 @@ static ant_value_t consume_body_from_stream(
   ant_value_t reader_args[1] = { stream };
   ant_value_t saved = js->new_target;
   
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
   
@@ -956,7 +955,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(new_signal)) { data_free(nd); return new_signal; }
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_request_proto);
+  js_set_proto_init(obj, js->sym.request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, nd, REQUEST_NATIVE_TAG);
   js_set_finalizer(obj, request_finalize);
@@ -1312,10 +1311,10 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   obj = js_mkobj(js);
-  proto = js_instance_proto_from_new_target(js, g_request_proto);
+  proto = js_instance_proto_from_new_target(js, js->sym.request_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-  else js_set_proto_init(obj, g_request_proto);
+  else js_set_proto_init(obj, js->sym.request_proto);
   
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
@@ -1395,7 +1394,7 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   }
 
   obj = js_mkobj(js);
-  js_set_proto_init(obj, g_request_proto);
+  js_set_proto_init(obj, js->sym.request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);
   js_set_finalizer(obj, request_finalize);
@@ -1503,18 +1502,18 @@ ant_value_t request_create_server(
 void init_request_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);
-  g_request_proto = js_mkobj(js);
+  js->sym.request_proto = js_mkobj(js);
 
-  js_set(js, g_request_proto, "text", js_mkfun(js_req_text));
-  js_set(js, g_request_proto, "json", js_mkfun(js_req_json));
-  js_set(js, g_request_proto, "arrayBuffer", js_mkfun(js_req_array_buffer));
-  js_set(js, g_request_proto, "blob", js_mkfun(js_req_blob));
-  js_set(js, g_request_proto, "formData", js_mkfun(js_req_form_data));
-  js_set(js, g_request_proto, "bytes", js_mkfun(js_req_bytes));
-  js_set(js, g_request_proto, "clone", js_mkfun(js_request_clone));
+  js_set(js, js->sym.request_proto, "text", js_mkfun(js_req_text));
+  js_set(js, js->sym.request_proto, "json", js_mkfun(js_req_json));
+  js_set(js, js->sym.request_proto, "arrayBuffer", js_mkfun(js_req_array_buffer));
+  js_set(js, js->sym.request_proto, "blob", js_mkfun(js_req_blob));
+  js_set(js, js->sym.request_proto, "formData", js_mkfun(js_req_form_data));
+  js_set(js, js->sym.request_proto, "bytes", js_mkfun(js_req_bytes));
+  js_set(js, js->sym.request_proto, "clone", js_mkfun(js_request_clone));
 
 #define GETTER(prop, fn) \
-  js_set_getter_desc(js, g_request_proto, prop, sizeof(prop)-1, js_mkfun(js_req_get_##fn), JS_DESC_C)
+  js_set_getter_desc(js, js->sym.request_proto, prop, sizeof(prop)-1, js_mkfun(js_req_get_##fn), JS_DESC_C)
   GETTER("method",            method);
   GETTER("url",               url);
   GETTER("headers",           headers);
@@ -1535,9 +1534,9 @@ void init_request_module(void) {
   GETTER("bodyUsed",          body_used);
 #undef GETTER
 
-  js_set_sym(js, g_request_proto, get_inspect_sym(), js_mkfun(request_inspect));
-  js_set_sym(js, g_request_proto, get_toStringTag_sym(), js_mkstr(js, "Request", 7));
-  ant_value_t ctor = js_make_ctor(js, js_request_ctor, g_request_proto, "Request", 7);
+  js_set_sym(js, js->sym.request_proto, get_inspect_sym(), js_mkfun(request_inspect));
+  js_set_sym(js, js->sym.request_proto, get_toStringTag_sym(), js_mkstr(js, "Request", 7));
+  ant_value_t ctor = js_make_ctor(js, js_request_ctor, js->sym.request_proto, "Request", 7);
   
   js_set(js, g, "Request", ctor);
   js_set_descriptor(js, g, "Request", 7, JS_DESC_W | JS_DESC_C);

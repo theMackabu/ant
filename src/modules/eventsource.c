@@ -55,8 +55,6 @@ enum {
   ES_CLOSED = 2,
 };
 
-static ant_value_t g_eventsource_proto = 0;
-static ant_value_t g_eventsource_ctor = 0;
 static eventsource_state_t *g_active_eventsources = NULL;
 
 static eventsource_state_t *eventsource_data(ant_value_t value) {
@@ -388,7 +386,7 @@ static void eventsource_finalize(ant_t *js, ant_object_t *obj) {
 
 static ant_value_t eventsource_create_object(ant_t *js) {
   ant_value_t obj = js_mkobj(js);
-  if (is_object_type(g_eventsource_proto)) js_set_proto_init(obj, g_eventsource_proto);
+  if (is_object_type(js->sym.eventsource_proto)) js_set_proto_init(obj, js->sym.eventsource_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_EVENTTARGET));
   js_set(js, obj, "onopen", js_mknull());
   js_set(js, obj, "onmessage", js_mknull());
@@ -454,23 +452,23 @@ void init_eventsource_module(void) {
   ant_value_t global = js_glob(js);
   ant_value_t eventtarget_proto = js_get_ctor_proto(js, "EventTarget", 11);
 
-  g_eventsource_proto = js_mkobj(js);
-  if (is_object_type(eventtarget_proto)) js_set_proto_init(g_eventsource_proto, eventtarget_proto);
-  js_set(js, g_eventsource_proto, "close", js_mkfun(js_eventsource_close));
-  js_set(js, g_eventsource_proto, "CONNECTING", js_mknum(ES_CONNECTING));
-  js_set(js, g_eventsource_proto, "OPEN", js_mknum(ES_OPEN));
-  js_set(js, g_eventsource_proto, "CLOSED", js_mknum(ES_CLOSED));
-  js_set_sym(js, g_eventsource_proto, get_toStringTag_sym(), js_mkstr(js, "EventSource", 11));
+  js->sym.eventsource_proto = js_mkobj(js);
+  if (is_object_type(eventtarget_proto)) js_set_proto_init(js->sym.eventsource_proto, eventtarget_proto);
+  js_set(js, js->sym.eventsource_proto, "close", js_mkfun(js_eventsource_close));
+  js_set(js, js->sym.eventsource_proto, "CONNECTING", js_mknum(ES_CONNECTING));
+  js_set(js, js->sym.eventsource_proto, "OPEN", js_mknum(ES_OPEN));
+  js_set(js, js->sym.eventsource_proto, "CLOSED", js_mknum(ES_CLOSED));
+  js_set_sym(js, js->sym.eventsource_proto, get_toStringTag_sym(), js_mkstr(js, "EventSource", 11));
 
-  g_eventsource_ctor = js_make_ctor(js, js_eventsource_ctor, g_eventsource_proto, "EventSource", 11);
-  js_set(js, g_eventsource_ctor, "CONNECTING", js_mknum(ES_CONNECTING));
-  js_set(js, g_eventsource_ctor, "OPEN", js_mknum(ES_OPEN));
-  js_set(js, g_eventsource_ctor, "CLOSED", js_mknum(ES_CLOSED));
-  js_set(js, global, "EventSource", g_eventsource_ctor);
+  js->sym.eventsource_ctor = js_make_ctor(js, js_eventsource_ctor, js->sym.eventsource_proto, "EventSource", 11);
+  js_set(js, js->sym.eventsource_ctor, "CONNECTING", js_mknum(ES_CONNECTING));
+  js_set(js, js->sym.eventsource_ctor, "OPEN", js_mknum(ES_OPEN));
+  js_set(js, js->sym.eventsource_ctor, "CLOSED", js_mknum(ES_CLOSED));
+  js_set(js, global, "EventSource", js->sym.eventsource_ctor);
 }
 
 void gc_mark_eventsource(ant_t *js, gc_mark_fn mark) {
-  if (g_eventsource_proto) mark(js, g_eventsource_proto);
-  if (g_eventsource_ctor) mark(js, g_eventsource_ctor);
+  if (js->sym.eventsource_proto) mark(js, js->sym.eventsource_proto);
+  if (js->sym.eventsource_ctor) mark(js, js->sym.eventsource_ctor);
   for (eventsource_state_t *es = g_active_eventsources; es; es = es->next) mark(js, es->obj);
 }

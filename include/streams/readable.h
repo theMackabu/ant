@@ -36,9 +36,6 @@ enum {
   RS_CONTROLLER_NATIVE_TAG = 0x52534354u // RSCT
 };
 
-extern ant_value_t g_rs_proto;
-extern ant_value_t g_reader_proto;
-extern ant_value_t g_controller_proto;
 
 void init_readable_stream_module(void);
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

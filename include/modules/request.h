@@ -28,7 +28,6 @@ typedef struct {
   bool body_used;
 } request_data_t;
 
-extern ant_value_t g_request_proto;
 void init_request_module(void);
 
 request_data_t *request_get_data(ant_value_t obj);

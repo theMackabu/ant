@@ -29,7 +29,7 @@ static inline bool sv_is_map_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
-  if (!g_map_iter_proto || js_get_proto(js, obj) != g_map_iter_proto) return false;
+  if (!js->sym.map_iter_proto || js_get_proto(js, obj) != js->sym.map_iter_proto) return false;
   
   map_iterator_state_t *st = get_map_iter_state(obj);
   if (!st) return false;
@@ -46,7 +46,7 @@ static inline bool sv_is_set_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
-  if (!g_set_iter_proto || js_get_proto(js, obj) != g_set_iter_proto) return false;
+  if (!js->sym.set_iter_proto || js_get_proto(js, obj) != js->sym.set_iter_proto) return false;
   
   set_iterator_state_t *st = get_set_iter_state(obj);
   if (!st) return false;

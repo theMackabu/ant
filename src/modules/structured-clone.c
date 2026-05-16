@@ -283,7 +283,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return clone;
   }
 
-  blob_data_t *bd = js_is_prototype_of(js, g_blob_proto, val) ? blob_get_data(val) : NULL;
+  blob_data_t *bd = js_is_prototype_of(js, js->sym.blob_proto, val) ? blob_get_data(val) : NULL;
   if (bd) {
     ant_value_t clone = blob_create(js, bd->data, bd->size, bd->type);
     if (is_err(clone)) return clone;
@@ -294,7 +294,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
         nbd->name = strdup(bd->name);
         nbd->last_modified = bd->last_modified;
       }
-      js_set_proto_init(clone, g_file_proto);
+      js_set_proto_init(clone, js->sym.file_proto);
     }
     return clone;
   }

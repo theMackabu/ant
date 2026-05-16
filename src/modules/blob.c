@@ -18,8 +18,6 @@
 #include "modules/symbol.h"
 #include "streams/readable.h"
 
-ant_value_t g_blob_proto = 0;
-ant_value_t g_file_proto = 0;
 
 enum { BLOB_NATIVE_TAG = 0x424c4f42u }; // BLOB
 
@@ -162,7 +160,7 @@ ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char 
   if (!bd) return js_mkerr(js, "out of memory");
   ant_value_t obj = js_mkobj(js);
   
-  js_set_proto_init(obj, g_blob_proto);
+  js_set_proto_init(obj, js->sym.blob_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
   js_set_native(obj, bd, BLOB_NATIVE_TAG);
   js_set_finalizer(obj, blob_finalize);
@@ -341,7 +339,7 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!bd) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_blob_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.blob_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
@@ -412,7 +410,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   bd->last_modified = last_modified;
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_file_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.file_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FILE));
@@ -425,31 +423,31 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
 void init_blob_module(void) {
   ant_t *js     = rt->js;
   ant_value_t g = js_glob(js);
-  g_blob_proto  = js_mkobj(js);
+  js->sym.blob_proto  = js_mkobj(js);
 
-  js_set_getter_desc(js, g_blob_proto, "size", 4, js_mkfun(blob_get_size), JS_DESC_C);
-  js_set_getter_desc(js, g_blob_proto, "type", 4, js_mkfun(blob_get_type), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.blob_proto, "size", 4, js_mkfun(blob_get_size), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.blob_proto, "type", 4, js_mkfun(blob_get_type), JS_DESC_C);
 
-  js_set(js, g_blob_proto, "text",        js_mkfun(js_blob_text));
-  js_set(js, g_blob_proto, "arrayBuffer", js_mkfun(js_blob_array_buffer));
-  js_set(js, g_blob_proto, "bytes",       js_mkfun(js_blob_bytes));
-  js_set(js, g_blob_proto, "slice",       js_mkfun(js_blob_slice));
-  js_set(js, g_blob_proto, "stream",      js_mkfun(js_blob_stream));
+  js_set(js, js->sym.blob_proto, "text",        js_mkfun(js_blob_text));
+  js_set(js, js->sym.blob_proto, "arrayBuffer", js_mkfun(js_blob_array_buffer));
+  js_set(js, js->sym.blob_proto, "bytes",       js_mkfun(js_blob_bytes));
+  js_set(js, js->sym.blob_proto, "slice",       js_mkfun(js_blob_slice));
+  js_set(js, js->sym.blob_proto, "stream",      js_mkfun(js_blob_stream));
 
-  js_set_sym(js, g_blob_proto, get_toStringTag_sym(), js_mkstr(js, "Blob", 4));
-  ant_value_t blob_ctor = js_make_ctor(js, js_blob_ctor, g_blob_proto, "Blob", 4);
+  js_set_sym(js, js->sym.blob_proto, get_toStringTag_sym(), js_mkstr(js, "Blob", 4));
+  ant_value_t blob_ctor = js_make_ctor(js, js_blob_ctor, js->sym.blob_proto, "Blob", 4);
   
   js_set(js, g, "Blob", blob_ctor);
   js_set_descriptor(js, g, "Blob", 4, JS_DESC_W | JS_DESC_C);
 
-  g_file_proto = js_mkobj(js);
-  js_set_proto_init(g_file_proto, g_blob_proto);
+  js->sym.file_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.file_proto, js->sym.blob_proto);
 
-  js_set_getter_desc(js, g_file_proto, "name",         4,  js_mkfun(file_get_name),          JS_DESC_C);
-  js_set_getter_desc(js, g_file_proto, "lastModified", 12, js_mkfun(file_get_last_modified),  JS_DESC_C);
+  js_set_getter_desc(js, js->sym.file_proto, "name",         4,  js_mkfun(file_get_name),          JS_DESC_C);
+  js_set_getter_desc(js, js->sym.file_proto, "lastModified", 12, js_mkfun(file_get_last_modified),  JS_DESC_C);
 
-  js_set_sym(js, g_file_proto, get_toStringTag_sym(), js_mkstr(js, "File", 4));
-  ant_value_t file_ctor = js_make_ctor(js, js_file_ctor, g_file_proto, "File", 4);
+  js_set_sym(js, js->sym.file_proto, get_toStringTag_sym(), js_mkstr(js, "File", 4));
+  ant_value_t file_ctor = js_make_ctor(js, js_file_ctor, js->sym.file_proto, "File", 4);
   
   js_set(js, g, "File", file_ctor);
   js_set_descriptor(js, g, "File", 4, JS_DESC_W | JS_DESC_C);

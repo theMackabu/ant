@@ -16,8 +16,6 @@
 #include "modules/collections.h"
 #include "modules/symbol.h"
 
-ant_value_t g_map_iter_proto = 0;
-ant_value_t g_set_iter_proto = 0;
 
 typedef struct {
   unsigned char stack[32];
@@ -404,7 +402,7 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_map_iter_proto);
+  js_set_proto_init(iter, js->sym.map_iter_proto);
   js_set_native(iter, state, MAP_ITER_NATIVE_TAG);
   
   return iter;
@@ -458,7 +456,7 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_set_iter_proto);
+  js_set_proto_init(iter, js->sym.set_iter_proto);
   js_set_native(iter, state, SET_ITER_NATIVE_TAG);
   
   return iter;
@@ -1638,17 +1636,17 @@ void init_collections_module(void) {
   ant_value_t iter_sym = get_iterator_sym();
   ant_value_t tag_sym = get_toStringTag_sym();
   
-  g_map_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_map_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_map_iter_proto, "next", js_mkfun(map_iter_next));
-  js_set_sym(js, g_map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
-  js_iter_register_advance(g_map_iter_proto, advance_map);
-  
-  g_set_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_set_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_set_iter_proto, "next", js_mkfun(set_iter_next));
-  js_set_sym(js, g_set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
-  js_iter_register_advance(g_set_iter_proto, advance_set);
+  js->sym.map_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.map_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->sym.map_iter_proto, "next", js_mkfun(map_iter_next));
+  js_set_sym(js, js->sym.map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
+  js_iter_register_advance(js->sym.map_iter_proto, advance_map);
+
+  js->sym.set_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.set_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->sym.set_iter_proto, "next", js_mkfun(set_iter_next));
+  js_set_sym(js, js->sym.set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
+  js_iter_register_advance(js->sym.set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);

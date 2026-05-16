@@ -29,7 +29,6 @@ typedef struct {
   int pending_len;
 } sd_state_t;
 
-static ant_value_t g_string_decoder_proto = 0;
 
 enum { STRING_DECODER_NATIVE_TAG = 0x53444543u }; // SDEC
 
@@ -223,7 +222,7 @@ ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_string_decoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.string_decoder_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, STRING_DECODER_NATIVE_TAG);
@@ -271,14 +270,14 @@ static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t string_decoder_library(ant_t *js) {
-  g_string_decoder_proto = js_mkobj(js);
+  js->sym.string_decoder_proto = js_mkobj(js);
   
-  js_set_getter_desc(js, g_string_decoder_proto, "encoding", 8, js_mkfun(js_sd_get_encoding), JS_DESC_C);
-  js_set(js, g_string_decoder_proto, "write", js_mkfun(js_sd_write));
-  js_set(js, g_string_decoder_proto, "end",   js_mkfun(js_sd_end));
-  js_set_sym(js, g_string_decoder_proto, get_toStringTag_sym(), js_mkstr(js, "StringDecoder", 13));
+  js_set_getter_desc(js, js->sym.string_decoder_proto, "encoding", 8, js_mkfun(js_sd_get_encoding), JS_DESC_C);
+  js_set(js, js->sym.string_decoder_proto, "write", js_mkfun(js_sd_write));
+  js_set(js, js->sym.string_decoder_proto, "end",   js_mkfun(js_sd_end));
+  js_set_sym(js, js->sym.string_decoder_proto, get_toStringTag_sym(), js_mkstr(js, "StringDecoder", 13));
 
-  ant_value_t ctor = js_make_ctor(js, js_sd_ctor, g_string_decoder_proto, "StringDecoder", 13);
+  ant_value_t ctor = js_make_ctor(js, js_sd_ctor, js->sym.string_decoder_proto, "StringDecoder", 13);
   ant_value_t lib = js_mkobj(js);
   js_set(js, lib, "StringDecoder", ctor);
   

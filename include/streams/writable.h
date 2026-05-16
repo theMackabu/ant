@@ -34,9 +34,6 @@ enum {
   WS_CONTROLLER_NATIVE_TAG = 0x57534354u // WSCT
 };
 
-extern ant_value_t g_ws_proto;
-extern ant_value_t g_ws_writer_proto;
-extern ant_value_t g_ws_controller_proto;
 
 void init_writable_stream_module(void);
 void gc_mark_writable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

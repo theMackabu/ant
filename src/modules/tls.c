@@ -89,10 +89,6 @@ enum {
   TLS_SOCKET_NATIVE_TAG = 0x544c534bu,  // TLSK
 };
 
-static ant_value_t g_tls_context_proto = 0;
-static ant_value_t g_tls_context_ctor = 0;
-static ant_value_t g_tls_socket_proto = 0;
-static ant_value_t g_tls_socket_ctor = 0;
 static ant_tls_socket_t *g_active_tls_sockets = NULL;
 
 static void tls_context_dispose(ant_tls_context_wrap_t *wrap) {
@@ -481,12 +477,12 @@ static ant_value_t js_tls_context_close(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static void tls_init_context_proto(ant_t *js) {
-  if (g_tls_context_proto && g_tls_context_ctor) return;
+  if (js->sym.tls_context_proto && js->sym.tls_context_ctor) return;
 
-  if (!g_tls_context_proto) {
-    g_tls_context_proto = js_mkobj(js);
-    js_set(js, g_tls_context_proto, "close", js_mkfun(js_tls_context_close));
-    js_set_sym(js, g_tls_context_proto, get_toStringTag_sym(), js_mkstr(js, "SecureContext", 13));
+  if (!js->sym.tls_context_proto) {
+    js->sym.tls_context_proto = js_mkobj(js);
+    js_set(js, js->sym.tls_context_proto, "close", js_mkfun(js_tls_context_close));
+    js_set_sym(js, js->sym.tls_context_proto, get_toStringTag_sym(), js_mkstr(js, "SecureContext", 13));
   }
 }
 
@@ -873,12 +869,12 @@ static ant_value_t js_tls_socket_ctor(ant_t *js, ant_value_t *args, int nargs) {
   tls_init_socket_proto(js);
   if (tls_socket_data(existing)) {
     tls_define_default_socket_state(js, existing);
-    js_set_proto_wb(js, existing, g_tls_socket_proto);
+    js_set_proto_wb(js, existing, js->sym.tls_socket_proto);
     return existing;
   }
 
   obj = js_mkobj(js);
-  proto = js_instance_proto_from_new_target(js, g_tls_socket_proto);
+  proto = js_instance_proto_from_new_target(js, js->sym.tls_socket_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   tls_define_default_socket_state(js, obj);
   js_set(js, obj, "alpnProtocol", js_false);
@@ -894,9 +890,9 @@ void tls_init_socket_proto(ant_t *js) {
   ant_value_t net_socket_ctor = 0;
   ant_value_t net_socket_proto = 0;
 
-  if (g_tls_socket_proto && g_tls_socket_ctor) return;
+  if (js->sym.tls_socket_proto && js->sym.tls_socket_ctor) return;
 
-  if (!g_tls_socket_proto) {
+  if (!js->sym.tls_socket_proto) {
     net = net_library(js);
     net_socket_ctor = js_get(js, net, "Socket");
     net_socket_proto = js_get(js, net_socket_ctor, "prototype");
@@ -908,34 +904,34 @@ void tls_init_socket_proto(ant_t *js) {
       net_socket_proto = ee_proto;
     }
 
-    g_tls_socket_proto = js_mkobj(js);
-    if (is_object_type(net_socket_proto)) js_set_proto_init(g_tls_socket_proto, net_socket_proto);
-    js_set(js, g_tls_socket_proto, "read", js_mkfun(js_tls_socket_read));
-    js_set(js, g_tls_socket_proto, "unshift", js_mkfun(js_tls_socket_unshift));
-    js_set(js, g_tls_socket_proto, "write", js_mkfun(js_tls_socket_write));
-    js_set(js, g_tls_socket_proto, "end", js_mkfun(js_tls_socket_end));
-    js_set(js, g_tls_socket_proto, "destroy", js_mkfun(js_tls_socket_destroy));
-    js_set(js, g_tls_socket_proto, "pause", js_mkfun(js_tls_socket_pause));
-    js_set(js, g_tls_socket_proto, "resume", js_mkfun(js_tls_socket_resume));
-    js_set(js, g_tls_socket_proto, "setEncoding", js_mkfun(js_tls_socket_setEncoding));
-    js_set(js, g_tls_socket_proto, "setNoDelay", js_mkfun(js_tls_socket_setNoDelay));
-    js_set(js, g_tls_socket_proto, "setKeepAlive", js_mkfun(js_tls_socket_setKeepAlive));
-    js_set(js, g_tls_socket_proto, "setTimeout", js_mkfun(js_tls_socket_setTimeout));
-    js_set(js, g_tls_socket_proto, "address", js_mkfun(js_tls_socket_address));
-    js_set(js, g_tls_socket_proto, "ref", js_mkfun(js_tls_socket_ref));
-    js_set(js, g_tls_socket_proto, "unref", js_mkfun(js_tls_socket_unref));
-    js_set(js, g_tls_socket_proto, "cork", js_mkfun(js_tls_socket_cork));
-    js_set(js, g_tls_socket_proto, "uncork", js_mkfun(js_tls_socket_uncork));
-    js_set(js, g_tls_socket_proto, "getProtocol", js_mkfun(js_tls_socket_getProtocol));
-    js_set(js, g_tls_socket_proto, "getCipher", js_mkfun(js_tls_socket_getCipher));
-    js_set(js, g_tls_socket_proto, "getSession", js_mkfun(js_tls_socket_getSession));
-    js_set(js, g_tls_socket_proto, "getPeerCertificate", js_mkfun(js_tls_socket_getPeerCertificate));
-    js_set(js, g_tls_socket_proto, "renegotiate", js_mkfun(js_tls_socket_renegotiate));
-    js_set_sym(js, g_tls_socket_proto, get_toStringTag_sym(), js_mkstr(js, "TLSSocket", 9));
+    js->sym.tls_socket_proto = js_mkobj(js);
+    if (is_object_type(net_socket_proto)) js_set_proto_init(js->sym.tls_socket_proto, net_socket_proto);
+    js_set(js, js->sym.tls_socket_proto, "read", js_mkfun(js_tls_socket_read));
+    js_set(js, js->sym.tls_socket_proto, "unshift", js_mkfun(js_tls_socket_unshift));
+    js_set(js, js->sym.tls_socket_proto, "write", js_mkfun(js_tls_socket_write));
+    js_set(js, js->sym.tls_socket_proto, "end", js_mkfun(js_tls_socket_end));
+    js_set(js, js->sym.tls_socket_proto, "destroy", js_mkfun(js_tls_socket_destroy));
+    js_set(js, js->sym.tls_socket_proto, "pause", js_mkfun(js_tls_socket_pause));
+    js_set(js, js->sym.tls_socket_proto, "resume", js_mkfun(js_tls_socket_resume));
+    js_set(js, js->sym.tls_socket_proto, "setEncoding", js_mkfun(js_tls_socket_setEncoding));
+    js_set(js, js->sym.tls_socket_proto, "setNoDelay", js_mkfun(js_tls_socket_setNoDelay));
+    js_set(js, js->sym.tls_socket_proto, "setKeepAlive", js_mkfun(js_tls_socket_setKeepAlive));
+    js_set(js, js->sym.tls_socket_proto, "setTimeout", js_mkfun(js_tls_socket_setTimeout));
+    js_set(js, js->sym.tls_socket_proto, "address", js_mkfun(js_tls_socket_address));
+    js_set(js, js->sym.tls_socket_proto, "ref", js_mkfun(js_tls_socket_ref));
+    js_set(js, js->sym.tls_socket_proto, "unref", js_mkfun(js_tls_socket_unref));
+    js_set(js, js->sym.tls_socket_proto, "cork", js_mkfun(js_tls_socket_cork));
+    js_set(js, js->sym.tls_socket_proto, "uncork", js_mkfun(js_tls_socket_uncork));
+    js_set(js, js->sym.tls_socket_proto, "getProtocol", js_mkfun(js_tls_socket_getProtocol));
+    js_set(js, js->sym.tls_socket_proto, "getCipher", js_mkfun(js_tls_socket_getCipher));
+    js_set(js, js->sym.tls_socket_proto, "getSession", js_mkfun(js_tls_socket_getSession));
+    js_set(js, js->sym.tls_socket_proto, "getPeerCertificate", js_mkfun(js_tls_socket_getPeerCertificate));
+    js_set(js, js->sym.tls_socket_proto, "renegotiate", js_mkfun(js_tls_socket_renegotiate));
+    js_set_sym(js, js->sym.tls_socket_proto, get_toStringTag_sym(), js_mkstr(js, "TLSSocket", 9));
   }
 
-  if (!g_tls_socket_ctor)
-    g_tls_socket_ctor = js_make_ctor(js, js_tls_socket_ctor, g_tls_socket_proto, "TLSSocket", 9);
+  if (!js->sym.tls_socket_ctor)
+    js->sym.tls_socket_ctor = js_make_ctor(js, js_tls_socket_ctor, js->sym.tls_socket_proto, "TLSSocket", 9);
 }
 
 static ant_value_t js_tls_create_context(ant_t *js, ant_value_t *args, int nargs) {
@@ -1042,7 +1038,7 @@ static ant_value_t js_tls_create_context(ant_t *js, ant_value_t *args, int nargs
   }
 
   obj = js_mkobj(js);
-  js_set_proto_init(obj, g_tls_context_proto);
+  js_set_proto_init(obj, js->sym.tls_context_proto);
   wrap->obj = obj;
   
   js_set_native(obj, wrap, TLS_CONTEXT_NATIVE_TAG);
@@ -1209,7 +1205,7 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   }
 
   obj = js_mkobj(js);
-  js_set_proto_init(obj, g_tls_socket_proto);
+  js_set_proto_init(obj, js->sym.tls_socket_proto);
   socket->obj = obj;
   js_set_native(obj, socket, TLS_SOCKET_NATIVE_TAG);
   tls_define_default_socket_state(js, obj);
@@ -1274,14 +1270,14 @@ static ant_value_t tls_build_library(ant_t *js) {
   tls_init_context_proto(js);
   tls_init_socket_proto(js);
   
-  if (!g_tls_context_ctor) g_tls_context_ctor = js_make_ctor(
+  if (!js->sym.tls_context_ctor) js->sym.tls_context_ctor = js_make_ctor(
     js, js_tls_secure_context_ctor,
-    g_tls_context_proto, "SecureContext", 13
+    js->sym.tls_context_proto, "SecureContext", 13
   );
   
   js_set(js, lib, "version", version);
-  js_set(js, lib, "TLSSocket", g_tls_socket_ctor);
-  js_set(js, lib, "SecureContext", g_tls_context_ctor);
+  js_set(js, lib, "TLSSocket", js->sym.tls_socket_ctor);
+  js_set(js, lib, "SecureContext", js->sym.tls_context_ctor);
   js_set(js, lib, "createSecureContext", create_secure_context);
   js_set(js, lib, "connect", connect);
   js_set(js, lib, "createConnection", connect);
@@ -1310,10 +1306,10 @@ ant_value_t tls_library(ant_t *js) {
 void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
   ant_tls_socket_t *socket = NULL;
 
-  if (g_tls_context_proto) mark(js, g_tls_context_proto);
-  if (g_tls_context_ctor) mark(js, g_tls_context_ctor);
-  if (g_tls_socket_proto) mark(js, g_tls_socket_proto);
-  if (g_tls_socket_ctor) mark(js, g_tls_socket_ctor);
+  if (js->sym.tls_context_proto) mark(js, js->sym.tls_context_proto);
+  if (js->sym.tls_context_ctor) mark(js, js->sym.tls_context_ctor);
+  if (js->sym.tls_socket_proto) mark(js, js->sym.tls_socket_proto);
+  if (js->sym.tls_socket_ctor) mark(js, js->sym.tls_socket_ctor);
 
   for (socket = g_active_tls_sockets; socket; socket = socket->next_active) {
     mark(js, socket->obj);

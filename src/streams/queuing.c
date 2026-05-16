@@ -9,8 +9,6 @@
 #include "modules/symbol.h"
 #include "streams/queuing.h"
 
-static ant_value_t g_count_qs_proto;
-static ant_value_t g_bytelength_qs_proto;
 
 static ant_value_t js_count_size(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum(1);
@@ -66,11 +64,11 @@ static ant_value_t qs_ctor(ant_t *js, ant_value_t *args, int nargs, ant_value_t 
 }
 
 static ant_value_t js_count_qs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return qs_ctor(js, args, nargs, g_count_qs_proto, "CountQueuingStrategy");
+  return qs_ctor(js, args, nargs, js->sym.count_qs_proto, "CountQueuingStrategy");
 }
 
 static ant_value_t js_bytelength_qs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return qs_ctor(js, args, nargs, g_bytelength_qs_proto, "ByteLengthQueuingStrategy");
+  return qs_ctor(js, args, nargs, js->sym.bytelength_qs_proto, "ByteLengthQueuingStrategy");
 }
 
 static ant_value_t make_size_fn(ant_t *js, ant_cfunc_t cfunc, int length) {
@@ -89,28 +87,28 @@ void init_queuing_strategies_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);
 
-  g_count_qs_proto = js_mkobj(js);
-  js_set_slot(g_count_qs_proto, SLOT_DATA, make_size_fn(js, js_count_size, 0));
-  js_set_getter_desc(js, g_count_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
-  js_set_getter_desc(js, g_count_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
-  js_set_sym(js, g_count_qs_proto, get_toStringTag_sym(), js_mkstr(js, "CountQueuingStrategy", 20));
+  js->sym.count_qs_proto = js_mkobj(js);
+  js_set_slot(js->sym.count_qs_proto, SLOT_DATA, make_size_fn(js, js_count_size, 0));
+  js_set_getter_desc(js, js->sym.count_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.count_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
+  js_set_sym(js, js->sym.count_qs_proto, get_toStringTag_sym(), js_mkstr(js, "CountQueuingStrategy", 20));
 
-  ant_value_t cqs_ctor = js_make_ctor(js, js_count_qs_ctor, g_count_qs_proto, "CountQueuingStrategy", 20);
+  ant_value_t cqs_ctor = js_make_ctor(js, js_count_qs_ctor, js->sym.count_qs_proto, "CountQueuingStrategy", 20);
   js_set(js, g, "CountQueuingStrategy", cqs_ctor);
   js_set_descriptor(js, g, "CountQueuingStrategy", 20, JS_DESC_W | JS_DESC_C);
 
-  g_bytelength_qs_proto = js_mkobj(js);
-  js_set_slot(g_bytelength_qs_proto, SLOT_DATA, make_size_fn(js, js_bytelength_size, 1));
-  js_set_getter_desc(js, g_bytelength_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
-  js_set_getter_desc(js, g_bytelength_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
-  js_set_sym(js, g_bytelength_qs_proto, get_toStringTag_sym(), js_mkstr(js, "ByteLengthQueuingStrategy", 25));
+  js->sym.bytelength_qs_proto = js_mkobj(js);
+  js_set_slot(js->sym.bytelength_qs_proto, SLOT_DATA, make_size_fn(js, js_bytelength_size, 1));
+  js_set_getter_desc(js, js->sym.bytelength_qs_proto, "highWaterMark", 13, js_mkfun(js_qs_get_highwatermark), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.bytelength_qs_proto, "size", 4, js_mkfun(js_qs_get_size), JS_DESC_C);
+  js_set_sym(js, js->sym.bytelength_qs_proto, get_toStringTag_sym(), js_mkstr(js, "ByteLengthQueuingStrategy", 25));
 
-  ant_value_t blqs_ctor = js_make_ctor(js, js_bytelength_qs_ctor, g_bytelength_qs_proto, "ByteLengthQueuingStrategy", 25);
+  ant_value_t blqs_ctor = js_make_ctor(js, js_bytelength_qs_ctor, js->sym.bytelength_qs_proto, "ByteLengthQueuingStrategy", 25);
   js_set(js, g, "ByteLengthQueuingStrategy", blqs_ctor);
   js_set_descriptor(js, g, "ByteLengthQueuingStrategy", 25, JS_DESC_W | JS_DESC_C);
 }
 
 void gc_mark_queuing_strategies(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  mark(js, g_count_qs_proto);
-  mark(js, g_bytelength_qs_proto);
+  mark(js, js->sym.count_qs_proto);
+  mark(js, js->sym.bytelength_qs_proto);
 }

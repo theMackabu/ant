@@ -92,8 +92,6 @@ typedef struct rl_interface {
 
 static uint64_t next_interface_id = 1;
 static rl_interface_t *interfaces = NULL;
-static ant_value_t g_rl_async_iter_proto = 0;
-static ant_value_t g_rl_interface_proto = 0;
 
 static const char *rl_render_prompt(const rl_interface_t *iface) {
   if (!iface) return "";
@@ -1150,15 +1148,15 @@ static ant_value_t rl_async_iter_return(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t rl_get_async_iter_proto(ant_t *js) {
-  if (is_object_type(g_rl_async_iter_proto)) return g_rl_async_iter_proto;
+  if (is_object_type(js->sym.rl_async_iter_proto)) return js->sym.rl_async_iter_proto;
 
-  g_rl_async_iter_proto = js_mkobj(js);
-  js_set(js, g_rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
-  js_set(js, g_rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
-  js_set_sym(js, g_rl_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
-  js_set_sym(js, g_rl_async_iter_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncIterator", 13));
+  js->sym.rl_async_iter_proto = js_mkobj(js);
+  js_set(js, js->sym.rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
+  js_set(js, js->sym.rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
+  js_set_sym(js, js->sym.rl_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  js_set_sym(js, js->sym.rl_async_iter_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncIterator", 13));
 
-  return g_rl_async_iter_proto;
+  return js->sym.rl_async_iter_proto;
 }
 
 static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int nargs) {
@@ -1201,28 +1199,28 @@ static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int
 }
 
 static ant_value_t rl_get_interface_proto(ant_t *js) {
-  if (is_object_type(g_rl_interface_proto)) return g_rl_interface_proto;
+  if (is_object_type(js->sym.rl_interface_proto)) return js->sym.rl_interface_proto;
 
-  g_rl_interface_proto = js_mkobj(js);
-  js_set_proto_init(g_rl_interface_proto, eventemitter_prototype(js));
+  js->sym.rl_interface_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.rl_interface_proto, eventemitter_prototype(js));
 
-  js_set(js, g_rl_interface_proto, "close", js_mkfun(rl_interface_close));
-  js_set(js, g_rl_interface_proto, "pause", js_mkfun(rl_interface_pause));
-  js_set(js, g_rl_interface_proto, "resume", js_mkfun(rl_interface_resume));
-  js_set(js, g_rl_interface_proto, "prompt", js_mkfun(rl_interface_prompt));
-  js_set(js, g_rl_interface_proto, "setPrompt", js_mkfun(rl_interface_set_prompt));
-  js_set(js, g_rl_interface_proto, "getPrompt", js_mkfun(rl_interface_get_prompt));
-  js_set(js, g_rl_interface_proto, "write", js_mkfun(rl_interface_write));
-  js_set(js, g_rl_interface_proto, "question", js_mkfun(rl_interface_question_callback));
-  js_set(js, g_rl_interface_proto, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
+  js_set(js, js->sym.rl_interface_proto, "close", js_mkfun(rl_interface_close));
+  js_set(js, js->sym.rl_interface_proto, "pause", js_mkfun(rl_interface_pause));
+  js_set(js, js->sym.rl_interface_proto, "resume", js_mkfun(rl_interface_resume));
+  js_set(js, js->sym.rl_interface_proto, "prompt", js_mkfun(rl_interface_prompt));
+  js_set(js, js->sym.rl_interface_proto, "setPrompt", js_mkfun(rl_interface_set_prompt));
+  js_set(js, js->sym.rl_interface_proto, "getPrompt", js_mkfun(rl_interface_get_prompt));
+  js_set(js, js->sym.rl_interface_proto, "write", js_mkfun(rl_interface_write));
+  js_set(js, js->sym.rl_interface_proto, "question", js_mkfun(rl_interface_question_callback));
+  js_set(js, js->sym.rl_interface_proto, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
 
-  js_set_getter_desc(js, g_rl_interface_proto, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, g_rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, g_rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_rl_interface_proto, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
-  js_set_sym(js, g_rl_interface_proto, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
+  js_set_getter_desc(js, js->sym.rl_interface_proto, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, js->sym.rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, js->sym.rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->sym.rl_interface_proto, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
+  js_set_sym(js, js->sym.rl_interface_proto, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
 
-  return g_rl_interface_proto;
+  return js->sym.rl_interface_proto;
 }
 
 static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) {
@@ -1357,8 +1355,8 @@ ant_value_t readline_promises_library(ant_t *js) {
 }
 
 void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
-  if (g_rl_async_iter_proto) mark(js, g_rl_async_iter_proto);
-  if (g_rl_interface_proto) mark(js, g_rl_interface_proto);
+  if (js->sym.rl_async_iter_proto) mark(js, js->sym.rl_async_iter_proto);
+  if (js->sym.rl_interface_proto) mark(js, js->sym.rl_interface_proto);
   
   rl_interface_t *iface, *tmp;
   HASH_ITER(hh, interfaces, iface, tmp) {

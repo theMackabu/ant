@@ -4,8 +4,6 @@
 #include "types.h"
 #include <stdbool.h>
 
-extern ant_value_t g_ts_proto;
-extern ant_value_t g_ts_ctrl_proto;
 
 void init_transform_stream_module(void);
 void gc_mark_transform_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

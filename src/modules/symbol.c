@@ -13,11 +13,7 @@
 #include "gc/roots.h"
 #include "gc/modules.h"
 
-#define DECL_SYM(name, _desc) static ant_value_t g_##name = {0};
-WELLKNOWN_SYMBOLS(DECL_SYM)
-#undef DECL_SYM
-
-#define DEF_GET_SYM(name, _desc) ant_value_t get_##name##_sym(void) { return g_##name; }
+#define DEF_GET_SYM(name, _desc) ant_value_t get_##name##_sym(void) { return rt->js->sym.wks_##name; }
 WELLKNOWN_SYMBOLS(DEF_GET_SYM)
 #undef DEF_GET_SYM
 
@@ -104,7 +100,7 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
 
   js->sym.iterator_proto = js_mkobj(js);
   js_set_proto_init(js->sym.iterator_proto, js->sym.object_proto);
-  js_set_sym(js, js->sym.iterator_proto, g_iterator, js_mkfun(sym_this_cb));
+  js_set_sym(js, js->sym.iterator_proto, js->sym.wks_iterator, js_mkfun(sym_this_cb));
   
   return js->sym.iterator_proto;
 }
@@ -184,7 +180,7 @@ static ant_value_t get_array_iterator_prototype(ant_t *js) {
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.array_iterator_proto = js_mkobj(js);
   js_set(js, js->sym.array_iterator_proto, "next", js_mkfun(arr_iter_next));
-  js_set_sym(js, js->sym.array_iterator_proto, g_toStringTag, js_mkstr(js, "Array Iterator", 14));
+  js_set_sym(js, js->sym.array_iterator_proto, js->sym.wks_toStringTag, js_mkstr(js, "Array Iterator", 14));
   js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
 
   return js->sym.array_iterator_proto;
@@ -210,7 +206,7 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.string_iterator_proto = js_mkobj(js);
   js_set(js, js->sym.string_iterator_proto, "next", js_mkfun(str_iter_next));
-  js_set_sym(js, js->sym.string_iterator_proto, g_toStringTag, js_mkstr(js, "String Iterator", 15));
+  js_set_sym(js, js->sym.string_iterator_proto, js->sym.wks_toStringTag, js_mkstr(js, "String Iterator", 15));
   js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
 
   return js->sym.string_iterator_proto;
@@ -312,9 +308,9 @@ ant_value_t maybe_call_symbol_method(
 }
 
 void js_define_species_getter(ant_t *js, ant_value_t ctor) {
-  if (!is_object_type(ctor) || vtype(g_species) != T_SYMBOL) return;
+  if (!is_object_type(ctor) || vtype(js->sym.wks_species) != T_SYMBOL) return;
   ctor = js_as_obj(ctor);
-  js_set_sym_getter_desc(js, ctor, g_species, js_mkfun(sym_this_cb), JS_DESC_C);
+  js_set_sym_getter_desc(js, ctor, js->sym.wks_species, js_mkfun(sym_this_cb), JS_DESC_C);
 }
 
 void init_symbol_module(void) {
@@ -334,7 +330,7 @@ void init_symbol_module(void) {
   gc_register_root(&js->sym.async_generator_proto);
   gc_register_root(&js->sym.async_iterator_proto);
 
-  #define INIT_SYM(name, desc) g_##name = js_mksym_well_known(js, desc);
+  #define INIT_SYM(name, desc) js->sym.wks_##name = js_mksym_well_known(js, desc);
   WELLKNOWN_SYMBOLS(INIT_SYM)
   #undef INIT_SYM
 
@@ -345,7 +341,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
   js_set(js, symbol_proto, "valueOf", js_mkfun(builtin_Symbol_valueOf));
   js_set_sym(js, symbol_proto, get_toPrimitive_sym(), js_mkfun(builtin_Symbol_valueOf));
-  js_set_sym(js, symbol_proto, g_toStringTag, js_mkstr(js, "Symbol", 6));
+  js_set_sym(js, symbol_proto, js->sym.wks_toStringTag, js_mkstr(js, "Symbol", 6));
   js_set_getter_desc(js, symbol_proto, "description", 11, js_mkfun(builtin_Symbol_description), JS_DESC_C);
   
   ant_value_t symbol_ctor = js_mkobj(js);
@@ -354,7 +350,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "keyFor", js_mkfun(builtin_Symbol_keyFor));
   js_set(js, symbol_ctor, "prototype", symbol_proto);
   
-  #define SET_CTOR_SYM(name, _desc) js_set(js, symbol_ctor, #name, g_##name);
+  #define SET_CTOR_SYM(name, _desc) js_set(js, symbol_ctor, #name, js->sym.wks_##name);
   WELLKNOWN_SYMBOLS(SET_CTOR_SYM)
   #undef SET_CTOR_SYM
   
@@ -371,8 +367,8 @@ void init_symbol_module(void) {
   js_iter_register_advance(js->sym.array_iterator_proto, advance_array);
   js_iter_register_advance(js->sym.string_iterator_proto, advance_string);
   
-  js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
-  js_set_sym(js, array_proto, g_iterator, js_get(js, array_proto, "values"));
+  js_set_sym(js, rt->ant_obj, js->sym.wks_toStringTag, js_mkstr(js, "Ant", 3));
+  js_set_sym(js, array_proto, js->sym.wks_iterator, js_get(js, array_proto, "values"));
 
   ant_value_t array_unscopables = js_mkobj(js);
   js_set(js, array_unscopables, "find", js_true);
@@ -384,24 +380,24 @@ void init_symbol_module(void) {
   js_set(js, array_unscopables, "values", js_true);
   js_set(js, array_unscopables, "flat", js_true);
   js_set(js, array_unscopables, "flatMap", js_true);
-  js_set_sym(js, array_proto, g_unscopables, array_unscopables);
+  js_set_sym(js, array_proto, js->sym.wks_unscopables, array_unscopables);
   
   ant_value_t string_ctor = js_get(js, js_glob(js), "String");
   ant_value_t string_proto = js_get(js, string_ctor, "prototype");
-  js_set_sym(js, string_proto, g_iterator, js_mkfun(string_iterator));
+  js_set_sym(js, string_proto, js->sym.wks_iterator, js_mkfun(string_iterator));
   
   ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
   ant_value_t promise_proto = js_get(js, promise_ctor, "prototype");
-  js_set_sym(js, promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
+  js_set_sym(js, promise_proto, js->sym.wks_toStringTag, js_mkstr(js, "Promise", 7));
 
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
-  js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));
+  js_set_sym(js, async_func_proto, js->sym.wks_toStringTag, js_mkstr(js, "AsyncFunction", 13));
   
   ant_value_t generator_func_proto = js_get_slot(js_glob(js), SLOT_GENERATOR_PROTO);
-  js_set_sym(js, generator_func_proto, g_toStringTag, js_mkstr(js, "GeneratorFunction", 17));
+  js_set_sym(js, generator_func_proto, js->sym.wks_toStringTag, js_mkstr(js, "GeneratorFunction", 17));
   
   ant_value_t async_generator_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
-  js_set_sym(js, async_generator_func_proto, g_toStringTag, js_mkstr(js, "AsyncGeneratorFunction", 22));
+  js_set_sym(js, async_generator_func_proto, js->sym.wks_toStringTag, js_mkstr(js, "AsyncGeneratorFunction", 22));
 
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
@@ -415,7 +411,12 @@ void gc_mark_symbols(ant_t *js, gc_mark_fn mark) {
   mark(js, js->sym.async_generator_proto);
   mark(js, js->sym.async_iterator_proto);
 
-  #define GC_SYM(name, _desc) mark(js, g_##name);
+  #define GC_SYM(name, _desc) mark(js, js->sym.wks_##name);
   WELLKNOWN_SYMBOLS(GC_SYM)
   #undef GC_SYM
+
+  for (int i = 0; i < js->sym.stringify_depth && i < MAX_STRINGIFY_DEPTH; i++)
+    mark(js, js->sym.stringify_stack[i]);
+  for (int i = 0; i < js->sym.multiref_count && i < MAX_MULTIREF_OBJS; i++)
+    mark(js, js->sym.multiref_objs[i]);
 }

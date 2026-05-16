@@ -820,19 +820,20 @@ typedef struct {
 } path_api_t;
 
 static path_api_t path_build_api_for_style(ant_t *js, path_style_t style) {
-ant_value_t style_value = js_mknum((double)style);
-return (path_api_t){
-  .basename = js_heavy_mkfun(js, builtin_path_basename, style_value),
-  .dirname = js_heavy_mkfun(js, builtin_path_dirname, style_value),
-  .extname = js_heavy_mkfun(js, builtin_path_extname, style_value),
-  .join = js_heavy_mkfun(js, builtin_path_join, style_value),
-  .normalize = js_heavy_mkfun(js, builtin_path_normalize, style_value),
-  .resolve = js_heavy_mkfun(js, builtin_path_resolve, style_value),
-  .relative = js_heavy_mkfun(js, builtin_path_relative, style_value),
-  .isAbsolute = js_heavy_mkfun(js, builtin_path_isAbsolute, style_value),
-  .parse = js_heavy_mkfun(js, builtin_path_parse, style_value),
-  .format = js_heavy_mkfun(js, builtin_path_format, style_value)
-};}
+  ant_value_t style_value = js_mknum((double)style);
+  return (path_api_t){
+    .basename = js_heavy_mkfun(js, builtin_path_basename, style_value),
+    .dirname = js_heavy_mkfun(js, builtin_path_dirname, style_value),
+    .extname = js_heavy_mkfun(js, builtin_path_extname, style_value),
+    .join = js_heavy_mkfun(js, builtin_path_join, style_value),
+    .normalize = js_heavy_mkfun(js, builtin_path_normalize, style_value),
+    .resolve = js_heavy_mkfun(js, builtin_path_resolve, style_value),
+    .relative = js_heavy_mkfun(js, builtin_path_relative, style_value),
+    .isAbsolute = js_heavy_mkfun(js, builtin_path_isAbsolute, style_value),
+    .parse = js_heavy_mkfun(js, builtin_path_parse, style_value),
+    .format = js_heavy_mkfun(js, builtin_path_format, style_value)
+  };
+}
 
 static void path_apply_api(ant_t *js, ant_value_t target, const path_api_t *api) {
   js_set(js, target, "basename", api->basename);

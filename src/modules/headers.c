@@ -43,8 +43,6 @@ enum {
   ITER_VALUES = 2
 };
 
-ant_value_t g_headers_proto      = 0;
-ant_value_t g_headers_iter_proto = 0;
 
 enum {
   HEADERS_NATIVE_TAG = 0x48445253u, // HDRS
@@ -539,7 +537,7 @@ static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kin
   st->kind  = kind;
 
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_headers_iter_proto);
+  js_set_proto_init(iter, js->sym.headers_iter_proto);
   js_set_native(iter, st, HEADERS_ITER_NATIVE_TAG);
   js_set_finalizer(iter, headers_iter_finalize);
   js_set_slot_wb(js, iter, SLOT_AUX, headers_obj);
@@ -829,7 +827,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_headers_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.headers_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
@@ -845,7 +843,7 @@ ant_value_t headers_create_empty(ant_t *js) {
   if (!l) return js_mkerr(js, "out of memory");
   
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_headers_proto);
+  js_set_proto_init(obj, js->sym.headers_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
   js_set_native(obj, l, HEADERS_NATIVE_TAG);
   js_set_finalizer(obj, headers_finalize);
@@ -1094,39 +1092,39 @@ void init_headers_module(void) {
   ant_t *js     = rt->js;
   ant_value_t g = js_glob(js);
 
-  g_headers_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_headers_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_headers_iter_proto, "next", js_mkfun(headers_iter_next));
-  js_set_descriptor(js, g_headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
-  js_iter_register_advance(g_headers_iter_proto, advance_headers);
+  js->sym.headers_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.headers_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->sym.headers_iter_proto, "next", js_mkfun(headers_iter_next));
+  js_set_descriptor(js, js->sym.headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->sym.headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js_iter_register_advance(js->sym.headers_iter_proto, advance_headers);
 
-  g_headers_proto = js_mkobj(js);
+  js->sym.headers_proto = js_mkobj(js);
 
-  js_set(js, g_headers_proto, "append",       js_mkfun(js_headers_append));
-  js_set(js, g_headers_proto, "set",          js_mkfun(js_headers_set));
-  js_set(js, g_headers_proto, "get",          js_mkfun(js_headers_get));
-  js_set(js, g_headers_proto, "has",          js_mkfun(js_headers_has));
-  js_set(js, g_headers_proto, "delete",       js_mkfun(js_headers_delete));
-  js_set(js, g_headers_proto, "forEach",      js_mkfun(js_headers_for_each));
-  js_set(js, g_headers_proto, "keys",         js_mkfun(js_headers_keys));
-  js_set(js, g_headers_proto, "values",       js_mkfun(js_headers_values));
-  js_set(js, g_headers_proto, "entries",      js_mkfun(js_headers_entries));
-  js_set(js, g_headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
+  js_set(js, js->sym.headers_proto, "append",       js_mkfun(js_headers_append));
+  js_set(js, js->sym.headers_proto, "set",          js_mkfun(js_headers_set));
+  js_set(js, js->sym.headers_proto, "get",          js_mkfun(js_headers_get));
+  js_set(js, js->sym.headers_proto, "has",          js_mkfun(js_headers_has));
+  js_set(js, js->sym.headers_proto, "delete",       js_mkfun(js_headers_delete));
+  js_set(js, js->sym.headers_proto, "forEach",      js_mkfun(js_headers_for_each));
+  js_set(js, js->sym.headers_proto, "keys",         js_mkfun(js_headers_keys));
+  js_set(js, js->sym.headers_proto, "values",       js_mkfun(js_headers_values));
+  js_set(js, js->sym.headers_proto, "entries",      js_mkfun(js_headers_entries));
+  js_set(js, js->sym.headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
-  js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_get(js, g_headers_proto, "entries"));
-  js_set_sym(js, g_headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
-  js_set_sym(js, g_headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
+  js_set_sym(js, js->sym.headers_proto, get_iterator_sym(),    js_get(js, js->sym.headers_proto, "entries"));
+  js_set_sym(js, js->sym.headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
+  js_set_sym(js, js->sym.headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_headers_ctor));
-  js_mkprop_fast(js, ctor_obj, "prototype", 9, g_headers_proto);
+  js_mkprop_fast(js, ctor_obj, "prototype", 9, js->sym.headers_proto);
   js_mkprop_fast(js, ctor_obj, "name", 4, js_mkstr(js, "Headers", 7));
   js_set_descriptor(js, ctor_obj, "name", 4, 0);
   
   ant_value_t ctor = js_obj_to_func(ctor_obj);
-  js_set(js, g_headers_proto, "constructor", ctor);
-  js_set_descriptor(js, g_headers_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.headers_proto, "constructor", ctor);
+  js_set_descriptor(js, js->sym.headers_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   js_set(js, g, "Headers", ctor);
   js_set_descriptor(js, g, "Headers", 7, JS_DESC_W | JS_DESC_C);

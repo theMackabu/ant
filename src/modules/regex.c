@@ -57,10 +57,6 @@ static compiled_regex_cache_entry_t **compiled_regex_cache = NULL;
 static pcre2_match_context *regex_match_ctx = NULL;
 static pcre2_jit_stack *regex_jit_stack = NULL;
 
-static ant_value_t regexp_matchall_iter_proto_val = 0;
-static ant_value_t regexp_ctor_value = 0;
-static ant_value_t regexp_empty_string = 0;
-static ant_value_t regexp_static_values[11] = {0};
 
 static bool regexp_static_roots_registered = false;
 static bool regexp_exec_write_guard_armed = false;
@@ -145,35 +141,35 @@ static ant_value_t regexp_build_named_groups_meta(ant_t *js, pcre2_code *code) {
   return meta;
 }
 
-static void regexp_register_static_roots(void) {
+static void regexp_register_static_roots(ant_t *js) {
   if (regexp_static_roots_registered) return;
-  gc_register_root(&regexp_ctor_value);
-  gc_register_root(&regexp_empty_string);
-  for (size_t i = 0; i < sizeof(regexp_static_values) / sizeof(regexp_static_values[0]); i++)
-    gc_register_root(&regexp_static_values[i]);
+  gc_register_root(&js->sym.regexp_matchall_iter_proto);
+  gc_register_root(&js->sym.regexp_ctor);
+  gc_register_root(&js->sym.regexp_empty_string);
+  for (size_t i = 0; i < sizeof(js->sym.regexp_static_values) / sizeof(js->sym.regexp_static_values[0]); i++)
+    gc_register_root(&js->sym.regexp_static_values[i]);
   regexp_static_roots_registered = true;
 }
 
-static inline ant_value_t regexp_static_value(size_t idx) {
-  if (idx >= sizeof(regexp_static_values) / sizeof(regexp_static_values[0]))
-    return regexp_empty_string ? regexp_empty_string : js_mkundef();
-  return regexp_static_values[idx] ? regexp_static_values[idx] : (regexp_empty_string ? regexp_empty_string : js_mkundef());
+static inline ant_value_t regexp_static_value(ant_t *js, size_t idx) {
+  if (idx >= sizeof(js->sym.regexp_static_values) / sizeof(js->sym.regexp_static_values[0]))
+    return js->sym.regexp_empty_string ? js->sym.regexp_empty_string : js_mkundef();
+  return js->sym.regexp_static_values[idx] ? js->sym.regexp_static_values[idx] : (js->sym.regexp_empty_string ? js->sym.regexp_empty_string : js_mkundef());
 }
 
-static inline ant_value_t regexp_static_set(size_t idx, ant_value_t value) {
-  if (idx < sizeof(regexp_static_values) / sizeof(regexp_static_values[0]))
-    regexp_static_values[idx] = value;
+static inline ant_value_t regexp_static_set(ant_t *js, size_t idx, ant_value_t value) {
+  if (idx < sizeof(js->sym.regexp_static_values) / sizeof(js->sym.regexp_static_values[0]))
+    js->sym.regexp_static_values[idx] = value;
   return js_mkundef();
 }
 
 #define REGEXP_STATIC_ACCESSORS(name, idx) \
   static ant_value_t regexp_static_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
-    (void)js; (void)args; (void)nargs; \
-    return regexp_static_value(idx); \
+    (void)args; (void)nargs; \
+    return regexp_static_value(js, idx); \
   } \
   static ant_value_t regexp_static_set_##name(ant_t *js, ant_value_t *args, int nargs) { \
-    (void)js; \
-    return regexp_static_set(idx, nargs > 0 ? args[0] : js_mkundef()); \
+    return regexp_static_set(js, idx, nargs > 0 ? args[0] : js_mkundef()); \
   }
 
 REGEXP_STATIC_ACCESSORS(d1, 0)
@@ -191,19 +187,19 @@ REGEXP_STATIC_ACCESSORS(amp, 10)
 #undef REGEXP_STATIC_ACCESSORS
 
 static void update_regexp_statics(ant_t *js, const char *str_ptr, PCRE2_SIZE *ovector, uint32_t ovcount) {
-  ant_value_t empty = regexp_empty_string ? regexp_empty_string : js_mkstr(js, "", 0);
+  ant_value_t empty = js->sym.regexp_empty_string ? js->sym.regexp_empty_string : js_mkstr(js, "", 0);
   for (int i = 1; i <= 9; i++) {
     ant_value_t val = empty;
     if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET)
       val = js_mkstr(js, str_ptr + ovector[2*i], ovector[2*i+1] - ovector[2*i]);
-    regexp_static_values[i - 1] = val;
+    js->sym.regexp_static_values[i - 1] = val;
   }
 
   ant_value_t match0 = (ovcount > 0 && ovector[0] != PCRE2_UNSET)
     ? js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0])
     : empty;
-  regexp_static_values[9] = match0;
-  regexp_static_values[10] = match0;
+  js->sym.regexp_static_values[9] = match0;
+  js->sym.regexp_static_values[10] = match0;
 }
 
 static inline bool is_pcre2_passthrough_escape(char c) {
@@ -1687,7 +1683,7 @@ static ant_value_t builtin_regexp_symbol_matchAll(ant_t *js, ant_value_t *args, 
   js_set_slot(iter, SLOT_MATCHALL_STR, str);
   js_set_slot(iter, SLOT_MATCHALL_DONE, js_false);
 
-  js_set_proto_init(iter, regexp_matchall_iter_proto_val);
+  js_set_proto_init(iter, js->sym.regexp_matchall_iter_proto);
 
   return iter;
 }
@@ -2829,7 +2825,7 @@ match_string_pattern:;
 
 void init_regex_module(void) {
   ant_t *js = rt->js;
-  regexp_register_static_roots();
+  regexp_register_static_roots(js);
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
 
@@ -2853,10 +2849,10 @@ void init_regex_module(void) {
   js_set_sym(js, regexp_proto, get_match_sym(), js_mkfun(builtin_regexp_symbol_match));
   js_set_sym(js, regexp_proto, get_matchAll_sym(), js_mkfun(builtin_regexp_symbol_matchAll));
 
-  regexp_matchall_iter_proto_val = js_mkobj(js);
-  js_set_proto_init(regexp_matchall_iter_proto_val, js->sym.iterator_proto);
-  defmethod(js, regexp_matchall_iter_proto_val, "next", 4, js_mkfun(regexp_matchall_next));
-  js_set_sym(js, regexp_matchall_iter_proto_val, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js->sym.regexp_matchall_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.regexp_matchall_iter_proto, js->sym.iterator_proto);
+  defmethod(js, js->sym.regexp_matchall_iter_proto, "next", 4, js_mkfun(regexp_matchall_next));
+  js_set_sym(js, js->sym.regexp_matchall_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
   js_set_sym(js, regexp_proto, get_replace_sym(), js_mkfun(builtin_regexp_symbol_replace));
   js_set_sym(js, regexp_proto, get_search_sym(), js_mkfun(builtin_regexp_symbol_search));
   js_set_sym(js, regexp_proto, get_toStringTag_sym(), js_mkstr(js, "RegExp", 6));
@@ -2871,16 +2867,16 @@ void init_regex_module(void) {
   js_define_species_getter(js, regexp_ctor);
 
   ant_value_t regexp_func = js_obj_to_func(regexp_ctor);
-  regexp_ctor_value = regexp_func;
+  js->sym.regexp_ctor = regexp_func;
   js_setprop(js, regexp_proto, js_mkstr(js, "constructor", 11), regexp_func);
   js_set_descriptor(js, regexp_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   js_set(js, regexp_ctor, "escape", js_mkfun(builtin_regexp_escape));
 
   ant_value_t empty = js_mkstr_permanent(js, "", 0);
-  regexp_empty_string = empty;
-  for (size_t i = 0; i < sizeof(regexp_static_values) / sizeof(regexp_static_values[0]); i++)
-    regexp_static_values[i] = empty;
+  js->sym.regexp_empty_string = empty;
+  for (size_t i = 0; i < sizeof(js->sym.regexp_static_values) / sizeof(js->sym.regexp_static_values[0]); i++)
+    js->sym.regexp_static_values[i] = empty;
 
   static ant_cfunc_meta_t stat_getters[11];
   static ant_cfunc_meta_t stat_setters[11];
@@ -2945,6 +2941,7 @@ void gc_sweep_regex_cache(void) {
 }
 
 void cleanup_regex_module(void) {
+  ant_t *js = rt->js;
   for (size_t i = 0; i < regex_cache_count; i++) {
     pcre2_match_data_free(regex_cache[i].match_data);
   }
@@ -2968,11 +2965,12 @@ void cleanup_regex_module(void) {
   regex_jit_stack = NULL;
   pcre2_match_context_free(regex_match_ctx);
   regex_match_ctx = NULL;
-  regexp_ctor_value = 0;
-  regexp_empty_string = 0;
+  js->sym.regexp_matchall_iter_proto = 0;
+  js->sym.regexp_ctor = 0;
+  js->sym.regexp_empty_string = 0;
   regexp_exec_write_guard_armed = false;
   regexp_exec_property_written = false;
   regexp_replace_property_written = false;
-  for (size_t i = 0; i < sizeof(regexp_static_values) / sizeof(regexp_static_values[0]); i++)
-    regexp_static_values[i] = 0;
+  for (size_t i = 0; i < sizeof(js->sym.regexp_static_values) / sizeof(js->sym.regexp_static_values[0]); i++)
+    js->sym.regexp_static_values[i] = 0;
 }

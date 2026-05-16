@@ -4,8 +4,6 @@
 #include "types.h"
 #include <stdbool.h>
 
-extern ant_value_t g_tes_proto;
-extern ant_value_t g_tds_proto;
 
 void init_codec_stream_module(void);
 void gc_mark_codec_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));

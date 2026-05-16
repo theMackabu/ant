@@ -788,7 +788,7 @@ static void fetch_start_upload(fetch_request_t *req) {
 
   if (!rs_is_stream(stream)) return;
 
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
 

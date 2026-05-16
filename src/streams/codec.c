@@ -14,8 +14,6 @@
 #include "streams/codec.h"
 #include "streams/transform.h"
 
-ant_value_t g_tes_proto;
-ant_value_t g_tds_proto;
 
 enum {
   TES_NATIVE_TAG = 0x54455354u, // TEST
@@ -214,7 +212,7 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_tes_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.tes_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TES_NATIVE_TAG);
   js_set_finalizer(obj, tes_state_finalize);
@@ -388,7 +386,7 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_tds_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.tds_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TDS_NATIVE_TAG);
   js_set_finalizer(obj, tds_state_finalize);
@@ -423,30 +421,30 @@ void init_codec_stream_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);
 
-  g_tes_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_tes_proto, "encoding", 8, js_mkfun(js_tes_get_encoding), JS_DESC_C);
-  js_set_getter_desc(js, g_tes_proto, "readable", 8, js_mkfun(js_tes_get_readable), JS_DESC_C);
-  js_set_getter_desc(js, g_tes_proto, "writable", 8, js_mkfun(js_tes_get_writable), JS_DESC_C);
-  js_set_sym(js, g_tes_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoderStream", 17));
+  js->sym.tes_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.tes_proto, "encoding", 8, js_mkfun(js_tes_get_encoding), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tes_proto, "readable", 8, js_mkfun(js_tes_get_readable), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tes_proto, "writable", 8, js_mkfun(js_tes_get_writable), JS_DESC_C);
+  js_set_sym(js, js->sym.tes_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoderStream", 17));
 
-  ant_value_t tes_ctor = js_make_ctor(js, js_tes_ctor, g_tes_proto, "TextEncoderStream", 17);
+  ant_value_t tes_ctor = js_make_ctor(js, js_tes_ctor, js->sym.tes_proto, "TextEncoderStream", 17);
   js_set(js, g, "TextEncoderStream", tes_ctor);
   js_set_descriptor(js, g, "TextEncoderStream", 17, JS_DESC_W | JS_DESC_C);
 
-  g_tds_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_tds_proto, "encoding",  8, js_mkfun(js_tds_get_encoding),  JS_DESC_C);
-  js_set_getter_desc(js, g_tds_proto, "fatal",     5, js_mkfun(js_tds_get_fatal),     JS_DESC_C);
-  js_set_getter_desc(js, g_tds_proto, "ignoreBOM", 9, js_mkfun(js_tds_get_ignore_bom), JS_DESC_C);
-  js_set_getter_desc(js, g_tds_proto, "readable",  8, js_mkfun(js_tds_get_readable),  JS_DESC_C);
-  js_set_getter_desc(js, g_tds_proto, "writable",  8, js_mkfun(js_tds_get_writable),  JS_DESC_C);
-  js_set_sym(js, g_tds_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoderStream", 17));
+  js->sym.tds_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.tds_proto, "encoding",  8, js_mkfun(js_tds_get_encoding),  JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tds_proto, "fatal",     5, js_mkfun(js_tds_get_fatal),     JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tds_proto, "ignoreBOM", 9, js_mkfun(js_tds_get_ignore_bom), JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tds_proto, "readable",  8, js_mkfun(js_tds_get_readable),  JS_DESC_C);
+  js_set_getter_desc(js, js->sym.tds_proto, "writable",  8, js_mkfun(js_tds_get_writable),  JS_DESC_C);
+  js_set_sym(js, js->sym.tds_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoderStream", 17));
 
-  ant_value_t tds_ctor = js_make_ctor(js, js_tds_ctor, g_tds_proto, "TextDecoderStream", 17);
+  ant_value_t tds_ctor = js_make_ctor(js, js_tds_ctor, js->sym.tds_proto, "TextDecoderStream", 17);
   js_set(js, g, "TextDecoderStream", tds_ctor);
   js_set_descriptor(js, g, "TextDecoderStream", 17, JS_DESC_W | JS_DESC_C);
 }
 
 void gc_mark_codec_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  mark(js, g_tes_proto);
-  mark(js, g_tds_proto);
+  mark(js, js->sym.tes_proto);
+  mark(js, js->sym.tds_proto);
 }

@@ -11,7 +11,6 @@
 #include "modules/symbol.h"
 #include "modules/domexception.h"
 
-static ant_value_t g_domexception_proto = 0;
 static bool g_initialized = false;
 
 static const struct { const char *name; int code; } domex_codes[] = {
@@ -124,7 +123,7 @@ ant_value_t make_dom_exception(ant_t *js, const char *message, const char *name)
   int code = name_to_code(name);
 
   ant_value_t obj = js_mkobj(js);
-  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_domexception_proto);
+  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, js->sym.domexception_proto);
 
   js_set(js, obj, "message", js_mkstr(js, message, msg_len));
   js_set(js, obj, "name",    js_mkstr(js, name,    name_len));
@@ -141,7 +140,7 @@ void init_domexception_module(void) {
   ant_value_t global = js_glob(js);
 
   ant_value_t proto = js_mkobj(js);
-  g_domexception_proto = proto;
+  js->sym.domexception_proto = proto;
   g_initialized = true;
 
   ant_value_t error_proto = js_get_ctor_proto(js, "Error", 5);
@@ -172,5 +171,5 @@ void init_domexception_module(void) {
 }
 
 void gc_mark_domexception(ant_t *js, gc_mark_fn mark) {
-  if (g_initialized) mark(js, g_domexception_proto);
+  if (g_initialized) mark(js, js->sym.domexception_proto);
 }

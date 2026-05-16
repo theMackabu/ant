@@ -1207,7 +1207,7 @@ static bool server_request_ensure_reader(server_request_t *req) {
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
 
   saved = js->new_target;
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   req->response_reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
 

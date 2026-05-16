@@ -17,9 +17,6 @@
 #include "modules/url.h"
 #include "modules/symbol.h"
 
-static ant_value_t g_url_proto = 0;
-static ant_value_t g_usp_proto = 0;
-static ant_value_t g_usp_iter_proto = 0;
 
 enum { URL_NATIVE_TAG = 0x55524c53u }; // URLS
 
@@ -670,7 +667,7 @@ static void url_sync_usp(ant_t *js, ant_value_t url_obj, const char *query) {
 
 static ant_value_t make_usp_for_url(ant_t *js, ant_value_t url_obj, const char *query) {
   ant_value_t usp = js_mkobj(js);
-  js_set_proto_init(usp, g_usp_proto);
+  js_set_proto_init(usp, js->sym.usp_proto);
   js_set_slot(usp, SLOT_BRAND, js_mknum(BRAND_URLSEARCHPARAMS));
   js_set_slot_wb(js, usp, SLOT_DATA, url_obj);
   js_set_slot(usp, SLOT_ENTRIES, parse_query_to_arr(js, query));
@@ -1007,7 +1004,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_url_proto);
+  js_set_proto_init(obj, js->sym.url_proto);
   js_set_native(obj, s, URL_NATIVE_TAG);
   js_set_finalizer(obj, url_finalize);
 
@@ -1020,7 +1017,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
 
 ant_value_t make_url_obj(ant_t *js, url_state_t *s) {
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_url_proto);
+  js_set_proto_init(obj, js->sym.url_proto);
   js_set_native(obj, s, URL_NATIVE_TAG);
   js_set_finalizer(obj, url_finalize);
   const char *query = (s->search && s->search[0] == '?') ? s->search + 1 : "";
@@ -1328,7 +1325,7 @@ static ant_value_t usp_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t make_usp_iter(ant_t *js, ant_value_t usp, int kind) {
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_usp_iter_proto);
+  js_set_proto_init(iter, js->sym.usp_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, usp);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, 0)));
   return iter;
@@ -1352,7 +1349,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
     "Failed to construct 'URLSearchParams': Please use the 'new' operator.");
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_usp_proto);
+  js_set_proto_init(obj, js->sym.usp_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_URLSEARCHPARAMS));
   js_set_slot(obj, SLOT_DATA, js_mkundef());
   
@@ -1469,52 +1466,52 @@ void init_url_module(void) {
   ant_t *js = rt->js;
   ant_value_t glob = js->global;
 
-  g_usp_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_usp_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_usp_iter_proto, "next", js_mkfun(usp_iter_next));
-  js_set_descriptor(js, g_usp_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_usp_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js->sym.usp_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.usp_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->sym.usp_iter_proto, "next", js_mkfun(usp_iter_next));
+  js_set_descriptor(js, js->sym.usp_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->sym.usp_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
 
-  g_usp_proto = js_mkobj(js);
-  js_set(js, g_usp_proto, "get",      js_mkfun(usp_get));
-  js_set(js, g_usp_proto, "getAll",   js_mkfun(usp_getAll));
-  js_set(js, g_usp_proto, "has",      js_mkfun(usp_has));
-  js_set(js, g_usp_proto, "set",      js_mkfun(usp_set));
-  js_set(js, g_usp_proto, "append",   js_mkfun(usp_append));
-  js_set(js, g_usp_proto, "delete",   js_mkfun(usp_delete));
-  js_set(js, g_usp_proto, "sort",     js_mkfun(usp_sort));
-  js_set(js, g_usp_proto, "toString", js_mkfun(usp_toString));
-  js_set(js, g_usp_proto, "forEach",  js_mkfun(usp_forEach));
-  js_set_getter_desc(js, g_usp_proto, "size", 4, js_mkfun(usp_size_get), JS_DESC_C);
+  js->sym.usp_proto = js_mkobj(js);
+  js_set(js, js->sym.usp_proto, "get",      js_mkfun(usp_get));
+  js_set(js, js->sym.usp_proto, "getAll",   js_mkfun(usp_getAll));
+  js_set(js, js->sym.usp_proto, "has",      js_mkfun(usp_has));
+  js_set(js, js->sym.usp_proto, "set",      js_mkfun(usp_set));
+  js_set(js, js->sym.usp_proto, "append",   js_mkfun(usp_append));
+  js_set(js, js->sym.usp_proto, "delete",   js_mkfun(usp_delete));
+  js_set(js, js->sym.usp_proto, "sort",     js_mkfun(usp_sort));
+  js_set(js, js->sym.usp_proto, "toString", js_mkfun(usp_toString));
+  js_set(js, js->sym.usp_proto, "forEach",  js_mkfun(usp_forEach));
+  js_set_getter_desc(js, js->sym.usp_proto, "size", 4, js_mkfun(usp_size_get), JS_DESC_C);
 
-  js_set(js, g_usp_proto, "entries", js_mkfun(usp_entries_fn));
-  js_set(js, g_usp_proto, "keys",    js_mkfun(usp_keys_fn));
-  js_set(js, g_usp_proto, "values",  js_mkfun(usp_values_fn));
-  
-  js_set_sym(js, g_usp_proto, get_iterator_sym(), js_get(js, g_usp_proto, "entries"));
-  js_set_sym(js, g_usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
+  js_set(js, js->sym.usp_proto, "entries", js_mkfun(usp_entries_fn));
+  js_set(js, js->sym.usp_proto, "keys",    js_mkfun(usp_keys_fn));
+  js_set(js, js->sym.usp_proto, "values",  js_mkfun(usp_values_fn));
 
-  ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, g_usp_proto, "URLSearchParams", 15);
+  js_set_sym(js, js->sym.usp_proto, get_iterator_sym(), js_get(js, js->sym.usp_proto, "entries"));
+  js_set_sym(js, js->sym.usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
+
+  ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, js->sym.usp_proto, "URLSearchParams", 15);
   js_set(js, glob, "URLSearchParams", usp_ctor);
 
-  g_url_proto = js_mkobj(js);
-  js_set_accessor_desc(js, g_url_proto, "href",         4,  js_mkfun(url_get_href),         js_mkfun(url_set_href),     JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "protocol",     8,  js_mkfun(url_get_protocol),     js_mkfun(url_set_protocol), JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "username",     8,  js_mkfun(url_get_username),     js_mkfun(url_set_username), JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "password",     8,  js_mkfun(url_get_password),     js_mkfun(url_set_password), JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "host",         4,  js_mkfun(url_get_host),         js_mkfun(url_set_host),     JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "hostname",     8,  js_mkfun(url_get_hostname),     js_mkfun(url_set_hostname), JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "port",         4,  js_mkfun(url_get_port),         js_mkfun(url_set_port),     JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "pathname",     8,  js_mkfun(url_get_pathname),     js_mkfun(url_set_pathname), JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "search",       6,  js_mkfun(url_get_search),       js_mkfun(url_set_search),   JS_DESC_C);
-  js_set_accessor_desc(js, g_url_proto, "hash",         4,  js_mkfun(url_get_hash),         js_mkfun(url_set_hash),     JS_DESC_C);
-  js_set_getter_desc(js,   g_url_proto, "origin",       6,  js_mkfun(url_get_origin),       JS_DESC_C);
-  js_set_getter_desc(js,   g_url_proto, "searchParams", 12, js_mkfun(url_get_searchParams), JS_DESC_C);
-  js_set(js, g_url_proto, "toString", js_mkfun(url_toString));
-  js_set(js, g_url_proto, "toJSON",   js_mkfun(url_toString));
-  js_set_sym(js, g_url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
+  js->sym.url_proto = js_mkobj(js);
+  js_set_accessor_desc(js, js->sym.url_proto, "href",         4,  js_mkfun(url_get_href),         js_mkfun(url_set_href),     JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "protocol",     8,  js_mkfun(url_get_protocol),     js_mkfun(url_set_protocol), JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "username",     8,  js_mkfun(url_get_username),     js_mkfun(url_set_username), JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "password",     8,  js_mkfun(url_get_password),     js_mkfun(url_set_password), JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "host",         4,  js_mkfun(url_get_host),         js_mkfun(url_set_host),     JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "hostname",     8,  js_mkfun(url_get_hostname),     js_mkfun(url_set_hostname), JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "port",         4,  js_mkfun(url_get_port),         js_mkfun(url_set_port),     JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "pathname",     8,  js_mkfun(url_get_pathname),     js_mkfun(url_set_pathname), JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "search",       6,  js_mkfun(url_get_search),       js_mkfun(url_set_search),   JS_DESC_C);
+  js_set_accessor_desc(js, js->sym.url_proto, "hash",         4,  js_mkfun(url_get_hash),         js_mkfun(url_set_hash),     JS_DESC_C);
+  js_set_getter_desc(js,   js->sym.url_proto, "origin",       6,  js_mkfun(url_get_origin),       JS_DESC_C);
+  js_set_getter_desc(js,   js->sym.url_proto, "searchParams", 12, js_mkfun(url_get_searchParams), JS_DESC_C);
+  js_set(js, js->sym.url_proto, "toString", js_mkfun(url_toString));
+  js_set(js, js->sym.url_proto, "toJSON",   js_mkfun(url_toString));
+  js_set_sym(js, js->sym.url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
 
-  ant_value_t url_ctor = js_make_ctor(js, js_URL, g_url_proto, "URL", 3);
+  ant_value_t url_ctor = js_make_ctor(js, js_URL, js->sym.url_proto, "URL", 3);
   js_set(js, url_ctor, "canParse", js_mkfun(url_canParse));
   js_set(js, url_ctor, "parse",    js_mkfun(url_parse));
   js_set(js, glob, "URL", url_ctor);

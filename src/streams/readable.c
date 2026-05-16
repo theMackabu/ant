@@ -14,10 +14,6 @@
 #include "streams/readable.h"
 #include "streams/pipes.h"
 
-ant_value_t g_rs_proto;
-ant_value_t g_reader_proto;
-ant_value_t g_controller_proto;
-ant_value_t g_rs_async_iter_proto;
 
 bool rs_is_stream(ant_value_t obj) {
   return js_check_brand(obj, BRAND_READABLE_STREAM)
@@ -657,7 +653,7 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs) {
   promise_mark_handled(closed);
   
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_reader_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.reader_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_READER));
@@ -715,7 +711,7 @@ static ant_value_t js_rs_get_reader(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t reader_args[1] = { js->this_val };
   ant_value_t saved_new_target = js->new_target;
-  js->new_target = g_reader_proto;
+  js->new_target = js->sym.reader_proto;
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved_new_target;
   return reader;
@@ -755,7 +751,7 @@ static ant_value_t js_rs_values(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(reader)) return reader;
 
   ant_value_t iterator = js_mkobj(js);
-  js_set_proto_init(iterator, g_rs_async_iter_proto);
+  js_set_proto_init(iterator, js->sym.rs_async_iter_proto);
   js_set_slot(iterator, SLOT_DATA, reader);
   
   return iterator;
@@ -800,7 +796,7 @@ static ant_value_t setup_default_controller(
   ctrl->strategy_hwm = hwm;
 
   ant_value_t ctrl_obj = js_mkobj(js);
-  js_set_proto_init(ctrl_obj, g_controller_proto);
+  js_set_proto_init(ctrl_obj, js->sym.controller_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_native(ctrl_obj, ctrl, RS_CONTROLLER_NATIVE_TAG);
   js_set_slot(ctrl_obj, SLOT_ENTRIES, stream_obj);
@@ -872,7 +868,7 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   st->state = RS_STATE_READABLE;
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_rs_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.rs_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
@@ -945,7 +941,7 @@ ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_
   st->state = RS_STATE_READABLE;
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_rs_proto);
+  js_set_proto_init(obj, js->sym.rs_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
   js_set_native(obj, st, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(obj, rs_stream_finalize);
@@ -967,65 +963,65 @@ static ant_value_t js_rs_controller_ctor(ant_t *js, ant_value_t *args, int nargs
 }
 
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  mark(js, g_rs_proto);
-  mark(js, g_reader_proto);
-  mark(js, g_controller_proto);
-  mark(js, g_rs_async_iter_proto);
+  mark(js, js->sym.rs_proto);
+  mark(js, js->sym.reader_proto);
+  mark(js, js->sym.controller_proto);
+  mark(js, js->sym.rs_async_iter_proto);
 }
 
 void init_readable_stream_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);
 
-  g_controller_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_controller_proto, "desiredSize", 11, js_mkfun(js_rs_controller_get_desired_size), JS_DESC_C);
-  js_set(js, g_controller_proto, "close", js_mkfun(js_rs_controller_close));
-  js_set_descriptor(js, g_controller_proto, "close", 5, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_controller_proto, "enqueue", js_mkfun(js_rs_controller_enqueue));
-  js_set_descriptor(js, g_controller_proto, "enqueue", 7, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_controller_proto, "error", js_mkfun(js_rs_controller_error));
-  js_set_descriptor(js, g_controller_proto, "error", 5, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, g_controller_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStreamDefaultController", 31));
+  js->sym.controller_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.controller_proto, "desiredSize", 11, js_mkfun(js_rs_controller_get_desired_size), JS_DESC_C);
+  js_set(js, js->sym.controller_proto, "close", js_mkfun(js_rs_controller_close));
+  js_set_descriptor(js, js->sym.controller_proto, "close", 5, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.controller_proto, "enqueue", js_mkfun(js_rs_controller_enqueue));
+  js_set_descriptor(js, js->sym.controller_proto, "enqueue", 7, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.controller_proto, "error", js_mkfun(js_rs_controller_error));
+  js_set_descriptor(js, js->sym.controller_proto, "error", 5, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, js->sym.controller_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStreamDefaultController", 31));
 
-  ant_value_t ctrl_ctor = js_make_ctor(js, js_rs_controller_ctor, g_controller_proto, "ReadableStreamDefaultController", 31);
+  ant_value_t ctrl_ctor = js_make_ctor(js, js_rs_controller_ctor, js->sym.controller_proto, "ReadableStreamDefaultController", 31);
   js_set(js, g, "ReadableStreamDefaultController", ctrl_ctor);
   js_set_descriptor(js, g, "ReadableStreamDefaultController", 31, JS_DESC_W | JS_DESC_C);
 
-  g_reader_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_reader_proto, "closed", 6, js_mkfun(js_rs_reader_get_closed), JS_DESC_C);
-  js_set(js, g_reader_proto, "read", js_mkfun(js_rs_reader_read));
-  js_set_descriptor(js, g_reader_proto, "read", 4, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_reader_proto, "releaseLock", js_mkfun(js_rs_reader_release_lock));
-  js_set_descriptor(js, g_reader_proto, "releaseLock", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_reader_proto, "cancel", js_mkfun(js_rs_reader_cancel));
-  js_set_descriptor(js, g_reader_proto, "cancel", 6, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, g_reader_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStreamDefaultReader", 27));
+  js->sym.reader_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.reader_proto, "closed", 6, js_mkfun(js_rs_reader_get_closed), JS_DESC_C);
+  js_set(js, js->sym.reader_proto, "read", js_mkfun(js_rs_reader_read));
+  js_set_descriptor(js, js->sym.reader_proto, "read", 4, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.reader_proto, "releaseLock", js_mkfun(js_rs_reader_release_lock));
+  js_set_descriptor(js, js->sym.reader_proto, "releaseLock", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.reader_proto, "cancel", js_mkfun(js_rs_reader_cancel));
+  js_set_descriptor(js, js->sym.reader_proto, "cancel", 6, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, js->sym.reader_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStreamDefaultReader", 27));
 
-  ant_value_t reader_ctor = js_make_ctor(js, js_rs_reader_ctor, g_reader_proto, "ReadableStreamDefaultReader", 27);
+  ant_value_t reader_ctor = js_make_ctor(js, js_rs_reader_ctor, js->sym.reader_proto, "ReadableStreamDefaultReader", 27);
   js_set(js, g, "ReadableStreamDefaultReader", reader_ctor);
   js_set_descriptor(js, g, "ReadableStreamDefaultReader", 27, JS_DESC_W | JS_DESC_C);
 
-  g_rs_async_iter_proto = js_mkobj(js);
-  js_set(js, g_rs_async_iter_proto, "next", js_mkfun(js_rs_async_iter_next));
-  js_set_descriptor(js, g_rs_async_iter_proto, "next", 4, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_rs_async_iter_proto, "return", js_mkfun(js_rs_async_iter_return));
-  js_set_descriptor(js, g_rs_async_iter_proto, "return", 6, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, g_rs_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  js->sym.rs_async_iter_proto = js_mkobj(js);
+  js_set(js, js->sym.rs_async_iter_proto, "next", js_mkfun(js_rs_async_iter_next));
+  js_set_descriptor(js, js->sym.rs_async_iter_proto, "next", 4, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.rs_async_iter_proto, "return", js_mkfun(js_rs_async_iter_return));
+  js_set_descriptor(js, js->sym.rs_async_iter_proto, "return", 6, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, js->sym.rs_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
 
-  g_rs_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_rs_proto, "locked", 6, js_mkfun(js_rs_get_locked), JS_DESC_C);
-  js_set(js, g_rs_proto, "cancel", js_mkfun(js_rs_cancel));
-  js_set_descriptor(js, g_rs_proto, "cancel", 6, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_rs_proto, "getReader", js_mkfun(js_rs_get_reader));
-  js_set_descriptor(js, g_rs_proto, "getReader", 9, JS_DESC_W | JS_DESC_C);
-  init_pipes_proto(js, g_rs_proto);
+  js->sym.rs_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->sym.rs_proto, "locked", 6, js_mkfun(js_rs_get_locked), JS_DESC_C);
+  js_set(js, js->sym.rs_proto, "cancel", js_mkfun(js_rs_cancel));
+  js_set_descriptor(js, js->sym.rs_proto, "cancel", 6, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->sym.rs_proto, "getReader", js_mkfun(js_rs_get_reader));
+  js_set_descriptor(js, js->sym.rs_proto, "getReader", 9, JS_DESC_W | JS_DESC_C);
+  init_pipes_proto(js, js->sym.rs_proto);
   
-  js_set(js, g_rs_proto, "values", js_mkfun(js_rs_values));
-  js_set_descriptor(js, g_rs_proto, "values", 6, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, g_rs_proto, get_asyncIterator_sym(), js_get(js, g_rs_proto, "values"));
-  js_set_sym(js, g_rs_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStream", 14));
+  js_set(js, js->sym.rs_proto, "values", js_mkfun(js_rs_values));
+  js_set_descriptor(js, js->sym.rs_proto, "values", 6, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, js->sym.rs_proto, get_asyncIterator_sym(), js_get(js, js->sym.rs_proto, "values"));
+  js_set_sym(js, js->sym.rs_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStream", 14));
 
-  ant_value_t rs_ctor = js_make_ctor(js, js_rs_ctor, g_rs_proto, "ReadableStream", 14);
+  ant_value_t rs_ctor = js_make_ctor(js, js_rs_ctor, js->sym.rs_proto, "ReadableStream", 14);
   js_set(js, g, "ReadableStream", rs_ctor);
   js_set_descriptor(js, g, "ReadableStream", 14, JS_DESC_W | JS_DESC_C);
 }

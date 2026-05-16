@@ -56,8 +56,6 @@ typedef struct zlib_stream_s {
   struct zlib_stream_s *next_active;
 } zlib_stream_t;
 
-static ant_value_t g_transform_proto = 0;
-static ant_value_t g_zlib_protos[ZLIB_KIND_COUNT] = {0};
 static zlib_stream_t *g_active_streams = NULL;
 
 static ant_value_t js_zlib_destroy(ant_t *js, ant_value_t *args, int nargs);
@@ -591,9 +589,9 @@ static ant_value_t zlib_create_stream(ant_t *js, zlib_kind_t kind, ant_value_t o
   }
 
   ant_value_t obj = js_mkobj(js);
-  if (kind >= 0 && kind < ZLIB_KIND_COUNT && is_object_type(g_zlib_protos[kind]))
-    js_set_proto_init(obj, g_zlib_protos[kind]);
-  else if (is_object_type(g_transform_proto)) js_set_proto_init(obj, g_transform_proto);
+  if (kind >= 0 && kind < ZLIB_KIND_COUNT && is_object_type(js->sym.zlib_protos[kind]))
+    js_set_proto_init(obj, js->sym.zlib_protos[kind]);
+  else if (is_object_type(js->sym.zlib_transform_proto)) js_set_proto_init(obj, js->sym.zlib_transform_proto);
 
   js_set_native(obj, st, ZLIB_STREAM_TAG);
 
@@ -946,35 +944,35 @@ static ant_value_t make_codes(ant_t *js) {
 }
 
 static void zlib_init_proto(ant_t *js) {
-  if (g_transform_proto) return;
+  if (js->sym.zlib_transform_proto) return;
 
   ant_value_t events = events_library(js);
   ant_value_t ee_ctor = js_get(js, events, "EventEmitter");
   ant_value_t ee_proto = js_get(js, ee_ctor, "prototype");
 
-  g_transform_proto = js_mkobj(js);
-  js_set_proto_init(g_transform_proto, ee_proto);
+  js->sym.zlib_transform_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.zlib_transform_proto, ee_proto);
 
-  js_set(js, g_transform_proto, "write",    js_mkfun(js_zlib_write));
-  js_set(js, g_transform_proto, "end",      js_mkfun(js_zlib_end));
-  js_set(js, g_transform_proto, "destroy",  js_mkfun(js_zlib_destroy));
-  js_set(js, g_transform_proto, "close",    js_mkfun(js_zlib_close));
-  js_set(js, g_transform_proto, "flush",    js_mkfun(js_zlib_flush));
-  js_set(js, g_transform_proto, "params",   js_mkfun(js_zlib_params));
-  js_set(js, g_transform_proto, "reset",    js_mkfun(js_zlib_reset));
-  js_set(js, g_transform_proto, "pause",    js_mkfun(js_zlib_pause));
-  js_set(js, g_transform_proto, "resume",   js_mkfun(js_zlib_resume));
-  js_set(js, g_transform_proto, "unpipe",   js_mkfun(js_zlib_unpipe));
-  js_set(js, g_transform_proto, "pipe",     js_mkfun(js_zlib_pipe));
+  js_set(js, js->sym.zlib_transform_proto, "write",    js_mkfun(js_zlib_write));
+  js_set(js, js->sym.zlib_transform_proto, "end",      js_mkfun(js_zlib_end));
+  js_set(js, js->sym.zlib_transform_proto, "destroy",  js_mkfun(js_zlib_destroy));
+  js_set(js, js->sym.zlib_transform_proto, "close",    js_mkfun(js_zlib_close));
+  js_set(js, js->sym.zlib_transform_proto, "flush",    js_mkfun(js_zlib_flush));
+  js_set(js, js->sym.zlib_transform_proto, "params",   js_mkfun(js_zlib_params));
+  js_set(js, js->sym.zlib_transform_proto, "reset",    js_mkfun(js_zlib_reset));
+  js_set(js, js->sym.zlib_transform_proto, "pause",    js_mkfun(js_zlib_pause));
+  js_set(js, js->sym.zlib_transform_proto, "resume",   js_mkfun(js_zlib_resume));
+  js_set(js, js->sym.zlib_transform_proto, "unpipe",   js_mkfun(js_zlib_unpipe));
+  js_set(js, js->sym.zlib_transform_proto, "pipe",     js_mkfun(js_zlib_pipe));
 
-  js_set_getter_desc(js, g_transform_proto, "bytesWritten", 12,
+  js_set_getter_desc(js, js->sym.zlib_transform_proto, "bytesWritten", 12,
   js_mkfun(js_zlib_get_bytes_written), JS_DESC_C);
 }
 
 static ant_value_t zlib_mkctor(ant_t *js, zlib_kind_t kind, ant_cfunc_t fn, const char *name) {
   ant_value_t proto = js_mkobj(js);
-  if (is_object_type(g_transform_proto)) js_set_proto_init(proto, g_transform_proto);
-  g_zlib_protos[kind] = proto;
+  if (is_object_type(js->sym.zlib_transform_proto)) js_set_proto_init(proto, js->sym.zlib_transform_proto);
+  js->sym.zlib_protos[kind] = proto;
 
   ant_value_t ctor = js_make_ctor(js, fn, proto, name, strlen(name));
   js_mark_constructor(ctor, true);
@@ -1044,8 +1042,8 @@ ant_value_t zlib_library(ant_t *js) {
 }
 
 void gc_mark_zlib(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  if (g_transform_proto) mark(js, g_transform_proto);
+  if (js->sym.zlib_transform_proto) mark(js, js->sym.zlib_transform_proto);
   for (int i = 0; i < ZLIB_KIND_COUNT; i++)
-    if (g_zlib_protos[i]) mark(js, g_zlib_protos[i]);
+    if (js->sym.zlib_protos[i]) mark(js, js->sym.zlib_protos[i]);
   for (zlib_stream_t *st = g_active_streams; st; st = st->next_active) mark(js, st->obj);
 }

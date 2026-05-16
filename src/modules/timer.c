@@ -79,8 +79,6 @@ static struct {
   .active_timer_count = 0,
 };
 
-static ant_value_t g_timeout_proto = 0;
-static ant_value_t g_interval_proto = 0;
 
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
@@ -249,7 +247,7 @@ static ant_value_t timer_make_object(
   double delay_ms, int is_interval, ant_value_t timer_args
 ) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = is_interval ? g_interval_proto : g_timeout_proto;
+  ant_value_t proto = is_interval ? js->sym.interval_proto : js->sym.timeout_proto;
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set(js, obj, "delay", js_mknum(delay_ms));
@@ -883,26 +881,26 @@ void init_timer_module() {
   ant_t *js = rt->js;
   timer_state.js = js;
 
-  g_timeout_proto = js_mkobj(js);
-  g_interval_proto = js_mkobj(js);
-  gc_register_root(&g_timeout_proto);
-  gc_register_root(&g_interval_proto);
+  js->sym.timeout_proto = js_mkobj(js);
+  js->sym.interval_proto = js_mkobj(js);
+  gc_register_root(&js->sym.timeout_proto);
+  gc_register_root(&js->sym.interval_proto);
 
-  js_set_proto_init(g_timeout_proto, js->sym.object_proto);
-  js_set(js, g_timeout_proto, "ref", js_mkfun(js_timer_ref));
-  js_set(js, g_timeout_proto, "unref", js_mkfun(js_timer_unref));
-  js_set(js, g_timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
-  js_set(js, g_timeout_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, g_timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
-  js_set_sym(js, g_timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+  js_set_proto_init(js->sym.timeout_proto, js->sym.object_proto);
+  js_set(js, js->sym.timeout_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, js->sym.timeout_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, js->sym.timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, js->sym.timeout_proto, "refresh", js_mkfun(js_timer_refresh));
+  js_set_sym(js, js->sym.timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
+  js_set_sym(js, js->sym.timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 
-  js_set_proto_init(g_interval_proto, js->sym.object_proto);
-  js_set(js, g_interval_proto, "ref", js_mkfun(js_timer_ref));
-  js_set(js, g_interval_proto, "unref", js_mkfun(js_timer_unref));
-  js_set(js, g_interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
-  js_set(js, g_interval_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, g_interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
-  js_set_sym(js, g_interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+  js_set_proto_init(js->sym.interval_proto, js->sym.object_proto);
+  js_set(js, js->sym.interval_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, js->sym.interval_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, js->sym.interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, js->sym.interval_proto, "refresh", js_mkfun(js_timer_refresh));
+  js_set_sym(js, js->sym.interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
+  js_set_sym(js, js->sym.interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 
   timers_define_common(js, js_glob(js));
 }
@@ -933,8 +931,8 @@ ant_value_t timers_promises_library(ant_t *js) {
 }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
-  if (is_object_type(g_timeout_proto)) mark(js, g_timeout_proto);
-  if (is_object_type(g_interval_proto)) mark(js, g_interval_proto);
+  if (is_object_type(js->sym.timeout_proto)) mark(js, js->sym.timeout_proto);
+  if (is_object_type(js->sym.interval_proto)) mark(js, js->sym.interval_proto);
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
     if (!t->active) continue;
     if (is_object_type(t->obj)) mark(js, t->obj);

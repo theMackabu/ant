@@ -101,10 +101,6 @@ struct net_write_args_s {
   ant_value_t error;
 };
 
-static ant_value_t g_net_server_proto = 0;
-static ant_value_t g_net_socket_proto = 0;
-static ant_value_t g_net_server_ctor = 0;
-static ant_value_t g_net_socket_ctor = 0;
 
 static net_server_t *g_active_servers = NULL;
 static net_socket_t *g_active_sockets = NULL;
@@ -490,7 +486,7 @@ static void net_socket_schedule_connect_error(ant_t *js, net_socket_t *socket, i
 
 static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_net_socket_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.net_socket_proto);
   net_socket_t *socket = calloc(1, sizeof(*socket));
 
   if (!socket) return NULL;
@@ -533,7 +529,7 @@ static void net_socket_attach_conn(net_socket_t *socket, ant_conn_t *conn) {
 
 static net_server_t *net_server_create(ant_t *js) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_net_server_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.net_server_proto);
   net_server_t *server = calloc(1, sizeof(*server));
 
   if (!server) return NULL;
@@ -1184,48 +1180,48 @@ static void net_init_constructors(ant_t *js) {
   ant_value_t ee_ctor = 0;
   ant_value_t ee_proto = 0;
 
-  if (g_net_server_ctor && g_net_socket_ctor) return;
+  if (js->sym.net_server_ctor && js->sym.net_socket_ctor) return;
 
   events = events_library(js);
   ee_ctor = js_get(js, events, "EventEmitter");
   ee_proto = js_get(js, ee_ctor, "prototype");
 
-  g_net_socket_proto = js_mkobj(js);
-  js_set_proto_init(g_net_socket_proto, ee_proto);
-  js_set(js, g_net_socket_proto, "address", js_mkfun(js_net_socket_address));
-  js_set(js, g_net_socket_proto, "pause", js_mkfun(js_net_socket_pause));
-  js_set(js, g_net_socket_proto, "resume", js_mkfun(js_net_socket_resume));
-  js_set(js, g_net_socket_proto, "setEncoding", js_mkfun(js_net_socket_setEncoding));
-  js_set(js, g_net_socket_proto, "setTimeout", js_mkfun(js_net_socket_setTimeout));
-  js_set(js, g_net_socket_proto, "setNoDelay", js_mkfun(js_net_socket_setNoDelay));
-  js_set(js, g_net_socket_proto, "setKeepAlive", js_mkfun(js_net_socket_setKeepAlive));
-  js_set(js, g_net_socket_proto, "write", js_mkfun(js_net_socket_write));
-  js_set(js, g_net_socket_proto, "end", js_mkfun(js_net_socket_end));
-  js_set(js, g_net_socket_proto, "destroy", js_mkfun(js_net_socket_destroy));
-  js_set(js, g_net_socket_proto, "connect", js_mkfun(js_net_socket_connect));
-  js_set(js, g_net_socket_proto, "ref", js_mkfun(js_net_socket_ref));
-  js_set(js, g_net_socket_proto, "unref", js_mkfun(js_net_socket_unref));
-  js_set_sym(js, g_net_socket_proto, get_toStringTag_sym(), js_mkstr(js, "Socket", 6));
-  g_net_socket_ctor = js_make_ctor(js, js_net_socket_ctor, g_net_socket_proto, "Socket", 6);
+  js->sym.net_socket_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.net_socket_proto, ee_proto);
+  js_set(js, js->sym.net_socket_proto, "address", js_mkfun(js_net_socket_address));
+  js_set(js, js->sym.net_socket_proto, "pause", js_mkfun(js_net_socket_pause));
+  js_set(js, js->sym.net_socket_proto, "resume", js_mkfun(js_net_socket_resume));
+  js_set(js, js->sym.net_socket_proto, "setEncoding", js_mkfun(js_net_socket_setEncoding));
+  js_set(js, js->sym.net_socket_proto, "setTimeout", js_mkfun(js_net_socket_setTimeout));
+  js_set(js, js->sym.net_socket_proto, "setNoDelay", js_mkfun(js_net_socket_setNoDelay));
+  js_set(js, js->sym.net_socket_proto, "setKeepAlive", js_mkfun(js_net_socket_setKeepAlive));
+  js_set(js, js->sym.net_socket_proto, "write", js_mkfun(js_net_socket_write));
+  js_set(js, js->sym.net_socket_proto, "end", js_mkfun(js_net_socket_end));
+  js_set(js, js->sym.net_socket_proto, "destroy", js_mkfun(js_net_socket_destroy));
+  js_set(js, js->sym.net_socket_proto, "connect", js_mkfun(js_net_socket_connect));
+  js_set(js, js->sym.net_socket_proto, "ref", js_mkfun(js_net_socket_ref));
+  js_set(js, js->sym.net_socket_proto, "unref", js_mkfun(js_net_socket_unref));
+  js_set_sym(js, js->sym.net_socket_proto, get_toStringTag_sym(), js_mkstr(js, "Socket", 6));
+  js->sym.net_socket_ctor = js_make_ctor(js, js_net_socket_ctor, js->sym.net_socket_proto, "Socket", 6);
 
-  g_net_server_proto = js_mkobj(js);
-  js_set_proto_init(g_net_server_proto, ee_proto);
-  js_set(js, g_net_server_proto, "listen", js_mkfun(js_net_server_listen));
-  js_set(js, g_net_server_proto, "close", js_mkfun(js_net_server_close));
-  js_set(js, g_net_server_proto, "address", js_mkfun(js_net_server_address));
-  js_set(js, g_net_server_proto, "getConnections", js_mkfun(js_net_server_getConnections));
-  js_set(js, g_net_server_proto, "ref", js_mkfun(js_net_server_ref));
-  js_set(js, g_net_server_proto, "unref", js_mkfun(js_net_server_unref));
-  js_set_sym(js, g_net_server_proto, get_toStringTag_sym(), js_mkstr(js, "Server", 6));
-  g_net_server_ctor = js_make_ctor(js, js_net_server_ctor, g_net_server_proto, "Server", 6);
+  js->sym.net_server_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.net_server_proto, ee_proto);
+  js_set(js, js->sym.net_server_proto, "listen", js_mkfun(js_net_server_listen));
+  js_set(js, js->sym.net_server_proto, "close", js_mkfun(js_net_server_close));
+  js_set(js, js->sym.net_server_proto, "address", js_mkfun(js_net_server_address));
+  js_set(js, js->sym.net_server_proto, "getConnections", js_mkfun(js_net_server_getConnections));
+  js_set(js, js->sym.net_server_proto, "ref", js_mkfun(js_net_server_ref));
+  js_set(js, js->sym.net_server_proto, "unref", js_mkfun(js_net_server_unref));
+  js_set_sym(js, js->sym.net_server_proto, get_toStringTag_sym(), js_mkstr(js, "Server", 6));
+  js->sym.net_server_ctor = js_make_ctor(js, js_net_server_ctor, js->sym.net_server_proto, "Server", 6);
 }
 
 ant_value_t net_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
   net_init_constructors(js);
-  js_set(js, lib, "Server", g_net_server_ctor);
-  js_set(js, lib, "Socket", g_net_socket_ctor);
+  js_set(js, lib, "Server", js->sym.net_server_ctor);
+  js_set(js, lib, "Socket", js->sym.net_socket_ctor);
   js_set(js, lib, "createServer", js_mkfun(js_net_createServer));
   js_set(js, lib, "createConnection", js_mkfun(js_net_createConnection));
   js_set(js, lib, "connect", js_mkfun(js_net_connect));
@@ -1246,10 +1242,10 @@ void gc_mark_net(ant_t *js, gc_mark_fn mark) {
   net_server_t *server = NULL;
   net_socket_t *socket = NULL;
 
-  if (g_net_server_proto) mark(js, g_net_server_proto);
-  if (g_net_socket_proto) mark(js, g_net_socket_proto);
-  if (g_net_server_ctor) mark(js, g_net_server_ctor);
-  if (g_net_socket_ctor) mark(js, g_net_socket_ctor);
+  if (js->sym.net_server_proto) mark(js, js->sym.net_server_proto);
+  if (js->sym.net_socket_proto) mark(js, js->sym.net_socket_proto);
+  if (js->sym.net_server_ctor) mark(js, js->sym.net_server_ctor);
+  if (js->sym.net_socket_ctor) mark(js, js->sym.net_socket_ctor);
 
   for (server = g_active_servers; server; server = server->next_active)
     mark(js, server->obj);
