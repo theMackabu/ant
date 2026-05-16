@@ -23,6 +23,22 @@ typedef enum {
 } sv_define_method_flags_t;
 
 typedef enum {
+  SV_OPF_JIT_ELIGIBLE               = 1u << 0,
+  SV_OPF_JIT_INLINEABLE             = 1u << 1,
+  SV_OPF_JIT_NEEDS_BAILOUT          = 1u << 2,
+  SV_OPF_JIT_NEEDS_INC_LOCAL        = 1u << 3,
+  SV_OPF_JIT_NEEDS_ARGS_BUF         = 1u << 4,
+  SV_OPF_JIT_NEEDS_TCO_ARGS         = 1u << 5,
+  SV_OPF_JIT_NEEDS_ITER_ROOTS       = 1u << 6,
+  SV_OPF_JIT_NEEDS_CLOSE_UPVAL      = 1u << 7,
+  SV_OPF_JIT_NEEDS_IC_EPOCH         = 1u << 8,
+  SV_OPF_JIT_LOCAL_NUMERIC_BAILOUT  = 1u << 9,
+  SV_OPF_JIT_BRANCH32               = 1u << 10,
+  SV_OPF_JIT_BRANCH8                = 1u << 11,
+  SV_OPF_JIT_OSR_BACKEDGE           = 1u << 12,
+} sv_opcode_flags_t;
+
+typedef enum {
 #define OP_DEF(name, size, n_pop, n_push, f) OP_##name,
 #include "silver/opcode.h"
   OP__COUNT
@@ -30,6 +46,11 @@ typedef enum {
 
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
+#include "silver/opcode.h"
+};
+
+static const uint16_t sv_op_flags[OP__COUNT] = {
+#define OP_FLAG(name, flags) [OP_##name] = (flags),
 #include "silver/opcode.h"
 };
 

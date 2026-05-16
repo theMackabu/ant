@@ -1109,21 +1109,12 @@ static void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr) {
     if (sz == 0) break;
     int src = (int)(ip - func->code);
     int target = -1;
-    switch (op) {
-      case OP_JMP:
-      case OP_JMP_FALSE:
-      case OP_JMP_TRUE:
-      case OP_JMP_FALSE_PEEK:
-      case OP_JMP_TRUE_PEEK:
-      case OP_JMP_NOT_NULLISH:
+    uint16_t flags = sv_op_flags[op];
+    if ((flags & SV_OPF_JIT_OSR_BACKEDGE) != 0) {
+      if ((flags & SV_OPF_JIT_BRANCH32) != 0)
         target = src + sz + sv_get_i32(ip + 1);
-        break;
-      case OP_JMP8:
-      case OP_JMP_FALSE8:
-      case OP_JMP_TRUE8:
+      else if ((flags & SV_OPF_JIT_BRANCH8) != 0)
         target = src + sz + (int8_t)sv_get_i8(ip + 1);
-        break;
-      default: break;
     }
     if (target >= 0 && target < src) {
       bool found = false;
@@ -1252,39 +1243,11 @@ static bool jit_inlineable(sv_func_t *f) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) return false;
-    switch (op) {
-      case OP_GET_ARG:
-      case OP_CONST_I8: case OP_CONST: case OP_CONST8:
-      case OP_UNDEF: case OP_NULL: case OP_TRUE: case OP_FALSE:
-      case OP_THIS:
-      case OP_GET_LOCAL: case OP_GET_LOCAL8:
-      case OP_PUT_LOCAL: case OP_PUT_LOCAL8:
-      case OP_SET_LOCAL: case OP_SET_LOCAL8:
-      case OP_GET_UPVAL:
-      case OP_POP: case OP_DUP: case OP_DUP2:
-      case OP_INSERT2: case OP_INSERT3:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
-      case OP_MOD: case OP_NEG:
-      case OP_LT: case OP_LE: case OP_GT: case OP_GE:
-      case OP_SEQ: case OP_SNE: case OP_EQ: case OP_NE:
-      case OP_IS_UNDEF: case OP_IS_NULL:
-      case OP_JMP: case OP_JMP_TRUE: case OP_JMP_FALSE:
-      case OP_JMP_TRUE8: case OP_JMP_FALSE8:
-      case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
-      case OP_RETURN: case OP_RETURN_UNDEF:
-      case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_GLOBAL:
-      case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
-        break;
-      case OP_SPECIAL_OBJ:
-        // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
-        // the interpreter until JIT routes a real per-call activation/object
-        // with matching lifetime and semantics.
-        if (sv_get_u8(ip + 1) == 0) return false;
-        break;
-      default:
-        return false;
-    }
+    if ((sv_op_flags[op] & SV_OPF_JIT_INLINEABLE) == 0) return false;
+    // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
+    // the interpreter until JIT routes a real per-call activation/object
+    // with matching lifetime and semantics.
+    if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) return false;
     ip += sz;
   }
   return true;
@@ -2110,36 +2073,20 @@ static bool jit_emit_inline_body(
   return true;
 }
 
-static void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm,
-                                MIR_context_t ctx) {
+static void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm,  MIR_context_t ctx) {
   uint8_t *ip   = func->code;
   uint8_t *end  = func->code + func->code_len;
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) break;
-    switch (op) {
-      case OP_JMP:
-      case OP_JMP_FALSE:
-      case OP_JMP_TRUE:
-      case OP_JMP_FALSE_PEEK:
-      case OP_JMP_TRUE_PEEK:
-      case OP_JMP_NOT_NULLISH:
-      case OP_TRY_PUSH:
-      case OP_CATCH:
-      case OP_FINALLY: {
-        int off = (int)(ip - func->code) + sv_get_i32(ip + 1) + sz;
-        label_for_offset(ctx, lm, off);
-        break;
-      }
-      case OP_JMP8:
-      case OP_JMP_FALSE8:
-      case OP_JMP_TRUE8: {
-        int off = (int)(ip - func->code) + (int8_t)sv_get_i8(ip + 1) + sz;
-        label_for_offset(ctx, lm, off);
-        break;
-      }
-      default: break;
+    uint16_t flags = sv_op_flags[op];
+    if ((flags & SV_OPF_JIT_BRANCH32) != 0) {
+      int off = (int)(ip - func->code) + sv_get_i32(ip + 1) + sz;
+      label_for_offset(ctx, lm, off);
+    } else if ((flags & SV_OPF_JIT_BRANCH8) != 0) {
+      int off = (int)(ip - func->code) + (int8_t)sv_get_i8(ip + 1) + sz;
+      label_for_offset(ctx, lm, off);
     }
     ip += sz;
   }
@@ -2177,62 +2124,24 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) break;
-    switch (op) {
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
-      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
-      case OP_NEG:
-      case OP_LT:  case OP_LE:  case OP_GT:  case OP_GE:
-      case OP_BAND: case OP_BOR: case OP_BXOR: case OP_BNOT:
-      case OP_SHL:  case OP_SHR: case OP_USHR:
-      case OP_TYPEOF:
-      case OP_ADD_LOCAL:
-      case OP_STR_APPEND_LOCAL:
-      case OP_STR_ALC_SNAPSHOT:
-      case OP_STR_FLUSH_LOCAL:
-        f.needs_bailout = true;
-        break;
-      case OP_INC_LOCAL: case OP_DEC_LOCAL:
-      case OP_POST_INC:
-        f.needs_inc_local = true; 
-        break;
-      case OP_CALL: case OP_CALL_METHOD: case OP_CALL_ARRAY_INCLUDES:
-      case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
-      case OP_ARRAY: case OP_NEW:
-      case OP_APPLY: case OP_NEW_APPLY:
-        f.needs_args_buf = true;
-        if (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD)
-          f.needs_tco_args = true;
-        break;
-      case OP_FOR_OF:
-      case OP_DESTRUCTURE_INIT: case OP_DESTRUCTURE_NEXT: case OP_DESTRUCTURE_CLOSE:
-        f.needs_args_buf = true;
-        f.needs_iter_roots = true;
-        break;
-      case OP_CLOSE_UPVAL: case OP_CLOSURE:
-        f.needs_close_upval = true;
-        break;
-      case OP_SET_ARG:
-        f.needs_bailout = true;
-        break;
-      case OP_PUT_LOCAL:
-      case OP_SET_LOCAL: {
+    uint16_t flags = sv_op_flags[op];
+    if ((flags & SV_OPF_JIT_NEEDS_BAILOUT) != 0) f.needs_bailout = true;
+    if ((flags & SV_OPF_JIT_NEEDS_INC_LOCAL) != 0) f.needs_inc_local = true;
+    if ((flags & SV_OPF_JIT_NEEDS_ARGS_BUF) != 0) f.needs_args_buf = true;
+    if ((flags & SV_OPF_JIT_NEEDS_TCO_ARGS) != 0) f.needs_tco_args = true;
+    if ((flags & SV_OPF_JIT_NEEDS_ITER_ROOTS) != 0) f.needs_iter_roots = true;
+    if ((flags & SV_OPF_JIT_NEEDS_CLOSE_UPVAL) != 0) f.needs_close_upval = true;
+    if ((flags & SV_OPF_JIT_NEEDS_IC_EPOCH) != 0) f.needs_ic_epoch = true;
+    if ((flags & SV_OPF_JIT_LOCAL_NUMERIC_BAILOUT) != 0) {
+      if (op == OP_PUT_LOCAL || op == OP_SET_LOCAL) {
         uint16_t idx = sv_get_u16(ip + 1);
         if (jit_local_has_numeric_hint(func, idx))
           f.needs_bailout = true;
-        break;
-      }
-      case OP_PUT_LOCAL8:
-      case OP_SET_LOCAL8: {
+      } else {
         uint8_t idx = sv_get_u8(ip + 1);
         if (jit_local_has_numeric_hint(func, idx))
           f.needs_bailout = true;
-        break;
       }
-      case OP_GET_FIELD: case OP_GET_FIELD2: case OP_PUT_FIELD:
-      case OP_INSTANCEOF: case OP_CALL_IS_PROTO:
-        f.needs_ic_epoch = true;
-        break;
-      default: break;
     }
     ip += sz;
   }
@@ -2250,90 +2159,29 @@ static bool jit_is_eligible(sv_func_t *func) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) return false;
-    switch (op) {
-      case OP_CONST_I8: case OP_CONST: case OP_CONST8:
-      case OP_UNDEF: case OP_NULL: case OP_TRUE: case OP_FALSE:
-      case OP_THIS:
-      case OP_GET_ARG: case OP_SET_ARG:
-      case OP_GET_LOCAL:  case OP_PUT_LOCAL:  case OP_SET_LOCAL:
-      case OP_GET_LOCAL8: case OP_PUT_LOCAL8: case OP_SET_LOCAL8:
-      case OP_SET_LOCAL_UNDEF:                  
-      case OP_GET_SLOT_RAW:
-      case OP_GET_UPVAL: case OP_PUT_UPVAL: case OP_SET_UPVAL:
-      case OP_CLOSE_UPVAL:
-      case OP_REST:
-      case OP_POP: case OP_DUP: case OP_DUP2:
-      case OP_INSERT2: case OP_INSERT3:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
-      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
-      case OP_POST_INC:
-      case OP_NEG: case OP_IS_UNDEF: case OP_IS_NULL:
-      case OP_LT:  case OP_LE:  case OP_GT:  case OP_GE:
-      case OP_NE:  case OP_SNE:
-      case OP_BAND: case OP_BOR: case OP_BXOR: case OP_BNOT:
-      case OP_SHL:  case OP_SHR: case OP_USHR:
-      case OP_NOT: case OP_TYPEOF: case OP_VOID:
-      case OP_DELETE:
-      case OP_INSTANCEOF:
-      case OP_NEW:
-      case OP_JMP: case OP_JMP8:
-      case OP_JMP_FALSE:  case OP_JMP_FALSE8:
-      case OP_JMP_TRUE:   case OP_JMP_TRUE8:
-      case OP_JMP_FALSE_PEEK: case OP_JMP_TRUE_PEEK:
-      case OP_CALL: case OP_CALL_METHOD:
-      case OP_CALL_IS_PROTO: case OP_CALL_ARRAY_INCLUDES:
-      case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
-      case OP_APPLY: case OP_NEW_APPLY:
-      case OP_GET_GLOBAL: case OP_GET_GLOBAL_UNDEF:
-      case OP_PUT_GLOBAL:
-      case OP_GET_FIELD: case OP_GET_FIELD2: case OP_PUT_FIELD:
-      case OP_GET_ELEM: case OP_GET_ELEM2: case OP_PUT_ELEM:
-      case OP_OBJECT: case OP_ARRAY: case OP_SET_PROTO:
-      case OP_SWAP: case OP_ROT3L:
-      case OP_IN: case OP_GET_LENGTH:
-      case OP_DEFINE_FIELD: case OP_DEFINE_METHOD_COMP: case OP_SEQ: case OP_EQ:
-      case OP_FOR_OF:
-      case OP_DESTRUCTURE_INIT: case OP_DESTRUCTURE_NEXT: case OP_DESTRUCTURE_CLOSE:
-      case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL:
-      case OP_STR_APPEND_LOCAL:
-      case OP_STR_ALC_SNAPSHOT:
-      case OP_TO_PROPKEY:
-      case OP_RETURN: case OP_RETURN_UNDEF:
-      case OP_SET_NAME:
-      case OP_TRY_PUSH: case OP_TRY_POP:
-      case OP_THROW: case OP_THROW_ERROR:
-      case OP_CATCH: case OP_NIP_CATCH:
-      case OP_NOP: case OP_HALT:
-      case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
-        break;
-      case OP_CLOSURE: {
-        uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)func->const_count) return false;
-        ant_value_t cv = func->constants[idx];
-        if (vtype(cv) != T_NTARG) return false;
-        break;
-      }
-      case OP_RE_LITERAL_EXEC:
-      case OP_STR_RE_LITERAL_REPLACE:
-      case OP_RE_EXEC_TRUTHY:
-        eligible = false;
-        break;
-      case OP_SPECIAL_OBJ:
-        if (sv_get_u8(ip + 1) == 0) {
-          if (sv_jit_warn_unlikely)
-            fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
-                    sv_get_u8(ip + 1),
-                    func->name ? func->name : "<anonymous>");
-          eligible = false;
-        }
-        break;
-      default:
+    if ((sv_op_flags[op] & SV_OPF_JIT_ELIGIBLE) == 0) {
+      if (op != OP_RE_LITERAL_EXEC &&
+          op != OP_STR_RE_LITERAL_REPLACE &&
+          op != OP_RE_EXEC_TRUTHY) {
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op %s in %s\n",
                   (op < OP__COUNT && sv_op_names[op]) ? sv_op_names[op] : "???",
                   func->name ? func->name : "<anonymous>");
+      }
+      eligible = false;
+    } else if (op == OP_CLOSURE) {
+      uint32_t idx = sv_get_u32(ip + 1);
+      if (idx >= (uint32_t)func->const_count) return false;
+      ant_value_t cv = func->constants[idx];
+      if (vtype(cv) != T_NTARG) return false;
+    } else if (op == OP_SPECIAL_OBJ) {
+      if (sv_get_u8(ip + 1) == 0) {
+        if (sv_jit_warn_unlikely)
+          fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
+                  sv_get_u8(ip + 1),
+                  func->name ? func->name : "<anonymous>");
         eligible = false;
-        break;
+      }
     }
     ip += sz;
   }
