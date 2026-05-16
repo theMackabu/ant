@@ -39,12 +39,19 @@ runs:
         echo "arch=${ops_arch}" >> "$GITHUB_OUTPUT"
         echo "cache_version=${cache_version}" >> "$GITHUB_OUTPUT"
 
-    - name: Cache ops
+    - name: Cache ops binary
       id: cache
       uses: actions/cache@v5
       with:
         path: .ops-cache/ops
         key: ops-${{ runner.os }}-${{ steps.ops.outputs.arch }}-${{ steps.ops.outputs.cache_version }}
+
+    - name: Cache ops runtime
+      id: runtime-cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.ops
+        key: ops-runtime-${{ runner.os }}-${{ steps.ops.outputs.arch }}-${{ steps.ops.outputs.cache_version }}
 
     - name: Install ops
       shell: bash
@@ -58,3 +65,24 @@ runs:
 
         sudo install -m 0755 .ops-cache/ops /usr/local/bin/ops
         ops version
+
+    - name: Ensure ops runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${{ steps.ops.outputs.arch }}" == "aarch64" ]]; then
+          if find "$HOME/.ops" -path "*/0.*-arm/kernel.img" -type f -print -quit 2>/dev/null | grep -q .; then
+            echo "ops ARM runtime already cached"
+            exit 0
+          fi
+
+          ops update --arm
+        else
+          if find "$HOME/.ops" -path "*/0.*/kernel.img" -type f -print -quit 2>/dev/null | grep -q .; then
+            echo "ops x64 runtime already cached"
+            exit 0
+          fi
+
+          ops update
+        fi

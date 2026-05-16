@@ -16,6 +16,10 @@ on:
           - macos-aarch64
           - windows-x64
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
