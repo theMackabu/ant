@@ -31,3 +31,13 @@ jobs:
     with:
       platform: ${{ inputs.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  nanos:
+    needs: [build]
+    if: ${{ inputs.platform == 'linux-musl-x64' || inputs.platform == 'linux-musl-aarch64' }}
+    uses: ./.github/workflows/build-nanos.yml
+    with:
+      arch: ${{ inputs.platform == 'linux-musl-aarch64' && 'aarch64' || 'x64' }}
+      artifact: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl' }}
+      runner: ${{ inputs.platform == 'linux-musl-aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+      image: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64' }}

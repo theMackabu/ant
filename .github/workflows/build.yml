@@ -44,6 +44,26 @@ jobs:
       platform: ${{ matrix.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
+  nanos-x64:
+    needs: [build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/build-nanos.yml
+    with:
+      arch: x64
+      artifact: ant-linux-x64-musl
+      runner: ubuntu-latest
+      image: ant-sandbox-x64
+
+  nanos-aarch64:
+    needs: [build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    uses: ./.github/workflows/build-nanos.yml
+    with:
+      arch: aarch64
+      artifact: ant-linux-aarch64-musl
+      runner: ubuntu-24.04-arm
+      image: ant-sandbox-aarch64
+
   summary:
     name: Version
     needs: [build]

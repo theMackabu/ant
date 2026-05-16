@@ -1,0 +1,68 @@
+name: Build Nanos Image
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: 'Target architecture (x64 or aarch64)'
+        required: true
+        type: string
+      artifact:
+        description: 'Ant binary artifact name to download'
+        required: true
+        type: string
+      runner:
+        description: 'GitHub Actions runner to use'
+        required: true
+        type: string
+      image:
+        description: 'Nanos image name'
+        required: true
+        type: string
+
+jobs:
+  nanos:
+    name: Nanos Image (${{ inputs.arch }})
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download ant binary
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.artifact }}
+          path: nanos
+
+      - name: Install ops
+        run: |
+          OPS_VER=$(curl -fsSL https://api.github.com/repos/nanovms/ops/releases/latest | jq -r .tag_name)
+          curl -fsSL "https://github.com/nanovms/ops/releases/download/${OPS_VER}/linux.zip" -o ops.zip
+          unzip -q ops.zip
+          chmod +x ops
+          sudo mv ops /usr/local/bin/ops
+
+      - name: Build Nanos image
+        working-directory: nanos
+        run: |
+          chmod +x ant
+          ops build ./ant -i ${{ inputs.image }}
+          cp ~/.ops/images/${{ inputs.image }}.img ant-sandbox.img
+
+      - name: Image info
+        working-directory: nanos
+        run: |
+          ANT_SIZE=$(du -sh ant | cut -f1)
+          IMG_SIZE=$(du -sh ant-sandbox.img | cut -f1)
+          echo "## ant-sandbox (${{ inputs.arch }})" >> $GITHUB_STEP_SUMMARY
+          echo "| | size |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| ant binary | $ANT_SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| nanos image | $IMG_SIZE |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload image
+        uses: actions/upload-artifact@v6
+        with:
+          name: ant-sandbox-${{ inputs.arch }}
+          path: nanos/ant-sandbox.img
+          retention-days: 7
