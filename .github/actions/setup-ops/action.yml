@@ -1,0 +1,60 @@
+name: Setup Ops
+description: Install the NanoVMs ops CLI with a cache keyed by the upstream binary version
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve ops download
+      id: ops
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "$(uname -m)" in
+          aarch64|arm64)
+            ops_url="https://storage.googleapis.com/cli/linux/aarch64/ops"
+            ops_arch="aarch64"
+            ;;
+          x86_64|amd64)
+            ops_url="https://storage.googleapis.com/cli/linux/ops"
+            ops_arch="x64"
+            ;;
+          *)
+            echo "::error::Unsupported runner architecture: $(uname -m)"
+            exit 1
+            ;;
+        esac
+
+        headers=$(curl -fsSI "$ops_url")
+        generation=$(awk -F': ' 'tolower($1) == "x-goog-generation" { gsub(/\r/, "", $2); print $2 }' <<<"$headers")
+        etag=$(awk -F': ' 'tolower($1) == "etag" { gsub(/[\r"]/, "", $2); print $2 }' <<<"$headers")
+        cache_version="${generation:-$etag}"
+
+        if [[ -z "$cache_version" ]]; then
+          echo "::error::Could not resolve ops cache version from ${ops_url}"
+          exit 1
+        fi
+
+        echo "url=${ops_url}" >> "$GITHUB_OUTPUT"
+        echo "arch=${ops_arch}" >> "$GITHUB_OUTPUT"
+        echo "cache_version=${cache_version}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache ops
+      id: cache
+      uses: actions/cache@v5
+      with:
+        path: .ops-cache/ops
+        key: ops-${{ runner.os }}-${{ steps.ops.outputs.arch }}-${{ steps.ops.outputs.cache_version }}
+
+    - name: Install ops
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        mkdir -p .ops-cache
+        if [[ ! -f .ops-cache/ops ]]; then
+          curl -fsSL "${{ steps.ops.outputs.url }}" -o .ops-cache/ops
+        fi
+
+        sudo install -m 0755 .ops-cache/ops /usr/local/bin/ops
+        ops version

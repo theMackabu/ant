@@ -71,7 +71,7 @@ jobs:
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     steps:
       - name: Download version artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: version-*
           path: versions

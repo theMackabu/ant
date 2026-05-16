@@ -9,45 +9,133 @@ on:
         type: string
       artifact:
         description: 'Ant binary artifact name to download'
-        required: true
+        required: false
+        default: ''
         type: string
       runner:
         description: 'GitHub Actions runner to use'
-        required: true
+        required: false
+        default: ''
         type: string
       image:
         description: 'Nanos image name'
-        required: true
+        required: false
+        default: ''
         type: string
+      source_run_id:
+        description: 'Workflow run ID containing the Ant binary artifact'
+        required: false
+        default: ''
+        type: string
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Target architecture'
+        required: true
+        default: x64
+        type: choice
+        options:
+          - x64
+          - aarch64
+      source_run_id:
+        description: 'Workflow run ID containing the Alpine/musl Ant artifact to reuse (blank uses latest successful run on this branch)'
+        required: false
+        default: ''
+        type: string
+      artifact:
+        description: 'Ant binary artifact name (blank uses the arch default)'
+        required: false
+        default: ''
+        type: string
+      image:
+        description: 'Nanos image name (blank uses the arch default)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
   nanos:
     name: Nanos Image (${{ inputs.arch }})
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || (inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
+    env:
+      NANOS_ARTIFACT: ${{ inputs.artifact || (inputs.arch == 'aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl') }}
+      NANOS_IMAGE: ${{ inputs.image || (inputs.arch == 'aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Download ant binary
-        uses: actions/download-artifact@v5
-        with:
-          name: ${{ inputs.artifact }}
-          path: nanos
-
-      - name: Install ops
+      - name: Resolve source artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RUN_ID: ${{ inputs.source_run_id }}
+          CALLER_RUNNER: ${{ inputs.runner }}
         run: |
-          OPS_VER=$(curl -fsSL https://api.github.com/repos/nanovms/ops/releases/latest | jq -r .tag_name)
-          curl -fsSL "https://github.com/nanovms/ops/releases/download/${OPS_VER}/linux.zip" -o ops.zip
-          unzip -q ops.zip
-          chmod +x ops
-          sudo mv ops /usr/local/bin/ops
+          set -euo pipefail
+
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          headers=(
+            -H "Accept: application/vnd.github+json"
+            -H "Authorization: Bearer ${GH_TOKEN}"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+          )
+
+          source_run_id="$REQUESTED_RUN_ID"
+          if [[ -z "$source_run_id" && -n "$CALLER_RUNNER" ]]; then
+            source_run_id="$GITHUB_RUN_ID"
+          fi
+
+          if [[ -z "$source_run_id" ]]; then
+            branch=$(jq -rn --arg value "$GITHUB_REF_NAME" '$value | @uri')
+            echo "Looking for latest successful run on ${GITHUB_REF_NAME} with ${NANOS_ARTIFACT}"
+
+            for page in 1 2 3 4 5; do
+              runs=$(curl -fsSL "${headers[@]}" \
+                "${api}/actions/runs?branch=${branch}&status=success&per_page=50&page=${page}")
+
+              while IFS= read -r run_id; do
+                artifacts=$(curl -fsSL "${headers[@]}" \
+                  "${api}/actions/runs/${run_id}/artifacts?per_page=100")
+
+                if jq -e --arg name "$NANOS_ARTIFACT" \
+                  '.artifacts[] | select(.name == $name and .expired == false)' \
+                  >/dev/null <<<"$artifacts"; then
+                  source_run_id="$run_id"
+                  break 2
+                fi
+              done < <(jq -r '.workflow_runs[].id' <<<"$runs")
+            done
+          fi
+
+          if [[ -z "$source_run_id" ]]; then
+            echo "::error::No successful workflow run on ${GITHUB_REF_NAME} contains ${NANOS_ARTIFACT}."
+            exit 1
+          fi
+
+          echo "Using ${NANOS_ARTIFACT} from workflow run ${source_run_id}"
+          echo "run_id=${source_run_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Download ant binary
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.NANOS_ARTIFACT }}
+          path: nanos
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.source.outputs.run_id }}
+
+      - name: Setup ops
+        uses: ./.github/actions/setup-ops
 
       - name: Build Nanos image
         working-directory: nanos
         run: |
           chmod +x ant
-          ops build ./ant -i ${{ inputs.image }}
-          cp ~/.ops/images/${{ inputs.image }}.img ant-sandbox.img
+          ops build ./ant -i "$NANOS_IMAGE"
+          cp ~/.ops/images/${NANOS_IMAGE}.img ant-sandbox.img
 
       - name: Image info
         working-directory: nanos
@@ -55,6 +143,9 @@ jobs:
           ANT_SIZE=$(du -sh ant | cut -f1)
           IMG_SIZE=$(du -sh ant-sandbox.img | cut -f1)
           echo "## ant-sandbox (${{ inputs.arch }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Source run: \`${{ steps.source.outputs.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| | size |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| ant binary | $ANT_SIZE |" >> $GITHUB_STEP_SUMMARY
