@@ -64,6 +64,7 @@ jobs:
     env:
       NANOS_ARTIFACT: ${{ inputs.artifact || (inputs.arch == 'aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl') }}
       NANOS_IMAGE: ${{ inputs.image || (inputs.arch == 'aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64') }}
+      OPS_ARCH: ${{ inputs.arch == 'aarch64' && 'arm64' || 'amd64' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -134,7 +135,7 @@ jobs:
         working-directory: nanos
         run: |
           chmod +x ant
-          ops build ./ant -i "$NANOS_IMAGE"
+          ops build ./ant -i "$NANOS_IMAGE" --arch="$OPS_ARCH"
 
           if [[ -f "$HOME/.ops/images/${NANOS_IMAGE}.img" ]]; then
             cp "$HOME/.ops/images/${NANOS_IMAGE}.img" ant-sandbox.img
