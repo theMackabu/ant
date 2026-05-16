@@ -135,7 +135,16 @@ jobs:
         run: |
           chmod +x ant
           ops build ./ant -i "$NANOS_IMAGE"
-          cp ~/.ops/images/${NANOS_IMAGE}.img ant-sandbox.img
+
+          if [[ -f "$HOME/.ops/images/${NANOS_IMAGE}.img" ]]; then
+            cp "$HOME/.ops/images/${NANOS_IMAGE}.img" ant-sandbox.img
+          elif [[ -f "$HOME/.ops/images/${NANOS_IMAGE}" ]]; then
+            cp "$HOME/.ops/images/${NANOS_IMAGE}" ant-sandbox.img
+          else
+            echo "::error::ops did not create ${NANOS_IMAGE} under $HOME/.ops/images"
+            ls -la "$HOME/.ops/images" || true
+            exit 1
+          fi
 
       - name: Image info
         working-directory: nanos
