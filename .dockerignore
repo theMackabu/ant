@@ -1,8 +1,12 @@
+# docker does not read .gitignore automatically. keep this aligned with the
+# repo ignore rules, plus Docker-specific large local outputs.
+
 .env
 .nova
 .maid
 .cache
 .superset
+.git
 
 .claude
 .github/artifacts
@@ -16,7 +20,6 @@
 /result
 /result-*
 /todo/*
-/nanos/out
 
 /src/pkg/.zig-cache
 /src/strip/target
@@ -32,9 +35,11 @@ node_modules
 /tools
 /zoo.sh
 
-/vendor/*/
+/vendor/*
 /vendor/.wraplock
+!/vendor/*.wrap
 !/vendor/packagefiles
+!/vendor/packagefiles/**
 
 *.todo
 *.trace
@@ -42,3 +47,10 @@ node_modules
 bun.lock
 pnpm-lock.yaml
 package-lock.json
+
+docs/reports/.wrangler
+docs/reports/node_modules
+nanos/build-sandbox.sh
+nanos/out
+ant-sandbox.img
+**/.DS_Store

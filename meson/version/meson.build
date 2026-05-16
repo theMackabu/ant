@@ -1,5 +1,7 @@
 fs = import('fs')
-git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
+
+git_hash_opt = get_option('build_git_hash')
+git_hash = git_hash_opt != '' ? git_hash_opt : run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
 git_hash = git_hash != '' ? git_hash : 'unknown'
 
 timestamp_opt = get_option('build_timestamp')
