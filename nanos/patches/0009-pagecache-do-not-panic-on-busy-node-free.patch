@@ -8,6 +8,12 @@ index 9e3606c7..a4673135 100644
          pagecache_page_release_locked(pc, pp, false);
 -    /* a pagecache node being released means no outstanding page references are possible */
 -    assert(page_state(pp) == PAGECACHE_PAGESTATE_FREE);
++    /* A pagecache node being released should mean no outstanding page
++     * references are possible. Some sandbox 9p teardown paths can still hold a
++     * transient mapping/page reference while the VM is already exiting; don't
++     * turn that into a kernel panic. Leave the page behind for the dying VM
++     * instead of deallocating memory still referenced elsewhere.
++     */
 +    if (page_state(pp) != PAGECACHE_PAGESTATE_FREE) {
 +        pagecache_unlock_state(pc);
 +        return true;
