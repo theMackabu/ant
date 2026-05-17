@@ -1,0 +1,37 @@
+diff --git a/src/kernel/log.c b/src/kernel/log.c
+index 047ad986..f1fb0a63 100644
+--- a/src/kernel/log.c
++++ b/src/kernel/log.c
+@@ -83,6 +83,12 @@ define_closure_function(2, 1, void, klog_load_sh,
+ 
+ void klog_load(klog_dump dest, status_handler sh)
+ {
++    if (!klog.disk_handler) {
++        dest->boot_id = dest->exit_code = 0;
++        dest->msgs[0] = '\0';
++        apply(sh, STATUS_OK);
++        return;
++    }
+     struct storage_req req = {
+         .op = STORAGE_OP_READ,
+         .blocks = range_rshift(irangel(klog.disk_offset, KLOG_DUMP_SIZE), SECTOR_OFFSET),
+@@ -94,6 +100,10 @@ void klog_load(klog_dump dest, status_handler sh)
+ 
+ void klog_save(int exit_code, status_handler sh)
+ {
++    if (!klog.disk_handler) {
++        apply(sh, STATUS_OK);
++        return;
++    }
+     bytes msg_len = 0;
+     if (klog.count > 0) {
+         klog_lock();
+@@ -122,6 +132,8 @@ void klog_save(int exit_code, status_handler sh)
+ void klog_dump_clear(void)
+ {
+     /* Make an invalid header. */
++    if (!klog.disk_handler)
++        return;
+     zero(&klog.dump.header, sizeof(klog.dump.header));
+ 
+     /* Only the first sector needs to be written. */
