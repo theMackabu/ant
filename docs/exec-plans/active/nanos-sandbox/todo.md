@@ -1,17 +1,8 @@
 # Nanos Sandbox: Things To Add
 
 Status: active
-Last reviewed: 2026-05-16
+Last reviewed: 2026-05-17
 Owner: theMackabu
-
-## Reliable HVF Delivery
-
-Make timer and device interrupt delivery reliable through Hypervisor.framework's
-GIC.
-
-This is the next backend priority before chasing higher-level features. Device
-completion, timer interrupts, and guest scheduling need to be boring before the
-transport layer can be trusted.
 
 ## Real Network Backend
 
@@ -20,6 +11,17 @@ drop-complete implementation.
 
 The goal is a Nanos-compatible device that can eventually support guest fetch,
 package access, and controlled sandbox networking.
+
+The first macOS direction is vmnet shared mode behind `ANT_SANDBOX_VM_NET=1`.
+The virtio-net queue plumbing should preserve guest RX buffers until packets are
+available, pass TX Ethernet frames into vmnet, and inject vmnet RX packets back
+into guest RX descriptors.
+
+Open packaging/signing issue: adding `com.apple.vm.networking` to the ad-hoc
+local signature makes macOS kill the binary before `main`, while omitting it
+makes `vmnet_start_interface()` fail with status `1001`. Decide whether network
+requires a separately signed/helper binary, a release signing profile with the
+vmnet entitlement, or a different unentitled host network backend.
 
 ## Workspace Mounts
 

@@ -1,7 +1,7 @@
 # Nanos Sandbox: Legacy Things To Remove And Rewrite
 
 Status: active
-Last reviewed: 2026-05-16
+Last reviewed: 2026-05-17
 Owner: theMackabu
 
 ## Request Transport Cleanup
@@ -43,6 +43,55 @@ Replace it with a user-facing `ant sandbox --verbose` mode that feels more like
 macOS verbose boot: high-signal boot/device/protocol milestones without raw
 device spam.
 
+## Darwin Backend Stubs And Bringup Shims
+
+`src/sandbox/backends/darwin.c` is a working bringup backend, but several
+pieces are intentionally minimal and should not be treated as finished APIs:
+
+- Timer delivery is better but not final. The backend now raises the correct
+  redistributor PPI and uses `cntvct_el0` for deadline math, but the patched
+  Nanos `CNTFRQ_EL0` fallback is still bringup scaffolding.
+- The MSI path is modern virtio PCI MSI-X now, but the machine still exposes a
+  GICv2M-compatible MSI frame rather than a full ITS. Keep that contract honest:
+  use the V2M SPI window deliberately, or replace it with a real ITS model and a
+  matching Nanos patch.
+- Virtio-net now has opt-in vmnet shared-mode plumbing behind
+  `ANT_SANDBOX_VM_NET=1`, but the local ad-hoc binary cannot currently start it:
+  adding `com.apple.vm.networking` to the local entitlements makes macOS kill
+  the executable before `main`, while omitting it makes `vmnet_start_interface`
+  fail with status `1001`. Treat network as blocked on the signing/helper
+  decision, not done.
+- Virtio-vsock is only a first request pipe. It sends one newline-terminated
+  JSON request after the guest connects, ignores the event queue, and advances
+  flow-control counters for guest RW packets without parsing stdout/stderr,
+  result, error, or exit frames.
+- Virtio-9p is a small read-mostly server for the current workspace. It handles
+  attach, walk, getattr, lopen, read, readdir, statfs, and clunk, while other
+  9p messages return `ENOSYS`. Writes, mutation, stronger path policy, dynamic
+  mount tags, and arbitrary guest mount aliases are still future work.
+- Virtio-blk is modern virtio PCI, but it is still only enough for the raw root
+  image. It uses a tiny fixed queue, direct `pread`/`pwrite`, sparse config
+  handling, and should be reviewed before relying on flush/discard/write-zero
+  behavior.
+- PCI config space is handcrafted for the current modern virtio devices. It
+  exposes the required capabilities and MSI-X tables, but it is not a full PCI
+  root-complex model and still swallows unsupported config/PIO accesses.
+- PL011/UART is an output/debug path, not the final sandbox stdio transport.
+  It should become boot log and panic plumbing once daemon frames own normal
+  stdout/stderr.
+- RTC and miscellaneous MMIO devices are minimal compatibility shims. RTC reads
+  host wall time and ignores writes; unknown devices should become explicit
+  models or explicit failures as the machine contract stabilizes.
+- Shutdown and error mapping are incomplete. PSCI/semihosting exits can stop
+  the VM, but the host does not yet reliably distinguish script exceptions,
+  guest daemon errors, kernel panics, transport errors, and clean exits.
+- Environment flags such as `ANT_SANDBOX_VM_TRACE`,
+  `ANT_SANDBOX_VM_TRACE_9P_PATHS`, `ANT_SANDBOX_VM_TRACE_9P_READDIR`,
+  `ANT_SANDBOX_VM_TIMEOUT_MS`, and `ANT_SANDBOX_VM_NET` are bringup controls.
+  Keep or replace them deliberately before exposing a stable CLI.
+- The backend is Apple Silicon only. The non-aarch64 Darwin path is a hard
+  `ENOSYS` stub.
+
 ## Image Layout Cleanup
 
 The direct `ops build` MBR image is not the final shipped artifact. It includes
@@ -69,13 +118,14 @@ Runtime lookup should not scan old ops paths. It should use only:
 
 ## Network Cleanup
 
-Any drop-complete-only virtio-net behavior is a bringup shim, not the final
-network backend. Replace it with a real host network backend before calling
-network support done.
+The old drop-complete-only virtio-net behavior has been replaced with vmnet
+shared-mode queue plumbing, but network support is not done until a signed or
+otherwise unentitled backend can actually start on user machines.
 
 Also verify the doc and code agree on the current state: local smoke output may
 still show `NET: no network interface found` unless network emulation is enabled
-or completed.
+or completed. `ANT_SANDBOX_VM_NET=1` currently fails early without the vmnet
+entitlement.
 
 ## Mount Path Cleanup
 

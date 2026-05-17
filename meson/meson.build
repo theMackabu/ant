@@ -26,7 +26,7 @@ add_project_arguments(
 
 if host_machine.system() == 'darwin'
   deployment_flag = '-mmacosx-version-min=15.0'
-  add_project_arguments(deployment_flag, language: ['c', 'cpp'])
+  add_project_arguments(deployment_flag, '-fblocks', language: ['c', 'cpp'])
   add_project_link_arguments(deployment_flag, language: ['c', 'cpp'])
 endif
 
