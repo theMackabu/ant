@@ -128,7 +128,7 @@ ASLR/address-space width for other workloads.
 
 ## macOS Backend Progress
 
-The first macOS backend lives under `src/sandbox/backends/darwin.c` and uses
+The first macOS backend lives under `src/sandbox/backends/darwin/` and uses
 Hypervisor.framework directly.
 
 References cloned for this work:
@@ -198,6 +198,34 @@ Completed cleanup:
 Validated after this cleanup:
 
 ```sh
+./build/ant sandbox examples/demo/advanced.js
+./build/ant sandbox examples/demo/wasm.js
+./build/ant sandbox examples/demo/pi.js
+```
+
+## Darwin Backend Source Split
+
+The macOS backend was split out of the single 3k-line `darwin.c` into focused
+translation units under `src/sandbox/backends/darwin/`.
+
+Current layout:
+
+- `backend.c`: top-level backend entrypoint, VM lifecycle, and vCPU run loop
+- `common.c`: byte helpers, guest memory access, file checks, and kernel loading
+- `fdt.c`: generated Nanos boot device tree
+- `gic.c`: Hypervisor.framework GIC setup, timer handling, and MSI setup
+- `mmio.c`: top-level MMIO dispatch and exception advancement
+- `pci.c`: PCI ECAM/config-space model
+- `virtio.c`: shared modern virtio PCI/MSI-X/common-config handling
+- `virtio_blk.c`, `virtio_net.c`, `virtio_vsock.c`, `virtio_9p.c`: device
+  implementations
+- `uart.c`: PL011 output buffering
+- `backend.h`: Darwin backend-private machine types and cross-file prototypes
+
+Validation after the split:
+
+```sh
+meson compile -C build
 ./build/ant sandbox examples/demo/advanced.js
 ./build/ant sandbox examples/demo/wasm.js
 ./build/ant sandbox examples/demo/pi.js

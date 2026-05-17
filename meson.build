@@ -18,7 +18,20 @@ include = include_directories('include')
 
 sandbox_backend_sources = []
 if host_machine.system() == 'darwin'
-  sandbox_backend_sources += files('src/sandbox/backends/darwin.c')
+  sandbox_backend_sources += files(
+    'src/sandbox/backends/darwin/backend.c',
+    'src/sandbox/backends/darwin/common.c',
+    'src/sandbox/backends/darwin/fdt.c',
+    'src/sandbox/backends/darwin/gic.c',
+    'src/sandbox/backends/darwin/mmio.c',
+    'src/sandbox/backends/darwin/pci.c',
+    'src/sandbox/backends/darwin/uart.c',
+    'src/sandbox/backends/darwin/virtio.c',
+    'src/sandbox/backends/darwin/virtio_9p.c',
+    'src/sandbox/backends/darwin/virtio_blk.c',
+    'src/sandbox/backends/darwin/virtio_net.c',
+    'src/sandbox/backends/darwin/virtio_vsock.c',
+  )
 endif
 
 subdir('meson')

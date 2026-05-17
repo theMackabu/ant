@@ -45,7 +45,7 @@ device spam.
 
 ## Darwin Backend Stubs And Bringup Shims
 
-`src/sandbox/backends/darwin.c` is a working bringup backend, but several
+`src/sandbox/backends/darwin/` is a working bringup backend, but several
 pieces are intentionally minimal and should not be treated as finished APIs:
 
 - Timer delivery is better but not final. The backend now raises the correct
