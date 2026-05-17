@@ -135,7 +135,7 @@ jobs:
         working-directory: nanos
         run: |
           chmod +x ant
-          ops build ./ant -i "$NANOS_IMAGE" --arch="$OPS_ARCH"
+          ops build ./ant -i "$NANOS_IMAGE" --arch="$OPS_ARCH" --consoles +pl011 --consoles +16550 -a "--sandbox-daemon"
 
           if [[ -f "$HOME/.ops/images/${NANOS_IMAGE}.img" ]]; then
             cp "$HOME/.ops/images/${NANOS_IMAGE}.img" ant-sandbox.img

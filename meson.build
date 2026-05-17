@@ -16,6 +16,11 @@ is_static = get_option('static_link')
 src_root = meson.project_source_root()
 include = include_directories('include')
 
+sandbox_backend_sources = []
+if host_machine.system() == 'darwin'
+  sandbox_backend_sources += files('src/sandbox/backends/darwin.c')
+endif
+
 subdir('meson')
 
 messages_h = custom_target('messages_h',
@@ -39,7 +44,7 @@ lib_sources = files(run_command(
 
 libant = static_library(
   'ant',
-  lib_sources + [
+  lib_sources + sandbox_backend_sources + [
     builtin_bundle_h,
     snapshot_h,
     messages_h,
@@ -106,13 +111,33 @@ if get_option('linker_map')
   endif
 endif
 
-executable(
+ant_exe = executable(
   'ant',
   files('src/main.c', 'src/watch.c') + [messages_h],
   dependencies: libant_dep,
   link_args: ant_link_args,
   export_dynamic: true
 )
+
+if host_machine.system() == 'darwin'
+  codesign = find_program('codesign')
+  custom_target(
+    'ant_codesign',
+    input: files('meson/ant.entitlements'),
+    output: 'ant.codesign.stamp',
+    command: [
+      'sh', '-c',
+      '"$1" --force --sign - --entitlements "$2" "$3" && touch "$4"',
+      'ant-codesign',
+      codesign,
+      '@INPUT0@',
+      ant_exe,
+      '@OUTPUT@',
+    ],
+    depends: ant_exe,
+    build_by_default: true,
+  )
+endif
 
 executable(
   'tlsuv-boringssl-smoke',

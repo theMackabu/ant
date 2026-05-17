@@ -24,6 +24,14 @@ USAGE
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
+sandbox_config_dir=
+
+cleanup() {
+  if [[ -n "${sandbox_config_dir:-}" ]]; then
+    rm -rf "$sandbox_config_dir"
+  fi
+}
+trap cleanup EXIT
 
 arch=native
 image=
@@ -93,6 +101,19 @@ esac
 out_dir=${out_dir:-"$repo_root/nanos/out/$arch"}
 binary_dir="$out_dir/binary"
 image_out="$out_dir/ant-sandbox.img"
+case "$arch" in
+  aarch64) cache_arch=arm64 ;;
+  x64) cache_arch=x64 ;;
+esac
+
+if [[ -d "$HOME/.ant" ]]; then
+  sandbox_cache_dir="$HOME/.ant/sandbox"
+else
+  sandbox_cache_base="${XDG_CACHE_HOME:-$HOME/.cache}"
+  sandbox_cache_dir="$sandbox_cache_base/ant/sandbox"
+fi
+sandbox_cache_image="$sandbox_cache_dir/ant-sandbox-${cache_arch}.img"
+sandbox_cache_kernel="$sandbox_cache_dir/nanos-kernel-${cache_arch}.img"
 if [[ -n "${BUILD_TIMESTAMP:-}" ]]; then
   build_timestamp=$BUILD_TIMESTAMP
 elif git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -177,10 +198,43 @@ else
   "$ops_cmd" update
 fi
 
+shopt -s nullglob
+if [[ "$ops_arch" == "arm64" ]]; then
+  ops_kernels=("$HOME"/.ops/*-arm/kernel.img)
+else
+  ops_kernels=("$HOME"/.ops/[0-9]*/kernel.img)
+fi
+shopt -u nullglob
+
+if (( ${#ops_kernels[@]} == 0 )); then
+  echo "ops did not create a cached Nanos kernel under $HOME/.ops" >&2
+  exit 1
+fi
+
 echo "==> Building Nanos image $image"
+sandbox_config_dir=$(mktemp -d "${TMPDIR:-/tmp}/ant-nanos-config.XXXXXX")
+mkdir -p "$sandbox_config_dir/root/workspace"
+: > "$sandbox_config_dir/root/workspace/__ant_mount"
+
+sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
+cat > "$sandbox_ops_config" <<JSON
+{
+  "MapDirs": {
+    "$sandbox_config_dir/root/*": "/"
+  }
+}
+JSON
+
 (
   cd "$binary_dir"
-  "$ops_cmd" build ./ant -i "$image" --arch="$ops_arch"
+  "$ops_cmd" build ./ant \
+    -c "$sandbox_ops_config" \
+    -i "$image" \
+    --arch="$ops_arch" \
+    --consoles +pl011 \
+    --consoles +16550 \
+    --mounts "%0:/workspace:ro" \
+    -a "--sandbox-daemon"
 )
 
 if [[ -f "$HOME/.ops/images/${image}.img" ]]; then
@@ -195,3 +249,10 @@ fi
 
 echo "==> Wrote:"
 ls -lh "$binary_dir/ant" "$image_out"
+
+mkdir -p "$sandbox_cache_dir"
+cp "$image_out" "$sandbox_cache_image"
+cp "${ops_kernels[0]}" "$sandbox_cache_kernel"
+
+echo "==> Cached sandbox assets:"
+ls -lh "$sandbox_cache_image" "$sandbox_cache_kernel"

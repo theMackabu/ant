@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
@@ -34,6 +35,9 @@
 #include "cli/pkg.h"
 #include "cli/misc.h"
 #include "cli/version.h"
+#include "sandbox/cli.h"
+#include "sandbox/sandbox.h"
+#include "sandbox/transport.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -132,6 +136,7 @@ static const subcommand_t subcommands[] = {
   {"ls",      "list",    "List installed packages",                      pkg_cmd_ls},
   {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
   {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
+  {"sandbox", NULL,      "Run a script in the Ant sandbox",              ant_sandbox_cmd},
   {NULL, NULL, NULL, NULL}
 };
 
@@ -254,7 +259,7 @@ static argv_split_t split_script_args(int *argc, char **argv) {
 }
 
 static argv_split_t build_process_argv(int argc, char **argv, const char *module, argv_split_t script) {
-  if (!module || script.argc == 0) return (argv_split_t){ argc, argv };
+  if (!module) return (argv_split_t){ argc, argv };
 
   int total = 2 + script.argc;
   char **out = try_oom(sizeof(char*) * (total + 1));
@@ -441,6 +446,8 @@ int main(int argc, char *argv[]) {
   
   int filtered_argc = 0; int original_argc = argc;
   char **original_argv = argv;
+  bool sandbox_daemon = false;
+  ant_sandbox_request_t sandbox = { 0 };
   
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
@@ -462,6 +469,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
     else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
     else if (strncmp(argv[i], "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(argv[i] + 13);
+    else if (strcmp(argv[i], "--sandbox-daemon") == 0) sandbox_daemon = true;
     else if (strcmp(argv[i], "--inspect") == 0) inspector.enabled = true;
     
     else if (strncmp(argv[i], "--inspect=", 10) == 0) {
@@ -512,10 +520,11 @@ int main(int argc, char *argv[]) {
   
   #define CLEANUP_ARGS_AND_ARGV() ({ \
     if (proc_argv.argv != argv) free(proc_argv.argv); \
+    ant_sandbox_request_free(&sandbox); \
     arg_freetable(argtable, ARGTABLE_COUNT); \
     free(filtered_argv); \
   })
-  
+
   if (help->count > 0) {
     print_commands(argtable);
     CLEANUP_ARGS_AND_ARGV();
@@ -547,7 +556,14 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  if (eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
+  if (sandbox_daemon) {
+    if (!ant_sandbox_read_request_transport(&sandbox)) {
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (!sandbox_daemon && eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
     const char *positional = file->filename[0];
     int first_pos_idx = find_argv_token_index(argc, argv, positional);
     
@@ -629,6 +645,24 @@ int main(int argc, char *argv[]) {
   const char *module_file = (repl_mode || file->count == 0) 
     ? NULL 
     : file->filename[0];
+
+  if (sandbox_daemon) {
+    if (sandbox.cwd && chdir(sandbox.cwd) != 0) {
+      fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox.cwd, strerror(errno));
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+
+    repl_mode = false;
+    stdin_mode = false;
+
+    if (sandbox.mode == ANT_SANDBOX_REQUEST_RUN) {
+      module_file = sandbox.entry;
+      script_tail = (argv_split_t){ sandbox.argc, sandbox.argv };
+    } else {
+      module_file = NULL;
+    }
+  }
 
   if (watch->count > 0) {
     char *resolved_file = NULL;
@@ -786,6 +820,23 @@ int main(int argc, char *argv[]) {
   
   if (inspector.wait_for_session) ant_inspector_wait_for_session();
   if (internal_crash_report_mode) js_result = ant_crash_run_internal_report(js);
+
+  else if (sandbox_daemon && sandbox.mode == ANT_SANDBOX_REQUEST_EVAL) {
+    js_result = ant_sandbox_eval_module(js, sandbox.source, strlen(sandbox.source));
+  }
+
+  else if (sandbox_daemon && sandbox.mode == ANT_SANDBOX_REQUEST_RUN) {
+    char *resolved_file = resolve_js_file(sandbox.entry);
+
+    if (!resolved_file) {
+      crfprintf(stderr, msg.module_not_found, sandbox.entry);
+      js_result = EXIT_FAILURE;
+    } else {
+      js_result = execute_module(js, resolved_file);
+      js_run_event_loop(js);
+      free(resolved_file);
+    }
+  }
 
   else if (eval->count > 0) {
     const char *script = eval->sval[0];
