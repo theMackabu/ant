@@ -299,6 +299,8 @@ else
   exit 1
 fi
 
+python3 "$repo_root/nanos/shrink-image.py" "$image_out" "$image_out"
+
 find "$out_dir" -maxdepth 1 -type f \( \
   -name 'ant-sandbox.img' -o \
   -name 'ant-sandbox-[0-9]*.img' -o \

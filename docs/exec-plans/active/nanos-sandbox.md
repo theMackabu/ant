@@ -254,11 +254,14 @@ compiled Nanos kernel into the full Ant-version cache directory. `ant sandbox
 
 Local ARM image facts observed on 2026-05-16:
 
-- `ant-sandbox.img` is a raw MBR image.
-- It contains two Nanos TFS partitions.
-- Raw size is about 24 MB.
+- The direct `ops build` output is a raw MBR image with two Nanos TFS
+  partitions.
+- The direct `ops build` output is about 24 MB.
 - Partition 1 is a fixed Nanos/kernel area of about 12 MiB and mostly zeros.
 - Partition 2 contains the Ant app payload of about 11.3 MiB.
+- The sandbox build now shrinks the final shipped image to the raw root TFS
+  partition and relies on the paired patched Nanos kernel to mount that raw TFS
+  as `/`.
 - Embedded Ant ELF is already stripped; the bulk is real `.text`, `.rodata`,
   and unwind data.
 

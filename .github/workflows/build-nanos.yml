@@ -147,6 +147,15 @@ jobs:
             exit 1
           fi
 
+      - name: Shrink Nanos image
+        working-directory: nanos
+        run: |
+          set -euo pipefail
+          before=$(du -h ant-sandbox.img | cut -f1)
+          python3 shrink-image.py ant-sandbox.img ant-sandbox.img
+          after=$(du -h ant-sandbox.img | cut -f1)
+          echo "Shrank ant-sandbox.img from ${before} to ${after}"
+
       - name: Image info
         working-directory: nanos
         run: |
