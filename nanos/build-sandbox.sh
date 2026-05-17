@@ -220,6 +220,12 @@ if [[ ! -f "$nanos_kernel" ]]; then
   exit 1
 fi
 
+case "$arch" in
+  aarch64) ops_kernel="$nanos_cache_dir/ant-kernel-arm.img" ;;
+  x64) ops_kernel="$nanos_cache_dir/ant-kernel-x64.img" ;;
+esac
+cp "$nanos_kernel" "$ops_kernel"
+
 echo "==> building Nanos image $image"
 sandbox_config_dir=$(mktemp -d "$nanos_cache_dir/ops-config.XXXXXX")
 ops_state="$sandbox_config_dir/.ops"
@@ -228,7 +234,7 @@ mkdir -p "$ops_state/images"
 sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
 cat > "$sandbox_ops_config" <<JSON
 {
-  "Kernel": "$nanos_kernel",
+  "Kernel": "$ops_kernel",
   "NanosVersion": "$ant_version"
 }
 JSON
