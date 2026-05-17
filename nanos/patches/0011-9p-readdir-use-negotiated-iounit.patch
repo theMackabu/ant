@@ -1,0 +1,16 @@
+diff --git a/src/fs/9p.c b/src/fs/9p.c
+index 190c464..1d50fd3 100644
+--- a/src/fs/9p.c
++++ b/src/fs/9p.c
+@@ -365,7 +365,10 @@ static int p9_readdir(p9fs fs, u32 fid, tuple md)
+         s = 0;
+     else if (s != 0)
+         return s;
+-    const int iobuf_size = PAGESIZE;
++    u32 max_iobuf_size = (fs->msize > P9_IOHDR_SIZE) ? fs->msize - P9_IOHDR_SIZE : PAGESIZE;
++    u32 iobuf_size = iounit ? MIN(iounit, max_iobuf_size) : max_iobuf_size;
++    if (iobuf_size < sizeof(struct p9_readdir_entry))
++        iobuf_size = sizeof(struct p9_readdir_entry);
+     u8 *buf = v9p_get_iobuf(fs->transport, iobuf_size);
+     if (buf == INVALID_ADDRESS)
+         return -ENOMEM;

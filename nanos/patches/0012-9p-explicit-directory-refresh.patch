@@ -1,0 +1,94 @@
+diff --git a/src/fs/fs.h b/src/fs/fs.h
+index 5fd30e6a..85cb882d 100644
+--- a/src/fs/fs.h
++++ b/src/fs/fs.h
+@@ -71,6 +71,7 @@ struct filesystem {
+     int blocksize_order;
+     boolean ro; /* true for read-only filesystem */
+     tuple (*lookup)(filesystem fs, tuple parent, string name);
++    int (*refresh_dir)(filesystem fs, tuple md);
+     int (*create)(filesystem fs, tuple parent, string name, tuple md, fsfile *f);
+     int (*link)(filesystem fs, tuple parent, string name, tuple md);
+     int (*unlink)(filesystem fs, tuple parent, string name, tuple md, boolean *destruct_md);
+diff --git a/src/fs/fs.c b/src/fs/fs.c
+index 82102a37..50cdcabb 100644
+--- a/src/fs/fs.c
++++ b/src/fs/fs.c
+@@ -1128,9 +1128,7 @@ static tuple lookup_follow(filesystem *fs, tuple t, string a, tuple *p)
+                 filesystem_release(*fs);
+                 filesystem_lock(child_fs);
+ 
+-                /* The lookup call below, which should return childfs->root, may be needed by a
+-                 * filesystem to retrieve up-to-date contents of its root directory. */
+-                t = child_fs->lookup(child_fs, child_fs->root, alloca_wrap_cstring("."));
++                t = child_fs->root;
+ 
+                 *fs = child_fs;
+             }
+diff --git a/src/fs/9p.c b/src/fs/9p.c
+index 1d50fd3..2f0157a 100644
+--- a/src/fs/9p.c
++++ b/src/fs/9p.c
+@@ -596,7 +596,7 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+     if (!parent_dentry)
+         return 0;
+     if (!buffer_strcmp(name, "."))
+-        return (p9_readdir(p9fs, parent_dentry->fid, parent) == 0) ? parent : 0;
++        return parent;
+     parent_dentry->pinned = true;
+     u32 fid = p9_fid_new(p9fs);
+     parent_dentry->pinned = false;
+@@ -622,8 +622,8 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+     }
+     switch (qid.type) {
+     case P9_QID_TYPE_DIR:
+-        if (p9_readdir(p9fs, fid, md) != 0)
+-            goto error;
++        if (!children(md))
++            set(md, sym(children), allocate_tuple());
+         break;
+     case P9_QID_TYPE_SYMLINK:
+         if (p9_readlink(p9fs, fid, md) != 0)
+@@ -642,6 +642,15 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+     return md;
+ }
+ 
++static int p9_refresh_dir(filesystem fs, tuple md)
++{
++    p9fs p9fs = (struct p9fs *)fs;
++    p9_dentry dentry = p9_get_dentry_from_md(p9fs, md);
++    if (!dentry)
++        return -ENOENT;
++    return p9_readdir(p9fs, dentry->fid, md);
++}
++
+ static int p9_create(filesystem fs, tuple parent, string name, tuple md, fsfile *f)
+ {
+     if (!name)
+@@ -772,6 +781,8 @@ void p9_create_fs(heap h, void *transport, boolean readonly, filesystem_complete
+     fs->fs.root = fs->root.md = allocate_tuple();
+     set(fs->root.md, sym_this(".."), fs->root.md);
++    set(fs->root.md, sym(children), allocate_tuple());
+     fs->fs.lookup = p9_lookup;
++    fs->fs.refresh_dir = p9_refresh_dir;
+     fs->fs.create = p9_create;
+     fs->fs.unlink = p9_unlink;
+     fs->fs.rename = p9_rename;
+diff --git a/src/unix/syscall.c b/src/unix/syscall.c
+index b4d4615..583334f 100644
+--- a/src/unix/syscall.c
++++ b/src/unix/syscall.c
+@@ -1216,6 +1216,13 @@ static sysreturn getdents_internal(int fd, void *dirp, unsigned int count, boole
+         goto out;
+     }
+     md = filesystem_get_meta(f->fs, f->n);
++    if (md && f->offset == 0 && f->fs->refresh_dir) {
++        int refresh = f->fs->refresh_dir(f->fs, md);
++        if (refresh != 0) {
++            rv = refresh;
++            goto out;
++        }
++    }
+     tuple c;
+     if (!md || !(c = children(md))) {
+         rv = -ENOTDIR;
