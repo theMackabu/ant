@@ -91,6 +91,8 @@
 #define ANT_VIRTIO_NET_QUEUE_SIZE 256u
 #define ANT_VIRTIO_9P_F_MOUNT_TAG 0x1u
 #define ANT_VIRTIO_9P_QUEUE_SIZE 32u
+#define ANT_HVF_9P_MSIZE 8192u
+#define ANT_HVF_9P_IOUNIT (ANT_HVF_9P_MSIZE - 11u)
 #define ANT_VIRTIO_VSOCK_F_STREAM 0x1u
 #define ANT_VIRTIO_VSOCK_QUEUE_COUNT 3u
 #define ANT_VIRTIO_VSOCK_QUEUE_SIZE 32u
@@ -1967,7 +1969,7 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       if (13u + vlen > req_len || 13u + vlen > resp_cap) return ant_hvf_9p_error(resp, tag, EINVAL);
       uint32_t size = 13u + vlen;
       ant_hvf_9p_hdr(resp, size, P9_RVERSION, tag);
-      ant_hvf_store32(resp + 7, msize < 8192 ? msize : 8192);
+      ant_hvf_store32(resp + 7, msize < ANT_HVF_9P_MSIZE ? msize : ANT_HVF_9P_MSIZE);
       ant_hvf_store16(resp + 11, vlen);
       memcpy(resp + 13, req + 13, vlen);
       return size;
@@ -2080,7 +2082,7 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       if (open_rc != 0) return ant_hvf_9p_error(resp, tag, ENOENT);
       ant_hvf_9p_hdr(resp, 24, P9_RLOPEN, tag);
       ant_hvf_9p_qid(resp + 7, S_ISDIR(st.st_mode), f->path);
-      ant_hvf_store32(resp + 20, 8192);
+      ant_hvf_store32(resp + 20, ANT_HVF_9P_IOUNIT);
       return 24;
     case P9_TREAD: {
       if (req_len < 23) return ant_hvf_9p_error(resp, tag, EINVAL);
@@ -2217,8 +2219,8 @@ static int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) 
     if (rc != 0) return rc;
     uint16_t head = ant_hvf_load16(head_raw);
 
-    unsigned char req[8192];
-    unsigned char resp[8192];
+    unsigned char req[ANT_HVF_9P_MSIZE];
+    unsigned char resp[ANT_HVF_9P_MSIZE];
     ant_hvf_iov_t writes[8];
     size_t req_len = 0;
     size_t writes_len = 0;
