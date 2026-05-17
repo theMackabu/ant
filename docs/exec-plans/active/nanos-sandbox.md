@@ -218,6 +218,14 @@ Nanos checkout, writes `ant.version` from `meson/ant.version`, and uploads both
 stable `nanos-kernel-<arch>` and versioned
 `nanos-kernel-<arch>-<ant.version>` artifacts.
 
+Local build outputs should stay boring and singular:
+
+- `nanos/out/<arch>/ant-sandbox-<arch>.img`
+- `nanos/out/<arch>/ant-kernel-<arch>.img`
+
+Do not add parallel stable/versioned local image names. Version isolation belongs
+in the runtime cache directory, not in `nanos/out`.
+
 The default `ant sandbox script.js` mount is image manifest `%0:/workspace`
 paired with a host 9p mount tag of `0`. This matches Nanos's virtio-9p attach
 ID handling (`virtfs0`) and keeps the image generic: the host supplies whatever

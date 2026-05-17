@@ -13,6 +13,8 @@ options:
       target architecture. defaults to native.
   --no-cache
       pass --no-cache to docker build.
+  --skip-docker
+      reuse nanos/out/<arch>/binary/ant and only rebuild the Nanos image.
   -h, --help
       show this help.
 USAGE
@@ -31,6 +33,7 @@ trap cleanup EXIT
 
 arch=native
 docker_no_cache=()
+skip_docker=false
 nanos_src="$nanos_cache_dir/nanos"
 nanos_url=${NANOS_URL:-https://github.com/nanovms/nanos.git}
 
@@ -42,6 +45,10 @@ while (($#)); do
       ;;
     --no-cache)
       docker_no_cache=(--no-cache)
+      shift
+      ;;
+    --skip-docker)
+      skip_docker=true
       shift
       ;;
     -h|--help)
@@ -92,12 +99,14 @@ esac
 
 out_dir="$repo_root/nanos/out/$arch"
 binary_dir="$out_dir/binary"
-image_out="$out_dir/ant-sandbox.img"
 
 case "$arch" in
   aarch64) cache_arch=aarch64 ;;
   x64) cache_arch=x64 ;;
 esac
+
+image_out="$out_dir/ant-sandbox-${cache_arch}.img"
+kernel_out="$out_dir/ant-kernel-${cache_arch}.img"
 if [[ -n "${BUILD_TIMESTAMP:-}" ]]; then
   build_timestamp=$BUILD_TIMESTAMP
 else
@@ -116,8 +125,8 @@ if [[ -z "$ant_base_version" ]]; then
   exit 1
 fi
 
-ant_version="${ant_base_version}.${build_timestamp}-g${build_git_hash}"
-safe_version=${ant_version//[^A-Za-z0-9._-]/-}
+sandbox_version="$ant_base_version"
+safe_version=${sandbox_version//[^A-Za-z0-9._-]/-}
 
 if [[ -d "$HOME/.ant" ]]; then
   sandbox_cache_root="$HOME/.ant/sandbox"
@@ -160,35 +169,40 @@ else
   nanos_cc=${NANOS_CC:-cc}
 fi
 
-if docker buildx version >/dev/null 2>&1; then
-  docker_build=(docker buildx build)
-else
-  docker_build=(docker build)
-fi
-
 mkdir -p "$nanos_cache_dir" "$binary_dir" "$out_dir"
-rm -rf "$binary_dir"
-mkdir -p "$binary_dir"
 
-echo "==> building Ant musl binary for $arch with Docker ($docker_platform)"
-"${docker_build[@]}" \
-  --platform "$docker_platform" \
-  "${docker_no_cache[@]}" \
-  --build-arg "BUILD_TIMESTAMP=$build_timestamp" \
-  --build-arg "BUILD_GIT_HASH=$build_git_hash" \
-  --build-arg "ZIG_VERSION=$zig_version" \
-  --build-arg "ZLIB_VERSION=$zlib_version" \
-  --output "type=local,dest=$binary_dir" \
-  -f "$repo_root/nanos/Dockerfile" \
-  "$repo_root"
+if [[ "$skip_docker" == true ]]; then
+  echo "==> reusing Ant musl binary for $arch"
+  if [[ ! -x "$binary_dir/ant" ]]; then
+    echo "missing $binary_dir/ant; rerun without --skip-docker first" >&2
+    exit 1
+  fi
+else
+  if docker buildx version >/dev/null 2>&1; then
+    docker_build=(docker buildx build)
+  else
+    docker_build=(docker build)
+  fi
+
+  rm -rf "$binary_dir"
+  mkdir -p "$binary_dir"
+
+  echo "==> building Ant musl binary for $arch with Docker ($docker_platform)"
+  "${docker_build[@]}" \
+    --platform "$docker_platform" \
+    "${docker_no_cache[@]}" \
+    --build-arg "BUILD_TIMESTAMP=$build_timestamp" \
+    --build-arg "BUILD_GIT_HASH=$build_git_hash" \
+    --build-arg "ZIG_VERSION=$zig_version" \
+    --build-arg "ZLIB_VERSION=$zlib_version" \
+    --output "type=local,dest=$binary_dir" \
+    -f "$repo_root/nanos/Dockerfile" \
+    "$repo_root"
+fi
 
 chmod +x "$binary_dir/ant"
 
-versioned_image_out="$out_dir/ant-sandbox-${safe_version}.img"
-kernel_out="$out_dir/nanos-kernel.img"
-versioned_kernel_out="$out_dir/nanos-kernel-${safe_version}.img"
-
-echo "==> ant version $ant_version"
+echo "==> ant version $sandbox_version"
 if command -v file >/dev/null 2>&1; then
   file "$binary_dir/ant"
 else
@@ -202,6 +216,7 @@ if [[ ! -d "$nanos_src/.git" ]]; then
   git clone "$nanos_url" "$nanos_src"
 fi
 
+patch_inputs=("$repo_root"/nanos/patches/*.patch)
 for patch in "$repo_root"/nanos/patches/*.patch; do
   if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
     git -C "$nanos_src" apply "$patch"
@@ -213,29 +228,52 @@ for patch in "$repo_root"/nanos/patches/*.patch; do
   fi
 done
 
-make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" kernel
 nanos_kernel="$nanos_src/output/platform/$nanos_platform/bin/kernel.img"
+nanos_kernel_stamp="$nanos_cache_dir/kernel-${cache_arch}.stamp"
+nanos_revision=$(git -C "$nanos_src" rev-parse HEAD)
+patch_signature=$(shasum -a 256 "${patch_inputs[@]}" | shasum -a 256 | awk '{print $1}')
+compiler_signature=$("$nanos_cc" --version 2>/dev/null | head -n 1 || printf '%s' "$nanos_cc")
+kernel_signature=$(
+  printf 'nanos=%s\n' "$nanos_revision"
+  printf 'patches=%s\n' "$patch_signature"
+  printf 'platform=%s\n' "$nanos_platform"
+  printf 'arch=%s\n' "$nanos_arch"
+  printf 'cc=%s\n' "$compiler_signature"
+)
+
+if [[ -f "$nanos_kernel" && -f "$nanos_kernel_stamp" ]] &&
+   [[ "$(cat "$nanos_kernel_stamp")" == "$kernel_signature" ]]; then
+  echo "==> reusing patched Nanos kernel for $nanos_platform/$nanos_arch"
+elif [[ -f "$nanos_kernel" && ! -f "$nanos_kernel_stamp" ]]; then
+  echo "==> reusing existing patched Nanos kernel for $nanos_platform/$nanos_arch"
+  printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
+else
+  make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" kernel
+  printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
+fi
+
 if [[ ! -f "$nanos_kernel" ]]; then
   echo "Nanos kernel build did not create $nanos_kernel" >&2
   exit 1
 fi
 
-case "$arch" in
-  aarch64) ops_kernel="$nanos_cache_dir/ant-kernel-arm.img" ;;
-  x64) ops_kernel="$nanos_cache_dir/ant-kernel-x64.img" ;;
-esac
-cp "$nanos_kernel" "$ops_kernel"
+cp "$nanos_kernel" "$kernel_out"
 
 echo "==> building Nanos image $image"
 sandbox_config_dir=$(mktemp -d "$nanos_cache_dir/ops-config.XXXXXX")
 ops_state="$sandbox_config_dir/.ops"
 mkdir -p "$ops_state/images"
+case "$arch" in
+  aarch64) ops_kernel="$sandbox_config_dir/ant-kernel-arm.img" ;;
+  x64) ops_kernel="$sandbox_config_dir/ant-kernel-x64.img" ;;
+esac
+cp "$kernel_out" "$ops_kernel"
 
 sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
 cat > "$sandbox_ops_config" <<JSON
 {
   "Kernel": "$ops_kernel",
-  "NanosVersion": "$ant_version"
+  "NanosVersion": "$sandbox_version"
 }
 JSON
 
@@ -261,16 +299,19 @@ else
   exit 1
 fi
 
-cp "$image_out" "$versioned_image_out"
-cp "$nanos_kernel" "$kernel_out"
-cp "$kernel_out" "$versioned_kernel_out"
+find "$out_dir" -maxdepth 1 -type f \( \
+  -name 'ant-sandbox.img' -o \
+  -name 'ant-sandbox-[0-9]*.img' -o \
+  -name 'nanos-kernel*.img' \
+\) -delete
+rm -f "$nanos_cache_dir/ant-kernel-arm.img" "$nanos_cache_dir/ant-kernel-x64.img"
 
 echo "==> wrote:"
-ls -lh "$binary_dir/ant" "$image_out" "$versioned_image_out" "$kernel_out" "$versioned_kernel_out"
+ls -lh "$binary_dir/ant" "$image_out" "$kernel_out"
 
 mkdir -p "$sandbox_cache_dir"
 cp "$image_out" "$sandbox_cache_image"
-cp "$nanos_kernel" "$sandbox_cache_kernel"
+cp "$kernel_out" "$sandbox_cache_kernel"
 
 echo "==> cached sandbox assets:"
 ls -lh "$sandbox_cache_image" "$sandbox_cache_kernel"
