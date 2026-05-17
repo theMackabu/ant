@@ -3,12 +3,16 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "sandbox/transport.h"
+#include "sandbox/vm.h"
 #include <Hypervisor/Hypervisor.h>
-#include <dispatch/dispatch.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -16,13 +20,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
-#include <vmnet/vmnet.h>
-#include <xpc/xpc.h>
 
 #if defined(__aarch64__)
 
@@ -105,6 +108,8 @@
 #define ANT_VIRTIO_NET_HDR_LEN 12u
 #define ANT_HVF_NET_MAX_PACKET 2048u
 #define ANT_HVF_NET_RX_BACKLOG 64u
+#define ANT_HVF_NET_TCP_MAX 256u
+#define ANT_HVF_NET_HOST_RING 1024u
 #define ANT_VIRTIO_NET_RX_QUEUE 0u
 #define ANT_VIRTIO_NET_TX_QUEUE 1u
 #define ANT_VIRTIO_NET_QUEUE_COUNT 2u
@@ -322,6 +327,8 @@ typedef struct {
   unsigned char data[ANT_HVF_NET_MAX_PACKET];
 } ant_hvf_net_packet_t;
 
+typedef struct ant_hvf_nat ant_hvf_nat_t;
+
 typedef struct {
   void *host_mem;
   size_t mem_size;
@@ -334,16 +341,19 @@ typedef struct {
   ant_hvf_virtio_device_t net;
   bool net_enabled;
   bool net_started;
-  interface_ref net_iface;
-  dispatch_queue_t net_event_queue;
+  ant_hvf_nat_t *net_nat;
   pthread_mutex_t net_lock;
   bool net_lock_init;
   bool net_rx_wake;
   uint8_t net_mac[6];
+  uint8_t net_guest_mac[6];
+  bool net_guest_mac_seen;
   uint32_t net_max_packet_size;
   uint32_t net_rx_head;
   uint32_t net_rx_count;
   ant_hvf_net_packet_t net_rx_packets[ANT_HVF_NET_RX_BACKLOG];
+  const ant_sandbox_port_forward_t *net_forwards;
+  size_t net_forward_count;
   ant_hvf_9p_device_t p9[1];
   ant_hvf_vsock_device_t vsock;
   uint8_t uart_buf[4096];
@@ -550,8 +560,6 @@ int ant_hvf_vring_write_chain(ant_hvf_vm_t *vm,
                                      uint32_t len,
                                      uint32_t *used_len);
 void ant_hvf_net_note_rx(ant_hvf_vm_t *vm);
-void ant_hvf_net_read_available(ant_hvf_vm_t *vm);
-bool ant_hvf_parse_mac(const char *mac, uint8_t out[6]);
 int ant_hvf_net_start(ant_hvf_vm_t *vm);
 void ant_hvf_net_stop(ant_hvf_vm_t *vm);
 int ant_hvf_virtio_blk_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev);

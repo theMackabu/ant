@@ -273,7 +273,10 @@ sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
 cat > "$sandbox_ops_config" <<JSON
 {
   "Kernel": "$ops_kernel",
-  "NanosVersion": "$sandbox_version"
+  "NanosVersion": "$sandbox_version",
+  "Env": {
+    "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+  }
 }
 JSON
 

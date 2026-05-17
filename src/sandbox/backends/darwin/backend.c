@@ -128,7 +128,9 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   vm.mem_size = ant_align_page(vm.mem_size);
   vm.image_fd = -1;
   vm.image_sectors = (uint64_t)image_size / 512ull;
-  vm.net_enabled = getenv("ANT_SANDBOX_VM_NET") != NULL;
+  vm.net_enabled = config->network_enabled;
+  vm.net_forwards = config->forwards;
+  vm.net_forward_count = config->forward_count;
   ant_hvf_virtio_init(&vm.blk,
                       ANT_HVF_VIRTIO_KIND_BLOCK,
                       "virtio-blk",

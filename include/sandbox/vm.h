@@ -2,6 +2,13 @@
 #define ANT_SANDBOX_VM_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct {
+  uint16_t host_port;
+  uint16_t guest_port;
+} ant_sandbox_port_forward_t;
 
 typedef struct {
   const char *image_path;
@@ -10,6 +17,9 @@ typedef struct {
   const char *shared_dir_path;
   const char *shared_dir_tag;
   bool shared_dir_readonly;
+  bool network_enabled;
+  const ant_sandbox_port_forward_t *forwards;
+  size_t forward_count;
   unsigned int cpu_count;
   unsigned long long memory_size;
   unsigned int timeout_ms;
