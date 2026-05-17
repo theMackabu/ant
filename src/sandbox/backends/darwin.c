@@ -1850,6 +1850,10 @@ static int ant_hvf_9p_walk(ant_hvf_9p_device_t *dev, const char *base, const cha
   return ant_hvf_9p_stat(dev, out, &st);
 }
 
+static bool ant_hvf_9p_trace_paths(void) {
+  return getenv("ANT_SANDBOX_VM_TRACE_9P_PATHS") != NULL;
+}
+
 static int ant_hvf_9p_read_chain(ant_hvf_vm_t *vm,
                                  uint64_t desc_base,
                                  uint16_t head,
@@ -1967,6 +1971,14 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
         off += nlen;
         char next[ANT_HVF_9P_PATH_MAX];
         int rc = ant_hvf_9p_walk(dev, path, name, next, sizeof(next));
+        if (ant_hvf_9p_trace_paths()) {
+          fprintf(stderr,
+                  "sandbox vm: 9p walk base=%s name=%s rc=%d next=%s\n",
+                  path[0] ? path : ".",
+                  name,
+                  rc,
+                  rc == 0 && next[0] ? next : (rc == 0 ? "." : "-"));
+        }
         if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
         snprintf(path, sizeof(path), "%s", next);
         struct stat st;
@@ -1988,6 +2000,12 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       struct stat st;
       int rc = ant_hvf_9p_stat(dev, f->path, &st);
+      if (ant_hvf_9p_trace_paths()) {
+        fprintf(stderr,
+                "sandbox vm: 9p getattr path=%s rc=%d\n",
+                f->path[0] ? f->path : ".",
+                rc);
+      }
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
       ant_hvf_9p_hdr(resp, 143, P9_RGETATTR, tag);
       ant_hvf_store64(resp + 7, P9_GETATTR_BASIC);
@@ -2016,7 +2034,14 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       f = ant_hvf_9p_fid(dev, fid);
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       struct stat st;
-      if (ant_hvf_9p_stat(dev, f->path, &st) != 0) return ant_hvf_9p_error(resp, tag, ENOENT);
+      int open_rc = ant_hvf_9p_stat(dev, f->path, &st);
+      if (ant_hvf_9p_trace_paths()) {
+        fprintf(stderr,
+                "sandbox vm: 9p lopen path=%s rc=%d\n",
+                f->path[0] ? f->path : ".",
+                open_rc);
+      }
+      if (open_rc != 0) return ant_hvf_9p_error(resp, tag, ENOENT);
       ant_hvf_9p_hdr(resp, 24, P9_RLOPEN, tag);
       ant_hvf_9p_qid(resp + 7, S_ISDIR(st.st_mode), f->path);
       ant_hvf_store32(resp + 20, 8192);
@@ -2036,6 +2061,14 @@ static uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       int fd = open(host, O_RDONLY);
       if (fd < 0) return ant_hvf_9p_error(resp, tag, (uint32_t)errno);
       ssize_t n = pread(fd, resp + 11, count, (off_t)offset);
+      if (ant_hvf_9p_trace_paths()) {
+        fprintf(stderr,
+                "sandbox vm: 9p read path=%s offset=%llu count=%u got=%zd\n",
+                f->path[0] ? f->path : ".",
+                (unsigned long long)offset,
+                count,
+                n);
+      }
       if (n < 0) {
         uint32_t e = (uint32_t)errno;
         close(fd);

@@ -114,14 +114,39 @@ Example request:
 Start with a one-shot protocol:
 
 1. Host launches the VM.
-2. Guest daemon reads one request.
+2. Guest daemon connects to the host sandbox service.
 3. Guest executes it.
 4. Guest returns result and exits the VM.
 
-For the first working native VMM path, use NDJSON over virtio-vsock for the
-request/control channel. The guest daemon connects to host CID `2`, port
-`1024`, reads one newline-delimited JSON request, executes it, and exits. 9p
-remains the workspace file transport.
+Use length-prefixed frames over virtio-vsock for the sandbox protocol, not
+newline-delimited JSON and not request files. Each frame starts with a fixed-size
+length prefix followed by a JSON payload. This keeps newlines, stack traces, and
+future multi-line values unambiguous while staying simple to debug. 9p remains
+the workspace file transport.
+
+Initial frame types:
+
+```json
+{"type":"run","cwd":"/workspace","entry":"script.js","argv":[]}
+{"type":"eval","cwd":"/workspace","source":"export default 1 + 1"}
+{"type":"stdout","data":"hello\n"}
+{"type":"stderr","data":"warning\n"}
+{"type":"result","value":2}
+{"type":"error","name":"TypeError","message":"...","stack":"..."}
+{"type":"exit","code":0}
+```
+
+Normal sandbox stdout/stderr should travel over the framed guest daemon
+protocol, not over the emulated machine console. Keep PL011/console attached
+only for boot logs, kernel panics, daemon startup failures, and low-level
+diagnostics.
+
+TTY/color behavior should become an explicit sandbox protocol capability. The
+current PL011 path makes guest `process.stdout.isTTY` false, so ordinary
+`console.log` output does not use colors even though some error-reporting paths
+still print ANSI styling directly. Once stdout/stderr are daemon frames, the
+host should decide whether to advertise TTY/color support, preserve ANSI,
+strip ANSI, or force color behavior for terminal-attached sandbox runs.
 
 For `Sandbox` instances, evolve to a persistent JSON-RPC-like protocol over the
 same stream transport:
@@ -130,10 +155,10 @@ same stream transport:
 - `run`
 - `close`
 - stdout/stderr frames
-- result/error frames
+- result/error/exit frames
 
-For pure `eval`, virtio-serial alone can carry the source and result. For
-`script.js` with local imports/assets, use the mount model above.
+For pure `eval`, the same framed vsock protocol carries the source and result.
+For `script.js` with local imports/assets, use the mount model above.
 
 ## Backend Contract
 
@@ -142,17 +167,16 @@ using platform-specific guest conventions:
 
 - load the cached Nanos kernel
 - attach the cached Ant/Nanos disk image as virtio-blk
-- provide console output in a Nanos-compatible way
-- provide one request transport for JSON frames
+- provide console output in a Nanos-compatible way for debug/failure output
+- provide one request/result/stdout/stderr transport for framed JSON messages
 - optionally provide a Nanos-compatible file mount for `/workspace`
 
 The current common denominators are:
 
-- request: virtio-vsock NDJSON, with 9p request-file fallback only as a bringup
-  aid
+- request/results/stdout/stderr: length-prefixed virtio-vsock frames
 - files: virtio-9p for the default read-only cwd mount, or an attached input
   volume when a backend cannot provide 9p yet
-- output: guest console/stdout
+- debug output: guest console/PL011
 
 Avoid image patching, temp-image argument rewrites, TCP control channels, host
 request files, and stdin probing as the default model. The daemon should only
@@ -267,8 +291,8 @@ Still missing from the macOS backend:
 - reliable timer and device interrupt delivery through Hypervisor.framework's GIC
 - a real host network backend for virtio-net RX/TX instead of drop-complete TX
 - virtio-9p or another Nanos-compatible attached input volume for `/workspace`
-- virtio-vsock request/control transport
-- structured stdout/stderr/result framing back to the host CLI
+- length-prefixed virtio-vsock frames for request/control/stdout/stderr/results
+- routing normal guest stdout/stderr through the daemon protocol instead of PL011
 
 ## Open Questions
 
