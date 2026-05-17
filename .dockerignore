@@ -29,6 +29,7 @@
 /game-of-life
 
 node_modules
+**/node_modules
 !/tests/node_modules
 
 /wpt
@@ -52,5 +53,6 @@ docs/reports/.wrangler
 docs/reports/node_modules
 nanos/build-sandbox.sh
 nanos/out
+nanos/.cache
 ant-sandbox.img
 **/.DS_Store

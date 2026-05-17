@@ -119,10 +119,11 @@ Start with a one-shot protocol:
 4. Guest returns result and exits the VM.
 
 Use length-prefixed frames over virtio-vsock for the sandbox protocol, not
-newline-delimited JSON and not request files. Each frame starts with a fixed-size
-length prefix followed by a JSON payload. This keeps newlines, stack traces, and
-future multi-line values unambiguous while staying simple to debug. 9p remains
-the workspace file transport.
+newline-delimited JSON and not request files. JSON payloads are acceptable for
+the first bring-up, but they should not become the permanent ABI. The long-term
+transport should be a compact custom serializable binary stream with typed
+frames for requests, stdout/stderr chunks, results, errors, and exits. 9p
+remains the workspace file transport.
 
 Initial frame types:
 
@@ -148,8 +149,8 @@ still print ANSI styling directly. Once stdout/stderr are daemon frames, the
 host should decide whether to advertise TTY/color support, preserve ANSI,
 strip ANSI, or force color behavior for terminal-attached sandbox runs.
 
-For `Sandbox` instances, evolve to a persistent JSON-RPC-like protocol over the
-same stream transport:
+For `Sandbox` instances, evolve to a persistent request/response protocol over
+the same binary stream transport:
 
 - `eval`
 - `run`
@@ -190,10 +191,17 @@ Nanos image already understands.
 
 The local builder and host CLI use the Ant sandbox cache:
 
-- If legacy `~/.ant` exists: `~/.ant/sandbox/`
-- Otherwise: `$XDG_CACHE_HOME/ant/sandbox/` or `~/.cache/ant/sandbox/`
+- If legacy `~/.ant` exists: `~/.ant/sandbox/<ant-version>/`
+- Otherwise: `$XDG_CACHE_HOME/ant/sandbox/<ant-version>/` or
+  `~/.cache/ant/sandbox/<ant-version>/`
 - `ant-sandbox-<arch>.img`
-- `nanos-kernel-<arch>.img`
+- `ant-kernel-<arch>.img`
+
+Local build scratch state stays inside the repository under `nanos/.cache/`:
+
+- `nanos/.cache/nanos/` for the patched Nanos checkout and kernel build.
+- `nanos/.cache/ops-config.*` for the transient ops HOME/config used while
+  composing the sandbox image.
 
 The image manifest must include this generic mount ID:
 
@@ -201,8 +209,14 @@ The image manifest must include this generic mount ID:
 
 Current local filenames:
 
-- `ant-sandbox-arm64.img`
-- `nanos-kernel-arm64.img`
+- `ant-sandbox-aarch64.img`
+- `ant-kernel-aarch64.img`
+
+CI builds the patched kernel with `.github/workflows/build-nanos-kernel.yml`.
+That workflow is manually runnable, applies `nanos/patches/*.patch` to a fresh
+Nanos checkout, writes `ant.version` from `meson/ant.version`, and uploads both
+stable `nanos-kernel-<arch>` and versioned
+`nanos-kernel-<arch>-<ant.version>` artifacts.
 
 The default `ant sandbox script.js` mount is image manifest `%0:/workspace`
 paired with a host 9p mount tag of `0`. This matches Nanos's virtio-9p attach
@@ -223,10 +237,10 @@ request JSON. Possible directions:
 - Patch or upstream Nanos support for dynamically attaching virtio-9p mounts at
   caller-selected guest paths, if that proves practical.
 
-`nanos/build-sandbox.sh` copies the freshly built image and matching Ops/Nanos
-kernel into this cache. `ant sandbox <script>` reads from the same cache and can
-seed it from `nanos/out/<arch>/ant-sandbox.img` plus `~/.ops/.../kernel.img`
-during local development.
+`nanos/build-sandbox.sh` copies the freshly built image and matching locally
+compiled Nanos kernel into the full Ant-version cache directory. `ant sandbox
+<script>` reads only from that same versioned cache unless
+`ANT_SANDBOX_IMAGE` or `ANT_SANDBOX_KERNEL` explicitly points at an override.
 
 ## Native VMM Notes
 
@@ -273,7 +287,7 @@ Hypervisor.framework directly. References cloned for this work:
 The backend currently uses Hypervisor.framework directly to create the VM, map
 guest RAM, create the GIC/vCPU, load the cached Nanos kernel, provide a boot
 FDT, and emulate enough UART/RTC/PCI/legacy virtio-blk surface to start booting
-the cached image from `~/.ant/sandbox`. The current local run reaches Nanos
+the cached image from `~/.ant/sandbox/<ant-version>`. The current local run reaches Nanos
 guest output and services virtio-blk reads from the cached image. The PCI
 enumeration bug was slot 0 reporting header type
 `0xff`, which made Nanos take the multi-host-controller path and skip normal bus

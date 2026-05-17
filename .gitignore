@@ -16,7 +16,9 @@
 /result
 /result-*
 /todo/*
+
 /nanos/out
+/nanos/.cache
 
 /src/pkg/.zig-cache
 /src/strip/target

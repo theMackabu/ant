@@ -6,15 +6,11 @@ usage() {
 usage: nanos/build-sandbox.sh [options]
 
 build a local Linux musl Ant binary in Alpine Docker, then build a Nanos
-sandbox image with ops.
+sandbox image with ops and a patched local Nanos kernel.
 
 options:
   --arch <native|x64|amd64|aarch64|arm64>
       target architecture. defaults to native.
-  --image <name>
-      ops image name. defaults to ant-sandbox-x64 or ant-sandbox-aarch64.
-  --out <dir>
-      output directory. defaults to nanos/out/<arch>.
   --no-cache
       pass --no-cache to docker build.
   -h, --help
@@ -24,32 +20,24 @@ USAGE
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
+nanos_cache_dir="$script_dir/.cache"
 sandbox_config_dir=
+real_home=${HOME:?}
 
 cleanup() {
-  if [[ -n "${sandbox_config_dir:-}" ]]; then
-    rm -rf "$sandbox_config_dir"
-  fi
+  if [[ -n "${sandbox_config_dir:-}" ]]; then rm -rf "$sandbox_config_dir"; fi
 }
 trap cleanup EXIT
 
 arch=native
-image=
-out_dir=
 docker_no_cache=()
+nanos_src="$nanos_cache_dir/nanos"
+nanos_url=${NANOS_URL:-https://github.com/nanovms/nanos.git}
 
 while (($#)); do
   case "$1" in
     --arch)
       arch=${2:-}
-      shift 2
-      ;;
-    --image)
-      image=${2:-}
-      shift 2
-      ;;
-    --out)
-      out_dir=${2:-}
       shift 2
       ;;
     --no-cache)
@@ -84,13 +72,17 @@ case "$arch" in
     arch=x64
     docker_platform=linux/amd64
     ops_arch=amd64
-    image=${image:-ant-sandbox-x64}
+    nanos_platform=pc
+    nanos_arch=x86_64
+    image=ant-sandbox-x64
     ;;
   aarch64|arm64)
     arch=aarch64
     docker_platform=linux/arm64
     ops_arch=arm64
-    image=${image:-ant-sandbox-aarch64}
+    nanos_platform=virt
+    nanos_arch=aarch64
+    image=ant-sandbox-aarch64
     ;;
   *)
     echo "unsupported architecture: $arch" >&2
@@ -98,37 +90,45 @@ case "$arch" in
     ;;
 esac
 
-out_dir=${out_dir:-"$repo_root/nanos/out/$arch"}
+out_dir="$repo_root/nanos/out/$arch"
 binary_dir="$out_dir/binary"
 image_out="$out_dir/ant-sandbox.img"
+
 case "$arch" in
-  aarch64) cache_arch=arm64 ;;
+  aarch64) cache_arch=aarch64 ;;
   x64) cache_arch=x64 ;;
 esac
-
-if [[ -d "$HOME/.ant" ]]; then
-  sandbox_cache_dir="$HOME/.ant/sandbox"
-else
-  sandbox_cache_base="${XDG_CACHE_HOME:-$HOME/.cache}"
-  sandbox_cache_dir="$sandbox_cache_base/ant/sandbox"
-fi
-sandbox_cache_image="$sandbox_cache_dir/ant-sandbox-${cache_arch}.img"
-sandbox_cache_kernel="$sandbox_cache_dir/nanos-kernel-${cache_arch}.img"
 if [[ -n "${BUILD_TIMESTAMP:-}" ]]; then
   build_timestamp=$BUILD_TIMESTAMP
-elif git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  build_timestamp=$(git -C "$repo_root" log -1 --format=%ct)
 else
-  build_timestamp=0
+  build_timestamp=$(git -C "$repo_root" log -1 --format=%ct)
 fi
 
 if [[ -n "${BUILD_GIT_HASH:-}" ]]; then
   build_git_hash=$BUILD_GIT_HASH
-elif git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  build_git_hash=$(git -C "$repo_root" rev-parse --short HEAD)
 else
-  build_git_hash=unknown
+  build_git_hash=$(git -C "$repo_root" rev-parse --short HEAD)
 fi
+
+ant_base_version=$(tr -d '[:space:]' < "$repo_root/meson/ant.version")
+if [[ -z "$ant_base_version" ]]; then
+  echo "meson/ant.version is empty" >&2
+  exit 1
+fi
+
+ant_version="${ant_base_version}.${build_timestamp}-g${build_git_hash}"
+safe_version=${ant_version//[^A-Za-z0-9._-]/-}
+
+if [[ -d "$HOME/.ant" ]]; then
+  sandbox_cache_root="$HOME/.ant/sandbox"
+else
+  sandbox_cache_base="${XDG_CACHE_HOME:-$HOME/.cache}"
+  sandbox_cache_root="$sandbox_cache_base/ant/sandbox"
+fi
+
+sandbox_cache_dir="$sandbox_cache_root/$safe_version"
+sandbox_cache_image="$sandbox_cache_dir/ant-sandbox-${cache_arch}.img"
+sandbox_cache_kernel="$sandbox_cache_dir/ant-kernel-${cache_arch}.img"
 
 zig_version=${ZIG_VERSION:-}
 zlib_version=${ZLIB_VERSION:-}
@@ -145,11 +145,19 @@ fi
 
 if command -v ops >/dev/null 2>&1; then
   ops_cmd=$(command -v ops)
-elif [[ -x "$HOME/.ops/bin/ops" ]]; then
-  ops_cmd="$HOME/.ops/bin/ops"
+elif [[ -x "$real_home/.ops/bin/ops" ]]; then
+  ops_cmd="$real_home/.ops/bin/ops"
 else
   echo "ops not found. Install ops first, then rerun this script." >&2
   exit 1
+fi
+
+if [[ "$(uname -s)" == "Darwin" && -x /usr/bin/clang ]]; then
+  nanos_cc=${NANOS_CC:-/usr/bin/clang}
+elif command -v clang >/dev/null 2>&1; then
+  nanos_cc=${NANOS_CC:-$(command -v clang)}
+else
+  nanos_cc=${NANOS_CC:-cc}
 fi
 
 if docker buildx version >/dev/null 2>&1; then
@@ -158,11 +166,11 @@ else
   docker_build=(docker build)
 fi
 
-mkdir -p "$binary_dir" "$out_dir"
+mkdir -p "$nanos_cache_dir" "$binary_dir" "$out_dir"
 rm -rf "$binary_dir"
 mkdir -p "$binary_dir"
 
-echo "==> Building Ant musl binary for $arch with Docker ($docker_platform)"
+echo "==> building Ant musl binary for $arch with Docker ($docker_platform)"
 "${docker_build[@]}" \
   --platform "$docker_platform" \
   "${docker_no_cache[@]}" \
@@ -175,59 +183,59 @@ echo "==> Building Ant musl binary for $arch with Docker ($docker_platform)"
   "$repo_root"
 
 chmod +x "$binary_dir/ant"
+
+versioned_image_out="$out_dir/ant-sandbox-${safe_version}.img"
+kernel_out="$out_dir/nanos-kernel.img"
+versioned_kernel_out="$out_dir/nanos-kernel-${safe_version}.img"
+
+echo "==> ant version $ant_version"
 if command -v file >/dev/null 2>&1; then
   file "$binary_dir/ant"
 else
   ls -lh "$binary_dir/ant"
 fi
 
-echo "==> Ensuring ops runtime for $ops_arch"
-shopt -s nullglob
-if [[ "$ops_arch" == "arm64" ]]; then
-  ops_kernels=("$HOME"/.ops/*-arm/kernel.img)
-else
-  ops_kernels=("$HOME"/.ops/[0-9]*/kernel.img)
-fi
-shopt -u nullglob
+echo "==> building patched Nanos kernel ($nanos_platform/$nanos_arch)"
 
-if (( ${#ops_kernels[@]} > 0 )); then
-  echo "==> Using cached ops runtime ${ops_kernels[0]}"
-elif [[ "$ops_arch" == "arm64" ]]; then
-  "$ops_cmd" update --arm
-else
-  "$ops_cmd" update
+if [[ ! -d "$nanos_src/.git" ]]; then
+  mkdir -p "$(dirname "$nanos_src")"
+  git clone "$nanos_url" "$nanos_src"
 fi
 
-shopt -s nullglob
-if [[ "$ops_arch" == "arm64" ]]; then
-  ops_kernels=("$HOME"/.ops/*-arm/kernel.img)
-else
-  ops_kernels=("$HOME"/.ops/[0-9]*/kernel.img)
-fi
-shopt -u nullglob
+for patch in "$repo_root"/nanos/patches/*.patch; do
+  if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
+    git -C "$nanos_src" apply "$patch"
+  elif git -C "$nanos_src" apply --check -R "$patch" >/dev/null 2>&1; then
+    echo "==> Patch already applied: $(basename "$patch")"
+  else
+    echo "failed to apply or verify Nanos patch: $patch" >&2
+    exit 1
+  fi
+done
 
-if (( ${#ops_kernels[@]} == 0 )); then
-  echo "ops did not create a cached Nanos kernel under $HOME/.ops" >&2
+make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" kernel
+nanos_kernel="$nanos_src/output/platform/$nanos_platform/bin/kernel.img"
+if [[ ! -f "$nanos_kernel" ]]; then
+  echo "Nanos kernel build did not create $nanos_kernel" >&2
   exit 1
 fi
 
-echo "==> Building Nanos image $image"
-sandbox_config_dir=$(mktemp -d "${TMPDIR:-/tmp}/ant-nanos-config.XXXXXX")
-mkdir -p "$sandbox_config_dir/root/workspace"
-: > "$sandbox_config_dir/root/workspace/__ant_mount"
+echo "==> building Nanos image $image"
+sandbox_config_dir=$(mktemp -d "$nanos_cache_dir/ops-config.XXXXXX")
+ops_state="$sandbox_config_dir/.ops"
+mkdir -p "$ops_state/images"
 
 sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
 cat > "$sandbox_ops_config" <<JSON
 {
-  "MapDirs": {
-    "$sandbox_config_dir/root/*": "/"
-  }
+  "Kernel": "$nanos_kernel",
+  "NanosVersion": "$ant_version"
 }
 JSON
 
 (
   cd "$binary_dir"
-  "$ops_cmd" build ./ant \
+  OPS_HOME="$sandbox_config_dir" "$ops_cmd" build ./ant \
     -c "$sandbox_ops_config" \
     -i "$image" \
     --arch="$ops_arch" \
@@ -237,22 +245,26 @@ JSON
     -a "--sandbox-daemon"
 )
 
-if [[ -f "$HOME/.ops/images/${image}.img" ]]; then
-  cp "$HOME/.ops/images/${image}.img" "$image_out"
-elif [[ -f "$HOME/.ops/images/${image}" ]]; then
-  cp "$HOME/.ops/images/${image}" "$image_out"
+if [[ -f "$ops_state/images/${image}.img" ]]; then
+  cp "$ops_state/images/${image}.img" "$image_out"
+elif [[ -f "$ops_state/images/${image}" ]]; then
+  cp "$ops_state/images/${image}" "$image_out"
 else
-  echo "ops did not create $image under $HOME/.ops/images" >&2
-  ls -la "$HOME/.ops/images" >&2 || true
+  echo "ops did not create $image under temporary ops image dir" >&2
+  ls -la "$ops_state/images" >&2 || true
   exit 1
 fi
 
-echo "==> Wrote:"
-ls -lh "$binary_dir/ant" "$image_out"
+cp "$image_out" "$versioned_image_out"
+cp "$nanos_kernel" "$kernel_out"
+cp "$kernel_out" "$versioned_kernel_out"
+
+echo "==> wrote:"
+ls -lh "$binary_dir/ant" "$image_out" "$versioned_image_out" "$kernel_out" "$versioned_kernel_out"
 
 mkdir -p "$sandbox_cache_dir"
 cp "$image_out" "$sandbox_cache_image"
-cp "${ops_kernels[0]}" "$sandbox_cache_kernel"
+cp "$nanos_kernel" "$sandbox_cache_kernel"
 
-echo "==> Cached sandbox assets:"
+echo "==> cached sandbox assets:"
 ls -lh "$sandbox_cache_image" "$sandbox_cache_kernel"

@@ -2699,13 +2699,6 @@ static int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   rc = ant_hvf_init_vcpu(&vm);
   if (rc != 0) goto done;
 
-  fprintf(stderr,
-          "sandbox vm: booting cached Nanos kernel via Hypervisor.framework; image=%s (%lld bytes) kernel=%s (%lld bytes)\n",
-          config->image_path,
-          (long long)image_size,
-          config->kernel_path,
-          (long long)kernel_size);
-
   unsigned int timeout_ms = config->timeout_ms ? config->timeout_ms : 60000;
   const char *timeout_env = getenv("ANT_SANDBOX_VM_TIMEOUT_MS");
   if (timeout_env && timeout_env[0]) timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);

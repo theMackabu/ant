@@ -95,11 +95,14 @@ COPY . /work
 RUN git config --global --add safe.directory /work
 
 ARG TARGETARCH
-ARG BUILD_TIMESTAMP=0
-ARG BUILD_GIT_HASH=unknown
+ARG BUILD_TIMESTAMP
+ARG BUILD_GIT_HASH
 RUN --mount=type=cache,id=ant-nanos-meson-wraps,target=/work/vendor/packagecache,sharing=locked \
     --mount=type=cache,id=ant-nanos-build-${TARGETARCH},target=/work/build,sharing=locked \
+    --mount=type=cache,id=ant-nanos-npm-${TARGETARCH},target=/root/.npm,sharing=locked \
     set -eux; \
+    rm -rf /work/src/tools/node_modules; \
+    npm ci --prefix /work/src/tools; \
     ar_path="$(command -v llvm-ar)"; \
     ranlib_path="$(command -v llvm-ranlib)"; \
     export CC=clang; \
@@ -122,9 +125,8 @@ RUN --mount=type=cache,id=ant-nanos-meson-wraps,target=/work/vendor/packagecache
       --prefer-static \
       -Dstatic_link=true; \
     meson compile -C build; \
-    ./build/ant --version-raw; \
-    llvm-strip --strip-unneeded build/ant; \
     mkdir -p /out; \
+    llvm-strip --strip-unneeded build/ant; \
     cp build/ant /out/ant
 
 FROM scratch AS export
