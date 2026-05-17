@@ -1,0 +1,37 @@
+diff --git a/src/fs/9p.c b/src/fs/9p.c
+index 27c5901..190c464 100644
+--- a/src/fs/9p.c
++++ b/src/fs/9p.c
+@@ -396,12 +396,24 @@ static int p9_readdir(p9fs fs, u32 fid, tuple md)
+                 p9_dentry dentry;
+                 if (t) {
+                     dentry = p9_get_dentry_from_md(fs, t);
++                    if (!dentry) {
++                        t = allocate_tuple();
++                        if (t == INVALID_ADDRESS) {
++                            s = -ENOMEM;
++                            break;
++                        }
++                    }
+                 } else {
+                     t = allocate_tuple();
++                    if (t == INVALID_ADDRESS) {
++                        s = -ENOMEM;
++                        break;
++                    }
+                     dentry = 0;
+                 }
+                 p9_debug("  dir entry '%b', type 0x%x, md %p\n", symbol_string(name_sym),
+                          entry->type, t);
++                set(t, sym(..), md);
+                 if (!dentry) {
+                     dentry = p9_dentry_new(fs, P9_NOFID, entry->qid.path, t);
+                     if (!dentry) {
+@@ -416,7 +428,6 @@ static int p9_readdir(p9fs fs, u32 fid, tuple md)
+                     attr = sym(children);
+                     if (!get(t, attr))
+                         set(t, attr, allocate_tuple());
+-                    set(t, sym(..), md);
+                     break;
+                 case DT_LNK:
+                     attr = sym(linktarget);

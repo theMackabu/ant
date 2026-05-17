@@ -278,6 +278,8 @@ typedef struct {
   bool net_enabled;
   ant_hvf_9p_device_t p9[1];
   ant_hvf_vsock_device_t vsock;
+  uint8_t uart_buf[4096];
+  size_t uart_len;
   bool trace;
   bool timed_out;
   uint64_t cntfrq;
@@ -287,6 +289,25 @@ typedef struct {
   uint64_t last_exit_ipa;
   uint64_t last_exit_va;
 } ant_hvf_vm_t;
+
+static void ant_hvf_uart_flush(ant_hvf_vm_t *vm) {
+  size_t off = 0;
+  while (off < vm->uart_len) {
+    ssize_t n = write(STDOUT_FILENO, vm->uart_buf + off, vm->uart_len - off);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    if (n == 0) break;
+    off += (size_t)n;
+  }
+  vm->uart_len = 0;
+}
+
+static void ant_hvf_uart_put(ant_hvf_vm_t *vm, uint8_t byte) {
+  vm->uart_buf[vm->uart_len++] = byte;
+  if (vm->uart_len == sizeof(vm->uart_buf)) ant_hvf_uart_flush(vm);
+}
 
 typedef struct {
   ant_hvf_vm_t *vm;
@@ -641,6 +662,21 @@ static int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   uint64_t cpu_reg[] = { 0 };
   if ((rc = ant_fdt_prop_reg64(&fdt, "reg", cpu_reg, 1)) != 0) return rc;
   if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+
+  if ((rc = ant_fdt_begin(&fdt, "timer")) != 0) return rc;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,armv8-timer")) != 0) return rc;
+  if ((rc = ant_fdt_prop_null(&fdt, "always-on")) != 0) return rc;
+  if (vm->cntfrq > 0 && vm->cntfrq <= UINT32_MAX) {
+    if ((rc = ant_fdt_prop_u32(&fdt, "clock-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
+  }
+  uint32_t timer_irq[] = {
+    1, 13, 4,
+    1, 14, 4,
+    1, 11, 4,
+    1, 10, 4,
+  };
+  if ((rc = ant_fdt_prop_cells(&fdt, "interrupts", timer_irq, sizeof(timer_irq) / sizeof(timer_irq[0]))) != 0) return rc;
   if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
 
   if ((rc = ant_fdt_begin(&fdt, "memory@40000000")) != 0) return rc;
@@ -2367,8 +2403,7 @@ static bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, ui
 static bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
   (void)size;
   if (addr == ANT_HVF_UART_BASE) {
-    fputc((int)(value & 0xff), stdout);
-    fflush(stdout);
+    ant_hvf_uart_put(vm, (uint8_t)(value & 0xff));
     return true;
   }
   if (addr >= ANT_HVF_RTC_BASE && addr < ANT_HVF_RTC_BASE + 0x1000) return true;
@@ -2676,9 +2711,11 @@ static int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   if (timeout_env && timeout_env[0]) timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
 
   rc = ant_hvf_run(&vm, timeout_ms);
+  ant_hvf_uart_flush(&vm);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");
 
 done:
+  ant_hvf_uart_flush(&vm);
   if (vcpu_created) {
     int destroy_rc = ant_hvf_check(hv_vcpu_destroy(vm.vcpu), "hv_vcpu_destroy");
     if (rc == 0) rc = destroy_rc;

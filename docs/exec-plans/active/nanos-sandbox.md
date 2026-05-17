@@ -281,10 +281,19 @@ enumeration bug was slot 0 reporting header type
 The backend also exposes a minimal legacy virtio-net PCI device at slot 2 with
 `VIRTIO_NET_F_MAC`, RX/TX queues, and drop-complete TX handling. Nanos now
 attaches `en1` and assigns an IPv6 link-local address, proving network device
-discovery works. The next debugging layer is timer wakeup plus the
-request/workspace transport.
+discovery works. HVF does not allow the backend to set `CNTFRQ_EL0`, so the
+generated FDT advertises the host counter through `/timer/clock-frequency` and
+the local Nanos patch reads that value when the architectural register is zero.
+The next debugging layer is the request/workspace transport.
 Meson now ad-hoc signs local Darwin builds with `meson/ant.entitlements` so
 Hypervisor.framework allows `hv_vm_create`.
+
+Current local Nanos patches are saved under `nanos/patches/` so they can be
+replayed or moved into a fork/action later. The low-user-VA patch is intended
+for the Ant sandbox image, not as a casual global Nanos default: it keeps
+aarch64 user pointers below Ant's 47-bit NaN-boxing ceiling while still leaving
+128 TiB of user VA, but it also reduces ASLR/address-space width for any other
+workload.
 
 Still missing from the macOS backend:
 
@@ -293,6 +302,10 @@ Still missing from the macOS backend:
 - virtio-9p or another Nanos-compatible attached input volume for `/workspace`
 - length-prefixed virtio-vsock frames for request/control/stdout/stderr/results
 - routing normal guest stdout/stderr through the daemon protocol instead of PL011
+- a user-facing `ant sandbox --verbose` mode that feels like macOS verbose boot:
+  high-signal boot/device/protocol milestones without raw MMIO/queue spam. The
+  current `ANT_SANDBOX_VM_TRACE` env flag is a temporary bringup aid and should
+  be removed or hidden once the backend stabilizes.
 
 ## Open Questions
 

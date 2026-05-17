@@ -1,0 +1,54 @@
+diff --git a/src/aarch64/clock.c b/src/aarch64/clock.c
+index 8fa4e05..f238ebf 100644
+--- a/src/aarch64/clock.c
++++ b/src/aarch64/clock.c
+@@ -1,14 +1,35 @@
+ #include <kernel.h>
+ #include <gic.h>
++#include <devicetree.h>
+ 
+ #define __vdso_dat (&(VVAR_REF(vdso_dat)))
++#define ARM_GENERIC_TIMER_FALLBACK_FREQ 24000000ull
+ 
+ BSS_RO_AFTER_INIT clock_now platform_monotonic_now;
+ BSS_RO_AFTER_INIT clock_timer platform_timer;
++BSS_RO_AFTER_INIT static u64 arm_cntfrq;
++
++static u64 cntfrq_from_dtb(void)
++{
++    void *dtb = pointer_from_u64(DEVICETREE_BLOB_BASE + kernel_phys_offset);
++    dt_node timer = dtb_find_node_by_path(dtb, ss("/timer"));
++    if (!timer)
++        return 0;
++
++    dt_value v = dt_get_prop_value(dtb, timer, ss("clock-frequency"));
++    if ((v.type == DT_VALUE_FREQ) && v.u.num)
++        return v.u.num;
++
++    v = dt_get_prop_value(dtb, timer, ss("timebase-frequency"));
++    if ((v.type == DT_VALUE_FREQ) && v.u.num)
++        return v.u.num;
++
++    return 0;
++}
+ 
+ static inline u64 cntfrq(void)
+ {
+-    return read_psr(CNTFRQ_EL0);
++    return arm_cntfrq;
+ }
+ 
+ closure_function(0, 0, timestamp, arm_clock_now)
+@@ -37,6 +58,12 @@ BSS_RO_AFTER_INIT closure_struct(arm_timer_percpu_init, _timer_percpu_init);
+ 
+ void init_clock(void)
+ {
++    arm_cntfrq = read_psr(CNTFRQ_EL0);
++    if (!arm_cntfrq)
++        arm_cntfrq = cntfrq_from_dtb();
++    if (!arm_cntfrq)
++        arm_cntfrq = ARM_GENERIC_TIMER_FALLBACK_FREQ;
++
+     register_platform_clock_now(init_closure(&_clock_now, arm_clock_now), VDSO_CLOCK_SYSCALL, 0);
+     register_platform_clock_timer(init_closure_func(&_deadline_timer, clock_timer,
+                                                     arm_deadline_timer),

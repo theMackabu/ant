@@ -1,0 +1,13 @@
+diff --git a/src/unix/unix_internal.h b/src/unix/unix_internal.h
+index c7b489c..cb7256b 100644
+--- a/src/unix/unix_internal.h
++++ b/src/unix/unix_internal.h
+@@ -72,7 +72,7 @@ static inline time_t time_t_from_time(timestamp t)
+ #define PROCESS_VIRTUAL_MMAP_RANGE  (irange(PROCESS_VIRTUAL_HEAP_START, PROCESS_VIRTUAL_HEAP_LIMIT))
+ #define PROCESS_VIRTUAL_32BIT_RANGE (irange(2ull * GB, 4ull * GB))
+ 
+-#define PROCESS_STACK_SIZE          (2 * MB)
++#define PROCESS_STACK_SIZE          (32 * MB)
+ #define PROCESS_STACK_PREALLOC_SIZE PAGESIZE
+ #define PROCESS_STACK_GUARD_GAP     (256 * PAGESIZE)    /* same as default value on Linux */
+ 
