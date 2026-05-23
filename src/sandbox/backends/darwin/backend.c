@@ -131,6 +131,8 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   vm.net_enabled = config->network_enabled;
   vm.net_forwards = config->forwards;
   vm.net_forward_count = config->forward_count;
+  if (config->mount_count == 0 || config->mount_count > ANT_HVF_VIRTIO_9P_MAX) return -EINVAL;
+  vm.p9_count = config->mount_count;
   ant_hvf_virtio_init(&vm.blk,
                       ANT_HVF_VIRTIO_KIND_BLOCK,
                       "virtio-blk",
@@ -173,21 +175,23 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
                       ANT_VIRTIO_VSOCK_QUEUE_SIZE,
                       8);
   vm.vsock.request_json = config->request_json;
-  ant_hvf_virtio_init(&vm.p9[0].virtio,
-                      ANT_HVF_VIRTIO_KIND_9P,
-                      "virtio-9p",
-                      ANT_VIRTIO_PCI_SUBDEVICE_9P,
-                      ANT_VIRTIO_PCI_SUBDEVICE_9P,
-                      ANT_HVF_VIRTIO_9P0_SLOT,
-                      0x01,
-                      0x00,
-                      (uint32_t)ANT_HVF_VIRTIO_9P0_BAR,
-                      ANT_VIRTIO_9P_F_MOUNT_TAG,
-                      1,
-                      ANT_VIRTIO_9P_QUEUE_SIZE,
-                      (uint16_t)(2u + strlen("0")));
-  vm.p9[0].root = config->shared_dir_path;
-  vm.p9[0].tag = "0";
+  for (size_t i = 0; i < vm.p9_count; i++) {
+    ant_hvf_virtio_init(&vm.p9[i].virtio,
+                        ANT_HVF_VIRTIO_KIND_9P,
+                        "virtio-9p",
+                        ANT_VIRTIO_PCI_SUBDEVICE_9P,
+                        ANT_VIRTIO_PCI_SUBDEVICE_9P,
+                        (uint8_t)(ANT_HVF_VIRTIO_9P_SLOT_BASE + i),
+                        0x01,
+                        0x00,
+                        (uint32_t)(ANT_HVF_VIRTIO_9P_BAR_BASE + i * ANT_HVF_VIRTIO_BAR_SIZE),
+                        ANT_VIRTIO_9P_F_MOUNT_TAG,
+                        1,
+                        ANT_VIRTIO_9P_QUEUE_SIZE,
+                        (uint16_t)(2u + strlen(config->mounts[i].tag)));
+    vm.p9[i].root = config->mounts[i].host_path;
+    vm.p9[i].tag = config->mounts[i].tag;
+  }
   vm.cntfrq = ant_hvf_host_cntfrq();
   vm.trace = getenv("ANT_SANDBOX_VM_TRACE") != NULL;
 
@@ -274,6 +278,7 @@ done:
   }
   if (vm.image_fd >= 0) close(vm.image_fd);
   if (vm.host_mem && vm.host_mem != MAP_FAILED) munmap(vm.host_mem, vm.mem_size);
+  for (size_t i = 0; i < vm.p9_count; i++) free(vm.p9[i].fids);
   if (vm.net_lock_init) pthread_mutex_destroy(&vm.net_lock);
   return rc;
 }

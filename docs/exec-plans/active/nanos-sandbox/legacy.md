@@ -92,30 +92,6 @@ pieces are intentionally minimal and should not be treated as finished APIs:
 - The backend is Apple Silicon only. The non-aarch64 Darwin path is a hard
   `ENOSYS` stub.
 
-## Image Layout Cleanup
-
-The direct `ops build` MBR image is not the final shipped artifact. It includes
-a mostly empty fixed Nanos/kernel partition that costs about 12 MiB.
-
-The final sandbox image should remain the shrunk raw-root TFS image paired with
-the matching patched Nanos kernel.
-
-Avoid local output variants such as stable plus versioned copies in `nanos/out`.
-Keep one local filename per arch and put version isolation in the runtime cache.
-
-## ops Quirk Cleanup
-
-The local image builder still works around ops behavior while composing the
-image. Any workaround that depends on ops filename arch detection or transient
-ops state should stay isolated to the build script and should not leak into the
-runtime cache or host CLI.
-
-Runtime lookup should not scan old ops paths. It should use only:
-
-- the versioned Ant sandbox cache
-- explicit `ANT_SANDBOX_IMAGE`
-- explicit `ANT_SANDBOX_KERNEL`
-
 ## Network Cleanup
 
 The old drop-complete-only virtio-net behavior has been replaced with vmnet

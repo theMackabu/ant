@@ -16,21 +16,33 @@ bool ant_hvf_pci_addr(uint64_t addr, unsigned *bus, unsigned *slot, unsigned *fn
 }
 
 bool ant_hvf_is_virtio_slot(unsigned bus, unsigned slot, unsigned fn) {
+  bool p9_slot = slot >= ANT_HVF_VIRTIO_9P_SLOT_BASE &&
+                 slot < ANT_HVF_VIRTIO_9P_SLOT_BASE + ANT_HVF_VIRTIO_9P_MAX;
   return bus == 0 && fn == 0 &&
          (slot == ANT_HVF_VIRTIO_BLK_SLOT || slot == ANT_HVF_VIRTIO_NET_SLOT ||
-          slot == ANT_HVF_VIRTIO_9P0_SLOT || slot == ANT_HVF_VIRTIO_VSOCK_SLOT);
+          p9_slot || slot == ANT_HVF_VIRTIO_VSOCK_SLOT);
 }
 
 ant_hvf_virtio_device_t *ant_hvf_virtio_for_slot(ant_hvf_vm_t *vm, unsigned slot) {
   if (slot == ANT_HVF_VIRTIO_BLK_SLOT) return &vm->blk;
   if (slot == ANT_HVF_VIRTIO_NET_SLOT) return vm->net_enabled ? &vm->net : NULL;
-  if (slot == ANT_HVF_VIRTIO_9P0_SLOT) return &vm->p9[0].virtio;
+  ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_slot(vm, slot);
+  if (p9) return &p9->virtio;
   if (slot == ANT_HVF_VIRTIO_VSOCK_SLOT) return &vm->vsock.virtio;
   return NULL;
 }
 
 ant_hvf_9p_device_t *ant_hvf_p9_for_slot(ant_hvf_vm_t *vm, unsigned slot) {
-  if (slot == ANT_HVF_VIRTIO_9P0_SLOT) return &vm->p9[0];
+  if (slot < ANT_HVF_VIRTIO_9P_SLOT_BASE) return NULL;
+  unsigned index = slot - ANT_HVF_VIRTIO_9P_SLOT_BASE;
+  if (index >= vm->p9_count || index >= ANT_HVF_VIRTIO_9P_MAX) return NULL;
+  return &vm->p9[index];
+}
+
+ant_hvf_9p_device_t *ant_hvf_p9_for_virtio(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev) {
+  for (size_t i = 0; i < vm->p9_count; i++) {
+    if (&vm->p9[i].virtio == dev) return &vm->p9[i];
+  }
   return NULL;
 }
 

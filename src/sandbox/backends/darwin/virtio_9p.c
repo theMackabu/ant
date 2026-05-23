@@ -188,9 +188,30 @@ int ant_hvf_9p_write_response(ant_hvf_vm_t *vm,
   return done == resp_len ? 0 : -ENOSPC;
 }
 
-ant_hvf_9p_fid_t *ant_hvf_9p_fid(ant_hvf_9p_device_t *dev, uint32_t fid) {
-  if (fid >= ANT_HVF_9P_FID_COUNT) return NULL;
-  return &dev->fids[fid];
+ant_hvf_9p_fid_t *ant_hvf_9p_fid(ant_hvf_9p_device_t *dev, uint32_t fid, bool create) {
+  for (size_t i = 0; i < dev->fid_count; i++) {
+    if (dev->fids[i].active && dev->fids[i].fid == fid) return &dev->fids[i];
+  }
+  if (!create) return NULL;
+
+  for (size_t i = 0; i < dev->fid_count; i++) {
+    if (!dev->fids[i].active) {
+      memset(&dev->fids[i], 0, sizeof(dev->fids[i]));
+      dev->fids[i].fid = fid;
+      return &dev->fids[i];
+    }
+  }
+
+  size_t old_capacity = dev->fid_capacity;
+  size_t new_capacity = old_capacity ? old_capacity * 2u : ANT_HVF_9P_INITIAL_FID_COUNT;
+  ant_hvf_9p_fid_t *new_fids = realloc(dev->fids, new_capacity * sizeof(*new_fids));
+  if (!new_fids) return NULL;
+  memset(new_fids + old_capacity, 0, (new_capacity - old_capacity) * sizeof(*new_fids));
+  dev->fids = new_fids;
+  dev->fid_capacity = new_capacity;
+  dev->fid_count = new_capacity;
+  dev->fids[old_capacity].fid = fid;
+  return &dev->fids[old_capacity];
 }
 
 uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
@@ -220,7 +241,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
     case P9_TATTACH:
       if (req_len < 15) return ant_hvf_9p_error(resp, tag, EINVAL);
       fid = ant_hvf_load32(req + 7);
-      f = ant_hvf_9p_fid(dev, fid);
+      f = ant_hvf_9p_fid(dev, fid, true);
       if (!f) return ant_hvf_9p_error(resp, tag, EINVAL);
       f->active = true;
       f->path[0] = '\0';
@@ -232,8 +253,8 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       fid = ant_hvf_load32(req + 7);
       uint32_t newfid = ant_hvf_load32(req + 11);
       uint16_t nwname = ant_hvf_load16(req + 15);
-      f = ant_hvf_9p_fid(dev, fid);
-      ant_hvf_9p_fid_t *nf = ant_hvf_9p_fid(dev, newfid);
+      f = ant_hvf_9p_fid(dev, fid, false);
+      ant_hvf_9p_fid_t *nf = ant_hvf_9p_fid(dev, newfid, true);
       if (!f || !f->active || !nf) return ant_hvf_9p_error(resp, tag, ENOENT);
       char path[ANT_HVF_9P_PATH_MAX];
       snprintf(path, sizeof(path), "%s", f->path);
@@ -269,6 +290,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
         size += 13;
       }
       nf->active = true;
+      nf->fid = newfid;
       snprintf(nf->path, sizeof(nf->path), "%s", path);
       ant_hvf_store32(resp, size);
       ant_hvf_store16(resp + 7, nwname);
@@ -277,7 +299,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
     case P9_TGETATTR: {
       if (req_len < 19) return ant_hvf_9p_error(resp, tag, EINVAL);
       fid = ant_hvf_load32(req + 7);
-      f = ant_hvf_9p_fid(dev, fid);
+      f = ant_hvf_9p_fid(dev, fid, false);
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       struct stat st;
       int rc = ant_hvf_9p_stat(dev, f->path, &st);
@@ -312,7 +334,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
     case P9_TLOPEN:
       if (req_len < 15) return ant_hvf_9p_error(resp, tag, EINVAL);
       fid = ant_hvf_load32(req + 7);
-      f = ant_hvf_9p_fid(dev, fid);
+      f = ant_hvf_9p_fid(dev, fid, false);
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       struct stat st;
       int open_rc = ant_hvf_9p_stat(dev, f->path, &st);
@@ -332,7 +354,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       fid = ant_hvf_load32(req + 7);
       uint64_t offset = ant_hvf_load64(req + 11);
       uint32_t count = ant_hvf_load32(req + 19);
-      f = ant_hvf_9p_fid(dev, fid);
+      f = ant_hvf_9p_fid(dev, fid, false);
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       if (11u + count > resp_cap) count = (uint32_t)(resp_cap - 11u);
       uint32_t got = 0;
@@ -366,7 +388,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       fid = ant_hvf_load32(req + 7);
       uint64_t offset = ant_hvf_load64(req + 11);
       uint32_t count = ant_hvf_load32(req + 19);
-      f = ant_hvf_9p_fid(dev, fid);
+      f = ant_hvf_9p_fid(dev, fid, false);
       if (!f || !f->active) return ant_hvf_9p_error(resp, tag, ENOENT);
       if (count > resp_cap - 11u) count = (uint32_t)(resp_cap - 11u);
 
@@ -421,7 +443,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       return 61;
     case P9_TCLUNK:
       if (req_len >= 11) {
-        f = ant_hvf_9p_fid(dev, ant_hvf_load32(req + 7));
+        f = ant_hvf_9p_fid(dev, ant_hvf_load32(req + 7), false);
         if (f) memset(f, 0, sizeof(*f));
       }
       ant_hvf_9p_hdr(resp, 7, P9_RCLUNK, tag);

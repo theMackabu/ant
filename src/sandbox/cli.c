@@ -23,9 +23,19 @@ typedef struct {
 } ant_sandbox_assets_t;
 
 #define ANT_SANDBOX_MAX_FORWARDS 32
+#define ANT_SANDBOX_MAX_MOUNTS 8
 
 typedef struct {
+  ant_sandbox_mount_t mounts[ANT_SANDBOX_MAX_MOUNTS];
+  char mount_hosts[ANT_SANDBOX_MAX_MOUNTS][4096];
+  char mount_guests[ANT_SANDBOX_MAX_MOUNTS][1024];
+  char mount_tags[ANT_SANDBOX_MAX_MOUNTS][1200];
   ant_sandbox_port_forward_t forwards[ANT_SANDBOX_MAX_FORWARDS];
+  char temp_dirs[ANT_SANDBOX_MAX_MOUNTS][4096];
+  size_t mount_count;
+  size_t temp_dir_count;
+  char guest_cwd[1024];
+  bool explicit_mounts;
   size_t forward_count;
   int script_index;
 } ant_sandbox_cli_options_t;
@@ -171,15 +181,30 @@ static char *sandbox_json_escape_into(char *out, const char *str) {
   return out;
 }
 
-static char *sandbox_build_run_request(const char *entry, int argc, char **argv) {
-  size_t len = strlen("{\"mode\":\"run\",\"cwd\":\"" ANT_SANDBOX_GUEST_CWD "\",\"entry\":\"\",\"argv\":[]}");
+static char *sandbox_build_run_request(
+  const char *cwd,
+  const ant_sandbox_mount_t *mounts,
+  size_t mount_count,
+  const char *entry,
+  int argc,
+  char **argv
+) {
+  size_t len = strlen("{\"mode\":\"run\",\"cwd\":\"\",\"entry\":\"\",\"argv\":[],\"mounts\":[]}");
+  len += sandbox_json_escaped_len(cwd);
   len += sandbox_json_escaped_len(entry);
   for (int i = 0; i < argc; i++) len += sandbox_json_escaped_len(argv[i]) + 3;
+  for (size_t i = 0; i < mount_count; i++) {
+    len += strlen("{\"tag\":\"\",\"guest\":\"\",\"readonly\":false}") + 1;
+    len += sandbox_json_escaped_len(mounts[i].tag);
+    len += sandbox_json_escaped_len(mounts[i].guest_path);
+  }
 
   char *json = try_oom(len + 1);
   char *p = json;
 
-  p += sprintf(p, "{\"mode\":\"run\",\"cwd\":\"" ANT_SANDBOX_GUEST_CWD "\",\"entry\":\"");
+  p += sprintf(p, "{\"mode\":\"run\",\"cwd\":\"");
+  p = sandbox_json_escape_into(p, cwd);
+  p += sprintf(p, "\",\"entry\":\"");
   p = sandbox_json_escape_into(p, entry);
   p += sprintf(p, "\",\"argv\":[");
 
@@ -190,8 +215,108 @@ static char *sandbox_build_run_request(const char *entry, int argc, char **argv)
     *p++ = '"';
   }
 
+  p += sprintf(p, "],\"mounts\":[");
+  for (size_t i = 0; i < mount_count; i++) {
+    if (i > 0) *p++ = ',';
+    p += sprintf(p, "{\"tag\":\"");
+    p = sandbox_json_escape_into(p, mounts[i].tag);
+    p += sprintf(p, "\",\"guest\":\"");
+    p = sandbox_json_escape_into(p, mounts[i].guest_path);
+    p += sprintf(p, "\",\"readonly\":%s}", mounts[i].readonly ? "true" : "false");
+  }
   p += sprintf(p, "]}");
   return json;
+}
+
+static bool sandbox_guest_path_valid(const char *path) {
+  if (!path || path[0] != '/' || path[1] == '\0') return false;
+  if (strstr(path, "/../") || strstr(path, "/..") || strstr(path, "/./")) return false;
+  return strcmp(path, "/..") != 0 && strcmp(path, "/.") != 0;
+}
+
+static int sandbox_create_temp_dir(char *out, size_t out_len) {
+  const char *tmpdir = getenv("TMPDIR");
+  if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
+  int written = snprintf(out, out_len, "%s/ant-sandbox-write.XXXXXX", tmpdir);
+  if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
+  return mkdtemp(out) ? 0 : -errno;
+}
+
+static int sandbox_parse_mount(
+  ant_sandbox_cli_options_t *opts,
+  const char *value,
+  bool readonly
+) {
+  if (opts->explicit_mounts && opts->mount_count >= ANT_SANDBOX_MAX_MOUNTS) {
+    fprintf(stderr, "sandbox: too many mounts\n");
+    return -E2BIG;
+  }
+
+  const char *sep = strchr(value, ':');
+  if (!sep || sep == value || sep[1] == '\0') {
+    fprintf(stderr, "sandbox: mount needs host:guest, got '%s'\n", value);
+    return -EINVAL;
+  }
+
+  size_t host_len = (size_t)(sep - value);
+  char host[4096];
+  if (host_len >= sizeof(host)) return -ENAMETOOLONG;
+  memcpy(host, value, host_len);
+  host[host_len] = '\0';
+
+  const char *guest = sep + 1;
+  if (!sandbox_guest_path_valid(guest)) {
+    fprintf(stderr, "sandbox: invalid guest mount path '%s'\n", guest);
+    return -EINVAL;
+  }
+
+  size_t idx = opts->mount_count;
+  if (strcmp(host, "tmp") == 0) {
+    int rc = sandbox_create_temp_dir(opts->temp_dirs[opts->temp_dir_count],
+                                     sizeof(opts->temp_dirs[opts->temp_dir_count]));
+    if (rc != 0) {
+      fprintf(stderr, "sandbox: failed to create temporary mount: %s\n", strerror(-rc));
+      return rc;
+    }
+    snprintf(opts->mount_hosts[idx], sizeof(opts->mount_hosts[idx]), "%s",
+             opts->temp_dirs[opts->temp_dir_count]);
+    opts->temp_dir_count++;
+    readonly = false;
+  } else {
+    char resolved[4096];
+    if (!realpath(host, resolved)) {
+      if (readonly) {
+        fprintf(stderr, "sandbox: missing mount path '%s': %s\n", host, strerror(errno));
+        return -errno;
+      }
+      int rc = ant_mkdir_p(host);
+      if (rc != 0) {
+        fprintf(stderr, "sandbox: failed to create mount path '%s': %s\n", host, strerror(errno));
+        return -errno;
+      }
+      if (!realpath(host, resolved)) return -errno;
+    }
+    snprintf(opts->mount_hosts[idx], sizeof(opts->mount_hosts[idx]), "%s", resolved);
+  }
+
+  int written = snprintf(opts->mount_guests[idx], sizeof(opts->mount_guests[idx]), "%s", guest);
+  if (written < 0 || (size_t)written >= sizeof(opts->mount_guests[idx])) return -ENAMETOOLONG;
+  written = snprintf(opts->mount_tags[idx], sizeof(opts->mount_tags[idx]), "%zu:%s%s",
+                     idx,
+                     guest,
+                     readonly ? ":ro" : "");
+  if (written < 0 || (size_t)written >= sizeof(opts->mount_tags[idx])) return -ENAMETOOLONG;
+  opts->mounts[idx] = (ant_sandbox_mount_t){
+    .host_path = opts->mount_hosts[idx],
+    .guest_path = opts->mount_guests[idx],
+    .tag = opts->mount_tags[idx],
+    .readonly = readonly,
+  };
+  opts->mount_count++;
+  if (opts->mount_count == 1) {
+    snprintf(opts->guest_cwd, sizeof(opts->guest_cwd), "%s", guest);
+  }
+  return 0;
 }
 
 static int sandbox_parse_port(const char *value, const char *kind, uint16_t *out) {
@@ -240,6 +365,7 @@ static int sandbox_parse_forward(const char *value, ant_sandbox_port_forward_t *
 static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_t *opts) {
   memset(opts, 0, sizeof(*opts));
   opts->script_index = -1;
+  snprintf(opts->guest_cwd, sizeof(opts->guest_cwd), "%s", ANT_SANDBOX_GUEST_CWD);
 
   for (int i = 1; i < argc; i++) {
     const char *arg = argv[i];
@@ -275,6 +401,25 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       continue;
     }
 
+    if (strcmp(arg, "--mount") == 0 || strncmp(arg, "--mount=", 8) == 0 ||
+        strcmp(arg, "--write") == 0 || strncmp(arg, "--write=", 8) == 0) {
+      bool readonly = arg[2] == 'm';
+      const char *value = NULL;
+      if (strcmp(arg, "--mount") == 0 || strcmp(arg, "--write") == 0) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "sandbox: %s needs host:guest\n", arg);
+          return -EINVAL;
+        }
+        value = argv[++i];
+      } else {
+        value = arg + 8;
+      }
+      opts->explicit_mounts = true;
+      int rc = sandbox_parse_mount(opts, value, readonly);
+      if (rc != 0) return rc;
+      continue;
+    }
+
     if (arg[0] == '-') {
       fprintf(stderr, "sandbox: unknown option '%s'\n", arg);
       return -EINVAL;
@@ -288,7 +433,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
 }
 
 static void sandbox_print_usage(void) {
-  fprintf(stderr, "Usage: ant sandbox [--forward <port|host:guest>] <script.js> [args...]\n");
+  fprintf(stderr, "Usage: ant sandbox [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
 }
 
 int ant_sandbox_cmd(int argc, char **argv) {
@@ -314,16 +459,27 @@ int ant_sandbox_cmd(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  if (!opts.explicit_mounts) {
+    char default_mount[sizeof(cwd) + sizeof(":/workspace")];
+    snprintf(default_mount, sizeof(default_mount), "%s:%s", cwd, ANT_SANDBOX_GUEST_CWD);
+    rc = sandbox_parse_mount(&opts, default_mount, true);
+    if (rc != 0) return EXIT_FAILURE;
+  }
+
   int script_argc = argc - opts.script_index - 1;
   char **script_argv = argv + opts.script_index + 1;
-  char *request = sandbox_build_run_request(argv[opts.script_index], script_argc, script_argv);
+  char *request = sandbox_build_run_request(opts.guest_cwd,
+                                            opts.mounts,
+                                            opts.mount_count,
+                                            argv[opts.script_index],
+                                            script_argc,
+                                            script_argv);
   ant_sandbox_vm_config_t config = {
     .image_path = assets.image,
     .kernel_path = assets.kernel,
     .request_json = request,
-    .shared_dir_path = cwd,
-    .shared_dir_tag = "0",
-    .shared_dir_readonly = true,
+    .mounts = opts.mounts,
+    .mount_count = opts.mount_count,
     .network_enabled = true,
     .forwards = opts.forwards,
     .forward_count = opts.forward_count,

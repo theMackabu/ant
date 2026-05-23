@@ -115,11 +115,17 @@ Once stdout/stderr are daemon frames, the host should decide whether to:
 Promote the protocol into an `ant:sandbox` module with persistent VM support:
 
 ```js
-import { Sandbox } from "ant:sandbox";
+import { Sandbox } from 'ant:sandbox';
 
-const sb = new Sandbox({ mount: ".:/workspace" });
-await sb.run("script.js");
-await sb.eval("export default 1 + 1");
+const sb = new Sandbox({ mount: '.:/workspace' });
+// or
+const sb = new Sandbox({
+  mount: ['.:/workspace', '.:/workspace'],
+  write: '.:/workspace'
+});
+
+await sb.run('script.js');
+await sb.eval('export default 1 + 1');
 await sb.close();
 ```
 

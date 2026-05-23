@@ -217,21 +217,28 @@ if [[ ! -d "$nanos_src/.git" ]]; then
 fi
 
 patch_inputs=("$repo_root"/nanos/patches/*.patch)
-for patch in "$repo_root"/nanos/patches/*.patch; do
-  if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
-    git -C "$nanos_src" apply "$patch"
-  elif git -C "$nanos_src" apply --check -R "$patch" >/dev/null 2>&1; then
-    echo "==> Patch already applied: $(basename "$patch")"
-  else
-    echo "failed to apply or verify Nanos patch: $patch" >&2
-    exit 1
-  fi
-done
+patch_signature=$(cd "$repo_root" && shasum -a 256 nanos/patches/*.patch | shasum -a 256 | awk '{print $1}')
+nanos_patch_stamp="$nanos_cache_dir/patches-${cache_arch}.stamp"
+
+if [[ -f "$nanos_patch_stamp" && "$(cat "$nanos_patch_stamp")" == "$patch_signature" ]]; then
+  echo "==> reusing patched Nanos source"
+else
+  git -C "$nanos_src" reset --hard HEAD >/dev/null
+  for patch in "$repo_root"/nanos/patches/*.patch; do
+    if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
+      git -C "$nanos_src" apply "$patch"
+    else
+      echo "failed to apply Nanos patch: $patch" >&2
+      exit 1
+    fi
+  done
+  printf '%s\n' "$patch_signature" > "$nanos_patch_stamp"
+fi
 
 nanos_kernel="$nanos_src/output/platform/$nanos_platform/bin/kernel.img"
 nanos_kernel_stamp="$nanos_cache_dir/kernel-${cache_arch}.stamp"
 nanos_revision=$(git -C "$nanos_src" rev-parse HEAD)
-patch_signature=$(shasum -a 256 "${patch_inputs[@]}" | shasum -a 256 | awk '{print $1}')
+
 compiler_signature=$("$nanos_cc" --version 2>/dev/null | head -n 1 || printf '%s' "$nanos_cc")
 kernel_signature=$(
   printf 'nanos=%s\n' "$nanos_revision"
@@ -288,7 +295,6 @@ JSON
     --arch="$ops_arch" \
     --consoles +pl011 \
     --consoles +16550 \
-    --mounts "%0:/workspace:ro" \
     -a "--sandbox-daemon"
 )
 

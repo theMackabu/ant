@@ -11,12 +11,18 @@ typedef struct {
 } ant_sandbox_port_forward_t;
 
 typedef struct {
+  const char *host_path;
+  const char *guest_path;
+  const char *tag;
+  bool readonly;
+} ant_sandbox_mount_t;
+
+typedef struct {
   const char *image_path;
   const char *kernel_path;
   const char *request_json;
-  const char *shared_dir_path;
-  const char *shared_dir_tag;
-  bool shared_dir_readonly;
+  const ant_sandbox_mount_t *mounts;
+  size_t mount_count;
   bool network_enabled;
   const ant_sandbox_port_forward_t *forwards;
   size_t forward_count;

@@ -43,10 +43,11 @@
 #define ANT_HVF_VIRTIO_BLK_SLOT 1u
 #define ANT_HVF_VIRTIO_NET_BAR 0x10042000ull
 #define ANT_HVF_VIRTIO_NET_SLOT 2u
-#define ANT_HVF_VIRTIO_9P0_BAR 0x10043000ull
-#define ANT_HVF_VIRTIO_9P0_SLOT 3u
-#define ANT_HVF_VIRTIO_VSOCK_BAR 0x10045000ull
-#define ANT_HVF_VIRTIO_VSOCK_SLOT 6u
+#define ANT_HVF_VIRTIO_9P_BAR_BASE 0x10043000ull
+#define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#define ANT_HVF_VIRTIO_9P_MAX 8u
+#define ANT_HVF_VIRTIO_VSOCK_BAR 0x1004b000ull
+#define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
 #define ANT_HVF_GIC_DIST_BASE 0x08000000ull
 #define ANT_HVF_GIC_REDIST_BASE 0x080a0000ull
 #define ANT_HVF_GIC_MSI_BASE 0x08020000ull
@@ -133,7 +134,7 @@
 #define ANT_HVF_VSOCK_HOST_CID ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID
 #define ANT_HVF_VSOCK_HOST_PORT ANT_SANDBOX_TRANSPORT_VSOCK_PORT
 #define ANT_HVF_VSOCK_BUF_ALLOC 65536u
-#define ANT_HVF_9P_FID_COUNT 256u
+#define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
 
 #define P9_RLERROR 7u
@@ -238,6 +239,7 @@ typedef struct {
 
 typedef struct {
   bool active;
+  uint32_t fid;
   char path[ANT_HVF_9P_PATH_MAX];
 } ant_hvf_9p_fid_t;
 
@@ -297,7 +299,9 @@ typedef struct {
   ant_hvf_virtio_device_t virtio;
   const char *root;
   const char *tag;
-  ant_hvf_9p_fid_t fids[ANT_HVF_9P_FID_COUNT];
+  ant_hvf_9p_fid_t *fids;
+  size_t fid_count;
+  size_t fid_capacity;
 } ant_hvf_9p_device_t;
 
 typedef struct {
@@ -354,7 +358,8 @@ typedef struct {
   ant_hvf_net_packet_t net_rx_packets[ANT_HVF_NET_RX_BACKLOG];
   const ant_sandbox_port_forward_t *net_forwards;
   size_t net_forward_count;
-  ant_hvf_9p_device_t p9[1];
+  ant_hvf_9p_device_t p9[ANT_HVF_VIRTIO_9P_MAX];
+  size_t p9_count;
   ant_hvf_vsock_device_t vsock;
   uint8_t uart_buf[4096];
   size_t uart_len;
@@ -470,6 +475,7 @@ bool ant_hvf_pci_addr(uint64_t addr, unsigned *bus, unsigned *slot, unsigned *fn
 bool ant_hvf_is_virtio_slot(unsigned bus, unsigned slot, unsigned fn);
 ant_hvf_virtio_device_t *ant_hvf_virtio_for_slot(ant_hvf_vm_t *vm, unsigned slot);
 ant_hvf_9p_device_t *ant_hvf_p9_for_slot(ant_hvf_vm_t *vm, unsigned slot);
+ant_hvf_9p_device_t *ant_hvf_p9_for_virtio(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev);
 void ant_hvf_cfg_store16(unsigned char *cfg, unsigned off, uint16_t value);
 void ant_hvf_cfg_store32(unsigned char *cfg, unsigned off, uint32_t value);
 void ant_hvf_virtio_cfg_cap(unsigned char *cfg,
@@ -625,7 +631,7 @@ int ant_hvf_9p_write_response(ant_hvf_vm_t *vm,
                                      size_t writes_len,
                                      const unsigned char *resp,
                                      uint32_t resp_len);
-ant_hvf_9p_fid_t *ant_hvf_9p_fid(ant_hvf_9p_device_t *dev, uint32_t fid);
+ant_hvf_9p_fid_t *ant_hvf_9p_fid(ant_hvf_9p_device_t *dev, uint32_t fid, bool create);
 uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
                                   const unsigned char *req,
                                   size_t req_len,

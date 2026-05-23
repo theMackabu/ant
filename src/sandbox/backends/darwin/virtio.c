@@ -42,12 +42,15 @@ ant_hvf_virtio_device_t *ant_hvf_virtio_for_bar(ant_hvf_vm_t *vm, uint64_t addr)
   ant_hvf_virtio_device_t *devices[] = {
     &vm->blk,
     vm->net_enabled ? &vm->net : NULL,
-    &vm->p9[0].virtio,
     &vm->vsock.virtio,
   };
   for (size_t i = 0; i < sizeof(devices) / sizeof(devices[0]); i++) {
     ant_hvf_virtio_device_t *dev = devices[i];
     if (!dev || dev->bar0 == UINT32_MAX) continue;
+    if (addr >= dev->bar0 && addr < (uint64_t)dev->bar0 + ANT_HVF_VIRTIO_BAR_SIZE) return dev;
+  }
+  for (size_t i = 0; i < vm->p9_count; i++) {
+    ant_hvf_virtio_device_t *dev = &vm->p9[i].virtio;
     if (addr >= dev->bar0 && addr < (uint64_t)dev->bar0 + ANT_HVF_VIRTIO_BAR_SIZE) return dev;
   }
   return NULL;
@@ -108,7 +111,7 @@ bool ant_hvf_virtio_device_config_read(ant_hvf_vm_t *vm,
                                               uint64_t off,
                                               unsigned size,
                                               uint64_t *value) {
-  unsigned char cfg[64];
+  unsigned char cfg[1200];
   memset(cfg, 0, sizeof(cfg));
 
   switch (dev->kind) {
@@ -120,7 +123,8 @@ bool ant_hvf_virtio_device_config_read(ant_hvf_vm_t *vm,
       memcpy(cfg, vm->net_mac, sizeof(vm->net_mac));
       break;
     case ANT_HVF_VIRTIO_KIND_9P: {
-      ant_hvf_9p_device_t *p9 = &vm->p9[0];
+      ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_virtio(vm, dev);
+      if (!p9) return false;
       uint16_t tag_len = (uint16_t)strlen(p9->tag);
       ant_hvf_store16(cfg, tag_len);
       memcpy(cfg + 2, p9->tag, tag_len < sizeof(cfg) - 2 ? tag_len : sizeof(cfg) - 2);
@@ -292,7 +296,10 @@ bool ant_hvf_virtio_common_write(ant_hvf_vm_t *vm,
         ant_hvf_virtio_net_notify(vm, dev, queue);
         break;
       case ANT_HVF_VIRTIO_KIND_9P:
-        ant_hvf_virtio_9p_notify(vm, &vm->p9[0]);
+        {
+          ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_virtio(vm, dev);
+          if (p9) ant_hvf_virtio_9p_notify(vm, p9);
+        }
         break;
       case ANT_HVF_VIRTIO_KIND_VSOCK:
         ant_hvf_virtio_vsock_notify(vm, queue);
@@ -335,7 +342,8 @@ bool ant_hvf_virtio_common_write(ant_hvf_vm_t *vm,
           vm->vsock.peer_port = 0;
           vm->vsock.fwd_cnt = 0;
         } else if (dev->kind == ANT_HVF_VIRTIO_KIND_9P) {
-          memset(vm->p9[0].fids, 0, sizeof(vm->p9[0].fids));
+          ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_virtio(vm, dev);
+          if (p9 && p9->fids) memset(p9->fids, 0, p9->fid_count * sizeof(*p9->fids));
         }
       } else {
         dev->status = (uint8_t)value;
