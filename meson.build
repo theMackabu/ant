@@ -50,32 +50,29 @@ libant = static_library(
   dependencies: ant_deps
 )
 
-pkg_lib = custom_target(
-  'pkg_zig',
-  output: 'libpkg.a',
-  command: [
-    'sh', '-c',
-    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/$PKG_LIB_NAME" "@OUTPUT@"'
-  ],
-  env: {
-    'ZIG': zig.full_path(),
-    'ANT_VERSION': ant_version,
-    
-    'PKG_ZIG_DIR': pkg_zig_dir, 'PKG_BUILD_DIR': pkg_build_dir,
-    'LMDB_INCLUDE': lmdb_include_path, 'ZLIB_INCLUDE': zlib_include_path,
-    'LIBUV_INCLUDE': libuv_include_path, 'YYJSON_INCLUDE': yyjson_include_path,
-    
-    'PKG_TARGET': host_machine.cpu_family() + '-' + host_machine.system(),
-    'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
-  },
-  build_by_default: true,
-  build_always_stale: true
+pkg_lib = static_library(
+  'pkg_c',
+  files(
+    'src/pkg/intern.c',
+    'src/pkg/lockfile.c',
+    'src/pkg/cache.c',
+    'src/pkg/metadata.c',
+    'src/pkg/extractor.c',
+    'src/pkg/fetcher.c',
+    'src/pkg/linker.c',
+    'src/pkg/resolver.c',
+    'src/pkg/root.c'
+  ),
+  include_directories: [include, include_directories('src/pkg')],
+  dependencies: [lmdb_dep, yyjson_dep, tlsuv_dep, libuv_dep, nghttp2_dep, zlib_dep, uthash_dep],
+  install: false
 )
+
 
 pkg_dep = declare_dependency(
   link_with: [pkg_lib],
   include_directories: include,
-  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
+  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep, zlib_dep, uthash_dep]
 )
 
 libant_dep = declare_dependency(

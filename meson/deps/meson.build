@@ -166,7 +166,7 @@ skim_dep = subproject('skim', default_options: [
   'default_library=static',
 ]).get_variable('skim_dep')
 
-zig = find_program('zig', required: true)
+
 
 deps_info = {
   'lmdb': {
@@ -206,8 +206,7 @@ llhttp_include_path = subprojects_src / deps_info['llhttp']['dir'] / deps_info['
 zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info['zlib-ng']['inc']
 brotli_include_path = subprojects_src / deps_info['google-brotli']['dir'] / deps_info['google-brotli']['inc']
 
-pkg_zig_dir = src_root / 'src' / 'pkg'
-pkg_build_dir = meson.current_build_dir()
+
 
 ant_deps = [
   libffi_dep, crprintf_dep, argtable3_dep,
