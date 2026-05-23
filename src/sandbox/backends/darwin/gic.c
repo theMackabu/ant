@@ -67,13 +67,6 @@ int ant_hvf_create_gic(ant_hvf_vm_t *vm) {
       vm->gic_msi_enabled = true;
       vm->gic_msi_base = msi_base;
       vm->gic_msi_count = msi_count;
-      if (vm->trace) {
-        fprintf(stderr,
-                "sandbox vm: GIC MSI range base=%u count=%u region=0x%llx\n",
-                msi_base,
-                msi_count,
-                (unsigned long long)ANT_HVF_GIC_MSI_BASE);
-      }
     } else {
       fprintf(stderr,
               "sandbox vm: failed to configure GIC MSI support msi_rc=%d\n",
@@ -118,10 +111,7 @@ int ant_hvf_init_vcpu(ant_hvf_vm_t *vm) {
   rc = ant_hvf_check(hv_vcpu_set_sys_reg(vm->vcpu, HV_SYS_REG_MPIDR_EL1, 0),
                      "hv_vcpu_set_sys_reg(MPIDR_EL1)");
   if (rc != 0) return rc;
-  hv_return_t cntfrq_rc = hv_vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
-  if (cntfrq_rc != HV_SUCCESS && vm->trace) {
-    fprintf(stderr, "sandbox vm: HVF does not allow setting CNTFRQ_EL0 (%d)\n", cntfrq_rc);
-  }
+  hv_vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
   return ant_hvf_check(hv_vcpu_set_vtimer_mask(vm->vcpu, false),
                        "hv_vcpu_set_vtimer_mask(init)");
 }
@@ -137,7 +127,6 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
   if (rc != 0) return rc;
 
   if ((ctl & 1u) == 0 || (ctl & 2u) != 0) {
-    if (vm->trace) fprintf(stderr, "sandbox vm: wfx wait without active vtimer\n");
     return 0;
   }
 
@@ -150,12 +139,6 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
     uint64_t ticks = cval - now;
     uint64_t ns = (ticks * 1000000000ull) / vm->cntfrq;
     if (ns > 100000000ull) ns = 100000000ull;
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: wfx timer wait ticks=%llu ns=%llu\n",
-              (unsigned long long)ticks,
-              (unsigned long long)ns);
-    }
     if (ns > 0) {
       struct timespec ts = {
         .tv_sec = (time_t)(ns / 1000000000ull),
@@ -163,8 +146,6 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
       };
       while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {}
     }
-  } else if (vm->trace) {
-    fprintf(stderr, "sandbox vm: wfx timer already expired\n");
   }
 
   return ant_hvf_sync_vtimer(vm);
@@ -182,21 +163,12 @@ int ant_hvf_sync_vtimer(ant_hvf_vm_t *vm) {
 }
 
 int ant_hvf_raise_vtimer(ant_hvf_vm_t *vm, const char *where) {
-  hv_return_t gic_rc = ant_hvf_gic.set_redistributor_reg(
+  ant_hvf_gic.set_redistributor_reg(
     vm->vcpu,
     (ant_hvf_gic_redistributor_reg_t)ANT_HVF_GICR_ISPENDR0,
     1ull << ANT_HVF_GIC_EL1_VIRTUAL_TIMER);
-  if (gic_rc != HV_SUCCESS && vm->trace) {
-    fprintf(stderr, "sandbox vm: HVF denied direct vtimer PPI pending at %s (%d)\n",
-            where,
-            gic_rc);
-  }
-  hv_return_t irq_rc = hv_vcpu_set_pending_interrupt(vm->vcpu, HV_INTERRUPT_TYPE_IRQ, true);
-  if (irq_rc != HV_SUCCESS && vm->trace) {
-    fprintf(stderr, "sandbox vm: HVF denied vtimer IRQ-line assertion at %s (%d)\n",
-            where,
-            irq_rc);
-  }
+  (void)where;
+  hv_vcpu_set_pending_interrupt(vm->vcpu, HV_INTERRUPT_TYPE_IRQ, true);
   return ant_hvf_check(hv_vcpu_set_vtimer_mask(vm->vcpu, false),
                        "hv_vcpu_set_vtimer_mask(vtimer)");
 }

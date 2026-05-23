@@ -31,6 +31,7 @@ typedef struct {
   unsigned int cpu_count;
   unsigned long long memory_size;
   unsigned int timeout_ms;
+  bool verbose;
 } ant_sandbox_vm_config_t;
 
 typedef struct ant_sandbox_vm_backend {

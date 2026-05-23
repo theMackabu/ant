@@ -70,11 +70,6 @@ int ant_hvf_virtio_blk_request(ant_hvf_vm_t *vm,
   };
   (void)req.reserved;
 
-  if (vm->trace) {
-    fprintf(stderr, "sandbox vm: blk req head=%u type=%u sector=%llu\n",
-            head, req.type, (unsigned long long)req.sector);
-  }
-
   uint8_t status = ANT_VIRTIO_BLK_S_OK;
   uint32_t total = 0;
   uint16_t next = desc.next;
@@ -112,10 +107,6 @@ int ant_hvf_virtio_blk_request(ant_hvf_vm_t *vm,
   if (rc != 0) return rc;
 
   *used_len = (req.type == ANT_VIRTIO_BLK_T_IN ? total : 0) + 1u;
-  if (vm->trace) {
-    fprintf(stderr, "sandbox vm: blk complete head=%u status=%u used_len=%u\n",
-            head, status, *used_len);
-  }
   return 0;
 }
 
@@ -131,14 +122,6 @@ int ant_hvf_virtio_blk_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev) {
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
-  if (vm->trace) {
-    fprintf(stderr,
-            "sandbox vm: blk notify avail=%u last=%u desc=0x%llx used=0x%llx\n",
-            avail_idx,
-            q->last_avail,
-            (unsigned long long)desc_base,
-            (unsigned long long)used_base);
-  }
 
   while (q->last_avail != avail_idx) {
     uint16_t ring_slot = q->last_avail % q->size;

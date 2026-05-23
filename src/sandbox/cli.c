@@ -3,6 +3,7 @@
 #include "sandbox/cli.h"
 
 #include "cli/version.h"
+#include "cli/pkg.h"
 #include "modules/io.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/vm.h"
@@ -42,6 +43,7 @@ typedef struct {
   size_t temp_dir_count;
   char guest_cwd[1024];
   bool explicit_mounts;
+  bool verbose;
   size_t forward_count;
   int script_index;
 } ant_sandbox_cli_options_t;
@@ -331,6 +333,11 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       return 0;
     }
 
+    if (strcmp(arg, "--verbose") == 0) {
+      opts->verbose = true;
+      continue;
+    }
+
     if (strcmp(arg, "--forward") == 0 || strncmp(arg, "--forward=", 10) == 0) {
       const char *value = NULL;
       if (strcmp(arg, "--forward") == 0) {
@@ -386,7 +393,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
 }
 
 static void sandbox_print_usage(void) {
-  fprintf(stderr, "Usage: ant sandbox [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
+  fprintf(stderr, "Usage: ant sandbox [--verbose] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
 }
 
 int ant_sandbox_cmd(int argc, char **argv) {
@@ -452,6 +459,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
     .cpu_count = 1,
     .memory_size = 1024ull * 1024ull * 1024ull,
     .timeout_ms = 0,
+    .verbose = opts.verbose || pkg_verbose,
   };
 
   rc = ant_sandbox_vm_start(&config);

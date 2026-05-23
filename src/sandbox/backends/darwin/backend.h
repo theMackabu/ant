@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -378,7 +379,7 @@ typedef struct {
   size_t p9_count;
   ant_hvf_vsock_device_t vsock;
   ant_hvf_uart_capture_t uart;
-  bool trace;
+  bool verbose;
   bool timed_out;
   bool gic_msi_enabled;
   uint32_t gic_msi_base;
@@ -449,6 +450,9 @@ size_t ant_align4(size_t n);
 size_t ant_align_page(size_t n);
 int ant_hvf_check(hv_return_t ret, const char *op);
 int ant_hvf_check_file(const char *kind, const char *path, off_t *size_out);
+void ant_hvf_verbose(ant_hvf_vm_t *vm, const char *message);
+void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...)
+  __attribute__((format(printf, 2, 3)));
 uint16_t ant_hvf_load16(const unsigned char *p);
 uint32_t ant_hvf_load32(const unsigned char *p);
 uint64_t ant_hvf_load64(const unsigned char *p);

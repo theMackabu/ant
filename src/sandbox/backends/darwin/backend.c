@@ -3,6 +3,32 @@
 
 #if defined(__aarch64__)
 
+static void ant_hvf_verbose_prefix(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    fputs("[0.000000] ant: ", stderr);
+    return;
+  }
+  fprintf(stderr, "[%lld.%06ld] ant: ", (long long)ts.tv_sec, ts.tv_nsec / 1000);
+}
+
+void ant_hvf_verbose(ant_hvf_vm_t *vm, const char *message) {
+  if (!vm || !vm->verbose) return;
+  ant_hvf_verbose_prefix();
+  fputs(message, stderr);
+  fputc('\n', stderr);
+}
+
+void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...) {
+  if (!vm || !vm->verbose) return;
+  ant_hvf_verbose_prefix();
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  fputc('\n', stderr);
+}
+
 void *ant_hvf_timeout_thread(void *arg) {
   ant_hvf_timeout_t *timeout = arg;
   usleep(timeout->timeout_ms * 1000u);
@@ -63,7 +89,6 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms) {
         goto done;
       }
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_VTIMER_ACTIVATED) {
-      if (vm->trace) fprintf(stderr, "sandbox vm: vtimer activated\n");
       rc = ant_hvf_raise_vtimer(vm, "vtimer activated");
       if (rc != 0) goto done;
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_CANCELED) {
@@ -199,7 +224,30 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
     vm.p9[i].tag = config->mounts[i].tag;
   }
   vm.cntfrq = ant_hvf_host_cntfrq();
-  vm.trace = getenv("ANT_SANDBOX_VM_TRACE") != NULL;
+  vm.verbose = config->verbose;
+  ant_hvf_verbosef(&vm,
+                   "Hypervisor.framework backend image=%s kernel=%s memory=%zu MiB mounts=%zu forwards=%zu",
+                   config->image_path,
+                   config->kernel_path,
+                   vm.mem_size / ((size_t)1024 * 1024),
+                   vm.p9_count,
+                   vm.net_forward_count);
+  for (size_t i = 0; i < config->mount_count; i++) {
+    ant_hvf_verbosef(&vm,
+                     "mount[%zu] host=%s guest=%s tag=%s %s",
+                     i,
+                     config->mounts[i].host_path,
+                     config->mounts[i].guest_path,
+                     config->mounts[i].tag,
+                     config->mounts[i].readonly ? "ro" : "rw");
+  }
+  for (size_t i = 0; i < config->forward_count; i++) {
+    ant_hvf_verbosef(&vm,
+                     "forward[%zu] host=%u guest=%u",
+                     i,
+                     config->forwards[i].host_port,
+                     config->forwards[i].guest_port);
+  }
 
   bool vm_created = false;
   bool mem_mapped = false;
@@ -216,6 +264,7 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   }
 
   if (vm.net_enabled) {
+    ant_hvf_verbose(&vm, "starting network backend");
     rc = ant_hvf_net_start(&vm);
     if (rc != 0) goto done;
   }
@@ -225,19 +274,23 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
     rc = -errno;
     goto done;
   }
+  ant_hvf_verbosef(&vm, "opened disk image (%lld bytes)", (long long)image_size);
 
   vm.host_mem = mmap(NULL, vm.mem_size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
   if (vm.host_mem == MAP_FAILED) {
     rc = -errno;
     goto done;
   }
+  ant_hvf_verbosef(&vm, "allocated guest RAM at %p", vm.host_mem);
 
   rc = ant_hvf_check(hv_vm_create(NULL), "hv_vm_create");
   if (rc != 0) goto done;
   vm_created = true;
+  ant_hvf_verbose(&vm, "created VM");
 
   rc = ant_hvf_create_gic(&vm);
   if (rc != 0) goto done;
+  ant_hvf_verbose(&vm, "created GIC");
 
   rc = ant_hvf_check(
     hv_vm_map(vm.host_mem, ANT_HVF_GUEST_BASE, vm.mem_size,
@@ -245,16 +298,23 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
     "hv_vm_map");
   if (rc != 0) goto done;
   mem_mapped = true;
+  ant_hvf_verbosef(&vm,
+                   "mapped guest RAM base=0x%llx size=%zu MiB",
+                   (unsigned long long)ANT_HVF_GUEST_BASE,
+                   vm.mem_size / ((size_t)1024 * 1024));
 
   rc = ant_hvf_load_kernel(&vm, config->kernel_path);
   if (rc != 0) goto done;
+  ant_hvf_verbosef(&vm, "loaded Nanos kernel (%lld bytes)", (long long)kernel_size);
 
   rc = ant_hvf_build_dtb(&vm);
   if (rc != 0) goto done;
+  ant_hvf_verbose(&vm, "built boot device tree");
 
   rc = ant_hvf_check(hv_vcpu_create(&vm.vcpu, &vm.vcpu_exit, NULL), "hv_vcpu_create");
   if (rc != 0) goto done;
   vcpu_created = true;
+  ant_hvf_verbose(&vm, "created vCPU");
 
   rc = ant_hvf_init_vcpu(&vm);
   if (rc != 0) goto done;
@@ -262,6 +322,7 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   unsigned int timeout_ms = config->timeout_ms ? config->timeout_ms : 60000;
   const char *timeout_env = getenv("ANT_SANDBOX_VM_TIMEOUT_MS");
   if (timeout_env && timeout_env[0]) timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
+  ant_hvf_verbosef(&vm, "starting guest timeout=%u ms", timeout_ms);
 
   rc = ant_hvf_run(&vm, timeout_ms);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");

@@ -48,13 +48,7 @@ bool ant_hvf_gic_msi_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint6
   uint32_t intid = (uint32_t)value;
   if (intid < vm->gic_msi_base || intid >= vm->gic_msi_base + vm->gic_msi_count) return true;
 
-  hv_return_t rc = ant_hvf_gic.send_msi(ANT_HVF_GIC_MSI_BASE + ANT_HVF_GICM_SET_SPI_NSR, intid);
-  if (rc != HV_SUCCESS && vm->trace) {
-    fprintf(stderr,
-            "sandbox vm: hv_gic_send_msi failed intid=%u rc=%d\n",
-            intid,
-            rc);
-  }
+  ant_hvf_gic.send_msi(ANT_HVF_GIC_MSI_BASE + ANT_HVF_GICM_SET_SPI_NSR, intid);
   return true;
 }
 
@@ -136,18 +130,6 @@ int ant_hvf_handle_mmio(ant_hvf_vm_t *vm, hv_vcpu_exit_exception_t *ex) {
     return ant_hvf_advance_pc(vm->vcpu);
   }
   if (ec == ESR_EC_HLT && (esr & ESR_HLT_IMM16_MASK) == 0xf000u) {
-    if (vm->trace) {
-      uint64_t op = 0;
-      uint64_t arg = 0;
-      uint64_t status = 0;
-      hv_vcpu_get_reg(vm->vcpu, HV_REG_X0, &op);
-      hv_vcpu_get_reg(vm->vcpu, HV_REG_X1, &arg);
-      if (op == 0x18u) ant_hvf_guest_read(vm, arg + 8, &status, sizeof(status));
-      fprintf(stderr,
-              "sandbox vm: guest semihosting exit op=0x%llx status=%llu\n",
-              (unsigned long long)op,
-              (unsigned long long)status);
-    }
     return ANT_HVF_GUEST_SHUTDOWN;
   }
 
@@ -164,26 +146,10 @@ int ant_hvf_handle_mmio(ant_hvf_vm_t *vm, hv_vcpu_exit_exception_t *ex) {
     int rc = ant_hvf_check(hv_vcpu_get_reg(vm->vcpu, (hv_reg_t)(HV_REG_X0 + reg), &value),
                            "hv_vcpu_get_reg(mmio write)");
     if (rc != 0) return rc;
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: mmio write ipa=0x%llx size=%u x%u=0x%llx\n",
-              (unsigned long long)ex->physical_address,
-              size,
-              reg,
-              (unsigned long long)value);
-    }
     if (!ant_hvf_mmio_write(vm, ex->physical_address, size, value)) return -ENOSYS;
   } else {
     uint64_t value = 0;
     if (!ant_hvf_mmio_read(vm, ex->physical_address, size, &value)) return -ENOSYS;
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: mmio read ipa=0x%llx size=%u x%u=0x%llx\n",
-              (unsigned long long)ex->physical_address,
-              size,
-              reg,
-              (unsigned long long)value);
-    }
     int rc = ant_hvf_check(hv_vcpu_set_reg(vm->vcpu, (hv_reg_t)(HV_REG_X0 + reg), value),
                            "hv_vcpu_set_reg(mmio read)");
     if (rc != 0) return rc;

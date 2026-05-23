@@ -208,11 +208,8 @@ static void ant_net_enqueue(ant_hvf_vm_t *vm, const void *data, uint32_t len) {
     queued = true;
   }
   pthread_mutex_unlock(&vm->net_lock);
-  if (vm->trace) fprintf(stderr, "sandbox vm: net enqueue len=%u queued=%d backlog=%u\n",
-                         len, queued, vm->net_rx_count);
   if (queued) {
-    int rc = ant_hvf_virtio_net_drain_rx(vm);
-    if (vm->trace && rc != 0) fprintf(stderr, "sandbox vm: net immediate rx drain failed rc=%d\n", rc);
+    ant_hvf_virtio_net_drain_rx(vm);
     ant_hvf_net_note_rx(vm);
   }
 }
@@ -323,9 +320,6 @@ static void ant_net_handle_arp(ant_hvf_vm_t *vm, const ant_eth_t *eth, const uns
   uint32_t target = ntohl(req->tpa);
   if (target != ANT_NET_HOST_IP && target != ANT_NET_DNS_IP) return;
   ant_net_set_guest(vm, eth->src);
-  if (vm->trace) fprintf(stderr, "sandbox vm: net arp reply target=%u.%u.%u.%u\n",
-                         (target >> 24u) & 0xffu, (target >> 16u) & 0xffu,
-                         (target >> 8u) & 0xffu, target & 0xffu);
 
   unsigned char frame[sizeof(ant_eth_t) + sizeof(ant_arp_t)];
   ant_eth_t *resp_eth = (ant_eth_t *)frame;
@@ -378,9 +372,6 @@ static void ant_net_handle_dhcp(ant_hvf_vm_t *vm,
   if (memcmp(payload + 236, "\x63\x82\x53\x63", 4) != 0) return;
   uint8_t msg_type = ant_dhcp_type(payload + 240, len - 240);
   if (msg_type != 1 && msg_type != 3) return;
-  if (vm->trace) fprintf(stderr, "sandbox vm: net dhcp %s xid=%02x%02x%02x%02x\n",
-                         msg_type == 1 ? "discover" : "request",
-                         payload[4], payload[5], payload[6], payload[7]);
 
   unsigned char resp[548];
   memset(resp, 0, sizeof(resp));
@@ -419,8 +410,6 @@ static void ant_net_handle_dhcp(ant_hvf_vm_t *vm,
   ant_net_send_udp(vm, dst_mac, ANT_NET_HOST_IP, dst_ip,
                    ANT_DHCP_SERVER_PORT, ntohs(udp->src),
                    resp, (uint16_t)(opt - resp));
-  if (vm->trace) fprintf(stderr, "sandbox vm: net dhcp reply type=%u len=%zu\n",
-                         type, (size_t)(opt - resp));
 }
 
 static size_t ant_dns_skip_name(const unsigned char *packet, size_t len, size_t off) {
@@ -637,26 +626,16 @@ static void ant_nat_flush_pending(ant_hvf_nat_tcp_t *c) {
 }
 
 static void ant_nat_tcp_from_host(ant_hvf_nat_t *nat, ant_hvf_nat_tcp_t *c) {
-  ant_hvf_vm_t *vm = nat->vm;
   for (;;) {
     if (c->host_len >= sizeof(c->host_buf)) break;
     ssize_t n = read(c->fd, c->host_buf + c->host_len, sizeof(c->host_buf) - c->host_len);
     if (n > 0) {
-      if (vm->trace) fprintf(stderr, "sandbox vm: nat host read %zd bytes peer=%u.%u.%u.%u:%u guest_port=%u\n",
-                             n,
-                             (c->peer_ip >> 24u) & 0xffu, (c->peer_ip >> 16u) & 0xffu,
-                             (c->peer_ip >> 8u) & 0xffu, c->peer_ip & 0xffu,
-                             c->peer_port, c->guest_port);
       if (c->host_len == 0 && c->host_sent == 0) c->host_base = c->nat_next;
       c->host_len += (size_t)n;
       ant_nat_send_host_buffer(nat, c);
       continue;
     }
     if (n == 0) {
-      if (vm->trace) fprintf(stderr, "sandbox vm: nat host eof peer=%u.%u.%u.%u:%u guest_port=%u\n",
-                             (c->peer_ip >> 24u) & 0xffu, (c->peer_ip >> 16u) & 0xffu,
-                             (c->peer_ip >> 8u) & 0xffu, c->peer_ip & 0xffu,
-                             c->peer_port, c->guest_port);
       c->host_eof = true;
       ant_nat_close_fd(c);
       ant_nat_send_host_buffer(nat, c);
@@ -664,11 +643,6 @@ static void ant_nat_tcp_from_host(ant_hvf_nat_t *nat, ant_hvf_nat_tcp_t *c) {
     }
     if (errno == EINTR) continue;
     if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-    if (vm->trace) fprintf(stderr, "sandbox vm: nat host read error %s peer=%u.%u.%u.%u:%u guest_port=%u\n",
-                           strerror(errno),
-                           (c->peer_ip >> 24u) & 0xffu, (c->peer_ip >> 16u) & 0xffu,
-                           (c->peer_ip >> 8u) & 0xffu, c->peer_ip & 0xffu,
-                           c->peer_port, c->guest_port);
     ant_nat_close_tcp(c);
     break;
   }
@@ -866,11 +840,6 @@ static void ant_net_handle_tcp(ant_hvf_vm_t *vm,
   }
 
   if (payload_len > 0) {
-    if (vm->trace) fprintf(stderr, "sandbox vm: nat guest payload %zu bytes peer=%u.%u.%u.%u:%u guest_port=%u pending=%zu\n",
-                           payload_len,
-                           (c->peer_ip >> 24u) & 0xffu, (c->peer_ip >> 16u) & 0xffu,
-                           (c->peer_ip >> 8u) & 0xffu, c->peer_ip & 0xffu,
-                           c->peer_port, c->guest_port, c->pending_len);
     c->guest_next = seq + (uint32_t)payload_len;
     if (c->fd >= 0 && !c->guest_fin_seen) {
       size_t cap = sizeof(c->pending) - c->pending_off - c->pending_len;
@@ -886,10 +855,6 @@ static void ant_net_handle_tcp(ant_hvf_vm_t *vm,
   }
 
   if (tcp->flags & ANT_TCP_FIN) {
-    if (vm->trace) fprintf(stderr, "sandbox vm: nat guest fin peer=%u.%u.%u.%u:%u guest_port=%u ack=%u nat_next=%u\n",
-                           (c->peer_ip >> 24u) & 0xffu, (c->peer_ip >> 16u) & 0xffu,
-                           (c->peer_ip >> 8u) & 0xffu, c->peer_ip & 0xffu,
-                           c->peer_port, c->guest_port, c->guest_ack, c->nat_next);
     uint32_t fin_next = seq + (uint32_t)payload_len + 1u;
     if (fin_next > c->guest_next) c->guest_next = fin_next;
     c->guest_fin_seen = true;
@@ -940,12 +905,6 @@ static void ant_net_handle_ipv4(ant_hvf_vm_t *vm, const ant_eth_t *eth, const un
     const ant_udp_t *udp = (const ant_udp_t *)l4;
     uint16_t sport = ntohs(udp->src);
     uint16_t dport = ntohs(udp->dst);
-    if (vm->trace) fprintf(stderr, "sandbox vm: net udp %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u len=%zu\n",
-                           (ntohl(ip->src) >> 24u) & 0xffu, (ntohl(ip->src) >> 16u) & 0xffu,
-                           (ntohl(ip->src) >> 8u) & 0xffu, ntohl(ip->src) & 0xffu, sport,
-                           (ntohl(ip->dst) >> 24u) & 0xffu, (ntohl(ip->dst) >> 16u) & 0xffu,
-                           (ntohl(ip->dst) >> 8u) & 0xffu, ntohl(ip->dst) & 0xffu, dport,
-                           l4_len);
     size_t udp_len = ntohs(udp->len);
     if (udp_len < sizeof(*udp) || udp_len > l4_len) return;
     const unsigned char *udp_payload = l4 + sizeof(*udp);
@@ -958,12 +917,6 @@ static void ant_net_handle_ipv4(ant_hvf_vm_t *vm, const ant_eth_t *eth, const un
   } else if (ip->proto == ANT_IP_TCP) {
     if (l4_len < sizeof(ant_tcp_t)) return;
     const ant_tcp_t *tcp = (const ant_tcp_t *)l4;
-    if (vm->trace) fprintf(stderr, "sandbox vm: net tcp %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u flags=0x%x len=%zu\n",
-                           (ntohl(ip->src) >> 24u) & 0xffu, (ntohl(ip->src) >> 16u) & 0xffu,
-                           (ntohl(ip->src) >> 8u) & 0xffu, ntohl(ip->src) & 0xffu, ntohs(tcp->src),
-                           (ntohl(ip->dst) >> 24u) & 0xffu, (ntohl(ip->dst) >> 16u) & 0xffu,
-                           (ntohl(ip->dst) >> 8u) & 0xffu, ntohl(ip->dst) & 0xffu, ntohs(tcp->dst),
-                           tcp->flags, l4_len);
     size_t thl = (size_t)(tcp->off >> 4u) * 4u;
     if (thl < sizeof(*tcp) || thl > l4_len) return;
     ant_net_handle_tcp(vm, eth, ip, tcp, l4 + thl, l4_len - thl);
@@ -1036,7 +989,7 @@ int ant_hvf_net_start(ant_hvf_vm_t *vm) {
   nat->thread_started = true;
   vm->net_started = true;
   vm->net_max_packet_size = 1518u;
-  if (vm->trace) fprintf(stderr, "sandbox vm: native NAT network started forwards=%zu\n", nat->forward_count);
+  ant_hvf_verbosef(vm, "network backend ready (native NAT, forwards=%zu)", nat->forward_count);
   return 0;
 }
 
@@ -1089,7 +1042,6 @@ int ant_hvf_virtio_net_tx(ant_hvf_vm_t *vm,
     }
   }
 
-  if (vm->trace) fprintf(stderr, "sandbox vm: net tx complete head=%u used_len=%u\n", head, total);
   *used_len = total;
   return 0;
 }
@@ -1148,8 +1100,6 @@ int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
     delivered = true;
   }
 
-  if (vm->trace && delivered) fprintf(stderr, "sandbox vm: net rx delivered queue=%u backlog=%u\n",
-                                      ANT_VIRTIO_NET_RX_QUEUE, vm->net_rx_count);
   return delivered ? ant_hvf_virtio_interrupt(vm, dev, ANT_VIRTIO_NET_RX_QUEUE) : 0;
 }
 

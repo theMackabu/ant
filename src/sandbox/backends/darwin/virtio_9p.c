@@ -466,15 +466,6 @@ int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) {
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
-  if (vm->trace) {
-    fprintf(stderr,
-            "sandbox vm: 9p tag=%s notify avail=%u last=%u desc=0x%llx used=0x%llx\n",
-            dev->tag ? dev->tag : "?",
-            avail_idx,
-            q->last_avail,
-            (unsigned long long)desc_base,
-            (unsigned long long)used_base);
-  }
 
   while (q->last_avail != avail_idx) {
     uint16_t ring_slot = q->last_avail % q->size;
@@ -491,35 +482,13 @@ int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) {
     size_t writes_len = 0;
     rc = ant_hvf_9p_read_chain(vm, desc_base, head, q->size,
                                req, sizeof(req), &req_len, writes, 8, &writes_len);
-    if (rc != 0) {
-      if (vm->trace) fprintf(stderr, "sandbox vm: 9p read chain failed %d\n", rc);
-      return rc;
-    }
-    if (vm->trace && req_len >= 7) {
-      fprintf(stderr,
-              "sandbox vm: 9p tag=%s req head=%u type=%u len=%zu writes=%zu\n",
-              dev->tag ? dev->tag : "?",
-              head,
-              req[4],
-              req_len,
-              writes_len);
-    }
+    if (rc != 0) return rc;
     uint32_t resp_len = ant_hvf_9p_handle(dev, req, req_len, resp, sizeof(resp));
     if (resp_len == 0) resp_len = ant_hvf_9p_error(resp, 0, EIO);
     rc = ant_hvf_9p_write_response(vm, writes, writes_len, resp, resp_len);
-    if (rc != 0) {
-      if (vm->trace) fprintf(stderr, "sandbox vm: 9p write response failed %d len=%u\n", rc, resp_len);
-      return rc;
-    }
+    if (rc != 0) return rc;
     rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, resp_len);
     if (rc != 0) return rc;
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: 9p tag=%s complete head=%u resp_len=%u\n",
-              dev->tag ? dev->tag : "?",
-              head,
-              resp_len);
-    }
     q->last_avail++;
   }
 

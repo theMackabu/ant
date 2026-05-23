@@ -64,6 +64,10 @@ void ant_hvf_uart_report_panic(ant_hvf_vm_t *vm) {
 void ant_hvf_uart_put(ant_hvf_vm_t *vm, uint8_t byte) {
   if (!vm) return;
 
+  if (vm->verbose) {
+    while (write(STDERR_FILENO, &byte, 1) < 0 && errno == EINTR) {}
+  }
+
   size_t limit = ant_hvf_uart_limit(vm);
   if (limit == 0) return;
 

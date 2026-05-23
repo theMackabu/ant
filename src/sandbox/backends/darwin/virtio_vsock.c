@@ -116,13 +116,6 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
   if (rc != 0) return rc;
 
   q->last_avail++;
-  if (vm->trace) {
-    fprintf(stderr,
-            "sandbox vm: vsock rx packet op=%u len=%u peer_port=%u\n",
-            op,
-            payload_len,
-            dev->peer_port);
-  }
   return ant_hvf_virtio_interrupt(vm, &dev->virtio, 0);
 }
 
@@ -134,7 +127,10 @@ int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm) {
   int rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RW,
                                      dev->request_data,
                                      (uint32_t)dev->request_len);
-  if (rc == 0) dev->request_sent = true;
+  if (rc == 0) {
+    dev->request_sent = true;
+    ant_hvf_verbosef(vm, "sent daemon request (%zu bytes)", dev->request_len);
+  }
   if (rc == -EAGAIN) return 0;
   return rc;
 }
@@ -254,10 +250,10 @@ static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const uns
       if (len >= 4) {
         vm->vsock.exit_code = (int)ant_hvf_load32(payload);
         vm->vsock.exit_received = true;
+        ant_hvf_verbosef(vm, "daemon exit code=%d", vm->vsock.exit_code);
       }
       break;
     default:
-      if (vm->trace) fprintf(stderr, "sandbox vm: ignored sandbox frame type=%u len=%u\n", type, len);
       break;
   }
 }
@@ -337,20 +333,10 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
     rc = ant_hvf_vsock_read_tx_packet(vm, desc_base, head, &hdr, &payload, &used_len);
     if (rc != 0) return rc;
 
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: vsock tx op=%u len=%u src=%llu:%u dst=%llu:%u\n",
-              hdr.op,
-              hdr.len,
-              (unsigned long long)hdr.src_cid,
-              hdr.src_port,
-              (unsigned long long)hdr.dst_cid,
-              hdr.dst_port);
-    }
-
     if (hdr.op == ANT_VIRTIO_VSOCK_OP_REQUEST && hdr.dst_port == ANT_HVF_VSOCK_HOST_PORT) {
       dev->connected = true;
       dev->peer_port = hdr.src_port;
+      ant_hvf_verbose(vm, "daemon connected");
       ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RESPONSE, NULL, 0);
       ant_hvf_vsock_maybe_send_request(vm);
     } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_RW) {

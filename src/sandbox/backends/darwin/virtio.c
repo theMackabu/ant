@@ -159,6 +159,7 @@ bool ant_hvf_virtio_msix_masked(ant_hvf_virtio_device_t *dev, unsigned vector) {
 }
 
 int ant_hvf_virtio_msix_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, uint16_t vector) {
+  (void)vm;
   if (vector == ANT_VIRTIO_MSI_NO_VECTOR || vector >= ANT_HVF_VIRTIO_MSIX_VECTOR_COUNT) return 0;
   if (ant_hvf_virtio_msix_masked(dev, vector)) {
     dev->msix_pba |= 1u << vector;
@@ -169,15 +170,6 @@ int ant_hvf_virtio_msix_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, u
                   ((uint64_t)dev->msix[vector].msg_addr_hi << 32);
   hv_return_t rc = ant_hvf_gic.send_msi(addr, dev->msix[vector].msg_data);
   if (rc != HV_SUCCESS) {
-    if (vm->trace) {
-      fprintf(stderr,
-              "sandbox vm: MSI-X notify %s vector=%u addr=0x%llx data=0x%x failed rc=%d\n",
-              dev->name,
-              vector,
-              (unsigned long long)addr,
-              dev->msix[vector].msg_data,
-              rc);
-    }
     return -EIO;
   }
   return 0;
@@ -241,8 +233,7 @@ bool ant_hvf_virtio_msix_write(ant_hvf_vm_t *vm,
   bool is_masked = ant_hvf_virtio_msix_masked(dev, vector);
   if (was_masked && !is_masked && (dev->msix_pba & (1u << vector))) {
     dev->msix_pba &= ~(1u << vector);
-    int rc = ant_hvf_virtio_msix_notify(vm, dev, (uint16_t)vector);
-    if (rc != 0 && vm->trace) fprintf(stderr, "sandbox vm: pending MSI-X delivery failed rc=%d\n", rc);
+    ant_hvf_virtio_msix_notify(vm, dev, (uint16_t)vector);
   }
   return true;
 }
