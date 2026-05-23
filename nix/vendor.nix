@@ -17,7 +17,6 @@ stdenvNoCC.mkDerivation {
   version = lib.fileContents ../meson/ant.version;
 
   inherit src;
-
   nativeBuildInputs = [ meson ninja git cacert ];
 
   dontConfigure = true;
@@ -45,5 +44,5 @@ stdenvNoCC.mkDerivation {
 
   outputHashMode = "recursive";
   outputHashAlgo = "sha256";
-  outputHash = "sha256-LKq8zNUxBHKJFhEblmshzAl55VU1ihQcjVUGXQMoeDg=";
+  outputHash = "sha256-of1UEARm0GemBgYYlZcdXdRmggmF+ADK0KMjHHORVYg=";
 }

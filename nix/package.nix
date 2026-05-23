@@ -1,5 +1,5 @@
 { lib
-, llvmPackages_18
+, llvmPackages_21
 , stdenv
 , meson
 , ninja
@@ -9,13 +9,10 @@
 , nodejs_22
 , git
 , curl
-, rustc
-, cargo
-, rustPlatform
 , zig_0_15 ? null
 , zig ? null
 , importNpmLock
-, apple-sdk ? null
+, apple-sdk_15 ? null
 , callPackage
 , gitRev ? "unknown"
 }:
@@ -23,6 +20,7 @@
 let
   zigPkg = if zig_0_15 != null then zig_0_15 else zig;
 
+  cpuTuneFlag = "-mcpu=native";
   antVendor = callPackage ./vendor.nix { };
 
   toolsNodeModules = importNpmLock.buildNodeModules {
@@ -30,12 +28,24 @@ let
     packageLock = lib.importJSON ../src/tools/npm-shrinkwrap.json;
     nodejs = nodejs_22;
   };
-in
-llvmPackages_18.stdenv.mkDerivation (finalAttrs: {
-  pname = "ant";
-  version = lib.fileContents ../meson/ant.version;
 
+  extraOptFlags = [
+    cpuTuneFlag
+    "-Qunused-arguments"
+    "-fvisibility=hidden"
+    "-fvisibility-inlines-hidden"
+    "-fno-math-errno"
+    "-fno-trapping-math"
+    "-fno-stack-protector"
+    "-mllvm" "-enable-machine-outliner=never"
+  ];
+  optArgs = lib.concatStringsSep " " extraOptFlags;
+in
+
+llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
+  pname = "ant";
   src = ../.;
+  version = lib.fileContents ../meson/ant.version;
 
   nativeBuildInputs = [
     meson
@@ -46,18 +56,10 @@ llvmPackages_18.stdenv.mkDerivation (finalAttrs: {
     nodejs_22
     git
     curl
-    rustc
-    cargo
-    rustPlatform.cargoSetupHook
     zigPkg
   ];
 
-  buildInputs = lib.optionals stdenv.isDarwin [ apple-sdk ];
-
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = ../src/strip/Cargo.lock;
-  };
-  cargoRoot = "src/strip";
+  buildInputs = lib.optionals stdenv.isDarwin [ apple-sdk_15 ];
 
   postUnpack = ''
     chmod -R u+w "$sourceRoot/vendor"
@@ -65,12 +67,13 @@ llvmPackages_18.stdenv.mkDerivation (finalAttrs: {
     chmod -R u+w "$sourceRoot/vendor"
   '';
 
-  postPatch = ''
-    substituteInPlace meson/version/meson.build \
-      --replace-fail \
-        "git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()" \
-        "git_hash = '${gitRev}'"
-  '';
+  mesonFlags = [
+    "-Dbuild_git_hash=${gitRev}"
+    "-Db_lto_mode=default"
+  ];
+
+  NIX_ENFORCE_NO_NATIVE = false;
+  env.NIX_CFLAGS_COMPILE = optArgs;
 
   preConfigure = ''
     export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache

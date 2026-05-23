@@ -9,7 +9,9 @@ def main():
     return 2
 
   npm, tools_dir, stamp = sys.argv[1:]
-  subprocess.run([npm, 'ci'], cwd=tools_dir, check=True)
+  node_modules = pathlib.Path(tools_dir) / 'node_modules'
+  if not node_modules.is_symlink():
+    subprocess.run([npm, 'ci'], cwd=tools_dir, check=True)
   pathlib.Path(stamp).write_text('ok\n')
   return 0
 
