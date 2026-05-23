@@ -341,6 +341,9 @@ bool ant_hvf_virtio_common_write(ant_hvf_vm_t *vm,
           vm->vsock.request_sent = false;
           vm->vsock.peer_port = 0;
           vm->vsock.fwd_cnt = 0;
+          vm->vsock.exit_received = false;
+          vm->vsock.exit_code = 0;
+          vm->vsock.rx_stream_len = 0;
         } else if (dev->kind == ANT_HVF_VIRTIO_KIND_9P) {
           ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_virtio(vm, dev);
           if (p9 && p9->fids) memset(p9->fids, 0, p9->fid_count * sizeof(*p9->fids));

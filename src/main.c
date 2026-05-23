@@ -652,6 +652,11 @@ int main(int argc, char *argv[]) {
       CLEANUP_ARGS_AND_ARGV();
       return EXIT_FAILURE;
     }
+    if (!ant_sandbox_transport_install_output_frames()) {
+      fprintf(stderr, "sandbox daemon: failed to install framed output transport: %s\n", strerror(errno));
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
 
     repl_mode = false;
     stdin_mode = false;
@@ -697,6 +702,10 @@ int main(int argc, char *argv[]) {
   
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
+  if (sandbox_daemon) {
+    io_set_sandbox_terminal(sandbox.capabilities);
+    process_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+  }
 
   init_symbol_module();
   init_iterator_module();
@@ -875,6 +884,7 @@ int main(int argc, char *argv[]) {
   }}
     
   cleanup: {
+    if (sandbox_daemon) ant_sandbox_transport_send_exit(js_result);
     js_destroy(js);
     CLEANUP_ARGS_AND_ARGV();
   }

@@ -63,7 +63,7 @@ int ant_hvf_vsock_write_iov(ant_hvf_vm_t *vm,
 
 int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
                                      uint16_t op,
-                                     const char *payload,
+                                     const void *payload,
                                      uint32_t payload_len) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
   ant_hvf_virtio_queue_t *q = &dev->virtio.queues[0];
@@ -86,9 +86,12 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
   if (rc != 0) return rc;
   uint16_t head = ant_hvf_load16(head_raw);
 
-  unsigned char packet[4096];
   size_t hdr_len = sizeof(ant_virtio_vsock_hdr_t);
-  if (hdr_len + payload_len > sizeof(packet)) return -E2BIG;
+  size_t packet_len = hdr_len + payload_len;
+  if (packet_len > UINT32_MAX) return -E2BIG;
+
+  unsigned char *packet = malloc(packet_len ? packet_len : 1);
+  if (!packet) return -ENOMEM;
 
   ant_virtio_vsock_hdr_t hdr = {
     .src_cid = ANT_HVF_VSOCK_HOST_CID,
@@ -106,7 +109,8 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
   if (payload_len > 0) memcpy(packet + hdr_len, payload, payload_len);
 
   uint32_t used_len = 0;
-  rc = ant_hvf_vsock_write_iov(vm, desc_base, head, packet, (uint32_t)(hdr_len + payload_len), &used_len);
+  rc = ant_hvf_vsock_write_iov(vm, desc_base, head, packet, (uint32_t)packet_len, &used_len);
+  free(packet);
   if (rc != 0) return rc;
   rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, used_len);
   if (rc != 0) return rc;
@@ -124,15 +128,12 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
 
 int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
-  if (!dev->connected || dev->request_sent || !dev->request_json) return 0;
+  if (!dev->connected || dev->request_sent || !dev->request_data || dev->request_len == 0) return 0;
+  if (dev->request_len > UINT32_MAX) return -E2BIG;
 
-  size_t len = strlen(dev->request_json);
-  if (len > 3900) return -E2BIG;
-  char line[4096];
-  memcpy(line, dev->request_json, len);
-  line[len++] = '\n';
-
-  int rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RW, line, (uint32_t)len);
+  int rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RW,
+                                     dev->request_data,
+                                     (uint32_t)dev->request_len);
   if (rc == 0) dev->request_sent = true;
   if (rc == -EAGAIN) return 0;
   return rc;
@@ -142,11 +143,12 @@ int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
                                         uint64_t desc_base,
                                         uint16_t head,
                                         ant_virtio_vsock_hdr_t *hdr,
+                                        unsigned char **payload,
                                         uint32_t *used_len) {
-  unsigned char raw[sizeof(ant_virtio_vsock_hdr_t)];
-  uint32_t done = 0;
+  unsigned char *raw = NULL;
   uint32_t total = 0;
   uint16_t index = head;
+  *payload = NULL;
 
   for (unsigned chain = 0; chain < ANT_VIRTIO_VSOCK_QUEUE_SIZE; chain++) {
     ant_vring_desc_t desc;
@@ -154,24 +156,152 @@ int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
     if (rc != 0) return rc;
 
     if (!(desc.flags & ANT_VRING_DESC_F_WRITE)) {
-      uint32_t n = desc.len;
-      if (done < sizeof(raw)) {
-        uint32_t copy = n;
-        if (copy > sizeof(raw) - done) copy = (uint32_t)(sizeof(raw) - done);
-        rc = ant_hvf_guest_read(vm, desc.addr, raw + done, copy);
-        if (rc != 0) return rc;
-        done += copy;
-      }
-      total += n;
+      if (desc.len > UINT32_MAX - total) return -E2BIG;
+      total += desc.len;
     }
 
     if (!(desc.flags & ANT_VRING_DESC_F_NEXT)) break;
     index = desc.next;
   }
 
-  if (done < sizeof(raw)) return -EINVAL;
+  if (total < sizeof(ant_virtio_vsock_hdr_t)) return -EINVAL;
+  raw = malloc(total);
+  if (!raw) return -ENOMEM;
+
+  uint32_t done = 0;
+  index = head;
+  for (unsigned chain = 0; chain < ANT_VIRTIO_VSOCK_QUEUE_SIZE; chain++) {
+    ant_vring_desc_t desc;
+    int rc = ant_hvf_vring_read_desc(vm, desc_base, index, &desc);
+    if (rc != 0) {
+      free(raw);
+      return rc;
+    }
+
+    if (!(desc.flags & ANT_VRING_DESC_F_WRITE)) {
+      rc = ant_hvf_guest_read(vm, desc.addr, raw + done, desc.len);
+      if (rc != 0) {
+        free(raw);
+        return rc;
+      }
+      done += desc.len;
+    }
+
+    if (!(desc.flags & ANT_VRING_DESC_F_NEXT)) break;
+    index = desc.next;
+  }
+
   *hdr = ant_hvf_vsock_load_hdr(raw);
+  if (hdr->len > total - sizeof(ant_virtio_vsock_hdr_t)) {
+    free(raw);
+    return -EINVAL;
+  }
+  if (hdr->len > 0) {
+    *payload = malloc(hdr->len);
+    if (!*payload) {
+      free(raw);
+      return -ENOMEM;
+    }
+    memcpy(*payload, raw + sizeof(ant_virtio_vsock_hdr_t), hdr->len);
+  }
+  free(raw);
   *used_len = total;
+  return 0;
+}
+
+static void ant_hvf_vsock_write_output(FILE *stream, const unsigned char *payload, uint32_t len, bool strip_ansi) {
+  if (!strip_ansi) {
+    if (len > 0) fwrite(payload, 1, len, stream);
+    fflush(stream);
+    return;
+  }
+
+  for (uint32_t i = 0; i < len; i++) {
+    if (payload[i] == '\x1b' && i + 1 < len && payload[i + 1] == '[') {
+      i += 2;
+      while (i < len && ((payload[i] >= '0' && payload[i] <= '9') || payload[i] == ';')) i++;
+      if (i < len && payload[i] == 'm') continue;
+      fputc('\x1b', stream);
+      fputc('[', stream);
+      if (i < len) fputc(payload[i], stream);
+      continue;
+    }
+    fputc(payload[i], stream);
+  }
+  fflush(stream);
+}
+
+static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const unsigned char *payload, uint32_t len) {
+  bool strip_ansi = (vm->vsock.capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) != 0;
+  switch (type) {
+    case ANT_SANDBOX_FRAME_STDOUT:
+      ant_hvf_vsock_write_output(stdout, payload, len, strip_ansi);
+      break;
+    case ANT_SANDBOX_FRAME_STDERR:
+      ant_hvf_vsock_write_output(stderr, payload, len, strip_ansi);
+      break;
+    case ANT_SANDBOX_FRAME_RESULT:
+      ant_hvf_vsock_write_output(stdout, payload, len, strip_ansi);
+      if (len == 0 || payload[len - 1] != '\n') fputc('\n', stdout);
+      fflush(stdout);
+      break;
+    case ANT_SANDBOX_FRAME_ERROR:
+      ant_hvf_vsock_write_output(stderr, payload, len, strip_ansi);
+      if (len == 0 || payload[len - 1] != '\n') fputc('\n', stderr);
+      fflush(stderr);
+      break;
+    case ANT_SANDBOX_FRAME_EXIT:
+      if (len >= 4) {
+        vm->vsock.exit_code = (int)ant_hvf_load32(payload);
+        vm->vsock.exit_received = true;
+      }
+      break;
+    default:
+      if (vm->trace) fprintf(stderr, "sandbox vm: ignored sandbox frame type=%u len=%u\n", type, len);
+      break;
+  }
+}
+
+static int ant_hvf_vsock_consume_frames(ant_hvf_vm_t *vm, const unsigned char *payload, uint32_t len) {
+  ant_hvf_vsock_device_t *dev = &vm->vsock;
+  if (len == 0) return 0;
+  if (len > ANT_SANDBOX_FRAME_MAX_SIZE) return -E2BIG;
+  if (dev->rx_stream_len > ANT_SANDBOX_FRAME_MAX_SIZE - len) return -E2BIG;
+
+  size_t needed = dev->rx_stream_len + len;
+  if (needed > dev->rx_stream_cap) {
+    size_t next = dev->rx_stream_cap ? dev->rx_stream_cap * 2 : 4096;
+    while (next < needed) next *= 2;
+    unsigned char *buf = realloc(dev->rx_stream, next);
+    if (!buf) return -ENOMEM;
+    dev->rx_stream = buf;
+    dev->rx_stream_cap = next;
+  }
+
+  memcpy(dev->rx_stream + dev->rx_stream_len, payload, len);
+  dev->rx_stream_len += len;
+
+  size_t off = 0;
+  while (dev->rx_stream_len - off >= ANT_SANDBOX_FRAME_HEADER_SIZE) {
+    unsigned char *frame = dev->rx_stream + off;
+    if (memcmp(frame, ANT_SANDBOX_FRAME_MAGIC, 4) != 0) return -EINVAL;
+    if (frame[4] != ANT_SANDBOX_FRAME_VERSION) return -EINVAL;
+    if (ant_hvf_load16(frame + 6) != 0) return -EINVAL;
+
+    uint32_t payload_len = ant_hvf_load32(frame + 8);
+    if (payload_len > ANT_SANDBOX_FRAME_MAX_SIZE - ANT_SANDBOX_FRAME_HEADER_SIZE) return -E2BIG;
+    size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + (size_t)payload_len;
+    if (dev->rx_stream_len - off < frame_len) break;
+
+    ant_hvf_vsock_handle_frame(vm, frame[5], frame + ANT_SANDBOX_FRAME_HEADER_SIZE, payload_len);
+    off += frame_len;
+  }
+
+  if (off > 0) {
+    memmove(dev->rx_stream, dev->rx_stream + off, dev->rx_stream_len - off);
+    dev->rx_stream_len -= off;
+  }
+
   return 0;
 }
 
@@ -202,8 +332,9 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
     uint16_t head = ant_hvf_load16(head_raw);
 
     ant_virtio_vsock_hdr_t hdr;
+    unsigned char *payload = NULL;
     uint32_t used_len = 0;
-    rc = ant_hvf_vsock_read_tx_packet(vm, desc_base, head, &hdr, &used_len);
+    rc = ant_hvf_vsock_read_tx_packet(vm, desc_base, head, &hdr, &payload, &used_len);
     if (rc != 0) return rc;
 
     if (vm->trace) {
@@ -224,7 +355,13 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
       ant_hvf_vsock_maybe_send_request(vm);
     } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_RW) {
       dev->fwd_cnt += hdr.len;
+      rc = ant_hvf_vsock_consume_frames(vm, payload, hdr.len);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
     }
+    free(payload);
 
     rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, used_len);
     if (rc != 0) return rc;

@@ -3,6 +3,8 @@
 #include "sandbox/cli.h"
 
 #include "cli/version.h"
+#include "modules/io.h"
+#include "sandbox/sandbox.h"
 #include "sandbox/vm.h"
 #include "utils.h"
 
@@ -11,6 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -136,98 +142,6 @@ static int sandbox_assets_resolve(ant_sandbox_assets_t *assets) {
   return 0;
 }
 
-static size_t sandbox_json_escaped_len(const char *str) {
-  size_t len = 0;
-  for (const unsigned char *p = (const unsigned char *)str; *p; p++) {
-    switch (*p) {
-      case '"':
-      case '\\':
-      case '\b':
-      case '\f':
-      case '\n':
-      case '\r':
-      case '\t':
-        len += 2;
-        break;
-      default:
-        len += *p < 0x20 ? 6 : 1;
-        break;
-    }
-  }
-  return len;
-}
-
-static char *sandbox_json_escape_into(char *out, const char *str) {
-  static const char hex[] = "0123456789abcdef";
-  for (const unsigned char *p = (const unsigned char *)str; *p; p++) {
-    switch (*p) {
-      case '"': *out++ = '\\'; *out++ = '"'; break;
-      case '\\': *out++ = '\\'; *out++ = '\\'; break;
-      case '\b': *out++ = '\\'; *out++ = 'b'; break;
-      case '\f': *out++ = '\\'; *out++ = 'f'; break;
-      case '\n': *out++ = '\\'; *out++ = 'n'; break;
-      case '\r': *out++ = '\\'; *out++ = 'r'; break;
-      case '\t': *out++ = '\\'; *out++ = 't'; break;
-      default:
-        if (*p < 0x20) {
-          *out++ = '\\'; *out++ = 'u'; *out++ = '0'; *out++ = '0';
-          *out++ = hex[*p >> 4]; *out++ = hex[*p & 0xf];
-        } else {
-          *out++ = (char)*p;
-        }
-        break;
-    }
-  }
-  return out;
-}
-
-static char *sandbox_build_run_request(
-  const char *cwd,
-  const ant_sandbox_mount_t *mounts,
-  size_t mount_count,
-  const char *entry,
-  int argc,
-  char **argv
-) {
-  size_t len = strlen("{\"mode\":\"run\",\"cwd\":\"\",\"entry\":\"\",\"argv\":[],\"mounts\":[]}");
-  len += sandbox_json_escaped_len(cwd);
-  len += sandbox_json_escaped_len(entry);
-  for (int i = 0; i < argc; i++) len += sandbox_json_escaped_len(argv[i]) + 3;
-  for (size_t i = 0; i < mount_count; i++) {
-    len += strlen("{\"tag\":\"\",\"guest\":\"\",\"readonly\":false}") + 1;
-    len += sandbox_json_escaped_len(mounts[i].tag);
-    len += sandbox_json_escaped_len(mounts[i].guest_path);
-  }
-
-  char *json = try_oom(len + 1);
-  char *p = json;
-
-  p += sprintf(p, "{\"mode\":\"run\",\"cwd\":\"");
-  p = sandbox_json_escape_into(p, cwd);
-  p += sprintf(p, "\",\"entry\":\"");
-  p = sandbox_json_escape_into(p, entry);
-  p += sprintf(p, "\",\"argv\":[");
-
-  for (int i = 0; i < argc; i++) {
-    if (i > 0) *p++ = ',';
-    *p++ = '"';
-    p = sandbox_json_escape_into(p, argv[i]);
-    *p++ = '"';
-  }
-
-  p += sprintf(p, "],\"mounts\":[");
-  for (size_t i = 0; i < mount_count; i++) {
-    if (i > 0) *p++ = ',';
-    p += sprintf(p, "{\"tag\":\"");
-    p = sandbox_json_escape_into(p, mounts[i].tag);
-    p += sprintf(p, "\",\"guest\":\"");
-    p = sandbox_json_escape_into(p, mounts[i].guest_path);
-    p += sprintf(p, "\",\"readonly\":%s}", mounts[i].readonly ? "true" : "false");
-  }
-  p += sprintf(p, "]}");
-  return json;
-}
-
 static bool sandbox_guest_path_valid(const char *path) {
   if (!path || path[0] != '/' || path[1] == '\0') return false;
   if (strstr(path, "/../") || strstr(path, "/..") || strstr(path, "/./")) return false;
@@ -240,6 +154,45 @@ static int sandbox_create_temp_dir(char *out, size_t out_len) {
   int written = snprintf(out, out_len, "%s/ant-sandbox-write.XXXXXX", tmpdir);
   if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
   return mkdtemp(out) ? 0 : -errno;
+}
+
+static void sandbox_terminal_size(uint16_t *rows_out, uint16_t *cols_out) {
+  int rows = 24;
+  int cols = 80;
+#ifndef _WIN32
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+    if (ws.ws_row > 0) rows = ws.ws_row;
+    if (ws.ws_col > 0) cols = ws.ws_col;
+  }
+#endif
+  if (rows > UINT16_MAX) rows = UINT16_MAX;
+  if (cols > UINT16_MAX) cols = UINT16_MAX;
+  *rows_out = (uint16_t)rows;
+  *cols_out = (uint16_t)cols;
+}
+
+static uint32_t sandbox_terminal_capabilities(uint16_t *rows_out, uint16_t *cols_out) {
+  uint32_t caps = 0;
+  bool stdout_tty = isatty(STDOUT_FILENO) != 0;
+  bool stderr_tty = isatty(STDERR_FILENO) != 0;
+
+  if (stdout_tty) caps |= ANT_SANDBOX_CAP_STDOUT_TTY;
+  if (stderr_tty) caps |= ANT_SANDBOX_CAP_STDERR_TTY;
+
+  const char *force_color = getenv("FORCE_COLOR");
+  const char *no_color = getenv("NO_COLOR");
+  if (io_no_color || (no_color && *no_color)) {
+    caps |= ANT_SANDBOX_CAP_COLOR_STRIP;
+  } else if (force_color) {
+    if (ant_env_bool(force_color, true)) caps |= ANT_SANDBOX_CAP_COLOR_FORCE;
+    else caps |= ANT_SANDBOX_CAP_COLOR_STRIP;
+  } else if (stdout_tty || stderr_tty) {
+    caps |= ANT_SANDBOX_CAP_COLOR_FORCE;
+  }
+
+  sandbox_terminal_size(rows_out, cols_out);
+  return caps;
 }
 
 static int sandbox_parse_mount(
@@ -468,16 +421,29 @@ int ant_sandbox_cmd(int argc, char **argv) {
 
   int script_argc = argc - opts.script_index - 1;
   char **script_argv = argv + opts.script_index + 1;
-  char *request = sandbox_build_run_request(opts.guest_cwd,
-                                            opts.mounts,
-                                            opts.mount_count,
-                                            argv[opts.script_index],
-                                            script_argc,
-                                            script_argv);
+  uint16_t tty_rows = 24;
+  uint16_t tty_cols = 80;
+  uint32_t capabilities = sandbox_terminal_capabilities(&tty_rows, &tty_cols);
+  size_t request_len = 0;
+  uint8_t *request = ant_sandbox_build_run_request_frame(opts.guest_cwd,
+                                                         argv[opts.script_index],
+                                                         script_argc,
+                                                         script_argv,
+                                                         capabilities,
+                                                         tty_rows,
+                                                         tty_cols,
+                                                         &request_len);
+  if (!request) {
+    fprintf(stderr, "sandbox: failed to build request frame\n");
+    return EXIT_FAILURE;
+  }
+
   ant_sandbox_vm_config_t config = {
     .image_path = assets.image,
     .kernel_path = assets.kernel,
-    .request_json = request,
+    .request_data = request,
+    .request_len = request_len,
+    .capabilities = capabilities,
     .mounts = opts.mounts,
     .mount_count = opts.mount_count,
     .network_enabled = true,

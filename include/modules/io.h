@@ -4,8 +4,11 @@
 #include "types.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 extern bool io_no_color;
+
+void io_set_sandbox_terminal(uint32_t capabilities);
 
 typedef struct {
   uintptr_t *visited;

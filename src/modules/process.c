@@ -39,6 +39,7 @@
 #include "gc/modules.h"
 
 #include "modules/process.h"
+#include "sandbox/sandbox.h"
 #include "modules/tty.h"
 #include "modules/symbol.h"
 #include "modules/buffer.h"
@@ -97,6 +98,10 @@ typedef struct {
 
 static stdin_state_t stdin_state = {0};
 static uint64_t process_start_time = 0;
+static bool sandbox_terminal_enabled = false;
+static uint32_t sandbox_terminal_capabilities = 0;
+static uint16_t sandbox_tty_rows = 24;
+static uint16_t sandbox_tty_cols = 80;
 
 #ifndef _WIN32
 static uv_signal_t sigwinch_handle;
@@ -605,15 +610,22 @@ static bool stdin_is_tty(void) {
 }
 
 static bool stdout_is_tty(void) {
+  if (sandbox_terminal_enabled) return (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDOUT_TTY) != 0;
   return uv_guess_handle(STDOUT_FILENO) == UV_TTY;
 }
 
 static bool stderr_is_tty(void) {
+  if (sandbox_terminal_enabled) return (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDERR_TTY) != 0;
   return uv_guess_handle(STDERR_FILENO) == UV_TTY;
 }
 
 static void get_tty_size(int fd, int *rows, int *cols) {
   int out_rows = 24, out_cols = 80;
+  if (sandbox_terminal_enabled && (fd == STDOUT_FILENO || fd == STDERR_FILENO)) {
+    *rows = sandbox_tty_rows ? sandbox_tty_rows : 24;
+    *cols = sandbox_tty_cols ? sandbox_tty_cols : 80;
+    return;
+  }
 #ifndef _WIN32
   struct winsize ws;
   if (ioctl(fd, TIOCGWINSZ, &ws) == 0) {
@@ -631,6 +643,13 @@ static void get_tty_size(int fd, int *rows, int *cols) {
 #endif
   if (rows) *rows = out_rows;
   if (cols) *cols = out_cols;
+}
+
+void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols) {
+  sandbox_terminal_enabled = true;
+  sandbox_terminal_capabilities = capabilities;
+  sandbox_tty_rows = rows ? rows : 24;
+  sandbox_tty_cols = cols ? cols : 80;
 }
 
 static bool stdin_set_raw_mode(bool enable) {

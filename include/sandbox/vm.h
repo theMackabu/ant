@@ -20,7 +20,9 @@ typedef struct {
 typedef struct {
   const char *image_path;
   const char *kernel_path;
-  const char *request_json;
+  const void *request_data;
+  size_t request_len;
+  uint32_t capabilities;
   const ant_sandbox_mount_t *mounts;
   size_t mount_count;
   bool network_enabled;

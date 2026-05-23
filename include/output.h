@@ -18,10 +18,13 @@ typedef struct {
   ant_output_buffer_t buffer;
 } ant_output_stream_t;
 
+typedef bool (*ant_output_writer_t)(FILE *stream, const void *data, size_t len, void *user);
+
 #ifdef _WIN32
 void ant_output_init_console(void);
 #endif
 
+void ant_output_set_writer(ant_output_writer_t writer, void *user);
 ant_output_stream_t *ant_output_stream(FILE *stream);
 void ant_output_stream_begin(ant_output_stream_t *out);
 

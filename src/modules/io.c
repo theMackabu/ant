@@ -29,14 +29,22 @@
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
+#include "sandbox/sandbox.h"
 #include "modules/symbol.h"
 
 bool io_no_color = false;
+
+static bool g_sandbox_terminal_enabled = false;
+static uint32_t g_sandbox_terminal_capabilities = 0;
 
 static ant_value_t g_console_proto = 0;
 static ant_value_t g_console_ctor = 0;
 
 static bool io_fd_is_tty(int fd) {
+  if (g_sandbox_terminal_enabled) {
+    if (fd == STDOUT_FILENO) return (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDOUT_TTY) != 0;
+    if (fd == STDERR_FILENO) return (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDERR_TTY) != 0;
+  }
 #ifdef _WIN32
   return _isatty(fd) != 0;
 #else
@@ -45,12 +53,22 @@ static bool io_fd_is_tty(int fd) {
 }
 
 static bool io_should_color_fd(int fd) {
+  if (g_sandbox_terminal_enabled) {
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) return false;
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) return true;
+  }
   if (io_no_color) return false;
   const char *force_color = getenv("FORCE_COLOR");
   if (force_color) return ant_env_bool(force_color, true);
   const char *no_color = getenv("NO_COLOR");
   if (no_color && *no_color) return false;
   return io_fd_is_tty(fd);
+}
+
+void io_set_sandbox_terminal(uint32_t capabilities) {
+  g_sandbox_terminal_enabled = true;
+  g_sandbox_terminal_capabilities = capabilities;
+  if (capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) io_no_color = true;
 }
 
 #define JSON_KEY    "\x1b[0m"

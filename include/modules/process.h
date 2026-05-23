@@ -3,8 +3,12 @@
 
 #include "types.h"
 
+#include <stdint.h>
+
 void init_process_module(void);
 ant_value_t process_library(ant_t *js);
+
+void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols);
 
 void process_enable_keypress_events(void);
 void emit_process_event(const char *event_type, ant_value_t *args, int nargs);

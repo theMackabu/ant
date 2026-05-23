@@ -58,6 +58,10 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms) {
                 (unsigned long long)vm->vcpu_exit->exception.virtual_address);
         goto done;
       }
+      if (vm->vsock.exit_received) {
+        rc = vm->vsock.exit_code;
+        goto done;
+      }
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_VTIMER_ACTIVATED) {
       if (vm->trace) fprintf(stderr, "sandbox vm: vtimer activated\n");
       rc = ant_hvf_raise_vtimer(vm, "vtimer activated");
@@ -174,7 +178,9 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
                       ANT_VIRTIO_VSOCK_QUEUE_COUNT,
                       ANT_VIRTIO_VSOCK_QUEUE_SIZE,
                       8);
-  vm.vsock.request_json = config->request_json;
+  vm.vsock.request_data = config->request_data;
+  vm.vsock.request_len = config->request_len;
+  vm.vsock.capabilities = config->capabilities;
   for (size_t i = 0; i < vm.p9_count; i++) {
     ant_hvf_virtio_init(&vm.p9[i].virtio,
                         ANT_HVF_VIRTIO_KIND_9P,
@@ -258,11 +264,11 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   if (timeout_env && timeout_env[0]) timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
 
   rc = ant_hvf_run(&vm, timeout_ms);
-  ant_hvf_uart_flush(&vm);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");
 
 done:
-  ant_hvf_uart_flush(&vm);
+  if (!vm.vsock.exit_received && ant_hvf_uart_has_panic(&vm)) ant_hvf_uart_report_panic(&vm);
+  else ant_hvf_uart_discard(&vm);
   ant_hvf_net_stop(&vm);
   if (vcpu_created) {
     int destroy_rc = ant_hvf_check(hv_vcpu_destroy(vm.vcpu), "hv_vcpu_destroy");
@@ -278,6 +284,7 @@ done:
   }
   if (vm.image_fd >= 0) close(vm.image_fd);
   if (vm.host_mem && vm.host_mem != MAP_FAILED) munmap(vm.host_mem, vm.mem_size);
+  free(vm.vsock.rx_stream);
   for (size_t i = 0; i < vm.p9_count; i++) free(vm.p9[i].fids);
   if (vm.net_lock_init) pthread_mutex_destroy(&vm.net_lock);
   return rc;

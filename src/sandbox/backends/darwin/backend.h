@@ -134,6 +134,7 @@
 #define ANT_HVF_VSOCK_HOST_CID ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID
 #define ANT_HVF_VSOCK_HOST_PORT ANT_SANDBOX_TRANSPORT_VSOCK_PORT
 #define ANT_HVF_VSOCK_BUF_ALLOC 65536u
+#define ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES (16u * 1024u)
 #define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
 
@@ -319,11 +320,18 @@ typedef struct {
 
 typedef struct {
   ant_hvf_virtio_device_t virtio;
-  const char *request_json;
+  const void *request_data;
+  size_t request_len;
   bool connected;
   bool request_sent;
   uint32_t peer_port;
   uint32_t fwd_cnt;
+  bool exit_received;
+  int exit_code;
+  uint32_t capabilities;
+  unsigned char *rx_stream;
+  size_t rx_stream_len;
+  size_t rx_stream_cap;
 } ant_hvf_vsock_device_t;
 
 typedef struct {
@@ -332,6 +340,14 @@ typedef struct {
 } ant_hvf_net_packet_t;
 
 typedef struct ant_hvf_nat ant_hvf_nat_t;
+
+typedef struct {
+  uint8_t *data;
+  size_t len;
+  size_t cap;
+  size_t limit;
+  bool truncated;
+} ant_hvf_uart_capture_t;
 
 typedef struct {
   void *host_mem;
@@ -361,8 +377,7 @@ typedef struct {
   ant_hvf_9p_device_t p9[ANT_HVF_VIRTIO_9P_MAX];
   size_t p9_count;
   ant_hvf_vsock_device_t vsock;
-  uint8_t uart_buf[4096];
-  size_t uart_len;
+  ant_hvf_uart_capture_t uart;
   bool trace;
   bool timed_out;
   bool gic_msi_enabled;
@@ -424,7 +439,9 @@ typedef struct {
 extern ant_hvf_gic_api_t ant_hvf_gic;
 
 
-void ant_hvf_uart_flush(ant_hvf_vm_t *vm);
+void ant_hvf_uart_discard(ant_hvf_vm_t *vm);
+void ant_hvf_uart_report_panic(ant_hvf_vm_t *vm);
+bool ant_hvf_uart_has_panic(ant_hvf_vm_t *vm);
 void ant_hvf_uart_put(ant_hvf_vm_t *vm, uint8_t byte);
 uint32_t ant_bswap32(uint32_t x);
 uint64_t ant_bswap64(uint64_t x);
@@ -583,13 +600,14 @@ int ant_hvf_vsock_write_iov(ant_hvf_vm_t *vm,
                                    uint32_t *used_len);
 int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
                                      uint16_t op,
-                                     const char *payload,
+                                     const void *payload,
                                      uint32_t payload_len);
 int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm);
 int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
                                         uint64_t desc_base,
                                         uint16_t head,
                                         ant_virtio_vsock_hdr_t *hdr,
+                                        unsigned char **payload,
                                         uint32_t *used_len);
 int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue);
 uint64_t ant_hvf_9p_hash(const char *path);
