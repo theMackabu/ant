@@ -11,6 +11,7 @@ typedef enum {
   ANT_SANDBOX_REQUEST_NONE = 0,
   ANT_SANDBOX_REQUEST_RUN,
   ANT_SANDBOX_REQUEST_EVAL,
+  ANT_SANDBOX_REQUEST_CLOSE,
 } ant_sandbox_request_mode_t;
 
 typedef enum {
@@ -21,6 +22,7 @@ typedef enum {
   ANT_SANDBOX_FRAME_RESULT = 5,
   ANT_SANDBOX_FRAME_ERROR = 6,
   ANT_SANDBOX_FRAME_EXIT = 7,
+  ANT_SANDBOX_FRAME_CLOSE = 8,
 } ant_sandbox_frame_type_t;
 
 #define ANT_SANDBOX_FRAME_MAGIC "ANTF"
@@ -83,6 +85,7 @@ uint8_t *ant_sandbox_build_eval_request_frame(
   uint16_t tty_cols,
   size_t *len_out
 );
+uint8_t *ant_sandbox_build_close_request_frame(size_t *len_out);
 bool ant_sandbox_parse_request_frame(const uint8_t *frame, size_t frame_len, ant_sandbox_request_t *out);
 int ant_sandbox_eval_module(ant_t *js, const char *script, size_t len);
 uint8_t *ant_sandbox_build_result_payload(ant_t *js, ant_value_t value, size_t *len_out);

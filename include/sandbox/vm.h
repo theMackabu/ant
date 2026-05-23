@@ -24,6 +24,15 @@ typedef bool (*ant_sandbox_vm_frame_handler_t)(
   void *user
 );
 
+typedef struct ant_sandbox_vm_session ant_sandbox_vm_session_t;
+
+typedef struct {
+  const void *request_data;
+  size_t request_len;
+  ant_sandbox_vm_frame_handler_t frame_handler;
+  void *frame_handler_user;
+} ant_sandbox_vm_request_t;
+
 typedef struct {
   const char *image_path;
   const char *kernel_path;
@@ -46,6 +55,9 @@ typedef struct {
 typedef struct ant_sandbox_vm_backend {
   const char *name;
   int (*start)(const ant_sandbox_vm_config_t *config);
+  int (*create_session)(const ant_sandbox_vm_config_t *config, void **session_out);
+  int (*execute_session)(void *session, const ant_sandbox_vm_request_t *request);
+  void (*destroy_session)(void *session);
 } ant_sandbox_vm_backend_t;
 
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend;
@@ -54,5 +66,8 @@ const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend)
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void);
 bool ant_sandbox_vm_supported(void);
 int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config);
+int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_sandbox_vm_session_t **session_out);
+int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_sandbox_vm_request_t *request);
+void ant_sandbox_vm_session_destroy(ant_sandbox_vm_session_t *session);
 
 #endif

@@ -235,6 +235,10 @@ uint8_t *ant_sandbox_build_eval_request_frame(
   return frame;
 }
 
+uint8_t *ant_sandbox_build_close_request_frame(size_t *len_out) {
+  return sandbox_alloc_frame(ANT_SANDBOX_FRAME_CLOSE, 0, len_out);
+}
+
 typedef struct {
   const uint8_t *p;
   const uint8_t *end;
@@ -365,6 +369,10 @@ bool ant_sandbox_parse_request_frame(const uint8_t *frame, size_t frame_len, ant
       break;
     case ANT_SANDBOX_FRAME_EVAL:
       ok = sandbox_parse_eval_payload(payload, payload_len, out);
+      break;
+    case ANT_SANDBOX_FRAME_CLOSE:
+      ok = payload_len == 0;
+      if (ok) out->mode = ANT_SANDBOX_REQUEST_CLOSE;
       break;
     default:
       fprintf(stderr, "sandbox daemon: unsupported request frame type %u\n", frame[5]);

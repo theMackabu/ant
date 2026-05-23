@@ -30,6 +30,7 @@ typedef struct {
   uint32_t capabilities;
   uint16_t tty_rows;
   uint16_t tty_cols;
+  ant_sandbox_vm_session_t *session;
   bool verbose;
   bool closed;
 } sandbox_state_t;
@@ -46,6 +47,7 @@ static void sandbox_finalize(ant_t *js, ant_object_t *obj) {
   sandbox_state_t *state = sandbox_get_state(value);
   if (!state) return;
   js_clear_native(value, SANDBOX_NATIVE_TAG);
+  ant_sandbox_vm_session_destroy(state->session);
   free(state);
 }
 
@@ -283,12 +285,6 @@ static sandbox_state_t *sandbox_require_open_state(ant_t *js, ant_value_t *error
   return state;
 }
 
-static ant_value_t sandbox_resolved_number(ant_t *js, int value) {
-  ant_value_t promise = js_mkpromise(js);
-  js_resolve_promise(js, promise, js_mknum(value));
-  return promise;
-}
-
 typedef struct {
   ant_t *js;
   bool has_result;
@@ -320,26 +316,12 @@ static bool sandbox_capture_frame(uint8_t type, const void *payload, size_t payl
   return false;
 }
 
-static ant_value_t sandbox_start_vm(
-  ant_t *js,
-  sandbox_state_t *state,
-  uint8_t *request,
-  size_t request_len,
-  bool expect_result
-) {
-  if (!request) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox request"));
-
-  sandbox_frame_capture_t capture = {
-    .js = js,
-    .result = js_mkundef(),
-    .error = js_mkundef(),
-  };
+static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state) {
+  if (state->session) return 0;
 
   ant_sandbox_vm_config_t config = {
     .image_path = state->assets.image,
     .kernel_path = state->assets.kernel,
-    .request_data = request,
-    .request_len = request_len,
     .capabilities = state->capabilities,
     .mounts = state->launch.mounts,
     .mount_count = state->launch.mount_count,
@@ -350,11 +332,42 @@ static ant_value_t sandbox_start_vm(
     .memory_size = 1024ull * 1024ull * 1024ull,
     .timeout_ms = 0,
     .verbose = state->verbose,
+  };
+
+  (void)js;
+  return ant_sandbox_vm_session_create(&config, &state->session);
+}
+
+static ant_value_t sandbox_execute_request(
+  ant_t *js,
+  sandbox_state_t *state,
+  uint8_t *request,
+  size_t request_len,
+  bool expect_result
+) {
+  if (!request) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox request"));
+
+  int rc = sandbox_ensure_session(js, state);
+  if (rc != 0) {
+    free(request);
+    if (rc == -ENOSYS) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox VM backend is not available"));
+    return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to start sandbox VM session: %s", strerror(-rc)));
+  }
+
+  sandbox_frame_capture_t capture = {
+    .js = js,
+    .result = js_mkundef(),
+    .error = js_mkundef(),
+  };
+
+  ant_sandbox_vm_request_t vm_request = {
+    .request_data = request,
+    .request_len = request_len,
     .frame_handler = sandbox_capture_frame,
     .frame_handler_user = &capture,
   };
 
-  int rc = ant_sandbox_vm_start(&config);
+  rc = ant_sandbox_vm_session_execute(state->session, &vm_request);
   free(request);
 
   GC_ROOT_SAVE(root_mark, js);
@@ -435,7 +448,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
                                                          (uint32_t)state->launch.forward_count,
                                                          &request_len);
   free(argv);
-  return sandbox_start_vm(js, state, request, request_len, false);
+  return sandbox_execute_request(js, state, request, request_len, false);
 }
 
 static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
@@ -452,16 +465,45 @@ static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
                                                           state->tty_rows,
                                                           state->tty_cols,
                                                           &request_len);
-  return sandbox_start_vm(js, state, request, request_len, true);
+  return sandbox_execute_request(js, state, request, request_len, true);
 }
 
 static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   sandbox_state_t *state = sandbox_get_state(js->this_val);
-  if (state) state->closed = true;
   ant_value_t promise = js_mkpromise(js);
-  js_resolve_promise(js, promise, js_mkundef());
+  if (!state || state->closed) {
+    js_resolve_promise(js, promise, js_mkundef());
+    return promise;
+  }
+
+  state->closed = true;
+  if (!state->session) {
+    js_resolve_promise(js, promise, js_mkundef());
+    return promise;
+  }
+
+  size_t request_len = 0;
+  uint8_t *request = ant_sandbox_build_close_request_frame(&request_len);
+  if (!request) {
+    ant_sandbox_vm_session_destroy(state->session);
+    state->session = NULL;
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox close request"));
+    return promise;
+  }
+
+  ant_sandbox_vm_request_t vm_request = {
+    .request_data = request,
+    .request_len = request_len,
+  };
+  int rc = ant_sandbox_vm_session_execute(state->session, &vm_request);
+  free(request);
+  ant_sandbox_vm_session_destroy(state->session);
+  state->session = NULL;
+
+  if (rc == 0) js_resolve_promise(js, promise, js_mkundef());
+  else js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox close failed with code %d", rc));
   return promise;
 }
 

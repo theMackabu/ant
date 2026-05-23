@@ -426,6 +426,58 @@ static int execute_module(ant_t *js, const char *filename) {
   return server_maybe_start_from_export(js, default_export);
 }
 
+static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, bool *close_out) {
+  *close_out = false;
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_CLOSE) {
+    *close_out = true;
+    return EXIT_SUCCESS;
+  }
+
+  if (sandbox->cwd && chdir(sandbox->cwd) != 0) {
+    fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox->cwd, strerror(errno));
+    return EXIT_FAILURE;
+  }
+
+  io_set_sandbox_terminal(sandbox->capabilities);
+  process_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
+  ant_sandbox_policy_set_forwards(sandbox->forward_ports, sandbox->forward_count);
+
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_EVAL) {
+    return ant_sandbox_eval_module(js, sandbox->source, strlen(sandbox->source));
+  }
+
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) {
+    char *resolved_file = resolve_js_file(sandbox->entry);
+    int rc = EXIT_SUCCESS;
+
+    if (!resolved_file) {
+      crfprintf(stderr, msg.module_not_found, sandbox->entry);
+      rc = EXIT_FAILURE;
+    } else {
+      rc = execute_module(js, resolved_file);
+      js_run_event_loop(js);
+      free(resolved_file);
+    }
+    return rc;
+  }
+
+  fprintf(stderr, "sandbox daemon: unsupported request mode\n");
+  return EXIT_FAILURE;
+}
+
+static int run_sandbox_daemon_loop(ant_t *js, ant_sandbox_request_t *sandbox) {
+  for (;;) {
+    bool close_requested = false;
+    int code = execute_sandbox_request(js, sandbox, &close_requested);
+    ant_sandbox_transport_send_exit(code);
+    ant_sandbox_request_free(sandbox);
+    memset(sandbox, 0, sizeof(*sandbox));
+
+    if (close_requested) return code;
+    if (!ant_sandbox_read_request_transport(sandbox)) return EXIT_FAILURE;
+  }
+}
+
 int main(int argc, char *argv[]) {
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
   
@@ -812,6 +864,11 @@ int main(int argc, char *argv[]) {
     crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   }
 
+  if (sandbox_daemon) {
+    js_result = run_sandbox_daemon_loop(js, &sandbox);
+    goto cleanup;
+  }
+
   if (inspector.enabled && !ant_inspector_start(js, &inspector)) {
     fprintf(stderr, "Unable to start inspector on %s:%d\n", inspector.host, inspector.port);
     js_result = EXIT_FAILURE;
@@ -833,23 +890,6 @@ int main(int argc, char *argv[]) {
   
   if (inspector.wait_for_session) ant_inspector_wait_for_session();
   if (internal_crash_report_mode) js_result = ant_crash_run_internal_report(js);
-
-  else if (sandbox_daemon && sandbox.mode == ANT_SANDBOX_REQUEST_EVAL) {
-    js_result = ant_sandbox_eval_module(js, sandbox.source, strlen(sandbox.source));
-  }
-
-  else if (sandbox_daemon && sandbox.mode == ANT_SANDBOX_REQUEST_RUN) {
-    char *resolved_file = resolve_js_file(sandbox.entry);
-
-    if (!resolved_file) {
-      crfprintf(stderr, msg.module_not_found, sandbox.entry);
-      js_result = EXIT_FAILURE;
-    } else {
-      js_result = execute_module(js, resolved_file);
-      js_run_event_loop(js);
-      free(resolved_file);
-    }
-  }
 
   else if (eval->count > 0) {
     const char *script = eval->sval[0];
@@ -888,7 +928,6 @@ int main(int argc, char *argv[]) {
   }}
     
   cleanup: {
-    if (sandbox_daemon) ant_sandbox_transport_send_exit(js_result);
     js_destroy(js);
     CLEANUP_ARGS_AND_ARGV();
   }
