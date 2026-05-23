@@ -1,7 +1,7 @@
 # Nanos Sandbox: Comments
 
 Status: active
-Last reviewed: 2026-05-16
+Last reviewed: 2026-05-23
 Owner: theMackabu
 
 ## Core Architecture
@@ -30,8 +30,8 @@ using platform-specific guest conventions:
 The current common denominators are:
 
 - request/results/stdout/stderr: length-prefixed frames, likely virtio-vsock
-- files: virtio-9p for the default read-only cwd mount, or an attached input
-  volume when a backend cannot provide 9p yet
+- files: virtio-9p for read-only host mounts, or an attached input volume when
+  a backend cannot provide 9p yet
 - debug output: guest console/PL011
 
 The Darwin backend uses Hypervisor.framework directly. It must boot the cached
@@ -55,22 +55,32 @@ the same binary stream transport.
 
 ## Mount Comments
 
-Use the project directory as the first implementation model because it makes
-local imports and file reads work naturally.
+Use the project directory as the default implementation model because it makes
+local imports and file reads work naturally. The CLI now supports repeatable
+read-only mounts where each host path maps to a real guest mountpoint.
 
-Example request shape during bringup:
+Examples:
 
-```json
-{
-  "mode": "run",
-  "cwd": "/workspace",
-  "entry": "script.js",
-  "argv": [],
-  "mounts": [
-    { "host": ".", "guest": "/workspace", "readonly": true },
-    { "host": "tmp", "guest": "/tmp", "readonly": false }
-  ]
-}
+```sh
+ant sandbox script.js
+ant sandbox --mount .:/project script.js
+ant sandbox --mount .:/workspace --mount ./fixtures:/fixtures script.js
+```
+
+The host backend gives each mount its own virtio-9p device and encodes the
+attach ID plus guest path in the 9p tag, for example `0:/workspace:ro`. The
+patched Nanos side creates the target mountpoint and merges dynamic tag mounts
+with any boot manifest mount table.
+
+The request transport uses a binary frame with length-prefixed strings. Mounts
+are established by the backend as real virtio-9p devices; the daemon request
+only needs the guest cwd, entry/source, and argv.
+
+Writable mounts are still future work. The planned CLI shape is explicit:
+
+```sh
+ant sandbox --write tmp:/tmp script.js
+ant sandbox --write ./out:/out script.js
 ```
 
 ## Native VMM Comments
@@ -93,9 +103,13 @@ Each host backend adapts the platform API to devices Nanos already understands.
   should the image manifest explicitly pass `--sandbox-daemon`?
 - Should the first prototype use 9p for mounted cwd, or package a small init
   request into a separate block/initrd-style device?
-- What is the exact stdout/stderr/result framing format?
-- How should exit codes and thrown exceptions map back to the host CLI?
-- What minimal APIs should `ant:sandbox` expose in the first module version?
+- Should structured result frames eventually support richer object transfer, or
+  should `ant:sandbox` keep primitive results and require explicit stdout/files
+  for larger data?
+- How should exit codes, thrown exceptions, guest daemon errors, and VM/backend
+  failures map into distinct host error classes?
+- Should persistent `ant:sandbox` add async request queueing/cancellation, or
+  keep one in-flight request per VM until the first stable API pass?
 
 ## Tech Debt Notes
 
