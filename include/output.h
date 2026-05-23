@@ -25,6 +25,7 @@ void ant_output_init_console(void);
 #endif
 
 void ant_output_set_writer(ant_output_writer_t writer, void *user);
+bool ant_output_has_writer(void);
 ant_output_stream_t *ant_output_stream(FILE *stream);
 void ant_output_stream_begin(ant_output_stream_t *out);
 

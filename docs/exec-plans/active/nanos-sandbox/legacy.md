@@ -25,14 +25,8 @@ pieces are intentionally minimal and should not be treated as finished APIs:
 - RTC and miscellaneous MMIO devices are minimal compatibility shims. RTC reads
   host wall time and ignores writes; unknown devices should become explicit
   models or explicit failures as the machine contract stabilizes.
-- Shutdown is still minimal. PSCI/semihosting exits can stop the VM, but
-  cancellation, forced teardown, and long-running lifecycle policy still need a
-  deliberate design.
-- Internal/debug environment flags such as `ANT_SANDBOX_VM_TRACE_9P_PATHS` and
-  `ANT_SANDBOX_VM_TRACE_9P_READDIR` are bringup controls. Keep them hidden or
-  replace them deliberately before exposing a stable CLI.
-- Remove the scoped 9p trace flags after module-loading and directory-walk
-  performance is fixed; they are temporary probes for the current loading perf
-  work, not a stable diagnostics API.
+- Shutdown is still minimal. PSCI/semihosting exits and explicit timeout policy
+  can stop the VM, but API-level cancellation, forced teardown, and graceful
+  long-running session lifecycle still need a deliberate design.
 - The backend is Apple Silicon only. The non-aarch64 Darwin path is a hard
   `ENOSYS` stub.

@@ -620,3 +620,24 @@ The host also wires virtio-vsock queue 2 instead of treating it as unused.
 Nanos patch `0014-virtio-vsock-event-queue.patch` posts event buffers on the
 guest event queue and rearms the queue after each event completion, including
 the transport-reset event used by the virtio-vsock ABI.
+
+## Virtio-9p Module Loading Performance
+
+The Darwin 9p server now caches validated stat/path results per mounted 9p
+device. Module loading does a large number of repeated walks for shared
+directory prefixes and package files; caching removes most repeated host
+`realpath`/`lstat` churn while keeping path validation at cache fill time.
+
+Writable 9p mutations clear the per-mount cache so write workflows do not keep
+stale file or directory state.
+
+The temporary `ANT_SANDBOX_VM_TRACE_9P_PATHS` and
+`ANT_SANDBOX_VM_TRACE_9P_READDIR` probes were removed after this pass instead
+of becoming stable diagnostics.
+
+Validation after the 9p cache:
+
+```sh
+/usr/bin/time -p ./build/ant sandbox examples/npm/smoke
+./build/ant sandbox --mount .:/workspace --write tmp:/tmp examples/demo/writable_mount.js
+```

@@ -36,6 +36,10 @@ void ant_output_set_writer(ant_output_writer_t writer, void *user) {
   g_writer_user = user;
 }
 
+bool ant_output_has_writer(void) {
+  return g_writer != NULL;
+}
+
 ant_output_stream_t *ant_output_stream(FILE *stream) {
   ant_output_stream_t *out = (stream == stderr) ? &g_stderr_writer : &g_stdout_writer;
   out->stream = stream;

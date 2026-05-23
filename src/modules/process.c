@@ -645,11 +645,39 @@ static void get_tty_size(int fd, int *rows, int *cols) {
   if (cols) *cols = out_cols;
 }
 
+static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
+  if (!sandbox_terminal_enabled || !is_special_object(process_obj)) return;
+
+  ant_value_t env_obj = js_get(js, process_obj, "env");
+  if (!is_special_object(env_obj)) return;
+
+  if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
+    js_set(js, env_obj, "NO_COLOR", js_mkstr(js, "1", 1));
+    js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "0", 1));
+  }
+  else if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE)
+    js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "1", 1));
+}
+
 void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols) {
   sandbox_terminal_enabled = true;
   sandbox_terminal_capabilities = capabilities;
+
   sandbox_tty_rows = rows ? rows : 24;
   sandbox_tty_cols = cols ? cols : 80;
+
+  ant_t *js = rt ? rt->js : NULL;
+  if (!js) return;
+
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
+  if (!is_special_object(process_obj)) return;
+  process_update_sandbox_env(js, process_obj);
+
+  ant_value_t stdout_obj = js_get(js, process_obj, "stdout");
+  if (is_special_object(stdout_obj)) js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
+
+  ant_value_t stderr_obj = js_get(js, process_obj, "stderr");
+  if (is_special_object(stderr_obj)) js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
 }
 
 static bool stdin_set_raw_mode(bool enable) {
@@ -838,9 +866,8 @@ static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs,
   ant_output_stream_t *out = NULL;
 
   if (!data) return js_false;
-  if (uv_guess_handle(fd) == UV_TTY) {
+  if (!ant_output_has_writer() && uv_guess_handle(fd) == UV_TTY)
     return js_bool(tty_ctrl_write_fd(fd, data, len));
-  }
 
   out = ant_output_stream(stream);
   ant_output_stream_begin(out);
@@ -1941,6 +1968,7 @@ void init_process_module() {
   js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
   js_set(js, env_obj, "toString", js_mkfun(env_toString));
   js_set(js, process_obj, "env", env_obj);
+  process_update_sandbox_env(js, process_obj);
   
   ant_value_t argv_arr = js_mkarr(js);
   for (int i = 0; i < rt->argc; i++) {

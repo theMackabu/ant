@@ -204,7 +204,10 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   if (vm->image_fd >= 0) close(vm->image_fd);
   if (vm->host_mem && vm->host_mem != MAP_FAILED) munmap(vm->host_mem, vm->mem_size);
   free(vm->vsock.rx_stream);
-  for (size_t i = 0; i < vm->p9_count; i++) free(vm->p9[i].fids);
+  for (size_t i = 0; i < vm->p9_count; i++) {
+    free(vm->p9[i].fids);
+    ant_hvf_9p_stat_cache_clear(&vm->p9[i]);
+  }
   if (vm->net_lock_init) pthread_mutex_destroy(&vm->net_lock);
   if (rc_inout) *rc_inout = rc;
 }

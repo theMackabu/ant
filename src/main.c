@@ -440,6 +440,7 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, bo
 
   io_set_sandbox_terminal(sandbox->capabilities);
   process_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
+  tty_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
   ant_sandbox_policy_set_forwards(sandbox->forward_ports, sandbox->forward_count);
 
   if (sandbox->mode == ANT_SANDBOX_REQUEST_EVAL) {
@@ -759,6 +760,7 @@ int main(int argc, char *argv[]) {
   if (sandbox_daemon) {
     io_set_sandbox_terminal(sandbox.capabilities);
     process_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+    tty_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
     ant_sandbox_policy_set_forwards(sandbox.forward_ports, sandbox.forward_count);
   }
 

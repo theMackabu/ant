@@ -461,12 +461,14 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
-  int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
-  if (rc != 0) return rc;
-  uint16_t avail_idx = ant_hvf_load16(idx_raw);
+  int rc = 0;
+  for (;;) {
+    unsigned char idx_raw[2];
+    rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
+    if (rc != 0) return rc;
+    uint16_t avail_idx = ant_hvf_load16(idx_raw);
+    if (q->last_avail == avail_idx) break;
 
-  while (q->last_avail != avail_idx) {
     uint16_t ring_slot = q->last_avail % q->size;
     unsigned char head_raw[2];
     rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,

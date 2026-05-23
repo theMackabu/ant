@@ -18,6 +18,7 @@
 #define ANT_HVF_9P_IOUNIT (ANT_HVF_9P_MSIZE - 11u)
 #define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
+#define ANT_HVF_9P_HOST_PATH_MAX 4096u
 
 #define P9_RLERROR 7u
 #define P9_TSTATFS 8u
@@ -71,6 +72,14 @@ typedef struct {
 } ant_hvf_9p_fid_t;
 
 typedef struct {
+  bool occupied;
+  char *path;
+  char *host_path;
+  int rc;
+  struct stat st;
+} ant_hvf_9p_stat_cache_entry_t;
+
+typedef struct {
   ant_hvf_virtio_device_t virtio;
   const char *root;
   const char *tag;
@@ -78,6 +87,9 @@ typedef struct {
   ant_hvf_9p_fid_t *fids;
   size_t fid_count;
   size_t fid_capacity;
+  ant_hvf_9p_stat_cache_entry_t *stat_cache;
+  size_t stat_cache_capacity;
+  size_t stat_cache_count;
 } ant_hvf_9p_device_t;
 
 uint64_t ant_hvf_9p_hash(const char *path);
@@ -95,6 +107,7 @@ uint32_t ant_hvf_9p_error(unsigned char *out, uint16_t tag, uint32_t ecode);
 bool ant_hvf_9p_path_bad(const char *path);
 int ant_hvf_9p_host_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, size_t out_len);
 int ant_hvf_9p_stat(ant_hvf_9p_device_t *dev, const char *rel, struct stat *st);
+void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev);
 uint8_t ant_hvf_9p_dtype_from_mode(mode_t mode);
 bool ant_hvf_9p_dtype_is_dir(uint8_t dtype);
 int ant_hvf_9p_dirent_type(ant_hvf_9p_device_t *dev,
@@ -103,7 +116,6 @@ int ant_hvf_9p_dirent_type(ant_hvf_9p_device_t *dev,
                            uint8_t *dtype,
                            bool *is_dir);
 int ant_hvf_9p_walk(ant_hvf_9p_device_t *dev, const char *base, const char *name, char *out, size_t out_len);
-bool ant_hvf_9p_trace_paths(void);
 int ant_hvf_9p_read_chain(ant_hvf_vm_t *vm,
                           uint64_t desc_base,
                           uint16_t head,
