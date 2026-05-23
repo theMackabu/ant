@@ -1,6 +1,13 @@
 import { Sandbox } from 'ant:sandbox';
 
-const sandbox = new Sandbox({ mount: '.:/workspace' });
+const sandbox = new Sandbox({
+  mount: '.:/workspace'
+});
+
+const writableSandbox = new Sandbox({
+  mount: '.:/workspace',
+  write: 'tmp:/tmp'
+});
 
 async function showError(label, fn) {
   try {
@@ -18,6 +25,10 @@ try {
   const code = await sandbox.run('examples/demo/pi.js');
   console.log(`sandbox exited with code ${code}`);
 
+  console.log('\nsandbox writable mount:');
+  const writeCode = await writableSandbox.run('examples/demo/writable_mount.js');
+  console.log(`writable sandbox exited with code ${writeCode}`);
+
   console.log('\nsandbox guest error:');
   await showError('eval threw', () => sandbox.eval('throw new TypeError("boom")'));
 
@@ -25,4 +36,5 @@ try {
   await showError('run failed', () => sandbox.run('does-not-exist.js'));
 } finally {
   await sandbox.close();
+  await writableSandbox.close();
 }
