@@ -1,13 +1,10 @@
 import { Sandbox } from 'ant:sandbox';
 
-const sandbox = new Sandbox({
-  mount: '.:/workspace'
-});
+const verbose = process.argv.includes('--dump');
+const base = { mount: '.:/workspace', verbose };
 
-const writableSandbox = new Sandbox({
-  mount: '.:/workspace',
-  write: 'tmp:/tmp'
-});
+const sandbox = new Sandbox(base);
+const writableSandbox = new Sandbox({ ...base, write: 'tmp:/tmp' });
 
 async function showError(label, fn) {
   try {
