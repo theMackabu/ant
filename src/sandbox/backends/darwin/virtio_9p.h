@@ -19,6 +19,8 @@
 #define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
 #define ANT_HVF_9P_HOST_PATH_MAX 4096u
+#define ANT_HVF_9P_TOP_PATH_COUNT 64u
+#define ANT_HVF_9P_TOP_PATH_LEN 160u
 
 #define P9_RLERROR 7u
 #define P9_TSTATFS 8u
@@ -80,6 +82,37 @@ typedef struct {
 } ant_hvf_9p_stat_cache_entry_t;
 
 typedef struct {
+  bool used;
+  uint64_t hash;
+  char path[ANT_HVF_9P_TOP_PATH_LEN];
+  uint64_t count;
+  uint64_t stat_hits;
+  uint64_t stat_misses;
+  uint64_t reads;
+  uint64_t readdirs;
+  uint64_t bytes;
+} ant_hvf_9p_path_stat_t;
+
+typedef struct {
+  uint64_t requests;
+  uint64_t errors;
+  uint64_t op_counts[256];
+  uint64_t stat_hits;
+  uint64_t stat_misses;
+  uint64_t stat_cache_clears;
+  uint64_t read_count;
+  uint64_t read_bytes;
+  uint64_t readdir_count;
+  uint64_t readdir_bytes;
+  uint64_t write_count;
+  uint64_t write_bytes;
+  uint64_t total_ns;
+  uint64_t max_ns;
+  uint8_t max_type;
+  ant_hvf_9p_path_stat_t paths[ANT_HVF_9P_TOP_PATH_COUNT];
+} ant_hvf_9p_stats_t;
+
+typedef struct {
   ant_hvf_virtio_device_t virtio;
   const char *root;
   const char *tag;
@@ -90,6 +123,7 @@ typedef struct {
   ant_hvf_9p_stat_cache_entry_t *stat_cache;
   size_t stat_cache_capacity;
   size_t stat_cache_count;
+  ant_hvf_9p_stats_t stats;
 } ant_hvf_9p_device_t;
 
 uint64_t ant_hvf_9p_hash(const char *path);
@@ -138,5 +172,6 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
                            unsigned char *resp,
                            size_t resp_cap);
 int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev);
+void ant_hvf_9p_report_stats(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev, size_t index);
 
 #endif

@@ -188,6 +188,7 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
 
   if (!vm->vsock.exit_received && ant_hvf_uart_has_panic(vm)) ant_hvf_uart_report_panic(vm);
   else ant_hvf_uart_discard(vm);
+  for (size_t i = 0; i < vm->p9_count; i++) ant_hvf_9p_report_stats(vm, &vm->p9[i], i);
   ant_hvf_net_stop(vm);
   if (session->vcpu_created) {
     int destroy_rc = ant_hvf_check(hv_vcpu_destroy(vm->vcpu), "hv_vcpu_destroy");

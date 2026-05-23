@@ -2,6 +2,12 @@
 
 #if defined(__aarch64__)
 
+static uint64_t ant_hvf_9p_now_ns(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 uint64_t ant_hvf_9p_hash(const char *path) {
   uint64_t h = 1469598103934665603ull;
   for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
@@ -9,6 +15,103 @@ uint64_t ant_hvf_9p_hash(const char *path) {
     h *= 1099511628211ull;
   }
   return h ? h : 1;
+}
+
+static const char *ant_hvf_9p_type_name(uint8_t type) {
+  switch (type) {
+    case P9_TVERSION: return "version";
+    case P9_TATTACH: return "attach";
+    case P9_TWALK: return "walk";
+    case P9_TGETATTR: return "getattr";
+    case P9_TLOPEN: return "lopen";
+    case P9_TREAD: return "read";
+    case P9_TWRITE: return "write";
+    case P9_TREADDIR: return "readdir";
+    case P9_TREADLINK: return "readlink";
+    case P9_TLCREATE: return "lcreate";
+    case P9_TMKDIR: return "mkdir";
+    case P9_TMKNOD: return "mknod";
+    case P9_TSYMLINK: return "symlink";
+    case P9_TSETATTR: return "setattr";
+    case P9_TFSYNC: return "fsync";
+    case P9_TRENAMEAT: return "renameat";
+    case P9_TUNLINKAT: return "unlinkat";
+    case P9_TSTATFS: return "statfs";
+    case P9_TCLUNK: return "clunk";
+    default: return "unknown";
+  }
+}
+
+static void ant_hvf_9p_copy_path_label(char *out, size_t out_len, const char *path) {
+  if (!out || out_len == 0) return;
+  if (!path || path[0] == '\0') {
+    snprintf(out, out_len, ".");
+    return;
+  }
+  size_t len = strlen(path);
+  if (len < out_len) {
+    memcpy(out, path, len + 1);
+    return;
+  }
+  if (out_len <= 4) {
+    snprintf(out, out_len, "%s", path + len - (out_len - 1));
+    return;
+  }
+  out[0] = '.';
+  out[1] = '.';
+  out[2] = '.';
+  size_t tail = out_len - 4;
+  memcpy(out + 3, path + len - tail, tail);
+  out[out_len - 1] = '\0';
+}
+
+static ant_hvf_9p_path_stat_t *ant_hvf_9p_path_stat(ant_hvf_9p_device_t *dev, const char *path) {
+  if (!dev) return NULL;
+  const char *key = path ? path : "";
+  uint64_t h = ant_hvf_9p_hash(key);
+  size_t first = (size_t)(h % ANT_HVF_9P_TOP_PATH_COUNT);
+  size_t fallback = first;
+  uint64_t lowest = UINT64_MAX;
+
+  for (size_t probe = 0; probe < ANT_HVF_9P_TOP_PATH_COUNT; probe++) {
+    size_t idx = (first + probe) % ANT_HVF_9P_TOP_PATH_COUNT;
+    ant_hvf_9p_path_stat_t *entry = &dev->stats.paths[idx];
+    if (entry->used && entry->hash == h) return entry;
+    if (!entry->used) {
+      entry->used = true;
+      entry->hash = h;
+      ant_hvf_9p_copy_path_label(entry->path, sizeof(entry->path), key);
+      return entry;
+    }
+    if (entry->count < lowest) {
+      lowest = entry->count;
+      fallback = idx;
+    }
+  }
+
+  ant_hvf_9p_path_stat_t *entry = &dev->stats.paths[fallback];
+  memset(entry, 0, sizeof(*entry));
+  entry->used = true;
+  entry->hash = h;
+  ant_hvf_9p_copy_path_label(entry->path, sizeof(entry->path), key);
+  return entry;
+}
+
+static void ant_hvf_9p_count_path(ant_hvf_9p_device_t *dev,
+                                  const char *path,
+                                  bool stat_hit,
+                                  bool stat_miss,
+                                  bool read,
+                                  bool readdir,
+                                  uint64_t bytes) {
+  ant_hvf_9p_path_stat_t *entry = ant_hvf_9p_path_stat(dev, path);
+  if (!entry) return;
+  entry->count++;
+  if (stat_hit) entry->stat_hits++;
+  if (stat_miss) entry->stat_misses++;
+  if (read) entry->reads++;
+  if (readdir) entry->readdirs++;
+  entry->bytes += bytes;
 }
 
 void ant_hvf_9p_qid(unsigned char *out, bool dir, const char *path) {
@@ -143,6 +246,7 @@ int ant_hvf_9p_host_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, s
 
 void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev) {
   if (!dev || !dev->stat_cache) return;
+  dev->stats.stat_cache_clears++;
   for (size_t i = 0; i < dev->stat_cache_capacity; i++) {
     free(dev->stat_cache[i].path);
     free(dev->stat_cache[i].host_path);
@@ -199,6 +303,8 @@ static int ant_hvf_9p_stat_cached(ant_hvf_9p_device_t *dev,
 
   ant_hvf_9p_stat_cache_entry_t *entry = ant_hvf_9p_stat_cache_find(dev, rel);
   if (entry) {
+    dev->stats.stat_hits++;
+    ant_hvf_9p_count_path(dev, rel, true, false, false, false, 0);
     if (entry->rc == 0) {
       if (st) *st = entry->st;
       if (host_out) {
@@ -216,6 +322,8 @@ static int ant_hvf_9p_stat_cached(ant_hvf_9p_device_t *dev,
 
   char host[ANT_HVF_9P_HOST_PATH_MAX];
   int rc = ant_hvf_9p_host_path(dev, rel, host, sizeof(host));
+  dev->stats.stat_misses++;
+  ant_hvf_9p_count_path(dev, rel, false, true, false, false, 0);
   struct stat local_st;
   memset(&local_st, 0, sizeof(local_st));
   if (rc == 0 && lstat(host, &local_st) != 0) rc = -errno;
@@ -439,6 +547,8 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
   if (req_len < 7) return 0;
   uint8_t type = req[4];
   uint16_t tag = ant_hvf_load16(req + 5);
+  dev->stats.requests++;
+  dev->stats.op_counts[type]++;
   uint32_t fid;
   ant_hvf_9p_fid_t *f;
 
@@ -571,6 +681,9 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       }
       got = (uint32_t)n;
       close(fd);
+      dev->stats.read_count++;
+      dev->stats.read_bytes += got;
+      ant_hvf_9p_count_path(dev, f->path, false, false, true, false, got);
       ant_hvf_9p_hdr(resp, 11u + got, P9_RREAD, tag);
       ant_hvf_store32(resp + 7, got);
       return 11u + got;
@@ -597,6 +710,8 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
         return ant_hvf_9p_error(resp, tag, e);
       }
       close(fd);
+      dev->stats.write_count++;
+      dev->stats.write_bytes += (uint64_t)n;
       ant_hvf_9p_stat_cache_clear(dev);
       ant_hvf_9p_hdr(resp, 11, P9_RWRITE, tag);
       ant_hvf_store32(resp + 7, (uint32_t)n);
@@ -876,6 +991,9 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       }
       closedir(dir);
 
+      dev->stats.readdir_count++;
+      dev->stats.readdir_bytes += used;
+      ant_hvf_9p_count_path(dev, f->path, false, false, false, true, used);
       ant_hvf_9p_hdr(resp, 11u + used, P9_RREADDIR, tag);
       ant_hvf_store32(resp + 7, used);
       return 11u + used;
@@ -896,6 +1014,69 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       return 7;
     default:
       return ant_hvf_9p_error(resp, tag, ENOSYS);
+  }
+}
+
+void ant_hvf_9p_report_stats(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev, size_t index) {
+  if (!vm || !vm->verbose || !dev || dev->stats.requests == 0) return;
+
+  uint64_t avg_us = dev->stats.requests ? dev->stats.total_ns / dev->stats.requests / 1000u : 0;
+  uint64_t max_us = dev->stats.max_ns / 1000u;
+  ant_hvf_verbosef(vm,
+                   "9p[%zu] summary tag=%s root=%s requests=%llu errors=%llu read=%llu/%lluB readdir=%llu/%lluB write=%llu/%lluB stat_cache=%llu hit/%llu miss clears=%llu avg=%lluus max=%lluus(%s)",
+                   index,
+                   dev->tag ? dev->tag : "",
+                   dev->root ? dev->root : "",
+                   (unsigned long long)dev->stats.requests,
+                   (unsigned long long)dev->stats.errors,
+                   (unsigned long long)dev->stats.read_count,
+                   (unsigned long long)dev->stats.read_bytes,
+                   (unsigned long long)dev->stats.readdir_count,
+                   (unsigned long long)dev->stats.readdir_bytes,
+                   (unsigned long long)dev->stats.write_count,
+                   (unsigned long long)dev->stats.write_bytes,
+                   (unsigned long long)dev->stats.stat_hits,
+                   (unsigned long long)dev->stats.stat_misses,
+                   (unsigned long long)dev->stats.stat_cache_clears,
+                   (unsigned long long)avg_us,
+                   (unsigned long long)max_us,
+                   ant_hvf_9p_type_name(dev->stats.max_type));
+
+  ant_hvf_verbosef(vm,
+                   "9p[%zu] ops walk=%llu getattr=%llu lopen=%llu read=%llu readdir=%llu readlink=%llu clunk=%llu",
+                   index,
+                   (unsigned long long)dev->stats.op_counts[P9_TWALK],
+                   (unsigned long long)dev->stats.op_counts[P9_TGETATTR],
+                   (unsigned long long)dev->stats.op_counts[P9_TLOPEN],
+                   (unsigned long long)dev->stats.op_counts[P9_TREAD],
+                   (unsigned long long)dev->stats.op_counts[P9_TREADDIR],
+                   (unsigned long long)dev->stats.op_counts[P9_TREADLINK],
+                   (unsigned long long)dev->stats.op_counts[P9_TCLUNK]);
+
+  ant_hvf_9p_path_stat_t *top[8] = {0};
+  for (size_t i = 0; i < ANT_HVF_9P_TOP_PATH_COUNT; i++) {
+    ant_hvf_9p_path_stat_t *entry = &dev->stats.paths[i];
+    if (!entry->used || entry->count == 0) continue;
+    for (size_t slot = 0; slot < 8; slot++) {
+      if (top[slot] && top[slot]->count >= entry->count) continue;
+      for (size_t move = 7; move > slot; move--) top[move] = top[move - 1];
+      top[slot] = entry;
+      break;
+    }
+  }
+
+  for (size_t i = 0; i < 8 && top[i]; i++) {
+    ant_hvf_verbosef(vm,
+                     "9p[%zu] hot[%zu] count=%llu stat=%llu/%llu read=%llu readdir=%llu bytes=%llu path=%s",
+                     index,
+                     i,
+                     (unsigned long long)top[i]->count,
+                     (unsigned long long)top[i]->stat_hits,
+                     (unsigned long long)top[i]->stat_misses,
+                     (unsigned long long)top[i]->reads,
+                     (unsigned long long)top[i]->readdirs,
+                     (unsigned long long)top[i]->bytes,
+                     top[i]->path);
   }
 }
 
@@ -929,8 +1110,19 @@ int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) {
     rc = ant_hvf_9p_read_chain(vm, desc_base, head, q->size,
                                req, sizeof(req), &req_len, writes, 8, &writes_len);
     if (rc != 0) return rc;
+    uint64_t start_ns = ant_hvf_9p_now_ns();
     uint32_t resp_len = ant_hvf_9p_handle(dev, req, req_len, resp, sizeof(resp));
+    uint64_t end_ns = ant_hvf_9p_now_ns();
+    if (start_ns && end_ns >= start_ns) {
+      uint64_t elapsed = end_ns - start_ns;
+      dev->stats.total_ns += elapsed;
+      if (elapsed > dev->stats.max_ns) {
+        dev->stats.max_ns = elapsed;
+        dev->stats.max_type = req_len >= 5 ? req[4] : 0;
+      }
+    }
     if (resp_len == 0) resp_len = ant_hvf_9p_error(resp, 0, EIO);
+    if (resp_len >= 5 && resp[4] == P9_RLERROR) dev->stats.errors++;
     rc = ant_hvf_9p_write_response(vm, writes, writes_len, resp, resp_len);
     if (rc != 0) return rc;
     rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, resp_len);
