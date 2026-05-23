@@ -26,11 +26,45 @@ bool ant_sandbox_vm_supported(void) {
   return ant_sandbox_vm_default_backend() != NULL;
 }
 
+void ant_sandbox_vm_result_clear(ant_sandbox_vm_result_t *result) {
+  if (!result) return;
+  result->kind = ANT_SANDBOX_VM_RESULT_NONE;
+  result->code = 0;
+}
+
+const char *ant_sandbox_vm_result_name(ant_sandbox_vm_result_kind_t kind) {
+  switch (kind) {
+    case ANT_SANDBOX_VM_RESULT_NONE: return "SandboxResultNone";
+    case ANT_SANDBOX_VM_RESULT_GUEST_EXIT: return "SandboxScriptExit";
+    case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE: return "SandboxBackendUnavailable";
+    case ANT_SANDBOX_VM_RESULT_CONFIG_ERROR: return "SandboxConfigError";
+    case ANT_SANDBOX_VM_RESULT_TIMEOUT: return "SandboxTimeout";
+    case ANT_SANDBOX_VM_RESULT_KERNEL_PANIC: return "SandboxKernelPanic";
+    case ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR: return "SandboxProtocolError";
+    case ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR: return "SandboxTransportError";
+    case ANT_SANDBOX_VM_RESULT_VM_ERROR: return "SandboxVMError";
+  }
+  return "SandboxVMError";
+}
+
+bool ant_sandbox_vm_result_is_infrastructure_failure(const ant_sandbox_vm_result_t *result) {
+  if (!result) return false;
+  return result->kind != ANT_SANDBOX_VM_RESULT_NONE &&
+         result->kind != ANT_SANDBOX_VM_RESULT_GUEST_EXIT;
+}
+
 int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config) {
   if (!config) return -EINVAL;
+  ant_sandbox_vm_result_clear(config->result);
 
   const ant_sandbox_vm_backend_t *backend = ant_sandbox_vm_default_backend();
-  if (!backend) return -ENOSYS;
+  if (!backend) {
+    if (config->result) {
+      config->result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+      config->result->code = -ENOSYS;
+    }
+    return -ENOSYS;
+  }
 
   if (backend->create_session && backend->execute_session && backend->destroy_session) {
     ant_sandbox_vm_session_t *session = NULL;
@@ -41,6 +75,7 @@ int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config) {
         .request_len = config->request_len,
         .frame_handler = config->frame_handler,
         .frame_handler_user = config->frame_handler_user,
+        .result = config->result,
       };
       rc = ant_sandbox_vm_session_execute(session, &request);
     }
@@ -56,9 +91,16 @@ int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config) {
 int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_sandbox_vm_session_t **session_out) {
   if (!config || !session_out) return -EINVAL;
   *session_out = NULL;
+  ant_sandbox_vm_result_clear(config->result);
 
   const ant_sandbox_vm_backend_t *backend = ant_sandbox_vm_default_backend();
-  if (!backend || !backend->create_session || !backend->execute_session || !backend->destroy_session) return -ENOSYS;
+  if (!backend || !backend->create_session || !backend->execute_session || !backend->destroy_session) {
+    if (config->result) {
+      config->result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+      config->result->code = -ENOSYS;
+    }
+    return -ENOSYS;
+  }
 
   ant_sandbox_vm_session_t *session = calloc(1, sizeof(*session));
   if (!session) return -ENOMEM;
@@ -76,6 +118,7 @@ int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_san
 
 int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_sandbox_vm_request_t *request) {
   if (!session || !session->backend || !session->backend_session || !request) return -EINVAL;
+  ant_sandbox_vm_result_clear(request->result);
   if (!session->backend->execute_session) return -ENOSYS;
   return session->backend->execute_session(session->backend_session, request);
 }

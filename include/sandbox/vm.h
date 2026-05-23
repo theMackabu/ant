@@ -26,11 +26,29 @@ typedef bool (*ant_sandbox_vm_frame_handler_t)(
 
 typedef struct ant_sandbox_vm_session ant_sandbox_vm_session_t;
 
+typedef enum {
+  ANT_SANDBOX_VM_RESULT_NONE = 0,
+  ANT_SANDBOX_VM_RESULT_GUEST_EXIT,
+  ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE,
+  ANT_SANDBOX_VM_RESULT_CONFIG_ERROR,
+  ANT_SANDBOX_VM_RESULT_TIMEOUT,
+  ANT_SANDBOX_VM_RESULT_KERNEL_PANIC,
+  ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR,
+  ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR,
+  ANT_SANDBOX_VM_RESULT_VM_ERROR,
+} ant_sandbox_vm_result_kind_t;
+
+typedef struct {
+  ant_sandbox_vm_result_kind_t kind;
+  int code;
+} ant_sandbox_vm_result_t;
+
 typedef struct {
   const void *request_data;
   size_t request_len;
   ant_sandbox_vm_frame_handler_t frame_handler;
   void *frame_handler_user;
+  ant_sandbox_vm_result_t *result;
 } ant_sandbox_vm_request_t;
 
 typedef struct {
@@ -50,6 +68,7 @@ typedef struct {
   bool verbose;
   ant_sandbox_vm_frame_handler_t frame_handler;
   void *frame_handler_user;
+  ant_sandbox_vm_result_t *result;
 } ant_sandbox_vm_config_t;
 
 typedef struct ant_sandbox_vm_backend {
@@ -65,6 +84,9 @@ extern const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend;
 const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend);
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void);
 bool ant_sandbox_vm_supported(void);
+void ant_sandbox_vm_result_clear(ant_sandbox_vm_result_t *result);
+const char *ant_sandbox_vm_result_name(ant_sandbox_vm_result_kind_t kind);
+bool ant_sandbox_vm_result_is_infrastructure_failure(const ant_sandbox_vm_result_t *result);
 int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config);
 int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_sandbox_vm_session_t **session_out);
 int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_sandbox_vm_request_t *request);

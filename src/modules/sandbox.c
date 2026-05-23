@@ -11,11 +11,13 @@
 #include "sandbox/host.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/vm.h"
+#include "silver/engine.h"
 #include "modules/symbol.h"
 
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -316,7 +318,63 @@ static bool sandbox_capture_frame(uint8_t type, const void *payload, size_t payl
   return false;
 }
 
-static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state) {
+static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc) {
+  if (!result || result->kind != ANT_SANDBOX_VM_RESULT_NONE) return;
+  if (rc == 0) return;
+  if (rc == -ENOSYS) result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+  else if (rc == -EINVAL) result->kind = ANT_SANDBOX_VM_RESULT_CONFIG_ERROR;
+  else if (rc == -ETIMEDOUT) result->kind = ANT_SANDBOX_VM_RESULT_TIMEOUT;
+  else result->kind = ANT_SANDBOX_VM_RESULT_VM_ERROR;
+  result->code = rc;
+}
+
+static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_result_t *result, int rc) {
+  ant_sandbox_vm_result_t fallback = {0};
+  if (!result || result->kind == ANT_SANDBOX_VM_RESULT_NONE) {
+    fallback.code = rc;
+    sandbox_fill_result_from_rc(&fallback, rc);
+    result = &fallback;
+  }
+
+  const char *name = ant_sandbox_vm_result_name(result->kind);
+  char message[256];
+  switch (result->kind) {
+    case ANT_SANDBOX_VM_RESULT_GUEST_EXIT:
+      snprintf(message, sizeof(message), "sandbox script exited with code %d", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
+      snprintf(message, sizeof(message), "sandbox VM backend is not available");
+      break;
+    case ANT_SANDBOX_VM_RESULT_CONFIG_ERROR:
+      snprintf(message, sizeof(message), "sandbox VM configuration failed (%d)", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_TIMEOUT:
+      snprintf(message, sizeof(message), "sandbox VM timed out");
+      break;
+    case ANT_SANDBOX_VM_RESULT_KERNEL_PANIC:
+      snprintf(message, sizeof(message), "sandbox kernel panic");
+      break;
+    case ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR:
+      snprintf(message, sizeof(message), "sandbox daemon protocol error (%d)", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR:
+      snprintf(message, sizeof(message), "sandbox transport error (%d)", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_VM_ERROR:
+    case ANT_SANDBOX_VM_RESULT_NONE:
+    default:
+      snprintf(message, sizeof(message), "sandbox VM failed (%d)", result->code ? result->code : rc);
+      break;
+  }
+
+  ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE | JS_ERR_NO_STACK, "%s", message);
+  ant_value_t err_obj = js_as_obj(err);
+  js_set(js, err_obj, "name", js_mkstr(js, name, strlen(name)));
+  js_set(js, err_obj, "code", js_mknum((double)result->code));
+  return err;
+}
+
+static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state, ant_sandbox_vm_result_t *result) {
   if (state->session) return 0;
 
   ant_sandbox_vm_config_t config = {
@@ -332,6 +390,7 @@ static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state) {
     .memory_size = 1024ull * 1024ull * 1024ull,
     .timeout_ms = 0,
     .verbose = state->verbose,
+    .result = result,
   };
 
   (void)js;
@@ -347,11 +406,12 @@ static ant_value_t sandbox_execute_request(
 ) {
   if (!request) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox request"));
 
-  int rc = sandbox_ensure_session(js, state);
+  ant_sandbox_vm_result_t vm_result = {0};
+  int rc = sandbox_ensure_session(js, state, &vm_result);
   if (rc != 0) {
     free(request);
-    if (rc == -ENOSYS) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox VM backend is not available"));
-    return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to start sandbox VM session: %s", strerror(-rc)));
+    sandbox_fill_result_from_rc(&vm_result, rc);
+    return sandbox_rejected(js, sandbox_vm_result_error(js, &vm_result, rc));
   }
 
   sandbox_frame_capture_t capture = {
@@ -365,9 +425,11 @@ static ant_value_t sandbox_execute_request(
     .request_len = request_len,
     .frame_handler = sandbox_capture_frame,
     .frame_handler_user = &capture,
+    .result = &vm_result,
   };
 
   rc = ant_sandbox_vm_session_execute(state->session, &vm_request);
+  sandbox_fill_result_from_rc(&vm_result, rc);
   free(request);
 
   GC_ROOT_SAVE(root_mark, js);
@@ -378,10 +440,12 @@ static ant_value_t sandbox_execute_request(
   GC_ROOT_PIN(js, promise);
   if (capture.has_error) {
     js_reject_promise(js, promise, capture.error);
-  } else if (rc == -ENOSYS) {
-    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox VM backend is not available"));
+  } else if (ant_sandbox_vm_result_is_infrastructure_failure(&vm_result)) {
+    js_reject_promise(js, promise, sandbox_vm_result_error(js, &vm_result, rc));
+  } else if (vm_result.kind == ANT_SANDBOX_VM_RESULT_GUEST_EXIT && vm_result.code != 0) {
+    js_reject_promise(js, promise, sandbox_vm_result_error(js, &vm_result, rc));
   } else if (rc != 0) {
-    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox exited with code %d", rc));
+    js_reject_promise(js, promise, sandbox_vm_result_error(js, &vm_result, rc));
   } else if (expect_result) {
     js_resolve_promise(js, promise, capture.has_result ? capture.result : js_mkundef());
   } else {
@@ -493,17 +557,20 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
     return promise;
   }
 
+  ant_sandbox_vm_result_t vm_result = {0};
   ant_sandbox_vm_request_t vm_request = {
     .request_data = request,
     .request_len = request_len,
+    .result = &vm_result,
   };
   int rc = ant_sandbox_vm_session_execute(state->session, &vm_request);
+  sandbox_fill_result_from_rc(&vm_result, rc);
   free(request);
   ant_sandbox_vm_session_destroy(state->session);
   state->session = NULL;
 
   if (rc == 0) js_resolve_promise(js, promise, js_mkundef());
-  else js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox close failed with code %d", rc));
+  else js_reject_promise(js, promise, sandbox_vm_result_error(js, &vm_result, rc));
   return promise;
 }
 

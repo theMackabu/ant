@@ -325,6 +325,8 @@ typedef struct {
   size_t request_len;
   bool connected;
   bool request_sent;
+  bool protocol_error;
+  bool transport_error;
   uint32_t peer_port;
   uint32_t fwd_cnt;
   bool exit_received;

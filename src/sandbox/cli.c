@@ -100,6 +100,51 @@ static void sandbox_print_usage(void) {
   fprintf(stderr, "Usage: ant sandbox [--verbose] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
 }
 
+static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc) {
+  if (!result || result->kind != ANT_SANDBOX_VM_RESULT_NONE) return;
+  if (rc == 0) return;
+  if (rc == -ENOSYS) result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+  else if (rc == -EINVAL) result->kind = ANT_SANDBOX_VM_RESULT_CONFIG_ERROR;
+  else if (rc == -ETIMEDOUT) result->kind = ANT_SANDBOX_VM_RESULT_TIMEOUT;
+  else result->kind = ANT_SANDBOX_VM_RESULT_VM_ERROR;
+  result->code = rc;
+}
+
+static void sandbox_print_vm_failure(const ant_sandbox_vm_result_t *result, int rc) {
+  if (!result || result->kind == ANT_SANDBOX_VM_RESULT_NONE) {
+    fprintf(stderr, "sandbox: VM failed (%d)\n", rc);
+    return;
+  }
+
+  switch (result->kind) {
+    case ANT_SANDBOX_VM_RESULT_GUEST_EXIT:
+      break;
+    case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
+      fprintf(stderr, "sandbox: VM backend is not available\n");
+      break;
+    case ANT_SANDBOX_VM_RESULT_CONFIG_ERROR:
+      fprintf(stderr, "sandbox: VM configuration failed (%d)\n", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_TIMEOUT:
+      fprintf(stderr, "sandbox: VM timed out\n");
+      break;
+    case ANT_SANDBOX_VM_RESULT_KERNEL_PANIC:
+      /* The backend prints the panic summary and console tail. */
+      break;
+    case ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR:
+      fprintf(stderr, "sandbox: daemon protocol error (%d)\n", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR:
+      fprintf(stderr, "sandbox: transport error (%d)\n", result->code);
+      break;
+    case ANT_SANDBOX_VM_RESULT_VM_ERROR:
+    case ANT_SANDBOX_VM_RESULT_NONE:
+    default:
+      fprintf(stderr, "sandbox: VM failed (%d)\n", result->code ? result->code : rc);
+      break;
+  }
+}
+
 int ant_sandbox_cmd(int argc, char **argv) {
   if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
     sandbox_print_usage();
@@ -158,6 +203,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  ant_sandbox_vm_result_t vm_result = {0};
   ant_sandbox_vm_config_t config = {
     .image_path = assets.image,
     .kernel_path = assets.kernel,
@@ -173,14 +219,18 @@ int ant_sandbox_cmd(int argc, char **argv) {
     .memory_size = 1024ull * 1024ull * 1024ull,
     .timeout_ms = 0,
     .verbose = opts.verbose || pkg_verbose,
+    .result = &vm_result,
   };
 
   rc = ant_sandbox_vm_start(&config);
+  sandbox_fill_result_from_rc(&vm_result, rc);
   free(request);
 
   if (rc == 0) return EXIT_SUCCESS;
-  if (rc == -ENOSYS) {
-    fprintf(stderr, "sandbox: VM backend is not ready to run the cached image yet\n");
+  if (vm_result.kind == ANT_SANDBOX_VM_RESULT_GUEST_EXIT) {
+    if (vm_result.code >= 0 && vm_result.code <= 255) return vm_result.code;
+    return EXIT_FAILURE;
   }
+  sandbox_print_vm_failure(&vm_result, rc);
   return EXIT_FAILURE;
 }

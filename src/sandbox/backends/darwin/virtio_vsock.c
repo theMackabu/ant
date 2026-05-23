@@ -227,9 +227,9 @@ static void ant_hvf_vsock_write_output(FILE *stream, const unsigned char *payloa
   fflush(stream);
 }
 
-static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const unsigned char *payload, uint32_t len) {
+static int ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const unsigned char *payload, uint32_t len) {
   bool strip_ansi = (vm->vsock.capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) != 0;
-  if (vm->frame_handler && vm->frame_handler(type, payload, len, vm->frame_handler_user)) return;
+  if (vm->frame_handler && vm->frame_handler(type, payload, len, vm->frame_handler_user)) return 0;
 
   switch (type) {
     case ANT_SANDBOX_FRAME_STDOUT:
@@ -248,6 +248,9 @@ static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const uns
           if (display[display_len - 1] != '\n') fputc('\n', stdout);
           fflush(stdout);
         }
+      } else {
+        vm->vsock.protocol_error = true;
+        return -EINVAL;
       }
       break;
     }
@@ -261,6 +264,9 @@ static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const uns
           if (display[display_len - 1] != '\n') fputc('\n', stderr);
           fflush(stderr);
         }
+      } else {
+        vm->vsock.protocol_error = true;
+        return -EINVAL;
       }
       break;
     }
@@ -269,18 +275,29 @@ static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const uns
         vm->vsock.exit_code = (int)ant_hvf_load32(payload);
         vm->vsock.exit_received = true;
         ant_hvf_verbosef(vm, "daemon exit code=%d", vm->vsock.exit_code);
+      } else {
+        vm->vsock.protocol_error = true;
+        return -EINVAL;
       }
       break;
     default:
-      break;
+      vm->vsock.protocol_error = true;
+      return -EINVAL;
   }
+  return 0;
 }
 
 static int ant_hvf_vsock_consume_frames(ant_hvf_vm_t *vm, const unsigned char *payload, uint32_t len) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
   if (len == 0) return 0;
-  if (len > ANT_SANDBOX_FRAME_MAX_SIZE) return -E2BIG;
-  if (dev->rx_stream_len > ANT_SANDBOX_FRAME_MAX_SIZE - len) return -E2BIG;
+  if (len > ANT_SANDBOX_FRAME_MAX_SIZE) {
+    dev->protocol_error = true;
+    return -E2BIG;
+  }
+  if (dev->rx_stream_len > ANT_SANDBOX_FRAME_MAX_SIZE - len) {
+    dev->protocol_error = true;
+    return -E2BIG;
+  }
 
   size_t needed = dev->rx_stream_len + len;
   if (needed > dev->rx_stream_cap) {
@@ -298,16 +315,29 @@ static int ant_hvf_vsock_consume_frames(ant_hvf_vm_t *vm, const unsigned char *p
   size_t off = 0;
   while (dev->rx_stream_len - off >= ANT_SANDBOX_FRAME_HEADER_SIZE) {
     unsigned char *frame = dev->rx_stream + off;
-    if (memcmp(frame, ANT_SANDBOX_FRAME_MAGIC, 4) != 0) return -EINVAL;
-    if (frame[4] != ANT_SANDBOX_FRAME_VERSION) return -EINVAL;
-    if (ant_hvf_load16(frame + 6) != 0) return -EINVAL;
+    if (memcmp(frame, ANT_SANDBOX_FRAME_MAGIC, 4) != 0) {
+      dev->protocol_error = true;
+      return -EINVAL;
+    }
+    if (frame[4] != ANT_SANDBOX_FRAME_VERSION) {
+      dev->protocol_error = true;
+      return -EINVAL;
+    }
+    if (ant_hvf_load16(frame + 6) != 0) {
+      dev->protocol_error = true;
+      return -EINVAL;
+    }
 
     uint32_t payload_len = ant_hvf_load32(frame + 8);
-    if (payload_len > ANT_SANDBOX_FRAME_MAX_SIZE - ANT_SANDBOX_FRAME_HEADER_SIZE) return -E2BIG;
+    if (payload_len > ANT_SANDBOX_FRAME_MAX_SIZE - ANT_SANDBOX_FRAME_HEADER_SIZE) {
+      dev->protocol_error = true;
+      return -E2BIG;
+    }
     size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + (size_t)payload_len;
     if (dev->rx_stream_len - off < frame_len) break;
 
-    ant_hvf_vsock_handle_frame(vm, frame[5], frame + ANT_SANDBOX_FRAME_HEADER_SIZE, payload_len);
+    int rc = ant_hvf_vsock_handle_frame(vm, frame[5], frame + ANT_SANDBOX_FRAME_HEADER_SIZE, payload_len);
+    if (rc != 0) return rc;
     off += frame_len;
   }
 

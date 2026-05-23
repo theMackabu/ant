@@ -152,6 +152,35 @@ typedef struct {
   bool vcpu_created;
 } ant_hvf_session_t;
 
+static void ant_hvf_set_result(ant_sandbox_vm_result_t *result,
+                               ant_sandbox_vm_result_kind_t kind,
+                               int code) {
+  if (!result) return;
+  result->kind = kind;
+  result->code = code;
+}
+
+static void ant_hvf_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, int rc) {
+  if (!result) return;
+  if (vm && vm->vsock.exit_received) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_GUEST_EXIT, vm->vsock.exit_code);
+  } else if (vm && ant_hvf_uart_has_panic(vm)) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_KERNEL_PANIC, rc ? rc : -EFAULT);
+  } else if (rc == -ENOSYS) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE, rc);
+  } else if (rc == -ETIMEDOUT) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
+  } else if (vm && vm->vsock.protocol_error) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
+  } else if (vm && vm->vsock.transport_error) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR, rc);
+  } else if (rc == -EINVAL) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, rc);
+  } else if (rc != 0) {
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_VM_ERROR, rc);
+  }
+}
+
 static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   if (!session) return;
   ant_hvf_vm_t *vm = &session->vm;
@@ -203,6 +232,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   vm->net_forward_count = config->forward_count;
   if (config->mount_count == 0 || config->mount_count > ANT_HVF_VIRTIO_9P_MAX) {
     free(session);
+    ant_hvf_set_result(config->result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, -EINVAL);
     return -EINVAL;
   }
   vm->p9_count = config->mount_count;
@@ -365,6 +395,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   return 0;
 
 fail:
+  ant_hvf_classify_result(vm, config->result, rc);
   ant_hvf_session_cleanup(session, &rc);
   free(session);
   return rc;
@@ -380,6 +411,8 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->vsock.request_sent = false;
   vm->vsock.exit_received = false;
   vm->vsock.exit_code = 0;
+  vm->vsock.protocol_error = false;
+  vm->vsock.transport_error = false;
   vm->timed_out = false;
   vm->frame_handler = request->frame_handler;
   vm->frame_handler_user = request->frame_handler_user;
@@ -400,10 +433,16 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   }
 
   int maybe_sent = ant_hvf_vsock_maybe_send_request(vm);
-  if (maybe_sent != 0 && maybe_sent != -EAGAIN) return maybe_sent;
+  if (maybe_sent != 0 && maybe_sent != -EAGAIN) {
+    vm->vsock.transport_error = true;
+    ant_hvf_classify_result(vm, request->result, maybe_sent);
+    return maybe_sent;
+  }
 
   int rc = ant_hvf_run(vm, timeout_ms, timeout_until_request_sent);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");
+  if (!vm->vsock.exit_received && ant_hvf_uart_has_panic(vm) && rc == 0) rc = -EFAULT;
+  ant_hvf_classify_result(vm, request->result, rc);
 
   vm->vsock.request_data = NULL;
   vm->vsock.request_len = 0;
