@@ -208,6 +208,7 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   for (size_t i = 0; i < vm->p9_count; i++) {
     free(vm->p9[i].fids);
     ant_hvf_9p_stat_cache_clear(&vm->p9[i]);
+    ant_hvf_9p_file_cache_clear(&vm->p9[i]);
   }
   if (vm->net_lock_init) pthread_mutex_destroy(&vm->net_lock);
   if (rc_inout) *rc_inout = rc;

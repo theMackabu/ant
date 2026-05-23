@@ -257,6 +257,19 @@ void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev) {
   dev->stat_cache_count = 0;
 }
 
+void ant_hvf_9p_file_cache_clear(ant_hvf_9p_device_t *dev) {
+  if (!dev || !dev->file_cache) return;
+  for (size_t i = 0; i < dev->file_cache_capacity; i++) {
+    free(dev->file_cache[i].path);
+    free(dev->file_cache[i].data);
+  }
+  free(dev->file_cache);
+  dev->file_cache = NULL;
+  dev->file_cache_capacity = 0;
+  dev->file_cache_count = 0;
+  dev->file_cache_bytes = 0;
+}
+
 static int ant_hvf_9p_stat_cache_grow(ant_hvf_9p_device_t *dev) {
   size_t old_capacity = dev->stat_cache_capacity;
   size_t new_capacity = old_capacity ? old_capacity * 2u : 1024u;
@@ -283,6 +296,32 @@ static int ant_hvf_9p_stat_cache_grow(ant_hvf_9p_device_t *dev) {
   return 0;
 }
 
+static int ant_hvf_9p_file_cache_grow(ant_hvf_9p_device_t *dev) {
+  size_t old_capacity = dev->file_cache_capacity;
+  size_t new_capacity = old_capacity ? old_capacity * 2u : ANT_HVF_9P_FILE_CACHE_INITIAL;
+  ant_hvf_9p_file_cache_entry_t *old_entries = dev->file_cache;
+  ant_hvf_9p_file_cache_entry_t *new_entries = calloc(new_capacity, sizeof(*new_entries));
+  if (!new_entries) return -ENOMEM;
+
+  dev->file_cache = new_entries;
+  dev->file_cache_capacity = new_capacity;
+  dev->file_cache_count = 0;
+  for (size_t i = 0; i < old_capacity; i++) {
+    ant_hvf_9p_file_cache_entry_t *old = &old_entries[i];
+    if (!old->occupied) continue;
+    uint64_t h = ant_hvf_9p_hash(old->path);
+    for (size_t probe = 0; probe < new_capacity; probe++) {
+      ant_hvf_9p_file_cache_entry_t *dst = &new_entries[(h + probe) & (new_capacity - 1u)];
+      if (dst->occupied) continue;
+      *dst = *old;
+      dev->file_cache_count++;
+      break;
+    }
+  }
+  free(old_entries);
+  return 0;
+}
+
 static ant_hvf_9p_stat_cache_entry_t *ant_hvf_9p_stat_cache_find(ant_hvf_9p_device_t *dev, const char *rel) {
   if (!dev->stat_cache_capacity) return NULL;
   uint64_t h = ant_hvf_9p_hash(rel);
@@ -292,6 +331,127 @@ static ant_hvf_9p_stat_cache_entry_t *ant_hvf_9p_stat_cache_find(ant_hvf_9p_devi
     if (strcmp(entry->path, rel) == 0) return entry;
   }
   return NULL;
+}
+
+static ant_hvf_9p_file_cache_entry_t *ant_hvf_9p_file_cache_find(ant_hvf_9p_device_t *dev, const char *rel) {
+  if (!dev->file_cache_capacity) return NULL;
+  uint64_t h = ant_hvf_9p_hash(rel);
+  for (size_t probe = 0; probe < dev->file_cache_capacity; probe++) {
+    ant_hvf_9p_file_cache_entry_t *entry = &dev->file_cache[(h + probe) & (dev->file_cache_capacity - 1u)];
+    if (!entry->occupied) return NULL;
+    if (strcmp(entry->path, rel) == 0) return entry;
+  }
+  return NULL;
+}
+
+static bool ant_hvf_9p_copy_file_cache_entry(ant_hvf_9p_file_cache_entry_t *entry,
+                                             uint64_t offset,
+                                             uint32_t count,
+                                             unsigned char *out,
+                                             uint32_t *got) {
+  *got = 0;
+  if (offset >= entry->size) return true;
+
+  size_t start = (size_t)offset;
+  size_t available = entry->size - start;
+  size_t n = count < available ? count : available;
+  if (n) memcpy(out, entry->data + start, n);
+  *got = (uint32_t)n;
+  return true;
+}
+
+static bool ant_hvf_9p_read_cached_file(ant_hvf_9p_device_t *dev,
+                                        const char *rel,
+                                        const char *host,
+                                        const struct stat *st,
+                                        uint64_t offset,
+                                        uint32_t count,
+                                        unsigned char *out,
+                                        uint32_t *got) {
+  if (!dev->readonly || !S_ISREG(st->st_mode)) {
+    dev->stats.file_cache_bypasses++;
+    return false;
+  }
+  if (st->st_size < 0 || (uint64_t)st->st_size > ANT_HVF_9P_FILE_CACHE_MAX_FILE) {
+    dev->stats.file_cache_bypasses++;
+    return false;
+  }
+
+  ant_hvf_9p_file_cache_entry_t *entry = ant_hvf_9p_file_cache_find(dev, rel);
+  if (entry) {
+    dev->stats.file_cache_hits++;
+    return ant_hvf_9p_copy_file_cache_entry(entry, offset, count, out, got);
+  }
+
+  size_t size = (size_t)st->st_size;
+  if (size > ANT_HVF_9P_FILE_CACHE_MAX_BYTES ||
+      dev->file_cache_bytes > ANT_HVF_9P_FILE_CACHE_MAX_BYTES - size) {
+    dev->stats.file_cache_bypasses++;
+    return false;
+  }
+
+  dev->stats.file_cache_misses++;
+  if (!dev->file_cache_capacity ||
+      (dev->file_cache_count + 1u) * 10u >= dev->file_cache_capacity * 7u) {
+    int grow_rc = ant_hvf_9p_file_cache_grow(dev);
+    if (grow_rc != 0) return false;
+  }
+
+  uint8_t *data = malloc(size ? size : 1u);
+  if (!data) return false;
+
+  int fd = open(host, O_RDONLY);
+  if (fd < 0) {
+    free(data);
+    return false;
+  }
+
+  size_t done = 0;
+  while (done < size) {
+    ssize_t n = read(fd, data + done, size - done);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      close(fd);
+      free(data);
+      return false;
+    }
+    if (n == 0) break;
+    done += (size_t)n;
+  }
+  close(fd);
+
+  if (done != size) {
+    free(data);
+    return false;
+  }
+
+  char *path = strdup(rel);
+  if (!path) {
+    free(data);
+    return false;
+  }
+
+  uint64_t h = ant_hvf_9p_hash(rel);
+  entry = NULL;
+  for (size_t probe = 0; probe < dev->file_cache_capacity; probe++) {
+    ant_hvf_9p_file_cache_entry_t *candidate = &dev->file_cache[(h + probe) & (dev->file_cache_capacity - 1u)];
+    if (candidate->occupied) continue;
+    entry = candidate;
+    break;
+  }
+  if (!entry) {
+    free(path);
+    free(data);
+    return false;
+  }
+
+  entry->occupied = true;
+  entry->path = path;
+  entry->data = data;
+  entry->size = size;
+  dev->file_cache_count++;
+  dev->file_cache_bytes += size;
+  return ant_hvf_9p_copy_file_cache_entry(entry, offset, count, out, got);
 }
 
 static int ant_hvf_9p_stat_cached(ant_hvf_9p_device_t *dev,
@@ -671,16 +831,18 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       int rc = ant_hvf_9p_stat_cached(dev, f->path, &st, host, sizeof(host));
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
       if (!S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode)) return ant_hvf_9p_error(resp, tag, EISDIR);
-      int fd = open(host, O_RDONLY);
-      if (fd < 0) return ant_hvf_9p_error(resp, tag, (uint32_t)errno);
-      ssize_t n = pread(fd, resp + 11, count, (off_t)offset);
-      if (n < 0) {
-        uint32_t e = (uint32_t)errno;
+      if (!ant_hvf_9p_read_cached_file(dev, f->path, host, &st, offset, count, resp + 11, &got)) {
+        int fd = open(host, O_RDONLY);
+        if (fd < 0) return ant_hvf_9p_error(resp, tag, (uint32_t)errno);
+        ssize_t n = pread(fd, resp + 11, count, (off_t)offset);
+        if (n < 0) {
+          uint32_t e = (uint32_t)errno;
+          close(fd);
+          return ant_hvf_9p_error(resp, tag, e);
+        }
+        got = (uint32_t)n;
         close(fd);
-        return ant_hvf_9p_error(resp, tag, e);
       }
-      got = (uint32_t)n;
-      close(fd);
       dev->stats.read_count++;
       dev->stats.read_bytes += got;
       ant_hvf_9p_count_path(dev, f->path, false, false, true, false, got);
@@ -1023,7 +1185,7 @@ void ant_hvf_9p_report_stats(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev, size_t 
   uint64_t avg_us = dev->stats.requests ? dev->stats.total_ns / dev->stats.requests / 1000u : 0;
   uint64_t max_us = dev->stats.max_ns / 1000u;
   ant_hvf_verbosef(vm,
-                   "9p[%zu] summary tag=%s root=%s requests=%llu errors=%llu read=%llu/%lluB readdir=%llu/%lluB write=%llu/%lluB stat_cache=%llu hit/%llu miss clears=%llu avg=%lluus max=%lluus(%s)",
+                   "9p[%zu] summary tag=%s root=%s requests=%llu errors=%llu read=%llu/%lluB readdir=%llu/%lluB write=%llu/%lluB stat_cache=%llu hit/%llu miss clears=%llu file_cache=%llu hit/%llu miss/%llu bypass entries=%zu/%zu bytes=%zu avg=%lluus max=%lluus(%s)",
                    index,
                    dev->tag ? dev->tag : "",
                    dev->root ? dev->root : "",
@@ -1038,6 +1200,12 @@ void ant_hvf_9p_report_stats(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev, size_t 
                    (unsigned long long)dev->stats.stat_hits,
                    (unsigned long long)dev->stats.stat_misses,
                    (unsigned long long)dev->stats.stat_cache_clears,
+                   (unsigned long long)dev->stats.file_cache_hits,
+                   (unsigned long long)dev->stats.file_cache_misses,
+                   (unsigned long long)dev->stats.file_cache_bypasses,
+                   dev->file_cache_count,
+                   dev->file_cache_capacity,
+                   dev->file_cache_bytes,
                    (unsigned long long)avg_us,
                    (unsigned long long)max_us,
                    ant_hvf_9p_type_name(dev->stats.max_type));

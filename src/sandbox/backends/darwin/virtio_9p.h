@@ -21,6 +21,9 @@
 #define ANT_HVF_9P_HOST_PATH_MAX 4096u
 #define ANT_HVF_9P_TOP_PATH_COUNT 64u
 #define ANT_HVF_9P_TOP_PATH_LEN 160u
+#define ANT_HVF_9P_FILE_CACHE_MAX_FILE (256u * 1024u)
+#define ANT_HVF_9P_FILE_CACHE_MAX_BYTES (16u * 1024u * 1024u)
+#define ANT_HVF_9P_FILE_CACHE_INITIAL 256u
 
 #define P9_RLERROR 7u
 #define P9_TSTATFS 8u
@@ -82,6 +85,13 @@ typedef struct {
 } ant_hvf_9p_stat_cache_entry_t;
 
 typedef struct {
+  bool occupied;
+  char *path;
+  uint8_t *data;
+  size_t size;
+} ant_hvf_9p_file_cache_entry_t;
+
+typedef struct {
   bool used;
   uint64_t hash;
   char path[ANT_HVF_9P_TOP_PATH_LEN];
@@ -106,6 +116,9 @@ typedef struct {
   uint64_t readdir_bytes;
   uint64_t write_count;
   uint64_t write_bytes;
+  uint64_t file_cache_hits;
+  uint64_t file_cache_misses;
+  uint64_t file_cache_bypasses;
   uint64_t total_ns;
   uint64_t max_ns;
   uint8_t max_type;
@@ -123,6 +136,10 @@ typedef struct {
   ant_hvf_9p_stat_cache_entry_t *stat_cache;
   size_t stat_cache_capacity;
   size_t stat_cache_count;
+  ant_hvf_9p_file_cache_entry_t *file_cache;
+  size_t file_cache_capacity;
+  size_t file_cache_count;
+  size_t file_cache_bytes;
   ant_hvf_9p_stats_t stats;
 } ant_hvf_9p_device_t;
 
@@ -142,6 +159,7 @@ bool ant_hvf_9p_path_bad(const char *path);
 int ant_hvf_9p_host_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, size_t out_len);
 int ant_hvf_9p_stat(ant_hvf_9p_device_t *dev, const char *rel, struct stat *st);
 void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev);
+void ant_hvf_9p_file_cache_clear(ant_hvf_9p_device_t *dev);
 uint8_t ant_hvf_9p_dtype_from_mode(mode_t mode);
 bool ant_hvf_9p_dtype_is_dir(uint8_t dtype);
 int ant_hvf_9p_dirent_type(ant_hvf_9p_device_t *dev,

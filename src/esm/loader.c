@@ -69,11 +69,17 @@ typedef struct {
   size_t size;
 } esm_file_data_t;
 
-static esm_module_cache_t global_module_cache = {NULL, 0};
-static int esm_dynamic_import_depth = 0;
+typedef struct esm_package_json_cache_entry {
+  char *path;
+  yyjson_doc *doc;
+  UT_hash_handle hh;
+} esm_package_json_cache_entry_t;
 
+static esm_module_cache_t global_module_cache = {NULL, 0};
+static esm_package_json_cache_entry_t *global_package_json_cache = NULL;
+
+static int esm_dynamic_import_depth = 0;
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
-static char *esm_canonicalize_path(const char *path);
 
 static bool esm_is_path_sep(char ch) {
   return ch == '/' || ch == '\\';
@@ -151,6 +157,38 @@ static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
 #endif
 
   return path;
+}
+
+// TODO: improve
+static char *esm_canonicalize_path(const char *path) {
+  if (!path) return NULL;
+
+  char *canonical = strdup(path);
+  if (!canonical) return NULL;
+
+  char *src = canonical, *dst = canonical;
+
+  while (*src) {
+    if (*src == '/') {
+      *dst++ = '/';
+      while (*src == '/') src++;
+
+      if (strncmp(src, "./", 2) == 0) src += 2;
+      else if (strncmp(src, "../", 3) == 0) {
+        src += 3;
+        if (dst > canonical + 1) {
+          dst--;
+          while (dst > canonical && *(dst - 1) != '/') dst--;
+        }
+      }
+    } else *dst++ = *src++;
+  }
+
+  *dst = '\0';
+  if (strlen(canonical) > 1 && canonical[strlen(canonical) - 1] == '/') 
+    canonical[strlen(canonical) - 1] = '\0';
+
+  return canonical;
 }
 
 static char *esm_make_cache_key(const char *module_key) {
@@ -425,6 +463,27 @@ static char *esm_find_node_module_dir(const char *start_dir, const char *package
   return NULL;
 }
 
+static yyjson_doc *esm_read_package_json_cached(const char *pkg_json_path) {
+  if (!pkg_json_path || !pkg_json_path[0]) return NULL;
+
+  esm_package_json_cache_entry_t *entry = NULL;
+  HASH_FIND_STR(global_package_json_cache, pkg_json_path, entry);
+  if (entry) return entry->doc;
+
+  entry = (esm_package_json_cache_entry_t *)calloc(1, sizeof(*entry));
+  if (!entry) return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+
+  entry->path = strdup(pkg_json_path);
+  if (!entry->path) {
+    free(entry);
+    return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  }
+
+  entry->doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  HASH_ADD_STR(global_package_json_cache, path, entry);
+  return entry->doc;
+}
+
 static bool esm_matches_pattern_key(const char *key, const char *request, const char **capture, size_t *capture_len) {
   const char *star = strchr(key, '*');
   if (!star) return false;
@@ -600,7 +659,7 @@ static char *esm_resolve_package_entrypoint(const char *package_dir, const char 
   char pkg_json_path[PATH_MAX];
   snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", package_dir);
 
-  yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  yyjson_doc *doc = esm_read_package_json_cached(pkg_json_path);
   yyjson_val *root = doc ? yyjson_doc_get_root(doc) : NULL;
   yyjson_val *exports = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "exports") : NULL;
 
@@ -623,23 +682,17 @@ static char *esm_resolve_package_entrypoint(const char *package_dir, const char 
       else if (!subpath || !subpath[0]) resolved = esm_resolve_exports_target(exports, package_dir, "", 0, base_path, false, prefer_require);
     } else if (!subpath || !subpath[0]) resolved = esm_resolve_exports_target(exports, package_dir, "", 0, base_path, false, prefer_require);
 
-    if (doc) yyjson_doc_free(doc);
     return resolved;
   }
 
   if (!subpath || !subpath[0]) {
     char *resolved = esm_resolve_package_main_entry(root, package_dir);
-    if (resolved) {
-      if (doc) yyjson_doc_free(doc);
-      return resolved;
-    }
-    if (doc) yyjson_doc_free(doc);
+    if (resolved) return resolved;
     return esm_try_resolve_index_with_exts(package_dir, ".");
   }
 
   char *resolved = esm_try_resolve_with_exts(package_dir, subpath, esm_has_extension(subpath));
   if (!resolved) resolved = esm_try_resolve_index_with_exts(package_dir, subpath);
-  if (doc) yyjson_doc_free(doc);
   return resolved;
 }
 
@@ -655,7 +708,7 @@ static char *esm_resolve_package_imports(const char *specifier, const char *base
     char pkg_json_path[PATH_MAX];
     snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", current);
 
-    yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+    yyjson_doc *doc = esm_read_package_json_cached(pkg_json_path);
     if (doc) {
       yyjson_val *root = yyjson_doc_get_root(doc);
       yyjson_val *imports = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "imports") : NULL;
@@ -664,7 +717,6 @@ static char *esm_resolve_package_imports(const char *specifier, const char *base
         imports, specifier, current,
         base_path, true, prefer_require
       );
-      yyjson_doc_free(doc);
       return resolved;
     }
 
@@ -821,27 +873,23 @@ static bool esm_path_contains_node_modules(const char *path) {
   return strstr(path, "\\node_modules\\") != NULL;
 }
 
-static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *has_type) {
-  if (has_type) *has_type = false;
+static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *is_module) {
+  if (is_module) *is_module = false;
 
-  yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  yyjson_doc *doc = esm_read_package_json_cached(pkg_json_path);
   if (!doc) return false;
 
   yyjson_val *root = yyjson_doc_get_root(doc);
   yyjson_val *type = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "type") : NULL;
 
   if (!type || !yyjson_is_str(type)) {
-    yyjson_doc_free(doc);
-    return false;
+    return true;
   }
 
   const char *type_str = yyjson_get_str(type);
-  if (has_type) *has_type = true;
-
-  bool is_module = type_str && strcmp(type_str, "module") == 0;
-  yyjson_doc_free(doc);
+  if (is_module) *is_module = type_str && strcmp(type_str, "module") == 0;
   
-  return is_module;
+  return true;
 }
 
 static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_module) {
@@ -860,11 +908,9 @@ static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_m
     char pkg_json_path[PATH_MAX];
     snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", current);
 
-    struct stat st;
-    if (stat(pkg_json_path, &st) == 0 && S_ISREG(st.st_mode)) {
-      bool has_type = false;
-      bool pkg_is_module = esm_read_package_json_type_module(pkg_json_path, &has_type);
-      if (is_module) *is_module = has_type && pkg_is_module;
+    bool pkg_is_module = false;
+    if (esm_read_package_json_type_module(pkg_json_path, &pkg_is_module)) {
+      if (is_module) *is_module = pkg_is_module;
       return true;
     }
     
@@ -942,42 +988,6 @@ static esm_module_kind_t esm_classify_module_kind(const char *resolved_path) {
   if (esm_is_image(resolved_path)) return ESM_MODULE_KIND_IMAGE;
   if (esm_is_native(resolved_path)) return ESM_MODULE_KIND_NATIVE;
   return ESM_MODULE_KIND_CODE;
-}
-
-static char *esm_canonicalize_path(const char *path) {
-  if (!path) return NULL;
-
-  char *canonical = strdup(path);
-  if (!canonical) return NULL;
-
-  char *src = canonical, *dst = canonical;
-
-  while (*src) {
-    if (*src == '/') {
-      *dst++ = '/';
-      while (*src == '/') src++;
-
-      if (strncmp(src, "./", 2) == 0) {
-        src += 2;
-      } else if (strncmp(src, "../", 3) == 0) {
-        src += 3;
-        if (dst > canonical + 1) {
-          dst--;
-          while (dst > canonical && *(dst - 1) != '/') dst--;
-        }
-      }
-    } else {
-      *dst++ = *src++;
-    }
-  }
-
-  *dst = '\0';
-
-  if (strlen(canonical) > 1 && canonical[strlen(canonical) - 1] == '/') {
-    canonical[strlen(canonical) - 1] = '\0';
-  }
-
-  return canonical;
 }
 
 static esm_module_t *esm_find_module(const char *module_key) {
@@ -1058,6 +1068,14 @@ void js_esm_cleanup_module_cache(void) {
     free(current);
   }
   global_module_cache.count = 0;
+
+  esm_package_json_cache_entry_t *pkg_current, *pkg_tmp;
+  HASH_ITER(hh, global_package_json_cache, pkg_current, pkg_tmp) {
+    HASH_DEL(global_package_json_cache, pkg_current);
+    free(pkg_current->path);
+    if (pkg_current->doc) yyjson_doc_free(pkg_current->doc);
+    free(pkg_current);
+  }
 }
 
 static ant_value_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_file_data_t *out) {
