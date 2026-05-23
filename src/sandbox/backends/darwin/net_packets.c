@@ -75,14 +75,14 @@ static size_t ant_net_emit_ipv4(ant_hvf_vm_t *vm,
   return sizeof(*eth) + sizeof(*ip) + payload_len;
 }
 
-static void ant_net_send_udp(ant_hvf_vm_t *vm,
-                             const uint8_t dst_mac[6],
-                             uint32_t src_ip,
-                             uint32_t dst_ip,
-                             uint16_t src_port,
-                             uint16_t dst_port,
-                             const void *payload,
-                             uint16_t payload_len) {
+void ant_net_send_udp(ant_hvf_vm_t *vm,
+                      const uint8_t dst_mac[6],
+                      uint32_t src_ip,
+                      uint32_t dst_ip,
+                      uint16_t src_port,
+                      uint16_t dst_port,
+                      const void *payload,
+                      uint16_t payload_len) {
   unsigned char frame[ANT_HVF_NET_MAX_PACKET];
   unsigned char udp_buf[sizeof(ant_udp_t) + 1500];
   if (payload_len > sizeof(udp_buf) - sizeof(ant_udp_t)) return;
@@ -370,6 +370,8 @@ static void ant_net_handle_ipv4(ant_hvf_vm_t *vm, const ant_eth_t *eth, const un
       ant_net_handle_dhcp(vm, eth, udp, udp_payload, udp_payload_len);
     } else if (dport == ANT_DNS_PORT) {
       ant_net_handle_dns(vm, eth, ip, udp, udp_payload, udp_payload_len);
+    } else if (vm->net_nat) {
+      ant_nat_handle_udp(vm->net_nat, eth, ip, udp, udp_payload, udp_payload_len);
     }
   } else if (ip->proto == ANT_IP_TCP) {
     if (l4_len < sizeof(ant_tcp_t)) return;

@@ -99,10 +99,12 @@ uint16_t ant_net_l4_csum(uint32_t src, uint32_t dst, uint8_t proto, const void *
 void ant_hvf_net_note_rx(ant_hvf_vm_t *vm);
 void ant_net_enqueue(ant_hvf_vm_t *vm, const void *data, uint32_t len);
 void ant_net_set_guest(ant_hvf_vm_t *vm, const uint8_t mac[6]);
+void ant_net_send_udp(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, const void *payload, uint16_t payload_len);
 void ant_net_send_tcp(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack, uint8_t flags, const void *payload, uint16_t payload_len);
 void ant_net_send_rst(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack);
 void ant_net_handle_frame(ant_hvf_vm_t *vm, const unsigned char *frame, size_t frame_len);
 void ant_nat_handle_tcp(ant_hvf_nat_t *nat, const ant_eth_t *eth, const ant_ipv4_t *ip, const ant_tcp_t *tcp, const unsigned char *payload, size_t payload_len);
+void ant_nat_handle_udp(ant_hvf_nat_t *nat, const ant_eth_t *eth, const ant_ipv4_t *ip, const ant_udp_t *udp, const unsigned char *payload, size_t payload_len);
 void ant_nat_wake(ant_hvf_nat_t *nat);
 void ant_nat_note_guest_packet(ant_hvf_nat_t *nat);
 

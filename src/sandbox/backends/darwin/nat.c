@@ -11,6 +11,7 @@ typedef enum {
 } ant_hvf_nat_tcp_state_t;
 
 typedef struct ant_hvf_nat_tcp ant_hvf_nat_tcp_t;
+typedef struct ant_hvf_nat_udp ant_hvf_nat_udp_t;
 
 typedef struct {
   int fd;
@@ -46,6 +47,16 @@ struct ant_hvf_nat_tcp {
   size_t host_sent;
 };
 
+struct ant_hvf_nat_udp {
+  bool active;
+  int fd;
+  uint32_t guest_ip;
+  uint16_t guest_port;
+  uint32_t peer_ip;
+  uint16_t peer_port;
+  uint8_t guest_mac[6];
+};
+
 struct ant_hvf_nat {
   ant_hvf_vm_t *vm;
   pthread_mutex_t lock;
@@ -57,6 +68,9 @@ struct ant_hvf_nat {
   ant_hvf_nat_tcp_t **tcp;
   size_t tcp_count;
   size_t tcp_cap;
+  ant_hvf_nat_udp_t **udp;
+  size_t udp_count;
+  size_t udp_cap;
   ant_hvf_nat_forward_t *forwards;
   size_t forward_count;
   size_t forward_cap;
@@ -65,6 +79,7 @@ struct ant_hvf_nat {
   uint64_t guest_drops;
   uint64_t host_packets;
   uint64_t tcp_opened;
+  uint64_t udp_opened;
 };
 
 static bool ant_nat_tcp_active(const ant_hvf_nat_tcp_t *c) {
@@ -84,6 +99,22 @@ static bool ant_nat_grow_tcp_table(ant_hvf_nat_t *nat, size_t needed) {
   memset(grown + nat->tcp_cap, 0, (next - nat->tcp_cap) * sizeof(*grown));
   nat->tcp = grown;
   nat->tcp_cap = next;
+  return true;
+}
+
+static bool ant_nat_grow_udp_table(ant_hvf_nat_t *nat, size_t needed) {
+  if (needed <= nat->udp_cap) return true;
+  size_t next = nat->udp_cap ? nat->udp_cap : ANT_NAT_TCP_INITIAL_CAP;
+  while (next < needed) {
+    if (next > SIZE_MAX / 2u) return false;
+    next *= 2u;
+  }
+  if (next > SIZE_MAX / sizeof(*nat->udp)) return false;
+  ant_hvf_nat_udp_t **grown = realloc(nat->udp, next * sizeof(*grown));
+  if (!grown) return false;
+  memset(grown + nat->udp_cap, 0, (next - nat->udp_cap) * sizeof(*grown));
+  nat->udp = grown;
+  nat->udp_cap = next;
   return true;
 }
 
@@ -265,6 +296,51 @@ static ant_hvf_nat_tcp_t *ant_nat_alloc_tcp(ant_hvf_nat_t *nat) {
   return c;
 }
 
+static ant_hvf_nat_udp_t *ant_nat_find_udp(ant_hvf_nat_t *nat,
+                                           uint32_t guest_ip,
+                                           uint16_t guest_port,
+                                           uint32_t peer_ip,
+                                           uint16_t peer_port) {
+  for (size_t i = 0; i < nat->udp_count; i++) {
+    ant_hvf_nat_udp_t *u = nat->udp[i];
+    if (!u || !u->active) continue;
+    if (u->guest_ip == guest_ip && u->guest_port == guest_port &&
+        u->peer_ip == peer_ip && u->peer_port == peer_port) {
+      return u;
+    }
+  }
+  return NULL;
+}
+
+static ant_hvf_nat_udp_t *ant_nat_alloc_udp(ant_hvf_nat_t *nat) {
+  for (size_t i = 0; i < nat->udp_count; i++) {
+    ant_hvf_nat_udp_t *u = nat->udp[i];
+    if (u && !u->active) {
+      memset(u, 0, sizeof(*u));
+      u->fd = -1;
+      u->active = true;
+      nat->udp_opened++;
+      return u;
+    }
+  }
+
+  if (!ant_nat_grow_udp_table(nat, nat->udp_count + 1u)) return NULL;
+  ant_hvf_nat_udp_t *u = calloc(1, sizeof(*u));
+  if (!u) return NULL;
+  u->fd = -1;
+  u->active = true;
+  nat->udp[nat->udp_count++] = u;
+  nat->udp_opened++;
+  return u;
+}
+
+static void ant_nat_close_udp(ant_hvf_nat_udp_t *u) {
+  if (!u) return;
+  if (u->fd >= 0) close(u->fd);
+  memset(u, 0, sizeof(*u));
+  u->fd = -1;
+}
+
 static void ant_nat_close_tcp(ant_hvf_nat_tcp_t *c) {
   if (c->fd >= 0) close(c->fd);
   ant_nat_free_tcp_buffers(c);
@@ -402,32 +478,38 @@ static void *ant_nat_thread(void *arg) {
   nfds_t poll_cap = 0;
   struct pollfd *fds = NULL;
   ant_hvf_nat_tcp_t **tcp_map = NULL;
+  ant_hvf_nat_udp_t **udp_map = NULL;
   ant_hvf_nat_forward_t **fwd_map = NULL;
 
   while (!nat->stop) {
     nfds_t n = 0;
     pthread_mutex_lock(&nat->lock);
-    nfds_t needed = (nfds_t)(1u + nat->tcp_count + nat->forward_count);
+    nfds_t needed = (nfds_t)(1u + nat->tcp_count + nat->udp_count + nat->forward_count);
     if (needed > poll_cap) {
       struct pollfd *new_fds = calloc(needed, sizeof(*new_fds));
       ant_hvf_nat_tcp_t **new_tcp_map = calloc(needed, sizeof(*new_tcp_map));
+      ant_hvf_nat_udp_t **new_udp_map = calloc(needed, sizeof(*new_udp_map));
       ant_hvf_nat_forward_t **new_fwd_map = calloc(needed, sizeof(*new_fwd_map));
-      if (!new_fds || !new_tcp_map || !new_fwd_map) {
+      if (!new_fds || !new_tcp_map || !new_udp_map || !new_fwd_map) {
         free(new_fds);
         free(new_tcp_map);
+        free(new_udp_map);
         free(new_fwd_map);
         pthread_mutex_unlock(&nat->lock);
         break;
       }
       free(fds);
       free(tcp_map);
+      free(udp_map);
       free(fwd_map);
       fds = new_fds;
       tcp_map = new_tcp_map;
+      udp_map = new_udp_map;
       fwd_map = new_fwd_map;
       poll_cap = needed;
     }
     memset(tcp_map, 0, poll_cap * sizeof(*tcp_map));
+    memset(udp_map, 0, poll_cap * sizeof(*udp_map));
     memset(fwd_map, 0, poll_cap * sizeof(*fwd_map));
     fds[n++] = (struct pollfd){ .fd = nat->wake_pipe[0], .events = POLLIN };
 
@@ -448,6 +530,13 @@ static void *ant_nat_thread(void *arg) {
       if (!ev) continue;
       fds[n] = (struct pollfd){ .fd = c->fd, .events = ev };
       tcp_map[n] = c;
+      n++;
+    }
+    for (size_t i = 0; i < nat->udp_count && n < poll_cap; i++) {
+      ant_hvf_nat_udp_t *u = nat->udp[i];
+      if (!u || !u->active || u->fd < 0) continue;
+      fds[n] = (struct pollfd){ .fd = u->fd, .events = POLLIN };
+      udp_map[n] = u;
       n++;
     }
     pthread_mutex_unlock(&nat->lock);
@@ -491,20 +580,95 @@ static void *ant_nat_thread(void *arg) {
         continue;
       }
       ant_hvf_nat_tcp_t *c = tcp_map[i];
-      if (!c || !ant_nat_tcp_active(c)) continue;
-      if (fds[i].revents & POLLOUT) {
-        ant_nat_check_connect(c);
-        if (ant_nat_tcp_active(c)) ant_nat_flush_pending(c);
+      ant_hvf_nat_udp_t *u = udp_map[i];
+      if (c) {
+        if (!ant_nat_tcp_active(c)) continue;
+        if (fds[i].revents & POLLOUT) {
+          ant_nat_check_connect(c);
+          if (ant_nat_tcp_active(c)) ant_nat_flush_pending(c);
+        }
+        if (ant_nat_tcp_active(c) && (fds[i].revents & (POLLIN | POLLHUP))) ant_nat_tcp_from_host(nat, c);
+        if (ant_nat_tcp_active(c) && (fds[i].revents & POLLERR)) ant_nat_close_tcp(c);
+        continue;
       }
-      if (ant_nat_tcp_active(c) && (fds[i].revents & (POLLIN | POLLHUP))) ant_nat_tcp_from_host(nat, c);
-      if (ant_nat_tcp_active(c) && (fds[i].revents & POLLERR)) ant_nat_close_tcp(c);
+      if (u && u->active && (fds[i].revents & POLLIN)) {
+        unsigned char buf[ANT_HVF_NET_MAX_PACKET];
+        for (;;) {
+          ssize_t rn = recv(u->fd, buf, sizeof(buf), 0);
+          if (rn > 0) {
+            ant_net_send_udp(nat->vm, u->guest_mac, u->peer_ip, u->guest_ip,
+                             u->peer_port, u->guest_port, buf, (uint16_t)rn);
+            continue;
+          }
+          if (rn < 0 && errno == EINTR) continue;
+          if (rn < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+          ant_nat_close_udp(u);
+          break;
+        }
+      } else if (u && u->active && (fds[i].revents & POLLERR)) {
+        ant_nat_close_udp(u);
+      }
     }
     pthread_mutex_unlock(&nat->lock);
   }
   free(fds);
   free(tcp_map);
+  free(udp_map);
   free(fwd_map);
   return NULL;
+}
+
+void ant_nat_handle_udp(ant_hvf_nat_t *nat,
+                        const ant_eth_t *eth,
+                        const ant_ipv4_t *ip,
+                        const ant_udp_t *udp,
+                        const unsigned char *payload,
+                        size_t payload_len) {
+  if (payload_len > ANT_HVF_NET_MAX_PACKET) return;
+  uint32_t src_ip = ntohl(ip->src);
+  uint32_t dst_ip = ntohl(ip->dst);
+  uint16_t src_port = ntohs(udp->src);
+  uint16_t dst_port = ntohs(udp->dst);
+
+  pthread_mutex_lock(&nat->lock);
+  ant_hvf_nat_udp_t *u = ant_nat_find_udp(nat, src_ip, src_port, dst_ip, dst_port);
+  if (!u) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) goto done;
+    ant_socket_nonblock(fd);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip);
+    addr.sin_port = htons(dst_port);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+      close(fd);
+      goto done;
+    }
+
+    u = ant_nat_alloc_udp(nat);
+    if (!u) {
+      close(fd);
+      goto done;
+    }
+    u->fd = fd;
+    u->guest_ip = src_ip;
+    u->guest_port = src_port;
+    u->peer_ip = dst_ip;
+    u->peer_port = dst_port;
+    memcpy(u->guest_mac, eth->src, 6);
+  }
+
+  ssize_t wn = send(u->fd, payload, payload_len, 0);
+  if (wn < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+    ant_nat_close_udp(u);
+  } else {
+    ant_nat_wake(nat);
+  }
+
+done:
+  pthread_mutex_unlock(&nat->lock);
 }
 
 void ant_nat_handle_tcp(ant_hvf_nat_t *nat,
@@ -717,19 +881,26 @@ void ant_hvf_net_stop(ant_hvf_vm_t *vm) {
     ant_nat_free_tcp_buffers(nat->tcp[i]);
     free(nat->tcp[i]);
   }
+  for (size_t i = 0; i < nat->udp_count; i++) {
+    if (nat->udp[i] && nat->udp[i]->active) ant_nat_close_udp(nat->udp[i]);
+    free(nat->udp[i]);
+  }
   for (size_t i = 0; i < nat->forward_count; i++) {
     if (nat->forwards[i].fd >= 0) close(nat->forwards[i].fd);
   }
   if (vm->verbose) {
     ant_hvf_verbosef(vm,
-                     "network backend stopped (guest_packets=%llu host_packets=%llu drops=%llu tcp_opened=%llu tcp_slots=%zu)",
+                     "network backend stopped (guest_packets=%llu host_packets=%llu drops=%llu tcp_opened=%llu udp_opened=%llu tcp_slots=%zu udp_slots=%zu)",
                      (unsigned long long)nat->guest_packets,
                      (unsigned long long)nat->host_packets,
                      (unsigned long long)nat->guest_drops,
                      (unsigned long long)nat->tcp_opened,
-                     nat->tcp_count);
+                     (unsigned long long)nat->udp_opened,
+                     nat->tcp_count,
+                     nat->udp_count);
   }
   free(nat->tcp);
+  free(nat->udp);
   free(nat->forwards);
   if (nat->wake_pipe[0] >= 0) close(nat->wake_pipe[0]);
   if (nat->wake_pipe[1] >= 0) close(nat->wake_pipe[1]);
