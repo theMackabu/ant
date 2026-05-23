@@ -25,6 +25,7 @@ void ant_sandbox_request_free(ant_sandbox_request_t *req) {
 
   for (int i = 0; i < req->argc; i++) free(req->argv[i]);
   free(req->argv);
+  free(req->forward_ports);
 
   memset(req, 0, sizeof(*req));
 }
@@ -134,9 +135,12 @@ uint8_t *ant_sandbox_build_run_request_frame(
   uint32_t capabilities,
   uint16_t tty_rows,
   uint16_t tty_cols,
+  const uint16_t *forward_ports,
+  uint32_t forward_count,
   size_t *len_out
 ) {
   if (!cwd || !entry || argc < 0 || !len_out) return NULL;
+  if (forward_count > 0 && !forward_ports) return NULL;
 
   size_t payload_len = 0;
   if (!sandbox_frame_add_size(&payload_len, 8)) return NULL;
@@ -146,6 +150,10 @@ uint8_t *ant_sandbox_build_run_request_frame(
 
   for (int i = 0; i < argc; i++) {
     if (!argv[i] || !sandbox_string_payload_size(&payload_len, argv[i])) return NULL;
+  }
+  if (forward_count > 0 &&
+      !sandbox_frame_add_size(&payload_len, 4 + (size_t)forward_count * 2u)) {
+    return NULL;
   }
 
   size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + payload_len;
@@ -163,6 +171,10 @@ uint8_t *ant_sandbox_build_run_request_frame(
   sandbox_store32(p, (uint32_t)argc);
   p += 4;
   for (int i = 0; i < argc; i++) p = sandbox_write_string(p, argv[i]);
+  if (forward_count > 0) {
+    p = sandbox_write_u32(p, forward_count);
+    for (uint32_t i = 0; i < forward_count; i++) p = sandbox_write_u16(p, forward_ports[i]);
+  }
 
   return frame;
 }
@@ -218,6 +230,18 @@ static bool sandbox_parse_run_payload(const uint8_t *payload, size_t payload_len
   }
 
   out->argv[argc] = NULL;
+  if (r.p < r.end) {
+    uint32_t forward_count = 0;
+    if (!sandbox_read_u32(&r, &forward_count)) return false;
+    if ((size_t)(r.end - r.p) < (size_t)forward_count * 2u) return false;
+    out->forward_count = forward_count;
+    if (forward_count > 0) {
+      out->forward_ports = try_oom(sizeof(*out->forward_ports) * (size_t)forward_count);
+      for (uint32_t i = 0; i < forward_count; i++) {
+        if (!sandbox_read_u16(&r, &out->forward_ports[i])) return false;
+      }
+    }
+  }
   return r.p == r.end;
 }
 

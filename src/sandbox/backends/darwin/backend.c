@@ -32,11 +32,12 @@ void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...) {
 void *ant_hvf_timeout_thread(void *arg) {
   ant_hvf_timeout_t *timeout = arg;
   usleep(timeout->timeout_ms * 1000u);
+  if (timeout->until_request_sent && timeout->vm->vsock.request_sent) return NULL;
   timeout->vm->timed_out = true;
   hv_vcpus_exit(&timeout->vm->vcpu, 1);
   return NULL;
 }
-int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms) {
+int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_request_sent) {
   pthread_t timeout_thread;
   ant_hvf_timeout_t timeout;
   bool timeout_thread_started = false;
@@ -44,6 +45,7 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms) {
   if (timeout_ms > 0) {
     timeout.vm = vm;
     timeout.timeout_ms = timeout_ms;
+    timeout.until_request_sent = timeout_until_request_sent;
     int prc = pthread_create(&timeout_thread, NULL, ant_hvf_timeout_thread, &timeout);
     if (prc == 0) {
       timeout_thread_started = true;
@@ -319,12 +321,22 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   rc = ant_hvf_init_vcpu(&vm);
   if (rc != 0) goto done;
 
-  unsigned int timeout_ms = config->timeout_ms ? config->timeout_ms : 60000;
+  bool timeout_until_request_sent = config->timeout_ms == 0;
+  unsigned int timeout_ms = config->timeout_ms ? config->timeout_ms : 10000;
   const char *timeout_env = getenv("ANT_SANDBOX_VM_TIMEOUT_MS");
-  if (timeout_env && timeout_env[0]) timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
-  ant_hvf_verbosef(&vm, "starting guest timeout=%u ms", timeout_ms);
+  if (timeout_env && timeout_env[0]) {
+    timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
+    timeout_until_request_sent = false;
+  }
+  if (timeout_ms > 0 && timeout_until_request_sent) {
+    ant_hvf_verbosef(&vm, "starting guest boot-timeout=%u ms", timeout_ms);
+  } else if (timeout_ms > 0) {
+    ant_hvf_verbosef(&vm, "starting guest timeout=%u ms", timeout_ms);
+  } else {
+    ant_hvf_verbose(&vm, "starting guest timeout=disabled");
+  }
 
-  rc = ant_hvf_run(&vm, timeout_ms);
+  rc = ant_hvf_run(&vm, timeout_ms, timeout_until_request_sent);
   if (rc == -ETIMEDOUT) fprintf(stderr, "sandbox vm: guest timed out\n");
 
 done:

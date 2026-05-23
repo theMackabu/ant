@@ -10,13 +10,16 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "inspector.h"
 #include "internal.h"
+#include "output.h"
 #include "ptr.h"
 
 #include "gc/modules.h"
 #include "net/connection.h"
 #include "net/listener.h"
+#include "sandbox/policy.h"
 #include "streams/readable.h"
 
 #include "http/http1_parser.h"
@@ -1556,14 +1559,18 @@ int server_maybe_start_from_export(ant_t *js, ant_value_t default_export) {
 
   server_result = server_start_from_export(js, default_export);
   if (is_err(server_result)) {
-    error = js_str(js, server_result);
-    goto fail;
+    print_error_value(js, server_result, js_mkundef(), NULL);
+    return EXIT_FAILURE;
   }
 
   return EXIT_SUCCESS;
 
 fail:
-  fprintf(stderr, "%s\n", error);
+  ant_output_stream_t *out = ant_output_stream(stderr);
+  ant_output_stream_begin(out);
+  ant_output_stream_append_cstr(out, error);
+  ant_output_stream_putc(out, '\n');
+  ant_output_stream_flush(out);
   return EXIT_FAILURE;
 }
 
@@ -1724,6 +1731,18 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
       128, server->idle_timeout_ms, &callbacks, server
     );
   } else {
+    if (!ant_sandbox_policy_port_forwarded(server->port)) {
+      int port = server->port;
+      free(server->unix_path);
+      free(server->hostname);
+      free(server);
+      return js_mkerr_typed(js, JS_ERR_TYPE | JS_ERR_NO_STACK,
+                            "sandbox listen on port %d requires --forward %d or --forward <host>:%d",
+                            port,
+                            port,
+                            port);
+    }
+
     rc = ant_listener_listen_tcp(
       &server->listener, server->loop,
       server->hostname, server->port,

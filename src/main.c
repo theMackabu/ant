@@ -36,6 +36,7 @@
 #include "cli/misc.h"
 #include "cli/version.h"
 #include "sandbox/cli.h"
+#include "sandbox/policy.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
 
@@ -705,6 +706,7 @@ int main(int argc, char *argv[]) {
   if (sandbox_daemon) {
     io_set_sandbox_terminal(sandbox.capabilities);
     process_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+    ant_sandbox_policy_set_forwards(sandbox.forward_ports, sandbox.forward_count);
   }
 
   init_symbol_module();

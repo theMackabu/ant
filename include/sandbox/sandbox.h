@@ -43,6 +43,8 @@ typedef struct {
   uint32_t capabilities;
   uint16_t tty_rows;
   uint16_t tty_cols;
+  uint16_t *forward_ports;
+  uint32_t forward_count;
 } ant_sandbox_request_t;
 
 void ant_sandbox_request_free(ant_sandbox_request_t *req);
@@ -60,6 +62,8 @@ uint8_t *ant_sandbox_build_run_request_frame(
   uint32_t capabilities,
   uint16_t tty_rows,
   uint16_t tty_cols,
+  const uint16_t *forward_ports,
+  uint32_t forward_count,
   size_t *len_out
 );
 bool ant_sandbox_parse_request_frame(const uint8_t *frame, size_t frame_len, ant_sandbox_request_t *out);

@@ -27,6 +27,8 @@
 #define ANT_DHCP_SERVER_PORT 67u
 #define ANT_DHCP_CLIENT_PORT 68u
 #define ANT_DNS_PORT 53u
+#define ANT_NAT_INBOUND_PORT_FIRST 49152u
+#define ANT_NAT_INBOUND_PORT_LAST  65535u
 
 typedef struct ant_hvf_nat_tcp ant_hvf_nat_tcp_t;
 
@@ -75,6 +77,7 @@ struct ant_hvf_nat {
   ant_hvf_nat_tcp_t tcp[ANT_HVF_NET_TCP_MAX];
   ant_hvf_nat_forward_t forwards[32];
   size_t forward_count;
+  uint16_t next_inbound_port;
 };
 
 typedef struct __attribute__((packed)) {
@@ -520,6 +523,29 @@ static ant_hvf_nat_tcp_t *ant_nat_find_tcp(ant_hvf_nat_t *nat,
   return NULL;
 }
 
+static uint16_t ant_nat_alloc_inbound_port(ant_hvf_nat_t *nat) {
+  if (nat->next_inbound_port < ANT_NAT_INBOUND_PORT_FIRST) {
+    nat->next_inbound_port = ANT_NAT_INBOUND_PORT_FIRST;
+  }
+
+  for (uint32_t tries = 0; tries <= ANT_NAT_INBOUND_PORT_LAST - ANT_NAT_INBOUND_PORT_FIRST; tries++) {
+    uint16_t port = nat->next_inbound_port++;
+    if (nat->next_inbound_port < ANT_NAT_INBOUND_PORT_FIRST) nat->next_inbound_port = ANT_NAT_INBOUND_PORT_FIRST;
+
+    bool used = false;
+    for (size_t i = 0; i < ANT_HVF_NET_TCP_MAX; i++) {
+      ant_hvf_nat_tcp_t *c = &nat->tcp[i];
+      if (c->used && c->inbound && c->peer_port == port) {
+        used = true;
+        break;
+      }
+    }
+    if (!used) return port;
+  }
+
+  return 0;
+}
+
 static ant_hvf_nat_tcp_t *ant_nat_alloc_tcp(ant_hvf_nat_t *nat) {
   for (size_t i = 0; i < ANT_HVF_NET_TCP_MAX; i++) {
     if (!nat->tcp[i].used) {
@@ -706,14 +732,15 @@ static void *ant_nat_thread(void *arg) {
         if (fd >= 0) {
           ant_socket_nonblock(fd);
           ant_hvf_nat_tcp_t *c = ant_nat_alloc_tcp(nat);
-          if (c) {
+          uint16_t peer_port = ant_nat_alloc_inbound_port(nat);
+          if (c && peer_port > 0) {
             c->inbound = true;
             c->fd = fd;
             c->guest_ip = ANT_NET_GUEST_IP;
             c->guest_port = fwd_map[i]->guest_port;
             c->peer_ip = ANT_NET_HOST_IP;
-            c->peer_port = fwd_map[i]->host_port;
-            c->nat_iss = 0x41000000u + (uint32_t)i;
+            c->peer_port = peer_port;
+            c->nat_iss = 0x41000000u + ((uint32_t)peer_port << 4u);
             c->nat_next = c->nat_iss + 1u;
             c->guest_ack = c->nat_iss;
             c->guest_window = 65535u;
@@ -724,6 +751,7 @@ static void *ant_nat_thread(void *arg) {
             ant_net_send_tcp(nat->vm, c->guest_mac, c->peer_ip, c->guest_ip, c->peer_port, c->guest_port,
                              c->nat_iss, 0, ANT_TCP_SYN, NULL, 0);
           } else {
+            if (c) ant_nat_close_tcp(c);
             close(fd);
           }
         }

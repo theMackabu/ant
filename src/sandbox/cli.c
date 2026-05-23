@@ -431,6 +431,8 @@ int ant_sandbox_cmd(int argc, char **argv) {
   uint16_t tty_rows = 24;
   uint16_t tty_cols = 80;
   uint32_t capabilities = sandbox_terminal_capabilities(&tty_rows, &tty_cols);
+  uint16_t forward_ports[ANT_SANDBOX_MAX_FORWARDS];
+  for (size_t i = 0; i < opts.forward_count; i++) forward_ports[i] = opts.forwards[i].guest_port;
   size_t request_len = 0;
   uint8_t *request = ant_sandbox_build_run_request_frame(opts.guest_cwd,
                                                          argv[opts.script_index],
@@ -439,6 +441,8 @@ int ant_sandbox_cmd(int argc, char **argv) {
                                                          capabilities,
                                                          tty_rows,
                                                          tty_cols,
+                                                         forward_ports,
+                                                         (uint32_t)opts.forward_count,
                                                          &request_len);
   if (!request) {
     fprintf(stderr, "sandbox: failed to build request frame\n");

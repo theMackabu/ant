@@ -21,6 +21,7 @@
 #include "gc/modules.h"
 #include "net/connection.h"
 #include "net/listener.h"
+#include "sandbox/policy.h"
 #include "silver/engine.h"
 
 #include "modules/buffer.h"
@@ -1005,6 +1006,14 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
   if (!server) return js->thrown_value;
   if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
   if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
+  if (!parsed.path && !ant_sandbox_policy_port_forwarded(parsed.port)) {
+    return js_mkerr_typed(js,
+                          JS_ERR_TYPE | JS_ERR_NO_STACK,
+                          "sandbox listen on port %d requires --forward %d or --forward <host>:%d",
+                          parsed.port,
+                          parsed.port,
+                          parsed.port);
+  }
 
   free(server->path);
   server->path = NULL;

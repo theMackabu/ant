@@ -395,6 +395,7 @@ typedef struct {
 typedef struct {
   ant_hvf_vm_t *vm;
   unsigned int timeout_ms;
+  bool until_request_sent;
 } ant_hvf_timeout_t;
 
 typedef struct {
