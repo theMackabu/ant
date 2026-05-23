@@ -274,7 +274,11 @@ Current layout:
 - `virtio_blk.c`, `virtio_net.c`, `virtio_vsock.c`, `virtio_9p.c`: device
   implementations
 - `uart.c`: PL011 output buffering
-- `backend.h`: Darwin backend-private machine types and cross-file prototypes
+- `backend.h`: Darwin backend-private VM/session state and common cross-file
+  helpers
+- focused private headers for backend pieces: `hvf.h`, `fdt.h`, `gic.h`,
+  `pci.h`, `virtio.h`, `virtio_blk.h`, `virtio_net.h`, `virtio_vsock.h`,
+  `virtio_9p.h`, `nat.h`, and `forward.h`
 
 Validation after the split:
 
