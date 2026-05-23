@@ -179,6 +179,37 @@ uint8_t *ant_sandbox_build_run_request_frame(
   return frame;
 }
 
+uint8_t *ant_sandbox_build_eval_request_frame(
+  const char *cwd,
+  const char *source,
+  uint32_t capabilities,
+  uint16_t tty_rows,
+  uint16_t tty_cols,
+  size_t *len_out
+) {
+  if (!cwd || !source || !len_out) return NULL;
+
+  size_t payload_len = 0;
+  if (!sandbox_frame_add_size(&payload_len, 8)) return NULL;
+  if (!sandbox_string_payload_size(&payload_len, cwd)) return NULL;
+  if (!sandbox_string_payload_size(&payload_len, source)) return NULL;
+
+  size_t frame_len = ANT_SANDBOX_FRAME_HEADER_SIZE + payload_len;
+  if (payload_len > UINT32_MAX || frame_len > ANT_SANDBOX_FRAME_MAX_SIZE) return NULL;
+
+  uint8_t *frame = sandbox_alloc_frame(ANT_SANDBOX_FRAME_EVAL, payload_len, len_out);
+  if (!frame) return NULL;
+
+  uint8_t *p = frame + ANT_SANDBOX_FRAME_HEADER_SIZE;
+  p = sandbox_write_u32(p, capabilities);
+  p = sandbox_write_u16(p, tty_rows);
+  p = sandbox_write_u16(p, tty_cols);
+  p = sandbox_write_string(p, cwd);
+  p = sandbox_write_string(p, source);
+
+  return frame;
+}
+
 typedef struct {
   const uint8_t *p;
   const uint8_t *end;

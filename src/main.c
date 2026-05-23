@@ -106,6 +106,7 @@
 #include "modules/formdata.h"
 #include "modules/zlib.h"
 #include "modules/rpc.h"
+#include "modules/sandbox.h"
 #include "streams/queuing.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
@@ -762,6 +763,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
+  ant_register_library(sandbox_library, "ant:sandbox", NULL);
   
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);

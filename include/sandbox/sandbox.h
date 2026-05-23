@@ -66,6 +66,14 @@ uint8_t *ant_sandbox_build_run_request_frame(
   uint32_t forward_count,
   size_t *len_out
 );
+uint8_t *ant_sandbox_build_eval_request_frame(
+  const char *cwd,
+  const char *source,
+  uint32_t capabilities,
+  uint16_t tty_rows,
+  uint16_t tty_cols,
+  size_t *len_out
+);
 bool ant_sandbox_parse_request_frame(const uint8_t *frame, size_t frame_len, ant_sandbox_request_t *out);
 int ant_sandbox_eval_module(ant_t *js, const char *script, size_t len);
 
