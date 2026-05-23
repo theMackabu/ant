@@ -61,10 +61,22 @@ int ant_hvf_vsock_write_iov(ant_hvf_vm_t *vm,
   return 0;
 }
 
-int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
-                                     uint16_t op,
-                                     const void *payload,
-                                     uint32_t payload_len) {
+static uint32_t ant_hvf_vsock_peer_space(const ant_hvf_vsock_device_t *dev) {
+  uint32_t in_flight = dev->tx_cnt - dev->peer_fwd_cnt;
+  if (in_flight >= dev->peer_buf_alloc) return 0;
+  return dev->peer_buf_alloc - in_flight;
+}
+
+static void ant_hvf_vsock_update_peer_credit(ant_hvf_vsock_device_t *dev,
+                                             const ant_virtio_vsock_hdr_t *hdr) {
+  dev->peer_buf_alloc = hdr->buf_alloc;
+  dev->peer_fwd_cnt = hdr->fwd_cnt;
+}
+
+static int ant_hvf_vsock_send_packet_len(ant_hvf_vm_t *vm,
+                                         uint16_t op,
+                                         const void *payload,
+                                         uint32_t payload_len) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
   ant_hvf_virtio_queue_t *q = &dev->virtio.queues[0];
   if (!q->enabled || !q->desc || !q->avail || !q->used) return -EAGAIN;
@@ -116,23 +128,106 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
   if (rc != 0) return rc;
 
   q->last_avail++;
+  if (op == ANT_VIRTIO_VSOCK_OP_RW) dev->tx_cnt += payload_len;
   return ant_hvf_virtio_interrupt(vm, &dev->virtio, 0);
+}
+
+static int ant_hvf_vsock_maybe_send_response(ant_hvf_vm_t *vm) {
+  ant_hvf_vsock_device_t *dev = &vm->vsock;
+  if (!dev->connected || dev->response_sent) return 0;
+  int rc = ant_hvf_vsock_send_packet_len(vm, ANT_VIRTIO_VSOCK_OP_RESPONSE, NULL, 0);
+  if (rc == 0) dev->response_sent = true;
+  return rc == -EAGAIN ? 0 : rc;
+}
+
+int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
+                                     uint16_t op,
+                                     const void *payload,
+                                     uint32_t payload_len) {
+  uint32_t chunk = payload_len;
+  if (op == ANT_VIRTIO_VSOCK_OP_RW) {
+    uint32_t peer_space = ant_hvf_vsock_peer_space(&vm->vsock);
+    if (peer_space == 0) return -EAGAIN;
+    if (chunk > peer_space) chunk = peer_space;
+    if (chunk > ANT_HVF_VSOCK_MAX_PAYLOAD) chunk = ANT_HVF_VSOCK_MAX_PAYLOAD;
+  }
+  return ant_hvf_vsock_send_packet_len(vm, op, payload, chunk);
 }
 
 int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
   if (!dev->connected || dev->request_sent || !dev->request_data || dev->request_len == 0) return 0;
+  int response_rc = ant_hvf_vsock_maybe_send_response(vm);
+  if (response_rc != 0 || !dev->response_sent) return response_rc;
   if (dev->request_len > UINT32_MAX) return -E2BIG;
 
-  int rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RW,
-                                     dev->request_data,
-                                     (uint32_t)dev->request_len);
-  if (rc == 0) {
-    dev->request_sent = true;
-    ant_hvf_verbosef(vm, "sent daemon request (%zu bytes)", dev->request_len);
+  const unsigned char *request = dev->request_data;
+  while (dev->request_off < dev->request_len) {
+    uint32_t remaining = (uint32_t)(dev->request_len - dev->request_off);
+    uint32_t chunk = remaining;
+    uint32_t peer_space = ant_hvf_vsock_peer_space(dev);
+    if (peer_space == 0) return 0;
+    if (chunk > peer_space) chunk = peer_space;
+    if (chunk > ANT_HVF_VSOCK_MAX_PAYLOAD) chunk = ANT_HVF_VSOCK_MAX_PAYLOAD;
+
+    int rc = ant_hvf_vsock_send_packet_len(vm, ANT_VIRTIO_VSOCK_OP_RW,
+                                           request + dev->request_off,
+                                           chunk);
+    if (rc == -EAGAIN) return 0;
+    if (rc != 0) return rc;
+    dev->request_off += chunk;
   }
-  if (rc == -EAGAIN) return 0;
-  return rc;
+
+  dev->request_sent = true;
+  ant_hvf_verbosef(vm, "sent daemon request (%zu bytes)", dev->request_len);
+  return 0;
+}
+
+static int ant_hvf_vsock_send_credit_update(ant_hvf_vm_t *vm) {
+  int rc = ant_hvf_vsock_send_packet_len(vm, ANT_VIRTIO_VSOCK_OP_CREDIT_UPDATE, NULL, 0);
+  return rc == -EAGAIN ? 0 : rc;
+}
+
+static int ant_hvf_vsock_send_event(ant_hvf_vm_t *vm, uint32_t id) {
+  ant_hvf_vsock_device_t *dev = &vm->vsock;
+  ant_hvf_virtio_queue_t *q = &dev->virtio.queues[2];
+  if (!q->enabled || !q->desc || !q->avail || !q->used) return -EAGAIN;
+
+  uint64_t desc_base = q->desc;
+  uint64_t avail_base = q->avail;
+  uint64_t used_base = q->used;
+
+  unsigned char idx_raw[2];
+  int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
+  if (rc != 0) return rc;
+  uint16_t avail_idx = ant_hvf_load16(idx_raw);
+  if (q->last_avail == avail_idx) return -EAGAIN;
+
+  uint16_t ring_slot = q->last_avail % q->size;
+  unsigned char head_raw[2];
+  rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
+                          head_raw, sizeof(head_raw));
+  if (rc != 0) return rc;
+  uint16_t head = ant_hvf_load16(head_raw);
+
+  unsigned char raw[4];
+  ant_hvf_store32(raw, id);
+  uint32_t used_len = 0;
+  rc = ant_hvf_vsock_write_iov(vm, desc_base, head, raw, sizeof(raw), &used_len);
+  if (rc != 0) return rc;
+  rc = ant_hvf_vring_add_used(vm, used_base, q->size, head, used_len);
+  if (rc != 0) return rc;
+
+  q->last_avail++;
+  return ant_hvf_virtio_interrupt(vm, &dev->virtio, 2);
+}
+
+static int ant_hvf_vsock_maybe_send_event(ant_hvf_vm_t *vm) {
+  ant_hvf_vsock_device_t *dev = &vm->vsock;
+  if (!dev->event_transport_reset_pending) return 0;
+  int rc = ant_hvf_vsock_send_event(vm, ANT_VIRTIO_VSOCK_EVENT_TRANSPORT_RESET);
+  if (rc == 0) dev->event_transport_reset_pending = false;
+  return rc == -EAGAIN ? 0 : rc;
 }
 
 int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
@@ -355,8 +450,12 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
   ant_hvf_virtio_queue_t *q = &dev->virtio.queues[queue];
   if (!q->enabled || !q->desc || !q->avail || !q->used) return 0;
 
-  if (queue == 0) return ant_hvf_vsock_maybe_send_request(vm);
-  if (queue == 2) return 0;
+  if (queue == 0) {
+    int rc = ant_hvf_vsock_maybe_send_response(vm);
+    if (rc != 0) return rc;
+    return ant_hvf_vsock_maybe_send_request(vm);
+  }
+  if (queue == 2) return ant_hvf_vsock_maybe_send_event(vm);
 
   uint64_t desc_base = q->desc;
   uint64_t avail_base = q->avail;
@@ -381,16 +480,67 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
     rc = ant_hvf_vsock_read_tx_packet(vm, desc_base, head, &hdr, &payload, &used_len);
     if (rc != 0) return rc;
 
+    if (hdr.src_cid == ANT_HVF_VSOCK_GUEST_CID &&
+        hdr.dst_cid == ANT_HVF_VSOCK_HOST_CID &&
+        hdr.src_port == dev->peer_port &&
+        hdr.dst_port == ANT_HVF_VSOCK_HOST_PORT) {
+      ant_hvf_vsock_update_peer_credit(dev, &hdr);
+    }
+
     if (hdr.op == ANT_VIRTIO_VSOCK_OP_REQUEST && hdr.dst_port == ANT_HVF_VSOCK_HOST_PORT) {
       dev->connected = true;
       dev->peer_port = hdr.src_port;
+      dev->response_sent = false;
+      ant_hvf_vsock_update_peer_credit(dev, &hdr);
       ant_hvf_verbose(vm, "daemon connected");
-      ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_RESPONSE, NULL, 0);
-      ant_hvf_vsock_maybe_send_request(vm);
+      rc = ant_hvf_vsock_maybe_send_response(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+      rc = ant_hvf_vsock_maybe_send_request(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
     } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_RW) {
       dev->fwd_cnt += hdr.len;
       rc = ant_hvf_vsock_consume_frames(vm, payload, hdr.len);
       if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+      rc = ant_hvf_vsock_send_credit_update(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+      rc = ant_hvf_vsock_maybe_send_request(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+    } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_CREDIT_UPDATE) {
+      rc = ant_hvf_vsock_maybe_send_request(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+    } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_CREDIT_REQUEST) {
+      rc = ant_hvf_vsock_send_credit_update(vm);
+      if (rc != 0) {
+        free(payload);
+        return rc;
+      }
+    } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_RST) {
+      dev->connected = false;
+      dev->response_sent = false;
+      dev->request_sent = false;
+      dev->request_off = 0;
+      dev->transport_error = !dev->exit_received;
+    } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_SHUTDOWN) {
+      rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_SHUTDOWN, NULL, 0);
+      if (rc != 0 && rc != -EAGAIN) {
         free(payload);
         return rc;
       }

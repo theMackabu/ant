@@ -75,7 +75,7 @@ index 1d50fd3..2f0157a 100644
      fs->fs.unlink = p9_unlink;
      fs->fs.rename = p9_rename;
 diff --git a/src/unix/syscall.c b/src/unix/syscall.c
-index b4d4615..583334f 100644
+index b4d4615..583334f 100755
 --- a/src/unix/syscall.c
 +++ b/src/unix/syscall.c
 @@ -1216,6 +1216,13 @@ static sysreturn getdents_internal(int fd, void *dirp, unsigned int count, boole

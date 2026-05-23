@@ -408,6 +408,7 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
 
   vm->vsock.request_data = request->request_data;
   vm->vsock.request_len = request->request_len;
+  vm->vsock.request_off = 0;
   vm->vsock.request_sent = false;
   vm->vsock.exit_received = false;
   vm->vsock.exit_code = 0;

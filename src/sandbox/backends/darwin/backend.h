@@ -130,10 +130,12 @@
 #define ANT_VIRTIO_VSOCK_OP_RW 5u
 #define ANT_VIRTIO_VSOCK_OP_CREDIT_UPDATE 6u
 #define ANT_VIRTIO_VSOCK_OP_CREDIT_REQUEST 7u
+#define ANT_VIRTIO_VSOCK_EVENT_TRANSPORT_RESET 0u
 #define ANT_HVF_VSOCK_GUEST_CID 3ull
 #define ANT_HVF_VSOCK_HOST_CID ANT_SANDBOX_TRANSPORT_VSOCK_HOST_CID
 #define ANT_HVF_VSOCK_HOST_PORT ANT_SANDBOX_TRANSPORT_VSOCK_PORT
 #define ANT_HVF_VSOCK_BUF_ALLOC 65536u
+#define ANT_HVF_VSOCK_MAX_PAYLOAD 2048u
 #define ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES (16u * 1024u)
 #define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
@@ -322,12 +324,18 @@ typedef struct {
   ant_hvf_virtio_device_t virtio;
   const void *request_data;
   size_t request_len;
+  size_t request_off;
   bool connected;
+  bool response_sent;
   bool request_sent;
   bool protocol_error;
   bool transport_error;
   uint32_t peer_port;
+  uint32_t peer_buf_alloc;
+  uint32_t peer_fwd_cnt;
+  uint32_t tx_cnt;
   uint32_t fwd_cnt;
+  bool event_transport_reset_pending;
   bool exit_received;
   int exit_code;
   uint32_t capabilities;
