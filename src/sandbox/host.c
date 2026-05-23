@@ -193,8 +193,9 @@ int ant_sandbox_launch_add_mount(
       sandbox_host_error(err, err_len, "failed to create temporary mount: %s", strerror(-rc));
       return rc;
     }
-    snprintf(opts->mount_hosts[idx], sizeof(opts->mount_hosts[idx]), "%s",
-             opts->temp_dirs[opts->temp_dir_count]);
+    char resolved[4096];
+    if (!realpath(opts->temp_dirs[opts->temp_dir_count], resolved)) return -errno;
+    snprintf(opts->mount_hosts[idx], sizeof(opts->mount_hosts[idx]), "%s", resolved);
     opts->temp_dir_count++;
     readonly = false;
   } else {

@@ -325,15 +325,36 @@ table so dynamic virtio-tag mounts are not lost later in boot.
 The host 9p server now tracks arbitrary guest fid numbers with a dynamic fid map
 instead of assuming the guest uses small dense fid IDs.
 
-Writable mounts are still a separate piece of work. The syntax is reserved:
+## Writable Mounts
+
+Explicit writable mounts are implemented on top of dynamic mount paths:
 
 ```sh
 ant sandbox --write tmp:/tmp script.js
 ant sandbox --write ./out:/out script.js
 ```
 
-but the current 9p server remains read-mostly and should not be documented as a
-stable writable mount ABI yet.
+`tmp:/tmp` creates a temporary host directory and exposes it as a writable guest
+mount. Host project directories remain read-only by default; host-backed writes
+must be requested explicitly with `--write`.
+
+The Darwin 9p server now carries the per-mount readonly bit, rejects mutations
+on read-only mounts with `EROFS`, and implements the Nanos 9p mutation surface
+used by Ant filesystem writes: `lcreate`, `write`, `mkdir`, `mknod`,
+`symlink`, `readlink`, `setattr` for truncate, `fsync`, `renameat`, and
+`unlinkat`.
+
+Writable paths are resolved through a mount-root containment policy. Existing
+paths must resolve under the mount root; new entries are created only under a
+contained parent directory; guest names reject absolute paths, slashes, `.`, and
+`..`.
+
+`examples/demo/writable_mount.js` demonstrates a Docker-ish temporary write
+mount:
+
+```sh
+ant sandbox --write tmp:/tmp examples/demo/writable_mount.js
+```
 
 Validation after dynamic mount work:
 

@@ -145,10 +145,28 @@
 #define P9_RSTATFS 9u
 #define P9_TLOPEN 12u
 #define P9_RLOPEN 13u
+#define P9_TLCREATE 14u
+#define P9_RLCREATE 15u
+#define P9_TSYMLINK 16u
+#define P9_RSYMLINK 17u
+#define P9_TMKNOD 18u
+#define P9_RMKNOD 19u
+#define P9_TREADLINK 22u
+#define P9_RREADLINK 23u
 #define P9_TGETATTR 24u
 #define P9_RGETATTR 25u
+#define P9_TSETATTR 26u
+#define P9_RSETATTR 27u
 #define P9_TREADDIR 40u
 #define P9_RREADDIR 41u
+#define P9_TFSYNC 50u
+#define P9_RFSYNC 51u
+#define P9_TMKDIR 72u
+#define P9_RMKDIR 73u
+#define P9_TRENAMEAT 74u
+#define P9_RRENAMEAT 75u
+#define P9_TUNLINKAT 76u
+#define P9_RUNLINKAT 77u
 #define P9_TVERSION 100u
 #define P9_RVERSION 101u
 #define P9_TATTACH 104u
@@ -157,10 +175,15 @@
 #define P9_RWALK 111u
 #define P9_TREAD 116u
 #define P9_RREAD 117u
+#define P9_TWRITE 118u
+#define P9_RWRITE 119u
 #define P9_TCLUNK 120u
 #define P9_RCLUNK 121u
+#define P9_QTSYMLINK 0x02u
 #define P9_QTDIR 0x80u
 #define P9_GETATTR_BASIC 0x7ffull
+#define P9_SETATTR_SIZE (1u << 3)
+#define P9_DOTL_AT_REMOVEDIR 0x200u
 #define ANT_HVF_GICR_ISPENDR0 66048u
 #define ANT_HVF_GIC_EL1_VIRTUAL_TIMER 27u
 #define ANT_HVF_GICM_TYPER 0x0008u
@@ -302,6 +325,7 @@ typedef struct {
   ant_hvf_virtio_device_t virtio;
   const char *root;
   const char *tag;
+  bool readonly;
   ant_hvf_9p_fid_t *fids;
   size_t fid_count;
   size_t fid_capacity;

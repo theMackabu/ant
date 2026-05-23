@@ -12,8 +12,9 @@ pieces are intentionally minimal and should not be treated as finished APIs:
 - Timer delivery is better but not final. The backend now raises the correct
   redistributor PPI and uses `cntvct_el0` for deadline math, but the patched
   Nanos `CNTFRQ_EL0` fallback is still bringup scaffolding.
-- Virtio-9p is still read-mostly. Writes, mutation, stronger path policy, and
-  stable writable mount semantics are future work.
+- Virtio-9p now supports explicit writable mounts, but its path policy and
+  mutation surface should continue to be reviewed as more workflows depend on
+  host-backed writes.
 - Virtio-blk is modern virtio PCI, but it is still only enough for the raw root
   image. It uses a tiny fixed queue, direct `pread`/`pwrite`, sparse config
   handling, and should be reviewed before relying on flush/discard/write-zero

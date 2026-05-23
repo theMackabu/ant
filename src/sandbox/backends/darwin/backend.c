@@ -294,6 +294,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
                         (uint16_t)(2u + strlen(config->mounts[i].tag)));
     vm->p9[i].root = config->mounts[i].host_path;
     vm->p9[i].tag = config->mounts[i].tag;
+    vm->p9[i].readonly = config->mounts[i].readonly;
   }
   vm->cntfrq = ant_hvf_host_cntfrq();
   vm->verbose = config->verbose;
