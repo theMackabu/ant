@@ -380,6 +380,8 @@ typedef struct {
   ant_hvf_vsock_device_t vsock;
   ant_hvf_uart_capture_t uart;
   bool verbose;
+  ant_sandbox_vm_frame_handler_t frame_handler;
+  void *frame_handler_user;
   bool timed_out;
   bool gic_msi_enabled;
   uint32_t gic_msi_base;

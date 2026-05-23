@@ -173,6 +173,50 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   ant_value_t verbose = js_get(js, opts, "verbose");
   if (vtype(verbose) != T_UNDEF && vtype(verbose) != T_NULL) state->verbose = js_truthy(js, verbose);
 
+  ant_value_t tty = js_get(js, opts, "tty");
+  if (vtype(tty) != T_UNDEF && vtype(tty) != T_NULL) {
+    if (js_truthy(js, tty)) {
+      state->capabilities |= ANT_SANDBOX_CAP_STDOUT_TTY | ANT_SANDBOX_CAP_STDERR_TTY;
+    } else {
+      state->capabilities &= ~(ANT_SANDBOX_CAP_STDOUT_TTY | ANT_SANDBOX_CAP_STDERR_TTY);
+    }
+  }
+
+  ant_value_t rows = js_get(js, opts, "ttyRows");
+  if (vtype(rows) != T_UNDEF && vtype(rows) != T_NULL) {
+    if (vtype(rows) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyRows must be a number");
+    double n = js_getnum(rows);
+    if (n < 1 || n > UINT16_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "ttyRows is out of range");
+    state->tty_rows = (uint16_t)n;
+  }
+
+  ant_value_t cols = js_get(js, opts, "ttyCols");
+  if (vtype(cols) != T_UNDEF && vtype(cols) != T_NULL) {
+    if (vtype(cols) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyCols must be a number");
+    double n = js_getnum(cols);
+    if (n < 1 || n > UINT16_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "ttyCols is out of range");
+    state->tty_cols = (uint16_t)n;
+  }
+
+  ant_value_t color = js_get(js, opts, "color");
+  if (vtype(color) != T_UNDEF && vtype(color) != T_NULL) {
+    if (vtype(color) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "color must be 'auto', 'force', 'strip', or 'preserve'");
+    const char *policy = js_getstr(js, color, NULL);
+    if (strcmp(policy, "auto") == 0) {
+      /* Keep the host-derived capability bits. */
+    } else if (strcmp(policy, "force") == 0) {
+      state->capabilities &= ~ANT_SANDBOX_CAP_COLOR_STRIP;
+      state->capabilities |= ANT_SANDBOX_CAP_COLOR_FORCE;
+    } else if (strcmp(policy, "strip") == 0) {
+      state->capabilities &= ~ANT_SANDBOX_CAP_COLOR_FORCE;
+      state->capabilities |= ANT_SANDBOX_CAP_COLOR_STRIP;
+    } else if (strcmp(policy, "preserve") == 0) {
+      state->capabilities &= ~(ANT_SANDBOX_CAP_COLOR_FORCE | ANT_SANDBOX_CAP_COLOR_STRIP);
+    } else {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "color must be 'auto', 'force', 'strip', or 'preserve'");
+    }
+  }
+
   return js_mkundef();
 }
 
@@ -245,8 +289,51 @@ static ant_value_t sandbox_resolved_number(ant_t *js, int value) {
   return promise;
 }
 
-static ant_value_t sandbox_start_vm(ant_t *js, sandbox_state_t *state, uint8_t *request, size_t request_len) {
+typedef struct {
+  ant_t *js;
+  bool has_result;
+  bool has_error;
+  ant_value_t result;
+  ant_value_t error;
+} sandbox_frame_capture_t;
+
+static bool sandbox_capture_frame(uint8_t type, const void *payload, size_t payload_len, void *user) {
+  sandbox_frame_capture_t *capture = user;
+  if (!capture || !capture->js) return false;
+
+  if (type == ANT_SANDBOX_FRAME_RESULT) {
+    ant_value_t result = js_mkundef();
+    if (ant_sandbox_decode_result_value(capture->js, payload, payload_len, &result)) {
+      capture->result = result;
+      capture->has_result = true;
+      return true;
+    }
+    return false;
+  }
+
+  if (type == ANT_SANDBOX_FRAME_ERROR) {
+    capture->error = ant_sandbox_decode_error_value(capture->js, payload, payload_len);
+    capture->has_error = true;
+    return true;
+  }
+
+  return false;
+}
+
+static ant_value_t sandbox_start_vm(
+  ant_t *js,
+  sandbox_state_t *state,
+  uint8_t *request,
+  size_t request_len,
+  bool expect_result
+) {
   if (!request) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox request"));
+
+  sandbox_frame_capture_t capture = {
+    .js = js,
+    .result = js_mkundef(),
+    .error = js_mkundef(),
+  };
 
   ant_sandbox_vm_config_t config = {
     .image_path = state->assets.image,
@@ -263,13 +350,32 @@ static ant_value_t sandbox_start_vm(ant_t *js, sandbox_state_t *state, uint8_t *
     .memory_size = 1024ull * 1024ull * 1024ull,
     .timeout_ms = 0,
     .verbose = state->verbose,
+    .frame_handler = sandbox_capture_frame,
+    .frame_handler_user = &capture,
   };
 
   int rc = ant_sandbox_vm_start(&config);
   free(request);
-  if (rc == 0) return sandbox_resolved_number(js, 0);
-  if (rc == -ENOSYS) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox VM backend is not available"));
-  return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox exited with code %d", rc));
+
+  GC_ROOT_SAVE(root_mark, js);
+  if (capture.has_result) GC_ROOT_PIN(js, capture.result);
+  if (capture.has_error) GC_ROOT_PIN(js, capture.error);
+
+  ant_value_t promise = js_mkpromise(js);
+  GC_ROOT_PIN(js, promise);
+  if (capture.has_error) {
+    js_reject_promise(js, promise, capture.error);
+  } else if (rc == -ENOSYS) {
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox VM backend is not available"));
+  } else if (rc != 0) {
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "sandbox exited with code %d", rc));
+  } else if (expect_result) {
+    js_resolve_promise(js, promise, capture.has_result ? capture.result : js_mkundef());
+  } else {
+    js_resolve_promise(js, promise, js_mknum(0));
+  }
+  GC_ROOT_RESTORE(js, root_mark);
+  return promise;
 }
 
 static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
@@ -329,7 +435,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
                                                          (uint32_t)state->launch.forward_count,
                                                          &request_len);
   free(argv);
-  return sandbox_start_vm(js, state, request, request_len);
+  return sandbox_start_vm(js, state, request, request_len, false);
 }
 
 static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
@@ -346,7 +452,7 @@ static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
                                                           state->tty_rows,
                                                           state->tty_cols,
                                                           &request_len);
-  return sandbox_start_vm(js, state, request, request_len);
+  return sandbox_start_vm(js, state, request, request_len, true);
 }
 
 static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {

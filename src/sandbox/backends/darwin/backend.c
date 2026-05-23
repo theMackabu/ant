@@ -227,6 +227,8 @@ int ant_hvf_start(const ant_sandbox_vm_config_t *config) {
   }
   vm.cntfrq = ant_hvf_host_cntfrq();
   vm.verbose = config->verbose;
+  vm.frame_handler = config->frame_handler;
+  vm.frame_handler_user = config->frame_handler_user;
   ant_hvf_verbosef(&vm,
                    "Hypervisor.framework backend image=%s kernel=%s memory=%zu MiB mounts=%zu forwards=%zu",
                    config->image_path,

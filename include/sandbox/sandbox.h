@@ -33,6 +33,15 @@ typedef enum {
 #define ANT_SANDBOX_CAP_COLOR_FORCE (1u << 2)
 #define ANT_SANDBOX_CAP_COLOR_STRIP (1u << 3)
 
+typedef enum {
+  ANT_SANDBOX_VALUE_UNDEFINED = 0,
+  ANT_SANDBOX_VALUE_NULL = 1,
+  ANT_SANDBOX_VALUE_BOOL = 2,
+  ANT_SANDBOX_VALUE_NUMBER = 3,
+  ANT_SANDBOX_VALUE_STRING = 4,
+  ANT_SANDBOX_VALUE_DISPLAY = 5,
+} ant_sandbox_value_type_t;
+
 typedef struct {
   ant_sandbox_request_mode_t mode;
   char *cwd;
@@ -76,5 +85,21 @@ uint8_t *ant_sandbox_build_eval_request_frame(
 );
 bool ant_sandbox_parse_request_frame(const uint8_t *frame, size_t frame_len, ant_sandbox_request_t *out);
 int ant_sandbox_eval_module(ant_t *js, const char *script, size_t len);
+uint8_t *ant_sandbox_build_result_payload(ant_t *js, ant_value_t value, size_t *len_out);
+uint8_t *ant_sandbox_build_error_payload(
+  ant_t *js,
+  ant_value_t value,
+  ant_value_t fallback_stack,
+  size_t *len_out
+);
+bool ant_sandbox_decode_result_value(
+  ant_t *js,
+  const void *payload,
+  size_t payload_len,
+  ant_value_t *out
+);
+ant_value_t ant_sandbox_decode_error_value(ant_t *js, const void *payload, size_t payload_len);
+bool ant_sandbox_result_payload_display(const void *payload, size_t payload_len, const char **out, size_t *out_len);
+bool ant_sandbox_error_payload_display(const void *payload, size_t payload_len, const char **out, size_t *out_len);
 
 #endif

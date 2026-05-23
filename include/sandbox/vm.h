@@ -17,6 +17,13 @@ typedef struct {
   bool readonly;
 } ant_sandbox_mount_t;
 
+typedef bool (*ant_sandbox_vm_frame_handler_t)(
+  uint8_t type,
+  const void *payload,
+  size_t payload_len,
+  void *user
+);
+
 typedef struct {
   const char *image_path;
   const char *kernel_path;
@@ -32,6 +39,8 @@ typedef struct {
   unsigned long long memory_size;
   unsigned int timeout_ms;
   bool verbose;
+  ant_sandbox_vm_frame_handler_t frame_handler;
+  void *frame_handler_user;
 } ant_sandbox_vm_config_t;
 
 typedef struct ant_sandbox_vm_backend {

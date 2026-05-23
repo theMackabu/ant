@@ -229,6 +229,8 @@ static void ant_hvf_vsock_write_output(FILE *stream, const unsigned char *payloa
 
 static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const unsigned char *payload, uint32_t len) {
   bool strip_ansi = (vm->vsock.capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) != 0;
+  if (vm->frame_handler && vm->frame_handler(type, payload, len, vm->frame_handler_user)) return;
+
   switch (type) {
     case ANT_SANDBOX_FRAME_STDOUT:
       ant_hvf_vsock_write_output(stdout, payload, len, strip_ansi);
@@ -237,15 +239,31 @@ static void ant_hvf_vsock_handle_frame(ant_hvf_vm_t *vm, uint8_t type, const uns
       ant_hvf_vsock_write_output(stderr, payload, len, strip_ansi);
       break;
     case ANT_SANDBOX_FRAME_RESULT:
-      ant_hvf_vsock_write_output(stdout, payload, len, strip_ansi);
-      if (len == 0 || payload[len - 1] != '\n') fputc('\n', stdout);
-      fflush(stdout);
+    {
+      const char *display = NULL;
+      size_t display_len = 0;
+      if (ant_sandbox_result_payload_display(payload, len, &display, &display_len)) {
+        if (display_len > 0) {
+          ant_hvf_vsock_write_output(stdout, (const unsigned char *)display, (uint32_t)display_len, strip_ansi);
+          if (display[display_len - 1] != '\n') fputc('\n', stdout);
+          fflush(stdout);
+        }
+      }
       break;
+    }
     case ANT_SANDBOX_FRAME_ERROR:
-      ant_hvf_vsock_write_output(stderr, payload, len, strip_ansi);
-      if (len == 0 || payload[len - 1] != '\n') fputc('\n', stderr);
-      fflush(stderr);
+    {
+      const char *display = NULL;
+      size_t display_len = 0;
+      if (ant_sandbox_error_payload_display(payload, len, &display, &display_len)) {
+        if (display_len > 0) {
+          ant_hvf_vsock_write_output(stderr, (const unsigned char *)display, (uint32_t)display_len, strip_ansi);
+          if (display[display_len - 1] != '\n') fputc('\n', stderr);
+          fflush(stderr);
+        }
+      }
       break;
+    }
     case ANT_SANDBOX_FRAME_EXIT:
       if (len >= 4) {
         vm->vsock.exit_code = (int)ant_hvf_load32(payload);
