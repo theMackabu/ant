@@ -7,6 +7,7 @@
 #include "sandbox/cli.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,13 +17,32 @@
 
 typedef struct {
   ant_sandbox_launch_options_t launch;
+  unsigned int timeout_ms;
+  unsigned int boot_timeout_ms;
   bool verbose;
   int script_index;
 } ant_sandbox_cli_options_t;
 
+static int sandbox_parse_ms_option(const char *name, const char *value, unsigned int *out) {
+  if (!value || !value[0]) {
+    fprintf(stderr, "sandbox: %s needs milliseconds\n", name);
+    return -EINVAL;
+  }
+  errno = 0;
+  char *end = NULL;
+  unsigned long parsed = strtoul(value, &end, 10);
+  if (errno != 0 || !end || *end != '\0' || parsed > UINT_MAX) {
+    fprintf(stderr, "sandbox: %s must be a non-negative millisecond value\n", name);
+    return -EINVAL;
+  }
+  *out = (unsigned int)parsed;
+  return 0;
+}
+
 static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_t *opts) {
   memset(opts, 0, sizeof(*opts));
   ant_sandbox_launch_options_init(&opts->launch);
+  opts->boot_timeout_ms = ANT_SANDBOX_DEFAULT_BOOT_TIMEOUT_MS;
   opts->script_index = -1;
 
   for (int i = 1; i < argc; i++) {
@@ -38,6 +58,52 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
 
     if (strcmp(arg, "--verbose") == 0) {
       opts->verbose = true;
+      continue;
+    }
+
+    if (strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0 ||
+        strncmp(arg, "--timeout=", 10) == 0 || strncmp(arg, "--timeout-ms=", 13) == 0) {
+      const char *value = NULL;
+      const char *name = strncmp(arg, "--timeout-ms", 12) == 0 ? "--timeout-ms" : "--timeout";
+      if (strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
+          return -EINVAL;
+        }
+        value = argv[++i];
+      } else if (strncmp(arg, "--timeout-ms=", 13) == 0) {
+        value = arg + 13;
+      } else {
+        value = arg + 10;
+      }
+      int rc = sandbox_parse_ms_option(name, value, &opts->timeout_ms);
+      if (rc != 0) return rc;
+      continue;
+    }
+
+    if (strcmp(arg, "--boot-timeout") == 0 || strcmp(arg, "--boot-timeout-ms") == 0 ||
+        strcmp(arg, "--request-timeout") == 0 || strcmp(arg, "--request-timeout-ms") == 0 ||
+        strncmp(arg, "--boot-timeout=", 15) == 0 || strncmp(arg, "--boot-timeout-ms=", 18) == 0 ||
+        strncmp(arg, "--request-timeout=", 18) == 0 || strncmp(arg, "--request-timeout-ms=", 21) == 0) {
+      const char *value = NULL;
+      const char *name = strncmp(arg, "--request", 9) == 0 ? "--request-timeout-ms" : "--boot-timeout-ms";
+      if (strchr(arg, '=') == NULL) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
+          return -EINVAL;
+        }
+        value = argv[++i];
+      } else if (strncmp(arg, "--boot-timeout-ms=", 18) == 0) {
+        value = arg + 18;
+      } else if (strncmp(arg, "--boot-timeout=", 15) == 0) {
+        value = arg + 15;
+      } else if (strncmp(arg, "--request-timeout-ms=", 21) == 0) {
+        value = arg + 21;
+      } else {
+        value = arg + 18;
+      }
+      int rc = sandbox_parse_ms_option(name, value, &opts->boot_timeout_ms);
+      if (rc != 0) return rc;
       continue;
     }
 
@@ -97,7 +163,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
 }
 
 static void sandbox_print_usage(void) {
-  fprintf(stderr, "Usage: ant sandbox [--verbose] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
+  fprintf(stderr, "Usage: ant sandbox [--verbose] [--timeout-ms ms] [--boot-timeout-ms ms] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
 }
 
 static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc) {
@@ -217,7 +283,8 @@ int ant_sandbox_cmd(int argc, char **argv) {
     .forward_count = opts.launch.forward_count,
     .cpu_count = 1,
     .memory_size = 1024ull * 1024ull * 1024ull,
-    .timeout_ms = 0,
+    .timeout_ms = opts.timeout_ms,
+    .boot_timeout_ms = opts.boot_timeout_ms,
     .verbose = opts.verbose || pkg_verbose,
     .result = &vm_result,
   };

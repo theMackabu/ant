@@ -298,6 +298,8 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   }
   vm->cntfrq = ant_hvf_host_cntfrq();
   vm->verbose = config->verbose;
+  vm->timeout_ms = config->timeout_ms;
+  vm->boot_timeout_ms = config->boot_timeout_ms;
   vm->frame_handler = config->frame_handler;
   vm->frame_handler_user = config->frame_handler_user;
   ant_hvf_verbosef(vm,
@@ -419,13 +421,8 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->frame_handler = request->frame_handler;
   vm->frame_handler_user = request->frame_handler_user;
 
-  unsigned int timeout_ms = 10000;
-  bool timeout_until_request_sent = true;
-  const char *timeout_env = getenv("ANT_SANDBOX_VM_TIMEOUT_MS");
-  if (timeout_env && timeout_env[0]) {
-    timeout_ms = (unsigned int)strtoul(timeout_env, NULL, 10);
-    timeout_until_request_sent = false;
-  }
+  unsigned int timeout_ms = vm->timeout_ms ? vm->timeout_ms : vm->boot_timeout_ms;
+  bool timeout_until_request_sent = vm->timeout_ms == 0 && vm->boot_timeout_ms > 0;
   if (timeout_ms > 0 && timeout_until_request_sent) {
     ant_hvf_verbosef(vm, "running guest request-timeout=%u ms", timeout_ms);
   } else if (timeout_ms > 0) {

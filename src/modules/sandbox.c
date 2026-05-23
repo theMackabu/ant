@@ -15,6 +15,7 @@
 #include "modules/symbol.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -33,6 +34,8 @@ typedef struct {
   uint16_t tty_rows;
   uint16_t tty_cols;
   ant_sandbox_vm_session_t *session;
+  unsigned int timeout_ms;
+  unsigned int boot_timeout_ms;
   bool verbose;
   bool closed;
 } sandbox_state_t;
@@ -177,6 +180,26 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   ant_value_t verbose = js_get(js, opts, "verbose");
   if (vtype(verbose) != T_UNDEF && vtype(verbose) != T_NULL) state->verbose = js_truthy(js, verbose);
 
+  ant_value_t timeout = js_get(js, opts, "timeoutMs");
+  if (vtype(timeout) == T_UNDEF) timeout = js_get(js, opts, "timeout");
+  if (vtype(timeout) != T_UNDEF && vtype(timeout) != T_NULL) {
+    if (vtype(timeout) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "timeoutMs must be a number");
+    double n = js_getnum(timeout);
+    if (n < 0 || n > UINT_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "timeoutMs is out of range");
+    state->timeout_ms = (unsigned int)n;
+  }
+
+  ant_value_t boot_timeout = js_get(js, opts, "bootTimeoutMs");
+  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "bootTimeout");
+  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "requestTimeoutMs");
+  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "requestTimeout");
+  if (vtype(boot_timeout) != T_UNDEF && vtype(boot_timeout) != T_NULL) {
+    if (vtype(boot_timeout) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "bootTimeoutMs must be a number");
+    double n = js_getnum(boot_timeout);
+    if (n < 0 || n > UINT_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "bootTimeoutMs is out of range");
+    state->boot_timeout_ms = (unsigned int)n;
+  }
+
   ant_value_t tty = js_get(js, opts, "tty");
   if (vtype(tty) != T_UNDEF && vtype(tty) != T_NULL) {
     if (js_truthy(js, tty)) {
@@ -232,6 +255,7 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!state) return js_mkerr(js, "out of memory");
 
   ant_sandbox_launch_options_init(&state->launch);
+  state->boot_timeout_ms = ANT_SANDBOX_DEFAULT_BOOT_TIMEOUT_MS;
   state->capabilities = ant_sandbox_terminal_capabilities(&state->tty_rows, &state->tty_cols);
 
   char err[512] = { 0 };
@@ -388,7 +412,8 @@ static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state, ant_sandbox
     .forward_count = state->launch.forward_count,
     .cpu_count = 1,
     .memory_size = 1024ull * 1024ull * 1024ull,
-    .timeout_ms = 0,
+    .timeout_ms = state->timeout_ms,
+    .boot_timeout_ms = state->boot_timeout_ms,
     .verbose = state->verbose,
     .result = result,
   };

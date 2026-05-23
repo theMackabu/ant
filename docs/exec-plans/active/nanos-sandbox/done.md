@@ -509,9 +509,17 @@ host cannot reach.
 
 The default VM timeout is now a 10s boot/request-delivery timeout. Once the daemon
 connects and accepts the request, long-running scripts keep running until they
-exit or the user stops the sandbox. The hidden `ANT_SANDBOX_VM_TIMEOUT_MS`
-bringup override still wins as a full-run timeout for now, but it should
-eventually be replaced by an explicit CLI/config timeout.
+exit or the user stops the sandbox.
+
+Timeouts are explicit policy now:
+
+- CLI: `--boot-timeout-ms <ms>` / `--request-timeout-ms <ms>` controls the
+  request-delivery deadline, and `--timeout-ms <ms>` enables an optional
+  full-run timeout. `0` disables either timeout.
+- `ant:sandbox`: `bootTimeoutMs` / `requestTimeoutMs` and `timeoutMs` expose
+  the same policy on `new Sandbox({...})`.
+
+The hidden `ANT_SANDBOX_VM_TIMEOUT_MS` override was removed.
 
 ## Error Mapping
 

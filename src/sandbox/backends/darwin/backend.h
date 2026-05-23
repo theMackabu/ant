@@ -81,6 +81,8 @@ struct ant_hvf_vm {
   bool verbose;
   ant_sandbox_vm_frame_handler_t frame_handler;
   void *frame_handler_user;
+  unsigned int timeout_ms;
+  unsigned int boot_timeout_ms;
   bool timed_out;
   bool gic_msi_enabled;
   uint32_t gic_msi_base;

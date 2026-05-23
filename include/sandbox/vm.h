@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define ANT_SANDBOX_DEFAULT_BOOT_TIMEOUT_MS 10000u
+
 typedef struct {
   uint16_t host_port;
   uint16_t guest_port;
@@ -65,6 +67,7 @@ typedef struct {
   unsigned int cpu_count;
   unsigned long long memory_size;
   unsigned int timeout_ms;
+  unsigned int boot_timeout_ms;
   bool verbose;
   ant_sandbox_vm_frame_handler_t frame_handler;
   void *frame_handler_user;

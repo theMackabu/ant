@@ -28,14 +28,11 @@ pieces are intentionally minimal and should not be treated as finished APIs:
 - Shutdown is still minimal. PSCI/semihosting exits can stop the VM, but
   cancellation, forced teardown, and long-running lifecycle policy still need a
   deliberate design.
-- Internal/debug environment flags such as `ANT_SANDBOX_VM_TRACE_9P_PATHS`,
-  `ANT_SANDBOX_VM_TRACE_9P_READDIR`, and `ANT_SANDBOX_VM_TIMEOUT_MS` are
-  bringup controls. Keep them hidden or replace them deliberately before
-  exposing a stable CLI.
+- Internal/debug environment flags such as `ANT_SANDBOX_VM_TRACE_9P_PATHS` and
+  `ANT_SANDBOX_VM_TRACE_9P_READDIR` are bringup controls. Keep them hidden or
+  replace them deliberately before exposing a stable CLI.
 - Remove the scoped 9p trace flags after module-loading and directory-walk
   performance is fixed; they are temporary probes for the current loading perf
   work, not a stable diagnostics API.
-- Remove `ANT_SANDBOX_VM_TIMEOUT_MS` eventually too. Timeout behavior should be
-  an explicit sandbox CLI/config policy, not a hidden environment variable.
 - The backend is Apple Silicon only. The non-aarch64 Darwin path is a hard
   `ENOSYS` stub.
