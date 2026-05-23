@@ -24,6 +24,8 @@ if host_machine.system() == 'darwin'
     'src/sandbox/backends/darwin/fdt.c',
     'src/sandbox/backends/darwin/gic.c',
     'src/sandbox/backends/darwin/mmio.c',
+    'src/sandbox/backends/darwin/nat.c',
+    'src/sandbox/backends/darwin/net_packets.c',
     'src/sandbox/backends/darwin/pci.c',
     'src/sandbox/backends/darwin/uart.c',
     'src/sandbox/backends/darwin/virtio.c',
@@ -152,6 +154,7 @@ if host_machine.system() == 'darwin'
   )
 endif
 
+# move to meson/tests
 executable(
   'tlsuv-boringssl-smoke',
   files('tests/tlsuv_boringssl_smoke.c'),
@@ -165,3 +168,12 @@ executable(
   dependencies: libant_dep,
   build_by_default: false
 )
+
+if host_machine.system() == 'darwin'
+  executable(
+    'test-sandbox-net-packets',
+    files('tests/test_sandbox_net_packets.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+endif
