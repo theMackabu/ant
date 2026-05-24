@@ -84,6 +84,12 @@ struct ant_hvf_vm {
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
   bool timed_out;
+  uint32_t rtc_load_value;
+  time_t rtc_load_host;
+  uint32_t rtc_match;
+  uint32_t rtc_imsc;
+  uint32_t rtc_icr;
+  bool rtc_enabled;
   bool gic_msi_enabled;
   uint32_t gic_msi_base;
   uint32_t gic_msi_count;

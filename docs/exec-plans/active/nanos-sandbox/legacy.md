@@ -19,9 +19,10 @@ pieces are intentionally minimal and should not be treated as finished APIs:
   current device set, including BAR sizing, command masking, MSI-X control
   masking, and absent-device reads. It is still not a full PCI root-complex
   model, and unsupported PIO accesses are still minimal compatibility shims.
-- RTC and miscellaneous MMIO devices are minimal compatibility shims. RTC reads
-  host wall time and ignores writes; unknown devices should become explicit
-  models or explicit failures as the machine contract stabilizes.
+- RTC now has an explicit PL031 subset for the registers Nanos uses, and
+  unsupported RTC/unknown MMIO accesses fail with diagnostics instead of
+  silently returning zero. Unsupported PCI PIO accesses are still minimal
+  compatibility shims.
 - Shutdown is still minimal. PSCI/semihosting exits and explicit timeout policy
   can stop the VM, but API-level cancellation, forced teardown, and graceful
   long-running session lifecycle still need a deliberate design.

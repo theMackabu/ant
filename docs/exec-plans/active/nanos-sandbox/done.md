@@ -340,6 +340,31 @@ Remaining boundary:
   non-virtio config accesses remain compatibility shims until the VM contract
   needs stricter failure behavior.
 
+## RTC And MMIO Explicit Failures
+
+The Darwin backend no longer treats the RTC page as a zero-filled catch-all
+device.
+
+Completed cleanup:
+
+- model the PL031 RTC subset Nanos uses: data, match, load, control, interrupt
+  mask/status/clear, and PrimeCell/peripheral ID registers
+- preserve wall-clock reads by initializing the RTC counter from host time
+- honor guest `RTCLR` writes so Nanos `rtc_settimeofday()` updates the modeled
+  counter instead of disappearing
+- reject unsupported RTC reads/writes with an explicit diagnostic and unhandled
+  guest exception instead of silent zero/ignore behavior
+- reject unknown MMIO reads/writes with the same explicit diagnostic path
+- add focused Darwin coverage for PL031 IDs, data/load/control behavior,
+  interrupt mask/status behavior, unsupported RTC accesses, and unknown MMIO
+  failures
+
+Remaining boundary:
+
+- PCI PIO space still returns zero / ignores writes as a compatibility shim.
+  Tighten that once the guest no longer needs broad PIO tolerance during early
+  PCI bringup.
+
 ## Workspace Mounts And Dynamic Guest Paths
 
 The CLI now mounts the host current working directory read-only at `/workspace`
