@@ -40,31 +40,73 @@
 #include <time.h>
 #include <unistd.h>
 
-#define ANT_HVF_GUEST_BASE 0x00000000ull
-#define ANT_HVF_PVH_START_INFO 0x00100000ull
-#define ANT_HVF_PVH_MEMMAP 0x00101000ull
-#define ANT_HVF_KERNEL_BASE 0x00200000ull
-#define ANT_HVF_VIRTIO_BLK_BAR 0xf0001000ull
-#define ANT_HVF_VIRTIO_BLK_SLOT 1u
-#define ANT_HVF_VIRTIO_NET_BAR 0xf0002000ull
-#define ANT_HVF_VIRTIO_NET_SLOT 2u
-#define ANT_HVF_VIRTIO_9P_BAR_BASE 0xf0003000ull
-#define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#if defined(__x86_64__)
+#  define ANT_HVF_GUEST_BASE 0x00000000ull
+#  define ANT_HVF_PVH_START_INFO 0x00100000ull
+#  define ANT_HVF_PVH_MEMMAP 0x00101000ull
+#  define ANT_HVF_KERNEL_BASE 0x00200000ull
+#  define ANT_HVF_VIRTIO_BLK_BAR 0xf0001000ull
+#  define ANT_HVF_VIRTIO_BLK_SLOT 1u
+#  define ANT_HVF_VIRTIO_NET_BAR 0xf0002000ull
+#  define ANT_HVF_VIRTIO_NET_SLOT 2u
+#  define ANT_HVF_VIRTIO_9P_BAR_BASE 0xf0003000ull
+#  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#  define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
+#  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_ELF_MACHINE 62u
+#  define ANT_HVF_ELF_MACHINE_NAME "x86_64"
+#  define ANT_KVM_COM1_PORT 0x3f8u
+#  define ANT_KVM_PCI_ADDR_PORT 0x0cf8u
+#  define ANT_KVM_PCI_DATA_PORT 0x0cfcu
+#elif defined(__aarch64__)
+#  define ANT_HVF_GUEST_BASE 0x40000000ull
+#  define ANT_HVF_DTB_BASE 0x40000000ull
+#  define ANT_HVF_KERNEL_BASE 0x40400000ull
+#  define ANT_HVF_UART_BASE 0x09000000ull
+#  define ANT_HVF_RTC_BASE 0x09010000ull
+#  define ANT_HVF_PCIE_MMIO_BASE 0x10000000ull
+#  define ANT_HVF_PCIE_PIO_BASE 0x3eff0000ull
+#  define ANT_HVF_PCIE_ECAM_BASE 0x3f000000ull
+#  define ANT_HVF_PCIE_ECAM_SIZE 0x01000000ull
+#  define ANT_HVF_VIRTIO_BLK_BAR 0x10041000ull
+#  define ANT_HVF_VIRTIO_BLK_SLOT 1u
+#  define ANT_HVF_VIRTIO_NET_BAR 0x10042000ull
+#  define ANT_HVF_VIRTIO_NET_SLOT 2u
+#  define ANT_HVF_VIRTIO_9P_BAR_BASE 0x10043000ull
+#  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#  define ANT_HVF_VIRTIO_VSOCK_BAR 0x1004b000ull
+#  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_GIC_DIST_BASE 0x08000000ull
+#  define ANT_HVF_GIC_CPU_BASE 0x08010000ull
+#  define ANT_HVF_GIC_REDIST_BASE 0x080a0000ull
+#  define ANT_HVF_GIC_MSI_BASE 0x08020000ull
+#  define ANT_HVF_GIC_MSI_SIZE 0x1000ull
+#  define ANT_HVF_GIC_MSI_VECTOR_BASE 48u
+#  define ANT_HVF_GIC_MSI_VECTOR_COUNT 64u
+#  define ANT_HVF_ELF_MACHINE 183u
+#  define ANT_HVF_ELF_MACHINE_NAME "aarch64"
+#else
+#  define ANT_HVF_GUEST_BASE 0x00000000ull
+#  define ANT_HVF_KERNEL_BASE 0x00200000ull
+#  define ANT_HVF_VIRTIO_BLK_BAR 0xf0001000ull
+#  define ANT_HVF_VIRTIO_BLK_SLOT 1u
+#  define ANT_HVF_VIRTIO_NET_BAR 0xf0002000ull
+#  define ANT_HVF_VIRTIO_NET_SLOT 2u
+#  define ANT_HVF_VIRTIO_9P_BAR_BASE 0xf0003000ull
+#  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#  define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
+#  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_ELF_MACHINE 0u
+#  define ANT_HVF_ELF_MACHINE_NAME "supported Linux"
+#endif
+
 #define ANT_HVF_VIRTIO_9P_MAX 8u
-#define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
-#define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
 #define ANT_HVF_PAGE_SIZE 0x1000ull
 
 #define ANT_HVF_BYTES_U16 2u
 #define ANT_HVF_BYTES_U32 4u
 #define ANT_HVF_ELF_IDENT_BYTES 16u
 #define ANT_HVF_MAC_BYTES 6u
-#define ANT_HVF_ELF_MACHINE 62u
-#define ANT_HVF_ELF_MACHINE_NAME "x86_64"
-
-#define ANT_KVM_COM1_PORT 0x3f8u
-#define ANT_KVM_PCI_ADDR_PORT 0x0cf8u
-#define ANT_KVM_PCI_DATA_PORT 0x0cfcu
 
 typedef struct {
   unsigned char ident[ANT_HVF_ELF_IDENT_BYTES];
@@ -128,12 +170,16 @@ struct ant_hvf_vm {
   void *host_mem;
   size_t mem_size;
   uint64_t kernel_entry;
+  uint64_t kas_offset_symbol;
+  uint64_t kas_kern_offset_symbol;
+  uint64_t pcie_ecam_base_symbol;
   uint64_t pvh_entry32;
   int image_fd;
   uint64_t image_sectors;
   int kvm_fd;
   int vm_fd;
   int vcpu_fd;
+  int gic_fd;
   struct kvm_run *run;
   size_t run_mmap_size;
   uint32_t pci_addr;
@@ -168,6 +214,17 @@ struct ant_hvf_vm {
   atomic_bool canceled;
   atomic_bool timeout_disarmed;
   atomic_bool timed_out;
+  uint32_t rtc_load_value;
+  time_t rtc_load_host;
+  uint32_t rtc_match;
+  uint32_t rtc_imsc;
+  uint32_t rtc_icr;
+  bool rtc_enabled;
+  bool gic_msi_enabled;
+  int gic_version;
+  uint32_t gic_msi_base;
+  uint32_t gic_msi_count;
+  uint64_t cntfrq;
 };
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);
