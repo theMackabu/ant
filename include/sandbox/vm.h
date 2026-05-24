@@ -86,6 +86,7 @@ typedef struct ant_sandbox_vm_backend {
 
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend;
 extern const ant_sandbox_vm_backend_t ant_sandbox_vm_linux_backend;
+extern const ant_sandbox_vm_backend_t ant_sandbox_vm_windows_backend;
 
 const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend);
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void);

@@ -15,6 +15,8 @@ const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void) {
   return &ant_sandbox_vm_darwin_backend;
 #elif defined(__linux__)
   return &ant_sandbox_vm_linux_backend;
+#elif defined(_WIN32)
+  return &ant_sandbox_vm_windows_backend;
 #else
   return NULL;
 #endif

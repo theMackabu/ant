@@ -188,6 +188,8 @@ static void sandbox_print_vm_failure(const ant_sandbox_vm_result_t *result, int 
     case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
 #if defined(__APPLE__) && !defined(__aarch64__)
       fprintf(stderr, "sandbox: Hypervisor.framework sandbox backend requires Apple Silicon\n");
+#elif defined(_WIN32)
+      fprintf(stderr, "sandbox: native Windows sandbox backend is not implemented; use WSL for sandbox support\n");
 #else
       fprintf(stderr, "sandbox: VM backend is not available\n");
 #endif

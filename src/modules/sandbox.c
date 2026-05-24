@@ -376,6 +376,10 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
     case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
 #if defined(__APPLE__) && !defined(__aarch64__)
       snprintf(message, sizeof(message), "sandbox VM backend requires Apple Silicon");
+#elif defined(_WIN32)
+      snprintf(message,
+               sizeof(message),
+               "native Windows sandbox backend is not implemented; use WSL for sandbox support");
 #else
       snprintf(message, sizeof(message), "sandbox VM backend is not available");
 #endif

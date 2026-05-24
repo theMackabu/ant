@@ -41,6 +41,7 @@ if host_machine.system() == 'darwin'
     'src/sandbox/backends/darwin/mmio.c',
     'src/sandbox/backends/darwin/uart.c',
   )
+  sandbox_backend_sources += sandbox_shared_sources
 elif host_machine.system() == 'linux'
   sandbox_backend_sources += files(
     'src/sandbox/backends/linux/kvm_aarch64.c',
@@ -48,8 +49,12 @@ elif host_machine.system() == 'linux'
     'src/sandbox/backends/linux/kvm_unavailable.c',
     'src/sandbox/backends/linux/kvm_x86.c',
   )
+  sandbox_backend_sources += sandbox_shared_sources
+elif host_machine.system() == 'windows'
+  sandbox_backend_sources += files(
+    'src/sandbox/backends/windows/backend.c',
+  )
 endif
-sandbox_backend_sources += sandbox_shared_sources
 
 subdir('meson')
 
