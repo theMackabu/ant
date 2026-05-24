@@ -217,7 +217,7 @@ static void print_commands(void **argtable) {
   crprintf(msg.ant_help_flags);
   
   print_flags_help(stdout, argtable);
-  print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
+  print_flag(stdout, (flag_help_t){ .s = "V", .l = "verbose",  .g = "enable verbose output" });
   print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
 }
 
@@ -576,7 +576,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (strcmp(arg, "--verbose") == 0) pkg_verbose = true;
+    if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) pkg_verbose = true;
     else if (strcmp(arg, "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
     else if (strncmp(arg, "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(arg + 13);
     else if (strcmp(arg, "--sandbox-daemon") == 0) sandbox_daemon = true;

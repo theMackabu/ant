@@ -1,10 +1,12 @@
 #include <compat.h> // IWYU pragma: keep
 
+#include "cli/misc.h"
 #include "cli/pkg.h"
 #include "sandbox/host.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/vm.h"
 #include "sandbox/cli.h"
+#include "messages.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -14,6 +16,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <crprintf.h>
 
 typedef struct {
   ant_sandbox_launch_options_t launch;
@@ -58,13 +61,13 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       return 0;
     }
 
-    if (strcmp(arg, "--verbose") == 0) {
+    if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) {
       opts->verbose = true;
       continue;
     }
 
     if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0 ||
-        strncmp(arg, "--eval=", 7) == 0) {
+        strncmp(arg, "-e=", 3) == 0 || strncmp(arg, "--eval=", 7) == 0) {
       if (opts->script_index >= 0) {
         fprintf(stderr, "sandbox: --eval cannot be combined with a script\n");
         return -EINVAL;
@@ -76,20 +79,25 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
           return -EINVAL;
         }
         opts->eval_source = argv[++i];
+      } else if (strncmp(arg, "-e=", 3) == 0) {
+        opts->eval_source = arg + 3;
       } else opts->eval_source = arg + 7;
       continue;
     }
 
-    if (strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0 ||
+    if (strcmp(arg, "-t") == 0 || strncmp(arg, "-t=", 3) == 0 ||
+        strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0 ||
         strncmp(arg, "--timeout=", 10) == 0 || strncmp(arg, "--timeout-ms=", 13) == 0) {
       const char *value = NULL;
-      const char *name = strncmp(arg, "--timeout-ms", 12) == 0 ? "--timeout-ms" : "--timeout";
-      if (strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0) {
+      const char *name = "--timeout-ms";
+      if (strcmp(arg, "-t") == 0 || strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0) {
         if (i + 1 >= argc) {
           fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
           return -EINVAL;
         }
         value = argv[++i];
+      } else if (strncmp(arg, "-t=", 3) == 0) {
+        value = arg + 3;
       } else if (strncmp(arg, "--timeout-ms=", 13) == 0) {
         value = arg + 13;
       } else {
@@ -100,18 +108,23 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       continue;
     }
 
-    if (strcmp(arg, "--boot-timeout") == 0 || strcmp(arg, "--boot-timeout-ms") == 0 ||
+    if (strcmp(arg, "-b") == 0 || strcmp(arg, "-r") == 0 ||
+        strncmp(arg, "-b=", 3) == 0 || strncmp(arg, "-r=", 3) == 0 ||
+        strcmp(arg, "--boot-timeout") == 0 || strcmp(arg, "--boot-timeout-ms") == 0 ||
         strcmp(arg, "--request-timeout") == 0 || strcmp(arg, "--request-timeout-ms") == 0 ||
         strncmp(arg, "--boot-timeout=", 15) == 0 || strncmp(arg, "--boot-timeout-ms=", 18) == 0 ||
         strncmp(arg, "--request-timeout=", 18) == 0 || strncmp(arg, "--request-timeout-ms=", 21) == 0) {
       const char *value = NULL;
-      const char *name = strncmp(arg, "--request", 9) == 0 ? "--request-timeout-ms" : "--boot-timeout-ms";
-      if (strchr(arg, '=') == NULL) {
+      const char *name = (strcmp(arg, "-r") == 0 || strncmp(arg, "-r=", 3) == 0 ||
+                         strncmp(arg, "--request", 9) == 0) ? "--request-timeout-ms" : "--boot-timeout-ms";
+      if (strcmp(arg, "-b") == 0 || strcmp(arg, "-r") == 0 || strchr(arg, '=') == NULL) {
         if (i + 1 >= argc) {
           fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
           return -EINVAL;
         }
         value = argv[++i];
+      } else if (strncmp(arg, "-b=", 3) == 0 || strncmp(arg, "-r=", 3) == 0) {
+        value = arg + 3;
       } else if (strncmp(arg, "--boot-timeout-ms=", 18) == 0) {
         value = arg + 18;
       } else if (strncmp(arg, "--boot-timeout=", 15) == 0) {
@@ -126,14 +139,17 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       continue;
     }
 
-    if (strcmp(arg, "--forward") == 0 || strncmp(arg, "--forward=", 10) == 0) {
+    if (strcmp(arg, "-f") == 0 || strncmp(arg, "-f=", 3) == 0 ||
+        strcmp(arg, "--forward") == 0 || strncmp(arg, "--forward=", 10) == 0) {
       const char *value = NULL;
-      if (strcmp(arg, "--forward") == 0) {
+      if (strcmp(arg, "-f") == 0 || strcmp(arg, "--forward") == 0) {
         if (i + 1 >= argc) {
           fprintf(stderr, "sandbox: --forward needs a port or host:guest pair\n");
           return -EINVAL;
         }
         value = argv[++i];
+      } else if (strncmp(arg, "-f=", 3) == 0) {
+        value = arg + 3;
       } else {
         value = arg + 10;
       }
@@ -147,16 +163,22 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       continue;
     }
 
-    if (strcmp(arg, "--mount") == 0 || strncmp(arg, "--mount=", 8) == 0 ||
+    if (strcmp(arg, "-m") == 0 || strncmp(arg, "-m=", 3) == 0 ||
+        strcmp(arg, "-w") == 0 || strncmp(arg, "-w=", 3) == 0 ||
+        strcmp(arg, "--mount") == 0 || strncmp(arg, "--mount=", 8) == 0 ||
         strcmp(arg, "--write") == 0 || strncmp(arg, "--write=", 8) == 0) {
-      bool readonly = arg[2] == 'm';
+      bool readonly = strcmp(arg, "-m") == 0 || strncmp(arg, "-m=", 3) == 0 ||
+                      strcmp(arg, "--mount") == 0 || strncmp(arg, "--mount=", 8) == 0;
       const char *value = NULL;
-      if (strcmp(arg, "--mount") == 0 || strcmp(arg, "--write") == 0) {
+      if (strcmp(arg, "-m") == 0 || strcmp(arg, "-w") == 0 ||
+          strcmp(arg, "--mount") == 0 || strcmp(arg, "--write") == 0) {
         if (i + 1 >= argc) {
           fprintf(stderr, "sandbox: %s needs host:guest\n", arg);
           return -EINVAL;
         }
         value = argv[++i];
+      } else if (strncmp(arg, "-m=", 3) == 0 || strncmp(arg, "-w=", 3) == 0) {
+        value = arg + 3;
       } else {
         value = arg + 8;
       }
@@ -185,8 +207,42 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
   return opts->eval_mode ? 0 : -EINVAL;
 }
 
-static void sandbox_print_usage(void) {
-  fprintf(stderr, "Usage: ant sandbox [--verbose] [--timeout-ms ms] [--boot-timeout-ms ms] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] [-e source | <script.js> [args...]]\n");
+static void sandbox_print_usage(FILE *fp) {
+  crfprintf(fp, msg.sandbox_help_header);
+  crfprintf(fp, msg.ant_help_flags);
+  print_flag(fp, (flag_help_t){ .s = "e", .l = "eval", .d = "source", .g = msg.sandbox_flag_eval });
+  print_flag(fp, (flag_help_t){ .s = "m", .l = "mount", .d = "host:guest", .g = msg.sandbox_flag_mount });
+  print_flag(fp, (flag_help_t){ .s = "w", .l = "write", .d = "host:guest", .g = msg.sandbox_flag_write });
+  print_flag(fp, (flag_help_t){ .s = "f", .l = "forward", .d = "port|host:guest", .g = msg.sandbox_flag_forward });
+  print_flag(fp, (flag_help_t){ .s = "t", .l = "timeout-ms", .d = "ms", .g = msg.sandbox_flag_timeout });
+  print_flag(fp, (flag_help_t){ .s = "b", .l = "boot-timeout-ms", .d = "ms", .g = msg.sandbox_flag_boot_timeout });
+  print_flag(fp, (flag_help_t){ .s = "r", .l = "request-timeout-ms", .d = "ms", .g = msg.sandbox_flag_request_timeout });
+  print_flag(fp, (flag_help_t){ .s = "V", .l = "verbose", .g = msg.sandbox_flag_verbose });
+  print_flag(fp, (flag_help_t){ .s = "h", .l = "help", .g = msg.sandbox_flag_help });
+}
+
+static bool sandbox_option_takes_separate_value(const char *arg) {
+  if (strchr(arg, '=') != NULL) return false;
+  return strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0 ||
+         strcmp(arg, "-t") == 0 || strcmp(arg, "--timeout") == 0 ||
+         strcmp(arg, "--timeout-ms") == 0 ||
+         strcmp(arg, "-b") == 0 || strcmp(arg, "--boot-timeout") == 0 ||
+         strcmp(arg, "--boot-timeout-ms") == 0 ||
+         strcmp(arg, "-r") == 0 || strcmp(arg, "--request-timeout") == 0 ||
+         strcmp(arg, "--request-timeout-ms") == 0 ||
+         strcmp(arg, "-f") == 0 || strcmp(arg, "--forward") == 0 ||
+         strcmp(arg, "-m") == 0 || strcmp(arg, "--mount") == 0 ||
+         strcmp(arg, "-w") == 0 || strcmp(arg, "--write") == 0;
+}
+
+static bool sandbox_args_request_help(int argc, char **argv) {
+  for (int i = 1; i < argc; i++) {
+    const char *arg = argv[i];
+    if (strcmp(arg, "--") == 0 || arg[0] != '-') return false;
+    if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) return true;
+    if (sandbox_option_takes_separate_value(arg)) i++;
+  }
+  return false;
 }
 
 static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc) {
@@ -241,15 +297,15 @@ static void sandbox_print_vm_failure(const ant_sandbox_vm_result_t *result, int 
 }
 
 int ant_sandbox_cmd(int argc, char **argv) {
-  if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-    sandbox_print_usage();
+  if (argc < 2 || sandbox_args_request_help(argc, argv)) {
+    sandbox_print_usage(argc < 2 ? stderr : stdout);
     return argc < 2 ? EXIT_FAILURE : EXIT_SUCCESS;
   }
 
   ant_sandbox_cli_options_t opts;
   int rc = sandbox_parse_options(argc, argv, &opts);
   if (rc != 0 || (!opts.eval_mode && opts.script_index < 0)) {
-    sandbox_print_usage();
+    sandbox_print_usage(stderr);
     ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
   }
