@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      nanos_ref:
+        description: 'Nanos git ref to patch/build'
+        required: false
+        default: master
+        type: string
   workflow_dispatch:
     inputs:
       arch:
@@ -52,6 +57,11 @@ on:
         required: false
         default: ''
         type: string
+      nanos_ref:
+        description: 'Nanos git ref to patch/build'
+        required: false
+        default: master
+        type: string
 
 permissions:
   actions: read
@@ -65,6 +75,8 @@ jobs:
       NANOS_ARTIFACT: ${{ inputs.artifact || (inputs.arch == 'aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl') }}
       NANOS_IMAGE: ${{ inputs.image || (inputs.arch == 'aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64') }}
       OPS_ARCH: ${{ inputs.arch == 'aarch64' && 'arm64' || 'amd64' }}
+      NANOS_PLATFORM: ${{ inputs.arch == 'aarch64' && 'virt' || 'pc' }}
+      NANOS_ARCH: ${{ inputs.arch == 'aarch64' && 'aarch64' || 'x86_64' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -131,19 +143,87 @@ jobs:
       - name: Setup ops
         uses: ./.github/actions/setup-ops
 
+      - name: Install Nanos build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ca-certificates \
+            clang \
+            curl \
+            git \
+            jq \
+            lld \
+            llvm \
+            make \
+            perl \
+            python3 \
+            xxd
+
+          if [[ "${{ inputs.arch }}" == "x64" ]]; then
+            sudo apt-get install -y nasm
+          fi
+
+      - name: Checkout Nanos
+        run: |
+          set -euo pipefail
+          git init nanos-src
+          git -C nanos-src remote add origin https://github.com/nanovms/nanos.git
+          git -C nanos-src fetch --depth 1 origin "${{ inputs.nanos_ref }}"
+          git -C nanos-src checkout --detach FETCH_HEAD
+
+      - name: Apply Ant sandbox Nanos patches
+        run: |
+          set -euo pipefail
+          for patch in nanos/patches/*.patch; do
+            echo "Applying ${patch}"
+            git -C nanos-src apply "$GITHUB_WORKSPACE/$patch"
+          done
+
+      - name: Build patched Nanos kernel
+        run: |
+          set -euo pipefail
+          make -C nanos-src PLATFORM="$NANOS_PLATFORM" ARCH="$NANOS_ARCH" CC=clang kernel
+          cp "nanos-src/output/platform/${NANOS_PLATFORM}/bin/kernel.img" "nanos/ant-kernel-${{ inputs.arch }}.img"
+
       - name: Build Nanos image
         working-directory: nanos
         run: |
+          set -euo pipefail
           chmod +x ant
-          ops build ./ant -i "$NANOS_IMAGE" --arch="$OPS_ARCH" --consoles +pl011 --consoles +16550 -a "--sandbox-daemon"
 
-          if [[ -f "$HOME/.ops/images/${NANOS_IMAGE}.img" ]]; then
-            cp "$HOME/.ops/images/${NANOS_IMAGE}.img" ant-sandbox.img
-          elif [[ -f "$HOME/.ops/images/${NANOS_IMAGE}" ]]; then
-            cp "$HOME/.ops/images/${NANOS_IMAGE}" ant-sandbox.img
+          kernel_path="$PWD/ant-kernel-${{ inputs.arch }}.img"
+          ant_version=$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/meson/ant.version")
+          ops_home="$RUNNER_TEMP/ant-ops-home"
+          rm -rf "$ops_home"
+          mkdir -p "$ops_home/.ops/images"
+
+          cat > ops-sandbox.json <<JSON
+          {
+            "Kernel": "$kernel_path",
+            "NanosVersion": "$ant_version",
+            "Env": {
+              "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+            }
+          }
+          JSON
+
+          OPS_HOME="$ops_home" ops build ./ant \
+            -c ops-sandbox.json \
+            -i "$NANOS_IMAGE" \
+            --arch="$OPS_ARCH" \
+            --consoles +pl011 \
+            --consoles +16550 \
+            -a "--sandbox-daemon"
+
+          if [[ -f "$ops_home/.ops/images/${NANOS_IMAGE}.img" ]]; then
+            cp "$ops_home/.ops/images/${NANOS_IMAGE}.img" "ant-sandbox-${{ inputs.arch }}.img"
+          elif [[ -f "$ops_home/.ops/images/${NANOS_IMAGE}" ]]; then
+            cp "$ops_home/.ops/images/${NANOS_IMAGE}" "ant-sandbox-${{ inputs.arch }}.img"
           else
-            echo "::error::ops did not create ${NANOS_IMAGE} under $HOME/.ops/images"
-            ls -la "$HOME/.ops/images" || true
+            echo "::error::ops did not create ${NANOS_IMAGE} under temporary ops image dir"
+            ls -la "$ops_home/.ops/images" || true
             exit 1
           fi
 
@@ -151,28 +231,34 @@ jobs:
         working-directory: nanos
         run: |
           set -euo pipefail
-          before=$(du -h ant-sandbox.img | cut -f1)
-          python3 shrink-image.py ant-sandbox.img ant-sandbox.img
-          after=$(du -h ant-sandbox.img | cut -f1)
-          echo "Shrank ant-sandbox.img from ${before} to ${after}"
+          image="ant-sandbox-${{ inputs.arch }}.img"
+          before=$(du -h "$image" | cut -f1)
+          python3 shrink-image.py "$image" "$image"
+          after=$(du -h "$image" | cut -f1)
+          echo "Shrank ${image} from ${before} to ${after}"
 
       - name: Image info
         working-directory: nanos
         run: |
           ANT_SIZE=$(du -sh ant | cut -f1)
-          IMG_SIZE=$(du -sh ant-sandbox.img | cut -f1)
+          KERNEL_SIZE=$(du -sh "ant-kernel-${{ inputs.arch }}.img" | cut -f1)
+          IMG_SIZE=$(du -sh "ant-sandbox-${{ inputs.arch }}.img" | cut -f1)
           echo "## ant-sandbox (${{ inputs.arch }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Source run: \`${{ steps.source.outputs.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Nanos ref: \`${{ inputs.nanos_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| | size |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| ant binary | $ANT_SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| patched kernel | $KERNEL_SIZE |" >> $GITHUB_STEP_SUMMARY
           echo "| nanos image | $IMG_SIZE |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload image
         uses: actions/upload-artifact@v6
         with:
           name: ant-sandbox-${{ inputs.arch }}
-          path: nanos/ant-sandbox.img
+          path: |
+            nanos/ant-sandbox-${{ inputs.arch }}.img
+            nanos/ant-kernel-${{ inputs.arch }}.img
           retention-days: 7
