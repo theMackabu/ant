@@ -61,7 +61,13 @@ void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...) {
 
 void *ant_hvf_timeout_thread(void *arg) {
   ant_hvf_timeout_t *timeout = arg;
-  usleep(timeout->timeout_ms * 1000u);
+  uint64_t ns = (uint64_t)timeout->timeout_ms * 1000000ULL;
+  struct timespec sleep_for = {
+    .tv_sec = (time_t)(ns / 1000000000ULL),
+    .tv_nsec = (long)(ns % 1000000000ULL),
+  };
+
+  while (nanosleep(&sleep_for, &sleep_for) != 0 && errno == EINTR) {}
   if (timeout->until_request_sent && timeout->vm->vsock.request_sent) return NULL;
   timeout->vm->timed_out = true;
   hv_vcpus_exit(&timeout->vm->vcpu, 1);
