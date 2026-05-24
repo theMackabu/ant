@@ -518,29 +518,55 @@ int main(int argc, char *argv[]) {
     free(exec_argv); return exitcode;
   }
   
-  // TODO: only parse before script filename
   char **filtered_argv = try_oom(sizeof(char*) * argc);
+  bool parse_global_args = true;
+  
   for (int i = 0; i < argc; i++) {
-    if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
-    else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
-    else if (strncmp(argv[i], "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(argv[i] + 13);
-    else if (strcmp(argv[i], "--sandbox-daemon") == 0) sandbox_daemon = true;
-    else if (strcmp(argv[i], "--inspect") == 0) inspector.enabled = true;
+    const char *arg = argv[i];
     
-    else if (strncmp(argv[i], "--inspect=", 10) == 0) {
-      inspector.enabled = true;
-      parse_inspector_spec(argv[i] + 10, inspector.host, sizeof(inspector.host), &inspector.port);
+    if (i == 0 || !parse_global_args) {
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
     }
     
-    else if (strcmp(argv[i], "--inspect-wait") == 0) {
+    if (strcmp(arg, "--") == 0) {
+      parse_global_args = false;
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
+    }
+    
+    if (is_valued_flag(arg)) {
+      filtered_argv[filtered_argc++] = argv[i];
+      if (i + 1 < argc) filtered_argv[filtered_argc++] = argv[++i];
+      continue;
+    }
+    
+    if (arg[0] != '-') {
+      parse_global_args = false;
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
+    }
+
+    if (strcmp(arg, "--verbose") == 0) pkg_verbose = true;
+    else if (strcmp(arg, "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
+    else if (strncmp(arg, "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(arg + 13);
+    else if (strcmp(arg, "--sandbox-daemon") == 0) sandbox_daemon = true;
+    else if (strcmp(arg, "--inspect") == 0) inspector.enabled = true;
+    
+    else if (strncmp(arg, "--inspect=", 10) == 0) {
+      inspector.enabled = true;
+      parse_inspector_spec(arg + 10, inspector.host, sizeof(inspector.host), &inspector.port);
+    }
+    
+    else if (strcmp(arg, "--inspect-wait") == 0) {
       inspector.enabled = true;
       inspector.wait_for_session = true;
     }
     
-    else if (strncmp(argv[i], "--inspect-wait=", 15) == 0) {
+    else if (strncmp(arg, "--inspect-wait=", 15) == 0) {
       inspector.enabled = true;
       inspector.wait_for_session = true;
-      parse_inspector_spec(argv[i] + 15, inspector.host, sizeof(inspector.host), &inspector.port);
+      parse_inspector_spec(arg + 15, inspector.host, sizeof(inspector.host), &inspector.port);
     }
     
     else filtered_argv[filtered_argc++] = argv[i];

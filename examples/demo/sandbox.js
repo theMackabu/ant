@@ -1,6 +1,6 @@
 import { Sandbox } from 'ant:sandbox';
 
-const verbose = process.argv.includes('--dump');
+const verbose = process.argv.includes('--verbose');
 const base = { mount: '.:/workspace', verbose };
 
 const sandbox = new Sandbox(base);

@@ -20,6 +20,8 @@ typedef struct {
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
   bool verbose;
+  bool eval_mode;
+  const char *eval_source;
   int script_index;
 } ant_sandbox_cli_options_t;
 
@@ -58,6 +60,23 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
 
     if (strcmp(arg, "--verbose") == 0) {
       opts->verbose = true;
+      continue;
+    }
+
+    if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0 ||
+        strncmp(arg, "--eval=", 7) == 0) {
+      if (opts->script_index >= 0) {
+        fprintf(stderr, "sandbox: --eval cannot be combined with a script\n");
+        return -EINVAL;
+      }
+      opts->eval_mode = true;
+      if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "sandbox: %s needs source\n", arg);
+          return -EINVAL;
+        }
+        opts->eval_source = argv[++i];
+      } else opts->eval_source = arg + 7;
       continue;
     }
 
@@ -155,15 +174,19 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       return -EINVAL;
     }
 
+    if (opts->eval_mode) {
+      fprintf(stderr, "sandbox: --eval cannot be combined with a script\n");
+      return -EINVAL;
+    }
     opts->script_index = i;
     return 0;
   }
 
-  return -EINVAL;
+  return opts->eval_mode ? 0 : -EINVAL;
 }
 
 static void sandbox_print_usage(void) {
-  fprintf(stderr, "Usage: ant sandbox [--verbose] [--timeout-ms ms] [--boot-timeout-ms ms] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] <script.js> [args...]\n");
+  fprintf(stderr, "Usage: ant sandbox [--verbose] [--timeout-ms ms] [--boot-timeout-ms ms] [--mount host:guest] [--write host:guest] [--forward <port|host:guest>] [-e source | <script.js> [args...]]\n");
 }
 
 static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc) {
@@ -225,7 +248,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
 
   ant_sandbox_cli_options_t opts;
   int rc = sandbox_parse_options(argc, argv, &opts);
-  if (rc != 0 || opts.script_index < 0) {
+  if (rc != 0 || (!opts.eval_mode && opts.script_index < 0)) {
     sandbox_print_usage();
     ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
@@ -256,24 +279,34 @@ int ant_sandbox_cmd(int argc, char **argv) {
     }
   }
 
-  int script_argc = argc - opts.script_index - 1;
-  char **script_argv = argv + opts.script_index + 1;
   uint16_t tty_rows = 24;
   uint16_t tty_cols = 80;
   uint32_t capabilities = ant_sandbox_terminal_capabilities(&tty_rows, &tty_cols);
   uint16_t forward_ports[ANT_SANDBOX_MAX_FORWARDS];
   for (size_t i = 0; i < opts.launch.forward_count; i++) forward_ports[i] = opts.launch.forwards[i].guest_port;
   size_t request_len = 0;
-  uint8_t *request = ant_sandbox_build_run_request_frame(opts.launch.guest_cwd,
-                                                         argv[opts.script_index],
-                                                         script_argc,
-                                                         script_argv,
-                                                         capabilities,
-                                                         tty_rows,
-                                                         tty_cols,
-                                                         forward_ports,
-                                                         (uint32_t)opts.launch.forward_count,
-                                                         &request_len);
+  uint8_t *request = NULL;
+  if (opts.eval_mode) {
+    request = ant_sandbox_build_eval_request_frame(opts.launch.guest_cwd,
+                                                   opts.eval_source,
+                                                   capabilities,
+                                                   tty_rows,
+                                                   tty_cols,
+                                                   &request_len);
+  } else {
+    int script_argc = argc - opts.script_index - 1;
+    char **script_argv = argv + opts.script_index + 1;
+    request = ant_sandbox_build_run_request_frame(opts.launch.guest_cwd,
+                                                  argv[opts.script_index],
+                                                  script_argc,
+                                                  script_argv,
+                                                  capabilities,
+                                                  tty_rows,
+                                                  tty_cols,
+                                                  forward_ports,
+                                                  (uint32_t)opts.launch.forward_count,
+                                                  &request_len);
+  }
   if (!request) {
     fprintf(stderr, "sandbox: failed to build request frame\n");
     ant_sandbox_launch_options_cleanup(&opts.launch);
