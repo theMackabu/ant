@@ -604,6 +604,32 @@ Timeouts are explicit policy now:
 
 The hidden `ANT_SANDBOX_VM_TIMEOUT_MS` override was removed.
 
+## Shutdown And Cancellation Policy
+
+Sandbox VM shutdown now has separate graceful and forced lifecycle paths.
+
+Graceful close:
+
+- `Sandbox.close()` sends a typed close frame to the guest daemon.
+- Close requests use the configured boot/request timeout as a full close
+  deadline, not merely a request-delivery deadline.
+- The daemon acknowledges close with an `exit` frame and exits its request loop
+  before the host tears down the VM.
+
+Forced teardown:
+
+- `Sandbox.terminate()` explicitly cancels the VM session without asking the
+  guest daemon to close.
+- The helper process first gets a chance to notice closed control pipes and run
+  backend cleanup.
+- If the helper does not exit promptly, the parent escalates to `SIGTERM` and
+  then `SIGKILL`, so a wedged HVF helper cannot leave the caller blocked
+  forever.
+
+This keeps long-running server behavior intact by default: normal sandbox runs
+can stay alive after request delivery, while close/cancel paths now have bounded
+host-side teardown semantics.
+
 ## Error Mapping
 
 Sandbox VM execution now reports a classified result alongside the raw return
@@ -616,6 +642,7 @@ code. The host distinguishes:
 - kernel panic
 - daemon protocol errors
 - transport errors
+- cancellation
 - generic VM failures
 
 The CLI treats guest exits as script failures and returns the guest exit code

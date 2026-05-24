@@ -109,6 +109,66 @@ static void sandbox_vm_verbose_helper_pid(const ant_sandbox_vm_config_t *config,
           (long)pid);
 }
 
+static void sandbox_vm_verbose_session(ant_sandbox_vm_session_t *session, const char *message) {
+  if (!session || !session->verbose) return;
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    fprintf(stderr, "[0.000000] ant: %s\n", message);
+    return;
+  }
+  fprintf(stderr, "[%lld.%06ld] ant: %s\n",
+          (long long)ts.tv_sec,
+          ts.tv_nsec / 1000,
+          message);
+}
+
+static bool sandbox_vm_wait_pid(pid_t pid, unsigned int timeout_ms) {
+  struct timespec start;
+  bool have_start = clock_gettime(CLOCK_MONOTONIC, &start) == 0;
+
+  for (;;) {
+    int status = 0;
+    pid_t rc = waitpid(pid, &status, WNOHANG);
+    if (rc == pid) return true;
+    if (rc < 0) return errno == ECHILD;
+    if (timeout_ms == 0) return false;
+
+    if (have_start) {
+      struct timespec now;
+      if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+        uint64_t elapsed_ms = (uint64_t)(now.tv_sec - start.tv_sec) * 1000ull;
+        if (now.tv_nsec >= start.tv_nsec) elapsed_ms += (uint64_t)(now.tv_nsec - start.tv_nsec) / 1000000ull;
+        else elapsed_ms -= (uint64_t)(start.tv_nsec - now.tv_nsec) / 1000000ull;
+        if (elapsed_ms >= timeout_ms) return false;
+      }
+    }
+
+    usleep(10000);
+  }
+}
+
+static void sandbox_vm_stop_helper(ant_sandbox_vm_session_t *session, bool graceful) {
+  if (!session || session->helper_pid <= 0) return;
+  pid_t pid = session->helper_pid;
+
+  if (graceful && sandbox_vm_wait_pid(pid, 1000)) {
+    session->helper_pid = -1;
+    return;
+  }
+
+  sandbox_vm_verbose_session(session, "terminating sandbox helper");
+  kill(pid, SIGTERM);
+  if (sandbox_vm_wait_pid(pid, 1000)) {
+    session->helper_pid = -1;
+    return;
+  }
+
+  sandbox_vm_verbose_session(session, "force-killing sandbox helper");
+  kill(pid, SIGKILL);
+  waitpid(pid, NULL, 0);
+  session->helper_pid = -1;
+}
+
 static bool sandbox_vm_helper_child_frame(uint8_t type, const void *payload, size_t payload_len, void *user) {
   int fd = *(int *)user;
   if (payload_len > UINT32_MAX) return false;
@@ -304,7 +364,10 @@ int ant_sandbox_vm_helper_create(
     close(to_child[1]);
     close(from_child[0]);
     kill(pid, SIGTERM);
-    waitpid(pid, NULL, 0);
+    if (!sandbox_vm_wait_pid(pid, 1000)) {
+      kill(pid, SIGKILL);
+      waitpid(pid, NULL, 0);
+    }
     return -ENOMEM;
   }
 
@@ -313,21 +376,26 @@ int ant_sandbox_vm_helper_create(
   session->helper_cmd_fd = to_child[1];
   session->helper_msg_fd = from_child[0];
   session->capabilities = config->capabilities;
+  session->verbose = config->verbose;
   session->helper = true;
 
   int create_rc = 0;
   int msg_type = sandbox_vm_helper_read_result(session->helper_msg_fd, config->result, &create_rc);
   if (msg_type != ANT_SANDBOX_VM_HELPER_MSG_CREATE_RESULT) {
     close(session->helper_cmd_fd);
+    session->helper_cmd_fd = -1;
     close(session->helper_msg_fd);
-    waitpid(pid, NULL, 0);
+    session->helper_msg_fd = -1;
+    sandbox_vm_stop_helper(session, true);
     free(session);
     return msg_type < 0 ? msg_type : -EPROTO;
   }
   if (create_rc != 0) {
     close(session->helper_cmd_fd);
+    session->helper_cmd_fd = -1;
     close(session->helper_msg_fd);
-    waitpid(pid, NULL, 0);
+    session->helper_msg_fd = -1;
+    sandbox_vm_stop_helper(session, true);
     free(session);
     return create_rc;
   }
@@ -396,13 +464,31 @@ int ant_sandbox_vm_helper_execute(
   }
 }
 
+int ant_sandbox_vm_helper_cancel(ant_sandbox_vm_session_t *session) {
+  if (!session || !session->helper) return -EINVAL;
+  if (session->helper_cmd_fd >= 0) {
+    close(session->helper_cmd_fd);
+    session->helper_cmd_fd = -1;
+  }
+  if (session->helper_msg_fd >= 0) {
+    close(session->helper_msg_fd);
+    session->helper_msg_fd = -1;
+  }
+  sandbox_vm_stop_helper(session, true);
+  return 0;
+}
+
 void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
   if (!session) return;
   if (session->helper_cmd_fd >= 0) {
     sandbox_vm_send_header(session->helper_cmd_fd, ANT_SANDBOX_VM_HELPER_CMD_DESTROY, 0, 0);
     close(session->helper_cmd_fd);
+    session->helper_cmd_fd = -1;
   }
-  if (session->helper_msg_fd >= 0) close(session->helper_msg_fd);
-  if (session->helper_pid > 0) waitpid(session->helper_pid, NULL, 0);
+  if (session->helper_msg_fd >= 0) {
+    close(session->helper_msg_fd);
+    session->helper_msg_fd = -1;
+  }
+  sandbox_vm_stop_helper(session, true);
   free(session);
 }

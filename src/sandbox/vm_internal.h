@@ -14,6 +14,7 @@ struct ant_sandbox_vm_session {
   int helper_cmd_fd;
   int helper_msg_fd;
   uint32_t capabilities;
+  bool verbose;
   bool helper;
 };
 
@@ -26,6 +27,7 @@ int ant_sandbox_vm_helper_execute(
   ant_sandbox_vm_session_t *session,
   const ant_sandbox_vm_request_t *request
 );
+int ant_sandbox_vm_helper_cancel(ant_sandbox_vm_session_t *session);
 void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session);
 
 #endif

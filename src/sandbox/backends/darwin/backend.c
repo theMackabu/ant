@@ -1,5 +1,6 @@
 #include "backend.h"
 #include "sandbox/vm.h"
+#include "sandbox/sandbox.h"
 
 #if defined(__aarch64__)
 
@@ -433,8 +434,13 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->frame_handler = request->frame_handler;
   vm->frame_handler_user = request->frame_handler_user;
 
+  const uint8_t *frame = request->request_data;
+  bool close_request = request->request_len >= ANT_SANDBOX_FRAME_HEADER_SIZE &&
+                       memcmp(frame, ANT_SANDBOX_FRAME_MAGIC, 4) == 0 &&
+                       frame[4] == ANT_SANDBOX_FRAME_VERSION &&
+                       frame[5] == ANT_SANDBOX_FRAME_CLOSE;
   unsigned int timeout_ms = vm->timeout_ms ? vm->timeout_ms : vm->boot_timeout_ms;
-  bool timeout_until_request_sent = vm->timeout_ms == 0 && vm->boot_timeout_ms > 0;
+  bool timeout_until_request_sent = !close_request && vm->timeout_ms == 0 && vm->boot_timeout_ms > 0;
   if (timeout_ms > 0 && timeout_until_request_sent) {
     ant_hvf_verbosef(vm, "running guest request-timeout=%u ms", timeout_ms);
   } else if (timeout_ms > 0) {

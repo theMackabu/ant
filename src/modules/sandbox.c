@@ -384,6 +384,9 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
     case ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR:
       snprintf(message, sizeof(message), "sandbox transport error (%d)", result->code);
       break;
+    case ANT_SANDBOX_VM_RESULT_CANCELED:
+      snprintf(message, sizeof(message), "sandbox VM canceled");
+      break;
     case ANT_SANDBOX_VM_RESULT_VM_ERROR:
     case ANT_SANDBOX_VM_RESULT_NONE:
     default:
@@ -599,12 +602,43 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
+static ant_value_t sandbox_terminate(ant_t *js, ant_value_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  sandbox_state_t *state = sandbox_get_state(js->this_val);
+  ant_value_t promise = js_mkpromise(js);
+  if (!state || state->closed) {
+    js_resolve_promise(js, promise, js_mkundef());
+    return promise;
+  }
+
+  state->closed = true;
+  int rc = 0;
+  if (state->session) {
+    rc = ant_sandbox_vm_session_cancel(state->session);
+    ant_sandbox_vm_session_destroy(state->session);
+    state->session = NULL;
+  }
+
+  if (rc == 0) {
+    js_resolve_promise(js, promise, js_mkundef());
+  } else {
+    ant_sandbox_vm_result_t result = {
+      .kind = rc == -ENOSYS ? ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE : ANT_SANDBOX_VM_RESULT_CANCELED,
+      .code = rc,
+    };
+    js_reject_promise(js, promise, sandbox_vm_result_error(js, &result, rc));
+  }
+  return promise;
+}
+
 ant_value_t sandbox_library(ant_t *js) {
   if (!g_sandbox_ctor) {
     g_sandbox_proto = js_mkobj(js);
     js_set(js, g_sandbox_proto, "run", js_mkfun_arity(sandbox_run, 1));
     js_set(js, g_sandbox_proto, "eval", js_mkfun_arity(sandbox_eval, 1));
     js_set(js, g_sandbox_proto, "close", js_mkfun(sandbox_close));
+    js_set(js, g_sandbox_proto, "terminate", js_mkfun(sandbox_terminate));
     js_set_sym(js, g_sandbox_proto, get_toStringTag_sym(), js_mkstr(js, "Sandbox", 7));
     g_sandbox_ctor = js_make_ctor(js, sandbox_ctor, g_sandbox_proto, "Sandbox", 7);
     gc_register_root(&g_sandbox_proto);

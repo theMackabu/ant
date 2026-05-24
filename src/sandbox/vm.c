@@ -38,6 +38,7 @@ const char *ant_sandbox_vm_result_name(ant_sandbox_vm_result_kind_t kind) {
     case ANT_SANDBOX_VM_RESULT_KERNEL_PANIC: return "SandboxKernelPanic";
     case ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR: return "SandboxProtocolError";
     case ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR: return "SandboxTransportError";
+    case ANT_SANDBOX_VM_RESULT_CANCELED: return "SandboxCanceled";
     case ANT_SANDBOX_VM_RESULT_VM_ERROR: return "SandboxVMError";
   }
   return "SandboxVMError";
@@ -125,6 +126,12 @@ int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_
   if (!session->backend_session) return -EINVAL;
   if (!session->backend->execute_session) return -ENOSYS;
   return session->backend->execute_session(session->backend_session, request);
+}
+
+int ant_sandbox_vm_session_cancel(ant_sandbox_vm_session_t *session) {
+  if (!session) return -EINVAL;
+  if (session->helper) return ant_sandbox_vm_helper_cancel(session);
+  return -ENOSYS;
 }
 
 void ant_sandbox_vm_session_destroy(ant_sandbox_vm_session_t *session) {
