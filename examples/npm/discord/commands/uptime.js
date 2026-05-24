@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
 
 const fmt = s => {
   const d = Math.floor(s / 86400);
@@ -9,6 +9,10 @@ const fmt = s => {
 };
 
 export default {
-  builder: new SlashCommandBuilder().setName('uptime').setDescription('show bot uptime'),
+  builder: new SlashCommandBuilder()
+    .setName('uptime')
+    .setDescription('show bot uptime')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall)
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel),
   run: async i => i.reply(`up for ${fmt(process.uptime())}`)
 };
