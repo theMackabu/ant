@@ -191,8 +191,13 @@ void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts) {
 
 static bool sandbox_guest_path_valid(const char *path) {
   if (!path || path[0] != '/' || path[1] == '\0') return false;
-  if (strstr(path, "/../") || strstr(path, "/..") || strstr(path, "/./")) return false;
-  return strcmp(path, "/..") != 0 && strcmp(path, "/.") != 0;
+  const char *p = path;
+  while ((p = strchr(p, '/')) != NULL) {
+    p++;
+    if (p[0] == '.' && (p[1] == '/' || p[1] == '\0')) return false;
+    if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\0')) return false;
+  }
+  return true;
 }
 
 static int sandbox_create_temp_dir(char *out, size_t out_len) {

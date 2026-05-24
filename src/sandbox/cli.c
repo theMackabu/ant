@@ -338,11 +338,13 @@ int ant_sandbox_cmd(int argc, char **argv) {
   free(request);
   ant_sandbox_launch_options_cleanup(&opts.launch);
 
-  if (rc == 0) return EXIT_SUCCESS;
   if (vm_result.kind == ANT_SANDBOX_VM_RESULT_GUEST_EXIT) {
     if (vm_result.code >= 0 && vm_result.code <= 255) return vm_result.code;
     return EXIT_FAILURE;
   }
+  
+  if (rc == 0) return EXIT_SUCCESS;
   sandbox_print_vm_failure(&vm_result, rc);
+  
   return EXIT_FAILURE;
 }

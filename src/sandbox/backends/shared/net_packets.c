@@ -272,15 +272,9 @@ static bool ant_dns_read_name(const unsigned char *packet, size_t len, size_t of
 }
 
 static bool ant_dns_lookup_a(const char *name, uint32_t *out) {
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  struct addrinfo *res = NULL;
-  if (getaddrinfo(name, NULL, &hints, &res) != 0 || !res) return false;
-  struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-  *out = ntohl(sin->sin_addr.s_addr);
-  freeaddrinfo(res);
+  struct in_addr addr;
+  if (inet_pton(AF_INET, name, &addr) != 1) return false;
+  *out = ntohl(addr.s_addr);
   return true;
 }
 
@@ -367,6 +361,8 @@ static void ant_net_handle_ipv4(ant_hvf_vm_t *vm, const ant_eth_t *eth, const un
     size_t udp_payload_len = udp_len - sizeof(*udp);
     if (sport == ANT_DHCP_CLIENT_PORT && dport == ANT_DHCP_SERVER_PORT) {
       ant_net_handle_dhcp(vm, eth, udp, udp_payload, udp_payload_len);
+    } else if (dport == ANT_DNS_PORT && vm->net_nat) {
+      ant_nat_handle_udp(vm->net_nat, eth, ip, udp, udp_payload, udp_payload_len);
     } else if (dport == ANT_DNS_PORT) {
       ant_net_handle_dns(vm, eth, ip, udp, udp_payload, udp_payload_len);
     } else if (vm->net_nat) {
@@ -395,4 +391,3 @@ void ant_net_handle_frame(ant_hvf_vm_t *vm, const unsigned char *frame, size_t f
     ant_net_handle_ipv4(vm, eth, frame + sizeof(*eth), frame_len - sizeof(*eth));
   }
 }
-

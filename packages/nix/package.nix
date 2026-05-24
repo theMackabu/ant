@@ -13,6 +13,7 @@
 , zig ? null
 , importNpmLock
 , apple-sdk_15 ? null
+, darwin ? null
 , callPackage
 , gitRev ? "unknown"
 }:
@@ -57,7 +58,7 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     git
     curl
     zigPkg
-  ];
+  ] ++ lib.optionals stdenv.isDarwin [ darwin.sigtool ];
 
   buildInputs = lib.optionals stdenv.isDarwin [ apple-sdk_15 ];
 
@@ -88,6 +89,10 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     install -Dm755 ant "$out/bin/ant"
     ln -s ant          "$out/bin/antx"
     runHook postInstall
+  '';
+
+  postFixup = lib.optionalString stdenv.isDarwin ''
+    codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/bin/ant"
   '';
 
   doCheck = false;

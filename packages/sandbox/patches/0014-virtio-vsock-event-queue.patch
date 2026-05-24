@@ -53,7 +53,7 @@ index a2b7a0ec..21a5435f 100644
      vs->rx_seqno = 0;
      vtdev_set_status(dev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
      vsock_set_transport(vs);
-@@ -346,6 +362,51 @@ closure_func_basic(vqfinish, void, virtio_sock_rx_complete,
+@@ -346,6 +362,52 @@ closure_func_basic(vqfinish, void, virtio_sock_rx_complete,
      virtio_sock_rxq_submit(vs);
  }
  
@@ -75,7 +75,8 @@ index a2b7a0ec..21a5435f 100644
 +    }
 +
 +    dealloc_unmap(vs->backed, eventbuf, eventbuf->phys, sizeof(*eventbuf));
-+    virtio_sock_eventq_submit(vs);
++    if (!virtio_sock_eventq_submit(vs))
++        virtio_sock_debug("failed to resubmit event queue buffer");
 +}
 +
 +static boolean virtio_sock_eventq_submit(virtio_sock vs)

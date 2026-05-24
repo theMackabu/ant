@@ -32,7 +32,7 @@ export default {
     if (!submitted) return;
 
     const code = submitted.fields.getTextInputValue('code');
-    console.log(`[run] ${i.user.tag} (${i.user.id}): ${code}`);
+    console.log(`[run] ${i.user.tag} (${i.user.id})`);
 
     let buf = '';
     const sink = { write(s) { buf += s; return true; } };

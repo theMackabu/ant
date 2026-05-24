@@ -1006,6 +1006,11 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
   if (!server) return js->thrown_value;
   if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
   if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
+  if (!parsed.path && parsed.port == 0 && ant_sandbox_policy_forward_restricted()) {
+    return js_mkerr_typed(js,
+                          JS_ERR_TYPE | JS_ERR_NO_STACK,
+                          "sandbox listen on port 0 is not supported; use a fixed port with --forward <port>");
+  }
   if (!parsed.path && !ant_sandbox_policy_port_forwarded(parsed.port)) {
     return js_mkerr_typed(js,
                           JS_ERR_TYPE | JS_ERR_NO_STACK,

@@ -22,9 +22,19 @@ import {
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
 
+app.options('*', c => {
+  c.header('Access-Control-Allow-Origin', '*');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  c.header('Access-Control-Max-Age', '86400');
+  return c.body(null, 204);
+});
+
 app.use('*', async (c, next) => {
   await next();
   c.header('Access-Control-Allow-Origin', '*');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   c.header('X-Content-Type-Options', 'nosniff');
 });
 

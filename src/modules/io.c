@@ -68,7 +68,7 @@ static bool io_should_color_fd(int fd) {
 void io_set_sandbox_terminal(uint32_t capabilities) {
   g_sandbox_terminal_enabled = true;
   g_sandbox_terminal_capabilities = capabilities;
-  if (capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) io_no_color = true;
+  io_no_color = (capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) != 0;
 }
 
 #define JSON_KEY    "\x1b[0m"

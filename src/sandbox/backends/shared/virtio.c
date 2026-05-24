@@ -51,6 +51,7 @@ ant_hvf_virtio_device_t *ant_hvf_virtio_for_bar(ant_hvf_vm_t *vm, uint64_t addr)
   }
   for (size_t i = 0; i < vm->p9_count; i++) {
     ant_hvf_virtio_device_t *dev = &vm->p9[i].virtio;
+    if (dev->bar0 == UINT32_MAX) continue;
     if (addr >= dev->bar0 && addr < (uint64_t)dev->bar0 + ANT_HVF_VIRTIO_BAR_SIZE) return dev;
   }
   return NULL;

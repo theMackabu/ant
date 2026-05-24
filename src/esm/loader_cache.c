@@ -222,6 +222,11 @@ yyjson_doc *esm_package_json_cache_read(const char *pkg_json_path) {
   }
 
   entry->doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  if (!entry->doc) {
+    free(entry->path);
+    free(entry);
+    return NULL;
+  }
   HASH_ADD_STR(global_package_json_cache, path, entry);
   return entry->doc;
 }

@@ -77,6 +77,10 @@ static int sandbox_for_each_string(
 
   if (vtype(value) == T_STR) {
     const char *str = js_getstr(js, value, NULL);
+    if (!str) {
+      *error_out = js_mkerr(js, "oom");
+      return -ENOMEM;
+    }
     return cb(js, str, udata);
   }
 
@@ -88,7 +92,12 @@ static int sandbox_for_each_string(
         *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "%s entries must be strings", name);
         return -EINVAL;
       }
-      int rc = cb(js, js_getstr(js, item, NULL), udata);
+      const char *str = js_getstr(js, item, NULL);
+      if (!str) {
+        *error_out = js_mkerr(js, "oom");
+        return -ENOMEM;
+      }
+      int rc = cb(js, str, udata);
       if (rc != 0) return rc;
     }
     return 0;
@@ -506,6 +515,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.run(entry, argv?) requires an entry string"));
 
   char *entry = js_getstr(js, args[0], NULL);
+  if (!entry) return sandbox_rejected(js, js_mkerr(js, "out of memory"));
   char **argv = NULL;
   int argc = 0;
 
@@ -523,6 +533,10 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
           return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
         }
         argv[i] = js_getstr(js, item, NULL);
+        if (!argv[i]) {
+          free(argv);
+          return sandbox_rejected(js, js_mkerr(js, "out of memory"));
+        }
       }
     } else {
       argc = nargs - 1;
@@ -534,6 +548,10 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
           return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
         }
         argv[i] = js_getstr(js, args[i + 1], NULL);
+        if (!argv[i]) {
+          free(argv);
+          return sandbox_rejected(js, js_mkerr(js, "out of memory"));
+        }
       }
     }
   }

@@ -8,6 +8,12 @@ usage: packages/sandbox/build-sandbox.sh [options]
 build a local Linux musl Ant binary in Alpine Docker, then build a Nanos
 sandbox image with ops and a patched local Nanos kernel.
 
+environment:
+  NANOS_REF
+      Nanos git ref to fetch and patch. defaults to the CI-pinned revision.
+  NANOS_URL
+      Nanos git repository URL. defaults to https://github.com/nanovms/nanos.git.
+
 options:
   --arch <native|x64|amd64|aarch64|arm64>
       target architecture. defaults to native.
@@ -35,6 +41,7 @@ arch=native
 docker_no_cache=()
 skip_docker=false
 nanos_src="$nanos_cache_dir/nanos"
+nanos_ref=${NANOS_REF:-8f75979ab152e8a71f4afe70762d5902b7d71fcc}
 nanos_url=${NANOS_URL:-https://github.com/nanovms/nanos.git}
 
 while (($#)); do
@@ -216,14 +223,38 @@ if [[ ! -d "$nanos_src/.git" ]]; then
   git clone "$nanos_url" "$nanos_src"
 fi
 
-patch_inputs=("$repo_root"/packages/sandbox/patches/*.patch)
-patch_signature=$(cd "$repo_root" && shasum -a 256 packages/sandbox/patches/*.patch | shasum -a 256 | awk '{print $1}')
+if [[ ! "$nanos_ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+  echo "invalid NANOS_REF: $nanos_ref" >&2
+  exit 1
+fi
+
+git -C "$nanos_src" remote set-url origin "$nanos_url"
+git -C "$nanos_src" fetch --depth 1 origin "$nanos_ref"
+nanos_revision=$(git -C "$nanos_src" rev-parse FETCH_HEAD)
+echo "==> using Nanos $nanos_revision"
+
+if command -v shasum >/dev/null 2>&1; then
+  sha256_files=(shasum -a 256)
+elif command -v sha256sum >/dev/null 2>&1; then
+  sha256_files=(sha256sum)
+else
+  echo "shasum or sha256sum is required to hash Nanos patches" >&2
+  exit 1
+fi
+
+patch_signature=$(cd "$repo_root" && "${sha256_files[@]}" packages/sandbox/patches/*.patch | "${sha256_files[@]}" | awk '{print $1}')
+patched_source_signature=$(
+  printf 'nanos=%s\n' "$nanos_revision"
+  printf 'patches=%s\n' "$patch_signature"
+)
 nanos_patch_stamp="$nanos_cache_dir/patches-${cache_arch}.stamp"
 
-if [[ -f "$nanos_patch_stamp" && "$(cat "$nanos_patch_stamp")" == "$patch_signature" ]]; then
+if [[ -f "$nanos_patch_stamp" &&
+      "$(cat "$nanos_patch_stamp")" == "$patched_source_signature" &&
+      "$(git -C "$nanos_src" rev-parse HEAD)" == "$nanos_revision" ]]; then
   echo "==> reusing patched Nanos source"
 else
-  git -C "$nanos_src" reset --hard HEAD >/dev/null
+  git -C "$nanos_src" reset --hard FETCH_HEAD >/dev/null
   for patch in "$repo_root"/packages/sandbox/patches/*.patch; do
     if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
       git -C "$nanos_src" apply "$patch"
@@ -232,12 +263,11 @@ else
       exit 1
     fi
   done
-  printf '%s\n' "$patch_signature" > "$nanos_patch_stamp"
+  printf '%s\n' "$patched_source_signature" > "$nanos_patch_stamp"
 fi
 
 nanos_kernel="$nanos_src/output/platform/$nanos_platform/bin/kernel.img"
 nanos_kernel_stamp="$nanos_cache_dir/kernel-${cache_arch}.stamp"
-nanos_revision=$(git -C "$nanos_src" rev-parse HEAD)
 
 compiler_signature=$("$nanos_cc" --version 2>/dev/null | head -n 1 || printf '%s' "$nanos_cc")
 kernel_signature=$(

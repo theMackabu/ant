@@ -275,7 +275,7 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   }
 
 done:
-  deadline.stop = true;
+  atomic_store_explicit(&deadline.stop, true, memory_order_release);
   if (deadline_thread_started) pthread_join(deadline_thread, NULL);
   vm->vcpu_thread_valid = false;
   return rc;
@@ -400,6 +400,19 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
     ant_kvm_set_result(config->result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, -EINVAL);
     return -EINVAL;
   }
+  if ((config->mount_count > 0 && !config->mounts) ||
+      (config->forward_count > 0 && !config->forwards)) {
+    ant_kvm_set_result(config->result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, -EINVAL);
+    return -EINVAL;
+  }
+
+  unsigned long long requested_memory =
+    config->memory_size ? config->memory_size : (1024ull * 1024ull * 1024ull);
+  if (requested_memory > SIZE_MAX ||
+      (size_t)requested_memory > SIZE_MAX - ((size_t)ANT_HVF_PAGE_SIZE - 1u)) {
+    ant_kvm_set_result(config->result, ANT_SANDBOX_VM_RESULT_CONFIG_ERROR, -EINVAL);
+    return -EINVAL;
+  }
 
   ant_kvm_session_t *session = calloc(1, sizeof(*session));
   if (!session) return -ENOMEM;
@@ -408,7 +421,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   vm->vm_fd = -1;
   vm->vcpu_fd = -1;
   vm->image_fd = -1;
-  vm->mem_size = config->memory_size ? (size_t)config->memory_size : (1024ull * 1024ull * 1024ull);
+  vm->mem_size = (size_t)requested_memory;
   vm->mem_size = ant_align_page(vm->mem_size);
   vm->image_sectors = (uint64_t)image_size / 512ull;
   vm->net_enabled = config->network_enabled;

@@ -254,7 +254,10 @@ export async function resolveNanosArtifact(
 export async function fetchDownload(env: Env, artifact: ResolvedArtifact): Promise<Response> {
   if (artifact.source.type === 'actions') return fetchArtifactDownload(env, artifact.artifact.id);
 
-  const releaseUrl = artifact.artifact.browser_download_url || artifact.artifact.api_url;
+  const releaseUrl =
+    env.GITHUB_TOKEN && artifact.artifact.api_url
+      ? artifact.artifact.api_url
+      : artifact.artifact.browser_download_url || artifact.artifact.api_url;
   if (!releaseUrl) {
     throw new HttpError(`release asset missing download URL: ${artifact.name}`, 502);
   }

@@ -8,6 +8,7 @@
 void init_process_module(void);
 ant_value_t process_library(ant_t *js);
 
+void process_refresh_sandbox_argv(void);
 void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols);
 
 void process_enable_keypress_events(void);

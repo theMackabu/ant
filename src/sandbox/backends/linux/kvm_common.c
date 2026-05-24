@@ -28,7 +28,7 @@ void *ant_kvm_deadline_thread(void *opaque) {
   ant_kvm_deadline_t *deadline = opaque;
   const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
   for (;;) {
-    if (deadline->stop || !deadline->vm ||
+    if (atomic_load_explicit(&deadline->stop, memory_order_acquire) || !deadline->vm ||
         atomic_load_explicit(&deadline->vm->canceled, memory_order_acquire)) {
       return NULL;
     }

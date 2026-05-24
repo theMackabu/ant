@@ -171,6 +171,12 @@ async function githubFetch(
   accept = 'application/vnd.github+json',
 ): Promise<Response> {
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `https://api.github.com${pathOrUrl}`;
+  if (pathOrUrl.startsWith('http')) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'api.github.com') {
+      throw new HttpError(`refusing authenticated request to untrusted GitHub host: ${parsed.hostname}`, 502);
+    }
+  }
   const headers = new Headers({
     Accept: accept,
     'User-Agent': 'ant-api-worker',

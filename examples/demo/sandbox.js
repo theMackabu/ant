@@ -32,6 +32,8 @@ try {
   console.log('\nsandbox script exit:');
   await showError('run failed', () => sandbox.run('does-not-exist.js'));
 } finally {
-  await sandbox.close();
-  await writableSandbox.close();
+  await Promise.allSettled([
+    sandbox.close(),
+    writableSandbox.close(),
+  ]);
 }

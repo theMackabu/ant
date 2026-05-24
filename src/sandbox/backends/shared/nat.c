@@ -1,5 +1,6 @@
 #include "sandbox_backend/net_internal.h"
 
+#include <stdatomic.h>
 
 typedef enum {
   ANT_NAT_TCP_UNUSED = 0,
@@ -62,7 +63,7 @@ struct ant_hvf_nat {
   bool lock_init;
   pthread_t thread;
   bool thread_started;
-  bool stop;
+  atomic_bool stop;
   int wake_pipe[ANT_NAT_WAKE_PIPE_FDS];
   ant_hvf_nat_tcp_t **tcp;
   size_t tcp_count;
@@ -74,11 +75,11 @@ struct ant_hvf_nat {
   size_t forward_count;
   size_t forward_cap;
   uint16_t next_inbound_port;
-  uint64_t guest_packets;
-  uint64_t guest_drops;
-  uint64_t host_packets;
-  uint64_t tcp_opened;
-  uint64_t udp_opened;
+  atomic_uint_fast64_t guest_packets;
+  atomic_uint_fast64_t guest_drops;
+  atomic_uint_fast64_t host_packets;
+  atomic_uint_fast64_t tcp_opened;
+  atomic_uint_fast64_t udp_opened;
 };
 
 static bool ant_nat_tcp_active(const ant_hvf_nat_tcp_t *c) {
@@ -190,7 +191,7 @@ static void ant_nat_drain_wake(ant_hvf_nat_t *nat) {
 }
 
 void ant_nat_note_guest_packet(ant_hvf_nat_t *nat) {
-  if (nat) nat->guest_packets++;
+  if (nat) atomic_fetch_add_explicit(&nat->guest_packets, 1, memory_order_relaxed);
 }
 
 void ant_hvf_net_note_rx(ant_hvf_vm_t *vm) {
@@ -217,11 +218,11 @@ void ant_net_enqueue(ant_hvf_vm_t *vm, const void *data, uint32_t len) {
   }
   pthread_mutex_unlock(&vm->net_lock);
   if (queued) {
-    if (vm->net_nat) vm->net_nat->host_packets++;
+    if (vm->net_nat) atomic_fetch_add_explicit(&vm->net_nat->host_packets, 1, memory_order_relaxed);
     ant_hvf_virtio_net_drain_rx(vm);
     ant_hvf_net_note_rx(vm);
   } else if (vm->net_nat) {
-    vm->net_nat->guest_drops++;
+    atomic_fetch_add_explicit(&vm->net_nat->guest_drops, 1, memory_order_relaxed);
   }
 }
 
@@ -277,7 +278,7 @@ static ant_hvf_nat_tcp_t *ant_nat_alloc_tcp(ant_hvf_nat_t *nat) {
       memset(c, 0, sizeof(*c));
       c->state = ANT_NAT_TCP_ESTABLISHED;
       c->fd = -1;
-      nat->tcp_opened++;
+      atomic_fetch_add_explicit(&nat->tcp_opened, 1, memory_order_relaxed);
       return c;
     }
   }
@@ -291,7 +292,7 @@ static ant_hvf_nat_tcp_t *ant_nat_alloc_tcp(ant_hvf_nat_t *nat) {
   c->fd = -1;
   nat->tcp[nat->tcp_count++] = c;
   c->state = ANT_NAT_TCP_ESTABLISHED;
-  nat->tcp_opened++;
+  atomic_fetch_add_explicit(&nat->tcp_opened, 1, memory_order_relaxed);
   return c;
 }
 
@@ -318,7 +319,7 @@ static ant_hvf_nat_udp_t *ant_nat_alloc_udp(ant_hvf_nat_t *nat) {
       memset(u, 0, sizeof(*u));
       u->fd = -1;
       u->active = true;
-      nat->udp_opened++;
+      atomic_fetch_add_explicit(&nat->udp_opened, 1, memory_order_relaxed);
       return u;
     }
   }
@@ -329,7 +330,7 @@ static ant_hvf_nat_udp_t *ant_nat_alloc_udp(ant_hvf_nat_t *nat) {
   u->fd = -1;
   u->active = true;
   nat->udp[nat->udp_count++] = u;
-  nat->udp_opened++;
+  atomic_fetch_add_explicit(&nat->udp_opened, 1, memory_order_relaxed);
   return u;
 }
 
@@ -480,7 +481,7 @@ static void *ant_nat_thread(void *arg) {
   ant_hvf_nat_udp_t **udp_map = NULL;
   ant_hvf_nat_forward_t **fwd_map = NULL;
 
-  while (!nat->stop) {
+  while (!atomic_load_explicit(&nat->stop, memory_order_acquire)) {
     nfds_t n = 0;
     pthread_mutex_lock(&nat->lock);
     nfds_t needed = (nfds_t)(1u + nat->tcp_count + nat->udp_count + nat->forward_count);
@@ -642,7 +643,9 @@ void ant_nat_handle_udp(ant_hvf_nat_t *nat,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip);
+    uint32_t connect_ip = dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip;
+    if (dst_ip == ANT_NET_DNS_IP) connect_ip = ANT_NET_IP(8, 8, 8, 8);
+    addr.sin_addr.s_addr = htonl(connect_ip);
     addr.sin_port = htons(dst_port);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
       close(fd);
@@ -716,7 +719,9 @@ void ant_nat_handle_tcp(ant_hvf_nat_t *nat,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip);
+    uint32_t connect_ip = dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip;
+    if (dst_ip == ANT_NET_DNS_IP) connect_ip = ANT_NET_IP(8, 8, 8, 8);
+    addr.sin_addr.s_addr = htonl(connect_ip);
     addr.sin_port = htons(dst_port);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc != 0 && errno != EINPROGRESS) {
@@ -804,10 +809,11 @@ int ant_hvf_net_start(ant_hvf_vm_t *vm) {
   nat->wake_pipe[1] = -1;
   vm->net_nat = nat;
 
-  if (pthread_mutex_init(&nat->lock, NULL) != 0) {
+  int mutex_rc = pthread_mutex_init(&nat->lock, NULL);
+  if (mutex_rc != 0) {
     vm->net_nat = NULL;
     free(nat);
-    return -errno;
+    return -mutex_rc;
   }
   nat->lock_init = true;
 
@@ -875,7 +881,7 @@ int ant_hvf_net_start(ant_hvf_vm_t *vm) {
 void ant_hvf_net_stop(ant_hvf_vm_t *vm) {
   ant_hvf_nat_t *nat = vm->net_nat;
   if (!nat) return;
-  nat->stop = true;
+  atomic_store_explicit(&nat->stop, true, memory_order_release);
   ant_nat_wake(nat);
   if (nat->thread_started) pthread_join(nat->thread, NULL);
   for (size_t i = 0; i < nat->tcp_count; i++) {
@@ -893,11 +899,11 @@ void ant_hvf_net_stop(ant_hvf_vm_t *vm) {
   if (vm->verbose) {
     ant_hvf_verbosef(vm,
                      "network backend stopped (guest_packets=%llu host_packets=%llu drops=%llu tcp_opened=%llu udp_opened=%llu tcp_slots=%zu udp_slots=%zu)",
-                     (unsigned long long)nat->guest_packets,
-                     (unsigned long long)nat->host_packets,
-                     (unsigned long long)nat->guest_drops,
-                     (unsigned long long)nat->tcp_opened,
-                     (unsigned long long)nat->udp_opened,
+                     (unsigned long long)atomic_load_explicit(&nat->guest_packets, memory_order_relaxed),
+                     (unsigned long long)atomic_load_explicit(&nat->host_packets, memory_order_relaxed),
+                     (unsigned long long)atomic_load_explicit(&nat->guest_drops, memory_order_relaxed),
+                     (unsigned long long)atomic_load_explicit(&nat->tcp_opened, memory_order_relaxed),
+                     (unsigned long long)atomic_load_explicit(&nat->udp_opened, memory_order_relaxed),
                      nat->tcp_count,
                      nat->udp_count);
   }

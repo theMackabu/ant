@@ -300,3 +300,8 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
 
   return &runtime;
 }
+
+void ant_runtime_set_argv(int argc, char **argv) {
+  runtime.argc = argc;
+  runtime.argv = argv;
+}

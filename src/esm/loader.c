@@ -281,7 +281,7 @@ static char *esm_make_cache_key(const char *module_key) {
   if (esm_has_builtin_scheme(module_key)) return strdup(module_key);
   if (esm_is_data_url(module_key)) return strdup(module_key);
   if (esm_is_url(module_key)) return strdup(module_key);
-  return esm_canonicalize_path(module_key);
+  return esm_make_absolute_path(module_key);
 }
 
 static char *esm_make_resolve_cache_key(const char *specifier, const char *base_path, bool prefer_require) {

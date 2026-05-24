@@ -426,15 +426,39 @@ static int execute_module(ant_t *js, const char *filename) {
   return server_maybe_start_from_export(js, default_export);
 }
 
-static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, bool *close_out) {
+static char **build_sandbox_process_argv(const char *argv0, ant_sandbox_request_t *sandbox, int *argc_out) {
+  int argc = 1;
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) argc = 2 + sandbox->argc;
+
+  char **argv = try_oom(sizeof(*argv) * (size_t)(argc + 1));
+  argv[0] = (char *)argv0;
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) {
+    argv[1] = sandbox->entry;
+    for (int i = 0; i < sandbox->argc; i++) argv[2 + i] = sandbox->argv[i];
+  }
+  
+  argv[argc] = NULL;
+  *argc_out = argc;
+  
+  return argv;
+}
+
+static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, const char *argv0, bool *close_out) {
   *close_out = false;
   if (sandbox->mode == ANT_SANDBOX_REQUEST_CLOSE) {
     *close_out = true;
     return EXIT_SUCCESS;
   }
 
+  int request_argc = 0;
+  char **request_argv = build_sandbox_process_argv(argv0, sandbox, &request_argc);
+  
+  ant_runtime_set_argv(request_argc, request_argv);
+  process_refresh_sandbox_argv();
+
   if (sandbox->cwd && chdir(sandbox->cwd) != 0) {
     fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox->cwd, strerror(errno));
+    free(request_argv);
     return EXIT_FAILURE;
   }
 
@@ -444,7 +468,9 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, bo
   ant_sandbox_policy_set_forwards(sandbox->forward_ports, sandbox->forward_count);
 
   if (sandbox->mode == ANT_SANDBOX_REQUEST_EVAL) {
-    return ant_sandbox_eval_module(js, sandbox->source, strlen(sandbox->source));
+    int rc = ant_sandbox_eval_module(js, sandbox->source, strlen(sandbox->source));
+    free(request_argv);
+    return rc;
   }
 
   if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) {
@@ -459,17 +485,20 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, bo
       js_run_event_loop(js);
       free(resolved_file);
     }
+    free(request_argv);
     return rc;
   }
 
   fprintf(stderr, "sandbox daemon: unsupported request mode\n");
+  free(request_argv);
+  
   return EXIT_FAILURE;
 }
 
-static int run_sandbox_daemon_loop(ant_t *js, ant_sandbox_request_t *sandbox) {
+static int run_sandbox_daemon_loop(ant_t *js, ant_sandbox_request_t *sandbox, const char *argv0) {
   for (;;) {
     bool close_requested = false;
-    int code = execute_sandbox_request(js, sandbox, &close_requested);
+    int code = execute_sandbox_request(js, sandbox, argv0, &close_requested);
     ant_sandbox_transport_send_exit(code);
     ant_sandbox_request_free(sandbox);
     memset(sandbox, 0, sizeof(*sandbox));
@@ -893,7 +922,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (sandbox_daemon) {
-    js_result = run_sandbox_daemon_loop(js, &sandbox);
+    js_result = run_sandbox_daemon_loop(js, &sandbox, original_argv[0]);
     goto cleanup;
   }
 

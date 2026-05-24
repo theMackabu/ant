@@ -18,6 +18,10 @@ void ant_sandbox_policy_set_forwards(const uint16_t *ports, uint32_t count) {
   for (uint32_t i = 0; i < count; i++) g_forward_ports[i] = ports[i];
 }
 
+bool ant_sandbox_policy_forward_restricted(void) {
+  return g_forward_policy;
+}
+
 bool ant_sandbox_policy_port_forwarded(int port) {
   if (!g_forward_policy) return true;
   if (port <= 0 || port > UINT16_MAX) return false;

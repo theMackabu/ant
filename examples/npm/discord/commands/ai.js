@@ -14,8 +14,8 @@ export default {
   ownerOnly: true,
   run: async i => {
     const prompt = i.options.getString('prompt', true);
-    console.log(`[ai] ${i.user.tag} (${i.user.id}): ${prompt}`);
-    await i.deferReply();
+    console.log(`[ai] ${i.user.tag} (${i.user.id})`);
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const { text } = await generateText({
         model: openai('gpt-5.5'),
@@ -23,7 +23,7 @@ export default {
       });
       await i.editReply(clip(text || '_(no output)_', 1900));
     } catch (err) {
-      await i.editReply({ content: `error: ${clip(err?.message ?? String(err), 1800)}`, flags: MessageFlags.Ephemeral });
+      await i.editReply({ content: `error: ${clip(err?.message ?? String(err), 1800)}` });
     }
   }
 };

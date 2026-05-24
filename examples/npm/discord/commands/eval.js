@@ -12,7 +12,7 @@ export default {
   ownerOnly: true,
   run: async i => {
     const code = i.options.getString('code', true);
-    console.log(`[eval] ${i.user.tag} (${i.user.id}): ${code}`);
+    console.log(`[eval] ${i.user.tag} (${i.user.id})`);
 
     let buf = '';
     const sink = { write(s) { buf += s; return true; } };

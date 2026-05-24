@@ -5,6 +5,7 @@
 #include "backend.h"
 #include "sandbox/sandbox.h"
 
+#include <stdatomic.h>
 #include <limits.h>
 
 enum {
@@ -45,7 +46,7 @@ typedef struct {
   struct timespec start;
   unsigned int timeout_ms;
   bool timeout_until_request_sent;
-  volatile sig_atomic_t stop;
+  atomic_bool stop;
 } ant_kvm_deadline_t;
 
 void ant_kvm_install_wakeup_signal(void);

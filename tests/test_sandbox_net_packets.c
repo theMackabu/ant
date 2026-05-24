@@ -250,7 +250,7 @@ static void test_dns_response(void) {
   ant_net_store16(query + 4, 1);
   unsigned char *p = query + 12;
   *p++ = 9;
-  memcpy(p, "localhost", 9);
+  memcpy(p, "127.0.0.1", 9);
   p += 9;
   *p++ = 0;
   ant_net_store16(p, 1);

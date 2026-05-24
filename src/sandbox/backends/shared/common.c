@@ -137,6 +137,11 @@ int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path) {
     }
 
     if (ph.type != 1) continue;
+    if (ph.filesz > ph.memsz || ph.memsz > SIZE_MAX || ph.filesz > SIZE_MAX) {
+      close(fd);
+      fprintf(stderr, "sandbox vm: invalid ELF segment sizes in %s\n", path);
+      return -EINVAL;
+    }
     void *dest = ant_hvf_guest_ptr(vm, ph.paddr, (size_t)ph.memsz);
     if (!dest) {
       close(fd);

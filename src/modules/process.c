@@ -653,10 +653,33 @@ static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
 
   if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
     js_set(js, env_obj, "NO_COLOR", js_mkstr(js, "1", 1));
-    js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "0", 1));
+    js_delete_prop(js, env_obj, "FORCE_COLOR", 11);
   }
-  else if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE)
+  else if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) {
+    js_delete_prop(js, env_obj, "NO_COLOR", 8);
     js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "1", 1));
+  }
+  else {
+    js_delete_prop(js, env_obj, "NO_COLOR", 8);
+    js_delete_prop(js, env_obj, "FORCE_COLOR", 11);
+  }
+}
+
+void process_refresh_sandbox_argv(void) {
+  ant_t *js = rt ? rt->js : NULL;
+  if (!js) return;
+
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
+  if (!is_special_object(process_obj)) return;
+
+  ant_value_t argv_arr = js_mkarr(js);
+  for (int i = 0; i < rt->argc; i++) {
+    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
+  }
+
+  js_set(js, process_obj, "argv", argv_arr);
+  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
 }
 
 void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols) {
