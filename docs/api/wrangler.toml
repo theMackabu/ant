@@ -1,0 +1,22 @@
+name = "ant-manifest"
+main = "src/routes.ts"
+
+workers_dev = false
+compatibility_date = "2026-05-24"
+
+[vars]
+GITHUB_BRANCH = "master"
+GITHUB_REPOSITORY = "theMackabu/ant"
+CACHE_TTL_SECONDS = "300"
+MANIFEST_REFRESH_SECONDS = "21600"
+
+[[r2_buckets]]
+binding = "DOWNLOADS"
+bucket_name = "ant-downloads"
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "manifest.antjs.org"
+custom_domain = true

@@ -1,0 +1,23 @@
+{
+  "name": "ant-api",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260523.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.4.0"
+  },
+  "trustedDependencies": [
+    "workerd"
+  ],
+  "dependencies": {
+    "hono": "^4.12.22",
+    "zod": "^4.4.3"
+  }
+}

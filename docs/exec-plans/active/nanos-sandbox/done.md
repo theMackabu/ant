@@ -149,13 +149,15 @@ Local ARM image facts observed on 2026-05-16:
 
 ## CI Image Build
 
-CI builds the patched kernel with `.github/workflows/build-nanos-kernel.yml`.
-That workflow is manually runnable, applies `nanos/patches/*.patch` to a fresh
-Nanos checkout, reads `ant.version` from `meson/ant.version`, and uploads both
-stable and versioned kernel artifacts.
+CI builds the patched kernel inside `.github/workflows/build-nanos.yml` before
+building the sandbox image. The workflow applies `nanos/patches/*.patch` to a
+fresh Nanos checkout, passes that kernel explicitly to `ops build`, and uploads
+both `ant-kernel-<arch>.img` and `ant-sandbox-<arch>.img`.
 
-The reusable Nanos image workflow shrinks its `ops build` output before upload,
-so consumers receive the smaller raw-root image instead of the padded MBR image.
+The reusable Nanos image workflow caches Nanos `vendor/` and `output/` by
+runner architecture, resolved Nanos commit, and Ant patch hash, then shrinks
+its `ops build` output before upload so consumers receive the smaller raw-root
+image instead of the padded MBR image.
 
 ## Current Nanos Patches
 
