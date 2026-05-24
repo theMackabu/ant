@@ -14,8 +14,9 @@
 
 #define ANT_VIRTIO_9P_F_MOUNT_TAG 0x1u
 #define ANT_VIRTIO_9P_QUEUE_SIZE 32u
-#define ANT_HVF_9P_MSIZE 8192u
-#define ANT_HVF_9P_IOUNIT (ANT_HVF_9P_MSIZE - 11u)
+#define ANT_HVF_9P_DEFAULT_MSIZE 8192u
+#define ANT_HVF_9P_MAX_MSIZE (64u * 1024u)
+#define ANT_HVF_9P_MIN_MSIZE 4096u
 #define ANT_HVF_9P_INITIAL_FID_COUNT 256u
 #define ANT_HVF_9P_PATH_MAX 1024u
 #define ANT_HVF_9P_HOST_PATH_MAX 4096u
@@ -133,6 +134,10 @@ typedef struct {
   const char *root;
   const char *tag;
   bool readonly;
+  unsigned char *req_buf;
+  unsigned char *resp_buf;
+  size_t msize;
+  size_t buf_capacity;
   ant_hvf_9p_fid_t *fids;
   size_t fid_count;
   size_t fid_capacity;
@@ -173,6 +178,8 @@ int ant_hvf_9p_child_path(ant_hvf_9p_device_t *dev,
 int ant_hvf_9p_stat(ant_hvf_9p_device_t *dev, const char *rel, struct stat *st);
 void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev);
 void ant_hvf_9p_file_cache_clear(ant_hvf_9p_device_t *dev);
+int ant_hvf_9p_buffers_init(ant_hvf_9p_device_t *dev, size_t capacity);
+void ant_hvf_9p_buffers_free(ant_hvf_9p_device_t *dev);
 uint8_t ant_hvf_9p_dtype_from_mode(mode_t mode);
 bool ant_hvf_9p_dtype_is_dir(uint8_t dtype);
 int ant_hvf_9p_dirent_type(ant_hvf_9p_device_t *dev,

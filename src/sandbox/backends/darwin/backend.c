@@ -208,6 +208,7 @@ static void ant_hvf_session_cleanup(ant_hvf_session_t *session, int *rc_inout) {
   free(vm->vsock.rx_stream);
   for (size_t i = 0; i < vm->p9_count; i++) {
     free(vm->p9[i].fids);
+    ant_hvf_9p_buffers_free(&vm->p9[i]);
     ant_hvf_9p_stat_cache_clear(&vm->p9[i]);
     ant_hvf_9p_file_cache_clear(&vm->p9[i]);
   }
@@ -301,6 +302,8 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
     vm->p9[i].root = config->mounts[i].host_path;
     vm->p9[i].tag = config->mounts[i].tag;
     vm->p9[i].readonly = config->mounts[i].readonly;
+    rc = ant_hvf_9p_buffers_init(&vm->p9[i], ANT_HVF_9P_MAX_MSIZE);
+    if (rc != 0) goto fail;
   }
   vm->cntfrq = ant_hvf_host_cntfrq();
   if (vm->cntfrq == 0 || vm->cntfrq > UINT32_MAX) {

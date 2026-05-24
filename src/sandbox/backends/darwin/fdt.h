@@ -35,12 +35,16 @@ typedef struct {
 } ant_fdt_header_t;
 
 typedef struct {
-  unsigned char structure[ANT_FDT_STRUCTURE_BYTES];
-  unsigned char strings[ANT_FDT_STRINGS_BYTES];
+  unsigned char *structure;
+  unsigned char *strings;
   size_t structure_len;
+  size_t structure_cap;
   size_t strings_len;
+  size_t strings_cap;
 } ant_fdt_t;
 
+int ant_fdt_init(ant_fdt_t *fdt);
+void ant_fdt_free(ant_fdt_t *fdt);
 int ant_fdt_reserve(ant_fdt_t *fdt, size_t len, unsigned char **out);
 int ant_fdt_u32(ant_fdt_t *fdt, uint32_t val);
 int ant_fdt_string_offset(ant_fdt_t *fdt, const char *name);

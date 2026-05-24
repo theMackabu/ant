@@ -2,9 +2,47 @@
 
 #if defined(__aarch64__)
 
+int ant_fdt_init(ant_fdt_t *fdt) {
+  if (!fdt) return -EINVAL;
+  memset(fdt, 0, sizeof(*fdt));
+  fdt->structure_cap = ANT_FDT_STRUCTURE_BYTES;
+  fdt->strings_cap = ANT_FDT_STRINGS_BYTES;
+  fdt->structure = calloc(1, fdt->structure_cap);
+  fdt->strings = calloc(1, fdt->strings_cap);
+  if (!fdt->structure || !fdt->strings) {
+    ant_fdt_free(fdt);
+    return -ENOMEM;
+  }
+  return 0;
+}
+
+void ant_fdt_free(ant_fdt_t *fdt) {
+  if (!fdt) return;
+  free(fdt->structure);
+  free(fdt->strings);
+  memset(fdt, 0, sizeof(*fdt));
+}
+
+static int ant_fdt_grow(unsigned char **buf, size_t *cap, size_t used, size_t need) {
+  if (need <= *cap - used) return 0;
+  size_t new_cap = *cap ? *cap : 256u;
+  while (need > new_cap - used) {
+    if (new_cap >= ANT_HVF_DTB_MAX) return -ENOSPC;
+    size_t next = new_cap * 2u;
+    new_cap = next > ANT_HVF_DTB_MAX ? ANT_HVF_DTB_MAX : next;
+  }
+  unsigned char *new_buf = realloc(*buf, new_cap);
+  if (!new_buf) return -ENOMEM;
+  memset(new_buf + *cap, 0, new_cap - *cap);
+  *buf = new_buf;
+  *cap = new_cap;
+  return 0;
+}
+
 int ant_fdt_reserve(ant_fdt_t *fdt, size_t len, unsigned char **out) {
   size_t aligned = ant_align4(len);
-  if (aligned > sizeof(fdt->structure) - fdt->structure_len) return -ENOSPC;
+  int rc = ant_fdt_grow(&fdt->structure, &fdt->structure_cap, fdt->structure_len, aligned);
+  if (rc != 0) return rc;
   *out = fdt->structure + fdt->structure_len;
   memset(*out, 0, aligned);
   fdt->structure_len += aligned;
@@ -21,7 +59,8 @@ int ant_fdt_u32(ant_fdt_t *fdt, uint32_t val) {
 
 int ant_fdt_string_offset(ant_fdt_t *fdt, const char *name) {
   size_t len = strlen(name) + 1;
-  if (len > sizeof(fdt->strings) - fdt->strings_len) return -ENOSPC;
+  int rc = ant_fdt_grow(&fdt->strings, &fdt->strings_cap, fdt->strings_len, len);
+  if (rc != 0) return rc;
   int off = (int)fdt->strings_len;
   memcpy(fdt->strings + fdt->strings_len, name, len);
   fdt->strings_len += len;
@@ -88,91 +127,92 @@ int ant_fdt_prop_reg64(ant_fdt_t *fdt, const char *name, const uint64_t *cells, 
 
 int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   ant_fdt_t fdt;
-  memset(&fdt, 0, sizeof(fdt));
+  int rc = ant_fdt_init(&fdt);
+  if (rc != 0) goto out;
 
-  int rc = ant_fdt_begin(&fdt, "");
-  if (rc != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "linux,dummy-virt")) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 2)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "interrupt-parent", 1)) != 0) return rc;
+  rc = ant_fdt_begin(&fdt, "");
+  if (rc != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "linux,dummy-virt")) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 2)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "interrupt-parent", 1)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "cpus")) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 0)) != 0) return rc;
-  if ((rc = ant_fdt_begin(&fdt, "cpu@0")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "cpu")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,arm-v8")) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "cpus")) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 2)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 0)) != 0) goto out;
+  if ((rc = ant_fdt_begin(&fdt, "cpu@0")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "cpu")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,arm-v8")) != 0) goto out;
   uint64_t cpu_reg[] = { 0 };
-  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", cpu_reg, 1)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", cpu_reg, 1)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "timer")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,armv8-timer")) != 0) return rc;
-  if ((rc = ant_fdt_prop_null(&fdt, "always-on")) != 0) return rc;
-  if (vm->cntfrq == 0 || vm->cntfrq > UINT32_MAX) return -EINVAL;
-  if ((rc = ant_fdt_prop_u32(&fdt, "clock-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "timebase-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "timer")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,armv8-timer")) != 0) goto out;
+  if ((rc = ant_fdt_prop_null(&fdt, "always-on")) != 0) goto out;
+  if (vm->cntfrq == 0 || vm->cntfrq > UINT32_MAX) { rc = -EINVAL; goto out; }
+  if ((rc = ant_fdt_prop_u32(&fdt, "clock-frequency", (uint32_t)vm->cntfrq)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "timebase-frequency", (uint32_t)vm->cntfrq)) != 0) goto out;
   uint32_t timer_irq[] = {
     1, 13, 4,
     1, 14, 4,
     1, 11, 4,
     1, 10, 4,
   };
-  if ((rc = ant_fdt_prop_cells(&fdt, "interrupts", timer_irq, sizeof(timer_irq) / sizeof(timer_irq[0]))) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_cells(&fdt, "interrupts", timer_irq, sizeof(timer_irq) / sizeof(timer_irq[0]))) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "memory@40000000")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "memory")) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "memory@40000000")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "memory")) != 0) goto out;
   uint64_t mem_reg[] = { ANT_HVF_GUEST_BASE, vm->mem_size };
-  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", mem_reg, 2)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", mem_reg, 2)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "chosen")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "bootargs", "")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "stdout-path", "/uart@9000000")) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "chosen")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "bootargs", "")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "stdout-path", "/uart@9000000")) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "intc")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,gic-v3")) != 0) return rc;
-  if ((rc = ant_fdt_prop_null(&fdt, "interrupt-controller")) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#interrupt-cells", 3)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "phandle", 1)) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "intc")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,gic-v3")) != 0) goto out;
+  if ((rc = ant_fdt_prop_null(&fdt, "interrupt-controller")) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#interrupt-cells", 3)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "phandle", 1)) != 0) goto out;
   uint64_t gic_reg[] = { ANT_HVF_GIC_DIST_BASE, 0x10000, ANT_HVF_GIC_REDIST_BASE, 0x200000 };
-  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", gic_reg, 4)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", gic_reg, 4)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "uart@9000000")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,pl011")) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "uart@9000000")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,pl011")) != 0) goto out;
   uint64_t uart_reg[] = { ANT_HVF_UART_BASE, 0x1000 };
-  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", uart_reg, 2)) != 0) return rc;
+  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", uart_reg, 2)) != 0) goto out;
   uint32_t uart_irq[] = { 0, 1, 4 };
-  if ((rc = ant_fdt_prop_cells(&fdt, "interrupts", uart_irq, 3)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_cells(&fdt, "interrupts", uart_irq, 3)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_begin(&fdt, "pcie@3f000000")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "pci-host-ecam-generic")) != 0) return rc;
-  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "pci")) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 3)) != 0) return rc;
-  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 2)) != 0) return rc;
+  if ((rc = ant_fdt_begin(&fdt, "pcie@3f000000")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "compatible", "pci-host-ecam-generic")) != 0) goto out;
+  if ((rc = ant_fdt_prop_string(&fdt, "device_type", "pci")) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#address-cells", 3)) != 0) goto out;
+  if ((rc = ant_fdt_prop_u32(&fdt, "#size-cells", 2)) != 0) goto out;
   uint64_t pcie_reg[] = { ANT_HVF_PCIE_ECAM_BASE, ANT_HVF_PCIE_ECAM_SIZE };
-  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", pcie_reg, 2)) != 0) return rc;
+  if ((rc = ant_fdt_prop_reg64(&fdt, "reg", pcie_reg, 2)) != 0) goto out;
   uint32_t bus_range[] = { 0, 0 };
-  if ((rc = ant_fdt_prop_cells(&fdt, "bus-range", bus_range, 2)) != 0) return rc;
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
+  if ((rc = ant_fdt_prop_cells(&fdt, "bus-range", bus_range, 2)) != 0) goto out;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
 
-  if ((rc = ant_fdt_end(&fdt)) != 0) return rc;
-  if ((rc = ant_fdt_u32(&fdt, FDT_END)) != 0) return rc;
+  if ((rc = ant_fdt_end(&fdt)) != 0) goto out;
+  if ((rc = ant_fdt_u32(&fdt, FDT_END)) != 0) goto out;
 
   size_t off_mem = sizeof(ant_fdt_header_t);
   size_t off_struct = ant_align4(off_mem + 16);
   size_t off_strings = off_struct + fdt.structure_len;
   size_t total = off_strings + fdt.strings_len;
-  if (total > ANT_HVF_DTB_MAX) return -ENOSPC;
+  if (total > ANT_HVF_DTB_MAX) { rc = -ENOSPC; goto out; }
 
   unsigned char *dtb = ant_hvf_guest_ptr(vm, ANT_HVF_DTB_BASE, total);
-  if (!dtb) return -EINVAL;
+  if (!dtb) { rc = -EINVAL; goto out; }
   memset(dtb, 0, ANT_HVF_DTB_MAX);
 
   ant_fdt_header_t hdr = {
@@ -190,7 +230,10 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   memcpy(dtb, &hdr, sizeof(hdr));
   memcpy(dtb + off_struct, fdt.structure, fdt.structure_len);
   memcpy(dtb + off_strings, fdt.strings, fdt.strings_len);
-  return 0;
+  rc = 0;
+out:
+  ant_fdt_free(&fdt);
+  return rc;
 }
 
 #endif

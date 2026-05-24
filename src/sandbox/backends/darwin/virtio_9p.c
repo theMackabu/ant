@@ -275,6 +275,30 @@ void ant_hvf_9p_file_cache_clear(ant_hvf_9p_device_t *dev) {
   dev->file_cache_bytes = 0;
 }
 
+int ant_hvf_9p_buffers_init(ant_hvf_9p_device_t *dev, size_t capacity) {
+  if (!dev) return -EINVAL;
+  if (capacity < ANT_HVF_9P_MIN_MSIZE || capacity > ANT_HVF_9P_MAX_MSIZE) return -EINVAL;
+  dev->req_buf = malloc(capacity);
+  dev->resp_buf = malloc(capacity);
+  if (!dev->req_buf || !dev->resp_buf) {
+    ant_hvf_9p_buffers_free(dev);
+    return -ENOMEM;
+  }
+  dev->msize = capacity < ANT_HVF_9P_DEFAULT_MSIZE ? capacity : ANT_HVF_9P_DEFAULT_MSIZE;
+  dev->buf_capacity = capacity;
+  return 0;
+}
+
+void ant_hvf_9p_buffers_free(ant_hvf_9p_device_t *dev) {
+  if (!dev) return;
+  free(dev->req_buf);
+  free(dev->resp_buf);
+  dev->req_buf = NULL;
+  dev->resp_buf = NULL;
+  dev->msize = 0;
+  dev->buf_capacity = 0;
+}
+
 static int ant_hvf_9p_stat_cache_grow(ant_hvf_9p_device_t *dev) {
   size_t old_capacity = dev->stat_cache_capacity;
   size_t new_capacity = old_capacity ? old_capacity * 2u : 1024u;
@@ -751,9 +775,12 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       uint32_t msize = ant_hvf_load32(req + 7);
       uint16_t vlen = ant_hvf_load16(req + 11);
       if (13u + vlen > req_len || 13u + vlen > resp_cap) return ant_hvf_9p_error(resp, tag, EINVAL);
+      if (msize < ANT_HVF_9P_MIN_MSIZE) msize = ANT_HVF_9P_MIN_MSIZE;
+      if (msize > dev->buf_capacity) msize = (uint32_t)dev->buf_capacity;
+      dev->msize = msize;
       uint32_t size = 13u + vlen;
       ant_hvf_9p_hdr(resp, size, P9_RVERSION, tag);
-      ant_hvf_store32(resp + 7, msize < ANT_HVF_9P_MSIZE ? msize : ANT_HVF_9P_MSIZE);
+      ant_hvf_store32(resp + 7, (uint32_t)dev->msize);
       ant_hvf_store16(resp + 11, vlen);
       memcpy(resp + 13, req + 13, vlen);
       return size;
@@ -847,7 +874,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       if (open_rc != 0) return ant_hvf_9p_error(resp, tag, ENOENT);
       ant_hvf_9p_hdr(resp, 24, P9_RLOPEN, tag);
       ant_hvf_9p_qid_mode(resp + 7, st.st_mode, f->path);
-      ant_hvf_store32(resp + 20, ANT_HVF_9P_IOUNIT);
+      ant_hvf_store32(resp + 20, (uint32_t)(dev->msize - 11u));
       return 24;
     }
     case P9_TREAD: {
@@ -942,7 +969,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
       ant_hvf_9p_hdr(resp, 24, P9_RLCREATE, tag);
       ant_hvf_9p_qid_mode(resp + 7, st.st_mode, f->path);
-      ant_hvf_store32(resp + 20, ANT_HVF_9P_IOUNIT);
+      ant_hvf_store32(resp + 20, (uint32_t)(dev->msize - 11u));
       return 24;
     }
     case P9_TMKDIR: {
@@ -1310,16 +1337,17 @@ int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) {
     if (rc != 0) return rc;
     uint16_t head = ant_hvf_load16(head_raw);
 
-    unsigned char req[ANT_HVF_9P_MSIZE];
-    unsigned char resp[ANT_HVF_9P_MSIZE];
+    if (!dev->req_buf || !dev->resp_buf || dev->msize == 0) return -ENOMEM;
+    unsigned char *req = dev->req_buf;
+    unsigned char *resp = dev->resp_buf;
     ant_hvf_iov_t writes[ANT_HVF_9P_MAX_WRITE_IOV];
     size_t req_len = 0;
     size_t writes_len = 0;
     rc = ant_hvf_9p_read_chain(vm, desc_base, head, q->size,
-                               req, sizeof(req), &req_len, writes, 8, &writes_len);
+                               req, dev->msize, &req_len, writes, ANT_HVF_9P_MAX_WRITE_IOV, &writes_len);
     if (rc != 0) return rc;
     uint64_t start_ns = ant_hvf_9p_now_ns();
-    uint32_t resp_len = ant_hvf_9p_handle(dev, req, req_len, resp, sizeof(resp));
+    uint32_t resp_len = ant_hvf_9p_handle(dev, req, req_len, resp, dev->msize);
     uint64_t end_ns = ant_hvf_9p_now_ns();
     if (start_ns && end_ns >= start_ns) {
       uint64_t elapsed = end_ns - start_ns;
