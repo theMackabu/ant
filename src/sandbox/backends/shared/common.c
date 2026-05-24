@@ -122,7 +122,7 @@ int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path) {
 
   if (memcmp(eh.ident, "\177ELF", 4) != 0 || eh.ident[4] != 2 || eh.machine != ANT_HVF_ELF_MACHINE) {
     close(fd);
-    fprintf(stderr, "sandbox vm: Nanos kernel is not an " ANT_HVF_ELF_MACHINE_NAME " ELF image: %s\n", path);
+    fprintf(stderr, "sandbox vm: sandbox kernel is not an " ANT_HVF_ELF_MACHINE_NAME " ELF image: %s\n", path);
     return -EINVAL;
   }
 

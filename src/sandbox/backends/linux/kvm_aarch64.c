@@ -1131,7 +1131,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
 
   ant_kvm_install_wakeup_signal();
   ant_hvf_verbosef(vm,
-                   "loaded Nanos kernel (%lld bytes) entry=0x%llx cntfrq=%llu gic=v%d",
+                   "loaded sandbox kernel (%lld bytes) entry=0x%llx cntfrq=%llu gic=v%d",
                    (long long)kernel_size,
                    (unsigned long long)vm->kernel_entry,
                    (unsigned long long)vm->cntfrq,

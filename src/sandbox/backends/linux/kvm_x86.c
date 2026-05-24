@@ -526,7 +526,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   if (rc != 0) goto fail;
   rc = ant_kvm_find_symbol(config->kernel_path, "pvh_start32", &vm->pvh_entry32);
   if (rc != 0) {
-    fprintf(stderr, "sandbox vm: failed to find pvh_start32 in Nanos kernel\n");
+    fprintf(stderr, "sandbox vm: failed to find pvh_start32 in sandbox kernel\n");
     goto fail;
   }
   rc = ant_kvm_write_pvh_start(vm);
@@ -556,7 +556,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   ant_kvm_install_wakeup_signal();
 
   ant_hvf_verbosef(vm,
-                   "loaded Nanos kernel (%lld bytes) pvh_start32=0x%llx",
+                   "loaded sandbox kernel (%lld bytes) pvh_start32=0x%llx",
                    (long long)kernel_size,
                    (unsigned long long)vm->pvh_entry32);
   *session_out = session;

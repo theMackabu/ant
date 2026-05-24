@@ -43,6 +43,7 @@ sandbox_flag_boot_timeout = "limit sandbox boot and request startup time"
 sandbox_flag_request_timeout = "alias for --boot-timeout-ms"
 sandbox_flag_verbose = "enable verbose sandbox output"
 sandbox_flag_help = "display this help and exit"
+sandbox_arg_ms_invalid = "{error}: <bold>Option <cyan>%s</> must be a non-negative millisecond value\n"
 
 watch_spawn_failed = "{error}: <bold>Failed to spawn watched process:</> %s\n"
 watch_entrypoint_missing = "{error}: <bold>--watch requires a local file entrypoint.</>\n"

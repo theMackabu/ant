@@ -7,6 +7,7 @@
 #include "sandbox/vm.h"
 #include "sandbox/cli.h"
 #include "messages.h"
+#include "utils.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -30,14 +31,14 @@ typedef struct {
 
 static int sandbox_parse_ms_option(const char *name, const char *value, unsigned int *out) {
   if (!value || !value[0]) {
-    fprintf(stderr, "sandbox: %s needs milliseconds\n", name);
+    crfprintf(stderr, msg.arg_opt_needed, name);
     return -EINVAL;
   }
   errno = 0;
   char *end = NULL;
   unsigned long parsed = strtoul(value, &end, 10);
   if (errno != 0 || !end || *end != '\0' || parsed > UINT_MAX) {
-    fprintf(stderr, "sandbox: %s must be a non-negative millisecond value\n", name);
+    crfprintf(stderr, msg.sandbox_arg_ms_invalid, name);
     return -EINVAL;
   }
   *out = (unsigned int)parsed;
@@ -54,7 +55,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
     const char *arg = argv[i];
     if (strcmp(arg, "--") == 0) {
       if (i + 1 >= argc) {
-        fprintf(stderr, "sandbox: missing script after --\n");
+        crfprintf(stderr, msg.arg_opt_needed, "--");
         return -EINVAL;
       }
       opts->script_index = i + 1;
@@ -75,7 +76,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       opts->eval_mode = true;
       if (strcmp(arg, "-e") == 0 || strcmp(arg, "--eval") == 0) {
         if (i + 1 >= argc) {
-          fprintf(stderr, "sandbox: %s needs source\n", arg);
+          crfprintf(stderr, msg.arg_opt_needed, arg);
           return -EINVAL;
         }
         opts->eval_source = argv[++i];
@@ -92,7 +93,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       const char *name = "--timeout-ms";
       if (strcmp(arg, "-t") == 0 || strcmp(arg, "--timeout") == 0 || strcmp(arg, "--timeout-ms") == 0) {
         if (i + 1 >= argc) {
-          fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
+          crfprintf(stderr, msg.arg_opt_needed, arg);
           return -EINVAL;
         }
         value = argv[++i];
@@ -119,7 +120,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
                          strncmp(arg, "--request", 9) == 0) ? "--request-timeout-ms" : "--boot-timeout-ms";
       if (strcmp(arg, "-b") == 0 || strcmp(arg, "-r") == 0 || strchr(arg, '=') == NULL) {
         if (i + 1 >= argc) {
-          fprintf(stderr, "sandbox: %s needs milliseconds\n", arg);
+          crfprintf(stderr, msg.arg_opt_needed, arg);
           return -EINVAL;
         }
         value = argv[++i];
@@ -144,7 +145,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       const char *value = NULL;
       if (strcmp(arg, "-f") == 0 || strcmp(arg, "--forward") == 0) {
         if (i + 1 >= argc) {
-          fprintf(stderr, "sandbox: --forward needs a port or host:guest pair\n");
+          crfprintf(stderr, msg.arg_opt_needed, arg);
           return -EINVAL;
         }
         value = argv[++i];
@@ -173,7 +174,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
       if (strcmp(arg, "-m") == 0 || strcmp(arg, "-w") == 0 ||
           strcmp(arg, "--mount") == 0 || strcmp(arg, "--write") == 0) {
         if (i + 1 >= argc) {
-          fprintf(stderr, "sandbox: %s needs host:guest\n", arg);
+          crfprintf(stderr, msg.arg_opt_needed, arg);
           return -EINVAL;
         }
         value = argv[++i];
@@ -192,7 +193,7 @@ static int sandbox_parse_options(int argc, char **argv, ant_sandbox_cli_options_
     }
 
     if (arg[0] == '-') {
-      fprintf(stderr, "sandbox: unknown option '%s'\n", arg);
+      crfprintf(stderr, msg.arg_invalid, arg);
       return -EINVAL;
     }
 
@@ -305,9 +306,20 @@ int ant_sandbox_cmd(int argc, char **argv) {
   ant_sandbox_cli_options_t opts;
   int rc = sandbox_parse_options(argc, argv, &opts);
   if (rc != 0 || (!opts.eval_mode && opts.script_index < 0)) {
+    if (rc != 0) fputc('\n', stderr);
     sandbox_print_usage(stderr);
     ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
+  }
+
+  if (!opts.eval_mode) {
+    char *resolved_file = resolve_js_file(argv[opts.script_index]);
+    if (!resolved_file) {
+      crfprintf(stderr, msg.module_not_found, argv[opts.script_index]);
+      ant_sandbox_launch_options_cleanup(&opts.launch);
+      return EXIT_FAILURE;
+    }
+    free(resolved_file);
   }
 
   ant_sandbox_assets_t assets;
