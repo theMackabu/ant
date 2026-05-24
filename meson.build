@@ -30,6 +30,7 @@ sandbox_shared_sources = files(
   'src/sandbox/backends/shared/virtio_9p.c',
   'src/sandbox/backends/shared/virtio_blk.c',
   'src/sandbox/backends/shared/virtio_net.c',
+  'src/sandbox/backends/shared/virtio_rng.c',
   'src/sandbox/backends/shared/virtio_vsock.c',
 )
 if host_machine.system() == 'darwin'
@@ -191,6 +192,13 @@ if host_machine.system() == 'darwin'
   executable(
     'test-sandbox-virtio-blk',
     files('tests/test_sandbox_virtio_blk.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-virtio-rng',
+    files('tests/test_sandbox_virtio_rng.c'),
     dependencies: libant_dep,
     build_by_default: false
   )

@@ -11,6 +11,7 @@
 #include "sandbox_backend/virtio_9p.h"
 #include "sandbox_backend/virtio_blk.h"
 #include "sandbox_backend/virtio_net.h"
+#include "sandbox_backend/virtio_rng.h"
 #include "sandbox_backend/virtio_vsock.h"
 #include "sandbox_backend/pci.h"
 
@@ -53,6 +54,8 @@
 #  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
 #  define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
 #  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_VIRTIO_RNG_BAR 0xf000c000ull
+#  define ANT_HVF_VIRTIO_RNG_SLOT 12u
 #  define ANT_HVF_ELF_MACHINE 62u
 #  define ANT_HVF_ELF_MACHINE_NAME "x86_64"
 #  define ANT_KVM_COM1_PORT 0x3f8u
@@ -76,6 +79,8 @@
 #  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
 #  define ANT_HVF_VIRTIO_VSOCK_BAR 0x1004b000ull
 #  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_VIRTIO_RNG_BAR 0x1004c000ull
+#  define ANT_HVF_VIRTIO_RNG_SLOT 12u
 #  define ANT_HVF_GIC_DIST_BASE 0x08000000ull
 #  define ANT_HVF_GIC_CPU_BASE 0x08010000ull
 #  define ANT_HVF_GIC_REDIST_BASE 0x080a0000ull
@@ -96,6 +101,8 @@
 #  define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
 #  define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
 #  define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#  define ANT_HVF_VIRTIO_RNG_BAR 0xf000c000ull
+#  define ANT_HVF_VIRTIO_RNG_SLOT 12u
 #  define ANT_HVF_ELF_MACHINE 0u
 #  define ANT_HVF_ELF_MACHINE_NAME "supported Linux"
 #endif
@@ -187,6 +194,7 @@ struct ant_hvf_vm {
   bool vcpu_thread_valid;
   ant_hvf_virtio_device_t blk;
   ant_hvf_virtio_device_t net;
+  ant_hvf_virtio_device_t rng;
   bool net_enabled;
   bool net_started;
   ant_hvf_nat_t *net_nat;

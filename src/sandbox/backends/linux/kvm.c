@@ -659,6 +659,19 @@ static int ant_kvm_init_devices(ant_hvf_vm_t *vm, const ant_sandbox_vm_config_t 
                       ANT_VIRTIO_VSOCK_QUEUE_COUNT,
                       ANT_VIRTIO_VSOCK_QUEUE_SIZE,
                       8);
+  ant_hvf_virtio_init(&vm->rng,
+                      ANT_HVF_VIRTIO_KIND_RNG,
+                      "virtio-rng",
+                      ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
+                      ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
+                      ANT_HVF_VIRTIO_RNG_SLOT,
+                      0xff,
+                      0x00,
+                      (uint32_t)ANT_HVF_VIRTIO_RNG_BAR,
+                      0,
+                      1,
+                      ANT_VIRTIO_RNG_QUEUE_SIZE,
+                      0);
   vm->vsock.capabilities = config->capabilities;
   for (size_t i = 0; i < vm->p9_count; i++) {
     ant_hvf_virtio_init(&vm->p9[i].virtio,
@@ -1904,6 +1917,19 @@ static int ant_kvm_init_devices(ant_hvf_vm_t *vm, const ant_sandbox_vm_config_t 
                       ANT_VIRTIO_VSOCK_QUEUE_COUNT,
                       ANT_VIRTIO_VSOCK_QUEUE_SIZE,
                       8);
+  ant_hvf_virtio_init(&vm->rng,
+                      ANT_HVF_VIRTIO_KIND_RNG,
+                      "virtio-rng",
+                      ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
+                      ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY,
+                      ANT_HVF_VIRTIO_RNG_SLOT,
+                      0xff,
+                      0x00,
+                      (uint32_t)ANT_HVF_VIRTIO_RNG_BAR,
+                      0,
+                      1,
+                      ANT_VIRTIO_RNG_QUEUE_SIZE,
+                      0);
   vm->vsock.capabilities = config->capabilities;
   for (size_t i = 0; i < vm->p9_count; i++) {
     ant_hvf_virtio_init(&vm->p9[i].virtio,

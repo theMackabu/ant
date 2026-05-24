@@ -28,7 +28,7 @@ bool ant_hvf_is_virtio_slot(unsigned bus, unsigned slot, unsigned fn) {
                  slot < ANT_HVF_VIRTIO_9P_SLOT_BASE + ANT_HVF_VIRTIO_9P_MAX;
   return bus == 0 && fn == 0 &&
          (slot == ANT_HVF_VIRTIO_BLK_SLOT || slot == ANT_HVF_VIRTIO_NET_SLOT ||
-          p9_slot || slot == ANT_HVF_VIRTIO_VSOCK_SLOT);
+          p9_slot || slot == ANT_HVF_VIRTIO_VSOCK_SLOT || slot == ANT_HVF_VIRTIO_RNG_SLOT);
 }
 
 ant_hvf_virtio_device_t *ant_hvf_virtio_for_slot(ant_hvf_vm_t *vm, unsigned slot) {
@@ -37,6 +37,7 @@ ant_hvf_virtio_device_t *ant_hvf_virtio_for_slot(ant_hvf_vm_t *vm, unsigned slot
   ant_hvf_9p_device_t *p9 = ant_hvf_p9_for_slot(vm, slot);
   if (p9) return &p9->virtio;
   if (slot == ANT_HVF_VIRTIO_VSOCK_SLOT) return &vm->vsock.virtio;
+  if (slot == ANT_HVF_VIRTIO_RNG_SLOT) return &vm->rng;
   return NULL;
 }
 
@@ -123,18 +124,20 @@ void ant_hvf_virtio_build_config(ant_hvf_virtio_device_t *dev, unsigned char cfg
                          true);
   ant_hvf_virtio_cfg_cap(cfg,
                          ANT_VIRTIO_PCI_CAP_ISR_POS,
-                         ANT_VIRTIO_PCI_CAP_DEVICE_POS,
+                         dev->device_config_len ? ANT_VIRTIO_PCI_CAP_DEVICE_POS : ANT_VIRTIO_PCI_CAP_MSIX_POS,
                          ANT_VIRTIO_PCI_CAP_ISR_CFG,
                          ANT_HVF_VIRTIO_ISR_CFG,
                          1u,
                          false);
-  ant_hvf_virtio_cfg_cap(cfg,
-                         ANT_VIRTIO_PCI_CAP_DEVICE_POS,
-                         ANT_VIRTIO_PCI_CAP_MSIX_POS,
-                         ANT_VIRTIO_PCI_CAP_DEVICE_CFG,
-                         ANT_HVF_VIRTIO_DEVICE_CFG,
-                         dev->device_config_len,
-                         false);
+  if (dev->device_config_len) {
+    ant_hvf_virtio_cfg_cap(cfg,
+                           ANT_VIRTIO_PCI_CAP_DEVICE_POS,
+                           ANT_VIRTIO_PCI_CAP_MSIX_POS,
+                           ANT_VIRTIO_PCI_CAP_DEVICE_CFG,
+                           ANT_HVF_VIRTIO_DEVICE_CFG,
+                           dev->device_config_len,
+                           false);
+  }
 
   cfg[ANT_VIRTIO_PCI_CAP_MSIX_POS + 0] = ANT_PCI_CAP_MSIX;
   cfg[ANT_VIRTIO_PCI_CAP_MSIX_POS + 1] = 0;

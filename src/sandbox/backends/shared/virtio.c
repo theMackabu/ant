@@ -42,6 +42,7 @@ ant_hvf_virtio_device_t *ant_hvf_virtio_for_bar(ant_hvf_vm_t *vm, uint64_t addr)
     &vm->blk,
     vm->net_enabled ? &vm->net : NULL,
     &vm->vsock.virtio,
+    &vm->rng,
   };
   for (size_t i = 0; i < sizeof(devices) / sizeof(devices[0]); i++) {
     ant_hvf_virtio_device_t *dev = devices[i];
@@ -130,6 +131,8 @@ bool ant_hvf_virtio_device_config_read(ant_hvf_vm_t *vm,
     }
     case ANT_HVF_VIRTIO_KIND_VSOCK:
       ant_hvf_store64(cfg, ANT_HVF_VSOCK_GUEST_CID);
+      break;
+    case ANT_HVF_VIRTIO_KIND_RNG:
       break;
   }
 
@@ -286,6 +289,9 @@ bool ant_hvf_virtio_common_write(ant_hvf_vm_t *vm,
         break;
       case ANT_HVF_VIRTIO_KIND_VSOCK:
         ant_hvf_virtio_vsock_notify(vm, queue);
+        break;
+      case ANT_HVF_VIRTIO_KIND_RNG:
+        ant_hvf_virtio_rng_notify(vm, dev);
         break;
     }
     return true;

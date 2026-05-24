@@ -12,6 +12,7 @@
 #define ANT_VIRTIO_PCI_DEVICE_MODERN_BASE 0x1040u
 #define ANT_VIRTIO_PCI_SUBDEVICE_NET 1u
 #define ANT_VIRTIO_PCI_SUBDEVICE_BLOCK 2u
+#define ANT_VIRTIO_PCI_SUBDEVICE_ENTROPY 4u
 #define ANT_VIRTIO_PCI_SUBDEVICE_9P 9u
 #define ANT_VIRTIO_PCI_SUBDEVICE_VSOCK 19u
 #define ANT_VIRTIO_PCI_SUBVENDOR 0x1af4u
@@ -50,6 +51,7 @@ typedef enum {
   ANT_HVF_VIRTIO_KIND_NET,
   ANT_HVF_VIRTIO_KIND_9P,
   ANT_HVF_VIRTIO_KIND_VSOCK,
+  ANT_HVF_VIRTIO_KIND_RNG,
 } ant_hvf_virtio_kind_t;
 
 typedef struct {
@@ -171,4 +173,3 @@ int ant_hvf_vring_write_chain(ant_hvf_vm_t *vm,
                               const unsigned char *data,
                               uint32_t len,
                               uint32_t *used_len);
-

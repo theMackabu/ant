@@ -12,6 +12,7 @@
 #include "sandbox_backend/virtio_9p.h"
 #include "sandbox_backend/virtio_blk.h"
 #include "sandbox_backend/virtio_net.h"
+#include "sandbox_backend/virtio_rng.h"
 #include "sandbox_backend/virtio_vsock.h"
 #include "sandbox_backend/pci.h"
 
@@ -62,6 +63,7 @@ struct ant_hvf_vm {
   hv_vcpu_exit_t *vcpu_exit;
   ant_hvf_virtio_device_t blk;
   ant_hvf_virtio_device_t net;
+  ant_hvf_virtio_device_t rng;
   bool net_enabled;
   bool net_started;
   ant_hvf_nat_t *net_nat;
