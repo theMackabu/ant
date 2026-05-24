@@ -10,6 +10,10 @@
 #if defined(__aarch64__)
 
 #define ANT_HVF_DTB_MAX 0x20000u
+#define ANT_FDT_STRUCTURE_BYTES 8192u
+#define ANT_FDT_STRINGS_BYTES 2048u
+#define ANT_FDT_MAX_PROP_CELLS_32 32u
+#define ANT_FDT_MAX_PROP_CELLS_64 16u
 
 #define FDT_MAGIC 0xd00dfeedu
 #define FDT_BEGIN_NODE 1u
@@ -31,8 +35,8 @@ typedef struct {
 } ant_fdt_header_t;
 
 typedef struct {
-  unsigned char structure[8192];
-  unsigned char strings[2048];
+  unsigned char structure[ANT_FDT_STRUCTURE_BYTES];
+  unsigned char strings[ANT_FDT_STRINGS_BYTES];
   size_t structure_len;
   size_t strings_len;
 } ant_fdt_t;

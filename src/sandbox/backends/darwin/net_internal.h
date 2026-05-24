@@ -35,11 +35,17 @@
 #define ANT_DNS_PORT 53u
 #define ANT_NAT_INBOUND_PORT_FIRST 49152u
 #define ANT_NAT_INBOUND_PORT_LAST  65535u
+#define ANT_NET_MAC_BYTES ANT_HVF_MAC_BYTES
+#define ANT_DHCP_PACKET_BYTES 548u
+#define ANT_DNS_NAME_BYTES 256u
+#define ANT_NET_STANDARD_PACKET_BYTES 1500u
+#define ANT_NAT_WAKE_DRAIN_BYTES 64u
+#define ANT_NAT_WAKE_PIPE_FDS 2u
 
 
 typedef struct __attribute__((packed)) {
-  uint8_t dst[6];
-  uint8_t src[6];
+  uint8_t dst[ANT_NET_MAC_BYTES];
+  uint8_t src[ANT_NET_MAC_BYTES];
   uint16_t ethertype;
 } ant_eth_t;
 
@@ -49,9 +55,9 @@ typedef struct __attribute__((packed)) {
   uint8_t hlen;
   uint8_t plen;
   uint16_t op;
-  uint8_t sha[6];
+  uint8_t sha[ANT_NET_MAC_BYTES];
   uint32_t spa;
-  uint8_t tha[6];
+  uint8_t tha[ANT_NET_MAC_BYTES];
   uint32_t tpa;
 } ant_arp_t;
 
@@ -98,10 +104,10 @@ uint16_t ant_net_l4_csum(uint32_t src, uint32_t dst, uint8_t proto, const void *
 
 void ant_hvf_net_note_rx(ant_hvf_vm_t *vm);
 void ant_net_enqueue(ant_hvf_vm_t *vm, const void *data, uint32_t len);
-void ant_net_set_guest(ant_hvf_vm_t *vm, const uint8_t mac[6]);
-void ant_net_send_udp(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, const void *payload, uint16_t payload_len);
-void ant_net_send_tcp(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack, uint8_t flags, const void *payload, uint16_t payload_len);
-void ant_net_send_rst(ant_hvf_vm_t *vm, const uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack);
+void ant_net_set_guest(ant_hvf_vm_t *vm, const uint8_t mac[ANT_NET_MAC_BYTES]);
+void ant_net_send_udp(ant_hvf_vm_t *vm, const uint8_t dst_mac[ANT_NET_MAC_BYTES], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, const void *payload, uint16_t payload_len);
+void ant_net_send_tcp(ant_hvf_vm_t *vm, const uint8_t dst_mac[ANT_NET_MAC_BYTES], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack, uint8_t flags, const void *payload, uint16_t payload_len);
+void ant_net_send_rst(ant_hvf_vm_t *vm, const uint8_t dst_mac[ANT_NET_MAC_BYTES], uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port, uint32_t seq, uint32_t ack);
 void ant_net_handle_frame(ant_hvf_vm_t *vm, const unsigned char *frame, size_t frame_len);
 void ant_nat_handle_tcp(ant_hvf_nat_t *nat, const ant_eth_t *eth, const ant_ipv4_t *ip, const ant_tcp_t *tcp, const unsigned char *payload, size_t payload_len);
 void ant_nat_handle_udp(ant_hvf_nat_t *nat, const ant_eth_t *eth, const ant_ipv4_t *ip, const ant_udp_t *udp, const unsigned char *payload, size_t payload_len);

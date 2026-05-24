@@ -24,6 +24,9 @@
 #define ANT_HVF_9P_FILE_CACHE_MAX_FILE (256u * 1024u)
 #define ANT_HVF_9P_FILE_CACHE_MAX_BYTES (16u * 1024u * 1024u)
 #define ANT_HVF_9P_FILE_CACHE_INITIAL 256u
+#define ANT_HVF_9P_TYPE_COUNT 256u
+#define ANT_HVF_9P_MAX_WRITE_IOV 8u
+#define ANT_HVF_9P_REPORT_TOP_COUNT 8u
 
 #define P9_RLERROR 7u
 #define P9_TSTATFS 8u
@@ -106,7 +109,7 @@ typedef struct {
 typedef struct {
   uint64_t requests;
   uint64_t errors;
-  uint64_t op_counts[256];
+  uint64_t op_counts[ANT_HVF_9P_TYPE_COUNT];
   uint64_t stat_hits;
   uint64_t stat_misses;
   uint64_t stat_cache_clears;

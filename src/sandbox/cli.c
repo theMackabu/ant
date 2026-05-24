@@ -186,7 +186,11 @@ static void sandbox_print_vm_failure(const ant_sandbox_vm_result_t *result, int 
     case ANT_SANDBOX_VM_RESULT_GUEST_EXIT:
       break;
     case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
+#if defined(__APPLE__) && !defined(__aarch64__)
+      fprintf(stderr, "sandbox: Hypervisor.framework sandbox backend requires Apple Silicon\n");
+#else
       fprintf(stderr, "sandbox: VM backend is not available\n");
+#endif
       break;
     case ANT_SANDBOX_VM_RESULT_CONFIG_ERROR:
       fprintf(stderr, "sandbox: VM configuration failed (%d)\n", result->code);

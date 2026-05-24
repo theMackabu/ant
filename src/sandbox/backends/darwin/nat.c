@@ -35,7 +35,7 @@ struct ant_hvf_nat_tcp {
   bool guest_fin_seen;
   bool host_eof;
   bool host_fin_sent;
-  uint8_t guest_mac[6];
+  uint8_t guest_mac[ANT_NET_MAC_BYTES];
   unsigned char *pending;
   size_t pending_off;
   size_t pending_len;
@@ -54,7 +54,7 @@ struct ant_hvf_nat_udp {
   uint16_t guest_port;
   uint32_t peer_ip;
   uint16_t peer_port;
-  uint8_t guest_mac[6];
+  uint8_t guest_mac[ANT_NET_MAC_BYTES];
 };
 
 struct ant_hvf_nat {
@@ -64,7 +64,7 @@ struct ant_hvf_nat {
   pthread_t thread;
   bool thread_started;
   bool stop;
-  int wake_pipe[2];
+  int wake_pipe[ANT_NAT_WAKE_PIPE_FDS];
   ant_hvf_nat_tcp_t **tcp;
   size_t tcp_count;
   size_t tcp_cap;
@@ -181,7 +181,7 @@ void ant_nat_wake(ant_hvf_nat_t *nat) {
 }
 
 static void ant_nat_drain_wake(ant_hvf_nat_t *nat) {
-  unsigned char buf[64];
+  unsigned char buf[ANT_NAT_WAKE_DRAIN_BYTES];
   while (nat->wake_pipe[0] >= 0) {
     ssize_t n = read(nat->wake_pipe[0], buf, sizeof(buf));
     if (n > 0) continue;
@@ -568,8 +568,10 @@ static void *ant_nat_thread(void *arg) {
             c->guest_window = 65535u;
             c->host_base = c->nat_next;
             c->state = ANT_NAT_TCP_CONNECTING_GUEST;
-            memcpy(c->guest_mac, nat->vm->net_guest_mac_seen ? nat->vm->net_guest_mac :
-                                  (uint8_t[]){ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }, 6);
+            const uint8_t broadcast_mac[ANT_NET_MAC_BYTES] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+            memcpy(c->guest_mac,
+                   nat->vm->net_guest_mac_seen ? nat->vm->net_guest_mac : broadcast_mac,
+                   ANT_NET_MAC_BYTES);
             ant_net_send_tcp(nat->vm, c->guest_mac, c->peer_ip, c->guest_ip, c->peer_port, c->guest_port,
                              c->nat_iss, 0, ANT_TCP_SYN, NULL, 0);
           } else {
@@ -657,7 +659,7 @@ void ant_nat_handle_udp(ant_hvf_nat_t *nat,
     u->guest_port = src_port;
     u->peer_ip = dst_ip;
     u->peer_port = dst_port;
-    memcpy(u->guest_mac, eth->src, 6);
+    memcpy(u->guest_mac, eth->src, ANT_NET_MAC_BYTES);
   }
 
   ssize_t wn = send(u->fd, payload, payload_len, 0);
@@ -709,7 +711,7 @@ void ant_nat_handle_tcp(ant_hvf_nat_t *nat,
     c->guest_ack = c->nat_iss;
     c->guest_window = ntohs(tcp->win);
     c->host_base = c->nat_next;
-    memcpy(c->guest_mac, eth->src, 6);
+    memcpy(c->guest_mac, eth->src, ANT_NET_MAC_BYTES);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));

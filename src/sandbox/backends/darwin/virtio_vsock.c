@@ -85,14 +85,14 @@ static int ant_hvf_vsock_send_packet_len(ant_hvf_vm_t *vm,
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
+  unsigned char idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
   if (q->last_avail == avail_idx) return -EAGAIN;
 
   uint16_t ring_slot = q->last_avail % q->size;
-  unsigned char head_raw[2];
+  unsigned char head_raw[ANT_HVF_BYTES_U16];
   rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
                           head_raw, sizeof(head_raw));
   if (rc != 0) return rc;
@@ -197,20 +197,20 @@ static int ant_hvf_vsock_send_event(ant_hvf_vm_t *vm, uint32_t id) {
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
+  unsigned char idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
   if (q->last_avail == avail_idx) return -EAGAIN;
 
   uint16_t ring_slot = q->last_avail % q->size;
-  unsigned char head_raw[2];
+  unsigned char head_raw[ANT_HVF_BYTES_U16];
   rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
                           head_raw, sizeof(head_raw));
   if (rc != 0) return rc;
   uint16_t head = ant_hvf_load16(head_raw);
 
-  unsigned char raw[4];
+  unsigned char raw[ANT_HVF_BYTES_U32];
   ant_hvf_store32(raw, id);
   uint32_t used_len = 0;
   rc = ant_hvf_vsock_write_iov(vm, desc_base, head, raw, sizeof(raw), &used_len);
@@ -463,14 +463,14 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
 
   int rc = 0;
   for (;;) {
-    unsigned char idx_raw[2];
+    unsigned char idx_raw[ANT_HVF_BYTES_U16];
     rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
     if (rc != 0) return rc;
     uint16_t avail_idx = ant_hvf_load16(idx_raw);
     if (q->last_avail == avail_idx) break;
 
     uint16_t ring_slot = q->last_avail % q->size;
-    unsigned char head_raw[2];
+    unsigned char head_raw[ANT_HVF_BYTES_U16];
     rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
                             head_raw, sizeof(head_raw));
     if (rc != 0) return rc;

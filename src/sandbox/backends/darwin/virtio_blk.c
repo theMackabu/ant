@@ -10,7 +10,7 @@ void ant_hvf_virtio_blk_config(const ant_hvf_vm_t *vm, unsigned char *cfg, size_
 }
 
 int ant_hvf_vring_read_desc(ant_hvf_vm_t *vm, uint64_t desc_base, uint16_t index, ant_vring_desc_t *out) {
-  unsigned char raw[16];
+  unsigned char raw[ANT_VIRTIO_BLK_DESC_BYTES];
   int rc = ant_hvf_guest_read(vm, desc_base + (uint64_t)index * sizeof(raw), raw, sizeof(raw));
   if (rc != 0) return rc;
   out->addr = ant_hvf_load64(raw);
@@ -87,7 +87,7 @@ int ant_hvf_virtio_blk_request(ant_hvf_vm_t *vm,
   if (!(desc.flags & ANT_VRING_DESC_F_NEXT)) return -EINVAL;
   if (desc.next >= queue_size) return -EINVAL;
 
-  unsigned char req_raw[16];
+  unsigned char req_raw[ANT_VIRTIO_BLK_REQUEST_BYTES];
   if (desc.len < sizeof(req_raw)) return -EINVAL;
   rc = ant_hvf_guest_read(vm, desc.addr, req_raw, sizeof(req_raw));
   if (rc != 0) return rc;
@@ -194,14 +194,14 @@ int ant_hvf_virtio_blk_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev) {
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
+  unsigned char idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
 
   while (q->last_avail != avail_idx) {
     uint16_t ring_slot = q->last_avail % q->size;
-    unsigned char head_raw[2];
+    unsigned char head_raw[ANT_HVF_BYTES_U16];
     rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u,
                             head_raw, sizeof(head_raw));
     if (rc != 0) return rc;

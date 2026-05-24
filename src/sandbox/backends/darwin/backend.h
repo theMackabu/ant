@@ -65,8 +65,8 @@ struct ant_hvf_vm {
   pthread_mutex_t net_lock;
   bool net_lock_init;
   bool net_rx_wake;
-  uint8_t net_mac[6];
-  uint8_t net_guest_mac[6];
+  uint8_t net_mac[ANT_HVF_MAC_BYTES];
+  uint8_t net_guest_mac[ANT_HVF_MAC_BYTES];
   bool net_guest_mac_seen;
   uint32_t net_max_packet_size;
   uint32_t net_rx_head;

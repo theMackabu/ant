@@ -56,10 +56,15 @@
 #define ANT_HVF_SYS_REG_CNTFRQ_EL0 ((hv_sys_reg_t)0xdf00)
 #define ANT_HVF_SYS_REG_CNTVCT_EL0 ((hv_sys_reg_t)0xdf02)
 
+#define ANT_HVF_BYTES_U16 2u
+#define ANT_HVF_BYTES_U32 4u
+#define ANT_HVF_ELF_IDENT_BYTES 16u
+#define ANT_HVF_MAC_BYTES 6u
+
 #define ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES (16u * 1024u)
 
 typedef struct {
-  unsigned char ident[16];
+  unsigned char ident[ANT_HVF_ELF_IDENT_BYTES];
   uint16_t type;
   uint16_t machine;
   uint32_t version;

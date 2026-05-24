@@ -73,14 +73,14 @@ int ant_fdt_prop_u32(ant_fdt_t *fdt, const char *name, uint32_t value) {
 }
 
 int ant_fdt_prop_cells(ant_fdt_t *fdt, const char *name, const uint32_t *cells, size_t count) {
-  uint32_t be[32];
+  uint32_t be[ANT_FDT_MAX_PROP_CELLS_32];
   if (count > sizeof(be) / sizeof(be[0])) return -EINVAL;
   for (size_t i = 0; i < count; i++) be[i] = ant_bswap32(cells[i]);
   return ant_fdt_prop(fdt, name, be, count * sizeof(be[0]));
 }
 
 int ant_fdt_prop_reg64(ant_fdt_t *fdt, const char *name, const uint64_t *cells, size_t count) {
-  uint64_t be[16];
+  uint64_t be[ANT_FDT_MAX_PROP_CELLS_64];
   if (count > sizeof(be) / sizeof(be[0])) return -EINVAL;
   for (size_t i = 0; i < count; i++) be[i] = ant_bswap64(cells[i]);
   return ant_fdt_prop(fdt, name, be, count * sizeof(be[0]));

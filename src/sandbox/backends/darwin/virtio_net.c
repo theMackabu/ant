@@ -34,7 +34,7 @@ int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
+  unsigned char idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
@@ -56,7 +56,7 @@ int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
     uint32_t guest_len = ANT_VIRTIO_NET_HDR_LEN + packet.len;
 
     uint16_t ring_slot = q->last_avail % q->size;
-    unsigned char head_raw[2];
+    unsigned char head_raw[ANT_HVF_BYTES_U16];
     rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u, head_raw, sizeof(head_raw));
     if (rc != 0) return rc;
     uint16_t head = ant_hvf_load16(head_raw);
@@ -91,7 +91,7 @@ int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, un
   uint64_t avail_base = q->avail;
   uint64_t used_base = q->used;
 
-  unsigned char idx_raw[2];
+  unsigned char idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, avail_base + 2, idx_raw, sizeof(idx_raw));
   if (rc != 0) return rc;
   uint16_t avail_idx = ant_hvf_load16(idx_raw);
@@ -100,7 +100,7 @@ int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, un
 
   while (q->last_avail != avail_idx) {
     uint16_t ring_slot = q->last_avail % q->size;
-    unsigned char head_raw[2];
+    unsigned char head_raw[ANT_HVF_BYTES_U16];
     rc = ant_hvf_guest_read(vm, avail_base + 4u + (uint64_t)ring_slot * 2u, head_raw, sizeof(head_raw));
     if (rc != 0) return rc;
     uint16_t head = ant_hvf_load16(head_raw);

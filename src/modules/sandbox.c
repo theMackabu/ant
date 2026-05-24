@@ -374,7 +374,11 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
       snprintf(message, sizeof(message), "sandbox script exited with code %d", result->code);
       break;
     case ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE:
+#if defined(__APPLE__) && !defined(__aarch64__)
+      snprintf(message, sizeof(message), "sandbox VM backend requires Apple Silicon");
+#else
       snprintf(message, sizeof(message), "sandbox VM backend is not available");
+#endif
       break;
     case ANT_SANDBOX_VM_RESULT_CONFIG_ERROR:
       snprintf(message, sizeof(message), "sandbox VM configuration failed (%d)", result->code);

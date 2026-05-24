@@ -111,7 +111,7 @@ bool ant_hvf_virtio_device_config_read(ant_hvf_vm_t *vm,
                                               uint64_t off,
                                               unsigned size,
                                               uint64_t *value) {
-  unsigned char cfg[1200];
+  unsigned char cfg[ANT_HVF_VIRTIO_DEVICE_CONFIG_BYTES];
   memset(cfg, 0, sizeof(cfg));
 
   switch (dev->kind) {
@@ -370,12 +370,12 @@ int ant_hvf_vring_add_used(ant_hvf_vm_t *vm,
                                   unsigned queue_size,
                                   uint16_t head,
                                   uint32_t used_len) {
-  unsigned char used_idx_raw[2];
+  unsigned char used_idx_raw[ANT_HVF_BYTES_U16];
   int rc = ant_hvf_guest_read(vm, used_base + 2, used_idx_raw, sizeof(used_idx_raw));
   if (rc != 0) return rc;
   uint16_t used_idx = ant_hvf_load16(used_idx_raw);
   uint64_t elem = used_base + 4u + (uint64_t)(used_idx % queue_size) * 8u;
-  unsigned char used_elem[8];
+  unsigned char used_elem[ANT_HVF_VRING_USED_ELEM_BYTES];
   ant_hvf_store32(used_elem, head);
   ant_hvf_store32(used_elem + 4, used_len);
   rc = ant_hvf_guest_write(vm, elem, used_elem, sizeof(used_elem));

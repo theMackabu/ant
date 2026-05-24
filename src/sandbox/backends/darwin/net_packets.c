@@ -43,22 +43,22 @@ uint16_t ant_net_l4_csum(uint32_t src, uint32_t dst, uint8_t proto, const void *
   return ant_net_csum(data, len, sum);
 }
 
-void ant_net_set_guest(ant_hvf_vm_t *vm, const uint8_t mac[6]) {
-  memcpy(vm->net_guest_mac, mac, 6);
+void ant_net_set_guest(ant_hvf_vm_t *vm, const uint8_t mac[ANT_NET_MAC_BYTES]) {
+  memcpy(vm->net_guest_mac, mac, ANT_NET_MAC_BYTES);
   vm->net_guest_mac_seen = true;
 }
 
 static size_t ant_net_emit_ipv4(ant_hvf_vm_t *vm,
                                 unsigned char *out,
-                                const uint8_t dst_mac[6],
+                                const uint8_t dst_mac[ANT_NET_MAC_BYTES],
                                 uint32_t src_ip,
                                 uint32_t dst_ip,
                                 uint8_t proto,
                                 const void *payload,
                                 uint16_t payload_len) {
   ant_eth_t *eth = (ant_eth_t *)out;
-  memcpy(eth->dst, dst_mac, 6);
-  memcpy(eth->src, vm->net_mac, 6);
+  memcpy(eth->dst, dst_mac, ANT_NET_MAC_BYTES);
+  memcpy(eth->src, vm->net_mac, ANT_NET_MAC_BYTES);
   eth->ethertype = htons(ANT_ETH_IPV4);
 
   ant_ipv4_t *ip = (ant_ipv4_t *)(out + sizeof(*eth));
@@ -76,7 +76,7 @@ static size_t ant_net_emit_ipv4(ant_hvf_vm_t *vm,
 }
 
 void ant_net_send_udp(ant_hvf_vm_t *vm,
-                      const uint8_t dst_mac[6],
+                      const uint8_t dst_mac[ANT_NET_MAC_BYTES],
                       uint32_t src_ip,
                       uint32_t dst_ip,
                       uint16_t src_port,
@@ -84,7 +84,7 @@ void ant_net_send_udp(ant_hvf_vm_t *vm,
                       const void *payload,
                       uint16_t payload_len) {
   unsigned char frame[ANT_HVF_NET_MAX_PACKET];
-  unsigned char udp_buf[sizeof(ant_udp_t) + 1500];
+  unsigned char udp_buf[sizeof(ant_udp_t) + ANT_NET_STANDARD_PACKET_BYTES];
   if (payload_len > sizeof(udp_buf) - sizeof(ant_udp_t)) return;
   ant_udp_t *udp = (ant_udp_t *)udp_buf;
   udp->src = htons(src_port);
@@ -98,7 +98,7 @@ void ant_net_send_udp(ant_hvf_vm_t *vm,
 }
 
 void ant_net_send_tcp(ant_hvf_vm_t *vm,
-                             const uint8_t dst_mac[6],
+                             const uint8_t dst_mac[ANT_NET_MAC_BYTES],
                              uint32_t src_ip,
                              uint32_t dst_ip,
                              uint16_t src_port,
@@ -128,7 +128,7 @@ void ant_net_send_tcp(ant_hvf_vm_t *vm,
 }
 
 void ant_net_send_rst(ant_hvf_vm_t *vm,
-                             const uint8_t dst_mac[6],
+                             const uint8_t dst_mac[ANT_NET_MAC_BYTES],
                              uint32_t src_ip,
                              uint32_t dst_ip,
                              uint16_t src_port,
@@ -142,7 +142,7 @@ static void ant_net_handle_arp(ant_hvf_vm_t *vm, const ant_eth_t *eth, const uns
   if (len < sizeof(ant_arp_t)) return;
   const ant_arp_t *req = (const ant_arp_t *)payload;
   if (ntohs(req->htype) != 1 || ntohs(req->ptype) != ANT_ETH_IPV4 ||
-      req->hlen != 6 || req->plen != 4 || ntohs(req->op) != 1) {
+      req->hlen != ANT_NET_MAC_BYTES || req->plen != 4 || ntohs(req->op) != 1) {
     return;
   }
 
@@ -152,20 +152,20 @@ static void ant_net_handle_arp(ant_hvf_vm_t *vm, const ant_eth_t *eth, const uns
 
   unsigned char frame[sizeof(ant_eth_t) + sizeof(ant_arp_t)];
   ant_eth_t *resp_eth = (ant_eth_t *)frame;
-  memcpy(resp_eth->dst, eth->src, 6);
-  memcpy(resp_eth->src, vm->net_mac, 6);
+  memcpy(resp_eth->dst, eth->src, ANT_NET_MAC_BYTES);
+  memcpy(resp_eth->src, vm->net_mac, ANT_NET_MAC_BYTES);
   resp_eth->ethertype = htons(ANT_ETH_ARP);
 
   ant_arp_t *resp = (ant_arp_t *)(frame + sizeof(*resp_eth));
   memset(resp, 0, sizeof(*resp));
   resp->htype = htons(1);
   resp->ptype = htons(ANT_ETH_IPV4);
-  resp->hlen = 6;
+  resp->hlen = ANT_NET_MAC_BYTES;
   resp->plen = 4;
   resp->op = htons(2);
-  memcpy(resp->sha, vm->net_mac, 6);
+  memcpy(resp->sha, vm->net_mac, ANT_NET_MAC_BYTES);
   resp->spa = htonl(target);
-  memcpy(resp->tha, req->sha, 6);
+  memcpy(resp->tha, req->sha, ANT_NET_MAC_BYTES);
   resp->tpa = req->spa;
   ant_net_enqueue(vm, frame, sizeof(frame));
 }
@@ -202,7 +202,7 @@ static void ant_net_handle_dhcp(ant_hvf_vm_t *vm,
   uint8_t msg_type = ant_dhcp_type(payload + 240, len - 240);
   if (msg_type != 1 && msg_type != 3) return;
 
-  unsigned char resp[548];
+  unsigned char resp[ANT_DHCP_PACKET_BYTES];
   memset(resp, 0, sizeof(resp));
   resp[0] = 2;
   resp[1] = payload[1];
@@ -229,11 +229,11 @@ static void ant_net_handle_dhcp(ant_hvf_vm_t *vm,
   opt = ant_dhcp_opt(opt, 51, 4, &lease);
   *opt++ = 255;
 
-  uint8_t dst_mac[6];
+  uint8_t dst_mac[ANT_NET_MAC_BYTES];
   memset(dst_mac, 0xff, sizeof(dst_mac));
   uint32_t dst_ip = ANT_NET_BROADCAST_IP;
   if (!(payload[10] & 0x80u)) {
-    memcpy(dst_mac, eth->src, 6);
+    memcpy(dst_mac, eth->src, ANT_NET_MAC_BYTES);
     dst_ip = ANT_NET_GUEST_IP;
   }
   ant_net_send_udp(vm, dst_mac, ANT_NET_HOST_IP, dst_ip,
@@ -298,13 +298,13 @@ static void ant_net_handle_dns(ant_hvf_vm_t *vm,
   if (qend + 4 > query_len) return;
   uint16_t qtype = ant_net_load16(query + qend);
 
-  char name[256];
+  char name[ANT_DNS_NAME_BYTES];
   if (!ant_dns_read_name(query, query_len, 12, name, sizeof(name))) return;
 
   uint32_t answer_ip = 0;
   bool answered = qtype == 1 && ant_dns_lookup_a(name, &answer_ip);
 
-  unsigned char resp[1500];
+  unsigned char resp[ANT_NET_STANDARD_PACKET_BYTES];
   if (query_len > sizeof(resp) - 32) return;
   memcpy(resp, query, query_len);
   resp[2] = 0x81;
@@ -335,7 +335,7 @@ static void ant_net_handle_icmp(ant_hvf_vm_t *vm,
   if (payload_len < 8 || payload[0] != 8) return;
   uint32_t dst = ntohl(ip->dst);
   if (dst != ANT_NET_HOST_IP && dst != ANT_NET_DNS_IP) return;
-  unsigned char reply[1500];
+  unsigned char reply[ANT_NET_STANDARD_PACKET_BYTES];
   if (payload_len > sizeof(reply)) return;
   memcpy(reply, payload, payload_len);
   reply[0] = 0;
