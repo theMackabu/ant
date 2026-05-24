@@ -246,7 +246,7 @@ export async function resolveNanosArtifact(
   return {
     ...artifact,
     name: `${kind === 'kernel' ? 'ant-kernel' : 'ant-sandbox'}-${arch}`,
-    zip_entry: `nanos/${filename}`,
+    zip_entry: `packages/sandbox/${filename}`,
     filename,
   };
 }

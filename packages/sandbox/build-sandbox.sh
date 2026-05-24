@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-usage: nanos/build-sandbox.sh [options]
+usage: packages/sandbox/build-sandbox.sh [options]
 
 build a local Linux musl Ant binary in Alpine Docker, then build a Nanos
 sandbox image with ops and a patched local Nanos kernel.
@@ -14,14 +14,14 @@ options:
   --no-cache
       pass --no-cache to docker build.
   --skip-docker
-      reuse nanos/out/<arch>/binary/ant and only rebuild the Nanos image.
+      reuse packages/sandbox/out/<arch>/binary/ant and only rebuild the Nanos image.
   -h, --help
       show this help.
 USAGE
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd -- "$script_dir/.." && pwd)
+repo_root=$(cd -- "$script_dir/../.." && pwd)
 nanos_cache_dir="$script_dir/.cache"
 sandbox_config_dir=
 real_home=${HOME:?}
@@ -97,7 +97,7 @@ case "$arch" in
     ;;
 esac
 
-out_dir="$repo_root/nanos/out/$arch"
+out_dir="$repo_root/packages/sandbox/out/$arch"
 binary_dir="$out_dir/binary"
 
 case "$arch" in
@@ -196,7 +196,7 @@ else
     --build-arg "ZIG_VERSION=$zig_version" \
     --build-arg "ZLIB_VERSION=$zlib_version" \
     --output "type=local,dest=$binary_dir" \
-    -f "$repo_root/nanos/Dockerfile" \
+    -f "$repo_root/packages/sandbox/Dockerfile" \
     "$repo_root"
 fi
 
@@ -216,15 +216,15 @@ if [[ ! -d "$nanos_src/.git" ]]; then
   git clone "$nanos_url" "$nanos_src"
 fi
 
-patch_inputs=("$repo_root"/nanos/patches/*.patch)
-patch_signature=$(cd "$repo_root" && shasum -a 256 nanos/patches/*.patch | shasum -a 256 | awk '{print $1}')
+patch_inputs=("$repo_root"/packages/sandbox/patches/*.patch)
+patch_signature=$(cd "$repo_root" && shasum -a 256 packages/sandbox/patches/*.patch | shasum -a 256 | awk '{print $1}')
 nanos_patch_stamp="$nanos_cache_dir/patches-${cache_arch}.stamp"
 
 if [[ -f "$nanos_patch_stamp" && "$(cat "$nanos_patch_stamp")" == "$patch_signature" ]]; then
   echo "==> reusing patched Nanos source"
 else
   git -C "$nanos_src" reset --hard HEAD >/dev/null
-  for patch in "$repo_root"/nanos/patches/*.patch; do
+  for patch in "$repo_root"/packages/sandbox/patches/*.patch; do
     if git -C "$nanos_src" apply --check "$patch" >/dev/null 2>&1; then
       git -C "$nanos_src" apply "$patch"
     else
@@ -308,7 +308,7 @@ else
   exit 1
 fi
 
-python3 "$repo_root/nanos/shrink-image.py" "$image_out" "$image_out"
+python3 "$repo_root/packages/sandbox/shrink-image.py" "$image_out" "$image_out"
 
 find "$out_dir" -maxdepth 1 -type f \( \
   -name 'ant-sandbox.img' -o \

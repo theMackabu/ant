@@ -12,15 +12,15 @@ python = find_program('python3')
 is_static = true
 
 use_lto = get_option('lto')
-src_root = meson.project_source_root() / '..'
-include = include_directories('../include')
+src_root = meson.project_source_root() / '../..'
+include = include_directories('../../include')
 
 subdir('meson')
 
 messages_h = custom_target('messages_h',
-  input: '../src/core/messages.toml',
+  input: '../../src/core/messages.toml',
   output: 'messages.h',
-  command: [python, files('../meson/messages.py'), '@INPUT@'],
+  command: [python, files('../../meson/messages.py'), '@INPUT@'],
   capture: true,
 )
 

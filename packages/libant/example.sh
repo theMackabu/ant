@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist"
-SOURCE="$SCRIPT_DIR/../examples/embed/embed.c"
+SOURCE="$SCRIPT_DIR/../../examples/embed/embed.c"
 OUTPUT="$SCRIPT_DIR/dist/embed"
 
 if [ ! -f "$DIST_DIR/libant.a" ]; then

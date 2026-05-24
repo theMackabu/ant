@@ -136,7 +136,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ${{ env.NANOS_ARTIFACT }}
-          path: nanos
+          path: packages/sandbox
           github-token: ${{ github.token }}
           run-id: ${{ steps.source.outputs.run_id }}
 
@@ -180,7 +180,7 @@ jobs:
       - name: Apply Ant sandbox Nanos patches
         run: |
           set -euo pipefail
-          for patch in nanos/patches/*.patch; do
+          for patch in packages/sandbox/patches/*.patch; do
             echo "Applying ${patch}"
             git -C nanos-src apply "$GITHUB_WORKSPACE/$patch"
           done
@@ -191,7 +191,7 @@ jobs:
           path: |
             nanos-src/vendor
             nanos-src/output
-          key: nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-${{ steps.nanos-source.outputs.revision }}-${{ hashFiles('nanos/patches/*.patch') }}
+          key: nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-${{ steps.nanos-source.outputs.revision }}-${{ hashFiles('packages/sandbox/patches/*.patch') }}
           restore-keys: |
             nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-${{ steps.nanos-source.outputs.revision }}-
             nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-
@@ -200,10 +200,10 @@ jobs:
         run: |
           set -euo pipefail
           make -C nanos-src PLATFORM="$NANOS_PLATFORM" ARCH="$NANOS_ARCH" CC=clang kernel
-          cp "nanos-src/output/platform/${NANOS_PLATFORM}/bin/kernel.img" "nanos/ant-kernel-${{ inputs.arch }}.img"
+          cp "nanos-src/output/platform/${NANOS_PLATFORM}/bin/kernel.img" "packages/sandbox/ant-kernel-${{ inputs.arch }}.img"
 
       - name: Build Nanos image
-        working-directory: nanos
+        working-directory: packages/sandbox
         run: |
           set -euo pipefail
           chmod +x ant
@@ -252,7 +252,7 @@ jobs:
           fi
 
       - name: Shrink Nanos image
-        working-directory: nanos
+        working-directory: packages/sandbox
         run: |
           set -euo pipefail
           image="ant-sandbox-${{ inputs.arch }}.img"
@@ -262,7 +262,7 @@ jobs:
           echo "Shrank ${image} from ${before} to ${after}"
 
       - name: Image info
-        working-directory: nanos
+        working-directory: packages/sandbox
         run: |
           ANT_SIZE=$(du -sh ant | cut -f1)
           KERNEL_SIZE=$(du -sh "ant-kernel-${{ inputs.arch }}.img" | cut -f1)
@@ -283,8 +283,8 @@ jobs:
         with:
           name: ant-sandbox-${{ inputs.arch }}
           path: |
-            nanos/ant-sandbox-${{ inputs.arch }}.img
-            nanos/ant-kernel-${{ inputs.arch }}.img
+            packages/sandbox/ant-sandbox-${{ inputs.arch }}.img
+            packages/sandbox/ant-kernel-${{ inputs.arch }}.img
           retention-days: 7
 
       - name: Refresh manifest

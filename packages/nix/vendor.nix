@@ -2,19 +2,19 @@
 
 let
   src = lib.fileset.toSource {
-    root = ../.;
+    root = ../..;
     fileset = lib.fileset.unions [
-      ../meson.build
-      ../meson_options.txt
-      ../meson
-      (lib.fileset.fileFilter (f: f.hasExt "wrap") ../vendor)
-      ../vendor/packagefiles
+      ../../meson.build
+      ../../meson_options.txt
+      ../../meson
+      (lib.fileset.fileFilter (f: f.hasExt "wrap") ../../vendor)
+      ../../vendor/packagefiles
     ];
   };
 in
 stdenvNoCC.mkDerivation {
   pname = "ant-vendor";
-  version = lib.fileContents ../meson/ant.version;
+  version = lib.fileContents ../../meson/ant.version;
 
   inherit src;
   nativeBuildInputs = [ meson ninja git cacert ];

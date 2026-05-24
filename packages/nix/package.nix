@@ -24,8 +24,8 @@ let
   antVendor = callPackage ./vendor.nix { };
 
   toolsNodeModules = importNpmLock.buildNodeModules {
-    package = lib.importJSON ../src/tools/package.json;
-    packageLock = lib.importJSON ../src/tools/npm-shrinkwrap.json;
+    package = lib.importJSON ../../src/tools/package.json;
+    packageLock = lib.importJSON ../../src/tools/npm-shrinkwrap.json;
     nodejs = nodejs_22;
   };
 
@@ -44,8 +44,8 @@ in
 
 llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
   pname = "ant";
-  src = ../.;
-  version = lib.fileContents ../meson/ant.version;
+  src = ../..;
+  version = lib.fileContents ../../meson/ant.version;
 
   nativeBuildInputs = [
     meson

@@ -51,8 +51,8 @@ package-lock.json
 
 docs/reports/.wrangler
 docs/reports/node_modules
-nanos/build-sandbox.sh
-nanos/out
-nanos/.cache
+packages/sandbox/build-sandbox.sh
+packages/sandbox/out
+packages/sandbox/.cache
 ant-sandbox.img
 **/.DS_Store
