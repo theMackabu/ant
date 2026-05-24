@@ -47,7 +47,7 @@ app.get('/v1/latest', c =>
 
 app.post('/v1/refresh', c => {
   const auth = c.req.header('Authorization') || '';
-  const expected = c.env.REFRESH_TOKEN;
+  const expected = c.env.MANIFEST_REFRESH_TOKEN;
   if (!expected || auth !== `Bearer ${expected}`) return c.json({ error: 'unauthorized' }, 401);
 
   return forceRefreshManifest(c.env, c.executionCtx, () =>
