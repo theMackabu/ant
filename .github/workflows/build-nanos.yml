@@ -166,12 +166,16 @@ jobs:
           fi
 
       - name: Checkout Nanos
+        id: nanos-source
         run: |
           set -euo pipefail
           git init nanos-src
           git -C nanos-src remote add origin https://github.com/nanovms/nanos.git
           git -C nanos-src fetch --depth 1 origin "${{ inputs.nanos_ref }}"
           git -C nanos-src checkout --detach FETCH_HEAD
+          revision=$(git -C nanos-src rev-parse HEAD)
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+          echo "Using Nanos ${revision}"
 
       - name: Apply Ant sandbox Nanos patches
         run: |
@@ -180,6 +184,17 @@ jobs:
             echo "Applying ${patch}"
             git -C nanos-src apply "$GITHUB_WORKSPACE/$patch"
           done
+
+      - name: Cache Nanos kernel build
+        uses: actions/cache@v5
+        with:
+          path: |
+            nanos-src/vendor
+            nanos-src/output
+          key: nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-${{ steps.nanos-source.outputs.revision }}-${{ hashFiles('nanos/patches/*.patch') }}
+          restore-keys: |
+            nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-${{ steps.nanos-source.outputs.revision }}-
+            nanos-kernel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.arch }}-
 
       - name: Build patched Nanos kernel
         run: |
