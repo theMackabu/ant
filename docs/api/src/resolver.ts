@@ -2,6 +2,7 @@ import {
   branch,
   BUILD_WORKFLOW,
   canDownloadActionsArtifacts,
+  DEFAULT_BRANCH,
   MUSL_SANDBOX_WORKFLOW,
   repository,
 } from './config';
@@ -32,7 +33,6 @@ import type {
 } from './types';
 
 export async function latestManifest(url: URL, env: Env) {
-  const release = await latestRelease(env);
   const ant = await Promise.all(
     antTargets.map(target =>
       resolveManifestEntry(
@@ -61,7 +61,6 @@ export async function latestManifest(url: URL, env: Env) {
 
   return {
     schema: 1,
-    version: releaseInfo(release),
     generated_at: new Date().toISOString(),
     ant,
     sandbox,
@@ -262,8 +261,16 @@ export async function fetchDownload(env: Env, artifact: ResolvedArtifact): Promi
   return fetchReleaseAssetDownload(env, releaseUrl);
 }
 
-export function downloadUrl(url: URL, kind: ArtifactKind, name: string): string {
+export function downloadUrl(
+  url: URL,
+  kind: ArtifactKind,
+  name: string,
+  artifactBranch: string,
+): string {
   const next = new URL(`/v1/download/${kind}/${encodeURIComponent(name)}`, url);
+  if (url.searchParams.has('branch') || artifactBranch !== DEFAULT_BRANCH) {
+    next.searchParams.set('branch', artifactBranch);
+  }
   return next.toString();
 }
 
@@ -290,7 +297,7 @@ async function resolveActionAnt(env: Env, target: AntTarget, url: URL): Promise<
     artifact,
     version,
     actionSourceInfo(env, BUILD_WORKFLOW, run),
-    downloadUrl(url, 'ant', target.key),
+    downloadUrl(url, 'ant', target.key, branch(env)),
   );
 }
 
@@ -311,7 +318,7 @@ async function resolveActionNamedArtifact(
     artifact,
     undefined,
     actionSourceInfo(env, workflow, run),
-    downloadUrl(url, kind, arch),
+    downloadUrl(url, kind, arch, branch(env)),
   );
 }
 
@@ -329,7 +336,7 @@ async function resolveAnyActionNamedArtifact(
     artifact,
     undefined,
     actionSourceInfo(env, run.path || run.name, run),
-    downloadUrl(url, kind, arch),
+    downloadUrl(url, kind, arch, branch(env)),
   );
 }
 
@@ -373,7 +380,7 @@ async function resolveReleaseArtifact(
     kind,
     name: asset.name,
     version,
-    download_url: downloadUrl(url, kind, downloadName),
+    download_url: downloadUrl(url, kind, downloadName, branch(env)),
     artifact: {
       id: asset.id,
       name: asset.name,

@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+const BranchSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9._/-]+$/, 'branch contains unsupported characters')
+  .refine(value => !value.includes('..'), 'branch cannot contain ..');
+
 export const VersionQuerySchema = z
   .object({
     current: z.string().optional(),
@@ -43,4 +51,8 @@ export const VersionQuerySchema = z
 export const DownloadParamsSchema = z.object({
   kind: z.enum(['ant', 'sandbox', 'kernel']),
   name: z.string().min(1),
+});
+
+export const BranchQuerySchema = z.object({
+  branch: BranchSchema.optional(),
 });

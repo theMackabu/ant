@@ -21,6 +21,13 @@ export function branch(env: Env): string {
   return env.GITHUB_BRANCH || DEFAULT_BRANCH;
 }
 
+export function withBranch(env: Env, value: string): Env {
+  return {
+    ...env,
+    GITHUB_BRANCH: value,
+  };
+}
+
 export function cacheTtl(env: Env): number {
   const parsed = Number(env.CACHE_TTL_SECONDS || DEFAULT_CACHE_TTL_SECONDS);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_CACHE_TTL_SECONDS;

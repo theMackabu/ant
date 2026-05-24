@@ -111,5 +111,6 @@ jobs:
           MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
         if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
         run: |
-          curl -fsS -X POST https://manifest.antjs.org/v1/refresh \
+          curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
+            --data-urlencode "branch=${GITHUB_REF_NAME}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
