@@ -1,6 +1,5 @@
-#include "net_internal.h"
+#include "sandbox_backend/net_internal.h"
 
-#if defined(__aarch64__)
 
 typedef enum {
   ANT_NAT_TCP_UNUSED = 0,
@@ -199,7 +198,7 @@ void ant_hvf_net_note_rx(ant_hvf_vm_t *vm) {
   pthread_mutex_lock(&vm->net_lock);
   vm->net_rx_wake = true;
   pthread_mutex_unlock(&vm->net_lock);
-  if (vm->vcpu) hv_vcpus_exit(&vm->vcpu, 1);
+  ant_hvf_wake_vcpu(vm);
 }
 
 void ant_net_enqueue(ant_hvf_vm_t *vm, const void *data, uint32_t len) {
@@ -911,6 +910,3 @@ void ant_hvf_net_stop(ant_hvf_vm_t *vm) {
   vm->net_nat = NULL;
   vm->net_started = false;
 }
-
-
-#endif

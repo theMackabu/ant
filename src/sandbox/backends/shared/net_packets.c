@@ -1,6 +1,5 @@
-#include "net_internal.h"
+#include "sandbox_backend/net_internal.h"
 
-#if defined(__aarch64__)
 
 static uint32_t ant_net_id;
 
@@ -397,4 +396,3 @@ void ant_net_handle_frame(ant_hvf_vm_t *vm, const unsigned char *frame, size_t f
   }
 }
 
-#endif

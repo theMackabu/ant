@@ -1,6 +1,5 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 uint32_t ant_bswap32(uint32_t x) {
   return ((x & 0x000000ffu) << 24) |
@@ -19,20 +18,6 @@ size_t ant_align4(size_t n) {
 
 size_t ant_align_page(size_t n) {
   return (n + (size_t)ANT_HVF_PAGE_SIZE - 1u) & ~((size_t)ANT_HVF_PAGE_SIZE - 1u);
-}
-
-int ant_hvf_check(hv_return_t ret, const char *op) {
-  if (ret == HV_SUCCESS) return 0;
-
-  if (ret == HV_DENIED) {
-    fprintf(stderr,
-            "sandbox vm: %s denied; sign the binary with com.apple.security.hypervisor\n",
-            op);
-    return -EACCES;
-  }
-
-  fprintf(stderr, "sandbox vm: %s failed with Hypervisor.framework error %d\n", op, ret);
-  return -EIO;
 }
 
 int ant_hvf_check_file(const char *kind, const char *path, off_t *size_out) {
@@ -135,9 +120,9 @@ int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path) {
     return rc;
   }
 
-  if (memcmp(eh.ident, "\177ELF", 4) != 0 || eh.ident[4] != 2 || eh.machine != 183) {
+  if (memcmp(eh.ident, "\177ELF", 4) != 0 || eh.ident[4] != 2 || eh.machine != ANT_HVF_ELF_MACHINE) {
     close(fd);
-    fprintf(stderr, "sandbox vm: Nanos kernel is not an aarch64 ELF image: %s\n", path);
+    fprintf(stderr, "sandbox vm: Nanos kernel is not an " ANT_HVF_ELF_MACHINE_NAME " ELF image: %s\n", path);
     return -EINVAL;
   }
 
@@ -192,5 +177,3 @@ void ant_hvf_assign_width64(uint64_t *target, unsigned offset, unsigned size, ui
   unsigned shift = offset * 8u;
   *target = (*target & ~(mask << shift)) | ((value & mask) << shift);
 }
-
-#endif

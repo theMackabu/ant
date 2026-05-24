@@ -1,6 +1,5 @@
-#include "net_internal.h"
+#include "sandbox_backend/net_internal.h"
 
-#if defined(__aarch64__)
 
 int ant_hvf_virtio_net_tx(ant_hvf_vm_t *vm,
                                  uint64_t desc_base,
@@ -117,4 +116,3 @@ int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, un
   return ant_hvf_virtio_interrupt(vm, dev, queue);
 }
 
-#endif

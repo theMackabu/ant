@@ -1,6 +1,5 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 void ant_hvf_virtio_init(ant_hvf_virtio_device_t *dev,
                                 ant_hvf_virtio_kind_t kind,
@@ -158,20 +157,14 @@ bool ant_hvf_virtio_msix_masked(ant_hvf_virtio_device_t *dev, unsigned vector) {
 }
 
 int ant_hvf_virtio_msix_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, uint16_t vector) {
-  (void)vm;
   if (vector == ANT_VIRTIO_MSI_NO_VECTOR || vector >= ANT_HVF_VIRTIO_MSIX_VECTOR_COUNT) return 0;
   if (ant_hvf_virtio_msix_masked(dev, vector)) {
     dev->msix_pba |= 1u << vector;
     return 0;
   }
-  if (!ant_hvf_gic.send_msi) return -ENOSYS;
   uint64_t addr = (uint64_t)dev->msix[vector].msg_addr_lo |
                   ((uint64_t)dev->msix[vector].msg_addr_hi << 32);
-  hv_return_t rc = ant_hvf_gic.send_msi(addr, dev->msix[vector].msg_data);
-  if (rc != HV_SUCCESS) {
-    return -EIO;
-  }
-  return 0;
+  return ant_hvf_send_msi(vm, addr, dev->msix[vector].msg_data);
 }
 
 int ant_hvf_virtio_interrupt(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, unsigned queue) {
@@ -445,5 +438,3 @@ int ant_hvf_vring_write_chain(ant_hvf_vm_t *vm,
 
   return -ENOSPC;
 }
-
-#endif

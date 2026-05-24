@@ -15,26 +15,37 @@ is_static = get_option('static_link')
 
 src_root = meson.project_source_root()
 include = include_directories('include')
+sandbox_backend_include = include_directories(
+  'src/sandbox/backends',
+  'src/sandbox/backends/shared/include',
+)
 
 sandbox_backend_sources = []
+sandbox_shared_sources = files(
+  'src/sandbox/backends/shared/common.c',
+  'src/sandbox/backends/shared/nat.c',
+  'src/sandbox/backends/shared/net_packets.c',
+  'src/sandbox/backends/shared/pci.c',
+  'src/sandbox/backends/shared/virtio.c',
+  'src/sandbox/backends/shared/virtio_9p.c',
+  'src/sandbox/backends/shared/virtio_blk.c',
+  'src/sandbox/backends/shared/virtio_net.c',
+  'src/sandbox/backends/shared/virtio_vsock.c',
+)
 if host_machine.system() == 'darwin'
   sandbox_backend_sources += files(
     'src/sandbox/backends/darwin/backend.c',
-    'src/sandbox/backends/darwin/common.c',
     'src/sandbox/backends/darwin/fdt.c',
     'src/sandbox/backends/darwin/gic.c',
     'src/sandbox/backends/darwin/mmio.c',
-    'src/sandbox/backends/darwin/nat.c',
-    'src/sandbox/backends/darwin/net_packets.c',
-    'src/sandbox/backends/darwin/pci.c',
     'src/sandbox/backends/darwin/uart.c',
-    'src/sandbox/backends/darwin/virtio.c',
-    'src/sandbox/backends/darwin/virtio_9p.c',
-    'src/sandbox/backends/darwin/virtio_blk.c',
-    'src/sandbox/backends/darwin/virtio_net.c',
-    'src/sandbox/backends/darwin/virtio_vsock.c',
+  )
+elif host_machine.system() == 'linux'
+  sandbox_backend_sources += files(
+    'src/sandbox/backends/linux/kvm.c',
   )
 endif
+sandbox_backend_sources += sandbox_shared_sources
 
 subdir('meson')
 
@@ -66,7 +77,7 @@ libant = static_library(
     theme_h
   ],
   install: true,
-  include_directories: include,
+  include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps
 )
 
@@ -100,7 +111,7 @@ pkg_dep = declare_dependency(
 
 libant_dep = declare_dependency(
   link_with: libant,
-  include_directories: include,
+  include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps + [pkg_dep]
 )
 

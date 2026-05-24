@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__aarch64__)
 
 #define ANT_VIRTIO_BLK_F_SEG_MAX (1ull << 2)
 #define ANT_VIRTIO_BLK_F_BLK_SIZE (1ull << 6)
@@ -44,4 +43,3 @@ int ant_hvf_virtio_blk_request(ant_hvf_vm_t *vm,
                                uint32_t *used_len);
 int ant_hvf_virtio_blk_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev);
 
-#endif

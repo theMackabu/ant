@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include <sys/stat.h>
 
-#if defined(__aarch64__)
 
 #define ANT_VIRTIO_9P_F_MOUNT_TAG 0x1u
 #define ANT_VIRTIO_9P_QUEUE_SIZE 32u
@@ -212,4 +211,3 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
 int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev);
 void ant_hvf_9p_report_stats(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev, size_t index);
 
-#endif

@@ -2,8 +2,8 @@
 
 #include <compat.h> // IWYU pragma: keep
 
-#include "forward.h"
 #include "hvf.h"
+#include "sandbox_backend/forward.h"
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -1,8 +1,8 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 bool ant_hvf_pci_addr(uint64_t addr, unsigned *bus, unsigned *slot, unsigned *fn, unsigned *reg) {
+#if defined(ANT_HVF_PCIE_ECAM_BASE) && defined(ANT_HVF_PCIE_ECAM_SIZE)
   if (addr < ANT_HVF_PCIE_ECAM_BASE || addr >= ANT_HVF_PCIE_ECAM_BASE + ANT_HVF_PCIE_ECAM_SIZE) {
     return false;
   }
@@ -13,6 +13,14 @@ bool ant_hvf_pci_addr(uint64_t addr, unsigned *bus, unsigned *slot, unsigned *fn
   *fn = (unsigned)((off >> 12) & 0x7);
   *reg = (unsigned)(off & 0xfff);
   return true;
+#else
+  (void)addr;
+  (void)bus;
+  (void)slot;
+  (void)fn;
+  (void)reg;
+  return false;
+#endif
 }
 
 bool ant_hvf_is_virtio_slot(unsigned bus, unsigned slot, unsigned fn) {
@@ -204,6 +212,3 @@ void ant_hvf_pci_config_write(ant_hvf_vm_t *vm,
     ant_hvf_pci_write_msix_control(dev, reg, size, value);
   }
 }
-
-
-#endif

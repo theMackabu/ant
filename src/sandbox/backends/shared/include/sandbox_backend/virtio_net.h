@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#if defined(__aarch64__)
 
 #define ANT_VIRTIO_NET_F_MAC 0x20u
 #define ANT_VIRTIO_NET_HDR_LEN 12u
@@ -34,4 +33,3 @@ int ant_hvf_virtio_net_tx(ant_hvf_vm_t *vm,
 int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm);
 int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, unsigned queue);
 
-#endif

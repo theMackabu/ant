@@ -7,7 +7,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#if defined(__aarch64__)
 
 #define ANT_VIRTIO_PCI_VENDOR 0x1af4u
 #define ANT_VIRTIO_PCI_DEVICE_MODERN_BASE 0x1040u
@@ -173,4 +172,3 @@ int ant_hvf_vring_write_chain(ant_hvf_vm_t *vm,
                               uint32_t len,
                               uint32_t *used_len);
 
-#endif

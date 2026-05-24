@@ -1,6 +1,5 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 void ant_hvf_vsock_store_hdr(unsigned char *out, const ant_virtio_vsock_hdr_t *hdr) {
   ant_hvf_store64(out, hdr->src_cid);
@@ -557,4 +556,3 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
   return ant_hvf_virtio_interrupt(vm, &dev->virtio, queue);
 }
 
-#endif

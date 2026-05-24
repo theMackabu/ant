@@ -13,6 +13,8 @@ const char *ant_sandbox_vm_backend_name(const ant_sandbox_vm_backend_t *backend)
 const ant_sandbox_vm_backend_t *ant_sandbox_vm_default_backend(void) {
 #if defined(__APPLE__)
   return &ant_sandbox_vm_darwin_backend;
+#elif defined(__linux__)
+  return &ant_sandbox_vm_linux_backend;
 #else
   return NULL;
 #endif

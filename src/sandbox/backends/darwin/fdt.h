@@ -2,7 +2,7 @@
 
 #include <compat.h> // IWYU pragma: keep
 
-#include "forward.h"
+#include "sandbox_backend/forward.h"
 
 #include <stddef.h>
 #include <stdint.h>

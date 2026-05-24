@@ -1,6 +1,5 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 void ant_hvf_virtio_blk_config(const ant_hvf_vm_t *vm, unsigned char *cfg, size_t cfg_len) {
   if (!cfg || cfg_len < ANT_VIRTIO_BLK_CONFIG_LEN) return;
@@ -221,4 +220,3 @@ int ant_hvf_virtio_blk_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev) {
   return ant_hvf_virtio_interrupt(vm, dev, 0);
 }
 
-#endif

@@ -9,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__aarch64__)
 
 #define ANT_VIRTIO_VSOCK_F_STREAM 0x1u
 #define ANT_VIRTIO_VSOCK_QUEUE_COUNT 3u
@@ -87,4 +86,3 @@ int ant_hvf_vsock_read_tx_packet(ant_hvf_vm_t *vm,
                                  uint32_t *used_len);
 int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue);
 
-#endif

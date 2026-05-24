@@ -1,10 +1,9 @@
 #pragma once
 
+#if defined(__linux__)
+
 #include <compat.h> // IWYU pragma: keep
 
-#include "fdt.h"
-#include "gic.h"
-#include "hvf.h"
 #include "sandbox/vm.h"
 #include "sandbox_backend/forward.h"
 #include "sandbox_backend/nat.h"
@@ -15,22 +14,23 @@
 #include "sandbox_backend/virtio_vsock.h"
 #include "sandbox_backend/pci.h"
 
-#include <Hypervisor/Hypervisor.h>
 #include <arpa/inet.h>
 #include <dirent.h>
-#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/kvm.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -39,10 +39,81 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(__aarch64__)
+#define ANT_HVF_GUEST_BASE 0x00000000ull
+#define ANT_HVF_PVH_START_INFO 0x00100000ull
+#define ANT_HVF_PVH_MEMMAP 0x00101000ull
+#define ANT_HVF_KERNEL_BASE 0x00200000ull
+#define ANT_HVF_VIRTIO_BLK_BAR 0xf0001000ull
+#define ANT_HVF_VIRTIO_BLK_SLOT 1u
+#define ANT_HVF_VIRTIO_NET_BAR 0xf0002000ull
+#define ANT_HVF_VIRTIO_NET_SLOT 2u
+#define ANT_HVF_VIRTIO_9P_BAR_BASE 0xf0003000ull
+#define ANT_HVF_VIRTIO_9P_SLOT_BASE 3u
+#define ANT_HVF_VIRTIO_9P_MAX 8u
+#define ANT_HVF_VIRTIO_VSOCK_BAR 0xf000b000ull
+#define ANT_HVF_VIRTIO_VSOCK_SLOT 11u
+#define ANT_HVF_PAGE_SIZE 0x1000ull
 
-#define ANT_HVF_ELF_MACHINE 183u
-#define ANT_HVF_ELF_MACHINE_NAME "aarch64"
+#define ANT_HVF_BYTES_U16 2u
+#define ANT_HVF_BYTES_U32 4u
+#define ANT_HVF_ELF_IDENT_BYTES 16u
+#define ANT_HVF_MAC_BYTES 6u
+#define ANT_HVF_ELF_MACHINE 62u
+#define ANT_HVF_ELF_MACHINE_NAME "x86_64"
+
+#define ANT_KVM_COM1_PORT 0x3f8u
+#define ANT_KVM_PCI_ADDR_PORT 0x0cf8u
+#define ANT_KVM_PCI_DATA_PORT 0x0cfcu
+
+typedef struct {
+  unsigned char ident[ANT_HVF_ELF_IDENT_BYTES];
+  uint16_t type;
+  uint16_t machine;
+  uint32_t version;
+  uint64_t entry;
+  uint64_t phoff;
+  uint64_t shoff;
+  uint32_t flags;
+  uint16_t ehsize;
+  uint16_t phentsize;
+  uint16_t phnum;
+  uint16_t shentsize;
+  uint16_t shnum;
+  uint16_t shstrndx;
+} ant_elf64_ehdr_t;
+
+typedef struct {
+  uint32_t type;
+  uint32_t flags;
+  uint64_t offset;
+  uint64_t vaddr;
+  uint64_t paddr;
+  uint64_t filesz;
+  uint64_t memsz;
+  uint64_t align;
+} ant_elf64_phdr_t;
+
+typedef struct {
+  uint32_t name;
+  unsigned char info;
+  unsigned char other;
+  uint16_t shndx;
+  uint64_t value;
+  uint64_t size;
+} ant_elf64_sym_t;
+
+typedef struct {
+  uint32_t name;
+  uint32_t type;
+  uint64_t flags;
+  uint64_t addr;
+  uint64_t offset;
+  uint64_t size;
+  uint32_t link;
+  uint32_t info;
+  uint64_t addralign;
+  uint64_t entsize;
+} ant_elf64_shdr_t;
 
 typedef struct {
   uint8_t *data;
@@ -56,10 +127,17 @@ struct ant_hvf_vm {
   void *host_mem;
   size_t mem_size;
   uint64_t kernel_entry;
+  uint64_t pvh_entry32;
   int image_fd;
   uint64_t image_sectors;
-  hv_vcpu_t vcpu;
-  hv_vcpu_exit_t *vcpu_exit;
+  int kvm_fd;
+  int vm_fd;
+  int vcpu_fd;
+  struct kvm_run *run;
+  size_t run_mmap_size;
+  uint32_t pci_addr;
+  pthread_t vcpu_thread;
+  bool vcpu_thread_valid;
   ant_hvf_virtio_device_t blk;
   ant_hvf_virtio_device_t net;
   bool net_enabled;
@@ -87,41 +165,19 @@ struct ant_hvf_vm {
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
   bool timed_out;
-  uint32_t rtc_load_value;
-  time_t rtc_load_host;
-  uint32_t rtc_match;
-  uint32_t rtc_imsc;
-  uint32_t rtc_icr;
-  bool rtc_enabled;
-  bool gic_msi_enabled;
-  uint32_t gic_msi_base;
-  uint32_t gic_msi_count;
-  uint64_t cntfrq;
-  uint32_t last_exit_reason;
-  uint64_t last_exit_pc;
-  uint64_t last_exit_esr;
-  uint64_t last_exit_ipa;
-  uint64_t last_exit_va;
 };
-
-typedef struct {
-  ant_hvf_vm_t *vm;
-  unsigned int timeout_ms;
-  bool until_request_sent;
-} ant_hvf_timeout_t;
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);
 void ant_hvf_uart_report_panic(ant_hvf_vm_t *vm);
 bool ant_hvf_uart_has_panic(ant_hvf_vm_t *vm);
 void ant_hvf_uart_put(ant_hvf_vm_t *vm, uint8_t byte);
+int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data);
+void ant_hvf_wake_vcpu(ant_hvf_vm_t *vm);
 
 uint32_t ant_bswap32(uint32_t x);
 uint64_t ant_bswap64(uint64_t x);
 size_t ant_align4(size_t n);
 size_t ant_align_page(size_t n);
-int ant_hvf_check(hv_return_t ret, const char *op);
-int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data);
-void ant_hvf_wake_vcpu(ant_hvf_vm_t *vm);
 int ant_hvf_check_file(const char *kind, const char *path, off_t *size_out);
 void ant_hvf_verbose(ant_hvf_vm_t *vm, const char *message);
 void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...)
@@ -138,23 +194,9 @@ int ant_hvf_guest_write(ant_hvf_vm_t *vm, uint64_t guest_addr, const void *src, 
 int ant_read_all(int fd, void *buf, size_t len, off_t off);
 int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path);
 
-void *ant_hvf_sym(const char *name);
-int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *name);
-uint64_t ant_hvf_host_cntfrq(void);
-uint64_t ant_hvf_host_cntvct(void);
-int ant_hvf_init_vcpu(ant_hvf_vm_t *vm);
-int ant_hvf_handle_wfx(ant_hvf_vm_t *vm);
-int ant_hvf_sync_vtimer(ant_hvf_vm_t *vm);
-int ant_hvf_raise_vtimer(ant_hvf_vm_t *vm, const char *where);
-
 uint64_t ant_hvf_select_width(uint64_t value, unsigned offset, unsigned size);
 void ant_hvf_assign_width(uint32_t *target, unsigned offset, unsigned size, uint64_t value);
 void ant_hvf_assign_width16(uint16_t *target, unsigned offset, unsigned size, uint64_t value);
 void ant_hvf_assign_width64(uint64_t *target, unsigned offset, unsigned size, uint64_t value);
-
-bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value);
-bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value);
-int ant_hvf_advance_pc(hv_vcpu_t vcpu);
-int ant_hvf_handle_mmio(ant_hvf_vm_t *vm, hv_vcpu_exit_exception_t *ex);
 
 #endif

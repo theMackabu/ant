@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#if defined(__aarch64__)
 
 #define ANT_PCI_STATUS_CAP_LIST 0x0010u
 #define ANT_PCI_COMMAND_IO 0x0001u
@@ -61,4 +60,3 @@ void ant_hvf_pci_config_write(ant_hvf_vm_t *vm,
 bool ant_hvf_pci_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t *value);
 bool ant_hvf_pci_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value);
 
-#endif

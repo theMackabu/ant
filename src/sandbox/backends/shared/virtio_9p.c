@@ -1,6 +1,5 @@
-#include "backend.h"
+#include "sandbox_backend/backend.h"
 
-#if defined(__aarch64__)
 
 static uint64_t ant_hvf_9p_now_ns(void) {
   struct timespec ts;
@@ -1369,4 +1368,3 @@ int ant_hvf_virtio_9p_notify(ant_hvf_vm_t *vm, ant_hvf_9p_device_t *dev) {
   return ant_hvf_virtio_interrupt(vm, vdev, 0);
 }
 
-#endif

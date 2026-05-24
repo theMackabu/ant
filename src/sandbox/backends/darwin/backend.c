@@ -4,6 +4,32 @@
 
 #if defined(__aarch64__)
 
+int ant_hvf_check(hv_return_t ret, const char *op) {
+  if (ret == HV_SUCCESS) return 0;
+
+  if (ret == HV_DENIED) {
+    fprintf(stderr,
+            "sandbox vm: %s denied; sign the binary with com.apple.security.hypervisor\n",
+            op);
+    return -EACCES;
+  }
+
+  fprintf(stderr, "sandbox vm: %s failed with Hypervisor.framework error %d\n", op, ret);
+  return -EIO;
+}
+
+int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data) {
+  (void)vm;
+  if (!ant_hvf_gic.send_msi) return -ENOSYS;
+  hv_return_t rc = ant_hvf_gic.send_msi((hv_ipa_t)addr, data);
+  if (rc != HV_SUCCESS) return -EIO;
+  return 0;
+}
+
+void ant_hvf_wake_vcpu(ant_hvf_vm_t *vm) {
+  if (vm && vm->vcpu) hv_vcpus_exit(&vm->vcpu, 1);
+}
+
 static void ant_hvf_verbose_prefix(void) {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {

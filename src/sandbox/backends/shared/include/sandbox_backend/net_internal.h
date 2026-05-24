@@ -3,7 +3,6 @@
 
 #include "backend.h"
 
-#if defined(__aarch64__)
 
 #define ANT_NET_IP(a, b, c, d) \
   ((((uint32_t)(a)) << 24u) | (((uint32_t)(b)) << 16u) | (((uint32_t)(c)) << 8u) | ((uint32_t)(d)))
@@ -114,5 +113,4 @@ void ant_nat_handle_udp(ant_hvf_nat_t *nat, const ant_eth_t *eth, const ant_ipv4
 void ant_nat_wake(ant_hvf_nat_t *nat);
 void ant_nat_note_guest_packet(ant_hvf_nat_t *nat);
 
-#endif
 #endif

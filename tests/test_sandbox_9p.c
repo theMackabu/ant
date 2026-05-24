@@ -1,5 +1,5 @@
 #include "sandbox/host.h"
-#include "../src/sandbox/backends/darwin/virtio_9p.h"
+#include "sandbox_backend/virtio_9p.h"
 
 #include <assert.h>
 #include <errno.h>
