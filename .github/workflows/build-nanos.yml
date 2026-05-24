@@ -196,12 +196,21 @@ jobs:
           kernel_path="$PWD/ant-kernel-${{ inputs.arch }}.img"
           ant_version=$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/meson/ant.version")
           ops_home="$RUNNER_TEMP/ant-ops-home"
+          case "${{ inputs.arch }}" in
+            aarch64) ops_kernel="$RUNNER_TEMP/ant-kernel-arm.img" ;;
+            x64) ops_kernel="$RUNNER_TEMP/ant-kernel-x64.img" ;;
+            *)
+              echo "::error::unsupported Nanos architecture: ${{ inputs.arch }}"
+              exit 1
+              ;;
+          esac
           rm -rf "$ops_home"
           mkdir -p "$ops_home/.ops/images"
+          cp "$kernel_path" "$ops_kernel"
 
           cat > ops-sandbox.json <<JSON
           {
-            "Kernel": "$kernel_path",
+            "Kernel": "$ops_kernel",
             "NanosVersion": "$ant_version",
             "Env": {
               "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
