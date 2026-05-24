@@ -250,10 +250,10 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
                       0x01,
                       0x00,
                       (uint32_t)ANT_HVF_VIRTIO_BLK_BAR,
-                      0,
+                      ANT_VIRTIO_BLK_FEATURES,
                       1,
                       ANT_VIRTIO_BLK_QUEUE_SIZE,
-                      24);
+                      ANT_VIRTIO_BLK_CONFIG_LEN);
   ant_hvf_virtio_init(&vm->net,
                       ANT_HVF_VIRTIO_KIND_NET,
                       "virtio-net",

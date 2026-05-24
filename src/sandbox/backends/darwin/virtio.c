@@ -116,8 +116,7 @@ bool ant_hvf_virtio_device_config_read(ant_hvf_vm_t *vm,
 
   switch (dev->kind) {
     case ANT_HVF_VIRTIO_KIND_BLOCK:
-      ant_hvf_store64(cfg, vm->image_sectors);
-      ant_hvf_store32(cfg + 20, 512u);
+      ant_hvf_virtio_blk_config(vm, cfg, sizeof(cfg));
       break;
     case ANT_HVF_VIRTIO_KIND_NET:
       memcpy(cfg, vm->net_mac, sizeof(vm->net_mac));

@@ -289,6 +289,31 @@ meson compile -C build
 ./build/ant sandbox examples/demo/pi.js
 ```
 
+## Virtio-blk Review
+
+The Darwin virtio-blk backend now has a clearer root-image contract instead of
+the original bringup-only device shape.
+
+Completed cleanup:
+
+- advertise `SEG_MAX`, `BLK_SIZE`, and `FLUSH` instead of exposing an empty
+  feature set
+- report a larger queue and matching `seg_max` in device config
+- validate descriptor chains, descriptor direction, status descriptors, queue
+  bounds, and descriptor loops before completing requests
+- bounds-check root-image reads and writes against the advertised sector count
+  and reject unaligned or overflowing disk ranges
+- handle normal header-to-status flush requests with `fsync`
+- return `UNSUPP` for unadvertised request types instead of treating every
+  unknown command as a generic I/O failure
+- add a focused Darwin unit test for read, write, flush, unsupported commands,
+  and invalid descriptor direction
+
+Intentional remaining boundary:
+
+- discard and write-zeroes are still not advertised or implemented; add them
+  only when the sandbox root image needs sparse trim/zeroing semantics.
+
 ## Workspace Mounts And Dynamic Guest Paths
 
 The CLI now mounts the host current working directory read-only at `/workspace`
