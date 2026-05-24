@@ -133,6 +133,9 @@ int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_
 int ant_sandbox_vm_session_cancel(ant_sandbox_vm_session_t *session) {
   if (!session) return -EINVAL;
   if (session->helper) return ant_sandbox_vm_helper_cancel(session);
+  if (session->backend && session->backend->cancel_session && session->backend_session) {
+    return session->backend->cancel_session(session->backend_session);
+  }
   return -ENOSYS;
 }
 

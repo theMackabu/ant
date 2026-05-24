@@ -164,7 +164,9 @@ struct ant_hvf_vm {
   void *frame_handler_user;
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
-  bool timed_out;
+  volatile sig_atomic_t canceled;
+  volatile sig_atomic_t timeout_disarmed;
+  volatile sig_atomic_t timed_out;
 };
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);

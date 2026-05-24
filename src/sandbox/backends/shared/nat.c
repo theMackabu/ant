@@ -522,7 +522,8 @@ static void *ant_nat_thread(void *arg) {
       if (!ant_nat_tcp_active(c) || c->fd < 0) continue;
       uint32_t in_flight = ant_nat_host_sent_seq(c) - c->guest_ack;
       uint32_t guest_window = c->guest_window ? c->guest_window : ANT_TCP_GUEST_WINDOW;
-      short ev = in_flight < guest_window &&
+      short ev = c->state != ANT_NAT_TCP_CONNECTING_GUEST &&
+                 in_flight < guest_window &&
                  c->host_len < ANT_NAT_STREAM_BUFFER_LIMIT &&
                  !c->host_eof ? POLLIN : 0;
       if (c->state == ANT_NAT_TCP_CONNECTING_HOST || c->pending_len) ev |= POLLOUT;

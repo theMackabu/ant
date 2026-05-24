@@ -17,6 +17,7 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 #else
+#include <signal.h>
 #include <sys/resource.h>
 #include <sys/utsname.h>
 #include <pwd.h>

@@ -80,6 +80,7 @@ typedef struct ant_sandbox_vm_backend {
   int (*start)(const ant_sandbox_vm_config_t *config);
   int (*create_session)(const ant_sandbox_vm_config_t *config, void **session_out);
   int (*execute_session)(void *session, const ant_sandbox_vm_request_t *request);
+  int (*cancel_session)(void *session);
   void (*destroy_session)(void *session);
 } ant_sandbox_vm_backend_t;
 

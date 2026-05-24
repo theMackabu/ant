@@ -38,8 +38,51 @@ typedef struct {
   bool memory_registered;
 } ant_kvm_session_t;
 
+typedef struct {
+  ant_hvf_vm_t *vm;
+  struct timespec start;
+  unsigned int timeout_ms;
+  bool timeout_until_request_sent;
+  volatile sig_atomic_t stop;
+} ant_kvm_deadline_t;
+
 static void ant_kvm_noop_signal(int sig) {
   (void)sig;
+}
+
+static void ant_kvm_install_wakeup_signal(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = ant_kvm_noop_signal;
+  sigemptyset(&sa.sa_mask);
+  (void)sigaction(SIGUSR1, &sa, NULL);
+}
+
+static uint64_t ant_kvm_elapsed_ms(const struct timespec *start, const struct timespec *now) {
+  uint64_t elapsed = (uint64_t)(now->tv_sec - start->tv_sec) * 1000ull;
+  if (now->tv_nsec >= start->tv_nsec) {
+    elapsed += (uint64_t)(now->tv_nsec - start->tv_nsec) / 1000000ull;
+  } else {
+    elapsed -= (uint64_t)(start->tv_nsec - now->tv_nsec) / 1000000ull;
+  }
+  return elapsed;
+}
+
+static void *ant_kvm_deadline_thread(void *opaque) {
+  ant_kvm_deadline_t *deadline = opaque;
+  const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
+  for (;;) {
+    if (deadline->stop || !deadline->vm || deadline->vm->canceled) return NULL;
+    if (deadline->timeout_until_request_sent && deadline->vm->timeout_disarmed) return NULL;
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+        ant_kvm_elapsed_ms(&deadline->start, &now) >= deadline->timeout_ms) {
+      deadline->vm->timed_out = true;
+      ant_hvf_wake_vcpu(deadline->vm);
+      return NULL;
+    }
+    nanosleep(&tick, NULL);
+  }
 }
 
 static void ant_kvm_set_result(ant_sandbox_vm_result_t *result,
@@ -60,6 +103,8 @@ static void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *r
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE, rc);
   } else if (rc == -ETIMEDOUT) {
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
+  } else if (rc == -ECANCELED || (vm && vm->canceled)) {
+    ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_CANCELED, rc ? rc : -ECANCELED);
   } else if (vm && vm->vsock.protocol_error) {
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
   } else if (vm && vm->vsock.transport_error) {
@@ -450,42 +495,64 @@ static int ant_kvm_handle_mmio(ant_hvf_vm_t *vm) {
 }
 
 static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_request_sent) {
-  struct timespec start;
-  bool have_start = clock_gettime(CLOCK_MONOTONIC, &start) == 0;
+  int rc = 0;
+  pthread_t deadline_thread;
+  bool deadline_thread_started = false;
+  ant_kvm_deadline_t deadline = {
+    .vm = vm,
+    .timeout_ms = timeout_ms,
+    .timeout_until_request_sent = timeout_until_request_sent,
+  };
+  bool have_deadline = timeout_ms > 0 && clock_gettime(CLOCK_MONOTONIC, &deadline.start) == 0;
   vm->vcpu_thread = pthread_self();
   vm->vcpu_thread_valid = true;
+  vm->timeout_disarmed = false;
+
+  if (have_deadline && pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
+    deadline_thread_started = true;
+  }
 
   for (;;) {
-    if (timeout_ms > 0 && (!timeout_until_request_sent || !vm->vsock.request_sent) && have_start) {
+    if (vm->canceled) {
+      rc = -ECANCELED;
+      break;
+    }
+    if (vm->timed_out) {
+      rc = -ETIMEDOUT;
+      break;
+    }
+    if (timeout_until_request_sent && vm->vsock.request_sent) vm->timeout_disarmed = true;
+    if (!deadline_thread_started && have_deadline &&
+        (!timeout_until_request_sent || !vm->timeout_disarmed)) {
       struct timespec now;
-      if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
-        uint64_t elapsed = (uint64_t)(now.tv_sec - start.tv_sec) * 1000ull;
-        if (now.tv_nsec >= start.tv_nsec) elapsed += (uint64_t)(now.tv_nsec - start.tv_nsec) / 1000000ull;
-        else elapsed -= (uint64_t)(start.tv_nsec - now.tv_nsec) / 1000000ull;
-        if (elapsed >= timeout_ms) {
-          vm->timed_out = true;
-          vm->vcpu_thread_valid = false;
-          return -ETIMEDOUT;
-        }
+      if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+          ant_kvm_elapsed_ms(&deadline.start, &now) >= timeout_ms) {
+        vm->timed_out = true;
+        rc = -ETIMEDOUT;
+        break;
       }
     }
 
-    int rc = ioctl(vm->vcpu_fd, KVM_RUN, 0);
+    rc = ioctl(vm->vcpu_fd, KVM_RUN, 0);
     if (rc < 0) {
       if (errno == EINTR) {
+        if (vm->canceled) {
+          rc = -ECANCELED;
+          break;
+        }
+        if (vm->timed_out) {
+          rc = -ETIMEDOUT;
+          break;
+        }
         if (vm->net_rx_wake) {
           vm->net_rx_wake = false;
           rc = ant_hvf_virtio_net_drain_rx(vm);
-          if (rc != 0) {
-            vm->vcpu_thread_valid = false;
-            return rc;
-          }
+          if (rc != 0) break;
         }
         continue;
       }
       rc = -errno;
-      vm->vcpu_thread_valid = false;
-      return rc;
+      break;
     }
 
     switch (vm->run->exit_reason) {
@@ -497,33 +564,36 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
         break;
       case KVM_EXIT_HLT:
       case KVM_EXIT_SHUTDOWN:
-        vm->vcpu_thread_valid = false;
-        return 0;
+        rc = 0;
+        goto done;
       case KVM_EXIT_FAIL_ENTRY:
         fprintf(stderr,
                 "sandbox vm: KVM fail entry hardware_entry_failure_reason=0x%llx\n",
                 (unsigned long long)vm->run->fail_entry.hardware_entry_failure_reason);
-        vm->vcpu_thread_valid = false;
-        return -EIO;
+        rc = -EIO;
+        goto done;
       case KVM_EXIT_INTERNAL_ERROR:
         fprintf(stderr, "sandbox vm: KVM internal error suberror=%u\n", vm->run->internal.suberror);
-        vm->vcpu_thread_valid = false;
-        return -EIO;
+        rc = -EIO;
+        goto done;
       default:
         fprintf(stderr, "sandbox vm: unhandled KVM exit reason %u\n", vm->run->exit_reason);
-        vm->vcpu_thread_valid = false;
-        return -EIO;
+        rc = -EIO;
+        goto done;
     }
 
-    if (rc != 0) {
-      vm->vcpu_thread_valid = false;
-      return rc;
-    }
+    if (rc != 0) break;
     if (vm->vsock.exit_received) {
-      vm->vcpu_thread_valid = false;
-      return vm->vsock.exit_code;
+      rc = vm->vsock.exit_code;
+      break;
     }
   }
+
+done:
+  deadline.stop = true;
+  if (deadline_thread_started) pthread_join(deadline_thread, NULL);
+  vm->vcpu_thread_valid = false;
+  return rc;
 }
 
 static void ant_kvm_session_cleanup(ant_kvm_session_t *session, int *rc_inout) {
@@ -756,7 +826,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   rc = ant_kvm_init_vcpu(vm);
   if (rc != 0) goto fail;
 
-  signal(SIGUSR1, ant_kvm_noop_signal);
+  ant_kvm_install_wakeup_signal();
 
   ant_hvf_verbosef(vm,
                    "loaded Nanos kernel (%lld bytes) pvh_start32=0x%llx",
@@ -786,6 +856,8 @@ static int ant_kvm_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->vsock.protocol_error = false;
   vm->vsock.transport_error = false;
   vm->timed_out = false;
+  vm->canceled = false;
+  vm->timeout_disarmed = false;
   vm->frame_handler = request->frame_handler;
   vm->frame_handler_user = request->frame_handler_user;
 
@@ -823,9 +895,18 @@ static int ant_kvm_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   return rc;
 }
 
+static int ant_kvm_session_cancel(void *opaque) {
+  if (!opaque) return -EINVAL;
+  ant_kvm_session_t *session = opaque;
+  session->vm.canceled = true;
+  ant_hvf_wake_vcpu(&session->vm);
+  return 0;
+}
+
 static void ant_kvm_session_destroy(void *opaque) {
   if (!opaque) return;
   ant_kvm_session_t *session = opaque;
+  (void)ant_kvm_session_cancel(session);
   int rc = 0;
   ant_kvm_session_cleanup(session, &rc);
   free(session);
@@ -853,6 +934,7 @@ const ant_sandbox_vm_backend_t ant_sandbox_vm_linux_backend = {
   .start = ant_kvm_start,
   .create_session = ant_kvm_session_create,
   .execute_session = ant_kvm_session_execute,
+  .cancel_session = ant_kvm_session_cancel,
   .destroy_session = ant_kvm_session_destroy,
 };
 
