@@ -2,6 +2,9 @@
 #include "sandbox/vm.h"
 #include "sandbox/sandbox.h"
 
+#include <errno.h>
+#include <stdio.h>
+
 #if defined(__aarch64__)
 
 int ant_hvf_check(hv_return_t ret, const char *op) {

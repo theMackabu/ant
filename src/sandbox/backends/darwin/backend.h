@@ -2,10 +2,13 @@
 
 #include <compat.h> // IWYU pragma: keep
 
+#include "sandbox/vm.h"
+
+#if defined(__aarch64__)
+
 #include "fdt.h"
 #include "gic.h"
 #include "hvf.h"
-#include "sandbox/vm.h"
 #include "sandbox_backend/forward.h"
 #include "sandbox_backend/nat.h"
 #include "sandbox_backend/virtio.h"
@@ -39,8 +42,6 @@
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
-
-#if defined(__aarch64__)
 
 #define ANT_HVF_ELF_MACHINE 183u
 #define ANT_HVF_ELF_MACHINE_NAME "aarch64"

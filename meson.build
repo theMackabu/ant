@@ -33,15 +33,20 @@ sandbox_shared_sources = files(
   'src/sandbox/backends/shared/virtio_rng.c',
   'src/sandbox/backends/shared/virtio_vsock.c',
 )
+darwin_hvf_supported = host_machine.system() == 'darwin' and host_machine.cpu_family() == 'aarch64'
 if host_machine.system() == 'darwin'
   sandbox_backend_sources += files(
     'src/sandbox/backends/darwin/backend.c',
-    'src/sandbox/backends/darwin/fdt.c',
-    'src/sandbox/backends/darwin/gic.c',
-    'src/sandbox/backends/darwin/mmio.c',
-    'src/sandbox/backends/darwin/uart.c',
   )
-  sandbox_backend_sources += sandbox_shared_sources
+  if darwin_hvf_supported
+    sandbox_backend_sources += files(
+      'src/sandbox/backends/darwin/fdt.c',
+      'src/sandbox/backends/darwin/gic.c',
+      'src/sandbox/backends/darwin/mmio.c',
+      'src/sandbox/backends/darwin/uart.c',
+    )
+    sandbox_backend_sources += sandbox_shared_sources
+  endif
 elif host_machine.system() == 'linux'
   sandbox_backend_sources += files(
     'src/sandbox/backends/linux/kvm_aarch64.c',
@@ -189,7 +194,7 @@ executable(
   build_by_default: false
 )
 
-if host_machine.system() == 'darwin'
+if darwin_hvf_supported
   executable(
     'test-sandbox-net-packets',
     files('tests/test_sandbox_net_packets.c'),
