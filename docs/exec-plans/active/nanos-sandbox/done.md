@@ -165,7 +165,8 @@ replayed in local builds, CI, or a fork later.
 Known patch themes:
 
 - keep aarch64 user pointers below Ant's 47-bit NaN-boxing ceiling
-- read architected timer frequency from devicetree when `CNTFRQ_EL0` is zero
+- read architected timer frequency from devicetree when `CNTFRQ_EL0` is zero,
+  with no hardcoded guest-side fallback
 - refresh stale 9p readdir children
 - fix `writev` handling
 - make stack growth probing report `ENOMEM` correctly
@@ -215,9 +216,13 @@ The slot 0 PCI enumeration bug was slot 0 reporting header type `0xff`, which
 made Nanos take the multi-host-controller path and skip normal bus 0 probing.
 Slot 0 now reports a single-controller header while remaining absent.
 
-HVF does not allow the backend to set `CNTFRQ_EL0`, so the generated FDT
-advertises the host counter through `/timer/clock-frequency` and the local Nanos
-patch reads that value when the architectural register is zero.
+The Darwin backend treats the generic timer frequency as an explicit VM
+contract. It reads the host `cntfrq_el0`, rejects zero or unsupported values,
+publishes that value through `/timer/clock-frequency` and
+`/timer/timebase-frequency`, and attempts to seed guest `CNTFRQ_EL0` for
+runtimes that permit it. The local Nanos patch reads the devicetree value when
+the architectural register is zero and halts if neither source provides a
+frequency; it no longer falls back to a guessed 24 MHz timer.
 
 ## HVF GIC, Timer, And MSI-X Cleanup
 
@@ -244,6 +249,8 @@ Completed cleanup:
 - fix the local GIC redistributor register type from 16 bits to 32 bits so
   `GICR_ISPENDR0` is not truncated
 - compare vtimer deadlines against `cntvct_el0`, not `mach_absolute_time()`
+- publish the host timer frequency through the boot FDT and remove the Nanos
+  hardcoded `CNTFRQ_EL0 == 0` fallback
 - assert the HVF IRQ line when raising the virtual timer PPI, matching the
   reference shape in libkrun
 - remove the `ANT_SANDBOX_VM_WAKE_MS` polling thread now that the allowed

@@ -2,13 +2,12 @@ diff --git a/src/aarch64/clock.c b/src/aarch64/clock.c
 index 8fa4e05..f238ebf 100644
 --- a/src/aarch64/clock.c
 +++ b/src/aarch64/clock.c
-@@ -1,14 +1,35 @@
+@@ -1,14 +1,34 @@
  #include <kernel.h>
  #include <gic.h>
 +#include <devicetree.h>
  
  #define __vdso_dat (&(VVAR_REF(vdso_dat)))
-+#define ARM_GENERIC_TIMER_FALLBACK_FREQ 24000000ull
  
  BSS_RO_AFTER_INIT clock_now platform_monotonic_now;
  BSS_RO_AFTER_INIT clock_timer platform_timer;
@@ -39,7 +38,7 @@ index 8fa4e05..f238ebf 100644
  }
  
  closure_function(0, 0, timestamp, arm_clock_now)
-@@ -37,6 +58,12 @@ BSS_RO_AFTER_INIT closure_struct(arm_timer_percpu_init, _timer_percpu_init);
+@@ -37,6 +57,12 @@ BSS_RO_AFTER_INIT closure_struct(arm_timer_percpu_init, _timer_percpu_init);
  
  void init_clock(void)
  {
@@ -47,7 +46,7 @@ index 8fa4e05..f238ebf 100644
 +    if (!arm_cntfrq)
 +        arm_cntfrq = cntfrq_from_dtb();
 +    if (!arm_cntfrq)
-+        arm_cntfrq = ARM_GENERIC_TIMER_FALLBACK_FREQ;
++        halt("aarch64 generic timer frequency unavailable\n");
 +
      register_platform_clock_now(init_closure(&_clock_now, arm_clock_now), VDSO_CLOCK_SYSCALL, 0);
      register_platform_clock_timer(init_closure_func(&_deadline_timer, clock_timer,

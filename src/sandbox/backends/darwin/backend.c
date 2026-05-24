@@ -302,6 +302,13 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
     vm->p9[i].readonly = config->mounts[i].readonly;
   }
   vm->cntfrq = ant_hvf_host_cntfrq();
+  if (vm->cntfrq == 0 || vm->cntfrq > UINT32_MAX) {
+    fprintf(stderr,
+            "sandbox vm: unsupported host generic timer frequency %llu\n",
+            (unsigned long long)vm->cntfrq);
+    rc = -EIO;
+    goto fail;
+  }
   vm->verbose = config->verbose;
   vm->timeout_ms = config->timeout_ms;
   vm->boot_timeout_ms = config->boot_timeout_ms;

@@ -111,9 +111,9 @@ int ant_hvf_build_dtb(ant_hvf_vm_t *vm) {
   if ((rc = ant_fdt_begin(&fdt, "timer")) != 0) return rc;
   if ((rc = ant_fdt_prop_string(&fdt, "compatible", "arm,armv8-timer")) != 0) return rc;
   if ((rc = ant_fdt_prop_null(&fdt, "always-on")) != 0) return rc;
-  if (vm->cntfrq > 0 && vm->cntfrq <= UINT32_MAX) {
-    if ((rc = ant_fdt_prop_u32(&fdt, "clock-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
-  }
+  if (vm->cntfrq == 0 || vm->cntfrq > UINT32_MAX) return -EINVAL;
+  if ((rc = ant_fdt_prop_u32(&fdt, "clock-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
+  if ((rc = ant_fdt_prop_u32(&fdt, "timebase-frequency", (uint32_t)vm->cntfrq)) != 0) return rc;
   uint32_t timer_irq[] = {
     1, 13, 4,
     1, 14, 4,

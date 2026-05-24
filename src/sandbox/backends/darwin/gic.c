@@ -111,7 +111,14 @@ int ant_hvf_init_vcpu(ant_hvf_vm_t *vm) {
   rc = ant_hvf_check(hv_vcpu_set_sys_reg(vm->vcpu, HV_SYS_REG_MPIDR_EL1, 0),
                      "hv_vcpu_set_sys_reg(MPIDR_EL1)");
   if (rc != 0) return rc;
-  hv_vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
+  hv_return_t cntfrq_rc = hv_vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
+  if (cntfrq_rc == HV_SUCCESS) {
+    ant_hvf_verbosef(vm, "seeded CNTFRQ_EL0=%llu", (unsigned long long)vm->cntfrq);
+  } else {
+    ant_hvf_verbosef(vm,
+                     "CNTFRQ_EL0 sysreg seed unavailable rc=%d; using timer frequency from device tree",
+                     cntfrq_rc);
+  }
   return ant_hvf_check(hv_vcpu_set_vtimer_mask(vm->vcpu, false),
                        "hv_vcpu_set_vtimer_mask(init)");
 }
