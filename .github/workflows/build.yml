@@ -99,3 +99,17 @@ jobs:
           fi
 
           echo "## Build Version: \`${UNIQUE[0]}\`" >> $GITHUB_STEP_SUMMARY
+
+  refresh-manifest:
+    name: Refresh manifest
+    needs: [build, nanos-x64, nanos-aarch64]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
+    steps:
+      - name: Refresh manifest
+        env:
+          MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST https://manifest.antjs.org/v1/refresh \
+            -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"

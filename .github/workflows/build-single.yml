@@ -45,3 +45,17 @@ jobs:
       artifact: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl' }}
       runner: ${{ inputs.platform == 'linux-musl-aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
       image: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64' }}
+
+  refresh-manifest:
+    name: Refresh manifest
+    needs: [build, nanos]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos.result == 'success') }}
+    steps:
+      - name: Refresh manifest
+        env:
+          MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST https://manifest.antjs.org/v1/refresh \
+            -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
