@@ -183,4 +183,11 @@ if host_machine.system() == 'darwin'
     dependencies: libant_dep,
     build_by_default: false
   )
+
+  executable(
+    'test-sandbox-pci',
+    files('tests/test_sandbox_pci.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
 endif

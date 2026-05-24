@@ -314,6 +314,32 @@ Intentional remaining boundary:
 - discard and write-zeroes are still not advertised or implemented; add them
   only when the sandbox root image needs sparse trim/zeroing semantics.
 
+## PCI Config Cleanup
+
+The Darwin PCI config path is still a small machine contract for the current
+modern virtio devices, but the writable config-space semantics are now explicit
+instead of scattered through ad hoc conditionals.
+
+Completed cleanup:
+
+- named the conventional PCI config offsets used by the backend
+- split device lookup, BAR0 writes, command writes, and MSI-X control writes
+  into focused helpers
+- keep BAR sizing behavior explicit and align assigned BARs to the advertised
+  virtio BAR size
+- mask `PCI_COMMAND` to the I/O, memory, and bus-master bits the backend
+  actually models
+- mask MSI-X control to enable and mask-all bits while preserving the table size
+  reported through config-space reads
+- add focused Darwin coverage for ECAM decode, present/absent device reads,
+  command masking, BAR sizing/assignment, and MSI-X control masking
+
+Remaining boundary:
+
+- this is not a general-purpose PCI root-complex model; unsupported PIO and
+  non-virtio config accesses remain compatibility shims until the VM contract
+  needs stricter failure behavior.
+
 ## Workspace Mounts And Dynamic Guest Paths
 
 The CLI now mounts the host current working directory read-only at `/workspace`

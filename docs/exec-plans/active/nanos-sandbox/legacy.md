@@ -15,9 +15,10 @@ pieces are intentionally minimal and should not be treated as finished APIs:
 - Virtio-9p now supports explicit writable mounts, but its path policy and
   mutation surface should continue to be reviewed as more workflows depend on
   host-backed writes.
-- PCI config space is handcrafted for the current modern virtio devices. It
-  exposes the required capabilities and MSI-X tables, but it is not a full PCI
-  root-complex model and still swallows unsupported config/PIO accesses.
+- PCI config space now has explicit modern virtio config handling for the
+  current device set, including BAR sizing, command masking, MSI-X control
+  masking, and absent-device reads. It is still not a full PCI root-complex
+  model, and unsupported PIO accesses are still minimal compatibility shims.
 - RTC and miscellaneous MMIO devices are minimal compatibility shims. RTC reads
   host wall time and ignores writes; unknown devices should become explicit
   models or explicit failures as the machine contract stabilizes.

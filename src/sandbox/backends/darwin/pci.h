@@ -19,6 +19,21 @@
 #define ANT_PCI_MSIX_ENABLE 0x8000u
 #define ANT_PCI_MSIX_MASK_ALL 0x4000u
 #define ANT_PCI_MSIX_ENTRY_MASKED 0x00000001u
+#define ANT_PCI_CONFIG_SIZE 256u
+#define ANT_PCI_CONFIG_VENDOR_ID 0x00u
+#define ANT_PCI_CONFIG_DEVICE_ID 0x02u
+#define ANT_PCI_CONFIG_COMMAND 0x04u
+#define ANT_PCI_CONFIG_STATUS 0x06u
+#define ANT_PCI_CONFIG_REVISION_ID 0x08u
+#define ANT_PCI_CONFIG_PROG_IF 0x09u
+#define ANT_PCI_CONFIG_SUBCLASS 0x0au
+#define ANT_PCI_CONFIG_CLASS_CODE 0x0bu
+#define ANT_PCI_CONFIG_HEADER_TYPE 0x0eu
+#define ANT_PCI_CONFIG_BAR0 0x10u
+#define ANT_PCI_CONFIG_SUBVENDOR_ID 0x2cu
+#define ANT_PCI_CONFIG_SUBSYSTEM_ID 0x2eu
+#define ANT_PCI_CONFIG_CAP_PTR 0x34u
+#define ANT_PCI_CONFIG_INTERRUPT_PIN 0x3du
 
 bool ant_hvf_pci_addr(uint64_t addr, unsigned *bus, unsigned *slot, unsigned *fn, unsigned *reg);
 bool ant_hvf_is_virtio_slot(unsigned bus, unsigned slot, unsigned fn);
@@ -34,7 +49,7 @@ void ant_hvf_virtio_cfg_cap(unsigned char *cfg,
                             uint32_t offset,
                             uint32_t length,
                             bool notify);
-void ant_hvf_virtio_build_config(ant_hvf_virtio_device_t *dev, unsigned char cfg[256]);
+void ant_hvf_virtio_build_config(ant_hvf_virtio_device_t *dev, unsigned char cfg[ANT_PCI_CONFIG_SIZE]);
 uint32_t ant_hvf_pci_config_read32(ant_hvf_vm_t *vm, unsigned bus, unsigned slot, unsigned fn, unsigned reg);
 void ant_hvf_pci_config_write(ant_hvf_vm_t *vm,
                               unsigned bus,
