@@ -24,6 +24,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -164,9 +165,9 @@ struct ant_hvf_vm {
   void *frame_handler_user;
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
-  volatile sig_atomic_t canceled;
-  volatile sig_atomic_t timeout_disarmed;
-  volatile sig_atomic_t timed_out;
+  atomic_bool canceled;
+  atomic_bool timeout_disarmed;
+  atomic_bool timed_out;
 };
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);

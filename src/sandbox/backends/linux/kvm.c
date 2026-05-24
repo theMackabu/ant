@@ -72,12 +72,18 @@ static void *ant_kvm_deadline_thread(void *opaque) {
   ant_kvm_deadline_t *deadline = opaque;
   const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
   for (;;) {
-    if (deadline->stop || !deadline->vm || deadline->vm->canceled) return NULL;
-    if (deadline->timeout_until_request_sent && deadline->vm->timeout_disarmed) return NULL;
+    if (deadline->stop || !deadline->vm ||
+        atomic_load_explicit(&deadline->vm->canceled, memory_order_acquire)) {
+      return NULL;
+    }
+    if (deadline->timeout_until_request_sent &&
+        atomic_load_explicit(&deadline->vm->timeout_disarmed, memory_order_acquire)) {
+      return NULL;
+    }
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
         ant_kvm_elapsed_ms(&deadline->start, &now) >= deadline->timeout_ms) {
-      deadline->vm->timed_out = true;
+      atomic_store_explicit(&deadline->vm->timed_out, true, memory_order_release);
       ant_hvf_wake_vcpu(deadline->vm);
       return NULL;
     }
@@ -103,7 +109,8 @@ static void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *r
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE, rc);
   } else if (rc == -ETIMEDOUT) {
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
-  } else if (rc == -ECANCELED || (vm && vm->canceled)) {
+  } else if (rc == -ECANCELED ||
+             (vm && atomic_load_explicit(&vm->canceled, memory_order_acquire))) {
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_CANCELED, rc ? rc : -ECANCELED);
   } else if (vm && vm->vsock.protocol_error) {
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR, rc);
@@ -506,28 +513,31 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   bool have_deadline = timeout_ms > 0 && clock_gettime(CLOCK_MONOTONIC, &deadline.start) == 0;
   vm->vcpu_thread = pthread_self();
   vm->vcpu_thread_valid = true;
-  vm->timeout_disarmed = false;
+  atomic_store_explicit(&vm->timeout_disarmed, false, memory_order_release);
 
   if (have_deadline && pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
     deadline_thread_started = true;
   }
 
   for (;;) {
-    if (vm->canceled) {
+    if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
       rc = -ECANCELED;
       break;
     }
-    if (vm->timed_out) {
+    if (atomic_load_explicit(&vm->timed_out, memory_order_acquire)) {
       rc = -ETIMEDOUT;
       break;
     }
-    if (timeout_until_request_sent && vm->vsock.request_sent) vm->timeout_disarmed = true;
+    if (timeout_until_request_sent && vm->vsock.request_sent) {
+      atomic_store_explicit(&vm->timeout_disarmed, true, memory_order_release);
+    }
     if (!deadline_thread_started && have_deadline &&
-        (!timeout_until_request_sent || !vm->timeout_disarmed)) {
+        (!timeout_until_request_sent ||
+         !atomic_load_explicit(&vm->timeout_disarmed, memory_order_acquire))) {
       struct timespec now;
       if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
           ant_kvm_elapsed_ms(&deadline.start, &now) >= timeout_ms) {
-        vm->timed_out = true;
+        atomic_store_explicit(&vm->timed_out, true, memory_order_release);
         rc = -ETIMEDOUT;
         break;
       }
@@ -536,11 +546,11 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
     rc = ioctl(vm->vcpu_fd, KVM_RUN, 0);
     if (rc < 0) {
       if (errno == EINTR) {
-        if (vm->canceled) {
+        if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
           rc = -ECANCELED;
           break;
         }
-        if (vm->timed_out) {
+        if (atomic_load_explicit(&vm->timed_out, memory_order_acquire)) {
           rc = -ETIMEDOUT;
           break;
         }
@@ -733,6 +743,22 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
                    vm->mem_size / ((size_t)1024 * 1024),
                    vm->p9_count,
                    vm->net_forward_count);
+  for (size_t i = 0; i < config->mount_count; i++) {
+    ant_hvf_verbosef(vm,
+                     "mount[%zu] host=%s guest=%s tag=%s %s",
+                     i,
+                     config->mounts[i].host_path,
+                     config->mounts[i].guest_path,
+                     config->mounts[i].tag,
+                     config->mounts[i].readonly ? "ro" : "rw");
+  }
+  for (size_t i = 0; i < config->forward_count; i++) {
+    ant_hvf_verbosef(vm,
+                     "forward[%zu] host=%u guest=%u",
+                     i,
+                     config->forwards[i].host_port,
+                     config->forwards[i].guest_port);
+  }
 
   if (pthread_mutex_init(&vm->net_lock, NULL) == 0) {
     vm->net_lock_init = true;
@@ -855,9 +881,9 @@ static int ant_kvm_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->vsock.exit_code = 0;
   vm->vsock.protocol_error = false;
   vm->vsock.transport_error = false;
-  vm->timed_out = false;
-  vm->canceled = false;
-  vm->timeout_disarmed = false;
+  atomic_store_explicit(&vm->timed_out, false, memory_order_release);
+  atomic_store_explicit(&vm->canceled, false, memory_order_release);
+  atomic_store_explicit(&vm->timeout_disarmed, false, memory_order_release);
   vm->frame_handler = request->frame_handler;
   vm->frame_handler_user = request->frame_handler_user;
 
@@ -898,7 +924,7 @@ static int ant_kvm_session_execute(void *opaque, const ant_sandbox_vm_request_t 
 static int ant_kvm_session_cancel(void *opaque) {
   if (!opaque) return -EINVAL;
   ant_kvm_session_t *session = opaque;
-  session->vm.canceled = true;
+  atomic_store_explicit(&session->vm.canceled, true, memory_order_release);
   ant_hvf_wake_vcpu(&session->vm);
   return 0;
 }
