@@ -43,7 +43,10 @@ if host_machine.system() == 'darwin'
   )
 elif host_machine.system() == 'linux'
   sandbox_backend_sources += files(
-    'src/sandbox/backends/linux/kvm.c',
+    'src/sandbox/backends/linux/kvm_aarch64.c',
+    'src/sandbox/backends/linux/kvm_common.c',
+    'src/sandbox/backends/linux/kvm_unavailable.c',
+    'src/sandbox/backends/linux/kvm_x86.c',
   )
 endif
 sandbox_backend_sources += sandbox_shared_sources
