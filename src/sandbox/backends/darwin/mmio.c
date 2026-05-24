@@ -227,8 +227,7 @@ bool ant_hvf_mmio_read(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t 
     return ant_hvf_virtio_common_read(vm, virtio, addr - virtio->bar0, size, value);
   }
   if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000) {
-    *value = 0;
-    return true;
+    return ant_hvf_mmio_unsupported(vm, "PCI PIO", false, addr, size, 0);
   }
   return ant_hvf_mmio_unsupported(vm, "unknown", false, addr, size, 0);
 }
@@ -251,7 +250,9 @@ bool ant_hvf_mmio_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t
   if (virtio) {
     return ant_hvf_virtio_common_write(vm, virtio, addr - virtio->bar0, size, value);
   }
-  if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000) return true;
+  if (addr >= ANT_HVF_PCIE_PIO_BASE && addr < ANT_HVF_PCIE_PIO_BASE + 0x10000) {
+    return ant_hvf_mmio_unsupported(vm, "PCI PIO", true, addr, size, value);
+  }
   return ant_hvf_mmio_unsupported(vm, "unknown", true, addr, size, value);
 }
 

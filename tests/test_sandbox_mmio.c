@@ -63,6 +63,8 @@ static void test_unsupported_mmio(void) {
   assert(!ant_hvf_mmio_write(&vm, ANT_HVF_RTC_BASE + 0x000, 4, 1));
   assert(!ant_hvf_mmio_write(&vm, ANT_HVF_RTC_BASE + 0x008, 2, 1));
   assert(!ant_hvf_mmio_read(&vm, ANT_HVF_RTC_BASE + 0x020, 4, &value));
+  assert(!ant_hvf_mmio_read(&vm, ANT_HVF_PCIE_PIO_BASE, 4, &value));
+  assert(!ant_hvf_mmio_write(&vm, ANT_HVF_PCIE_PIO_BASE, 4, 1));
   assert(!ant_hvf_mmio_read(&vm, 0x0bad0000ull, 4, &value));
   assert(!ant_hvf_mmio_write(&vm, 0x0bad0000ull, 4, 1));
 }

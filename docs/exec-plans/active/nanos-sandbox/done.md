@@ -361,16 +361,16 @@ Completed cleanup:
   counter instead of disappearing
 - reject unsupported RTC reads/writes with an explicit diagnostic and unhandled
   guest exception instead of silent zero/ignore behavior
-- reject unknown MMIO reads/writes with the same explicit diagnostic path
+- reject PCI PIO and unknown MMIO reads/writes with the same explicit diagnostic
+  path instead of returning zero or swallowing writes
 - add focused Darwin coverage for PL031 IDs, data/load/control behavior,
-  interrupt mask/status behavior, unsupported RTC accesses, and unknown MMIO
-  failures
+  interrupt mask/status behavior, unsupported RTC accesses, PCI PIO failures,
+  and unknown MMIO failures
 
 Remaining boundary:
 
-- PCI PIO space still returns zero / ignores writes as a compatibility shim.
-  Tighten that once the guest no longer needs broad PIO tolerance during early
-  PCI bringup.
+- PCI config space is still a scoped model for the current virtio devices, not a
+  general-purpose root complex.
 
 ## Workspace Mounts And Dynamic Guest Paths
 
