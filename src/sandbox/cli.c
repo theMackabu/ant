@@ -221,6 +221,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
   int rc = sandbox_parse_options(argc, argv, &opts);
   if (rc != 0 || opts.script_index < 0) {
     sandbox_print_usage();
+    ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
   }
 
@@ -229,12 +230,14 @@ int ant_sandbox_cmd(int argc, char **argv) {
   rc = ant_sandbox_assets_resolve(&assets, err, sizeof(err));
   if (rc != 0) {
     fprintf(stderr, "sandbox: %s\n", err[0] ? err : "failed to resolve sandbox assets");
+    ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
   }
 
   char cwd[4096];
   if (!getcwd(cwd, sizeof(cwd))) {
     fprintf(stderr, "sandbox: failed to read current directory: %s\n", strerror(errno));
+    ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
   }
 
@@ -242,6 +245,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
     rc = ant_sandbox_launch_add_default_mount(&opts.launch, cwd, err, sizeof(err));
     if (rc != 0) {
       fprintf(stderr, "sandbox: %s\n", err[0] ? err : "failed to add default mount");
+      ant_sandbox_launch_options_cleanup(&opts.launch);
       return EXIT_FAILURE;
     }
   }
@@ -266,6 +270,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
                                                          &request_len);
   if (!request) {
     fprintf(stderr, "sandbox: failed to build request frame\n");
+    ant_sandbox_launch_options_cleanup(&opts.launch);
     return EXIT_FAILURE;
   }
 
@@ -292,6 +297,7 @@ int ant_sandbox_cmd(int argc, char **argv) {
   rc = ant_sandbox_vm_start(&config);
   sandbox_fill_result_from_rc(&vm_result, rc);
   free(request);
+  ant_sandbox_launch_options_cleanup(&opts.launch);
 
   if (rc == 0) return EXIT_SUCCESS;
   if (vm_result.kind == ANT_SANDBOX_VM_RESULT_GUEST_EXIT) {

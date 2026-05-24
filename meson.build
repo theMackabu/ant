@@ -197,4 +197,11 @@ if host_machine.system() == 'darwin'
     dependencies: libant_dep,
     build_by_default: false
   )
+
+  executable(
+    'test-sandbox-9p',
+    files('tests/test_sandbox_9p.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
 endif

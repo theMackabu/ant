@@ -190,10 +190,15 @@ bool ant_hvf_9p_name_bad(const char *name) {
          strcmp(name, ".") == 0 || strcmp(name, "..") == 0;
 }
 
+bool ant_hvf_9p_symlink_target_bad(const char *target) {
+  return !target || target[0] == '\0' || ant_hvf_9p_path_bad(target);
+}
+
 bool ant_hvf_9p_under_root(ant_hvf_9p_device_t *dev, const char *path) {
   if (!dev->root || !path) return false;
   size_t root_len = strlen(dev->root);
   if (root_len == 0) return false;
+  if (root_len == 1 && dev->root[0] == '/') return path[0] == '/';
   if (strncmp(path, dev->root, root_len) != 0) return false;
   return path[root_len] == '\0' || path[root_len] == '/';
 }
@@ -544,6 +549,34 @@ int ant_hvf_9p_join_rel(const char *parent, const char *name, char *out, size_t 
                               : snprintf(out, out_len, "%s", name);
   if (n < 0 || (size_t)n >= out_len) return -ENAMETOOLONG;
   return ant_hvf_9p_path_bad(out) ? -EINVAL : 0;
+}
+
+static bool ant_hvf_9p_path_equal_or_child(const char *path, const char *parent, const char **suffix) {
+  size_t parent_len = strlen(parent);
+  if (strcmp(path, parent) == 0) {
+    *suffix = "";
+    return true;
+  }
+  if (parent_len == 0) return false;
+  if (strncmp(path, parent, parent_len) == 0 && path[parent_len] == '/') {
+    *suffix = path + parent_len;
+    return true;
+  }
+  return false;
+}
+
+static void ant_hvf_9p_rewrite_fids_after_rename(ant_hvf_9p_device_t *dev,
+                                                  const char *old_rel,
+                                                  const char *new_rel) {
+  if (!dev || !dev->fids) return;
+  for (size_t i = 0; i < dev->fid_capacity; i++) {
+    ant_hvf_9p_fid_t *f = &dev->fids[i];
+    if (!f->active) continue;
+    const char *suffix = NULL;
+    if (!ant_hvf_9p_path_equal_or_child(f->path, old_rel, &suffix)) continue;
+    int n = snprintf(f->path, sizeof(f->path), "%s%s", new_rel, suffix);
+    if (n < 0 || (size_t)n >= sizeof(f->path)) f->active = false;
+  }
 }
 
 bool ant_hvf_9p_read_string(const unsigned char *req,
@@ -995,7 +1028,7 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
         return ant_hvf_9p_error(resp, tag, EINVAL);
       }
       if (off + 4 > req_len) return ant_hvf_9p_error(resp, tag, EINVAL);
-      if (ant_hvf_9p_path_bad(target)) return ant_hvf_9p_error(resp, tag, EPERM);
+      if (ant_hvf_9p_symlink_target_bad(target)) return ant_hvf_9p_error(resp, tag, EPERM);
       char host[4096];
       int rc = ant_hvf_9p_child_path(dev, f->path, name, host, sizeof(host));
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
@@ -1083,11 +1116,18 @@ uint32_t ant_hvf_9p_handle(ant_hvf_9p_device_t *dev,
       }
       char old_host[4096];
       char new_host[4096];
+      char old_rel[ANT_HVF_9P_PATH_MAX];
+      char new_rel[ANT_HVF_9P_PATH_MAX];
       int rc = ant_hvf_9p_child_path(dev, old_dir->path, old_name, old_host, sizeof(old_host));
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
       rc = ant_hvf_9p_child_path(dev, new_dir->path, new_name, new_host, sizeof(new_host));
       if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
+      rc = ant_hvf_9p_join_rel(old_dir->path, old_name, old_rel, sizeof(old_rel));
+      if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
+      rc = ant_hvf_9p_join_rel(new_dir->path, new_name, new_rel, sizeof(new_rel));
+      if (rc != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)-rc);
       if (rename(old_host, new_host) != 0) return ant_hvf_9p_error(resp, tag, (uint32_t)errno);
+      ant_hvf_9p_rewrite_fids_after_rename(dev, old_rel, new_rel);
       ant_hvf_9p_stat_cache_clear(dev);
       return ant_hvf_9p_minimal(resp, tag, P9_RRENAMEAT);
     }

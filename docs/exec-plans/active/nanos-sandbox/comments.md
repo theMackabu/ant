@@ -76,12 +76,8 @@ The request transport uses a binary frame with length-prefixed strings. Mounts
 are established by the backend as real virtio-9p devices; the daemon request
 only needs the guest cwd, entry/source, and argv.
 
-Writable mounts are still future work. The planned CLI shape is explicit:
-
-```sh
-ant sandbox --write tmp:/tmp script.js
-ant sandbox --write ./out:/out script.js
-```
+Writable mounts are implemented. `tmp:/tmp` creates a temporary writable host
+directory, and host-backed writes require explicit `--write host:guest`.
 
 ## Native VMM Comments
 

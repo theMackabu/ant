@@ -156,7 +156,17 @@ uint32_t ant_hvf_9p_append_dirent(unsigned char *out,
                                   uint8_t dtype);
 uint32_t ant_hvf_9p_error(unsigned char *out, uint16_t tag, uint32_t ecode);
 bool ant_hvf_9p_path_bad(const char *path);
+bool ant_hvf_9p_name_bad(const char *name);
+bool ant_hvf_9p_symlink_target_bad(const char *target);
+bool ant_hvf_9p_under_root(ant_hvf_9p_device_t *dev, const char *path);
+int ant_hvf_9p_raw_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, size_t out_len);
+int ant_hvf_9p_existing_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, size_t out_len);
 int ant_hvf_9p_host_path(ant_hvf_9p_device_t *dev, const char *rel, char *out, size_t out_len);
+int ant_hvf_9p_child_path(ant_hvf_9p_device_t *dev,
+                          const char *parent_rel,
+                          const char *name,
+                          char *out,
+                          size_t out_len);
 int ant_hvf_9p_stat(ant_hvf_9p_device_t *dev, const char *rel, struct stat *st);
 void ant_hvf_9p_stat_cache_clear(ant_hvf_9p_device_t *dev);
 void ant_hvf_9p_file_cache_clear(ant_hvf_9p_device_t *dev);

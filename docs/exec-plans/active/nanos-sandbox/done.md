@@ -436,11 +436,18 @@ paths must resolve under the mount root; new entries are created only under a
 contained parent directory; guest names reject absolute paths, slashes, `.`, and
 `..`.
 
+Path policy hardening now also rejects empty or escaping symlink targets,
+preserves mount-root containment when the host root is `/`, rewrites active 9p
+fid paths after successful `renameat` so renamed files and directory children do
+not keep stale host paths, and cleans up `tmp:` writable host directories when
+the CLI exits or an `ant:sandbox` session is closed, terminated, finalized, or
+fails during construction.
+
 `examples/demo/writable_mount.js` demonstrates a Docker-ish temporary write
 mount:
 
 ```sh
-ant sandbox --write tmp:/tmp examples/demo/writable_mount.js
+ant sandbox --mount .:/workspace --write tmp:/tmp examples/demo/writable_mount.js
 ```
 
 Validation after dynamic mount work:
@@ -453,6 +460,7 @@ meson compile -C build
 ./build/ant sandbox examples/demo/pi.js
 ./build/ant sandbox --mount .:/project examples/demo/pi.js
 ./build/ant sandbox examples/npm/smoke
+./build/test-sandbox-9p
 ```
 
 ## Binary Request Transport

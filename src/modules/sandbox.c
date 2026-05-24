@@ -47,13 +47,20 @@ static sandbox_state_t *sandbox_get_state(ant_value_t value) {
   return (sandbox_state_t *)js_get_native(value, SANDBOX_NATIVE_TAG);
 }
 
+static void sandbox_state_destroy(sandbox_state_t *state) {
+  if (!state) return;
+  ant_sandbox_vm_session_destroy(state->session);
+  state->session = NULL;
+  ant_sandbox_launch_options_cleanup(&state->launch);
+  free(state);
+}
+
 static void sandbox_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   sandbox_state_t *state = sandbox_get_state(value);
   if (!state) return;
   js_clear_native(value, SANDBOX_NATIVE_TAG);
-  ant_sandbox_vm_session_destroy(state->session);
-  free(state);
+  sandbox_state_destroy(state);
 }
 
 typedef int (*sandbox_string_cb_t)(ant_t *js, const char *value, void *udata);
@@ -261,25 +268,25 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
   char err[512] = { 0 };
   int rc = ant_sandbox_assets_resolve(&state->assets, err, sizeof(err));
   if (rc != 0) {
-    free(state);
+    sandbox_state_destroy(state);
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s", err[0] ? err : "failed to resolve sandbox assets");
   }
 
   ant_value_t result = sandbox_apply_options(js, state, nargs > 0 ? args[0] : js_mkundef());
   if (is_err(result)) {
-    free(state);
+    sandbox_state_destroy(state);
     return result;
   }
 
   if (!state->launch.explicit_mounts) {
     char cwd[4096];
     if (!getcwd(cwd, sizeof(cwd))) {
-      free(state);
+      sandbox_state_destroy(state);
       return js_mkerr_typed(js, JS_ERR_TYPE, "failed to read current directory");
     }
     rc = ant_sandbox_launch_add_default_mount(&state->launch, cwd, err, sizeof(err));
     if (rc != 0) {
-      free(state);
+      sandbox_state_destroy(state);
       return js_mkerr_typed(js, JS_ERR_TYPE, "%s", err[0] ? err : "failed to add default mount");
     }
   }
@@ -572,6 +579,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
 
   state->closed = true;
   if (!state->session) {
+    ant_sandbox_launch_options_cleanup(&state->launch);
     js_resolve_promise(js, promise, js_mkundef());
     return promise;
   }
@@ -581,6 +589,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   if (!request) {
     ant_sandbox_vm_session_destroy(state->session);
     state->session = NULL;
+    ant_sandbox_launch_options_cleanup(&state->launch);
     js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "failed to build sandbox close request"));
     return promise;
   }
@@ -596,6 +605,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   free(request);
   ant_sandbox_vm_session_destroy(state->session);
   state->session = NULL;
+  ant_sandbox_launch_options_cleanup(&state->launch);
 
   if (rc == 0) js_resolve_promise(js, promise, js_mkundef());
   else js_reject_promise(js, promise, sandbox_vm_result_error(js, &vm_result, rc));
@@ -619,6 +629,7 @@ static ant_value_t sandbox_terminate(ant_t *js, ant_value_t *args, int nargs) {
     ant_sandbox_vm_session_destroy(state->session);
     state->session = NULL;
   }
+  ant_sandbox_launch_options_cleanup(&state->launch);
 
   if (rc == 0) {
     js_resolve_promise(js, promise, js_mkundef());

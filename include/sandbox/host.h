@@ -34,6 +34,7 @@ typedef struct {
 const char *ant_sandbox_cache_arch(void);
 int ant_sandbox_assets_resolve(ant_sandbox_assets_t *assets, char *err, size_t err_len);
 void ant_sandbox_launch_options_init(ant_sandbox_launch_options_t *opts);
+void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts);
 int ant_sandbox_launch_add_mount(
   ant_sandbox_launch_options_t *opts,
   const char *value,

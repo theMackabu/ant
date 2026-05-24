@@ -8,6 +8,7 @@
 #include "utils.h"
 
 #include <errno.h>
+#include <dirent.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -139,6 +140,49 @@ void ant_sandbox_launch_options_init(ant_sandbox_launch_options_t *opts) {
   snprintf(opts->guest_cwd, sizeof(opts->guest_cwd), "%s", ANT_SANDBOX_DEFAULT_GUEST_CWD);
 }
 
+static bool sandbox_is_managed_temp_dir(const char *path) {
+  if (!path || !path[0]) return false;
+  const char *base = strrchr(path, '/');
+  base = base ? base + 1 : path;
+  return strncmp(base, "ant-sandbox-write.", strlen("ant-sandbox-write.")) == 0;
+}
+
+static int sandbox_remove_tree(const char *path) {
+  struct stat st;
+  if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -errno;
+  if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) return unlink(path) == 0 ? 0 : -errno;
+
+  DIR *dir = opendir(path);
+  if (!dir) return -errno;
+  int rc = 0;
+  struct dirent *ent = NULL;
+  while ((ent = readdir(dir))) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    char child[4096];
+    int written = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+    if (written < 0 || (size_t)written >= sizeof(child)) {
+      rc = -ENAMETOOLONG;
+      break;
+    }
+    int child_rc = sandbox_remove_tree(child);
+    if (child_rc != 0 && rc == 0) rc = child_rc;
+  }
+  closedir(dir);
+  if (rc != 0) return rc;
+  return rmdir(path) == 0 ? 0 : -errno;
+}
+
+void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts) {
+  if (!opts) return;
+  for (size_t i = 0; i < opts->temp_dir_count; i++) {
+    if (sandbox_is_managed_temp_dir(opts->temp_dirs[i])) {
+      (void)sandbox_remove_tree(opts->temp_dirs[i]);
+    }
+    opts->temp_dirs[i][0] = '\0';
+  }
+  opts->temp_dir_count = 0;
+}
+
 static bool sandbox_guest_path_valid(const char *path) {
   if (!path || path[0] != '/' || path[1] == '\0') return false;
   if (strstr(path, "/../") || strstr(path, "/..") || strstr(path, "/./")) return false;
@@ -187,14 +231,22 @@ int ant_sandbox_launch_add_mount(
   size_t idx = opts->mount_count;
   if (strcmp(host, "tmp") == 0) {
     if (opts->temp_dir_count >= ANT_SANDBOX_MAX_MOUNTS) return -E2BIG;
-    int rc = sandbox_create_temp_dir(opts->temp_dirs[opts->temp_dir_count],
-                                     sizeof(opts->temp_dirs[opts->temp_dir_count]));
+    char temp_dir[4096];
+    int rc = sandbox_create_temp_dir(temp_dir, sizeof(temp_dir));
     if (rc != 0) {
       sandbox_host_error(err, err_len, "failed to create temporary mount: %s", strerror(-rc));
       return rc;
     }
     char resolved[4096];
-    if (!realpath(opts->temp_dirs[opts->temp_dir_count], resolved)) return -errno;
+    if (!realpath(temp_dir, resolved)) {
+      rc = -errno;
+      if (sandbox_is_managed_temp_dir(temp_dir)) (void)sandbox_remove_tree(temp_dir);
+      return rc;
+    }
+    snprintf(opts->temp_dirs[opts->temp_dir_count],
+             sizeof(opts->temp_dirs[opts->temp_dir_count]),
+             "%s",
+             resolved);
     snprintf(opts->mount_hosts[idx], sizeof(opts->mount_hosts[idx]), "%s", resolved);
     opts->temp_dir_count++;
     readonly = false;
