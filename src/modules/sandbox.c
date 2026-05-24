@@ -158,7 +158,9 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
 
   if (vtype(opts) == T_STR) {
     sandbox_mount_parse_t mount_ctx = { .state = state, .readonly = true };
-    int rc = sandbox_add_mount_option(js, js_getstr(js, opts, NULL), &mount_ctx);
+    const char *opts_str = js_getstr(js, opts, NULL);
+    if (!opts_str) return js_mkerr(js, "out of memory");
+    int rc = sandbox_add_mount_option(js, opts_str, &mount_ctx);
     if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", mount_ctx.error[0] ? mount_ctx.error : "invalid mount option");
     return js_mkundef();
   }

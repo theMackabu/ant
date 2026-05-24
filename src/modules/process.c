@@ -659,10 +659,6 @@ static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
     js_delete_prop(js, env_obj, "NO_COLOR", 8);
     js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "1", 1));
   }
-  else {
-    js_delete_prop(js, env_obj, "NO_COLOR", 8);
-    js_delete_prop(js, env_obj, "FORCE_COLOR", 11);
-  }
 }
 
 void process_refresh_sandbox_argv(void) {

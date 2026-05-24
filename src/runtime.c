@@ -302,6 +302,11 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
 }
 
 void ant_runtime_set_argv(int argc, char **argv) {
+  if (argc < 0 || (argc > 0 && argv == NULL)) {
+    runtime.argc = 0;
+    runtime.argv = NULL;
+    return;
+  }
   runtime.argc = argc;
   runtime.argv = argv;
 }

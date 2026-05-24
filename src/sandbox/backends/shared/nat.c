@@ -1,6 +1,10 @@
 #include "sandbox_backend/net_internal.h"
 
+#include <ctype.h>
 #include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef enum {
   ANT_NAT_TCP_UNUSED = 0,
@@ -81,6 +85,64 @@ struct ant_hvf_nat {
   atomic_uint_fast64_t tcp_opened;
   atomic_uint_fast64_t udp_opened;
 };
+
+static bool ant_nat_parse_ipv4(const char *value, size_t len, uint32_t *out) {
+  if (!value || len == 0 || len >= 64) return false;
+
+  char buf[64];
+  memcpy(buf, value, len);
+  buf[len] = '\0';
+
+  struct in_addr addr;
+  if (inet_pton(AF_INET, buf, &addr) != 1) return false;
+
+  uint32_t ip = ntohl(addr.s_addr);
+  if (ip == 0 || ip == ANT_NET_BROADCAST_IP) return false;
+
+  *out = ip;
+  return true;
+}
+
+static bool ant_nat_env_dns_ip(uint32_t *out) {
+  const char *value = getenv("ANT_SANDBOX_DNS_IP");
+  if (!value || !*value) value = getenv("ANT_DNS_IP");
+  if (!value || !*value) return false;
+  return ant_nat_parse_ipv4(value, strlen(value), out);
+}
+
+static bool ant_nat_host_dns_ip(uint32_t *out) {
+  FILE *fp = fopen("/etc/resolv.conf", "r");
+  if (!fp) return false;
+
+  char line[256];
+  while (fgets(line, sizeof(line), fp)) {
+    char *p = line;
+    while (isspace((unsigned char)*p)) p++;
+    if (strncmp(p, "nameserver", 10) != 0 || !isspace((unsigned char)p[10])) continue;
+    p += 10;
+    while (isspace((unsigned char)*p)) p++;
+
+    char *end = p;
+    while (*end && !isspace((unsigned char)*end) && *end != '#') end++;
+    if (ant_nat_parse_ipv4(p, (size_t)(end - p), out)) {
+      fclose(fp);
+      return true;
+    }
+  }
+
+  fclose(fp);
+  return false;
+}
+
+static uint32_t ant_nat_connect_ip(uint32_t dst_ip) {
+  if (dst_ip == ANT_NET_HOST_IP) return 0x7f000001u;
+  if (dst_ip != ANT_NET_DNS_IP) return dst_ip;
+
+  uint32_t dns_ip;
+  if (ant_nat_env_dns_ip(&dns_ip)) return dns_ip;
+  if (ant_nat_host_dns_ip(&dns_ip)) return dns_ip;
+  return ANT_NET_IP(8, 8, 8, 8);
+}
 
 static bool ant_nat_tcp_active(const ant_hvf_nat_tcp_t *c) {
   return c && c->state != ANT_NAT_TCP_UNUSED;
@@ -643,9 +705,7 @@ void ant_nat_handle_udp(ant_hvf_nat_t *nat,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    uint32_t connect_ip = dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip;
-    if (dst_ip == ANT_NET_DNS_IP) connect_ip = ANT_NET_IP(8, 8, 8, 8);
-    addr.sin_addr.s_addr = htonl(connect_ip);
+    addr.sin_addr.s_addr = htonl(ant_nat_connect_ip(dst_ip));
     addr.sin_port = htons(dst_port);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
       close(fd);
@@ -719,9 +779,7 @@ void ant_nat_handle_tcp(ant_hvf_nat_t *nat,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    uint32_t connect_ip = dst_ip == ANT_NET_HOST_IP ? 0x7f000001u : dst_ip;
-    if (dst_ip == ANT_NET_DNS_IP) connect_ip = ANT_NET_IP(8, 8, 8, 8);
-    addr.sin_addr.s_addr = htonl(connect_ip);
+    addr.sin_addr.s_addr = htonl(ant_nat_connect_ip(dst_ip));
     addr.sin_port = htons(dst_port);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc != 0 && errno != EINPROGRESS) {

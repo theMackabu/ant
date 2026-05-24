@@ -32,7 +32,7 @@ static void ant_kvm_segment(struct kvm_segment *seg,
   seg->dpl = 0;
   seg->db = 1;
   seg->s = 1;
-  seg->l = code ? 0 : 0;
+  seg->l = 0;
   seg->g = 1;
 }
 
