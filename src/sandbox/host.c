@@ -20,6 +20,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#define lstat stat
+#endif
+
 static void sandbox_host_error(char *err, size_t err_len, const char *fmt, ...)
   __attribute__((format(printf, 3, 4)));
 
@@ -143,6 +147,8 @@ void ant_sandbox_launch_options_init(ant_sandbox_launch_options_t *opts) {
 static bool sandbox_is_managed_temp_dir(const char *path) {
   if (!path || !path[0]) return false;
   const char *base = strrchr(path, '/');
+  const char *win_base = strrchr(path, '\\');
+  if (!base || (win_base && win_base > base)) base = win_base;
   base = base ? base + 1 : path;
   return strncmp(base, "ant-sandbox-write.", strlen("ant-sandbox-write.")) == 0;
 }
@@ -190,11 +196,29 @@ static bool sandbox_guest_path_valid(const char *path) {
 }
 
 static int sandbox_create_temp_dir(char *out, size_t out_len) {
+#ifdef _WIN32
+  const char *tmpdir = getenv("TMPDIR");
+  if (!tmpdir || !tmpdir[0]) tmpdir = getenv("TEMP");
+  if (!tmpdir || !tmpdir[0]) tmpdir = ".";
+  for (unsigned attempt = 0; attempt < 100; attempt++) {
+    int written = snprintf(out,
+                           out_len,
+                           "%s/ant-sandbox-write.%lu.%u",
+                           tmpdir,
+                           (unsigned long)GetCurrentProcessId(),
+                           attempt);
+    if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
+    if (_mkdir(out) == 0) return 0;
+    if (errno != EEXIST) return -errno;
+  }
+  return -EEXIST;
+#else
   const char *tmpdir = getenv("TMPDIR");
   if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
   int written = snprintf(out, out_len, "%s/ant-sandbox-write.XXXXXX", tmpdir);
   if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
   return mkdtemp(out) ? 0 : -errno;
+#endif
 }
 
 int ant_sandbox_launch_add_mount(

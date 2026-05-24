@@ -3,8 +3,11 @@
 #include "sandbox/vm.h"
 
 #include <errno.h>
+#include <stdio.h>
 
 static int ant_windows_sandbox_unavailable(const ant_sandbox_vm_config_t *config) {
+  fputs("sandbox vm: native Windows sandbox backend is not implemented; use WSL for sandbox support\n",
+        stderr);
   if (config && config->result) {
     config->result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
     config->result->code = -ENOSYS;

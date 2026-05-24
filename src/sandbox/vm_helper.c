@@ -5,9 +5,49 @@
 #include "vm_internal.h"
 
 #include <errno.h>
+#include <stdlib.h>
+
+#ifdef _WIN32
+
+int ant_sandbox_vm_helper_create(
+  const ant_sandbox_vm_backend_t *backend,
+  const ant_sandbox_vm_config_t *config,
+  ant_sandbox_vm_session_t **session_out
+) {
+  (void)backend;
+  if (session_out) *session_out = NULL;
+  if (config && config->result) {
+    config->result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+    config->result->code = -ENOSYS;
+  }
+  return -ENOSYS;
+}
+
+int ant_sandbox_vm_helper_execute(
+  ant_sandbox_vm_session_t *session,
+  const ant_sandbox_vm_request_t *request
+) {
+  (void)session;
+  if (request && request->result) {
+    request->result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
+    request->result->code = -ENOSYS;
+  }
+  return -ENOSYS;
+}
+
+int ant_sandbox_vm_helper_cancel(ant_sandbox_vm_session_t *session) {
+  (void)session;
+  return -ENOSYS;
+}
+
+void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
+  free(session);
+}
+
+#else
+
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -492,3 +532,5 @@ void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
   sandbox_vm_stop_helper(session, true);
   free(session);
 }
+
+#endif

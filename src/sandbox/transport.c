@@ -9,6 +9,37 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+
+bool ant_sandbox_transport_send_frame(ant_sandbox_frame_type_t type, const void *payload, size_t payload_len) {
+  (void)type;
+  (void)payload;
+  (void)payload_len;
+  errno = ENOSYS;
+  return false;
+}
+
+bool ant_sandbox_transport_send_exit(int code) {
+  (void)code;
+  errno = ENOSYS;
+  return false;
+}
+
+bool ant_sandbox_transport_install_output_frames(void) {
+  errno = ENOSYS;
+  return false;
+}
+
+bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {
+  (void)out;
+  errno = ENOSYS;
+  fprintf(stderr, "sandbox daemon: native Windows sandbox transport is not implemented; use WSL for sandbox support\n");
+  return false;
+}
+
+#else
+
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -182,3 +213,5 @@ bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {
   free(frame);
   return ok;
 }
+
+#endif
