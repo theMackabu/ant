@@ -5,8 +5,33 @@ export const VersionQuerySchema = z
     current: z.string().optional(),
     version: z.string().optional(),
     target: z.string().optional(),
-    kind: z.enum(['ant', 'sandbox', 'kernel']).default('ant'),
+    kind: z.enum(['ant', 'sandbox', 'kernel']),
     arch: z.string().optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (!query.current && !query.version) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['current'],
+        message: 'current version is required',
+      });
+    }
+
+    if (query.kind === 'ant' && !query.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['target'],
+        message: 'target is required for ant version checks',
+      });
+    }
+
+    if (query.kind !== 'ant' && !query.arch && !query.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['arch'],
+        message: 'arch is required for sandbox and kernel version checks',
+      });
+    }
   })
   .transform(query => ({
     current: query.current || query.version || '',

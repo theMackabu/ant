@@ -10,7 +10,14 @@ import { downloadArtifact } from './downloads';
 import { resolveArch, resolveTarget } from './targets';
 import { DownloadParamsSchema, VersionQuerySchema } from './schemas';
 import { cachedManifest, forceRefreshManifest } from './manifest-cache';
-import { latestManifest, resolveAnt, resolveNanosArtifact, versionCheck } from './resolver';
+import {
+  latestAntVersion,
+  latestManifest,
+  resolveAnt,
+  resolveNanosArtifact,
+  versionCheck,
+  versionManifest,
+} from './resolver';
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -50,6 +57,25 @@ app.post('/v1/refresh', c => {
 
 app.get('/v1/version', c => versionRoute(c));
 app.get('/v1/check', c => versionRoute(c));
+
+app.get('/v1/version/get-tag', c => {
+  const cacheKey = `version-latest:${repository(c.env)}:release`;
+
+  return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () => latestAntVersion(c.env));
+});
+
+app.get('/v1/version/:version', c => {
+  const version = c.req.param('version');
+  if (version === 'latest') {
+    throw new HttpError('latest is not a version route; use /v1/version/get-tag', 404);
+  }
+
+  const cacheKey = `version-manifest:${repository(c.env)}:${version}`;
+
+  return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () =>
+    versionManifest(c.env, version),
+  );
+});
 
 app.on(['GET', 'HEAD'], '/v1/download/:kind/:name', async c => {
   const params = DownloadParamsSchema.parse(c.req.param());

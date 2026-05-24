@@ -5,7 +5,11 @@ export function routeIndex(url: URL) {
     schema: 1,
     routes: {
       latest: route(url, '/v1/latest'),
-      version: route(url, '/v1/version?kind={kind}&target={target}&arch={arch}&current={version}'),
+      version: {
+        get_tag: route(url, '/v1/version/get-tag'),
+        manifest: route(url, '/v1/version/{version}'),
+        check: route(url, '/v1/version?kind={kind}&target={target}&arch={arch}&current={version}'),
+      },
       check: route(url, '/v1/check?kind={kind}&target={target}&arch={arch}&current={version}'),
       downloads: {
         ant: route(url, '/v1/download/ant/{target}'),

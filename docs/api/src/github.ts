@@ -70,6 +70,14 @@ export async function latestRelease(env: Env): Promise<GitHubRelease> {
   return githubJson<GitHubRelease>(env, `/repos/${repository(env)}/releases/latest`);
 }
 
+export async function releaseByTag(env: Env, version: string): Promise<GitHubRelease> {
+  const tag = version.startsWith('v') ? version : `v${version}`;
+  return githubJson<GitHubRelease>(
+    env,
+    `/repos/${repository(env)}/releases/tags/${encodeURIComponent(tag)}`,
+  );
+}
+
 export function findReleaseAsset(
   release: GitHubRelease,
   artifactName: string,

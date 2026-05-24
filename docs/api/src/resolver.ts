@@ -13,6 +13,7 @@ import {
   findLatestRunWithArtifacts,
   findReleaseAsset,
   latestRelease,
+  releaseByTag,
   readVersionArtifact,
   requireArtifact,
 } from './github';
@@ -31,6 +32,7 @@ import type {
 } from './types';
 
 export async function latestManifest(url: URL, env: Env) {
+  const release = await latestRelease(env);
   const ant = await Promise.all(
     antTargets.map(target =>
       resolveManifestEntry(
@@ -59,6 +61,7 @@ export async function latestManifest(url: URL, env: Env) {
 
   return {
     schema: 1,
+    version: releaseInfo(release),
     generated_at: new Date().toISOString(),
     ant,
     sandbox,
@@ -66,9 +69,45 @@ export async function latestManifest(url: URL, env: Env) {
   };
 }
 
+export async function versionManifest(env: Env, version: string) {
+  const release = await releaseByTag(env, version);
+  const ant = antTargets.map(target =>
+    resolveManifestEntry(
+      {
+        target: target.key,
+        os: target.os,
+        arch: target.arch,
+        libc: target.libc,
+      },
+      () => resolveReleaseAsset(env, release, 'ant', target.artifact),
+    ),
+  );
+
+  const sandbox = arches.map(arch =>
+    resolveManifestEntry({ arch }, () =>
+      resolveReleaseAsset(env, release, 'sandbox', `ant-sandbox-${arch}`),
+    ),
+  );
+
+  const kernel = arches.map(arch =>
+    resolveManifestEntry({ arch }, () =>
+      resolveReleaseAsset(env, release, 'kernel', `ant-kernel-${arch}`),
+    ),
+  );
+
+  return {
+    schema: 1,
+    version: releaseInfo(release),
+    generated_at: new Date().toISOString(),
+    ant: await Promise.all(ant),
+    sandbox: await Promise.all(sandbox),
+    kernel: await Promise.all(kernel),
+  };
+}
+
 async function resolveManifestEntry<T extends Record<string, unknown>>(
   base: T,
-  resolve: () => Promise<ResolvedArtifact>,
+  resolve: () => ResolvedArtifact | Promise<ResolvedArtifact>,
 ): Promise<T & (({ available: true } & ResolvedArtifact) | { available: false; error: string })> {
   try {
     return {
@@ -88,37 +127,47 @@ async function resolveManifestEntry<T extends Record<string, unknown>>(
 
 type VersionCheckQuery = {
   kind: ArtifactKind;
-  target: string;
+  target?: string;
   arch?: string;
   current: string;
 };
 
+const arches = ['x64', 'aarch64'];
+
+export async function latestAntVersion(env: Env) {
+  const release = await latestRelease(env);
+
+  return {
+    schema: 1,
+    ...releaseInfo(release),
+  };
+}
+
 export async function versionCheck(url: URL, env: Env, query: VersionCheckQuery) {
-  const latest =
+  const [release, latest] = await Promise.all([
+    latestRelease(env),
     query.kind === 'ant'
-      ? await resolveAnt(env, resolveTarget(query.target), url)
-      : await resolveNanosArtifact(env, query.kind, resolveVersionArch(query), url);
+      ? await resolveAnt(env, resolveTarget(query.target || ''), url)
+      : await resolveNanosArtifact(env, query.kind, resolveVersionArch(query), url),
+  ]);
   const current = normalizeVersion(query.current);
+  const latestVersion = normalizeVersion(release.tag_name);
 
   return {
     schema: 1,
     kind: query.kind,
     target: query.kind === 'ant' ? query.target : `${query.kind}-${resolveVersionArch(query)}`,
     current: current || null,
-    latest: latest.version || null,
+    latest: latestVersion,
     latest_sha: latest.source.type === 'actions' ? latest.source.head_sha : null,
-    out_of_date: isOutOfDate(
-      current,
-      latest.version,
-      latest.source.type === 'actions' ? latest.source.head_sha : undefined,
-    ),
+    out_of_date: isOutOfDate(current, latestVersion, undefined),
     download_url: latest.download_url,
     source: latest.source,
   };
 }
 
 function resolveVersionArch(query: VersionCheckQuery): string {
-  const raw = query.arch || query.target.replace(/^(sandbox|kernel)-/, '');
+  const raw = query.arch || (query.target || '').replace(/^(sandbox|kernel)-/, '');
   if (raw === 'x64' || raw === 'aarch64') return raw;
   throw new HttpError(`unknown arch: ${raw || '(missing)'}`, 400);
 }
@@ -339,6 +388,34 @@ async function resolveReleaseArtifact(
   };
 }
 
+function resolveReleaseAsset(
+  env: Env,
+  release: GitHubRelease,
+  kind: ArtifactKind,
+  artifactName: string,
+): ResolvedArtifact {
+  const asset = findReleaseAsset(release, artifactName);
+  if (!asset) throw new HttpError(`release asset not found: ${artifactName}`, 404);
+
+  return {
+    kind,
+    name: asset.name,
+    version: normalizeVersion(release.tag_name),
+    download_url: asset.browser_download_url,
+    artifact: {
+      id: asset.id,
+      name: asset.name,
+      size_in_bytes: asset.size,
+      created_at: asset.created_at,
+      updated_at: asset.updated_at,
+      content_type: asset.content_type,
+      api_url: asset.url,
+      browser_download_url: asset.browser_download_url,
+    },
+    source: releaseSourceInfoFromRelease(release, repository(env)),
+  };
+}
+
 async function resolveReleaseAfterActionsMiss(
   env: Env,
   kind: ArtifactKind,
@@ -372,14 +449,33 @@ function actionSourceInfo(env: Env, workflow: string, run: WorkflowRun): ActionS
 }
 
 function releaseSourceInfo(env: Env, release: GitHubRelease): ReleaseSourceInfo {
+  return releaseSourceInfoFromRelease(release, repository(env));
+}
+
+function releaseSourceInfoFromRelease(
+  release: GitHubRelease,
+  repo = 'theMackabu/ant',
+): ReleaseSourceInfo {
   return {
     type: 'release',
-    repository: repository(env),
+    repository: repo,
     release_id: release.id,
     tag_name: release.tag_name,
     name: release.name,
     html_url: release.html_url,
     published_at: release.published_at,
     created_at: release.created_at,
+  };
+}
+
+function releaseInfo(release: GitHubRelease) {
+  return {
+    latest: normalizeVersion(release.tag_name),
+    tag: release.tag_name,
+    source: {
+      type: 'release',
+      html_url: release.html_url,
+      published_at: release.published_at,
+    },
   };
 }
