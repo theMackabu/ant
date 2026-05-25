@@ -54,7 +54,6 @@ typedef struct {
   char target[64];
   char version[96];
   char download_url[2048];
-  char source_url[2048];
   uint64_t size;
 } ant_latest_info_t;
 
@@ -253,18 +252,14 @@ static const char *version_json_string(yyjson_val *obj, const char *key) {
   return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
 }
 
-static void version_semver_copy(char *out, size_t out_len, const char *version) {
+static void version_release_tag_copy(char *out, size_t out_len, const char *version) {
   if (!out || out_len == 0) return;
   out[0] = '\0';
   if (!version) return;
 
   size_t i = 0;
-  int dots = 0;
   for (; version[i] && i + 1 < out_len; i++) {
-    if (version[i] == '.') {
-      dots++;
-      if (dots == 3) break;
-    }
+    if (version[i] == '-' || version[i] == '+') break;
     out[i] = version[i];
   }
   out[i] = '\0';
@@ -368,9 +363,6 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
       snprintf(latest->version, sizeof(latest->version), "%s", version);
       snprintf(latest->download_url, sizeof(latest->download_url), "%s", download_url);
       yyjson_val *artifact = yyjson_obj_get(item, "artifact");
-      yyjson_val *source = yyjson_obj_get(item, "source");
-      const char *source_url = version_json_string(source, "html_url");
-      if (source_url) snprintf(latest->source_url, sizeof(latest->source_url), "%s", source_url);
       latest->size = version_json_uint(artifact, "size_in_bytes");
       rc = 0;
       break;
@@ -491,16 +483,13 @@ int ant_upgrade(int argc, char **argv) {
   crprintf("<bright_green>Upgraded successfully to Ant %s</>\n", latest.version);
   crprintf("<dim>Installed at %s</>\n", install_path);
 
-  char semver[32];
-  version_semver_copy(semver, sizeof(semver), latest.version);
-  if (semver[0]) {
+  char release_tag[64];
+  version_release_tag_copy(release_tag, sizeof(release_tag), latest.version);
+  if (release_tag[0]) {
     crprintf("\n<bold>Release notes:</>\n\n");
-    crprintf("  <green>https://github.com/theMackabu/ant/releases/tag/v%s</>\n\n", semver);
+    crprintf("  <green>https://github.com/theMackabu/ant/releases/tag/v%s</>\n\n", release_tag);
   }
-  if (latest.source_url[0]) {
-    crprintf("\n<bold>Build:</>\n\n");
-    crprintf("  <green>%s</>\n", latest.source_url);
-  }
+  
   return EXIT_SUCCESS;
 }
 
