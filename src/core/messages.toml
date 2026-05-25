@@ -29,6 +29,22 @@ ant_help_header = """\
 If no module file is specified, {name} starts in REPL mode.<br=2/>\
 """
 
+sandbox_help_header = """\
+{let h=bold, arg=cyan, name='Ant sandbox'}\
+<$h+red>{name}</> runs JavaScript inside an isolated VM ({version})<br=2/>\
+<$h>Usage: ant sandbox <$arg>[...flags]</> <yellow>[-e source | module.js]</yellow> <$arg>[...args]</><br=2/>\
+"""
+sandbox_flag_eval = "evaluate source in the sandbox"
+sandbox_flag_mount = "mount host path read-only at guest path"
+sandbox_flag_write = "mount host path writable at guest path"
+sandbox_flag_forward = "forward a host port or host:guest port pair"
+sandbox_flag_timeout = "limit guest execution time"
+sandbox_flag_boot_timeout = "limit sandbox boot and request startup time"
+sandbox_flag_request_timeout = "alias for --boot-timeout-ms"
+sandbox_flag_verbose = "enable verbose sandbox output"
+sandbox_flag_help = "display this help and exit"
+sandbox_arg_ms_invalid = "{error}: <bold>Option <cyan>%s</> must be a non-negative millisecond value\n"
+
 watch_spawn_failed = "{error}: <bold>Failed to spawn watched process:</> %s\n"
 watch_entrypoint_missing = "{error}: <bold>--watch requires a local file entrypoint.</>\n"
 watch_file_failed = "{error}: <bold>Failed to watch %s:</> %s\n"

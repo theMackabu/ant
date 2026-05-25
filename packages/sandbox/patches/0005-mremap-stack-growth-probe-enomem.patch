@@ -1,0 +1,17 @@
+diff --git a/src/unix/mmap.c b/src/unix/mmap.c
+index 91b23db..476895b 100644
+--- a/src/unix/mmap.c
++++ b/src/unix/mmap.c
+@@ -770,6 +770,12 @@ sysreturn mremap(void *old_address, u64 old_size, u64 new_size, int flags, void
+     /* only remap mmap, non-custom regions */
+     struct vmap k;
+     runtime_memcpy(&k, old_vmap, sizeof(k));
++    if ((k.flags & VMAP_FLAG_STACK) &&
++        !(flags & (MREMAP_MAYMOVE | MREMAP_FIXED)) &&
++        new_size > old_size) {
++        rv = -ENOMEM;
++        goto unlock_out;
++    }
+     if ((k.flags & VMAP_FLAG_MMAP) == 0 || (k.flags & VMAP_MMAP_TYPE_CUSTOM)) {
+         rv = -EINVAL;
+         goto unlock_out;

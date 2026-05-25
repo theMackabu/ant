@@ -16,6 +16,8 @@
 
 static ant_output_stream_t g_stdout_writer = { .stream = NULL };
 static ant_output_stream_t g_stderr_writer = { .stream = NULL };
+static ant_output_writer_t g_writer = NULL;
+static void *g_writer_user = NULL;
 
 #ifdef _WIN32
 void ant_output_init_console(void) {
@@ -28,6 +30,15 @@ void ant_output_init_console(void) {
   if (GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode)) SetConsoleCP(CP_UTF8);
 }
 #endif
+
+void ant_output_set_writer(ant_output_writer_t writer, void *user) {
+  g_writer = writer;
+  g_writer_user = user;
+}
+
+bool ant_output_has_writer(void) {
+  return g_writer != NULL;
+}
 
 ant_output_stream_t *ant_output_stream(FILE *stream) {
   ant_output_stream_t *out = (stream == stderr) ? &g_stderr_writer : &g_stdout_writer;
@@ -134,6 +145,12 @@ bool ant_output_stream_flush(ant_output_stream_t *out) {
   if (out->buffer.len == 0) return fflush(out->stream) == 0;
 
   len = out->buffer.len;
+  if (g_writer) {
+    bool ok = g_writer(out->stream, out->buffer.data, len, g_writer_user);
+    out->buffer.len = 0;
+    return ok;
+  }
+
   wrote = fwrite(out->buffer.data, 1, len, out->stream);
   out->buffer.len = 0;
   

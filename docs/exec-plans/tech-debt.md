@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-05-15
+Last reviewed: 2026-05-16
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -17,6 +17,18 @@ scheduled.
 - Status:
 
 ## Open Items
+
+- Area: `src/sandbox/backends/darwin.c` / macOS HVF VMM interrupts
+  - Issue: The Darwin Hypervisor.framework backend currently continues when `hv_gic_config_set_msi_interrupt_range()` fails, and device bringup still includes legacy/polling/manual wake paths instead of a fully interrupt-driven virtio PCI model.
+  - Impact: This is acceptable for sandbox bringup, but it leaves the backend less representative of the final VMM contract. Future virtio devices, networking, and lower-latency I/O may rely on proper MSI/MSI-X delivery instead of polling or legacy compatibility paths.
+  - Proposed fix: Implement proper GIC MSI/MSI-X wiring for PCI virtio devices on Apple Silicon HVF, make block/net/vsock/9p completions use real device interrupts, then remove the legacy/polling/manual-wake bringup paths and any fallback code that only exists because MSI is missing.
+  - Status: backlog
+
+- Area: `src/modules/storage.c` / global `localStorage`
+  - Issue: `JSON.stringify(globalThis)` can throw when it reaches the global `localStorage` property and no `--localstorage-file` or `localStorage.setFile()` path has been configured. Repro: `console.log(JSON.stringify(this));` currently reports `TypeError: Warning: --localstorage-file or localStorage.setFile were not provided with valid paths.`
+  - Impact: Object inspection and serialization of broad global objects can fail because a host API accessor performs configuration validation too early. This is surprising behavior and unrelated code can trip over localStorage simply by enumerating or stringifying globals.
+  - Proposed fix: Make the global `localStorage` property safe to read when unconfigured, either by returning an inert/lazy storage object that throws only when storage operations are used, or by omitting/marking the property so generic stringify/inspection does not invoke a throwing accessor.
+  - Status: backlog
 
 - Area: Silver closure allocation / function-object initialization
   - Issue: `sv_init_closure_function_object()` assigns `closure->func_obj` before proving that the backing function object and its required metadata were initialized successfully. Allocation failures in `mkobj()`, `.length` setup, or prototype setup can therefore leave a closure with an error or partially initialized `func_obj`.

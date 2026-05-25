@@ -1,0 +1,13 @@
+diff --git a/src/aarch64/machine.h b/src/aarch64/machine.h
+index 0336e1b..7e77f50 100644
+--- a/src/aarch64/machine.h
++++ b/src/aarch64/machine.h
+@@ -120,7 +120,7 @@ __bswap64(u64 _x)
+ #define VA_TAG_OFFSET    USER_VA_TAG_OFFSET
+ #define VA_TAG_WIDTH     USER_VA_TAG_WIDTH
+ #else
+-#define USER_LIMIT       0x0001000000000000ull  /* 4-level page tables -> 48-bit addresses */
++#define USER_LIMIT       0x0000800000000000ull  /* keep user pointers below Ant's 47-bit NaN-boxing ceiling */
+ #define VA_TAG_OFFSET    56
+ #define VA_TAG_WIDTH     8
+ #endif

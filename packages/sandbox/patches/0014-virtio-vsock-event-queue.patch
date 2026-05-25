@@ -1,0 +1,108 @@
+diff --git a/src/virtio/virtio_socket.c b/src/virtio/virtio_socket.c
+index a2b7a0ec..21a5435f 100644
+--- a/src/virtio/virtio_socket.c
++++ b/src/virtio/virtio_socket.c
+@@ -21,6 +21,8 @@
+ #define VIRTIO_VSOCK_OP_CREDIT_UPDATE   6
+ #define VIRTIO_VSOCK_OP_CREDIT_REQUEST  7
+ 
++#define VIRTIO_VSOCK_EVENT_TRANSPORT_RESET 0
++
+ #define VIRTIO_VSOCK_SHUTDOWN_F_RECEIVE U64_FROM_BIT(0)
+ #define VIRTIO_VSOCK_SHUTDOWN_F_SEND    U64_FROM_BIT(1)
+ 
+@@ -41,6 +43,10 @@ struct virtio_vsock_hdr {
+     u32 fwd_cnt;
+ } __attribute__((packed));
+ 
++struct virtio_vsock_event {
++    u32 id;
++} __attribute__((packed));
++
+ //#define VIRTIO_SOCK_DEBUG
+ #ifdef VIRTIO_SOCK_DEBUG
+ #define virtio_sock_debug(x, ...) do {tprintf(sym(virtio_sock), 0, ss(x "\n"), ##__VA_ARGS__);} while(0)
+@@ -84,6 +90,13 @@ typedef struct virtio_sock_rxbuf {
+     u8 data[0];
+ } *virtio_sock_rxbuf;
+ 
++typedef struct virtio_sock_eventbuf {
++    virtio_sock vs;
++    u64 phys;
++    closure_struct(vqfinish, complete);
++    struct virtio_vsock_event event;
++} *virtio_sock_eventbuf;
++
+ typedef struct virtio_sock_txbuf {
+     virtio_sock vs;
+     closure_struct(vqfinish, complete);
+@@ -91,6 +104,7 @@ typedef struct virtio_sock_txbuf {
+ } *virtio_sock_txbuf;
+ 
+ static boolean virtio_sock_rxq_submit(virtio_sock vs);
++static boolean virtio_sock_eventq_submit(virtio_sock vs);
+ 
+ static boolean virtio_sock_dev_attach(heap general, backed_heap backed, vtdev dev)
+ {
+@@ -128,6 +142,8 @@ static boolean virtio_sock_dev_attach(heap general, backed_heap backed, vtdev de
+     vs->dev = dev;
+     if (!virtio_sock_rxq_submit(vs))
+         goto err;
++    if (!virtio_sock_eventq_submit(vs))
++        goto err;
+     vs->rx_seqno = 0;
+     vtdev_set_status(dev, VIRTIO_CONFIG_STATUS_DRIVER_OK);
+     vsock_set_transport(vs);
+@@ -346,6 +362,52 @@ closure_func_basic(vqfinish, void, virtio_sock_rx_complete,
+     virtio_sock_rxq_submit(vs);
+ }
+ 
++closure_func_basic(vqfinish, void, virtio_sock_event_complete,
++                   u64 len)
++{
++    virtio_sock_eventbuf eventbuf = struct_from_field(closure_self(), virtio_sock_eventbuf, complete);
++    virtio_sock vs = eventbuf->vs;
++
++    if (len >= sizeof(eventbuf->event)) {
++        switch (eventbuf->event.id) {
++        case VIRTIO_VSOCK_EVENT_TRANSPORT_RESET:
++            virtio_sock_debug("transport reset event");
++            break;
++        default:
++            virtio_sock_debug("unknown event %d", eventbuf->event.id);
++            break;
++        }
++    }
++
++    dealloc_unmap(vs->backed, eventbuf, eventbuf->phys, sizeof(*eventbuf));
++    if (!virtio_sock_eventq_submit(vs))
++        virtio_sock_debug("failed to resubmit event queue buffer");
++}
++
++static boolean virtio_sock_eventq_submit(virtio_sock vs)
++{
++    virtqueue vq = vs->eventq;
++    u64 phys;
++    virtio_sock_eventbuf eventbuf = alloc_map(vs->backed, sizeof(*eventbuf), &phys);
++    if (eventbuf == INVALID_ADDRESS)
++        return false;
++    eventbuf->vs = vs;
++    eventbuf->phys = phys;
++    eventbuf->event.id = 0;
++
++    vqmsg m = allocate_vqmsg(vq);
++    if (m == INVALID_ADDRESS) {
++        dealloc_unmap(vs->backed, eventbuf, phys, sizeof(*eventbuf));
++        return false;
++    }
++
++    vqmsg_push(vq, m, phys + offsetof(virtio_sock_eventbuf, event),
++               sizeof(eventbuf->event), true);
++    vqmsg_commit(vq, m, init_closure_func(&eventbuf->complete, vqfinish,
++                                          virtio_sock_event_complete));
++    return true;
++}
++
+ static boolean virtio_sock_rxq_submit(virtio_sock vs)
+ {
+     virtqueue vq = vs->rxq;

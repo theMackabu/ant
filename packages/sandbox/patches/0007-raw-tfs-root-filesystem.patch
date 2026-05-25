@@ -1,0 +1,32 @@
+diff --git a/src/kernel/init.c b/src/kernel/init.c
+index dfce5422..5055c908 100644
+--- a/src/kernel/init.c
++++ b/src/kernel/init.c
+@@ -662,13 +662,20 @@ closure_function(6, 1, void, mbr_read,
+         char label[VOLUME_LABEL_MAX_LEN];
+         s = filesystem_probe(mbr, uuid, label);
+         if (is_ok(s)) {
+-            storage_req_handler req_handler = bound(req_handler);
+-            fs_init_handler fs_init = closure(heap_locked(init_heaps), volume_fs_init, req_handler,
+-                                              bound(length));
+-            if (fs_init != INVALID_ADDRESS)
+-                volume_add(uuid, label, req_handler, fs_init, bound(attach_id));
+-            else
+-                msg_err("storage: failed to allocate closure, skipping volume");
++            timm_dealloc(s);
++            if (!root_fs) {
++                rootfs_init(mbr, 0, bound(req_handler), bound(length),
++                            bound(start), bound(complete));
++                goto out;
++            } else {
++                storage_req_handler req_handler = bound(req_handler);
++                fs_init_handler fs_init = closure(heap_locked(init_heaps), volume_fs_init,
++                                                  req_handler, bound(length));
++                if (fs_init != INVALID_ADDRESS)
++                    volume_add(uuid, label, req_handler, fs_init, bound(attach_id));
++                else
++                    msg_err("storage: failed to allocate closure, skipping volume");
++            }
+         } else {
+             msg_err("storage: failed to probe filesystem: %v", get(s, sym_this("result")));
+             timm_dealloc(s);

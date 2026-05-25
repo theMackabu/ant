@@ -15,6 +15,42 @@ is_static = get_option('static_link')
 
 src_root = meson.project_source_root()
 include = include_directories('include')
+sandbox_backend_include = include_directories(
+  'src/sandbox/backends',
+  'src/sandbox/backends/shared/include',
+)
+
+sandbox_shared_sources = files(run_command(
+  python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:shared',
+  check: true
+).stdout().strip().split())
+
+sandbox_backend_sources = []
+darwin_hvf_supported = host_machine.system() == 'darwin' and host_machine.cpu_family() == 'aarch64'
+if host_machine.system() == 'darwin'
+  sandbox_backend_sources += files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:darwin',
+    check: true
+  ).stdout().strip().split())
+  if darwin_hvf_supported
+    sandbox_backend_sources += files(run_command(
+      python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:darwin_hvf',
+      check: true
+    ).stdout().strip().split())
+    sandbox_backend_sources += sandbox_shared_sources
+  endif
+elif host_machine.system() == 'linux'
+  sandbox_backend_sources += files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:linux',
+    check: true
+  ).stdout().strip().split())
+  sandbox_backend_sources += sandbox_shared_sources
+elif host_machine.system() == 'windows'
+  sandbox_backend_sources += files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'sandbox_backend:windows',
+    check: true
+  ).stdout().strip().split())
+endif
 
 subdir('meson')
 
@@ -39,14 +75,14 @@ lib_sources = files(run_command(
 
 libant = static_library(
   'ant',
-  lib_sources + [
+  lib_sources + sandbox_backend_sources + [
     builtin_bundle_h,
     snapshot_h,
     messages_h,
     theme_h
   ],
   install: true,
-  include_directories: include,
+  include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps
 )
 
@@ -80,7 +116,7 @@ pkg_dep = declare_dependency(
 
 libant_dep = declare_dependency(
   link_with: libant,
-  include_directories: include,
+  include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps + [pkg_dep]
 )
 
@@ -106,7 +142,7 @@ if get_option('linker_map')
   endif
 endif
 
-executable(
+ant_exe = executable(
   'ant',
   files('src/main.c', 'src/watch.c') + [messages_h],
   dependencies: libant_dep,
@@ -114,6 +150,27 @@ executable(
   export_dynamic: true
 )
 
+if host_machine.system() == 'darwin'
+  codesign = find_program('codesign')
+  custom_target(
+    'ant_codesign',
+    input: files('meson/ant.entitlements'),
+    output: 'ant.codesign.stamp',
+    command: [
+      'sh', '-c',
+      '"$1" --force --sign - --entitlements "$2" "$3" && touch "$4"',
+      'ant-codesign',
+      codesign,
+      '@INPUT0@',
+      ant_exe,
+      '@OUTPUT@',
+    ],
+    depends: ant_exe,
+    build_by_default: true,
+  )
+endif
+
+# move to meson/tests
 executable(
   'tlsuv-boringssl-smoke',
   files('tests/tlsuv_boringssl_smoke.c'),
@@ -127,3 +184,47 @@ executable(
   dependencies: libant_dep,
   build_by_default: false
 )
+
+if darwin_hvf_supported
+  executable(
+    'test-sandbox-net-packets',
+    files('tests/test_sandbox_net_packets.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-virtio-blk',
+    files('tests/test_sandbox_virtio_blk.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-virtio-rng',
+    files('tests/test_sandbox_virtio_rng.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-pci',
+    files('tests/test_sandbox_pci.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-mmio',
+    files('tests/test_sandbox_mmio.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+
+  executable(
+    'test-sandbox-9p',
+    files('tests/test_sandbox_9p.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
+endif

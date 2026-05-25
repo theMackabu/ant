@@ -4,6 +4,7 @@
 #include "types.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 extern bool io_no_color;
 
@@ -33,6 +34,7 @@ ant_value_t console_library(ant_t *js);
 
 void print_value_colored(const char *str, FILE *stream);
 void print_repl_value(ant_t *js, ant_value_t val, FILE *stream);
+void io_set_sandbox_terminal(uint32_t capabilities);
 bool print_uncaught_throw(ant_t *js);
 
 void inspect_object(

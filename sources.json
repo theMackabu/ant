@@ -7,6 +7,7 @@
       "src/highlight/*.c",
       "src/esm/*.c",
       "src/cli/*.c",
+      "src/sandbox/*.c",
       "src/inspector/*.c",
       "src/modules/*.c",
       "src/streams/*.c",
@@ -22,6 +23,7 @@
       "src/gc/*.c",
       "src/highlight/*.c",
       "src/esm/*.c",
+      "src/sandbox/*.c",
       "src/inspector/*.c",
       "src/modules/*.c",
       "src/streams/*.c",
@@ -30,6 +32,46 @@
       "src/net/*.c"
     ],
     "exclude": ["src/main.c", "src/watch.c"]
+  },
+  "sandbox_backend": {
+    "sections": {
+      "shared": {
+        "files": [
+          "src/sandbox/backends/shared/common.c",
+          "src/sandbox/backends/shared/nat.c",
+          "src/sandbox/backends/shared/net_packets.c",
+          "src/sandbox/backends/shared/pci.c",
+          "src/sandbox/backends/shared/virtio.c",
+          "src/sandbox/backends/shared/virtio_9p.c",
+          "src/sandbox/backends/shared/virtio_blk.c",
+          "src/sandbox/backends/shared/virtio_net.c",
+          "src/sandbox/backends/shared/virtio_rng.c",
+          "src/sandbox/backends/shared/virtio_vsock.c"
+        ]
+      },
+      "darwin": {
+        "files": ["src/sandbox/backends/darwin/backend.c"]
+      },
+      "darwin_hvf": {
+        "files": [
+          "src/sandbox/backends/darwin/fdt.c",
+          "src/sandbox/backends/darwin/gic.c",
+          "src/sandbox/backends/darwin/mmio.c",
+          "src/sandbox/backends/darwin/uart.c"
+        ]
+      },
+      "linux": {
+        "files": [
+          "src/sandbox/backends/linux/kvm_aarch64.c",
+          "src/sandbox/backends/linux/kvm_common.c",
+          "src/sandbox/backends/linux/kvm_unavailable.c",
+          "src/sandbox/backends/linux/kvm_x86.c"
+        ]
+      },
+      "windows": {
+        "files": ["src/sandbox/backends/windows/backend.c"]
+      }
+    }
   },
   "core": {
     "patterns": ["src/core/**/*.ts"],

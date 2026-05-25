@@ -26,6 +26,7 @@ js_err_type_t get_error_type(ant_t *js);
 
 bool print_uncaught_throw(ant_t *js);
 bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value);
+void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix);
 
 void js_clear_error_site(ant_t *js);
 void js_print_stack_trace_vm(ant_t *js, FILE *stream);

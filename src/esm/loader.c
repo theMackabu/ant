@@ -5,6 +5,7 @@
 #include "esm/library.h"
 #include "esm/remote.h"
 #include "esm/builtin_bundle.h"
+#include "loader_cache.h"
 
 #include "modules/json.h"
 #include "modules/napi.h"
@@ -69,11 +70,9 @@ typedef struct {
   size_t size;
 } esm_file_data_t;
 
-static esm_module_cache_t global_module_cache = {NULL, 0};
 static int esm_dynamic_import_depth = 0;
-
+static esm_module_cache_t global_module_cache = {NULL, 0};
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
-static char *esm_canonicalize_path(const char *path);
 
 static bool esm_is_path_sep(char ch) {
   return ch == '/' || ch == '\\';
@@ -153,12 +152,169 @@ static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
   return path;
 }
 
+static char *esm_canonicalize_path(const char *path) {
+  if (!path) return NULL;
+
+  size_t len = strlen(path);
+  char *canonical = malloc(len + 1);
+  if (!canonical) return NULL;
+
+  const char *src = path;
+  char *dst = canonical;
+  char *root_end = canonical;
+
+#ifdef _WIN32
+  if (esm_has_windows_drive_letter(src)) {
+    *dst++ = src[0];
+    *dst++ = ':';
+    src += 2;
+  }
+#endif
+
+  if (esm_is_path_sep(*src)) {
+    *dst++ = '/';
+    while (esm_is_path_sep(*src)) src++;
+  }
+  root_end = dst;
+
+  while (*src) {
+    while (esm_is_path_sep(*src)) src++;
+    if (!*src) break;
+
+    const char *component = src;
+    while (*src && !esm_is_path_sep(*src)) src++;
+    size_t component_len = (size_t)(src - component);
+
+    if (component_len == 1 && component[0] == '.') continue;
+    if (component_len == 2 && component[0] == '.' && component[1] == '.') {
+      if (dst > root_end) {
+        if (dst > canonical && *(dst - 1) == '/') dst--;
+        while (dst > root_end && *(dst - 1) != '/') dst--;
+        if (dst > root_end && *(dst - 1) == '/') dst--;
+      } else if (root_end == canonical) {
+        if (dst > canonical && *(dst - 1) != '/') *dst++ = '/';
+        memcpy(dst, "..", 2);
+        dst += 2;
+      }
+      continue;
+    }
+
+    if (dst > canonical && *(dst - 1) != '/') *dst++ = '/';
+    memcpy(dst, component, component_len);
+    dst += component_len;
+  }
+
+  if (dst == canonical) *dst++ = '.';
+  else if (dst > root_end && *(dst - 1) == '/') dst--;
+  *dst = '\0';
+
+  return canonical;
+}
+
+static char *esm_make_absolute_path(const char *path) {
+  if (!path || !path[0]) return NULL;
+  if (esm_path_is_absolute(path)) return esm_canonicalize_path(path);
+
+  char cwd[PATH_MAX];
+  if (!getcwd(cwd, sizeof(cwd))) return NULL;
+
+  size_t cwd_len = strlen(cwd);
+  size_t path_len = strlen(path);
+  char *joined = malloc(cwd_len + 1u + path_len + 1u);
+  if (!joined) return NULL;
+
+  memcpy(joined, cwd, cwd_len);
+  joined[cwd_len] = '/';
+  memcpy(joined + cwd_len + 1u, path, path_len + 1u);
+
+  char *canonical = esm_canonicalize_path(joined);
+  free(joined);
+  return canonical;
+}
+
+static bool esm_lstat_path(const char *path, struct stat *st) {
+#ifdef _WIN32
+  return stat(path, st) == 0;
+#else
+  return lstat(path, st) == 0;
+#endif
+}
+
+static char *esm_resolve_existing_regular_path(const char *path) {
+  struct stat st;
+  if (!esm_lstat_path(path, &st)) return NULL;
+
+#ifndef _WIN32
+  if (S_ISLNK(st.st_mode)) {
+    char *resolved = realpath(path, NULL);
+    if (!resolved) return NULL;
+    if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) return resolved;
+    free(resolved);
+    return NULL;
+  }
+#endif
+
+  return S_ISREG(st.st_mode) ? esm_make_absolute_path(path) : NULL;
+}
+
+static char *esm_resolve_existing_directory_path(const char *path) {
+  struct stat st;
+  if (!esm_lstat_path(path, &st)) return NULL;
+
+#ifndef _WIN32
+  if (S_ISLNK(st.st_mode)) {
+    char *resolved = realpath(path, NULL);
+    if (!resolved) return NULL;
+    if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) return resolved;
+    free(resolved);
+    return NULL;
+  }
+#endif
+
+  return S_ISDIR(st.st_mode) ? esm_make_absolute_path(path) : NULL;
+}
+
 static char *esm_make_cache_key(const char *module_key) {
   if (!module_key) return NULL;
   if (esm_has_builtin_scheme(module_key)) return strdup(module_key);
   if (esm_is_data_url(module_key)) return strdup(module_key);
   if (esm_is_url(module_key)) return strdup(module_key);
-  return esm_canonicalize_path(module_key);
+  return esm_make_absolute_path(module_key);
+}
+
+static char *esm_make_resolve_cache_key(const char *specifier, const char *base_path, bool prefer_require) {
+  char *base_key = esm_make_cache_key((base_path && base_path[0]) ? base_path : ".");
+  if (!base_key) return NULL;
+
+  size_t spec_len = specifier ? strlen(specifier) : 0;
+  size_t base_len = strlen(base_key);
+  
+  size_t len = snprintf(
+    NULL, 0, "%c:%zu:%s:%zu:%s",
+    prefer_require ? 'r' : 'i',
+    spec_len,
+    specifier ? specifier : "",
+    base_len,
+    base_key
+  );
+  
+  char *key = malloc(len + 1u);
+  if (!key) {
+    free(base_key);
+    return NULL;
+  }
+
+  snprintf(
+    key, len + 1u, "%c:%zu:%s:%zu:%s",
+    prefer_require ? 'r' : 'i',
+    spec_len,
+    specifier ? specifier : "",
+    base_len,
+    base_key
+  );
+  
+  free(base_key);
+  return key;
 }
 
 static char *esm_get_extension(const char *path) {
@@ -185,12 +341,16 @@ static char *esm_try_resolve(const char *dir, const char *spec, const char *suff
   char path[PATH_MAX];
   if (!dir || !dir[0]) snprintf(path, PATH_MAX, "%s%s", spec, suffix);
   else snprintf(path, PATH_MAX, "%s/%s%s", dir, spec, suffix);
-  char *resolved = realpath(path, NULL);
+
+  char *cached = NULL;
+  if (esm_path_resolve_cache_get(path, &cached)) return cached;
+
+  char *resolved = esm_resolve_existing_regular_path(path);
   if (resolved) {
-    struct stat st;
-    if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) return resolved;
-    free(resolved);
-  }
+    esm_path_resolve_cache_put(path, resolved);
+    return resolved;
+  } esm_path_resolve_cache_put(path, NULL);
+  
   return NULL;
 }
 
@@ -325,6 +485,12 @@ static char *esm_resolve_absolute(const char *specifier) {
 }
 
 static char *esm_get_base_dir(const char *base_path) {
+  bool can_cache = base_path && base_path[0];
+  if (can_cache) {
+    char *cached = NULL;
+    if (esm_base_dir_cache_get(base_path, &cached)) return cached;
+  }
+
   if (!base_path || !base_path[0]) {
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) return NULL;
@@ -348,6 +514,7 @@ static char *esm_get_base_dir(const char *base_path) {
     char *out = realpath(resolved_or_candidate, NULL);
     if (!out) out = strdup(resolved_or_candidate);
     if (resolved) free(resolved);
+    if (can_cache && out) esm_base_dir_cache_put(base_path, out);
     return out;
   }
 
@@ -360,6 +527,7 @@ static char *esm_get_base_dir(const char *base_path) {
   if (!out) out = strdup(dir);
   
   free(tmp);
+  if (can_cache && out) esm_base_dir_cache_put(base_path, out);
   return out;
 }
 
@@ -400,17 +568,27 @@ static bool esm_split_package_specifier(
 static char *esm_find_node_module_dir(const char *start_dir, const char *package_name) {
   if (!start_dir || !package_name) return NULL;
 
+  char *cached_initial = NULL;
+  if (esm_package_dir_cache_get(start_dir, package_name, &cached_initial)) return cached_initial;
+
   char current[PATH_MAX];
   snprintf(current, sizeof(current), "%s", start_dir);
 
   while (true) {
+    char *cached_dir = NULL;
+    if (esm_package_dir_cache_get(current, package_name, &cached_dir)) {
+      esm_package_dir_cache_put(start_dir, package_name, cached_dir);
+      return cached_dir;
+    }
+
     char candidate[PATH_MAX];
     snprintf(candidate, sizeof(candidate), "%s/node_modules/%s", current, package_name);
 
-    struct stat st;
-    if (stat(candidate, &st) == 0 && S_ISDIR(st.st_mode)) {
-      char *resolved = realpath(candidate, NULL);
-      return resolved ? resolved : strdup(candidate);
+    char *package_dir = esm_resolve_existing_directory_path(candidate);
+    if (package_dir) {
+      esm_package_dir_cache_put(current, package_name, package_dir);
+      esm_package_dir_cache_put(start_dir, package_name, package_dir);
+      return package_dir;
     }
 
     if (esm_path_is_root(current)) break;
@@ -422,6 +600,7 @@ static char *esm_find_node_module_dir(const char *start_dir, const char *package
     else *slash = '\0';
   }
   
+  esm_package_dir_cache_put(start_dir, package_name, NULL);
   return NULL;
 }
 
@@ -600,7 +779,7 @@ static char *esm_resolve_package_entrypoint(const char *package_dir, const char 
   char pkg_json_path[PATH_MAX];
   snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", package_dir);
 
-  yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  yyjson_doc *doc = esm_package_json_cache_read(pkg_json_path);
   yyjson_val *root = doc ? yyjson_doc_get_root(doc) : NULL;
   yyjson_val *exports = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "exports") : NULL;
 
@@ -623,23 +802,17 @@ static char *esm_resolve_package_entrypoint(const char *package_dir, const char 
       else if (!subpath || !subpath[0]) resolved = esm_resolve_exports_target(exports, package_dir, "", 0, base_path, false, prefer_require);
     } else if (!subpath || !subpath[0]) resolved = esm_resolve_exports_target(exports, package_dir, "", 0, base_path, false, prefer_require);
 
-    if (doc) yyjson_doc_free(doc);
     return resolved;
   }
 
   if (!subpath || !subpath[0]) {
     char *resolved = esm_resolve_package_main_entry(root, package_dir);
-    if (resolved) {
-      if (doc) yyjson_doc_free(doc);
-      return resolved;
-    }
-    if (doc) yyjson_doc_free(doc);
+    if (resolved) return resolved;
     return esm_try_resolve_index_with_exts(package_dir, ".");
   }
 
   char *resolved = esm_try_resolve_with_exts(package_dir, subpath, esm_has_extension(subpath));
   if (!resolved) resolved = esm_try_resolve_index_with_exts(package_dir, subpath);
-  if (doc) yyjson_doc_free(doc);
   return resolved;
 }
 
@@ -655,7 +828,7 @@ static char *esm_resolve_package_imports(const char *specifier, const char *base
     char pkg_json_path[PATH_MAX];
     snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", current);
 
-    yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+    yyjson_doc *doc = esm_package_json_cache_read(pkg_json_path);
     if (doc) {
       yyjson_val *root = yyjson_doc_get_root(doc);
       yyjson_val *imports = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "imports") : NULL;
@@ -664,7 +837,6 @@ static char *esm_resolve_package_imports(const char *specifier, const char *base
         imports, specifier, current,
         base_path, true, prefer_require
       );
-      yyjson_doc_free(doc);
       return resolved;
     }
 
@@ -741,7 +913,7 @@ static char *esm_resolve_relative_path(const char *specifier, const char *base_p
   }
 }
 
-static char *esm_resolve_path_cond(const char *specifier, const char *base_path, bool prefer_require) {
+static char *esm_resolve_path_cond_uncached(const char *specifier, const char *base_path, bool prefer_require) {
   if (!specifier || !specifier[0]) return NULL;
 
   if (esm_path_is_absolute(specifier)) {
@@ -757,6 +929,28 @@ static char *esm_resolve_path_cond(const char *specifier, const char *base_path,
   }
 
   return esm_resolve_node_module_cond(specifier, base_path, prefer_require);
+}
+
+static char *esm_resolve_path_cond(const char *specifier, const char *base_path, bool prefer_require) {
+  char *key = esm_make_resolve_cache_key(specifier, base_path, prefer_require);
+  if (!key) return esm_resolve_path_cond_uncached(specifier, base_path, prefer_require);
+
+  char *cached = esm_resolve_cache_get(key);
+  if (cached) {
+    free(key);
+    return cached;
+  }
+
+  char *resolved = esm_resolve_path_cond_uncached(specifier, base_path, prefer_require);
+  if (!resolved) {
+    free(key);
+    return NULL;
+  }
+
+  esm_resolve_cache_put(key, resolved);
+  free(key);
+  
+  return resolved;
 }
 
 static char *esm_resolve_path(const char *specifier, const char *base_path) {
@@ -821,27 +1015,23 @@ static bool esm_path_contains_node_modules(const char *path) {
   return strstr(path, "\\node_modules\\") != NULL;
 }
 
-static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *has_type) {
-  if (has_type) *has_type = false;
+static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *is_module) {
+  if (is_module) *is_module = false;
 
-  yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  yyjson_doc *doc = esm_package_json_cache_read(pkg_json_path);
   if (!doc) return false;
 
   yyjson_val *root = yyjson_doc_get_root(doc);
   yyjson_val *type = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "type") : NULL;
 
   if (!type || !yyjson_is_str(type)) {
-    yyjson_doc_free(doc);
-    return false;
+    return true;
   }
 
   const char *type_str = yyjson_get_str(type);
-  if (has_type) *has_type = true;
-
-  bool is_module = type_str && strcmp(type_str, "module") == 0;
-  yyjson_doc_free(doc);
+  if (is_module) *is_module = type_str && strcmp(type_str, "module") == 0;
   
-  return is_module;
+  return true;
 }
 
 static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_module) {
@@ -860,11 +1050,9 @@ static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_m
     char pkg_json_path[PATH_MAX];
     snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", current);
 
-    struct stat st;
-    if (stat(pkg_json_path, &st) == 0 && S_ISREG(st.st_mode)) {
-      bool has_type = false;
-      bool pkg_is_module = esm_read_package_json_type_module(pkg_json_path, &has_type);
-      if (is_module) *is_module = has_type && pkg_is_module;
+    bool pkg_is_module = false;
+    if (esm_read_package_json_type_module(pkg_json_path, &pkg_is_module)) {
+      if (is_module) *is_module = pkg_is_module;
       return true;
     }
     
@@ -942,42 +1130,6 @@ static esm_module_kind_t esm_classify_module_kind(const char *resolved_path) {
   if (esm_is_image(resolved_path)) return ESM_MODULE_KIND_IMAGE;
   if (esm_is_native(resolved_path)) return ESM_MODULE_KIND_NATIVE;
   return ESM_MODULE_KIND_CODE;
-}
-
-static char *esm_canonicalize_path(const char *path) {
-  if (!path) return NULL;
-
-  char *canonical = strdup(path);
-  if (!canonical) return NULL;
-
-  char *src = canonical, *dst = canonical;
-
-  while (*src) {
-    if (*src == '/') {
-      *dst++ = '/';
-      while (*src == '/') src++;
-
-      if (strncmp(src, "./", 2) == 0) {
-        src += 2;
-      } else if (strncmp(src, "../", 3) == 0) {
-        src += 3;
-        if (dst > canonical + 1) {
-          dst--;
-          while (dst > canonical && *(dst - 1) != '/') dst--;
-        }
-      }
-    } else {
-      *dst++ = *src++;
-    }
-  }
-
-  *dst = '\0';
-
-  if (strlen(canonical) > 1 && canonical[strlen(canonical) - 1] == '/') {
-    canonical[strlen(canonical) - 1] = '\0';
-  }
-
-  return canonical;
 }
 
 static esm_module_t *esm_find_module(const char *module_key) {
@@ -1058,6 +1210,8 @@ void js_esm_cleanup_module_cache(void) {
     free(current);
   }
   global_module_cache.count = 0;
+
+  esm_loader_cache_cleanup();
 }
 
 static ant_value_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_file_data_t *out) {

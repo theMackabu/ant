@@ -1,0 +1,38 @@
+diff --git a/src/fs/9p.c b/src/fs/9p.c
+index 2f0157a..34dc9b7 100644
+--- a/src/fs/9p.c
++++ b/src/fs/9p.c
+@@ -600,6 +600,13 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+         return 0;
+     if (!buffer_strcmp(name, "."))
+         return parent;
++    symbol name_sym = intern(name);
++    tuple cached = lookup(parent, name_sym);
++    if (cached) {
++        p9_dentry cached_dentry = p9_get_dentry_from_md(p9fs, cached);
++        if (cached_dentry && cached_dentry->fid != P9_NOFID)
++            return cached;
++    }
+     parent_dentry->pinned = true;
+     u32 fid = p9_fid_new(p9fs);
+     parent_dentry->pinned = false;
+@@ -617,8 +624,7 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+         md = dentry->md;
+     } else {
+         md = allocate_tuple();
+-        if (qid.type == P9_QID_TYPE_DIR)
+-            set(md, sym(..), parent);
++        set(md, sym(..), parent);
+     }
+     switch (qid.type) {
+     case P9_QID_TYPE_DIR:
+@@ -636,6 +642,9 @@ static tuple p9_lookup(filesystem fs, tuple parent, string name)
+         if (!dentry)
+             goto error;
+     }
++    tuple parent_children = children(parent);
++    if (parent_children && get_tuple(parent_children, name_sym) != md)
++        set(parent_children, name_sym, md);
+     return md;
+   error:
+     if (!dentry) {

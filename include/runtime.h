@@ -42,5 +42,6 @@ void *parse_arena_bump(size_t size);
 
 void destroy_runtime(ant_t *js);
 void *code_arena_bump(size_t size);
+void ant_runtime_set_argv(int argc, char **argv);
 
 #endif

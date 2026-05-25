@@ -3,11 +3,11 @@
  * This demonstrates how to embed the Ant JS engine in a C application.
  *
  * to build:
- * ./libant/build.sh  
- * ./libant/example.sh  
+ * ./packages/libant/build.sh
+ * ./packages/libant/example.sh
  *
  * to run:
- * ./libant/dist/embed
+ * ./packages/libant/dist/embed
  */
 
 #include <ant.h>

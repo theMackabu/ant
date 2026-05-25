@@ -1,0 +1,77 @@
+diff --git a/src/aarch64/gic.c b/src/aarch64/gic.c
+index 0803daa9..fcbcfd62 100644
+--- a/src/aarch64/gic.c
++++ b/src/aarch64/gic.c
+@@ -554,37 +554,42 @@ int init_gic(void)
+         u64 icc_ctlr = read_psr_s(ICC_CTLR_EL1);
+         gic.intid_mask = (field_from_u64(icc_ctlr, ICC_CTLR_EL1_IDbits) ==
+                           ICC_CTLR_EL1_IDbits_24) ? MASK(24) : MASK(16);
+-        gic_msi_vector_base = GIC_LPI_INTS_START;
+-        u64 typer = gicd_read_32(TYPER);
+-        u8 num_lpis = field_from_u64(typer, GICD_num_LPIs);
+-        if (num_lpis == 0)
+-            gic_msi_vector_num = U32_FROM_BIT(field_from_u64(typer, GICD_IDbits) + 1) -
+-                                 gic_msi_vector_base;
+-        else
+-            gic_msi_vector_num = U32_FROM_BIT(num_lpis + 1);
+-
+-        /* Set up a page-sized LPI configuration table. */
+-        gic_msi_vector_num = MAX(gic_msi_vector_num, PAGESIZE); /* 1 byte per LPI */
+-        kernel_heaps kh = get_kernel_heaps();
+-        backed_heap backed = heap_linear_backed(kh);
+-        u64 pa;
+-        gic.lpi_cfg_table = alloc_map(backed, PAGESIZE, &pa);
+-        assert(gic.lpi_cfg_table != INVALID_ADDRESS);
+-        zero(gic.lpi_cfg_table, PAGESIZE);
+-        u64 id_bits = find_order(gic_msi_vector_base + gic_msi_vector_num) - 1;
+-        gic.redist.propbase = pa | id_bits;
+-        gicr_write_64(PROPBASER, gic.redist.propbase);
+-
+-        /* Set up LPI pending table, which must be aligned to 64 KB. */
+-        void *lpi_pending_table = alloc_map(backed, 64 * KB, &pa);
+-        assert(lpi_pending_table != INVALID_ADDRESS);
+-        zero(lpi_pending_table, 64 * KB);
+-        gic.redist.pendbase = GICR_PENDBASER_PTZ | pa;
+-        gicr_write_64(PENDBASER, gic.redist.pendbase);
+-
+-        gicr_write_32(CTLR, GICR_CTLR_EnableLPIs);
+-        if (gic.its_base)
++        if (gic.its_base) {
++            gic_msi_vector_base = GIC_LPI_INTS_START;
++            u64 typer = gicd_read_32(TYPER);
++            u8 num_lpis = field_from_u64(typer, GICD_num_LPIs);
++            if (num_lpis == 0)
++                gic_msi_vector_num = U32_FROM_BIT(field_from_u64(typer, GICD_IDbits) + 1) -
++                                     gic_msi_vector_base;
++            else
++                gic_msi_vector_num = U32_FROM_BIT(num_lpis + 1);
++
++            /* Set up a page-sized LPI configuration table. */
++            gic_msi_vector_num = MAX(gic_msi_vector_num, PAGESIZE); /* 1 byte per LPI */
++            kernel_heaps kh = get_kernel_heaps();
++            backed_heap backed = heap_linear_backed(kh);
++            u64 pa;
++            gic.lpi_cfg_table = alloc_map(backed, PAGESIZE, &pa);
++            assert(gic.lpi_cfg_table != INVALID_ADDRESS);
++            zero(gic.lpi_cfg_table, PAGESIZE);
++            u64 id_bits = find_order(gic_msi_vector_base + gic_msi_vector_num) - 1;
++            gic.redist.propbase = pa | id_bits;
++            gicr_write_64(PROPBASER, gic.redist.propbase);
++
++            /* Set up LPI pending table, which must be aligned to 64 KB. */
++            void *lpi_pending_table = alloc_map(backed, 64 * KB, &pa);
++            assert(lpi_pending_table != INVALID_ADDRESS);
++            zero(lpi_pending_table, 64 * KB);
++            gic.redist.pendbase = GICR_PENDBASER_PTZ | pa;
++            gicr_write_64(PENDBASER, gic.redist.pendbase);
++
++            gicr_write_32(CTLR, GICR_CTLR_EnableLPIs);
+             init_gits(kh);
++        } else {
++            u64 typer = mmio_read_32(GIC_V2M_MSI_TYPER);
++            gic_msi_vector_base = field_from_u64(typer, GIC_V2M_MSI_TYPER_BASE);
++            gic_msi_vector_num = field_from_u64(typer, GIC_V2M_MSI_TYPER_NUM);
++        }
+     } else {
+         gic.intid_mask = MASK(10);
+ 

@@ -1,6 +1,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "output.h"
 #include "silver/engine.h"
 #include "modules/io.h"
 #include "highlight.h"
@@ -21,9 +22,12 @@
 
 typedef struct { char *buf; size_t size; } errbuf_t;
 
-static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
+void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
   ant_value_t obj = is_err(value) ? js_as_obj(value) : value;
+  ant_output_stream_t *out = ant_output_stream(stderr);
+  
   const char *stack = NULL; bool no_stack = false;
+  ant_output_stream_begin(out);
   
   if (vtype(obj) == T_OBJ) {
     ant_value_t err_type = js_get_slot(obj, SLOT_ERR_TYPE);
@@ -37,22 +41,23 @@ static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback
     stack = (const char *)(uintptr_t)(soff);
   }
   
-  if (prefix) fputs(prefix, stderr);
+  if (prefix) ant_output_stream_append_cstr(out, prefix);
   
   if (stack) {
-    fputs(stack, stderr);
+    ant_output_stream_append_cstr(out, stack);
     size_t n = strlen(stack);
-    if (n == 0 || stack[n - 1] != '\n') fputc('\n', stderr);
+    if (n == 0 || stack[n - 1] != '\n') ant_output_stream_putc(out, '\n');
   } else if (vtype(obj) == T_OBJ) {
     const char *name = get_str_prop(js, obj, "name", 4, NULL);
     const char *msg = get_str_prop(js, obj, "message", 7, NULL);
     
-    if (name && msg) fprintf(stderr, "%s%s%s: %s%s%s\n", C_RED, name, C_RESET, C_BOLD, msg, C_RESET);
-    else if (name) fprintf(stderr, "%s%s%s\n", C_RED, name, C_RESET);
-    else fprintf(stderr, "[object Error]\n");
+    if (name && msg) ant_output_stream_appendf(out, "%s%s%s: %s%s%s\n", C_RED, name, C_RESET, C_BOLD, msg, C_RESET);
+    else if (name) ant_output_stream_appendf(out, "%s%s%s\n", C_RED, name, C_RESET);
+    else ant_output_stream_append_cstr(out, "[object Error]\n");
   } 
   
-  else fprintf(stderr, "%s\n", js_str(js, value));
+  else ant_output_stream_appendf(out, "%s\n", js_str(js, value));
+  ant_output_stream_flush(out);
 }
 
 bool print_uncaught_throw(ant_t *js) {

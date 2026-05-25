@@ -1,9 +1,13 @@
-import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
+import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + '\n…' : s);
 
 export default {
-  builder: new SlashCommandBuilder().setName('run').setDescription('evaluate javascript via modal (owner only)'),
+  builder: new SlashCommandBuilder()
+    .setName('run')
+    .setDescription('evaluate javascript via modal (owner only)')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall)
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel),
   ownerOnly: true,
   run: async i => {
     const modal = new ModalBuilder()
@@ -28,6 +32,7 @@ export default {
     if (!submitted) return;
 
     const code = submitted.fields.getTextInputValue('code');
+    console.log(`[run] ${i.user.tag} (${i.user.id})`);
 
     let buf = '';
     const sink = { write(s) { buf += s; return true; } };

@@ -1,0 +1,209 @@
+diff --git a/src/kernel/storage.c b/src/kernel/storage.c
+index 72b6a054..9e3ed956 100644
+--- a/src/kernel/storage.c
++++ b/src/kernel/storage.c
+@@ -3,6 +3,9 @@
+ #include <storage.h>
+ #include <fs.h>
+ 
++int filesystem_mkdirpath(filesystem fs, tuple cwd, sstring fp,
++        boolean persistent);
++
+ //#define STORAGE_DEBUG
+ #ifdef STORAGE_DEBUG
+ #define storage_debug(x, ...) do {tprintf(sym(storage), 0, ss(x "\n"), ##__VA_ARGS__);} while(0)
+@@ -39,6 +42,7 @@ static struct {
+ #define storage_unlock()    spin_unlock_irq(&storage.lock, _irqflags)
+ 
+ static void notify_mount_change_locked(void);
++static void storage_apply_mountpoints_locked(void);
+ 
+ /* Called with mutex locked. */
+ static volume storage_get_volume(tuple root)
+@@ -140,6 +144,11 @@ static void volume_mount(volume v, buffer mount_point)
+         readonly = true;
+     }
+     filesystem fs = storage.root_fs;
++    if (!fs)
++        return;
++    if (filesystem_mkdirpath(fs, 0, cmount_point, true) != 0) {
++        /* The path may already exist, or the root may not support mkdirpath. */
++    }
+     tuple root = filesystem_getroot(storage.root_fs);
+     tuple mount_dir_t;
+     int fss = filesystem_get_node(&fs, fs->get_inode(fs, root), cmount_point,
+@@ -167,6 +176,60 @@ static void volume_mount(volume v, buffer mount_point)
+     apply(v->init_handler, readonly, complete);
+ }
+ 
++static buffer storage_copy_mount_path(buffer path)
++{
++    bytes len = buffer_length(path);
++    buffer copy = allocate_buffer(storage.h, len);
++    if (copy == INVALID_ADDRESS)
++        return INVALID_ADDRESS;
++    runtime_memcpy(buffer_ref(copy, 0), buffer_ref(path, 0), len);
++    buffer_produce(copy, len);
++    return copy;
++}
++
++static symbol storage_attach_id_symbol(int attach_id)
++{
++    char name[32];
++    rsnprintf(name, sizeof(name), "%%%d", attach_id);
++    return intern(alloca_wrap_buffer(name, sstring_from_cstring(name, sizeof(name)).len));
++}
++
++boolean storage_mount_attach_id(int attach_id, buffer path)
++{
++    buffer persistent_path = storage_copy_mount_path(path);
++    if (persistent_path == INVALID_ADDRESS)
++        return false;
++
++    tuple new_mounts = 0;
++    if (!storage.mounts) {
++        new_mounts = allocate_tuple();
++        if (new_mounts == INVALID_ADDRESS) {
++            deallocate_buffer(persistent_path);
++            return false;
++        }
++    }
++
++    symbol attach = storage_attach_id_symbol(attach_id);
++    boolean mounted = false;
++    storage_lock();
++    if (!storage.mounts)
++        storage.mounts = new_mounts;
++    set(storage.mounts, attach, persistent_path);
++    list_foreach(&storage.volumes, e) {
++        volume v = struct_from_list(e, volume, l);
++        if (v->attach_id == attach_id) {
++            if (!v->fs && !v->mounting)
++                volume_mount(v, persistent_path);
++            mounted = true;
++            break;
++        }
++    }
++    storage_unlock();
++    if (mounted)
++        storage_check_if_ready();
++    return mounted;
++}
++
+ static void storage_io_sg(block_io op, sg_list sg, range blocks, status_handler completion)
+ {
+     merge m = allocate_merge(storage.h, completion);
+@@ -228,6 +291,11 @@ void storage_set_root_fs(filesystem root_fs)
+ {
+     storage.root_fs = root_fs;
+     fs_set_path_helper(get_root_fs, storage_get_mountpoint);
++    storage_lock();
++    storage_apply_mountpoints_locked();
++    storage_unlock();
++    if (storage.mounts)
++        storage_check_if_ready();
+ }
+ 
+ closure_func_basic(binding_handler, boolean, storage_set_mountpoints_each,
+@@ -245,13 +313,33 @@ closure_func_basic(binding_handler, boolean, storage_set_mountpoints_each,
+     return true;
+ }
+ 
++static void storage_apply_mountpoints_locked(void)
++{
++    if (!storage.mounts)
++        return;
++    storage.mounting = true;
++    iterate(storage.mounts, stack_closure_func(binding_handler, storage_set_mountpoints_each));
++    storage.mounting = false;
++}
++
++closure_func_basic(binding_handler, boolean, storage_merge_mountpoints_each,
++                   value k, value path)
++{
++    assert(is_symbol(k));
++    assert(is_string(path));
++    set(storage.mounts, k, path);
++    return true;
++}
++
+ void storage_set_mountpoints(tuple mounts)
+ {
+     storage_lock();
+-    storage.mounts = mounts;
+-    storage.mounting = true;
+-    iterate(mounts, stack_closure_func(binding_handler, storage_set_mountpoints_each));
+-    storage.mounting = false;
++    if (storage.mounts && storage.mounts != mounts) {
++        iterate(mounts, stack_closure_func(binding_handler, storage_merge_mountpoints_each));
++    } else {
++        storage.mounts = mounts;
++    }
++    storage_apply_mountpoints_locked();
+     storage_unlock();
+     storage_check_if_ready();
+ }
+diff --git a/src/runtime/storage.h b/src/runtime/storage.h
+index 05822b1f..c92fb92a 100644
+--- a/src/runtime/storage.h
++++ b/src/runtime/storage.h
+@@ -99,6 +99,7 @@ void init_volumes(heap h);
+ void storage_set_root_fs(struct filesystem *root_fs);
+ void storage_set_mountpoints(tuple mounts);
+ boolean volume_add(u8 *uuid, char *label, void *priv, fs_init_handler init_handler, int attach_id);
++boolean storage_mount_attach_id(int attach_id, buffer path);
+ void storage_when_ready(status_handler complete);
+ void storage_sync(status_handler sh);
+ 
+diff --git a/src/virtio/virtio_9p.c b/src/virtio/virtio_9p.c
+index e2e91466..d1ac12d1 100644
+--- a/src/virtio/virtio_9p.c
++++ b/src/virtio/virtio_9p.c
+@@ -84,6 +84,7 @@ static boolean v9p_dev_attach(heap general, backed_heap backed, vtdev dev)
+     if (v9p == INVALID_ADDRESS)
+         return false;
+     u64 attach_id = -1ull;
++    buffer mount_path = 0;
+     if (dev->features & VIRTIO_9P_MOUNT_TAG) {
+         u16 tag_len = vtdev_cfg_read_2(dev, 0);
+         if (tag_len != 0) {
+@@ -91,7 +92,23 @@ static boolean v9p_dev_attach(heap general, backed_heap backed, vtdev dev)
+             if (b != INVALID_ADDRESS) {
+                 vtdev_cfg_read_mem(dev, sizeof(tag_len), buffer_ref(b, 0), tag_len);
+                 buffer_produce(b, tag_len);
+-                parse_int(b, 10, &attach_id);
++                char *tag = buffer_ref(b, 0);
++                int i = 0;
++                attach_id = 0;
++                while ((i < tag_len) && (tag[i] >= '0') && (tag[i] <= '9')) {
++                    attach_id = attach_id * 10 + tag[i] - '0';
++                    i++;
++                }
++                if ((i == 0) || ((i < tag_len) && (tag[i] != ':')))
++                    attach_id = -1ull;
++                if ((attach_id != -1ull) && (i < tag_len) && (tag[i] == ':') && (i + 1 < tag_len)) {
++                    u16 path_len = tag_len - i - 1;
++                    mount_path = allocate_buffer(general, path_len);
++                    if (mount_path != INVALID_ADDRESS) {
++                        runtime_memcpy(buffer_ref(mount_path, 0), tag + i + 1, path_len);
++                        buffer_produce(mount_path, path_len);
++                    }
++                }
+                 deallocate_buffer(b);
+             }
+         }
+@@ -115,8 +132,14 @@ static boolean v9p_dev_attach(heap general, backed_heap backed, vtdev dev)
+         msg_err("v9p: failed to add volume");
+         goto err;
+     }
++    if (mount_path) {
++        storage_mount_attach_id((int)attach_id, mount_path);
++        deallocate_buffer(mount_path);
++    }
+     return true;
+   err:
++    if (mount_path)
++        deallocate_buffer(mount_path);
+     deallocate(general, v9p, sizeof(*v9p));
+     return false;
+ }

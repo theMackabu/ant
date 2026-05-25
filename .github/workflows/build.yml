@@ -75,7 +75,7 @@ jobs:
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     steps:
       - name: Download version artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: version-*
           path: versions
@@ -99,3 +99,18 @@ jobs:
           fi
 
           echo "## Build Version: \`${UNIQUE[0]}\`" >> $GITHUB_STEP_SUMMARY
+
+  refresh-manifest:
+    name: Refresh manifest
+    needs: [build, nanos-x64, nanos-aarch64]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
+    steps:
+      - name: Refresh manifest
+        env:
+          MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
+            --data-urlencode "branch=${GITHUB_REF_NAME}" \
+            -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"

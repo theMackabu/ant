@@ -13,7 +13,6 @@
 #include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#define ANT_ISATTY _isatty
 #define ANT_STDIN_FD 0
 #define ANT_STDOUT_FD 1
 #define ANT_STDERR_FD 2
@@ -22,7 +21,6 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
-#define ANT_ISATTY isatty
 #define ANT_STDIN_FD STDIN_FILENO
 #define ANT_STDOUT_FD STDOUT_FILENO
 #define ANT_STDERR_FD STDERR_FILENO
@@ -32,8 +30,10 @@
 #include "gc/roots.h"
 #include "descriptors.h"
 #include "errors.h"
+#include "output.h"
 #include "internal.h"
 #include "runtime.h"
+#include "sandbox/sandbox.h"
 #include "tty_ctrl.h"
 #include "silver/engine.h"
 
@@ -47,6 +47,12 @@ static ant_value_t g_tty_readstream_proto = 0;
 static ant_value_t g_tty_readstream_ctor = 0;
 static ant_value_t g_tty_writestream_proto = 0;
 static ant_value_t g_tty_writestream_ctor = 0;
+
+static uint16_t g_sandbox_tty_rows = 24;
+static uint16_t g_sandbox_tty_cols = 80;
+
+static bool g_sandbox_terminal_enabled = false;
+static uint32_t g_sandbox_terminal_capabilities = 0;
 
 typedef struct tty_read_stream_state {
   ant_t *js;
@@ -75,6 +81,10 @@ static bool parse_fd(ant_value_t value, int *fd_out) {
 
 static bool is_tty_fd(int fd) {
   if (fd < 0) return false;
+  if (g_sandbox_terminal_enabled) {
+    if (fd == ANT_STDOUT_FD) return (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDOUT_TTY) != 0;
+    if (fd == ANT_STDERR_FD) return (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDERR_TTY) != 0;
+  }
   return uv_guess_handle(fd) == UV_TTY;
 }
 
@@ -239,6 +249,12 @@ static void get_tty_size(int fd, int *rows, int *cols) {
   int out_rows = 24;
   int out_cols = 80;
 
+  if (g_sandbox_terminal_enabled && (fd == ANT_STDOUT_FD || fd == ANT_STDERR_FD)) {
+    if (rows) *rows = g_sandbox_tty_rows;
+    if (cols) *cols = g_sandbox_tty_cols;
+    return;
+  }
+
 #ifdef _WIN32
   HANDLE handle = INVALID_HANDLE_VALUE;
   if (fd == ANT_STDOUT_FD) {
@@ -351,6 +367,11 @@ static int force_color_depth(const char *force_color) {
 }
 
 static int detect_color_depth(ant_t *js, int fd, ant_value_t env_obj) {
+  if (g_sandbox_terminal_enabled && (fd == ANT_STDOUT_FD || fd == ANT_STDERR_FD)) {
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) return 1;
+    if (g_sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) return 24;
+  }
+
   char scratch[128];
   const char *force_color = get_env_value(js, env_obj, "FORCE_COLOR", scratch, sizeof(scratch));
   
@@ -516,7 +537,7 @@ static ant_value_t tty_isatty(ant_t *js, ant_value_t *args, int nargs) {
 
   int fd = 0;
   if (!parse_fd(args[0], &fd)) return js_false;
-  return js_bool(ANT_ISATTY(fd) != 0);
+  return js_bool(is_tty_fd(fd));
 }
 
 static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
@@ -528,9 +549,16 @@ static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t cb = js_mkundef();
   if (nargs > 1 && is_callable(args[1])) cb = args[1];
+  if (nargs > 2 && is_callable(args[2])) cb = args[2];
 
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
-  bool ok = tty_ctrl_write_fd(fd, data, len);
+  bool ok = false;
+
+  if (ant_output_has_writer() && (fd == ANT_STDOUT_FD || fd == ANT_STDERR_FD)) {
+    ant_output_stream_t *out = ant_output_stream(fd == ANT_STDERR_FD ? stderr : stdout);
+    ant_output_stream_begin(out);
+    ok = ant_output_stream_append(out, data, len) && ant_output_stream_flush(out);
+  } else ok = tty_ctrl_write_fd(fd, data, len);
 
   if (is_callable(cb)) {
     if (ok) invoke_callback_if_needed(js, cb, js_mknull());
@@ -799,6 +827,8 @@ static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, in
   if (is_err(obj)) return obj;
 
   ensure_stream_common_props(js, obj, fd);
+  js_set(js, obj, "_write", js_mkfun(tty_stream_write));
+
   return obj;
 }
 
@@ -880,6 +910,7 @@ void init_tty_module(void) {
     if (is_special_object(stdout_proto)) js_set_proto_init(stdout_proto, stream_duplex_prototype(js));
     setup_writestream_proto(js, stdout_proto);
     stream_init_duplex_object(js, stdout_obj, js_mkundef());
+    js_set(js, stdout_obj, "_write", js_mkfun(tty_stream_write));
     js_set(js, stdout_obj, "readable", js_false);
   }
 
@@ -893,8 +924,16 @@ void init_tty_module(void) {
     if (is_special_object(stderr_proto)) js_set_proto_init(stderr_proto, stream_duplex_prototype(js));
     setup_writestream_proto(js, stderr_proto);
     stream_init_duplex_object(js, stderr_obj, js_mkundef());
+    js_set(js, stderr_obj, "_write", js_mkfun(tty_stream_write));
     js_set(js, stderr_obj, "readable", js_false);
   }
+}
+
+void tty_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols) {
+  g_sandbox_terminal_enabled = true;
+  g_sandbox_terminal_capabilities = capabilities;
+  g_sandbox_tty_rows = rows ? rows : 24;
+  g_sandbox_tty_cols = cols ? cols : 80;
 }
 
 ant_value_t tty_library(ant_t *js) {

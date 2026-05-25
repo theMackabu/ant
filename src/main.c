@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
@@ -34,6 +35,10 @@
 #include "cli/pkg.h"
 #include "cli/misc.h"
 #include "cli/version.h"
+#include "sandbox/cli.h"
+#include "sandbox/policy.h"
+#include "sandbox/sandbox.h"
+#include "sandbox/transport.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -101,6 +106,7 @@
 #include "modules/formdata.h"
 #include "modules/zlib.h"
 #include "modules/rpc.h"
+#include "modules/sandbox.h"
 #include "streams/queuing.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
@@ -132,6 +138,7 @@ static const subcommand_t subcommands[] = {
   {"ls",      "list",    "List installed packages",                      pkg_cmd_ls},
   {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
   {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
+  {"sandbox", NULL,      "Run a script in the Ant sandbox",              ant_sandbox_cmd},
   {NULL, NULL, NULL, NULL}
 };
 
@@ -210,7 +217,7 @@ static void print_commands(void **argtable) {
   crprintf(msg.ant_help_flags);
   
   print_flags_help(stdout, argtable);
-  print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
+  print_flag(stdout, (flag_help_t){ .s = "V", .l = "verbose",  .g = "enable verbose output" });
   print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
 }
 
@@ -254,7 +261,7 @@ static argv_split_t split_script_args(int *argc, char **argv) {
 }
 
 static argv_split_t build_process_argv(int argc, char **argv, const char *module, argv_split_t script) {
-  if (!module || script.argc == 0) return (argv_split_t){ argc, argv };
+  if (!module) return (argv_split_t){ argc, argv };
 
   int total = 2 + script.argc;
   char **out = try_oom(sizeof(char*) * (total + 1));
@@ -419,6 +426,89 @@ static int execute_module(ant_t *js, const char *filename) {
   return server_maybe_start_from_export(js, default_export);
 }
 
+static char **build_sandbox_process_argv(const char *argv0, ant_sandbox_request_t *sandbox, int *argc_out) {
+  int argc = 1;
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) argc = 2 + sandbox->argc;
+
+  char **argv = try_oom(sizeof(*argv) * (size_t)(argc + 1));
+  argv[0] = (char *)argv0;
+  
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) {
+    argv[1] = sandbox->entry;
+    for (int i = 0; i < sandbox->argc; i++) argv[2 + i] = sandbox->argv[i];
+  }
+  
+  argv[argc] = NULL;
+  *argc_out = argc;
+  
+  return argv;
+}
+
+static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, const char *argv0, bool *close_out) {
+  *close_out = false;
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_CLOSE) {
+    *close_out = true;
+    return EXIT_SUCCESS;
+  }
+
+  int request_argc = 0;
+  char **request_argv = build_sandbox_process_argv(argv0, sandbox, &request_argc);
+  
+  ant_runtime_set_argv(request_argc, request_argv);
+  process_refresh_sandbox_argv();
+
+  if (sandbox->cwd && chdir(sandbox->cwd) != 0) {
+    fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox->cwd, strerror(errno));
+    free(request_argv);
+    return EXIT_FAILURE;
+  }
+
+  io_set_sandbox_terminal(sandbox->capabilities);
+  process_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
+  tty_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
+  ant_sandbox_policy_set_forwards(sandbox->forward_ports, sandbox->forward_count);
+
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_EVAL) {
+    int rc = ant_sandbox_eval_module(js, sandbox->source, strlen(sandbox->source));
+    free(request_argv);
+    return rc;
+  }
+
+  if (sandbox->mode == ANT_SANDBOX_REQUEST_RUN) {
+    char *resolved_file = resolve_js_file(sandbox->entry);
+    int rc = EXIT_SUCCESS;
+
+    if (!resolved_file) {
+      crfprintf(stderr, msg.module_not_found, sandbox->entry);
+      rc = EXIT_FAILURE;
+    } else {
+      rc = execute_module(js, resolved_file);
+      js_run_event_loop(js);
+      free(resolved_file);
+    }
+    free(request_argv);
+    return rc;
+  }
+
+  fprintf(stderr, "sandbox daemon: unsupported request mode\n");
+  free(request_argv);
+  
+  return EXIT_FAILURE;
+}
+
+static int run_sandbox_daemon_loop(ant_t *js, ant_sandbox_request_t *sandbox, const char *argv0) {
+for (;;) {
+  bool close_requested = false;
+  int code = execute_sandbox_request(js, sandbox, argv0, &close_requested);
+  
+  ant_sandbox_transport_send_exit(code);
+  ant_sandbox_request_free(sandbox);
+  memset(sandbox, 0, sizeof(*sandbox));
+
+  if (close_requested) return code;
+  if (!ant_sandbox_read_request_transport(sandbox)) return EXIT_FAILURE;
+}}
+
 int main(int argc, char *argv[]) {
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
   
@@ -442,6 +532,9 @@ int main(int argc, char *argv[]) {
   int filtered_argc = 0; int original_argc = argc;
   char **original_argv = argv;
   
+  bool sandbox_daemon = false;
+  ant_sandbox_request_t sandbox = { 0 };
+  
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
 
@@ -456,28 +549,55 @@ int main(int argc, char *argv[]) {
     free(exec_argv); return exitcode;
   }
   
-  // TODO: only parse before script filename
   char **filtered_argv = try_oom(sizeof(char*) * argc);
+  bool parse_global_args = true;
+  
   for (int i = 0; i < argc; i++) {
-    if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
-    else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
-    else if (strncmp(argv[i], "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(argv[i] + 13);
-    else if (strcmp(argv[i], "--inspect") == 0) inspector.enabled = true;
+    const char *arg = argv[i];
     
-    else if (strncmp(argv[i], "--inspect=", 10) == 0) {
-      inspector.enabled = true;
-      parse_inspector_spec(argv[i] + 10, inspector.host, sizeof(inspector.host), &inspector.port);
+    if (i == 0 || !parse_global_args) {
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
     }
     
-    else if (strcmp(argv[i], "--inspect-wait") == 0) {
+    if (strcmp(arg, "--") == 0) {
+      parse_global_args = false;
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
+    }
+    
+    if (is_valued_flag(arg)) {
+      filtered_argv[filtered_argc++] = argv[i];
+      if (i + 1 < argc) filtered_argv[filtered_argc++] = argv[++i];
+      continue;
+    }
+    
+    if (arg[0] != '-') {
+      parse_global_args = false;
+      filtered_argv[filtered_argc++] = argv[i];
+      continue;
+    }
+
+    if (strcmp(arg, "-V") == 0 || strcmp(arg, "--verbose") == 0) pkg_verbose = true;
+    else if (strcmp(arg, "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
+    else if (strncmp(arg, "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(arg + 13);
+    else if (strcmp(arg, "--sandbox-daemon") == 0) sandbox_daemon = true;
+    else if (strcmp(arg, "--inspect") == 0) inspector.enabled = true;
+    
+    else if (strncmp(arg, "--inspect=", 10) == 0) {
+      inspector.enabled = true;
+      parse_inspector_spec(arg + 10, inspector.host, sizeof(inspector.host), &inspector.port);
+    }
+    
+    else if (strcmp(arg, "--inspect-wait") == 0) {
       inspector.enabled = true;
       inspector.wait_for_session = true;
     }
     
-    else if (strncmp(argv[i], "--inspect-wait=", 15) == 0) {
+    else if (strncmp(arg, "--inspect-wait=", 15) == 0) {
       inspector.enabled = true;
       inspector.wait_for_session = true;
-      parse_inspector_spec(argv[i] + 15, inspector.host, sizeof(inspector.host), &inspector.port);
+      parse_inspector_spec(arg + 15, inspector.host, sizeof(inspector.host), &inspector.port);
     }
     
     else filtered_argv[filtered_argc++] = argv[i];
@@ -512,10 +632,11 @@ int main(int argc, char *argv[]) {
   
   #define CLEANUP_ARGS_AND_ARGV() ({ \
     if (proc_argv.argv != argv) free(proc_argv.argv); \
+    ant_sandbox_request_free(&sandbox); \
     arg_freetable(argtable, ARGTABLE_COUNT); \
     free(filtered_argv); \
   })
-  
+
   if (help->count > 0) {
     print_commands(argtable);
     CLEANUP_ARGS_AND_ARGV();
@@ -547,7 +668,12 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  if (eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
+  if (sandbox_daemon) if (!ant_sandbox_read_request_transport(&sandbox)) {
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
+
+  if (!sandbox_daemon && eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
     const char *positional = file->filename[0];
     int first_pos_idx = find_argv_token_index(argc, argv, positional);
     
@@ -630,6 +756,29 @@ int main(int argc, char *argv[]) {
     ? NULL 
     : file->filename[0];
 
+  if (sandbox_daemon) {
+    if (sandbox.cwd && chdir(sandbox.cwd) != 0) {
+      fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox.cwd, strerror(errno));
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+    if (!ant_sandbox_transport_install_output_frames()) {
+      fprintf(stderr, "sandbox daemon: failed to install framed output transport: %s\n", strerror(errno));
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+
+    repl_mode = false;
+    stdin_mode = false;
+
+    if (sandbox.mode == ANT_SANDBOX_REQUEST_RUN) {
+      module_file = sandbox.entry;
+      script_tail = (argv_split_t){ sandbox.argc, sandbox.argv };
+    } else {
+      module_file = NULL;
+    }
+  }
+
   if (watch->count > 0) {
     char *resolved_file = NULL;
 
@@ -663,6 +812,13 @@ int main(int argc, char *argv[]) {
   
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
+  
+  if (sandbox_daemon) {
+    io_set_sandbox_terminal(sandbox.capabilities);
+    process_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+    tty_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+    ant_sandbox_policy_set_forwards(sandbox.forward_ports, sandbox.forward_count);
+  }
 
   init_symbol_module();
   init_iterator_module();
@@ -717,6 +873,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
+  ant_register_library(sandbox_library, "ant:sandbox", NULL);
   
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
@@ -763,6 +920,11 @@ int main(int argc, char *argv[]) {
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
     crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
+  }
+
+  if (sandbox_daemon) {
+    js_result = run_sandbox_daemon_loop(js, &sandbox, original_argv[0]);
+    goto cleanup;
   }
 
   if (inspector.enabled && !ant_inspector_start(js, &inspector)) {

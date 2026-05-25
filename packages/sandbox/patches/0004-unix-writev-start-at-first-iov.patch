@@ -1,0 +1,40 @@
+diff --git a/src/unix/syscall.c b/src/unix/syscall.c
+index 0bf93c1..10a06e4 100755
+--- a/src/unix/syscall.c
++++ b/src/unix/syscall.c
+@@ -151,19 +151,31 @@ void iov_op(fdesc f, boolean write, struct iovec *iov, int iovcnt, u64 offset,
+     p->write = write;
+     p->iov = iov;
+     p->iovcnt = iovcnt;
+-    p->initialized = false;
++    p->initialized = true;
+     p->blocking = blocking;
+     p->file_offset = offset;
+     p->curr = 0;
+-    p->curr_len = 0;
++    while (p->curr < iovcnt && iov[p->curr].iov_len == 0)
++        p->curr++;
++    if (p->curr == iovcnt) {
++        deallocate(h, p, sizeof(*p));
++        rv = 0;
++        goto out;
++    }
++    p->curr_base = iov[p->curr].iov_base;
++    p->curr_len = iov[p->curr].iov_len;
++    if (!memory_is_user(p->curr_base, p->curr_len)) {
++        deallocate(h, p, sizeof(*p));
++        rv = -EFAULT;
++        goto out;
++    }
+     p->total_len = 0;
+     p->ctx = ctx;
+     p->completion = completion;
+     init_closure_func(&p->bh, thunk, iov_bh);
+     closure_set_context(&p->bh, ctx);
+     init_closure_func(&p->each_complete, io_completion, iov_op_each_complete);
+-    io_completion each = (io_completion)&p->each_complete;
+-    apply(each, 0);
++    iov_op_each(p);
+     return;
+ out:
+     apply(completion, rv);
