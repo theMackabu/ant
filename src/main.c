@@ -139,6 +139,7 @@ static const subcommand_t subcommands[] = {
   {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
   {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
   {"sandbox", NULL,      "Run a script in the Ant sandbox",              ant_sandbox_cmd},
+  {"upgrade", NULL,      "Upgrade Ant to the latest version",            ant_upgrade},
   {NULL, NULL, NULL, NULL}
 };
 
@@ -211,6 +212,7 @@ static void print_subcommands(void) {
 }
 
 static void print_commands(void **argtable) {
+  if (ant_version_print_update_hint(stdout)) printf("\n");
   crprintf(msg.ant_help_header);
   
   print_subcommands();
