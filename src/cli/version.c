@@ -54,6 +54,7 @@ typedef struct {
   char target[64];
   char version[96];
   char download_url[2048];
+  char source_url[2048];
   uint64_t size;
 } ant_latest_info_t;
 
@@ -252,6 +253,23 @@ static const char *version_json_string(yyjson_val *obj, const char *key) {
   return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
 }
 
+static void version_semver_copy(char *out, size_t out_len, const char *version) {
+  if (!out || out_len == 0) return;
+  out[0] = '\0';
+  if (!version) return;
+
+  size_t i = 0;
+  int dots = 0;
+  for (; version[i] && i + 1 < out_len; i++) {
+    if (version[i] == '.') {
+      dots++;
+      if (dots == 3) break;
+    }
+    out[i] = version[i];
+  }
+  out[i] = '\0';
+}
+
 static uint64_t version_json_uint(yyjson_val *obj, const char *key) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
   return val && yyjson_is_uint(val) ? yyjson_get_uint(val) : 0;
@@ -350,6 +368,9 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
       snprintf(latest->version, sizeof(latest->version), "%s", version);
       snprintf(latest->download_url, sizeof(latest->download_url), "%s", download_url);
       yyjson_val *artifact = yyjson_obj_get(item, "artifact");
+      yyjson_val *source = yyjson_obj_get(item, "source");
+      const char *source_url = version_json_string(source, "html_url");
+      if (source_url) snprintf(latest->source_url, sizeof(latest->source_url), "%s", source_url);
       latest->size = version_json_uint(artifact, "size_in_bytes");
       rc = 0;
       break;
@@ -402,20 +423,25 @@ int ant_upgrade(int argc, char **argv) {
   char err[512] = {0};
   ant_latest_info_t latest;
   progress_t progress;
-  progress_start(&progress, "Checking latest version");
-  int rc = ant_fetch_latest(&latest, &progress, err, sizeof(err));
-  progress_stop(&progress);
+
+  crprintf("<bold>Current Ant version:</> <bright_magenta>%s</>\n", ANT_VERSION);
+  crprintf("<dim>Looking up latest version</>\n\n");
+
+  int rc = ant_fetch_latest(&latest, NULL, err, sizeof(err));
   if (rc != 0) {
     fprintf(stderr, "ant upgrade: %s\n", err[0] ? err : "failed to check latest version");
     return EXIT_FAILURE;
   }
 
   if (!ant_latest_is_newer(&latest)) {
-    printf("Ant %s is already the latest version for %s.\n", ANT_VERSION, latest.target);
+    crprintf("<bright_magenta>Ant is already up to date.</> <dim>(%s for %s)</>\n", ANT_VERSION, latest.target);
     return EXIT_SUCCESS;
   }
 
-  printf("Ant %s is out! You're on %s\n", latest.version, ANT_VERSION);
+  crprintf("Found latest version <green>%s</>\n\n", latest.version);
+  crprintf("Downloading <magenta>%s</>\n", latest.download_url);
+  crprintf("Ant is upgrading to version <green>%s</>\n\n", latest.version);
+  fflush(stdout);
 
   char install_path[4096];
   rc = ant_install_path(install_path, sizeof(install_path));
@@ -462,7 +488,19 @@ int ant_upgrade(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  printf("Upgraded Ant to %s at %s\n", latest.version, install_path);
+  crprintf("<bright_magenta>Upgraded successfully to Ant %s</>\n", latest.version);
+  crprintf("<dim>Installed at %s</>\n", install_path);
+
+  char semver[32];
+  version_semver_copy(semver, sizeof(semver), latest.version);
+  if (semver[0]) {
+    crprintf("\n<bold>Release notes:</>\n\n");
+    crprintf("  <magenta>https://github.com/theMackabu/ant/releases/tag/v%s</>\n\n", semver);
+  }
+  if (latest.source_url[0]) {
+    crprintf("\n<bold>Build:</>\n\n");
+    crprintf("  <magenta>%s</>\n", latest.source_url);
+  }
   return EXIT_SUCCESS;
 }
 
