@@ -1,5 +1,5 @@
 import { branch, manifestRefreshSeconds, repository } from './config';
-import { prefetchArtifacts } from './downloads';
+import { annotateGzipSizes, prefetchArtifacts } from './downloads';
 import type { Env, ResolvedArtifact } from './types';
 
 type WaitUntilContext = {
@@ -27,7 +27,13 @@ export async function cachedManifest(
       ctx.waitUntil(refreshManifest(env, key, producer));
     }
 
-    return new Response(cached.body, { status: 200, headers });
+    return new Response(
+      JSON.stringify(await annotateGzipSizes(env, await cached.json()), null, 2) + '\n',
+      {
+        status: 200,
+        headers,
+      },
+    );
   }
 
   const body = await producer();
@@ -43,15 +49,16 @@ export async function forceRefreshManifest(
 ): Promise<Response> {
   const key = manifestKey(env);
   const body = await producer();
-  await storeManifest(env, key, body);
-  ctx.waitUntil(prefetchArtifacts(env, manifestArtifacts(body)));
+  await prefetchArtifacts(env, manifestArtifacts(body));
+  const annotated = await annotateGzipSizes(env, body);
+  await storeManifest(env, key, annotated);
 
   return Response.json(
     {
       ok: true,
       refreshed: true,
       cache_key: key,
-      artifact_count: manifestArtifacts(body).length,
+      artifact_count: manifestArtifacts(annotated).length,
     },
     { headers: jsonHeaders() },
   );
@@ -66,8 +73,8 @@ async function refreshManifest(env: Env, key: string, producer: ManifestProducer
 }
 
 async function storeManifestAndPrefetch(env: Env, key: string, body: unknown): Promise<void> {
-  await storeManifest(env, key, body);
   await prefetchArtifacts(env, manifestArtifacts(body));
+  await storeManifest(env, key, await annotateGzipSizes(env, body));
 }
 
 async function storeManifest(env: Env, key: string, body: unknown): Promise<void> {

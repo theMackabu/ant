@@ -248,7 +248,8 @@ export async function resolveNanosArtifact(
   return {
     ...artifact,
     name: `${kind === 'kernel' ? 'ant-kernel' : 'ant-sandbox'}-${arch}`,
-    zip_entry: `packages/sandbox/${filename}`,
+    gzip_url: gzipUrl(artifact.download_url),
+    zip_entry: filename,
     filename,
   };
 }
@@ -281,6 +282,12 @@ export function downloadUrl(
     next.searchParams.set('run_id', String(runId));
   }
   return next.toString();
+}
+
+function gzipUrl(downloadUrl: string): string {
+  const url = new URL(downloadUrl);
+  url.searchParams.set('gzip', '1');
+  return url.toString();
 }
 
 async function resolveActionAnt(env: Env, target: AntTarget, url: URL): Promise<ResolvedArtifact> {

@@ -99,6 +99,8 @@ export type ResolvedArtifact = {
   name: string;
   version?: string;
   download_url: string;
+  gzip_url?: string;
+  gzip_size_in_bytes?: number;
   zip_entry?: string;
   filename?: string;
   artifact: ArtifactInfo;
