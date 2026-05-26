@@ -4,6 +4,7 @@
 #include <time.h>
 #include <limits.h>
 #include <openssl/evp.h>
+#include <openssl/mem.h>
 #include <openssl/rand.h>
 
 #pragma GCC diagnostic push
@@ -429,6 +430,28 @@ static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int 
   return args[0];
 }
 
+static ant_value_t js_crypto_timing_safe_equal(ant_t *js, ant_value_t *args, int nargs) {
+  const uint8_t *left = NULL;
+  const uint8_t *right = NULL;
+  
+  size_t left_len = 0;
+  size_t right_len = 0;
+
+  if (
+    nargs < 2 ||
+    !buffer_source_get_bytes(js, args[0], &left, &left_len) ||
+    !buffer_source_get_bytes(js, args[1], &right, &right_len)
+  ) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "timingSafeEqual arguments must be Buffer, TypedArray, DataView, or ArrayBuffer"
+  );
+
+  if (left_len != right_len)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Input buffers must have the same byte length");
+
+  return js_bool(CRYPTO_memcmp(left, right, left_len) == 0);
+}
+
 // TODO: extend subtle
 static ant_value_t crypto_subtle_get_algorithm_name(ant_t *js, ant_value_t algorithm) {
   if (vtype(algorithm) == T_STR) return js_tostring_val(js, algorithm);
@@ -655,6 +678,7 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   js_set(js, subtle_obj, "digest", js_mkfun(js_crypto_subtle_digest));
+  js_set(js, subtle_obj, "timingSafeEqual", js_mkfun(js_crypto_timing_safe_equal));
   js_set_sym(js, subtle_obj, get_toStringTag_sym(), js_mkstr(js, "SubtleCrypto", 12));
   js_set(js, crypto_obj, "subtle", subtle_obj);
   
@@ -679,6 +703,7 @@ ant_value_t crypto_library(ant_t *js) {
   js_set(js, lib, "randomFillSync", js_mkfun(js_crypto_random_fill_sync));
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
+  js_set(js, lib, "timingSafeEqual", js_mkfun(js_crypto_timing_safe_equal));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "crypto", 6));
 
   return lib;

@@ -3,6 +3,7 @@ declare module 'crypto' {
 
   interface SubtleCrypto {
     digest(algorithm: string | { name: string }, data: BufferSource): Promise<ArrayBuffer>;
+    timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
   }
 
   interface WebCrypto {
@@ -23,6 +24,7 @@ declare module 'crypto' {
   function randomBytes(length: number): number[];
   function randomUUID(): string;
   function getRandomValues<T extends ArrayBufferView>(array: T): T;
+  function timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
 }
 
 declare module 'ant:crypto' {
