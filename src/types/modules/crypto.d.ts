@@ -24,6 +24,7 @@ declare module 'crypto' {
   function randomBytes(length: number): number[];
   function randomUUID(): string;
   function getRandomValues<T extends ArrayBufferView>(array: T): T;
+  function getHashes(): string[];
   function timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
 }
 

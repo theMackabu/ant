@@ -64,6 +64,38 @@ static const char *const k_crypto_cipher_names[] = {
   "rc4",
 };
 
+static const char *const k_crypto_hash_names[] = {
+  "DSA-SHA",
+  "DSA-SHA1",
+  "MD4",
+  "MD5",
+  "MD5-SHA1",
+  "RSA-MD5",
+  "RSA-SHA1",
+  "RSA-SHA224",
+  "RSA-SHA256",
+  "RSA-SHA384",
+  "RSA-SHA512",
+  "dsaWithSHA",
+  "dsaWithSHA1",
+  "ecdsa-with-SHA1",
+  "md4",
+  "md5",
+  "md5-sha1",
+  "md5WithRSAEncryption",
+  "sha1",
+  "sha1WithRSAEncryption",
+  "sha224",
+  "sha224WithRSAEncryption",
+  "sha256",
+  "sha256WithRSAEncryption",
+  "sha384",
+  "sha384WithRSAEncryption",
+  "sha512",
+  "sha512-256",
+  "sha512WithRSAEncryption",
+};
+
 static void crypto_hash_state_free(ant_hash_state_t *state) {
   if (!state) return;
   if (state->ctx) EVP_MD_CTX_free(state->ctx);
@@ -481,6 +513,31 @@ static ant_value_t js_crypto_get_ciphers(ant_t *js, ant_value_t *args, int nargs
   return result;
 }
 
+static ant_value_t js_crypto_get_hashes(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result = js_mkarr(js);
+  if (is_err(result)) return result;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+
+  size_t count = sizeof(k_crypto_hash_names) / sizeof(k_crypto_hash_names[0]);
+  for (size_t i = 0; i < count; i++) {
+    const char *name = k_crypto_hash_names[i];
+    if (!EVP_get_digestbyname(name)) continue;
+
+    ant_value_t hash_name = js_mkstr(js, name, strlen(name));
+    if (is_err(hash_name)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return hash_name;
+    }
+    
+    js_arr_push(js, result, hash_name);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 static ant_value_t js_crypto_timing_safe_equal(ant_t *js, ant_value_t *args, int nargs) {
   const uint8_t *left = NULL;
   const uint8_t *right = NULL;
@@ -755,6 +812,7 @@ ant_value_t crypto_library(ant_t *js) {
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   js_set(js, lib, "getCiphers", js_mkfun(js_crypto_get_ciphers));
+  js_set(js, lib, "getHashes", js_mkfun(js_crypto_get_hashes));
   js_set(js, lib, "timingSafeEqual", js_mkfun(js_crypto_timing_safe_equal));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "crypto", 6));
 
