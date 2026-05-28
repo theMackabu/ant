@@ -1,0 +1,77 @@
+# Depot CI Migration
+# Source: .github/workflows/build-musl-sandboxes.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Build Musl Sandboxes
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      - id: timestamp
+        run: echo "value=$(date +%s)" >> "$GITHUB_OUTPUT"
+  build-musl:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux-musl-x64
+          - linux-musl-aarch64
+    uses: ./.depot/workflows/build-platform.yml
+    with:
+      platform: ${{ matrix.platform }}
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+  sandbox-x64:
+    needs: build-musl
+    if: ${{ !cancelled() && needs.build-musl.result == 'success' }}
+    uses: ./.depot/workflows/build-nanos.yml
+    with:
+      arch: x64
+      artifact: ant-linux-x64-musl
+      runner: ubuntu-latest
+      image: ant-sandbox-x64
+      source_run_id: ${{ github.run_id }}
+  sandbox-aarch64:
+    needs: build-musl
+    if: ${{ !cancelled() && needs.build-musl.result == 'success' }}
+    uses: ./.depot/workflows/build-nanos.yml
+    with:
+      arch: aarch64
+      artifact: ant-linux-aarch64-musl
+      runner: ubuntu-24.04-arm
+      image: ant-sandbox-aarch64
+      source_run_id: ${{ github.run_id }}
+  summary:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    needs: [build-musl, sandbox-x64, sandbox-aarch64]
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Musl sandbox artifacts
+
+          This workflow uploads:
+
+          - `ant-linux-x64-musl`
+          - `ant-linux-aarch64-musl`
+          - `ant-sandbox-x64`
+          - `ant-sandbox-aarch64`
+
+          Each sandbox artifact contains the paired `ant-sandbox-<arch>.img`
+          and `ant-kernel-<arch>.img` files.
+          SUMMARY

@@ -1,0 +1,64 @@
+# Depot CI Migration
+# Source: .github/workflows/build-single.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Build Single Platform
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Target platform'
+        required: true
+        type: choice
+        options:
+          - linux-glibc-x64
+          - linux-glibc-aarch64
+          - linux-musl-x64
+          - linux-musl-aarch64
+          - macos-x64
+          - macos-aarch64
+          - windows-x64
+permissions:
+  actions: read
+  contents: read
+jobs:
+  prepare:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      - id: timestamp
+        run: echo "value=$(date +%s)" >> $GITHUB_OUTPUT
+  build:
+    needs: prepare
+    uses: ./.depot/workflows/build-platform.yml
+    with:
+      platform: ${{ inputs.platform }}
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+  nanos:
+    needs: [build]
+    if: ${{ inputs.platform == 'linux-musl-x64' || inputs.platform == 'linux-musl-aarch64' }}
+    uses: ./.depot/workflows/build-nanos.yml
+    with:
+      arch: ${{ inputs.platform == 'linux-musl-aarch64' && 'aarch64' || 'x64' }}
+      artifact: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl' }}
+      runner: ${{ inputs.platform == 'linux-musl-aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+      image: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64' }}
+  refresh-manifest:
+    name: Refresh manifest
+    needs: [build, nanos]
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos.result == 'success') }}
+    steps:
+      - name: Refresh manifest
+        env:
+          MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
+            --data-urlencode "branch=${GITHUB_REF_NAME}" \
+            --data-urlencode "run_id=${GITHUB_RUN_ID}" \
+            -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
