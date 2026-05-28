@@ -12,6 +12,19 @@ on:
         description: 'Platform key from versions.json targets'
         required: true
         type: string
+      runner:
+        description: 'Runner label (runs-on)'
+        required: true
+        type: string
+      container:
+        description: 'Container image, or empty string for no container'
+        required: false
+        type: string
+        default: ''
+      shell:
+        description: 'Default shell for run steps'
+        required: true
+        type: string
       build_timestamp:
         required: true
         type: string
@@ -23,34 +36,11 @@ jobs:
   build:
     outputs:
       version: ${{ steps.build.outputs.version }}
-    # runs-on/container/shell must be hardcoded
-    runs-on: |-
-      ${{ case(
-        inputs.platform == 'linux-glibc-x64', 'ubuntu-24.04',
-        inputs.platform == 'linux-glibc-aarch64', 'ubuntu-24.04-arm',
-        inputs.platform == 'linux-musl-x64', 'ubuntu-24.04',
-        inputs.platform == 'linux-musl-aarch64', 'ubuntu-24.04-arm',
-        inputs.platform == 'macos-x64', 'macos-15-intel',
-        inputs.platform == 'macos-aarch64', 'macos-15',
-        inputs.platform == 'windows-x64', 'windows-latest',
-        'ubuntu-24.04'
-      ) }}
-    container: |-
-      ${{ case(
-        startsWith(inputs.platform, 'linux-glibc'), 'ubuntu:22.04',
-        startsWith(inputs.platform, 'linux-musl'), 'alpine:3.23',
-        ''
-      ) }}
+    runs-on: ${{ inputs.runner }}
+    container: ${{ inputs.container }}
     defaults:
       run:
-        shell: |-
-          ${{ case(
-            startsWith(inputs.platform, 'linux-glibc'), 'bash',
-            startsWith(inputs.platform, 'linux-musl'), 'sh',
-            startsWith(inputs.platform, 'macos'), 'bash',
-            inputs.platform == 'windows-x64', 'msys2 {0}',
-            'bash'
-          ) }}
+        shell: ${{ inputs.shell }}
     steps:
       # === ALPINE ARM64 WORKAROUND (must be first) ===
       - name: Setup Alpine ARM64 support

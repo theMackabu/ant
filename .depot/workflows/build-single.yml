@@ -29,14 +29,37 @@ jobs:
     runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
+      runner: ${{ steps.map.outputs.runner }}
+      container: ${{ steps.map.outputs.container }}
+      shell: ${{ steps.map.outputs.shell }}
     steps:
       - id: timestamp
         run: echo "value=$(date +%s)" >> $GITHUB_OUTPUT
+      - id: map
+        run: |
+          case "${{ inputs.platform }}" in
+            linux-glibc-x64)     RUNNER=ubuntu-24.04;      CONTAINER=ubuntu:22.04; SHELL_=bash ;;
+            linux-glibc-aarch64) RUNNER=ubuntu-24.04-arm;  CONTAINER=ubuntu:22.04; SHELL_=bash ;;
+            linux-musl-x64)      RUNNER=ubuntu-24.04;      CONTAINER=alpine:3.23;  SHELL_=sh ;;
+            linux-musl-aarch64)  RUNNER=ubuntu-24.04-arm;  CONTAINER=alpine:3.23;  SHELL_=sh ;;
+            macos-x64)           RUNNER=macos-15-intel;    CONTAINER='';           SHELL_=bash ;;
+            macos-aarch64)       RUNNER=macos-15;          CONTAINER='';           SHELL_=bash ;;
+            windows-x64)         RUNNER=windows-latest;    CONTAINER='';           SHELL_='msys2 {0}' ;;
+            *) echo "Unknown platform: ${{ inputs.platform }}" >&2; exit 1 ;;
+          esac
+          {
+            echo "runner=$RUNNER"
+            echo "container=$CONTAINER"
+            echo "shell=$SHELL_"
+          } >> "$GITHUB_OUTPUT"
   build:
     needs: prepare
     uses: ./.depot/workflows/build-platform.yml
     with:
       platform: ${{ inputs.platform }}
+      runner: ${{ needs.prepare.outputs.runner }}
+      container: ${{ needs.prepare.outputs.container }}
+      shell: ${{ needs.prepare.outputs.shell }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
   nanos:
     needs: [build]
