@@ -32,17 +32,14 @@ jobs:
           - platform: linux-musl-x64
             runner: ubuntu-24.04
             container: alpine:3.23
-            shell: sh
           - platform: linux-musl-aarch64
             runner: ubuntu-24.04-arm
             container: alpine:3.23
-            shell: sh
     uses: ./.depot/workflows/build-platform.yml
     with:
       platform: ${{ matrix.platform }}
       runner: ${{ matrix.runner }}
       container: ${{ matrix.container }}
-      shell: ${{ matrix.shell }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
   sandbox-x64:
     needs: build-musl

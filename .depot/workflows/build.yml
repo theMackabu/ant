@@ -41,37 +41,29 @@ jobs:
           - platform: linux-glibc-x64
             runner: ubuntu-24.04
             container: ubuntu:22.04
-            shell: bash
           - platform: linux-glibc-aarch64
             runner: ubuntu-24.04-arm
             container: ubuntu:22.04
-            shell: bash
           - platform: linux-musl-x64
             runner: ubuntu-24.04
             container: alpine:3.23
-            shell: sh
           - platform: linux-musl-aarch64
             runner: ubuntu-24.04-arm
             container: alpine:3.23
-            shell: sh
           - platform: macos-x64
             runner: macos-15-intel
             container: ''
-            shell: bash
           - platform: macos-aarch64
             runner: macos-15
             container: ''
-            shell: bash
           - platform: windows-x64
             runner: windows-latest
             container: ''
-            shell: msys2 {0}
     uses: ./.depot/workflows/build-platform.yml
     with:
       platform: ${{ matrix.platform }}
       runner: ${{ matrix.runner }}
       container: ${{ matrix.container }}
-      shell: ${{ matrix.shell }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
   nanos-x64:
     needs: [build]

@@ -21,10 +21,6 @@ on:
         required: false
         type: string
         default: ''
-      shell:
-        description: 'Default shell for run steps'
-        required: true
-        type: string
       build_timestamp:
         required: true
         type: string
@@ -38,9 +34,6 @@ jobs:
       version: ${{ steps.build.outputs.version }}
     runs-on: ${{ inputs.runner }}
     container: ${{ inputs.container }}
-    defaults:
-      run:
-        shell: ${{ inputs.shell }}
     steps:
       # === ALPINE ARM64 WORKAROUND (must be first) ===
       - name: Setup Alpine ARM64 support
@@ -49,6 +42,7 @@ jobs:
       # === LINUX GLIBC SETUP ===
       - name: Setup Linux glibc environment
         if: startsWith(inputs.platform, 'linux-glibc')
+        shell: bash
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -68,6 +62,7 @@ jobs:
       # === LINUX MUSL SETUP ===
       - name: Setup Linux musl environment
         if: startsWith(inputs.platform, 'linux-musl')
+        shell: sh
         run: |
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
             musl-dev \
@@ -77,6 +72,7 @@ jobs:
       # === MACOS SETUP ===
       - name: Setup macOS environment
         if: startsWith(inputs.platform, 'macos')
+        shell: bash
         run: |
           for pkg in meson ninja llvm jq; do
             brew list "$pkg" &>/dev/null || brew install "$pkg"
