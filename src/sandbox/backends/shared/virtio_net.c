@@ -27,7 +27,7 @@ int ant_hvf_virtio_net_tx(
   return 0;
 }
 
-int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
+static int ant_hvf_virtio_net_drain_rx_unlocked(ant_hvf_vm_t *vm) {
   ant_hvf_virtio_device_t *dev = &vm->net;
   ant_hvf_virtio_queue_t *q = &dev->queues[ANT_VIRTIO_NET_RX_QUEUE];
   if (!q->enabled || !q->desc || !q->avail || !q->used) return 0;
@@ -84,6 +84,23 @@ int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
   return delivered ? ant_hvf_virtio_interrupt(vm, dev, ANT_VIRTIO_NET_RX_QUEUE) : 0;
 }
 
+int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm) {
+  if (!vm->virtio_lock_init) return ant_hvf_virtio_net_drain_rx_unlocked(vm);
+  pthread_mutex_lock(&vm->virtio_lock);
+  int rc = ant_hvf_virtio_net_drain_rx_unlocked(vm);
+  pthread_mutex_unlock(&vm->virtio_lock);
+  return rc;
+}
+
+int ant_hvf_virtio_net_drain_rx_if_wake(ant_hvf_vm_t *vm) {
+  if (!vm->net_lock_init) return 0;
+  pthread_mutex_lock(&vm->net_lock);
+  bool wake = vm->net_rx_wake;
+  if (wake) vm->net_rx_wake = false;
+  pthread_mutex_unlock(&vm->net_lock);
+  return wake ? ant_hvf_virtio_net_drain_rx(vm) : 0;
+}
+
 int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, unsigned queue) {
   if (queue >= ANT_VIRTIO_NET_QUEUE_COUNT) return 0;
   ant_hvf_virtio_queue_t *q = &dev->queues[queue];
@@ -118,4 +135,3 @@ int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, un
 
   return ant_hvf_virtio_interrupt(vm, dev, queue);
 }
-

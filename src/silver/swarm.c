@@ -388,11 +388,11 @@ static void mir_load_imm(MIR_context_t ctx, MIR_item_t fn,
 static void mir_emit_fill_param_slots_from_args(
   MIR_context_t ctx, MIR_item_t fn,
   MIR_reg_t r_slotbuf, MIR_reg_t r_args, MIR_reg_t r_argc,
-  bool *captured_params, int param_count
+  bool *captured_params, int param_count, bool fill_all
 ) {
-  if (!captured_params) return;
+  if (!captured_params && !fill_all) return;
   for (int i = 0; i < param_count; i++) {
-    if (!captured_params[i]) continue;
+    if (!fill_all && !captured_params[i]) continue;
     MIR_label_t arg_present = MIR_new_label(ctx);
     MIR_label_t arg_done = MIR_new_label(ctx);
     MIR_append_insn(ctx, fn,
@@ -574,6 +574,7 @@ static inline void mir_emit_self_tail(
   MIR_reg_t r_args, MIR_reg_t r_argc,
   MIR_reg_t *local_regs, int n_locals,
   bool has_captured_slots, MIR_reg_t r_slotbuf, bool *captured_params,
+  bool fill_all_params,
   bool has_captures, bool *captured_locals,
   MIR_reg_t r_lbuf, MIR_label_t entry
 ) {
@@ -593,7 +594,7 @@ static inline void mir_emit_self_tail(
       MIR_new_reg_op(ctx, r_argc),
       MIR_new_int_op(ctx, (int64_t)call_argc)));
   if (has_captured_slots)
-    mir_emit_fill_param_slots_from_args(ctx, fn, r_slotbuf, r_tco_args, r_argc, captured_params, param_count);
+    mir_emit_fill_param_slots_from_args(ctx, fn, r_slotbuf, r_tco_args, r_argc, captured_params, param_count, fill_all_params);
   for (int i = 0; i < n_locals; i++)
     mir_load_imm(ctx, fn, local_regs[i], mkval(T_UNDEF, 0));
   if (has_captures) {
@@ -1137,6 +1138,9 @@ static bool func_writes_params(sv_func_t *func) {
     int sz = sv_op_size[op];
     if (sz == 0) break;
     if (op == OP_PUT_ARG || op == OP_SET_ARG) return true;
+    if (op == OP_STR_APPEND_LOCAL || op == OP_STR_ALC_SNAPSHOT || op == OP_STR_FLUSH_LOCAL) {
+      if (sv_get_u16(ip + 1) < func->param_count) return true;
+    }
     ip += sz;
   }
 
@@ -2871,6 +2875,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_label_t bailout_tramp = needs_bailout ? MIR_new_label(ctx) : NULL;
 
   int param_count = func->param_count;
+  bool writes_params = func_writes_params(func);
   bool *captured_params = scan_captured_params(func);
   bool *captured_locals = scan_captured_locals(func, n_locals);
   bool has_captured_params = false;
@@ -2883,9 +2888,45 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     for (int i = 0; i < n_locals; i++)
       if (captured_locals[i]) { has_captures = true; break; }
   }
-  bool has_captured_slots = has_captured_params || has_captures;
+  bool params_in_slotbuf = writes_params || has_captured_params;
+  bool has_captured_slots = params_in_slotbuf || has_captures;
   bool use_unified_slotbuf = has_captured_slots && has_captures;
   int slotbuf_count = use_unified_slotbuf ? (param_count + n_locals) : param_count;
+
+  MIR_reg_t r_param_init_argc = r_argc;
+  if (writes_params && param_count > 0) {
+    r_param_init_argc = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "param_init_argc");
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_param_init_argc),
+        MIR_new_reg_op(ctx, r_argc)));
+
+    MIR_disp_t osr_base = (MIR_disp_t)offsetof(struct sv_vm, jit_osr);
+    MIR_label_t param_argc_done = MIR_new_label(ctx);
+    MIR_label_t param_argc_enough = MIR_new_label(ctx);
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_bool),
+        MIR_new_mem_op(ctx, MIR_T_U8,
+          osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, active),
+          r_vm, 0, 1)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, param_argc_done),
+        MIR_new_reg_op(ctx, r_bool),
+        MIR_new_int_op(ctx, 0)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_UBGT,
+        MIR_new_label_op(ctx, param_argc_enough),
+        MIR_new_reg_op(ctx, r_param_init_argc),
+        MIR_new_int_op(ctx, (int64_t)param_count - 1)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_param_init_argc),
+        MIR_new_int_op(ctx, param_count)));
+    MIR_append_insn(ctx, jit_func, param_argc_enough);
+    MIR_append_insn(ctx, jit_func, param_argc_done);
+  }
 
   MIR_reg_t r_slotbuf = r_tmp2;
   if (has_captured_slots && slotbuf_count > 0) {
@@ -2894,7 +2935,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       MIR_new_insn(ctx, MIR_ALLOCA,
         MIR_new_reg_op(ctx, r_slotbuf),
         MIR_new_uint_op(ctx, (uint64_t)slotbuf_count * sizeof(ant_value_t))));
-    mir_emit_fill_param_slots_from_args(ctx, jit_func, r_slotbuf, r_args, r_argc, captured_params, param_count);
+    mir_emit_fill_param_slots_from_args(
+      ctx, jit_func, r_slotbuf, r_args, r_param_init_argc,
+      captured_params, param_count, writes_params);
   }
 
   bool needs_lbuf = needs_bailout || feat.needs_close_upval || has_captures;
@@ -3229,7 +3272,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (has_captured_params && captured_params && idx < (uint16_t)param_count && captured_params[idx]) {
+        if (idx < (uint16_t)param_count
+            && (writes_params || (has_captured_params && captured_params && captured_params[idx]))) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, dst),
@@ -3263,14 +3307,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t idx = sv_get_u16(ip + 1);
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t val = vstack_top(&vs);
-        if (has_captured_params && captured_params && idx < (uint16_t)param_count && captured_params[idx]) {
+        if (idx < (uint16_t)param_count
+            && (writes_params || (has_captured_params && captured_params && captured_params[idx]))) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_JSVAL,
                 (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
                 r_slotbuf, 0, 1),
               MIR_new_reg_op(ctx, val)));
-          if (idx < (uint16_t)param_count) {
+          if (!writes_params && idx < (uint16_t)param_count) {
             MIR_label_t arg_in_range = MIR_new_label(ctx);
             MIR_label_t arg_done = MIR_new_label(ctx);
             MIR_append_insn(ctx, jit_func,
@@ -3382,8 +3427,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if ((int)slot_idx < param_count) {
           uint16_t idx = slot_idx;
           MIR_reg_t dst = vstack_push(&vs);
-          if (has_captured_params && captured_params && idx < (uint16_t)param_count &&
-              captured_params[idx]) {
+          if (idx < (uint16_t)param_count
+              && (writes_params || (has_captured_params && captured_params && captured_params[idx]))) {
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_reg_op(ctx, dst),
@@ -4935,6 +4980,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             mir_emit_self_tail(ctx, jit_func, (int)call_argc, param_count,
                                r_tco_args, r_arg_arr, r_args, r_argc,
                                local_regs, n_locals, has_captured_slots, r_slotbuf, captured_params,
+                               writes_params,
                                has_captures,
                                captured_locals, r_lbuf, self_tail_entry);
             break;
@@ -5077,6 +5123,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           mir_emit_self_tail(ctx, jit_func, (int)call_argc, param_count,
                              r_tco_args, r_arg_arr, r_args, r_argc,
                              local_regs, n_locals, has_captured_slots, r_slotbuf, captured_params,
+                             writes_params,
                              has_captures,
                              captured_locals, r_lbuf, self_tail_entry);
         } else {
@@ -5592,18 +5639,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t slot_idx = sv_get_u16(ip + 1);
         int pre_op_sp = vs.sp;
         if ((int)slot_idx < param_count) {
-          MIR_label_t arg_in_range = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_UBGT,
-              MIR_new_label_op(ctx, arg_in_range),
-              MIR_new_reg_op(ctx, r_argc),
-              MIR_new_int_op(ctx, (int64_t)slot_idx)));
-          mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
-          mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
-            0, r_bailout_off, bc_off,
-            r_bailout_sp, pre_op_sp, bailout_tramp,
-            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
-          MIR_append_insn(ctx, jit_func, arg_in_range);
+          if (!writes_params) {
+            MIR_label_t arg_in_range = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGT,
+                MIR_new_label_op(ctx, arg_in_range),
+                MIR_new_reg_op(ctx, r_argc),
+                MIR_new_int_op(ctx, (int64_t)slot_idx)));
+            mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+            mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
+              0, r_bailout_off, bc_off,
+              r_bailout_sp, pre_op_sp, bailout_tramp,
+              r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+            MIR_append_insn(ctx, jit_func, arg_in_range);
+          }
 
           vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
           MIR_reg_t rhs = vstack_pop(&vs);
@@ -5616,8 +5665,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
               MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
-              MIR_new_reg_op(ctx, r_args),
-              MIR_new_reg_op(ctx, r_argc),
+              writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
+              writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)slot_idx),
               MIR_new_reg_op(ctx, rhs)));
@@ -5703,18 +5752,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t slot_idx = sv_get_u16(ip + 1);
         int pre_op_sp = vs.sp;
         if ((int)slot_idx < param_count) {
-          MIR_label_t arg_in_range = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_UBGT,
-              MIR_new_label_op(ctx, arg_in_range),
-              MIR_new_reg_op(ctx, r_argc),
-              MIR_new_int_op(ctx, (int64_t)slot_idx)));
-          mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
-          mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
-            0, r_bailout_off, bc_off,
-            r_bailout_sp, pre_op_sp, bailout_tramp,
-            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
-          MIR_append_insn(ctx, jit_func, arg_in_range);
+          if (!writes_params) {
+            MIR_label_t arg_in_range = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGT,
+                MIR_new_label_op(ctx, arg_in_range),
+                MIR_new_reg_op(ctx, r_argc),
+                MIR_new_int_op(ctx, (int64_t)slot_idx)));
+            mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+            mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
+              0, r_bailout_off, bc_off,
+              r_bailout_sp, pre_op_sp, bailout_tramp,
+              r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+            MIR_append_insn(ctx, jit_func, arg_in_range);
+          }
 
           vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
           vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
@@ -5729,8 +5780,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
               MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
-              MIR_new_reg_op(ctx, r_args),
-              MIR_new_reg_op(ctx, r_argc),
+              writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
+              writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)slot_idx),
               MIR_new_reg_op(ctx, lhs),
@@ -7944,8 +7995,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
               MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
-              MIR_new_reg_op(ctx, r_args),
-              MIR_new_reg_op(ctx, r_argc),
+              writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
+              writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)slot_idx)));
         } else {
@@ -8245,7 +8296,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
     MIR_reg_t r_resume_res = MIR_new_func_reg(ctx, jit_func->u.func,
                                                MIR_JSVAL, "resume_res");
-    if (has_captured_params) {
+    if (has_captured_params && !writes_params) {
       mir_emit_fill_uncaptured_param_slots_from_args(
         ctx, jit_func, r_slotbuf, r_args, r_argc, captured_params, param_count);
     }
@@ -8261,8 +8312,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_new_reg_op(ctx, r_argc),
         MIR_new_reg_op(ctx, r_args_buf),
         MIR_new_reg_op(ctx, r_bailout_sp),
-        has_captured_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_uint_op(ctx, 0),
-        MIR_new_int_op(ctx, has_captured_params ? param_count : 0),
+        params_in_slotbuf ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_uint_op(ctx, 0),
+        MIR_new_int_op(ctx, params_in_slotbuf ? param_count : 0),
         MIR_new_reg_op(ctx, r_lbuf),
         MIR_new_int_op(ctx, n_locals),
         MIR_new_reg_op(ctx, r_bailout_off)));
@@ -8359,8 +8410,6 @@ ant_value_t sv_jit_try_osr(
   sv_frame_t *frame, sv_func_t *func,
   int bc_offset
 ) {
-  if (func_writes_params(func)) return SV_JIT_RETRY_INTERP;
-
   sv_closure_t osr_closure;
   sv_closure_t *closure;
   if (vtype(frame->callee) == T_FUNC) {

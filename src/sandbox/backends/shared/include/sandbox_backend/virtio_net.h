@@ -26,6 +26,6 @@ void ant_hvf_net_stop(ant_hvf_vm_t *vm);
 
 int ant_hvf_net_start(ant_hvf_vm_t *vm);
 int ant_hvf_virtio_net_drain_rx(ant_hvf_vm_t *vm);
+int ant_hvf_virtio_net_drain_rx_if_wake(ant_hvf_vm_t *vm);
 int ant_hvf_virtio_net_tx(ant_hvf_vm_t *vm, uint64_t desc_base, uint16_t head, uint32_t *used_len);
 int ant_hvf_virtio_net_notify(ant_hvf_vm_t *vm, ant_hvf_virtio_device_t *dev, unsigned queue);
-

@@ -217,6 +217,8 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
         break;
       }
     }
+    rc = ant_hvf_virtio_net_drain_rx_if_wake(vm);
+    if (rc != 0) break;
 
     rc = ioctl(vm->vcpu_fd, KVM_RUN, 0);
     if (rc < 0) {
@@ -229,11 +231,8 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
           rc = -ETIMEDOUT;
           break;
         }
-        if (vm->net_rx_wake) {
-          vm->net_rx_wake = false;
-          rc = ant_hvf_virtio_net_drain_rx(vm);
-          if (rc != 0) break;
-        }
+        rc = ant_hvf_virtio_net_drain_rx_if_wake(vm);
+        if (rc != 0) break;
         continue;
       }
       rc = -errno;
@@ -306,6 +305,7 @@ static void ant_kvm_session_cleanup(ant_kvm_session_t *session, int *rc_inout) {
     ant_hvf_9p_file_cache_clear(&vm->p9[i]);
   }
   if (vm->net_lock_init) pthread_mutex_destroy(&vm->net_lock);
+  if (vm->virtio_lock_init) pthread_mutex_destroy(&vm->virtio_lock);
   if (rc_inout) *rc_inout = rc;
 }
 
@@ -479,6 +479,11 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   );
 
   if (pthread_mutex_init(&vm->net_lock, NULL) == 0) vm->net_lock_init = true;
+  else if (vm->net_enabled) {
+    rc = -errno;
+    goto fail;
+  }
+  if (pthread_mutex_init(&vm->virtio_lock, NULL) == 0) vm->virtio_lock_init = true;
   else if (vm->net_enabled) {
     rc = -errno;
     goto fail;
