@@ -24,6 +24,7 @@ ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out);
 ant_value_t bigint_from_int64(ant_t *js, int64_t value);
 ant_value_t bigint_from_uint64(ant_t *js, uint64_t value);
 ant_value_t bigint_from_integral_double(ant_t *js, double value);
+ant_value_t bigint_from_value(ant_t *js, ant_value_t arg);
 
 bool bigint_to_int64_wrapping(ant_t *js, ant_value_t value, int64_t *out);
 bool bigint_to_uint64_wrapping(ant_t *js, ant_value_t value, uint64_t *out);

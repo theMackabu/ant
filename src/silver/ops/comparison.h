@@ -152,7 +152,9 @@ static inline ant_value_t sv_push_bigint_relational(
   if (lt == T_BIGINT && rty == T_BIGINT) {
     cmp = bigint_compare(js, l, r);
     result = sv_rel_from_bigint_cmp(cmp, true, op);
-  } else if ((lt == T_BIGINT && rty == T_NUM) || (lt == T_NUM && rty == T_BIGINT)) {
+  } 
+  
+  else if ((lt == T_BIGINT && rty == T_NUM) || (lt == T_NUM && rty == T_BIGINT)) {
     bool left_is_bigint = lt == T_BIGINT;
     bool ordered = false;
     
@@ -162,6 +164,18 @@ static inline ant_value_t sv_push_bigint_relational(
     
     if (is_err(status)) return status;
     result = ordered && sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
+  } 
+  
+  else if (lt == T_BIGINT || rty == T_BIGINT) {
+    bool left_is_bigint = lt == T_BIGINT;
+    ant_value_t other_bigint = bigint_from_value(js, left_is_bigint ? r : l);
+    if (is_err(other_bigint)) return other_bigint;
+    
+    cmp = left_is_bigint
+      ? bigint_compare(js, l, other_bigint)
+      : bigint_compare(js, r, other_bigint);
+    
+    result = sv_rel_from_bigint_cmp(cmp, left_is_bigint, op);
   }
 
   vm->stack[vm->sp++] = mkval(T_BOOL, result);

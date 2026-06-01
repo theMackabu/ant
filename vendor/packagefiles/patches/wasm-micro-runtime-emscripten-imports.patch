@@ -487,7 +487,7 @@ index f44b967..99e7424 100644
  #if WASM_ENABLE_INTERP != 0
      if (table->inst_comm_rt->module_type == Wasm_Module_Bytecode) {
          WASMTableInstance *table_interp =
-@@ -4215,9 +4476,34 @@ bool
+@@ -4215,9 +4476,39 @@ bool
  wasm_table_grow(wasm_table_t *table, wasm_table_size_t delta,
                  own wasm_ref_t *init)
  {
@@ -512,7 +512,12 @@ index f44b967..99e7424 100644
 +
 +        table->host_table->cur_size = new_size;
 +        for (uint32 i = old_size; i < new_size; i++) {
-+            if (!wasm_table_set(table, i, init ? wasm_ref_copy(init) : NULL)) {
++            wasm_ref_t *ref = init ? wasm_ref_copy(init) : NULL;
++            if (!wasm_table_set(table, i, ref)) {
++                if (ref)
++                    wasm_ref_delete(ref);
++                for (uint32 j = old_size; j < i; j++)
++                    wasm_table_set(table, j, NULL);
 +                table->host_table->cur_size = old_size;
 +                return false;
 +            }
@@ -525,7 +530,7 @@ index f44b967..99e7424 100644
      LOG_WARNING("Calling wasm_table_grow() by host is not supported."
                  "Only allow growing a table via the opcode table.grow");
      return false;
-@@ -4246,8 +4532,43 @@ wasm_memory_new_basic(wasm_store_t *store, const wasm_memorytype_t *type)
+@@ -4246,8 +4537,43 @@ wasm_memory_new_basic(wasm_store_t *store, const wasm_memorytype_t *type)
  wasm_memory_t *
  wasm_memory_new(wasm_store_t *store, const wasm_memorytype_t *type)
  {
@@ -570,7 +575,7 @@ index f44b967..99e7424 100644
  }
  
  wasm_memory_t *
-@@ -4347,6 +4668,13 @@ wasm_memory_delete(wasm_memory_t *memory)
+@@ -4347,6 +4673,13 @@ wasm_memory_delete(wasm_memory_t *memory)
          memory->type = NULL;
      }
  
@@ -584,7 +589,7 @@ index f44b967..99e7424 100644
      DELETE_HOST_INFO(memory)
  
      wasm_runtime_free(memory);
-@@ -4367,10 +4695,13 @@ wasm_memory_data(wasm_memory_t *memory)
+@@ -4367,10 +4700,13 @@ wasm_memory_data(wasm_memory_t *memory)
  {
      WASMModuleInstanceCommon *module_inst_comm;
  
@@ -599,7 +604,7 @@ index f44b967..99e7424 100644
      module_inst_comm = memory->inst_comm_rt;
  #if WASM_ENABLE_INTERP != 0
      if (module_inst_comm->module_type == Wasm_Module_Bytecode) {
-@@ -4404,10 +4735,14 @@ wasm_memory_data_size(const wasm_memory_t *memory)
+@@ -4404,10 +4740,14 @@ wasm_memory_data_size(const wasm_memory_t *memory)
  {
      WASMModuleInstanceCommon *module_inst_comm;
  
@@ -615,7 +620,7 @@ index f44b967..99e7424 100644
      module_inst_comm = memory->inst_comm_rt;
  #if WASM_ENABLE_INTERP != 0
      if (module_inst_comm->module_type == Wasm_Module_Bytecode) {
-@@ -4443,10 +4778,13 @@ wasm_memory_size(const wasm_memory_t *memory)
+@@ -4443,10 +4783,13 @@ wasm_memory_size(const wasm_memory_t *memory)
  {
      WASMModuleInstanceCommon *module_inst_comm;
  
@@ -630,7 +635,7 @@ index f44b967..99e7424 100644
      module_inst_comm = memory->inst_comm_rt;
  #if WASM_ENABLE_INTERP != 0
      if (module_inst_comm->module_type == Wasm_Module_Bytecode) {
-@@ -4478,8 +4816,9 @@ wasm_memory_size(const wasm_memory_t *memory)
+@@ -4478,8 +4821,9 @@ wasm_memory_size(const wasm_memory_t *memory)
  bool
  wasm_memory_grow(wasm_memory_t *memory, wasm_memory_pages_t delta)
  {
@@ -642,7 +647,7 @@ index f44b967..99e7424 100644
      LOG_WARNING("Calling wasm_memory_grow() by host is not supported."
                  "Only allow growing a memory via the opcode memory.grow");
      return false;
-@@ -4551,6 +4890,8 @@ interp_link_global(const WASMModule *module_interp, uint16 global_idx_rt,
+@@ -4551,6 +4895,8 @@ interp_link_global(const WASMModule *module_interp, uint16 global_idx_rt,
  
      /* set init value */
      bh_assert(import->init);
@@ -651,7 +656,7 @@ index f44b967..99e7424 100644
      switch (wasm_valtype_kind(import->type->val_type)) {
          case WASM_I32:
              imported_global_interp->u.global.global_data_linked.i32 =
-@@ -4577,6 +4918,108 @@ interp_link_global(const WASMModule *module_interp, uint16 global_idx_rt,
+@@ -4577,6 +4923,108 @@ interp_link_global(const WASMModule *module_interp, uint16 global_idx_rt,
      return true;
  }
  
@@ -760,7 +765,7 @@ index f44b967..99e7424 100644
  static bool
  interp_process_export(wasm_store_t *store,
                        const WASMModuleInstance *inst_interp,
-@@ -4845,14 +5288,14 @@ static bool
+@@ -4845,14 +5293,14 @@ static bool
  do_link(const wasm_instance_t *inst, const wasm_module_t *module,
          const wasm_extern_vec_t *imports)
  {
@@ -778,7 +783,7 @@ index f44b967..99e7424 100644
          wasm_extern_t *import = imports->data[i];
  
          if (!import) {
-@@ -4910,10 +5353,37 @@ do_link(const wasm_instance_t *inst, const wasm_module_t *module,
+@@ -4910,10 +5358,37 @@ do_link(const wasm_instance_t *inst, const wasm_module_t *module,
                  break;
              }
              case WASM_EXTERN_MEMORY:

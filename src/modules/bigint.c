@@ -1384,11 +1384,7 @@ size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len) {
   return total;
 }
 
-static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
-  if (nargs < 1) return js_mkbigint(js, "0", 1, false);
-
-  ant_value_t arg = args[0];
+ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_BIGINT) return arg;
 
   if (vtype(arg) == T_NUM) {
@@ -1436,6 +1432,13 @@ static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(arg) == T_BOOL) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
 
   return js_mkerr(js, "Cannot convert to BigInt");
+}
+
+static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
+  if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
+  if (nargs < 1) return js_mkbigint(js, "0", 1, false);
+
+  return bigint_from_value(js, args[0]);
 }
 
 static ant_value_t bigint_to_u64(ant_t *js, ant_value_t value, uint64_t *out) {

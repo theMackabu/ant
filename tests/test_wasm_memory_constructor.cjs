@@ -16,13 +16,20 @@ assert(memory instanceof WebAssembly.Memory);
 assert(memory.buffer instanceof ArrayBuffer);
 assert.strictEqual(memory.buffer.byteLength, 65536);
 
-const bytes = new Uint8Array(memory.buffer);
+const initialBuffer = memory.buffer;
+assert.strictEqual(memory.buffer, initialBuffer);
+
+const bytes = new Uint8Array(initialBuffer);
 bytes[0] = 42;
 bytes[65535] = 7;
 assert.strictEqual(new Uint8Array(memory.buffer)[0], 42);
 assert.strictEqual(new Uint8Array(memory.buffer)[65535], 7);
 
 assert.strictEqual(memory.grow(1), 1);
+assert.strictEqual(initialBuffer.byteLength, 0);
+assert.strictEqual(bytes[0], undefined);
+assert.notStrictEqual(memory.buffer, initialBuffer);
+assert.strictEqual(memory.buffer, memory.buffer);
 assert.strictEqual(memory.buffer.byteLength, 131072);
 
 const grownBytes = new Uint8Array(memory.buffer);

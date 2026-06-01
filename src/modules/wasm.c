@@ -56,6 +56,7 @@ typedef struct {
   bool use_cached_value;
   bool standalone_table;
   wasm_valkind_t standalone_table_element;
+  ant_value_t memory_buffer;
   wasm_val_t cached_value;
   uint32_t standalone_table_size;
   uint32_t standalone_table_max_size;
@@ -477,6 +478,7 @@ static ant_value_t wasm_wrap_extern_object(ant_t *js, wasm_extern_wrap_kind_t ki
   handle->kind = kind;
   handle->store = store;
   handle->own_handle = own_handle;
+  handle->memory_buffer = js_mkundef();
   handle->cached_value = (wasm_val_t)WASM_INIT_VAL;
 
   switch (kind) {
@@ -1356,14 +1358,26 @@ static bool wasm_parse_memory_descriptor(ant_t *js, ant_value_t descriptor, wasm
   return true;
 }
 
-static ant_value_t wasm_make_external_arraybuffer(ant_t *js, uint8_t *data, size_t len) {
+static void wasm_detach_external_arraybuffer(ant_t *js, ant_value_t buffer) {
+  ArrayBufferData *data = buffer_get_arraybuffer_data(buffer);
+  if (!data || data->is_detached) return;
+  data->is_detached = 1;
+  data->data = NULL;
+  data->length = 0;
+  data->capacity = 0;
+  if (is_object_type(buffer)) js_set(js, buffer, "byteLength", js_mknum(0));
+}
+
+static ant_value_t wasm_make_external_arraybuffer(ant_t *js, uint8_t *data, size_t len, ant_value_t owner) {
   ArrayBufferData *buffer = calloc(1, sizeof(ArrayBufferData));
   if (!buffer) return js_mkerr(js, "out of memory");
   buffer->data = data;
   buffer->length = len;
   buffer->capacity = len;
   buffer->ref_count = 0;
-  return create_arraybuffer_obj(js, buffer);
+  ant_value_t result = create_arraybuffer_obj(js, buffer);
+  if (is_object_type(owner) && is_object_type(result)) js_set_slot_wb(js, result, SLOT_ENTRIES, owner);
+  return result;
 }
 
 static bool wasm_parse_table_descriptor(ant_t *js, ant_value_t descriptor, wasm_limits_t *limits, wasm_valkind_t *element, ant_value_t *err) {
@@ -1452,7 +1466,17 @@ static ant_value_t js_wasm_memory_buffer_getter(ant_t *js, ant_value_t *args, in
 
   data = wasm_memory_data(handle->as.memory);
   len = wasm_memory_data_size(handle->as.memory);
-  return wasm_make_external_arraybuffer(js, (uint8_t *)data, len);
+  ArrayBufferData *cached = buffer_get_arraybuffer_data(handle->memory_buffer);
+  if (cached && !cached->is_detached && cached->data == (uint8_t *)data && cached->length == len)
+    return handle->memory_buffer;
+  if (cached) wasm_detach_external_arraybuffer(js, handle->memory_buffer);
+
+  ant_value_t buffer = wasm_make_external_arraybuffer(js, (uint8_t *)data, len, js->this_val);
+  if (is_err(buffer)) return buffer;
+
+  handle->memory_buffer = buffer;
+  js_set_slot_wb(js, js->this_val, SLOT_AUX, buffer);
+  return buffer;
 }
 
 static ant_value_t js_wasm_memory_grow(ant_t *js, ant_value_t *args, int nargs) {
@@ -1472,6 +1496,10 @@ static ant_value_t js_wasm_memory_grow(ant_t *js, ant_value_t *args, int nargs) 
 
   if (!wasm_memory_grow(handle->as.memory, delta))
     return js_mkerr_typed(js, JS_ERR_RANGE, "Failed to grow memory by %u pages", delta);
+
+  wasm_detach_external_arraybuffer(js, handle->memory_buffer);
+  handle->memory_buffer = js_mkundef();
+  js_set_slot_wb(js, js->this_val, SLOT_AUX, js_mkundef());
 
   return js_mknum((double)old_size);
 }

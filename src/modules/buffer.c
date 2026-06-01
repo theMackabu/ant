@@ -1243,7 +1243,8 @@ static ant_value_t js_typedarray_set(ant_t *js, ant_value_t *args, int nargs) {
 
     for (size_t i = 0; i < src_len; i++) {
       ant_value_t value = js_mkundef();
-      if (!buffer_typedarray_data_read_index(js, src_ta, i, &value)) value = js_mknum(0);
+      if (!buffer_typedarray_data_read_index(js, src_ta, i, &value))
+        return js_mkerr(js, "Failed to read from source TypedArray");
       ant_value_t write_result = typedarray_write_value(js, dst, offset + i, value);
       if (is_err(write_result)) return write_result;
     }
@@ -2826,8 +2827,10 @@ static ant_value_t js_typedarray_reverse(ant_t *js, ant_value_t *args, int nargs
   for (size_t left = 0, right = ta_data->length; left < right && left < --right; left++) {
     ant_value_t a = js_mkundef();
     ant_value_t b = js_mkundef();
-    if (!buffer_typedarray_data_read_index(js, ta_data, left, &a)) break;
-    if (!buffer_typedarray_data_read_index(js, ta_data, right, &b)) break;
+    if (!buffer_typedarray_data_read_index(js, ta_data, left, &a))
+      return js_mkerr(js, "Failed to read from TypedArray");
+    if (!buffer_typedarray_data_read_index(js, ta_data, right, &b))
+      return js_mkerr(js, "Failed to read from TypedArray");
     ant_value_t write_b = typedarray_write_value(js, ta_data, left, b);
     if (is_err(write_b)) return write_b;
     ant_value_t write_a = typedarray_write_value(js, ta_data, right, a);
@@ -2852,11 +2855,9 @@ static ant_value_t js_typedarray_sort(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t *values = len ? malloc(sizeof(ant_value_t) * len) : NULL;
   if (len && !values) return js_mkerr(js, "oom");
 
-  for (size_t i = 0; i < len; i++) {
-    if (!buffer_typedarray_data_read_index(js, ta_data, i, &values[i])) {
-      free(values);
-      return this_val;
-    }
+  for (size_t i = 0; i < len; i++) if (!buffer_typedarray_data_read_index(js, ta_data, i, &values[i])) {
+    free(values);
+    return js_mkerr(js, "Failed to read from TypedArray");
   }
 
   for (size_t i = 1; i < len; i++) {
