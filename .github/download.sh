@@ -1,19 +1,33 @@
 #!/bin/bash
 set -e
 
-REPO="themackabu/ant"
-OUT_DIR="$(dirname "${BASH_SOURCE[0]}")/artifacts"
+REPO="${ANT_DOWNLOAD_REPO:-sf-tools/ant}"
+WORKFLOW="${ANT_DOWNLOAD_WORKFLOW:-build.yml}"
+OUT_DIR="${ANT_DOWNLOAD_OUT_DIR:-$(dirname "${BASH_SOURCE[0]}")/artifacts}"
 
-LATEST=$(gh run list --repo "$REPO" --limit 1 --json databaseId,status,conclusion,displayTitle,headBranch,createdAt)
+LATEST=$(gh run list \
+  --repo "$REPO" \
+  --workflow "$WORKFLOW" \
+  --limit 10 \
+  --json databaseId,status,conclusion,displayTitle,headBranch,createdAt,workflowName \
+  --jq '[.[] | select(.status == "completed" and .conclusion == "success")][0]')
 
-RUN_ID=$(echo "$LATEST" | jq -r '.[0].databaseId')
-STATUS=$(echo "$LATEST" | jq -r '.[0].status')
-CONCLUSION=$(echo "$LATEST" | jq -r '.[0].conclusion')
-TITLE=$(echo "$LATEST" | jq -r '.[0].displayTitle')
-BRANCH=$(echo "$LATEST" | jq -r '.[0].headBranch')
-CREATED=$(echo "$LATEST" | jq -r '.[0].createdAt')
+if [[ -z "$LATEST" || "$LATEST" == "null" ]]; then
+  echo "No completed successful $WORKFLOW runs found in $REPO."
+  exit 1
+fi
+
+RUN_ID=$(echo "$LATEST" | jq -r '.databaseId')
+STATUS=$(echo "$LATEST" | jq -r '.status')
+CONCLUSION=$(echo "$LATEST" | jq -r '.conclusion')
+TITLE=$(echo "$LATEST" | jq -r '.displayTitle')
+WORKFLOW_NAME=$(echo "$LATEST" | jq -r '.workflowName')
+BRANCH=$(echo "$LATEST" | jq -r '.headBranch')
+CREATED=$(echo "$LATEST" | jq -r '.createdAt')
 
 echo "Latest run:"
+echo "  Repo:       $REPO"
+echo "  Workflow:   $WORKFLOW_NAME ($WORKFLOW)"
 echo "  Title:      $TITLE"
 echo "  Branch:     $BRANCH"
 echo "  Run ID:     $RUN_ID"
@@ -21,16 +35,6 @@ echo "  Status:     $STATUS"
 echo "  Conclusion: $CONCLUSION"
 echo "  Created:    $CREATED"
 echo
-
-if [[ "$STATUS" != "completed" ]]; then
-  echo "Run is still in progress. Exiting."
-  exit 1
-fi
-
-if [[ "$CONCLUSION" != "success" ]]; then
-  echo "Run did not succeed (conclusion: $CONCLUSION). Exiting."
-  exit 1
-fi
 
 echo "Run completed successfully. Downloading artifacts..."
 mkdir -p "$OUT_DIR"

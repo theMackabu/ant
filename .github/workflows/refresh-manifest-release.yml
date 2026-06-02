@@ -1,0 +1,30 @@
+name: Refresh Manifest On Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.target_commitish || github.event.repository.default_branch || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  refresh-manifest:
+    name: Refresh manifest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh manifest
+        env:
+          MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+          UPSTREAM_BRANCH: ${{ github.event.release.target_commitish || github.event.repository.default_branch || github.ref_name }}
+        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
+            --data-urlencode "branch=${UPSTREAM_BRANCH}" \
+            --data-urlencode "run_id=${GITHUB_RUN_ID}" \
+            -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
