@@ -105,6 +105,10 @@ runs:
           MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"
         fi
 
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          MESON_ARGS="$MESON_ARGS -Dcodesign=false"
+        fi
+
         if [[ -n "${{ inputs.extra_meson_args }}" ]]; then
           MESON_ARGS="$MESON_ARGS ${{ inputs.extra_meson_args }}"
         fi
@@ -134,6 +138,8 @@ runs:
         fi
         if [[ "$RUNNER_OS" == "macOS" ]]; then
           ${{ inputs.strip }} -x build/${{ inputs.binary_name }}
+          codesign --force --sign - --entitlements meson/ant.entitlements build/${{ inputs.binary_name }}
+          codesign --verify --verbose build/${{ inputs.binary_name }}
         else
           ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
         fi
