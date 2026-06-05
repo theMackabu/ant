@@ -223,13 +223,19 @@ jobs:
           cp "nanos-src/output/platform/${NANOS_PLATFORM}/bin/kernel.img" "packages/sandbox/ant-kernel-${SANDBOX_ARCH}.img"
 
       - name: Build Nanos image
+        id: image
         working-directory: packages/sandbox
         run: |
           set -euo pipefail
           chmod +x ant
 
           kernel_path="$PWD/ant-kernel-${SANDBOX_ARCH}.img"
-          ant_version=$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/meson/ant.version")
+          ant_version=$(./ant --version | head -n 1 | tr -d '[:space:]')
+          if [[ -z "$ant_version" ]]; then
+            echo "::error::failed to read Ant version from downloaded binary"
+            exit 1
+          fi
+          echo "ant_version=${ant_version}" >> "$GITHUB_OUTPUT"
           ops_home="$RUNNER_TEMP/ant-ops-home"
           case "$SANDBOX_ARCH" in
             aarch64) ops_kernel="$RUNNER_TEMP/ant-kernel-arm.img" ;;
@@ -315,4 +321,5 @@ jobs:
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${GITHUB_REF_NAME}" \
             --data-urlencode "run_id=${GITHUB_RUN_ID}" \
+            --data-urlencode "version=${{ steps.image.outputs.ant_version }}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
