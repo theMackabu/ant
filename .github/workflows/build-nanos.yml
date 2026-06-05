@@ -230,7 +230,7 @@ jobs:
           chmod +x ant
 
           kernel_path="$PWD/ant-kernel-${SANDBOX_ARCH}.img"
-          ant_version=$(./ant --version | head -n 1 | tr -d '[:space:]')
+          ant_version=$(./ant --version-raw | tr -d '[:space:]')
           if [[ -z "$ant_version" ]]; then
             echo "::error::failed to read Ant version from downloaded binary"
             exit 1
