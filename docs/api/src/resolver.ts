@@ -6,7 +6,7 @@ import {
   canDownloadActionsArtifacts,
   DEFAULT_BRANCH,
   MUSL_SANDBOX_WORKFLOW,
-  repository,
+  releaseRepository,
 } from './config';
 import { HttpError, isNotFound } from './errors';
 import {
@@ -256,7 +256,9 @@ export async function resolveNanosArtifact(
 }
 
 export async function fetchDownload(env: Env, artifact: ResolvedArtifact): Promise<Response> {
-  if (artifact.source.type === 'actions') return fetchArtifactDownload(env, artifact.artifact.id);
+  if (artifact.source.type === 'actions') {
+    return fetchArtifactDownload(env, artifact.source.repository, artifact.artifact.id);
+  }
 
   const releaseUrl =
     env.GITHUB_TOKEN && artifact.artifact.api_url
@@ -279,7 +281,7 @@ export function downloadUrl(
   if (url.searchParams.has('branch') || artifactBranch !== DEFAULT_BRANCH) {
     next.searchParams.set('branch', artifactBranch);
   }
-  if (url.searchParams.has('run_id') || runId) {
+  if (runId) {
     next.searchParams.set('run_id', String(runId));
   }
   return next.toString();
@@ -301,10 +303,17 @@ async function resolveActionAnt(env: Env, target: AntTarget, url: URL): Promise<
     }
   }
 
-  const { run, artifacts } = await findLatestRunWithArtifacts(env, BUILD_WORKFLOW, branch(env), [
+  const match = await findLatestRunWithArtifacts(env, BUILD_WORKFLOW, branch(env), [
     target.artifact,
   ]);
-  return resolveActionAntFromArtifacts(env, target, url, run, artifacts);
+  return resolveActionAntFromArtifacts(
+    env,
+    target,
+    url,
+    match.repository,
+    match.run,
+    match.artifacts,
+  );
 }
 
 async function resolveActionAntFromRun(
@@ -313,14 +322,22 @@ async function resolveActionAntFromRun(
   url: URL,
   runId: number,
 ): Promise<ResolvedArtifact> {
-  const { run, artifacts } = await findRunWithArtifacts(env, runId, [target.artifact]);
-  return resolveActionAntFromArtifacts(env, target, url, run, artifacts);
+  const match = await findRunWithArtifacts(env, runId, [target.artifact]);
+  return resolveActionAntFromArtifacts(
+    env,
+    target,
+    url,
+    match.repository,
+    match.run,
+    match.artifacts,
+  );
 }
 
 async function resolveActionAntFromArtifacts(
   env: Env,
   target: AntTarget,
   url: URL,
+  sourceRepository: string,
   run: WorkflowRun,
   artifacts: Artifact[],
 ): Promise<ResolvedArtifact> {
@@ -332,7 +349,7 @@ async function resolveActionAntFromArtifacts(
 
   if (versionArtifact) {
     try {
-      version = await readVersionArtifact(env, versionArtifact);
+      version = await readVersionArtifact(env, sourceRepository, versionArtifact);
     } catch (error) {
       console.warn(`failed to read ${versionArtifact.name}`, error);
     }
@@ -342,8 +359,8 @@ async function resolveActionAntFromArtifacts(
     'ant',
     artifact,
     version,
-    actionSourceInfo(env, BUILD_WORKFLOW, run),
-    downloadUrl(url, 'ant', target.key, branch(env), matchedRunId(env, run)),
+    actionSourceInfo(sourceRepository, BUILD_WORKFLOW, run),
+    downloadUrl(url, 'ant', target.key, branch(env), run.id),
   );
 }
 
@@ -358,13 +375,13 @@ async function resolveActionNamedArtifact(
   const runId = actionsRunId(env);
   if (runId) {
     try {
-      const { run, artifacts } = await findRunWithArtifacts(env, runId, [artifactName]);
-      const artifact = requireArtifact(artifacts, artifactName);
+      const match = await findRunWithArtifacts(env, runId, [artifactName]);
+      const artifact = requireArtifact(match.artifacts, artifactName);
       return resolvedAction(
         kind,
         artifact,
         undefined,
-        actionSourceInfo(env, run.path || workflow, run),
+        actionSourceInfo(match.repository, match.run.path || workflow, match.run),
         downloadUrl(url, kind, arch, branch(env), runId),
       );
     } catch (error) {
@@ -372,16 +389,14 @@ async function resolveActionNamedArtifact(
     }
   }
 
-  const { run, artifacts } = await findLatestRunWithArtifacts(env, workflow, branch(env), [
-    artifactName,
-  ]);
-  const artifact = requireArtifact(artifacts, artifactName);
+  const match = await findLatestRunWithArtifacts(env, workflow, branch(env), [artifactName]);
+  const artifact = requireArtifact(match.artifacts, artifactName);
   return resolvedAction(
     kind,
     artifact,
     undefined,
-    actionSourceInfo(env, workflow, run),
-    downloadUrl(url, kind, arch, branch(env), matchedRunId(env, run)),
+    actionSourceInfo(match.repository, workflow, match.run),
+    downloadUrl(url, kind, arch, branch(env), match.run.id),
   );
 }
 
@@ -392,14 +407,14 @@ async function resolveAnyActionNamedArtifact(
   arch: string,
   url: URL,
 ): Promise<ResolvedArtifact> {
-  const { run, artifacts } = await findLatestAnyRunWithArtifacts(env, [artifactName]);
-  const artifact = requireArtifact(artifacts, artifactName);
+  const match = await findLatestAnyRunWithArtifacts(env, [artifactName]);
+  const artifact = requireArtifact(match.artifacts, artifactName);
   return resolvedAction(
     kind,
     artifact,
     undefined,
-    actionSourceInfo(env, run.path || run.name, run),
-    downloadUrl(url, kind, arch, branch(env), matchedRunId(env, run)),
+    actionSourceInfo(match.repository, match.run.path || match.run.name, match.run),
+    downloadUrl(url, kind, arch, branch(env), match.run.id),
   );
 }
 
@@ -425,11 +440,6 @@ function resolvedAction(
     },
     source,
   };
-}
-
-function matchedRunId(env: Env, run: WorkflowRun): number | undefined {
-  const runId = actionsRunId(env);
-  return runId === run.id ? runId : undefined;
 }
 
 async function resolveReleaseArtifact(
@@ -487,7 +497,7 @@ function resolveReleaseAsset(
       api_url: asset.url,
       browser_download_url: asset.browser_download_url,
     },
-    source: releaseSourceInfoFromRelease(release, repository(env)),
+    source: releaseSourceInfoFromRelease(release, releaseRepository(env)),
   };
 }
 
@@ -508,10 +518,10 @@ async function resolveReleaseAfterActionsMiss(
   }
 }
 
-function actionSourceInfo(env: Env, workflow: string, run: WorkflowRun): ActionSourceInfo {
+function actionSourceInfo(repo: string, workflow: string, run: WorkflowRun): ActionSourceInfo {
   return {
     type: 'actions',
-    repository: repository(env),
+    repository: repo,
     workflow,
     run_id: run.id,
     run_number: run.run_number,
@@ -524,7 +534,7 @@ function actionSourceInfo(env: Env, workflow: string, run: WorkflowRun): ActionS
 }
 
 function releaseSourceInfo(env: Env, release: GitHubRelease): ReleaseSourceInfo {
-  return releaseSourceInfoFromRelease(release, repository(env));
+  return releaseSourceInfoFromRelease(release, releaseRepository(env));
 }
 
 function releaseSourceInfoFromRelease(

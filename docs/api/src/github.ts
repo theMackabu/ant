@@ -1,4 +1,4 @@
-import { repository } from './config';
+import { actionRepositories, releaseRepository } from './config';
 import { HttpError } from './errors';
 import { readZipText } from './zip';
 import type {
@@ -11,31 +11,57 @@ import type {
   WorkflowRun,
 } from './types';
 
+type ActionArtifactMatch = {
+  repository: string;
+  run: WorkflowRun;
+  artifacts: Artifact[];
+};
+
 export async function findLatestRunWithArtifacts(
   env: Env,
   workflow: string,
   branch: string,
   requiredArtifacts: string[],
-): Promise<{ run: WorkflowRun; artifacts: Artifact[] }> {
-  const repo = repository(env);
+): Promise<ActionArtifactMatch> {
+  const candidates: ActionArtifactMatch[] = [];
   const encodedBranch = encodeURIComponent(branch);
   const encodedWorkflow = encodeURIComponent(workflow);
 
-  for (let page = 1; page <= 5; page++) {
-    const runs = await githubJson<GitHubRunsResponse>(
-      env,
-      `/repos/${repo}/actions/workflows/${encodedWorkflow}/runs?branch=${encodedBranch}&status=success&per_page=20&page=${page}`,
-    );
+  for (const repo of actionRepositories(env)) {
+    for (let page = 1; page <= 5; page++) {
+      let runs: GitHubRunsResponse;
+      try {
+        runs = await githubJson<GitHubRunsResponse>(
+          env,
+          `/repos/${repo}/actions/workflows/${encodedWorkflow}/runs?branch=${encodedBranch}&status=success&per_page=20&page=${page}`,
+        );
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 404) break;
+        throw error;
+      }
 
-    for (const run of runs.workflow_runs) {
-      if (run.conclusion !== 'success') continue;
-      const artifacts = await listArtifacts(env, run.id);
-      const artifactNames = new Set(
-        artifacts.filter(artifact => !artifact.expired).map(artifact => artifact.name),
-      );
-      if (requiredArtifacts.every(name => artifactNames.has(name))) return { run, artifacts };
+      let found = false;
+      for (const run of runs.workflow_runs) {
+        if (run.conclusion !== 'success') continue;
+        const artifacts = await listArtifacts(env, repo, run.id);
+        const artifactNames = new Set(
+          artifacts.filter(artifact => !artifact.expired).map(artifact => artifact.name),
+        );
+        if (requiredArtifacts.every(name => artifactNames.has(name))) {
+          candidates.push({ repository: repo, run, artifacts });
+          found = true;
+          break;
+        }
+      }
+
+      if (found) break;
     }
   }
+
+  const latest = candidates.sort(
+    (a, b) => Date.parse(b.run.created_at) - Date.parse(a.run.created_at),
+  )[0];
+  if (latest) return latest;
 
   throw new HttpError(
     `no successful ${workflow} run contains ${requiredArtifacts.join(', ')}`,
@@ -47,14 +73,24 @@ export async function findRunWithArtifacts(
   env: Env,
   runId: number,
   requiredArtifacts: string[],
-): Promise<{ run: WorkflowRun; artifacts: Artifact[] }> {
-  const run = await githubJson<WorkflowRun>(env, `/repos/${repository(env)}/actions/runs/${runId}`);
-  const artifacts = await listArtifacts(env, runId);
-  const artifactNames = new Set(
-    artifacts.filter(artifact => !artifact.expired).map(artifact => artifact.name),
-  );
+): Promise<ActionArtifactMatch> {
+  for (const repo of actionRepositories(env)) {
+    try {
+      const run = await githubJson<WorkflowRun>(env, `/repos/${repo}/actions/runs/${runId}`);
+      const artifacts = await listArtifacts(env, repo, runId);
+      const artifactNames = new Set(
+        artifacts.filter(artifact => !artifact.expired).map(artifact => artifact.name),
+      );
 
-  if (requiredArtifacts.every(name => artifactNames.has(name))) return { run, artifacts };
+      if (requiredArtifacts.every(name => artifactNames.has(name))) {
+        return { repository: repo, run, artifacts };
+      }
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) continue;
+      throw error;
+    }
+  }
+
   throw new HttpError(
     `workflow run ${runId} does not contain ${requiredArtifacts.join(', ')}`,
     404,
@@ -64,35 +100,61 @@ export async function findRunWithArtifacts(
 export async function findLatestAnyRunWithArtifacts(
   env: Env,
   requiredArtifacts: string[],
-): Promise<{ run: WorkflowRun; artifacts: Artifact[] }> {
-  const artifacts = await Promise.all(
+): Promise<ActionArtifactMatch> {
+  const matches = await Promise.all(
     requiredArtifacts.map(name => findLatestArtifactByName(env, name)),
   );
-  const run = runFromArtifact(env, artifacts[0]);
+  const { repository: repo } = matches[0];
+  const artifacts = matches.map(match => match.artifact);
+  const run = runFromArtifact(repo, artifacts[0]);
 
-  if (artifacts.every(artifact => artifact.workflow_run?.id === run.id)) return { run, artifacts };
+  if (
+    matches.every(match => match.repository === repo) &&
+    artifacts.every(artifact => artifact.workflow_run?.id === run.id)
+  ) {
+    return { repository: repo, run, artifacts };
+  }
   throw new HttpError(`no single workflow run contains ${requiredArtifacts.join(', ')}`, 404);
 }
 
-export async function findLatestArtifactByName(env: Env, name: string): Promise<Artifact> {
-  const response = await githubJson<GitHubArtifactsResponse>(
-    env,
-    `/repos/${repository(env)}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=20`,
-  );
-  const artifact = response.artifacts.find(item => item.name === name && !item.expired);
-  if (!artifact) throw new HttpError(`actions artifact not found: ${name}`, 404);
-  return artifact;
+export async function findLatestArtifactByName(
+  env: Env,
+  name: string,
+): Promise<{ repository: string; artifact: Artifact }> {
+  const candidates: { repository: string; artifact: Artifact }[] = [];
+
+  for (const repo of actionRepositories(env)) {
+    let response: GitHubArtifactsResponse;
+    try {
+      response = await githubJson<GitHubArtifactsResponse>(
+        env,
+        `/repos/${repo}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=20`,
+      );
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) continue;
+      throw error;
+    }
+    const artifact = response.artifacts.find(item => item.name === name && !item.expired);
+    if (artifact) candidates.push({ repository: repo, artifact });
+  }
+
+  const latest = candidates.sort(
+    (a, b) => Date.parse(b.artifact.created_at) - Date.parse(a.artifact.created_at),
+  )[0];
+  if (latest) return latest;
+
+  throw new HttpError(`actions artifact not found: ${name}`, 404);
 }
 
 export async function latestRelease(env: Env): Promise<GitHubRelease> {
-  return githubJson<GitHubRelease>(env, `/repos/${repository(env)}/releases/latest`);
+  return githubJson<GitHubRelease>(env, `/repos/${releaseRepository(env)}/releases/latest`);
 }
 
 export async function releaseByTag(env: Env, version: string): Promise<GitHubRelease> {
   const tag = version.startsWith('v') ? version : `v${version}`;
   return githubJson<GitHubRelease>(
     env,
-    `/repos/${repository(env)}/releases/tags/${encodeURIComponent(tag)}`,
+    `/repos/${releaseRepository(env)}/releases/tags/${encodeURIComponent(tag)}`,
   );
 }
 
@@ -121,8 +183,12 @@ export function requireArtifact(artifacts: Artifact[], name: string): Artifact {
   return artifact;
 }
 
-export async function readVersionArtifact(env: Env, artifact: Artifact): Promise<string> {
-  const response = await githubFetch(env, artifactApiPath(env, artifact.id));
+export async function readVersionArtifact(
+  env: Env,
+  repo: string,
+  artifact: Artifact,
+): Promise<string> {
+  const response = await githubFetch(env, artifactApiPath(repo, artifact.id));
   if (!response.ok) throw new HttpError(`failed to download ${artifact.name}`, response.status);
 
   const zip = await response.arrayBuffer();
@@ -130,8 +196,12 @@ export async function readVersionArtifact(env: Env, artifact: Artifact): Promise
   return text.trim();
 }
 
-export async function fetchArtifactDownload(env: Env, artifactId: number): Promise<Response> {
-  return githubFetch(env, artifactApiPath(env, artifactId));
+export async function fetchArtifactDownload(
+  env: Env,
+  repo: string,
+  artifactId: number,
+): Promise<Response> {
+  return githubFetch(env, artifactApiPath(repo, artifactId));
 }
 
 export async function fetchReleaseAssetDownload(env: Env, assetApiUrl: string): Promise<Response> {
@@ -142,11 +212,11 @@ export async function fetchReleaseAssetDownload(env: Env, assetApiUrl: string): 
   return githubFetch(env, assetApiUrl, 'application/octet-stream');
 }
 
-function artifactApiPath(env: Env, artifactId: number): string {
-  return `/repos/${repository(env)}/actions/artifacts/${artifactId}/zip`;
+function artifactApiPath(repo: string, artifactId: number): string {
+  return `/repos/${repo}/actions/artifacts/${artifactId}/zip`;
 }
 
-function runFromArtifact(env: Env, artifact: Artifact): WorkflowRun {
+function runFromArtifact(repo: string, artifact: Artifact): WorkflowRun {
   const workflowRun = artifact.workflow_run;
   if (!workflowRun) throw new HttpError(`artifact missing workflow run: ${artifact.name}`, 502);
 
@@ -161,16 +231,16 @@ function runFromArtifact(env: Env, artifact: Artifact): WorkflowRun {
     status: 'completed',
     conclusion: 'success',
     workflow_id: 0,
-    html_url: `https://github.com/${repository(env)}/actions/runs/${workflowRun.id}`,
+    html_url: `https://github.com/${repo}/actions/runs/${workflowRun.id}`,
     created_at: artifact.created_at,
     updated_at: artifact.updated_at,
   };
 }
 
-async function listArtifacts(env: Env, runId: number): Promise<Artifact[]> {
+async function listArtifacts(env: Env, repo: string, runId: number): Promise<Artifact[]> {
   const response = await githubJson<GitHubArtifactsResponse>(
     env,
-    `/repos/${repository(env)}/actions/runs/${runId}/artifacts?per_page=100`,
+    `/repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`,
   );
   return response.artifacts;
 }

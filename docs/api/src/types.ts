@@ -1,6 +1,8 @@
 export type Env = {
   DOWNLOADS: R2Bucket;
   GITHUB_REPOSITORY?: string;
+  GITHUB_ACTION_REPOSITORIES?: string;
+  GITHUB_RELEASE_REPOSITORY?: string;
   GITHUB_BRANCH?: string;
   GITHUB_RUN_ID?: string;
   GITHUB_ARTIFACT_VERSION?: string;

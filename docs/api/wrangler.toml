@@ -7,6 +7,10 @@ compatibility_date = "2026-05-24"
 [vars]
 GITHUB_BRANCH = "master"
 GITHUB_REPOSITORY = "theMackabu/ant"
+
+GITHUB_RELEASE_REPOSITORY = "theMackabu/ant"
+GITHUB_ACTION_REPOSITORIES = "sf-tools/ant,theMackabu/ant"
+
 CACHE_TTL_SECONDS = "300"
 MANIFEST_REFRESH_SECONDS = "21600"
 
