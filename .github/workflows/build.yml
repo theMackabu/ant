@@ -73,6 +73,8 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - name: Download version artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -81,6 +83,7 @@ jobs:
           path: versions
 
       - name: Generate summary
+        id: version
         run: |
           VERSIONS=()
           for dir in versions/version-*; do
@@ -98,13 +101,14 @@ jobs:
             exit 1
           fi
 
+          echo "value=${UNIQUE[0]}" >> "$GITHUB_OUTPUT"
           echo "## Build Version: \`${UNIQUE[0]}\`" >> $GITHUB_STEP_SUMMARY
 
   refresh-manifest:
     name: Refresh manifest
-    needs: [build, nanos-x64, nanos-aarch64]
+    needs: [build, nanos-x64, nanos-aarch64, summary]
     runs-on: ubuntu-latest
-    if: ${{ always() && !cancelled() && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
+    if: ${{ always() && !cancelled() && needs.summary.result == 'success' && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
     steps:
       - name: Refresh manifest
         env:
@@ -114,4 +118,5 @@ jobs:
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${GITHUB_REF_NAME}" \
             --data-urlencode "run_id=${GITHUB_RUN_ID}" \
+            --data-urlencode "version=${{ needs.summary.outputs.version }}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"

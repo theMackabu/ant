@@ -1,4 +1,5 @@
 import {
+  artifactVersion,
   actionsRunId,
   branch,
   BUILD_WORKFLOW,
@@ -327,7 +328,7 @@ async function resolveActionAntFromArtifacts(
   const versionArtifact = artifacts.find(
     item => item.name === `version-${target.artifact}` && !item.expired,
   );
-  let version: string | undefined;
+  let version = artifactVersion(env);
 
   if (versionArtifact) {
     try {

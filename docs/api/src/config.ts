@@ -28,18 +28,21 @@ export function actionsRunId(env: Env): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+export function artifactVersion(env: Env): string | undefined {
+  const version = env.GITHUB_ARTIFACT_VERSION?.trim();
+  return version || undefined;
+}
+
 export function withBranch(env: Env, value: string): Env {
-  return {
-    ...env,
-    GITHUB_BRANCH: value,
-  };
+  return { ...env, GITHUB_BRANCH: value };
 }
 
 export function withActionsRun(env: Env, value: string): Env {
-  return {
-    ...env,
-    GITHUB_RUN_ID: value,
-  };
+  return { ...env, GITHUB_RUN_ID: value };
+}
+
+export function withArtifactVersion(env: Env, value: string): Env {
+  return { ...env, GITHUB_ARTIFACT_VERSION: value };
 }
 
 export function cacheTtl(env: Env): number {

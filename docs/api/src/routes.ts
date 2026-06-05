@@ -5,10 +5,15 @@ import type { Context } from 'hono';
 import { HttpError } from './errors';
 import { cachedJson } from './http-cache';
 import { routeIndex } from './route-index';
-import { branch, repository, withActionsRun, withBranch } from './config';
+import { branch, repository, withActionsRun, withArtifactVersion, withBranch } from './config';
 import { downloadArtifact } from './downloads';
 import { resolveArch, resolveTarget } from './targets';
-import { BranchQuerySchema, DownloadParamsSchema, VersionQuerySchema } from './schemas';
+import {
+  BranchQuerySchema,
+  DownloadParamsSchema,
+  RefreshQuerySchema,
+  VersionQuerySchema,
+} from './schemas';
 import { cachedManifest, forceRefreshManifest } from './manifest-cache';
 import {
   latestAntVersion,
@@ -57,7 +62,7 @@ app.get('/v1/latest', c => {
 });
 
 app.post('/v1/refresh', c => {
-  const env = requestEnv(c);
+  const env = refreshEnv(c);
   const auth = c.req.header('Authorization') || '';
   const expected = env.MANIFEST_REFRESH_TOKEN;
   if (!expected || auth !== `Bearer ${expected}`) return c.json({ error: 'unauthorized' }, 401);
@@ -123,6 +128,16 @@ function requestEnv(c: AppContext): Env {
     (headerRunId ? BranchQuerySchema.parse({ run_id: headerRunId }).run_id : undefined);
   const branchEnv = requestedBranch ? withBranch(c.env, requestedBranch) : c.env;
   return requestedRunId ? withActionsRun(branchEnv, requestedRunId) : branchEnv;
+}
+
+function refreshEnv(c: AppContext): Env {
+  const env = requestEnv(c);
+  const query = RefreshQuerySchema.parse(c.req.query());
+  const headerVersion = c.req.header('X-Ant-Version');
+  const requestedVersion =
+    query.version ||
+    (headerVersion ? RefreshQuerySchema.parse({ version: headerVersion }).version : undefined);
+  return requestedVersion ? withArtifactVersion(env, requestedVersion) : env;
 }
 
 export default app;

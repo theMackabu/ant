@@ -8,6 +8,13 @@ const BranchSchema = z
   .regex(/^[A-Za-z0-9._/-]+$/, 'branch contains unsupported characters')
   .refine(value => !value.includes('..'), 'branch cannot contain ..');
 
+const ArtifactVersionSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9._+-]+$/, 'version contains unsupported characters');
+
 export const VersionQuerySchema = z
   .object({
     current: z.string().optional(),
@@ -59,4 +66,8 @@ export const BranchQuerySchema = z.object({
     .string()
     .regex(/^[1-9][0-9]*$/)
     .optional(),
+});
+
+export const RefreshQuerySchema = BranchQuerySchema.extend({
+  version: ArtifactVersionSchema.optional(),
 });

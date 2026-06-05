@@ -3,6 +3,7 @@ export type Env = {
   GITHUB_REPOSITORY?: string;
   GITHUB_BRANCH?: string;
   GITHUB_RUN_ID?: string;
+  GITHUB_ARTIFACT_VERSION?: string;
   GITHUB_TOKEN?: string;
   MANIFEST_REFRESH_TOKEN?: string;
   CACHE_TTL_SECONDS?: string;
