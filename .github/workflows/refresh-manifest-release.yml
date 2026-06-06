@@ -21,9 +21,15 @@ jobs:
       - name: Refresh manifest
         env:
           MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
-          UPSTREAM_BRANCH: ${{ github.event.release.target_commitish || github.event.repository.default_branch || github.ref_name }}
+          UPSTREAM_REF: ${{ github.event.release.target_commitish || github.event.repository.default_branch || github.ref_name }}
         if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
         run: |
+          UPSTREAM_BRANCH="${UPSTREAM_REF:-${GITHUB_REF_NAME:-master}}"
+          if [[ -z "$UPSTREAM_BRANCH" ]]; then
+            echo "::error::Could not resolve manifest branch"
+            exit 1
+          fi
+
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${UPSTREAM_BRANCH}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"
