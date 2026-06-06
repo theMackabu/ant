@@ -70,7 +70,7 @@ jobs:
           fi
           apt-get update
           apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
-            python3-pip ninja-build cmake pkg-config jq
+            python3-pip ninja-build cmake pkg-config jq xz-utils
           curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
           apt-get install -y nodejs
           pip3 install meson tomli
