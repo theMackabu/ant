@@ -71,7 +71,7 @@ custom_target(
   output: 'libant.h',
   command: [
     'bash', meson.project_source_root() / 'scripts' / 'header.sh',
-    '@OUTPUT@', ant_version, timestamp, git_hash, target_triple,
+    '@OUTPUT@', ant_version, timestamp, git_hash, git_longhash, target_triple,
   ],
   build_by_default: true,
   build_always_stale: true

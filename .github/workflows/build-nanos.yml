@@ -149,8 +149,16 @@ jobs:
             exit 1
           fi
 
+          source_run=$(curl -fsSL "${headers[@]}" "${api}/actions/runs/${source_run_id}")
+          source_sha=$(jq -r '.head_sha // empty' <<<"$source_run")
+          if [[ ! "$source_sha" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+            echo "::error::failed to resolve source revision for workflow run ${source_run_id}"
+            exit 1
+          fi
+
           echo "Using ${NANOS_ARTIFACT} from workflow run ${source_run_id}"
           echo "run_id=${source_run_id}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${source_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Download ant binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -230,12 +238,12 @@ jobs:
           chmod +x ant
 
           kernel_path="$PWD/ant-kernel-${SANDBOX_ARCH}.img"
-          ant_version=$(./ant --version-raw | tr -d '[:space:]')
-          if [[ -z "$ant_version" ]]; then
-            echo "::error::failed to read Ant version from downloaded binary"
+          ant_revision="${{ steps.source.outputs.head_sha }}"
+          if [[ ! "$ant_revision" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+            echo "::error::failed to resolve Ant revision from source run"
             exit 1
           fi
-          echo "ant_version=${ant_version}" >> "$GITHUB_OUTPUT"
+          echo "ant_revision=${ant_revision}" >> "$GITHUB_OUTPUT"
           ops_home="$RUNNER_TEMP/ant-ops-home"
           case "$SANDBOX_ARCH" in
             aarch64) ops_kernel="$RUNNER_TEMP/ant-kernel-arm.img" ;;
@@ -252,7 +260,7 @@ jobs:
           cat > ops-sandbox.json <<JSON
           {
             "Kernel": "$ops_kernel",
-            "NanosVersion": "$ant_version",
+            "NanosVersion": "$ant_revision",
             "Env": {
               "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
             }
@@ -321,5 +329,5 @@ jobs:
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${GITHUB_REF_NAME}" \
             --data-urlencode "run_id=${GITHUB_RUN_ID}" \
-            --data-urlencode "version=${{ steps.image.outputs.ant_version }}" \
+            --data-urlencode "revision=${{ steps.image.outputs.ant_revision }}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"

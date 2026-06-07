@@ -12,6 +12,12 @@ export const DEFAULT_RELEASE_REPOSITORY = 'theMackabu/ant';
 export const DEFAULT_CACHE_TTL_SECONDS = 300;
 export const DEFAULT_MANIFEST_REFRESH_SECONDS = 21600;
 
+export type RequestOptions = {
+  branch?: string;
+  runId?: number;
+  revision?: string;
+};
+
 export function canDownloadActionsArtifacts(env: Env): boolean {
   return Boolean(env.GITHUB_TOKEN);
 }
@@ -36,32 +42,16 @@ export function actionRepositories(env: Env): string[] {
   return repos.length ? [...new Set(repos)] : DEFAULT_ACTION_REPOSITORIES;
 }
 
-export function branch(env: Env): string {
-  return env.GITHUB_BRANCH || DEFAULT_BRANCH;
+export function branch(env: Env, options?: RequestOptions): string {
+  return options?.branch || env.GITHUB_BRANCH || DEFAULT_BRANCH;
 }
 
-export function actionsRunId(env: Env): number | undefined {
+export function actionsRunId(env: Env, options?: RequestOptions): number | undefined {
+  if (options?.runId) return options.runId;
   const raw = env.GITHUB_RUN_ID;
   if (!raw) return undefined;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-export function artifactVersion(env: Env): string | undefined {
-  const version = env.GITHUB_ARTIFACT_VERSION?.trim();
-  return version || undefined;
-}
-
-export function withBranch(env: Env, value: string): Env {
-  return { ...env, GITHUB_BRANCH: value };
-}
-
-export function withActionsRun(env: Env, value: string): Env {
-  return { ...env, GITHUB_RUN_ID: value };
-}
-
-export function withArtifactVersion(env: Env, value: string): Env {
-  return { ...env, GITHUB_ARTIFACT_VERSION: value };
 }
 
 export function cacheTtl(env: Env): number {

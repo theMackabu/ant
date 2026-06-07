@@ -1,4 +1,5 @@
 import { branch, manifestRefreshSeconds, repository } from './config';
+import type { RequestOptions } from './config';
 import { annotateGzipSizes, prefetchArtifacts } from './downloads';
 import type { Env, ResolvedArtifact } from './types';
 
@@ -10,10 +11,11 @@ type ManifestProducer = () => Promise<unknown>;
 
 export async function cachedManifest(
   env: Env,
+  options: RequestOptions,
   ctx: WaitUntilContext,
   producer: ManifestProducer,
 ): Promise<Response> {
-  const key = manifestKey(env);
+  const key = manifestKey(env, options);
   const cached = await env.DOWNLOADS.get(key);
 
   if (cached) {
@@ -24,7 +26,7 @@ export async function cachedManifest(
 
     if (shouldRefreshManifest(env, cached)) {
       headers.set('X-Ant-Manifest-Refresh', 'background');
-      ctx.waitUntil(refreshManifest(env, key, producer));
+      ctx.waitUntil(refreshManifest(env, options, key, producer));
     }
 
     return new Response(
@@ -38,20 +40,21 @@ export async function cachedManifest(
 
   const body = await producer();
   const response = manifestResponse(body, 'miss');
-  ctx.waitUntil(storeManifestAndPrefetch(env, key, body));
+  ctx.waitUntil(storeManifestAndPrefetch(env, options, key, body));
   return response;
 }
 
 export async function forceRefreshManifest(
   env: Env,
+  options: RequestOptions,
   ctx: WaitUntilContext,
   producer: ManifestProducer,
 ): Promise<Response> {
-  const key = manifestKey(env);
+  const key = manifestKey(env, options);
   const body = await producer();
   await prefetchArtifacts(env, manifestArtifacts(body));
   const annotated = await annotateGzipSizes(env, body);
-  await storeManifest(env, key, annotated);
+  await storeManifest(env, options, key, annotated);
 
   return Response.json(
     {
@@ -64,20 +67,20 @@ export async function forceRefreshManifest(
   );
 }
 
-async function refreshManifest(env: Env, key: string, producer: ManifestProducer): Promise<void> {
+async function refreshManifest(env: Env, options: RequestOptions, key: string, producer: ManifestProducer): Promise<void> {
   try {
-    await storeManifestAndPrefetch(env, key, await producer());
+    await storeManifestAndPrefetch(env, options, key, await producer());
   } catch (error) {
     console.warn(`failed to refresh manifest cache ${key}`, error);
   }
 }
 
-async function storeManifestAndPrefetch(env: Env, key: string, body: unknown): Promise<void> {
+async function storeManifestAndPrefetch(env: Env, options: RequestOptions, key: string, body: unknown): Promise<void> {
   await prefetchArtifacts(env, manifestArtifacts(body));
-  await storeManifest(env, key, await annotateGzipSizes(env, body));
+  await storeManifest(env, options, key, await annotateGzipSizes(env, body));
 }
 
-async function storeManifest(env: Env, key: string, body: unknown): Promise<void> {
+async function storeManifest(env: Env, options: RequestOptions, key: string, body: unknown): Promise<void> {
   await env.DOWNLOADS.put(key, JSON.stringify(body, null, 2) + '\n', {
     httpMetadata: {
       contentType: 'application/json; charset=utf-8',
@@ -85,7 +88,7 @@ async function storeManifest(env: Env, key: string, body: unknown): Promise<void
     },
     customMetadata: {
       repository: repository(env),
-      branch: branch(env),
+      branch: branch(env, options),
       cached_at: new Date().toISOString(),
     },
   });
@@ -103,8 +106,8 @@ function shouldRefreshManifest(env: Env, object: R2Object): boolean {
   return Date.now() - cachedAt > manifestRefreshSeconds(env) * 1000;
 }
 
-function manifestKey(env: Env): string {
-  return `manifests/latest/${repository(env)}/${branch(env)}.json`;
+function manifestKey(env: Env, options: RequestOptions): string {
+  return `manifests/latest/${repository(env)}/${branch(env, options)}.json`;
 }
 
 function jsonHeaders(): Headers {

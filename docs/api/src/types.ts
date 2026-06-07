@@ -5,7 +5,6 @@ export type Env = {
   GITHUB_RELEASE_REPOSITORY?: string;
   GITHUB_BRANCH?: string;
   GITHUB_RUN_ID?: string;
-  GITHUB_ARTIFACT_VERSION?: string;
   GITHUB_TOKEN?: string;
   MANIFEST_REFRESH_TOKEN?: string;
   CACHE_TTL_SECONDS?: string;
@@ -78,6 +77,7 @@ export type ReleaseAsset = {
 export type GitHubRelease = {
   id: number;
   tag_name: string;
+  target_commitish?: string;
   name: string | null;
   html_url: string;
   published_at: string | null;
@@ -101,6 +101,7 @@ export type ResolvedArtifact = {
   kind: ArtifactKind;
   name: string;
   version?: string;
+  revision?: string;
   download_url: string;
   gzip_url?: string;
   gzip_size_in_bytes?: number;

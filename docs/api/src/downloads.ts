@@ -37,6 +37,7 @@ export async function downloadArtifact(
   headers.set('X-Ant-Source', artifact.source.type);
 
   if (artifact.version) headers.set('X-Ant-Version', artifact.version);
+  if (artifact.revision) headers.set('X-Ant-Revision', artifact.revision);
   headers.set('Access-Control-Allow-Origin', '*');
 
   if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
@@ -54,6 +55,7 @@ export async function downloadArtifact(
         kind: artifact.kind,
         source: artifact.source.type,
         version: artifact.version || '',
+        revision: artifact.revision || '',
       },
     }).catch(error => console.warn(`failed to cache ${r2Key} in R2`, error)),
   );
@@ -213,6 +215,7 @@ function metadataFor(artifact: ResolvedArtifact): Record<string, string> {
     kind: artifact.kind,
     source: artifact.source.type,
     version: artifact.version || '',
+    revision: artifact.revision || '',
     zip_entry: artifact.zip_entry || '',
   };
 }
@@ -254,6 +257,7 @@ function downloadHeaders(
   headers.set('X-Ant-Artifact', artifact.name);
   headers.set('X-Ant-Source', artifact.source.type);
   if (artifact.version) headers.set('X-Ant-Version', artifact.version);
+  if (artifact.revision) headers.set('X-Ant-Revision', artifact.revision);
   if (contentLength !== undefined) headers.set('Content-Length', String(contentLength));
   if (encoding) {
     headers.set('X-Ant-Compression', encoding);
@@ -322,6 +326,8 @@ function r2DownloadResponse(
 
   const version = object.customMetadata?.version || artifact.version;
   if (version) headers.set('X-Ant-Version', version);
+  const revision = object.customMetadata?.revision || artifact.revision;
+  if (revision) headers.set('X-Ant-Revision', revision);
   if (!headers.has('Cache-Control')) {
     headers.set('Cache-Control', `public, max-age=${DEFAULT_CACHE_TTL_SECONDS}`);
   }

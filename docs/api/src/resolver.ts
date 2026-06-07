@@ -1,5 +1,4 @@
 import {
-  artifactVersion,
   actionsRunId,
   branch,
   BUILD_WORKFLOW,
@@ -8,6 +7,7 @@ import {
   MUSL_SANDBOX_WORKFLOW,
   releaseRepository,
 } from './config';
+import type { RequestOptions } from './config';
 import { HttpError, isNotFound } from './errors';
 import {
   fetchArtifactDownload,
@@ -18,6 +18,7 @@ import {
   findRunWithArtifacts,
   latestRelease,
   releaseByTag,
+  releaseTagRevision,
   readVersionArtifact,
   requireArtifact,
 } from './github';
@@ -35,7 +36,7 @@ import type {
   WorkflowRun,
 } from './types';
 
-export async function latestManifest(url: URL, env: Env) {
+export async function latestManifest(url: URL, env: Env, options: RequestOptions = {}) {
   const ant = await Promise.all(
     antTargets.map(target =>
       resolveManifestEntry(
@@ -45,20 +46,20 @@ export async function latestManifest(url: URL, env: Env) {
           arch: target.arch,
           libc: target.libc,
         },
-        () => resolveAnt(env, target, url),
+        () => resolveAnt(env, target, url, options),
       ),
     ),
   );
 
   const sandbox = await Promise.all(
     ['x64', 'aarch64'].map(arch =>
-      resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'sandbox', arch, url)),
+      resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'sandbox', arch, url, options)),
     ),
   );
 
   const kernel = await Promise.all(
     ['x64', 'aarch64'].map(arch =>
-      resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'kernel', arch, url)),
+      resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'kernel', arch, url, options)),
     ),
   );
 
@@ -128,9 +129,7 @@ async function resolveManifestEntry<T extends Record<string, unknown>>(
 }
 
 type VersionCheckQuery = {
-  kind: ArtifactKind;
   target?: string;
-  arch?: string;
   current: string;
 };
 
@@ -145,45 +144,47 @@ export async function latestAntVersion(env: Env) {
   };
 }
 
-export async function versionCheck(url: URL, env: Env, query: VersionCheckQuery) {
+export async function versionCheck(
+  url: URL,
+  env: Env,
+  query: VersionCheckQuery,
+  options: RequestOptions = {},
+) {
   const [release, latest] = await Promise.all([
     latestRelease(env),
-    query.kind === 'ant'
-      ? await resolveAnt(env, resolveTarget(query.target || ''), url)
-      : await resolveNanosArtifact(env, query.kind, resolveVersionArch(query), url),
+    resolveAnt(env, resolveTarget(query.target || ''), url, options),
   ]);
   const current = normalizeVersion(query.current);
   const latestVersion = normalizeVersion(release.tag_name);
 
   return {
     schema: 1,
-    kind: query.kind,
-    target: query.kind === 'ant' ? query.target : `${query.kind}-${resolveVersionArch(query)}`,
+    kind: 'ant',
+    target: query.target,
     current: current || null,
     latest: latestVersion,
-    latest_sha: latest.source.type === 'actions' ? latest.source.head_sha : null,
+    latest_sha: latest.revision || (latest.source.type === 'actions' ? latest.source.head_sha : null),
     out_of_date: isOutOfDate(current, latestVersion, undefined),
     download_url: latest.download_url,
     source: latest.source,
   };
 }
 
-function resolveVersionArch(query: VersionCheckQuery): string {
-  const raw = query.arch || (query.target || '').replace(/^(sandbox|kernel)-/, '');
-  if (raw === 'x64' || raw === 'aarch64') return raw;
-  throw new HttpError(`unknown arch: ${raw || '(missing)'}`, 400);
-}
-
-export async function resolveAnt(env: Env, target: AntTarget, url: URL): Promise<ResolvedArtifact> {
+export async function resolveAnt(
+  env: Env,
+  target: AntTarget,
+  url: URL,
+  options: RequestOptions = {},
+): Promise<ResolvedArtifact> {
   if (!canDownloadActionsArtifacts(env)) {
-    return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url);
+    return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url, options);
   }
 
   try {
-    return await resolveActionAnt(env, target, url);
+    return await resolveActionAnt(env, target, url, options);
   } catch (error) {
     if (!isNotFound(error)) throw error;
-    return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url);
+    return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url, options);
   }
 }
 
@@ -193,6 +194,7 @@ export async function resolveNamedArtifact(
   workflow: string,
   artifactName: string,
   url: URL,
+  options: RequestOptions = {},
 ): Promise<ResolvedArtifact> {
   const arch = artifactName.endsWith('aarch64') ? 'aarch64' : 'x64';
 
@@ -203,18 +205,19 @@ export async function resolveNamedArtifact(
       artifactName,
       arch,
       url,
+      options,
       'actions artifact lookup skipped because GITHUB_TOKEN is not configured',
     );
   }
 
   try {
-    return await resolveActionNamedArtifact(env, kind, workflow, artifactName, arch, url);
+    return await resolveActionNamedArtifact(env, kind, workflow, artifactName, arch, url, options);
   } catch (error) {
     if (!isNotFound(error)) throw error;
     const primaryReason = error instanceof Error ? error.message : 'actions artifact not found';
 
     try {
-      return await resolveAnyActionNamedArtifact(env, kind, artifactName, arch, url);
+      return await resolveAnyActionNamedArtifact(env, kind, artifactName, arch, url, options);
     } catch (fallbackError) {
       if (!isNotFound(fallbackError)) throw fallbackError;
       const fallbackReason =
@@ -225,6 +228,7 @@ export async function resolveNamedArtifact(
         artifactName,
         arch,
         url,
+        options,
         `${primaryReason}; ${fallbackReason}`,
       );
     }
@@ -236,6 +240,7 @@ export async function resolveNanosArtifact(
   kind: Extract<ArtifactKind, 'sandbox' | 'kernel'>,
   arch: string,
   url: URL,
+  options: RequestOptions = {},
 ): Promise<ResolvedArtifact> {
   const artifact = await resolveNamedArtifact(
     env,
@@ -243,6 +248,7 @@ export async function resolveNanosArtifact(
     MUSL_SANDBOX_WORKFLOW,
     `ant-sandbox-${arch}`,
     url,
+    options,
   );
 
   const filename = kind === 'kernel' ? `ant-kernel-${arch}.img` : `ant-sandbox-${arch}.img`;
@@ -293,17 +299,22 @@ function gzipUrl(downloadUrl: string): string {
   return url.toString();
 }
 
-async function resolveActionAnt(env: Env, target: AntTarget, url: URL): Promise<ResolvedArtifact> {
-  const runId = actionsRunId(env);
+async function resolveActionAnt(
+  env: Env,
+  target: AntTarget,
+  url: URL,
+  options: RequestOptions,
+): Promise<ResolvedArtifact> {
+  const runId = actionsRunId(env, options);
   if (runId) {
     try {
-      return await resolveActionAntFromRun(env, target, url, runId);
+      return await resolveActionAntFromRun(env, target, url, runId, options);
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
   }
 
-  const match = await findLatestRunWithArtifacts(env, BUILD_WORKFLOW, branch(env), [
+  const match = await findLatestRunWithArtifacts(env, BUILD_WORKFLOW, branch(env, options), [
     target.artifact,
   ]);
   return resolveActionAntFromArtifacts(
@@ -313,6 +324,7 @@ async function resolveActionAnt(env: Env, target: AntTarget, url: URL): Promise<
     match.repository,
     match.run,
     match.artifacts,
+    options,
   );
 }
 
@@ -321,6 +333,7 @@ async function resolveActionAntFromRun(
   target: AntTarget,
   url: URL,
   runId: number,
+  options: RequestOptions,
 ): Promise<ResolvedArtifact> {
   const match = await findRunWithArtifacts(env, runId, [target.artifact]);
   return resolveActionAntFromArtifacts(
@@ -330,6 +343,7 @@ async function resolveActionAntFromRun(
     match.repository,
     match.run,
     match.artifacts,
+    options,
   );
 }
 
@@ -340,12 +354,13 @@ async function resolveActionAntFromArtifacts(
   sourceRepository: string,
   run: WorkflowRun,
   artifacts: Artifact[],
+  options: RequestOptions,
 ): Promise<ResolvedArtifact> {
   const artifact = requireArtifact(artifacts, target.artifact);
   const versionArtifact = artifacts.find(
     item => item.name === `version-${target.artifact}` && !item.expired,
   );
-  let version = artifactVersion(env);
+  let version: string | undefined;
 
   if (versionArtifact) {
     try {
@@ -359,8 +374,9 @@ async function resolveActionAntFromArtifacts(
     'ant',
     artifact,
     version,
+    options.revision || run.head_sha,
     actionSourceInfo(sourceRepository, BUILD_WORKFLOW, run),
-    downloadUrl(url, 'ant', target.key, branch(env), run.id),
+    downloadUrl(url, 'ant', target.key, branch(env, options), run.id),
   );
 
   resolved.zip_entry = target.os === 'windows' ? 'ant.exe' : 'ant';
@@ -376,8 +392,9 @@ async function resolveActionNamedArtifact(
   artifactName: string,
   arch: string,
   url: URL,
+  options: RequestOptions,
 ): Promise<ResolvedArtifact> {
-  const runId = actionsRunId(env);
+  const runId = actionsRunId(env, options);
   if (runId) {
     try {
       const match = await findRunWithArtifacts(env, runId, [artifactName]);
@@ -385,23 +402,25 @@ async function resolveActionNamedArtifact(
       return resolvedAction(
         kind,
         artifact,
-        artifactVersion(env),
+        undefined,
+        options.revision || match.run.head_sha,
         actionSourceInfo(match.repository, match.run.path || workflow, match.run),
-        downloadUrl(url, kind, arch, branch(env), runId),
+        downloadUrl(url, kind, arch, branch(env, options), runId),
       );
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
   }
 
-  const match = await findLatestRunWithArtifacts(env, workflow, branch(env), [artifactName]);
+  const match = await findLatestRunWithArtifacts(env, workflow, branch(env, options), [artifactName]);
   const artifact = requireArtifact(match.artifacts, artifactName);
   return resolvedAction(
     kind,
     artifact,
-    artifactVersion(env),
+    undefined,
+    options.revision || match.run.head_sha,
     actionSourceInfo(match.repository, workflow, match.run),
-    downloadUrl(url, kind, arch, branch(env), match.run.id),
+    downloadUrl(url, kind, arch, branch(env, options), match.run.id),
   );
 }
 
@@ -411,15 +430,17 @@ async function resolveAnyActionNamedArtifact(
   artifactName: string,
   arch: string,
   url: URL,
+  options: RequestOptions,
 ): Promise<ResolvedArtifact> {
   const match = await findLatestAnyRunWithArtifacts(env, [artifactName]);
   const artifact = requireArtifact(match.artifacts, artifactName);
   return resolvedAction(
     kind,
     artifact,
-    artifactVersion(env),
+    undefined,
+    options.revision || match.run.head_sha,
     actionSourceInfo(match.repository, match.run.path || match.run.name, match.run),
-    downloadUrl(url, kind, arch, branch(env), match.run.id),
+    downloadUrl(url, kind, arch, branch(env, options), match.run.id),
   );
 }
 
@@ -427,13 +448,15 @@ function resolvedAction(
   kind: ArtifactKind,
   artifact: Artifact,
   version: string | undefined,
+  revision: string,
   source: ActionSourceInfo,
   download_url: string,
 ): ResolvedArtifact {
   return {
     kind,
     name: artifact.name,
-    version,
+    version: kind === 'ant' ? version : undefined,
+    revision,
     download_url,
     artifact: {
       id: artifact.id,
@@ -453,17 +476,20 @@ async function resolveReleaseArtifact(
   artifactName: string,
   downloadName: string,
   url: URL,
+  options: RequestOptions,
 ): Promise<ResolvedArtifact> {
   const release = await latestRelease(env);
   const asset = findReleaseAsset(release, artifactName);
   if (!asset) throw new HttpError(`release asset not found: ${artifactName}`, 404);
 
   const version = normalizeVersion(release.tag_name);
+  const revision = await releaseTagRevision(env, release);
   return {
     kind,
     name: asset.name,
-    version,
-    download_url: downloadUrl(url, kind, downloadName, branch(env), actionsRunId(env)),
+    version: kind === 'ant' ? version : undefined,
+    revision,
+    download_url: downloadUrl(url, kind, downloadName, branch(env, options), actionsRunId(env, options)),
     artifact: {
       id: asset.id,
       name: asset.name,
@@ -478,19 +504,22 @@ async function resolveReleaseArtifact(
   };
 }
 
-function resolveReleaseAsset(
+async function resolveReleaseAsset(
   env: Env,
   release: GitHubRelease,
   kind: ArtifactKind,
   artifactName: string,
-): ResolvedArtifact {
+): Promise<ResolvedArtifact> {
   const asset = findReleaseAsset(release, artifactName);
   if (!asset) throw new HttpError(`release asset not found: ${artifactName}`, 404);
+  const version = normalizeVersion(release.tag_name);
+  const revision = await releaseTagRevision(env, release);
 
   return {
     kind,
     name: asset.name,
-    version: normalizeVersion(release.tag_name),
+    version: kind === 'ant' ? version : undefined,
+    revision,
     download_url: asset.browser_download_url,
     artifact: {
       id: asset.id,
@@ -512,10 +541,11 @@ async function resolveReleaseAfterActionsMiss(
   artifactName: string,
   downloadName: string,
   url: URL,
+  options: RequestOptions,
   actionsReason: string,
 ): Promise<ResolvedArtifact> {
   try {
-    return await resolveReleaseArtifact(env, kind, artifactName, downloadName, url);
+    return await resolveReleaseArtifact(env, kind, artifactName, downloadName, url, options);
   } catch (error) {
     if (!isNotFound(error)) throw error;
     const releaseReason = error instanceof Error ? error.message : 'release asset not found';

@@ -6,11 +6,12 @@ OUTPUT="$1"
 ANT_VERSION="$2"
 ANT_BUILD_TIMESTAMP="$3"
 ANT_GIT_HASH="$4"
-ANT_TARGET_TRIPLE="$5"
+ANT_GIT_LONGHASH="$5"
+ANT_TARGET_TRIPLE="$6"
 INCLUDE_DIR="$ROOT_DIR/include"
 
 if [ -z "$OUTPUT" ] || [ -z "$ANT_VERSION" ]; then
-  echo "Usage: $0 <output.h> <version> <timestamp> <git_hash> <target_triple>"
+  echo "Usage: $0 <output.h> <version> <timestamp> <git_hash> <git_longhash> <target_triple>"
   exit 1
 fi
 
@@ -87,6 +88,7 @@ struct arg_file;
 #define ANT_VERSION "$ANT_VERSION"
 #define ANT_BUILD_TIMESTAMP $ANT_BUILD_TIMESTAMP
 #define ANT_GIT_HASH "$ANT_GIT_HASH"
+#define ANT_GIT_LONGHASH "$ANT_GIT_LONGHASH"
 #define ANT_TARGET_TRIPLE "$ANT_TARGET_TRIPLE"
 
 EOF

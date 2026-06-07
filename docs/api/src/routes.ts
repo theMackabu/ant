@@ -5,7 +5,8 @@ import type { Context } from 'hono';
 import { HttpError } from './errors';
 import { cachedJson } from './http-cache';
 import { routeIndex } from './route-index';
-import { branch, repository, withActionsRun, withArtifactVersion, withBranch } from './config';
+import { branch, repository } from './config';
+import type { RequestOptions } from './config';
 import { downloadArtifact } from './downloads';
 import { resolveArch, resolveTarget } from './targets';
 import {
@@ -57,17 +58,21 @@ app.notFound(c => c.json({ error: 'not found' }, 404));
 app.get('/', c => c.json(routeIndex(new URL(c.req.url))));
 
 app.get('/v1/latest', c => {
-  const env = requestEnv(c);
-  return cachedManifest(env, c.executionCtx, () => latestManifest(new URL(c.req.url), env));
+  const options = requestOptions(c);
+  return cachedManifest(c.env, options, c.executionCtx, () =>
+    latestManifest(new URL(c.req.url), c.env, options),
+  );
 });
 
 app.post('/v1/refresh', c => {
-  const env = refreshEnv(c);
+  const options = refreshOptions(c);
   const auth = c.req.header('Authorization') || '';
-  const expected = env.MANIFEST_REFRESH_TOKEN;
+  const expected = c.env.MANIFEST_REFRESH_TOKEN;
   if (!expected || auth !== `Bearer ${expected}`) return c.json({ error: 'unauthorized' }, 401);
 
-  return forceRefreshManifest(env, c.executionCtx, () => latestManifest(new URL(c.req.url), env));
+  return forceRefreshManifest(c.env, options, c.executionCtx, () =>
+    latestManifest(new URL(c.req.url), c.env, options),
+  );
 });
 
 app.get('/v1/version', c => versionRoute(c));
@@ -93,30 +98,30 @@ app.get('/v1/version/:version', c => {
 });
 
 app.on(['GET', 'HEAD'], '/v1/download/:kind/:name', async c => {
-  const env = requestEnv(c);
+  const options = requestOptions(c);
   const params = DownloadParamsSchema.parse(c.req.param());
   const url = new URL(c.req.url);
   const artifact =
     params.kind === 'ant'
-      ? await resolveAnt(env, resolveTarget(params.name), url)
+      ? await resolveAnt(c.env, resolveTarget(params.name), url, options)
       : params.kind === 'sandbox'
-        ? await resolveNanosArtifact(env, 'sandbox', resolveArch(params.name), url)
-        : await resolveNanosArtifact(env, 'kernel', resolveArch(params.name), url);
+        ? await resolveNanosArtifact(c.env, 'sandbox', resolveArch(params.name), url, options)
+        : await resolveNanosArtifact(c.env, 'kernel', resolveArch(params.name), url, options);
 
-  return downloadArtifact(c.req.raw, env, c.executionCtx, artifact);
+  return downloadArtifact(c.req.raw, c.env, c.executionCtx, artifact);
 });
 
 async function versionRoute(c: AppContext) {
   const query = VersionQuerySchema.parse(c.req.query());
-  const env = requestEnv(c);
-  const cacheKey = `version:${repository(env)}:${branch(env)}:${query.kind || ''}:${query.arch || ''}:${query.target}:${query.current}`;
+  const options = requestOptions(c);
+  const cacheKey = `version:${repository(c.env)}:${branch(c.env, options)}:${query.target}:${query.current}`;
 
   return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () =>
-    versionCheck(new URL(c.req.url), env, query),
+    versionCheck(new URL(c.req.url), c.env, query, options),
   );
 }
 
-function requestEnv(c: AppContext): Env {
+function requestOptions(c: AppContext): RequestOptions {
   const query = BranchQuerySchema.parse(c.req.query());
   const headerBranch = c.req.header('X-Ant-Branch');
   const headerRunId = c.req.header('X-GitHub-Run-Id');
@@ -126,18 +131,25 @@ function requestEnv(c: AppContext): Env {
   const requestedRunId =
     query.run_id ||
     (headerRunId ? BranchQuerySchema.parse({ run_id: headerRunId }).run_id : undefined);
-  const branchEnv = requestedBranch ? withBranch(c.env, requestedBranch) : c.env;
-  return requestedRunId ? withActionsRun(branchEnv, requestedRunId) : branchEnv;
+  return {
+    branch: requestedBranch,
+    runId: requestedRunId ? Number(requestedRunId) : undefined,
+  };
 }
 
-function refreshEnv(c: AppContext): Env {
-  const env = requestEnv(c);
+function refreshOptions(c: AppContext): RequestOptions {
+  const options = requestOptions(c);
   const query = RefreshQuerySchema.parse(c.req.query());
-  const headerVersion = c.req.header('X-Ant-Version');
-  const requestedVersion =
-    query.version ||
-    (headerVersion ? RefreshQuerySchema.parse({ version: headerVersion }).version : undefined);
-  return requestedVersion ? withArtifactVersion(env, requestedVersion) : env;
+  const headerRevision = c.req.header('X-Ant-Revision');
+  const requestedRevision =
+    query.revision ||
+    (headerRevision
+      ? RefreshQuerySchema.parse({ revision: headerRevision }).revision
+      : undefined);
+  return {
+    ...options,
+    revision: requestedRevision,
+  };
 }
 
 export default app;

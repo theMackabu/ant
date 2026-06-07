@@ -8,20 +8,16 @@ const BranchSchema = z
   .regex(/^[A-Za-z0-9._/-]+$/, 'branch contains unsupported characters')
   .refine(value => !value.includes('..'), 'branch cannot contain ..');
 
-const ArtifactVersionSchema = z
+const ArtifactRevisionSchema = z
   .string()
   .trim()
-  .min(1)
-  .max(128)
-  .regex(/^[A-Za-z0-9._+-]+$/, 'version contains unsupported characters');
+  .regex(/^[0-9a-fA-F]{40,64}$/, 'revision must be a full git hash');
 
 export const VersionQuerySchema = z
   .object({
     current: z.string().optional(),
     version: z.string().optional(),
     target: z.string().optional(),
-    kind: z.enum(['ant', 'sandbox', 'kernel']),
-    arch: z.string().optional(),
   })
   .superRefine((query, ctx) => {
     if (!query.current && !query.version) {
@@ -32,27 +28,17 @@ export const VersionQuerySchema = z
       });
     }
 
-    if (query.kind === 'ant' && !query.target) {
+    if (!query.target) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['target'],
         message: 'target is required for ant version checks',
       });
     }
-
-    if (query.kind !== 'ant' && !query.arch && !query.target) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['arch'],
-        message: 'arch is required for sandbox and kernel version checks',
-      });
-    }
   })
   .transform(query => ({
     current: query.current || query.version || '',
     target: query.target || '',
-    kind: query.kind,
-    arch: query.arch,
   }));
 
 export const DownloadParamsSchema = z.object({
@@ -69,5 +55,5 @@ export const BranchQuerySchema = z.object({
 });
 
 export const RefreshQuerySchema = BranchQuerySchema.extend({
-  version: ArtifactVersionSchema.optional(),
+  revision: ArtifactRevisionSchema.optional(),
 });

@@ -17,6 +17,19 @@ type ActionArtifactMatch = {
   artifacts: Artifact[];
 };
 
+type GitHubGitObject = {
+  sha: string;
+  type: string;
+};
+
+type GitHubRef = {
+  object: GitHubGitObject;
+};
+
+type GitHubTag = {
+  object: GitHubGitObject;
+};
+
 export async function findLatestRunWithArtifacts(
   env: Env,
   workflow: string,
@@ -156,6 +169,28 @@ export async function releaseByTag(env: Env, version: string): Promise<GitHubRel
     env,
     `/repos/${releaseRepository(env)}/releases/tags/${encodeURIComponent(tag)}`,
   );
+}
+
+export async function releaseTagRevision(env: Env, release: GitHubRelease): Promise<string> {
+  const repo = releaseRepository(env);
+  const ref = await githubJson<GitHubRef>(
+    env,
+    `/repos/${repo}/git/ref/tags/${encodeURIComponent(release.tag_name)}`,
+  );
+
+  if (ref.object.type === 'commit') return ref.object.sha;
+  if (ref.object.type !== 'tag') {
+    throw new HttpError(`release tag is not a commit: ${release.tag_name}`, 502);
+  }
+
+  const tag = await githubJson<GitHubTag>(
+    env,
+    `/repos/${repo}/git/tags/${encodeURIComponent(ref.object.sha)}`,
+  );
+  if (tag.object.type !== 'commit') {
+    throw new HttpError(`release tag does not point at a commit: ${release.tag_name}`, 502);
+  }
+  return tag.object.sha;
 }
 
 export function findReleaseAsset(

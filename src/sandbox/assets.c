@@ -565,10 +565,6 @@ static uint64_t sandbox_json_uint(yyjson_val *obj, const char *key) {
   return 0;
 }
 
-static bool sandbox_manifest_version_matches_local(const char *manifest_version) {
-  return manifest_version && strcmp(manifest_version, ANT_VERSION) == 0;
-}
-
 static yyjson_val *sandbox_manifest_find(yyjson_val *root, const char *array_key, const char *field, const char *value) {
   yyjson_val *arr = root && yyjson_is_obj(root) ? yyjson_obj_get(root, array_key) : NULL;
   if (!arr || !yyjson_is_arr(arr)) return NULL;
@@ -630,7 +626,7 @@ static uint64_t sandbox_manifest_gzip_size(yyjson_val *entry) {
 static int sandbox_manifest_url(char *out, size_t out_len) {
   const char *base = getenv("ANT_SANDBOX_MANIFEST_URL");
   const char *branch = getenv("ANT_SANDBOX_MANIFEST_BRANCH");
-  
+
   if (!base || !base[0]) base = ANT_SANDBOX_MANIFEST_URL;
   if (!branch || !branch[0]) {
     int written = snprintf(out, out_len, "%s", base);
@@ -704,29 +700,26 @@ static int sandbox_manifest_select(
     goto done;
   }
 
-  const char *ant_version = sandbox_json_string(ant, "version");
-  if (!sandbox_manifest_version_matches_local(ant_version)) {
-    sandbox_asset_error(
-      err, err_len,
-      "manifest Ant version mismatch: current=%s manifest=%s",
-      ANT_VERSION,
-      ant_version ? ant_version : "(missing)"
+  yyjson_val *ant_source = yyjson_obj_get(ant, "source");
+  yyjson_val *sandbox_source = yyjson_obj_get(sandbox, "source");
+  yyjson_val *kernel_source = yyjson_obj_get(kernel, "source");
+  const char *ant_revision = sandbox_json_string(ant, "revision");
+
+  if (!ant_revision || strcmp(ant_revision, ANT_GIT_LONGHASH) != 0) {
+    sandbox_asset_error(err, err_len,
+      "manifest Ant revision mismatch: current=%s manifest=%s",
+      ANT_GIT_LONGHASH, ant_revision ? ant_revision : "(missing)"
     );
     rc = -EINVAL;
     goto done;
   }
 
-  yyjson_val *ant_source = yyjson_obj_get(ant, "source");
-  yyjson_val *sandbox_source = yyjson_obj_get(sandbox, "source");
-  yyjson_val *kernel_source = yyjson_obj_get(kernel, "source");
-  
   uint64_t ant_run = sandbox_json_uint(ant_source, "run_id");
   uint64_t sandbox_run = sandbox_json_uint(sandbox_source, "run_id");
   uint64_t kernel_run = sandbox_json_uint(kernel_source, "run_id");
   
   if (!ant_run || sandbox_run != ant_run || kernel_run != ant_run) {
-    sandbox_asset_error(
-      err, err_len,
+    sandbox_asset_error(err, err_len,
       "manifest sandbox build mismatch: ant=%llu sandbox=%llu kernel=%llu",
       (unsigned long long)ant_run,
       (unsigned long long)sandbox_run,
@@ -736,39 +729,30 @@ static int sandbox_manifest_select(
     goto done;
   }
 
-  const char *ant_sha = sandbox_json_string(ant_source, "head_sha");
-  const char *sandbox_sha = sandbox_json_string(sandbox_source, "head_sha");
-  const char *kernel_sha = sandbox_json_string(kernel_source, "head_sha");
-  if (ant_sha && sandbox_sha && strcmp(ant_sha, sandbox_sha) != 0) {
+  const char *sandbox_revision = sandbox_json_string(sandbox, "revision");
+  const char *kernel_revision = sandbox_json_string(kernel, "revision");
+
+  if (!sandbox_revision || strcmp(sandbox_revision, ant_revision) != 0) {
     sandbox_asset_error(err, err_len, "manifest sandbox commit mismatch");
     rc = -EINVAL;
     goto done;
   }
-  if (ant_sha && kernel_sha && strcmp(ant_sha, kernel_sha) != 0) {
-    sandbox_asset_error(err, err_len, "manifest kernel commit mismatch");
-    rc = -EINVAL;
-    goto done;
-  }
 
-  const char *sandbox_version = sandbox_json_string(sandbox, "version");
-  const char *kernel_version = sandbox_json_string(kernel, "version");
-  if (sandbox_version && strcmp(sandbox_version, ant_version) != 0) {
-    sandbox_asset_error(err, err_len, "manifest sandbox version mismatch");
-    rc = -EINVAL;
-    goto done;
-  }
-  if (kernel_version && strcmp(kernel_version, ant_version) != 0) {
-    sandbox_asset_error(err, err_len, "manifest kernel version mismatch");
+  if (!kernel_revision || strcmp(kernel_revision, ant_revision) != 0) {
+    sandbox_asset_error(err, err_len, "manifest kernel commit mismatch");
     rc = -EINVAL;
     goto done;
   }
 
   rc = sandbox_manifest_copy_string(selection->sandbox_url, sizeof(selection->sandbox_url), sandbox, "download_url", "sandbox", err, err_len);
   if (rc != 0) goto done;
+  
   rc = sandbox_manifest_copy_string(selection->kernel_url, sizeof(selection->kernel_url), kernel, "download_url", "kernel", err, err_len);
   if (rc != 0) goto done;
+  
   rc = sandbox_manifest_copy_optional_string(selection->sandbox_gzip_url, sizeof(selection->sandbox_gzip_url), sandbox, "gzip_url");
   if (rc != 0) goto done;
+  
   rc = sandbox_manifest_copy_optional_string(selection->kernel_gzip_url, sizeof(selection->kernel_gzip_url), kernel, "gzip_url");
   if (rc != 0) goto done;
 

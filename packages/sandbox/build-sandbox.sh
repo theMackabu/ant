@@ -123,17 +123,13 @@ fi
 if [[ -n "${BUILD_GIT_HASH:-}" ]]; then
   build_git_hash=$BUILD_GIT_HASH
 else
-  build_git_hash=$(git -C "$repo_root" rev-parse --short HEAD)
+  build_git_hash=$(git -C "$repo_root" rev-parse HEAD)
 fi
 
-ant_base_version=$(tr -d '[:space:]' < "$repo_root/meson/ant.version")
-if [[ -z "$ant_base_version" ]]; then
-  echo "meson/ant.version is empty" >&2
+if [[ ! "$build_git_hash" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+  echo "BUILD_GIT_HASH must be a full git hash: $build_git_hash" >&2
   exit 1
 fi
-
-sandbox_version="$ant_base_version.$build_timestamp-g$build_git_hash"
-safe_version=${sandbox_version//[^A-Za-z0-9._-]/-}
 
 if [[ -d "$HOME/.ant" ]]; then
   sandbox_cache_root="$HOME/.ant/sandbox"
@@ -142,7 +138,7 @@ else
   sandbox_cache_root="$sandbox_cache_base/ant/sandbox"
 fi
 
-sandbox_cache_dir="$sandbox_cache_root/$safe_version"
+sandbox_cache_dir="$sandbox_cache_root/$build_git_hash"
 sandbox_cache_image="$sandbox_cache_dir/ant-sandbox-${cache_arch}.img"
 sandbox_cache_kernel="$sandbox_cache_dir/ant-kernel-${cache_arch}.img"
 
@@ -209,7 +205,7 @@ fi
 
 chmod +x "$binary_dir/ant"
 
-echo "==> ant version $sandbox_version"
+echo "==> ant revision $build_git_hash"
 if command -v file >/dev/null 2>&1; then
   file "$binary_dir/ant"
 else
@@ -310,7 +306,7 @@ sandbox_ops_config="$sandbox_config_dir/ops-sandbox.json"
 cat > "$sandbox_ops_config" <<JSON
 {
   "Kernel": "$ops_kernel",
-  "NanosVersion": "$sandbox_version",
+  "NanosVersion": "$build_git_hash",
   "Env": {
     "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
   }

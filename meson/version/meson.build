@@ -1,8 +1,9 @@
 fs = import('fs')
 
 git_hash_opt = get_option('build_git_hash')
-git_hash = git_hash_opt != '' ? git_hash_opt : run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
-git_hash = git_hash != '' ? git_hash : 'unknown'
+git_longhash = git_hash_opt != '' ? git_hash_opt : run_command('git', 'rev-parse', 'HEAD', check: false).stdout().strip()
+git_longhash = git_longhash != '' ? git_longhash : 'unknown'
+git_hash = git_longhash.substring(0, 8)
 
 timestamp_opt = get_option('build_timestamp')
 timestamp = timestamp_opt != '' ? timestamp_opt : run_command('date', '+%s', check: true).stdout().strip()
@@ -22,6 +23,7 @@ add_project_arguments(
   '-DANT_VERSION="' + ant_version + '"',
   '-DANT_BUILD_TIMESTAMP=' + timestamp,
   '-DANT_GIT_HASH="' + git_hash + '"',
+  '-DANT_GIT_LONGHASH="' + git_longhash + '"',
   '-DANT_TARGET_TRIPLE="' + target_triple + '"',
   language: 'c'
 )

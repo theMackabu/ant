@@ -16,7 +16,7 @@ snapshot_h = custom_target(
     src_root / 'src' / 'core' / 'index.ts',
     '@OUTPUT@',
     'VERSION=' + ant_version,
-    'GIT_HASH=' + git_hash,
+    'GIT_HASH=' + git_longhash,
     'BUILD_TIMESTAMP=' + timestamp,
     'TARGET=' + target_triple,
     'HOST=' + host_machine.system(),
