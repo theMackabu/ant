@@ -36,6 +36,7 @@
 #include "cli/misc.h"
 #include "cli/version.h"
 #include "sandbox/cli.h"
+#include "sandbox/host.h"
 #include "sandbox/policy.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
@@ -814,6 +815,8 @@ int main(int argc, char *argv[]) {
   js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
   
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
+  if (sandbox_daemon) ant_sandbox_set_guest_process(true);
+  
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
   if (web->count > 0) rt->flags |= ANT_RUNTIME_WEB;
   

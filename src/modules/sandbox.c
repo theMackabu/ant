@@ -270,6 +270,9 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox constructor requires 'new'");
 
+  if (ant_sandbox_is_guest_process())
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Nested Sandbox creation is not supported inside ant sandbox");
+
   sandbox_state_t *state = calloc(1, sizeof(*state));
   if (!state) return js_mkerr(js, "out of memory");
 
@@ -282,7 +285,7 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   if (rc != 0) {
     sandbox_state_destroy(state);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "%s", err[0] ? err : "failed to resolve sandbox assets");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "%s", err[0] ? err : "Failed to resolve sandbox assets");
   }
 
   ant_value_t result = sandbox_apply_options(js, state, nargs > 0 ? args[0] : js_mkundef());

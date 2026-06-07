@@ -23,6 +23,11 @@
 #define lstat stat
 #endif
 
+static bool g_sandbox_guest_process = false;
+
+void ant_sandbox_set_guest_process(bool enabled) { g_sandbox_guest_process = enabled; }
+bool ant_sandbox_is_guest_process(void) { return g_sandbox_guest_process; }
+
 static void sandbox_host_error(char *err, size_t err_len, const char *fmt, ...)
   __attribute__((format(printf, 3, 4)));
 

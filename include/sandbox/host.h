@@ -32,6 +32,10 @@ typedef struct {
 } ant_sandbox_launch_options_t;
 
 const char *ant_sandbox_cache_arch(void);
+
+void ant_sandbox_set_guest_process(bool enabled);
+bool ant_sandbox_is_guest_process(void);
+
 void ant_sandbox_launch_options_init(ant_sandbox_launch_options_t *opts);
 void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts);
 
