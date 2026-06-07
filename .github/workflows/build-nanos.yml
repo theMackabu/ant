@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      source_revision:
+        description: 'Full Ant git revision for the Ant binary artifact'
+        required: false
+        default: ''
+        type: string
       nanos_ref:
         description: 'Nanos git ref to patch/build'
         required: false
@@ -44,6 +49,11 @@ on:
           - aarch64
       source_run_id:
         description: 'Workflow run ID containing the Alpine/musl Ant artifact to reuse (blank uses latest successful run on this branch)'
+        required: false
+        default: ''
+        type: string
+      source_revision:
+        description: 'Full Ant git revision for the Ant binary artifact'
         required: false
         default: ''
         type: string
@@ -106,6 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_RUN_ID: ${{ inputs.source_run_id }}
+          REQUESTED_REVISION: ${{ inputs.source_revision }}
           CALLER_RUNNER: ${{ inputs.runner }}
         run: |
           set -euo pipefail
@@ -149,8 +160,11 @@ jobs:
             exit 1
           fi
 
-          source_run=$(curl -fsSL "${headers[@]}" "${api}/actions/runs/${source_run_id}")
-          source_sha=$(jq -r '.head_sha // empty' <<<"$source_run")
+          source_sha="$REQUESTED_REVISION"
+          if [[ -z "$source_sha" ]]; then
+            source_run=$(curl -fsSL "${headers[@]}" "${api}/actions/runs/${source_run_id}")
+            source_sha=$(jq -r '.head_sha // empty' <<<"$source_run")
+          fi
           if [[ ! "$source_sha" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
             echo "::error::failed to resolve source revision for workflow run ${source_run_id}"
             exit 1

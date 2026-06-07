@@ -45,6 +45,7 @@ jobs:
       artifact: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-linux-aarch64-musl' || 'ant-linux-x64-musl' }}
       runner: ${{ inputs.platform == 'linux-musl-aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
       image: ${{ inputs.platform == 'linux-musl-aarch64' && 'ant-sandbox-aarch64' || 'ant-sandbox-x64' }}
+      source_revision: ${{ github.sha }}
 
   refresh-manifest:
     name: Refresh manifest
