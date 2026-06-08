@@ -538,11 +538,29 @@ static inline ant_module_t *js_active_tla_module_ctx(ant_t *js) {
   return NULL;
 }
 
+static inline void js_module_ctx_link_namespace(ant_t *js, ant_value_t module_ctx, ant_value_t ns) {
+  if (!is_object_type(module_ctx) || !is_object_type(ns)) return;
+  js_set_slot_wb(js, ns, SLOT_MODULE_CTX, module_ctx);
+  js_set_slot_wb(js, module_ctx, SLOT_DATA, ns);
+}
+
+static inline ant_value_t js_module_ctx_namespace(ant_value_t module_ctx) {
+  if (!is_object_type(module_ctx)) return js_mkundef();
+  ant_value_t ns = js_get_slot(module_ctx, SLOT_DATA);
+  return is_object_type(ns) ? ns : js_mkundef();
+}
+
+static inline ant_value_t js_current_func_module_ns(ant_t *js) {
+  if (!js || !is_object_type(js->current_func)) return js_mkundef();
+  return js_module_ctx_namespace(js_get_slot(js->current_func, SLOT_MODULE_CTX));
+}
+
 static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
   ant_module_t *ctx = js->module;
   if (ctx) return ctx->module_ns;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
-  return ctx ? ctx->module_ns : js_mkundef();
+  if (ctx) return ctx->module_ns;
+  return js_current_func_module_ns(js);
 }
 
 static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
