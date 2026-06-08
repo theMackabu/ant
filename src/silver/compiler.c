@@ -2888,6 +2888,143 @@ static void compile_call_optional(
   compile_optional_call_after_setup(c, node, kind, has_spread);
 }
 
+static bool ast_contains_await_expr(const sv_ast_t *node) {
+  if (!node) return false;
+
+  if (node->type == N_AWAIT) return true;
+  if (node->type == N_FUNC) return false;
+
+  if (ast_contains_await_expr(node->left))         return true;
+  if (ast_contains_await_expr(node->right))        return true;
+  if (ast_contains_await_expr(node->cond))         return true;
+  if (ast_contains_await_expr(node->body))         return true;
+  if (ast_contains_await_expr(node->catch_body))   return true;
+  if (ast_contains_await_expr(node->finally_body)) return true;
+  if (ast_contains_await_expr(node->catch_param))  return true;
+  if (ast_contains_await_expr(node->init))         return true;
+  if (ast_contains_await_expr(node->update))       return true;
+
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_await_expr(node->args.items[i])) return true;
+
+  return false;
+}
+
+static bool func_params_contain_await(const sv_ast_t *node) {
+  if (!node) return false;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_await_expr(node->args.items[i])) return true;
+  return false;
+}
+
+static bool function_param_name(sv_ast_t *param, const char **name, uint32_t *len) {
+  if (!param) return false;
+  
+  if (param->type == N_IDENT) {
+    *name = param->str;
+    *len = param->len;
+    return true;
+  }
+  
+  if (
+    param->type == N_REST &&
+    param->right && param->right->type == N_IDENT
+  ) {
+    *name = param->right->str;
+    *len = param->right->len;
+    return true;
+  }
+  
+  if (
+    param->type == N_ASSIGN_PAT &&
+    param->left && param->left->type == N_IDENT
+  ) {
+    *name = param->left->str;
+    *len = param->left->len;
+    return true;
+  }
+  
+  return false;
+}
+
+static bool function_has_own_use_strict(ant_t *js, sv_ast_t *fn) {
+  if (fn->body && fn->body->type == N_BLOCK) for (int i = 0; i < fn->body->args.count; i++) {
+    sv_ast_t *stmt = fn->body->args.items[i];
+    if (!stmt || stmt->type == N_EMPTY) continue;
+    if (stmt->type != N_STRING) break;
+    if (sv_ast_is_use_strict(js, stmt)) return true;
+  }
+  return false;
+}
+
+static bool function_has_non_simple_params(sv_ast_t *fn) {
+  for (int i = 0; i < fn->args.count; i++) {
+    sv_ast_t *param = fn->args.items[i];
+    if (!param || param->type != N_IDENT) return true;
+  }
+  return false;
+}
+
+static bool check_function_param_early_errors(
+  ant_t *js,
+  sv_ast_t *fn,
+  bool inherited_strict,
+  bool *out_has_own_use_strict,
+  bool emit_error
+) {
+  if (fn->args.count > UINT16_MAX) {
+    if (emit_error)
+      js_mkerr_typed(js, JS_ERR_SYNTAX, "too many function parameters");
+    return false;
+  }
+
+  if ((fn->flags & FN_ASYNC) && func_params_contain_await(fn)) {
+    if (emit_error)
+      js_mkerr_typed(js, JS_ERR_SYNTAX, "await is not allowed in async function parameters");
+    return false;
+  }
+
+  bool has_own_use_strict = function_has_own_use_strict(js, fn);
+  if (out_has_own_use_strict) *out_has_own_use_strict = has_own_use_strict;
+
+  bool strict = inherited_strict || (fn->flags & FN_CLASS_BODY) || has_own_use_strict;
+  bool has_non_simple_params = function_has_non_simple_params(fn);
+
+  if (has_own_use_strict && has_non_simple_params) {
+    if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
+      "Illegal 'use strict' directive in function with non-simple parameter list");
+    return false;
+  }
+
+  if (!strict) return true;
+
+  for (int i = 0; i < fn->args.count; i++) {
+    const char *name = NULL;
+    uint32_t len = 0;
+    if (!function_param_name(fn->args.items[i], &name, &len) || len == 0) continue;
+    if (is_strict_restricted_ident(name, len)) {
+      if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
+        "strict mode forbids '%.*s' as a parameter name",
+        (int)len, name);
+      return false;
+    }
+    
+    for (int j = 0; j < i; j++) {
+      const char *prev = NULL;
+      uint32_t prev_len = 0;
+      if (!function_param_name(fn->args.items[j], &prev, &prev_len)) continue;
+      if (prev_len == len && memcmp(prev, name, len) == 0) {
+        if (emit_error)js_mkerr_typed(js, JS_ERR_SYNTAX,
+          "duplicate parameter name '%.*s' in strict mode",
+          (int)len, name);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 static bool is_inline_literal_eval_expr(sv_ast_t *node) {
   if (!node) return false;
   switch (node->type) {
@@ -2931,6 +3068,33 @@ static bool is_inline_literal_eval_expr(sv_ast_t *node) {
   }
 }
 
+static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_ast_t *node) {
+  if (!node) return true;
+  if (node->type == N_CLASS) return false;
+  
+  if (
+    node->type == N_FUNC &&
+    (!(node->flags & (FN_ARROW | FN_PAREN)) ||
+     !check_function_param_early_errors(c->js, node, c->is_strict, NULL, false))
+  ) return false;
+
+  if (!inline_eval_can_compile_without_early_errors(c, node->left)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->right)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->cond)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->body)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->catch_body)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->finally_body)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->catch_param)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->init)) return false;
+  if (!inline_eval_can_compile_without_early_errors(c, node->update)) return false;
+
+  for (int i = 0; i < node->args.count; i++) {
+    if (!inline_eval_can_compile_without_early_errors(c, node->args.items[i])) return false;
+  }
+
+  return true;
+}
+
 static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   if (!node || node->args.count == 0) return false;
 
@@ -2956,9 +3120,11 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *expr = NULL;
   if (program->args.count == 0) {
     expr = NULL;
-  } else if (program->args.count == 1 && is_inline_literal_eval_expr(program->args.items[0])) {
-    expr = program->args.items[0];
-  } else {
+  } else if (
+    program->args.count == 1 &&
+    is_inline_literal_eval_expr(program->args.items[0]) &&
+    inline_eval_can_compile_without_early_errors(c, program->args.items[0])
+  ) expr = program->args.items[0]; else {
     parse_arena_rewind(mark);
     c->js->thrown_exists = saved_thrown_exists;
     c->js->thrown_value = saved_thrown_value;
@@ -5374,37 +5540,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(private_scope.names);
 }
 
-static bool ast_contains_await_expr(const sv_ast_t *node) {
-  if (!node) return false;
-  
-  if (node->type == N_AWAIT) return true;
-  if (node->type == N_FUNC) return false;
-
-  if (ast_contains_await_expr(node->left))         return true;
-  if (ast_contains_await_expr(node->right))        return true;
-  if (ast_contains_await_expr(node->cond))         return true;
-  if (ast_contains_await_expr(node->body))         return true;
-  if (ast_contains_await_expr(node->catch_body))   return true;
-  if (ast_contains_await_expr(node->finally_body)) return true;
-  if (ast_contains_await_expr(node->catch_param))  return true;
-  if (ast_contains_await_expr(node->init))         return true;
-  if (ast_contains_await_expr(node->update))       return true;
-
-  for (int i = 0; i < node->args.count; i++) {
-    if (ast_contains_await_expr(node->args.items[i])) return true;
-  }
-
-  return false;
-}
-
-static bool func_params_contain_await(const sv_ast_t *node) {
-  if (!node) return false;
-  for (int i = 0; i < node->args.count; i++) {
-    if (ast_contains_await_expr(node->args.items[i])) return true;
-  }
-  return false;
-}
-
 static uint16_t function_length_from_params(const sv_ast_t *node) {
   if (!node) return 0;
   uint16_t length = 0;
@@ -5421,22 +5556,14 @@ sv_func_t *compile_function_body(
   sv_ast_t *node,
   sv_compile_mode_t mode
 ) {
-  if (node->args.count > UINT16_MAX) {
-    js_mkerr_typed(
-      enclosing->js, JS_ERR_SYNTAX,
-      "too many function parameters");
-    return NULL;
-  }
-
-  if ((node->flags & FN_ASYNC) && func_params_contain_await(node)) {
-    js_mkerr_typed(
-      enclosing->js, JS_ERR_SYNTAX,
-      "await is not allowed in async function parameters");
-    return NULL;
-  }
-
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
+
+  bool has_own_use_strict = false;
+  if (!check_function_param_early_errors(
+    comp.js, node, comp.is_strict, &has_own_use_strict, true
+  )) return NULL;
+  if (has_own_use_strict) comp.is_strict = true;
 
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *p = node->args.items[i];
@@ -5451,78 +5578,9 @@ sv_func_t *compile_function_body(
 
   comp.param_locals = comp.local_count;
 
-  bool has_own_use_strict = false;
-  if (node->body && node->body->type == N_BLOCK) for (int i = 0; i < node->body->args.count; i++) {
-    sv_ast_t *stmt = node->body->args.items[i];
-    if (!stmt || stmt->type == N_EMPTY) continue;
-    if (stmt->type != N_STRING) break;
-    if (sv_ast_is_use_strict(comp.js, stmt)) {
-      has_own_use_strict = true;
-      comp.is_strict = true;
-    }
-  }
-
-  if (comp.is_strict) {
-    const char *param_names[256];
-    uint32_t param_lens[256];
-    int param_name_count = 0;
-
-    for (int i = 0; i < node->args.count; i++) {
-      sv_ast_t *p = node->args.items[i];
-      const char *pname = NULL;
-      uint32_t plen = 0;
-
-      if (p && p->type == N_IDENT) {
-        pname = p->str; plen = p->len;
-      } else if (p && p->type == N_REST && p->right && p->right->type == N_IDENT) {
-        pname = p->right->str; plen = p->right->len;
-      } else if (p && p->type == N_ASSIGN_PAT && p->left && p->left->type == N_IDENT) {
-        pname = p->left->str; plen = p->left->len;
-      }
-
-      if (!pname || plen == 0) continue;
-
-      if (is_strict_restricted_ident(pname, plen)) {
-        js_mkerr_typed(
-          comp.js, JS_ERR_SYNTAX,
-          "strict mode forbids '%.*s' as a parameter name",
-          (int)plen, pname);
-        return NULL;
-      }
-
-      for (int j = 0; j < param_name_count; j++) {
-        if (param_lens[j] == plen &&
-            memcmp(param_names[j], pname, plen) == 0) {
-          js_mkerr_typed(
-            comp.js, JS_ERR_SYNTAX,
-            "duplicate parameter name '%.*s' in strict mode",
-            (int)plen, pname);
-          return NULL;
-        }
-      }
-
-      if (param_name_count < (int)(sizeof(param_names) / sizeof(param_names[0]))) {
-        param_names[param_name_count] = pname;
-        param_lens[param_name_count] = plen;
-        param_name_count++;
-      }
-    }
-  }
-
-  bool has_non_simple_params = false;
-  for (int i = 0; i < node->args.count; i++) {
-    sv_ast_t *p = node->args.items[i];
-    if (p->type != N_IDENT) { has_non_simple_params = true; break; }
-  }
-
-  if (has_own_use_strict && has_non_simple_params) {
-    js_mkerr_typed(
-      comp.js, JS_ERR_SYNTAX,
-      "Illegal 'use strict' directive in function with non-simple parameter list");
-    return NULL;
-  }
-  
+  bool has_non_simple_params = function_has_non_simple_params(node);
   bool repl_top = is_repl_top_level(&comp);
+  
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       if (!repl_top) {
