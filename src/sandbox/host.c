@@ -69,6 +69,58 @@ static int sandbox_cache_dir(char *out, size_t out_size) {
   return ant_xdg_cache_path(out, out_size, suffix) == 0 ? 0 : -EINVAL;
 }
 
+static int sandbox_cache_root(char *out, size_t out_size) {
+  return ant_xdg_cache_path(out, out_size, "sandbox") == 0 ? 0 : -EINVAL;
+}
+
+static int sandbox_remove_tree(const char *path) {
+  struct stat st;
+  if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -errno;
+  if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) return unlink(path) == 0 ? 0 : -errno;
+
+  DIR *dir = opendir(path);
+  if (!dir) return -errno;
+  int rc = 0;
+  struct dirent *ent = NULL;
+  
+  while ((ent = readdir(dir))) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    char child[4096];
+    int written = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+    if (written < 0 || (size_t)written >= sizeof(child)) {
+      rc = -ENAMETOOLONG;
+      break;
+    }
+    int child_rc = sandbox_remove_tree(child);
+    if (child_rc != 0 && rc == 0) rc = child_rc;
+  }
+  closedir(dir);
+  if (rc != 0) return rc;
+  return rmdir(path) == 0 ? 0 : -errno;
+}
+
+static void sandbox_prune_old_cache_dirs(const char *current_dir) {
+  char root[4096];
+  if (!current_dir || sandbox_cache_root(root, sizeof(root)) != 0) return;
+
+  DIR *dir = opendir(root);
+  if (!dir) return;
+
+  struct dirent *ent = NULL;
+  while ((ent = readdir(dir))) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    if (strcmp(ent->d_name, ANT_GIT_LONGHASH) == 0) continue;
+
+    char child[4096];
+    int written = snprintf(child, sizeof(child), "%s/%s", root, ent->d_name);
+    if (written < 0 || (size_t)written >= sizeof(child)) continue;
+    if (strcmp(child, current_dir) == 0) continue;
+    (void)sandbox_remove_tree(child);
+  }
+
+  closedir(dir);
+}
+
 static int sandbox_resolve_asset(
   char *out,
   size_t out_size,
@@ -147,6 +199,7 @@ int ant_sandbox_assets_resolve(ant_sandbox_assets_t *assets, char *err, size_t e
 
   snprintf(assets->image, sizeof(assets->image), "%s", image_path);
   snprintf(assets->kernel, sizeof(assets->kernel), "%s", kernel_path);
+  if (!using_overrides) sandbox_prune_old_cache_dirs(assets->cache_dir);
 
   return 0;
 }
@@ -164,31 +217,6 @@ static bool sandbox_is_managed_temp_dir(const char *path) {
   if (!base || (win_base && win_base > base)) base = win_base;
   base = base ? base + 1 : path;
   return strncmp(base, "ant-sandbox-write.", strlen("ant-sandbox-write.")) == 0;
-}
-
-static int sandbox_remove_tree(const char *path) {
-  struct stat st;
-  if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -errno;
-  if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) return unlink(path) == 0 ? 0 : -errno;
-
-  DIR *dir = opendir(path);
-  if (!dir) return -errno;
-  int rc = 0;
-  struct dirent *ent = NULL;
-  while ((ent = readdir(dir))) {
-    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-    char child[4096];
-    int written = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
-    if (written < 0 || (size_t)written >= sizeof(child)) {
-      rc = -ENAMETOOLONG;
-      break;
-    }
-    int child_rc = sandbox_remove_tree(child);
-    if (child_rc != 0 && rc == 0) rc = child_rc;
-  }
-  closedir(dir);
-  if (rc != 0) return rc;
-  return rmdir(path) == 0 ? 0 : -errno;
 }
 
 void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts) {
