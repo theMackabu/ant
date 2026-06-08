@@ -2919,13 +2919,13 @@ static bool func_params_contain_await(const sv_ast_t *node) {
 
 static bool function_param_name(sv_ast_t *param, const char **name, uint32_t *len) {
   if (!param) return false;
-  
+
   if (param->type == N_IDENT) {
     *name = param->str;
     *len = param->len;
     return true;
   }
-  
+
   if (
     param->type == N_REST &&
     param->right && param->right->type == N_IDENT
@@ -2934,7 +2934,7 @@ static bool function_param_name(sv_ast_t *param, const char **name, uint32_t *le
     *len = param->right->len;
     return true;
   }
-  
+
   if (
     param->type == N_ASSIGN_PAT &&
     param->left && param->left->type == N_IDENT
@@ -2943,7 +2943,7 @@ static bool function_param_name(sv_ast_t *param, const char **name, uint32_t *le
     *len = param->left->len;
     return true;
   }
-  
+
   return false;
 }
 
@@ -2957,19 +2957,12 @@ static bool function_has_own_use_strict(ant_t *js, sv_ast_t *fn) {
   return false;
 }
 
-static bool function_has_non_simple_params(sv_ast_t *fn) {
-  for (int i = 0; i < fn->args.count; i++) {
-    sv_ast_t *param = fn->args.items[i];
-    if (!param || param->type != N_IDENT) return true;
-  }
-  return false;
-}
-
 static bool check_function_param_early_errors(
   ant_t *js,
   sv_ast_t *fn,
   bool inherited_strict,
   bool *out_has_own_use_strict,
+  bool *out_has_non_simple_params,
   bool emit_error
 ) {
   if (fn->args.count > UINT16_MAX) {
@@ -2988,41 +2981,72 @@ static bool check_function_param_early_errors(
   if (out_has_own_use_strict) *out_has_own_use_strict = has_own_use_strict;
 
   bool strict = inherited_strict || (fn->flags & FN_CLASS_BODY) || has_own_use_strict;
-  bool has_non_simple_params = function_has_non_simple_params(fn);
+  bool has_non_simple_params = false;
+  
+  const char **param_names = NULL;
+  uint32_t *param_lens = NULL;
+  
+  int param_name_count = 0;
+  bool ok = true;
+
+  if (strict && fn->args.count > 0) {
+    size_t count = (size_t)fn->args.count;
+    param_names = malloc(count * sizeof(*param_names));
+    param_lens = malloc(count * sizeof(*param_lens));
+    
+    if (!param_names || !param_lens) {
+      if (emit_error) js_mkerr(js, "out of memory");
+      ok = false;
+      goto done;
+    }
+  }
+
+  for (int i = 0; i < fn->args.count; i++) {
+    sv_ast_t *param = fn->args.items[i];
+    if (!param || param->type != N_IDENT) has_non_simple_params = true;
+
+    const char *name = NULL;
+    uint32_t len = 0;
+    if (!function_param_name(param, &name, &len) || len == 0) continue;
+
+    if (strict && is_strict_restricted_ident(name, len)) {
+      if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
+        "strict mode forbids '%.*s' as a parameter name",
+        (int)len, name);
+      ok = false;
+      goto done;
+    }
+
+    if (strict) for (int j = 0; j < param_name_count; j++) {
+      if (param_lens[j] != len || memcmp(param_names[j], name, len) != 0) continue;
+      if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
+        "duplicate parameter name '%.*s' in strict mode",
+        (int)len, name);
+      ok = false;
+      goto done;
+    }
+
+    if (strict) {
+      param_names[param_name_count] = name;
+      param_lens[param_name_count] = len;
+      param_name_count++;
+    }
+  }
+
+  if (out_has_non_simple_params)
+    *out_has_non_simple_params = has_non_simple_params;
 
   if (has_own_use_strict && has_non_simple_params) {
     if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
       "Illegal 'use strict' directive in function with non-simple parameter list");
-    return false;
+    ok = false;
+    goto done;
   }
 
-  if (!strict) return true;
-
-  for (int i = 0; i < fn->args.count; i++) {
-    const char *name = NULL;
-    uint32_t len = 0;
-    if (!function_param_name(fn->args.items[i], &name, &len) || len == 0) continue;
-    if (is_strict_restricted_ident(name, len)) {
-      if (emit_error) js_mkerr_typed(js, JS_ERR_SYNTAX,
-        "strict mode forbids '%.*s' as a parameter name",
-        (int)len, name);
-      return false;
-    }
-    
-    for (int j = 0; j < i; j++) {
-      const char *prev = NULL;
-      uint32_t prev_len = 0;
-      if (!function_param_name(fn->args.items[j], &prev, &prev_len)) continue;
-      if (prev_len == len && memcmp(prev, name, len) == 0) {
-        if (emit_error)js_mkerr_typed(js, JS_ERR_SYNTAX,
-          "duplicate parameter name '%.*s' in strict mode",
-          (int)len, name);
-        return false;
-      }
-    }
-  }
-
-  return true;
+done:
+  free(param_names);
+  free(param_lens);
+  return ok;
 }
 
 static bool is_inline_literal_eval_expr(sv_ast_t *node) {
@@ -3075,7 +3099,7 @@ static bool inline_eval_can_compile_without_early_errors(sv_compiler_t *c, sv_as
   if (
     node->type == N_FUNC &&
     (!(node->flags & (FN_ARROW | FN_PAREN)) ||
-     !check_function_param_early_errors(c->js, node, c->is_strict, NULL, false))
+     !check_function_param_early_errors(c->js, node, c->is_strict, NULL, NULL, false))
   ) return false;
 
   if (!inline_eval_can_compile_without_early_errors(c, node->left)) return false;
@@ -5560,11 +5584,14 @@ sv_func_t *compile_function_body(
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
 
   bool has_own_use_strict = false;
-  if (!check_function_param_early_errors(
-    comp.js, node, comp.is_strict, &has_own_use_strict, true
-  )) return NULL;
-  if (has_own_use_strict) comp.is_strict = true;
+  bool has_non_simple_params = false;
 
+  if (!check_function_param_early_errors(
+    comp.js, node, comp.is_strict,
+    &has_own_use_strict, &has_non_simple_params, true
+  )) return NULL;
+
+  if (has_own_use_strict) comp.is_strict = true;
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *p = node->args.items[i];
     if (p->type == N_IDENT) {
@@ -5577,8 +5604,6 @@ sv_func_t *compile_function_body(
   }
 
   comp.param_locals = comp.local_count;
-
-  bool has_non_simple_params = function_has_non_simple_params(node);
   bool repl_top = is_repl_top_level(&comp);
   
   if (!has_non_simple_params && node->body) {
