@@ -446,7 +446,7 @@ static ant_value_t esm_prepare_eval_ctx(
   ant_value_t module_ctx = js_create_module_context(js, resolved_path, is_main);
   
   if (is_err(module_ctx)) return module_ctx;
-  if (is_object_type(ns)) js_set_slot_wb(js, ns, SLOT_MODULE_CTX, module_ctx);
+  js_module_ctx_link_namespace(js, module_ctx, ns);
 
   *out_ctx = (ant_module_t){
     .module_ns = ns,
@@ -1308,13 +1308,15 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
         mod->is_loading = false;
         return module_ctx;
       }
-      js_set_slot_wb(js, ns, SLOT_MODULE_CTX, module_ctx);
       
+      js_module_ctx_link_namespace(js, module_ctx, ns);
       ant_value_t native_exports = napi_load_native_module(js, mod->resolved_path, ns);
+      
       if (is_err(native_exports)) {
         mod->is_loading = false;
         return native_exports;
       }
+      
       return esm_complete_namespace_module(js, mod, ns);
     }
     case ESM_MODULE_KIND_CODE:

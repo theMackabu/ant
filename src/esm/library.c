@@ -96,7 +96,7 @@ ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, siz
     const char *display_name = canon->display_name[0] ? canon->display_name : canon->name;
     ant_value_t module_ctx = js_create_module_context(js, display_name, false);
     if (is_err(module_ctx)) return module_ctx;
-    if (is_object_type(module_ctx)) js_set_slot_wb(js, canon->cached_ns, SLOT_MODULE_CTX, module_ctx);
+    js_module_ctx_link_namespace(js, module_ctx, canon->cached_ns);
   }
 
   canon->ns_initialized = true;
