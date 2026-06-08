@@ -1,6 +1,7 @@
 #ifndef SUGAR_H
 #define SUGAR_H
 
+#include "esm/loader.h"
 #include "types.h"
 
 #include <stdbool.h>
@@ -57,6 +58,7 @@ typedef struct coroutine {
   
   ant_value_t awaited_promise;
   ant_value_t async_promise;
+  ant_module_t *module_eval_ctx;
   
   struct coroutine *active_parent;
   struct coroutine *active_prev;

@@ -86,6 +86,11 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
     coro->sv_vm = NULL;
   }
 
+  if (coro->module_eval_ctx) {
+    CORO_FREE(coro->module_eval_ctx);
+    coro->module_eval_ctx = NULL;
+  }
+
   coro->js = NULL;
   coro->owner_vm = NULL;
   coro->active_parent = NULL;
@@ -159,6 +164,29 @@ void free_coroutine(coroutine_t *coro) {
   coroutine_release(coro);
 }
 
+static void coroutine_activate(ant_t *js, coroutine_t *coro) {
+  if (!js || !coro) return;
+  coro->active_parent = js->active_async_coro;
+  coro->active_prev = NULL;
+  if (js->active_async_coro) js->active_async_coro->active_prev = coro;
+  js->active_async_coro = coro;
+  coroutine_hold(coro, CORO_HOLD_ACTIVE);
+}
+
+static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
+  if (!js || !coro) return;
+  if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
+  else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
+  if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
+  coro->active_parent = NULL;
+  coro->active_prev = NULL;
+  coroutine_unhold(coro, CORO_HOLD_ACTIVE);
+}
+
+static bool coroutine_has_module_namespace(coroutine_t *coro) {
+  return coro && coro->module_eval_ctx;
+}
+
 static size_t calculate_coro_stack_size(void) {
   static size_t cached_size = 0;
   if (coro_stack_size_initialized) return cached_size;
@@ -198,36 +226,18 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     coro->sv_vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
     coro->sv_vm->suspended_resume_pending = true;
     
-    coro->active_parent = js->active_async_coro;
-    coro->active_prev = NULL;
-    if (js->active_async_coro) js->active_async_coro->active_prev = coro;
-    
-    js->active_async_coro = coro;
-    coroutine_hold(coro, CORO_HOLD_ACTIVE);
+    coroutine_activate(js, coro);
     ant_value_t result = sv_resume_suspended(coro->sv_vm);
     
     coro->is_settled = false;
     if (coro->sv_vm->suspended) {
-      if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
-      else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
-      if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
-      
-      coro->active_parent = NULL;
-      coro->active_prev = NULL;
-      coroutine_unhold(coro, CORO_HOLD_ACTIVE);
+      coroutine_deactivate(js, coro);
       if (generator_resume_pending_request(js, coro, result)) return;
       coroutine_release(coro);
-      
       return;
     }
     
-    if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
-    else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
-    if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
-    
-    coro->active_parent = NULL;
-    coro->active_prev = NULL;
-    coroutine_unhold(coro, CORO_HOLD_ACTIVE);
+    coroutine_deactivate(js, coro);
     
     if (generator_resume_pending_request(js, coro, result)) {
       coroutine_release(coro);
@@ -254,7 +264,12 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
 
   coro->is_ready = false;
   mco_result res;
+  
+  bool activate_for_module = coroutine_has_module_namespace(coro);
+  if (activate_for_module) coroutine_activate(js, coro);
   MCO_RESUME_SAVE(js, coro->mco, res);
+  
+  if (activate_for_module) coroutine_deactivate(js, coro);
   mco_state status = mco_status(coro->mco);
 
   if (res != MCO_SUCCESS || status == MCO_DEAD)

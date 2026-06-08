@@ -510,6 +510,13 @@ static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->yield_value);
   gc_mark_value(js, c->super_val);
   gc_mark_value(js, c->new_target);
+  
+  if (c->module_eval_ctx) {
+    gc_mark_value(js, c->module_eval_ctx->module_ns);
+    gc_mark_value(js, c->module_eval_ctx->module_ctx);
+    gc_mark_value(js, c->module_eval_ctx->prev_import_meta_prop);
+  }
+  
   if (c->args) for (int i = 0; i < c->nargs; i++) gc_mark_value(js, c->args[i]);
 }
 

@@ -531,12 +531,29 @@ bool lookup_prop_meta(
   ant_offset_t sym_off, prop_meta_t *out
 );
 
+static inline ant_module_t *js_active_tla_module_ctx(ant_t *js) {
+  if (!js) return NULL;
+  for (coroutine_t *coro = js->active_async_coro; coro; coro = coro->active_parent)
+    if (coro->module_eval_ctx) return coro->module_eval_ctx;
+  return NULL;
+}
+
 static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
+  if (js->active_async_coro) {
+    ant_module_t *ctx = js_active_tla_module_ctx(js);
+    if (ctx) return ctx->module_ns;
+  }
+
   ant_module_t *ctx = js->module;
   return ctx ? ctx->module_ns : js_mkundef();
 }
 
 static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
+  if (js->active_async_coro) {
+    ant_module_t *ctx = js_active_tla_module_ctx(js);
+    if (ctx) return ctx->module_ctx;
+  }
+
   ant_module_t *ctx = js->module;
   return ctx ? ctx->module_ctx : js_mkundef();
 }
@@ -556,6 +573,11 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
 }
 
 static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
+  if (js->active_async_coro) {
+    ant_module_t *ctx = js_active_tla_module_ctx(js);
+    if (ctx) return ctx->format;
+  }
+
   ant_module_t *ctx = js->module;
   return ctx ? ctx->format : MODULE_EVAL_FORMAT_UNKNOWN;
 }

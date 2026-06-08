@@ -325,6 +325,21 @@ static void sv_mco_tla_entry(mco_coro *mco) {
   }
 }
 
+static inline ant_value_t sv_capture_tla_module_ctx(ant_t *js, coroutine_t *coro) {
+  if (!js || !coro || !js->module || vtype(js->module->module_ns) != T_OBJ)
+    return js_mkundef();
+
+  ant_module_t *ctx = CORO_MALLOC(sizeof(ant_module_t));
+  if (!ctx) return js_mkerr(js, "out of memory for TLA module context");
+
+  *ctx = *js->module;
+  ctx->prev = NULL;
+  ctx->prev_import_meta_prop = js_mkundef();
+  coro->module_eval_ctx = ctx;
+  
+  return js_mkundef();
+}
+
 static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (++coros_this_tick > CORO_PER_TICK_LIMIT) {
     js->fatal_error = true;
@@ -348,6 +363,14 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
       coro, js, js->vm, promise, this_val,
       js_mkundef(), js_mkundef(), js_mkundef(), 0
     );
+
+    ant_value_t module_res = sv_capture_tla_module_ctx(js, coro);
+    if (is_err(module_res)) {
+      coroutine_release(coro);
+      GC_ROOT_RESTORE(js, root_mark);
+      return module_res;
+    }
+
     sv_async_link_activation(js, coro);
 
     ant_value_t result = sv_execute_entry(
@@ -443,9 +466,18 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     .destroy_requested = false,
   };
 
+  ant_value_t module_res = sv_capture_tla_module_ctx(js, coro);
+  if (is_err(module_res)) {
+    coroutine_release(coro);
+    return module_res;
+  }
+
   ctx->coro = coro;
   enqueue_coroutine(coro);
+  
+  sv_async_link_activation(js, coro);
   MCO_RESUME_SAVE(js, mco, res);
+  sv_async_unlink_activation(js, coro);
 
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
