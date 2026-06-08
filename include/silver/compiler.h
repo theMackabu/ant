@@ -17,6 +17,20 @@ typedef struct {
   size_t len;
 } sv_param_t;
 
+typedef enum {
+  SV_IMPORT_BIND_NONE = 0,
+  SV_IMPORT_BIND_DEFAULT,
+  SV_IMPORT_BIND_NAMED,
+} sv_import_bind_kind_t;
+
+typedef struct {
+  uint8_t import_kind;
+  const char *import_name;
+  uint32_t import_name_len;
+  const char *export_name;
+  uint32_t export_name_len;
+} sv_binding_meta_t;
+
 typedef struct {
   const char *name;
   uint32_t name_len;
@@ -27,6 +41,7 @@ typedef struct {
   bool captured;
   bool is_tdz;
   uint8_t inferred_type;
+  sv_binding_meta_t binding;
 } sv_local_t;
 
 typedef struct {
@@ -116,6 +131,8 @@ typedef struct sv_compiler {
   int param_locals;
 
   sv_upval_desc_t *upval_descs;
+  sv_binding_meta_t *upval_bindings;
+  
   int upvalue_count;
   int upvalue_cap;
 

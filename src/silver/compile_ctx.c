@@ -81,6 +81,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->locals);
   free(ctx->local_lookup_heads);
   free(ctx->upval_descs);
+  free(ctx->upval_bindings);
   free(ctx->loops);
   free(ctx->srcpos);
   free(ctx->slot_types);
