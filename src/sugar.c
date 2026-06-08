@@ -170,11 +170,13 @@ static void coroutine_activate(ant_t *js, coroutine_t *coro) {
   coro->active_prev = NULL;
   if (js->active_async_coro) js->active_async_coro->active_prev = coro;
   js->active_async_coro = coro;
+  if (coro->module_eval_ctx) js_module_eval_ctx_push(js, coro->module_eval_ctx);
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 }
 
 static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
+  if (coro->module_eval_ctx) js_module_eval_ctx_pop(js, coro->module_eval_ctx);
   if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
   else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
   if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
@@ -183,7 +185,7 @@ static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
   coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 }
 
-static bool coroutine_has_module_namespace(coroutine_t *coro) {
+static bool coroutine_has_module_eval_ctx(coroutine_t *coro) {
   return coro && coro->module_eval_ctx;
 }
 
@@ -265,7 +267,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   coro->is_ready = false;
   mco_result res;
   
-  bool activate_for_module = coroutine_has_module_namespace(coro);
+  bool activate_for_module = coroutine_has_module_eval_ctx(coro);
   if (activate_for_module) coroutine_activate(js, coro);
   MCO_RESUME_SAVE(js, coro->mco, res);
   
