@@ -8,7 +8,6 @@ export type Env = {
   GITHUB_TOKEN?: string;
   MANIFEST_REFRESH_TOKEN?: string;
   CACHE_TTL_SECONDS?: string;
-  MANIFEST_REFRESH_SECONDS?: string;
 };
 
 export type ArtifactKind = 'ant' | 'sandbox' | 'kernel';

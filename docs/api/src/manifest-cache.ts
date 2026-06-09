@@ -1,4 +1,4 @@
-import { branch, manifestRefreshSeconds, repository } from './config';
+import { branch, repository } from './config';
 import type { RequestOptions } from './config';
 import { annotateGzipSizes, downloadCacheKeys, prefetchArtifacts } from './downloads';
 import type { Env, ResolvedArtifact } from './types';
@@ -23,11 +23,6 @@ export async function cachedManifest(
     cached.writeHttpMetadata(headers);
     headers.set('X-Ant-Manifest-Cache', 'hit');
     headers.set('X-Ant-Manifest-Cached-At', cached.customMetadata?.cached_at || '');
-
-    if (shouldRefreshManifest(env, cached)) {
-      headers.set('X-Ant-Manifest-Refresh', 'background');
-      ctx.waitUntil(refreshManifest(env, options, key, producer));
-    }
 
     return new Response(
       JSON.stringify(await annotateGzipSizes(env, await cached.json()), null, 2) + '\n',
@@ -101,12 +96,6 @@ function manifestResponse(body: unknown, cacheState: string): Response {
   const headers = jsonHeaders();
   headers.set('X-Ant-Manifest-Cache', cacheState);
   return Response.json(body, { headers });
-}
-
-function shouldRefreshManifest(env: Env, object: R2Object): boolean {
-  const cachedAt = Date.parse(object.customMetadata?.cached_at || '');
-  if (!Number.isFinite(cachedAt)) return true;
-  return Date.now() - cachedAt > manifestRefreshSeconds(env) * 1000;
 }
 
 function manifestKey(env: Env, options: RequestOptions): string {

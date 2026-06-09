@@ -10,7 +10,6 @@ export const DEFAULT_ACTION_REPOSITORIES = ['sf-tools/ant', 'theMackabu/ant'];
 export const DEFAULT_RELEASE_REPOSITORY = 'theMackabu/ant';
 
 export const DEFAULT_CACHE_TTL_SECONDS = 300;
-export const DEFAULT_MANIFEST_REFRESH_SECONDS = 21600;
 
 export type RequestOptions = {
   branch?: string;
@@ -58,11 +57,4 @@ export function actionsRunId(env: Env, options?: RequestOptions): number | undef
 export function cacheTtl(env: Env): number {
   const parsed = Number(env.CACHE_TTL_SECONDS || DEFAULT_CACHE_TTL_SECONDS);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_CACHE_TTL_SECONDS;
-}
-
-export function manifestRefreshSeconds(env: Env): number {
-  const parsed = Number(env.MANIFEST_REFRESH_SECONDS || DEFAULT_MANIFEST_REFRESH_SECONDS);
-  return Number.isFinite(parsed) && parsed > 0
-    ? Math.floor(parsed)
-    : DEFAULT_MANIFEST_REFRESH_SECONDS;
 }
