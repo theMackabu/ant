@@ -190,6 +190,8 @@ void gc_run(ant_t *js) {
 
   js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
+  js->gc_closure_alloc = 0;
+  js->gc_closure_at_minor = 0;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
   gc_last_run_ms = gc_now_ms();
@@ -213,6 +215,7 @@ void gc_run_minor(ant_t *js) {
   size_t survivors = js->obj_arena.live_count > old_before
     ? js->obj_arena.live_count - old_before : 0;
     
+  js->gc_closure_at_minor = js->gc_closure_alloc;
   gc_adapt_nursery(young_before, survivors);
   gc_last_run_ms = gc_now_ms();
 }
@@ -223,8 +226,11 @@ void gc_maybe(ant_t *js) {
   
   size_t live = js->obj_arena.live_count;
   size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
-  
-  if (young_count >= gc_nursery_threshold) {
+  size_t closure_young = js->gc_closure_alloc > js->gc_closure_at_minor
+    ? js->gc_closure_alloc - js->gc_closure_at_minor : 0;
+
+  if (young_count >= gc_nursery_threshold ||
+      closure_young >= GC_CLOSURE_NURSERY_THRESHOLD) {
     gc_tick = 0;
     size_t live_before_minor = js->obj_arena.live_count;
     size_t major_threshold = gc_live_major_threshold(js);
@@ -235,7 +241,8 @@ void gc_maybe(ant_t *js) {
     if (js->minor_gc_count >= gc_major_every_n) {
       bool major_due = 
         live_before_minor >= major_threshold ||
-        js->gc_pool_alloc >= pool_threshold;
+        js->gc_pool_alloc >= pool_threshold ||
+        js->gc_closure_alloc >= GC_CLOSURE_MAJOR_THRESHOLD;
       
       if (major_due) {
         js->minor_gc_count = 0;
@@ -249,6 +256,15 @@ void gc_maybe(ant_t *js) {
   size_t threshold = gc_live_major_threshold(js);
   
   if (live >= threshold) {
+    gc_tick = 0;
+    gc_run(js);
+    return;
+  }
+
+  /* Closure arenas are only swept by majors; with lazy function objects
+     closures no longer drag young objects along, so schedule majors from
+     closure pressure directly. */
+  if (js->gc_closure_alloc >= GC_CLOSURE_MAJOR_THRESHOLD) {
     gc_tick = 0;
     gc_run(js);
     return;

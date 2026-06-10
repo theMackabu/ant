@@ -226,6 +226,11 @@ struct ant_isolate_t {
   
   size_t gc_last_live;
   size_t gc_pool_alloc;
+  /* closures allocated since the last major GC; closure arenas are
+     only swept by majors, so this drives GC cadence now that closures
+     no longer drag young function objects along. */
+  size_t gc_closure_alloc;
+  size_t gc_closure_at_minor;
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;

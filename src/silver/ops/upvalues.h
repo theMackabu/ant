@@ -50,8 +50,12 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
 
 static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value_t parent_func) {
   if (vtype(parent_func) == T_FUNC) {
-    ant_value_t module_ctx = js_get_slot(js_func_obj(parent_func), SLOT_MODULE_CTX);
-    if (is_object_type(module_ctx)) return module_ctx;
+    sv_closure_t *pc = js_func_closure(parent_func);
+    if (is_object_type(pc->module_ctx)) return pc->module_ctx;
+    if (pc->func_obj) {
+      ant_value_t module_ctx = js_get_slot(pc->func_obj, SLOT_MODULE_CTX);
+      if (is_object_type(module_ctx)) return module_ctx;
+    }
   }
 
   return js_module_eval_active_ctx(js);
@@ -199,9 +203,11 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
-  
+  /* The function object (and its .prototype) materializes lazily on
+     first property/prototype access; see sv_closure_materialize_func_obj. */
+  closure->module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
+  closure->func_obj = 0;
+
   return js_mkundef();
 }
 

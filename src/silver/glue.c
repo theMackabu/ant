@@ -727,12 +727,12 @@ ant_value_t jit_helper_closure(
   }
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(
+  closure->module_ctx = sv_get_current_closure_module_ctx(
     js, mkval(T_FUNC, (uintptr_t)parent_closure)
   );
-  
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
-  if (name) js_set_function_name(js, func_val, name, name_len);
+  closure->func_obj = 0;
+  closure->pending_name = name;
+  closure->pending_name_len = name_len;
 
   return func_val;
 }
@@ -820,7 +820,15 @@ void jit_helper_define_field(
 void jit_helper_set_name(
   ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
-) { 
+) {
+  if (vtype(fn) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(fn);
+    if (!c->func_obj) {
+      c->pending_name = str;
+      c->pending_name_len = len;
+      return;
+    }
+  }
   js_set_function_name(js, fn, str, len);
 }
 

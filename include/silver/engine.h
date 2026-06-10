@@ -329,14 +329,27 @@ typedef struct sv_closure {
   ant_value_t *bound_argv;
   ant_value_t bound_args;
   ant_value_t super_val;
+  /* 0 (raw) = function object not materialized yet; see js_func_obj. */
   ant_value_t func_obj;
-  
+
+  /* Captured at closure creation for lazy func_obj materialization. */
+  ant_value_t module_ctx;
+  const char *pending_name;
+  uint32_t pending_name_len;
+
   uint64_t gc_epoch;
 } sv_closure_t;
 
 static inline sv_closure_t *js_closure_alloc(ant_t *js) {
   sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
-  if (c) c->gc_epoch = gc_get_epoch();
+  js->gc_closure_alloc++;
+  if (c) {
+    c->gc_epoch = gc_get_epoch();
+    c->func_obj = 0;
+    c->module_ctx = mkval(T_UNDEF, 0);
+    c->pending_name = NULL;
+    c->pending_name_len = 0;
+  }
   return c;
 }
 
@@ -344,8 +357,14 @@ static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
 }
 
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
+                                            ant_value_t func_val);
+
 static inline ant_value_t js_func_obj(ant_value_t func) {
-  return js_func_closure(func)->func_obj;
+  sv_closure_t *c = js_func_closure(func);
+  if (__builtin_expect(c->func_obj == 0, 0))
+    return sv_closure_materialize_func_obj(rt->js, c, func);
+  return c->func_obj;
 }
 
 static inline ant_value_t js_as_obj(ant_value_t v) {

@@ -249,7 +249,8 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   
   c->gc_epoch = gc_epoch;
   gc_mark_func(js, c->func);
-  gc_mark_value(js, c->func_obj);
+  if (c->func_obj) gc_mark_value(js, c->func_obj);
+  gc_mark_value(js, c->module_ctx);
   gc_mark_value(js, c->bound_this);
   gc_mark_value(js, c->bound_args);
   gc_mark_value(js, c->super_val);

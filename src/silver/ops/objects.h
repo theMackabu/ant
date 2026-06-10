@@ -113,6 +113,14 @@ static inline void sv_op_set_name(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t fn = vm->stack[vm->sp - 1];
+  if (vtype(fn) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(fn);
+    if (!c->func_obj) {
+      c->pending_name = a->str;
+      c->pending_name_len = a->len;
+      return;
+    }
+  }
   js_set_function_name(js, fn, a->str, a->len);
 }
 

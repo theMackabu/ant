@@ -758,6 +758,25 @@ ant_value_t sv_execute_entry(
   return sv_execute_entry_common(vm, func, NULL, 0, js_mkundef(), js_mkundef(), this_val, args, argc, NULL);
 }
 
+static size_t sv_dbg_materialize_n = 0;
+__attribute__((destructor)) static void sv_lazy_dbg_report(void) {
+  if (getenv("ANT_LAZY_STATS"))
+    fprintf(stderr, "materialized=%zu\n", sv_dbg_materialize_n);
+}
+
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
+                                            ant_value_t func_val) {
+  sv_dbg_materialize_n++;
+  if (c->func_obj) return c->func_obj;
+  sv_init_closure_function_object(js, c, func_val, c->module_ctx);
+  if (c->pending_name && c->func_obj) {
+    js_set_function_name(js, func_val, c->pending_name, c->pending_name_len);
+    c->pending_name = NULL;
+    c->pending_name_len = 0;
+  }
+  return c->func_obj;
+}
+
 ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
   ant_value_t this_val, ant_value_t *args, int argc, ant_value_t *out_this
