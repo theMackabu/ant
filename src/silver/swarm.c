@@ -155,6 +155,8 @@ typedef struct {
   uint8_t     *slot_type;    
   uint64_t    *known_const;  
   bool        *has_const;    
+  /* Slot is statically known to hold a JS boolean (js_true/js_false). */
+  uint8_t     *known_bool;
   int          sp;           
   int          max;
 } jit_vstack_t;
@@ -163,6 +165,7 @@ static MIR_reg_t vstack_push(jit_vstack_t *vs) {
   if (vs->known_func) vs->known_func[vs->sp] = NULL;
   if (vs->slot_type) vs->slot_type[vs->sp] = 0; 
   if (vs->has_const) vs->has_const[vs->sp] = false;
+  if (vs->known_bool) vs->known_bool[vs->sp] = 0;
   return vs->regs[vs->sp++];
 }
 
@@ -170,6 +173,7 @@ static MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
   if (vs->known_func) vs->known_func[vs->sp] = NULL;
   if (vs->slot_type) vs->slot_type[vs->sp] = 0;
   if (vs->has_const) { vs->has_const[vs->sp] = true; vs->known_const[vs->sp] = val; }
+  if (vs->known_bool) vs->known_bool[vs->sp] = 0;
   return vs->regs[vs->sp++];
 }
 
@@ -326,6 +330,23 @@ static bool jit_bailout_slot_was_num(jit_vstack_t *vs, int idx,
   return vs->slot_type && vs->slot_type[idx] == SLOT_NUM;
 }
 
+/* Per-compile state set by sv_jit_compile: locals flagged in
+   jit_cur_dnum_locals keep their live value only in local_d_regs ("d-only"
+   locals); the boxed regs are stale and must be refreshed before any code
+   reads them wholesale (bailout snapshots, upvalue closing). Compiles are
+   not reentrant, so plain statics are safe. */
+static const uint8_t *jit_cur_dnum_locals;
+static MIR_reg_t *jit_cur_local_d_regs;
+
+static void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
+                                MIR_reg_t *local_regs, int n_locals,
+                                MIR_reg_t r_d_slot) {
+  if (!jit_cur_dnum_locals) return;
+  for (int i = 0; i < n_locals; i++)
+    if (jit_cur_dnum_locals[i])
+      mir_d_to_i64(ctx, fn, local_regs[i], jit_cur_local_d_regs[i], r_d_slot);
+}
+
 static void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
                                         MIR_reg_t r_bailout_off, int bc_off,
                                         MIR_reg_t r_bailout_sp, int pre_op_sp,
@@ -347,6 +368,7 @@ static void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
           (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
         MIR_new_reg_op(ctx, vs->regs[i])));
   }
+  mir_emit_dnum_rebox(ctx, fn, local_regs, n_locals, r_d_slot);
   for (int i = 0; i < n_locals; i++)
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_MOV,
@@ -2903,14 +2925,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   vs.slot_type = calloc((size_t)vs.max, sizeof(uint8_t));
   vs.known_const = calloc((size_t)vs.max, sizeof(uint64_t));
   vs.has_const = calloc((size_t)vs.max, sizeof(bool));
+  vs.known_bool = calloc((size_t)vs.max, sizeof(uint8_t));
   
-  if (!vs.regs || !vs.known_func || !vs.d_regs || !vs.slot_type || !vs.known_const || !vs.has_const) {
+  if (!vs.regs || !vs.known_func || !vs.d_regs || !vs.slot_type || !vs.known_const || !vs.has_const || !vs.known_bool) {
     free(vs.regs); 
     free(vs.known_func);
     free(vs.d_regs);
     free(vs.slot_type);
     free(vs.known_const);
     free(vs.has_const);
+    free(vs.known_bool);
+  free(vs.known_bool);
     
     MIR_finish_func(ctx);
     MIR_finish_module(ctx);
@@ -2949,6 +2974,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       free(vs.slot_type);
       free(vs.known_const);
       free(vs.has_const);
+    free(vs.known_bool);
+  free(vs.known_bool);
       free(local_regs);
       free(local_d_regs);
       free(known_func_locals);
@@ -3077,6 +3104,41 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
   bool params_in_slotbuf = writes_params || has_captured_params;
   bool has_captured_slots = params_in_slotbuf || has_captures;
+
+  /* "d-only" locals: uncaptured, statically numeric, never retyped by
+     SET_LOCAL_UNDEF and never targeted by the string-builder local ops.
+     Their boxed regs are not maintained per store; snapshots rebox. */
+  uint8_t *dnum_locals = NULL;
+  if (n_locals > 0 && local_d_regs && known_type_locals) {
+    dnum_locals = calloc((size_t)n_locals, 1);
+    if (dnum_locals) {
+      for (int i = 0; i < n_locals; i++)
+        dnum_locals[i] = known_type_locals[i] == SV_TI_NUM &&
+                         !(captured_locals && captured_locals[i]);
+      uint8_t *dp = func->code, *de = func->code + func->code_len;
+      while (dp < de) {
+        sv_op_t dop = (sv_op_t)*dp;
+        int dsz = sv_op_size[dop];
+        if (dsz == 0) break;
+        if (dop == OP_SET_LOCAL_UNDEF) {
+          /* TDZ marker: harmless if the local is immediately initialized
+             with a number (mirrors the SET_LOCAL_UNDEF codegen rule). */
+          uint16_t di = sv_get_u16(dp + 1);
+          if (di < (uint16_t)n_locals &&
+              !jit_has_immediate_numeric_local_init(func, dp + dsz, de, di))
+            dnum_locals[di] = 0;
+        } else if (dop == OP_STR_APPEND_LOCAL || dop == OP_STR_ALC_SNAPSHOT) {
+          uint16_t ds = sv_get_u16(dp + 1);
+          if (ds >= (uint16_t)param_count &&
+              (int)ds - param_count < n_locals)
+            dnum_locals[ds - param_count] = 0;
+        }
+        dp += dsz;
+      }
+    }
+  }
+  jit_cur_dnum_locals = dnum_locals;
+  jit_cur_local_d_regs = local_d_regs;
   bool use_unified_slotbuf = has_captured_slots && has_captures;
   int slotbuf_count = use_unified_slotbuf ? (param_count + n_locals) : param_count;
 
@@ -3622,10 +3684,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         MIR_reg_t dst = vstack_push(&vs);
         if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, dst),
-            MIR_new_reg_op(ctx, local_regs[idx])));
+        if (!(dnum_locals && dnum_locals[idx]))
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, local_regs[idx])));
         if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_DMOV,
@@ -3646,10 +3709,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         MIR_reg_t dst = vstack_push(&vs);
         if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, dst),
-            MIR_new_reg_op(ctx, local_regs[idx])));
+        if (!(dnum_locals && dnum_locals[idx]))
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, local_regs[idx])));
         if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_DMOV,
@@ -3704,10 +3768,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
           MIR_reg_t dst = vstack_push(&vs);
           if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_MOV,
-              MIR_new_reg_op(ctx, dst),
-              MIR_new_reg_op(ctx, local_regs[idx])));
+          if (!(dnum_locals && dnum_locals[idx]))
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, dst),
+                MIR_new_reg_op(ctx, local_regs[idx])));
           if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_DMOV,
@@ -3725,6 +3790,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_func_t *kf = vs.known_func[vs.sp - 1];
         bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
+        if (dnum_locals && dnum_locals[idx]) {
+          if (!src_is_num)
+            vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+          MIR_reg_t dsrc = vstack_pop(&vs);
+          if (known_func_locals) known_func_locals[idx] = kf;
+          mir_emit_numeric_local_store_mirror(ctx, jit_func,
+            local_d_regs[idx], dsrc, src_d, src_is_num,
+            r_bool, bc_off, vs.sp + 1, &bailout_ctx);
+          break;
+        }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_pop(&vs);
         if (known_func_locals) known_func_locals[idx] = kf;
@@ -3751,6 +3826,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_func_t *kf = vs.known_func[vs.sp - 1];
         bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
+        if (dnum_locals && dnum_locals[idx]) {
+          if (!src_is_num)
+            vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+          MIR_reg_t dsrc = vstack_pop(&vs);
+          if (known_func_locals) known_func_locals[idx] = kf;
+          mir_emit_numeric_local_store_mirror(ctx, jit_func,
+            local_d_regs[idx], dsrc, src_d, src_is_num,
+            r_bool, bc_off, vs.sp + 1, &bailout_ctx);
+          break;
+        }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_pop(&vs);
         if (known_func_locals) known_func_locals[idx] = kf;
@@ -3777,6 +3862,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (idx >= (uint16_t)n_locals) { ok = false; break; }
         bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
+        if (dnum_locals && dnum_locals[idx]) {
+          /* d-only local: maintain only the d mirror. Non-numeric source
+             bails and re-executes this op in the interpreter. */
+          if (!src_is_num)
+            vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+          if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
+          mir_emit_numeric_local_store_mirror(ctx, jit_func,
+            local_d_regs[idx], vs.regs[vs.sp - 1], src_d, src_is_num,
+            r_bool, bc_off, vs.sp, &bailout_ctx);
+          break;
+        }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_top(&vs);
         if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
@@ -3802,6 +3898,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
         bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
+        if (dnum_locals && dnum_locals[idx]) {
+          /* d-only local: maintain only the d mirror. Non-numeric source
+             bails and re-executes this op in the interpreter. */
+          if (!src_is_num)
+            vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+          if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
+          mir_emit_numeric_local_store_mirror(ctx, jit_func,
+            local_d_regs[idx], vs.regs[vs.sp - 1], src_d, src_is_num,
+            r_bool, bc_off, vs.sp, &bailout_ctx);
+          break;
+        }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_top(&vs);
         if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
@@ -4534,6 +4641,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
         }
+        mir_emit_dnum_rebox(ctx, jit_func, local_regs, n_locals, r_d_slot);
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -4622,6 +4730,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func, is_true);
         mir_load_imm(ctx, jit_func, rs, js_true);
         MIR_append_insn(ctx, jit_func, is_done);
+        if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_BOXED;
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         break;
       }
 
@@ -4636,6 +4746,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t rd = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
 
         if (fb_never_num) {
           if (l_is_num) mir_d_to_i64(ctx, jit_func, rl, vs.d_regs[vs.sp - 1], r_d_slot);
@@ -4799,6 +4910,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t rd = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
 
         if (fb_never_num) {
           if (l_is_num) mir_d_to_i64(ctx, jit_func, rl, vs.d_regs[vs.sp - 1], r_d_slot);
@@ -4969,6 +5081,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_JMP_FALSE8:
       case OP_JMP_TRUE:
       case OP_JMP_TRUE8: {
+        bool cond_known_bool = vs.known_bool && vs.sp > 0 &&
+                               vs.known_bool[vs.sp - 1];
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         bool is_peek = (op == OP_JMP_FALSE_PEEK || op == OP_JMP_TRUE_PEEK);
         MIR_reg_t cond = is_peek ? vstack_top(&vs) : vstack_pop(&vs);
@@ -4978,6 +5092,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         int target = bc_off + sz + (short_op ? (int8_t)sv_get_i8(ip + 1)
                                              : sv_get_i32(ip + 1));
         MIR_label_t lbl = label_for_branch(ctx, &lm, target, vs.sp);
+        if (cond_known_bool) {
+          /* Condition is statically a JS boolean: one compare-branch
+             replaces the full truthiness decode. */
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BEQ,
+              MIR_new_label_op(ctx, lbl),
+              MIR_new_reg_op(ctx, cond),
+              MIR_new_uint_op(ctx, is_false_branch ? js_false : js_true)));
+          break;
+        }
         MIR_label_t lbl_not_bool = MIR_new_label(ctx);
         MIR_label_t lbl_not_num  = MIR_new_label(ctx);
         MIR_label_t lbl_done     = MIR_new_label(ctx);
@@ -5857,7 +5981,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_insn(ctx, MIR_DMOV,
               MIR_new_reg_op(ctx, local_d_regs[idx]),
               MIR_new_reg_op(ctx, fd2)));
-        mir_d_to_i64(ctx, jit_func, local_regs[idx], fd2, r_d_slot);
+        if (!(dnum_locals && dnum_locals[idx]))
+          mir_d_to_i64(ctx, jit_func, local_regs[idx], fd2, r_d_slot);
         if (has_captures && captured_locals && captured_locals[idx])
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -5895,7 +6020,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_insn(ctx, MIR_DMOV,
               MIR_new_reg_op(ctx, local_d_regs[idx]),
               MIR_new_reg_op(ctx, fd2)));
-        mir_d_to_i64(ctx, jit_func, local_regs[idx], fd2, r_d_slot);
+        if (!(dnum_locals && dnum_locals[idx]))
+          mir_d_to_i64(ctx, jit_func, local_regs[idx], fd2, r_d_slot);
         if (has_captures && captured_locals && captured_locals[idx])
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -5908,6 +6034,47 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_ADD_LOCAL: {
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
+        if (dnum_locals && dnum_locals[idx]) {
+          /* d-only local: accumulate in the d mirror. A non-numeric RHS
+             bails and re-executes ADD_LOCAL in the interpreter (the RHS
+             stays in the stack snapshot at sp + 1). */
+          if (known_func_locals) known_func_locals[idx] = NULL;
+          bool al_rr_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+          MIR_reg_t al_rr_d = al_rr_num ? vs.d_regs[vs.sp - 1] : 0;
+          if (!al_rr_num)
+            vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+          MIR_reg_t al_rr = vstack_pop(&vs);
+          int al_n = arith_n++;
+          char al_dn[32];
+          snprintf(al_dn, sizeof(al_dn), "ald_%d", al_n);
+          MIR_reg_t al_fd = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_D, al_dn);
+          if (al_rr_num) {
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_DMOV,
+                MIR_new_reg_op(ctx, al_fd),
+                MIR_new_reg_op(ctx, al_rr_d)));
+          } else {
+            MIR_label_t al_slow = MIR_new_label(ctx);
+            MIR_label_t al_done = MIR_new_label(ctx);
+            mir_emit_is_num_guard(ctx, jit_func, r_bool, al_rr, al_slow);
+            mir_i64_to_d(ctx, jit_func, al_fd, al_rr, r_d_slot);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, al_done)));
+            MIR_append_insn(ctx, jit_func, al_slow);
+            mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+            mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
+              0, r_bailout_off, bc_off,
+              r_bailout_sp, vs.sp + 1, bailout_tramp,
+              r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+            MIR_append_insn(ctx, jit_func, al_done);
+          }
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_DADD,
+              MIR_new_reg_op(ctx, local_d_regs[idx]),
+              MIR_new_reg_op(ctx, local_d_regs[idx]),
+              MIR_new_reg_op(ctx, al_fd)));
+          break;
+        }
         if (known_func_locals) known_func_locals[idx] = NULL;
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t rr = vstack_pop(&vs);
@@ -7416,6 +7583,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         if (r_const || l_const) {
           MIR_reg_t other = r_const ? rl : rr;
           MIR_label_t is_true = MIR_new_label(ctx);
@@ -7451,6 +7619,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         if (is_nullish) {
           MIR_reg_t other = r_const ? rl : rr;
           MIR_label_t is_true = MIR_new_label(ctx);
@@ -7491,6 +7660,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         if (is_nullish) {
           MIR_reg_t other = r_const ? rl : rr;
           MIR_label_t is_false = MIR_new_label(ctx);
@@ -7529,6 +7699,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         if (r_const || l_const) {
           MIR_reg_t other = r_const ? rl : rr;
           MIR_label_t is_false = MIR_new_label(ctx);
@@ -7563,6 +7734,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t rd = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
 
         if (fb_never_num) {
           if (l_is_num) mir_d_to_i64(ctx, jit_func, rl, vs.d_regs[vs.sp - 1], r_d_slot);
@@ -7689,6 +7861,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t rd = vstack_push(&vs);
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
 
         if (fb_never_num) {
           if (l_is_num) mir_d_to_i64(ctx, jit_func, rl, vs.d_regs[vs.sp - 1], r_d_slot);
@@ -7858,6 +8031,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_mem_op(ctx, MIR_T_I64,
                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
+        mir_emit_dnum_rebox(ctx, jit_func, local_regs, n_locals, r_d_slot);
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -7890,6 +8064,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, rs)));
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
         break;
       }
 
@@ -8735,12 +8910,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(vs.slot_type);
   free(vs.known_const);
   free(vs.has_const);
+  free(vs.known_bool);
   free(local_regs);
   free(local_d_regs);
   free(known_func_locals);
   free(known_type_locals);
   free(captured_params);
   free(captured_locals);
+  free(dnum_locals);
+  jit_cur_dnum_locals = NULL;
+  jit_cur_local_d_regs = NULL;
 
   if (!ok) {
     MIR_remove_module(ctx, mod);
