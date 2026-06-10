@@ -14,6 +14,13 @@ bool gc_disabled = false;
 static size_t   gc_tick = 0;
 static uint64_t gc_last_run_ms = 0;
 
+static size_t gc_dbg_minor_n = 0;
+static size_t gc_dbg_major_n = 0;
+__attribute__((destructor)) static void gc_dbg_report(void) {
+  if (getenv("ANT_GC_STATS"))
+    fprintf(stderr, "gc: minors=%zu majors=%zu\n", gc_dbg_minor_n, gc_dbg_major_n);
+}
+
 static size_t   gc_nursery_threshold = GC_NURSERY_THRESHOLD;
 static uint32_t gc_major_every_n     = GC_MAJOR_EVERY_N_MINOR;
 
@@ -163,6 +170,7 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  gc_dbg_major_n++;
   size_t live_before = js->obj_arena.live_count;
 
   js->prop_refs_len = 0;
@@ -189,6 +197,7 @@ void gc_run(ant_t *js) {
 
 void gc_run_minor(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  gc_dbg_minor_n++;
 
   size_t old_before   = js->old_live_count;
   size_t live_before  = js->obj_arena.live_count;

@@ -17218,8 +17218,8 @@ void js_destroy(ant_t *js) {
 }
 
 inline double js_getnum(ant_value_t value) { return tod(value); }
-inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; }
-inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; }
+inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; js_cstk_refresh_floor(js); }
+inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; js_cstk_refresh_floor(js); }
 inline void js_set_filename(ant_t *js, const char *filename) { js->filename = filename; }
 
 inline ant_value_t js_mkundef(void) { return mkval(T_UNDEF, 0); }

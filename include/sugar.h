@@ -22,12 +22,14 @@
   (res_) = mco_resume((mco_));                   \
   (js_)->cstk.base = _saved_cstk;                \
   (js_)->cstk.limit = _saved_limit;              \
+  js_cstk_refresh_floor((js_));                  \
 } while (0)
 
 #define MCO_CORO_STACK_ENTER(js_, mco_) do {     \
   volatile char _coro_marker;                    \
   (js_)->cstk.base = (void *)&_coro_marker;      \
   (js_)->cstk.limit = (mco_)->stack_size;        \
+  js_cstk_refresh_floor((js_));                  \
 } while (0)
 
 #define CORO_PER_TICK_LIMIT 100000

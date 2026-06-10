@@ -241,6 +241,7 @@ struct sv_func {
   
   bool jit_compile_failed;
   bool jit_compiling;
+  bool jit_loop_hot;
 #endif
 };
 

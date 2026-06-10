@@ -21,7 +21,8 @@
 #include <stddef.h>
 
 typedef struct {
-  MIR_context_t ctx;
+  MIR_context_t ctx;      /* opt level 1: fast compiles for the long tail */
+  MIR_context_t ctx_hot;  /* opt level 3: loop-hot functions */
   bool externals_loaded;
 } sv_jit_ctx_t;
 
@@ -39,8 +40,10 @@ static void jit_ctx_remove(ant_t *js) {
 
 static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   if (jc == NULL || jc->externals_loaded) return;
-  MIR_context_t ctx = jc->ctx;
-#define LOAD_EXT(name) MIR_load_external(ctx, #name, name)
+#define LOAD_EXT(name) do { \
+    MIR_load_external(jc->ctx, #name, name); \
+    MIR_load_external(jc->ctx_hot, #name, name); \
+  } while (0)
   LOAD_EXT(jit_helper_add);
   LOAD_EXT(jit_helper_sub);
   LOAD_EXT(jit_helper_mul);
@@ -116,9 +119,19 @@ void sv_jit_init(ant_t *js) {
   if (jit_ctx_get(js)) return;
   sv_jit_ctx_t *jc = calloc(1, sizeof(*jc));
   if (!jc) return;
+
+  const char *forced = getenv("ANT_JIT_OPT");
+  unsigned lvl_fast = forced ? (unsigned)atoi(forced) : 1;
+  unsigned lvl_hot  = forced ? (unsigned)atoi(forced) : 3;
+
   jc->ctx = MIR_init();
   MIR_gen_init(jc->ctx);
-  MIR_gen_set_optimize_level(jc->ctx, 3);
+  MIR_gen_set_optimize_level(jc->ctx, lvl_fast);
+
+  jc->ctx_hot = MIR_init();
+  MIR_gen_init(jc->ctx_hot);
+  MIR_gen_set_optimize_level(jc->ctx_hot, lvl_hot);
+
   jit_load_externals_once(jc);
   jit_ctx_set(js, jc);
 }
@@ -128,6 +141,8 @@ void sv_jit_destroy(ant_t *js) {
   if (!jc) return;
   MIR_gen_finish(jc->ctx);
   MIR_finish(jc->ctx);
+  MIR_gen_finish(jc->ctx_hot);
+  MIR_finish(jc->ctx_hot);
   free(jc);
   jit_ctx_remove(js);
 }
@@ -212,9 +227,24 @@ static MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
 #define JIT_ERR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | T_ERR)
 
 
+/* Register-to-register bitcasts on targets with MIR_I2DB/MIR_D2IB
+   patterns; other targets fall back to a memory round-trip via `slot`. */
+#if defined(__aarch64__) || defined(__x86_64__)
+#define SV_JIT_HAS_BITCAST 1
+#else
+#define SV_JIT_HAS_BITCAST 0
+#endif
+
 static void mir_i64_to_d(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst_d, MIR_reg_t src_i64,
                          MIR_reg_t slot) {
+#if SV_JIT_HAS_BITCAST
+  (void)slot;
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_I2DB,
+      MIR_new_reg_op(ctx, dst_d),
+      MIR_new_reg_op(ctx, src_i64)));
+#else
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_mem_op(ctx, MIR_T_I64, 0, slot, 0, 1),
@@ -223,11 +253,19 @@ static void mir_i64_to_d(MIR_context_t ctx, MIR_item_t fn,
     MIR_new_insn(ctx, MIR_DMOV,
       MIR_new_reg_op(ctx, dst_d),
       MIR_new_mem_op(ctx, MIR_T_D, 0, slot, 0, 1)));
+#endif
 }
 
 static void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst_i64, MIR_reg_t src_d,
                          MIR_reg_t slot) {
+#if SV_JIT_HAS_BITCAST
+  (void)slot;
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_D2IB,
+      MIR_new_reg_op(ctx, dst_i64),
+      MIR_new_reg_op(ctx, src_d)));
+#else
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_DMOV,
       MIR_new_mem_op(ctx, MIR_T_D, 0, slot, 0, 1),
@@ -236,6 +274,7 @@ static void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, dst_i64),
       MIR_new_mem_op(ctx, MIR_T_I64, 0, slot, 0, 1)));
+#endif
 }
 
 
@@ -1375,6 +1414,7 @@ static bool jit_emit_inline_body(
   MIR_context_t ctx, MIR_item_t jit_func,
   sv_func_t *callee,
   MIR_reg_t *arg_regs, int caller_argc,
+  const uint8_t *arg_num, const MIR_reg_t *arg_d,
   MIR_reg_t result, MIR_label_t slow, MIR_label_t join,
   MIR_reg_t r_bool, MIR_reg_t *p_d_slot, int id,
   MIR_reg_t r_inl_closure, MIR_reg_t r_inl_this,
@@ -1393,6 +1433,40 @@ static bool jit_emit_inline_body(
     inl_vs[i] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, rn);
   }
   int isp = 0;
+
+  /* Unboxed (double) mirror of inl_vs slots. A slot with inl_num[k] set
+     holds its live value only in inl_d[k]; inl_vs[k] is stale until
+     INL_FLUSH_SLOT boxes it. Every case that does not understand typed
+     slots must flush the slots it reads and leave its outputs untyped. */
+  MIR_reg_t inl_d[inl_max_stack];
+  uint8_t inl_num[inl_max_stack];
+  for (int i = 0; i < inl_max_stack; i++) {
+    char rn[32]; snprintf(rn, sizeof(rn), "inl%d_dt%d", id, i);
+    inl_d[i] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_D, rn);
+    inl_num[i] = 0;
+  }
+
+#define INL_ENSURE_D_SLOT() do {                                        \
+    if (!*p_d_slot) {                                                   \
+      *p_d_slot = MIR_new_func_reg(ctx, jit_func->u.func,               \
+                                   MIR_T_I64, "d_slot_inl");            \
+      MIR_append_insn(ctx, jit_func,                                    \
+        MIR_new_insn(ctx, MIR_ALLOCA,                                   \
+          MIR_new_reg_op(ctx, *p_d_slot),                               \
+          MIR_new_uint_op(ctx, 8)));                                    \
+    }                                                                   \
+  } while (0)
+#define INL_FLUSH_SLOT(k) do {                                          \
+    int _fk = (k);                                                      \
+    if (inl_num[_fk]) {                                                 \
+      INL_ENSURE_D_SLOT();                                              \
+      mir_d_to_i64(ctx, jit_func, inl_vs[_fk], inl_d[_fk], *p_d_slot);  \
+      inl_num[_fk] = 0;                                                 \
+    }                                                                   \
+  } while (0)
+#define INL_FLUSH_ALL() do {                                            \
+    for (int _fa = 0; _fa < isp; _fa++) INL_FLUSH_SLOT(_fa);            \
+  } while (0)
 
   int inl_n_locals = callee->max_locals;
   MIR_reg_t inl_locals[inl_n_locals > 0 ? inl_n_locals : 1];
@@ -1419,13 +1493,24 @@ static bool jit_emit_inline_body(
     int label_sp = -1;
     MIR_label_t target_lbl = inl_label_lookup(&inl_lm, inl_bc_off, &label_sp);
     if (target_lbl) {
+      INL_FLUSH_ALL();
       MIR_append_insn(ctx, jit_func, target_lbl);
       if (label_sp >= 0) isp = label_sp;
+      memset(inl_num, 0, sizeof(inl_num));
     }
 
     switch (op) {
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
+        if ((int)idx < caller_argc && arg_num && arg_num[idx]) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_DMOV,
+              MIR_new_reg_op(ctx, inl_d[isp]),
+              MIR_new_reg_op(ctx, arg_d[idx])));
+          inl_num[isp++] = 1;
+          break;
+        }
+        inl_num[isp] = 0;
         MIR_reg_t dst = inl_vs[isp++];
         if ((int)idx < caller_argc)
           MIR_append_insn(ctx, jit_func,
@@ -1497,6 +1582,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_PUT_LOCAL: {
+        INL_FLUSH_SLOT(isp - 1);
         uint16_t idx = sv_get_u16(ip + 1);
         if (idx >= (uint16_t)inl_n_locals) return false;
         MIR_append_insn(ctx, jit_func,
@@ -1506,6 +1592,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_PUT_LOCAL8: {
+        INL_FLUSH_SLOT(isp - 1);
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)inl_n_locals) return false;
         MIR_append_insn(ctx, jit_func,
@@ -1515,6 +1602,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_SET_LOCAL: {
+        INL_FLUSH_SLOT(isp - 1);
         uint16_t idx = sv_get_u16(ip + 1);
         if (idx >= (uint16_t)inl_n_locals) return false;
         MIR_append_insn(ctx, jit_func,
@@ -1524,6 +1612,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_SET_LOCAL8: {
+        INL_FLUSH_SLOT(isp - 1);
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)inl_n_locals) return false;
         MIR_append_insn(ctx, jit_func,
@@ -1572,8 +1661,9 @@ static bool jit_emit_inline_body(
         break;
       }
 
-      case OP_POP: isp--; break;
+      case OP_POP: isp--; inl_num[isp] = 0; break;
       case OP_DUP: {
+        INL_FLUSH_SLOT(isp - 1);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_vs[isp]),
@@ -1582,6 +1672,8 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_DUP2: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         if (isp < 2) return false;
         MIR_reg_t ra = inl_vs[isp - 2];
         MIR_reg_t rb = inl_vs[isp - 1];
@@ -1598,6 +1690,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_INSERT2: {
+        INL_FLUSH_ALL();
         if (isp < 2) return false;
         char tn[32]; snprintf(tn, sizeof(tn), "inl%d_ins2t", id);
         MIR_reg_t r_t = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, tn);
@@ -1623,6 +1716,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_INSERT3: {
+        INL_FLUSH_ALL();
         if (isp < 3) return false;
         char tn[32]; snprintf(tn, sizeof(tn), "inl%d_ins3t", id);
         MIR_reg_t r_t = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, tn);
@@ -1655,9 +1749,30 @@ static bool jit_emit_inline_body(
 
       case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
       case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM: {
+        if (inl_num[isp - 1] && inl_num[isp - 2]) {
+          MIR_insn_code_t dop;
+          switch (op) {
+            case OP_ADD: case OP_ADD_NUM: dop = MIR_DADD; break;
+            case OP_SUB: case OP_SUB_NUM: dop = MIR_DSUB; break;
+            case OP_MUL: case OP_MUL_NUM: dop = MIR_DMUL; break;
+            default:                      dop = MIR_DDIV; break;
+          }
+          isp -= 2;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, dop,
+              MIR_new_reg_op(ctx, inl_d[isp]),
+              MIR_new_reg_op(ctx, inl_d[isp]),
+              MIR_new_reg_op(ctx, inl_d[isp + 1])));
+          inl_num[isp++] = 1;
+          inl_num[isp] = 0;
+          break;
+        }
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
+        inl_num[isp - 1] = 0;
 
         if (!(op == OP_ADD_NUM || op == OP_SUB_NUM ||
               op == OP_MUL_NUM || op == OP_DIV_NUM)) {
@@ -1706,6 +1821,8 @@ static bool jit_emit_inline_body(
       }
 
       case OP_MOD: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         mir_emit_is_num_guard(ctx, jit_func, r_bool, inl_vs[isp - 1], slow);
         mir_emit_is_num_guard(ctx, jit_func, r_bool, inl_vs[isp - 2], slow);
 
@@ -1765,6 +1882,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_NEG: {
+        INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t rs = inl_vs[isp - 1];
         mir_emit_is_num_guard(ctx, jit_func, r_bool, rs, slow);
 
@@ -1793,9 +1911,35 @@ static bool jit_emit_inline_body(
       }
 
       case OP_LT: case OP_LE: case OP_GT: case OP_GE: {
+        if (inl_num[isp - 1] && inl_num[isp - 2]) {
+          MIR_insn_code_t dcmp;
+          switch (op) {
+            case OP_LT: dcmp = MIR_DLT; break;
+            case OP_LE: dcmp = MIR_DLE; break;
+            case OP_GT: dcmp = MIR_DGT; break;
+            default:    dcmp = MIR_DGE; break;
+          }
+          isp -= 2;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, dcmp,
+              MIR_new_reg_op(ctx, r_bool),
+              MIR_new_reg_op(ctx, inl_d[isp]),
+              MIR_new_reg_op(ctx, inl_d[isp + 1])));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_OR,
+              MIR_new_reg_op(ctx, inl_vs[isp]),
+              MIR_new_uint_op(ctx, js_false),
+              MIR_new_reg_op(ctx, r_bool)));
+          inl_num[isp++] = 0;
+          inl_num[isp] = 0;
+          break;
+        }
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
+        inl_num[isp - 1] = 0;
 
         mir_emit_is_num_guard(ctx, jit_func, r_bool, rl, slow);
         mir_emit_is_num_guard(ctx, jit_func, r_bool, rr, slow);
@@ -1845,6 +1989,8 @@ static bool jit_emit_inline_body(
       }
 
       case OP_SEQ: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
@@ -1854,6 +2000,8 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_SNE: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
@@ -1863,6 +2011,8 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_EQ: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
@@ -1872,6 +2022,8 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_NE: {
+        INL_FLUSH_SLOT(isp - 1);
+        INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
@@ -1882,6 +2034,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_IS_UNDEF: case OP_IS_NULL: {
+        INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t rs = inl_vs[isp - 1];
         uint64_t cmp_val = (op == OP_IS_UNDEF)
           ? mkval(T_UNDEF, 0) : mkval(T_NULL, 0);
@@ -1902,6 +2055,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_JMP: {
+        INL_FLUSH_ALL();
         int target = inl_bc_off + sz + sv_get_i32(ip + 1);
         MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
         if (!lbl) return false;
@@ -1913,6 +2067,7 @@ static bool jit_emit_inline_body(
       case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
       case OP_JMP_TRUE: case OP_JMP_FALSE:
       case OP_JMP_TRUE8: case OP_JMP_FALSE8: {
+        INL_FLUSH_ALL();
         bool is_peek = (op == OP_JMP_TRUE_PEEK || op == OP_JMP_FALSE_PEEK);
         MIR_reg_t cond = is_peek ? inl_vs[isp - 1] : inl_vs[--isp];
         bool short_op = (op == OP_JMP_TRUE8 || op == OP_JMP_FALSE8);
@@ -1964,6 +2119,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_GET_FIELD: {
+        INL_FLUSH_SLOT(isp - 1);
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)callee->atom_count) return false;
         sv_atom_t *atom = &callee->atoms[idx];
@@ -1994,6 +2150,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_GET_FIELD2: {
+        INL_FLUSH_SLOT(isp - 1);
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)callee->atom_count) return false;
         sv_atom_t *atom = &callee->atoms[idx];
@@ -2041,6 +2198,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_RETURN: {
+        INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t ret = inl_vs[--isp];
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
@@ -2057,6 +2215,7 @@ static bool jit_emit_inline_body(
         break;
 
       case OP_SPECIAL_OBJ: {
+        INL_FLUSH_ALL();
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = inl_vs[isp++];
         if (which == 1) {
@@ -2210,6 +2369,24 @@ static bool jit_is_eligible(sv_func_t *func) {
   return eligible;
 }
 
+#include <time.h>
+static size_t jit_dbg_compile_n = 0;
+static size_t jit_dbg_recompile_n = 0;
+static uint64_t jit_dbg_compile_ns = 0;
+__attribute__((destructor)) static void jit_dbg_report(void) {
+  if (getenv("ANT_JIT_STATS"))
+    fprintf(stderr, "jit: compiles=%zu recompiles=%zu time=%.1fms\n",
+            jit_dbg_compile_n, jit_dbg_recompile_n, (double)jit_dbg_compile_ns / 1e6);
+}
+static uint64_t jit_dbg_now_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+static void jit_dbg_timer_end(uint64_t *start) {
+  jit_dbg_compile_ns += jit_dbg_now_ns() - *start;
+}
+
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
   if (func->jit_compile_failed || func->jit_compiling) return NULL;
   if (func->jit_code == NULL && func->jit_compiled_tfb_ver != 0 &&
@@ -2224,6 +2401,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
   
   func->jit_compiling = true;
+  jit_dbg_compile_n++;
+  if (func->jit_compiled_tfb_ver != 0) jit_dbg_recompile_n++;
+  __attribute__((cleanup(jit_dbg_timer_end))) uint64_t jit_dbg_t0 = jit_dbg_now_ns();
   sv_jit_ctx_t *jc = jit_ctx_get(js);
   
   if (!jc) { 
@@ -2237,7 +2417,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
   
   jit_load_externals_once(jc);
-  MIR_context_t ctx = jc->ctx;
+  /* Loop-hot functions amortize codegen cost; the call-triggered long tail
+     wants compile latency over code quality. */
+  bool jit_compile_hot = func->jit_loop_hot ||
+                         func->back_edge_count >= SV_JIT_OSR_THRESHOLD / 8;
+  MIR_context_t ctx = jit_compile_hot ? jc->ctx_hot : jc->ctx;
 
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
@@ -2464,11 +2648,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,   "str",
     MIR_T_I32, "len");
 
-  MIR_type_t so_ret = MIR_T_I64;
-  MIR_item_t stack_ovf_proto = MIR_new_proto(ctx, "so_proto",
-    1, &so_ret, 1,
-    MIR_T_I64, "js");
-
   MIR_type_t soe_ret = MIR_JSVAL;
   MIR_item_t stack_ovf_err_proto = MIR_new_proto(ctx, "soe_proto",
     1, &soe_ret, 2,
@@ -2649,7 +2828,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call_is_proto = MIR_new_import(ctx, "jit_helper_call_is_proto");
   MIR_item_t imp_delete      = MIR_new_import(ctx, "jit_helper_delete");
   MIR_item_t imp_set_name   = MIR_new_import(ctx, "jit_helper_set_name");
-  MIR_item_t imp_stack_ovf      = MIR_new_import(ctx, "jit_helper_stack_overflow");
   MIR_item_t imp_stack_ovf_err  = MIR_new_import(ctx, "jit_helper_stack_overflow_error");
 
   MIR_item_t jit_func = MIR_new_func(ctx, fname,
@@ -2684,19 +2862,26 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       MIR_new_mem_op(ctx, MIR_T_I64, 0, r_vm, 0, 1)));
 
   {
-    MIR_reg_t r_ovf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "stk_ovf");
+    /* Inline C-stack overflow probe: an alloca'd slot is a frame-address
+       proxy; the stack grows down, so overflow iff probe < cstk.floor.
+       floor == NULL disables the check (probe >= 0 always, unsigned). */
+    MIR_reg_t r_stk_probe = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "stk_probe");
+    MIR_reg_t r_stk_floor = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "stk_floor");
     MIR_label_t no_overflow = MIR_new_label(ctx);
     MIR_append_insn(ctx, jit_func,
-      MIR_new_call_insn(ctx, 4,
-        MIR_new_ref_op(ctx, stack_ovf_proto),
-        MIR_new_ref_op(ctx, imp_stack_ovf),
-        MIR_new_reg_op(ctx, r_ovf),
-        MIR_new_reg_op(ctx, r_js)));
+      MIR_new_insn(ctx, MIR_ALLOCA,
+        MIR_new_reg_op(ctx, r_stk_probe),
+        MIR_new_int_op(ctx, 8)));
     MIR_append_insn(ctx, jit_func,
-      MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_stk_floor),
+        MIR_new_mem_op(ctx, MIR_T_I64,
+          (MIR_disp_t)offsetof(ant_t, cstk.floor), r_js, 0, 1)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_UBGE,
         MIR_new_label_op(ctx, no_overflow),
-        MIR_new_reg_op(ctx, r_ovf),
-        MIR_new_int_op(ctx, 0)));
+        MIR_new_reg_op(ctx, r_stk_probe),
+        MIR_new_reg_op(ctx, r_stk_floor)));
     MIR_reg_t r_ovf_err = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "stk_err");
     MIR_append_insn(ctx, jit_func,
       MIR_new_call_insn(ctx, 5,
@@ -2995,6 +3180,54 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   jit_label_map_t lm = {0};
   scan_branch_targets(func, &lm, ctx);
 
+  /* Hoist read-only params into registers once per entry instead of a
+     branchy argc-checked load at every GET_ARG. Emitted before the OSR
+     dispatch so OSR entries populate them too; self-tail jumps re-enter
+     here (args/argc are updated before jumping). Params that live in
+     slotbuf (written or captured) are excluded. */
+  MIR_label_t self_tail_entry = MIR_new_label(ctx);
+  MIR_append_insn(ctx, jit_func, self_tail_entry);
+
+  MIR_reg_t param_cache[8] = {0};
+  {
+    uint8_t read_mask = 0;
+    uint8_t *pscan = func->code, *pend = func->code + func->code_len;
+    while (pscan < pend) {
+      sv_op_t pop_ = (sv_op_t)*pscan;
+      int psz = sv_op_size[pop_];
+      if (psz == 0) break;
+      if (pop_ == OP_GET_ARG) {
+        uint16_t pidx = sv_get_u16(pscan + 1);
+        if (pidx < 8) read_mask |= (uint8_t)(1u << pidx);
+      }
+      pscan += psz;
+    }
+    for (int i = 0; i < param_count && i < 8; i++) {
+      if (!(read_mask & (1u << i))) continue;
+      if (writes_params || (captured_params && captured_params[i])) continue;
+      char prn[16];
+      snprintf(prn, sizeof(prn), "parg%d", i);
+      param_cache[i] = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, prn);
+      MIR_label_t in_range = MIR_new_label(ctx);
+      MIR_label_t done = MIR_new_label(ctx);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_UBGT,
+          MIR_new_label_op(ctx, in_range),
+          MIR_new_reg_op(ctx, r_argc),
+          MIR_new_int_op(ctx, (int64_t)i)));
+      mir_load_imm(ctx, jit_func, param_cache[i], mkval(T_UNDEF, 0));
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+      MIR_append_insn(ctx, jit_func, in_range);
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_MOV,
+          MIR_new_reg_op(ctx, param_cache[i]),
+          MIR_new_mem_op(ctx, MIR_JSVAL,
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args, 0, 1)));
+      MIR_append_insn(ctx, jit_func, done);
+    }
+  }
+
   osr_entry_map_t osr_map = {0};
   scan_osr_entries(func, &osr_map);
   if (osr_map.count > 0) {
@@ -3143,10 +3376,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   jit_catch_sp_t catch_sp_map[JIT_TRY_MAX];
   int catch_sp_count = 0;
 
-  MIR_label_t self_tail_entry = MIR_new_label(ctx);
-  MIR_append_insn(ctx, jit_func, self_tail_entry);
-
-
   MIR_reg_t r_result = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "result");
   mir_load_imm(ctx, jit_func, r_result, mkval(T_UNDEF, 0));
 
@@ -3274,7 +3503,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (idx < (uint16_t)param_count
+        if (idx < 8 && param_cache[idx]) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, param_cache[idx])));
+        } else if (idx < (uint16_t)param_count
             && (writes_params || (has_captured_params && captured_params && captured_params[idx]))) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -4850,7 +5084,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_TAIL_CALL:
       case OP_CALL: {
-        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         bool is_tail = (op == OP_TAIL_CALL);
         uint16_t call_argc = sv_get_u16(ip + 1);
         if (call_argc > 16 || vs.sp < (int)call_argc + 1) { ok = false; break; }
@@ -4863,6 +5096,26 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           if (inline_callee && jit_inlineable(inline_callee)
               && jit_inline_body_feasible(inline_callee)) {
             int cn = call_n++;
+
+            /* Args (and, outside try blocks, the slots below them) may
+               stay unboxed: the inline fast path reads d-regs, the slow
+               path is a plain helper call, and bailing consumers re-box
+               via the typed snapshot helpers. Inside a try block the
+               catch path reads boxed regs, so flush everything. */
+            int inl_arg_base = vs.sp - (int)call_argc;
+            if (jit_try_depth > 0) {
+              for (int k = 0; k < inl_arg_base; k++)
+                vstack_ensure_boxed(&vs, k, ctx, jit_func, r_d_slot);
+            } else if (inl_arg_base > 0) {
+              vstack_ensure_boxed(&vs, inl_arg_base - 1, ctx, jit_func, r_d_slot);
+            }
+            uint8_t inl_arg_num[16] = {0};
+            MIR_reg_t inl_arg_d[16] = {0};
+            for (int i = 0; i < (int)call_argc; i++) {
+              inl_arg_num[i] = vs.slot_type &&
+                               vs.slot_type[inl_arg_base + i] == SLOT_NUM;
+              inl_arg_d[i] = vs.d_regs[inl_arg_base + i];
+            }
 
             MIR_reg_t inl_arg_regs[call_argc > 0 ? call_argc : 1];
             for (int i = (int)call_argc - 1; i >= 0; i--)
@@ -4944,12 +5197,30 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)inline_callee)));
             }
 
-            mir_emit_resolve_call_this(ctx, jit_func, r_inl_this, r_inl_cl,
-                                       r_this_curr, r_inl_flags, r_inl_bound);
+            /* Inlinees that never read `this` don't need the arrow/bound
+               resolution chain. */
+            bool inl_uses_this = false;
+            {
+              uint8_t *tscan = inline_callee->code;
+              uint8_t *tend = inline_callee->code + inline_callee->code_len;
+              while (tscan < tend) {
+                sv_op_t top_ = (sv_op_t)*tscan;
+                int tsz = sv_op_size[top_];
+                if (tsz == 0) { inl_uses_this = true; break; }
+                if (top_ == OP_THIS) { inl_uses_this = true; break; }
+                tscan += tsz;
+              }
+            }
+            if (inl_uses_this)
+              mir_emit_resolve_call_this(ctx, jit_func, r_inl_this, r_inl_cl,
+                                         r_this_curr, r_inl_flags, r_inl_bound);
+            else
+              mir_load_imm(ctx, jit_func, r_inl_this, mkval(T_UNDEF, 0));
 
             bool inlined = jit_emit_inline_body(
               ctx, jit_func, inline_callee,
               inl_arg_regs, (int)call_argc,
+              inl_arg_num, inl_arg_d,
               r_call_res, inl_slow, inl_join,
               r_bool, &r_d_slot, cn,
               r_inl_cl, r_inl_this, r_inl_new_target, r_inl_super,
@@ -4961,6 +5232,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
             if (inlined) {
               MIR_append_insn(ctx, jit_func, inl_slow);
+              for (int i = 0; i < (int)call_argc; i++)
+                if (inl_arg_num[i])
+                  mir_d_to_i64(ctx, jit_func, inl_arg_regs[i],
+                               inl_arg_d[i], r_d_slot);
               for (int i = 0; i < (int)call_argc; i++)
                 MIR_append_insn(ctx, jit_func,
                   MIR_new_insn(ctx, MIR_MOV,
@@ -4996,6 +5271,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             vs.sp = vs.sp - 1 + call_argc + 1;
           }
         }
+
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
 
         int cn = call_n++;
 
@@ -8550,6 +8827,7 @@ ant_value_t sv_jit_try_osr(
   if (func->jit_code) {
     jit = (sv_jit_func_t)func->jit_code;
   } else {
+    func->jit_loop_hot = true;
     if (func->code_len > 512) {
       func->call_count = SV_JIT_THRESHOLD + 1;
       func->back_edge_count = 0;

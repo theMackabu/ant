@@ -187,6 +187,9 @@ struct ant_isolate_t {
     void *main_base;
     void *main_lo;
     size_t limit;
+    /* base - limit, kept in sync with base/limit; NULL disables the
+       inline JIT prologue overflow check. */
+    void *floor;
   } cstk;
 
   struct {
@@ -352,8 +355,15 @@ static inline bool is_undefined(ant_value_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-static inline bool is_empty_slot(ant_value_t v) { 
-  return v == T_EMPTY; 
+static inline bool is_empty_slot(ant_value_t v) {
+  return v == T_EMPTY;
+}
+
+static inline void js_cstk_refresh_floor(ant_t *js) {
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit)
+    ? (void *)(base - js->cstk.limit)
+    : NULL;
 }
 
 static inline bool is_callable(ant_value_t v) {
