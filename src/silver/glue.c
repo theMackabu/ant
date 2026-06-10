@@ -857,8 +857,15 @@ ant_value_t jit_helper_put_field(
   return js_setprop(js, obj, key, val);
 }
 
+ant_value_t jit_helper_put_field_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
+) {
+  return sv_put_field_cached(js, obj, val, atom, ic);
+}
+
 ant_value_t jit_helper_get_elem(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, 
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t key, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t ot = vtype(obj);

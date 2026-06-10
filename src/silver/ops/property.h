@@ -469,7 +469,7 @@ static inline ant_value_t sv_op_get_field2(
 static inline bool sv_try_put_field_fast(
   ant_t *js,
   ant_value_t obj,
-  sv_atom_t *a,
+  const sv_atom_t *a,
   ant_value_t val,
   uint32_t *out_index
 ) {
@@ -531,21 +531,15 @@ static inline void sv_ic_set_add_transition(
   ic->guard.add.epoch = epoch;
 }
 
-static inline ant_value_t sv_op_put_field(
-  sv_vm_t *vm, ant_t *js,
-  sv_func_t *func, uint8_t *ip
+static inline ant_value_t sv_put_field_cached(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const sv_atom_t *a, sv_ic_entry_t *ic
 ) {
-  uint32_t idx = sv_get_u32(ip + 1);
-  sv_atom_t *a = &func->atoms[idx];
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
-  
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
-  sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
-  
-  if (a->len == 4 && memcmp(a->str, "exec", 4) == 0)
+
+  if (a->len == 4 && a->str[0] == 'e' && memcmp(a->str, "exec", 4) == 0)
     regexp_note_exec_property_write();
-  else if (a->len == 7 && memcmp(a->str, "replace", 7) == 0)
+  else if (a->len == 7 && a->str[0] == 'r' && memcmp(a->str, "replace", 7) == 0)
     regexp_note_replace_property_write();
 
   if (ic && ptr && !ptr->flags.is_exotic && ptr->shape && ic->epoch == ant_ic_epoch_counter &&
@@ -646,6 +640,17 @@ static inline ant_value_t sv_op_put_field(
   if (old_shape) ant_shape_release(old_shape);
 
   return out;
+}
+
+static inline ant_value_t sv_op_put_field(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  uint32_t idx = sv_get_u32(ip + 1);
+  sv_atom_t *a = &func->atoms[idx];
+  ant_value_t val = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
+  return sv_put_field_cached(js, obj, val, a, sv_ic_slot_for_ip(func, ip));
 }
 
 static inline ant_value_t sv_op_get_elem(

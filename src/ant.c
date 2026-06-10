@@ -2695,6 +2695,16 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
 // TODO: make get and set dry
 static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  {
+    ant_object_t *fast = array_obj_ptr(arr);
+    if (fast && fast->flags.fast_array && fast->u.array.data &&
+        idx < (ant_offset_t)fast->u.array.len &&
+        idx < (ant_offset_t)fast->u.array.cap) {
+      ant_value_t v = fast->u.array.data[idx];
+      if (!is_empty_slot(v)) return v;
+    }
+  }
+
   ant_offset_t semantic_len = get_array_length(js, arr);
   
   if (idx >= semantic_len) return js_mkundef();
@@ -3992,9 +4002,9 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
   
-  if (klen == 4 && memcmp(key, "exec", 4) == 0)
+  if (klen == 4 && key[0] == 'e' && memcmp(key, "exec", 4) == 0)
     regexp_note_exec_property_write();
-  else if (klen == 7 && memcmp(key, "replace", 7) == 0)
+  else if (klen == 7 && key[0] == 'r' && memcmp(key, "replace", 7) == 0)
     regexp_note_replace_property_write();
 
   if (array_obj_ptr(obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {

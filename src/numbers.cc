@@ -236,6 +236,17 @@ static size_t ant_format_number(
 }
 
 extern "C" size_t ant_number_to_shortest(double value, char *buf, size_t len) {
+  int32_t iv = (int32_t)value;
+  if ((double)iv == value) {
+    char tmp[12];
+    char *end = tmp + sizeof(tmp);
+    char *p = end;
+    uint32_t u = iv < 0 ? (uint32_t)(-(int64_t)iv) : (uint32_t)iv;
+    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
+    if (iv < 0) *--p = '-';
+    return copy_truncated_number_result(buf, len, p, (size_t)(end - p));
+  }
+
   char scratch[kShortestBufferSize];
   return ant_format_number(buf, len, scratch, sizeof(scratch), [value](StringBuilder *builder) {
     return DoubleToStringConverter::EcmaScriptConverter().ToShortest(value, builder);
