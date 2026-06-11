@@ -579,6 +579,28 @@ static void emit_import_binding_resolve(
     emit_atom_op(c, OP_IMPORT_NAMED, import_name, import_name_len);
 }
 
+enum {
+  IMPORT_BIND_DEFAULT   = 1 << 0,
+  IMPORT_BIND_NAMESPACE = 1 << 1,
+};
+
+static uint8_t import_spec_binding(sv_ast_t *spec, const char **name, uint32_t *len) {
+  *name = NULL;
+  *len = 0;
+  if (spec->flags & IMPORT_BIND_NAMESPACE) return SV_IMPORT_BIND_NONE;
+  if ((spec->flags & IMPORT_BIND_DEFAULT) || !spec->left || spec->left->type != N_IDENT)
+    return SV_IMPORT_BIND_DEFAULT;
+  *name = spec->left->str;
+  *len = spec->left->len;
+  return SV_IMPORT_BIND_NAMED;
+}
+
+static void mark_import_binding(sv_compiler_t *c, int idx, sv_ast_t *spec) {
+  if (idx < 0) return;
+  sv_binding_meta_t *binding = &c->locals[idx].binding;
+  binding->import_kind = import_spec_binding(spec, &binding->import_name, &binding->import_name_len);
+}
+
 static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
   if (c->local_lookup_heads && c->local_lookup_cap > 0) {
     uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
@@ -1552,7 +1574,8 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         if (!spec || spec->type != N_IMPORT_SPEC ||
             !spec->right || spec->right->type != N_IDENT)
           continue;
-        ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
+        int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
+        mark_import_binding(c, idx, spec);
       }
     } else if (decl_node->type == N_CLASS && decl_node->str) {
       int lb = c->local_count;
@@ -3976,11 +3999,6 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-enum {
-  IMPORT_BIND_DEFAULT   = 1 << 0,
-  IMPORT_BIND_NAMESPACE = 1 << 1,
-};
-
 void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
   if (!node->right) return;
   bool repl_top = is_repl_top_level(c);
@@ -4002,19 +4020,9 @@ void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
         !spec->right || spec->right->type != N_IDENT)
       continue;
 
-    uint8_t import_kind = SV_IMPORT_BIND_NONE;
     const char *import_name = NULL;
     uint32_t import_name_len = 0;
-    if (!(spec->flags & IMPORT_BIND_NAMESPACE)) {
-      if ((spec->flags & IMPORT_BIND_DEFAULT) ||
-          !spec->left || spec->left->type != N_IDENT) {
-        import_kind = SV_IMPORT_BIND_DEFAULT;
-      } else {
-        import_kind = SV_IMPORT_BIND_NAMED;
-        import_name = spec->left->str;
-        import_name_len = spec->left->len;
-      }
-    }
+    uint8_t import_kind = import_spec_binding(spec, &import_name, &import_name_len);
 
     emit_get_local(c, ns_local);
     if (repl_top) {
@@ -4023,9 +4031,7 @@ void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
     } else {
       int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
       emit_put_local(c, idx);
-      c->locals[idx].binding.import_kind = import_kind;
-      c->locals[idx].binding.import_name = import_name;
-      c->locals[idx].binding.import_name_len = import_name_len;
+      mark_import_binding(c, idx, spec);
     }
   }
 }

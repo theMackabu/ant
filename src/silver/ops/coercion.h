@@ -82,12 +82,16 @@ static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
   return result;
 }
 
-static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
-  ant_value_t ns = vm->stack[vm->sp - 1];
+static inline ant_value_t sv_import_default_value(ant_value_t ns) {
   if (vtype(ns) == T_OBJ) {
     ant_value_t slot_val = js_get_slot(ns, SLOT_DEFAULT);
-    if (vtype(slot_val) != T_UNDEF) { vm->stack[vm->sp - 1] = slot_val; return;  }
+    if (vtype(slot_val) != T_UNDEF) return slot_val;
   }
+  return ns;
+}
+
+static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
+  vm->stack[vm->sp - 1] = sv_import_default_value(vm->stack[vm->sp - 1]);
 }
 
 static inline bool sv_module_namespace_has_export(
@@ -136,6 +140,30 @@ static inline ant_value_t sv_missing_named_export_error(
   );
 }
 
+static inline ant_value_t sv_import_named_value(
+  ant_t *js,
+  ant_value_t ns,
+  const char *name,
+  uint32_t len
+) {
+  if (vtype(ns) == T_OBJ && !is_proxy(js_as_obj(ns))) {
+    ant_value_t value = js_get(js, ns, name);
+    if (vtype(value) != T_UNDEF) return value;
+    if (
+      sv_module_namespace_has_export(js, ns, name, len) ||
+      js_get_slot(ns, SLOT_MODULE_LOADING) == js_true
+    ) return value;
+    return sv_missing_named_export_error(js, ns, name, len);
+  }
+
+  if (
+    !sv_module_namespace_has_export(js, ns, name, len) &&
+    js_get_slot(ns, SLOT_MODULE_LOADING) != js_true
+  ) return sv_missing_named_export_error(js, ns, name, len);
+
+  return js_get(js, ns, name);
+}
+
 static inline ant_value_t sv_op_import_named(
   sv_vm_t *vm,
   ant_t *js,
@@ -149,15 +177,10 @@ static inline ant_value_t sv_op_import_named(
   ant_value_t ns = vm->stack[vm->sp - 1];
   sv_atom_t *a = &func->atoms[atom_idx];
 
-  if (
-    !sv_module_namespace_has_export(js, ns, a->str, a->len) &&
-    js_get_slot(ns, SLOT_MODULE_LOADING) != js_true
-  ) return sv_missing_named_export_error(js, ns, a->str, a->len);
-
-  ant_value_t value = js_get(js, ns, a->str);
+  ant_value_t value = sv_import_named_value(js, ns, a->str, a->len);
   if (is_err(value)) return value;
   vm->stack[vm->sp - 1] = value;
-  
+
   return tov(0);
 }
 

@@ -16,6 +16,7 @@
 #include "ops/iteration.h"
 #include "ops/upvalues.h"
 #include "ops/comparison.h"
+#include "ops/coercion.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
@@ -609,6 +610,27 @@ ant_value_t jit_helper_get_field(
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR || vtype(v) == T_SYMBOL) return v;
   return coerce_to_str(js, v);
+}
+
+ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns) {
+  return sv_import_default_value(ns);
+}
+
+ant_value_t jit_helper_import_named(
+  ant_t *js, ant_value_t ns,
+  const char *str, uint32_t len,
+  sv_func_t *func, int32_t bc_off
+) {
+  ant_value_t out = sv_import_named_value(js, ns, str, len);
+  if (is_err(out)) jit_set_error_site_from_func(js, func, bc_off);
+  return out;
+}
+
+ant_value_t jit_helper_export(
+  ant_t *js, const char *str, 
+  uint32_t len, ant_value_t value
+) {
+  return sv_module_export_cstr(js, str, (size_t)len, value);
 }
 
 static inline sv_upvalue_t *jit_make_undef_upvalue(void) {
