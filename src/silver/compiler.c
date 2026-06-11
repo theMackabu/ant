@@ -774,7 +774,7 @@ static void merge_binding_meta(sv_binding_meta_t *dst, const sv_binding_meta_t *
     dst->import_name_len = src->import_name_len;
   }
 
-  if (src->exports) dst->exports = src->exports;
+  if (!dst->exports && src->exports) dst->exports = src->exports;
 }
 
 static void ensure_upvalue_capacity(sv_compiler_t *c) {
