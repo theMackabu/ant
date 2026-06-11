@@ -1,6 +1,12 @@
 export let counter = 0
 export let compound = 0
 export let destructured = 0
+export { forwardLexical as forwardLexicalAlias }
+let forwardLexical = 41
+export { ForwardClass as ForwardClassAlias }
+class ForwardClass {
+  static value = 42
+}
 let inner = 0
 export { inner as alias }
 export let multi = 0

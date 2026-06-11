@@ -1001,6 +1001,7 @@ static void emit_with_put(
 }
 
 static void emit_put_local(sv_compiler_t *c, int local_idx);
+static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
 static inline void emit_get_module_import_binding(sv_compiler_t *c) {
@@ -1116,6 +1117,21 @@ static void emit_export_dups(sv_compiler_t *c, const sv_export_name_t *exports) 
 static void emit_export_writes(sv_compiler_t *c, const sv_export_name_t *exports) {
   for (const sv_export_name_t *e = exports; e; e = e->next)
     emit_atom_op(c, OP_EXPORT, e->name, e->len);
+}
+
+static void emit_export_writes_from_stack(sv_compiler_t *c, const sv_export_name_t *exports) {
+  if (!exports) return;
+  for (const sv_export_name_t *e = exports->next; e; e = e->next)
+    emit_op(c, OP_DUP);
+  emit_export_writes(c, exports);
+}
+
+static void emit_local_export_writes(sv_compiler_t *c, int local) {
+  if (local < 0) return;
+  const sv_export_name_t *exports = c->locals[local].binding.exports;
+  if (!exports) return;
+  emit_get_local(c, local);
+  emit_export_writes_from_stack(c, exports);
 }
 
 static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {
@@ -4116,9 +4132,7 @@ static void compile_export_emit(sv_compiler_t *c, const char *name, uint32_t len
     return;
   }
 
-  for (const sv_export_name_t *e = exports->next; e; e = e->next)
-    emit_op(c, OP_DUP);
-  emit_export_writes(c, exports);
+  emit_export_writes_from_stack(c, exports);
 }
 
 static void defer_export(sv_compiler_t *c, const char *name, uint32_t len) {
@@ -4193,6 +4207,14 @@ static void compile_export_pattern(sv_compiler_t *c, sv_ast_t *pat) {
     default:
       break;
   }
+}
+
+static bool export_clause_is_metadata_only(sv_compiler_t *c, sv_ast_t *spec) {
+  if (!spec || !spec->left || spec->left->type != N_IDENT) return false;
+  int local = resolve_local_at_depth(c, spec->left->str, spec->left->len, c->scope_depth);
+  if (local < 0) return false;
+  sv_local_t *loc = &c->locals[local];
+  return loc->is_tdz && loc->binding.import_kind == SV_IMPORT_BIND_NONE;
 }
 
 void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
@@ -4280,6 +4302,8 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
         emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     } else {
+      if (export_clause_is_metadata_only(c, spec))
+        continue;
       emit_get_var(c, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     }
@@ -4336,6 +4360,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         if (decl->right || !is_const) {
           emit_put_local_typed(c, idx, init_type);
           c->locals[idx].is_tdz = false;
+          emit_local_export_writes(c, idx);
           if (is_using) {
             if (c->using_stack_local >= 0) {
               emit_get_local(c, c->using_stack_local);
@@ -5638,6 +5663,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_DUP);
     emit_put_local(c, outer_name_local);
     c->locals[outer_name_local].is_tdz = false;
+    emit_local_export_writes(c, outer_name_local);
   }
 
   if (has_class_scope) end_scope(c);

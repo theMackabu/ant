@@ -23,6 +23,10 @@ assert(readCounter() === 2, `hoisted-function read after bump: expected 2, got $
 writeAll();
 assert(ns.compound === 5, `compound assignment export: expected 5, got ${ns.compound}`);
 assert(ns.destructured === 42, `destructuring assignment export: expected 42, got ${ns.destructured}`);
+assert(ns.forwardLexicalAlias === 41,
+  `forward lexical alias: expected 41, got ${ns.forwardLexicalAlias}`);
+assert(ns.ForwardClassAlias.value === 42,
+  `forward class alias: expected 42, got ${ns.ForwardClassAlias?.value}`);
 assert(ns.alias === 99, `aliased export clause: expected 99, got ${ns.alias}`);
 assert(ns.multi === 7 && ns.multiB === 7 && ns.multiC === 7,
   `multi-alias export must update every name: got ${ns.multi}/${ns.multiB}/${ns.multiC}`);
