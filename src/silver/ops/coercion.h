@@ -10,12 +10,11 @@
 #include "silver/engine.h"
 #include "modules/symbol.h"
 
-static inline ant_value_t sv_module_export_cstr(
-  ant_t *js,
+static inline ant_value_t sv_module_export_to_ns(
+  ant_t *js, ant_value_t module_ns,
   const char *name, size_t len,
   ant_value_t value
 ) {
-  ant_value_t module_ns = js_module_eval_active_ns(js);
   if (vtype(module_ns) != T_OBJ)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
@@ -26,6 +25,30 @@ static inline ant_value_t sv_module_export_cstr(
     js_set_slot_wb(js, module_ns, SLOT_DEFAULT, value);
 
   return tov(0);
+}
+
+static inline ant_value_t sv_module_export_cstr(
+  ant_t *js,
+  const char *name, size_t len,
+  ant_value_t value
+) {
+  return sv_module_export_to_ns(js, js_module_eval_active_ns(js), name, len, value);
+}
+
+/* exports executed inside a function (live-binding writes) must target the
+   function's own module, not whichever module is currently mid-eval */
+static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value_t func_obj) {
+  if (is_object_type(func_obj)) {
+    ant_value_t ns = js_module_ctx_namespace(js_get_slot(func_obj, SLOT_MODULE_CTX));
+    if (vtype(ns) == T_OBJ) return ns;
+  }
+  return js_module_eval_active_ns(js);
+}
+
+static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
+  if (vtype(callee) == T_FUNC)
+    return sv_export_target_ns_from_func_obj(js, js_func_obj(callee));
+  return js_module_eval_active_ns(js);
 }
 
 static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
@@ -184,14 +207,18 @@ static inline ant_value_t sv_op_import_named(
   return tov(0);
 }
 
-static inline ant_value_t sv_op_export(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+static inline ant_value_t sv_op_export(
+  sv_vm_t *vm, ant_t *js,
+  sv_frame_t *frame, sv_func_t *func, uint8_t *ip
+) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   if (atom_idx >= (uint32_t)func->atom_count)
     return js_mkerr(js, "invalid export atom index");
 
   ant_value_t value = vm->stack[--vm->sp];
   sv_atom_t *a = &func->atoms[atom_idx];
-  return sv_module_export_cstr(js, a->str, a->len, value);
+  ant_value_t ns = sv_export_target_ns(js, frame ? frame->callee : js_mkundef());
+  return sv_module_export_to_ns(js, ns, a->str, a->len, value);
 }
 
 static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {

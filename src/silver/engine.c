@@ -1925,7 +1925,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_IMPORT_SYNC:     { VM_CHECK(sv_op_import_sync(vm, js));            NEXT(1); }
   L_IMPORT_DEFAULT:  { sv_op_import_default(vm, js);                   NEXT(1); }
   L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip)); NEXT(5); }
-  L_EXPORT:          { VM_CHECK(sv_op_export(vm, js, func, ip));       NEXT(5); }
+  L_EXPORT:          { VM_CHECK(sv_op_export(vm, js, frame, func, ip)); NEXT(5); }
   L_EXPORT_ALL:      { VM_CHECK(sv_op_export_all(vm, js));             NEXT(1); }
 
   L_ENTER_WITH:   { VM_CHECK(sv_op_enter_with(vm, js, frame));  NEXT(1); }

@@ -627,10 +627,12 @@ ant_value_t jit_helper_import_named(
 }
 
 ant_value_t jit_helper_export(
-  ant_t *js, const char *str, 
-  uint32_t len, ant_value_t value
+  ant_t *js, sv_closure_t *closure,
+  const char *str, uint32_t len, ant_value_t value
 ) {
-  return sv_module_export_cstr(js, str, (size_t)len, value);
+  ant_value_t func_obj = closure ? closure->func_obj : js_mkundef();
+  ant_value_t ns = sv_export_target_ns_from_func_obj(js, func_obj);
+  return sv_module_export_to_ns(js, ns, str, (size_t)len, value);
 }
 
 static inline sv_upvalue_t *jit_make_undef_upvalue(void) {

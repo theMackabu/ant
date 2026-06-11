@@ -2338,8 +2338,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_type_t exp_ret = MIR_JSVAL;
   MIR_item_t export_proto = MIR_new_proto(ctx, "exp_proto",
-    1, &exp_ret, 4,
+    1, &exp_ret, 5,
     MIR_T_I64, "js",
+    MIR_T_P,   "closure",
     MIR_T_P,   "str",
     MIR_T_I32, "len",
     MIR_JSVAL,  "val");
@@ -6172,11 +6173,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t val = vstack_pop(&vs);
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 7,
+          MIR_new_call_insn(ctx, 8,
             MIR_new_ref_op(ctx, export_proto),
             MIR_new_ref_op(ctx, imp_export),
             MIR_new_reg_op(ctx, r_err_tmp),
             MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_closure),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
             MIR_new_uint_op(ctx, (uint64_t)atom->len),
             MIR_new_reg_op(ctx, val)));

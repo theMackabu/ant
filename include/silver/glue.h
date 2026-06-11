@@ -106,8 +106,8 @@ ant_value_t jit_helper_import_named(
 );
 
 ant_value_t jit_helper_export(
-  ant_t *js, const char *str, 
-  uint32_t len, ant_value_t value
+  ant_t *js, sv_closure_t *closure,
+  const char *str, uint32_t len, ant_value_t value
 );
 
 ant_value_t jit_helper_closure(

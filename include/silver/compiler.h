@@ -23,12 +23,17 @@ typedef enum {
   SV_IMPORT_BIND_NAMED,
 } sv_import_bind_kind_t;
 
+typedef struct sv_export_name {
+  const char *name;
+  uint32_t len;
+  struct sv_export_name *next;
+} sv_export_name_t;
+
 typedef struct {
   uint8_t import_kind;
   const char *import_name;
   uint32_t import_name_len;
-  const char *export_name;
-  uint32_t export_name_len;
+  sv_export_name_t *exports;
 } sv_binding_meta_t;
 
 typedef struct {
