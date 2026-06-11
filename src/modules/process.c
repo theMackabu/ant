@@ -2005,8 +2005,9 @@ void init_process_module() {
   js_set_setter(env_obj, env_setter);
   js_set_deleter(env_obj, env_deleter);
   
-  js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
-  js_set(js, env_obj, "toString", js_mkfun(env_toString));
+  defmethod(js, env_obj, "toObject", 8, js_mkfun(env_to_object));
+  defmethod(js, env_obj, "toString", 8, js_mkfun(env_toString));
+  
   js_set(js, process_obj, "env", env_obj);
   process_update_sandbox_env(js, process_obj);
   

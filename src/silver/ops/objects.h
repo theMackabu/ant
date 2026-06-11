@@ -151,10 +151,12 @@ static inline void sv_op_copy_data_props(
   if (vm->sp < 2) return;
   ant_value_t src = vm->stack[vm->sp - 1];
   ant_value_t dst = vm->stack[vm->sp - 2];
+  
   if (!is_object_type(src) || !is_object_type(dst)) return;
-
-  ant_iter_t iter = js_prop_iter_begin(js, src);
   ant_object_t *source_ptr = js_obj_ptr(js_as_obj(src));
+  
+  if (source_ptr && source_ptr->flags.is_exotic && js_copy_exotic_own_props(js, dst, src)) return;
+  ant_iter_t iter = js_prop_iter_begin(js, src);
   
   ant_iter_key_t key = {0};
   ant_value_t val = js_mkundef();

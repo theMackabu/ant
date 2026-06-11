@@ -6653,6 +6653,37 @@ static ant_value_t iterate_dynamic_keys(ant_t *js, ant_value_t obj, dynamic_kv_m
   return mkval(T_ARR, vdata(arr));
 }
 
+bool js_copy_exotic_own_props(ant_t *js, ant_value_t dst, ant_value_t src) {
+  if (!is_object_type(src) || !is_object_type(dst)) return false;
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(src));
+  if (!ptr || !ptr->flags.is_exotic || !ptr->exotic_keys ||
+      !ptr->exotic_ops || !ptr->exotic_ops->getter) return false;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, src);
+  GC_ROOT_PIN(js, dst);
+
+  ant_value_t keys = ptr->exotic_keys(js, src);
+  GC_ROOT_PIN(js, keys);
+  ant_offset_t len = get_array_length(js, keys);
+
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t key_val = arr_get(js, keys, i);
+    if (vtype(key_val) != T_STR) continue;
+    GC_ROOT_SAVE(key_mark, js);
+    GC_ROOT_PIN(js, key_val);
+    ant_offset_t klen; ant_offset_t str_off = vstr(js, key_val, &klen);
+    const char *key = (const char *)(uintptr_t)(str_off);
+    ant_value_t val = ptr->exotic_ops->getter(js, src, key, klen);
+    GC_ROOT_PIN(js, val);
+    js_setprop(js, dst, key_val, val);
+    GC_ROOT_RESTORE(js, key_mark);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return true;
+}
+
 static ant_value_t builtin_object_is(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_false;
   return same_value_values(js, args[0], args[1]) ? js_true : js_false;
@@ -6839,7 +6870,7 @@ ant_value_t js_own_property_keys(ant_t *js, ant_value_t obj, bool include_symbol
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || !ptr->shape) goto done;
 
-  if (ptr->flags.is_exotic && ptr->exotic_keys && !include_symbols) {
+  if (ptr->flags.is_exotic && ptr->exotic_keys) {
     ant_value_t keys = ptr->exotic_keys(js, obj);
     GC_ROOT_RESTORE(js, root_mark);
     return keys;
@@ -8897,8 +8928,12 @@ static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs
       continue;
     }
 
+    ant_object_t *source_ptr = js_obj_ptr(js_as_obj(source));
+    if (source_ptr && source_ptr->flags.is_exotic && js_copy_exotic_own_props(js, as_obj, source)) continue;
+    
     bool fast_handled = false;
     ant_value_t fast_result = object_assign_fast_ordinary_source(js, as_obj, source, &fast_handled);
+    
     if (is_err(fast_result)) return fast_result;
     if (fast_handled) continue;
     
