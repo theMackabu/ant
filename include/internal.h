@@ -638,6 +638,24 @@ static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const
   return lookup_prop_meta(js, cur_obj, PROP_META_STRING, key, klen, 0, out);
 }
 
+static inline ant_value_t sv_uninitialized_binding_error(ant_t *js, const char *name, size_t len) {
+  return js_mkerr_typed(
+    js, JS_ERR_REFERENCE,
+    "Cannot access '%.*s' before initialization", (int)len, name
+  );
+}
+
+/* define-level write for module namespace exports: bypasses the namespace's
+   sealed (non-writable, non-extensible) user-facing attributes */
+static inline ant_value_t js_module_ns_define(
+  ant_t *js, ant_value_t ns,
+  const char *name, size_t len, ant_value_t value
+) {
+  const char *interned = intern_string(name, len);
+  if (!interned) return js_mkerr(js, "oom");
+  return mkprop_interned_exact(js, ns, interned, value, ANT_PROP_ATTR_ENUMERABLE);
+}
+
 static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
   const char *interned = intern_string(name, len);
   if (!interned) return js_mkerr(js, "oom");

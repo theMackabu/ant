@@ -17929,6 +17929,9 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
   }
   
   *out = propref_load(js, off);
+  if (__builtin_expect(is_empty_slot(*out), 0) && js_check_brand(obj, BRAND_MODULE_NAMESPACE)) {
+    *out = sv_uninitialized_binding_error(js, key, key_len);
+  }
   return true;
 }
 

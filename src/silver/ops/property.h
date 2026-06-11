@@ -416,6 +416,8 @@ static inline ant_value_t sv_prop_get_field_ic(
   ant_value_t hit = js_mkundef();
   if (ic && ptr && !ptr->flags.is_exotic && track_ic &&
       sv_ic_try_get_hit(ic, ptr, a, &hit)) {
+    if (__builtin_expect(is_empty_slot(hit), 0) && js_check_brand(obj, BRAND_MODULE_NAMESPACE))
+      return sv_uninitialized_binding_error(js, a->str, a->len);
     sv_gf_ic_note_success(ic);
     return hit;
   }
@@ -425,6 +427,10 @@ static inline ant_value_t sv_prop_get_field_ic(
     uint32_t prop_idx = 0;
     ant_value_t out = js_mkundef();
     if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &out)) {
+      /* uninitialized module export: throw without populating the IC so the
+         JIT fast path can never load the sentinel directly */
+      if (__builtin_expect(is_empty_slot(out), 0) && js_check_brand(obj, BRAND_MODULE_NAMESPACE))
+        return sv_uninitialized_binding_error(js, a->str, a->len);
       ic->cached_shape = ptr->shape;
       ic->cached_holder = holder;
       ic->guard.receiver_proto = ptr->proto;
@@ -437,7 +443,10 @@ static inline ant_value_t sv_prop_get_field_ic(
   }
 
   if (track_ic) sv_gf_ic_note_miss(ic);
-  return sv_prop_get_at(js, obj, a->str, a->len, func, ip);
+  ant_value_t res = sv_prop_get_at(js, obj, a->str, a->len, func, ip);
+  if (__builtin_expect(is_empty_slot(res), 0) && js_check_brand(obj, BRAND_MODULE_NAMESPACE))
+    return sv_uninitialized_binding_error(js, a->str, a->len);
+  return res;
 }
 
 static inline ant_value_t sv_op_get_field(

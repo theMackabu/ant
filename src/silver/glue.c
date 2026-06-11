@@ -612,8 +612,12 @@ ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   return coerce_to_str(js, v);
 }
 
-ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns) {
-  return sv_import_default_value(ns);
+ant_value_t jit_helper_import_default(
+  ant_t *js, ant_value_t ns, sv_func_t *func, int32_t bc_off
+) {
+  ant_value_t out = sv_import_default_value(js, ns);
+  if (is_err(out)) jit_set_error_site_from_func(js, func, bc_off);
+  return out;
 }
 
 ant_value_t jit_helper_import_named(

@@ -403,6 +403,7 @@ static char *esm_try_resolve_relative_typescript_source_fallback(
 
 static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
   ant_value_t default_val = js_get_slot(ns, SLOT_DEFAULT);
+  if (is_empty_slot(default_val)) return ns;
   return vtype(default_val) != T_UNDEF ? default_val : ns;
 }
 

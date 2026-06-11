@@ -18,7 +18,7 @@ static inline ant_value_t sv_module_export_to_ns(
   if (vtype(module_ns) != T_OBJ)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  ant_value_t set_res = setprop_cstr(js, module_ns, name, len, value);
+  ant_value_t set_res = js_module_ns_define(js, module_ns, name, len, value);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
@@ -105,16 +105,20 @@ static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
   return result;
 }
 
-static inline ant_value_t sv_import_default_value(ant_value_t ns) {
+static inline ant_value_t sv_import_default_value(ant_t *js, ant_value_t ns) {
   if (vtype(ns) == T_OBJ) {
     ant_value_t slot_val = js_get_slot(ns, SLOT_DEFAULT);
+    if (is_empty_slot(slot_val)) return sv_uninitialized_binding_error(js, "default", 7);
     if (vtype(slot_val) != T_UNDEF) return slot_val;
   }
   return ns;
 }
 
-static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
-  vm->stack[vm->sp - 1] = sv_import_default_value(vm->stack[vm->sp - 1]);
+static inline ant_value_t sv_op_import_default(sv_vm_t *vm, ant_t *js) {
+  ant_value_t v = sv_import_default_value(js, vm->stack[vm->sp - 1]);
+  if (is_err(v)) return v;
+  vm->stack[vm->sp - 1] = v;
+  return tov(0);
 }
 
 static inline bool sv_module_namespace_has_export(
@@ -171,11 +175,13 @@ static inline ant_value_t sv_import_named_value(
 ) {
   if (vtype(ns) == T_OBJ && !is_proxy(js_as_obj(ns))) {
     ant_value_t value = js_get(js, ns, name);
+    if (is_empty_slot(value)) return sv_uninitialized_binding_error(js, name, len);
     if (vtype(value) != T_UNDEF) return value;
-    if (
-      sv_module_namespace_has_export(js, ns, name, len) ||
-      js_get_slot(ns, SLOT_MODULE_LOADING) == js_true
-    ) return value;
+    if (sv_module_namespace_has_export(js, ns, name, len)) return value;
+    /* statically unknown bindings (e.g. through `export * from`) resolve once
+       the module finishes evaluating; before that they are uninitialized */
+    if (js_get_slot(ns, SLOT_MODULE_LOADING) == js_true)
+      return sv_uninitialized_binding_error(js, name, len);
     return sv_missing_named_export_error(js, ns, name, len);
   }
 
@@ -184,7 +190,9 @@ static inline ant_value_t sv_import_named_value(
     js_get_slot(ns, SLOT_MODULE_LOADING) != js_true
   ) return sv_missing_named_export_error(js, ns, name, len);
 
-  return js_get(js, ns, name);
+  ant_value_t value = js_get(js, ns, name);
+  if (is_empty_slot(value)) return sv_uninitialized_binding_error(js, name, len);
+  return value;
 }
 
 static inline ant_value_t sv_op_import_named(

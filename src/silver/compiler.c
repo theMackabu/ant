@@ -1503,6 +1503,55 @@ static void annex_b_collect_block_var_funcs(sv_ast_t *node, sv_ast_list_t *out) 
   }
 }
 
+static inline bool is_module_top_level(const sv_compiler_t *c) {
+  return c->mode == SV_COMPILE_MODULE && c->enclosing && !c->enclosing->enclosing;
+}
+
+/* re-publish a local's current value under every export alias; declaration
+   initializers store with raw put-local ops, so they need this after the
+   store to keep the namespace in sync */
+static void emit_export_refresh_local(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (!is_module_top_level(c)) return;
+  int local = resolve_local(c, name, len);
+  if (local == -1) return;
+  for (const sv_export_name_t *e = c->locals[local].binding.exports; e; e = e->next) {
+    emit_get_local(c, local);
+    emit_atom_op(c, OP_EXPORT, e->name, e->len);
+  }
+}
+
+static void emit_export_refresh_pattern(sv_compiler_t *c, sv_ast_t *pat) {
+  if (!pat || !is_module_top_level(c)) return;
+  switch (pat->type) {
+    case N_IDENT:
+      emit_export_refresh_local(c, pat->str, pat->len);
+      break;
+    case N_ASSIGN_PAT:
+      emit_export_refresh_pattern(c, pat->left);
+      break;
+    case N_REST:
+    case N_SPREAD:
+      emit_export_refresh_pattern(c, pat->right);
+      break;
+    case N_ARRAY:
+    case N_ARRAY_PAT:
+      for (int i = 0; i < pat->args.count; i++)
+        emit_export_refresh_pattern(c, pat->args.items[i]);
+      break;
+    case N_OBJECT:
+    case N_OBJECT_PAT:
+      for (int i = 0; i < pat->args.count; i++) {
+        sv_ast_t *prop = pat->args.items[i];
+        if (!prop) continue;
+        if (prop->type == N_PROPERTY) emit_export_refresh_pattern(c, prop->right);
+        else emit_export_refresh_pattern(c, prop);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 static void mark_export_binding_as(
   sv_compiler_t *c,
   const char *name, uint32_t len,
@@ -1705,6 +1754,7 @@ static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     if (!node) continue;
     if (node->type == N_FUNC && node->str && !(node->flags & (FN_ARROW | FN_PAREN))) {
       hoist_one_func(c, node, !c->is_strict && c->scope_depth > 0);
+      emit_export_refresh_local(c, node->str, node->len);
     }
     if (!c->is_strict && (node->type == N_IF || node->type == N_LABEL)) {
       sv_ast_list_t funcs = {0};
@@ -4048,6 +4098,8 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       compile_class(c, node);
       if (node->flags & FN_PAREN) emit_set_completion_from_stack(c);
       else emit_op(c, OP_POP);
+      if (!(node->flags & FN_PAREN) && node->str)
+        emit_export_refresh_local(c, node->str, node->len);
       break;
 
     case N_WITH:
@@ -4269,6 +4321,8 @@ void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
         emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     } else {
+      int local = resolve_local(c, spec->left->str, spec->left->len);
+      if (local != -1 && c->locals[local].binding.exports) continue;
       emit_get_var(c, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     }
@@ -4310,6 +4364,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
             emit_put_local_typed(c, idx, init_type);
           else compile_lhs_set(c, target, false);
         } else compile_lhs_set(c, target, false);
+        emit_export_refresh_pattern(c, target);
       }
     } else {
       if (target->type == N_IDENT) {
@@ -4325,6 +4380,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         if (decl->right || !is_const) {
           emit_put_local_typed(c, idx, init_type);
           c->locals[idx].is_tdz = false;
+          emit_export_refresh_local(c, target->str, target->len);
           if (is_using) {
             if (c->using_stack_local >= 0) {
               emit_get_local(c, c->using_stack_local);
@@ -4342,6 +4398,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
           compile_expr(c, decl->right);
           compile_destructure_binding(c, target, kind);
           emit_op(c, OP_POP);
+          emit_export_refresh_pattern(c, target);
         }
       }
     }

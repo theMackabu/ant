@@ -2322,9 +2322,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_type_t impd_ret = MIR_JSVAL;
   MIR_item_t import_default_proto = MIR_new_proto(ctx, "impd_proto",
-    1, &impd_ret, 2,
+    1, &impd_ret, 4,
     MIR_T_I64, "js",
-    MIR_JSVAL,  "ns");
+    MIR_JSVAL,  "ns",
+    MIR_T_P,   "func",
+    MIR_T_I32, "bc_off");
 
   MIR_type_t impn_ret = MIR_JSVAL;
   MIR_item_t import_named_proto = MIR_new_proto(ctx, "impn_proto",
@@ -6112,12 +6114,38 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t ns = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 5,
+          MIR_new_call_insn(ctx, 7,
             MIR_new_ref_op(ctx, import_default_proto),
             MIR_new_ref_op(ctx, imp_import_default),
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, r_js),
-            MIR_new_reg_op(ctx, ns)));
+            MIR_new_reg_op(ctx, ns),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_int_op(ctx, (int64_t)bc_off)));
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, dst)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, dst));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
         break;
       }
 
