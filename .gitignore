@@ -16,6 +16,7 @@
 /result
 /result-*
 /todo/*
+/docs/private
 
 /packages/sandbox/out
 /packages/sandbox/.cache
