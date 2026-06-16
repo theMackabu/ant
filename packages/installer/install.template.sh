@@ -35,6 +35,81 @@ success() {
   printf '\033[32m%s\033[0m %s\n' 'ok' "$1"
 }
 
+run_step() {
+  local message="$1"
+  shift
+  local status_code
+
+  if [[ ! -t 1 ]]; then
+    status "$message"
+    "$@"
+    return $?
+  fi
+
+  printf '\033[36m%s\033[0m %s' '::' "$message"
+  "$@"
+  status_code=$?
+  if [[ "$status_code" -eq 0 ]]; then
+    printf '\r\033[K'
+  else
+    printf '\r\033[31m%s\033[0m %s\033[K\n' '!!' "$message"
+  fi
+  return "$status_code"
+}
+
+run_with_loader() {
+  local message="$1"
+  shift
+  local width=24
+  local index=0
+  local phase=0
+  local pid status
+  local notes=(
+    'resolving platform artifact'
+    'waiting for manifest cache'
+    'streaming ant binary'
+    'writing executable'
+  )
+
+  if [[ ! -t 1 ]]; then
+    status "$message"
+    "$@"
+    return $?
+  fi
+
+  "$@" &
+  pid=$!
+
+  while kill -0 "$pid" 2>/dev/null; do
+    local offset=$((index % width))
+    local bar=""
+    local i
+    for ((i = 0; i < width; i++)); do
+      if (( (i - offset + width) % width < 6 )); then
+        bar+="#"
+      else
+        bar+="-"
+      fi
+    done
+    printf '\r\033[36m%s\033[0m %s [\033[32m%s\033[0m] %s\033[K' \
+      '::' "$message" "$bar" "${notes[phase]}"
+    index=$(((index + 1) % width))
+    if (( index % 6 == 0 )); then
+      phase=$(((phase + 1) % ${#notes[@]}))
+    fi
+    sleep 0.1
+  done
+
+  wait "$pid"
+  status=$?
+  if [[ "$status" -eq 0 ]]; then
+    printf '\r\033[K'
+  else
+    printf '\r\033[31m%s\033[0m %s\033[K\n' '!!' "$message"
+  fi
+  return "$status"
+}
+
 bold() {
   printf '\033[1m%s\033[0m' "$1"
 }
@@ -189,17 +264,16 @@ main() {
   detail "source: $ant_uri"
   printf '\n'
 
-  status "Preparing install directory"
-  mkdir -p "$bin_dir" || die "Failed to create install directory \"$bin_dir\""
+  run_step "Preparing install directory" mkdir -p "$bin_dir" ||
+    die "Failed to create install directory \"$bin_dir\""
 
-  status "Downloading Ant"
-  curl --fail --location --progress-bar --output "$exe" "$ant_uri" ||
+  run_with_loader "Downloading Ant" \
+    curl --fail --location --silent --show-error --output "$exe" "$ant_uri" ||
     die "Failed to download $app_name from \"$ant_uri\""
 
-  status "Setting executable permissions"
-  chmod 755 "$exe" || die "Failed to set permissions on $app_name executable"
+  run_step "Setting executable permissions" chmod 755 "$exe" ||
+    die "Failed to set permissions on $app_name executable"
 
-  printf '\n'
   success "$app_name installed to $(tildify "$exe")"
 
   if has_cmd "$binary_name"; then
