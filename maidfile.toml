@@ -37,7 +37,7 @@ script = "ant .github/agents/check_repo_structure.js"
 script = "ant .github/agents/route_validation.js"
 
 [tasks.generate_installer]
-script = "ant .github/install/render-install.js"
+script = "ant packages/installer/render-install.js"
 
 [tasks.setup]
 script = ['meson subprojects download', 'meson setup build --wipe']
