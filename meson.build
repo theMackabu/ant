@@ -11,6 +11,7 @@ project('ant', ['c', 'cpp'], default_options: [
 ], subproject_dir: 'vendor')
 
 python = find_program('python3')
+fs = import('fs')
 is_static = get_option('static_link')
 
 src_root = meson.project_source_root()
@@ -185,13 +186,22 @@ executable(
   build_by_default: false
 )
 
-executable(
-  'embed-example',
-  files('examples/embed/embed.c'),
-  include_directories: include_directories('packages/libant/dist'),
-  dependencies: libant_dep,
-  build_by_default: false
-)
+embed_example = get_option('embed_example')
+embed_example_dist = 'packages/libant/dist'
+
+if not embed_example.disabled()
+  if fs.is_dir(meson.project_source_root() / embed_example_dist)
+    executable(
+      'embed-example',
+      files('examples/embed/embed.c'),
+      include_directories: include_directories(embed_example_dist),
+      dependencies: libant_dep,
+      build_by_default: false
+    )
+  elif embed_example.enabled()
+    error('embed_example requires ' + embed_example_dist + '; run packages/libant/build.sh first')
+  endif
+endif
 
 if darwin_hvf_supported
   executable(
