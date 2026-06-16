@@ -29,7 +29,7 @@ void headers_for_each(ant_value_t hdrs, headers_foreach_cb cb, void *ctx);
 
 bool headers_is_headers(ant_value_t obj);
 bool headers_copy_from(ant_t *js, ant_value_t dst, ant_value_t src);
-bool advance_headers(ant_t *js, struct js_iter_t *it, ant_value_t *out);
+bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool headers_init_has_name(ant_t *js, ant_value_t init, const char *name);
 bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value);
 

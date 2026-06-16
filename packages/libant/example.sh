@@ -15,6 +15,8 @@ fi
 case "$(uname -s)" in
   Darwin)
     LIBS="-framework Security -framework CoreFoundation -lpthread"
+    CFLAGS="${CFLAGS:-} -mmacosx-version-min=15.0"
+    LDFLAGS="${LDFLAGS:-} -mmacosx-version-min=15.0"
     ;;
   Linux)
     LIBS="-lpthread -ldl -lm"
@@ -28,7 +30,10 @@ case "$(uname -s)" in
 esac
 
 CC="${CC:-clang}"
+CXX="${CXX:-clang++}"
+OBJ="$DIST_DIR/embed.o"
 
 echo "Compiling embed example..."
-$CC "$SOURCE" -I"$DIST_DIR" "$DIST_DIR/libant.a" $LIBS -o "$OUTPUT"
+$CC $CFLAGS -c "$SOURCE" -I"$DIST_DIR" -o "$OBJ"
+$CXX $LDFLAGS "$OBJ" "$DIST_DIR/libant.a" $LIBS -o "$OUTPUT"
 echo "Done: $OUTPUT"

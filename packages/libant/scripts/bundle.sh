@@ -13,7 +13,7 @@ bundle_lib() {
   
   echo "Bundling $NAME..."
   
-  TMPDIR=$(mktemp -d)
+  temp_dir=$(mktemp -d)
   
   LIBS=$(find "$BUILD_DIR" -name '*.a' \
     ! -name 'libant.a' \
@@ -22,7 +22,7 @@ bundle_lib() {
     ! -path '*/.external/*' \
     2>/dev/null | grep -E -v "$EXCLUDE" | sort -u)
   
-  cd "$TMPDIR"
+  cd "$temp_dir"
   for lib in $LIBS; do
     libname=$(basename "$lib" .a)
     mkdir -p "$libname"
@@ -33,7 +33,7 @@ bundle_lib() {
   
   if [ ! -s objects.txt ]; then
     echo "No objects found, skipping $NAME"
-    rm -rf "$TMPDIR"
+    rm -rf "$temp_dir"
     cd "$SCRIPT_DIR"
     return
   fi
@@ -44,7 +44,7 @@ bundle_lib() {
     ar rcs "$OUTPUT" $(cat objects.txt)
   fi
   
-  rm -rf "$TMPDIR"
+  rm -rf "$temp_dir"
   cd "$SCRIPT_DIR"
   
   cp "$OUTPUT" "$DIST_DIR/"

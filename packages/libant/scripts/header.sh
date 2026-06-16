@@ -16,25 +16,40 @@ if [ -z "$OUTPUT" ] || [ -z "$ANT_VERSION" ]; then
 fi
 
 VENDOR_DIR="$SCRIPT_DIR/vendor"
+LIBUV_INCLUDE_DIR="$VENDOR_DIR/libuv-v1.52.0/include"
 
 HEADERS=(
+  "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
+  "utarray.h:$VENDOR_DIR/uthash-2.3.0/src/utarray.h"
+  "types.h:$INCLUDE_DIR/types.h"
   "debug.h:$INCLUDE_DIR/debug.h"
   "common.h:$INCLUDE_DIR/common.h"
-  "types.h:$INCLUDE_DIR/types.h"
-  "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
+  "shapes.h:$INCLUDE_DIR/shapes.h"
+  "object.h:$INCLUDE_DIR/object.h"
+  "uv.h:$LIBUV_INCLUDE_DIR/uv.h"
   "errors.h:$INCLUDE_DIR/errors.h"
   "ant.h:$INCLUDE_DIR/ant.h"
+  "arena.h:$INCLUDE_DIR/arena.h"
+  "pool.h:$INCLUDE_DIR/pool.h"
+  "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
+  "esm/loader.h:$INCLUDE_DIR/esm/loader.h"
+  "sugar.h:$INCLUDE_DIR/sugar.h"
+  "descriptors.h:$INCLUDE_DIR/descriptors.h"
   "internal.h:$INCLUDE_DIR/internal.h"
+  "gc/objects.h:$INCLUDE_DIR/gc/objects.h"
+  "gc/modules.h:$INCLUDE_DIR/gc/modules.h"
+  "runtime.h:$INCLUDE_DIR/runtime.h"
+  "modules/symbol.h:$INCLUDE_DIR/modules/symbol.h"
+  "modules/timer.h:$INCLUDE_DIR/modules/timer.h"
   "silver/vm.h:$INCLUDE_DIR/silver/vm.h"
   "silver/engine.h:$INCLUDE_DIR/silver/engine.h"
-  "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
-  "sugar.h:$INCLUDE_DIR/sugar.h"
+  "modules/url.h:$INCLUDE_DIR/modules/url.h"
+  "net/listener.h:$INCLUDE_DIR/net/listener.h"
+  "net/connection.h:$INCLUDE_DIR/net/connection.h"
   "reactor.h:$INCLUDE_DIR/reactor.h"
   "tokens.h:$INCLUDE_DIR/tokens.h"
-  "stack.h:$INCLUDE_DIR/stack.h"
   "compat.h:$INCLUDE_DIR/compat.h"
   "utils.h:$INCLUDE_DIR/utils.h"
-  "runtime.h:$INCLUDE_DIR/runtime.h"
   "esm/remote.h:$INCLUDE_DIR/esm/remote.h"
 )
 
@@ -42,6 +57,55 @@ for f in "$INCLUDE_DIR"/modules/*.h; do
   name="modules/$(basename "$f")"
   HEADERS+=("$name:$f")
 done
+
+DEDUPED_HEADERS=()
+seen_headers=" "
+for entry in "${HEADERS[@]}"; do
+  name="${entry%%:*}"
+  if [[ "$seen_headers" == *" $name "* ]]; then
+    continue
+  fi
+  DEDUPED_HEADERS+=("$entry")
+  seen_headers="$seen_headers$name "
+done
+HEADERS=("${DEDUPED_HEADERS[@]}")
+
+emit_header_file() {
+  local path="$1"
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once ]]; then
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/opcode\.h\" ]]; then
+      cat "$INCLUDE_DIR/silver/opcode.h" >> "$OUTPUT"
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(uv/[^\"[:space:]]+\.h)\" ]]; then
+      uv_path="$LIBUV_INCLUDE_DIR/${BASH_REMATCH[1]}"
+      if [ -f "$uv_path" ]; then
+        echo "/* === ${BASH_REMATCH[1]} === */" >> "$OUTPUT"
+        emit_header_file "$uv_path"
+        echo "" >> "$OUTPUT"
+      fi
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\" ]]; then
+      continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(metadata|common|types|uthash|utarray|minicoro|uv)\.h\> ]]; then
+      continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<uv/ ]]; then
+      continue
+    fi
+
+    echo "$line" >> "$OUTPUT"
+  done < "$path"
+}
 
 cat > "$OUTPUT" << EOF
 /*
@@ -104,34 +168,7 @@ for entry in "${HEADERS[@]}"; do
   
   echo "/* === $name === */" >> "$OUTPUT"
   
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once ]]; then
-      continue
-    fi
-
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/opcode\.h\" ]]; then
-      cat "$INCLUDE_DIR/silver/opcode.h" >> "$OUTPUT"
-      continue
-    fi
-    
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(metadata\.h|errors\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
-      continue
-    fi
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"esm/ ]]; then
-      continue
-    fi
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"modules/ ]]; then
-      continue
-    fi
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/ ]]; then
-      continue
-    fi
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(metadata|common|uv|types|uthash|minicoro)\.h\> ]]; then
-      continue
-    fi
-    
-    echo "$line" >> "$OUTPUT"
-  done < "$path"
+  emit_header_file "$path"
   
   echo "" >> "$OUTPUT"
 done

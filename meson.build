@@ -144,7 +144,7 @@ endif
 
 ant_exe = executable(
   'ant',
-  files('src/main.c', 'src/watch.c') + [messages_h],
+  files('src/main.c') + [messages_h],
   dependencies: libant_dep,
   link_args: ant_link_args,
   export_dynamic: true
@@ -181,6 +181,14 @@ executable(
 executable(
   'test-http-protocols',
   files('tests/test_http_protocols.c'),
+  dependencies: libant_dep,
+  build_by_default: false
+)
+
+executable(
+  'embed-example',
+  files('examples/embed/embed.c'),
+  include_directories: include_directories('packages/libant/dist'),
   dependencies: libant_dep,
   build_by_default: false
 )

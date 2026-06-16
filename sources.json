@@ -15,11 +15,13 @@
       "src/http/*.c",
       "src/net/*.c"
     ],
-    "exclude": ["src/main.c", "src/watch.c"]
+    "exclude": ["src/main.c"]
   },
   "library": {
+    "files": ["src/cli/version.c"],
     "patterns": [
       "src/*.c",
+      "src/*.cc",
       "src/gc/*.c",
       "src/highlight/*.c",
       "src/esm/*.c",
@@ -31,7 +33,7 @@
       "src/http/*.c",
       "src/net/*.c"
     ],
-    "exclude": ["src/main.c", "src/watch.c"]
+    "exclude": ["src/main.c"]
   },
   "sandbox_backend": {
     "sections": {

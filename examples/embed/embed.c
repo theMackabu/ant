@@ -202,18 +202,28 @@ static void example_call_js_from_c(void) {
   if (!js) return;
 
   const char *code =
-    "function multiply(a, b) {"
+    "export function multiply(a, b) {"
     "    return a * b;"
     "}"
-    "function formatName(first, last) {"
+    "export function formatName(first, last) {"
     "    return last + ', ' + first;"
     "}";
 
-  js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t ns = js_mkobj(js);
+  
+  ant_value_t eval_result = js_esm_eval_module_source(
+    js, "embed_call_js_from_c.mjs", 
+    code, strlen(code), ns
+  );
+  
+  if (vtype(eval_result) == T_ERR) {
+    printf("  Error: %s\n", js_str(js, eval_result));
+    js_destroy(js);
+    return;
+  }
 
-  ant_value_t glob = js_glob(js);
-  ant_value_t multiply_fn = js_get(js, glob, "multiply");
-  ant_value_t format_fn = js_get(js, glob, "formatName");
+  ant_value_t multiply_fn = js_get(js, ns, "multiply");
+  ant_value_t format_fn = js_get(js, ns, "formatName");
 
   ant_value_t args1[] = { js_mknum(6), js_mknum(7) };
   ant_value_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, false);
@@ -304,23 +314,33 @@ static void example_stateful_session(void) {
 
 
 
-  const char *scripts[] = {
-    "let counter = 0;",
-    "function increment() { return ++counter; }",
-    "function getCount() { return counter; }",
-    "increment(); increment(); increment();",
-    "getCount()"
-  };
+  const char *code =
+    "let counter = 0;"
+    "export function increment() { return ++counter; }"
+    "export function getCount() { return counter; }";
 
-  ant_value_t result = js_mkundef();
-  for (int i = 0; i < 5; i++) {
-    result = js_eval_bytecode_eval(js, scripts[i], strlen(scripts[i]));
-    if (vtype(result) == T_ERR) {
-      printf("  Error in script %d: %s\n", i, js_str(js, result));
-      break;
+  ant_value_t ns = js_mkobj(js);
+  ant_value_t eval_result = js_esm_eval_module_source(
+    js, "embed_stateful_session.mjs", code, strlen(code), ns
+  );
+  if (vtype(eval_result) == T_ERR) {
+    printf("  Error: %s\n", js_str(js, eval_result));
+    js_destroy(js);
+    return;
+  }
+
+  ant_value_t increment = js_get(js, ns, "increment");
+  for (int i = 0; i < 3; i++) {
+    ant_value_t call_result = sv_vm_call(js->vm, js, increment, js_mkundef(), NULL, 0, NULL, false);
+    if (vtype(call_result) == T_ERR) {
+      printf("  Error in increment %d: %s\n", i + 1, js_str(js, call_result));
+      js_destroy(js);
+      return;
     }
   }
 
+  ant_value_t get_count = js_get(js, ns, "getCount");
+  ant_value_t result = sv_vm_call(js->vm, js, get_count, js_mkundef(), NULL, 0, NULL, false);
   printf("  Final count: %g\n", js_getnum(result));
 
   js_destroy(js);
@@ -338,7 +358,7 @@ static void example_async_event_loop(void) {
   init_timer_module();
 
   const char *code =
-    "let results = [];"
+    "export let results = [];"
     ""
     "setTimeout(() => {"
     "  results.push('timer 1 (50ms)');"
@@ -358,7 +378,10 @@ static void example_async_event_loop(void) {
     ""
     "results.push('sync');";
 
-  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t ns = js_mkobj(js);
+  ant_value_t result = js_esm_eval_module_source(
+    js, "embed_async_event_loop.mjs", code, strlen(code), ns
+  );
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
     js_destroy(js);
@@ -367,7 +390,7 @@ static void example_async_event_loop(void) {
 
   js_run_event_loop(js);
 
-  ant_value_t results = js_get(js, js_glob(js), "results");
+  ant_value_t results = js_get(js, ns, "results");
 
   printf("  Execution order:\n");
   ant_offset_t len = js_arr_len(js, results);

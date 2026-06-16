@@ -1,9 +1,11 @@
-project('libant', 'c', default_options: [
+project('libant', ['c', 'cpp'], default_options: [
   'buildtype=release',
   'optimization=3',
   'c_std=gnu23',
+  'cpp_std=gnu++23',
   'default_library=static',
-  'b_lto=false',
+  'b_lto=true',
+  'b_lto_threads=8',
   'strip=true',
   'warning_level=2'
 ], subproject_dir: 'vendor')
@@ -24,6 +26,13 @@ messages_h = custom_target('messages_h',
   capture: true,
 )
 
+theme_h = custom_target('theme_h',
+  input: '../../src/highlight/theme.toml',
+  output: 'theme.h',
+  command: [python, files('../../meson/theme.py'), '@INPUT@'],
+  capture: true,
+)
+
 lib_sources = files(run_command(
   python, files('meson/sources.py'), src_root / 'sources.json', 'library', src_root,
   check: true
@@ -31,7 +40,7 @@ lib_sources = files(run_command(
 
 libant_core = static_library(
   'ant_core',
-  lib_sources + [snapshot_h, messages_h],
+  lib_sources + [builtin_bundle_h, snapshot_h, messages_h, theme_h],
   include_directories: include,
   dependencies: ant_deps,
 )
@@ -39,7 +48,7 @@ libant_core = static_library(
 if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
-    lib_sources + [snapshot_h, messages_h],
+    lib_sources + [builtin_bundle_h, snapshot_h, messages_h, theme_h],
     include_directories: include,
     dependencies: ant_deps,
     c_args: ['-flto'],
