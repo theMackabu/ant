@@ -2,6 +2,7 @@
   "name": "ant",
   "type": "module",
   "scripts": {
+    "publish": "./build/ant packages/installer/render-install.js",
     "spec": "./build/ant examples/spec/run.js",
     "jit": "./build/ant examples/jit/run.js"
   },

@@ -1,13 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '../..');
 const configPath = path.join(scriptDir, 'install.json');
 const templatePath = path.join(scriptDir, 'install.template.sh');
 const outputPath = path.join(scriptDir, 'dist', 'install');
+const deploy = !process.argv.includes('--no-deploy');
 
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const template = readFileSync(templatePath, 'utf8');
@@ -103,7 +104,7 @@ function renderTargetSelection(config) {
     lines.push('    rosetta="$(sysctl -n sysctl.proc_translated 2>/dev/null || true)"');
     lines.push('    if [[ "$rosetta" == "1" ]]; then');
     lines.push(`      target=${shellSingleQuote(rosettaTarget.rosettaTarget)}`);
-    lines.push('      dim "Your shell is running in Rosetta 2. Downloading $app_name for $target instead"');
+    lines.push('      dim "Your shell is running in Rosetta 2. Downloading $app_name for $target instead" >&2');
     lines.push('    fi');
     lines.push('  fi');
   }
@@ -143,10 +144,16 @@ execFileSync('bash', ['-n', outputPath], { stdio: 'inherit' });
 
 for (const relativeCopy of config.publishedCopies ?? []) {
   const copyPath = path.join(repoRoot, relativeCopy);
-  if (existsSync(copyPath)) {
-    mkdirSync(path.dirname(copyPath), { recursive: true });
-    writeFileSync(copyPath, output, { mode: 0o755 });
-    chmodSync(copyPath, 0o755);
-    execFileSync('bash', ['-n', copyPath], { stdio: 'inherit' });
-  }
+  mkdirSync(path.dirname(copyPath), { recursive: true });
+  copyFileSync(outputPath, copyPath);
+  chmodSync(copyPath, 0o755);
+  execFileSync('bash', ['-n', copyPath], { stdio: 'inherit' });
 }
+
+if (deploy)
+  for (const relativeDir of config.deployDirs ?? []) {
+    execFileSync('ant', ['deploy'], {
+      cwd: path.join(repoRoot, relativeDir),
+      stdio: 'inherit'
+    });
+  }

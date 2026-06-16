@@ -19,6 +19,22 @@ dim() {
   printf '\033[2m%s\033[0m\n' "$1"
 }
 
+line() {
+  printf '\033[2m%s\033[0m\n' '------------------------------------------------------------'
+}
+
+status() {
+  printf '\033[36m%s\033[0m %s\n' '::' "$1"
+}
+
+detail() {
+  printf '   \033[2m%s\033[0m\n' "$1"
+}
+
+success() {
+  printf '\033[32m%s\033[0m %s\n' 'ok' "$1"
+}
+
 bold() {
   printf '\033[1m%s\033[0m' "$1"
 }
@@ -49,7 +65,7 @@ append_or_print() {
         printf '%s\n' "$command"
       done
     } >>"$path" || return 1
-    dim "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_path\""
+    success "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_path\""
     return 0
   fi
 
@@ -159,21 +175,39 @@ main() {
   ant_uri="${ANT_DOWNLOAD_URL:-$download_url}"
   ant_uri="${ant_uri//\{target\}/$target}"
 
-  local install_dir bin_dir exe zip_path
+  local install_dir bin_dir exe
   install_dir="${!install_env:-$HOME/$default_install_dir}"
   bin_dir="$install_dir/bin"
   exe="$bin_dir/$binary_name"
-  zip_path="$exe.zip"
 
+  printf '\n'
+  bold 'Ant installer'
+  printf '\n'
+  line
+  detail "target: $target"
+  detail "install: $(tildify "$exe")"
+  detail "source: $ant_uri"
+  printf '\n'
+
+  status "Preparing install directory"
   mkdir -p "$bin_dir" || die "Failed to create install directory \"$bin_dir\""
+
+  status "Downloading Ant"
   curl --fail --location --progress-bar --output "$exe" "$ant_uri" ||
     die "Failed to download $app_name from \"$ant_uri\""
+
+  status "Setting executable permissions"
   chmod 755 "$exe" || die "Failed to set permissions on $app_name executable"
 
-  printf '\033[32m%s was installed successfully to \033[1;32m%s\033[0m\n' "$app_name" "$(tildify "$exe")"
+  printf '\n'
+  success "$app_name installed to $(tildify "$exe")"
 
   if has_cmd "$binary_name"; then
-    printf "Run '%s --help' to get started\n" "$binary_name"
+    printf '\n'
+    dim 'Ready.'
+    printf '   '
+    bold "$binary_name --help"
+    printf '\n'
     exit 0
   fi
 
@@ -189,10 +223,11 @@ main() {
   configured_refresh_command=""
 
   printf '\n'
+  status "Updating shell profile"
   configure_shell "$shell_name" "$quoted_install_dir" "$bin_env" "$tilde_bin_dir"
 
   printf '\n'
-  dim 'To get started, run:'
+  dim 'Next steps:'
   if [[ -n "$configured_refresh_command" ]]; then
     printf '  '
     bold "$configured_refresh_command"
