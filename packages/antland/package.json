@@ -1,0 +1,43 @@
+{
+  "name": "antland",
+  "version": "0.0.2",
+  "description": "ants.land package manager for npm, yarn, pnpm and bun",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/theMackabu/ant"
+  },
+  "bin": {
+    "antland": "dist/bin.js"
+  },
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "rimraf dist && tsc",
+    "cli": "ant src/bin.ts",
+    "prepack": "ant build"
+  },
+  "keywords": [
+    "ants.land",
+    "registry",
+    "install",
+    "package manager",
+    "npm",
+    "publish"
+  ],
+  "homepage": "https://ants.land/docs/cli",
+  "license": "MIT",
+  "files": [
+    "dist/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "semiver": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^6.0.3"
+  }
+}
