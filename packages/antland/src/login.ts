@@ -33,9 +33,10 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
 }
 
 function openBrowser(url: string) {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  const [cmd, args] =
+    process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
   try {
-    spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref();
+    spawn(cmd, args as string[], { stdio: 'ignore', detached: true }).unref();
   } catch {}
 }
 

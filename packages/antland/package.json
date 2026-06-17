@@ -4,7 +4,7 @@
   "description": "ants.land package manager for npm, yarn, pnpm and bun",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theMackabu/ant"
+    "url": "git+https://github.com/theMackabu/ant.git"
   },
   "bin": {
     "antland": "dist/bin.js"
