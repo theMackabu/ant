@@ -1980,6 +1980,10 @@ ant_value_t process_library(ant_t *js) {
   return process_obj;
 }
 
+static void process_set_string(ant_t *js, ant_value_t obj, const char *key, const char *value) {
+  js_set(js, obj, key, js_mkstr(js, value, strlen(value)));
+}
+
 void init_process_module() {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
@@ -2023,12 +2027,37 @@ void init_process_module() {
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
+
+  ant_value_t features_obj = js_mkobj(js);
+  js_set(js, features_obj, "uv", js_true);
+  process_set_string(js, features_obj, "tls", "BoringSSL");
+  process_set_string(js, features_obj, "typescript", "transform");
+  js_set(js, process_obj, "features", features_obj);
+  process_set_string(js, process_obj, "version", "v25.9.0");
   
   ant_value_t versions_obj = js_mkobj(js);
-  js_set(js, versions_obj, "ant", js_mkstr(js, ANT_VERSION, strlen(ANT_VERSION)));
+  process_set_string(js, versions_obj, "ant", ANT_VERSION);
+  process_set_string(js, versions_obj, "silver", ANT_VERSION);
+  process_set_string(js, versions_obj, "skim", SKIM_VERSION);
+  
   char uv_ver[32];
   snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
-  js_set(js, versions_obj, "uv", js_mkstr(js, uv_ver, strlen(uv_ver)));
+  process_set_string(js, versions_obj, "uv", uv_ver);
+  process_set_string(js, versions_obj, "node", "25.9.0");
+  process_set_string(js, versions_obj, "brotli", "1.1.0");
+  process_set_string(js, versions_obj, "llhttp", "9.3.1");
+  process_set_string(js, versions_obj, "nghttp2", "1.68.0");
+  process_set_string(js, versions_obj, "simdjson", "0.12.0");
+  process_set_string(js, versions_obj, "pcre2", "10.47");
+  process_set_string(js, versions_obj, "libffi", "3.5.2");
+  process_set_string(js, versions_obj, "lmdb", "0.9.33");
+  process_set_string(js, versions_obj, "utf8proc", "2.10.0");
+  process_set_string(js, versions_obj, "zlib", "2.3.3");
+  process_set_string(js, versions_obj, "v8", "14.1.146.11-node.25");
+  process_set_string(js, versions_obj, "modules", "141");
+  process_set_string(js, versions_obj, "napi", "10");
+  process_set_string(js, versions_obj, "wamr", "92f40918bbfad35546a1512b10bd25eaa31add4d");
+  process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
   js_set(js, process_obj, "versions", versions_obj);
   
   ant_value_t release_obj = js_mkobj(js);

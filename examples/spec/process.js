@@ -206,6 +206,7 @@ test('version starts with v', process.version.startsWith('v'), true);
 
 test('versions is object', typeof process.versions, 'object');
 test('versions.ant exists', typeof process.versions.ant, 'string');
+test('versions.skim exists', typeof process.versions.skim, 'string');
 test('versions.uv exists', typeof process.versions.uv, 'string');
 
 test('features is object', typeof process.features, 'object');

@@ -64,5 +64,6 @@ add_project_arguments(
   '-DANT_GIT_HASH="' + git_hash + '"',
   '-DANT_GIT_LONGHASH="' + git_longhash + '"',
   '-DANT_TARGET_TRIPLE="' + target_triple + '"',
+  '-DSKIM_VERSION="' + skim_version + '"',
   language: 'c'
 )

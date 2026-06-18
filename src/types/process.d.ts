@@ -13,6 +13,7 @@ interface Features {
 
 interface Versions {
   ant: string;
+  skim: string;
   silver: string;
   node: string;
   brotli: string;

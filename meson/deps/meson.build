@@ -162,10 +162,22 @@ pcre2_dep = subproject('pcre2', default_options: [
   'test=false'
 ]).get_variable('libpcre2_8')
 
-skim_dep = subproject('skim', default_options: [
+skim_sub = subproject('skim', default_options: [
   'optimization=3',
   'default_library=static',
-]).get_variable('skim_dep')
+])
+skim_dep = skim_sub.get_variable('skim_dep')
+skim_version = skim_dep.version()
+if skim_version == 'unknown'
+  skim_version = run_command(
+    'git', '-C', src_root / 'vendor' / 'skim',
+    'describe', '--tags', '--always', '--dirty',
+    check: false
+  ).stdout().strip()
+endif
+if skim_version == ''
+  error('could not determine Skim version')
+endif
 
 zig = find_program('zig', required: true)
 
