@@ -66,9 +66,11 @@ static ant_value_t usp_array_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
 }
 
 void url_state_clear(url_state_t *s) {
+  if (!s) return;
   free(s->protocol); free(s->username); free(s->password);
   free(s->hostname); free(s->port);    free(s->pathname);
   free(s->search);   free(s->hash);
+  memset(s, 0, sizeof(*s));
 }
 
 void url_free_state(url_state_t *s) {
@@ -526,6 +528,8 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
 }
 
 char *build_href(const url_state_t *s) {
+  if (!s || !s->protocol) return NULL;
+
   bool has_authority =
     (s->hostname && *s->hostname) ||
     (s->username && *s->username) ||
@@ -681,6 +685,7 @@ static ant_value_t url_get_href(ant_t *js, ant_value_t *args, int nargs) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkstr(js, "", 0);
   char *href = build_href(s);
+  if (!href) return js_mkstr(js, "", 0);
   ant_value_t ret = js_mkstr(js, href, strlen(href));
   free(href);
   return ret;
@@ -975,6 +980,7 @@ static ant_value_t url_toString(ant_t *js, ant_value_t *args, int nargs) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkstr(js, "", 0);
   char *href = build_href(s);
+  if (!href) return js_mkstr(js, "", 0);
   ant_value_t ret = js_mkstr(js, href, strlen(href));
   free(href);
   return ret;
@@ -1719,6 +1725,7 @@ static ant_value_t builtin_url_format(ant_t *js, ant_value_t *args, int nargs) {
   url_state_t *state = url_get_state(args[0]);
   if (state) {
     char *href = build_href(state);
+    if (!href) return js_mkstr(js, "", 0);
     ant_value_t ret = js_mkstr(js, href, strlen(href));
     free(href);
     return ret;

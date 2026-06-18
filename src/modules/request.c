@@ -1456,8 +1456,10 @@ ant_value_t request_create_server(
   request_data_t *req = data_new_server(method);
   if (!req) return js_mkerr(js, "out of memory");
 
-  if (target && request_parse_server_url(target, absolute_target, host, server_hostname, server_port, &req->url) != 0)
-    url_state_clear(&req->url);
+  if (!target || request_parse_server_url(target, absolute_target, host, server_hostname, server_port, &req->url) != 0) {
+    data_free(req);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid URL");
+  }
 
   if (body) req->has_body = true;
 
