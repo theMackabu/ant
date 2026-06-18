@@ -18,6 +18,20 @@ pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
   } else std.posix.symlink(target, link_path) catch {};
 }
 
+fn makeExecutable(dir: std.fs.Dir, path: []const u8) !void {
+  if (comptime builtin.os.tag == .windows) return;
+  if (path.len >= std.fs.max_path_bytes) return error.PathTooLong;
+
+  var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  @memcpy(path_buf[0..path.len], path);
+  path_buf[path.len] = 0;
+  const path_z: [*:0]const u8 = path_buf[0..path.len :0];
+
+  const stat = dir.statFile(path) catch return error.IoError;
+  const mode = (stat.mode & 0o777) | 0o111;
+  if (std.c.fchmodat(dir.fd, path_z, @intCast(mode), 0) != 0) return error.IoError;
+}
+
 fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) !void {
   if (comptime builtin.os.tag != .windows) return;
   var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
@@ -316,6 +330,7 @@ pub const Linker = struct {
     defer self.allocator.free(target);
 
     bin_dir.deleteFile(cmd_name) catch {};
+    makeExecutable(bin_dir, target) catch {};
     try createSymlinkOrCopy(bin_dir, target, cmd_name);
 
     _ = self.stats.bins_linked.fetchAdd(1, .release);

@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include <pkg.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1359,10 +1360,11 @@ int pkg_cmd_exec(int argc, char **argv) {
 
   const char *cmd = use_ant ? "ant" : bin_path;
   execvp(cmd, exec_argv);
+  int exec_errno = errno;
   free(exec_argv);
 
-  if (use_ant) fprintf(stderr, "Error: failed to execute 'ant %s' - is ant installed?\n", bin_path);
-  else fprintf(stderr, "Error: failed to execute '%s'\n", bin_path);
+  if (use_ant) fprintf(stderr, "Error: failed to execute 'ant %s': %s - is ant installed?\n", bin_path, strerror(exec_errno));
+  else fprintf(stderr, "Error: failed to execute '%s': %s\n", bin_path, strerror(exec_errno));
 
   return EXIT_FAILURE;
 }
