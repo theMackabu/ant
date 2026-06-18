@@ -112,7 +112,7 @@ static inline ant_value_t sv_op_get_global(
     return sv;
   }
   ant_value_t val = sv_global_get_interned_ic(js, a->str, func, ip);
-  if (is_undefined(val) && lkp_interned(js, js->global, a->str, a->len) == 0) return js_mkerr_typed(
+  if (is_undefined(val) && lkp_interned(js, js->global, a->str) == 0) return js_mkerr_typed(
     js, JS_ERR_REFERENCE, "'%.*s' is not defined",
     (int)a->len, a->str
   );
@@ -133,7 +133,7 @@ static inline ant_value_t sv_op_put_global(
   sv_frame_t *frame, sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  if (sv_frame_is_strict(frame) && lkp_interned(js, js->global, a->str, a->len) == 0)
+  if (sv_frame_is_strict(frame) && lkp_interned(js, js->global, a->str) == 0)
     return js_mkerr_typed(
       js, JS_ERR_REFERENCE, "'%.*s' is not defined",
       (int)a->len, a->str);

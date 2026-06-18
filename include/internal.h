@@ -450,7 +450,7 @@ const char *intern_string(const char *str, size_t len);
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 
 ant_value_t  lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
-ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern, size_t len);
+ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern);
 
 ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
 ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);

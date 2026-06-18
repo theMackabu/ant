@@ -3293,7 +3293,7 @@ ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, siz
   if (!interned) return 0;
   ant_value_t prop = mkprop_interned(js, obj, interned, v, 0);
   if (is_err(prop)) return 0;
-  return lkp_interned(js, obj, interned, len);
+  return lkp_interned(js, obj, interned);
 }
 
 void js_saveval(ant_t *js, ant_offset_t off, ant_value_t v) {
@@ -3720,7 +3720,7 @@ static inline void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_le
   }
 
   ant_value_t new_len_val = tov((double)new_len);
-  ant_offset_t len_off = lkp_interned(js, obj, js->intern.length, 6);
+  ant_offset_t len_off = lkp_interned(js, obj, js->intern.length);
   
   if (len_off != 0) js_saveval(js, len_off, new_len_val);
   else js_mkprop_fast(js, obj, "length", 6, new_len_val);
@@ -4373,13 +4373,12 @@ static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
   return len == n && !memcmp(buf, s, n);
 }
 
-ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern, size_t len) {
+ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern) {
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!search_intern || !ptr || !ptr->shape) return 0;
 
   int32_t shape_slot = ant_shape_lookup_interned(ptr->shape, search_intern);
-  (void)len;
   if (shape_slot < 0) return 0;
   return propref_make(js, ptr, (uint32_t)shape_slot);
 }
@@ -4387,7 +4386,7 @@ ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern,
 inline ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
   const char *search_intern = intern_string(buf, len);
   if (!search_intern) return 0;
-  return lkp_interned(js, obj, search_intern, len);
+  return lkp_interned(js, obj, search_intern);
 }
 
 inline ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern) {
@@ -4639,13 +4638,13 @@ ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) 
   while (true) {
     if (t == T_OBJ || t == T_ARR || t == T_FUNC || t == T_PROMISE || t == T_GENERATOR) {
       ant_value_t as_obj = js_as_obj(cur);
-      ant_offset_t off = lkp_interned(js, as_obj, key_intern, len);
+      ant_offset_t off = lkp_interned(js, as_obj, key_intern);
       if (off != 0) return off;
     } else if (t == T_CFUNC) {
       ant_value_t func_proto = get_ctor_proto(js, "Function", 8);
       uint8_t ft = vtype(func_proto);
       if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
-        ant_offset_t off = lkp_interned(js, js_as_obj(func_proto), key_intern, len);
+        ant_offset_t off = lkp_interned(js, js_as_obj(func_proto), key_intern);
         if (off != 0) return off;
       }
       break;
@@ -6277,7 +6276,7 @@ static ant_value_t builtin_AggregateError(ant_t *js, ant_value_t *args, int narg
   
   if (!is_new) {
     this_val = js_mkobj(js);
-    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), js->intern.prototype, 9);
+    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), js->intern.prototype);
     if (proto_off) js_set_proto_init(this_val, propref_load(js, proto_off));
     else js_set_proto_init(this_val, get_ctor_proto(js, "AggregateError", 14));
   }
@@ -6312,7 +6311,7 @@ static ant_value_t builtin_SuppressedError(ant_t *js, ant_value_t *args, int nar
 
   if (!is_new) {
     this_val = js_mkobj(js);
-    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), js->intern.prototype, 9);
+    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), js->intern.prototype);
     if (proto_off) js_set_proto_init(this_val, propref_load(js, proto_off));
     else js_set_proto_init(this_val, get_ctor_proto(js, "SuppressedError", 15));
   }
@@ -7403,7 +7402,7 @@ static ant_value_t for_in_keys_add_cstr(
     return js_mkerr(js, "oom");
   }
 
-  if (lkp_interned(js, seen, interned, key_len) != 0) goto done;
+  if (lkp_interned(js, seen, interned) != 0) goto done;
 
   ant_value_t mark = mkprop_interned(js, seen, interned, js_true, 0);
   if (is_err(mark)) {
@@ -7957,7 +7956,7 @@ static ant_value_t builtin_object___defineSetter__(ant_t *js, ant_value_t *args,
 
 static ant_value_t legacy_lookup_accessor_from_descriptor(ant_t *js, ant_value_t desc, bool want_getter) {
   if (vtype(desc) != T_OBJ) return js_mkundef();
-  ant_offset_t off = lkp_interned(js, desc, want_getter ? js->intern.get : js->intern.set, 3);
+  ant_offset_t off = lkp_interned(js, desc, want_getter ? js->intern.get : js->intern.set);
   if (off == 0) return js_mkundef();
   return propref_load(js, off);
 }
@@ -8262,7 +8261,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
       value = propref_load(js, value_off);
     }
     
-    ant_offset_t get_off = lkp_interned(js, descriptor, js->intern.get, 3);
+    ant_offset_t get_off = lkp_interned(js, descriptor, js->intern.get);
     if (get_off != 0) {
       has_get = true;
       getter_val = propref_load(js, get_off);
@@ -8271,7 +8270,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
       }
     }
     
-    ant_offset_t set_off = lkp_interned(js, descriptor, js->intern.set, 3);
+    ant_offset_t set_off = lkp_interned(js, descriptor, js->intern.set);
     if (set_off != 0) {
       has_set = true;
       setter_val = propref_load(js, set_off);
@@ -15296,7 +15295,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
     }
   }
 
-  ant_offset_t proto_off = lkp_interned(js, func_obj, js->intern.prototype, 9);
+  ant_offset_t proto_off = lkp_interned(js, func_obj, js->intern.prototype);
   if (proto_off == 0) return mkval(T_BOOL, 0);
   
   ant_value_t ctor_proto = propref_load(js, proto_off);
@@ -15798,7 +15797,7 @@ static ant_value_t proxy_aware_length(ant_t *js, ant_value_t obj, ant_offset_t *
     *out_len = (ant_offset_t)ta->length;
     return js_mkundef();
   }
-  ant_offset_t off = lkp_interned(js, obj, js->intern.length, 6);
+  ant_offset_t off = lkp_interned(js, obj, js->intern.length);
   if (off == 0) return js_mkundef();
   ant_value_t len_val = propref_load(js, off);
   if (vtype(len_val) == T_NUM) *out_len = (ant_offset_t)tod(len_val);
@@ -18061,7 +18060,7 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
       }
     }
 
-    ant_offset_t prop_off = lkp_interned(js, cur_obj, key_intern, key_len);
+    ant_offset_t prop_off = lkp_interned(js, cur_obj, key_intern);
     if (prop_off != 0) return propref_load(js, prop_off);
 
     ant_value_t proto = get_proto(js, cur_obj);

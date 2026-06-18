@@ -307,7 +307,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
     lookup_sym_descriptor(func_proto_obj, has_instance_sym_off) != NULL
   )) return false;
 
-  ant_offset_t proto_off = lkp_interned(js, func_obj, js->intern.prototype, 9);
+  ant_offset_t proto_off = lkp_interned(js, func_obj, js->intern.prototype);
   if (proto_off == 0) return false;
 
   ant_value_t proto = js_propref_load(js, proto_off);
