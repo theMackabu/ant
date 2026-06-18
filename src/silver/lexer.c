@@ -924,10 +924,11 @@ static inline bool regex_allowed_after_ident(const char *buf, ant_offset_t start
   return false;
 }
 
-static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant_offset_t start) {
+static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant_offset_t start, bool *closed) {
   ant_offset_t i = start + 1;
   int expr_depth = 0;
   bool can_start_regex = true;
+  *closed = false;
 
   while (i < rem) {
     char c = buf[i];
@@ -937,8 +938,11 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
       continue;
     }
 
-    if (expr_depth == 0) {
-      if (c == '`') return i + 1;
+  if (expr_depth == 0) {
+      if (c == '`') {
+        *closed = true;
+        return i + 1;
+      }
       if (c == '$' && i + 1 < rem && buf[i + 1] == '{') {
         expr_depth = 1;
         can_start_regex = true;
@@ -953,8 +957,9 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
     }
 
     if (c == '`') {
-      ant_offset_t next = skip_template_literal(buf, rem, i);
-      if (next <= i) return rem;
+      bool nested_closed = false;
+      ant_offset_t next = skip_template_literal(buf, rem, i, &nested_closed);
+      if (!nested_closed || next <= i) return rem;
       i = next;
       can_start_regex = false;
       continue;
@@ -1019,8 +1024,10 @@ static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant
 }
 
 static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, ant_offset_t rem) {
-  ant_offset_t end = skip_template_literal(buf, rem, 0);
-  if (end <= 1 || end > rem) {
+  bool closed = false;
+  ant_offset_t end = skip_template_literal(buf, rem, 0, &closed);
+  
+  if (!closed || end <= 1 || end > rem) {
     lx->st.tok = TOK_ERR;
     lx->st.tlen = rem;
     return TOK_ERR;
