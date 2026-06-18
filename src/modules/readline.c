@@ -30,7 +30,6 @@
 #include "internal.h"
 #include "descriptors.h"
 #include "tty_ctrl.h"
-#include "silver/engine.h"
 
 #include "gc/modules.h"
 #include "modules/events.h"
@@ -72,8 +71,7 @@ typedef struct rl_interface {
   int crlf_delay;
   int escape_code_timeout;
   int tab_size;
-  ant_value_t pending_question_resolve;
-  ant_value_t pending_question_reject;
+  ant_value_t pending_question_promise;
   uv_tty_t tty_in;
   uv_tty_t tty_out;
   bool tty_initialized;
@@ -512,10 +510,9 @@ static void process_line(ant_t *js, rl_interface_t *iface) {
   ant_value_t line_val = js_mkstr(js, line, strlen(line));
   emit_event(js, iface, "line", &line_val, 1);
   
-  if (vtype(iface->pending_question_resolve) == T_FUNC) {
-    sv_vm_call(js->vm, js, iface->pending_question_resolve, js_mkundef(), &line_val, 1, NULL, false);
-    iface->pending_question_resolve = js_mkundef();
-    iface->pending_question_reject = js_mkundef();
+  if (vtype(iface->pending_question_promise) == T_PROMISE) {
+    js_resolve_promise(js, iface->pending_question_promise, line_val);
+    iface->pending_question_promise = js_mkundef();
   }
   
   iface->line_buffer[0] = '\0';
@@ -877,9 +874,7 @@ static ant_value_t rl_interface_question_promise(ant_t *js, ant_value_t *args, i
   
   rl_set_active_prompt(iface, query);
   write_output(iface, rl_render_prompt(iface));
-  
-  iface->pending_question_resolve = js_get(js, promise, "_resolve");
-  iface->pending_question_reject = js_get(js, promise, "_reject");
+  iface->pending_question_promise = promise;
   
   return promise;
 }
@@ -1243,8 +1238,7 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   iface->paused = false;
   iface->closed = false;
   iface->reading = false;
-  iface->pending_question_resolve = js_mkundef();
-  iface->pending_question_reject = js_mkundef();
+  iface->pending_question_promise = js_mkundef();
   iface->tty_initialized = false;
   iface->escape_state = 0;
   iface->escape_len = 0;
@@ -1366,7 +1360,6 @@ void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
     mark(js, iface->output_stream);
     mark(js, iface->completer);
     mark(js, iface->js_obj);
-    mark(js, iface->pending_question_resolve);
-    mark(js, iface->pending_question_reject);
+    mark(js, iface->pending_question_promise);
   }
 }
