@@ -7,6 +7,7 @@
 #include "sugar.h"
 #include "errors.h"
 #include "arena.h"
+#include "silver/ast.h"
 #include "descriptors.h"
 #include "esm/loader.h"
 
@@ -523,6 +524,11 @@ ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
+
+ant_value_t js_eval_parsed_bytecode(
+  ant_t *js, struct sv_ast *program,
+  const char *buf, size_t len, int mode
+);
 
 bool lookup_prop_meta(
   ant_t *js, ant_value_t cur_obj,

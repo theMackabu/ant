@@ -78,7 +78,7 @@ void esm_predeclare_exports(ant_t *js, sv_ast_t *program, ant_value_t ns) {
   for (int i = 0; i < program->args.count; i++) {
   sv_ast_t *stmt = program->args.items[i];
   if (!stmt || stmt->type != N_EXPORT) continue;
-  uint16_t f = stmt->flags;
+  uint32_t f = stmt->flags;
   
   if (f & EX_DEFAULT) setprop_cstr(js, ns, "default", 7, js_mkundef());
   else if ((f & EX_DECL) && stmt->left) predeclare_decl(js, stmt->left, ns);

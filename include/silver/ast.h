@@ -105,6 +105,7 @@ enum {
   FN_TEMPLATE_SEGMENT = 1 << 13,
   FN_USES_NEW_TARGET  = 1 << 14,
   FN_CLASS_BODY       = 1 << 15,
+  FN_MODULE_SYNTAX    = 1 << 16,
 };
 
 enum {
@@ -128,7 +129,7 @@ typedef struct {
 struct sv_ast {
   sv_node_type_t  type;
   uint8_t         op;
-  uint16_t        flags;
+  uint32_t        flags;
   sv_var_kind_t   var_kind;
 
   const char     *str;

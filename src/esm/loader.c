@@ -11,10 +11,14 @@
 #include "modules/napi.h"
 #include "modules/uri.h"
 
+#include "silver/ast.h"
+#include "silver/compiler.h"
+
 #include "errors.h"
 #include "gc/modules.h"
 #include "internal.h"
 #include "reactor.h"
+#include "runtime.h"
 #include "utils.h"
 
 #include <ctype.h>
@@ -69,6 +73,12 @@ typedef struct {
   char *data;
   size_t size;
 } esm_file_data_t;
+
+typedef enum {
+  ESM_PACKAGE_TYPE_NONE = 0,
+  ESM_PACKAGE_TYPE_MODULE,
+  ESM_PACKAGE_TYPE_COMMONJS,
+} esm_package_type_t;
 
 static int esm_dynamic_import_depth = 0;
 static esm_module_cache_t global_module_cache = {NULL, 0};
@@ -1015,8 +1025,8 @@ static bool esm_path_contains_node_modules(const char *path) {
   return strstr(path, "\\node_modules\\") != NULL;
 }
 
-static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *is_module) {
-  if (is_module) *is_module = false;
+static bool esm_read_package_json_type(const char *pkg_json_path, esm_package_type_t *out_type) {
+  if (out_type) *out_type = ESM_PACKAGE_TYPE_NONE;
 
   yyjson_doc *doc = esm_package_json_cache_read(pkg_json_path);
   if (!doc) return false;
@@ -1024,18 +1034,20 @@ static bool esm_read_package_json_type_module(const char *pkg_json_path, bool *i
   yyjson_val *root = yyjson_doc_get_root(doc);
   yyjson_val *type = (root && yyjson_is_obj(root)) ? yyjson_obj_get(root, "type") : NULL;
 
-  if (!type || !yyjson_is_str(type)) {
-    return true;
-  }
-
+  if (!type || !yyjson_is_str(type)) return true;
   const char *type_str = yyjson_get_str(type);
-  if (is_module) *is_module = type_str && strcmp(type_str, "module") == 0;
+  
+  if (type_str && strcmp(type_str, "module") == 0) {
+    if (out_type) *out_type = ESM_PACKAGE_TYPE_MODULE;
+  } else if (type_str && strcmp(type_str, "commonjs") == 0) {
+    if (out_type) *out_type = ESM_PACKAGE_TYPE_COMMONJS;
+  }
   
   return true;
 }
 
-static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_module) {
-  if (is_module) *is_module = false;
+static bool esm_lookup_package_type(const char *resolved_path, esm_package_type_t *out_type) {
+  if (out_type) *out_type = ESM_PACKAGE_TYPE_NONE;
   if (!resolved_path || !resolved_path[0]) return false;
 
   char path_copy[PATH_MAX];
@@ -1050,9 +1062,9 @@ static bool esm_lookup_package_type_module(const char *resolved_path, bool *is_m
     char pkg_json_path[PATH_MAX];
     snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", current);
 
-    bool pkg_is_module = false;
-    if (esm_read_package_json_type_module(pkg_json_path, &pkg_is_module)) {
-      if (is_module) *is_module = pkg_is_module;
+    esm_package_type_t pkg_type = ESM_PACKAGE_TYPE_NONE;
+    if (esm_read_package_json_type(pkg_json_path, &pkg_type)) {
+      if (out_type) *out_type = pkg_type;
       return true;
     }
     
@@ -1074,26 +1086,67 @@ static ant_module_format_t esm_decide_module_format(const char *resolved_path) {
   if (esm_is_esm_extension(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
 
   if (esm_has_suffix(resolved_path, ".js")) {
-    bool pkg_is_module = false;
-    bool has_package_json = esm_lookup_package_type_module(resolved_path, &pkg_is_module);
-    if (!has_package_json) return MODULE_EVAL_FORMAT_CJS;
-    return pkg_is_module ? MODULE_EVAL_FORMAT_ESM : MODULE_EVAL_FORMAT_CJS;
+    esm_package_type_t pkg_type = ESM_PACKAGE_TYPE_NONE;
+    (void)esm_lookup_package_type(resolved_path, &pkg_type);
+    if (pkg_type == ESM_PACKAGE_TYPE_MODULE) return MODULE_EVAL_FORMAT_ESM;
+    if (pkg_type == ESM_PACKAGE_TYPE_COMMONJS) return MODULE_EVAL_FORMAT_CJS;
+    return MODULE_EVAL_FORMAT_UNKNOWN;
   }
 
   return MODULE_EVAL_FORMAT_ESM;
 }
 
-static ant_value_t esm_eval_module_with_format(
+static ant_value_t esm_eval_ambiguous_js_source(
   ant_t *js,
-  const char *resolved_path,
-  const char *js_code,
-  size_t js_len,
-  ant_value_t ns,
-  ant_module_format_t format
+  const char *resolved_path, const char *js_code,
+  size_t js_len, ant_value_t ns, ant_module_format_t *format
 ) {
-  if (format == MODULE_EVAL_FORMAT_CJS) {
+  bool saved_thrown_exists = js->thrown_exists;
+  ant_value_t saved_thrown_value = js->thrown_value;
+  ant_value_t saved_thrown_stack = js->thrown_stack;
+  code_arena_mark_t parse_mark = parse_arena_mark();
+  sv_ast_t *program = sv_parse(js, js_code, (ant_offset_t)js_len, false);
+
+  if (!program) {
+    parse_arena_rewind(parse_mark);
+    js->thrown_exists = saved_thrown_exists;
+    js->thrown_value = saved_thrown_value;
+    js->thrown_stack = saved_thrown_stack;
+    *format = MODULE_EVAL_FORMAT_CJS;
+    if (js->module) js->module->format = *format;
     return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns);
   }
+
+  if (program->flags & FN_MODULE_SYNTAX) {
+    *format = MODULE_EVAL_FORMAT_ESM;
+    if (js->module) js->module->format = *format;
+    
+    ant_value_t result = js_eval_parsed_bytecode(
+      js, program, js_code, 
+      js_len, SV_COMPILE_MODULE
+    );
+    
+    parse_arena_rewind(parse_mark);
+    return result;
+  }
+
+  parse_arena_rewind(parse_mark);
+  *format = MODULE_EVAL_FORMAT_CJS;
+  if (js->module) js->module->format = *format;
+  return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns);
+}
+
+static ant_value_t esm_eval_module_with_format(
+  ant_t *js,
+  const char *resolved_path, const char *js_code,
+  size_t js_len, ant_value_t ns, ant_module_format_t *format
+) {
+  if (*format == MODULE_EVAL_FORMAT_UNKNOWN) return esm_eval_ambiguous_js_source(
+    js, resolved_path, js_code, 
+    js_len, ns, format
+  );
+  if (*format == MODULE_EVAL_FORMAT_CJS) 
+    return esm_load_commonjs_module(js, resolved_path, js_code, js_len, ns);
   return js_eval_bytecode_module(js, js_code, js_len);
 }
 
@@ -1115,7 +1168,7 @@ ant_value_t js_esm_eval_module_source(
   
   ant_value_t result = esm_eval_module_with_format(
     js, resolved_path, js_code, 
-    js_len, ns, format
+    js_len, ns, &format
   );
 
   js_module_eval_ctx_pop(js, &eval_ctx);
@@ -1418,7 +1471,8 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   }
 
   ant_value_t result = esm_eval_module_with_format(
-    js, mod->resolved_path, js_code, js_len, ns, mod->format
+    js, mod->resolved_path, js_code, 
+    js_len, ns, &mod->format
   );
   
   free(content);

@@ -6411,6 +6411,12 @@ sv_func_t *sv_compile_function_with_params(
     return NULL;
   }
 
+  if (program->flags & FN_MODULE_SYNTAX) {
+    js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot use import/export syntax in CommonJS");
+    parse_arena_rewind(parse_mark);
+    return NULL;
+  }
+
   static const char *k_top_name_function = "<function>";
   static const char *k_top_name_async_function = "<async function>";
   const char *top_name = is_async ? k_top_name_async_function : k_top_name_function;

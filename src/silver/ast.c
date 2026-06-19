@@ -135,6 +135,18 @@ static inline sv_ast_t *mk_plain(sv_node_type_t type) {
   _n->src_off = (uint32_t)TOFF; _n; \
 })
 
+static bool program_has_module_syntax(const sv_ast_t *program) {
+  if (!program || program->type != N_PROGRAM) return false;
+
+  for (int i = 0; i < program->args.count; i++) {
+    const sv_ast_t *stmt = program->args.items[i];
+    if (!stmt) continue;
+    if (stmt->type == N_IMPORT_DECL || stmt->type == N_EXPORT) return true;
+  }
+
+  return false;
+}
+
 static inline sv_ast_t *mk_num(double val) {
   sv_ast_t *n = mk_plain(N_NUMBER);
   n->num = val;
@@ -877,7 +889,7 @@ static sv_ast_t *parse_array(P) {
   return n;
 }
 
-static bool validate_accessor_params(P, sv_ast_t *fn, uint16_t flags) {
+static bool validate_accessor_params(P, sv_ast_t *fn, uint32_t flags) {
   if (!(flags & (FN_GETTER | FN_SETTER)) || !fn) return true;
 
   if ((flags & FN_GETTER) && fn->args.count != 0) {
@@ -2318,6 +2330,7 @@ sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
   }
   
   if (p->lx.strict) program->flags |= FN_PARSE_STRICT;
+  if (program_has_module_syntax(program)) program->flags |= FN_MODULE_SYNTAX;
   if (sv_parse_trace_unlikely) fprintf(stderr,
     "[parse] return program strict=%d body=%d\n",
     p->lx.strict ? 1 : 0, program->args.count
