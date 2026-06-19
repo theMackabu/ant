@@ -63,6 +63,7 @@ static struct {
   int next_timer_id;
   int next_immediate_id;
   int active_timer_count;
+  int active_refed_timer_count;
 } timer_state = {
   .js = NULL,
   .timers = NULL,
@@ -77,6 +78,7 @@ static struct {
   .next_timer_id = 1,
   .next_immediate_id = 1,
   .active_timer_count = 0,
+  .active_refed_timer_count = 0,
 };
 
 static ant_value_t g_timeout_proto = 0;
@@ -190,16 +192,22 @@ static ant_value_t timer_inspect(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_timer_ref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
-  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle))
+  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle)) {
+    int was_refed = uv_has_ref((const uv_handle_t *)&entry->handle);
     uv_ref((uv_handle_t *)&entry->handle);
+    if (entry->active && !was_refed) timer_state.active_refed_timer_count++;
+  }
   return this_obj;
 }
 
 static ant_value_t js_timer_unref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
-  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle))
+  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle)) {
+    int was_refed = uv_has_ref((const uv_handle_t *)&entry->handle);
     uv_unref((uv_handle_t *)&entry->handle);
+    if (entry->active && was_refed) timer_state.active_refed_timer_count--;
+  }
   return this_obj;
 }
 
@@ -232,6 +240,8 @@ static void timer_close_entry(timer_entry_t *entry) {
   if (entry->active) {
     entry->active = 0;
     timer_state.active_timer_count--;
+    if (uv_has_ref((const uv_handle_t *)&entry->handle))
+      timer_state.active_refed_timer_count--;
   }
   if (!uv_is_closing((uv_handle_t *)&entry->handle))
     uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
@@ -275,6 +285,8 @@ static void timer_callback(uv_timer_t *handle) {
   if (!entry->is_interval) {
     entry->active = 0;
     timer_state.active_timer_count--;
+    if (uv_has_ref((const uv_handle_t *)&entry->handle))
+      timer_state.active_refed_timer_count--;
   }
 
   GC_ROOT_SAVE(root_mark, js);
@@ -301,6 +313,8 @@ static ant_value_t js_timer_refresh(ant_t *js, ant_value_t *args, int nargs) {
     }
     entry->active = 1;
     timer_state.active_timer_count++;
+    if (uv_has_ref((const uv_handle_t *)&entry->handle))
+      timer_state.active_refed_timer_count++;
   }
 
   uv_timer_start(
@@ -343,6 +357,7 @@ static ant_value_t js_set_timeout(ant_t *js, ant_value_t *args, int nargs) {
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
+  timer_state.active_refed_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, 0);
 
   return timer_make_object(js, entry, delay_ms, 0, timer_args);
@@ -378,6 +393,7 @@ static ant_value_t js_set_interval(ant_t *js, ant_value_t *args, int nargs) {
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
+  timer_state.active_refed_timer_count++;
   uv_timer_start(&entry->handle, timer_callback, ms, ms);
 
   return timer_make_object(js, entry, delay_ms, 1, timer_args);
@@ -862,7 +878,7 @@ int has_pending_immediates(void) {
 }
 
 int has_pending_timers(void) {
-  return timer_state.active_timer_count > 0;
+  return timer_state.active_refed_timer_count > 0;
 }
 
 int has_pending_microtasks(void) {
