@@ -96,6 +96,7 @@ key_event_t repl_read_key(void) {
     }
   }
   if (c == 8) return (key_event_t){ KEY_BACKSPACE, 0 };
+  if (c == '\t') return (key_event_t){ KEY_TAB, 0 };
   if (c == '\r' || c == '\n') return (key_event_t){ KEY_ENTER, 0 };
   if (c == 3) {
     ctrl_c_pressed++;
@@ -149,6 +150,7 @@ key_event_t repl_read_key(void) {
   }
 
   if (c == 127 || c == 8) return (key_event_t){ KEY_BACKSPACE, 0 };
+  if (c == '\t') return (key_event_t){ KEY_TAB, 0 };
   if (c == '\n' || c == '\r') return (key_event_t){ KEY_ENTER, 0 };
   if (isprint(c) || (unsigned char)c >= 0x80) return (key_event_t){ KEY_CHAR, c };
   return (key_event_t){ KEY_NONE, 0 };

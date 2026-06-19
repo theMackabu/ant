@@ -153,6 +153,35 @@ static void line_insert(
   );
 }
 
+static bool line_accept_preview(
+  char *line,
+  int *pos,
+  int *len,
+  const char *prompt,
+  preview_state_t *preview
+) {
+  const char *suffix = preview_suffix(preview);
+  if (!suffix || *pos != *len) return false;
+
+  size_t suffix_len = strlen(suffix);
+  if (suffix_len == 0) return false;
+  if ((size_t)*len + suffix_len >= (size_t)MAX_LINE_LENGTH)
+    suffix_len = (size_t)MAX_LINE_LENGTH - 1 - (size_t)*len;
+  if (suffix_len == 0) return false;
+
+  memcpy(line + *len, suffix, suffix_len);
+  *len += (int)suffix_len;
+  *pos = *len;
+  line[*len] = '\0';
+
+  preview_update(preview, line, *len);
+  refresh_line_with_preview(
+    line, *len, *pos, prompt,
+    preview_suffix(preview), preview_text(preview)
+  );
+  return true;
+}
+
 static void move_or_refresh_without_preview(
   char *line,
   int len,
@@ -199,6 +228,7 @@ static char *read_line_with_history(
       [KEY_BACKSPACE] = &&l_backspace,
       [KEY_ENTER] = &&l_enter,
       [KEY_EOF] = &&l_eof,
+      [KEY_TAB] = &&l_tab,
       [KEY_CHAR] = &&l_char,
     };
 
@@ -267,6 +297,10 @@ static char *read_line_with_history(
   l_backspace:
     line_backspace(line, &pos, &len, prompt, &preview);
     continue;
+
+  l_tab:
+    if (line_accept_preview(line, &pos, &len, prompt, &preview)) continue;
+    goto l_none;
 
   l_char:
     line_insert(line, &pos, &len, key.ch, prompt, &preview);
