@@ -198,6 +198,8 @@ static bool repl_preview_snapshot_complete(
   size_t suffix_len
 ) {
   if (!snapshot || !line || !suffix_out || suffix_len == 0) return false;
+  if (repl_preview_snapshot_contains(snapshot, line, len)) return false;
+
   const repl_preview_entry_t *prefix_match = NULL;
   size_t prefix_match_count = 0;
   size_t common_len = 0;
