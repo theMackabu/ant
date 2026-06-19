@@ -10,4 +10,5 @@ can reuse the decision history.
 
 ## Plans
 
+- [tlsuv WebSocket Buffered Read](tlsuv-websocket-buffered-read.md)
 - [Watch Supervisor](watch-supervisor.md)

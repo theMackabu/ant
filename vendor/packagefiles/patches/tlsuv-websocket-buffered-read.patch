@@ -1,0 +1,349 @@
+diff --git a/include/tlsuv/websocket.h b/include/tlsuv/websocket.h
+index f89bc02..70957c3 100644
+--- a/include/tlsuv/websocket.h
++++ b/include/tlsuv/websocket.h
+@@ -48,7 +48,12 @@ struct tlsuv_websocket_s {
+     uv_link_t ws_link;
+     tls_link_t tls_link;
+ 
++    char *read_buf;
++    size_t read_len;
++    size_t read_cap;
++
+     bool closed;
++    bool processing_read;
+ };
+ 
+ /**
+diff --git a/src/websocket.c b/src/websocket.c
+index b7334da..8c6d6e6 100644
+--- a/src/websocket.c
++++ b/src/websocket.c
+@@ -15,6 +15,8 @@
+ #include "tlsuv/websocket.h"
+ 
+ #include <assert.h>
++#include <limits.h>
++#include <stdint.h>
+ 
+ #include "alloc.h"
+ #include "http_req.h"
+@@ -57,6 +59,8 @@ static void send_pong(tlsuv_websocket_t *ws, const char* ping_data, int len);
+ static void tls_hs_cb(tls_link_t *tls, int status);
+ 
+ static int ws_read_start(uv_link_t *l);
++static void ws_read_buffer_clear(tlsuv_websocket_t *ws);
++static void ws_process_buffered_frames(tlsuv_websocket_t *ws);
+ static void ws_tr_write_cb(uv_write_t *req, int status);
+ void ws_process_read(tlsuv_websocket_t *ws, ssize_t nread, const uv_buf_t *buf);
+ 
+@@ -74,6 +78,10 @@ int tlsuv_websocket_init_with_src(uv_loop_t *loop, tlsuv_websocket_t *ws, tlsuv_
+     ws->type = UV_IDLE;
+     ws->src = src;
+     ws->req = tlsuv__calloc(1, sizeof(tlsuv_http_req_t));
++    ws->read_buf = NULL;
++    ws->read_len = 0;
++    ws->read_cap = 0;
++    ws->processing_read = false;
+ 
+     char randbuf[24];
+     uv_random(NULL, NULL, randbuf, sizeof(randbuf), 0, NULL);
+@@ -420,6 +428,207 @@ void ws_read_cb(uv_link_t *l, ssize_t nread, const uv_buf_t *buf) {
+     ws_process_read(ws, nread, buf);
+ }
+ 
++enum ws_parse_status {
++    WS_PARSE_INCOMPLETE,
++    WS_PARSE_READY,
++    WS_PARSE_PROTOCOL_ERROR,
++};
++
++static void ws_read_buffer_clear(tlsuv_websocket_t *ws) {
++    if (ws == NULL) return;
++    tlsuv__free(ws->read_buf);
++    ws->read_buf = NULL;
++    ws->read_len = 0;
++    ws->read_cap = 0;
++}
++
++static int ws_read_buffer_append(tlsuv_websocket_t *ws, const char *data, size_t len) {
++    if (ws == NULL || len == 0) return 0;
++    if (data == NULL || len > SIZE_MAX - ws->read_len) return UV_ENOMEM;
++
++    size_t need = ws->read_len + len;
++    if (need > ws->read_cap) {
++        size_t cap = ws->read_cap != 0 ? ws->read_cap : 8192;
++        while (cap < need) {
++            if (cap > SIZE_MAX / 2) {
++                cap = need;
++                break;
++            }
++            cap *= 2;
++        }
++        char *next = tlsuv__realloc(ws->read_buf, cap);
++        if (next == NULL) return UV_ENOMEM;
++        ws->read_buf = next;
++        ws->read_cap = cap;
++    }
++
++    memcpy(ws->read_buf + ws->read_len, data, len);
++    ws->read_len = need;
++    return 0;
++}
++
++static void ws_read_buffer_consume(tlsuv_websocket_t *ws, size_t len) {
++    if (ws == NULL || len == 0) return;
++    if (len >= ws->read_len) {
++        ws->read_len = 0;
++        return;
++    }
++    memmove(ws->read_buf, ws->read_buf + len, ws->read_len - len);
++    ws->read_len -= len;
++}
++
++static uint16_t ws_read_u16_be(const char *data) {
++    return (uint16_t)(((uint16_t)(uint8_t)data[0] << 8) | (uint8_t)data[1]);
++}
++
++static uint64_t ws_read_u64_be(const char *data) {
++    uint64_t value = 0;
++    for (int i = 0; i < 8; i++) {
++        value = (value << 8) | (uint8_t)data[i];
++    }
++    return value;
++}
++
++static enum ws_parse_status ws_parse_frame_header(
++        const char *frame,
++        size_t available,
++        char *op,
++        bool *masked,
++        uint8_t mask[4],
++        size_t *payload_offset,
++        size_t *payload_len,
++        size_t *frame_len) {
++    if (available < 2) return WS_PARSE_INCOMPLETE;
++
++    uint8_t first = (uint8_t)frame[0];
++    uint8_t second = (uint8_t)frame[1];
++    bool fin = (first & WS_FIN) != 0;
++    size_t pos = 2;
++    uint64_t len = second & 0x7fU;
++
++    *op = (char)(first & WS_OP_BITS);
++    *masked = (second & WS_MASK) != 0;
++
++    if ((first & 0x70U) != 0) return WS_PARSE_PROTOCOL_ERROR;
++    if ((*op & 0x8) != 0 && (!fin || len > 125)) return WS_PARSE_PROTOCOL_ERROR;
++
++    if (len == 126) {
++        if (available < pos + 2) return WS_PARSE_INCOMPLETE;
++        len = ws_read_u16_be(frame + pos);
++        pos += 2;
++    } else if (len == 127) {
++        if (available < pos + 8) return WS_PARSE_INCOMPLETE;
++        len = ws_read_u64_be(frame + pos);
++        if ((len & (UINT64_C(1) << 63)) != 0) return WS_PARSE_PROTOCOL_ERROR;
++        pos += 8;
++    }
++
++    if (*masked) {
++        if (available < pos + 4) return WS_PARSE_INCOMPLETE;
++        memcpy(mask, frame + pos, 4);
++        pos += 4;
++    } else {
++        memset(mask, 0, 4);
++    }
++
++    if (len > SIZE_MAX || len > UINT_MAX || pos > SIZE_MAX - (size_t)len) return WS_PARSE_PROTOCOL_ERROR;
++    if (available < pos + (size_t)len) return WS_PARSE_INCOMPLETE;
++
++    *payload_offset = pos;
++    *payload_len = (size_t)len;
++    *frame_len = pos + (size_t)len;
++    return WS_PARSE_READY;
++}
++
++static void ws_unmask_payload(char *payload, size_t payload_len, const uint8_t mask[4]) {
++    for (size_t i = 0; i < payload_len; i++) {
++        payload[i] = (char)(payload[i] ^ mask[i % 4]);
++    }
++}
++
++static void ws_dispatch_frame(tlsuv_websocket_t *ws, char op, char *payload, size_t payload_len, bool masked, const uint8_t mask[4]) {
++    if (ws == NULL) return;
++    ws_unmask_payload(payload, payload_len, mask);
++
++    switch (op) {
++        case OpCode_TXT:
++        case OpCode_BIN: {
++            UM_LOG(TRACE, "got data %zd masked=%d", payload_len, masked);
++            uv_buf_t data = uv_buf_init(payload, (unsigned int)payload_len);
++            ws->read_cb((uv_stream_t *) ws, (ssize_t)payload_len, &data);
++            break;
++        }
++        case OpCode_Close:
++            UM_LOG(TRACE, "got close");
++            ws->closed = true;
++            ws->read_cb((uv_stream_t *) ws, UV_EOF, NULL);
++            break;
++        case OpCode_Ping:
++            UM_LOG(TRACE, "got ping masked=%d len=%zd", masked, payload_len);
++            send_pong(ws, payload, (int)payload_len);
++            break;
++        case OpCode_Pong:
++            UM_LOG(TRACE, "got pong");
++            break;
++        default:
++            UM_LOG(INFO, "got unsupported frame %hd", op);
++    }
++}
++
++static enum ws_parse_status ws_process_frame_slice(tlsuv_websocket_t *ws, char *data, size_t len, size_t *consumed) {
++    if (consumed) *consumed = 0;
++    while (ws != NULL && !ws->closed && len > 0) {
++        char op = 0;
++        bool masked = false;
++        uint8_t mask[4] = {0};
++        size_t payload_offset = 0;
++        size_t payload_len = 0;
++        size_t frame_len = 0;
++        enum ws_parse_status status = ws_parse_frame_header(
++                data,
++                len,
++                &op,
++                &masked,
++                mask,
++                &payload_offset,
++                &payload_len,
++                &frame_len);
++
++        if (status != WS_PARSE_READY) return status;
++        ws_dispatch_frame(ws, op, data + payload_offset, payload_len, masked, mask);
++        if (ws->closed) break;
++
++        data += frame_len;
++        len -= frame_len;
++        if (consumed) *consumed += frame_len;
++    }
++    return WS_PARSE_READY;
++}
++
++static void ws_process_buffered_frames(tlsuv_websocket_t *ws) {
++    if (ws == NULL || ws->processing_read) return;
++
++    ws->processing_read = true;
++    while (!ws->closed && ws->read_len > 0) {
++        size_t consumed = 0;
++        enum ws_parse_status status = ws_process_frame_slice(ws, ws->read_buf, ws->read_len, &consumed);
++
++        if (consumed > 0) ws_read_buffer_consume(ws, consumed);
++        if (status == WS_PARSE_INCOMPLETE) break;
++        if (status == WS_PARSE_PROTOCOL_ERROR) {
++            ws->read_len = 0;
++            ws->read_cb((uv_stream_t *) ws, UV_EPROTO, NULL);
++            break;
++        }
++        if (consumed == 0) break;
++    }
++    ws->processing_read = false;
++
++    if (ws->closed) {
++        ws_read_buffer_clear(ws);
++    }
++}
++
+ void ws_process_read(tlsuv_websocket_t *ws, ssize_t nread, const uv_buf_t *buf) {
+     UM_LOG(VERB, "ws_read_cb nread = %zd", nread);
+     if (nread < 0) {
+@@ -469,53 +678,30 @@ void ws_process_read(tlsuv_websocket_t *ws, ssize_t nread, const uv_buf_t *buf)
+         return;
+     }
+ 
+-    char *frame = buf->base + processed;
+-    char op = (char)(frame[0] & WS_OP_BITS);
+-    bool masked = (frame[1] & WS_MASK) != 0;
+-    size_t len = frame[1] & (~WS_MASK);
+-    char *dp = frame + 2;
+-    if (len == 126) {
+-        len = be16toh(*(uint16_t *)(&frame[2]));
+-        dp += 2;
+-    } else if (len == 127) {
+-        len = be64toh(*(uint64_t*)&frame[2]);
+-        dp += 8;
+-    }
++    char *data = buf->base + processed;
++    size_t len = (size_t)(nread - processed);
++    int rc = 0;
+ 
+-    uint8_t mask[4];
+-    if (masked) {
+-        memcpy(mask, dp, sizeof(mask));
+-        dp += sizeof(mask);
++    if (ws->read_len == 0) {
++        size_t consumed = 0;
++        enum ws_parse_status status = ws_process_frame_slice(ws, data, len, &consumed);
++        if (status == WS_PARSE_PROTOCOL_ERROR) {
++            tlsuv__free(buf->base);
++            ws->read_cb((uv_stream_t *) ws, UV_EPROTO, NULL);
++            return;
++        }
++        if (!ws->closed && consumed < len) {
++            rc = ws_read_buffer_append(ws, data + consumed, len - consumed);
++        }
+     } else {
+-        memset(mask, 0, sizeof(mask));
+-    }
+-
+-    switch (op) {
+-        case OpCode_TXT:
+-        case OpCode_BIN:
+-            UM_LOG(TRACE, "got data %zd masked=%d", len, masked);
+-            for (size_t i=0; i<len; i++) {
+-                buf->base[i] = (char)(*dp ^ mask[i % 4]);
+-                dp++;
+-            }
+-            ws->read_cb((uv_stream_t *) ws, (ssize_t)len, buf);
+-            break;
+-        case OpCode_Close:
+-            UM_LOG(TRACE, "got close");
+-            ws->read_cb((uv_stream_t *) ws, UV_EOF, buf);
+-            break;
+-        case OpCode_Ping:
+-            UM_LOG(TRACE, "got ping masked=%d len=%zd", masked, len);
+-            send_pong(ws, dp, (int)len);
+-            break;
+-        case OpCode_Pong:
+-            UM_LOG(TRACE, "got pong");
+-            break;
+-        default:
+-            UM_LOG(INFO, "got unsupported frame %hd", op);
++        rc = ws_read_buffer_append(ws, data, len);
++        if (rc == 0) ws_process_buffered_frames(ws);
+     }
+ 
+     tlsuv__free(buf->base);
++    if (rc != 0) {
++        ws->read_cb((uv_stream_t *) ws, rc, NULL);
++    }
+ }
+ 
+ static void send_pong(tlsuv_websocket_t *ws, const char* ping_data, int len) {
+@@ -614,6 +800,9 @@ static void on_ws_close(tlsuv_websocket_t *ws) {
+         ws->src = NULL;
+     }
+ 
++    if (!ws->processing_read) {
++        ws_read_buffer_clear(ws);
++    }
+     if (ws->close_cb) {
+         ws->close_cb((uv_handle_t *) ws);
+     }
+@@ -628,6 +817,7 @@ static void ws_close_cb(uv_link_t *l) {
+ 
+ int tlsuv_websocket_close(tlsuv_websocket_t *ws, uv_close_cb cb) {
+     ws->close_cb = cb;
++    ws->closed = true;
+ 
+     if (ws->connect_req) {
+         UM_LOG(TRACE, "closing ws connect req");
