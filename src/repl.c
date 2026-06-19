@@ -56,6 +56,18 @@ typedef struct {
   size_t cap;
 } repl_decl_pending_t;
 
+typedef struct {
+  char *expr;
+  char *preview;
+  size_t expr_len;
+} repl_preview_entry_t;
+
+typedef struct {
+  repl_preview_entry_t *items;
+  size_t count;
+  size_t cap;
+} repl_preview_snapshot_t;
+
 static repl_decl_registry_t *g_repl_decl_registry = NULL;
 static void repl_read_wake_cb(uv_async_t *handle) { (void)handle; }
 static cmd_result_t cmd_help(ant_t *js, ant_history_t *history, const char *arg);
@@ -66,11 +78,367 @@ typedef struct {
   ant_history_t *history;
   const char *prompt;
   highlight_state prefix_state;
+  repl_preview_snapshot_t *preview_snapshot;
   ant_readline_result_t status;
   char *line;
   bool done;
   bool async_initialized;
+  bool preview_enabled;
 } repl_read_job_t;
+
+static bool repl_preview_ident_char(char c, bool first) {
+  unsigned char uc = (unsigned char)c;
+  return c == '_' || c == '$' || isalpha(uc) || (!first && isdigit(uc));
+}
+
+static void repl_preview_copy_line(
+  char *out,
+  size_t out_len,
+  const char *src,
+  size_t src_len
+) {
+  if (!out || out_len == 0) return;
+  out[0] = '\0';
+  if (!src) return;
+
+  size_t n = 0;
+  bool clipped = false;
+  // TODO: reduce nesting
+  for (size_t i = 0; i < src_len && src[i]; i++) {
+    if (src[i] == '\n' || src[i] == '\r') {
+      if (n > 0 && out[n - 1] != ' ') {
+        if (n + 1 >= out_len) {
+          clipped = true;
+          break;
+        }
+        out[n++] = ' ';
+      }
+      continue;
+    }
+    if (n + 1 >= out_len) {
+      clipped = true;
+      break;
+    }
+    out[n++] = src[i];
+  }
+
+  if (clipped && out_len > 5) {
+    size_t max_n = out_len - 5;
+    if (n > max_n) n = max_n;
+    memcpy(out + n, " ...", 4);
+    n += 4;
+  }
+  out[n] = '\0';
+}
+
+static bool repl_preview_format_value(
+  ant_t *js,
+  ant_value_t value,
+  char *out,
+  size_t out_len
+) {
+  if (!js || !out || out_len == 0) return false;
+  out[0] = '\0';
+
+  if (vtype(value) == T_STR) {
+    char *str = js_getstr(js, value, NULL);
+    if (!str) return false;
+    if (out_len > 2) {
+      out[0] = '\'';
+      repl_preview_copy_line(out + 1, out_len - 2, str, strlen(str));
+      size_t n = strlen(out);
+      if (n + 1 < out_len) {
+        out[n++] = '\'';
+        out[n] = '\0';
+      }
+    }
+    return out[0] != '\0';
+  }
+
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(js, value, cbuf, sizeof(cbuf));
+  repl_preview_copy_line(out, out_len, cstr.ptr, strlen(cstr.ptr));
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return out[0] != '\0';
+}
+
+static bool repl_preview_append(
+  char *out,
+  size_t out_len,
+  size_t *n,
+  const char *src
+) {
+  if (!out || !n || out_len == 0 || !src) return false;
+  size_t src_len = strlen(src);
+  if (*n + src_len >= out_len) {
+    size_t avail = (*n < out_len) ? out_len - *n - 1 : 0;
+    if (avail > 0) memcpy(out + *n, src, avail);
+    *n += avail;
+    out[*n] = '\0';
+    return false;
+  }
+  memcpy(out + *n, src, src_len);
+  *n += src_len;
+  out[*n] = '\0';
+  return true;
+}
+
+static bool repl_preview_append_bytes(
+  char *out,
+  size_t out_len,
+  size_t *n,
+  const char *src,
+  size_t src_len
+) {
+  if (!out || !n || out_len == 0 || !src) return false;
+  if (*n + src_len >= out_len) {
+    size_t avail = (*n < out_len) ? out_len - *n - 1 : 0;
+    if (avail > 0) memcpy(out + *n, src, avail);
+    *n += avail;
+    out[*n] = '\0';
+    return false;
+  }
+  memcpy(out + *n, src, src_len);
+  *n += src_len;
+  out[*n] = '\0';
+  return true;
+}
+
+static bool repl_preview_format_global(
+  ant_t *js,
+  ant_value_t global,
+  char *out,
+  size_t out_len
+) {
+  if (!js || !out || out_len == 0) return false;
+  size_t n = 0;
+  out[0] = '\0';
+
+  if (!repl_preview_append(out, out_len, &n, "Object [global] { ")) return false;
+
+  bool first = true;
+  bool clipped = false;
+  ant_iter_t iter = js_prop_iter_begin(js, global);
+  const char *key = NULL;
+  size_t key_len = 0;
+  ant_value_t value = js_mkundef();
+
+  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+    if (!key || key_len == 0) continue;
+
+    char value_preview[160];
+    if (value == global) {
+      strncpy(value_preview, "[Circular]", sizeof(value_preview) - 1);
+      value_preview[sizeof(value_preview) - 1] = '\0';
+    } else if (!repl_preview_format_value(js, value, value_preview, sizeof(value_preview))) {
+      continue;
+    }
+
+    if (!first && !repl_preview_append(out, out_len, &n, ", ")) {
+      clipped = true;
+      break;
+    }
+    first = false;
+    if (
+      !repl_preview_append_bytes(out, out_len, &n, key, key_len) ||
+      !repl_preview_append(out, out_len, &n, ": ") ||
+      !repl_preview_append(out, out_len, &n, value_preview)
+    ) {
+      clipped = true;
+      break;
+    }
+  }
+
+  js_prop_iter_end(&iter);
+
+  if (clipped) {
+    if (out_len > 5) {
+      size_t max_n = out_len - 5;
+      if (n > max_n) n = max_n;
+      memcpy(out + n, " ...", 4);
+      n += 4;
+      out[n] = '\0';
+    }
+  } else repl_preview_append(out, out_len, &n, " }");
+
+  return out[0] != '\0';
+}
+
+static void repl_preview_snapshot_free(repl_preview_snapshot_t *snapshot) {
+  if (!snapshot) return;
+  for (size_t i = 0; i < snapshot->count; i++) {
+    free(snapshot->items[i].expr);
+    free(snapshot->items[i].preview);
+  }
+  free(snapshot->items);
+  snapshot->items = NULL;
+  snapshot->count = 0;
+  snapshot->cap = 0;
+}
+
+static bool repl_preview_snapshot_contains(
+  const repl_preview_snapshot_t *snapshot,
+  const char *expr,
+  size_t expr_len
+) {
+  if (!snapshot || !expr) return false;
+  for (size_t i = 0; i < snapshot->count; i++)
+    if (
+      snapshot->items[i].expr_len == expr_len &&
+      memcmp(snapshot->items[i].expr, expr, expr_len) == 0
+    ) return true;
+  return false;
+}
+
+static bool repl_preview_expr_is_ident(const char *expr, size_t expr_len) {
+  if (!expr || expr_len == 0 || !repl_preview_ident_char(expr[0], true)) return false;
+  for (size_t i = 1; i < expr_len; i++)
+    if (!repl_preview_ident_char(expr[i], false)) return false;
+  return true;
+}
+
+static bool repl_preview_snapshot_add(
+  repl_preview_snapshot_t *snapshot,
+  const char *expr,
+  size_t expr_len,
+  const char *preview
+) {
+  if (!snapshot || !expr || expr_len == 0 || !preview || preview[0] == '\0')
+    return true;
+  if (repl_preview_snapshot_contains(snapshot, expr, expr_len)) return true;
+
+  if (snapshot->count >= snapshot->cap) {
+    size_t new_cap = snapshot->cap ? snapshot->cap * 2 : 64;
+    repl_preview_entry_t *items = realloc(snapshot->items, new_cap * sizeof(*items));
+    if (!items) return false;
+    snapshot->items = items;
+    snapshot->cap = new_cap;
+  }
+
+  char *expr_copy = malloc(expr_len + 1);
+  if (!expr_copy) return false;
+  memcpy(expr_copy, expr, expr_len);
+  expr_copy[expr_len] = '\0';
+
+  char *preview_copy = strdup(preview);
+  if (!preview_copy) {
+    free(expr_copy);
+    return false;
+  }
+
+  snapshot->items[snapshot->count++] = (repl_preview_entry_t){
+    .expr = expr_copy,
+    .preview = preview_copy,
+    .expr_len = expr_len,
+  };
+  return true;
+}
+
+static bool repl_preview_snapshot_add_value(
+  ant_t *js,
+  repl_preview_snapshot_t *snapshot,
+  const char *expr,
+  size_t expr_len,
+  ant_value_t value
+) {
+  switch (vtype(value)) {
+    case T_OBJ:
+    case T_ARR:
+    case T_PROMISE:
+    case T_GENERATOR:
+    case T_MAP:
+    case T_SET:
+    case T_WEAKMAP:
+    case T_WEAKSET:
+    case T_TYPEDARRAY:
+      return true;
+    default:
+      break;
+  }
+
+  char preview[REPL_PREVIEW_TEXT_MAX];
+  if (!repl_preview_format_value(js, value, preview, sizeof(preview))) return true;
+  return repl_preview_snapshot_add(snapshot, expr, expr_len, preview);
+}
+
+static bool repl_preview_snapshot_build(ant_t *js, repl_preview_snapshot_t *snapshot) {
+  if (!js || !snapshot) return false;
+
+  ant_value_t global = js_glob(js);
+  char global_preview[REPL_PREVIEW_TEXT_MAX];
+  if (!repl_preview_format_global(js, global, global_preview, sizeof(global_preview)))
+    return false;
+  if (!repl_preview_snapshot_add(snapshot, "this", 4, global_preview)) return false;
+  if (!repl_preview_snapshot_add(snapshot, "global", 6, global_preview)) return false;
+  if (!repl_preview_snapshot_add(snapshot, "globalThis", 10, global_preview)) return false;
+
+  ant_iter_t iter = js_prop_iter_begin(js, global);
+  const char *key = NULL;
+  size_t key_len = 0;
+  ant_value_t value = js_mkundef();
+  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+    if (!repl_preview_expr_is_ident(key, key_len)) continue;
+    if (!repl_preview_snapshot_add_value(js, snapshot, key, key_len, value)) {
+      js_prop_iter_end(&iter);
+      return false;
+    }
+  }
+  js_prop_iter_end(&iter);
+  return true;
+}
+
+static bool repl_snapshot_preview_cb(
+  void *ctx,
+  const char *line,
+  size_t len,
+  char *suffix_out,
+  size_t suffix_len,
+  char *preview_out,
+  size_t preview_len
+) {
+  repl_preview_snapshot_t *snapshot = (repl_preview_snapshot_t *)ctx;
+  if (
+    !snapshot || !line ||
+    !suffix_out || suffix_len == 0 ||
+    !preview_out || preview_len == 0
+  ) return false;
+  suffix_out[0] = '\0';
+  preview_out[0] = '\0';
+
+  while (len > 0 && isspace((unsigned char)*line)) {
+    line++;
+    len--;
+  }
+  while (len > 0 && isspace((unsigned char)line[len - 1])) len--;
+  if (len == 0 || line[0] == '.') return false;
+
+  repl_preview_entry_t *prefix_match = NULL;
+  for (size_t i = 0; i < snapshot->count; i++) {
+    repl_preview_entry_t *entry = &snapshot->items[i];
+    if (entry->expr_len == len && memcmp(entry->expr, line, len) == 0) {
+      strncpy(preview_out, entry->preview, preview_len - 1);
+      preview_out[preview_len - 1] = '\0';
+      return preview_out[0] != '\0';
+    }
+    if (len < 3) continue;
+    if (entry->expr_len > len && memcmp(entry->expr, line, len) == 0) {
+      if (prefix_match) return false;
+      prefix_match = entry;
+    }
+  }
+
+  if (prefix_match) {
+    size_t suffix_bytes = prefix_match->expr_len - len;
+    if (suffix_bytes >= suffix_len) suffix_bytes = suffix_len - 1;
+    memcpy(suffix_out, prefix_match->expr + len, suffix_bytes);
+    suffix_out[suffix_bytes] = '\0';
+    strncpy(preview_out, prefix_match->preview, preview_len - 1);
+    preview_out[preview_len - 1] = '\0';
+    return suffix_out[0] != '\0' || preview_out[0] != '\0';
+  }
+
+  return false;
+}
 
 static void repl_read_async_close_cb(uv_handle_t *handle) {
   repl_read_job_t *job = (repl_read_job_t *)handle->data;
@@ -87,10 +455,13 @@ static void *repl_read_thread_main(void *data) {
   sigaddset(&sigint_set, SIGINT);
   pthread_sigmask(SIG_UNBLOCK, &sigint_set, NULL);
 #endif
-  
-  ant_readline_result_t status = ant_readline(
-    job->history, job->prompt, 
-    job->prefix_state, &line
+
+  ant_readline_result_t status = ant_readline_with_preview(
+    job->history, job->prompt,
+    job->prefix_state,
+    job->preview_enabled ? repl_snapshot_preview_cb : NULL,
+    job->preview_snapshot,
+    &line
   );
 
   pthread_mutex_lock(&job->mutex);
@@ -122,12 +493,15 @@ static ant_readline_result_t repl_readline_async(
     .history = history,
     .prompt = prompt,
     .prefix_state = prefix_state,
+    .preview_snapshot = NULL,
     .status = ANT_READLINE_EOF,
     .line = NULL,
     .done = false,
     .async_initialized = false,
+    .preview_enabled = true,
   };
-  
+  repl_preview_snapshot_t preview_snapshot = {0};
+
   pthread_t thread;
 #ifndef _WIN32
   sigset_t sigint_set;
@@ -136,11 +510,18 @@ static ant_readline_result_t repl_readline_async(
 #endif
 
   if (out_line) *out_line = NULL;
-  if (pthread_mutex_init(&job.mutex, NULL) != 0)
+  if (repl_preview_snapshot_build(js, &preview_snapshot))
+    job.preview_snapshot = &preview_snapshot;
+  else job.preview_enabled = false;
+
+  if (pthread_mutex_init(&job.mutex, NULL) != 0) {
+    repl_preview_snapshot_free(&preview_snapshot);
     return ant_readline(history, prompt, prefix_state, out_line);
+  }
 
   if (uv_async_init(uv_default_loop(), &job.async, repl_read_wake_cb) != 0) {
     pthread_mutex_destroy(&job.mutex);
+    repl_preview_snapshot_free(&preview_snapshot);
     return ant_readline(history, prompt, prefix_state, out_line);
   }
   job.async.data = &job;
@@ -160,6 +541,7 @@ static ant_readline_result_t repl_readline_async(
       uv_close((uv_handle_t *)&job.async, repl_read_async_close_cb);
     while (job.async_initialized) uv_run(uv_default_loop(), UV_RUN_ONCE);
     pthread_mutex_destroy(&job.mutex);
+    repl_preview_snapshot_free(&preview_snapshot);
     return ant_readline(history, prompt, prefix_state, out_line);
   }
 
@@ -182,6 +564,7 @@ static ant_readline_result_t repl_readline_async(
   char *line = job.line;
   pthread_mutex_unlock(&job.mutex);
   pthread_mutex_destroy(&job.mutex);
+  repl_preview_snapshot_free(&preview_snapshot);
 
   if (out_line) *out_line = line;
   else free(line);
@@ -195,7 +578,7 @@ static inline void repl_clear_exception_state(ant_t *js) {
 
 static void repl_decl_registry_free(repl_decl_registry_t *reg) {
   if (!reg) return;
-  for (size_t i = 0; i < reg->count; i++) 
+  for (size_t i = 0; i < reg->count; i++)
     free(reg->items[i].name);
   free(reg->items);
   reg->items = NULL;
@@ -209,7 +592,7 @@ static bool repl_decl_registry_contains(
 ) {
   if (!reg || !name) return false;
   for (size_t i = 0; i < reg->count; i++) if (
-    reg->items[i].len == (size_t)len 
+    reg->items[i].len == (size_t)len
     && memcmp(reg->items[i].name, name, (size_t)len) == 0
   ) return true;
   return false;
@@ -221,7 +604,7 @@ static bool repl_decl_registry_add(
 ) {
   if (!reg || !name) return true;
   if (repl_decl_registry_contains(reg, name, len)) return true;
-  
+
   if (reg->count >= reg->cap) {
     size_t new_cap = reg->cap ? reg->cap * 2 : 32;
     repl_decl_name_t *ni = realloc(reg->items, new_cap * sizeof(*ni));
@@ -232,17 +615,17 @@ static bool repl_decl_registry_add(
     reg->items = ni;
     reg->cap = new_cap;
   }
-  
+
   char *copy = malloc((size_t)len + 1);
   if (!copy) {
     js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
     return false;
   }
-  
+
   memcpy(copy, name, (size_t)len);
   copy[len] = '\0';
   reg->items[reg->count++] = (repl_decl_name_t){ .name = copy, .len = (size_t)len };
-  
+
   return true;
 }
 
@@ -261,7 +644,7 @@ static bool repl_decl_pending_contains(
   const char *name, uint32_t len
 ) {
   if (!p || !name) return false;
-  for (size_t i = 0; i < p->count; i++) 
+  for (size_t i = 0; i < p->count; i++)
     if (p->lens[i] == len && memcmp(p->names[i], name, (size_t)len) == 0) return true;
   return false;
 }
@@ -369,7 +752,7 @@ static bool repl_precheck_and_commit_lexicals(
 
   repl_clear_exception_state(js);
   sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
-  
+
   if (!program || js->thrown_exists) {
     ok = true;
     goto done;
@@ -466,28 +849,28 @@ static cmd_result_t cmd_load(ant_t *js, ant_history_t *history, const char *arg)
     fprintf(stderr, "Usage: .load <filename>\n");
     return CMD_OK;
   }
-  
+
   FILE *fp = fopen(arg, "r");
   if (fp == NULL) {
     fprintf(stderr, "Failed to open file: %s\n", arg);
     return CMD_OK;
   }
-  
+
   fseek(fp, 0, SEEK_END);
   long file_size = ftell(fp);
   fseek(fp, 0, SEEK_SET);
-  
+
   char *file_buffer = malloc(file_size + 1);
   if (file_buffer) {
     size_t len = fread(file_buffer, 1, file_size, fp);
     file_buffer[len] = '\0';
     repl_eval_chunk(
-      js, g_repl_decl_registry, 
+      js, g_repl_decl_registry,
       file_buffer, len, REPL_PRINT_LOAD
     );
     free(file_buffer);
   }
-  
+
   fclose(fp);
   return CMD_OK;
 }
@@ -497,19 +880,19 @@ static cmd_result_t cmd_save(ant_t *js, ant_history_t *history, const char *arg)
     fprintf(stderr, "Usage: .save <filename>\n");
     return CMD_OK;
   }
-  
+
   FILE *fp = fopen(arg, "w");
   if (fp == NULL) {
     fprintf(stderr, "Failed to open file for writing: %s\n", arg);
     return CMD_OK;
   }
-  
-  for (int i = 0; i < history->count; i++) 
+
+  for (int i = 0; i < history->count; i++)
     fprintf(fp, "%s\n", history->lines[i]);
-  
+
   fclose(fp);
   printf("Session saved to %s\n", arg);
-  
+
   return CMD_OK;
 }
 
@@ -572,7 +955,7 @@ static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg)
 
   repl_clear_exception_state(js);
   ant_value_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
-  
+
   js_reactor_pump_repl_nowait(js);
   if (js->thrown_exists) {
     js_set(js, js_glob(js), "_error", js->thrown_value);
@@ -581,7 +964,7 @@ static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg)
 
   js_set(js, js_glob(js), "_", result); char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, result, cbuf, sizeof(cbuf));
-  
+
   bool copied_command = repl_copy_with_command(cstr.ptr, cstr.len);
   if (cstr.needs_free) free((void *)cstr.ptr);
 
@@ -628,11 +1011,11 @@ static cmd_result_t cmd_help(ant_t *js, ant_history_t *history, const char *arg)
 
 static cmd_result_t execute_command(ant_t *js, ant_history_t *history, const char *line) {
   const char *cmd_start = line + 1;
-  
+
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
     size_t n = strlen(cmd->name);
     if (strncmp(cmd_start, cmd->name, n) != 0) continue;
-    
+
     char next = cmd_start[n];
     if (cmd->has_arg && (next == ' ' || next == '\0')) {
       const char *arg = cmd_start + n;
@@ -641,7 +1024,7 @@ static cmd_result_t execute_command(ant_t *js, ant_history_t *history, const cha
     }
     if (!cmd->has_arg && next == '\0') return cmd->handler(js, history, NULL);
   }
-  
+
   return CMD_NOT_FOUND;
 }
 
@@ -669,20 +1052,20 @@ static bool in_template_text(parse_state_t *s) {
 
 static bool is_incomplete_input(const char *code, size_t len) {
   parse_state_t s = {0};
-  
+
   for (size_t i = 0; i < len; i++) {
     char c = code[i];
-    
+
     if (s.escaped) { s.escaped = false; continue; }
     if (c == '\\' && (s.in_string || s.template_count > 0)) { s.escaped = true; continue; }
     if (s.in_string) { if (c == s.string_char) s.in_string = false; continue; }
-    
+
     if (in_template_text(&s)) {
       if (c == '`') s.template_count--;
       else if (c == '$' && i + 1 < len && code[i + 1] == '{') { s.brace++; i++; }
       continue;
     }
-    
+
     if (c == '/' && i + 1 < len) {
       if (code[i + 1] == '/') { while (i < len && code[i] != '\n') i++; continue; }
       if (code[i + 1] == '*') {
@@ -697,7 +1080,7 @@ static bool is_incomplete_input(const char *code, size_t len) {
         continue;
       }
     }
-    
+
     switch (c) {
       case '"': case '\'': s.in_string = true; s.string_char = c; break;
       case '`': push_template(&s); break;
@@ -707,12 +1090,12 @@ static bool is_incomplete_input(const char *code, size_t len) {
     }
     if (!isspace((unsigned char)c)) s.last_code_char = c;
   }
-  
+
   bool incomplete =
     s.in_string || s.template_count > 0 ||
     s.paren > 0 || s.bracket > 0 || s.brace > 0 ||
     s.last_code_char == ',';
-  
+
   free(s.templates);
   return incomplete;
 }
@@ -720,29 +1103,29 @@ static bool is_incomplete_input(const char *code, size_t len) {
 void ant_repl_run() {
   ant_t *js = rt->js;
   ant_readline_install_signal_handler();
-  
+
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
-  
+
   crprintf(
     "Welcome to <red+bold>Ant JavaScript</> v%s\n"
     "Type <cyan>.copy [code]</cyan> to copy, <cyan>.help</cyan> for more information.\n\n",
     ANT_VERSION
   );
-  
+
   ant_history_t history;
   ant_history_init(&history, 512);
   ant_history_load(&history);
-  
+
   repl_decl_registry_t decl_registry = {0};
   g_repl_decl_registry = &decl_registry;
-  
+
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
-  
+
   js_set(js, js_glob(js), "_", js_mkundef());
   js_set(js, js_glob(js), "_error", js_mkundef());
-  
+
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_", 1, JS_DESC_W | JS_DESC_C);
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_error", 6, JS_DESC_W | JS_DESC_C);
 
@@ -750,7 +1133,7 @@ void ant_repl_run() {
   char *multiline_buf = NULL;
   size_t multiline_len = 0;
   size_t multiline_cap = 0;
-  
+
   while (1) {
     const char *prompt = multiline_buf ? "\x1b[2m|\x1b[0m " : "\x1b[2m❯\x1b[0m ";
     highlight_state prefix_state = HL_STATE_INIT;
@@ -796,10 +1179,10 @@ void ant_repl_run() {
       }
       break;
     }
-    
+
     prev_ctrl_c_count = 0;
     size_t line_len = strlen(line);
-    
+
     if (line_len == 0 && multiline_buf) {
       if (multiline_len + 1 >= multiline_cap) {
         multiline_cap = multiline_cap ? multiline_cap * 2 : 256;
@@ -810,12 +1193,12 @@ void ant_repl_run() {
       free(line);
       continue;
     }
-    
+
     if (line_len == 0) {
       free(line);
       continue;
     }
-    
+
     if (!multiline_buf && line[0] == '.') {
       cmd_result_t result = execute_command(js, &history, line);
       if (result == CMD_EXIT) {
@@ -828,42 +1211,42 @@ void ant_repl_run() {
       free(line);
       continue;
     }
-    
+
     size_t new_len = multiline_len + line_len + 1;
     if (new_len >= multiline_cap || !multiline_buf) {
       multiline_cap = multiline_cap ? multiline_cap * 2 : 256;
       if (multiline_cap < new_len + 1) multiline_cap = new_len + 1;
       multiline_buf = realloc(multiline_buf, multiline_cap);
     }
-    
+
     if (multiline_len > 0)
       multiline_buf[multiline_len++] = '\n';
-    
+
     memcpy(multiline_buf + multiline_len, line, line_len);
     multiline_len += line_len;
     multiline_buf[multiline_len] = '\0';
     free(line);
-    
+
     if (is_incomplete_input(multiline_buf, multiline_len)) continue;
     ant_history_add(&history, multiline_buf);
-    
+
     repl_eval_chunk(
-      js, &decl_registry, multiline_buf, 
+      js, &decl_registry, multiline_buf,
       multiline_len, REPL_PRINT_INTERACTIVE
     );
-    
+
     free(multiline_buf);
     multiline_buf = NULL;
     multiline_len = 0;
     multiline_cap = 0;
   }
-  
+
   if (multiline_buf) free(multiline_buf);
   ant_readline_shutdown();
-  
+
   repl_decl_registry_free(&decl_registry);
   g_repl_decl_registry = NULL;
-  
+
   ant_history_save(&history);
   ant_history_free(&history);
 }

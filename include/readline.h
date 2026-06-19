@@ -2,6 +2,7 @@
 #define ANT_READLINE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include "highlight.h"
 
 typedef struct {
@@ -29,10 +30,29 @@ void ant_history_free(ant_history_t *hist);
 const char *ant_history_prev(ant_history_t *hist);
 const char *ant_history_next(ant_history_t *hist);
 
+typedef bool (*ant_readline_preview_fn)(
+  void *ctx,
+  const char *line,
+  size_t len,
+  char *suffix_out,
+  size_t suffix_len,
+  char *preview_out,
+  size_t preview_len
+);
+
 ant_readline_result_t ant_readline(
   ant_history_t *hist,
   const char *prompt,
   highlight_state line_state,
+  char **out_line
+);
+
+ant_readline_result_t ant_readline_with_preview(
+  ant_history_t *hist,
+  const char *prompt,
+  highlight_state line_state,
+  ant_readline_preview_fn preview_fn,
+  void *preview_ctx,
   char **out_line
 );
 
