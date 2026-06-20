@@ -12463,6 +12463,13 @@ static ant_value_t builtin_string_includes(ant_t *js, ant_value_t *args, int nar
   return mkval(T_BOOL, 0);
 }
 
+static inline ant_offset_t string_clamped_position(ant_t *js, ant_value_t value, ant_offset_t len) {
+  double pos = js_to_number(js, value);
+  if (isnan(pos) || pos < 0) return 0;
+  if (pos > D(len)) return len;
+  return (ant_offset_t)pos;
+}
+
 static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "startsWith called on non-string");
@@ -12473,18 +12480,36 @@ static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int n
     ant_value_t maybe_err = reject_regexp_arg(js, search, "startsWith");
     if (is_err(maybe_err)) return maybe_err;
   }
+  
   search = js_tostring_val(js, search);
   if (is_err(search)) return search;
   
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   ant_offset_t search_len, search_off = vstr(js, search, &search_len);
+  
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   const char *search_ptr = (char *)(uintptr_t)(search_off);
+
+  if (str_is_ascii(str_ptr)) {
+    ant_offset_t start = nargs >= 2 ? string_clamped_position(js, args[1], str_len) : 0;
+    if (search_len > str_len - start) return mkval(T_BOOL, 0);
+    if (search_len == 0) return mkval(T_BOOL, 1);
+    return mkval(T_BOOL, memcmp(str_ptr + start, search_ptr, search_len) == 0 ? 1 : 0);
+  }
+
+  ant_offset_t str_units = (ant_offset_t)utf16_strlen(str_ptr, str_len);
+  ant_offset_t search_units = (ant_offset_t)utf16_strlen(search_ptr, search_len);
+  ant_offset_t start = nargs >= 2 ? string_clamped_position(js, args[1], str_units) : 0;
   
-  if (search_len > str_len) return mkval(T_BOOL, 0);
+  if (search_units > str_units - start) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
+
+  size_t byte_start = 0, byte_end = 0;
+  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
   
-  return mkval(T_BOOL, memcmp(str_ptr, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL,
+    byte_end - byte_start == (size_t)search_len &&
+    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
 }
 
 static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nargs) {
@@ -12497,6 +12522,7 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
     ant_value_t maybe_err = reject_regexp_arg(js, search, "endsWith");
     if (is_err(maybe_err)) return maybe_err;
   }
+  
   search = js_tostring_val(js, search);
   if (is_err(search)) return search;
   
@@ -12505,11 +12531,34 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
   
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   const char *search_ptr = (char *)(uintptr_t)(search_off);
+
+  if (str_is_ascii(str_ptr)) {
+    ant_offset_t end = (nargs >= 2 && vtype(args[1]) != T_UNDEF)
+      ? string_clamped_position(js, args[1], str_len)
+      : str_len;
+    ant_offset_t start = end - search_len;
+    if (start < 0) return mkval(T_BOOL, 0);
+    if (search_len == 0) return mkval(T_BOOL, 1);
+    return mkval(T_BOOL, memcmp(str_ptr + start, search_ptr, search_len) == 0 ? 1 : 0);
+  }
+
+  ant_offset_t str_units = (ant_offset_t)utf16_strlen(str_ptr, str_len);
+  ant_offset_t search_units = (ant_offset_t)utf16_strlen(search_ptr, search_len);
   
-  if (search_len > str_len) return mkval(T_BOOL, 0);
+  ant_offset_t end = (nargs >= 2 && vtype(args[1]) != T_UNDEF)
+    ? string_clamped_position(js, args[1], str_units)
+    : str_units;
+  
+  ant_offset_t start = end - search_units;
+  if (start < 0) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
+
+  size_t byte_start = 0, byte_end = 0;
+  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
   
-  return mkval(T_BOOL, memcmp(str_ptr + str_len - search_len, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL,
+    byte_end - byte_start == (size_t)search_len &&
+    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
 }
 
 static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nargs) {

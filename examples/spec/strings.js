@@ -35,9 +35,19 @@ test('includes empty', 'hello'.includes(''), true);
 
 test('startsWith true', 'Hello, World!'.startsWith('Hello'), true);
 test('startsWith false', 'Hello, World!'.startsWith('World'), false);
+test('startsWith position true', 'Hello, World!'.startsWith('World', 7), true);
+test('startsWith position false', 'Hello, World!'.startsWith('Hello', 1), false);
+test('startsWith position clamps negative', 'Hello'.startsWith('Hello', -1), true);
+test('startsWith position clamps past end for empty search', 'Hello'.startsWith('', 99), true);
+test('startsWith position past end rejects non-empty search', 'Hello'.startsWith('H', 99), false);
+test('startsWith Hono query fast path shape', 'http://localhost:18080/?q=hello'.startsWith('q', 24), true);
 
 test('endsWith true', 'index.html'.endsWith('.html'), true);
 test('endsWith false', 'index.html'.endsWith('.js'), false);
+test('endsWith end position true', 'index.html'.endsWith('index', 5), true);
+test('endsWith end position false', 'index.html'.endsWith('.html', 5), false);
+test('endsWith end position clamps negative for empty search', 'index.html'.endsWith('', -1), true);
+test('endsWith end position clamps negative for non-empty search', 'index.html'.endsWith('i', -1), false);
 
 test('toUpperCase', 'hello'.toUpperCase(), 'HELLO');
 test('toLowerCase', 'HELLO'.toLowerCase(), 'hello');
