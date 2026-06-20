@@ -20,6 +20,12 @@ typedef enum {
 } pkg_error_t;
 
 typedef enum {
+  PKG_REGISTRY_CHOICE_UNKNOWN = 0,
+  PKG_REGISTRY_CHOICE_PRIMARY = 1,
+  PKG_REGISTRY_CHOICE_FALLBACK = 2,
+} pkg_registry_choice_t;
+
+typedef enum {
   PKG_PHASE_RESOLVING = 0,
   PKG_PHASE_FETCHING = 1,
   PKG_PHASE_EXTRACTING = 2,
@@ -69,6 +75,13 @@ pkg_error_t pkg_resolve_check_many(
   pkg_context_t *ctx,
   const char *const *package_specs,
   uint32_t count
+);
+
+pkg_registry_choice_t pkg_choose_registry_many(
+  const char *const *package_specs,
+  uint32_t count,
+  const char *primary_registry,
+  const char *fallback_registry
 );
 
 pkg_error_t pkg_add(

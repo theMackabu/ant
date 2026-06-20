@@ -9,7 +9,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
-#include <pthread.h>
 #include <argtable3.h>
 #include <yyjson.h>
 
@@ -238,31 +237,6 @@ static bool normalize_package_specs(const char *const *in, int count, pkg_source
   return true;
 }
 
-typedef struct {
-  pkg_source_t source;
-  const char *const *specs;
-  int count;
-  pkg_error_t err;
-  char error[512];
-} resolve_probe_t;
-
-static void *resolve_probe_main(void *arg) {
-  resolve_probe_t *probe = (resolve_probe_t *)arg;
-  pkg_options_t opts = pkg_options_make(probe->source, NULL, NULL);
-  pkg_context_t *ctx = pkg_init(&opts);
-  if (!ctx) {
-    probe->err = PKG_OUT_OF_MEMORY;
-    snprintf(probe->error, sizeof(probe->error), "Failed to initialize package manager");
-    return NULL;
-  }
-
-  probe->err = pkg_resolve_check_many(ctx, probe->specs, (uint32_t)probe->count);
-  const char *msg = pkg_error_string(ctx);
-  if (msg && msg[0]) snprintf(probe->error, sizeof(probe->error), "%s", msg);
-  pkg_free(ctx);
-  return NULL;
-}
-
 static bool should_parallel_fallback(const normalized_specs_t *specs, pkg_cli_config_t config) {
   return specs->source == PKG_SOURCE_LAND
     && !specs->explicit_source
@@ -279,31 +253,18 @@ static bool choose_parallel_fallback_source(
   *used_fallback_out = false;
   if (count <= 0) return false;
 
-  resolve_probe_t land = {
-    .source = PKG_SOURCE_LAND,
-    .specs = specs->specs,
-    .count = count,
-    .err = PKG_NETWORK_ERROR,
-    .error = {0},
-  };
-  resolve_probe_t npm = {
-    .source = PKG_SOURCE_NPM,
-    .specs = specs->specs,
-    .count = count,
-    .err = PKG_NETWORK_ERROR,
-    .error = {0},
-  };
+  pkg_registry_choice_t choice = pkg_choose_registry_many(
+    specs->specs,
+    (uint32_t)count,
+    pkg_source_registry_host(PKG_SOURCE_LAND),
+    pkg_source_registry_host(PKG_SOURCE_NPM)
+  );
 
-  pthread_t npm_thread;
-  if (pthread_create(&npm_thread, NULL, resolve_probe_main, &npm) != 0) return false;
-  resolve_probe_main(&land);
-  pthread_join(npm_thread, NULL);
-
-  if (land.err == PKG_OK) {
+  if (choice == PKG_REGISTRY_CHOICE_PRIMARY) {
     *source_out = PKG_SOURCE_LAND;
     return true;
   }
-  if (land.err == PKG_RESOLVE_ERROR && npm.err == PKG_OK) {
+  if (choice == PKG_REGISTRY_CHOICE_FALLBACK) {
     *source_out = PKG_SOURCE_NPM;
     *used_fallback_out = true;
     return true;
@@ -1181,7 +1142,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   bool parallel_checked = false;
   if (should_parallel_fallback(&normalized, config)) {
     parallel_checked = choose_parallel_fallback_source(&normalized, count, &add_source, &used_parallel_fallback);
-    if (used_parallel_fallback) {
+    if (used_parallel_fallback && pkg_verbose) {
       fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
         C_YELLOW, C_RESET);
     }
@@ -1213,8 +1174,10 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
     if (!pkg_verbose) { progress_stop(&progress);  }
     if (!parallel_checked && add_source == PKG_SOURCE_LAND && !normalized.explicit_source && err == PKG_RESOLVE_ERROR && config.missing_fallback == PKG_FALLBACK_NPM) {
       pkg_free(ctx);
-      fprintf(stderr, "\n%sWarning:%s package was not found on ants.land; retrying from npm because install.missingPackageFallback=npm\n",
-        C_YELLOW, C_RESET);
+      if (pkg_verbose) {
+        fprintf(stderr, "\n%sWarning:%s package was not found on ants.land; retrying from npm because install.missingPackageFallback=npm\n",
+          C_YELLOW, C_RESET);
+      }
 
       progress_t retry_progress;
       if (!pkg_verbose) progress_start(&retry_progress, resolve_msg);
@@ -1892,8 +1855,10 @@ int pkg_cmd_exec(int argc, char **argv) {
     if (err != PKG_OK) {
       if (exec_source == PKG_SOURCE_LAND && err == PKG_RESOLVE_ERROR && config.missing_fallback == PKG_FALLBACK_NPM) {
         pkg_free(ctx);
-        fprintf(stderr, "\n%sWarning:%s package was not found on ants.land; retrying from npm because install.missingPackageFallback=npm\n",
-          C_YELLOW, C_RESET);
+        if (pkg_verbose) {
+          fprintf(stderr, "\n%sWarning:%s package was not found on ants.land; retrying from npm because install.missingPackageFallback=npm\n",
+            C_YELLOW, C_RESET);
+        }
 
         if (show_progress) progress_start(&progress, "🔍 Resolving from npm");
         pkg_options_t retry_opts = pkg_options_make(

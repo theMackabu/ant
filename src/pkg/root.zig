@@ -198,6 +198,12 @@ const Dependency = extern struct {
   version: [*:0]const u8,
 };
 
+pub const RegistryChoice = enum(c_int) {
+  unknown = 0,
+  primary = 1,
+  fallback = 2,
+};
+
 pub const PkgContext = struct {
   allocator: std.mem.Allocator,
   arena_state: std.heap.ArenaAllocator,
@@ -2164,6 +2170,100 @@ export fn pkg_resolve_check_many(
   }
 
   return .ok;
+}
+
+const ParsedPackageSpec = struct {
+  name: []const u8,
+  constraint: []const u8,
+};
+
+fn parsePackageSpec(spec_str: []const u8) ParsedPackageSpec {
+  var pkg_name: []const u8 = spec_str;
+  var version_constraint: []const u8 = "latest";
+
+  if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+    if (at_idx == 0) {
+      if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
+        pkg_name = spec_str[0..second_at];
+        version_constraint = spec_str[second_at + 1 ..];
+      }
+    } else {
+      pkg_name = spec_str[0..at_idx];
+      version_constraint = spec_str[at_idx + 1 ..];
+    }
+  }
+
+  return .{ .name = pkg_name, .constraint = version_constraint };
+}
+
+fn metadataSatisfies(allocator: std.mem.Allocator, json_data: []const u8, constraint_str: []const u8) bool {
+  var metadata = resolver.PackageMetadata.parseFromJson(allocator, json_data) catch return false;
+  defer metadata.deinit();
+
+  const constraint = resolver.Constraint.parse(constraint_str) catch return false;
+  if (constraint.kind == .any) {
+    if (metadata.dist_tag_latest) |latest| {
+      for (metadata.versions.items) |*v| {
+        if (v.version.order(latest) == .eq and v.matchesPlatform()) return true;
+      }
+    }
+  }
+
+  for (metadata.versions.items) |*v| {
+    if (constraint.satisfies(v.version) and v.matchesPlatform()) return true;
+  }
+
+  return false;
+}
+
+fn metadataResultSatisfies(allocator: std.mem.Allocator, result: *const fetcher.Fetcher.MetadataResult, constraint: []const u8) bool {
+  if (result.has_error or result.status_code != 200) return false;
+  const data = result.data orelse return false;
+  return metadataSatisfies(allocator, data, constraint);
+}
+
+export fn pkg_choose_registry_many(
+  package_specs: [*]const [*:0]const u8,
+  count: u32,
+  primary_registry: [*:0]const u8,
+  fallback_registry: [*:0]const u8,
+) RegistryChoice {
+  if (count == 0) return .unknown;
+
+  var arena_state = std.heap.ArenaAllocator.init(global_allocator);
+  defer arena_state.deinit();
+  const arena_alloc = arena_state.allocator();
+
+  var primary_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(primary_registry)) catch return .unknown;
+  defer primary_fetcher.deinit();
+
+  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
+  defer fallback_fetcher.deinit();
+
+  var primary_all_available = true;
+  var primary_had_not_found = false;
+  var primary_had_non_not_found_error = false;
+  var fallback_all_available = true;
+
+  for (0..count) |i| {
+    const spec = parsePackageSpec(std.mem.span(package_specs[i]));
+    const result = fetcher.Fetcher.fetchMetadataDual(primary_fetcher, fallback_fetcher, spec.name, arena_alloc) catch return .unknown;
+
+    const primary_available = metadataResultSatisfies(arena_alloc, &result.primary, spec.constraint);
+    const fallback_available = metadataResultSatisfies(arena_alloc, &result.fallback, spec.constraint);
+
+    if (!primary_available) {
+      primary_all_available = false;
+      if (result.primary.status_code == 404) primary_had_not_found = true
+      else primary_had_non_not_found_error = true;
+    }
+
+    if (!fallback_available) fallback_all_available = false;
+  }
+
+  if (primary_all_available) return .primary;
+  if (primary_had_not_found and !primary_had_non_not_found_error and fallback_all_available) return .fallback;
+  return .unknown;
 }
 
 export fn pkg_add_many(

@@ -1254,6 +1254,7 @@ pub const Fetcher = struct {
     data: ?[]u8,
     compressed: bool,
     has_error: bool,
+    status_code: u16,
   };
 
   fn storeMetadataBatchResult(
@@ -1264,11 +1265,196 @@ pub const Fetcher = struct {
   ) bool {
     const decoded = decodeMetadataOwned(req, allocator, decompress_buf) orelse {
       result.has_error = true;
+      result.status_code = req.status_code;
       return false;
     };
     result.data = decoded.data;
     result.compressed = decoded.compressed;
+    result.status_code = req.status_code;
     return true;
+  }
+
+  fn startMetaClientsAsync(self: *Fetcher) !void {
+    if (self.meta_clients_initialized) return;
+
+    for (&self.meta_clients) |*slot| {
+      if (slot.* != null) continue;
+      const client = Http2Client.init(self.allocator, self.registry_host, true) catch |err| {
+        debug.log("fetcher: failed to init async meta connection: {}", .{err});
+        continue;
+      };
+      client.initiateConnectAsync() catch |err| {
+        debug.log("fetcher: failed to start async meta connection: {}", .{err});
+        client.deinit();
+        continue;
+      };
+      slot.* = client;
+    }
+  }
+
+  fn finishMetaClientsAsync(self: *Fetcher) !void {
+    if (self.meta_clients_initialized) return;
+
+    const loop = uv.uv_default_loop();
+    while (true) {
+      var pending = false;
+      for (self.meta_clients) |slot| {
+        const client = slot orelse continue;
+        if (client.connected == 0) {
+          pending = true;
+          break;
+        }
+      }
+      if (!pending) break;
+      _ = uv.uv_run(loop, uv.RUN_ONCE);
+    }
+
+    var any_connected = false;
+    for (self.meta_clients) |slot| {
+      if (slot) |client| {
+        if (client.connected > 0) {
+          any_connected = true;
+        }
+      }
+    }
+
+    if (!any_connected) return error.ConnectionFailed;
+    self.meta_clients_initialized = true;
+  }
+
+  fn initMetadataResult(name: []const u8) MetadataResult {
+    return .{ .name = name, .data = null, .compressed = false, .has_error = false, .status_code = 0 };
+  }
+
+  fn queueSingleMetadataRequest(self: *Fetcher, name: []const u8, result: *MetadataResult) bool {
+    var conn_idx: usize = 0;
+    const c = self.nextMetaClient(&conn_idx) orelse {
+      result.has_error = true;
+      return false;
+    };
+
+    const session = c.h2_session orelse {
+      result.has_error = true;
+      return false;
+    };
+
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/{s}", .{name}) catch {
+      result.has_error = true;
+      return false;
+    };
+
+    var hdrs = [_]nghttp2.nv{
+      Http2Client.makeNv(":method", "GET"),
+      Http2Client.makeNv(":path", c.allocator.dupeZ(u8, path) catch {
+        result.has_error = true;
+        return false;
+      }),
+      Http2Client.makeNv(":scheme", "https"),
+      Http2Client.makeNv(":authority", c.host),
+      Http2Client.makeNv("accept", "application/vnd.npm.install-v1+json"),
+      Http2Client.makeNv("accept-encoding", "gzip"),
+      Http2Client.makeNv("user-agent", user_agent),
+    };
+
+    const req = &c.requests[c.request_count];
+    c.request_count += 1;
+    req.* = .{
+      .stream_id = 0,
+      .path = hdrs[1].value[0..hdrs[1].valuelen :0],
+      .on_data = null,
+      .on_complete = null,
+      .on_error = null,
+      .userdata = result,
+      .response_body = .empty,
+      .status_code = 0,
+      .done = false,
+      .has_error = false,
+      .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
+      .end_ns = 0,
+      .bytes = 0,
+      .content_encoding = .identity,
+    };
+
+    const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
+    if (sid < 0) {
+      c.request_count -= 1;
+      if (req.path) |p| c.allocator.free(p);
+      result.has_error = true;
+      return false;
+    }
+
+    req.stream_id = sid;
+    return true;
+  }
+
+  pub const DualMetadataResult = struct {
+    primary: MetadataResult,
+    fallback: MetadataResult,
+  };
+
+  pub fn fetchMetadataDual(
+    primary: *Fetcher,
+    fallback: *Fetcher,
+    package_name: []const u8,
+    allocator: std.mem.Allocator,
+  ) !DualMetadataResult {
+    try primary.startMetaClientsAsync();
+    try fallback.startMetaClientsAsync();
+    primary.finishMetaClientsAsync() catch {};
+    fallback.finishMetaClientsAsync() catch {};
+
+    var result = DualMetadataResult{
+      .primary = initMetadataResult(package_name),
+      .fallback = initMetadataResult(package_name),
+    };
+
+    const primary_queued = primary.queueSingleMetadataRequest(package_name, &result.primary);
+    const fallback_queued = fallback.queueSingleMetadataRequest(package_name, &result.fallback);
+
+    if (!primary_queued and !fallback_queued) return error.ConnectionFailed;
+
+    primary.flushMetaClients();
+    fallback.flushMetaClients();
+
+    const loop = uv.uv_default_loop();
+    while (true) {
+      const primary_done = !primary_queued or primary.metaRequestsComplete();
+      const fallback_done = !fallback_queued or fallback.metaRequestsComplete();
+      if (primary_done and fallback_done) break;
+      _ = uv.uv_run(loop, uv.RUN_ONCE);
+      primary.flushMetaClients();
+      fallback.flushMetaClients();
+    }
+
+    var decompress_buf = std.ArrayListUnmanaged(u8).empty;
+    defer decompress_buf.deinit(c_allocator);
+
+    if (primary_queued) {
+      for (primary.meta_clients) |maybe_client| {
+        if (maybe_client) |c| {
+          for (c.requests[0..c.request_count]) |*req| {
+            const r: *MetadataResult = @ptrCast(@alignCast(req.userdata));
+            _ = storeMetadataBatchResult(req, r, allocator, &decompress_buf);
+          }
+          c.resetRequests();
+        }
+      }
+    }
+
+    if (fallback_queued) {
+      for (fallback.meta_clients) |maybe_client| {
+        if (maybe_client) |c| {
+          for (c.requests[0..c.request_count]) |*req| {
+            const r: *MetadataResult = @ptrCast(@alignCast(req.userdata));
+            _ = storeMetadataBatchResult(req, r, allocator, &decompress_buf);
+          }
+          c.resetRequests();
+        }
+      }
+    }
+
+    return result;
   }
 
   pub fn fetchMetadataBatch(self: *Fetcher, names: []const []const u8, allocator: std.mem.Allocator) ![]MetadataResult {
@@ -1287,7 +1473,7 @@ pub const Fetcher = struct {
 
     var results = try allocator.alloc(MetadataResult, names.len);
     for (results, 0..) |*r, i| {
-      r.* = .{ .name = names[i], .data = null, .compressed = false, .has_error = false };
+      r.* = initMetadataResult(names[i]);
     }
 
     const total_capacity = active_connections * (MAX_PENDING_REQUESTS - 1);
