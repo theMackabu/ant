@@ -243,6 +243,7 @@ static bool is_valued_flag(const char *arg) {
     strcmp(arg, "-e") == 0 || 
     strcmp(arg, "--eval") == 0 || 
     strcmp(arg, "--repl") == 0 ||
+    strcmp(arg, "--type") == 0 ||
     strcmp(arg, "--localstorage-file") == 0;
 }
 
@@ -358,14 +359,22 @@ static char *read_file(const char *filename, size_t *len) {
   return buffer;
 }
 
-static void eval_code(ant_t *js, const char *script, size_t len, const char *tag, bool should_print) {
+static void eval_code(
+  ant_t *js, const char *script, size_t len,
+  const char *tag, bool should_print, bool module_type
+) {
   js_set_filename(js, tag);
   js_setup_import_meta(js, tag);
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, tag, strlen(tag)));
   
-  ant_value_t result = js_eval_bytecode_eval(js, script, len);
+  ant_value_t result;
+  if (module_type) {
+    ant_value_t ns = js_mkobj(js);
+    result = is_err(ns) ? ns : js_esm_eval_module_source(js, tag, script, len, ns);
+  } else result = js_eval_bytecode_eval(js, script, len);
+  
   js_run_event_loop(js);
   
   if (print_uncaught_throw(js)) {
@@ -625,6 +634,7 @@ int main(int argc, char *argv[]) {
   #define ARG_ITEMS(X) \
     X(struct arg_str *, eval, arg_str0("e", "eval", "<script>", "evaluate script")) \
     X(struct arg_str *, repl, arg_str0(NULL, "repl", "<script>", "start REPL after evaluating script")) \
+    X(struct arg_str *, input_type, arg_str0(NULL, "type", "<type>", "set string input type: commonjs or module")) \
     X(struct arg_lit *, print, arg_lit0("p", "print", "evaluate script and print result")) \
     X(struct arg_lit *, watch, arg_lit0("w", "watch", "restart process when entry file changes")) \
     X(struct arg_lit *, web, arg_lit0(NULL, "web", "enable web-compatible globals")) \
@@ -771,6 +781,23 @@ int main(int argc, char *argv[]) {
     crfprintf(stderr, msg.watch_module_error);
     CLEANUP_ARGS_AND_ARGV();
     return EXIT_FAILURE;
+  }
+
+  bool module_input_type = false;
+  if (input_type->count > 0) {
+    const char *type_value = input_type->sval[0];
+    if (strcmp(type_value, "module") == 0) module_input_type = true;
+    else if (strcmp(type_value, "commonjs") != 0) {
+      fprintf(stderr, "Error: --type must be either \"commonjs\" or \"module\".\n");
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+
+    if (eval->count == 0 && !stdin_mode) {
+      fprintf(stderr, "Error: --type can only be used with --eval or stdin.\n");
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
   }
   
   const char *module_file = (repl_mode || file->count == 0) 
@@ -975,7 +1002,7 @@ int main(int argc, char *argv[]) {
 
   else if (eval->count > 0) {
     const char *script = eval->sval[0];
-    eval_code(js, script, strlen(script), "[eval]", print->count > 0);
+    eval_code(js, script, strlen(script), "[eval]", print->count > 0, module_input_type);
   }
   
   else if (repl_mode) {
@@ -989,7 +1016,7 @@ int main(int argc, char *argv[]) {
       js_result = EXIT_FAILURE; goto cleanup; 
     }
     if (inspector.enabled) ant_inspector_register_script_source("[stdin]", buf, len, false);
-    eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);
+    eval_code(js, buf, len, "[stdin]", print->count > 0, module_input_type); free(buf);
   } 
   
   else {
