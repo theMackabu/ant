@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const io = std.Io.Threaded.global_single_threaded.io();
 
 pub var enabled: bool = false;
@@ -9,11 +8,7 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
   
   var buf: [2048]u8 = undefined;
   const msg = std.fmt.bufPrint(&buf, "[pkg] " ++ fmt ++ "\n", args) catch return;
-  
-  if (comptime builtin.os.tag == .windows) {
-    const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch return;
-    _ = std.os.windows.WriteFile(handle, msg, null) catch {};
-  } else _ = std.c.write(2, msg.ptr, msg.len);
+  std.Io.File.stderr().writeStreamingAll(io, msg) catch {};
 }
 
 pub fn timer(comptime label: []const u8, start: u64) u64 {

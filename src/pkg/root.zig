@@ -17,10 +17,12 @@ const global_allocator: std.mem.Allocator = std.heap.c_allocator;
 
 fn getHomeDir(allocator: std.mem.Allocator) ![]const u8 {
   if (builtin.os.tag == .windows) {
-    const home_w = std.process.getenvW(
-      std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE")
-    ) orelse return error.NoHomeDir;
-    return std.unicode.utf16LeToUtf8Alloc(allocator, home_w) catch error.NoHomeDir;
+    const home = std.process.Environ.getAlloc(.{ .block = .global }, allocator, "USERPROFILE") catch return error.NoHomeDir;
+    if (home.len == 0) {
+      allocator.free(home);
+      return error.NoHomeDir;
+    }
+    return home;
   }
   const home = std.c.getenv("HOME") orelse return error.NoHomeDir;
   return allocator.dupe(u8, std.mem.span(home));

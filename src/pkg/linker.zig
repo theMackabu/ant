@@ -8,15 +8,11 @@ const PARALLEL_LINK_THRESHOLD = 500;
 const LINK_THREAD_COUNT = 8;
 
 pub fn createSymlinkOrCopy(dir: std.Io.Dir, target: []const u8, link_name: []const u8) !void {
-  if (comptime builtin.os.tag == .windows) {
-    try createSymlinkWindows(dir, target, link_name);
-  } else try dir.symLink(io, target, link_name, .{});
+  try dir.symLink(io, target, link_name, .{});
 }
 
 pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
-  if (comptime builtin.os.tag == .windows) {
-    createSymlinkAbsoluteWindows(target, link_path);
-  } else std.Io.Dir.symLinkAbsolute(io, target, link_path, .{}) catch {};
+  std.Io.Dir.symLinkAbsolute(io, target, link_path, .{}) catch {};
 }
 
 fn makeExecutable(dir: std.Io.Dir, path: []const u8) !void {
@@ -31,34 +27,6 @@ fn makeExecutable(dir: std.Io.Dir, path: []const u8) !void {
   const stat = dir.statFile(io, path, .{}) catch return error.IoError;
   const mode = (stat.permissions.toMode() & 0o777) | 0o111;
   if (std.c.fchmodat(dir.handle, path_z, @intCast(mode), 0) != 0) return error.IoError;
-}
-
-fn createSymlinkWindows(dir: std.Io.Dir, target: []const u8, link_name: []const u8) !void {
-  if (comptime builtin.os.tag != .windows) return;
-  var target_utf16: [std.Io.Dir.max_path_bytes]u16 = undefined;
-  var link_utf16: [std.Io.Dir.max_path_bytes]u16 = undefined;
-  const target_len = try std.unicode.utf8ToUtf16Le(&target_utf16, target);
-  const link_len = try std.unicode.utf8ToUtf16Le(&link_utf16, link_name);
-  target_utf16[target_len] = 0;
-  
-  _ = try std.os.windows.CreateSymbolicLink(
-    dir.fd, link_utf16[0..link_len],
-    target_utf16[0..target_len :0], false,
-  );
-}
-
-fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void {
-  if (comptime builtin.os.tag != .windows) return;
-  var target_utf16: [std.Io.Dir.max_path_bytes]u16 = undefined;
-  var link_utf16: [std.Io.Dir.max_path_bytes]u16 = undefined;
-  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
-  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_path) catch return;
-  target_utf16[target_len] = 0;
-  
-  _ = std.os.windows.CreateSymbolicLink(
-    null, link_utf16[0..link_len],
-    target_utf16[0..target_len :0], false,
-  ) catch {};
 }
 
 pub const LinkError = error{
