@@ -9,7 +9,7 @@
 , nodejs_22
 , git
 , curl
-, zig_0_15 ? null
+, zig_0_16 ? null
 , zig ? null
 , importNpmLock
 , apple-sdk_15 ? null
@@ -19,7 +19,7 @@
 }:
 
 let
-  zigPkg = if zig_0_15 != null then zig_0_15 else zig;
+  zigPkg = if zig_0_16 != null then zig_0_16 else zig;
 
   cpuTuneFlag = "-mcpu=native";
   antVersion = import ./version.nix { inherit lib gitRev; };

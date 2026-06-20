@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const io = std.Io.Threaded.global_single_threaded.io();
 
 pub const cli = @import("cli.zig");
 pub const lockfile = @import("lockfile.zig");
@@ -21,15 +22,28 @@ fn getHomeDir(allocator: std.mem.Allocator) ![]const u8 {
     ) orelse return error.NoHomeDir;
     return std.unicode.utf16LeToUtf8Alloc(allocator, home_w) catch error.NoHomeDir;
   }
-  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
-  return allocator.dupe(u8, home);
+  const home = std.c.getenv("HOME") orelse return error.NoHomeDir;
+  return allocator.dupe(u8, std.mem.span(home));
 }
 
 fn getAbsoluteEnv(name: [:0]const u8) ?[]const u8 {
   if (builtin.os.tag == .windows) return null;
-  const value = std.posix.getenv(name) orelse return null;
-  if (value.len == 0 or !std.fs.path.isAbsolute(value)) return null;
-  return value;
+  const value = std.c.getenv(name) orelse return null;
+  const value_slice = std.mem.span(value);
+  if (value_slice.len == 0 or !std.fs.path.isAbsolute(value_slice)) return null;
+  return value_slice;
+}
+
+fn currentEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+  const environ: std.process.Environ = switch (builtin.os.tag) {
+    .windows => .{ .block = .global },
+    else => blk: {
+      var env_count: usize = 0;
+      while (std.c.environ[env_count] != null) : (env_count += 1) {}
+      break :blk .{ .block = .{ .slice = std.c.environ[0..env_count :null] } };
+    },
+  };
+  return environ.createMap(allocator);
 }
 
 fn getLegacyAntDirIfExists(allocator: std.mem.Allocator) !?[]const u8 {
@@ -37,7 +51,7 @@ fn getLegacyAntDirIfExists(allocator: std.mem.Allocator) !?[]const u8 {
   defer allocator.free(home);
 
   const dir = try std.fmt.allocPrint(allocator, "{s}/.ant", .{home});
-  std.fs.cwd().access(dir, .{}) catch {
+  std.Io.Dir.cwd().access(io, dir, .{}) catch {
     allocator.free(dir);
     return null;
   };
@@ -193,14 +207,14 @@ pub const PkgContext = struct {
         .packages_skipped = 0,
         .elapsed_ms = 0
       },
-      .added_packages = .{},
-      .added_packages_storage = .{},
-      .lifecycle_scripts = .{},
-      .lifecycle_scripts_storage = .{},
-      .info_dist_tags = .{},
-      .info_maintainers = .{},
-      .info_dependencies = .{},
-      .info_storage = .{},
+      .added_packages = .empty,
+      .added_packages_storage = .empty,
+      .lifecycle_scripts = .empty,
+      .lifecycle_scripts_storage = .empty,
+      .info_dist_tags = .empty,
+      .info_maintainers = .empty,
+      .info_dependencies = .empty,
+      .info_storage = .empty,
     };
 
     debug.enabled = options.verbose;
@@ -349,8 +363,8 @@ pub const PkgContext = struct {
 
     self.clearAddedPackages();
 
-    var timer = std.time.Timer.start() catch return error.OutOfMemory;
-    var stage_start: u64 = @intCast(std.time.nanoTimestamp());
+    const timer = std.Io.Clock.Timestamp.now(io, .boot);
+    var stage_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
     debug.log("install start: lockfile={s} node_modules={s}", .{ lockfile_path, node_modules_path });
 
@@ -379,7 +393,7 @@ pub const PkgContext = struct {
       try hit_set.put(hit.index, hit.file_count);
     }
 
-    var misses = std.ArrayListUnmanaged(u32){};
+    var misses = std.ArrayListUnmanaged(u32).empty;
     for (0..pkg_count) |i| {
       if (!hit_set.contains(@intCast(i))) {
         try misses.append(arena_alloc, @intCast(i));
@@ -543,7 +557,7 @@ pub const PkgContext = struct {
           .path = ctx.cache_path,
           .unpacked_size = stats.bytes,
           .file_count = stats.files,
-          .cached_at = std.time.timestamp(),
+          .cached_at = std.Io.Timestamp.now(io, .real).toSeconds(),
         }, ctx.pkg_name, ctx.version_str) catch continue;
 
         self.addPackageToResults(ctx.pkg_name, ctx.version_str, ctx.direct) catch {};
@@ -573,7 +587,7 @@ pub const PkgContext = struct {
       .files_copied = link_stats.files_copied,
       .packages_installed = link_stats.packages_installed,
       .packages_skipped = link_stats.packages_skipped,
-      .elapsed_ms = timer.read() / 1_000_000,
+      .elapsed_ms = @intCast(timer.untilNow(io).raw.toMilliseconds()),
     };
   }
 };
@@ -740,7 +754,7 @@ export fn pkg_count_installed(node_modules_path: [*:0]const u8) u32 {
   if (!std.mem.endsWith(u8, nm_path, "node_modules")) return 0;
   
   const base = nm_path[0 .. nm_path.len - "node_modules".len];
-  var buf: [std.fs.max_path_bytes]u8 = undefined;
+  var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
   const lp = std.fmt.bufPrint(&buf, "{s}ant.lockb", .{base}) catch return 0;
   
   var lf = lockfile.Lockfile.open(lp) catch return 0;
@@ -756,17 +770,17 @@ export fn pkg_discover_lifecycle_scripts(
   c.clearLifecycleScripts();
 
   const nm_path = std.mem.span(node_modules_path);
-  var nm_dir = std.fs.cwd().openDir(nm_path, .{ .iterate = true }) catch return .io_error;
-  defer nm_dir.close();
+  var nm_dir = std.Io.Dir.cwd().openDir(io, nm_path, .{ .iterate = true }) catch return .io_error;
+  defer nm_dir.close(io);
 
   var iter = nm_dir.iterate();
-  while (iter.next() catch null) |entry| {
+  while (iter.next(io) catch null) |entry| {
     if (entry.kind != .directory) continue;
     if (entry.name[0] == '@') {
-      var scope_dir = nm_dir.openDir(entry.name, .{ .iterate = true }) catch continue;
-      defer scope_dir.close();
+      var scope_dir = nm_dir.openDir(io, entry.name, .{ .iterate = true }) catch continue;
+      defer scope_dir.close(io);
       var scope_iter = scope_dir.iterate();
-      while (scope_iter.next() catch null) |scoped_entry| {
+      while (scope_iter.next(io) catch null) |scoped_entry| {
         if (scoped_entry.kind != .directory) continue;
         const full_name = std.fmt.allocPrint(c.allocator, "@{s}/{s}", .{ entry.name[1..], scoped_entry.name }) catch continue;
         defer c.allocator.free(full_name);
@@ -780,14 +794,11 @@ export fn pkg_discover_lifecycle_scripts(
   return .ok;
 }
 
-fn discoverPackageScript(ctx: *PkgContext, nm_path: []const u8, pkg_name: []const u8, parent_dir: std.fs.Dir, dir_name: []const u8) void {
-  var pkg_dir = parent_dir.openDir(dir_name, .{}) catch return;
-  defer pkg_dir.close();
+fn discoverPackageScript(ctx: *PkgContext, nm_path: []const u8, pkg_name: []const u8, parent_dir: std.Io.Dir, dir_name: []const u8) void {
+  var pkg_dir = parent_dir.openDir(io, dir_name, .{}) catch return;
+  defer pkg_dir.close(io);
 
-  const pkg_json = pkg_dir.openFile("package.json", .{}) catch return;
-  defer pkg_json.close();
-
-  const content = pkg_json.readToEndAlloc(ctx.allocator, 1024 * 1024) catch return;
+  const content = pkg_dir.readFileAlloc(io, "package.json", ctx.allocator, .limited(1024 * 1024)) catch return;
   defer ctx.allocator.free(content);
 
   var doc = json.JsonDoc.parse(content) catch return;
@@ -801,7 +812,7 @@ fn discoverPackageScript(ctx: *PkgContext, nm_path: []const u8, pkg_name: []cons
 
     if (std.mem.eql(u8, pkg_name, "esbuild")) return;
 
-    var commands = std.ArrayListUnmanaged(LifecycleCommand){};
+    var commands = std.ArrayListUnmanaged(LifecycleCommand).empty;
     defer freeLifecycleCommands(ctx.allocator, &commands);
     if (install_script) |script| {
       appendLifecycleCommand(ctx.allocator, &commands, "install", script) catch return;
@@ -870,13 +881,7 @@ export fn pkg_add_trusted_dependencies(
 
   debug.log("[trust] pkg_add_trusted_dependencies: path={s} count={d}", .{ path, count });
 
-  const file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
-    debug.log("[trust] failed to open file: {}", .{err});
-    return .io_error;
-  };
-  defer file.close();
-
-  const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| {
+  const content = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
     debug.log("[trust] failed to read file: {}", .{err});
     return .io_error;
   };
@@ -917,7 +922,7 @@ export fn pkg_add_trusted_dependencies(
     debug.log("[trust] trustedDependencies array already exists", .{});
   }
 
-  var string_copies = std.ArrayListUnmanaged([:0]u8){};
+  var string_copies = std.ArrayListUnmanaged([:0]u8).empty;
   defer {
     for (string_copies.items) |s| allocator.free(s);
     string_copies.deinit(allocator);
@@ -1006,7 +1011,7 @@ const InterleavedContext = struct {
       .db = db,
       .http = http,
       .pkg_ctx = pkg_ctx,
-      .extract_contexts = .{},
+      .extract_contexts = .empty,
       .queued_integrities = std.AutoHashMap([64]u8, void).init(arena_alloc),
       .callbacks_received = 0,
       .integrity_duplicates = 0,
@@ -1149,7 +1154,7 @@ fn installToolPackageNoLifecycle(
       .path = ectx.cache_path,
       .unpacked_size = stats.bytes,
       .file_count = stats.files,
-      .cached_at = std.time.timestamp(),
+      .cached_at = std.Io.Timestamp.now(io, .real).toSeconds(),
     }, ectx.pkg_name, ectx.version_str) catch continue;
 
     pkg_linker.linkPackage(.{
@@ -1194,8 +1199,8 @@ export fn pkg_resolve_and_install(
   _ = c.arena_state.reset(.retain_capacity);
   const arena_alloc = c.arena_state.allocator();
 
-  var timer = std.time.Timer.start() catch return .out_of_memory;
-  var stage_start: u64 = @intCast(std.time.nanoTimestamp());
+  const timer = std.Io.Clock.Timestamp.now(io, .boot);
+  var stage_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
   debug.log("resolve+install (interleaved): package_json={s} lockfile={s} node_modules={s}", .{
     std.mem.span(package_json_path),
@@ -1258,7 +1263,7 @@ export fn pkg_resolve_and_install(
   defer pkg_linker.deinit();
   pkg_linker.setNodeModulesPath(std.mem.span(node_modules_path)) catch return .io_error;
 
-  var cache_hit_jobs = std.ArrayListUnmanaged(linker.PackageLink){};
+  var cache_hit_jobs = std.ArrayListUnmanaged(linker.PackageLink).empty;
   var pkg_iter = res.resolved.valueIterator();
   while (pkg_iter.next()) |pkg_ptr| {
     const pkg = pkg_ptr.*;
@@ -1329,9 +1334,9 @@ export fn pkg_resolve_and_install(
     size: u64,
   };
 
-  var cache_entries = std.ArrayListUnmanaged(cache.CacheDB.NamedCacheEntry){};
-  var link_jobs = std.ArrayListUnmanaged(LinkJobWithSize){};
-  const current_time = std.time.timestamp();
+  var cache_entries = std.ArrayListUnmanaged(cache.CacheDB.NamedCacheEntry).empty;
+  var link_jobs = std.ArrayListUnmanaged(LinkJobWithSize).empty;
+  const current_time = std.Io.Timestamp.now(io, .real).toSeconds();
   const nm_path = std.mem.span(node_modules_path);
 
   for (interleaved.extract_contexts.items) |ext_ctx| {
@@ -1395,9 +1400,9 @@ export fn pkg_resolve_and_install(
 
   var slow_link_count = std.atomic.Value(u32).init(0);
   var max_link_ms = std.atomic.Value(u64).init(0);
-  var slow_link_names = std.ArrayListUnmanaged([]const u8){};
+  var slow_link_names = std.ArrayListUnmanaged([]const u8).empty;
   defer slow_link_names.deinit(c.allocator);
-  var slow_link_lock = std.Thread.Mutex{};
+  var slow_link_lock = std.Io.Mutex.init;
 
   var depth_start: usize = 0;
   while (depth_start < link_jobs.items.len) {
@@ -1422,7 +1427,7 @@ export fn pkg_resolve_and_install(
         if (start_idx >= end_idx) break;
 
         threads[t] = std.Thread.spawn(.{}, struct {
-          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Thread.Mutex, alloc: std.mem.Allocator) void {
+          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Io.Mutex, alloc: std.mem.Allocator) void {
             for (jobs) |job_with_size| {
               const job = job_with_size.job;
               const current = counter.fetchAdd(1, .monotonic) + 1;
@@ -1430,18 +1435,18 @@ export fn pkg_resolve_and_install(
               const msg_len = std.fmt.bufPrint(&msg_buf, "{s}", .{job.name}) catch continue;
               msg_buf[msg_len.len] = 0;
               pkg_ctx.reportProgress(.linking, current, total, msg_buf[0..msg_len.len :0]);
-              const start = std.time.nanoTimestamp();
+              const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
               lnk.linkPackage(job) catch {};
-              const delta = std.time.nanoTimestamp() - start;
+              const delta = std.Io.Timestamp.now(io, .boot).toNanoseconds() - start;
               const elapsed_ms: u64 = if (delta < 0) 0 else @intCast(@as(u128, @intCast(delta)) / 1_000_000);
               if (elapsed_ms > 100) {
                 _ = slow_count.fetchAdd(1, .monotonic);
-                lock.lock();
+                lock.lockUncancelable(io);
                 const entry = std.fmt.allocPrint(alloc, "{s} {d}ms", .{ job.name, elapsed_ms }) catch null;
                 if (entry) |val| {
                   names.append(alloc, val) catch {};
                 }
-                lock.unlock();
+                lock.unlock(io);
                 var current_max = max_ms.load(.monotonic);
                 while (elapsed_ms > current_max) : (current_max = max_ms.load(.monotonic)) {
                   if (max_ms.cmpxchgWeak(current_max, elapsed_ms, .monotonic, .monotonic) == null) break;
@@ -1461,9 +1466,9 @@ export fn pkg_resolve_and_install(
         const current = link_counter.fetchAdd(1, .monotonic) + 1;
         const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
         c.reportProgress(.linking, current, total_jobs, msg);
-        const start = std.time.nanoTimestamp();
+        const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
         pkg_linker.linkPackage(job) catch {};
-        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.time.nanoTimestamp())) - @as(u64, @intCast(start))) / 1_000_000);
+        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(u64, @intCast(start))) / 1_000_000);
         if (elapsed_ms > 100 and c.options.verbose) {
           debug.log("  link slow: {s} {d}ms", .{ job.name, elapsed_ms });
         }
@@ -1498,7 +1503,7 @@ export fn pkg_resolve_and_install(
     .files_copied = link_stats.files_copied,
     .packages_installed = link_stats.packages_installed,
     .packages_skipped = link_stats.packages_skipped,
-    .elapsed_ms = timer.read() / 1_000_000,
+    .elapsed_ms = @intCast(timer.untilNow(io).raw.toMilliseconds()),
   };
 
   debug.log("total: {d} packages in {d}ms", .{ res.resolved.count(), c.last_install_result.elapsed_ms });
@@ -1540,7 +1545,7 @@ fn freeLifecycleCommands(allocator: std.mem.Allocator, commands: *std.ArrayListU
 }
 
 fn lifecycleMarkerContent(allocator: std.mem.Allocator, commands: []const LifecycleCommand) ![]u8 {
-  var content = std.ArrayListUnmanaged(u8){};
+  var content = std.ArrayListUnmanaged(u8).empty;
   errdefer content.deinit(allocator);
   try content.appendSlice(allocator, "ant lifecycle v1\n");
   for (commands) |cmd| {
@@ -1551,7 +1556,7 @@ fn lifecycleMarkerContent(allocator: std.mem.Allocator, commands: []const Lifecy
 }
 
 fn lifecycleMarkerMatches(allocator: std.mem.Allocator, marker_path: []const u8, commands: []const LifecycleCommand) bool {
-  const existing = std.fs.cwd().readFileAlloc(allocator, marker_path, 64 * 1024) catch return false;
+  const existing = std.Io.Dir.cwd().readFileAlloc(io, marker_path, allocator, .limited(64 * 1024)) catch return false;
   defer allocator.free(existing);
 
   const expected = lifecycleMarkerContent(allocator, commands) catch return false;
@@ -1564,9 +1569,9 @@ fn writeLifecycleMarker(allocator: std.mem.Allocator, marker_path: []const u8, c
   const content = lifecycleMarkerContent(allocator, commands) catch return;
   defer allocator.free(content);
 
-  const file = std.fs.cwd().createFile(marker_path, .{}) catch return;
-  defer file.close();
-  file.writeAll(content) catch {};
+  const file = std.Io.Dir.cwd().createFile(io, marker_path, .{}) catch return;
+  defer file.close(io);
+  file.writeStreamingAll(io, content) catch {};
 }
 
 fn pathDelimiter() u8 {
@@ -1578,7 +1583,7 @@ fn findExecutableInPath(allocator: std.mem.Allocator, path_env: []const u8, name
   while (path_iter.next()) |dir| {
     if (dir.len == 0) continue;
     const candidate = try std.fs.path.join(allocator, &.{ dir, name });
-    std.fs.cwd().access(candidate, .{}) catch {
+    std.Io.Dir.cwd().access(io, candidate, .{}) catch {
       allocator.free(candidate);
       continue;
     };
@@ -1598,7 +1603,7 @@ fn findNpmNodeGypInPrefix(allocator: std.mem.Allocator, prefix: []const u8) !?[]
     "bin",
     "node-gyp.js",
   });
-  std.fs.cwd().access(candidate, .{}) catch {
+  std.Io.Dir.cwd().access(io, candidate, .{}) catch {
     allocator.free(candidate);
     return null;
   };
@@ -1613,7 +1618,7 @@ fn findNpmNodeGypInNpmRoot(allocator: std.mem.Allocator, npm_root: []const u8) !
     "bin",
     "node-gyp.js",
   });
-  std.fs.cwd().access(candidate, .{}) catch {
+  std.Io.Dir.cwd().access(io, candidate, .{}) catch {
     allocator.free(candidate);
     return null;
   };
@@ -1633,7 +1638,7 @@ fn findNpmNodeGypNearExecutable(allocator: std.mem.Allocator, executable_path: [
     }
   }
 
-  const real_path = std.fs.cwd().realpathAlloc(allocator, executable_path) catch return null;
+  const real_path = std.Io.Dir.cwd().realPathFileAlloc(io, executable_path, allocator) catch return null;
   defer allocator.free(real_path);
   if (!std.mem.eql(u8, real_path, executable_path)) {
     if (try findNpmNodeGypNearExecutable(allocator, real_path)) |node_gyp| return node_gyp;
@@ -1642,7 +1647,7 @@ fn findNpmNodeGypNearExecutable(allocator: std.mem.Allocator, executable_path: [
   return null;
 }
 
-fn findNpmNodeGyp(allocator: std.mem.Allocator, env_map: *std.process.EnvMap) !?[]u8 {
+fn findNpmNodeGyp(allocator: std.mem.Allocator, env_map: *std.process.Environ.Map) !?[]u8 {
   const path_env = env_map.get("PATH") orelse return null;
 
   const node_name = if (builtin.os.tag == .windows) "node.exe" else "node";
@@ -1672,19 +1677,19 @@ fn appendShellSingleQuoted(allocator: std.mem.Allocator, out: *std.ArrayListUnma
   try out.append(allocator, '\'');
 }
 
-fn ensureLifecycleNodeGypShim(ctx: *PkgContext, allocator: std.mem.Allocator, env_map: *std.process.EnvMap) !?[]u8 {
+fn ensureLifecycleNodeGypShim(ctx: *PkgContext, allocator: std.mem.Allocator, env_map: *std.process.Environ.Map) !?[]u8 {
   const node_gyp_path = (try findNpmNodeGyp(allocator, env_map)) orelse return null;
   defer allocator.free(node_gyp_path);
 
   const bin_dir = try std.fs.path.join(allocator, &.{ ctx.cache_dir, "tools", "node-gyp", "npm-bundled", "bin" });
   errdefer allocator.free(bin_dir);
-  try std.fs.cwd().makePath(bin_dir);
+  try std.Io.Dir.cwd().createDirPath(io, bin_dir);
 
   const shim_name = if (builtin.os.tag == .windows) "node-gyp.cmd" else "node-gyp";
   const shim_path = try std.fs.path.join(allocator, &.{ bin_dir, shim_name });
   defer allocator.free(shim_path);
 
-  var content = std.ArrayListUnmanaged(u8){};
+  var content = std.ArrayListUnmanaged(u8).empty;
   defer content.deinit(allocator);
   if (builtin.os.tag == .windows) {
     try content.appendSlice(allocator, "@echo off\r\nnode \"");
@@ -1697,11 +1702,11 @@ fn ensureLifecycleNodeGypShim(ctx: *PkgContext, allocator: std.mem.Allocator, en
   }
 
   const file = if (builtin.os.tag == .windows)
-    try std.fs.cwd().createFile(shim_path, .{})
+    try std.Io.Dir.cwd().createFile(io, shim_path, .{})
   else
-    try std.fs.cwd().createFile(shim_path, .{ .mode = 0o755 });
-  defer file.close();
-  try file.writeAll(content.items);
+    try std.Io.Dir.cwd().createFile(io, shim_path, .{ .permissions = .executable_file });
+  defer file.close(io);
+  try file.writeStreamingAll(io, content.items);
 
   debug.log("prepared lifecycle node-gyp shim: {s}", .{node_gyp_path});
   return bin_dir;
@@ -1728,11 +1733,11 @@ fn ensureAntManagedNodeGypBin(ctx: *PkgContext, allocator: std.mem.Allocator) !?
   const bin_path = try std.fs.path.join(allocator, &.{ bin_dir, bin_name });
   defer allocator.free(bin_path);
 
-  if (std.fs.cwd().access(bin_path, .{})) |_| {
+  if (std.Io.Dir.cwd().access(io, bin_path, .{})) |_| {
     return bin_dir;
   } else |_| {}
 
-  try std.fs.cwd().makePath(tool_root);
+  try std.Io.Dir.cwd().createDirPath(io, tool_root);
   const package_json_path = try std.fs.path.join(allocator, &.{ tool_root, "package.json" });
   defer allocator.free(package_json_path);
   const lockfile_path = try std.fs.path.join(allocator, &.{ tool_root, "ant.lockb" });
@@ -1745,9 +1750,9 @@ fn ensureAntManagedNodeGypBin(ctx: *PkgContext, allocator: std.mem.Allocator) !?
   defer allocator.free(package_json);
 
   {
-    const file = try std.fs.cwd().createFile(package_json_path, .{});
-    defer file.close();
-    try file.writeAll(package_json);
+    const file = try std.Io.Dir.cwd().createFile(io, package_json_path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, package_json);
   }
 
   installToolPackageNoLifecycle(ctx, allocator, package_json_path, lockfile_path, node_modules_path) catch |err| {
@@ -1756,7 +1761,7 @@ fn ensureAntManagedNodeGypBin(ctx: *PkgContext, allocator: std.mem.Allocator) !?
     return null;
   };
 
-  std.fs.cwd().access(bin_path, .{}) catch {
+  std.Io.Dir.cwd().access(io, bin_path, .{}) catch {
     debug.log("Ant-managed node-gyp did not create {s}", .{bin_path});
     allocator.free(bin_dir);
     return null;
@@ -1772,14 +1777,14 @@ fn runTrustedPostinstall(
   node_modules_path: []const u8,
   allocator: std.mem.Allocator,
 ) bool {
-  var env_map = std.process.getEnvMap(allocator) catch {
+  var env_map = currentEnvMap(allocator) catch {
     ctx.setError("Failed to prepare lifecycle environment");
     return false;
   };
   defer env_map.deinit();
 
-  const cwd = std.fs.cwd();
-  const abs_nm_path = cwd.realpathAlloc(allocator, node_modules_path) catch {
+  const cwd = std.Io.Dir.cwd();
+  const abs_nm_path = cwd.realPathFileAlloc(io, node_modules_path, allocator) catch {
     ctx.setError("Failed to resolve node_modules for lifecycle scripts");
     return false;
   };
@@ -1807,7 +1812,7 @@ fn runTrustedPostinstall(
 
   env_map.put("PATH", new_path) catch return false;
 
-  var jobs = std.ArrayListUnmanaged(PostinstallJob){};
+  var jobs = std.ArrayListUnmanaged(PostinstallJob).empty;
   defer {
     for (jobs.items) |*job| {
       allocator.free(job.pkg_dir);
@@ -1825,10 +1830,7 @@ fn runTrustedPostinstall(
     }) catch continue;
     defer allocator.free(pkg_json_path);
 
-    const file = std.fs.cwd().openFile(pkg_json_path, .{}) catch continue;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch continue;
+    const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_path, allocator, .limited(1024 * 1024)) catch continue;
     defer allocator.free(content);
 
     var doc = json.JsonDoc.parse(content) catch continue;
@@ -1837,7 +1839,7 @@ fn runTrustedPostinstall(
     const root = doc.root();
 
     if (root.getObject("scripts")) |scripts| {
-      var commands = std.ArrayListUnmanaged(LifecycleCommand){};
+      var commands = std.ArrayListUnmanaged(LifecycleCommand).empty;
       if (scripts.getString("install")) |script| {
         appendLifecycleCommand(allocator, &commands, "install", script) catch {};
       }
@@ -1892,67 +1894,51 @@ fn runTrustedPostinstall(
       else
         &[_][]const u8{ "sh", "-c", cmd.script };
 
-      var child = std.process.Child.init(shell_argv, allocator);
-      child.cwd = job.pkg_dir;
-      child.env_map = &env_map;
-      child.stderr_behavior = .Pipe;
-      child.stdout_behavior = .Pipe;
-
-      child.spawn() catch {
+      const result = std.process.run(allocator, io, .{
+        .argv = shell_argv,
+        .cwd = .{ .path = job.pkg_dir },
+        .environ_map = &env_map,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+      }) catch {
         if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: failed to spawn", .{ cmd.name, job.pkg_name });
         job.failed = true;
         break;
       };
+      defer allocator.free(result.stdout);
+      defer allocator.free(result.stderr);
 
-      var stdout_buf: std.ArrayList(u8) = .empty;
-      var stderr_buf: std.ArrayList(u8) = .empty;
-
-      child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024) catch {};
-
-      const term = child.wait() catch {
-        stdout_buf.deinit(allocator);
-        stderr_buf.deinit(allocator);
-        if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: wait failed", .{ cmd.name, job.pkg_name });
-        job.failed = true;
-        break;
-      };
-
-      if (stdout_buf.items.len > 0) {
-        var line_iter = std.mem.splitScalar(u8, stdout_buf.items, '\n');
+      if (result.stdout.len > 0) {
+        var line_iter = std.mem.splitScalar(u8, result.stdout, '\n');
         while (line_iter.next()) |line| {
           if (line.len > 0) debug.log("  {s}: {s}", .{ job.pkg_name, line });
         }
-      } stdout_buf.deinit(allocator);
+      }
 
-      switch (term) {
-        .Exited => |code| {
+      switch (result.term) {
+        .exited => |code| {
           if (code != 0) {
             debug.log("  {s} failed for {s}: exit code {d}", .{ cmd.name, job.pkg_name, code });
-            if (stderr_buf.items.len > 0) debug.log("  stderr: {s}", .{stderr_buf.items});
+            if (result.stderr.len > 0) debug.log("  stderr: {s}", .{result.stderr});
             if (ctx.last_error == null) {
-              if (stderr_buf.items.len > 0)
-                ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: {s}", .{ cmd.name, job.pkg_name, stderr_buf.items })
+              if (result.stderr.len > 0)
+                ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: {s}", .{ cmd.name, job.pkg_name, result.stderr })
               else
                 ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: exit code {d}", .{ cmd.name, job.pkg_name, code });
             }
-            stderr_buf.deinit(allocator);
             job.failed = true;
             break;
-          } else {
-            stderr_buf.deinit(allocator);
           }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
           job.failed = true;
-          if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' killed by signal {d}: {s}", .{ cmd.name, sig, job.pkg_name });
-          debug.log("  {s} killed by signal {d}: {s}", .{ cmd.name, sig, job.pkg_name });
-          stderr_buf.deinit(allocator);
+          if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' killed by signal {d}: {s}", .{ cmd.name, @intFromEnum(sig), job.pkg_name });
+          debug.log("  {s} killed by signal {d}: {s}", .{ cmd.name, @intFromEnum(sig), job.pkg_name });
           break;
         },
         else => {
           job.failed = true;
           if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}", .{ cmd.name, job.pkg_name });
-          stderr_buf.deinit(allocator);
           break;
         },
       }
@@ -2017,13 +2003,8 @@ export fn pkg_add(
   };
 
   const content = blk: {
-    const file = std.fs.cwd().openFile(pkg_json_str, .{ .mode = .read_only }) catch |err| {
+    break :blk std.Io.Dir.cwd().readFileAlloc(io, pkg_json_str, arena_alloc, .limited(10 * 1024 * 1024)) catch |err| {
       if (err == error.FileNotFound) break :blk "{}";
-      c.setError("Failed to open package.json");
-      return .io_error;
-    };
-    defer file.close();
-    break :blk file.readToEndAlloc(arena_alloc, 10 * 1024 * 1024) catch {
       c.setError("Failed to read package.json");
       return .io_error;
     };
@@ -2049,11 +2030,11 @@ export fn pkg_add(
 
   const target_key = if (dev) "devDependencies" else "dependencies";
   
-  var deps = if (parsed.value.object.get(target_key)) |d|
-    if (d == .object) d.object else std.json.ObjectMap.init(arena_alloc)
-  else std.json.ObjectMap.init(arena_alloc);
+  var deps: std.json.ObjectMap = if (parsed.value.object.get(target_key)) |d|
+    if (d == .object) d.object else .empty
+  else .empty;
 
-  deps.put(pkg_name, .{ .string = version_with_caret }) catch {
+  deps.put(arena_alloc, pkg_name, .{ .string = version_with_caret }) catch {
     return .out_of_memory;
   };
 
@@ -2157,13 +2138,8 @@ export fn pkg_add_many(
   }
 
   const content = blk: {
-    const file = std.fs.cwd().openFile(pkg_json_str, .{ .mode = .read_only }) catch |err| {
+    break :blk std.Io.Dir.cwd().readFileAlloc(io, pkg_json_str, arena_alloc, .limited(10 * 1024 * 1024)) catch |err| {
       if (err == error.FileNotFound) break :blk "{}";
-      c.setError("Failed to open package.json");
-      return .io_error;
-    };
-    defer file.close();
-    break :blk file.readToEndAlloc(arena_alloc, 10 * 1024 * 1024) catch {
       c.setError("Failed to read package.json");
       return .io_error;
     };
@@ -2181,13 +2157,13 @@ export fn pkg_add_many(
 
   const target_key = if (dev) "devDependencies" else "dependencies";
 
-  var deps = if (parsed.value.object.get(target_key)) |d|
-    if (d == .object) d.object else std.json.ObjectMap.init(arena_alloc)
-  else std.json.ObjectMap.init(arena_alloc);
+  var deps: std.json.ObjectMap = if (parsed.value.object.get(target_key)) |d|
+    if (d == .object) d.object else .empty
+  else .empty;
 
   for (resolved) |entry| {
     const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{entry.version_str}) catch return .out_of_memory;
-    deps.put(entry.name, .{ .string = version_with_caret }) catch return .out_of_memory;
+    deps.put(arena_alloc, entry.name, .{ .string = version_with_caret }) catch return .out_of_memory;
   }
 
   var writer = json.JsonWriter.init() catch return .out_of_memory;
@@ -2271,7 +2247,7 @@ export fn pkg_remove(
   const pkg_json_str = std.mem.span(package_json_path);
   const name_str = std.mem.span(package_name);
 
-  const content = std.fs.cwd().readFileAlloc(arena_alloc, pkg_json_str, 10 * 1024 * 1024) catch {
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_str, arena_alloc, .limited(10 * 1024 * 1024)) catch {
     c.setError("Failed to read package.json");
     return .io_error;
   };
@@ -2391,15 +2367,15 @@ export fn pkg_get_bin_path(
   else
     .{ full, @as([]const u8, "") };
 
-  var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
   const bin_path = std.fmt.bufPrint(&path_buf, "{s}/.bin/{s}", .{ nm_path, name }) catch return -1;
 
-  std.fs.cwd().access(bin_path, .{}) catch return -1;
+  std.Io.Dir.cwd().access(io, bin_path, .{}) catch return -1;
 
   if (constraint_str.len > 0) {
     const constraint = resolver.Constraint.parse(constraint_str) catch return -1;
     if (constraint.kind != .any) {
-      var pkg_buf: [std.fs.max_path_bytes]u8 = undefined;
+      var pkg_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
       const pkg_path = std.fmt.bufPrint(&pkg_buf, "{s}/{s}/package.json", .{ nm_path, name }) catch return -1;
       const pkg_path_z = pkg_buf[0..pkg_path.len :0];
       var doc = json.JsonDoc.parseFile(pkg_path_z) catch return -1;
@@ -2410,15 +2386,15 @@ export fn pkg_get_bin_path(
     }
   }
 
-  var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-  const real_path = std.fs.cwd().realpath(bin_path, &real_path_buf) catch return -1;
+  var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+  const real_path_len = std.Io.Dir.cwd().realPathFile(io, bin_path, &real_path_buf) catch return -1;
 
-  if (real_path.len >= out_path_len) return -1;
+  if (real_path_len >= out_path_len) return -1;
 
-  @memcpy(out_path[0..real_path.len], real_path);
-  out_path[real_path.len] = 0;
+  @memcpy(out_path[0..real_path_len], real_path_buf[0..real_path_len]);
+  out_path[real_path_len] = 0;
 
-  return @intCast(real_path.len);
+  return @intCast(real_path_len);
 }
 
 export fn pkg_list_bins(
@@ -2428,15 +2404,15 @@ export fn pkg_list_bins(
 ) c_int {
   const nm_path = std.mem.span(node_modules_path);
 
-  var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
   const bin_dir_path = std.fmt.bufPrint(&path_buf, "{s}/.bin", .{nm_path}) catch return -1;
 
-  var dir = std.fs.cwd().openDir(bin_dir_path, .{ .iterate = true }) catch return -1;
-  defer dir.close();
+  var dir = std.Io.Dir.cwd().openDir(io, bin_dir_path, .{ .iterate = true }) catch return -1;
+  defer dir.close(io);
 
   var count: c_int = 0;
   var iter = dir.iterate();
-  while (iter.next() catch null) |entry| {
+  while (iter.next(io) catch null) |entry| {
     if (entry.kind == .sym_link or entry.kind == .file) {
       if (callback) |cb| {
         var name_buf: [256]u8 = undefined;
@@ -2462,13 +2438,10 @@ export fn pkg_list_package_bins(
   const nm_path = std.mem.span(node_modules_path);
   const pkg_name = std.mem.span(package_name);
 
-  var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
   const pkg_json_path = std.fmt.bufPrint(&path_buf, "{s}/{s}/package.json", .{ nm_path, pkg_name }) catch return -1;
 
-  const file = std.fs.cwd().openFile(pkg_json_path, .{}) catch return -1;
-  defer file.close();
-
-  const content = file.readToEndAlloc(global_allocator, 1024 * 1024) catch return -1;
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_path, global_allocator, .limited(1024 * 1024)) catch return -1;
   defer global_allocator.free(content);
 
   var doc = json.JsonDoc.parse(content) catch return -1;
@@ -2540,7 +2513,7 @@ export fn pkg_get_script(
       return @intCast(script.len);
     }
 
-    if (std.fs.cwd().access("server.js", .{})) |_| {
+    if (std.Io.Dir.cwd().access(io, "server.js", .{})) |_| {
       const script = "ant server.js";
       if (script.len >= out_script_len) return -1;
       @memcpy(out_script[0..script.len], script);
@@ -2561,7 +2534,7 @@ fn runScriptCommand(
   allocator: std.mem.Allocator,
   script: []const u8,
   extra_args: ?[*:0]const u8,
-  env_map: *std.process.EnvMap,
+  env_map: *std.process.Environ.Map,
 ) !ScriptResult {
   const final_script = if (extra_args) |args| blk: {
     const args_str = std.mem.span(args);
@@ -2579,15 +2552,15 @@ fn runScriptCommand(
     &[_][]const u8{ "cmd", "/c", script_z }
   else &[_][]const u8{ "sh", "-c", script_z };
 
-  var child = std.process.Child.init(shell_argv, allocator);
-  child.env_map = env_map;
-
-  try child.spawn();
-  const term = try child.wait();
+  var child = try std.process.spawn(io, .{
+    .argv = shell_argv,
+    .environ_map = env_map,
+  });
+  const term = try child.wait(io);
 
   return switch (term) {
-    .Exited => |code| .{ .exit_code = code, .signal = 0 },
-    .Signal => |sig| .{ .exit_code = -1, .signal = @intCast(sig) },
+    .exited => |code| .{ .exit_code = code, .signal = 0 },
+    .signal => |sig| .{ .exit_code = -1, .signal = @intCast(@intFromEnum(sig)) },
     else => .{ .exit_code = -1, .signal = 0 },
   };
 }
@@ -2625,11 +2598,11 @@ export fn pkg_run_script(
     if (post_key) |pk| post_script = scripts_obj.getString(pk);
   }
 
-  var env_map = std.process.getEnvMap(allocator) catch return .out_of_memory;
+  var env_map = currentEnvMap(allocator) catch return .out_of_memory;
   defer env_map.deinit(); const nm_path = std.mem.span(node_modules_path);
 
-  const cwd = std.fs.cwd();
-  const abs_nm_path = cwd.realpathAlloc(allocator, nm_path) catch nm_path;
+  const cwd = std.Io.Dir.cwd();
+  const abs_nm_path = cwd.realPathFileAlloc(io, nm_path, allocator) catch nm_path;
   defer if (abs_nm_path.ptr != nm_path.ptr) allocator.free(abs_nm_path);
 
   const bin_path = std.fmt.allocPrint(allocator, "{s}/.bin", .{abs_nm_path}) catch return .out_of_memory;
@@ -2961,7 +2934,7 @@ export fn pkg_info(
   const dist = version_obj.getObject("dist");
   const unpacked_size: u64 = if (dist) |d| @as(u64, @intCast(d.getInt("unpackedSize") orelse 0)) else 0;
 
-  var keywords_buf = std.ArrayListUnmanaged(u8){};
+  var keywords_buf = std.ArrayListUnmanaged(u8).empty;
   defer keywords_buf.deinit(c.allocator);
   if (version_obj.getArray("keywords")) |kw_arr| {
     var kw_iter = kw_arr.arrayIterator() orelse return .resolve_error;
@@ -3092,16 +3065,13 @@ fn selectPackageBinName(
     pkg_name,
   }) catch return .{ .err = .out_of_memory };
 
-  const file = std.fs.cwd().openFile(pkg_json_path, .{}) catch {
-    c.setErrorFmt("Package '{s}' was installed, but its package.json could not be opened", .{pkg_name});
-    return .{ .err = .io_error };
-  };
-  defer file.close();
+  defer allocator.free(pkg_json_path);
 
-  const content = file.readToEndAlloc(allocator, 1024 * 1024) catch {
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_path, allocator, .limited(1024 * 1024)) catch {
     c.setErrorFmt("Package '{s}' was installed, but its package.json could not be read", .{pkg_name});
     return .{ .err = .io_error };
   };
+  defer allocator.free(content);
 
   var doc = json.JsonDoc.parse(content) catch {
     c.setErrorFmt("Package '{s}' was installed, but its package.json could not be parsed", .{pkg_name});
@@ -3209,14 +3179,14 @@ export fn pkg_exec_temp(
   const temp_nm_dir = std.fmt.allocPrint(arena_alloc, "{s}/node_modules", .{temp_nm_path}) catch return .out_of_memory;
   const temp_lockfile = std.fmt.allocPrint(arena_alloc, "{s}/ant.lockb", .{temp_nm_path}) catch return .out_of_memory;
 
-  if (std.fs.cwd().openDir(exec_base, .{ .iterate = true })) |dir| {
+  if (std.Io.Dir.cwd().openDir(io, exec_base, .{ .iterate = true })) |dir| {
     var d = dir;
-    defer d.close();
+    defer d.close(io);
     
-    const stat = d.statFile(pkg_name) catch null;
+    const stat = d.statFile(io, pkg_name, .{}) catch null;
     if (stat) |s| {
-      const now: i128 = std.time.nanoTimestamp();
-      const mtime: i128 = s.mtime;
+      const now: i128 = std.Io.Timestamp.now(io, .boot).toNanoseconds();
+      const mtime: i128 = s.mtime.nanoseconds;
       const age_ns = now - mtime;
       const hours_24_ns: i128 = 24 * 60 * 60 * 1_000_000_000;
       
@@ -3224,27 +3194,27 @@ export fn pkg_exec_temp(
         debug.log("exec: cleaning stale cache for {s} (age: {d}h)", .{
           pkg_name, @divFloor(age_ns, 60 * 60 * 1_000_000_000),
         });
-        d.deleteTree(pkg_name) catch {};
+        d.deleteTree(io, pkg_name) catch {};
       }
     }
   } else |_| {}
 
-  std.fs.cwd().makePath(temp_nm_path) catch {};
+  std.Io.Dir.cwd().createDirPath(io, temp_nm_path) catch {};
 
   const pkg_json_content = std.fmt.allocPrint(arena_alloc, 
     \\{{"dependencies":{{"{s}":"{s}"}}}}
   , .{pkg_name, version_constraint}) catch return .out_of_memory;
 
-  const pkg_json_file = std.fs.cwd().createFile(temp_pkg_json, .{}) catch {
+  const pkg_json_file = std.Io.Dir.cwd().createFile(io, temp_pkg_json, .{}) catch {
     c.setError("Failed to create temp package.json");
     return .io_error;
   };
-  pkg_json_file.writeAll(pkg_json_content) catch {
-    pkg_json_file.close();
+  pkg_json_file.writeStreamingAll(io, pkg_json_content) catch {
+    pkg_json_file.close(io);
     c.setError("Failed to write temp package.json");
     return .io_error;
   };
-  pkg_json_file.close();
+  pkg_json_file.close(io);
 
   const http = c.http orelse return .network_error;
   const db = c.cache_db orelse return .cache_error;
@@ -3292,7 +3262,7 @@ export fn pkg_exec_temp(
       .path = ectx.cache_path,
       .unpacked_size = stats.bytes,
       .file_count = stats.files,
-      .cached_at = std.time.timestamp(),
+      .cached_at = std.Io.Timestamp.now(io, .real).toSeconds(),
     }, ectx.pkg_name, ectx.version_str) catch continue;
 
     pkg_linker.linkPackage(.{
@@ -3336,23 +3306,23 @@ export fn pkg_exec_temp(
   if (selected_bin.err != .ok) return selected_bin.err;
   bin_name = selected_bin.name;
 
-  var bin_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var bin_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
   const bin_link_path = std.fmt.bufPrint(&bin_path_buf, "{s}/.bin/{s}", .{ temp_nm_dir, bin_name }) catch return .io_error;
 
   debug.log("exec: looking for bin at {s}", .{bin_link_path});
 
-  std.fs.cwd().access(bin_link_path, .{}) catch {
+  std.Io.Dir.cwd().access(io, bin_link_path, .{}) catch {
     c.setErrorFmt("Binary '{s}' not found in package", .{bin_name});
     return .not_found;
   };
 
-  var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-  const real_path = std.fs.cwd().realpath(bin_link_path, &real_path_buf) catch return .io_error;
+  var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+  const real_path_len = std.Io.Dir.cwd().realPathFile(io, bin_link_path, &real_path_buf) catch return .io_error;
 
-  if (real_path.len >= out_bin_path_len) return .io_error;
+  if (real_path_len >= out_bin_path_len) return .io_error;
 
-  @memcpy(out_bin_path[0..real_path.len], real_path);
-  out_bin_path[real_path.len] = 0;
+  @memcpy(out_bin_path[0..real_path_len], real_path_buf[0..real_path_len]);
+  out_bin_path[real_path_len] = 0;
 
   return .ok;
 }
@@ -3393,11 +3363,11 @@ fn ensureGlobalPackageJson(allocator: std.mem.Allocator, global_dir: []const u8)
   const pkg_json_path = try std.fmt.allocPrint(allocator, "{s}/package.json", .{global_dir});
   defer allocator.free(pkg_json_path);
   
-  std.fs.cwd().access(pkg_json_path, .{}) catch {
-    std.fs.cwd().makePath(global_dir) catch {};
-    const file = try std.fs.cwd().createFile(pkg_json_path, .{});
-    defer file.close();
-    try file.writeAll("{\"dependencies\":{}}\n");
+  std.Io.Dir.cwd().access(io, pkg_json_path, .{}) catch {
+    std.Io.Dir.cwd().createDirPath(io, global_dir) catch {};
+    const file = try std.Io.Dir.cwd().createFile(io, pkg_json_path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, "{\"dependencies\":{}}\n");
   };
 }
 
@@ -3405,7 +3375,7 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
   const bin_dir = getGlobalBinDir(allocator) catch return;
   defer allocator.free(bin_dir);
   
-  std.fs.cwd().makePath(bin_dir) catch return;
+  std.Io.Dir.cwd().createDirPath(io, bin_dir) catch return;
   
   const pkg_bin_dir = std.fmt.allocPrint(allocator, "{s}/{s}", .{nm_path, pkg_name}) catch return;
   defer allocator.free(pkg_bin_dir);
@@ -3413,7 +3383,7 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
   const pkg_json_path = std.fmt.allocPrint(allocator, "{s}/package.json", .{pkg_bin_dir}) catch return;
   defer allocator.free(pkg_json_path);
   
-  const content = std.fs.cwd().readFileAlloc(allocator, pkg_json_path, 1024 * 1024) catch return;
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_path, allocator, .limited(1024 * 1024)) catch return;
   defer allocator.free(content);
   
   const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return;
@@ -3443,7 +3413,7 @@ fn linkSingleBin(allocator: std.mem.Allocator, bin_dir: []const u8, nm_path: []c
   const link_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{bin_dir, bin_name}) catch return;
   defer allocator.free(link_path);
   
-  std.fs.cwd().deleteFile(link_path) catch {};
+  std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
   linker.createSymlinkAbsolute(target, link_path);
   
   debug.log("linked global bin: {s} -> {s}", .{link_path, target});
@@ -3453,15 +3423,16 @@ fn unlinkGlobalBins(allocator: std.mem.Allocator, pkg_name: []const u8) void {
   const bin_dir = getGlobalBinDir(allocator) catch return;
   defer allocator.free(bin_dir);
   
-  var dir = std.fs.cwd().openDir(bin_dir, .{ .iterate = true }) catch return;
-  defer dir.close();
+  var dir = std.Io.Dir.cwd().openDir(io, bin_dir, .{ .iterate = true }) catch return;
+  defer dir.close(io);
   
   var iter = dir.iterate();
-  while (iter.next() catch null) |entry| {
+  while (iter.next(io) catch null) |entry| {
     if (entry.kind != .sym_link) continue;
     
-    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const target = dir.readLink(entry.name, &target_buf) catch continue;
+    var target_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const target_len = dir.readLink(io, entry.name, &target_buf) catch continue;
+    const target = target_buf[0..target_len];
 
     const pattern = std.fmt.allocPrint(allocator, "/{s}/", .{pkg_name}) catch continue;
     defer allocator.free(pattern);
@@ -3469,7 +3440,7 @@ fn unlinkGlobalBins(allocator: std.mem.Allocator, pkg_name: []const u8) void {
     defer allocator.free(pattern_end);
 
     if (std.mem.indexOf(u8, target, pattern) != null or std.mem.endsWith(u8, target, pattern_end)) {
-      dir.deleteFile(entry.name) catch continue;
+      dir.deleteFile(io, entry.name) catch continue;
       debug.log("unlinked global bin: {s}", .{entry.name});
     }
   }

@@ -28,7 +28,7 @@ pub const StringPool = struct {
     return .{
       .allocator = allocator,
       .strings = std.StringHashMap(InternedString).init(allocator),
-      .storage = std.ArrayListUnmanaged([]const u8){},
+      .storage = std.ArrayListUnmanaged([]const u8).empty,
     };
   }
 

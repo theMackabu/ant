@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Io.Threaded.global_single_threaded.io();
 const builtin = @import("builtin");
 
 pub const MAGIC: u32 = 0x504B474C;
@@ -139,10 +140,10 @@ pub const Lockfile = struct {
   hash_table: []const HashBucket,
 
   pub fn open(path: []const u8) !Lockfile {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
     
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size < @sizeOf(Header)) {
       return error.InvalidLockfile;
     }
@@ -151,7 +152,7 @@ pub const Lockfile = struct {
       const data = try std.heap.c_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(Header)), stat.size);
       errdefer std.heap.c_allocator.free(data);
       
-      const bytes_read = try file.readAll(data);
+      const bytes_read = try file.readPositionalAll(io, data, 0);
       if (bytes_read != stat.size) {
         std.heap.c_allocator.free(data);
         return error.InvalidLockfile;
@@ -161,7 +162,7 @@ pub const Lockfile = struct {
     } else {
       const data = try std.posix.mmap(
         null, stat.size,
-        std.posix.PROT.READ,
+        .{ .READ = true },
         .{ .TYPE = .PRIVATE },
         file.handle, 0,
       );
@@ -274,9 +275,9 @@ pub const LockfileWriter = struct {
   pub fn init(allocator: std.mem.Allocator) LockfileWriter {
     return .{
       .allocator = allocator,
-      .packages = .{},
-      .dependencies = .{},
-      .string_builder = .{},
+      .packages = .empty,
+      .dependencies = .empty,
+      .string_builder = .empty,
       .string_offsets = std.StringHashMap(StringRef).init(allocator),
     };
   }
@@ -327,8 +328,8 @@ pub const LockfileWriter = struct {
   }
 
   pub fn write(self: *LockfileWriter, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
 
     const header_size: u32 = @sizeOf(Header);
     const string_table_offset = header_size;
@@ -381,22 +382,22 @@ pub const LockfileWriter = struct {
       .hash_table_size = hash_table_size,
     };
 
-    try file.writeAll(std.mem.asBytes(&header));
-    try file.writeAll(self.string_builder.items);
+    try file.writeStreamingAll(io, std.mem.asBytes(&header));
+    try file.writeStreamingAll(io, self.string_builder.items);
     
     if (package_pad_size > 0) {
       const padding = [_]u8{0} ** 8;
-      try file.writeAll(padding[0..package_pad_size]);
-    } try file.writeAll(std.mem.sliceAsBytes(self.packages.items));
+      try file.writeStreamingAll(io, padding[0..package_pad_size]);
+    } try file.writeStreamingAll(io, std.mem.sliceAsBytes(self.packages.items));
     
     if (dep_pad_size > 0) {
       const padding = [_]u8{0} ** 8;
-      try file.writeAll(padding[0..dep_pad_size]);
-    } try file.writeAll(std.mem.sliceAsBytes(self.dependencies.items));
+      try file.writeStreamingAll(io, padding[0..dep_pad_size]);
+    } try file.writeStreamingAll(io, std.mem.sliceAsBytes(self.dependencies.items));
     
     if (hash_pad_size > 0) {
       const padding = [_]u8{0} ** 8;
-      try file.writeAll(padding[0..hash_pad_size]);
-    } try file.writeAll(std.mem.sliceAsBytes(hash_table));
+      try file.writeStreamingAll(io, padding[0..hash_pad_size]);
+    } try file.writeStreamingAll(io, std.mem.sliceAsBytes(hash_table));
   }
 };

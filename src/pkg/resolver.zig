@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const io = std.Io.Threaded.global_single_threaded.io();
 const lockfile = @import("lockfile.zig");
 const intern = @import("intern.zig");
 const fetcher = @import("fetcher.zig");
@@ -466,7 +467,7 @@ pub const PackageMetadata = struct {
     return .{
       .allocator = allocator,
       .name = try allocator.dupe(u8, name),
-      .versions = .{},
+      .versions = .empty,
       .dist_tag_latest = null,
     };
   }
@@ -560,7 +561,7 @@ pub const PackageMetadata = struct {
 
       if (version_data.object.get("os")) |os_arr| {
         if (os_arr == .array) {
-          var os_buf = std.ArrayListUnmanaged(u8){};
+          var os_buf = std.ArrayListUnmanaged(u8).empty;
           for (os_arr.array.items, 0..) |item, i| {
             if (item == .string) {
               if (i > 0) os_buf.append(allocator, ',') catch {};
@@ -575,7 +576,7 @@ pub const PackageMetadata = struct {
 
       if (version_data.object.get("cpu")) |cpu_arr| {
         if (cpu_arr == .array) {
-          var cpu_buf = std.ArrayListUnmanaged(u8){};
+          var cpu_buf = std.ArrayListUnmanaged(u8).empty;
           for (cpu_arr.array.items, 0..) |item, i| {
             if (item == .string) {
               if (i > 0) cpu_buf.append(allocator, ',') catch {};
@@ -591,7 +592,7 @@ pub const PackageMetadata = struct {
       var libc_filter: ?[]const u8 = null;
       if (version_data.object.get("libc")) |libc_arr| {
         if (libc_arr == .array) {
-          var libc_buf = std.ArrayListUnmanaged(u8){};
+          var libc_buf = std.ArrayListUnmanaged(u8).empty;
           for (libc_arr.array.items, 0..) |item, i| {
             if (item == .string) {
               if (i > 0) libc_buf.append(allocator, ',') catch {};
@@ -765,7 +766,7 @@ pub const Resolver = struct {
     defer pkg_json.deinit(self.allocator);
 
     debug.log("pass 1: collecting constraints", .{});
-    var pass1_start: u64 = @intCast(std.time.nanoTimestamp());
+    var pass1_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     self.http.initiateTarballConnectionsAsync();
 
     const ConstraintInfo = struct {
@@ -798,7 +799,7 @@ pub const Resolver = struct {
       depth: u32,
     };
 
-    var collect_queue = std.ArrayListUnmanaged(CollectItem){};
+    var collect_queue = std.ArrayListUnmanaged(CollectItem).empty;
     defer collect_queue.deinit(self.allocator);
 
     var seen_collect = std.StringHashMap(void).init(self.allocator);
@@ -832,7 +833,7 @@ pub const Resolver = struct {
     while (collect_queue.items.len > 0) {
       debug.log("  pass1 level {d}: {d} packages", .{ collect_level, collect_queue.items.len });
 
-      var to_fetch = std.ArrayListUnmanaged([]const u8){};
+      var to_fetch = std.ArrayListUnmanaged([]const u8).empty;
       defer to_fetch.deinit(self.allocator);
 
       for (collect_queue.items) |item| {
@@ -915,10 +916,10 @@ pub const Resolver = struct {
         }
       };
 
-      var next_collect = std.ArrayListUnmanaged(CollectItem){};
+      var next_collect = std.ArrayListUnmanaged(CollectItem).empty;
       errdefer next_collect.deinit(self.allocator);
 
-      var prefetch_queue = std.ArrayListUnmanaged([]const u8){};
+      var prefetch_queue = std.ArrayListUnmanaged([]const u8).empty;
       defer prefetch_queue.deinit(self.allocator);
 
       if (to_fetch.items.len > 0) {
@@ -960,7 +961,7 @@ pub const Resolver = struct {
         const gop = try all_constraints.getOrPut(spec.install_name);
         if (!gop.found_existing) {
           gop.key_ptr.* = try self.allocator.dupe(u8, spec.install_name);
-          gop.value_ptr.* = .{};
+          gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, .{
           .package_name = try self.allocator.dupe(u8, spec.package_name),
@@ -1072,7 +1073,7 @@ pub const Resolver = struct {
       parent_name: ?[]const u8,
     };
 
-    var queue = std.ArrayListUnmanaged(WorkItem){};
+    var queue = std.ArrayListUnmanaged(WorkItem).empty;
     defer {
       for (queue.items) |item| if (item.parent_name) |p| self.allocator.free(p);
       queue.deinit(self.allocator);
@@ -1108,10 +1109,10 @@ pub const Resolver = struct {
 
     var level: u32 = 0;
     while (queue.items.len > 0) {
-      const level_start: u64 = @intCast(std.time.nanoTimestamp());
+      const level_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
       debug.log("  pass2 level {d}: {d} packages", .{ level, queue.items.len });
 
-      var next_queue = std.ArrayListUnmanaged(WorkItem){};
+      var next_queue = std.ArrayListUnmanaged(WorkItem).empty;
       errdefer next_queue.deinit(self.allocator);
 
       for (queue.items) |item| {
@@ -1261,7 +1262,7 @@ pub const Resolver = struct {
     const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
     if (!cons_gop.found_existing) {
       cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
-      cons_gop.value_ptr.* = .{};
+      cons_gop.value_ptr.* = .empty;
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
 
@@ -1273,7 +1274,7 @@ pub const Resolver = struct {
       .version = version_info.version,
       .integrity = version_info.integrity,
       .tarball_url = try self.allocator.dupe(u8, version_info.tarball_url),
-      .dependencies = .{},
+      .dependencies = .empty,
       .depth = depth,
       .direct = direct,
       .parent_path = null,
@@ -1340,7 +1341,7 @@ pub const Resolver = struct {
       const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
       if (!cons_gop.found_existing) {
         cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
-        cons_gop.value_ptr.* = .{};
+        cons_gop.value_ptr.* = .empty;
       }
       try cons_gop.value_ptr.append(self.allocator, constraint);
 
@@ -1408,7 +1409,7 @@ pub const Resolver = struct {
     const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
     if (!cons_gop.found_existing) {
       cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
-      cons_gop.value_ptr.* = .{};
+      cons_gop.value_ptr.* = .empty;
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
 
@@ -1429,7 +1430,7 @@ pub const Resolver = struct {
       .version = best.version,
       .integrity = best.integrity,
       .tarball_url = try self.allocator.dupe(u8, best.tarball_url),
-      .dependencies = .{},
+      .dependencies = .empty,
       .depth = depth,
       .direct = direct,
       .parent_path = null,
@@ -1510,7 +1511,7 @@ pub const Resolver = struct {
       .version = version_info.version,
       .integrity = version_info.integrity,
       .tarball_url = try self.allocator.dupe(u8, version_info.tarball_url),
-      .dependencies = .{},
+      .dependencies = .empty,
       .depth = depth,
       .direct = false,
       .parent_path = try self.allocator.dupe(u8, parent_path),
@@ -1572,7 +1573,7 @@ pub const Resolver = struct {
 
     if (!cons_gop.found_existing) {
       cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
-      cons_gop.value_ptr.* = .{};
+      cons_gop.value_ptr.* = .empty;
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
 
@@ -1627,7 +1628,7 @@ pub const Resolver = struct {
       .version = best.version,
       .integrity = best.integrity,
       .tarball_url = try self.allocator.dupe(u8, best.tarball_url),
-      .dependencies = .{},
+      .dependencies = .empty,
       .depth = depth,
       .direct = (depth == 0),
       .parent_path = null,

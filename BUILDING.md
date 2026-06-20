@@ -84,7 +84,7 @@ The following tools are required to build Ant regardless of platform:
 - **pkg-config**
 - **Node.js** >= 22 and **npm** (used to generate bundled JavaScript sources at
   build time)
-- **[Zig](https://ziglang.org/)** >= 0.15 (builds the package manager component)
+- **[Zig](https://ziglang.org/)** >= 0.16 (builds the package manager component)
 - **Git**
 
 Dependencies are vendored as Meson subprojects under `vendor/`
@@ -165,7 +165,7 @@ You will also need Zig installed. The recommended approach:
 - Zig:
 
   ```bash
-  # install 0.15.2
+  # install 0.16.0
   brew install zig
   ```
 
@@ -417,11 +417,11 @@ To verify:
 
 Configure options are set via `meson setup` or `meson configure`:
 
-| Option              | Type    | Default | Description                                |
-| ------------------- | ------- | ------- | ------------------------------------------ |
-| `static_link`       | boolean | `false` | Statically link the final binary           |
-| `build_timestamp`   | string  | (auto)  | Embedded build timestamp metadata          |
-| `deps_prefix_cmake` | string  | (empty) | Prefix path for cmake dependency lookup    |
+| Option              | Type    | Default | Description                             |
+| ------------------- | ------- | ------- | --------------------------------------- |
+| `static_link`       | boolean | `false` | Statically link the final binary        |
+| `build_timestamp`   | string  | (auto)  | Embedded build timestamp metadata       |
+| `deps_prefix_cmake` | string  | (empty) | Prefix path for cmake dependency lookup |
 
 Standard Meson built-in options used by Ant:
 

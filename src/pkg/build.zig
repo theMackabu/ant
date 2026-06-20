@@ -1,9 +1,5 @@
 const std = @import("std");
 
-fn getEnv(key: []const u8) ?[]const u8 {
-  return std.process.getEnvVarOwned(std.heap.page_allocator, key) catch null;
-}
-
 fn darwinMinVersion(os_tag: ?std.Target.Os.Tag) ?std.Target.Query.OsVersion {
   const tag = os_tag orelse return null;
   if (tag != .macos) return null;
@@ -12,8 +8,8 @@ fn darwinMinVersion(os_tag: ?std.Target.Os.Tag) ?std.Target.Query.OsVersion {
 
 pub fn build(b: *std.Build) void {
   const resolved_target = blk: {
-    const target_str = getEnv("PKG_TARGET") orelse break :blk b.standardTargetOptions(.{});
-    defer std.heap.page_allocator.free(target_str);
+    const target_str = b.graph.environ_map.get("PKG_TARGET") 
+    orelse break :blk b.standardTargetOptions(.{});
     var it = std.mem.splitScalar(u8, target_str, '-');
     
     const cpu_arch = if (it.next()) |a| 
@@ -35,10 +31,10 @@ pub fn build(b: *std.Build) void {
     });
   };
 
-  const lmdb_include = getEnv("LMDB_INCLUDE");
-  const zlib_include = getEnv("ZLIB_INCLUDE");
-  const libuv_include = getEnv("LIBUV_INCLUDE");
-  const yyjson_include = getEnv("YYJSON_INCLUDE");
+  const lmdb_include = b.graph.environ_map.get("LMDB_INCLUDE");
+  const zlib_include = b.graph.environ_map.get("ZLIB_INCLUDE");
+  const libuv_include = b.graph.environ_map.get("LIBUV_INCLUDE");
+  const yyjson_include = b.graph.environ_map.get("YYJSON_INCLUDE");
 
   const lib = b.addLibrary(.{
     .name = "pkg",
@@ -57,17 +53,18 @@ pub fn build(b: *std.Build) void {
   lib.use_llvm = true;
   if (!resolved_target.result.os.tag.isDarwin()) lib.use_lld = true;
 
-  lib.addCSourceFile(.{
+  lib.root_module.addCSourceFile(.{
     .file = b.path("metadata.c"),
     .flags = &.{ "-O3", "-DNDEBUG" },
   });
   
-  const version = getEnv("ANT_VERSION") orelse "unknown";
+  const version = b.graph.environ_map.get("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
   options.addOption([]const u8, "version", version);
   
   lib.root_module.addOptions("config", options);
   lib.root_module.addCMacro("NDEBUG", "1");
+  lib.root_module.addCMacro("YYJSON_DISABLE_UTILS", "1");
 
   if (lmdb_include) |p| lib.root_module.addIncludePath(.{ .cwd_relative = p });
   if (zlib_include) |p| lib.root_module.addIncludePath(.{ .cwd_relative = p });

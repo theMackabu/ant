@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const linker = @import("linker.zig");
+const io = std.Io.Threaded.global_single_threaded.io();
 
 const c = @cImport({
   @cInclude("zlib.h");
@@ -123,12 +124,12 @@ pub const TarHeader = extern struct {
   }
 
   pub fn getSize(self: *const TarHeader) !u64 {
-    const size_str = std.mem.trimRight(u8, &self.size, &[_]u8{ 0, ' ' });
+    const size_str = std.mem.trimEnd(u8, &self.size, &[_]u8{ 0, ' ' });
     return std.fmt.parseInt(u64, size_str, 8) catch return error.InvalidTarHeader;
   }
 
   pub fn getMode(self: *const TarHeader) !u32 {
-    const mode_str = std.mem.trimRight(u8, &self.mode, &[_]u8{ 0, ' ' });
+    const mode_str = std.mem.trimEnd(u8, &self.mode, &[_]u8{ 0, ' ' });
     return std.fmt.parseInt(u32, mode_str, 8) catch return error.InvalidTarHeader;
   }
 
@@ -366,10 +367,10 @@ pub const TarParser = struct {
 
 pub const Extractor = struct {
   allocator: std.mem.Allocator,
-  output_dir: std.fs.Dir,
+  output_dir: std.Io.Dir,
   parser: TarParser,
   decompressor: *GzipDecompressor,
-  current_file: ?std.fs.File,
+  current_file: ?std.Io.File,
   current_file_path: [256]u8,
   current_file_path_len: usize,
   current_file_mode: u32,
@@ -380,7 +381,7 @@ pub const Extractor = struct {
     const extractor = try allocator.create(Extractor);
     errdefer allocator.destroy(extractor);
 
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, output_path) catch |err| switch (err) {
       error.PathAlreadyExists => {},
       else => return error.IoError,
     };
@@ -390,7 +391,7 @@ pub const Extractor = struct {
 
     extractor.* = .{
       .allocator = allocator,
-      .output_dir = try std.fs.cwd().openDir(output_path, .{}),
+      .output_dir = try std.Io.Dir.cwd().openDir(io, output_path, .{}),
       .parser = TarParser.init("package/"),
       .decompressor = decompressor,
       .current_file = null,
@@ -406,10 +407,10 @@ pub const Extractor = struct {
 
   pub fn deinit(self: *Extractor) void {
     if (self.current_file) |f| {
-      f.close();
+      f.close(io);
       self.applyFileMode();
     }
-    self.output_dir.close();
+    self.output_dir.close(io);
     self.decompressor.deinit();
     self.allocator.destroy(self);
   }
@@ -424,7 +425,7 @@ pub const Extractor = struct {
         @memcpy(path_buf[0..path.len], path);
         path_buf[path.len] = 0;
         const path_z: [*:0]const u8 = path_buf[0..path.len :0];
-        _ = std.c.fchmodat(self.output_dir.fd, path_z, @intCast(self.current_file_mode & 0o777), 0);
+        _ = std.c.fchmodat(self.output_dir.handle, path_z, @intCast(self.current_file_mode & 0o777), 0);
       }
     }
     self.current_file_path_len = 0;
@@ -457,7 +458,7 @@ pub const Extractor = struct {
   inline fn handleEntry(self: *Extractor, entry: TarParser.Entry) !void {
     if (entry.path.len == 0) return;
     switch (entry.entry_type) {
-      .directory => self.output_dir.makePath(entry.path) catch {},
+      .directory => self.output_dir.createDirPath(io, entry.path) catch {},
       .file => try self.createFile(entry),
       .symlink => self.createSymlink(entry) catch {},
     }
@@ -466,9 +467,9 @@ pub const Extractor = struct {
   inline fn createFile(self: *Extractor, entry: TarParser.Entry) !void {
     self.closeCurrentFile();
     if (std.fs.path.dirname(entry.path)) |dir| {
-      try self.output_dir.makePath(dir);
+      try self.output_dir.createDirPath(io, dir);
     }
-    self.current_file = try self.output_dir.createFile(entry.path, .{});
+    self.current_file = try self.output_dir.createFile(io, entry.path, .{});
     const len = @min(entry.path.len, 256);
     @memcpy(self.current_file_path[0..len], entry.path[0..len]);
     self.current_file_path_len = len;
@@ -484,23 +485,23 @@ pub const Extractor = struct {
     try validatePath(target);
     
     if (std.fs.path.dirname(entry.path)) |dir| {
-      try self.output_dir.makePath(dir);
+      try self.output_dir.createDirPath(io, dir);
     }
     
-    self.output_dir.deleteFile(entry.path) catch {};
+    self.output_dir.deleteFile(io, entry.path) catch {};
     try linker.createSymlinkOrCopy(self.output_dir, target, entry.path);
   }
   
   inline fn writeFileData(self: *Extractor, data: []const u8) !void {
     if (self.current_file) |f| {
-      try f.writeAll(data);
+      try f.writeStreamingAll(io, data);
       self.bytes_extracted += data.len;
     }
   }
   
   inline fn closeCurrentFile(self: *Extractor) void {
     if (self.current_file) |f| {
-      f.close();
+      f.close(io);
       self.applyFileMode();
       self.current_file = null;
     }

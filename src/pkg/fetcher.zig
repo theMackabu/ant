@@ -1,5 +1,6 @@
 const std = @import("std");
 const c_allocator = std.heap.c_allocator;
+const io = std.Io.Threaded.global_single_threaded.io();
 
 const debug = @import("debug.zig");
 const extractor = @import("extractor.zig");
@@ -131,7 +132,7 @@ const Http2Client = struct {
       .connected = 0,
       .connect_pending = false,
       .closing = false,
-      .write_buf = .{},
+      .write_buf = .empty,
       .requests = undefined,
       .request_count = 0,
       .requests_done = 0,
@@ -146,7 +147,7 @@ const Http2Client = struct {
         .on_complete = null,
         .on_error = null,
         .userdata = null,
-        .response_body = .{},
+        .response_body = .empty,
         .status_code = 0,
         .done = false,
         .has_error = false,
@@ -213,7 +214,7 @@ const Http2Client = struct {
         .on_complete = null,
         .on_error = null,
         .userdata = null,
-        .response_body = .{},
+        .response_body = .empty,
         .status_code = 0,
         .done = false,
         .has_error = false,
@@ -242,7 +243,7 @@ const Http2Client = struct {
         if (req.path) |p| self.allocator.free(p);
         req.response_body.deinit(self.allocator);
         req.path = null;
-        req.response_body = .{};
+        req.response_body = .empty;
         req.stream_id = -1;
       }
     }
@@ -284,7 +285,7 @@ const Http2Client = struct {
       if (client.findRequest(frame.hd.stream_id)) |req| {
         if (!req.done) {
           req.done = true;
-          req.end_ns = @intCast(std.time.nanoTimestamp());
+          req.end_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
           client.requests_done += 1;
           if (req.on_complete) |cb| cb(req.status_code, req.userdata);
         }
@@ -323,7 +324,7 @@ const Http2Client = struct {
     const req = client.findRequest(stream_id) orelse return 0;
     if (!req.done) {
       req.done = true;
-      req.end_ns = @intCast(std.time.nanoTimestamp());
+      req.end_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
       client.requests_done += 1;
       if (error_code != 0) {
         req.has_error = true;
@@ -436,7 +437,7 @@ const Http2Client = struct {
     if (self.connected > 0) return;
     if (self.connected < 0) return error.ConnectionFailed;
 
-    var conn_start: u64 = @intCast(std.time.nanoTimestamp());
+    var conn_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
     if (!self.connect_pending) {
       const ctx = try self.allocator.create(ConnectCtx);
@@ -499,11 +500,11 @@ const Http2Client = struct {
       .on_complete = null,
       .on_error = null,
       .userdata = null,
-      .response_body = .{},
+      .response_body = .empty,
       .status_code = 0,
       .done = false,
       .has_error = false,
-      .start_ns = @intCast(std.time.nanoTimestamp()),
+      .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
       .end_ns = 0,
       .bytes = 0,
       .content_encoding = .identity,
@@ -550,11 +551,11 @@ const Http2Client = struct {
       .on_complete = on_complete,
       .on_error = on_error,
       .userdata = userdata,
-      .response_body = .{},
+      .response_body = .empty,
       .status_code = 0,
       .done = false,
       .has_error = false,
-      .start_ns = @intCast(std.time.nanoTimestamp()),
+      .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
       .end_ns = 0,
       .bytes = 0,
       .content_encoding = .identity 
@@ -583,7 +584,7 @@ const Http2Client = struct {
   }
 
   pub fn run(self: *Http2Client) !void {
-    const run_start: u64 = @intCast(std.time.nanoTimestamp());
+    const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     var loop_count: u32 = 0;
     var last_done: usize = 0;
     var last_report: u64 = run_start;
@@ -593,7 +594,7 @@ const Http2Client = struct {
       try self.flush();
       loop_count += 1;
 
-      const now: u64 = @intCast(std.time.nanoTimestamp());
+      const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
       if (now - last_report > 1_000_000_000) {
         const done_delta = self.requests_done - last_done;
         debug.log("    h2: progress {d}/{d} (+{d} in last 1s) loops={d}", .{
@@ -605,7 +606,7 @@ const Http2Client = struct {
       }
     }
 
-    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
+    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
     const elapsed_ms = elapsed_ns / 1_000_000;
     debug.log("    h2: run complete in {d}ms, {d} loops, {d}/{d} done", .{
       elapsed_ms, loop_count,
@@ -685,12 +686,12 @@ pub const Fetcher = struct {
       .registry_host = try allocator.dupe(u8, registry_host),
       .meta_clients = [_]?*Http2Client{null} ** NUM_META_CONNECTIONS,
       .meta_clients_initialized = false,
-      .pending = .{},
+      .pending = .empty,
       .tarball_clients = [_]?*Http2Client{null} ** NUM_CONNECTIONS,
       .tarball_clients_initialized = false,
-      .tarball_contexts = .{},
+      .tarball_contexts = .empty,
       .tarball_round_robin = 0,
-      .tarball_stats = .{},
+      .tarball_stats = .empty,
       .last_http_error_url = null,
       .last_http_error_status = 0,
     };
@@ -772,7 +773,7 @@ pub const Fetcher = struct {
     if (self.tarball_clients_initialized) return;
 
     debug.log("fetcher: initializing {d} persistent connections", .{NUM_CONNECTIONS});
-    const init_start: u64 = @intCast(std.time.nanoTimestamp());
+    const init_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
     for (&self.tarball_clients, 0..) |*slot, i| {
       const client = Http2Client.init(self.allocator, self.registry_host, true) catch |err| {
@@ -846,7 +847,7 @@ pub const Fetcher = struct {
       .done = false,
       .has_error = false,
       .url = try self.allocator.dupe(u8, url),
-      .start_ns = @intCast(std.time.nanoTimestamp()),
+      .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
       .bytes = 0,
     };
     
@@ -924,7 +925,7 @@ pub const Fetcher = struct {
       .done = false,
       .has_error = false,
       .url = url,
-      .start_ns = @intCast(std.time.nanoTimestamp()),
+      .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
       .bytes = 0,
     };
     
@@ -954,7 +955,7 @@ pub const Fetcher = struct {
 
   pub fn finishTarballs(self: *Fetcher) void {
     const loop = uv.uv_default_loop();
-    var last_report: u64 = @intCast(std.time.nanoTimestamp());
+    var last_report: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     var loops: usize = 0;
     var completed: usize = 0;
     const start = last_report;
@@ -976,7 +977,7 @@ pub const Fetcher = struct {
         const ctx = self.tarball_contexts.items[i];
         if (ctx.done) {
           if (!ctx.has_error) {
-            const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.time.nanoTimestamp())) - ctx.start_ns) / 1_000_000);
+            const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - ctx.start_ns) / 1_000_000);
             const url_copy = self.allocator.dupe(u8, ctx.url) catch null;
             if (url_copy) |url| {
               self.tarball_stats.append(self.allocator, .{ .url = url, .bytes = ctx.bytes, .elapsed_ms = elapsed_ms }) catch {};
@@ -1015,7 +1016,7 @@ pub const Fetcher = struct {
                   .done = false,
                   .has_error = false,
                   .url = req.url,
-                  .start_ns = @intCast(std.time.nanoTimestamp()),
+                  .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
                   .bytes = 0,
                 };
                 self.tarball_contexts.append(self.allocator, ctx) catch {
@@ -1038,7 +1039,7 @@ pub const Fetcher = struct {
                       const c: *TarballCtx = @ptrCast(@alignCast(ud));
                       c.handler.on_complete(status, c.handler.user_data);
                       if (debug.enabled) {
-                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.time.nanoTimestamp())) - c.start_ns) / 1_000_000);
+                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - c.start_ns) / 1_000_000);
                         debug.log("    tarball: done {s} {d}ms {d} bytes status={d}", .{ c.url, elapsed_ms, c.bytes, status });
                       }
                       c.done = true;
@@ -1049,7 +1050,7 @@ pub const Fetcher = struct {
                       const c: *TarballCtx = @ptrCast(@alignCast(ud));
                       c.handler.on_error(err, c.handler.user_data);
                       if (debug.enabled) {
-                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.time.nanoTimestamp())) - c.start_ns) / 1_000_000);
+                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - c.start_ns) / 1_000_000);
                         debug.log("    tarball: error {s} {d}ms {d} bytes", .{ c.url, elapsed_ms, c.bytes });
                       }
                       c.done = true;
@@ -1073,7 +1074,7 @@ pub const Fetcher = struct {
         if (!queued) break;
       }
 
-      const now: u64 = @intCast(std.time.nanoTimestamp());
+      const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
       if (now - last_report > 1_000_000_000) {
         var total_bytes: usize = 0;
         for (self.tarball_contexts.items) |ctx| {
@@ -1090,7 +1091,7 @@ pub const Fetcher = struct {
       }
     }
 
-    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, start));
+    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, start));
     debug.log("fetcher: finishTarballs completed in {d}ms, {d} loops, {d} completed", .{
       elapsed_ns / 1_000_000,
       loops,
@@ -1273,7 +1274,7 @@ pub const Fetcher = struct {
   pub fn fetchMetadataBatch(self: *Fetcher, names: []const []const u8, allocator: std.mem.Allocator) ![]MetadataResult {
     if (names.len == 0) return &[_]MetadataResult{};
 
-    var total_start: u64 = @intCast(std.time.nanoTimestamp());
+    var total_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     try self.ensureMetaClients();
     total_start = debug.timer("  meta: get clients", total_start);
 
@@ -1293,12 +1294,12 @@ pub const Fetcher = struct {
     var offset: usize = 0;
     var batch_num: usize = 0;
 
-    var decompress_buf = std.ArrayListUnmanaged(u8){};
+    var decompress_buf = std.ArrayListUnmanaged(u8).empty;
     defer decompress_buf.deinit(c_allocator);
 
     while (offset < names.len) {
       const end = @min(offset + total_capacity, names.len);
-      var batch_start: u64 = @intCast(std.time.nanoTimestamp());
+      var batch_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
       debug.log("  meta: batch {d} ({d}-{d})", .{ batch_num, offset, end });
 
       var queued: usize = 0;
@@ -1342,11 +1343,11 @@ pub const Fetcher = struct {
           .on_complete = null,
           .on_error = null,
           .userdata = result,
-          .response_body = .{},
+          .response_body = .empty,
           .status_code = 0,
           .done = false,
           .has_error = false,
-          .start_ns = @intCast(std.time.nanoTimestamp()),
+          .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
           .end_ns = 0,
           .bytes = 0,
           .content_encoding = .identity,
@@ -1370,7 +1371,7 @@ pub const Fetcher = struct {
       const loop = uv.uv_default_loop();
       var all_done = false;
       var loops: usize = 0;
-      const run_start: u64 = @intCast(std.time.nanoTimestamp());
+      const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
       while (!all_done) {
         _ = uv.uv_run(loop, uv.RUN_ONCE);
@@ -1378,7 +1379,7 @@ pub const Fetcher = struct {
         all_done = self.metaRequestsComplete();
       }
 
-      const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
+      const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
       debug.log("    h2: run complete in {d}ms, {d} loops", .{ elapsed_ns / 1_000_000, loops });
       batch_start = debug.timer("  meta: run h2 loop", batch_start);
 
@@ -1390,7 +1391,7 @@ pub const Fetcher = struct {
         if (maybe_client) |c| {
           for (c.requests[0..c.request_count]) |*req| {
             const result: *MetadataResult = @ptrCast(@alignCast(req.userdata));
-            const end_ns = if (req.end_ns != 0) req.end_ns else @as(u64, @intCast(std.time.nanoTimestamp()));
+            const end_ns = if (req.end_ns != 0) req.end_ns else @as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()));
             const duration_ms: u64 = @intCast((end_ns - req.start_ns) / 1_000_000);
             total_bytes += req.response_body.items.len;
             if (duration_ms > max_req_ms) {
@@ -1512,7 +1513,7 @@ pub const Fetcher = struct {
   ) !void {
     if (names.len == 0) return;
 
-    var total_start: u64 = @intCast(std.time.nanoTimestamp());
+    var total_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     try self.ensureMetaClients();
     total_start = debug.timer("  meta: get clients", total_start);
 
@@ -1538,12 +1539,12 @@ pub const Fetcher = struct {
     var offset: usize = 0;
     var batch_num: usize = 0;
 
-    var decompress_buf = std.ArrayListUnmanaged(u8){};
+    var decompress_buf = std.ArrayListUnmanaged(u8).empty;
     defer decompress_buf.deinit(c_allocator);
 
     while (offset < names.len) {
       const end = @min(offset + total_capacity, names.len);
-      var batch_start: u64 = @intCast(std.time.nanoTimestamp());
+      var batch_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
       debug.log("  meta: batch {d} ({d}-{d})", .{ batch_num, offset, end });
 
@@ -1578,7 +1579,7 @@ pub const Fetcher = struct {
           .on_complete = null,
           .on_error = null,
           .userdata = tracker,
-          .response_body = .{},
+          .response_body = .empty,
           .status_code = 0,
           .done = false,
           .has_error = false,
@@ -1587,7 +1588,7 @@ pub const Fetcher = struct {
           .bytes = 0,
           .content_encoding = .identity,
         };
-        req.start_ns = @intCast(std.time.nanoTimestamp());
+        req.start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
         const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
         if (sid < 0) {
@@ -1606,7 +1607,7 @@ pub const Fetcher = struct {
       const loop = uv.uv_default_loop();
       var all_done = false;
       var loops: usize = 0;
-      const run_start: u64 = @intCast(std.time.nanoTimestamp());
+      const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
 
       while (!all_done) {
         _ = uv.uv_run(loop, uv.RUN_ONCE);
@@ -1616,7 +1617,7 @@ pub const Fetcher = struct {
         all_done = self.metaRequestsComplete();
       }
 
-      const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
+      const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
       debug.log("    h2: run complete in {d}ms, {d} loops", .{ elapsed_ns / 1_000_000, loops });
 
       var slow_count: usize = 0;
@@ -1627,7 +1628,7 @@ pub const Fetcher = struct {
         if (maybe_client) |c| {
           for (c.requests[0..c.request_count]) |*req| {
             const tracker: *MetadataStreamTracker = @ptrCast(@alignCast(req.userdata));
-            const end_ns = if (req.end_ns != 0) req.end_ns else @as(u64, @intCast(std.time.nanoTimestamp()));
+            const end_ns = if (req.end_ns != 0) req.end_ns else @as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()));
             const duration_ms: u64 = @intCast((end_ns - req.start_ns) / 1_000_000);
             total_bytes += req.response_body.items.len;
             if (duration_ms > max_req_ms) {
@@ -1664,7 +1665,7 @@ pub const Fetcher = struct {
   pub fn run(self: *Fetcher) !void {
     if (self.pending.items.len == 0 and self.tarball_contexts.items.len == 0) return;
 
-    const run_start: u64 = @intCast(std.time.nanoTimestamp());
+    const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
     const total_requests = self.pending.items.len + self.tarball_contexts.items.len;
     
     debug.log("fetcher: {d} tarballs to download (pending={d}, in-flight={d})", .{
@@ -1676,7 +1677,7 @@ pub const Fetcher = struct {
     try self.ensureTarballClients();
     self.finishTarballs();
 
-    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
+    const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
     debug.log("fetcher: {d} tarballs complete in {d}ms", .{ total_requests, elapsed_ns / 1_000_000 });
   }
 };

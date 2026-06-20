@@ -31,7 +31,7 @@ RUN apk add --no-cache \
     zstd
 
 ARG TARGETARCH
-ARG ZIG_VERSION=0.15.2
+ARG ZIG_VERSION=0.16.0
 RUN set -eux; \
     case "$TARGETARCH" in \
       amd64) zig_arch="x86_64-linux" ;; \

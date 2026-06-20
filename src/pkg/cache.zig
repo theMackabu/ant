@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Io.Threaded.global_single_threaded.io();
 
 const c = @cImport({
   @cInclude("lmdb.h");
@@ -45,14 +46,14 @@ pub const CacheDB = struct {
   pub fn open(cache_dir: []const u8) !*CacheDB {
     const allocator = std.heap.c_allocator;
 
-    std.fs.cwd().makePath(cache_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, cache_dir) catch |err| switch (err) {
       error.PathAlreadyExists => {},
       else => return error.CacheError,
     };
 
     const packages_path = try std.fmt.allocPrintSentinel(allocator, "{s}/cache", .{cache_dir}, 0);
     defer allocator.free(packages_path);
-    std.fs.cwd().makePath(packages_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, packages_path) catch |err| switch (err) {
       error.PathAlreadyExists => {},
       else => return error.CacheError,
     };
@@ -228,7 +229,7 @@ pub const CacheDB = struct {
       s.allocator.free(s.items);
     }
   } {
-    var hits = std.ArrayListUnmanaged(BatchHit){};
+    var hits = std.ArrayListUnmanaged(BatchHit).empty;
     errdefer hits.deinit(allocator);
 
     var txn: ?*c.MDB_txn = null;
@@ -405,7 +406,7 @@ pub const CacheDB = struct {
     const db_path = std.fmt.allocPrint(self.allocator, "{s}/index.lmdb", .{self.cache_dir}) catch return 0;
     defer self.allocator.free(db_path);
 
-    const stat = std.fs.cwd().statFile(db_path) catch return 0;
+    const stat = std.Io.Dir.cwd().statFile(io, db_path, .{}) catch return 0;
     return alignToBlock(stat.size);
   }
 
@@ -414,32 +415,32 @@ pub const CacheDB = struct {
     defer self.allocator.free(cache_path);
 
     var total: usize = 0;
-    var dir = std.fs.cwd().openDir(cache_path, .{ .iterate = true }) catch return 0;
-    defer dir.close();
+    var dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch return 0;
+    defer dir.close(io);
 
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(io) catch null) |entry| {
       if (entry.kind == .directory) {
         total += self.getDirSize(dir, entry.name);
       } else if (entry.kind == .file) {
-        const stat = dir.statFile(entry.name) catch continue;
+        const stat = dir.statFile(io, entry.name, .{}) catch continue;
         total += alignToBlock(stat.size);
       }
     }
     return total;
   }
 
-  fn getDirSize(self: *CacheDB, parent: std.fs.Dir, name: []const u8) usize {
-    var subdir = parent.openDir(name, .{ .iterate = true }) catch return 0;
-    defer subdir.close();
+  fn getDirSize(self: *CacheDB, parent: std.Io.Dir, name: []const u8) usize {
+    var subdir = parent.openDir(io, name, .{ .iterate = true }) catch return 0;
+    defer subdir.close(io);
 
     var total: usize = 0;
     var iter = subdir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(io) catch null) |entry| {
       if (entry.kind == .directory) {
         total += self.getDirSize(subdir, entry.name);
       } else if (entry.kind == .file) {
-        const stat = subdir.statFile(entry.name) catch continue;
+        const stat = subdir.statFile(io, entry.name, .{}) catch continue;
         total += alignToBlock(stat.size);
       }
     }
@@ -472,7 +473,7 @@ pub const CacheDB = struct {
     var cached_at: i64 = undefined;
     @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
 
-    const now = std.time.timestamp();
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
     if (now - cached_at > METADATA_TTL_SECS) return null;
 
     const json_data = data[@sizeOf(i64)..value.mv_size];
@@ -499,7 +500,7 @@ pub const CacheDB = struct {
     const value_buf = try self.allocator.alloc(u8, value_size);
     defer self.allocator.free(value_buf);
 
-    const now: i64 = std.time.timestamp();
+    const now: i64 = std.Io.Timestamp.now(io, .real).toSeconds();
     @memcpy(value_buf[0..@sizeOf(i64)], std.mem.asBytes(&now));
     @memcpy(value_buf[@sizeOf(i64)..], data_to_store);
 
@@ -518,8 +519,8 @@ pub const CacheDB = struct {
   }
 
   const PruneCollections = struct {
-    keys: std.ArrayListUnmanaged([66]u8) = .{},
-    paths: std.ArrayListUnmanaged([]const u8) = .{},
+    keys: std.ArrayListUnmanaged([66]u8) = .empty,
+    paths: std.ArrayListUnmanaged([]const u8) = .empty,
     
     fn deinit(self: *PruneCollections, allocator: std.mem.Allocator) void {
       for (self.paths.items) |p| allocator.free(p);
@@ -579,7 +580,7 @@ pub const CacheDB = struct {
     if (c.mdb_cursor_open(txn, self.dbi_secondary, &cursor) != 0) return;
     defer c.mdb_cursor_close(cursor);
 
-    var to_delete = std.ArrayListUnmanaged([]u8){};
+    var to_delete = std.ArrayListUnmanaged([]u8).empty;
     defer {
       for (to_delete.items) |k| self.allocator.free(k);
       to_delete.deinit(self.allocator);
@@ -611,17 +612,17 @@ pub const CacheDB = struct {
   }
 
   inline fn deletePackageFiles(paths: []const []const u8) void {
-    for (paths) |path| std.fs.cwd().deleteTree(path) catch {};
+    for (paths) |path| std.Io.Dir.cwd().deleteTree(io, path) catch {};
   }
 
   inline fn pruneExpiredMetadata(self: *CacheDB, txn: *c.MDB_txn) void {
-    const now = std.time.timestamp();
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
 
     var cursor: ?*c.MDB_cursor = null;
     if (c.mdb_cursor_open(txn, self.dbi_metadata, &cursor) != 0) return;
     defer c.mdb_cursor_close(cursor);
 
-    var to_delete = std.ArrayListUnmanaged([]u8){};
+    var to_delete = std.ArrayListUnmanaged([]u8).empty;
     defer {
       for (to_delete.items) |k| self.allocator.free(k);
       to_delete.deinit(self.allocator);
@@ -652,7 +653,7 @@ pub const CacheDB = struct {
   }
 
   pub fn prune(self: *CacheDB, max_age_days: u32) !u32 {
-    const now = std.time.timestamp();
+    const now = std.Io.Timestamp.now(io, .real).toSeconds();
     const max_age_secs: i64 = @as(i64, max_age_days) * 24 * 60 * 60;
     const cutoff = now - max_age_secs;
 

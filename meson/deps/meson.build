@@ -180,6 +180,10 @@ if skim_version == ''
 endif
 
 zig = find_program('zig', required: true)
+zig_version = run_command(zig, 'version', check: true).stdout().strip()
+if not zig_version.version_compare('>=0.16.0') or not zig_version.version_compare('<0.17.0')
+  error('Zig 0.16.x is required to build src/pkg; found ' + zig_version + '.')
+endif
 
 deps_info = {
   'lmdb': {

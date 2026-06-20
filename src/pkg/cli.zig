@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("root.zig");
+const io = std.Io.Threaded.global_single_threaded.io();
 
 const ListCallback = 
   *const fn ([*:0]const u8, [*:0]const u8, ?*anyopaque) callconv(.c) void;
@@ -25,7 +26,7 @@ const PkgDeps = struct {
 
 fn emitPkg(pd: *PkgDeps, name: []const u8, cb: ListCallback, ud: ?*anyopaque) void {
   const pkg_json = std.fmt.allocPrint(pd.arena, "{s}/{s}/package.json", .{pd.nm_path, name}) catch return;
-  const content = std.fs.cwd().readFileAlloc(pd.arena, pkg_json, 256 * 1024) catch return;
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json, pd.arena, .limited(256 * 1024)) catch return;
   const parsed = std.json.parseFromSlice(std.json.Value, pd.arena, content, .{}) catch return;
   defer parsed.deinit();
   
@@ -44,7 +45,7 @@ pub fn get_dependencies(ctx: ?*root.PkgContext, base_path: ?[]const u8, include_
   const nm_path = if (base_path) |bp| std.fmt.allocPrint(arena, "{s}/node_modules", .{bp}) catch return null
   else arena.dupe(u8, "node_modules") catch return null;
   
-  const content = std.fs.cwd().readFileAlloc(arena, pkg_json_path, 1024 * 1024) catch return null;
+  const content = std.Io.Dir.cwd().readFileAlloc(io, pkg_json_path, arena, .limited(1024 * 1024)) catch return null;
   const parsed = std.json.parseFromSlice(std.json.Value, arena, content, .{}) catch return null;
   
   const deps_val = parsed.value.object.get("dependencies");
