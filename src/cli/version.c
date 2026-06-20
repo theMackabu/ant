@@ -50,6 +50,7 @@ typedef struct {
   char target[64];
   char version[96];
   char download_url[2048];
+  char release_notes_url[2048];
   uint64_t build_timestamp;
   uint64_t size;
 } ant_latest_info_t;
@@ -233,19 +234,6 @@ static const char *version_json_string(yyjson_val *obj, const char *key) {
   return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
 }
 
-static void version_release_tag_copy(char *out, size_t out_len, const char *version) {
-  if (!out || out_len == 0) return;
-  out[0] = '\0';
-  if (!version) return;
-
-  size_t i = 0;
-  for (; version[i] && i + 1 < out_len; i++) {
-    if (version[i] == '-' || version[i] == '+') break;
-    out[i] = version[i];
-  }
-  out[i] = '\0';
-}
-
 static uint64_t version_json_uint(yyjson_val *obj, const char *key) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
   return val && yyjson_is_uint(val) ? yyjson_get_uint(val) : 0;
@@ -348,9 +336,18 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
       if (!version || !download_url) break;
       snprintf(latest->version, sizeof(latest->version), "%s", version);
       snprintf(latest->download_url, sizeof(latest->download_url), "%s", download_url);
+      
+      yyjson_val *source = yyjson_obj_get(item, "source");
+      const char *source_type = version_json_string(source, "type");
+      const char *source_url = version_json_string(source, "html_url");
+      
+      if (source_type && strcmp(source_type, "release") == 0 && source_url)
+        snprintf(latest->release_notes_url, sizeof(latest->release_notes_url), "%s", source_url);
+      
       latest->build_timestamp = version_json_uint(item, "build_timestamp");
       yyjson_val *artifact = yyjson_obj_get(item, "artifact");
       latest->size = version_json_uint(artifact, "size_in_bytes");
+      
       rc = 0;
       break;
     }
@@ -470,11 +467,9 @@ int ant_upgrade(int argc, char **argv) {
   crprintf("<bright_green>Upgraded successfully to Ant %s</>\n", latest.version);
   crprintf("<dim>Installed at %s</>\n", install_path);
 
-  char release_tag[64];
-  version_release_tag_copy(release_tag, sizeof(release_tag), latest.version);
-  if (release_tag[0]) {
+  if (latest.release_notes_url[0]) {
     crprintf("\n<bold>Release notes:</>\n\n");
-    crprintf("  <green>https://github.com/theMackabu/ant/releases/tag/v%s</>\n\n", release_tag);
+    crprintf("  <green>%s</>\n\n", latest.release_notes_url);
   }
   
   return EXIT_SUCCESS;
