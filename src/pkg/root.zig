@@ -2119,6 +2119,53 @@ export fn pkg_add(
   return .ok;
 }
 
+export fn pkg_resolve_check_many(
+  ctx: ?*PkgContext,
+  package_specs: [*]const [*:0]const u8,
+  count: u32,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  _ = c.arena_state.reset(.retain_capacity);
+  const arena_alloc = c.arena_state.allocator();
+
+  const http = c.http orelse return .network_error;
+  var res = resolver.Resolver.init(
+    arena_alloc,
+    c.allocator,
+    &c.string_pool,
+    http,
+    null,
+    if (c.options.registry_url) |url| std.mem.span(url) else "https://registry.npmjs.org",
+    &c.metadata_cache,
+  );
+  defer res.deinit();
+
+  for (0..count) |i| {
+    const spec_str = std.mem.span(package_specs[i]);
+    var pkg_name: []const u8 = spec_str;
+    var version_constraint: []const u8 = "latest";
+
+    if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+      if (at_idx == 0) {
+        if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
+          pkg_name = spec_str[0..second_at];
+          version_constraint = spec_str[second_at + 1 ..];
+        }
+      } else {
+        pkg_name = spec_str[0..at_idx];
+        version_constraint = spec_str[at_idx + 1 ..];
+      }
+    }
+
+    _ = res.resolve(pkg_name, version_constraint, 0) catch |err| {
+      setResolveError(c, pkg_name, err);
+      return .resolve_error;
+    };
+  }
+
+  return .ok;
+}
+
 export fn pkg_add_many(
   ctx: ?*PkgContext,
   package_json_path: [*:0]const u8,

@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
+#include <pthread.h>
 #include <argtable3.h>
 #include <yyjson.h>
 
@@ -80,7 +81,7 @@ static bool parse_pkg_missing_fallback(const char *value, pkg_missing_fallback_t
 static pkg_cli_config_t pkg_config_defaults(void) {
   return (pkg_cli_config_t){
     .default_registry = PKG_SOURCE_LAND,
-    .missing_fallback = PKG_FALLBACK_NONE,
+    .missing_fallback = PKG_FALLBACK_NPM,
   };
 }
 
@@ -191,6 +192,7 @@ typedef struct {
   pkg_source_t source;
   const char *const *specs;
   bool owns_specs;
+  bool explicit_source;
 } normalized_specs_t;
 
 static void free_normalized_specs(normalized_specs_t specs) {
@@ -201,6 +203,7 @@ static bool normalize_package_specs(const char *const *in, int count, pkg_source
   out->source = default_source;
   out->specs = in;
   out->owns_specs = false;
+  out->explicit_source = false;
   if (count <= 0) return true;
 
   const char **stripped = try_oom(sizeof(*stripped) * (size_t)count);
@@ -231,7 +234,82 @@ static bool normalize_package_specs(const char *const *in, int count, pkg_source
   out->source = saw_prefix ? chosen : default_source;
   out->specs = stripped;
   out->owns_specs = true;
+  out->explicit_source = saw_prefix;
   return true;
+}
+
+typedef struct {
+  pkg_source_t source;
+  const char *const *specs;
+  int count;
+  pkg_error_t err;
+  char error[512];
+} resolve_probe_t;
+
+static void *resolve_probe_main(void *arg) {
+  resolve_probe_t *probe = (resolve_probe_t *)arg;
+  pkg_options_t opts = pkg_options_make(probe->source, NULL, NULL);
+  pkg_context_t *ctx = pkg_init(&opts);
+  if (!ctx) {
+    probe->err = PKG_OUT_OF_MEMORY;
+    snprintf(probe->error, sizeof(probe->error), "Failed to initialize package manager");
+    return NULL;
+  }
+
+  probe->err = pkg_resolve_check_many(ctx, probe->specs, (uint32_t)probe->count);
+  const char *msg = pkg_error_string(ctx);
+  if (msg && msg[0]) snprintf(probe->error, sizeof(probe->error), "%s", msg);
+  pkg_free(ctx);
+  return NULL;
+}
+
+static bool should_parallel_fallback(const normalized_specs_t *specs, pkg_cli_config_t config) {
+  return specs->source == PKG_SOURCE_LAND
+    && !specs->explicit_source
+    && config.missing_fallback == PKG_FALLBACK_NPM;
+}
+
+static bool choose_parallel_fallback_source(
+  const normalized_specs_t *specs,
+  int count,
+  pkg_source_t *source_out,
+  bool *used_fallback_out
+) {
+  *source_out = specs->source;
+  *used_fallback_out = false;
+  if (count <= 0) return false;
+
+  resolve_probe_t land = {
+    .source = PKG_SOURCE_LAND,
+    .specs = specs->specs,
+    .count = count,
+    .err = PKG_NETWORK_ERROR,
+    .error = {0},
+  };
+  resolve_probe_t npm = {
+    .source = PKG_SOURCE_NPM,
+    .specs = specs->specs,
+    .count = count,
+    .err = PKG_NETWORK_ERROR,
+    .error = {0},
+  };
+
+  pthread_t npm_thread;
+  if (pthread_create(&npm_thread, NULL, resolve_probe_main, &npm) != 0) return false;
+  resolve_probe_main(&land);
+  pthread_join(npm_thread, NULL);
+
+  if (land.err == PKG_OK) {
+    *source_out = PKG_SOURCE_LAND;
+    return true;
+  }
+  if (land.err == PKG_RESOLVE_ERROR && npm.err == PKG_OK) {
+    *source_out = PKG_SOURCE_NPM;
+    *used_fallback_out = true;
+    return true;
+  }
+
+  return false;
 }
 
 typedef enum {
@@ -1097,6 +1175,17 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   pkg_cli_config_t config = pkg_config_load();
   normalized_specs_t normalized;
   if (!normalize_package_specs(package_specs, count, config.default_registry, &normalized)) return EXIT_FAILURE;
+
+  pkg_source_t add_source = normalized.source;
+  bool used_parallel_fallback = false;
+  bool parallel_checked = false;
+  if (should_parallel_fallback(&normalized, config)) {
+    parallel_checked = choose_parallel_fallback_source(&normalized, count, &add_source, &used_parallel_fallback);
+    if (used_parallel_fallback) {
+      fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
+        C_YELLOW, C_RESET);
+    }
+  }
   
   char resolve_msg[64];
   snprintf(resolve_msg, sizeof(resolve_msg), "🔍 Resolving [%d/%d]", count, count);
@@ -1107,7 +1196,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   }
   
   pkg_options_t opts = pkg_options_make(
-    normalized.source,
+    add_source,
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
@@ -1122,7 +1211,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   pkg_error_t err = pkg_add_many(ctx, "package.json", normalized.specs, (uint32_t)count, dev);
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
-    if (normalized.source == PKG_SOURCE_LAND && err == PKG_RESOLVE_ERROR && config.missing_fallback == PKG_FALLBACK_NPM) {
+    if (!parallel_checked && add_source == PKG_SOURCE_LAND && !normalized.explicit_source && err == PKG_RESOLVE_ERROR && config.missing_fallback == PKG_FALLBACK_NPM) {
       pkg_free(ctx);
       fprintf(stderr, "\n%sWarning:%s package was not found on ants.land; retrying from npm because install.missingPackageFallback=npm\n",
         C_YELLOW, C_RESET);
@@ -1161,7 +1250,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
       return EXIT_SUCCESS;
     }
 
-    if (normalized.source == PKG_SOURCE_LAND && err == PKG_RESOLVE_ERROR) print_land_not_found_hint(package_specs[0]);
+    if (add_source == PKG_SOURCE_LAND && err == PKG_RESOLVE_ERROR) print_land_not_found_hint(package_specs[0]);
     else print_pkg_error(ctx);
     pkg_free(ctx);
     free_normalized_specs(normalized);
@@ -1179,7 +1268,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   
   if (!pkg_verbose) progress_stop(&progress);
 
-  if (normalized.source == PKG_SOURCE_LAND) {
+  if (add_source == PKG_SOURCE_LAND) {
     print_land_compatibility_summary(normalized.specs, count);
   }
 

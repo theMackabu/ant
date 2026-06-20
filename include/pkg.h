@@ -65,6 +65,12 @@ pkg_error_t pkg_resolve_and_install(
   const char *node_modules_path
 );
 
+pkg_error_t pkg_resolve_check_many(
+  pkg_context_t *ctx,
+  const char *const *package_specs,
+  uint32_t count
+);
+
 pkg_error_t pkg_add(
   pkg_context_t *ctx,
   const char *package_json_path,
