@@ -52,15 +52,39 @@ fn scriptShell() []const u8 {
     const value = std.mem.span(shell);
     if (value.len > 0) return value;
   }
+  if (std.c.getenv("SHELL")) |shell| {
+    const value = std.mem.span(shell);
+    if (value.len > 0) return value;
+  }
+  std.Io.Dir.cwd().access(io, "/bin/sh", .{}) catch return "sh";
   return "/bin/sh";
 }
 
-fn writeProcessOutput(file: std.Io.File, bytes: []const u8) void {
-  if (bytes.len == 0) return;
-  var buffer: [4096]u8 = undefined;
-  var writer = file.writer(io, &buffer);
-  writer.interface.writeAll(bytes) catch return;
-  writer.interface.flush() catch {};
+fn isAntsLandRegistry(registry_url: []const u8) bool {
+  var host = registry_url;
+  if (std.mem.startsWith(u8, host, "https://")) host = host["https://".len..];
+  if (std.mem.startsWith(u8, host, "http://")) host = host["http://".len..];
+  if (std.mem.endsWith(u8, host, "/")) host = host[0 .. host.len - 1];
+  return std.mem.eql(u8, host, "npm.ants.land");
+}
+
+fn shouldWriteLandTarballDependency(c: *PkgContext, package_name: []const u8) bool {
+  if (std.mem.startsWith(u8, package_name, "@")) return false;
+  const registry_url = if (c.options.registry_url) |url| std.mem.span(url) else return false;
+  return isAntsLandRegistry(registry_url);
+}
+
+fn dependencyValueForResolved(
+  allocator: std.mem.Allocator,
+  c: *PkgContext,
+  package_name: []const u8,
+  version_str: []const u8,
+  resolved_pkg: *const resolver.ResolvedPackage,
+) ![]const u8 {
+  if (shouldWriteLandTarballDependency(c, package_name)) {
+    return allocator.dupe(u8, resolved_pkg.tarball_url);
+  }
+  return std.fmt.allocPrint(allocator, "^{s}", .{version_str});
 }
 
 fn getLegacyAntDirIfExists(allocator: std.mem.Allocator) !?[]const u8 {
@@ -1898,6 +1922,10 @@ fn runTrustedPostinstall(
   if (jobs.items.len == 0) return true;
   for (jobs.items) |job| debug.log("starting lifecycle scripts: {s}", .{job.pkg_name});
 
+  var process_io_state: std.Io.Threaded = .init(allocator, .{});
+  defer process_io_state.deinit();
+  const process_io = process_io_state.io();
+
   var scripts_run: u32 = 0;
   var failed_count: u32 = 0;
   for (jobs.items, 0..) |*job, i| {
@@ -1911,38 +1939,31 @@ fn runTrustedPostinstall(
       else
         &[_][]const u8{ scriptShell(), "-c", cmd.script };
 
-      const result = std.process.run(allocator, io, .{
+      var child = std.process.spawn(process_io, .{
         .argv = shell_argv,
         .cwd = .{ .path = job.pkg_dir },
         .environ_map = &env_map,
-        .expand_arg0 = .expand,
-        .stdout_limit = .limited(1024 * 1024),
-        .stderr_limit = .limited(1024 * 1024),
+        .expand_arg0 = .no_expand,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
       }) catch |err| {
         if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: failed to spawn: {}", .{ cmd.name, job.pkg_name, err });
         job.failed = true;
         break;
       };
-      defer allocator.free(result.stdout);
-      defer allocator.free(result.stderr);
+      const term = child.wait(process_io) catch |err| {
+        if (ctx.last_error == null) ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: failed to wait: {}", .{ cmd.name, job.pkg_name, err });
+        job.failed = true;
+        break;
+      };
 
-      if (result.stdout.len > 0) {
-        var line_iter = std.mem.splitScalar(u8, result.stdout, '\n');
-        while (line_iter.next()) |line| {
-          if (line.len > 0) debug.log("  {s}: {s}", .{ job.pkg_name, line });
-        }
-      }
-
-      switch (result.term) {
+      switch (term) {
         .exited => |code| {
           if (code != 0) {
             debug.log("  {s} failed for {s}: exit code {d}", .{ cmd.name, job.pkg_name, code });
-            if (result.stderr.len > 0) debug.log("  stderr: {s}", .{result.stderr});
             if (ctx.last_error == null) {
-              if (result.stderr.len > 0)
-                ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: {s}", .{ cmd.name, job.pkg_name, result.stderr })
-              else
-                ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: exit code {d}", .{ cmd.name, job.pkg_name, code });
+              ctx.setErrorFmt("Lifecycle script '{s}' failed for {s}: exit code {d}", .{ cmd.name, job.pkg_name, code });
             }
             job.failed = true;
             break;
@@ -2041,8 +2062,8 @@ export fn pkg_add(
   const version_str = resolved_pkg.version.format(arena_alloc) catch {
     return .out_of_memory;
   };
-  
-  const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{version_str}) catch {
+
+  const dependency_value = dependencyValueForResolved(arena_alloc, c, pkg_name, version_str, resolved_pkg) catch {
     return .out_of_memory;
   };
 
@@ -2052,7 +2073,7 @@ export fn pkg_add(
     if (d == .object) d.object else .empty
   else .empty;
 
-  deps.put(arena_alloc, pkg_name, .{ .string = version_with_caret }) catch {
+  deps.put(arena_alloc, pkg_name, .{ .string = dependency_value }) catch {
     return .out_of_memory;
   };
 
@@ -2082,7 +2103,7 @@ export fn pkg_add(
 
   if (!found_target) {
     const deps_obj = writer.createObject();
-    writer.objectAdd(deps_obj, pkg_name, writer.createString(version_with_caret));
+    writer.objectAdd(deps_obj, pkg_name, writer.createString(dependency_value));
     writer.objectAdd(root_obj, target_key, deps_obj);
   }
 
@@ -2124,7 +2145,7 @@ export fn pkg_add_many(
 
   const ResolvedEntry = struct {
     name: []const u8,
-    version_str: []const u8,
+    dependency_value: []const u8,
   };
 
   const resolved = arena_alloc.alloc(ResolvedEntry, count) catch return .out_of_memory;
@@ -2152,7 +2173,8 @@ export fn pkg_add_many(
     };
 
     const version_str = resolved_pkg.version.format(arena_alloc) catch return .out_of_memory;
-    resolved[i] = .{ .name = pkg_name, .version_str = version_str };
+    const dependency_value = dependencyValueForResolved(arena_alloc, c, pkg_name, version_str, resolved_pkg) catch return .out_of_memory;
+    resolved[i] = .{ .name = pkg_name, .dependency_value = dependency_value };
   }
 
   const content = blk: {
@@ -2180,8 +2202,7 @@ export fn pkg_add_many(
   else .empty;
 
   for (resolved) |entry| {
-    const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{entry.version_str}) catch return .out_of_memory;
-    deps.put(arena_alloc, entry.name, .{ .string = version_with_caret }) catch return .out_of_memory;
+    deps.put(arena_alloc, entry.name, .{ .string = entry.dependency_value }) catch return .out_of_memory;
   }
 
   var writer = json.JsonWriter.init() catch return .out_of_memory;
@@ -2210,8 +2231,7 @@ export fn pkg_add_many(
   if (!found_target) {
     const deps_obj = writer.createObject();
     for (resolved) |entry| {
-      const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{entry.version_str}) catch return .out_of_memory;
-      writer.objectAdd(deps_obj, entry.name, writer.createString(version_with_caret));
+      writer.objectAdd(deps_obj, entry.name, writer.createString(entry.dependency_value));
     }
     writer.objectAdd(root_obj, target_key, deps_obj);
   }
@@ -2570,20 +2590,21 @@ fn runScriptCommand(
     &[_][]const u8{ scriptShell(), "/c", script_z }
   else &[_][]const u8{ scriptShell(), "-c", script_z };
 
-  const run = try std.process.run(allocator, io, .{
+  var process_io_state: std.Io.Threaded = .init(allocator, .{});
+  defer process_io_state.deinit();
+  const process_io = process_io_state.io();
+
+  var child = try std.process.spawn(process_io, .{
     .argv = shell_argv,
     .environ_map = env_map,
-    .expand_arg0 = .expand,
-    .stdout_limit = .limited(1024 * 1024),
-    .stderr_limit = .limited(1024 * 1024),
+    .expand_arg0 = .no_expand,
+    .stdin = .inherit,
+    .stdout = .inherit,
+    .stderr = .inherit,
   });
-  defer allocator.free(run.stdout);
-  defer allocator.free(run.stderr);
+  const term = try child.wait(process_io);
 
-  writeProcessOutput(.stdout(), run.stdout);
-  writeProcessOutput(.stderr(), run.stderr);
-
-  return switch (run.term) {
+  return switch (term) {
     .exited => |code| .{ .exit_code = code, .signal = 0 },
     .signal => |sig| .{ .exit_code = -1, .signal = @intCast(@intFromEnum(sig)) },
     else => .{ .exit_code = -1, .signal = 0 },

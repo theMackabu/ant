@@ -234,8 +234,19 @@ static bool normalize_package_specs(const char *const *in, int count, pkg_source
   return true;
 }
 
-static int ensure_npmrc_scope_registry(const char *scope) {
-  if (!scope || !scope[0]) return 0;
+typedef enum {
+  NPMRC_SCOPE_ERROR = -1,
+  NPMRC_SCOPE_EXISTS = 0,
+  NPMRC_SCOPE_ADDED = 1,
+} npmrc_scope_result_t;
+
+typedef struct {
+  char scope[128];
+  npmrc_scope_result_t result;
+} npmrc_scope_status_t;
+
+static npmrc_scope_result_t ensure_npmrc_scope_registry(const char *scope) {
+  if (!scope || !scope[0]) return NPMRC_SCOPE_EXISTS;
 
   char line[512];
   snprintf(line, sizeof(line), "@%s:registry=https://%s", scope, ANT_LAND_REGISTRY);
@@ -250,7 +261,7 @@ static int ensure_npmrc_scope_registry(const char *scope) {
         content = try_oom((size_t)n + 1);
         if (!content) {
           fclose(f);
-          return -1;
+          return NPMRC_SCOPE_ERROR;
         }
         len = fread(content, 1, (size_t)n, f);
         content[len] = '\0';
@@ -276,33 +287,128 @@ static int ensure_npmrc_scope_registry(const char *scope) {
   }
   if (exists) {
     free(content);
-    return 0;
+    return NPMRC_SCOPE_EXISTS;
   }
 
   f = fopen(".npmrc", "a");
   if (!f) {
     free(content);
-    return -1;
+    return NPMRC_SCOPE_ERROR;
   }
   if (len > 0 && content && content[len - 1] != '\n') fputc('\n', f);
   fprintf(f, "%s\n", line);
   int rc = ferror(f) ? -1 : 0;
   fclose(f);
   free(content);
+  return rc == 0 ? NPMRC_SCOPE_ADDED : NPMRC_SCOPE_ERROR;
+}
+
+static int scope_status_index(npmrc_scope_status_t *statuses, int count, const char *scope) {
+  for (int i = 0; i < count; i++) {
+    if (strcmp(statuses[i].scope, scope) == 0) return i;
+  }
+  return -1;
+}
+
+static bool package_name_is_scoped(const char *name) {
+  if (!name || name[0] != '@') return false;
+  const char *slash = strchr(name, '/');
+  return slash && slash > name + 1 && slash[1] != '\0';
+}
+
+static int collect_land_scope_registries(
+  const char *const *package_specs,
+  int count,
+  npmrc_scope_status_t **statuses_out,
+  int *status_count_out
+) {
+  *statuses_out = NULL;
+  *status_count_out = 0;
+  if (count <= 0) return 0;
+
+  npmrc_scope_status_t *statuses = try_oom(sizeof(*statuses) * (size_t)count);
+  if (!statuses) return -1;
+  int status_count = 0;
+  int rc = 0;
+
+  for (int i = 0; i < count; i++) {
+    char pkg_name[512];
+    if (package_name_from_spec(package_specs[i], pkg_name, sizeof(pkg_name)) == 0) continue;
+    if (!package_name_is_scoped(pkg_name)) continue;
+    char *slash = strchr(pkg_name, '/');
+    *slash = '\0';
+    const char *scope = pkg_name + 1;
+    if (scope_status_index(statuses, status_count, scope) >= 0) continue;
+
+    snprintf(statuses[status_count].scope, sizeof(statuses[status_count].scope), "%s", scope);
+    statuses[status_count].result = ensure_npmrc_scope_registry(scope);
+    if (statuses[status_count].result == NPMRC_SCOPE_ERROR) rc = -1;
+    status_count++;
+  }
+
+  *statuses_out = statuses;
+  *status_count_out = status_count;
   return rc;
 }
 
-static int ensure_land_scope_registries(const char *const *package_specs, int count) {
+static npmrc_scope_result_t land_scope_status_for_package(
+  const char *pkg_name,
+  npmrc_scope_status_t *statuses,
+  int status_count
+) {
+  if (!package_name_is_scoped(pkg_name)) return NPMRC_SCOPE_EXISTS;
+  const char *slash = strchr(pkg_name, '/');
+  if (!slash) return NPMRC_SCOPE_EXISTS;
+  char scope[128];
+  size_t len = (size_t)(slash - (pkg_name + 1));
+  if (len >= sizeof(scope)) len = sizeof(scope) - 1;
+  memcpy(scope, pkg_name + 1, len);
+  scope[len] = '\0';
+  int idx = scope_status_index(statuses, status_count, scope);
+  return idx >= 0 ? statuses[idx].result : NPMRC_SCOPE_EXISTS;
+}
+
+static void print_land_compatibility_summary(const char *const *package_specs, int count) {
+  npmrc_scope_status_t *statuses = NULL;
+  int status_count = 0;
+  int scope_rc = collect_land_scope_registries(package_specs, count, &statuses, &status_count);
+
+  for (int i = 0; i < status_count; i++) {
+    if (statuses[i].result == NPMRC_SCOPE_ADDED) {
+      printf("\nAdded .npmrc registry mapping for @%s -> https://%s\n", statuses[i].scope, ANT_LAND_REGISTRY);
+    }
+  }
+  if (scope_rc != 0) {
+    fprintf(stderr, "\n%sWarning:%s failed to update .npmrc with ants.land scope registry mappings\n", C_YELLOW, C_RESET);
+  }
+
+  bool has_land_package = false;
   for (int i = 0; i < count; i++) {
     char pkg_name[512];
-    if (package_name_from_spec(package_specs[i], pkg_name, sizeof(pkg_name)) != 0) continue;
-    if (pkg_name[0] != '@') continue;
-    char *slash = strchr(pkg_name, '/');
-    if (!slash || slash == pkg_name + 1) continue;
-    *slash = '\0';
-    if (ensure_npmrc_scope_registry(pkg_name + 1) != 0) return -1;
+    if (package_name_from_spec(package_specs[i], pkg_name, sizeof(pkg_name)) == 0) continue;
+    has_land_package = true;
+    break;
   }
-  return 0;
+  if (!has_land_package) {
+    free(statuses);
+    return;
+  }
+
+  printf("\nants.land packages were added to package.json.\n\n");
+  printf("Compatible with other package managers:\n");
+
+  for (int i = 0; i < count; i++) {
+    char pkg_name[512];
+    if (package_name_from_spec(package_specs[i], pkg_name, sizeof(pkg_name)) == 0) continue;
+    if (package_name_is_scoped(pkg_name)) {
+      npmrc_scope_result_t status = land_scope_status_for_package(pkg_name, statuses, status_count);
+      printf("  %s: %s .npmrc scope registry mapping\n",
+        pkg_name,
+        status == NPMRC_SCOPE_ADDED ? "added" : "uses");
+    } else printf("  %s: wrote tarball URL dependency\n", pkg_name);
+  }
+
+  free(statuses);
 }
 
 static void progress_callback(void *user_data, pkg_phase_t phase, uint32_t current, uint32_t total, const char *message) {
@@ -1062,10 +1168,6 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
     return EXIT_FAILURE;
   }
 
-  if (normalized.source == PKG_SOURCE_LAND && ensure_land_scope_registries(normalized.specs, count) != 0) {
-    fprintf(stderr, "\n%sWarning:%s failed to update .npmrc with ants.land scope registry mappings\n", C_YELLOW, C_RESET);
-  }
-
   err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
@@ -1076,6 +1178,10 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   }
   
   if (!pkg_verbose) progress_stop(&progress);
+
+  if (normalized.source == PKG_SOURCE_LAND) {
+    print_land_compatibility_summary(normalized.specs, count);
+  }
 
   pkg_install_result_t result;
   if (pkg_get_install_result(ctx, &result) == PKG_OK) {

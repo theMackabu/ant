@@ -304,6 +304,10 @@ fn dependencySpec(install_name: []const u8, constraint: []const u8) DependencySp
   };
 }
 
+fn isTarballUrl(spec: []const u8) bool {
+  return std.mem.startsWith(u8, spec, "https://") or std.mem.startsWith(u8, spec, "http://");
+}
+
 pub const VersionInfo = struct {
   version: Version,
   version_str: []const u8,
@@ -1208,6 +1212,114 @@ pub const Resolver = struct {
     return best;
   }
 
+  fn selectVersionByTarballUrl(_: *Resolver, metadata: *const PackageMetadata, tarball_url: []const u8) ?*const VersionInfo {
+    for (metadata.versions.items) |*v| {
+      if (std.mem.eql(u8, v.tarball_url, tarball_url)) return v;
+    }
+    return null;
+  }
+
+  fn createPackageFromVersion(
+    self: *Resolver,
+    name: []const u8,
+    version_info: *const VersionInfo,
+    depth: u32,
+    direct: bool,
+    parent_path: ?[]const u8,
+  ) !*ResolvedPackage {
+    const pkg = try self.allocator.create(ResolvedPackage);
+    errdefer self.allocator.destroy(pkg);
+
+    pkg.* = .{
+      .name = try self.string_pool.intern(name),
+      .version = version_info.version,
+      .integrity = version_info.integrity,
+      .tarball_url = try self.allocator.dupe(u8, version_info.tarball_url),
+      .dependencies = .empty,
+      .depth = depth,
+      .direct = direct,
+      .parent_path = if (parent_path) |p| try self.allocator.dupe(u8, p) else null,
+      .has_bin = version_info.bin.count() > 0,
+      .allocator = self.allocator,
+    };
+
+    var dep_it = version_info.dependencies.iterator();
+    while (dep_it.next()) |entry| {
+      try pkg.dependencies.append(self.allocator, .{
+        .name = try self.string_pool.intern(entry.key_ptr.*),
+        .constraint = try self.allocator.dupe(u8, entry.value_ptr.*),
+        .flags = .{},
+      });
+    }
+
+    var opt_it = version_info.optional_dependencies.iterator();
+    while (opt_it.next()) |entry| {
+      const opt_spec = dependencySpec(entry.key_ptr.*, entry.value_ptr.*);
+      if (self.metadata_cache.get(opt_spec.package_name)) |opt_meta| {
+        const opt_con = Constraint.parse(opt_spec.constraint) catch continue;
+        const opt_best = self.selectBestVersion(&opt_meta, opt_con) orelse continue;
+        if (!opt_best.matchesPlatform()) continue;
+      }
+      try pkg.dependencies.append(self.allocator, .{
+        .name = try self.string_pool.intern(entry.key_ptr.*),
+        .constraint = try self.allocator.dupe(u8, entry.value_ptr.*),
+        .flags = .{ .optional = true },
+      });
+    }
+
+    var peer_it = version_info.peer_dependencies.iterator();
+    while (peer_it.next()) |entry| {
+      if (version_info.peer_dependencies_meta.contains(entry.key_ptr.*)) continue;
+      try pkg.dependencies.append(self.allocator, .{
+        .name = try self.string_pool.intern(entry.key_ptr.*),
+        .constraint = try self.allocator.dupe(u8, entry.value_ptr.*),
+        .flags = .{ .peer = true },
+      });
+    }
+
+    return pkg;
+  }
+
+  fn resolveTarballUrl(
+    self: *Resolver,
+    name: []const u8,
+    tarball_url: []const u8,
+    depth: u32,
+    direct: bool,
+    parent_path: ?[]const u8,
+  ) !*ResolvedPackage {
+    if (self.resolved.get(name)) |existing_pkg| {
+      if (std.mem.eql(u8, existing_pkg.tarball_url, tarball_url)) {
+        if (direct) existing_pkg.direct = true;
+        if (depth < existing_pkg.depth) existing_pkg.depth = depth;
+        return existing_pkg;
+      }
+    }
+
+    var metadata = try self.fetchMetadata(name);
+    const version_info = self.selectVersionByTarballUrl(&metadata, tarball_url) orelse return error.NoMatchingVersion;
+    if (!version_info.matchesPlatform()) return error.PlatformMismatch;
+
+    const pkg = try self.createPackageFromVersion(name, version_info, depth, direct, parent_path);
+    errdefer {
+      pkg.deinit();
+      self.allocator.destroy(pkg);
+    }
+
+    const name_key = if (parent_path) |parent|
+      try std.fmt.allocPrint(self.allocator, "{s}/node_modules/{s}", .{ parent, name })
+    else
+      try self.allocator.dupe(u8, name);
+    errdefer self.allocator.free(name_key);
+    try self.resolved.put(name_key, pkg);
+
+    if (self.on_package_resolved) |callback| {
+      callback(pkg, self.on_package_resolved_data);
+    }
+
+    return pkg;
+  }
+
   fn resolveSingleWithOptimal(
     self: *Resolver,
     name: []const u8,
@@ -1218,6 +1330,9 @@ pub const Resolver = struct {
     optimal_versions: *std.StringHashMap(*const VersionInfo),
   ) !*ResolvedPackage {
     const dep_spec = dependencySpec(name, constraint_str);
+    if (isTarballUrl(dep_spec.constraint)) {
+      return self.resolveTarballUrl(dep_spec.install_name, dep_spec.constraint, depth, direct, parent_name);
+    }
     const constraint = try Constraint.parse(dep_spec.constraint);
 
     if (self.resolved.get(dep_spec.install_name)) |existing_pkg| {
@@ -1329,6 +1444,9 @@ pub const Resolver = struct {
 
   fn resolveSingle(self: *Resolver, name: []const u8, constraint_str: []const u8, depth: u32, direct: bool, parent_name: ?[]const u8) !*ResolvedPackage {
     const dep_spec = dependencySpec(name, constraint_str);
+    if (isTarballUrl(dep_spec.constraint)) {
+      return self.resolveTarballUrl(dep_spec.install_name, dep_spec.constraint, depth, direct, parent_name);
+    }
     const constraint = try Constraint.parse(dep_spec.constraint);
 
     if (self.resolved.get(dep_spec.install_name)) |existing_pkg| {
@@ -1568,6 +1686,9 @@ pub const Resolver = struct {
     }
 
     const dep_spec = dependencySpec(name, constraint_str);
+    if (isTarballUrl(dep_spec.constraint)) {
+      return self.resolveTarballUrl(dep_spec.install_name, dep_spec.constraint, depth, depth == 0, null);
+    }
     const constraint = try Constraint.parse(dep_spec.constraint);
     const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
 
