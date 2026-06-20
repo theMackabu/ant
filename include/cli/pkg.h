@@ -13,8 +13,6 @@ int pkg_cmd_remove(int argc, char **argv);
 int pkg_cmd_trust(int argc, char **argv);
 int pkg_cmd_run(int argc, char **argv);
 int pkg_cmd_exec(int argc, char **argv);
-int pkg_cmd_login(int argc, char **argv);
-int pkg_cmd_publish(int argc, char **argv);
 int pkg_cmd_config(int argc, char **argv);
 int pkg_cmd_why(int argc, char **argv);
 int pkg_cmd_info(int argc, char **argv);

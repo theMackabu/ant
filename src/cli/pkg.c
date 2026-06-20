@@ -9,7 +9,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
-#include <sys/wait.h>
 #include <argtable3.h>
 #include <yyjson.h>
 
@@ -1683,79 +1682,6 @@ int pkg_cmd_exec(int argc, char **argv) {
   else fprintf(stderr, "Error: failed to execute '%s': %s\n", bin_path, strerror(exec_errno));
 
   return EXIT_FAILURE;
-}
-
-static int run_external(char *const argv[]) {
-  pid_t pid = fork();
-  if (pid < 0) {
-    fprintf(stderr, "Error: failed to start %s: %s\n", argv[0], strerror(errno));
-    return EXIT_FAILURE;
-  }
-  if (pid == 0) {
-    execvp(argv[0], argv);
-    fprintf(stderr, "Error: failed to execute %s: %s\n", argv[0], strerror(errno));
-    _exit(127);
-  }
-
-  int status = 0;
-  if (waitpid(pid, &status, 0) < 0) {
-    fprintf(stderr, "Error: failed waiting for %s: %s\n", argv[0], strerror(errno));
-    return EXIT_FAILURE;
-  }
-  if (WIFEXITED(status)) return WEXITSTATUS(status);
-  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-  return EXIT_FAILURE;
-}
-
-int pkg_cmd_login(int argc, char **argv) {
-  struct arg_lit *help = arg_lit0("h", "help", "display help");
-  struct arg_end *end = arg_end(5);
-  void *argtable[] = { help, end };
-  int nerrors = arg_parse(argc, argv, argtable);
-
-  int exitcode = EXIT_SUCCESS;
-  if (help->count > 0) {
-    printf("Usage: ant login\n\n");
-    printf("Authenticate this device with ants.land.\n");
-  } else if (nerrors > 0) {
-    arg_print_errors(stdout, end, "ant login");
-    exitcode = EXIT_FAILURE;
-  } else {
-    char *login_argv[] = { (char *)"npx", (char *)"antland", (char *)"login", NULL };
-    exitcode = run_external(login_argv);
-  }
-
-  arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
-  return exitcode;
-}
-
-int pkg_cmd_publish(int argc, char **argv) {
-  for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      printf("Usage: ant publish [npm publish options...]\n\n");
-      printf("Publish the current package to ants.land.\n");
-      return EXIT_SUCCESS;
-    }
-  }
-
-  int extra = argc > 1 ? argc - 1 : 0;
-  char **publish_argv = try_oom(sizeof(char *) * (size_t)(4 + extra + 1));
-  if (!publish_argv) {
-    fprintf(stderr, "Error: out of memory\n");
-    return EXIT_FAILURE;
-  }
-
-  int idx = 0;
-  publish_argv[idx++] = (char *)"npm";
-  publish_argv[idx++] = (char *)"publish";
-  publish_argv[idx++] = (char *)"--registry";
-  publish_argv[idx++] = (char *)"https://npm.ants.land";
-  for (int i = 1; i < argc; i++) publish_argv[idx++] = argv[i];
-  publish_argv[idx] = NULL;
-
-  int exitcode = run_external(publish_argv);
-  free(publish_argv);
-  return exitcode;
 }
 
 int pkg_cmd_config(int argc, char **argv) {

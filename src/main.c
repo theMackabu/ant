@@ -33,6 +33,7 @@
 #endif
 
 #include "cli/pkg.h"
+#include "cli/registry.h"
 #include "cli/misc.h"
 #include "cli/version.h"
 #include "sandbox/assets.h"
