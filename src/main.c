@@ -242,6 +242,7 @@ static bool is_valued_flag(const char *arg) {
   return 
     strcmp(arg, "-e") == 0 || 
     strcmp(arg, "--eval") == 0 || 
+    strcmp(arg, "--repl") == 0 ||
     strcmp(arg, "--localstorage-file") == 0;
 }
 
@@ -623,6 +624,7 @@ int main(int argc, char *argv[]) {
 
   #define ARG_ITEMS(X) \
     X(struct arg_str *, eval, arg_str0("e", "eval", "<script>", "evaluate script")) \
+    X(struct arg_str *, repl, arg_str0(NULL, "repl", "<script>", "start REPL after evaluating script")) \
     X(struct arg_lit *, print, arg_lit0("p", "print", "evaluate script and print result")) \
     X(struct arg_lit *, watch, arg_lit0("w", "watch", "restart process when entry file changes")) \
     X(struct arg_lit *, web, arg_lit0(NULL, "web", "enable web-compatible globals")) \
@@ -686,7 +688,7 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  if (!sandbox_daemon && eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
+  if (!sandbox_daemon && eval->count == 0 && repl->count == 0 && file->count > 0 && file->filename[0] != NULL) {
     const char *positional = file->filename[0];
     int first_pos_idx = find_argv_token_index(argc, argv, positional);
     
@@ -756,8 +758,14 @@ int main(int argc, char *argv[]) {
   }
   
   bool has_stdin = !isatty(STDIN_FILENO);
-  bool repl_mode = (file->count == 0 && eval->count == 0 && !has_stdin);
+  bool repl_mode = repl->count > 0 || (file->count == 0 && eval->count == 0 && !has_stdin);
   bool stdin_mode = (has_stdin && file->count == 0);
+
+  if (repl->count > 0 && (eval->count > 0 || file->count > 0)) {
+    fprintf(stderr, "Error: --repl cannot be combined with --eval or a script file.\n");
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
   
   if (watch->count > 0 && (eval->count > 0 || repl_mode || stdin_mode)) {
     crfprintf(stderr, msg.watch_module_error);
@@ -971,7 +979,7 @@ int main(int argc, char *argv[]) {
   }
   
   else if (repl_mode) {
-    ant_repl_run();
+    ant_repl_run(repl->count > 0 ? repl->sval[0] : NULL);
   }
   
   else if (stdin_mode) {

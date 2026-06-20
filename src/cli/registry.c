@@ -18,10 +18,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 #include <uv.h>
 #include <yyjson.h>
 #include <zlib.h>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 #define ANT_LAND_SITE_URL "https://ants.land"
 #define ANT_LAND_REGISTRY_URL "https://npm.ants.land"
@@ -104,6 +109,14 @@ static char *str_dup_range(const char *s, size_t len) {
 
 static char *str_dup(const char *s) {
   return s ? str_dup_range(s, strlen(s)) : NULL;
+}
+
+static int registry_lstat(const char *path, struct stat *st) {
+#ifdef _WIN32
+  return stat(path, st);
+#else
+  return lstat(path, st);
+#endif
 }
 
 static char *path_join2(const char *a, const char *b) {
@@ -306,17 +319,18 @@ fail:
 }
 
 static void open_browser(const char *url) {
+#ifdef _WIN32
+  (void)_spawnlp(_P_NOWAIT, "explorer.exe", "explorer.exe", url, (char *)NULL);
+#else
   pid_t pid = fork();
   if (pid != 0) return;
 #if defined(__APPLE__)
   execlp("open", "open", url, (char *)NULL);
-#elif defined(_WIN32)
-  (void)url;
-  _exit(0);
 #else
   execlp("xdg-open", "xdg-open", url, (char *)NULL);
 #endif
   _exit(127);
+#endif
 }
 
 static int save_npmrc_token(const char *host, const char *token) {
@@ -582,7 +596,7 @@ static int tar_append_file_header(byte_buf_t *tar, const char *path, const struc
 
 static int tar_append_file(byte_buf_t *tar, const char *full_path, const char *rel_path, size_t *file_count) {
   struct stat st;
-  if (lstat(full_path, &st) != 0) return -1;
+  if (registry_lstat(full_path, &st) != 0) return -1;
   if (!S_ISREG(st.st_mode)) return 0;
 
   char tar_path[PATH_MAX];
@@ -621,7 +635,7 @@ static int tar_walk(byte_buf_t *tar, const char *base, const char *rel, size_t *
   if (!full) return -1;
 
   struct stat st;
-  if (lstat(full, &st) != 0) {
+  if (registry_lstat(full, &st) != 0) {
     free(full);
     return -1;
   }

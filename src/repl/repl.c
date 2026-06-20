@@ -545,6 +545,7 @@ done:
 typedef enum {
   REPL_PRINT_INTERACTIVE,
   REPL_PRINT_LOAD,
+  REPL_PRINT_STARTUP,
 } repl_print_mode_t;
 
 static void repl_eval_chunk(
@@ -573,8 +574,10 @@ static void repl_eval_chunk(
     return;
   }
 
-  if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
-  else if (vtype(result) != T_UNDEF) printf("%s\n", js_str(js, result));
+  if (print_mode == REPL_PRINT_LOAD) {
+    if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
+    else if (vtype(result) != T_UNDEF) printf("%s\n", js_str(js, result));
+  }
 }
 
 static const char *repl_command_usage(const repl_command_t *cmd) {
@@ -850,14 +853,14 @@ static bool is_incomplete_input(const char *code, size_t len) {
   return incomplete;
 }
 
-void ant_repl_run() {
+void ant_repl_run(const char *startup_code) {
   ant_t *js = rt->js;
   ant_readline_install_signal_handler();
 
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
 
-  crprintf(
+  if (!startup_code) crprintf(
     "Welcome to <red+bold>Ant JavaScript</> v%s\n"
     "Type <cyan>.copy [code]</cyan> to copy, <cyan>.help</cyan> for more information.\n\n",
     ANT_VERSION
@@ -878,6 +881,12 @@ void ant_repl_run() {
 
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_", 1, JS_DESC_W | JS_DESC_C);
   js_set_descriptor(js, js_as_obj(js_glob(js)), "_error", 6, JS_DESC_W | JS_DESC_C);
+
+  if (startup_code) repl_eval_chunk(
+    js, &decl_registry,
+    startup_code, strlen(startup_code),
+    REPL_PRINT_STARTUP
+  );
 
   int prev_ctrl_c_count = 0;
   char *multiline_buf = NULL;
