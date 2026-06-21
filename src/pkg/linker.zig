@@ -4,7 +4,8 @@ const builtin = @import("builtin");
 const json = @import("json.zig");
 const debug = @import("debug.zig");
 
-const PARALLEL_LINK_THRESHOLD = 500;
+pub const DIR_CLONE_THRESHOLD = 16;
+const PARALLEL_LINK_THRESHOLD = DIR_CLONE_THRESHOLD;
 const LINK_THREAD_COUNT = 8;
 
 pub fn createSymlinkOrCopy(dir: std.Io.Dir, target: []const u8, link_name: []const u8) !void {
@@ -97,6 +98,7 @@ pub const PackageLink = struct {
   parent_path: ?[]const u8 = null,
   file_count: u32 = 0,
   has_bin: bool = true,
+  allow_dir_symlink: bool = false,
 };
 
 pub const Linker = struct {
@@ -163,13 +165,15 @@ pub const Linker = struct {
       try self.allocator.dupe(u8, pkg.name);
     defer self.allocator.free(install_path);
 
+    if (pkg.allow_dir_symlink and self.installedSymlinkMatches(node_modules, install_path, pkg.cache_path)) {
+      _ = self.stats.packages_skipped.fetchAdd(1, .release);
+      return;
+    }
+
     var source_dir = std.Io.Dir.cwd().openDir(io, pkg.cache_path, .{ .iterate = true }) catch {
       return error.PathNotFound;
     };
     defer source_dir.close(io);
-
-    const source_version = readPackageVersion(self.allocator, source_dir);
-    defer if (source_version) |v| self.allocator.free(v);
 
     var should_skip = false;
     var has_existing_install = false;
@@ -181,6 +185,9 @@ pub const Linker = struct {
         has_existing_install = true;
         var installed_dir = dir;
         defer installed_dir.close(io);
+
+        const source_version = readPackageVersion(self.allocator, source_dir);
+        defer if (source_version) |v| self.allocator.free(v);
 
         const installed_version = readPackageVersion(self.allocator, installed_dir);
         defer if (installed_version) |v| self.allocator.free(v);
@@ -196,7 +203,25 @@ pub const Linker = struct {
     }
 
     if (has_existing_install and has_existing_package) {
-      node_modules.deleteTree(io, install_path) catch return error.IoError;
+      self.deleteInstalledPath(node_modules, install_path) catch return error.IoError;
+    }
+
+    const use_symlinked_cli = pkg.has_bin and self.packageSupportsSymlinkedCli(source_dir);
+    const use_dir_symlink = pkg.allow_dir_symlink and (!pkg.has_bin or use_symlinked_cli);
+
+    if (use_dir_symlink) {
+      try self.symlinkPackageDirectory(node_modules, pkg.cache_path, install_path);
+      if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, use_symlinked_cli);
+      _ = self.stats.packages_installed.fetchAdd(1, .release);
+      return;
+    }
+
+    const replace_existing_files = has_existing_install and !has_existing_package;
+    if (!replace_existing_files and pkg.file_count >= PARALLEL_LINK_THRESHOLD and
+        self.clonePackageDirectory(node_modules, pkg.cache_path, install_path, pkg.file_count)) {
+      if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, false);
+      _ = self.stats.packages_installed.fetchAdd(1, .release);
+      return;
     }
 
     node_modules.createDirPath(io, install_path) catch |err| switch (err) {
@@ -208,13 +233,128 @@ pub const Linker = struct {
     var dest_dir = node_modules.openDir(io, install_path, .{}) catch return error.IoError;
     defer dest_dir.close(io);
 
-    self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, pkg.name) catch |err| return err;
+    self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, replace_existing_files) catch |err| return err;
 
-    if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name);
+    if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, false);
     _ = self.stats.packages_installed.fetchAdd(1, .release);
   }
 
-  fn linkBinaries(self: *Linker, pkg_name: []const u8) !void {
+  fn deleteInstalledPath(_: *Linker, node_modules: std.Io.Dir, install_path: []const u8) !void {
+    node_modules.deleteTree(io, install_path) catch |tree_err| {
+      node_modules.deleteFile(io, install_path) catch |file_err| {
+        if (tree_err == error.FileNotFound or file_err == error.FileNotFound) return;
+        return error.IoError;
+      };
+    };
+  }
+
+  fn symlinkPackageDirectory(self: *Linker, node_modules: std.Io.Dir, cache_path: []const u8, install_path: []const u8) !void {
+    if (std.fs.path.dirname(install_path)) |parent| {
+      node_modules.createDirPath(io, parent) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return error.IoError,
+      };
+    }
+
+    node_modules.deleteFile(io, install_path) catch {};
+    node_modules.symLink(io, cache_path, install_path, .{}) catch return error.IoError;
+    _ = self.stats.files_linked.fetchAdd(1, .release);
+    _ = self.stats.dirs_created.fetchAdd(1, .release);
+  }
+
+  fn clonePackageDirectory(self: *Linker, node_modules: std.Io.Dir, cache_path: []const u8, install_path: []const u8, file_count: u32) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+
+    if (std.fs.path.dirname(install_path)) |parent| {
+      node_modules.createDirPath(io, parent) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return false,
+      };
+    }
+
+    const dest_path = std.fmt.allocPrintSentinel(self.allocator, "{s}/{s}", .{ self.node_modules_path, install_path }, 0) catch return false;
+    defer self.allocator.free(dest_path);
+    const source_path = self.allocator.dupeZ(u8, cache_path) catch return false;
+    defer self.allocator.free(source_path);
+
+    const copyfile_fn = struct {
+      extern "c" fn copyfile([*:0]const u8, [*:0]const u8, ?*anyopaque, u32) c_int;
+    }.copyfile;
+
+    const COPYFILE_ACL: u32 = 1 << 0;
+    const COPYFILE_STAT: u32 = 1 << 1;
+    const COPYFILE_XATTR: u32 = 1 << 2;
+    const COPYFILE_DATA: u32 = 1 << 3;
+    const COPYFILE_ALL: u32 = COPYFILE_ACL | COPYFILE_STAT | COPYFILE_XATTR | COPYFILE_DATA;
+    const COPYFILE_RECURSIVE: u32 = 1 << 15;
+    const COPYFILE_CLONE: u32 = 1 << 24;
+
+    if (copyfile_fn(source_path.ptr, dest_path.ptr, null, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE) != 0) {
+      node_modules.deleteTree(io, install_path) catch {};
+      return false;
+    }
+
+    _ = self.stats.files_cloned.fetchAdd(file_count, .release);
+    _ = self.stats.dirs_created.fetchAdd(1, .release);
+    return true;
+  }
+
+  fn installedSymlinkMatches(_: *Linker, node_modules: std.Io.Dir, install_path: []const u8, cache_path: []const u8) bool {
+    var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const target_len = node_modules.readLink(io, install_path, &link_buf) catch return false;
+    const target = link_buf[0..target_len];
+    if (!std.mem.eql(u8, target, cache_path)) return false;
+
+    std.Io.Dir.cwd().access(io, cache_path, .{}) catch return false;
+    return true;
+  }
+
+  fn packageSupportsSymlinkedCli(self: *Linker, dir: std.Io.Dir) bool {
+    const content = dir.readFileAlloc(io, "package.json", self.allocator, .limited(1024 * 1024)) catch return false;
+    defer self.allocator.free(content);
+
+    var doc = json.JsonDoc.parse(content) catch return false;
+    defer doc.deinit();
+
+    const root_val = doc.root();
+    if (root_val.getString("main") != null or
+        root_val.getString("module") != null or
+        root_val.getString("exports") != null or
+        root_val.getObject("exports") != null) return false;
+
+    if (root_val.getObject("bin")) |bin_obj| {
+      var iter = bin_obj.objectIterator() orelse return false;
+      defer iter.deinit();
+      var count: u32 = 0;
+      while (iter.next()) |entry| {
+        const bin_path = entry.value.asString() orelse return false;
+        if (!self.binPathIsNodeScript(dir, bin_path)) return false;
+        count += 1;
+      }
+      return count > 0;
+    }
+
+    if (root_val.getString("bin")) |bin_path| {
+      return self.binPathIsNodeScript(dir, bin_path);
+    }
+    return false;
+  }
+
+  fn binPathIsNodeScript(self: *Linker, dir: std.Io.Dir, bin_path: []const u8) bool {
+    _ = self;
+    var normalized_path = bin_path;
+    if (std.mem.startsWith(u8, normalized_path, "./")) normalized_path = normalized_path[2..];
+    var file = dir.openFile(io, normalized_path, .{}) catch return false;
+    defer file.close(io);
+
+    var buf: [256]u8 = undefined;
+    const len = file.readPositionalAll(io, &buf, 0) catch return false;
+    const content = buf[0..len];
+    if (!std.mem.startsWith(u8, content, "#!")) return false;
+    return std.mem.indexOf(u8, content[0..@min(content.len, 128)], "node") != null;
+  }
+
+  fn linkBinaries(self: *Linker, pkg_name: []const u8, preserve_symlinks_main: bool) !void {
     const bin_dir = self.bin_dir orelse return;
     const node_modules = self.node_modules_dir orelse return;
 
@@ -233,14 +373,20 @@ pub const Linker = struct {
       var iter = bin_obj.objectIterator() orelse return;
       while (iter.next()) |entry| {
         const bin_path = entry.value.asString() orelse continue;
-        self.createBinSymlink(pkg_name, entry.key, bin_path, bin_dir) catch continue;
+        if (preserve_symlinks_main)
+          self.createBinWrapper(pkg_name, entry.key, bin_path, bin_dir) catch continue
+        else
+          self.createBinSymlink(pkg_name, entry.key, bin_path, bin_dir) catch continue;
       }
     } else if (root_val.getString("bin")) |bin_path| {
       const simple_name = if (std.mem.indexOf(u8, pkg_name, "/")) |slash|
         pkg_name[slash + 1 ..]
       else
         pkg_name;
-      self.createBinSymlink(pkg_name, simple_name, bin_path, bin_dir) catch {};
+      if (preserve_symlinks_main)
+        self.createBinWrapper(pkg_name, simple_name, bin_path, bin_dir) catch {}
+      else
+        self.createBinSymlink(pkg_name, simple_name, bin_path, bin_dir) catch {};
     }
   }
 
@@ -299,6 +445,28 @@ pub const Linker = struct {
     _ = self.stats.bins_linked.fetchAdd(1, .release);
   }
 
+  fn createBinWrapper(self: *Linker, pkg_name: []const u8, cmd_name: []const u8, bin_path: []const u8, bin_dir: std.Io.Dir) !void {
+    var normalized_path = bin_path;
+    if (std.mem.startsWith(u8, normalized_path, "./")) {
+      normalized_path = normalized_path[2..];
+    }
+
+    const target = try std.fmt.allocPrint(self.allocator, "../{s}/{s}", .{ pkg_name, normalized_path });
+    defer self.allocator.free(target);
+    const script = try std.fmt.allocPrint(self.allocator,
+      "#!/bin/sh\nbasedir=$(dirname \"$0\")\nexec node --preserve-symlinks-main \"$basedir/{s}\" \"$@\"\n",
+      .{target},
+    );
+    defer self.allocator.free(script);
+
+    bin_dir.deleteFile(io, cmd_name) catch {};
+    var file = try bin_dir.createFile(io, cmd_name, if (comptime builtin.os.tag == .windows) .{} else .{ .permissions = .executable_file });
+    defer file.close(io);
+    try file.writeStreamingAll(io, script);
+
+    _ = self.stats.bins_linked.fetchAdd(1, .release);
+  }
+
   const FileWorkItem = struct {
     source_path: []const u8,
     dest_path: []const u8,
@@ -306,18 +474,17 @@ pub const Linker = struct {
     link_target: ?[]const u8,
   };
 
-  fn linkDirectory(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir) !void {
-    try self.linkDirectorySequential(source, dest);
+  fn linkDirectory(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, replace_existing: bool) !void {
+    try self.linkDirectorySequential(source, dest, replace_existing);
   }
 
-  pub fn linkDirectoryWithHint(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, file_count: u32, name: []const u8) !void {
+  pub fn linkDirectoryWithHint(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, file_count: u32, replace_existing: bool) !void {
     if (file_count >= PARALLEL_LINK_THRESHOLD) {
-      debug.log("    parallel link: {s} ({d} files)", .{ name, file_count });
-      try self.linkDirectoryParallel(source, dest);
-    } else try self.linkDirectorySequential(source, dest);
+      try self.linkDirectoryParallel(source, dest, replace_existing);
+    } else try self.linkDirectorySequential(source, dest, replace_existing);
   }
 
-  fn linkDirectorySequential(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir) !void {
+  fn linkDirectorySequential(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, replace_existing: bool) !void {
     var iter = source.iterate();
     while (try iter.next(io)) |entry| {
       switch (entry.kind) {
@@ -334,9 +501,9 @@ pub const Linker = struct {
           var child_dest = dest.openDir(io, entry.name, .{}) catch continue;
           defer child_dest.close(io);
 
-          try self.linkDirectorySequential(child_source, child_dest);
+          try self.linkDirectorySequential(child_source, child_dest, replace_existing);
         },
-        .file => try self.linkFile(source, dest, entry.name),
+        .file => try self.linkFile(source, dest, entry.name, replace_existing),
         .sym_link => {
           var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
           const target_len = source.readLink(io, entry.name, &link_buf) catch continue;
@@ -353,9 +520,10 @@ pub const Linker = struct {
     items: []const FileWorkItem,
     source_base: std.Io.Dir,
     dest_base: std.Io.Dir,
+    replace_existing: bool,
   };
 
-  fn linkDirectoryParallel(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir) !void {
+  fn linkDirectoryParallel(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, replace_existing: bool) !void {
     var work_items = std.ArrayListUnmanaged(FileWorkItem).empty;
     defer {
       for (work_items.items) |item| {
@@ -386,6 +554,7 @@ pub const Linker = struct {
         .items = items_slice[offset..end],
         .source_base = source,
         .dest_base = dest,
+        .replace_existing = replace_existing,
       };
 
       threads[i] = std.Thread.spawn(.{}, processWorkItems, .{&contexts[i]}) catch |err| blk: {
@@ -418,7 +587,7 @@ pub const Linker = struct {
             ctx.dest_base;
           defer if (dst_dir_path.len > 0) dst_dir.close(io);
 
-          ctx.linker.linkFile(src_dir, dst_dir, filename) catch {};
+          ctx.linker.linkFile(src_dir, dst_dir, filename, ctx.replace_existing) catch {};
         },
         .sym_link => {
           if (item.link_target) |target| {
@@ -494,8 +663,8 @@ pub const Linker = struct {
     }
   }
 
-  fn linkFile(self: *Linker, source_dir: std.Io.Dir, dest_dir: std.Io.Dir, name: []const u8) !void {
-    dest_dir.deleteFile(io, name) catch {};
+  fn linkFile(self: *Linker, source_dir: std.Io.Dir, dest_dir: std.Io.Dir, name: []const u8, replace_existing: bool) !void {
+    if (replace_existing) dest_dir.deleteFile(io, name) catch {};
 
     if (comptime builtin.os.tag != .windows) {
       if (!self.cross_device.load(.acquire)) {

@@ -88,17 +88,7 @@ pub const CacheDB = struct {
     };
 
     try self.openDatabases();
-    self.autoPruneMetadata();
-
     return self;
-  }
-
-  fn autoPruneMetadata(self: *CacheDB) void {
-    var txn: ?*c.MDB_txn = null;
-    if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) return;
-    
-    self.pruneExpiredMetadata(txn.?);
-    _ = c.mdb_txn_commit(txn);
   }
 
   fn openDatabases(self: *CacheDB) !void {

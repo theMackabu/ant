@@ -771,6 +771,7 @@ pub const Resolver = struct {
 
     debug.log("pass 1: collecting constraints", .{});
     var pass1_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+    var trace = debug.StageTrace{};
     self.http.initiateTarballConnectionsAsync();
 
     const ConstraintInfo = struct {
@@ -1023,7 +1024,7 @@ pub const Resolver = struct {
       collect_level += 1;
     }
 
-    pass1_start = debug.timer("pass 1 complete", pass1_start);
+    pass1_start = trace.mark("resolver pass 1 collect metadata", pass1_start);
     debug.log("  collected constraints for {d} packages", .{all_constraints.count()});
     debug.log("computing optimal versions", .{});
 
@@ -1066,7 +1067,7 @@ pub const Resolver = struct {
       }
     }
 
-    pass1_start = debug.timer("optimal versions computed", pass1_start);
+    pass1_start = trace.mark("resolver optimal versions", pass1_start);
     debug.log("pass 2: resolving with optimal versions", .{});
 
     const WorkItem = struct {
@@ -1170,6 +1171,9 @@ pub const Resolver = struct {
       queue = next_queue;
       level += 1;
     }
+
+    _ = trace.mark("resolver pass 2 resolve graph", pass1_start);
+    trace.summary("resolver");
   }
 
   fn countSatisfied(_: *Resolver, _: *const PackageMetadata, version_info: *const VersionInfo, constraint_list: anytype) usize {

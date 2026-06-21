@@ -70,6 +70,8 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     git
     curl
     zigPkg
+  ] ++ lib.optionals stdenv.isLinux [
+    llvmPackages_21.lld
   ] ++ lib.optionals stdenv.isDarwin [ darwin.sigtool ];
 
   buildInputs = lib.optionals stdenv.isDarwin [ apple-sdk_15 ];
@@ -84,6 +86,9 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
     "-Dembed_example=disabled"
+  ] ++ lib.optionals stdenv.isLinux [
+    "-Dc_link_args=-fuse-ld=lld"
+    "-Dcpp_link_args=-fuse-ld=lld"
   ] ++ pgoFlags;
 
   NIX_ENFORCE_NO_NATIVE = false;

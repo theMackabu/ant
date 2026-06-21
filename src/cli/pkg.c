@@ -266,6 +266,7 @@ static bool choose_parallel_fallback_source(
   *used_fallback_out = false;
   if (count <= 0) return false;
 
+  pkg_set_trace_enabled(pkg_verbose);
   pkg_registry_choice_t choice = pkg_choose_registry_many(
     specs->specs,
     (uint32_t)count,
@@ -1071,10 +1072,7 @@ static int cmd_install(void) {
   print_install_header("install");
   
   progress_t progress;
-  
-  if (!pkg_verbose) {
-    progress_start(&progress, "🔍 Resolving [1/1]");
-  }
+  if (!pkg_verbose) progress_start(&progress, "🔍 Resolving [1/1]");
   
   pkg_cli_config_t config = pkg_config_load();
   struct stat st;
@@ -1090,11 +1088,10 @@ static int cmd_install(void) {
       return EXIT_FAILURE;
     }
 
-    if (choose_package_json_fallback_source("package.json", config, &install_source, &used_parallel_fallback)
-      && used_parallel_fallback && pkg_verbose) {
-      fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
-        C_YELLOW, C_RESET);
-    }
+    if (
+      choose_package_json_fallback_source("package.json", config, &install_source, &used_parallel_fallback) && 
+      used_parallel_fallback && pkg_verbose
+    ) fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n", C_YELLOW, C_RESET);
   }
 
   pkg_options_t opts = pkg_options_make(
@@ -1127,11 +1124,8 @@ static int cmd_install(void) {
     }
   }
   
-  if (!pkg_verbose) {
-    progress_stop(&progress);
-    
-  }
-
+  if (!pkg_verbose) progress_stop(&progress);
+  
   pkg_install_result_t result;
   if (pkg_get_install_result(ctx, &result) == PKG_OK) {
     if (result.packages_installed > 0) {

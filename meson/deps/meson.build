@@ -135,7 +135,10 @@ wirecall = dependency('wirecall', default_options: [
   'tests=disabled',
 ])
 
-utf8proc_base_dep = subproject('utf8proc').get_variable('utf8proc_dep')
+utf8proc_base_dep = subproject('utf8proc', default_options: [
+  'tests=disabled',
+]).get_variable('utf8proc_dep')
+
 utf8proc_dep = declare_dependency(
   dependencies: [utf8proc_base_dep],
   compile_args: get_option('default_library') == 'static' ? ['-DUTF8PROC_STATIC'] : [],

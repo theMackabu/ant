@@ -53,6 +53,8 @@ typedef struct {
 
 typedef struct pkg_context pkg_context_t;
 
+void pkg_set_trace_enabled(bool enabled);
+
 const char *pkg_error_string(const pkg_context_t *ctx);
 
 pkg_context_t *pkg_init(const pkg_options_t *options);
