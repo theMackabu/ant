@@ -27,6 +27,19 @@ let merged = Object.assign({}, { a: 1 }, { b: 2 });
 test('Object.assign a', merged.a, 1);
 test('Object.assign b', merged.b, 2);
 
+let assignGetterCalls = 0;
+const assignGetterSource = {};
+Object.defineProperty(assignGetterSource, 'Module', {
+  enumerable: true,
+  get() {
+    assignGetterCalls++;
+    return function fn() {};
+  }
+});
+const assignGetterTarget = Object.assign({}, assignGetterSource);
+test('Object.assign copies getter value', typeof assignGetterTarget.Module, 'function');
+test('Object.assign calls getter once', assignGetterCalls, 1);
+
 const ordered = {
   2: true,
   0: true,
@@ -130,6 +143,22 @@ test('destructuring default', y, 10);
 
 test('hasOwnProperty true', { a: 1 }.hasOwnProperty('a'), true);
 test('hasOwnProperty false', { a: 1 }.hasOwnProperty('b'), false);
+test('string primitive has own index', 'xy'.hasOwnProperty('0'), true);
+test('string primitive has own length', 'xy'.hasOwnProperty('length'), true);
+test('Object.hasOwn string primitive index', Object.hasOwn('xy', '1'), true);
+test('boxed string has own index', Object('xy').hasOwnProperty('0'), true);
+
+let stringIndexDesc = Object.getOwnPropertyDescriptor('xy', '0');
+test('string index descriptor value', stringIndexDesc.value, 'x');
+test('string index descriptor writable', stringIndexDesc.writable, false);
+test('string index descriptor enumerable', stringIndexDesc.enumerable, true);
+test('string index descriptor configurable', stringIndexDesc.configurable, false);
+
+let stringLengthDesc = Object.getOwnPropertyDescriptor(Object('xy'), 'length');
+test('string length descriptor value', stringLengthDesc.value, 2);
+test('string length descriptor enumerable', stringLengthDesc.enumerable, false);
+testDeep('Object.keys boxed string', Object.keys(Object('xy')), ['0', '1']);
+testDeep('Object.getOwnPropertyNames boxed string', Object.getOwnPropertyNames(Object('xy')), ['0', '1', 'length']);
 
 let frozen = Object.freeze({ a: 1 });
 test('Object.isFrozen', Object.isFrozen(frozen), true);
