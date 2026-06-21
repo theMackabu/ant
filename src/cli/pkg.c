@@ -194,8 +194,21 @@ typedef struct {
   bool explicit_source;
 } normalized_specs_t;
 
+typedef struct {
+  char **items;
+  int count;
+} package_json_specs_t;
+
 static void free_normalized_specs(normalized_specs_t specs) {
   if (specs.owns_specs) free((void *)specs.specs);
+}
+
+static void free_package_json_specs(package_json_specs_t *specs) {
+  if (!specs || !specs->items) return;
+  for (int i = 0; i < specs->count; i++) free(specs->items[i]);
+  free(specs->items);
+  specs->items = NULL;
+  specs->count = 0;
 }
 
 static bool normalize_package_specs(const char *const *in, int count, pkg_source_t default_source, normalized_specs_t *out) {
@@ -271,6 +284,149 @@ static bool choose_parallel_fallback_source(
   }
 
   return false;
+}
+
+static bool dependency_version_is_registry_range(const char *version) {
+  if (!version || !version[0]) return false;
+
+  const char *unsupported[] = {
+    "file:",
+    "link:",
+    "workspace:",
+    "git:",
+    "github:",
+    "http://",
+    "https://",
+  };
+  for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); i++) {
+    size_t len = strlen(unsupported[i]);
+    if (strncmp(version, unsupported[i], len) == 0) return false;
+  }
+  return true;
+}
+
+static bool package_spec_from_dependency(
+  const char *name,
+  const char *version,
+  char **spec_out
+) {
+  *spec_out = NULL;
+  if (!name || !name[0] || !dependency_version_is_registry_range(version)) return true;
+
+  const char *package_name = name;
+  size_t package_name_len = strlen(name);
+  const char *constraint = version;
+
+  if (strncmp(version, "npm:", 4) == 0) {
+    const char *alias = version + 4;
+    const char *at = NULL;
+    if (alias[0] == '@') {
+      at = strchr(alias + 1, '@');
+    } else at = strchr(alias, '@');
+
+    package_name = alias;
+    package_name_len = at ? (size_t)(at - alias) : strlen(alias);
+    constraint = at && at[1] ? at + 1 : "latest";
+    if (package_name_len == 0) return true;
+  }
+
+  size_t constraint_len = strlen(constraint);
+  char *spec = try_oom(package_name_len + 1 + constraint_len + 1);
+  if (!spec) return false;
+  memcpy(spec, package_name, package_name_len);
+  spec[package_name_len] = '@';
+  memcpy(spec + package_name_len + 1, constraint, constraint_len + 1);
+  *spec_out = spec;
+  return true;
+}
+
+static bool append_package_json_specs_from_section(yyjson_val *root, const char *section, package_json_specs_t *specs, int *cap) {
+  yyjson_val *deps = yyjson_obj_get(root, section);
+  if (!deps || !yyjson_is_obj(deps)) return true;
+
+  yyjson_val *key;
+  yyjson_val *val;
+  yyjson_obj_iter iter;
+  yyjson_obj_iter_init(deps, &iter);
+  while ((key = yyjson_obj_iter_next(&iter))) {
+    val = yyjson_obj_iter_get_val(key);
+    if (!yyjson_is_str(key) || !yyjson_is_str(val)) continue;
+
+    const char *name = yyjson_get_str(key);
+    const char *version = yyjson_get_str(val);
+    char *spec = NULL;
+    if (!package_spec_from_dependency(name, version, &spec)) return false;
+    if (!spec) continue;
+
+    if (specs->count == *cap) {
+      int next_cap = *cap == 0 ? 8 : *cap * 2;
+      char **next = realloc(specs->items, (size_t)next_cap * sizeof(*next));
+      if (!next) {
+        free(spec);
+        return false;
+      }
+      specs->items = next;
+      *cap = next_cap;
+    }
+
+    specs->items[specs->count++] = spec;
+  }
+
+  return true;
+}
+
+static bool collect_package_json_specs(const char *package_json_path, package_json_specs_t *specs) {
+  specs->items = NULL;
+  specs->count = 0;
+
+  yyjson_read_err err;
+  yyjson_doc *doc = yyjson_read_file(package_json_path, 0, NULL, &err);
+  if (!doc) return false;
+
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  if (!root || !yyjson_is_obj(root)) {
+    yyjson_doc_free(doc);
+    return false;
+  }
+
+  int cap = 0;
+  bool ok = append_package_json_specs_from_section(root, "dependencies", specs, &cap)
+    && append_package_json_specs_from_section(root, "devDependencies", specs, &cap);
+
+  yyjson_doc_free(doc);
+  if (!ok) free_package_json_specs(specs);
+  return ok;
+}
+
+static bool choose_package_json_fallback_source(
+  const char *package_json_path,
+  pkg_cli_config_t config,
+  pkg_source_t *source_out,
+  bool *used_fallback_out
+) {
+  *source_out = config.default_registry;
+  *used_fallback_out = false;
+
+  if (config.default_registry != PKG_SOURCE_LAND || config.missing_fallback != PKG_FALLBACK_NPM) {
+    return false;
+  }
+
+  package_json_specs_t specs;
+  if (!collect_package_json_specs(package_json_path, &specs)) return false;
+  if (specs.count == 0) {
+    free_package_json_specs(&specs);
+    return false;
+  }
+
+  normalized_specs_t normalized = {
+    .source = PKG_SOURCE_LAND,
+    .specs = (const char *const *)specs.items,
+    .owns_specs = false,
+    .explicit_source = false,
+  };
+  bool checked = choose_parallel_fallback_source(&normalized, specs.count, source_out, used_fallback_out);
+  free_package_json_specs(&specs);
+  return checked;
 }
 
 typedef enum {
@@ -921,28 +1077,39 @@ static int cmd_install(void) {
   }
   
   pkg_cli_config_t config = pkg_config_load();
+  struct stat st;
+  
+  bool needs_resolve = (stat("ant.lockb", &st) != 0);
+  pkg_source_t install_source = config.default_registry;
+  bool used_parallel_fallback = false;
+
+  if (needs_resolve) {
+    if (stat("package.json", &st) != 0) {
+      if (!pkg_verbose) { progress_stop(&progress);  }
+      fprintf(stderr, "Error: No package.json found\n");
+      return EXIT_FAILURE;
+    }
+
+    if (choose_package_json_fallback_source("package.json", config, &install_source, &used_parallel_fallback)
+      && used_parallel_fallback && pkg_verbose) {
+      fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
+        C_YELLOW, C_RESET);
+    }
+  }
+
   pkg_options_t opts = pkg_options_make(
-    config.default_registry,
+    install_source,
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
     return EXIT_FAILURE;
   }
-
-  struct stat st;
-  bool needs_resolve = (stat("ant.lockb", &st) != 0);
   
   if (needs_resolve) {
-    if (stat("package.json", &st) != 0) {
-      if (!pkg_verbose) { progress_stop(&progress);  }
-      fprintf(stderr, "Error: No package.json found\n");
-      pkg_free(ctx);
-      return EXIT_FAILURE;
-    }
-    
     pkg_error_t err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
     if (err != PKG_OK) {
       if (!pkg_verbose) { progress_stop(&progress);  }
@@ -1026,8 +1193,23 @@ static int cmd_update(void) {
   }
   
   pkg_cli_config_t config = pkg_config_load();
+  struct stat st;
+  if (stat("package.json", &st) != 0) {
+    if (!pkg_verbose) progress_stop(&progress);
+    fprintf(stderr, "Error: No package.json found\n");
+    return EXIT_FAILURE;
+  }
+
+  pkg_source_t update_source = config.default_registry;
+  bool used_parallel_fallback = false;
+  if (choose_package_json_fallback_source("package.json", config, &update_source, &used_parallel_fallback)
+    && used_parallel_fallback && pkg_verbose) {
+    fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
+      C_YELLOW, C_RESET);
+  }
+
   pkg_options_t opts = pkg_options_make(
-    config.default_registry,
+    update_source,
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
@@ -1035,14 +1217,6 @@ static int cmd_update(void) {
   if (!ctx) {
     if (!pkg_verbose) progress_stop(&progress);
     fprintf(stderr, "Error: Failed to initialize package manager\n");
-    return EXIT_FAILURE;
-  }
-
-  struct stat st;
-  if (stat("package.json", &st) != 0) {
-    if (!pkg_verbose) progress_stop(&progress);
-    fprintf(stderr, "Error: No package.json found\n");
-    pkg_free(ctx);
     return EXIT_FAILURE;
   }
 

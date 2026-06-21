@@ -2239,33 +2239,41 @@ export fn pkg_choose_registry_many(
   var primary_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(primary_registry)) catch return .unknown;
   defer primary_fetcher.deinit();
 
-  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
-  defer fallback_fetcher.deinit();
+  const names = arena_alloc.alloc([]const u8, count) catch return .unknown;
+  const constraints = arena_alloc.alloc([]const u8, count) catch return .unknown;
+  for (0..count) |i| {
+    const spec = parsePackageSpec(std.mem.span(package_specs[i]));
+    names[i] = spec.name;
+    constraints[i] = spec.constraint;
+  }
+
+  const primary_results = primary_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
 
   var primary_all_available = true;
   var primary_had_not_found = false;
   var primary_had_non_not_found_error = false;
-  var fallback_all_available = true;
 
-  for (0..count) |i| {
-    const spec = parsePackageSpec(std.mem.span(package_specs[i]));
-    const result = fetcher.Fetcher.fetchMetadataDual(primary_fetcher, fallback_fetcher, spec.name, arena_alloc) catch return .unknown;
-
-    const primary_available = metadataResultSatisfies(arena_alloc, &result.primary, spec.constraint);
-    const fallback_available = metadataResultSatisfies(arena_alloc, &result.fallback, spec.constraint);
-
+  for (primary_results, 0..) |*result, i| {
+    const primary_available = metadataResultSatisfies(arena_alloc, result, constraints[i]);
     if (!primary_available) {
       primary_all_available = false;
-      if (result.primary.status_code == 404) primary_had_not_found = true
+      if (result.status_code == 404) primary_had_not_found = true
       else primary_had_non_not_found_error = true;
     }
-
-    if (!fallback_available) fallback_all_available = false;
   }
 
   if (primary_all_available) return .primary;
-  if (primary_had_not_found and !primary_had_non_not_found_error and fallback_all_available) return .fallback;
-  return .unknown;
+  if (!primary_had_not_found or primary_had_non_not_found_error) return .unknown;
+
+  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
+  defer fallback_fetcher.deinit();
+
+  const fallback_results = fallback_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
+  for (fallback_results, 0..) |*result, i| {
+    if (!metadataResultSatisfies(arena_alloc, result, constraints[i])) return .unknown;
+  }
+
+  return .fallback;
 }
 
 export fn pkg_add_many(
