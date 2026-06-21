@@ -33,7 +33,7 @@ static ant_value_t builtin_createRequire_call(ant_t *js, ant_value_t *args, int 
     base_path = (const char *)(uintptr_t)(poff);
   }
 
-  ant_value_t ns = js_esm_import_sync_from(js, args[0], base_path);
+  ant_value_t ns = js_esm_import_sync_from_require(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
   if (vtype(ns) == T_OBJ) {
@@ -81,7 +81,7 @@ static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, i
     ? js_get(js, args[1], "paths") : js_mkundef();
 
   if (vtype(paths_val) != T_ARR) {
-    ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
+    ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], base_path);
     return resolve_strip_file_url(js, resolved);
   }
 
@@ -93,7 +93,7 @@ static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, i
     char *dir = js_getstr(js, p, NULL);
     if (!dir) continue;
     
-    ant_value_t resolved = js_esm_resolve_specifier(js, args[0], dir);
+    ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], dir);
     if (!is_err(resolved) && vtype(resolved) == T_STR)
       return resolve_strip_file_url(js, resolved);
   }
