@@ -76,6 +76,7 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
   mesonFlags = [
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
+    "-Dembed_example=disabled"
   ] ++ lib.optional pgoEnabled "-Dpgo=enabled";
 
   NIX_ENFORCE_NO_NATIVE = false;
