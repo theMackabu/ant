@@ -94,13 +94,14 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
 
   installPhase = ''
     runHook preInstall
-    install -Dm755 ant "$out/bin/ant"
-    ln -s ant          "$out/bin/antx"
+    install -Dm755 ant "$out/ant"
+    ln -s ant "$out/antx"
     runHook postInstall
   '';
 
   postFixup = lib.optionalString stdenv.isDarwin ''
-    codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/bin/ant"
+    strip -S -x "$out/ant"
+    codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/ant"
   '';
 
   doCheck = false;
