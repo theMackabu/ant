@@ -2056,7 +2056,7 @@ void init_process_module() {
   process_set_string(js, versions_obj, "v8", "14.1.146.11-node.25");
   process_set_string(js, versions_obj, "modules", "141");
   process_set_string(js, versions_obj, "napi", "10");
-  process_set_string(js, versions_obj, "wamr", "92f40918bbfad35546a1512b10bd25eaa31add4d");
+  process_set_string(js, versions_obj, "wamr", "26756a5c5846c262c9e5c89f3fc8e1e693ee2539");
   process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
   js_set(js, process_obj, "versions", versions_obj);
   

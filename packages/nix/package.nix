@@ -17,13 +17,12 @@
 , callPackage
 , gitRev ? "unknown"
 , enablePgo ? false
+, enableNativeTuning ? false
 }:
 
 let
   zigPkg = if zig_0_16 != null then zig_0_16 else zig;
 
-  cpuTuneFlag =
-    if stdenv.hostPlatform.isx86 then "-march=native" else "-mcpu=native";
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix { inherit gitRev; };
 
@@ -34,7 +33,6 @@ let
   };
 
   extraOptFlags = [
-    cpuTuneFlag
     "-Qunused-arguments"
     "-fvisibility=hidden"
     "-fvisibility-inlines-hidden"
@@ -86,12 +84,13 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
     "-Dembed_example=disabled"
+  ] ++ lib.optionals enableNativeTuning [
+    "-Dnative_tuning=enabled"
   ] ++ lib.optionals stdenv.isLinux [
     "-Dc_link_args=-fuse-ld=lld"
     "-Dcpp_link_args=-fuse-ld=lld"
   ] ++ pgoFlags;
 
-  NIX_ENFORCE_NO_NATIVE = false;
   env.NIX_CFLAGS_COMPILE = optArgs;
 
   preConfigure = ''
@@ -125,4 +124,6 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
     platforms = lib.platforms.unix;
     mainProgram = "ant";
   };
+} // lib.optionalAttrs enableNativeTuning {
+  NIX_ENFORCE_NO_NATIVE = false;
 })

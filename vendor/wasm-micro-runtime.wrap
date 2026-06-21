@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/bytecodealliance/wasm-micro-runtime.git
-revision = 92f40918bbfad35546a1512b10bd25eaa31add4d
+revision = 26756a5c5846c262c9e5c89f3fc8e1e693ee2539
 depth = 1
 patch_directory = wasm-micro-runtime
 diff_files = patches/wasm-micro-runtime-windows.patch, patches/wasm-micro-runtime-emscripten-imports.patch

@@ -12,8 +12,6 @@
 *.dll
 
 /build
-/meson/pgo/raw
-
 /traces
 /result
 /result-*

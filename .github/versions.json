@@ -72,7 +72,7 @@
       "deps": [],
       "static_link": false,
       "cmake_generator": null,
-      "extra_meson_args": null
+      "extra_meson_args": "-Dpgo=enabled"
     },
     "windows-x64": {
       "os_type": "windows",

@@ -4,6 +4,7 @@ option('static_link', type: 'boolean', value: false, description: 'statically li
 option('linker_map', type: 'boolean', value: false, description: 'emit a linker map for the ant binary')
 option('codesign', type: 'boolean', value: true, description: 'codesign the Ant binary on Darwin')
 option('embed_example', type: 'feature', value: 'auto', description: 'configure to build the libant embed example')
+option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'auto', description: 'use meson/pgo/profiles profile data for the current platform when available')
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')

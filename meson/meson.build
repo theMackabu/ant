@@ -6,6 +6,9 @@ message('  b_lto: ' + (get_option('b_lto') ? 'true' : 'false'))
 message('  strip: ' + (get_option('strip') ? 'true' : 'false'))
 message('  linker_map: ' + (get_option('linker_map') ? 'true' : 'false'))
 
+cc = meson.get_compiler('c')
+cpp = meson.get_compiler('cpp')
+
 if get_option('buildtype') != 'release'
   warning('Building in non-release mode. For best performance, use --buildtype=release')
 endif
@@ -35,16 +38,44 @@ if host_machine.system() == 'linux'
   add_project_link_arguments('-no-pie', language: ['c', 'cpp'])
 endif
 
+native_tuning = get_option('native_tuning')
+native_tuning_flag = ''
+if ['x86', 'x86_64'].contains(host_machine.cpu_family())
+  native_tuning_flag = '-march=native'
+else
+  native_tuning_flag = '-mcpu=native'
+endif
+native_tuning_supported = (
+  cc.has_argument(native_tuning_flag) and
+  cpp.has_argument(native_tuning_flag)
+)
+
+if native_tuning.enabled()
+  if not native_tuning_supported
+    error('native_tuning requested but compiler does not support ' + native_tuning_flag)
+  endif
+  add_project_arguments(native_tuning_flag, language: ['c', 'cpp'])
+  message('  native_tuning: enabled (' + native_tuning_flag + ')')
+elif native_tuning.auto() and native_tuning_supported and get_option('buildtype') == 'release'
+  add_project_arguments(native_tuning_flag, language: ['c', 'cpp'])
+  message('  native_tuning: auto enabled (' + native_tuning_flag + ')')
+else
+  message('  native_tuning: disabled')
+endif
+
 pgo = get_option('pgo')
 pgo_file = 'ant-' + host_machine.system() + '-' + host_machine.cpu_family() + '.profdata'
 pgo_profile = src_root / 'meson' / 'pgo' / 'profiles' / pgo_file
 pgo_profile_exists = fs.is_file(pgo_profile)
-pgo_c_id = meson.get_compiler('c').get_id()
-pgo_cpp_id = meson.get_compiler('cpp').get_id()
+
+pgo_c_id = cc.get_id()
+pgo_cpp_id = cpp.get_id()
+
 pgo_compiler_supported = (
   (pgo_c_id == 'clang' or pgo_c_id == 'appleclang' or pgo_c_id == 'apple-clang') and
   (pgo_cpp_id == 'clang' or pgo_cpp_id == 'appleclang' or pgo_cpp_id == 'apple-clang')
 )
+
 pgo_auto_compatible = get_option('buildtype') == 'release' and get_option('b_sanitize') == 'none'
 pgo_use = false
 

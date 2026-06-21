@@ -157,7 +157,9 @@ wamr_sources += files(
   'core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/blocking_op.c',
 )
 
-if host_machine.cpu_family() == 'aarch64'
+if wamr_platform == 'darwin'
+  wamr_sources += files('core/iwasm/common/arch/invokeNative_general.c')
+elif host_machine.cpu_family() == 'aarch64'
   wamr_sources += files(wamr_enable_simd ? 'core/iwasm/common/arch/invokeNative_aarch64_simd.s' : 'core/iwasm/common/arch/invokeNative_aarch64.s')
 elif host_machine.cpu_family() == 'x86_64'
   if wamr_platform == 'windows'
