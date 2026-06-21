@@ -86,16 +86,14 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   rm -rf "$BUILD_DIR"
   mkdir -p "$PROFILE_DIR"
   (cd "$ROOT" && meson subprojects download >/dev/null 2>&1 || true)
-  GEN_C_ARGS="$EXTRA_FLAGS -fprofile-generate=$RAW_DIR"
   meson setup "$BUILD_DIR" \
     --buildtype=release \
     -Dpgo=disabled \
+    "-Dpgo_generate_dir=$RAW_DIR" \
     -Db_lto=false \
     -Dstrip=false \
-    "-Dc_args=$GEN_C_ARGS" \
-    "-Dcpp_args=$GEN_C_ARGS" \
-    "-Dc_link_args=-fprofile-generate=$RAW_DIR" \
-    "-Dcpp_link_args=-fprofile-generate=$RAW_DIR"
+    "-Dc_args=$EXTRA_FLAGS" \
+    "-Dcpp_args=$EXTRA_FLAGS"
   meson compile -C "$BUILD_DIR"
 
   echo "==> [2/3] Training (writes profraw to $RAW_DIR)"
@@ -133,16 +131,13 @@ fi
 
 echo "==> [3/3] Final PGO build at $BUILD_DIR"
 rm -rf "$BUILD_DIR"
-USE_FLAGS="$EXTRA_FLAGS -fprofile-use=$PROFDATA -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
 meson setup "$BUILD_DIR" \
   --buildtype=release \
-  -Dpgo=disabled \
+  -Dpgo=enabled \
   -Db_lto=true \
   -Db_lto_mode=default \
-  "-Dc_args=$USE_FLAGS" \
-  "-Dcpp_args=$USE_FLAGS" \
-  "-Dc_link_args=-fprofile-use=$PROFDATA" \
-  "-Dcpp_link_args=-fprofile-use=$PROFDATA"
+  "-Dc_args=$EXTRA_FLAGS" \
+  "-Dcpp_args=$EXTRA_FLAGS"
 meson compile -C "$BUILD_DIR"
 
 echo

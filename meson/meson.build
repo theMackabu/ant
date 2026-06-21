@@ -64,6 +64,7 @@ else
 endif
 
 pgo = get_option('pgo')
+pgo_generate_dir = get_option('pgo_generate_dir')
 pgo_file = 'ant-' + host_machine.system() + '-' + host_machine.cpu_family() + '.profdata'
 pgo_profile = src_root / 'meson' / 'pgo' / 'profiles' / pgo_file
 pgo_profile_exists = fs.is_file(pgo_profile)
@@ -79,7 +80,18 @@ pgo_compiler_supported = (
 pgo_auto_compatible = get_option('buildtype') == 'release' and get_option('b_sanitize') == 'none'
 pgo_use = false
 
-if pgo.enabled()
+if pgo_generate_dir != ''
+  if not pgo.disabled()
+    error('pgo_generate_dir requires -Dpgo=disabled; cannot generate and use PGO in the same build')
+  endif
+  if not pgo_compiler_supported
+    error('pgo_generate_dir requires Clang/Apple Clang, found c=' + pgo_c_id + ', cpp=' + pgo_cpp_id)
+  endif
+  pgo_generate_args = ['-fprofile-generate=' + pgo_generate_dir]
+  add_project_arguments(pgo_generate_args, language: ['c', 'cpp'])
+  add_project_link_arguments(pgo_generate_args, language: ['c', 'cpp'])
+  message('  pgo: generate (' + pgo_generate_dir + ')')
+elif pgo.enabled()
   if not pgo_profile_exists
     error('PGO profile requested but not found: ' + pgo_profile)
   endif

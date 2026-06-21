@@ -6,6 +6,7 @@ option('codesign', type: 'boolean', value: true, description: 'codesign the Ant 
 option('embed_example', type: 'feature', value: 'auto', description: 'configure to build the libant embed example')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'auto', description: 'use meson/pgo/profiles profile data for the current platform when available')
+option('pgo_generate_dir', type: 'string', value: '', description: 'emit LLVM PGO raw profiles for Ant project targets into this directory')
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
