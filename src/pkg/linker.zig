@@ -234,6 +234,7 @@ pub const Linker = struct {
     defer dest_dir.close(io);
 
     self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, replace_existing_files) catch |err| return err;
+    if (!installedFileCountMatches(dest_dir, pkg.file_count)) return error.IoError;
 
     if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, false);
     _ = self.stats.packages_installed.fetchAdd(1, .release);
@@ -711,7 +712,7 @@ pub const Linker = struct {
 
     const result = std.c.linkat(source_dir.handle, source_z, dest_dir.handle, dest_z, 0);
     if (result != 0) {
-      const errno = std.posix.errno(result);
+      const errno = std.c.errno(result);
       return switch (errno) {
         .XDEV => error.CrossDevice,
         .PERM, .ACCES => error.PermissionDenied,

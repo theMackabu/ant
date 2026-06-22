@@ -589,6 +589,7 @@ pub const PkgContext = struct {
 
       var success_count: usize = 0;
       var error_count: usize = 0;
+      var link_error_count: usize = 0;
       std.sort.heap(PkgExtractCtx, extract_contexts[0..valid_count], {}, struct {
         fn lessThan(_: void, a: PkgExtractCtx, b: PkgExtractCtx) bool {
           const depth_a = linkPathDepth(a.parent_path);
@@ -638,10 +639,14 @@ pub const PkgContext = struct {
           .parent_path = ctx.parent_path,
           .file_count = stats.files,
           .has_bin = ctx.has_bin,
-        }) catch {};
+        }) catch |err| {
+          link_error_count += 1;
+          debug.log("  link error: {s}: {s}", .{ ctx.pkg_name, @errorName(err) });
+        };
       }
       stage_start = trace.mark("cache insert + link misses", stage_start);
       debug.log("  fetched: {d} success, {d} errors", .{ success_count, error_count });
+      if (link_error_count > 0) return error.IoError;
     }
 
     db.sync();
@@ -1405,7 +1410,10 @@ fn installToolPackageNoLifecycle(
       .parent_path = ectx.parent_path,
       .file_count = stats.files,
       .has_bin = ectx.has_bin,
-    }) catch continue;
+    }) catch |err| {
+      debug.log("  link error: {s}: {s}", .{ ectx.pkg_name, @errorName(err) });
+      return err;
+    };
   }
 
   var resolved_iter = res.resolved.valueIterator();
@@ -1575,10 +1583,15 @@ export fn pkg_resolve_and_install(
   std.sort.heap(linker.PackageLink, cache_hit_jobs.items, {}, packageLinkLessThanParentFirst);
 
   var linked_count: usize = 0;
+  var link_error_count: usize = 0;
   for (cache_hit_jobs.items, 0..) |job, i| {
     const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
     c.reportProgress(.linking, @intCast(i), @intCast(cache_hit_jobs.items.len), msg);
-    pkg_linker.linkPackage(job) catch continue;
+    pkg_linker.linkPackage(job) catch |err| {
+      link_error_count += 1;
+      debug.log("  link error: {s}: {s}", .{ job.name, @errorName(err) });
+      continue;
+    };
     linked_count += 1;
   }
 
@@ -1668,6 +1681,7 @@ export fn pkg_resolve_and_install(
   }.lessThan);
 
   var slow_link_count = std.atomic.Value(u32).init(0);
+  var download_link_error_count = std.atomic.Value(u32).init(0);
   var max_link_ms = std.atomic.Value(u64).init(0);
   var slow_link_names = std.ArrayListUnmanaged([]const u8).empty;
   defer slow_link_names.deinit(c.allocator);
@@ -1696,7 +1710,7 @@ export fn pkg_resolve_and_install(
         if (start_idx >= end_idx) break;
 
         threads[t] = std.Thread.spawn(.{}, struct {
-          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Io.Mutex, alloc: std.mem.Allocator) void {
+          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), link_errors: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Io.Mutex, alloc: std.mem.Allocator) void {
             for (jobs) |job_with_size| {
               const job = job_with_size.job;
               const current = counter.fetchAdd(1, .monotonic) + 1;
@@ -1705,7 +1719,11 @@ export fn pkg_resolve_and_install(
               msg_buf[msg_len.len] = 0;
               pkg_ctx.reportProgress(.linking, current, total, msg_buf[0..msg_len.len :0]);
               const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
-              lnk.linkPackage(job) catch {};
+              lnk.linkPackage(job) catch |err| {
+                _ = link_errors.fetchAdd(1, .monotonic);
+                debug.log("  link error: {s}: {s}", .{ job.name, @errorName(err) });
+                continue;
+              };
               const delta = std.Io.Timestamp.now(io, .boot).toNanoseconds() - start;
               const elapsed_ms: u64 = if (delta < 0) 0 else @intCast(@as(u128, @intCast(delta)) / 1_000_000);
               if (elapsed_ms > 100) {
@@ -1723,7 +1741,7 @@ export fn pkg_resolve_and_install(
               }
             }
           }
-        }.work, .{ &pkg_linker, depth_jobs[start_idx..end_idx], c, total_jobs, &link_counter, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
+        }.work, .{ &pkg_linker, depth_jobs[start_idx..end_idx], c, total_jobs, &link_counter, &download_link_error_count, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
       }
 
       for (&threads) |*t| {
@@ -1736,7 +1754,11 @@ export fn pkg_resolve_and_install(
         const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
         c.reportProgress(.linking, current, total_jobs, msg);
         const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
-        pkg_linker.linkPackage(job) catch {};
+        pkg_linker.linkPackage(job) catch |err| {
+          _ = download_link_error_count.fetchAdd(1, .monotonic);
+          debug.log("  link error: {s}: {s}", .{ job.name, @errorName(err) });
+          continue;
+        };
         const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(u64, @intCast(start))) / 1_000_000);
         if (elapsed_ms > 100 and c.options.verbose) {
           debug.log("  link slow: {s} {d}ms", .{ job.name, elapsed_ms });
@@ -1759,6 +1781,14 @@ export fn pkg_resolve_and_install(
   
   debug.log("  downloaded: {d} success, {d} errors", .{ success_count, error_count });
   for (interleaved.extract_contexts.items) |ext_ctx| ext_ctx.ext.deinit();
+  link_error_count += download_link_error_count.load(.monotonic);
+  if (link_error_count > 0) {
+    c.setErrorFmt("Failed to link {d} package{s}", .{
+      link_error_count,
+      if (link_error_count == 1) "" else "s",
+    });
+    return .io_error;
+  }
 
   db.sync();
   _ = trace.mark("cache sync", stage_start);
