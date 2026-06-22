@@ -13,6 +13,17 @@ const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
+const missing = [
+  ['DISCORD_CLIENT_ID', CLIENT_ID],
+  ['DISCORD_GUILD_ID', GUILD_ID],
+  ['DISCORD_TOKEN', DISCORD_TOKEN]
+].filter(([, value]) => !value).map(([name]) => name);
+
+if (missing.length) {
+  console.error(`missing required environment variables: ${missing.join(', ')}`);
+  process.exit(1);
+}
+
 const handlers = Object.fromEntries([version, github, evalCmd, runCmd, uptime, ping, ai, sh].map(h => [h.builder.name, h]));
 const commands = Object.values(handlers).map(h => h.builder.toJSON());
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });

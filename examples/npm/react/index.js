@@ -1,4 +1,4 @@
-import { build } from 'esbuild';
+import { build } from 'esbuild-wasm';
 import { join } from 'node:path';
 
 const { outputFiles } = await build({

@@ -172,6 +172,33 @@ else
   nanos_cc=${NANOS_CC:-cc}
 fi
 
+nanos_cross_compile=${NANOS_CROSS_COMPILE:-}
+if [[ -z "$nanos_cross_compile" ]]; then
+  case "$nanos_arch" in
+    aarch64)
+      nanos_cross_candidates=(aarch64-elf- aarch64-none-elf- aarch64-linux-gnu-)
+      ;;
+    x86_64)
+      nanos_cross_candidates=(x86_64-elf- x86_64-none-elf- x86_64-linux-gnu-)
+      ;;
+    *)
+      nanos_cross_candidates=("${nanos_arch}-elf-" "${nanos_arch}-none-elf-" "${nanos_arch}-linux-gnu-")
+      ;;
+  esac
+
+  for prefix in "${nanos_cross_candidates[@]}"; do
+    if command -v "${prefix}ld" >/dev/null 2>&1; then
+      nanos_cross_compile=$prefix
+      break
+    fi
+  done
+fi
+
+if [[ -z "$nanos_cross_compile" ]]; then
+  echo "Nanos cross linker not found. Set NANOS_CROSS_COMPILE to the tool prefix, e.g. aarch64-none-elf-." >&2
+  exit 1
+fi
+
 mkdir -p "$nanos_cache_dir" "$binary_dir" "$out_dir"
 
 if [[ "$skip_docker" == true ]]; then
@@ -266,12 +293,16 @@ nanos_kernel="$nanos_src/output/platform/$nanos_platform/bin/kernel.img"
 nanos_kernel_stamp="$nanos_cache_dir/kernel-${cache_arch}.stamp"
 
 compiler_signature=$("$nanos_cc" --version 2>/dev/null | head -n 1 || printf '%s' "$nanos_cc")
+linker_signature=$("${nanos_cross_compile}ld" --version 2>/dev/null | head -n 1 || printf '%s' "${nanos_cross_compile}ld")
+
 kernel_signature=$(
   printf 'nanos=%s\n' "$nanos_revision"
   printf 'patches=%s\n' "$patch_signature"
   printf 'platform=%s\n' "$nanos_platform"
   printf 'arch=%s\n' "$nanos_arch"
   printf 'cc=%s\n' "$compiler_signature"
+  printf 'cross=%s\n' "$nanos_cross_compile"
+  printf 'ld=%s\n' "$linker_signature"
 )
 
 if [[ -f "$nanos_kernel" && -f "$nanos_kernel_stamp" ]] &&
@@ -281,7 +312,7 @@ elif [[ -f "$nanos_kernel" && ! -f "$nanos_kernel_stamp" ]]; then
   echo "==> reusing existing patched Nanos kernel for $nanos_platform/$nanos_arch"
   printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
 else
-  make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" kernel
+  make -C "$nanos_src" PLATFORM="$nanos_platform" ARCH="$nanos_arch" CC="$nanos_cc" CROSS_COMPILE="$nanos_cross_compile" kernel
   printf '%s\n' "$kernel_signature" > "$nanos_kernel_stamp"
 fi
 

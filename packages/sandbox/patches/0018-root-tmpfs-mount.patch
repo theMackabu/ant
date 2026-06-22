@@ -1,0 +1,170 @@
+diff --git a/klib/tmpfs.c b/klib/tmpfs.c
+index 6d0b7cf0..7531c345 100644
+--- a/klib/tmpfs.c
++++ b/klib/tmpfs.c
+@@ -246,7 +246,9 @@ filesystem tmpfs_new(void)
+     return INVALID_ADDRESS;
+ }
+ 
++#ifdef KLIB
+ int init(status_handler complete)
+ {
+     return KLIB_INIT_OK;
+ }
++#endif
+diff --git a/platform/pc/Makefile b/platform/pc/Makefile
+index 67f0bfdd..d067eb44 100644
+--- a/platform/pc/Makefile
++++ b/platform/pc/Makefile
+@@ -59,6 +59,7 @@ SRCS-kernel.elf= \
+ 	$(SRCDIR)/fs/fs.c \
+ 	$(SRCDIR)/fs/tfs.c \
+ 	$(SRCDIR)/fs/tlog.c \
++	$(ROOTDIR)/klib/tmpfs.c \
+ 	$(SRCDIR)/unix/aio.c \
+ 	$(SRCDIR)/unix/blockq.c \
+ 	$(SRCDIR)/unix/coredump.c \
+@@ -173,6 +174,7 @@ SRCS-lwip= \
+ 
+ INCLUDES=\
+ 	-I$(SRCDIR) \
++	-I$(ROOTDIR)/klib \
+ 	-I$(ARCHDIR) \
+ 	-I$(SRCDIR)/gdb \
+ 	-I$(SRCDIR)/http \
+diff --git a/platform/virt/Makefile b/platform/virt/Makefile
+index fc870390..40c7a023 100644
+--- a/platform/virt/Makefile
++++ b/platform/virt/Makefile
+@@ -81,6 +81,7 @@ SRCS-kernel.elf= \
+ 	$(SRCDIR)/fs/fs.c \
+ 	$(SRCDIR)/fs/tfs.c \
+ 	$(SRCDIR)/fs/tlog.c \
++	$(ROOTDIR)/klib/tmpfs.c \
+ 	$(SRCDIR)/unix/aio.c \
+ 	$(SRCDIR)/unix/blockq.c \
+ 	$(SRCDIR)/unix/coredump.c \
+@@ -160,6 +161,7 @@ SRCS-lwip= \
+ 
+ INCLUDES=\
+ 	-I$(SRCDIR) \
++	-I$(ROOTDIR)/klib \
+ 	-I$(ARCHDIR) \
+ 	-I$(CURDIR) \
+ 	-I$(SRCDIR)/devicetree \
+diff --git a/src/kernel/storage.c b/src/kernel/storage.c
+index 1493a45f..60691ce1 100644
+--- a/src/kernel/storage.c
++++ b/src/kernel/storage.c
+@@ -2,6 +2,8 @@
+ #include <pagecache.h>
+ #include <storage.h>
+ #include <fs.h>
++#include <tmpfs.h>
++#include <errno.h>
+ 
+ int filesystem_mkdirpath(filesystem fs, tuple cwd, sstring fp,
+         boolean persistent);
+@@ -36,6 +37,7 @@ static struct {
+     struct spinlock lock;
+     u64 mount_generation;
+     vector mounts_watchers;
++    boolean tmpfs_mounted;
+ } storage;
+ 
+ #define storage_lock()      u64 _irqflags = spin_lock_irq(&storage.lock)
+@@ -43,6 +45,7 @@ static struct {
+ 
+ static void notify_mount_change_locked(void);
+ static void storage_apply_mountpoints_locked(void);
++static void storage_mount_tmpfs(void);
+ 
+ /* Called with mutex locked. */
+ static volume storage_get_volume(tuple root)
+@@ -285,12 +288,14 @@ void init_volumes(heap h)
+     storage.mount_generation = 0;
+     storage.mounts_watchers = allocate_vector(h, 1);
+     assert(storage.mounts_watchers != INVALID_ADDRESS);
++    storage.tmpfs_mounted = false;
+ }
+ 
+ void storage_set_root_fs(filesystem root_fs)
+ {
+     storage.root_fs = root_fs;
+     fs_set_path_helper(get_root_fs, storage_get_mountpoint);
++    storage_mount_tmpfs();
+     storage_lock();
+     storage_apply_mountpoints_locked();
+     storage_unlock();
+@@ -298,6 +303,71 @@ void storage_set_root_fs(filesystem root_fs)
+         storage_check_if_ready();
+ }
+ 
++static void storage_mount_tmpfs(void)
++{
++    if (!storage.root_fs || storage.tmpfs_mounted)
++        return;
++
++    filesystem root_fs = storage.root_fs;
++    int fss = filesystem_mkdirpath(root_fs, 0, ss("/tmp"), false);
++    if ((fss != 0) && (fss != -EEXIST)) {
++        msg_err("storage: failed to create /tmp mount point: %s", string_from_errno(-fss));
++        return;
++    }
++
++    tuple root = filesystem_getroot(root_fs);
++    tuple mount_dir_t;
++    filesystem lookup_fs = root_fs;
++    fss = filesystem_get_node(&lookup_fs, root_fs->get_inode(root_fs, root), ss("/tmp"),
++                              FS_NODE_FOLLOW, &mount_dir_t, 0, 0);
++    if (fss != 0) {
++        msg_err("storage: /tmp mount point not found: %s", string_from_errno(-fss));
++        return;
++    }
++
++    boolean valid_mount_dir = (lookup_fs == root_fs) && (mount_dir_t != root) && children(mount_dir_t);
++    inode mount_dir = lookup_fs->get_inode(lookup_fs, mount_dir_t);
++    filesystem_put_node(lookup_fs, mount_dir_t);
++    if (!valid_mount_dir) {
++        msg_err("storage: invalid /tmp mount point");
++        return;
++    }
++
++    volume v = allocate(storage.h, sizeof(*v));
++    if (v == INVALID_ADDRESS) {
++        msg_err("storage: failed to track /tmp tmpfs mount");
++        return;
++    }
++    zero(v, sizeof(*v));
++
++    filesystem tmp_fs = tmpfs_new();
++    if (tmp_fs == INVALID_ADDRESS) {
++        msg_err("storage: failed to create /tmp tmpfs");
++        deallocate(storage.h, v, sizeof(*v));
++        return;
++    }
++
++    fss = filesystem_mount(root_fs, mount_dir, tmp_fs);
++    if (fss != 0) {
++        msg_err("storage: failed to mount /tmp tmpfs: %s", string_from_errno(-fss));
++        filesystem_release(tmp_fs);
++        deallocate(storage.h, v, sizeof(*v));
++        return;
++    }
++
++    runtime_memcpy(v->label, "tmpfs", sizeof("tmpfs"));
++    v->label_len = sstring_from_cstring(v->label, VOLUME_LABEL_MAX_LEN).len;
++    v->attach_id = -1;
++    v->fs = tmp_fs;
++    v->mount_dir = mount_dir;
++
++    storage_lock();
++    list_push_back(&storage.volumes, &v->l);
++    storage.tmpfs_mounted = true;
++    notify_mount_change_locked();
++    storage_unlock();
++}
++
+ closure_func_basic(binding_handler, boolean, storage_set_mountpoints_each,
+                    value k, value path)
+ {
