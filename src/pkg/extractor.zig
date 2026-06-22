@@ -376,6 +376,8 @@ pub const Extractor = struct {
   current_file_mode: u32,
   files_extracted: u32,
   bytes_extracted: u64,
+  gzip_finished: bool,
+  archive_finished: bool,
 
   pub fn init(allocator: std.mem.Allocator, output_path: []const u8) !*Extractor {
     const extractor = try allocator.create(Extractor);
@@ -400,6 +402,8 @@ pub const Extractor = struct {
       .current_file_mode = 0o644,
       .files_extracted = 0,
       .bytes_extracted = 0,
+      .gzip_finished = false,
+      .archive_finished = false,
     };
 
     return extractor;
@@ -432,7 +436,9 @@ pub const Extractor = struct {
   }
 
   pub fn feedCompressed(self: *Extractor, data: []const u8) !void {
-    _ = try self.decompressor.decompress(data, handleDecompressed, self);
+    if (try self.decompressor.decompress(data, handleDecompressed, self)) {
+      self.gzip_finished = true;
+    }
   }
 
   fn handleDecompressed(data: []const u8, user_data: ?*anyopaque) !void {
@@ -449,7 +455,10 @@ pub const Extractor = struct {
         .need_more_data => return,
         .entry => |entry| try self.handleEntry(entry),
         .file_data => |d| try self.writeFileData(d),
-        .end_of_archive => return self.closeCurrentFile(),
+        .end_of_archive => {
+          self.archive_finished = true;
+          return self.closeCurrentFile();
+        },
         .err => |e| return e,
       }
     }
@@ -512,5 +521,9 @@ pub const Extractor = struct {
       .files = self.files_extracted,
       .bytes = self.bytes_extracted,
     };
+  }
+
+  pub fn isComplete(self: *const Extractor) bool {
+    return self.gzip_finished and self.archive_finished and self.files_extracted > 0;
   }
 };

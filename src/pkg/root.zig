@@ -562,8 +562,9 @@ pub const PkgContext = struct {
             }
           }.onData,
           struct {
-            fn onComplete(_: u16, user_data: ?*anyopaque) void {
+            fn onComplete(status: u16, user_data: ?*anyopaque) void {
               const ctx: *PkgExtractCtx = @ptrCast(@alignCast(user_data));
+              if (status != 200) ctx.has_error = true;
               ctx.completed = true;
             }
           }.onComplete,
@@ -605,7 +606,7 @@ pub const PkgContext = struct {
       for (extract_contexts[0..valid_count], 0..) |*ctx, i| {
         defer ctx.ext.deinit();
 
-        if (ctx.has_error) {
+        if (ctx.has_error or !ctx.completed or !ctx.ext.isComplete()) {
           error_count += 1;
           debug.log("  error: {s}", .{ctx.pkg_name});
           continue;
@@ -1314,8 +1315,9 @@ const InterleavedContext = struct {
         }
       }.onData,
       struct {
-        fn onComplete(_: u16, ud: ?*anyopaque) void {
+        fn onComplete(status: u16, ud: ?*anyopaque) void {
           const c: *InterleavedExtractCtx = @ptrCast(@alignCast(ud));
+          if (status != 200) c.has_error = true;
           c.completed = true;
 
           const completed = c.parent.tarballs_completed.fetchAdd(1, .monotonic) + 1;
@@ -1385,7 +1387,7 @@ fn installToolPackageNoLifecycle(
 
   for (interleaved.extract_contexts.items) |ectx| {
     defer ectx.ext.deinit();
-    if (ectx.has_error) continue;
+    if (ectx.has_error or !ectx.completed or !ectx.ext.isComplete()) continue;
 
     const stats = ectx.ext.stats();
     db.insert(&.{
@@ -1607,7 +1609,7 @@ export fn pkg_resolve_and_install(
   const nm_path = std.mem.span(node_modules_path);
 
   for (interleaved.extract_contexts.items) |ext_ctx| {
-    if (ext_ctx.has_error or !ext_ctx.completed) {
+    if (ext_ctx.has_error or !ext_ctx.completed or !ext_ctx.ext.isComplete()) {
       error_count += 1;
       debug.log("  error: {s}", .{ext_ctx.pkg_name}); continue;
     }
@@ -3840,7 +3842,7 @@ export fn pkg_exec_temp(
 
   for (interleaved.extract_contexts.items) |ectx| {
     defer ectx.ext.deinit();
-    if (ectx.has_error) continue;
+    if (ectx.has_error or !ectx.completed or !ectx.ext.isComplete()) continue;
 
     const stats = ectx.ext.stats();
     db.insert(&.{
