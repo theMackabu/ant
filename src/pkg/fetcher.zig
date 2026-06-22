@@ -74,6 +74,8 @@ const MAX_PENDING_REQUESTS = 20;
 const NUM_CONNECTIONS = 6;
 const NUM_META_CONNECTIONS = 3;
 const META_SLOW_LOG_MS: u64 = 250;
+const META_STALL_TIMEOUT_NS = 30 * 1_000_000_000;
+const META_PROGRESS_LOG_NS = 1 * 1_000_000_000;
 
 const Http2Client = struct {
   allocator: std.mem.Allocator,
@@ -1186,19 +1188,49 @@ pub const Fetcher = struct {
 
   fn flushMetaClients(self: *Fetcher) void {
     for (self.meta_clients) |maybe_client| {
-      if (maybe_client) |c| c.flush() catch {};
+      const c = maybe_client orelse continue;
+      c.flush() catch {};
     }
   }
 
-  fn metaRequestsComplete(self: *Fetcher) bool {
+  const MetaProgress = struct {
+    completed: usize = 0,
+    total: usize = 0,
+
+    fn done(self: MetaProgress) bool {
+      return self.completed == self.total;
+    }
+  };
+
+  fn metaProgress(self: *Fetcher) MetaProgress {
+    var progress = MetaProgress{};
     for (self.meta_clients) |maybe_client| {
-      if (maybe_client) |c| {
-        for (c.requests[0..c.request_count]) |*req| {
-          if (!req.done and !req.has_error) return false;
-        }
+      const c = maybe_client orelse continue;
+      progress.total += c.request_count;
+
+      for (c.requests[0..c.request_count]) |*req| {
+        if (req.done or req.has_error) progress.completed += 1;
       }
     }
-    return true;
+    return progress;
+  }
+
+  fn metaRequestsComplete(self: *Fetcher) bool {
+    return self.metaProgress().done();
+  }
+
+  fn failPendingMetaRequests(self: *Fetcher) void {
+    const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+    for (self.meta_clients) |maybe_client| {
+      const c = maybe_client orelse continue;
+      for (c.requests[0..c.request_count]) |*req| {
+        if (req.done or req.has_error) continue;
+        req.done = true;
+        req.has_error = true;
+        req.end_ns = now;
+        c.requests_done += 1;
+      }
+    }
   }
 
   fn decodeMetadataOwned(
@@ -1558,11 +1590,35 @@ pub const Fetcher = struct {
       var all_done = false;
       var loops: usize = 0;
       const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+      var last_progress_ns = run_start;
+      var last_report_ns = run_start;
+      var last_completed = self.metaProgress().completed;
 
       while (!all_done) {
-        _ = uv.uv_run(loop, uv.RUN_ONCE);
+        _ = uv.uv_run(loop, uv.RUN_NOWAIT);
+        self.flushMetaClients();
         loops += 1;
-        all_done = self.metaRequestsComplete();
+
+        const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+        var progress = self.metaProgress();
+        if (progress.completed != last_completed) {
+          last_completed = progress.completed;
+          last_progress_ns = now;
+        } else if (now - last_progress_ns > META_STALL_TIMEOUT_NS) {
+          debug.log("    h2: metadata stalled at {d}/{d} after {d}ms; failing pending requests", .{
+            progress.completed,
+            progress.total,
+            (now - run_start) / 1_000_000,
+          });
+          self.failPendingMetaRequests();
+          progress = self.metaProgress();
+        } else if (now - last_report_ns > META_PROGRESS_LOG_NS) {
+          debug.log("    h2: metadata progress {d}/{d} loops={d}", .{ progress.completed, progress.total, loops });
+          last_report_ns = now;
+        }
+
+        all_done = progress.done();
+        if (!all_done) _ = io.sleep(.fromNanoseconds(1 * 1_000_000), .boot) catch {};
       }
 
       const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
@@ -1794,13 +1850,37 @@ pub const Fetcher = struct {
       var all_done = false;
       var loops: usize = 0;
       const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+      var last_progress_ns = run_start;
+      var last_report_ns = run_start;
+      var last_completed = self.metaProgress().completed;
 
       while (!all_done) {
-        _ = uv.uv_run(loop, uv.RUN_ONCE);
+        _ = uv.uv_run(loop, uv.RUN_NOWAIT);
+        self.flushMetaClients();
         loops += 1;
         self.emitCompletedStreamingMetadataCallbacks(processed, allocator, &decompress_buf, callback, userdata);
 
-        all_done = self.metaRequestsComplete();
+        const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+        var progress = self.metaProgress();
+        if (progress.completed != last_completed) {
+          last_completed = progress.completed;
+          last_progress_ns = now;
+        } else if (now - last_progress_ns > META_STALL_TIMEOUT_NS) {
+          debug.log("    h2: metadata stalled at {d}/{d} after {d}ms; failing pending requests", .{
+            progress.completed,
+            progress.total,
+            (now - run_start) / 1_000_000,
+          });
+          self.failPendingMetaRequests();
+          self.emitCompletedStreamingMetadataCallbacks(processed, allocator, &decompress_buf, callback, userdata);
+          progress = self.metaProgress();
+        } else if (now - last_report_ns > META_PROGRESS_LOG_NS) {
+          debug.log("    h2: metadata progress {d}/{d} loops={d}", .{ progress.completed, progress.total, loops });
+          last_report_ns = now;
+        }
+
+        all_done = progress.done();
+        if (!all_done) _ = io.sleep(.fromNanoseconds(1 * 1_000_000), .boot) catch {};
       }
 
       const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
