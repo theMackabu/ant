@@ -1687,6 +1687,18 @@ export fn pkg_resolve_and_install(
   defer slow_link_names.deinit(c.allocator);
   var slow_link_lock = std.Io.Mutex.init;
 
+  var copy_link_mode = false;
+  for (link_jobs.items) |job_with_size| {
+    if (linker.Linker.pathsAreCrossDevice(job_with_size.job.cache_path, std.mem.span(node_modules_path))) {
+      copy_link_mode = true;
+      pkg_linker.enableCopyMode();
+      break;
+    }
+  }
+  if (copy_link_mode and c.options.verbose) {
+    debug.log("  linker: cache and node_modules are on different devices; using copy mode", .{});
+  }
+
   var depth_start: usize = 0;
   while (depth_start < link_jobs.items.len) {
     const depth = linkPathDepth(link_jobs.items[depth_start].job.parent_path);
@@ -1700,7 +1712,7 @@ export fn pkg_resolve_and_install(
       debug.log("  linking depth {d} ({d} items)", .{ depth, depth_jobs.len });
     }
 
-    if (num_threads > 1 and depth_jobs.len > 4) {
+    if (!copy_link_mode and num_threads > 1 and depth_jobs.len > 4) {
       var threads: [8]?std.Thread = .{null} ** 8;
       const jobs_per_thread = (depth_jobs.len + num_threads - 1) / num_threads;
 

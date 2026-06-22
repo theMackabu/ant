@@ -156,6 +156,21 @@ pub const Linker = struct {
     self.bin_dir = new_bin_dir;
   }
 
+  pub fn enableCopyMode(self: *Linker) void {
+    self.cross_device.store(true, .release);
+  }
+
+  pub fn pathsAreCrossDevice(source_path: []const u8, dest_path: []const u8) bool {
+    if (comptime builtin.os.tag != .linux) return false;
+
+    var source_dir = std.Io.Dir.cwd().openDir(io, source_path, .{}) catch return false;
+    defer source_dir.close(io);
+    var dest_dir = std.Io.Dir.cwd().openDir(io, dest_path, .{}) catch return false;
+    defer dest_dir.close(io);
+
+    return dirsAreCrossDevice(source_dir, dest_dir);
+  }
+
   pub fn linkPackage(self: *Linker, pkg: PackageLink) !void {
     const node_modules = self.node_modules_dir orelse return error.IoError;
 
@@ -174,6 +189,10 @@ pub const Linker = struct {
       return error.PathNotFound;
     };
     defer source_dir.close(io);
+
+    if (!self.cross_device.load(.acquire) and dirsAreCrossDevice(source_dir, node_modules)) {
+      self.enableCopyMode();
+    }
 
     var should_skip = false;
     var has_existing_install = false;
@@ -480,7 +499,7 @@ pub const Linker = struct {
   }
 
   pub fn linkDirectoryWithHint(self: *Linker, source: std.Io.Dir, dest: std.Io.Dir, file_count: u32, replace_existing: bool) !void {
-    if (file_count >= PARALLEL_LINK_THRESHOLD) {
+    if (!self.cross_device.load(.acquire) and file_count >= PARALLEL_LINK_THRESHOLD) {
       try self.linkDirectoryParallel(source, dest, replace_existing);
     } else try self.linkDirectorySequential(source, dest, replace_existing);
   }
@@ -715,10 +734,22 @@ pub const Linker = struct {
       const errno = std.c.errno(result);
       return switch (errno) {
         .XDEV => error.CrossDevice,
-        .PERM, .ACCES => error.PermissionDenied,
+        .PERM, .ACCES => error.IoError,
         else => error.IoError,
       };
     }
+  }
+
+  fn dirsAreCrossDevice(source_dir: std.Io.Dir, dest_dir: std.Io.Dir) bool {
+    if (comptime builtin.os.tag != .linux) return false;
+
+    var source_stat: std.os.linux.Statx = undefined;
+    var dest_stat: std.os.linux.Statx = undefined;
+    const flags = std.os.linux.AT.EMPTY_PATH | std.os.linux.AT.STATX_DONT_SYNC;
+    if (std.c.statx(source_dir.handle, "", flags, std.os.linux.STATX.BASIC_STATS, &source_stat) != 0) return false;
+    if (std.c.statx(dest_dir.handle, "", flags, std.os.linux.STATX.BASIC_STATS, &dest_stat) != 0) return false;
+
+    return source_stat.dev_major != dest_stat.dev_major or source_stat.dev_minor != dest_stat.dev_minor;
   }
 
   fn fclonefileat(src_fd: std.posix.fd_t, src_name: []const u8, dst_fd: std.posix.fd_t, dst_name: []const u8) !void {
