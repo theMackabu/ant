@@ -112,7 +112,7 @@ llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
 
   postFixup = lib.optionalString stdenv.isDarwin ''
     strip -S -x "$out/bin/ant"
-    codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/ant"
+    codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/bin/ant"
   '';
 
   doCheck = false;
