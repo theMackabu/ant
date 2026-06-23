@@ -268,10 +268,28 @@ pub const Linker = struct {
     var dest_dir = node_modules.openDir(io, install_path, .{ .iterate = true }) catch return error.IoError;
     defer dest_dir.close(io);
 
-    self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, replace_existing_files) catch |err| return err;
-    if (pkg.file_count != 0 and !installedFileCountMatches(dest_dir, pkg.file_count)) return error.IoError;
+    self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, replace_existing_files) catch |err| {
+      debug.log("  link directory failed: {s}: {s}", .{ pkg.name, @errorName(err) });
+      return err;
+    };
+    if (pkg.file_count != 0 and !installedFileCountMatches(dest_dir, pkg.file_count)) {
+      const actual_count = countFilesRecursive(dest_dir) catch 0;
+      const source_count = countFilesRecursive(source_dir) catch 0;
+      debug.log("  link verify failed: {s}: expected={d} actual={d} source={d}", .{
+        pkg.name,
+        pkg.file_count,
+        actual_count,
+        source_count,
+      });
+      return error.IoError;
+    }
 
-    if (pkg.parent_path == null and pkg.has_bin) try self.linkPackageBinaries(pkg.name, pkg.bins, false);
+    if (pkg.parent_path == null and pkg.has_bin) {
+      self.linkPackageBinaries(pkg.name, pkg.bins, false) catch |err| {
+        debug.log("  link binaries failed: {s}: {s}", .{ pkg.name, @errorName(err) });
+        return err;
+      };
+    }
     _ = self.stats.packages_installed.fetchAdd(1, .release);
   }
 

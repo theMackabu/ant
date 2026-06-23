@@ -478,12 +478,16 @@ pub const Extractor = struct {
     if (std.fs.path.dirname(entry.path)) |dir| {
       try self.output_dir.createDirPath(io, dir);
     }
+    const already_exists = blk: {
+      self.output_dir.access(io, entry.path, .{}) catch break :blk false;
+      break :blk true;
+    };
     self.current_file = try self.output_dir.createFile(io, entry.path, .{});
     const len = @min(entry.path.len, 256);
     @memcpy(self.current_file_path[0..len], entry.path[0..len]);
     self.current_file_path_len = len;
     self.current_file_mode = entry.mode;
-    self.files_extracted += 1;
+    if (!already_exists) self.files_extracted += 1;
   }
   
   inline fn createSymlink(self: *Extractor, entry: TarParser.Entry) !void {
