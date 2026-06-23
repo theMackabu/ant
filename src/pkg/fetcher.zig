@@ -70,6 +70,11 @@ const PendingRequest = struct {
   handler: ?StreamHandler,
 };
 
+const TarballClientSlot = struct {
+  client: *Http2Client,
+  idx: usize,
+};
+
 const MAX_PENDING_REQUESTS = 20;
 const NUM_CONNECTIONS = 6;
 const NUM_META_CONNECTIONS = 3;
@@ -669,6 +674,7 @@ pub const Fetcher = struct {
   meta_clients_initialized: bool,
   pending: std.ArrayListUnmanaged(PendingRequest),
   tarball_clients: [NUM_CONNECTIONS]?*Http2Client,
+  extra_tarball_clients: std.ArrayListUnmanaged(*Http2Client),
   tarball_clients_initialized: bool,
   tarball_contexts: std.ArrayListUnmanaged(*TarballCtx),
   tarball_round_robin: usize,
@@ -690,6 +696,7 @@ pub const Fetcher = struct {
       .meta_clients_initialized = false,
       .pending = .empty,
       .tarball_clients = [_]?*Http2Client{null} ** NUM_CONNECTIONS,
+      .extra_tarball_clients = .empty,
       .tarball_clients_initialized = false,
       .tarball_contexts = .empty,
       .tarball_round_robin = 0,
@@ -710,6 +717,8 @@ pub const Fetcher = struct {
     for (&self.tarball_clients) |*maybe_client| {
       if (maybe_client.*) |c| { c.deinit(); maybe_client.* = null; }
     }
+    for (self.extra_tarball_clients.items) |c| c.deinit();
+    self.extra_tarball_clients.deinit(self.allocator);
     for (self.tarball_contexts.items) |ctx| {
       self.allocator.free(ctx.url);
       self.allocator.destroy(ctx);
@@ -801,13 +810,33 @@ pub const Fetcher = struct {
     _ = debug.timer("fetcher: connection pool init", init_start);
   }
   
-  fn findAvailableClient(self: *Fetcher) ?struct { client: *Http2Client, idx: usize } {
+  fn findAvailableClient(self: *Fetcher) ?TarballClientSlot {
     var attempts: usize = 0;
     while (attempts < NUM_CONNECTIONS) : (attempts += 1) {
       const idx = (self.tarball_round_robin + attempts) % NUM_CONNECTIONS;
       if (self.tarball_clients[idx]) |client| { if (client.hasCapacity()) return .{ .client = client, .idx = idx }; }
     }
     return null;
+  }
+
+  fn clientHostMatches(client: *Http2Client, host: []const u8) bool {
+    return std.mem.eql(u8, client.host, host);
+  }
+
+  fn findAvailableClientForHost(self: *Fetcher, host: []const u8) !?TarballClientSlot {
+    if (std.mem.eql(u8, host, self.registry_host)) return self.findAvailableClient();
+
+    for (self.extra_tarball_clients.items, 0..) |client, i| {
+      if (clientHostMatches(client, host) and client.hasCapacity()) {
+        return .{ .client = client, .idx = NUM_CONNECTIONS + i };
+      }
+    }
+
+    const client = try Http2Client.init(self.allocator, host, true);
+    errdefer client.deinit();
+    try client.ensureConnected();
+    try self.extra_tarball_clients.append(self.allocator, client);
+    return .{ .client = client, .idx = NUM_CONNECTIONS + self.extra_tarball_clients.items.len - 1 };
   }
 
   pub fn initiateTarballConnectionsAsync(self: *Fetcher) void {
@@ -836,7 +865,7 @@ pub const Fetcher = struct {
     try self.ensureTarballClients();
     const parsed = try ParsedUrl.parse(url);
     
-    const available = self.findAvailableClient() orelse {
+    const available = (try self.findAvailableClientForHost(parsed.host)) orelse {
       try self.pending.append(self.allocator, .{
         .url = try self.allocator.dupe(u8, url),
         .handler = handler,
@@ -904,8 +933,23 @@ pub const Fetcher = struct {
   
   fn dispatchPending(self: *Fetcher) void {
     while (self.pending.items.len > 0) {
-      const available = self.findAvailableClient() orelse break;
       const req = self.pending.pop() orelse break;
+      const parsed = ParsedUrl.parse(req.url) catch {
+        if (req.handler) |handler| handler.on_error(FetchError.InvalidUrl, handler.user_data);
+        self.allocator.free(req.url);
+        continue;
+      };
+      const available = self.findAvailableClientForHost(parsed.host) catch {
+        if (req.handler) |handler| handler.on_error(FetchError.ConnectionFailed, handler.user_data);
+        self.allocator.free(req.url);
+        continue;
+      } orelse {
+        self.pending.append(self.allocator, req) catch {
+          if (req.handler) |handler| handler.on_error(FetchError.OutOfMemory, handler.user_data);
+          self.allocator.free(req.url);
+        };
+        break;
+      };
       
       const handler = req.handler orelse {
         self.allocator.free(req.url); continue;
@@ -995,85 +1039,9 @@ pub const Fetcher = struct {
       }
 
       while (self.pending.items.len > 0) {
-        var queued = false;
-        for (&self.tarball_clients, 0..) |maybe_client, conn_idx| {
-          if (maybe_client) |client| {
-            if (client.hasCapacity()) {
-              const maybe_req = self.pending.pop();
-              const req = maybe_req orelse break;
-              if (req.handler) |handler| {
-                const parsed = ParsedUrl.parse(req.url) catch {
-                  handler.on_error(FetchError.InvalidUrl, handler.user_data);
-                  self.allocator.free(req.url);
-                  continue;
-                };
-
-                const ctx = self.allocator.create(TarballCtx) catch {
-                  handler.on_error(FetchError.OutOfMemory, handler.user_data);
-                  self.allocator.free(req.url);
-                  continue;
-                };
-                ctx.* = .{
-                  .handler = handler,
-                  .done = false,
-                  .has_error = false,
-                  .url = req.url,
-                  .start_ns = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds()),
-                  .bytes = 0,
-                };
-                self.tarball_contexts.append(self.allocator, ctx) catch {
-                  self.allocator.destroy(ctx);
-                  self.allocator.free(req.url);
-                  continue;
-                };
-
-                client.getStream(
-                  parsed.path,
-                  struct {
-                    fn onData(data: []const u8, ud: ?*anyopaque) void {
-                      const c: *TarballCtx = @ptrCast(@alignCast(ud));
-                      c.bytes += data.len;
-                      c.handler.on_data(data, c.handler.user_data);
-                    }
-                  }.onData,
-                  struct {
-                    fn onComplete(status: u16, ud: ?*anyopaque) void {
-                      const c: *TarballCtx = @ptrCast(@alignCast(ud));
-                      c.handler.on_complete(status, c.handler.user_data);
-                      if (debug.enabled) {
-                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - c.start_ns) / 1_000_000);
-                        debug.log("    tarball: done {s} {d}ms {d} bytes status={d}", .{ c.url, elapsed_ms, c.bytes, status });
-                      }
-                      c.done = true;
-                    }
-                  }.onComplete,
-                  struct {
-                    fn onError(err: FetchError, ud: ?*anyopaque) void {
-                      const c: *TarballCtx = @ptrCast(@alignCast(ud));
-                      c.handler.on_error(err, c.handler.user_data);
-                      if (debug.enabled) {
-                        const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - c.start_ns) / 1_000_000);
-                        debug.log("    tarball: error {s} {d}ms {d} bytes", .{ c.url, elapsed_ms, c.bytes });
-                      }
-                      c.done = true;
-                      c.has_error = true;
-                    }
-                  }.onError,
-                  ctx,
-                ) catch {
-                  handler.on_error(FetchError.Http2Error, handler.user_data);
-                  ctx.done = true;
-                };
-                queued = true;
-                _ = conn_idx;
-              } else {
-                self.allocator.free(req.url);
-              }
-              break;
-            }
-          }
-        }
-        if (!queued) break;
+        const before = self.pending.items.len;
+        self.dispatchPending();
+        if (self.pending.items.len == before) break;
       }
 
       const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());

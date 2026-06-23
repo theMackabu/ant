@@ -8,6 +8,14 @@ const json = @import("json.zig");
 const debug = @import("debug.zig");
 const cache = @import("cache.zig");
 
+fn isAntsLandRegistry(registry_url: []const u8) bool {
+  var host = registry_url;
+  if (std.mem.startsWith(u8, host, "https://")) host = host["https://".len..];
+  if (std.mem.startsWith(u8, host, "http://")) host = host["http://".len..];
+  if (std.mem.endsWith(u8, host, "/")) host = host[0 .. host.len - 1];
+  return std.mem.eql(u8, host, "npm.ants.land");
+}
+
 pub const ResolveError = error{
   InvalidPackageJson,
   NetworkError,
@@ -905,6 +913,7 @@ pub const Resolver = struct {
   disabled_root_dependencies: std.ArrayListUnmanaged(ResolvedPackage.DisabledDep),
   registry_url: []const u8,
   metadata_cache: *std.StringHashMap(PackageMetadata),
+  npm_fallback_http: ?*fetcher.Fetcher,
   on_package_resolved: ?OnPackageResolvedFn,
   on_package_resolved_data: ?*anyopaque,
   lock_resolution_hash: u64,
@@ -930,6 +939,7 @@ pub const Resolver = struct {
       .disabled_root_dependencies = .empty,
       .registry_url = registry_url,
       .metadata_cache = metadata_cache,
+      .npm_fallback_http = null,
       .on_package_resolved = null,
       .on_package_resolved_data = null,
       .lock_resolution_hash = 0,
@@ -969,6 +979,7 @@ pub const Resolver = struct {
     }
     self.constraints.deinit();
     self.in_progress.deinit();
+    if (self.npm_fallback_http) |http| http.deinit();
     self.clearDisabledRootDependencies();
     self.disabled_root_dependencies.deinit(self.allocator);
   }
@@ -2227,11 +2238,46 @@ pub const Resolver = struct {
 
   fn fetchFromNetwork(self: *Resolver, name: []const u8) !PackageMetadata {
     debug.log("  metadata: {s} (fetch)", .{name});
-    const json_data = try self.http.fetchMetadata(name, self.allocator);
+    const json_data = self.http.fetchMetadata(name, self.allocator) catch |err| {
+      if (err == error.ResponseError) {
+        if (self.http.getLastHttpError()) |http_err| {
+          if (http_err.status == 404 and isAntsLandRegistry(self.registry_url)) {
+            debug.log("  metadata: {s} (npm fallback)", .{name});
+            const fallback = try self.ensureNpmFallbackFetcher();
+            return self.fetchFromNetworkWith(fallback, name, false);
+          }
+        }
+      }
+      return err;
+    };
     defer self.allocator.free(json_data);
 
     if (self.cache_db) |db| {
       db.insertMetadata(name, json_data) catch {};
+    }
+
+    const metadata = try PackageMetadata.parseFromJson(self.cache_allocator, json_data);
+    const cache_key = try self.cache_allocator.dupe(u8, name);
+
+    try self.metadata_cache.put(cache_key, metadata);
+    return self.metadata_cache.get(name).?;
+  }
+
+  fn ensureNpmFallbackFetcher(self: *Resolver) !*fetcher.Fetcher {
+    if (self.npm_fallback_http) |http| return http;
+    const http = try fetcher.Fetcher.init(self.cache_allocator, "registry.npmjs.org");
+    self.npm_fallback_http = http;
+    return http;
+  }
+
+  fn fetchFromNetworkWith(self: *Resolver, http: *fetcher.Fetcher, name: []const u8, write_disk_cache: bool) !PackageMetadata {
+    const json_data = try http.fetchMetadata(name, self.allocator);
+    defer self.allocator.free(json_data);
+
+    if (write_disk_cache) {
+      if (self.cache_db) |db| {
+        db.insertMetadata(name, json_data) catch {};
+      }
     }
 
     const metadata = try PackageMetadata.parseFromJson(self.cache_allocator, json_data);

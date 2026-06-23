@@ -3092,20 +3092,29 @@ export fn pkg_choose_registry_many(
   }
   var fallback_ok: u32 = 0;
   var fallback_miss: u32 = 0;
+  var fallback_covers_primary_misses = true;
   for (registry_results.fallback, 0..) |*result, i| {
     if (metadataResultSatisfies(arena_alloc, result, constraints[i])) {
       fallback_ok += 1;
     } else {
       fallback_miss += 1;
+      if (registry_results.primary[i].status_code == 404) {
+        fallback_covers_primary_misses = false;
+      }
     }
   }
   _ = trace.mark("registry fallback evaluate", stage_start);
   debug.trace("registry fallback result: ok={d} miss={d}", .{ fallback_ok, fallback_miss });
   trace.summary("registry choose");
 
-  if (fallback_miss > 0) {
+  if (!fallback_covers_primary_misses) {
     debug.trace("registry choose done: choice=unknown total={d}us", .{debug.elapsedUsSince(total_start)});
     return .unknown;
+  }
+  if (primary_ok > 0) {
+    storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .primary);
+    debug.trace("registry choose done: choice=primary source=mixed total={d}us", .{debug.elapsedUsSince(total_start)});
+    return .primary;
   }
   storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
   debug.trace("registry choose done: choice=fallback total={d}us", .{debug.elapsedUsSince(total_start)});
