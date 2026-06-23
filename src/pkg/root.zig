@@ -2760,27 +2760,57 @@ fn registryChoiceCacheHash(
   return hasher.final();
 }
 
+fn registryPrimaryMissCacheHash(primary_registry: []const u8, package_name: []const u8) u64 {
+  var hasher = std.hash.Wyhash.init(0);
+  hasher.update(primary_registry);
+  hasher.update(&[_]u8{0});
+  hasher.update(package_name);
+  return hasher.final();
+}
+
 fn registryChoiceCachePath(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
 ) ![]const u8 {
-  const cache_dir = try PkgContext.getDefaultCacheDir(allocator);
-  defer allocator.free(cache_dir);
+  const default_cache_dir = if (cache_dir_override == null)
+    try PkgContext.getDefaultCacheDir(allocator)
+  else
+    null;
+  defer if (default_cache_dir) |dir| allocator.free(dir);
+  const cache_dir = cache_dir_override orelse default_cache_dir.?;
   const hash = registryChoiceCacheHash(package_specs, count, primary_registry, fallback_registry);
   return std.fmt.allocPrint(allocator, "{s}/registry-choice/{x}.choice", .{ cache_dir, hash });
 }
 
+fn registryPrimaryMissCachePath(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) ![]const u8 {
+  const default_cache_dir = if (cache_dir_override == null)
+    try PkgContext.getDefaultCacheDir(allocator)
+  else
+    null;
+  defer if (default_cache_dir) |dir| allocator.free(dir);
+  const cache_dir = cache_dir_override orelse default_cache_dir.?;
+  const hash = registryPrimaryMissCacheHash(primary_registry, package_name);
+  return std.fmt.allocPrint(allocator, "{s}/registry-miss/{x}.miss", .{ cache_dir, hash });
+}
+
 fn lookupCachedRegistryChoice(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
 ) ?RegistryChoice {
-  const path = registryChoiceCachePath(allocator, package_specs, count, primary_registry, fallback_registry) catch return null;
+  const path = registryChoiceCachePath(allocator, cache_dir_override, package_specs, count, primary_registry, fallback_registry) catch return null;
   defer allocator.free(path);
 
   const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return null;
@@ -2794,15 +2824,35 @@ fn lookupCachedRegistryChoice(
   return registryChoiceFromByte(data[@sizeOf(i64)]);
 }
 
+fn lookupCachedRegistryPrimaryMiss(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) bool {
+  const path = registryPrimaryMissCachePath(allocator, cache_dir_override, primary_registry, package_name) catch return false;
+  defer allocator.free(path);
+
+  const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return false;
+  defer allocator.free(data);
+  if (data.len < @sizeOf(i64)) return false;
+
+  var cached_at: i64 = undefined;
+  @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
+  const now = std.Io.Timestamp.now(io, .real).toSeconds();
+  return now - cached_at <= 24 * 60 * 60;
+}
+
 fn storeRegistryChoice(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
   choice: RegistryChoice,
 ) void {
-  const path = registryChoiceCachePath(allocator, package_specs, count, primary_registry, fallback_registry) catch return;
+  const path = registryChoiceCachePath(allocator, cache_dir_override, package_specs, count, primary_registry, fallback_registry) catch return;
   defer allocator.free(path);
   if (std.fs.path.dirname(path)) |dir| {
     std.Io.Dir.cwd().createDirPath(io, dir) catch return;
@@ -2815,9 +2865,28 @@ fn storeRegistryChoice(
   std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = &value }) catch {};
 }
 
+fn storeRegistryPrimaryMiss(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) void {
+  const path = registryPrimaryMissCachePath(allocator, cache_dir_override, primary_registry, package_name) catch return;
+  defer allocator.free(path);
+  if (std.fs.path.dirname(path)) |dir| {
+    std.Io.Dir.cwd().createDirPath(io, dir) catch return;
+  }
+
+  var value: [@sizeOf(i64)]u8 = undefined;
+  const now: i64 = std.Io.Timestamp.now(io, .real).toSeconds();
+  @memcpy(value[0..@sizeOf(i64)], std.mem.asBytes(&now));
+  std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = &value }) catch {};
+}
+
 export fn pkg_choose_registry_many(
   package_specs: [*]const [*:0]const u8,
   count: u32,
+  cache_dir_override: ?[*:0]const u8,
   primary_registry: [*:0]const u8,
   fallback_registry: [*:0]const u8,
 ) RegistryChoice {
@@ -2828,13 +2897,14 @@ export fn pkg_choose_registry_many(
   var stage_start = total_start;
   const primary_registry_str = std.mem.span(primary_registry);
   const fallback_registry_str = std.mem.span(fallback_registry);
+  const registry_choice_cache_dir = if (cache_dir_override) |dir| std.mem.span(dir) else null;
   debug.trace("registry choose start: specs={d} primary={s} fallback={s}", .{
     count,
     primary_registry_str,
     fallback_registry_str,
   });
 
-  if (lookupCachedRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str)) |choice| {
+  if (lookupCachedRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str)) |choice| {
     _ = trace.mark("registry choice cache lookup", stage_start);
     trace.summary("registry choose");
     debug.trace("registry choose done: choice={s} source=cache total={d}us", .{
@@ -2853,6 +2923,10 @@ export fn pkg_choose_registry_many(
   defer primary_fetcher.deinit();
   stage_start = trace.mark("registry primary init", stage_start);
 
+  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
+  defer fallback_fetcher.deinit();
+  stage_start = trace.mark("registry fallback init", stage_start);
+
   const names = arena_alloc.alloc([]const u8, count) catch return .unknown;
   const constraints = arena_alloc.alloc([]const u8, count) catch return .unknown;
   for (0..count) |i| {
@@ -2862,8 +2936,48 @@ export fn pkg_choose_registry_many(
   }
   stage_start = trace.mark("registry spec parse", stage_start);
 
-  const primary_results = primary_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
-  stage_start = trace.mark("registry primary metadata", stage_start);
+  var primary_miss_cache_hit = true;
+  for (names) |name| {
+    if (!lookupCachedRegistryPrimaryMiss(global_allocator, registry_choice_cache_dir, primary_registry_str, name)) {
+      primary_miss_cache_hit = false;
+      break;
+    }
+  }
+
+  if (primary_miss_cache_hit) {
+    stage_start = trace.mark("registry primary miss cache lookup", stage_start);
+    debug.trace("registry primary miss cache hit: count={d}", .{count});
+
+    const fallback_results = fallback_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
+    stage_start = trace.mark("registry fallback metadata", stage_start);
+
+    var fallback_ok: u32 = 0;
+    var fallback_miss: u32 = 0;
+    for (fallback_results, 0..) |*result, i| {
+      if (metadataResultSatisfies(arena_alloc, result, constraints[i])) {
+        fallback_ok += 1;
+      } else {
+        fallback_miss += 1;
+      }
+    }
+
+    _ = trace.mark("registry fallback evaluate", stage_start);
+    debug.trace("registry fallback result: ok={d} miss={d}", .{ fallback_ok, fallback_miss });
+    trace.summary("registry choose");
+
+    if (fallback_miss > 0) {
+      debug.trace("registry choose done: choice=unknown source=primary-miss-cache total={d}us", .{debug.elapsedUsSince(total_start)});
+      return .unknown;
+    }
+
+    storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
+    debug.trace("registry choose done: choice=fallback source=primary-miss-cache total={d}us", .{debug.elapsedUsSince(total_start)});
+    return .fallback;
+  }
+  stage_start = trace.mark("registry primary miss cache lookup", stage_start);
+
+  const registry_results = fetcher.Fetcher.fetchMetadataDualBatch(primary_fetcher, fallback_fetcher, names, arena_alloc) catch return .unknown;
+  stage_start = trace.mark("registry metadata", stage_start);
 
   var primary_all_available = true;
   var primary_had_not_found = false;
@@ -2873,7 +2987,7 @@ export fn pkg_choose_registry_many(
   var primary_unsatisfied: u32 = 0;
   var primary_error: u32 = 0;
 
-  for (primary_results, 0..) |*result, i| {
+  for (registry_results.primary, 0..) |*result, i| {
     const primary_available = metadataResultSatisfies(arena_alloc, result, constraints[i]);
     if (primary_available) {
       primary_ok += 1;
@@ -2883,6 +2997,7 @@ export fn pkg_choose_registry_many(
     if (!primary_available) {
       primary_all_available = false;
       if (result.status_code == 404) {
+        storeRegistryPrimaryMiss(global_allocator, registry_choice_cache_dir, primary_registry_str, names[i]);
         primary_had_not_found = true;
         primary_not_found += 1;
       } else if (result.status_code == 200) {
@@ -2903,7 +3018,7 @@ export fn pkg_choose_registry_many(
   });
 
   if (primary_all_available) {
-    storeRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str, .primary);
+    storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .primary);
     trace.summary("registry choose");
     debug.trace("registry choose done: choice=primary total={d}us", .{debug.elapsedUsSince(total_start)});
     return .primary;
@@ -2913,16 +3028,9 @@ export fn pkg_choose_registry_many(
     debug.trace("registry choose done: choice=unknown total={d}us", .{debug.elapsedUsSince(total_start)});
     return .unknown;
   }
-
-  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
-  defer fallback_fetcher.deinit();
-  stage_start = trace.mark("registry fallback init", stage_start);
-
-  const fallback_results = fallback_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
-  stage_start = trace.mark("registry fallback metadata", stage_start);
   var fallback_ok: u32 = 0;
   var fallback_miss: u32 = 0;
-  for (fallback_results, 0..) |*result, i| {
+  for (registry_results.fallback, 0..) |*result, i| {
     if (metadataResultSatisfies(arena_alloc, result, constraints[i])) {
       fallback_ok += 1;
     } else {
@@ -2937,7 +3045,7 @@ export fn pkg_choose_registry_many(
     debug.trace("registry choose done: choice=unknown total={d}us", .{debug.elapsedUsSince(total_start)});
     return .unknown;
   }
-  storeRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
+  storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
   debug.trace("registry choose done: choice=fallback total={d}us", .{debug.elapsedUsSince(total_start)});
   return .fallback;
 }

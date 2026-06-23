@@ -299,6 +299,7 @@ static bool should_parallel_fallback(const normalized_specs_t *specs, pkg_cli_co
 static bool choose_parallel_fallback_source(
   const normalized_specs_t *specs,
   int count,
+  const char *cache_dir,
   pkg_source_t *source_out,
   bool *used_fallback_out
 ) {
@@ -310,6 +311,7 @@ static bool choose_parallel_fallback_source(
   pkg_registry_choice_t choice = pkg_choose_registry_many(
     specs->specs,
     (uint32_t)count,
+    cache_dir,
     pkg_source_registry_host(PKG_SOURCE_LAND),
     pkg_source_registry_host(PKG_SOURCE_NPM)
   );
@@ -488,7 +490,7 @@ static bool choose_package_json_fallback_source(
     .owns_specs = false,
     .explicit_source = false,
   };
-  bool checked = choose_parallel_fallback_source(&normalized, specs.count, source_out, used_fallback_out);
+  bool checked = choose_parallel_fallback_source(&normalized, specs.count, cached_choice_dir, source_out, used_fallback_out);
   free_package_json_specs(&specs);
   return checked;
 }
@@ -1002,7 +1004,12 @@ static int cmd_add_global(const char *const *package_specs, int count) {
   bool used_parallel_fallback = false;
   bool parallel_checked = false;
   if (should_parallel_fallback(&normalized, config)) {
-    parallel_checked = choose_parallel_fallback_source(&normalized, count, &add_source, &used_parallel_fallback);
+    char choice_cache_dir[4096];
+    const char *choice_cache = NULL;
+    if (config.store == PKG_STORE_PROJECT && project_store_cache_dir(choice_cache_dir, sizeof(choice_cache_dir))) {
+      choice_cache = choice_cache_dir;
+    }
+    parallel_checked = choose_parallel_fallback_source(&normalized, count, choice_cache, &add_source, &used_parallel_fallback);
     if (used_parallel_fallback && pkg_verbose) {
       fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
         C_YELLOW, C_RESET);
@@ -1355,7 +1362,12 @@ static int cmd_update_many(const char *const *package_specs, int count) {
   bool used_parallel_fallback = false;
   bool parallel_checked = false;
   if (should_parallel_fallback(&normalized, config)) {
-    parallel_checked = choose_parallel_fallback_source(&normalized, count, &update_source, &used_parallel_fallback);
+    char choice_cache_dir[4096];
+    const char *choice_cache = NULL;
+    if (config.store == PKG_STORE_PROJECT && project_store_cache_dir(choice_cache_dir, sizeof(choice_cache_dir))) {
+      choice_cache = choice_cache_dir;
+    }
+    parallel_checked = choose_parallel_fallback_source(&normalized, count, choice_cache, &update_source, &used_parallel_fallback);
     if (used_parallel_fallback && pkg_verbose) {
       fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
         C_YELLOW, C_RESET);
@@ -1509,7 +1521,12 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   bool used_parallel_fallback = false;
   bool parallel_checked = false;
   if (should_parallel_fallback(&normalized, config)) {
-    parallel_checked = choose_parallel_fallback_source(&normalized, count, &add_source, &used_parallel_fallback);
+    char choice_cache_dir[4096];
+    const char *choice_cache = NULL;
+    if (config.store == PKG_STORE_PROJECT && project_store_cache_dir(choice_cache_dir, sizeof(choice_cache_dir))) {
+      choice_cache = choice_cache_dir;
+    }
+    parallel_checked = choose_parallel_fallback_source(&normalized, count, choice_cache, &add_source, &used_parallel_fallback);
     if (used_parallel_fallback && pkg_verbose) {
       fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n",
         C_YELLOW, C_RESET);

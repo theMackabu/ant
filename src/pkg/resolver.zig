@@ -1133,6 +1133,20 @@ pub const Resolver = struct {
         collect_queue_items: []const CollectItem,
         allocator: std.mem.Allocator,
 
+        fn queuePrefetch(ctx: *@This(), name: []const u8, constraint_str: []const u8) void {
+          const dep_spec = dependencySpec(name, constraint_str);
+          if (ctx.resolver.metadata_cache.contains(dep_spec.package_name)) return;
+
+          var already_queued = false;
+          for (ctx.prefetch_queue.items) |q| {
+            if (std.mem.eql(u8, q, dep_spec.package_name)) {
+              already_queued = true;
+              break;
+            }
+          }
+          if (!already_queued) ctx.prefetch_queue.append(ctx.allocator, dep_spec.package_name) catch {};
+        }
+
         fn onMetadata(name: []const u8, data: ?[]const u8, has_error: bool, userdata: ?*anyopaque) void {
           const ctx: *@This() = @ptrCast(@alignCast(userdata));
           if (has_error or data == null) return;
@@ -1158,17 +1172,7 @@ pub const Resolver = struct {
 
             var dep_it = best.dependencies.iterator();
             while (dep_it.next()) |entry| {
-              const dep_spec = dependencySpec(entry.key_ptr.*, entry.value_ptr.*);
-              if (ctx.resolver.metadata_cache.contains(dep_spec.package_name)) continue;
-
-              var already_queued = false;
-              for (ctx.prefetch_queue.items) |q| {
-                if (std.mem.eql(u8, q, dep_spec.package_name)) {
-                  already_queued = true;
-                  break;
-                }
-              }
-              if (!already_queued) ctx.prefetch_queue.append(ctx.allocator, dep_spec.package_name) catch {};
+              ctx.queuePrefetch(entry.key_ptr.*, entry.value_ptr.*);
             }
             break;
           }
