@@ -1516,11 +1516,13 @@ pub const Fetcher = struct {
 
     var primary_connections: usize = 0;
     for (primary.meta_clients) |maybe_client| {
-      if (maybe_client != null) primary_connections += 1;
+      const client = maybe_client orelse continue;
+      if (metaClientCanQueue(client)) primary_connections += 1;
     }
     var fallback_connections: usize = 0;
     for (fallback.meta_clients) |maybe_client| {
-      if (maybe_client != null) fallback_connections += 1;
+      const client = maybe_client orelse continue;
+      if (metaClientCanQueue(client)) fallback_connections += 1;
     }
     if (primary_connections == 0 and fallback_connections == 0) return error.ConnectionFailed;
 
@@ -1539,8 +1541,15 @@ pub const Fetcher = struct {
       results.fallback[i] = initMetadataResult(name);
     }
 
-    const max_connections = @max(primary_connections, fallback_connections);
-    const total_capacity = @max(@as(usize, 1), max_connections * (MAX_PENDING_REQUESTS - 1));
+    const primary_capacity = primary_connections * (MAX_PENDING_REQUESTS - 1);
+    const fallback_capacity = fallback_connections * (MAX_PENDING_REQUESTS - 1);
+    const total_capacity = if (primary_capacity == 0)
+      fallback_capacity
+    else if (fallback_capacity == 0)
+      primary_capacity
+    else
+      @min(primary_capacity, fallback_capacity);
+    if (total_capacity == 0) return error.ConnectionFailed;
     var offset: usize = 0;
     var batch_num: usize = 0;
 
@@ -1593,6 +1602,7 @@ pub const Fetcher = struct {
           });
           primary.failPendingMetaRequests();
           fallback.failPendingMetaRequests();
+          break;
         } else if (now - last_report_ns > META_PROGRESS_LOG_NS) {
           debug.log("    h2: dual metadata progress {d}/{d} loops={d}", .{ completed, total, loops });
           last_report_ns = now;

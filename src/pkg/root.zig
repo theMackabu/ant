@@ -475,6 +475,7 @@ pub const PkgContext = struct {
       self.setError("Lockfile was generated for a different platform");
       return error.InvalidLockfile;
     }
+    removeInstallStateMarker(arena_alloc, node_modules_path);
     const trust_installed = installStateMarkerMatches(arena_alloc, node_modules_path, lf.header.graph_hash);
 
     const pkg_count = lf.header.package_count;
@@ -1073,6 +1074,12 @@ fn installStateMarkerMatches(allocator: std.mem.Allocator, node_modules_path: []
   const actual = std.Io.Dir.cwd().readFileAlloc(io, marker_path, allocator, .limited(1024)) catch return false;
   defer allocator.free(actual);
   return std.mem.eql(u8, actual, expected);
+}
+
+fn removeInstallStateMarker(allocator: std.mem.Allocator, node_modules_path: []const u8) void {
+  const marker_path = installStateMarkerPath(allocator, node_modules_path) catch return;
+  defer allocator.free(marker_path);
+  std.Io.Dir.cwd().deleteFile(io, marker_path) catch {};
 }
 
 fn writeInstallStateMarker(allocator: std.mem.Allocator, node_modules_path: []const u8, graph_hash: u64) void {
@@ -1685,6 +1692,7 @@ export fn pkg_resolve_and_install(
     std.mem.span(lockfile_path),
     std.mem.span(node_modules_path),
   });
+  removeInstallStateMarker(arena_alloc, std.mem.span(node_modules_path));
 
   const http = c.http orelse return .network_error;
   http.resetMetaClients();

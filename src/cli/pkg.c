@@ -456,14 +456,14 @@ static bool choose_package_json_fallback_source(
   }
 
   char cache_dir[4096];
-  const char *cached_choice_dir = NULL;
+  const char *project_cache_dir = NULL;
   if (config.store == PKG_STORE_PROJECT && project_store_cache_dir(cache_dir, sizeof(cache_dir))) {
-    cached_choice_dir = cache_dir;
+    project_cache_dir = cache_dir;
   }
 
   pkg_registry_choice_t cached_choice = pkg_cached_resolution_registry_choice(
     package_json_path,
-    cached_choice_dir,
+    project_cache_dir,
     pkg_source_registry_host(PKG_SOURCE_LAND),
     pkg_source_registry_host(PKG_SOURCE_NPM)
   );
@@ -490,7 +490,7 @@ static bool choose_package_json_fallback_source(
     .owns_specs = false,
     .explicit_source = false,
   };
-  bool checked = choose_parallel_fallback_source(&normalized, specs.count, cached_choice_dir, source_out, used_fallback_out);
+  bool checked = choose_parallel_fallback_source(&normalized, specs.count, project_cache_dir, source_out, used_fallback_out);
   free_package_json_specs(&specs);
   return checked;
 }
