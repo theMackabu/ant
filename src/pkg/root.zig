@@ -89,6 +89,28 @@ fn dependencyValueForResolved(
   return std.fmt.allocPrint(allocator, "^{s}", .{version_str});
 }
 
+fn lockfilePackageBins(allocator: std.mem.Allocator, lf: *const lockfile.Lockfile, package_index: u32) ![]const linker.PackageBin {
+  const entries = lf.getPackageBins(package_index);
+  if (entries.len == 0) return &[_]linker.PackageBin{};
+  const bins = try allocator.alloc(linker.PackageBin, entries.len);
+  for (entries, 0..) |entry, i| {
+    bins[i] = .{
+      .name = entry.name.slice(lf.string_table),
+      .path = entry.path.slice(lf.string_table),
+    };
+  }
+  return bins;
+}
+
+fn resolvedPackageBins(allocator: std.mem.Allocator, pkg: *const resolver.ResolvedPackage) ![]const linker.PackageBin {
+  if (pkg.bins.items.len == 0) return &[_]linker.PackageBin{};
+  const bins = try allocator.alloc(linker.PackageBin, pkg.bins.items.len);
+  for (pkg.bins.items, 0..) |bin, i| {
+    bins[i] = .{ .name = bin.name, .path = bin.path };
+  }
+  return bins;
+}
+
 fn getLegacyAntDirIfExists(allocator: std.mem.Allocator) !?[]const u8 {
   const home = try getHomeDir(allocator);
   defer allocator.free(home);
@@ -427,6 +449,16 @@ pub const PkgContext = struct {
     const arena_alloc = self.arena_state.allocator();
 
     self.clearAddedPackages();
+    self.last_install_result = .{
+      .package_count = 0,
+      .cache_hits = 0,
+      .cache_misses = 0,
+      .files_linked = 0,
+      .files_copied = 0,
+      .packages_installed = 0,
+      .packages_skipped = 0,
+      .elapsed_ms = 0,
+    };
 
     const timer = std.Io.Clock.Timestamp.now(io, .boot);
     var stage_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
@@ -439,6 +471,12 @@ pub const PkgContext = struct {
       return error.InvalidLockfile;
     };
     defer lf.close();
+    if (!lf.header.matchesCurrentPlatform()) {
+      self.setError("Lockfile was generated for a different platform");
+      return error.InvalidLockfile;
+    }
+    const trust_installed = installStateMarkerMatches(arena_alloc, node_modules_path, lf.header.graph_hash);
+    removeInstallStateMarker(arena_alloc, node_modules_path);
 
     const pkg_count = lf.header.package_count;
     stage_start = trace.mark("lockfile open", stage_start);
@@ -478,6 +516,13 @@ pub const PkgContext = struct {
       const pkg_name = pkg.name.slice(lf.string_table);
       const cache_path = try db.getPackagePath(&pkg.integrity, arena_alloc);
       const parent_path = pkg.parent_path.slice(lf.string_table);
+      const file_count = if (hit.file_count != 0)
+        hit.file_count
+      else if (lf.header.hasInstallMetadata())
+        pkg.fileCount()
+      else
+        0;
+      const bins = lockfilePackageBins(arena_alloc, &lf, hit.index) catch &[_]linker.PackageBin{};
 
       const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{pkg_name}, 0) catch continue;
       self.reportProgress(.linking, @intCast(i), @intCast(cache_hits.items.len), msg);
@@ -487,10 +532,12 @@ pub const PkgContext = struct {
         .node_modules_path = node_modules_path,
         .name = pkg_name,
         .parent_path = if (parent_path.len > 0) parent_path else null,
-        .file_count = hit.file_count,
+        .file_count = file_count,
         .has_bin = pkg.flags.has_bin,
+        .bins = bins,
+        .trust_installed = trust_installed,
         .allow_dir_symlink = (!pkg.flags.has_bin and pkg.deps_count == 0) or
-          (pkg.flags.has_bin and hit.file_count >= linker.DIR_CLONE_THRESHOLD and parent_path.len == 0),
+          (pkg.flags.has_bin and file_count >= linker.DIR_CLONE_THRESHOLD and parent_path.len == 0),
       });
 
       if (pkg.flags.direct) {
@@ -512,6 +559,7 @@ pub const PkgContext = struct {
         direct: bool,
         parent_path: ?[]const u8,
         has_bin: bool,
+        bins: []const linker.PackageBin,
         completed: bool,
         has_error: bool,
       };
@@ -537,6 +585,7 @@ pub const PkgContext = struct {
 
         const ext = extractor.Extractor.init(self.allocator, cache_path) catch continue;
         const parent_path_str = pkg.parent_path.slice(lf.string_table);
+        const bins = lockfilePackageBins(arena_alloc, &lf, pkg_idx) catch &[_]linker.PackageBin{};
         
         extract_contexts[valid_count] = .{
           .ext = ext,
@@ -548,6 +597,7 @@ pub const PkgContext = struct {
           .direct = pkg.flags.direct,
           .parent_path = if (parent_path_str.len > 0) parent_path_str else null,
           .has_bin = pkg.flags.has_bin,
+          .bins = bins,
           .completed = false,
           .has_error = false,
         };
@@ -639,6 +689,8 @@ pub const PkgContext = struct {
           .parent_path = ctx.parent_path,
           .file_count = stats.files,
           .has_bin = ctx.has_bin,
+          .bins = ctx.bins,
+          .trust_installed = trust_installed,
         }) catch |err| {
           link_error_count += 1;
           debug.log("  link error: {s}: {s}", .{ ctx.pkg_name, @errorName(err) });
@@ -646,11 +698,19 @@ pub const PkgContext = struct {
       }
       stage_start = trace.mark("cache insert + link misses", stage_start);
       debug.log("  fetched: {d} success, {d} errors", .{ success_count, error_count });
+      if (error_count > 0) {
+        self.setErrorFmt("Failed to fetch or extract {d} package{s}", .{
+          error_count,
+          if (error_count == 1) "" else "s",
+        });
+        return error.IoError;
+      }
       if (link_error_count > 0) return error.IoError;
     }
 
     db.sync();
     _ = trace.mark("cache sync", stage_start);
+    writeInstallStateMarker(arena_alloc, node_modules_path, lf.header.graph_hash);
 
     const link_stats = pkg_linker.getStats();
     self.last_install_result = .{
@@ -787,27 +847,28 @@ fn resolutionCacheKey(
   pkg_json: *const json.PackageJson,
   registry: []const u8,
 ) ?u64 {
-  if (pkg_json.peer_dependencies.count() > 0 or
-      pkg_json.optional_dependencies.count() > 0 or
-      pkg_json.trusted_dependencies.count() > 0) return null;
+  if (pkg_json.peer_dependencies.count() > 0) return null;
 
   var entries = std.ArrayListUnmanaged(ResolutionCacheEntry).empty;
   defer entries.deinit(allocator);
 
   if (!(appendResolutionCacheEntries(allocator, &entries, 'd', &pkg_json.dependencies) catch return null)) return null;
   if (!(appendResolutionCacheEntries(allocator, &entries, 'D', &pkg_json.dev_dependencies) catch return null)) return null;
+  if (!(appendResolutionCacheEntries(allocator, &entries, 'o', &pkg_json.optional_dependencies) catch return null)) return null;
   if (entries.items.len == 0) return null;
 
   std.sort.heap(ResolutionCacheEntry, entries.items, {}, resolutionCacheEntryLessThan);
 
   var hasher = std.hash.Wyhash.init(0);
-  hasher.update("resolution-lock-v1");
+  hasher.update("resolution-lock-v3");
   hasher.update(&[_]u8{0});
   hasher.update(registry);
   hasher.update(&[_]u8{0});
   hasher.update(@tagName(builtin.os.tag));
   hasher.update(&[_]u8{0});
   hasher.update(@tagName(builtin.cpu.arch));
+  hasher.update(&[_]u8{0});
+  hasher.update(@tagName(builtin.abi));
 
   for (entries.items) |entry| {
     hasher.update(&[_]u8{0, entry.section, 0});
@@ -819,8 +880,125 @@ fn resolutionCacheKey(
   return hasher.final();
 }
 
+fn resolutionCachePathForDir(cache_dir: []const u8, allocator: std.mem.Allocator, key: u64) ![]const u8 {
+  return std.fmt.allocPrint(allocator, "{s}/resolution-lock/{x}.lockb", .{ cache_dir, key });
+}
+
 fn resolutionCachePath(c: *PkgContext, allocator: std.mem.Allocator, key: u64) ![]const u8 {
-  return std.fmt.allocPrint(allocator, "{s}/resolution-lock/{x}.lockb", .{ c.cache_dir, key });
+  return resolutionCachePathForDir(c.cache_dir, allocator, key);
+}
+
+fn lockfilePathForPackageJson(allocator: std.mem.Allocator, package_json_path: []const u8) ![]const u8 {
+  if (std.fs.path.dirname(package_json_path)) |dir| {
+    return std.fs.path.join(allocator, &.{ dir, "ant.lockb" });
+  }
+  return allocator.dupe(u8, "ant.lockb");
+}
+
+fn lockfileMatchesResolutionHash(lockfile_path: []const u8, resolution_hash: u64) bool {
+  if (resolution_hash == 0) return false;
+  var lf = lockfile.Lockfile.open(lockfile_path) catch return false;
+  defer lf.close();
+  return lf.header.hasInstallMetadata() and
+    lf.header.matchesCurrentPlatform() and
+    lf.header.resolution_hash == resolution_hash;
+}
+
+fn timestampWithinTtl(cached_at: i64, now: i64, ttl_seconds: i64, future_skew_seconds: i64) bool {
+  const oldest = if (now > std.math.minInt(i64) + ttl_seconds)
+    now - ttl_seconds
+  else
+    std.math.minInt(i64);
+  const newest = if (now < std.math.maxInt(i64) - future_skew_seconds)
+    now + future_skew_seconds
+  else
+    std.math.maxInt(i64);
+  return cached_at >= oldest and cached_at <= newest;
+}
+
+fn cachedResolutionLockfileAvailable(
+  allocator: std.mem.Allocator,
+  cache_dir: []const u8,
+  pkg_json: *const json.PackageJson,
+  registry: []const u8,
+) bool {
+  const key = resolutionCacheKey(allocator, pkg_json, registry) orelse return false;
+  const path = resolutionCachePathForDir(cache_dir, allocator, key) catch return false;
+  defer allocator.free(path);
+
+  const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024)) catch return false;
+  defer allocator.free(data);
+  if (!cachedResolutionLockfileDataValid(data, key)) return false;
+
+  var cached_at: i64 = undefined;
+  @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
+  const now = std.Io.Timestamp.now(io, .real).toSeconds();
+  return timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60);
+}
+
+fn cachedResolutionLockfileDataValid(data: []const u8, expected_resolution_hash: u64) bool {
+  if (data.len < @sizeOf(i64) + @sizeOf(lockfile.Header)) return false;
+
+  var header: lockfile.Header = undefined;
+  const body = data[@sizeOf(i64)..];
+  @memcpy(std.mem.asBytes(&header), body[0..@sizeOf(lockfile.Header)]);
+  if (!header.validate() or !header.hasInstallMetadata() or !header.matchesCurrentPlatform()) return false;
+  if (header.resolution_hash == 0 or header.resolution_hash != expected_resolution_hash) return false;
+
+  const sections = struct {
+    fn end(body_len: usize, offset: u32, count: u32, elem_size: usize) ?usize {
+      const start: usize = @intCast(offset);
+      const n: usize = @intCast(count);
+      const bytes = std.math.mul(usize, n, elem_size) catch return null;
+      if (start > body_len or bytes > body_len - start) return null;
+      return start + bytes;
+    }
+
+    fn fits(body_len: usize, offset: u32, count: u32, elem_size: usize) bool {
+      return end(body_len, offset, count, elem_size) != null;
+    }
+
+    fn alignUp(value: usize, alignment: usize) usize {
+      const rem = value % alignment;
+      return if (rem == 0) value else value + (alignment - rem);
+    }
+  };
+
+  if (!sections.fits(body.len, header.string_table_offset, header.string_table_size, 1)) return false;
+  if (!sections.fits(body.len, header.package_array_offset, header.package_count, @sizeOf(lockfile.Package))) return false;
+  if (!sections.fits(body.len, header.dependency_array_offset, header.dependency_count, @sizeOf(lockfile.Dependency))) return false;
+  const hash_end = sections.end(body.len, header.hash_table_offset, header.hash_table_size, @sizeOf(lockfile.HashBucket)) orelse return false;
+
+  const bin_end = if (header.bin_entry_count > 0) blk: {
+    const bin_offset: usize = @intCast(header.bin_entry_offset);
+    if (bin_offset < hash_end) return false;
+    break :blk sections.end(body.len, header.bin_entry_offset, header.bin_entry_count, @sizeOf(lockfile.BinEntry)) orelse return false;
+  } else if (header.bin_entry_offset != 0) blk: {
+    const offset: usize = @intCast(header.bin_entry_offset);
+    if (offset < hash_end or offset > body.len) return false;
+    break :blk offset;
+  } else hash_end;
+
+  const disabled_start = sections.alignUp(bin_end, @alignOf(lockfile.DisabledDependency));
+  if (disabled_start > body.len) return false;
+  const disabled_count: usize = @intCast(header.disabled_dependency_count);
+  const disabled_bytes = std.math.mul(usize, disabled_count, @sizeOf(lockfile.DisabledDependency)) catch return false;
+  if (disabled_bytes > body.len - disabled_start) return false;
+  const disabled_end = disabled_start + disabled_bytes;
+
+  if (header.platform_entry_count > 0) {
+    const platform_start = if (header.platform_entry_offset != 0)
+      @as(usize, @intCast(header.platform_entry_offset))
+    else
+      sections.alignUp(disabled_end, @alignOf(lockfile.PlatformEntry));
+    const min_platform_start = sections.alignUp(disabled_end, @alignOf(lockfile.PlatformEntry));
+    if (platform_start < min_platform_start or platform_start > body.len) return false;
+    const platform_count: usize = @intCast(header.platform_entry_count);
+    const platform_bytes = std.math.mul(usize, platform_count, @sizeOf(lockfile.PlatformEntry)) catch return false;
+    if (platform_bytes > body.len - platform_start) return false;
+  }
+
+  return true;
 }
 
 fn readCachedResolutionLockfile(
@@ -836,12 +1014,12 @@ fn readCachedResolutionLockfile(
 
   const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024)) catch return false;
   defer allocator.free(data);
-  if (data.len < @sizeOf(i64)) return false;
+  if (!cachedResolutionLockfileDataValid(data, key)) return false;
 
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  if (now - cached_at > 24 * 60 * 60) return false;
+  if (!timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60)) return false;
 
   std.Io.Dir.cwd().writeFile(io, .{
     .sub_path = lockfile_path,
@@ -874,6 +1052,46 @@ fn storeCachedResolutionLockfile(
   @memcpy(value[@sizeOf(i64)..], lock_data);
 
   std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = value }) catch {};
+}
+
+fn installStateMarkerPath(allocator: std.mem.Allocator, node_modules_path: []const u8) ![]const u8 {
+  return std.fmt.allocPrint(allocator, "{s}/.ant/install-state", .{node_modules_path});
+}
+
+fn installStateMarkerContent(allocator: std.mem.Allocator, graph_hash: u64) ![]const u8 {
+  return std.fmt.allocPrint(allocator,
+    "ant-install-state-v1\n{x}\n{s}\n{s}\n{s}\n",
+    .{ graph_hash, @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
+  );
+}
+
+fn installStateMarkerMatches(allocator: std.mem.Allocator, node_modules_path: []const u8, graph_hash: u64) bool {
+  if (graph_hash == 0) return false;
+  const marker_path = installStateMarkerPath(allocator, node_modules_path) catch return false;
+  defer allocator.free(marker_path);
+  const expected = installStateMarkerContent(allocator, graph_hash) catch return false;
+  defer allocator.free(expected);
+  const actual = std.Io.Dir.cwd().readFileAlloc(io, marker_path, allocator, .limited(1024)) catch return false;
+  defer allocator.free(actual);
+  return std.mem.eql(u8, actual, expected);
+}
+
+fn removeInstallStateMarker(allocator: std.mem.Allocator, node_modules_path: []const u8) void {
+  const marker_path = installStateMarkerPath(allocator, node_modules_path) catch return;
+  defer allocator.free(marker_path);
+  std.Io.Dir.cwd().deleteFile(io, marker_path) catch {};
+}
+
+fn writeInstallStateMarker(allocator: std.mem.Allocator, node_modules_path: []const u8, graph_hash: u64) void {
+  if (graph_hash == 0) return;
+  const marker_path = installStateMarkerPath(allocator, node_modules_path) catch return;
+  defer allocator.free(marker_path);
+  if (std.fs.path.dirname(marker_path)) |dir| {
+    std.Io.Dir.cwd().createDirPath(io, dir) catch return;
+  }
+  const content = installStateMarkerContent(allocator, graph_hash) catch return;
+  defer allocator.free(content);
+  std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker_path, .data = content }) catch {};
 }
 
 fn batchHitLessThanParentFirst(lf: *const lockfile.Lockfile, a: cache.CacheDB.BatchHit, b: cache.CacheDB.BatchHit) bool {
@@ -1229,11 +1447,24 @@ const InterleavedExtractCtx = struct {
   direct: bool,
   parent_path: ?[]const u8,
   has_bin: bool,
+  bins: []const linker.PackageBin,
   completed: bool,
   has_error: bool,
   queued: bool,
   parent: *InterleavedContext,
 };
+
+fn populateResolvedFileCountsFromCache(res: *resolver.Resolver, db: *cache.CacheDB) void {
+  var iter = res.resolved.valueIterator();
+  while (iter.next()) |pkg_ptr| {
+    const pkg = pkg_ptr.*;
+    if (db.lookup(&pkg.integrity)) |cache_entry| {
+      var entry = cache_entry;
+      defer entry.deinit();
+      pkg.file_count = entry.file_count;
+    }
+  }
+}
 
 const InterleavedContext = struct {
   allocator: std.mem.Allocator,
@@ -1271,7 +1502,7 @@ const InterleavedContext = struct {
     self.queued_integrities.deinit();
   }
 
-  fn onPackageResolved(pkg: *const resolver.ResolvedPackage, user_data: ?*anyopaque) void {
+  fn onPackageResolved(pkg: *resolver.ResolvedPackage, user_data: ?*anyopaque) void {
     const self: *InterleavedContext = @ptrCast(@alignCast(user_data));
     self.callbacks_received += 1;
 
@@ -1305,6 +1536,7 @@ const InterleavedContext = struct {
       .direct = pkg.direct,
       .parent_path = pkg.parent_path,
       .has_bin = pkg.has_bin,
+      .bins = resolvedPackageBins(self.arena_alloc, pkg) catch &[_]linker.PackageBin{},
       .completed = false,
       .has_error = false,
       .queued = false,
@@ -1410,6 +1642,7 @@ fn installToolPackageNoLifecycle(
       .parent_path = ectx.parent_path,
       .file_count = stats.files,
       .has_bin = ectx.has_bin,
+      .bins = ectx.bins,
     }) catch |err| {
       debug.log("  link error: {s}: {s}", .{ ectx.pkg_name, @errorName(err) });
       return err;
@@ -1430,11 +1663,13 @@ fn installToolPackageNoLifecycle(
         .parent_path = pkg.parent_path,
         .file_count = entry.file_count,
         .has_bin = pkg.has_bin,
+        .bins = resolvedPackageBins(allocator, pkg) catch &[_]linker.PackageBin{},
       }) catch continue;
     }
   }
 
-  res.writeLockfile(lockfile_path) catch {};
+  populateResolvedFileCountsFromCache(&res, db);
+  _ = res.writeLockfile(lockfile_path) catch {};
   db.sync();
 }
 
@@ -1473,6 +1708,29 @@ export fn pkg_resolve_and_install(
     debug.log("  trusted dependencies: {d}", .{pkg_json.trusted_dependencies.count()});
   }
   const registry = if (c.options.registry_url) |url| std.mem.span(url) else "https://registry.npmjs.org";
+  const resolution_hash = resolutionCacheKey(arena_alloc, &pkg_json, registry) orelse 0;
+
+  if (lockfileMatchesResolutionHash(std.mem.span(lockfile_path), resolution_hash)) {
+    c.install(std.mem.span(lockfile_path), std.mem.span(node_modules_path)) catch |err| {
+      debug.trace("clean lockfile install failed: {s}", .{@errorName(err)});
+    };
+    if (c.last_install_result.package_count > 0) {
+      _ = trace.mark("clean lockfile install", stage_start);
+      trace.summary("resolve+install");
+      debug.trace("resolve+install total: source=clean-lockfile packages={d} cached={d} fetched={d} files_linked={d} files_copied={d} total={d}ms", .{
+        c.last_install_result.package_count,
+        c.last_install_result.cache_hits,
+        c.last_install_result.cache_misses,
+        c.last_install_result.files_linked,
+        c.last_install_result.files_copied,
+        c.last_install_result.elapsed_ms,
+      });
+      if (pkg_json.trusted_dependencies.count() > 0) {
+        if (!runTrustedPostinstall(c, &pkg_json.trusted_dependencies, std.mem.span(node_modules_path), arena_alloc)) return .io_error;
+      }
+      return .ok;
+    }
+  }
 
   if (readCachedResolutionLockfile(c, arena_alloc, &pkg_json, registry, std.mem.span(lockfile_path))) {
     stage_start = trace.mark("resolution lock cache hit", stage_start);
@@ -1490,10 +1748,14 @@ export fn pkg_resolve_and_install(
         c.last_install_result.files_copied,
         c.last_install_result.elapsed_ms,
       });
+      if (pkg_json.trusted_dependencies.count() > 0) {
+        if (!runTrustedPostinstall(c, &pkg_json.trusted_dependencies, std.mem.span(node_modules_path), arena_alloc)) return .io_error;
+      }
       return .ok;
     }
   }
   stage_start = trace.mark("resolution lock cache lookup", stage_start);
+  removeInstallStateMarker(arena_alloc, std.mem.span(node_modules_path));
 
   var interleaved = InterleavedContext.init(c.allocator, arena_alloc, db, http, c);
   defer interleaved.deinit();
@@ -1507,6 +1769,7 @@ export fn pkg_resolve_and_install(
     registry,
     &c.metadata_cache,
   ); defer res.deinit();
+  res.setLockResolutionHash(resolution_hash);
 
   res.setOnPackageResolved(InterleavedContext.onPackageResolved, &interleaved);
   res.resolveFromPackageJson(std.mem.span(package_json_path)) catch |err| {
@@ -1559,6 +1822,7 @@ export fn pkg_resolve_and_install(
       .parent_path = pkg.parent_path,
       .file_count = cache_entry.file_count,
       .has_bin = pkg.has_bin,
+      .bins = resolvedPackageBins(arena_alloc, pkg) catch &[_]linker.PackageBin{},
       .allow_dir_symlink = (!pkg.has_bin and pkg.dependencies.items.len == 0 and !resolvedPackageHasNestedChildren(&res, pkg, arena_alloc)) or
         (pkg.has_bin and cache_entry.file_count >= linker.DIR_CLONE_THRESHOLD and pkg.parent_path == null),
     }) catch continue;
@@ -1601,13 +1865,6 @@ export fn pkg_resolve_and_install(
   } else stage_start = trace.mark("link cache hits", stage_start);
   debug.log("  linked {d} from cache", .{linked_count});
 
-  res.writeLockfile(std.mem.span(lockfile_path)) catch |err| {
-    c.setErrorFmt("Failed to write lockfile: {}", .{err});
-    return .io_error;
-  };
-  storeCachedResolutionLockfile(c, arena_alloc, &pkg_json, registry, std.mem.span(lockfile_path));
-  stage_start = trace.mark("write lockfile", stage_start);
-
   var success_count: usize = 0;
   var error_count: usize = 0;
 
@@ -1649,6 +1906,7 @@ export fn pkg_resolve_and_install(
         .parent_path = ext_ctx.parent_path,
         .file_count = stats.files,
         .has_bin = ext_ctx.has_bin,
+        .bins = ext_ctx.bins,
       },
       .size = stats.bytes,
     }) catch continue;
@@ -1707,24 +1965,31 @@ export fn pkg_resolve_and_install(
       linkPathDepth(link_jobs.items[depth_end].job.parent_path) == depth) : (depth_end += 1) {}
 
     const depth_jobs = link_jobs.items[depth_start..depth_end];
-    const num_threads = @min(8, depth_jobs.len);
+    const max_threads: usize = if (copy_link_mode) 2 else 8;
+    const num_threads = @min(max_threads, depth_jobs.len);
+    var depth_has_root_bins = false;
+    for (depth_jobs) |job_with_size| {
+      if (job_with_size.job.parent_path == null and job_with_size.job.has_bin) {
+        depth_has_root_bins = true;
+        break;
+      }
+    }
     if (c.options.verbose and depth_jobs.len > 1) {
       debug.log("  linking depth {d} ({d} items)", .{ depth, depth_jobs.len });
     }
 
-    if (!copy_link_mode and num_threads > 1 and depth_jobs.len > 4) {
+    if (!depth_has_root_bins and num_threads > 1 and depth_jobs.len > 4) {
       var threads: [8]?std.Thread = .{null} ** 8;
-      const jobs_per_thread = (depth_jobs.len + num_threads - 1) / num_threads;
+      var next_job = std.atomic.Value(usize).init(0);
+      var spawned_count: usize = 0;
 
       for (0..num_threads) |t| {
-        const start_idx = t * jobs_per_thread;
-        const end_idx = @min(start_idx + jobs_per_thread, depth_jobs.len);
-        if (start_idx >= end_idx) break;
-
         threads[t] = std.Thread.spawn(.{}, struct {
-          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), link_errors: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Io.Mutex, alloc: std.mem.Allocator) void {
-            for (jobs) |job_with_size| {
-              const job = job_with_size.job;
+          fn work(lnk: *linker.Linker, jobs: []const LinkJobWithSize, next: *std.atomic.Value(usize), pkg_ctx: *PkgContext, total: u32, counter: *std.atomic.Value(u32), link_errors: *std.atomic.Value(u32), slow_count: *std.atomic.Value(u32), max_ms: *std.atomic.Value(u64), names: *std.ArrayListUnmanaged([]const u8), lock: *std.Io.Mutex, alloc: std.mem.Allocator) void {
+            while (true) {
+              const idx = next.fetchAdd(1, .monotonic);
+              if (idx >= jobs.len) break;
+              const job = jobs[idx].job;
               const current = counter.fetchAdd(1, .monotonic) + 1;
               var msg_buf: [256]u8 = undefined;
               const msg_len = std.fmt.bufPrint(&msg_buf, "{s}", .{job.name}) catch continue;
@@ -1753,11 +2018,31 @@ export fn pkg_resolve_and_install(
               }
             }
           }
-        }.work, .{ &pkg_linker, depth_jobs[start_idx..end_idx], c, total_jobs, &link_counter, &download_link_error_count, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
+        }.work, .{ &pkg_linker, depth_jobs, &next_job, c, total_jobs, &link_counter, &download_link_error_count, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
+        if (threads[t] != null) spawned_count += 1;
       }
 
-      for (&threads) |*t| {
-        if (t.*) |thread| thread.join();
+      if (spawned_count == 0) {
+        for (depth_jobs) |job_with_size| {
+          const job = job_with_size.job;
+          const current = link_counter.fetchAdd(1, .monotonic) + 1;
+          const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
+          c.reportProgress(.linking, current, total_jobs, msg);
+          const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
+          pkg_linker.linkPackage(job) catch |err| {
+            _ = download_link_error_count.fetchAdd(1, .monotonic);
+            debug.log("  link error: {s}: {s}", .{ job.name, @errorName(err) });
+            continue;
+          };
+          const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(u64, @intCast(start))) / 1_000_000);
+          if (elapsed_ms > 100 and c.options.verbose) {
+            debug.log("  link slow: {s} {d}ms", .{ job.name, elapsed_ms });
+          }
+        }
+      } else {
+        for (&threads) |*t| {
+          if (t.*) |thread| thread.join();
+        }
       }
     } else {
       for (depth_jobs) |job_with_size| {
@@ -1793,6 +2078,13 @@ export fn pkg_resolve_and_install(
   
   debug.log("  downloaded: {d} success, {d} errors", .{ success_count, error_count });
   for (interleaved.extract_contexts.items) |ext_ctx| ext_ctx.ext.deinit();
+  if (error_count > 0) {
+    c.setErrorFmt("Failed to fetch or extract {d} package{s}", .{
+      error_count,
+      if (error_count == 1) "" else "s",
+    });
+    return .extract_error;
+  }
   link_error_count += download_link_error_count.load(.monotonic);
   if (link_error_count > 0) {
     c.setErrorFmt("Failed to link {d} package{s}", .{
@@ -1802,8 +2094,17 @@ export fn pkg_resolve_and_install(
     return .io_error;
   }
 
+  populateResolvedFileCountsFromCache(&res, db);
+  const graph_hash = res.writeLockfile(std.mem.span(lockfile_path)) catch |err| {
+    c.setErrorFmt("Failed to write lockfile: {}", .{err});
+    return .io_error;
+  };
+  storeCachedResolutionLockfile(c, arena_alloc, &pkg_json, registry, std.mem.span(lockfile_path));
+  stage_start = trace.mark("write lockfile", stage_start);
+
   db.sync();
   _ = trace.mark("cache sync", stage_start);
+  writeInstallStateMarker(arena_alloc, std.mem.span(node_modules_path), graph_hash);
 
   const link_stats = pkg_linker.getStats();
   c.last_install_result = .{
@@ -2521,27 +2822,57 @@ fn registryChoiceCacheHash(
   return hasher.final();
 }
 
+fn registryPrimaryMissCacheHash(primary_registry: []const u8, package_name: []const u8) u64 {
+  var hasher = std.hash.Wyhash.init(0);
+  hasher.update(primary_registry);
+  hasher.update(&[_]u8{0});
+  hasher.update(package_name);
+  return hasher.final();
+}
+
 fn registryChoiceCachePath(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
 ) ![]const u8 {
-  const cache_dir = try PkgContext.getDefaultCacheDir(allocator);
-  defer allocator.free(cache_dir);
+  const default_cache_dir = if (cache_dir_override == null)
+    try PkgContext.getDefaultCacheDir(allocator)
+  else
+    null;
+  defer if (default_cache_dir) |dir| allocator.free(dir);
+  const cache_dir = cache_dir_override orelse default_cache_dir.?;
   const hash = registryChoiceCacheHash(package_specs, count, primary_registry, fallback_registry);
   return std.fmt.allocPrint(allocator, "{s}/registry-choice/{x}.choice", .{ cache_dir, hash });
 }
 
+fn registryPrimaryMissCachePath(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) ![]const u8 {
+  const default_cache_dir = if (cache_dir_override == null)
+    try PkgContext.getDefaultCacheDir(allocator)
+  else
+    null;
+  defer if (default_cache_dir) |dir| allocator.free(dir);
+  const cache_dir = cache_dir_override orelse default_cache_dir.?;
+  const hash = registryPrimaryMissCacheHash(primary_registry, package_name);
+  return std.fmt.allocPrint(allocator, "{s}/registry-miss/{x}.miss", .{ cache_dir, hash });
+}
+
 fn lookupCachedRegistryChoice(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
 ) ?RegistryChoice {
-  const path = registryChoiceCachePath(allocator, package_specs, count, primary_registry, fallback_registry) catch return null;
+  const path = registryChoiceCachePath(allocator, cache_dir_override, package_specs, count, primary_registry, fallback_registry) catch return null;
   defer allocator.free(path);
 
   const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return null;
@@ -2551,19 +2882,39 @@ fn lookupCachedRegistryChoice(
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  if (now - cached_at > 24 * 60 * 60) return null;
+  if (!timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60)) return null;
   return registryChoiceFromByte(data[@sizeOf(i64)]);
+}
+
+fn lookupCachedRegistryPrimaryMiss(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) bool {
+  const path = registryPrimaryMissCachePath(allocator, cache_dir_override, primary_registry, package_name) catch return false;
+  defer allocator.free(path);
+
+  const data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64)) catch return false;
+  defer allocator.free(data);
+  if (data.len < @sizeOf(i64)) return false;
+
+  var cached_at: i64 = undefined;
+  @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
+  const now = std.Io.Timestamp.now(io, .real).toSeconds();
+  return timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60);
 }
 
 fn storeRegistryChoice(
   allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
   package_specs: [*]const [*:0]const u8,
   count: u32,
   primary_registry: []const u8,
   fallback_registry: []const u8,
   choice: RegistryChoice,
 ) void {
-  const path = registryChoiceCachePath(allocator, package_specs, count, primary_registry, fallback_registry) catch return;
+  const path = registryChoiceCachePath(allocator, cache_dir_override, package_specs, count, primary_registry, fallback_registry) catch return;
   defer allocator.free(path);
   if (std.fs.path.dirname(path)) |dir| {
     std.Io.Dir.cwd().createDirPath(io, dir) catch return;
@@ -2576,9 +2927,28 @@ fn storeRegistryChoice(
   std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = &value }) catch {};
 }
 
+fn storeRegistryPrimaryMiss(
+  allocator: std.mem.Allocator,
+  cache_dir_override: ?[]const u8,
+  primary_registry: []const u8,
+  package_name: []const u8,
+) void {
+  const path = registryPrimaryMissCachePath(allocator, cache_dir_override, primary_registry, package_name) catch return;
+  defer allocator.free(path);
+  if (std.fs.path.dirname(path)) |dir| {
+    std.Io.Dir.cwd().createDirPath(io, dir) catch return;
+  }
+
+  var value: [@sizeOf(i64)]u8 = undefined;
+  const now: i64 = std.Io.Timestamp.now(io, .real).toSeconds();
+  @memcpy(value[0..@sizeOf(i64)], std.mem.asBytes(&now));
+  std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = &value }) catch {};
+}
+
 export fn pkg_choose_registry_many(
   package_specs: [*]const [*:0]const u8,
   count: u32,
+  cache_dir_override: ?[*:0]const u8,
   primary_registry: [*:0]const u8,
   fallback_registry: [*:0]const u8,
 ) RegistryChoice {
@@ -2589,13 +2959,14 @@ export fn pkg_choose_registry_many(
   var stage_start = total_start;
   const primary_registry_str = std.mem.span(primary_registry);
   const fallback_registry_str = std.mem.span(fallback_registry);
+  const registry_choice_cache_dir = if (cache_dir_override) |dir| std.mem.span(dir) else null;
   debug.trace("registry choose start: specs={d} primary={s} fallback={s}", .{
     count,
     primary_registry_str,
     fallback_registry_str,
   });
 
-  if (lookupCachedRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str)) |choice| {
+  if (lookupCachedRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str)) |choice| {
     _ = trace.mark("registry choice cache lookup", stage_start);
     trace.summary("registry choose");
     debug.trace("registry choose done: choice={s} source=cache total={d}us", .{
@@ -2614,6 +2985,10 @@ export fn pkg_choose_registry_many(
   defer primary_fetcher.deinit();
   stage_start = trace.mark("registry primary init", stage_start);
 
+  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
+  defer fallback_fetcher.deinit();
+  stage_start = trace.mark("registry fallback init", stage_start);
+
   const names = arena_alloc.alloc([]const u8, count) catch return .unknown;
   const constraints = arena_alloc.alloc([]const u8, count) catch return .unknown;
   for (0..count) |i| {
@@ -2623,8 +2998,48 @@ export fn pkg_choose_registry_many(
   }
   stage_start = trace.mark("registry spec parse", stage_start);
 
-  const primary_results = primary_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
-  stage_start = trace.mark("registry primary metadata", stage_start);
+  var primary_miss_cache_hit = true;
+  for (names) |name| {
+    if (!lookupCachedRegistryPrimaryMiss(global_allocator, registry_choice_cache_dir, primary_registry_str, name)) {
+      primary_miss_cache_hit = false;
+      break;
+    }
+  }
+
+  if (primary_miss_cache_hit) {
+    stage_start = trace.mark("registry primary miss cache lookup", stage_start);
+    debug.trace("registry primary miss cache hit: count={d}", .{count});
+
+    const fallback_results = fallback_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
+    stage_start = trace.mark("registry fallback metadata", stage_start);
+
+    var fallback_ok: u32 = 0;
+    var fallback_miss: u32 = 0;
+    for (fallback_results, 0..) |*result, i| {
+      if (metadataResultSatisfies(arena_alloc, result, constraints[i])) {
+        fallback_ok += 1;
+      } else {
+        fallback_miss += 1;
+      }
+    }
+
+    _ = trace.mark("registry fallback evaluate", stage_start);
+    debug.trace("registry fallback result: ok={d} miss={d}", .{ fallback_ok, fallback_miss });
+    trace.summary("registry choose");
+
+    if (fallback_miss > 0) {
+      debug.trace("registry choose done: choice=unknown source=primary-miss-cache total={d}us", .{debug.elapsedUsSince(total_start)});
+      return .unknown;
+    }
+
+    storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
+    debug.trace("registry choose done: choice=fallback source=primary-miss-cache total={d}us", .{debug.elapsedUsSince(total_start)});
+    return .fallback;
+  }
+  stage_start = trace.mark("registry primary miss cache lookup", stage_start);
+
+  const registry_results = fetcher.Fetcher.fetchMetadataDualBatch(primary_fetcher, fallback_fetcher, names, arena_alloc) catch return .unknown;
+  stage_start = trace.mark("registry metadata", stage_start);
 
   var primary_all_available = true;
   var primary_had_not_found = false;
@@ -2634,7 +3049,7 @@ export fn pkg_choose_registry_many(
   var primary_unsatisfied: u32 = 0;
   var primary_error: u32 = 0;
 
-  for (primary_results, 0..) |*result, i| {
+  for (registry_results.primary, 0..) |*result, i| {
     const primary_available = metadataResultSatisfies(arena_alloc, result, constraints[i]);
     if (primary_available) {
       primary_ok += 1;
@@ -2644,6 +3059,7 @@ export fn pkg_choose_registry_many(
     if (!primary_available) {
       primary_all_available = false;
       if (result.status_code == 404) {
+        storeRegistryPrimaryMiss(global_allocator, registry_choice_cache_dir, primary_registry_str, names[i]);
         primary_had_not_found = true;
         primary_not_found += 1;
       } else if (result.status_code == 200) {
@@ -2664,7 +3080,7 @@ export fn pkg_choose_registry_many(
   });
 
   if (primary_all_available) {
-    storeRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str, .primary);
+    storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .primary);
     trace.summary("registry choose");
     debug.trace("registry choose done: choice=primary total={d}us", .{debug.elapsedUsSince(total_start)});
     return .primary;
@@ -2674,16 +3090,9 @@ export fn pkg_choose_registry_many(
     debug.trace("registry choose done: choice=unknown total={d}us", .{debug.elapsedUsSince(total_start)});
     return .unknown;
   }
-
-  var fallback_fetcher = fetcher.Fetcher.init(global_allocator, std.mem.span(fallback_registry)) catch return .unknown;
-  defer fallback_fetcher.deinit();
-  stage_start = trace.mark("registry fallback init", stage_start);
-
-  const fallback_results = fallback_fetcher.fetchMetadataBatch(names, arena_alloc) catch return .unknown;
-  stage_start = trace.mark("registry fallback metadata", stage_start);
   var fallback_ok: u32 = 0;
   var fallback_miss: u32 = 0;
-  for (fallback_results, 0..) |*result, i| {
+  for (registry_results.fallback, 0..) |*result, i| {
     if (metadataResultSatisfies(arena_alloc, result, constraints[i])) {
       fallback_ok += 1;
     } else {
@@ -2698,9 +3107,46 @@ export fn pkg_choose_registry_many(
     debug.trace("registry choose done: choice=unknown total={d}us", .{debug.elapsedUsSince(total_start)});
     return .unknown;
   }
-  storeRegistryChoice(global_allocator, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
+  storeRegistryChoice(global_allocator, registry_choice_cache_dir, package_specs, count, primary_registry_str, fallback_registry_str, .fallback);
   debug.trace("registry choose done: choice=fallback total={d}us", .{debug.elapsedUsSince(total_start)});
   return .fallback;
+}
+
+export fn pkg_cached_resolution_registry_choice(
+  package_json_path: [*:0]const u8,
+  cache_dir_override: ?[*:0]const u8,
+  primary_registry: [*:0]const u8,
+  fallback_registry: [*:0]const u8,
+) RegistryChoice {
+  var arena_state = std.heap.ArenaAllocator.init(global_allocator);
+  defer arena_state.deinit();
+  const arena_alloc = arena_state.allocator();
+
+  const default_cache_dir = if (cache_dir_override == null)
+    PkgContext.getDefaultCacheDir(arena_alloc) catch return .unknown
+  else
+    null;
+  const cache_dir = if (cache_dir_override) |dir| std.mem.span(dir) else default_cache_dir.?;
+  const pkg_json_path_z = arena_alloc.dupeZ(u8, std.mem.span(package_json_path)) catch return .unknown;
+  var pkg_json = json.PackageJson.parse(arena_alloc, pkg_json_path_z) catch return .unknown;
+  defer pkg_json.deinit(arena_alloc);
+
+  const lockfile_path = lockfilePathForPackageJson(arena_alloc, std.mem.span(package_json_path)) catch null;
+  if (lockfile_path) |path| {
+    defer arena_alloc.free(path);
+    const primary_key = resolutionCacheKey(arena_alloc, &pkg_json, std.mem.span(primary_registry)) orelse 0;
+    if (lockfileMatchesResolutionHash(path, primary_key)) return .primary;
+    const fallback_key = resolutionCacheKey(arena_alloc, &pkg_json, std.mem.span(fallback_registry)) orelse 0;
+    if (lockfileMatchesResolutionHash(path, fallback_key)) return .fallback;
+  }
+
+  if (cachedResolutionLockfileAvailable(arena_alloc, cache_dir, &pkg_json, std.mem.span(primary_registry))) {
+    return .primary;
+  }
+  if (cachedResolutionLockfileAvailable(arena_alloc, cache_dir, &pkg_json, std.mem.span(fallback_registry))) {
+    return .fallback;
+  }
+  return .unknown;
 }
 
 export fn pkg_add_many(
@@ -3902,6 +4348,7 @@ export fn pkg_exec_temp(
       .parent_path = ectx.parent_path,
       .file_count = stats.files,
       .has_bin = ectx.has_bin,
+      .bins = ectx.bins,
     }) catch continue;
   }
 
@@ -3919,11 +4366,13 @@ export fn pkg_exec_temp(
         .parent_path = pkg.parent_path,
         .file_count = entry.file_count,
         .has_bin = pkg.has_bin,
+        .bins = resolvedPackageBins(arena_alloc, pkg) catch &[_]linker.PackageBin{},
       }) catch continue;
     }
   }
 
-  res.writeLockfile(temp_lockfile) catch {};
+  populateResolvedFileCountsFromCache(&res, db);
+  _ = res.writeLockfile(temp_lockfile) catch {};
 
   var trusted = std.StringHashMap(void).init(arena_alloc);
   var resolved_iter2 = res.resolved.valueIterator();

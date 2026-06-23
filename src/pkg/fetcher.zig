@@ -1425,6 +1425,11 @@ pub const Fetcher = struct {
     fallback: MetadataResult,
   };
 
+  pub const DualMetadataBatchResult = struct {
+    primary: []MetadataResult,
+    fallback: []MetadataResult,
+  };
+
   pub fn fetchMetadataDual(
     primary: *Fetcher,
     fallback: *Fetcher,
@@ -1487,6 +1492,162 @@ pub const Fetcher = struct {
     }
 
     return result;
+  }
+
+  pub fn fetchMetadataDualBatch(
+    primary: *Fetcher,
+    fallback: *Fetcher,
+    names: []const []const u8,
+    allocator: std.mem.Allocator,
+  ) !DualMetadataBatchResult {
+    if (names.len == 0) {
+      return .{
+        .primary = &[_]MetadataResult{},
+        .fallback = &[_]MetadataResult{},
+      };
+    }
+
+    var total_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+    try primary.startMetaClientsAsync();
+    try fallback.startMetaClientsAsync();
+    primary.finishMetaClientsAsync() catch {};
+    fallback.finishMetaClientsAsync() catch {};
+    total_start = debug.timer("  meta: dual get clients", total_start);
+
+    var primary_connections: usize = 0;
+    for (primary.meta_clients) |maybe_client| {
+      const client = maybe_client orelse continue;
+      if (metaClientCanQueue(client)) primary_connections += 1;
+    }
+    var fallback_connections: usize = 0;
+    for (fallback.meta_clients) |maybe_client| {
+      const client = maybe_client orelse continue;
+      if (metaClientCanQueue(client)) fallback_connections += 1;
+    }
+    if (primary_connections == 0 and fallback_connections == 0) return error.ConnectionFailed;
+
+    debug.log("  meta: dual batch {d} packages across {d}+{d} connections", .{
+      names.len,
+      primary_connections,
+      fallback_connections,
+    });
+
+    var results = DualMetadataBatchResult{
+      .primary = try allocator.alloc(MetadataResult, names.len),
+      .fallback = try allocator.alloc(MetadataResult, names.len),
+    };
+    for (names, 0..) |name, i| {
+      results.primary[i] = initMetadataResult(name);
+      results.fallback[i] = initMetadataResult(name);
+    }
+
+    const primary_capacity = primary_connections * (MAX_PENDING_REQUESTS - 1);
+    const fallback_capacity = fallback_connections * (MAX_PENDING_REQUESTS - 1);
+    const total_capacity = if (primary_capacity == 0)
+      fallback_capacity
+    else if (fallback_capacity == 0)
+      primary_capacity
+    else
+      @min(primary_capacity, fallback_capacity);
+    if (total_capacity == 0) return error.ConnectionFailed;
+    var offset: usize = 0;
+    var batch_num: usize = 0;
+
+    var decompress_buf = std.ArrayListUnmanaged(u8).empty;
+    defer decompress_buf.deinit(c_allocator);
+
+    while (offset < names.len) {
+      const end = @min(offset + total_capacity, names.len);
+      var batch_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+      debug.log("  meta: dual batch {d} ({d}-{d})", .{ batch_num, offset, end });
+
+      var primary_queued: usize = 0;
+      var fallback_queued: usize = 0;
+      for (offset..end) |i| {
+        if (primary.queueSingleMetadataRequest(names[i], &results.primary[i])) primary_queued += 1;
+        if (fallback.queueSingleMetadataRequest(names[i], &results.fallback[i])) fallback_queued += 1;
+      }
+
+      batch_start = debug.timer("  meta: dual queue requests", batch_start);
+      primary.flushMetaClients();
+      fallback.flushMetaClients();
+
+      const loop = uv.uv_default_loop();
+      var loops: usize = 0;
+      const run_start: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+      var last_progress_ns = run_start;
+      var last_report_ns = run_start;
+      var last_completed: usize = primary.metaProgress().completed + fallback.metaProgress().completed;
+
+      while (true) {
+        _ = uv.uv_run(loop, uv.RUN_NOWAIT);
+        primary.flushMetaClients();
+        fallback.flushMetaClients();
+        loops += 1;
+
+        const primary_progress = primary.metaProgress();
+        const fallback_progress = fallback.metaProgress();
+        const completed = primary_progress.completed + fallback_progress.completed;
+        const total = primary_progress.total + fallback_progress.total;
+        const now: u64 = @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds());
+
+        if (completed != last_completed) {
+          last_completed = completed;
+          last_progress_ns = now;
+        } else if (now - last_progress_ns > META_STALL_TIMEOUT_NS) {
+          debug.log("    h2: dual metadata stalled at {d}/{d} after {d}ms; failing pending requests", .{
+            completed,
+            total,
+            (now - run_start) / 1_000_000,
+          });
+          primary.failPendingMetaRequests();
+          fallback.failPendingMetaRequests();
+          break;
+        } else if (now - last_report_ns > META_PROGRESS_LOG_NS) {
+          debug.log("    h2: dual metadata progress {d}/{d} loops={d}", .{ completed, total, loops });
+          last_report_ns = now;
+        }
+
+        if (completed == total) break;
+        _ = io.sleep(.fromNanoseconds(1 * 1_000_000), .boot) catch {};
+      }
+
+      const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(i128, run_start));
+      debug.log("    h2: dual run complete in {d}ms, {d} loops", .{ elapsed_ns / 1_000_000, loops });
+      batch_start = debug.timer("  meta: dual run h2 loop", batch_start);
+
+      var primary_success: usize = 0;
+      for (primary.meta_clients) |maybe_client| {
+        const client = maybe_client orelse continue;
+        for (client.requests[0..client.request_count]) |*req| {
+          const result: *MetadataResult = @ptrCast(@alignCast(req.userdata));
+          if (storeMetadataBatchResult(req, result, allocator, &decompress_buf)) primary_success += 1;
+        }
+        client.resetRequests();
+      }
+
+      var fallback_success: usize = 0;
+      for (fallback.meta_clients) |maybe_client| {
+        const client = maybe_client orelse continue;
+        for (client.requests[0..client.request_count]) |*req| {
+          const result: *MetadataResult = @ptrCast(@alignCast(req.userdata));
+          if (storeMetadataBatchResult(req, result, allocator, &decompress_buf)) fallback_success += 1;
+        }
+        client.resetRequests();
+      }
+      _ = debug.timer("  meta: dual copy results", batch_start);
+      debug.log("  meta: dual queued={d}+{d} success={d}+{d}", .{
+        primary_queued,
+        fallback_queued,
+        primary_success,
+        fallback_success,
+      });
+
+      offset = end;
+      batch_num += 1;
+    }
+
+    return results;
   }
 
   pub fn fetchMetadataBatch(self: *Fetcher, names: []const []const u8, allocator: std.mem.Allocator) ![]MetadataResult {
