@@ -86,6 +86,13 @@ pkg_registry_choice_t pkg_choose_registry_many(
   const char *fallback_registry
 );
 
+pkg_registry_choice_t pkg_cached_resolution_registry_choice(
+  const char *package_json_path,
+  const char *cache_dir,
+  const char *primary_registry,
+  const char *fallback_registry
+);
+
 pkg_error_t pkg_add(
   pkg_context_t *ctx,
   const char *package_json_path,

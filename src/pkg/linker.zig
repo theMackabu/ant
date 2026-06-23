@@ -98,7 +98,14 @@ pub const PackageLink = struct {
   parent_path: ?[]const u8 = null,
   file_count: u32 = 0,
   has_bin: bool = true,
+  bins: []const PackageBin = &[_]PackageBin{},
   allow_dir_symlink: bool = false,
+  trust_installed: bool = false,
+};
+
+pub const PackageBin = struct {
+  name: []const u8,
+  path: []const u8,
 };
 
 pub const Linker = struct {
@@ -213,14 +220,20 @@ pub const Linker = struct {
         var installed_dir = dir;
         defer installed_dir.close(io);
 
-        const source_version = readPackageVersion(self.allocator, source_dir);
-        defer if (source_version) |v| self.allocator.free(v);
+        if (pkg.trust_installed) {
+          has_existing_package = true;
+          should_skip = true;
+        } else {
+          const source_version = readPackageVersion(self.allocator, source_dir);
+          defer if (source_version) |v| self.allocator.free(v);
 
-        const installed_version = readPackageVersion(self.allocator, installed_dir);
-        defer if (installed_version) |v| self.allocator.free(v);
-        has_existing_package = installed_version != null;
-        should_skip = packageVersionsMatch(source_version, installed_version) and
-          installedFileCountMatches(installed_dir, pkg.file_count);
+          const installed_version = readPackageVersion(self.allocator, installed_dir);
+          defer if (installed_version) |v| self.allocator.free(v);
+          has_existing_package = installed_version != null;
+          should_skip = packageVersionsMatch(source_version, installed_version) and
+            pkg.file_count != 0 and
+            installedFileCountMatches(installed_dir, pkg.file_count);
+        }
       }
     }
 
@@ -238,7 +251,7 @@ pub const Linker = struct {
 
     if (use_dir_symlink) {
       try self.symlinkPackageDirectory(node_modules, pkg.cache_path, install_path);
-      if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, use_symlinked_cli);
+      if (pkg.parent_path == null and pkg.has_bin) try self.linkPackageBinaries(pkg.name, pkg.bins, use_symlinked_cli);
       _ = self.stats.packages_installed.fetchAdd(1, .release);
       return;
     }
@@ -246,7 +259,7 @@ pub const Linker = struct {
     const replace_existing_files = has_existing_install and !has_existing_package;
     if (!replace_existing_files and pkg.file_count >= PARALLEL_LINK_THRESHOLD and
         self.clonePackageDirectory(node_modules, pkg.cache_path, install_path, pkg.file_count)) {
-      if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, false);
+      if (pkg.parent_path == null and pkg.has_bin) try self.linkPackageBinaries(pkg.name, pkg.bins, false);
       _ = self.stats.packages_installed.fetchAdd(1, .release);
       return;
     }
@@ -261,9 +274,9 @@ pub const Linker = struct {
     defer dest_dir.close(io);
 
     self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, replace_existing_files) catch |err| return err;
-    if (!installedFileCountMatches(dest_dir, pkg.file_count)) return error.IoError;
+    if (pkg.file_count != 0 and !installedFileCountMatches(dest_dir, pkg.file_count)) return error.IoError;
 
-    if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name, false);
+    if (pkg.parent_path == null and pkg.has_bin) try self.linkPackageBinaries(pkg.name, pkg.bins, false);
     _ = self.stats.packages_installed.fetchAdd(1, .release);
   }
 
@@ -415,6 +428,19 @@ pub const Linker = struct {
         self.createBinWrapper(pkg_name, simple_name, bin_path, bin_dir) catch {}
       else
         self.createBinSymlink(pkg_name, simple_name, bin_path, bin_dir) catch {};
+    }
+  }
+
+  fn linkPackageBinaries(self: *Linker, pkg_name: []const u8, bins: []const PackageBin, preserve_symlinks_main: bool) !void {
+    if (bins.len == 0) return self.linkBinaries(pkg_name, preserve_symlinks_main);
+
+    const bin_dir = self.bin_dir orelse return;
+    for (bins) |bin| {
+      if (bin.name.len == 0 or bin.path.len == 0) continue;
+      if (preserve_symlinks_main)
+        self.createBinWrapper(pkg_name, bin.name, bin.path, bin_dir) catch continue
+      else
+        self.createBinSymlink(pkg_name, bin.name, bin.path, bin_dir) catch continue;
     }
   }
 

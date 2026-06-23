@@ -33,9 +33,15 @@ typedef enum {
   PKG_FALLBACK_NPM,
 } pkg_missing_fallback_t;
 
+typedef enum {
+  PKG_STORE_GLOBAL,
+  PKG_STORE_PROJECT,
+} pkg_store_t;
+
 typedef struct {
   pkg_source_t default_registry;
   pkg_missing_fallback_t missing_fallback;
+  pkg_store_t store;
 } pkg_cli_config_t;
 
 static void print_bin_callback(const char *name, void *user_data);
@@ -77,10 +83,27 @@ static bool parse_pkg_missing_fallback(const char *value, pkg_missing_fallback_t
   return false;
 }
 
+static const char *pkg_store_name(pkg_store_t store) {
+  return store == PKG_STORE_PROJECT ? "project" : "global";
+}
+
+static bool parse_pkg_store(const char *value, pkg_store_t *out) {
+  if (strcmp(value, "global") == 0) {
+    *out = PKG_STORE_GLOBAL;
+    return true;
+  }
+  if (strcmp(value, "project") == 0) {
+    *out = PKG_STORE_PROJECT;
+    return true;
+  }
+  return false;
+}
+
 static pkg_cli_config_t pkg_config_defaults(void) {
   return (pkg_cli_config_t){
     .default_registry = PKG_SOURCE_LAND,
     .missing_fallback = PKG_FALLBACK_NPM,
+    .store = PKG_STORE_GLOBAL,
   };
 }
 
@@ -126,6 +149,9 @@ static pkg_cli_config_t pkg_config_load(void) {
     } else if (strcmp(key, "install.missingPackageFallback") == 0) {
       pkg_missing_fallback_t fallback;
       if (parse_pkg_missing_fallback(value, &fallback)) config.missing_fallback = fallback;
+    } else if (strcmp(key, "install.store") == 0) {
+      pkg_store_t store;
+      if (parse_pkg_store(value, &store)) config.store = store;
     }
   }
 
@@ -155,6 +181,7 @@ static int pkg_config_save(pkg_cli_config_t config) {
   if (!f) return -1;
   fprintf(f, "install.defaultRegistry=%s\n", pkg_source_name(config.default_registry));
   fprintf(f, "install.missingPackageFallback=%s\n", pkg_missing_fallback_name(config.missing_fallback));
+  fprintf(f, "install.store=%s\n", pkg_store_name(config.store));
   int rc = ferror(f) ? -1 : 0;
   fclose(f);
   return rc;
@@ -162,11 +189,24 @@ static int pkg_config_save(pkg_cli_config_t config) {
 
 static pkg_options_t pkg_options_make(pkg_source_t source, pkg_progress_cb callback, void *user_data) {
   return (pkg_options_t){
+    .cache_dir = NULL,
     .registry_url = pkg_source_registry_host(source),
+    .max_connections = 6,
     .progress_callback = callback,
     .user_data = user_data,
     .verbose = pkg_verbose
   };
+}
+
+static bool project_store_cache_dir(char *out, size_t out_size) {
+  int n = snprintf(out, out_size, "node_modules/.ant/pkg");
+  return n > 0 && (size_t)n < out_size;
+}
+
+static void pkg_options_apply_local_store(pkg_options_t *opts, pkg_cli_config_t config, char *cache_dir, size_t cache_dir_size) {
+  if (config.store != PKG_STORE_PROJECT) return;
+  if (!project_store_cache_dir(cache_dir, cache_dir_size)) return;
+  opts->cache_dir = cache_dir;
 }
 
 static bool strip_source_prefix(const char *spec, pkg_source_t default_source, pkg_source_t *source_out, const char **stripped_out) {
@@ -392,7 +432,8 @@ static bool collect_package_json_specs(const char *package_json_path, package_js
 
   int cap = 0;
   bool ok = append_package_json_specs_from_section(root, "dependencies", specs, &cap)
-    && append_package_json_specs_from_section(root, "devDependencies", specs, &cap);
+    && append_package_json_specs_from_section(root, "devDependencies", specs, &cap)
+    && append_package_json_specs_from_section(root, "optionalDependencies", specs, &cap);
 
   yyjson_doc_free(doc);
   if (!ok) free_package_json_specs(specs);
@@ -410,6 +451,28 @@ static bool choose_package_json_fallback_source(
 
   if (config.default_registry != PKG_SOURCE_LAND || config.missing_fallback != PKG_FALLBACK_NPM) {
     return false;
+  }
+
+  char cache_dir[4096];
+  const char *cached_choice_dir = NULL;
+  if (config.store == PKG_STORE_PROJECT && project_store_cache_dir(cache_dir, sizeof(cache_dir))) {
+    cached_choice_dir = cache_dir;
+  }
+
+  pkg_registry_choice_t cached_choice = pkg_cached_resolution_registry_choice(
+    package_json_path,
+    cached_choice_dir,
+    pkg_source_registry_host(PKG_SOURCE_LAND),
+    pkg_source_registry_host(PKG_SOURCE_NPM)
+  );
+  if (cached_choice == PKG_REGISTRY_CHOICE_PRIMARY) {
+    *source_out = PKG_SOURCE_LAND;
+    return true;
+  }
+  if (cached_choice == PKG_REGISTRY_CHOICE_FALLBACK) {
+    *source_out = PKG_SOURCE_NPM;
+    *used_fallback_out = true;
+    return true;
   }
 
   package_json_specs_t specs;
@@ -1099,6 +1162,8 @@ static int cmd_install(void) {
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  char install_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, install_cache_dir, sizeof(install_cache_dir));
   
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
@@ -1207,6 +1272,8 @@ static int cmd_update(void) {
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  char update_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, update_cache_dir, sizeof(update_cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     if (!pkg_verbose) progress_stop(&progress);
@@ -1317,6 +1384,8 @@ static int cmd_update_many(const char *const *package_specs, int count) {
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  char update_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, update_cache_dir, sizeof(update_cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     free((void *)deps_specs);
@@ -1353,6 +1422,8 @@ static int cmd_update_many(const char *const *package_specs, int count) {
         pkg_verbose ? NULL : progress_callback,
         pkg_verbose ? NULL : &retry_progress
       );
+      char retry_cache_dir[4096];
+      pkg_options_apply_local_store(&retry_opts, config, retry_cache_dir, sizeof(retry_cache_dir));
       ctx = pkg_init(&retry_opts);
       if (!ctx) {
         if (!pkg_verbose) progress_stop(&retry_progress);
@@ -1458,6 +1529,8 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  char add_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, add_cache_dir, sizeof(add_cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     if (!pkg_verbose) progress_stop(&progress);
@@ -1483,6 +1556,8 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
         pkg_verbose ? NULL : progress_callback,
         pkg_verbose ? NULL : &retry_progress
       );
+      char retry_cache_dir[4096];
+      pkg_options_apply_local_store(&retry_opts, config, retry_cache_dir, sizeof(retry_cache_dir));
       ctx = pkg_init(&retry_opts);
       if (!ctx) {
         if (!pkg_verbose) progress_stop(&retry_progress);
@@ -1549,12 +1624,16 @@ static int cmd_remove(const char *package_name) {
   if (!pkg_verbose) {
     progress_start(&progress, "🔍 Resolving");
   }
+
+  pkg_cli_config_t config = pkg_config_load();
   
-  pkg_options_t opts = { 
-    .progress_callback = pkg_verbose ? NULL : progress_callback,
-    .user_data = pkg_verbose ? NULL : &progress,
-    .verbose = pkg_verbose 
-  };
+  pkg_options_t opts = pkg_options_make(
+    config.default_registry,
+    pkg_verbose ? NULL : progress_callback,
+    pkg_verbose ? NULL : &progress
+  );
+  char remove_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, remove_cache_dir, sizeof(remove_cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
@@ -1612,8 +1691,15 @@ static int cmd_trust(const char **pkgs, int count, bool all) {
   
   struct timespec start_time;
   clock_gettime(CLOCK_MONOTONIC, &start_time);
-  
-  pkg_options_t opts = { .verbose = pkg_verbose };
+
+  pkg_cli_config_t config = pkg_config_load();
+  pkg_options_t opts = pkg_options_make(
+    config.default_registry,
+    NULL,
+    NULL
+  );
+  char trust_cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, trust_cache_dir, sizeof(trust_cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
@@ -2223,6 +2309,7 @@ int pkg_cmd_config(int argc, char **argv) {
     printf("Keys:\n");
     printf("  install.defaultRegistry          land | npm\n");
     printf("  install.missingPackageFallback   none | npm\n");
+    printf("  install.store                    global | project\n");
     return EXIT_SUCCESS;
   }
 
@@ -2241,6 +2328,10 @@ int pkg_cmd_config(int argc, char **argv) {
     }
     if (strcmp(argv[2], "install.missingPackageFallback") == 0) {
       printf("%s\n", pkg_missing_fallback_name(config.missing_fallback));
+      return EXIT_SUCCESS;
+    }
+    if (strcmp(argv[2], "install.store") == 0) {
+      printf("%s\n", pkg_store_name(config.store));
       return EXIT_SUCCESS;
     }
     fprintf(stderr, "Error: unknown config key: %s\n", argv[2]);
@@ -2267,6 +2358,13 @@ int pkg_cmd_config(int argc, char **argv) {
         return EXIT_FAILURE;
       }
       config.missing_fallback = fallback;
+    } else if (strcmp(argv[2], "install.store") == 0) {
+      pkg_store_t store;
+      if (!parse_pkg_store(argv[3], &store)) {
+        fprintf(stderr, "Error: install.store must be global or project\n");
+        return EXIT_FAILURE;
+      }
+      config.store = store;
     } else {
       fprintf(stderr, "Error: unknown config key: %s\n", argv[2]);
       return EXIT_FAILURE;
@@ -2553,7 +2651,10 @@ int pkg_cmd_ls(int argc, char **argv) {
 }
 
 static int cmd_cache_info(void) {
-  pkg_options_t opts = { .verbose = pkg_verbose };
+  pkg_cli_config_t config = pkg_config_load();
+  pkg_options_t opts = { .max_connections = 6, .verbose = pkg_verbose };
+  char cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, cache_dir, sizeof(cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
@@ -2569,7 +2670,7 @@ static int cmd_cache_info(void) {
   }
   
   char size_buf[64], db_buf[64];
-  printf("%sCache location:%s %s\n", C_BOLD, C_RESET, get_cache_dir());
+  printf("%sCache location:%s %s\n", C_BOLD, C_RESET, opts.cache_dir ? opts.cache_dir : get_cache_dir());
   printf("%sPackages:%s      %u\n", C_BOLD, C_RESET, stats.package_count);
   printf("%sSize:%s          %s\n", C_BOLD, C_RESET, format_size(stats.total_size, size_buf, sizeof(size_buf)));
   printf("%sDB size:%s       %s\n", C_BOLD, C_RESET, format_size(stats.db_size, db_buf, sizeof(db_buf)));
@@ -2579,7 +2680,10 @@ static int cmd_cache_info(void) {
 }
 
 static int cmd_cache_prune(uint32_t max_age_days) {
-  pkg_options_t opts = { .verbose = pkg_verbose };
+  pkg_cli_config_t config = pkg_config_load();
+  pkg_options_t opts = { .max_connections = 6, .verbose = pkg_verbose };
+  char cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, cache_dir, sizeof(cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
@@ -2605,7 +2709,10 @@ static int cmd_cache_prune(uint32_t max_age_days) {
 }
 
 static int cmd_cache_sync(void) {
-  pkg_options_t opts = { .verbose = pkg_verbose };
+  pkg_cli_config_t config = pkg_config_load();
+  pkg_options_t opts = { .max_connections = 6, .verbose = pkg_verbose };
+  char cache_dir[4096];
+  pkg_options_apply_local_store(&opts, config, cache_dir, sizeof(cache_dir));
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
     fprintf(stderr, "Error: Failed to initialize package manager\n");
