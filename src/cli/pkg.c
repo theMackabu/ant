@@ -183,7 +183,7 @@ static int pkg_config_save(pkg_cli_config_t config) {
   fprintf(f, "install.missingPackageFallback=%s\n", pkg_missing_fallback_name(config.missing_fallback));
   fprintf(f, "install.store=%s\n", pkg_store_name(config.store));
   int rc = ferror(f) ? -1 : 0;
-  fclose(f);
+  if (fclose(f) != 0) rc = -1;
   return rc;
 }
 

@@ -584,6 +584,39 @@ pub const LockfileWriter = struct {
     });
   }
 
+  fn stringRefOrder(self: *const LockfileWriter, a: StringRef, b: StringRef) std.math.Order {
+    return std.mem.order(u8, a.slice(self.string_builder.items), b.slice(self.string_builder.items));
+  }
+
+  fn binEntryLessThan(self: *const LockfileWriter, a: BinEntry, b: BinEntry) bool {
+    if (a.package_index != b.package_index) return a.package_index < b.package_index;
+    const name_order = self.stringRefOrder(a.name, b.name);
+    if (name_order != .eq) return name_order == .lt;
+    return self.stringRefOrder(a.path, b.path) == .lt;
+  }
+
+  fn disabledDependencyLessThan(self: *const LockfileWriter, a: DisabledDependency, b: DisabledDependency) bool {
+    if (a.parent_package_index != b.parent_package_index) return a.parent_package_index < b.parent_package_index;
+    const name_order = self.stringRefOrder(a.name, b.name);
+    if (name_order != .eq) return name_order == .lt;
+    return self.stringRefOrder(a.constraint, b.constraint) == .lt;
+  }
+
+  fn platformEntryLessThan(self: *const LockfileWriter, a: PlatformEntry, b: PlatformEntry) bool {
+    if (a.package_index != b.package_index) return a.package_index < b.package_index;
+    const os_order = self.stringRefOrder(a.os, b.os);
+    if (os_order != .eq) return os_order == .lt;
+    const cpu_order = self.stringRefOrder(a.cpu, b.cpu);
+    if (cpu_order != .eq) return cpu_order == .lt;
+    return self.stringRefOrder(a.libc, b.libc) == .lt;
+  }
+
+  fn sortSideTables(self: *LockfileWriter) void {
+    std.mem.sort(BinEntry, self.bin_entries.items, self, binEntryLessThan);
+    std.mem.sort(DisabledDependency, self.disabled_dependencies.items, self, disabledDependencyLessThan);
+    std.mem.sort(PlatformEntry, self.platform_entries.items, self, platformEntryLessThan);
+  }
+
   fn alignOffset(offset: u32, alignment: u32) u32 {
     return alignFileOffset(offset, alignment);
   }
@@ -657,6 +690,8 @@ pub const LockfileWriter = struct {
   }
 
   pub fn write(self: *LockfileWriter, path: []const u8) !u64 {
+    self.sortSideTables();
+
     const file = try std.Io.Dir.cwd().createFile(io, path, .{});
     defer file.close(io);
 

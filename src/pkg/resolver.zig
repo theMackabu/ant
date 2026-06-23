@@ -385,7 +385,7 @@ pub const VersionInfo = struct {
     if (self.cpu) |cpu_filter| if (!matchesFilter(cpu_filter, current_cpu)) return false;
 
     if (self.libc) |libc_filter| {
-      const libc = current_libc orelse "";
+      const libc = current_libc orelse return false;
       if (!matchesFilter(libc_filter, libc)) return false;
     }
 
@@ -551,7 +551,7 @@ fn tokenMatchesCurrentLibc(token: []const u8) bool {
   if (comptime builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf) {
     return std.mem.eql(u8, token, "musl");
   }
-  return std.mem.eql(u8, token, "gnu");
+  return std.mem.eql(u8, token, "gnu") or std.mem.eql(u8, token, "glibc");
 }
 
 fn optionalDependencyNamePlatformMismatch(name: []const u8) bool {
@@ -565,7 +565,7 @@ fn optionalDependencyNamePlatformMismatch(name: []const u8) bool {
     "arm", "arm64", "ia32", "loong64", "mips64el", "ppc64",
     "riscv64", "s390x", "x64",
   };
-  const libc_tokens = &[_][]const u8{ "gnu", "musl" };
+  const libc_tokens = &[_][]const u8{ "glibc", "gnu", "musl" };
 
   var has_os = false;
   var os_matches = false;
@@ -802,9 +802,7 @@ pub const ResolvedPackage = struct {
   pub fn deinit(self: *ResolvedPackage) void {
     self.allocator.free(self.tarball_url);
     if (self.parent_path) |p| self.allocator.free(p);
-    for (self.dependencies.items) |dep| {
-      self.allocator.free(dep.constraint);
-    }
+    self.clearDependencies();
     self.dependencies.deinit(self.allocator);
     self.clearBins();
     self.bins.deinit(self.allocator);
@@ -819,6 +817,13 @@ pub const ResolvedPackage = struct {
       self.allocator.free(bin.path);
     }
     self.bins.clearRetainingCapacity();
+  }
+
+  pub fn clearDependencies(self: *ResolvedPackage) void {
+    for (self.dependencies.items) |dep| {
+      self.allocator.free(dep.constraint);
+    }
+    self.dependencies.clearRetainingCapacity();
   }
 
   pub fn copyBinsFromVersion(self: *ResolvedPackage, version_info: *const VersionInfo) !void {
@@ -875,6 +880,14 @@ pub const ResolvedPackage = struct {
       return std.fmt.allocPrint(allocator, "{s}/node_modules/{s}", .{ parent, self.name.slice() });
     }
     return allocator.dupe(u8, self.name.slice());
+  }
+
+  fn orderForLockfile(_: void, a: *ResolvedPackage, b: *ResolvedPackage) bool {
+    const a_parent = a.parent_path orelse "";
+    const b_parent = b.parent_path orelse "";
+    const parent_order = std.mem.order(u8, a_parent, b_parent);
+    if (parent_order != .eq) return parent_order == .lt;
+    return std.mem.order(u8, a.name.slice(), b.name.slice()) == .lt;
   }
 };
 
@@ -1510,6 +1523,48 @@ pub const Resolver = struct {
     return null;
   }
 
+  fn copyDependenciesFromVersion(self: *Resolver, pkg: *ResolvedPackage, version_info: *const VersionInfo) !void {
+    pkg.clearDependencies();
+    pkg.clearDisabledDependencies();
+
+    var dep_it = version_info.dependencies.iterator();
+    while (dep_it.next()) |entry| {
+      try pkg.dependencies.append(self.allocator, .{
+        .name = try self.string_pool.intern(entry.key_ptr.*),
+        .constraint = try self.allocator.dupe(u8, entry.value_ptr.*),
+        .flags = .{},
+      });
+    }
+
+    var opt_it = version_info.optional_dependencies.iterator();
+    while (opt_it.next()) |entry| {
+      if (self.optionalDependencyShouldSkip(entry.key_ptr.*, entry.value_ptr.*)) {
+        try pkg.addDisabledDependency(entry.key_ptr.*, entry.value_ptr.*);
+        continue;
+      }
+      try pkg.dependencies.append(self.allocator, .{
+        .name = try self.string_pool.intern(entry.key_ptr.*),
+        .constraint = try self.allocator.dupe(u8, entry.value_ptr.*),
+        .flags = .{ .optional = true },
+      });
+    }
+  }
+
+  fn refreshResolvedPackageFromVersion(self: *Resolver, pkg: *ResolvedPackage, version_info: *const VersionInfo) !void {
+    const tarball_url = try self.allocator.dupe(u8, version_info.tarball_url);
+    errdefer self.allocator.free(tarball_url);
+
+    pkg.version = version_info.version;
+    pkg.integrity = version_info.integrity;
+    self.allocator.free(pkg.tarball_url);
+    pkg.tarball_url = tarball_url;
+    pkg.has_bin = version_info.bin.count() > 0;
+    try pkg.copyBinsFromVersion(version_info);
+    try pkg.copyPlatformFromVersion(version_info);
+    try self.copyDependenciesFromVersion(pkg, version_info);
+    pkg.file_count = 0;
+  }
+
   fn createPackageFromVersion(
     self: *Resolver,
     name: []const u8,
@@ -1786,14 +1841,7 @@ pub const Resolver = struct {
             b.version.patch,
           });
 
-          existing_pkg.version = b.version;
-          existing_pkg.integrity = b.integrity;
-          self.allocator.free(existing_pkg.tarball_url);
-          existing_pkg.tarball_url = try self.allocator.dupe(u8, b.tarball_url);
-          existing_pkg.has_bin = b.bin.count() > 0;
-          try existing_pkg.copyBinsFromVersion(b);
-          try existing_pkg.copyPlatformFromVersion(b);
-          existing_pkg.file_count = 0;
+          try self.refreshResolvedPackageFromVersion(existing_pkg, b);
 
           if (self.on_package_resolved) |callback| {
             callback(existing_pkg, self.on_package_resolved_data);
@@ -2038,14 +2086,7 @@ pub const Resolver = struct {
           best.version.patch,
         });
 
-        existing_pkg.version = best.version;
-        existing_pkg.integrity = best.integrity;
-        self.allocator.free(existing_pkg.tarball_url);
-        existing_pkg.tarball_url = try self.allocator.dupe(u8, best.tarball_url);
-        existing_pkg.has_bin = best.bin.count() > 0;
-        try existing_pkg.copyBinsFromVersion(best);
-        try existing_pkg.copyPlatformFromVersion(best);
-        existing_pkg.file_count = 0;
+        try self.refreshResolvedPackageFromVersion(existing_pkg, best);
       }
 
       if (depth == 0) existing_pkg.direct = true;
@@ -2292,14 +2333,15 @@ pub const Resolver = struct {
     var packages_ordered = std.ArrayListUnmanaged(*ResolvedPackage).empty;
     defer packages_ordered.deinit(self.allocator);
 
-    var idx: u32 = 0;
     var iter = self.resolved.valueIterator();
     while (iter.next()) |pkg_ptr| {
-      const pkg = pkg_ptr.*;
+      try packages_ordered.append(self.allocator, pkg_ptr.*);
+    }
+    std.mem.sort(*ResolvedPackage, packages_ordered.items, {}, ResolvedPackage.orderForLockfile);
+
+    for (packages_ordered.items, 0..) |pkg, i| {
       const install_path = try pkg.installPath(self.allocator);
-      try pkg_indices.put(install_path, idx);
-      try packages_ordered.append(self.allocator, pkg);
-      idx += 1;
+      try pkg_indices.put(install_path, @intCast(i));
     }
 
     for (packages_ordered.items) |pkg| {

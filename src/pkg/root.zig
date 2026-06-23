@@ -697,6 +697,13 @@ pub const PkgContext = struct {
       }
       stage_start = trace.mark("cache insert + link misses", stage_start);
       debug.log("  fetched: {d} success, {d} errors", .{ success_count, error_count });
+      if (error_count > 0) {
+        self.setErrorFmt("Failed to fetch or extract {d} package{s}", .{
+          error_count,
+          if (error_count == 1) "" else "s",
+        });
+        return error.IoError;
+      }
       if (link_error_count > 0) return error.IoError;
     }
 
@@ -896,6 +903,18 @@ fn lockfileMatchesResolutionHash(lockfile_path: []const u8, resolution_hash: u64
     lf.header.resolution_hash == resolution_hash;
 }
 
+fn timestampWithinTtl(cached_at: i64, now: i64, ttl_seconds: i64, future_skew_seconds: i64) bool {
+  const oldest = if (now > std.math.minInt(i64) + ttl_seconds)
+    now - ttl_seconds
+  else
+    std.math.minInt(i64);
+  const newest = if (now < std.math.maxInt(i64) - future_skew_seconds)
+    now + future_skew_seconds
+  else
+    std.math.maxInt(i64);
+  return cached_at >= oldest and cached_at <= newest;
+}
+
 fn cachedResolutionLockfileAvailable(
   allocator: std.mem.Allocator,
   cache_dir: []const u8,
@@ -913,7 +932,7 @@ fn cachedResolutionLockfileAvailable(
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  return cached_at <= now + 60 and now - cached_at <= 24 * 60 * 60;
+  return timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60);
 }
 
 fn cachedResolutionLockfileDataValid(data: []const u8, expected_resolution_hash: u64) bool {
@@ -999,7 +1018,7 @@ fn readCachedResolutionLockfile(
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  if (cached_at > now + 60 or now - cached_at > 24 * 60 * 60) return false;
+  if (!timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60)) return false;
 
   std.Io.Dir.cwd().writeFile(io, .{
     .sub_path = lockfile_path,
@@ -1940,13 +1959,21 @@ export fn pkg_resolve_and_install(
     const depth_jobs = link_jobs.items[depth_start..depth_end];
     const max_threads: usize = if (copy_link_mode) 2 else 8;
     const num_threads = @min(max_threads, depth_jobs.len);
+    var depth_has_root_bins = false;
+    for (depth_jobs) |job_with_size| {
+      if (job_with_size.job.parent_path == null and job_with_size.job.has_bin) {
+        depth_has_root_bins = true;
+        break;
+      }
+    }
     if (c.options.verbose and depth_jobs.len > 1) {
       debug.log("  linking depth {d} ({d} items)", .{ depth, depth_jobs.len });
     }
 
-    if (num_threads > 1 and depth_jobs.len > 4) {
+    if (!depth_has_root_bins and num_threads > 1 and depth_jobs.len > 4) {
       var threads: [8]?std.Thread = .{null} ** 8;
       var next_job = std.atomic.Value(usize).init(0);
+      var spawned_count: usize = 0;
 
       for (0..num_threads) |t| {
         threads[t] = std.Thread.spawn(.{}, struct {
@@ -1984,10 +2011,30 @@ export fn pkg_resolve_and_install(
             }
           }
         }.work, .{ &pkg_linker, depth_jobs, &next_job, c, total_jobs, &link_counter, &download_link_error_count, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
+        if (threads[t] != null) spawned_count += 1;
       }
 
-      for (&threads) |*t| {
-        if (t.*) |thread| thread.join();
+      if (spawned_count == 0) {
+        for (depth_jobs) |job_with_size| {
+          const job = job_with_size.job;
+          const current = link_counter.fetchAdd(1, .monotonic) + 1;
+          const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
+          c.reportProgress(.linking, current, total_jobs, msg);
+          const start = std.Io.Timestamp.now(io, .boot).toNanoseconds();
+          pkg_linker.linkPackage(job) catch |err| {
+            _ = download_link_error_count.fetchAdd(1, .monotonic);
+            debug.log("  link error: {s}: {s}", .{ job.name, @errorName(err) });
+            continue;
+          };
+          const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.Io.Timestamp.now(io, .boot).toNanoseconds())) - @as(u64, @intCast(start))) / 1_000_000);
+          if (elapsed_ms > 100 and c.options.verbose) {
+            debug.log("  link slow: {s} {d}ms", .{ job.name, elapsed_ms });
+          }
+        }
+      } else {
+        for (&threads) |*t| {
+          if (t.*) |thread| thread.join();
+        }
       }
     } else {
       for (depth_jobs) |job_with_size| {
@@ -2023,6 +2070,13 @@ export fn pkg_resolve_and_install(
   
   debug.log("  downloaded: {d} success, {d} errors", .{ success_count, error_count });
   for (interleaved.extract_contexts.items) |ext_ctx| ext_ctx.ext.deinit();
+  if (error_count > 0) {
+    c.setErrorFmt("Failed to fetch or extract {d} package{s}", .{
+      error_count,
+      if (error_count == 1) "" else "s",
+    });
+    return .extract_error;
+  }
   link_error_count += download_link_error_count.load(.monotonic);
   if (link_error_count > 0) {
     c.setErrorFmt("Failed to link {d} package{s}", .{
@@ -2820,7 +2874,7 @@ fn lookupCachedRegistryChoice(
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  if (now - cached_at > 24 * 60 * 60) return null;
+  if (!timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60)) return null;
   return registryChoiceFromByte(data[@sizeOf(i64)]);
 }
 
@@ -2840,7 +2894,7 @@ fn lookupCachedRegistryPrimaryMiss(
   var cached_at: i64 = undefined;
   @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
   const now = std.Io.Timestamp.now(io, .real).toSeconds();
-  return now - cached_at <= 24 * 60 * 60;
+  return timestampWithinTtl(cached_at, now, 24 * 60 * 60, 60);
 }
 
 fn storeRegistryChoice(

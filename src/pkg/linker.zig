@@ -220,20 +220,15 @@ pub const Linker = struct {
         var installed_dir = dir;
         defer installed_dir.close(io);
 
-        if (pkg.trust_installed) {
-          has_existing_package = true;
-          should_skip = true;
-        } else {
-          const source_version = readPackageVersion(self.allocator, source_dir);
-          defer if (source_version) |v| self.allocator.free(v);
+        const source_version = readPackageVersion(self.allocator, source_dir);
+        defer if (source_version) |v| self.allocator.free(v);
 
-          const installed_version = readPackageVersion(self.allocator, installed_dir);
-          defer if (installed_version) |v| self.allocator.free(v);
-          has_existing_package = installed_version != null;
-          should_skip = packageVersionsMatch(source_version, installed_version) and
-            pkg.file_count != 0 and
-            installedFileCountMatches(installed_dir, pkg.file_count);
-        }
+        const installed_version = readPackageVersion(self.allocator, installed_dir);
+        defer if (installed_version) |v| self.allocator.free(v);
+        has_existing_package = installed_version != null;
+        should_skip = packageVersionsMatch(source_version, installed_version) and
+          pkg.file_count != 0 and
+          installedFileCountMatches(installed_dir, pkg.file_count);
       }
     }
 
@@ -395,6 +390,29 @@ pub const Linker = struct {
     return std.mem.indexOf(u8, content[0..@min(content.len, 128)], "node") != null;
   }
 
+  fn explicitBinNameIsSafe(name: []const u8) bool {
+    if (name.len == 0 or std.fs.path.isAbsolute(name)) return false;
+    if (std.mem.indexOfScalar(u8, name, '/') != null or std.mem.indexOfScalar(u8, name, '\\') != null) return false;
+    return !std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..");
+  }
+
+  fn explicitBinPathIsSafe(path: []const u8) bool {
+    if (path.len == 0 or std.fs.path.isAbsolute(path)) return false;
+    var normalized = path;
+    while (std.mem.startsWith(u8, normalized, "./")) normalized = normalized[2..];
+    if (normalized.len == 0) return false;
+
+    var parts = std.mem.splitAny(u8, normalized, "/\\");
+    while (parts.next()) |part| {
+      if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+    }
+    return true;
+  }
+
+  fn explicitBinIsSafe(bin: PackageBin) bool {
+    return explicitBinNameIsSafe(bin.name) and explicitBinPathIsSafe(bin.path);
+  }
+
   fn linkBinaries(self: *Linker, pkg_name: []const u8, preserve_symlinks_main: bool) !void {
     const bin_dir = self.bin_dir orelse return;
     const node_modules = self.node_modules_dir orelse return;
@@ -436,7 +454,7 @@ pub const Linker = struct {
 
     const bin_dir = self.bin_dir orelse return;
     for (bins) |bin| {
-      if (bin.name.len == 0 or bin.path.len == 0) continue;
+      if (!explicitBinIsSafe(bin)) continue;
       if (preserve_symlinks_main)
         self.createBinWrapper(pkg_name, bin.name, bin.path, bin_dir) catch continue
       else
