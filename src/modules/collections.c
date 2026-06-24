@@ -348,13 +348,14 @@ static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "forEach requires a callback function");
   
   ant_value_t callback = args[0];
+  ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
   
   if (map_ptr && *map_ptr) {
   map_entry_t *entry, *tmp;
   HASH_ITER(hh, *map_ptr, entry, tmp) {
     ant_value_t k = entry->key_val;
     ant_value_t call_args[3] = { entry->value, k, this_val };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(result)) return result;
   }}
   
@@ -555,12 +556,13 @@ static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "forEach requires a callback function");
   
   ant_value_t callback = args[0];
+  ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
   if (set_ptr && *set_ptr) {
   set_entry_t *entry, *tmp;
   
   HASH_ITER(hh, *set_ptr, entry, tmp) {
     ant_value_t call_args[3] = { entry->value, entry->value, this_val };
-    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(result)) return result;
   }}
   
