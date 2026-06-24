@@ -1,6 +1,6 @@
 {
   "name": "@ant/hono",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Hono adapter helpers for Ant's native server runtime",
   "type": "module",
   "main": "dist/index.js",

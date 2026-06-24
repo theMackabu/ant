@@ -19,11 +19,95 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <time.h>
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <stdatomic.h>
+#define SV_JIT_ASYNC 1
+#endif
+
+typedef struct sv_jit_plan sv_jit_plan_t;
 
 typedef struct {
   MIR_context_t ctx;
   bool externals_loaded;
+#ifdef SV_JIT_ASYNC
+  pthread_t worker;
+  pthread_mutex_t async_lock;
+  pthread_cond_t async_cond;
+  bool worker_started;
+  bool worker_stop;
+  struct sv_jit_job *pending_head;
+  struct sv_jit_job *pending_tail;
+  struct sv_jit_job *running;
+  struct sv_jit_job *completed;
+  struct sv_jit_owned_ctx *owned_ctxs;
+  atomic_uint async_depth;
+  atomic_uint completed_depth;
+#endif
 } sv_jit_ctx_t;
+
+#ifdef SV_JIT_ASYNC
+static pthread_mutex_t sv_jit_codegen_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct sv_jit_owned_ctx {
+  sv_jit_ctx_t *ctx;
+  sv_jit_plan_t *plan;
+  struct sv_jit_owned_ctx *next;
+} sv_jit_owned_ctx_t;
+
+typedef enum {
+  SV_JIT_CONST_IMMEDIATE = 0,
+  SV_JIT_CONST_RUNTIME_SLOT = 1,
+} sv_jit_const_kind_t;
+
+typedef struct {
+  ant_value_t value;
+  uint32_t slot;
+  uint8_t kind;
+} sv_jit_const_desc_t;
+
+struct sv_jit_plan {
+  sv_func_t *target;
+  sv_func_t func_view;
+  uint32_t tfb_version;
+  uint32_t const_epoch;
+  uint32_t call_target_epoch;
+  uint8_t call_target_count;
+  uint8_t *code;
+  ant_value_t *const_values;
+  sv_jit_const_desc_t *const_descs;
+  sv_call_target_fb_t *call_targets;
+  sv_atom_t *atoms;
+  char *atom_storage;
+  char *name_storage;
+  sv_ic_entry_t *ic_slots;
+  sv_upval_desc_t *upval_descs;
+  sv_type_info_t *local_types;
+  uint8_t *type_feedback;
+  uint8_t *local_type_feedback;
+};
+
+typedef struct sv_jit_job {
+  sv_jit_plan_t plan;
+  sv_jit_ctx_t *compile_ctx;
+  sv_jit_func_t code;
+  uint64_t compile_ns;
+  bool failed;
+  struct sv_jit_job *next;
+} sv_jit_job_t;
+
+static void sv_jit_async_ctx_destroy(sv_jit_ctx_t *jc);
+static void sv_jit_plan_free(sv_jit_plan_t *plan);
+static void sv_jit_job_free(sv_jit_job_t *job, bool destroy_ctx);
+static void *sv_jit_async_worker_main(void *arg);
+#endif
+
+static uint64_t sv_jit_now_ns(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
 
 static sv_jit_ctx_t *jit_ctx_get(ant_t *js) {
   return (sv_jit_ctx_t *)js->jit_ctx;
@@ -35,6 +119,36 @@ static void jit_ctx_set(ant_t *js, sv_jit_ctx_t *ctx) {
 
 static void jit_ctx_remove(ant_t *js) {
   js->jit_ctx = NULL;
+}
+
+static sv_jit_ctx_t *jit_ctx_create(void) {
+  sv_jit_ctx_t *jc = calloc(1, sizeof(*jc));
+  if (!jc) return NULL;
+  jc->ctx = MIR_init();
+  if (!jc->ctx) {
+    free(jc);
+    return NULL;
+  }
+  MIR_gen_init(jc->ctx);
+  MIR_gen_set_optimize_level(jc->ctx, 3);
+#ifdef SV_JIT_ASYNC
+  pthread_mutex_init(&jc->async_lock, NULL);
+  pthread_cond_init(&jc->async_cond, NULL);
+#endif
+  return jc;
+}
+
+static void jit_ctx_destroy_base(sv_jit_ctx_t *jc) {
+  if (!jc) return;
+  if (jc->ctx) {
+    MIR_gen_finish(jc->ctx);
+    MIR_finish(jc->ctx);
+  }
+#ifdef SV_JIT_ASYNC
+  pthread_cond_destroy(&jc->async_cond);
+  pthread_mutex_destroy(&jc->async_lock);
+#endif
+  free(jc);
 }
 
 static void jit_load_externals_once(sv_jit_ctx_t *jc) {
@@ -64,6 +178,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_destructure_next);
   LOAD_EXT(jit_helper_get_global);
   LOAD_EXT(jit_helper_get_field);
+  LOAD_EXT(jit_helper_get_field_no_ic);
   LOAD_EXT(jit_helper_import_default);
   LOAD_EXT(jit_helper_import_named);
   LOAD_EXT(jit_helper_export);
@@ -116,11 +231,8 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
 
 void sv_jit_init(ant_t *js) {
   if (jit_ctx_get(js)) return;
-  sv_jit_ctx_t *jc = calloc(1, sizeof(*jc));
+  sv_jit_ctx_t *jc = jit_ctx_create();
   if (!jc) return;
-  jc->ctx = MIR_init();
-  MIR_gen_init(jc->ctx);
-  MIR_gen_set_optimize_level(jc->ctx, 3);
   jit_load_externals_once(jc);
   jit_ctx_set(js, jc);
 }
@@ -128,9 +240,52 @@ void sv_jit_init(ant_t *js) {
 void sv_jit_destroy(ant_t *js) {
   sv_jit_ctx_t *jc = jit_ctx_get(js);
   if (!jc) return;
-  MIR_gen_finish(jc->ctx);
-  MIR_finish(jc->ctx);
-  free(jc);
+#ifdef SV_JIT_ASYNC
+  if (jc->worker_started) {
+    pthread_mutex_lock(&jc->async_lock);
+    jc->worker_stop = true;
+    pthread_cond_signal(&jc->async_cond);
+    pthread_mutex_unlock(&jc->async_lock);
+    pthread_join(jc->worker, NULL);
+    jc->worker_started = false;
+  }
+
+  sv_jit_job_t *job = jc->pending_head;
+  jc->pending_head = jc->pending_tail = NULL;
+  while (job) {
+    sv_jit_job_t *next = job->next;
+    if (job->plan.target) job->plan.target->jit_compile_queued = false;
+    sv_jit_job_free(job, true);
+    job = next;
+  }
+  job = jc->completed;
+  jc->completed = NULL;
+  while (job) {
+    sv_jit_job_t *next = job->next;
+    if (job->plan.target) job->plan.target->jit_compile_queued = false;
+    sv_jit_job_free(job, true);
+    job = next;
+  }
+  if (jc->running) {
+    if (jc->running->plan.target) jc->running->plan.target->jit_compile_queued = false;
+    sv_jit_job_free(jc->running, true);
+    jc->running = NULL;
+  }
+
+  sv_jit_owned_ctx_t *owned = jc->owned_ctxs;
+  jc->owned_ctxs = NULL;
+  while (owned) {
+    sv_jit_owned_ctx_t *next = owned->next;
+    sv_jit_async_ctx_destroy(owned->ctx);
+    if (owned->plan) {
+      sv_jit_plan_free(owned->plan);
+      free(owned->plan);
+    }
+    free(owned);
+    owned = next;
+  }
+#endif
+  jit_ctx_destroy_base(jc);
   jit_ctx_remove(js);
 }
 
@@ -633,6 +788,72 @@ static void mir_load_const_slot(MIR_context_t ctx, MIR_item_t fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, dst),
       MIR_new_mem_op(ctx, MIR_T_I64, 0, dst, 0, 1)));
+}
+
+static void mir_load_runtime_const_slot(MIR_context_t ctx, MIR_item_t fn,
+                                        MIR_reg_t dst, MIR_reg_t runtime_func,
+                                        MIR_reg_t const_base, uint32_t slot) {
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, const_base),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(sv_func_t, constants),
+        runtime_func, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, dst),
+      MIR_new_mem_op(ctx, MIR_T_I64,
+        (MIR_disp_t)(slot * (uint32_t)sizeof(ant_value_t)),
+        const_base, 0, 1)));
+}
+
+static bool mir_emit_const_load(
+  MIR_context_t ctx,
+  MIR_item_t fn,
+  sv_jit_plan_t *plan,
+  sv_func_t *func,
+  sv_func_t *runtime_func,
+  MIR_reg_t runtime_func_reg,
+  MIR_reg_t const_base_reg,
+  uint32_t idx,
+  MIR_reg_t dst,
+  ant_value_t *out_value,
+  bool *out_is_heap
+) {
+  if (!func || idx >= (uint32_t)func->const_count) return false;
+#ifdef SV_JIT_ASYNC
+  if (plan) {
+    if (!plan->const_descs || idx >= (uint32_t)plan->func_view.const_count)
+      return false;
+    sv_jit_const_desc_t *desc = &plan->const_descs[idx];
+    ant_value_t value = desc->value;
+    if (desc->kind == SV_JIT_CONST_RUNTIME_SLOT) {
+      if (!runtime_func || !runtime_func->constants ||
+          desc->slot >= (uint32_t)runtime_func->const_count)
+        return false;
+      if (out_value) *out_value = value;
+      if (out_is_heap) *out_is_heap = true;
+      mir_load_runtime_const_slot(ctx, fn, dst, runtime_func_reg,
+                                  const_base_reg, desc->slot);
+    } else {
+      if (out_value) *out_value = value;
+      if (out_is_heap) *out_is_heap = jit_const_is_heap(value);
+      mir_load_imm(ctx, fn, dst, value);
+    }
+    return true;
+  }
+#else
+  (void)plan;
+#endif
+  ant_value_t value = func->constants[idx];
+  if (out_value) *out_value = value;
+  bool is_heap = jit_const_is_heap(value);
+  if (out_is_heap) *out_is_heap = is_heap;
+  if (is_heap)
+    mir_load_const_slot(ctx, fn, dst, &runtime_func->constants[idx]);
+  else
+    mir_load_imm(ctx, fn, dst, value);
+  return true;
 }
 
 
@@ -2212,7 +2433,105 @@ static bool jit_is_eligible(sv_func_t *func) {
   return eligible;
 }
 
-sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
+static bool jit_has_osr_backedge(sv_func_t *func) {
+  if (!func || !func->code) return false;
+  uint8_t *ip = func->code;
+  uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    int sz = sv_op_size[op];
+    if (sz == 0) return false;
+    uint16_t flags = sv_op_flags[op];
+    if ((flags & SV_OPF_JIT_OSR_BACKEDGE) != 0) {
+      int src = (int)(ip - func->code);
+      int target = src + sz;
+      if ((flags & SV_OPF_JIT_BRANCH32) != 0)
+        target += sv_get_i32(ip + 1);
+      else if ((flags & SV_OPF_JIT_BRANCH8) != 0)
+        target += (int8_t)sv_get_i8(ip + 1);
+      if (target <= src) return true;
+    }
+    ip += sz;
+  }
+  return false;
+}
+
+static bool jit_async_op_is_snapshot_only(sv_op_t op) {
+  switch (op) {
+    case OP_OBJECT:
+    case OP_ARRAY:
+    case OP_CLOSURE:
+    case OP_REST:
+    case OP_PUT_UPVAL:
+    case OP_SET_UPVAL:
+    case OP_CLOSE_UPVAL:
+    case OP_PUT_FIELD:
+    case OP_GET_ELEM:
+    case OP_GET_ELEM2:
+    case OP_PUT_ELEM:
+    case OP_DEFINE_FIELD:
+    case OP_GET_LENGTH:
+    case OP_CALL:
+    case OP_TAIL_CALL:
+    case OP_CALL_METHOD:
+    case OP_TAIL_CALL_METHOD:
+    case OP_PUT_GLOBAL:
+    case OP_IMPORT_DEFAULT:
+    case OP_IMPORT_NAMED:
+    case OP_EXPORT:
+    case OP_INSTANCEOF:
+    case OP_IN:
+    case OP_TYPEOF:
+    case OP_DELETE:
+    case OP_CALL_IS_PROTO:
+    case OP_CALL_ARRAY_INCLUDES:
+    case OP_APPLY:
+    case OP_DEFINE_METHOD_COMP:
+    case OP_SET_NAME:
+    case OP_SET_NAME_COMP:
+    case OP_SET_PROTO:
+    case OP_SET_HOME_OBJ:
+    case OP_TO_PROPKEY:
+    case OP_SPECIAL_OBJ:
+    case OP_NEW:
+    case OP_NEW_APPLY:
+      return false;
+    default:
+      return true;
+  }
+}
+
+static bool jit_async_plan_is_snapshot_only(sv_func_t *func, sv_op_t *out_unsupported_op) {
+  if (!func || !func->code) return false;
+  uint8_t *ip = func->code;
+  uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    int sz = sv_op_size[op];
+    if (sz == 0) return false;
+    if (!jit_async_op_is_snapshot_only(op)) {
+      if (out_unsupported_op) *out_unsupported_op = op;
+      return false;
+    }
+    ip += sz;
+  }
+  return true;
+}
+
+static bool jit_async_compile_snapshot_safe(sv_func_t *func, sv_op_t *out_unsupported_op) {
+  if (!func) return false;
+  if (jit_has_osr_backedge(func)) return false;
+  return jit_async_plan_is_snapshot_only(func, out_unsupported_op);
+}
+
+static sv_jit_func_t sv_jit_compile_in_ctx(
+  ant_t *js,
+  sv_jit_ctx_t *jc,
+  sv_func_t *func,
+  sv_closure_t *hint_closure,
+  sv_func_t *runtime_func,
+  sv_jit_plan_t *plan
+) {
   if (func->jit_compile_failed || func->jit_compiling) return NULL;
   if (func->jit_code == NULL && func->jit_compiled_tfb_ver != 0 &&
       func->tfb_version == func->jit_compiled_tfb_ver) {
@@ -2226,24 +2545,18 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
   
   func->jit_compiling = true;
-  sv_jit_ctx_t *jc = jit_ctx_get(js);
-  
-  if (!jc) { 
-    sv_jit_init(js);
-    jc = jit_ctx_get(js);
-  }
-  
   if (!jc) {
     func->jit_compiling = false;
     return NULL;
   }
+  if (!runtime_func) runtime_func = func;
   
   jit_load_externals_once(jc);
   MIR_context_t ctx = jc->ctx;
 
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
-           func->name ? func->name : "anon", (void *)func);
+           func->name ? func->name : "anon", (void *)runtime_func);
 
   MIR_module_t mod = MIR_new_module(ctx, fname);
   MIR_type_t ret_type = MIR_JSVAL;
@@ -2635,6 +2948,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_dclose      = MIR_new_import(ctx, "jit_helper_destructure_close");
   MIR_item_t imp_gg         = MIR_new_import(ctx, "jit_helper_get_global");
   MIR_item_t imp_get_field  = MIR_new_import(ctx, "jit_helper_get_field");
+  MIR_item_t imp_get_field_no_ic = MIR_new_import(ctx, "jit_helper_get_field_no_ic");
   MIR_item_t imp_import_default = MIR_new_import(ctx, "jit_helper_import_default");
   MIR_item_t imp_import_named   = MIR_new_import(ctx, "jit_helper_import_named");
   MIR_item_t imp_export         = MIR_new_import(ctx, "jit_helper_export");
@@ -2700,6 +3014,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_reg_t r_args     = MIR_reg(ctx, "args",     jit_func->u.func);
   MIR_reg_t r_argc     = MIR_reg(ctx, "argc",     jit_func->u.func);
   MIR_reg_t r_closure  = MIR_reg(ctx, "closure",  jit_func->u.func);
+  MIR_reg_t r_runtime_func = MIR_new_func_reg(ctx, jit_func->u.func,
+                                              MIR_T_I64, "runtime_func");
+  MIR_reg_t r_const_base = MIR_new_func_reg(ctx, jit_func->u.func,
+                                            MIR_T_I64, "const_base");
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_runtime_func),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(sv_closure_t, func),
+        r_closure, 0, 1)));
 
   MIR_reg_t r_this_curr = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "this_curr");
   MIR_append_insn(ctx, jit_func,
@@ -3240,12 +3564,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CONST: {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->const_count) { ok = false; break; }
-        ant_value_t cv = func->constants[idx];
         MIR_reg_t dst = vstack_push(&vs);
-        if (jit_const_is_heap(cv))
-          mir_load_const_slot(ctx, jit_func, dst, &func->constants[idx]);
-        else {
-          mir_load_imm(ctx, jit_func, dst, cv);
+        ant_value_t cv = T_UNDEF;
+        bool cv_is_heap = false;
+        if (!mir_emit_const_load(ctx, jit_func, plan, func, runtime_func,
+                                 r_runtime_func, r_const_base,
+                                 idx, dst, &cv, &cv_is_heap)) {
+          ok = false;
+          break;
+        }
+        if (!cv_is_heap) {
           if (vtype(cv) == T_NUM) {
             union { uint64_t u; double d; } u = {cv};
             MIR_append_insn(ctx, jit_func,
@@ -3261,12 +3589,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CONST8: {
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)func->const_count) { ok = false; break; }
-        ant_value_t cv = func->constants[idx];
         MIR_reg_t dst = vstack_push(&vs);
-        if (jit_const_is_heap(cv))
-          mir_load_const_slot(ctx, jit_func, dst, &func->constants[idx]);
-        else {
-          mir_load_imm(ctx, jit_func, dst, cv);
+        ant_value_t cv = T_UNDEF;
+        bool cv_is_heap = false;
+        if (!mir_emit_const_load(ctx, jit_func, plan, func, runtime_func,
+                                 r_runtime_func, r_const_base,
+                                 idx, dst, &cv, &cv_is_heap)) {
+          ok = false;
+          break;
+        }
+        if (!cv_is_heap) {
           if (vtype(cv) == T_NUM) {
             union { uint64_t u; double d; } u = {cv};
             MIR_append_insn(ctx, jit_func,
@@ -4834,7 +5166,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t call_argc = sv_get_u16(ip + 1);
         if (call_argc > 16 || vs.sp < (int)call_argc + 1) { ok = false; break; }
 
-        if (!is_tail) {
+        if (!is_tail && !plan) {
           sv_func_t *inline_callee = vs.known_func[vs.sp - call_argc - 1];
           if (!inline_callee)
             inline_callee = sv_tfb_get_call_target(func, bc_off);
@@ -5469,7 +5801,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         sv_atom_t *atom = &func->atoms[idx];
         MIR_reg_t dst = vstack_push(&vs);
 
-        if (vs.known_func) {
+        if (js && vs.known_func) {
           ant_value_t gv = jit_helper_get_global(js, atom->str, func, bc_off);
           if (vtype(gv) == T_FUNC) {
             sv_closure_t *gcl = js_func_closure(gv);
@@ -5495,7 +5827,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         break;
       }
@@ -5696,7 +6028,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
               writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
@@ -5722,7 +6054,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)param_count),
               MIR_new_reg_op(ctx, r_lbuf),
@@ -5811,7 +6143,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
               writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
@@ -5840,7 +6172,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)param_count),
               MIR_new_reg_op(ctx, r_lbuf),
@@ -5961,7 +6293,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t ic_idx = sv_get_u16(ip + 5);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
-        if (mir_emit_get_field_ic_fastpath(
+        if (!plan && mir_emit_get_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow, r_ic_epoch_val)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
@@ -5971,14 +6303,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, gf_proto),
-            MIR_new_ref_op(ctx, imp_get_field),
+            MIR_new_ref_op(ctx, plan ? imp_get_field_no_ic : imp_get_field),
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, obj),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
             MIR_new_uint_op(ctx, (uint64_t)atom->len),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_URSH,
@@ -6016,7 +6348,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t ic_idx = sv_get_u16(ip + 5);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
-        if (mir_emit_get_field_ic_fastpath(
+        if (!plan && mir_emit_get_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow, r_ic_epoch_val)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
@@ -6026,14 +6358,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, gf_proto),
-            MIR_new_ref_op(ctx, imp_get_field),
+            MIR_new_ref_op(ctx, plan ? imp_get_field_no_ic : imp_get_field),
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, obj),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
             MIR_new_uint_op(ctx, (uint64_t)atom->len),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_URSH,
@@ -6137,7 +6469,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, ns),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
             MIR_new_uint_op(ctx, (uint64_t)atom->len),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_append_insn(ctx, jit_func,
@@ -6265,7 +6597,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, obj),
             MIR_new_reg_op(ctx, key),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_append_insn(ctx, jit_func,
@@ -6887,7 +7219,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, rl),
             MIR_new_reg_op(ctx, rr),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         if (has_captures) {
           for (int i = 0; i < n_locals; i++)
@@ -7050,7 +7382,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, this_obj),
             MIR_new_reg_op(ctx, fn),
             MIR_new_reg_op(ctx, arg),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
         if (has_captures) {
           for (int i = 0; i < n_locals; i++)
@@ -8128,7 +8460,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               writes_params ? MIR_new_reg_op(ctx, r_slotbuf) : MIR_new_reg_op(ctx, r_args),
               writes_params ? MIR_new_int_op(ctx, param_count) : MIR_new_reg_op(ctx, r_argc),
               MIR_new_uint_op(ctx, 0),
@@ -8150,7 +8482,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_err_tmp),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_js),
-              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)runtime_func),
               MIR_new_uint_op(ctx, 0),
               MIR_new_int_op(ctx, (int64_t)param_count),
               MIR_new_reg_op(ctx, r_lbuf),
@@ -8494,6 +8826,504 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   func->jit_compiled_tfb_ver = func->tfb_version;
   return generated;
 }
+
+sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
+#ifdef SV_JIT_ASYNC
+  pthread_mutex_lock(&sv_jit_codegen_mutex);
+#endif
+  sv_jit_ctx_t *jc = jit_ctx_get(js);
+  if (!jc) {
+    sv_jit_init(js);
+    jc = jit_ctx_get(js);
+  }
+  sv_jit_func_t code = sv_jit_compile_in_ctx(js, jc, func, hint_closure, func, NULL);
+#ifdef SV_JIT_ASYNC
+  pthread_mutex_unlock(&sv_jit_codegen_mutex);
+#endif
+  return code;
+}
+
+#ifdef SV_JIT_ASYNC
+static bool sv_jit_memdup_field(void **dst, const void *src, size_t bytes) {
+  if (!src || bytes == 0) {
+    *dst = NULL;
+    return true;
+  }
+  void *copy = malloc(bytes);
+  if (!copy) return false;
+  memcpy(copy, src, bytes);
+  *dst = copy;
+  return true;
+}
+
+static bool sv_jit_strndup_field(char **dst, const char *src, size_t len) {
+  *dst = NULL;
+  if (!src) return true;
+  char *copy = malloc(len + 1);
+  if (!copy) return false;
+  memcpy(copy, src, len);
+  copy[len] = '\0';
+  *dst = copy;
+  return true;
+}
+
+static void sv_jit_plan_free(sv_jit_plan_t *plan) {
+  if (!plan) return;
+  free(plan->code);
+  free(plan->const_values);
+  free(plan->const_descs);
+  free(plan->call_targets);
+  free(plan->atoms);
+  free(plan->atom_storage);
+  free(plan->name_storage);
+  free(plan->ic_slots);
+  free(plan->upval_descs);
+  free(plan->local_types);
+  free(plan->type_feedback);
+  free(plan->local_type_feedback);
+  memset(plan, 0, sizeof(*plan));
+}
+
+static void sv_jit_plan_release_compile_only(sv_jit_plan_t *plan) {
+  if (!plan) return;
+  free(plan->code);
+  free(plan->const_values);
+  free(plan->const_descs);
+  free(plan->call_targets);
+  free(plan->atoms);
+  free(plan->ic_slots);
+  free(plan->upval_descs);
+  free(plan->local_types);
+  free(plan->type_feedback);
+  free(plan->local_type_feedback);
+  plan->code = NULL;
+  plan->const_values = NULL;
+  plan->const_descs = NULL;
+  plan->call_targets = NULL;
+  plan->call_target_count = 0;
+  plan->atoms = NULL;
+  plan->ic_slots = NULL;
+  plan->upval_descs = NULL;
+  plan->local_types = NULL;
+  plan->type_feedback = NULL;
+  plan->local_type_feedback = NULL;
+  memset(&plan->func_view, 0, sizeof(plan->func_view));
+}
+
+static bool sv_jit_plan_copy_atoms(sv_jit_plan_t *plan, sv_func_t *src) {
+  if (!src->atoms || src->atom_count <= 0) return true;
+  size_t atom_count = (size_t)src->atom_count;
+  if (!sv_jit_memdup_field((void **)&plan->atoms, src->atoms, atom_count * sizeof(*src->atoms)))
+    return false;
+
+  size_t storage_len = 0;
+  for (size_t i = 0; i < atom_count; i++)
+    storage_len += (size_t)src->atoms[i].len + 1;
+  if (storage_len == 0) return true;
+
+  plan->atom_storage = malloc(storage_len);
+  if (!plan->atom_storage) return false;
+
+  char *cursor = plan->atom_storage;
+  for (size_t i = 0; i < atom_count; i++) {
+    size_t len = (size_t)src->atoms[i].len;
+    if (src->atoms[i].str && len > 0)
+      memcpy(cursor, src->atoms[i].str, len);
+    cursor[len] = '\0';
+    plan->atoms[i].str = cursor;
+    cursor += len + 1;
+  }
+  return true;
+}
+
+static bool sv_jit_plan_build_constants(sv_jit_plan_t *plan, sv_func_t *src) {
+  if (!src->constants || src->const_count <= 0) return true;
+  size_t count = (size_t)src->const_count;
+  if (!sv_jit_memdup_field((void **)&plan->const_values, src->constants,
+                           count * sizeof(*src->constants)))
+    return false;
+  plan->const_descs = calloc(count, sizeof(*plan->const_descs));
+  if (!plan->const_descs) return false;
+  for (size_t i = 0; i < count; i++) {
+    ant_value_t value = src->constants[i];
+    plan->const_descs[i].slot = (uint32_t)i;
+    plan->const_descs[i].value = value;
+    plan->const_descs[i].kind = SV_JIT_CONST_RUNTIME_SLOT;
+  }
+  return true;
+}
+
+static bool sv_jit_plan_build_call_targets(sv_jit_plan_t *plan, sv_func_t *src) {
+  if (!src->call_target_fb || src->call_target_fb_count == 0) return true;
+  size_t count = src->call_target_fb_count;
+  if (!sv_jit_memdup_field((void **)&plan->call_targets, src->call_target_fb,
+                           count * sizeof(*src->call_target_fb)))
+    return false;
+  plan->call_target_count = src->call_target_fb_count;
+  return true;
+}
+
+static bool sv_jit_plan_build(sv_jit_plan_t *plan, sv_func_t *src) {
+  memset(plan, 0, sizeof(*plan));
+  if (!src) return false;
+  plan->target = src;
+  plan->tfb_version = src->tfb_version;
+  plan->const_epoch = src->const_epoch;
+  plan->call_target_epoch = src->call_target_epoch;
+
+  if (!sv_jit_memdup_field((void **)&plan->code, src->code, (size_t)src->code_len)) goto fail;
+  if (!sv_jit_plan_build_constants(plan, src)) goto fail;
+  if (!sv_jit_plan_copy_atoms(plan, src)) goto fail;
+  if (!sv_jit_plan_build_call_targets(plan, src)) goto fail;
+  if (!sv_jit_memdup_field((void **)&plan->ic_slots, src->ic_slots, (size_t)src->ic_count * sizeof(*src->ic_slots))) goto fail;
+  if (!sv_jit_memdup_field((void **)&plan->upval_descs, src->upval_descs, (size_t)src->upvalue_count * sizeof(*src->upval_descs))) goto fail;
+  if (!sv_jit_memdup_field((void **)&plan->local_types, src->local_types, (size_t)src->local_type_count * sizeof(*src->local_types))) goto fail;
+  if (!sv_jit_memdup_field((void **)&plan->type_feedback, sv_func_type_feedback(src), (size_t)src->code_len)) goto fail;
+  if (!sv_jit_memdup_field((void **)&plan->local_type_feedback, src->local_type_feedback, (size_t)src->max_locals)) goto fail;
+  if (src->name && !sv_jit_strndup_field(&plan->name_storage, src->name, strlen(src->name))) goto fail;
+
+  sv_func_t *view = &plan->func_view;
+  *view = *src;
+  view->code = plan->code;
+  view->constants = plan->const_values;
+  view->atoms = plan->atoms;
+  view->ic_slots = plan->ic_slots;
+  view->upval_descs = plan->upval_descs;
+  view->local_types = plan->local_types;
+  view->name = plan->name_storage ? plan->name_storage : "<async>";
+  view->type_feedback = plan->type_feedback;
+  view->local_type_feedback = plan->local_type_feedback;
+  view->call_target_fb = plan->call_targets;
+  view->call_target_fb_count = plan->call_target_count;
+  view->call_target_epoch = plan->call_target_epoch;
+  view->jit_code = NULL;
+  view->jit_compile_failed = false;
+  view->jit_compiling = false;
+  view->jit_compile_queued = false;
+  view->jit_async_unsupported = false;
+  view->jit_compiled_tfb_ver = 0;
+  view->jit_bailout_tfb_ver = 0;
+  view->jit_bailout_count = 0;
+  return true;
+
+fail:
+  sv_jit_plan_free(plan);
+  return false;
+}
+
+static void sv_jit_async_ctx_destroy(sv_jit_ctx_t *jc) {
+  jit_ctx_destroy_base(jc);
+}
+
+static void sv_jit_job_free(sv_jit_job_t *job, bool destroy_ctx) {
+  if (!job) return;
+  sv_jit_plan_free(&job->plan);
+  if (destroy_ctx) sv_jit_async_ctx_destroy(job->compile_ctx);
+  free(job);
+}
+
+static bool sv_jit_keep_async_code(
+  sv_jit_ctx_t *main_ctx,
+  sv_jit_ctx_t *compile_ctx,
+  sv_jit_plan_t *plan
+) {
+  if (!main_ctx || !compile_ctx || !plan) return false;
+  sv_jit_owned_ctx_t *node = calloc(1, sizeof(*node));
+  sv_jit_plan_t *owned_plan = malloc(sizeof(*owned_plan));
+  if (!node || !owned_plan) {
+    free(node);
+    free(owned_plan);
+    return false;
+  }
+  *owned_plan = *plan;
+  memset(plan, 0, sizeof(*plan));
+  sv_jit_plan_release_compile_only(owned_plan);
+  node->ctx = compile_ctx;
+  node->plan = owned_plan;
+  node->next = main_ctx->owned_ctxs;
+  main_ctx->owned_ctxs = node;
+  return true;
+}
+
+static bool sv_jit_plan_constants_match(sv_jit_plan_t *plan) {
+  sv_func_t *target = plan->target;
+  return target && target->const_epoch == plan->const_epoch;
+}
+
+static bool sv_jit_plan_call_targets_match(sv_jit_plan_t *plan) {
+  sv_func_t *target = plan->target;
+  if (!target) return false;
+  if (target->call_target_epoch != plan->call_target_epoch) return false;
+  if (target->call_target_fb_count != plan->call_target_count) return false;
+  if (plan->call_target_count == 0) return true;
+  if (!target->call_target_fb || !plan->call_targets) return false;
+  for (uint8_t i = 0; i < plan->call_target_count; i++) {
+    sv_call_target_fb_t *fb = &target->call_target_fb[i];
+    sv_call_target_fb_t *desc = &plan->call_targets[i];
+    if (fb->bc_off != desc->bc_off ||
+        fb->target != desc->target ||
+        fb->disabled != desc->disabled ||
+        fb->miss_count != desc->miss_count)
+      return false;
+  }
+  return true;
+}
+
+static bool sv_jit_plan_valid(sv_jit_job_t *job) {
+  sv_jit_plan_t *plan = &job->plan;
+  sv_func_t *target = plan->target;
+  return
+    target &&
+    !target->jit_code &&
+    !target->jit_compile_failed &&
+    target->tfb_version == plan->tfb_version &&
+    sv_jit_plan_constants_match(plan) &&
+    sv_jit_plan_call_targets_match(plan);
+}
+
+static bool sv_jit_plan_installable(sv_jit_job_t *job) {
+  return
+    !job->failed &&
+    job->code &&
+    sv_jit_plan_valid(job);
+}
+
+static bool sv_jit_should_requeue_stale(sv_jit_job_t *job) {
+  sv_func_t *target = job->plan.target;
+  return
+    target &&
+    !job->failed &&
+    !target->jit_code &&
+    !target->jit_compile_failed &&
+    target->call_count > SV_JIT_ASYNC_THRESHOLD;
+}
+
+static void sv_jit_worker_push_completed(sv_jit_ctx_t *jc, sv_jit_job_t *job) {
+  pthread_mutex_lock(&jc->async_lock);
+  jc->running = NULL;
+  job->next = jc->completed;
+  jc->completed = job;
+  atomic_fetch_add_explicit(&jc->completed_depth, 1, memory_order_release);
+  pthread_mutex_unlock(&jc->async_lock);
+}
+
+static void *sv_jit_async_worker_main(void *arg) {
+  sv_jit_ctx_t *main_ctx = (sv_jit_ctx_t *)arg;
+  for (;;) {
+    pthread_mutex_lock(&main_ctx->async_lock);
+    while (!main_ctx->worker_stop && !main_ctx->pending_head)
+      pthread_cond_wait(&main_ctx->async_cond, &main_ctx->async_lock);
+
+    if (main_ctx->worker_stop && !main_ctx->pending_head) {
+      pthread_mutex_unlock(&main_ctx->async_lock);
+      break;
+    }
+
+    sv_jit_job_t *job = main_ctx->pending_head;
+    main_ctx->pending_head = job->next;
+    if (!main_ctx->pending_head)
+      main_ctx->pending_tail = NULL;
+    job->next = NULL;
+    main_ctx->running = job;
+    pthread_mutex_unlock(&main_ctx->async_lock);
+
+    pthread_mutex_lock(&sv_jit_codegen_mutex);
+    uint64_t compile_start_ns = sv_jit_now_ns();
+    sv_jit_ctx_t *compile_ctx = jit_ctx_create();
+    job->compile_ctx = compile_ctx;
+    if (compile_ctx) {
+      job->code = sv_jit_compile_in_ctx(
+        NULL, compile_ctx, &job->plan.func_view, NULL, job->plan.target, &job->plan);
+      job->failed = job->code == NULL;
+    } else {
+      job->failed = true;
+    }
+    uint64_t compile_end_ns = sv_jit_now_ns();
+    if (compile_end_ns >= compile_start_ns)
+      job->compile_ns = compile_end_ns - compile_start_ns;
+    pthread_mutex_unlock(&sv_jit_codegen_mutex);
+
+    sv_jit_worker_push_completed(main_ctx, job);
+  }
+  return NULL;
+}
+
+void sv_jit_poll(ant_t *js) {
+  sv_jit_ctx_t *jc = jit_ctx_get(js);
+  if (!jc) return;
+  if (atomic_load_explicit(&jc->completed_depth, memory_order_acquire) == 0) return;
+
+  pthread_mutex_lock(&jc->async_lock);
+  sv_jit_job_t *jobs = jc->completed;
+  jc->completed = NULL;
+  atomic_store_explicit(&jc->completed_depth, 0, memory_order_release);
+  pthread_mutex_unlock(&jc->async_lock);
+
+  while (jobs) {
+    sv_jit_job_t *job = jobs;
+    jobs = job->next;
+    job->next = NULL;
+
+    sv_func_t *target = job->plan.target;
+    bool install = sv_jit_plan_installable(job);
+    bool requeue_stale = !install && sv_jit_should_requeue_stale(job);
+    if (target) target->jit_compile_queued = false;
+    if (install) {
+      install = sv_jit_keep_async_code(jc, job->compile_ctx, &job->plan);
+      if (install) {
+        if (sv_jit_warn_unlikely)
+          fprintf(stderr, "jit: async install %s tfb=%u compile=%.3fms\n",
+                  target->name ? target->name : "<anonymous>",
+                  (unsigned)target->tfb_version,
+                  (double)job->compile_ns / 1000000.0);
+        target->jit_code = (void *)job->code;
+        target->jit_compiled_tfb_ver = target->tfb_version;
+        job->compile_ctx = NULL;
+      }
+    } else if (target && job->failed && target->tfb_version == job->plan.tfb_version) {
+      if (sv_jit_warn_unlikely)
+        fprintf(stderr, "jit: async failed %s tfb=%u compile=%.3fms\n",
+                target->name ? target->name : "<anonymous>",
+                (unsigned)target->tfb_version,
+                (double)job->compile_ns / 1000000.0);
+    } else if (target && sv_jit_warn_unlikely) {
+      fprintf(stderr,
+              "jit: async stale %s target_tfb=%u plan_tfb=%u compile=%.3fms\n",
+              target->name ? target->name : "<anonymous>",
+              (unsigned)target->tfb_version,
+              (unsigned)job->plan.tfb_version,
+              (double)job->compile_ns / 1000000.0);
+    }
+
+    atomic_fetch_sub_explicit(&jc->async_depth, 1, memory_order_acq_rel);
+    sv_jit_job_free(job, true);
+    if (requeue_stale)
+      (void)sv_jit_request_compile(js, target);
+  }
+}
+
+static void sv_jit_visit_job_funcs(
+  sv_jit_job_t *job, void (*visitor)(void *ctx, sv_func_t *func), void *ctx
+) {
+  if (!job) return;
+  visitor(ctx, job->plan.target);
+  for (uint8_t i = 0; i < job->plan.call_target_count; i++) {
+    sv_func_t *target = job->plan.call_targets[i].target;
+    if (target) visitor(ctx, target);
+  }
+}
+
+static void sv_jit_visit_plan_funcs(
+  sv_jit_plan_t *plan, void (*visitor)(void *ctx, sv_func_t *func), void *ctx
+) {
+  if (!plan) return;
+  visitor(ctx, plan->target);
+  for (uint8_t i = 0; i < plan->call_target_count; i++) {
+    sv_func_t *target = plan->call_targets[i].target;
+    if (target) visitor(ctx, target);
+  }
+}
+
+void sv_jit_visit_queued_funcs(
+  ant_t *js, void (*visitor)(void *ctx, sv_func_t *func), void *ctx
+) {
+  if (!visitor) return;
+  sv_jit_ctx_t *jc = jit_ctx_get(js);
+  if (!jc) return;
+
+  pthread_mutex_lock(&jc->async_lock);
+  for (sv_jit_job_t *job = jc->pending_head; job; job = job->next)
+    sv_jit_visit_job_funcs(job, visitor, ctx);
+  sv_jit_visit_job_funcs(jc->running, visitor, ctx);
+  for (sv_jit_job_t *job = jc->completed; job; job = job->next)
+    sv_jit_visit_job_funcs(job, visitor, ctx);
+  pthread_mutex_unlock(&jc->async_lock);
+
+  for (sv_jit_owned_ctx_t *owned = jc->owned_ctxs; owned; owned = owned->next)
+    sv_jit_visit_plan_funcs(owned->plan, visitor, ctx);
+}
+
+bool sv_jit_request_compile(ant_t *js, sv_func_t *func) {
+  if (!js || !func || func->jit_code || func->jit_compile_failed ||
+      func->jit_compile_queued || func->jit_async_unsupported)
+    return false;
+  sv_op_t unsupported_op = OP__COUNT;
+  if (!jit_async_compile_snapshot_safe(func, &unsupported_op)) {
+    func->jit_async_unsupported = true;
+    if (unsupported_op != OP__COUNT &&
+        sv_jit_warn_unlikely && func->call_count == SV_JIT_ASYNC_THRESHOLD + 1) {
+      const char *op_name = (unsupported_op < OP__COUNT && sv_op_names[unsupported_op])
+        ? sv_op_names[unsupported_op]
+        : "???";
+      fprintf(stderr, "jit: async unsupported %s op=%s\n",
+              func->name ? func->name : "<anonymous>", op_name);
+    }
+    return false;
+  }
+  if (!jit_is_eligible(func)) {
+    func->jit_compile_failed = true;
+    return false;
+  }
+
+  sv_jit_ctx_t *jc = jit_ctx_get(js);
+  if (!jc) {
+    sv_jit_init(js);
+    jc = jit_ctx_get(js);
+  }
+  if (!jc) return false;
+
+  sv_jit_job_t *job = calloc(1, sizeof(*job));
+  if (!job) return false;
+  if (!sv_jit_plan_build(&job->plan, func)) {
+    sv_jit_job_free(job, true);
+    return false;
+  }
+
+  pthread_mutex_lock(&jc->async_lock);
+  if (!jc->worker_started) {
+    if (pthread_create(&jc->worker, NULL, sv_jit_async_worker_main, jc) != 0) {
+      pthread_mutex_unlock(&jc->async_lock);
+      sv_jit_job_free(job, true);
+      return false;
+    }
+    jc->worker_started = true;
+  }
+  if (atomic_load_explicit(&jc->async_depth, memory_order_acquire) >= 2) {
+    pthread_mutex_unlock(&jc->async_lock);
+    sv_jit_job_free(job, true);
+    return false;
+  }
+
+  func->jit_compile_queued = true;
+  if (jc->pending_tail)
+    jc->pending_tail->next = job;
+  else
+    jc->pending_head = job;
+  jc->pending_tail = job;
+  atomic_fetch_add_explicit(&jc->async_depth, 1, memory_order_release);
+  pthread_cond_signal(&jc->async_cond);
+  pthread_mutex_unlock(&jc->async_lock);
+  return true;
+}
+#else
+void sv_jit_poll(ant_t *js) {
+  (void)js;
+}
+
+void sv_jit_visit_queued_funcs(
+  ant_t *js, void (*visitor)(void *ctx, sv_func_t *func), void *ctx
+) {
+  (void)js;
+  (void)visitor;
+  (void)ctx;
+}
+
+bool sv_jit_request_compile(ant_t *js, sv_func_t *func) {
+  (void)js;
+  (void)func;
+  return false;
+}
+#endif
 
 static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
   sv_call_target_fb_t *fb = func->call_target_fb;

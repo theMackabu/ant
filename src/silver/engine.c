@@ -720,6 +720,23 @@ static inline ant_value_t sv_try_direct_closure_jit(
     }
     return jit_result;
   }
+  if (callee->jit_compile_queued) {
+    sv_jit_poll(js);
+    if (callee->jit_code) {
+      if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
+      sv_jit_enter(js);
+      ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
+        vm, jit_this, js_mkundef(), closure->super_val,
+        call_args, call_argc, closure
+      );
+      sv_jit_leave(js);
+      if (sv_is_jit_bailout(jit_result)) {
+        sv_jit_on_bailout(callee);
+        return SV_JIT_RETRY_INTERP;
+      }
+      return jit_result;
+    }
+  }
 
   if (callee->is_generator) return SV_JIT_RETRY_INTERP;
   if (callee->jit_compile_failed) return SV_JIT_RETRY_INTERP;
@@ -727,7 +744,11 @@ static inline ant_value_t sv_try_direct_closure_jit(
   uint32_t cc = ++callee->call_count;
   if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
     sv_tfb_ensure(callee);
-  if (cc <= SV_JIT_THRESHOLD) return SV_JIT_RETRY_INTERP;
+  if (cc <= SV_JIT_ASYNC_THRESHOLD) return SV_JIT_RETRY_INTERP;
+  if (cc <= SV_JIT_SYNC_FALLBACK_THRESHOLD) {
+    (void)sv_jit_request_compile(js, callee);
+    return SV_JIT_RETRY_INTERP;
+  }
 
   sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
   if (!jit_fn) {
@@ -1941,7 +1962,12 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_PUT_CONST: {
     uint32_t idx = sv_get_u32(ip + 1);
     ant_value_t cached = vm->stack[--vm->sp];
-    func->constants[idx] = cached;
+    if (func->constants[idx] != cached) {
+      func->constants[idx] = cached;
+#ifdef ANT_JIT
+      func->const_epoch++;
+#endif
+    }
     gc_remember_func_const(js, func, idx, cached);
     NEXT(5);
   }

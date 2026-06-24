@@ -8,6 +8,11 @@
 
 void sv_jit_init(ant_t *js);
 void sv_jit_destroy(ant_t *js);
+void sv_jit_poll(ant_t *js);
+bool sv_jit_request_compile(ant_t *js, sv_func_t *func);
+void sv_jit_visit_queued_funcs(
+  ant_t *js, void (*visitor)(void *ctx, sv_func_t *func), void *ctx
+);
 
 sv_jit_func_t sv_jit_compile(
   ant_t *js, sv_func_t *func, 

@@ -607,6 +607,16 @@ ant_value_t jit_helper_get_field(
   return out;
 }
 
+ant_value_t jit_helper_get_field_no_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
+  (void)vm;
+  uint8_t *ip = NULL;
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  return sv_prop_get_at(js, obj, str, len, func, ip);
+}
+
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR || vtype(v) == T_SYMBOL) return v;
   return coerce_to_str(js, v);

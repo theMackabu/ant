@@ -33,6 +33,9 @@
 #include "silver/lexer.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"
+#ifdef ANT_JIT
+#include "silver/swarm.h"
+#endif
 #include "silver/ops/using.h"
 #include "modules/regex.h"
 
@@ -17393,6 +17396,9 @@ ant_t *js_create_dynamic() {
 
 void js_destroy(ant_t *js) {
   if (js == NULL) return;  
+#ifdef ANT_JIT
+  sv_jit_destroy(js);
+#endif
   if (js->vm) {
     sv_vm_destroy(js->vm);
     js->vm = NULL;

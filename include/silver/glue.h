@@ -99,6 +99,12 @@ ant_value_t jit_helper_get_field(
   sv_func_t *func, int32_t bc_off
 );
 
+ant_value_t jit_helper_get_field_no_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len,
+  sv_func_t *func, int32_t bc_off
+);
+
 ant_value_t jit_helper_import_named(
   ant_t *js, ant_value_t ns,
   const char *str, uint32_t len,

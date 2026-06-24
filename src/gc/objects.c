@@ -7,6 +7,9 @@
 #include "silver/engine.h"
 #include "modules/regex.h"
 #include "modules/generator.h"
+#ifdef ANT_JIT
+#include "silver/swarm.h"
+#endif
 #include "modules/collections.h"
 
 #include "gc.h"
@@ -204,7 +207,15 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
 
   for (int i = 0; i < func->child_func_count; i++) 
     gc_mark_func(js, func->child_funcs[i]);
-    
+
+  if (func->call_target_fb) {
+    for (int i = 0; i < func->call_target_fb_count; i++) {
+      sv_call_target_fb_t *fb = &func->call_target_fb[i];
+      if (!fb->disabled && fb->target)
+        gc_mark_func(js, fb->target);
+    }
+  }
+
   for (int i = 0; i < func->obj_site_count; i++) {
     if (func->obj_sites) ant_gc_shapes_mark(func->obj_sites[i].shared_shape);
   }
@@ -218,6 +229,12 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
   if (prof && --g_gc_func_mark_profile_depth == 0)
     g_gc_func_mark_profile.time_ns += gc_now_ns() - g_gc_func_mark_profile_start_ns;
 }
+
+#ifdef ANT_JIT
+static void gc_mark_jit_func_root(void *ctx, sv_func_t *func) {
+  gc_mark_func((ant_t *)ctx, func);
+}
+#endif
 
 static void gc_mark_remembered_func_consts(ant_t *js) {
 for (size_t i = 0; i < js->remembered_func_const_len; i++) {
@@ -560,6 +577,10 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->thrown_value);
   gc_mark_value(js, js->thrown_stack);
   gc_mark_value(js, js->length_str);
+
+#ifdef ANT_JIT
+  sv_jit_visit_queued_funcs(js, gc_mark_jit_func_root, js);
+#endif
 
   if (rt && rt->js == js)
     gc_mark_value(js, rt->ant_obj);

@@ -234,6 +234,8 @@ struct sv_func {
   uint32_t back_edge_count;
   uint32_t jit_bailout_tfb_ver;
   uint32_t tfb_version;
+  uint32_t const_epoch;
+  uint32_t call_target_epoch;
   uint32_t jit_compiled_tfb_ver;
 
   uint8_t jit_bailout_count;
@@ -241,6 +243,8 @@ struct sv_func {
   
   bool jit_compile_failed;
   bool jit_compiling;
+  bool jit_compile_queued;
+  bool jit_async_unsupported;
 #endif
 };
 
@@ -902,6 +906,8 @@ static inline ant_value_t sv_call_closure(
 #define SV_TFB_INOBJ_P90_DENOMINATOR 10
 
 #define SV_JIT_THRESHOLD       100
+#define SV_JIT_ASYNC_THRESHOLD SV_JIT_THRESHOLD
+#define SV_JIT_SYNC_FALLBACK_THRESHOLD 500
 #define SV_JIT_RECOMPILE_DELAY 50
 #define SV_TFB_ALLOC_THRESHOLD 2
 
@@ -995,6 +1001,8 @@ ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
   sv_closure_t *closure, ant_value_t callee_func,
   sv_call_ctx_t *ctx, ant_value_t *out_this
 );
+void sv_jit_poll(ant_t *js);
+bool sv_jit_request_compile(ant_t *js, sv_func_t *func);
 
 static inline uint8_t sv_tfb_classify(ant_value_t v) {
   if (vtype(v) == T_NUM) return SV_TFB_NUM;
@@ -1084,12 +1092,17 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
     if (fb[i].bc_off != (uint16_t)bc_off) continue;
     if (fb[i].disabled) return;
     if (fb[i].target == callee) return;
-    if (fb[i].target == NULL) { fb[i].target = callee; return; }
+    if (fb[i].target == NULL) {
+      fb[i].target = callee;
+      func->call_target_epoch++;
+      return;
+    }
     fb[i].miss_count++;
     if (fb[i].miss_count >= SV_CALL_FB_MISS_DISABLE) {
       fb[i].disabled = 1;
       fb[i].target = NULL;
     } else fb[i].target = callee;
+    func->call_target_epoch++;
     func->tfb_version++;
     return;
   }
@@ -1104,6 +1117,7 @@ static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_fun
   fb[count].miss_count = 0;
   fb[count].disabled = 0;
   func->call_target_fb_count = (uint8_t)(count + 1);
+  func->call_target_epoch++;
 }
 
 static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
@@ -1274,13 +1288,32 @@ static inline ant_value_t sv_call_resolve_closure(
         sv_jit_on_bailout(fn);
       } else { sv_call_cleanup(js, ctx); return result; }
     }
+    if (fn->jit_compile_queued) {
+      sv_jit_poll(js);
+      if (fn->jit_code) {
+        sv_jit_enter(js);
+        ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
+          vm, ctx->this_val, js->new_target,
+          ctx->super_val, ctx->args, ctx->argc, closure
+        );
+        sv_jit_leave(js);
+        if (sv_is_jit_bailout(result)) {
+          sv_jit_on_bailout(fn);
+        } else { sv_call_cleanup(js, ctx); return result; }
+      }
+    }
     {
       uint32_t cc = ++fn->call_count;
       if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
         sv_tfb_ensure(fn);
-      if (!fn->jit_compile_failed && cc > SV_JIT_THRESHOLD) {
-        ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
-        if (result != SV_JIT_RETRY_INTERP) return result;
+      if (!fn->jit_compile_failed) {
+        if (cc > SV_JIT_ASYNC_THRESHOLD && cc <= SV_JIT_SYNC_FALLBACK_THRESHOLD) {
+          (void)sv_jit_request_compile(js, fn);
+        }
+        if (cc > SV_JIT_SYNC_FALLBACK_THRESHOLD) {
+          ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
+          if (result != SV_JIT_RETRY_INTERP) return result;
+        }
       }
     }
   }
