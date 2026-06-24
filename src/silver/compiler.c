@@ -3609,10 +3609,16 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
   }
 
   if (target->type == N_IDENT) {
-    bool is_const = (kind == SV_VAR_CONST);
-    int idx = ensure_local_at_depth(c, target->str, target->len,
-                                    is_const, c->scope_depth);
+    bool is_const = (
+      kind == SV_VAR_CONST ||
+      kind == SV_VAR_USING ||
+      kind == SV_VAR_AWAIT_USING
+    );
+    int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
     emit_put_local(c, idx);
+    c->locals[idx].is_tdz = false;
+    set_local_inferred_type(c, idx, SV_TI_UNKNOWN);
+    emit_local_export_writes(c, idx);
     return;
   }
 
@@ -3849,6 +3855,38 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
 
 void compile_stmts(sv_compiler_t *c, sv_ast_list_t *list) {
   for (int i = 0; i < list->count; i++) compile_stmt(c, list->items[i]);
+}
+
+static bool module_stmt_is_static_declaration(sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_IMPORT_DECL) return true;
+  return node->type == N_EXPORT && (node->flags & EX_FROM);
+}
+
+static void compile_module_static_declaration_prologue(sv_compiler_t *c, sv_ast_list_t *list) {
+  for (int i = 0; i < list->count; i++) {
+    sv_ast_t *node = list->items[i];
+    if (!module_stmt_is_static_declaration(node)) continue;
+    compile_stmt(c, node);
+  }
+}
+
+static bool should_emit_module_static_declarations(sv_compiler_t *c, sv_ast_t *body) {
+  return c->mode == SV_COMPILE_MODULE &&
+    c->enclosing && !c->enclosing->enclosing &&
+    body && body->type == N_BLOCK;
+}
+
+static void compile_body_block(
+  sv_compiler_t *c,
+  sv_ast_t *body,
+  bool skip_static_declarations
+) {
+  for (int i = 0; i < body->args.count; i++) {
+    sv_ast_t *stmt = body->args.items[i];
+    if (skip_static_declarations && module_stmt_is_static_declaration(stmt)) continue;
+    compile_stmt(c, stmt);
+  }
 }
 
 static bool stmt_list_has_using_decl(sv_ast_list_t *list, bool *has_await_using) {
@@ -5937,11 +5975,15 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.completion_local);
   }
 
+  bool emitted_static_declarations =
+    should_emit_module_static_declarations(&comp, node->body);
+  if (emitted_static_declarations)
+    compile_module_static_declaration_prologue(&comp, &node->body->args);
+
   if (node->body) {
-    if (node->body->type == N_BLOCK) {
-      for (int i = 0; i < node->body->args.count; i++)
-        compile_stmt(&comp, node->body->args.items[i]);
-    } else compile_tail_return_expr(&comp, node->body);
+    if (node->body->type == N_BLOCK)
+      compile_body_block(&comp, node->body, emitted_static_declarations);
+    else compile_tail_return_expr(&comp, node->body);
   }
 
   for (int i = 0; i < comp.deferred_export_count; i++) {

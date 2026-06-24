@@ -582,9 +582,9 @@ static sv_ast_t *parse_primary(P) {
     [TOK_IMPORT]     = &&l_import_expr,
     [TOK_DIV]        = &&l_regex,
     [TOK_DIV_ASSIGN] = &&l_regex,
-    [TOK_GLOBAL_THIS] = &&l_globalthis,
-    [TOK_WINDOW]      = &&l_globalthis,
-    [TOK_HASH]        = &&l_private_name,
+    [TOK_GLOBAL_THIS]= &&l_globalthis,
+    [TOK_WINDOW]     = &&l_ident,
+    [TOK_HASH]       = &&l_private_name,
   };
 
   if (TOK < TOK_MAX && dispatch[TOK])
