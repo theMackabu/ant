@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [React Doctor String Indexing Investigation](react-doctor-string-indexing.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 
 Recommended sections:
