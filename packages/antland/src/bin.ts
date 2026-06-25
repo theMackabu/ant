@@ -122,10 +122,9 @@ if (!isExecCmd && (args.length === 0 || args.some(a => a === '-h' || a === '--he
       process.exit(1);
     }
     const binArgs = rest.slice(i + 1);
-    const snippetPrefix = target.startsWith('snippet:') ? 'snippet:' : target.startsWith('gist:') ? 'gist:' : null;
-    if (snippetPrefix) run(() => execSnippet(target.slice(snippetPrefix.length), { yes, binArgs }));
+    if (target.startsWith('snippet:')) run(() => execSnippet(target.slice('snippet:'.length), { yes, binArgs }));
     else run(() => execPackage(target, { yes, binArgs, pkgManagerName: pkgManagerFrom(ours) }));
-  } else if (cmd === 'snippet' || cmd === 'gist') {
+  } else if (cmd === 'snippet') {
     const rest = args.slice(1);
     const isPrivate = rest.includes('--private');
     const file = rest.find(a => !a.startsWith('-'));
