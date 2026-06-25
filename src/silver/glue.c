@@ -857,7 +857,7 @@ ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
     if (flat) {
       const char *str_data = flat->bytes;
       ant_offset_t byte_len = flat->len;
-      return tov((double)(uint32_t)(str_is_ascii(str_data) 
+      return tov((double)(uint32_t)(sv_flat_string_is_ascii(flat)
         ? byte_len 
         : utf16_strlen(str_data, byte_len)
       ));

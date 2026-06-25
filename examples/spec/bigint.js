@@ -4,6 +4,8 @@ console.log('BigInt Tests\n');
 
 test('bigint literal', 123n, 123n);
 test('BigInt()', BigInt(456), 456n);
+test('BigInt.prototype.constructor', BigInt.prototype.constructor, BigInt);
+test('bigint primitive constructor', (123n).constructor, BigInt);
 test('BigInt from string', BigInt('789'), 789n);
 test('BigInt from hex string', BigInt('0xff'), 255n);
 test('BigInt from binary string', BigInt('0b1010'), 10n);

@@ -9,8 +9,26 @@
 #include "silver/engine.h"
 
 #include <libgen.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#define CJS_PATH_SEP '\\'
+#else
+#define CJS_PATH_SEP '/'
+#endif
+
+void esm_setup_commonjs_require(
+  ant_t *js,
+  ant_value_t require_fn,
+  ant_value_t resolve_fn
+) {
+  js_set(js, require_fn, "resolve", resolve_fn);
+  js_set(js, require_fn, "cache", js_mkobj(js));
+  js_set(js, require_fn, "extensions", js_mkobj(js));
+  js_set(js, require_fn, "main", js_mkundef());
+}
 
 static ant_value_t cjs_module_exports_getter(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
@@ -93,6 +111,135 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
   }
 
   return resolved;
+}
+
+static size_t esm_commonjs_dirname_len(const char *path, size_t path_len) {
+  if (!path || path_len == 0) return 0;
+
+  const char *last_sep = NULL;
+  for (size_t i = 0; i < path_len; i++) {
+    if (path[i] == '/' || path[i] == '\\') last_sep = path + i;
+  }
+
+  return last_sep ? (size_t)(last_sep - path) : 0;
+}
+
+ant_value_t esm_commonjs_node_module_paths(ant_t *js, const char *path, size_t path_len) {
+  ant_value_t paths = js_mkarr(js);
+  if (is_err(paths)) return paths;
+
+  if (!path || path_len == 0) return paths;
+
+  char *current = (char *)malloc(path_len + 1);
+  if (!current) return js_mkerr(js, "oom");
+
+  memcpy(current, path, path_len);
+  current[path_len] = '\0';
+
+  while (true) {
+    size_t len = strlen(current);
+    while (len > 1 && (current[len - 1] == '/' || current[len - 1] == '\\')) {
+      current[--len] = '\0';
+    }
+
+    size_t out_len = len + 14;
+    char *entry = (char *)malloc(out_len);
+    if (!entry) { free(current); return js_mkerr(js, "oom"); }
+    snprintf(entry, out_len, "%s%cnode_modules", current, CJS_PATH_SEP);
+    js_arr_push(js, paths, js_mkstr(js, entry, strlen(entry)));
+    free(entry);
+
+    char *slash = strrchr(current, CJS_PATH_SEP);
+#ifdef _WIN32
+    char *alt_slash = strrchr(current, '/');
+    if (!slash || (alt_slash && alt_slash > slash)) slash = alt_slash;
+#endif
+
+    if (!slash || slash == current) break;
+    *slash = '\0';
+  }
+
+  free(current);
+  return paths;
+}
+
+ant_value_t esm_create_commonjs_module_record(
+  ant_t *js,
+  const char *filename,
+  size_t filename_len,
+  ant_value_t parent,
+  ant_value_t ns,
+  esm_commonjs_module_record_t *out
+) {
+  if (!filename) return js_mkerr(js, "CommonJS module filename is required");
+  if (out) memset(out, 0, sizeof(*out));
+
+  ant_value_t object_proto = js->sym.object_proto;
+  ant_value_t module_obj = js_mkobj(js);
+  ant_value_t exports_obj = js_mkobj(js);
+  if (is_err(module_obj)) return module_obj;
+  if (is_err(exports_obj)) return exports_obj;
+
+  if (is_object_type(object_proto)) {
+    js_set_proto_init(module_obj, object_proto);
+    js_set_proto_init(exports_obj, object_proto);
+  }
+
+  ant_value_t filename_val = js_mkstr(js, filename, filename_len);
+  size_t dir_len = esm_commonjs_dirname_len(filename, filename_len);
+  ant_value_t dirname_val = js_mkstr(js, filename, dir_len);
+
+  js_set(js, module_obj, "id", filename_val);
+  js_set(js, module_obj, "filename", filename_val);
+  js_set(js, module_obj, "loaded", js_false);
+  js_set(js, module_obj, "parent", parent);
+  js_set(js, module_obj, "children", js_mkarr(js));
+  js_set(js, module_obj, "path", dirname_val);
+  js_set(js, module_obj, "paths", esm_commonjs_node_module_paths(js, filename, dir_len));
+
+  if (is_object_type(ns)) {
+    ant_value_t exports_state = js_mkobj(js);
+    if (is_object_type(object_proto)) js_set_proto_init(exports_state, object_proto);
+    js_set(js, exports_state, "value", exports_obj);
+    js_set(js, exports_state, "namespace", ns);
+
+    js_set_getter_desc(
+      js, js_as_obj(module_obj), "exports", 7,
+      js_heavy_mkfun(js, cjs_module_exports_getter, exports_state),
+      JS_DESC_E | JS_DESC_C
+    );
+    js_set_setter_desc(
+      js, js_as_obj(module_obj), "exports", 7,
+      js_heavy_mkfun(js, cjs_module_exports_setter, exports_state),
+      JS_DESC_E | JS_DESC_C
+    );
+
+    js_set_slot_wb(js, ns, SLOT_DEFAULT, exports_obj);
+    setprop_cstr(js, ns, "default", 7, exports_obj);
+  } else {
+    js_set(js, module_obj, "exports", exports_obj);
+  }
+
+  ant_value_t require_fn = js_heavy_mkfun(
+    js, esm_cjs_require,
+    filename_val
+  );
+  ant_value_t require_resolve_fn = js_heavy_mkfun(
+    js, esm_cjs_require_resolve,
+    filename_val
+  );
+  esm_setup_commonjs_require(js, require_fn, require_resolve_fn);
+  js_set(js, module_obj, "require", require_fn);
+
+  if (out) {
+    out->module_obj = module_obj;
+    out->exports_obj = exports_obj;
+    out->require_fn = require_fn;
+    out->filename_val = filename_val;
+    out->dirname_val = dirname_val;
+  }
+
+  return module_obj;
 }
 
 static bool copy_own_prop(
@@ -188,69 +335,24 @@ ant_value_t esm_load_commonjs_module(
   const char *module_path, const char *code,
   size_t code_len, ant_value_t ns
 ) {
-  char *path_copy = strdup(module_path);
-  if (!path_copy) return js_mkerr(js, "OOM loading CommonJS module");
-
-  ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t module_obj = js_mkobj(js);
-  ant_value_t exports_obj = js_mkobj(js);
-  ant_value_t exports_state = js_mkobj(js);
-  
-  if (is_object_type(object_proto)) {
-    js_set_proto_init(module_obj, object_proto);
-    js_set_proto_init(exports_obj, object_proto);
-    js_set_proto_init(exports_state, object_proto);
-  }
-  
-  js_set(js, exports_state, "value", exports_obj);
-  js_set(js, exports_state, "namespace", ns);
-  
-  js_set_getter_desc(
-    js, js_as_obj(module_obj), "exports", 7,
-    js_heavy_mkfun(js, cjs_module_exports_getter, exports_state),
-    JS_DESC_E | JS_DESC_C
+  esm_commonjs_module_record_t record;
+  ant_value_t module_obj = esm_create_commonjs_module_record(
+    js, module_path, strlen(module_path), js_mkundef(), ns, &record
   );
-  
-  js_set_setter_desc(
-    js, js_as_obj(module_obj), "exports", 7,
-    js_heavy_mkfun(js, cjs_module_exports_setter, exports_state),
-    JS_DESC_E | JS_DESC_C
-  );
-  
-  js_set_slot_wb(js, ns, SLOT_DEFAULT, exports_obj);
-  setprop_cstr(js, ns, "default", 7, exports_obj);
-  js_set(js, module_obj, "loaded", js_false);
-  js_set(js, module_obj, "id", js_mkstr(js, module_path, strlen(module_path)));
-  js_set(js, module_obj, "filename", js_mkstr(js, module_path, strlen(module_path)));
-
-  ant_value_t require_fn = js_heavy_mkfun(
-    js, esm_cjs_require,
-    js_mkstr(js, module_path, strlen(module_path))
-  );
-  
-  ant_value_t require_resolve_fn = js_heavy_mkfun(
-    js, esm_cjs_require_resolve,
-    js_mkstr(js, module_path, strlen(module_path))
-  );
-  
-  js_set(js, require_fn, "resolve", require_resolve_fn);
-
-  char *dir = dirname(path_copy);
-  ant_value_t dirname_val = js_mkstr(js, dir, strlen(dir));
-  ant_value_t filename_val = js_mkstr(js, module_path, strlen(module_path));
+  if (is_err(module_obj)) return module_obj;
 
   const char *prev_filename = js->filename;
   js_set_filename(js, module_path);
 
   ant_value_t result = esm_eval_commonjs_function(
     js, code, code_len,
-    require_fn, module_obj, exports_obj,
-    filename_val, dirname_val
+    record.require_fn, record.module_obj, record.exports_obj,
+    record.filename_val, record.dirname_val
   );
   
   if (vtype(result) == T_PROMISE) js_run_event_loop(js);
-  js_set(js, module_obj, "loaded", js_true);
-  ant_value_t exports_val = js_get(js, module_obj, "exports");
+  js_set(js, record.module_obj, "loaded", js_true);
+  ant_value_t exports_val = js_get(js, record.module_obj, "exports");
   
   if (!is_err(result) && !js->thrown_exists) {
     ant_value_t ns_res = esm_populate_cjs_namespace(js, ns, exports_val);
@@ -258,7 +360,6 @@ ant_value_t esm_load_commonjs_module(
   }
 
   js_set_filename(js, prev_filename);
-  free(path_copy);
 
   if (is_err(result)) return result;
   return exports_val;

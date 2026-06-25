@@ -1358,6 +1358,9 @@ ant_value_t events_library(ant_t *js) {
   
   eventemitter_prototype(js);
   js_set_module_default(js, lib, g_eventemitter_ctor, "EventEmitter");
+  ant_value_t error_monitor = js_mksym(js, "events.errorMonitor");
+  js_set(js, lib, "errorMonitor", error_monitor);
+  js_set(js, g_eventemitter_ctor, "errorMonitor", error_monitor);
   js_set(js, lib, "once", js_mkfun(js_events_once));
   js_set(js, lib, "on", js_mkfun(js_events_on));
   js_set(js, lib, "addAbortListener", js_mkfun(js_events_add_abort_listener));

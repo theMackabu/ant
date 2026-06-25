@@ -66,6 +66,7 @@ typedef enum {
   FS_OP_CLOSE,
   FS_OP_MKDTEMP,
   FS_OP_CHMOD,
+  FS_OP_CHOWN,
   FS_OP_RENAME,
   FS_OP_FSYNC
 } fs_op_type_t;
@@ -270,6 +271,14 @@ static bool fs_parse_mode(ant_t *js, ant_value_t arg, mode_t *out) {
   }
 
   *out = mode;
+  return true;
+}
+
+static bool fs_parse_uid_gid(ant_value_t arg, unsigned int *out) {
+  if (vtype(arg) != T_NUM) return false;
+  double value = js_getnum(arg);
+  if (value < 0 || value != (unsigned int)value) return false;
+  *out = (unsigned int)value;
   return true;
 }
 
@@ -3589,6 +3598,88 @@ static ant_value_t builtin_fs_chmod(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
+static ant_value_t builtin_fs_chownSync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "chownSync() requires a path argument");
+  if (nargs < 2) return js_mkerr(js, "chownSync() requires a uid argument");
+  if (nargs < 3) return js_mkerr(js, "chownSync() requires a gid argument");
+
+  ant_value_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "chownSync() path must be a string or URL");
+
+  unsigned int uid = 0;
+  unsigned int gid = 0;
+  if (!fs_parse_uid_gid(args[1], &uid)) return js_mkerr(js, "chownSync() uid must be a non-negative integer");
+  if (!fs_parse_uid_gid(args[2], &gid)) return js_mkerr(js, "chownSync() gid must be a non-negative integer");
+
+  size_t path_len = 0;
+  char *path = js_getstr(js, path_val, &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+
+  uv_fs_t req;
+  int result = uv_fs_chown(uv_default_loop(), &req, path_cstr, (uv_uid_t)uid, (uv_gid_t)gid, NULL);
+
+  if (result < 0) {
+    ant_value_t err = fs_mk_uv_error(js, result, "chown", path_cstr, NULL);
+    uv_fs_req_cleanup(&req);
+    free(path_cstr);
+    return err;
+  }
+
+  uv_fs_req_cleanup(&req);
+  free(path_cstr);
+  return js_mkundef();
+}
+
+static ant_value_t builtin_fs_chown(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "chown() requires a path argument");
+  if (nargs < 2) return js_mkerr(js, "chown() requires a uid argument");
+  if (nargs < 3) return js_mkerr(js, "chown() requires a gid argument");
+
+  ant_value_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "chown() path must be a string or URL");
+
+  unsigned int uid = 0;
+  unsigned int gid = 0;
+  if (!fs_parse_uid_gid(args[1], &uid)) return js_mkerr(js, "chown() uid must be a non-negative integer");
+  if (!fs_parse_uid_gid(args[2], &gid)) return js_mkerr(js, "chown() gid must be a non-negative integer");
+
+  size_t path_len = 0;
+  char *path = js_getstr(js, path_val, &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_CHOWN;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+
+  if (!req->path) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_chown(
+    uv_default_loop(), &req->uv_req, req->path,
+    (uv_uid_t)uid, (uv_gid_t)gid,
+    on_chmod_complete
+  );
+
+  if (result < 0) {
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return req->promise;
+}
+
 static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "access() path must be a string");
@@ -4831,6 +4922,7 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
   js_set(js, lib, "access", js_mkfun(builtin_fs_access));
   js_set(js, lib, "chmod", js_mkfun(builtin_fs_chmod));
+  js_set(js, lib, "chown", js_mkfun(builtin_fs_chown));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
   js_set(js, lib, "realpath", js_mkfun(builtin_fs_realpath));
   js_set(js, lib, "readlink", js_mkfun(builtin_fs_readlink));
@@ -4862,6 +4954,7 @@ static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "exists", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_exists), true));
   js_set(js, lib, "access", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_access), false));
   js_set(js, lib, "chmod", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_chmod), false));
+  js_set(js, lib, "chown", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_chown), false));
   js_set(js, lib, "readdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readdir), false));
   js_set(js, lib, "readlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readlink), false));
 
@@ -4963,6 +5056,7 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
   js_set(js, lib, "chmodSync", js_mkfun(builtin_fs_chmodSync));
+  js_set(js, lib, "chownSync", js_mkfun(builtin_fs_chownSync));
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
   js_set(js, lib, "realpathSync", realpath_sync);
   js_set(js, lib, "readlinkSync", js_mkfun(builtin_fs_readlinkSync));

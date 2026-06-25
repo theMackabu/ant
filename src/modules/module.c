@@ -8,6 +8,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+#include "esm/commonjs.h"
 #include "esm/loader.h"
 #include "esm/library.h"
 #include "modules/symbol.h"
@@ -41,6 +42,60 @@ static ant_value_t builtin_createRequire_call(ant_t *js, ant_value_t *args, int 
     if (vtype(default_export) != T_UNDEF) return default_export;
   }
   
+  return ns;
+}
+
+static ant_value_t builtin_Module_nodeModulePaths(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR)
+    return js_mkerr(js, "Module._nodeModulePaths() expects a string path");
+
+  ant_offset_t len = 0;
+  ant_offset_t off = vstr(js, args[0], &len);
+  return esm_commonjs_node_module_paths(js, (const char *)(uintptr_t)off, (size_t)len);
+}
+
+static ant_value_t builtin_Module(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t id = nargs > 0 ? args[0] : js_mkstr(js, "", 0);
+  if (vtype(id) != T_STR) id = coerce_to_str(js, id);
+  if (is_err(id)) return id;
+
+  ant_offset_t len = 0;
+  ant_offset_t off = vstr(js, id, &len);
+  ant_value_t parent = (nargs > 1 && is_object_type(args[1])) ? args[1] : js_mkundef();
+  ant_value_t module_obj = esm_create_commonjs_module_record(
+    js, (const char *)(uintptr_t)off, (size_t)len, parent, js_mkundef(), NULL
+  );
+  if (is_err(module_obj)) return module_obj;
+
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->sym.object_proto);
+  if (is_object_type(proto)) js_set_proto_wb(js, module_obj, proto);
+  return module_obj;
+}
+
+static ant_value_t builtin_Module_prototype_require(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR)
+    return js_mkerr(js, "require() expects a string specifier");
+
+  const char *base_path = js_module_eval_active_filename(js);
+  ant_value_t this_obj = js_getthis(js);
+
+  if (is_object_type(this_obj)) {
+    ant_value_t filename = js_get(js, this_obj, "filename");
+    if (vtype(filename) == T_STR) {
+      ant_offset_t len = 0;
+      ant_offset_t off = vstr(js, filename, &len);
+      base_path = (const char *)(uintptr_t)off;
+    }
+  }
+
+  ant_value_t ns = js_esm_import_sync_from_require(js, args[0], base_path);
+  if (is_err(ns)) return ns;
+
+  if (vtype(ns) == T_OBJ) {
+    ant_value_t default_export = js_get_slot(ns, SLOT_DEFAULT);
+    if (vtype(default_export) != T_UNDEF) return default_export;
+  }
+
   return ns;
 }
 
@@ -127,7 +182,7 @@ static ant_value_t builtin_createRequire(ant_t *js, ant_value_t *args, int nargs
   ant_value_t path_val = js_mkstr(js, path, path_len);
   ant_value_t require_fn = js_heavy_mkfun(js, builtin_createRequire_call, path_val);
   ant_value_t resolve_fn = js_heavy_mkfun(js, builtin_createRequire_resolve, path_val);
-  js_set(js, require_fn, "resolve", resolve_fn);
+  esm_setup_commonjs_require(js, require_fn, resolve_fn);
 
   return require_fn;
 }
@@ -168,14 +223,36 @@ static ant_value_t builtin_resolveFilename(ant_t *js, ant_value_t *args, int nar
 
 ant_value_t module_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
-  js_set(js, lib, "createRequire", js_mkfun(builtin_createRequire));
+  ant_value_t create_require_fn = js_mkfun(builtin_createRequire);
+  ant_value_t resolve_filename_fn = js_mkfun(builtin_resolveFilename);
+  ant_value_t node_module_paths_fn = js_mkfun(builtin_Module_nodeModulePaths);
+  js_set(js, lib, "createRequire", create_require_fn);
 
   ant_value_t modules_arr = js_mkarr(js);
   builtin_iter_ctx_t ctx = { js, modules_arr };
   ant_library_foreach(push_builtin_name, &ctx);
   
   js_set(js, lib, "builtinModules", modules_arr);
-  js_set(js, lib, "_resolveFilename", js_mkfun(builtin_resolveFilename));
+  js_set(js, lib, "_resolveFilename", resolve_filename_fn);
+
+  ant_value_t module_ctor_obj = js_mkobj(js);
+  js_set_slot(module_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Module));
+  ant_value_t module_proto = js_mkobj(js);
+  js_set(js, module_ctor_obj, "prototype", module_proto);
+  ant_value_t module_ctor = js_obj_to_func(module_ctor_obj);
+  js_mark_constructor(module_ctor, true);
+  js_set(js, module_proto, "constructor", module_ctor);
+  js_set(js, module_proto, "require", js_mkfun_arity(builtin_Module_prototype_require, 1));
+  js_set(js, module_ctor, "Module", module_ctor);
+  js_set(js, module_ctor, "createRequire", create_require_fn);
+  js_set(js, module_ctor, "builtinModules", modules_arr);
+  js_set(js, module_ctor, "_resolveFilename", resolve_filename_fn);
+  js_set(js, module_ctor, "_nodeModulePaths", node_module_paths_fn);
+  js_set(js, lib, "Module", module_ctor);
+  js_set(js, lib, "_nodeModulePaths", node_module_paths_fn);
+  js_set(js, lib, "default", module_ctor);
+  js_set_slot_wb(js, lib, SLOT_DEFAULT, module_ctor);
+
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "Module", 6));
 
   return lib;

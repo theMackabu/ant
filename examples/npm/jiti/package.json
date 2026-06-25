@@ -1,0 +1,12 @@
+{
+  "name": "jiti-example",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "ant index.mjs"
+  },
+  "dependencies": {
+    "jiti": "^2.7.0"
+  },
+  "devDependencies": {}
+}

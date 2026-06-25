@@ -4658,6 +4658,8 @@ ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) 
 }
 
 static ant_value_t js_string_from_utf16_code_unit(ant_t *js, uint32_t code_unit) {
+  if (code_unit < 128) return js_ascii_char_string(js, (unsigned char)code_unit);
+
   char buf[4];
   size_t out_len = 0;
 
@@ -4671,6 +4673,13 @@ static ant_value_t js_string_from_utf16_code_unit(ant_t *js, uint32_t code_unit)
   return js_mkstr(js, buf, out_len);
 }
 
+static inline bool flat_string_is_ascii(ant_flat_string_t *flat) {
+  if (!flat) return false;
+  if (flat->is_ascii == STR_ASCII_UNKNOWN)
+    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  return flat->is_ascii == STR_ASCII_YES;
+}
+
 static bool js_try_get_string_index(
   ant_t *js, ant_value_t str,
   const char *key, size_t key_len, ant_value_t *out
@@ -4678,6 +4687,13 @@ static bool js_try_get_string_index(
   if (!is_array_index(key, (ant_offset_t)key_len)) return false;
 
   unsigned long idx = 0;
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  if (flat_string_is_ascii(flat)) {
+    if (!parse_array_index(key, key_len, flat->len, &idx)) return false;
+    *out = js_ascii_char_string(js, (unsigned char)flat->bytes[idx]);
+    return true;
+  }
+
   ant_offset_t byte_len = 0;
   ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
@@ -4711,6 +4727,13 @@ static bool js_try_get_string_own_exotic(
   } else if (obj_type != T_STR) return false;
 
   if (is_length_key(key, key_len)) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(str);
+    if (flat_string_is_ascii(flat)) {
+      *out = tov((double)flat->len);
+      if (is_length) *is_length = true;
+      return true;
+    }
+
     ant_offset_t byte_len = 0;
     ant_offset_t str_off = vstr(js, str, &byte_len);
     const char *str_data = (const char *)(uintptr_t)(str_off);
@@ -4726,6 +4749,9 @@ static ant_value_t getprop_any(ant_t *js, ant_value_t obj, const char *key, size
   uint8_t t = vtype(obj);
   
   if (t == T_STR && is_length_key(key, key_len)) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(obj);
+    if (flat_string_is_ascii(flat)) return tov(D(flat->len));
+
     ant_offset_t byte_len;
     ant_offset_t str_off = vstr(js, obj, &byte_len);
     return tov(D(utf16_strlen((const char *)(uintptr_t)(str_off), byte_len)));
@@ -12927,6 +12953,12 @@ static ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int n
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
   
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  if (flat_string_is_ascii(flat)) {
+    if ((ant_offset_t)idx_l >= flat->len) return tov(JS_NAN);
+    return tov((double)(unsigned char)flat->bytes[idx_l]);
+  }
+
   ant_offset_t byte_len; ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
   
@@ -18142,6 +18174,12 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
   
   if (t == T_STR || t == T_NUM || t == T_BOOL) {
     if (t == T_STR && is_length_key(key, key_len)) {
+      ant_flat_string_t *flat = ant_str_flat_ptr(obj);
+      if (flat_string_is_ascii(flat)) {
+        *out = tov((double)flat->len);
+        return true;
+      }
+
       ant_offset_t byte_len = 0; ant_offset_t str_off = vstr(js, obj, &byte_len);
       const char *str_data = (const char *)(uintptr_t)(str_off);
       *out = tov((double)utf16_strlen(str_data, byte_len));

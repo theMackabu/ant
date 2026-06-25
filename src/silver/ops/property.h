@@ -4,12 +4,20 @@
 #include "silver/engine.h"
 #include "shapes.h"
 #include "gc.h"
+#include "gc/roots.h"
 #include "utf8.h"
 #include <math.h>
 #include <stdlib.h>
 
 void regexp_note_exec_property_write(void);
 void regexp_note_replace_property_write(void);
+
+static inline bool sv_flat_string_is_ascii(ant_flat_string_t *flat) {
+  if (!flat) return false;
+  if (flat->is_ascii == STR_ASCII_UNKNOWN)
+    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  return flat->is_ascii == STR_ASCII_YES;
+}
 
 static inline ant_value_t sv_getprop_fallback_len(
   ant_t *js, ant_value_t obj,
@@ -297,6 +305,9 @@ static inline ant_value_t sv_prop_get_at(
   }
 
   if (vtype(str_prim) == T_STR && is_length_key(str, len)) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(str_prim);
+    if (sv_flat_string_is_ascii(flat)) return tov((double)flat->len);
+
     ant_offset_t byte_len = 0;
     ant_offset_t str_off = vstr(js, str_prim, &byte_len);
     const char *str_data = (const char *)(uintptr_t)(str_off);
@@ -379,6 +390,20 @@ static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value
   size_t idx = 0;
   if (!sv_parse_string_index_key(js, key, &idx)) return false;
 
+  ant_flat_string_t *flat = ant_str_flat_ptr(str);
+  if (sv_flat_string_is_ascii(flat)) {
+    if (idx >= (size_t)flat->len) {
+      *out = js_mkundef();
+      return true;
+    }
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, str);
+    GC_ROOT_PIN(js, key);
+    *out = js_ascii_char_string(js, (unsigned char)flat->bytes[idx]);
+    GC_ROOT_RESTORE(js, mark);
+    return true;
+  }
+
   ant_offset_t byte_len = 0;
   ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
@@ -397,7 +422,11 @@ static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value
     buf[2] = (char)(0x80 | (code_unit & 0x3F));
     out_len = 3;
   } else out_len = (size_t)utf8_encode(code_unit, buf);
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, str);
+  GC_ROOT_PIN(js, key);
   *out = js_mkstr(js, buf, out_len);
+  GC_ROOT_RESTORE(js, mark);
   
   return true;
 }
@@ -780,7 +809,7 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
       const char *str_data = flat->bytes;
       ant_offset_t byte_len = flat->len;
       vm->stack[vm->sp++] = tov((double)(uint32_t)(
-        str_is_ascii(str_data) 
+        sv_flat_string_is_ascii(flat)
           ? byte_len 
           : utf16_strlen(str_data, byte_len)
       ));

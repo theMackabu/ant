@@ -798,7 +798,12 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   entry->flags_mask = flags_mask;
   entry->code = re;
   pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &entry->namecount);
-  entry->jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
+  /*
+   * PCRE2 JIT can jump into invalid generated-code memory for some large
+   * package-tooling patterns on macOS. Prefer the interpreter until the JIT
+   * lifetime/permission issue is isolated.
+   */
+  entry->jit_ready = false;
   entry->refcount = 0;
   compiled_regex_cache[compiled_regex_cache_count++] = entry;
   return entry;

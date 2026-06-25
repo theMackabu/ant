@@ -1586,5 +1586,7 @@ void init_bigint_module(void) {
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   js_setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
   js_setprop(js, bigint_ctor_obj, ANT_STRING("name"), ANT_STRING("BigInt"));
-  js_setprop(js, glob, js_mkstr(js, "BigInt", 6), js_obj_to_func(bigint_ctor_obj));
+  ant_value_t bigint_ctor = js_obj_to_func(bigint_ctor_obj);
+  js_set(js, bigint_proto, "constructor", bigint_ctor);
+  js_setprop(js, glob, js_mkstr(js, "BigInt", 6), bigint_ctor);
 }

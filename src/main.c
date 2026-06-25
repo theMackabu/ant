@@ -104,6 +104,7 @@
 #include "modules/stream.h"
 #include "modules/structured-clone.h"
 #include "modules/v8.h"
+#include "modules/vm.h"
 #include "modules/worker_threads.h"
 #include "modules/headers.h"
 #include "modules/blob.h"
@@ -958,6 +959,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
   ant_standard_library("v8", v8_library);
+  ant_standard_library("vm", vm_library);
   ant_standard_library("zlib", zlib_library);
   ant_standard_library("string_decoder", string_decoder_library);
   ant_standard_library("stream", stream_library);

@@ -560,6 +560,8 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->thrown_value);
   gc_mark_value(js, js->thrown_stack);
   gc_mark_value(js, js->length_str);
+  for (size_t i = 0; i < sizeof(js->ascii_char_cache) / sizeof(js->ascii_char_cache[0]); i++)
+    gc_mark_value(js, js->ascii_char_cache[i]);
 
   if (rt && rt->js == js)
     gc_mark_value(js, rt->ant_obj);

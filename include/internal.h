@@ -163,6 +163,7 @@ struct ant_isolate_t {
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
+  ant_value_t ascii_char_cache[128];
   
   struct {
     const char *length;
@@ -702,6 +703,17 @@ static inline bool str_is_ascii(const char *str) {
     flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
   }
   return flat->is_ascii == STR_ASCII_YES;
+}
+
+static inline ant_value_t js_ascii_char_string(ant_t *js, unsigned char ch) {
+  if (ch >= 128) return js_mkstr(js, &ch, 1);
+  ant_value_t cached = js->ascii_char_cache[ch];
+  if (vtype(cached) != T_STR) {
+    char c = (char)ch;
+    cached = js_mkstr(js, &c, 1);
+    js->ascii_char_cache[ch] = cached;
+  }
+  return cached;
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

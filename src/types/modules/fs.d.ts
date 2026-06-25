@@ -139,6 +139,8 @@ declare module 'fs' {
   function accessSync(path: string, mode?: number): void;
   function chmod(path: string, mode: number | string): Promise<void>;
   function chmodSync(path: string, mode: number | string): void;
+  function chown(path: string | URL, uid: number, gid: number): Promise<void>;
+  function chownSync(path: string | URL, uid: number, gid: number): void;
   function readdir(path: string): Promise<string[]>;
   function readdirSync(path: string): string[];
   function realpath(path: string): Promise<string>;
@@ -264,6 +266,7 @@ declare module 'fs/promises' {
   function exists(path: string): Promise<boolean>;
   function access(path: string, mode?: number): Promise<void>;
   function chmod(path: string, mode: number | string): Promise<void>;
+  function chown(path: string | URL, uid: number, gid: number): Promise<void>;
   function readdir(path: string): Promise<string[]>;
   function realpath(path: string): Promise<string>;
   function readlink(path: string): Promise<string>;

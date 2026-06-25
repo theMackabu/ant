@@ -52,6 +52,7 @@ typedef enum {
 typedef struct {
   child_process_t *cp;
   child_stream_kind_t kind;
+  size_t read_offset;
 } child_stream_ctx_t;
 
 typedef struct {
@@ -101,6 +102,7 @@ struct child_process_s {
   bool stdin_closed;
   bool use_shell;
   bool detached;
+  bool spawned;
   bool close_emitted;
   bool keep_alive;
   int pending_closes;
@@ -234,6 +236,26 @@ static ant_value_t child_stream_decode_chunk(
   return is_err(decoded) ? chunk : decoded;
 }
 
+static bool child_stream_read_buffer(
+  child_process_t *cp,
+  child_stream_kind_t kind,
+  const char **data,
+  size_t *len
+) {
+  if (!cp || !data || !len) return false;
+  if (kind == CHILD_STREAM_STDOUT) {
+    *data = cp->stdout_buf;
+    *len = cp->stdout_len;
+    return true;
+  }
+  if (kind == CHILD_STREAM_STDERR) {
+    *data = cp->stderr_buf;
+    *len = cp->stderr_len;
+    return true;
+  }
+  return false;
+}
+
 static uv_pipe_t *child_pipe(child_process_t *cp, child_stream_kind_t kind) {
 switch (kind) {
   case CHILD_STREAM_STDIN: return &cp->stdin_pipe;
@@ -308,6 +330,26 @@ static child_event_t *find_or_create_event(child_process_t *cp, const char *name
     HASH_ADD_KEYPTR(hh, cp->events, evt->event_name, strlen(evt->event_name), evt);
   }
   return evt;
+}
+
+static void remove_child_event_listener(
+  child_process_t *cp,
+  const char *name,
+  ant_value_t callback
+) {
+  if (!cp || !name) return;
+  child_event_t *evt = NULL;
+  HASH_FIND_STR(cp->events, name, evt);
+  if (!evt) return;
+
+  int i = 0;
+  while (i < evt->count) {
+    if (evt->listeners[i].callback == callback) {
+      for (int j = i; j < evt->count - 1; j++)
+        evt->listeners[j] = evt->listeners[j + 1];
+      evt->count--;
+    } else i++;
+  }
 }
 
 static void try_free_child(child_process_t *cp) {
@@ -411,8 +453,6 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
   
   close_child_handle(cp, (uv_handle_t *)proc);
   close_child_pipe(cp, CHILD_STREAM_STDIN, false);
-  close_child_pipe(cp, CHILD_STREAM_STDOUT, true);
-  close_child_pipe(cp, CHILD_STREAM_STDERR, true);
   
   check_completion(cp);
 }
@@ -453,6 +493,7 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     data = child_stream_decode_chunk(cp->js, cp->stdout_obj, data);
     ant_value_t data_args[1] = { data };
     emit_stream_event(cp, CHILD_STREAM_STDOUT, "data", data_args, 1);
+    emit_stream_event(cp, CHILD_STREAM_STDOUT, "readable", NULL, 0);
     
     if (vtype(cp->stdout_obj) == T_OBJ) js_set(
       cp->js, cp->stdout_obj, "length", 
@@ -467,10 +508,21 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       ant_value_t err_args[1] = { js_mkstr(cp->js, uv_strerror((int)nread), (int)strlen(uv_strerror((int)nread))) };
       emit_event(cp, "error", err_args, 1);
       emit_stream_event(cp, CHILD_STREAM_STDOUT, "error", err_args, 1);
-    } else emit_stream_event(cp, CHILD_STREAM_STDOUT, "end", NULL, 0);
-    
-    if (nread != UV_EOF) 
+    } else {
+      if (vtype(cp->stdout_obj) == T_OBJ) {
+        js_set(cp->js, cp->stdout_obj, "readableEnded", js_true);
+        js_set(cp->js, cp->stdout_obj, "readable", js_false);
+      }
       emit_stream_event(cp, CHILD_STREAM_STDOUT, "end", NULL, 0);
+    }
+    
+    if (nread != UV_EOF) {
+      if (vtype(cp->stdout_obj) == T_OBJ) {
+        js_set(cp->js, cp->stdout_obj, "readableEnded", js_true);
+        js_set(cp->js, cp->stdout_obj, "readable", js_false);
+      }
+      emit_stream_event(cp, CHILD_STREAM_STDOUT, "end", NULL, 0);
+    }
     
     close_child_pipe(cp, CHILD_STREAM_STDOUT, true);
     check_completion(cp);
@@ -503,6 +555,7 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     data = child_stream_decode_chunk(cp->js, cp->stderr_obj, data);
     ant_value_t data_args[1] = { data };
     emit_stream_event(cp, CHILD_STREAM_STDERR, "data", data_args, 1);
+    emit_stream_event(cp, CHILD_STREAM_STDERR, "readable", NULL, 0);
     
     if (vtype(cp->stderr_obj) == T_OBJ) js_set(
       cp->js, cp->stderr_obj, "length",
@@ -521,6 +574,10 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       emit_stream_event(cp, CHILD_STREAM_STDERR, "error", err_args, 1);
     }
     
+    if (vtype(cp->stderr_obj) == T_OBJ) {
+      js_set(cp->js, cp->stderr_obj, "readableEnded", js_true);
+      js_set(cp->js, cp->stderr_obj, "readable", js_false);
+    }
     emit_stream_event(cp, CHILD_STREAM_STDERR, "end", NULL, 0);
     close_child_pipe(cp, CHILD_STREAM_STDERR, true);
     check_completion(cp);
@@ -539,6 +596,13 @@ static ant_value_t child_on(ant_t *js, ant_value_t *args, int nargs) {
   size_t name_len;
   char *name = js_getstr(js, args[0], &name_len);
   char *name_cstr = strndup(name, name_len);
+
+  if (cp->spawned && strcmp(name_cstr, "spawn") == 0) {
+    ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), NULL, 0, NULL, false);
+    if (vtype(result) == T_ERR) log_listener_error(js, "spawn", result);
+    free(name_cstr);
+    return this_obj;
+  }
   
   child_event_t *evt = find_or_create_event(cp, name_cstr);
   free(name_cstr);
@@ -566,6 +630,13 @@ static ant_value_t child_once(ant_t *js, ant_value_t *args, int nargs) {
   size_t name_len;
   char *name = js_getstr(js, args[0], &name_len);
   char *name_cstr = strndup(name, name_len);
+
+  if (cp->spawned && strcmp(name_cstr, "spawn") == 0) {
+    ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), NULL, 0, NULL, false);
+    if (vtype(result) == T_ERR) log_listener_error(js, "spawn", result);
+    free(name_cstr);
+    return this_obj;
+  }
   
   child_event_t *evt = find_or_create_event(cp, name_cstr);
   free(name_cstr);
@@ -578,6 +649,22 @@ static ant_value_t child_once(ant_t *js, ant_value_t *args, int nargs) {
   evt->listeners[evt->count].once = true;
   evt->count++;
   
+  return this_obj;
+}
+
+static ant_value_t child_off(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  if (vtype(args[0]) != T_STR) return this_obj;
+
+  child_process_t *cp = get_child_process(this_obj);
+  if (!cp) return this_obj;
+
+  size_t name_len;
+  char *name = js_getstr(js, args[0], &name_len);
+  char *name_cstr = strndup(name, name_len);
+  remove_child_event_listener(cp, name_cstr, args[1]);
+  free(name_cstr);
   return this_obj;
 }
 
@@ -755,6 +842,28 @@ static ant_value_t child_stream_end(ant_t *js, ant_value_t *args, int nargs) {
   return child_end_impl(ctx->cp);
 }
 
+static ant_value_t child_stream_read(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
+  if (!ctx || !ctx->cp) return js_mknull();
+
+  const char *data = NULL;
+  size_t len = 0;
+  if (!child_stream_read_buffer(ctx->cp, ctx->kind, &data, &len)) return js_mknull();
+  if (ctx->read_offset >= len) return js_mknull();
+
+  size_t remaining = len - ctx->read_offset;
+  size_t read_len = remaining;
+  if (nargs > 0 && !is_undefined(args[0]) && vtype(args[0]) == T_NUM) {
+    double requested = js_to_number(js, args[0]);
+    if (requested > 0 && requested < (double)read_len) read_len = (size_t)requested;
+  }
+
+  ant_value_t chunk = make_buffer_chunk(js, data + ctx->read_offset, read_len);
+  ctx->read_offset += read_len;
+  return child_stream_decode_chunk(js, this_obj, chunk);
+}
+
 static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
@@ -886,6 +995,27 @@ static ant_value_t child_stream_once(ant_t *js, ant_value_t *args, int nargs) {
   return this_obj;
 }
 
+static ant_value_t child_stream_off(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  if (nargs < 2 || vtype(args[0]) != T_STR) return this_obj;
+
+  child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
+  if (!ctx || !ctx->cp) return this_obj;
+
+  size_t name_len = 0;
+  char *name = js_getstr(js, args[0], &name_len);
+  if (!name) return this_obj;
+
+  char full_name[64];
+  snprintf(
+    full_name, sizeof(full_name),
+    "%s:%.*s", stream_kind_name(ctx->kind),
+    (int)name_len, name
+  );
+  remove_child_event_listener(ctx->cp, full_name, args[1]);
+  return this_obj;
+}
+
 static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, child_stream_kind_t kind) {
   ant_value_t obj = js_mkobj(js);
   child_stream_ctx_t *ctx = calloc(1, sizeof(child_stream_ctx_t));
@@ -900,7 +1030,11 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
 
   js_set_native(obj, ctx, CHILD_STREAM_NATIVE_TAG);
   js_set(js, obj, "on", js_mkfun(child_stream_on));
+  js_set(js, obj, "addListener", js_get(js, obj, "on"));
   js_set(js, obj, "once", js_mkfun(child_stream_once));
+  js_set(js, obj, "off", js_mkfun(child_stream_off));
+  js_set(js, obj, "removeListener", js_get(js, obj, "off"));
+  js_set(js, obj, "read", js_mkfun(child_stream_read));
   js_set(js, obj, "ref", js_mkfun(child_stream_ref));
   js_set(js, obj, "unref", js_mkfun(child_stream_unref));
   js_set(js, obj, "destroy", js_mkfun(child_stream_destroy));
@@ -908,6 +1042,10 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
   js_set(js, obj, "length", js_mknum(0));
   js_set(js, obj, "encoding", js_mknull());
   js_set(js, obj, "readableEncoding", js_mknull());
+  js_set(js, obj, "readable", kind == CHILD_STREAM_STDIN ? js_false : js_true);
+  js_set(js, obj, "readableEnded", js_false);
+  js_set(js, obj, "readableFlowing", js_mknull());
+  js_set(js, obj, "closed", js_false);
 
   if (kind == CHILD_STREAM_STDIN) {
     js_set(js, obj, "write", js_mkfun(child_stream_write));
@@ -943,7 +1081,10 @@ static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   }
   
   js_set(js, obj, "on", js_mkfun(child_on));
+  js_set(js, obj, "addListener", js_get(js, obj, "on"));
   js_set(js, obj, "once", js_mkfun(child_once));
+  js_set(js, obj, "off", js_mkfun(child_off));
+  js_set(js, obj, "removeListener", js_get(js, obj, "off"));
   js_set(js, obj, "ref", js_mkfun(child_ref));
   js_set(js, obj, "unref", js_mkfun(child_unref));
   js_set(js, obj, "kill", js_mkfun(child_kill));
@@ -1232,6 +1373,8 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   
   add_pending_child(cp);
   cp->child_obj = create_child_object(js, cp);
+  cp->spawned = true;
+  emit_event(cp, "spawn", NULL, 0);
   
   return cp->child_obj;
 }
