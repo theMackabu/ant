@@ -178,8 +178,7 @@ static inline void progress_start(progress_t *p, const char *message) {
   }
   
   if (message) {
-    strncpy(p->msg_buffer, message, PROGRESS_MSG_SIZE - 1);
-    p->msg_buffer[PROGRESS_MSG_SIZE - 1] = '\0';
+    snprintf(p->msg_buffer, PROGRESS_MSG_SIZE, "%s", message);
   } else p->msg_buffer[0] = '\0';
   
   p->refresh_rate_ns = 50 * 1000000ULL;
@@ -218,8 +217,7 @@ static inline void progress_maybe_refresh(progress_t *p) {
 static inline void progress_update(progress_t *p, const char *message) {
   progress_mutex_lock(&p->mutex);
   if (message) {
-    strncpy(p->msg_buffer, message, PROGRESS_MSG_SIZE - 1);
-    p->msg_buffer[PROGRESS_MSG_SIZE - 1] = '\0';
+    snprintf(p->msg_buffer, PROGRESS_MSG_SIZE, "%s", message);
   } else p->msg_buffer[0] = '\0';
 
   progress_mutex_unlock(&p->mutex);
