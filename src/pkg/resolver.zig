@@ -8,6 +8,8 @@ const json = @import("json.zig");
 const debug = @import("debug.zig");
 const cache = @import("cache.zig");
 
+const NPM_FALLBACK_HOST = "registry.npmjs.org";
+
 fn isAntsLandRegistry(registry_url: []const u8) bool {
   var host = registry_url;
   if (std.mem.startsWith(u8, host, "https://")) host = host["https://".len..];
@@ -2220,20 +2222,25 @@ pub const Resolver = struct {
     }
 
     if (self.cache_db) |db| {
-      if (db.lookupMetadata(self.http.registry_host, name, self.allocator)) |json_data| {
-        defer self.allocator.free(json_data);
-        const metadata = PackageMetadata.parseFromJson(self.cache_allocator, json_data) catch {
-          return self.fetchFromNetwork(name);
-        };
-
-        debug.log("  metadata: {s} (disk cache)", .{name});
-        const cache_key = try self.cache_allocator.dupe(u8, name);
-        try self.metadata_cache.put(cache_key, metadata);
-        return self.metadata_cache.get(name).?;
+      if (try self.loadFromDiskCache(db, self.http.registry_host, name, "disk cache")) |metadata| return metadata;
+      if (isAntsLandRegistry(self.registry_url)) {
+        if (try self.loadFromDiskCache(db, NPM_FALLBACK_HOST, name, "npm fallback, disk cache")) |metadata| return metadata;
       }
     }
 
     return self.fetchFromNetwork(name);
+  }
+
+  fn loadFromDiskCache(self: *Resolver, db: *cache.CacheDB, registry_host: []const u8, name: []const u8, label: []const u8) !?PackageMetadata {
+    const json_data = db.lookupMetadata(registry_host, name, self.allocator) orelse return null;
+    defer self.allocator.free(json_data);
+
+    const metadata = PackageMetadata.parseFromJson(self.cache_allocator, json_data) catch return null;
+    debug.log("  metadata: {s} ({s})", .{ name, label });
+
+    const cache_key = try self.cache_allocator.dupe(u8, name);
+    try self.metadata_cache.put(cache_key, metadata);
+    return self.metadata_cache.get(name).?;
   }
 
   fn fetchFromNetwork(self: *Resolver, name: []const u8) !PackageMetadata {
@@ -2244,7 +2251,7 @@ pub const Resolver = struct {
           if (http_err.status == 404 and isAntsLandRegistry(self.registry_url)) {
             debug.log("  metadata: {s} (npm fallback)", .{name});
             const fallback = try self.ensureNpmFallbackFetcher();
-            return self.fetchFromNetworkWith(fallback, name, false);
+            return self.fetchFromNetworkWith(fallback, name, true);
           }
         }
       }
@@ -2265,7 +2272,7 @@ pub const Resolver = struct {
 
   fn ensureNpmFallbackFetcher(self: *Resolver) !*fetcher.Fetcher {
     if (self.npm_fallback_http) |http| return http;
-    const http = try fetcher.Fetcher.init(self.cache_allocator, "registry.npmjs.org");
+    const http = try fetcher.Fetcher.init(self.cache_allocator, NPM_FALLBACK_HOST);
     self.npm_fallback_http = http;
     return http;
   }
