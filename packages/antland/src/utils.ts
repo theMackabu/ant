@@ -216,7 +216,7 @@ export async function exec(
   });
 }
 
-type StyleColor = 'red' | 'green' | 'cyan' | 'magenta' | 'dim' | 'yellow';
+type StyleColor = 'red' | 'green' | 'cyan' | 'magenta' | 'dim' | 'yellow' | 'strikethrough';
 export const styleText: (style: StyleColor, text: string) => string =
   typeof (util as { styleText?: unknown }).styleText === 'function'
     ? (util as unknown as { styleText: (s: string, t: string) => string }).styleText

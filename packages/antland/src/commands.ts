@@ -138,10 +138,25 @@ function printSafetyReport(id: string, version: string, score: PackageScore | nu
   }
 
   if (score.risks.length) {
-    const parts = score.risks.map(r => styleText(DANGER_RISKS.has(r) ? 'red' : 'yellow', RISK_LABELS[r] ?? r));
-    console.log(fieldLabel('Risks') + parts.join(styleText('dim', ', ')));
+    const reviewed = new Set(score.acknowledgedRisks ?? []);
+    const parts = score.risks.map(r => {
+      const label = RISK_LABELS[r] ?? r;
+      if (reviewed.has(r)) return styleText('dim', styleText('strikethrough', label));
+      return styleText(DANGER_RISKS.has(r) ? 'red' : 'yellow', label);
+    });
+    let line = fieldLabel('Risks') + parts.join(styleText('dim', ', '));
+    const left = score.risks.filter(r => !reviewed.has(r)).length;
+    if (reviewed.size && left === 0) line += styleText('dim', '  (all reviewed)');
+    console.log(line);
   } else {
     console.log(fieldLabel('Risks') + styleText('green', 'none detected'));
+  }
+
+  if (score.audit?.audited) {
+    const a = score.audit;
+    const supply = a.supplyChain != null ? ` ${a.supplyChain}% supply-chain` : '';
+    const verdict = a.passed ? styleText('green', `✓ passed audit${supply}`) : styleText('yellow', `⚠ audit flagged issues${supply}`);
+    console.log(fieldLabel('Audit') + verdict);
   }
 
   if (score.flags.obfuscated) console.log(fieldLabel('') + styleText('red', 'ships obfuscated source'));
@@ -205,7 +220,6 @@ export interface ExecSnippetOptions {
 }
 
 export async function execSnippet(id: string, options: ExecSnippetOptions) {
-  // send the saved token so a private snippet runs for its owner
   const token = await readToken();
   const { filename, content } = await fetchSnippet(id, token);
 

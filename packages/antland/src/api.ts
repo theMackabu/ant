@@ -65,6 +65,8 @@ export interface PackageScore {
   checks: ScoreCheck[];
   flags: { minified: boolean; obfuscated: boolean; verified: boolean };
   risks: string[];
+  acknowledgedRisks?: string[];
+  audit?: { audited: boolean; passed: boolean; supplyChain: number | null; issues: number } | null;
   typosquat: string | null;
   publisher: { name: string; handle: string; githubLogin: string | null; githubVerified: boolean } | null;
 }
