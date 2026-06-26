@@ -919,6 +919,7 @@ pub const Resolver = struct {
   on_package_resolved: ?OnPackageResolvedFn,
   on_package_resolved_data: ?*anyopaque,
   lock_resolution_hash: u64,
+  resolve_shallow: bool,
 
   pub fn init(
     allocator: std.mem.Allocator,
@@ -945,6 +946,7 @@ pub const Resolver = struct {
       .on_package_resolved = null,
       .on_package_resolved_data = null,
       .lock_resolution_hash = 0,
+      .resolve_shallow = false,
     };
   }
 
@@ -1176,12 +1178,15 @@ pub const Resolver = struct {
         fn onMetadata(name: []const u8, data: ?[]const u8, has_error: bool, userdata: ?*anyopaque) void {
           const ctx: *@This() = @ptrCast(@alignCast(userdata));
           if (has_error or data == null) return;
+          ctx.ingest(name, data.?, ctx.resolver.http.registry_host);
+        }
 
+        fn ingest(ctx: *@This(), name: []const u8, data: []const u8, registry_host: []const u8) void {
           if (ctx.resolver.cache_db) |db| {
-            db.insertMetadata(ctx.resolver.http.registry_host, name, data.?) catch {};
+            db.insertMetadata(registry_host, name, data) catch {};
           }
 
-          const metadata = PackageMetadata.parseFromJson(ctx.resolver.cache_allocator, data.?) catch return;
+          const metadata = PackageMetadata.parseFromJson(ctx.resolver.cache_allocator, data) catch return;
           const cache_key = ctx.resolver.cache_allocator.dupe(u8, name) catch return;
           ctx.resolver.metadata_cache.put(cache_key, metadata) catch {
             ctx.resolver.cache_allocator.free(cache_key);
@@ -1235,6 +1240,9 @@ pub const Resolver = struct {
             &stream_ctx,
           ) catch {};
         }
+        const prefetch_probed = prefetch_queue.items.len;
+        self.fetchMissingFromFallback(to_fetch.items, &stream_ctx);
+        self.fetchMissingFromFallback(prefetch_queue.items[0..prefetch_probed], &stream_ctx);
       }
 
       for (collect_queue.items) |item| {
@@ -1419,6 +1427,16 @@ pub const Resolver = struct {
 
       var next_queue = std.ArrayListUnmanaged(WorkItem).empty;
       errdefer next_queue.deinit(self.allocator);
+
+      {
+        var level_names = std.ArrayListUnmanaged([]const u8).empty;
+        defer level_names.deinit(self.allocator);
+        for (queue.items) |item| {
+          const spec = dependencySpec(item.name, item.constraint);
+          level_names.append(self.allocator, spec.package_name) catch break;
+        }
+        self.prefetchMetadataConcurrent(level_names.items);
+      }
 
       for (queue.items) |item| {
         if (item.optional and self.optionalDependencyShouldSkip(item.name, item.constraint)) {
@@ -2141,6 +2159,8 @@ pub const Resolver = struct {
     errdefer self.allocator.free(name_key);
     try self.resolved.put(name_key, pkg);
 
+    if (self.resolve_shallow) return pkg;
+
     var dep_iter = best.dependencies.iterator();
     while (dep_iter.next()) |entry| {
       const dep_name = entry.key_ptr.*;
@@ -2275,6 +2295,84 @@ pub const Resolver = struct {
     const http = try fetcher.Fetcher.init(self.cache_allocator, NPM_FALLBACK_HOST);
     self.npm_fallback_http = http;
     return http;
+  }
+
+  fn fetchMissingFromFallback(self: *Resolver, names: []const []const u8, sink: anytype) void {
+    if (!isAntsLandRegistry(self.registry_url)) return;
+
+    var missing = std.ArrayListUnmanaged([]const u8).empty;
+    defer missing.deinit(self.allocator);
+    for (names) |name| {
+      if (!self.metadata_cache.contains(name)) missing.append(self.allocator, name) catch return;
+    }
+    if (missing.items.len == 0) return;
+
+    const fallback = self.ensureNpmFallbackFetcher() catch return;
+    debug.log("  meta: npm fallback batch {d} packages", .{missing.items.len});
+    const results = fallback.fetchMetadataBatch(missing.items, self.allocator) catch return;
+    for (results) |*result| {
+      if (result.data) |data| sink.ingest(result.name, data, NPM_FALLBACK_HOST);
+    }
+  }
+
+  fn storeMetadata(self: *Resolver, name: []const u8, data: []const u8, registry_host: []const u8) void {
+    if (self.cache_db) |db| db.insertMetadata(registry_host, name, data) catch {};
+    const metadata = PackageMetadata.parseFromJson(self.cache_allocator, data) catch return;
+    const cache_key = self.cache_allocator.dupe(u8, name) catch return;
+    self.metadata_cache.put(cache_key, metadata) catch self.cache_allocator.free(cache_key);
+  }
+
+  fn prefetchMetadataConcurrent(self: *Resolver, names: []const []const u8) void {
+    var missing = std.ArrayListUnmanaged([]const u8).empty;
+    defer missing.deinit(self.allocator);
+    for (names) |name| {
+      if (self.metadata_cache.contains(name)) continue;
+      if (self.loadMetadataFromDisk(name)) continue;
+      for (missing.items) |m| {
+        if (std.mem.eql(u8, m, name)) break;
+      } else missing.append(self.allocator, name) catch return;
+    }
+    if (missing.items.len == 0) return;
+
+    const Sink = struct {
+      resolver: *Resolver,
+      fn onMeta(name: []const u8, data: ?[]const u8, has_error: bool, userdata: ?*anyopaque) void {
+        const s: *@This() = @ptrCast(@alignCast(userdata));
+        if (has_error or data == null) return;
+        s.resolver.storeMetadata(name, data.?, s.resolver.http.registry_host);
+      }
+    };
+    var sink = Sink{ .resolver = self };
+    self.http.fetchMetadataStreaming(missing.items, self.allocator, Sink.onMeta, &sink) catch {};
+
+    if (!isAntsLandRegistry(self.registry_url)) return;
+
+    var still_missing = std.ArrayListUnmanaged([]const u8).empty;
+    defer still_missing.deinit(self.allocator);
+    for (missing.items) |name| {
+      if (!self.metadata_cache.contains(name)) still_missing.append(self.allocator, name) catch return;
+    }
+    if (still_missing.items.len == 0) return;
+
+    const fallback = self.ensureNpmFallbackFetcher() catch return;
+    debug.log("  meta: npm fallback batch {d} packages", .{still_missing.items.len});
+    const results = fallback.fetchMetadataBatch(still_missing.items, self.allocator) catch return;
+    for (results) |*result| {
+      if (result.data) |data| self.storeMetadata(result.name, data, NPM_FALLBACK_HOST);
+    }
+  }
+
+  fn loadMetadataFromDisk(self: *Resolver, name: []const u8) bool {
+    const db = self.cache_db orelse return false;
+    if (self.loadFromDiskCache(db, self.http.registry_host, name, "disk cache")) |found| {
+      if (found != null) return true;
+    } else |_| {}
+    if (isAntsLandRegistry(self.registry_url)) {
+      if (self.loadFromDiskCache(db, NPM_FALLBACK_HOST, name, "npm fallback, disk cache")) |found| {
+        if (found != null) return true;
+      } else |_| {}
+    }
+    return false;
   }
 
   fn fetchFromNetworkWith(self: *Resolver, http: *fetcher.Fetcher, name: []const u8, write_disk_cache: bool) !PackageMetadata {

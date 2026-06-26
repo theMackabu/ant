@@ -3182,6 +3182,7 @@ export fn pkg_add_many(
     &c.metadata_cache,
   ); defer res.deinit();
 
+  res.resolve_shallow = true;
   const ResolvedEntry = struct {
     name: []const u8,
     dependency_value: []const u8,

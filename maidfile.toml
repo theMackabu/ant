@@ -53,13 +53,14 @@ script = [
 
 [tasks.install]
 script = ["maid build -q", '''
-   bash -c 'if which ant >/dev/null 2>&1; then
-     dir=$(dirname "$(which ant)")
-     cp ./build/ant "$dir/ant"
-     ln -sf "$dir/ant" "$dir/antx"
-   else
-     mkdir -p ~/.ant/bin
-     cp ./build/ant ~/.ant/bin/
-     ln -sf ~/.ant/bin/ant ~/.ant/bin/antx
-   fi'
+#!/usr/bin/env bash
+if which ant >/dev/null 2>&1; then
+  dir=$(dirname "$(which ant)")
+  cp ./build/ant "$dir/ant"
+  ln -sf "$dir/ant" "$dir/antx"
+else
+  mkdir -p ~/.ant/bin
+  cp ./build/ant ~/.ant/bin/
+  ln -sf ~/.ant/bin/ant ~/.ant/bin/antx
+fi
 ''']
