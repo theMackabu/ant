@@ -195,20 +195,27 @@ pub const Linker = struct {
       try self.allocator.dupe(u8, pkg.name);
     defer self.allocator.free(install_path);
 
-    if (pkg.allow_dir_symlink and self.installedSymlinkMatches(node_modules, install_path, pkg.cache_path)) {
-      _ = self.stats.packages_skipped.fetchAdd(1, .release);
-      return;
-    }
-
     var source_dir = std.Io.Dir.cwd().openDir(io, pkg.cache_path, .{ .iterate = true }) catch {
       return error.PathNotFound;
     };
     defer source_dir.close(io);
 
+    const use_virtual_context = pkg.allow_dir_symlink and self.packageNeedsVirtualContext(source_dir);
+    if (use_virtual_context) {
+      if (self.installedVirtualSymlinkMatches(node_modules, install_path, pkg.name, source_dir)) {
+        _ = self.stats.packages_skipped.fetchAdd(1, .release);
+        return;
+      }
+    } else if (pkg.allow_dir_symlink and self.installedSymlinkMatches(node_modules, install_path, pkg.cache_path)) {
+      _ = self.stats.packages_skipped.fetchAdd(1, .release);
+      return;
+    }
+
     if (!self.cross_device.load(.acquire) and dirsAreCrossDevice(source_dir, node_modules)) {
       self.enableCopyMode();
     }
 
+    const existing_is_stale_virtual_candidate = use_virtual_context and installedPathIsSymlink(node_modules, install_path);
     var should_skip = false;
     var has_existing_install = false;
     var has_existing_package = false;
@@ -226,7 +233,8 @@ pub const Linker = struct {
         const installed_version = readPackageVersion(self.allocator, installed_dir);
         defer if (installed_version) |v| self.allocator.free(v);
         has_existing_package = installed_version != null;
-        should_skip = packageVersionsMatch(source_version, installed_version) and
+        should_skip = !existing_is_stale_virtual_candidate and
+          packageVersionsMatch(source_version, installed_version) and
           (pkg.trust_installed or
             (pkg.file_count != 0 and installedFileCountMatches(installed_dir, pkg.file_count)));
       }
@@ -239,6 +247,13 @@ pub const Linker = struct {
 
     if (has_existing_install and has_existing_package) {
       self.deleteInstalledPath(node_modules, install_path) catch return error.IoError;
+    }
+
+    if (use_virtual_context) {
+      try self.linkVirtualPackageDirectory(node_modules, source_dir, pkg.cache_path, install_path, pkg.name, pkg.file_count);
+      if (pkg.parent_path == null and pkg.has_bin) try self.linkPackageBinaries(pkg.name, pkg.bins, false);
+      _ = self.stats.packages_installed.fetchAdd(1, .release);
+      return;
     }
 
     const use_symlinked_cli = pkg.has_bin and self.packageSupportsSymlinkedCli(source_dir);
@@ -294,9 +309,9 @@ pub const Linker = struct {
   }
 
   fn deleteInstalledPath(_: *Linker, node_modules: std.Io.Dir, install_path: []const u8) !void {
-    node_modules.deleteTree(io, install_path) catch |tree_err| {
-      node_modules.deleteFile(io, install_path) catch |file_err| {
-        if (tree_err == error.FileNotFound or file_err == error.FileNotFound) return;
+    node_modules.deleteFile(io, install_path) catch |file_err| {
+      node_modules.deleteTree(io, install_path) catch |tree_err| {
+        if (file_err == error.FileNotFound or tree_err == error.FileNotFound) return;
         return error.IoError;
       };
     };
@@ -314,6 +329,84 @@ pub const Linker = struct {
     node_modules.symLink(io, cache_path, install_path, .{}) catch return error.IoError;
     _ = self.stats.files_linked.fetchAdd(1, .release);
     _ = self.stats.dirs_created.fetchAdd(1, .release);
+  }
+
+  fn symlinkPackagePath(self: *Linker, node_modules: std.Io.Dir, target_path: []const u8, install_path: []const u8) !void {
+    if (std.fs.path.dirname(install_path)) |parent| {
+      node_modules.createDirPath(io, parent) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return error.IoError,
+      };
+    }
+
+    const link_parent = std.fs.path.dirname(install_path) orelse "";
+    const link_dir_abs = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, link_parent });
+    defer self.allocator.free(link_dir_abs);
+    const target_abs = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, target_path });
+    defer self.allocator.free(target_abs);
+    const relative_target = try std.fs.path.relative(self.allocator, "", null, link_dir_abs, target_abs);
+    defer self.allocator.free(relative_target);
+
+    node_modules.deleteFile(io, install_path) catch {};
+    node_modules.symLink(io, relative_target, install_path, .{}) catch return error.IoError;
+    _ = self.stats.files_linked.fetchAdd(1, .release);
+  }
+
+  fn linkVirtualPackageDirectory(
+    self: *Linker,
+    node_modules: std.Io.Dir,
+    source_dir: std.Io.Dir,
+    cache_path: []const u8,
+    install_path: []const u8,
+    pkg_name: []const u8,
+    file_count: u32,
+  ) !void {
+    const version = readPackageVersion(self.allocator, source_dir) orelse try self.allocator.dupe(u8, "0");
+    defer self.allocator.free(version);
+
+    const key = try self.virtualPackageKey(pkg_name, version, install_path);
+    defer self.allocator.free(key);
+    const virtual_parent_path = try std.fmt.allocPrint(self.allocator, ".ant/{s}/node_modules", .{key});
+    defer self.allocator.free(virtual_parent_path);
+    const virtual_install_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ virtual_parent_path, pkg_name });
+    defer self.allocator.free(virtual_install_path);
+
+    self.deleteInstalledPath(node_modules, virtual_install_path) catch {};
+    try self.materializePackageDirectory(node_modules, source_dir, cache_path, virtual_install_path, file_count, false);
+
+    var virtual_parent = node_modules.openDir(io, virtual_parent_path, .{}) catch return error.IoError;
+    defer virtual_parent.close(io);
+    try self.linkVirtualPackageDependencies(node_modules, virtual_parent, virtual_parent_path, install_path, source_dir);
+
+    self.deleteInstalledPath(node_modules, install_path) catch {};
+    try self.symlinkPackagePath(node_modules, virtual_install_path, install_path);
+  }
+
+  fn materializePackageDirectory(
+    self: *Linker,
+    node_modules: std.Io.Dir,
+    source_dir: std.Io.Dir,
+    cache_path: []const u8,
+    install_path: []const u8,
+    file_count: u32,
+    replace_existing_files: bool,
+  ) !void {
+    if (!replace_existing_files and file_count >= PARALLEL_LINK_THRESHOLD and
+        self.clonePackageDirectory(node_modules, cache_path, install_path, file_count)) return;
+
+    node_modules.createDirPath(io, install_path) catch |err| switch (err) {
+      error.PathAlreadyExists => {},
+      else => return error.IoError,
+    };
+    _ = self.stats.dirs_created.fetchAdd(1, .release);
+
+    var dest_dir = node_modules.openDir(io, install_path, .{ .iterate = true }) catch return error.IoError;
+    defer dest_dir.close(io);
+    self.linkDirectoryWithHint(source_dir, dest_dir, file_count, replace_existing_files) catch |err| {
+      debug.log("  link virtual directory failed: {s}: {s}", .{ install_path, @errorName(err) });
+      return err;
+    };
+    if (file_count != 0 and !installedFileCountMatches(dest_dir, file_count)) return error.IoError;
   }
 
   fn clonePackageDirectory(self: *Linker, node_modules: std.Io.Dir, cache_path: []const u8, install_path: []const u8, file_count: u32) bool {
@@ -360,6 +453,179 @@ pub const Linker = struct {
     if (!std.mem.eql(u8, target, cache_path)) return false;
 
     std.Io.Dir.cwd().access(io, cache_path, .{}) catch return false;
+    return true;
+  }
+
+  fn installedPathIsSymlink(node_modules: std.Io.Dir, install_path: []const u8) bool {
+    var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    _ = node_modules.readLink(io, install_path, &link_buf) catch return false;
+    return true;
+  }
+
+  fn installedVirtualSymlinkMatches(self: *Linker, node_modules: std.Io.Dir, install_path: []const u8, pkg_name: []const u8, source_dir: std.Io.Dir) bool {
+    const version = readPackageVersion(self.allocator, source_dir) orelse return false;
+    defer self.allocator.free(version);
+    const key = self.virtualPackageKey(pkg_name, version, install_path) catch return false;
+    defer self.allocator.free(key);
+    const virtual_install_path = std.fmt.allocPrint(self.allocator, ".ant/{s}/node_modules/{s}", .{ key, pkg_name }) catch return false;
+    defer self.allocator.free(virtual_install_path);
+
+    var link_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const target_len = node_modules.readLink(io, install_path, &link_buf) catch return false;
+    const target = link_buf[0..target_len];
+
+    const link_parent = std.fs.path.dirname(install_path) orelse "";
+    const link_dir_abs = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, link_parent }) catch return false;
+    defer self.allocator.free(link_dir_abs);
+    const target_abs = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, virtual_install_path }) catch return false;
+    defer self.allocator.free(target_abs);
+    const relative_target = std.fs.path.relative(self.allocator, "", null, link_dir_abs, target_abs) catch return false;
+    defer self.allocator.free(relative_target);
+
+    if (!std.mem.eql(u8, target, relative_target)) return false;
+    var virtual_dir = node_modules.openDir(io, virtual_install_path, .{ .iterate = true }) catch return false;
+    defer virtual_dir.close(io);
+    return true;
+  }
+
+  fn packageNeedsVirtualContext(self: *Linker, dir: std.Io.Dir) bool {
+    const content = dir.readFileAlloc(io, "package.json", self.allocator, .limited(1024 * 1024)) catch return false;
+    defer self.allocator.free(content);
+    var doc = json.JsonDoc.parse(content) catch return false;
+    defer doc.deinit();
+    const peer_obj = doc.root().getObject("peerDependencies") orelse return false;
+    var iter = peer_obj.objectIterator() orelse return false;
+    defer iter.deinit();
+    return iter.next() != null;
+  }
+
+  fn virtualPackageKey(self: *Linker, pkg_name: []const u8, version: []const u8, install_path: []const u8) ![]const u8 {
+    const escaped_name = try self.escapeVirtualKeyPart(pkg_name);
+    defer self.allocator.free(escaped_name);
+    const escaped_version = try self.escapeVirtualKeyPart(version);
+    defer self.allocator.free(escaped_version);
+
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(pkg_name);
+    hasher.update("\x00");
+    hasher.update(version);
+    hasher.update("\x00");
+    hasher.update(install_path);
+    const context_hash = hasher.final();
+
+    return std.fmt.allocPrint(self.allocator, "{s}@{s}-{x}", .{ escaped_name, escaped_version, context_hash });
+  }
+
+  fn escapeVirtualKeyPart(self: *Linker, value: []const u8) ![]const u8 {
+    var out = std.ArrayListUnmanaged(u8).empty;
+    errdefer out.deinit(self.allocator);
+    for (value) |ch| {
+      if ((ch >= 'a' and ch <= 'z') or
+          (ch >= 'A' and ch <= 'Z') or
+          (ch >= '0' and ch <= '9') or
+          ch == '.' or ch == '-' or ch == '_') {
+        try out.append(self.allocator, ch);
+      } else {
+        try out.append(self.allocator, '+');
+      }
+    }
+    return out.toOwnedSlice(self.allocator);
+  }
+
+  fn linkVirtualPackageDependencies(
+    self: *Linker,
+    node_modules: std.Io.Dir,
+    virtual_parent: std.Io.Dir,
+    virtual_parent_path: []const u8,
+    install_path: []const u8,
+    source_dir: std.Io.Dir,
+  ) !void {
+    const content = source_dir.readFileAlloc(io, "package.json", self.allocator, .limited(1024 * 1024)) catch return;
+    defer self.allocator.free(content);
+    var doc = json.JsonDoc.parse(content) catch return;
+    defer doc.deinit();
+
+    const root_val = doc.root();
+    try self.linkVirtualDependencyObject(node_modules, virtual_parent, virtual_parent_path, install_path, root_val.getObject("dependencies"));
+    try self.linkVirtualDependencyObject(node_modules, virtual_parent, virtual_parent_path, install_path, root_val.getObject("optionalDependencies"));
+    try self.linkVirtualDependencyObject(node_modules, virtual_parent, virtual_parent_path, install_path, root_val.getObject("peerDependencies"));
+  }
+
+  fn linkVirtualDependencyObject(
+    self: *Linker,
+    node_modules: std.Io.Dir,
+    virtual_parent: std.Io.Dir,
+    virtual_parent_path: []const u8,
+    install_path: []const u8,
+    maybe_obj: ?json.JsonValue,
+  ) !void {
+    const obj = maybe_obj orelse return;
+    var iter = obj.objectIterator() orelse return;
+    defer iter.deinit();
+    while (iter.next()) |entry| {
+      try self.linkVirtualDependency(node_modules, virtual_parent, virtual_parent_path, install_path, entry.key);
+    }
+  }
+
+  fn linkVirtualDependency(
+    self: *Linker,
+    node_modules: std.Io.Dir,
+    virtual_parent: std.Io.Dir,
+    virtual_parent_path: []const u8,
+    install_path: []const u8,
+    dep_name: []const u8,
+  ) !void {
+    const target_path = self.findDependencyInstallPath(node_modules, install_path, dep_name) orelse return;
+    defer self.allocator.free(target_path);
+
+    if (std.fs.path.dirname(dep_name)) |dep_parent| {
+      virtual_parent.createDirPath(io, dep_parent) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return error.IoError,
+      };
+    }
+
+    const dep_parent = std.fs.path.dirname(dep_name) orelse "";
+    const link_parent_path = if (dep_parent.len > 0)
+      try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ virtual_parent_path, dep_parent })
+    else
+      try self.allocator.dupe(u8, virtual_parent_path);
+    defer self.allocator.free(link_parent_path);
+
+    const link_dir_abs = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, link_parent_path });
+    defer self.allocator.free(link_dir_abs);
+    const target_abs = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.node_modules_path, target_path });
+    defer self.allocator.free(target_abs);
+    const relative_target = try std.fs.path.relative(self.allocator, "", null, link_dir_abs, target_abs);
+    defer self.allocator.free(relative_target);
+
+    virtual_parent.deleteFile(io, dep_name) catch {};
+    virtual_parent.symLink(io, relative_target, dep_name, .{}) catch return error.IoError;
+    _ = self.stats.files_linked.fetchAdd(1, .release);
+  }
+
+  fn findDependencyInstallPath(self: *Linker, node_modules: std.Io.Dir, install_path: []const u8, dep_name: []const u8) ?[]const u8 {
+    const nested = std.fmt.allocPrint(self.allocator, "{s}/node_modules/{s}", .{ install_path, dep_name }) catch return null;
+    if (pathExists(node_modules, nested)) return nested;
+    self.allocator.free(nested);
+
+    var search = install_path;
+    while (std.mem.lastIndexOf(u8, search, "/node_modules/")) |idx| {
+      const nm_end = idx + "/node_modules".len;
+      const candidate = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ search[0..nm_end], dep_name }) catch return null;
+      if (pathExists(node_modules, candidate)) return candidate;
+      self.allocator.free(candidate);
+      search = search[0..idx];
+    }
+
+    const root_candidate = self.allocator.dupe(u8, dep_name) catch return null;
+    if (pathExists(node_modules, root_candidate)) return root_candidate;
+    self.allocator.free(root_candidate);
+    return null;
+  }
+
+  fn pathExists(dir: std.Io.Dir, path: []const u8) bool {
+    dir.access(io, path, .{}) catch return false;
     return true;
   }
 
