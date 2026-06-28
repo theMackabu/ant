@@ -280,8 +280,9 @@ static argv_split_t build_process_argv(int argc, char **argv, const char *module
 
   int total = 2 + script.argc;
   char **out = try_oom(sizeof(char*) * (total + 1));
+  char *resolved = esm_is_url(module) ? NULL : realpath(module, NULL);
 
-  out[0] = argv[0]; out[1] = (char *)module;
+  out[0] = argv[0]; out[1] = resolved ? resolved : (char *)module;
   for (int i = 0; i < script.argc; i++) out[2 + i] = script.argv[i];
   out[total] = NULL;
 

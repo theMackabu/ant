@@ -65,6 +65,7 @@ typedef struct rl_interface {
   int line_len;
   rl_history_t history;
   bool terminal;
+  bool should_echo;
   bool paused;
   bool closed;
   bool reading;
@@ -74,9 +75,6 @@ typedef struct rl_interface {
   int escape_code_timeout;
   int tab_size;
   ant_value_t pending_question_promise;
-  uv_tty_t tty_in;
-  uv_tty_t tty_out;
-  bool tty_initialized;
   int escape_state;
   char escape_buf[16];
   int escape_len;
@@ -87,6 +85,7 @@ typedef struct rl_interface {
   bool raw_mode;
   uv_signal_t sigint_watcher;
   bool sigint_watcher_active;
+  bool sigint_watcher_initialized;
 #endif
 } rl_interface_t;
 
@@ -232,6 +231,7 @@ static void exit_raw_mode(rl_interface_t *iface) {
 #endif
 
 static void write_output(rl_interface_t *iface, const char *str) {
+  if (!iface->should_echo) return;
   fputs(str, stdout);
   fflush(stdout);
 }
@@ -370,8 +370,7 @@ static void handle_char_input(rl_interface_t *iface, char c) {
       int total_cols = prompt_len + iface->line_len;
       int rows = total_cols > 0 ? total_cols / cols + 1 : 1;
       if (rows > iface->last_render_rows) iface->last_render_rows = rows;
-      printf("%c", c);
-      fflush(stdout);
+      if (iface->should_echo) { printf("%c", c); fflush(stdout); }
     } else refresh_line(iface);
   }
 }
@@ -418,18 +417,16 @@ static void handle_escape_sequence(rl_interface_t *iface, const char *seq, int l
   switch (seq[1]) {
     case 'A': handle_history_up(iface); break;
     case 'B': handle_history_down(iface); break;
-    case 'C': 
+    case 'C':
       if (iface->line_pos < iface->line_len) {
         iface->line_pos++;
-        printf("\033[C");
-        fflush(stdout);
+        if (iface->should_echo) { printf("\033[C"); fflush(stdout); }
       }
       break;
     case 'D':
       if (iface->line_pos > 0) {
         iface->line_pos--;
-        printf("\033[D");
-        fflush(stdout);
+        if (iface->should_echo) { printf("\033[D"); fflush(stdout); }
       }
       break;
     case 'H':
@@ -446,11 +443,6 @@ static void handle_escape_sequence(rl_interface_t *iface, const char *seq, int l
       }
       break;
   }}
-}
-
-static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  buf->base = malloc(suggested_size);
-  buf->len = suggested_size;
 }
 
 static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t *args, int nargs) {
@@ -475,7 +467,6 @@ static void emit_history_event(ant_t *js, rl_interface_t *iface) {
 static void stop_reading(rl_interface_t *iface) {
   if (!iface->reading) return;
 
-  uv_read_stop((uv_stream_t *)&iface->tty_in);
   iface->reading = false;
 #ifndef _WIN32
   if (iface->sigint_watcher_active) {
@@ -483,6 +474,7 @@ static void stop_reading(rl_interface_t *iface) {
     iface->sigint_watcher_active = false;
   }
 #endif
+  if (!has_active_readline_interfaces()) process_stdin_detach_reader();
 }
 
 static bool rl_has_event_listener(ant_t *js, rl_interface_t *iface, const char *event_type) {
@@ -523,17 +515,9 @@ static void rl_close_interface(ant_t *js, rl_interface_t *iface) {
   if (!iface || iface->closed) return;
   stop_reading(iface);
 
-  if (iface->tty_initialized) {
-    uv_close((uv_handle_t *)&iface->tty_in, NULL);
 #ifndef _WIN32
-    if (!iface->sigint_watcher_active && uv_is_active((uv_handle_t *)&iface->sigint_watcher)) {
-      uv_close((uv_handle_t *)&iface->sigint_watcher, NULL);
-    }
-    exit_raw_mode(iface);
+  exit_raw_mode(iface);
 #endif
-    iface->tty_initialized = false;
-  }
-
   iface->closed = true;
   emit_event(js, iface, "close", NULL, 0);
 }
@@ -578,7 +562,7 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
 
   switch (c) {
     case '\r': case '\n':
-      putchar('\n'); fflush(stdout);
+      if (iface->should_echo) { putchar('\n'); fflush(stdout); }
       process_line(js, iface);
       break;
     case 127: case 8: handle_backspace(iface); break;
@@ -590,31 +574,31 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
     case 5:  iface->line_pos = iface->line_len; refresh_line(iface); break;
     case 11: iface->line_buffer[iface->line_pos] = '\0'; iface->line_len = iface->line_pos; refresh_line(iface); break;
     case 21: iface->line_buffer[0] = '\0'; iface->line_pos = 0; iface->line_len = 0; refresh_line(iface); break;
-    case 12: printf("\033[2J\033[H"); refresh_line(iface); break;
+    case 12: if (iface->should_echo) printf("\033[2J\033[H"); refresh_line(iface); break;
     default: if (c >= 32 && c < 127) handle_char_input(iface, c); break;
   }
 }
 
-static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  rl_interface_t *iface = (rl_interface_t *)stream->data;
+static void rl_feed_stdin_bytes(const char *buf, size_t len) {
   ant_t *js = rt->js;
+  rl_interface_t *iface, *tmp;
 
-  if (!iface || iface->closed || iface->paused) goto cleanup;
-
-  if (nread < 0) {
-    if (nread == UV_EOF) rl_close_interface(js, iface);
-    goto cleanup;
+  HASH_ITER(hh, interfaces, iface, tmp) {
+    if (iface->closed || !iface->reading || iface->paused) continue;
+    for (size_t i = 0; i < len; i++) {
+      process_byte(js, iface, buf[i]);
+      if (iface->closed) break;
+    }
   }
+}
 
-  for (ssize_t i = 0; i < nread; i++) {
-    process_byte(js, iface, buf->base[i]);
-    if (iface->closed) break;
+static void rl_handle_stdin_eof(void) {
+  ant_t *js = rt->js;
+  rl_interface_t *iface, *tmp;
+
+  HASH_ITER(hh, interfaces, iface, tmp) {
+    if (!iface->closed && iface->reading) rl_close_interface(js, iface);
   }
-
-  if (iface->closed) stop_reading(iface);
-
-cleanup:
-  free(buf->base);
 }
 
 #ifndef _WIN32
@@ -636,29 +620,26 @@ static void on_sigint(uv_signal_t *handle, int signum) {
 
 static void start_reading(rl_interface_t *iface) {
   if (iface->reading || iface->closed) return;
+  int is_tty = uv_guess_handle(STDIN_FILENO) == UV_TTY;
 
-  if (!iface->tty_initialized) {
-    uv_loop_t *loop = uv_default_loop();
-    int is_tty = uv_guess_handle(STDIN_FILENO) == UV_TTY;
-
-    if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
-
-    if (is_tty) {
 #ifndef _WIN32
-      enter_raw_mode(iface);
-      uv_signal_init(loop, &iface->sigint_watcher);
+  if (is_tty && iface->should_echo) {
+    enter_raw_mode(iface);
+    if (!iface->sigint_watcher_initialized) {
+      uv_signal_init(uv_default_loop(), &iface->sigint_watcher);
       iface->sigint_watcher.data = iface;
+      iface->sigint_watcher_initialized = true;
+    }
+    if (!iface->sigint_watcher_active) {
       uv_signal_start(&iface->sigint_watcher, on_sigint, SIGINT);
       iface->sigint_watcher_active = true;
-#endif
     }
-
-    iface->tty_in.data = iface;
-    iface->tty_initialized = true;
   }
+#endif
 
+  if (is_tty && iface->terminal) process_enable_keypress_events();
   iface->reading = true;
-  uv_read_start((uv_stream_t *)&iface->tty_in, alloc_buffer, on_stdin_read);
+  process_stdin_attach_reader(rl_feed_stdin_bytes, rl_handle_stdin_eof);
 }
 
 static rl_interface_t *get_interface(ant_t *js, ant_value_t this_obj) {
@@ -762,14 +743,11 @@ static ant_value_t rl_interface_get_prompt(ant_t *js, ant_value_t *args, int nar
   return js_mkstr(js, iface->prompt, strlen(iface->prompt));
 }
 
-static void process_key_sequence(rl_interface_t *iface, const char *name, bool ctrl, bool meta, bool shift) {
-  (void)meta; (void)shift;
-  
+static void process_key_sequence(rl_interface_t *iface, const char *name, bool ctrl, bool meta, bool shift) {  
   if (!name) return;
   
   if (strcmp(name, "return") == 0 || strcmp(name, "enter") == 0) {
-    printf("\n");
-    fflush(stdout);
+    if (iface->should_echo) { printf("\n"); fflush(stdout); }
   } else if (strcmp(name, "backspace") == 0) {
     if (iface->line_pos > 0) {
       memmove(iface->line_buffer + iface->line_pos - 1,
@@ -1285,7 +1263,6 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   iface->closed = false;
   iface->reading = false;
   iface->pending_question_promise = js_mkundef();
-  iface->tty_initialized = false;
   iface->escape_state = 0;
   iface->escape_len = 0;
   iface->last_render_rows = 1;
@@ -1299,6 +1276,7 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   
   ant_value_t terminal_val = js_get(js, options, "terminal");
   iface->terminal = terminal_val == js_true || vtype(terminal_val) == T_UNDEF;
+  iface->should_echo = is_special_object(iface->output_stream);
   
   ant_value_t history_size_val = js_get(js, options, "historySize");
   iface->history_size = rl_history_capacity_from_value(history_size_val);

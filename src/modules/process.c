@@ -90,6 +90,7 @@ typedef struct {
   uv_tty_t tty;
   bool tty_initialized;
   bool reading;
+  bool paused;
   bool keypress_enabled;
   ant_value_t decoder;
   int escape_state;
@@ -99,6 +100,9 @@ typedef struct {
 
 static stdin_state_t stdin_state = {0};
 static uint64_t process_start_time = 0;
+
+static stdin_byte_consumer_fn stdin_byte_consumer = NULL;
+static stdin_eof_fn stdin_byte_eof = NULL;
 
 static uint16_t sandbox_tty_rows = 24;
 static uint16_t sandbox_tty_cols = 80;
@@ -242,7 +246,7 @@ static const char *get_signal_name(int signum) {
 static ProcessEventType *find_or_create_event(ProcessEventType **table, const char *event_type) {
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(*table, event_type, evt);
-  
+  if (evt != NULL) evt->free_deferred = false;
   if (evt == NULL) {
     evt = malloc(sizeof(ProcessEventType));
     *evt = (ProcessEventType){
@@ -577,7 +581,9 @@ static void process_keypress_data(ant_t *js, const char *data, size_t len) {
     char name_buf[2] = { ch, '\0' };
     emit_keypress_event(js, &ch, 1, name_buf, false, false, false, &ch, 1);
   }
+}
 
+static void process_keypress_flush(ant_t *js) {
   if (stdin_state.escape_state == 1) {
     emit_keypress_event(js, "\x1b", 1, "escape", false, false, false, "\x1b", 1);
     stdin_state.escape_state = 0;
@@ -750,10 +756,26 @@ static inline void emit_stdin_data_event(const uv_buf_t *buf, ssize_t nread) {
 }
 
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  if (nread <= 0 || !rt->js) goto cleanup;
-  if (stdio_has_event_listener(stdin_events, "data")) emit_stdin_data_event(buf, nread);
-  if (stdin_state.keypress_enabled && stdio_has_event_listener(stdin_events, "keypress"))
-    process_keypress_data(rt->js, buf->base, (size_t)nread);
+  if (!rt->js) goto cleanup;
+  if (nread < 0) {
+    if (nread == UV_EOF && stdin_byte_eof) stdin_byte_eof();
+    goto cleanup;
+  }
+  
+  if (nread == 0) goto cleanup;
+  if (!stdin_state.paused && stdio_has_event_listener(stdin_events, "data"))
+    emit_stdin_data_event(buf, nread);
+
+  bool fed_keypress = false;
+  for (ssize_t i = 0; i < nread; i++) {
+    if (stdin_state.paused) break;
+    if (stdin_byte_consumer) stdin_byte_consumer(buf->base + i, 1);
+    if (stdin_state.keypress_enabled && stdio_has_event_listener(stdin_events, "keypress")) {
+      process_keypress_data(rt->js, buf->base + i, 1);
+      fed_keypress = true;
+    }
+  }
+  if (fed_keypress && !stdin_state.paused) process_keypress_flush(rt->js);
 
 cleanup:
   if (buf->base) free(buf->base);
@@ -778,6 +800,25 @@ static void stdin_stop_reading(void) {
   uv_read_stop((uv_stream_t *)&stdin_state.tty);
   stdin_state.reading = false;
   uv_unref((uv_handle_t *)&stdin_state.tty);
+}
+
+static void stdin_stop_reading_if_idle(void) {
+  if (stdin_byte_consumer) return;
+  if (stdio_has_event_listener(stdin_events, "data")) return;
+  stdin_stop_reading();
+}
+
+void process_stdin_attach_reader(stdin_byte_consumer_fn on_bytes, stdin_eof_fn on_eof) {
+  stdin_byte_consumer = on_bytes;
+  stdin_byte_eof = on_eof;
+  stdin_state.paused = false;
+  stdin_start_reading();
+}
+
+void process_stdin_detach_reader(void) {
+  stdin_byte_consumer = NULL;
+  stdin_byte_eof = NULL;
+  stdin_stop_reading_if_idle();
 }
 
 #ifndef _WIN32
@@ -830,14 +871,14 @@ static ant_value_t js_stdin_set_encoding(ant_t *js, ant_value_t *args, int nargs
   return this_obj;
 }
 
-static ant_value_t js_stdin_resume(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t js_stdin_resume(ant_params_t) {
+  stdin_state.paused = false;
   stdin_start_reading();
   return js_getthis(js);
 }
 
-static ant_value_t js_stdin_pause(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
+static ant_value_t js_stdin_pause(ant_params_t) {
+  stdin_state.paused = true;
   stdin_stop_reading();
   return js_getthis(js);
 }
@@ -848,7 +889,7 @@ static ant_value_t js_stdin_on(ant_t *js, ant_value_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-  
+
   ProcessEventType *evt = find_or_create_event(&stdin_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
@@ -856,8 +897,11 @@ static ant_value_t js_stdin_on(ant_t *js, ant_value_t *args, int nargs) {
   evt->listeners[evt->listener_count].once = false;
   evt->listener_count++;
   
-  if (strcmp(event, "data") == 0) stdin_start_reading();
-  
+  if (strcmp(event, "data") == 0) { 
+    stdin_state.paused = false; 
+    stdin_start_reading();
+  }
+
   return this_obj;
 }
 
@@ -869,18 +913,18 @@ static ant_value_t js_stdin_remove_all_listeners(ant_t *js, ant_value_t *args, i
     HASH_ITER(hh, stdin_events, evt, tmp) {
       free_event_type(&stdin_events, evt);
     }
-    stdin_stop_reading();
+    stdin_stop_reading_if_idle();
     return this_obj;
   }
-  
+
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return this_obj;
-  
+
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(stdin_events, event, evt);
   if (evt) free_event_type(&stdin_events, evt);
-  if (strcmp(event, "data") == 0) stdin_stop_reading();
-  
+  if (strcmp(event, "data") == 0) stdin_stop_reading_if_idle();
+
   return this_obj;
 }
 
@@ -892,8 +936,8 @@ static ant_value_t js_stdin_remove_listener(ant_t *js, ant_value_t *args, int na
   if (!event) return this_obj;
   
   bool now_empty = remove_listener_from_events(&stdin_events, event, args[1]);
-  if (now_empty && strcmp(event, "data") == 0) stdin_stop_reading();
-  
+  if (now_empty && strcmp(event, "data") == 0) stdin_stop_reading_if_idle();
+
   return this_obj;
 }
 
