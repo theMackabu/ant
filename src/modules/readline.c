@@ -745,37 +745,95 @@ static ant_value_t rl_interface_get_prompt(ant_t *js, ant_value_t *args, int nar
 
 static void process_key_sequence(rl_interface_t *iface, const char *name, bool ctrl, bool meta, bool shift) {  
   if (!name) return;
-  
-  if (strcmp(name, "return") == 0 || strcmp(name, "enter") == 0) {
+
+  static const void *dispatch[256] = {
+    ['a'] = &&l_a,
+    ['b'] = &&l_b,
+    ['d'] = &&l_d,
+    ['e'] = &&l_e,
+    ['h'] = &&l_h,
+    ['k'] = &&l_k,
+    ['l'] = &&l_l,
+    ['r'] = &&l_r,
+    ['u'] = &&l_u,
+  };
+
+  const unsigned char key = (unsigned char)name[0];
+  if (dispatch[key]) goto *dispatch[key];
+  return;
+
+l_r:
+  if (strcmp(name, "return") == 0) {
     if (iface->should_echo) { printf("\n"); fflush(stdout); }
-  } else if (strcmp(name, "backspace") == 0) {
-    if (iface->line_pos > 0) {
-      memmove(iface->line_buffer + iface->line_pos - 1,
-              iface->line_buffer + iface->line_pos,
-              iface->line_len - iface->line_pos + 1);
-      iface->line_pos--;
-      iface->line_len--;
-    }
-  } else if (strcmp(name, "delete") == 0) {
-    if (iface->line_pos < iface->line_len) {
-      memmove(iface->line_buffer + iface->line_pos,
-              iface->line_buffer + iface->line_pos + 1,
-              iface->line_len - iface->line_pos);
-      iface->line_len--;
-    }
-  } else if (strcmp(name, "left") == 0) {
-    if (iface->line_pos > 0) iface->line_pos--;
-  } else if (strcmp(name, "right") == 0) {
+    return;
+  }
+  if (strcmp(name, "right") == 0) {
     if (iface->line_pos < iface->line_len) iface->line_pos++;
-  } else if (strcmp(name, "home") == 0 || (ctrl && strcmp(name, "a") == 0)) {
-    iface->line_pos = 0;
-  } else if (strcmp(name, "end") == 0 || (ctrl && strcmp(name, "e") == 0)) {
+    return;
+  }
+  return;
+
+l_e:
+  if (strcmp(name, "enter") == 0) {
+    if (iface->should_echo) { printf("\n"); fflush(stdout); }
+    return;
+  }
+  if (strcmp(name, "end") == 0 || (ctrl && name[1] == '\0')) {
     iface->line_pos = iface->line_len;
-  } else if (ctrl && strcmp(name, "u") == 0) {
+  }
+  return;
+
+l_b:
+  if (strcmp(name, "backspace") != 0) return;
+  if (iface->line_pos <= 0) return;
+  memmove(
+    iface->line_buffer + iface->line_pos - 1,
+    iface->line_buffer + iface->line_pos,
+    iface->line_len - iface->line_pos + 1
+  );
+  iface->line_pos--;
+  iface->line_len--;
+  return;
+
+l_d:
+  if (strcmp(name, "delete") != 0) return;
+  if (iface->line_pos >= iface->line_len) return;
+  memmove(
+    iface->line_buffer + iface->line_pos,
+    iface->line_buffer + iface->line_pos + 1,
+    iface->line_len - iface->line_pos
+  );
+  iface->line_len--;
+  return;
+
+l_l:
+  if (strcmp(name, "left") == 0) {
+    if (iface->line_pos > 0) iface->line_pos--;
+  }
+  return;
+
+l_h:
+  if (strcmp(name, "home") == 0) {
+    iface->line_pos = 0;
+  }
+  return;
+
+l_a:
+  if (ctrl && name[1] == '\0') {
+    iface->line_pos = 0;
+  }
+  return;
+
+l_u:
+  if (ctrl && name[1] == '\0') {
     iface->line_buffer[0] = '\0';
     iface->line_pos = 0;
     iface->line_len = 0;
-  } else if (ctrl && strcmp(name, "k") == 0) {
+  }
+  return;
+
+l_k:
+  if (ctrl && name[1] == '\0') {
     iface->line_buffer[iface->line_pos] = '\0';
     iface->line_len = iface->line_pos;
   }
