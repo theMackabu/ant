@@ -52,5 +52,6 @@ test('sleep is function', typeof Ant.sleep, 'function');
 test('msleep is function', typeof Ant.msleep, 'function');
 test('usleep is function', typeof Ant.usleep, 'function');
 test('signal is function', typeof Ant.signal, 'function');
+test('serve is function', typeof Ant.serve, 'function');
 
 summary();

@@ -370,7 +370,7 @@ static void server_maybe_finish_stop(server_runtime_t *server) {
   if (!server || !server->stopping) return;
   if (ant_listener_has_connections(&server->listener)) return;
   if (!ant_listener_is_closed(&server->listener) || !server->sigint_closed || !server->sigterm_closed) return;
-
+  if (g_server == server) g_server = NULL;
   stop_waiters_resolve(server);
 }
 
@@ -1538,6 +1538,36 @@ static void server_on_listener_close(ant_listener_t *listener, void *user_data) 
   server_maybe_finish_stop((server_runtime_t *)user_data);
 }
 
+static char *server_make_url(const server_runtime_t *server) {
+  const char *hostname = NULL;
+  
+  size_t hostname_len = 0;
+  bool bracket_host = false;
+  
+  size_t cap = 0;
+  char *url = NULL;
+  int written = 0;
+
+  if (!server || server->unix_path) return NULL;
+  hostname = server->hostname ? server->hostname : "0.0.0.0";
+  hostname_len = strlen(hostname);
+  bracket_host = strchr(hostname, ':') != NULL && hostname[0] != '[';
+  cap = sizeof("http://") - 1 + hostname_len + (bracket_host ? 2 : 0) + 1 + 16 + 1;
+
+  url = malloc(cap);
+  if (!url) return NULL;
+
+  if (bracket_host) written = snprintf(url, cap, "http://[%s]:%d", hostname, server->port);
+  else written = snprintf(url, cap, "http://%s:%d", hostname, server->port);
+
+  if (written < 0 || (size_t)written >= cap) {
+    free(url);
+    return NULL;
+  }
+
+  return url;
+}
+
 static void server_on_accept(ant_listener_t *listener, ant_conn_t *conn, void *user_data) {
   server_runtime_t *server = (server_runtime_t *)user_data;
   server_conn_state_t *cs = NULL;
@@ -1888,6 +1918,24 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   uv_signal_start(&server->sigterm_handle, server_signal_cb, SIGTERM);
 
   server->server_ctx = js_mkobj(js);
+  if (server->hostname) js_set(
+    js, server->server_ctx, "hostname",
+    js_mkstr(js, server->hostname, strlen(server->hostname))
+  );
+  
+  js_set(js, server->server_ctx, "port", js_mknum((double)server->port));
+  if (server->unix_path) js_set(
+    js, server->server_ctx, "unix",
+    js_mkstr(js, server->unix_path, strlen(server->unix_path))
+  );
+  
+  else {
+  char *url = server_make_url(server);
+  if (url) {
+    js_set(js, server->server_ctx, "url", js_mkstr(js, url, strlen(url)));
+    free(url);
+  }}
+  
   js_set(js, server->server_ctx, "requestIP", server_mkruntimefun(js, server_request_ip, server));
   js_set(js, server->server_ctx, "timeout", server_mkruntimefun(js, server_timeout, server));
   js_set(js, server->server_ctx, "stop", server_mkruntimefun(js, server_stop, server));
@@ -1895,7 +1943,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   js_set(js, server->server_ctx, "eventSource", js_mkfun(server_event_source));
 
   g_server = server;
-  return js_mkundef();
+  return server->server_ctx;
 }
 
 void gc_mark_server(ant_t *js, gc_mark_fn mark) {

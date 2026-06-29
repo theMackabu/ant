@@ -26,6 +26,7 @@
 #include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
+#include "modules/server.h"
 #include "modules/symbol.h"
 
 static struct {
@@ -167,6 +168,12 @@ static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_suppress_reporting(ant_t *js, ant_value_t *args, int nargs) {
   ant_crash_suppress_reporting();
   return js_mkundef();
+}
+
+// Ant.serve(options)
+static ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.serve() requires 1 argument");
+  return server_start_from_export(js, args[0]);
 }
 
 // Ant.stats()
@@ -462,6 +469,7 @@ void init_builtin_module() {
   ant_value_t ant_obj = rt->ant_obj;
 
   js_set(js, ant_obj, "match", js_mkfun(js_match));
+  js_set(js, ant_obj, "serve", js_mkfun_arity(js_serve, 1));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, ant_obj, "signal", js_mkfun(js_signal));
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));

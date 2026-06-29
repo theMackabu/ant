@@ -130,25 +130,50 @@ interface AntGcMarkProfile {
   timeMs: number;
 }
 
-interface HttpContext {
-  req: {
-    method: string;
-    uri: string;
-    query: string;
-    body: string;
-    header(name: string): string | undefined;
-  };
-  res: {
-    header(name: string, value: string): void;
-    status(code: number): void;
-    body(body: string, status?: number, contentType?: string): void;
-    html(body: string, status?: number): void;
-    json(data: unknown, status?: number): void;
-    notFound(): void;
-    redirect(url: string, status?: number): void;
-  };
-  set(key: string, value: unknown): void;
-  get(key: string): unknown;
+interface AntWebSocketOptions {
+  idleTimeout?: number;
+  maxPayloadLength?: number;
+  perMessageDeflate?: boolean | object;
+}
+
+interface AntServeOptions {
+  fetch(request: Request, server: AntServer): Response | Promise<Response>;
+  port?: number;
+  hostname?: string;
+  unix?: string;
+  idleTimeout?: number;
+  requestTimeout?: number;
+  websocket?: AntWebSocketOptions;
+  tls?: unknown;
+}
+
+interface AntRequestIP {
+  address: string;
+  port: number;
+}
+
+interface AntWebSocketUpgrade {
+  socket: WebSocket;
+  response: Response;
+}
+
+interface AntEventSourceStream {
+  response: Response;
+  send(data: string): void;
+  comment(text: string): void;
+  close(): void;
+}
+
+interface AntServer {
+  hostname: string;
+  port: number;
+  url?: string;
+  unix?: string;
+  requestIP(request: Request): AntRequestIP | null;
+  timeout(request: Request, seconds: number): void;
+  stop(force?: boolean): Promise<void>;
+  upgradeWebSocket(request: Request): AntWebSocketUpgrade;
+  eventSource(): AntEventSourceStream;
 }
 
 interface AntStatic {
@@ -170,7 +195,7 @@ interface AntStatic {
   usleep(microseconds: number): void;
 
   signal(signum: number, handler: (signum: number) => void): void;
-  serve<T extends HttpContext = HttpContext>(port: number, handler?: (ctx: T) => void | Promise<void>): number;
+  serve(options: AntServeOptions): AntServer;
 }
 
 declare const Ant: AntStatic;
