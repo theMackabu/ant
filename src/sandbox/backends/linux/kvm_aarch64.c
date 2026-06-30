@@ -18,6 +18,7 @@
 #endif
 
 #define ANT_KVM_REG_ID_AA64PFR0_EL1 ARM64_SYS_REG(3, 0, 0, 4, 0)
+#define ANT_KVM_REG_MPIDR_EL1 ARM64_SYS_REG(3, 0, 0, 0, 5)
 
 enum {
   ANT_KVM_AARCH64_DTB_MAX = 0x20000u,
@@ -505,9 +506,17 @@ static int ant_kvm_init_vcpu(ant_hvf_vm_t *vm) {
   if (rc != 0) return rc;
   rc = ant_kvm_set_one_reg64(
     vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
+    KVM_REG_ARM_CORE_REG(regs.regs[1]),
+    0, "x1"
+  );
+  if (rc != 0) return rc;
+  rc = ant_kvm_set_one_reg64(
+    vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
     KVM_REG_ARM_CORE_REG(regs.pstate),
     PSR_MODE_EL1h | PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT, "pstate"
   );
+  if (rc != 0) return rc;
+  rc = ant_kvm_set_one_reg64(vm, ANT_KVM_REG_MPIDR_EL1, 0, "mpidr_el1");
   if (rc != 0) return rc;
   rc = ant_kvm_set_one_reg64(
     vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
