@@ -181,6 +181,7 @@ struct ant_hvf_vm {
   uint64_t kas_offset_symbol;
   uint64_t kas_kern_offset_symbol;
   uint64_t pcie_ecam_base_symbol;
+  uint64_t exception_vectors_symbol;
   uint64_t pvh_entry32;
   
   int image_fd;

@@ -541,12 +541,28 @@ static int ant_kvm_init_vcpu(ant_hvf_vm_t *vm) {
   if (rc != 0) return rc;
   rc = ant_kvm_set_one_reg64(
     vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
+    KVM_REG_ARM_CORE_REG(regs.regs[2]),
+    0, "x2"
+  );
+  if (rc != 0) return rc;
+  rc = ant_kvm_set_one_reg64(
+    vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
+    KVM_REG_ARM_CORE_REG(regs.regs[3]),
+    0, "x3"
+  );
+  if (rc != 0) return rc;
+  rc = ant_kvm_set_one_reg64(
+    vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
     KVM_REG_ARM_CORE_REG(regs.pstate),
     PSR_MODE_EL1h | PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT, "pstate"
   );
   if (rc != 0) return rc;
   rc = ant_kvm_set_one_reg64(vm, ANT_KVM_REG_MPIDR_EL1, 0, "mpidr_el1");
-  if (rc != 0) return rc;
+  if (rc != 0 && vm->verbose) ant_hvf_verbosef(vm, "continuing with KVM-provided MPIDR_EL1");
+  if (vm->exception_vectors_symbol != 0) {
+    rc = ant_kvm_set_one_reg64(vm, ANT_KVM_REG_VBAR_EL1, vm->exception_vectors_symbol, "vbar_el1");
+    if (rc != 0) return rc;
+  }
   rc = ant_kvm_set_one_reg64(
     vm, KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE |
     KVM_REG_ARM_CORE_REG(sp_el1),
@@ -1186,6 +1202,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   (void)ant_kvm_find_symbol(config->kernel_path, "kernel_phys_offset", &vm->kas_offset_symbol);
   (void)ant_kvm_find_symbol(config->kernel_path, "kas_kern_offset", &vm->kas_kern_offset_symbol);
   (void)ant_kvm_find_symbol(config->kernel_path, "pcie_ecam_base", &vm->pcie_ecam_base_symbol);
+  (void)ant_kvm_find_symbol(config->kernel_path, "exception_vectors", &vm->exception_vectors_symbol);
 
   vm->vcpu_fd = ioctl(vm->vm_fd, KVM_CREATE_VCPU, 0);
   if (vm->vcpu_fd < 0) { rc = -errno; goto fail; }
