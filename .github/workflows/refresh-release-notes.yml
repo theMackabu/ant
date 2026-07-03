@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag to publish notes for, such as v12.1.094641eb.1. Defaults to the latest release.'
+        description: 'Release tag to publish notes for, defaults to the latest release.'
         required: false
         type: string
 
