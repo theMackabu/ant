@@ -47,6 +47,20 @@ if (pbkdf2 !== "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
   throw new Error(`pbkdf2Sync mismatch: ${pbkdf2}`);
 }
 
+const pbkdf2Key = await crypto.subtle.importKey(
+  "raw",
+  enc.encode("password"),
+  "PBKDF2",
+  false,
+  ["deriveBits"]
+);
+const pbkdf2Bits = await crypto.subtle.deriveBits(
+  { name: "PBKDF2", salt: enc.encode("salt"), iterations: 1, hash: "SHA-256" },
+  pbkdf2Key,
+  256
+);
+if (hex(pbkdf2Bits) !== pbkdf2) throw new Error("subtle.deriveBits PBKDF2 mismatch");
+
 let callbackPbkdf2;
 const pbkdf2Return = crypto.pbkdf2("password", "salt", 1, 32, "sha256", (err, key) => {
   if (err) throw err;

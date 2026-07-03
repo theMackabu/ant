@@ -51,6 +51,17 @@ script = [
   'meson setup build --wipe --buildtype=debug -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off'
 ]
 
+[tasks.shell]
+script = '''
+nix develop --command zsh -lc '
+  export PATH="$NIX_CC/bin:$(dirname "$(command -v ld.lld)"):$PATH"
+  export CC="$NIX_CC/bin/clang"
+  export CXX="$NIX_CC/bin/clang++"
+  export LD="$NIX_CC/bin/ld"
+  exec zsh
+'
+'''
+
 [tasks.install]
 script = ["maid build -q", '''
 #!/usr/bin/env bash

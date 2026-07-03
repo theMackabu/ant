@@ -3,6 +3,7 @@ declare module 'crypto' {
 
   interface SubtleCrypto {
     digest(algorithm: string | { name: string }, data: BufferSource): Promise<ArrayBuffer>;
+    deriveBits(algorithm: string | { name: string }, baseKey: any, length: number): Promise<ArrayBuffer>;
     timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
   }
 
@@ -21,6 +22,7 @@ declare module 'crypto' {
     update(data: string | BufferSource, inputEncoding?: string): any;
     digest(encoding?: string): string | Uint8Array;
   };
+  
   function randomBytes(length: number): number[];
   function randomUUID(): string;
   function getRandomValues<T extends ArrayBufferView>(array: T): T;

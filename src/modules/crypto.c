@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <limits.h>
+#include <math.h>
 #include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -52,6 +53,7 @@ typedef struct {
 typedef enum {
   CRYPTO_KEY_HMAC = 1,
   CRYPTO_KEY_AES_GCM,
+  CRYPTO_KEY_PBKDF2,
 } ant_crypto_key_kind_t;
 
 typedef struct {
@@ -889,6 +891,10 @@ static ant_value_t crypto_subtle_import_key_impl(ant_t *js, ant_value_t *args, i
     return crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, bytes, len, args[2]);
   }
 
+  if (crypto_algorithm_is(js, args[2], "PBKDF2")) {
+    return crypto_make_key_object(js, CRYPTO_KEY_PBKDF2, NULL, bytes, len, args[2]);
+  }
+
   return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported CryptoKey algorithm");
 }
 
@@ -902,6 +908,66 @@ static ant_value_t js_crypto_subtle_import_key(ant_t *js, ant_value_t *args, int
 
 static ant_crypto_key_t *crypto_require_key(ant_value_t value) {
   return (ant_crypto_key_t *)js_get_native(value, CRYPTO_KEY_NATIVE_TAG);
+}
+
+static ant_value_t crypto_subtle_derive_bits_impl(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.deriveBits requires algorithm, baseKey, and length");
+  if (!crypto_algorithm_is(js, args[0], "PBKDF2")) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported deriveBits algorithm");
+  }
+
+  ant_crypto_key_t *key = crypto_require_key(args[1]);
+  if (!key || key->kind != CRYPTO_KEY_PBKDF2) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "PBKDF2 deriveBits requires a PBKDF2 CryptoKey");
+  }
+
+  double length_num = js_getnum(args[2]);
+  if (!isfinite(length_num) || length_num < 0 || length_num > (double)INT_MAX * 8.0 || fmod(length_num, 8) != 0) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "deriveBits length must be a non-negative multiple of 8");
+  }
+  int keylen = (int)(length_num / 8);
+
+  ant_value_t salt_val = js_get(js, args[0], "salt");
+  const uint8_t *salt = NULL;
+  size_t salt_len = 0;
+  
+  if (!buffer_source_get_bytes(js, salt_val, &salt, &salt_len)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "PBKDF2 salt must be an ArrayBuffer, TypedArray, DataView, or Buffer");
+  }
+  
+  if (salt_len > (size_t)INT_MAX || key->key_len > (size_t)INT_MAX) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "PBKDF2 input is too large");
+  }
+
+  ant_value_t iterations_val = js_get(js, args[0], "iterations");
+  double iterations_num = js_getnum(iterations_val);
+  if (!isfinite(iterations_num) || iterations_num <= 0 || iterations_num > INT_MAX || floor(iterations_num) != iterations_num) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "PBKDF2 iterations must be a positive integer");
+  }
+  int iterations = (int)iterations_num;
+
+  ant_value_t hash_val = js_get(js, args[0], "hash");
+  const EVP_MD *md = crypto_digest_from_algorithm(js, hash_val);
+  if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported PBKDF2 hash algorithm");
+
+  uint8_t *out = malloc((size_t)keylen ? (size_t)keylen : 1);
+  if (!out) return js_mkerr(js, "Out of memory");
+  if (PKCS5_PBKDF2_HMAC((const char *)key->key, (int)key->key_len, salt, (int)salt_len, iterations, md, keylen, out) != 1) {
+    free(out);
+    return js_mkerr(js, "PBKDF2 failed");
+  }
+
+  ant_value_t result = crypto_make_arraybuffer(js, out, (size_t)keylen);
+  free(out);
+  return result;
+}
+
+static ant_value_t js_crypto_subtle_derive_bits(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t result = crypto_subtle_derive_bits_impl(js, args, nargs);
+  if (is_err(result)) js_reject_promise(js, promise, result);
+  else js_resolve_promise(js, promise, result);
+  return promise;
 }
 
 static ant_value_t crypto_hmac_once(
@@ -1718,6 +1784,7 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   // TODO: add remaining WebCrypto key export, key derivation, wrapping, and asymmetric algorithms.
   js_set(js, subtle_obj, "digest", js_mkfun(js_crypto_subtle_digest));
   js_set(js, subtle_obj, "importKey", js_mkfun(js_crypto_subtle_import_key));
+  js_set(js, subtle_obj, "deriveBits", js_mkfun(js_crypto_subtle_derive_bits));
   js_set(js, subtle_obj, "sign", js_mkfun(js_crypto_subtle_sign));
   js_set(js, subtle_obj, "verify", js_mkfun(js_crypto_subtle_verify));
   js_set(js, subtle_obj, "encrypt", js_mkfun(js_crypto_subtle_encrypt));
