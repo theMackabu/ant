@@ -13875,9 +13875,18 @@ static ant_value_t builtin_btoa(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *)(uintptr_t)(str_off);
+
+  size_t bytes_len = 0;
+  bool is_latin1 = false;
+  uint8_t *bytes = utf8_to_latin1(str, (size_t)str_len, &bytes_len, &is_latin1);
   
+  if (!bytes) return is_latin1
+    ? js_mkerr(js, "out of memory")
+    : js_mkerr(js, "btoa: string contains characters outside Latin1 range");
+
   size_t out_len;
-  char *out = ant_base64_encode((const uint8_t *)str, str_len, &out_len);
+  char *out = ant_base64_encode(bytes, bytes_len, &out_len);
+  free(bytes);
   if (!out) return js_mkerr(js, "out of memory");
   
   ant_value_t result = js_mkstr(js, out, out_len);
@@ -13902,9 +13911,14 @@ static ant_value_t builtin_atob(ant_t *js, ant_value_t *args, int nargs) {
   size_t out_len;
   uint8_t *out = ant_base64_decode(str, str_len, &out_len);
   if (!out) return js_mkerr(js, "atob: invalid base64 string");
-  
-  ant_value_t result = js_mkstr(js, (char *)out, out_len);
+
+  size_t result_len = 0;
+  char *result_str = latin1_to_utf8(out, out_len, &result_len);
   free(out);
+  if (!result_str) return js_mkerr(js, "out of memory");
+
+  ant_value_t result = js_mkstr(js, result_str, result_len);
+  free(result_str);
   
   return result;
 }

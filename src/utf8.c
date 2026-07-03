@@ -281,6 +281,61 @@ size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos) {
   return (size_t)seq;
 }
 
+char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len) {
+  if (len > SIZE_MAX / 2) return NULL;
+
+  char *out = malloc(len == 0 ? 1 : len * 2);
+  if (!out) return NULL;
+
+  size_t o = 0;
+  for (size_t i = 0; i < len; i++) {
+    uint8_t byte = src[i];
+    if (byte < 0x80) out[o++] = (char)byte;
+    else {
+      out[o++] = (char)(0xc0 | (byte >> 6));
+      out[o++] = (char)(0x80 | (byte & 0x3f));
+    }
+  }
+
+  if (out_len) *out_len = o;
+  return out;
+}
+
+uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1) {
+  if (out_len) *out_len = 0;
+  if (is_latin1) *is_latin1 = true;
+
+  uint8_t *out = malloc(len == 0 ? 1 : len);
+  if (!out) return NULL;
+
+  size_t i = 0, o = 0;
+  while (i < len) {
+    uint8_t first = (uint8_t)src[i];
+    if (first < 0x80) {
+      out[o++] = first;
+      i++;
+      continue;
+    }
+
+    if (
+      (first == 0xc2 || first == 0xc3) &&
+      i + 1 < len &&
+      (((uint8_t)src[i + 1] & 0xc0) == 0x80)
+    ) {
+      out[o++] = (uint8_t)(((first & 0x1f) << 6) | ((uint8_t)src[i + 1] & 0x3f));
+      i += 2;
+      continue;
+    }
+
+    free(out);
+    if (is_latin1) *is_latin1 = false;
+    return NULL;
+  }
+
+  if (out_len) *out_len = o;
+  return out;
+}
+
 size_t utf8_strlen(const char *str, size_t byte_len) {
   size_t count = 0;
   const unsigned char *p = (const unsigned char *)str;

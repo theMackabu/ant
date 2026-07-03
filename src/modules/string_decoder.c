@@ -5,6 +5,7 @@
 
 #include "ant.h"
 #include "ptr.h"
+#include "utf8.h"
 #include "base64.h"
 #include "errors.h"
 #include "internal.h"
@@ -77,20 +78,12 @@ switch (enc) {
 }}
 
 static ant_value_t sd_latin1_to_str(ant_t *js, const uint8_t *src, size_t len) {
-  char *out = malloc(len * 2 + 1);
+  size_t out_len = 0;
+  
+  char *out = latin1_to_utf8(src, len, &out_len);
   if (!out) return js_mkerr(js, "out of memory");
-  size_t o = 0;
-  
-  for (size_t i = 0; i < len; i++) {
-  uint8_t b = src[i];
-  
-  if (b < 0x80) out[o++] = (char)b;
-  else {
-    out[o++] = (char)(0xC0 | (b >> 6));
-    out[o++] = (char)(0x80 | (b & 0x3F));
-  }}
-  
-  ant_value_t result = js_mkstr(js, out, o);
+
+  ant_value_t result = js_mkstr(js, out, out_len);
   free(out);
   
   return result;
