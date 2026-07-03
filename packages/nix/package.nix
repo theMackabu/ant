@@ -12,6 +12,7 @@
 , zig_0_16 ? null
 , zig ? null
 , importNpmLock
+, overrideCC
 , apple-sdk_15 ? null
 , darwin ? null
 , callPackage
@@ -22,6 +23,12 @@
 
 let
   zigPkg = if zig_0_16 != null then zig_0_16 else zig;
+  antStdenv =
+    if stdenv.isLinux then
+      overrideCC llvmPackages_21.stdenv (
+        llvmPackages_21.stdenv.cc.override { bintools = llvmPackages_21.bintools; }
+      )
+    else llvmPackages_21.stdenv;
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix { inherit gitRev; };
@@ -53,7 +60,7 @@ let
     else [ "-Dpgo=disabled" ];
 in
 
-llvmPackages_21.stdenv.mkDerivation (finalAttrs: {
+antStdenv.mkDerivation (finalAttrs: {
   pname = "ant";
   src = ../..;
   version = antVersion;
