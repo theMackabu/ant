@@ -12,6 +12,7 @@ test('node:process named hrtime.bigint is function', typeof nodeHrtime.bigint, '
 test('node:process named hrtime matches process.hrtime', nodeHrtime, process.hrtime);
 test('node:process named stdout is global stdout', nodeStdout, process.stdout);
 test('process toStringTag', Object.prototype.toString.call(process), '[object process]');
+test('process inherits Object.prototype methods', typeof process.hasOwnProperty, 'function');
 
 test('pid is number', typeof process.pid, 'number');
 test('pid is positive', process.pid > 0, true);
@@ -36,6 +37,7 @@ test('cwd returns string', typeof cwd, 'string');
 test('cwd not empty', cwd.length > 0, true);
 
 test('env is object', typeof process.env, 'object');
+test('env inherits Object.prototype methods', typeof process.env.hasOwnProperty, 'function');
 test('env has PATH or Path', process.env.PATH !== undefined || process.env.Path !== undefined, true);
 
 test('exit is function', typeof process.exit, 'function');
@@ -205,15 +207,21 @@ test('version is string', typeof process.version, 'string');
 test('version starts with v', process.version.startsWith('v'), true);
 
 test('versions is object', typeof process.versions, 'object');
+test('versions inherits Object.prototype methods', typeof process.versions.hasOwnProperty, 'function');
+test('versions.hasOwnProperty finds node', process.versions.hasOwnProperty('node'), true);
 test('versions.ant exists', typeof process.versions.ant, 'string');
 test('versions.skim exists', typeof process.versions.skim, 'string');
 test('versions.uv exists', typeof process.versions.uv, 'string');
 
 test('features is object', typeof process.features, 'object');
+test('features inherits Object.prototype methods', typeof process.features.hasOwnProperty, 'function');
+test('features.hasOwnProperty finds uv', process.features.hasOwnProperty('uv'), true);
 test('features.uv is boolean', typeof process.features.uv, 'boolean');
 test('features.typescript exists', typeof process.features.typescript, 'string');
 
 test('release is object', typeof process.release, 'object');
+test('release inherits Object.prototype methods', typeof process.release.hasOwnProperty, 'function');
+test('release.hasOwnProperty finds name', process.release.hasOwnProperty('name'), true);
 test('release.name is string', typeof process.release.name, 'string');
 
 test('uptime is function', typeof process.uptime, 'function');
