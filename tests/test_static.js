@@ -130,6 +130,40 @@ test(
   "$or"
 );
 
+console.log('\n=== Static Methods Available During Static Initialization ===');
+
+class StaticFieldCallsLaterMethod {
+  static value = StaticFieldCallsLaterMethod.calculate(2);
+  static calculate(n) {
+    return n + 1;
+  }
+}
+
+test('static field calls later static method', StaticFieldCallsLaterMethod.value, 3);
+
+let staticOrder = [];
+class StaticBlockSeesLaterMethod {
+  static first = staticOrder.push('first');
+  static {
+    staticOrder.push(typeof StaticBlockSeesLaterMethod.later);
+  }
+  static later() {
+    return 1;
+  }
+  static second = staticOrder.push('second');
+}
+
+test('static field and block order', staticOrder.join(','), 'first,function,second');
+
+class StaticFieldCallsLaterPrivateMethod {
+  static value = StaticFieldCallsLaterPrivateMethod.#calculate(4);
+  static #calculate(n) {
+    return n * 2;
+  }
+}
+
+test('static field calls later private static method', StaticFieldCallsLaterPrivateMethod.value, 8);
+
 console.log('\n=== Summary ===');
 console.log('Passed:', passed);
 console.log('Failed:', failed);

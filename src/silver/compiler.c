@@ -5314,6 +5314,26 @@ static void compile_private_static_element(sv_compiler_t *c, sv_ast_t *m, int ct
   emit_op(c, OP_POP);
 }
 
+static void compile_class_element_strict(
+  sv_compiler_t *c, sv_ast_t *m,
+  int ctor_local, int proto_local,
+  int preeval_key
+) {
+  bool saved_strict = c->is_strict;
+  c->is_strict = true;
+  if (is_private_name_node(m->left)) {
+    compile_private_static_element(c, m, ctor_local);
+  } else {
+    compile_class_method(c, m, ctor_local, proto_local, preeval_key);
+  }
+  c->is_strict = saved_strict;
+}
+
+typedef struct {
+  sv_ast_t *node;
+  int preeval_key;
+} sv_class_emit_item_t;
+
 static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_expr) {
   compile_expr(c, key_expr);
   int loc = add_local(c, "", 0, false, c->scope_depth);
@@ -5428,7 +5448,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   bool has_static_name = false;
 
   int field_count = 0;
-  int computed_method_count = 0;
+  int method_emit_count = 0;
+  int static_init_count = 0;
 
   if (node->str) outer_name_local = resolve_local(c, node->str, node->len);
   if (node->left) compile_expr(c, node->left);
@@ -5440,6 +5461,10 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
+    if (m->type == N_STATIC_BLOCK) {
+      static_init_count++;
+      continue;
+    }
     if (m->type != N_METHOD) continue;
     bool is_fn = is_class_method_def(m);
     bool is_private = is_private_name_node(m->left);
@@ -5473,42 +5498,56 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     ) has_static_name = true;
     
     if (!(m->flags & FN_STATIC) && (is_private || !is_fn)) field_count++;
-    if (!is_private && node->str && (m->flags & FN_COMPUTED) && (is_fn || (m->flags & FN_STATIC))) computed_method_count++;
+    else if (is_fn && (!is_private || (m->flags & FN_STATIC))) method_emit_count++;
+    else if (m->flags & FN_STATIC) static_init_count++;
   }
 
   sv_ast_t **field_inits = NULL;
   int *computed_key_locals = NULL;
-  int *method_comp_keys = NULL;
+  
+  sv_class_emit_item_t *method_emit_items = NULL;
+  sv_class_emit_item_t *static_init_items = NULL;
+  
   if (field_count > 0) {
     field_inits = malloc(sizeof(sv_ast_t *) * field_count);
     computed_key_locals = malloc(sizeof(int) * field_count);
   }
-  if (computed_method_count > 0) {
-    method_comp_keys = malloc(sizeof(int) * node->args.count);
-    for (int i = 0; i < node->args.count; i++) method_comp_keys[i] = -1;
-  }
+  if (method_emit_count > 0)
+    method_emit_items = malloc(sizeof(sv_class_emit_item_t) * method_emit_count);
+  if (static_init_count > 0)
+    static_init_items = malloc(sizeof(sv_class_emit_item_t) * static_init_count);
 
-  if (field_count > 0 || method_comp_keys) {
-  int fi = 0;
+  int fi = 0, mi = 0, si = 0;
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
+    if (m->type == N_STATIC_BLOCK) {
+      static_init_items[si++] = (sv_class_emit_item_t){ m, -1 };
+      continue;
+    }
     if (m->type != N_METHOD || m == ctor_method) continue;
     
     bool is_fn = is_class_method_def(m);
     bool is_private = is_private_name_node(m->left);
-    bool needs_instance_init = !(m->flags & FN_STATIC) && (is_private || !is_fn);
+    bool is_static = !!(m->flags & FN_STATIC);
+    bool needs_instance_init = !is_static && (is_private || !is_fn);
     
     if (needs_instance_init) {
-      if (field_inits) field_inits[fi] = m;
-      if (computed_key_locals) computed_key_locals[fi] = (!is_private && (m->flags & FN_COMPUTED))
+      field_inits[fi] = m;
+      computed_key_locals[fi++] = (!is_private && (m->flags & FN_COMPUTED))
         ? compile_class_precompute_key(c, m->left) : -1;
-      fi++;
       continue;
     }
-    
-    if (is_private || !method_comp_keys || !(m->flags & FN_COMPUTED)) continue;
-    method_comp_keys[i] = compile_class_precompute_key(c, m->left);
-  }}
+
+    bool needs_preeval_key = !is_private && node->str && (m->flags & FN_COMPUTED) &&
+      (is_fn || is_static);
+    int preeval_key = needs_preeval_key ? compile_class_precompute_key(c, m->left) : -1;
+
+    if (is_fn && (!is_private || is_static)) {
+      method_emit_items[mi++] = (sv_class_emit_item_t){ m, preeval_key };
+      continue;
+    }
+    if (is_static) static_init_items[si++] = (sv_class_emit_item_t){ m, preeval_key };
+  }
 
   int inner_name_local = -1;
   bool has_class_scope = node->str || private_scope.count > 0;
@@ -5660,38 +5699,27 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     emit_put_local(c, inner_name_local);
   }
 
-  for (int i = 0; i < node->args.count; i++) {
-    sv_ast_t *m = node->args.items[i];
+  for (int i = 0; i < method_emit_count; i++) {
+    sv_class_emit_item_t *item = &method_emit_items[i];
+    compile_class_element_strict(
+      c, item->node, ctor_local, proto_local, item->preeval_key
+    );
+  }
+
+  for (int i = 0; i < static_init_count; i++) {
+    sv_ast_t *m = static_init_items[i].node;
     if (m->type == N_STATIC_BLOCK) {
       compile_static_block(c, m, ctor_local);
       continue;
     }
-    
-    if (m->type != N_METHOD) continue;
-    if (m == ctor_method) continue;
-    if (is_private_name_node(m->left)) {
-      if (m->flags & FN_STATIC) {
-        bool saved_strict = c->is_strict;
-        c->is_strict = true;
-        compile_private_static_element(c, m, ctor_local);
-        c->is_strict = saved_strict;
-      }
-      continue;
-    }
-    
-    bool is_fn = is_class_method_def(m);
-    if (!is_fn && !(m->flags & FN_STATIC)) continue;
-    
-    bool saved_strict = c->is_strict;
-    c->is_strict = true;
-    compile_class_method(
-      c, m, ctor_local, proto_local, 
-      method_comp_keys ? method_comp_keys[i] : -1
+
+    compile_class_element_strict(
+      c, m, ctor_local, proto_local, static_init_items[i].preeval_key
     );
-    c->is_strict = saved_strict;
   }
 
-  free(method_comp_keys);
+  free(method_emit_items);
+  free(static_init_items);
   emit_get_local(c, ctor_local);
 
   if (class_repl_top && node->str) {

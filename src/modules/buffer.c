@@ -266,6 +266,25 @@ static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {
   return idx;
 }
 
+static inline size_t buffer_string_offset(ant_value_t value, size_t limit, size_t fallback) {
+  if (vtype(value) != T_NUM) return fallback;
+  double raw = js_getnum(value);
+  if (!(raw > 0) || isnan(raw)) return 0;
+  if (raw > (double)limit) return limit;
+  return (size_t)raw;
+}
+
+static inline void buffer_string_bounds(
+  ant_value_t start_arg, ant_value_t end_arg,
+  size_t limit, size_t *start_out, size_t *len_out
+) {
+  size_t start = buffer_string_offset(start_arg, limit, 0);
+  size_t end = buffer_string_offset(end_arg, limit, limit);
+  if (end < start) end = start;
+  *start_out = start;
+  *len_out = end - start;
+}
+
 ArrayBufferData *create_array_buffer_data(size_t length) {
   ArrayBufferData *data = ant_calloc(sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
@@ -2935,24 +2954,18 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   size_t start = 0;
-  size_t end = ta_data->byte_length;
+  size_t len = 0;
   
-  if (nargs > 1 && vtype(args[1]) == T_NUM) {
-    double raw = js_getnum(args[1]);
-    start = raw > 0 && !isnan(raw) ? (size_t)raw : 0;
-  }
+  buffer_string_bounds(
+    nargs > 1 ? args[1] : js_mkundef(),
+    nargs > 2 ? args[2] : js_mkundef(),
+    ta_data->byte_length,
+    &start, &len
+  );
   
-  if (nargs > 2 && vtype(args[2]) == T_NUM) {
-    double raw = js_getnum(args[2]);
-    end = raw > 0 && !isnan(raw) ? (size_t)raw : 0;
-  }
-  
-  if (start > ta_data->byte_length) start = ta_data->byte_length;
-  if (end > ta_data->byte_length) end = ta_data->byte_length;
-  if (end < start) end = start;
-
-  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset + start;
-  size_t len = end - start;
+  uint8_t *data = 
+    ta_data->buffer->data + 
+    ta_data->byte_offset + start;
   
   if (encoding == ENC_BASE64) {
     size_t out_len;
