@@ -2899,6 +2899,7 @@ static void js_arguments_finalizer(ant_t *js, ant_object_t *obj) {
 
 ant_value_t js_create_arguments_object(
   ant_t *js,
+  sv_vm_t *vm,
   ant_value_t callee,
   sv_frame_t *frame,
   int argc,
@@ -2927,16 +2928,16 @@ ant_value_t js_create_arguments_object(
       js_set_sym(js, arr, get_iterator_sym(), iter_fn);
   }
 
-  if (!is_strict && mapped_count > 0 && frame && js->vm) {
+  if (!is_strict && mapped_count > 0 && frame && vm) {
     ant_arguments_state_t *state = calloc(
       1, sizeof(*state) + (size_t)mapped_count * sizeof(state->deleted[0]));
     if (!state) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "oom");
     }
-    
-    state->vm = js->vm;
-    state->frame_index = (int)(frame - js->vm->frames);
+
+    state->vm = vm;
+    state->frame_index = (int)(frame - vm->frames);
     state->mapped_count = (uint32_t)mapped_count;
     
     js_set_native(arr, state, ANT_ARGUMENTS_NATIVE_TAG);
@@ -2948,6 +2949,13 @@ ant_value_t js_create_arguments_object(
 
   GC_ROOT_RESTORE(js, root_mark);
   return arr;
+}
+
+void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, sv_vm_t *vm, int frame_index) {
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  if (!state || state->frame_index < 0 || !vm) return;
+  state->vm = vm;
+  state->frame_index = frame_index;
 }
 
 void js_arguments_detach(ant_t *js, ant_value_t obj) {
