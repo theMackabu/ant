@@ -248,11 +248,15 @@ typedef enum {
   SV_COMPLETION_NONE = 0,
   SV_COMPLETION_THROW = 1,
   SV_COMPLETION_RETURN = 2,
+  SV_COMPLETION_JUMP = 3,
 } sv_completion_kind_t;
 
 typedef struct {
   sv_completion_kind_t kind;
-  ant_value_t              value;
+  ant_value_t value;
+  uint8_t *jump_ip;
+  uint16_t jump_finallies;
+  uint16_t jump_pops;
 } sv_completion_t;
 
 typedef enum {
@@ -291,6 +295,7 @@ typedef struct sv_frame {
 typedef enum {
   SV_HANDLER_TRY = 1,
   SV_HANDLER_FINALLY = 2,
+  SV_HANDLER_TRY_FINALLY = 3,
 } sv_handler_kind_t;
 
 typedef struct {

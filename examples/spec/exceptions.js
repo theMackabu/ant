@@ -191,4 +191,47 @@ function testFinallyOverridesReturn() {
 }
 test('return in finally overrides return in try', testFinallyOverridesReturn(), 'finally');
 
+{
+  let s = '';
+  for (let i = 0; i < 3; i++) {
+    try {
+      if (i === 1) continue;
+      if (i === 2) break;
+      s += i;
+    } catch (e) {} finally { s += 'F'; }
+  }
+  test('break/continue run finally', s, '0FFF');
+}
+
+{
+  let s = '';
+  outer: for (let i = 0; i < 2; i++) {
+    try {
+      for (let j = 0; j < 2; j++) {
+        try {
+          if (j === 1) break outer;
+          s += `${i}${j}`;
+        } finally { s += 'x'; }
+      }
+    } finally { s += 'y'; }
+  }
+  test('labeled break runs nested finallies', s, '00xxy');
+}
+
+function testNoStaleHandlerAfterBreak() {
+  for (;;) {
+    try { break; } catch (e) { return 'stale-catch'; }
+  }
+  try { throw new Error('after'); } catch (e) { return 'fresh-catch'; }
+}
+test('break pops try handler', testNoStaleHandlerAfterBreak(), 'fresh-catch');
+
+{
+  let s = '';
+  for (let i = 0; i < 3; i++) {
+    try { s += i; } finally { if (i === 1) break; s += 'F'; }
+  }
+  test('break in finally discards completion', s, '0F1');
+}
+
 summary();

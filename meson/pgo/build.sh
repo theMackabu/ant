@@ -100,16 +100,76 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   mkdir -p "$RAW_DIR"
   export LLVM_PROFILE_FILE="$RAW_DIR/profile-%p-%m.profraw"
 
+  now_ms() {
+    perl -MTime::HiRes=time -e 'printf "%d", time()*1000' 2>/dev/null || echo $(( $(date +%s) * 1000 ))
+  }
+  fmt_secs() {
+    awk "BEGIN{printf \"%.1fs\", $1/1000}"
+  }
+
   if [ -f "$ROOT/examples/spec/run.js" ]; then
-    echo "    - spec suite"
+    start=$(now_ms)
     "$BUILD_DIR/ant" "$ROOT/examples/spec/run.js" --all >/dev/null 2>&1 || true
+    echo "    - spec suite ($(fmt_secs $(( $(now_ms) - start ))))"
   fi
 
   echo "    - bench files in tests/"
   while IFS= read -r -d '' bench; do
-    echo "      $(basename "$bench")"
-    timeout 15s "$BUILD_DIR/ant" "$bench" >/dev/null 2>&1 || true
-  done < <(find "$ROOT/tests" -maxdepth 2 -type f \( -name 'bench_*.js' -o -name 'bench_*.cjs' -o -name 'bench_*.mjs' \) -print0)
+    start=$(now_ms)
+    rc=0
+    timeout 60s "$BUILD_DIR/ant" "$bench" >/dev/null 2>&1 || rc=$?
+    elapsed=$(fmt_secs $(( $(now_ms) - start )))
+    note=""
+    if [ "$rc" -eq 124 ]; then
+      note="  [TIMEOUT — killed, no profile data from this run]"
+    elif [ "$rc" -ne 0 ]; then
+      note="  [exit $rc]"
+    fi
+    printf '      %-40s %8s%s\n' "$(basename "$bench")" "$elapsed" "$note"
+  done < <(find "$ROOT/tests" -maxdepth 2 -type f \( -name 'bench_*.js' -o -name 'bench_*.cjs' -o -name 'bench_*.mjs' \) ! -name 'bench_server.*' -print0)
+
+  if [ -f "$PGO_DIR/train_server.js" ] && command -v curl >/dev/null 2>&1; then
+    SERVER_PORT=34117
+    start=$(now_ms)
+    "$BUILD_DIR/ant" "$PGO_DIR/train_server.js" >/dev/null 2>&1 &
+    SERVER_PID=$!
+    ready=0
+    for _ in $(seq 1 100); do
+      if curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:$SERVER_PORT/"; then ready=1; break; fi
+      kill -0 "$SERVER_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    if [ "$ready" -eq 1 ]; then
+      if command -v oha >/dev/null 2>&1; then
+        req_label="50000 requests via oha"
+        oha -n 50000 --no-tui -H "Accept-Encoding: identity" "http://127.0.0.1:$SERVER_PORT/hot" >/dev/null 2>&1 || true
+      else
+        req_label="8000 requests via curl"
+        curl_pids=()
+        for _ in 1 2 3 4; do
+          curl -s --max-time 60 -o /dev/null "http://127.0.0.1:$SERVER_PORT/hot/[1-2000]" &
+          curl_pids+=($!)
+        done
+        wait "${curl_pids[@]}" 2>/dev/null || true
+      fi
+      curl -s --max-time 5 -o /dev/null "http://127.0.0.1:$SERVER_PORT/quit" || true
+      for _ in $(seq 1 50); do
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        sleep 0.1
+      done
+      note=""
+      if kill -0 "$SERVER_PID" 2>/dev/null; then
+        note="  [did not exit on /quit — killed, no profile data from this run]"
+        kill -9 "$SERVER_PID" 2>/dev/null || true
+      fi
+      wait "$SERVER_PID" 2>/dev/null || true
+      printf '      %-40s %8s  [%s]%s\n' "bench_server.js" "$(fmt_secs $(( $(now_ms) - start )))" "$req_label" "$note"
+    else
+      kill -9 "$SERVER_PID" 2>/dev/null || true
+      wait "$SERVER_PID" 2>/dev/null || true
+      printf '      %-40s %8s  [server never became ready — skipped]\n' "bench_server.js" "$(fmt_secs $(( $(now_ms) - start )))"
+    fi
+  fi
 
   echo "==> Merging profiles -> $PROFDATA"
   shopt -s nullglob

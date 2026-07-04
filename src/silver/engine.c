@@ -1736,11 +1736,23 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_THROW:       { sv_err = sv_op_throw(vm);                      goto sv_throw; }
   L_THROW_ERROR: { sv_err = sv_op_throw_error(vm, js, func, ip);  goto sv_throw; }
   
-  L_TRY_PUSH:    { sv_op_try_push(vm, ip);               NEXT(5); }
-  L_TRY_POP:     { sv_op_try_pop(vm);                    NEXT(1); }
-  L_CATCH:       { sv_op_catch(vm, sv_err, ip);          NEXT(5); }
-  L_FINALLY:     { VM_CHECK(sv_op_finally(vm, js, ip));  NEXT(5); }
-  L_NIP_CATCH:   { sv_op_nip_catch(vm);                  NEXT(1); }
+  L_TRY_PUSH:         { sv_op_try_push(vm, ip, SV_HANDLER_TRY);          NEXT(5); }
+  L_TRY_PUSH_FINALLY: { sv_op_try_push(vm, ip, SV_HANDLER_TRY_FINALLY);  NEXT(5); }
+  L_TRY_POP:          { sv_op_try_pop(vm);                               NEXT(1); }
+  L_CATCH:            { sv_op_catch(vm, sv_err, ip);                     NEXT(5); }
+  L_FINALLY:          { VM_CHECK(sv_op_finally(vm, js, ip));             NEXT(5); }
+  L_FINALLY_DISCARD:  { sv_op_finally_discard(vm);                       NEXT(1); }
+  L_NIP_CATCH:        { sv_op_nip_catch(vm);                             NEXT(1); }
+
+  L_UNWIND_JMP: {
+    int32_t off = sv_get_i32(ip + 1);
+    uint8_t *target = ip + 5 + off;
+    int n_fin = (int)sv_get_u8(ip + 5);
+    int n_pop = (int)sv_get_u8(ip + 6);
+    uint8_t *finally_ip = sv_vm_unwind_for_jump(vm, target, n_fin, n_pop);
+    ip = finally_ip ? finally_ip : target;
+    DISPATCH();
+  }
 
   L_FINALLY_RET: {
     uint8_t *resume_ip = NULL;
@@ -1751,19 +1763,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       goto sv_throw;
     }
     if (action == SV_FINALLY_RET_RETURN) {
-      if (vm->handler_depth != frame->handler_base) {
-        uint8_t *finally_ip = sv_vm_unwind_for_return(vm, completion);
-        if (finally_ip) {
-          frame = &vm->frames[vm->fp];
-          func = frame->func;
-          bp = frame->bp;
-          lp = frame->lp;
-          ip = finally_ip;
-          DISPATCH();
-        }
-        vm->handler_depth = frame->handler_base;
-        frame->handler_top = frame->handler_base;
-      }
+      vm->handler_depth = frame->handler_base;
+      frame->handler_top = frame->handler_base;
       vm->sp = frame->prev_sp;
       if (vm->fp <= entry_fp) {
         vm_result = completion;

@@ -11,15 +11,14 @@ typedef enum {
   SV_FINALLY_RET_ERROR = 3,
 } sv_finally_ret_t;
 
-static inline bool sv_is_catch_only_handler(uint8_t *ip) {
-  return ip && *ip == OP_CATCH;
-}
-
 static inline void sv_clear_completion(sv_vm_t *vm) {
   if (vm->fp < 0) return;
   sv_frame_t *frame = &vm->frames[vm->fp];
   frame->completion.kind = SV_COMPLETION_NONE;
   frame->completion.value = js_mkundef();
+  frame->completion.jump_ip = NULL;
+  frame->completion.jump_finallies = 0;
+  frame->completion.jump_pops = 0;
 }
 
 static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
@@ -49,12 +48,12 @@ static inline ant_value_t sv_op_throw_error(
   return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)a->len, a->str);
 }
 
-static inline void sv_op_try_push(sv_vm_t *vm, uint8_t *ip) {
+static inline void sv_op_try_push(sv_vm_t *vm, uint8_t *ip, sv_handler_kind_t kind) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   if (vm->handler_depth < SV_HANDLER_MAX) {
     int32_t off = sv_get_i32(ip + 1);
     sv_handler_t *h = &vm->handler_stack[vm->handler_depth++];
-    h->kind = SV_HANDLER_TRY;
+    h->kind = (uint8_t)kind;
     h->ip = ip + sv_op_size[OP_TRY_PUSH] + off;
     h->saved_sp = vm->sp;
     frame->handler_top = vm->handler_depth;
@@ -64,7 +63,8 @@ static inline void sv_op_try_push(sv_vm_t *vm, uint8_t *ip) {
 static inline void sv_op_try_pop(sv_vm_t *vm) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   for (int i = vm->handler_depth - 1; i >= frame->handler_base; i--) {
-    if (vm->handler_stack[i].kind != SV_HANDLER_TRY) continue;
+    uint8_t kind = vm->handler_stack[i].kind;
+    if (kind != SV_HANDLER_TRY && kind != SV_HANDLER_TRY_FINALLY) continue;
     if (i + 1 < vm->handler_depth) {
       memmove(
         &vm->handler_stack[i],
@@ -97,6 +97,63 @@ static inline ant_value_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return js_mkundef();
 }
 
+static inline uint8_t *sv_vm_unwind_for_return(sv_vm_t *vm, ant_value_t ret) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  for (int i = vm->handler_depth - 1; i >= frame->handler_base; i--) {
+    sv_handler_t *h = &vm->handler_stack[i];
+    if (h->kind != SV_HANDLER_TRY_FINALLY) continue;
+
+    vm->handler_depth = i;
+    frame->handler_top = i;
+    vm->sp = h->saved_sp;
+    frame->completion.kind = SV_COMPLETION_RETURN;
+    frame->completion.value = ret;
+    vm->stack[vm->sp++] = ret;
+    return h->ip;
+  }
+
+  return NULL;
+}
+
+static inline uint8_t *sv_vm_unwind_for_jump(
+  sv_vm_t *vm, uint8_t *target_ip, int n_fin, int n_pop
+) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+
+  if (n_fin > 0) for (int i = vm->handler_depth - 1; i >= frame->handler_base; i--) {
+    sv_handler_t *h = &vm->handler_stack[i];
+    if (h->kind != SV_HANDLER_TRY_FINALLY) continue;
+
+    int used = vm->handler_depth - i;
+    vm->handler_depth = i;
+    frame->handler_top = i;
+    vm->sp = h->saved_sp;
+    frame->completion.kind = SV_COMPLETION_JUMP;
+    frame->completion.value = js_mkundef();
+    frame->completion.jump_ip = target_ip;
+    frame->completion.jump_finallies = (uint16_t)(n_fin - 1);
+    frame->completion.jump_pops = (uint16_t)(n_pop > used ? n_pop - used : 0);
+    vm->stack[vm->sp++] = js_mkundef();
+    return h->ip;
+  }
+
+  while (n_pop-- > 0 && vm->handler_depth > frame->handler_base)
+    vm->handler_depth--;
+  frame->handler_top = vm->handler_depth;
+  sv_clear_completion(vm);
+  return NULL;
+}
+
+static inline void sv_op_finally_discard(sv_vm_t *vm) {
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  if (vm->handler_depth > frame->handler_base &&
+      vm->handler_stack[vm->handler_depth - 1].kind == SV_HANDLER_FINALLY) {
+    vm->handler_depth--;
+    frame->handler_top = vm->handler_depth;
+  }
+  sv_clear_completion(vm);
+}
+
 static inline sv_finally_ret_t sv_op_finally_ret(
   sv_vm_t *vm, ant_t *js,
   uint8_t **resume_ip,
@@ -119,9 +176,27 @@ static inline sv_finally_ret_t sv_op_finally_ret(
   }
 
   if (frame->completion.kind == SV_COMPLETION_RETURN) {
-    *completion_val = frame->completion.value;
+    ant_value_t ret = frame->completion.value;
     sv_clear_completion(vm);
+    if (vm->handler_depth > frame->handler_base) {
+      uint8_t *finally_ip = sv_vm_unwind_for_return(vm, ret);
+      if (finally_ip) {
+        *resume_ip = finally_ip;
+        return SV_FINALLY_RET_JUMP;
+      }
+    }
+    *completion_val = ret;
     return SV_FINALLY_RET_RETURN;
+  }
+
+  if (frame->completion.kind == SV_COMPLETION_JUMP) {
+    uint8_t *target = frame->completion.jump_ip;
+    int n_fin = frame->completion.jump_finallies;
+    int n_pop = frame->completion.jump_pops;
+    sv_clear_completion(vm);
+    uint8_t *finally_ip = sv_vm_unwind_for_jump(vm, target, n_fin, n_pop);
+    *resume_ip = finally_ip ? finally_ip : target;
+    return SV_FINALLY_RET_JUMP;
   }
 
   *resume_ip = h.ip;
@@ -144,7 +219,7 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
     int top = (f == vm->fp) ? vm->handler_depth : frame->handler_top;
     for (int i = top - 1; i >= base; i--) {
       sv_handler_t *h = &vm->handler_stack[i];
-      if (h->kind != SV_HANDLER_TRY) continue;
+      if (h->kind != SV_HANDLER_TRY && h->kind != SV_HANDLER_TRY_FINALLY) continue;
 
       for (int drop = vm->fp; drop > f; drop--) {
         ant_value_t *bp = vm->frames[drop].bp;
@@ -173,25 +248,6 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   }
   
   sv_clear_completion(vm);
-  return NULL;
-}
-
-static inline uint8_t *sv_vm_unwind_for_return(sv_vm_t *vm, ant_value_t ret) {
-  sv_frame_t *frame = &vm->frames[vm->fp];
-  for (int i = vm->handler_depth - 1; i >= frame->handler_base; i--) {
-    sv_handler_t *h = &vm->handler_stack[i];
-    if (h->kind != SV_HANDLER_TRY) continue;
-    if (sv_is_catch_only_handler(h->ip)) continue;
-
-    vm->handler_depth = i;
-    frame->handler_top = i;
-    vm->sp = h->saved_sp;
-    frame->completion.kind = SV_COMPLETION_RETURN;
-    frame->completion.value = ret;
-    vm->stack[vm->sp++] = ret;
-    return h->ip;
-  }
-  
   return NULL;
 }
 
