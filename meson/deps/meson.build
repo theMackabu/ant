@@ -23,6 +23,11 @@ boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
 if host_machine.system() == 'windows'
   boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
   boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
+  # x86_64 perlasm needs NASM, which Meson's CMake subproject translation does
+  # not drive; fall back to the portable C implementations on MinGW.
+  boringssl_opts.add_cmake_defines({'OPENSSL_NO_ASM': '1'})
+  boringssl_opts.append_compile_args('c', '-DOPENSSL_NO_ASM')
+  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_NO_ASM')
 endif
 boringssl_opts.set_override_option('warning_level', '0')
 boringssl_opts.set_override_option('optimization', 's')

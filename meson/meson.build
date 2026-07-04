@@ -38,6 +38,12 @@ if host_machine.system() == 'linux'
   add_project_link_arguments('-no-pie', language: ['c', 'cpp'])
 endif
 
+if host_machine.system() == 'windows'
+  # MinGW headers default to an older Windows API level; Ant uses Win8+/Win10
+  # APIs (GetCurrentThreadStackLimits, CreateFile2, ...).
+  add_project_arguments('-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', language: ['c', 'cpp'])
+endif
+
 native_tuning = get_option('native_tuning')
 native_tuning_flag = ''
 if ['x86', 'x86_64'].contains(host_machine.cpu_family())
