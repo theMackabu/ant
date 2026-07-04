@@ -1,6 +1,11 @@
 {
   description = "javascript for 🐜's, a tiny runtime with big ambitions";
 
+  nixConfig = {
+    extra-substituters = ["https://ant.cachix.org"];
+    extra-trusted-public-keys = ["ant.cachix.org-1:v/FbrMBfZ/rZHKZtAqM5mpLu6YKLaDF64dcLP30VTH0="];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
