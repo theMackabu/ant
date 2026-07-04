@@ -1,6 +1,7 @@
 { lib
 , llvmPackages_21
 , stdenv
+, ccacheStdenv
 , meson
 , ninja
 , cmake
@@ -23,12 +24,25 @@
 
 let
   zigPkg = if zig_0_16 != null then zig_0_16 else zig;
-  antStdenv =
+  antBaseStdenv =
     if stdenv.isLinux then
       overrideCC llvmPackages_21.stdenv (
         llvmPackages_21.stdenv.cc.override { bintools = llvmPackages_21.bintools; }
       )
     else llvmPackages_21.stdenv;
+  antStdenv = ccacheStdenv.override {
+    stdenv = antBaseStdenv;
+    extraConfig = ''
+      export CCACHE_COMPRESS=1
+      export CCACHE_MAXSIZE=2G
+      export CCACHE_SLOPPINESS=random_seed,time_macros
+      if [ -d /tmp/ant-nix-ccache ] && [ -w /tmp/ant-nix-ccache ]; then
+        export CCACHE_DIR=/tmp/ant-nix-ccache
+      else
+        export CCACHE_DIR="$TMPDIR/ccache"
+      fi
+    '';
+  };
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix {};

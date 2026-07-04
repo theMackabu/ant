@@ -6,7 +6,6 @@ on:
       - master
     tags:
       - '*'
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -43,18 +42,34 @@ jobs:
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3
 
       - name: Configure Cachix
-        if: ${{ github.event_name == 'pull_request' || env.CACHIX_AUTH_TOKEN == '' }}
+        if: ${{ env.CACHIX_AUTH_TOKEN == '' }}
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: ant
           skipPush: true
 
       - name: Configure Cachix with push access
-        if: ${{ github.event_name != 'pull_request' && env.CACHIX_AUTH_TOKEN != '' }}
+        if: ${{ env.CACHIX_AUTH_TOKEN != '' }}
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71
         with:
           name: ant
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
+      - name: Prepare compiler cache
+        run: |
+          mkdir -p /tmp/ant-nix-ccache
+          chmod -R 0777 /tmp/ant-nix-ccache
+
+      - name: Cache compiler objects
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: /tmp/ant-nix-ccache
+          key: nix-ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            nix-ccache-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Fix compiler cache permissions
+        run: chmod -R 0777 /tmp/ant-nix-ccache
+
       - name: Build Ant
-        run: nix build .#ant --accept-flake-config --print-build-logs
+        run: nix build .#ant --accept-flake-config --print-build-logs --option extra-sandbox-paths /tmp/ant-nix-ccache
