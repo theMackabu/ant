@@ -31,7 +31,7 @@ let
     else llvmPackages_21.stdenv;
 
   antVersion = import ./version.nix { inherit lib gitRev; };
-  antVendor = callPackage ./vendor.nix { inherit gitRev; };
+  antVendor = callPackage ./vendor.nix {};
 
   toolsNodeModules = importNpmLock.buildNodeModules {
     package = lib.importJSON ../../src/tools/package.json;

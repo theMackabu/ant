@@ -3,7 +3,7 @@ name: Nix Cache
 on:
   push:
     branches:
-      - main
+      - master
     tags:
       - '*'
   pull_request:
@@ -57,4 +57,4 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
       - name: Build Ant
-        run: nix build .#ant --print-build-logs
+        run: nix build .#ant --accept-flake-config --print-build-logs

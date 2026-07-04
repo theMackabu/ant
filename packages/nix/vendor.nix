@@ -1,4 +1,4 @@
-{ lib, stdenvNoCC, meson, ninja, git, cacert, gitRev ? "unknown" }:
+{ lib, stdenvNoCC, meson, ninja, git, cacert }:
 
 let
   src = lib.fileset.toSource {
