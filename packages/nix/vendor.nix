@@ -14,7 +14,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "ant-vendor";
-  version = "cache";
+  version = "cache-${stdenvNoCC.hostPlatform.system}";
 
   inherit src;
   nativeBuildInputs = [ meson ninja git cacert ];
