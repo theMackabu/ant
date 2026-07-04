@@ -3,6 +3,7 @@
 
 #include "silver/vm.h"
 #include "internal.h"
+#include "gc.h"
 #include "runtime.h"
 #include "errors.h"
 #include "debug.h"
@@ -309,13 +310,21 @@ struct sv_upvalue {
   ant_value_t closed;
   struct sv_upvalue *next;
   uint64_t gc_epoch;
+  uint8_t in_remember_set;
 };
+
+bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot);
+
+static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
+  if (uv->location != &uv->closed || uv->in_remember_set) return;
+  if (new_val <= NANBOX_PREFIX) return;
+  if (uv->gc_epoch == 0) return;
+  if (gc_value_is_heap_ref(new_val)) gc_remember_upvalue(js, uv);
+}
 
 static inline sv_upvalue_t *js_upvalue_alloc(void) {
   return (sv_upvalue_t *)fixed_arena_alloc(&rt->js->upvalue_arena);
 }
-
-bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot);
 
 #define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
 #define SV_CALL_HAS_SUPER        (1u << 1)

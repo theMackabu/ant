@@ -129,13 +129,17 @@ static inline ant_value_t sv_op_get_upval(
 static inline void sv_op_put_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
-  *uv->location = vm->stack[--vm->sp];
+  ant_value_t val = vm->stack[--vm->sp];
+  *uv->location = val;
+  gc_upvalue_write_barrier(vm->js, uv, val);
 }
 
 static inline void sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
-  *uv->location = vm->stack[vm->sp - 1];
+  ant_value_t val = vm->stack[vm->sp - 1];
+  *uv->location = val;
+  gc_upvalue_write_barrier(vm->js, uv, val);
 }
 
 static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
@@ -151,10 +155,11 @@ static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint
       uv->closed = *loc;
       uv->location = &uv->closed;
       *pp = uv->next;
+      gc_upvalue_write_barrier(vm->js, uv, uv->closed);
     }
     else pp = &uv->next;
   }
-  
+
   return js_mkundef();
 }
 

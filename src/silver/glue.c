@@ -761,6 +761,10 @@ ant_value_t jit_helper_closure(
   return func_val;
 }
 
+void jit_helper_upval_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t val) {
+  gc_upvalue_write_barrier(js, uv, val);
+}
+
 void jit_helper_close_upval(
   sv_vm_t *vm, int32_t slot_idx, ant_value_t *locals, int n_locals,
   sv_upvalue_t **open_upvalues
@@ -779,7 +783,8 @@ void jit_helper_close_upval(
       uv->closed = *uv->location;
       uv->location = &uv->closed;
       *pp = uv->next;
-    } 
+      gc_upvalue_write_barrier(vm->js, uv, uv->closed);
+    }
     else pp = &uv->next;
   }
 }

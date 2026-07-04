@@ -30,6 +30,7 @@ static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
     uv->closed = *loc;
     uv->location = &uv->closed;
     *pp = uv->next;
+    gc_upvalue_write_barrier(vm->js, uv, uv->closed);
   }
   else pp = &uv->next;
 }}

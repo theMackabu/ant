@@ -127,12 +127,43 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   if (js->remember_set_len >= js->remember_set_cap) {
     size_t new_cap = js->remember_set_cap ? js->remember_set_cap * 2 : 64;
     ant_object_t **ns = realloc(js->remember_set, new_cap * sizeof(*ns));
-    if (!ns) return;
+    if (!ns) { js->gc_remember_overflow = true; return; }
     js->remember_set = ns;
     js->remember_set_cap = new_cap;
   }
   obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
+}
+
+void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
+  if (!js || !uv || uv->in_remember_set) return;
+
+  if (js->remembered_upvalue_len >= js->remembered_upvalue_cap) {
+    size_t new_cap = js->remembered_upvalue_cap ? js->remembered_upvalue_cap * 2 : 64;
+    struct sv_upvalue **entries = realloc(js->remembered_upvalues, new_cap * sizeof(*entries));
+    if (!entries) { js->gc_remember_overflow = true; return; }
+    js->remembered_upvalues = entries;
+    js->remembered_upvalue_cap = new_cap;
+  }
+
+  uv->in_remember_set = 1;
+  js->remembered_upvalues[js->remembered_upvalue_len++] = uv;
+}
+
+static void gc_mark_remembered_upvalues(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_upvalue_len; i++)
+    gc_mark_value(js, js->remembered_upvalues[i]->closed);
+}
+
+static void gc_clear_remembered_upvalues(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_upvalue_len; i++)
+    js->remembered_upvalues[i]->in_remember_set = 0;
+  js->remembered_upvalue_len = 0;
+
+  if (js->remembered_upvalue_cap > 512) {
+    struct sv_upvalue **entries = realloc(js->remembered_upvalues, 256 * sizeof(*entries));
+    if (entries) { js->remembered_upvalues = entries; js->remembered_upvalue_cap = 256; }
+  }
 }
 
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
@@ -769,6 +800,14 @@ static void gc_sweep(ant_t *js) {
 void gc_pin_existing_objects(ant_t *js) {
   if (!js) return;
 
+  ant_fixed_arena_t *ua = &js->upvalue_arena;
+  uint64_t stamp = gc_epoch ? gc_epoch : ~0ull;
+  
+  for (size_t off = 0; off < ua->watermark; off += ua->elem_size) {
+    sv_upvalue_t *uv = (sv_upvalue_t *)(ua->base + off);
+    if (uv->gc_epoch == 0) uv->gc_epoch = stamp;
+  }
+
   ant_object_t *tail = NULL;
   for (ant_object_t *obj = js->objects; obj; obj = obj->next) {
     obj->flags.gc_permanent = 1;
@@ -811,7 +850,9 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
   js->remember_set_len = 0;
+  
   gc_clear_remembered_func_consts(js);
+  gc_clear_remembered_upvalues(js);
 
   if (js->remember_set_cap > 512) {
     ant_object_t **ns = realloc(js->remember_set, 256 * sizeof(*ns));
@@ -910,6 +951,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
     gc_scan_obj(js, js->remember_set[i]);
   
   gc_mark_remembered_func_consts(js);
+  gc_mark_remembered_upvalues(js);
   
   for (size_t i = 0; i < js->remember_set_len; i++) 
     js->remember_set[i]->flags.in_remember_set = 0;
@@ -923,6 +965,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_sweep_young(js);
   gc_promote_survivors(js);
   gc_clear_remembered_func_consts(js);
+  gc_clear_remembered_upvalues(js);
   
   // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
   // property values on old objects are not scanned during minor GC (old objects

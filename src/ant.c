@@ -17465,7 +17465,15 @@ void js_destroy(ant_t *js) {
   free(js->remembered_func_consts);
   js->remembered_func_consts = NULL;
   js->remembered_func_const_len = js->remembered_func_const_cap = 0;
-  
+
+  free(js->remembered_upvalues);
+  js->remembered_upvalues = NULL;
+  js->remembered_upvalue_len = js->remembered_upvalue_cap = 0;
+
+  free(js->remember_set);
+  js->remember_set = NULL;
+  js->remember_set_len = js->remember_set_cap = 0;
+
   free(js->pending_rejections.items);
   js->pending_rejections.items = NULL;
   js->pending_rejections.len = js->pending_rejections.cap = 0;

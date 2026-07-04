@@ -240,9 +240,15 @@ struct ant_isolate_t {
     sv_func_t *func;
     uint32_t slot;
   } *remembered_func_consts;
-  
+
   size_t remembered_func_const_len;
   size_t remembered_func_const_cap;
+
+  size_t remembered_upvalue_len;
+  size_t remembered_upvalue_cap;
+  
+  struct sv_upvalue **remembered_upvalues;
+  bool gc_remember_overflow;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;

@@ -405,7 +405,10 @@ static inline void sv_with_fallback_put(
     case WITH_FB_UPVAL:
       if (frame->upvalues && (int)idx < frame->upvalue_count) {
         sv_upvalue_t *uv = frame->upvalues[idx];
-        if (uv) *uv->location = val;
+        if (uv) {
+          *uv->location = val;
+          gc_upvalue_write_barrier(js, uv, val);
+        }
       }
       break;
     default: break;
