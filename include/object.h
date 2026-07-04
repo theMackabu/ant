@@ -29,6 +29,7 @@ typedef struct {
   ant_value_t trigger_parent;
   
   struct ant_object *gc_pending_next;
+  struct ant_object *gc_pending_prev;
   promise_handler_t inline_handler;
   
   UT_array *handlers;

@@ -47,7 +47,7 @@ let
   system = builtins.currentSystem;
   pkgs = import flake.inputs.nixpkgs { inherit system; };
 in
-pkgs.callPackage ./packages/nix/vendor.nix { gitRev = "update-vendor-hashes"; }
+pkgs.callPackage ./packages/nix/vendor.nix {}
 EOF
 
 echo "Computing ant-vendor Nix hash from the current vendor wraps..."

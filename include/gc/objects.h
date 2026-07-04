@@ -20,7 +20,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark);
 void gc_object_free(ant_t *js, ant_object_t *obj);
 void gc_pin_existing_objects(ant_t *js);
 
-void gc_root_pending_promise(ant_object_t *obj);
-void gc_unroot_pending_promise(ant_object_t *obj);
+void gc_root_pending_promise(ant_t *js, ant_object_t *obj);
+void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj);
 
 #endif

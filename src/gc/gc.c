@@ -182,6 +182,7 @@ void gc_run(ant_t *js) {
 
   js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
+  js->gc_remember_overflow = false;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
   gc_last_run_ms = gc_now_ms();
@@ -189,6 +190,11 @@ void gc_run(ant_t *js) {
 
 void gc_run_minor(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+
+  if (__builtin_expect(js->gc_remember_overflow, 0)) {
+    gc_run(js);
+    return;
+  }
 
   size_t old_before   = js->old_live_count;
   size_t live_before  = js->obj_arena.live_count;

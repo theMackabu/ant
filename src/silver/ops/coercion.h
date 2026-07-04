@@ -405,7 +405,10 @@ static inline void sv_with_fallback_put(
     case WITH_FB_UPVAL:
       if (frame->upvalues && (int)idx < frame->upvalue_count) {
         sv_upvalue_t *uv = frame->upvalues[idx];
-        if (uv) *uv->location = val;
+        if (uv) {
+          *uv->location = val;
+          gc_upvalue_write_barrier(js, uv, val);
+        }
       }
       break;
     default: break;
@@ -588,7 +591,7 @@ static inline void sv_op_special_obj(
     int mapped_count = sv_frame_is_strict(frame) || !frame->func ? 0 : frame->func->param_count;
     if (mapped_count > frame->argc) mapped_count = frame->argc;
     frame->arguments_obj = js_create_arguments_object(
-      js, frame->callee, frame, frame->argc, 
+      js, vm, frame->callee, frame, frame->argc,
       mapped_count, sv_frame_is_strict(frame)
     );
   }

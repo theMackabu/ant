@@ -71,6 +71,7 @@ typedef struct {
   sv_patch_list_t breaks;
   sv_patch_list_t continues;
   int scope_depth;
+  int unwind_depth;
   const char *label;
   uint32_t label_len;
   bool is_switch;
@@ -162,6 +163,9 @@ typedef struct sv_compiler {
   bool regexp_replace_write_seen;
   
   int try_depth;
+  uint8_t *unwind_kinds;
+  int unwind_count;
+  int unwind_cap;
   int with_depth;
   int completion_local;
   int strict_args_local;

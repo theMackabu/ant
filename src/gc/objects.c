@@ -59,13 +59,11 @@ static inline bool gc_get_stack_bounds(
 }
 
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
-static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
+static gc_str_mark_fn g_str_mark = NULL;
 
+static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
-
-static gc_str_mark_fn g_str_mark = NULL;
-static ant_object_t *g_pending_promises = NULL;
 
 static uint64_t gc_epoch = 0;
 static uint8_t gc_obj_epoch = 0;
@@ -96,28 +94,32 @@ bool gc_obj_is_marked(const ant_object_t *obj) {
   return obj && obj->mark_epoch == gc_obj_epoch;
 }
 
-void gc_root_pending_promise(ant_object_t *obj) {
+void gc_root_pending_promise(ant_t *js, ant_object_t *obj) {
   ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
-  if (!pd || pd->gc_pending_rooted) return;
-  
+  if (!js || !pd || pd->gc_pending_rooted) return;
+
   pd->gc_pending_rooted = true;
-  pd->gc_pending_next = g_pending_promises;
-  g_pending_promises = obj;
+  pd->gc_pending_prev = NULL;
+  pd->gc_pending_next = js->pending_promises;
+  if (js->pending_promises && js->pending_promises->promise_state)
+    js->pending_promises->promise_state->gc_pending_prev = obj;
+  js->pending_promises = obj;
 }
 
-void gc_unroot_pending_promise(ant_object_t *obj) {
+void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj) {
   ant_promise_state_t *pd = obj ? obj->promise_state : NULL;
-  if (!pd || !pd->gc_pending_rooted) return;
-  
+  if (!js || !pd || !pd->gc_pending_rooted) return;
+
   pd->gc_pending_rooted = false;
-  ant_object_t **pp = &g_pending_promises;
-  while (*pp) {
-    ant_promise_state_t *current = (*pp)->promise_state;
-    if (*pp == obj) { *pp = pd->gc_pending_next; break; }
-    if (!current) { *pp = NULL; break; }
-    pp = &current->gc_pending_next;
-  }
+  ant_object_t *prev = pd->gc_pending_prev;
+  ant_object_t *next = pd->gc_pending_next;
+
+  if (prev && prev->promise_state) prev->promise_state->gc_pending_next = next;
+  else if (js->pending_promises == obj) js->pending_promises = next;
+  if (next && next->promise_state) next->promise_state->gc_pending_prev = prev;
+
   pd->gc_pending_next = NULL;
+  pd->gc_pending_prev = NULL;
 }
 
 void gc_remember_add(ant_t *js, ant_object_t *obj) {
@@ -125,12 +127,43 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   if (js->remember_set_len >= js->remember_set_cap) {
     size_t new_cap = js->remember_set_cap ? js->remember_set_cap * 2 : 64;
     ant_object_t **ns = realloc(js->remember_set, new_cap * sizeof(*ns));
-    if (!ns) return;
+    if (!ns) { js->gc_remember_overflow = true; return; }
     js->remember_set = ns;
     js->remember_set_cap = new_cap;
   }
   obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
+}
+
+void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
+  if (!js || !uv || uv->in_remember_set) return;
+
+  if (js->remembered_upvalue_len >= js->remembered_upvalue_cap) {
+    size_t new_cap = js->remembered_upvalue_cap ? js->remembered_upvalue_cap * 2 : 64;
+    struct sv_upvalue **entries = realloc(js->remembered_upvalues, new_cap * sizeof(*entries));
+    if (!entries) { js->gc_remember_overflow = true; return; }
+    js->remembered_upvalues = entries;
+    js->remembered_upvalue_cap = new_cap;
+  }
+
+  uv->in_remember_set = 1;
+  js->remembered_upvalues[js->remembered_upvalue_len++] = uv;
+}
+
+static void gc_mark_remembered_upvalues(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_upvalue_len; i++)
+    gc_mark_value(js, js->remembered_upvalues[i]->closed);
+}
+
+static void gc_clear_remembered_upvalues(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_upvalue_len; i++)
+    js->remembered_upvalues[i]->in_remember_set = 0;
+  js->remembered_upvalue_len = 0;
+
+  if (js->remembered_upvalue_cap > 512) {
+    struct sv_upvalue **entries = realloc(js->remembered_upvalues, 256 * sizeof(*entries));
+    if (entries) { js->remembered_upvalues = entries; js->remembered_upvalue_cap = 256; }
+  }
 }
 
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
@@ -608,7 +641,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_napi(js, gc_mark_value);
   gc_mark_rpc(js, gc_mark_value);
 
-  for (ant_object_t *obj = g_pending_promises; obj;) {
+  for (ant_object_t *obj = js->pending_promises; obj;) {
     ant_promise_state_t *pd = obj->promise_state;
     ant_object_t *next = pd ? pd->gc_pending_next : NULL;
     gc_grey_obj(js, obj);
@@ -640,7 +673,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->promise_state && obj->promise_state->gc_pending_rooted)
-    gc_unroot_pending_promise(obj);
+    gc_unroot_pending_promise(js, obj);
 
   if (obj->promise_state) {
     if (obj->promise_state->handlers)
@@ -767,6 +800,14 @@ static void gc_sweep(ant_t *js) {
 void gc_pin_existing_objects(ant_t *js) {
   if (!js) return;
 
+  ant_fixed_arena_t *ua = &js->upvalue_arena;
+  uint64_t stamp = gc_epoch ? gc_epoch : ~0ull;
+  
+  for (size_t off = 0; off < ua->watermark; off += ua->elem_size) {
+    sv_upvalue_t *uv = (sv_upvalue_t *)(ua->base + off);
+    if (uv->gc_epoch == 0) uv->gc_epoch = stamp;
+  }
+
   ant_object_t *tail = NULL;
   for (ant_object_t *obj = js->objects; obj; obj = obj->next) {
     obj->flags.gc_permanent = 1;
@@ -809,7 +850,9 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
   js->remember_set_len = 0;
+  
   gc_clear_remembered_func_consts(js);
+  gc_clear_remembered_upvalues(js);
 
   if (js->remember_set_cap > 512) {
     ant_object_t **ns = realloc(js->remember_set, 256 * sizeof(*ns));
@@ -908,6 +951,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
     gc_scan_obj(js, js->remember_set[i]);
   
   gc_mark_remembered_func_consts(js);
+  gc_mark_remembered_upvalues(js);
   
   for (size_t i = 0; i < js->remember_set_len; i++) 
     js->remember_set[i]->flags.in_remember_set = 0;
@@ -921,6 +965,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_sweep_young(js);
   gc_promote_survivors(js);
   gc_clear_remembered_func_consts(js);
+  gc_clear_remembered_upvalues(js);
   
   // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
   // property values on old objects are not scanned during minor GC (old objects

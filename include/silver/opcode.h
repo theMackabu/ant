@@ -187,10 +187,13 @@ OP_DEF(  HALT,              1,   0,   0, none)      /* stop execution */
 OP_DEF(  THROW,             1,   1,   0, none)
 OP_DEF(  THROW_ERROR,       6,   0,   0, atom_u8)   /* throw built-in error */
 OP_DEF(  TRY_PUSH,          5,   0,   0, label)     /* push catch handler */
+OP_DEF(  TRY_PUSH_FINALLY,  5,   0,   0, label)     /* push finally-protecting handler */
 OP_DEF(  TRY_POP,           1,   0,   0, none)      /* pop catch handler */
 OP_DEF(  CATCH,             5,   0,   1, label)     /* push caught value + finally addr */
 OP_DEF(  FINALLY,           5,   0,   0, label)     /* enter finally block */
 OP_DEF(  FINALLY_RET,       1,   1,   0, none)      /* return from finally */
+OP_DEF(  FINALLY_DISCARD,   1,   0,   0, none)      /* pop finally handler, drop completion */
+OP_DEF(  UNWIND_JMP,        7,   0,   0, label)     /* jump running n finally blocks */
 OP_DEF(  NIP_CATCH,         1,   2,   1, none)      /* catch ... a -> a */
 
 OP_DEF(  USING_PUSH,             1, 2, 1, none)   /* entries resource -> resource */
@@ -393,9 +396,11 @@ OP_FLAG(HALT                  , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(THROW                 , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(THROW_ERROR           , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(TRY_PUSH              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32)
+OP_FLAG(TRY_PUSH_FINALLY      , SV_OPF_JIT_BRANCH32)
 OP_FLAG(TRY_POP               , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(CATCH                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_BRANCH32)
 OP_FLAG(FINALLY               , SV_OPF_JIT_BRANCH32)
+OP_FLAG(UNWIND_JMP            , SV_OPF_JIT_BRANCH32)
 OP_FLAG(NIP_CATCH             , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(FOR_OF                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)

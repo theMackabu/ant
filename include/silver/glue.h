@@ -143,6 +143,11 @@ void jit_helper_take_open_upvalues_rebase(
   ant_value_t *src_slots, ant_value_t *dst_slots, int slot_count
 );
 
+void jit_helper_upval_barrier(
+  ant_t *js,
+  sv_upvalue_t *uv, ant_value_t val
+);
+
 void jit_helper_adopt_open_upvalues(
   sv_vm_t *vm,
   sv_upvalue_t **open_upvalues

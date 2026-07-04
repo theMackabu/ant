@@ -918,6 +918,24 @@ static void patch_list_resolve(sv_compiler_t *c, sv_patch_list_t *pl) {
   *pl = (sv_patch_list_t){0};
 }
 
+enum {
+  UNW_TRY_CATCH = 0,
+  UNW_TRY_FINALLY = 1,
+  UNW_FINALLY_BODY = 2,
+};
+
+static void unwind_push(sv_compiler_t *c, uint8_t kind) {
+  if (c->unwind_count >= c->unwind_cap) {
+    c->unwind_cap = c->unwind_cap ? c->unwind_cap * 2 : 8;
+    c->unwind_kinds = realloc(c->unwind_kinds, (size_t)c->unwind_cap);
+  }
+  c->unwind_kinds[c->unwind_count++] = kind;
+}
+
+static void unwind_pop(sv_compiler_t *c) {
+  if (c->unwind_count > 0) c->unwind_count--;
+}
+
 static void push_loop(
   sv_compiler_t *c, int loop_start,
   const char *label, uint32_t label_len,
@@ -936,6 +954,7 @@ static void push_loop(
   c->loops[c->loop_count++] = (sv_loop_t){
     .loop_start = loop_start,
     .scope_depth = c->scope_depth,
+    .unwind_depth = c->unwind_count,
     .label = label, .label_len = label_len,
     .is_switch = is_switch,
   };
@@ -1527,8 +1546,6 @@ static void mark_export_binding_as(
   int local = resolve_local(c, name, len);
   if (local == -1) return;
 
-  /* tail-append so binding meta already copied into nested compilers
-     (which share the list head) sees later aliases too */
   sv_export_name_t **slot = &c->locals[local].binding.exports;
   while (*slot) {
     if ((*slot)->len == export_name_len &&
@@ -1665,9 +1682,6 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     }
   }
 
-  /* second pass: export clauses and exported var decls can precede the
-     declarations they reference, so mark them once every hoisted local
-     exists (var locals were hoisted before this function ran) */
   for (int i = 0; i < stmts->count; i++) {
     sv_ast_t *node = stmts->items[i];
     if (!node || node->type != N_EXPORT) continue;
@@ -3973,8 +3987,11 @@ static void compile_block_with_using(sv_compiler_t *c, sv_ast_t *node) {
 
   c->try_depth++;
   int try_jump = emit_jump(c, OP_TRY_PUSH);
+  unwind_push(c, UNW_TRY_CATCH);
+  
   compile_stmts(c, &node->args);
   emit_op(c, OP_TRY_POP);
+  unwind_pop(c);
   c->try_depth--;
 
   emit_using_dispose_call(c, stack_local, -1, has_await_using, false);
@@ -4828,6 +4845,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     emit_op(c, is_for_await ? OP_FOR_AWAIT_OF : OP_FOR_OF);
     iter_err_local = add_local(c, "", 0, false, c->scope_depth);
     try_jump_for_of = emit_jump(c, OP_TRY_PUSH);
+    unwind_push(c, UNW_TRY_CATCH);
     c->try_depth++;
   } else {
     emit_op(c, OP_FOR_IN);  
@@ -4926,6 +4944,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   if (is_for_of) {
     emit_op(c, OP_POP);
     emit_op(c, OP_TRY_POP);
+    unwind_pop(c);
 
     int skip_break_cleanup = -1;
     if (break_close_slot >= 0)
@@ -4985,6 +5004,33 @@ for (int i = c->local_count - 1; i >= 0; i--) {
   }
 }}
 
+static void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
+  int n_pop = c->unwind_count - loop->unwind_depth;
+  int n_fin = 0;
+  for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--)
+    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) n_fin++;
+
+  if (n_pop <= 0) {
+    patch_list_add(pl, emit_jump(c, OP_JMP));
+    return;
+  }
+
+  if (n_fin == 0) {
+    for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--)
+      emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
+    patch_list_add(pl, emit_jump(c, OP_JMP));
+    return;
+  }
+
+  if (n_fin > 255) n_fin = 255;
+  if (n_pop > 255) n_pop = 255;
+  
+  int offset = emit_jump(c, OP_UNWIND_JMP);
+  emit(c, (uint8_t)n_fin);
+  emit(c, (uint8_t)n_pop);
+  patch_list_add(pl, offset);
+}
+
 void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   if (c->loop_count == 0) return;
 
@@ -4997,9 +5043,8 @@ void compile_break(sv_compiler_t *c, sv_ast_t *node) {
 
   emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
   emit_using_cleanups_to_depth(c, c->loops[target].scope_depth);
-  
-  int offset = emit_jump(c, OP_JMP);
-  patch_list_add(&c->loops[target].breaks, offset);
+
+  emit_loop_exit_jump(c, &c->loops[target], &c->loops[target].breaks);
 }
 
 
@@ -5012,20 +5057,22 @@ void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
     ) {
       emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
       emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-      patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
+      emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
       return;
     }
   } else if (!c->loops[i].is_switch) {
     emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
     emit_using_cleanups_to_depth(c, c->loops[i].scope_depth);
-    patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
+    emit_loop_exit_jump(c, &c->loops[i], &c->loops[i].continues);
     return;
   }
 }
 
 static void compile_finally_block(sv_compiler_t *c, sv_ast_t *finally_body) {
   int finally_jump = emit_jump(c, OP_FINALLY);
+  unwind_push(c, UNW_FINALLY_BODY);
   compile_stmt(c, finally_body);
+  unwind_pop(c);
   emit_op(c, OP_FINALLY_RET);
   patch_jump(c, finally_jump);
 }
@@ -5051,26 +5098,30 @@ void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   bool has_finally = (node->finally_body != NULL);
 
   c->try_depth++;
-  int try_jump = emit_jump(c, OP_TRY_PUSH);
+  int try_jump = emit_jump(c, has_finally ? OP_TRY_PUSH_FINALLY : OP_TRY_PUSH);
+  unwind_push(c, has_finally ? UNW_TRY_FINALLY : UNW_TRY_CATCH);
 
   if (has_catch && has_finally) {
     c->try_depth++;
     int inner_jump = emit_jump(c, OP_TRY_PUSH);
+    unwind_push(c, UNW_TRY_CATCH);
     compile_stmt(c, node->body);
-    
+
     emit_op(c, OP_TRY_POP);
+    unwind_pop(c);
     int inner_end = emit_jump(c, OP_JMP);
     patch_jump(c, inner_jump);
-    
+
     int catch_tag = emit_jump(c, OP_CATCH);
     compile_catch_body(c, node);
-    
+
     patch_jump(c, catch_tag);
     patch_jump(c, inner_end);
     c->try_depth--;
   } else compile_stmt(c, node->body);
 
   emit_op(c, OP_TRY_POP);
+  unwind_pop(c);
 
   if (!has_finally) {
     int end_jump = emit_jump(c, OP_JMP);
@@ -5987,6 +6038,7 @@ sv_func_t *compile_function_body(
 
     comp.try_depth++;
     body_using_try_jump = emit_jump(&comp, OP_TRY_PUSH);
+    unwind_push(&comp, UNW_TRY_CATCH);
   }
 
   bool completion_top = is_completion_top_level(&comp);
@@ -6014,6 +6066,7 @@ sv_func_t *compile_function_body(
 
   if (body_has_using) {
     emit_op(&comp, OP_TRY_POP);
+    unwind_pop(&comp);
     comp.try_depth--;
 
     emit_using_dispose_call(&comp, comp.using_stack_local, -1, body_has_await_using, false);

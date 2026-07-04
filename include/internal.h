@@ -227,6 +227,8 @@ struct ant_isolate_t {
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;
+  ant_object_t *pending_promises;
+  
   size_t old_live_count;
   size_t minor_gc_count;
 
@@ -238,9 +240,15 @@ struct ant_isolate_t {
     sv_func_t *func;
     uint32_t slot;
   } *remembered_func_consts;
-  
+
   size_t remembered_func_const_len;
   size_t remembered_func_const_cap;
+
+  size_t remembered_upvalue_len;
+  size_t remembered_upvalue_cap;
+  
+  struct sv_upvalue **remembered_upvalues;
+  bool gc_remember_overflow;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
@@ -434,10 +442,11 @@ ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
-ant_value_t js_create_arguments_object(ant_t *js, ant_value_t callee, sv_frame_t *frame, int argc, int mapped_count, bool is_strict);
+ant_value_t js_create_arguments_object(ant_t *js, sv_vm_t *vm, ant_value_t callee, sv_frame_t *frame, int argc, int mapped_count, bool is_strict);
 
 void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
+void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, sv_vm_t *vm, int frame_index);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);

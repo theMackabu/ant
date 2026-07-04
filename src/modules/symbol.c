@@ -173,9 +173,7 @@ static bool advance_string(ant_t *js, js_iter_t *it, ant_value_t *out) {
 }
 
 static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  js_iter_t it = { .iterator = js->this_val };
-  ant_value_t value;
-  return js_iter_result(js, advance_array(js, &it, &value), value);
+  return js_iter_next_result(js, advance_array);
 }
 
 static ant_value_t get_array_iterator_prototype(ant_t *js) {
@@ -199,9 +197,7 @@ ant_value_t make_array_iterator(ant_t *js, ant_value_t array, int kind) {
 }
 
 static ant_value_t str_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  js_iter_t it = { .iterator = js->this_val };
-  ant_value_t value;
-  return js_iter_result(js, advance_string(js, &it, &value), value);
+  return js_iter_next_result(js, advance_string);
 }
 
 static ant_value_t get_string_iterator_prototype(ant_t *js) {

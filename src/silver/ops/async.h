@@ -263,6 +263,8 @@ static inline sv_vm_t *sv_async_prepare_materialization(
       dst->bp = async_vm->stack + (src->bp - &source_vm->stack[stack_base]);
     if (src->lp)
       dst->lp = async_vm->stack + (src->lp - &source_vm->stack[stack_base]);
+    if (vtype(dst->arguments_obj) != T_UNDEF)
+      js_arguments_rebind_frame(js, dst->arguments_obj, async_vm, i);
   }
 
   if (handler_count > 0) {

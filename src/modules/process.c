@@ -2034,13 +2034,13 @@ void init_process_module() {
 
   stdin_state.decoder = js_mkundef();
   process_start_time = uv_hrtime();
-  ant_value_t process_proto = js_mkobj(js);
+  ant_value_t process_proto = js_newobj(js);
 
   process_set_methods(js, process_proto, true);
   js_set_sym(js, process_proto, get_toStringTag_sym(), js_mkstr(js, "process", 7));
 
   ant_value_t process_obj = js_mkobj(js);
-  ant_value_t env_obj = js_mkobj(js);
+  ant_value_t env_obj = js_newobj(js);
   
   js_set_proto_init(process_obj, process_proto);
   process_set_methods(js, process_obj, false);
@@ -2072,14 +2072,14 @@ void init_process_module() {
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
 
-  ant_value_t features_obj = js_mkobj(js);
+  ant_value_t features_obj = js_newobj(js);
   js_set(js, features_obj, "uv", js_true);
   process_set_string(js, features_obj, "tls", "BoringSSL");
   process_set_string(js, features_obj, "typescript", "transform");
   js_set(js, process_obj, "features", features_obj);
   process_set_string(js, process_obj, "version", "v25.9.0");
   
-  ant_value_t versions_obj = js_mkobj(js);
+  ant_value_t versions_obj = js_newobj(js);
   process_set_string(js, versions_obj, "ant", ANT_VERSION);
   process_set_string(js, versions_obj, "silver", ANT_VERSION);
   process_set_string(js, versions_obj, "skim", SKIM_VERSION);
@@ -2104,7 +2104,7 @@ void init_process_module() {
   process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
   js_set(js, process_obj, "versions", versions_obj);
   
-  ant_value_t release_obj = js_mkobj(js);
+  ant_value_t release_obj = js_newobj(js);
   js_set(js, release_obj, "name", js_mkstr(js, "ant", 3));
   js_set(js, process_obj, "release", release_obj);
   

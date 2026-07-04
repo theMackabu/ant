@@ -70,6 +70,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_to_propkey);
   LOAD_EXT(jit_helper_bailout_resume);
   LOAD_EXT(jit_helper_close_upval);
+  LOAD_EXT(jit_helper_upval_barrier);
   LOAD_EXT(jit_helper_adopt_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues);
   LOAD_EXT(jit_helper_take_open_upvalues_rebase);
@@ -522,6 +523,61 @@ static void mir_emit_close_marked_slots(
       MIR_new_int_op(ctx, slot_count),
       r_open_upvalues ? MIR_new_reg_op(ctx, r_open_upvalues) : MIR_new_uint_op(ctx, 0)));
   MIR_append_insn(ctx, fn, no_open);
+}
+
+static void mir_emit_upval_write_barrier(
+  MIR_context_t ctx, MIR_item_t jit_func,
+  MIR_item_t upval_barrier_proto, MIR_item_t imp_upval_barrier,
+  MIR_reg_t r_js, MIR_reg_t r_uv, MIR_reg_t r_loc, MIR_reg_t src, int un
+) {
+  MIR_label_t skip_barrier = MIR_new_label(ctx);
+  char rn_tmp[32];
+  snprintf(rn_tmp, sizeof(rn_tmp), "uvwb%d", un);
+  MIR_reg_t r_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_tmp);
+
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_ADD,
+      MIR_new_reg_op(ctx, r_tmp),
+      MIR_new_reg_op(ctx, r_uv),
+      MIR_new_int_op(ctx, (int64_t)offsetof(sv_upvalue_t, closed))));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, skip_barrier),
+      MIR_new_reg_op(ctx, r_loc),
+      MIR_new_reg_op(ctx, r_tmp)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_tmp),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(sv_upvalue_t, in_remember_set),
+        r_uv, 0, 1)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_BT,
+      MIR_new_label_op(ctx, skip_barrier),
+      MIR_new_reg_op(ctx, r_tmp)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, skip_barrier),
+      MIR_new_reg_op(ctx, src),
+      MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_tmp),
+      MIR_new_mem_op(ctx, MIR_T_I64,
+        (MIR_disp_t)offsetof(sv_upvalue_t, gc_epoch),
+        r_uv, 0, 1)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_BF,
+      MIR_new_label_op(ctx, skip_barrier),
+      MIR_new_reg_op(ctx, r_tmp)));
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_call_insn(ctx, 5,
+      MIR_new_ref_op(ctx, upval_barrier_proto),
+      MIR_new_ref_op(ctx, imp_upval_barrier),
+      MIR_new_reg_op(ctx, r_js),
+      MIR_new_reg_op(ctx, r_uv),
+      MIR_new_reg_op(ctx, src)));
+  MIR_append_insn(ctx, jit_func, skip_barrier);
 }
 
 static void mir_emit_exit_upvalue_cleanup(
@@ -2464,6 +2520,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I32, "n_locals",
     MIR_T_P,   "open_upvalues");
 
+  MIR_item_t upval_barrier_proto = MIR_new_proto(ctx, "upval_barrier_proto",
+    0, NULL, 3,
+    MIR_T_I64, "js",
+    MIR_T_P,   "uv",
+    MIR_T_I64, "val");
+
   MIR_item_t adopt_open_upvalues_proto = MIR_new_proto(ctx, "adopt_open_upvalues_proto",
     0, NULL, 2,
     MIR_T_I64, "vm",
@@ -2641,6 +2703,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_to_propkey = MIR_new_import(ctx, "jit_helper_to_propkey");
   MIR_item_t imp_resume     = MIR_new_import(ctx, "jit_helper_bailout_resume");
   MIR_item_t imp_close_upval = MIR_new_import(ctx, "jit_helper_close_upval");
+  MIR_item_t imp_upval_barrier = MIR_new_import(ctx, "jit_helper_upval_barrier");
   MIR_item_t imp_adopt_open_upvalues = MIR_new_import(ctx, "jit_helper_adopt_open_upvalues");
   MIR_item_t imp_take_open_upvalues = MIR_new_import(ctx, "jit_helper_take_open_upvalues");
   MIR_item_t imp_take_open_upvalues_rebase = MIR_new_import(ctx, "jit_helper_take_open_upvalues_rebase");
@@ -5396,6 +5459,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1),
             MIR_new_reg_op(ctx, src)));
+        mir_emit_upval_write_barrier(ctx, jit_func,
+          upval_barrier_proto, imp_upval_barrier,
+          r_js, r_uv, r_loc, src, un);
         break;
       }
 
@@ -5435,6 +5501,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1),
             MIR_new_reg_op(ctx, src)));
+        mir_emit_upval_write_barrier(ctx, jit_func,
+          upval_barrier_proto, imp_upval_barrier,
+          r_js, r_uv, r_loc, src, un);
         break;
       }
 

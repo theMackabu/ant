@@ -102,6 +102,20 @@ scheduled.
   - Proposed fix: Replace the placeholder async ID and resource behavior with real runtime-backed tracking, while keeping `AsyncLocalStorage` compatibility stable during the transition.
   - Status: backlog
 
+- Area: Native cfunc ABI / iterator `next()` trampolines
+  - Issue: The lightweight native-function ABI (`ant_cfunc_t`, registered via `js_mkfun` with a static `ant_cfunc_meta_t`) has no per-registration data channel — no userdata pointer and no QuickJS-style `magic` int. Any family of native callbacks that share logic but differ by one parameter therefore needs a named trampoline per variant. Current example: the six `*_iter_next` wrappers (array, string, map, set, typed array, headers) that each just call `js_iter_next_result(js, advance_*)`. That helper was introduced by PR #40 (issue #39) to fix unspecified-evaluation-order reads of an uninitialized `ant_value_t` in the old `js_iter_result(js, advance_*(js, &it, &value), value)` pattern, which GCC on Linux miscompiled (stale `value` read before the advance call) while Apple clang happened to evaluate in the safe order.
+  - Impact: Source-level boilerplate only. The trampolines are zero runtime cost: `js_iter_next_result` is `static inline` and the advance function is a compile-time constant at each call site, so calls are devirtualized and inlined, and each wrapper keeps a distinct symbol in profiles and stack traces. Alternatives considered and rejected: `js_heavy_mkfun_native()` binding the advance pointer to one generic callback (adds a slot load plus an indirect call on the hot iterator path, allocates a heavier function object, requires a function-pointer-through-`void *` cast, and collapses profiler frames); macro-generated wrappers (pure taste, less greppable).
+  - Proposed fix: Only if per-function registration data is wanted in several more places, add a QuickJS-style `magic` int to `ant_cfunc_meta_t` and pass it through to callbacks, letting one generic `iter_next` dispatch through a static advance table with no runtime pointer chasing. This is an engine-wide ABI change — every builtin signature, the call dispatcher, and the JIT native-call convention — so it must not be done just to delete the six iterator trampolines.
+  - Owner: theMackabu
+  - Status: backlog (deliberately deferred; revisit only alongside a broader cfunc ABI change)
+
+- Area: Generational GC / open upvalues into suspended coroutine stacks
+  - Issue: The closed-upvalue write barrier (`gc_upvalue_write_barrier`) covers closed cells only. An OPEN upvalue whose `location` was relocated into a materialized coroutine's heap-allocated VM stack (`sv_async_move_open_upvalues`) is not covered: if the owning generator/async object is promoted to old, minor GC scans neither the object (old objects are not traversed) nor the suspended VM stack (only `pending_coroutines` and mco stacks are scanned), so a young value written through such a cell between suspension and resumption is invisible to minor GC and can be freed while reachable.
+  - Impact: Use-after-free requiring a specific interleaving: closure escapes a generator, generator suspends and is promoted, escaped closure writes a fresh heap value through the still-open relocated cell, minor GC runs before resumption. Pre-existing (predates the closed-cell barrier); no known in-the-wild repro.
+  - Proposed fix: A per-isolate registry of live materialized VMs (`sv_vm_create(SV_VM_ASYNC)` / `sv_vm_destroy`), with minor GC scanning suspended VM stacks the way it scans `pending_coroutines`. Barrier-side alternatives are unsafe: remembering open cells and marking `*location` reads freed memory if the target VM is destroyed before the next GC (`sv_vm_destroy` does not close upvalues pointing into its stack).
+  - Owner: theMackabu
+  - Status: backlog
+
 - Area: `src/streams/readable.c`
   - Issue: `ReadableStreamBYOBReader` is still explicitly unimplemented, and byte-source support is still called out as incomplete.
   - Impact: Web Streams byte-oriented consumers cannot rely on BYOB reader semantics, leaving an important platform feature gap for stream-heavy or browser-compatible code.

@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
     .root_module = b.createModule(.{
       .root_source_file = b.path("root.zig"),
       .target = resolved_target,
-      .optimize = .ReleaseFast,
+      .optimize = .ReleaseSmall,
       .link_libc = true,
       .link_libcpp = true,
       .omit_frame_pointer = true,
