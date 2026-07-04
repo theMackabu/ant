@@ -389,9 +389,7 @@ bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out) {
 }
 
 static ant_value_t map_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  js_iter_t it = { .iterator = js->this_val };
-  ant_value_t value;
-  return js_iter_result(js, advance_map(js, &it, &value), value);
+  return js_iter_next_result(js, advance_map);
 }
 
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
@@ -444,9 +442,7 @@ bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out) {
 }
 
 static ant_value_t set_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  js_iter_t it = { .iterator = js->this_val };
-  ant_value_t value;
-  return js_iter_result(js, advance_set(js, &it, &value), value);
+  return js_iter_next_result(js, advance_set);
 }
 
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {

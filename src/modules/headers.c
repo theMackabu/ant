@@ -370,9 +370,7 @@ bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
 }
 
 static ant_value_t headers_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  js_iter_t it = { .iterator = js->this_val };
-  ant_value_t value;
-  return js_iter_result(js, advance_headers(js, &it, &value), value);
+  return js_iter_next_result(js, advance_headers);
 }
 
 static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kind) {
