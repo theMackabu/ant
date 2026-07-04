@@ -74,4 +74,11 @@ static inline ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t 
   return result;
 }
 
+static inline ant_value_t js_iter_next_result(ant_t *js, js_iter_advance_fn advance) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value = js_mkundef();
+  bool has_value = advance(js, &it, &value);
+  return js_iter_result(js, has_value, value);
+}
+
 #endif
