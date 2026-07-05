@@ -1887,7 +1887,7 @@ static int cmd_trust(const char **pkgs, int count, bool all) {
       C_GREEN, to_run_count, C_RESET,
       to_run_count == 1 ? "" : "s");
 
-    if (!pkg_verbose) progress_start(&progress, "Building");
+    if (!pkg_verbose) progress_start(&progress, "⚙️  Building");
     pkg_error_t run_err = pkg_run_postinstall(ctx, "node_modules", to_run, to_run_count);
     
     if (!pkg_verbose) progress_stop(&progress);

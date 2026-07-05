@@ -158,7 +158,7 @@ wamr_sources += files(
 )
 
 if wamr_platform == 'darwin'
-  wamr_sources += files('core/iwasm/common/arch/invokeNative_general.c')
+  wamr_sources += files('core/iwasm/common/arch/invokeNative_darwin.S')
 elif host_machine.cpu_family() == 'aarch64'
   wamr_sources += files(wamr_enable_simd ? 'core/iwasm/common/arch/invokeNative_aarch64_simd.s' : 'core/iwasm/common/arch/invokeNative_aarch64.s')
 elif host_machine.cpu_family() == 'x86_64'
