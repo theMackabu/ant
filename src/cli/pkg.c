@@ -1213,28 +1213,30 @@ static int cmd_install(void) {
   pkg_cli_config_t config = pkg_config_load();
   struct stat st;
   
-  bool needs_resolve = (stat("ant.lockb", &st) != 0);
+  bool has_lockfile = (stat("ant.lockb", &st) == 0);
+  bool has_package_json = (stat("package.json", &st) == 0);
+  bool needs_resolve = has_package_json;
+  
   pkg_source_t install_source = config.default_registry;
   bool used_parallel_fallback = false;
 
-  if (needs_resolve) {
-    if (stat("package.json", &st) != 0) {
-      if (!pkg_verbose) { progress_stop(&progress);  }
-      fprintf(stderr, "Error: No package.json found\n");
-      return EXIT_FAILURE;
-    }
-
-    if (
-      choose_package_json_fallback_source("package.json", config, &install_source, &used_parallel_fallback) && 
-      used_parallel_fallback && pkg_verbose
-    ) fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n", C_YELLOW, C_RESET);
+  if (!has_package_json && !has_lockfile) {
+    if (!pkg_verbose) { progress_stop(&progress);  }
+    fprintf(stderr, "Error: No package.json found\n");
+    return EXIT_FAILURE;
   }
+
+  if (needs_resolve) if (
+    choose_package_json_fallback_source("package.json", config, &install_source, &used_parallel_fallback) && 
+    used_parallel_fallback && pkg_verbose
+  ) fprintf(stderr, "%sWarning:%s package was not found on ants.land; using npm because install.missingPackageFallback=npm\n", C_YELLOW, C_RESET);
 
   pkg_options_t opts = pkg_options_make(
     install_source,
     pkg_verbose ? NULL : progress_callback,
     pkg_verbose ? NULL : &progress
   );
+  
   char install_cache_dir[4096];
   pkg_options_apply_local_store(&opts, config, install_cache_dir, sizeof(install_cache_dir));
   
@@ -1885,8 +1887,9 @@ static int cmd_trust(const char **pkgs, int count, bool all) {
       C_GREEN, to_run_count, C_RESET,
       to_run_count == 1 ? "" : "s");
 
-    if (!pkg_verbose) progress_start(&progress, "⚙️  Building");
+    if (!pkg_verbose) progress_start(&progress, "Building");
     pkg_error_t run_err = pkg_run_postinstall(ctx, "node_modules", to_run, to_run_count);
+    
     if (!pkg_verbose) progress_stop(&progress);
     if (run_err != PKG_OK) {
       print_pkg_error(ctx);
