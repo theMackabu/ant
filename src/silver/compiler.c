@@ -5610,6 +5610,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (ctor_method && ctor_method->right) {
+    if (node->left) ctor_method->right->flags |= FN_DERIVED_CTOR;
     c->field_inits = field_inits;
     c->field_init_count = field_count;
     c->computed_key_locals = computed_key_locals;
@@ -5640,6 +5641,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
     sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
     memset(fn, 0, sizeof(sv_func_t));
+    fn->is_derived_ctor = node->left != NULL;
     fn->code = code_arena_bump((size_t)comp.code_len);
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
     fn->code_len = comp.code_len;
@@ -6166,6 +6168,7 @@ sv_func_t *compile_function_body(
   func->has_await = false;
   func->is_generator = !!(node->flags & FN_GENERATOR);
   func->is_method = !!(node->flags & FN_METHOD);
+  func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_static = !!(node->flags & FN_STATIC);
   func->is_tla = comp.is_tla;
   func->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;

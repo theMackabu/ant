@@ -1315,6 +1315,9 @@ static bool *scan_captured_params(sv_func_t *func) {
 static bool jit_inlineable(sv_func_t *f) {
   if (!f) return false;
   if (f->is_async || f->is_generator) return false;
+  // derived ctors need the super-rebound `this` returned from RETURN/
+  // RETURN_UNDEF (see the main emission); the inline path doesn't model it
+  if (f->is_derived_ctor) return false;
   if (f->code_len > JIT_INLINE_MAX_BYTECODE) return false;
 
   uint8_t *ip  = f->code;
@@ -5580,6 +5583,48 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           mir_emit_close_marked_slots(ctx, jit_func,
             close_upval_proto, imp_close_upval,
             r_vm, r_lbuf, r_jit_open_upvalues, captured_locals, 0, n_locals);
+        if (func->is_derived_ctor) {
+          MIR_label_t dctor_replace = MIR_new_label(ctx);
+          MIR_label_t dctor_keep = MIR_new_label(ctx);
+          char rn_dt[32];
+          snprintf(rn_dt, sizeof(rn_dt), "dctor%d", upval_n++);
+          MIR_reg_t r_dt = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_dt);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_UBLE,
+              MIR_new_label_op(ctx, dctor_replace),
+              MIR_new_reg_op(ctx, ret_val),
+              MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_URSH,
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_reg_op(ctx, ret_val),
+              MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_AND,
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_int_op(ctx, NANBOX_TYPE_MASK)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_LSH,
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_int_op(ctx, 1),
+              MIR_new_reg_op(ctx, r_dt)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_AND,
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_reg_op(ctx, r_dt),
+              MIR_new_int_op(ctx, (int64_t)T_OBJECT_MASK)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BT,
+              MIR_new_label_op(ctx, dctor_keep),
+              MIR_new_reg_op(ctx, r_dt)));
+          MIR_append_insn(ctx, jit_func, dctor_replace);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, ret_val),
+              MIR_new_reg_op(ctx, r_this_curr)));
+          MIR_append_insn(ctx, jit_func, dctor_keep);
+        }
         MIR_append_insn(ctx, jit_func,
           MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, ret_val)));
         break;
@@ -5594,6 +5639,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           mir_emit_close_marked_slots(ctx, jit_func,
             close_upval_proto, imp_close_upval,
             r_vm, r_lbuf, r_jit_open_upvalues, captured_locals, 0, n_locals);
+        if (func->is_derived_ctor) {
+          // implicit ctor return: hand the (possibly super-rebound) this
+          // back to the caller, which has no other channel to receive it
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_this_curr)));
+          break;
+        }
         MIR_append_insn(ctx, jit_func,
           MIR_new_ret_insn(ctx, 1,
             MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));

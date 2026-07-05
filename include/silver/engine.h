@@ -221,14 +221,15 @@ struct sv_func {
   uint16_t param_count;
   uint16_t function_length;
 
-  bool is_strict;
-  bool is_arrow;
-  bool is_async;
-  bool has_await;
-  bool is_generator;
-  bool is_method;
-  bool is_static;
-  bool is_tla;
+  bool is_strict: 1;
+  bool is_arrow: 1;
+  bool is_async: 1;
+  bool has_await: 1;
+  bool is_generator: 1;
+  bool is_method: 1;
+  bool is_static: 1;
+  bool is_tla: 1;
+  bool is_derived_ctor: 1;
 
 #ifdef ANT_JIT
   uint32_t call_count;

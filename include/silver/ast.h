@@ -106,6 +106,7 @@ enum {
   FN_USES_NEW_TARGET  = 1 << 14,
   FN_CLASS_BODY       = 1 << 15,
   FN_MODULE_SYNTAX    = 1 << 16,
+  FN_DERIVED_CTOR     = 1 << 17,
 };
 
 enum {
