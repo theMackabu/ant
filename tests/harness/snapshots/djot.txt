@@ -1,0 +1,31 @@
+{
+  tag: 'doc',
+  references: {},
+  autoReferences: {},
+  footnotes: {},
+  children: [
+    {
+      tag: 'para',
+      children: [
+        { tag: 'str', text: 'hi ', pos: undefined },
+        {
+          tag: 'emph',
+          children: [
+            { tag: 'str', text: 'there', pos: undefined }
+          ],
+          pos: undefined
+        }
+      ],
+      attributes: undefined,
+      pos: undefined
+    }
+  ]
+}
+doc
+  para
+    str text="hi "
+    emph
+      str text="there"
+
+<p>hi <em>there</em></p>
+

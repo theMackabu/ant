@@ -1,0 +1,6 @@
+"use strict";
+(() => {
+  // examples/npm/esbuild/app.jsx
+  var TestElement = /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", null, "I am a paragraph."), /* @__PURE__ */ React.createElement("p", null, "I am a paragraph too."), /* @__PURE__ */ React.createElement("span", null, "I am a id: ", "<nanoid>"));
+})();
+

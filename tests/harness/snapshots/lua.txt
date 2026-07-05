@@ -1,0 +1,3 @@
+✓ Can run basic Lua code
+✓ Can pass JS types to Lua correctly
+✓ allows awaiting JS promises

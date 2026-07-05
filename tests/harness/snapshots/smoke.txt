@@ -1,0 +1,40 @@
+┌───────────────────┬──────────────────────────────────────┐
+│ Zero dependencies │ output                               │
+├───────────────────┼──────────────────────────────────────┤
+│ uuid              │ <uuid> │
+│ zod               │ it works                             │
+│ ms('2 days')      │ 172800000                            │
+│ prettyBytes       │ 1.34 kB                              │
+│ slugify           │ Hello-World!                         │
+│ deepmerge         │ {"a":1,"b":2}                        │
+│ diff              │ ["ra"]                               │
+│ nanoid            │ <nanoid>                │
+│ marked            │ <h1>Hello</h1>                       │
+└───────────────────┴──────────────────────────────────────┘
+┌────────────────────────┬──────────────────────────────────────────────────┐
+│ Small dependency trees │ output                                           │
+├────────────────────────┼──────────────────────────────────────────────────┤
+│ semver.valid           │ 1.2.3                                            │
+│ semver.gt              │ true                                             │
+│ minimatch              │ true                                             │
+│ dotenv                 │ HOST=localhost PORT=3000                         │
+│ csv-parse              │ alice(30), bob(25)                               │
+│ marked                 │ <p><strong>bold</strong> and <em>italic</em></p> │
+└────────────────────────┴──────────────────────────────────────────────────┘
+name: test
+version: 1.0.0
+tags:
+  - runtime
+  - modules
+green bold red
+┌───────────────────┬──────────────────────────────────┐
+│ Real world tools  │ output                           │
+├───────────────────┼──────────────────────────────────┤
+│ date-fns format   │ 2026-02-27                       │
+│ date-fns addDays  │ 2026-03-09                       │
+│ date-fns distance │ 10 days                          │
+│ date-fns diffDays │ 10                               │
+│ ajv valid         │ true                             │
+│ ajv invalid       │ false — must be >= 0             │
+│ handlebars        │ Hello Alice, you have 5 messages │
+└───────────────────┴──────────────────────────────────┘

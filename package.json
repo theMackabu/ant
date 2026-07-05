@@ -4,7 +4,12 @@
   "scripts": {
     "publish": "./build/ant packages/installer/render-install.js",
     "spec": "./build/ant examples/spec/run.js",
-    "jit": "./build/ant examples/jit/run.js"
+    "jit": "./build/ant examples/jit/run.js",
+    "test": "./build/ant tests/harness/run.js",
+    "test:update": "./build/ant tests/harness/run.js --update",
+    "test:servers": "./build/ant tests/harness/run.js servers",
+    "test:network": "./build/ant tests/harness/run.js network",
+    "test:oha": "./build/ant tests/harness/run.js oha"
   },
   "dependencies": {},
   "devDependencies": {}
