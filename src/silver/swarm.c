@@ -7763,6 +7763,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_VOID: {
         MIR_reg_t rs = vstack_top(&vs);
         mir_load_imm(ctx, jit_func, rs, mkval(T_UNDEF, 0));
+        if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_BOXED;
         if (vs.has_const) { 
           vs.has_const[vs.sp - 1] = true; 
           vs.known_const[vs.sp - 1] = mkval(T_UNDEF, 0);
