@@ -1994,6 +1994,26 @@ static bool jit_emit_inline_body(
         break;
       }
 
+      case OP_JMP_NOT_NULLISH: {
+        MIR_reg_t cond = inl_vs[isp - 1];
+        int target = inl_bc_off + sz + sv_get_i32(ip + 1);
+        MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
+        if (!lbl) return false;
+        MIR_label_t done = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BEQ,
+            MIR_new_label_op(ctx, done),
+            MIR_new_reg_op(ctx, cond),
+            MIR_new_uint_op(ctx, mkval(T_NULL, 0))));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, lbl),
+            MIR_new_reg_op(ctx, cond),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
+        MIR_append_insn(ctx, jit_func, done);
+        break;
+      }
+
       case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
       case OP_JMP_TRUE: case OP_JMP_FALSE:
       case OP_JMP_TRUE8: case OP_JMP_FALSE8: {
@@ -4866,6 +4886,26 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t lbl = label_for_branch(ctx, &lm, target, vs.sp);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl)));
+        break;
+      }
+
+      case OP_JMP_NOT_NULLISH: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        MIR_reg_t cond = vstack_top(&vs);
+        int target = bc_off + sz + sv_get_i32(ip + 1);
+        MIR_label_t lbl = label_for_branch(ctx, &lm, target, vs.sp);
+        MIR_label_t done = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BEQ,
+            MIR_new_label_op(ctx, done),
+            MIR_new_reg_op(ctx, cond),
+            MIR_new_uint_op(ctx, mkval(T_NULL, 0))));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, lbl),
+            MIR_new_reg_op(ctx, cond),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
+        MIR_append_insn(ctx, jit_func, done);
         break;
       }
 
