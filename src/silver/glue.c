@@ -17,6 +17,7 @@
 #include "ops/upvalues.h"
 #include "ops/comparison.h"
 #include "ops/coercion.h"
+#include "ops/private.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
@@ -904,6 +905,19 @@ ant_value_t jit_helper_get_elem(
   if (sv_try_string_index_get(js, obj, key, &str_elem))
     return str_elem;
   return sv_getprop_by_key(js, obj, key);
+}
+
+ant_value_t jit_helper_get_private(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
+) {
+  return sv_private_get_value(vm, js, obj, token, false);
+}
+
+ant_value_t jit_helper_put_private(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t obj, ant_value_t val, ant_value_t token
+) {
+  return sv_private_put_value(vm, js, obj, val, token);
 }
 
 ant_value_t jit_helper_put_elem(

@@ -371,6 +371,11 @@ the current shell toolchain instead:
 ./meson/pgo/build.sh --force-no-nix
 ```
 
+On macOS, the devShell intentionally uses unwrapped Clang with the selected
+Apple SDK and supplies Nix's full `compiler-rt` only through linker flags. Do
+not replace it with wrapped Clang: that injects Nix libc++ headers and can mix
+SDK versions when `SDKROOT` points at Xcode Command Line Tools.
+
 Use the same toolchain to consume any profile generated this way.
 
 PGO can also be controlled explicitly with Meson:

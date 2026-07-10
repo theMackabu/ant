@@ -23,12 +23,14 @@ pkgs.mkShellNoCC ({
   packages = [
     toolchain.bintools
     toolchain.clang
+    toolchain.compilerRt
   ];
 
   CFLAGS = optArgs;
   CXXFLAGS = optArgs;
   NIX_CFLAGS_COMPILE = optArgs;
   NIX_ENFORCE_NO_NATIVE = "0";
+  LDFLAGS = "-resource-dir=${toolchain.compilerRt}";
 
   CC = "${toolchain.clang}/bin/clang";
   CXX = "${toolchain.clang}/bin/clang++";

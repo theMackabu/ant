@@ -89,6 +89,8 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_get_elem);
   LOAD_EXT(jit_helper_get_elem2);
   LOAD_EXT(jit_helper_put_elem);
+  LOAD_EXT(jit_helper_get_private);
+  LOAD_EXT(jit_helper_put_private);
   LOAD_EXT(jit_helper_put_global);
   LOAD_EXT(jit_helper_object);
   LOAD_EXT(jit_helper_array);
@@ -2417,6 +2419,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_JSVAL,  "l",
     MIR_JSVAL,  "r");
 
+  MIR_type_t private_put_ret = MIR_JSVAL;
+  MIR_item_t private_put_proto = MIR_new_proto(ctx, "private_put_proto",
+    1, &private_put_ret,
+    5,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_JSVAL, "obj",
+    MIR_JSVAL, "val",
+    MIR_JSVAL, "token");
+
   MIR_type_t call_ret = MIR_JSVAL;
   MIR_item_t call_proto = MIR_new_proto(ctx, "call_proto",
     1, &call_ret,
@@ -2813,6 +2825,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_put_field   = MIR_new_import(ctx, "jit_helper_put_field");
   MIR_item_t imp_get_elem    = MIR_new_import(ctx, "jit_helper_get_elem");
   MIR_item_t imp_put_elem    = MIR_new_import(ctx, "jit_helper_put_elem");
+  MIR_item_t imp_get_private = MIR_new_import(ctx, "jit_helper_get_private");
+  MIR_item_t imp_put_private = MIR_new_import(ctx, "jit_helper_put_private");
   MIR_item_t imp_put_global  = MIR_new_import(ctx, "jit_helper_put_global");
   MIR_item_t imp_object      = MIR_new_import(ctx, "jit_helper_object");
   MIR_item_t imp_array       = MIR_new_import(ctx, "jit_helper_array");
@@ -6750,6 +6764,87 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_label_op(ctx, h->catch_label)));
         } else {
           JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, r_err_tmp));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
+        break;
+      }
+
+      case OP_GET_PRIVATE: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        MIR_reg_t token = vstack_pop(&vs);
+        MIR_reg_t obj = vstack_pop(&vs);
+        MIR_reg_t dst = vstack_push(&vs);
+        mir_call_helper2(ctx, jit_func, dst,
+                         helper2_proto, imp_get_private,
+                         r_vm, r_js, obj, token);
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, dst)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, dst));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
+        break;
+      }
+
+      case OP_PUT_PRIVATE: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
+        MIR_reg_t token = vstack_pop(&vs);
+        MIR_reg_t val = vstack_pop(&vs);
+        MIR_reg_t obj = vstack_pop(&vs);
+        MIR_reg_t dst = vstack_push(&vs);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 8,
+            MIR_new_ref_op(ctx, private_put_proto),
+            MIR_new_ref_op(ctx, imp_put_private),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, obj),
+            MIR_new_reg_op(ctx, val),
+            MIR_new_reg_op(ctx, token)));
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, dst)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, dst));
         }
         MIR_append_insn(ctx, jit_func, no_err);
         break;

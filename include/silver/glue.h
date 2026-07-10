@@ -178,6 +178,15 @@ ant_value_t jit_helper_get_elem(
   ant_value_t obj, ant_value_t key, sv_func_t *func, int32_t bc_off
 );
 
+ant_value_t jit_helper_get_private(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t token
+);
+
+ant_value_t jit_helper_put_private(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t obj, ant_value_t val, ant_value_t token
+);
+
 ant_value_t jit_helper_put_elem(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t val

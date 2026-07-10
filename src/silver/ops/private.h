@@ -176,15 +176,12 @@ static inline ant_value_t sv_private_missing(ant_t *js) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot access private member on object whose class did not declare it");
 }
 
-static inline ant_value_t sv_op_get_private_impl(sv_vm_t *vm, ant_t *js, bool optional) {
-  ant_value_t token = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
-
+static inline ant_value_t sv_private_get_value(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t token, bool optional
+) {
   if (!is_object_type(obj)) {
-    if (optional && (vtype(obj) == T_UNDEF || vtype(obj) == T_NULL)) {
-      vm->stack[vm->sp++] = js_mkundef();
-      return js_mkundef();
-    }
+    if (optional && (vtype(obj) == T_UNDEF || vtype(obj) == T_NULL)) return js_mkundef();
     return sv_private_missing(js);
   }
 
@@ -192,21 +189,28 @@ static inline ant_value_t sv_op_get_private_impl(sv_vm_t *vm, ant_t *js, bool op
   if (!entry) return sv_private_missing(js);
 
   ant_value_t kind_val = sv_private_entry_get(entry, 1);
-  int kind = vtype(kind_val) == T_NUM 
-    ? (int)js_getnum(kind_val) 
+  int kind = vtype(kind_val) == T_NUM
+    ? (int)js_getnum(kind_val)
     : SV_PRIVATE_FIELD;
-  
+
   if (kind == SV_PRIVATE_ACCESSOR) {
     ant_value_t getter = sv_private_entry_get(entry, 3);
     if (vtype(getter) == T_UNDEF)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Private accessor has no getter");
-    ant_value_t result = sv_vm_call_explicit_this(vm, js, getter, obj, NULL, 0);
-    if (is_err(result)) return result;
-    vm->stack[vm->sp++] = result;
-    return js_mkundef();
+    return sv_vm_call_explicit_this(vm, js, getter, obj, NULL, 0);
   }
 
-  vm->stack[vm->sp++] = sv_private_entry_get(entry, 2);
+  return sv_private_entry_get(entry, 2);
+}
+
+static inline ant_value_t sv_op_get_private_impl(sv_vm_t *vm, ant_t *js, bool optional) {
+  ant_value_t token = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t result = sv_private_get_value(vm, js, obj, token, optional);
+
+  if (is_err(result)) return result;
+  vm->stack[vm->sp++] = result;
+
   return js_mkundef();
 }
 
@@ -218,22 +222,21 @@ static inline ant_value_t sv_op_get_private_opt(sv_vm_t *vm, ant_t *js) {
   return sv_op_get_private_impl(vm, js, true);
 }
 
-static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
-  ant_value_t token = vm->stack[--vm->sp];
-  ant_value_t val = vm->stack[--vm->sp];
-  ant_value_t obj = vm->stack[--vm->sp];
-
+static inline ant_value_t sv_private_put_value(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t val, ant_value_t token
+) {
   if (!is_object_type(obj)) return sv_private_missing(js);
   ant_private_entry_t *entry = sv_private_find_entry(obj, token);
   if (!entry) return sv_private_missing(js);
 
   ant_value_t kind_val = sv_private_entry_get(entry, 1);
   int kind = vtype(kind_val) == T_NUM ? (int)js_getnum(kind_val) : SV_PRIVATE_FIELD;
+
   if (kind == SV_PRIVATE_FIELD) {
     ant_value_t set = sv_private_entry_set(js, obj, entry, 2, val);
     if (is_err(set)) return set;
-    vm->stack[vm->sp++] = val;
-    return js_mkundef();
+    return val;
   }
 
   if (kind == SV_PRIVATE_ACCESSOR) {
@@ -243,11 +246,22 @@ static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
     ant_value_t args[1] = { val };
     ant_value_t result = sv_vm_call_explicit_this(vm, js, setter, obj, args, 1);
     if (is_err(result)) return result;
-    vm->stack[vm->sp++] = val;
-    return js_mkundef();
+    return val;
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to private method");
+}
+
+static inline ant_value_t sv_op_put_private(sv_vm_t *vm, ant_t *js) {
+  ant_value_t token = vm->stack[--vm->sp];
+  ant_value_t val = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t result = sv_private_put_value(vm, js, obj, val, token);
+
+  if (is_err(result)) return result;
+  vm->stack[vm->sp++] = result;
+
+  return js_mkundef();
 }
 
 static inline ant_value_t sv_op_def_private(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
