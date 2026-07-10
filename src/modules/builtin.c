@@ -260,7 +260,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
         overflow_bytes += (obj->prop_count - inobj_limit) * sizeof(ant_value_t);
       uint8_t extra_count = 0;
       ant_extra_slot_t *slots = ant_object_extra_slots(obj, &extra_count);
-      if (slots) extra_bytes += extra_count * sizeof(ant_extra_slot_t);
+      if (slots) extra_bytes += ant_object_extra_capacity(obj) * sizeof(ant_extra_slot_t);
       if (obj->promise_state) promise_bytes += sizeof(ant_promise_state_t);
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
       if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);

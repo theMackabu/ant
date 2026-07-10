@@ -86,6 +86,7 @@ typedef struct {
   uint8_t native_count;
   uint8_t native_cap;
   uint8_t extra_count;
+  uint8_t extra_cap;
   uint8_t flags;
 } ant_object_sidecar_t;
 
@@ -153,6 +154,7 @@ typedef struct ant_object {
   uint8_t type_tag;
   uint8_t inobj_limit;
   uint8_t extra_count;
+  uint8_t extra_cap;
   uint8_t overflow_cap;
 
   ant_object_flags_t flags;
@@ -179,6 +181,13 @@ static inline uint8_t ant_object_extra_count(const ant_object_t *obj) {
   uintptr_t raw = (uintptr_t)obj->extra_slots;
   if ((raw & ant_sidecar) == 0) return obj->extra_count;
   return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_count;
+}
+
+static inline uint8_t ant_object_extra_capacity(const ant_object_t *obj) {
+  if (!obj) return 0;
+  uintptr_t raw = (uintptr_t)obj->extra_slots;
+  if ((raw & ant_sidecar) == 0) return obj->extra_cap;
+  return ((ant_object_sidecar_t *)(raw & ~ant_sidecar))->extra_cap;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slots(const ant_object_t *obj, uint8_t *count) {
@@ -228,9 +237,11 @@ static inline ant_object_sidecar_t *ant_object_ensure_sidecar(ant_object_t *obj)
   
   sidecar->extra_slots = obj->extra_slots;
   sidecar->extra_count = obj->extra_count;
+  sidecar->extra_cap = obj->extra_cap;
   
   obj->extra_slots = (ant_extra_slot_t *)((uintptr_t)sidecar | ant_sidecar);
   obj->extra_count = 0;
+  obj->extra_cap = 0;
   
   return sidecar;
 }

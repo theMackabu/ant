@@ -695,6 +695,7 @@ ant_value_t headers_create_empty(ant_t *js) {
   if (!l) return js_mkerr(js, "out of memory");
   
   ant_value_t obj = js_mkobj(js);
+  js_reserve_slots(obj, 2);
   js_set_proto_init(obj, g_headers_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
   js_set_native(obj, l, HEADERS_NATIVE_TAG);
@@ -713,6 +714,22 @@ bool headers_copy_from(ant_t *js, ant_value_t dst, ant_value_t src) {
   for (hdr_entry_t *e = src_list->head; e; e = e->next)
     list_append_raw(dst_list, e->name, e->value);
   return true;
+}
+
+size_t headers_find_literal(ant_value_t hdrs, const char *lower_name, const char **first_value) {
+  hdr_list_t *l = get_list(hdrs);
+  size_t count = 0;
+
+  if (first_value) *first_value = NULL;
+  if (!l || !lower_name) return 0;
+
+  for (hdr_entry_t *e = l->head; e; e = e->next) {
+    if (strcmp(e->name, lower_name) != 0) continue;
+    if (count == 0 && first_value) *first_value = e->value;
+    count++;
+  }
+
+  return count;
 }
 
 void headers_set_immutable(ant_value_t hdrs, bool immutable) {
@@ -772,17 +789,15 @@ bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const ch
   return true;
 }
 
-ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
-  ant_value_t new_hdrs = 0;
+ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
   uint8_t ht = vtype(init);
 
-  new_hdrs = headers_create_empty(js);
-  if (is_err(new_hdrs)) return new_hdrs;
-  if (ht == T_UNDEF) return new_hdrs;
+  if (!get_list(hdrs)) return js_mkerr(js, "Invalid Headers object");
+  if (ht == T_UNDEF) return js_mkundef();
 
   if (headers_is_headers(init)) {
-    headers_copy_from(js, new_hdrs, init);
-    return new_hdrs;
+    headers_copy_from(js, hdrs, init);
+    return js_mkundef();
   }
 
   if (ht == T_ARR) {
@@ -791,10 +806,10 @@ ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
       ant_value_t pair = js_arr_get(js, init, i);
       ant_value_t r = 0;
       if (js_arr_len(js, pair) < 2) continue;
-      r = headers_append_value(js, new_hdrs, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
+      r = headers_append_value(js, hdrs, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
       if (is_err(r)) return r;
     }
-    return new_hdrs;
+    return js_mkundef();
   }
 
   if (ht == T_OBJ) {
@@ -804,7 +819,7 @@ ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
     ant_value_t val = 0;
 
     while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-      ant_value_t r = headers_append_value(js, new_hdrs, js_mkstr(js, key, key_len), val);
+      ant_value_t r = headers_append_value(js, hdrs, js_mkstr(js, key, key_len), val);
       if (is_err(r)) {
         js_prop_iter_end(&it);
         return r;
@@ -814,6 +829,16 @@ ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
     js_prop_iter_end(&it);
   }
 
+  return js_mkundef();
+}
+
+ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
+  ant_value_t new_hdrs = headers_create_empty(js);
+  ant_value_t step = 0;
+
+  if (is_err(new_hdrs)) return new_hdrs;
+  step = headers_init_from(js, new_hdrs, init);
+  if (is_err(step)) return step;
   return new_hdrs;
 }
 

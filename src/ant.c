@@ -248,6 +248,26 @@ static ant_value_t obj_extra_get(ant_object_t *obj, internal_slot_t slot) {
   return entry ? entry->value : js_mkundef();
 }
 
+static bool obj_extra_reserve(ant_object_t *obj, uint8_t capacity) {
+  if (!obj) return false;
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  uint8_t current_capacity = sidecar ? sidecar->extra_cap : obj->extra_cap;
+  ant_extra_slot_t *entries = ant_object_extra_slots_ptr(obj);
+
+  if (capacity <= current_capacity) return true;
+  ant_extra_slot_t *next = realloc(entries, sizeof(*next) * capacity);
+  if (!next) return false;
+
+  if (sidecar) {
+    sidecar->extra_slots = next;
+    sidecar->extra_cap = capacity;
+  } else {
+    obj->extra_slots = next;
+    obj->extra_cap = capacity;
+  }
+  return true;
+}
+
 static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t value) {
   if (!obj) return false;
   
@@ -258,25 +278,23 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
   }
   
   uint8_t count = 0;
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
   ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
+  uint8_t capacity = sidecar ? sidecar->extra_cap : obj->extra_cap;
   
   if (count == UINT8_MAX) return false;
   uint8_t next_count = (uint8_t)(count + 1);
-  
-  ant_extra_slot_t *next = realloc(entries, sizeof(*next) * next_count);
-  if (!next) return false;
 
-  next[count].slot = (uint8_t)slot;
-  next[count].value = value;
-  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
-  
-  if (sidecar) {
-    sidecar->extra_slots = next;
-    sidecar->extra_count = next_count;
-  } else {
-    obj->extra_slots = next;
-    obj->extra_count = next_count;
+  if (next_count > capacity) {
+    if (!obj_extra_reserve(obj, next_count)) return false;
+    entries = ant_object_extra_slots_ptr(obj);
   }
+
+  entries[count].slot = (uint8_t)slot;
+  entries[count].value = value;
+  
+  if (sidecar) sidecar->extra_count = next_count;
+  else obj->extra_count = next_count;
   
   return true;
 }
@@ -446,6 +464,7 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->promise_state = NULL;
   obj->extra_slots = NULL;
   obj->extra_count = 0;
+  obj->extra_cap = 0;
   
   obj->finalizer = NULL;
   obj->native.ptr = NULL;
@@ -3348,6 +3367,10 @@ void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value) {
 
 void js_set_slot_wb(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value) {
   set_slot_wb(js, js_as_obj(obj), slot, value);
+}
+
+bool js_reserve_slots(ant_value_t obj, uint8_t capacity) {
+  return obj_extra_reserve(js_obj_ptr(js_as_obj(obj)), capacity);
 }
 
 static ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
