@@ -10,6 +10,7 @@
 #include "../../archive/archive.h"
 #include "../../runtime/ant_runtime.h"
 #include "../platform.h"
+#include "cef_runtime.h"
 #include "event_loop.h"
 
 static NSString *BundledEntryPath(NSString **temporary_root) {
@@ -58,10 +59,8 @@ static dispatch_source_t InstallDevelopmentReloadSignal(void) {
   signal(SIGUSR1, SIG_IGN);
   dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
   dispatch_source_set_event_handler(source, ^{
-    ant_desktop_control_message_t message = {0};
-    message.type = ANT_DESKTOP_CONTROL_RELOAD;
     for (ant_desktop_window_state_t *window = ant_desktop_window_first(); window; window = window->next) {
-      ant_desktop_platform_send_control(window, &message);
+      ant_desktop_platform_reload(window);
     }
   });
   dispatch_resume(source);
@@ -97,13 +96,19 @@ int main(int argc, char **argv) {
       runtime_argv = owned_runtime_argv;
     }
 
-    [NSApplication sharedApplication];
+    if (!ant_desktop_cef_initialize(argc, argv)) {
+      fputs("failed to initialize embedded Chromium\n", stderr);
+      free(owned_runtime_argv);
+      RemoveTemporaryApplication(temporary_root);
+      return 1;
+    }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
     volatile char stack_base;
     ant_t *js = js_create_dynamic();
     if (!js) {
       fputs("failed to create Ant runtime\n", stderr);
+      ant_desktop_cef_shutdown();
       free(owned_runtime_argv);
       RemoveTemporaryApplication(temporary_root);
       return 1;
@@ -114,6 +119,7 @@ int main(int argc, char **argv) {
     if (is_err(initialized)) {
       fprintf(stderr, "desktop runtime initialization failed: %s\n", RuntimeErrorDetail(js, initialized));
       js_destroy(js);
+      ant_desktop_cef_shutdown();
       free(owned_runtime_argv);
       RemoveTemporaryApplication(temporary_root);
       return 1;
@@ -127,6 +133,7 @@ int main(int argc, char **argv) {
     if (is_err(imported)) {
       fprintf(stderr, "desktop entry import failed (%s): %s\n", entry_path, RuntimeErrorDetail(js, imported));
       js_destroy(js);
+      ant_desktop_cef_shutdown();
       free(owned_runtime_argv);
       RemoveTemporaryApplication(temporary_root);
       return 1;
@@ -149,6 +156,7 @@ int main(int argc, char **argv) {
 
     [NSNotificationCenter.defaultCenter removeObserver:termination_observer];
     ant_desktop_platform_shutdown_all_windows();
+    ant_desktop_cef_shutdown();
     development_reload = nil;
     pump = nil;
     js_destroy(js);

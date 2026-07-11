@@ -2,29 +2,25 @@
 
 #include "../platform/platform.h"
 
-static ant_value_t DesktopWebContentsControl(ant_t *js, ant_desktop_control_type_t type) {
+typedef bool (*WebContentsAction)(ant_desktop_window_state_t *window);
+
+static ant_value_t DesktopWebContentsAction(ant_t *js, WebContentsAction action) {
   ant_desktop_window_state_t *window = ant_desktop_window_from_value(js, js_getthis(js));
-
   if (!window) return js_mkerr(js, "invalid WebContents receiver");
-  ant_desktop_control_message_t message = {0};
-  message.type = type;
-
-  if (!ant_desktop_platform_send_control(window, &message))
-    return js_mkerr(js, "Chromium is not running for this BrowserWindow");
-
+  if (!action(window)) return js_mkerr(js, "Chromium is not running for this BrowserWindow");
   return js_mkundef();
 }
 
 ant_value_t DesktopWebContentsOpenDevTools(ant_t *js, ant_value_t *args, int nargs) {
-  return DesktopWebContentsControl(js, ANT_DESKTOP_CONTROL_OPEN_DEVTOOLS);
+  return DesktopWebContentsAction(js, ant_desktop_platform_open_devtools);
 }
 
 ant_value_t DesktopWebContentsCloseDevTools(ant_t *js, ant_value_t *args, int nargs) {
-  return DesktopWebContentsControl(js, ANT_DESKTOP_CONTROL_CLOSE_DEVTOOLS);
+  return DesktopWebContentsAction(js, ant_desktop_platform_close_devtools);
 }
 
 ant_value_t DesktopWebContentsToggleDevTools(ant_t *js, ant_value_t *args, int nargs) {
-  return DesktopWebContentsControl(js, ANT_DESKTOP_CONTROL_TOGGLE_DEVTOOLS);
+  return DesktopWebContentsAction(js, ant_desktop_platform_toggle_devtools);
 }
 
 ant_value_t DesktopWebContentsInspectElement(ant_t *js, ant_value_t *args, int nargs) {
@@ -33,12 +29,7 @@ ant_value_t DesktopWebContentsInspectElement(ant_t *js, ant_value_t *args, int n
   if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM)
     return js_mkerr(js, "inspectElement(x, y) requires coordinates");
 
-  ant_desktop_control_message_t message = {0};
-  message.type = ANT_DESKTOP_CONTROL_INSPECT_ELEMENT;
-  message.x = js_getnum(args[0]);
-  message.y = js_getnum(args[1]);
-
-  if (!ant_desktop_platform_send_control(window, &message))
+  if (!ant_desktop_platform_inspect(window, (int)js_getnum(args[0]), (int)js_getnum(args[1])))
     return js_mkerr(js, "Chromium is not running for this BrowserWindow");
 
   return js_mkundef();
@@ -51,7 +42,7 @@ ant_value_t DesktopWebContentsIsDevToolsOpened(ant_t *js, ant_value_t *args, int
 }
 
 ant_value_t DesktopWebContentsReload(ant_t *js, ant_value_t *args, int nargs) {
-  return DesktopWebContentsControl(js, ANT_DESKTOP_CONTROL_RELOAD);
+  return DesktopWebContentsAction(js, ant_desktop_platform_reload);
 }
 
 ant_value_t DesktopWebContentsSend(ant_t *js, ant_value_t *args, int nargs) {
@@ -76,8 +67,8 @@ ant_value_t DesktopWebContentsSend(ant_t *js, ant_value_t *args, int nargs) {
   size_t payload_length = 0;
   const char *payload = js_getstr(js, encoded, &payload_length);
 
-  if (!SendIpcControl(window, ANT_DESKTOP_CONTROL_IPC_EVENT, 0, channel, channel_length, payload, payload_length))
-    return js_mkerr(js, "IPC event is too large or Chromium is not running");
+  if (!ant_desktop_platform_send_ipc(window, 2, 0, channel, channel_length, payload, payload_length))
+    return js_mkerr(js, "Chromium is not running for this BrowserWindow");
 
   return js_mkundef();
 }

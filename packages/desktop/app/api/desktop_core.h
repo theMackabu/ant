@@ -4,7 +4,6 @@
 #include <ant.h>
 #include <ptr.h>
 
-#include "../../ipc/control.h"
 #include "../core/window_state.h"
 
 enum { ANT_DESKTOP_STATE_TAG = 0x41445354u }; // ADST
@@ -65,8 +64,5 @@ ant_value_t DesktopMenuBuildFromTemplate(ant_t *, ant_value_t *, int);
 ant_value_t DesktopGetApplicationMenu(ant_t *, ant_value_t *, int);
 ant_value_t DesktopSetApplicationMenu(ant_t *, ant_value_t *, int);
 ant_value_t DesktopMenuItemCtor(ant_t *, ant_value_t *, int);
-
-bool SendIpcControl(ant_desktop_window_state_t *window, ant_desktop_control_type_t type, uint64_t request_id,
-                    const char *channel, size_t channel_length, const char *payload, size_t payload_length);
 
 #endif

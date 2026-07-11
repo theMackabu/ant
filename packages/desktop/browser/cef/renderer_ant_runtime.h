@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 bool ant_renderer_runtime_initialize(void);
+void ant_renderer_runtime_set_stack_base(void *stack_base);
 char *ant_renderer_runtime_describe(const char *specifier);
 char *ant_renderer_runtime_call(const char *specifier, const char *name, const char *arguments_json);
 void ant_renderer_runtime_free(char *value);

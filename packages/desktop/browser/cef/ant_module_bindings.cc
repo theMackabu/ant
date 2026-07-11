@@ -122,7 +122,7 @@ public:
     }
     CefRefPtr<CefDictionaryValue> dictionary = response->GetDictionary();
     if (!dictionary->GetBool("ok")) {
-      exception = ErrorMessage(dictionary->GetValue("error"));
+      exception = specifier_ + "." + name_ + ": " + ErrorMessage(dictionary->GetValue("error"));
       return true;
     }
     retval = dictionary->HasKey("value") ? ValueToV8(dictionary->GetValue("value"), 0) : CefV8Value::CreateUndefined();

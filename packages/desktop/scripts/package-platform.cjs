@@ -18,18 +18,23 @@ function sha256(filename) {
 
 function packagePlatform() {
   const executable = path.join(desktopRoot, 'build', 'ant-desktop');
-  const host = path.join(desktopRoot, 'runtime', 'Ant Chromium Host.app', 'Contents', 'MacOS', 'Ant Chromium Host');
+  const app = path.join(desktopRoot, 'runtime', 'Ant Desktop.app');
+  const bundledExecutable = path.join(app, 'Contents', 'MacOS', 'Ant Desktop');
+  const framework = path.join(app, 'Contents', 'Frameworks', 'Chromium Embedded Framework.framework');
+  if (!fs.existsSync(framework)) {
+    execute(process.execPath, [path.join(__dirname, 'build-browser-host.cjs')]);
+  }
   if (!fs.existsSync(executable)) {
     execute(process.execPath, [path.join(__dirname, 'build-app.cjs')]);
-  }
-  if (!fs.existsSync(host)) {
-    execute(process.execPath, [path.join(__dirname, 'build-browser-host.cjs')]);
+  } else {
+    fs.copyFileSync(executable, bundledExecutable);
+    fs.chmodSync(bundledExecutable, 0o755);
   }
 
   const artifacts = path.join(packageRoot, 'artifacts');
   const archive = path.join(artifacts, 'ant-desktop-darwin-arm64.tar.gz');
   fs.mkdirSync(artifacts, { recursive: true });
-  execute('tar', ['-czf', archive, 'build/ant-desktop', 'runtime/Ant Chromium Host.app'], {
+  execute('tar', ['-czf', archive, 'runtime/Ant Desktop.app'], {
     cwd: desktopRoot,
     env: { ...process.env, COPYFILE_DISABLE: '1' }
   });

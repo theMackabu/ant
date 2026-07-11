@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Ant BrowserWindow test</title>
+<script>
+  (async () => {
+    const info = await Ant.ipc.invoke('app:get-runtime-info');
+    if (!info.rendererIsWindow) throw new Error('renderer window identity was lost');
+    Ant.ipc.on('theme:changed', () => {});
+    Ant.ipc.send('page:ready', { ready: true });
+  })();
+</script>

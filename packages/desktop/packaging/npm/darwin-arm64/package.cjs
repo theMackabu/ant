@@ -259,8 +259,6 @@ function packageApp(layout, entry, options = {}) {
   }
 
   buildRenderer(options.rendererBuildCommand, appRoot);
-  const hostBundle = path.resolve(layout.host, '../../..');
-  const hostFrameworks = path.join(hostBundle, 'Contents', 'Frameworks');
   const temporary = `${output}.tmp-${process.pid}-${Date.now()}`;
   const contents = path.join(temporary, 'Contents');
   const macos = path.join(contents, 'MacOS');
@@ -279,10 +277,8 @@ function packageApp(layout, entry, options = {}) {
     fs.mkdirSync(resources, { recursive: true });
     fs.copyFileSync(layout.executable, path.join(macos, executable));
     fs.chmodSync(path.join(macos, executable), 0o755);
-    fs.copyFileSync(layout.host, path.join(macos, 'Ant Chromium Host'));
-    fs.chmodSync(path.join(macos, 'Ant Chromium Host'), 0o755);
-    for (const entry of fs.readdirSync(hostFrameworks)) {
-      copyTree(path.join(hostFrameworks, entry), path.join(frameworks, entry), [], isEnglishFrameworkResource);
+    for (const entry of fs.readdirSync(layout.frameworks)) {
+      copyTree(path.join(layout.frameworks, entry), path.join(frameworks, entry), [], isEnglishFrameworkResource);
     }
     writeApplicationArchive(included, path.join(resources, archive), excluded);
     if (options.icon) fs.copyFileSync(path.resolve(options.icon), path.join(resources, icon));

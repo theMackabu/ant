@@ -60,7 +60,7 @@ const lifecycle = [];
 for (const event of ['loading', 'navigation-start', 'navigation-commit', 'ready', 'title']) {
   window.on(event, value => lifecycle.push(value.type));
 }
-await window.loadFile(new URL('../examples/renderer/index.html', import.meta.url).pathname);
+await window.loadFile(new URL('fixtures/browser-window-page.html', import.meta.url).pathname);
 await Promise.race([
   rendererReady,
   new Promise((_, reject) => setTimeout(

@@ -8,6 +8,11 @@
 #include "../../app/runtime/ant_runtime.h"
 
 static ant_t *renderer_runtime;
+static void *renderer_stack_base;
+
+void ant_renderer_runtime_set_stack_base(void *stack_base) {
+  renderer_stack_base = stack_base;
+}
 
 static char *CopyJson(ant_value_t value) {
   ant_value_t json = json_stringify_value(renderer_runtime, value);
@@ -22,6 +27,16 @@ static char *CopyJson(ant_value_t value) {
 }
 
 static ant_value_t Response(bool ok, ant_value_t value) {
+  if (!ok && is_err(value)) {
+    if (vdata(value) != 0) {
+      ant_value_t message = js_get(renderer_runtime, mkval(T_OBJ, vdata(value)), "message");
+      if (vtype(message) == T_STR) value = message;
+    }
+    if (is_err(value)) {
+      const char *text = js_str(renderer_runtime, value);
+      value = js_mkstr(renderer_runtime, text, strlen(text));
+    }
+  }
   ant_value_t response = js_mkobj(renderer_runtime);
   js_set(renderer_runtime, response, "ok", js_bool(ok));
   js_set(renderer_runtime, response, ok ? "value" : "error", value);
@@ -37,10 +52,14 @@ static ant_value_t ImportModule(const char *specifier) {
 
 bool ant_renderer_runtime_initialize(void) {
   if (renderer_runtime) return true;
-  volatile char stack_base;
   renderer_runtime = js_create_dynamic();
   if (!renderer_runtime) return false;
-  js_setstackbase(renderer_runtime, (void *)&stack_base);
+  if (!renderer_stack_base) {
+    js_destroy(renderer_runtime);
+    renderer_runtime = NULL;
+    return false;
+  }
+  js_setstackbase(renderer_runtime, renderer_stack_base);
   char *argv[] = {(char *)"ant-desktop-renderer"};
   ant_runtime_init(renderer_runtime, 1, argv, NULL);
   ant_value_t initialized = AntInitializeRuntimeModules(renderer_runtime);

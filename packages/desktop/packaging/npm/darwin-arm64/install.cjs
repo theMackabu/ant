@@ -9,8 +9,8 @@ const packageRoot = __dirname;
 const archive = path.join(packageRoot, 'artifacts', 'ant-desktop-darwin-arm64.tar.gz');
 const checksumFile = `${archive}.sha256`;
 const vendor = path.join(packageRoot, 'vendor');
-const executable = path.join(vendor, 'build', 'ant-desktop');
-const host = path.join(vendor, 'runtime', 'Ant Chromium Host.app', 'Contents', 'MacOS', 'Ant Chromium Host');
+const executable = path.join(vendor, 'runtime', 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop');
+const framework = path.join(vendor, 'runtime', 'Ant Desktop.app', 'Contents', 'Frameworks', 'Chromium Embedded Framework.framework');
 
 function digest(filename) {
   const hash = crypto.createHash('sha256');
@@ -19,7 +19,7 @@ function digest(filename) {
 }
 
 function install() {
-  if (fs.existsSync(executable) && fs.existsSync(host)) return;
+  if (fs.existsSync(executable) && fs.existsSync(framework)) return;
   if (!fs.existsSync(archive) || !fs.existsSync(checksumFile)) {
     throw new Error('Ant Desktop platform archive is missing from the npm package');
   }
@@ -38,7 +38,6 @@ function install() {
     throw new Error(`Could not unpack Ant Desktop platform archive (tar exited ${result.status})`);
   }
   fs.chmodSync(executable, 0o755);
-  fs.chmodSync(host, 0o755);
 }
 
 if (require.main === module) install();

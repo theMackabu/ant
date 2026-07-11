@@ -35,7 +35,7 @@ async function buildBrowserHost() {
   const cCompiler = process.env.CC || findExecutable('clang');
   const cxxCompiler = process.env.CXX || findExecutable('clang++');
   const build = path.join(desktopRoot, 'build', 'browser', 'cef');
-  const product = path.join(build, 'Release', 'Ant Chromium Host.app');
+  const product = path.join(build, 'Release', 'Ant Desktop.app');
   execute(
     'cmake',
     [
@@ -54,13 +54,13 @@ async function buildBrowserHost() {
     ],
     { cwd: desktopRoot }
   );
-  execute('cmake', ['--build', build, '--target', 'ant_chromium_host', '--config', 'Release', '--', '-quiet'], { cwd: desktopRoot });
+  execute('cmake', ['--build', build, '--target', 'ant_chromium_runtime_stage', '--config', 'Release', '--', '-quiet'], { cwd: desktopRoot });
 
   const runtime = path.join(desktopRoot, 'runtime');
   fs.rmSync(runtime, { recursive: true, force: true });
   fs.mkdirSync(runtime, { recursive: true });
-  execute('ditto', [product, path.join(runtime, 'Ant Chromium Host.app')]);
-  process.stdout.write(`Installed pinned Chromium host in ${runtime}\n`);
+  execute('ditto', [product, path.join(runtime, 'Ant Desktop.app')]);
+  process.stdout.write(`Installed embedded Chromium runtime in ${runtime}\n`);
   return runtime;
 }
 

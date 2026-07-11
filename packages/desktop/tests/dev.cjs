@@ -42,13 +42,8 @@ async function main() {
   const entry = path.join(appRoot, 'main.js');
   const executable = path.join(temporary, 'ant-desktop');
   const icon = path.join(temporary, 'app.icns');
-  const hostBundle = path.join(temporary, 'Ant Chromium Host.app');
-  const host = path.join(hostBundle, 'Contents', 'MacOS', 'Ant Chromium Host');
-  fs.mkdirSync(path.dirname(host), { recursive: true });
-  fs.mkdirSync(path.join(hostBundle, 'Contents', 'Frameworks'), {
-    recursive: true
-  });
-  const fakeFramework = path.join(hostBundle, 'Contents', 'Frameworks', 'Fake.framework');
+  const frameworks = path.join(temporary, 'Frameworks');
+  const fakeFramework = path.join(frameworks, 'Fake.framework');
   fs.mkdirSync(path.join(fakeFramework, 'Versions', 'A'), { recursive: true });
   fs.writeFileSync(path.join(fakeFramework, 'Versions', 'A', 'Fake'), 'framework');
   fs.symlinkSync('A', path.join(fakeFramework, 'Versions', 'Current'));
@@ -57,9 +52,8 @@ async function main() {
   fs.writeFileSync(entry, 'console.log("dev");\n');
   fs.writeFileSync(executable, 'native');
   fs.writeFileSync(icon, 'icon');
-  fs.writeFileSync(host, 'chromium');
 
-  const result = createDevApp({ executable, host }, entry, {
+  const result = createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'cache'),
     icon,
     name: 'Dev Example'
@@ -73,15 +67,15 @@ async function main() {
   assert.equal(fs.readFileSync(path.join(developmentFrameworks, 'Fake.framework', 'Fake'), 'utf8'), 'framework');
   const cacheSentinel = path.join(developmentFrameworks, 'cache-sentinel');
   fs.writeFileSync(cacheSentinel, 'preserved');
-  createDevApp({ executable, host }, entry, {
+  createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'cache'),
     icon,
     name: 'Dev Example'
   });
   assert.equal(fs.readFileSync(cacheSentinel, 'utf8'), 'preserved');
 
-  fs.appendFileSync(host, '-updated');
-  createDevApp({ executable, host }, entry, {
+  fs.writeFileSync(path.join(frameworks, 'runtime-version'), 'updated');
+  createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'cache'),
     icon,
     name: 'Dev Example'
@@ -100,14 +94,14 @@ async function main() {
       productName: 'Ignored Package Name'
     })
   );
-  const fallback = createDevApp({ executable, host }, entry, {
+  const fallback = createDevApp({ executable, frameworks }, entry, {
     cacheDir: path.join(temporary, 'fallback-cache')
   });
   assert.equal(fallback.name, 'source');
 
   const exitProgram = path.join(temporary, 'exit.cjs');
   fs.writeFileSync(exitProgram, 'process.exit(0);\n');
-  const supervisor = await dev({ executable: process.execPath, host }, entry, {
+  const supervisor = await dev({ executable: process.execPath, frameworks }, entry, {
     args: [exitProgram],
     cacheDir: path.join(temporary, 'supervisor-cache'),
     name: 'Dev Example',
@@ -146,7 +140,7 @@ async function main() {
     process.exit(process.env.ANT_DESKTOP_RENDERER_URL === process.argv[2] ? 0 : 1);
   `
   );
-  const serverSupervisor = await dev({ executable: process.execPath, host }, entry, {
+  const serverSupervisor = await dev({ executable: process.execPath, frameworks }, entry, {
     args: [environmentProgram, rendererUrl],
     cacheDir: path.join(temporary, 'server-supervisor-cache'),
     include: ['main.js'],

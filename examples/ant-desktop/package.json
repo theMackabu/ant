@@ -15,7 +15,7 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "ant-desktop": "^0.1.2",
+    "ant-desktop": "^0.3.0",
     "@babel/core": "^7.29.7",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/babel__core": "^7.20.5",

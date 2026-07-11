@@ -19,11 +19,6 @@
 
 namespace {
 
-bool SwitchEnabled(CefRefPtr<CefCommandLine> command_line, const char *name, bool fallback) {
-  if (!command_line || !command_line->HasSwitch(name)) return fallback;
-  return command_line->GetSwitchValue(name) != "0";
-}
-
 std::string Trim(std::string value);
 std::string BindModule(const std::string &names, const std::string &require);
 
@@ -155,31 +150,29 @@ public:
   }
 
   void OnBrowserCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDictionaryValue> extra_info) override {
-    if (!extra_info || !extra_info->HasKey("antPreloadSource")) return;
-    preloads_[browser->GetIdentifier()] = {
-      extra_info->GetString("antPreloadPath"),
-      extra_info->GetString("antPreloadSource"),
-    };
+    BrowserConfig config;
+    if (extra_info) {
+      config.manifest = extra_info->GetString("antCapabilities");
+      config.capabilities = ant::desktop::ParseCapabilities(config.manifest);
+      config.sandbox = extra_info->GetBool("antSandbox");
+      config.node_integration = extra_info->GetBool("antNodeIntegration");
+      config.context_isolation = extra_info->GetBool("antContextIsolation");
+      config.preload_path = extra_info->GetString("antPreloadPath");
+      config.preload_source = extra_info->GetString("antPreloadSource");
+    }
+    configs_[browser->GetIdentifier()] = std::move(config);
   }
 
   void OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) override {
-    preloads_.erase(browser->GetIdentifier());
+    configs_.erase(browser->GetIdentifier());
   }
 
   void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                         CefRefPtr<CefV8Context> context) override {
     if (!frame->IsMain()) return;
-    if (!capabilities_loaded_) {
-      CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
-      if (command_line) {
-        manifest_ = command_line->GetSwitchValue("ant-capabilities");
-        sandbox_ = SwitchEnabled(command_line, "ant-sandbox", true);
-        node_integration_ = SwitchEnabled(command_line, "ant-node-integration", false);
-        context_isolation_ = SwitchEnabled(command_line, "ant-context-isolation", true);
-        capabilities_ = ant::desktop::ParseCapabilities(manifest_);
-      }
-      capabilities_loaded_ = true;
-    }
+    auto config_entry = configs_.find(browser->GetIdentifier());
+    if (config_entry == configs_.end()) return;
+    const BrowserConfig &config = config_entry->second;
     std::string source(reinterpret_cast<const char *>(ant_desktop_ipc_bridge_source),
                        ant_desktop_ipc_bridge_source_len);
     CefRefPtr<CefV8Value> factory;
@@ -190,10 +183,11 @@ public:
       return;
     }
     CefRefPtr<CefV8Value> bindings = CefV8Value::CreateObject(nullptr, nullptr);
-    bindings->SetValue("capabilityManifest", CefV8Value::CreateString(manifest_), V8_PROPERTY_ATTRIBUTE_READONLY);
-    bindings->SetValue("sandbox", CefV8Value::CreateBool(sandbox_), V8_PROPERTY_ATTRIBUTE_READONLY);
-    bindings->SetValue("nodeIntegration", CefV8Value::CreateBool(node_integration_), V8_PROPERTY_ATTRIBUTE_READONLY);
-    if (!sandbox_) {
+    bindings->SetValue("capabilityManifest", CefV8Value::CreateString(config.manifest), V8_PROPERTY_ATTRIBUTE_READONLY);
+    bindings->SetValue("sandbox", CefV8Value::CreateBool(config.sandbox), V8_PROPERTY_ATTRIBUTE_READONLY);
+    bindings->SetValue("nodeIntegration", CefV8Value::CreateBool(config.node_integration),
+                       V8_PROPERTY_ATTRIBUTE_READONLY);
+    if (!config.sandbox) {
 #if ANT_DESKTOP_RUNTIME_INTEGRATION
       bindings->SetValue("nodeEnvironment", CreateNodeEnvironmentBindings(), V8_PROPERTY_ATTRIBUTE_READONLY);
       CefRefPtr<CefV8Value> require = CreateAntModuleRequireBinding();
@@ -207,7 +201,7 @@ public:
       return;
 #endif
     }
-    bindings->SetValue("nativeIpc", CefV8Value::CreateFunction("antNativeIpc", new IpcV8Handler(capabilities_)),
+    bindings->SetValue("nativeIpc", CefV8Value::CreateFunction("antNativeIpc", new IpcV8Handler(config.capabilities)),
                        V8_PROPERTY_ATTRIBUTE_READONLY);
     CefV8ValueList arguments{bindings};
     CefRefPtr<CefV8Value> bridge = factory->ExecuteFunction(nullptr, arguments);
@@ -216,10 +210,9 @@ public:
       return;
     }
     receivers_[browser->GetIdentifier()] = bridge->GetValue("receive");
-    auto preload_entry = preloads_.find(browser->GetIdentifier());
-    if (preload_entry != preloads_.end()) {
-      const std::string &preload_path = preload_entry->second.path;
-      std::string preload = preload_entry->second.source;
+    if (!config.preload_source.empty()) {
+      const std::string &preload_path = config.preload_path;
+      std::string preload = config.preload_source;
       if (!RewriteRendererModuleImport(&preload)) {
         fputs("Ant preload has an unsupported ant:desktop/renderer import\n", stderr);
         return;
@@ -229,7 +222,7 @@ public:
         return;
       }
       context->GetGlobal()->SetValue("__antPreloadBindings", bridge, V8_PROPERTY_ATTRIBUTE_DONTENUM);
-      if (context_isolation_) {
+      if (config.context_isolation) {
         preload = "(globalThis => ((window, self) => {\n'use strict';\n" + preload +
                   "\n})(globalThis, globalThis))(Object.create(null))";
       }
@@ -270,19 +263,18 @@ public:
   }
 
 private:
-  struct Preload {
-    std::string path;
-    std::string source;
+  struct BrowserConfig {
+    std::string manifest;
+    std::set<std::string> capabilities;
+    std::string preload_path;
+    std::string preload_source;
+    bool sandbox = true;
+    bool node_integration = false;
+    bool context_isolation = true;
   };
 
-  std::string manifest_;
-  std::set<std::string> capabilities_;
   std::map<int, CefRefPtr<CefV8Value>> receivers_;
-  std::map<int, Preload> preloads_;
-  bool capabilities_loaded_ = false;
-  bool sandbox_ = true;
-  bool node_integration_ = false;
-  bool context_isolation_ = true;
+  std::map<int, BrowserConfig> configs_;
   IMPLEMENT_REFCOUNTING(RendererApp);
 };
 

@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 
+#include "cef_runtime.h"
 #include "event_loop.h"
 
 @interface AntRuntimePump ()
@@ -61,8 +62,11 @@ static void RuntimeTimerFired(CFRunLoopTimerRef timer, void *info) {
 - (void)pump {
   if (_pumping) return;
   _pumping = YES;
+  ant_desktop_cef_do_message_loop_work();
   js_reactor_pump_repl_nowait(_js);
   int timeout_ms = uv_backend_timeout(uv_default_loop());
+  int64_t cef_timeout_ms = ant_desktop_cef_next_message_delay_ms();
+  if (cef_timeout_ms >= 0 && (timeout_ms < 0 || cef_timeout_ms < timeout_ms)) timeout_ms = (int)cef_timeout_ms;
   CFAbsoluteTime fire =
     timeout_ms < 0 ? CFAbsoluteTimeGetCurrent() + 3600.0 : CFAbsoluteTimeGetCurrent() + ((double)timeout_ms / 1000.0);
   CFRunLoopTimerSetNextFireDate(_timer, fire);

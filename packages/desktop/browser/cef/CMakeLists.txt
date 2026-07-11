@@ -4,7 +4,7 @@ if(POLICY CMP0156)
 endif()
 
 set(CMAKE_CONFIGURATION_TYPES Debug Release)
-project(ant_chromium_host)
+project(ant_desktop_runtime)
 
 if(NOT CEF_ROOT)
   message(FATAL_ERROR "Pass -DCEF_ROOT=/path/to/cef_binary_*")
@@ -38,9 +38,9 @@ add_custom_command(
 )
 add_custom_target(ant_desktop_ipc_bridge DEPENDS "${IPC_BRIDGE_HEADER}")
 
-set(CEF_TARGET ant_chromium_host)
-set(CEF_OUTPUT_NAME "Ant Chromium Host")
-set(CEF_HELPER_TARGET ant_chromium_host_helper)
+set(CEF_TARGET ant_chromium_runtime_stage)
+set(CEF_OUTPUT_NAME "Ant Desktop")
+set(CEF_HELPER_TARGET ant_desktop_helper)
 set(CEF_HELPER_OUTPUT_NAME "${CEF_OUTPUT_NAME} Helper")
 
 SET_CEF_TARGET_OUT_DIR()
@@ -49,28 +49,18 @@ set(EXECUTABLE_NAME "${CEF_OUTPUT_NAME}")
 set(PRODUCT_NAME "${CEF_OUTPUT_NAME}")
 
 add_executable(${CEF_TARGET} MACOSX_BUNDLE
-  app_scheme.cc
-  host_app.mm
-  host_client.cc
-  host_state.cc
-  input.cc
-  ipc.cc
-  main.mm
-  platform/mac/application.mm
-  platform/mac/remote_layer_compositor.mm
-  ../../ipc/capabilities.cc
+  runtime_stage.mm
 )
 SET_EXECUTABLE_TARGET_PROPERTIES(${CEF_TARGET})
 target_compile_options(${CEF_TARGET} PRIVATE -fobjc-arc)
 target_link_libraries(${CEF_TARGET}
   libcef_dll_wrapper
   ${CEF_STANDARD_LIBS}
-  "-framework QuartzCore"
 )
 set_target_properties(${CEF_TARGET} PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/../mac/Info.plist.in"
   OUTPUT_NAME "${CEF_OUTPUT_NAME}"
-  XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.antjs.chromium-host"
+  XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.antjs.desktop-runtime-stage"
 )
 
 COPY_MAC_FRAMEWORK("${CEF_TARGET}" "${CEF_BINARY_DIR}" "${CEF_APP}")
@@ -127,7 +117,7 @@ foreach(_suffix_list ${CEF_HELPER_APP_SUFFIXES})
   set_target_properties(${_helper_target} PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${_helper_info_plist}"
     OUTPUT_NAME "${_helper_output_name}"
-    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.antjs.chromium-host.helper${_plist_suffix}"
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.antjs.desktop.helper${_plist_suffix}"
   )
 
   add_dependencies(${CEF_TARGET} ${_helper_target})

@@ -6,7 +6,11 @@ await window.loadFile(new URL('fixtures/ipc-page.html', import.meta.url).pathnam
 
 const opened = new Promise(resolve => window.on('devtools-opened', resolve));
 window.webContents.openDevTools();
-await Promise.race([opened, new Promise((_, reject) => setTimeout(() => reject(new Error('Web Inspector did not open')), 3000))]);
+let openTimeout;
+await Promise.race([opened, new Promise((_, reject) => {
+  openTimeout = setTimeout(() => reject(new Error('Web Inspector did not open')), 3000);
+})]);
+clearTimeout(openTimeout);
 if (!window.webContents.isDevToolsOpened()) {
   throw new Error('Web Inspector state was not updated');
 }

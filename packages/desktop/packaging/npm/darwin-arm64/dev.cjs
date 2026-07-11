@@ -40,9 +40,8 @@ function cloneTree(source, destination) {
   fs.chmodSync(destination, stat.mode);
 }
 
-function runtimeFingerprint(hostBundle, host) {
-  const frameworks = path.join(hostBundle, 'Contents', 'Frameworks');
-  const entries = [host, frameworks, ...fs.readdirSync(frameworks).map(entry => path.join(frameworks, entry))];
+function runtimeFingerprint(frameworks) {
+  const entries = [frameworks, ...fs.readdirSync(frameworks).map(entry => path.join(frameworks, entry))];
   const hash = crypto.createHash('sha256');
   for (const entry of entries) {
     const stat = fs.lstatSync(entry);
@@ -51,11 +50,10 @@ function runtimeFingerprint(hostBundle, host) {
   return hash.digest('hex');
 }
 
-function ensureRuntimeFrameworks(hostBundle, contents) {
-  const source = path.join(hostBundle, 'Contents', 'Frameworks');
+function ensureRuntimeFrameworks(source, contents) {
   const destination = path.join(contents, 'Frameworks');
   const marker = path.join(contents, '.ant-runtime.json');
-  const fingerprint = runtimeFingerprint(hostBundle, path.join(hostBundle, 'Contents', 'MacOS', 'Ant Chromium Host'));
+  const fingerprint = runtimeFingerprint(source);
   try {
     const cached = JSON.parse(fs.readFileSync(marker, 'utf8'));
     if (cached.fingerprint === fingerprint && fs.lstatSync(destination).isDirectory()) return;
@@ -94,7 +92,6 @@ function createDevApp(layout, entry, options = {}) {
   const macos = path.join(contents, 'MacOS');
   const resources = path.join(contents, 'Resources');
   const executable = path.join(macos, name);
-  const hostBundle = path.resolve(layout.host, '../../..');
   let icon;
 
   if (options.icon) {
@@ -108,8 +105,7 @@ function createDevApp(layout, entry, options = {}) {
   fs.mkdirSync(macos, { recursive: true });
   fs.mkdirSync(resources, { recursive: true });
   cloneFile(layout.executable, executable);
-  cloneFile(layout.host, path.join(macos, 'Ant Chromium Host'));
-  ensureRuntimeFrameworks(hostBundle, contents);
+  ensureRuntimeFrameworks(layout.frameworks, contents);
   replaceSymlink(appRoot, path.join(resources, 'app'), 'dir');
   if (options.icon) {
     replaceSymlink(path.resolve(options.icon), path.join(resources, icon), 'file');

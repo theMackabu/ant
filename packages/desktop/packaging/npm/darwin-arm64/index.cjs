@@ -7,16 +7,18 @@ const { spawn, spawnSync } = require('node:child_process');
 const packageRoot = __dirname;
 const sourceRoot = path.resolve(__dirname, '../../..');
 const sourceLayout = {
-  executable: path.join(sourceRoot, 'build', 'ant-desktop'),
-  host: path.join(sourceRoot, 'runtime', 'Ant Chromium Host.app', 'Contents', 'MacOS', 'Ant Chromium Host')
+  executable: path.join(sourceRoot, 'runtime', 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop'),
+  frameworks: path.join(sourceRoot, 'runtime', 'Ant Desktop.app', 'Contents', 'Frameworks')
 };
 const installedLayout = {
-  executable: path.join(packageRoot, 'vendor', 'build', 'ant-desktop'),
-  host: path.join(packageRoot, 'vendor', 'runtime', 'Ant Chromium Host.app', 'Contents', 'MacOS', 'Ant Chromium Host')
+  executable: path.join(packageRoot, 'vendor', 'runtime', 'Ant Desktop.app', 'Contents', 'MacOS', 'Ant Desktop'),
+  frameworks: path.join(packageRoot, 'vendor', 'runtime', 'Ant Desktop.app', 'Contents', 'Frameworks')
 };
 
 function isUsable(layout) {
-  return fs.existsSync(layout.executable) && fs.existsSync(layout.host);
+  return fs.existsSync(layout.executable) &&
+    fs.existsSync(path.join(layout.frameworks, 'Chromium Embedded Framework.framework')) &&
+    fs.existsSync(path.join(layout.frameworks, 'Ant Desktop Helper.app'));
 }
 
 function ensureInstalled() {
@@ -43,8 +45,7 @@ function launchOptions(options = {}) {
       cwd: options.cwd || process.cwd(),
       env: {
         ...process.env,
-        ...options.env,
-        ANT_CHROMIUM_HOST: layout.host
+        ...options.env
       },
       stdio: options.stdio || 'inherit'
     }
