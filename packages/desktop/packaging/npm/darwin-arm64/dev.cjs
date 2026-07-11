@@ -13,6 +13,66 @@ function replaceSymlink(target, link, type) {
   fs.symlinkSync(target, link, type);
 }
 
+function cloneFile(source, destination) {
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.copyFileSync(source, destination, fs.constants.COPYFILE_FICLONE);
+  fs.chmodSync(destination, fs.statSync(source).mode);
+}
+
+function cloneTree(source, destination) {
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    fs.symlinkSync(fs.readlinkSync(source), destination);
+    return;
+  }
+  if (stat.isDirectory()) {
+    fs.mkdirSync(destination, { recursive: true, mode: stat.mode });
+    for (const entry of fs.readdirSync(source)) {
+      cloneTree(path.join(source, entry), path.join(destination, entry));
+    }
+    return;
+  }
+  if (!stat.isFile()) throw new Error(`Unsupported Chromium runtime entry: ${source}`);
+  fs.copyFileSync(source, destination, fs.constants.COPYFILE_FICLONE);
+  fs.chmodSync(destination, stat.mode);
+}
+
+function runtimeFingerprint(hostBundle, host) {
+  const frameworks = path.join(hostBundle, 'Contents', 'Frameworks');
+  const entries = [host, frameworks, ...fs.readdirSync(frameworks).map(entry => path.join(frameworks, entry))];
+  const hash = crypto.createHash('sha256');
+  for (const entry of entries) {
+    const stat = fs.lstatSync(entry);
+    hash.update(`${path.resolve(entry)}\0${stat.size}\0${stat.mtimeMs}\0${stat.mode}\0`);
+  }
+  return hash.digest('hex');
+}
+
+function ensureRuntimeFrameworks(hostBundle, contents) {
+  const source = path.join(hostBundle, 'Contents', 'Frameworks');
+  const destination = path.join(contents, 'Frameworks');
+  const marker = path.join(contents, '.ant-runtime.json');
+  const fingerprint = runtimeFingerprint(hostBundle, path.join(hostBundle, 'Contents', 'MacOS', 'Ant Chromium Host'));
+  try {
+    const cached = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    if (cached.fingerprint === fingerprint && fs.lstatSync(destination).isDirectory()) return;
+  } catch {
+    // A missing or incomplete cache is rebuilt below.
+  }
+
+  const temporary = `${destination}.tmp-${process.pid}`;
+  fs.rmSync(temporary, { recursive: true, force: true });
+  try {
+    cloneTree(source, temporary);
+    fs.rmSync(destination, { recursive: true, force: true });
+    fs.renameSync(temporary, destination);
+    fs.writeFileSync(marker, `${JSON.stringify({ fingerprint })}\n`);
+  } catch (error) {
+    fs.rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function createDevApp(layout, entry, options = {}) {
   const sourceEntry = path.resolve(entry);
   if (!fs.statSync(sourceEntry, { throwIfNoEntry: false })?.isFile()) {
@@ -47,9 +107,9 @@ function createDevApp(layout, entry, options = {}) {
 
   fs.mkdirSync(macos, { recursive: true });
   fs.mkdirSync(resources, { recursive: true });
-  replaceSymlink(layout.executable, executable, 'file');
-  replaceSymlink(layout.host, path.join(macos, 'Ant Chromium Host'), 'file');
-  replaceSymlink(path.join(hostBundle, 'Contents', 'Frameworks'), path.join(contents, 'Frameworks'), 'dir');
+  cloneFile(layout.executable, executable);
+  cloneFile(layout.host, path.join(macos, 'Ant Chromium Host'));
+  ensureRuntimeFrameworks(hostBundle, contents);
   replaceSymlink(appRoot, path.join(resources, 'app'), 'dir');
   for (const resource of extraResources) {
     fs.mkdirSync(path.dirname(resource.destination), { recursive: true });

@@ -23,6 +23,11 @@ async function main() {
   fs.mkdirSync(path.join(hostBundle, 'Contents', 'Frameworks'), {
     recursive: true
   });
+  const fakeFramework = path.join(hostBundle, 'Contents', 'Frameworks', 'Fake.framework');
+  fs.mkdirSync(path.join(fakeFramework, 'Versions', 'A'), { recursive: true });
+  fs.writeFileSync(path.join(fakeFramework, 'Versions', 'A', 'Fake'), 'framework');
+  fs.symlinkSync('A', path.join(fakeFramework, 'Versions', 'Current'));
+  fs.symlinkSync('Versions/Current/Fake', path.join(fakeFramework, 'Fake'));
   fs.mkdirSync(path.join(appRoot, 'renderer'), { recursive: true });
   fs.writeFileSync(entry, 'console.log("dev");\n');
   fs.writeFileSync(executable, 'native');
@@ -35,7 +40,34 @@ async function main() {
     name: 'Dev Example'
   });
   assert.equal(result.name, 'Dev Example');
-  assert.equal(fs.realpathSync(result.executable), fs.realpathSync(executable));
+  assert.ok(fs.lstatSync(result.executable).isFile());
+  assert.equal(fs.readFileSync(result.executable, 'utf8'), 'native');
+  const developmentFrameworks = path.join(result.output, 'Contents', 'Frameworks');
+  assert.ok(fs.lstatSync(developmentFrameworks).isDirectory());
+  assert.equal(
+    fs.readlinkSync(path.join(developmentFrameworks, 'Fake.framework', 'Versions', 'Current')),
+    'A'
+  );
+  assert.equal(
+    fs.readFileSync(path.join(developmentFrameworks, 'Fake.framework', 'Fake'), 'utf8'),
+    'framework'
+  );
+  const cacheSentinel = path.join(developmentFrameworks, 'cache-sentinel');
+  fs.writeFileSync(cacheSentinel, 'preserved');
+  createDevApp({ executable, host }, entry, {
+    cacheDir: path.join(temporary, 'cache'),
+    icon,
+    name: 'Dev Example'
+  });
+  assert.equal(fs.readFileSync(cacheSentinel, 'utf8'), 'preserved');
+
+  fs.appendFileSync(host, '-updated');
+  createDevApp({ executable, host }, entry, {
+    cacheDir: path.join(temporary, 'cache'),
+    icon,
+    name: 'Dev Example'
+  });
+  assert.equal(fs.existsSync(cacheSentinel), false);
   assert.equal(
     fs.realpathSync(path.join(result.output, 'Contents', 'Resources', 'app')),
     fs.realpathSync(appRoot)

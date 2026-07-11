@@ -8,6 +8,11 @@ export const rendererEntry = path.join(
   'index.html'
 );
 
+const preloadEntry = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'preload.js'
+);
+
 export function createMainWindow() {
   const window = new BrowserWindow({
     width: 800,
@@ -18,6 +23,10 @@ export function createMainWindow() {
     trafficLightPosition: { x: 16, y: 15 },
     backgroundColor: '#202124',
     webPreferences: {
+      preload: preloadEntry,
+      sandbox: false,
+      nodeIntegration: true,
+      contextIsolation: false,
       capabilities: [
         { channel: 'app:get-runtime-info', access: ['invoke'] },
         { channel: 'app:toggle-theme', access: ['invoke'] },
