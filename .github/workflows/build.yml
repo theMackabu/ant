@@ -101,7 +101,7 @@ jobs:
     name: Refresh manifest
     needs: [build, nanos-x64, nanos-aarch64, summary]
     runs-on: ubuntu-latest
-    if: ${{ always() && !cancelled() && needs.summary.result == 'success' && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
+    if: ${{ github.event_name != 'pull_request' && always() && !cancelled() && needs.summary.result == 'success' && (needs.build.result == 'success' || needs.nanos-x64.result == 'success' || needs.nanos-aarch64.result == 'success') }}
     steps:
       - name: Refresh manifest
         env:

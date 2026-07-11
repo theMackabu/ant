@@ -338,7 +338,7 @@ jobs:
       - name: Refresh manifest
         env:
           MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
-        if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.MANIFEST_REFRESH_TOKEN != '' }}
         run: |
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${GITHUB_REF_NAME}" \
