@@ -2341,22 +2341,36 @@ typedef struct {
   bool recursive;
   bool force;
   bool error_on_exist;
+  bool dereference;
+  bool verbatim_symlinks;
+  ant_value_t filter;
 } fs_cp_options_t;
 
 static void fs_parse_cp_options(ant_t *js, ant_value_t value, fs_cp_options_t *opts) {
   opts->recursive = false;
   opts->force = true;
   opts->error_on_exist = false;
+  opts->dereference = false;
+  opts->verbatim_symlinks = false;
+  opts->filter = js_mkundef();
 
   if (vtype(value) != T_OBJ) return;
 
   ant_value_t recursive = js_get(js, value, "recursive");
   ant_value_t force = js_get(js, value, "force");
   ant_value_t error_on_exist = js_get(js, value, "errorOnExist");
+  ant_value_t dereference = js_get(js, value, "dereference");
+  ant_value_t verbatim_symlinks = js_get(js, value, "verbatimSymlinks");
+  ant_value_t filter = js_get(js, value, "filter");
 
   if (!is_undefined(recursive)) opts->recursive = js_truthy(js, recursive);
   if (!is_undefined(force)) opts->force = js_truthy(js, force);
   if (!is_undefined(error_on_exist)) opts->error_on_exist = js_truthy(js, error_on_exist);
+  if (!is_undefined(dereference)) opts->dereference = js_truthy(js, dereference);
+  if (!is_undefined(verbatim_symlinks)) {
+    opts->verbatim_symlinks = js_truthy(js, verbatim_symlinks);
+  }
+  if (is_callable(filter)) opts->filter = filter;
 }
 
 static char *fs_join_path(const char *base, const char *name) {
@@ -2382,6 +2396,11 @@ static ant_value_t fs_copy_file_sync_impl(
   const fs_cp_options_t *opts,
   const char *op_name
 ) {
+  struct stat src_st;
+  if (stat(src_cstr, &src_st) != 0) {
+    return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+  }
+
   struct stat dest_st;
   if (!opts->force && stat(dest_cstr, &dest_st) == 0) {
     if (opts->error_on_exist) return fs_mk_errno_error(js, EEXIST, op_name, src_cstr, dest_cstr);
@@ -2410,6 +2429,12 @@ static ant_value_t fs_copy_file_sync_impl(
 
   fclose(in);
   fclose(out);
+
+#ifndef _WIN32
+  if (chmod(dest_cstr, (mode_t)(src_st.st_mode & 0777)) != 0) {
+    return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+  }
+#endif
   
   return js_mkundef();
 }
@@ -2436,6 +2461,9 @@ static ant_value_t builtin_fs_copyFile(ant_t *js, ant_value_t *args, int nargs) 
     .recursive = false,
     .force = true,
     .error_on_exist = false,
+    .dereference = false,
+    .verbatim_symlinks = false,
+    .filter = 0,
   };
 
   ant_value_t promise = js_mkpromise(js);
@@ -2449,6 +2477,61 @@ static ant_value_t builtin_fs_copyFile(ant_t *js, ant_value_t *args, int nargs) 
   return promise;
 }
 
+static ant_value_t fs_copy_symlink_sync_impl(
+  ant_t *js,
+  const char *src_cstr,
+  const char *dest_cstr,
+  const fs_cp_options_t *opts,
+  const char *op_name
+) {
+  struct stat dest_st;
+  if (lstat(dest_cstr, &dest_st) == 0) {
+    if (!opts->force) {
+      if (opts->error_on_exist) {
+        return fs_mk_errno_error(js, EEXIST, op_name, src_cstr, dest_cstr);
+      }
+      return js_mkundef();
+    }
+    if (unlink(dest_cstr) != 0) {
+      return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+    }
+  } else if (errno != ENOENT) {
+    return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+  }
+
+  uv_fs_t read_req;
+  int rc = uv_fs_readlink(NULL, &read_req, src_cstr, NULL);
+  if (rc < 0 || !read_req.ptr) {
+    ant_value_t err = fs_mk_uv_error(js, rc, "readlink", src_cstr, dest_cstr);
+    uv_fs_req_cleanup(&read_req);
+    return err;
+  }
+
+  int flags = 0;
+#ifdef _WIN32
+  struct stat target_st;
+  if (stat(src_cstr, &target_st) == 0 && (target_st.st_mode & S_IFMT) == S_IFDIR) {
+    flags = UV_FS_SYMLINK_DIR;
+  }
+  if (!opts->verbatim_symlinks) flags |= UV_FS_SYMLINK_JUNCTION;
+#else
+  (void)opts->verbatim_symlinks;
+#endif
+
+  uv_fs_t write_req;
+  rc = uv_fs_symlink(
+    NULL, &write_req, (const char *)read_req.ptr, dest_cstr, flags, NULL
+  );
+  uv_fs_req_cleanup(&read_req);
+  if (rc < 0) {
+    ant_value_t err = fs_mk_uv_error(js, rc, "symlink", src_cstr, dest_cstr);
+    uv_fs_req_cleanup(&write_req);
+    return err;
+  }
+  uv_fs_req_cleanup(&write_req);
+  return js_mkundef();
+}
+
 static ant_value_t fs_copy_path_sync_impl(
   ant_t *js,
   const char *src_cstr,
@@ -2456,8 +2539,31 @@ static ant_value_t fs_copy_path_sync_impl(
   const fs_cp_options_t *opts,
   const char *op_name
 ) {
+  if (is_callable(opts->filter)) {
+    ant_value_t filter_args[] = {
+      js_mkstr(js, src_cstr, strlen(src_cstr)),
+      js_mkstr(js, dest_cstr, strlen(dest_cstr))
+    };
+    ant_value_t included = fs_call_value(
+      js, opts->filter, js_mkundef(), filter_args, 2
+    );
+    if (is_err(included)) return included;
+    if (!js_truthy(js, included)) return js_mkundef();
+  }
+
   struct stat src_st;
-  if (stat(src_cstr, &src_st) != 0) return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+  int stat_result = opts->dereference
+    ? stat(src_cstr, &src_st)
+    : lstat(src_cstr, &src_st);
+  if (stat_result != 0) {
+    return fs_mk_errno_error(js, errno, op_name, src_cstr, dest_cstr);
+  }
+
+  if ((src_st.st_mode & S_IFMT) == S_IFLNK) {
+    return fs_copy_symlink_sync_impl(
+      js, src_cstr, dest_cstr, opts, op_name
+    );
+  }
 
   if ((src_st.st_mode & S_IFMT) == S_IFDIR) {
     if (!opts->recursive) {
@@ -3705,6 +3811,57 @@ static ant_value_t builtin_fs_readlinkSync(ant_t *js, ant_value_t *args, int nar
   uv_fs_req_cleanup(&req);
   free(path_cstr);
   return link;
+}
+
+static ant_value_t builtin_fs_symlinkSync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "symlinkSync() requires target and path arguments");
+
+  ant_value_t target_val = fs_coerce_path(js, args[0]);
+  ant_value_t path_val = fs_coerce_path(js, args[1]);
+  if (vtype(target_val) != T_STR || vtype(path_val) != T_STR) {
+    return js_mkerr(js, "symlinkSync() target and path must be strings");
+  }
+
+  size_t target_len = 0;
+  size_t path_len = 0;
+  const char *target = js_getstr(js, target_val, &target_len);
+  const char *path = js_getstr(js, path_val, &path_len);
+  if (!target || !path) return js_mkerr(js, "Failed to get symlink path strings");
+
+  char *target_cstr = strndup(target, target_len);
+  char *path_cstr = strndup(path, path_len);
+  if (!target_cstr || !path_cstr) {
+    free(target_cstr);
+    free(path_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  int flags = 0;
+#ifdef _WIN32
+  if (nargs > 2 && vtype(args[2]) == T_STR) {
+    size_t type_len = 0;
+    const char *type = js_getstr(js, args[2], &type_len);
+    if (type && type_len == 3 && memcmp(type, "dir", 3) == 0) {
+      flags = UV_FS_SYMLINK_DIR;
+    } else if (type && type_len == 8 && memcmp(type, "junction", 8) == 0) {
+      flags = UV_FS_SYMLINK_JUNCTION;
+    }
+  }
+#endif
+
+  uv_fs_t req;
+  int result = uv_fs_symlink(NULL, &req, target_cstr, path_cstr, flags, NULL);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) {
+    ant_value_t err = fs_mk_uv_error(js, result, "symlink", path_cstr, target_cstr);
+    free(target_cstr);
+    free(path_cstr);
+    return err;
+  }
+
+  free(target_cstr);
+  free(path_cstr);
+  return js_mkundef();
 }
 
 static ant_value_t builtin_fs_readlink(ant_t *js, ant_value_t *args, int nargs) {
@@ -4966,6 +5123,7 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
   js_set(js, lib, "realpathSync", realpath_sync);
   js_set(js, lib, "readlinkSync", js_mkfun(builtin_fs_readlinkSync));
+  js_set(js, lib, "symlinkSync", js_mkfun(builtin_fs_symlinkSync));
   js_set(js, lib, "watch", js_mkfun(builtin_fs_watch));
   js_set(js, lib, "watchFile", js_mkfun(builtin_fs_watchFile));
   js_set(js, lib, "unwatchFile", js_mkfun(builtin_fs_unwatchFile));
