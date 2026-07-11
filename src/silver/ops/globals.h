@@ -29,6 +29,15 @@ static inline ant_object_t *sv_global_obj_ptr(ant_t *js) {
   return js_obj_ptr(js_as_obj(js->global));
 }
 
+static inline void sv_global_ic_note_success(sv_ic_entry_t *ic) {
+  if (!ic) return;
+  uintptr_t aux = ic->cached_aux;
+  uint8_t warmup = sv_gf_ic_warmup(aux);
+  if (warmup < 0xFFu) warmup++;
+  bool active = sv_gf_ic_active(aux) || warmup >= SV_GF_IC_WARMUP_ENABLE;
+  ic->cached_aux = sv_gf_ic_pack_aux(warmup, 0u, active);
+}
+
 static inline bool sv_global_ic_try_get_hit(
   ant_t *js,
   sv_ic_entry_t *ic,
@@ -77,7 +86,10 @@ static inline bool sv_global_ic_try_fill(
   ic->cached_shape = gptr->shape;
   ic->cached_holder = gptr;
   ic->cached_index = idx;
+  ic->cached_is_own = true;
+  ic->cached_is_accessor = false;
   ic->epoch = ant_ic_epoch_counter;
+  sv_global_ic_note_success(ic);
   *out = ant_object_prop_get_unchecked(gptr, idx);
   return true;
 }
@@ -91,7 +103,10 @@ static inline ant_value_t sv_global_get_interned_ic(
   ant_value_t out = js_mkundef();
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
   
-  if (sv_global_ic_try_get_hit(js, ic, interned, &out)) return out;
+  if (sv_global_ic_try_get_hit(js, ic, interned, &out)) {
+    sv_global_ic_note_success(ic);
+    return out;
+  }
   if (sv_global_ic_try_fill(js, ic, interned, &out)) return out;
   
   ant_value_t val = lkp_interned_val(js, js->global, interned);

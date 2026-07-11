@@ -143,6 +143,7 @@ struct ant_isolate_t {
 
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+  ant_fixed_arena_t native_data_arena;
   
   ant_value_t **c_roots;
   size_t c_root_count;
@@ -161,6 +162,7 @@ struct ant_isolate_t {
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
+  ant_value_t ascii_chars[128];
   
   struct {
     const char *length;
@@ -175,6 +177,9 @@ struct ant_isolate_t {
     const char *set;
     const char *arguments;
     const char *callee;
+    const char *headers;
+    const char *status;
+    const char *status_text;
     const char *idx[10];
   } intern;
   
@@ -194,6 +199,7 @@ struct ant_isolate_t {
 
     ant_value_t object_proto;
     ant_value_t array_proto;
+    ant_value_t string_proto;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;
@@ -473,6 +479,7 @@ ant_offset_t str_len_fast(ant_t *js, ant_value_t str);
 ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
+ant_value_t js_mkobj_with_shape(ant_t *js, ant_shape_t *shape);
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_value_t str_materialize(ant_t *js, ant_value_t value);
 
@@ -532,8 +539,13 @@ ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs
 ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
 
 bool js_is_array_includes_builtin(ant_value_t func);
+bool js_is_string_indexof_builtin(ant_value_t func);
+bool js_is_string_substring_builtin(ant_value_t func);
+
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_string_indexof_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
+ant_value_t js_string_substring_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
@@ -734,7 +746,7 @@ static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t pr
   js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
   js_set_descriptor(js, obj, "name", 4, 0);
 
-  ant_value_t fn_val = js_obj_to_func(obj);
+  ant_value_t fn_val = js_obj_to_func_ex(obj, SV_CALL_NATIVE_CTOR_ALLOCATES);
   js_set(js, proto, "constructor", fn_val);
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 

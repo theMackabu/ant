@@ -2,16 +2,16 @@ import { Elysia } from 'elysia';
 
 export const logger = ({ methods = ['GET', 'PUT', 'POST', 'DELETE'] } = {}) =>
   new Elysia()
-    .derive({ as: 'global' }, () => ({ start: Date.now() }))
-    .onBeforeHandle({ as: 'global' }, ctx => {
+    .request(ctx => {
       if (!methods.includes(ctx.request.method)) return;
+      ctx.start = performance.now();
       console.log('<--', ctx.request.method, ctx.path);
     })
-    .onAfterHandle({ as: 'global' }, ctx => {
+    .afterHandle('global', ctx => {
       if (!methods.includes(ctx.request.method)) return;
-      console.log('-->', ctx.request.method, ctx.path, ctx.set.status ?? Number.NaN, 'in', Date.now() - ctx.start, 'ms');
+      console.log('-->', ctx.request.method, ctx.path, ctx.set.status ?? 200, 'in', Number((performance.now() - ctx.start).toFixed(2)), 'ms');
     })
-    .onError({ as: 'global' }, ctx => {
+    .error('global', ctx => {
       if (!methods.includes(ctx.request.method)) return;
-      console.log('-->', ctx.request.method, ctx.path, ctx.set.status, 'in', ctx.start ? Date.now() - ctx.start : Number.NaN, 'ms');
+      console.log('-->', ctx.request.method, ctx.path, ctx.set.status, 'in', ctx.start ? Number((performance.now() - ctx.start).toFixed(2)) : Number.NaN, 'ms');
     });

@@ -84,14 +84,14 @@ OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
 OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
 OP_DEF(  PUT_FIELD,         7,   2,   0, atom)      /* obj val -> (atom + ic_idx:u16) */
-OP_DEF(  GET_ELEM,          1,   2,   1, none)      /* obj key -> val */
+OP_DEF(  GET_ELEM,          3,   2,   1, u16)       /* obj key -> val (ic_idx:u16) */
 OP_DEF(  GET_ELEM2,         1,   2,   2, none)      /* obj key -> obj val */
 OP_DEF(  PUT_ELEM,          1,   3,   0, none)      /* obj key val -> */
-OP_DEF(  DEFINE_FIELD,      5,   2,   1, atom)      /* obj val -> obj (own prop) */
+OP_DEF(  DEFINE_FIELD,      7,   2,   1, atom)      /* obj val -> obj (atom + ic_idx:u16) */
 OP_DEF(  GET_LENGTH,        1,   1,   1, none)      /* obj -> length */
 
 OP_DEF(  GET_FIELD_OPT,    7,   1,   1, atom)       /* null-safe obj -> val (atom + ic_idx:u16) */
-OP_DEF(  GET_ELEM_OPT,     1,   2,   1, none)       /* null-safe obj key -> val */
+OP_DEF(  GET_ELEM_OPT,     3,   2,   1, u16)        /* null-safe obj key -> val (ic_idx:u16) */
 
 OP_DEF(  GET_PRIVATE,      1,   2,   1, none)       /* obj private_name -> value */
 OP_DEF(  GET_PRIVATE_OPT,  1,   2,   1, none)       /* obj private_name -> value|undefined */
@@ -167,12 +167,14 @@ OP_DEF(  CALL,              3,   1,   1, npop)      /* func args... -> result */
 OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> result */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
+OP_DEF(  CALL_STRING_INDEXOF, 3, 2,   1, npop)      /* this func args... -> number */
+OP_DEF(  CALL_STRING_SUBSTRING,3, 2,   1, npop)      /* this func args... -> string */
 OP_DEF(  RE_LITERAL_EXEC,   1,   3,   1, none)      /* pattern flags arg -> exec result */
 OP_DEF(  STR_RE_LITERAL_REPLACE, 1, 4, 1, none)     /* str pattern flags repl -> string */
 OP_DEF(  RE_EXEC_TRUTHY,    1,   3,   1, none)      /* this func arg -> bool */
 OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
-OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */
+OP_DEF(  NEW,               5,   2,   1, npop)      /* func new.target args -> obj (argc:u16 + ic_idx:u16) */
 OP_DEF(  APPLY,             3,   3,   1, u16)       /* func this [args] -> result */
 OP_DEF(  SUPER_APPLY,       3,   3,   1, u16)       /* super this [args] -> result */
 OP_DEF(  NEW_APPLY,         3,   2,   1, u16)       /* func new.target [args] -> obj */
@@ -247,7 +249,7 @@ OP_DEF(  IS_NULL,           1,   1,   1, none)      /* TOS === null */
 OP_DEF(  IMPORT,            1,   2,   1, none)      /* dynamic import(specifier) */
 OP_DEF(  IMPORT_SYNC,       1,   1,   1, none)      /* sync module load for static import */
 OP_DEF(  IMPORT_DEFAULT,    1,   1,   1, none)      /* ns -> default (SLOT_DEFAULT or ns) */
-OP_DEF(  IMPORT_NAMED,      5,   1,   1, atom)      /* ns -> named export (throw if missing) */
+OP_DEF(  IMPORT_NAMED,      7,   1,   1, atom)      /* ns -> named export (throw if missing), ic:u16 */
 OP_DEF(  EXPORT,            5,   1,   0, atom)      /* value -> (module namespace[name] = value) */
 OP_DEF(  EXPORT_ALL,        1,   1,   0, none)      /* ns -> (export all properties) */
 
@@ -312,24 +314,24 @@ OP_FLAG(PUT_UPVAL             , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(SET_UPVAL             , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(CLOSE_UPVAL           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPVAL)
 
-OP_FLAG(GET_GLOBAL            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
-OP_FLAG(GET_GLOBAL_UNDEF      , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(GET_GLOBAL            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
+OP_FLAG(GET_GLOBAL_UNDEF      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(PUT_GLOBAL            , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(IMPORT_DEFAULT        , SV_OPF_JIT_ELIGIBLE)
-OP_FLAG(IMPORT_NAMED          , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(IMPORT_NAMED          , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(EXPORT                , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(GET_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_FIELD2            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(PUT_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
-OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_ELEM2             , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_ELEM              , SV_OPF_JIT_ELIGIBLE)
-OP_FLAG(DEFINE_FIELD          , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(DEFINE_FIELD          , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_LENGTH            , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_FIELD_OPT         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
-OP_FLAG(GET_ELEM_OPT          , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(GET_ELEM_OPT          , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_PRIVATE           , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_PRIVATE           , SV_OPF_JIT_ELIGIBLE)
 
@@ -393,6 +395,8 @@ OP_FLAG(CALL                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_STRING_INDEXOF   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_STRING_SUBSTRING , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(TAIL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS)
 OP_FLAG(TAIL_CALL_METHOD      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS)
 OP_FLAG(NEW                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)

@@ -49,4 +49,71 @@ assert(f5.inobjLimitFrozen === true, 'C5 limit should be frozen');
 assert(f2.slackRemaining === 0, 'C2 slackRemaining mismatch');
 assert(f5.slackRemaining === 0, 'C5 slackRemaining mismatch');
 
+function Conditional(flag) {
+  this.a = 1;
+  if (flag) this.b = 2;
+}
+
+function Returning(value) {
+  this.discarded = true;
+  return { value };
+}
+
+for (let i = 0; i < 1000; i++) {
+  const conditional = new Conditional((i & 1) === 0);
+  assert(conditional.a === 1, 'conditional constructor lost stable field');
+  assert(('b' in conditional) === ((i & 1) === 0), 'conditional constructor shape leaked');
+
+  const returned = new Returning(i);
+  assert(returned.value === i, 'returning constructor value mismatch');
+  assert(!('discarded' in returned), 'returning constructor leaked receiver fields');
+}
+
+function ReplacePrototype() {
+  this.value = 1;
+}
+for (let i = 0; i < 200; i++) new ReplacePrototype();
+const replacement = { marker: 42 };
+ReplacePrototype.prototype = replacement;
+const replaced = new ReplacePrototype();
+assert(Object.getPrototypeOf(replaced) === replacement, 'NEW prototype IC used stale value');
+assert(replaced.marker === 42, 'replacement prototype property missing');
+
+function ObservableShape() {
+  this.a = 1;
+  this.sawFuture = 'b' in this;
+  this.sawDescriptor = Object.getOwnPropertyDescriptor(this, 'b') !== undefined;
+  this.sawHasOwn = Object.hasOwn(this, 'b');
+  this.sawHasOwnProperty = this.hasOwnProperty('b');
+  this.sawReflectDescriptor = Reflect.getOwnPropertyDescriptor(this, 'b') !== undefined;
+  this.b = 2;
+}
+for (let i = 0; i < 200; i++) {
+  const value = new ObservableShape();
+  assert(value.sawFuture === false, 'pre-shaped future field leaked through in');
+  assert(value.sawDescriptor === false, 'pre-shaped future descriptor leaked');
+  assert(value.sawHasOwn === false, 'pre-shaped future field leaked through Object.hasOwn');
+  assert(value.sawHasOwnProperty === false, 'pre-shaped future field leaked through hasOwnProperty');
+  assert(value.sawReflectDescriptor === false, 'pre-shaped future descriptor leaked through Reflect');
+  assert(
+    Object.keys(value).join(',') ===
+      'a,sawFuture,sawDescriptor,sawHasOwn,sawHasOwnProperty,sawReflectDescriptor,b',
+    'pre-shaped key order mismatch'
+  );
+}
+
+function DivergentShape(mode) {
+  this.a = 1;
+  if (mode === 1) this.b = 2;
+  else if (mode === 2) this.c = 3;
+}
+for (let i = 0; i < 200; i++) new DivergentShape(1);
+const skipped = new DivergentShape(0);
+assert(!('b' in skipped), 'skipped pre-shaped tail field leaked');
+assert(Object.keys(skipped).join(',') === 'a', 'skipped pre-shaped keys mismatch');
+const changed = new DivergentShape(2);
+assert(!('b' in changed), 'changed pre-shaped field leaked old field');
+assert(changed.c === 3, 'changed pre-shaped field missing replacement');
+assert(Object.keys(changed).join(',') === 'a,c', 'changed pre-shaped keys mismatch');
+
 console.log('ctorPropFeedback OK');

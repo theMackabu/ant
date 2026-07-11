@@ -187,6 +187,25 @@ static inline ant_value_t sv_import_named_value(
   return js_get(js, ns, name);
 }
 
+static inline ant_value_t sv_import_named_value_ic(
+  ant_t *js,
+  ant_value_t ns,
+  const char *name,
+  uint32_t len,
+  sv_func_t *func,
+  uint8_t *ip
+) {
+  if (vtype(ns) == T_OBJ && !is_proxy(js_as_obj(ns))) {
+    sv_atom_t atom = { .str = name, .len = len };
+    ant_value_t value = sv_prop_get_field_ic(js, ns, &atom, func, ip);
+    if (vtype(value) != T_UNDEF || is_err(value)) return value;
+    if (sv_module_namespace_has_export(js, ns, name, len) ||
+        js_get_slot(ns, SLOT_MODULE_LOADING) == js_true) return value;
+    return sv_missing_named_export_error(js, ns, name, len);
+  }
+  return sv_import_named_value(js, ns, name, len);
+}
+
 static inline ant_value_t sv_op_import_named(
   sv_vm_t *vm,
   ant_t *js,
@@ -200,7 +219,7 @@ static inline ant_value_t sv_op_import_named(
   ant_value_t ns = vm->stack[vm->sp - 1];
   sv_atom_t *a = &func->atoms[atom_idx];
 
-  ant_value_t value = sv_import_named_value(js, ns, a->str, a->len);
+  ant_value_t value = sv_import_named_value_ic(js, ns, a->str, a->len, func, ip);
   if (is_err(value)) return value;
   vm->stack[vm->sp - 1] = value;
 

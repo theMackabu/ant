@@ -55,7 +55,9 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) 
   return js_mkundef();
 }
 
-static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline ant_value_t sv_op_new(
+  sv_vm_t *vm, ant_t *js, sv_func_t *caller, uint8_t *ip
+) {
   uint16_t argc = sv_get_u16(ip + 1);
   ant_value_t *args = &vm->stack[vm->sp - argc];
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
@@ -75,6 +77,18 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   }
 
+  if (sv_native_ctor_allocates_receiver(func)) {
+    ant_value_t result = sv_call_native(
+      js, func, js_mkundef(), args, argc);
+    vm->sp -= argc + 2;
+    if (is_err(result)) return result;
+    if (!is_object_type(result))
+      return js_mkerr_typed(js, JS_ERR_TYPE,
+        "native constructor did not return an object");
+    vm->stack[vm->sp++] = result;
+    return result;
+  }
+
   ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
     ant_value_t proto_source = func;
@@ -84,7 +98,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
       proto_source = target_func;
       record_func = target_func;
     }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
+    proto = sv_get_ctor_prototype_ic(js, proto_source, caller, ip);
   }
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));

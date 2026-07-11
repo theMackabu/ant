@@ -82,6 +82,8 @@ typedef struct {
   ant_native_entry_t *native_entries;
   ant_private_table_t private_table;
   ant_proxy_state_t *proxy_state;
+  const ant_exotic_ops_t *exotic_ops;
+  ant_value_t (*exotic_keys)(ant_t *, ant_value_t);
   
   uint8_t native_count;
   uint8_t native_cap;
@@ -131,9 +133,6 @@ typedef struct ant_object {
   ant_shape_t *shape;
   ant_value_t *overflow_prop;
   
-  const ant_exotic_ops_t *exotic_ops;
-  ant_value_t (*exotic_keys)(ant_t *, ant_value_t);
-  
   ant_promise_state_t *promise_state;
   ant_extra_slot_t *extra_slots;
   
@@ -167,6 +166,18 @@ static inline bool ant_object_has_sidecar(const ant_object_t *obj) {
 static inline ant_object_sidecar_t *ant_object_sidecar(const ant_object_t *obj) {
   if (!ant_object_has_sidecar(obj)) return NULL;
   return (ant_object_sidecar_t *)((uintptr_t)obj->extra_slots & ~ant_sidecar);
+}
+
+static inline const ant_exotic_ops_t *ant_object_exotic_ops(const ant_object_t *obj) {
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  return sidecar ? sidecar->exotic_ops : NULL;
+}
+
+static inline ant_value_t (*ant_object_exotic_keys(const ant_object_t *obj))(
+  ant_t *, ant_value_t
+) {
+  ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+  return sidecar ? sidecar->exotic_keys : NULL;
 }
 
 static inline ant_extra_slot_t *ant_object_extra_slots_ptr(const ant_object_t *obj) {

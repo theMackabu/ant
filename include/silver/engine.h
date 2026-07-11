@@ -95,6 +95,7 @@ typedef struct {
   uint32_t cached_index;
   uint32_t epoch;
   uintptr_t cached_aux;
+  ant_value_t cached_key;
   // keep this union valid: each IC slot must belong to exactly one bytecode site/op
   union {
     ant_value_t receiver_proto;
@@ -106,6 +107,8 @@ typedef struct {
     } add;
   } guard;
   bool cached_is_own;
+  bool cached_is_accessor;
+  uint8_t cached_receiver_type;
 } sv_ic_entry_t;
 
 typedef struct {
@@ -113,13 +116,14 @@ typedef struct {
   ant_shape_t *shared_shape;
 } sv_obj_site_cache_t;
 
-#define SV_GF_IC_AUX_WARMUP_MASK    ((uintptr_t)0xFFu)
-#define SV_GF_IC_AUX_MISS_MASK      ((uintptr_t)0xFF00u)
-#define SV_GF_IC_AUX_ACTIVE_BIT     ((uintptr_t)0x10000u)
-#define SV_GF_IC_AUX_MISS_SHIFT     8u
+#define SV_CALL_NATIVE_CTOR_ALLOCATES (1u << 5)
+#define SV_GF_IC_AUX_WARMUP_MASK      ((uintptr_t)0xFFu)
+#define SV_GF_IC_AUX_MISS_MASK        ((uintptr_t)0xFF00u)
+#define SV_GF_IC_AUX_ACTIVE_BIT       ((uintptr_t)0x10000u)
 
-#define SV_GF_IC_WARMUP_ENABLE      16u
-#define SV_GF_IC_MISS_DISABLE       4u
+#define SV_GF_IC_AUX_MISS_SHIFT 8u
+#define SV_GF_IC_WARMUP_ENABLE  16u
+#define SV_GF_IC_MISS_DISABLE   4u
 
 static inline uint8_t sv_gf_ic_warmup(uintptr_t aux) {
   return (uint8_t)(aux & SV_GF_IC_AUX_WARMUP_MASK);
@@ -356,6 +360,13 @@ static inline sv_closure_t *js_closure_alloc(ant_t *js) {
 
 static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
+}
+
+static inline bool sv_native_ctor_allocates_receiver(ant_value_t func) {
+  if (vtype(func) != T_FUNC) return false;
+  sv_closure_t *closure = js_func_closure(func);
+  return closure &&
+    (closure->call_flags & SV_CALL_NATIVE_CTOR_ALLOCATES) != 0;
 }
 
 static inline ant_value_t js_func_obj(ant_value_t func) {

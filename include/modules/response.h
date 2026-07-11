@@ -7,6 +7,8 @@
 #include "types.h"
 #include "modules/url.h"
 
+typedef struct headers_data headers_data_t;
+
 typedef struct {
   char *type;
   url_state_t url;
@@ -14,6 +16,7 @@ typedef struct {
   uint8_t *body_data;
   size_t body_size;
   char *body_type;
+  headers_data_t *pending_headers;
   ant_value_t websocket;
   int url_list_size;
   int status;
@@ -21,6 +24,9 @@ typedef struct {
   bool body_is_stream;
   bool has_body;
   bool body_used;
+  bool headers_immutable;
+  bool body_data_owned;
+  bool body_type_owned;
 } response_data_t;
 
 extern ant_value_t g_response_proto;

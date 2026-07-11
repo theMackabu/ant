@@ -431,12 +431,18 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
 static inline bool sv_op_has_ic_slot(sv_op_t op) {
   return op == OP_GET_GLOBAL || op == OP_GET_GLOBAL_UNDEF ||
          op == OP_GET_FIELD || op == OP_GET_FIELD2 ||
-         op == OP_GET_FIELD_OPT || op == OP_PUT_FIELD;
+         op == OP_GET_FIELD_OPT || op == OP_PUT_FIELD ||
+         op == OP_IMPORT_NAMED || op == OP_DEFINE_FIELD;
 }
 
 static uint16_t alloc_ic_idx(sv_compiler_t *c) {
   if (!c || c->ic_count >= (int)UINT16_MAX) return UINT16_MAX;
   return (uint16_t)c->ic_count++;
+}
+
+static void emit_ic_op(sv_compiler_t *c, sv_op_t op) {
+  emit_op(c, op);
+  emit_u16(c, alloc_ic_idx(c));
 }
 
 static void sv_func_init_obj_sites(sv_func_t *func) {
@@ -2246,7 +2252,7 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, target->left);
     compile_expr(c, target->right);
     emit_op(c, OP_DUP2);
-    emit_op(c, OP_GET_ELEM);
+    emit_ic_op(c, OP_GET_ELEM);
     if (prefix) {
       emit_op(c, is_inc ? OP_INC : OP_DEC);
       emit_op(c, OP_INSERT3);
@@ -2501,7 +2507,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, target->left);
       compile_expr(c, target->right);
       emit_op(c, OP_DUP2);
-      emit_op(c, OP_GET_ELEM);
+      emit_ic_op(c, OP_GET_ELEM);
       int skip = emit_jump(c,
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
@@ -2519,7 +2525,7 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, target->left);
     compile_expr(c, target->right);
     emit_op(c, OP_DUP2);
-    emit_op(c, OP_GET_ELEM);
+    emit_ic_op(c, OP_GET_ELEM);
     compile_expr(c, node->right);
     switch (op) {
       case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
@@ -2757,7 +2763,7 @@ static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
   emit_op(c, OP_DUP);
   if (node->flags & 1) {
     compile_expr(c, node->right);
-    emit_op(c, OP_GET_ELEM);
+    emit_ic_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
     emit_private_token(c, node->right);
     emit_op(c, OP_GET_PRIVATE);
@@ -2859,6 +2865,30 @@ static bool compile_call_array_includes_intrinsic(
   emit_op(c, OP_CALL_ARRAY_INCLUDES);
   emit_u16(c, (uint16_t)node->args.count);
   
+  return true;
+}
+
+static bool compile_call_string_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count > UINT16_MAX) return false;
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+
+  uint8_t op;
+  if (is_ident_str(callee->right->str, callee->right->len, "indexOf", 7))
+    op = OP_CALL_STRING_INDEXOF;
+  else if (is_ident_str(callee->right->str, callee->right->len, "substring", 9))
+    op = OP_CALL_STRING_SUBSTRING;
+  else return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  for (int i = 0; i < node->args.count; i++) compile_expr(c, node->args.items[i]);
+  emit_op(c, op);
+  emit_u16(c, (uint16_t)node->args.count);
   return true;
 }
 
@@ -3306,6 +3336,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
     return;
 
+  if (compile_call_string_intrinsic(c, node, has_spread))
+    return;
+
   if (compile_regexp_literal_exec_intrinsic(c, node, has_spread))
     return;
 
@@ -3384,6 +3417,7 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, node->args.items[i]);
     emit_op(c, OP_NEW);
     emit_u16(c, (uint16_t)argc);
+    emit_u16(c, alloc_ic_idx(c));
   }
 }
 
@@ -3415,7 +3449,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
 
   if (node->flags & 1) {
     compile_expr(c, node->right);
-    emit_op(c, OP_GET_ELEM);
+    emit_ic_op(c, OP_GET_ELEM);
   } else if (is_private_name_node(node->right)) {
     emit_private_token(c, node->right);
     emit_op(c, OP_GET_PRIVATE);
@@ -3434,7 +3468,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
 void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
     compile_expr(c, node->right);
-    emit_op(c, OP_GET_ELEM_OPT);
+    emit_ic_op(c, OP_GET_ELEM_OPT);
   } else if (is_private_name_node(node->right)) {
     emit_private_token(c, node->right);
     emit_op(c, OP_GET_PRIVATE_OPT);
@@ -3744,12 +3778,12 @@ static void compile_destructure_pattern(
       emit_op(c, OP_DUP);
       if ((prop->flags & FN_COMPUTED)) {
         compile_expr(c, key);
-        emit_op(c, OP_GET_ELEM);
+        emit_ic_op(c, OP_GET_ELEM);
       } else if (key->type == N_IDENT) {
         emit_atom_op(c, OP_GET_FIELD, key->str, key->len);
       } else {
         compile_expr(c, key);
-        emit_op(c, OP_GET_ELEM);
+        emit_ic_op(c, OP_GET_ELEM);
       }
 
       if (default_val) {
@@ -4884,7 +4918,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
     emit_get_local(c, iter_local);
     emit_get_local(c, idx_local);
-    emit_op(c, OP_GET_ELEM);
+    emit_ic_op(c, OP_GET_ELEM);
   }
 
   compile_for_each_assign_target(c, node->left);

@@ -587,6 +587,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->sym.object_proto);
   gc_mark_value(js, js->sym.array_proto);
+  gc_mark_value(js, js->sym.string_proto);
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->new_target);
   gc_mark_value(js, js->current_func);
@@ -741,6 +742,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     free(sidecar->native_entries);
     free(sidecar->proxy_state);
     free(sidecar->private_table.entries);
+    free((void *)sidecar->exotic_ops);
     free(sidecar);
     obj->extra_slots = NULL;
   } 
@@ -752,8 +754,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   free(obj->overflow_prop);
   obj->overflow_prop = NULL;
-  free((void *)obj->exotic_ops);
-  obj->exotic_ops = NULL;
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 
