@@ -4531,6 +4531,41 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
+      case OP_INC:
+      case OP_DEC: {
+        int top_idx = vs.sp - 1;
+        bool input_is_num = vs.slot_type && vs.slot_type[top_idx] == SLOT_NUM;
+        MIR_reg_t rs = vstack_top(&vs);
+
+        if (vs.known_func) vs.known_func[top_idx] = NULL;
+        if (vs.has_const) vs.has_const[top_idx] = false;
+
+        MIR_label_t bailout = input_is_num ? NULL : MIR_new_label(ctx);
+        MIR_label_t done = input_is_num ? NULL : MIR_new_label(ctx);
+        if (!input_is_num)
+          mir_emit_is_num_guard(ctx, jit_func, r_bool, rs, bailout);
+
+        vstack_ensure_num(&vs, top_idx, ctx, jit_func, r_d_slot);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, op == OP_INC ? MIR_DADD : MIR_DSUB,
+            MIR_new_reg_op(ctx, vs.d_regs[top_idx]),
+            MIR_new_reg_op(ctx, vs.d_regs[top_idx]),
+            MIR_new_reg_op(ctx, r_d_one)));
+
+        if (!input_is_num) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, bailout);
+          mir_emit_bailout_jump_typed(ctx, jit_func,
+            r_bailout_off, bc_off,
+            r_bailout_sp, vs.sp, bailout_tramp,
+            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot,
+            top_idx, false, -1, false);
+          MIR_append_insn(ctx, jit_func, done);
+        }
+        break;
+      }
+
       case OP_POST_INC: {
         int top_idx = vs.sp - 1;
         vstack_ensure_boxed(&vs, top_idx, ctx, jit_func, r_d_slot);
@@ -4552,6 +4587,49 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, fd1),
             MIR_new_reg_op(ctx, r_d_one)));
         mir_d_to_i64(ctx, jit_func, rnew, fd2, r_d_slot);
+        break;
+      }
+
+      case OP_POST_DEC: {
+        int old_idx = vs.sp - 1;
+        bool input_is_num = vs.slot_type && vs.slot_type[old_idx] == SLOT_NUM;
+        MIR_reg_t rold = vstack_top(&vs);
+        vstack_push(&vs);
+        int new_idx = vs.sp - 1;
+
+        if (vs.known_func) {
+          vs.known_func[old_idx] = NULL;
+          vs.known_func[new_idx] = NULL;
+        }
+        if (vs.has_const) {
+          vs.has_const[old_idx] = false;
+          vs.has_const[new_idx] = false;
+        }
+
+        MIR_label_t bailout = input_is_num ? NULL : MIR_new_label(ctx);
+        MIR_label_t done = input_is_num ? NULL : MIR_new_label(ctx);
+        if (!input_is_num)
+          mir_emit_is_num_guard(ctx, jit_func, r_bool, rold, bailout);
+
+        vstack_ensure_num(&vs, old_idx, ctx, jit_func, r_d_slot);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_DSUB,
+            MIR_new_reg_op(ctx, vs.d_regs[new_idx]),
+            MIR_new_reg_op(ctx, vs.d_regs[old_idx]),
+            MIR_new_reg_op(ctx, r_d_one)));
+        vs.slot_type[new_idx] = SLOT_NUM;
+
+        if (!input_is_num) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, bailout);
+          mir_emit_bailout_jump_typed(ctx, jit_func,
+            r_bailout_off, bc_off,
+            r_bailout_sp, vs.sp - 1, bailout_tramp,
+            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot,
+            old_idx, false, -1, false);
+          MIR_append_insn(ctx, jit_func, done);
+        }
         break;
       }
 

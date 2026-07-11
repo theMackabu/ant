@@ -165,6 +165,14 @@ export function targets() {
     }
   );
 
+  list.push({
+    group: 'perf',
+    type: 'demo',
+    name: 'bench_dec',
+    entry: 'tests/bench_dec.js',
+    checks: [ms('duration ms', /([\d.]+)ms/, 100, 600)]
+  });
+
   list.push(
     { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 25000, minRps: 17500 },
     { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 15000, minRps: 10500 },
