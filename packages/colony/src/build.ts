@@ -1,19 +1,14 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import { rolldown, type Plugin } from 'rolldown';
 
-// Modules a deployed app may not import. The console and the fleet daemon also
-// reject these at upload/spawn time; failing here gives the developer the error
-// at build time, before anything leaves their machine.
 const FORBIDDEN = new Set(['fs', 'fs/promises', 'child_process']);
-
 const strip = (spec: string): string => spec.replace(/^node:/, '').replace(/^ant:/, '');
+
 const denied = (spec: string): never => {
   throw new Error(`"${spec}" is not allowed on ants.page — filesystem and subprocess access are blocked.`);
 };
 
-// Treat node:/ant: builtins as external (the Ant runtime provides them) but
-// hard-error on the denied ones — in both prefixed and bare form.
 const antPlugin: Plugin = {
   name: 'ant-platform',
   resolveId(source) {
@@ -26,9 +21,8 @@ const antPlugin: Plugin = {
   }
 };
 
-// Bundle + minify the entry into a single ESM artifact, returned as bytes.
 export async function bundle(entry: string): Promise<Uint8Array> {
-  if (!fs.existsSync(entry)) throw new Error(`entry not found: ${entry}`);
+  if (!existsSync(entry)) throw new Error(`entry not found: ${entry}`);
   const build = await rolldown({ input: entry, plugins: [antPlugin], logLevel: 'silent' });
   try {
     const result = await build.generate({ format: 'es', minify: true });
@@ -60,28 +54,35 @@ const MIME: Record<string, string> = {
 };
 
 export interface Asset {
-  path: string; // url path, e.g. "/assets/index.js"
+  path: string;
   ct: string;
-  body: string; // base64
+  body: string;
 }
 
-const ASSET_LIMIT = 5 * 1024 * 1024; // per-file cap (keeps the manifest sane)
+const ASSET_LIMIT = 5 * 1024 * 1024;
 
-// Walk an assets directory into a flat list of url-pathed, base64-encoded files.
 export function collectAssets(dir: string): Asset[] {
-  if (!fs.existsSync(dir)) throw new Error(`assets directory not found: ${dir}`);
+  if (!existsSync(dir)) throw new Error(`assets directory not found: ${dir}`);
+  if (!statSync(dir).isDirectory()) throw new Error(`assets path is not a directory: ${dir}`);
   const out: Asset[] = [];
   const walk = (abs: string, rel: string) => {
-    for (const name of fs.readdirSync(abs)) {
-      const a = path.join(abs, name);
-      const r = rel + '/' + name;
-      const st = fs.statSync(a);
-      if (st.isDirectory()) {
-        walk(a, r);
-      } else {
-        if (st.size > ASSET_LIMIT) throw new Error(`asset too large (>${ASSET_LIMIT} bytes): ${r}`);
-        out.push({ path: r, ct: MIME[path.extname(name).toLowerCase()] || 'application/octet-stream', body: fs.readFileSync(a).toString('base64') });
+    const entries = readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const assetPath = join(abs, entry.name);
+      const urlPath = `${rel}/${entry.name}`;
+      if (entry.isSymbolicLink()) throw new Error(`asset symlinks are not supported: ${urlPath}`);
+      if (entry.isDirectory()) {
+        walk(assetPath, urlPath);
+        continue;
       }
+      if (!entry.isFile()) continue;
+      const size = statSync(assetPath).size;
+      if (size > ASSET_LIMIT) throw new Error(`asset too large (>${ASSET_LIMIT} bytes): ${urlPath}`);
+      out.push({
+        path: urlPath,
+        ct: MIME[extname(entry.name).toLowerCase()] || 'application/octet-stream',
+        body: readFileSync(assetPath).toString('base64')
+      });
     }
   };
   walk(dir, '');
@@ -93,12 +94,11 @@ export interface Migration {
   sql: string;
 }
 
-// Read *.sql files from a migrations dir, sorted by filename (the tag).
 export function collectMigrations(dir: string): Migration[] {
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter(f => f.endsWith('.sql'))
-    .sort()
-    .map(f => ({ tag: f.replace(/\.sql$/, ''), sql: fs.readFileSync(path.join(dir, f), 'utf-8') }));
+  if (!existsSync(dir)) throw new Error(`migrations directory not found: ${dir}`);
+  if (!statSync(dir).isDirectory()) throw new Error(`migrations path is not a directory: ${dir}`);
+  return readdirSync(dir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.sql'))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(entry => ({ tag: entry.name.replace(/\.sql$/, ''), sql: readFileSync(join(dir, entry.name), 'utf-8') }));
 }

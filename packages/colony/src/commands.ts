@@ -1,38 +1,41 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { loadColonyToml, findColonyToml } from './config';
+import { loadColonyToml, findColonyToml, normalizeProjectName } from './config';
 import { bundle, collectAssets, collectMigrations, type Asset, type Migration } from './build';
 import { getProject, deployManifest, deleteProject, listProjects } from './api';
 import { sha256hex, styleText } from './utils';
 
-// Vendor ants.land deps before bundling (deps come from the registry, not a live
-// CDN at runtime). Reuses the antland resolver via its CLI. No-op if there are no
-// deps or node_modules already exists.
 function ensureDeps(): void {
-  if (!fs.existsSync('package.json')) return;
-  let deps: Record<string, string> = {};
+  if (!existsSync('package.json')) return;
+  let manifest: unknown;
   try {
-    deps = (JSON.parse(fs.readFileSync('package.json', 'utf-8')).dependencies ?? {}) as Record<string, string>;
-  } catch {
-    return;
+    manifest = JSON.parse(readFileSync('package.json', 'utf-8'));
+  } catch (error) {
+    throw new Error(`could not read package.json: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (Object.keys(deps).length === 0 || fs.existsSync('node_modules')) return;
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) throw new Error('package.json must contain an object.');
+  const deps = (manifest as { dependencies?: unknown }).dependencies;
+  if (deps !== undefined && (typeof deps !== 'object' || deps === null || Array.isArray(deps)))
+    throw new Error('package.json `dependencies` must contain an object.');
+  if (!deps || Object.keys(deps).length === 0 || existsSync('node_modules')) return;
+
   console.log(styleText('dim', 'Installing deps from ants.land (antland install)…'));
-  let r = spawnSync('antland', ['install'], { stdio: 'inherit' });
-  if (r.error) r = spawnSync('npx', ['antland', 'install'], { stdio: 'inherit' });
-  if (r.error || r.status) throw new Error('could not vendor deps — run `antland install` manually, then `colony deploy`.');
+  let result = spawnSync('antland', ['install'], { stdio: 'inherit' });
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')
+    result = spawnSync('npx', ['--yes', 'antland', 'install'], { stdio: 'inherit' });
+  if (result.error || result.status !== 0) throw new Error('could not vendor deps — run `antland install` manually, then `colony deploy`.');
 }
 
 export async function deploy(): Promise<void> {
   const cfg = loadColonyToml();
   ensureDeps();
+
   console.log(`Building ${styleText('cyan', cfg.name)} ${styleText('dim', `(${cfg.main})`)}…`);
   const bytes = await bundle(cfg.main);
   const script = new TextDecoder().decode(bytes);
   const hash = sha256hex(bytes);
 
-  // per-sql-binding migrations from their migrations_dir
   const migrations: Record<string, Migration[]> = {};
   for (const b of cfg.bindings) {
     if (b.kind === 'sql' && b.migrationsDir) {
@@ -48,7 +51,8 @@ export async function deploy(): Promise<void> {
   }
   console.log(styleText('dim', `  bundle ${bytes.byteLength} bytes · sha256 ${hash.slice(0, 12)}`));
 
-  if (!(await getProject(cfg.name))) console.log(`Creating project ${styleText('cyan', cfg.name)} ${styleText('dim', `(placement=${cfg.placement})`)}…`);
+  if (!(await getProject(cfg.name)))
+    console.log(`Creating project ${styleText('cyan', cfg.name)} ${styleText('dim', `(placement=${cfg.placement})`)}…`);
   for (const b of cfg.bindings) console.log(styleText('dim', `  bind env.${b.binding} -> ${b.kind} ${b.id}`));
 
   const r = await deployManifest(cfg.name, {
@@ -60,7 +64,9 @@ export async function deploy(): Promise<void> {
     bindings: cfg.bindings.map(b => ({ kind: b.kind, name: b.binding, id: b.id, resourceName: b.name })),
     migrations,
     assets,
-    assetsConfig: cfg.assets ? { notFound: cfg.assets.notFound, startAnt: cfg.assets.startAnt, binding: cfg.assets.binding, name: cfg.assets.name } : null
+    assetsConfig: cfg.assets
+      ? { notFound: cfg.assets.notFound, startAnt: cfg.assets.startAnt, binding: cfg.assets.binding, name: cfg.assets.name }
+      : null
   });
   console.log();
   console.log(`${styleText('green', 'Deployed')} ${styleText('cyan', r.url)}`);
@@ -87,12 +93,12 @@ export async function list(): Promise<void> {
 }
 
 export function init(name?: string): void {
-  const p = path.join(process.cwd(), 'colony.toml');
-  if (fs.existsSync(p)) throw new Error('colony.toml already exists here.');
-  const projName = (name ?? path.basename(process.cwd())).toLowerCase();
-  fs.writeFileSync(
+  const p = join(process.cwd(), 'colony.toml');
+  if (existsSync(p)) throw new Error('colony.toml already exists here.');
+  const projName = normalizeProjectName(name ?? basename(process.cwd()));
+  writeFileSync(
     p,
-    `name = "${projName}"
+    `name = ${JSON.stringify(projName)}
 main = "server.js"
 placement = "default"
 

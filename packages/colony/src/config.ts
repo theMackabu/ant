@@ -1,34 +1,31 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { parseTomlDoc, type TomlVal } from './utils';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parse } from 'smol-toml';
 
-// The control-plane API (the console is not self-hostable, so this is fixed).
 export function consoleUrl(): string {
   return 'https://console.antjs.org';
 }
 
 export interface BindingDef {
   kind: 'kv' | 'sql';
-  binding: string; // the env.<binding> alias
-  id: string; // stable resource id (storage is keyed by this, not the name)
-  name?: string; // human resource name shown in the UI (like wrangler database_name)
-  migrationsDir?: string; // sql only
+  binding: string;
+  id: string;
+  name?: string;
+  migrationsDir?: string;
 }
 
 export interface AssetsDef {
-  binding: string; // shown in the bindings UI (like Cloudflare's ASSETS binding)
-  name?: string; // optional display name
+  binding: string;
+  name?: string;
   directory: string;
   notFound: 'single-page-application' | 'none';
-  // When Ant runs first: true = all paths, a glob (string) or list of globs =
-  // those paths; everything else is served as a static asset.
   startAnt: boolean | string[];
 }
 
 export interface ColonyConfig {
   name: string;
   main: string;
-  placement: string; // default (free) | smart (paid)
+  placement: string;
   observability: boolean;
   vars: Record<string, string>;
   bindings: BindingDef[];
@@ -36,50 +33,112 @@ export interface ColonyConfig {
 }
 
 export function findColonyToml(dir = process.cwd()): string | null {
-  const p = path.join(dir, 'colony.toml');
-  return fs.existsSync(p) ? p : null;
+  const configPath = join(dir, 'colony.toml');
+  return existsSync(configPath) ? configPath : null;
 }
 
-const str = (v: TomlVal | undefined, d = ''): string => (typeof v === 'string' ? v : d);
+type Table = Record<string, unknown>;
+
+function table(value: unknown, key: string): Table {
+  if (value === undefined) return {};
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`\`${key}\` must be a table.`);
+  return value as Table;
+}
+
+function string(value: unknown, key: string, fallback?: string): string {
+  if (value === undefined && fallback !== undefined) return fallback;
+  if (typeof value !== 'string' || !value) throw new Error(`\`${key}\` must be a non-empty string.`);
+  return value;
+}
+
+function optionalString(value: unknown, key: string): string | undefined {
+  if (value === undefined) return undefined;
+  return string(value, key);
+}
+
+export function normalizeProjectName(value: string): string {
+  const name = value.toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name))
+    throw new Error('project name must be a valid hostname label (letters, numbers, and interior hyphens; 63 characters maximum).');
+  return name;
+}
+
+function bindings(value: unknown, kind: BindingDef['kind']): BindingDef[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`\`[[${kind}]]\` must be an array of tables.`);
+  return value.map((entry, index) => {
+    const prefix = `${kind}[${index}]`;
+    const item = table(entry, prefix);
+    const binding: BindingDef = {
+      kind,
+      binding: string(item.binding, `${prefix}.binding`),
+      id: string(item.id, `${prefix}.id`),
+      name: optionalString(item.name, `${prefix}.name`)
+    };
+    if (kind === 'sql') binding.migrationsDir = optionalString(item.migrations_dir, `${prefix}.migrations_dir`);
+    return binding;
+  });
+}
+
+function startAnt(value: unknown): boolean | string[] {
+  if (value === undefined) return [];
+  if (typeof value === 'boolean') return value;
+  const routes = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(routes) || routes.some(route => typeof route !== 'string'))
+    throw new Error('`assets.start_ant` must be a boolean, string, or array of strings.');
+  return routes as string[];
+}
 
 export function loadColonyToml(dir = process.cwd()): ColonyConfig {
   const p = findColonyToml(dir);
   if (!p) throw new Error('no colony.toml here. Run `colony init` first.');
-  const doc = parseTomlDoc(fs.readFileSync(p, 'utf-8'));
-  const name = str(doc.root.name);
-  if (!name) throw new Error('colony.toml is missing `name`.');
+  let doc: Table;
+  try {
+    doc = parse(readFileSync(p, 'utf-8')) as Table;
+  } catch (error) {
+    throw new Error(`could not parse ${p}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
+  const varsTable = table(doc.vars, 'vars');
   const vars: Record<string, string> = {};
-  for (const [k, v] of Object.entries(doc.tables.vars ?? {})) vars[k] = String(v);
+  for (const [key, value] of Object.entries(varsTable)) {
+    if (!['string', 'number', 'boolean'].includes(typeof value)) throw new Error(`\`vars.${key}\` must be a scalar value.`);
+    vars[key] = String(value);
+  }
 
-  const bindings: BindingDef[] = [];
-  for (const b of doc.arrays.kv ?? []) bindings.push({ kind: 'kv', binding: str(b.binding), id: str(b.id), name: str(b.name) || undefined });
-  for (const b of doc.arrays.sql ?? []) bindings.push({ kind: 'sql', binding: str(b.binding), id: str(b.id), name: str(b.name) || undefined, migrationsDir: str(b.migrations_dir) || undefined });
-  for (const b of bindings) {
-    if (!b.binding) throw new Error(`a [[${b.kind}]] binding is missing \`binding\`.`);
-    if (!b.id) throw new Error(`[[${b.kind}]] "${b.binding}" is missing \`id\`.`);
+  const allBindings = [...bindings(doc.kv, 'kv'), ...bindings(doc.sql, 'sql')];
+  const names = new Set<string>();
+  for (const binding of allBindings) {
+    if (names.has(binding.binding)) throw new Error(`duplicate binding: ${binding.binding}`);
+    names.add(binding.binding);
   }
 
   let assets: AssetsDef | undefined;
-  const a = doc.tables.assets;
-  if (a) {
-    const sa = a.start_ant;
+  if (doc.assets !== undefined) {
+    const a = table(doc.assets, 'assets');
+    const notFound = a.not_found_handling ?? 'none';
+    if (notFound !== 'none' && notFound !== 'single-page-application')
+      throw new Error('`assets.not_found_handling` must be `none` or `single-page-application`.');
     assets = {
-      binding: str(a.binding) || 'ASSETS',
-      name: str(a.name) || undefined,
-      directory: str(a.directory, './dist'),
-      notFound: str(a.not_found_handling) === 'single-page-application' ? 'single-page-application' : 'none',
-      startAnt: sa === true ? true : typeof sa === 'string' ? [sa] : Array.isArray(sa) ? sa.map(String) : []
+      binding: string(a.binding, 'assets.binding', 'ASSETS'),
+      name: optionalString(a.name, 'assets.name'),
+      directory: string(a.directory, 'assets.directory', './dist'),
+      notFound,
+      startAnt: startAnt(a.start_ant)
     };
   }
 
+  const observability = table(doc.observability, 'observability');
+  if (observability.enabled !== undefined && typeof observability.enabled !== 'boolean')
+    throw new Error('`observability.enabled` must be a boolean.');
+
   return {
-    name: name.toLowerCase(),
-    main: str(doc.root.main) || str(doc.root.entry) || 'server.js',
-    placement: str(doc.root.placement) || 'default',
-    observability: doc.tables.observability?.enabled === true,
+    name: normalizeProjectName(string(doc.name, 'name')),
+    main: string(doc.main ?? doc.entry, 'main', 'server.js'),
+    placement: string(doc.placement, 'placement', 'default'),
+    observability: observability.enabled === true,
     vars,
-    bindings,
+    bindings: allBindings,
     assets
   };
 }

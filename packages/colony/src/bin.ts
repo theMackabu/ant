@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { deploy, destroy, list, init } from './commands';
 import { login, logout, whoami } from './auth';
-import { ExecError, prettyTime, styleText } from './utils';
+import { prettyTime, styleText } from './utils';
 
 const args = process.argv.slice(2);
 
@@ -47,9 +47,8 @@ async function run(fn: () => Promise<void> | void): Promise<void> {
     console.log();
     console.log(`${styleText('green', 'Done')} in ${prettyTime(Date.now() - start)}`);
   } catch (err) {
-    if (err instanceof ExecError) process.exit(err.code);
     console.error(styleText('red', err instanceof Error ? err.message : String(err)));
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 

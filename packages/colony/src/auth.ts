@@ -31,9 +31,15 @@ function cfgPath(): string {
 
 export function readConfig(): Cfg {
   try {
-    return JSON.parse(fs.readFileSync(cfgPath(), 'utf-8')) as Cfg;
-  } catch {
-    return {};
+    const config = JSON.parse(fs.readFileSync(cfgPath(), 'utf-8')) as unknown;
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Error('expected a JSON object');
+    for (const key of ['token', 'email', 'console'] as const) {
+      if (key in config && typeof (config as Record<string, unknown>)[key] !== 'string') throw new Error(`\`${key}\` must be a string`);
+    }
+    return config as Cfg;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Error(`could not read ${cfgPath()}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -43,7 +49,6 @@ function writeConfig(c: Cfg): void {
   fs.writeFileSync(cfgPath(), JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
 }
 
-// COLONY_TOKEN wins so CI can deploy without a saved config.
 export function readToken(): string | null {
   return process.env.COLONY_TOKEN ?? readConfig().token ?? null;
 }
@@ -60,18 +65,18 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
     headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
-  if (!res.ok) throw new Error(`Received ${res.status} from ${url}`);
-  return res.json() as Promise<T>;
+  const data = (await res.json().catch(() => null)) as (T & { error?: string; message?: string }) | null;
+  if (!res.ok) throw new Error(data?.message || data?.error || `Received ${res.status} from ${url}`);
+  if (data === null) throw new Error(`Received an invalid response from ${url}`);
+  return data;
 }
 
 function openBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
-  try {
-    spawn(cmd, args as string[], { stdio: 'ignore', detached: true }).unref();
-  } catch {
-    /* user can copy the URL */
-  }
+  const child = spawn(cmd, args as string[], { stdio: 'ignore', detached: true });
+  child.once('error', () => {});
+  child.unref();
 }
 
 export async function login(): Promise<void> {

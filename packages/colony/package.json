@@ -1,5 +1,5 @@
 {
-  "name": "colony",
+  "name": "@antjs.org/colony",
   "version": "0.0.1",
   "description": "Deploy Ant apps to ants.page (console.antjs.org)",
   "repository": {
@@ -14,7 +14,8 @@
   "scripts": {
     "build": "rimraf dist && tsc",
     "cli": "ant src/bin.ts",
-    "prepack": "ant build"
+    "test": "npm run build && node --test test/*.test.cjs",
+    "prepack": "npm run build"
   },
   "keywords": [
     "ants.page",
@@ -37,6 +38,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "rolldown": "^1.1.3"
+    "rolldown": "^1.1.3",
+    "smol-toml": "^1.7.0"
   }
 }
