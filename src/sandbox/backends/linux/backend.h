@@ -198,6 +198,11 @@ struct ant_hvf_vm {
   atomic_bool vcpu_thread_valid;
   atomic_bool vcpu_running;
   atomic_bool vsock_wake_pending;
+  clockid_t vcpu_clock_id;
+  atomic_bool cpu_run_active;
+  atomic_uint_fast64_t cpu_time_ns;
+  atomic_uint_fast64_t cpu_run_base_ns;
+  atomic_uint_fast64_t cpu_run_start_ns;
   
   ant_hvf_virtio_device_t blk;
   ant_hvf_virtio_device_t net;
@@ -239,8 +244,10 @@ struct ant_hvf_vm {
   void *frame_handler_user;
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
+  unsigned int cpu_time_ms;
   
   atomic_bool canceled;
+  atomic_bool cpu_timed_out;
   atomic_bool timeout_disarmed;
   atomic_bool timed_out;
   

@@ -104,7 +104,9 @@ struct ant_hvf_vm {
   
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
+  unsigned int cpu_time_ms;
   atomic_bool timed_out;
+  atomic_bool cpu_timed_out;
   atomic_bool canceled;
   atomic_bool vcpu_running;
   atomic_bool vsock_wake_pending;
@@ -134,6 +136,8 @@ typedef struct {
   ant_hvf_vm_t *vm;
   unsigned int timeout_ms;
   bool until_request_sent;
+  atomic_bool stop;
+  struct timespec started_at;
 } ant_hvf_timeout_t;
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);

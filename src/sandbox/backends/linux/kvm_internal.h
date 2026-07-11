@@ -57,5 +57,6 @@ void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, 
 int ant_kvm_ioctl(int fd, unsigned long req, void *arg, const char *op);
 int ant_kvm_find_symbol(const char *path, const char *name, uint64_t *value_out);
 uint64_t ant_kvm_elapsed_ms(const struct timespec *start, const struct timespec *now);
+uint64_t ant_kvm_cpu_time_ns(ant_hvf_vm_t *vm);
 
 #endif

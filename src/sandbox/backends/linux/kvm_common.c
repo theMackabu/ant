@@ -21,6 +21,19 @@ uint64_t ant_kvm_elapsed_ms(const struct timespec *start, const struct timespec 
   return elapsed;
 }
 
+uint64_t ant_kvm_cpu_time_ns(ant_hvf_vm_t *vm) {
+  if (!vm) return 0;
+  if (!atomic_load_explicit(&vm->cpu_run_active, memory_order_acquire))
+    return atomic_load_explicit(&vm->cpu_time_ns, memory_order_acquire);
+  struct timespec now;
+  if (clock_gettime(vm->vcpu_clock_id, &now) != 0)
+    return atomic_load_explicit(&vm->cpu_time_ns, memory_order_acquire);
+  uint64_t current = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+  uint64_t start = atomic_load_explicit(&vm->cpu_run_start_ns, memory_order_acquire);
+  uint64_t base = atomic_load_explicit(&vm->cpu_run_base_ns, memory_order_acquire);
+  return base + (current >= start ? current - start : 0);
+}
+
 void *ant_kvm_deadline_thread(void *opaque) {
   ant_kvm_deadline_t *deadline = opaque;
   const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
@@ -29,12 +42,21 @@ void *ant_kvm_deadline_thread(void *opaque) {
         atomic_load_explicit(&deadline->vm->canceled, memory_order_acquire)) {
       return NULL;
     }
-    if (deadline->timeout_until_request_sent &&
-        atomic_load_explicit(&deadline->vm->timeout_disarmed, memory_order_acquire)) {
+    bool wall_disarmed = deadline->timeout_until_request_sent &&
+      atomic_load_explicit(&deadline->vm->timeout_disarmed, memory_order_acquire);
+    if (wall_disarmed) {
+      if (deadline->vm->cpu_time_ms == 0) return NULL;
+    }
+    if (deadline->vm->cpu_time_ms > 0 &&
+        ant_kvm_cpu_time_ns(deadline->vm) >=
+          (uint64_t)deadline->vm->cpu_time_ms * 1000000ull) {
+      atomic_store_explicit(&deadline->vm->cpu_timed_out, true, memory_order_release);
+      ant_hvf_wake_vcpu(deadline->vm);
       return NULL;
     }
     struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+    if (!wall_disarmed && deadline->timeout_ms > 0 &&
+        clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
         ant_kvm_elapsed_ms(&deadline->start, &now) >= deadline->timeout_ms) {
       atomic_store_explicit(&deadline->vm->timed_out, true, memory_order_release);
       ant_hvf_wake_vcpu(deadline->vm);
@@ -62,6 +84,8 @@ void ant_kvm_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *result, 
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_KERNEL_PANIC, rc ? rc : -EFAULT);
   else if (rc == -ENOSYS)
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE, rc);
+  else if (rc == -EDQUOT || (vm && atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)))
+    ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_CPU_TIME_LIMIT, rc ? rc : -EDQUOT);
   else if (rc == -ETIMEDOUT)
     ant_kvm_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
   else if (rc == -ECANCELED || (vm && atomic_load_explicit(&vm->canceled, memory_order_acquire)))

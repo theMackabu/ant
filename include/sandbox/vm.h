@@ -35,6 +35,7 @@ typedef enum {
   ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE,
   ANT_SANDBOX_VM_RESULT_CONFIG_ERROR,
   ANT_SANDBOX_VM_RESULT_TIMEOUT,
+  ANT_SANDBOX_VM_RESULT_CPU_TIME_LIMIT,
   ANT_SANDBOX_VM_RESULT_KERNEL_PANIC,
   ANT_SANDBOX_VM_RESULT_PROTOCOL_ERROR,
   ANT_SANDBOX_VM_RESULT_TRANSPORT_ERROR,
@@ -46,6 +47,13 @@ typedef struct {
   ant_sandbox_vm_result_kind_t kind;
   int code;
 } ant_sandbox_vm_result_t;
+
+typedef struct {
+  uint64_t cpu_time_ns;
+  uint64_t wall_time_ns;
+  uint64_t resident_memory_bytes;
+  bool resident_memory_available;
+} ant_sandbox_vm_stats_t;
 
 typedef struct {
   const void *request_data;
@@ -70,6 +78,7 @@ typedef struct {
   unsigned long long memory_size;
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
+  unsigned int cpu_time_ms;
   bool verbose;
   ant_sandbox_vm_frame_handler_t frame_handler;
   void *frame_handler_user;
@@ -82,6 +91,7 @@ typedef struct ant_sandbox_vm_backend {
   int (*create_session)(const ant_sandbox_vm_config_t *config, void **session_out);
   int (*execute_session)(void *session, const ant_sandbox_vm_request_t *request);
   int (*send_session)(void *session, const void *data, size_t len);
+  int (*get_stats_session)(void *session, ant_sandbox_vm_stats_t *stats);
   int (*cancel_session)(void *session);
   void (*destroy_session)(void *session);
 } ant_sandbox_vm_backend_t;
@@ -106,6 +116,7 @@ int ant_sandbox_vm_start(const ant_sandbox_vm_config_t *config);
 int ant_sandbox_vm_session_cancel(ant_sandbox_vm_session_t *session);
 int ant_sandbox_vm_session_execute(ant_sandbox_vm_session_t *session, const ant_sandbox_vm_request_t *request);
 int ant_sandbox_vm_session_send(ant_sandbox_vm_session_t *session, const void *data, size_t len);
+int ant_sandbox_vm_session_stats(ant_sandbox_vm_session_t *session, ant_sandbox_vm_stats_t *stats);
 int ant_sandbox_vm_session_create(const ant_sandbox_vm_config_t *config, ant_sandbox_vm_session_t **session_out);
 
 #endif

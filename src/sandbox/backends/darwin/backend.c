@@ -97,21 +97,43 @@ void ant_hvf_verbosef(ant_hvf_vm_t *vm, const char *fmt, ...) {
   fputc('\n', stderr);
 }
 
+static uint64_t ant_hvf_process_cpu_time_ns(void) {
+  struct timespec value;
+  if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &value) != 0) return 0;
+  return (uint64_t)value.tv_sec * 1000000000ull + (uint64_t)value.tv_nsec;
+}
+
+static uint64_t ant_hvf_elapsed_ns(const struct timespec *start, const struct timespec *end) {
+  uint64_t seconds = (uint64_t)(end->tv_sec - start->tv_sec);
+  int64_t nanos = end->tv_nsec - start->tv_nsec;
+  if (nanos < 0) { seconds--; nanos += 1000000000ll; }
+  return seconds * 1000000000ull + (uint64_t)nanos;
+}
+
 void *ant_hvf_timeout_thread(void *arg) {
   ant_hvf_timeout_t *timeout = arg;
-  
-  uint64_t ns = (uint64_t)timeout->timeout_ms * 1000000ULL;
-  struct timespec sleep_for = {
-    .tv_sec = (time_t)(ns / 1000000000ULL),
-    .tv_nsec = (long)(ns % 1000000000ULL),
-  };
-
-  while (nanosleep(&sleep_for, &sleep_for) != 0 && errno == EINTR) {}
-  if (timeout->until_request_sent &&
-      atomic_load_explicit(&timeout->vm->vsock.request_sent, memory_order_acquire)) return NULL;
-  atomic_store_explicit(&timeout->vm->timed_out, true, memory_order_release);
-  hv_vcpus_exit(&timeout->vm->vcpu, 1);
-  
+  const struct timespec tick = { .tv_sec = 0, .tv_nsec = 1000000 };
+  while (!atomic_load_explicit(&timeout->stop, memory_order_acquire)) {
+    if (timeout->vm->cpu_time_ms > 0 &&
+        ant_hvf_process_cpu_time_ns() >= (uint64_t)timeout->vm->cpu_time_ms * 1000000ull) {
+      atomic_store_explicit(&timeout->vm->cpu_timed_out, true, memory_order_release);
+      hv_vcpus_exit(&timeout->vm->vcpu, 1);
+      return NULL;
+    }
+    bool wall_disarmed = timeout->until_request_sent &&
+      atomic_load_explicit(&timeout->vm->vsock.request_sent, memory_order_acquire);
+    if (timeout->timeout_ms > 0 && !wall_disarmed) {
+      struct timespec now;
+      if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+          ant_hvf_elapsed_ns(&timeout->started_at, &now) >=
+            (uint64_t)timeout->timeout_ms * 1000000ull) {
+        atomic_store_explicit(&timeout->vm->timed_out, true, memory_order_release);
+        hv_vcpus_exit(&timeout->vm->vcpu, 1);
+        return NULL;
+      }
+    }
+    nanosleep(&tick, NULL);
+  }
   return NULL;
 }
 int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_request_sent) {
@@ -121,10 +143,13 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
   bool timeout_thread_started = false;
   int rc = 0;
   
-  if (timeout_ms > 0) {
-    timeout.vm = vm;
-    timeout.timeout_ms = timeout_ms;
-    timeout.until_request_sent = timeout_until_request_sent;
+  if (timeout_ms > 0 || vm->cpu_time_ms > 0) {
+    timeout = (ant_hvf_timeout_t){
+      .vm = vm,
+      .timeout_ms = timeout_ms,
+      .until_request_sent = timeout_until_request_sent,
+    };
+    clock_gettime(CLOCK_MONOTONIC, &timeout.started_at);
     int prc = pthread_create(&timeout_thread, NULL, ant_hvf_timeout_thread, &timeout);
     if (prc == 0) timeout_thread_started = true;
   }
@@ -181,7 +206,10 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
       rc = ant_hvf_raise_vtimer(vm, "vtimer activated");
       if (rc != 0) goto done;
     } else if (vm->vcpu_exit->reason == HV_EXIT_REASON_CANCELED) {
-      if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
+      if (atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)) {
+        rc = -EDQUOT;
+        goto done;
+      } else if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
         rc = -ECANCELED;
         goto done;
       } else if (atomic_load_explicit(&vm->timed_out, memory_order_acquire)) {
@@ -221,7 +249,7 @@ int ant_hvf_run(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool timeout_until_re
 
 done:
   if (timeout_thread_started) {
-    if (!atomic_load_explicit(&vm->timed_out, memory_order_acquire)) pthread_cancel(timeout_thread);
+    atomic_store_explicit(&timeout.stop, true, memory_order_release);
     pthread_join(timeout_thread, NULL);
   }
   return rc;
@@ -253,6 +281,8 @@ static void ant_hvf_classify_result(ant_hvf_vm_t *vm, ant_sandbox_vm_result_t *r
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_KERNEL_PANIC, rc ? rc : -EFAULT);
   else if (rc == -ENOSYS)
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE, rc);
+  else if (rc == -EDQUOT || (vm && atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)))
+    ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_CPU_TIME_LIMIT, rc ? rc : -EDQUOT);
   else if (rc == -ETIMEDOUT)
     ant_hvf_set_result(result, ANT_SANDBOX_VM_RESULT_TIMEOUT, rc);
   else if (vm && vm->vsock.protocol_error)
@@ -444,6 +474,7 @@ static int ant_hvf_session_create(const ant_sandbox_vm_config_t *config, void **
   vm->verbose = config->verbose;
   vm->timeout_ms = config->timeout_ms;
   vm->boot_timeout_ms = config->boot_timeout_ms;
+  vm->cpu_time_ms = config->cpu_time_ms;
   vm->frame_handler = config->frame_handler;
   vm->frame_handler_user = config->frame_handler_user;
   ant_hvf_verbosef(vm,
@@ -575,6 +606,7 @@ static int ant_hvf_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->vsock.protocol_error = false;
   vm->vsock.transport_error = false;
   atomic_store_explicit(&vm->timed_out, false, memory_order_release);
+  atomic_store_explicit(&vm->cpu_timed_out, false, memory_order_release);
   atomic_store_explicit(&vm->canceled, false, memory_order_release);
   
   vm->frame_handler = request->frame_handler;
@@ -620,6 +652,12 @@ static int ant_hvf_session_send(void *opaque, const void *data, size_t len) {
   if (!opaque) return -EINVAL;
   ant_hvf_session_t *session = opaque;
   return ant_hvf_vsock_queue_frame(&session->vm, data, len);
+}
+
+static int ant_hvf_session_stats(void *opaque, ant_sandbox_vm_stats_t *stats) {
+  if (!opaque || !stats) return -EINVAL;
+  stats->cpu_time_ns = ant_hvf_process_cpu_time_ns();
+  return 0;
 }
 
 static int ant_hvf_session_cancel(void *opaque) {
@@ -676,6 +714,7 @@ const ant_sandbox_vm_backend_t ant_sandbox_vm_darwin_backend = {
   .create_session = ant_hvf_session_create,
   .execute_session = ant_hvf_session_execute,
   .send_session = ant_hvf_session_send,
+  .get_stats_session = ant_hvf_session_stats,
   .cancel_session = ant_hvf_session_cancel,
   .destroy_session = ant_hvf_session_destroy,
 };

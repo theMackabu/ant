@@ -47,7 +47,9 @@ typedef struct sandbox_state {
   
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
+  unsigned int cpu_time_ms;
   unsigned long long memory_size;
+  ant_sandbox_vm_stats_t last_stats;
   
   bool verbose;
   bool closed;
@@ -316,9 +318,17 @@ static void sandbox_free_messages(sandbox_state_t *state) {
   if (state) state->message_head = state->message_tail = NULL;
 }
 
+static void sandbox_update_stats(sandbox_state_t *state) {
+  if (!state || !state->session) return;
+  ant_sandbox_vm_stats_t current;
+  if (ant_sandbox_vm_session_stats(state->session, &current) == 0)
+    state->last_stats = current;
+}
+
 static void sandbox_state_destroy(sandbox_state_t *state) {
   if (!state) return;
   sandbox_remove_active(state);
+  sandbox_update_stats(state);
   if (state->worker_started) {
     ant_sandbox_vm_session_cancel(state->session);
     pthread_join(state->worker, NULL);
@@ -497,6 +507,16 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
     
     if (n < 0 || n > UINT_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "bootTimeoutMs is out of range");
     state->boot_timeout_ms = (unsigned int)n;
+  }
+
+  ant_value_t cpu_time = js_get(js, opts, "cpuTimeMs");
+  if (vtype(cpu_time) != T_UNDEF && vtype(cpu_time) != T_NULL) {
+    if (vtype(cpu_time) != T_NUM)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "cpuTimeMs must be a number");
+    double n = js_getnum(cpu_time);
+    if (!isfinite(n) || n < 0 || n > UINT_MAX)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "cpuTimeMs is out of range");
+    state->cpu_time_ms = (unsigned int)n;
   }
 
   ant_value_t memory_mb = js_get(js, opts, "memoryMb");
@@ -687,6 +707,7 @@ static void sandbox_fill_result_from_rc(ant_sandbox_vm_result_t *result, int rc)
   if (rc == -ENOSYS) result->kind = ANT_SANDBOX_VM_RESULT_BACKEND_UNAVAILABLE;
   else if (rc == -EINVAL) result->kind = ANT_SANDBOX_VM_RESULT_CONFIG_ERROR;
   else if (rc == -ETIMEDOUT) result->kind = ANT_SANDBOX_VM_RESULT_TIMEOUT;
+  else if (rc == -EDQUOT) result->kind = ANT_SANDBOX_VM_RESULT_CPU_TIME_LIMIT;
   else result->kind = ANT_SANDBOX_VM_RESULT_VM_ERROR;
   result->code = rc;
 }
@@ -723,6 +744,9 @@ static ant_value_t sandbox_vm_result_error(ant_t *js, const ant_sandbox_vm_resul
       break;
     case ANT_SANDBOX_VM_RESULT_TIMEOUT:
       snprintf(message, sizeof(message), "sandbox VM timed out");
+      break;
+    case ANT_SANDBOX_VM_RESULT_CPU_TIME_LIMIT:
+      snprintf(message, sizeof(message), "sandbox VM exceeded its CPU time budget");
       break;
     case ANT_SANDBOX_VM_RESULT_KERNEL_PANIC:
       snprintf(message, sizeof(message), "sandbox kernel panic");
@@ -768,6 +792,7 @@ static int sandbox_ensure_session(ant_t *js, sandbox_state_t *state, ant_sandbox
     .memory_size = state->memory_size,
     .timeout_ms = state->timeout_ms,
     .boot_timeout_ms = state->boot_timeout_ms,
+    .cpu_time_ms = state->cpu_time_ms,
     .verbose = state->verbose,
     .result = result,
   };
@@ -945,6 +970,7 @@ static void sandbox_async_cb(uv_async_t *handle) {
       close_rc = ant_sandbox_vm_session_execute(state->session, &request);
       free(close_request);
     }
+    sandbox_update_stats(state);
     ant_sandbox_vm_session_destroy(state->session);
     state->session = NULL;
     ant_sandbox_launch_options_cleanup(&state->launch);
@@ -1125,6 +1151,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   uint8_t *request = ant_sandbox_build_close_request_frame(&request_len);
   
   if (!request) {
+    sandbox_update_stats(state);
     ant_sandbox_vm_session_destroy(state->session);
     state->session = NULL;
     ant_sandbox_launch_options_cleanup(&state->launch);
@@ -1143,6 +1170,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   sandbox_fill_result_from_rc(&vm_result, rc);
   
   free(request);
+  sandbox_update_stats(state);
   ant_sandbox_vm_session_destroy(state->session);
   
   state->session = NULL;
@@ -1174,6 +1202,28 @@ static ant_value_t sandbox_send(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
+static ant_value_t sandbox_stats(ant_t *js, ant_value_t *args, int nargs) {
+  (void)args; (void)nargs;
+  sandbox_state_t *state = sandbox_get_state(js->this_val);
+  if (!state) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Sandbox receiver");
+
+  ant_sandbox_vm_stats_t stats = state->last_stats;
+  if (state->session) {
+    ant_sandbox_vm_stats_t current;
+    if (ant_sandbox_vm_session_stats(state->session, &current) == 0) {
+      state->last_stats = current;
+      stats = current;
+    }
+  }
+
+  ant_value_t result = js_mkobj(js);
+  js_set(js, result, "cpuTimeMs", js_mknum((double)stats.cpu_time_ns / 1000000.0));
+  js_set(js, result, "wallTimeMs", js_mknum((double)stats.wall_time_ns / 1000000.0));
+  if (stats.resident_memory_available)
+    js_set(js, result, "residentMemory", js_mknum((double)stats.resident_memory_bytes));
+  return result;
+}
+
 static ant_value_t sandbox_on(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.on('message', handler) requires a handler");
@@ -1197,6 +1247,7 @@ static ant_value_t sandbox_terminate(ant_t *js, ant_value_t *args, int nargs) {
   int rc = 0;
   
   if (state->session) {
+    sandbox_update_stats(state);
     rc = ant_sandbox_vm_session_cancel(state->session);
     if (state->worker_started) {
       pthread_join(state->worker, NULL);
@@ -1233,6 +1284,7 @@ ant_value_t sandbox_library(ant_t *js) {
     js_set(js, g_sandbox_proto, "run", js_mkfun_arity(sandbox_run, 1));
     js_set(js, g_sandbox_proto, "eval", js_mkfun_arity(sandbox_eval, 1));
     js_set(js, g_sandbox_proto, "send", js_mkfun_arity(sandbox_send, 1));
+    js_set(js, g_sandbox_proto, "stats", js_mkfun(sandbox_stats));
     js_set(js, g_sandbox_proto, "on", js_mkfun_arity(sandbox_on, 2));
     js_set(js, g_sandbox_proto, "close", js_mkfun(sandbox_close));
     js_set(js, g_sandbox_proto, "terminate", js_mkfun(sandbox_terminate));

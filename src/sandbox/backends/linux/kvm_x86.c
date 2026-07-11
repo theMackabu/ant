@@ -186,17 +186,39 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
   };
   
   bool have_deadline = timeout_ms > 0 && clock_gettime(CLOCK_MONOTONIC, &deadline.start) == 0;
+  if (!have_deadline) deadline.timeout_ms = 0;
   vm->vcpu_thread = pthread_self();
   atomic_store_explicit(&vm->vcpu_thread_valid, true, memory_order_release);
   atomic_store_explicit(&vm->timeout_disarmed, false, memory_order_release);
 
-  if (have_deadline && pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
+  struct timespec cpu_started;
+  int cpu_clock_rc = pthread_getcpuclockid(vm->vcpu_thread, &vm->vcpu_clock_id);
+  if (cpu_clock_rc != 0 || clock_gettime(vm->vcpu_clock_id, &cpu_started) != 0) {
+    atomic_store_explicit(&vm->vcpu_thread_valid, false, memory_order_release);
+    return cpu_clock_rc != 0 ? -cpu_clock_rc : -errno;
+  }
+  uint64_t cpu_start_ns = (uint64_t)cpu_started.tv_sec * 1000000000ull + (uint64_t)cpu_started.tv_nsec;
+  atomic_store_explicit(&vm->cpu_run_base_ns,
+                        atomic_load_explicit(&vm->cpu_time_ns, memory_order_acquire),
+                        memory_order_release);
+  atomic_store_explicit(&vm->cpu_run_start_ns, cpu_start_ns, memory_order_release);
+  atomic_store_explicit(&vm->cpu_run_active, true, memory_order_release);
+
+  if ((have_deadline || vm->cpu_time_ms > 0) &&
+      pthread_create(&deadline_thread, NULL, ant_kvm_deadline_thread, &deadline) == 0) {
     deadline_thread_started = true;
+  } else if (vm->cpu_time_ms > 0) {
+    rc = -EAGAIN;
+    goto done;
   }
 
   for (;;) {
     rc = ant_hvf_vsock_maybe_send_request(vm);
     if (rc != 0 && rc != -EAGAIN) break;
+    if (atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)) {
+      rc = -EDQUOT;
+      break;
+    }
     if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
       rc = -ECANCELED;
       break;
@@ -233,6 +255,10 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
     atomic_store_explicit(&vm->vcpu_running, false, memory_order_release);
     if (rc < 0) {
       if (errno == EINTR) {
+        if (atomic_load_explicit(&vm->cpu_timed_out, memory_order_acquire)) {
+          rc = -EDQUOT;
+          break;
+        }
         if (atomic_load_explicit(&vm->canceled, memory_order_acquire)) {
           rc = -ECANCELED;
           break;
@@ -288,6 +314,14 @@ static int ant_kvm_run_guest(ant_hvf_vm_t *vm, unsigned int timeout_ms, bool tim
 done:
   atomic_store_explicit(&deadline.stop, true, memory_order_release);
   if (deadline_thread_started) pthread_join(deadline_thread, NULL);
+  struct timespec cpu_finished;
+  if (clock_gettime(vm->vcpu_clock_id, &cpu_finished) == 0) {
+    uint64_t end_ns = (uint64_t)cpu_finished.tv_sec * 1000000000ull + (uint64_t)cpu_finished.tv_nsec;
+    uint64_t base = atomic_load_explicit(&vm->cpu_run_base_ns, memory_order_acquire);
+    uint64_t start = atomic_load_explicit(&vm->cpu_run_start_ns, memory_order_acquire);
+    atomic_store_explicit(&vm->cpu_time_ns, base + (end_ns >= start ? end_ns - start : 0), memory_order_release);
+  }
+  atomic_store_explicit(&vm->cpu_run_active, false, memory_order_release);
   atomic_store_explicit(&vm->vcpu_thread_valid, false, memory_order_release);
   return rc;
 }
@@ -461,6 +495,7 @@ static int ant_kvm_session_create(const ant_sandbox_vm_config_t *config, void **
   vm->verbose = config->verbose;
   vm->timeout_ms = config->timeout_ms;
   vm->boot_timeout_ms = config->boot_timeout_ms;
+  vm->cpu_time_ms = config->cpu_time_ms;
   vm->frame_handler = config->frame_handler;
   vm->frame_handler_user = config->frame_handler_user;
 
@@ -624,6 +659,7 @@ static int ant_kvm_session_execute(void *opaque, const ant_sandbox_vm_request_t 
   vm->vsock.transport_error = false;
   
   atomic_store_explicit(&vm->timed_out, false, memory_order_release);
+  atomic_store_explicit(&vm->cpu_timed_out, false, memory_order_release);
   atomic_store_explicit(&vm->canceled, false, memory_order_release);
   atomic_store_explicit(&vm->timeout_disarmed, false, memory_order_release);
   
@@ -672,6 +708,13 @@ static int ant_kvm_session_send(void *opaque, const void *data, size_t len) {
   return ant_hvf_vsock_queue_frame(&session->vm, data, len);
 }
 
+static int ant_kvm_session_stats(void *opaque, ant_sandbox_vm_stats_t *stats) {
+  if (!opaque || !stats) return -EINVAL;
+  ant_kvm_session_t *session = opaque;
+  stats->cpu_time_ns = ant_kvm_cpu_time_ns(&session->vm);
+  return 0;
+}
+
 static int ant_kvm_session_cancel(void *opaque) {
   if (!opaque) return -EINVAL;
   ant_kvm_session_t *session = opaque;
@@ -712,6 +755,7 @@ const ant_sandbox_vm_backend_t ant_sandbox_vm_linux_backend = {
   .create_session = ant_kvm_session_create,
   .execute_session = ant_kvm_session_execute,
   .send_session = ant_kvm_session_send,
+  .get_stats_session = ant_kvm_session_stats,
   .cancel_session = ant_kvm_session_cancel,
   .destroy_session = ant_kvm_session_destroy,
 };

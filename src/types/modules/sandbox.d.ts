@@ -7,6 +7,7 @@ declare module 'ant:sandbox' {
     memory?: number | `${number}${'kb' | 'mb' | 'gb' | 'kib' | 'mib' | 'gib'}`;
     memoryMb?: number;
     timeoutMs?: number;
+    cpuTimeMs?: number;
     bootTimeoutMs?: number;
     verbose?: boolean;
     tty?: boolean;
@@ -17,11 +18,18 @@ declare module 'ant:sandbox' {
 
   type MessageHandler = (message: unknown) => void;
 
+  interface SandboxStats {
+    cpuTimeMs: number;
+    wallTimeMs: number;
+    residentMemory?: number;
+  }
+
   class Sandbox {
     constructor(options?: SandboxOptions | string);
     onmessage?: MessageHandler;
     on(event: 'message', handler: MessageHandler): this;
     send(value: unknown): void;
+    stats(): SandboxStats;
     run(entry: string, argv?: string[]): Promise<number>;
     eval(source: string): Promise<unknown>;
     close(): Promise<void>;

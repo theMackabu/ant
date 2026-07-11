@@ -58,6 +58,11 @@ int ant_sandbox_vm_helper_send(ant_sandbox_vm_session_t *session, const void *da
   return -ENOSYS;
 }
 
+int ant_sandbox_vm_helper_stats(ant_sandbox_vm_session_t *session, ant_sandbox_vm_stats_t *stats) {
+  (void)session; (void)stats;
+  return -ENOSYS;
+}
+
 void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
   free(session);
 }
@@ -76,13 +81,16 @@ void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
 #include <unistd.h>
 
 #if defined(__APPLE__)
+#include <libproc.h>
 #include <mach-o/dyld.h>
+#include <sys/resource.h>
 #endif
 
 extern char **environ;
 
 enum { ANT_SANDBOX_VM_HELPER_MAGIC = 0x48564d41u }; // AMVH
 enum {
+  ANT_SANDBOX_VM_HELPER_STATS_FD = 197,
   ANT_SANDBOX_VM_HELPER_CMD_FD = 198,
   ANT_SANDBOX_VM_HELPER_MSG_FD = 199,
 };
@@ -92,6 +100,7 @@ typedef enum {
   ANT_SANDBOX_VM_HELPER_CMD_DESTROY = 2,
   ANT_SANDBOX_VM_HELPER_CMD_SEND = 3,
   ANT_SANDBOX_VM_HELPER_CMD_CREATE = 4,
+  ANT_SANDBOX_VM_HELPER_CMD_STATS = 5,
 } ant_sandbox_vm_helper_cmd_t;
 
 typedef enum {
@@ -152,6 +161,12 @@ static int sandbox_vm_send_header(int fd, uint8_t type, uint8_t frame_type, uint
     .length = length,
   };
   return sandbox_vm_write_full(fd, &header, sizeof(header));
+}
+
+static uint64_t sandbox_vm_cpu_time_ns(void) {
+  struct timespec value;
+  if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &value) != 0) return 0;
+  return (uint64_t)value.tv_sec * 1000000000ull + (uint64_t)value.tv_nsec;
 }
 
 typedef struct {
@@ -231,6 +246,7 @@ static uint8_t *sandbox_helper_encode_config(const ant_sandbox_vm_config_t *conf
     sandbox_helper_append_u64(&buf, config->memory_size) &&
     sandbox_helper_append_u32(&buf, config->timeout_ms) &&
     sandbox_helper_append_u32(&buf, config->boot_timeout_ms) &&
+    sandbox_helper_append_u32(&buf, config->cpu_time_ms) &&
     sandbox_helper_append_u8(&buf, config->verbose ? 1 : 0) &&
     sandbox_helper_append_u32(&buf, (uint32_t)config->mount_count);
   for (size_t i = 0; ok && i < config->mount_count; i++) {
@@ -326,6 +342,7 @@ static bool sandbox_helper_decode_config(
       !sandbox_helper_read_u64(&r, &memory_size) ||
       !sandbox_helper_read_u32(&r, &owned->config.timeout_ms) ||
       !sandbox_helper_read_u32(&r, &owned->config.boot_timeout_ms) ||
+      !sandbox_helper_read_u32(&r, &owned->config.cpu_time_ms) ||
       !sandbox_helper_read_u8(&r, &verbose) ||
       !sandbox_helper_read_u32(&r, &mount_count)) goto fail;
   if (mount_count > ANT_SANDBOX_MAX_MOUNTS) goto fail;
@@ -472,6 +489,7 @@ typedef struct {
   void *backend_session;
   int cmd_fd;
   int stop_fd;
+  int stats_fd;
   pthread_mutex_t mutex;
   pthread_cond_t cond;
   uint8_t *execute_data;
@@ -503,6 +521,12 @@ static void *sandbox_child_command_main(void *opaque) {
       if (control->backend->cancel_session)
         control->backend->cancel_session(control->backend_session);
       return NULL;
+    }
+    if (header.type == ANT_SANDBOX_VM_HELPER_CMD_STATS && header.length == 0) {
+      uint64_t cpu_time_ns = sandbox_vm_cpu_time_ns();
+      if (sandbox_vm_write_full(control->stats_fd, &cpu_time_ns, sizeof(cpu_time_ns)) != 0)
+        break;
+      continue;
     }
     if ((header.type != ANT_SANDBOX_VM_HELPER_CMD_EXECUTE &&
          header.type != ANT_SANDBOX_VM_HELPER_CMD_SEND) ||
@@ -613,7 +637,8 @@ static void sandbox_vm_helper_child(
   const ant_sandbox_vm_backend_t *backend,
   const ant_sandbox_vm_config_t *config,
   int cmd_fd,
-  int msg_fd
+  int msg_fd,
+  int stats_fd
 ) {
   void *backend_session = NULL;
   ant_sandbox_vm_result_t create_result = {0};
@@ -630,6 +655,7 @@ static void sandbox_vm_helper_child(
     .backend_session = backend_session,
     .cmd_fd = cmd_fd,
     .stop_fd = -1,
+    .stats_fd = stats_fd,
   };
   int stop_pipe[2] = { -1, -1 };
   if (pipe(stop_pipe) != 0) goto done;
@@ -699,6 +725,7 @@ done:
   if (backend_session) backend->destroy_session(backend_session);
   if (cmd_fd >= 0) close(cmd_fd);
   close(msg_fd);
+  close(stats_fd);
   _exit(0);
 }
 
@@ -738,7 +765,8 @@ int ant_sandbox_vm_helper_process_main(void) {
   sandbox_vm_helper_child(
     backend, &owned.config,
     ANT_SANDBOX_VM_HELPER_CMD_FD,
-    ANT_SANDBOX_VM_HELPER_MSG_FD
+    ANT_SANDBOX_VM_HELPER_MSG_FD,
+    ANT_SANDBOX_VM_HELPER_STATS_FD
   );
   return EXIT_SUCCESS;
 }
@@ -766,7 +794,9 @@ static void sandbox_vm_set_cloexec(int fd) {
 }
 
 static int sandbox_vm_move_reserved_fd(int *fd) {
-  if (!fd || (*fd != ANT_SANDBOX_VM_HELPER_CMD_FD && *fd != ANT_SANDBOX_VM_HELPER_MSG_FD)) return 0;
+  if (!fd || (*fd != ANT_SANDBOX_VM_HELPER_STATS_FD &&
+              *fd != ANT_SANDBOX_VM_HELPER_CMD_FD &&
+              *fd != ANT_SANDBOX_VM_HELPER_MSG_FD)) return 0;
   int moved = fcntl(*fd, F_DUPFD_CLOEXEC, ANT_SANDBOX_VM_HELPER_MSG_FD + 1);
   if (moved < 0) return -errno;
   close(*fd);
@@ -805,6 +835,7 @@ int ant_sandbox_vm_helper_create(
 ) {
   int to_child[2] = { -1, -1 };
   int from_child[2] = { -1, -1 };
+  int stats_child[2] = { -1, -1 };
   if (pipe(to_child) != 0) return -errno;
   if (pipe(from_child) != 0) {
     int rc = -errno;
@@ -812,12 +843,22 @@ int ant_sandbox_vm_helper_create(
     close(to_child[1]);
     return rc;
   }
-  int *pipe_fds[] = { &to_child[0], &to_child[1], &from_child[0], &from_child[1] };
+  if (pipe(stats_child) != 0) {
+    int rc = -errno;
+    close(to_child[0]); close(to_child[1]);
+    close(from_child[0]); close(from_child[1]);
+    return rc;
+  }
+  int *pipe_fds[] = {
+    &to_child[0], &to_child[1], &from_child[0], &from_child[1],
+    &stats_child[0], &stats_child[1],
+  };
   for (size_t i = 0; i < sizeof(pipe_fds) / sizeof(pipe_fds[0]); i++) {
     int move_rc = sandbox_vm_move_reserved_fd(pipe_fds[i]);
     if (move_rc != 0) {
       close(to_child[0]); close(to_child[1]);
       close(from_child[0]); close(from_child[1]);
+      close(stats_child[0]); close(stats_child[1]);
       return move_rc;
     }
   }
@@ -830,6 +871,8 @@ int ant_sandbox_vm_helper_create(
     close(to_child[1]);
     close(from_child[0]);
     close(from_child[1]);
+    close(stats_child[0]);
+    close(stats_child[1]);
     return -ENOMEM;
   }
 
@@ -839,6 +882,7 @@ int ant_sandbox_vm_helper_create(
     free(encoded);
     close(to_child[0]); close(to_child[1]);
     close(from_child[0]); close(from_child[1]);
+    close(stats_child[0]); close(stats_child[1]);
     return rc;
   }
 
@@ -846,6 +890,8 @@ int ant_sandbox_vm_helper_create(
   sandbox_vm_set_cloexec(to_child[1]);
   sandbox_vm_set_cloexec(from_child[0]);
   sandbox_vm_set_cloexec(from_child[1]);
+  sandbox_vm_set_cloexec(stats_child[0]);
+  sandbox_vm_set_cloexec(stats_child[1]);
 
   posix_spawn_file_actions_t actions;
   int spawn_rc = posix_spawn_file_actions_init(&actions);
@@ -853,11 +899,16 @@ int ant_sandbox_vm_helper_create(
     free(encoded);
     close(to_child[0]); close(to_child[1]);
     close(from_child[0]); close(from_child[1]);
+    close(stats_child[0]); close(stats_child[1]);
     return -spawn_rc;
   }
   if (spawn_rc == 0) spawn_rc = posix_spawn_file_actions_adddup2(&actions, to_child[0], ANT_SANDBOX_VM_HELPER_CMD_FD);
   if (spawn_rc == 0) spawn_rc = posix_spawn_file_actions_adddup2(&actions, from_child[1], ANT_SANDBOX_VM_HELPER_MSG_FD);
-  int inherited_fds[] = { to_child[0], to_child[1], from_child[0], from_child[1] };
+  if (spawn_rc == 0) spawn_rc = posix_spawn_file_actions_adddup2(&actions, stats_child[1], ANT_SANDBOX_VM_HELPER_STATS_FD);
+  int inherited_fds[] = {
+    to_child[0], to_child[1], from_child[0], from_child[1],
+    stats_child[0], stats_child[1],
+  };
   for (size_t i = 0; spawn_rc == 0 && i < sizeof(inherited_fds) / sizeof(inherited_fds[0]); i++)
     spawn_rc = posix_spawn_file_actions_addclose(&actions, inherited_fds[i]);
 
@@ -869,11 +920,13 @@ int ant_sandbox_vm_helper_create(
     free(encoded);
     close(to_child[0]); close(to_child[1]);
     close(from_child[0]); close(from_child[1]);
+    close(stats_child[0]); close(stats_child[1]);
     return -spawn_rc;
   }
 
   close(to_child[0]);
   close(from_child[1]);
+  close(stats_child[1]);
   sandbox_vm_verbose_helper_pid(config, pid);
 
   ant_sandbox_vm_session_t *session = calloc(1, sizeof(*session));
@@ -881,6 +934,7 @@ int ant_sandbox_vm_helper_create(
     free(encoded);
     close(to_child[1]);
     close(from_child[0]);
+    close(stats_child[0]);
     kill(pid, SIGTERM);
     if (!sandbox_vm_wait_pid(pid, 1000)) {
       kill(pid, SIGKILL);
@@ -893,6 +947,7 @@ int ant_sandbox_vm_helper_create(
   session->helper_pid = pid;
   session->helper_cmd_fd = to_child[1];
   session->helper_msg_fd = from_child[0];
+  session->helper_stats_fd = stats_child[0];
   session->capabilities = config->capabilities;
   session->verbose = config->verbose;
   session->helper = true;
@@ -900,6 +955,7 @@ int ant_sandbox_vm_helper_create(
     free(encoded);
     close(session->helper_cmd_fd);
     close(session->helper_msg_fd);
+    close(session->helper_stats_fd);
     sandbox_vm_stop_helper(session, false);
     free(session);
     return -ENOMEM;
@@ -918,6 +974,7 @@ int ant_sandbox_vm_helper_create(
     sandbox_vm_stop_helper(session, false);
     close(session->helper_cmd_fd);
     close(session->helper_msg_fd);
+    close(session->helper_stats_fd);
     if (session->helper_cmd_mutex_init) pthread_mutex_destroy(&session->helper_cmd_mutex);
     free(session);
     return rc;
@@ -930,6 +987,8 @@ int ant_sandbox_vm_helper_create(
     session->helper_cmd_fd = -1;
     close(session->helper_msg_fd);
     session->helper_msg_fd = -1;
+    close(session->helper_stats_fd);
+    session->helper_stats_fd = -1;
     sandbox_vm_stop_helper(session, true);
     if (session->helper_cmd_mutex_init) pthread_mutex_destroy(&session->helper_cmd_mutex);
     free(session);
@@ -940,6 +999,8 @@ int ant_sandbox_vm_helper_create(
     session->helper_cmd_fd = -1;
     close(session->helper_msg_fd);
     session->helper_msg_fd = -1;
+    close(session->helper_stats_fd);
+    session->helper_stats_fd = -1;
     sandbox_vm_stop_helper(session, true);
     if (session->helper_cmd_mutex_init) pthread_mutex_destroy(&session->helper_cmd_mutex);
     free(session);
@@ -1033,6 +1094,31 @@ int ant_sandbox_vm_helper_send(ant_sandbox_vm_session_t *session, const void *da
   return rc;
 }
 
+int ant_sandbox_vm_helper_stats(ant_sandbox_vm_session_t *session, ant_sandbox_vm_stats_t *stats) {
+  if (!session || !stats || session->helper_pid <= 0) return -EINVAL;
+  pthread_mutex_lock(&session->helper_cmd_mutex);
+  int rc = session->helper_cmd_fd >= 0 && session->helper_stats_fd >= 0
+    ? sandbox_vm_send_header(session->helper_cmd_fd, ANT_SANDBOX_VM_HELPER_CMD_STATS, 0, 0)
+    : -ECANCELED;
+  uint64_t cpu_time_ns = 0;
+  if (rc == 0)
+    rc = sandbox_vm_read_full(session->helper_stats_fd, &cpu_time_ns, sizeof(cpu_time_ns));
+  pthread_mutex_unlock(&session->helper_cmd_mutex);
+  if (rc != 0) return rc;
+  stats->cpu_time_ns = cpu_time_ns;
+#if defined(__APPLE__)
+  struct rusage_info_v2 usage;
+  memset(&usage, 0, sizeof(usage));
+  if (proc_pid_rusage(session->helper_pid, RUSAGE_INFO_V2, (rusage_info_t *)&usage) != 0)
+    return -errno;
+  stats->resident_memory_bytes = usage.ri_resident_size;
+  stats->resident_memory_available = true;
+  return 0;
+#else
+  return -ENOSYS;
+#endif
+}
+
 int ant_sandbox_vm_helper_cancel(ant_sandbox_vm_session_t *session) {
   if (!session || !session->helper) return -EINVAL;
   atomic_store_explicit(&session->helper_cancel_requested, true, memory_order_release);
@@ -1061,6 +1147,10 @@ void ant_sandbox_vm_helper_destroy(ant_sandbox_vm_session_t *session) {
   if (session->helper_msg_fd >= 0) {
     close(session->helper_msg_fd);
     session->helper_msg_fd = -1;
+  }
+  if (session->helper_stats_fd >= 0) {
+    close(session->helper_stats_fd);
+    session->helper_stats_fd = -1;
   }
   sandbox_vm_stop_helper(session, true);
   if (session->helper_cmd_mutex_init) pthread_mutex_destroy(&session->helper_cmd_mutex);
