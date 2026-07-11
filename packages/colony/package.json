@@ -32,6 +32,9 @@
   "engines": {
     "node": ">=18"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "rimraf": "^5.0.5",
