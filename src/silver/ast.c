@@ -635,7 +635,10 @@ static sv_ast_t *parse_primary(P) {
       n->src_off = paren_off;
       return n;
     }
+    bool outer_no_in = p->no_in;
+    p->no_in = false;
     sv_ast_t *expr = parse_paren_expr(p);
+    p->no_in = outer_no_in;
     expect(p, TOK_RPAREN);
     expr->flags |= FN_PAREN;
     if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_off = paren_off;
