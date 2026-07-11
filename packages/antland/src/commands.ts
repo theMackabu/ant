@@ -5,6 +5,7 @@ import { AntPackage, confirm, exec, getNewLineChars, isInteractive, styleText, t
 import { Bun, getPkgManager, YarnBerry, type InstallMode, type PkgManagerName } from './pkg_manager';
 import { getPackument, getScore, getTarballUrl, resolveVersion, uploadSnippet, fetchSnippet, REGISTRY_URL, SITE_URL, type PackageScore } from './api';
 import { readToken } from './login';
+import { multipartPublish } from './multipart_publish';
 
 const NPMRC_FILE = '.npmrc';
 const BUNFIG_FILE = 'bunfig.toml';
@@ -93,10 +94,10 @@ export interface PublishOptions extends BaseOptions {
 }
 
 export async function publish(options: PublishOptions) {
-  const { pkgManager } = await getPkgManager(process.cwd(), options.pkgManagerName);
   console.log(`Publishing to ${styleText('cyan', REGISTRY_URL)}...`);
   console.log(styleText('dim', 'Authenticate with a token from your package’s Publish tab (//npm.ants.land/:_authToken=...).'));
-  await pkgManager.publish(['--registry', REGISTRY_URL, ...options.publishArgs.filter(a => a !== '--verbose')]);
+  const token = await readToken();
+  await multipartPublish(REGISTRY_URL, token, options.publishArgs.filter(a => a !== '--verbose'));
 }
 
 const RISK_LABELS: Record<string, string> = {
