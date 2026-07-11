@@ -1,6 +1,6 @@
 {
   "name": "ant-desktop-darwin-arm64",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ant Desktop native runtime for macOS on Apple Silicon",
   "keywords": [
     "ant",
@@ -29,6 +29,7 @@
     "node": ">=18"
   },
   "files": [
+    "dev.cjs",
     "index.cjs",
     "install.cjs",
     "package.cjs",

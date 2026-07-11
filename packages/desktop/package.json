@@ -1,6 +1,6 @@
 {
   "name": "ant-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Build native desktop applications with Ant",
   "keywords": [
     "ant",
@@ -41,7 +41,7 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "ant-desktop-darwin-arm64": "0.1.1"
+    "ant-desktop-darwin-arm64": "0.1.2"
   },
   "publishConfig": {
     "access": "public"
