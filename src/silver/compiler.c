@@ -6457,9 +6457,8 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   wrapped[prefix_len + len] = ')';
   wrapped[wrapped_len] = '\0';
   
-  bool parse_strict = sv_vm_is_strict(js->vm);
   code_arena_mark_t parse_mark = parse_arena_mark();
-  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)wrapped_len, parse_strict);
+  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)wrapped_len, false);
   
   if (!program) {
     parse_arena_rewind(parse_mark);
