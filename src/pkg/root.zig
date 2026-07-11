@@ -500,7 +500,7 @@ pub const PkgContext = struct {
     const db = self.cache_db orelse return error.CacheError;
     var cache_hits = try db.batchLookup(integrities, arena_alloc);
     defer cache_hits.deinit();
-    if (self.options.force) cache_hits.items = &.{};
+    if (self.options.force) cache_hits.clear();
     stage_start = trace.mark("cache lookup", stage_start);
 
     var hit_set = std.AutoHashMap(u32, u32).init(arena_alloc);

@@ -215,6 +215,10 @@ pub const CacheDB = struct {
   ) !struct {
     items: []BatchHit,
     allocator: std.mem.Allocator,
+    pub fn clear(s: *@This()) void {
+      s.allocator.free(s.items);
+      s.items = &.{};
+    }
     pub fn deinit(s: *@This()) void {
       s.allocator.free(s.items);
     }
