@@ -329,7 +329,7 @@ bool ant_hvf_virtio_common_write(ant_hvf_vm_t *vm,
         ant_hvf_virtio_reset(dev);
         if (dev->kind == ANT_HVF_VIRTIO_KIND_VSOCK) {
           vm->vsock.connected = false;
-          vm->vsock.request_sent = false;
+          atomic_store_explicit(&vm->vsock.request_sent, false, memory_order_release);
           vm->vsock.peer_port = 0;
           vm->vsock.fwd_cnt = 0;
           vm->vsock.exit_received = false;

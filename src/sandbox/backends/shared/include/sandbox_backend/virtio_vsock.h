@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #define ANT_VIRTIO_VSOCK_F_STREAM 0x1u
@@ -40,14 +41,20 @@ typedef struct {
   uint32_t fwd_cnt;
 } __attribute__((packed)) ant_virtio_vsock_hdr_t;
 
+typedef struct ant_vsock_outgoing_frame {
+  unsigned char *data;
+  size_t len;
+  size_t off;
+  struct ant_vsock_outgoing_frame *next;
+} ant_vsock_outgoing_frame_t;
+
 typedef struct {
   ant_hvf_virtio_device_t virtio;
-  const void *request_data;
-  size_t request_len;
-  size_t request_off;
   bool connected;
   bool response_sent;
-  bool request_sent;
+  atomic_bool request_sent;
+  ant_vsock_outgoing_frame_t *outgoing_head;
+  ant_vsock_outgoing_frame_t *outgoing_tail;
   bool protocol_error;
   bool transport_error;
   uint32_t peer_port;
@@ -68,6 +75,8 @@ void ant_hvf_vsock_store_hdr(unsigned char *out, const ant_virtio_vsock_hdr_t *h
 ant_virtio_vsock_hdr_t ant_hvf_vsock_load_hdr(const unsigned char *raw);
 
 int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm);
+int ant_hvf_vsock_queue_frame(ant_hvf_vm_t *vm, const void *data, size_t len);
+void ant_hvf_vsock_clear_frames(ant_hvf_vm_t *vm);
 int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue);
 
 int ant_hvf_vsock_send_packet(

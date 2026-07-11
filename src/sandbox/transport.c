@@ -31,6 +31,10 @@ bool ant_sandbox_transport_install_output_frames(void) {
   return false;
 }
 
+int ant_sandbox_transport_fd(void) {
+  return -1;
+}
+
 bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {
   (void)out;
   errno = ENOSYS;
@@ -190,6 +194,10 @@ bool ant_sandbox_transport_install_output_frames(void) {
   if (transport_connect_vsock() != 0) return false;
   ant_output_set_writer(transport_output_writer, NULL);
   return true;
+}
+
+int ant_sandbox_transport_fd(void) {
+  return g_transport_fd;
 }
 
 bool ant_sandbox_read_request_transport(ant_sandbox_request_t *out) {

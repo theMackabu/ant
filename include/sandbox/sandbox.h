@@ -23,6 +23,7 @@ typedef enum {
   ANT_SANDBOX_FRAME_ERROR = 6,
   ANT_SANDBOX_FRAME_EXIT = 7,
   ANT_SANDBOX_FRAME_CLOSE = 8,
+  ANT_SANDBOX_FRAME_MESSAGE = 9,
 } ant_sandbox_frame_type_t;
 
 #define ANT_SANDBOX_FRAME_MAGIC "ANTF"

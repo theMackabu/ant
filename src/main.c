@@ -43,6 +43,7 @@
 #include "sandbox/policy.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
+#include "sandbox/vm.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -225,7 +226,7 @@ static void print_subcommands(void) {
 static void print_commands(void **argtable) {
   if (ant_version_print_update_hint(stdout)) printf("\n");
   crprintf(msg.ant_help_header);
-  
+
   print_subcommands();
   crprintf(msg.ant_help_flags);
   
@@ -537,6 +538,7 @@ for (;;) {
 }}
 
 int main(int argc, char *argv[]) {
+  if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
   
   if (internal_crash_report_mode) argc = 1;
@@ -561,7 +563,7 @@ int main(int argc, char *argv[]) {
   
   bool sandbox_daemon = false;
   ant_sandbox_request_t sandbox = { 0 };
-  
+
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
 

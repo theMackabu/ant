@@ -252,4 +252,11 @@ if darwin_hvf_supported
     dependencies: libant_dep,
     build_by_default: false
   )
+
+  executable(
+    'test-sandbox-vsock-queue',
+    files('tests/test_sandbox_vsock_queue.c'),
+    dependencies: libant_dep,
+    build_by_default: false
+  )
 endif

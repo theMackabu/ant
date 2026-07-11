@@ -3,7 +3,7 @@
 _An ant carries 50× its weight. So does this one._
 
 Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
-Built to carry more than it weighs while delivering near-V8 speeds.
+Built to carry more than it weighs without compromising performance.
 
 ```bash
 $ ls -lh ant

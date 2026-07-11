@@ -154,32 +154,101 @@ int ant_hvf_vsock_send_packet(ant_hvf_vm_t *vm,
   return ant_hvf_vsock_send_packet_len(vm, op, payload, chunk);
 }
 
+int ant_hvf_vsock_queue_frame(ant_hvf_vm_t *vm, const void *data, size_t len) {
+  if (!vm || !data || len == 0 || len > ANT_SANDBOX_FRAME_MAX_SIZE) return -EINVAL;
+  ant_vsock_outgoing_frame_t *frame = calloc(1, sizeof(*frame));
+  if (!frame) return -ENOMEM;
+  frame->data = malloc(len);
+  if (!frame->data) { free(frame); return -ENOMEM; }
+  memcpy(frame->data, data, len);
+  frame->len = len;
+
+  if (vm->vsock_lock_init) pthread_mutex_lock(&vm->vsock_lock);
+  if (vm->vsock.outgoing_tail) vm->vsock.outgoing_tail->next = frame;
+  else vm->vsock.outgoing_head = frame;
+  vm->vsock.outgoing_tail = frame;
+  atomic_store_explicit(&vm->vsock_wake_pending, true, memory_order_release);
+  if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+  if (atomic_load_explicit(&vm->vcpu_running, memory_order_acquire))
+    ant_hvf_wake_vcpu(vm);
+  return 0;
+}
+
+void ant_hvf_vsock_clear_frames(ant_hvf_vm_t *vm) {
+  if (!vm) return;
+  if (vm->vsock_lock_init) pthread_mutex_lock(&vm->vsock_lock);
+  ant_vsock_outgoing_frame_t *frame = vm->vsock.outgoing_head;
+  while (frame) {
+    ant_vsock_outgoing_frame_t *next = frame->next;
+    free(frame->data);
+    free(frame);
+    frame = next;
+  }
+  vm->vsock.outgoing_head = NULL;
+  vm->vsock.outgoing_tail = NULL;
+  atomic_store_explicit(&vm->vsock_wake_pending, false, memory_order_release);
+  if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+}
+
 int ant_hvf_vsock_maybe_send_request(ant_hvf_vm_t *vm) {
   ant_hvf_vsock_device_t *dev = &vm->vsock;
-  if (!dev->connected || dev->request_sent || !dev->request_data || dev->request_len == 0) return 0;
+  if (vm->vsock_lock_init) pthread_mutex_lock(&vm->vsock_lock);
+  ant_vsock_outgoing_frame_t *frame = dev->outgoing_head;
+  if (!dev->connected || !frame) {
+    if (!frame)
+      atomic_store_explicit(&vm->vsock_wake_pending, false, memory_order_release);
+    if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+    return 0;
+  }
   int response_rc = ant_hvf_vsock_maybe_send_response(vm);
-  if (response_rc != 0 || !dev->response_sent) return response_rc;
-  if (dev->request_len > UINT32_MAX) return -E2BIG;
+  if (response_rc != 0 || !dev->response_sent) {
+    if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+    return response_rc;
+  }
+  if (frame->len > UINT32_MAX) {
+    if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+    return -E2BIG;
+  }
 
-  const unsigned char *request = dev->request_data;
-  while (dev->request_off < dev->request_len) {
-    uint32_t remaining = (uint32_t)(dev->request_len - dev->request_off);
+  while (frame->off < frame->len) {
+    uint32_t remaining = (uint32_t)(frame->len - frame->off);
     uint32_t chunk = remaining;
     uint32_t peer_space = ant_hvf_vsock_peer_space(dev);
-    if (peer_space == 0) return 0;
+    if (peer_space == 0) {
+      if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+      return 0;
+    }
     if (chunk > peer_space) chunk = peer_space;
     if (chunk > ANT_HVF_VSOCK_MAX_PAYLOAD) chunk = ANT_HVF_VSOCK_MAX_PAYLOAD;
 
     int rc = ant_hvf_vsock_send_packet_len(vm, ANT_VIRTIO_VSOCK_OP_RW,
-                                           request + dev->request_off,
+                                           frame->data + frame->off,
                                            chunk);
-    if (rc == -EAGAIN) return 0;
-    if (rc != 0) return rc;
-    dev->request_off += chunk;
+    if (rc == -EAGAIN) {
+      if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+      return 0;
+    }
+    if (rc != 0) {
+      if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+      return rc;
+    }
+    frame->off += chunk;
   }
 
-  dev->request_sent = true;
-  ant_hvf_verbosef(vm, "sent daemon request (%zu bytes)", dev->request_len);
+  bool first = !atomic_load_explicit(&dev->request_sent, memory_order_acquire);
+  atomic_store_explicit(&dev->request_sent, true, memory_order_release);
+  dev->outgoing_head = frame->next;
+  if (!dev->outgoing_head) dev->outgoing_tail = NULL;
+  atomic_store_explicit(
+    &vm->vsock_wake_pending,
+    dev->outgoing_head != NULL,
+    memory_order_release
+  );
+  size_t sent_len = frame->len;
+  free(frame->data);
+  free(frame);
+  if (vm->vsock_lock_init) pthread_mutex_unlock(&vm->vsock_lock);
+  ant_hvf_verbosef(vm, "%s daemon frame (%zu bytes)", first ? "sent" : "sent queued", sent_len);
   return 0;
 }
 
@@ -537,8 +606,8 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
     } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_RST) {
       dev->connected = false;
       dev->response_sent = false;
-      dev->request_sent = false;
-      dev->request_off = 0;
+      atomic_store_explicit(&dev->request_sent, false, memory_order_release);
+      ant_hvf_vsock_clear_frames(vm);
       dev->transport_error = !dev->exit_received;
     } else if (hdr.op == ANT_VIRTIO_VSOCK_OP_SHUTDOWN) {
       rc = ant_hvf_vsock_send_packet(vm, ANT_VIRTIO_VSOCK_OP_SHUTDOWN, NULL, 0);
@@ -556,4 +625,3 @@ int ant_hvf_virtio_vsock_notify(ant_hvf_vm_t *vm, unsigned queue) {
 
   return ant_hvf_virtio_interrupt(vm, &dev->virtio, queue);
 }
-

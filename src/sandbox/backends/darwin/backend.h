@@ -30,6 +30,7 @@
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,9 +73,11 @@ struct ant_hvf_vm {
   ant_hvf_nat_t *net_nat;
   pthread_mutex_t net_lock;
   pthread_mutex_t virtio_lock;
+  pthread_mutex_t vsock_lock;
   
   bool net_lock_init;
   bool virtio_lock_init;
+  bool vsock_lock_init;
   bool net_rx_wake;
   
   uint8_t net_mac[ANT_HVF_MAC_BYTES];
@@ -101,7 +104,12 @@ struct ant_hvf_vm {
   
   unsigned int timeout_ms;
   unsigned int boot_timeout_ms;
-  bool timed_out;
+  unsigned int cpu_time_ms;
+  atomic_bool timed_out;
+  atomic_bool cpu_timed_out;
+  atomic_bool canceled;
+  atomic_bool vcpu_running;
+  atomic_bool vsock_wake_pending;
   
   uint32_t rtc_load_value;
   time_t rtc_load_host;
@@ -128,6 +136,8 @@ typedef struct {
   ant_hvf_vm_t *vm;
   unsigned int timeout_ms;
   bool until_request_sent;
+  atomic_bool stop;
+  struct timespec started_at;
 } ant_hvf_timeout_t;
 
 void ant_hvf_uart_discard(ant_hvf_vm_t *vm);
