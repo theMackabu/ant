@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,11 +52,14 @@ typedef struct {
 typedef struct {
   char *json;
   size_t json_len;
+  uint8_t *tarball;
   char *name;
   char *version;
   char *filename;
   size_t tarball_len;
   size_t file_count;
+  char shasum[41];
+  char integrity[104];
 } publish_payload_t;
 
 static void byte_buf_free(byte_buf_t *buf) {
@@ -214,16 +218,16 @@ static void registry_http_complete_cb(ant_http_request_t *req, ant_http_result_t
   }
 }
 
-static int registry_http_json(const char *method, const char *url, const char *body, const char *auth_token, char **body_out, size_t *body_len_out, int *status_out, char *err, size_t err_len) {
+static int registry_http_request(const char *method, const char *url, const void *body, size_t body_len, const char *content_type, const char *auth_token, char **body_out, size_t *body_len_out, int *status_out, char *err, size_t err_len) {
   registry_http_ctx_t ctx = {0};
   uv_loop_t loop;
   ant_http_header_t auth_header = {0};
   ant_http_header_t type_header = {0};
   const ant_http_header_t *headers = NULL;
 
-  if (body) {
+  if (body && content_type) {
     type_header.name = (char *)"content-type";
-    type_header.value = (char *)"application/json";
+    type_header.value = (char *)content_type;
     headers = &type_header;
   }
   char auth_value[4096];
@@ -239,8 +243,8 @@ static int registry_http_json(const char *method, const char *url, const char *b
     .method = method,
     .url = url,
     .headers = headers,
-    .body = (const uint8_t *)body,
-    .body_len = body ? strlen(body) : 0,
+    .body = body,
+    .body_len = body ? body_len : 0,
   };
   ant_http_request_t *req = NULL;
   int rc = uv_loop_init(&loop);
@@ -274,6 +278,10 @@ static int registry_http_json(const char *method, const char *url, const char *b
     if (body_len_out) *body_len_out = ctx.len;
   } else free(ctx.data);
   return 0;
+}
+
+static int registry_http_json(const char *method, const char *url, const char *body, const char *auth_token, char **body_out, size_t *body_len_out, int *status_out, char *err, size_t err_len) {
+  return registry_http_request(method, url, body, body ? strlen(body) : 0, "application/json", auth_token, body_out, body_len_out, status_out, err, err_len);
 }
 
 static char *url_join(const char *base, const char *path) {
@@ -720,7 +728,7 @@ static char *find_readme(void) {
   return NULL;
 }
 
-static int build_publish_payload(publish_payload_t *payload) {
+static int build_publish_payload(publish_payload_t *payload, bool include_attachment) {
   memset(payload, 0, sizeof(*payload));
   char *pkg_json = NULL;
   size_t pkg_json_len = 0;
@@ -760,6 +768,36 @@ static int build_publish_payload(publish_payload_t *payload) {
   }
   byte_buf_free(&tar);
 
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  if (EVP_Digest(gz.data, gz.len, digest, &digest_len, EVP_sha1(), NULL) != 1 || digest_len != 20) {
+    fprintf(stderr, "Error: failed to hash package tarball\n");
+    yyjson_doc_free(pkg_doc);
+    free(pkg_json);
+    byte_buf_free(&gz);
+    return -1;
+  }
+  for (size_t i = 0; i < digest_len; i++) snprintf(payload->shasum + i * 2, 3, "%02x", digest[i]);
+  if (EVP_Digest(gz.data, gz.len, digest, &digest_len, EVP_sha512(), NULL) != 1 || digest_len != 64) {
+    fprintf(stderr, "Error: failed to hash package tarball\n");
+    yyjson_doc_free(pkg_doc);
+    free(pkg_json);
+    byte_buf_free(&gz);
+    return -1;
+  }
+  size_t digest_b64_len = 0;
+  char *digest_b64 = ant_base64_encode(digest, digest_len, &digest_b64_len);
+  if (!digest_b64 || digest_b64_len + 8 >= sizeof(payload->integrity)) {
+    fprintf(stderr, "Error: failed to encode package integrity\n");
+    yyjson_doc_free(pkg_doc);
+    free(pkg_json);
+    byte_buf_free(&gz);
+    free(digest_b64);
+    return -1;
+  }
+  snprintf(payload->integrity, sizeof(payload->integrity), "sha512-%s", digest_b64);
+  free(digest_b64);
+
   char *bare = unscoped_name(name);
   if (!bare) {
     fprintf(stderr, "Error: out of memory\n");
@@ -782,14 +820,17 @@ static int build_publish_payload(publish_payload_t *payload) {
   free(bare);
 
   size_t b64_len = 0;
-  char *b64 = ant_base64_encode(gz.data, gz.len, &b64_len);
-  if (!b64) {
-    fprintf(stderr, "Error: failed to encode tarball\n");
-    yyjson_doc_free(pkg_doc);
-    free(pkg_json);
-    byte_buf_free(&gz);
-    free(filename);
-    return -1;
+  char *b64 = NULL;
+  if (include_attachment) {
+    b64 = ant_base64_encode(gz.data, gz.len, &b64_len);
+    if (!b64) {
+      fprintf(stderr, "Error: failed to encode tarball\n");
+      yyjson_doc_free(pkg_doc);
+      free(pkg_json);
+      byte_buf_free(&gz);
+      free(filename);
+      return -1;
+    }
   }
 
   yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -838,12 +879,14 @@ static int build_publish_payload(publish_payload_t *payload) {
   char *readme = find_readme();
   if (readme) yyjson_mut_obj_add_strcpy(doc, root, "readme", readme);
 
-  yyjson_mut_val *attachments = yyjson_mut_obj_add_obj(doc, root, "_attachments");
-  yyjson_mut_val *attachment = yyjson_mut_obj(doc);
-  yyjson_mut_obj_add_str(doc, attachment, "content_type", "application/octet-stream");
-  yyjson_mut_obj_add_strncpy(doc, attachment, "data", b64, b64_len);
-  yyjson_mut_obj_add_uint(doc, attachment, "length", (uint64_t)gz.len);
-  yyjson_mut_obj_add_val(doc, attachments, filename, attachment);
+  if (include_attachment) {
+    yyjson_mut_val *attachments = yyjson_mut_obj_add_obj(doc, root, "_attachments");
+    yyjson_mut_val *attachment = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_str(doc, attachment, "content_type", "application/octet-stream");
+    yyjson_mut_obj_add_strncpy(doc, attachment, "data", b64, b64_len);
+    yyjson_mut_obj_add_uint(doc, attachment, "length", (uint64_t)gz.len);
+    yyjson_mut_obj_add_val(doc, attachments, filename, attachment);
+  }
 
   size_t json_len = 0;
   char *json = yyjson_mut_write(doc, 0, &json_len);
@@ -865,6 +908,11 @@ static int build_publish_payload(publish_payload_t *payload) {
   payload->version = str_dup(version);
   payload->filename = filename;
   payload->tarball_len = gz.len;
+  if (!include_attachment) {
+    payload->tarball = gz.data;
+    gz.data = NULL;
+    gz.len = gz.cap = 0;
+  }
 
   yyjson_mut_doc_free(doc);
   yyjson_doc_free(pkg_doc);
@@ -879,10 +927,162 @@ static int build_publish_payload(publish_payload_t *payload) {
 static void publish_payload_free(publish_payload_t *payload) {
   if (!payload) return;
   free(payload->json);
+  free(payload->tarball);
   free(payload->name);
   free(payload->version);
   free(payload->filename);
   memset(payload, 0, sizeof(*payload));
+}
+
+static int registry_request_expect(
+  const char *method, const char *url, const void *body, size_t body_len,
+  const char *content_type, const char *token, char **response,
+  char *err, size_t err_len
+) {
+  int status = 0;
+  char request_err[256] = {0};
+  char *resp = NULL;
+  int rc = registry_http_request(method, url, body, body_len, content_type, token, &resp, NULL, &status, request_err, sizeof(request_err));
+  if (rc != 0) {
+    snprintf(err, err_len, "%s", request_err[0] ? request_err : "network error");
+    free(resp);
+    return -1;
+  }
+  if (status < 200 || status >= 300) {
+    snprintf(err, err_len, "HTTP %d%s%s", status, resp && resp[0] ? ": " : "", resp && resp[0] ? resp : "");
+    free(resp);
+    return -1;
+  }
+  if (response) *response = resp;
+  else free(resp);
+  return 0;
+}
+
+static int multipart_publish(const char *registry_url, const publish_payload_t *payload, const char *token, char *err, size_t err_len) {
+  int result = -1;
+  char *create_url = url_join(registry_url, "/-/v1/publish/uploads");
+  char *upload_url = NULL;
+  char *resp = NULL;
+  yyjson_mut_doc *create_doc = NULL;
+  yyjson_mut_doc *complete_doc = NULL;
+  char *create_body = NULL;
+  char *complete_body = NULL;
+  if (!create_url) goto oom;
+
+  create_doc = yyjson_mut_doc_new(NULL);
+  yyjson_mut_val *create_root = yyjson_mut_obj(create_doc);
+  yyjson_mut_doc_set_root(create_doc, create_root);
+  yyjson_mut_obj_add_strcpy(create_doc, create_root, "name", payload->name);
+  yyjson_mut_obj_add_strcpy(create_doc, create_root, "version", payload->version);
+  yyjson_mut_obj_add_uint(create_doc, create_root, "size", payload->tarball_len);
+  yyjson_mut_obj_add_strcpy(create_doc, create_root, "shasum", payload->shasum);
+  yyjson_mut_obj_add_strcpy(create_doc, create_root, "integrity", payload->integrity);
+  size_t create_len = 0;
+  create_body = yyjson_mut_write(create_doc, 0, &create_len);
+  if (!create_body) goto oom;
+  if (registry_request_expect("POST", create_url, create_body, create_len, "application/json", token, &resp, err, err_len) != 0) goto done;
+
+  yyjson_doc *create_resp_doc = yyjson_read(resp, strlen(resp), 0);
+  yyjson_val *create_resp_root = create_resp_doc ? yyjson_doc_get_root(create_resp_doc) : NULL;
+  const char *upload_id = json_string(create_resp_root, "id");
+  yyjson_val *part_size_val = create_resp_root ? yyjson_obj_get(create_resp_root, "partSize") : NULL;
+  uint64_t part_size_u64 = part_size_val && yyjson_is_uint(part_size_val) ? yyjson_get_uint(part_size_val) : 0;
+  if (!upload_id || part_size_u64 < 5 * 1024 * 1024 || part_size_u64 > SIZE_MAX) {
+    snprintf(err, err_len, "registry returned an invalid multipart upload");
+    yyjson_doc_free(create_resp_doc);
+    goto done;
+  }
+  char *upload_path = malloc(strlen("/-/v1/publish/uploads/") + strlen(upload_id) + 1);
+  if (!upload_path) {
+    yyjson_doc_free(create_resp_doc);
+    goto oom;
+  }
+  sprintf(upload_path, "/-/v1/publish/uploads/%s", upload_id);
+  upload_url = url_join(registry_url, upload_path);
+  free(upload_path);
+  yyjson_doc_free(create_resp_doc);
+  free(resp);
+  resp = NULL;
+  if (!upload_url) goto oom;
+
+  complete_doc = yyjson_mut_doc_new(NULL);
+  yyjson_mut_val *complete_root = yyjson_mut_obj(complete_doc);
+  yyjson_mut_doc_set_root(complete_doc, complete_root);
+  yyjson_mut_val *parts = yyjson_mut_obj_add_arr(complete_doc, complete_root, "parts");
+  size_t part_size = (size_t)part_size_u64;
+  size_t offset = 0;
+  unsigned part_number = 1;
+  while (offset < payload->tarball_len) {
+    size_t length = payload->tarball_len - offset;
+    if (length > part_size) length = part_size;
+    char suffix[64];
+    snprintf(suffix, sizeof(suffix), "/parts/%u", part_number);
+    char *part_url = url_join(upload_url, suffix);
+    if (!part_url) goto oom;
+    if (registry_request_expect("PUT", part_url, payload->tarball + offset, length, "application/octet-stream", token, &resp, err, err_len) != 0) {
+      free(part_url);
+      goto abort_upload;
+    }
+    free(part_url);
+    yyjson_doc *part_doc = yyjson_read(resp, strlen(resp), 0);
+    yyjson_val *part_root = part_doc ? yyjson_doc_get_root(part_doc) : NULL;
+    const char *etag = json_string(part_root, "etag");
+    if (!etag) {
+      snprintf(err, err_len, "registry returned an invalid upload part");
+      yyjson_doc_free(part_doc);
+      goto abort_upload;
+    }
+    yyjson_mut_val *part = yyjson_mut_obj(complete_doc);
+    yyjson_mut_obj_add_uint(complete_doc, part, "partNumber", part_number);
+    yyjson_mut_obj_add_strcpy(complete_doc, part, "etag", etag);
+    yyjson_mut_arr_append(parts, part);
+    yyjson_doc_free(part_doc);
+    free(resp);
+    resp = NULL;
+    offset += length;
+    part_number++;
+  }
+
+  size_t complete_len = 0;
+  complete_body = yyjson_mut_write(complete_doc, 0, &complete_len);
+  if (!complete_body) goto oom;
+  char *complete_url = url_join(upload_url, "/complete");
+  if (!complete_url) goto oom;
+  if (registry_request_expect("POST", complete_url, complete_body, complete_len, "application/json", token, NULL, err, err_len) != 0) {
+    free(complete_url);
+    goto abort_upload;
+  }
+  free(complete_url);
+
+  char *finalize_url = url_join(upload_url, "/finalize");
+  if (!finalize_url) goto oom;
+  if (registry_request_expect("POST", finalize_url, payload->json, payload->json_len, "application/json", token, NULL, err, err_len) != 0) {
+    free(finalize_url);
+    goto abort_upload;
+  }
+  free(finalize_url);
+  result = 0;
+  goto done;
+
+oom:
+  snprintf(err, err_len, "out of memory");
+  goto abort_upload;
+
+abort_upload:
+  if (upload_url) {
+    char ignored[64] = {0};
+    (void)registry_http_request("DELETE", upload_url, NULL, 0, NULL, token, NULL, NULL, NULL, ignored, sizeof(ignored));
+  }
+
+done:
+  free(resp);
+  free(create_url);
+  free(upload_url);
+  free(create_body);
+  free(complete_body);
+  yyjson_mut_doc_free(create_doc);
+  yyjson_mut_doc_free(complete_doc);
+  return result;
 }
 
 static void print_publish_help(void) {
@@ -899,6 +1099,7 @@ int pkg_cmd_publish(int argc, char **argv) {
   const char *registry_url = NULL;
   bool dry_run = false;
   bool npm = false;
+  bool land = true;
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -908,15 +1109,18 @@ int pkg_cmd_publish(int argc, char **argv) {
       dry_run = true;
     } else if (strcmp(argv[i], "--npm") == 0) {
       npm = true;
+      land = false;
       registry_url = NPM_REGISTRY_URL;
     } else if (strcmp(argv[i], "--land") == 0) {
       npm = false;
+      land = true;
       registry_url = NULL;
     } else if (strcmp(argv[i], "--registry") == 0) {
       if (i + 1 >= argc) {
         fprintf(stderr, "Error: --registry requires a URL\n");
         return EXIT_FAILURE;
       }
+      land = false;
       registry_url = argv[++i];
     } else {
       fprintf(stderr, "Error: unknown publish option: %s\n", argv[i]);
@@ -930,7 +1134,7 @@ int pkg_cmd_publish(int argc, char **argv) {
   }
 
   publish_payload_t payload;
-  if (build_publish_payload(&payload) != 0) return EXIT_FAILURE;
+  if (build_publish_payload(&payload, !land) != 0) return EXIT_FAILURE;
 
   char *host = url_host(registry_url);
   char *encoded = url_encode_package(payload.name);
@@ -967,7 +1171,25 @@ int pkg_cmd_publish(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  char err[256] = {0};
+  char err[1024] = {0};
+  if (land) {
+    int rc = multipart_publish(registry_url, &payload, token, err, sizeof(err));
+    if (rc != 0) {
+      fprintf(stderr, "Error: publish failed: %s\n", err[0] ? err : "network error");
+      free(token);
+      free(host);
+      free(url);
+      publish_payload_free(&payload);
+      return EXIT_FAILURE;
+    }
+    printf("Published %s@%s\n", payload.name, payload.version);
+    free(token);
+    free(host);
+    free(url);
+    publish_payload_free(&payload);
+    return EXIT_SUCCESS;
+  }
+
   char *resp = NULL;
   int status = 0;
   int rc = registry_http_json("PUT", url, payload.json, token, &resp, NULL, &status, err, sizeof(err));

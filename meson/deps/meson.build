@@ -130,6 +130,7 @@ wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
 
 wirecall = dependency('wirecall', default_options: [
+  'b_lto=' + get_option('b_lto').to_string(),
   'scheduler=false',
   'demos=disabled',
   'tests=disabled',
