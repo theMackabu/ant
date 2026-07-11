@@ -1,6 +1,6 @@
 {
   "name": "ant-desktop-darwin-arm64",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Ant Desktop native runtime for macOS on Apple Silicon",
   "keywords": [
     "ant",
