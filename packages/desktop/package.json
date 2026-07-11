@@ -20,6 +20,7 @@
     "build": "ant scripts/build.js",
     "package": "ant scripts/package-platform.cjs",
     "release": "node scripts/publish.js",
+    "version:set": "node scripts/set-version.js",
     "example:start": "ant app/bin/ant-desktop.js dev --app-dir tests/examples",
     "example:package": "ant app/bin/ant-desktop.js package --app-dir tests/examples --overwrite"
   },
