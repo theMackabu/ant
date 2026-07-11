@@ -247,6 +247,9 @@ void ant_desktop_platform_finish_browser_close(ant_desktop_window_state_t *state
 void ant_desktop_request_termination(void) {
   if (g_terminating) return;
   g_terminating = true;
+  for (AntDesktopWindow *window in g_windows.allValues.copy) {
+    ant_desktop_emit_window_event(window.state, "quit", "", 0, 0);
+  }
   if (ant_desktop_window_count() == 0) {
     StopApplication();
     return;

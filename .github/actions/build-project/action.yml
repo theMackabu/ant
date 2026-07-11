@@ -129,6 +129,18 @@ runs:
         echo "Version: $VERSION"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          NON_SYSTEM_DYLIBS=$(otool -L build/${{ inputs.binary_name }} \
+            | tail -n +2 \
+            | awk '{print $1}' \
+            | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+          if [[ -n "$NON_SYSTEM_DYLIBS" ]]; then
+            echo "Error: macOS release binary references non-system libraries:"
+            echo "$NON_SYSTEM_DYLIBS"
+            exit 1
+          fi
+        fi
+
     - name: Strip binary
       shell: bash
       run: |

@@ -159,7 +159,10 @@ libffi_dep = subproject('libffi', default_options: [
   'tests=false'
 ]).get_variable('ffi_dep')
 
-cares_dep = dependency('libcares')
+cares_dep = subproject('c-ares', default_options: [
+  'default_library=static',
+  'warning_level=0',
+]).get_variable('cares_dep')
 
 pcre2_dep = subproject('pcre2', default_options: [
   'optimization=3',

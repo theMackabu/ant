@@ -19,7 +19,6 @@
 @interface AntDesktopApplication : NSApplication <CefAppProtocol> {
 @private
   BOOL handlingSendEvent_;
-  BOOL terminationRequested_;
 }
 @end
 
@@ -35,9 +34,7 @@
   [super sendEvent:event];
 }
 - (void)terminate:(id)sender {
-  if (terminationRequested_) return;
-  terminationRequested_ = YES;
-  [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationWillTerminateNotification object:self];
+  (void)sender;
   ant_desktop_request_termination();
 }
 @end
@@ -73,6 +70,7 @@ public:
     command_line->AppendSwitch("disable-notifications");
     command_line->AppendSwitch("use-mock-keychain");
     command_line->AppendSwitchWithValue("lang", "en-US");
+    if (!ant_desktop_devtools_enabled()) command_line->AppendSwitch("disable-dev-tools");
   }
 
   void OnScheduleMessagePumpWork(int64_t delay_ms) override {
@@ -112,6 +110,10 @@ NSString *ApplicationSupportPath(void) {
 }
 
 } // namespace
+
+bool ant_desktop_devtools_enabled(void) {
+  return getenv("ANT_DESKTOP_DEV") != nullptr;
+}
 
 bool ant_desktop_cef_initialize(int argc, char **argv) {
   if (g_initialized) return true;

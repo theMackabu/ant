@@ -10,6 +10,7 @@
 #include "../../../browser/cef/app_scheme.h"
 #include "../../../browser/cef/ipc.h"
 #include "cef_callbacks.h"
+#include "cef_runtime.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_context_menu_handler.h"
@@ -123,6 +124,10 @@ public:
       ant_desktop_cef_show_window(window_);
       ant_desktop_cef_resolve_load(window_);
     } else {
+      if (!ant_desktop_devtools_enabled()) {
+        browser->GetHost()->CloseBrowser(true);
+        return;
+      }
       devtools_ = browser;
       SetDevToolsOpen(true);
     }
@@ -132,6 +137,7 @@ public:
                              CefBrowserSettings &settings, CefRefPtr<CefDictionaryValue> &extra_info,
                              bool *use_default_window) override {
     CEF_REQUIRE_UI_THREAD();
+    if (!ant_desktop_devtools_enabled()) return;
     *use_default_window = true;
     SetDevToolsOpen(true);
   }
@@ -149,6 +155,10 @@ public:
     if (devtools_ && devtools_->IsSame(browser)) {
       devtools_ = nullptr;
       SetDevToolsOpen(false);
+      if (close_browser_after_devtools_ && browser_) {
+        close_browser_after_devtools_ = false;
+        browser_->GetHost()->CloseBrowser(false);
+      }
       return;
     }
     if (!browser_ || !browser_->IsSame(browser)) return;
@@ -222,6 +232,21 @@ public:
   bool closing() const {
     return closing_;
   }
+  void Close() {
+    if (!browser_) return;
+    CefRefPtr<CefBrowserHost> host = browser_->GetHost();
+    if (devtools_) {
+      close_browser_after_devtools_ = true;
+      devtools_->GetHost()->CloseBrowser(true);
+      return;
+    }
+    if (host->HasDevTools()) {
+      close_browser_after_devtools_ = true;
+      host->CloseDevTools();
+      return;
+    }
+    host->CloseBrowser(false);
+  }
   void DevToolsClosed() {
     SetDevToolsOpen(false);
   }
@@ -239,6 +264,7 @@ private:
   AntDraggableRegionView *__strong draggable_view_;
   CefRefPtr<CefBrowser> browser_;
   CefRefPtr<CefBrowser> devtools_;
+  bool close_browser_after_devtools_ = false;
   bool devtools_open_ = false;
   bool closing_ = false;
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
@@ -296,7 +322,7 @@ bool ant_desktop_browser_closing(void *window) {
 
 void ant_desktop_browser_close(void *window) {
   CefRefPtr<EmbeddedClient> client = Client(window);
-  if (client && client->browser()) client->browser()->GetHost()->CloseBrowser(false);
+  if (client) client->Close();
 }
 
 void ant_desktop_browser_detach(void *window) {
@@ -305,6 +331,7 @@ void ant_desktop_browser_detach(void *window) {
 }
 
 void ant_desktop_browser_open_devtools(void *window) {
+  if (!ant_desktop_devtools_enabled()) return;
   CefRefPtr<EmbeddedClient> client = Client(window);
   if (client && client->browser())
     client->browser()->GetHost()->ShowDevTools(CefWindowInfo(), nullptr, CefBrowserSettings(), CefPoint());
@@ -319,6 +346,7 @@ void ant_desktop_browser_close_devtools(void *window) {
 }
 
 void ant_desktop_browser_toggle_devtools(void *window) {
+  if (!ant_desktop_devtools_enabled()) return;
   CefRefPtr<EmbeddedClient> client = Client(window);
   if (!client || !client->browser()) return;
   CefRefPtr<CefBrowserHost> host = client->browser()->GetHost();
@@ -329,6 +357,7 @@ void ant_desktop_browser_toggle_devtools(void *window) {
 }
 
 void ant_desktop_browser_inspect(void *window, int x, int y) {
+  if (!ant_desktop_devtools_enabled()) return;
   CefRefPtr<EmbeddedClient> client = Client(window);
   if (client && client->browser())
     client->browser()->GetHost()->ShowDevTools(CefWindowInfo(), nullptr, CefBrowserSettings(), CefPoint(x, y));
