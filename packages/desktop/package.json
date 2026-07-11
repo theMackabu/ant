@@ -1,6 +1,6 @@
 {
   "name": "ant-desktop",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0",
   "description": "Build native desktop applications with Ant",
   "license": "MIT",
   "repository": {
@@ -32,7 +32,7 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "ant-desktop-darwin-arm64": "0.1.0-rc.1"
+    "ant-desktop-darwin-arm64": "0.1.0"
   },
   "publishConfig": {
     "access": "public"
