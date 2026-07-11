@@ -10,12 +10,7 @@ const { packagePlatform } = require('./package-platform.cjs');
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptsRoot, '..');
 const repositoryRoot = path.resolve(desktopRoot, '../..');
-const platformRoot = path.join(
-  desktopRoot,
-  'packaging',
-  'npm',
-  'darwin-arm64'
-);
+const platformRoot = path.join(desktopRoot, 'packaging', 'npm', 'darwin-arm64');
 
 function readPackage(root) {
   return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -55,14 +50,12 @@ function validateVersions(rootPackage, platformPackage) {
   const selectedVersion = rootPackage.optionalDependencies?.[platformPackage.name];
   if (rootPackage.version !== platformPackage.version) {
     throw new Error(
-      `Package versions do not match: ${rootPackage.name}@${rootPackage.version} and ` +
-      `${platformPackage.name}@${platformPackage.version}`
+      `Package versions do not match: ${rootPackage.name}@${rootPackage.version} and ` + `${platformPackage.name}@${platformPackage.version}`
     );
   }
   if (selectedVersion !== platformPackage.version) {
     throw new Error(
-      `${rootPackage.name} must select ${platformPackage.name}@${platformPackage.version}; ` +
-      `found ${selectedVersion || 'no optional dependency'}`
+      `${rootPackage.name} must select ${platformPackage.name}@${platformPackage.version}; ` + `found ${selectedVersion || 'no optional dependency'}`
     );
   }
 }
@@ -70,13 +63,6 @@ function validateVersions(rootPackage, platformPackage) {
 function step(message, command, args, cwd) {
   process.stdout.write(`\n${message}\n`);
   execute(command, args, { cwd });
-}
-
-function antExecutable() {
-  const configured = process.env.ANT;
-  if (configured) return configured;
-  const local = path.join(repositoryRoot, 'build', 'ant');
-  return fs.existsSync(local) ? local : 'ant';
 }
 
 function publishPackages(command, packages, registryArguments, dryRun) {
@@ -98,12 +84,7 @@ async function main() {
   const platformPackage = readPackage(platformRoot);
   validateVersions(rootPackage, platformPackage);
 
-  step(
-    'Building Ant Desktop',
-    process.execPath,
-    [path.join(scriptsRoot, 'build.js')],
-    desktopRoot
-  );
+  step('Building Ant Desktop', process.execPath, [path.join(scriptsRoot, 'build.js')], desktopRoot);
 
   process.stdout.write('\nPreparing native platform package\n');
   packagePlatform();
@@ -125,9 +106,9 @@ async function main() {
   }
   if (options.ant) {
     publishPackages(
-      antExecutable(),
+      'antland',
       packageOrder.map(entry => ({ ...entry, registry: 'ants.land' })),
-      ['publish', '--land'],
+      ['publish'],
       options.dryRun
     );
     registries.push('ants.land');
