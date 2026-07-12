@@ -3090,6 +3090,22 @@ static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static int emit_optional_chain_short_circuit(sv_compiler_t *c) {
+  int present = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_POP);
+  emit_op(c, OP_UNDEF);
+  int end = emit_jump(c, OP_JMP);
+  patch_jump(c, present);
+  return end;
+}
+
+static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
+  if (!member || !member->right) return false;
+  if (member->type == N_OPTIONAL) return true;
+  return member->type == N_MEMBER &&
+    sv_node_has_optional_base(member->left);
+}
+
 static void compile_call_emit_invoke(
   sv_compiler_t *c, sv_ast_t *node,
   sv_call_kind_t kind, bool has_spread
@@ -3159,9 +3175,6 @@ static bool compile_call_is_proto_intrinsic(
   if (is_ident_name(callee->left, "super")) return false;
   if (!is_ident_str(callee->right->str, callee->right->len, "isPrototypeOf", 13))
     return false;
-  // Optional base (`a?.b.isPrototypeOf(x)`): let the guarded generic path handle
-  // the short-circuit; this fast path would read the method off a nullish base.
-  if (sv_node_has_optional_base(callee->left)) return false;
 
   compile_expr(c, callee->left);
   compile_receiver_property_get(c, callee);
@@ -3182,9 +3195,6 @@ static bool compile_call_array_includes_intrinsic(
   if (is_ident_name(callee->left, "super")) return false;
   if (!is_ident_str(callee->right->str, callee->right->len, "includes", 8))
     return false;
-  // Optional base (`a?.b.includes(x)`): let the guarded generic path handle the
-  // short-circuit; this fast path would read `.includes` off a nullish base.
-  if (sv_node_has_optional_base(callee->left)) return false;
 
   compile_expr(c, callee->left);
   compile_receiver_property_get(c, callee);
@@ -3268,11 +3278,11 @@ static bool compile_regexp_exec_truthy_intrinsic(
     
   sv_ast_t *callee = node->left;
   if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
   if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
   if (is_ident_name(callee->left, "super")) return false;
   if (!is_ident_str(callee->right->str, callee->right->len, "exec", 4))
     return false;
-  if (sv_node_has_optional_base(callee->left)) return false;
 
   compile_expr(c, callee->left);
   compile_receiver_property_get(c, callee);
@@ -3304,57 +3314,36 @@ static void compile_optional_call_after_setup(
   patch_jump(c, j_end);
 }
 
+static void compile_guarded_member_call(
+  sv_compiler_t *c, sv_ast_t *call_node,
+  sv_ast_t *member, bool has_spread, bool optional_callee
+) {
+  compile_expr(c, member->left);
+  int end = emit_optional_chain_short_circuit(c);
+  compile_receiver_property_get(c, member);
+  if (optional_callee)
+    compile_optional_call_after_setup(
+      c, call_node, SV_CALL_METHOD, has_spread);
+  else
+    compile_call_emit_invoke(
+      c, call_node, SV_CALL_METHOD, has_spread);
+  patch_jump(c, end);
+}
+
 static void compile_call_optional(
   sv_compiler_t *c, sv_ast_t *node,
   sv_ast_t *opt_callee, bool has_spread
 ) {
   if (opt_callee->right) {
-    compile_expr(c, opt_callee->left);
-    emit_op(c, OP_DUP);
-    emit_op(c, OP_IS_UNDEF_OR_NULL);
-    int j_have_obj = emit_jump(c, OP_JMP_FALSE);
-    emit_op(c, OP_POP);
-    emit_op(c, OP_UNDEF);
-    int j_end = emit_jump(c, OP_JMP);
-    patch_jump(c, j_have_obj);
-
-    compile_receiver_property_get(c, opt_callee);
-    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
-    patch_jump(c, j_end);
-    
+    compile_guarded_member_call(
+      c, node, opt_callee, has_spread, false);
     return;
   }
 
   sv_ast_t *target = opt_callee->left;
-  if (target && target->type == N_OPTIONAL && target->right) {
-    compile_expr(c, target->left);
-    emit_op(c, OP_DUP);
-    emit_op(c, OP_IS_UNDEF_OR_NULL);
-    int j_have_obj = emit_jump(c, OP_JMP_FALSE);
-    emit_op(c, OP_POP);
-    emit_op(c, OP_UNDEF);
-    int j_end = emit_jump(c, OP_JMP);
-    patch_jump(c, j_have_obj);
-
-    compile_receiver_property_get(c, target);
-    compile_optional_call_after_setup(c, node, SV_CALL_METHOD, has_spread);
-    patch_jump(c, j_end);
-    return;
-  }
-
-  // `a?.b.c?.()`: the receiver `a?.b.c` itself has an optional base, so guard it
-  // the same way — a nullish link short-circuits the whole thing to undefined
-  // instead of reading `.c` (the method) off the short-circuited value.
-  if (target && target->type == N_MEMBER && sv_node_has_optional_base(target->left)) {
-    compile_expr(c, target->left);
-    int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
-    emit_op(c, OP_POP);
-    emit_op(c, OP_UNDEF);
-    int end_jump = emit_jump(c, OP_JMP);
-    patch_jump(c, ok_jump);
-    compile_receiver_property_get(c, target);
-    compile_optional_call_after_setup(c, node, SV_CALL_METHOD, has_spread);
-    patch_jump(c, end_jump);
+  if (member_call_needs_optional_base_guard(target)) {
+    compile_guarded_member_call(
+      c, node, target, has_spread, true);
     return;
   }
 
@@ -3707,6 +3696,12 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  if (member_call_needs_optional_base_guard(callee)) {
+    compile_guarded_member_call(
+      c, node, callee, has_spread, false);
+    return;
+  }
+
   if (compile_call_is_proto_intrinsic(c, node, has_spread))
     return;
 
@@ -3744,19 +3739,6 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (compile_direct_eval_call(c, node, has_spread)) return;
-
-  if (callee->type == N_MEMBER && sv_node_has_optional_base(callee->left)) {
-    compile_expr(c, callee->left);
-    int ok_jump  = emit_jump(c, OP_JMP_NOT_NULLISH);
-    emit_op(c, OP_POP);
-    emit_op(c, OP_UNDEF);
-    int end_jump = emit_jump(c, OP_JMP);
-    patch_jump(c, ok_jump);
-    compile_receiver_property_get(c, callee);
-    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
-    patch_jump(c, end_jump);
-    return;
-  }
 
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
   compile_call_emit_invoke(c, node, kind, has_spread);
@@ -4174,6 +4156,7 @@ static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
   if (call_has_spread_arg(node)) return false;
   
   sv_ast_t *callee = node->left;
+  if (sv_node_has_optional_base(callee)) return false;
   if (
     callee->type == N_IDENT && 
     ((callee->len == 5 && memcmp(callee->str, "super", 5) == 0) ||
@@ -4217,16 +4200,6 @@ static void emit_return_from_stack(sv_compiler_t *c) {
 
 static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
-
-  // Any optional chain in the callee (`a?.b()`, `a?.b.c()`, ...) must go through
-  // compile_call, which short-circuits the whole chain to `undefined` when a
-  // link is nullish. compile_call_setup_non_optional below has no such guard, so
-  // a bare member callee (`a?.b.c`) would read `.c` off the short-circuited base.
-  if (sv_node_has_optional_base(callee)) {
-    compile_call(c, node);
-    emit_return_from_stack(c);
-    return;
-  }
 
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
   int argc = node->args.count;
