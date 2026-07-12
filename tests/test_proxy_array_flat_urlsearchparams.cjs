@@ -13,10 +13,18 @@ assert("length" in new Proxy([], {}), "in operator should see array proxy length
 
 const canonicalIndexArray = [1, 2];
 assert(!("00" in canonicalIndexArray), "in operator should not canonicalize leading-zero keys");
+canonicalIndexArray["00"] = 3;
+assert("00" in canonicalIndexArray, "leading-zero keys should remain ordinary array properties");
+assert(canonicalIndexArray.length === 2, "leading-zero properties should not change array length");
+
+const overflowingIndex = "18446744073709551616";
 assert(
-  !("18446744073709551616" in canonicalIndexArray),
+  !(overflowingIndex in canonicalIndexArray),
   "in operator should reject overflowing array indices"
 );
+canonicalIndexArray[overflowingIndex] = 4;
+assert(overflowingIndex in canonicalIndexArray, "overflowing keys should remain ordinary properties");
+assert(canonicalIndexArray.length === 2, "overflowing properties should not change array length");
 
 let inheritedHasCalls = 0;
 const inheritedProxyArray = Array(1);
