@@ -11,6 +11,36 @@ assert(JSON.stringify(proxiedArray.flatMap(function (x) { return x; })) === "[1,
 assert(0 in new Proxy([1], {}), "in operator should see array proxy indices");
 assert("length" in new Proxy([], {}), "in operator should see array proxy length");
 
+const canonicalIndexArray = [1, 2];
+assert(!("00" in canonicalIndexArray), "in operator should not canonicalize leading-zero keys");
+assert(
+  !("18446744073709551616" in canonicalIndexArray),
+  "in operator should reject overflowing array indices"
+);
+
+let inheritedHasCalls = 0;
+const inheritedProxyArray = Array(1);
+Object.setPrototypeOf(inheritedProxyArray, new Proxy({}, {
+  has(target, key) {
+    inheritedHasCalls++;
+    return key === "0";
+  },
+}));
+assert(0 in inheritedProxyArray, "in operator should invoke an inherited proxy has trap");
+assert(inheritedHasCalls === 1, "inherited proxy has trap should run exactly once");
+
+const throwingProxyArray = Array(1);
+Object.setPrototypeOf(throwingProxyArray, new Proxy({}, {
+  has() {
+    throw new Error("inherited has boom");
+  },
+}));
+assertThrows(
+  function () { return 0 in throwingProxyArray; },
+  "inherited has boom",
+  "in operator should propagate inherited proxy has errors"
+);
+
 let sawOuterLength = false;
 let sawPairLength = false;
 const pair = new Proxy(["a", "b"], {

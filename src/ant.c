@@ -974,20 +974,35 @@ static inline bool is_array_index(const char *key, ant_offset_t klen) {
 }
 
 static inline bool parse_array_index(const char *key, size_t klen, ant_offset_t max_len, unsigned long *out_idx) {
-  if (klen == 0 || key[0] < '0' || key[0] > '9') return false;
-  unsigned long parsed_idx = 0;
+  if (
+    klen == 0 || key[0] < '0' || key[0] > '9' ||
+    (klen > 1 && key[0] == '0')
+  ) return false;
   
-  for (size_t i = 0; i < klen; i++) {
+  const size_t max_ulong_digits = sizeof(unsigned long) == 8 ? 20u : 10u;
+  if (klen > max_ulong_digits) return false;
+
+  unsigned long parsed_idx = 0;
+  if (klen == max_ulong_digits) for (size_t i = 0; i < klen; i++) {
     if (key[i] < '0' || key[i] > '9') return false;
-    parsed_idx = parsed_idx * 10 + (key[i] - '0');
+    unsigned long digit = (unsigned long)(key[i] - '0');
+    if (
+      parsed_idx > ULONG_MAX / 10 ||
+      (parsed_idx == ULONG_MAX / 10 && digit > ULONG_MAX % 10)
+    ) return false;
+    parsed_idx = parsed_idx * 10 + digit;
+  }
+  
+  else for (size_t i = 0; i < klen; i++) {
+    if (key[i] < '0' || key[i] > '9') return false;
+    parsed_idx = parsed_idx * 10 + (unsigned long)(key[i] - '0');
   }
   
   if (parsed_idx >= max_len) return false;
   *out_idx = parsed_idx;
+  
   return true;
 }
-
-#define ANT_ARRAY_INDEX_EXCLUSIVE ((ant_offset_t)UINT32_MAX)
 
 static inline ant_object_t *array_obj_ptr(ant_value_t obj) {
   if (!is_object_type(obj)) return NULL;
@@ -1015,7 +1030,7 @@ static inline void array_define_or_set_index(ant_t *js, ant_value_t obj, const c
   if (!array_obj_ptr(obj)) return;
 
   unsigned long idx = 0;
-  if (!parse_array_index(key, klen, ANT_ARRAY_INDEX_EXCLUSIVE, &idx)) return;
+  if (!parse_array_index(key, klen, ((ant_offset_t)UINT32_MAX), &idx)) return;
 
   ant_offset_t cur_len = get_array_length(js, obj);
   ant_offset_t next_len = (ant_offset_t)idx + 1;
@@ -15589,27 +15604,31 @@ static inline bool try_array_key_membership(
   ant_offset_t array_len = get_array_length(js, array);
   if (!parse_array_index(name, name_len, array_len, &index)) return false;
 
-  *result = js_bool(arr_has(js, array, (ant_offset_t)index));
+  if (!arr_has(js, array, (ant_offset_t)index)) return false;
+  *result = js_true;
+  
   return true;
 }
 
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_offset_t prop_len;
   const char *prop_name;
+  
   char num_buf[32];
+  bool array_key_fast_path_checked = false;
 
   if (vtype(l) == T_STR && vtype(r) == T_ARR) {
+    array_key_fast_path_checked = true;
     ant_offset_t direct_len;
     ant_offset_t direct_off = vstr(js, l, &direct_len);
+    
     const char *direct_name = (const char *)(uintptr_t)direct_off;
     ant_value_t direct_result;
-    if (try_array_key_membership(js, r, direct_name, direct_len, &direct_result))
-      return direct_result;
+    if (try_array_key_membership(js, r, direct_name, direct_len, &direct_result)) return direct_result;
   }
   
   ant_value_t key = js_to_primitive(js, l, 1);
   if (is_err(key)) return key;
-  
   bool is_sym = (vtype(key) == T_SYMBOL);
   
   if (is_sym) {
@@ -15637,7 +15656,7 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
     return js_bool(js_truthy(js, result));
   }
   
-  if (!is_sym && vtype(r) == T_ARR) {
+  if (!array_key_fast_path_checked && !is_sym && vtype(r) == T_ARR) {
     ant_value_t array_result;
     if (try_array_key_membership(js, r, prop_name, prop_len, &array_result))
       return array_result;
