@@ -2943,7 +2943,7 @@ fn metadataSatisfies(allocator: std.mem.Allocator, json_data: []const u8, constr
   }
 
   for (metadata.versions.items) |*v| {
-    if (constraint.satisfies(v.version) and v.matchesPlatform()) return true;
+    if (metadata.constraintMatches(constraint, v.version) and v.matchesPlatform()) return true;
   }
 
   return false;

@@ -29,6 +29,15 @@ typedef struct code_block {
   char data[];
 } code_block_t;
 
+_Static_assert(
+  (CODE_ARENA_ALIGNMENT & (CODE_ARENA_ALIGNMENT - 1u)) == 0,
+  "code arena alignment must be a power of two"
+);
+_Static_assert(
+  offsetof(code_block_t, data) % CODE_ARENA_ALIGNMENT == 0,
+  "code arena block payload must satisfy the arena alignment"
+);
+
 static struct ant_runtime runtime = {0};
 struct ant_runtime *const rt = &runtime;
 static intern_entry_t *code_interns = NULL;
@@ -81,17 +90,26 @@ static void *arena_bump(
   code_block_t **current,
   size_t size
 ) {
-  size = (size + 7) & ~(size_t)7;
-  if (!*current || (*current)->used + size > (*current)->capacity) {
+  const size_t align_mask = (size_t)CODE_ARENA_ALIGNMENT - 1u;
+  size = (size + align_mask) & ~align_mask;
+  
+  size_t used = *current
+    ? ((*current)->used + align_mask) & ~align_mask : 0;
+    
+  if (!*current || used + size > (*current)->capacity) {
     code_block_t *new_block = code_arena_new_block(size);
+    
     if (!new_block) return NULL;
     if (!*head) *head = new_block;
     else if (*current) (*current)->next = new_block;
+    
     *current = new_block;
+    used = 0;
   }
 
-  void *ptr = &(*current)->data[(*current)->used];
-  (*current)->used += size;
+  void *ptr = &(*current)->data[used];
+  (*current)->used = used + size;
+  
   return ptr;
 }
 

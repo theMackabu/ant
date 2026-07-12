@@ -2282,8 +2282,9 @@ static void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm,  MIR_conte
 static bool jit_local_has_numeric_hint(sv_func_t *func, int idx) {
   if (!func || idx < 0) return false;
   if (idx >= func->max_locals) return false;
-  if (func->local_types && idx < func->local_type_count &&
-      func->local_types[idx].type == SV_TI_NUM)
+  sv_type_info_t *local_types = sv_func_local_types(func);
+  if (local_types && idx < func->local_type_count &&
+      local_types[idx].type == SV_TI_NUM)
     return true;
   if (func->local_type_feedback) {
     uint8_t ltf = func->local_type_feedback[idx];
@@ -2988,10 +2989,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       return NULL;
     }
     
-    if (func->local_types && func->local_type_count > 0) {
+    sv_type_info_t *local_types = sv_func_local_types(func);
+    if (local_types && func->local_type_count > 0) {
       int ncopy = func->local_type_count < n_locals ? func->local_type_count : n_locals;
       for (int i = 0; i < ncopy; i++)
-        known_type_locals[i] = func->local_types[i].type;
+        known_type_locals[i] = local_types[i].type;
     }
     if (func->local_type_feedback) {
       for (int i = 0; i < n_locals; i++) {

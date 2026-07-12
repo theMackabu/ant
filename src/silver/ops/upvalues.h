@@ -204,8 +204,15 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
+  
   ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
   sv_init_closure_function_object(js, closure, func_val, module_ctx);
+  ant_value_t eval_env = sv_frame_eval_env(js, frame);
+  
+  if (eval_env != js->global && is_object_type(closure->func_obj)) {
+    js_set_slot_wb(js, closure->func_obj, SLOT_EVAL_ENV, eval_env);
+    closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+  }
   
   return js_mkundef();
 }

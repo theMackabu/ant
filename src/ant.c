@@ -974,20 +974,35 @@ static inline bool is_array_index(const char *key, ant_offset_t klen) {
 }
 
 static inline bool parse_array_index(const char *key, size_t klen, ant_offset_t max_len, unsigned long *out_idx) {
-  if (klen == 0 || key[0] < '0' || key[0] > '9') return false;
-  unsigned long parsed_idx = 0;
+  if (
+    klen == 0 || key[0] < '0' || key[0] > '9' ||
+    (klen > 1 && key[0] == '0')
+  ) return false;
   
-  for (size_t i = 0; i < klen; i++) {
+  const size_t max_ulong_digits = sizeof(unsigned long) == 8 ? 20u : 10u;
+  if (klen > max_ulong_digits) return false;
+
+  unsigned long parsed_idx = 0;
+  if (klen == max_ulong_digits) for (size_t i = 0; i < klen; i++) {
     if (key[i] < '0' || key[i] > '9') return false;
-    parsed_idx = parsed_idx * 10 + (key[i] - '0');
+    unsigned long digit = (unsigned long)(key[i] - '0');
+    if (
+      parsed_idx > ULONG_MAX / 10 ||
+      (parsed_idx == ULONG_MAX / 10 && digit > ULONG_MAX % 10)
+    ) return false;
+    parsed_idx = parsed_idx * 10 + digit;
+  }
+  
+  else for (size_t i = 0; i < klen; i++) {
+    if (key[i] < '0' || key[i] > '9') return false;
+    parsed_idx = parsed_idx * 10 + (unsigned long)(key[i] - '0');
   }
   
   if (parsed_idx >= max_len) return false;
   *out_idx = parsed_idx;
+  
   return true;
 }
-
-#define ANT_ARRAY_INDEX_EXCLUSIVE ((ant_offset_t)UINT32_MAX)
 
 static inline ant_object_t *array_obj_ptr(ant_value_t obj) {
   if (!is_object_type(obj)) return NULL;
@@ -1015,7 +1030,7 @@ static inline void array_define_or_set_index(ant_t *js, ant_value_t obj, const c
   if (!array_obj_ptr(obj)) return;
 
   unsigned long idx = 0;
-  if (!parse_array_index(key, klen, ANT_ARRAY_INDEX_EXCLUSIVE, &idx)) return;
+  if (!parse_array_index(key, klen, ((ant_offset_t)UINT32_MAX), &idx)) return;
 
   ant_offset_t cur_len = get_array_length(js, obj);
   ant_offset_t next_len = (ant_offset_t)idx + 1;
@@ -4023,11 +4038,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
 
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
-  
-  if (klen == 4 && memcmp(key, "exec", 4) == 0)
-    regexp_note_exec_property_write();
-  else if (klen == 7 && memcmp(key, "replace", 7) == 0)
-    regexp_note_replace_property_write();
+  regexp_note_property_write(key, (size_t)klen);
 
   if (array_obj_ptr(obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {
     ant_arguments_state_t *args_state = js_arguments_state(obj);
@@ -6136,6 +6147,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     set_slot(bound_func, SLOT_DATA, data_slot);
   }
 
+  ant_value_t eval_env = get_slot(func_obj, SLOT_EVAL_ENV);
+  if (is_object_type(eval_env))
+    js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
   set_slot(bound_func, SLOT_TARGET_FUNC, func);
   
   if (bound_argc > 0) {
@@ -6201,7 +6215,7 @@ static ant_value_t builtin_error_captureStackTrace(ant_t *js, ant_value_t *args,
   }
 
   ant_value_t target = args[0];
-  ant_value_t error_ctor = lkp_val(js, js->global, "Error", 5);
+  ant_value_t error_ctor = lkp_val(js, js_glob(js), "Error", 5);
   ant_value_t prep = js_mkundef();
 
   if (vtype(error_ctor) == T_FUNC || vtype(error_ctor) == T_CFUNC) {
@@ -15573,14 +15587,47 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   return walk_prototype_chain(js, l, ctor_proto);
 }
 
+static inline bool try_array_key_membership(
+  ant_t *js,
+  ant_value_t array,
+  const char *name,
+  ant_offset_t name_len,
+  ant_value_t *result
+) {
+  if (is_length_key(name, name_len)) {
+    *result = js_true;
+    return true;
+  }
+
+  unsigned long index;
+  ant_offset_t array_len = get_array_length(js, array);
+  if (!parse_array_index(name, name_len, array_len, &index)) return false;
+
+  if (!arr_has(js, array, (ant_offset_t)index)) return false;
+  *result = js_true;
+  
+  return true;
+}
+
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_offset_t prop_len;
   const char *prop_name;
+  
   char num_buf[32];
+  bool array_key_fast_path_checked = false;
+
+  if (vtype(l) == T_STR && vtype(r) == T_ARR) {
+    array_key_fast_path_checked = true;
+    ant_offset_t direct_len;
+    ant_offset_t direct_off = vstr(js, l, &direct_len);
+    
+    const char *direct_name = (const char *)(uintptr_t)direct_off;
+    ant_value_t direct_result;
+    if (try_array_key_membership(js, r, direct_name, direct_len, &direct_result)) return direct_result;
+  }
   
   ant_value_t key = js_to_primitive(js, l, 1);
   if (is_err(key)) return key;
-  
   bool is_sym = (vtype(key) == T_SYMBOL);
   
   if (is_sym) {
@@ -15608,11 +15655,10 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
     return js_bool(js_truthy(js, result));
   }
   
-  if (!is_sym && vtype(r) == T_ARR) {
-    unsigned long idx;
-    ant_offset_t arr_len = get_array_length(js, r);
-    if (parse_array_index(prop_name, prop_len, arr_len, &idx)) return mkval(T_BOOL, arr_has(js, r, (ant_offset_t)idx) ? 1 : 0);
-    if (is_length_key(prop_name, prop_len)) return mkval(T_BOOL, 1);
+  if (!array_key_fast_path_checked && !is_sym && vtype(r) == T_ARR) {
+    ant_value_t array_result;
+    if (try_array_key_membership(js, r, prop_name, prop_len, &array_result))
+      return array_result;
   }
 
   ant_value_t cur = r;
@@ -18283,6 +18329,11 @@ ant_value_t js_getprop_fallback(ant_t *js, ant_value_t obj, const char *name) {
 ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t receiver, const char *name) {
   if (!name) return js_mkundef();
 
+  if (vtype(super_obj) == T_ARR && (is_length_key(name, strlen(name)) || (name[0] >= '0' && name[0] <= '9'))) {
+    ant_value_t own_value;
+    if (js_try_get(js, super_obj, name, &own_value)) return own_value;
+  }
+
   if (vtype(super_obj) == T_FUNC) super_obj = js_func_obj(super_obj);
   if (!is_object_type(super_obj)) return js_mkundef();
 
@@ -18430,9 +18481,22 @@ ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func) {
   return result;
 }
 
+static ant_value_t js_execute_compiled_eval_bytecode(
+  ant_t *js, sv_func_t *func,
+  ant_value_t this_val, ant_value_t eval_env
+) {
+  js_clear_error_site(js);
+
+  if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
+  return sv_execute_eval_entry(
+    sv_vm_get_active(js), func, this_val, eval_env
+  );
+}
+
 static inline ant_value_t js_eval_bytecode_mode(
   ant_t *js, const char *buf, size_t len, 
-  sv_compile_mode_t mode, bool parse_strict
+  sv_compile_mode_t mode, bool parse_strict,
+  ant_value_t eval_this, ant_value_t eval_env
 ) {
   if (len == (size_t)~0U) len = strlen(buf);
 
@@ -18453,27 +18517,54 @@ static inline ant_value_t js_eval_bytecode_mode(
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
 
+  if (mode == SV_COMPILE_EVAL)
+    return js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env);
   return js_execute_compiled_bytecode(js, func);
 }
 
 ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_SCRIPT, false);
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_SCRIPT, 
+    false, js_mkundef(), js_mkundef()
+  );
 }
 
 ant_value_t js_eval_bytecode_module(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false);
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_MODULE, 
+    false, js_mkundef(), js_mkundef()
+  );
 }
 
 ant_value_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, false);
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_EVAL, 
+    false, js->global, js->global
+  );
 }
 
 ant_value_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t len, bool inherit_strict) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, inherit_strict);
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_EVAL, 
+    inherit_strict, js->global, js->global
+  );
+}
+
+ant_value_t js_eval_bytecode_eval_in_env_with_strict(
+  ant_t *js, const char *buf, size_t len,
+  bool inherit_strict, ant_value_t this_val, ant_value_t eval_env
+) {
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_EVAL, 
+    inherit_strict, this_val, eval_env
+  );
 }
 
 ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false);
+  return js_eval_bytecode_mode(
+    js, buf, len, SV_COMPILE_REPL, 
+    false, js_mkundef(), js_mkundef()
+  );
 }
 
 static inline ant_value_t sv_call_cfunc(ant_params_t, ant_bind_t) {

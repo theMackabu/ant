@@ -2,6 +2,7 @@
 #define REGEX_H
 
 #include "types.h"
+#include <string.h>
 
 typedef struct {
   const char *pattern_ptr;
@@ -20,6 +21,16 @@ void cleanup_regex_module(void);
 void gc_sweep_regex_cache(void);
 void regexp_note_exec_property_write(void);
 void regexp_note_replace_property_write(void);
+
+static inline void regexp_note_property_write(
+  const char *name, size_t len
+) {
+  if (!name) return;
+  if (len == 4 && memcmp(name, "exec", 4) == 0)
+    regexp_note_exec_property_write();
+  else if (len == 7 && memcmp(name, "replace", 7) == 0)
+    regexp_note_replace_property_write();
+}
 
 size_t js_to_pcre2_pattern(
   const char *src, size_t src_len,

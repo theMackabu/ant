@@ -11,6 +11,7 @@
 #include "modules/timer.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +55,15 @@ static const uint16_t sv_op_flags[OP__COUNT] = {
 #define OP_FLAG(name, flags) [OP_##name] = (flags),
 #include "silver/opcode.h"
 };
+
+static const bool sv_op_ic_slots[OP__COUNT] = {
+#define OP_IC_SLOT(name) [OP_##name] = true,
+#include "silver/opcode.h"
+};
+
+static inline bool sv_op_has_ic_slot(sv_op_t op) {
+  return (unsigned)op < OP__COUNT && sv_op_ic_slots[op];
+}
 
 typedef struct {
   const char *str;
@@ -174,10 +184,40 @@ _Static_assert(
 
 #endif
 
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint16_t index;
+  uint8_t kind;
+  bool is_const;
+} sv_runtime_binding_t;
+
+typedef struct {
+  const sv_runtime_binding_t *bindings;
+  uint32_t count;
+} sv_eval_scope_t;
+
+enum {
+  SV_EVAL_BIND_PARAM = 0,
+  SV_EVAL_BIND_LOCAL = 1,
+  SV_EVAL_BIND_UPVALUE = 2,
+};
+
+typedef struct {
+  sv_eval_scope_t *eval_scopes;
+  uint32_t eval_scope_count;
+  sv_type_info_t local_types[];
+} sv_func_metadata_t;
+
+_Static_assert(
+  _Alignof(sv_func_metadata_t) <= CODE_ARENA_ALIGNMENT,
+  "function metadata alignment exceeds the code arena guarantee"
+);
+
 struct sv_func {
   uint8_t *code;
   ant_value_t *constants;
-  
+
   struct sv_func **child_funcs;
   uint32_t *gc_const_slots;
   
@@ -185,8 +225,12 @@ struct sv_func {
   sv_ic_entry_t *ic_slots;
   sv_obj_site_cache_t *obj_sites;
   sv_upval_desc_t *upval_descs;
-  sv_type_info_t *local_types;
   
+  union {
+    sv_type_info_t *local_types;
+    sv_func_metadata_t *metadata;
+  } type_data;
+
   const char *name;
   const char *filename;
   sv_srcpos_t *srcpos;
@@ -230,6 +274,7 @@ struct sv_func {
   bool is_static: 1;
   bool is_tla: 1;
   bool is_derived_ctor: 1;
+  bool has_dynamic_eval: 1;
 
 #ifdef ANT_JIT
   uint32_t call_count;
@@ -245,6 +290,32 @@ struct sv_func {
   bool jit_compiling;
 #endif
 };
+
+static inline sv_func_metadata_t *sv_func_metadata(sv_func_t *func) {
+  if (!func || !func->has_dynamic_eval) return NULL;
+  ANT_ASSERT(
+    func->type_data.metadata != NULL,
+    "dynamic-eval function must have metadata"
+  );
+  return func->type_data.metadata;
+}
+
+static inline sv_type_info_t *sv_func_local_types(sv_func_t *func) {
+  if (!func) return NULL;
+  if (!func->has_dynamic_eval) return func->type_data.local_types;
+  sv_func_metadata_t *metadata = sv_func_metadata(func);
+  return metadata ? metadata->local_types : NULL;
+}
+
+static inline const sv_eval_scope_t *sv_func_eval_scope(sv_func_t *func, uint32_t index) {
+  sv_func_metadata_t *metadata = sv_func_metadata(func);
+  ANT_ASSERT(metadata != NULL, "eval opcode requires function metadata");
+  ANT_ASSERT(
+    index < metadata->eval_scope_count,
+    "eval opcode scope index is outside function metadata"
+  );
+  return &metadata->eval_scopes[index];
+}
 
 typedef enum {
   SV_COMPLETION_NONE = 0,
@@ -267,9 +338,6 @@ typedef enum {
   SV_RESUME_RETURN = 2,
 } sv_resume_kind_t;
 
-typedef struct 
-  sv_upvalue sv_upvalue_t;
-
 typedef struct sv_frame {
   uint8_t *ip;
   ant_value_t *bp;
@@ -282,17 +350,23 @@ typedef struct sv_frame {
   ant_value_t super_val;
   
   int prev_sp;
-  int handler_base;
-  int handler_top;
   int argc;
   
   sv_completion_t completion;
   sv_upvalue_t **upvalues;
+
   int upvalue_count;
+  uint16_t handler_base;
+  uint16_t handler_top;
   
   ant_value_t with_obj;
   ant_value_t arguments_obj;
+  ant_value_t eval_env;
 } sv_frame_t;
+
+static inline ant_value_t sv_frame_eval_env(ant_t *js, const sv_frame_t *frame) {
+  return frame && is_object_type(frame->eval_env) ? frame->eval_env : js->global;
+}
 
 typedef enum {
   SV_HANDLER_TRY = 1,
@@ -332,6 +406,7 @@ static inline sv_upvalue_t *js_upvalue_alloc(void) {
 #define SV_CALL_IS_ARROW         (1u << 2)
 #define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
 #define SV_CALL_BORROWED_UPVALS  (1u << 4)
+#define SV_CALL_HAS_EVAL_ENV     (1u << 5)
 
 typedef struct sv_closure {
   uint32_t call_flags;
@@ -362,6 +437,13 @@ static inline ant_value_t js_func_obj(ant_value_t func) {
   return js_func_closure(func)->func_obj;
 }
 
+static inline ant_value_t sv_closure_eval_env(const sv_closure_t *closure) {
+  if (!closure || !(closure->call_flags & SV_CALL_HAS_EVAL_ENV) ||
+      !is_object_type(closure->func_obj)) return js_mkundef();
+  ant_value_t env = js_get_slot(closure->func_obj, SLOT_EVAL_ENV);
+  return is_object_type(env) ? env : js_mkundef();
+}
+
 static inline ant_value_t js_as_obj(ant_value_t v) {
   uint8_t t = vtype(v);
   if (t == T_OBJ) return v;
@@ -374,6 +456,11 @@ ant_value_t sv_execute_closure_entry(
   ant_value_t callee_func, ant_value_t super_val,
   ant_value_t this_val, ant_value_t *args,
   int argc, ant_value_t *out_this
+);
+
+ant_value_t sv_execute_eval_entry(
+  sv_vm_t *vm, sv_func_t *func,
+  ant_value_t this_val, ant_value_t eval_env
 );
 
 #ifdef ANT_JIT
@@ -389,6 +476,9 @@ typedef struct {
 #define SV_TRY_MAX  64
 #define SV_TDZ      T_EMPTY
 #define SV_HANDLER_MAX (SV_TRY_MAX * 2)
+
+_Static_assert(SV_HANDLER_MAX <= UINT16_MAX,
+  "frame handler indexes must fit in uint16_t");
 
 #define SV_FRAMES_HARD_MAX 65536
 #define SV_STACK_HARD_MAX  524288
@@ -1048,7 +1138,7 @@ static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
 
   sidecar->type_feedback = func->type_feedback;
   func->type_feedback = (uint8_t *)((uintptr_t)sidecar | ant_sidecar);
-  
+
   return sidecar;
 }
 

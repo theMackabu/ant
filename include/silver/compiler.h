@@ -108,6 +108,12 @@ typedef struct sv_private_scope {
   int cap;
 } sv_private_scope_t;
 
+typedef struct {
+  sv_runtime_binding_t *bindings;
+  uint32_t count;
+  uint32_t capacity;
+} sv_eval_scope_builder_t;
+
 typedef struct sv_compiler {
   ant_t *js;
   const char *filename;
@@ -138,9 +144,13 @@ typedef struct sv_compiler {
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;
-  
+
   int upvalue_count;
   int upvalue_cap;
+
+  sv_eval_scope_builder_t *eval_scopes;
+  int eval_scope_count;
+  int eval_scope_cap;
 
   sv_loop_t *loops;
   int loop_count;
@@ -156,6 +166,7 @@ typedef struct sv_compiler {
   bool is_arrow;
   bool is_async;
   bool is_strict;
+  bool inherits_eval_env;
   sv_compile_mode_t mode;
 
   bool is_tla;
