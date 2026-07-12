@@ -912,6 +912,11 @@ static bool eval_binding_set_init(
     capacity *= 2;
   }
 
+  if ((size_t)capacity > SIZE_MAX / sizeof(uint32_t)) {
+    js_mkerr(c->js, "too many bindings while capturing direct eval scope");
+    return false;
+  }
+
   uint32_t *slots = malloc((size_t)capacity * sizeof(uint32_t));
   if (!slots) {
     js_mkerr(c->js, "out of memory while indexing direct eval scope");
