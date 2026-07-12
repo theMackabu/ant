@@ -15573,6 +15573,26 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   return walk_prototype_chain(js, l, ctor_proto);
 }
 
+static inline bool try_array_key_membership(
+  ant_t *js,
+  ant_value_t array,
+  const char *name,
+  ant_offset_t name_len,
+  ant_value_t *result
+) {
+  if (is_length_key(name, name_len)) {
+    *result = js_true;
+    return true;
+  }
+
+  unsigned long index;
+  ant_offset_t array_len = get_array_length(js, array);
+  if (!parse_array_index(name, name_len, array_len, &index)) return false;
+
+  *result = js_bool(arr_has(js, array, (ant_offset_t)index));
+  return true;
+}
+
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_offset_t prop_len;
   const char *prop_name;
@@ -15582,12 +15602,9 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
     ant_offset_t direct_len;
     ant_offset_t direct_off = vstr(js, l, &direct_len);
     const char *direct_name = (const char *)(uintptr_t)direct_off;
-    if (is_length_key(direct_name, direct_len)) return js_true;
-
-    unsigned long idx;
-    ant_offset_t arr_len = get_array_length(js, r);
-    if (parse_array_index(direct_name, direct_len, arr_len, &idx))
-      return js_bool(arr_has(js, r, (ant_offset_t)idx));
+    ant_value_t direct_result;
+    if (try_array_key_membership(js, r, direct_name, direct_len, &direct_result))
+      return direct_result;
   }
   
   ant_value_t key = js_to_primitive(js, l, 1);
@@ -15621,10 +15638,9 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   }
   
   if (!is_sym && vtype(r) == T_ARR) {
-    unsigned long idx;
-    ant_offset_t arr_len = get_array_length(js, r);
-    if (parse_array_index(prop_name, prop_len, arr_len, &idx)) return mkval(T_BOOL, arr_has(js, r, (ant_offset_t)idx) ? 1 : 0);
-    if (is_length_key(prop_name, prop_len)) return mkval(T_BOOL, 1);
+    ant_value_t array_result;
+    if (try_array_key_membership(js, r, prop_name, prop_len, &array_result))
+      return array_result;
   }
 
   ant_value_t cur = r;
