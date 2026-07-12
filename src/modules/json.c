@@ -210,7 +210,7 @@ static int json_cycle_check(json_cycle_ctx *ctx, ant_value_t val, const char *ke
 }
 
 static ant_value_t json_cycle_error(ant_t *js, const json_cycle_ctx *ctx) {
-  const char *ctor = ctx->cycle_start == js->global ? "global" : "Object";
+  const char *ctor = ctx->cycle_start == js_glob(js) ? "global" : "Object";
   char message[384];
   snprintf(
     message, sizeof(message),

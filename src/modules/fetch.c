@@ -947,7 +947,7 @@ ant_value_t ant_fetch(ant_t *js, ant_value_t *args, int nargs) {
 
 void init_fetch_module() {
   utarray_new(pending_requests, &ut_ptr_icd);
-  js_set(rt->js, rt->js->global, "fetch", js_mkfun_flags(ant_fetch, CFUNC_HAS_PROTOTYPE));
+  js_set(rt->js, js_glob(rt->js), "fetch", js_mkfun_flags(ant_fetch, CFUNC_HAS_PROTOTYPE));
 }
 
 int has_pending_fetches(void) {

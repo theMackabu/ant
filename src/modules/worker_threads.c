@@ -70,10 +70,11 @@ static bool wt_is_worker_mode(void) {
 }
 
 static ant_value_t wt_get_or_create_env_store(ant_t *js) {
-  ant_value_t store = js_get_slot(js->global, SLOT_WT_ENV_STORE);
+  ant_value_t global = js_glob(js);
+  ant_value_t store = js_get_slot(global, SLOT_WT_ENV_STORE);
   if (!is_object_type(store)) {
     store = js_mkobj(js);
-    js_set_slot(js->global, SLOT_WT_ENV_STORE, store);
+    js_set_slot(global, SLOT_WT_ENV_STORE, store);
   }
   return store;
 }
@@ -88,7 +89,7 @@ static void wt_init_env_store(ant_t *js, bool is_worker) {
       if (is_object_type(parsed)) store = parsed;
     }
   }
-  js_set_slot(js->global, SLOT_WT_ENV_STORE, store);
+  js_set_slot(js_glob(js), SLOT_WT_ENV_STORE, store);
 }
 
 static ant_worker_thread_t *wt_get_worker(ant_t *js, ant_value_t this_obj) {
@@ -103,7 +104,7 @@ static bool wt_is_message_port(ant_t *js, ant_value_t obj) {
 }
 
 static ant_value_t wt_get_message_port_proto(ant_t *js) {
-  ant_value_t proto = js_get_slot(js->global, SLOT_WT_PORT_PROTO);
+  ant_value_t proto = js_get_slot(js_glob(js), SLOT_WT_PORT_PROTO);
   if (!is_object_type(proto)) proto = js_mkobj(js);
   return proto;
 }
@@ -996,7 +997,7 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_mkprop_fast(js, message_port_ctor_obj, "name", 4, js_mkstr(js, "MessagePort", 11));
   js_set_descriptor(js, message_port_ctor_obj, "name", 4, 0);
   js_set(js, lib, "MessagePort", js_obj_to_func(message_port_ctor_obj));
-  js_set_slot(js->global, SLOT_WT_PORT_PROTO, message_port_proto);
+  js_set_slot(js_glob(js), SLOT_WT_PORT_PROTO, message_port_proto);
 
   ant_value_t message_channel_ctor_obj = js_mkobj(js);
   ant_value_t message_channel_proto = js_mkobj(js);

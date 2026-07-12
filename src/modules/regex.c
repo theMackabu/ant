@@ -2836,7 +2836,7 @@ match_string_pattern:;
 void init_regex_module(void) {
   ant_t *js = rt->js;
   regexp_register_static_roots();
-  ant_value_t glob = js->global;
+  ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
 
   ant_value_t regexp_proto = js_mkobj(js);

@@ -4776,7 +4776,7 @@ void init_fs_module(void) {
   utarray_new(pending_requests, &ut_ptr_icd);
   
   ant_t *js = rt->js;
-  ant_value_t glob = js->global;
+  ant_value_t glob = js_glob(js);
   
   ant_value_t stats_ctor = js_mkobj(js);
   ant_value_t stats_proto = js_mkobj(js);

@@ -1637,7 +1637,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
 void init_collections_module(void) {
   ant_t *js = rt->js;
   
-  ant_value_t glob = js->global;
+  ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
   
   ant_value_t iter_sym = get_iterator_sym();

@@ -1353,8 +1353,8 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "isDeepStrictEqual", js_mkfun(util_is_deep_strict_equal));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
   
-  js_set(js, lib, "TextDecoder", js_get(js, js->global, "TextDecoder"));
-  js_set(js, lib, "TextEncoder", js_get(js, js->global, "TextEncoder"));
+  js_set(js, lib, "TextDecoder", js_get(js, js_glob(js), "TextDecoder"));
+  js_set(js, lib, "TextEncoder", js_get(js, js_glob(js), "TextEncoder"));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "util", 4));
   
   return lib;

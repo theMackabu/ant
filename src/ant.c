@@ -6216,7 +6216,7 @@ static ant_value_t builtin_error_captureStackTrace(ant_t *js, ant_value_t *args,
   }
 
   ant_value_t target = args[0];
-  ant_value_t error_ctor = lkp_val(js, js->global, "Error", 5);
+  ant_value_t error_ctor = lkp_val(js, js_glob(js), "Error", 5);
   ant_value_t prep = js_mkundef();
 
   if (vtype(error_ctor) == T_FUNC || vtype(error_ctor) == T_CFUNC) {
@@ -16978,7 +16978,7 @@ ant_t *js_create(void *buf, size_t len) {
   js->new_target = js_mkundef();
   js->length_str = ANT_STRING("length");
 
-  ant_value_t glob = js->global;
+  ant_value_t glob = js->realm_global;
   ant_value_t object_proto = js_mkobj(js);
   set_proto(js, object_proto, js_mknull());
   

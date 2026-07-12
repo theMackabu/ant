@@ -1473,7 +1473,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
 
 void init_url_module(void) {
   ant_t *js = rt->js;
-  ant_value_t glob = js->global;
+  ant_value_t glob = js_glob(js);
 
   g_usp_iter_proto = js_mkobj(js);
   js_set_proto_init(g_usp_iter_proto, js->sym.iterator_proto);

@@ -2089,7 +2089,7 @@ static ant_value_t js_stream_is_readable(ant_t *js, ant_value_t *args, int nargs
 }
 
 static void stream_web_copy_global(ant_t *js, ant_value_t obj, const char *name) {
-  ant_value_t value = js_get(js, js->global, name);
+  ant_value_t value = js_get(js, js_glob(js), name);
   if (is_err(value)) return;
   js_set(js, obj, name, value);
 }
