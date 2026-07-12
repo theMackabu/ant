@@ -40,8 +40,7 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
   char *key_str = js_getstr(js, prop_key, NULL);
   if (!key_str) return js_mkundef();
 
-  if (!has_receiver) return js_get(js, target, key_str);
-  if (strict_eq_values(js, target, receiver))
+  if (!has_receiver || strict_eq_values(js, target, receiver))
     return js_getprop_fallback(js, target, key_str);
   return js_getprop_super(js, target, receiver, key_str);
 }
@@ -85,12 +84,21 @@ static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
   if (t == T_ARR && vtype(key) == T_STR) {
     size_t key_len;
     char *key_str = js_getstr(js, key, &key_len);
-    if (key_str && key_len == 6 && memcmp(key_str, "length", 6) == 0)
+    if (key_str && is_length_key(key_str, key_len))
       return js_true;
   }
 
-  if (t == T_ARR || (t == T_OBJ && is_proxy(target)) || vtype(key) != T_STR)
-    return do_in(js, key, target);
+  ant_value_t proxy_target = target;
+  bool target_is_proxy = false;
+  
+  if (t == T_OBJ) target_is_proxy = is_proxy(target);
+  else if (t == T_FUNC) {
+    proxy_target = js_func_obj(target);
+    target_is_proxy = is_proxy(proxy_target);
+  }
+
+  if (t == T_ARR || target_is_proxy || vtype(key) != T_STR)
+    return do_in(js, key, target_is_proxy ? proxy_target : target);
   if (t != T_OBJ && t != T_FUNC) return js_false;
 
   size_t key_len;

@@ -21,7 +21,7 @@ assert(read() === 'after', 'dynamic direct eval should write a mutable captured 
 const parameterLifter = data => eval(data.eval);
 assert(parameterLifter({ eval: 'data.value', value: 7 }) === 7, 'dynamic direct eval should read a parameter binding');
 
-const shadowedEval = eval => eval('value');
+const shadowedEval = new Function('eval', 'return eval("value")');
 assert(shadowedEval(value => `shadowed:${value}`) === 'shadowed:value',
   'a lexical binding named eval should remain an ordinary call');
 
