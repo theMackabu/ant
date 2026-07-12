@@ -26,6 +26,7 @@ function AddResult(name, result) {
 }
 
 function AddScore(score) {
+  print('raw-score', 100 * BenchmarkSuite.GeometricMean(BenchmarkSuite.scores));
   print('score', score);
 }
 

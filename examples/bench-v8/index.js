@@ -4,7 +4,6 @@ import path from 'ant:path';
 import { spawn } from 'child_process';
 
 const benchmarkFiles = [
-  'tests/base.js',
   'tests/richards.js',
   'tests/deltablue.js',
   'tests/crypto.js',
@@ -12,8 +11,7 @@ const benchmarkFiles = [
   'tests/earley-boyer.js',
   'tests/regexp.js',
   'tests/splay.js',
-  'tests/navier-stokes.js',
-  'harness.js'
+  'tests/navier-stokes.js'
 ];
 
 const benchmarkDir = import.meta.dirname;
@@ -23,12 +21,44 @@ const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-bench-v8-'));
 const temporaryEntry = path.join(temporaryDir, 'bench-v8.js');
 
 try {
-  const source = benchmarkFiles.map(file => fs.readFileSync(path.join(benchmarkDir, file), 'utf8')).join('');
+  const base = fs.readFileSync(path.join(benchmarkDir, 'tests/base.js'), 'utf8');
+  const harness = fs.readFileSync(path.join(benchmarkDir, 'harness.js'), 'utf8');
+  const results = {};
+  const rawScores = [];
 
-  fs.writeFileSync(temporaryEntry, source);
+  for (const benchmarkFile of benchmarkFiles) {
+    const source = base + fs.readFileSync(path.join(benchmarkDir, benchmarkFile), 'utf8') + harness;
+    fs.writeFileSync(temporaryEntry, source);
 
-  console.log('running bench-v8 with ./build/ant');
-  const child = spawn('./build/ant', [temporaryEntry], { cwd: repoRoot });
+    console.log(`running ${benchmarkFile}`);
+    const stdout = await runAnt(temporaryEntry);
+    const resultMatch = stdout.match(/^result\s+(.+?)\s+(\S+)\s*$/im);
+    if (!resultMatch) throw new Error(`${benchmarkFile} did not report a result`);
+
+    const result = Number(resultMatch[2]);
+    if (!Number.isFinite(result)) {
+      throw new Error(`${benchmarkFile} reported an invalid score: ${resultMatch[2]}`);
+    }
+    results[resultMatch[1]] = result;
+
+    const rawScoreMatch = stdout.match(/^raw-score\s+(\S+)\s*$/im);
+    if (!rawScoreMatch) throw new Error(`${benchmarkFile} did not report a raw score`);
+
+    const rawScore = Number(rawScoreMatch[1]);
+    if (!Number.isFinite(rawScore)) {
+      throw new Error(`${benchmarkFile} reported an invalid raw score: ${rawScoreMatch[1]}`);
+    }
+    rawScores.push(rawScore);
+  }
+
+  const score = Number(formatScore(geometricMean(rawScores)));
+  fs.writeFileSync(scorePath, `${JSON.stringify({ score, results }, null, 2)}\n`);
+} finally {
+  fs.rmSync(temporaryDir, { recursive: true, force: true });
+}
+
+async function runAnt(entry) {
+  const child = spawn('./build/ant', [entry], { cwd: repoRoot });
   let stdout = '';
 
   child.stdout.setEncoding('utf8');
@@ -46,25 +76,13 @@ try {
   });
 
   if (status !== 0) throw new Error(`bench-v8 exited with status ${status}`);
+  return stdout;
+}
 
-  const scoreMatch = stdout.match(/^score\s+(\S+)\s*$/im);
-  if (!scoreMatch) throw new Error('bench-v8 did not report a score');
+function geometricMean(numbers) {
+  return Math.exp(numbers.reduce((sum, number) => sum + Math.log(number), 0) / numbers.length);
+}
 
-  const score = Number(scoreMatch[1]);
-  if (!Number.isFinite(score)) {
-    throw new Error(`bench-v8 reported an invalid score: ${scoreMatch[1]}`);
-  }
-
-  const results = {};
-  for (const match of stdout.matchAll(/^result\s+(.+?)\s+(\S+)\s*$/gim)) {
-    const result = Number(match[2]);
-    if (!Number.isFinite(result)) {
-      throw new Error(`bench-v8 reported an invalid ${match[1]} score: ${match[2]}`);
-    }
-    results[match[1]] = result;
-  }
-
-  fs.writeFileSync(scorePath, `${JSON.stringify({ score, results }, null, 2)}\n`);
-} finally {
-  fs.rmSync(temporaryDir, { recursive: true, force: true });
+function formatScore(score) {
+  return score > 100 ? score.toFixed(0) : score.toPrecision(3);
 }
