@@ -990,7 +990,7 @@ ant_value_t jit_helper_put_field(
 }
 
 void jit_helper_put_field_transition_inobj(
-  ant_object_t *obj, ant_value_t val, sv_ic_entry_t *ic
+  ant_t *js, ant_object_t *obj, ant_value_t val, sv_ic_entry_t *ic
 ) {
   ant_shape_t *old_shape = obj->shape;
   ant_shape_t *new_shape = ic->guard.add.to_shape;
@@ -999,12 +999,19 @@ void jit_helper_put_field_transition_inobj(
   ant_shape_retain(new_shape);
   obj->shape = new_shape;
   ant_shape_release(old_shape);
+  gc_write_barrier(js, obj, val);
   obj->inobj[slot] = val;
   obj->prop_count = slot + 1;
   ic->cached_shape = new_shape;
   ic->cached_holder = obj;
   ic->cached_index = slot;
   ic->epoch = ant_ic_epoch_counter;
+}
+
+void jit_helper_write_barrier(
+  ant_t *js, ant_object_t *obj, ant_value_t val
+) {
+  gc_write_barrier(js, obj, val);
 }
 
 ant_value_t jit_helper_get_elem(

@@ -204,7 +204,11 @@ ant_value_t jit_helper_put_field(
 );
 
 void jit_helper_put_field_transition_inobj(
-  ant_object_t *obj, ant_value_t val, sv_ic_entry_t *ic
+  ant_t *js, ant_object_t *obj, ant_value_t val, sv_ic_entry_t *ic
+);
+
+void jit_helper_write_barrier(
+  ant_t *js, ant_object_t *obj, ant_value_t val
 );
 
 ant_value_t jit_helper_get_elem(

@@ -760,14 +760,14 @@ static inline ant_value_t sv_put_field_ic(
       ic->guard.add.epoch == ant_ic_epoch_counter &&
       ic->guard.add.from_shape == ptr->shape &&
       ic->guard.add.to_shape) {
-    ant_shape_t *old_shape = ptr->shape;
-    ant_shape_retain(ic->guard.add.to_shape);
-    ptr->shape = ic->guard.add.to_shape;
-    ant_shape_release(old_shape);
     if (ic->guard.add.slot >= ptr->prop_count &&
         !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
       return js_mkerr(js, "oom");
     }
+    ant_shape_t *old_shape = ptr->shape;
+    ant_shape_retain(ic->guard.add.to_shape);
+    ptr->shape = ic->guard.add.to_shape;
+    ant_shape_release(old_shape);
     ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
     gc_write_barrier(js, ptr, val);
     ic->cached_shape = ptr->shape;

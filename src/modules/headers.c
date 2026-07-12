@@ -901,7 +901,7 @@ void headers_data_append_if_missing(headers_data_t *data, const char *name, cons
   if (!data || !name || !value) return;
   size_t name_len = strlen(name);
   for (hdr_entry_t *e = data->head; e; e = e->next) {
-    if (strcmp(e->name, name) == 0) return;
+    if (ascii_case_equal(e->name, name)) return;
   }
   (void)list_append_parts(
     data,

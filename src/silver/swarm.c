@@ -92,6 +92,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_sne);
   LOAD_EXT(jit_helper_put_field);
   LOAD_EXT(jit_helper_put_field_transition_inobj);
+  LOAD_EXT(jit_helper_write_barrier);
   LOAD_EXT(jit_helper_get_elem);
   LOAD_EXT(jit_helper_get_elem2);
   LOAD_EXT(jit_helper_put_elem);
@@ -1276,8 +1277,11 @@ static bool mir_emit_put_field_ic_fastpath(
   bool require_holder,
   MIR_label_t slow,
   MIR_reg_t r_global_epoch,
+  MIR_reg_t r_js,
   MIR_item_t transition_proto,
-  MIR_item_t imp_transition
+  MIR_item_t imp_transition,
+  MIR_item_t write_barrier_proto,
+  MIR_item_t imp_write_barrier
 ) {
   if (!func || !func->ic_slots) return false;
   if (ic_idx == UINT16_MAX || ic_idx >= func->ic_count) return false;
@@ -1295,6 +1299,7 @@ static bool mir_emit_put_field_ic_fastpath(
   PUT_FIELD_REG(flags0, MIR_T_I64);
   PUT_FIELD_REG(state, MIR_T_I64);
   PUT_FIELD_REG(flags1, MIR_T_I64);
+  PUT_FIELD_REG(barrier_flags, MIR_T_I64);
   PUT_FIELD_REG(type, MIR_T_I64);
   PUT_FIELD_REG(shape, MIR_T_I64);
   PUT_FIELD_REG(ic_shape, MIR_T_I64);
@@ -1312,6 +1317,7 @@ static bool mir_emit_put_field_ic_fastpath(
 
   MIR_label_t overflow = MIR_new_label(ctx);
   MIR_label_t try_transition = MIR_new_label(ctx);
+  MIR_label_t barrier_done = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn,
@@ -1407,6 +1413,44 @@ static bool mir_emit_put_field_ic_fastpath(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, r_index),
       MIR_new_reg_op(ctx, r_prop_count)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBLE,
+      MIR_new_label_op(ctx, barrier_done),
+      MIR_new_reg_op(ctx, val),
+      MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_barrier_flags),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(ant_object_t, flags) + 1, r_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, r_state),
+      MIR_new_reg_op(ctx, r_barrier_flags),
+      MIR_new_uint_op(ctx, 1u << 2)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, barrier_done),
+      MIR_new_reg_op(ctx, r_state),
+      MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, r_state),
+      MIR_new_reg_op(ctx, r_barrier_flags),
+      MIR_new_uint_op(ctx, 1u << 3)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, barrier_done),
+      MIR_new_reg_op(ctx, r_state),
+      MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_call_insn(ctx, 5,
+      MIR_new_ref_op(ctx, write_barrier_proto),
+      MIR_new_ref_op(ctx, imp_write_barrier),
+      MIR_new_reg_op(ctx, r_js),
+      MIR_new_reg_op(ctx, r_ptr),
+      MIR_new_reg_op(ctx, val)));
+  MIR_append_insn(ctx, fn, barrier_done);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_inobj_limit),
@@ -1525,9 +1569,10 @@ static bool mir_emit_put_field_ic_fastpath(
       MIR_new_reg_op(ctx, r_add_slot),
       MIR_new_reg_op(ctx, r_inobj_limit)));
   MIR_append_insn(ctx, fn,
-    MIR_new_call_insn(ctx, 5,
+    MIR_new_call_insn(ctx, 6,
       MIR_new_ref_op(ctx, transition_proto),
       MIR_new_ref_op(ctx, imp_transition),
+      MIR_new_reg_op(ctx, r_js),
       MIR_new_reg_op(ctx, r_ptr),
       MIR_new_reg_op(ctx, val),
       MIR_new_reg_op(ctx, r_ic)));
@@ -3124,10 +3169,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I32, "bc_off");
 
   MIR_item_t put_field_transition_proto = MIR_new_proto(ctx, "pft_proto",
-    0, NULL, 3,
+    0, NULL, 4,
+    MIR_T_I64,   "js",
     MIR_T_P,     "obj",
     MIR_JSVAL,   "val",
     MIR_T_P,     "ic");
+
+  MIR_item_t write_barrier_proto = MIR_new_proto(ctx, "wb_proto",
+    0, NULL, 3,
+    MIR_T_I64, "js",
+    MIR_T_P,   "obj",
+    MIR_JSVAL, "val");
 
   MIR_type_t pe_ret = MIR_JSVAL;
   MIR_item_t put_elem_proto = MIR_new_proto(ctx, "pe_proto",
@@ -3287,6 +3339,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_put_field   = MIR_new_import(ctx, "jit_helper_put_field");
   MIR_item_t imp_put_field_transition =
     MIR_new_import(ctx, "jit_helper_put_field_transition_inobj");
+  MIR_item_t imp_write_barrier =
+    MIR_new_import(ctx, "jit_helper_write_barrier");
   MIR_item_t imp_get_elem    = MIR_new_import(ctx, "jit_helper_get_elem");
   MIR_item_t imp_put_elem    = MIR_new_import(ctx, "jit_helper_put_elem");
   MIR_item_t imp_get_private = MIR_new_import(ctx, "jit_helper_get_private");
@@ -7099,7 +7153,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t slow = MIR_new_label(ctx);
         if (mir_emit_put_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, obj, val, true, slow,
-          r_ic_epoch_val, put_field_transition_proto, imp_put_field_transition)) {
+          r_ic_epoch_val, r_js,
+          put_field_transition_proto, imp_put_field_transition,
+          write_barrier_proto, imp_write_barrier)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -7272,7 +7328,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t slow = MIR_new_label(ctx);
         if (mir_emit_put_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, obj, val, false, slow,
-          r_ic_epoch_val, put_field_transition_proto, imp_put_field_transition)) {
+          r_ic_epoch_val, r_js,
+          put_field_transition_proto, imp_put_field_transition,
+          write_barrier_proto, imp_write_barrier)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
           MIR_append_insn(ctx, jit_func, slow);
