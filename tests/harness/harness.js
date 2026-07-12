@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-const ANT = process.env.ANT_TEST_BIN || process.execPath;
+const ANT = resolve(process.env.ANT_TEST_BIN || process.execPath);
 const ERROR_MARKERS = /TypeError|ReferenceError|RangeError|Invalid |SIGBUS|panic|FATAL/;
 
 export const defaults = {
@@ -17,6 +18,68 @@ function now() {
 
 function fetchT(url, ms) {
   return fetch(url, { signal: AbortSignal.timeout(ms) });
+}
+
+function npmExampleDir(entry) {
+  return entry.match(/^(examples\/npm\/[^/]+)/)?.[1] ?? null;
+}
+
+function needsInstall(dir) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
+  } catch {
+    return false;
+  }
+
+  const dependencies = Object.keys(pkg.dependencies ?? {});
+  return dependencies.some(name => !existsSync(`${dir}/node_modules/${name}`));
+}
+
+async function installDependencies(dir, timeoutMs) {
+  let child;
+  try {
+    child = spawn(ANT, ['install'], { cwd: dir });
+  } catch (error) {
+    return { ok: false, detail: `could not start dependency install in ${dir}`, output: error.message };
+  }
+  let output = '';
+  child.on('stdout', d => {
+    output += d;
+  });
+  child.on('stderr', d => {
+    output += d;
+  });
+
+  let timer;
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const exited = new Promise(resolve => {
+    child.on('exit', code => resolve(code));
+    child.on('error', error => {
+      output += `${error.message}\n`;
+      resolve(-1);
+    });
+  });
+  const result = await Promise.race([exited, timeout]);
+  clearTimeout(timer);
+
+  if (result === 'timeout') {
+    try {
+      child.kill();
+    } catch {}
+    return { ok: false, detail: `dependency install timed out in ${dir}`, output };
+  }
+  if (result !== 0) return { ok: false, detail: `dependency install failed in ${dir} (code ${result})`, output };
+  return { ok: true };
+}
+
+async function ensureDependencies(target, opts) {
+  const dir = npmExampleDir(target.entry);
+  if (!dir || !needsInstall(dir)) return null;
+  console.log(`INSTALL ${dir} (ant install)`);
+  return installDependencies(dir, opts.targetTimeoutMs);
 }
 
 class Child {
@@ -117,7 +180,7 @@ const DEFAULT_SCRUB = [
 function scrub(output, extra = []) {
   let out = output;
   for (const [re, repl] of [...DEFAULT_SCRUB, ...extra]) out = out.replace(re, repl);
-  return out;
+  return out.replace(/\n+$/, '\n');
 }
 
 export async function runSnapshot(target, opts) {
@@ -137,7 +200,7 @@ export async function runSnapshot(target, opts) {
 
   let expected = null;
   try {
-    expected = readFileSync(file, 'utf8');
+    expected = scrub(readFileSync(file, 'utf8'), target.scrub);
   } catch {}
 
   if (opts.update || expected === null) {
@@ -334,7 +397,8 @@ export async function run(targets, opts = {}) {
     }
     if (t.type === 'skip') continue;
     const started = now();
-    const result = await RUNNERS[t.type](t, o);
+    const installResult = await ensureDependencies(t, o);
+    const result = installResult && !installResult.ok ? installResult : await RUNNERS[t.type](t, o);
     const ms = (now() - started).toFixed(0);
     if (result.ok) {
       pass++;

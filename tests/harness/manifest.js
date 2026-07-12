@@ -25,7 +25,8 @@ export function targets() {
     { group: 'servers', type: 'server', name: 'hono', entry: 'examples/npm/hono/src/index.ts' },
     { group: 'servers', type: 'server', name: 'express', entry: 'examples/npm/express/index.cjs' },
     { group: 'servers', type: 'server', name: 'h3', entry: 'examples/npm/h3' },
-    { group: 'servers', type: 'server', name: 'elysia', entry: 'examples/npm/elysia' }
+    { group: 'servers', type: 'server', name: 'elysia1', entry: 'examples/npm/elysia1' },
+    { group: 'servers', type: 'server', name: 'elysia2', entry: 'examples/npm/elysia2' }
   );
 
   const scrubPid = [[/\b\d{3,7}\b/g, '<pid>']];
@@ -33,7 +34,13 @@ export function targets() {
     { group: 'examples', type: 'snapshot', name: 'smoke', entry: 'examples/npm/smoke/index.js' },
     { group: 'examples', type: 'snapshot', name: 'djot', entry: 'examples/npm/djot/index.ts' },
     { group: 'examples', type: 'snapshot', name: 'esbuild', entry: 'examples/npm/esbuild/index.ts' },
-    { group: 'examples', type: 'snapshot', name: 'rolldown', entry: 'examples/npm/rolldown/index.ts' },
+    {
+      group: 'examples',
+      type: 'snapshot',
+      name: 'rolldown',
+      entry: 'examples/npm/rolldown/index.ts',
+      scrub: [[/(?:\.\.\/)+\.ant\/pkg\/cache\/[0-9a-f]+/g, '<ant-cache>']]
+    },
     { group: 'examples', type: 'snapshot', name: 'react', entry: 'examples/npm/react/index.js' },
     { group: 'examples', type: 'snapshot', name: 'preact', entry: 'examples/npm/preact/index.js' },
     { group: 'examples', type: 'snapshot', name: 'tar', entry: 'examples/npm/tar/index.js', scrub: [[/\d+ bytes/g, '<n> bytes']] },
@@ -174,10 +181,11 @@ export function targets() {
   });
 
   list.push(
-    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 25000, minRps: 17500 },
+    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 32000, minRps: 22400 },
     { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 46000 }
+    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 25000, minRps: 17500 },
+    { group: 'oha', type: 'oha', name: 'elysia1 rps', entry: 'examples/npm/elysia1/bench-server.ts', refRps: 120000, minRps: 84000 },
+    { group: 'oha', type: 'oha', name: 'elysia2 rps', entry: 'examples/npm/elysia2/bench-server.ts', refRps: 125000, minRps: 87500 }
   );
 
   list.push({
