@@ -299,7 +299,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
     lookup_sym_descriptor(func_obj, has_instance_sym_off) != NULL
   ) return false;
 
-  ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+  ant_value_t func_proto = js_get_slot(js->realm_global, SLOT_FUNC_PROTO);
   ant_value_t func_proto_obj = is_object_type(func_proto) ? js_as_obj(func_proto) : js_mkundef();
   
   if (is_object_type(func_proto_obj) && (

@@ -276,7 +276,7 @@ static inline void sv_op_define_class(
   if (vtype(ctor) == T_UNDEF) {
     ant_value_t ctor_obj = mkobj(js, 0);
     ctor = js_obj_to_func_ex(ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
-    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js->realm_global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC)
       js_set_proto_init(ctor_obj, func_proto);
   }
@@ -285,14 +285,14 @@ static inline void sv_op_define_class(
 
   if (pt == T_NULL) {
     js_set_proto_init(proto, js_mknull());
-    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js->realm_global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_wb(js, ctor, func_proto);
   } else if (parent_is_object) {
     ant_value_t parent_proto = js_getprop_fallback(js, parent, "prototype");
     if (is_object_type(parent_proto)) js_set_proto_init(proto, parent_proto);
     js_set_proto_wb(js, ctor, parent);
   } else {
-    ant_value_t object_ctor = js_getprop_fallback(js, js->global, "Object");
+    ant_value_t object_ctor = js_getprop_fallback(js, js->realm_global, "Object");
     if (vtype(object_ctor) == T_FUNC) {
       ant_value_t object_proto = js_getprop_fallback(js, object_ctor, "prototype");
       if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);

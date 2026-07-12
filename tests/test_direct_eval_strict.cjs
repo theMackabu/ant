@@ -7,6 +7,10 @@ function strictDirectEval(source) {
   return eval(source);
 }
 
+function sloppyDirectEval(source) {
+  return eval(source);
+}
+
 function assertStrictEvalSyntaxError(source, label) {
   try {
     strictDirectEval(source);
@@ -47,5 +51,37 @@ function assertStrictEvalUsesRealmSyntaxError(source) {
 }
 
 assertStrictEvalUsesRealmSyntaxError("with ({}) {}");
+
+assert(
+  sloppyDirectEval("globalThis") === globalThis,
+  "direct eval globalThis should be the realm global object"
+);
+assert(
+  sloppyDirectEval("(function () { return this; })()") === globalThis,
+  "a sloppy function called inside direct eval should receive the realm global this"
+);
+
+const evalFunction = sloppyDirectEval("(function evalFunction() {})");
+assert(
+  Object.getPrototypeOf(evalFunction) === Function.prototype,
+  "functions created by direct eval should use the realm Function prototype"
+);
+
+const evalGenerator = sloppyDirectEval("(function* evalGenerator() {})");
+const realmGenerator = function* realmGenerator() {};
+assert(
+  Object.getPrototypeOf(evalGenerator) === Object.getPrototypeOf(realmGenerator),
+  "generators created by direct eval should use the realm generator prototype"
+);
+
+const evalClass = sloppyDirectEval("(class EvalClass {})");
+assert(
+  Object.getPrototypeOf(evalClass) === Function.prototype,
+  "classes created by direct eval should use the realm Function prototype"
+);
+assert(
+  Object.getPrototypeOf(evalClass.prototype) === Object.prototype,
+  "class prototypes created by direct eval should use the realm Object prototype"
+);
 
 console.log("strict direct eval tests passed");

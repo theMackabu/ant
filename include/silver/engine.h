@@ -552,7 +552,7 @@ static inline bool sv_is_nullish_this(ant_value_t v) {
 static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
   if (func->is_strict) return sv_is_nullish_this(this_val) ? js_mkundef() : this_val;
-  return sv_is_nullish_this(this_val) ? js->global : this_val;
+  return sv_is_nullish_this(this_val) ? js->realm_global : this_val;
 }
 
 static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
@@ -695,7 +695,7 @@ static inline bool sv_call_mode_is_construct(sv_call_mode_t mode) {
 }
 
 static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val, sv_call_mode_t mode) {
-  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->global;
+  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->realm_global;
   return this_val;
 }
 

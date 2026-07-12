@@ -40,7 +40,7 @@ static inline void sv_op_this(sv_vm_t *vm, sv_frame_t *frame) {
 }
 
 static inline void sv_op_global(sv_vm_t *vm, ant_t *js) {
-  vm->stack[vm->sp++] = js->global;
+  vm->stack[vm->sp++] = js->realm_global;
 }
 
 static inline sv_obj_site_cache_t *sv_obj_site_for_ip(sv_func_t *func, uint8_t *ip) {
