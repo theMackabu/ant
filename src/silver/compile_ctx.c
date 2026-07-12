@@ -37,6 +37,7 @@ void sv_compile_ctx_init_root(
   ctx->source = source;
   ctx->source_len = source_len;
   ctx->mode = mode;
+  ctx->inherits_eval_env = mode == SV_COMPILE_EVAL;
   ctx->is_strict = is_strict;
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;
@@ -65,6 +66,8 @@ void sv_compile_ctx_init_child(
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
   ctx->is_strict = enclosing->is_strict || (node && !!(node->flags & FN_CLASS_BODY));
   ctx->mode = mode;
+  ctx->inherits_eval_env =
+    enclosing->inherits_eval_env || mode == SV_COMPILE_EVAL;
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
@@ -82,6 +85,9 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->local_lookup_heads);
   free(ctx->upval_descs);
   free(ctx->upval_bindings);
+  for (int i = 0; i < ctx->eval_scope_count; i++)
+    free(ctx->eval_scopes[i].bindings);
+  free(ctx->eval_scopes);
   free(ctx->loops);
   free(ctx->unwind_kinds);
   free(ctx->srcpos);

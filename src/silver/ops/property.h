@@ -1,15 +1,15 @@
 #ifndef SV_PROPERTY_H
 #define SV_PROPERTY_H
 
-#include "silver/engine.h"
 #include "shapes.h"
 #include "gc.h"
 #include "utf8.h"
+
+#include "modules/regex.h"
+#include "silver/engine.h"
+
 #include <math.h>
 #include <stdlib.h>
-
-void regexp_note_exec_property_write(void);
-void regexp_note_replace_property_write(void);
 
 static inline ant_value_t sv_getprop_fallback_len(
   ant_t *js, ant_value_t obj,
@@ -542,11 +542,7 @@ static inline ant_value_t sv_op_put_field(
   
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
   sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
-  
-  if (a->len == 4 && memcmp(a->str, "exec", 4) == 0)
-    regexp_note_exec_property_write();
-  else if (a->len == 7 && memcmp(a->str, "replace", 7) == 0)
-    regexp_note_replace_property_write();
+  regexp_note_property_write(a->str, a->len);
 
   if (ic && ptr && !ptr->flags.is_exotic && ptr->shape && ic->epoch == ant_ic_epoch_counter &&
       ic->cached_shape == ptr->shape && ic->cached_holder == ptr &&

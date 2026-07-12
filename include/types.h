@@ -17,10 +17,12 @@ typedef struct ant_http_request_s ant_http_request_t;
 typedef struct ant_object ant_object_t;
 typedef struct ant_shape  ant_shape_t;
 
-typedef struct sv_vm      sv_vm_t;
-typedef struct sv_func    sv_func_t;
-typedef struct sv_closure sv_closure_t;
-typedef struct sv_frame   sv_frame_t;
+typedef struct sv_vm             sv_vm_t;
+typedef struct sv_func           sv_func_t;
+typedef struct sv_upvalue        sv_upvalue_t;
+typedef struct sv_closure        sv_closure_t;
+typedef struct sv_frame          sv_frame_t;
+typedef struct sv_eval_env_state sv_eval_env_state_t;
 
 typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;

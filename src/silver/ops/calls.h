@@ -3,10 +3,12 @@
 
 #include <limits.h>
 #include "silver/engine.h"
+#include "gc/roots.h"
+#include "eval_env.h"
 
 typedef struct {
   ant_value_t *args;
-  int      argc;
+  int argc;
   ant_value_t *alloc;
 } sv_call_args_t;
 
@@ -196,6 +198,54 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return result;
 }
 
+static inline ant_value_t sv_eval_in_frame(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  const char *source, ant_offset_t source_len, uint32_t scope_index
+) {
+  sv_func_t *caller = frame ? frame->func : NULL;
+  
+  if (!caller) return js_eval_bytecode_eval_with_strict(js, source, source_len, false);
+  const sv_eval_scope_t *scope = sv_func_eval_scope(caller, scope_index);
+  ant_value_t parent_env = sv_frame_eval_env(js, frame);
+  
+  if (!scope) return js_eval_bytecode_eval_in_env_with_strict(
+    js, source, source_len, 
+    sv_frame_is_strict(frame), frame->this, parent_env
+  );
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t env = js_mkobj(js);
+  
+  if (is_err(env)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return env;
+  }
+  
+  GC_ROOT_PIN(js, parent_env);
+  GC_ROOT_PIN(js, env);
+  js_set_proto_wb(js, env, parent_env);
+
+  sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
+  if (!state) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "failed to capture direct eval bindings");
+  }
+
+  if (!sv_eval_env_state_attach(env, state)) {
+    free(state);
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "failed to attach direct eval bindings");
+  }
+  
+  ant_value_t result = js_eval_bytecode_eval_in_env_with_strict(
+    js, source, source_len, 
+    sv_frame_is_strict(frame), frame->this, env
+  );
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   ant_value_t code = vm->stack[--vm->sp];
   if (vtype(code) != T_STR) {
@@ -204,10 +254,13 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
   }
   ant_offset_t len;
   ant_offset_t off = vstr(js, code, &len);
+  
   const char *str = (const char *)(uintptr_t)(off);
-  ant_value_t result = js_eval_bytecode_eval_with_strict(
-    js, str, len, sv_frame_is_strict(frame));
+  uint32_t scope_index = sv_get_u32(ip + 1);
+  
+  ant_value_t result = sv_eval_in_frame(vm, js, frame, str, len, scope_index);
   if (!is_err(result)) vm->stack[vm->sp++] = result;
+  
   return result;
 }
 

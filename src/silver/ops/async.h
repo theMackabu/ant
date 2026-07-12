@@ -255,9 +255,10 @@ static inline sv_vm_t *sv_async_prepare_materialization(
     sv_frame_t *src = &source_vm->frames[entry_fp + i];
     sv_frame_t *dst = &async_vm->frames[i];
     *dst = *src;
+    
     dst->prev_sp = src->prev_sp - stack_base;
-    dst->handler_base = src->handler_base - handler_base;
-    dst->handler_top = src->handler_top - handler_base;
+    dst->handler_base = (uint16_t)(src->handler_base - handler_base);
+    dst->handler_top = (uint16_t)(src->handler_top - handler_base);
 
     if (src->bp)
       dst->bp = async_vm->stack + (src->bp - &source_vm->stack[stack_base]);

@@ -5,6 +5,7 @@
 #include "internal.h"
 
 #include "silver/engine.h"
+#include "silver/eval_env.h"
 #include "modules/regex.h"
 #include "modules/generator.h"
 #include "modules/collections.h"
@@ -276,6 +277,16 @@ static void gc_clear_remembered_func_consts(ant_t *js) {
   }}
 }
 
+void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count) {
+  if (!cells) return;
+  for (uint32_t i = 0; i < count; i++) {
+    sv_upvalue_t *uv = cells[i];
+    if (!uv) continue;
+    uv->gc_epoch = gc_epoch;
+    if (uv->location == &uv->closed) gc_mark_value(js, uv->closed);
+  }
+}
+
 static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   if (!c) return;
   if (c->gc_epoch == gc_epoch) return;
@@ -287,17 +298,10 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   gc_mark_value(js, c->bound_args);
   gc_mark_value(js, c->super_val);
 
-  if (c->upvalues && c->func) {
-  for (int i = 0; i < c->func->upvalue_count; i++) {
-    sv_upvalue_t *uv = c->upvalues[i];
-    if (!uv) continue;
-    uv->gc_epoch = gc_epoch;
-    if (uv->location == &uv->closed) gc_mark_value(js, uv->closed);
-  }}
-  
-  if (c->bound_argv) {
+  if (c->func)
+    gc_mark_upvalue_cells(js, c->upvalues, (uint32_t)c->func->upvalue_count);
+  if (c->bound_argv)
     for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->bound_argv[i]);
-  }
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {
@@ -410,6 +414,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
 
   if (obj->native.tag != 0 || ant_object_has_sidecar(obj)) {
     ant_value_t value = js_obj_from_ptr(obj);
+    sv_eval_env_gc_mark(js, obj);
     gc_mark_abort_signal_object(js, value, gc_mark_value);
     gc_mark_eventemitter_object(js, value, gc_mark_value);
   }
@@ -437,6 +442,7 @@ static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
     gc_mark_value(js, frame->with_obj);
     gc_mark_value(js, frame->completion.value);
     gc_mark_value(js, frame->arguments_obj);
+    gc_mark_value(js, frame->eval_env);
   }
 
   for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
@@ -738,6 +744,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   if (ant_object_has_sidecar(obj)) {
     ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
+    sv_eval_env_gc_free(obj);
     free(sidecar->extra_slots);
     free(sidecar->native_entries);
     free(sidecar->proxy_state);

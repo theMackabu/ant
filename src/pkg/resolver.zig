@@ -166,6 +166,7 @@ pub const Version = struct {
 pub const Constraint = struct {
   kind: Kind,
   version: Version,
+  tag: ?[]const u8 = null,
 
   pub const Kind = enum {
     exact, // 1.2.3
@@ -175,12 +176,24 @@ pub const Constraint = struct {
     gt, // >1.2.3
     lte, // <=1.2.3
     lt, // <1.2.3
+    tag, // npm dist-tag (next, beta, canary, ...)
     any, // *
   };
 
   pub fn parse(str: []const u8) !Constraint {
     if (str.len == 0 or std.mem.eql(u8, str, "*") or std.mem.eql(u8, str, "latest")) {
       return .{ .kind = .any, .version = .{ .major = 0, .minor = 0, .patch = 0, .prerelease = null, .build = null } };
+    }
+
+    if (str[0] != 'v' and (str[0] < '0' or str[0] > '9') and
+        !std.mem.startsWith(u8, str, "^") and !std.mem.startsWith(u8, str, "~") and
+        !std.mem.startsWith(u8, str, ">") and !std.mem.startsWith(u8, str, "<") and
+        !std.mem.startsWith(u8, str, "=")) {
+      return .{
+        .kind = .tag,
+        .version = .{ .major = 0, .minor = 0, .patch = 0, .prerelease = null, .build = null },
+        .tag = str,
+      };
     }
 
     var remaining = str;
@@ -271,6 +284,7 @@ pub const Constraint = struct {
       .gt => return v.order(self.version) == .gt,
       .lte => return v.order(self.version) != .gt,
       .lt => return v.order(self.version) == .lt,
+      .tag => return false,
     }
   }
 };
@@ -605,6 +619,7 @@ pub const PackageMetadata = struct {
   name: []const u8,
   versions: std.ArrayListUnmanaged(VersionInfo),
   dist_tag_latest: ?Version = null,
+  dist_tags: std.StringHashMap(Version),
 
   pub fn init(allocator: std.mem.Allocator, name: []const u8) !PackageMetadata {
     return .{
@@ -612,6 +627,7 @@ pub const PackageMetadata = struct {
       .name = try allocator.dupe(u8, name),
       .versions = .empty,
       .dist_tag_latest = null,
+      .dist_tags = std.StringHashMap(Version).init(allocator),
     };
   }
 
@@ -620,6 +636,13 @@ pub const PackageMetadata = struct {
       if (dtl.prerelease) |pre| self.allocator.free(pre);
       if (dtl.build) |bld| self.allocator.free(bld);
     }
+    var tag_iter = self.dist_tags.iterator();
+    while (tag_iter.next()) |entry| {
+      self.allocator.free(entry.key_ptr.*);
+      if (entry.value_ptr.prerelease) |pre| self.allocator.free(pre);
+      if (entry.value_ptr.build) |bld| self.allocator.free(bld);
+    }
+    self.dist_tags.deinit();
     for (self.versions.items) |*v| {
       v.deinit();
     }
@@ -653,6 +676,21 @@ pub const PackageMetadata = struct {
       if (pl.prerelease) |pre| pl.prerelease = allocator.dupe(u8, pre) catch null;
       if (pl.build) |bld| pl.build = allocator.dupe(u8, bld) catch null;
       break :blk pl;
+    };
+
+    if (root.object.get("dist-tags")) |dt| if (dt == .object) {
+      for (dt.object.keys(), dt.object.values()) |tag, value| {
+        if (value != .string) continue;
+        var version = Version.parse(value.string) catch continue;
+        if (version.prerelease) |pre| version.prerelease = allocator.dupe(u8, pre) catch continue;
+        if (version.build) |bld| version.build = allocator.dupe(u8, bld) catch continue;
+        const tag_copy = allocator.dupe(u8, tag) catch continue;
+        metadata.dist_tags.put(tag_copy, version) catch {
+          allocator.free(tag_copy);
+          if (version.prerelease) |pre| allocator.free(pre);
+          if (version.build) |bld| allocator.free(bld);
+        };
+      }
     };
 
     const versions_obj = root.object.get("versions") orelse return metadata;
@@ -751,7 +789,28 @@ pub const PackageMetadata = struct {
 
     return metadata;
   }
+
+  pub fn constraintMatches(self: *const PackageMetadata, constraint: Constraint, version: Version) bool {
+    if (constraint.kind == .tag) {
+      const wanted = self.dist_tags.get(constraint.tag orelse return false) orelse return false;
+      return version.order(wanted) == .eq;
+    }
+    return constraint.satisfies(version);
+  }
 };
+
+test "package metadata resolves npm dist-tags exactly" {
+  const allocator = std.testing.allocator;
+  var metadata = try PackageMetadata.parseFromJson(allocator,
+    \\{"name":"@example/cli","dist-tags":{"latest":"1.0.0","next":"2.0.0-next.7"},"versions":{"1.0.0":{"dist":{"tarball":"https://example.test/latest.tgz"}},"2.0.0-next.7":{"dist":{"tarball":"https://example.test/next.tgz"}}}}
+  );
+  defer metadata.deinit();
+
+  const constraint = try Constraint.parse("next");
+  try std.testing.expectEqual(Constraint.Kind.tag, constraint.kind);
+  try std.testing.expect(!metadata.constraintMatches(constraint, metadata.versions.items[0].version));
+  try std.testing.expect(metadata.constraintMatches(constraint, metadata.versions.items[1].version));
+}
 
 pub const ResolvedPackage = struct {
   name: intern.InternedString,
@@ -896,6 +955,7 @@ pub const Resolver = struct {
   resolved: std.StringHashMap(*ResolvedPackage),
   constraints: std.StringHashMap(std.ArrayListUnmanaged(Constraint)),
   in_progress: std.StringHashMap(void),
+  metadata_refresh: std.StringHashMap(void),
   disabled_root_dependencies: std.ArrayListUnmanaged(ResolvedPackage.DisabledDep),
   registry_url: []const u8,
   metadata_cache: *std.StringHashMap(PackageMetadata),
@@ -924,6 +984,7 @@ pub const Resolver = struct {
       .resolved = std.StringHashMap(*ResolvedPackage).init(allocator),
       .constraints = std.StringHashMap(std.ArrayListUnmanaged(Constraint)).init(allocator),
       .in_progress = std.StringHashMap(void).init(allocator),
+      .metadata_refresh = std.StringHashMap(void).init(allocator),
       .disabled_root_dependencies = .empty,
       .registry_url = registry_url,
       .metadata_cache = metadata_cache,
@@ -969,6 +1030,9 @@ pub const Resolver = struct {
     }
     self.constraints.deinit();
     self.in_progress.deinit();
+    var refresh_key_iter = self.metadata_refresh.keyIterator();
+    while (refresh_key_iter.next()) |key| self.allocator.free(key.*);
+    self.metadata_refresh.deinit();
     if (self.npm_fallback_http) |http| http.deinit();
     self.clearDisabledRootDependencies();
     self.disabled_root_dependencies.deinit(self.allocator);
@@ -1012,6 +1076,24 @@ pub const Resolver = struct {
       return self.selectBestVersion(&metadata, constraint) == null;
     }
     return false;
+  }
+
+  fn shouldRefreshMetadata(self: *const Resolver, name: []const u8) bool {
+    return self.force_refresh or self.metadata_refresh.contains(name);
+  }
+
+  fn markMetadataForRefresh(self: *Resolver, name: []const u8) !void {
+    if (self.force_refresh or self.metadata_refresh.contains(name)) return;
+
+    const key = try self.allocator.dupe(u8, name);
+    errdefer self.allocator.free(key);
+    try self.metadata_refresh.put(key, {});
+
+    if (self.metadata_cache.fetchRemove(name)) |entry| {
+      self.cache_allocator.free(entry.key);
+      var metadata = entry.value;
+      metadata.deinit();
+    }
   }
 
   pub fn resolveFromPackageJson(self: *Resolver, path: []const u8) !void {
@@ -1104,6 +1186,14 @@ pub const Resolver = struct {
     while (collect_queue.items.len > 0) {
       debug.log("  pass1 level {d}: {d} packages", .{ collect_level, collect_queue.items.len });
 
+      for (collect_queue.items) |item| {
+        const spec = dependencySpec(item.name, item.constraint_str);
+        const constraint = Constraint.parse(spec.constraint) catch continue;
+        if (constraint.kind == .tag) {
+          try self.markMetadataForRefresh(spec.package_name);
+        }
+      }
+
       var to_fetch = std.ArrayListUnmanaged([]const u8).empty;
       defer to_fetch.deinit(self.allocator);
 
@@ -1114,7 +1204,7 @@ pub const Resolver = struct {
         if (!self.metadata_cache.contains(spec.package_name)) {
           var loaded_from_disk = false;
           if (self.cache_db) |db| {
-            if (!self.force_refresh) {
+            if (!self.shouldRefreshMetadata(spec.package_name)) {
               if (db.lookupMetadata(self.http.registry_host, spec.package_name, self.allocator)) |json_data| {
                 const metadata = PackageMetadata.parseFromJson(self.cache_allocator, json_data) catch {
                   self.allocator.free(json_data);
@@ -1494,10 +1584,10 @@ pub const Resolver = struct {
     trace.summary("resolver");
   }
 
-  fn countSatisfied(_: *Resolver, _: *const PackageMetadata, version_info: *const VersionInfo, constraint_list: anytype) usize {
+  fn countSatisfied(_: *Resolver, metadata: *const PackageMetadata, version_info: *const VersionInfo, constraint_list: anytype) usize {
     var count: usize = 0;
     for (constraint_list) |info| {
-      if (info.constraint.satisfies(version_info.version)) count += 1;
+      if (metadata.constraintMatches(info.constraint, version_info.version)) count += 1;
     }
     return count;
   }
@@ -1508,7 +1598,7 @@ pub const Resolver = struct {
 
     var want_prerelease = false;
     for (constraint_list) |info| {
-      if (info.constraint.version.prerelease != null) {
+      if (info.constraint.version.prerelease != null or info.constraint.kind == .tag) {
         want_prerelease = true;
         break;
       }
@@ -1520,7 +1610,7 @@ pub const Resolver = struct {
 
       var score: i64 = 0;
       for (constraint_list) |info| {
-        if (info.constraint.satisfies(v.version)) {
+        if (metadata.constraintMatches(info.constraint, v.version)) {
           const weight: i64 = @intCast(1000 / (info.depth + 1));
           score += weight;
         }
@@ -1740,7 +1830,7 @@ pub const Resolver = struct {
     var metadata = try self.fetchMetadata(dep_spec.package_name);
     const version_info = blk: {
       if (optimal_versions.get(dep_spec.install_name)) |optimal| {
-        if (constraint.satisfies(optimal.version) and optimal.matchesPlatform()) break :blk optimal;
+        if (metadata.constraintMatches(constraint, optimal.version) and optimal.matchesPlatform()) break :blk optimal;
       }
       break :blk self.selectBestVersion(&metadata, constraint) orelse return error.NoMatchingVersion;
     };
@@ -2228,10 +2318,11 @@ pub const Resolver = struct {
         .name = cached.name,
         .versions = cached.versions,
         .dist_tag_latest = cached.dist_tag_latest,
+        .dist_tags = cached.dist_tags,
       };
     }
 
-    if (self.cache_db) |db| if (!self.force_refresh) {
+    if (self.cache_db) |db| if (!self.shouldRefreshMetadata(name)) {
       if (try self.loadFromDiskCache(db, self.http.registry_host, name, "disk cache")) |metadata| return metadata;
       if (isAntsLandRegistry(self.registry_url)) {
         if (try self.loadFromDiskCache(db, NPM_FALLBACK_HOST, name, "npm fallback, disk cache")) |metadata| return metadata;
@@ -2350,7 +2441,7 @@ pub const Resolver = struct {
     defer missing.deinit(self.allocator);
     for (names) |name| {
       if (self.metadata_cache.contains(name)) continue;
-      if (!self.force_refresh and self.loadMetadataFromDisk(name)) continue;
+      if (!self.shouldRefreshMetadata(name) and self.loadMetadataFromDisk(name)) continue;
       for (missing.items) |m| {
         if (std.mem.eql(u8, m, name)) break;
       } else missing.append(self.allocator, name) catch return;
@@ -2416,6 +2507,10 @@ pub const Resolver = struct {
   }
 
   fn selectBestVersion(_: *Resolver, metadata: *const PackageMetadata, constraint: Constraint) ?*const VersionInfo {
+    if (constraint.kind == .tag) for (metadata.versions.items) |*v| {
+      if (metadata.constraintMatches(constraint, v.version) and v.matchesPlatform()) return v;
+    };
+
     if (constraint.kind == .any) for (metadata.versions.items) |*v| {
       const dtl = metadata.dist_tag_latest orelse break;
       if (v.version.order(dtl) == .eq and v.matchesPlatform()) return v;
@@ -2427,7 +2522,7 @@ pub const Resolver = struct {
     for (metadata.versions.items) |*v| {
       if (!v.matchesPlatform()) continue;
       if (v.version.prerelease != null and !want_prerelease) continue;
-      if (constraint.satisfies(v.version)) {
+      if (metadata.constraintMatches(constraint, v.version)) {
         if (best == null or v.version.order(best.?.version) == .gt) best = v;
       }
     }
@@ -2436,7 +2531,7 @@ pub const Resolver = struct {
 
     for (metadata.versions.items) |*v| {
       if (!v.matchesPlatform()) continue;
-      if (!constraint.satisfies(v.version)) continue;
+      if (!metadata.constraintMatches(constraint, v.version)) continue;
       if (best == null or v.version.order(best.?.version) == .gt) best = v;
     }
 
@@ -2449,7 +2544,7 @@ pub const Resolver = struct {
     var want_prerelease = false;
     var all_any = true;
     for (all_constraints) |c| {
-      if (c.version.prerelease != null) want_prerelease = true;
+      if (c.version.prerelease != null or c.kind == .tag) want_prerelease = true;
       if (c.kind != .any) all_any = false;
     }
 
@@ -2464,7 +2559,7 @@ pub const Resolver = struct {
 
       var satisfies_all = true;
       for (all_constraints) |c| {
-        if (!c.satisfies(v.version)) {
+        if (!metadata.constraintMatches(c, v.version)) {
           satisfies_all = false;
           break;
         }
@@ -2481,7 +2576,7 @@ pub const Resolver = struct {
       if (!v.matchesPlatform()) continue;
       var satisfies_all = true;
       for (all_constraints) |c| {
-        if (!c.satisfies(v.version)) {
+        if (!metadata.constraintMatches(c, v.version)) {
           satisfies_all = false;
           break;
         }

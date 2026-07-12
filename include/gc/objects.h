@@ -15,6 +15,8 @@ uint64_t gc_get_epoch(void);
 bool gc_obj_is_marked(const ant_object_t *obj);
 
 void gc_mark_value(ant_t *js, ant_value_t v);
+void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count);
+
 void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark);
 void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark);
 void gc_object_free(ant_t *js, ant_object_t *obj);

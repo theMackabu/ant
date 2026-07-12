@@ -57,7 +57,7 @@ static inline void sv_op_try_push(sv_vm_t *vm, uint8_t *ip, sv_handler_kind_t ki
     h->kind = (uint8_t)kind;
     h->ip = ip + sv_op_size[OP_TRY_PUSH] + off;
     h->saved_sp = vm->sp;
-    frame->handler_top = vm->handler_depth;
+    frame->handler_top = (uint16_t)vm->handler_depth;
   }
 }
 
@@ -73,7 +73,7 @@ static inline void sv_op_try_pop(sv_vm_t *vm) {
         (size_t)(vm->handler_depth - i - 1) * sizeof(vm->handler_stack[0]));
     }
     vm->handler_depth--;
-    frame->handler_top = vm->handler_depth;
+    frame->handler_top = (uint16_t)vm->handler_depth;
     return;
   }
 }
@@ -93,7 +93,7 @@ static inline ant_value_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   h->kind = SV_HANDLER_FINALLY;
   h->ip = ip + sv_op_size[OP_FINALLY] + off;
   h->saved_sp = 0;
-  frame->handler_top = vm->handler_depth;
+  frame->handler_top = (uint16_t)vm->handler_depth;
   
   return js_mkundef();
 }
@@ -105,7 +105,7 @@ static inline uint8_t *sv_vm_unwind_for_return(sv_vm_t *vm, ant_value_t ret) {
     if (h->kind != SV_HANDLER_TRY_FINALLY) continue;
 
     vm->handler_depth = i;
-    frame->handler_top = i;
+    frame->handler_top = (uint16_t)i;
     vm->sp = h->saved_sp;
     frame->completion.kind = SV_COMPLETION_RETURN;
     frame->completion.value = ret;
@@ -127,7 +127,7 @@ static inline uint8_t *sv_vm_unwind_for_jump(
 
     int used = vm->handler_depth - i;
     vm->handler_depth = i;
-    frame->handler_top = i;
+    frame->handler_top = (uint16_t)i;
     vm->sp = h->saved_sp;
     frame->completion.kind = SV_COMPLETION_JUMP;
     frame->completion.value = js_mkundef();
@@ -140,7 +140,7 @@ static inline uint8_t *sv_vm_unwind_for_jump(
 
   while (n_pop-- > 0 && vm->handler_depth > frame->handler_base)
     vm->handler_depth--;
-  frame->handler_top = vm->handler_depth;
+  frame->handler_top = (uint16_t)vm->handler_depth;
   sv_clear_completion(vm);
   return NULL;
 }
@@ -150,7 +150,7 @@ static inline void sv_op_finally_discard(sv_vm_t *vm) {
   if (vm->handler_depth > frame->handler_base &&
       vm->handler_stack[vm->handler_depth - 1].kind == SV_HANDLER_FINALLY) {
     vm->handler_depth--;
-    frame->handler_top = vm->handler_depth;
+    frame->handler_top = (uint16_t)vm->handler_depth;
   }
   sv_clear_completion(vm);
 }
@@ -168,7 +168,7 @@ static inline sv_finally_ret_t sv_op_finally_ret(
   }
 
   sv_handler_t h = vm->handler_stack[--vm->handler_depth];
-  frame->handler_top = vm->handler_depth;
+  frame->handler_top = (uint16_t)vm->handler_depth;
 
   if (frame->completion.kind == SV_COMPLETION_THROW) {
     *completion_val = frame->completion.value;
@@ -240,11 +240,11 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       vm->frames[f].completion.value = caught;
       vm->stack[vm->sp++] = caught;
       vm->handler_depth = i;
-      vm->frames[f].handler_top = i;
+      vm->frames[f].handler_top = (uint16_t)i;
       return h->ip;
     }
 
-    frame->handler_top = base;
+    frame->handler_top = (uint16_t)base;
     if (f == vm->fp) vm->handler_depth = base;
   }
   

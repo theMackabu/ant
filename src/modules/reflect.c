@@ -16,6 +16,8 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t target = args[0];
   ant_value_t key = args[1];
   
+  bool has_receiver = nargs > 2;
+  ant_value_t receiver = has_receiver ? args[2] : target;
   if (!is_object_type(target)) return js_mkundef();
 
   ant_value_t prop_key = key;
@@ -24,8 +26,11 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(prop_key)) return prop_key;
   }
 
-  if (vtype(prop_key) == T_SYMBOL)
-    return js_get_sym(js, target, prop_key);
+  if (vtype(prop_key) == T_SYMBOL) {
+    return has_receiver
+      ? js_get_sym_with_receiver(js, target, prop_key, receiver)
+      : js_get_sym(js, target, prop_key);
+  }
 
   if (vtype(prop_key) != T_STR) {
     prop_key = js_tostring_val(js, prop_key);
@@ -34,8 +39,10 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
 
   char *key_str = js_getstr(js, prop_key, NULL);
   if (!key_str) return js_mkundef();
-  
-  return js_get(js, target, key_str);
+
+  if (!has_receiver || strict_eq_values(js, target, receiver))
+    return js_getprop_fallback(js, target, key_str);
+  return js_getprop_super(js, target, receiver, key_str);
 }
 
 static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
@@ -51,7 +58,7 @@ static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(target)) return target;
     t = T_FUNC;
   }
-  if (t != T_OBJ && t != T_FUNC) return js_false;
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_false;
   
   if (vtype(key) != T_STR) return js_false;
   
@@ -64,26 +71,41 @@ static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_false;
-  
+
   ant_value_t target = args[0];
   ant_value_t key = args[1];
-  
   int t = vtype(target);
+  
   if (t == T_CFUNC) {
     target = js_cfunc_promote(js, target);
     if (is_err(target)) return target;
     t = T_FUNC;
   }
+
+  if (t == T_ARR && vtype(key) == T_STR) {
+    size_t key_len;
+    char *key_str = js_getstr(js, key, &key_len);
+    if (key_str && is_length_key(key_str, key_len)) return js_true;
+  }
+
+  ant_value_t proxy_target = target;
+  bool target_is_proxy = false;
+  
+  if (t == T_OBJ) target_is_proxy = is_proxy(target);
+  else if (t == T_FUNC) {
+    proxy_target = js_func_obj(target);
+    target_is_proxy = is_proxy(proxy_target);
+  }
+
+  if (t == T_ARR || target_is_proxy || vtype(key) != T_STR)
+    return do_in(js, key, target_is_proxy ? proxy_target : target);
   if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  if (vtype(key) != T_STR) return js_false;
-  
+
   size_t key_len;
   char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_false;
   
-  ant_offset_t off = lkp_proto(js, target, key_str, key_len);
-  return js_bool(off > 0);
+  return js_bool(lkp_proto(js, target, key_str, key_len) > 0);
 }
 
 static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nargs) {
@@ -215,7 +237,7 @@ static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *a
   if (!is_object_type(target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.getOwnPropertyDescriptor called on non-object");
 
-  ant_value_t object_ctor = js_get(js, js_glob(js), "Object");
+  ant_value_t object_ctor = js_get(js, js->global, "Object");
   ant_value_t get_desc = js_get(js, object_ctor, "getOwnPropertyDescriptor");
   if (!is_callable(get_desc)) return js_mkundef();
 
@@ -315,5 +337,5 @@ void init_reflect_module(void) {
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
   js_set_sym(js, reflect_obj, get_toStringTag_sym(), js_mkstr(js, "Reflect", 7));
-  js_set(js, js_glob(js), "Reflect", reflect_obj);
+  js_set(js, js->global, "Reflect", reflect_obj);
 }

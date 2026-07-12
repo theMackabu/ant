@@ -88,7 +88,8 @@
   X(SLOT_REGEXP_GROUPS_CACHE)     \
   X(SLOT_MATCHALL_RX)             \
   X(SLOT_MATCHALL_STR)            \
-  X(SLOT_MATCHALL_DONE)
+  X(SLOT_MATCHALL_DONE)           \
+  X(SLOT_EVAL_ENV)
 
 #define ANT_DECLARE_INTERNAL_SLOT(name) name,
 typedef enum {

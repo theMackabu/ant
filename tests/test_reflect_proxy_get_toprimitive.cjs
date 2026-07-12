@@ -34,4 +34,23 @@ if (trappedKey !== key) {
   pass = false;
 }
 
+const inheritedTarget = Object.create({ inherited: 17 });
+if (Reflect.get(inheritedTarget, "inherited") !== 17) {
+  console.log("FAIL: two-argument Reflect.get should find inherited properties");
+  pass = false;
+}
+
+let hasTrapCalls = 0;
+const callableProxy = new Proxy(function () {}, {
+  has(target, actualKey) {
+    hasTrapCalls++;
+    return actualKey === "virtual";
+  }
+});
+
+if (!Reflect.has(callableProxy, "virtual") || hasTrapCalls !== 1) {
+  console.log("FAIL: Reflect.has should invoke a callable proxy's has trap");
+  pass = false;
+}
+
 if (pass) console.log("PASS");

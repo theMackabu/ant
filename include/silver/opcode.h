@@ -81,6 +81,10 @@ OP_DEF(  GET_GLOBAL,        7,   0,   1, atom)      /* push global[atom] (atom +
 OP_DEF(  GET_GLOBAL_UNDEF,  7,   0,   1, atom)      /* push undefined if missing (atom + ic_idx:u16) */
 OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
 
+OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
+OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
+OP_DEF(  PUT_EVAL_GLOBAL,       5,   1,   0, atom)  /* assign through direct-eval environment */
+
 OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
 OP_DEF(  PUT_FIELD,         7,   2,   0, atom)      /* obj val -> (atom + ic_idx:u16) */
@@ -152,6 +156,7 @@ OP_DEF(  TYPEOF,            1,   1,   1, none)
 OP_DEF(  VOID,              1,   1,   1, none)      /* eval + push undefined */
 OP_DEF(  DELETE,            1,   2,   1, none)      /* obj key -> bool */
 OP_DEF(  DELETE_VAR,        5,   0,   1, atom)      /* delete unqualified name */
+OP_DEF(  DELETE_EVAL_VAR,   5,   0,   1, atom)      /* delete through direct-eval environment */
 
 OP_DEF(  JMP,               5,   0,   0, label)     /* unconditional */
 OP_DEF(  JMP_FALSE,         5,   1,   0, label)     /* pop + branch if falsy */
@@ -255,6 +260,7 @@ OP_DEF(  ENTER_WITH,        1,   1,   0, none)      /* enter with(obj) block */
 OP_DEF(  EXIT_WITH,         1,   0,   0, none)      /* exit with(obj) block */
 
 OP_DEF(  WITH_GET_VAR,      8,   0,   1, atom)      /* -> val (check with-obj then fallback) */
+OP_DEF(  WITH_GET_CALL,     8,   0,   2, atom)      /* -> receiver, val for identifier call */
 OP_DEF(  WITH_PUT_VAR,      8,   1,   0, atom)      /* val -> (check with-obj then fallback) */
 OP_DEF(  WITH_DEL_VAR,      5,   0,   1, atom)      /* -> bool (delete from with-obj/global) */
 
@@ -430,4 +436,16 @@ OP_FLAG(LABEL                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(LINE_NUM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(COL_NUM               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 #undef OP_FLAG
+#endif
+
+#ifdef OP_IC_SLOT
+OP_IC_SLOT(GET_GLOBAL)
+OP_IC_SLOT(GET_GLOBAL_UNDEF)
+OP_IC_SLOT(GET_EVAL_GLOBAL)
+OP_IC_SLOT(GET_EVAL_GLOBAL_UNDEF)
+OP_IC_SLOT(GET_FIELD)
+OP_IC_SLOT(GET_FIELD2)
+OP_IC_SLOT(GET_FIELD_OPT)
+OP_IC_SLOT(PUT_FIELD)
+#undef OP_IC_SLOT
 #endif
