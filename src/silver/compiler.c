@@ -885,23 +885,80 @@ static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
   return -1;
 }
 
-static bool eval_scope_builder_has_binding(
-  const sv_eval_scope_builder_t *scope, const char *name, uint32_t len
+typedef struct {
+  uint32_t *slots;
+  uint32_t capacity;
+} sv_eval_binding_set_t;
+
+static bool eval_binding_set_init(
+  sv_compiler_t *c, sv_eval_binding_set_t *set, size_t candidate_count
 ) {
-  for (uint32_t i = 0; i < scope->count; i++) {
-    const sv_runtime_binding_t *binding = &scope->bindings[i];
-    if (binding->len == len && memcmp(binding->name, name, len) == 0) return true;
+  memset(set, 0, sizeof(*set));
+  if (candidate_count == 0) return true;
+
+  if (candidate_count > UINT32_MAX / 4) {
+    js_mkerr(c->js, "too many bindings while capturing direct eval scope");
+    return false;
   }
-  return false;
+
+  uint32_t capacity = 16;
+  uint32_t needed = (uint32_t)candidate_count * 2;
+
+  while (capacity < needed) {
+    if (capacity > UINT32_MAX / 2) {
+      js_mkerr(c->js, "too many bindings while capturing direct eval scope");
+      return false;
+    }
+    capacity *= 2;
+  }
+
+  uint32_t *slots = malloc((size_t)capacity * sizeof(uint32_t));
+  if (!slots) {
+    js_mkerr(c->js, "out of memory while indexing direct eval scope");
+    return false;
+  }
+
+  memset(slots, 0xff, (size_t)capacity * sizeof(uint32_t));
+  set->slots = slots;
+  set->capacity = capacity;
+
+  return true;
+}
+
+static uint32_t *eval_binding_set_slot(
+  sv_eval_binding_set_t *set, const sv_eval_scope_builder_t *scope,
+  const char *name, uint32_t len
+) {
+  if (!set->slots || set->capacity == 0) return NULL;
+  uint32_t slot = sv_compile_ctx_hash_local_name(name, len) & (set->capacity - 1);
+
+  for (;;) {
+    uint32_t binding_index = set->slots[slot];
+    if (binding_index == UINT32_MAX) return &set->slots[slot];
+    const sv_runtime_binding_t *binding = &scope->bindings[binding_index];
+    if (binding->len == len && memcmp(binding->name, name, len) == 0)
+      return &set->slots[slot];
+    slot = (slot + 1) & (set->capacity - 1);
+  }
+}
+
+static bool eval_scope_builder_has_binding(
+  sv_eval_binding_set_t *set, const sv_eval_scope_builder_t *scope,
+  const char *name, uint32_t len
+) {
+  uint32_t *slot = eval_binding_set_slot(set, scope, name, len);
+  return slot && *slot != UINT32_MAX;
 }
 
 static bool eval_scope_builder_add_binding(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set,
   const char *name, uint32_t len,
   uint8_t kind, uint16_t index, bool is_const
 ) {
-  if (!name || len == 0 || name[0] == '\x01' ||
-      eval_scope_builder_has_binding(scope, name, len)) return true;
+  if (!name || len == 0 || name[0] == '\x01') return true;
+  uint32_t *lookup_slot = eval_binding_set_slot(set, scope, name, len);
+  if (!lookup_slot || *lookup_slot != UINT32_MAX) return true;
 
   if (scope->count >= scope->capacity) {
     uint32_t capacity = scope->capacity ? scope->capacity * 2 : 8;
@@ -915,9 +972,71 @@ static bool eval_scope_builder_add_binding(
     scope->bindings = bindings;
     scope->capacity = capacity;
   }
-  scope->bindings[scope->count++] = (sv_runtime_binding_t){
+  uint32_t binding_index = scope->count++;
+  scope->bindings[binding_index] = (sv_runtime_binding_t){
     name, len, index, kind, is_const
   };
+  *lookup_slot = binding_index;
+  return true;
+}
+
+static inline bool eval_local_is_visible(const sv_local_t *local) {
+  return local && local->name && local->name_len > 0 &&
+    local->name[0] != '\x01';
+}
+
+static bool eval_scope_builder_capture_local(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set, sv_local_t *local, int local_index
+) {
+  if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
+        set, scope, local->name, local->name_len)) return true;
+
+  uint8_t kind = local->depth == -1
+    ? SV_EVAL_BIND_PARAM : SV_EVAL_BIND_LOCAL;
+  uint16_t index = kind == SV_EVAL_BIND_PARAM
+    ? (uint16_t)local_index
+    : (uint16_t)(local_index - c->param_locals);
+
+  if (!eval_scope_builder_add_binding(
+        c, scope, set, local->name, local->name_len,
+        kind, index, local->is_const)) return false;
+  local->captured = true;
+  return true;
+}
+
+static bool eval_scope_builder_capture_upvalue(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set, sv_local_t *local
+) {
+  if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
+        set, scope, local->name, local->name_len)) return true;
+
+  int upvalue = resolve_upvalue(c, local->name, local->name_len);
+  if (upvalue < 0) return true;
+  return eval_scope_builder_add_binding(
+    c, scope, set, local->name, local->name_len,
+    SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue,
+    c->upval_descs[upvalue].is_const);
+}
+
+static bool eval_scope_builder_capture_locals(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set
+) {
+  for (int i = c->local_count - 1; i >= 0; i--)
+    if (!eval_scope_builder_capture_local(
+          c, scope, set, &c->locals[i], i)) return false;
+  return true;
+}
+
+static bool eval_scope_builder_capture_upvalues(
+  sv_compiler_t *c, sv_eval_scope_builder_t *scope,
+  sv_eval_binding_set_t *set, sv_compiler_t *enclosing
+) {
+  for (int i = enclosing->local_count - 1; i >= 0; i--)
+    if (!eval_scope_builder_capture_upvalue(
+          c, scope, set, &enclosing->locals[i])) return false;
   return true;
 }
 
@@ -941,43 +1060,31 @@ static bool capture_dynamic_eval_scope(
   sv_eval_scope_builder_t *scope = &c->eval_scopes[scope_index];
   memset(scope, 0, sizeof(*scope));
 
-  for (int i = c->local_count - 1; i >= 0; i--) {
-    sv_local_t *local = &c->locals[i];
-    if (!local->name || local->name_len == 0 || local->name[0] == '\x01' ||
-        eval_scope_builder_has_binding(
-          scope, local->name, local->name_len)) continue;
-
-    bool added;
-    if (local->depth == -1) {
-      added = eval_scope_builder_add_binding(
-        c, scope, local->name, local->name_len,
-        SV_EVAL_BIND_PARAM, (uint16_t)i, local->is_const);
-    } else {
-      added = eval_scope_builder_add_binding(
-        c, scope, local->name, local->name_len,
-        SV_EVAL_BIND_LOCAL, (uint16_t)(i - c->param_locals), local->is_const);
-    }
-    if (!added) return false;
-    local->captured = true;
-  }
-
+  size_t candidate_count = (size_t)c->local_count;
   for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
-    for (int i = enc->local_count - 1; i >= 0; i--) {
-      sv_local_t *local = &enc->locals[i];
-      if (!local->name || local->name_len == 0 || local->name[0] == '\x01' ||
-          eval_scope_builder_has_binding(
-            scope, local->name, local->name_len)) continue;
-      int upvalue = resolve_upvalue(c, local->name, local->name_len);
-      if (upvalue >= 0) {
-        if (!eval_scope_builder_add_binding(
-          c, scope, local->name, local->name_len,
-          SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue,
-          c->upval_descs[upvalue].is_const)) return false;
-      }
+    if ((size_t)enc->local_count > SIZE_MAX - candidate_count) {
+      js_mkerr(c->js, "too many bindings while capturing direct eval scope");
+      return false;
     }
+    candidate_count += (size_t)enc->local_count;
   }
+
+  sv_eval_binding_set_t binding_set;
+  if (!eval_binding_set_init(c, &binding_set, candidate_count)) return false;
+
+  if (!eval_scope_builder_capture_locals(
+        c, scope, &binding_set)) goto capture_failed;
+
+  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing)
+    if (!eval_scope_builder_capture_upvalues(
+          c, scope, &binding_set, enc)) goto capture_failed;
+  free(binding_set.slots);
   *scope_index_out = scope_index;
   return true;
+
+capture_failed:
+  free(binding_set.slots);
+  return false;
 }
 
 static void sv_func_finalize_type_data(

@@ -53,6 +53,16 @@ assert(evalAtDistinctBlockSites('left', true) === 11,
 assert(evalAtDistinctBlockSites('right', false) === 22,
   'multiple eval sites should retain distinct lexical scopes');
 
+function evalShadowedBlockBinding(source) {
+  let value = 'outer';
+  {
+    let value = 'inner';
+    return eval(source);
+  }
+}
+assert(evalShadowedBlockBinding('value') === 'inner',
+  'direct eval scope indexing should preserve the innermost visible binding');
+
 const staticBlockSource = 'staticBlockValue';
 class StaticBlockEval {
   static {
