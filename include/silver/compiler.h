@@ -138,9 +138,13 @@ typedef struct sv_compiler {
 
   sv_upval_desc_t *upval_descs;
   sv_binding_meta_t *upval_bindings;
-  
+
   int upvalue_count;
   int upvalue_cap;
+
+  sv_eval_scope_t *eval_scopes;
+  int eval_scope_count;
+  int eval_scope_cap;
 
   sv_loop_t *loops;
   int loop_count;

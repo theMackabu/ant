@@ -489,6 +489,40 @@ static inline ant_value_t sv_op_with_get_var(
   return js_mkundef();
 }
 
+static inline ant_value_t sv_op_with_get_call(
+  sv_vm_t *vm, ant_t *js,
+  sv_frame_t *frame,
+  sv_func_t *func, uint8_t *ip
+) {
+  uint32_t atom_idx = sv_get_u32(ip + 1);
+  uint8_t fb_kind = sv_get_u8(ip + 5);
+  uint16_t fb_idx = sv_get_u16(ip + 6);
+  sv_atom_t *a = &func->atoms[atom_idx];
+
+  if (vtype(frame->with_obj) != T_UNDEF) {
+    ant_value_t val = js_mkundef();
+    if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
+      if (is_err(val)) return val;
+      vm->stack[vm->sp++] = frame->with_obj;
+      vm->stack[vm->sp++] = val;
+      return js_mkundef();
+    }
+  }
+
+  ant_value_t val;
+  if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
+    val = sv_global_get(js, a->str, a->len);
+    if (is_undefined(val) && fb_kind == WITH_FB_GLOBAL)
+      return js_mkerr_typed(
+        js, JS_ERR_REFERENCE, "'%.*s' is not defined",
+        (int)a->len, a->str);
+  } else val = sv_with_fallback_get(vm, js, frame, fb_kind, fb_idx);
+
+  vm->stack[vm->sp++] = js_mkundef();
+  vm->stack[vm->sp++] = val;
+  return js_mkundef();
+}
+
 static inline ant_value_t sv_op_with_put_var(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,

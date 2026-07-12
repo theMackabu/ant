@@ -886,6 +886,142 @@ static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
   return -1;
 }
 
+static bool eval_scope_has_binding(
+  const sv_eval_scope_t *scope, const char *name, uint32_t len
+) {
+  for (uint32_t i = 0; i < scope->count; i++) {
+    const sv_runtime_binding_t *binding = &scope->bindings[i];
+    if (binding->len == len && memcmp(binding->name, name, len) == 0)
+      return true;
+  }
+  return false;
+}
+
+static void eval_scope_add_binding(
+  sv_eval_scope_t *scope, const char *name, uint32_t len,
+  uint8_t kind, uint16_t index, bool is_const
+) {
+  if (!name || len == 0 || name[0] == '\x01' ||
+      eval_scope_has_binding(scope, name, len)) return;
+
+  if (scope->count >= scope->capacity) {
+    scope->capacity = scope->capacity ? scope->capacity * 2 : 8;
+    scope->bindings = realloc(
+      scope->bindings,
+      (size_t)scope->capacity * sizeof(sv_runtime_binding_t));
+  }
+  scope->bindings[scope->count++] = (sv_runtime_binding_t){
+    name, len, index, kind, is_const
+  };
+}
+
+static uint32_t add_dynamic_eval_scope(sv_compiler_t *c) {
+  if (c->eval_scope_count >= c->eval_scope_cap) {
+    c->eval_scope_cap = c->eval_scope_cap ? c->eval_scope_cap * 2 : 4;
+    c->eval_scopes = realloc(
+      c->eval_scopes,
+      (size_t)c->eval_scope_cap * sizeof(sv_eval_scope_t));
+  }
+
+  uint32_t scope_index = (uint32_t)c->eval_scope_count++;
+  sv_eval_scope_t *scope = &c->eval_scopes[scope_index];
+  memset(scope, 0, sizeof(*scope));
+
+  for (int i = c->local_count - 1; i >= 0; i--) {
+    sv_local_t *local = &c->locals[i];
+    if (local->depth == -1) {
+      eval_scope_add_binding(
+        scope, local->name, local->name_len,
+        SV_EVAL_BIND_PARAM, (uint16_t)i, local->is_const);
+    } else {
+      eval_scope_add_binding(
+        scope, local->name, local->name_len,
+        SV_EVAL_BIND_LOCAL, (uint16_t)(i - c->param_locals), local->is_const);
+    }
+  }
+
+  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
+    for (int i = enc->local_count - 1; i >= 0; i--) {
+      sv_local_t *local = &enc->locals[i];
+      if (!local->name || local->name_len == 0 || local->name[0] == '\x01' ||
+          eval_scope_has_binding(scope, local->name, local->name_len)) continue;
+      int upvalue = resolve_upvalue(c, local->name, local->name_len);
+      if (upvalue >= 0) {
+        eval_scope_add_binding(
+          scope, local->name, local->name_len,
+          SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue,
+          c->upval_descs[upvalue].is_const);
+      }
+    }
+  }
+  return scope_index;
+}
+
+static void sv_func_init_metadata_from_compiler(
+  sv_func_t *func, const sv_compiler_t *comp, int local_type_count
+) {
+  ANT_ASSERT(func != NULL, "function metadata requires a function");
+  ANT_ASSERT(comp != NULL, "function metadata requires a compiler context");
+  ANT_ASSERT(local_type_count >= 0, "function local type count cannot be negative");
+  ANT_ASSERT(!func->has_dynamic_eval, "function metadata cannot be initialized twice");
+  ANT_ASSERT(func->local_types == NULL, "function local types cannot be replaced");
+
+  func->local_type_count = local_type_count;
+  if (comp->eval_scope_count > 0) {
+    size_t metadata_size = offsetof(sv_func_metadata_t, local_types) +
+      (size_t)local_type_count * sizeof(sv_type_info_t);
+    sv_func_metadata_t *metadata = code_arena_bump(metadata_size);
+    ANT_ASSERT(metadata != NULL, "failed to allocate function metadata");
+    ANT_ASSERT(
+      ((uintptr_t)metadata % _Alignof(sv_func_metadata_t)) == 0,
+      "code arena returned misaligned function metadata"
+    );
+    memset(metadata, 0, metadata_size);
+    metadata->magic = SV_FUNC_METADATA_MAGIC;
+    metadata->eval_scopes = code_arena_bump(
+      (size_t)comp->eval_scope_count * sizeof(sv_eval_scope_t));
+    ANT_ASSERT(metadata->eval_scopes != NULL, "failed to allocate eval scopes");
+    metadata->eval_scope_count = (uint32_t)comp->eval_scope_count;
+
+    for (int i = 0; i < comp->eval_scope_count; i++) {
+      const sv_eval_scope_t *src = &comp->eval_scopes[i];
+      sv_eval_scope_t *dst = &metadata->eval_scopes[i];
+      *dst = *src;
+      dst->capacity = dst->count;
+      if (src->count > 0) {
+        dst->bindings = code_arena_bump(
+          (size_t)src->count * sizeof(sv_runtime_binding_t));
+        ANT_ASSERT(dst->bindings != NULL, "failed to allocate eval bindings");
+        memcpy(dst->bindings, src->bindings,
+          (size_t)src->count * sizeof(sv_runtime_binding_t));
+      }
+    }
+
+    if (local_type_count > 0 && comp->slot_types) {
+      int ncopy = local_type_count < comp->slot_type_cap
+        ? local_type_count : comp->slot_type_cap;
+      memcpy(metadata->local_types, comp->slot_types,
+        (size_t)ncopy * sizeof(sv_type_info_t));
+    }
+    func->local_types = metadata->local_types;
+    func->has_dynamic_eval = true;
+    return;
+  }
+
+  if (local_type_count == 0) return;
+  sv_type_info_t *local_types = code_arena_bump(
+    (size_t)local_type_count * sizeof(sv_type_info_t));
+  ANT_ASSERT(local_types != NULL, "failed to allocate function local types");
+  memset(local_types, 0, (size_t)local_type_count * sizeof(sv_type_info_t));
+  if (comp->slot_types) {
+    int ncopy = local_type_count < comp->slot_type_cap
+      ? local_type_count : comp->slot_type_cap;
+    memcpy(local_types, comp->slot_types,
+      (size_t)ncopy * sizeof(sv_type_info_t));
+  }
+  func->local_types = local_types;
+}
+
 static int emit_jump(sv_compiler_t *c, sv_op_t op) {
   emit_op(c, op);
   int offset = c->code_len;
@@ -2752,6 +2888,35 @@ static inline bool sv_call_kind_has_receiver(sv_call_kind_t kind) {
   return kind == SV_CALL_METHOD || kind == SV_CALL_SUPER;
 }
 
+static bool compile_with_identifier_call(
+  sv_compiler_t *c, const char *name, uint32_t len
+) {
+  if (c->with_depth <= 0 || is_ident_str(name, len, "super", 5)) return false;
+
+  uint8_t kind = WITH_FB_GLOBAL;
+  uint16_t idx = 0;
+  int local = resolve_local(c, name, len);
+  if (local != -1) {
+    kind = c->locals[local].depth == -1 ? WITH_FB_ARG : WITH_FB_LOCAL;
+    idx = kind == WITH_FB_ARG
+      ? (uint16_t)local
+      : (uint16_t)(local - c->param_locals);
+  } else {
+    int upval = resolve_upvalue(c, name, len);
+    if (upval != -1) {
+      kind = WITH_FB_UPVAL;
+      idx = (uint16_t)upval;
+    }
+  }
+
+  int atom = add_atom(c, name, len);
+  emit_op(c, OP_WITH_GET_CALL);
+  emit_u32(c, (uint32_t)atom);
+  emit(c, kind);
+  emit_u16(c, idx);
+  return true;
+}
+
 static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
   emit_op(c, OP_DUP);
   if (node->flags & 1) {
@@ -2815,6 +2980,11 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
     compile_receiver_property_get(c, callee);
     return SV_CALL_METHOD;
   }
+
+  if (
+    callee->type == N_IDENT &&
+    compile_with_identifier_call(c, callee->str, callee->len)
+  ) return SV_CALL_METHOD;
 
   compile_expr(c, callee);
   return SV_CALL_DIRECT;
@@ -3290,6 +3460,24 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   return true;
 }
 
+static bool eval_arg_is_definitely_non_string(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_NUMBER:
+    case N_BOOL:
+    case N_NULL:
+    case N_UNDEF:
+    case N_OBJECT:
+    case N_ARRAY:
+    case N_FUNC:
+    case N_CLASS:
+    case N_REGEXP:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
@@ -3335,8 +3523,28 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     node->args.items[1] = arrow;
   }
 
-  if (!has_spread && is_ident_name(callee, "eval")) {
+  if (
+    !has_spread && is_ident_name(callee, "eval") &&
+    resolve_local(c, "eval", 4) == -1 &&
+    resolve_upvalue(c, "eval", 4) == -1
+  ) {
+    if (node->args.count == 0) {
+      emit_op(c, OP_UNDEF);
+      return;
+    }
+
     if (compile_inline_literal_eval(c, node)) return;
+
+    if (eval_arg_is_definitely_non_string(node->args.items[0])) {
+      compile_expr(c, node->args.items[0]);
+      for (int i = 1; i < node->args.count; i++) {
+        compile_expr(c, node->args.items[i]);
+        emit_op(c, OP_POP);
+      }
+      return;
+    }
+
+    uint32_t eval_scope = add_dynamic_eval_scope(c);
 
     if (node->args.count > 0)
       compile_expr(c, node->args.items[0]);
@@ -3348,7 +3556,7 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     emit_op(c, OP_EVAL);
-    emit_u32(c, 0);
+    emit_u32(c, eval_scope);
     
     return;
   }
@@ -5443,15 +5651,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
 
   fn->max_locals = comp.max_local_count;
   fn->max_stack = fn->max_locals + 64;
-  fn->local_type_count = fn->max_locals;
-  if (fn->max_locals > 0) {
-    fn->local_types = code_arena_bump((size_t)fn->max_locals * sizeof(sv_type_info_t));
-    memset(fn->local_types, 0, (size_t)fn->max_locals * sizeof(sv_type_info_t));
-    if (comp.slot_types) {
-      int ncopy = fn->max_locals < comp.slot_type_cap ? fn->max_locals : comp.slot_type_cap;
-      memcpy(fn->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
-    }
-  }
+  sv_func_init_metadata_from_compiler(fn, &comp, fn->max_locals);
   fn->param_count = 0;
   fn->function_length = 0;
   fn->is_strict = true;
@@ -5672,15 +5872,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     }
     fn->max_locals = comp.max_local_count;
     fn->max_stack = fn->max_locals + 64;
-    fn->local_type_count = fn->max_locals;
-    if (fn->max_locals > 0) {
-      fn->local_types = code_arena_bump((size_t)fn->max_locals * sizeof(sv_type_info_t));
-      memset(fn->local_types, 0, (size_t)fn->max_locals * sizeof(sv_type_info_t));
-      if (comp.slot_types) {
-        int ncopy = fn->max_locals < comp.slot_type_cap ? fn->max_locals : comp.slot_type_cap;
-        memcpy(fn->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
-      }
-    }
+    sv_func_init_metadata_from_compiler(fn, &comp, fn->max_locals);
     
     fn->param_count = (uint16_t)comp.param_count;
     fn->function_length = (uint16_t)comp.param_count;
@@ -6150,15 +6342,7 @@ sv_func_t *compile_function_body(
 
   func->max_locals = max_locals;
   func->max_stack = max_locals + 64;
-  func->local_type_count = max_locals;
-  if (max_locals > 0) {
-    func->local_types = code_arena_bump((size_t)max_locals * sizeof(sv_type_info_t));
-    memset(func->local_types, 0, (size_t)max_locals * sizeof(sv_type_info_t));
-    if (comp.slot_types) {
-      int ncopy = max_locals < comp.slot_type_cap ? max_locals : comp.slot_type_cap;
-      memcpy(func->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
-    }
-  }
+  sv_func_init_metadata_from_compiler(func, &comp, max_locals);
   
   func->param_count = (uint16_t)comp.param_count;
   func->function_length = function_length_from_params(node);

@@ -255,6 +255,7 @@ OP_DEF(  ENTER_WITH,        1,   1,   0, none)      /* enter with(obj) block */
 OP_DEF(  EXIT_WITH,         1,   0,   0, none)      /* exit with(obj) block */
 
 OP_DEF(  WITH_GET_VAR,      8,   0,   1, atom)      /* -> val (check with-obj then fallback) */
+OP_DEF(  WITH_GET_CALL,     8,   0,   2, atom)      /* -> receiver, val for identifier call */
 OP_DEF(  WITH_PUT_VAR,      8,   1,   0, atom)      /* val -> (check with-obj then fallback) */
 OP_DEF(  WITH_DEL_VAR,      5,   0,   1, atom)      /* -> bool (delete from with-obj/global) */
 

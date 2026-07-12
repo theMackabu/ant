@@ -353,7 +353,7 @@ static sv_ast_t *parse_arrow_body(P) {
 
 static inline uint32_t node_src_end(P, sv_ast_t *node) {
   if (node && node->src_end > node->src_off) return node->src_end;
-  return (uint32_t)(TOFF + TLEN);
+  return (uint32_t)(node && node->type == N_BLOCK ? TOFF + TLEN : TOFF);
 }
 
 static void sv_parse_stmt_list(P, sv_ast_list_t *out, bool stop_at_rbrace, bool directive_ctx) {

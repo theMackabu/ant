@@ -15577,6 +15577,18 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   ant_offset_t prop_len;
   const char *prop_name;
   char num_buf[32];
+
+  if (vtype(l) == T_STR && vtype(r) == T_ARR) {
+    ant_offset_t direct_len;
+    ant_offset_t direct_off = vstr(js, l, &direct_len);
+    const char *direct_name = (const char *)(uintptr_t)direct_off;
+    if (is_length_key(direct_name, direct_len)) return js_true;
+
+    unsigned long idx;
+    ant_offset_t arr_len = get_array_length(js, r);
+    if (parse_array_index(direct_name, direct_len, arr_len, &idx))
+      return js_bool(arr_has(js, r, (ant_offset_t)idx));
+  }
   
   ant_value_t key = js_to_primitive(js, l, 1);
   if (is_err(key)) return key;
@@ -18282,6 +18294,11 @@ ant_value_t js_getprop_fallback(ant_t *js, ant_value_t obj, const char *name) {
 
 ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t receiver, const char *name) {
   if (!name) return js_mkundef();
+
+  if (vtype(super_obj) == T_ARR && (is_length_key(name, strlen(name)) || (name[0] >= '0' && name[0] <= '9'))) {
+    ant_value_t own_value;
+    if (js_try_get(js, super_obj, name, &own_value)) return own_value;
+  }
 
   if (vtype(super_obj) == T_FUNC) super_obj = js_func_obj(super_obj);
   if (!is_object_type(super_obj)) return js_mkundef();

@@ -11,6 +11,7 @@
 #include "modules/timer.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,10 +175,44 @@ _Static_assert(
 
 #endif
 
+typedef struct {
+  const char *name;
+  uint32_t len;
+  uint16_t index;
+  uint8_t kind;
+  bool is_const;
+} sv_runtime_binding_t;
+
+typedef struct {
+  sv_runtime_binding_t *bindings;
+  uint32_t count;
+  uint32_t capacity;
+} sv_eval_scope_t;
+
+enum {
+  SV_EVAL_BIND_PARAM = 0,
+  SV_EVAL_BIND_LOCAL = 1,
+  SV_EVAL_BIND_UPVALUE = 2,
+};
+
+typedef struct {
+  uint64_t magic;
+  sv_eval_scope_t *eval_scopes;
+  uint32_t eval_scope_count;
+  sv_type_info_t local_types[];
+} sv_func_metadata_t;
+
+#define SV_FUNC_METADATA_MAGIC UINT64_C(0x53564556414C4D44)
+
+_Static_assert(
+  _Alignof(sv_func_metadata_t) <= CODE_ARENA_ALIGNMENT,
+  "function metadata alignment exceeds the code arena guarantee"
+);
+
 struct sv_func {
   uint8_t *code;
   ant_value_t *constants;
-  
+
   struct sv_func **child_funcs;
   uint32_t *gc_const_slots;
   
@@ -186,7 +221,7 @@ struct sv_func {
   sv_obj_site_cache_t *obj_sites;
   sv_upval_desc_t *upval_descs;
   sv_type_info_t *local_types;
-  
+
   const char *name;
   const char *filename;
   sv_srcpos_t *srcpos;
@@ -230,6 +265,7 @@ struct sv_func {
   bool is_static: 1;
   bool is_tla: 1;
   bool is_derived_ctor: 1;
+  bool has_dynamic_eval: 1;
 
 #ifdef ANT_JIT
   uint32_t call_count;
@@ -245,6 +281,33 @@ struct sv_func {
   bool jit_compiling;
 #endif
 };
+
+static inline sv_func_metadata_t *sv_func_metadata(sv_func_t *func) {
+  /* has_dynamic_eval proves local_types is the FAM of sv_func_metadata_t. */
+  if (!func || !func->has_dynamic_eval) return NULL;
+  ANT_ASSERT(
+    func->local_types != NULL,
+    "dynamic-eval function must have metadata-backed local types"
+  );
+  sv_func_metadata_t *metadata = (sv_func_metadata_t *)(
+    (uint8_t *)func->local_types - offsetof(sv_func_metadata_t, local_types)
+  );
+  ANT_ASSERT(
+    metadata->magic == SV_FUNC_METADATA_MAGIC,
+    "dynamic-eval function metadata magic mismatch"
+  );
+  return metadata;
+}
+
+static inline sv_eval_scope_t *sv_func_eval_scope(sv_func_t *func, uint32_t index) {
+  sv_func_metadata_t *metadata = sv_func_metadata(func);
+  ANT_ASSERT(metadata != NULL, "eval opcode requires function metadata");
+  ANT_ASSERT(
+    index < metadata->eval_scope_count,
+    "eval opcode scope index is outside function metadata"
+  );
+  return &metadata->eval_scopes[index];
+}
 
 typedef enum {
   SV_COMPLETION_NONE = 0,
@@ -1048,7 +1111,7 @@ static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
 
   sidecar->type_feedback = func->type_feedback;
   func->type_feedback = (uint8_t *)((uintptr_t)sidecar | ant_sidecar);
-  
+
   return sidecar;
 }
 
