@@ -4647,7 +4647,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 
 ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
   const char *interned = intern_string(name, len);
-  ant_value_t ctor = lkp_interned_val(js, js->global, interned);
+  ant_value_t ctor = lkp_interned_val(js, js->realm_global, interned);
   if (vtype(ctor) != T_FUNC) return js_mknull();
   ant_value_t ctor_obj = js_as_obj(ctor);
   ant_value_t proto = lkp_interned_val(js, ctor_obj, js->intern.prototype);
@@ -16973,6 +16973,7 @@ ant_t *js_create(void *buf, size_t len) {
   }
   
   js->global = mkobj(js, 0);
+  js->realm_global = js->global;
   js->this_val = js->global;
   js->new_target = js_mkundef();
   js->length_str = ANT_STRING("length");
@@ -17565,7 +17566,7 @@ inline ant_value_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
 inline ant_value_t js_mknull(void) { return mkval(T_NULL, 0); }
 inline ant_value_t js_mknum(double value) { return tov(value); }
 inline ant_value_t js_mkobj(ant_t *js) { return mkobj(js, 0); }
-inline ant_value_t js_glob(ant_t *js) { return js->global; }
+inline ant_value_t js_glob(ant_t *js) { return js->realm_global; }
 
 ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta) {
   return mkval(T_CFUNC, (uintptr_t)meta);

@@ -157,6 +157,7 @@ struct ant_isolate_t {
   #endif
   
   ant_value_t global;
+  ant_value_t realm_global;
   ant_value_t this_val;
   ant_value_t new_target;
   ant_value_t current_func;
