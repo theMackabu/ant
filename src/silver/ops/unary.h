@@ -2,6 +2,8 @@
 #define SV_UNARY_H
 
 #include "silver/engine.h"
+#include "globals.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +53,15 @@ static inline void sv_op_delete_var(
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
   ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
+  vm->stack[vm->sp++] = result;
+}
+
+static inline void sv_op_delete_eval_var(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  ant_value_t result = sv_global_delete(js, a->str, a->len);
   vm->stack[vm->sp++] = result;
 }
 

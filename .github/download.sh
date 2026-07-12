@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO="${ANT_DOWNLOAD_REPO:-sf-tools/ant}"
+REPO="${ANT_DOWNLOAD_REPO:-theMackabu/ant}"
 WORKFLOW="${ANT_DOWNLOAD_WORKFLOW:-build.yml}"
 OUT_DIR="${ANT_DOWNLOAD_OUT_DIR:-$(dirname "${BASH_SOURCE[0]}")/artifacts}"
 

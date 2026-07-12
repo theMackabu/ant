@@ -430,6 +430,7 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
 // TODO: make it a X-macro in opcode.h
 static inline bool sv_op_has_ic_slot(sv_op_t op) {
   return op == OP_GET_GLOBAL || op == OP_GET_GLOBAL_UNDEF ||
+         op == OP_GET_EVAL_GLOBAL || op == OP_GET_EVAL_GLOBAL_UNDEF ||
          op == OP_GET_FIELD || op == OP_GET_FIELD2 ||
          op == OP_GET_FIELD_OPT || op == OP_PUT_FIELD;
 }
@@ -1262,7 +1263,9 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   }
   
   if (c->with_depth > 0) emit_with_get(c, name, len, WITH_FB_GLOBAL, 0);
-  else emit_atom_op(c, OP_GET_GLOBAL, name, len);
+  else emit_atom_op(
+    c, c->mode == SV_COMPILE_EVAL ? OP_GET_EVAL_GLOBAL : OP_GET_GLOBAL,
+    name, len);
 }
 
 static void emit_export_dups(sv_compiler_t *c, const sv_export_name_t *exports) {
@@ -1355,8 +1358,12 @@ static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
   } else {
     if (keep) {
       emit_op(c, OP_DUP);
-      emit_atom_op(c, OP_PUT_GLOBAL, name, len);
-    } else emit_atom_op(c, OP_PUT_GLOBAL, name, len);
+      emit_atom_op(
+        c, c->mode == SV_COMPILE_EVAL ? OP_PUT_EVAL_GLOBAL : OP_PUT_GLOBAL,
+        name, len);
+    } else emit_atom_op(
+      c, c->mode == SV_COMPILE_EVAL ? OP_PUT_EVAL_GLOBAL : OP_PUT_GLOBAL,
+      name, len);
   }
 }
 
@@ -2754,7 +2761,11 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
           emit(c, 0);
         }
       } else if (c->with_depth > 0) emit_with_get(c, arg->str, arg->len, WITH_FB_GLOBAL_UNDEF, 0);
-      else emit_atom_op(c, OP_GET_GLOBAL_UNDEF, arg->str, arg->len);
+      else emit_atom_op(
+        c, c->mode == SV_COMPILE_EVAL
+          ? OP_GET_EVAL_GLOBAL_UNDEF
+          : OP_GET_GLOBAL_UNDEF,
+        arg->str, arg->len);
     }
   } else compile_expr(c, arg);
   emit_op(c, OP_TYPEOF);
@@ -2808,7 +2819,11 @@ void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, arg->right);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_IDENT) {
-    emit_atom_op(c, c->with_depth > 0 ? OP_WITH_DEL_VAR : OP_DELETE_VAR, arg->str, arg->len);
+    emit_atom_op(
+      c, c->with_depth > 0
+        ? OP_WITH_DEL_VAR
+        : (c->mode == SV_COMPILE_EVAL ? OP_DELETE_EVAL_VAR : OP_DELETE_VAR),
+      arg->str, arg->len);
   } else {
     compile_expr(c, arg);
     emit_op(c, OP_POP);
@@ -3754,7 +3769,9 @@ void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
     emit_put_local(c, name_local);
   }
 
-  sv_func_t *fn = compile_function_body(c, node, SV_COMPILE_SCRIPT);
+  sv_func_t *fn = compile_function_body(
+    c, node,
+    c->mode == SV_COMPILE_EVAL ? SV_COMPILE_EVAL : SV_COMPILE_SCRIPT);
   if (!fn) {
     emit_op(c, OP_UNDEF);
     if (has_name) end_scope(c);

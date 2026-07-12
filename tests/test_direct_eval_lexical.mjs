@@ -21,6 +21,17 @@ assert(read() === 'after', 'dynamic direct eval should write a mutable captured 
 const parameterLifter = data => eval(data.eval);
 assert(parameterLifter({ eval: 'data.value', value: 7 }) === 7, 'dynamic direct eval should read a parameter binding');
 
+function createEvalClosure() {
+  let value = 1;
+  return {
+    read: () => value,
+    write: eval('(next) => value = next'),
+  };
+}
+const evalClosure = createEvalClosure();
+assert(evalClosure.write(9) === 9 && evalClosure.read() === 9,
+  'functions created by direct eval should retain captured caller bindings');
+
 const shadowedEval = new Function('eval', 'return eval("value")');
 assert(shadowedEval(value => `shadowed:${value}`) === 'shadowed:value',
   'a lexical binding named eval should remain an ordinary call');

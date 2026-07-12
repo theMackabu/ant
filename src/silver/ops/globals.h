@@ -4,17 +4,148 @@
 #include "silver/engine.h"
 #include "errors.h"
 #include "shapes.h"
+#include "eval_env.h"
+
+static inline bool sv_global_try_put_own_data(
+  ant_t *js, ant_value_t obj, const char *interned, uint32_t len,
+  ant_value_t val
+) {
+  if (!is_object_type(obj) || !interned) return false;
+  if (interned == js->intern.prototype ||
+      (len == 4 && memcmp(interned, "exec", 4) == 0) ||
+      (len == 7 && memcmp(interned, "replace", 7) == 0)) return false;
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
+  int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
+  if (slot < 0 || (uint32_t)slot >= ptr->prop_count) return false;
+
+  const ant_shape_prop_t *prop =
+    ant_shape_prop_at(ptr->shape, (uint32_t)slot);
+  if (!prop || prop->has_getter || prop->has_setter ||
+      (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) return false;
+
+  ant_object_prop_set_unchecked(ptr, (uint32_t)slot, val);
+  gc_write_barrier(js, ptr, val);
+  return true;
+}
+
+static inline bool sv_global_try_get_interned(
+  ant_t *js, const char *interned, uint32_t len, ant_value_t *out
+) {
+  ant_value_t current = js->global;
+  while (is_object_type(current)) {
+    if (current == js->realm_global) {
+      if (lkp_proto(js, current, interned, len) == 0) return false;
+      if (out) *out = js_getprop_fallback(js, current, interned);
+      return true;
+    }
+
+    if (sv_eval_env_try_get(js, current, interned, len, out)) return true;
+
+    ant_offset_t off = lkp_interned(js, current, interned);
+    if (off != 0) {
+      if (out) *out = js_propref_load(js, off);
+      return true;
+    }
+
+    current = js_get_proto(js, current);
+  }
+
+  return false;
+}
 
 static inline ant_value_t sv_global_get(ant_t *js, const char *str, uint32_t len) {
   if (!str) return js_mkundef();
-  
+
   const char *interned = intern_string(str, len);
   if (!interned) return js_mkundef();
-  
-  ant_value_t val = lkp_interned_val(js, js->global, interned);
-  if (is_undefined(val)) val = js_getprop_fallback(js, js->global, interned);
-  
+
+  ant_value_t val = js_mkundef();
+  (void)sv_global_try_get_interned(js, interned, len, &val);
   return val;
+}
+
+static inline ant_value_t sv_global_put(
+  ant_t *js, const char *str, uint32_t len,
+  ant_value_t val, bool is_strict
+) {
+  if (js->global == js->realm_global) {
+    if (is_strict && lkp_proto(js, js->realm_global, str, len) == 0)
+      return js_mkerr_typed(
+        js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
+    if (sv_global_try_put_own_data(
+          js, js->realm_global, str, len, val)) return val;
+    ant_value_t key = js_mkstr(js, str, len);
+    return js_setprop(js, js->realm_global, key, val);
+  }
+
+  ant_value_t target = js->realm_global;
+  ant_value_t current = js->global;
+  bool found = false;
+  
+  while (is_object_type(current)) {
+    if (current == js->realm_global) {
+      found = lkp_proto(js, current, str, len) != 0;
+      break;
+    }
+
+    sv_eval_env_state_t *state = sv_eval_env_state(current);
+    const sv_runtime_binding_t *binding =
+      sv_eval_env_find_binding(state, str, len);
+    if (binding) {
+      ant_value_t current_value;
+      if (!sv_eval_binding_load(
+            sv_eval_env_frame(state), binding, &current_value))
+        return js_mkerr(js, "invalid direct eval binding");
+      if (is_empty_slot(current_value))
+        return js_mkerr_typed(
+          js, JS_ERR_REFERENCE,
+          "Cannot access '%.*s' before initialization", (int)len, str);
+      if (binding->is_const)
+        return js_mkerr_typed(js, JS_ERR_TYPE, "assignment to constant variable");
+      if (!sv_eval_binding_store(js, sv_eval_env_frame(state), binding, val))
+        return js_mkerr(js, "invalid direct eval binding");
+      return val;
+    }
+
+    if (lkp_interned(js, current, str) != 0) {
+      target = current;
+      found = true;
+      break;
+    }
+    current = js_get_proto(js, current);
+  }
+
+  if (!found && is_strict)
+    return js_mkerr_typed(
+      js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
+
+  if (sv_global_try_put_own_data(js, target, str, len, val)) return val;
+
+  ant_value_t key = js_mkstr(js, str, len);
+  return js_setprop(js, target, key, val);
+}
+
+static inline ant_value_t sv_global_delete(
+  ant_t *js, const char *str, uint32_t len
+) {
+  if (js->global == js->realm_global)
+    return js_delete_prop(js, js->realm_global, str, len);
+
+  ant_value_t current = js->global;
+  while (is_object_type(current)) {
+    if (current == js->realm_global) {
+      if (lkp_proto(js, current, str, len) == 0) return js_true;
+      return js_delete_prop(js, current, str, len);
+    }
+    if (sv_eval_env_find_binding(sv_eval_env_state(current), str, len))
+      return js_false;
+    if (lkp_interned(js, current, str) != 0)
+      return js_delete_prop(js, current, str, len);
+    current = js_get_proto(js, current);
+  }
+  return js_true;
 }
 
 static inline sv_ic_entry_t *sv_global_ic_slot_for_ip(sv_func_t *func, uint8_t *ip) {
@@ -100,6 +231,24 @@ static inline ant_value_t sv_global_get_interned_ic(
   return val;
 }
 
+static inline ant_value_t sv_eval_global_get_interned_ic(
+  ant_t *js, const char *interned, uint32_t len,
+  sv_func_t *func, uint8_t *ip, bool *found
+) {
+  ant_value_t out = js_mkundef();
+  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
+
+  if (sv_global_ic_try_get_hit(js, ic, interned, &out) ||
+      sv_global_ic_try_fill(js, ic, interned, &out)) {
+    if (found) *found = true;
+    return out;
+  }
+
+  bool resolved = sv_global_try_get_interned(js, interned, len, &out);
+  if (found) *found = resolved;
+  return out;
+}
+
 static inline ant_value_t sv_op_get_global(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
@@ -137,8 +286,48 @@ static inline ant_value_t sv_op_put_global(
     return js_mkerr_typed(
       js, JS_ERR_REFERENCE, "'%.*s' is not defined",
       (int)a->len, a->str);
+  ant_value_t val = vm->stack[--vm->sp];
+  if (sv_global_try_put_own_data(
+        js, js->global, a->str, a->len, val)) return val;
   ant_value_t key = js_mkstr(js, a->str, a->len);
-  return js_setprop(js, js->global, key, vm->stack[--vm->sp]);
+  return js_setprop(js, js->global, key, val);
+}
+
+static inline ant_value_t sv_op_get_eval_global(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  bool found = false;
+  ant_value_t val = sv_eval_global_get_interned_ic(
+    js, a->str, a->len, func, ip, &found);
+  if (!found)
+    return js_mkerr_typed(
+      js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)a->len, a->str);
+  if (is_err(val)) return val;
+  vm->stack[vm->sp++] = val;
+  return val;
+}
+
+static inline ant_value_t sv_op_get_eval_global_undef(
+  sv_vm_t *vm, ant_t *js,
+  sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  ant_value_t val = sv_eval_global_get_interned_ic(
+    js, a->str, a->len, func, ip, NULL);
+  if (is_err(val)) return val;
+  vm->stack[vm->sp++] = val;
+  return val;
+}
+
+static inline ant_value_t sv_op_put_eval_global(
+  sv_vm_t *vm, ant_t *js,
+  sv_frame_t *frame, sv_func_t *func, uint8_t *ip
+) {
+  sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
+  return sv_global_put(
+    js, a->str, a->len, vm->stack[--vm->sp], sv_frame_is_strict(frame));
 }
 
 #endif

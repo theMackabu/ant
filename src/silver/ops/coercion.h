@@ -479,11 +479,14 @@ static inline ant_value_t sv_op_with_get_var(
   }}
 
   if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
-    ant_value_t val = sv_global_get(js, a->str, a->len);
-    if (is_undefined(val) && fb_kind == WITH_FB_GLOBAL)
+    const char *interned = intern_string(a->str, a->len);
+    ant_value_t val = js_mkundef();
+    bool found = interned && sv_global_try_get_interned(js, interned, a->len, &val);
+    if (!found && fb_kind == WITH_FB_GLOBAL)
       return js_mkerr_typed(
         js, JS_ERR_REFERENCE, "'%.*s' is not defined",
         (int)a->len, a->str);
+    if (is_err(val)) return val;
     vm->stack[vm->sp++] = val;
   } else vm->stack[vm->sp++] = sv_with_fallback_get(vm, js, frame, fb_kind, fb_idx);
   return js_mkundef();
@@ -511,15 +514,19 @@ static inline ant_value_t sv_op_with_get_call(
 
   ant_value_t val;
   if (fb_kind == WITH_FB_GLOBAL || fb_kind == WITH_FB_GLOBAL_UNDEF) {
-    val = sv_global_get(js, a->str, a->len);
-    if (is_undefined(val) && fb_kind == WITH_FB_GLOBAL)
+    const char *interned = intern_string(a->str, a->len);
+    val = js_mkundef();
+    bool found = interned && sv_global_try_get_interned(js, interned, a->len, &val);
+    if (!found && fb_kind == WITH_FB_GLOBAL)
       return js_mkerr_typed(
         js, JS_ERR_REFERENCE, "'%.*s' is not defined",
         (int)a->len, a->str);
   } else val = sv_with_fallback_get(vm, js, frame, fb_kind, fb_idx);
 
+  if (is_err(val)) return val;
   vm->stack[vm->sp++] = js_mkundef();
   vm->stack[vm->sp++] = val;
+  
   return js_mkundef();
 }
 
@@ -557,7 +564,7 @@ static inline ant_value_t sv_op_with_put_var(
 
 fallback:
   if (fb_kind == WITH_FB_GLOBAL) {
-    ant_value_t set_result = setprop_interned(js, js->global, a->str, a->len, val);
+    ant_value_t set_result = sv_global_put(js, a->str, a->len, val, false);
     if (is_err(set_result)) return set_result;
   } else sv_with_fallback_put(vm, js, frame, fb_kind, fb_idx, val);
   return js_mkundef();
@@ -592,7 +599,7 @@ static inline ant_value_t sv_op_with_del_var(
   }
   
 fallback:
-  ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
+  ant_value_t result = sv_global_delete(js, a->str, a->len);
   if (is_err(result)) return result;
   bool ok = js_truthy(js, result);
   vm->stack[vm->sp++] = mkval(T_BOOL, ok);

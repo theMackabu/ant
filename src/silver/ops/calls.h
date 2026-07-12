@@ -4,10 +4,11 @@
 #include <limits.h>
 #include "silver/engine.h"
 #include "gc/roots.h"
+#include "eval_env.h"
 
 typedef struct {
   ant_value_t *args;
-  int      argc;
+  int argc;
   ant_value_t *alloc;
 } sv_call_args_t;
 
@@ -197,122 +198,51 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return result;
 }
 
-static inline bool sv_eval_binding_visible(const sv_runtime_binding_t *binding) {
-  return binding && binding->name && binding->len > 0 && binding->name[0] != '\x01';
-}
-
-static inline void sv_eval_env_set(
-  ant_t *js, ant_value_t env,
-  const sv_runtime_binding_t *binding, ant_value_t value
-) {
-  if (!sv_eval_binding_visible(binding)) return;
-  (void)setprop_interned(js, env, binding->name, binding->len, value);
-}
-
-static inline bool sv_eval_env_get(
-  ant_t *js, ant_value_t env,
-  const sv_runtime_binding_t *binding, ant_value_t *out
-) {
-  if (!sv_eval_binding_visible(binding)) return false;
-  ant_offset_t off = lkp(js, env, binding->name, binding->len);
-  if (off == 0) return false;
-  *out = js_propref_load(js, off);
-  return true;
-}
-
-static inline bool sv_eval_binding_load(
-  sv_frame_t *frame, const sv_runtime_binding_t *binding, ant_value_t *out
-) {
-  switch (binding->kind) {
-    case SV_EVAL_BIND_PARAM:
-      *out = sv_frame_get_arg_value(frame, binding->index);
-      return true;
-    case SV_EVAL_BIND_LOCAL:
-      if (!frame->lp || binding->index >= (uint16_t)frame->func->max_locals)
-        return false;
-      *out = frame->lp[binding->index];
-      return true;
-    case SV_EVAL_BIND_UPVALUE: {
-      if (!frame->upvalues || binding->index >= (uint16_t)frame->upvalue_count)
-        return false;
-      sv_upvalue_t *uv = frame->upvalues[binding->index];
-      if (!uv) return false;
-      *out = *uv->location;
-      return true;
-    }
-    default:
-      return false;
-  }
-}
-
-static inline void sv_eval_binding_store(
-  ant_t *js, sv_frame_t *frame,
-  const sv_runtime_binding_t *binding, ant_value_t value
-) {
-  if (binding->is_const) return;
-  switch (binding->kind) {
-    case SV_EVAL_BIND_PARAM:
-      sv_frame_set_arg_value(js, frame, binding->index, value);
-      return;
-    case SV_EVAL_BIND_LOCAL:
-      if (frame->lp && binding->index < (uint16_t)frame->func->max_locals)
-        frame->lp[binding->index] = value;
-      return;
-    case SV_EVAL_BIND_UPVALUE: {
-      if (!frame->upvalues || binding->index >= (uint16_t)frame->upvalue_count)
-        return;
-      sv_upvalue_t *uv = frame->upvalues[binding->index];
-      if (!uv) return;
-      *uv->location = value;
-      gc_upvalue_write_barrier(js, uv, value);
-      return;
-    }
-    default:
-      return;
-  }
-}
-
 static inline ant_value_t sv_eval_in_frame(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   const char *source, ant_offset_t source_len, uint32_t scope_index
 ) {
-  (void)vm;
   sv_func_t *caller = frame ? frame->func : NULL;
+  
   if (!caller) return js_eval_bytecode_eval_with_strict(js, source, source_len, false);
   sv_eval_scope_t *scope = sv_func_eval_scope(caller, scope_index);
-  if (!scope)
-    return js_eval_bytecode_eval_with_strict(
-      js, source, source_len, sv_frame_is_strict(frame));
+  
+  if (!scope) return js_eval_bytecode_eval_with_strict(
+    js, source, source_len, 
+    sv_frame_is_strict(frame)
+  );
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t saved_global = js->global;
   ant_value_t env = js_mkobj(js);
+  
   if (is_err(env)) {
     GC_ROOT_RESTORE(js, root_mark);
     return env;
   }
+  
   GC_ROOT_PIN(js, saved_global);
   GC_ROOT_PIN(js, env);
   js_set_proto_wb(js, env, saved_global);
 
-  for (uint32_t i = 0; i < scope->count; i++) {
-    ant_value_t value;
-    if (sv_eval_binding_load(frame, &scope->bindings[i], &value))
-      sv_eval_env_set(js, env, &scope->bindings[i], value);
-  }
-
+  sv_eval_env_state_t state = {
+    .vm = vm,
+    .scope = scope,
+    .frame_index = (int)(frame - vm->frames),
+  };
+  
+  js_set_native(env, &state, SV_EVAL_ENV_NATIVE_TAG);
   js->global = env;
+  
   ant_value_t result = js_eval_bytecode_eval_with_strict(
-    js, source, source_len, sv_frame_is_strict(frame));
+    js, source, source_len, 
+    sv_frame_is_strict(frame)
+  );
+  
   js->global = saved_global;
-
-  for (uint32_t i = 0; i < scope->count; i++) {
-    ant_value_t value;
-    if (sv_eval_env_get(js, env, &scope->bindings[i], &value))
-      sv_eval_binding_store(js, frame, &scope->bindings[i], value);
-  }
-
+  js_clear_native(env, SV_EVAL_ENV_NATIVE_TAG);
   GC_ROOT_RESTORE(js, root_mark);
+  
   return result;
 }
 

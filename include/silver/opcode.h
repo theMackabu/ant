@@ -81,6 +81,10 @@ OP_DEF(  GET_GLOBAL,        7,   0,   1, atom)      /* push global[atom] (atom +
 OP_DEF(  GET_GLOBAL_UNDEF,  7,   0,   1, atom)      /* push undefined if missing (atom + ic_idx:u16) */
 OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
 
+OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
+OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
+OP_DEF(  PUT_EVAL_GLOBAL,       5,   1,   0, atom)  /* assign through direct-eval environment */
+
 OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
 OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
 OP_DEF(  PUT_FIELD,         7,   2,   0, atom)      /* obj val -> (atom + ic_idx:u16) */
@@ -152,6 +156,7 @@ OP_DEF(  TYPEOF,            1,   1,   1, none)
 OP_DEF(  VOID,              1,   1,   1, none)      /* eval + push undefined */
 OP_DEF(  DELETE,            1,   2,   1, none)      /* obj key -> bool */
 OP_DEF(  DELETE_VAR,        5,   0,   1, atom)      /* delete unqualified name */
+OP_DEF(  DELETE_EVAL_VAR,   5,   0,   1, atom)      /* delete through direct-eval environment */
 
 OP_DEF(  JMP,               5,   0,   0, label)     /* unconditional */
 OP_DEF(  JMP_FALSE,         5,   1,   0, label)     /* pop + branch if falsy */
