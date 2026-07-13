@@ -4,6 +4,7 @@
 #include "silver/glue.h"
 #include "silver/engine.h"
 #include "silver/opcode.h"
+#include "ops/globals.h"
 
 #include "internal.h"
 #include "debug.h"
@@ -383,6 +384,40 @@ static void mir_emit_bailout_check(MIR_context_t ctx, MIR_item_t fn,
     r_bailout_sp, pre_op_sp, bailout_tramp,
     r_args_buf, vs, local_regs, n_locals, r_lbuf, r_d_slot,
     -1, false, -1, false);
+}
+
+static void mir_emit_self_binding_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t value, MIR_reg_t closure,
+  MIR_reg_t tag_tmp, MIR_reg_t expected_tmp,
+  int bc_off, int pre_op_sp,
+  jit_bailout_emit_t *bail
+) {
+  MIR_label_t match = MIR_new_label(ctx);
+  uint64_t func_tag = NANBOX_PREFIX
+    | ((ant_value_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, tag_tmp),
+      MIR_new_uint_op(ctx, func_tag)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_OR,
+      MIR_new_reg_op(ctx, expected_tmp),
+      MIR_new_reg_op(ctx, tag_tmp),
+      MIR_new_reg_op(ctx, closure)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, match),
+      MIR_new_reg_op(ctx, value),
+      MIR_new_reg_op(ctx, expected_tmp)));
+  mir_emit_bailout_jump_typed(ctx, fn,
+    bail->off, bc_off,
+    bail->sp, pre_op_sp, bail->tramp,
+    bail->args_buf, bail->vstack, bail->local_regs, bail->n_locals,
+    bail->lbuf, bail->d_slot,
+    -1, false, -1, false);
+  MIR_append_insn(ctx, fn, match);
 }
 
 
@@ -2339,6 +2374,64 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
   return f;
 }
 
+static bool jit_value_is_closure(
+  ant_value_t value, const sv_closure_t *expected
+) {
+  if (vtype(value) != T_FUNC) return false;
+  return js_func_closure(value) == expected;
+}
+
+static bool jit_try_get_global_data(
+  ant_t *js, sv_func_t *func, uint8_t *ip,
+  const sv_atom_t *atom, ant_value_t *out
+) {
+  if (!js || !func || !ip || !atom || !out) return false;
+  sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
+  return sv_global_ic_try_get_hit(js->global, ic, atom->str, out) ||
+    sv_global_ic_try_fill(js->global, ic, atom->str, out);
+}
+
+static bool jit_mark_self_binding_guards(
+  ant_t *js, sv_func_t *func, sv_closure_t *hint_closure,
+  uint8_t *guard_sites
+) {
+  if (!js || !func || !hint_closure || !guard_sites) return false;
+
+  bool found = false;
+  uint8_t *ip = func->code;
+  uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    int sz = sv_op_size[op];
+    if (sz == 0) break;
+
+    if (op == OP_GET_UPVAL) {
+      uint16_t idx = sv_get_u16(ip + 1);
+      if (idx < (uint16_t)func->upvalue_count && func->upval_descs &&
+          hint_closure->upvalues && hint_closure->upvalues[idx] &&
+          jit_value_is_closure(
+            *hint_closure->upvalues[idx]->location, hint_closure)) {
+        guard_sites[ip - func->code] = 1;
+        found = true;
+      }
+    } else if (op == OP_GET_GLOBAL || op == OP_GET_GLOBAL_UNDEF) {
+      uint32_t idx = sv_get_u32(ip + 1);
+      if (idx < (uint32_t)func->atom_count) {
+        sv_atom_t *atom = &func->atoms[idx];
+        ant_value_t value;
+        if (jit_try_get_global_data(js, func, ip, atom, &value) &&
+            jit_value_is_closure(value, hint_closure)) {
+          guard_sites[ip - func->code] = 1;
+          found = true;
+        }
+      }
+    }
+
+    ip += sz;
+  }
+  return found;
+}
+
 static bool jit_is_eligible(sv_func_t *func) {
   if (func->is_async || func->is_generator) return false;
 
@@ -3057,7 +3150,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_reg_t r_err_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "err_tmp");
   mir_load_imm(ctx, jit_func, r_tmp2, 0);
 
+  uint8_t *self_binding_guards = calloc(
+    func->code_len > 0 ? (size_t)func->code_len : 1u, 1u);
   jit_features_t feat = jit_prescan_features(func);
+  if (jit_mark_self_binding_guards(
+        js, func, hint_closure, self_binding_guards)) {
+    feat.needs_bailout = true;
+    feat.needs_args_buf = true;
+  }
 
 
   MIR_reg_t r_d_slot = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "d_slot");
@@ -3458,8 +3558,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           vs.sp = lm.entries[i].sp;
         if (vs.slot_type)
           memset(vs.slot_type, SLOT_BOXED, (size_t)vs.max);
+        if (vs.known_func)
+          memset(vs.known_func, 0, (size_t)vs.max * sizeof(sv_func_t *));
         if (vs.has_const)
           memset(vs.has_const, 0, (size_t)vs.max * sizeof(bool));
+        if (known_func_locals)
+          memset(known_func_locals, 0,
+                 (size_t)n_locals * sizeof(sv_func_t *));
         if (known_type_locals && local_d_regs) {
           for (int li = 0; li < n_locals; li++)
             if (known_type_locals[li] == SV_TI_NUM
@@ -5684,28 +5789,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_GET_UPVAL: {
         uint16_t idx = sv_get_u16(ip + 1);
-
-        if (vs.known_func && hint_closure &&
-            idx < (uint16_t)func->upvalue_count &&
-            hint_closure->upvalues && hint_closure->upvalues[idx]) {
-          ant_value_t uv_val = *hint_closure->upvalues[idx]->location;
-          if (vtype(uv_val) == T_FUNC) {
-            sv_closure_t *ucl = js_func_closure(uv_val);
-            if (ucl && ucl->func == func) {
-              MIR_reg_t dst = vstack_push(&vs);
-              vs.known_func[vs.sp - 1] = func;
-              uint64_t func_tag = NANBOX_PREFIX
-                | ((ant_value_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
-              mir_load_imm(ctx, jit_func, r_tmp, func_tag);
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_insn(ctx, MIR_OR,
-                  MIR_new_reg_op(ctx, dst),
-                  MIR_new_reg_op(ctx, r_tmp),
-                  MIR_new_reg_op(ctx, r_closure)));
-              break;
-            }
-          }
-        }
+        bool guarded_self_upval = self_binding_guards &&
+          self_binding_guards[bc_off] != 0;
 
         int un = upval_n++;
         char rn_uvs[32], rn_uv[32], rn_loc[32];
@@ -5716,6 +5801,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t r_uvs = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_uvs);
         MIR_reg_t r_uv  = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_uv);
         MIR_reg_t r_loc = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_loc);
+        int pre_op_sp = vs.sp;
         MIR_reg_t dst   = vstack_push(&vs);
 
         MIR_append_insn(ctx, jit_func,
@@ -5743,6 +5829,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
             MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_loc, 0, 1)));
+        if (guarded_self_upval) {
+          vs.known_func[vs.sp - 1] = func;
+          mir_emit_self_binding_guard(
+            ctx, jit_func, dst, r_closure, r_tmp, r_tmp2,
+            bc_off, pre_op_sp, &bailout_ctx);
+        }
         break;
       }
 
@@ -5859,26 +5951,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->atom_count) { ok = false; break; }
         sv_atom_t *atom = &func->atoms[idx];
+        bool known_self_global = self_binding_guards &&
+          self_binding_guards[bc_off] != 0;
+        int pre_op_sp = vs.sp;
         MIR_reg_t dst = vstack_push(&vs);
-
-        if (vs.known_func) {
-          ant_value_t gv = jit_helper_get_global(js, atom->str, func, bc_off);
-          if (vtype(gv) == T_FUNC) {
-            sv_closure_t *gcl = js_func_closure(gv);
-            if (gcl && gcl->func == func) {
-              vs.known_func[vs.sp - 1] = func;
-              uint64_t func_tag = NANBOX_PREFIX
-                | ((ant_value_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
-              mir_load_imm(ctx, jit_func, r_tmp, func_tag);
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_insn(ctx, MIR_OR,
-                  MIR_new_reg_op(ctx, dst),
-                  MIR_new_reg_op(ctx, r_tmp),
-                  MIR_new_reg_op(ctx, r_closure)));
-              break;
-            }
-          }
-        }
 
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 7,
@@ -5889,6 +5965,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
             MIR_new_int_op(ctx, (int64_t)bc_off)));
+        if (known_self_global) {
+          vs.known_func[vs.sp - 1] = func;
+          mir_emit_self_binding_guard(
+            ctx, jit_func, dst, r_closure, r_tmp, r_tmp2,
+            bc_off, pre_op_sp, &bailout_ctx);
+        }
         break;
       }
 
@@ -9181,6 +9263,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(local_d_regs);
   free(known_func_locals);
   free(known_type_locals);
+  free(self_binding_guards);
   free(captured_params);
   free(captured_locals);
 
