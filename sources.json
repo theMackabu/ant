@@ -15,7 +15,8 @@
       "src/streams/*.c",
       "src/silver/*.c",
       "src/http/*.c",
-      "src/net/*.c"
+      "src/net/*.c",
+      "src/compile/*.c"
     ],
     "exclude": ["src/main.c"]
   },

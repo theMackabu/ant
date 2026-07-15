@@ -13,6 +13,7 @@ Store in-progress execution plans here.
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [WICG Observable Migration](wicg-observable.md)
+- [Single-File Executables (`ant compile`)](ant-compile.md)
 
 Recommended sections:
 

@@ -20,6 +20,7 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "snapshot.h"
+#include "compile.h"
 #include "inspector.h"
 #include "esm/commonjs.h"
 #include "esm/loader.h"
@@ -147,6 +148,7 @@ static const subcommand_t subcommands[] = {
   {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
   {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
   {"sandbox", NULL,      "Run a script in the Ant sandbox",              ant_sandbox_cmd},
+  {"compile", NULL,      "Compile an app into a single executable",      ant_compile_cmd},
   {"upgrade", NULL,      "Upgrade Ant to the latest version",            ant_upgrade},
   {NULL, NULL, NULL, NULL}
 };
@@ -537,6 +539,11 @@ for (;;) {
   if (!ant_sandbox_read_request_transport(sandbox)) return EXIT_FAILURE;
 }}
 
+static const char *g_fused_root = NULL;
+static void fused_cleanup(void) {
+  if (g_fused_root) ant_compile_cleanup(g_fused_root);
+}
+
 int main(int argc, char *argv[]) {
   if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
@@ -550,6 +557,28 @@ int main(int argc, char *argv[]) {
   
   setup_console_colors();
   parse_ant_debug_flags();
+
+  /* If this executable has an embedded application (produced by `ant compile`),
+     extract it and rewrite argv so the normal file-run path executes the entry
+     point. Must run before any argument parsing. */
+  if (ant_compile_has_payload()) {
+    char *fused_root = NULL;
+    char *fused_entry = ant_compile_extract_payload(&fused_root);
+    if (!fused_entry) {
+      fprintf(stderr, "ant: failed to load embedded application\n");
+      return EXIT_FAILURE;
+    }
+    g_fused_root = fused_root;
+    atexit(fused_cleanup);
+
+    char **fused_argv = try_oom(sizeof(char*) * (argc + 2));
+    fused_argv[0] = argv[0];
+    fused_argv[1] = fused_entry;
+    for (int i = 1; i < argc; i++) fused_argv[i + 1] = argv[i];
+    fused_argv[argc + 1] = NULL;
+    argc += 1;
+    argv = fused_argv;
+  }
 
   ant_inspector_options_t inspector = {
     .enabled = false,
