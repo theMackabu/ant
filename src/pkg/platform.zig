@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const io = std.Io.Threaded.global_single_threaded.io();
 
 const LibcTag = enum(u8) {
     unknown = 0,
@@ -8,6 +7,7 @@ const LibcTag = enum(u8) {
     musl = 2,
     none = 3,
 };
+
 
 var cached_linux_libc = std.atomic.Value(u8).init(@intFromEnum(LibcTag.unknown));
 
@@ -72,11 +72,12 @@ fn detectLinuxLibc() LibcTag {
 
 fn detectLibcFromCommand(argv: []const []const u8) ?LibcTag {
     const allocator = std.heap.page_allocator;
-    const result = std.process.run(allocator, io, .{
+    var threaded_io = std.Io.Threaded.init(allocator, .{});
+    defer threaded_io.deinit();
+    const result = std.process.run(allocator, threaded_io.io(), .{
         .argv = argv,
         .stdout_limit = .limited(64 * 1024),
         .stderr_limit = .limited(64 * 1024),
-        .reserve_amount = 256,
     }) catch return null;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -85,6 +86,7 @@ fn detectLibcFromCommand(argv: []const []const u8) ?LibcTag {
     if (detectLibcFromOutput(result.stderr)) |tag| return tag;
     return null;
 }
+
 
 fn detectLibcFromOutput(content: []const u8) ?LibcTag {
     if (containsAny(content, &.{ "musl libc", "musl " })) return .musl;
@@ -120,4 +122,11 @@ test "platform names use npm-compatible values" {
     try std.testing.expect(osName().len > 0);
     try std.testing.expect(cpuName().len > 0);
     try std.testing.expect(abiName().len > 0);
+}
+
+test "detectLinuxLibc detects runtime libc on linux" {
+    if (builtin.os.tag == .linux) {
+        const detected = detectLinuxLibc();
+        try std.testing.expect(detected != .unknown);
+    }
 }
