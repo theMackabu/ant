@@ -364,6 +364,16 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   return cursor.utf16_pos;
 }
 
+size_t utf16_strlen_bytes(const char *str, size_t byte_len) {
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+
+  while (cursor.p < cursor.end)
+    utf16_scan_cursor_advance(&cursor, cursor.end);
+
+  return cursor.utf16_pos;
+}
+
 int utf16_index_to_byte_offset(
   const char *str,
   size_t byte_len,

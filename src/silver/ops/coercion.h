@@ -71,6 +71,17 @@ static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
     vm->stack[vm->sp - 1] = coerce_to_str(js, v);
 }
 
+static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
+  ant_value_t v = vm->stack[vm->sp - 1];
+  if (vtype(v) == T_STR) return js_mkundef();
+  
+  ant_value_t out = js_template_to_string(js, v);
+  if (is_err(out)) return out;
+  
+  vm->stack[vm->sp - 1] = out;
+  return js_mkundef();
+}
+
 static inline void sv_op_is_undef(sv_vm_t *vm) {
   ant_value_t v = vm->stack[vm->sp - 1];
   vm->stack[vm->sp - 1] = mkval(T_BOOL, vtype(v) == T_UNDEF);

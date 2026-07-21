@@ -945,7 +945,7 @@ static void inspect_string_value(
       stream,
       " len=%" PRIu64 " ascii=%s bytes=",
       (uint64_t)flat->len,
-      inspect_ascii_state(flat->is_ascii)
+      inspect_ascii_state(str_flat_ascii_state(flat))
     );
     inspect_string_bytes(stream, flat->bytes, (size_t)flat->len);
     fprintf(stream, ">");

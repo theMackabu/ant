@@ -120,29 +120,29 @@ static inline void sv_clear_jit_resume(sv_vm_t *vm) {
 #endif
 
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
-  if (!func || !func->srcpos || func->srcpos_count <= 0) return false;
+  if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return false;
   int best = -1;
-  for (int i = 0; i < func->srcpos_count; i++) {
-    if ((int)func->srcpos[i].bc_offset <= bc_offset) best = i;
+  for (int i = 0; i < func->debug->srcpos_count; i++) {
+    if ((int)func->debug->srcpos[i].bc_offset <= bc_offset) best = i;
     else break;
   }
   if (best < 0) return false;
-  if (line) *line = func->srcpos[best].line;
-  if (col) *col = func->srcpos[best].col;
+  if (line) *line = func->debug->srcpos[best].line;
+  if (col) *col = func->debug->srcpos[best].col;
   return true;
 }
 
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end) {
-  if (!func || !func->srcpos || func->srcpos_count <= 0) return false;
+  if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return false;
   int best = -1;
-  for (int i = 0; i < func->srcpos_count; i++) {
-    if ((int)func->srcpos[i].bc_offset <= bc_offset) best = i;
+  for (int i = 0; i < func->debug->srcpos_count; i++) {
+    if ((int)func->debug->srcpos[i].bc_offset <= bc_offset) best = i;
     else break;
   }
   
   if (best < 0) return false;
-  uint32_t off = func->srcpos[best].src_off;
-  uint32_t end = func->srcpos[best].src_end;
+  uint32_t off = func->debug->srcpos[best].src_off;
+  uint32_t end = func->debug->srcpos[best].src_end;
   
   if (end < off) end = off;
   if (src_off) *src_off = off;
@@ -166,27 +166,27 @@ static ant_offset_t sv_srcpos_to_offset_local(const char *code, ant_offset_t cle
 }
 
 void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const char *filename) {
-  if (!js || !func || !func->source || func->source_len <= 0) return;
+  if (!js || !func || !func->debug->source || func->debug->source_len <= 0) return;
 
   uint32_t src_off = 0, src_end = 0;
   if (sv_lookup_srcspan(func, bc_offset, &src_off, &src_end)) {
     ant_offset_t off = (ant_offset_t)src_off;
     ant_offset_t span_len = (ant_offset_t)(src_end > src_off ? (src_end - src_off) : 0);
-    if (span_len <= 0 && off < (ant_offset_t)func->source_len) span_len = 1;
+    if (span_len <= 0 && off < (ant_offset_t)func->debug->source_len) span_len = 1;
     
     js_set_error_site(
-      js, func->source, (ant_offset_t)func->source_len,
-      filename ? filename : func->filename, off, span_len
+      js, func->debug->source, (ant_offset_t)func->debug->source_len,
+      filename ? filename : func->debug->filename, off, span_len
     );
     return;
   }
 
   uint32_t line = 0, col = 0;
   if (sv_lookup_srcpos(func, bc_offset, &line, &col)) {
-    ant_offset_t off = sv_srcpos_to_offset_local(func->source, (ant_offset_t)func->source_len, line, col);
+    ant_offset_t off = sv_srcpos_to_offset_local(func->debug->source, (ant_offset_t)func->debug->source_len, line, col);
     js_set_error_site(
-      js, func->source, (ant_offset_t)func->source_len,
-      filename ? filename : func->filename, off, 0
+      js, func->debug->source, (ant_offset_t)func->debug->source_len,
+      filename ? filename : func->debug->filename, off, 0
     );
   }
 }
@@ -201,12 +201,12 @@ void js_set_error_site_from_vm_top(ant_t *js) {
   
   int bc_off = 0;
   if (frame->ip && func->code) bc_off = (int)(frame->ip - func->code);
-  js_set_error_site_from_bc(js, func, bc_off, func->filename);
+  js_set_error_site_from_bc(js, func, bc_off, func->debug->filename);
 }
 
 // TODO: move to strings.c
 static inline bool sv_builder_has_cached_value(const ant_string_builder_t *builder) {
-  return builder && builder->cached != js_mkundef();
+  return builder && vtype(builder->cached) == T_STR;
 }
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
@@ -221,9 +221,12 @@ static inline ant_string_builder_t *sv_string_builder_heap_ptr(ant_value_t value
 
 static inline uint8_t sv_builder_chunk_ascii_state(ant_flat_string_t *flat) {
   if (!flat) return STR_ASCII_UNKNOWN;
-  if (flat->is_ascii == STR_ASCII_UNKNOWN)
-    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
-  return flat->is_ascii;
+  uint8_t state = str_flat_ascii_state(flat);
+  if (state == STR_ASCII_UNKNOWN) {
+    state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+    str_flat_init_meta(flat, state);
+  }
+  return state;
 }
 
 static inline void sv_builder_note_ascii(ant_string_builder_t *builder, uint8_t state) {
@@ -233,9 +236,16 @@ static inline void sv_builder_note_ascii(ant_string_builder_t *builder, uint8_t 
     builder->ascii_state = STR_ASCII_YES;
 }
 
-static inline void sv_builder_record_flat(ant_string_builder_t *builder, ant_flat_string_t *flat) {
+static inline void sv_builder_record_flat(
+  ant_t *js, ant_string_builder_t *builder, 
+  ant_value_t value, ant_flat_string_t *flat
+) {
   if (!builder || !flat) return;
+  ant_value_t cached = builder->cached;
   builder->len += flat->len;
+  builder->cached = vtype(cached) == T_NUM
+    ? tov(tod(cached) + (double)str_utf16_len(js, value))
+    : js_mkundef();
   sv_builder_note_ascii(builder, sv_builder_chunk_ascii_state(flat));
 }
 
@@ -285,7 +295,7 @@ static ant_value_t sv_builder_append_flat(
   ) {
     memcpy(builder->tail + builder->tail_len, flat->bytes, (size_t)flat->len);
     builder->tail_len = (uint16_t)(builder->tail_len + flat->len);
-    sv_builder_record_flat(builder, flat);
+    sv_builder_record_flat(js, builder, chunk, flat);
     return js_mkundef();
   }
 
@@ -294,7 +304,7 @@ static ant_value_t sv_builder_append_flat(
   ant_value_t push = sv_builder_push_chunk_value(js, builder, chunk);
   
   if (is_err(push)) return push;
-  sv_builder_record_flat(builder, flat);
+  sv_builder_record_flat(js, builder, chunk, flat);
   
   return js_mkundef();
 }
@@ -370,7 +380,6 @@ ant_value_t sv_string_builder_append_slot(
     if (is_err(rhs_str)) return rhs_str;
     rhs_str = sv_builder_normalize_chunk(js, rhs_str);
     if (is_err(rhs_str)) return rhs_str;
-    builder->cached = js_mkundef();
     ant_value_t append_err = sv_builder_append_flat(js, builder, rhs_str);
     if (is_err(append_err)) return append_err;
     sv_record_slot_feedback(frame, func, slot_idx, lhs);
@@ -1051,7 +1060,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_CLOSE_UPVAL:  { VM_CHECK(sv_op_close_upval(vm, frame, ip));    NEXT(3); }
 
   L_GET_GLOBAL:        { VM_CHECK(sv_op_get_global(vm, js, func, ip));         NEXT(7); }
-  L_GET_GLOBAL_UNDEF:  { sv_op_get_global_undef(vm, js, func, ip);             NEXT(7); }
+  L_GET_GLOBAL_UNDEF:  { VM_CHECK(sv_op_get_global_undef(vm, js, func, ip));   NEXT(7); }
   L_PUT_GLOBAL:        { VM_CHECK(sv_op_put_global(vm, js, frame, func, ip));  NEXT(5); }
 
   L_GET_FIELD:     { VM_CHECK(sv_op_get_field(vm, js, func, ip));   NEXT(7); }
@@ -1959,6 +1968,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_TO_OBJECT:   { VM_CHECK(sv_op_to_object(vm, js));  NEXT(1); }
   L_TO_PROPKEY:  { sv_op_to_propkey(vm, js);           NEXT(1); }
+  L_TO_STRING:   { VM_CHECK(sv_op_to_string(vm, js));  NEXT(1); }
   L_IS_UNDEF:    { sv_op_is_undef(vm);                 NEXT(1); }
   L_IS_NULL:     { sv_op_is_null(vm);                  NEXT(1); }
 

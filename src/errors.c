@@ -373,7 +373,7 @@ static int error_context_src_cols_limit(int gutter_w) {
 }
 
 static const char *error_frame_name(ant_t *js, sv_frame_t *frame, sv_func_t *func) {
-  if (func && func->name && func->name[0]) return func->name;
+  if (func && func->debug->name && func->debug->name[0]) return func->debug->name;
   if (js && frame && vtype(frame->callee) == T_FUNC) {
     ant_offset_t name_len = 0;
     const char *name = get_str_prop(js, js_func_obj(frame->callee), "name", 4, &name_len);
@@ -415,16 +415,17 @@ static bool error_fill_vm_frame_view(
   sv_func_t *func = frame->func;
 
   out->name = error_frame_name(js, frame, func);
-  out->file = (func && func->filename) ? func->filename : fallback_file;
-  out->line = (func && func->source_line > 0) ? func->source_line : 1;
+  out->file = (func && func->debug->filename) ? func->debug->filename : fallback_file;
+  out->line = (func && func->debug->source_line > 0) ? func->debug->source_line : 1;
   out->col = 1;
   out->index = i;
   out->depth = depth;
 
-  if (func && func->srcpos && frame->ip) {
+  if (func && func->debug->srcpos && frame->ip) {
     uint32_t l, c;
     if (sv_lookup_srcpos(func, (int)(frame->ip - func->code), &l, &c)) {
-      out->line = (int)l; out->col = (int)c;
+      out->line = (int)l; 
+      out->col = (int)c;
     }
   }
 

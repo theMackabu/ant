@@ -104,8 +104,8 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
     js_arr_push(js, bins, js_mknum((double)sv_tfb_ctor_prop_bin(fn, i)));
   js_set(js, out, "bins", bins);
 
-  if (fn->name) js_set(js, out, "name", js_mkstr(js, fn->name, strlen(fn->name)));
-  if (fn->filename) js_set(js, out, "filename", js_mkstr(js, fn->filename, strlen(fn->filename)));
+  if (fn->debug->name) js_set(js, out, "name", js_mkstr(js, fn->debug->name, strlen(fn->debug->name)));
+  if (fn->debug->filename) js_set(js, out, "filename", js_mkstr(js, fn->debug->filename, strlen(fn->debug->filename)));
 
   return out;
 #endif
