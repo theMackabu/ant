@@ -162,10 +162,15 @@ static void build_gc_const_tables(sv_func_t *func) {
     func->child_funcs = code_arena_bump((size_t)child_count * sizeof(sv_func_t *));
     if (func->child_funcs) {
       int out = 0;
+      
       for (int i = 0; i < func->const_count; i++) {
         if (vtype(func->constants[i]) != T_NTARG) continue;
-        func->child_funcs[out++] = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
-      } func->child_func_count = child_count;
+        sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
+        child->parent = func;
+        func->child_funcs[out++] = child;
+      } 
+      
+      func->child_func_count = child_count;
     }
   }
 
@@ -235,6 +240,13 @@ static inline bool is_template_segment(const sv_ast_t *node) {
 
 static inline bool is_invalid_cooked_string(const sv_ast_t *node) {
   return is_template_segment(node) && (node->flags & FN_INVALID_COOKED);
+}
+
+static bool template_has_valid_cooked_segments(const sv_ast_t *node) {
+  if (!node || node->type != N_TEMPLATE) return false;
+  for (int i = 0; i < node->args.count; i++)
+    if (is_invalid_cooked_string(node->args.items[i])) return false;
+  return true;
 }
 
 static inline ant_value_t ast_string_const(sv_compiler_t *c, const sv_ast_t *node) {
@@ -1552,9 +1564,46 @@ static void emit_get_local(sv_compiler_t *c, int local_idx) {
   else { emit_op(c, OP_GET_LOCAL); emit_u16(c, (uint16_t)slot); }
 }
 
+typedef enum {
+  SELF_APPEND_EXPR,
+  SELF_APPEND_TEMPLATE_REST,
+} self_append_rhs_kind_t;
+
+typedef struct {
+  int local;
+  uint16_t slot;
+  sv_ast_t *rhs;
+  self_append_rhs_kind_t rhs_kind;
+} self_append_match_t;
+
+static bool same_ident(const sv_ast_t *a, const sv_ast_t *b) {
+  return a && b &&
+    a->type == N_IDENT &&
+    b->type == N_IDENT &&
+    a->str && b->str &&
+    a->len == b->len &&
+    memcmp(a->str, b->str, a->len) == 0;
+}
+
+static sv_ast_t *match_binary_self_append(sv_ast_t *lhs, sv_ast_t *rhs) {
+  if (!rhs || rhs->type != N_BINARY || rhs->op != TOK_PLUS) return NULL;
+  if (!same_ident(rhs->left, lhs)) return NULL;
+  return rhs->right;
+}
+
+static bool match_template_self_append(
+  sv_compiler_t *c, int local, sv_ast_t *lhs, sv_ast_t *rhs
+) {
+  if (!rhs || rhs->type != N_TEMPLATE || rhs->args.count < 3) return false;
+  if (!is_template_segment(rhs->args.items[0]) || rhs->args.items[0]->len != 0)
+    return false;
+  if (!same_ident(rhs->args.items[1], lhs)) return false;
+  if (!template_has_valid_cooked_segments(rhs)) return false;
+  return get_local_inferred_type(c, local) == SV_TI_STR;
+}
+
 static bool match_self_append_local(
-  sv_compiler_t *c, sv_ast_t *node,
-  int *out_local_idx, uint16_t *out_slot, sv_ast_t **out_rhs
+  sv_compiler_t *c, sv_ast_t *node, self_append_match_t *match
 ) {
   if (!c || !node || node->type != N_ASSIGN || !node->left || node->left->type != N_IDENT)
     return false;
@@ -1566,25 +1615,35 @@ static bool match_self_append_local(
   if (c->locals[local].depth == -1 && c->strict_args_local >= 0) return false;
 
   sv_ast_t *rhs = NULL;
-  if (node->op == TOK_PLUS_ASSIGN) rhs = node->right;
-  else if (
-    node->op == TOK_ASSIGN &&
-    node->right && node->right->type == N_BINARY && node->right->op == TOK_PLUS &&
-    node->right->left && node->right->left->type == N_IDENT &&
-    node->right->left->len == node->left->len &&
-    memcmp(node->right->left->str, node->left->str, node->left->len) == 0
-  ) rhs = node->right->right;
+  self_append_rhs_kind_t rhs_kind = SELF_APPEND_EXPR;
+  switch (node->op) {
+    case TOK_PLUS_ASSIGN:
+      rhs = node->right;
+      break;
+    case TOK_ASSIGN:
+      rhs = match_binary_self_append(node->left, node->right);
+      if (!rhs && match_template_self_append(c, local, node->left, node->right)) {
+        rhs = node->right;
+        rhs_kind = SELF_APPEND_TEMPLATE_REST;
+      }
+      break;
+    default:
+      return false;
+  }
 
   if (!rhs) return false;
   uint8_t local_type = get_local_inferred_type(c, local);
-  uint8_t rhs_type = infer_expr_type(c, rhs);
-  if (local_type != SV_TI_STR && rhs_type != SV_TI_STR)
+  if (rhs_kind == SELF_APPEND_EXPR &&
+      local_type != SV_TI_STR && infer_expr_type(c, rhs) != SV_TI_STR)
     return false;
-    
-  if (out_local_idx) *out_local_idx = local;
-  if (out_slot) *out_slot = (uint16_t)local_to_frame_slot(c, local);
-  if (out_rhs) *out_rhs = rhs;
-  
+
+  if (match) {
+    match->local = local;
+    match->slot = (uint16_t)local_to_frame_slot(c, local);
+    match->rhs = rhs;
+    match->rhs_kind = rhs_kind;
+  }
+
   return true;
 }
 
@@ -1631,26 +1690,59 @@ static bool is_self_append_inplace_safe_expr(sv_compiler_t *c, sv_ast_t *node) {
     case N_TYPEOF:
     case N_VOID:
       return is_self_append_inplace_safe_expr(c, node->left);
-      
+
     default:
       return false;
   }
 }
 
-static bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
-  int local = -1;
-  uint16_t slot = 0;
-  sv_ast_t *rhs = NULL;
-  if (!match_self_append_local(c, node, &local, &slot, &rhs)) return false;
-  if (is_self_append_inplace_safe_expr(c, rhs)) {
-    compile_expr(c, rhs);
-    emit_slot_op(c, OP_STR_APPEND_LOCAL, slot);
-  } else {
-    emit_slot_op(c, OP_GET_SLOT_RAW, slot);
-    compile_expr(c, rhs);
-    emit_slot_op(c, OP_STR_ALC_SNAPSHOT, slot);
+static void compile_template_items(sv_compiler_t *c, sv_ast_t *node, int start) {
+  compile_expr(c, node->args.items[start]);
+  if (!is_template_segment(node->args.items[start]))
+    emit_op(c, OP_TO_STRING);
+  for (int i = start + 1; i < node->args.count; i++) {
+    sv_ast_t *item = node->args.items[i];
+    compile_expr(c, item);
+    if (!is_template_segment(item)) emit_op(c, OP_TO_STRING);
+    emit_op(c, OP_ADD);
   }
-  set_local_inferred_type(c, local, SV_TI_UNKNOWN);
+}
+
+static void compile_self_append_rhs(
+  sv_compiler_t *c, const self_append_match_t *match
+) {
+  if (match->rhs_kind == SELF_APPEND_TEMPLATE_REST)
+    compile_template_items(c, match->rhs, 2);
+  else
+    compile_expr(c, match->rhs);
+}
+
+static void compile_self_append(
+  sv_compiler_t *c, const self_append_match_t *match
+) {
+  if (match->rhs_kind == SELF_APPEND_TEMPLATE_REST) {
+    emit_slot_op(c, OP_GET_SLOT_RAW, match->slot);
+    emit_op(c, OP_TO_STRING);
+    compile_self_append_rhs(c, match);
+    emit_slot_op(c, OP_STR_ALC_SNAPSHOT, match->slot);
+    set_local_inferred_type(c, match->local, SV_TI_STR);
+    return;
+  }
+  if (is_self_append_inplace_safe_expr(c, match->rhs)) {
+    compile_self_append_rhs(c, match);
+    emit_slot_op(c, OP_STR_APPEND_LOCAL, match->slot);
+  } else {
+    emit_slot_op(c, OP_GET_SLOT_RAW, match->slot);
+    compile_self_append_rhs(c, match);
+    emit_slot_op(c, OP_STR_ALC_SNAPSHOT, match->slot);
+  }
+  set_local_inferred_type(c, match->local, SV_TI_UNKNOWN);
+}
+
+static bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
+  self_append_match_t match;
+  if (!match_self_append_local(c, node, &match)) return false;
+  compile_self_append(c, &match);
   return true;
 }
 
@@ -2556,14 +2648,8 @@ void compile_update(sv_compiler_t *c, sv_ast_t *node) {
 void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *target = node->left;
   uint8_t op = node->op;
-  int append_local = -1;
-  uint16_t append_slot = 0;
-  sv_ast_t *append_rhs = NULL;
-  
-  bool can_append_builder = match_self_append_local(
-    c, node, &append_local, 
-    &append_slot, &append_rhs
-  );
+  self_append_match_t append;
+  bool can_append_builder = match_self_append_local(c, node, &append);
 
   if (op == TOK_ASSIGN) {
     if (
@@ -2604,16 +2690,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     if (can_append_builder) {
-      if (is_self_append_inplace_safe_expr(c, append_rhs)) {
-        compile_expr(c, append_rhs);
-        emit_slot_op(c, OP_STR_APPEND_LOCAL, append_slot);
-      } else {
-        emit_slot_op(c, OP_GET_SLOT_RAW, append_slot);
-        compile_expr(c, append_rhs);
-        emit_slot_op(c, OP_STR_ALC_SNAPSHOT, append_slot);
-      }
+      compile_self_append(c, &append);
       emit_get_var(c, target->str, target->len);
-      set_local_inferred_type(c, append_local, SV_TI_UNKNOWN);
       return;
     }
 
@@ -2628,16 +2706,8 @@ void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     uint8_t rhs_type = infer_expr_type(c, node->right);
 
     if (can_append_builder) {
-      if (is_self_append_inplace_safe_expr(c, append_rhs)) {
-        compile_expr(c, append_rhs);
-        emit_slot_op(c, OP_STR_APPEND_LOCAL, append_slot);
-      } else {
-        emit_slot_op(c, OP_GET_SLOT_RAW, append_slot);
-        compile_expr(c, append_rhs);
-        emit_slot_op(c, OP_STR_ALC_SNAPSHOT, append_slot);
-      }
+      compile_self_append(c, &append);
       emit_get_var(c, target->str, target->len);
-      set_local_inferred_type(c, append_local, SV_TI_UNKNOWN);
       return;
     }
 
@@ -2986,26 +3056,15 @@ void compile_template(sv_compiler_t *c, sv_ast_t *node) {
     emit_constant(c, js_mkstr_permanent(c->js, "", 0));
     return;
   }
-  for (int i = 0; i < n; i++) {
-    sv_ast_t *item = node->args.items[i];
-    if (is_invalid_cooked_string(item)) {
-      static const char msg[] = "Invalid or unexpected token";
-      int atom = add_atom(c, msg, sizeof(msg) - 1);
-      emit_op(c, OP_THROW_ERROR);
-      emit_u32(c, (uint32_t)atom);
-      emit(c, (uint8_t)JS_ERR_SYNTAX);
-      return;
-    }
+  if (!template_has_valid_cooked_segments(node)) {
+    static const char msg[] = "Invalid or unexpected token";
+    int atom = add_atom(c, msg, sizeof(msg) - 1);
+    emit_op(c, OP_THROW_ERROR);
+    emit_u32(c, (uint32_t)atom);
+    emit(c, (uint8_t)JS_ERR_SYNTAX);
+    return;
   }
-  compile_expr(c, node->args.items[0]);
-  if (!is_template_segment(node->args.items[0]))
-    emit_op(c, OP_TO_PROPKEY);
-  for (int i = 1; i < n; i++) {
-    compile_expr(c, node->args.items[i]);
-    if (!is_template_segment(node->args.items[i]))
-      emit_op(c, OP_TO_PROPKEY);
-    emit_op(c, OP_ADD);
-  }
+  compile_template_items(c, node, 0);
 }
 
 static bool call_has_spread_arg(const sv_ast_t *node) {
@@ -3765,6 +3824,19 @@ void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static bool is_direct_length_member(sv_ast_t *node) {
+  return !(node->flags & 1) && !is_private_name_node(node->right) &&
+    node->right->len == 6 && memcmp(node->right->str, "length", 6) == 0;
+}
+
+static int resolve_raw_length_local(sv_compiler_t *c, sv_ast_t *base) {
+  if (c->with_depth != 0 || base->type != N_IDENT) return -1;
+
+  int local = resolve_local(c, base->str, base->len);
+  if (local < 0 || c->locals[local].is_tdz) return -1;
+  return local_to_frame_slot(c, local);
+}
+
 void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (is_ident_name(node->left, "super")) {
     if (!(node->flags & 1) && is_private_name_node(node->right)) {
@@ -3782,7 +3854,12 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
-  compile_expr(c, node->left);
+  bool direct_length = is_direct_length_member(node);
+  int raw_length_local = direct_length ? resolve_raw_length_local(c, node->left) : -1;
+
+  if (raw_length_local >= 0)
+    emit_slot_op(c, OP_GET_SLOT_RAW, (uint16_t)raw_length_local);
+  else compile_expr(c, node->left);
 
   int ok_jump = -1, end_jump = -1;
   if (sv_node_has_optional_base(node->left)) {
@@ -3798,8 +3875,7 @@ void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     emit_private_token(c, node->right);
     emit_op(c, OP_GET_PRIVATE);
   } else {
-    if (node->right->len == 6 && memcmp(node->right->str, "length", 6) == 0)
-      emit_op(c, OP_GET_LENGTH);
+    if (direct_length) emit_op(c, OP_GET_LENGTH);
     else {
       emit_srcpos(c, node->right);
       emit_atom_op(c, OP_GET_FIELD, node->right->str, node->right->len);
@@ -5783,6 +5859,8 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
 
   sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
   memset(fn, 0, sizeof(sv_func_t));
+  fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  memset(fn->debug, 0, sizeof(sv_func_debug_t));
   fn->code = code_arena_bump((size_t)comp.code_len);
   memcpy(fn->code, comp.code, (size_t)comp.code_len);
   fn->code_len = comp.code_len;
@@ -5810,9 +5888,9 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
     fn->upvalue_count = comp.upvalue_count;
   }
   if (comp.srcpos_count > 0) {
-    fn->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
-    memcpy(fn->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
-    fn->srcpos_count = comp.srcpos_count;
+    fn->debug->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    memcpy(fn->debug->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    fn->debug->srcpos_count = comp.srcpos_count;
   }
 
   fn->max_locals = comp.max_local_count;
@@ -5822,8 +5900,8 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   fn->function_length = 0;
   fn->is_strict = true;
   fn->is_static = true;
-  fn->filename = c->filename ? c->filename : c->js->filename;
-  fn->source_line = node ? (int)node->line : 0;
+  fn->debug->filename = c->filename ? c->filename : c->js->filename;
+  fn->debug->source_line = node ? (int)node->line : 0;
 
   sv_compile_ctx_cleanup(&comp);
 
@@ -6008,6 +6086,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
 
     sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
     memset(fn, 0, sizeof(sv_func_t));
+  fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  memset(fn->debug, 0, sizeof(sv_func_debug_t));
     fn->is_derived_ctor = node->left != NULL;
     fn->code = code_arena_bump((size_t)comp.code_len);
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
@@ -6043,14 +6123,14 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->param_count = (uint16_t)comp.param_count;
     fn->function_length = (uint16_t)comp.param_count;
     fn->is_strict = comp.is_strict;
-    fn->filename = c->js->filename;
-    fn->source_line = (int)node->line;
+    fn->debug->filename = c->js->filename;
+    fn->debug->source_line = (int)node->line;
     
     if (node->str && node->len > 0) {
       char *name = code_arena_bump(node->len + 1);
       memcpy(name, node->str, node->len);
       name[node->len] = '\0';
-      fn->name = name;
+      fn->debug->name = name;
     }
     
     sv_compile_ctx_cleanup(&comp);
@@ -6459,6 +6539,8 @@ sv_func_t *compile_function_body(
   int max_locals = comp.max_local_count - comp.param_locals;
   sv_func_t *func = code_arena_bump(sizeof(sv_func_t));
   memset(func, 0, sizeof(sv_func_t));
+  func->debug = code_arena_bump(sizeof(sv_func_debug_t));
+  memset(func->debug, 0, sizeof(sv_func_debug_t));
 
   func->code = code_arena_bump((size_t)comp.code_len);
   memcpy(func->code, comp.code, (size_t)comp.code_len);
@@ -6493,17 +6575,17 @@ sv_func_t *compile_function_body(
   }
 
   if (comp.srcpos_count > 0) {
-    func->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
-    memcpy(func->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
-    func->srcpos_count = comp.srcpos_count;
+    func->debug->srcpos = code_arena_bump((size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    memcpy(func->debug->srcpos, comp.srcpos, (size_t)comp.srcpos_count * sizeof(sv_srcpos_t));
+    func->debug->srcpos_count = comp.srcpos_count;
   }
 
   if (enclosing->source && enclosing->source_len > 0) {
-    func->source = enclosing->source;
-    func->source_len = (int)enclosing->source_len;
-    func->source_start = (int)node->src_off;
-    func->source_end   = (node->src_end > node->src_off)
-      ? (int)node->src_end : func->source_len;
+    func->debug->source = enclosing->source;
+    func->debug->source_len = (int)enclosing->source_len;
+    func->debug->source_start = (int)node->src_off;
+    func->debug->source_end   = (node->src_end > node->src_off)
+      ? (int)node->src_end : func->debug->source_len;
   }
 
   func->max_locals = max_locals;
@@ -6522,19 +6604,19 @@ sv_func_t *compile_function_body(
   func->is_derived_ctor = !!(node->flags & FN_DERIVED_CTOR);
   func->is_static = !!(node->flags & FN_STATIC);
   func->is_tla = comp.is_tla;
-  func->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
-  func->source_line = (int)node->line;
+  func->debug->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
+  func->debug->source_line = (int)node->line;
   
   if (node->str && node->len > 0) {
     char *name = code_arena_bump(node->len + 1);
     memcpy(name, node->str, node->len);
     name[node->len] = '\0';
-    func->name = name;
+    func->debug->name = name;
   } else if (enclosing->inferred_name && enclosing->inferred_name_len > 0) {
     char *name = code_arena_bump(enclosing->inferred_name_len + 1);
     memcpy(name, enclosing->inferred_name, enclosing->inferred_name_len);
     name[enclosing->inferred_name_len] = '\0';
-    func->name = name;
+    func->debug->name = name;
   }
 
   if (func->is_async || func->is_tla) {
@@ -6572,7 +6654,7 @@ static const uint8_t sv_op_fmts[OP__COUNT] = {
 };
 
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
-  const char *fname = func->name ? func->name : "";
+  const char *fname = func->debug->name ? func->debug->name : "";
 
   fprintf(stderr, "[generated bytecode for function: %s (%p <SharedFunctionInfo %s>)]\n",
     fname, (void *)func, fname);
@@ -6705,7 +6787,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
       fprintf(stderr, "           %d: <Number [%g]>\n", i, tod(v));
     } else if (t == T_CFUNC) {
       sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(v);
-      const char *cname = child->name ? child->name : "";
+      const char *cname = child->debug->name ? child->debug->name : "";
       fprintf(stderr, "           %d: <SharedFunctionInfo %s>\n", i, cname);
     } else fprintf(stderr, "           %d: <Unknown type=%d>\n", i, t);
   }
@@ -6718,7 +6800,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   }
 
   fprintf(stderr, "Handler Table (size = 0)\n");
-  fprintf(stderr, "Source Position Table (size = %d)\n", func->srcpos_count);
+  fprintf(stderr, "Source Position Table (size = %d)\n", func->debug->srcpos_count);
   fprintf(stderr, "\n");
 
   for (int i = 0; i < func->const_count; i++) {

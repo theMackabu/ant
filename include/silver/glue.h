@@ -269,6 +269,11 @@ ant_value_t jit_helper_str_append_local_snapshot(
   ant_value_t lhs, ant_value_t rhs
 );
 
+ant_value_t jit_helper_str_read_value(
+  sv_vm_t *vm, ant_t *js, 
+  ant_value_t value
+);
+
 ant_value_t jit_helper_str_flush_local(
   sv_vm_t *vm, ant_t *js, sv_func_t *func,
   ant_value_t *args, int argc,

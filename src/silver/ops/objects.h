@@ -309,10 +309,10 @@ static inline void sv_op_define_class(
     js_mark_constructor(js_func_obj(ctor), true);
   
   if (
-    vtype(ctor) == T_FUNC && func->source &&
-    source_end > source_start && source_end <= (uint32_t)func->source_len
+    vtype(ctor) == T_FUNC && func->debug->source &&
+    source_end > source_start && source_end <= (uint32_t)func->debug->source_len
   ) {
-    js_set_slot(ctor, SLOT_CODE, mkval(T_NTARG, (uintptr_t)(func->source + source_start)));
+    js_set_slot(ctor, SLOT_CODE, mkval(T_NTARG, (uintptr_t)(func->debug->source + source_start)));
     js_set_slot(ctor, SLOT_CODE_LEN, tov((double)(source_end - source_start)));
   }
   

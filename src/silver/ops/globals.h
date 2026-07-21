@@ -164,6 +164,20 @@ static inline bool sv_global_ic_try_get_hit(
   return true;
 }
 
+static inline bool sv_global_prop_is_accessor(
+  ant_value_t target,
+  const char *interned
+) {
+  ant_object_t *gptr = sv_global_obj_ptr(target);
+  if (!gptr || !gptr->shape) return false;
+
+  int32_t slot = ant_shape_lookup_interned(gptr->shape, interned);
+  if (slot < 0) return false;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(gptr->shape, (uint32_t)slot);
+  return prop && (prop->has_getter || prop->has_setter);
+}
+
 static inline bool sv_global_ic_try_fill(
   ant_value_t target,
   sv_ic_entry_t *ic,
@@ -206,10 +220,13 @@ static inline ant_value_t sv_global_get_interned_ic(
   
   if (sv_global_ic_try_get_hit(target, ic, interned, &out)) return out;
   if (sv_global_ic_try_fill(target, ic, interned, &out)) return out;
-  
+
+  if (sv_global_prop_is_accessor(target, interned))
+    return js_getprop_fallback(js, target, interned);
+
   ant_value_t val = lkp_interned_val(js, target, interned);
   if (is_undefined(val)) val = js_getprop_fallback(js, target, interned);
-  
+
   return val;
 }
 
@@ -255,12 +272,17 @@ static inline ant_value_t sv_op_get_global(
   return val;
 }
 
-static inline void sv_op_get_global_undef(
+static inline ant_value_t sv_op_get_global_undef(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  vm->stack[vm->sp++] = sv_global_get_interned_ic(js, a->str, func, ip);
+  ant_value_t val = sv_global_get_interned_ic(js, a->str, func, ip);
+  
+  if (is_err(val)) return val;
+  vm->stack[vm->sp++] = val;
+  
+  return val;
 }
 
 static inline ant_value_t sv_op_put_global(

@@ -52,7 +52,7 @@ typedef struct ant_large_string_alloc {
   uint32_t quarantine_epoch;
   uint8_t marked;
   ant_offset_t len;
-  uint8_t is_ascii;
+  uint64_t meta;
   char bytes[];
 } ant_large_string_alloc_t;
 
