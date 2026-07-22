@@ -715,7 +715,7 @@ static ant_value_t builtin_path_parse(ant_t *js, ant_value_t *args, int nargs) {
   base = normalized + start;
   base_len = end > start ? end - start : 0;
 
-  if (start == 0) js_set(js, result, "dir", js_mkstr(js, ".", 1));
+  if (start == 0) js_set(js, result, "dir", js_mkstr(js, "", 0));
   else {
     size_t dir_len = start;
     while (dir_len > root_len && path_is_sep(style, normalized[dir_len - 1])) dir_len--;
@@ -758,17 +758,22 @@ static ant_value_t builtin_path_format(ant_t *js, ant_value_t *args, int nargs) 
   char result[PATH_MAX] = {0};
   size_t pos = 0;
   
+  bool has_dir = false;
   if (vtype(dir_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, dir_val, &len);
-    if (str && len > 0 && pos + len < PATH_MAX) {
-      memcpy(result + pos, str, len);
-      pos += len;
-      if (result[pos - 1] != sep && pos < PATH_MAX - 1) {
-        result[pos++] = sep;
+    if (str && len > 0) {
+      has_dir = true;
+      if (pos + len < PATH_MAX) {
+        memcpy(result + pos, str, len);
+        pos += len;
+        if (result[pos - 1] != sep && pos < PATH_MAX - 1) {
+          result[pos++] = sep;
+        }
       }
     }
-  } else if (vtype(root_val) == T_STR) {
+  }
+  if (!has_dir && vtype(root_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, root_val, &len);
     if (str && len > 0 && pos + len < PATH_MAX) {
@@ -777,14 +782,19 @@ static ant_value_t builtin_path_format(ant_t *js, ant_value_t *args, int nargs) 
     }
   }
   
+  bool has_base = false;
   if (vtype(base_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, base_val, &len);
-    if (str && len > 0 && pos + len < PATH_MAX) {
-      memcpy(result + pos, str, len);
-      pos += len;
+    if (str && len > 0) {
+      has_base = true;
+      if (pos + len < PATH_MAX) {
+        memcpy(result + pos, str, len);
+        pos += len;
+      }
     }
-  } else {
+  }
+  if (!has_base) {
     if (vtype(name_val) == T_STR) {
       size_t len;
       char *str = js_getstr(js, name_val, &len);
