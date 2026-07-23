@@ -13,6 +13,7 @@
 #include "gc.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "gc/stats.h"
 #include "gc/modules.h"
 
 #include <stdlib.h>
@@ -134,6 +135,8 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   }
   obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
+  if (__builtin_expect(gc_stats_enabled, 0))
+    gc_stats_note_remember(js->remember_set_len);
 }
 
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
@@ -529,7 +532,7 @@ static void gc_scan_other_stacks(ant_t *js) {
   for (coroutine_t *c = pending_coroutines.head; c; c = c->next)
     gc_scan_mco_stack(js, c->mco, running);
 
-  if (js->cstk.main_base && js->cstk.main_lo) {
+  if (running && js->cstk.main_base && js->cstk.main_lo) {
     uintptr_t lo, hi;
     if (gc_get_stack_bounds(
       (uintptr_t)js->cstk.main_base,

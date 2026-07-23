@@ -12,6 +12,7 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "gc/stats.h"
 #include "crash.h"
 #include "repl.h"
 #include "debug.h"
@@ -154,6 +155,7 @@ static const subcommand_t subcommands[] = {
 static void ant_debug_apply(const char *key, const char *val) {
   if (strcmp(key, "gc") == 0) {
     if (strcmp(val, "disable") == 0) gc_disabled = true;
+    if (strcmp(val, "stats") == 0) gc_stats_enable(true);
   }
 
   else if (strcmp(key, "dump/parse") == 0) {

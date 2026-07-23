@@ -7,10 +7,9 @@
 
 #define GC_MIN_TICK            1024
 #define GC_NURSERY_THRESHOLD   32768
-#define GC_FORCE_INTERVAL_MS   50
 #define GC_MAJOR_EVERY_N_MINOR 8
 #define GC_MAJOR_SCALE         2048u
-#define GC_POOL_PRESSURE_FLOOR (8u * 1024u * 1024u)
+#define GC_POOL_PRESSURE_FLOOR (1u * 1024u * 1024u)
 
 #define GC_OBJ_TYPE_MASK (JS_TPFLG(T_OBJ) \
   | JS_TPFLG(T_ARR)                       \
@@ -39,6 +38,7 @@ size_t gc_pool_major_threshold(ant_t *js);
 
 void gc_func_mark_profile_enable(bool enabled);
 void gc_func_mark_profile_reset(void);
+uint64_t gc_get_string_epoch(void);
 
 extern bool gc_disabled;
 gc_func_mark_profile_t gc_func_mark_profile_get(void);
