@@ -11,15 +11,6 @@
 
 bool gc_disabled = false;
 
-// bumped only by major collections: string/rope pool memory is swept (and
-// pointers become reusable) only there, so caches keyed on string pointers
-// stay valid across minor collections
-static uint64_t gc_string_epoch = 1;
-
-uint64_t gc_get_string_epoch(void) {
-  return gc_string_epoch;
-}
-
 static size_t   gc_tick = 0;
 
 static size_t   gc_nursery_threshold = GC_NURSERY_THRESHOLD;
@@ -245,7 +236,6 @@ void gc_run(ant_t *js) {
   js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
   js->gc_remember_overflow = false;
-  gc_string_epoch++;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
   gc_stats_note_major(js,

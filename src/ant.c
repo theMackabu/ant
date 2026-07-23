@@ -12684,7 +12684,6 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
     while (idx < limit && search_pos <= str_len) {
       int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, str_len, search_pos,
         regex_subject_match_options(str_ptr, str_len), match_data, NULL);
-      regex_subject_mark_validated(str_ptr, str_len, (size_t)search_pos, rc);
       if (rc < 0) break;
 
       PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);

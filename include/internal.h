@@ -75,7 +75,14 @@
 
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,
+  STR_META_VALID_SHIFT = 58,
   STR_BUILDER_TAIL_CAP = 256,
+};
+
+enum {
+  STR_UTF_UNKNOWN = 0,
+  STR_UTF_VALID = 1,
+  STR_UTF_INVALID = 2, // WTF-8: lone-surrogate encodings present
 };
 
 enum: uint64_t {
@@ -757,7 +764,17 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
 }
 
 static inline uint8_t str_flat_ascii_state(const ant_flat_string_t *flat) {
-  return flat ? (uint8_t)(flat->meta >> STR_META_ASCII_SHIFT) : STR_ASCII_UNKNOWN;
+  return flat ? (uint8_t)((flat->meta >> STR_META_ASCII_SHIFT) & 0x3) : STR_ASCII_UNKNOWN;
+}
+
+static inline uint8_t str_flat_utf_valid_state(const ant_flat_string_t *flat) {
+  return flat ? (uint8_t)((flat->meta >> STR_META_VALID_SHIFT) & 0x3) : STR_UTF_UNKNOWN;
+}
+
+static inline void str_flat_set_utf_valid_state(ant_flat_string_t *flat, uint8_t state) {
+  if (!flat) return;
+  flat->meta = (flat->meta & ~(UINT64_C(0x3) << STR_META_VALID_SHIFT))
+             | ((uint64_t)state << STR_META_VALID_SHIFT);
 }
 
 static inline ant_offset_t str_flat_cached_utf16_len(const ant_flat_string_t *flat) {
@@ -787,6 +804,23 @@ static inline bool str_is_ascii(const char *str) {
     str_flat_init_meta(flat, state);
   }
   return state == STR_ASCII_YES;
+}
+
+bool utf8_validate_bytes(const char *str, size_t byte_len);
+
+// UTF-8 validity is a property of immutable content, memoized like the
+// ascii state. Strings holding lone surrogates (WTF-8) are INVALID and
+// must never be matched with UTF checks disabled.
+static inline bool str_is_valid_utf8(const char *str) {
+  if (str_is_ascii(str)) return true; // may lazily initialize the meta word
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  uint8_t state = str_flat_utf_valid_state(flat);
+  if (state == STR_UTF_UNKNOWN) {
+    state = utf8_validate_bytes(flat->bytes, (size_t)flat->len)
+      ? STR_UTF_VALID : STR_UTF_INVALID;
+    str_flat_set_utf_valid_state(flat, state);
+  }
+  return state == STR_UTF_VALID;
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

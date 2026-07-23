@@ -38,7 +38,6 @@ size_t gc_pool_major_threshold(ant_t *js);
 
 void gc_func_mark_profile_enable(bool enabled);
 void gc_func_mark_profile_reset(void);
-uint64_t gc_get_string_epoch(void);
 
 extern bool gc_disabled;
 gc_func_mark_profile_t gc_func_mark_profile_get(void);

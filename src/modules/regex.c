@@ -691,40 +691,12 @@ static regex_cache_entry_t *regex_cache_lookup(ant_object_t *obj) {
 
 // With PCRE2_UTF, every interpreted pcre2_match validates the subject's
 // UTF-8 before matching — quadratic across exec/split loops that rescan
-// the same subject. ASCII subjects (memoized header flag) and subjects
-// already validated by a from-offset-zero call this GC epoch skip the
-// check. Strings are immutable and pool memory is stable within an epoch;
-// the epoch guard covers pointer reuse after collection.
-typedef struct {
-  const char *ptr;
-  size_t len;
-  uint64_t epoch;
-} regex_validated_subject_t;
-
-static _Thread_local regex_validated_subject_t regex_validated_subject = {0};
-
-static inline uint32_t regex_subject_match_options_inline(const char *str_ptr, size_t str_len) {
-  if (str_is_ascii(str_ptr)) return PCRE2_NO_UTF_CHECK;
-  if (regex_validated_subject.ptr == str_ptr &&
-      regex_validated_subject.len == str_len &&
-      regex_validated_subject.epoch == gc_get_string_epoch()) {
-    return PCRE2_NO_UTF_CHECK;
-  }
-  return 0;
-}
-
+// the same subject. Validity is memoized on the string itself (ascii
+// header flag, or the WTF-8-aware utf_valid meta state), so known-valid
+// subjects pass PCRE2_NO_UTF_CHECK; lone-surrogate strings never do.
 uint32_t regex_subject_match_options(const char *str_ptr, size_t str_len) {
-  return regex_subject_match_options_inline(str_ptr, str_len);
-}
-
-void regex_subject_mark_validated(
-  const char *str_ptr, size_t str_len, size_t start_offset, int rc
-) {
-  if (start_offset != 0) return;
-  if (rc < 0 && rc != PCRE2_ERROR_NOMATCH) return;
-  regex_validated_subject.ptr = str_ptr;
-  regex_validated_subject.len = str_len;
-  regex_validated_subject.epoch = gc_get_string_epoch();
+  (void)str_len;
+  return str_is_valid_utf8(str_ptr) ? PCRE2_NO_UTF_CHECK : 0;
 }
 
 static pcre2_match_context *regex_get_match_context(void) {
@@ -1254,16 +1226,12 @@ static ant_value_t regexp_exec_shared_fast(
 
   int rc;
   uint32_t match_options = sticky_flag ? PCRE2_ANCHORED : 0;
-  match_options |= regex_subject_match_options_inline(str_ptr, str_len);
+  match_options |= regex_subject_match_options(str_ptr, str_len);
   pcre2_match_context *match_ctx = regex_get_match_context();
   if (compiled->jit_ready && !sticky_flag) {
     // pcre2_jit_match never validates UTF; it must not arm the cache
     rc = pcre2_jit_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
-  } else {
-    rc = pcre2_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
-    if (!(match_options & PCRE2_NO_UTF_CHECK))
-      regex_subject_mark_validated(str_ptr, str_len, (size_t)start_offset, rc);
-  }
+  } else rc = pcre2_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
 
   *used_fast_path = true;
   if (rc < 0) {
@@ -1344,18 +1312,14 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   uint32_t match_options = 0;
   if (sticky_flag) match_options |= PCRE2_ANCHORED;
-  match_options |= regex_subject_match_options_inline(str_ptr, str_len);
+  match_options |= regex_subject_match_options(str_ptr, str_len);
 
   int rc;
   pcre2_match_context *match_ctx = regex_get_match_context();
   if (compiled.jit_ready && !sticky_flag) {
     // pcre2_jit_match never validates UTF; it must not arm the cache
     rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
-  } else {
-    rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
-    if (!(match_options & PCRE2_NO_UTF_CHECK))
-      regex_subject_mark_validated(str_ptr, str_len, (size_t)start_offset, rc);
-  }
+  } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
 
   if (rc < 0) {
     if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
@@ -2316,16 +2280,12 @@ static ant_value_t regexp_split_fast(
   uint32_t lengthA = 0;
 
   while (q < str_len) {
-    uint32_t match_options = regex_subject_match_options_inline(str_ptr, str_len);
+    uint32_t match_options = regex_subject_match_options(str_ptr, str_len);
     int rc;
     if (compiled.jit_ready) {
       // pcre2_jit_match never validates UTF; it must not arm the cache
       rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, (PCRE2_SIZE)q, match_options, compiled.match_data, match_ctx);
-    } else {
-      rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, (PCRE2_SIZE)q, match_options, compiled.match_data, match_ctx);
-      if (!(match_options & PCRE2_NO_UTF_CHECK))
-        regex_subject_mark_validated(str_ptr, str_len, (size_t)q, rc);
-    }
+    } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, (PCRE2_SIZE)q, match_options, compiled.match_data, match_ctx);
     if (rc < 0) break;
 
     PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(compiled.match_data);
@@ -2566,8 +2526,7 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
 
   while (pos <= (PCRE2_SIZE)args.str_len) {
     int rc = pcre2_match(re, (PCRE2_SPTR)args.str_ptr, args.str_len, pos,
-      regex_subject_match_options_inline(args.str_ptr, args.str_len), match_data, regex_get_match_context());
-    regex_subject_mark_validated(args.str_ptr, args.str_len, (size_t)pos, rc);
+      regex_subject_match_options(args.str_ptr, args.str_len), match_data, regex_get_match_context());
     if (rc < 0) break;
 
     PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
