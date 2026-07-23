@@ -420,6 +420,18 @@ same-session serial, 100% success. Medians of three paired rounds:
 
 ## Decision Log
 
+- 2026-07-21: After merging master (PR #60's string meta word landed a
+  cached utf16 length upstream), UTF-8 validity moved into the string
+  itself: 2 spare meta bits beside the ascii state, strict RFC 3629
+  validator, WTF-8 lone-surrogate strings classified invalid. The regex
+  validated-subject TLS cache, its mark-after-interpreted-match rules,
+  and gc_get_string_epoch are all deleted — the epoch existed for one
+  commit as the bridge to this design. Valid subjects now skip pcre2
+  UTF re-validation for their lifetime; invalid ones never do. The
+  remaining follow-up from the three-design review is re-keying the
+  utf16 scan cache (still on the general GC epoch), which would need a
+  major-only counter reintroduced if pursued.
+
 - 2026-07-14: Pre-PR three-axis review (correctness/optimality/elegance
   subagents over the full working diff) found and fixed before commit:
   - CRITICAL: `regex_subject_mark_validated` ran after `pcre2_jit_match`,
