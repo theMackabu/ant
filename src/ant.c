@@ -12560,7 +12560,9 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
     bool had_any_split = false;
     
     while (idx < limit && search_pos <= str_len) {
-      int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, str_len, search_pos, 0, match_data, NULL);
+      int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, str_len, search_pos,
+        regex_subject_match_options(str_ptr, str_len), match_data, NULL);
+      regex_subject_mark_validated(str_ptr, str_len, (size_t)search_pos, rc);
       if (rc < 0) break;
 
       PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
@@ -12568,7 +12570,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
       PCRE2_SIZE match_end = ovector[1];
 
       if (match_start == match_end && match_start == last_match_end) {
-        search_pos = match_end + 1;
+        search_pos = match_end + (PCRE2_SIZE)utf8_char_len_at(str_ptr, str_len, (ant_offset_t)match_end);
         continue;
       }
 
@@ -12583,7 +12585,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
           }
         }
         if (is_pure_empty_capture) {
-          search_pos = match_end + 1;
+          search_pos = match_end + (PCRE2_SIZE)utf8_char_len_at(str_ptr, str_len, (ant_offset_t)match_end);
           continue;
         }
       }
@@ -12609,7 +12611,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
       last_match_end = match_end;
       segment_start = match_end;
       if (match_start == match_end) {
-        search_pos = match_end + 1;
+        search_pos = match_end + (PCRE2_SIZE)utf8_char_len_at(str_ptr, str_len, (ant_offset_t)match_end);
       } else {
         search_pos = match_end;
       }

@@ -1350,6 +1350,41 @@ static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_valu
   (void)instance;
 }
 
+static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) {
+  (void)func;
+  (void)idx;
+  (void)v;
+}
+
+static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
+  (void)func;
+  (void)ip;
+  (void)v;
+}
+
+static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
+  (void)func;
+  (void)ip;
+  (void)l;
+  (void)r;
+}
+
+static inline void sv_tfb_ensure(sv_func_t *fn) {
+  (void)fn;
+}
+
+static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
+  (void)func;
+  (void)bc_off;
+  (void)callee;
+}
+
+static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
+  (void)func;
+  (void)bc_off;
+  return NULL;
+}
+
 static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
   (void)ctor_func;
   return (uint8_t)ANT_INOBJ_MAX_SLOTS;
