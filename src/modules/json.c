@@ -96,8 +96,7 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     size_t klen = yyjson_get_len(key);
     ant_value_t v = yyjson_to_jsval(js, item, roots);
     if (is_err(v)) {
-      HASH_ITER(hh, hash, entry, tmp)
-        HASH_DEL(hash, entry); free(entry);
+      HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
       return v;
     }
     
@@ -105,23 +104,20 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     if (entry) js_saveval(js, entry->prop_off, v); else {
       ant_offset_t off = js_mkprop_fast_off(js, obj, k, klen, v);
       if (off == 0) {
-        HASH_ITER(hh, hash, entry, tmp) 
-          HASH_DEL(hash, entry); free(entry);
+        HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
         return json_parse_oom(js);
       }
       entry = malloc(sizeof(json_key_entry_t));
       if (!entry) {
-        HASH_ITER(hh, hash, entry, tmp)
-          HASH_DEL(hash, entry); free(entry);
+        HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
         return json_parse_oom(js);
       }
       entry->key = k; entry->key_len = klen; entry->prop_off = off;
       HASH_ADD_KEYPTR(hh, hash, entry->key, entry->key_len, entry);
     }}
     
-    HASH_ITER(hh, hash, entry, tmp)
-      HASH_DEL(hash, entry); free(entry);
-      
+    HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
+
     return obj;
   }
   
