@@ -54,6 +54,8 @@ if wamr_platform == 'windows'
     '-DHAVE_STRUCT_TIMESPEC',
     '-D_WINSOCK_DEPRECATED_NO_WARNINGS',
     '-DWASM_HAVE_MREMAP=0',
+    '-D_WIN32_WINNT=0x0A00',
+    '-DWINVER=0x0A00',
   ]
 elif wamr_platform == 'darwin'
   common_c_args += ['-DBH_PLATFORM_DARWIN', '-DWASM_HAVE_MREMAP=0']
