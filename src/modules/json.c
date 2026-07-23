@@ -22,6 +22,14 @@ typedef struct {
   UT_hash_handle hh;
 } json_key_entry_t;
 
+static void json_key_hash_free(json_key_entry_t **hash) {
+  json_key_entry_t *entry, *tmp;
+  HASH_ITER(hh, *hash, entry, tmp) {
+    HASH_DEL(*hash, entry);
+    free(entry);
+  }
+}
+
 static inline bool json_value_needs_temp_root(ant_value_t value) {
   if (value <= NANBOX_PREFIX) return false;
   
@@ -88,36 +96,35 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     if (!json_temp_pin(roots, obj)) return json_parse_oom(js);
     
     size_t idx, max; yyjson_val *key, *item;
-    json_key_entry_t *hash = NULL, *entry, *tmp;
-    
+    json_key_entry_t *hash = NULL, *entry;
+
     yyjson_obj_foreach(val, idx, max, key, item) {
     const char *k = yyjson_get_str(key);
-    
+
     size_t klen = yyjson_get_len(key);
     ant_value_t v = yyjson_to_jsval(js, item, roots);
     if (is_err(v)) {
-      HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
+      json_key_hash_free(&hash);
       return v;
     }
-    
+
     HASH_FIND(hh, hash, k, klen, entry);
     if (entry) js_saveval(js, entry->prop_off, v); else {
       ant_offset_t off = js_mkprop_fast_off(js, obj, k, klen, v);
       if (off == 0) {
-        HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
+        json_key_hash_free(&hash);
         return json_parse_oom(js);
       }
       entry = malloc(sizeof(json_key_entry_t));
       if (!entry) {
-        HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
+        json_key_hash_free(&hash);
         return json_parse_oom(js);
       }
       entry->key = k; entry->key_len = klen; entry->prop_off = off;
       HASH_ADD_KEYPTR(hh, hash, entry->key, entry->key_len, entry);
     }}
-    
-    HASH_ITER(hh, hash, entry, tmp) { HASH_DEL(hash, entry); free(entry); }
 
+    json_key_hash_free(&hash);
     return obj;
   }
   

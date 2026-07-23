@@ -19,6 +19,7 @@
 #include "gc/modules.h"
 #include "modules/abort.h"
 #include "modules/assert.h"
+#include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/fetch.h"
 #include "modules/headers.h"
@@ -679,6 +680,43 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
   return true;
 }
 
+static bool fetch_handle_blob_url(fetch_request_t *req) {
+  ant_t *js = req->js;
+  request_data_t *request = request_get_data(req->request_obj);
+  char *url = fetch_build_request_url(request);
+
+  if (!url || strncmp(url, "blob:", 5) != 0) {
+    free(url);
+    return false;
+  }
+
+  ant_value_t blob = url_resolve_object_url(js, url);
+  blob_data_t *data = blob_is_blob(js, blob) ? blob_get_data(blob) : NULL;
+  
+  if (!data) {
+    free(url);
+    fetch_reject(req, fetch_type_error(js, "Failed to fetch blob URL"));
+    fetch_request_release(req);
+    return true;
+  }
+
+  ant_value_t headers = headers_create_empty(js);
+  const char *content_type = data->type && *data->type ? data->type : NULL;
+  if (content_type) headers_set_literal(js, headers, "content-type", content_type);
+  
+  ant_value_t response = response_create_fetched(
+    js, 200, "OK", url, 1, headers,
+    data->data, data->size, js_mkundef(), content_type
+  );
+  free(url);
+
+  if (is_err(response)) fetch_reject(req, fetch_rejection_reason(js, response));
+  else fetch_resolve(req, response);
+
+  fetch_request_release(req);
+  return true;
+}
+
 static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int nargs) {
   fetch_request_t *req = (fetch_request_t *)js_get_native(js->current_func, FETCH_REQUEST_NATIVE_TAG);
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -816,9 +854,16 @@ static void fetch_start_http(fetch_request_t *req) {
     fetch_handle_data_url(req);
     return;
   }
+  
+  if (strncmp(url, "blob:", 5) == 0) {
+    free(url);
+    fetch_handle_blob_url(req);
+    return;
+  }
+  
   if (!fetch_is_http_url(url)) {
     free(url);
-    fetch_reject(req, fetch_type_error(req->js, "fetch only supports http:, https:, and data: URLs"));
+    fetch_reject(req, fetch_type_error(req->js, "fetch only supports http:, https:, data:, and blob: URLs"));
     fetch_request_release(req);
     return;
   }

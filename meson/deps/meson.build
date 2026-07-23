@@ -130,7 +130,7 @@ uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
-uriparser_dep = subproject('uriparser').get_variable('uriparser_dep')
+ada_dep = subproject('ada').get_variable('ada_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
 
@@ -258,7 +258,7 @@ ant_core_deps = [
 ]
 
 ant_format_deps = [
-  uriparser_dep, utf8proc_dep,
+  ada_dep, utf8proc_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep, brotli_enc_dep,
 ]
 

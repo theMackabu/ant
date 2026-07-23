@@ -358,7 +358,7 @@ static inline ant_value_t sv_prop_get_at(
   uint8_t t = vtype(obj);
 
   if (t == T_NULL || t == T_UNDEF) {
-    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);
+    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot read properties of %s (reading '%.*s')",
       t == T_NULL ? "null" : "undefined", (int)len, str);
@@ -376,10 +376,7 @@ static inline ant_value_t sv_prop_get_at(
   }
 
   if (vtype(str_prim) == T_STR && is_length_key(str, len)) {
-    ant_offset_t byte_len = 0;
-    ant_offset_t str_off = vstr(js, str_prim, &byte_len);
-    const char *str_data = (const char *)(uintptr_t)(str_off);
-    return tov((double)utf16_strlen(str_data, byte_len));
+    return tov((double)str_utf16_len(js, str_prim));
   }
 
   if (is_length_key(str, len)) {
@@ -538,7 +535,7 @@ static inline ant_value_t sv_get_elem_ic(
 ) {
   uint8_t ot = vtype(obj);
   if (ot == T_NULL || ot == T_UNDEF) {
-    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);
+    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
@@ -865,7 +862,7 @@ static inline ant_value_t sv_op_get_elem2(
 
   uint8_t ot = vtype(obj);
   if (ot == T_NULL || ot == T_UNDEF) {
-    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);
+    if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
@@ -989,22 +986,7 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
   }
   
   if (vtype(obj) == T_STR) {
-    ant_flat_string_t *flat = ant_str_flat_ptr(obj);
-    if (flat) {
-      const char *str_data = flat->bytes;
-      ant_offset_t byte_len = flat->len;
-      vm->stack[vm->sp++] = tov((double)(uint32_t)(
-        str_is_ascii(str_data) 
-          ? byte_len 
-          : utf16_strlen(str_data, byte_len)
-      ));
-      return js_mkundef();
-    }
-
-    ant_offset_t byte_len = 0;
-    ant_offset_t off = vstr(js, obj, &byte_len);
-    const char *str_data = (const char *)(uintptr_t)(off);
-    vm->stack[vm->sp++] = tov((double)(uint32_t)utf16_strlen(str_data, byte_len));
+    vm->stack[vm->sp++] = tov((double)str_utf16_len(js, obj));
     return js_mkundef();
   }
 

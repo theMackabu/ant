@@ -206,7 +206,7 @@ static request_data_t *data_dup(const request_data_t *src) {
   url_state_t *su = (url_state_t *)&src->url;
   url_state_t *du = &d->url;
 #define DUP_US(f) do { du->f = su->f ? strdup(su->f) : NULL; } while(0)
-  DUP_US(protocol); DUP_US(username); DUP_US(password);
+  DUP_US(href);     DUP_US(protocol); DUP_US(username); DUP_US(password);
   DUP_US(hostname); DUP_US(port);     DUP_US(pathname);
   DUP_US(search);   DUP_US(hash);
 #undef DUP_US

@@ -38,6 +38,7 @@ typedef enum {
   SV_OPF_JIT_BRANCH32               = 1u << 10,
   SV_OPF_JIT_BRANCH8                = 1u << 11,
   SV_OPF_JIT_OSR_BACKEDGE           = 1u << 12,
+  SV_OPF_BUILDER_TARGET             = 1u << 13,
 } sv_opcode_flags_t;
 
 typedef enum {
@@ -217,27 +218,37 @@ _Static_assert(
   "function metadata alignment exceeds the code arena guarantee"
 );
 
+typedef struct {
+  const char *name;
+  const char *filename;
+  sv_srcpos_t *srcpos;
+  const char *source;
+
+  int srcpos_count;
+  int source_line;
+  int source_len;
+  int source_start;
+  int source_end;
+} sv_func_debug_t;
+
 struct sv_func {
   uint8_t *code;
   ant_value_t *constants;
 
   struct sv_func **child_funcs;
+  struct sv_func *parent;
   uint32_t *gc_const_slots;
-  
+
   sv_atom_t *atoms;
   sv_ic_entry_t *ic_slots;
   sv_obj_site_cache_t *obj_sites;
   sv_upval_desc_t *upval_descs;
-  
+  sv_func_debug_t *debug;
+
   union {
     sv_type_info_t *local_types;
     sv_func_metadata_t *metadata;
   } type_data;
-
-  const char *name;
-  const char *filename;
-  sv_srcpos_t *srcpos;
-  const char *source;
 
 #ifdef ANT_JIT
   void *jit_code;
@@ -257,11 +268,6 @@ struct sv_func {
   int max_stack;
   int local_type_count;
   int upvalue_count;
-  int srcpos_count;
-  int source_line;
-  int source_len;
-  int source_start;
-  int source_end;
 
   uint16_t ic_count;
   uint16_t obj_site_count;
@@ -1072,8 +1078,8 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
     fprintf(stderr,
       "jit: bailout %u/%u tfb=%u func=%s op=%s bc=%d at %s:%u:%u reason=%s\n",
       (unsigned)fn->jit_bailout_count, (unsigned)SV_JIT_BAILOUT_LIMIT,
-      fn->tfb_version, fn->name ? fn->name : "<anonymous>",
-      op_name, bc_off, fn->filename ? fn->filename : "<unknown>",
+      fn->tfb_version, fn->debug->name ? fn->debug->name : "<anonymous>",
+      op_name, bc_off, fn->debug->filename ? fn->debug->filename : "<unknown>",
       line, col, reason ? reason : "unknown"
     );
   }
@@ -1083,7 +1089,7 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
     fn->call_count = 0;
     if (sv_jit_warn_unlikely) fprintf(
       stderr, "jit: disabling %s after %u bailouts at tfb=%u\n",
-      fn->name ? fn->name : "<anonymous>",
+      fn->debug->name ? fn->debug->name : "<anonymous>",
       (unsigned)fn->jit_bailout_count, fn->tfb_version
     );
     return;

@@ -20,18 +20,52 @@ testThrows('invalid URL with base throws', () => new URL('http://%', 'https://ex
 
 test('toString() returns href', url.toString(), url.href);
 test('toJSON() returns href', url.toJSON(), url.href);
+test('URL constructor length', URL.length, 1);
+test('URL.canParse length', URL.canParse.length, 1);
+test('URL.createObjectURL length', URL.createObjectURL.length, 1);
+test('URL.parse length', URL.parse.length, 1);
+test('URL.revokeObjectURL length', URL.revokeObjectURL.length, 1);
+
+const staticMembers = ['canParse', 'createObjectURL', 'parse', 'revokeObjectURL'];
+test('all URL static methods are present', staticMembers.every(name => typeof URL[name] === 'function'), true);
+test('URL prototype property is not enumerable', Object.keys(URL).includes('prototype'), false);
+test('URL accessors are enumerable', Object.keys(URL.prototype).includes('href'), true);
+testThrows('URL getter rejects incompatible receiver', () =>
+  Object.getOwnPropertyDescriptor(URL.prototype, 'href').get.call({}));
+testThrows('URL method rejects incompatible receiver', () => URL.prototype.toString.call({}));
+
+class ExtendedURL extends URL {}
+const extended = new ExtendedURL('/child', 'https://example.com/root');
+test('URL supports subclass construction', extended instanceof ExtendedURL, true);
+test('URL subclass resolves relative input', extended.href, 'https://example.com/child');
 
 test('URL.canParse valid', URL.canParse('https://example.com'), true);
 test('URL.canParse invalid', URL.canParse('not a url'), false);
 test('URL.canParse with base', URL.canParse('/path', 'https://example.com'), true);
+testThrows('URL.canParse requires input', () => URL.canParse());
+test('URL.canParse coerces input', URL.canParse({ toString: () => 'https://example.com' }), true);
 
 const parsed = URL.parse('https://example.com/test');
 test('URL.parse valid returns URL', parsed instanceof URL, true);
 test('URL.parse valid href', parsed.href, 'https://example.com/test');
 test('URL.parse invalid returns null', URL.parse('not a url'), null);
+testThrows('URL.parse requires input', () => URL.parse());
 
 const parsedBase = URL.parse('/path', 'https://example.com');
 test('URL.parse with base', parsedBase.href, 'https://example.com/path');
+
+test('strips ASCII whitespace', new URL(' \nhttps://example.com/path\t').href, 'https://example.com/path');
+test('normalizes special URL without slashes', new URL('https:example.com').href, 'https://example.com/');
+test('normalizes special URL backslashes', new URL('https://example.com\\path').href, 'https://example.com/path');
+test('normalizes IPv4 number forms', new URL('http://0x7f.1').hostname, '127.0.0.1');
+test('converts international domain names', new URL('https://bücher.example').hostname, 'xn--bcher-kva.example');
+test('percent-encodes Unicode paths', new URL('https://example.com/démonstration').pathname, '/d%C3%A9monstration');
+test('percent-encodes embedded NUL bytes', new URL('https://example.com/\0path').pathname, '/%00path');
+testThrows('rejects embedded NUL in host', () => new URL('https://exam\0ple.com/'));
+
+const opaque = new URL('mailto:test@example.com');
+test('opaque URL pathname', opaque.pathname, 'test@example.com');
+test('opaque URL origin', opaque.origin, 'null');
 
 console.log('\nURL properties (getters)\n');
 
@@ -51,6 +85,11 @@ test('search empty string when absent', urlNoSearch.search, '');
 
 const urlNoHash = new URL('https://example.com/path');
 test('hash empty string when absent', urlNoHash.hash, '');
+
+const emptyDelimiters = new URL('https://example.com/?#');
+test('empty query and fragment delimiters serialize', emptyDelimiters.href, 'https://example.com/?#');
+test('empty query delimiter has empty getter', emptyDelimiters.search, '');
+test('empty fragment delimiter has empty getter', emptyDelimiters.hash, '');
 
 const urlDefaultHost = new URL('https://example.com/');
 test('host without port', urlDefaultHost.host, 'example.com');
@@ -112,6 +151,14 @@ test('set username', us8.username, 'alice');
 const us9 = new URL('https://example.com/path');
 us9.password = 'secret';
 test('set password', us9.password, 'secret');
+
+const encodedSetters = new URL('https://example.com/');
+encodedSetters.username = 'a:b@c';
+encodedSetters.pathname = '/a b#c';
+encodedSetters.search = '?a b#c';
+encodedSetters.hash = '#a b#c';
+test('setters use component percent-encode sets', encodedSetters.href,
+  'https://a%3Ab%40c@example.com/a%20b%23c?a%20b%23c#a%20b#c');
 
 console.log('\ndefault port handling\n');
 
@@ -310,5 +357,34 @@ console.log('\ntoStringTag\n');
 
 test('URL toStringTag', Object.prototype.toString.call(new URL('https://example.com')), '[object URL]');
 test('URLSearchParams toStringTag', Object.prototype.toString.call(new URLSearchParams()), '[object URLSearchParams]');
+
+console.log('\nobject URLs\n');
+
+testThrows('createObjectURL requires input', () => URL.createObjectURL());
+testThrows('createObjectURL requires Blob', () => URL.createObjectURL({}));
+
+const objectBlob = new Blob(['hello'], { type: 'text/plain' });
+const objectURL = URL.createObjectURL(objectBlob);
+const secondObjectURL = URL.createObjectURL(objectBlob);
+test('createObjectURL returns blob URL', objectURL.startsWith('blob:'), true);
+test('createObjectURL returns unique URLs', objectURL === secondObjectURL, false);
+test('object URL parses with URL constructor', new URL(objectURL).href, objectURL);
+
+const objectResponse = await fetch(objectURL);
+test('fetch object URL status', objectResponse.status, 200);
+test('fetch object URL type', objectResponse.headers.get('content-type'), 'text/plain');
+test('fetch object URL body', await objectResponse.text(), 'hello');
+
+URL.revokeObjectURL(`${objectURL}#fragment`);
+let revokedFetchRejected = false;
+try {
+  await fetch(objectURL);
+} catch (error) {
+  revokedFetchRejected = error instanceof TypeError;
+}
+test('revoked object URL rejects fetch', revokedFetchRejected, true);
+URL.revokeObjectURL(objectURL);
+URL.revokeObjectURL('https://example.com/');
+URL.revokeObjectURL(secondObjectURL);
 
 summary();

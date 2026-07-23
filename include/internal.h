@@ -73,11 +73,23 @@
 #define PROTO_WALK_F_OBJECT_ONLY (1u << 0)
 #define PROTO_WALK_F_LOOKUP      (1u << 1)
 
-#define STR_BUILDER_TAIL_CAP 256u
-#define STR_HEAP_TAG_MASK    0x3ULL
-#define STR_HEAP_TAG_FLAT    0x0ULL
-#define STR_HEAP_TAG_ROPE    0x1ULL
-#define STR_HEAP_TAG_BUILDER 0x2ULL
+enum: uint64_t {
+  STR_META_ASCII_SHIFT = 56,
+  STR_BUILDER_TAIL_CAP = 256,
+};
+
+enum: uint64_t {
+  STR_HEAP_TAG_MASK    = 0x3,
+  STR_HEAP_TAG_FLAT    = 0x0,
+  STR_HEAP_TAG_ROPE    = 0x1,
+  STR_HEAP_TAG_BUILDER = 0x2,
+};
+
+enum: uint64_t {
+  STR_META_UTF16_MASK   = (UINT64_C(1) << STR_META_ASCII_SHIFT) - 1,
+  STR_META_ASCII_MASK   = ~STR_META_UTF16_MASK,
+  STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK,
+};
 
 #define T_EMPTY                (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | 0xDEADULL)
 #define T_SPECIAL_OBJECT_MASK  (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR))
@@ -309,9 +321,31 @@ enum {
 
 typedef struct {
   ant_offset_t len;
-  uint8_t is_ascii;
+  uint64_t meta;
   char bytes[];
 } ant_flat_string_t;
+
+_Static_assert(
+  sizeof(ant_flat_string_t) == 16,
+  "flat string header must remain 16 bytes"
+);
+
+_Static_assert(
+  offsetof(ant_flat_string_t, bytes) == sizeof(ant_flat_string_t),
+  "flat string bytes must follow packed metadata"
+);
+
+_Static_assert(
+  offsetof(ant_large_string_alloc_t, meta) - offsetof(ant_large_string_alloc_t, len) ==
+    offsetof(ant_flat_string_t, meta),
+  "large and pooled string metadata layouts must match"
+);
+
+_Static_assert(
+  offsetof(ant_large_string_alloc_t, bytes) - offsetof(ant_large_string_alloc_t, len) ==
+    offsetof(ant_flat_string_t, bytes),
+  "large and pooled string byte layouts must match"
+);
 
 typedef struct ant_builder_chunk {
   struct ant_builder_chunk *next;
@@ -409,6 +443,8 @@ bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 
 ant_value_t js_propref_load(ant_t *js, ant_offset_t handle);
+ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
+
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
@@ -479,6 +515,7 @@ ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len);
 ant_offset_t vstrlen(ant_t *js, ant_value_t value);
 ant_offset_t str_len_fast(ant_t *js, ant_value_t str);
+ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 
 ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
@@ -719,17 +756,37 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   return STR_ASCII_YES;
 }
 
+static inline uint8_t str_flat_ascii_state(const ant_flat_string_t *flat) {
+  return flat ? (uint8_t)(flat->meta >> STR_META_ASCII_SHIFT) : STR_ASCII_UNKNOWN;
+}
+
+static inline ant_offset_t str_flat_cached_utf16_len(const ant_flat_string_t *flat) {
+  return flat ? (ant_offset_t)(flat->meta & STR_META_UTF16_MASK) : STR_UTF16_LEN_UNKNOWN;
+}
+
+static inline void str_flat_init_meta(ant_flat_string_t *flat, uint8_t ascii_state) {
+  if (!flat) return;
+  flat->meta = ((uint64_t)ascii_state << STR_META_ASCII_SHIFT) | STR_UTF16_LEN_UNKNOWN;
+}
+
+static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {
+  if (!flat) return;
+  flat->meta = (flat->meta & STR_META_ASCII_MASK) | (len & STR_META_UTF16_MASK);
+}
+
 static inline void str_set_ascii_state(const char *str, uint8_t state) {
   ant_flat_string_t *flat = str_flat_from_bytes(str);
-  flat->is_ascii = state;
+  str_flat_init_meta(flat, state);
 }
 
 static inline bool str_is_ascii(const char *str) {
   ant_flat_string_t *flat = str_flat_from_bytes(str);
-  if (flat->is_ascii == STR_ASCII_UNKNOWN) {
-    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  uint8_t state = str_flat_ascii_state(flat);
+  if (state == STR_ASCII_UNKNOWN) {
+    state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+    str_flat_init_meta(flat, state);
   }
-  return flat->is_ascii == STR_ASCII_YES;
+  return state == STR_ASCII_YES;
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

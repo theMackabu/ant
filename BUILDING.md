@@ -91,6 +91,7 @@ Dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
 - aklomp-base64 0.5.2
+- Ada URL 3.4.4
 - argtable3 3.3.1
 - BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
 - crprintf `HEAD`
@@ -105,7 +106,6 @@ and are fetched automatically:
 - nghttp2 1.68.0
 - PCRE2 10.47
 - tlsuv 0.40.13
-- uriparser 1.0.0
 - utf8proc 2.10.0
 - uthash 2.3.0
 - uuidv7-h `HEAD`

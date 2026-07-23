@@ -120,6 +120,7 @@ static response_data_t *data_dup(const response_data_t *src) {
   su = (url_state_t *)&src->url;
   du = &d->url;
 #define DUP_US(f) do { du->f = su->f ? strdup(su->f) : NULL; } while (0)
+  DUP_US(href);
   DUP_US(protocol);
   DUP_US(username);
   DUP_US(password);

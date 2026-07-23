@@ -7,6 +7,10 @@ test('indexOf found', str.indexOf('world'), 6);
 test('indexOf first occurrence', str.indexOf('o'), 4);
 test('indexOf not found', str.indexOf('xyz'), -1);
 test('indexOf empty string', str.indexOf(''), 0);
+test('indexOf UTF-16 offset', 'a𝄞bé𝄞'.indexOf('𝄞'), 1);
+test('indexOf UTF-16 start', 'a𝄞bé𝄞'.indexOf('𝄞', 2), 5);
+test('indexOf non-ASCII prefix', 'éa'.indexOf('a'), 1);
+test('indexOf embedded NUL', 'a\0b\0c'.indexOf('\0b'), 1);
 
 let js = 'JavaScript';
 test('substring start end', js.substring(0, 4), 'Java');

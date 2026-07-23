@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/ada-url/ada.git
+revision = v3.4.4
+depth = 1
+patch_directory = ada
+
+[provide]
+ada = ada_dep
