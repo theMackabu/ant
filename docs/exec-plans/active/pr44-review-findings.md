@@ -1,7 +1,7 @@
 # PR #44 Review Findings — Fix Plan
 
-Status: active
-Last reviewed: 2026-07-23
+Status: complete (pending PGO re-verify of the warm-split micro)
+Last reviewed: 2026-07-24
 Owner: theMackabu
 
 ## Goal
@@ -314,6 +314,12 @@ re-litigated.
 - Every item above re-verified against HEAD 48680128 on 2026-07-23 before
   listing (segfault and latin1 reproduced on the no-JIT build; flag values,
   missing clears, and missing calls confirmed by reading HEAD).
+- 2026-07-24: all 19 items fixed, each verified on a JIT scratch build
+  (items 1-2 also on no-JIT) with Node cross-checks where applicable;
+  full spec suite 100/100 after the intern change; six regression tests
+  added to the harness. Perf-sensitive fixes (obj_site clear, watched
+  put-field gate, intern find-only, split statics) measured at parity —
+  re-verify the warm-split micro on the next fresh PGO build.
 
 ## Follow-ups (out of scope for this plan)
 
