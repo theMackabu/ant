@@ -209,7 +209,15 @@ re-litigated.
   - Verify: code inspection + existing header/response suites (OOM paths are
     hard to exercise directly).
 
-- [ ] 13. Win32 drive-relative paths treated as absolute
+- [x] 13. Win32 drive-relative paths treated as absolute
+  - RESOLUTION NOTE: path_absolutize now mirrors resolve(): fully
+    qualified (path_is_absolute_style) returns as-is, drive-relative
+    C:foo keeps its drive and joins the cwd (like resolve's
+    drive_prefix carry), posix behavior unchanged. Also implemented
+    Node's device-less-root quirk in relative() itself: '\a' -> '\b'
+    returns the resolved target (no ..-walk) while C:\-rooted paths
+    do walk. 14-case matrix (11 win32 + 3 posix) diffs clean against
+    Node; 7 cases pinned in test_path_relative_resolve.cjs.
   - `src/modules/path.c:161` (`path_absolutize`): any
     `path_root_length > 0` returns the input unchanged, but win32 `C:foo`
     (root len 2) and `\foo` (root len 1) are not fully qualified, so

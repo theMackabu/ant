@@ -156,9 +156,19 @@ static size_t path_trimmed_end(path_style_t style, const char *path, size_t len)
 
 // relative() operates on resolved paths: a non-absolute input is joined
 // onto the current working directory before normalization, matching
-// Node's `relative(resolve(from), resolve(to))` semantics
+// Node's `relative(resolve(from), resolve(to))` semantics. A win32
+// drive-relative path (`C:foo`, root length 2 but not fully qualified)
+// keeps its drive and resolves the rest against the cwd, like resolve()
 static char *path_absolutize(path_style_t style, const char *path, size_t len) {
-  if (path_root_length(style, path, len) > 0) return strndup(path, len);
+  if (path_is_absolute_style(style, path, len)) return strndup(path, len);
+
+  size_t prefix_len = 0;
+  char drive_prefix[3] = {0};
+  if (path_is_drive_relative(style, path, len)) {
+    drive_prefix[0] = path[0];
+    drive_prefix[1] = ':';
+    prefix_len = 2;
+  }
 
   char cwd[PATH_MAX];
   if (getcwd(cwd, sizeof(cwd)) == NULL) return strndup(path, len);
@@ -166,17 +176,20 @@ static char *path_absolutize(path_style_t style, const char *path, size_t len) {
   char *cwd_norm = path_normalize_separators(style, cwd, strlen(cwd));
   if (!cwd_norm) return NULL;
 
+  size_t drive_len = strlen(drive_prefix);
   size_t cwd_len = strlen(cwd_norm);
-  char *out = malloc(cwd_len + 1 + len + 1);
+  size_t rest_len = len - prefix_len;
+  char *out = malloc(drive_len + cwd_len + 1 + rest_len + 1);
   if (!out) {
     free(cwd_norm);
     return NULL;
   }
 
-  memcpy(out, cwd_norm, cwd_len);
-  out[cwd_len] = path_sep_char(style);
-  memcpy(out + cwd_len + 1, path, len);
-  out[cwd_len + 1 + len] = '\0';
+  memcpy(out, drive_prefix, drive_len);
+  memcpy(out + drive_len, cwd_norm, cwd_len);
+  out[drive_len + cwd_len] = path_sep_char(style);
+  memcpy(out + drive_len + cwd_len + 1, path + prefix_len, rest_len);
+  out[drive_len + cwd_len + 1 + rest_len] = '\0';
   free(cwd_norm);
   return out;
 }
@@ -670,6 +683,21 @@ static ant_value_t builtin_path_relative(ant_t *js, ant_value_t *args, int nargs
     }
     if (!equal) break;
     rel.common++;
+  }
+
+  // Node quirk: on a device-less win32 root ('\') with no common
+  // component, relative() returns the resolved target instead of a
+  // ..-walk (C:\-rooted paths do get the walk)
+  if (style == PATH_STYLE_WIN32 && rel.from_root_len == 1 && rel.common == 0 &&
+      rel.from_count > 0 && rel.to_count > 0) {
+    ant_value_t out = js_mkstr(js, rel.to_norm, strlen(rel.to_norm));
+    free(rel.from_norm);
+    free(rel.to_norm);
+    free(rel.from_segs);
+    free(rel.to_segs);
+    free(rel.from_lens);
+    free(rel.to_lens);
+    return out;
   }
 
   rel.result_cap = strlen(rel.to_norm) + (size_t)(rel.from_count - rel.common) * 3 + 2;
