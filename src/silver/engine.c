@@ -1066,14 +1066,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GET_FIELD:     { VM_CHECK(sv_op_get_field(vm, js, func, ip));   NEXT(7); }
   L_GET_FIELD2:    { VM_CHECK(sv_op_get_field2(vm, js, func, ip));  NEXT(7); }
   L_PUT_FIELD:     { VM_CHECK(sv_op_put_field(vm, js, func, ip));   NEXT(7); }
-  L_GET_ELEM:      { VM_CHECK(sv_op_get_elem(vm, js, func, ip));    NEXT(1); }
+  L_GET_ELEM:      { VM_CHECK(sv_op_get_elem(vm, js, func, ip));    NEXT(3); }
   L_GET_ELEM2:     { VM_CHECK(sv_op_get_elem2(vm, js, func, ip));   NEXT(1); }
   L_PUT_ELEM:      { VM_CHECK(sv_op_put_elem(vm, js));              NEXT(1); }
-  L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip);          NEXT(5); }
+  L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip);          NEXT(7); }
   L_GET_LENGTH:    { VM_CHECK(sv_op_get_length(vm, js));            NEXT(1); }
 
   L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));  NEXT(7); }
-  L_GET_ELEM_OPT:   { VM_CHECK(sv_op_get_elem_opt(vm, js, func, ip));   NEXT(1); }
+  L_GET_ELEM_OPT:   { VM_CHECK(sv_op_get_elem_opt(vm, js, func, ip));   NEXT(3); }
 
   L_GET_PRIVATE:      { VM_CHECK(sv_op_get_private(vm, js));       NEXT(1); }
   L_GET_PRIVATE_OPT:  { VM_CHECK(sv_op_get_private_opt(vm, js));   NEXT(1); }
@@ -1489,6 +1489,44 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_STRING_INDEXOF: {
+    uint16_t call_argc = sv_get_u16(ip + 1);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
+    ant_value_t call_result;
+
+    frame->ip = ip;
+    if (js_is_string_indexof_builtin(call_func))
+      call_result = js_string_indexof_call(js, call_this, call_args, call_argc);
+    else call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, false);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= call_argc + 2;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(3);
+  }
+
+  L_CALL_STRING_SUBSTRING: {
+    uint16_t call_argc = sv_get_u16(ip + 1);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
+    ant_value_t call_result;
+
+    frame->ip = ip;
+    if (js_is_string_substring_builtin(call_func))
+      call_result = js_string_substring_call(js, call_this, call_args, call_argc);
+    else call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, false);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= call_argc + 2;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(3);
+  }
+
   L_CALL_IS_PROTO: {
     ant_value_t call_arg  = vm->stack[vm->sp - 1];
     ant_value_t call_func = vm->stack[vm->sp - 2];
@@ -1652,7 +1690,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     DISPATCH();
   }
   
-  L_NEW:         { VM_CHECK(sv_op_new(vm, js, ip));                NEXT(3); }
+  L_NEW:       { VM_CHECK(sv_op_new(vm, js, func, ip));    NEXT(5); }
   L_APPLY:       { VM_CHECK(sv_op_apply(vm, js, ip));              NEXT(3); }
   L_SUPER_APPLY: { VM_CHECK(sv_op_super_apply(vm, js, frame, ip)); NEXT(3); }
   L_NEW_APPLY:   { VM_CHECK(sv_op_new_apply(vm, js, ip));          NEXT(3); }
@@ -1975,7 +2013,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_IMPORT:          { VM_CHECK(sv_op_import(vm, js));                 NEXT(1); }
   L_IMPORT_SYNC:     { VM_CHECK(sv_op_import_sync(vm, js));            NEXT(1); }
   L_IMPORT_DEFAULT:  { sv_op_import_default(vm, js);                   NEXT(1); }
-  L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip)); NEXT(5); }
+  L_IMPORT_NAMED:    { VM_CHECK(sv_op_import_named(vm, js, func, ip)); NEXT(7); }
   L_EXPORT:          { VM_CHECK(sv_op_export(vm, js, frame, func, ip)); NEXT(5); }
   L_EXPORT_ALL:      { VM_CHECK(sv_op_export_all(vm, js));             NEXT(1); }
 

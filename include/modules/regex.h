@@ -39,6 +39,12 @@ size_t js_to_pcre2_pattern(
 
 ant_value_t is_regexp_like(ant_t *js, ant_value_t value);
 ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args);
+
+// PCRE2_NO_UTF_CHECK when the subject is known-valid UTF-8 (memoized on
+// the string via the ascii/utf_valid meta states; WTF-8 lone-surrogate
+// strings never qualify). str_ptr must be an engine string pointer
+// (vstr/js_getstr result), not an arbitrary buffer.
+uint32_t regex_subject_match_options(const char *str_ptr, size_t str_len);
 ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_name);
 
 bool regexp_exec_truthy_try_fast(

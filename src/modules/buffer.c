@@ -245,16 +245,19 @@ static void register_buffer(ArrayBufferData *data) {
   }
   
   buffer_registry[buffer_registry_count++] = data;
+  data->registry_slot = buffer_registry_count;
 }
 
 static void unregister_buffer(ArrayBufferData *data) {
-  if (!data || !buffer_registry) return;
-  
-  for (size_t i = 0; i < buffer_registry_count; i++) {
-  if (buffer_registry[i] == data) { 
-    buffer_registry[i] = buffer_registry[--buffer_registry_count]; 
-    return; 
-  }}
+  if (!data || !buffer_registry || data->registry_slot == 0) return;
+
+  size_t idx = data->registry_slot - 1;
+  if (idx >= buffer_registry_count || buffer_registry[idx] != data) return;
+
+  ArrayBufferData *last = buffer_registry[--buffer_registry_count];
+  buffer_registry[idx] = last;
+  last->registry_slot = idx + 1;
+  data->registry_slot = 0;
 }
 
 static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {
@@ -3201,36 +3204,135 @@ static ant_value_t js_buffer_indexOf(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // Buffer.prototype.write(string, offset, length, encoding)
+// String-to-bytes encoders used by buf.write. Each writes at most dst_len
+// bytes of `str` encoded as its encoding into dst and returns the byte
+// count actually written; none allocate except base64 (variable-length
+// decode). ENC_ASCII/ENC_LATIN1 intentionally share the utf8 byte copy,
+// matching Buffer.from's treatment of those encodings.
+
+static size_t buffer_encode_utf8_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
+  size_t n = str_len < dst_len ? str_len : dst_len;
+  // partially encoded characters are not written (Node contract): back off
+  // to the last complete UTF-8 sequence when the copy would split one
+  if (n < str_len) {
+    while (n > 0 && ((unsigned char)str[n] & 0xc0) == 0x80) n--;
+  }
+  memcpy(dst, str, n);
+  return n;
+}
+
+static size_t buffer_encode_ucs2_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
+  size_t max_units = dst_len / 2;
+  size_t i = 0;
+  if (str_is_ascii(str)) {
+    if (max_units > str_len) max_units = str_len;
+    for (; i < max_units; i++) {
+      dst[i * 2] = (uint8_t)str[i];
+      dst[i * 2 + 1] = 0;
+    }
+    return i * 2;
+  }
+  for (; i < max_units; i++) {
+    uint32_t unit = utf16_code_unit_at(str, str_len, i);
+    if (unit > 0xffff) break; // past end of string
+    dst[i * 2] = (uint8_t)(unit & 0xff);
+    dst[i * 2 + 1] = (uint8_t)((unit >> 8) & 0xff);
+  }
+  return i * 2;
+}
+
+static int buffer_hex_nibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static size_t buffer_encode_hex_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
+  size_t n = 0;
+  for (size_t i = 0; i + 1 < str_len && n < dst_len; i += 2) {
+    int hi = buffer_hex_nibble(str[i]);
+    int lo = buffer_hex_nibble(str[i + 1]);
+    if (hi < 0 || lo < 0) break;
+    dst[n++] = (uint8_t)((hi << 4) | lo);
+  }
+  return n;
+}
+
+static size_t buffer_encode_base64_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
+  size_t decoded_len;
+  uint8_t *decoded = ant_base64_decode(str, str_len, &decoded_len);
+  if (!decoded) return 0;
+  size_t n = decoded_len < dst_len ? decoded_len : dst_len;
+  memcpy(dst, decoded, n);
+  free(decoded);
+  return n;
+}
+
+static size_t buffer_encode_into(
+  BufferEncoding encoding, const char *str, size_t str_len,
+  uint8_t *dst, size_t dst_len
+) {
+  switch (encoding) {
+    case ENC_UCS2: return buffer_encode_ucs2_into(str, str_len, dst, dst_len);
+    case ENC_HEX: return buffer_encode_hex_into(str, str_len, dst, dst_len);
+    case ENC_BASE64: return buffer_encode_base64_into(str, str_len, dst, dst_len);
+    default: return buffer_encode_utf8_into(str, str_len, dst, dst_len);
+  }
+}
+
+// byte length `str` would occupy under the encoding, without encoding it
+static size_t buffer_encoded_byte_length(BufferEncoding encoding, const char *str, size_t str_len) {
+  switch (encoding) {
+    case ENC_UCS2: return utf16_strlen(str, str_len) * 2;
+    case ENC_HEX: return str_len / 2;
+    case ENC_BASE64: {
+      size_t effective = str_len;
+      while (effective > 0 && (str[effective - 1] == '=' || str[effective - 1] == ' ')) effective--;
+      return effective * 3 / 4;
+    }
+    default: return str_len;
+  }
+}
+
+// buf.write(string[, offset[, length]][, encoding]) — the encoding may
+// appear in place of offset, length, or as the final argument
 static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "write requires a string");
-  
+
   ant_value_t this_val = js_getthis(js);
   TypedArrayData *ta_data = buffer_get_typedarray_data(this_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
-  
+
   size_t str_len;
   char *str = js_getstr(js, args[0], &str_len);
+  if (!str) return js_mkerr(js, "argument must be a string");
+  
   size_t offset = 0;
   size_t length = ta_data->byte_length;
-  
-  if (nargs > 1 && vtype(args[1]) == T_NUM) {
-    offset = (size_t)js_getnum(args[1]);
+  BufferEncoding encoding = ENC_UTF8;
+
+  for (int i = 1; i < nargs && i <= 3; i++) {
+    if (vtype(args[i]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[i], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+      break;
+    }
+    if (vtype(args[i]) == T_NUM) {
+      if (i == 1) offset = (size_t)js_getnum(args[i]);
+      else if (i == 2) length = (size_t)js_getnum(args[i]);
+    }
   }
-  
-  if (nargs > 2 && vtype(args[2]) == T_NUM) {
-    length = (size_t)js_getnum(args[2]);
-  }
-  
-  if (offset >= ta_data->byte_length) {
-    return js_mknum(0);
-  }
-  
+
+  if (offset >= ta_data->byte_length) return js_mknum(0);
+
   size_t available = ta_data->byte_length - offset;
-  size_t to_write = (str_len < length) ? str_len : length;
-  to_write = (to_write < available) ? to_write : available;
-  
-  memcpy(ta_data->buffer->data + ta_data->byte_offset + offset, str, to_write);
-  return js_mknum((double)to_write);
+  if (length < available) available = length;
+  uint8_t *dst = ta_data->buffer->data + ta_data->byte_offset + offset;
+
+  return js_mknum((double)buffer_encode_into(encoding, str, str_len, dst, available));
 }
 
 static ant_value_t js_buffer_copy(ant_t *js, ant_value_t *args, int nargs) {
@@ -3497,10 +3599,19 @@ static ant_value_t js_buffer_byteLength(ant_t *js, ant_value_t *args, int nargs)
   
   if (vtype(arg) == T_STR) {
     size_t len;
-    js_getstr(js, arg, &len);
-    return js_mknum((double)len);
+    char *str = js_getstr(js, arg, &len);
+
+    BufferEncoding encoding = ENC_UTF8;
+    if (nargs > 1 && vtype(args[1]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[1], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+    }
+
+    return js_mknum((double)buffer_encoded_byte_length(encoding, str, len));
   }
-  
+
   return js_mknum(0);
 }
 

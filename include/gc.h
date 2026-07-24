@@ -7,10 +7,9 @@
 
 #define GC_MIN_TICK            1024
 #define GC_NURSERY_THRESHOLD   32768
-#define GC_FORCE_INTERVAL_MS   50
 #define GC_MAJOR_EVERY_N_MINOR 8
 #define GC_MAJOR_SCALE         2048u
-#define GC_POOL_PRESSURE_FLOOR (8u * 1024u * 1024u)
+#define GC_POOL_PRESSURE_FLOOR (1u * 1024u * 1024u)
 
 #define GC_OBJ_TYPE_MASK (JS_TPFLG(T_OBJ) \
   | JS_TPFLG(T_ARR)                       \

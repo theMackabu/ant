@@ -1,7 +1,7 @@
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 //#endregion
-//#region ../../../.ant/pkg/cache/1cd7bd5ac9536d79852bca3c726c2001e245481bedd5b3dd1c254ab5a695f96940377ea6a53e21711a706dfddf639e9aaf6a085f3b01a4e0222111c0758d0e95/cjs/react.development.js
+//#region <ant-cache>/cjs/react.development.js
 /**
 * @license React
 * react.development.js
@@ -760,12 +760,12 @@ var require_react_development = /* @__PURE__ */ __commonJSMin(((exports, module)
 	})();
 }));
 //#endregion
-//#region ../../../.ant/pkg/cache/1cd7bd5ac9536d79852bca3c726c2001e245481bedd5b3dd1c254ab5a695f96940377ea6a53e21711a706dfddf639e9aaf6a085f3b01a4e0222111c0758d0e95/index.js
+//#region <ant-cache>/index.js
 var require__1cd7bd5ac9536d79852bca3c726c2001e245481bedd5b3dd1c254ab5a695f96940377ea6a53e21711a706dfddf639e9aaf6a085f3b01a4e0222111c0758d0e95 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_development();
 }));
 //#endregion
-//#region ../../../.ant/pkg/cache/1cd7bd5ac9536d79852bca3c726c2001e245481bedd5b3dd1c254ab5a695f96940377ea6a53e21711a706dfddf639e9aaf6a085f3b01a4e0222111c0758d0e95/cjs/react-jsx-runtime.development.js
+//#region <ant-cache>/cjs/react-jsx-runtime.development.js
 /**
 * @license React
 * react-jsx-runtime.development.js
@@ -975,4 +975,3 @@ const TestElement = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { childr
 ] });
 //#endregion
 export { TestElement };
-

@@ -689,6 +689,16 @@ static regex_cache_entry_t *regex_cache_lookup(ant_object_t *obj) {
   return NULL;
 }
 
+// With PCRE2_UTF, every interpreted pcre2_match validates the subject's
+// UTF-8 before matching — quadratic across exec/split loops that rescan
+// the same subject. Validity is memoized on the string itself (ascii
+// header flag, or the WTF-8-aware utf_valid meta state), so known-valid
+// subjects pass PCRE2_NO_UTF_CHECK; lone-surrogate strings never do.
+uint32_t regex_subject_match_options(const char *str_ptr, size_t str_len) {
+  (void)str_len;
+  return str_is_valid_utf8(str_ptr) ? PCRE2_NO_UTF_CHECK : 0;
+}
+
 static pcre2_match_context *regex_get_match_context(void) {
   if (regex_match_ctx) return regex_match_ctx;
 
@@ -1031,14 +1041,52 @@ static ant_value_t builtin_regexp_groups_getter(ant_t *js, ant_value_t *args, in
   return groups;
 }
 
-static ant_value_t regexp_build_indices_pair(ant_t *js, PCRE2_SIZE start, PCRE2_SIZE end) {
+// pcre2 reports byte offsets into the UTF-8 subject; everything JS-visible
+// (match.index, lastIndex, d-flag indices, replacer offsets) is UTF-16 code
+// units. Convert at the boundary; ASCII subjects convert for free.
+static inline double regexp_byte_to_units(const char *str, PCRE2_SIZE byte_off) {
+  if (str_is_ascii(str)) return (double)byte_off;
+  return (double)byte_offset_to_utf16(str, (size_t)byte_off);
+}
+
+// utf16 unit index -> byte offset; negative when out of range
+static inline int regexp_units_to_byte(const char *str, ant_offset_t byte_len, double units) {
+  if (isnan(units)) units = 0; // ToLength(NaN) is 0
+  if (units < 0) return -1;
+  if (units > (double)byte_len) return -1; // utf16 units never exceed bytes
+  if (units == 0) return 0;
+  if (str_is_ascii(str)) {
+    if (units > (double)byte_len) return -1;
+    return (int)units;
+  }
+  int r = utf16_index_to_byte_offset(str, (size_t)byte_len, (size_t)units, NULL);
+  if (r < 0 && units <= (double)utf16_strlen(str, (size_t)byte_len)) {
+    // a mid-surrogate-pair index at end of string has no exact byte
+    // position; clamp to the end (whole-character convention)
+    return (int)byte_len;
+  }
+  return r;
+}
+
+// AdvanceStringIndex: how many utf16 units one "character" step covers
+static double regexp_advance_units(
+  const char *str, ant_offset_t byte_len, double li_units, bool full_unicode
+) {
+  if (!full_unicode) return 1;
+  if (isnan(li_units) || li_units < 0 || li_units > (double)byte_len) return 1;
+  uint32_t hi = utf16_code_unit_at(str, (size_t)byte_len, (size_t)li_units);
+  uint32_t lo = utf16_code_unit_at(str, (size_t)byte_len, (size_t)li_units + 1);
+  return (hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff) ? 2 : 1;
+}
+
+static ant_value_t regexp_build_indices_pair(ant_t *js, const char *str_ptr, PCRE2_SIZE start, PCRE2_SIZE end) {
   if (start == PCRE2_UNSET) return js_mkundef();
 
   ant_value_t pair = js_mkarr(js);
   if (is_err(pair)) return pair;
-  js_arr_push(js, pair, tov((double)start));
-  js_arr_push(js, pair, tov((double)end));
-  
+  js_arr_push(js, pair, tov(regexp_byte_to_units(str_ptr, start)));
+  js_arr_push(js, pair, tov(regexp_byte_to_units(str_ptr, end)));
+
   return pair;
 }
 
@@ -1072,6 +1120,7 @@ static ant_value_t regexp_build_indices_groups(
 static ant_value_t regexp_build_indices_result(
   ant_t *js,
   ant_value_t regexp,
+  const char *str_ptr,
   PCRE2_SIZE *ovector,
   uint32_t ovcount
 ) {
@@ -1079,7 +1128,7 @@ static ant_value_t regexp_build_indices_result(
   if (is_err(indices_arr)) return indices_arr;
 
   for (uint32_t i = 0; i < ovcount && i < 32; i++) {
-    ant_value_t pair = regexp_build_indices_pair(js, ovector[2*i], ovector[2*i+1]);
+    ant_value_t pair = regexp_build_indices_pair(js, str_ptr, ovector[2*i], ovector[2*i+1]);
     if (is_err(pair)) return pair;
     js_arr_push(js, indices_arr, pair);
   }
@@ -1138,7 +1187,7 @@ static ant_value_t regexp_exec_plain_literal_fast(
   if (is_err(match_str)) return match_str;
   js_arr_push(js, result_arr, match_str);
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov(regexp_byte_to_units(str_ptr, ovector[0]))))) return js_mkerr(js, "oom");
   if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
   if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
   return result_arr;
@@ -1177,8 +1226,10 @@ static ant_value_t regexp_exec_shared_fast(
 
   int rc;
   uint32_t match_options = sticky_flag ? PCRE2_ANCHORED : 0;
+  match_options |= regex_subject_match_options(str_ptr, str_len);
   pcre2_match_context *match_ctx = regex_get_match_context();
   if (compiled->jit_ready && !sticky_flag) {
+    // pcre2_jit_match never validates UTF; it must not arm the cache
     rc = pcre2_jit_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
   } else rc = pcre2_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
 
@@ -1194,8 +1245,11 @@ static ant_value_t regexp_exec_shared_fast(
   uint32_t ovcount = pcre2_get_ovector_count(match_data);
   update_regexp_statics(js, str_ptr, ovector, ovcount);
 
+  // convert match start before match end: the utf16 scan cache only
+  // resumes forward, so ascending targets keep each conversion incremental
+  double index_units = regexp_byte_to_units(str_ptr, ovector[0]);
   if (global_flag || sticky_flag) {
-    ant_value_t next_idx = tov((double)ovector[1]);
+    ant_value_t next_idx = tov(regexp_byte_to_units(str_ptr, ovector[1]));
     if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) return js_mkerr(js, "oom");
   }
 
@@ -1215,7 +1269,7 @@ static ant_value_t regexp_exec_shared_fast(
     }
   }
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov(index_units)))) return js_mkerr(js, "oom");
   if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
   if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
   return result_arr;
@@ -1237,8 +1291,8 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     if (lastindex_off != 0) {
       ant_value_t li_val = js_propref_load(js, lastindex_off);
       if (vtype(li_val) == T_NUM) {
-        double li = tod(li_val);
-        if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
+        int li_bytes = regexp_units_to_byte(str_ptr, str_len, tod(li_val));
+        if (li_bytes >= 0) start_offset = (PCRE2_SIZE)li_bytes;
         else {
           if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) return js_mkerr(js, "oom");
           return js_mknull();
@@ -1258,10 +1312,12 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   uint32_t match_options = 0;
   if (sticky_flag) match_options |= PCRE2_ANCHORED;
+  match_options |= regex_subject_match_options(str_ptr, str_len);
 
   int rc;
   pcre2_match_context *match_ctx = regex_get_match_context();
   if (compiled.jit_ready && !sticky_flag) {
+    // pcre2_jit_match never validates UTF; it must not arm the cache
     rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
   } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
 
@@ -1277,8 +1333,10 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   update_regexp_statics(js, str_ptr, ovector, ovcount);
 
+  // ascending conversion order keeps the utf16 scan cache incremental
+  double index_units = regexp_byte_to_units(str_ptr, ovector[0]);
   if (global_flag || sticky_flag) {
-    ant_value_t next_idx = tov((double)ovector[1]);
+    ant_value_t next_idx = tov(regexp_byte_to_units(str_ptr, ovector[1]));
     if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) return js_mkerr(js, "oom");
   }
 
@@ -1297,7 +1355,7 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     }
   }
 
-  if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+  if (is_err(setprop_cstr(js, result_arr, "index", 5, tov(index_units)))) return js_mkerr(js, "oom");
   if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
 
   ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
@@ -1308,7 +1366,7 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   } else if (is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
 
   if (has_indices) {
-    ant_value_t indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
+    ant_value_t indices = regexp_build_indices_result(js, regexp, str_ptr, ovector, ovcount);
     if (is_err(indices)) return indices;
     if (is_err(setprop_cstr(js, result_arr, "indices", 7, indices))) return js_mkerr(js, "oom");
   }
@@ -1495,7 +1553,7 @@ static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value
 }
 
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str) {
-  ant_value_t exec_fn = js_get(js, rx, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, rx, "exec");
   if (is_err(exec_fn)) return exec_fn;
   return regexp_exec_with_exec_fn(js, rx, str, exec_fn);
 }
@@ -1527,7 +1585,7 @@ static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) 
     return js_mkerr_typed(js, JS_ERR_TYPE, "test called on non-object");
   ant_value_t str_arg = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
   if (is_err(str_arg)) return str_arg;
-  ant_value_t exec_fn = js_get(js, regexp, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, regexp, "exec");
   if (is_err(exec_fn)) return exec_fn;
 
   ant_value_t result;
@@ -1622,10 +1680,9 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
       if (is_err(li_val)) return li_val;
       double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
       ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-      double advance = 1;
-      if (full_unicode && li < (double)str_len) {
-        advance = (double)utf8_char_len_at((const char *)(uintptr_t)(str_off), str_len, (ant_offset_t)li);
-      } js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
+      double advance = regexp_advance_units(
+        (const char *)(uintptr_t)(str_off), str_len, li, full_unicode);
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   }
 }
@@ -1657,7 +1714,11 @@ static ant_value_t regexp_matchall_next(ant_t *js, ant_value_t *args, int nargs)
     if (mlen == 0) {
       ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
       double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
-      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + 1));
+      ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
+      ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+      double advance = regexp_advance_units(
+        (const char *)(uintptr_t)(str_off), str_len, li, js_truthy(js, unicode_val));
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   } else js_set_slot(iter, SLOT_MATCHALL_DONE, js_true);
 
@@ -1804,7 +1865,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
 
   if (!regexp_can_use_internal_fast_path(js, rx)) return js_mkundef();
 
-  ant_value_t exec_fn = js_get(js, rx, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, rx, "exec");
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
@@ -1874,7 +1935,7 @@ static ant_value_t regexp_search_plain_literal_fast(
 
   if (!regexp_can_use_internal_fast_path(js, rx)) return js_mkundef();
 
-  ant_value_t exec_fn = js_get(js, rx, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, rx, "exec");
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
@@ -1894,7 +1955,7 @@ static ant_value_t regexp_search_plain_literal_fast(
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
   update_regexp_statics(js, str_ptr, ovector, 1);
-  return tov((double)ovector[0]);
+  return tov(regexp_byte_to_units(str_ptr, ovector[0]));
 }
 
 static bool regexp_literal_exec_builtin_guard(ant_t *js) {
@@ -1983,7 +2044,7 @@ ant_value_t regexp_literal_exec_call(
       if (is_err(match_str)) return match_str;
       js_arr_push(js, result_arr, match_str);
 
-      if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+      if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov(regexp_byte_to_units(str_ptr, ovector[0]))))) return js_mkerr(js, "oom");
       if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
       if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
       return result_arr;
@@ -2048,10 +2109,8 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
       if (is_err(li_val)) return li_val;
       double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
       ant_offset_t sl, so = vstr(js, str, &sl);
-      double advance = 1;
-      if (full_unicode && li < (double)sl) {
-        advance = (double)utf8_char_len_at((const char *)(uintptr_t)(so), sl, (ant_offset_t)li);
-      }
+      double advance = regexp_advance_units(
+        (const char *)(uintptr_t)(so), sl, li, full_unicode);
       js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   }
@@ -2080,12 +2139,18 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_offset_t matched_len; vstr(js, matched, &matched_len);
 
     ant_value_t pos_val = js_getprop_fallback(js, result, "index");
-    ant_offset_t position = 0;
+    double position_units = 0;
     if (!is_err(pos_val) && vtype(pos_val) == T_NUM) {
       double d = tod(pos_val);
-      position = d < 0 ? 0 : (ant_offset_t)d;
+      position_units = d < 0 ? 0 : d;
     }
-    if (position > str_len) position = str_len;
+
+    // the replacer callback sees the utf16 position; all buffer slicing
+    // below works on the byte offset it maps to
+    str_off = vstr(js, str, &str_len);
+    int position_bytes = regexp_units_to_byte(
+      (const char *)(uintptr_t)str_off, str_len, position_units);
+    ant_offset_t position = position_bytes < 0 ? str_len : (ant_offset_t)position_bytes;
 
     ant_value_t replacement;
     if (func_replace) {
@@ -2094,7 +2159,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
       int ca = 0;
       for (ant_offset_t c = 0; c < ncaptures && ca < 30; c++)
         call_args[ca++] = js_arr_get(js, result, c);
-      call_args[ca++] = tov((double)position);
+      call_args[ca++] = tov(position_units);
       call_args[ca++] = str;
       replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, false);
     } else {
@@ -2183,6 +2248,86 @@ static ant_value_t builtin_regexp_symbol_search(ant_t *js, ant_value_t *args, in
   return vtype(idx) == T_NUM ? idx : tov(-1);
 }
 
+// Scan-and-slice split: one leftmost pcre2 search per separator instead of
+// the spec loop's sticky probe at every position. Byte offsets throughout;
+// equivalent to the sticky probe because the leftmost match from q is
+// exactly the first position where a sticky attempt would succeed.
+static ant_value_t regexp_split_fast(
+  ant_t *js, ant_value_t rx, ant_value_t str,
+  uint32_t lim, bool *handled
+) {
+  *handled = false;
+
+  compiled_regex_t compiled;
+  if (!regex_get_or_compile(js, rx, &compiled)) return js_mkundef();
+  *handled = true;
+
+  ant_value_t A = js_mkarr(js);
+  if (is_err(A)) return A;
+  if (lim == 0) return mkval(T_ARR, vdata(A));
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  pcre2_match_context *match_ctx = regex_get_match_context();
+
+  if (str_len == 0) {
+    int rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, 0, 0, 0, compiled.match_data, match_ctx);
+    if (rc < 0) js_arr_push(js, A, str);
+    return mkval(T_ARR, vdata(A));
+  }
+
+  ant_offset_t p = 0, q = 0;
+  uint32_t lengthA = 0;
+
+  while (q < str_len) {
+    uint32_t match_options = regex_subject_match_options(str_ptr, str_len);
+    int rc;
+    if (compiled.jit_ready) {
+      // pcre2_jit_match never validates UTF; it must not arm the cache
+      rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, (PCRE2_SIZE)q, match_options, compiled.match_data, match_ctx);
+    } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, (PCRE2_SIZE)q, match_options, compiled.match_data, match_ctx);
+    if (rc < 0) break;
+
+    PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(compiled.match_data);
+    uint32_t ovcount = pcre2_get_ovector_count(compiled.match_data);
+    ant_offset_t mstart = (ant_offset_t)ovector[0];
+    ant_offset_t e = (ant_offset_t)ovector[1];
+    if (e > str_len) e = str_len;
+
+    if (e == p) {
+      // whole-character advance regardless of the u flag: byte-wise
+      // advance would slice UTF-8 sequences apart, and the engine's
+      // strings cannot represent Node's lone-surrogate pieces
+      q = mstart + utf8_char_len_at(str_ptr, str_len, mstart);
+      continue;
+    }
+
+    ant_value_t piece = js_mkstr(js, str_ptr + p, (size_t)(mstart - p));
+    if (is_err(piece)) return piece;
+    js_arr_push(js, A, piece);
+    if (++lengthA == lim) return mkval(T_ARR, vdata(A));
+
+    for (uint32_t i = 1; i < ovcount && i < 32; i++) {
+      PCRE2_SIZE cs = ovector[2 * i];
+      PCRE2_SIZE ce = ovector[2 * i + 1];
+      ant_value_t cap = (cs == PCRE2_UNSET)
+        ? js_mkundef()
+        : js_mkstr(js, str_ptr + cs, ce - cs);
+      if (is_err(cap)) return cap;
+      js_arr_push(js, A, cap);
+      if (++lengthA == lim) return mkval(T_ARR, vdata(A));
+    }
+
+    p = e;
+    q = p;
+  }
+
+  ant_value_t trailing = js_mkstr(js, str_ptr + p, (size_t)(str_len - p));
+  if (is_err(trailing)) return trailing;
+  js_arr_push(js, A, trailing);
+  return mkval(T_ARR, vdata(A));
+}
+
 static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js_getthis(js);
   if (!is_object_type(rx))
@@ -2224,6 +2369,27 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
     if (fptr[i] == 'y') has_sticky = true;
   }
 
+  // fast path: unmodified builtin regexp with default species and a
+  // numeric (or absent) limit — bypasses splitter construction and the
+  // per-position sticky probing entirely
+  if (regexp_can_use_internal_fast_path(js, rx) &&
+      (nargs < 2 || vtype(args[1]) == T_UNDEF || vtype(args[1]) == T_NUM)) {
+    ant_value_t global_ctor = js_get(js, js_glob(js), "RegExp");
+    ant_value_t exec_fn = js_getprop_fallback(js, rx, "exec");
+    if (!is_err(global_ctor) && !is_err(exec_fn) &&
+        same_ctor_identity(js, C, global_ctor) &&
+        js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) {
+      uint32_t fast_lim = UINT32_MAX;
+      if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+        double d = tod(args[1]);
+        if (d >= 0 && d <= UINT32_MAX) fast_lim = (uint32_t)d;
+      }
+      bool handled = false;
+      ant_value_t fast = regexp_split_fast(js, rx, str, fast_lim, &handled);
+      if (is_err(fast) || handled) return fast;
+    }
+  }
+
   ant_value_t new_flags;
   if (has_sticky) new_flags = flags_str; else {
     char fbuf[16];
@@ -2263,7 +2429,17 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
   ant_value_t lastIndex_key = js_mkstr(js, "lastIndex", 9);
 
   while (q < size) {
-    js_setprop(js, splitter, lastIndex_key, tov((double)q));
+    // q/p/e are byte offsets for slicing; lastIndex crosses in utf16 units.
+    // skip positions inside a multibyte character: matching there was
+    // always a no-op, and they have no utf16 equivalent
+    str_off = vstr(js, str, &str_len);
+    if (((const char *)(uintptr_t)str_off)[q] & 0x80 &&
+        (((const char *)(uintptr_t)str_off)[q] & 0xc0) == 0x80) {
+      q++;
+      continue;
+    }
+    js_setprop(js, splitter, lastIndex_key,
+      tov(regexp_byte_to_units((const char *)(uintptr_t)str_off, (PCRE2_SIZE)q)));
 
     ant_value_t z = regexp_exec_abstract(js, splitter, str);
     if (is_err(z)) return z;
@@ -2278,8 +2454,11 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
 
     ant_value_t li_val = js_get(js, splitter, "lastIndex");
     if (is_err(li_val)) return li_val;
-    double e_raw = vtype(li_val) == T_NUM ? tod(li_val) : 0;
-    ant_offset_t e = (ant_offset_t)(e_raw < 0 ? 0 : (e_raw > (double)size ? (double)size : e_raw));
+    double e_units = vtype(li_val) == T_NUM ? tod(li_val) : 0;
+    str_off = vstr(js, str, &str_len);
+    int e_bytes = regexp_units_to_byte(
+      (const char *)(uintptr_t)str_off, str_len, e_units < 0 ? 0 : e_units);
+    ant_offset_t e = e_bytes < 0 ? size : (e_bytes > (int)size ? size : (ant_offset_t)e_bytes);
 
     if (e == p) {
       if (unicode_matching) {
@@ -2346,7 +2525,8 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
   int match_count = 0;
 
   while (pos <= (PCRE2_SIZE)args.str_len) {
-    int rc = pcre2_match(re, (PCRE2_SPTR)args.str_ptr, args.str_len, pos, 0, match_data, regex_get_match_context());
+    int rc = pcre2_match(re, (PCRE2_SPTR)args.str_ptr, args.str_len, pos,
+      regex_subject_match_options(args.str_ptr, args.str_len), match_data, regex_get_match_context());
     if (rc < 0) break;
 
     PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
@@ -2377,13 +2557,14 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
           js_arr_push(js, result_arr, match_str);
         }
       }
-      js_setprop(js, result_arr, js_mkstr(js, "index", 5), tov((double)match_start));
+      js_setprop(js, result_arr, js_mkstr(js, "index", 5),
+        tov(regexp_byte_to_units(args.str_ptr, (PCRE2_SIZE)match_start)));
     }
     match_count++;
 
     if (!args.global) break;
     if (match_start == match_end) {
-      pos = match_end + 1;
+      pos = match_end + (PCRE2_SIZE)utf8_char_len_at(args.str_ptr, args.str_len, (ant_offset_t)match_end);
     } else { pos = match_end; }
   }
 

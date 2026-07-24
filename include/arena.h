@@ -224,11 +224,10 @@ static inline void fixed_arena_destroy(ant_fixed_arena_t *a) {
   a->free_list = NULL;
 }
 
-static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
+static inline void *fixed_arena_alloc_uninitialized(ant_fixed_arena_t *a) {
   if (a->free_list) {
     void *p = a->free_list;
     a->free_list = *(void **)p;
-    memset(p, 0, a->elem_size);
     a->live_count++;
     return p;
   }
@@ -246,8 +245,13 @@ static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
 
   void *p = a->base + a->watermark;
   a->watermark = needed;
-  memset(p, 0, a->elem_size);
   a->live_count++;
+  return p;
+}
+
+static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
+  void *p = fixed_arena_alloc_uninitialized(a);
+  if (p) memset(p, 0, a->elem_size);
   return p;
 }
 

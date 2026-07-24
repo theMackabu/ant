@@ -154,6 +154,33 @@ static size_t path_trimmed_end(path_style_t style, const char *path, size_t len)
   return len;
 }
 
+// relative() operates on resolved paths: a non-absolute input is joined
+// onto the current working directory before normalization, matching
+// Node's `relative(resolve(from), resolve(to))` semantics
+static char *path_absolutize(path_style_t style, const char *path, size_t len) {
+  if (path_root_length(style, path, len) > 0) return strndup(path, len);
+
+  char cwd[PATH_MAX];
+  if (getcwd(cwd, sizeof(cwd)) == NULL) return strndup(path, len);
+
+  char *cwd_norm = path_normalize_separators(style, cwd, strlen(cwd));
+  if (!cwd_norm) return NULL;
+
+  size_t cwd_len = strlen(cwd_norm);
+  char *out = malloc(cwd_len + 1 + len + 1);
+  if (!out) {
+    free(cwd_norm);
+    return NULL;
+  }
+
+  memcpy(out, cwd_norm, cwd_len);
+  out[cwd_len] = path_sep_char(style);
+  memcpy(out + cwd_len + 1, path, len);
+  out[cwd_len + 1 + len] = '\0';
+  free(cwd_norm);
+  return out;
+}
+
 static size_t path_basename_start(path_style_t style, const char *path, size_t len) {
   size_t root_len = path_root_length(style, path, len);
   size_t end = path_trimmed_end(style, path, len);
@@ -577,8 +604,18 @@ static ant_value_t builtin_path_relative(ant_t *js, ant_value_t *args, int nargs
   if (!from || !to) return js_mkerr(js, "Failed to get arguments");
   if (from_len == to_len && strncmp(from, to, from_len) == 0) return js_mkstr(js, "", 0);
 
-  rel.from_norm = normalize_path_full(style, from, from_len);
-  rel.to_norm = normalize_path_full(style, to, to_len);
+  char *from_abs = path_absolutize(style, from, from_len);
+  char *to_abs = path_absolutize(style, to, to_len);
+  if (!from_abs || !to_abs) {
+    free(from_abs);
+    free(to_abs);
+    goto relative_fail;
+  }
+
+  rel.from_norm = normalize_path_full(style, from_abs, strlen(from_abs));
+  rel.to_norm = normalize_path_full(style, to_abs, strlen(to_abs));
+  free(from_abs);
+  free(to_abs);
   if (!rel.from_norm || !rel.to_norm) goto relative_fail;
 
   rel.from_root_len = path_root_length(style, rel.from_norm, strlen(rel.from_norm));

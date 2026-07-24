@@ -174,7 +174,8 @@ const char *js_str(ant_t *, ant_value_t val);
 const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_offset_t *out_len);
 
 typedef struct {
-  void *ctx;
+  ant_t *js;
+  ant_object_t *obj;
   ant_offset_t off;
 } ant_iter_t;
 
@@ -230,5 +231,7 @@ ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfi
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value);
 void js_set_slot_wb(ant_t *, ant_value_t obj, internal_slot_t slot, ant_value_t value);
 bool js_reserve_slots(ant_value_t obj, uint8_t capacity);
+void *js_native_data_alloc(ant_t *js, size_t size);
+void js_native_data_free(ant_t *js, void *ptr);
 
 #endif

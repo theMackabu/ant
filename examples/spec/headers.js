@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { test, testThrows, testDeep, summary } from './helpers.js';
 
 console.log('Headers constructor\n');
@@ -65,11 +66,55 @@ test('leading/trailing whitespace stripped', hn.get('x-trim'), 'hello');
 hn.set('x-tab', '\thello\t');
 test('leading/trailing tab stripped', hn.get('x-tab'), 'hello');
 
+console.log('\nByteString values\n');
+
+const hByteRecord = new Headers({ 'x-byte': '\u00e9' });
+test('record accepts latin1 value', hByteRecord.get('x-byte'), '\u00e9');
+test('copy preserves latin1 value', new Headers(hByteRecord).get('x-byte'), '\u00e9');
+
+const hByteSequence = new Headers([['x-byte', '\u00ff']]);
+test('sequence accepts latin1 value', hByteSequence.get('x-byte'), '\u00ff');
+
+const hByte = new Headers();
+hByte.append('x-byte', '\u0080');
+hByte.append('x-byte', '\u007f');
+test('append combines ByteString values', hByte.get('x-byte'), '\u0080, \u007f');
+hByte.set('x-byte', '\u00e9');
+test('set accepts latin1 value', hByte.get('x-byte'), '\u00e9');
+test('entries expose latin1 value', [...hByte.entries()][0][1], '\u00e9');
+test('values expose latin1 value', [...hByte.values()][0], '\u00e9');
+
+let forEachByte = null;
+hByte.forEach(value => { forEachByte = value; });
+test('forEach exposes latin1 value', forEachByte, '\u00e9');
+test('inspection exposes latin1 value', inspect(hByte).includes('\u00e9'), true);
+
+const hByteCookie = new Headers();
+hByteCookie.append('set-cookie', 'flavor=\u00ff');
+test('getSetCookie exposes latin1 value', hByteCookie.getSetCookie()[0], 'flavor=\u00ff');
+
+const hByteResponse = new Response(null, {
+  headers: { 'content-type': '\u00e9' },
+});
+test(
+  'Response header fast path preserves latin1 value',
+  hByteResponse.headers.get('content-type'),
+  '\u00e9',
+);
+
 console.log('\ninvalid name / value\n');
 
 testThrows('empty name throws', () => h.set('', 'val'));
 testThrows('name with space throws', () => h.set('x bad', 'val'));
 testThrows('name with colon throws', () => h.set('x:bad', 'val'));
+testThrows('value above ByteString range throws', () => h.set('x-byte', '\u0100'));
+testThrows('record value above ByteString range throws', () => new Headers({ x: '\u0100' }));
+testThrows('append value above ByteString range throws', () => h.append('x-byte', '\u0100'));
+testThrows('emoji value throws', () => h.set('x-byte', '\ud83d\ude00'));
+testThrows('lone surrogate value throws', () => h.set('x-byte', '\ud800'));
+testThrows('NUL value throws', () => h.set('x-byte', 'a\0b'));
+testThrows('CR value throws', () => h.set('x-byte', 'a\rb'));
+testThrows('LF value throws', () => h.set('x-byte', 'a\nb'));
 
 console.log('\nforEach\n');
 

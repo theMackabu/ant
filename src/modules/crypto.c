@@ -61,6 +61,7 @@ typedef struct {
   const EVP_MD *md;
   uint8_t *key;
   size_t key_len;
+  bool extractable; // authoritative [[extractable]]; the JS property is reflection
 } ant_crypto_key_t;
 
 typedef struct {
@@ -840,7 +841,8 @@ static ant_value_t js_crypto_subtle_digest(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t crypto_make_key_object(
   ant_t *js, ant_crypto_key_kind_t kind, const EVP_MD *md,
-  const uint8_t *key_bytes, size_t key_len, ant_value_t algorithm
+  const uint8_t *key_bytes, size_t key_len, ant_value_t algorithm,
+  bool extractable, ant_value_t usages
 ) {
   ant_crypto_key_t *key = calloc(1, sizeof(*key));
   if (!key) return js_mkerr(js, "Out of memory");
@@ -853,11 +855,13 @@ static ant_value_t crypto_make_key_object(
   }
   if (key_len) memcpy(key->key, key_bytes, key_len);
   key->key_len = key_len;
+  key->extractable = extractable;
 
   ant_value_t obj = js_mkobj(js);
   js_set(js, obj, "type", js_mkstr(js, "secret", 6));
-  js_set(js, obj, "extractable", js_false);
+  js_set(js, obj, "extractable", extractable ? js_true : js_false);
   js_set(js, obj, "algorithm", algorithm);
+  js_set(js, obj, "usages", vtype(usages) == T_ARR ? usages : js_mkarr(js));
   js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
   js_set_finalizer(obj, crypto_key_finalize);
   return obj;
@@ -880,19 +884,22 @@ static ant_value_t crypto_subtle_import_key_impl(ant_t *js, ant_value_t *args, i
     return js_mkerr_typed(js, JS_ERR_TYPE, "keyData must be an ArrayBuffer, TypedArray, DataView, or Buffer");
   }
 
+  bool extractable = nargs > 3 && js_truthy(js, args[3]);
+  ant_value_t usages = nargs > 4 ? args[4] : js_mkundef();
+
   if (crypto_algorithm_is(js, args[2], "HMAC")) {
     const EVP_MD *md = crypto_hmac_digest_from_algorithm(js, args[2]);
     if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported HMAC hash algorithm");
-    return crypto_make_key_object(js, CRYPTO_KEY_HMAC, md, bytes, len, args[2]);
+    return crypto_make_key_object(js, CRYPTO_KEY_HMAC, md, bytes, len, args[2], extractable, usages);
   }
 
   if (crypto_algorithm_is(js, args[2], "AES-GCM")) {
     if (!crypto_aes_gcm_cipher_for_key(len)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid AES-GCM key length");
-    return crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, bytes, len, args[2]);
+    return crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, bytes, len, args[2], extractable, usages);
   }
 
   if (crypto_algorithm_is(js, args[2], "PBKDF2")) {
-    return crypto_make_key_object(js, CRYPTO_KEY_PBKDF2, NULL, bytes, len, args[2]);
+    return crypto_make_key_object(js, CRYPTO_KEY_PBKDF2, NULL, bytes, len, args[2], extractable, usages);
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported CryptoKey algorithm");
@@ -908,6 +915,85 @@ static ant_value_t js_crypto_subtle_import_key(ant_t *js, ant_value_t *args, int
 
 static ant_crypto_key_t *crypto_require_key(ant_value_t value) {
   return (ant_crypto_key_t *)js_get_native(value, CRYPTO_KEY_NATIVE_TAG);
+}
+
+static ant_value_t crypto_subtle_generate_key_impl(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.generateKey requires an algorithm");
+  }
+
+  bool extractable = nargs > 1 && js_truthy(js, args[1]);
+  ant_value_t usages = nargs > 2 ? args[2] : js_mkundef();
+
+  if (crypto_algorithm_is(js, args[0], "AES-GCM")) {
+    double bits = js_getnum(js_get(js, args[0], "length"));
+    if (bits != 128 && bits != 192 && bits != 256) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "AES-GCM key length must be 128, 192, or 256");
+    }
+    uint8_t buf[32];
+    size_t len = (size_t)bits / 8;
+    if (RAND_bytes(buf, (int)len) != 1) return js_mkerr(js, "generateKey failed");
+    return crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, buf, len, args[0], extractable, usages);
+  }
+
+  if (crypto_algorithm_is(js, args[0], "HMAC")) {
+    const EVP_MD *md = crypto_hmac_digest_from_algorithm(js, args[0]);
+    if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported HMAC hash algorithm");
+
+    // default key length is the hash block size; an explicit length is bits
+    size_t len = (size_t)EVP_MD_block_size(md);
+    ant_value_t length_val = js_get(js, args[0], "length");
+    if (vtype(length_val) == T_NUM) {
+      double bits = js_getnum(length_val);
+      if (!isfinite(bits) || bits <= 0 || bits > 8192 || fmod(bits, 8) != 0) {
+        return js_mkerr_typed(js, JS_ERR_TYPE, "HMAC key length must be a positive multiple of 8 bits up to 8192");
+      }
+      len = (size_t)bits / 8;
+    }
+
+    uint8_t buf[1024];
+    if (RAND_bytes(buf, (int)len) != 1) return js_mkerr(js, "generateKey failed");
+    return crypto_make_key_object(js, CRYPTO_KEY_HMAC, md, buf, len, args[0], extractable, usages);
+  }
+
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported generateKey algorithm");
+}
+
+static ant_value_t js_crypto_subtle_generate_key(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t result = crypto_subtle_generate_key_impl(js, args, nargs);
+  if (is_err(result)) js_reject_promise(js, promise, result);
+  else js_resolve_promise(js, promise, result);
+  return promise;
+}
+
+static ant_value_t crypto_subtle_export_key_impl(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2 || vtype(args[0]) != T_STR) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.exportKey requires format and key");
+  }
+
+  size_t format_len = 0;
+  const char *format = js_getstr(js, args[0], &format_len);
+  if (!format || format_len != 3 || strncasecmp(format, "raw", 3) != 0) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Only raw CryptoKey export is supported");
+  }
+
+  ant_crypto_key_t *key = crypto_require_key(args[1]);
+  if (!key) return js_mkerr_typed(js, JS_ERR_TYPE, "exportKey requires a CryptoKey");
+
+  if (!key->extractable) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "CryptoKey is not extractable");
+  }
+
+  return crypto_make_arraybuffer(js, key->key, key->key_len);
+}
+
+static ant_value_t js_crypto_subtle_export_key(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t result = crypto_subtle_export_key_impl(js, args, nargs);
+  if (is_err(result)) js_reject_promise(js, promise, result);
+  else js_resolve_promise(js, promise, result);
+  return promise;
 }
 
 static ant_value_t crypto_subtle_derive_bits_impl(ant_t *js, ant_value_t *args, int nargs) {
@@ -1784,6 +1870,8 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   // TODO: add remaining WebCrypto key export, key derivation, wrapping, and asymmetric algorithms.
   js_set(js, subtle_obj, "digest", js_mkfun(js_crypto_subtle_digest));
   js_set(js, subtle_obj, "importKey", js_mkfun(js_crypto_subtle_import_key));
+  js_set(js, subtle_obj, "generateKey", js_mkfun(js_crypto_subtle_generate_key));
+  js_set(js, subtle_obj, "exportKey", js_mkfun(js_crypto_subtle_export_key));
   js_set(js, subtle_obj, "deriveBits", js_mkfun(js_crypto_subtle_derive_bits));
   js_set(js, subtle_obj, "sign", js_mkfun(js_crypto_subtle_sign));
   js_set(js, subtle_obj, "verify", js_mkfun(js_crypto_subtle_verify));

@@ -106,6 +106,7 @@ typedef struct {
   uint32_t cached_index;
   uint32_t epoch;
   uintptr_t cached_aux;
+  ant_value_t cached_key;
   // keep this union valid: each IC slot must belong to exactly one bytecode site/op
   union {
     ant_value_t receiver_proto;
@@ -117,6 +118,8 @@ typedef struct {
     } add;
   } guard;
   bool cached_is_own;
+  bool cached_is_accessor;
+  uint8_t cached_receiver_type;
 } sv_ic_entry_t;
 
 typedef struct {
@@ -124,13 +127,13 @@ typedef struct {
   ant_shape_t *shared_shape;
 } sv_obj_site_cache_t;
 
-#define SV_GF_IC_AUX_WARMUP_MASK    ((uintptr_t)0xFFu)
-#define SV_GF_IC_AUX_MISS_MASK      ((uintptr_t)0xFF00u)
-#define SV_GF_IC_AUX_ACTIVE_BIT     ((uintptr_t)0x10000u)
-#define SV_GF_IC_AUX_MISS_SHIFT     8u
+#define SV_GF_IC_AUX_WARMUP_MASK      ((uintptr_t)0xFFu)
+#define SV_GF_IC_AUX_MISS_MASK        ((uintptr_t)0xFF00u)
+#define SV_GF_IC_AUX_ACTIVE_BIT       ((uintptr_t)0x10000u)
 
-#define SV_GF_IC_WARMUP_ENABLE      16u
-#define SV_GF_IC_MISS_DISABLE       4u
+#define SV_GF_IC_AUX_MISS_SHIFT 8u
+#define SV_GF_IC_WARMUP_ENABLE  16u
+#define SV_GF_IC_MISS_DISABLE   4u
 
 static inline uint8_t sv_gf_ic_warmup(uintptr_t aux) {
   return (uint8_t)(aux & SV_GF_IC_AUX_WARMUP_MASK);
@@ -437,6 +440,12 @@ static inline sv_closure_t *js_closure_alloc(ant_t *js) {
 
 static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
+}
+
+static inline bool sv_native_ctor_allocates_receiver(ant_value_t func) {
+  if (vtype(func) != T_FUNC) return false;
+  sv_closure_t *closure = js_func_closure(func);
+  return closure && (closure->call_flags & JS_NATIVE_CTOR) != 0;
 }
 
 static inline ant_value_t js_func_obj(ant_value_t func) {
@@ -1345,6 +1354,41 @@ static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) 
 static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
   (void)ctor_func;
   (void)instance;
+}
+
+static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) {
+  (void)func;
+  (void)idx;
+  (void)v;
+}
+
+static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
+  (void)func;
+  (void)ip;
+  (void)v;
+}
+
+static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
+  (void)func;
+  (void)ip;
+  (void)l;
+  (void)r;
+}
+
+static inline void sv_tfb_ensure(sv_func_t *fn) {
+  (void)fn;
+}
+
+static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
+  (void)func;
+  (void)bc_off;
+  (void)callee;
+}
+
+static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
+  (void)func;
+  (void)bc_off;
+  return NULL;
 }
 
 static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {

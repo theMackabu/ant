@@ -10,9 +10,9 @@
 #include "tokens.h"
 #include "silver/glue.h"
 
+#include "ops/property.h"
 #include "ops/calls.h"
 #include "ops/globals.h"
-#include "ops/property.h"
 #include "ops/iteration.h"
 #include "ops/upvalues.h"
 #include "ops/comparison.h"
@@ -162,6 +162,10 @@ ant_value_t jit_helper_call(
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc
 ) {
+  if (vtype(func) == T_CFUNC) {
+    ant_value_t call_this = sv_is_nullish_this(this_val) ? js->global : this_val;
+    return sv_call_native(js, func, call_this, args, argc);
+  }
   return sv_vm_call(vm, js, func, this_val, args, argc, NULL, false);
 }
 
@@ -176,6 +180,13 @@ ant_value_t jit_helper_call_method(
   ant_value_t call_this = this_val;
 
   if (is_super_call) js->new_target = new_target;
+
+  if (!is_super_call && vtype(func) == T_CFUNC) {
+    call_this = sv_is_nullish_this(call_this) ? js->global : call_this;
+    ant_value_t result = sv_call_native(js, func, call_this, args, argc);
+    if (out_this) *out_this = call_this;
+    return result;
+  }
 
   ant_value_t super_this = call_this;
   ant_value_t result = sv_vm_call(
@@ -221,7 +232,12 @@ ant_value_t jit_helper_get_global(
 ) {
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  return sv_global_get_interned_ic(js, str, func, ip);
+  ant_value_t out = sv_global_get_interned_ic(js, str, func, ip);
+  if (ip && *ip == OP_GET_GLOBAL && is_undefined(out) &&
+      lkp_interned(js, js->global, str) == 0) {
+    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%s' is not defined", str);
+  }
+  return out;
 }
 
 static inline ant_value_t jit_eval_env(
@@ -634,6 +650,18 @@ ant_value_t jit_helper_call_array_includes(
   return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
 }
 
+ant_value_t jit_helper_call_string_builtin(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc, int kind
+) {
+  if (kind == 0 && js_is_string_indexof_builtin(call_func))
+    return js_string_indexof_call(js, call_this, args, argc);
+  if (kind == 1 && js_is_string_substring_builtin(call_func))
+    return js_string_substring_call(js, call_this, args, argc);
+  return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
+}
+
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   const char *ts = is_callable(v) ? "function" : typestr(vtype(v));
   return js_mkstr(js, ts, strlen(ts));
@@ -662,6 +690,17 @@ ant_value_t jit_helper_get_field(
   return out;
 }
 
+ant_value_t jit_helper_get_cached_accessor(
+  ant_t *js, ant_object_t *source, uint32_t index, ant_value_t receiver
+) {
+  if (!source || !source->shape) return js_mkundef();
+  const ant_shape_prop_t *prop = ant_shape_prop_at(source->shape, index);
+  if (!prop) return js_mkundef();
+  if (prop->has_getter)
+    return sv_call_property_getter(js, prop->getter, receiver);
+  return js_mkundef();
+}
+
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR || vtype(v) == T_SYMBOL) return v;
   return coerce_to_str(js, v);
@@ -676,7 +715,9 @@ ant_value_t jit_helper_import_named(
   const char *str, uint32_t len,
   sv_func_t *func, int32_t bc_off
 ) {
-  ant_value_t out = sv_import_named_value(js, ns, str, len);
+  uint8_t *ip = NULL;
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  ant_value_t out = sv_import_named_value_ic(js, ns, str, len, func, ip);
   if (is_err(out)) jit_set_error_site_from_func(js, func, bc_off);
   return out;
 }
@@ -901,10 +942,21 @@ ant_value_t jit_helper_bailout_resume(
 
 void jit_helper_define_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const char *str, uint32_t len
+  ant_value_t val, const char *str, uint32_t len,
+  sv_obj_site_cache_t *site, sv_func_t *func, int32_t bc_off
 ) {
-  if (!sv_try_define_field_fast(js, obj, str, val))
-    js_define_own_prop(js, obj, str, len, val);
+  (void)vm;
+  uint8_t *ip = NULL;
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  sv_atom_t atom = { .str = str, .len = len };
+  sv_define_field_ic(js, obj, val, &atom, func, ip);
+
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (site && ptr && ptr->shape && site->shared_shape != ptr->shape) {
+    ant_shape_retain(ptr->shape);
+    if (site->shared_shape) ant_shape_release(site->shared_shape);
+    site->shared_shape = ptr->shape;
+  }
 }
 
 void jit_helper_set_name(
@@ -926,30 +978,46 @@ ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
 
 ant_value_t jit_helper_put_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
-  ant_value_t val, const char *str, uint32_t len
+  ant_value_t val, sv_func_t *func, int32_t bc_off
 ) {
-  ant_value_t key = js_mkstr(js, str, len);
-  return js_setprop(js, obj, key, val);
+  (void)vm;
+  if (!func || bc_off < 0 || bc_off >= func->code_len) return SV_JIT_BAILOUT;
+  return sv_put_field_ic(js, func, func->code + bc_off, obj, val);
+}
+
+void jit_helper_put_field_transition_inobj(
+  ant_t *js, ant_object_t *obj, ant_value_t val, sv_ic_entry_t *ic
+) {
+  ant_shape_t *old_shape = obj->shape;
+  ant_shape_t *new_shape = ic->guard.add.to_shape;
+  uint32_t slot = ic->guard.add.slot;
+
+  ant_shape_retain(new_shape);
+  obj->shape = new_shape;
+  ant_shape_release(old_shape);
+  gc_write_barrier(js, obj, val);
+  obj->inobj[slot] = val;
+  obj->prop_count = slot + 1;
+  ic->cached_shape = new_shape;
+  ic->cached_holder = obj;
+  ic->cached_index = slot;
+  ic->epoch = ant_ic_epoch_counter;
+}
+
+void jit_helper_write_barrier(
+  ant_t *js, ant_object_t *obj, ant_value_t val
+) {
+  gc_write_barrier(js, obj, val);
 }
 
 ant_value_t jit_helper_get_elem(
   sv_vm_t *vm, ant_t *js, ant_value_t obj, 
   ant_value_t key, sv_func_t *func, int32_t bc_off
 ) {
-  uint8_t ot = vtype(obj);
-  if (ot == T_NULL || ot == T_UNDEF) {
-    jit_set_error_site_from_func(js, func, bc_off);
-    return sv_mk_nullish_read_error_by_key(js, obj, key);
-  }
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
-    double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d)
-      return js_arr_get(js, obj, (uint32_t)d);
-  }
-  ant_value_t str_elem = js_mkundef();
-  if (sv_try_string_index_get(js, obj, key, &str_elem))
-    return str_elem;
-  return sv_getprop_by_key(js, obj, key);
+  (void)vm;
+  uint8_t *ip = NULL;
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  return sv_get_elem_ic(js, obj, key, func, ip);
 }
 
 ant_value_t jit_helper_get_private(
@@ -984,8 +1052,12 @@ ant_value_t jit_helper_put_global(
   return js_setprop(js, js->global, key, val);
 }
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js) {
-  ant_value_t obj = mkobj(js, 0);
+ant_value_t jit_helper_object(
+  sv_vm_t *vm, ant_t *js, sv_obj_site_cache_t *site
+) {
+  ant_value_t obj = site && site->shared_shape
+    ? js_mkobj_with_shape(js, site->shared_shape)
+    : mkobj(js, 0);
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
@@ -1110,15 +1182,27 @@ ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value
 ant_value_t jit_helper_new(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t new_target,
-  ant_value_t *args, int argc
+  ant_value_t *args, int argc,
+  sv_func_t *caller, int32_t bc_off
 ) {
   ant_value_t record_func = func;
+  uint8_t *ip = NULL;
   js->new_target = new_target;
 
   if (vtype(func) == T_OBJ && is_proxy(func))
     return js_proxy_construct(js, func, args, argc, new_target);
   if (!js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+
+  if (sv_native_ctor_allocates_receiver(func)) {
+    ant_value_t result = sv_call_native(
+      js, func, js_mkundef(), args, argc);
+    if (is_err(result)) return result;
+    if (!is_object_type(result))
+      return js_mkerr_typed(js, JS_ERR_TYPE,
+        "native constructor did not return an object");
+    return result;
+  }
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
@@ -1129,7 +1213,8 @@ ant_value_t jit_helper_new(
       proto_source = target_func;
       record_func = target_func;
     }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
+    if (caller && bc_off >= 0 && bc_off < caller->code_len) ip = caller->code + bc_off;
+    proto = sv_get_ctor_prototype_ic(js, proto_source, caller, ip);
   }
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));

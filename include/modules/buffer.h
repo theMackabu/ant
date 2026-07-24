@@ -9,6 +9,7 @@ typedef struct {
   uint8_t *data;
   size_t length;
   size_t capacity;
+  size_t registry_slot; // buffer_registry index + 1; 0 = not registered
   int ref_count;
   int is_shared;
   int is_detached;
