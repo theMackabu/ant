@@ -229,7 +229,18 @@ re-litigated.
   - Verify: `path.win32.relative('C:\\a', 'C:foo')` and `\foo` cases vs
     Node.
 
-- [ ] 14. Element-IC interns every string key (unbounded intern growth)
+- [x] 14. Element-IC interns every string key (unbounded intern growth)
+  - RESOLUTION NOTE: the review undersold it — the elem-IC site was one
+    of EIGHT read-path inserters; the generic lookups (lkp, lkp_val,
+    lkp_with_getter/setter, lkp_proto, lookup_prop_meta,
+    js_get_ctor_proto) all interned every probed key, so the fallback
+    path grew the table too. Added intern_string_existing (find-only)
+    and switched all read paths; correctness is exact because shapes
+    can only contain interned names, and writes still intern at
+    property creation. Unique-key storm: 200,010 entries/9.3MB -> 10
+    entries/416B. 100/100 spec files pass; bench_lkp delta proven to be
+    scratch-vs-PGO build noise via stash A/B. Regression test
+    test_intern_table_bounded.cjs (fails on the old binary).
   - `src/silver/ops/property.h:~555`: `sv_get_elem_ic` interns each string
     key on the IC path; intern table never evicts, so
     `obj[uniqueRuntimeString]` in a loop grows memory without bound.

@@ -2322,6 +2322,22 @@ static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len) {
   return n;
 }
 
+// find-only probe: returns NULL for strings never interned. Read paths
+// use this so arbitrary runtime keys cannot grow the never-evicted
+// table; any hit-able property name was interned when the property was
+// defined
+const char *intern_string_existing(const char *str, size_t len) {
+  if (!intern_buckets) return NULL;
+
+  uint64_t h = hash_key(str, len);
+  size_t bucket = (size_t)(h & (intern_bucket_count - 1));
+
+  for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
+    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
+  }
+  return NULL;
+}
+
 const char *intern_string(const char *str, size_t len) {
   if (!intern_table_init()) return NULL;
 
@@ -3933,7 +3949,7 @@ bool lookup_prop_meta(
     if (key_kind == PROP_META_SYMBOL) {
       slot = ant_shape_lookup_symbol(cur_ptr->shape, sym_off);
     } else {
-      const char *interned_key = intern_string(key, klen);
+      const char *interned_key = intern_string_existing(key, klen);
       if (interned_key) slot = ant_shape_lookup_interned(cur_ptr->shape, interned_key);
     }
 
@@ -4487,7 +4503,7 @@ ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern)
 }
 
 inline ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_string_existing(buf, len);
   if (!search_intern) return 0;
   return lkp_interned(js, obj, search_intern);
 }
@@ -4502,7 +4518,7 @@ inline ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *sear
 }
 
 static inline ant_value_t lkp_val(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *interned = intern_string(buf, len);
+  const char *interned = intern_string_existing(buf, len);
   if (!interned) return js_mkundef();
   return lkp_interned_val(js, obj, interned);
 }
@@ -4560,7 +4576,7 @@ static inline ant_value_t lkp_sym_proto_val(ant_t *js, ant_value_t obj, ant_offs
 static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_string_existing(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4605,7 +4621,7 @@ static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, si
 static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out) {
   *has_setter_out = false;
   *setter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_string_existing(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4703,7 +4719,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
-  const char *interned = intern_string(name, len);
+  const char *interned = intern_string_existing(name, len);
   ant_value_t ctor = lkp_interned_val(js, js->global, interned);
   if (vtype(ctor) != T_FUNC) return js_mknull();
   ant_value_t ctor_obj = js_as_obj(ctor);
@@ -4732,7 +4748,7 @@ switch (type) {
 
 ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   uint8_t t = vtype(obj);
-  const char *key_intern = intern_string(key, len);
+  const char *key_intern = intern_string_existing(key, len);
   if (!key_intern) return 0;
 
   ant_value_t cur = obj;

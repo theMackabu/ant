@@ -26,7 +26,8 @@ export function targets() {
     'test_ctor_from_eval_scope.cjs',
     'test_string_call_stack_realloc.cjs',
     'test_jit_define_field_join_sites.cjs',
-    'test_jit_regexp_exec_override.cjs'
+    'test_jit_regexp_exec_override.cjs',
+    'test_intern_table_bounded.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

@@ -552,7 +552,10 @@ static inline ant_value_t sv_get_elem_ic(
   if (ic && ptr && !ptr->flags.is_exotic && vtype(key) == T_STR) {
     ant_offset_t key_len = 0;
     ant_offset_t key_off = vstr(js, key, &key_len);
-    const char *interned = intern_string((const char *)(uintptr_t)key_off, key_len);
+    // find-only: a key that can hit is a real property name, interned at
+    // definition time; inserting here would let unique runtime keys grow
+    // the intern table without bound
+    const char *interned = intern_string_existing((const char *)(uintptr_t)key_off, key_len);
     sv_atom_t atom = { .str = interned, .len = (uint32_t)key_len };
     ant_value_t hit = js_mkundef();
 

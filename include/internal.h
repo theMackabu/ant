@@ -508,6 +508,7 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
+const char *intern_string_existing(const char *str, size_t len);
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 
 ant_value_t  lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
