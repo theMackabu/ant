@@ -10488,11 +10488,11 @@ static inline ant_offset_t array_includes_length_from_number(double len_num) {
   return (ant_offset_t)len_num;
 }
 
-static inline ant_offset_t array_includes_start_index(ant_t *js, ant_value_t *args, int nargs, ant_offset_t len) {
+static inline ant_offset_t array_includes_start_index(ant_t *js, ant_value_t from_arg, ant_offset_t len) {
   int64_t start = 0;
-  
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
-  double from_index_num = js_to_number(js, args[1]);
+
+  if (vtype(from_arg) != T_UNDEF) {
+  double from_index_num = js_to_number(js, from_arg);
   if (!isnan(from_index_num)) start = (int64_t)from_index_num;
   if (start < 0) {
     start += (int64_t)len;
@@ -10707,15 +10707,15 @@ static ant_value_t array_includes_array_slow(
 }
 
 static ant_value_t array_includes_generic(
-  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_value_t *args, int nargs
+  ant_t *js, ant_value_t arr, const array_includes_query_t *query, ant_value_t from_arg
 ) {
   ant_value_t len_val = array_includes_length_value(js, arr);
   if (is_err(len_val)) return len_val;
 
   ant_offset_t len = array_includes_length_from_number(js_to_number(js, len_val));
   if (len == 0) return mkval(T_BOOL, 0);
-  
-  ant_offset_t start = array_includes_start_index(js, args, nargs, len);
+
+  ant_offset_t start = array_includes_start_index(js, from_arg, len);
   if (start >= len) return mkval(T_BOOL, 0);
 
   for (ant_offset_t i = start; i < len; i++) {
@@ -10733,16 +10733,19 @@ static ant_value_t array_includes_generic(
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t arr, ant_value_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "includes called on non-array");
-  
+
+  // args may point into vm->stack; snapshot before anything that can run
+  // user JS (proxy length traps, valueOf) and realloc it
   array_includes_query_t query = array_includes_prepare_query(
     (nargs > 0) ? args[0] : js_mkundef()
   );
+  ant_value_t from_arg = (nargs > 1) ? args[1] : js_mkundef();
 
   if (array_obj_ptr(arr) && !is_proxy(arr)) {
     ant_offset_t len = get_array_length(js, arr);
     if (len == 0) return mkval(T_BOOL, 0);
     
-    ant_offset_t start = array_includes_start_index(js, args, nargs, len);
+    ant_offset_t start = array_includes_start_index(js, from_arg, len);
     if (start >= len) return mkval(T_BOOL, 0);
     
     ant_value_t fast = array_includes_dense_fast(js, arr, &query, len, start);
@@ -10751,7 +10754,7 @@ ant_value_t js_array_includes_call(ant_t *js, ant_value_t arr, ant_value_t *args
     return array_includes_array_slow(js, arr, &query, len, start);
   }
 
-  return array_includes_generic(js, arr, &query, args, nargs);
+  return array_includes_generic(js, arr, &query, from_arg);
 }
 
 bool js_is_array_includes_builtin(ant_value_t func) {
@@ -12468,11 +12471,16 @@ static ant_value_t builtin_Array_of(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t js_string_indexof_call(
   ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs
 ) {
+  // args may point into vm->stack; to_string_val can run user JS (object
+  // receiver with a toString) and realloc the stack, so snapshot first
+  ant_value_t search = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t pos_arg = nargs > 1 ? args[1] : js_mkundef();
+
   ant_value_t str = to_string_val(js, this_val);
+  if (is_err(str)) return str;
   if (vtype(str) != T_STR) return js_mkerr(js, "indexOf called on non-string");
   if (nargs == 0) return tov(-1);
 
-  ant_value_t search = args[0];
   if (vtype(search) != T_STR) return tov(-1);
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
@@ -12483,8 +12491,8 @@ ant_value_t js_string_indexof_call(
   bool str_ascii = str_is_ascii(str_ptr);
 
   ant_offset_t start_utf16 = 0;
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    double pos = tod(args[1]);
+  if (vtype(pos_arg) == T_NUM) {
+    double pos = tod(pos_arg);
     if (pos < 0) pos = 0;
     double utf16_len = D(str_utf16_len(js, str));
     if (pos > utf16_len) pos = utf16_len;
@@ -12529,7 +12537,13 @@ bool js_is_string_indexof_builtin(ant_value_t func) {
 ant_value_t js_string_substring_call(
   ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs
 ) {
+  // snapshot before to_string_val for the same stack-realloc reason as
+  // js_string_indexof_call
+  ant_value_t start_arg = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t end_arg = nargs > 1 ? args[1] : js_mkundef();
+
   ant_value_t str = to_string_val(js, this_val);
+  if (is_err(str)) return str;
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -12538,13 +12552,13 @@ ant_value_t js_string_substring_call(
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
   
-  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
-    double d = tod(args[0]);
+  if (vtype(start_arg) == T_NUM) {
+    double d = tod(start_arg);
     start = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
-  
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    double d = tod(args[1]);
+
+  if (vtype(end_arg) == T_NUM) {
+    double d = tod(end_arg);
     end = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
   

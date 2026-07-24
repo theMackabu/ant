@@ -48,7 +48,14 @@ re-litigated.
   - Verify: repro with `new` on a function that closes over `eval`;
     spec suite.
 
-- [ ] 3. Use-after-free in string-call fast paths
+- [x] 3. Use-after-free in string-call fast paths
+  - RESOLUTION NOTE: fixed at the helper level (snapshot args before
+    to_string_val) instead of gating the interpreter labels on a T_STR
+    receiver — that covers all three entry points (interpreter labels, JIT
+    jit_helper_call_string_builtin, plain builtins) and keeps the fast path
+    for coercible receivers. Audit also found and fixed the SAME hazard in
+    js_array_includes_call's generic path (args[1] read after a proxy
+    length trap; from_arg now snapshotted at entry).
   - `src/silver/engine.c` `L_CALL_STRING_INDEXOF` / `L_CALL_STRING_SUBSTRING`
     (~line 1483).
   - `call_args` points into `vm->stack`; the helpers call
