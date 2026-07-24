@@ -861,7 +861,15 @@ static ant_value_t crypto_make_key_object(
   js_set(js, obj, "type", js_mkstr(js, "secret", 6));
   js_set(js, obj, "extractable", extractable ? js_true : js_false);
   js_set(js, obj, "algorithm", algorithm);
-  js_set(js, obj, "usages", vtype(usages) == T_ARR ? usages : js_mkarr(js));
+  // snapshot the caller's array: a CryptoKey's usage set is fixed at
+  // creation and must not alias caller-mutable state
+  ant_value_t usages_copy = js_mkarr(js);
+  if (vtype(usages) == T_ARR) {
+    ant_offset_t usage_count = js_arr_len(js, usages);
+    for (ant_offset_t i = 0; i < usage_count; i++)
+      js_arr_push(js, usages_copy, js_arr_get(js, usages, i));
+  }
+  js_set(js, obj, "usages", usages_copy);
   js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
   js_set_finalizer(obj, crypto_key_finalize);
   return obj;
@@ -918,12 +926,12 @@ static ant_crypto_key_t *crypto_require_key(ant_value_t value) {
 }
 
 static ant_value_t crypto_subtle_generate_key_impl(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.generateKey requires an algorithm");
+  if (nargs < 3) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.generateKey requires algorithm, extractable, and keyUsages");
   }
 
-  bool extractable = nargs > 1 && js_truthy(js, args[1]);
-  ant_value_t usages = nargs > 2 ? args[2] : js_mkundef();
+  bool extractable = js_truthy(js, args[1]);
+  ant_value_t usages = args[2];
 
   if (crypto_algorithm_is(js, args[0], "AES-GCM")) {
     double bits = js_getnum(js_get(js, args[0], "length"));

@@ -167,14 +167,23 @@ re-litigated.
   - Verify: custom exec returning `{index: 1.5}` / huge index; callback sees
     the clamped integer Node would pass.
 
-- [ ] 10. `subtle.generateKey` accepts missing arguments
+- [x] 10. `subtle.generateKey` accepts missing arguments
+  - RESOLUTION NOTE: nargs < 3 now rejects with TypeError (message style
+    matches importKey's). Found while verifying: the subtle wrapper
+    double-reports impl errors (promise rejects AND the error surfaces
+    as an uncaught top-level error) — pre-existing, reproduced with
+    importKey on the installed binary; logged under follow-ups.
   - `src/modules/crypto.c:920-926`: nargs 1–2 silently default
     `extractable=false`, `usages=undefined`; WebIDL requires all three
     (TypeError).
   - Fix: `if (nargs < 3) return js_mkerr_typed(..., TypeError)`.
   - Verify: 1- and 2-arg calls reject with TypeError; webcrypto test.
 
-- [ ] 11. `CryptoKey.usages` aliases the caller's array
+- [x] 11. `CryptoKey.usages` aliases the caller's array
+  - RESOLUTION NOTE: crypto_make_key_object snapshots the array
+    (js_mkarr + per-element push), covering generateKey and importKey.
+    Mutating the input array after creation no longer changes
+    key.usages.
   - `src/modules/crypto.c:864`: the passed usages array is stored without
     copying; mutating it after creation mutates the key.
   - Fix: copy into a fresh array (js_mkarr + push each element) at creation.
@@ -269,6 +278,10 @@ re-litigated.
   missing clears, and missing calls confirmed by reading HEAD).
 
 ## Follow-ups (out of scope for this plan)
+
+- Subtle-crypto wrapper double-reports impl errors: the returned promise
+  rejects AND the same error is raised as an uncaught top-level error
+  (pre-existing; reproduced with importKey on the installed binary).
 
 - Pre-existing, both merge parents, untracked anywhere: byte-wise
   `"héllo".split("")` mojibake; `indexOf` NaN-position raw cast (latent,
