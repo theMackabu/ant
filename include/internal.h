@@ -60,9 +60,9 @@
 #define NANBOX_PREFIX      0xFFF0000000000000ULL
 #define NANBOX_DATA_MASK   0x00007FFFFFFFFFFFULL
 
-#define JS_ERR_NO_STACK  (1 << 8)
-#define JS_TPFLG(t)      (1u << (t))
-#define JS_NATIVE_CTOR   (1u << 5)
+#define JS_ERR_NO_STACK (1 << 8)
+#define JS_TPFLG(t)     (1u << (t))
+#define JS_NATIVE_CTOR  (1u << 6)
 
 #define ROPE_MAX_DEPTH        4096
 #define MAX_STRINGIFY_DEPTH   64
