@@ -154,7 +154,11 @@ re-litigated.
   - Verify: latin1/ascii writes of non-ASCII match Node byte-for-byte;
     buffer suites.
 
-- [ ] 9. Replacer callback receives unclamped match index
+- [x] 9. Replacer callback receives unclamped match index
+  - RESOLUTION NOTE: full ToIntegerOrInfinity semantics (js_to_number,
+    so string/object indices coerce per spec — the old code zeroed any
+    non-number), truncate, clamp to str_utf16_len. Get errors on .index
+    now propagate. Node parity on 1.5/-3/99/NaN/"2"/valueOf probes.
   - `src/modules/regex.c:2140-2162`: raw `position_units` (double from a
     custom exec's `.index`, e.g. 1.5 or out-of-range) is passed to the
     callback while slicing uses the clamped byte position.

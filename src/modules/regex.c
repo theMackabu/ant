@@ -2153,11 +2153,14 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_offset_t matched_len; vstr(js, matched, &matched_len);
 
     ant_value_t pos_val = js_getprop_fallback(js, result, "index");
-    double position_units = 0;
-    if (!is_err(pos_val) && vtype(pos_val) == T_NUM) {
-      double d = tod(pos_val);
-      position_units = d < 0 ? 0 : d;
-    }
+    if (is_err(pos_val)) { free(buf); return pos_val; }
+    // spec: min(max(ToIntegerOrInfinity(index), 0), lengthS) in utf16 units;
+    // a custom exec can return any index value
+    double position_units = js_to_number(js, pos_val);
+    position_units = isnan(position_units) ? 0 : trunc(position_units);
+    if (position_units < 0) position_units = 0;
+    double len_units = (double)str_utf16_len(js, str);
+    if (position_units > len_units) position_units = len_units;
 
     // the replacer callback sees the utf16 position; all buffer slicing
     // below works on the byte offset it maps to
