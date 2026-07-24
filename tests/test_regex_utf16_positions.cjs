@@ -71,4 +71,13 @@ eq('empty-match match loop unicode', 'é'.match(/x*/g), ['', '']);
 eq('empty-match match loop astral', '😀'.match(/x*/g), ['', '']);
 eq('non-u empty split astral', '😀a'.split(/(?:)/).length >= 2, true);
 
+// the v flag selects full-unicode advancement exactly like u
+{
+  const idx = (re) => [...'😀a'.matchAll(re)].map((m) => m.index).join(',');
+  eq('matchAll gv advances whole chars', idx(/(?:)/gv), '0,2,3');
+  eq('matchAll gu advances whole chars', idx(/(?:)/gu), '0,2,3');
+  eq('match gv empty-loop astral', '😀a'.match(/x*/gv), ['', '', '']);
+  eq('replace gv empty-loop astral', '😀a'.replace(/(?:)/gv, '|'), '|😀|a|');
+}
+
 console.log('regex utf16 position tests passed');

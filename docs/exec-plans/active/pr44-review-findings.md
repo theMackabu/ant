@@ -89,7 +89,14 @@ re-litigated.
 
 ### Medium — correctness / spec divergence
 
-- [ ] 5. JIT put-field skips `regexp_note_property_write`
+- [x] 5. JIT put-field skips `regexp_note_property_write`
+  - RESOLUTION NOTE: compile-time gate in the OP_PUT_FIELD case via a new
+    shared `regexp_property_write_is_watched` predicate in
+    include/modules/regex.h (single source of truth with the watcher).
+    OP_DEFINE_FIELD is intentionally not gated: the interpreter's define
+    path does not call the watcher either, so this is exact parity.
+    Today's flag consumers also re-verify exec identity per call, so the
+    bypass was defense-in-depth rather than an observed miscompile.
   - Interpreter put path calls it (`src/silver/ops/property.h:735`);
     `src/silver/swarm.c` has zero references, so a JIT-hot
     `RegExp.prototype.exec = ...` store skips regex fast-path invalidation.
@@ -99,7 +106,12 @@ re-litigated.
   - Verify: JIT-warm loop that overwrites `exec` then calls a regex fast
     path; confirm the override is honored.
 
-- [ ] 6. matchAll empty-match advance ignores the `v` flag
+- [x] 6. matchAll empty-match advance ignores the `v` flag
+  - RESOLUTION NOTE: the same unicode-only read existed at THREE advance
+    sites — @@match, matchAll next, and @@replace (the review flagged only
+    matchAll). All three now use a shared `regexp_full_unicode_flag`
+    helper (u OR v, error-propagating). Verified exact Node parity on
+    matchAll/match/replace with /gv and /gu over astral subjects.
   - `src/modules/regex.c:~1716` reads only `"unicode"`; `unicodeSets` is
     supported (`REGEXP_FLAG_UNICODE_SET`) but not consulted, so
     `/(?:)/gv` under-advances into surrogate pairs.

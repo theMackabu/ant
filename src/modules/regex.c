@@ -1639,6 +1639,20 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
   return js_mkstr(js, buf, n);
 }
 
+// both the u and v flags select full-unicode AdvanceStringIndex semantics
+static ant_value_t regexp_full_unicode_flag(ant_t *js, ant_value_t rx, bool *out) {
+  ant_value_t u = js_getprop_fallback(js, rx, "unicode");
+  if (is_err(u)) return u;
+  bool full = js_truthy(js, u);
+  if (!full) {
+    ant_value_t v = js_getprop_fallback(js, rx, "unicodeSets");
+    if (is_err(v)) return v;
+    full = js_truthy(js, v);
+  }
+  *out = full;
+  return js_mkundef();
+}
+
 static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
@@ -1653,10 +1667,9 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
   if (!js_truthy(js, global_val))
     return regexp_exec_abstract(js, rx, str);
 
-  ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
-  if (is_err(unicode_val)) return unicode_val;
-
-  bool full_unicode = js_truthy(js, unicode_val);
+  bool full_unicode = false;
+  ant_value_t fu_err = regexp_full_unicode_flag(js, rx, &full_unicode);
+  if (is_err(fu_err)) return fu_err;
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
 
   ant_value_t A = js_mkarr(js);
@@ -1714,10 +1727,12 @@ static ant_value_t regexp_matchall_next(ant_t *js, ant_value_t *args, int nargs)
     if (mlen == 0) {
       ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
       double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
-      ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
+      bool full_unicode = false;
+      ant_value_t fu_err = regexp_full_unicode_flag(js, rx, &full_unicode);
+      if (is_err(fu_err)) return fu_err;
       ant_offset_t str_len, str_off = vstr(js, str, &str_len);
       double advance = regexp_advance_units(
-        (const char *)(uintptr_t)(str_off), str_len, li, js_truthy(js, unicode_val));
+        (const char *)(uintptr_t)(str_off), str_len, li, full_unicode);
       js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
     }
   } else js_set_slot(iter, SLOT_MATCHALL_DONE, js_true);
@@ -2077,9 +2092,8 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
 
   bool full_unicode = false;
   if (global) {
-    ant_value_t unicode_val = js_getprop_fallback(js, rx, "unicode");
-    if (is_err(unicode_val)) return unicode_val;
-    full_unicode = js_truthy(js, unicode_val);
+    ant_value_t fu_err = regexp_full_unicode_flag(js, rx, &full_unicode);
+    if (is_err(fu_err)) return fu_err;
     js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
   }
 
