@@ -33,8 +33,24 @@ async function main() {
   const key2 = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 }, true, []);
   const raw2 = new Uint8Array(await crypto.subtle.exportKey('raw', key2));
+  assert(new Uint8Array(raw).some((b) => b !== 0), 'first key material nonzero');
   assert(raw2.some((b) => b !== 0), 'key material nonzero');
   assert(Buffer.compare(Buffer.from(raw), Buffer.from(raw2)) !== 0, 'keys differ');
+
+  // all three arguments are required
+  for (const args of [[{ name: 'AES-GCM', length: 128 }], [{ name: 'AES-GCM', length: 128 }, true]]) {
+    let rejected = false;
+    await crypto.subtle.generateKey(...args).catch((e) => { rejected = e instanceof TypeError; });
+    assert(rejected, 'generateKey with ' + args.length + ' args rejects');
+  }
+
+  // usages snapshot at creation; mutating the input array does not leak in
+  const usagesInput = ['encrypt', 'decrypt'];
+  const snapKey = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 128 }, true, usagesInput);
+  usagesInput.push('sign');
+  usagesInput[0] = 'mutated';
+  assert(snapKey.usages.join(',') === 'encrypt,decrypt', 'usages snapshot');
 
   for (const length of [128, 192]) {
     const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length }, true, []);

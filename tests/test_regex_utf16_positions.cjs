@@ -57,7 +57,11 @@ eq('lastIndex reset after miss', z.lastIndex, 0);
 {
   const wtf = 'a' + String.fromCharCode(0xd800) + 'bXc';
   const g = /X/g;
-  eq('wtf8 global exec', g.exec(wtf) && g.exec(wtf.slice(0)), null);
+  const first = g.exec(wtf);
+  assert(first !== null, 'wtf8 global exec finds the match');
+  eq('wtf8 global exec index', first.index, 3);
+  eq('wtf8 global exec lastIndex', g.lastIndex, 4);
+  eq('wtf8 global re-exec exhausted', g.exec(wtf.slice(0)), null);
   const y = /b/y;
   y.lastIndex = 2;
   eq('wtf8 sticky after global', y.test(wtf), true);

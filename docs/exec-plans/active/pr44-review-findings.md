@@ -252,30 +252,39 @@ re-litigated.
 
 ### Low — hygiene, tests, docs
 
-- [ ] 15. `OPENSSL_cleanse` generated key buffers
+- [x] 15. `OPENSSL_cleanse` generated key buffers
+  - RESOLUTION NOTE: both branches cleanse sizeof(buf) after
+    crypto_make_key_object copies the material. The RAND_bytes-failure
+    returns leave buf unwritten, so no cleanse needed there.
   - `src/modules/crypto.c:~933`: stack buffers holding fresh AES/HMAC key
     material are left uncleansed after `crypto_make_key_object` copies them.
   - Fix: `OPENSSL_cleanse(buf, len)` on both branches (including error
     returns after RAND_bytes succeeded).
 
-- [ ] 16. Protocol doc stress10 kill block orphans the ant child
+- [x] 16. Protocol doc stress10 kill block orphans the ant child
+  - RESOLUTION NOTE: both snippets now pkill the ant child by test name
+    after the wrapper kill, matching the surrounding prose.
   - `docs/exec-plans/active/gc-and-server-benchmark-protocol.md:151-158` and
     `195-203`: the example kills only the `/usr/bin/time` wrapper PID while
     the surrounding text warns exactly against that.
   - Fix: make the snippets signal the ant child / process group (the pkill
     workaround the text already describes).
 
-- [ ] 17. Buffer registry test: assert absolute drift
+- [x] 17. Buffer registry test: assert absolute drift
   - `tests/test_buffer_registry_slots.cjs:~68`: `drift < 4MiB` passes on
     negative underflow; use `Math.abs(drift) < 4MiB`.
 
-- [ ] 18. WTF-8 exec test is vacuous on first-match failure
+- [x] 18. WTF-8 exec test is vacuous on first-match failure
+  - RESOLUTION NOTE: first match asserted explicitly (non-null, index 3,
+    lastIndex 4) before the exhausted re-exec null check.
   - `tests/test_regex_utf16_positions.cjs:~60`:
     `eq(..., g.exec(wtf) && g.exec(...), null)` passes if the FIRST exec
     wrongly returns null. Assert the first match (and its index/lastIndex)
     explicitly before the null re-exec check.
 
-- [ ] 19. WebCrypto test: check first key material nonzero
+- [x] 19. WebCrypto test: check first key material nonzero
+  - RESOLUTION NOTE: also pinned items 10/11 here (arity rejections and
+    the usages snapshot) since this file is their natural home.
   - `tests/test_webcrypto_generate_export.cjs:~32`: only `raw2` is checked
     for nonzero bytes; assert `raw` too.
 
@@ -308,6 +317,9 @@ re-litigated.
 
 ## Follow-ups (out of scope for this plan)
 
+- Node rejects generateKey with empty keyUsages for secret keys
+  (SyntaxError); ant accepts them — pre-existing divergence, the
+  webcrypto test has always relied on it.
 - Subtle-crypto wrapper double-reports impl errors: the returned promise
   rejects AND the same error is raised as an uncaught top-level error
   (pre-existing; reproduced with importKey on the installed binary).

@@ -155,6 +155,8 @@ run_gc_suite() {
       kill -TERM "$pid" 2>/dev/null || true
       sleep 1
       kill -KILL "$pid" 2>/dev/null || true
+      # the wrapper kill orphans the ant child; take it down by name
+      pkill -KILL -f test_gc_stress10 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       printf '%s\t%s\tEXPECTED_TIMEOUT\n' "$label" "$test_file"
       continue
@@ -200,6 +202,7 @@ sleep 20
 kill -TERM "$pid" 2>/dev/null
 sleep 1
 kill -KILL "$pid" 2>/dev/null
+pkill -KILL -f test_gc_stress10 2>/dev/null
 wait "$pid" 2>/dev/null
 ```
 

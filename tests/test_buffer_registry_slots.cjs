@@ -68,7 +68,7 @@ churn(200000);
 const settled = Ant.stats().external.buffers;
 const drift = settled - baseline;
 assert(
-  drift < 4 * 1024 * 1024,
+  Math.abs(drift) < 4 * 1024 * 1024,
   `external buffer accounting drifted by ${drift} bytes`
 );
 

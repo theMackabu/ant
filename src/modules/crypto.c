@@ -941,7 +941,9 @@ static ant_value_t crypto_subtle_generate_key_impl(ant_t *js, ant_value_t *args,
     uint8_t buf[32];
     size_t len = (size_t)bits / 8;
     if (RAND_bytes(buf, (int)len) != 1) return js_mkerr(js, "generateKey failed");
-    return crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, buf, len, args[0], extractable, usages);
+    ant_value_t key = crypto_make_key_object(js, CRYPTO_KEY_AES_GCM, NULL, buf, len, args[0], extractable, usages);
+    OPENSSL_cleanse(buf, sizeof(buf));
+    return key;
   }
 
   if (crypto_algorithm_is(js, args[0], "HMAC")) {
@@ -961,7 +963,9 @@ static ant_value_t crypto_subtle_generate_key_impl(ant_t *js, ant_value_t *args,
 
     uint8_t buf[1024];
     if (RAND_bytes(buf, (int)len) != 1) return js_mkerr(js, "generateKey failed");
-    return crypto_make_key_object(js, CRYPTO_KEY_HMAC, md, buf, len, args[0], extractable, usages);
+    ant_value_t key = crypto_make_key_object(js, CRYPTO_KEY_HMAC, md, buf, len, args[0], extractable, usages);
+    OPENSSL_cleanse(buf, sizeof(buf));
+    return key;
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported generateKey algorithm");
