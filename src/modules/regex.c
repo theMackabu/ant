@@ -2304,6 +2304,7 @@ static ant_value_t regexp_split_fast(
 
     PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(compiled.match_data);
     uint32_t ovcount = pcre2_get_ovector_count(compiled.match_data);
+    update_regexp_statics(js, str_ptr, ovector, ovcount);
     ant_offset_t mstart = (ant_offset_t)ovector[0];
     ant_offset_t e = (ant_offset_t)ovector[1];
     if (e > str_len) e = str_len;

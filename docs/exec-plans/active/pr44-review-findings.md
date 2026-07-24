@@ -120,7 +120,13 @@ re-litigated.
   - Verify: `[...'😀a'.matchAll(/(?:)/gv)]` produces the boundary before
     `a`; regex suites.
 
-- [ ] 7. `regexp_split_fast` skips `update_regexp_statics`
+- [x] 7. `regexp_split_fast` skips `update_regexp_statics`
+  - RESOLUTION NOTE: one update_regexp_statics call per successful
+    separator match, placed before the empty-match advance so empty
+    separator matches update statics like the exec-based slow path does.
+    No RegExp.input static exists in the engine, so nothing else to
+    mirror. Adds ~1 small-string alloc per separator; warm-split micro
+    within cross-build noise (re-verify on fresh PGO).
   - `src/modules/regex.c:~2280` calls pcre2 directly; the slow path updates
     legacy statics via the exec path (`regex.c:1246`/`1334`), so
     `RegExp.$1` / `RegExp.lastMatch` diverge between paths after `split`.
@@ -129,7 +135,15 @@ re-litigated.
   - Verify: `'a,b'.split(/(,)/)` then read `RegExp.$1` / `RegExp.lastMatch`;
     compare fast vs slow path (slow path forced via subclass).
 
-- [ ] 8. `Buffer.write` latin1/ascii writes UTF-8 bytes
+- [x] 8. `Buffer.write` latin1/ascii writes UTF-8 bytes
+  - RESOLUTION NOTE: the same wrong treatment covered the WHOLE latin1
+    surface, not just write — Buffer.from memcpy'd UTF-8 bytes,
+    byteLength returned UTF-8 length, and toString UTF-8-decoded. All
+    four fixed as one contract: encode = one byte per UTF-16 code unit
+    (unit & 0xff, shared buffer_encode_latin1_into with ascii fast
+    path), byteLength = utf16_strlen, decode = byte -> U+00xx (ascii
+    decode additionally & 0x7f). Byte-for-byte Node parity on 12 probes
+    including astral surrogate masking.
   - `src/modules/buffer.c:~3276`: `ENC_LATIN1`/`ENC_ASCII` fall through to
     `buffer_encode_utf8_into`. Reproduced: `Buffer.alloc(2).write("é", 0, 2,
     "latin1")` writes `c3 a9` and returns 2; Node writes `e9`, returns 1.

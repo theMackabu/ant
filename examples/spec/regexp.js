@@ -57,4 +57,12 @@ test('dotAll flag', re7.dotAll, true);
 
 test('sticky flag', /test/y.sticky, true);
 
+// legacy statics reflect the last separator match after split, on both
+// the generic path and the internal fast path
+'a,b;c'.split(/([,;])/);
+test('split updates RegExp.$1', RegExp.$1, ';');
+test('split updates RegExp.lastMatch', RegExp.lastMatch, ';');
+'x1y22z'.split(/(\d+)/);
+test('split statics track later match', RegExp.$1, '22');
+
 summary();
