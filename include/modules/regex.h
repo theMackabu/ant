@@ -22,6 +22,17 @@ void gc_sweep_regex_cache(void);
 void regexp_note_exec_property_write(void);
 void regexp_note_replace_property_write(void);
 
+// property names whose stores must invalidate the regex fast paths; the
+// JIT put-field emitter refuses its inline store for these so every such
+// write reaches regexp_note_property_write
+static inline bool regexp_property_write_is_watched(
+  const char *name, size_t len
+) {
+  return name &&
+    ((len == 4 && memcmp(name, "exec", 4) == 0) ||
+     (len == 7 && memcmp(name, "replace", 7) == 0));
+}
+
 static inline void regexp_note_property_write(
   const char *name, size_t len
 ) {

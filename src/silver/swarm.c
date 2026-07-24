@@ -7761,6 +7761,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_PUT_FIELD: {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->atom_count) { ok = false; break; }
+        sv_atom_t *pf_atom = &func->atoms[idx];
+        // stores to regex-watched names must reach the slow path so
+        // regexp_note_property_write can invalidate the regex fast paths
+        bool pf_watched = regexp_property_write_is_watched(
+          pf_atom->str, pf_atom->len);
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         MIR_reg_t val = vstack_pop(&vs);
@@ -7768,7 +7773,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t ic_idx = sv_get_u16(ip + 5);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
-        if (mir_emit_put_field_ic_fastpath(
+        if (!pf_watched && mir_emit_put_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, obj, val, true, slow,
           r_ic_epoch_val, r_js,
           put_field_transition_proto, imp_put_field_transition,
