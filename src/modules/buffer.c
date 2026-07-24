@@ -2492,6 +2492,9 @@ static ant_value_t js_uint8array_setFromBase64(ant_t *js, ant_value_t *args, int
   return result;
 }
 
+static size_t buffer_encode_latin1_into(
+  const char *str, size_t str_len, uint8_t *dst, size_t dst_len);
+
 typedef enum {
   ENC_UTF8,
   ENC_HEX,
@@ -2562,13 +2565,20 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
       size_t decoded_len = unit_count * 2;
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-      
+
       for (size_t i = 0; i < unit_count; i++) {
         uint32_t unit = utf16_code_unit_at(str, len, i);
         buffer->data[i * 2] = (uint8_t)(unit & 0xff);
         buffer->data[i * 2 + 1] = (uint8_t)((unit >> 8) & 0xff);
       }
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
+    } else if (encoding == ENC_LATIN1 || encoding == ENC_ASCII) {
+      size_t unit_count = utf16_strlen(str, len);
+      ArrayBufferData *buffer = create_array_buffer_data(unit_count);
+      if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+
+      buffer_encode_latin1_into(str, len, buffer->data, unit_count);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, unit_count, "Buffer");
     } else {
       ArrayBufferData *buffer = create_array_buffer_data(len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
@@ -3003,11 +3013,27 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     free(str);
     
     return result;
+  } else if (encoding == ENC_LATIN1 || encoding == ENC_ASCII) {
+    // latin1: each byte is U+0000..U+00FF; ascii additionally strips the
+    // high bit (the Node contract for decoding)
+    char *out = malloc(len * 2 + 1);
+    if (!out) return js_mkerr(js, "Failed to allocate string");
+
+    size_t out_len = 0;
+    for (size_t i = 0; i < len; i++) {
+      uint32_t unit = encoding == ENC_ASCII ? (uint32_t)(data[i] & 0x7f)
+                                            : (uint32_t)data[i];
+      out_len += (size_t)utf8_encode(unit, out + out_len);
+    }
+
+    ant_value_t result = js_mkstr(js, out, out_len);
+    free(out);
+    return result;
   } else {
     size_t out_cap = len * 3 + 1;
     char *out = malloc(out_cap);
     if (!out) return js_mkerr(js, "Failed to allocate string");
-    
+
     utf8_dec_t dec = { .bom_seen = true, .ignore_bom = true };
     utf8proc_ssize_t out_len = utf8_whatwg_decode(&dec, data, len, out, false, false);
     
@@ -3207,8 +3233,8 @@ static ant_value_t js_buffer_indexOf(ant_t *js, ant_value_t *args, int nargs) {
 // String-to-bytes encoders used by buf.write. Each writes at most dst_len
 // bytes of `str` encoded as its encoding into dst and returns the byte
 // count actually written; none allocate except base64 (variable-length
-// decode). ENC_ASCII/ENC_LATIN1 intentionally share the utf8 byte copy,
-// matching Buffer.from's treatment of those encodings.
+// decode). ENC_ASCII/ENC_LATIN1 write one byte per UTF-16 code unit
+// (unit & 0xff), the Node contract for both.
 
 static size_t buffer_encode_utf8_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
   size_t n = str_len < dst_len ? str_len : dst_len;
@@ -3219,6 +3245,21 @@ static size_t buffer_encode_utf8_into(const char *str, size_t str_len, uint8_t *
   }
   memcpy(dst, str, n);
   return n;
+}
+
+static size_t buffer_encode_latin1_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
+  if (str_is_ascii(str)) {
+    size_t n = str_len < dst_len ? str_len : dst_len;
+    memcpy(dst, str, n);
+    return n;
+  }
+  size_t i = 0;
+  for (; i < dst_len; i++) {
+    uint32_t unit = utf16_code_unit_at(str, str_len, i);
+    if (unit > 0xffff) break; // past end of string
+    dst[i] = (uint8_t)(unit & 0xff);
+  }
+  return i;
 }
 
 static size_t buffer_encode_ucs2_into(const char *str, size_t str_len, uint8_t *dst, size_t dst_len) {
@@ -3277,6 +3318,8 @@ static size_t buffer_encode_into(
     case ENC_UCS2: return buffer_encode_ucs2_into(str, str_len, dst, dst_len);
     case ENC_HEX: return buffer_encode_hex_into(str, str_len, dst, dst_len);
     case ENC_BASE64: return buffer_encode_base64_into(str, str_len, dst, dst_len);
+    case ENC_LATIN1:
+    case ENC_ASCII: return buffer_encode_latin1_into(str, str_len, dst, dst_len);
     default: return buffer_encode_utf8_into(str, str_len, dst, dst_len);
   }
 }
@@ -3285,6 +3328,8 @@ static size_t buffer_encode_into(
 static size_t buffer_encoded_byte_length(BufferEncoding encoding, const char *str, size_t str_len) {
   switch (encoding) {
     case ENC_UCS2: return utf16_strlen(str, str_len) * 2;
+    case ENC_LATIN1:
+    case ENC_ASCII: return utf16_strlen(str, str_len);
     case ENC_HEX: return str_len / 2;
     case ENC_BASE64: {
       size_t effective = str_len;

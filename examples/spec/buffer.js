@@ -384,4 +384,17 @@ test('ArrayBuffer slice detached throws', sliceError, 'Cannot slice a detached A
 const sharedBuf = new SharedArrayBuffer(16);
 test('SharedArrayBuffer detached', sharedBuf.detached, undefined);
 
+// latin1/ascii encode one byte per UTF-16 code unit (unit & 0xff); ascii
+// decode strips the high bit
+const l1 = Buffer.alloc(4);
+test('latin1 write é is one byte', l1.write('é', 0, 4, 'latin1'), 1);
+test('latin1 write é byte value', l1[0], 0xe9);
+test('ascii write é matches latin1', (l1.write('é', 1, 3, 'ascii'), l1[1]), 0xe9);
+test('latin1 write astral masks units', (l1.write('😀', 0, 4, 'latin1'), l1[0] * 256 + l1[1]), 0x3d00);
+test('latin1 byteLength is unit count', Buffer.byteLength('é😀', 'latin1'), 3);
+test('latin1 from é byte', Buffer.from('é', 'latin1')[0], 0xe9);
+test('latin1 round trip', Buffer.from('héllo', 'latin1').toString('latin1'), 'héllo');
+test('latin1 toString maps bytes', Buffer.from([0xe9, 0x41]).toString('latin1'), 'éA');
+test('ascii toString strips high bit', Buffer.from([0xe9, 0x41]).toString('ascii'), 'iA');
+
 summary();
