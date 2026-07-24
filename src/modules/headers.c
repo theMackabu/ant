@@ -292,9 +292,9 @@ static bool list_append_parts(
   return true;
 }
 
-static void list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
-  if (!lower_name || !value) return;
-  (void)list_append_parts(
+static bool list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
+  if (!lower_name || !value) return false;
+  return list_append_parts(
     l,
     lower_name, strlen(lower_name),
     value, strlen(value),
@@ -306,8 +306,14 @@ headers_data_t *headers_data_copy(const headers_data_t *src) {
   headers_data_t *dst = list_new();
   if (!dst) return NULL;
 
-  for (const hdr_entry_t *e = src->head; e; e = e->next)
-    list_append_raw(dst, e->name, e->value);
+  for (const hdr_entry_t *e = src->head; e; e = e->next) {
+    // a partial copy must not look like success: response cloning would
+    // silently drop headers
+    if (!list_append_raw(dst, e->name, e->value)) {
+      list_free(dst);
+      return NULL;
+    }
+  }
   return dst;
 }
 
@@ -1007,7 +1013,7 @@ bool headers_copy_from(ant_t *js, ant_value_t dst, ant_value_t src) {
   if (!src_list) return true;
   
   for (hdr_entry_t *e = src_list->head; e; e = e->next)
-    list_append_raw(dst_list, e->name, e->value);
+    if (!list_append_raw(dst_list, e->name, e->value)) return false;
   return true;
 }
 
@@ -1084,11 +1090,11 @@ bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const ch
   }
 
   list_delete_name(l, lower);
-  list_append_raw(l, lower, norm);
+  bool appended = list_append_raw(l, lower, norm);
   free(lower);
   free(norm);
-  
-  return true;
+
+  return appended;
 }
 
 ant_value_t headers_data_init_from(ant_t *js, headers_data_t *data, ant_value_t init) {
@@ -1100,7 +1106,8 @@ ant_value_t headers_data_init_from(ant_t *js, headers_data_t *data, ant_value_t 
   if (headers_is_headers(init)) {
     hdr_list_t *src = get_list(init);
     if (src) for (hdr_entry_t *e = src->head; e; e = e->next)
-      list_append_raw(data, e->name, e->value);
+      if (!list_append_raw(data, e->name, e->value))
+        return js_mkerr(js, "oom");
     return js_mkundef();
   }
 

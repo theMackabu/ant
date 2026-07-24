@@ -189,7 +189,17 @@ re-litigated.
   - Fix: copy into a fresh array (js_mkarr + push each element) at creation.
   - Verify: mutate the input array post-generateKey; key.usages unchanged.
 
-- [ ] 12. `headers_data_copy` swallows OOM; `Response.redirect` error-path leak
+- [x] 12. `headers_data_copy` swallows OOM; `Response.redirect` error-path leak
+  - RESOLUTION NOTE: list_append_raw now returns bool; headers_data_copy
+    frees the partial list and returns NULL on any append failure
+    (response.c's data_dup already handled NULL — the check was dead
+    until now). Failure also propagates at the three other raw-append
+    sites: headers_copy_from returns false, the set path returns the
+    append result, headers-init returns an oom error. Redirect's
+    ensure-headers failure path now frees href and clears the parsed
+    url like the surrounding error exits. OOM paths verified by
+    inspection; happy paths (redirect, clone, Headers copy
+    independence) probed against Node.
   - `src/modules/headers.c:~304`: `list_append_raw` discards append failure,
     so cloning returns a silently partial copy on OOM.
   - `src/modules/response.c:~944`: early return on `response_ensure_headers`

@@ -942,7 +942,11 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
   }
 
   headers = response_ensure_headers(js, obj);
-  if (is_err(headers)) return headers;
+  if (is_err(headers)) {
+    free(href);
+    url_state_clear(&parsed);
+    return headers;
+  }
   headers_set_immutable(headers, false);
   headers_append_if_missing(headers, "location", href);
   headers_set_immutable(headers, true);
