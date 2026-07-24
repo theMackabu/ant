@@ -24,7 +24,8 @@ export function targets() {
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
     'test_ctor_from_eval_scope.cjs',
-    'test_string_call_stack_realloc.cjs'
+    'test_string_call_stack_realloc.cjs',
+    'test_jit_define_field_join_sites.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

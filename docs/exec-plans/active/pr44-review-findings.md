@@ -67,7 +67,15 @@ re-litigated.
   - Verify: repro with `String.prototype.indexOf.call({toString(){...deep
     recursion to force stack growth...; return "x"}}, "x")`; spec suite.
 
-- [ ] 4. Stale `vs.obj_site` across JIT control-flow joins
+- [x] 4. Stale `vs.obj_site` across JIT control-flow joins
+  - RESOLUTION NOTE: conservative clear alongside the other speculative
+    slot state at the single branch-target reset block. This also discards
+    still-valid sites for literals whose construction spans a join
+    (branchy field values), losing the DEFINE_FIELD site fastpath for
+    fields after the branch — measured bench_jit_object_literal at parity
+    with installed (~40ms both), so the cost is not observable. If a
+    literal-heavy workload ever regresses, the precise fix is tracking
+    obj_site in the label-merge entries.
   - `src/silver/swarm.c` branch-target reset block (~line 4410).
   - The join reset memsets `slot_type` / `known_func` / `has_const` but never
     `obj_site`, so a stale object-literal site pointer can survive a merge

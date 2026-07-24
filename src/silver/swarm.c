@@ -4415,6 +4415,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           memset(vs.known_func, 0, (size_t)vs.max * sizeof(sv_func_t *));
         if (vs.has_const)
           memset(vs.has_const, 0, (size_t)vs.max * sizeof(bool));
+        if (vs.obj_site)
+          memset(vs.obj_site, 0, (size_t)vs.max * sizeof(sv_obj_site_cache_t *));
         if (known_func_locals)
           memset(known_func_locals, 0,
                  (size_t)n_locals * sizeof(sv_func_t *));
