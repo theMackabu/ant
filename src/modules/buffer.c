@@ -3306,6 +3306,8 @@ static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
 
   size_t str_len;
   char *str = js_getstr(js, args[0], &str_len);
+  if (!str) return js_mkerr(js, "argument must be a string");
+  
   size_t offset = 0;
   size_t length = ta_data->byte_length;
   BufferEncoding encoding = ENC_UTF8;

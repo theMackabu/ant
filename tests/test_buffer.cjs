@@ -176,6 +176,14 @@ const written = buf4.write('Hello', 0);
 console.log('Bytes written:', written);
 console.log('Buffer after write:', buf4.toString());
 
+// write with a non-string first argument must throw, not crash
+for (const bad of [123, {}, null, undefined]) {
+  let threw = false;
+  try { buf4.write(bad); } catch (e) { threw = e instanceof TypeError; }
+  if (!threw) throw new Error('write(' + String(bad) + ') did not throw TypeError');
+}
+console.log('Non-string write throws: ok');
+
 // Test Buffer toString with hex encoding
 const buf5 = Buffer.from('Hello');
 console.log('Buffer toString hex:', buf5.toString('hex'));
