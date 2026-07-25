@@ -81,18 +81,14 @@ static ant_value_t js_textencoder_get_encoding(ant_t *js, ant_value_t *args, int
 ant_value_t te_encode(ant_t *js, const char *str, size_t str_len) {
   ArrayBufferData *ab = create_array_buffer_data(str_len);
   if (!ab) return js_mkerr(js, "out of memory");
-  
+
   if (str_len > 0) {
-    const uint8_t *s = (const uint8_t *)str;
-    uint8_t *d = ab->data; size_t i = 0;
-    
-    while (i < str_len) {
-    if (s[i] == 0xED && i + 2 < str_len && s[i+1] >= 0xA0 && s[i+1] <= 0xBF) {
-      d[i] = 0xEF; d[i+1] = 0xBF; d[i+2] = 0xBD;
-      i += 3;
-    } else { d[i] = s[i]; i++; }}
+    memcpy(ab->data, str, str_len);
+    // the memoized validity flag keeps valid strings on the pure-memcpy
+    // path; only WTF-8 strings pay the surrogate patch pass
+    if (!str_is_valid_utf8(str)) utf8_replace_wtf8_surrogates(ab->data, str_len);
   }
-  
+
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, str_len, "Uint8Array");
 }
 

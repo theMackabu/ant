@@ -397,4 +397,15 @@ test('latin1 round trip', Buffer.from('héllo', 'latin1').toString('latin1'), 'h
 test('latin1 toString maps bytes', Buffer.from([0xe9, 0x41]).toString('latin1'), 'éA');
 test('ascii toString strips high bit', Buffer.from([0xe9, 0x41]).toString('ascii'), 'iA');
 
+// utf8 write/from must emit U+FFFD for lone surrogates, never raw WTF-8
+const loneBuf = Buffer.alloc(4);
+test('utf8 write lone surrogate length', loneBuf.write('\uD800', 0, 4, 'utf8'), 3);
+test('utf8 write lone surrogate bytes',
+  [loneBuf[0], loneBuf[1], loneBuf[2]].map((x) => x.toString(16)).join(' '), 'ef bf bd');
+test('utf8 from lone surrogate',
+  [...Buffer.from('a\uD800b', 'utf8')].map((x) => x.toString(16)).join(' '), '61 ef bf bd 62');
+test('utf8 lone surrogate round trip', Buffer.from('\uD800', 'utf8').toString('utf8'), '�');
+test('utf8 real pair unchanged',
+  [...Buffer.from('😀', 'utf8')].map((x) => x.toString(16)).join(' '), 'f0 9f 98 80');
+
 summary();

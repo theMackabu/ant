@@ -2494,6 +2494,8 @@ static ant_value_t js_uint8array_setFromBase64(ant_t *js, ant_value_t *args, int
 
 static size_t buffer_encode_latin1_into(
   const char *str, size_t str_len, uint8_t *dst, size_t dst_len);
+static size_t buffer_encode_utf8_into(
+  const char *str, size_t str_len, uint8_t *dst, size_t dst_len);
 
 typedef enum {
   ENC_UTF8,
@@ -2582,8 +2584,8 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
     } else {
       ArrayBufferData *buffer = create_array_buffer_data(len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-      
-      memcpy(buffer->data, str, len);
+
+      buffer_encode_utf8_into(str, len, buffer->data, len);
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
     }
   }
@@ -3244,6 +3246,9 @@ static size_t buffer_encode_utf8_into(const char *str, size_t str_len, uint8_t *
     while (n > 0 && ((unsigned char)str[n] & 0xc0) == 0x80) n--;
   }
   memcpy(dst, str, n);
+  // WTF-8 lone surrogates must leave the runtime as U+FFFD; the memoized
+  // validity flag keeps valid strings on the pure-memcpy path
+  if (!str_is_valid_utf8(str)) utf8_replace_wtf8_surrogates(dst, n);
   return n;
 }
 

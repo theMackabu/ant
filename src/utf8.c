@@ -364,6 +364,14 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   return cursor.utf16_pos;
 }
 
+void utf8_replace_wtf8_surrogates(uint8_t *bytes, size_t len) {
+  for (size_t i = 0; i + 2 < len; i++) {
+    if (bytes[i] != 0xed || (bytes[i + 1] & 0xe0) != 0xa0) continue;
+    memcpy(bytes + i, "\xef\xbf\xbd", 3);
+    i += 2;
+  }
+}
+
 // strict RFC 3629 validation: rejects overlongs, surrogates (WTF-8 lone
 // surrogate encodings ED A0-BF), values above U+10FFFF, and truncation
 bool utf8_validate_bytes(const char *str, size_t len) {
