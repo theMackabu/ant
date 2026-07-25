@@ -11,6 +11,7 @@ can reuse the decision history.
 ## Plans
 
 - [JIT PUT_FIELD GC Performance](jit-put-field-gc-performance.md)
+- [PR #44 Review Findings — Fix Plan](pr44-review-findings.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
 - [tlsuv WebSocket Buffered Read](tlsuv-websocket-buffered-read.md)
 - [Watch Supervisor](watch-supervisor.md)
