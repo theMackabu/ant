@@ -178,6 +178,12 @@ static void build_gc_const_tables(sv_func_t *func) {
   if (!marked_slots) return;
 
   int slot_count = 0;
+  for (int i = 0; i < func->const_count; i++) {
+    if (vtype(func->constants[i]) != T_BIGINT) continue;
+    marked_slots[i] = 1;
+    slot_count++;
+  }
+
   for (int pc = 0; pc < func->code_len;) {
     sv_op_t op = (sv_op_t)func->code[pc];
     int size = (op < OP__COUNT) ? sv_op_size[op] : 0;
