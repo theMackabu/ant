@@ -185,6 +185,7 @@ static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   if (coro) coroutine_unhold(coro, CORO_HOLD_GENERATOR);
 }
 
+// TODO: collapse
 coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
   return generator_coro(gen);
 }
@@ -213,23 +214,6 @@ static ant_value_t generator_find_owner(ant_t *js, coroutine_t *coro) {
   gen = generator_find_owner_in_list(js->objects_old, coro);
   if (vtype(gen) != T_UNDEF) return gen;
   return generator_find_owner_in_list(js->permanent_objects, coro);
-}
-
-static coroutine_t *generator_find_coro_for_vm_in_list(ant_object_t *head, sv_vm_t *vm) {
-  for (ant_object_t *obj = head; obj; obj = obj->next) {
-    generator_data_t *data = generator_data(js_obj_from_ptr(obj));
-    if (data && data->coro && data->state == GEN_EXECUTING) return data->coro;
-  }
-  return NULL;
-}
-
-coroutine_t *generator_get_coro_for_vm(ant_t *js, sv_vm_t *vm) {
-  if (!js || !vm) return NULL;
-  coroutine_t *coro = generator_find_coro_for_vm_in_list(js->objects, vm);
-  if (coro) return coro;
-  coro = generator_find_coro_for_vm_in_list(js->objects_old, vm);
-  if (coro) return coro;
-  return generator_find_coro_for_vm_in_list(js->permanent_objects, vm);
 }
 
 bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t result) {

@@ -11,7 +11,6 @@
 
 #include "silver/engine.h"
 #include "silver/swarm.h"
-#include "modules/generator.h"
 #include "modules/regex.h"
 
 #include "ops/literals.h"
@@ -2086,8 +2085,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_YIELD: {
     ant_value_t yielded = vm->stack[--vm->sp];
     coroutine_t *coro = sv_async_active_coro(js);
-    if (!coro || coro->type != CORO_GENERATOR)
-      coro = generator_get_coro_for_vm(js, vm);
     if (!coro || coro->type != CORO_GENERATOR) {
       sv_err = js_mkerr(js, "yield can only be used inside generator functions");
       goto sv_throw;
@@ -2117,8 +2114,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_YIELD_STAR_THROW:
   L_YIELD_STAR_RETURN: {
     coroutine_t *coro = sv_async_active_coro(js);
-    if (!coro || coro->type != CORO_GENERATOR)
-      coro = generator_get_coro_for_vm(js, vm);
     if (!coro || coro->type != CORO_GENERATOR) {
       sv_err = js_mkerr(js, "yield can only be used inside generator functions");
       goto sv_throw;

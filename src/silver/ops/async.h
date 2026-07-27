@@ -4,7 +4,6 @@
 #include "ant.h"
 #include "sugar.h"
 #include "gc/roots.h"
-#include "modules/generator.h"
 #include "silver/engine.h"
 
 typedef enum {
@@ -259,8 +258,6 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
   }
 
   coroutine_t *coro = sv_async_active_coro(js);
-  if (!coro) coro = generator_get_coro_for_vm(js, vm);
-
   if (!coro) {
     out.state = SV_AWAIT_ERROR;
     out.value = js_mkerr(js, "await can only be used inside async functions");
