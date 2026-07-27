@@ -170,7 +170,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     coroutine_deactivate(js, coro);
 
     if (suspended_again) {
-      if (generator_resume_pending_request(js, coro, result)) return;
+      generator_resume_pending_request(js, coro, result);
       coroutine_release(coro);
       return;
     }

@@ -36,9 +36,10 @@ export function targets() {
     'test_minicoro_concurrent.cjs',
     'test_arguments_async.cjs',
     'test_arguments_escaped_coro.js',
+    'test_async_gen_leak.mjs',
     'test_upvalue_gc.cjs'
   ];
-  for (const f of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
+  for (const f of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true });
 
   list.push(
     { group: 'servers', type: 'server', name: 'hono', entry: 'examples/npm/hono/src/index.ts' },

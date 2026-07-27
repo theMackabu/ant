@@ -261,7 +261,15 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
     return out;
   }
 
-  sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
+  int entry_fp = vm->suspended_entry_fp;
+  if (entry_fp < 0 || entry_fp > vm->fp) {
+    coroutine_clear_await_registration(coro);
+    out.state = SV_AWAIT_ERROR;
+    out.value = js_mkerr(js, "await suspended without a valid entry frame");
+    return out;
+  }
+
+  sv_activation_t *act = sv_activation_capture(vm, entry_fp, coro->act);
   if (!act) {
     coroutine_clear_await_registration(coro);
     out.state = SV_AWAIT_ERROR;
