@@ -2462,13 +2462,19 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_IMPORT:
-      compile_expr(c, node->right);
       if (has_module_import_binding(c)) {
         emit_get_module_import_binding(c);
-        emit_op(c, OP_SWAP);
+        compile_expr(c, node->right);
+        if (node->left) compile_expr(c, node->left);
+        else emit_op(c, OP_UNDEF);
         emit_op(c, OP_CALL);
-        emit_u16(c, 1);
-      } else emit_op(c, OP_IMPORT);
+        emit_u16(c, 2);
+      } else {
+        compile_expr(c, node->right);
+        if (node->left) compile_expr(c, node->left);
+        else emit_op(c, OP_UNDEF);
+        emit_op(c, OP_IMPORT);
+      }
       break;
 
     case N_REGEXP:

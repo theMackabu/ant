@@ -166,9 +166,66 @@ static ant_value_t builtin_resolveFilename(ant_t *js, ant_value_t *args, int nar
   return resolved;
 }
 
+typedef struct { 
+  const char *name; 
+  bool found; 
+} builtin_lookup_ctx_t;
+
+static void match_builtin_name(const char *name, void *ud) {
+  builtin_lookup_ctx_t *ctx = (builtin_lookup_ctx_t *)ud;
+  if (!ctx->found && strcmp(name, ctx->name) == 0) ctx->found = true;
+}
+
+static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR) return js_false;
+
+  const char *name = js_getstr(js, args[0], NULL);
+  if (strncmp(name, "node:", 5) == 0) name += 5;
+
+  builtin_lookup_ctx_t ctx = { name, false };
+  ant_library_foreach(match_builtin_name, &ctx);
+  return js_bool(ctx.found);
+}
+
+static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t hook = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (vtype(js->esm.hooks) != T_ARR) return js_mkundef();
+
+  ant_value_t remaining = js_mkarr(js);
+  ant_offset_t len = js_arr_len(js, js->esm.hooks);
+
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, js->esm.hooks, i);
+    if (entry != hook) js_arr_push(js, remaining, entry);
+  }
+
+  js->esm.hooks = remaining;
+  return js_mkundef();
+}
+
+static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "registerHooks requires an options object");
+
+  if (vtype(js->esm.hooks) != T_ARR) js->esm.hooks = js_mkarr(js);
+  js_arr_push(js, js->esm.hooks, args[0]);
+
+  ant_value_t dereg_obj = js_mkobj(js);
+  js_set_slot(dereg_obj, SLOT_CFUNC, js_mkfun(builtin_module_deregisterHooks));
+  js_set_slot(dereg_obj, SLOT_DATA, args[0]);
+
+  ant_value_t out = js_mkobj(js);
+  js_set(js, out, "deregister", js_obj_to_func(js, dereg_obj));
+  
+  return out;
+}
+
 ant_value_t module_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
+  
   js_set(js, lib, "createRequire", js_mkfun(builtin_createRequire));
+  js_set(js, lib, "registerHooks", js_mkfun(builtin_module_registerHooks));
+  js_set(js, lib, "isBuiltin", js_mkfun(builtin_module_isBuiltin));
 
   ant_value_t modules_arr = js_mkarr(js);
   builtin_iter_ctx_t ctx = { js, modules_arr };

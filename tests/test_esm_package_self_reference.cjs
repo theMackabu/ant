@@ -8,8 +8,6 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-esm-self-reference-'));
 const ant = path.resolve(process.execPath);
 
 try {
-  // Physical package directory outside any node_modules hierarchy, like the
-  // package-manager cache targets that node_modules symlinks point at.
   const storeDir = path.join(tmp, 'store', 'selfref-fixture');
   fs.mkdirSync(storeDir, { recursive: true });
 
@@ -21,18 +19,12 @@ try {
         './find': { import: './find.mjs', require: './find.cjs' },
         './walk': { import: './walk.mjs' },
         './resolve': { import: './resolve.mjs', require: './resolve.cjs' },
-        './probe': './probe.mjs',
-      },
+        './probe': './probe.mjs'
+      }
     })
   );
-  fs.writeFileSync(
-    path.join(storeDir, 'find.mjs'),
-    'import { up } from "selfref-fixture/walk";\nexport const chain = `find->${up}`;\n'
-  );
-  fs.writeFileSync(
-    path.join(storeDir, 'walk.mjs'),
-    'import { leaf } from "selfref-fixture/resolve";\nexport const up = `walk->${leaf}`;\n'
-  );
+  fs.writeFileSync(path.join(storeDir, 'find.mjs'), 'import { up } from "selfref-fixture/walk";\nexport const chain = `find->${up}`;\n');
+  fs.writeFileSync(path.join(storeDir, 'walk.mjs'), 'import { leaf } from "selfref-fixture/resolve";\nexport const up = `walk->${leaf}`;\n');
   fs.writeFileSync(path.join(storeDir, 'resolve.mjs'), 'export const leaf = "resolve:import";\n');
   fs.writeFileSync(path.join(storeDir, 'resolve.cjs'), 'module.exports = { leaf: "resolve:require" };\n');
   fs.writeFileSync(
@@ -51,18 +43,25 @@ try {
   const appDir = path.join(tmp, 'app');
   const nodeModules = path.join(appDir, 'node_modules');
   fs.mkdirSync(nodeModules, { recursive: true });
-  fs.writeFileSync(
-    path.join(appDir, 'package.json'),
-    JSON.stringify({ name: 'app-fixture', type: 'module' })
-  );
+  fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'app-fixture', type: 'module', exports: { '.': './main.mjs' } }));
   fs.symlinkSync(storeDir, path.join(nodeModules, 'selfref-fixture'), 'junction');
+
+  const shadowDir = path.join(nodeModules, 'app-fixture');
+  fs.mkdirSync(shadowDir, { recursive: true });
+  fs.writeFileSync(path.join(shadowDir, 'package.json'), JSON.stringify({ name: 'app-fixture', exports: { './hidden': './hidden.mjs' } }));
+  fs.writeFileSync(path.join(shadowDir, 'hidden.mjs'), 'export const hidden = "shadow";\n');
+
+  fs.writeFileSync(
+    path.join(nodeModules, 'loose.mjs'),
+    'export async function probeApp() {\n' +
+      '  try { await import("app-fixture"); return "resolved"; }\n' +
+      '  catch { return "rejected"; }\n' +
+      '}\n'
+  );
 
   const externalDir = path.join(nodeModules, 'external-pkg');
   fs.mkdirSync(externalDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(externalDir, 'package.json'),
-    JSON.stringify({ name: 'external-pkg', exports: { '.': { import: './index.mjs' } } })
-  );
+  fs.writeFileSync(path.join(externalDir, 'package.json'), JSON.stringify({ name: 'external-pkg', exports: { '.': { import: './index.mjs' } } }));
   fs.writeFileSync(path.join(externalDir, 'index.mjs'), 'export const external = "external-ok";\n');
 
   fs.writeFileSync(
@@ -84,22 +83,27 @@ try {
       'const secretResult = await probeSecret();',
       'if (secretResult !== "rejected") throw new Error(`unexported subpath should stay rejected, got ${secretResult}`);',
       '',
-      'console.log("self reference chain ok");',
+      'let shadowResult;',
+      'try { await import("app-fixture/hidden"); shadowResult = "resolved"; }',
+      'catch { shadowResult = "rejected"; }',
+      'if (shadowResult !== "rejected") throw new Error(`self reference must not fall back to shadow package, got ${shadowResult}`);',
       '',
+      'const { probeApp } = await import("./node_modules/loose.mjs");',
+      'const looseResult = await probeApp();',
+      'if (looseResult !== "rejected") throw new Error(`node_modules boundary should block self reference, got ${looseResult}`);',
+      '',
+      'console.log("self reference chain ok");',
+      ''
     ].join('\n')
   );
 
   const result = spawnSync(ant, ['--no-color', path.join(appDir, 'main.mjs')], {
     cwd: appDir,
-    encoding: 'utf8',
+    encoding: 'utf8'
   });
   if (result.error) throw result.error;
 
-  assert.strictEqual(
-    result.status,
-    0,
-    `self reference fixture failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`
-  );
+  assert.strictEqual(result.status, 0, `self reference fixture failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   assert.match(result.stdout, /self reference chain ok/);
 
   console.log('esm package self reference ok');

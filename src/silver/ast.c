@@ -834,7 +834,11 @@ static sv_ast_t *parse_primary(P) {
     if (NEXT() != TOK_LPAREN) return mk_ident("import", 6);
     CONSUME();
     sv_ast_t *n = mk(N_IMPORT);
-    n->right = parse_expr(p);
+    n->right = parse_assign(p);
+    if (NEXT() == TOK_COMMA && (CONSUME(), NEXT() != TOK_RPAREN)) {
+      n->left = parse_assign(p);
+      if (NEXT() == TOK_COMMA) CONSUME();
+    }
     expect(p, TOK_RPAREN);
     return n;
   }

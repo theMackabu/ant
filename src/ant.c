@@ -15879,15 +15879,21 @@ static const char *js_get_execution_module_filename(ant_t *js) {
 
 ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
-  
+
   ant_value_t module_ctx = js_get_import_owner_module_ctx(js);
   const char *base_path = js_get_module_ctx_filename(js, module_ctx);
-  
+
   if (!js_has_module_filename(base_path))
     base_path = js_get_execution_module_filename(js);
-    
+
+  ant_value_t attrs = js_mkundef();
+  if (nargs >= 2 && is_object_type(args[1])) {
+    attrs = js_get(js, args[1], "with");
+    if (!is_object_type(attrs)) attrs = js_mkundef();
+  }
+
   ant_value_t tla_promise = js_mkundef();
-  ant_value_t ns = js_esm_import_dynamic(js, args[0], base_path, &tla_promise);
+  ant_value_t ns = js_esm_import_dynamic_ex(js, args[0], base_path, attrs, &tla_promise);
   
   if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
 
@@ -17110,6 +17116,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->global = mkobj(js, 0);
   js->this_val = js->global;
   js->new_target = js_mkundef();
+  js->esm.hooks = js_mkundef();
+  js->esm.import_attributes = js_mkundef();
   js->length_str = ANT_STRING("length");
 
   ant_value_t glob = js->global;

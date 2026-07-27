@@ -180,6 +180,11 @@ struct ant_isolate_t {
   ant_value_t length_str;
   
   struct {
+    ant_value_t hooks;
+    ant_value_t import_attributes;
+  } esm;
+  
+  struct {
     const char *length;
     const char *buffer;
     const char *prototype;
