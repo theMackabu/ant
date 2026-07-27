@@ -38,9 +38,10 @@
 #include "ops/coercion.h"
 
 enum {
+  SV_VM_GUARD_SIZE = (size_t)65536,
   SV_STACK_RESERVE = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
   SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
-  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_FRAMES_RESERVE)
+  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
 };
 
 static void *sv_vm_reserve_storage(void) {
@@ -52,7 +53,9 @@ static void *sv_vm_reserve_storage(void) {
   flags |= MAP_NORESERVE;
 #endif
   void *p = mmap(NULL, SV_VM_RESERVE, PROT_READ | PROT_WRITE, flags, -1, 0);
-  return p == MAP_FAILED ? NULL : p;
+  if (p == MAP_FAILED) return NULL;
+  mprotect((char *)p + SV_STACK_RESERVE, SV_VM_GUARD_SIZE, PROT_NONE);
+  return p;
 #endif
 }
 
@@ -97,7 +100,7 @@ sv_vm_t *sv_vm_create(ant_t *js) {
   }
 
   vm->stack = (ant_value_t *)base;
-  vm->frames = (sv_frame_t *)((char *)base + SV_STACK_RESERVE);
+  vm->frames = (sv_frame_t *)((char *)base + SV_STACK_RESERVE + SV_VM_GUARD_SIZE);
 
   if (
     !sv_vm_commit_storage(vm->stack, (size_t)stack_size * sizeof(ant_value_t)) ||
@@ -287,6 +290,26 @@ bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
 
   act->frame_count = 0;
   return true;
+}
+
+void sv_activation_seal(ant_t *js, sv_activation_t *act) {
+  if (!js || !act || act->frame_count <= 0) return;
+
+  for (sv_upvalue_t *uv = act->open_upvalues; uv;) {
+    sv_upvalue_t *next = uv->next;
+    uv->closed = *uv->location;
+    uv->location = &uv->closed;
+    uv->next = NULL;
+    uv = next;
+  }
+  act->open_upvalues = NULL;
+
+  for (int i = 0; i < act->frame_count; i++) {
+    ant_value_t args_obj = act->frames[i].arguments_obj;
+    if (vtype(args_obj) == T_UNDEF) continue;
+    if (js_obj_ptr(args_obj)->mark_epoch == ANT_GC_DEAD) continue;
+    js_arguments_detach(js, args_obj);
+  }
 }
 
 #ifdef ANT_JIT

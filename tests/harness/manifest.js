@@ -35,6 +35,7 @@ export function targets() {
     'test_coro_this.js',
     'test_minicoro_concurrent.cjs',
     'test_arguments_async.cjs',
+    'test_arguments_escaped_coro.js',
     'test_upvalue_gc.cjs'
   ];
   for (const f of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });

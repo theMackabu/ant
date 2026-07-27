@@ -67,6 +67,7 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
   }
 
   if (coro->act) {
+    sv_activation_seal(coro->js, coro->act);
     free(coro->act);
     coro->act = NULL;
   }
@@ -206,9 +207,11 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     coroutine_activate(js, coro);
 
     ant_value_t result;
-    if (!sv_activation_install(vm, coro->act)) 
+    if (!sv_activation_install(vm, coro->act)) {
+      sv_activation_seal(js, coro->act);
+      coro->act->frame_count = 0;
       result = js_mkerr(js, "failed to install async activation");
-    else {
+    } else {
       vm->suspended_resume_value = coro->result;
       vm->suspended_resume_is_error = coro->is_error;
       vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
