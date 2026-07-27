@@ -483,7 +483,8 @@ ant_value_t js_create_arguments_object(ant_t *js, sv_vm_t *vm, ant_value_t calle
 
 void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
-void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, sv_vm_t *vm, int frame_index);
+void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index);
+void js_arguments_bind_direct(ant_t *js, ant_value_t obj, struct sv_frame *frame);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);

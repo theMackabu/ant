@@ -161,6 +161,8 @@ struct sv_ast {
 void sv_ast_list_push(sv_ast_list_t *list, sv_ast_t *node);
 bool sv_ast_can_be_expression_statement(const sv_ast_t *node);
 bool ast_references_arguments(const sv_ast_t *node);
+bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender);
+bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender);
 
 sv_ast_t *sv_ast_new(sv_node_type_t type);
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict);

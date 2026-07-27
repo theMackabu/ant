@@ -8,29 +8,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
-#include <minicoro.h>
-
-#define CORO_MALLOC(size) calloc(1, size)
-#define CORO_FREE(ptr) free(ptr)
-
-#define MCO_RESUME_SAVE(js_, mco_, res_) do {    \
-  void *_saved_cstk = (js_)->cstk.base;          \
-  size_t _saved_limit = (js_)->cstk.limit;       \
-  volatile char _stk_mark;                       \
-  if (!mco_running())                            \
-    (js_)->cstk.main_lo = (void *)&_stk_mark;    \
-  (res_) = mco_resume((mco_));                   \
-  (js_)->cstk.base = _saved_cstk;                \
-  (js_)->cstk.limit = _saved_limit;              \
-} while (0)
-
-#define MCO_CORO_STACK_ENTER(js_, mco_) do {     \
-  volatile char _coro_marker;                    \
-  (js_)->cstk.base = (void *)&_coro_marker;      \
-  (js_)->cstk.limit = (mco_)->stack_size;        \
-} while (0)
-
-#define CORO_PER_TICK_LIMIT 100000
 
 typedef enum {
   CORO_ASYNC_AWAIT,
@@ -66,17 +43,14 @@ typedef struct coroutine {
   struct coroutine *prev;
   struct coroutine *next;
   
-  mco_coro *mco;
-  struct sv_vm *owner_vm;
-  struct sv_vm *sv_vm;
+  struct sv_activation *act;
   
   ant_offset_t resume_point;
   coroutine_type_t type;
   
-  int owner_entry_fp;
-  int owner_saved_fp;
   int nargs;
   
+  uint64_t gc_epoch;
   uint32_t refcount;
   uint8_t hold_bits;
   
@@ -84,7 +58,6 @@ typedef struct coroutine {
   bool is_error;
   bool is_done;
   bool materialized;
-  bool mco_started;
   bool is_ready;
   bool did_suspend;
   bool await_registered;
@@ -107,7 +80,6 @@ typedef struct {
 } js_await_result_t;
 
 extern coroutine_queue_t pending_coroutines;
-extern uint32_t coros_this_tick;
 
 void enqueue_coroutine(coroutine_t *coro);
 void remove_coroutine(coroutine_t *coro);

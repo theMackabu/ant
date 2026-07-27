@@ -218,7 +218,7 @@ static ant_value_t generator_find_owner(ant_t *js, coroutine_t *coro) {
 static coroutine_t *generator_find_coro_for_vm_in_list(ant_object_t *head, sv_vm_t *vm) {
   for (ant_object_t *obj = head; obj; obj = obj->next) {
     generator_data_t *data = generator_data(js_obj_from_ptr(obj));
-    if (data && data->coro && data->coro->sv_vm == vm && data->coro->owner_vm == vm) return data->coro;
+    if (data && data->coro && data->state == GEN_EXECUTING) return data->coro;
   }
   return NULL;
 }
@@ -264,7 +264,7 @@ bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t 
     return true;
   }
 
-  if (coro->sv_vm && coro->sv_vm->suspended) {
+  if (coro->act && coro->act->frame_count > 0) {
     if (vtype(coro->awaited_promise) != T_UNDEF) {
       generator_set_state(gen, GEN_EXECUTING);
       GC_ROOT_RESTORE(js, root_mark);
@@ -318,8 +318,8 @@ static ant_value_t generator_resume_kind(
   GC_ROOT_PIN(js, gen);
   GC_ROOT_PIN(js, resume_value);
   coroutine_t *coro = generator_coro(gen);
-  
-  if (!coro || !coro->sv_vm) {
+
+  if (!coro || (!coro->act && generator_state(gen) != GEN_SUSPENDED_START)) {
     generator_set_state(gen, GEN_COMPLETED);
     if (resume_kind == SV_RESUME_THROW) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -382,23 +382,50 @@ static ant_value_t generator_resume_kind(
   js->active_async_coro = coro;
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 
+  sv_vm_t *exec_vm = sv_vm_get_active(js);
   ant_value_t result;
+  
   if (state == GEN_SUSPENDED_START) {
     sv_closure_t *closure = (vtype(coro->async_func) == T_FUNC) ? js_func_closure(coro->async_func) : NULL;
     if (!closure || !closure->func) result = js_mkerr(js, "invalid generator function");
     else result = sv_execute_closure_entry(
-      coro->sv_vm, closure, coro->async_func,
+      exec_vm, closure, coro->async_func,
       coro->super_val, coro->this_val, coro->args, coro->nargs, NULL
     );
-  } else {
-    coro->sv_vm->suspended_resume_value = resume_value;
-    coro->sv_vm->suspended_resume_is_error = (resume_kind == SV_RESUME_THROW);
-    coro->sv_vm->suspended_resume_kind = resume_kind;
-    coro->sv_vm->suspended_resume_pending = true;
-    result = sv_resume_suspended(coro->sv_vm);
+  } else if (coro->act && sv_activation_install(exec_vm, coro->act)) {
+    exec_vm->suspended_resume_value = resume_value;
+    exec_vm->suspended_resume_is_error = (resume_kind == SV_RESUME_THROW);
+    exec_vm->suspended_resume_kind = resume_kind;
+    exec_vm->suspended_resume_pending = true;
+    result = sv_resume_suspended(exec_vm);
+  } else result = js_mkerr(js, "generator activation lost");
+
+  bool suspended_now = true;
+  bool yielded_here = exec_vm->suspended && exec_vm->suspended_entry_fp >= 0;
+  
+  if (yielded_here) {
+    sv_activation_t *act = sv_activation_capture(
+      exec_vm, exec_vm->suspended_entry_fp, 
+      coro->act
+    );
+    
+    if (act) coro->act = act; else {
+      int efp = exec_vm->suspended_entry_fp;
+      exec_vm->fp = efp - 1;
+      exec_vm->sp = exec_vm->frames[efp].prev_sp;
+      exec_vm->handler_depth = exec_vm->frames[efp].handler_base;
+      exec_vm->suspended = false;
+      exec_vm->suspended_resume_pending = false;
+      exec_vm->suspended_entry_fp = -1;
+      exec_vm->suspended_saved_fp = -1;
+      suspended_now = false;
+      result = js_mkerr(js, "out of memory capturing generator activation");
+    }
   }
   
+  if (suspended_now) suspended_now = coro->act && coro->act->frame_count > 0;
   GC_ROOT_PIN(js, result);
+  
   js->active_async_coro = saved_active;
   if (saved_active) saved_active->active_prev = NULL;
   
@@ -413,9 +440,10 @@ static ant_value_t generator_resume_kind(
     return result;
   }
 
-  if (coro->sv_vm && coro->sv_vm->suspended) {
+  if (suspended_now) {
     if (generator_is_async(gen) && vtype(coro->awaited_promise) != T_UNDEF) {
       generator_set_state(gen, GEN_EXECUTING);
+      
       if (vtype(coro->async_promise) != T_PROMISE) {
         coro->async_promise = js_mkpromise(js);
         GC_ROOT_PIN(js, coro->async_promise);
@@ -538,22 +566,15 @@ ant_value_t sv_call_generator_closure_dispatch(
   ant_value_t this_val, ant_value_t *args, int argc
 ) {
   if (!closure || !closure->func) return js_mkerr(js, "invalid generator function");
-
-  sv_vm_t *gen_vm = sv_vm_create(js, SV_VM_ASYNC);
-  if (!gen_vm) return js_mkerr(js, "out of memory for generator VM");
-
-  coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
-  if (!coro) {
-    sv_vm_destroy(gen_vm);
-    return js_mkerr(js, "out of memory for generator");
-  }
+  
+  coroutine_t *coro = (coroutine_t *)calloc(1, sizeof(coroutine_t));
+  if (!coro) return js_mkerr(js, "out of memory for generator");
 
   ant_value_t *copied_args = NULL;
   if (argc > 0 && args) {
-    copied_args = (ant_value_t *)CORO_MALLOC(sizeof(ant_value_t) * (size_t)argc);
+    copied_args = (ant_value_t *)calloc(1, sizeof(ant_value_t) * (size_t)argc);
     if (!copied_args) {
-      sv_vm_destroy(gen_vm);
-      CORO_FREE(coro);
+      free(coro);
       return js_mkerr(js, "out of memory for generator args");
     }
     memcpy(copied_args, args, sizeof(ant_value_t) * (size_t)argc);
@@ -561,17 +582,15 @@ ant_value_t sv_call_generator_closure_dispatch(
 
   ant_value_t gen = js_mkgenerator(js);
   if (is_err(gen)) {
-    if (copied_args) CORO_FREE(copied_args);
-    sv_vm_destroy(gen_vm);
-    CORO_FREE(coro);
+    if (copied_args) free(copied_args);
+    free(coro);
     return gen;
   }
 
   generator_data_t *data = (generator_data_t *)calloc(1, sizeof(*data));
   if (!data) {
-    if (copied_args) CORO_FREE(copied_args);
-    sv_vm_destroy(gen_vm);
-    CORO_FREE(coro);
+    if (copied_args) free(copied_args);
+    free(coro);
     return js_mkerr(js, "out of memory for generator data");
   }
 
@@ -594,10 +613,6 @@ ant_value_t sv_call_generator_closure_dispatch(
     .yield_value = js_mkundef(),
     .async_promise = js_mkundef(),
     .next = NULL,
-    .mco = NULL,
-    .owner_vm = gen_vm,
-    .sv_vm = gen_vm,
-    .mco_started = false,
     .is_ready = false,
     .did_suspend = false,
     .refcount = 1,

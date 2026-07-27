@@ -2,6 +2,13 @@
 #include "errors.h"
 #include <stdlib.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 #include "silver/engine.h"
 #include "silver/swarm.h"
 #include "modules/generator.h"
@@ -30,37 +37,83 @@
 #include "ops/objects.h"
 #include "ops/coercion.h"
 
-sv_vm_t *sv_vm_create(ant_t *js, sv_vm_kind_t kind) {
+enum {
+  SV_STACK_RESERVE = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
+  SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
+  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_FRAMES_RESERVE)
+};
+
+static void *sv_vm_reserve_storage(void) {
+#ifdef _WIN32
+  return VirtualAlloc(NULL, SV_VM_RESERVE, MEM_RESERVE, PAGE_READWRITE);
+#else
+  int flags = MAP_PRIVATE | MAP_ANON;
+#ifdef MAP_NORESERVE
+  flags |= MAP_NORESERVE;
+#endif
+  void *p = mmap(NULL, SV_VM_RESERVE, PROT_READ | PROT_WRITE, flags, -1, 0);
+  return p == MAP_FAILED ? NULL : p;
+#endif
+}
+
+static void sv_vm_release_storage(void *base) {
+  if (!base) return;
+#ifdef _WIN32
+  VirtualFree(base, 0, MEM_RELEASE);
+#else
+  munmap(base, SV_VM_RESERVE);
+#endif
+}
+
+static bool sv_vm_commit_storage(void *addr, size_t bytes) {
+#ifdef _WIN32
+  return VirtualAlloc(addr, bytes, MEM_COMMIT, PAGE_READWRITE) != NULL;
+#else
+  (void)addr; (void)bytes;
+  return true;
+#endif
+}
+
+sv_vm_t *sv_vm_create(ant_t *js) {
   int stack_size, max_frames;
-  sv_vm_limits(kind, &stack_size, &max_frames);
+  sv_vm_limits(&stack_size, &max_frames);
 
   sv_vm_t *vm = calloc(1, sizeof(*vm));
   if (!vm) return NULL;
-  
+
   vm->js = js;
   vm->fp = -1;
-  
+
   vm->stack_size = stack_size;
   vm->max_frames = max_frames;
-  
+
   vm->suspended_entry_fp = -1;
   vm->suspended_saved_fp = -1;
-  
-  vm->stack = calloc((size_t)stack_size, sizeof(ant_value_t));
-  vm->frames = calloc((size_t)max_frames, sizeof(sv_frame_t));
-  
-  if (!vm->stack || !vm->frames) { 
-    sv_vm_destroy(vm);
+
+  void *base = sv_vm_reserve_storage();
+  if (!base) {
+    free(vm);
     return NULL;
   }
-  
+
+  vm->stack = (ant_value_t *)base;
+  vm->frames = (sv_frame_t *)((char *)base + SV_STACK_RESERVE);
+
+  if (
+    !sv_vm_commit_storage(vm->stack, (size_t)stack_size * sizeof(ant_value_t)) ||
+    !sv_vm_commit_storage(vm->frames, (size_t)max_frames * sizeof(sv_frame_t))
+  ) {
+    sv_vm_release_storage(base);
+    free(vm);
+    return NULL;
+  }
+
   return vm;
 }
 
 void sv_vm_destroy(sv_vm_t *vm) {
   if (!vm) return;
-  free(vm->stack);
-  free(vm->frames);
+  sv_vm_release_storage(vm->stack);
   free(vm);
 }
 
@@ -68,12 +121,8 @@ static bool sv_vm_grow_frames(sv_vm_t *vm) {
   int new_max = vm->max_frames * 2;
   if (new_max > SV_FRAMES_HARD_MAX) new_max = SV_FRAMES_HARD_MAX;
   if (new_max <= vm->max_frames) return false;
-  
-  sv_frame_t *nf = realloc(vm->frames, (size_t)new_max * sizeof(sv_frame_t));
-  if (!nf) return false;
-  vm->frames = nf;
+  if (!sv_vm_commit_storage(vm->frames, (size_t)new_max * sizeof(sv_frame_t))) return false;
   vm->max_frames = new_max;
-  
   return true;
 }
 
@@ -81,28 +130,162 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   int new_size = vm->stack_size * 2;
   if (new_size > SV_STACK_HARD_MAX) new_size = SV_STACK_HARD_MAX;
   if (new_size <= vm->stack_size) return false;
-  
-  ant_value_t *old = vm->stack;
-  int old_size = vm->stack_size;
-  
-  ant_value_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(ant_value_t));
-  if (!ns) return false;
-  
-  ptrdiff_t delta = ns - old;
-  vm->stack = ns;
+  if (!sv_vm_commit_storage(vm->stack, (size_t)new_size * sizeof(ant_value_t))) return false;
   vm->stack_size = new_size;
-  
-  if (delta != 0) {
-    for (int i = 0; i <= vm->fp; i++) {
-      if (vm->frames[i].bp) vm->frames[i].bp += delta;
-      if (vm->frames[i].lp) vm->frames[i].lp += delta;
-    }
-    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) if (
-      uv->location != &uv->closed &&
-      sv_slot_in_range(old, (size_t)old_size, uv->location)
-    ) uv->location += delta;
+  return true;
+}
+
+sv_activation_t *sv_activation_capture(sv_vm_t *vm, int entry_fp, sv_activation_t *reuse) {
+  if (!vm || vm->fp < 0 || entry_fp < 0 || entry_fp > vm->fp) return NULL;
+
+  sv_frame_t *entry_frame = &vm->frames[entry_fp];
+  int frame_count = vm->fp - entry_fp + 1;
+  int stack_base = entry_frame->prev_sp;
+  int stack_count = vm->sp - stack_base;
+  int handler_base = entry_frame->handler_base;
+  int handler_count = vm->handler_depth - handler_base;
+
+  if (stack_count < 0 || handler_count < 0) return NULL;
+
+  size_t frames_off = (sizeof(sv_activation_t) + 7) & ~(size_t)7;
+  size_t slots_off = frames_off + (size_t)frame_count * sizeof(sv_frame_t);
+  size_t handlers_off = slots_off + (size_t)stack_count * sizeof(ant_value_t);
+  size_t need = handlers_off + (size_t)handler_count * sizeof(sv_handler_t);
+
+  sv_activation_t *act = reuse;
+  if (!act || act->capacity < need) {
+    act = realloc(reuse, need);
+    if (!act) return NULL;
+    act->capacity = need;
   }
+
+  act->frames = (sv_frame_t *)((char *)act + frames_off);
+  act->slots = (ant_value_t *)((char *)act + slots_off);
+  act->handlers = (sv_handler_t *)((char *)act + handlers_off);
   
+  act->frame_count = frame_count;
+  act->stack_count = stack_count;
+  act->handler_count = handler_count;
+
+  ant_value_t *src_base = &vm->stack[stack_base];
+  if (stack_count > 0)
+    memcpy(act->slots, src_base, sizeof(ant_value_t) * (size_t)stack_count);
+
+  for (int i = 0; i < frame_count; i++) {
+    sv_frame_t *src = &vm->frames[entry_fp + i];
+    sv_frame_t *dst = &act->frames[i];
+    *dst = *src;
+
+    dst->prev_sp = src->prev_sp - stack_base;
+    dst->handler_base = (uint16_t)(src->handler_base - handler_base);
+    dst->handler_top = (uint16_t)(src->handler_top - handler_base);
+
+    if (src->bp) dst->bp = act->slots + (src->bp - src_base);
+    if (src->lp) dst->lp = act->slots + (src->lp - src_base);
+  }
+
+  for (int i = 0; i < frame_count; i++) if (vtype(act->frames[i].arguments_obj) != T_UNDEF) 
+    js_arguments_bind_direct(vm->js, act->frames[i].arguments_obj, &act->frames[i]);
+
+  for (int i = 0; i < handler_count; i++) {
+    sv_handler_t h = vm->handler_stack[handler_base + i];
+    h.saved_sp -= stack_base;
+    act->handlers[i] = h;
+  }
+
+  act->open_upvalues = NULL;
+  sv_upvalue_t **src_pp = &vm->open_upvalues;
+  sv_upvalue_t **dst_pp = &act->open_upvalues;
+  
+  while (*src_pp) {
+    sv_upvalue_t *uv = *src_pp;
+    if (stack_count <= 0 || !sv_slot_in_range(src_base, (size_t)stack_count, uv->location)) {
+      src_pp = &uv->next;
+      continue;
+    }
+
+    ptrdiff_t slot = uv->location - src_base;
+    *src_pp = uv->next;
+    uv->location = &act->slots[slot];
+    uv->next = NULL;
+    *dst_pp = uv;
+    dst_pp = &uv->next;
+  }
+
+  vm->fp = entry_fp - 1;
+  vm->sp = stack_base;
+  vm->handler_depth = handler_base;
+  vm->suspended = false;
+  vm->suspended_resume_pending = false;
+  vm->suspended_resume_is_error = false;
+  vm->suspended_resume_kind = SV_RESUME_NEXT;
+  vm->suspended_resume_value = js_mkundef();
+  vm->suspended_entry_fp = -1;
+  vm->suspended_saved_fp = -1;
+
+  return act;
+}
+
+bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
+  if (!vm || !act || act->frame_count < 1) return false;
+
+  while (vm->sp + act->stack_count > vm->stack_size)
+    if (!sv_vm_grow_stack(vm)) return false;
+  while (vm->fp + act->frame_count >= vm->max_frames)
+    if (!sv_vm_grow_frames(vm)) return false;
+  
+  if (vm->handler_depth + act->handler_count > SV_HANDLER_MAX) return false;
+
+  int entry_fp = vm->fp + 1;
+  int stack_base = vm->sp;
+  int handler_base = vm->handler_depth;
+  ant_value_t *dst_base = &vm->stack[stack_base];
+
+  if (act->stack_count > 0)
+    memcpy(dst_base, act->slots, sizeof(ant_value_t) * (size_t)act->stack_count);
+
+  for (int i = 0; i < act->frame_count; i++) {
+    sv_frame_t *src = &act->frames[i];
+    sv_frame_t *dst = &vm->frames[entry_fp + i];
+    *dst = *src;
+
+    dst->prev_sp = src->prev_sp + stack_base;
+    dst->handler_base = (uint16_t)(src->handler_base + handler_base);
+    dst->handler_top = (uint16_t)(src->handler_top + handler_base);
+
+    if (src->bp) dst->bp = dst_base + (src->bp - act->slots);
+    if (src->lp) dst->lp = dst_base + (src->lp - act->slots);
+
+    if (vtype(dst->arguments_obj) != T_UNDEF)
+      js_arguments_rebind_frame(vm->js, dst->arguments_obj, entry_fp + i);
+  }
+
+  for (int i = 0; i < act->handler_count; i++) {
+    sv_handler_t h = act->handlers[i];
+    h.saved_sp += stack_base;
+    vm->handler_stack[handler_base + i] = h;
+  }
+
+  if (act->open_upvalues) {
+    sv_upvalue_t *tail = act->open_upvalues;
+    for (sv_upvalue_t *uv = act->open_upvalues;; uv = uv->next) {
+      uv->location = dst_base + (uv->location - act->slots);
+      if (!uv->next) { tail = uv; break; }
+    }
+    tail->next = vm->open_upvalues;
+    vm->open_upvalues = act->open_upvalues;
+    act->open_upvalues = NULL;
+  }
+
+  vm->sp = stack_base + act->stack_count;
+  vm->fp = entry_fp + act->frame_count - 1;
+  vm->handler_depth = handler_base + act->handler_count;
+
+  vm->suspended = true;
+  vm->suspended_entry_fp = entry_fp;
+  vm->suspended_saved_fp = entry_fp - 1;
+
+  act->frame_count = 0;
   return true;
 }
 
@@ -1842,7 +2025,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       goto sv_throw;
     }
     if (await_result.state == SV_AWAIT_SUSPENDED) {
-      if (await_result.handoff) vm_result = js_mkundef();
+      vm_result = js_mkundef();
       goto sv_leave;
     }
     NEXT(1);
@@ -1860,16 +2043,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     vm->suspended_saved_fp = entry_fp - 1;
     
     sv_await_result_t await_result = sv_await_value(vm, js, await_val);
-    if (await_result.state == SV_AWAIT_SUSPENDED && await_result.handoff) {
-      vm->suspended_entry_fp = -1;
-      vm->suspended_saved_fp = -1;
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+
+    if (await_result.state == SV_AWAIT_SUSPENDED) {
       vm_result = js_mkundef();
       goto sv_leave;
     }
-    
-    if (await_result.state == SV_AWAIT_SUSPENDED) goto sv_leave;
-    vm->suspended_entry_fp = -1;
-    vm->suspended_saved_fp = -1;
     
     if (await_result.state == SV_AWAIT_ERROR) {
       sv_err = await_result.value;
@@ -1882,7 +2062,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   
   L_YIELD: {
     ant_value_t yielded = vm->stack[--vm->sp];
-    coroutine_t *coro = sv_async_get_active_coro_for_vm(js, vm);
+    coroutine_t *coro = sv_async_active_coro(js);
     if (!coro || coro->type != CORO_GENERATOR)
       coro = generator_get_coro_for_vm(js, vm);
     if (!coro || coro->type != CORO_GENERATOR) {
@@ -1913,7 +2093,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_YIELD_STAR_NEXT:
   L_YIELD_STAR_THROW:
   L_YIELD_STAR_RETURN: {
-    coroutine_t *coro = sv_async_get_active_coro_for_vm(js, vm);
+    coroutine_t *coro = sv_async_active_coro(js);
     if (!coro || coro->type != CORO_GENERATOR)
       coro = generator_get_coro_for_vm(js, vm);
     if (!coro || coro->type != CORO_GENERATOR) {

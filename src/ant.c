@@ -49,7 +49,6 @@
 #include <float.h>
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
-#include <minicoro.h>
 
 #ifdef _WIN32
 #include <sys/stat.h>
@@ -2869,15 +2868,21 @@ shape_has:;
   return false;
 }
 
+// TODO: move into arguments.c
 enum { ANT_ARGUMENTS_NATIVE_TAG = 0x41524753u }; // ARGS
 
 typedef struct {
-  sv_vm_t *vm;
+  sv_frame_t *direct_frame;
   int frame_index;
   uint32_t mapped_count;
   uint8_t in_setter;
   uint8_t deleted[];
 } ant_arguments_state_t;
+
+static inline sv_frame_t *js_arguments_frame(ant_t *js, ant_arguments_state_t *state) {
+  if (state->direct_frame) return state->direct_frame;
+  return &js->vm->frames[state->frame_index];
+}
 
 static inline ant_arguments_state_t *js_arguments_state(ant_value_t obj) {
   return (ant_arguments_state_t *)js_get_native(obj, ANT_ARGUMENTS_NATIVE_TAG);
@@ -2896,7 +2901,7 @@ static ant_value_t js_arguments_getter(ant_t *js, ant_value_t obj, const char *k
     (uint32_t)idx < state->mapped_count &&
     !state->deleted[idx]
   ) {
-    sv_frame_t *frame = &state->vm->frames[state->frame_index];
+    sv_frame_t *frame = js_arguments_frame(js, state);
     return frame->bp[idx];
   }
 
@@ -2919,7 +2924,7 @@ static bool js_arguments_setter(
     (uint32_t)idx < state->mapped_count &&
     !state->deleted[idx]
   ) {
-    sv_frame_t *frame = &state->vm->frames[state->frame_index];
+    sv_frame_t *frame = js_arguments_frame(js, state);
     frame->bp[idx] = value;
   }
 
@@ -2980,7 +2985,6 @@ ant_value_t js_create_arguments_object(
       return js_mkerr(js, "oom");
     }
 
-    state->vm = vm;
     state->frame_index = (int)(frame - vm->frames);
     state->mapped_count = (uint32_t)mapped_count;
     
@@ -2995,11 +2999,17 @@ ant_value_t js_create_arguments_object(
   return arr;
 }
 
-void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, sv_vm_t *vm, int frame_index) {
+void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index) {
   ant_arguments_state_t *state = js_arguments_state(obj);
-  if (!state || state->frame_index < 0 || !vm) return;
-  state->vm = vm;
+  if (!state || state->frame_index < 0) return;
   state->frame_index = frame_index;
+  state->direct_frame = NULL;
+}
+
+void js_arguments_bind_direct(ant_t *js, ant_value_t obj, sv_frame_t *frame) {
+  ant_arguments_state_t *state = js_arguments_state(obj);
+  if (!state || state->frame_index < 0 || !frame) return;
+  state->direct_frame = frame;
 }
 
 void js_arguments_detach(ant_t *js, ant_value_t obj) {
@@ -3009,7 +3019,7 @@ void js_arguments_detach(ant_t *js, ant_value_t obj) {
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, obj);
 
-  sv_frame_t *frame = &state->vm->frames[state->frame_index];
+  sv_frame_t *frame = js_arguments_frame(js, state);
   ant_offset_t arr_len = get_array_length(js, obj);
   ant_offset_t limit = (ant_offset_t)state->mapped_count;
   if (arr_len < limit) limit = arr_len;
@@ -17600,7 +17610,7 @@ ant_t *js_create_dynamic() {
     return NULL;
   }
   js->owns_mem = true;
-  js->vm = sv_vm_create(js, SV_VM_MAIN);
+  js->vm = sv_vm_create(js);
   return js;
 }
 

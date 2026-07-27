@@ -394,6 +394,23 @@ struct sv_upvalue {
   uint8_t in_remember_set;
 };
 
+typedef struct sv_activation {
+  int frame_count;
+  int stack_count;
+  int handler_count;
+  size_t capacity;
+  sv_upvalue_t *open_upvalues;
+  sv_frame_t *frames;
+  ant_value_t *slots;
+  sv_handler_t *handlers;
+} sv_activation_t;
+
+sv_activation_t *sv_activation_capture(
+  sv_vm_t *vm, int entry_fp, 
+  sv_activation_t *reuse
+);
+
+bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act);
 bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
@@ -596,13 +613,9 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
+// TODO: use js->vm only
 static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
-  if (!js) return NULL;
-  if (js->active_async_coro) {
-    if (js->active_async_coro->sv_vm) return js->active_async_coro->sv_vm;
-    if (js->active_async_coro->owner_vm) return js->active_async_coro->owner_vm;
-  }
-  return js->vm;
+  return js ? js->vm : NULL;
 }
 
 static inline bool sv_is_strict_context(ant_t *js) {

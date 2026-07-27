@@ -5,15 +5,7 @@
 #include "modules/timer.h"
 #include "silver/engine.h"
 
-#define MCO_USE_VMEM_ALLOCATOR
-#define MCO_ZERO_MEMORY
-#define MCO_DEFAULT_STACK_SIZE (1024 * 1024)
-#define MINICORO_IMPL
-#include <minicoro.h>
-
-uint32_t coros_this_tick = 0;
 coroutine_queue_t pending_coroutines = {NULL, NULL};
-
 static bool coro_stack_size_initialized = false;
 static coroutine_t *retired_coroutines = NULL;
 
@@ -69,30 +61,22 @@ static void retire_coroutine_storage(coroutine_t *coro) {
 static void destroy_coroutine_resources(coroutine_t *coro) {
   if (!coro) return;
 
-  if (coro->mco) {
-    void *ctx = mco_get_user_data(coro->mco);
-    if (ctx) CORO_FREE(ctx);
-    mco_destroy(coro->mco);
-    coro->mco = NULL;
-  }
-
   if (coro->args) {
-    CORO_FREE(coro->args);
+    free(coro->args);
     coro->args = NULL;
   }
 
-  if (coro->sv_vm) {
-    sv_vm_destroy(coro->sv_vm);
-    coro->sv_vm = NULL;
+  if (coro->act) {
+    free(coro->act);
+    coro->act = NULL;
   }
 
   if (coro->module_eval_ctx) {
-    CORO_FREE(coro->module_eval_ctx);
+    free(coro->module_eval_ctx);
     coro->module_eval_ctx = NULL;
   }
 
   coro->js = NULL;
-  coro->owner_vm = NULL;
   coro->active_parent = NULL;
   coro->materialized = false;
 }
@@ -109,7 +93,7 @@ static void coroutine_release_storage(coroutine_t *coro) {
   if (js && js->vm_exec_depth > 0) retire_coroutine_storage(coro);
   else {
     destroy_coroutine_resources(coro);
-    CORO_FREE(coro);
+    free(coro);
   }
 }
 
@@ -139,7 +123,7 @@ void reap_retired_coroutines(void) {
   while (coro) {
     coroutine_t *next = coro->next;
     destroy_coroutine_resources(coro);
-    CORO_FREE(coro);
+    free(coro);
     coro = next;
   }
 }
@@ -216,66 +200,66 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   if (!coro) return;
   coroutine_retain(coro);
 
-  if (!coro->mco) {
-    if (!coro->sv_vm || !coro->sv_vm->suspended) {
-      coroutine_release(coro);
-      return;
-    }
-    
+  if (coro->act && coro->act->frame_count > 0) {
+    sv_vm_t *vm = sv_vm_get_active(js);
     coro->is_ready = false;
-    coro->sv_vm->suspended_resume_value = coro->result;
-    coro->sv_vm->suspended_resume_is_error = coro->is_error;
-    coro->sv_vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
-    coro->sv_vm->suspended_resume_pending = true;
-    
     coroutine_activate(js, coro);
-    ant_value_t result = sv_resume_suspended(coro->sv_vm);
-    
+
+    ant_value_t result;
+    if (!sv_activation_install(vm, coro->act)) 
+      result = js_mkerr(js, "failed to install async activation");
+    else {
+      vm->suspended_resume_value = coro->result;
+      vm->suspended_resume_is_error = coro->is_error;
+      vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
+      vm->suspended_resume_pending = true;
+      result = sv_resume_suspended(vm);
+    }
+
     coro->is_settled = false;
-    if (coro->sv_vm->suspended) {
-      coroutine_deactivate(js, coro);
+
+    if (vm->suspended && vm->suspended_entry_fp >= 0) {
+    sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
+    
+    if (act) coro->act = act;
+    else {
+      int efp = vm->suspended_entry_fp;
+      vm->fp = efp - 1;
+      vm->sp = vm->frames[efp].prev_sp;
+      vm->handler_depth = vm->frames[efp].handler_base;
+      vm->suspended = false;
+      vm->suspended_resume_pending = false;
+      vm->suspended_entry_fp = -1;
+      vm->suspended_saved_fp = -1;
+      result = js_mkerr(js, "out of memory capturing activation");
+    }}
+
+    bool suspended_again = coro->act && coro->act->frame_count > 0;
+    coroutine_deactivate(js, coro);
+
+    if (suspended_again) {
       if (generator_resume_pending_request(js, coro, result)) return;
       coroutine_release(coro);
       return;
     }
-    
-    coroutine_deactivate(js, coro);
-    
+
     if (generator_resume_pending_request(js, coro, result)) {
       coroutine_release(coro);
       return;
     }
-    
+
     if (is_err(result)) {
       ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
       js_reject_promise(js, coro->async_promise, reject_value);
     } else js_resolve_promise(js, coro->async_promise, result);
-    
+
     js_maybe_drain_microtasks_after_async_settle(js);
     coroutine_release(coro);
     
     return;
   }
-
-  if (mco_status(coro->mco) != MCO_SUSPENDED) {
-    coroutine_release(coro);
-    return;
-  }
-
-  coro->is_ready = false;
-  mco_result res;
-  
-  bool activate_for_module = coroutine_has_module_eval_ctx(coro);
-  if (activate_for_module) coroutine_activate(js, coro);
-  MCO_RESUME_SAVE(js, coro->mco, res);
-  
-  if (activate_for_module) coroutine_deactivate(js, coro);
-  mco_state status = mco_status(coro->mco);
-
-  if (res != MCO_SUCCESS || status == MCO_DEAD)
-    remove_coroutine(coro);
 
   coroutine_release(coro);
 }

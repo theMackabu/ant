@@ -13,8 +13,6 @@ export function targets() {
 
   const REGRESSION_TESTS = [
     'test_promise.cjs',
-    'test_arguments_async.cjs',
-    'test_upvalue_gc.cjs',
     'test_jit_derived_ctor.cjs',
     'test_jit_string_builder_snapshot.cjs',
     'test_template_self_append.cjs',
@@ -25,6 +23,21 @@ export function targets() {
     'test_stream_readable_to_web.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
+
+  const ASYNC_TESTS = [
+    'test_gc_async.js',
+    'test_gc_coro.js',
+    'test_gc_in_coro.js',
+    'test_async_gc.js',
+    'test_async_coroutines.cjs',
+    'test_async_generator_gc_liveness.cjs',
+    'test_coro_resume_safety.js',
+    'test_coro_this.js',
+    'test_minicoro_concurrent.cjs',
+    'test_arguments_async.cjs',
+    'test_upvalue_gc.cjs'
+  ];
+  for (const f of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 
   list.push(
     { group: 'servers', type: 'server', name: 'hono', entry: 'examples/npm/hono/src/index.ts' },

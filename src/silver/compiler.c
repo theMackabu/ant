@@ -3674,7 +3674,8 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   } else if (
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
-    inline_eval_can_compile_without_early_errors(c, program->args.items[0])
+    inline_eval_can_compile_without_early_errors(c, program->args.items[0]) &&
+    !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
     parse_arena_rewind(mark);
     c->js->thrown_exists = saved_thrown_exists;
@@ -6249,6 +6250,17 @@ sv_func_t *compile_function_body(
     &has_own_use_strict, &has_non_simple_params, true
   )) return NULL;
 
+  if (!(node->flags & FN_GENERATOR)) {
+    const sv_ast_t *offender = NULL;
+    bool found = ast_contains_own_yield(node->body, &offender);
+    for (int i = 0; !found && i < node->args.count; i++)
+      found = ast_contains_own_yield(node->args.items[i], &offender);
+    if (found) {
+      js_mkerr_typed(comp.js, JS_ERR_SYNTAX, "yield is only valid in generator functions");
+      return NULL;
+    }
+  }
+
   if (has_own_use_strict) comp.is_strict = true;
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *p = node->args.items[i];
@@ -6814,6 +6826,20 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
 sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
+
+  if (mode == SV_COMPILE_EVAL) {
+    const sv_ast_t *offender = NULL;
+    for (int i = 0; i < program->args.count; i++)
+      if (ast_contains_direct_suspend(program->args.items[i], &offender)) break;
+
+    if (offender) {
+      js_mkerr_typed(js, JS_ERR_SYNTAX, offender->type == N_AWAIT
+        ? "await is only valid in async functions and the top level bodies of modules"
+        : "yield is only valid in generator functions");
+      return NULL;
+    }
+  }
+  
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] start kind=program mode=%d len=%u body=%d strict=%d\n",
     (int)mode, (unsigned)source_len,
