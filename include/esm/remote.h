@@ -1,6 +1,7 @@
 #ifndef ESM_REMOTE_H
 #define ESM_REMOTE_H
 
+#include "types.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -11,7 +12,7 @@ char *esm_parse_data_url(const char *url, size_t *out_len);
 char *esm_fetch_url(const char *url, size_t *out_len, char **out_error);
 char *esm_resolve_url(const char *specifier, const char *base_url);
 
-#define FILE_RESOLVER *(*file_resolver)(const char *, const char *)
-char *esm_resolve(const char *specifier, const char *base_path, char FILE_RESOLVER);
+#define FILE_RESOLVER *(*file_resolver)(ant_t *, const char *, const char *)
+char *esm_resolve(ant_t *js, const char *specifier, const char *base_path, char FILE_RESOLVER);
 
 #endif

@@ -75,13 +75,13 @@ static inline void sv_async_init_activation(
 }
 
 static inline ant_value_t sv_capture_tla_module_ctx(ant_t *js, coroutine_t *coro) {
-  if (!js || !coro || !js->module || vtype(js->module->module_ns) != T_OBJ)
+  if (!js || !coro || !js->esm.module_stack || vtype(js->esm.module_stack->module_ns) != T_OBJ)
     return js_mkundef();
 
   ant_module_t *ctx = calloc(1, sizeof(ant_module_t));
   if (!ctx) return js_mkerr(js, "out of memory for TLA module context");
 
-  *ctx = *js->module;
+  *ctx = *js->esm.module_stack;
   ctx->prev = NULL;
   ctx->prev_import_meta_prop = js_mkundef();
   coro->module_eval_ctx = ctx;

@@ -148,22 +148,7 @@ static ant_value_t builtin_resolveFilename(ant_t *js, ant_value_t *args, int nar
   }
 
   ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
-  if (is_err(resolved)) return resolved;
-  if (vtype(resolved) != T_STR) return resolved;
-
-  ant_offset_t len = 0;
-  ant_offset_t off = vstr(js, resolved, &len);
-  
-  const char *s = (const char *)(uintptr_t)(off);
-  static const char *prefix = "file://";
-
-  if ((size_t)len >= strlen(prefix) && strncmp(s, prefix, strlen(prefix)) == 0) {
-    const char *path_part = s + strlen(prefix);
-    size_t plen = (size_t)len - strlen(prefix);
-    return js_mkstr(js, path_part, plen);
-  }
-
-  return resolved;
+  return resolve_strip_file_url(js, resolved);
 }
 
 typedef struct { 

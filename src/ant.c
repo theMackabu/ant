@@ -15915,15 +15915,11 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_get_import_meta_prop(ant_t *js) {
-  ant_value_t import_fn = js_get_import_func(js);
-  if (vtype(import_fn) != T_FUNC) return js_mkundef();
-  return js_get(js, js_func_obj(import_fn), "meta");
+  return js->esm.import_meta;
 }
 
 static void js_set_import_meta_prop(ant_t *js, ant_value_t import_meta) {
-  ant_value_t import_fn = js_get_import_func(js);
-  if (vtype(import_fn) != T_FUNC) return;
-  setprop_cstr(js, js_func_obj(import_fn), "meta", 4, import_meta);
+  js->esm.import_meta = import_meta;
 }
 
 static void js_set_import_module_ctx(ant_t *js, ant_value_t module_ctx) {
@@ -16133,9 +16129,9 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
-  ctx->prev = js->module;
+  ctx->prev = js->esm.module_stack;
   ctx->prev_import_meta_prop = js_get_import_meta_prop(js);
-  js->module = ctx;
+  js->esm.module_stack = ctx;
 
   ant_value_t import_meta = js_get_module_ctx_import_meta(js, ctx->module_ctx);
   if (vtype(import_meta) != T_UNDEF) js_set_import_meta_prop(js, import_meta);
@@ -16144,9 +16140,9 @@ void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx) {
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
-  if (js->module == ctx) {
+  if (js->esm.module_stack == ctx) {
     js_set_import_meta_prop(js, ctx->prev_import_meta_prop);
-    js->module = ctx->prev;
+    js->esm.module_stack = ctx->prev;
   }
 }
 
@@ -17117,7 +17113,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->this_val = js->global;
   js->new_target = js_mkundef();
   js->esm.hooks = js_mkundef();
-  js->esm.import_attributes = js_mkundef();
+  js->esm.import_meta = js_mkundef();
+  js->esm.state = NULL;
   js->length_str = ANT_STRING("length");
 
   ant_value_t glob = js->global;
@@ -17632,7 +17629,7 @@ void js_destroy(ant_t *js) {
     js->vm = NULL;
   }
   
-  js_esm_cleanup_module_cache();
+  js_esm_cleanup_module_cache(js);
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();
