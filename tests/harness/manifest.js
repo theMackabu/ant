@@ -24,22 +24,25 @@ export function targets() {
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 
+  // [file, max rss MB] — ceilings ~3x observed baseline; generous enough to
+  // absorb machine noise, tight enough to fail on genuine leaks
   const ASYNC_TESTS = [
-    'test_gc_async.js',
-    'test_gc_coro.js',
-    'test_gc_in_coro.js',
-    'test_async_gc.js',
-    'test_async_coroutines.cjs',
-    'test_async_generator_gc_liveness.cjs',
-    'test_coro_resume_safety.js',
-    'test_coro_this.js',
-    'test_minicoro_concurrent.cjs',
-    'test_arguments_async.cjs',
-    'test_arguments_escaped_coro.js',
-    'test_async_gen_leak.mjs',
-    'test_upvalue_gc.cjs'
+    ['test_gc_async.js', 96],
+    ['test_gc_coro.js', 96],
+    ['test_gc_in_coro.js', 64],
+    ['test_async_gc.js', 48],
+    ['test_async_coroutines.cjs', 48],
+    ['test_async_generator_gc_liveness.cjs', 64],
+    ['test_coro_resume_safety.js', 48],
+    ['test_coro_this.js', 48],
+    ['test_minicoro_concurrent.cjs', 48],
+    ['test_arguments_async.cjs', 48],
+    ['test_arguments_escaped_coro.js', 64],
+    ['test_async_gen_leak.mjs', 48],
+    ['test_upvalue_gc.cjs', 384]
   ];
-  for (const f of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true });
+  for (const [f, maxRssMb] of ASYNC_TESTS)
+    list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true, maxRssMb });
 
   list.push(
     { group: 'servers', type: 'server', name: 'hono', entry: 'examples/npm/hono/src/index.ts' },

@@ -230,8 +230,11 @@ export async function runTest(target, opts) {
   if (code !== 0) return { ok: false, detail: `exit ${code}`, output: child.output };
   if (errs.length) return { ok: false, detail: 'error markers in output', output: errs.join('\n') };
 
-  const mem = [...child.output.matchAll(/\[mem\] rss (\d+MB)/g)].pop();
-  return { ok: true, detail: mem ? `rss ${mem[1]}` : undefined };
+  const mem = [...child.output.matchAll(/\[mem\] rss (\d+)MB/g)].pop();
+  if (mem && target.maxRssMb && Number(mem[1]) > target.maxRssMb)
+    return { ok: false, detail: `rss ${mem[1]}MB exceeds max ${target.maxRssMb}MB` };
+
+  return { ok: true, detail: mem ? `rss ${mem[1]}MB / ${target.maxRssMb ?? '?'}MB max` : undefined };
 }
 
 export const runScript = runTest;
