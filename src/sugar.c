@@ -155,14 +155,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     
     if (act) coro->act = act;
     else {
-      int efp = vm->suspended_entry_fp;
-      vm->fp = efp - 1;
-      vm->sp = vm->frames[efp].prev_sp;
-      vm->handler_depth = vm->frames[efp].handler_base;
-      vm->suspended = false;
-      vm->suspended_resume_pending = false;
-      vm->suspended_entry_fp = -1;
-      vm->suspended_saved_fp = -1;
+      sv_activation_discard(vm, vm->suspended_entry_fp);
       result = js_mkerr(js, "out of memory capturing activation");
     }}
 

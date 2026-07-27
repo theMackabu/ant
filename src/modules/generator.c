@@ -380,14 +380,7 @@ static ant_value_t generator_resume_kind(
     );
     
     if (act) coro->act = act; else {
-      int efp = exec_vm->suspended_entry_fp;
-      exec_vm->fp = efp - 1;
-      exec_vm->sp = exec_vm->frames[efp].prev_sp;
-      exec_vm->handler_depth = exec_vm->frames[efp].handler_base;
-      exec_vm->suspended = false;
-      exec_vm->suspended_resume_pending = false;
-      exec_vm->suspended_entry_fp = -1;
-      exec_vm->suspended_saved_fp = -1;
+      sv_activation_discard(exec_vm, exec_vm->suspended_entry_fp);
       suspended_now = false;
       result = js_mkerr(js, "out of memory capturing generator activation");
     }

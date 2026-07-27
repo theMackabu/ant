@@ -291,6 +291,35 @@ bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
   return true;
 }
 
+static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
+  if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
+    js_arguments_detach(js, frame->arguments_obj);
+    frame->arguments_obj = js_mkundef();
+  }
+}
+
+void sv_activation_discard(sv_vm_t *vm, int entry_fp) {
+  if (!vm || entry_fp < 0 || entry_fp > vm->fp) return;
+
+  if (vm->open_upvalues) {
+  for (int f = vm->fp; f >= entry_fp; f--) {
+    ant_value_t *drop_bp = vm->frames[f].bp;
+    if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
+  }}
+
+  for (int f = vm->fp; f >= entry_fp; f--)
+    sv_drop_frame_runtime_state(vm->js, &vm->frames[f]);
+
+  vm->fp = entry_fp - 1;
+  vm->sp = vm->frames[entry_fp].prev_sp;
+  vm->handler_depth = vm->frames[entry_fp].handler_base;
+
+  vm->suspended = false;
+  vm->suspended_resume_pending = false;
+  vm->suspended_entry_fp = -1;
+  vm->suspended_saved_fp = -1;
+}
+
 void sv_activation_seal(ant_t *js, sv_activation_t *act) {
   if (!js || !act || act->frame_count <= 0) return;
 
@@ -700,12 +729,6 @@ static inline void sv_sync_frame_locals(
   *frame = &vm->frames[vm->fp]; *func = (*frame)->func;
   *bp = (*frame)->bp; *lp = (*frame)->lp;
 }
-
-static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
-if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
-  js_arguments_detach(js, frame->arguments_obj);
-  frame->arguments_obj = js_mkundef();
-}}
 
 static inline ant_value_t sv_stage_frame_args(
   sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,

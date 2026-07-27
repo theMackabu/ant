@@ -412,6 +412,7 @@ sv_activation_t *sv_activation_capture(
 
 bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act);
 void sv_activation_seal(ant_t *js, sv_activation_t *act);
+void sv_activation_discard(sv_vm_t *vm, int entry_fp);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
   if (uv->location != &uv->closed || uv->in_remember_set) return;
