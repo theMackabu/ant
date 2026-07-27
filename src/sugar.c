@@ -5,56 +5,11 @@
 #include "modules/timer.h"
 #include "silver/engine.h"
 
-coroutine_queue_t pending_coroutines = {NULL, NULL};
-static bool coro_stack_size_initialized = false;
 static coroutine_t *retired_coroutines = NULL;
-
-bool has_pending_coroutines(void) {
-  return pending_coroutines.head != NULL;
-}
-
-bool has_ready_coroutines(void) {
-  coroutine_t *temp = pending_coroutines.head;
-  while (temp) {
-    if (temp->is_ready) return true;
-    temp = temp->next;
-  }
-  return false;
-}
-
-void enqueue_coroutine(coroutine_t *coro) {
-  if (!coro) return;
-  if (coro->hold_bits & CORO_HOLD_PENDING) return;
-  coro->next = NULL;
-  coro->prev = pending_coroutines.tail;
-  
-  if (pending_coroutines.tail) {
-    pending_coroutines.tail->next = coro;
-  } else pending_coroutines.head = coro;
-  pending_coroutines.tail = coro;
-  coroutine_hold(coro, CORO_HOLD_PENDING);
-}
-
-void remove_coroutine(coroutine_t *coro) {
-  if (!coro || !(coro->hold_bits & CORO_HOLD_PENDING)) return;
-  
-  if (coro->prev) {
-    coro->prev->next = coro->next;
-  } else pending_coroutines.head = coro->next;
-  
-  if (coro->next) {
-    coro->next->prev = coro->prev;
-  } else pending_coroutines.tail = coro->prev;
-  
-  coro->prev = NULL;
-  coro->next = NULL;
-  coroutine_unhold(coro, CORO_HOLD_PENDING);
-}
 
 static void retire_coroutine_storage(coroutine_t *coro) {
   if (!coro) return;
   coro->next = retired_coroutines;
-  coro->prev = NULL;
   retired_coroutines = coro;
 }
 
@@ -79,7 +34,6 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
 
   coro->js = NULL;
   coro->active_parent = NULL;
-  coro->materialized = false;
 }
 
 void coroutine_retain(coroutine_t *coro) {
@@ -170,31 +124,9 @@ static void coroutine_deactivate(ant_t *js, coroutine_t *coro) {
   coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 }
 
-static bool coroutine_has_module_eval_ctx(coroutine_t *coro) {
-  return coro && coro->module_eval_ctx;
-}
-
-static size_t calculate_coro_stack_size(void) {
-  static size_t cached_size = 0;
-  if (coro_stack_size_initialized) return cached_size;
-  
-  coro_stack_size_initialized = true;
-  const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
-  
-  if (env_stack) {
-  size_t size = (size_t)atoi(env_stack) * 1024;
-  if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) { 
-    cached_size = size; return cached_size; 
-  }}
-  
-  return cached_size;
-}
-
 static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int nargs, bool is_error) {
   coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_settled = true;
   coro->is_error = is_error;
-  coro->is_ready = true;
 }
 
 static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
@@ -203,7 +135,6 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
 
   if (coro->act && coro->act->frame_count > 0) {
     sv_vm_t *vm = sv_vm_get_active(js);
-    coro->is_ready = false;
     coroutine_activate(js, coro);
 
     ant_value_t result;
@@ -218,8 +149,6 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
       vm->suspended_resume_pending = true;
       result = sv_resume_suspended(vm);
     }
-
-    coro->is_settled = false;
 
     if (vm->suspended && vm->suspended_entry_fp >= 0) {
     sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);

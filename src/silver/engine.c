@@ -533,13 +533,6 @@ static inline void sv_record_slot_feedback(
   sv_tfb_record_local(func, (int)(slot_idx - func->param_count), value);
 }
 
-bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot) {
-  if (!vm || !slot) return false;
-  for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next)
-    if (uv->location == slot) return true;
-  return false;
-}
-
 ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
   if (vtype(value) == T_STR && str_is_heap_builder(value))
     return str_materialize(js, value);
@@ -2089,8 +2082,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       sv_err = js_mkerr(js, "yield can only be used inside generator functions");
       goto sv_throw;
     }
-    coro->yield_value = yielded;
-    coro->did_suspend = true;
     vm->suspended = true;
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;
@@ -2141,8 +2132,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       NEXT(3);
     }
 
-    coro->yield_value = yielded;
-    coro->did_suspend = true;
     vm->suspended = true;
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;

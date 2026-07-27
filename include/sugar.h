@@ -17,57 +17,43 @@ typedef enum {
 
 typedef enum {
   CORO_HOLD_ACTIVE    = 1u << 0,
-  CORO_HOLD_PENDING   = 1u << 1,
   CORO_HOLD_GENERATOR = 1u << 2,
   CORO_HOLD_AWAIT     = 1u << 3,
 } coroutine_hold_t;
 
+// TODO: check padding
 typedef struct coroutine {
   ant_t *js;
-  
+
   ant_value_t this_val;
   ant_value_t super_val;
   ant_value_t new_target;
   ant_value_t result;
   ant_value_t async_func;
-  ant_value_t yield_value;
+  ant_value_t owner_gen;
   ant_value_t *args;
-  
+
   ant_value_t awaited_promise;
   ant_value_t async_promise;
   ant_module_t *module_eval_ctx;
-  
+
   struct coroutine *active_parent;
   struct coroutine *active_prev;
-  
-  struct coroutine *prev;
+
   struct coroutine *next;
-  
   struct sv_activation *act;
-  
-  ant_offset_t resume_point;
+
   coroutine_type_t type;
-  
+
   int nargs;
-  
+
   uint64_t gc_epoch;
   uint32_t refcount;
   uint8_t hold_bits;
-  
-  bool is_settled;
-  bool is_error;
-  bool is_done;
-  bool materialized;
-  bool is_ready;
-  bool did_suspend;
-  bool await_registered;
-  bool destroy_requested;
-} coroutine_t;
 
-typedef struct {
-  coroutine_t *head;
-  coroutine_t *tail;
-} coroutine_queue_t;
+  bool is_error;
+  bool await_registered;
+} coroutine_t;
 
 typedef enum {
   JS_AWAIT_PENDING = 0,
@@ -78,11 +64,6 @@ typedef struct {
   js_await_state_t state;
   ant_value_t value;
 } js_await_result_t;
-
-extern coroutine_queue_t pending_coroutines;
-
-void enqueue_coroutine(coroutine_t *coro);
-void remove_coroutine(coroutine_t *coro);
 
 void coroutine_retain(coroutine_t *coro);
 void coroutine_release(coroutine_t *coro);
@@ -101,8 +82,5 @@ ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
-
-bool has_ready_coroutines(void);
-bool has_pending_coroutines(void);
 
 #endif

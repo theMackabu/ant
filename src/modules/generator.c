@@ -182,7 +182,10 @@ static coroutine_t *generator_coro(ant_value_t gen) {
 static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   generator_data_t *data = generator_data(gen);
   if (data && data->coro == coro) data->coro = NULL;
-  if (coro) coroutine_unhold(coro, CORO_HOLD_GENERATOR);
+  if (coro) {
+    coro->owner_gen = js_mkundef();
+    coroutine_unhold(coro, CORO_HOLD_GENERATOR);
+  }
 }
 
 // TODO: collapse
@@ -199,27 +202,10 @@ void generator_mark_for_gc(ant_t *js, ant_value_t gen) {
   }
 }
 
-static ant_value_t generator_find_owner_in_list(ant_object_t *head, coroutine_t *coro) {
-  for (ant_object_t *obj = head; obj; obj = obj->next) {
-    ant_value_t candidate = js_obj_from_ptr(obj);
-    generator_data_t *data = generator_data(candidate);
-    if (data && data->coro == coro) return candidate;
-  }
-  return js_mkundef();
-}
-
-static ant_value_t generator_find_owner(ant_t *js, coroutine_t *coro) {
-  ant_value_t gen = generator_find_owner_in_list(js->objects, coro);
-  if (vtype(gen) != T_UNDEF) return gen;
-  gen = generator_find_owner_in_list(js->objects_old, coro);
-  if (vtype(gen) != T_UNDEF) return gen;
-  return generator_find_owner_in_list(js->permanent_objects, coro);
-}
-
 bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t result) {
   if (!coro || coro->type != CORO_GENERATOR || vtype(coro->async_promise) != T_PROMISE) return false;
 
-  ant_value_t gen = generator_find_owner(js, coro);
+  ant_value_t gen = coro->owner_gen;
   generator_data_t *data = generator_data(gen);
   if (!data || !data->is_async) return false;
 
@@ -587,22 +573,16 @@ ant_value_t sv_call_generator_closure_dispatch(
     .awaited_promise = js_mkundef(),
     .result = js_mkundef(),
     .async_func = callee_func,
+    .owner_gen = gen,
     .args = copied_args,
     .nargs = argc,
     .active_parent = NULL,
-    .is_settled = false,
     .is_error = false,
-    .is_done = false,
-    .resume_point = 0,
-    .yield_value = js_mkundef(),
     .async_promise = js_mkundef(),
     .next = NULL,
-    .is_ready = false,
-    .did_suspend = false,
     .refcount = 1,
     .hold_bits = 0,
     .await_registered = false,
-    .destroy_requested = false,
   };
 
   *data = (generator_data_t){
@@ -610,6 +590,7 @@ ant_value_t sv_call_generator_closure_dispatch(
     .state = GEN_SUSPENDED_START,
     .is_async = closure->func->is_async,
   };
+  
   coroutine_hold(coro, CORO_HOLD_GENERATOR);
   coroutine_release(coro);
 

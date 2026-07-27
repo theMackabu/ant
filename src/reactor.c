@@ -10,16 +10,11 @@
 #include "modules/readline.h"
 #include "modules/process.h"
 
-static reactor_poll_hook_t g_poll_hook = NULL;
-static void *g_poll_hook_data = NULL;
-
 static inline work_flags_t get_pending_work(void) {
   work_flags_t flags = 0;
   if (has_pending_microtasks())         flags |= WORK_MICROTASKS;
   if (has_pending_timers())             flags |= WORK_TIMERS;
   if (has_pending_immediates())         flags |= WORK_IMMEDIATES;
-  if (has_pending_coroutines())         flags |= WORK_COROUTINES;
-  if (has_ready_coroutines())           flags |= WORK_COROUTINES_READY;
   if (has_pending_fetches())            flags |= WORK_FETCHES;
   if (has_pending_fs_ops())             flags |= WORK_FS_OPS;
   if (has_pending_child_processes())    flags |= WORK_CHILD_PROCS;
@@ -29,15 +24,8 @@ static inline work_flags_t get_pending_work(void) {
 }
 
 static inline bool event_loop_alive(void) {
-  work_flags_t w = get_pending_work();
-  if (w & (WORK_PENDING & ~WORK_COROUTINES)) return true;
-  if ((w & WORK_COROUTINES) && (w & WORK_COROUTINES_READY)) return true;
-  return UV_CHECK_ALIVE;
-}
-
-void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
-  g_poll_hook = hook;
-  g_poll_hook_data = data;
+  if (get_pending_work() & WORK_PENDING) return true;
+  return uv_loop_alive(uv_default_loop());
 }
 
 void js_poll_events(ant_t *js) {
@@ -45,8 +33,6 @@ void js_poll_events(ant_t *js) {
 
   process_immediates(js);
   process_microtasks(js);
-  
-  if (g_poll_hook) g_poll_hook(g_poll_hook_data);
 }
 
 void js_run_event_loop(ant_t *js) {
@@ -56,10 +42,11 @@ drain:
     reap_retired_coroutines();
     work_flags_t work = get_pending_work();
     
-    if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    else if ((work & WORK_ASYNC) || UV_CHECK_ALIVE) {
+    if (work & WORK_BLOCKING) 
+      uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+    else if ((work & WORK_ASYNC) || uv_loop_alive(uv_default_loop()))
       uv_run(uv_default_loop(), UV_RUN_ONCE);
-    } else break;
+    else break;
   } 
   
   js_poll_events(js);

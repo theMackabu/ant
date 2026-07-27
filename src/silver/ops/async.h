@@ -60,26 +60,18 @@ static inline void sv_async_init_activation(
     .new_target = new_target,
     .result = js_mkundef(),
     .async_func = async_func,
-    .yield_value = js_mkundef(),
+    .owner_gen = js_mkundef(),
     .args = NULL,
     .awaited_promise = js_mkundef(),
     .async_promise = promise,
     .active_parent = NULL,
-    .prev = NULL,
     .next = NULL,
-    .resume_point = 0,
     .type = CORO_ASYNC_AWAIT,
     .nargs = nargs,
     .refcount = 1,
     .hold_bits = 0,
-    .is_settled = false,
     .is_error = false,
-    .is_done = false,
-    .materialized = false,
-    .is_ready = false,
-    .did_suspend = false,
     .await_registered = false,
-    .destroy_requested = false,
   };
 }
 
@@ -228,9 +220,8 @@ static inline ant_value_t sv_start_async_closure(
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
       js_reject_promise(js, promise, reject_value);
-    } else {
-      js_resolve_promise(js, promise, result);
-    }
+    } else js_resolve_promise(js, promise, result);
+
     coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
   
@@ -264,18 +255,12 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
     return out;
   }
 
-  coro->is_settled = false;
-  coro->is_ready = false;
   js_await_result_t await_result = js_promise_await_coroutine(js, value, coro);
-
   if (await_result.state == JS_AWAIT_ERROR) {
-    coro->is_settled = false;
     out.state = SV_AWAIT_ERROR;
     out.value = js_throw(js, await_result.value);
     return out;
   }
-
-  coro->did_suspend = true;
 
   sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
   if (!act) {
@@ -286,9 +271,8 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
   }
 
   coro->act = act;
-  coro->materialized = true;
-
   out.state = SV_AWAIT_SUSPENDED;
+  
   return out;
 }
 

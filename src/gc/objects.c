@@ -536,7 +536,7 @@ static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->async_promise);
   gc_mark_value(js, c->awaited_promise);
   gc_mark_value(js, c->result);
-  gc_mark_value(js, c->yield_value);
+  gc_mark_value(js, c->owner_gen);
   gc_mark_value(js, c->super_val);
   gc_mark_value(js, c->new_target);
   
@@ -577,7 +577,6 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
 
-  for (coroutine_t *c = pending_coroutines.head; c; c = c->next) gc_mark_coroutine(js, c);
   for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) gc_mark_coroutine(js, c);
 
   gc_mark_value(js, js->global);
