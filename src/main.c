@@ -857,7 +857,7 @@ int main(int argc, char *argv[]) {
   ant_t *js;
   volatile char stack_base;
   
-  if (!(js = js_create_dynamic())) {
+  if (!(js = ant_create())) {
     crfprintf(stderr, msg.ant_allocation_fatal);
     CLEANUP_ARGS_AND_ARGV();
     return EXIT_FAILURE;

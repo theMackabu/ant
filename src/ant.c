@@ -3032,6 +3032,7 @@ void js_arguments_detach(ant_t *js, ant_value_t obj) {
   }
 
   state->frame_index = -1;
+  state->direct_frame = NULL;
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -17077,7 +17078,7 @@ static ant_value_t builtin_Proxy_revocable(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-ant_t *js_create(void *buf, size_t len) {
+static ant_t *isolate_init(void *buf, size_t len) {
   ANT_ASSERT(
     (uintptr_t)buf <= ((1ULL << 53) - 1),
     "pointer exceeds 53-bit double-precision integer limit"
@@ -17602,15 +17603,23 @@ ant_t *js_create(void *buf, size_t len) {
   return js;
 }
 
-ant_t *js_create_dynamic() {
+ant_t *ant_create() {
   ant_t *js = (ant_t *)calloc(1, sizeof(*js));
   if (js == NULL) return NULL;
-  if (js_create(js, sizeof(*js)) == NULL) {
+  
+  if (isolate_init(js, sizeof(*js)) == NULL) {
     free(js);
     return NULL;
   }
+  
   js->owns_mem = true;
   js->vm = sv_vm_create(js);
+
+  if (!js->vm) {
+    js_destroy(js);
+    return NULL;
+  }
+
   return js;
 }
 

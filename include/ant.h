@@ -37,8 +37,8 @@ if (!(cond)) {                                                              \
 #define js_false   (NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT))
 #define js_bool(x) (js_false | (ant_value_t)!!(x))
 
-ant_t *js_create(void *buf, size_t len);
-ant_t *js_create_dynamic();
+// create a new ant isolate
+ant_t *ant_create();
 
 ant_value_t js_glob(ant_t *);
 void js_mark_constructor(ant_value_t value, bool is_constructor);

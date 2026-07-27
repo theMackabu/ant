@@ -52,7 +52,7 @@ static ant_value_t ImportModule(const char *specifier) {
 
 bool ant_renderer_runtime_initialize(void) {
   if (renderer_runtime) return true;
-  renderer_runtime = js_create_dynamic();
+  renderer_runtime = ant_create();
   if (!renderer_runtime) return false;
   if (!renderer_stack_base) {
     js_destroy(renderer_runtime);
