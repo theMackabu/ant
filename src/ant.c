@@ -15914,14 +15914,6 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   return builtin_Promise_resolve(js, promise_args, 1);
 }
 
-static ant_value_t js_get_import_meta_prop(ant_t *js) {
-  return js->esm.import_meta;
-}
-
-static void js_set_import_meta_prop(ant_t *js, ant_value_t import_meta) {
-  js->esm.import_meta = import_meta;
-}
-
 static void js_set_import_module_ctx(ant_t *js, ant_value_t module_ctx) {
   if (!is_object_type(module_ctx)) return;
   ant_value_t import_fn = js_get_import_func(js);
@@ -15935,7 +15927,7 @@ static ant_value_t js_get_current_import_meta(ant_t *js) {
     js_get_execution_module_ctx(js)
   );
   if (vtype(import_meta) == T_OBJ) return import_meta;
-  return js_get_import_meta_prop(js);
+  return js->esm.import_meta;
 }
 
 static ant_value_t builtin_import_meta_resolve(ant_t *js, ant_value_t *args, int nargs) {
@@ -16123,25 +16115,25 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
   if (is_err(import_meta) || vtype(import_meta) == T_UNDEF) return;
 
   js_set_import_module_ctx(js, module_ctx);
-  js_set_import_meta_prop(js, import_meta);
+  js->esm.import_meta = import_meta;
 }
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
   ctx->prev = js->esm.module_stack;
-  ctx->prev_import_meta_prop = js_get_import_meta_prop(js);
+  ctx->prev_import_meta_prop = js->esm.import_meta;
   js->esm.module_stack = ctx;
 
   ant_value_t import_meta = js_get_module_ctx_import_meta(js, ctx->module_ctx);
-  if (vtype(import_meta) != T_UNDEF) js_set_import_meta_prop(js, import_meta);
+  if (vtype(import_meta) != T_UNDEF) js->esm.import_meta = import_meta;
 }
 
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
   if (js->esm.module_stack == ctx) {
-    js_set_import_meta_prop(js, ctx->prev_import_meta_prop);
+    js->esm.import_meta = ctx->prev_import_meta_prop;
     js->esm.module_stack = ctx->prev;
   }
 }
