@@ -17624,7 +17624,9 @@ ant_t *ant_create() {
 }
 
 void js_destroy(ant_t *js) {
-  if (js == NULL) return;  
+  if (js == NULL) return;
+  reap_retired_coroutines(js);
+
   if (js->vm) {
     sv_vm_destroy(js->vm);
     js->vm = NULL;

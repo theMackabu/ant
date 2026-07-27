@@ -579,7 +579,6 @@ ant_value_t sv_call_generator_closure_dispatch(
     .active_parent = NULL,
     .is_error = false,
     .async_promise = js_mkundef(),
-    .next = NULL,
     .refcount = 1,
     .hold_bits = 0,
     .await_registered = false,

@@ -65,7 +65,6 @@ static inline void sv_async_init_activation(
     .awaited_promise = js_mkundef(),
     .async_promise = promise,
     .active_parent = NULL,
-    .next = NULL,
     .type = CORO_ASYNC_AWAIT,
     .nargs = nargs,
     .refcount = 1,

@@ -145,7 +145,7 @@ typedef struct {
 
 struct ant_isolate_t {
   sv_vm_t *vm;
-  
+
   ant_module_t *module;
   ant_object_t *objects;
   ant_object_t *permanent_objects;
@@ -159,7 +159,9 @@ struct ant_isolate_t {
   ant_value_t **c_roots;
   size_t c_root_count;
   size_t c_root_cap;
+  
   struct gc_temp_root_scope *temp_roots;
+  struct coroutine *retired_coroutines;
 
   const char *code;
   const char *filename;

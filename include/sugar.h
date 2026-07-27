@@ -21,7 +21,6 @@ typedef enum {
   CORO_HOLD_AWAIT     = 1u << 3,
 } coroutine_hold_t;
 
-// TODO: check padding
 typedef struct coroutine {
   ant_t *js;
 
@@ -37,16 +36,16 @@ typedef struct coroutine {
   ant_value_t async_promise;
   ant_module_t *module_eval_ctx;
 
-  struct coroutine *active_parent;
+  union {
+    struct coroutine *active_parent;
+    struct coroutine *retired_next;
+  };
+  
   struct coroutine *active_prev;
-
-  struct coroutine *next;
   struct sv_activation *act;
-
   coroutine_type_t type;
 
   int nargs;
-
   uint64_t gc_epoch;
   uint32_t refcount;
   uint8_t hold_bits;
@@ -71,11 +70,15 @@ void coroutine_release(coroutine_t *coro);
 void coroutine_hold(coroutine_t *coro, uint8_t hold);
 void coroutine_unhold(coroutine_t *coro, uint8_t hold);
 
-void reap_retired_coroutines(void);
+void reap_retired_coroutines(ant_t *js);
 void free_coroutine(coroutine_t *coro);
 void coroutine_clear_await_registration(coroutine_t *coro);
 
-ant_value_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, ant_value_t closure_scope, ant_value_t *args, int nargs);
+ant_value_t start_async_in_coroutine(
+  ant_t *js, const char *code, size_t code_len,
+  ant_value_t closure_scope, ant_value_t *args, int nargs
+);
+
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 

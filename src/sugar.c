@@ -5,12 +5,10 @@
 #include "modules/timer.h"
 #include "silver/engine.h"
 
-static coroutine_t *retired_coroutines = NULL;
-
 static void retire_coroutine_storage(coroutine_t *coro) {
-  if (!coro) return;
-  coro->next = retired_coroutines;
-  retired_coroutines = coro;
+  if (!coro || !coro->js) return;
+  coro->retired_next = coro->js->retired_coroutines;
+  coro->js->retired_coroutines = coro;
 }
 
 static void destroy_coroutine_resources(coroutine_t *coro) {
@@ -71,12 +69,14 @@ void coroutine_unhold(coroutine_t *coro, uint8_t hold) {
   coroutine_release(coro);
 }
 
-void reap_retired_coroutines(void) {
-  coroutine_t *coro = retired_coroutines;
-  retired_coroutines = NULL;
-  
+void reap_retired_coroutines(ant_t *js) {
+  if (!js) return;
+
+  coroutine_t *coro = js->retired_coroutines;
+  js->retired_coroutines = NULL;
+
   while (coro) {
-    coroutine_t *next = coro->next;
+    coroutine_t *next = coro->retired_next;
     destroy_coroutine_resources(coro);
     free(coro);
     coro = next;

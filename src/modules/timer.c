@@ -825,7 +825,7 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   timer_state.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
-  reap_retired_coroutines();
+  reap_retired_coroutines(js);
 }
 
 void process_microtasks(ant_t *js) {

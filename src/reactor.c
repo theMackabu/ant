@@ -39,7 +39,7 @@ void js_run_event_loop(ant_t *js) {
 drain:
   while (event_loop_alive()) {
     js_poll_events(js);
-    reap_retired_coroutines();
+    reap_retired_coroutines(js);
     work_flags_t work = get_pending_work();
     
     if (work & WORK_BLOCKING) 
@@ -50,7 +50,7 @@ drain:
   } 
   
   js_poll_events(js);
-  reap_retired_coroutines();
+  reap_retired_coroutines(js);
   ant_value_t code = js_mknum(0);
   emit_process_event("beforeExit", &code, 1);
   
@@ -59,8 +59,8 @@ drain:
 
 void js_reactor_pump_repl_nowait(ant_t *js) {
   js_poll_events(js);
-  reap_retired_coroutines();
+  reap_retired_coroutines(js);
   uv_run(uv_default_loop(), UV_RUN_NOWAIT);
   js_poll_events(js);
-  reap_retired_coroutines();
+  reap_retired_coroutines(js);
 }
