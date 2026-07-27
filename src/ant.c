@@ -17090,7 +17090,6 @@ static ant_t *isolate_init(void *buf, size_t len) {
   memset(buf, 0, len);
   
   js = (ant_t *)buf;
-  rt->js = js;
   js_init_intern_cache(js);
   
   if (!fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)) return NULL;
@@ -17114,7 +17113,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
     fixed_arena_destroy(&js->obj_arena);
     return NULL;
   }
-  
+
+  rt->js = js;
   js->global = mkobj(js, 0);
   js->this_val = js->global;
   js->new_target = js_mkundef();

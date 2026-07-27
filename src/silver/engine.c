@@ -53,7 +53,10 @@ static void *sv_vm_reserve_storage(void) {
 #endif
   void *p = mmap(NULL, SV_VM_RESERVE, PROT_READ | PROT_WRITE, flags, -1, 0);
   if (p == MAP_FAILED) return NULL;
-  mprotect((char *)p + SV_STACK_RESERVE, SV_VM_GUARD_SIZE, PROT_NONE);
+  if (mprotect((char *)p + SV_STACK_RESERVE, SV_VM_GUARD_SIZE, PROT_NONE) != 0) {
+    munmap(p, SV_VM_RESERVE);
+    return NULL;
+  }
   return p;
 #endif
 }
@@ -79,6 +82,9 @@ static bool sv_vm_commit_storage(void *addr, size_t bytes) {
 sv_vm_t *sv_vm_create(ant_t *js) {
   int stack_size, max_frames;
   sv_vm_limits(&stack_size, &max_frames);
+
+  if (stack_size > SV_STACK_HARD_MAX) stack_size = SV_STACK_HARD_MAX;
+  if (max_frames > SV_FRAMES_HARD_MAX) max_frames = SV_FRAMES_HARD_MAX;
 
   sv_vm_t *vm = calloc(1, sizeof(*vm));
   if (!vm) return NULL;

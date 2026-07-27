@@ -129,6 +129,25 @@ static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int na
   coro->is_error = is_error;
 }
 
+static ant_value_t coroutine_resume_and_recapture(ant_t *js, sv_vm_t *vm, coroutine_t *coro) {
+  vm->suspended_resume_value = coro->result;
+  vm->suspended_resume_is_error = coro->is_error;
+  vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
+  vm->suspended_resume_pending = true;
+
+  ant_value_t result = sv_resume_suspended(vm);
+  if (!vm->suspended || vm->suspended_entry_fp < 0) return result;
+
+  sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
+  if (act) {
+    coro->act = act;
+    return result;
+  }
+
+  sv_activation_discard(vm, vm->suspended_entry_fp);
+  return js_mkerr(js, "out of memory capturing activation");
+}
+
 static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   if (!coro) return;
   coroutine_retain(coro);
@@ -142,22 +161,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
       sv_activation_seal(js, coro->act);
       coro->act->frame_count = 0;
       result = js_mkerr(js, "failed to install async activation");
-    } else {
-      vm->suspended_resume_value = coro->result;
-      vm->suspended_resume_is_error = coro->is_error;
-      vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
-      vm->suspended_resume_pending = true;
-      result = sv_resume_suspended(vm);
-    }
-
-    if (vm->suspended && vm->suspended_entry_fp >= 0) {
-    sv_activation_t *act = sv_activation_capture(vm, vm->suspended_entry_fp, coro->act);
-    
-    if (act) coro->act = act;
-    else {
-      sv_activation_discard(vm, vm->suspended_entry_fp);
-      result = js_mkerr(js, "out of memory capturing activation");
-    }}
+    } else result = coroutine_resume_and_recapture(js, vm, coro);
 
     bool suspended_again = coro->act && coro->act->frame_count > 0;
     coroutine_deactivate(js, coro);
