@@ -61,14 +61,20 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   ant_output_stream_flush(out);
 }
 
-bool print_uncaught_throw(ant_t *js) {
-  if (!js->thrown_exists) return false;
-  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
-  
+ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback) {
+  ant_value_t value = js->thrown_exists ? js->thrown_value : fallback;
+
   js->thrown_exists = false;
   js->thrown_value = js_mkundef();
   js->thrown_stack = js_mkundef();
-  
+
+  return value;
+}
+
+bool print_uncaught_throw(ant_t *js) {
+  if (!js->thrown_exists) return false;
+  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
+  js_take_thrown(js, js_mkundef());
   return true;
 }
 

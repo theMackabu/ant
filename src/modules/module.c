@@ -173,18 +173,26 @@ static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t hook = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  if (vtype(js->esm.hooks) != T_ARR) return js_mkundef();
+  ant_value_t self = js_getcurrentfunc(js);
+  ant_value_t hook = js_get_slot(self, SLOT_DATA);
+  if (vtype(hook) == T_UNDEF || vtype(js->esm.hooks) != T_ARR) return js_mkundef();
 
   ant_value_t remaining = js_mkarr(js);
   ant_offset_t len = js_arr_len(js, js->esm.hooks);
+  bool removed = false;
 
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t entry = js_arr_get(js, js->esm.hooks, i);
-    if (entry != hook) js_arr_push(js, remaining, entry);
+    if (!removed && entry == hook) {
+      removed = true;
+      continue;
+    }
+    js_arr_push(js, remaining, entry);
   }
 
   js->esm.hooks = remaining;
+  js_set_slot(self, SLOT_DATA, js_mkundef());
+  
   return js_mkundef();
 }
 

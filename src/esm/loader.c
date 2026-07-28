@@ -448,6 +448,8 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   }
 
   ant_value_t ns = js_mkobj(js);
+  js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
+  
   if (is_object_type(value)) {
     ant_value_t keys = js_own_property_keys(js, value, false, true);
     ant_offset_t len = js_arr_len(js, keys);
@@ -1370,14 +1372,7 @@ static ant_value_t esm_load_text(ant_t *js, const char *path) {
   return result;
 }
 
-static ant_value_t esm_load_image(ant_t *js, const char *path) {
-  esm_file_data_t file;
-  ant_value_t err = esm_read_file(js, path, "image file", &file);
-  if (is_err(err)) return err;
-
-  unsigned char *content = (unsigned char *)file.data;
-  size_t size = file.size;
-
+static ant_value_t esm_image_value(ant_t *js, const unsigned char *content, size_t size, const char *path) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t data_arr = js_mkarr(js);
 
@@ -1389,8 +1384,44 @@ static ant_value_t esm_load_image(ant_t *js, const char *path) {
   js_setprop(js, obj, js_mkstr(js, "path", 4), js_mkstr(js, path, strlen(path)));
   js_setprop(js, obj, js_mkstr(js, "size", 4), tov((double)size));
 
+  return obj;
+}
+
+static ant_value_t esm_load_image(ant_t *js, const char *path) {
+  esm_file_data_t file;
+  ant_value_t err = esm_read_file(js, path, "image file", &file);
+  if (is_err(err)) return err;
+
+  ant_value_t obj = esm_image_value(js, (const unsigned char *)file.data, file.size, path);
   free(file.data);
   return obj;
+}
+
+static ant_value_t esm_load_value_module(ant_t *js, esm_module_t *mod) {
+  if (!mod->embedded_code) {
+    switch (mod->kind) {
+      case ESM_MODULE_KIND_JSON: return esm_load_json(js, mod->resolved_path);
+      case ESM_MODULE_KIND_TEXT: return esm_load_text(js, mod->resolved_path);
+      default: return esm_load_image(js, mod->resolved_path);
+    }
+  }
+
+  size_t len = mod->embedded_code_len;
+  char *buf = (char *)malloc(len + 1);
+  if (!buf) return js_mkerr(js, "OOM loading module source");
+
+  memcpy(buf, mod->embedded_code, len);
+  buf[len] = '\0';
+
+  ant_value_t val;
+  switch (mod->kind) {
+    case ESM_MODULE_KIND_JSON: val = json_parse_value(js, js_mkstr(js, buf, len)); break;
+    case ESM_MODULE_KIND_TEXT: val = js_mkstr(js, buf, len); break;
+    default: val = esm_image_value(js, (const unsigned char *)buf, len, mod->resolved_path); break;
+  }
+
+  free(buf);
+  return val;
 }
 
 static void esm_module_record_cleanup(esm_module_record_t *record) {
@@ -1586,18 +1617,10 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   mod->is_loading = true;
 
   switch (mod->kind) {
-    case ESM_MODULE_KIND_JSON: {
-      ant_value_t json_val = esm_load_json(js, mod->resolved_path);
-      return esm_complete_value_module(js, mod, json_val);
-    }
-    case ESM_MODULE_KIND_TEXT: {
-      ant_value_t text_val = esm_load_text(js, mod->resolved_path);
-      return esm_complete_value_module(js, mod, text_val);
-    }
-    case ESM_MODULE_KIND_IMAGE: {
-      ant_value_t img_val = esm_load_image(js, mod->resolved_path);
-      return esm_complete_value_module(js, mod, img_val);
-    }
+    case ESM_MODULE_KIND_JSON:
+    case ESM_MODULE_KIND_TEXT:
+    case ESM_MODULE_KIND_IMAGE:
+      return esm_complete_value_module(js, mod, esm_load_value_module(js, mod));
     case ESM_MODULE_KIND_NATIVE: {
       ant_value_t ns = esm_make_namespace_object(js);
       mod->namespace_obj = ns;
@@ -1861,7 +1884,11 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, int level, ant_value_t spec,
   }
 
   ant_value_t out = js_mkobj(js);
-  if (!esm_lookup_builtin_alias(spec_copy, strlen(spec_copy))) {
+  bool scheme_passthrough = esm_has_builtin_scheme(spec_copy)
+    || esm_is_data_url(spec_copy)
+    || esm_is_url(spec_copy);
+
+  if (!scheme_passthrough && !esm_lookup_builtin_alias(spec_copy, strlen(spec_copy))) {
     if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
     char *resolved = esm_resolve(js, spec_copy, base_path, esm_resolve_path);
 
@@ -1989,25 +2016,25 @@ static ant_value_t esm_import_via_hooks(
   ant_value_t url_val = js_get(js, resolved, "url");
   GC_ROOT_PIN(js, url_val);
 
-  if (vtype(url_val) != T_STR || strncmp(js_getstr(js, url_val, NULL), "file://", 7) != 0) {
+  if (vtype(url_val) != T_STR) {
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkundef();
   }
+
+  bool is_file_url = strncmp(js_getstr(js, url_val, NULL), "file://", 7) == 0;
 
   ant_value_t loaded = esm_run_load_chain(js, top, url_val, ctx);
   GC_ROOT_PIN(js, loaded);
 
   if (is_err(loaded)) {
+    if (!is_file_url) {
+      js_take_thrown(js, js_mkundef());
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkundef();
+    }
     *handled = true;
     GC_ROOT_RESTORE(js, root_mark);
     return loaded;
-  }
-
-  const char *url = js_getstr(js, url_val, NULL);
-  char *fs_path = esm_file_url_to_path(js, url);
-  if (!fs_path) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkundef();
   }
 
   ant_module_format_t format = MODULE_EVAL_FORMAT_UNKNOWN;
@@ -2017,7 +2044,6 @@ static ant_value_t esm_import_via_hooks(
     if (strcmp(fmt_str, "commonjs") == 0) format = MODULE_EVAL_FORMAT_CJS;
     else if (strcmp(fmt_str, "module") == 0) format = MODULE_EVAL_FORMAT_ESM;
   }
-  if (format == MODULE_EVAL_FORMAT_UNKNOWN) format = esm_decide_module_format(js, fs_path);
 
   const uint8_t *source = NULL;
   size_t source_len = 0;
@@ -2029,19 +2055,30 @@ static ant_value_t esm_import_via_hooks(
     source_len = (size_t)sl;
   }
 
-  if (esm_is_json(fs_path)) {
-    format = MODULE_EVAL_FORMAT_UNKNOWN;
-    source = NULL;
-    source_len = 0;
+  const char *url = js_getstr(js, url_val, NULL);
+  char *fs_path = esm_file_url_to_path(js, url);
+
+  if (!fs_path) {
+    if (!source) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkundef();
+    }
+    *handled = true;
+    ant_value_t ns = esm_get_or_load(js, specifier, url, url, format, source, source_len);
+    GC_ROOT_RESTORE(js, root_mark);
+    return ns;
   }
 
-  const char *cache_key = strchr(url, '?') ? url : fs_path;
+  if (esm_is_json(fs_path)) format = MODULE_EVAL_FORMAT_UNKNOWN;
+  else if (format == MODULE_EVAL_FORMAT_UNKNOWN) format = esm_decide_module_format(js, fs_path);
+
+  const char *cache_key = (strchr(url, '?') || strchr(url, '#')) ? url : fs_path;
   *handled = true;
-  
+
   ant_value_t ns = esm_get_or_load(js, specifier, fs_path, cache_key, format, source, source_len);
   free(fs_path);
   GC_ROOT_RESTORE(js, root_mark);
-  
+
   return ns;
 }
 
@@ -2266,12 +2303,13 @@ ant_value_t js_esm_import_dynamic_ex(ant_t *js, ant_value_t specifier, const cha
 
   esm_module_t *mod = NULL, *tmp = NULL;
   if (st) HASH_ITER(hh, st->modules, mod, tmp) {
-  if (mod->has_tla && mod->namespace_obj == ns) {
-    *out_tla_promise = mod->tla_promise;
-    mod->has_tla = false;
-    mod->tla_promise = js_mkundef();
-    break;
-  }}
+    if (mod->has_tla && mod->namespace_obj == ns) {
+      *out_tla_promise = mod->tla_promise;
+      mod->has_tla = false;
+      mod->tla_promise = js_mkundef();
+      break;
+    }
+  }
 
   return ns;
 }

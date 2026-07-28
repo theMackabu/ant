@@ -15887,9 +15887,22 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
     base_path = js_get_execution_module_filename(js);
 
   ant_value_t attrs = js_mkundef();
-  if (nargs >= 2 && is_object_type(args[1])) {
+  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
+    if (!is_object_type(args[1])) {
+      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object");
+      return builtin_Promise_reject(js, &err, 1);
+    }
+
     attrs = js_get(js, args[1], "with");
-    if (!is_object_type(attrs)) attrs = js_mkundef();
+    if (is_err(attrs)) {
+      ant_value_t reject_val = js_take_thrown(js, attrs);
+      return builtin_Promise_reject(js, &reject_val, 1);
+    }
+
+    if (vtype(attrs) != T_UNDEF && !is_object_type(attrs)) {
+      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object");
+      return builtin_Promise_reject(js, &err, 1);
+    }
   }
 
   ant_value_t tla_promise = js_mkundef();
