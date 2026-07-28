@@ -832,14 +832,13 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
 
   int props_type = vtype(props);
-  if ((JS_TPFLG(props_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(props_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_merge_obj(js, err_obj, props);
-  }
+
   ant_value_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   int proto_type = vtype(proto);
-  if ((JS_TPFLG(proto_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
-  }
 
   js->thrown_exists = true;
   js->thrown_value = err_obj;

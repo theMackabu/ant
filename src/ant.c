@@ -73,9 +73,9 @@
 
 #define D(x) ((double)(x))
 
-_Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
-_Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
-_Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
+static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
+static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
+static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
 
 #if defined(__STDC_IEC_559__) || defined(__GCC_IEC_559)
 #elif defined(__FAST_MATH__)
@@ -3544,7 +3544,7 @@ static inline bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, uint
     return true;
   }
 
-  if (JS_TPFLG(ct) & T_OBJECT_MASK) {
+  if (T_FLAG_FIND(ct) & T_OBJECT_MASK) {
     ant_value_t as_obj = js_as_obj(*cur);
     ant_value_t proto = get_slot(as_obj, SLOT_PROTO);
     
@@ -3555,7 +3555,7 @@ static inline bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, uint
       return true;
     }
     
-    if (JS_TPFLG(ct) & T_NEEDS_PROTO_FALLBACK) {
+    if (T_FLAG_FIND(ct) & T_NEEDS_PROTO_FALLBACK) {
       ant_value_t fallback = get_prototype_for_type(js, ct);
       uint8_t ft = vtype(fallback);
       if (ft == T_NULL || ft == T_UNDEF) return false;
@@ -15889,7 +15889,7 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t attrs = js_mkundef();
   if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
     if (!is_object_type(args[1])) {
-      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object");
+      ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object"));
       return builtin_Promise_reject(js, &err, 1);
     }
 
@@ -15900,8 +15900,27 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
     }
 
     if (vtype(attrs) != T_UNDEF && !is_object_type(attrs)) {
-      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object");
+      ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object"));
       return builtin_Promise_reject(js, &err, 1);
+    }
+
+    if (is_object_type(attrs)) {
+      ant_value_t keys = js_own_property_keys(js, attrs, false, true);
+      ant_offset_t key_count = js_arr_len(js, keys);
+      for (ant_offset_t i = 0; i < key_count; i++) {
+        ant_value_t key = js_arr_get(js, keys, i);
+        if (vtype(key) != T_STR) continue;
+
+        ant_value_t val = js_get(js, attrs, js_getstr(js, key, NULL));
+        if (is_err(val)) {
+          ant_value_t reject_val = js_take_thrown(js, val);
+          return builtin_Promise_reject(js, &reject_val, 1);
+        }
+        if (vtype(val) != T_STR) {
+          ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "Import attribute values must be strings"));
+          return builtin_Promise_reject(js, &err, 1);
+        }
+      }
     }
   }
 

@@ -13,6 +13,7 @@ struct ant_esm_state {
   struct esm_path_resolve_cache_entry *path_resolve_cache;
 
   struct esm_module *modules;
+  struct esm_module *last_tla_module;
   int module_count;
   int dynamic_import_depth;
 };
@@ -31,5 +32,5 @@ void esm_base_dir_cache_put(ant_t *js, const char *base_path, const char *base_d
 bool esm_package_dir_cache_get(ant_t *js, const char *start_dir, const char *package_name, char **package_dir_out);
 void esm_package_dir_cache_put(ant_t *js, const char *start_dir, const char *package_name, const char *package_dir);
 
-yyjson_doc *esm_package_json_cache_read(ant_t *js, const char *pkg_json_path);
+yyjson_doc *esm_package_json_cache_read(ant_t *js, const char *pkg_json_path, bool *out_owned);
 void esm_loader_cache_cleanup(ant_t *js);

@@ -178,7 +178,7 @@ typedef struct {
   sv_ctor_prop_fb_t ctor_prop_fb;
 } sv_func_sidecar_t;
 
-_Static_assert(
+static_assert(
   _Alignof(sv_func_sidecar_t) > ant_sidecar,
   "function sidecar pointer uses low-bit tag"
 );
@@ -210,7 +210,7 @@ typedef struct {
   sv_type_info_t local_types[];
 } sv_func_metadata_t;
 
-_Static_assert(
+static_assert(
   _Alignof(sv_func_metadata_t) <= CODE_ARENA_ALIGNMENT,
   "function metadata alignment exceeds the code arena guarantee"
 );
@@ -501,7 +501,7 @@ typedef struct {
 #define SV_TDZ      T_EMPTY
 #define SV_HANDLER_MAX (SV_TRY_MAX * 2)
 
-_Static_assert(SV_HANDLER_MAX <= UINT16_MAX,
+static_assert(SV_HANDLER_MAX <= UINT16_MAX,
   "frame handler indexes must fit in uint16_t");
 
 #define SV_FRAMES_HARD_MAX 65536
@@ -1035,12 +1035,6 @@ static inline ant_value_t sv_call_closure(
 #define SV_CALL_FB_MISS_DISABLE 4
 
 #define SV_JIT_RETRY_INTERP    mkval(T_ERR, 1)
-#define SV_JIT_MAGIC           0xBA110ULL
-
-#define SV_JIT_BAILOUT \
-  (NANBOX_PREFIX \
-    | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) \
-    | SV_JIT_MAGIC)
   
 extern const char *const sv_op_names[OP__COUNT];
   

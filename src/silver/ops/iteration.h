@@ -9,11 +9,13 @@
 #include "modules/symbol.h"
 #include "modules/collections.h"
 
-#define SV_ITER_GENERIC  0
-#define SV_ITER_ARRAY    1
-#define SV_ITER_MAP      2
-#define SV_ITER_SET      3
-#define SV_ITER_STRING   4
+enum: uint8_t {
+  SV_ITER_GENERIC = 0,
+  SV_ITER_ARRAY   = 1,
+  SV_ITER_MAP     = 2,
+  SV_ITER_SET     = 3,
+  SV_ITER_STRING  = 4,
+};
 
 static inline ant_value_t sv_op_for_in(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
@@ -131,6 +133,14 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
 
 static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
+
+  if (vtype(iterable) == T_ARR) {
+    vm->stack[vm->sp++] = iterable;
+    vm->stack[vm->sp++] = tov(0);
+    vm->stack[vm->sp++] = SV_AITER_ARRAY_TAG;
+    return tov(0);
+  }
+
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
 
@@ -328,7 +338,13 @@ static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
-  int tag = (int)js_getnum(vm->stack[vm->sp - 1]);
+  ant_value_t tag_val = vm->stack[vm->sp - 1];
+  if (vtype(tag_val) != T_NUM) {
+    vm->sp -= 3;
+    return;
+  }
+
+  int tag = (int)js_getnum(tag_val);
   if (tag == SV_ITER_GENERIC) {
     ant_value_t iterator = vm->stack[vm->sp - 3];
     ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
@@ -387,6 +403,48 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     .state = SV_AWAIT_READY,
     .value = js_mkundef(),
   };
+
+  if (vm->sp >= 4 && vm->stack[vm->sp - 2] == SV_AITER_AWAIT_MARK) {
+    ant_value_t value = vm->stack[--vm->sp];
+    vm->stack[vm->sp - 1] = SV_AITER_ARRAY_TAG;
+    vm->stack[vm->sp++] = value;
+    vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+    return out;
+  }
+
+  if (vm->sp >= 3 && vm->stack[vm->sp - 1] == SV_AITER_ARRAY_TAG) {
+    ant_value_t arr = vm->stack[vm->sp - 3];
+    int idx = (int)js_getnum(vm->stack[vm->sp - 2]);
+    ant_offset_t len = js_arr_len(js, arr);
+
+    if (idx >= (int)len) {
+      vm->stack[vm->sp++] = js_mkundef();
+      vm->stack[vm->sp++] = mkval(T_BOOL, 1);
+      return out;
+    }
+
+    ant_value_t value = js_arr_get(js, arr, (ant_offset_t)idx);
+    vm->stack[vm->sp - 2] = tov(idx + 1);
+
+    if (vtype(value) != T_PROMISE) {
+      vm->stack[vm->sp++] = value;
+      vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+      return out;
+    }
+
+    vm->stack[vm->sp - 1] = SV_AITER_AWAIT_MARK;
+    vm->suspended_entry_fp = vm->fp;
+    vm->suspended_saved_fp = vm->fp - 1;
+    sv_await_result_t awaited = sv_await_value(vm, js, value);
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+    if (awaited.state != SV_AWAIT_READY) return awaited;
+
+    vm->stack[vm->sp - 1] = SV_AITER_ARRAY_TAG;
+    vm->stack[vm->sp++] = awaited.value;
+    vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+    return out;
+  }
 
   bool has_resumed_value = vm->sp >= 5 &&
     vtype(vm->stack[vm->sp - 2]) == T_BOOL &&

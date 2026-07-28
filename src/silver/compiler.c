@@ -2955,7 +2955,7 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (known && c->with_depth == 0) {
+      if (known && c->with_depth == 0 && c->locals[local].is_const) {
         emit_constant(c, js_mkstr_permanent(c->js, known, strlen(known)));
         return;
       }
@@ -4925,6 +4925,7 @@ static bool fold_static_typeof_compare(
   sv_ast_t *ident = typeof_node->right;
   int local = resolve_local(c, ident->str, ident->len);
   if (local < 0) return false;
+  if (!c->locals[local].is_const) return false;
   const char *known = typeof_name_for_type(get_local_inferred_type(c, local));
   if (!known) return false;
 

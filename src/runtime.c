@@ -29,11 +29,11 @@ typedef struct code_block {
   char data[];
 } code_block_t;
 
-_Static_assert(
+static_assert(
   (CODE_ARENA_ALIGNMENT & (CODE_ARENA_ALIGNMENT - 1u)) == 0,
   "code arena alignment must be a power of two"
 );
-_Static_assert(
+static_assert(
   offsetof(code_block_t, data) % CODE_ARENA_ALIGNMENT == 0,
   "code arena block payload must satisfy the arena alignment"
 );

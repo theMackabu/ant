@@ -10,6 +10,7 @@
 #include "internal.h"
 #include "esm/loader.h"
 #include "esm/library.h"
+#include "gc/roots.h"
 #include "modules/symbol.h"
 
 typedef struct { ant_t *js; ant_value_t arr; } builtin_iter_ctx_t;
@@ -179,7 +180,10 @@ static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, 
   ant_value_t hook = js_get_slot(self, SLOT_DATA);
   if (vtype(hook) == T_UNDEF || vtype(js->esm.hooks) != T_ARR) return js_mkundef();
 
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t remaining = js_mkarr(js);
+  GC_ROOT_PIN(js, remaining);
+
   ant_offset_t len = js_arr_len(js, js->esm.hooks);
   bool removed = false;
 
@@ -194,7 +198,8 @@ static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, 
 
   js->esm.hooks = remaining;
   js_set_slot(self, SLOT_DATA, js_mkundef());
-  
+
+  GC_ROOT_RESTORE(js, root_mark);
   return js_mkundef();
 }
 
@@ -219,13 +224,17 @@ static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, in
   if (vtype(js->esm.hooks) != T_ARR) js->esm.hooks = js_mkarr(js);
   js_arr_push(js, js->esm.hooks, args[0]);
 
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t dereg_obj = js_mkobj(js);
+  GC_ROOT_PIN(js, dereg_obj);
   js_set_slot(dereg_obj, SLOT_CFUNC, js_mkfun(builtin_module_deregisterHooks));
   js_set_slot(dereg_obj, SLOT_DATA, args[0]);
 
   ant_value_t out = js_mkobj(js);
+  GC_ROOT_PIN(js, out);
   js_set(js, out, "deregister", js_obj_to_func(js, dereg_obj));
-  
+
+  GC_ROOT_RESTORE(js, root_mark);
   return out;
 }
 

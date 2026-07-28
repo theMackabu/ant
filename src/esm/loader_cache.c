@@ -235,22 +235,30 @@ void esm_package_dir_cache_put(ant_t *js, const char *start_dir, const char *pac
   HASH_ADD_STR(st->package_dir_cache, key, entry);
 }
 
-yyjson_doc *esm_package_json_cache_read(ant_t *js, const char *pkg_json_path) {
+yyjson_doc *esm_package_json_cache_read(ant_t *js, const char *pkg_json_path, bool *out_owned) {
+  *out_owned = false;
   if (!pkg_json_path || !pkg_json_path[0]) return NULL;
 
   ant_esm_state_t *st = esm_state(js);
-  if (!st) return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  if (!st) {
+    *out_owned = true;
+    return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  }
 
   esm_package_json_cache_entry_t *entry = NULL;
   HASH_FIND_STR(st->package_json_cache, pkg_json_path, entry);
   if (entry) return entry->doc;
 
   entry = (esm_package_json_cache_entry_t *)calloc(1, sizeof(*entry));
-  if (!entry) return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  if (!entry) {
+    *out_owned = true;
+    return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
+  }
 
   entry->path = strdup(pkg_json_path);
   if (!entry->path) {
     free(entry);
+    *out_owned = true;
     return yyjson_read_file(pkg_json_path, 0, NULL, NULL);
   }
 

@@ -91,7 +91,7 @@ typedef struct {
   uint8_t flags;
 } ant_object_sidecar_t;
 
-_Static_assert(
+static_assert(
   _Alignof(ant_object_sidecar_t) > ant_sidecar, 
   "object sidecar pointer uses low-bit tag"
 );
@@ -114,7 +114,7 @@ typedef union ant_object_flags {
   uint8_t bytes[2];
 } ant_object_flags_t;
 
-_Static_assert(
+static_assert(
   sizeof(ant_object_flags_t) == 2,
   "ant_object_flags_t must cover the packed object bitfields"
 );

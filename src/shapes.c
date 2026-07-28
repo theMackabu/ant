@@ -26,7 +26,7 @@ typedef struct shape_child_entry {
   UT_hash_handle hh;
 } shape_child_entry_t;
 
-_Static_assert(
+static_assert(
   sizeof(shape_index_entry_t) == sizeof(shape_child_entry_t), 
   "entry pool requires index and child entries to be the same size"
 );
