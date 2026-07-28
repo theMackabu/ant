@@ -15907,8 +15907,11 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t tla_promise = js_mkundef();
   ant_value_t ns = js_esm_import_dynamic_ex(js, args[0], base_path, attrs, &tla_promise);
-  
-  if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
+
+  if (is_err(ns)) {
+    ant_value_t reject_val = js_take_thrown(js, ns);
+    return builtin_Promise_reject(js, &reject_val, 1);
+  }
 
   if (vtype(tla_promise) == T_PROMISE) {
     ant_value_t resolve_fn = make_data_cfunc(js, ns, builtin_import_tla_resolve);

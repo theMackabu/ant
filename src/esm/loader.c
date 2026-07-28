@@ -65,6 +65,7 @@ typedef struct esm_module {
   bool is_loaded;
   bool is_loading;
   bool has_tla;
+  bool owns_embedded;
 } esm_module_t;
 
 typedef struct {
@@ -447,20 +448,29 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
     return value;
   }
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+
   ant_value_t ns = js_mkobj(js);
+  GC_ROOT_PIN(js, ns);
   js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
-  
+
   if (is_object_type(value)) {
     ant_value_t keys = js_own_property_keys(js, value, false, true);
+    GC_ROOT_PIN(js, keys);
+
+    ant_value_t key = js_mkundef();
+    GC_ROOT_PIN(js, key);
+
     ant_offset_t len = js_arr_len(js, keys);
     for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t key = js_arr_get(js, keys, i);
+      key = js_arr_get(js, keys, i);
       if (vtype(key) != T_STR) continue;
       const char *key_str = js_getstr(js, key, NULL);
       js_setprop(js, ns, key, js_get(js, value, key_str));
     }
   }
-  
+
   js_set(js, ns, "default", value);
   js_set_slot(ns, SLOT_DEFAULT, value);
 
@@ -468,7 +478,8 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   mod->default_export = value;
   mod->is_loaded = true;
   mod->is_loading = false;
-  
+
+  GC_ROOT_RESTORE(js, root_mark);
   return ns;
 }
 
@@ -1258,7 +1269,9 @@ static esm_module_t *esm_create_module(
   const char *module_key,
   ant_module_format_t format,
   const uint8_t *embedded_code,
-  size_t embedded_code_len
+  size_t embedded_code_len,
+  bool copy_embedded,
+  int kind_hint
 ) {
   ant_esm_state_t *st = esm_state(js);
   if (!st) return NULL;
@@ -1279,6 +1292,19 @@ static esm_module_t *esm_create_module(
     return NULL;
   }
 
+  bool owns_embedded = false;
+  if (embedded_code && copy_embedded) {
+    uint8_t *copy = (uint8_t *)malloc(embedded_code_len);
+    if (!copy) {
+      free(cache_key);
+      free(mod);
+      return NULL;
+    }
+    memcpy(copy, embedded_code, embedded_code_len);
+    embedded_code = copy;
+    owns_embedded = true;
+  }
+
   *mod = (esm_module_t){
     .path = strdup(path),
     .cache_key = cache_key,
@@ -1287,7 +1313,7 @@ static esm_module_t *esm_create_module(
     .default_export = js_mkundef(),
     .is_loaded = false,
     .is_loading = false,
-    .kind = esm_classify_module_kind(resolved_path),
+    .kind = kind_hint >= 0 ? (esm_module_kind_t)kind_hint : esm_classify_module_kind(resolved_path),
     .format = format,
     .url_content = NULL,
     .url_content_len = 0,
@@ -1295,16 +1321,18 @@ static esm_module_t *esm_create_module(
     .embedded_code_len = embedded_code_len,
     .tla_promise = js_mkundef(),
     .has_tla = false,
+    .owns_embedded = owns_embedded,
   };
-  
+
   if (!mod->path || !mod->resolved_path) {
+    if (owns_embedded) free((void *)mod->embedded_code);
     free(mod->path);
     free(mod->cache_key);
     free(mod->resolved_path);
     free(mod);
     return NULL;
   }
-  
+
   HASH_ADD_STR(st->modules, cache_key, mod);
   st->module_count++;
 
@@ -1321,6 +1349,7 @@ void js_esm_cleanup_module_cache(ant_t *js) {
       if (current->cache_key) free(current->cache_key);
       if (current->resolved_path) free(current->resolved_path);
       if (current->url_content) free(current->url_content);
+      if (current->owns_embedded) free((void *)current->embedded_code);
       free(current);
     }
     st->module_count = 0;
@@ -1541,7 +1570,8 @@ static ant_value_t esm_load_static_dependency(
         bundle->source_name,
         module->format,
         module->code,
-        module->code_len
+        module->code_len,
+        false, -1
       );
       if (!dep) {
         free(specifier);
@@ -1574,7 +1604,8 @@ static ant_value_t esm_load_static_dependency(
       resolved_path,
       resolved_path,
       MODULE_EVAL_FORMAT_UNKNOWN,
-      NULL, 0
+      NULL, 0,
+      false, -1
     );
     if (!dep) {
       free(resolved_path);
@@ -1780,14 +1811,16 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   return esm_complete_namespace_module(js, mod, ns);
 }
 
-static ant_value_t esm_get_or_load(
+static ant_value_t esm_get_or_load_ex(
   ant_t *js,
   const char *specifier,
   const char *resolved_path,
   const char *module_key,
   ant_module_format_t format,
   const uint8_t *embedded_code,
-  size_t embedded_code_len
+  size_t embedded_code_len,
+  bool copy_embedded,
+  int kind_hint
 ) {
   esm_module_t *mod = esm_find_module(js, module_key);
   if (!mod) {
@@ -1798,11 +1831,29 @@ static ant_value_t esm_get_or_load(
       module_key,
       format,
       embedded_code,
-      embedded_code_len
+      embedded_code_len,
+      copy_embedded,
+      kind_hint
     );
     if (!mod) return js_mkerr(js, "Cannot create module");
   }
   return esm_load_module(js, mod);
+}
+
+static ant_value_t esm_get_or_load(
+  ant_t *js,
+  const char *specifier,
+  const char *resolved_path,
+  const char *module_key,
+  ant_module_format_t format,
+  const uint8_t *embedded_code,
+  size_t embedded_code_len
+) {
+  return esm_get_or_load_ex(
+    js, specifier, resolved_path, module_key,
+    format, embedded_code, embedded_code_len,
+    false, -1
+  );
 }
 
 static const char *esm_default_base_path(ant_t *js) {
@@ -1818,19 +1869,32 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, int level, ant_value_t spec,
 static ant_value_t esm_run_load_chain(ant_t *js, int level, ant_value_t url, ant_value_t ctx);
 
 static ant_value_t esm_hook_make_next(ant_t *js, ant_value_t next_fn, int level, ant_value_t ctx, const char *base_path) {
+  GC_ROOT_SAVE(root_mark, js);
+
   ant_value_t data = js_mkobj(js);
+  GC_ROOT_PIN(js, data);
   js_set(js, data, "level", js_mknum((double)level));
   js_set(js, data, "ctx", ctx);
   js_set(js, data, "base", base_path ? js_mkstr(js, base_path, strlen(base_path)) : js_mkundef());
 
   ant_value_t obj = js_mkobj(js);
+  GC_ROOT_PIN(js, obj);
   js_set_slot(obj, SLOT_CFUNC, next_fn);
   js_set_slot(obj, SLOT_DATA, data);
-  return js_obj_to_func(js, obj);
+
+  ant_value_t fn = js_obj_to_func(js, obj);
+  GC_ROOT_RESTORE(js, root_mark);
+  return fn;
+}
+
+static bool esm_hook_next_was_called(ant_t *js, ant_value_t next) {
+  ant_value_t data = js_get_slot(next, SLOT_DATA);
+  return js_truthy(js, js_get(js, data, "called"));
 }
 
 static ant_value_t builtin_esm_next_resolve(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  js_set(js, data, "called", js_true);
   int level = (int)js_getnum(js_get(js, data, "level"));
 
   ant_value_t base_val = js_get(js, data, "base");
@@ -1843,6 +1907,7 @@ static ant_value_t builtin_esm_next_resolve(ant_t *js, ant_value_t *args, int na
 
 static ant_value_t builtin_esm_next_load(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  js_set(js, data, "called", js_true);
   int level = (int)js_getnum(js_get(js, data, "level"));
 
   ant_value_t url = nargs > 0 ? args[0] : js_mkundef();
@@ -1861,13 +1926,22 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, int level, ant_value_t spec,
     ant_value_t fn = js_get(js, hook, "resolve");
     if (vtype(fn) != T_FUNC && vtype(fn) != T_CFUNC) continue;
 
+    GC_ROOT_SAVE(root_mark, js);
     ant_value_t next = esm_hook_make_next(js, js_mkfun(builtin_esm_next_resolve), level - 1, ctx, base_path);
+    GC_ROOT_PIN(js, next);
+
     ant_value_t call_args[3] = { spec, ctx, next };
     ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, 3, NULL, false);
+    GC_ROOT_PIN(js, result);
 
-    if (is_err(result)) return result;
-    if (!is_object_type(result))
-      return js_mkerr_typed(js, JS_ERR_TYPE, "resolve hook must return an object");
+    if (!is_err(result)) {
+      if (!is_object_type(result))
+        result = js_mkerr_typed(js, JS_ERR_TYPE, "resolve hook must return an object");
+      else if (!esm_hook_next_was_called(js, next) && !js_truthy(js, js_get(js, result, "shortCircuit")))
+        result = js_mkerr_typed(js, JS_ERR_TYPE, "resolve hook must call nextResolve() or set shortCircuit: true");
+    }
+
+    GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
 
@@ -1877,8 +1951,11 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, int level, ant_value_t spec,
   char *spec_copy = strndup((const char *)(uintptr_t)soff, (size_t)slen);
   if (!spec_copy) return js_mkerr(js, "oom");
 
+  char *url_suffix = NULL;
   char *file_url_path = esm_file_url_to_path(js, spec_copy);
   if (file_url_path) {
+    const char *suffix = spec_copy + strcspn(spec_copy, "?#");
+    if (*suffix) url_suffix = strdup(suffix);
     free(spec_copy);
     spec_copy = file_url_path;
   }
@@ -1893,24 +1970,27 @@ static ant_value_t esm_run_resolve_chain(ant_t *js, int level, ant_value_t spec,
     char *resolved = esm_resolve(js, spec_copy, base_path, esm_resolve_path);
 
     if (resolved) {
-      size_t url_len = strlen(resolved) + 8;
+      size_t url_len = strlen(resolved) + (url_suffix ? strlen(url_suffix) : 0) + 8;
       char *url = malloc(url_len);
       if (!url) {
         free(resolved);
         free(spec_copy);
+        free(url_suffix);
         return js_mkerr(js, "oom");
       }
-      snprintf(url, url_len, "file://%s", resolved);
+      snprintf(url, url_len, "file://%s%s", resolved, url_suffix ? url_suffix : "");
       js_set(js, out, "url", js_mkstr(js, url, strlen(url)));
       free(url);
       free(resolved);
       free(spec_copy);
+      free(url_suffix);
       return out;
     }
   }
 
   js_set(js, out, "url", spec);
   free(spec_copy);
+  free(url_suffix);
   return out;
 }
 
@@ -1925,13 +2005,22 @@ static ant_value_t esm_run_load_chain(ant_t *js, int level, ant_value_t url, ant
     ant_value_t fn = js_get(js, hook, "load");
     if (vtype(fn) != T_FUNC && vtype(fn) != T_CFUNC) continue;
 
+    GC_ROOT_SAVE(root_mark, js);
     ant_value_t next = esm_hook_make_next(js, js_mkfun(builtin_esm_next_load), level - 1, ctx, NULL);
+    GC_ROOT_PIN(js, next);
+
     ant_value_t call_args[3] = { url, ctx, next };
     ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, 3, NULL, false);
+    GC_ROOT_PIN(js, result);
 
-    if (is_err(result)) return result;
-    if (!is_object_type(result))
-      return js_mkerr_typed(js, JS_ERR_TYPE, "load hook must return an object");
+    if (!is_err(result)) {
+      if (!is_object_type(result))
+        result = js_mkerr_typed(js, JS_ERR_TYPE, "load hook must return an object");
+      else if (!esm_hook_next_was_called(js, next) && !js_truthy(js, js_get(js, result, "shortCircuit")))
+        result = js_mkerr_typed(js, JS_ERR_TYPE, "load hook must call nextLoad() or set shortCircuit: true");
+    }
+
+    GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
 
@@ -1943,7 +2032,7 @@ static ant_value_t esm_run_load_chain(ant_t *js, int level, ant_value_t url, ant
 
   char *path = esm_file_url_to_path(js, url_copy);
   free(url_copy);
-  if (!path) return js_mkerr(js, "load hook: unsupported url");
+  if (!path) return js_mkobj(js);
 
   esm_file_data_t file = {0};
   ant_value_t err = esm_read_file(js, path, "module source", &file);
@@ -1965,6 +2054,7 @@ static ant_value_t esm_run_load_chain(ant_t *js, int level, ant_value_t url, ant
   return out;
 }
 
+
 static ant_value_t esm_import_via_hooks(
   ant_t *js,
   const char *specifier,
@@ -1983,12 +2073,16 @@ static ant_value_t esm_import_via_hooks(
   GC_ROOT_PIN(js, ctx);
 
   if (base_path && base_path[0]) {
-    size_t purl_len = strlen(base_path) + 8;
-    char *purl = malloc(purl_len);
-    if (purl) {
-      snprintf(purl, purl_len, "file://%s", base_path);
-      js_set(js, ctx, "parentURL", js_mkstr(js, purl, strlen(purl)));
-      free(purl);
+    if (esm_is_url(base_path) || strncmp(base_path, "file://", 7) == 0) {
+      js_set(js, ctx, "parentURL", js_mkstr(js, base_path, strlen(base_path)));
+    } else {
+      size_t purl_len = strlen(base_path) + 8;
+      char *purl = malloc(purl_len);
+      if (purl) {
+        snprintf(purl, purl_len, "file://%s", base_path);
+        js_set(js, ctx, "parentURL", js_mkstr(js, purl, strlen(purl)));
+        free(purl);
+      }
     }
   }
 
@@ -2021,28 +2115,23 @@ static ant_value_t esm_import_via_hooks(
     return js_mkundef();
   }
 
-  bool is_file_url = strncmp(js_getstr(js, url_val, NULL), "file://", 7) == 0;
-
   ant_value_t loaded = esm_run_load_chain(js, top, url_val, ctx);
   GC_ROOT_PIN(js, loaded);
 
   if (is_err(loaded)) {
-    if (!is_file_url) {
-      js_take_thrown(js, js_mkundef());
-      GC_ROOT_RESTORE(js, root_mark);
-      return js_mkundef();
-    }
     *handled = true;
     GC_ROOT_RESTORE(js, root_mark);
     return loaded;
   }
 
   ant_module_format_t format = MODULE_EVAL_FORMAT_UNKNOWN;
+  int kind_hint = -1;
   ant_value_t fmt_val = js_get(js, loaded, "format");
   if (vtype(fmt_val) == T_STR) {
     const char *fmt_str = js_getstr(js, fmt_val, NULL);
     if (strcmp(fmt_str, "commonjs") == 0) format = MODULE_EVAL_FORMAT_CJS;
     else if (strcmp(fmt_str, "module") == 0) format = MODULE_EVAL_FORMAT_ESM;
+    else if (strcmp(fmt_str, "json") == 0) kind_hint = ESM_MODULE_KIND_JSON;
   }
 
   const uint8_t *source = NULL;
@@ -2064,18 +2153,18 @@ static ant_value_t esm_import_via_hooks(
       return js_mkundef();
     }
     *handled = true;
-    ant_value_t ns = esm_get_or_load(js, specifier, url, url, format, source, source_len);
+    ant_value_t ns = esm_get_or_load_ex(js, specifier, url, url, format, source, source_len, true, kind_hint);
     GC_ROOT_RESTORE(js, root_mark);
     return ns;
   }
 
-  if (esm_is_json(fs_path)) format = MODULE_EVAL_FORMAT_UNKNOWN;
+  if (kind_hint == ESM_MODULE_KIND_JSON || esm_is_json(fs_path)) format = MODULE_EVAL_FORMAT_UNKNOWN;
   else if (format == MODULE_EVAL_FORMAT_UNKNOWN) format = esm_decide_module_format(js, fs_path);
 
   const char *cache_key = (strchr(url, '?') || strchr(url, '#')) ? url : fs_path;
   *handled = true;
 
-  ant_value_t ns = esm_get_or_load(js, specifier, fs_path, cache_key, format, source, source_len);
+  ant_value_t ns = esm_get_or_load_ex(js, specifier, fs_path, cache_key, format, source, source_len, true, kind_hint);
   free(fs_path);
   GC_ROOT_RESTORE(js, root_mark);
 

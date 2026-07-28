@@ -164,7 +164,9 @@ static void match_builtin_name(const char *name, void *ud) {
 static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) return js_false;
 
-  const char *name = js_getstr(js, args[0], NULL);
+  size_t name_len = 0;
+  const char *name = js_getstr(js, args[0], &name_len);
+  if (!name || strlen(name) != name_len) return js_false;
   if (strncmp(name, "node:", 5) == 0) name += 5;
 
   builtin_lookup_ctx_t ctx = { name, false };
@@ -196,9 +198,23 @@ static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, 
   return js_mkundef();
 }
 
+static bool hook_member_invalid(ant_value_t fn) {
+  return vtype(fn) != T_UNDEF && vtype(fn) != T_FUNC && vtype(fn) != T_CFUNC;
+}
+
 static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "registerHooks requires an options object");
+
+  ant_value_t resolve_fn = js_get(js, args[0], "resolve");
+  if (is_err(resolve_fn)) return resolve_fn;
+  if (hook_member_invalid(resolve_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The 'resolve' hook must be a function");
+
+  ant_value_t load_fn = js_get(js, args[0], "load");
+  if (is_err(load_fn)) return load_fn;
+  if (hook_member_invalid(load_fn))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The 'load' hook must be a function");
 
   if (vtype(js->esm.hooks) != T_ARR) js->esm.hooks = js_mkarr(js);
   js_arr_push(js, js->esm.hooks, args[0]);
