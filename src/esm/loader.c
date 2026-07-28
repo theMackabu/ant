@@ -165,7 +165,7 @@ static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
   if (p_len == 0) return NULL;
 
   ant_value_t encoded = js_mkstr(js, p, p_len);
-  ant_value_t decoded = js_decodeURI(js, &encoded, 1);
+  ant_value_t decoded = js_decodeURIComponent(js, &encoded, 1);
 
   size_t len = 0;
   char *str = js_getstr(js, decoded, &len);

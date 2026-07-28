@@ -15905,22 +15905,31 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
     }
 
     if (is_object_type(attrs)) {
+      GC_ROOT_SAVE(root_mark, js);
       ant_value_t keys = js_own_property_keys(js, attrs, false, true);
+      GC_ROOT_PIN(js, keys);
+
+      ant_value_t key = js_mkundef();
+      GC_ROOT_PIN(js, key);
+
       ant_offset_t key_count = js_arr_len(js, keys);
       for (ant_offset_t i = 0; i < key_count; i++) {
-        ant_value_t key = js_arr_get(js, keys, i);
+        key = js_arr_get(js, keys, i);
         if (vtype(key) != T_STR) continue;
 
         ant_value_t val = js_get(js, attrs, js_getstr(js, key, NULL));
         if (is_err(val)) {
           ant_value_t reject_val = js_take_thrown(js, val);
+          GC_ROOT_RESTORE(js, root_mark);
           return builtin_Promise_reject(js, &reject_val, 1);
         }
         if (vtype(val) != T_STR) {
           ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "Import attribute values must be strings"));
+          GC_ROOT_RESTORE(js, root_mark);
           return builtin_Promise_reject(js, &err, 1);
         }
       }
+      GC_ROOT_RESTORE(js, root_mark);
     }
   }
 
