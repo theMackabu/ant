@@ -39,7 +39,7 @@ const withDetail = run(`
 
 assertMatch(
   withDetail.stderr,
-  /\\(ant:\\d+\\) \\[Custom_Warning\\] Warning: Something happened!\\n/,
+  /\(ant:\d+\) \[Custom_Warning\] Warning: Something happened!\n/,
   'emitWarning formats code, type, and message'
 );
 assertIncludes(

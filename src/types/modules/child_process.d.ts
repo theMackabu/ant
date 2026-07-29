@@ -5,7 +5,7 @@ declare module 'child_process' {
     stdout: string;
     stderr: string;
     exitCode: number;
-    signalCode: number | null;
+    signalCode: string | null;
     pid: number;
   }
 
@@ -13,15 +13,15 @@ declare module 'child_process' {
     stdout: string;
     stderr: string;
     exitCode: number | null;
-    signalCode: number | null;
+    signalCode: string | null;
     pid: number;
     killed: boolean;
-    on(event: 'exit', listener: (code: number, signal: number | null) => void): ChildProcess;
-    on(event: 'close', listener: (code: number, signal: number | null) => void): ChildProcess;
+    on(event: 'exit', listener: (code: number | null, signal: string | null) => void): ChildProcess;
+    on(event: 'close', listener: (code: number | null, signal: string | null) => void): ChildProcess;
     on(event: 'error', listener: (err: Error) => void): ChildProcess;
     on(event: 'data', listener: (data: string) => void): ChildProcess;
     once(event: string, listener: (...args: unknown[]) => void): ChildProcess;
-    kill(signal?: number): boolean;
+    kill(signal?: number | string): boolean;
     write(data: string): void;
     end(): void;
   }

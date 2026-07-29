@@ -116,11 +116,28 @@ stderrChild.on('close', () => {
 });
 
 const longChild = spawn('sleep', ['10']);
-longChild.on('close', () => {});
+let killedExitCode;
+let killedSignal;
+longChild.on('exit', (code, signal) => {
+  killedExitCode = code;
+  killedSignal = signal;
+});
+const longChildDoneP = new Promise(resolve => {
+  longChild.on('close', (code, signal) => {
+    test('signal exit event code is null', killedExitCode, null);
+    test('signal exit event names signal', killedSignal, 'SIGTERM');
+    test('signal close event code is null', code, null);
+    test('signal close event names signal', signal, 'SIGTERM');
+    test('signal leaves exitCode null', longChild.exitCode, null);
+    test('signal sets symbolic signalCode', longChild.signalCode, 'SIGTERM');
+    test('successful kill marks child killed', longChild.killed, true);
+    resolve();
+  });
+});
 const killResult = longChild.kill('SIGTERM');
 test('spawn kill returns true', killResult, true);
 
-Promise.all([execDoneP, execFailDoneP, shellChildDoneP, stdinChildDoneP]).then(() => {
+Promise.all([execDoneP, execFailDoneP, shellChildDoneP, stdinChildDoneP, longChildDoneP]).then(() => {
   test('exec async completed', execDone, true);
   test('exec fail async completed', execFailDone, true);
   summary();

@@ -17584,8 +17584,11 @@ static ant_t *isolate_init(void *buf, size_t len) {
   defmethod(js, p_ctor_obj, "any", 3, js_mkfun(builtin_Promise_any));
   
   js_setprop_nonconfigurable(js, p_ctor_obj, "prototype", 9, promise_proto);
+  ant_value_t p_ctor_func = js_obj_to_func(js, p_ctor_obj);
+  js_setprop(js, promise_proto, ANT_STRING("constructor"), p_ctor_func);
+  js_set_descriptor(js, promise_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   js_setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
-  js_setprop(js, glob, js_mkstr(js, "Promise", 7), js_obj_to_func(js, p_ctor_obj));
+  js_setprop(js, glob, js_mkstr(js, "Promise", 7), p_ctor_func);
   
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);

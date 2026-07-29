@@ -6,6 +6,14 @@
 
 #define EVENTS_DEFAULT_MAX_LISTENERS 10
 
+typedef void (*eventemitter_listener_change_fn)(
+  ant_t *js,
+  ant_value_t target,
+  ant_value_t key,
+  ant_offset_t listener_count,
+  void *context
+);
+
 ant_value_t events_library(ant_t *js);
 ant_value_t eventemitter_prototype(ant_t *js);
 
@@ -22,6 +30,13 @@ bool eventemitter_add_listener_val(
   ant_t *js,
   ant_value_t target, ant_value_t key,
   ant_value_t listener, bool once
+);
+
+bool eventemitter_set_listener_change_hook(
+  ant_t *js,
+  ant_value_t target,
+  eventemitter_listener_change_fn hook,
+  void *context
 );
 
 bool eventemitter_emit_args(

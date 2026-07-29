@@ -553,9 +553,8 @@ static bool append_error_context(
     bool was_clipped = (src_cols_limit > 0 && line_len > src_cols_limit);
 
     if (!io_no_color) {
-      size_t highlight_len = was_clipped ? (size_t)src_cols_limit : (size_t)line_len;
       highlight_js_line_clipped(
-        src + ls, highlight_len, (size_t)src_cols_limit,
+        src + ls, (size_t)line_len, (size_t)src_cols_limit,
         tagged, sizeof(tagged), &hl_state
       );
       crsprintf_stateful(rendered, sizeof(rendered), NULL, tagged);
