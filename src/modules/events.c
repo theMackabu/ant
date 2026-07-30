@@ -1731,15 +1731,15 @@ static ant_value_t events_on_queue_shift(ant_t *js, ant_value_t state, const cha
 static void events_on_remove_one(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t listener) {
   if (!is_object_type(target) || !key || !is_callable(listener)) return;
 
-  if (is_eventemitter_instance(target) || is_eventtarget_instance(target)) {
-    eventemitter_remove_listener_val(js, target, key, listener);
+  ant_value_t remove_method = js_getprop_fallback(js, target, "removeListener");
+  if (is_callable(remove_method)) {
+    ant_value_t call_args[2] = { key, listener };
+    eventemitter_call_listener(js, remove_method, target, call_args, 2);
     return;
   }
 
-  ant_value_t remove_method = js_getprop_fallback(js, target, "removeListener");
-  if (!is_callable(remove_method)) return;
-  ant_value_t call_args[2] = { key, listener };
-  eventemitter_call_listener(js, remove_method, target, call_args, 2);
+  if (is_eventtarget_instance(target)) 
+    eventemitter_remove_listener_val(js, target, key, listener);
 }
 
 static void events_on_detach(ant_t *js, ant_value_t state) {
@@ -1752,6 +1752,7 @@ static void events_on_detach(ant_t *js, ant_value_t state) {
 
   events_on_remove_one(js, target, js_get(js, state, "eventName"), js_get(js, state, "listener"));
   events_on_remove_one(js, target, js_get(js, state, "errorKey"), js_get(js, state, "errorListener"));
+  
   if (abort_signal_is_signal(signal) && is_callable(abort_listener))
     abort_signal_remove_listener(js, signal, abort_listener);
 }
@@ -1883,17 +1884,14 @@ static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, state, "finished", js_false);
   js_set(js, state, "storedError", js_mkundef());
 
-  if (is_eventemitter_instance(target) || is_eventtarget_instance(target)) {
-    eventemitter_add_listener_val(js, target, key, listener, false);
-    if (is_eventemitter_instance(target))
-      eventemitter_add_listener_val(js, target, error_key, error_listener, false);
-  } else if (is_eventemitter_like(js, target)) {
-    ant_value_t on_method = js_getprop_fallback(js, target, "on");
+  ant_value_t on_method = js_getprop_fallback(js, target, "on");
+  if (is_callable(on_method)) {
     ant_value_t on_args[2] = { key, listener };
     eventemitter_call_listener(js, on_method, target, on_args, 2);
-    on_args[0] = error_key;
-    on_args[1] = error_listener;
+    on_args[0] = error_key; on_args[1] = error_listener;
     eventemitter_call_listener(js, on_method, target, on_args, 2);
+  } else if (is_eventtarget_instance(target)) {
+    eventemitter_add_listener_val(js, target, key, listener, false);
   } else return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
 
   if (abort_signal_is_signal(signal)) {
