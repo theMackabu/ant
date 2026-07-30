@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
@@ -546,6 +547,8 @@ int main(int argc, char *argv[]) {
   
   #ifdef _WIN32
   ant_output_init_console();
+  #else
+  signal(SIGPIPE, SIG_IGN);
   #endif
   
   setup_console_colors();
