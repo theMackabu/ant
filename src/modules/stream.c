@@ -352,6 +352,26 @@ static void stream_remove_listener(
   stream_call_prop(js, target, "removeListener", args, 2);
 }
 
+static void stream_add_listener(
+  ant_t *js,
+  ant_value_t target,
+  const char *event_name,
+  ant_value_t listener,
+  bool once
+) {
+  const char *method = once ? "once" : "on";
+
+  if (is_callable(js_getprop_fallback(js, target, method))) {
+    ant_value_t args[2];
+    args[0] = js_mkstr(js, event_name, strlen(event_name));
+    args[1] = listener;
+    stream_call_prop(js, target, method, args, 2);
+    return;
+  }
+
+  eventemitter_add_listener(js, target, event_name, listener, once);
+}
+
 static ant_value_t stream_get_option(ant_t *js, ant_value_t options, const char *name) {
   if (!is_object_type(options)) return js_mkundef();
   return js_get(js, options, name);
@@ -691,11 +711,11 @@ static ant_value_t js_stream_pipe(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, state_obj, "onError", js_heavy_mkfun(js, stream_pipe_on_error, state_obj));
 
   js_arr_push(js, stream_pipes(js, source), state_obj);
-  eventemitter_add_listener(js, source, "data", js_get(js, state_obj, "onData"), false);
-  eventemitter_add_listener(js, source, "end", js_get(js, state_obj, "onEnd"), true);
-  eventemitter_add_listener(js, source, "close", js_get(js, state_obj, "onClose"), true);
-  eventemitter_add_listener(js, source, "error", js_get(js, state_obj, "onError"), false);
-  eventemitter_add_listener(js, args[0], "drain", js_get(js, state_obj, "onDrain"), false);
+  stream_add_listener(js, source, "data", js_get(js, state_obj, "onData"), false);
+  stream_add_listener(js, source, "end", js_get(js, state_obj, "onEnd"), true);
+  stream_add_listener(js, source, "close", js_get(js, state_obj, "onClose"), true);
+  stream_add_listener(js, source, "error", js_get(js, state_obj, "onError"), false);
+  stream_add_listener(js, args[0], "drain", js_get(js, state_obj, "onDrain"), false);
   eventemitter_emit_args(js, args[0], "pipe", &source, 1);
   readable_state = stream_readable_state(js, source);
   if (is_object_type(readable_state)) js_set(js, readable_state, "flowing", js_true);
@@ -1659,10 +1679,11 @@ static ant_value_t stream_finished_register(ant_t *js, ant_value_t stream_obj, a
   js_set(js, state_obj, "onFinish", on_finish);
   js_set(js, state_obj, "onError", on_error);
 
-  eventemitter_add_listener(js, stream_obj, "end", on_finish, false);
-  eventemitter_add_listener(js, stream_obj, "finish", on_finish, false);
-  eventemitter_add_listener(js, stream_obj, "close", on_finish, false);
-  eventemitter_add_listener(js, stream_obj, "error", on_error, false);
+  stream_add_listener(js, stream_obj, "end", on_finish, false);
+  stream_add_listener(js, stream_obj, "finish", on_finish, false);
+  stream_add_listener(js, stream_obj, "close", on_finish, false);
+  stream_add_listener(js, stream_obj, "error", on_error, false);
+  
   return stream_obj;
 }
 
@@ -2051,11 +2072,9 @@ static ant_value_t js_readable_to_web(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, state_obj, "onEnd", on_end);
   js_set(js, state_obj, "onError", on_error);
 
-  if (
-    !eventemitter_add_listener(js, source, "data", on_data, false) ||
-    !eventemitter_add_listener(js, source, "end", on_end, true) ||
-    !eventemitter_add_listener(js, source, "error", on_error, true)
-  ) return js_mkerr_typed(js, JS_ERR_TYPE, "Readable.toWeb requires an EventEmitter-compatible stream");
+  stream_add_listener(js, source, "data", on_data, false);
+  stream_add_listener(js, source, "end", on_end, true);
+  stream_add_listener(js, source, "error", on_error, true);
 
   stream_call_prop(js, source, "resume", NULL, 0);
   return web_stream;

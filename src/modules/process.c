@@ -227,6 +227,7 @@ static void init_signal_map(void) {
 }
 
 int process_signal_number(const char *name) {
+  if (!name || name[0] != 'S') return -1;
   init_signal_map();
   SignalEntry *entry = NULL;
   HASH_FIND(hh_name, signals_by_name, name, strlen(name), entry);
