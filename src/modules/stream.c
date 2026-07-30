@@ -1017,19 +1017,18 @@ static ant_value_t js_readable_set_encoding(ant_t *js, ant_value_t *args, int na
   return stream_obj;
 }
 
-static ant_value_t js_readable_on(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_readable_add(ant_t *js, ant_value_t *args, int nargs, bool once) {
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "Readable");
-  ant_value_t key = 0;
-  ant_value_t state = 0;
+  ant_value_t key = 0; ant_value_t state = 0;
 
   if (is_err(stream_obj)) return stream_obj;
   if (nargs < 2) return js_mkerr(js, "on requires 2 arguments (event, listener)");
   key = stream_event_key(js, args[0]);
-  
+
   if (is_err(key)) return key;
-  if (!eventemitter_add_listener_val(js, stream_obj, key, args[1], false))
+  if (!eventemitter_add_listener_val(js, stream_obj, key, args[1], once))
     return js_mkerr(js, "listener must be a function");
-    
+
   if (stream_key_is_cstr(js, key, "data")) {
     state = stream_readable_state(js, stream_obj);
     if (is_object_type(state)) js_set(js, state, "flowing", js_true);
@@ -1037,6 +1036,14 @@ static ant_value_t js_readable_on(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   return stream_obj;
+}
+
+static ant_value_t js_readable_on(ant_t *js, ant_value_t *args, int nargs) {
+  return js_readable_add(js, args, nargs, false);
+}
+
+static ant_value_t js_readable_once(ant_t *js, ant_value_t *args, int nargs) {
+  return js_readable_add(js, args, nargs, true);
 }
 
 static ant_value_t js_readable_resume(ant_t *js, ant_value_t *args, int nargs) {
@@ -2149,6 +2156,8 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, g_readable_proto, "read", js_mkfun(js_readable_read));
   js_set(js, g_readable_proto, "setEncoding", js_mkfun(js_readable_set_encoding));
   js_set(js, g_readable_proto, "on", js_mkfun(js_readable_on));
+  js_set_exact(js, g_readable_proto, "addListener", js_get(js, g_readable_proto, "on"));
+  js_set(js, g_readable_proto, "once", js_mkfun(js_readable_once));
   js_set(js, g_readable_proto, "resume", js_mkfun(js_readable_resume));
   js_set(js, g_readable_proto, "pause", js_mkfun(js_readable_pause));
   js_set_sym(js, g_readable_proto, get_toStringTag_sym(), js_mkstr(js, "Readable", 8));

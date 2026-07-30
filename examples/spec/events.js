@@ -265,13 +265,10 @@ try {
 }
 test('events.once rejects once-shaped plain objects', duckOnceRejected, true);
 
-let protoEmitterRejected = false;
-try {
-  await nodeOnce(Object.create(EventEmitter.prototype), 'ready');
-} catch {
-  protoEmitterRejected = true;
-}
-test('events.once rejects EventEmitter prototype spoofing', protoEmitterRejected, true);
+const protoEmitter = Object.create(EventEmitter.prototype);
+const protoOnceP = nodeOnce(protoEmitter, 'ready');
+protoEmitter.emit('ready', 42);
+test('events.once accepts prototype-chain emitters', (await protoOnceP)[0], 42);
 
 let duckTargetRejected = false;
 try {
