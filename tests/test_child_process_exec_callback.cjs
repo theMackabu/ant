@@ -10,20 +10,35 @@ function assert(condition, message) {
 // callback form returns a child.
 const pending = new Set(['ok', 'fail', 'stderr', 'signal', 'execFile']);
 
-const child = exec('printf hello', (error, stdout, stderr) => {
+// assertions thrown inside an exec callback would otherwise escape as an uncaught
+// exception from a libuv callback, reporting differently than the promise phase below
+function guard(fn) {
+  return (...args) => {
+    try { fn(...args); }
+    catch (error) { console.log('FAIL:', error && error.message); process.exit(1); }
+  };
+}
+
+// a callback that never fires would leave finish() unreachable and hang the test
+const watchdog = setTimeout(() => {
+  console.log(`FAIL: exec callbacks never completed: ${[...pending].join(', ')}`);
+  process.exit(1);
+}, 15000);
+
+const child = exec('printf hello', guard((error, stdout, stderr) => {
   assert(error === null, `expected no error, got ${error}`);
   assert(stdout === 'hello', `expected stdout "hello", got ${JSON.stringify(stdout)}`);
   assert(stderr === '', `expected empty stderr, got ${JSON.stringify(stderr)}`);
   pending.delete('ok');
   finish();
-});
+}));
 
 assert(typeof child.pid === 'number', 'exec with a callback should return a ChildProcess');
 assert(!!child.stdout, 'returned child should expose stdout');
 assert(typeof child.kill === 'function', 'returned child should expose kill');
 
 const failingCommand = 'printf OUT; printf ERR >&2; exit 3';
-exec(failingCommand, (error, stdout, stderr) => {
+exec(failingCommand, guard((error, stdout, stderr) => {
   assert(error instanceof Error, `expected an Error, got ${typeof error}`);
   assert(error.code === 3, `expected error.code 3, got ${error.code}`);
   assert(error.killed === false, `expected killed false, got ${error.killed}`);
@@ -34,18 +49,18 @@ exec(failingCommand, (error, stdout, stderr) => {
   assert(stderr === 'ERR', `expected failed stderr "ERR", got ${JSON.stringify(stderr)}`);
   pending.delete('fail');
   finish();
-});
+}));
 
-exec('printf oops >&2', (error, stdout, stderr) => {
+exec('printf oops >&2', guard((error, stdout, stderr) => {
   assert(error === null, `expected no error for stderr-only output, got ${error}`);
   assert(stdout === '', `expected empty stdout, got ${JSON.stringify(stdout)}`);
   assert(stderr === 'oops', `expected stderr "oops", got ${JSON.stringify(stderr)}`);
   pending.delete('stderr');
   finish();
-});
+}));
 
 const signaledCommand = 'sleep 10';
-const signaledChild = exec(signaledCommand, (error, stdout, stderr) => {
+const signaledChild = exec(signaledCommand, guard((error, stdout, stderr) => {
   assert(error instanceof Error, `expected signal Error, got ${typeof error}`);
   assert(error.code === null, `expected signal error.code null, got ${error.code}`);
   assert(error.killed === true, `expected signal killed true, got ${error.killed}`);
@@ -55,14 +70,14 @@ const signaledChild = exec(signaledCommand, (error, stdout, stderr) => {
   assert(stderr === '', `expected empty signal stderr, got ${JSON.stringify(stderr)}`);
   pending.delete('signal');
   finish();
-});
+}));
 setTimeout(() => {
   assert(signaledChild.kill('SIGTERM') === true, 'expected SIGTERM kill to succeed');
 }, 20);
 
 const execFileArgs = ['-c', 'printf FILEOUT; printf FILEERR >&2; exit 4'];
 const execFileCommand = `sh ${execFileArgs.join(' ')}`;
-execFile('sh', execFileArgs, (error, stdout, stderr) => {
+execFile('sh', execFileArgs, guard((error, stdout, stderr) => {
   assert(error instanceof Error, `expected execFile Error, got ${typeof error}`);
   assert(error.code === 4, `expected execFile code 4, got ${error.code}`);
   assert(error.killed === false, `expected execFile killed false, got ${error.killed}`);
@@ -73,12 +88,13 @@ execFile('sh', execFileArgs, (error, stdout, stderr) => {
   assert(stderr === 'FILEERR', `expected execFile stderr, got ${JSON.stringify(stderr)}`);
   pending.delete('execFile');
   finish();
-});
+}));
 
 // The direct Promise form is an Ant extension and retains its established
 // string rejection. util.promisify(exec) follows Node and rejects with Error.
 function finish() {
   if (pending.size > 0) return;
+  clearTimeout(watchdog);
 
   exec('printf done').then(result => {
     assert(result.stdout === 'done', `promise form stdout, got ${JSON.stringify(result.stdout)}`);

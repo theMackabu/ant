@@ -53,12 +53,17 @@ typedef struct {
   child_stream_kind_t kind;
 } child_stream_ctx_t;
 
-typedef struct {
+typedef struct 
+  child_write_req_s child_write_req_t;
+
+struct child_write_req_s {
   uv_write_t req;
   child_process_t *cp;
   ant_value_t callback;
   char *data;
-} child_write_req_t;
+  child_write_req_t *next;
+  child_write_req_t *prev;
+};
 
 typedef enum {
   STDIO_PIPE = 0,
@@ -101,7 +106,9 @@ struct child_process_s {
   bool detached;
   bool close_emitted;
   bool keep_alive;
+  bool discarded;
   int pending_closes;
+  child_write_req_t *pending_writes;
   char *cwd;
   stdio_mode_t stdio_modes[3];
   struct child_process_s *next;
@@ -235,6 +242,7 @@ static void add_pending_child(child_process_t *cp) {
 }
 
 static void remove_pending_child(child_process_t *cp) {
+  if (!cp->prev && !cp->next && pending_children_head != cp) return;
   if (cp->prev) cp->prev->next = cp->next;
   else pending_children_head = cp->next;
   if (cp->next) cp->next->prev = cp->prev;
@@ -270,6 +278,15 @@ static void free_child_process(child_process_t *cp) {
 
 static void try_free_child(child_process_t *cp) {
   if (!cp) return;
+
+  if (cp->discarded) {
+    if (cp->pending_closes == 0) {
+      remove_pending_child(cp);
+      free_child_process(cp);
+    }
+    return;
+  }
+
   if (cp->exited && cp->stdout_closed && cp->stderr_closed && cp->pending_closes == 0) {
     remove_pending_child(cp);
     free_child_process(cp);
@@ -387,6 +404,22 @@ static void close_child_pipe(child_process_t *cp, child_stream_kind_t kind, bool
   close_child_handle(cp, (uv_handle_t *)pipe);
 }
 
+static void discard_unspawned_child(child_process_t *cp) {
+  if (!cp) return;
+  cp->discarded = true;
+
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+    uv_pipe_t *pipe = child_pipe(cp, i);
+    bool *closed = child_closed_flag(cp, i);
+
+    if (!child_stdio_is_pipe(cp, i) || !pipe) continue;
+    if (closed) *closed = true;
+    close_child_handle(cp, (uv_handle_t *)pipe);
+  }
+
+  try_free_child(cp);
+}
+
 static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
   child_process_t *cp = (child_process_t *)proc->data;
   cp->exit_code = exit_status;
@@ -444,7 +477,7 @@ static void on_child_read(
         *acc_cap = new_cap;
       }
     }
-    if (cp->collect_output && *acc) {
+    if (cp->collect_output && *acc && *acc_len + (size_t)nread <= *acc_cap) {
       memcpy(*acc + *acc_len, buf->base, nread);
       *acc_len += nread;
     }
@@ -520,11 +553,31 @@ static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(result == 0);
 }
 
+static void child_write_link(child_process_t *cp, child_write_req_t *write) {
+  write->prev = NULL;
+  write->next = cp->pending_writes;
+  if (cp->pending_writes) cp->pending_writes->prev = write;
+  cp->pending_writes = write;
+}
+
+static void child_write_unlink(child_write_req_t *write) {
+  child_process_t *cp = write->cp;
+
+  if (write->prev) write->prev->next = write->next;
+  else if (cp && cp->pending_writes == write) cp->pending_writes = write->next;
+  if (write->next) write->next->prev = write->prev;
+
+  write->next = NULL;
+  write->prev = NULL;
+}
+
 static void on_child_write_done(uv_write_t *req, int status) {
   child_write_req_t *write = (child_write_req_t *)req->data;
+  child_process_t *cp = NULL;
   ant_value_t callback_args[1];
 
   if (!write) return;
+  cp = write->cp;
 
   if (is_callable(write->callback)) {
     if (status < 0) {
@@ -547,8 +600,10 @@ static void on_child_write_done(uv_write_t *req, int status) {
     );
   }
 
+  child_write_unlink(write);
   free(write->data);
   free(write);
+  try_free_child(cp);
 }
 
 static ant_value_t child_write_impl(
@@ -604,6 +659,7 @@ static ant_value_t child_write_impl(
     return js_mkerr(js, "%s", uv_strerror(result));
   }
 
+  child_write_link(cp, write);
   return js_true;
 }
 
@@ -811,22 +867,21 @@ static void child_stream_init_protos(ant_t *js) {
   if (g_child_readable_proto && g_child_writable_proto) return;
 
   g_child_readable_proto = js_mkobj(js);
+  gc_register_root(&g_child_readable_proto);
   js_set_proto_init(g_child_readable_proto, stream_readable_prototype(js));
   js_set(js, g_child_readable_proto, "ref", js_mkfun(child_stream_ref));
   js_set(js, g_child_readable_proto, "unref", js_mkfun(child_stream_unref));
   js_set(js, g_child_readable_proto, "_destroy", js_mkfun(child_stream__destroy));
   js_set(js, g_child_readable_proto, "_read", js_mkfun(child_stream__read));
 
-  gc_register_root(&g_child_readable_proto);
-
   g_child_writable_proto = js_mkobj(js);
+  gc_register_root(&g_child_writable_proto);
   js_set_proto_init(g_child_writable_proto, stream_writable_prototype(js));
   js_set(js, g_child_writable_proto, "ref", js_mkfun(child_stream_ref));
   js_set(js, g_child_writable_proto, "unref", js_mkfun(child_stream_unref));
   js_set(js, g_child_writable_proto, "_destroy", js_mkfun(child_stream__destroy));
   js_set(js, g_child_writable_proto, "_write", js_mkfun(child_stream__write));
   js_set(js, g_child_writable_proto, "_final", js_mkfun(child_stream__final));
-  gc_register_root(&g_child_writable_proto);
 }
 
 static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, child_stream_kind_t kind) {
@@ -1207,7 +1262,7 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   free_env_array(env);
   
   if (r < 0) {
-    free_child_process(cp);
+    discard_unspawned_child(cp);
     return js_mkerr(js, "Failed to spawn process: %s", uv_strerror(r));
   }
   
@@ -1302,7 +1357,7 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t promise = cp->promise;
     ant_value_t err = js_make_error_silent(js, JS_ERR_GENERIC, uv_strerror(r));
 
-    free_child_process(cp);
+    discard_unspawned_child(cp);
     if (is_callable(callback)) {
       ant_value_t cb_args[3] = { err, js_mkstr(js, "", 0), js_mkstr(js, "", 0) };
       sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
@@ -2219,4 +2274,6 @@ for (child_process_t *cp = pending_children_head; cp; cp = cp->next) {
   mark(js, cp->stdout_obj);
   mark(js, cp->stderr_obj);
   mark(js, cp->promise);
+
+  for (child_write_req_t *w = cp->pending_writes; w; w = w->next) mark(js, w->callback);
 }}

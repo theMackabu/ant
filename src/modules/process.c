@@ -219,8 +219,10 @@ static void init_signal_map(void) {
   
   size_t count = sizeof(entries) / sizeof(entries[0]);
   for (size_t i = 0; i < count; i++) {
+    SignalEntry *existing = NULL;
     HASH_ADD_KEYPTR(hh_name, signals_by_name, entries[i].name, strlen(entries[i].name), &entries[i]);
-    HASH_ADD(hh_num, signals_by_num, signum, sizeof(int), &entries[i]);
+    HASH_FIND(hh_num, signals_by_num, &entries[i].signum, sizeof(int), existing);
+    if (!existing) HASH_ADD(hh_num, signals_by_num, signum, sizeof(int), &entries[i]);
   }
   
   initialized = true;
@@ -706,6 +708,7 @@ static void stdin_stop_reading_if_idle(ant_t *js) {
   if (!ps) return;
   if (ps->stdin_byte_consumer) return;
   if (eventemitter_listener_count(js, ps->stdin_obj, "data") > 0) return;
+  if (eventemitter_listener_count(js, ps->stdin_obj, "keypress") > 0) return;
   stdin_stop_reading(js);
 }
 
@@ -769,6 +772,7 @@ static void start_sigwinch_handler(ant_t *js) {
   ps->sigwinch_initialized = true;
   ps->sigwinch_handle.data = js;
   if (uv_signal_start(&ps->sigwinch_handle, on_sigwinch, SIGWINCH) != 0) {
+    ps->sigwinch_requested = false;
     ps->sigwinch_closing = true;
     uv_close((uv_handle_t *)&ps->sigwinch_handle, on_sigwinch_close);
     return;
@@ -1567,8 +1571,10 @@ static void process_listener_change(
   }
 
   if (
-    target == ps->stdin_obj &&
-    process_event_key_is(js, key, "data")
+    target == ps->stdin_obj && (
+      process_event_key_is(js, key, "data") ||
+      process_event_key_is(js, key, "keypress")
+    )
   ) {
     if (listener_count > 0) {
       ps->stdin_state.paused = false;

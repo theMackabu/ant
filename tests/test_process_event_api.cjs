@@ -81,6 +81,13 @@ if (removalEvents.join(',') !== 'first,removed') {
   console.log('FAIL: listener removal should not alter an active process.emit snapshot');
   process.exit(1);
 }
+// the snapshot above fires the removed listener regardless, so emit again to prove
+// process.off actually detached it
+process.emit('codex-process-removal');
+if (removalEvents.join(',') !== 'first,removed,first') {
+  console.log('FAIL: process.off should stop later invocations');
+  process.exit(1);
+}
 process.removeAllListeners('codex-process-removal');
 
 const nestedOnceEvents = [];

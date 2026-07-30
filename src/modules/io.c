@@ -28,6 +28,7 @@
 #include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
+#include "modules/util.h"
 #include "sandbox/sandbox.h"
 #include "modules/symbol.h"
 
@@ -85,8 +86,8 @@ static inline bool io_is_digit_ascii(char c) {
   return c >= '0' && c <= '9';
 }
 
-static bool io_print_to_output(const char *str, ant_output_stream_t *out) {
-  if (!io_no_color) {
+static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
+  if (!no_color) {
     return ant_output_stream_append_cstr(out, str);
   }
 
@@ -210,8 +211,10 @@ static int io_iso_utc_token_len(const char *p) {
     p += len; goto next; \
   }
 
-static void print_value_colored_to_output(const char *str, ant_output_stream_t *out) {
-  if (io_no_color) { io_print_to_output(str, out); return; }
+static void print_value_colored_to_output(
+  const char *str, ant_output_stream_t *out, bool no_color
+) {
+  if (no_color) { io_print_to_output(str, out, true); return; }
 
   static void *dispatch[] = {
     [CC_NUL] = &&done, [CC_QUOTE] = &&quote, [CC_ESCAPE] = &&other,
@@ -396,7 +399,7 @@ other:
 void print_value_colored(const char *str, FILE *stream) {
   ant_output_stream_t *out = ant_output_stream(stream);
   ant_output_stream_begin(out);
-  print_value_colored_to_output(str, out);
+  print_value_colored_to_output(str, out, io_no_color);
   ant_output_stream_flush(out);
 }
 
@@ -421,7 +424,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
 
   if (stack) {
     ant_output_stream_begin(out);
-    io_print_to_output(stack, out);
+    io_print_to_output(stack, out, io_no_color);
     ant_output_stream_putc(out, '\n');
     ant_output_stream_flush(out);
     return;
@@ -438,7 +441,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
     ant_output_stream_flush(err_out);
   } else {
     ant_output_stream_begin(out);
-    print_value_colored_to_output(cstr.ptr, out);
+    print_value_colored_to_output(cstr.ptr, out, io_no_color);
     ant_output_stream_putc(out, '\n');
     ant_output_stream_flush(out);
   }
@@ -545,34 +548,59 @@ static ant_value_t console_get_state_map(ant_t *js, ant_value_t this_obj, const 
   return map;
 }
 
+typedef struct {
+  ant_t *js;
+  ant_output_stream_t *out;
+  bool color_values;
+  bool ok;
+} console_format_ctx_t;
+
+static bool console_emit_value(console_format_ctx_t *c, ant_value_t value, bool plain) {
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(c->js, value, cbuf, sizeof(cbuf));
+
+  if (plain) c->ok = io_print_to_output(cstr.ptr, c->out, io_no_color);
+  else print_value_colored_to_output(cstr.ptr, c->out, io_no_color || !c->color_values);
+
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return c->ok;
+}
+
+static bool console_format_text(void *ctx, const char *s, size_t len) {
+  console_format_ctx_t *c = (console_format_ctx_t *)ctx;
+  c->ok = c->ok && ant_output_stream_append(c->out, s, len);
+  return c->ok;
+}
+
+static bool console_format_value(void *ctx, ant_value_t value, char spec) {
+  console_format_ctx_t *c = (console_format_ctx_t *)ctx;
+  return console_emit_value(c, value, spec == 's' && vtype(value) == T_STR);
+}
+
+static const ant_format_sink_t console_format_sink = {
+  console_format_text, 
+  console_format_value
+};
+
 static bool console_write_args_to_stream(
   ant_t *js, ant_output_stream_t *out,
   ant_value_t *args, int nargs, bool color_values
 ) {
-  for (int i = 0; i < nargs; i++) {
-    if (i && !ant_output_stream_putc(out, ' ')) return false;
+  console_format_ctx_t ctx = { js, out, color_values, true };
+  int start = ant_format_walk(js, args, nargs, 0, &console_format_sink, &ctx);
+  if (!ctx.ok) return false;
+
+  for (int i = start; i < nargs; i++) {
+    if ((i || start) && !ant_output_stream_putc(out, ' ')) return false;
 
     if (vtype(args[i]) == T_OBJ) {
     const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
     if (stack) {
-      if (!io_print_to_output(stack, out)) return false;
+      if (!io_print_to_output(stack, out, io_no_color)) return false;
       continue;
     }}
 
-    char cbuf[512];
-    js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-    bool ok = true;
-
-    if (vtype(args[i]) == T_STR) ok = io_print_to_output(cstr.ptr, out);
-    else {
-      bool saved_no_color = io_no_color;
-      io_no_color = saved_no_color || !color_values;
-      if (ok) print_value_colored_to_output(cstr.ptr, out);
-      io_no_color = saved_no_color;
-    }
-
-    if (cstr.needs_free) free((void *)cstr.ptr);
-    if (!ok) return false;
+    if (!console_emit_value(&ctx, args[i], vtype(args[i]) == T_STR)) return false;
   }
 
   return true;
@@ -638,26 +666,6 @@ ant_value_t console_emit_current(
 ) {
   return console_emit_with_this(js, js_getthis(js), use_stderr, prefix, args, nargs);
 }
-
-static void console_write_args_to_output(ant_t *js, ant_output_stream_t *out, ant_value_t *args, int nargs) {
-for (int i = 0; i < nargs; i++) {
-  if (i) ant_output_stream_putc(out, ' ');
-  
-  if (vtype(args[i]) == T_OBJ) {
-  const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
-  if (stack) {
-    io_print_to_output(stack, out);
-    continue;
-  }}
-  
-  char cbuf[512];
-  js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-  
-  if (vtype(args[i]) == T_STR) io_print_to_output(cstr.ptr, out);
-  else print_value_colored_to_output(cstr.ptr, out);
-  
-  if (cstr.needs_free) free((void *)cstr.ptr);
-}}
 
 static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
   ant_inspector_console_api_called(js, "log", args, nargs);

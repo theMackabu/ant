@@ -1640,27 +1640,63 @@ static ant_value_t events_on_iter_result(ant_t *js, ant_value_t value, bool done
   return result;
 }
 
+static void events_on_queue_compact(ant_t *js, ant_value_t state, const char *arr_name, const char *head_name) {
+  ant_value_t arr = js_get(js, state, arr_name);
+  ant_value_t head_val = js_get(js, state, head_name);
+  
+  ant_offset_t head = vtype(head_val) == T_NUM ? (ant_offset_t)js_getnum(head_val) : 0;
+  ant_offset_t len = vtype(arr) == T_ARR ? js_arr_len(js, arr) : 0;
+  ant_value_t compact = 0;
+
+  if (vtype(arr) != T_ARR || head == 0) return;
+  if (head < len && (head < 32 || head * 2 < len)) return;
+
+  compact = js_mkarr(js);
+  for (ant_offset_t i = head; i < len; i++)
+    js_arr_push(js, compact, js_arr_get(js, arr, i));
+
+  js_set(js, state, arr_name, compact);
+  js_set(js, state, head_name, js_mknum(0));
+}
+
 static ant_value_t events_on_queue_shift(ant_t *js, ant_value_t state, const char *arr_name, const char *head_name) {
   ant_value_t arr = js_get(js, state, arr_name);
   ant_value_t head_val = js_get(js, state, head_name);
+  
   ant_offset_t head = vtype(head_val) == T_NUM ? (ant_offset_t)js_getnum(head_val) : 0;
+  ant_value_t value = 0;
 
   if (vtype(arr) != T_ARR || head >= js_arr_len(js, arr)) return js_mkundef();
   js_set(js, state, head_name, js_mknum((double)(head + 1)));
-  return js_arr_get(js, arr, head);
+  
+  value = js_arr_get(js, arr, head);
+  events_on_queue_compact(js, state, arr_name, head_name);
+
+  return value;
+}
+
+static ant_value_t events_on_remover(ant_t *js, ant_value_t target) {
+  static const char *names[] = { "removeListener", "off", "removeEventListener" };
+
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+    ant_value_t remove_method = js_getprop_fallback(js, target, names[i]);
+    if (is_callable(remove_method)) return remove_method;
+  }
+
+  return js_mkundef();
 }
 
 static void events_on_remove_one(ant_t *js, ant_value_t target, ant_value_t key, ant_value_t listener) {
   if (!is_object_type(target) || !key || !is_callable(listener)) return;
 
-  ant_value_t remove_method = js_getprop_fallback(js, target, "removeListener");
+  ant_value_t remove_method = events_on_remover(js, target);
   if (is_callable(remove_method)) {
     ant_value_t call_args[2] = { key, listener };
     eventemitter_call_listener(js, remove_method, target, call_args, 2);
     return;
   }
 
-  if (is_eventtarget_instance(target)) 
+  if (is_eventtarget_instance(target))
     eventemitter_remove_listener_val(js, target, key, listener);
 }
 
@@ -1809,9 +1845,24 @@ static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t on_method = js_getprop_fallback(js, target, "on");
   if (is_callable(on_method)) {
     ant_value_t on_args[2] = { key, listener };
-    eventemitter_call_listener(js, on_method, target, on_args, 2);
+    ant_value_t registered = 0;
+
+    if (!is_callable(events_on_remover(js, target)) && !is_eventtarget_instance(target))
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE,
+        "target must provide removeListener(), off() or removeEventListener()"
+      );
+
+    registered = eventemitter_call_listener(js, on_method, target, on_args, 2);
+    if (is_err(registered)) return registered;
+
     on_args[0] = error_key; on_args[1] = error_listener;
-    eventemitter_call_listener(js, on_method, target, on_args, 2);
+    registered = eventemitter_call_listener(js, on_method, target, on_args, 2);
+
+    if (is_err(registered)) {
+      events_on_remove_one(js, target, key, listener);
+      return registered;
+    }
   } else if (is_eventtarget_instance(target)) {
     eventemitter_add_listener_val(js, target, key, listener, false);
   } else return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
@@ -1981,6 +2032,13 @@ static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList 
     if (vtype(signal) != T_UNDEF) mark(js, signal);
   }
 }}
+
+void cleanup_events_module(ant_t *js) {
+  if (!js || !js->events_state) return;
+  evt_list_free(&js->events_state->global_events);
+  free(js->events_state);
+  js->events_state = NULL;
+}
 
 void gc_mark_events(ant_t *js, gc_mark_fn mark) {
   if (js->events_state) mark_event_type_listeners(js, mark, &js->events_state->global_events);

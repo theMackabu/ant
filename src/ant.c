@@ -64,6 +64,7 @@
 #include "modules/symbol.h"
 #include "modules/date.h"
 #include "modules/buffer.h"
+#include "modules/events.h"
 #include "modules/blob.h"
 #include "modules/collections.h"
 #include "modules/lmdb.h"
@@ -2277,45 +2278,95 @@ ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len) {
   return (ant_offset_t)(uintptr_t)ptr;
 }
 
+static bool strstring_has_template(const char *str, size_t slen) {
+  for (const char *p = str; (p = memchr(p, '$', (size_t)(str + slen - p))); p++)
+    if (p + 1 < str + slen && p[1] == '{') return true;
+  return false;
+}
+
+static char strstring_quote(const char *str, ant_offset_t slen) {
+  size_t n = (size_t)slen;
+
+  if (!memchr(str, '\'', n)) return '\'';
+  if (!memchr(str, '"', n)) return '"';
+  if (!memchr(str, '`', n) && !strstring_has_template(str, n)) return '`';
+
+  return '\'';
+}
+
+static const uint8_t strstring_escape_tbl[256] = {
+  [0x00] = 1, [0x01] = 1, [0x02] = 1, [0x03] = 1, [0x04] = 1, [0x05] = 1, [0x06] = 1,
+  [0x07] = 1, [0x08] = 1, [0x09] = 1, [0x0a] = 1, [0x0b] = 1, [0x0c] = 1, [0x0d] = 1,
+  [0x0e] = 1, [0x0f] = 1, [0x10] = 1, [0x11] = 1, [0x12] = 1, [0x13] = 1, [0x14] = 1,
+  [0x15] = 1, [0x16] = 1, [0x17] = 1, [0x18] = 1, [0x19] = 1, [0x1a] = 1, [0x1b] = 1,
+  [0x1c] = 1, [0x1d] = 1, [0x1e] = 1, [0x1f] = 1, [0x7f] = 1, ['\\'] = 1,
+};
+
 static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len) {
   ant_offset_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *)(uintptr_t)off;
-  
-  size_t n = 0;
-  size_t avail = 0;
+  char quote = strstring_quote(str, slen);
+
+  size_t n = 0; size_t avail = 0;
   char *dst = fixed_buf_write_ptr(buf, len, n, &avail);
+  
+  ant_offset_t i = 0;
+  n += cpy(dst, avail, &quote, 1);
 
-  n += cpy(dst, avail, "'", 1);
-
-  for (ant_offset_t i = 0; i < slen; i++) {
-    char c = str[i];
+  while (i < slen) {
+    ant_offset_t start = i;
     const char *escaped = NULL;
+    
+    size_t escaped_len = 2;
+    char scratch[4];
+
+    while (
+      i < slen &&
+      !strstring_escape_tbl[(unsigned char)str[i]] &&
+      str[i] != quote
+    ) i++;
+
+    if (i > start) {
+      dst = fixed_buf_write_ptr(buf, len, n, &avail);
+      n += cpy(dst, avail, str + start, (size_t)(i - start));
+    }
+
+    if (i >= slen) break;
+
+    switch (str[i]) {
+      case '\n': escaped = "\\n";  break;
+      case '\r': escaped = "\\r";  break;
+      case '\t': escaped = "\\t";  break;
+      case '\b': escaped = "\\b";  break;
+      case '\f': escaped = "\\f";  break;
+      case '\v': escaped = "\\v";  break;
+      case '\\': escaped = "\\\\"; break;
+      
+      default: {
+        unsigned char c = (unsigned char)str[i];
+        scratch[0] = '\\';
+
+        if (c == (unsigned char)quote) scratch[1] = quote;
+        else {
+          scratch[1] = 'x';
+          scratch[2] = "0123456789ABCDEF"[c >> 4];
+          scratch[3] = "0123456789ABCDEF"[c & 0x0f];
+          escaped_len = 4;
+        }
+
+        escaped = scratch;
+        break;
+      }
+    }
 
     dst = fixed_buf_write_ptr(buf, len, n, &avail);
-    switch (c) {
-      case '\n': escaped = "\\n"; break;
-      case '\r': escaped = "\\r"; break;
-      case '\t': escaped = "\\t"; break;
-      case '\\': escaped = "\\\\"; break;
-      case '\'': escaped = "\\'"; break;
-      default: break;
-    }
-    
-    if (escaped) {
-      n += cpy(dst, avail, escaped, 2);
-      continue;
-    }
-    
-    if (avail > 1) {
-      *dst = c;
-      dst[1] = '\0';
-    } else if (avail == 1) *dst = '\0';
-    n++;
+    n += cpy(dst, avail, escaped, escaped_len);
+    i++;
   }
 
   dst = fixed_buf_write_ptr(buf, len, n, &avail);
-  n += cpy(dst, avail, "'", 1);
-  
+  n += cpy(dst, avail, &quote, 1);
+
   return n;
 }
 
@@ -2514,7 +2565,10 @@ static char *tostr_alloc(ant_t *js, ant_value_t value) {
   return buf;
 }
 
-js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size) {
+static js_cstr_t js_cstr_impl(
+  ant_t *js, ant_value_t value,
+  char *stack_buf, size_t stack_size, bool quote_strings
+) {
   js_cstr_t out = { .ptr = "", .len = 0, .needs_free = false };
 
   if (is_err(value)) {
@@ -2535,7 +2589,8 @@ js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack
     return out;
   }
 
-  if (vtype(value) == T_STR) {
+  // inspect quotes a bare string, String() does not
+  if (!quote_strings && vtype(value) == T_STR) {
     size_t len = 0;
     char *str = js_getstr(js, value, &len);
     out.ptr = str ? str : ""; out.len = len;
@@ -2589,6 +2644,14 @@ js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack
     buf = next;
     capacity = new_capacity;
   }
+}
+
+js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size) {
+  return js_cstr_impl(js, value, stack_buf, stack_size, false);
+}
+
+js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size) {
+  return js_cstr_impl(js, value, stack_buf, stack_size, true);
 }
 
 ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
@@ -14024,6 +14087,16 @@ static ant_value_t builtin_parseFloat(ant_t *js, ant_value_t *args, int nargs) {
   return tov(result);
 }
 
+double js_parse_int_value(ant_t *js, ant_value_t arg) {
+  ant_value_t result = builtin_parseInt(js, &arg, 1);
+  return vtype(result) == T_NUM ? tod(result) : JS_NAN;
+}
+
+double js_parse_float_value(ant_t *js, ant_value_t arg) {
+  ant_value_t result = builtin_parseFloat(js, &arg, 1);
+  return vtype(result) == T_NUM ? tod(result) : JS_NAN;
+}
+
 static ant_value_t builtin_btoa(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "btoa requires 1 argument");
   
@@ -17686,6 +17759,7 @@ void js_destroy(ant_t *js) {
   
   cleanup_buffer_module();
   cleanup_atomics_module(js);
+  cleanup_events_module(js);
 
   fixed_arena_destroy(&js->obj_arena);
   fixed_arena_destroy(&js->closure_arena);

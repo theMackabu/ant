@@ -482,7 +482,10 @@ ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t k
 
 ant_value_t tov(double d);
 double tod(ant_value_t v);
+
 double js_to_number(ant_t *js, ant_value_t arg);
+double js_parse_int_value(ant_t *js, ant_value_t arg);
+double js_parse_float_value(ant_t *js, ant_value_t arg);
 
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
@@ -547,7 +550,9 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
+
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
+js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 
 ant_value_t  lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
 ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern);

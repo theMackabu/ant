@@ -1,0 +1,682 @@
+#include <compat.h> // IWYU pragma: keep
+#include <ctype.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+
+#include "ant.h"
+#include "internal.h"
+#include "modules/url.h"
+#include "url_internal.h"
+
+typedef struct {
+  const char *ptr;
+  size_t len;
+} url_slice_t;
+
+static bool str_nonempty(const char *s) {
+  return s && *s;
+}
+
+typedef struct {
+  url_slice_t protocol, auth, host, port, hostname;
+  url_slice_t hash, search, query, pathname, path, href;
+  bool slashes;
+} legacy_url_t;
+
+static url_slice_t url_slice(const char *ptr, size_t len) {
+  return (url_slice_t){ ptr, len };
+}
+
+static url_slice_t url_slice_cstr(const char *s) {
+  return s ? url_slice(s, strlen(s)) : (url_slice_t){0};
+}
+
+static url_slice_t url_slice_if_set(const char *s) {
+  return str_nonempty(s) ? url_slice(s, strlen(s)) : (url_slice_t){0};
+}
+
+static url_slice_t url_slice_buf(const url_fmt_buf_t *b) {
+  return b->len ? url_slice(b->buf, b->len) : (url_slice_t){0};
+}
+
+static void legacy_url_set(ant_t *js, ant_value_t obj, const char *name, url_slice_t s) {
+  js_set(js, obj, name, s.ptr ? js_mkstr(js, s.ptr, s.len) : js_mknull());
+}
+
+static ant_value_t legacy_url_object(ant_t *js, const legacy_url_t *u) {
+  ant_value_t obj = js_mkobj(js);
+
+  legacy_url_set(js, obj, "protocol", u->protocol);
+  js_set(js, obj, "slashes", u->slashes ? js_true : js_mknull());
+  legacy_url_set(js, obj, "auth", u->auth);
+  legacy_url_set(js, obj, "host", u->host);
+  legacy_url_set(js, obj, "port", u->port);
+  legacy_url_set(js, obj, "hostname", u->hostname);
+  legacy_url_set(js, obj, "hash", u->hash);
+  legacy_url_set(js, obj, "search", u->search);
+  legacy_url_set(js, obj, "query", u->query);
+  legacy_url_set(js, obj, "pathname", u->pathname);
+  legacy_url_set(js, obj, "path", u->path);
+  legacy_url_set(js, obj, "href", u->href);
+
+  return obj;
+}
+
+static bool legacy_url_has_scheme(const char *value, size_t len, size_t *colon_at) {
+  if (len < 2 || !isalpha((unsigned char)value[0])) return false;
+
+  for (size_t i = 1; i < len; i++) {
+    unsigned char c = (unsigned char)value[i];
+    if (c == ':') {
+      *colon_at = i;
+      return true;
+    }
+    if (!(isalnum(c) || c == '+' || c == '-' || c == '.')) return false;
+  }
+
+  return false;
+}
+
+static legacy_url_t legacy_url_relative(const char *value, size_t len) {
+  const char *end = value + len;
+  const char *hash = memchr(value, '#', len);
+  const char *tail = hash ? hash : end;
+  const char *search = memchr(value, '?', (size_t)(tail - value));
+  const char *path_end = search ? search : tail;
+  legacy_url_t url = {0};
+
+  url.href = url_slice(value, len);
+  if (hash) url.hash = url_slice(hash, (size_t)(end - hash));
+
+  if (search) {
+    url.search = url_slice(search, (size_t)(tail - search));
+    url.query = url_slice(search + 1, url.search.len - 1);
+  }
+
+  if (path_end > value) url.pathname = url_slice(value, (size_t)(path_end - value));
+  if (url.pathname.ptr || search) url.path = url_slice(value, (size_t)(tail - value));
+
+  return url;
+}
+
+typedef struct {
+  url_fmt_buf_t auth;
+  url_fmt_buf_t host;
+  url_fmt_buf_t path;
+} legacy_url_scratch_t;
+
+static void legacy_url_scratch_free(legacy_url_scratch_t *scratch) {
+  free(scratch->auth.buf);
+  free(scratch->host.buf);
+  free(scratch->path.buf);
+}
+
+static bool legacy_url_scratch_fill(legacy_url_scratch_t *scratch, const url_state_t *st) {
+  if (str_nonempty(st->username)) {
+    if (!url_fmt_append(&scratch->auth, st->username)) return false;
+    if (
+      str_nonempty(st->password) && (
+        !url_fmt_append_c(&scratch->auth, ':') ||
+        !url_fmt_append(&scratch->auth, st->password)
+      )
+    ) return false;
+  }
+
+  if (!url_fmt_append(&scratch->host, st->hostname)) return false;
+  if (
+    str_nonempty(st->port) && (
+      !url_fmt_append_c(&scratch->host, ':') ||
+      !url_fmt_append(&scratch->host, st->port)
+    )
+  ) return false;
+
+  return url_fmt_append(&scratch->path, st->pathname)
+    && url_fmt_append(&scratch->path, st->search);
+}
+
+static legacy_url_t legacy_url_absolute(
+  const url_state_t *st,
+  const legacy_url_scratch_t *scratch,
+  const char *value,
+  size_t len,
+  size_t colon_at
+) {
+  legacy_url_t url = {0};
+
+  url.slashes =
+    colon_at + 2 < len &&
+    value[colon_at + 1] == '/' &&
+    value[colon_at + 2] == '/';
+
+  url.protocol = url_slice_cstr(st->protocol);
+  url.auth = url_slice_buf(&scratch->auth);
+
+  url.host = url_slice(scratch->host.buf ? scratch->host.buf : "", scratch->host.len);
+  url.port = url_slice_if_set(st->port);
+  url.hostname = url_slice_cstr(st->hostname);
+  url.hash = url_slice_if_set(st->hash);
+  url.search = url_slice_if_set(st->search);
+  url.query = str_nonempty(st->search) ? url_slice_cstr(st->search + 1) : (url_slice_t){0};
+  url.pathname = url_slice_if_set(st->pathname);
+  url.path = url_slice_buf(&scratch->path);
+  url.href = url_slice_cstr(st->href);
+
+  return url;
+}
+
+static ant_value_t legacy_url_from_state(
+  ant_t *js,
+  const char *value,
+  size_t len,
+  size_t colon_at,
+  const url_state_t *state
+) {
+  legacy_url_scratch_t scratch = {0};
+  legacy_url_t url;
+  ant_value_t obj;
+
+  if (!legacy_url_scratch_fill(&scratch, state)) {
+    legacy_url_scratch_free(&scratch);
+    return js_mkerr(js, "allocation failure");
+  }
+
+  url = legacy_url_absolute(state, &scratch, value, len, colon_at);
+  obj = legacy_url_object(js, &url);
+  legacy_url_scratch_free(&scratch);
+
+  return obj;
+}
+
+static bool legacy_proto_is(const char *proto, size_t len, const char *name) {
+  size_t name_len = strlen(name);
+  if (len && proto[len - 1] == ':') len--;
+  return len == name_len && strncmp(proto, name, name_len) == 0;
+}
+
+static bool legacy_proto_is_slashed(const char *proto, size_t len) {
+  return
+    legacy_proto_is(proto, len, "http")  || legacy_proto_is(proto, len, "https") ||
+    legacy_proto_is(proto, len, "ftp")   || legacy_proto_is(proto, len, "gopher") ||
+    legacy_proto_is(proto, len, "file")  || legacy_proto_is(proto, len, "ws") ||
+    legacy_proto_is(proto, len, "wss");
+}
+
+static bool legacy_proto_is_hostless(const char *proto, size_t len) {
+  return legacy_proto_is(proto, len, "javascript");
+}
+
+static const char *legacy_auto_escape(unsigned char c) {
+  switch (c) {
+    case '\t': return "%09";
+    case '\n': return "%0A";
+    case '\r': return "%0D";
+    case ' ':  return "%20";
+    case '"':  return "%22";
+    case '\'': return "%27";
+    case '<':  return "%3C";
+    case '>':  return "%3E";
+    case '\\': return "%5C";
+    case '^':  return "%5E";
+    case '`':  return "%60";
+    case '{':  return "%7B";
+    case '|':  return "%7C";
+    case '}':  return "%7D";
+    default:   return NULL;
+  }
+}
+
+static bool legacy_auth_is_safe(unsigned char c) {
+  return isalnum(c) || (c && strchr("!'()*-._~:", (char)c) != NULL);
+}
+
+static bool legacy_host_char_is_stripped(unsigned char c) {
+  return c == '\t' || c == '\n' || c == '\r';
+}
+
+static bool legacy_host_char_is_invalid(unsigned char c) {
+  switch (c) {
+    case ' ': case '"': case '%': case '\'':
+    case ';': case '<': case '>': case '\\': case '^': case '`':
+    case '{': case '|': case '}': return true;
+    default: return false;
+  }
+}
+
+static size_t legacy_scheme_len(const char *value, size_t len) {
+  size_t i = 0;
+  for (; i < len; i++) {
+    unsigned char c = (unsigned char)value[i];
+    if (isalnum(c) || c == '.' || c == '+' || c == '-') continue;
+    return c == ':' && i > 0 ? i + 1 : 0;
+  }
+  return 0;
+}
+
+static bool legacy_has_auth_authority(const char *rest, size_t len) {
+  size_t i = 2;
+  size_t user_len = 0;
+
+  if (len < 2 || rest[0] != '/' || rest[1] != '/') return false;
+  for (; i < len && rest[i] != '@' && rest[i] != '/'; i++) user_len++;
+  if (!user_len || i >= len || rest[i] != '@') return false;
+
+  return i + 1 < len && rest[i + 1] != '@' && rest[i + 1] != '/';
+}
+
+static bool legacy_is_ws(unsigned char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static bool legacy_simple_path(const char *s, size_t len, size_t *path_len, bool *has_search) {
+  size_t i = 1;
+
+  if (!len || s[0] != '/') return false;
+  if (i < len && s[i] == '/') {
+    if (i + 1 < len && s[i + 1] == '/') return false;
+    i++;
+  }
+
+  while (i < len && s[i] != '?' && !legacy_is_ws((unsigned char)s[i])) i++;
+  if (i < len && legacy_is_ws((unsigned char)s[i])) return false;
+
+  *path_len = i;
+  *has_search = i < len;
+  if (i == len) return true;
+
+  for (size_t j = i + 1; j < len; j++)
+    if (legacy_is_ws((unsigned char)s[j])) return false;
+
+  return true;
+}
+
+static void legacy_query_add(ant_t *js, ant_value_t obj, const char *k, const char *v) {
+  ant_value_t existing = js_get(js, obj, k);
+  ant_value_t value = js_mkstr(js, v, strlen(v));
+
+  if (is_undefined(existing)) {
+    js_set(js, obj, k, value);
+    return;
+  }
+
+  if (vtype(existing) == T_ARR) {
+    js_arr_push(js, existing, value);
+    return;
+  }
+
+  ant_value_t arr = js_mkarr(js);
+  js_arr_push(js, arr, existing);
+  js_arr_push(js, arr, value);
+  js_set(js, obj, k, arr);
+}
+
+static ant_value_t legacy_query_object(ant_t *js, const char *query, size_t len) {
+  ant_value_t obj = js_mkobj(js);
+  size_t start = 0;
+
+  for (size_t i = 0; i <= len; i++) {
+    if (i != len && query[i] != '&') continue;
+    if (i > start) {
+      size_t pair_len = i - start;
+      const char *pair = query + start;
+      const char *eq = memchr(pair, '=', pair_len);
+      char *raw_k = strndup(pair, eq ? (size_t)(eq - pair) : pair_len);
+      char *raw_v = eq ? strndup(eq + 1, pair_len - (size_t)(eq - pair) - 1) : strdup("");
+
+      if (raw_k && raw_v) {
+        char *k = form_urldecode(raw_k);
+        char *v = form_urldecode(raw_v);
+        if (k && v) legacy_query_add(js, obj, k, v);
+        free(k); free(v);
+      }
+
+      free(raw_k); free(raw_v);
+    }
+    start = i + 1;
+  }
+
+  return obj;
+}
+
+typedef struct {
+  url_fmt_buf_t protocol;
+  url_fmt_buf_t hostname;
+  url_fmt_buf_t host;
+  url_fmt_buf_t path;
+  url_fmt_buf_t tail;
+  url_fmt_buf_t input;
+  char *auth;
+} legacy_parse_scratch_t;
+
+static void legacy_parse_scratch_free(legacy_parse_scratch_t *s) {
+  free(s->protocol.buf);
+  free(s->hostname.buf);
+  free(s->host.buf);
+  free(s->path.buf);
+  free(s->tail.buf);
+  free(s->input.buf);
+  free(s->auth);
+}
+
+ant_value_t legacy_url_parse_impl(
+  ant_t *js,
+  const char *input,
+  size_t input_len,
+  bool parse_query,
+  bool slashes_denote_host
+) {
+  legacy_parse_scratch_t scratch = {0};
+  legacy_url_t url = {0};
+  ant_value_t obj = 0;
+
+  const char *rest = input;
+  size_t rest_len = input_len;
+
+  url_slice_t proto = {0}, hostname = {0}, port = {0};
+  bool slashes = false;
+  bool has_query_object = false;
+  bool host_parsed = false;
+  bool ipv6_hostname = false;
+  bool has_hash = false;
+  bool has_at = false;
+  bool strip_tail_ws = false;
+
+  while (rest_len && (unsigned char)rest[0] <= ' ') { rest++; rest_len--; }
+  while (rest_len && (unsigned char)rest[rest_len - 1] <= ' ') rest_len--;
+
+  bool has_backslash = false;
+  size_t head = 0;
+
+  for (; head < rest_len; head++) {
+    char c = rest[head];
+    if (c == '?' || c == '#') break;
+    if (c == '@') has_at = true;
+    else if (c == '\\') has_backslash = true;
+  }
+
+  has_hash = (head < rest_len && rest[head] == '#') ||
+    memchr(rest + head, '#', rest_len - head) != NULL;
+
+  if (has_backslash) {
+    for (size_t i = 0; i < rest_len; i++) if (
+      !url_fmt_append_c(&scratch.input, i < head && rest[i] == '\\' ? '/' : rest[i])
+    ) goto oom;
+
+    rest = scratch.input.buf;
+    rest_len = scratch.input.len;
+  }
+
+  if (!slashes_denote_host && !has_hash && !has_at) {
+    size_t path_len = 0;
+    bool has_search = false;
+
+    if (legacy_simple_path(rest, rest_len, &path_len, &has_search)) {
+      url.pathname = url_slice(rest, path_len);
+      url.path = url_slice(rest, rest_len);
+      url.href = url.path;
+      
+      if (has_search) url.search = url_slice(rest + path_len, rest_len - path_len);
+      obj = legacy_url_object(js, &url);
+
+      if (has_search && parse_query)
+        js_set(js, obj, "query", legacy_query_object(js, url.search.ptr + 1, url.search.len - 1));
+      else if (has_search)
+        js_set(js, obj, "query", js_mkstr(js, url.search.ptr + 1, url.search.len - 1));
+      else if (parse_query)
+        js_set(js, obj, "query", js_mkobj(js));
+
+      legacy_parse_scratch_free(&scratch);
+      return obj;
+    }
+  }
+
+  {
+    size_t scheme_len = legacy_scheme_len(rest, rest_len);
+    if (scheme_len) {
+      for (size_t i = 0; i < scheme_len; i++)
+        if (!url_fmt_append_c(&scratch.protocol, (char)tolower((unsigned char)rest[i]))) goto oom;
+      proto = url_slice(scratch.protocol.buf, scratch.protocol.len);
+      rest += scheme_len;
+      rest_len -= scheme_len;
+    }
+  }
+
+  if (slashes_denote_host || proto.ptr || legacy_has_auth_authority(rest, rest_len)) {
+    bool leading = rest_len >= 2 && rest[0] == '/' && rest[1] == '/';
+    if (leading && !(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len))) {
+      rest += 2;
+      rest_len -= 2;
+      slashes = true;
+    }
+  }
+
+  if (
+    !(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len)) &&
+    (slashes || (proto.ptr && !legacy_proto_is_slashed(proto.ptr, proto.len)))
+  ) {
+    ssize_t at_sign = -1, host_end = -1, non_host = -1;
+    size_t start = 0;
+    size_t host_len = 0;
+    const char *host = NULL;
+
+    host_parsed = true;
+
+    for (size_t i = 0; i < rest_len; i++) {
+      unsigned char c = (unsigned char)rest[i];
+
+      if (c == '@') { at_sign = (ssize_t)i; non_host = -1; continue; }
+      if (c == '#' || c == '/' || c == '?') {
+        if (non_host == -1) non_host = (ssize_t)i;
+        host_end = (ssize_t)i;
+        break;
+      }
+      if (legacy_host_char_is_invalid(c) && non_host == -1) non_host = (ssize_t)i;
+    }
+
+    if (at_sign != -1) {
+      char *raw = NULL;
+
+      for (ssize_t i = 0; i < at_sign; i++) {
+        if (rest[i] != '%') continue;
+        if (
+          i + 2 < at_sign &&
+          isxdigit((unsigned char)rest[i + 1]) &&
+          isxdigit((unsigned char)rest[i + 2])
+        ) { i += 2; continue; }
+
+        legacy_parse_scratch_free(&scratch);
+        return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
+      }
+
+      raw = strndup(rest, (size_t)at_sign);
+      if (!raw) goto oom;
+      scratch.auth = url_decode_component(raw);
+      free(raw);
+      if (!scratch.auth) goto oom;
+
+      url.auth = url_slice(scratch.auth, strlen(scratch.auth));
+      start = (size_t)at_sign + 1;
+    }
+
+    strip_tail_ws = non_host != -1 && (host_end == -1 || non_host < host_end);
+
+    if (non_host == -1) {
+      host = rest + start;
+      host_len = rest_len - start;
+      rest += rest_len;
+      rest_len = 0;
+    } else {
+      host = rest + start;
+      host_len = (size_t)non_host - start;
+      rest += (size_t)non_host;
+      rest_len -= (size_t)non_host;
+    }
+
+    for (size_t i = 0; i < host_len; i++) {
+      unsigned char c = (unsigned char)host[i];
+      if (legacy_host_char_is_stripped(c)) continue;
+      if (!url_fmt_append_c(&scratch.hostname, (char)tolower(c))) goto oom;
+    }
+
+    hostname = url_slice(scratch.hostname.buf ? scratch.hostname.buf : "", scratch.hostname.len);
+
+    size_t scan_from = 0;
+    size_t colon = hostname.len;
+
+    if (hostname.len && hostname.ptr[0] == '[') {
+      const char *close = memchr(hostname.ptr, ']', hostname.len);
+      if (close) scan_from = (size_t)(close - hostname.ptr) + 1;
+    }
+
+    for (size_t i = hostname.len; i > scan_from; i--)
+      if (hostname.ptr[i - 1] == ':') { colon = i - 1; break; }
+
+    if (colon < hostname.len) {
+      size_t port_len = hostname.len - colon - 1;
+
+      for (size_t i = 0; i < port_len; i++)
+        if (!isdigit((unsigned char)hostname.ptr[colon + 1 + i])) {
+          legacy_parse_scratch_free(&scratch);
+          return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid port in url");
+        }
+
+      if (port_len) port = url_slice(hostname.ptr + colon + 1, port_len);
+      hostname = url_slice(hostname.ptr, colon);
+    }
+
+    if (hostname.len >= 2 && hostname.ptr[0] == '[' && hostname.ptr[hostname.len - 1] == ']') {
+      url.hostname = url_slice(hostname.ptr + 1, hostname.len - 2);
+      ipv6_hostname = true;
+    } else url.hostname = hostname;
+
+    if (!ipv6_hostname) {
+    for (size_t i = 0; i < hostname.len; i++) {
+      char c = hostname.ptr[i];
+      if (c != ':' && c != '[' && c != ']') continue;
+      legacy_parse_scratch_free(&scratch);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid port in url");
+    }}
+
+    url.port = port;
+  }
+
+  if (!(proto.ptr && legacy_proto_is_hostless(proto.ptr, proto.len))) {
+    if (ipv6_hostname && (!rest_len || rest[0] != '/')) if (!url_fmt_append_c(&scratch.tail, '/')) goto oom;
+
+    for (size_t i = 0; i < rest_len; i++) {
+      const char *escaped = NULL;
+      bool ok = true;
+
+      if (strip_tail_ws && legacy_host_char_is_stripped((unsigned char)rest[i])) continue;
+      escaped = legacy_auto_escape((unsigned char)rest[i]);
+      
+      ok = escaped
+        ? url_fmt_append(&scratch.tail, escaped)
+        : url_fmt_append_c(&scratch.tail, rest[i]);
+      if (!ok) goto oom;
+    }
+
+    rest = scratch.tail.buf ? scratch.tail.buf : "";
+    rest_len = scratch.tail.len;
+  }
+
+  const char *hash = memchr(rest, '#', rest_len);
+  if (hash) {
+    url.hash = url_slice(hash, rest_len - (size_t)(hash - rest));
+    rest_len = (size_t)(hash - rest);
+  }
+
+  const char *qm = memchr(rest, '?', rest_len);
+  if (qm) {
+    size_t search_len = rest_len - (size_t)(qm - rest);
+    url.search = url_slice(qm, search_len);
+    url.query = url_slice(qm + 1, search_len - 1);
+    rest_len = (size_t)(qm - rest);
+    has_query_object = parse_query;
+  } else if (parse_query) has_query_object = true;
+
+  if (rest_len) url.pathname = url_slice(rest, rest_len);
+  
+  if (
+    proto.ptr && legacy_proto_is_slashed(proto.ptr, proto.len) &&
+    hostname.len && !url.pathname.ptr
+  ) url.pathname = url_slice("/", 1);
+
+  if (url.pathname.ptr || url.search.ptr) {
+    if (!url_fmt_append_n(&scratch.path, url.pathname.ptr, url.pathname.len)) goto oom;
+    if (!url_fmt_append_n(&scratch.path, url.search.ptr, url.search.len)) goto oom;
+    url.path = url_slice_buf(&scratch.path);
+  }
+
+  url.protocol = proto;
+  url.slashes = slashes;
+
+  if (host_parsed) {
+    if (
+      !url_fmt_append_n(&scratch.host, hostname.ptr, hostname.len) ||
+      (port.len && (!url_fmt_append_c(&scratch.host, ':') ||
+                    !url_fmt_append_n(&scratch.host, port.ptr, port.len)))
+    ) goto oom;
+
+    url.host = url_slice(scratch.host.buf ? scratch.host.buf : "", scratch.host.len);
+  }
+
+  {
+    url_fmt_buf_t out = {0};
+    bool slashed_proto = proto.ptr && legacy_proto_is_slashed(proto.ptr, proto.len);
+    bool authority = slashes || (slashed_proto && url.host.len);
+    bool file_authority =
+      !authority && slashed_proto && legacy_proto_is(proto.ptr, proto.len, "file");
+    bool want_slashes = authority || file_authority;
+    bool root_pathname =
+      authority && url.pathname.len && url.pathname.ptr[0] != '/';
+
+    if (
+      !url_fmt_append_n(&out, proto.ptr, proto.len) ||
+      (want_slashes && !url_fmt_append_n(&out, "//", 2))
+    ) { free(out.buf); goto oom; }
+
+    for (size_t i = 0; url.host.len && i < url.auth.len; i++) {
+      unsigned char c = (unsigned char)url.auth.ptr[i];
+      char hex[4];
+
+      if (legacy_auth_is_safe(c)) {
+        if (!url_fmt_append_c(&out, (char)c)) { free(out.buf); goto oom; }
+        continue;
+      }
+
+      snprintf(hex, sizeof(hex), "%%%02X", c);
+      if (!url_fmt_append_n(&out, hex, 3)) { free(out.buf); goto oom; }
+    }
+
+    if (
+      (url.host.len && url.auth.len && !url_fmt_append_c(&out, '@')) ||
+      !url_fmt_append_n(&out, url.host.ptr, url.host.len) ||
+      (root_pathname && !url_fmt_append_c(&out, '/')) ||
+      !url_fmt_append_n(&out, url.pathname.ptr, url.pathname.len) ||
+      !url_fmt_append_n(&out, url.search.ptr, url.search.len) ||
+      !url_fmt_append_n(&out, url.hash.ptr, url.hash.len)
+    ) { free(out.buf); goto oom; }
+
+    url.href = url_slice(out.buf ? out.buf : "", out.len);
+    obj = legacy_url_object(js, &url);
+    free(out.buf);
+  }
+
+  if (has_query_object) {
+  if (url.search.ptr) js_set(js, obj, "query", legacy_query_object(js, url.query.ptr, url.query.len));
+  else {
+    js_set(js, obj, "search", js_mknull());
+    js_set(js, obj, "query", js_mkobj(js));
+  }}
+
+  legacy_parse_scratch_free(&scratch);
+  return obj;
+
+oom:
+  legacy_parse_scratch_free(&scratch);
+  return js_mkerr(js, "allocation failure");
+}

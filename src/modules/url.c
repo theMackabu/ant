@@ -17,6 +17,7 @@
 #include "silver/engine.h"
 #include "modules/url.h"
 #include "modules/symbol.h"
+#include "url/url_internal.h"
 
 static ant_value_t g_url_proto = 0;
 static ant_value_t g_url_ctor = 0;
@@ -1352,47 +1353,6 @@ static ant_value_t builtin_pathToFileURL(ant_t *js, ant_value_t *args, int nargs
   return make_url_obj(js, s);
 }
 
-typedef struct {
-  char *buf;
-  size_t len;
-  size_t cap;
-} url_fmt_buf_t;
-
-static bool url_fmt_reserve(url_fmt_buf_t *b, size_t extra) {
-  if (extra <= b->cap - b->len) return true;
-
-  size_t needed = b->len + extra + 1;
-  size_t next = b->cap ? b->cap : 128;
-  while (next < needed) next *= 2;
-
-  char *buf = realloc(b->buf, next);
-  if (!buf) return false;
-  b->buf = buf;
-  b->cap = next;
-  
-  return true;
-}
-
-static bool url_fmt_append_n(url_fmt_buf_t *b, const char *s, size_t n) {
-  if (!s || n == 0) return true;
-  if (!url_fmt_reserve(b, n)) return false;
-  memcpy(b->buf + b->len, s, n);
-  b->len += n;
-  b->buf[b->len] = '\0';
-  return true;
-}
-
-static bool url_fmt_append(url_fmt_buf_t *b, const char *s) {
-  return url_fmt_append_n(b, s, s ? strlen(s) : 0);
-}
-
-static bool url_fmt_append_c(url_fmt_buf_t *b, char c) {
-  if (!url_fmt_reserve(b, 1)) return false;
-  b->buf[b->len++] = c;
-  b->buf[b->len] = '\0';
-  return true;
-}
-
 static bool url_fmt_append_value_string(ant_t *js, url_fmt_buf_t *b, ant_value_t value) {
   ant_value_t str_val = vtype(value) == T_STR ? value : js_tostring_val(js, value);
   if (is_err(str_val)) return false;
@@ -1494,214 +1454,22 @@ static bool url_fmt_protocol_needs_slashes(const char *protocol, size_t len) {
     (len == 2 && memcmp(protocol, "ws", 2) == 0) ||
     (len == 3 && memcmp(protocol, "wss", 3) == 0);
 }
-typedef struct {
-  const char *ptr;
-  size_t len;
-} url_slice_t;
-
-static bool str_nonempty(const char *s) {
-  return s && *s;
-}
-
-typedef struct {
-  url_slice_t protocol, auth, host, port, hostname;
-  url_slice_t hash, search, query, pathname, path, href;
-  bool slashes;
-} legacy_url_t;
-
-static url_slice_t url_slice(const char *ptr, size_t len) {
-  return (url_slice_t){ ptr, len };
-}
-
-static url_slice_t url_slice_cstr(const char *s) {
-  return s ? url_slice(s, strlen(s)) : (url_slice_t){0};
-}
-
-static url_slice_t url_slice_if_set(const char *s) {
-  return str_nonempty(s) ? url_slice(s, strlen(s)) : (url_slice_t){0};
-}
-
-static url_slice_t url_slice_buf(const url_fmt_buf_t *b) {
-  return b->len ? url_slice(b->buf, b->len) : (url_slice_t){0};
-}
-
-static void legacy_url_set(ant_t *js, ant_value_t obj, const char *name, url_slice_t s) {
-  js_set(js, obj, name, s.ptr ? js_mkstr(js, s.ptr, s.len) : js_mknull());
-}
-
-static ant_value_t legacy_url_object(ant_t *js, const legacy_url_t *u) {
-  ant_value_t obj = js_mkobj(js);
-
-  legacy_url_set(js, obj, "protocol", u->protocol);
-  js_set(js, obj, "slashes", u->slashes ? js_true : js_mknull());
-  legacy_url_set(js, obj, "auth", u->auth);
-  legacy_url_set(js, obj, "host", u->host);
-  legacy_url_set(js, obj, "port", u->port);
-  legacy_url_set(js, obj, "hostname", u->hostname);
-  legacy_url_set(js, obj, "hash", u->hash);
-  legacy_url_set(js, obj, "search", u->search);
-  legacy_url_set(js, obj, "query", u->query);
-  legacy_url_set(js, obj, "pathname", u->pathname);
-  legacy_url_set(js, obj, "path", u->path);
-  legacy_url_set(js, obj, "href", u->href);
-
-  return obj;
-}
-
-static bool legacy_url_has_scheme(const char *value, size_t len, size_t *colon_at) {
-  if (len < 2 || !isalpha((unsigned char)value[0])) return false;
-
-  for (size_t i = 1; i < len; i++) {
-    unsigned char c = (unsigned char)value[i];
-    if (c == ':') {
-      *colon_at = i;
-      return true;
-    }
-    if (!(isalnum(c) || c == '+' || c == '-' || c == '.')) return false;
-  }
-
-  return false;
-}
-
-static legacy_url_t legacy_url_relative(const char *value, size_t len) {
-  const char *end = value + len;
-  const char *hash = memchr(value, '#', len);
-  const char *tail = hash ? hash : end;
-  const char *search = memchr(value, '?', (size_t)(tail - value));
-  const char *path_end = search ? search : tail;
-  legacy_url_t url = {0};
-
-  url.href = url_slice(value, len);
-  if (hash) url.hash = url_slice(hash, (size_t)(end - hash));
-
-  if (search) {
-    url.search = url_slice(search, (size_t)(tail - search));
-    url.query = url_slice(search + 1, url.search.len - 1);
-  }
-
-  if (path_end > value) url.pathname = url_slice(value, (size_t)(path_end - value));
-  if (url.pathname.ptr || search) url.path = url_slice(value, (size_t)(tail - value));
-
-  return url;
-}
-
-typedef struct {
-  url_fmt_buf_t auth;
-  url_fmt_buf_t host;
-  url_fmt_buf_t path;
-} legacy_url_scratch_t;
-
-static void legacy_url_scratch_free(legacy_url_scratch_t *scratch) {
-  free(scratch->auth.buf);
-  free(scratch->host.buf);
-  free(scratch->path.buf);
-}
-
-static bool legacy_url_scratch_fill(legacy_url_scratch_t *scratch, const url_state_t *st) {
-  if (str_nonempty(st->username)) {
-    if (!url_fmt_append(&scratch->auth, st->username)) return false;
-    if (
-      str_nonempty(st->password) && (
-        !url_fmt_append_c(&scratch->auth, ':') ||
-        !url_fmt_append(&scratch->auth, st->password)
-      )
-    ) return false;
-  }
-
-  if (!url_fmt_append(&scratch->host, st->hostname)) return false;
-  if (
-    str_nonempty(st->port) && (
-      !url_fmt_append_c(&scratch->host, ':') ||
-      !url_fmt_append(&scratch->host, st->port)
-    )
-  ) return false;
-
-  return url_fmt_append(&scratch->path, st->pathname)
-    && url_fmt_append(&scratch->path, st->search);
-}
-
-static legacy_url_t legacy_url_absolute(
-  const url_state_t *st,
-  const legacy_url_scratch_t *scratch,
-  const char *value,
-  size_t len,
-  size_t colon_at
-) {
-  legacy_url_t url = {0};
-
-  url.slashes =
-    colon_at + 2 < len &&
-    value[colon_at + 1] == '/' &&
-    value[colon_at + 2] == '/';
-
-  url.protocol = url_slice_cstr(st->protocol);
-  url.auth = url_slice_buf(&scratch->auth);
-
-  url.host = url_slice(scratch->host.buf ? scratch->host.buf : "", scratch->host.len);
-  url.port = url_slice_if_set(st->port);
-  url.hostname = url_slice_cstr(st->hostname);
-  url.hash = url_slice_if_set(st->hash);
-  url.search = url_slice_if_set(st->search);
-  url.query = str_nonempty(st->search) ? url_slice_cstr(st->search + 1) : (url_slice_t){0};
-  url.pathname = url_slice_if_set(st->pathname);
-  url.path = url_slice_buf(&scratch->path);
-  url.href = url_slice_cstr(st->href);
-
-  return url;
-}
-
-static ant_value_t legacy_url_from_state(
-  ant_t *js,
-  const char *value,
-  size_t len,
-  size_t colon_at,
-  const url_state_t *state
-) {
-  legacy_url_scratch_t scratch = {0};
-  legacy_url_t url;
-  ant_value_t obj;
-
-  if (!legacy_url_scratch_fill(&scratch, state)) {
-    legacy_url_scratch_free(&scratch);
-    return js_mkerr(js, "allocation failure");
-  }
-
-  url = legacy_url_absolute(state, &scratch, value, len, colon_at);
-  obj = legacy_url_object(js, &url);
-  legacy_url_scratch_free(&scratch);
-
-  return obj;
-}
 
 static ant_value_t builtin_url_parse(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "url.parse() requires a string argument");
-
-  ant_value_t input = vtype(args[0]) == T_STR ? args[0] : js_tostring_val(js, args[0]);
-  if (is_err(input)) return input;
-
   size_t len = 0;
-  const char *value = js_getstr(js, input, &len);
-  if (!value) return js_mkerr_typed(js, JS_ERR_TYPE, "url.parse() requires a string argument");
+  const char *value = NULL;
 
-  size_t colon_at = 0;
-  url_state_t state;
-  ant_value_t result;
+  if (nargs < 1 || vtype(args[0]) != T_STR)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The \"url\" argument must be of type string");
 
-  if (!legacy_url_has_scheme(value, len, &colon_at)) {
-    legacy_url_t url = legacy_url_relative(value, len);
-    return legacy_url_object(js, &url);
-  }
+  value = js_getstr(js, args[0], &len);
+  if (!value) return js_mkerr_typed(js, JS_ERR_TYPE, "The \"url\" argument must be of type string");
 
-  if (parse_url_to_state_n(value, len, NULL, 0, &state) != 0) {
-    legacy_url_t url = legacy_url_relative(value, len);
-    return legacy_url_object(js, &url);
-  }
-
-  result = legacy_url_from_state(js, value, len, colon_at, &state);
-  url_state_clear(&state);
-
-  return result;
+  return legacy_url_parse_impl(
+    js, value, len,
+    nargs > 1 && js_truthy(js, args[1]),
+    nargs > 2 && js_truthy(js, args[2])
+  );
 }
 
 static ant_value_t builtin_url_format(ant_t *js, ant_value_t *args, int nargs) {

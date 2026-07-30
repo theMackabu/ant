@@ -50,7 +50,25 @@ kept.on('close', () => { keptClosed = true; });
 kept.on('finish', () => { keptFinished = true; });
 kept.end();
 
-setTimeout(() => {
+// wait for the lifecycle events themselves rather than a fixed delay, so a loaded
+// machine cannot turn this into a spurious failure
+const waitingFor = new Set(['settled:close', 'flags:close', 'kept:finish']);
+const arrived = (name) => {
+  waitingFor.delete(name);
+  if (waitingFor.size === 0) setImmediate(check);
+};
+
+settled.on('close', () => arrived('settled:close'));
+flags.on('close', () => arrived('flags:close'));
+kept.on('finish', () => arrived('kept:finish'));
+
+const watchdog = setTimeout(() => {
+  console.log(`FAIL: timed out waiting for ${[...waitingFor].join(', ')}`);
+  process.exit(1);
+}, 5000);
+
+function check() {
+  clearTimeout(watchdog);
   assert(
     order.join(',') === 'sync-after-end,end-cb,finishA,finishB,close',
     `unexpected end ordering: ${order.join(',')}`
@@ -58,6 +76,7 @@ setTimeout(() => {
   assert(flags.destroyed === true, 'autoDestroy should destroy a finished writable');
   assert(kept.destroyed === false, 'autoDestroy:false should leave the stream alive');
   assert(keptFinished === true, 'autoDestroy:false should still emit finish');
+  // one extra turn past 'finish' is enough to catch a stray close
   assert(keptClosed === false, 'autoDestroy:false should not emit close before destroy');
   console.log('PASS');
-}, 80);
+}
