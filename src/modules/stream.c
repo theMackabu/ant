@@ -1184,6 +1184,23 @@ static ant_value_t stream_writable_dequeue(ant_t *js, ant_value_t state) {
   return entry;
 }
 
+static void stream_writable_fail_buffered(ant_t *js, ant_value_t stream_obj, ant_value_t err) {
+  ant_value_t state = stream_writable_state(js, stream_obj);
+  if (!is_object_type(state)) return;
+
+  while (stream_writable_has_buffered(js, state)) {
+    ant_value_t entry = stream_writable_dequeue(js, state);
+    ant_value_t entry_cb = 0;
+
+    if (!is_object_type(entry)) break;
+    entry_cb = js_get(js, entry, "callback");
+    if (is_callable(entry_cb)) stream_call_callback(js, entry_cb, &err, 1);
+  }
+
+  stream_writable_set_length(js, stream_obj, state, 0);
+  js_set(js, state, "needDrain", js_false);
+}
+
 static ant_value_t stream_writable_emit_drain(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   stream_emit_named(js, stream_obj, "drain");
@@ -1221,33 +1238,35 @@ static ant_value_t stream_writable_write_done(ant_t *js, ant_value_t *args, int 
 
   if (!is_undefined(err) && !is_null(err)) {
     ant_value_t destroy_args[1] = { err };
-    if (priv) { priv->pending_final = false; priv->writing = false; } {
-      ant_value_t saved_this = js->this_val;
-      js->this_val = stream_obj;
-      js_stream_destroy(js, destroy_args, 1);
-      js->this_val = saved_this;
-    }
+    ant_value_t saved_this = 0;
 
+    if (priv) { priv->pending_final = false; priv->writing = false; }
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
+    stream_writable_fail_buffered(js, stream_obj, err);
 
-    if (is_object_type(state)) {
-      while (stream_writable_has_buffered(js, state)) {
-        ant_value_t entry = stream_writable_dequeue(js, state);
-        ant_value_t entry_cb = 0;
-
-        if (!is_object_type(entry)) break;
-        entry_cb = js_get(js, entry, "callback");
-        if (is_callable(entry_cb)) stream_call_callback(js, entry_cb, &err, 1);
-      }
-
-      stream_writable_set_length(js, stream_obj, state, 0);
-      js_set(js, state, "needDrain", js_false);
-    }
+    saved_this = js->this_val;
+    js->this_val = stream_obj;
+    js_stream_destroy(js, destroy_args, 1);
+    js->this_val = saved_this;
 
     return js_mkundef();
   }
 
   if (is_callable(callback)) stream_call_callback(js, callback, NULL, 0);
+
+  if (
+    js_truthy(js, js_get(js, stream_obj, "destroyed")) &&
+    is_object_type(state) && stream_writable_has_buffered(js, state)
+  ) {
+    ant_value_t destroyed_err = js_make_error_silent(
+      js, JS_ERR_GENERIC, "Cannot call write after a stream was destroyed"
+    );
+
+    js_set(js, destroyed_err, "code", js_mkstr(js, "ERR_STREAM_DESTROYED", 20));
+    stream_writable_fail_buffered(js, stream_obj, destroyed_err);
+    return js_mkundef();
+  }
+
   if (priv && priv->draining) return js_mkundef();
   if (priv) priv->draining = true;
   
