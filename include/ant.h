@@ -29,7 +29,6 @@ if (!(cond)) {                                                              \
 #define REMAIN(n, len)        ((n) >= (len) ? 0 : (len) - (n))
 
 #define JS_NAN     ((double)NAN)
-#define JS_NEG_NAN ((double)(-NAN))
 #define JS_INF     ((double)INFINITY)
 #define JS_NEG_INF ((double)(-INFINITY))
 
