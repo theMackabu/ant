@@ -2127,56 +2127,6 @@ static ant_value_t builtin_fs_readFileSync(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t builtin_fs_readBytesSync(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytesSync() path must be a string");
-  
-  size_t path_len;
-  char *path = js_getstr(js, args[0], &path_len);
-  if (!path) return js_mkerr(js, "Failed to get path string");
-  
-  char *path_cstr = strndup(path, path_len);
-  if (!path_cstr) return js_mkerr(js, "Out of memory");
-  
-  FILE *file = fopen(path_cstr, "rb");
-  if (!file) {
-    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
-    free(path_cstr);
-    return err;
-  }
-  
-  fseek(file, 0, SEEK_END);
-  long file_size = ftell(file);
-  fseek(file, 0, SEEK_SET);
-  
-  if (file_size < 0) {
-    fclose(file);
-    free(path_cstr);
-    return js_mkerr(js, "Failed to get file size");
-  }
-  
-  char *data = malloc(file_size);
-  if (!data) {
-    fclose(file);
-    free(path_cstr);
-    return js_mkerr(js, "Out of memory");
-  }
-  
-  size_t bytes_read = fread(data, 1, file_size, file);
-  fclose(file);
-  free(path_cstr);
-  
-  if (bytes_read != (size_t)file_size) {
-    free(data);
-    return js_mkerr(js, "Failed to read entire file");
-  }
-  
-  ant_value_t result = js_mkstr(js, data, file_size);
-  free(data);
-  
-  return result;
-}
-
 static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
@@ -2210,15 +2160,13 @@ static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_readBytes(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "readBytes() requires a path argument");
-  
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytes() path must be a string");
+static ant_value_t builtin_fs_stream(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "stream() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "stream() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
-  
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -5090,7 +5038,7 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
   js_set(js, lib, "readSync", js_mkfun(builtin_fs_readSync));
   js_set(js, lib, "fsync", js_mkfun(builtin_fs_fsync));
-  js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
+  js_set(js, lib, "stream", js_mkfun(builtin_fs_stream));
   js_set(js, lib, "createReadStream", js_mkfun(builtin_fs_createReadStream));
   js_set(js, lib, "createWriteStream", js_mkfun(builtin_fs_createWriteStream));
   js_set(js, lib, "openSync", js_mkfun(builtin_fs_openSync));

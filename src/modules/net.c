@@ -456,12 +456,6 @@ static void net_socket_detach(net_socket_t *socket) {
   free(socket);
 }
 
-static void net_socket_emit_error(net_socket_t *socket, const char *message) {
-  ant_value_t arg = js_make_error_silent(socket->js, JS_ERR_TYPE, message);
-  socket->had_error = true;
-  net_emit(socket->js, socket->obj, "error", &arg, 1);
-}
-
 static ant_value_t net_socket_emit_connect_error(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t socket_obj = is_object_type(state) ? js_get(js, state, "socket") : js_mkundef();

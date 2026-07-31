@@ -5739,19 +5739,6 @@ static void emit_field_inits(sv_compiler_t *c, sv_ast_t **fields, int count) {
   }
 }
 
-
-static sv_ast_t *find_class_constructor(sv_ast_t *node) {
-  for (int i = 0; i < node->args.count; i++) {
-    sv_ast_t *m = node->args.items[i];
-    if (m->type == N_METHOD && m->left && m->left->type == N_IDENT &&
-        m->left->len == 11 &&
-        memcmp(m->left->str, "constructor", 11) == 0) {
-      return m;
-    }
-  }
-  return NULL;
-}
-
 static inline bool is_class_method_def(const sv_ast_t *m) {
   return 
     m && m->right && m->right->type == N_FUNC &&

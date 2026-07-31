@@ -47,10 +47,6 @@ static path_style_t path_current_style(ant_t *js) {
   return path_host_style();
 }
 
-static bool path_style_is_windows(path_style_t style) {
-  return style == PATH_STYLE_WIN32;
-}
-
 static bool path_is_sep(path_style_t style, char ch) {
   if (style == PATH_STYLE_WIN32) return ch == '\\' || ch == '/';
   return ch == '/';

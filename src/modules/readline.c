@@ -195,18 +195,6 @@ static const char *rl_history_next(rl_history_t *hist) {
   return "";
 }
 
-static void rl_history_free(rl_history_t *hist) {
-  if (hist->lines) {
-    for (int i = 0; i < hist->count; i++) {
-      free(hist->lines[i]);
-    }
-    free(hist->lines);
-    hist->lines = NULL;
-  }
-  hist->count = 0;
-  hist->current = -1;
-}
-
 #ifndef _WIN32
 static void enter_raw_mode(rl_interface_t *iface) {
   if (iface->raw_mode) return;
@@ -316,12 +304,6 @@ static void refresh_line(rl_interface_t *iface) {
   }
 
   iface->last_render_rows = end_cols > 0 ? end_cols / cols + 1 : 1;
-}
-
-static rl_interface_t *find_interface_by_id(uint64_t id) {
-  rl_interface_t *iface = NULL;
-  HASH_FIND(hh, interfaces, &id, sizeof(uint64_t), iface);
-  return iface;
 }
 
 static void set_line_buffer(rl_interface_t *iface, const char *line) {
@@ -993,18 +975,6 @@ static ant_value_t rl_interface_closed_getter(ant_t *js, ant_value_t *args, int 
   
   if (!iface) return js_true;
   return js_bool(iface->closed);
-}
-
-static void free_interface(rl_interface_t *iface) {
-  if (!iface) return;
-  
-  HASH_DEL(interfaces, iface);
-  
-  free(iface->prompt);
-  free(iface->active_prompt);
-  free(iface->line_buffer);
-  rl_history_free(&iface->history);
-  free(iface);
 }
 
 static ant_value_t rl_clear_line(ant_t *js, ant_value_t *args, int nargs) {

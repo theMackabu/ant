@@ -184,8 +184,6 @@ struct ant_isolate_t {
   ant_events_state_t *events_state;
 
   ant_fixed_arena_t obj_arena;
-  ant_prop_ref_t *prop_refs;
-
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
   
@@ -259,8 +257,6 @@ struct ant_isolate_t {
   } sym;
   
   ant_offset_t max_size;
-  ant_offset_t prop_refs_len;
-  ant_offset_t prop_refs_cap;
   js_error_site_t errsite;
 
   struct {
@@ -490,15 +486,15 @@ double js_parse_float_value(ant_t *js, ant_value_t arg);
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 
-ant_value_t js_propref_load(ant_t *js, ant_offset_t handle);
 ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
+ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
+
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
-ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
 // TODO: move into builder.c
 typedef struct {
@@ -554,14 +550,14 @@ const char *intern_string(const char *str, size_t len);
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 
-ant_value_t  lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
-ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern);
+ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
+ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern);
 
-ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
-ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);
+ant_prop_loc_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
+ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);
 
-ant_offset_t lkp_sym(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
-ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
+ant_prop_loc_t lkp_sym(ant_value_t obj, ant_offset_t sym_off);
+ant_prop_loc_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 
 ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len);
 ant_offset_t vstrlen(ant_t *js, ant_value_t value);

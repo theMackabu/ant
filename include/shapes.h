@@ -50,7 +50,7 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
 
 bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot);
 bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);
-bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_from);
+bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot);
 
 uint32_t ant_shape_count(const ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);

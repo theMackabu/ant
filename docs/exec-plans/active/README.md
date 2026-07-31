@@ -14,6 +14,7 @@ Store in-progress execution plans here.
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
+- [Stream Property Surface](stream-property-surface.md)
 - [WICG Observable Migration](wicg-observable.md)
 
 Recommended sections:

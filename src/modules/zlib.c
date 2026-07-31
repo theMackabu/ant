@@ -167,16 +167,6 @@ static void zlib_add_active(zlib_stream_t *st) {
   g_active_streams = st;
 }
 
-static void zlib_remove_active(zlib_stream_t *st) {
-  zlib_stream_t **it;
-  for (it = &g_active_streams; *it; it = &(*it)->next_active) {
-  if (*it == st) {
-    *it = st->next_active;
-    st->next_active = NULL;
-    return;
-  }}
-}
-
 static void zlib_stream_release(zlib_stream_t *st) {
   if (!st) return;
   if (st->brotli) {

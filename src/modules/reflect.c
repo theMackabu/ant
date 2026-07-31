@@ -104,7 +104,7 @@ static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
   char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_false;
   
-  return js_bool(lkp_proto(js, target, key_str, key_len) > 0);
+  return js_bool(lkp_proto(js, target, key_str, key_len).obj);
 }
 
 static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nargs) {

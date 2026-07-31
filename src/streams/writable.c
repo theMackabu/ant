@@ -677,56 +677,6 @@ ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj) {
   return promise;
 }
 
-static ant_value_t ws_abort_resolve(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
-  ant_value_t stream_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-  js_resolve_promise(js, p, js_mkundef());
-
-  ws_stream_t *stream = ws_get_stream(stream_obj);
-  if (stream) stream->has_pending_abort = false;
-  js_set_slot(stream_obj, SLOT_WS_READY, js_mkundef());
-
-  ant_value_t stored_error = ws_stream_stored_error(stream_obj);
-  ant_value_t cr = ws_stream_close_request(stream_obj);
-  
-  if (!is_undefined(cr)) {
-    js_reject_promise(js, cr, stored_error);
-    js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
-  }
-  
-  ant_value_t writer_obj = ws_stream_writer(stream_obj);
-  if (ws_is_writer(writer_obj)) ws_writer_reject_closed_promise(js, writer_obj, stored_error);
-
-  return js_mkundef();
-}
-
-static ant_value_t ws_abort_reject(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
-  ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
-  ant_value_t stream_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-  ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
-  js_reject_promise(js, p, reason);
-
-  ws_stream_t *stream = ws_get_stream(stream_obj);
-  if (stream) stream->has_pending_abort = false;
-  js_set_slot(stream_obj, SLOT_WS_READY, js_mkundef());
-
-  ant_value_t stored_error = ws_stream_stored_error(stream_obj);
-  ant_value_t cr = ws_stream_close_request(stream_obj);
-  
-  if (!is_undefined(cr)) {
-    js_reject_promise(js, cr, stored_error);
-    js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
-  }
-  
-  ant_value_t writer_obj = ws_stream_writer(stream_obj);
-  if (ws_is_writer(writer_obj))
-    ws_writer_reject_closed_promise(js, writer_obj, stored_error);
-
-  return js_mkundef();
-}
-
 ant_value_t writable_stream_abort(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
   ws_stream_t *stream = ws_get_stream(stream_obj);
   if (!stream) return js_mkundef();

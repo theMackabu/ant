@@ -12,6 +12,7 @@
 #include "modules/symbol.h"
 #include "modules/performance.h"
 
+// TODO: move to isolate
 static double time_origin_ms = 0;
 
 static double get_current_time_ms(void) {
@@ -29,15 +30,8 @@ static double get_current_time_ms(void) {
 
 // performance.now()
 static ant_value_t js_performance_now(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   double now = get_current_time_ms() - time_origin_ms;
   return js_mknum(now);
-}
-
-// performance.timeOrigin
-static ant_value_t js_performance_time_origin(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
-  return js_mknum(time_origin_ms);
 }
 
 ant_value_t perf_hooks_library(ant_t *js) {

@@ -99,10 +99,10 @@ static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t fle
 }
 
 static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
-  ant_offset_t flags_off = lkp(js, regexp, "flags", 5);
-  if (flags_off == 0) return 0;
+  ant_prop_loc_t flags_off = lkp(js, regexp, "flags", 5);
+  if (!flags_off.obj) return 0;
 
-  ant_value_t flags_val = js_propref_load(js, flags_off);
+  ant_value_t flags_val = js_prop_load(flags_off);
   if (vtype(flags_val) != T_STR) return 0;
 
   ant_value_t cached_flags = js_get_slot(regexp, SLOT_REGEXP_FLAGS_STRING);
@@ -629,26 +629,6 @@ ant_value_t is_regexp_like(ant_t *js, ant_value_t value) {
   return js_bool(proto_chain_contains(js, value, regexp_proto));
 }
 
-static ant_value_t should_regexp_passthrough(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) != T_UNDEF) return js_false;
-  if (nargs <= 0) return js_false;
-
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) return js_false;
-  if (!is_object_type(args[0])) return js_false;
-
-  ant_value_t is_re = is_regexp_like(js, args[0]);
-  if (is_err(is_re)) return is_re;
-  if (!js_truthy(js, is_re)) return js_false;
-
-  ant_value_t ctor = js_getprop_fallback(js, args[0], "constructor");
-  if (is_err(ctor)) return ctor;
-
-  ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
-  if (is_err(regexp_ctor)) return regexp_ctor;
-
-  return js_bool(same_ctor_identity(js, ctor, regexp_ctor));
-}
-
 ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_name) {
   ant_value_t is_re = is_regexp_like(js, value);
   if (is_err(is_re)) return is_re;
@@ -850,14 +830,16 @@ static bool regexp_source_pattern(ant_t *js, ant_value_t regexp_obj, const char 
     return true;
   }
 
-  ant_offset_t source_off = lkp(js, regexp_obj, "source", 6);
-  if (source_off == 0) return false;
-  source_val = js_propref_load(js, source_off);
+  ant_prop_loc_t source_off = lkp(js, regexp_obj, "source", 6);
+  if (!source_off.obj) return false;
+  
+  source_val = js_prop_load(source_off);
   if (vtype(source_val) != T_STR) return false;
 
   ant_offset_t poff;
   poff = vstr(js, source_val, pattern_len);
   *pattern_ptr = (const char *)(uintptr_t)poff;
+  
   return true;
 }
 
@@ -1232,9 +1214,9 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   // TODO: reduce nesting
   PCRE2_SIZE start_offset = 0;
   if (global_flag || sticky_flag) {
-    ant_offset_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
-    if (lastindex_off != 0) {
-      ant_value_t li_val = js_propref_load(js, lastindex_off);
+    ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
+    if (lastindex_off.obj) {
+      ant_value_t li_val = js_prop_load(lastindex_off);
       if (vtype(li_val) == T_NUM) {
         double li = tod(li_val);
         if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
@@ -2690,24 +2672,24 @@ static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs
   bool ignore_case = false, multiline = false;
 
   if (vtype(pattern) == T_OBJ) {
-    ant_offset_t source_off = lkp(js, pattern, "source", 6);
-    if (source_off == 0) {
+    ant_prop_loc_t source_off = lkp(js, pattern, "source", 6);
+    if (!source_off.obj) {
       pattern = js_to_primitive(js, pattern, 1);
       if (is_err(pattern)) return pattern;
       pattern = js_tostring_val(js, pattern);
       if (is_err(pattern)) return pattern;
       goto search_string_pattern;
     }
-    ant_value_t source_val = js_propref_load(js, source_off);
+    ant_value_t source_val = js_prop_load(source_off);
     if (vtype(source_val) != T_STR) return tov(-1);
 
     ant_offset_t poff;
     poff = vstr(js, source_val, &pattern_len);
     pattern_ptr = (char *)(uintptr_t)(poff);
 
-    ant_offset_t flags_off = lkp(js, pattern, "flags", 5);
-    if (flags_off != 0) {
-      ant_value_t flags_val = js_propref_load(js, flags_off);
+    ant_prop_loc_t flags_off = lkp(js, pattern, "flags", 5);
+    if (flags_off.obj) {
+      ant_value_t flags_val = js_prop_load(flags_off);
       if (vtype(flags_val) == T_STR) {
         ant_offset_t flen, foff = vstr(js, flags_val, &flen);
         const char *flags_str = (char *)(uintptr_t)(foff);
@@ -2781,8 +2763,8 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
   bool multiline = false;
 
   if (vtype(pattern) == T_OBJ) {
-    ant_offset_t source_off = lkp(js, pattern, "source", 6);
-    if (source_off == 0) {
+    ant_prop_loc_t source_off = lkp(js, pattern, "source", 6);
+    if (!source_off.obj) {
       pattern = js_to_primitive(js, pattern, 1);
       if (is_err(pattern)) return pattern;
       pattern = js_tostring_val(js, pattern);
@@ -2790,16 +2772,16 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
       goto match_string_pattern;
     }
 
-    ant_value_t source_val = js_propref_load(js, source_off);
+    ant_value_t source_val = js_prop_load(source_off);
     if (vtype(source_val) != T_STR) return js_mknull();
 
     ant_offset_t poff;
     poff = vstr(js, source_val, &pattern_len);
     pattern_ptr = (char *)(uintptr_t)(poff);
 
-    ant_offset_t flags_off = lkp(js, pattern, "flags", 5);
-    if (flags_off != 0) {
-    ant_value_t flags_val = js_propref_load(js, flags_off);
+    ant_prop_loc_t flags_off = lkp(js, pattern, "flags", 5);
+    if (flags_off.obj) {
+    ant_value_t flags_val = js_prop_load(flags_off);
     if (vtype(flags_val) == T_STR) {
       ant_offset_t flen, foff = vstr(js, flags_val, &flen);
       const char *flags_str = (char *)(uintptr_t)(foff);

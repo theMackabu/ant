@@ -17,10 +17,6 @@ typedef struct {
   size_t len;
 } url_slice_t;
 
-static bool str_nonempty(const char *s) {
-  return s && *s;
-}
-
 typedef struct {
   url_slice_t protocol, auth, host, port, hostname;
   url_slice_t hash, search, query, pathname, path, href;
@@ -29,14 +25,6 @@ typedef struct {
 
 static url_slice_t url_slice(const char *ptr, size_t len) {
   return (url_slice_t){ ptr, len };
-}
-
-static url_slice_t url_slice_cstr(const char *s) {
-  return s ? url_slice(s, strlen(s)) : (url_slice_t){0};
-}
-
-static url_slice_t url_slice_if_set(const char *s) {
-  return str_nonempty(s) ? url_slice(s, strlen(s)) : (url_slice_t){0};
 }
 
 static url_slice_t url_slice_buf(const url_fmt_buf_t *b) {
@@ -66,130 +54,11 @@ static ant_value_t legacy_url_object(ant_t *js, const legacy_url_t *u) {
   return obj;
 }
 
-static bool legacy_url_has_scheme(const char *value, size_t len, size_t *colon_at) {
-  if (len < 2 || !isalpha((unsigned char)value[0])) return false;
-
-  for (size_t i = 1; i < len; i++) {
-    unsigned char c = (unsigned char)value[i];
-    if (c == ':') {
-      *colon_at = i;
-      return true;
-    }
-    if (!(isalnum(c) || c == '+' || c == '-' || c == '.')) return false;
-  }
-
-  return false;
-}
-
-static legacy_url_t legacy_url_relative(const char *value, size_t len) {
-  const char *end = value + len;
-  const char *hash = memchr(value, '#', len);
-  const char *tail = hash ? hash : end;
-  const char *search = memchr(value, '?', (size_t)(tail - value));
-  const char *path_end = search ? search : tail;
-  legacy_url_t url = {0};
-
-  url.href = url_slice(value, len);
-  if (hash) url.hash = url_slice(hash, (size_t)(end - hash));
-
-  if (search) {
-    url.search = url_slice(search, (size_t)(tail - search));
-    url.query = url_slice(search + 1, url.search.len - 1);
-  }
-
-  if (path_end > value) url.pathname = url_slice(value, (size_t)(path_end - value));
-  if (url.pathname.ptr || search) url.path = url_slice(value, (size_t)(tail - value));
-
-  return url;
-}
-
 typedef struct {
   url_fmt_buf_t auth;
   url_fmt_buf_t host;
   url_fmt_buf_t path;
 } legacy_url_scratch_t;
-
-static void legacy_url_scratch_free(legacy_url_scratch_t *scratch) {
-  free(scratch->auth.buf);
-  free(scratch->host.buf);
-  free(scratch->path.buf);
-}
-
-static bool legacy_url_scratch_fill(legacy_url_scratch_t *scratch, const url_state_t *st) {
-  if (str_nonempty(st->username)) {
-    if (!url_fmt_append(&scratch->auth, st->username)) return false;
-    if (
-      str_nonempty(st->password) && (
-        !url_fmt_append_c(&scratch->auth, ':') ||
-        !url_fmt_append(&scratch->auth, st->password)
-      )
-    ) return false;
-  }
-
-  if (!url_fmt_append(&scratch->host, st->hostname)) return false;
-  if (
-    str_nonempty(st->port) && (
-      !url_fmt_append_c(&scratch->host, ':') ||
-      !url_fmt_append(&scratch->host, st->port)
-    )
-  ) return false;
-
-  return url_fmt_append(&scratch->path, st->pathname)
-    && url_fmt_append(&scratch->path, st->search);
-}
-
-static legacy_url_t legacy_url_absolute(
-  const url_state_t *st,
-  const legacy_url_scratch_t *scratch,
-  const char *value,
-  size_t len,
-  size_t colon_at
-) {
-  legacy_url_t url = {0};
-
-  url.slashes =
-    colon_at + 2 < len &&
-    value[colon_at + 1] == '/' &&
-    value[colon_at + 2] == '/';
-
-  url.protocol = url_slice_cstr(st->protocol);
-  url.auth = url_slice_buf(&scratch->auth);
-
-  url.host = url_slice(scratch->host.buf ? scratch->host.buf : "", scratch->host.len);
-  url.port = url_slice_if_set(st->port);
-  url.hostname = url_slice_cstr(st->hostname);
-  url.hash = url_slice_if_set(st->hash);
-  url.search = url_slice_if_set(st->search);
-  url.query = str_nonempty(st->search) ? url_slice_cstr(st->search + 1) : (url_slice_t){0};
-  url.pathname = url_slice_if_set(st->pathname);
-  url.path = url_slice_buf(&scratch->path);
-  url.href = url_slice_cstr(st->href);
-
-  return url;
-}
-
-static ant_value_t legacy_url_from_state(
-  ant_t *js,
-  const char *value,
-  size_t len,
-  size_t colon_at,
-  const url_state_t *state
-) {
-  legacy_url_scratch_t scratch = {0};
-  legacy_url_t url;
-  ant_value_t obj;
-
-  if (!legacy_url_scratch_fill(&scratch, state)) {
-    legacy_url_scratch_free(&scratch);
-    return js_mkerr(js, "allocation failure");
-  }
-
-  url = legacy_url_absolute(state, &scratch, value, len, colon_at);
-  obj = legacy_url_object(js, &url);
-  legacy_url_scratch_free(&scratch);
-
-  return obj;
-}
 
 static bool legacy_proto_is(const char *proto, size_t len, const char *name) {
   size_t name_len = strlen(name);

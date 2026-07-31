@@ -125,16 +125,6 @@ static bool util_sb_append_inspect(ant_t *js, util_sb_t *sb, ant_value_t v) {
   return ok;
 }
 
-static bool util_sb_append_json(ant_t *js, util_sb_t *sb, ant_value_t v) {
-  ant_value_t json = json_stringify_value(js, v);
-  if (vtype(json) != T_STR) {
-    return util_sb_append_n(sb, "[Circular]", 10);
-  }
-  size_t len = 0;
-  const char *s = js_getstr(js, json, &len);
-  return s ? util_sb_append_n(sb, s, len) : util_sb_append_n(sb, "[Circular]", 10);
-}
-
 static bool util_set_named_value(
   ant_t *js,
   ant_value_t values,
