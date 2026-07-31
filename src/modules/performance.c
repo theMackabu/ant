@@ -12,9 +12,6 @@
 #include "modules/symbol.h"
 #include "modules/performance.h"
 
-// TODO: move to isolate
-static double time_origin_ms = 0;
-
 static double get_current_time_ms(void) {
 #ifdef _WIN32
   LARGE_INTEGER freq, count;
@@ -30,7 +27,7 @@ static double get_current_time_ms(void) {
 
 // performance.now()
 static ant_value_t js_performance_now(ant_t *js, ant_value_t *args, int nargs) {
-  double now = get_current_time_ms() - time_origin_ms;
+  double now = get_current_time_ms() - js->perf_time_origin_ms;
   return js_mknum(now);
 }
 
@@ -45,10 +42,9 @@ void init_performance_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t perf_obj = js_mkobj(js);
 
-  time_origin_ms = get_current_time_ms();
-  
+  js->perf_time_origin_ms = get_current_time_ms();
   js_set(js, perf_obj, "now", js_mkfun(js_performance_now));
-  js_set(js, perf_obj, "timeOrigin", js_mknum(time_origin_ms));
+  js_set(js, perf_obj, "timeOrigin", js_mknum(js->perf_time_origin_ms));
   
   js_set_sym(js, perf_obj, get_toStringTag_sym(), ANT_STRING("Performance"));
   js_set(js, glob, "performance", perf_obj);

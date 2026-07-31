@@ -114,7 +114,12 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
 
       if (loc.obj) js_prop_store(js, loc, v);
       else {
-        ant_value_t set = js_setprop(js, obj, js_mkstr(js, k, klen), v);
+        ant_value_t key_str = js_mkstr(js, k, klen);
+        if (is_err(key_str)) {
+          json_key_hash_free(&hash);
+          return key_str;
+        }
+        ant_value_t set = js_setprop(js, obj, key_str, v);
         if (is_err(set)) {
           json_key_hash_free(&hash);
           return set;
@@ -621,6 +626,7 @@ static json_write_t json_write_object_fast(
       }
     } else prop = js_prop_load(loc);
 
+    if (!json_ctx_pin_value(ctx, prop)) goto abort;
     size_t mark = out->len;
 
     if (wrote_any && !json_out_char(out, ',')) goto abort;
@@ -689,6 +695,7 @@ static json_write_t json_write_object(
       json_capture_error(ctx, prop);
       goto abort;
     }
+    if (!json_ctx_pin_value(ctx, prop)) goto abort;
 
     size_t mark = out->len;
 
@@ -730,8 +737,13 @@ static json_write_t json_write_impl(
 
     case T_UNDEF:
     case T_FUNC:
+    case T_CFUNC:
     case T_SYMBOL:
       return in_array ? (json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT) : JSON_W_SKIP;
+
+    case T_BIGINT:
+      json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_TYPE,"Do not know how to serialize a BigInt"));
+      return JSON_W_ABORT;
 
     case T_NUM: return json_out_number(out, js_getnum(val)) ? JSON_W_OK : JSON_W_ABORT;
     case T_STR: return json_out_quoted(ctx->js, out, val) ? JSON_W_OK : JSON_W_ABORT;
@@ -749,6 +761,11 @@ static json_write_t json_write_impl(
       case T_BOOL: return json_out_write(out, prim == js_true ? "true" : "false", prim == js_true ? 4 : 5) ? JSON_W_OK : JSON_W_ABORT;
       default: break;
     }
+  }
+
+  if (depth >= 2000) {
+    json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_RANGE, "Maximum call stack size exceeded"));
+    return JSON_W_ABORT;
   }
 
   if (json_cycle_check(ctx, val, key)) return JSON_W_ABORT;

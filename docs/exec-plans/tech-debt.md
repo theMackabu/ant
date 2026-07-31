@@ -91,7 +91,7 @@ scheduled.
   - Status: backlog
 
 - Area: `src/modules/worker_threads.c`
-  - Issue: `node:worker_threads` is still a minimal compatibility implementation, and `Worker.postMessage` remains explicitly unimplemented.
+  - Issue: `node:worker_threads` is still a minimal compatibility implementation, and `Worker.postMessage` remains explicitly unimplemented. The file header points here; keep the two in sync if the scope changes.
   - Impact: Build tools and libraries that rely on real worker thread messaging or broader worker lifecycle behavior still cannot use the native surface directly.
   - Proposed fix: Expand worker thread support incrementally, starting with message passing and the most commonly used worker APIs, while preserving the existing lightweight process-backed architecture where practical.
   - Status: backlog

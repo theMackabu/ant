@@ -12,6 +12,16 @@ arithmetic, stores, calls -- runs interpreted.
 
 This is not a loop-body cost. It is a function-level veto.
 
+Scope is **arrays, Maps, Sets and strings** -- the iterators the VM drives through its own
+`SV_ITER_*` tags without ever materialising a result object. Those are what the measurements
+below cover and what `OP_ITER_NEXT` plus `OP_ITER_CLOSE` unblock.
+
+**Generic iterators are explicitly out of scope for this plan.** A user-defined
+`Symbol.iterator`, a generator, or anything else that returns `{value, done}` objects also
+goes through `OP_ITER_GET_VALUE`, which has no JIT flag either -- so those loops stay
+ineligible even after this lands. That is a second phase, and it needs its own measurement:
+nothing here establishes what generic-iterator loops cost, only array-backed ones.
+
 ## Evidence
 
 `jit_is_eligible` (`src/silver/swarm.c:2773`) walks the bytecode and rejects the function
@@ -19,7 +29,7 @@ if any opcode lacks `SV_OPF_JIT_ELIGIBLE`. `OP_ITER_NEXT`, `OP_ITER_GET_VALUE` a
 `OP_ITER_CLOSE` have no `OP_FLAG` entry in `include/silver/opcode.h` at all, so they
 default to zero flags. The JIT says so itself:
 
-```
+```console
 $ ANT_DEBUG="dump/vm:op-warn" ./build/ant repro.mjs
 jit: ineligible op ITER_CLOSE in useForOf
 jit: ineligible op ITER_NEXT  in useForOf
@@ -69,7 +79,7 @@ Most of the supporting machinery is in place, which is what makes this tractable
 
 Stack effects, from `include/silver/opcode.h:217-219`:
 
-```
+```text
 OP_DEF(  ITER_NEXT,         2,   3,   5, u8)   /* pops 3, pushes 5, u8 type hint */
 OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)
 OP_DEF(  ITER_CLOSE,        1,   3,   0, none)
@@ -117,10 +127,13 @@ vstack state is the actual problem.
    (near `swarm.c:3254`) and import (near `swarm.c:3284`).
 3. **`OP_ITER_CLOSE`.** Add the same flags and fall through to the existing
    `OP_DESTRUCTURE_CLOSE` case.
-4. **`OP_ITER_GET_VALUE`.** Only reached by generic iterators; unpacks `{value, done}`.
-   No iterator state, no GC subtlety. Can be deferred -- it did not appear in the
-   `for...of`-over-array warning.
-5. **Re-measure and re-run `dump/vm:op-warn` on the real `dotick`.** Steps 2-4 only remove
+4. **`OP_ITER_GET_VALUE` -- second phase, not this one.** Only reached by generic iterators
+   (user `Symbol.iterator`, generators), which is why it never appeared in the
+   array-backed warning. It unpacks `{value, done}`: no iterator state, no GC subtlety, so
+   the opcode itself is easy. What is missing is evidence -- measure a generic-iterator
+   loop the way the array case was measured before deciding it is worth doing, and confirm
+   with `dump/vm:op-warn` that it is the only remaining blocker for those loops.
+5. **Re-measure and re-run `dump/vm:op-warn` on the real `dotick`.** Steps 2-3 only remove
    the veto; if anything else in that function is ineligible the win will not materialise,
    and the warning names the blocker directly.
 6. **Then consider inlining the array case.** Only after the glue lands and is measured.
@@ -141,7 +154,7 @@ There is currently **no** inlined iterator codegen anywhere -- `grep SV_ITER_ARR
 src/silver/swarm.c` returns nothing. The three iterator-adjacent opcodes the JIT does
 support are each a C call:
 
-```
+```text
 imp_for_of  -> jit_helper_for_of
 imp_dnext   -> jit_helper_destructure_next
 imp_dclose  -> jit_helper_destructure_close

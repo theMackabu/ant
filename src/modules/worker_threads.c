@@ -1,6 +1,8 @@
-// stub: minimal node:worker_threads implementation
-// just enough for rolldown to run transforms
-// TO BE REPLACED...
+// stub: minimal node:worker_threads implementation, just enough for rolldown to run
+// transforms. Worker.postMessage is explicitly unimplemented, so anything needing real
+// worker messaging or lifecycle cannot use this surface yet.
+//
+// scope and replacement plan: docs/exec-plans/tech-debt.md, "src/modules/worker_threads.c"
 
 #include <compat.h> // IWYU pragma: keep
 

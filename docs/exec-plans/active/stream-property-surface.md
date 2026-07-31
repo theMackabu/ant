@@ -77,7 +77,7 @@ node v26.5.1.
 
 ### Own-property leakage
 
-```
+```text
 ant  Readable: ["readable","destroyed","_paused","_pipes","_streamOptions","readableEnded","_readableState","_read"]
 node Readable: ["_events","_readableState","_read","_maxListeners"]
 
@@ -125,7 +125,14 @@ Ordered so each step is independently landable and testable.
    both null and false, so they should be unaffected, but confirm each.
 4. **Own-property hygiene.** Stop `stream_init_base` publishing `readable`/`_paused`/
    `_pipes`/`_streamOptions` as enumerable own properties; move them to slots or
-   non-enumerable descriptors. Fixes `Writable.readable` as a side effect.
+   non-enumerable descriptors.
+
+   This **necessarily** changes `Writable.readable` from `false` to `undefined`, matching
+   node -- there is no way to stop publishing the own property and keep the old value. So
+   the behaviour change lands with this step rather than being deferred: `'readable' in
+   stream` and `stream.readable !== undefined` duck-typing both flip. Land it as its own
+   commit with a test asserting the node-matching shape, so it can be reverted
+   independently of the cosmetic getter work.
 5. **`errored` / `closed`.** Both sides. `errored` is already tracked via
    `stream_set_errored`; `closed` needs wiring to the `close` emit.
 6. **Writable remainder.** `writableObjectMode`, `writableCorked`, `writableAborted`,
@@ -146,8 +153,11 @@ Ordered so each step is independently landable and testable.
 - `readableFlowing` is not landable as a standalone getter — without the tri-state fix it
   reports `false` where node reports `null`, which is worse than `undefined` because it
   looks correct.
-- The `highWaterMark` default and `Writable.readable` are held back from the surface work
-  because they change observable stream behaviour, not just its description.
+- The `highWaterMark` default is held back from the surface work because it changes
+  observable backpressure timing, not just the description of it.
+- `Writable.readable` is **not** held back, despite also being a behaviour change. It cannot
+  be: step 4 removes the own property that produces the wrong value, so the two are the same
+  edit. It ships with step 4, in its own commit, with a test.
 
 ## Validation status
 

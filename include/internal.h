@@ -258,6 +258,7 @@ struct ant_isolate_t {
   
   ant_offset_t max_size;
   js_error_site_t errsite;
+  double perf_time_origin_ms;
 
   struct {
     ant_pool_t rope;
