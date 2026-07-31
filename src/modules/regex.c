@@ -2669,36 +2669,13 @@ static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs
   ant_value_t pattern = args[0];
   const char *pattern_ptr = NULL;
   ant_offset_t pattern_len = 0;
-  bool ignore_case = false, multiline = false;
 
   if (vtype(pattern) == T_OBJ) {
-    ant_prop_loc_t source_off = lkp(js, pattern, "source", 6);
-    if (!source_off.obj) {
-      pattern = js_to_primitive(js, pattern, 1);
-      if (is_err(pattern)) return pattern;
-      pattern = js_tostring_val(js, pattern);
-      if (is_err(pattern)) return pattern;
-      goto search_string_pattern;
-    }
-    ant_value_t source_val = js_prop_load(source_off);
-    if (vtype(source_val) != T_STR) return tov(-1);
-
-    ant_offset_t poff;
-    poff = vstr(js, source_val, &pattern_len);
-    pattern_ptr = (char *)(uintptr_t)(poff);
-
-    ant_prop_loc_t flags_off = lkp(js, pattern, "flags", 5);
-    if (flags_off.obj) {
-      ant_value_t flags_val = js_prop_load(flags_off);
-      if (vtype(flags_val) == T_STR) {
-        ant_offset_t flen, foff = vstr(js, flags_val, &flen);
-        const char *flags_str = (char *)(uintptr_t)(foff);
-        for (ant_offset_t i = 0; i < flen; i++) {
-          if (flags_str[i] == 'i') ignore_case = true;
-          if (flags_str[i] == 'm') multiline = true;
-        }
-      }
-    }
+    pattern = js_to_primitive(js, pattern, 1);
+    if (is_err(pattern)) return pattern;
+    pattern = js_tostring_val(js, pattern);
+    if (is_err(pattern)) return pattern;
+    goto search_string_pattern;
   } else if (vtype(pattern) == T_STR) {
 search_string_pattern:;
     ant_offset_t poff;
@@ -2711,10 +2688,7 @@ search_string_pattern:;
 
   char pcre2_pattern[4096];
   size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, pattern_len, pcre2_pattern, sizeof(pcre2_pattern), false);
-
   uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
-  if (ignore_case) options |= PCRE2_CASELESS;
-  if (multiline) options |= PCRE2_MULTILINE;
 
   int errcode;
   PCRE2_SIZE erroffset;
@@ -2758,39 +2732,18 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
   ant_value_t pattern = args[0];
   const char *pattern_ptr = NULL;
   ant_offset_t pattern_len = 0;
-  bool global_flag = false;
-  bool ignore_case = false;
-  bool multiline = false;
+  
+  const bool 
+    global_flag = false, 
+    ignore_case = false, 
+    multiline = false;
 
   if (vtype(pattern) == T_OBJ) {
-    ant_prop_loc_t source_off = lkp(js, pattern, "source", 6);
-    if (!source_off.obj) {
-      pattern = js_to_primitive(js, pattern, 1);
-      if (is_err(pattern)) return pattern;
-      pattern = js_tostring_val(js, pattern);
-      if (is_err(pattern)) return pattern;
-      goto match_string_pattern;
-    }
-
-    ant_value_t source_val = js_prop_load(source_off);
-    if (vtype(source_val) != T_STR) return js_mknull();
-
-    ant_offset_t poff;
-    poff = vstr(js, source_val, &pattern_len);
-    pattern_ptr = (char *)(uintptr_t)(poff);
-
-    ant_prop_loc_t flags_off = lkp(js, pattern, "flags", 5);
-    if (flags_off.obj) {
-    ant_value_t flags_val = js_prop_load(flags_off);
-    if (vtype(flags_val) == T_STR) {
-      ant_offset_t flen, foff = vstr(js, flags_val, &flen);
-      const char *flags_str = (char *)(uintptr_t)(foff);
-      for (ant_offset_t i = 0; i < flen; i++) {
-        if (flags_str[i] == 'g') global_flag = true;
-        if (flags_str[i] == 'i') ignore_case = true;
-        if (flags_str[i] == 'm') multiline = true;
-      }}
-    }
+    pattern = js_to_primitive(js, pattern, 1);
+    if (is_err(pattern)) return pattern;
+    pattern = js_tostring_val(js, pattern);
+    if (is_err(pattern)) return pattern;
+    goto match_string_pattern;
   } else if (vtype(pattern) == T_STR) {
 match_string_pattern:;
     ant_offset_t poff;

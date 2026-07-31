@@ -172,10 +172,42 @@ requires step 2 to work first.
 
 ## Validation status
 
-- Timings taken 2026-07-31, PGO release build, best-of-N, against node v26.5.1.
-- The `for...of` vs indexed comparison and the `dotick`/`render` split are reproducible;
-  scripts were in `/tmp` and are not preserved.
+- Timings taken 2026-07-31 on darwin-aarch64, PGO release build
+  (`meson --buildtype=release`, pgo enabled), best-of-5, at branch `af22111a`, against
+  node v26.5.1.
 - Baseline at time of writing: harness 123/0 on `spec tests async`, conformance 1511/1511.
+
+The iteration benchmark is checked in. Reproduce with:
+
+```console
+$ ./build/ant examples/jit/bench_iteration.mjs
+for..of array                381ms  26.5 ns/step
+indexed for                  102ms  7.1 ns/step
+for..of, no prop read        340ms  23.6 ns/step
+for..of map.values()         348ms  24.2 ns/step
+
+$ node examples/jit/bench_iteration.mjs
+for..of array                 17ms  1.2 ns/step
+indexed for                   12ms  0.8 ns/step
+for..of, no prop read          6ms  0.4 ns/step
+for..of map.values()          16ms  1.1 ns/step
+```
+
+Confirm the veto is still in place before you trust a "no change" result -- if these opcodes
+stop appearing, the ratio has moved for a reason:
+
+```console
+$ ANT_DEBUG="dump/vm:op-warn" ./build/ant examples/jit/bench_iteration.mjs 2>&1 | grep ineligible
+jit: ineligible op ITER_CLOSE in <anonymous>
+jit: ineligible op ITER_NEXT in <anonymous>
+```
+
+Absolute times move between machines. The ratio between `for..of array` and `indexed for`
+is the stable signal: 3.7x on ant, 1.4x on node. Any fix has to move that ratio toward 1.
+
+The `dotick`/`render` split came from `game-of-life/dist`, timed by calling `w.dotick()` and
+`w.render()` in separate loops after 200 warmup ticks. That one is not checked in -- it
+depends on the `game-of-life` working tree, which is not part of this repository.
 
 ## Follow-ups
 

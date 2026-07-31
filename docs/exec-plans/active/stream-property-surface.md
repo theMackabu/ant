@@ -138,8 +138,23 @@ Ordered so each step is independently landable and testable.
 6. **Writable remainder.** `writableObjectMode`, `writableCorked`, `writableAborted`,
    `writableBuffer`, `setDefaultEncoding`.
 7. **Test.** Extend `test_stream_writable_lifecycle.cjs` or add a sibling asserting, for
-   both directions: every flag is a non-enumerable prototype getter, no flag is an own
-   key, and `Object.keys()` matches node's set.
+   both directions: every flag is a non-enumerable prototype getter, and no flag appears
+   as an own key.
+
+   Do **not** assert `Object.keys()` equals node's set. The table above shows node also
+   exposes `_events` and `_maxListeners`, which come from its EventEmitter and are out of
+   scope here -- that assertion cannot pass however good the stream work is. Assert the
+   absence of the stream-owned keys instead, against an explicit list:
+
+   ```js
+   const LEAKED = ['readable', 'destroyed', '_paused', '_pipes', '_streamOptions',
+                   'readableEnded'];
+   for (const k of LEAKED) assert(!Object.hasOwn(stream, k), `${k} is an own key`);
+   ```
+
+   Exact `Object.keys()` parity needs the EventEmitter internals to match too. If that is
+   wanted, add it to the Scope and Task list of this plan or write a separate one; do not
+   smuggle it in through a test assertion.
 8. **`highWaterMark` default** — separate commit, separate decision. Benchmark pipe
    throughput before/after; 4× the buffer changes drain frequency.
 9. **Methods** — separate plan. `unshift`/`wrap`/`_destroy`/`_undestroy` are small;
