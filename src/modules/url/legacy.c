@@ -54,12 +54,6 @@ static ant_value_t legacy_url_object(ant_t *js, const legacy_url_t *u) {
   return obj;
 }
 
-typedef struct {
-  url_fmt_buf_t auth;
-  url_fmt_buf_t host;
-  url_fmt_buf_t path;
-} legacy_url_scratch_t;
-
 static bool legacy_proto_is(const char *proto, size_t len, const char *name) {
   size_t name_len = strlen(name);
   if (len && proto[len - 1] == ':') len--;

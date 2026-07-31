@@ -528,11 +528,6 @@ ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot) {
   return get_slot(js_as_obj(obj), slot); 
 }
 
-typedef enum {
-  NTARG_INVALID = 0,
-  NTARG_NEW_TARGET = 1
-} ntarg_kind_t;
-
 static inline bool is_unboxed_obj(ant_t *js, ant_value_t val, ant_value_t expected_proto) {
   if (vtype(val) != T_OBJ) return false;
   if (vtype(get_slot(val, SLOT_PRIMITIVE)) != T_UNDEF) return false;

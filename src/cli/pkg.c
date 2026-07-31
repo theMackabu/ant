@@ -2629,12 +2629,6 @@ int pkg_cmd_info(int argc, char **argv) {
 
 typedef struct {
   int count;
-  bool show_path;
-  const char *nm_path;
-} ls_ctx_t;
-
-typedef struct {
-  int count;
   int total;
 } pkg_ls_ctx_t;
 

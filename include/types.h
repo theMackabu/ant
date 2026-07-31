@@ -27,7 +27,6 @@ typedef struct sv_closure        sv_closure_t;
 typedef struct sv_frame          sv_frame_t;
 typedef struct sv_eval_env_state sv_eval_env_state_t;
 
-typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;
 

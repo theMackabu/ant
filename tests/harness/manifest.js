@@ -19,6 +19,7 @@ export function targets() {
     'test_global_accessor_read.cjs',
     'test_jit_inline_call_errors.cjs',
     'test_string_length_accumulation.cjs',
+    'test_property_location_stress.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
     'test_esm_package_self_reference.cjs',
