@@ -18,10 +18,6 @@ typedef struct {
   uint32_t limbs[];
 } bigint_payload_t;
 
-static inline bool is_decimal_digit(char c) {
-  return c >= '0' && c <= '9';
-}
-
 static bool checked_add_size(size_t a, size_t b, size_t *out) {
   if (a > SIZE_MAX - b) return false;
   *out = a + b;

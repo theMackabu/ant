@@ -21,7 +21,6 @@ add_project_arguments(
   '-Wundef',
   '-Wconversion',
   '-Wno-sign-conversion',
-  '-Wno-unused-function',
   '-Wno-unused-parameter',
   '-Wno-deprecated-declarations',
   language: 'c'

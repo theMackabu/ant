@@ -1,5 +1,8 @@
-// stub: minimal node:worker_threads implementation
-// just enough for rolldown to run transforms
+// stub: minimal node:worker_threads implementation, just enough for rolldown to run
+// transforms. Worker.postMessage is explicitly unimplemented, so anything needing real
+// worker messaging or lifecycle cannot use this surface yet.
+//
+// scope and replacement plan: docs/exec-plans/tech-debt.md, "src/modules/worker_threads.c"
 
 #include <compat.h> // IWYU pragma: keep
 
@@ -944,8 +947,8 @@ static ant_value_t worker_threads_get_environment_data(ant_t *js, ant_value_t *a
   if (!key) return js_mkerr(js, "Out of memory");
 
   ant_value_t store = wt_get_or_create_env_store(js);
-  ant_offset_t off = lkp(js, store, key, key_len);
-  if (off == 0) {
+  ant_prop_loc_t off = lkp(js, store, key, key_len);
+  if (!off.obj) {
     free(key);
     return js_mkundef();
   }

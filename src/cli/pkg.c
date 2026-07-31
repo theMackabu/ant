@@ -2629,56 +2629,6 @@ int pkg_cmd_info(int argc, char **argv) {
 
 typedef struct {
   int count;
-  bool show_path;
-  const char *nm_path;
-} ls_ctx_t;
-
-static void print_ls_package(const char *name, void *user_data) {
-  ls_ctx_t *ctx = (ls_ctx_t *)user_data;
-  
-  char pkg_json_path[4096];
-  snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/%s/package.json", ctx->nm_path, name);
-  
-  FILE *f = fopen(pkg_json_path, "r");
-  if (!f) {
-    printf("  %s%s%s\n", C_BOLD, name, C_RESET);
-    ctx->count++;
-    return;
-  }
-  
-  char buf[8192];
-  size_t len = fread(buf, 1, sizeof(buf) - 1, f);
-  fclose(f);
-  buf[len] = '\0';
-  
-  const char *version = "?";
-  char version_buf[64] = {0};
-  
-  char *ver_key = strstr(buf, "\"version\"");
-  if (ver_key) {
-    char *colon = strchr(ver_key, ':');
-    if (colon) {
-      char *quote1 = strchr(colon, '"');
-      if (quote1) {
-        char *quote2 = strchr(quote1 + 1, '"');
-        if (quote2) {
-          size_t vlen = (size_t)(quote2 - quote1 - 1);
-          if (vlen < sizeof(version_buf)) {
-            memcpy(version_buf, quote1 + 1, vlen);
-            version_buf[vlen] = '\0';
-            version = version_buf;
-          }
-        }
-      }
-    }
-  }
-  
-  printf("  %s%s%s@%s%s%s\n", C_BOLD, name, C_RESET, C_DIM, version, C_RESET);
-  ctx->count++;
-}
-
-typedef struct {
-  int count;
   int total;
 } pkg_ls_ctx_t;
 

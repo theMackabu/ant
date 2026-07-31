@@ -27,9 +27,13 @@ typedef struct sv_closure        sv_closure_t;
 typedef struct sv_frame          sv_frame_t;
 typedef struct sv_eval_env_state sv_eval_env_state_t;
 
-typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;
+
+typedef struct {
+  ant_object_t *obj;
+  uint32_t slot;
+} ant_prop_loc_t;
 
 typedef ant_value_t 
   (*ant_cfunc_t) 
@@ -42,7 +46,9 @@ typedef struct ant_cfunc_meta {
   uint8_t flags;
 } ant_cfunc_meta_t;
 
-#define ant_sidecar  ((uintptr_t)1u)
+constexpr uintptr_t ant_sidecar = 1u;
+constexpr ant_prop_loc_t ANT_PROP_LOC_NONE = {NULL, 0};
+
 #define ant_bind_t   ant_value_t func, ant_value_t this_val
 #define ant_params_t ant_t *js, ant_value_t *args, int nargs
 

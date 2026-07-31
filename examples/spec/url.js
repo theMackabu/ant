@@ -58,6 +58,7 @@ test('strips ASCII whitespace', new URL(' \nhttps://example.com/path\t').href, '
 test('normalizes special URL without slashes', new URL('https:example.com').href, 'https://example.com/');
 test('normalizes special URL backslashes', new URL('https://example.com\\path').href, 'https://example.com/path');
 test('normalizes IPv4 number forms', new URL('http://0x7f.1').hostname, '127.0.0.1');
+test('rejects overflowing hexadecimal IPv4', URL.canParse('http://0x100000000'), false);
 test('converts international domain names', new URL('https://bücher.example').hostname, 'xn--bcher-kva.example');
 test('percent-encodes Unicode paths', new URL('https://example.com/démonstration').pathname, '/d%C3%A9monstration');
 test('percent-encodes embedded NUL bytes', new URL('https://example.com/\0path').pathname, '/%00path');
@@ -114,6 +115,12 @@ const us3 = new URL('https://example.com/path');
 us3.hostname = 'other.com';
 test('set hostname', us3.hostname, 'other.com');
 test('set hostname updates host', us3.host, 'other.com');
+
+const rejectedNonSpecialHost = new URL('non-spec:/x');
+rejectedNonSpecialHost.host = '@\b[';
+test('failed host setter preserves authority-less URL', rejectedNonSpecialHost.href, 'non-spec:/x');
+rejectedNonSpecialHost.hostname = '@\b[';
+test('failed hostname setter preserves authority-less URL', rejectedNonSpecialHost.href, 'non-spec:/x');
 
 const us4 = new URL('https://example.com/path');
 us4.port = '9090';

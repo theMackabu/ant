@@ -444,11 +444,6 @@ void js_set_error_site_from_vm_top(ant_t *js) {
   js_set_error_site_from_bc(js, func, bc_off, func->debug->filename);
 }
 
-// TODO: move to strings.c
-static inline bool sv_builder_has_cached_value(const ant_string_builder_t *builder) {
-  return builder && vtype(builder->cached) == T_STR;
-}
-
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
   if (vtype(value) != T_STR || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
   return (ant_flat_string_t *)(uintptr_t)vdata(value);
@@ -1436,10 +1431,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         ? ip + sv_op_size[OP_JMP_FALSE]
         : ip + sv_op_size[OP_JMP_FALSE] + sv_get_i32(ip + 1);
     }
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
@@ -1455,46 +1447,31 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
         : ip + sv_op_size[OP_JMP_TRUE];
     }
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_FALSE_PEEK: { 
     uint8_t *prev = ip; ip = sv_op_jmp_false_peek(vm, js, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_TRUE_PEEK: { 
     uint8_t *prev = ip; ip = sv_op_jmp_true_peek(vm, js, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_NOT_NULLISH: { 
     uint8_t *prev = ip; ip = sv_op_jmp_not_nullish(vm, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
    
   L_JMP8: {
     uint8_t *prev = ip; ip = sv_op_jmp8(ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   

@@ -978,7 +978,7 @@ ant_value_t jit_helper_put_global(
   sv_vm_t *vm, ant_t *js, ant_value_t val,
   const char *str, uint32_t len, int is_strict
 ) {
-  if (is_strict && lkp(js, js->global, str, len) == 0)
+  if (is_strict && !lkp(js, js->global, str, len).obj)
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
   ant_value_t key = js_mkstr(js, str, len);
   return js_setprop(js, js->global, key, val);

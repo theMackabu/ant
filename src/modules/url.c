@@ -1353,15 +1353,6 @@ static ant_value_t builtin_pathToFileURL(ant_t *js, ant_value_t *args, int nargs
   return make_url_obj(js, s);
 }
 
-static bool url_fmt_append_value_string(ant_t *js, url_fmt_buf_t *b, ant_value_t value) {
-  ant_value_t str_val = vtype(value) == T_STR ? value : js_tostring_val(js, value);
-  if (is_err(str_val)) return false;
-
-  size_t len = 0;
-  const char *str = js_getstr(js, str_val, &len);
-  return str && url_fmt_append_n(b, str, len);
-}
-
 static bool url_fmt_get_string_prop(
   ant_t *js,
   ant_value_t obj,

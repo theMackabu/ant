@@ -284,12 +284,10 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, alloc, "shapes", js_mknum((double)shape_bytes));
   js_set(js, alloc, "closures", js_mknum((double)js->alloc_bytes.closures));
   js_set(js, alloc, "upvalues", js_mknum((double)js->alloc_bytes.upvalues));
-  js_set(js, alloc, "propRefs", js_mknum((double)(js->prop_refs_cap * sizeof(ant_prop_ref_t))));
 
   size_t alloc_total = obj_bytes + overflow_bytes + extra_bytes
     + promise_bytes + proxy_bytes + exotic_bytes + array_bytes
-    + shape_bytes + js->alloc_bytes.closures + js->alloc_bytes.upvalues
-    + js->prop_refs_cap * sizeof(ant_prop_ref_t);
+    + shape_bytes + js->alloc_bytes.closures + js->alloc_bytes.upvalues;
   
   js_set(js, alloc, "total", js_mknum((double)alloc_total));
   js_set(js, result, "alloc", alloc);

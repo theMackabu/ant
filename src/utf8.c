@@ -166,13 +166,6 @@ static inline bool utf16_scan_cursor_advance(
   return true;
 }
 
-static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
-  if (len == 0) { *seq_len = 0; return 0; }
-  utf8proc_int32_t cp;
-  *seq_len = (int)utf8_next(buf, (utf8proc_ssize_t)len, &cp);
-  return cp < 0 ? 0xFFFD : (uint32_t)cp;
-}
-
 static bool utf8_json_quote_reserve(char **buf, size_t *cap, size_t need) {
   if (need <= *cap) return true;
 

@@ -193,7 +193,7 @@ static bool inspector_safe_get_existing_prop(
   ant_value_t *out
 ) {
   if (!js || !key || !out || memchr(key, '\0', key_len)) return false;
-  if (lkp_proto(js, obj, key, key_len) == 0) return false;
+  if (!lkp_proto(js, obj, key, key_len).obj) return false;
   return inspector_safe_get_prop(js, obj, key, key_len, out);
 }
 

@@ -9,7 +9,6 @@
 #include "loader_cache.h"
 #include "loader_internal.h"
 
-#include "modules/buffer.h"
 #include "modules/json.h"
 #include "modules/napi.h"
 #include "modules/uri.h"
@@ -22,7 +21,6 @@
 #include "internal.h"
 #include "reactor.h"
 #include "runtime.h"
-#include "silver/engine.h"
 #include "gc/roots.h"
 #include "utils.h"
 
@@ -1143,12 +1141,6 @@ static inline bool esm_is_esm_extension(const char *path) {
   return
     esm_has_suffix(path, ".mjs") ||
     esm_has_suffix(path, ".mts");
-}
-
-static bool esm_path_contains_node_modules(const char *path) {
-  if (!path) return false;
-  if (strstr(path, "/node_modules/")) return true;
-  return strstr(path, "\\node_modules\\") != NULL;
 }
 
 static bool esm_lookup_package_type(ant_t *js, const char *resolved_path, esm_package_type_t *out_type) {

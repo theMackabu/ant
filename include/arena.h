@@ -27,12 +27,9 @@ typedef struct {
   void *free_list;
 } ant_fixed_arena_t;
 
-#define ANT_ARENA_MIN (32 * 1024)
-#define ANT_ARENA_MAX (64ULL * 1024 * 1024 * 1024)
-
-#define ANT_ARENA_THRESHOLD   (256ULL * 1024 * 1024)
-#define ARENA_GROW_INCREMENT  (8ULL * 1024 * 1024)
-#define ANT_CLOSURE_ARENA_MAX (2ULL * 1024 * 1024 * 1024)
+static constexpr size_t ANT_ARENA_MAX         = 64ULL * 1024 * 1024 * 1024;
+static constexpr size_t ANT_CLOSURE_ARENA_MAX = 2ULL * 1024 * 1024 * 1024;
+static constexpr size_t ARENA_GROW_INCREMENT  = 8ULL * 1024 * 1024;
 
 // the kernel can hand out mmap addresses above the 47-bit NaN-boxing ceiling.
 // ant_mmap_low() probes the low VA range with MAP_FIXED_NOREPLACE

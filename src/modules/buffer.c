@@ -648,31 +648,6 @@ static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, 
   R_FAIL:    return false;
 }
 
-static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, double value) {
-  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached || index >= ta_data->length) return false;
-  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
-
-  static const void *dispatch[] = {
-    &&W_INT8, &&W_UINT8, &&W_UINT8_CLAMPED, &&W_INT16, &&W_UINT16,
-    &&W_INT32, &&W_UINT32, &&W_FLOAT16, &&W_FLOAT32, &&W_FLOAT64, &&W_FAIL, &&W_FAIL
-  };
-
-  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_FAIL;
-  goto *dispatch[ta_data->type];
-
-  W_INT8:    ((int8_t *)data)[index] = (int8_t)js_to_int32(value);     return true;
-  W_UINT8:   data[index] = (uint8_t)js_to_uint32(value);               return true;
-  W_UINT8_CLAMPED: data[index] = typedarray_to_uint8_clamped(value);   return true;
-  W_INT16:   ((int16_t *)data)[index] = (int16_t)js_to_int32(value);   return true;
-  W_UINT16:  ((uint16_t *)data)[index] = (uint16_t)js_to_uint32(value); return true;
-  W_INT32:   ((int32_t *)data)[index] = js_to_int32(value);            return true;
-  W_UINT32:  ((uint32_t *)data)[index] = js_to_uint32(value);          return true;
-  W_FLOAT16: ((uint16_t *)data)[index] = double_to_half(value); return true;
-  W_FLOAT32: ((float *)data)[index] = (float)value;       return true;
-  W_FLOAT64: ((double *)data)[index] = value;             return true;
-  W_FAIL:    return false;
-}
-
 static ant_value_t js_typedarray_every(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray.prototype.every requires a callable");

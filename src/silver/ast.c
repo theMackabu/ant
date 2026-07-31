@@ -115,12 +115,6 @@ static inline const char *tok_str(P) {
   return &CODE[TOFF]; 
 }
 
-static inline bool eat(P, uint8_t tok) {
-  NEXT();
-  if (TOK == tok) { CONSUME(); return true; }
-  return false;
-}
-
 static inline void expect(P, uint8_t tok) {
   NEXT();
   if (TOK == tok) CONSUME();

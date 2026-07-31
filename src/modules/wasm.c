@@ -243,11 +243,6 @@ static wasm_module_handle_t *wasm_module_handle(ant_value_t value) {
   return (wasm_module_handle_t *)js_get_native(value, WASM_MODULE_NATIVE_TAG);
 }
 
-static wasm_instance_handle_t *wasm_instance_handle(ant_value_t value) {
-  if (!js_check_brand(value, BRAND_WASM_INSTANCE)) return NULL;
-  return (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
-}
-
 static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_wrap_kind_t kind) {
   if ((kind == WASM_EXTERN_WRAP_GLOBAL && !js_check_brand(value, BRAND_WASM_GLOBAL))
       || (kind == WASM_EXTERN_WRAP_MEMORY && !js_check_brand(value, BRAND_WASM_MEMORY))

@@ -690,12 +690,6 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
   return p;
 }
 
-static ant_value_t ts_source_pull_resolve(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t p = js_get_slot(js->current_func, SLOT_DATA);
-  js_resolve_promise(js, p, js_mkundef());
-  return js_mkundef();
-}
-
 static ant_value_t ts_source_pull(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
 
