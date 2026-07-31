@@ -275,19 +275,23 @@ static bool json_out_quoted_raw(json_out_t *o, const char *str, size_t byte_len)
 static bool json_out_quoted(ant_t *js, json_out_t *o, ant_value_t value) {
   size_t byte_len = 0;
   char *str = js_getstr(js, value, &byte_len);
-  if (!str) return json_out_write(o, "\"\"", 2);
+  if (!str) { o->oom = true; return false; }
   return json_out_quoted_raw(o, str, byte_len);
 }
 
 static bool json_out_number(json_out_t *o, double num) {
   if (isnan(num) || isinf(num)) return json_out_write(o, "null", 4);
   if (!json_out_reserve(o, 48)) return false;
-  
   char *p = o->buf + o->len;
-  int64_t as_int = (int64_t)num;
-  
-  if ((double)as_int == num && num >= -9007199254740992.0 && num <= 9007199254740992.0) {
+
+  if (
+    num >= -9007199254740992.0 &&
+    num <= 9007199254740992.0 && 
+    (double)(int64_t)num == num
+  ) {
+    int64_t as_int = (int64_t)num;
     uint64_t u;
+    
     if (as_int < 0) {
       *p++ = '-';
       u = (uint64_t)(-(as_int + 1)) + 1u;
@@ -400,26 +404,35 @@ static ant_value_t json_apply_tojson(
   if (!is_special_object(val)) return val;
 
   ant_value_t toJSON = js_mkundef();
-  ant_prop_loc_t own = lkp_interned(val, ctx->tojson_key);
+  bool needs_generic = is_proxy(val);
+  ant_prop_loc_t found = ANT_PROP_LOC_NONE;
 
-  if (own.obj) toJSON = js_prop_load(own);
-  else {
-    ant_value_t proto = js_get_proto(js, val);
-    bool known_absent =
-      ctx->tojson_proto == proto &&
-      ctx->tojson_epoch == ant_ic_epoch_counter &&
-      ctx->tojson_absent;
+  if (!needs_generic) {
+    found = lkp_interned(val, ctx->tojson_key);
 
-    if (!known_absent && is_object_type(proto)) {
-      ant_prop_loc_t loc = lkp_proto(js, proto, "toJSON", 6);
-      ctx->tojson_proto = proto;
-      ctx->tojson_epoch = ant_ic_epoch_counter;
-      ctx->tojson_absent = !loc.obj;
-      if (loc.obj) toJSON = js_prop_load(loc);
+    if (!found.obj) {
+      ant_value_t proto = js_get_proto(js, val);
+      bool known_absent =
+        ctx->tojson_proto == proto &&
+        ctx->tojson_epoch == ant_ic_epoch_counter &&
+        ctx->tojson_absent;
+
+      if (!known_absent && is_object_type(proto)) {
+        found = lkp_proto(js, proto, "toJSON", 6);
+        ctx->tojson_proto = proto;
+        ctx->tojson_epoch = ant_ic_epoch_counter;
+        ctx->tojson_absent = !found.obj;
+      }
+    }
+
+    if (found.obj) {
+      const ant_shape_prop_t *meta = ant_shape_prop_at(found.obj->shape, found.slot);
+      if (meta && (meta->has_getter || meta->has_setter)) needs_generic = true;
+      else toJSON = js_prop_load(found);
     }
   }
 
-  if (!is_callable(toJSON) && !own.obj && is_proxy(val)) {
+  if (needs_generic) {
     ant_value_t generic = js_get(js, val, "toJSON");
     if (is_err(generic)) {
       json_capture_error(ctx, generic);
@@ -893,31 +906,40 @@ ant_value_t json_parse_value(ant_t *js, ant_value_t value) {
   return js_json_parse(js, args, 1);
 }
 
-static void json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, int nargs) {
+static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, int nargs) {
   ctx->indent_len = 0;
-  if (nargs < 3) return;
-
+  if (nargs < 3) return true;
   ant_value_t space = args[2];
+
   if (is_special_object(space)) {
-    ant_value_t prim = js_to_primitive(js, space, 0);
-    if (is_err(prim)) return;
+    uint8_t boxed = vtype(js_get_slot(space, SLOT_PRIMITIVE));
+    if (boxed != T_NUM && boxed != T_STR) return true;
+
+    ant_value_t prim = boxed == T_NUM
+      ? js_to_primitive(js, space, 0)
+      : js_tostring_val(js, space);
+
+    if (is_err(prim) || js->thrown_exists) {
+      json_capture_error(ctx, prim);
+      return false;
+    }
     space = prim;
   }
 
   if (vtype(space) == T_NUM) {
     double d = js_getnum(space);
-    if (isnan(d) || d < 1) return;
+    if (isnan(d) || d < 1) return true;
     size_t n = d > 10 ? 10 : (size_t)d;
     memset(ctx->indent, ' ', n);
     ctx->indent_len = n;
-    return;
+    return true;
   }
 
-  if (vtype(space) != T_STR) return;
+  if (vtype(space) != T_STR) return true;
 
   size_t byte_len = 0;
   char *str = js_getstr(js, space, &byte_len);
-  if (!str || !byte_len) return;
+  if (!str || !byte_len) return true;
 
   size_t units = utf16_strlen(str, byte_len);
   size_t take = byte_len;
@@ -931,6 +953,8 @@ static void json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
 
   memcpy(ctx->indent, str, take);
   ctx->indent_len = take;
+  
+  return true;
 }
 
 ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
@@ -1002,7 +1026,11 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
     }
   }}} 
   
-  json_set_indent(js, &ctx, args, nargs);
+  if (!json_set_indent(js, &ctx, args, nargs)) {
+    ant_value_t error = json_normalize_error(ctx.error);
+    result = is_err(error) ? error : js_throw(js, error);
+    goto cleanup;
+  }
 
   root_holder = json_create_root_holder(js, args[0], &ctx);
   if (is_err(root_holder)) {
