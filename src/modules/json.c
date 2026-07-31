@@ -759,6 +759,11 @@ static json_write_t json_write_impl(
       case T_NUM:  return json_out_number(out, js_getnum(prim)) ? JSON_W_OK : JSON_W_ABORT;
       case T_STR:  return json_out_quoted(ctx->js, out, prim) ? JSON_W_OK : JSON_W_ABORT;
       case T_BOOL: return json_out_write(out, prim == js_true ? "true" : "false", prim == js_true ? 4 : 5) ? JSON_W_OK : JSON_W_ABORT;
+
+      case T_BIGINT: 
+        json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_TYPE, "Do not know how to serialize a BigInt"));
+        return JSON_W_ABORT;
+
       default: break;
     }
   }

@@ -12,22 +12,40 @@ arithmetic, stores, calls -- runs interpreted.
 
 This is not a loop-body cost. It is a function-level veto.
 
-Scope is **arrays, Maps, Sets and strings** -- the iterators the VM drives through its own
-`SV_ITER_*` tags without ever materialising a result object. Those are what the measurements
-below cover and what `OP_ITER_NEXT` plus `OP_ITER_CLOSE` unblock.
+Scope is **every synchronous `for...of` loop**: arrays, Maps, Sets and strings, and also
+user-defined `Symbol.iterator` objects and generators.
 
-**Generic iterators are explicitly out of scope for this plan.** A user-defined
-`Symbol.iterator`, a generator, or anything else that returns `{value, done}` objects also
-goes through `OP_ITER_GET_VALUE`, which has no JIT flag either -- so those loops stay
-ineligible even after this lands. That is a second phase, and it needs its own measurement:
-nothing here establishes what generic-iterator loops cost, only array-backed ones.
+Generic iterators cannot be excluded, because the compiler emits the same two opcodes for
+them. `sv_iter_advance`'s `default:` case (`src/silver/ops/iteration.h`) calls `next()`,
+checks the result is an object, and unpacks `{value, done}` inline -- all inside
+`OP_ITER_NEXT`. `OP_ITER_GET_VALUE` is emitted **nowhere**; `grep OP_ITER_GET_VALUE src/`
+finds it only in the opcode table and the interpreter dispatch label. It is a dead opcode.
+
+Confirm with the checked-in benchmark's sibling case:
+
+```console
+$ ANT_DEBUG="dump/vm:op-warn" ./build/ant /tmp/genericiter.mjs 2>&1 | grep ineligible | sort -u
+jit: ineligible op ITER_CLOSE in arrayIter
+jit: ineligible op ITER_CLOSE in generatorIter
+jit: ineligible op ITER_CLOSE in userIter
+jit: ineligible op ITER_NEXT in arrayIter
+jit: ineligible op ITER_NEXT in generatorIter
+jit: ineligible op ITER_NEXT in userIter
+```
+
+**This raises the risk of steps 2-3, it does not lower it.** Flagging `OP_ITER_NEXT`
+eligible opts generic iterators in whether or not this plan mentions them, and those are the
+loops that call arbitrary user JS through `sv_vm_call` in the middle of the iteration --
+directly across the back-edge whose vstack merge the failed attempt showed is the blocker.
+Validation must cover a user `Symbol.iterator` and a generator, not just arrays and Maps.
 
 ## Evidence
 
 `jit_is_eligible` (`src/silver/swarm.c:2773`) walks the bytecode and rejects the function
-if any opcode lacks `SV_OPF_JIT_ELIGIBLE`. `OP_ITER_NEXT`, `OP_ITER_GET_VALUE` and
-`OP_ITER_CLOSE` have no `OP_FLAG` entry in `include/silver/opcode.h` at all, so they
-default to zero flags. The JIT says so itself:
+if any opcode lacks `SV_OPF_JIT_ELIGIBLE`. `OP_ITER_NEXT` and `OP_ITER_CLOSE` have no
+`OP_FLAG` entry in `include/silver/opcode.h` at all, so they default to zero flags. Those
+two are the whole veto -- every synchronous `for...of` emits them and nothing else. The JIT
+says so itself:
 
 ```console
 $ ANT_DEBUG="dump/vm:op-warn" ./build/ant repro.mjs
@@ -68,7 +86,9 @@ V8 and inverted on ant -- the indexed version is the only one that compiles.
 Most of the supporting machinery is in place, which is what makes this tractable:
 
 - `jit_iter_advance_from_buf` (`src/silver/glue.c:323`) -- buffer-based advance, already
-  takes the `hint` operand, already writes the updated index back to `iter_buf[1]`.
+  takes the `hint` operand, already writes the updated index back to `iter_buf[1]`. Its
+  `default:` case already drives generic iterators, so no new helper is needed for them --
+  which is exactly why they cannot be left out of scope.
 - `r_iter_roots` -- GC-visible shadow of the three iterator stack slots, populated by
   `OP_FOR_OF` (`src/silver/swarm.c:7696`).
 - `r_args_buf` marshalling plus the error/catch protocol.
@@ -81,7 +101,7 @@ Stack effects, from `include/silver/opcode.h:217-219`:
 
 ```text
 OP_DEF(  ITER_NEXT,         2,   3,   5, u8)   /* pops 3, pushes 5, u8 type hint */
-OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)
+OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)   /* dead: the compiler never emits it */
 OP_DEF(  ITER_CLOSE,        1,   3,   0, none)
 ```
 
@@ -127,12 +147,14 @@ vstack state is the actual problem.
    (near `swarm.c:3254`) and import (near `swarm.c:3284`).
 3. **`OP_ITER_CLOSE`.** Add the same flags and fall through to the existing
    `OP_DESTRUCTURE_CLOSE` case.
-4. **`OP_ITER_GET_VALUE` -- second phase, not this one.** Only reached by generic iterators
-   (user `Symbol.iterator`, generators), which is why it never appeared in the
-   array-backed warning. It unpacks `{value, done}`: no iterator state, no GC subtlety, so
-   the opcode itself is easy. What is missing is evidence -- measure a generic-iterator
-   loop the way the array case was measured before deciding it is worth doing, and confirm
-   with `dump/vm:op-warn` that it is the only remaining blocker for those loops.
+4. **Validate against generic iterators, not just arrays.** Step 2 opts in user
+   `Symbol.iterator` objects and generators automatically. Those reach `sv_vm_call` from
+   inside `OP_ITER_NEXT`, so user code runs across the back-edge and can reassign the loop
+   variable, close the iterator, or throw. Cover all of: array, `Map.values()`, string,
+   user `Symbol.iterator`, generator, `return()` on early `break`, and a throw mid-loop.
+
+   `OP_ITER_GET_VALUE` needs no work. The compiler never emits it -- it is dead, and worth
+   deleting separately rather than flagging.
 5. **Re-measure and re-run `dump/vm:op-warn` on the real `dotick`.** Steps 2-3 only remove
    the veto; if anything else in that function is ineligible the win will not materialise,
    and the warning names the blocker directly.
