@@ -16,6 +16,7 @@ Store in-progress execution plans here.
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
+- [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Stream Property Surface](stream-property-surface.md)
 - [WICG Observable Migration](wicg-observable.md)

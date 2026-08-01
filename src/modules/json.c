@@ -535,6 +535,11 @@ static json_write_t json_write_array(
     if (!json_write_indent(ctx, out, depth + 1)) goto abort;
     ant_value_t elem = js_arr_get(js, val, i);
 
+    if (is_err(elem) || js->thrown_exists) {
+      json_capture_error(ctx, elem);
+      goto abort;
+    }
+
     if (has_replacer || is_special_object(elem)) uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
     else idxstr[0] = '\0';
 
@@ -963,7 +968,7 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
   char *str = js_getstr(js, space, &byte_len);
   if (!str || !byte_len) return true;
 
-  size_t units = utf16_strlen(str, byte_len);
+  size_t units = (size_t)str_utf16_len(js, space);
   size_t take = byte_len;
 
   if (units > 10) {

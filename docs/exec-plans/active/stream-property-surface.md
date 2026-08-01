@@ -20,11 +20,21 @@ pre-existing gap, verified against a `master` build — none of it is a regressi
 - Own-property hygiene: `Object.keys(stream)` should not expose internals.
 - The two behavioural divergences the audit surfaced (`highWaterMark` default,
   `Writable.readable`).
-- Missing prototype methods, including the Node 17+ async iterator helpers.
-- Missing `node:stream` module exports.
 
 Out of scope: web streams (`stream/web`), `stream/promises`, and the `_readableState` /
 `_writableState` internal field layout beyond what the getters need.
+
+Also out of scope, and deliberately so:
+
+- Missing prototype methods, including the Node 17+ async iterator helpers. Audited under
+  "Missing prototype methods" below so the gap is on record, but deferred to its own plan
+  by task 9; the 12 async helpers want `iterator` landed first.
+- Missing `node:stream` module exports. Audited under "Missing module exports" below. No
+  task in this plan covers them and none should — they are independent of the instance
+  property surface this plan is about.
+
+Both are recorded here as evidence from the same audit, not as work items. Anything that
+moves into scope needs a task and a validation step, not just a mention.
 
 ## Constraints
 
@@ -124,8 +134,11 @@ Ordered so each step is independently landable and testable.
    audit the ~9 `js_truthy(js_get(state,"flowing"))` sites — all want "not flowing" for
    both null and false, so they should be unaffected, but confirm each.
 4. **Own-property hygiene.** Stop `stream_init_base` publishing `readable`/`_paused`/
-   `_pipes`/`_streamOptions` as enumerable own properties; move them to slots or
-   non-enumerable descriptors.
+   `_pipes`/`_streamOptions` as own properties; move them to slots or prototype accessors.
+
+   A non-enumerable own descriptor is **not** sufficient: non-enumerability keeps a key out
+   of `Object.keys`, but `Object.hasOwn` still reports it, which is what task 7 asserts.
+   The state has to leave the instance entirely.
 
    This **necessarily** changes `Writable.readable` from `false` to `undefined`, matching
    node -- there is no way to stop publishing the own property and keep the old value. So

@@ -20,6 +20,7 @@ export function targets() {
     'test_jit_inline_call_errors.cjs',
     'test_string_length_accumulation.cjs',
     'test_property_location_stress.cjs',
+    'test_accessor_undefined_result.cjs',
     'test_child_process_sigpipe_reset.cjs',
     'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
@@ -53,7 +54,11 @@ export function targets() {
     { group: 'servers', type: 'server', name: 'elysia', entry: 'examples/npm/elysia' }
   );
 
-  const scrubPid = [[/\b\d{3,7}\b/g, '<pid>']];
+  const scrubPid = [
+    [/\bpid \d+\b/g, 'pid <pid>'],
+    [/\bppid=\d+/g, 'ppid=<pid>'],
+    [/\bgot \d+ pids\b/g, 'got <pid> pids']
+  ];
   list.push(
     { group: 'examples', type: 'snapshot', name: 'smoke', entry: 'examples/npm/smoke/index.js' },
     { group: 'examples', type: 'snapshot', name: 'djot', entry: 'examples/npm/djot/index.ts' },

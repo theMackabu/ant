@@ -18,13 +18,23 @@ user-defined `Symbol.iterator` objects and generators.
 Generic iterators cannot be excluded, because the compiler emits the same two opcodes for
 them. `sv_iter_advance`'s `default:` case (`src/silver/ops/iteration.h`) calls `next()`,
 checks the result is an object, and unpacks `{value, done}` inline -- all inside
-`OP_ITER_NEXT`. `OP_ITER_GET_VALUE` is emitted **nowhere**; `grep OP_ITER_GET_VALUE src/`
-finds it only in the opcode table and the interpreter dispatch label. It is a dead opcode.
-
-Confirm with the checked-in benchmark's sibling case:
+`OP_ITER_NEXT`. `ITER_GET_VALUE` is emitted **nowhere**. The opcode name is produced by the
+`OP_DEF` macro, so search for it without the `OP_` prefix, recursively, across both trees:
 
 ```console
-$ ANT_DEBUG="dump/vm:op-warn" ./build/ant /tmp/genericiter.mjs 2>&1 | grep ineligible | sort -u
+$ grep -rn 'ITER_GET_VALUE' src include
+src/silver/engine.c:2037:  L_ITER_GET_VALUE:   { sv_op_iter_get_value(vm, js);             NEXT(1); }
+include/silver/opcode.h:218:OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_off value done */
+```
+
+Those two hits are the opcode table and the interpreter dispatch label. Nothing emits it,
+so it is a dead opcode.
+
+Confirm the ineligible ops with the checked-in fixture, which covers an array, a generator
+and a hand-written `Symbol.iterator`:
+
+```console
+$ ANT_DEBUG="dump/vm:op-warn" ./build/ant examples/jit/generic_iterators.mjs 2>&1 | grep ineligible | sort -u
 jit: ineligible op ITER_CLOSE in arrayIter
 jit: ineligible op ITER_CLOSE in generatorIter
 jit: ineligible op ITER_CLOSE in userIter

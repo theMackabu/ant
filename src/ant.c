@@ -4749,11 +4749,10 @@ static bool try_accessor_getter(ant_t *js, ant_value_t obj, const char *key, siz
   lkp_with_getter(js, obj, key, key_len, &getter, &has_getter);
 
   ant_value_t result = call_proto_accessor(js, obj, getter, has_getter, NULL, 0, false);
-  if (vtype(result) != T_UNDEF) {
-    *out = result;
-    return true;
-  }
-  return false;
+  if (!has_getter && vtype(result) == T_UNDEF) return false;
+
+  *out = result;
+  return true;
 }
 
 typedef struct {
@@ -4904,7 +4903,7 @@ static ant_offset_t builder_utf16_len_lazy(ant_t *js, ant_value_t value) {
   else {
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next)
       total += str_utf16_len(js, chunk->value);
-    total += (ant_offset_t)utf16_strlen_bytes(builder->tail, builder->tail_len);
+    total += (ant_offset_t)utf16_strlen(builder->tail, builder->tail_len);
   }
 
   builder->cached = tov((double)total);
@@ -8299,6 +8298,40 @@ static bool define_lookup_existing_meta(
   return true;
 }
 
+static void array_materialize_dense_for_define(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
+  if (!key || !array_obj_ptr(obj)) return;
+
+  unsigned long idx = 0;
+  if (!parse_array_index(key, klen, ((ant_offset_t)UINT32_MAX), &idx)) return;
+
+  ant_offset_t doff = get_dense_buf(obj);
+  if (!doff) return;
+
+  ant_offset_t cap = dense_capacity(doff);
+  bool moved = false;
+
+  for (ant_offset_t i = 0; i < cap; i++) {
+    ant_value_t existing = dense_get(doff, i);
+    if (is_empty_slot(existing)) continue;
+
+    char idxstr[16];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
+
+    dense_set(js, doff, i, T_EMPTY);
+    mkprop(
+      js, obj, js_mkstr(js, idxstr, idxlen), existing,
+      ANT_PROP_ATTR_ENUMERABLE | ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
+    );
+    moved = true;
+  }
+
+  if (!moved) return;
+
+  ant_object_t *ptr = array_obj_ptr(obj);
+  if (ptr) ptr->flags.fast_array = 0;
+  array_mark_may_have_holes(obj);
+}
+
 // TODO: decompose this huge function into small pieces
 static ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor) {
   if (vtype(obj) == T_CFUNC) obj = js_cfunc_promote(js, obj);
@@ -8461,6 +8494,8 @@ static ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_
     return obj;
   }
   
+  if (!sym_key) array_materialize_dense_for_define(js, as_obj, prop_str, (size_t)prop_len);
+
   ant_prop_loc_t existing_off = sym_key
     ? lkp_sym(as_obj, sym_off)
     : lkp(js, as_obj, prop_str, prop_len);
@@ -12338,7 +12373,7 @@ static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int na
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
+  size_t utf16_len = (size_t)str_utf16_len(js, str);
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
   
@@ -12368,7 +12403,7 @@ static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs
   if (vtype(str) != T_STR) return js_mkerr(js, "substr called on non-string");
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
+  size_t utf16_len = (size_t)str_utf16_len(js, str);
   
   if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
   
@@ -12613,7 +12648,7 @@ static ant_value_t builtin_string_slice(ant_t *js, ant_value_t *args, int nargs)
   
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
+  size_t utf16_len = (size_t)str_utf16_len(js, str);
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len = D(utf16_len);
   
@@ -12706,8 +12741,8 @@ static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int n
     return mkval(T_BOOL, memcmp(str_ptr + start, search_ptr, search_len) == 0 ? 1 : 0);
   }
 
-  ant_offset_t str_units = (ant_offset_t)utf16_strlen(str_ptr, str_len);
-  ant_offset_t search_units = (ant_offset_t)utf16_strlen(search_ptr, search_len);
+  ant_offset_t str_units = str_utf16_len(js, str);
+  ant_offset_t search_units = str_utf16_len(js, search);
   ant_offset_t start = nargs >= 2 ? string_clamped_position(js, args[1], str_units) : 0;
   
   if (search_units > str_units - start) return mkval(T_BOOL, 0);
@@ -12751,8 +12786,8 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
     return mkval(T_BOOL, memcmp(str_ptr + start, search_ptr, search_len) == 0 ? 1 : 0);
   }
 
-  ant_offset_t str_units = (ant_offset_t)utf16_strlen(str_ptr, str_len);
-  ant_offset_t search_units = (ant_offset_t)utf16_strlen(search_ptr, search_len);
+  ant_offset_t str_units = str_utf16_len(js, str);
+  ant_offset_t search_units = str_utf16_len(js, search);
   
   ant_offset_t end = (nargs >= 2 && vtype(args[1]) != T_UNDEF)
     ? string_clamped_position(js, args[1], str_units)
@@ -13179,9 +13214,9 @@ static ant_value_t builtin_string_padStart(ant_t *js, ant_value_t *args, int nar
   if (target_len <= 0) return str;
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  size_t str_utf16_len = utf16_strlen(str_ptr, (size_t)str_len);
+  size_t str_units_len = (size_t)str_utf16_len(js, str);
   
-  if ((size_t)target_len <= str_utf16_len) return str;
+  if ((size_t)target_len <= str_units_len) return str;
   
   ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
@@ -13190,11 +13225,11 @@ static ant_value_t builtin_string_padStart(ant_t *js, ant_value_t *args, int nar
   }
   ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *)(uintptr_t)(pad_off);
-  size_t pad_utf16_len = utf16_strlen(pad_str, (size_t)pad_len);
+  size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
   
   if (pad_utf16_len == 0) return str;
   
-  size_t fill_utf16_len = (size_t)target_len - str_utf16_len;
+  size_t fill_utf16_len = (size_t)target_len - str_units_len;
   size_t full_repeats = fill_utf16_len / pad_utf16_len;
   size_t rem_utf16 = fill_utf16_len % pad_utf16_len;
   size_t rem_bytes = 0;
@@ -13239,9 +13274,9 @@ static ant_value_t builtin_string_padEnd(ant_t *js, ant_value_t *args, int nargs
   if (target_len <= 0) return str;
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  size_t str_utf16_len = utf16_strlen(str_ptr, (size_t)str_len);
+  size_t str_units_len = (size_t)str_utf16_len(js, str);
   
-  if ((size_t)target_len <= str_utf16_len) return str;
+  if ((size_t)target_len <= str_units_len) return str;
   
   ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
@@ -13250,11 +13285,11 @@ static ant_value_t builtin_string_padEnd(ant_t *js, ant_value_t *args, int nargs
   }
   ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *)(uintptr_t)(pad_off);
-  size_t pad_utf16_len = utf16_strlen(pad_str, (size_t)pad_len);
+  size_t pad_utf16_len = (size_t)str_utf16_len(js, pad_val);
   
   if (pad_utf16_len == 0) return str;
   
-  size_t fill_utf16_len = (size_t)target_len - str_utf16_len;
+  size_t fill_utf16_len = (size_t)target_len - str_units_len;
   size_t full_repeats = fill_utf16_len / pad_utf16_len;
   size_t rem_utf16 = fill_utf16_len % pad_utf16_len;
   size_t rem_bytes = 0;

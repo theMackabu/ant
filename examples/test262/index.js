@@ -117,7 +117,6 @@ const byteStatSuffixes = new Set([
   'shapes',
   'closures',
   'upvalues',
-  'propRefs',
   'total',
   'buffers',
   'code',

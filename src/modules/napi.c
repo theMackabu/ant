@@ -1717,7 +1717,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_string_utf16(
   const char *str = js_getstr(nenv->js, (ant_value_t)value, &byte_len);
   if (!str) return napi_set_last(env, napi_string_expected, "string expected");
 
-  size_t utf16_len = utf16_strlen(str, byte_len);
+  size_t utf16_len = (size_t)str_utf16_len(nenv->js, (ant_value_t)value);
   if (result) *result = utf16_len;
   if (!buf || bufsize == 0) return napi_set_last(env, napi_ok, NULL);
 

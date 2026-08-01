@@ -81,6 +81,19 @@ Public API: `js_propref_load` -> `js_prop_load(ant_prop_loc_t)`, `js_saveval` ->
 (it was already marked `// TODO: deprecate`; its only caller used the handle as a
 success flag and now calls `js_mkprop_fast`). This is an ABI break for embedders.
 
+Taken deliberately, with no compatibility shim. A shim is not merely undesirable here, it
+is not implementable: the old entry points took a `uint32_t` handle into `js->prop_refs`,
+and the whole point of this work was deleting that table. Keeping the signatures alive
+would mean keeping the table alive, which is the memory the change exists to reclaim. The
+replacements carry an `ant_object_t *` plus a slot, which no handle can be reconstructed
+into after the table is gone.
+
+Ant is pre-1.0 and has no published ABI contract, so there is no SONAME to bump and no
+supported embedder release to migrate from. Embedders on these two symbols update the call
+sites; the mapping above is the whole migration. Revisit this position when a stable
+release exists — at that point removals like this one need the versioning and deprecation
+window that would be ceremony today.
+
 ## Results
 
 Peak RSS, PGO release build, versus `af22111a`:

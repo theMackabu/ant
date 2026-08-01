@@ -122,7 +122,7 @@ char *form_urlencode_n(const char *str, size_t len) {
     snprintf(out + j, 4, "%%%02X", c);
     j += 3;
   }}
-  
+
   out[j] = '\0';
   return out;
 }
@@ -132,14 +132,15 @@ char *form_urlencode(const char *str) {
   return form_urlencode_n(str, strlen(str));
 }
 
-char *form_urldecode(const char *str) {
+char *form_urldecode_len(const char *str, size_t *out_len) {
+  if (out_len) *out_len = 0;
   if (!str) return strdup("");
   size_t len = strlen(str);
   char *out = malloc(len + 1);
-  
+
   if (!out) return strdup("");
   size_t j = 0;
-  
+
   for (size_t i = 0; i < len; i++) {
     if (str[i] == '+') out[j++] = ' ';
     else if (
@@ -155,17 +156,19 @@ char *form_urldecode(const char *str) {
   }
   
   out[j] = '\0';
+  if (out_len) *out_len = j;
   return out;
 }
 
-char *url_decode_component(const char *str) {
+char *url_decode_component_len(const char *str, size_t *out_len) {
+  if (out_len) *out_len = 0;
   if (!str) return strdup("");
   size_t len = strlen(str);
   char *out = malloc(len + 1);
-  
+
   if (!out) return strdup("");
   size_t j = 0;
-  
+
   for (size_t i = 0; i < len; i++) {
     if (
       str[i] == '%' && i + 2 < len &&
@@ -178,9 +181,18 @@ char *url_decode_component(const char *str) {
       i += 2;
     } else out[j++] = str[i];
   }
-  
+
   out[j] = '\0';
+  if (out_len) *out_len = j;
   return out;
+}
+
+char *form_urldecode(const char *str) {
+  return form_urldecode_len(str, NULL);
+}
+
+char *url_decode_component(const char *str) {
+  return url_decode_component_len(str, NULL);
 }
 
 static char *ada_string_dup(ada_string value) {

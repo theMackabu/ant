@@ -2529,7 +2529,7 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
       free(decoded);
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
     } else if (encoding == ENC_UCS2) {
-      size_t unit_count = utf16_strlen(str, len);
+      size_t unit_count = (size_t)str_utf16_len(js, args[0]);
       size_t decoded_len = unit_count * 2;
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
@@ -3080,7 +3080,7 @@ static ant_value_t buffer_encode_search_string(ant_t *js, ant_value_t value, Buf
     *out_len = decoded_len;
     *owned = decoded;
   } else if (encoding == ENC_UCS2) {
-    size_t unit_count = utf16_strlen(str, len);
+    size_t unit_count = (size_t)str_utf16_len(js, str_value);
     size_t decoded_len = unit_count * 2;
     uint8_t *decoded = malloc(decoded_len == 0 ? 1 : decoded_len);
     if (!decoded) return js_mkerr(js, "Failed to allocate string");

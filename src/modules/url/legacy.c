@@ -156,9 +156,17 @@ static bool legacy_simple_path(const char *s, size_t len, size_t *path_len, bool
   return true;
 }
 
-static void legacy_query_add(ant_t *js, ant_value_t obj, const char *k, const char *v) {
+static void legacy_query_add(
+  ant_t *js, ant_value_t obj, const char *k, size_t k_len, const char *v, size_t v_len
+) {
+  // TODO: k_len is unused for now: js_get/js_set take NUL-terminated keys, and property keys
+  // with an embedded NUL are truncated by the intern layer regardless of what this site
+  // does (docs/exec-plans/active/nul-keys-and-array-includes.md, part 1). The decoder
+  // already produces the length, so it is threaded through to make this site correct the
+  // moment length-carrying key lookups exist.
+  (void)k_len;
   ant_value_t existing = js_get(js, obj, k);
-  ant_value_t value = js_mkstr(js, v, strlen(v));
+  ant_value_t value = js_mkstr(js, v, v_len);
 
   if (is_undefined(existing)) {
     js_set(js, obj, k, value);
@@ -190,9 +198,10 @@ static ant_value_t legacy_query_object(ant_t *js, const char *query, size_t len)
       char *raw_v = eq ? strndup(eq + 1, pair_len - (size_t)(eq - pair) - 1) : strdup("");
 
       if (raw_k && raw_v) {
-        char *k = form_urldecode(raw_k);
-        char *v = form_urldecode(raw_v);
-        if (k && v) legacy_query_add(js, obj, k, v);
+        size_t k_len = 0, v_len = 0;
+        char *k = form_urldecode_len(raw_k, &k_len);
+        char *v = form_urldecode_len(raw_v, &v_len);
+        if (k && v) legacy_query_add(js, obj, k, k_len, v, v_len);
         free(k); free(v);
       }
 
@@ -356,11 +365,12 @@ ant_value_t legacy_url_parse_impl(
 
       raw = strndup(rest, (size_t)at_sign);
       if (!raw) goto oom;
-      scratch.auth = url_decode_component(raw);
+      size_t auth_len = 0;
+      scratch.auth = url_decode_component_len(raw, &auth_len);
       free(raw);
       if (!scratch.auth) goto oom;
 
-      url.auth = url_slice(scratch.auth, strlen(scratch.auth));
+      url.auth = url_slice(scratch.auth, auth_len);
       start = (size_t)at_sign + 1;
     }
 

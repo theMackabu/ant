@@ -77,7 +77,6 @@ interface AntAllocStats {
   shapes: number;
   closures: number;
   upvalues: number;
-  propRefs: number;
   total: number;
 }
 
