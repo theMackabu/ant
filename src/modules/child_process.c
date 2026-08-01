@@ -1865,12 +1865,21 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   
   bool as_string = sync_encoding_wants_string(js, options_arg);
 
+  ant_value_t stdout_val = sync_make_output(js, stdout_buf, stdout_len, as_string);
+  ant_value_t stderr_val = sync_make_output(js, stderr_buf, stderr_len, as_string);
+
   ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", sync_make_output(js, stdout_buf, stdout_len, as_string));
-  js_set(js, result, "stderr", sync_make_output(js, stderr_buf, stderr_len, as_string));
+  js_set(js, result, "stdout", stdout_val);
+  js_set(js, result, "stderr", stderr_val);
   js_set(js, result, "status", js_mknum((double)exit_code));
   js_set(js, result, "signal", js_mknull());
   js_set(js, result, "pid", js_mknum((double)pid));
+
+  ant_value_t output = js_mkarr(js);
+  js_arr_push(js, output, js_mknull());
+  js_arr_push(js, output, stdout_val);
+  js_arr_push(js, output, stderr_val);
+  js_set(js, result, "output", output);
 
   if (stdout_buf) free(stdout_buf);
   if (stderr_buf) free(stderr_buf);
@@ -2237,21 +2246,14 @@ static bool sync_build_argv(sync_res_t *res, bool use_shell, size_t command_len)
   return res->argv[0] && res->argv[1];
 }
 
+extern char **environ;
+
 static void sync_child_exec(
   const sync_pipes_t *pipes, const sync_opts_t *opts, const sync_res_t *res
 ) {
   signal(SIGPIPE, SIG_DFL);
   if (res->cwd && chdir(res->cwd) != 0) _exit(127);
-
-  if (res->env) {
-    for (char **entry = res->env; *entry; entry++) {
-      char *eq = strchr(*entry, '=');
-      if (!eq) continue;
-      *eq = '\0';
-      setenv(*entry, eq + 1, 1);
-      *eq = '=';
-    }
-  }
+  if (res->env) environ = res->env;
 
   static const int target_fd[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
   static const int null_flags[3] = { O_RDONLY, O_WRONLY, O_WRONLY };

@@ -11,9 +11,9 @@ declare module 'child_process' {
   }
 
   class ChildProcess extends EventEmitter {
-    stdout: Readable;
-    stderr: Readable;
-    stdin: Writable;
+    stdout: Readable | null;
+    stderr: Readable | null;
+    stdin: Writable | null;
     exitCode: number | null;
     signalCode: string | null;
     pid: number;

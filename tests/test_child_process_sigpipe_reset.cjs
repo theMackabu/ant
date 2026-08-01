@@ -10,6 +10,13 @@
 // SIGPIPE disposition, so that pipeline terminates either way.
 const { spawnSync, spawn, exec } = require('child_process');
 
+// bash is the required witness (see header comment); fail loudly if it is absent
+// rather than letting empty output read as success on minimal images
+if (spawnSync('bash', ['-c', 'true']).status !== 0) {
+  console.log('SKIP: bash not available; trap-based SIGPIPE witness needs bash');
+  process.exit(0);
+}
+
 let failures = 0;
 function check(label, actual) {
   const ok = actual === '';
@@ -33,7 +40,7 @@ function viaSpawn() {
 
 function viaExec() {
   return new Promise((resolve) => {
-    exec('bash -c "trap -p SIGPIPE"', (err, stdout) => resolve(stdout));
+    exec('bash -c "trap -p SIGPIPE"', (err, stdout) => resolve(err ? `exec error: ${err.message}` : stdout));
   });
 }
 

@@ -24,6 +24,8 @@ class Child {
     this.output = '';
     this.exitCode = null;
     this.proc = spawn(ANT, [entry, ...args]);
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
     this.proc.stdout.on('data', d => {
       this.output += d;
     });

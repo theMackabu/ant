@@ -3,6 +3,13 @@
 // fork/exec path. Every expectation here was checked against node first.
 const { execSync, execFileSync, spawnSync } = require('child_process');
 
+// the timeout/maxBuffer/killSignal paths exercised below exist only in the POSIX
+// spawn_sync_impl, and the shell commands are POSIX-specific
+if (process.platform === 'win32') {
+  console.log('SKIP: POSIX-only execSync option coverage');
+  process.exit(0);
+}
+
 let failures = 0;
 function eq(label, actual, expected) {
   const ok = actual === expected;
@@ -88,11 +95,13 @@ eq('honours input', execSync('cat', { input: 'fed-on-stdin', encoding: 'utf8' })
   eq('output[2] is stderr', r.output[2], '');
 }
 
-// shell may name a specific shell rather than just being a boolean
+// shell may name a specific shell rather than just being a boolean; minimal images
+// may only ship /bin/sh, so probe for bash and fall back
+const shellPath = spawnSync('/bin/bash', ['-c', 'true']).status === 0 ? '/bin/bash' : '/bin/sh';
 eq(
   'shell as a path',
-  execSync('echo $0', { shell: '/bin/bash', encoding: 'utf8' }).trim(),
-  '/bin/bash'
+  execSync('echo $0', { shell: shellPath, encoding: 'utf8' }).trim(),
+  shellPath
 );
 
 // maxBuffer caps collected output and reports ENOBUFS, and must not wait for a child

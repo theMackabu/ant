@@ -34,8 +34,9 @@ or evaluation step, object is swept or its shape freed, then `mkprop` runs).
 
 ## Constraints
 
-- No GC-stress hook exists today (`grep getenv src/gc*` is empty), so the
-  repro is probabilistic. Building a deterministic repro is step one.
+- No GC-stress hook exists today (`grep -rn "getenv\|GC_STRESS" src/gc/ src/gc.c`
+  finds nothing), so the repro is probabilistic. Building a deterministic repro
+  is step one.
 
 ## Task list
 
