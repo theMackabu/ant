@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <utarray.h>
 
 #ifdef _WIN32
@@ -32,6 +33,7 @@
 #include "gc/roots.h"
 #include "silver/engine.h"
 
+#include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/process.h"
@@ -108,6 +110,8 @@ struct child_process_s {
   bool keep_alive;
   bool discarded;
   int pending_closes;
+  int spawn_error;
+  char *spawn_file;
   child_write_req_t *pending_writes;
   char *cwd;
   stdio_mode_t stdio_modes[3];
@@ -269,6 +273,7 @@ static void free_child_process(child_process_t *cp) {
   if (cp->stdout_buf) free(cp->stdout_buf);
   if (cp->stderr_buf) free(cp->stderr_buf);
   if (cp->cwd) free(cp->cwd);
+  if (cp->spawn_file) free(cp->spawn_file);
   if (cp->stdin_ctx) free(cp->stdin_ctx);
   if (cp->stdout_ctx) free(cp->stdout_ctx);
   if (cp->stderr_ctx) free(cp->stderr_ctx);
@@ -364,6 +369,47 @@ static void check_completion(child_process_t *cp) {
     
     try_free_child(cp);
   }
+}
+
+static ant_value_t child_spawn_failure_cb(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t child = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  child_process_t *cp = get_child_process(child);
+  if (!cp) return js_mkundef();
+
+  const char *file = cp->spawn_file ? cp->spawn_file : "";
+  const char *name = uv_err_name(cp->spawn_error);
+
+  char syscall[224];
+  char message[256];
+  snprintf(syscall, sizeof(syscall), "spawn %s", file);
+  snprintf(message, sizeof(message), "%s %s", syscall, name);
+
+  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+
+  if (is_object_type(error)) {
+    js_set(js, error, "code", js_mkstr(js, name, strlen(name)));
+    js_set(js, error, "errno", js_mknum((double)cp->spawn_error));
+    js_set(js, error, "syscall", js_mkstr(js, syscall, strlen(syscall)));
+    js_set(js, error, "path", js_mkstr(js, file, strlen(file)));
+  }
+
+  ant_value_t error_args[1] = { error };
+  emit_event(cp, "error", error_args, 1);
+
+  cp->exited = true;
+  cp->exit_code = cp->spawn_error;
+  cp->term_signal = 0;
+  check_completion(cp);
+
+  return js_mkundef();
+}
+
+static void child_schedule_spawn_failure(ant_t *js, child_process_t *cp) {
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t callback = js_heavy_mkfun(js, child_spawn_failure_cb, cp->child_obj);
+
+  js_resolve_promise(js, promise, js_mkundef());
+  promise_mark_handled(js_promise_then(js, promise, callback, js_mkundef()));
 }
 
 static void on_handle_close(uv_handle_t *handle) {
@@ -464,7 +510,6 @@ static void on_child_read(
   size_t *acc_cap = is_stdout ? &cp->stdout_cap : &cp->stderr_cap;
   size_t *seen = is_stdout ? &cp->stdout_seen : &cp->stderr_seen;
   
-  const char *text_event = is_stdout ? "stdout" : "stderr";
   ant_value_t obj = child_stream_obj(cp, kind);
 
   if (nread > 0) {
@@ -480,11 +525,6 @@ static void on_child_read(
     if (cp->collect_output && *acc && *acc_len + (size_t)nread <= *acc_cap) {
       memcpy(*acc + *acc_len, buf->base, nread);
       *acc_len += nread;
-    }
-
-    if (eventemitter_listener_count(cp->js, cp->child_obj, text_event) > 0) {
-      ant_value_t text_args[1] = { js_mkstr(cp->js, buf->base, nread) };
-      emit_event(cp, text_event, text_args, 1);
     }
 
     if (vtype(obj) == T_OBJ) {
@@ -1246,7 +1286,10 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   if (cwd) options.cwd = cwd;
   if (detached) options.flags = UV_PROCESS_DETACHED;
   int r = uv_spawn(uv_default_loop(), &cp->process, &options);
-  
+
+  char spawn_file[192];
+  snprintf(spawn_file, sizeof(spawn_file), "%s", options.file ? options.file : "");
+
   if (use_shell) {
     free(final_args[0]);
     free(final_args[1]);
@@ -1262,8 +1305,22 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   free_env_array(env);
   
   if (r < 0) {
-    discard_unspawned_child(cp);
-    return js_mkerr(js, "Failed to spawn process: %s", uv_strerror(r));
+    cp->spawn_error = r;
+    cp->spawn_file = strdup(spawn_file);
+
+    for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+      uv_pipe_t *pipe = child_pipe(cp, i);
+      bool *closed = child_closed_flag(cp, i);
+
+      if (closed) *closed = true;
+      if (child_stdio_is_pipe(cp, i) && pipe) close_child_handle(cp, (uv_handle_t *)pipe);
+    }
+
+    add_pending_child(cp);
+    cp->child_obj = create_child_object(js, cp);
+    child_schedule_spawn_failure(js, cp);
+
+    return cp->child_obj;
   }
   
   static const uv_read_cb read_cbs[] = { NULL, on_stdout_read, on_stderr_read };
@@ -1601,96 +1658,74 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   return child;
 }
 
-static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
-  
-  size_t cmd_len;
-  char *cmd = js_getstr(js, args[0], &cmd_len);
-  char *cmd_str = strndup(cmd, cmd_len);
-  
-  FILE *fp = popen(cmd_str, "r");
-  free(cmd_str);
-  
-  if (!fp) {
-    return js_mkerr(js, "Failed to execute command");
+static bool sync_encoding_wants_string(ant_t *js, ant_value_t options_arg) {
+  if (!is_special_object(options_arg)) return false;
+
+  ant_value_t encoding_val = js_get(js, options_arg, "encoding");
+  if (vtype(encoding_val) != T_STR) return false;
+
+  size_t encoding_len = 0;
+  char *encoding = js_getstr(js, encoding_val, &encoding_len);
+  if (!encoding) return false;
+
+  if (encoding_len == 6 && strncmp(encoding, "buffer", 6) == 0) return false;
+  return true;
+}
+
+static bool sync_value_bytes(ant_t *js, ant_value_t value, const char **out, size_t *len) {
+  *out = NULL;
+  *len = 0;
+
+  if (vtype(value) == T_STR) {
+    *out = js_getstr(js, value, len);
+    return *out != NULL;
   }
-  
-  char *output = NULL;
-  size_t output_len = 0;
-  size_t output_cap = 4096;
-  output = malloc(output_cap);
-  
-  if (!output) {
-    pclose(fp);
-    return js_mkerr(js, "Out of memory");
+
+  const uint8_t *bytes = NULL;
+  if (buffer_source_get_bytes(js, value, &bytes, len)) {
+    *out = (const char *)bytes;
+    return true;
   }
-  
-  char buffer[4096];
-  while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-    size_t len = strlen(buffer);
-    if (output_len + len >= output_cap) {
-      output_cap *= 2;
-      char *new_output = realloc(output, output_cap);
-      if (!new_output) {
-        free(output);
-        pclose(fp);
-        return js_mkerr(js, "Out of memory");
-      }
-      output = new_output;
-    }
-    memcpy(output + output_len, buffer, len);
-    output_len += len;
-  }
-  
-  int status = pclose(fp);
-#ifdef _WIN32
-  int exit_code = status;
-#else
-  int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-#endif
-  
-  if (output_len > 0 && output[output_len - 1] == '\n') {
-    output_len--;
-  }
-  
-  if (exit_code != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Command failed with exit code %d", exit_code);
-    free(output); return js_mkerr(js, "%s", err_msg);
-  }
-  
-  ant_value_t result = js_mkstr(js, output, output_len);
-  free(output);
-  return result;
+
+  return false;
+}
+
+static ant_value_t sync_make_output(ant_t *js, const char *bytes, size_t len, bool as_string) {
+  if (as_string) return js_mkstr(js, bytes ? bytes : "", len);
+
+  ArrayBufferData *buffer = create_array_buffer_data(len);
+  if (!buffer) return js_mkerr(js, "Out of memory");
+  if (bytes && len > 0) memcpy(buffer->data, bytes, len);
+
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
 }
 
 #ifdef _WIN32
-static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
-  
+
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
   char *cmd_str = strndup(cmd, cmd_len);
-  
+
   char **spawn_args = NULL;
   int spawn_argc = 0;
   char *input = NULL;
   size_t input_len = 0;
-  bool use_shell = false;
+  bool use_shell = force_shell;
   ant_value_t options_arg = child_process_options_arg(args, nargs);
-  
+
   if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
-  
+
   if (is_special_object(options_arg)) {
     ant_value_t input_val = js_get(js, options_arg, "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
-    use_shell = js_truthy(js, js_get(js, options_arg, "shell"));
+    if (!use_shell) use_shell = js_truthy(js, js_get(js, options_arg, "shell"));
   }
-  
+
   size_t cmdline_len = cmd_len + 3;
   for (int i = 0; i < spawn_argc; i++) {
     cmdline_len += strlen(spawn_args[i]) + 3;
@@ -1812,17 +1847,23 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
   
+  bool as_string = sync_encoding_wants_string(js, options_arg);
+
   ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", js_mkstr(js, stdout_buf ? stdout_buf : "", stdout_len));
-  js_set(js, result, "stderr", js_mkstr(js, stderr_buf ? stderr_buf : "", stderr_len));
+  js_set(js, result, "stdout", sync_make_output(js, stdout_buf, stdout_len, as_string));
+  js_set(js, result, "stderr", sync_make_output(js, stderr_buf, stderr_len, as_string));
   js_set(js, result, "status", js_mknum((double)exit_code));
   js_set(js, result, "signal", js_mknull());
   js_set(js, result, "pid", js_mknum((double)pid));
-  
+
   if (stdout_buf) free(stdout_buf);
   if (stderr_buf) free(stderr_buf);
-  
+
   return result;
+}
+
+static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
+  return spawn_sync_impl(js, args, nargs, false);
 }
 #else
 static void close_if_valid(int fd) {
@@ -1859,60 +1900,106 @@ static bool append_sync_output(char **buf, size_t *len, size_t *cap, const char 
   return true;
 }
 
-static bool read_sync_outputs(
-  int stdout_fd,
-  int stderr_fd,
-  char **stdout_buf,
-  size_t *stdout_len,
-  size_t *stdout_cap,
-  char **stderr_buf,
-  size_t *stderr_len,
-  size_t *stderr_cap
-) {
-  bool stdout_open = stdout_fd >= 0;
-  bool stderr_open = stderr_fd >= 0;
-  char buffer[4096];
+static uint64_t sync_now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
 
-  while (stdout_open || stderr_open) {
+typedef struct {
+  int fd;
+  char *buf;
+  size_t len;
+  size_t cap;
+  bool open;
+} sync_reader_t;
+
+typedef struct {
+  pid_t pid;
+  int timeout_ms;
+  int kill_signal;
+  size_t max_buffer;
+  bool timed_out;
+  bool over_buffer;
+} sync_read_ctl_t;
+
+static void sync_reader_init(sync_reader_t *reader, int fd) {
+  *reader = (sync_reader_t){ .fd = fd, .open = fd >= 0 };
+}
+
+static bool sync_reader_pump(sync_reader_t *reader, sync_read_ctl_t *ctl) {
+  char chunk[4096];
+  ssize_t n = read(reader->fd, chunk, sizeof(chunk));
+
+  if (n <= 0) {
+    close_if_valid(reader->fd);
+    reader->open = false;
+    return true;
+  }
+
+  size_t room = reader->len < ctl->max_buffer ? ctl->max_buffer - reader->len : 0;
+  size_t take = (size_t)n < room ? (size_t)n : room;
+  if (take < (size_t)n) ctl->over_buffer = true;
+
+  return append_sync_output(&reader->buf, &reader->len, &reader->cap, chunk, take);
+}
+
+static void sync_reader_shutdown(sync_reader_t *reader) {
+  if (!reader->open) return;
+  close_if_valid(reader->fd);
+  reader->open = false;
+}
+
+static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_read_ctl_t *ctl) {
+  uint64_t deadline = ctl->timeout_ms > 0 ? sync_now_ms() + (uint64_t)ctl->timeout_ms : 0;
+
+  while (out->open || err->open) {
     fd_set readfds;
     FD_ZERO(&readfds);
     int max_fd = -1;
 
-    if (stdout_open) {
-      FD_SET(stdout_fd, &readfds);
-      if (stdout_fd > max_fd) max_fd = stdout_fd;
-    }
-    if (stderr_open) {
-      FD_SET(stderr_fd, &readfds);
-      if (stderr_fd > max_fd) max_fd = stderr_fd;
+    sync_reader_t *sides[2] = { out, err };
+    for (int i = 0; i < 2; i++) {
+      if (!sides[i]->open) continue;
+      FD_SET(sides[i]->fd, &readfds);
+      if (sides[i]->fd > max_fd) max_fd = sides[i]->fd;
     }
 
-    int ready = select(max_fd + 1, &readfds, NULL, NULL, NULL);
+    struct timeval tv;
+    struct timeval *tv_ptr = NULL;
+
+    if (deadline) {
+      uint64_t now = sync_now_ms();
+      if (now >= deadline) {
+        if (ctl->pid > 0) kill(ctl->pid, ctl->kill_signal);
+        ctl->timed_out = true;
+        break;
+      } else {
+        uint64_t remaining = deadline - now;
+        tv.tv_sec = (time_t)(remaining / 1000);
+        tv.tv_usec = (suseconds_t)((remaining % 1000) * 1000);
+        tv_ptr = &tv;
+      }
+    }
+
+    int ready = select(max_fd + 1, &readfds, NULL, NULL, tv_ptr);
     if (ready < 0) {
       if (errno == EINTR) continue;
       return false;
     }
+    if (ready == 0) continue;
 
-    if (stdout_open && FD_ISSET(stdout_fd, &readfds)) {
-      ssize_t n = read(stdout_fd, buffer, sizeof(buffer));
-      if (n > 0) {
-        if (!append_sync_output(stdout_buf, stdout_len, stdout_cap, buffer, (size_t)n)) return false;
-      } else {
-        close_if_valid(stdout_fd);
-        stdout_open = false;
-      }
-    }
+    for (int i = 0; i < 2; i++)
+      if (sides[i]->open && FD_ISSET(sides[i]->fd, &readfds) && !sync_reader_pump(sides[i], ctl)) return false;
 
-    if (stderr_open && FD_ISSET(stderr_fd, &readfds)) {
-      ssize_t n = read(stderr_fd, buffer, sizeof(buffer));
-      if (n > 0) {
-        if (!append_sync_output(stderr_buf, stderr_len, stderr_cap, buffer, (size_t)n)) return false;
-      } else {
-        close_if_valid(stderr_fd);
-        stderr_open = false;
-      }
+    if (ctl->over_buffer) {
+      if (ctl->pid > 0) kill(ctl->pid, ctl->kill_signal);
+      break;
     }
   }
+
+  sync_reader_shutdown(out);
+  sync_reader_shutdown(err);
 
   return true;
 }
@@ -1927,227 +2014,426 @@ static void free_sync_exec_args(char **exec_args, bool use_shell) {
   free(exec_args);
 }
 
-static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
-  
-  size_t cmd_len;
-  char *cmd = js_getstr(js, args[0], &cmd_len);
-  char *cmd_str = strndup(cmd, cmd_len);
-  
-  char **spawn_args = NULL;
-  int spawn_argc = 0;
-  char *cwd = NULL;
-  char **env = NULL;
-  char *input = NULL;
-  size_t input_len = 0;
-  bool use_shell = false;
-  ant_value_t options_arg = child_process_options_arg(args, nargs);
-  stdio_mode_t stdio_modes[3] = {
-    STDIO_PIPE, STDIO_PIPE, STDIO_PIPE
+
+typedef struct {
+  char *command;
+  char **args;
+  int arg_count;
+  char *cwd;
+  char **env;
+  char *shell;
+  char **argv;
+  bool argv_owned;
+} sync_res_t;
+
+static void sync_res_free(sync_res_t *res) {
+  free_sync_exec_args(res->argv, res->argv_owned);
+  free(res->command);
+  free(res->cwd);
+  free(res->shell);
+  free_env_array(res->env);
+  free_args_array(res->args, res->arg_count);
+  *res = (sync_res_t){0};
+}
+
+typedef struct {
+  int fds[3][2];
+} sync_pipes_t;
+
+static void sync_pipes_init(sync_pipes_t *pipes) {
+  for (int i = 0; i < 3; i++) pipes->fds[i][0] = pipes->fds[i][1] = -1;
+}
+
+static void sync_pipes_close_all(sync_pipes_t *pipes) {
+  for (int i = 0; i < 3; i++) {
+    close_if_valid(pipes->fds[i][0]);
+    close_if_valid(pipes->fds[i][1]);
+    pipes->fds[i][0] = pipes->fds[i][1] = -1;
+  }
+}
+
+static bool sync_pipes_open(sync_pipes_t *pipes, const stdio_mode_t *modes) {
+  for (int i = 0; i < 3; i++)
+    if (modes[i] == STDIO_PIPE && pipe(pipes->fds[i]) < 0) return false;
+  return true;
+}
+
+typedef struct {
+  const char *input;
+  size_t input_len;
+  bool use_shell;
+  bool encode_as_string;
+  int timeout_ms;
+  int kill_signal;
+  size_t max_buffer;
+  stdio_mode_t stdio[3];
+  char label[128];
+} sync_opts_t;
+
+static const size_t SYNC_MAX_BUFFER_DEFAULT = 1024 * 1024;
+
+static int sync_parse_kill_signal(ant_t *js, ant_value_t value, int fallback) {
+  if (vtype(value) == T_NUM) {
+    int resolved = (int)js_getnum(value);
+    return resolved > 0 ? resolved : fallback;
+  }
+  if (vtype(value) != T_STR) return fallback;
+
+  size_t len = 0;
+  char *name = js_getstr(js, value, &len);
+
+  char buf[32];
+  if (!name || len >= sizeof(buf)) return fallback;
+
+  memcpy(buf, name, len);
+  buf[len] = '\0';
+
+  int resolved = process_signal_number(buf);
+  return resolved > 0 ? resolved : fallback;
+}
+
+static void sync_parse_options(
+  ant_t *js, ant_value_t options, bool force_shell, sync_opts_t *opts, sync_res_t *res
+) {
+  *opts = (sync_opts_t){
+    .use_shell = force_shell,
+    .kill_signal = SIGTERM,
+    .max_buffer = SYNC_MAX_BUFFER_DEFAULT,
+    .stdio = { STDIO_PIPE, STDIO_PIPE, STDIO_PIPE },
   };
-  
-  if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
-  
-  if (is_special_object(options_arg)) {
-    ant_value_t cwd_val = js_get(js, options_arg, "cwd");
-    if (vtype(cwd_val) == T_STR) {
-      size_t cwd_len;
-      char *cwd_str = js_getstr(js, cwd_val, &cwd_len);
-      cwd = strndup(cwd_str, cwd_len);
-    }
+  if (!is_special_object(options)) return;
 
-    ant_value_t input_val = js_get(js, options_arg, "input");
-    if (vtype(input_val) == T_STR) {
-      input = js_getstr(js, input_val, &input_len);
-    }
-
-    ant_value_t stdio_val = js_get(js, options_arg, "stdio");
-    parse_stdio_option(js, stdio_val, stdio_modes);
-
-    ant_value_t env_val = js_get(js, options_arg, "env");
-    env = parse_env_object(js, env_val);
-    use_shell = js_truthy(js, js_get(js, options_arg, "shell"));
+  ant_value_t cwd_val = js_get(js, options, "cwd");
+  if (vtype(cwd_val) == T_STR) {
+    size_t cwd_len = 0;
+    char *cwd = js_getstr(js, cwd_val, &cwd_len);
+    if (cwd) res->cwd = strndup(cwd, cwd_len);
   }
-  
-  int exec_argc = use_shell ? 3 : spawn_argc + 1;
-  char **exec_args = calloc((size_t)exec_argc + 1, sizeof(char *));
-  if (!exec_args) {
-    free(cmd_str);
-    if (cwd) free(cwd);
-    free_env_array(env);
-    free_args_array(spawn_args, spawn_argc);
-    return js_mkerr(js, "Out of memory");
-  }
-  
-  if (use_shell) {
-    size_t shell_command_len = cmd_len + 1;
-    for (int i = 0; i < spawn_argc; i++) shell_command_len += strlen(spawn_args[i]) + 2;
-    char *shell_command = malloc(shell_command_len);
-    if (!shell_command) {
-      free(exec_args);
-      free(cmd_str);
-      if (cwd) free(cwd);
-      free_env_array(env);
-      free_args_array(spawn_args, spawn_argc);
-      return js_mkerr(js, "Out of memory");
+
+  sync_value_bytes(js, js_get(js, options, "input"), &opts->input, &opts->input_len);
+  parse_stdio_option(js, js_get(js, options, "stdio"), opts->stdio);
+  res->env = parse_env_object(js, js_get(js, options, "env"));
+
+  ant_value_t shell_val = js_get(js, options, "shell");
+  if (vtype(shell_val) == T_STR) {
+    size_t shell_len = 0;
+    char *shell = js_getstr(js, shell_val, &shell_len);
+    if (shell && shell_len > 0) {
+      res->shell = strndup(shell, shell_len);
+      opts->use_shell = true;
     }
-    strcpy(shell_command, cmd_str);
-    for (int i = 0; i < spawn_argc; i++) {
-      strcat(shell_command, " ");
-      strcat(shell_command, spawn_args[i]);
+  } else if (!opts->use_shell) opts->use_shell = js_truthy(js, shell_val);
+
+  opts->encode_as_string = sync_encoding_wants_string(js, options);
+
+  ant_value_t timeout_val = js_get(js, options, "timeout");
+  if (vtype(timeout_val) == T_NUM) {
+    double ms = js_getnum(timeout_val);
+    if (ms > 0 && ms < (double)INT_MAX) opts->timeout_ms = (int)ms;
+  }
+
+  ant_value_t max_buffer_val = js_get(js, options, "maxBuffer");
+  if (vtype(max_buffer_val) == T_NUM) {
+    double bytes = js_getnum(max_buffer_val);
+    if (bytes >= 0) opts->max_buffer = bytes >= (double)SIZE_MAX ? SIZE_MAX : (size_t)bytes;
+  }
+
+  opts->kill_signal = sync_parse_kill_signal(js, js_get(js, options, "killSignal"), SIGTERM);
+}
+
+static bool sync_build_argv(sync_res_t *res, bool use_shell, size_t command_len) {
+  int count = use_shell ? 3 : res->arg_count + 1;
+  res->argv = calloc((size_t)count + 1, sizeof(char *));
+  if (!res->argv) return false;
+
+  if (!use_shell) {
+    res->argv[0] = res->command;
+    for (int i = 0; i < res->arg_count; i++) res->argv[i + 1] = res->args[i];
+    return true;
+  }
+
+  size_t len = command_len + 1;
+  for (int i = 0; i < res->arg_count; i++) len += strlen(res->args[i]) + 2;
+
+  char *line = malloc(len);
+  if (!line) return false;
+
+  res->argv_owned = true;
+  strcpy(line, res->command);
+  for (int i = 0; i < res->arg_count; i++) {
+    strcat(line, " ");
+    strcat(line, res->args[i]);
+  }
+
+  res->argv[0] = strdup(res->shell ? res->shell : "/bin/sh");
+  res->argv[1] = strdup("-c");
+  res->argv[2] = line;
+
+  return res->argv[0] && res->argv[1];
+}
+
+static void sync_child_exec(
+  const sync_pipes_t *pipes, const sync_opts_t *opts, const sync_res_t *res
+) {
+  signal(SIGPIPE, SIG_DFL);
+  if (res->cwd && chdir(res->cwd) != 0) _exit(127);
+
+  if (res->env) {
+    for (char **entry = res->env; *entry; entry++) {
+      char *eq = strchr(*entry, '=');
+      if (!eq) continue;
+      *eq = '\0';
+      setenv(*entry, eq + 1, 1);
+      *eq = '=';
     }
-    exec_args[0] = strdup("/bin/sh");
-    exec_args[1] = strdup("-c");
-    exec_args[2] = shell_command;
-  } else {
-    exec_args[0] = cmd_str;
-    for (int i = 0; i < spawn_argc; i++) exec_args[i + 1] = spawn_args[i];
   }
-  exec_args[exec_argc] = NULL;
-  
-  int stdin_pipe[2] = { -1, -1 };
-  int stdout_pipe[2] = { -1, -1 };
-  int stderr_pipe[2] = { -1, -1 };
 
-  if (
-    (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE && pipe(stdin_pipe) < 0) ||
-    (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_PIPE && pipe(stdout_pipe) < 0) ||
-    (stdio_modes[CHILD_STREAM_STDERR] == STDIO_PIPE && pipe(stderr_pipe) < 0)
-  ) {
-    close_if_valid(stdin_pipe[0]);
-    close_if_valid(stdin_pipe[1]);
-    close_if_valid(stdout_pipe[0]);
-    close_if_valid(stdout_pipe[1]);
-    close_if_valid(stderr_pipe[0]);
-    close_if_valid(stderr_pipe[1]);
-    free_sync_exec_args(exec_args, use_shell);
-    free(cmd_str);
-    if (cwd) free(cwd);
-    free_env_array(env);
-    free_args_array(spawn_args, spawn_argc);
-    return js_mkerr(js, "Failed to create pipes");
-  }
-  
-  pid_t pid = fork();
-  
-  if (pid < 0) {
-    close_if_valid(stdin_pipe[0]);
-    close_if_valid(stdin_pipe[1]);
-    close_if_valid(stdout_pipe[0]);
-    close_if_valid(stdout_pipe[1]);
-    close_if_valid(stderr_pipe[0]);
-    close_if_valid(stderr_pipe[1]);
-    free_sync_exec_args(exec_args, use_shell);
-    free(cmd_str);
-    if (cwd) free(cwd);
-    free_env_array(env);
-    free_args_array(spawn_args, spawn_argc);
-    return js_mkerr(js, "Fork failed");
-  }
-  
-  if (pid == 0) {
-    if (cwd && chdir(cwd) != 0) _exit(127);
-    if (env) {
-      for (char **entry = env; *entry; entry++) {
-        char *eq = strchr(*entry, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        setenv(*entry, eq + 1, 1);
-        *eq = '=';
-      }
+  static const int target_fd[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
+  static const int null_flags[3] = { O_RDONLY, O_WRONLY, O_WRONLY };
+
+  for (int i = 0; i < 3; i++) {
+    if (opts->stdio[i] == STDIO_PIPE) {
+      bool reading = i == CHILD_STREAM_STDIN;
+      int keep = reading ? pipes->fds[i][0] : pipes->fds[i][1];
+      int drop = reading ? pipes->fds[i][1] : pipes->fds[i][0];
+
+      close_if_valid(drop);
+      dup2(keep, target_fd[i]);
+      close_if_valid(keep);
+    } else if (opts->stdio[i] == STDIO_IGNORE) {
+      child_redirect_stdio_to_devnull(target_fd[i], null_flags[i]);
     }
-
-    if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE) {
-      close_if_valid(stdin_pipe[1]);
-      dup2(stdin_pipe[0], STDIN_FILENO);
-      close_if_valid(stdin_pipe[0]);
-    } else if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_IGNORE) {
-      child_redirect_stdio_to_devnull(STDIN_FILENO, O_RDONLY);
-    }
-
-    if (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_PIPE) {
-      close_if_valid(stdout_pipe[0]);
-      dup2(stdout_pipe[1], STDOUT_FILENO);
-      close_if_valid(stdout_pipe[1]);
-    } else if (stdio_modes[CHILD_STREAM_STDOUT] == STDIO_IGNORE) {
-      child_redirect_stdio_to_devnull(STDOUT_FILENO, O_WRONLY);
-    }
-
-    if (stdio_modes[CHILD_STREAM_STDERR] == STDIO_PIPE) {
-      close_if_valid(stderr_pipe[0]);
-      dup2(stderr_pipe[1], STDERR_FILENO);
-      close_if_valid(stderr_pipe[1]);
-    } else if (stdio_modes[CHILD_STREAM_STDERR] == STDIO_IGNORE) {
-      child_redirect_stdio_to_devnull(STDERR_FILENO, O_WRONLY);
-    }
-    
-    execvp(exec_args[0], exec_args);
-    _exit(127);
   }
-  
-  free_sync_exec_args(exec_args, use_shell);
-  free(cmd_str);
-  if (cwd) free(cwd);
-  free_env_array(env);
-  free_args_array(spawn_args, spawn_argc);
-  
-  close_if_valid(stdin_pipe[0]);
-  close_if_valid(stdout_pipe[1]);
-  close_if_valid(stderr_pipe[1]);
-  
-  if (stdio_modes[CHILD_STREAM_STDIN] == STDIO_PIPE && input && input_len > 0) {
-    write(stdin_pipe[1], input, input_len);
+
+  execvp(res->argv[0], res->argv);
+  _exit(127);
+}
+
+static void sync_write_input(int fd, const char *data, size_t len) {
+  size_t written = 0;
+  while (data && written < len) {
+    ssize_t n = write(fd, data + written, len - written);
+    if (n <= 0) break;
+    written += (size_t)n;
   }
-  close_if_valid(stdin_pipe[1]);
-  
-  char *stdout_buf = NULL;
-  size_t stdout_len = 0;
-  size_t stdout_cap = 0;
-  
-  char *stderr_buf = NULL;
-  size_t stderr_len = 0;
-  size_t stderr_cap = 0;
-  int status = 0;
+}
 
-  bool read_ok = read_sync_outputs(
-    stdout_pipe[0], stderr_pipe[0],
-    &stdout_buf, &stdout_len, &stdout_cap,
-    &stderr_buf, &stderr_len, &stderr_cap
-  );
+static ant_value_t sync_build_result(
+  ant_t *js, pid_t pid, int status, const sync_read_ctl_t *ctl, const sync_opts_t *opts,
+  const sync_reader_t *out, const sync_reader_t *err
+) {
+  ant_value_t stdout_val = sync_make_output(js, out->buf, out->len, opts->encode_as_string);
+  ant_value_t stderr_val = sync_make_output(js, err->buf, err->len, opts->encode_as_string);
 
-  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-
-  if (!read_ok) {
-    if (stdout_buf) free(stdout_buf);
-    if (stderr_buf) free(stderr_buf);
-    return js_mkerr(js, "Failed to read process output");
-  }
-  
-  int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-  int signal_code = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
-  
   ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", js_mkstr(js, stdout_buf ? stdout_buf : "", stdout_len));
-  js_set(js, result, "stderr", js_mkstr(js, stderr_buf ? stderr_buf : "", stderr_len));
-  js_set(js, result, "status", js_mknum((double)exit_code));
-  js_set(js, result, "signal", signal_code ? js_mknum((double)signal_code) : js_mknull());
+  js_set(js, result, "stdout", stdout_val);
+  js_set(js, result, "stderr", stderr_val);
   js_set(js, result, "pid", js_mknum((double)pid));
-  
-  if (stdout_buf) free(stdout_buf);
-  if (stderr_buf) free(stderr_buf);
-  
+
+  ant_value_t output = js_mkarr(js);
+  js_arr_push(js, output, js_mknull());
+  js_arr_push(js, output, stdout_val);
+  js_arr_push(js, output, stderr_val);
+  js_set(js, result, "output", output);
+
+  int signal_code = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+  if (signal_code) {
+    const char *name = process_signal_name(signal_code);
+    js_set(js, result, "status", js_mknull());
+    js_set(js, result, "signal", name ? js_mkstr(js, name, strlen(name)) : js_mknull());
+  } else {
+    js_set(js, result, "status", js_mknum((double)(WIFEXITED(status) ? WEXITSTATUS(status) : -1)));
+    js_set(js, result, "signal", js_mknull());
+  }
+
+  const char *failure = ctl->timed_out ? "ETIMEDOUT" : ctl->over_buffer ? "ENOBUFS" : NULL;
+  if (failure) {
+    char message[256];
+    snprintf(message, sizeof(message), "spawnSync %s %s", opts->label, failure);
+    js_set(js, result, "error", js_make_error_silent(js, JS_ERR_GENERIC, message));
+  }
+
   return result;
 }
+static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
+  if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+
+  size_t command_len = 0;
+  char *command = js_getstr(js, args[0], &command_len);
+  if (!command) return js_mkerr(js, "Command must be a string");
+
+  sync_res_t res = {0};
+  res.command = strndup(command, command_len);
+  if (!res.command) return js_mkerr(js, "Out of memory");
+
+  if (nargs >= 2 && vtype(args[1]) == T_ARR)
+    res.args = parse_args_array(js, args[1], &res.arg_count);
+
+  sync_opts_t opts;
+  sync_parse_options(js, child_process_options_arg(args, nargs), force_shell, &opts, &res);
+
+  if (opts.use_shell) snprintf(opts.label, sizeof(opts.label), "%s", res.shell ? res.shell : "/bin/sh");
+  else snprintf(opts.label, sizeof(opts.label), "%.*s", (int)(command_len < 120 ? command_len : 120), command);
+
+  if (!sync_build_argv(&res, opts.use_shell, command_len)) {
+    sync_res_free(&res);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  sync_pipes_t pipes;
+  sync_pipes_init(&pipes);
+
+  if (!sync_pipes_open(&pipes, opts.stdio)) {
+    sync_pipes_close_all(&pipes);
+    sync_res_free(&res);
+    return js_mkerr(js, "Failed to create pipes");
+  }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    sync_pipes_close_all(&pipes);
+    sync_res_free(&res);
+    return js_mkerr(js, "Fork failed");
+  }
+  if (pid == 0) sync_child_exec(&pipes, &opts, &res);
+
+  bool want_stdin = opts.stdio[CHILD_STREAM_STDIN] == STDIO_PIPE;
+
+  close_if_valid(pipes.fds[CHILD_STREAM_STDIN][0]);
+  close_if_valid(pipes.fds[CHILD_STREAM_STDOUT][1]);
+  close_if_valid(pipes.fds[CHILD_STREAM_STDERR][1]);
+
+  if (want_stdin) sync_write_input(pipes.fds[CHILD_STREAM_STDIN][1], opts.input, opts.input_len);
+  close_if_valid(pipes.fds[CHILD_STREAM_STDIN][1]);
+
+  sync_reader_t out, err;
+  sync_reader_init(&out, pipes.fds[CHILD_STREAM_STDOUT][0]);
+  sync_reader_init(&err, pipes.fds[CHILD_STREAM_STDERR][0]);
+
+  sync_read_ctl_t ctl = {
+    .pid = pid,
+    .timeout_ms = opts.timeout_ms,
+    .kill_signal = opts.kill_signal,
+    .max_buffer = opts.max_buffer,
+  };
+
+  bool read_ok = read_sync_outputs(&out, &err, &ctl);
+  int status = 0;
+
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+  sync_res_free(&res);
+
+  ant_value_t result = read_ok
+    ? sync_build_result(js, pid, status, &ctl, &opts, &out, &err)
+    : js_mkerr(js, "Failed to read process output");
+
+  free(out.buf);
+  free(err.buf);
+
+  return result;
+}
+
+
+static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
+  return spawn_sync_impl(js, args, nargs, false);
+}
 #endif
+
+static ant_value_t sync_result_error(
+  ant_t *js, ant_value_t result, ant_value_t command_val, const char *api
+) {
+  ant_value_t spawn_error = js_get(js, result, "error");
+  ant_value_t status = js_get(js, result, "status");
+  ant_value_t signal = js_get(js, result, "signal");
+
+  bool failed_status = vtype(status) == T_NUM && (int)js_getnum(status) != 0;
+  bool signalled = vtype(signal) == T_STR;
+  if (!is_object_type(spawn_error) && !failed_status && !signalled) return js_mkundef();
+
+  ant_value_t stdout_val = js_get(js, result, "stdout");
+  ant_value_t stderr_val = js_get(js, result, "stderr");
+
+  char message[512];
+  if (is_object_type(spawn_error)) {
+    ant_value_t existing = js_get(js, spawn_error, "message");
+    size_t existing_len = 0;
+    char *existing_str = vtype(existing) == T_STR ? js_getstr(js, existing, &existing_len) : NULL;
+    snprintf(
+      message, sizeof(message), "%.*s",
+      (int)(existing_len < sizeof(message) - 1 ? existing_len : sizeof(message) - 1),
+      existing_str ? existing_str : "Command failed"
+    );
+  } else {
+    size_t command_len = 0;
+    char *command_str = vtype(command_val) == T_STR ? js_getstr(js, command_val, &command_len) : NULL;
+    const char *stderr_str = NULL;
+    size_t stderr_len = 0;
+    sync_value_bytes(js, stderr_val, &stderr_str, &stderr_len);
+
+    if (stderr_len > 0) snprintf(
+      message, sizeof(message), "Command failed: %.*s\n%.*s",
+      (int)(command_len < 200 ? command_len : 200), command_str ? command_str : api,
+      (int)(stderr_len < 250 ? stderr_len : 250), stderr_str
+    );
+    else snprintf(
+      message, sizeof(message), "Command failed: %.*s",
+      (int)(command_len < 200 ? command_len : 200), command_str ? command_str : api
+    );
+  }
+
+  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+  if (!is_object_type(error)) return error;
+
+  js_set(js, error, "status", status);
+  js_set(js, error, "signal", signal);
+  js_set(js, error, "stdout", stdout_val);
+  js_set(js, error, "stderr", stderr_val);
+  js_set(js, error, "pid", js_get(js, result, "pid"));
+  js_set(js, error, "output", js_get(js, result, "output"));
+
+  return error;
+}
+
+static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+
+  ant_value_t spawn_args[3];
+  spawn_args[0] = args[0];
+  spawn_args[1] = js_mkundef();
+  spawn_args[2] = nargs >= 2 ? args[1] : js_mkundef();
+
+  ant_value_t result = spawn_sync_impl(js, spawn_args, 3, true);
+  if (vtype(result) != T_OBJ) return result;
+
+  ant_value_t options = spawn_args[2];
+  bool stdio_specified =
+    is_special_object(options) && vtype(js_get(js, options, "stdio")) != T_UNDEF;
+
+  if (!stdio_specified) {
+    const char *stderr_str = NULL;
+    size_t stderr_len = 0;
+    sync_value_bytes(js, js_get(js, result, "stderr"), &stderr_str, &stderr_len);
+
+    size_t written = 0;
+    while (stderr_str && written < stderr_len) {
+      ssize_t n = write(STDERR_FILENO, stderr_str + written, stderr_len - written);
+      if (n <= 0) break;
+      written += (size_t)n;
+    }
+  }
+
+  ant_value_t error = sync_result_error(js, result, args[0], "execSync");
+  if (!is_object_type(error)) return js_get(js, result, "stdout");
+
+  return js_throw(js, error);
+}
 
 static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t argv = js_mkundef();
   ant_value_t options = js_mkundef();
-  
   ant_value_t spawn_args[3];
-  ant_value_t result;
-  ant_value_t status;
 
   if (nargs < 1) return js_mkerr(js, "execFileSync() requires a file");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "File must be a string");
@@ -2163,12 +2449,14 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
   spawn_args[1] = argv;
   spawn_args[2] = options;
 
-  result = builtin_spawnSync(js, spawn_args, 3);
+  ant_value_t result = builtin_spawnSync(js, spawn_args, 3);
   if (vtype(result) != T_OBJ) return result;
 
-  status = js_get(js, result, "status");
-  if (vtype(status) == T_NUM && (int)js_getnum(status) != 0)
-    return js_mkerr(js, "Command failed with exit code %d", (int)js_getnum(status));
+  ant_value_t command = child_process_command_value(js, args[0], argv);
+  if (vtype(command) != T_STR) command = args[0];
+
+  ant_value_t error = sync_result_error(js, result, command, "execFileSync");
+  if (is_object_type(error)) return js_throw(js, error);
 
   return js_get(js, result, "stdout");
 }

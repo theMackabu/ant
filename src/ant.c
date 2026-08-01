@@ -2697,11 +2697,13 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
   ant_value_t *next = realloc(obj->u.array.data, sizeof(*next) * (size_t)new_cap);
   if (!next) return 0;
 
+  js->alloc_bytes.arrays += (size_t)(new_cap - old_cap) * sizeof(*next);
   for (ant_offset_t i = old_cap; i < new_cap; i++) next[i] = T_EMPTY;
 
   obj->u.array.data = next;
   obj->u.array.cap = (uint32_t)new_cap;
   obj->flags.fast_array = 1;
+  
   return (ant_offset_t)(uintptr_t)obj;
 }
 
@@ -3119,6 +3121,7 @@ static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
   obj->u.array.data = malloc(sizeof(*obj->u.array.data) * (size_t)obj->u.array.cap);
   
   if (obj->u.array.data) {
+    js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
     for (uint32_t i = 0; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->flags.fast_array = 1;
     obj->flags.may_have_holes = 0;

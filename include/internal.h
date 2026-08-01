@@ -271,6 +271,7 @@ struct ant_isolate_t {
   struct {
     size_t closures;
     size_t upvalues;
+    size_t arrays;
   } alloc_bytes;
   
   size_t gc_last_live;

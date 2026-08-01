@@ -2,6 +2,7 @@
 
 #include <pkg.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2406,6 +2407,10 @@ int pkg_cmd_exec(int argc, char **argv) {
     free(exec_argv);
     return EXIT_FAILURE;
   }
+
+  #ifndef _WIN32
+  signal(SIGPIPE, SIG_DFL);
+  #endif
 
   execvp(cmd, exec_argv);
   int exec_errno = errno;

@@ -248,8 +248,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   size_t promise_bytes  = 0;
   size_t proxy_bytes    = 0;
   size_t exotic_bytes   = 0;
-  size_t array_bytes    = 0;
-  
+
   for (int pass = 0; pass < 3; pass++) {
     ant_object_t *head = pass == 0 ? js->objects : pass == 1 ? js->objects_old : js->permanent_objects;
     for (ant_object_t *obj = head; obj; obj = obj->next) {
@@ -265,8 +264,6 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
       if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);
       if (obj->exotic_ops) exotic_bytes += sizeof(ant_exotic_ops_t);
-      if (obj->type_tag == T_ARR && obj->u.array.data)
-        array_bytes += obj->u.array.cap * sizeof(ant_value_t);
     }
   }
 
@@ -278,7 +275,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, alloc, "promises", js_mknum((double)promise_bytes));
   js_set(js, alloc, "proxies", js_mknum((double)proxy_bytes));
   js_set(js, alloc, "exotic", js_mknum((double)exotic_bytes));
-  js_set(js, alloc, "arrays", js_mknum((double)array_bytes));
+  js_set(js, alloc, "arrays", js_mknum((double)js->alloc_bytes.arrays));
   
   size_t shape_bytes = ant_shape_total_bytes();
   js_set(js, alloc, "shapes", js_mknum((double)shape_bytes));
@@ -286,7 +283,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, alloc, "upvalues", js_mknum((double)js->alloc_bytes.upvalues));
 
   size_t alloc_total = obj_bytes + overflow_bytes + extra_bytes
-    + promise_bytes + proxy_bytes + exotic_bytes + array_bytes
+    + promise_bytes + proxy_bytes + exotic_bytes + js->alloc_bytes.arrays
     + shape_bytes + js->alloc_bytes.closures + js->alloc_bytes.upvalues;
   
   js_set(js, alloc, "total", js_mknum((double)alloc_total));

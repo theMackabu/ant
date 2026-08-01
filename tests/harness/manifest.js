@@ -20,6 +20,8 @@ export function targets() {
     'test_jit_inline_call_errors.cjs',
     'test_string_length_accumulation.cjs',
     'test_property_location_stress.cjs',
+    'test_child_process_sigpipe_reset.cjs',
+    'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
     'test_esm_package_self_reference.cjs',

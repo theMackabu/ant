@@ -679,6 +679,8 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->type_tag == T_ARR && obj->u.array.data) {
+    size_t bytes = (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
+    js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
     free(obj->u.array.data);
     obj->u.array.data = NULL;
   }

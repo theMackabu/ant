@@ -24,10 +24,10 @@ class Child {
     this.output = '';
     this.exitCode = null;
     this.proc = spawn(ANT, [entry, ...args]);
-    this.proc.on('stdout', d => {
+    this.proc.stdout.on('data', d => {
       this.output += d;
     });
-    this.proc.on('stderr', d => {
+    this.proc.stderr.on('data', d => {
       this.output += d;
     });
     this.exited = new Promise(resolve => {
@@ -295,10 +295,10 @@ export async function runOha(target, opts) {
 
     let ohaOut = '';
     const oha = spawn('oha', [url, '-n', '50000', '-H', 'Accept-Encoding: identity', '--no-tui']);
-    oha.on('stdout', d => {
+    oha.stdout.on('data', d => {
       ohaOut += d;
     });
-    oha.on('stderr', d => {
+    oha.stderr.on('data', d => {
       ohaOut += d;
     });
     const done = await new Promise(resolve => {

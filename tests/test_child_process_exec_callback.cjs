@@ -71,9 +71,11 @@ const signaledChild = exec(signaledCommand, guard((error, stdout, stderr) => {
   pending.delete('signal');
   finish();
 }));
-setTimeout(() => {
+// guard() here too: a bare throw from a timer callback escapes as an uncaught exception
+// rather than the FAIL line the harness matches on
+setTimeout(guard(() => {
   assert(signaledChild.kill('SIGTERM') === true, 'expected SIGTERM kill to succeed');
-}, 20);
+}), 20);
 
 const execFileArgs = ['-c', 'printf FILEOUT; printf FILEERR >&2; exit 4'];
 const execFileCommand = `sh ${execFileArgs.join(' ')}`;

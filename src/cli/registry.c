@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <openssl/evp.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -332,6 +333,7 @@ static void open_browser(const char *url) {
 #else
   pid_t pid = fork();
   if (pid != 0) return;
+  signal(SIGPIPE, SIG_DFL);
 #if defined(__APPLE__)
   execlp("open", "open", url, (char *)NULL);
 #else

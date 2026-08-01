@@ -25,7 +25,7 @@ async function waitForHttpServer(port, { host = '127.0.0.1', timeoutMs = 1000, i
 
 export async function startServer(path, port, options) {
   const child = spawn(process.execPath, [path, String(port)]);
-  child.on('stderr', data => {
+  child.stderr.on('data', data => {
     if (String(data).trim()) console.log(String(data).trim());
   });
 

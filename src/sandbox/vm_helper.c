@@ -912,9 +912,28 @@ int ant_sandbox_vm_helper_create(
   for (size_t i = 0; spawn_rc == 0 && i < sizeof(inherited_fds) / sizeof(inherited_fds[0]); i++)
     spawn_rc = posix_spawn_file_actions_addclose(&actions, inherited_fds[i]);
 
+  posix_spawnattr_t attr;
+  bool attr_ready = spawn_rc == 0 && posix_spawnattr_init(&attr) == 0;
+
+  if (attr_ready) {
+    sigset_t defaults;
+    sigemptyset(&defaults);
+    sigaddset(&defaults, SIGPIPE);
+    
+    if (
+      posix_spawnattr_setsigdefault(&attr, &defaults) != 0 || 
+      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF) != 0
+    ) {
+      posix_spawnattr_destroy(&attr);
+      attr_ready = false;
+    }
+  }
+
   pid_t pid = -1;
   char *helper_argv[] = { "ant-sandbox-vm-helper", NULL };
-  if (spawn_rc == 0) spawn_rc = posix_spawn(&pid, executable, &actions, NULL, helper_argv, environ);
+  if (spawn_rc == 0)
+    spawn_rc = posix_spawn(&pid, executable, &actions, attr_ready ? &attr : NULL, helper_argv, environ);
+  if (attr_ready) posix_spawnattr_destroy(&attr);
   posix_spawn_file_actions_destroy(&actions);
   if (spawn_rc != 0) {
     free(encoded);
