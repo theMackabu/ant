@@ -222,7 +222,10 @@ static inline size_t wtf8_decode_at(const char *str, size_t byte_len, size_t i, 
   if (n == 0 || i + n > byte_len) return 0;
 
   uint32_t cp = (uint32_t)(c & (0x7F >> n));
-  for (size_t k = 1; k < n; k++) cp = (cp << 6) | ((uint32_t)str[i + k] & 0x3F);
+  for (size_t k = 1; k < n; k++) {
+    if (((unsigned char)str[i + k] & 0xC0) != 0x80) return 0;
+    cp = (cp << 6) | ((uint32_t)str[i + k] & 0x3F);
+  }
 
   *out_cp = cp;
   return n;

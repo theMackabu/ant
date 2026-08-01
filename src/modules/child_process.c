@@ -1966,12 +1966,53 @@ static void sync_reader_shutdown(sync_reader_t *reader) {
   reader->open = false;
 }
 
-static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_read_ctl_t *ctl) {
+typedef struct {
+  int fd;
+  const char *data;
+  size_t len;
+  size_t written;
+  bool open;
+} sync_writer_t;
+
+static void sync_writer_init(sync_writer_t *writer, int fd, const char *data, size_t len) {
+  *writer = (sync_writer_t){ .fd = fd, .data = data, .len = len, .open = fd >= 0 };
+
+  if (writer->open && (!data || len == 0)) {
+    close_if_valid(fd);
+    writer->open = false;
+    return;
+  }
+
+  if (writer->open) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+}
+
+static void sync_writer_shutdown(sync_writer_t *writer) {
+  if (!writer->open) return;
+  close_if_valid(writer->fd);
+  writer->open = false;
+}
+
+static void sync_writer_pump(sync_writer_t *writer) {
+  size_t remaining = writer->len - writer->written;
+  ssize_t n = write(writer->fd, writer->data + writer->written, remaining);
+
+  if (n < 0) {
+    if (errno == EINTR || errno == EAGAIN) return;
+    sync_writer_shutdown(writer);
+    return;
+  }
+
+  writer->written += (size_t)n;
+  if (writer->written >= writer->len) sync_writer_shutdown(writer);
+}
+
+static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_writer_t *in, sync_read_ctl_t *ctl) {
   uint64_t deadline = ctl->timeout_ms > 0 ? sync_now_ms() + (uint64_t)ctl->timeout_ms : 0;
 
-  while (out->open || err->open) {
-    fd_set readfds;
+  while (out->open || err->open || in->open) {
+    fd_set readfds, writefds;
     FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
     int max_fd = -1;
 
     sync_reader_t *sides[2] = { out, err };
@@ -1979,6 +2020,11 @@ static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_read_
       if (!sides[i]->open) continue;
       FD_SET(sides[i]->fd, &readfds);
       if (sides[i]->fd > max_fd) max_fd = sides[i]->fd;
+    }
+
+    if (in->open) {
+      FD_SET(in->fd, &writefds);
+      if (in->fd > max_fd) max_fd = in->fd;
     }
 
     struct timeval tv;
@@ -1998,12 +2044,14 @@ static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_read_
       }
     }
 
-    int ready = select(max_fd + 1, &readfds, NULL, NULL, tv_ptr);
+    int ready = select(max_fd + 1, &readfds, in->open ? &writefds : NULL, NULL, tv_ptr);
     if (ready < 0) {
       if (errno == EINTR) continue;
       return false;
     }
+    
     if (ready == 0) continue;
+    if (in->open && FD_ISSET(in->fd, &writefds)) sync_writer_pump(in);
 
     for (int i = 0; i < 2; i++)
       if (sides[i]->open && FD_ISSET(sides[i]->fd, &readfds) && !sync_reader_pump(sides[i], ctl)) return false;
@@ -2014,6 +2062,7 @@ static bool read_sync_outputs(sync_reader_t *out, sync_reader_t *err, sync_read_
     }
   }
 
+  sync_writer_shutdown(in);
   sync_reader_shutdown(out);
   sync_reader_shutdown(err);
 
@@ -2225,15 +2274,6 @@ static void sync_child_exec(
   _exit(127);
 }
 
-static void sync_write_input(int fd, const char *data, size_t len) {
-  size_t written = 0;
-  while (data && written < len) {
-    ssize_t n = write(fd, data + written, len - written);
-    if (n <= 0) break;
-    written += (size_t)n;
-  }
-}
-
 static ant_value_t sync_build_result(
   ant_t *js, pid_t pid, int status, const sync_read_ctl_t *ctl, const sync_opts_t *opts,
   const sync_reader_t *out, const sync_reader_t *err
@@ -2320,8 +2360,9 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   close_if_valid(pipes.fds[CHILD_STREAM_STDOUT][1]);
   close_if_valid(pipes.fds[CHILD_STREAM_STDERR][1]);
 
-  if (want_stdin) sync_write_input(pipes.fds[CHILD_STREAM_STDIN][1], opts.input, opts.input_len);
-  close_if_valid(pipes.fds[CHILD_STREAM_STDIN][1]);
+  sync_writer_t in;
+  sync_writer_init(&in, want_stdin ? pipes.fds[CHILD_STREAM_STDIN][1] : -1, opts.input, opts.input_len);
+  if (!want_stdin) close_if_valid(pipes.fds[CHILD_STREAM_STDIN][1]);
 
   sync_reader_t out, err;
   sync_reader_init(&out, pipes.fds[CHILD_STREAM_STDOUT][0]);
@@ -2334,7 +2375,7 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
     .max_buffer = opts.max_buffer,
   };
 
-  bool read_ok = read_sync_outputs(&out, &err, &ctl);
+  bool read_ok = read_sync_outputs(&out, &err, &in, &ctl);
   int status = 0;
 
   while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}

@@ -25,6 +25,7 @@ export function targets() {
     'test_nul_property_keys.cjs',
     'test_url_legacy_idna.cjs',
     'test_child_process_sigpipe_reset.cjs',
+    'test_spawn_sync_stdin_pump.cjs',
     'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
