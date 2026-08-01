@@ -8494,6 +8494,27 @@ static ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_
     return obj;
   }
   
+  if (!sym_key && !has_get && !has_set && has_value
+      && has_writable && writable
+      && has_enumerable && enumerable
+      && has_configurable && configurable) {
+    ant_object_t *fast_arr = array_obj_ptr(as_obj);
+    unsigned long fast_idx = 0;
+
+    if (
+      fast_arr && fast_arr->flags.fast_array &&
+      fast_arr->flags.extensible && !fast_arr->flags.sealed && !fast_arr->flags.frozen &&
+      parse_array_index(prop_str, (size_t)prop_len, ((ant_offset_t)UINT32_MAX), &fast_idx)
+    ) {
+      ant_offset_t doff = get_dense_buf(as_obj);
+      if (doff && (ant_offset_t)fast_idx < dense_capacity(doff)) {
+        dense_set(js, doff, (ant_offset_t)fast_idx, value);
+        array_define_or_set_index(js, as_obj, prop_str, (size_t)prop_len);
+        return obj;
+      }
+    }
+  }
+
   if (!sym_key) array_materialize_dense_for_define(js, as_obj, prop_str, (size_t)prop_len);
 
   ant_prop_loc_t existing_off = sym_key
