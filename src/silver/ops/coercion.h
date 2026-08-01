@@ -468,7 +468,7 @@ static inline bool sv_try_get_with_bound_value(
   bool abrupt = false;
   if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
   if (abrupt) return true;
-  *out = sv_getprop_fallback_len(js, with_obj, a->str, (ant_offset_t)a->len);
+  *out = js_getprop_fallback_len(js, with_obj, a->str, a->len);
   
   return true;
 }

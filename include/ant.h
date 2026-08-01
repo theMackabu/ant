@@ -74,6 +74,7 @@ ant_value_t js_getcurrentfunc(ant_t *);
 ant_value_t js_get(ant_t *, ant_value_t, const char *);
 ant_value_t js_getprop_proto(ant_t *, ant_value_t, const char *);
 ant_value_t js_getprop_fallback(ant_t *js, ant_value_t obj, const char *name);
+ant_value_t js_getprop_fallback_len(ant_t *js, ant_value_t obj, const char *name, size_t key_len);
 ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t receiver, const char *name);
 
 ant_offset_t js_arr_len(ant_t *js, ant_value_t arr);

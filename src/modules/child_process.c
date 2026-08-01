@@ -108,7 +108,6 @@ struct child_process_s {
   bool detached;
   bool close_emitted;
   bool keep_alive;
-  bool discarded;
   int pending_closes;
   int spawn_error;
   char *spawn_file;
@@ -284,14 +283,6 @@ static void free_child_process(child_process_t *cp) {
 static void try_free_child(child_process_t *cp) {
   if (!cp) return;
 
-  if (cp->discarded) {
-    if (cp->pending_closes == 0) {
-      remove_pending_child(cp);
-      free_child_process(cp);
-    }
-    return;
-  }
-
   if (cp->exited && cp->stdout_closed && cp->stderr_closed && cp->pending_closes == 0) {
     remove_pending_child(cp);
     free_child_process(cp);
@@ -448,22 +439,6 @@ static void close_child_pipe(child_process_t *cp, child_stream_kind_t kind, bool
   }
 
   close_child_handle(cp, (uv_handle_t *)pipe);
-}
-
-static void discard_unspawned_child(child_process_t *cp) {
-  if (!cp) return;
-  cp->discarded = true;
-
-  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
-    uv_pipe_t *pipe = child_pipe(cp, i);
-    bool *closed = child_closed_flag(cp, i);
-
-    if (!child_stdio_is_pipe(cp, i) || !pipe) continue;
-    if (closed) *closed = true;
-    close_child_handle(cp, (uv_handle_t *)pipe);
-  }
-
-  try_free_child(cp);
 }
 
 static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
@@ -1318,6 +1293,7 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
 
     add_pending_child(cp);
     cp->child_obj = create_child_object(js, cp);
+    js_set(js, cp->child_obj, "pid", js_mkundef());
     child_schedule_spawn_failure(js, cp);
 
     return cp->child_obj;
@@ -1339,6 +1315,7 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t exec_spawn_error_capture(ant_t *js, ant_value_t *args, int nargs);
 static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t callback = js_mkundef();
 
@@ -1411,18 +1388,40 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   free(cmd_str);
   
   if (r < 0) {
-    ant_value_t promise = cp->promise;
-    ant_value_t err = js_make_error_silent(js, JS_ERR_GENERIC, uv_strerror(r));
+    cp->spawn_error = r;
+    cp->spawn_file = strdup("/bin/sh");
 
-    discard_unspawned_child(cp);
-    if (is_callable(callback)) {
-      ant_value_t cb_args[3] = { err, js_mkstr(js, "", 0), js_mkstr(js, "", 0) };
-      sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
-      return js_mkundef();
+    for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+      uv_pipe_t *pipe = child_pipe(cp, i);
+      bool *closed = child_closed_flag(cp, i);
+
+      if (closed) *closed = true;
+      if (child_stdio_is_pipe(cp, i) && pipe) close_child_handle(cp, (uv_handle_t *)pipe);
     }
 
-    js_reject_promise(js, promise, js_mkstr(js, uv_strerror(r), strlen(uv_strerror(r))));
-    return promise;
+    add_pending_child(cp);
+    cp->child_obj = create_child_object(js, cp);
+    js_set(js, cp->child_obj, "pid", js_mkundef());
+
+    if (is_callable(callback)) {
+      ant_value_t ctx = js_mkobj(js);
+      js_set(js, ctx, "callback", callback);
+      js_set(js, ctx, "child", cp->child_obj);
+      js_set(js, ctx, "command", args[0]);
+      eventemitter_add_listener(
+        js, cp->child_obj, "error",
+        js_heavy_mkfun(js, exec_spawn_error_capture, ctx), true
+      );
+      eventemitter_add_listener(
+        js, cp->child_obj, "close",
+        js_heavy_mkfun(js, exec_file_close_callback, ctx), true
+      );
+      child_schedule_spawn_failure(js, cp);
+      return cp->child_obj;
+    }
+
+    child_schedule_spawn_failure(js, cp);
+    return cp->promise;
   }
   
   uv_read_start((uv_stream_t *)&cp->stdout_pipe, alloc_buffer, on_stdout_read);
@@ -1447,6 +1446,12 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   return cp->promise;
 }
 
+static ant_value_t exec_spawn_error_capture(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (nargs > 0) js_set(js, ctx, "spawnError", args[0]);
+  return js_mkundef();
+}
+
 static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
@@ -1465,6 +1470,17 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   bool was_signaled = vtype(signal_code_val) == T_STR;
 
   if (!is_callable(callback)) return js_mkundef();
+
+  ant_value_t spawn_error = js_get(js, ctx, "spawnError");
+  if (is_object_type(spawn_error)) {
+    if (vtype(command_val) == T_STR) js_set(js, spawn_error, "cmd", command_val);
+    js_set(js, spawn_error, "killed", js_false);
+    cb_args[0] = spawn_error;
+    cb_args[1] = js_mkstr(js, "", 0);
+    cb_args[2] = js_mkstr(js, "", 0);
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
+    return js_mkundef();
+  }
 
   if (exited_nonzero || was_signaled) {
     size_t command_len = 0;

@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-05-16
+Last reviewed: 2026-08-01
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -17,6 +17,19 @@ scheduled.
 - Status:
 
 ## Open Items
+
+- Area: `src/modules/events.c` / `src/modules/process.c` — module-level cached JS values
+  - Issue: `eventemitter_prototype()` caches the EventEmitter prototype in a process-global `static ant_value_t` (`g_eventemitter_proto`) and returns it for every isolate. Every other `g_*` cached JS value in modules has the same shape.
+  - Impact: A second isolate in one process would install objects from the first isolate's heap as prototypes for `process`/stdio (cross-heap references, GC corruption). Not reproducible today — nothing in-tree creates two isolates per process (workers are separate processes via uv_spawn) — but it silently constrains any future multi-isolate embedding.
+  - Proposed fix: If multi-isolate support is ever decided, sweep ALL module-level `g_*` JS-value caches onto `ant_t` (per-isolate), not a spot fix of one variable.
+  - Status: parked (pending multi-isolate decision)
+
+- Area: `src/modules/worker_threads.c` — spawn-failure path
+  - Issue: The `new Worker(...)` synchronous failure branch calls `wt_cleanup(wt)` (plain `free`) while `wt` is still linked on `active_workers_head` (so `gc_mark_worker_threads` walks freed memory on every GC) and while `wt_spawn_worker`'s failure branches have `uv_close`d the embedded `stdout_pipe` with a NULL callback (uv still owns a closing handle inside the freed struct).
+  - Impact: Use-after-free on GC mark and on uv close completion — but only reachable when uv_spawn fails synchronously (EMFILE-class errors; missing binaries report asynchronously via exit_cb), which also makes a fix hard to test.
+  - Proposed fix: Mirror the success path — `wt_detach` + close handles with `wt_on_handle_closed` and `close_pending` accounting; drop `wt_cleanup` entirely (the success path deliberately leaks the struct; the failure path should match).
+  - Status: backlog
+
 
 - Area: `src/sandbox/backends/darwin.c` / macOS HVF VMM interrupts
   - Issue: The Darwin Hypervisor.framework backend currently continues when `hv_gic_config_set_msi_interrupt_range()` fails, and device bringup still includes legacy/polling/manual wake paths instead of a fully interrupt-driven virtio PCI model.

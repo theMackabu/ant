@@ -192,7 +192,7 @@ static inline ant_value_t sv_iter_result_get_named(
   bool should_fallback = false;
 
   if (interned && sv_try_get_shape_data_prop(js, ptr, interned, &out, &should_fallback)) return out;
-  return sv_getprop_fallback_len(js, result, key, key_len);
+  return js_getprop_fallback_len(js, result, key, (size_t)key_len);
 }
 
 static inline void sv_iter_result_unpack(

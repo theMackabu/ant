@@ -744,12 +744,20 @@ static ant_value_t js_stream_unpipe(ant_t *js, ant_value_t *args, int nargs) {
   return source;
 }
 
-static ant_value_t stream_destroy_done(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stream_destroy_emit_tick(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t stream_obj = js_get(js, state_obj, "stream");
-  ant_value_t destroyed_err = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t destroyed_err = js_get(js, state_obj, "error");
   if (!is_null(destroyed_err) && !is_undefined(destroyed_err)) stream_emit_error(js, stream_obj, destroyed_err);
   stream_emit_named(js, stream_obj, "close");
+  return js_mkundef();
+}
+
+static ant_value_t stream_destroy_done(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t destroyed_err = (nargs > 0) ? args[0] : js_mkundef();
+  js_set(js, state_obj, "error", destroyed_err);
+  stream_schedule_microtask(js, stream_destroy_emit_tick, state_obj);
   return js_mkundef();
 }
 
@@ -1241,6 +1249,7 @@ static ant_value_t stream_writable_write_done(ant_t *js, ant_value_t *args, int 
     ant_value_t saved_this = 0;
 
     if (priv) { priv->pending_final = false; priv->writing = false; }
+    stream_set_errored(js, stream_obj, err);
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     stream_writable_fail_buffered(js, stream_obj, err);
 
@@ -1358,6 +1367,14 @@ static bool stream_writable_start(
   return js_truthy(js, js_get(js, done_state, "done"));
 }
 
+static ant_value_t stream_errored_write_cb_tick(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t callback = js_get(js, state_obj, "callback");
+  ant_value_t error = js_get(js, state_obj, "error");
+  if (is_callable(callback)) stream_call_callback(js, callback, &error, 1);
+  return js_mkundef();
+}
+
 static ant_value_t stream_writable_write_impl(
   ant_t *js,
   ant_value_t stream_obj,
@@ -1380,6 +1397,17 @@ static ant_value_t stream_writable_write_impl(
 
   state = stream_writable_state(js, stream_obj);
   if (!is_object_type(state)) return js_false;
+
+  ant_value_t prior_error = js_get(js, state, "errored");
+  if (!is_undefined(prior_error) && !is_null(prior_error)) {
+    if (is_callable(callback)) {
+      ant_value_t tick_state = js_mkobj(js);
+      js_set(js, tick_state, "callback", callback);
+      js_set(js, tick_state, "error", prior_error);
+      stream_schedule_microtask(js, stream_errored_write_cb_tick, tick_state);
+    }
+    return js_false;
+  }
 
   if (
     (!allow_after_end && js_truthy(js, js_get(js, stream_obj, "writableEnded"))) ||
@@ -1442,7 +1470,11 @@ static ant_value_t stream_writable_finish_tick(ant_t *js, ant_value_t *args, int
   ant_value_t callback = js_get(js, state_obj, "callback");
   ant_value_t state = stream_writable_state(js, stream_obj);
 
-  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_mkundef();
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) {
+    if (is_callable(callback)) stream_call_callback(js, callback, NULL, 0);
+    return js_mkundef();
+  }
+  
   if (is_object_type(state)) js_set(js, state, "finished", js_true);
   if (is_callable(callback)) stream_call_callback(js, callback, NULL, 0);
   stream_emit_named(js, stream_obj, "finish");

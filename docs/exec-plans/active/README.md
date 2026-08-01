@@ -15,10 +15,13 @@ Store in-progress execution plans here.
 - [Hash Seed Randomization](hash-seed-randomization.md)
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
+- [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
+- [Module Import GC Flake](module-import-gc-flake.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Stream Property Surface](stream-property-surface.md)
+- [UTF-16 Random-Access Index (fable carry-back)](utf16-random-access-index.md)
 - [WICG Observable Migration](wicg-observable.md)
 
 Recommended sections:

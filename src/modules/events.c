@@ -1635,8 +1635,8 @@ static ant_value_t js_events_get_event_listeners(ant_t *js, ant_value_t *args, i
 
 static ant_value_t events_on_iter_result(ant_t *js, ant_value_t value, bool done) {
   ant_value_t result = js_mkobj(js);
-  js_set(js, result, "value", value);
   js_set(js, result, "done", js_bool(done));
+  js_set(js, result, "value", value);
   return result;
 }
 
@@ -1755,13 +1755,22 @@ static ant_value_t js_events_on_error_cb(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
+static ant_value_t events_make_abort_error(ant_t *js, ant_value_t signal) {
+  ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, "The operation was aborted");
+  if (!is_object_type(error)) return error;
+
+  js_set(js, error, "name", js_mkstr(js, "AbortError", 10));
+  js_set(js, error, "code", js_mkstr(js, "ABORT_ERR", 9));
+
+  ant_value_t reason = abort_signal_get_reason(signal);
+  if (vtype(reason) != T_UNDEF) js_set(js, error, "cause", reason);
+  return error;
+}
+
 static ant_value_t js_events_on_abort_cb(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_object_type(state)) return js_mkundef();
-
-  ant_value_t reason = abort_signal_get_reason(js_get(js, state, "signal"));
-  if (vtype(reason) == T_UNDEF) reason = js_mkerr(js, "The operation was aborted");
-  events_on_fail(js, state, reason);
+  events_on_fail(js, state, events_make_abort_error(js, js_get(js, state, "signal")));
   return js_mkundef();
 }
 
@@ -1821,7 +1830,7 @@ static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t options = nargs >= 3 && is_object_type(args[2]) ? args[2] : js_mkundef();
   ant_value_t signal = is_object_type(options) ? js_get(js, options, "signal") : js_mkundef();
   if (abort_signal_is_signal(signal) && abort_signal_is_aborted(signal))
-    return js_mkerr(js, "The operation was aborted");
+    return js_throw(js, events_make_abort_error(js, signal));
 
   ant_value_t state = js_mkobj(js);
   ant_value_t listener = js_heavy_mkfun(js, js_events_on_event_cb, state);
@@ -1856,16 +1865,21 @@ static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
     registered = eventemitter_call_listener(js, on_method, target, on_args, 2);
     if (is_err(registered)) return registered;
 
-    on_args[0] = error_key; on_args[1] = error_listener;
-    registered = eventemitter_call_listener(js, on_method, target, on_args, 2);
+    size_t key_len = 0;
+    const char *key_str = vtype(key) == T_STR ? js_getstr(js, key, &key_len) : NULL;
+    bool key_is_error = key_str && key_len == 5 && memcmp(key_str, "error", 5) == 0;
 
-    if (is_err(registered)) {
-      events_on_remove_one(js, target, key, listener);
-      return registered;
+    if (!key_is_error) {
+      on_args[0] = error_key; on_args[1] = error_listener;
+      registered = eventemitter_call_listener(js, on_method, target, on_args, 2);
+
+      if (is_err(registered)) {
+        events_on_remove_one(js, target, key, listener);
+        return registered;
+      }
     }
-  } else if (is_eventtarget_instance(target)) {
-    eventemitter_add_listener_val(js, target, key, listener, false);
-  } else return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
+  } else if (is_eventtarget_instance(target)) eventemitter_add_listener_val(js, target, key, listener, false);
+  else return js_mkerr_typed(js, JS_ERR_TYPE, "target is not an EventEmitter or EventTarget");
 
   if (abort_signal_is_signal(signal)) {
     ant_value_t abort_listener = js_heavy_mkfun(js, js_events_on_abort_cb, state);

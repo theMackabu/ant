@@ -154,5 +154,15 @@ element reads should come from.
 
 ## Validation status
 
-Repro tables above were captured against node v26 and ant at `6876e2c8`. No fixes landed
-yet; both parts are open.
+Repro tables above were captured against node v26 and ant at `6876e2c8`.
+
+Part 2 FIXED (2026-08-01): the failure was not in the predicates but in
+`array_includes_dense_fast` trusting `may_have_holes` — the flag is never set by the
+defineProperty path, so the fast scan read raw `T_EMPTY` dense slots and returned false
+while the elements lived in the shape. The no-holes branch was removed; an empty slot now
+always bails to the slow lookup path. Whole repro table verified identical to node;
+bench_includes_dense/sparse at parity. Part 1 FIXED (2026-08-01): intern_length() added via header adjacency, 21 strlen
+consumers migrated, and the dynamic-get path converted to length-carrying
+(js_try_get_len / js_getprop_fallback_len; the silver shim lost its NUL-terminating
+copy). Full repro table identical to node; covered by tests/test_nul_property_keys.cjs.
+Both parts of this plan are complete; move to completed/ on next doc pass.

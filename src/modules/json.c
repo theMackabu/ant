@@ -614,7 +614,7 @@ static json_write_t json_write_object_fast(
 
   for (size_t i = 0; i < key_count; i++) {
     const char *key = keys[i];
-    size_t key_len = strlen(key);
+    size_t key_len = intern_length(key);
     if (!is_key_in_replacer_arr(js, ctx, key, key_len)) continue;
 
     ant_prop_loc_t loc = lkp_interned(val, key);

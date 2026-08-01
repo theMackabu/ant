@@ -572,8 +572,19 @@ static bool console_format_text(void *ctx, const char *s, size_t len) {
   return c->ok;
 }
 
+static bool console_emit_inspected(console_format_ctx_t *c, ant_value_t value) {
+  char cbuf[256];
+  js_cstr_t cstr = js_inspect_cstr(c->js, value, cbuf, sizeof(cbuf));
+
+  c->ok = io_print_to_output(cstr.ptr, c->out, io_no_color);
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return c->ok;
+}
+
 static bool console_format_value(void *ctx, ant_value_t value, char spec) {
   console_format_ctx_t *c = (console_format_ctx_t *)ctx;
+  if ((spec == 'o' || spec == 'O') && vtype(value) == T_STR)
+    return console_emit_inspected(c, value);
   return console_emit_value(c, value, spec == 's' && vtype(value) == T_STR);
 }
 

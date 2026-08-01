@@ -1,4 +1,5 @@
 #include <compat.h> // IWYU pragma: keep
+#include <ada_c.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -221,6 +222,7 @@ typedef struct {
   url_fmt_buf_t tail;
   url_fmt_buf_t input;
   char *auth;
+  char *idna;
 } legacy_parse_scratch_t;
 
 static void legacy_parse_scratch_free(legacy_parse_scratch_t *s) {
@@ -231,6 +233,7 @@ static void legacy_parse_scratch_free(legacy_parse_scratch_t *s) {
   free(s->tail.buf);
   free(s->input.buf);
   free(s->auth);
+  free(s->idna);
 }
 
 ant_value_t legacy_url_parse_impl(
@@ -423,7 +426,29 @@ ant_value_t legacy_url_parse_impl(
     if (hostname.len >= 2 && hostname.ptr[0] == '[' && hostname.ptr[hostname.len - 1] == ']') {
       url.hostname = url_slice(hostname.ptr + 1, hostname.len - 2);
       ipv6_hostname = true;
-    } else url.hostname = hostname;
+    } else {
+      bool non_ascii = false;
+      for (size_t i = 0; i < hostname.len; i++)
+        if ((unsigned char)hostname.ptr[i] >= 0x80) { non_ascii = true; break; }
+
+      if (non_ascii) {
+        ada_owned_string ascii = ada_idna_to_ascii(hostname.ptr, hostname.len);
+        if (!ascii.data || !ascii.length) {
+          ada_free_owned_string(ascii);
+          legacy_parse_scratch_free(&scratch);
+          ant_value_t props = js_mkobj(js);
+          js_set(js, props, "code", js_mkstr(js, "ERR_INVALID_URL", 15));
+          js_set(js, props, "input", js_mkstr(js, input, input_len));
+          return js_mkerr_props(js, JS_ERR_TYPE, props, "Invalid URL");
+        }
+        scratch.idna = strndup(ascii.data, ascii.length);
+        ada_free_owned_string(ascii);
+        if (!scratch.idna) goto oom;
+        hostname = url_slice(scratch.idna, strlen(scratch.idna));
+      }
+
+      url.hostname = hostname;
+    }
 
     if (!ipv6_hostname) {
     for (size_t i = 0; i < hostname.len; i++) {
