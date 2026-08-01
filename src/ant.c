@@ -10532,6 +10532,12 @@ static ant_value_t array_includes_dense_fast(
   ant_offset_t dense_len = dense_iterable_length(js, arr);
   if (dense_len != len) return js_mkundef();
 
+  if (!array_may_have_holes(arr)) {
+    for (ant_offset_t i = start; i < len; i++) 
+      if (array_includes_matches(js, query, dense[i])) return mkval(T_BOOL, 1);
+    return mkval(T_BOOL, 0);
+  }
+
   for (ant_offset_t i = start; i < len; i++) {
     ant_value_t val = dense[i];
     if (is_empty_slot(val)) return js_mkundef();
