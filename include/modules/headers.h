@@ -4,13 +4,15 @@
 #include "types.h"
 #include "modules/symbol.h"
 
-extern ant_value_t g_headers_iter_proto;
-extern ant_value_t g_headers_proto;
-
 typedef void (*headers_foreach_cb)(
   const char *name,
   const char *value,
   void *ctx
+);
+
+size_t headers_find_literal(
+  ant_value_t hdrs, const char *lower_name, 
+  const char **first_value
 );
 
 void init_headers_module(ant_t *js);
@@ -31,7 +33,5 @@ ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init);
 ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name);
 ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v);
 ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value);
-
-size_t headers_find_literal(ant_value_t hdrs, const char *lower_name, const char **first_value);
 
 #endif

@@ -31,8 +31,8 @@ static size_t ta_metadata_bytes     = 0;
 static size_t buffer_registry_count = 0;
 static size_t buffer_registry_cap   = 0;
 
-static ArrayBufferData **buffer_registry   = NULL;
-static ant_value_t g_typedarray_iter_proto = 0;
+// TODO: move to isolate
+static ArrayBufferData **buffer_registry = NULL;
 
 static void *ta_meta_alloc(size_t size) {
   void *ptr = ant_calloc(size);
@@ -206,7 +206,7 @@ static ant_value_t ta_values(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_VALUES, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -214,7 +214,7 @@ static ant_value_t ta_keys(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_KEYS, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -222,7 +222,7 @@ static ant_value_t ta_entries(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_ENTRIES, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -3699,10 +3699,10 @@ void init_buffer_module(ant_t *js) {
   js_set(js, typedarray_proto, "constructor", typedarray_ctor);
   js_set_descriptor(js, typedarray_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
-  g_typedarray_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_typedarray_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
-  js_iter_register_advance(g_typedarray_iter_proto, advance_typedarray);
+  js->builtins.typedarray_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.typedarray_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
+  js_iter_register_advance(js->builtins.typedarray_iter_proto, advance_typedarray);
 
   js_set(js, typedarray_proto, "values", js_mkfun(ta_values));
   js_set(js, typedarray_proto, "keys", js_mkfun(ta_keys));

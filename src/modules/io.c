@@ -25,7 +25,6 @@
 #include "internal.h"
 #include "utils.h"
 #include "inspector.h"
-#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
 #include "modules/util.h"
@@ -36,9 +35,6 @@ bool io_no_color = false;
 
 static bool g_sandbox_terminal_enabled = false;
 static uint32_t g_sandbox_terminal_capabilities = 0;
-
-static ant_value_t g_console_proto = 0;
-static ant_value_t g_console_ctor = 0;
 
 static bool io_fd_is_tty(int fd) {
   if (g_sandbox_terminal_enabled) {
@@ -1257,9 +1253,9 @@ static void console_apply_methods(ant_t *js, ant_value_t console_obj) {
 }
 
 static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_console_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.console_proto);
   ant_value_t console_obj = js_mkobj(js);
-  js_set_proto_init(console_obj, is_special_object(proto) ? proto : g_console_proto);
+  js_set_proto_init(console_obj, is_special_object(proto) ? proto : js->builtins.console_proto);
 
   ant_value_t stdout_obj = js_mkundef();
   ant_value_t stderr_obj = js_mkundef();
@@ -1289,23 +1285,20 @@ static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int narg
 }
 
 static void console_ensure_constructor(ant_t *js) {
-  if (g_console_ctor) return;
+  if (js->builtins.console_ctor) return;
   
-  g_console_proto = js_mkobj(js);
-  console_apply_methods(js, g_console_proto);
+  js->builtins.console_proto = js_mkobj(js);
+  console_apply_methods(js, js->builtins.console_proto);
   
-  js_set_sym(js, g_console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
-  g_console_ctor = js_make_ctor(js, js_console_constructor, g_console_proto, "Console", 7);
-  
-  gc_register_root(&g_console_proto);
-  gc_register_root(&g_console_ctor);
+  js_set_sym(js, js->builtins.console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  js->builtins.console_ctor = js_make_ctor(js, js_console_constructor, js->builtins.console_proto, "Console", 7);
 }
 
 static ant_value_t console_create_default(ant_t *js) {
   console_ensure_constructor(js);
   ant_value_t console_obj = js_mkobj(js);
   
-  js_set_proto_init(console_obj, g_console_proto);
+  js_set_proto_init(console_obj, js->builtins.console_proto);
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_COUNTS, js_mkobj(js));
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_TIMERS, js_mkobj(js));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_INDENT, js_mknum(2));
@@ -1318,7 +1311,7 @@ static ant_value_t console_create_default(ant_t *js) {
 ant_value_t console_library(ant_t *js) {
   ant_value_t console_obj = console_create_default(js);
   
-  js_set(js, console_obj, "Console", g_console_ctor);
+  js_set(js, console_obj, "Console", js->builtins.console_ctor);
   js_set(js, console_obj, "default", console_obj);
   
   return console_obj;
@@ -1328,6 +1321,6 @@ void init_console_module(ant_t *js) {
   ant_value_t console_obj = console_create_default(js);
   console_apply_methods(js, console_obj);
   
-  js_set(js, console_obj, "Console", g_console_ctor);
+  js_set(js, console_obj, "Console", js->builtins.console_ctor);
   js_set(js, js_glob(js), "console", console_obj);
 }

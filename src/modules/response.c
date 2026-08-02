@@ -25,8 +25,6 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-ant_value_t g_response_proto = 0;
-
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
 
 static response_data_t *get_data(ant_value_t obj) {
@@ -540,7 +538,7 @@ static ant_value_t consume_body_from_stream(
   ant_value_t reader_args[1] = { stream };
   ant_value_t saved = js->new_target;
 
-  js->new_target = g_reader_proto;
+  js->new_target = js->builtins.reader_proto;
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
 
@@ -755,7 +753,7 @@ static ant_value_t response_new(ant_t *js, bool immutable_headers) {
   obj = js_mkobj(js);
   js_reserve_slots(obj, 3);
   
-  js_set_proto_init(obj, g_response_proto);
+  js_set_proto_init(obj, js->builtins.response_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_RESPONSE));
   js_set_native(obj, resp, RESPONSE_NATIVE_TAG);
   js_set_finalizer(obj, response_finalize);
@@ -787,7 +785,7 @@ static ant_value_t js_response_ctor(ant_t *js, ant_value_t *args, int nargs) {
   obj = response_new(js, false);
   if (is_err(obj)) return obj;
 
-  proto = js_instance_proto_from_new_target(js, g_response_proto);
+  proto = js_instance_proto_from_new_target(js, js->builtins.response_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   step = response_init_common(js, obj, init, body, false);
@@ -1081,7 +1079,7 @@ static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
 
   obj = js_mkobj(js);
   js_reserve_slots(obj, 3);
-  js_set_proto_init(obj, g_response_proto);
+  js_set_proto_init(obj, js->builtins.response_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_RESPONSE));
   js_set_native(obj, nd, RESPONSE_NATIVE_TAG);
   js_set_finalizer(obj, response_finalize);
@@ -1237,18 +1235,18 @@ void init_response_module(ant_t *js) {
   ant_value_t g = js_glob(js);
   ant_value_t ctor = 0;
 
-  g_response_proto = js_mkobj(js);
+  js->builtins.response_proto = js_mkobj(js);
 
-  js_set(js, g_response_proto, "text", js_mkfun(js_res_text));
-  js_set(js, g_response_proto, "json", js_mkfun(js_res_json));
-  js_set(js, g_response_proto, "arrayBuffer", js_mkfun(js_res_array_buffer));
-  js_set(js, g_response_proto, "blob", js_mkfun(js_res_blob));
-  js_set(js, g_response_proto, "formData", js_mkfun(js_res_form_data));
-  js_set(js, g_response_proto, "bytes", js_mkfun(js_res_bytes));
-  js_set(js, g_response_proto, "clone", js_mkfun(js_response_clone));
+  js_set(js, js->builtins.response_proto, "text", js_mkfun(js_res_text));
+  js_set(js, js->builtins.response_proto, "json", js_mkfun(js_res_json));
+  js_set(js, js->builtins.response_proto, "arrayBuffer", js_mkfun(js_res_array_buffer));
+  js_set(js, js->builtins.response_proto, "blob", js_mkfun(js_res_blob));
+  js_set(js, js->builtins.response_proto, "formData", js_mkfun(js_res_form_data));
+  js_set(js, js->builtins.response_proto, "bytes", js_mkfun(js_res_bytes));
+  js_set(js, js->builtins.response_proto, "clone", js_mkfun(js_response_clone));
 
 #define GETTER(prop, fn) \
-  js_set_getter_desc(js, g_response_proto, prop, sizeof(prop) - 1, js_mkfun(js_res_get_##fn), JS_DESC_C)
+  js_set_getter_desc(js, js->builtins.response_proto, prop, sizeof(prop) - 1, js_mkfun(js_res_get_##fn), JS_DESC_C)
   GETTER("type", type);
   GETTER("url", url);
   GETTER("redirected", redirected);
@@ -1260,9 +1258,9 @@ void init_response_module(ant_t *js) {
   GETTER("bodyUsed", body_used);
 #undef GETTER
 
-  js_set_sym(js, g_response_proto, get_inspect_sym(), js_mkfun(response_inspect));
-  js_set_sym(js, g_response_proto, get_toStringTag_sym(), js_mkstr(js, "Response", 8));
-  ctor = js_make_ctor(js, js_response_ctor, g_response_proto, "Response", 8);
+  js_set_sym(js, js->builtins.response_proto, get_inspect_sym(), js_mkfun(response_inspect));
+  js_set_sym(js, js->builtins.response_proto, get_toStringTag_sym(), js_mkstr(js, "Response", 8));
+  ctor = js_make_ctor(js, js_response_ctor, js->builtins.response_proto, "Response", 8);
   js_set(js, ctor, "error", js_mkfun(js_response_error));
   js_set(js, ctor, "redirect", js_mkfun(js_response_redirect));
   js_set(js, ctor, "json", js_mkfun(js_response_json_static));

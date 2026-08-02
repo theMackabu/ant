@@ -255,6 +255,18 @@ struct ant_isolate_t {
     ant_value_t async_generator_proto;
     ant_value_t async_iterator_proto;
   } sym;
+
+  struct {
+    #define ANT_BUILTIN(name) ant_value_t name;
+    #define ANT_BUILTIN_ARR(name, n) ant_value_t name[n];
+    #include "isolate_values.h"
+  } builtins;
+
+  struct {
+    #define ANT_MUTABLE_ROOT(name) ant_value_t name;
+    #define ANT_MUTABLE_ROOT_ARR(name, n) ant_value_t name[n];
+    #include "isolate_values.h"
+  } mutable_roots;
   
   ant_offset_t max_size;
   js_error_site_t errsite;

@@ -21,7 +21,6 @@
 #include "modules/symbol.h"
 #include "modules/util.h"
 #include "modules/abort.h"
-#include "modules/collections.h"
 
 typedef struct {
   char *buf;
@@ -774,12 +773,12 @@ static ant_value_t util_types_is_bigint_object(ant_t *js, ant_value_t *args, int
 
 static ant_value_t util_types_is_map_iterator(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  return js_bool(util_has_proto_in_chain(js, args[0], g_map_iter_proto));
+  return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.map_iter_proto));
 }
 
 static ant_value_t util_types_is_set_iterator(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  return js_bool(util_has_proto_in_chain(js, args[0], g_set_iter_proto));
+  return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.set_iter_proto));
 }
 
 static ant_value_t util_types_is_module_namespace_object(ant_t *js, ant_value_t *args, int nargs) {

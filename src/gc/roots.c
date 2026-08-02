@@ -93,11 +93,28 @@ ant_value_t gc_temp_root_get(gc_temp_root_handle_t handle) {
   return handle.scope->items[handle.index];
 }
 
+static void gc_visit_value_slots(
+  ant_t *js, gc_root_visitor_t visitor, 
+  const ant_value_t *slots, size_t count
+) {
+  for (size_t i = 0; i < count; i++) if (slots[i]) visitor(js, slots[i]);
+}
+
+static void gc_visit_isolate_values(ant_t *js, gc_root_visitor_t visitor) {
+  #define ANT_BUILTIN(name)             gc_visit_value_slots(js, visitor, &js->builtins.name, 1);
+  #define ANT_BUILTIN_ARR(name, n)      gc_visit_value_slots(js, visitor, js->builtins.name, n);
+  #define ANT_MUTABLE_ROOT(name)        gc_visit_value_slots(js, visitor, &js->mutable_roots.name, 1);
+  #define ANT_MUTABLE_ROOT_ARR(name, n) gc_visit_value_slots(js, visitor, js->mutable_roots.name, n);
+  #include "isolate_values.h"
+}
+
 void gc_visit_roots(ant_t *js, gc_root_visitor_t visitor) {
-  for (size_t i = 0; i < g_root_count; i++) 
+  for (size_t i = 0; i < g_root_count; i++)
     if (g_roots[i] && *g_roots[i]) visitor(js, *g_roots[i]);
-    
+
   if (!js) return;
+  gc_visit_isolate_values(js, visitor);
+
   for (size_t i = 0; i < js->c_root_count; i++) {
     ant_value_t *slot = js->c_roots[i];
     if (slot && *slot) visitor(js, *slot);

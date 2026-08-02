@@ -41,7 +41,6 @@ static const UT_icd abort_listener_icd = { sizeof(abort_listener_t), NULL, NULL,
 static const UT_icd abort_value_icd    = { sizeof(ant_value_t),      NULL, NULL, NULL };
 
 static abort_timeout_entry_t *timeout_entries = NULL;
-static ant_value_t g_signal_proto = 0;
 static bool g_initialized = false;
 
 enum { ABORT_SIGNAL_NATIVE_TAG = 0x41534947u }; // ASIG
@@ -203,7 +202,7 @@ static ant_value_t make_new_signal(ant_t *js) {
   js_set_native(obj, data, ABORT_SIGNAL_NATIVE_TAG);
   js_set_finalizer(obj, abort_signal_finalize);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_ABORT_SIGNAL));
-  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_signal_proto);
+  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, js->builtins.signal_proto);
 
   js_set(js, obj, "aborted", js_false);
   js_set(js, obj, "reason", js_mkundef());
@@ -431,7 +430,7 @@ void init_abort_module(ant_t *js) {
   ant_value_t global = js_glob(js);
 
   ant_value_t signal_proto = js_mkobj(js);
-  g_signal_proto = signal_proto;
+  js->builtins.signal_proto = signal_proto;
   g_initialized = true;
 
   js_set(js, signal_proto, "addEventListener",    js_mkfun(abort_signal_add_event_listener));
@@ -472,7 +471,6 @@ void init_abort_module(ant_t *js) {
 }
 
 void gc_mark_abort(ant_t *js, gc_mark_fn mark) {
-  if (g_initialized) mark(js, g_signal_proto);
   for (abort_timeout_entry_t *e = timeout_entries; e; e = e->next)
     if (!e->closed) mark(js, e->signal);
 }

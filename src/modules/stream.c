@@ -18,25 +18,6 @@
 
 enum { STREAM_NATIVE_TAG = 0x5354524Du }; // STRM
 
-static ant_value_t g_stream_proto = 0;
-static ant_value_t g_stream_ctor  = 0;
-
-static ant_value_t g_stream_utf8 = 0;
-static ant_value_t g_readable_proto = 0;
-static ant_value_t g_readable_ctor  = 0;
-
-static ant_value_t g_writable_proto = 0;
-static ant_value_t g_writable_ctor  = 0;
-
-static ant_value_t g_duplex_proto = 0;
-static ant_value_t g_duplex_ctor  = 0;
-
-static ant_value_t g_transform_proto = 0;
-static ant_value_t g_transform_ctor  = 0;
-
-static ant_value_t g_passthrough_proto = 0;
-static ant_value_t g_passthrough_ctor  = 0;
-
 static double g_default_high_water_mark = 16384.0;
 static double g_default_object_high_water_mark = 16.0;
 
@@ -1022,7 +1003,7 @@ static ant_value_t js_readable_set_encoding(ant_t *js, ant_value_t *args, int na
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "Readable");
   ant_value_t state = 0; ant_value_t decoder = 0;
 
-  ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : g_stream_utf8;
+  ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js->builtins.stream_utf8;
   ant_value_t encoding_str = 0;
 
   if (is_err(stream_obj)) return stream_obj;
@@ -1449,7 +1430,7 @@ static ant_value_t stream_writable_write_impl(
 static ant_value_t js_writable_write(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "Writable");
   ant_value_t callback = js_mkundef();
-  ant_value_t encoding = g_stream_utf8;
+  ant_value_t encoding = js->builtins.stream_utf8;
 
   if (is_err(stream_obj)) return stream_obj;
 
@@ -1657,7 +1638,7 @@ static ant_value_t js_transform__write(ant_t *js, ant_value_t *args, int nargs) 
   cb = js_heavy_mkfun(js, stream_transform_write_callback, cb_state);
 
   call_args[0] = nargs > 0 ? args[0] : js_mkundef();
-  call_args[1] = nargs > 1 ? args[1] : g_stream_utf8;
+  call_args[1] = nargs > 1 ? args[1] : js->builtins.stream_utf8;
   call_args[2] = cb;
 
   return stream_call(js, transform_fn, stream_obj, call_args, 3, false);
@@ -2045,7 +2026,7 @@ static ant_value_t js_readable_from(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state_obj = 0;
 
   ctor_args[0] = nargs > 1 ? args[1] : js_mkundef();
-  readable = stream_construct(js, g_readable_proto, ctor_args[0], stream_init_readable);
+  readable = stream_construct(js, js->builtins.readable_proto, ctor_args[0], stream_init_readable);
   if (is_err(readable)) return readable;
 
   state_obj = js_mkobj(js);
@@ -2172,20 +2153,20 @@ static ant_value_t js_readable_to_web(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_stream_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return stream_construct(js, g_stream_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_base);
+  return stream_construct(js, js->builtins.stream_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_base);
 }
 
 static ant_value_t js_readable_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return stream_construct(js, g_readable_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_readable);
+  return stream_construct(js, js->builtins.readable_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_readable);
 }
 
 static ant_value_t js_writable_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return stream_construct(js, g_writable_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_writable);
+  return stream_construct(js, js->builtins.writable_proto, nargs > 0 ? args[0] : js_mkundef(), stream_init_writable);
 }
 
 static ant_value_t js_duplex_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_duplex_proto);
-  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : g_duplex_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.duplex_proto);
+  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : js->builtins.duplex_proto);
   ant_value_t options = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t options_obj = is_object_type(options) ? options : js_mkobj(js);
 
@@ -2199,8 +2180,8 @@ static ant_value_t js_duplex_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_transform_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_transform_proto);
-  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : g_transform_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.stream_transform_proto);
+  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : js->builtins.stream_transform_proto);
   ant_value_t options = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t options_obj = is_object_type(options) ? options : js_mkobj(js);
   
@@ -2223,8 +2204,8 @@ static ant_value_t js_transform_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_passthrough_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_passthrough_proto);
-  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : g_passthrough_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.passthrough_proto);
+  ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : js->builtins.passthrough_proto);
   ant_value_t options = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t options_obj = is_object_type(options) ? options : js_mkobj(js);
 
@@ -2242,117 +2223,117 @@ void stream_init_constructors(ant_t *js) {
   ant_value_t ee_ctor = 0;
   ant_value_t ee_proto = 0;
 
-  if (g_stream_ctor) return;
+  if (js->builtins.stream_ctor) return;
 
   events = events_library(js);
   ee_ctor = js_get(js, events, "EventEmitter");
   ee_proto = js_get(js, ee_ctor, "prototype");
 
-  g_stream_proto = js_mkobj(js);
-  js_set_proto_init(g_stream_proto, ee_proto);
-  js_set(js, g_stream_proto, "pipe", js_mkfun(js_stream_pipe));
-  js_set(js, g_stream_proto, "unpipe", js_mkfun(js_stream_unpipe));
-  js_set(js, g_stream_proto, "pause", js_mkfun(js_stream_pause));
-  js_set(js, g_stream_proto, "resume", js_mkfun(js_stream_resume));
-  js_set(js, g_stream_proto, "isPaused", js_mkfun(js_stream_is_paused));
-  js_set(js, g_stream_proto, "destroy", js_mkfun(js_stream_destroy));
-  js_set_sym(js, g_stream_proto, get_toStringTag_sym(), js_mkstr(js, "Stream", 6));
-  g_stream_ctor = js_make_ctor(js, js_stream_ctor, g_stream_proto, "Stream", 6);
+  js->builtins.stream_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.stream_proto, ee_proto);
+  js_set(js, js->builtins.stream_proto, "pipe", js_mkfun(js_stream_pipe));
+  js_set(js, js->builtins.stream_proto, "unpipe", js_mkfun(js_stream_unpipe));
+  js_set(js, js->builtins.stream_proto, "pause", js_mkfun(js_stream_pause));
+  js_set(js, js->builtins.stream_proto, "resume", js_mkfun(js_stream_resume));
+  js_set(js, js->builtins.stream_proto, "isPaused", js_mkfun(js_stream_is_paused));
+  js_set(js, js->builtins.stream_proto, "destroy", js_mkfun(js_stream_destroy));
+  js_set_sym(js, js->builtins.stream_proto, get_toStringTag_sym(), js_mkstr(js, "Stream", 6));
+  js->builtins.stream_ctor = js_make_ctor(js, js_stream_ctor, js->builtins.stream_proto, "Stream", 6);
 
-  g_readable_proto = js_mkobj(js);
-  js_set_proto_init(g_readable_proto, g_stream_proto);
-  js_set(js, g_readable_proto, "_read", js_mkfun(js_readable__read));
-  js_set(js, g_readable_proto, "push", js_mkfun(js_readable_push));
-  js_set(js, g_readable_proto, "read", js_mkfun(js_readable_read));
-  js_set(js, g_readable_proto, "setEncoding", js_mkfun(js_readable_set_encoding));
-  js_set(js, g_readable_proto, "on", js_mkfun(js_readable_on));
-  js_set_exact(js, g_readable_proto, "addListener", js_get(js, g_readable_proto, "on"));
-  js_set(js, g_readable_proto, "once", js_mkfun(js_readable_once));
-  js_set(js, g_readable_proto, "resume", js_mkfun(js_readable_resume));
-  js_set(js, g_readable_proto, "pause", js_mkfun(js_readable_pause));
-  js_set_sym(js, g_readable_proto, get_toStringTag_sym(), js_mkstr(js, "Readable", 8));
-  g_readable_ctor = js_make_ctor(js, js_readable_ctor, g_readable_proto, "Readable", 8);
-  js_set(js, g_readable_ctor, "from", js_mkfun(js_readable_from));
-  js_set(js, g_readable_ctor, "fromWeb", js_mkfun(js_readable_from_web));
-  js_set(js, g_readable_ctor, "toWeb", js_mkfun(js_readable_to_web));
+  js->builtins.readable_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.readable_proto, js->builtins.stream_proto);
+  js_set(js, js->builtins.readable_proto, "_read", js_mkfun(js_readable__read));
+  js_set(js, js->builtins.readable_proto, "push", js_mkfun(js_readable_push));
+  js_set(js, js->builtins.readable_proto, "read", js_mkfun(js_readable_read));
+  js_set(js, js->builtins.readable_proto, "setEncoding", js_mkfun(js_readable_set_encoding));
+  js_set(js, js->builtins.readable_proto, "on", js_mkfun(js_readable_on));
+  js_set_exact(js, js->builtins.readable_proto, "addListener", js_get(js, js->builtins.readable_proto, "on"));
+  js_set(js, js->builtins.readable_proto, "once", js_mkfun(js_readable_once));
+  js_set(js, js->builtins.readable_proto, "resume", js_mkfun(js_readable_resume));
+  js_set(js, js->builtins.readable_proto, "pause", js_mkfun(js_readable_pause));
+  js_set_sym(js, js->builtins.readable_proto, get_toStringTag_sym(), js_mkstr(js, "Readable", 8));
+  js->builtins.readable_ctor = js_make_ctor(js, js_readable_ctor, js->builtins.readable_proto, "Readable", 8);
+  js_set(js, js->builtins.readable_ctor, "from", js_mkfun(js_readable_from));
+  js_set(js, js->builtins.readable_ctor, "fromWeb", js_mkfun(js_readable_from_web));
+  js_set(js, js->builtins.readable_ctor, "toWeb", js_mkfun(js_readable_to_web));
 
-  g_writable_proto = js_mkobj(js);
-  js_set_proto_init(g_writable_proto, g_stream_proto);
-  js_set(js, g_writable_proto, "_write", js_mkfun(js_writable__write));
-  js_set(js, g_writable_proto, "_final", js_mkfun(js_writable__final));
-  js_set(js, g_writable_proto, "write", js_mkfun(js_writable_write));
-  stream_define_writable_accessors(js, g_writable_proto);
-  js_set(js, g_writable_proto, "end", js_mkfun(js_writable_end));
-  js_set(js, g_writable_proto, "cork", js_mkfun(stream_noop));
-  js_set(js, g_writable_proto, "uncork", js_mkfun(stream_noop));
-  js_set_sym(js, g_writable_proto, get_toStringTag_sym(), js_mkstr(js, "Writable", 8));
-  g_writable_ctor = js_make_ctor(js, js_writable_ctor, g_writable_proto, "Writable", 8);
+  js->builtins.writable_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.writable_proto, js->builtins.stream_proto);
+  js_set(js, js->builtins.writable_proto, "_write", js_mkfun(js_writable__write));
+  js_set(js, js->builtins.writable_proto, "_final", js_mkfun(js_writable__final));
+  js_set(js, js->builtins.writable_proto, "write", js_mkfun(js_writable_write));
+  stream_define_writable_accessors(js, js->builtins.writable_proto);
+  js_set(js, js->builtins.writable_proto, "end", js_mkfun(js_writable_end));
+  js_set(js, js->builtins.writable_proto, "cork", js_mkfun(stream_noop));
+  js_set(js, js->builtins.writable_proto, "uncork", js_mkfun(stream_noop));
+  js_set_sym(js, js->builtins.writable_proto, get_toStringTag_sym(), js_mkstr(js, "Writable", 8));
+  js->builtins.writable_ctor = js_make_ctor(js, js_writable_ctor, js->builtins.writable_proto, "Writable", 8);
 
-  g_duplex_proto = js_mkobj(js);
-  js_set_proto_init(g_duplex_proto, g_readable_proto);
-  js_set(js, g_duplex_proto, "_write", js_mkfun(js_writable__write));
-  js_set(js, g_duplex_proto, "_final", js_mkfun(js_writable__final));
-  js_set(js, g_duplex_proto, "write", js_mkfun(js_writable_write));
-  stream_define_writable_accessors(js, g_duplex_proto);
-  js_set(js, g_duplex_proto, "end", js_mkfun(js_writable_end));
-  js_set(js, g_duplex_proto, "cork", js_mkfun(stream_noop));
-  js_set(js, g_duplex_proto, "uncork", js_mkfun(stream_noop));
-  js_set_sym(js, g_duplex_proto, get_toStringTag_sym(), js_mkstr(js, "Duplex", 6));
-  g_duplex_ctor = js_make_ctor(js, js_duplex_ctor, g_duplex_proto, "Duplex", 6);
+  js->builtins.duplex_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.duplex_proto, js->builtins.readable_proto);
+  js_set(js, js->builtins.duplex_proto, "_write", js_mkfun(js_writable__write));
+  js_set(js, js->builtins.duplex_proto, "_final", js_mkfun(js_writable__final));
+  js_set(js, js->builtins.duplex_proto, "write", js_mkfun(js_writable_write));
+  stream_define_writable_accessors(js, js->builtins.duplex_proto);
+  js_set(js, js->builtins.duplex_proto, "end", js_mkfun(js_writable_end));
+  js_set(js, js->builtins.duplex_proto, "cork", js_mkfun(stream_noop));
+  js_set(js, js->builtins.duplex_proto, "uncork", js_mkfun(stream_noop));
+  js_set_sym(js, js->builtins.duplex_proto, get_toStringTag_sym(), js_mkstr(js, "Duplex", 6));
+  js->builtins.duplex_ctor = js_make_ctor(js, js_duplex_ctor, js->builtins.duplex_proto, "Duplex", 6);
 
-  g_transform_proto = js_mkobj(js);
-  js_set_proto_init(g_transform_proto, g_duplex_proto);
-  js_set(js, g_transform_proto, "_transform", js_mkfun(js_transform__transform));
-  js_set(js, g_transform_proto, "_write", js_mkfun(js_transform__write));
-  js_set(js, g_transform_proto, "_final", js_mkfun(js_transform__final));
-  js_set_sym(js, g_transform_proto, get_toStringTag_sym(), js_mkstr(js, "Transform", 9));
-  g_transform_ctor = js_make_ctor(js, js_transform_ctor, g_transform_proto, "Transform", 9);
+  js->builtins.stream_transform_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.stream_transform_proto, js->builtins.duplex_proto);
+  js_set(js, js->builtins.stream_transform_proto, "_transform", js_mkfun(js_transform__transform));
+  js_set(js, js->builtins.stream_transform_proto, "_write", js_mkfun(js_transform__write));
+  js_set(js, js->builtins.stream_transform_proto, "_final", js_mkfun(js_transform__final));
+  js_set_sym(js, js->builtins.stream_transform_proto, get_toStringTag_sym(), js_mkstr(js, "Transform", 9));
+  js->builtins.stream_transform_ctor = js_make_ctor(js, js_transform_ctor, js->builtins.stream_transform_proto, "Transform", 9);
 
-  g_passthrough_proto = js_mkobj(js);
-  js_set_proto_init(g_passthrough_proto, g_transform_proto);
-  js_set(js, g_passthrough_proto, "_transform", js_mkfun(js_passthrough__transform));
-  js_set_sym(js, g_passthrough_proto, get_toStringTag_sym(), js_mkstr(js, "PassThrough", 11));
-  g_passthrough_ctor = js_make_ctor(js, js_passthrough_ctor, g_passthrough_proto, "PassThrough", 11);
+  js->builtins.passthrough_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.passthrough_proto, js->builtins.stream_transform_proto);
+  js_set(js, js->builtins.passthrough_proto, "_transform", js_mkfun(js_passthrough__transform));
+  js_set_sym(js, js->builtins.passthrough_proto, get_toStringTag_sym(), js_mkstr(js, "PassThrough", 11));
+  js->builtins.passthrough_ctor = js_make_ctor(js, js_passthrough_ctor, js->builtins.passthrough_proto, "PassThrough", 11);
 
-  g_stream_utf8 = js_mkstr(js, "utf8", 4);
-  gc_register_root(&g_stream_utf8);
-  gc_register_root(&g_stream_proto);
-  gc_register_root(&g_stream_ctor);
-  gc_register_root(&g_readable_proto);
-  gc_register_root(&g_readable_ctor);
-  gc_register_root(&g_writable_proto);
-  gc_register_root(&g_writable_ctor);
-  gc_register_root(&g_duplex_proto);
-  gc_register_root(&g_duplex_ctor);
-  gc_register_root(&g_transform_proto);
-  gc_register_root(&g_transform_ctor);
-  gc_register_root(&g_passthrough_proto);
-  gc_register_root(&g_passthrough_ctor);
+  js->builtins.stream_utf8 = js_mkstr(js, "utf8", 4);
+  gc_register_root(&js->builtins.stream_utf8);
+  gc_register_root(&js->builtins.stream_proto);
+  gc_register_root(&js->builtins.stream_ctor);
+  gc_register_root(&js->builtins.readable_proto);
+  gc_register_root(&js->builtins.readable_ctor);
+  gc_register_root(&js->builtins.writable_proto);
+  gc_register_root(&js->builtins.writable_ctor);
+  gc_register_root(&js->builtins.duplex_proto);
+  gc_register_root(&js->builtins.duplex_ctor);
+  gc_register_root(&js->builtins.stream_transform_proto);
+  gc_register_root(&js->builtins.stream_transform_ctor);
+  gc_register_root(&js->builtins.passthrough_proto);
+  gc_register_root(&js->builtins.passthrough_ctor);
 }
 
 ant_value_t stream_readable_constructor(ant_t *js) {
   stream_init_constructors(js);
-  return g_readable_ctor;
+  return js->builtins.readable_ctor;
 }
 
 ant_value_t stream_writable_constructor(ant_t *js) {
   stream_init_constructors(js);
-  return g_writable_ctor;
+  return js->builtins.writable_ctor;
 }
 
 ant_value_t stream_readable_prototype(ant_t *js) {
   stream_init_constructors(js);
-  return g_readable_proto;
+  return js->builtins.readable_proto;
 }
 
 ant_value_t stream_writable_prototype(ant_t *js) {
   stream_init_constructors(js);
-  return g_writable_proto;
+  return js->builtins.writable_proto;
 }
 
 ant_value_t stream_duplex_prototype(ant_t *js) {
   stream_init_constructors(js);
-  return g_duplex_proto;
+  return js->builtins.duplex_proto;
 }
 
 ant_value_t stream_construct_readable(ant_t *js, ant_value_t base_proto, ant_value_t options) {
@@ -2489,12 +2470,12 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, promises, "pipeline", js_mkfun(js_stream_promises_pipeline));
   js_set(js, promises, "finished", js_mkfun(js_stream_promises_finished));
 
-  js_set_module_default(js, lib, g_stream_ctor, "Stream");
-  js_set(js, lib, "Readable", g_readable_ctor);
-  js_set(js, lib, "Writable", g_writable_ctor);
-  js_set(js, lib, "Duplex", g_duplex_ctor);
-  js_set(js, lib, "Transform", g_transform_ctor);
-  js_set(js, lib, "PassThrough", g_passthrough_ctor);
+  js_set_module_default(js, lib, js->builtins.stream_ctor, "Stream");
+  js_set(js, lib, "Readable", js->builtins.readable_ctor);
+  js_set(js, lib, "Writable", js->builtins.writable_ctor);
+  js_set(js, lib, "Duplex", js->builtins.duplex_ctor);
+  js_set(js, lib, "Transform", js->builtins.stream_transform_ctor);
+  js_set(js, lib, "PassThrough", js->builtins.passthrough_ctor);
   js_set(js, lib, "pipeline", js_mkfun(js_stream_pipeline));
   js_set(js, lib, "finished", js_mkfun(js_stream_finished));
   js_set(js, lib, "getDefaultHighWaterMark", js_mkfun(js_stream_get_default_high_water_mark));
@@ -2505,20 +2486,20 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, lib, "isReadable", js_mkfun(js_stream_is_readable));
   js_set(js, lib, "promises", promises);
 
-  js_set(js, g_stream_ctor, "Readable", g_readable_ctor);
-  js_set(js, g_stream_ctor, "Writable", g_writable_ctor);
-  js_set(js, g_stream_ctor, "Duplex", g_duplex_ctor);
-  js_set(js, g_stream_ctor, "Transform", g_transform_ctor);
-  js_set(js, g_stream_ctor, "PassThrough", g_passthrough_ctor);
-  js_set(js, g_stream_ctor, "pipeline", js_get(js, lib, "pipeline"));
-  js_set(js, g_stream_ctor, "finished", js_get(js, lib, "finished"));
-  js_set(js, g_stream_ctor, "getDefaultHighWaterMark", js_get(js, lib, "getDefaultHighWaterMark"));
-  js_set(js, g_stream_ctor, "setDefaultHighWaterMark", js_get(js, lib, "setDefaultHighWaterMark"));
-  js_set(js, g_stream_ctor, "isDestroyed", js_get(js, lib, "isDestroyed"));
-  js_set(js, g_stream_ctor, "isDisturbed", js_get(js, lib, "isDisturbed"));
-  js_set(js, g_stream_ctor, "isErrored", js_get(js, lib, "isErrored"));
-  js_set(js, g_stream_ctor, "isReadable", js_get(js, lib, "isReadable"));
-  js_set(js, g_stream_ctor, "promises", promises);
+  js_set(js, js->builtins.stream_ctor, "Readable", js->builtins.readable_ctor);
+  js_set(js, js->builtins.stream_ctor, "Writable", js->builtins.writable_ctor);
+  js_set(js, js->builtins.stream_ctor, "Duplex", js->builtins.duplex_ctor);
+  js_set(js, js->builtins.stream_ctor, "Transform", js->builtins.stream_transform_ctor);
+  js_set(js, js->builtins.stream_ctor, "PassThrough", js->builtins.passthrough_ctor);
+  js_set(js, js->builtins.stream_ctor, "pipeline", js_get(js, lib, "pipeline"));
+  js_set(js, js->builtins.stream_ctor, "finished", js_get(js, lib, "finished"));
+  js_set(js, js->builtins.stream_ctor, "getDefaultHighWaterMark", js_get(js, lib, "getDefaultHighWaterMark"));
+  js_set(js, js->builtins.stream_ctor, "setDefaultHighWaterMark", js_get(js, lib, "setDefaultHighWaterMark"));
+  js_set(js, js->builtins.stream_ctor, "isDestroyed", js_get(js, lib, "isDestroyed"));
+  js_set(js, js->builtins.stream_ctor, "isDisturbed", js_get(js, lib, "isDisturbed"));
+  js_set(js, js->builtins.stream_ctor, "isErrored", js_get(js, lib, "isErrored"));
+  js_set(js, js->builtins.stream_ctor, "isReadable", js_get(js, lib, "isReadable"));
+  js_set(js, js->builtins.stream_ctor, "promises", promises);
 
   js_set(js, promises, "default", promises);
   js_set_slot_wb(js, promises, SLOT_DEFAULT, promises);

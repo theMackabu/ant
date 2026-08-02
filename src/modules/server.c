@@ -1265,13 +1265,12 @@ static bool server_request_ensure_reader(server_request_t *req) {
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
 
   saved = js->new_target;
-  js->new_target = g_reader_proto;
+  js->new_target = js->builtins.reader_proto;
   req->response_reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
 
   return !is_err(req->response_reader);
 }
-
 
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   server_write_req_t *wr = (server_write_req_t *)user_data;

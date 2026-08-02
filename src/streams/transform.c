@@ -15,9 +15,6 @@
 #include "streams/readable.h"
 #include "streams/writable.h"
 
-ant_value_t g_ts_proto;
-ant_value_t g_ts_ctrl_proto;
-
 static inline bool ts_has_stream_shape(ant_value_t obj) {
   return vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
     && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES))
@@ -914,13 +911,13 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t ts_obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_ts_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ts_proto);
   if (is_object_type(proto)) js_set_proto_init(ts_obj, proto);
   js_set_slot(ts_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM));
   js_set_slot(ts_obj, SLOT_DATA, js_mknum(0));
 
   ant_value_t ctrl_obj = js_mkobj(js);
-  js_set_proto_init(ctrl_obj, g_ts_ctrl_proto);
+  js_set_proto_init(ctrl_obj, js->builtins.ts_ctrl_proto);
   js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM_CONTROLLER));
   js_set_slot(ctrl_obj, SLOT_DATA, ts_obj);
   js_set_slot(ctrl_obj, SLOT_ENTRIES, transform_fn);
@@ -948,7 +945,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   rst->state = RS_STATE_READABLE;
 
   ant_value_t rs_obj = js_mkobj(js);
-  js_set_proto_init(rs_obj, g_rs_proto);
+  js_set_proto_init(rs_obj, js->builtins.rs_proto);
   js_set_slot(rs_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
   js_set_native(rs_obj, rst, RS_STREAM_NATIVE_TAG);
   js_set_finalizer(rs_obj, ts_rs_finalize);
@@ -958,7 +955,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   rcc->strategy_hwm = readable_hwm;
 
   ant_value_t rs_ctrl_obj = js_mkobj(js);
-  js_set_proto_init(rs_ctrl_obj, g_controller_proto);
+  js_set_proto_init(rs_ctrl_obj, js->builtins.controller_proto);
   js_set_slot(rs_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_native(rs_ctrl_obj, rcc, RS_CONTROLLER_NATIVE_TAG);
   js_set_slot(rs_ctrl_obj, SLOT_ENTRIES, rs_obj);
@@ -976,7 +973,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   wst->state = WS_STATE_WRITABLE;
 
   ant_value_t ws_obj = js_mkobj(js);
-  js_set_proto_init(ws_obj, g_ws_proto);
+  js_set_proto_init(ws_obj, js->builtins.ws_proto);
   js_set_slot(ws_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
   js_set_native(ws_obj, wst, WS_STREAM_NATIVE_TAG);
   js_set_slot(ws_obj, SLOT_SETTLED, js_mkarr(js));
@@ -994,7 +991,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   wc->strategy_hwm = writable_hwm;
 
   ant_value_t ws_ctrl_obj = js_mkobj(js);
-  js_set_proto_init(ws_ctrl_obj, g_ws_controller_proto);
+  js_set_proto_init(ws_ctrl_obj, js->builtins.ws_controller_proto);
   js_set_slot(ws_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_CONTROLLER));
   js_set_native(ws_ctrl_obj, wc, WS_CONTROLLER_NATIVE_TAG);
   js_set_slot(ws_ctrl_obj, SLOT_ENTRIES, ws_obj);
@@ -1044,31 +1041,26 @@ static ant_value_t js_ts_ctrl_ctor(ant_t *js, ant_value_t *args, int nargs) {
 void init_transform_stream_module(ant_t *js) {
   ant_value_t g = js_glob(js);
 
-  g_ts_ctrl_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_ts_ctrl_proto, "desiredSize", 11, js_mkfun(js_ts_ctrl_get_desired_size), JS_DESC_C);
-  js_set(js, g_ts_ctrl_proto, "enqueue", js_mkfun(js_ts_ctrl_enqueue));
-  js_set_descriptor(js, g_ts_ctrl_proto, "enqueue", 7, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_ts_ctrl_proto, "error", js_mkfun(js_ts_ctrl_error));
-  js_set_descriptor(js, g_ts_ctrl_proto, "error", 5, JS_DESC_W | JS_DESC_C);
-  js_set(js, g_ts_ctrl_proto, "terminate", js_mkfun(js_ts_ctrl_terminate));
-  js_set_descriptor(js, g_ts_ctrl_proto, "terminate", 9, JS_DESC_W | JS_DESC_C);
-  js_set_sym(js, g_ts_ctrl_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStreamDefaultController", 32));
+  js->builtins.ts_ctrl_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.ts_ctrl_proto, "desiredSize", 11, js_mkfun(js_ts_ctrl_get_desired_size), JS_DESC_C);
+  js_set(js, js->builtins.ts_ctrl_proto, "enqueue", js_mkfun(js_ts_ctrl_enqueue));
+  js_set_descriptor(js, js->builtins.ts_ctrl_proto, "enqueue", 7, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->builtins.ts_ctrl_proto, "error", js_mkfun(js_ts_ctrl_error));
+  js_set_descriptor(js, js->builtins.ts_ctrl_proto, "error", 5, JS_DESC_W | JS_DESC_C);
+  js_set(js, js->builtins.ts_ctrl_proto, "terminate", js_mkfun(js_ts_ctrl_terminate));
+  js_set_descriptor(js, js->builtins.ts_ctrl_proto, "terminate", 9, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, js->builtins.ts_ctrl_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStreamDefaultController", 32));
 
-  ant_value_t ctrl_ctor = js_make_ctor(js, js_ts_ctrl_ctor, g_ts_ctrl_proto, "TransformStreamDefaultController", 32);
+  ant_value_t ctrl_ctor = js_make_ctor(js, js_ts_ctrl_ctor, js->builtins.ts_ctrl_proto, "TransformStreamDefaultController", 32);
   js_set(js, g, "TransformStreamDefaultController", ctrl_ctor);
   js_set_descriptor(js, g, "TransformStreamDefaultController", 32, JS_DESC_W | JS_DESC_C);
 
-  g_ts_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_ts_proto, "readable", 8, js_mkfun(js_ts_get_readable), JS_DESC_C);
-  js_set_getter_desc(js, g_ts_proto, "writable", 8, js_mkfun(js_ts_get_writable), JS_DESC_C);
-  js_set_sym(js, g_ts_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStream", 15));
+  js->builtins.ts_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.ts_proto, "readable", 8, js_mkfun(js_ts_get_readable), JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.ts_proto, "writable", 8, js_mkfun(js_ts_get_writable), JS_DESC_C);
+  js_set_sym(js, js->builtins.ts_proto, get_toStringTag_sym(), js_mkstr(js, "TransformStream", 15));
 
-  ant_value_t ts_ctor = js_make_ctor(js, js_ts_ctor, g_ts_proto, "TransformStream", 15);
+  ant_value_t ts_ctor = js_make_ctor(js, js_ts_ctor, js->builtins.ts_proto, "TransformStream", 15);
   js_set(js, g, "TransformStream", ts_ctor);
   js_set_descriptor(js, g, "TransformStream", 15, JS_DESC_W | JS_DESC_C);
-}
-
-void gc_mark_transform_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  mark(js, g_ts_proto);
-  mark(js, g_ts_ctrl_proto);
 }

@@ -18,15 +18,15 @@ scheduled.
 
 ## Open Items
 
-- Area: `src/modules/events.c` / `src/modules/process.c` — module-level cached JS values
-  - Issue: `eventemitter_prototype()` caches the EventEmitter prototype in a process-global `static ant_value_t` (`g_eventemitter_proto`) and returns it for every isolate. Every other `g_*` cached JS value in modules has the same shape.
-  - Impact: A second isolate in one process would install objects from the first isolate's heap as prototypes for `process`/stdio (cross-heap references, GC corruption). Not reproducible today — nothing in-tree creates two isolates per process (workers are separate processes via uv_spawn) — but it silently constrains any future multi-isolate embedding.
-  - Proposed fix: If multi-isolate support is ever decided, sweep ALL module-level `g_*` JS-value caches onto `ant_t` (per-isolate), not a spot fix of one variable.
-  - Status: parked (pending multi-isolate decision)
+- Area: module-level cached JS values (`g_*` statics)
+  - Issue: RESOLVED for value caches (2026-08-02): all 129 module-level `ant_value_t` globals (static caches + extern-linked stream/fetch protos) migrated to per-isolate `js->builtins` / `js->mutable_roots` (field lists in include/isolate_values.h, opcode.h-style), marked centrally in `gc_visit_roots` — this was also the root cause of the module-import GC flake (see completed/module-import-gc-flake.md). Remaining: non-value module statics (native handles, caches like `compiled_regex_cache`, `g_active_servers` lists) are still process-global, and `js->sym` fields are still rooted via per-field `gc_register_root` rather than central marking.
+  - Impact: Remaining statics only matter if multi-isolate embedding is ever supported.
+  - Proposed fix: If multi-isolate lands, sweep the remaining non-value module statics onto `ant_t` and migrate `js->sym` registration to central marking.
+  - Status: mostly resolved; remainder parked (pending multi-isolate decision)
 
 - Area: `src/modules/worker_threads.c` — spawn-failure path
   - Issue: The `new Worker(...)` synchronous failure branch calls `wt_cleanup(wt)` (plain `free`) while `wt` is still linked on `active_workers_head` (so `gc_mark_worker_threads` walks freed memory on every GC) and while `wt_spawn_worker`'s failure branches have `uv_close`d the embedded `stdout_pipe` with a NULL callback (uv still owns a closing handle inside the freed struct).
-  - Impact: Use-after-free on GC mark and on uv close completion — but only reachable when uv_spawn fails synchronously (EMFILE-class errors; missing binaries report asynchronously via exit_cb), which also makes a fix hard to test.
+  - Impact: Use-after-free on GC mark and on uv close completion — but only reachable when uv_spawn fails synchronously (EMFILE-class errors; missing binaries report asynchronously via exit_cb), which also makes a fix hard to test. 2026-08-02: `ANT_GC_STRESS=3` runs of the spec suite intermittently segfault with PC=0 under `uv__stream_io` right after the worker_threads tests — a dead uv callback consistent with this teardown path, so the family is reachable under GC stress even without spawn failure (the stress hook was temporary; re-add a forced-GC tick in gc_maybe to reproduce).
   - Proposed fix: Mirror the success path — `wt_detach` + close handles with `wt_on_handle_closed` and `close_pending` accounting; drop `wt_cleanup` entirely (the success path deliberately leaks the struct; the failure path should match).
   - Status: backlog
 
