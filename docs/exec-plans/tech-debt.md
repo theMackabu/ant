@@ -30,6 +30,12 @@ scheduled.
   - Proposed fix: Mirror the success path — `wt_detach` + close handles with `wt_on_handle_closed` and `close_pending` accounting; drop `wt_cleanup` entirely (the success path deliberately leaks the struct; the failure path should match).
   - Status: backlog
 
+- Area: `src/modules/child_process.c` — Windows `spawnSync` option parity
+  - Issue: The win32 `spawn_sync_impl` branch ignores `timeout`, `killSignal`, and `maxBuffer` entirely (the POSIX branch implements all three via the select loop and `sync_read_ctl_t`). The `output` array and `error` shape gaps were fixed 2026-08-02, but the three options silently do nothing on Windows.
+  - Impact: `execSync`/`spawnSync` with a timeout can hang forever on Windows, and `maxBuffer` provides no protection; `tests/test_child_process_exec_sync_options.cjs` skips on win32 for exactly this reason, so CI would not catch a fix or a regression.
+  - Proposed fix: Implement the deadline with `WaitForSingleObject(pi.hProcess, remaining_ms)` + `TerminateProcess` on expiry, and cap the stdout/stderr accumulation loops with the maxBuffer budget (mirror `sync_read_ctl_t` semantics: set the ETIMEDOUT/ENOBUFS `error` via the same `sync_result_error` shape). Needs a Windows machine to validate; un-skip the options test on win32 once done.
+  - Status: backlog (blocked on Windows validation)
+
 
 - Area: `src/sandbox/backends/darwin.c` / macOS HVF VMM interrupts
   - Issue: The Darwin Hypervisor.framework backend currently continues when `hv_gic_config_set_msi_interrupt_range()` fails, and device bringup still includes legacy/polling/manual wake paths instead of a fully interrupt-driven virtio PCI model.
