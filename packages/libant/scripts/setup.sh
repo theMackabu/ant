@@ -8,7 +8,7 @@ meson subprojects download
 
 RSYNC_OPTS=""
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) RSYNC_OPTS="--copy-links" ;;
+  MINGW*|MSYS*|CYGWIN*|CLANG*|UCRT*) RSYNC_OPTS="--copy-links" ;;
 esac
 
 mkdir -p "$SCRIPT_DIR/vendor"
