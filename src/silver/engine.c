@@ -620,22 +620,29 @@ ant_value_t sv_string_builder_append_slot(
     return js_mkundef();
   }
 
-  ant_value_t lu = unwrap_primitive(js, lhs);
-  ant_value_t ru = unwrap_primitive(js, rhs);
+  ant_value_t lu = sv_add_to_primitive(js, lhs);
+  if (is_err(lu)) return lu;
+  
+  ant_value_t ru = sv_add_to_primitive(js, rhs);
+  if (is_err(ru)) return ru;
+  
   bool string_concat = is_non_numeric(lu) || is_non_numeric(ru);
   if (!string_concat) {
-    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lhs, rhs);
+    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lu, ru);
     if (is_err(add_err)) return add_err;
     sv_record_slot_feedback(frame, func, slot_idx, *slot);
     return js_mkundef();
   }
 
-  ant_value_t lhs_str = coerce_to_str_concat(js, lhs);
+  ant_value_t lhs_str = coerce_to_str_concat(js, lu);
   if (is_err(lhs_str)) return lhs_str;
-  ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
+  
+  ant_value_t rhs_str = coerce_to_str_concat(js, ru);
   if (is_err(rhs_str)) return rhs_str;
+  
   lhs_str = sv_builder_normalize_chunk(js, lhs_str);
   if (is_err(lhs_str)) return lhs_str;
+  
   rhs_str = sv_builder_normalize_chunk(js, rhs_str);
   if (is_err(rhs_str)) return rhs_str;
 
@@ -645,8 +652,10 @@ ant_value_t sv_string_builder_append_slot(
 
   ant_value_t append_lhs = sv_builder_append_flat(js, builder, lhs_str);
   if (is_err(append_lhs)) return append_lhs;
+  
   ant_value_t append_rhs = sv_builder_append_flat(js, builder, rhs_str);
   if (is_err(append_rhs)) return append_rhs;
+  
   *slot = builder_value;
   sv_record_slot_feedback(frame, func, slot_idx, *slot);
   
@@ -672,20 +681,22 @@ ant_value_t sv_string_builder_append_snapshot_slot(
     return js_mkundef();
   }
 
-  ant_value_t lu = unwrap_primitive(js, lhs);
-  ant_value_t ru = unwrap_primitive(js, rhs);
-  
+  ant_value_t lu = sv_add_to_primitive(js, lhs);
+  if (is_err(lu)) return lu;
+  ant_value_t ru = sv_add_to_primitive(js, rhs);
+  if (is_err(ru)) return ru;
+
   bool string_concat = is_non_numeric(lu) || is_non_numeric(ru);
   if (!string_concat) {
-    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lhs, rhs);
+    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lu, ru);
     if (is_err(add_err)) return add_err;
     sv_record_slot_feedback(frame, func, slot_idx, *slot);
     return js_mkundef();
   }
 
-  ant_value_t lhs_str = coerce_to_str_concat(js, lhs);
+  ant_value_t lhs_str = coerce_to_str_concat(js, lu);
   if (is_err(lhs_str)) return lhs_str;
-  ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
+  ant_value_t rhs_str = coerce_to_str_concat(js, ru);
   if (is_err(rhs_str)) return rhs_str;
   lhs_str = sv_builder_normalize_chunk(js, lhs_str);
   if (is_err(lhs_str)) return lhs_str;

@@ -5,11 +5,13 @@
 #include "ant.h"
 #include "internal.h"
 #include "errors.h"
+#include "gc/roots.h"
 #include "utils.h"
 #include "silver/lexer.h"
 
 #define BIGINT_BASE ((uint64_t)0x100000000ULL)
 #define BIGINT_DEC_GROUP_BASE 1000000000U
+#define BIGINT_STACK_LIMBS 32u
 
 typedef struct {
   uint8_t sign;
@@ -87,6 +89,84 @@ static const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
   return payload->limbs;
 }
 
+static ant_value_t bigint_alloc_payload(
+  ant_t *js,
+  size_t capacity,
+  bigint_payload_t **payload_out
+) {
+  if (capacity == 0) capacity = 1;
+  if (capacity > UINT32_MAX) return js_mkerr(js, "oom");
+
+  size_t limbs_bytes;
+  if (!checked_mul_size(capacity, sizeof(uint32_t), &limbs_bytes))
+    return js_mkerr(js, "oom");
+
+  size_t payload_size;
+  if (!checked_add_size(offsetof(bigint_payload_t, limbs), limbs_bytes, &payload_size))
+    return js_mkerr(js, "oom");
+
+  bigint_payload_t *payload = (bigint_payload_t *)js_type_alloc(
+    js, ANT_ALLOC_BIGINT, payload_size, _Alignof(bigint_payload_t)
+  );
+  if (!payload) return js_mkerr(js, "oom");
+
+  payload->sign = 0;
+  payload->pad[0] = 0;
+  payload->pad[1] = 0;
+  payload->pad[2] = 0;
+  payload->limb_count = (uint32_t)capacity;
+  *payload_out = payload;
+  return mkval(T_BIGINT, (uintptr_t)payload);
+}
+
+static ant_value_t bigint_alloc_binary_payload(
+  ant_t *js,
+  ant_value_t a,
+  ant_value_t b,
+  size_t capacity,
+  bigint_payload_t **payload_out
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  if (!gc_push_root(js, &a) || !gc_push_root(js, &b)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "oom");
+  }
+
+  ant_value_t out = bigint_alloc_payload(js, capacity, payload_out);
+  GC_ROOT_RESTORE(js, root_mark);
+  return out;
+}
+
+static ant_value_t bigint_alloc_unary_payload(
+  ant_t *js,
+  ant_value_t value,
+  size_t capacity,
+  bigint_payload_t **payload_out
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  if (!gc_push_root(js, &value)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "oom");
+  }
+
+  ant_value_t out = bigint_alloc_payload(js, capacity, payload_out);
+  GC_ROOT_RESTORE(js, root_mark);
+  return out;
+}
+
+static ant_value_t bigint_finish_payload(
+  ant_value_t value,
+  bigint_payload_t *payload,
+  size_t count,
+  bool negative
+) {
+  bigint_normalize_limbs(payload->limbs, &count);
+  if (count == 1 && payload->limbs[0] == 0) negative = false;
+  payload->sign = negative ? 1 : 0;
+  payload->limb_count = (uint32_t)count;
+  return value;
+}
+
 double bigint_to_double(ant_t *js, ant_value_t v) {
   size_t count;
   const uint32_t *limbs = bigint_limbs(js, v, &count);
@@ -111,31 +191,13 @@ static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t co
   }
 
   while (count > 1 && limbs[count - 1] == 0) count--;
-  if (count == 1 && limbs[0] == 0) negative = false;
 
-  if (count > UINT32_MAX) return js_mkerr(js, "oom");
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = bigint_alloc_payload(js, count, &payload);
+  if (is_err(out)) return out;
 
-  size_t limbs_bytes;
-  if (!checked_mul_size(count, sizeof(uint32_t), &limbs_bytes)) return js_mkerr(js, "oom");
-
-  size_t payload_size;
-  if (!checked_add_size(offsetof(bigint_payload_t, limbs), limbs_bytes, &payload_size)) {
-    return js_mkerr(js, "oom");
-  }
-
-  bigint_payload_t *payload = (bigint_payload_t *)js_type_alloc(
-    js, ANT_ALLOC_BIGINT, payload_size, _Alignof(bigint_payload_t)
-  );
-  if (!payload) return js_mkerr(js, "oom");
-
-  payload->sign = negative ? 1 : 0;
-  payload->pad[0] = 0;
-  payload->pad[1] = 0;
-  payload->pad[2] = 0;
-  payload->limb_count = (uint32_t)count;
-  memcpy(payload->limbs, limbs, limbs_bytes);
-
-  return mkval(T_BIGINT, (uintptr_t)payload);
+  memcpy(payload->limbs, limbs, count * sizeof(uint32_t));
+  return bigint_finish_payload(out, payload, count, negative);
 }
 
 ant_value_t bigint_from_uint64(ant_t *js, uint64_t value) {
@@ -277,11 +339,14 @@ static int bigint_cmp_abs_limbs(const uint32_t *a, size_t alen, const uint32_t *
   return 0;
 }
 
-static uint32_t *bigint_add_abs_limbs(const uint32_t *a, size_t alen, const uint32_t *b, size_t blen, size_t *rlen) {
+static size_t bigint_add_abs_limbs(
+  const uint32_t *a,
+  size_t alen,
+  const uint32_t *b,
+  size_t blen,
+  uint32_t *result
+) {
   size_t maxlen = alen > blen ? alen : blen;
-
-  uint32_t *result = limb_alloc(maxlen + 1);
-  if (!result) return NULL;
 
   uint64_t carry = 0;
   for (size_t i = 0; i < maxlen; i++) {
@@ -293,47 +358,37 @@ static uint32_t *bigint_add_abs_limbs(const uint32_t *a, size_t alen, const uint
   }
 
   result[maxlen] = (uint32_t)carry;
-  *rlen = maxlen + (carry ? 1 : 0);
-  if (*rlen == 0) *rlen = 1;
-  bigint_normalize_limbs(result, rlen);
-  return result;
+  return maxlen + (carry ? 1 : 0);
 }
 
-static uint32_t *bigint_add_u32(const uint32_t *a, size_t alen, uint32_t value, size_t *rlen) {
-  uint32_t *result = limb_dup(a, alen);
-  if (!result) return NULL;
-
+static size_t bigint_add_u32_inplace(
+  uint32_t *result,
+  size_t count,
+  size_t capacity,
+  uint32_t value
+) {
   uint64_t carry = value;
   size_t i = 0;
 
-  while (carry != 0 && i < alen) {
+  while (carry != 0 && i < count) {
     uint64_t sum = (uint64_t)result[i] + carry;
     result[i] = (uint32_t)sum;
     carry = sum >> 32;
     i++;
   }
 
-  if (carry == 0) {
-    *rlen = alen;
-    bigint_normalize_limbs(result, rlen);
-    return result;
-  }
-
-  uint32_t *grown = (uint32_t *)realloc(result, (alen + 1) * sizeof(uint32_t));
-  if (!grown) {
-    free(result);
-    return NULL;
-  }
-
-  grown[alen] = (uint32_t)carry;
-  *rlen = alen + 1;
-  return grown;
+  if (carry != 0 && count < capacity) result[count++] = (uint32_t)carry;
+  bigint_normalize_limbs(result, &count);
+  return count;
 }
 
-static uint32_t *bigint_sub_abs_limbs(const uint32_t *a, size_t alen, const uint32_t *b, size_t blen, size_t *rlen) {
-  uint32_t *result = limb_alloc(alen);
-  if (!result) return NULL;
-
+static size_t bigint_sub_abs_limbs(
+  const uint32_t *a,
+  size_t alen,
+  const uint32_t *b,
+  size_t blen,
+  uint32_t *result
+) {
   uint64_t borrow = 0;
 
   for (size_t i = 0; i < alen; i++) {
@@ -350,14 +405,25 @@ static uint32_t *bigint_sub_abs_limbs(const uint32_t *a, size_t alen, const uint
     }
   }
 
-  *rlen = alen;
-  bigint_normalize_limbs(result, rlen);
-  return result;
+  return alen;
 }
 
-static uint32_t *bigint_mul_abs_limbs(const uint32_t *a, size_t alen, const uint32_t *b, size_t blen, size_t *rlen) {
-  uint32_t *result = limb_alloc(alen + blen + 1);
-  if (!result) return NULL;
+static size_t bigint_mul_abs_limbs(
+  const uint32_t *a,
+  size_t alen,
+  const uint32_t *b,
+  size_t blen,
+  uint32_t *result
+) {
+  if (alen == 1 && blen == 1) {
+    uint64_t product = (uint64_t)a[0] * (uint64_t)b[0];
+    result[0] = (uint32_t)product;
+    result[1] = (uint32_t)(product >> 32);
+    return result[1] == 0 ? 1 : 2;
+  }
+
+  size_t capacity = alen + blen + 1;
+  memset(result, 0, capacity * sizeof(uint32_t));
 
   for (size_t i = 0; i < alen; i++) {
     uint64_t carry = 0;
@@ -378,24 +444,26 @@ static uint32_t *bigint_mul_abs_limbs(const uint32_t *a, size_t alen, const uint
     }
   }
 
-  *rlen = alen + blen + 1;
-  bigint_normalize_limbs(result, rlen);
-  return result;
+  return capacity;
 }
 
-static uint32_t *bigint_shift_left_abs(const uint32_t *limbs, size_t count, uint64_t shift, size_t *rlen) {
+static size_t bigint_shift_left_abs(
+  const uint32_t *limbs,
+  size_t count,
+  uint64_t shift,
+  uint32_t *out
+) {
   size_t limb_shift = (size_t)(shift >> 5);
   unsigned bit_shift = (unsigned)(shift & 31u);
 
   size_t out_count = count + limb_shift + 1;
-  uint32_t *out = limb_alloc(out_count);
-  if (!out) return NULL;
+  memset(out, 0, out_count * sizeof(uint32_t));
 
   if (bit_shift == 0) {
     memcpy(out + limb_shift, limbs, count * sizeof(uint32_t));
-    *rlen = count + limb_shift;
-    bigint_normalize_limbs(out, rlen);
-    return out;
+    out_count = count + limb_shift;
+    bigint_normalize_limbs(out, &out_count);
+    return out_count;
   }
 
   uint32_t carry = 0;
@@ -406,17 +474,16 @@ static uint32_t *bigint_shift_left_abs(const uint32_t *limbs, size_t count, uint
   }
 
   out[count + limb_shift] = carry;
-  *rlen = out_count;
-  bigint_normalize_limbs(out, rlen);
-  return out;
+  bigint_normalize_limbs(out, &out_count);
+  return out_count;
 }
 
-static uint32_t *bigint_shift_right_abs(
+static size_t bigint_shift_right_abs(
   const uint32_t *limbs,
   size_t count,
   uint64_t shift,
-  bool *truncated,
-  size_t *rlen
+  uint32_t *out,
+  bool *truncated
 ) {
   size_t limb_shift = (size_t)(shift >> 5);
   unsigned bit_shift = (unsigned)(shift & 31u);
@@ -428,12 +495,9 @@ static uint32_t *bigint_shift_right_abs(
       if (limbs[i] != 0) { lost = true; break; }
     }
 
-    uint32_t *zero = limb_alloc(1);
-    if (!zero) return NULL;
-    zero[0] = 0;
+    out[0] = 0;
     if (truncated) *truncated = lost;
-    *rlen = 1;
-    return zero;
+    return 1;
   }
 
   for (size_t i = 0; i < limb_shift; i++) {
@@ -441,8 +505,6 @@ static uint32_t *bigint_shift_right_abs(
   }
 
   size_t out_count = count - limb_shift;
-  uint32_t *out = limb_alloc(out_count);
-  if (!out) return NULL;
 
   if (bit_shift == 0) {
     memcpy(out, limbs + limb_shift, out_count * sizeof(uint32_t));
@@ -460,10 +522,9 @@ static uint32_t *bigint_shift_right_abs(
     if ((limbs[limb_shift] & mask) != 0) lost = true;
   }
 
-  *rlen = out_count;
-  bigint_normalize_limbs(out, rlen);
+  bigint_normalize_limbs(out, &out_count);
   if (truncated) *truncated = lost;
-  return out;
+  return out_count;
 }
 
 static uint32_t bigint_div_small_inplace(uint32_t *limbs, size_t count, uint32_t divisor) {
@@ -495,63 +556,43 @@ static size_t bigint_abs_bitlen_limbs(const uint32_t *limbs, size_t count) {
   return (count - 1) * 32u + (32u - (size_t)lead);
 }
 
-static uint32_t *bigint_to_twos_complement_limbs(
+static uint32_t bigint_twos_complement_limb(
   const uint32_t *limbs,
   size_t count,
   bool negative,
-  size_t width
+  size_t index,
+  uint64_t *carry
 ) {
-  if (width == 0) width = 1;
-
-  uint32_t *out = limb_alloc(width);
-  if (!out) return NULL;
-
-  size_t copy_count = count < width ? count : width;
-  if (copy_count > 0) memcpy(out, limbs, copy_count * sizeof(uint32_t));
-
-  if (!negative) return out;
-
-  for (size_t i = 0; i < width; i++) out[i] = ~out[i];
-
-  uint64_t carry = 1;
-  for (size_t i = 0; i < width && carry != 0; i++) {
-    uint64_t cur = (uint64_t)out[i] + carry;
-    out[i] = (uint32_t)cur;
-    carry = cur >> 32;
-  }
-
-  return out;
+  uint32_t limb = index < count ? limbs[index] : 0;
+  if (!negative) return limb;
+  uint64_t cur = (uint64_t)(~limb) + *carry;
+  *carry = cur >> 32;
+  return (uint32_t)cur;
 }
 
-static uint32_t *bigint_from_twos_complement_limbs(
-  const uint32_t *twos,
+static size_t bigint_twos_complement_to_magnitude(
+  uint32_t *limbs,
   size_t width,
-  bool *negative_out,
-  size_t *count_out
+  bool *negative_out
 ) {
   if (width == 0) width = 1;
 
-  bool negative = (twos[width - 1] & 0x80000000u) != 0;
-  uint32_t *mag = limb_dup(twos, width);
-  if (!mag) return NULL;
+  bool negative = (limbs[width - 1] & 0x80000000u) != 0;
 
   if (negative) {
-    for (size_t i = 0; i < width; i++) mag[i] = ~mag[i];
     uint64_t carry = 1;
-    for (size_t i = 0; i < width && carry != 0; i++) {
-      uint64_t cur = (uint64_t)mag[i] + carry;
-      mag[i] = (uint32_t)cur;
+    for (size_t i = 0; i < width; i++) {
+      uint64_t cur = (uint64_t)(~limbs[i]) + carry;
+      limbs[i] = (uint32_t)cur;
       carry = cur >> 32;
     }
   }
 
-  size_t mcount = width;
-  bigint_normalize_limbs(mag, &mcount);
-  if (mcount == 1 && mag[0] == 0) negative = false;
+  bigint_normalize_limbs(limbs, &width);
+  if (width == 1 && limbs[0] == 0) negative = false;
 
   if (negative_out) *negative_out = negative;
-  if (count_out) *count_out = mcount;
-  return mag;
+  return width;
 }
 
 typedef enum {
@@ -574,32 +615,37 @@ static ant_value_t bigint_bitwise_binary(ant_t *js, ant_value_t a, ant_value_t b
   size_t width = (width_bits + 31u) / 32u;
   if (width == 0) width = 1;
 
-  uint32_t *at = bigint_to_twos_complement_limbs(ad, alen, aneg, width);
-  uint32_t *bt = bigint_to_twos_complement_limbs(bd, blen, bneg, width);
-  if (!at || !bt) {
-    free(at);
-    free(bt);
-    return js_mkerr(js, "oom");
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
+
+  if (width > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_binary_payload(js, a, b, width, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    ad = bigint_limbs(js, a, &alen);
+    bd = bigint_limbs(js, b, &blen);
   }
 
+  uint64_t acarry = 1;
+  uint64_t bcarry = 1;
+  
   for (size_t i = 0; i < width; i++) {
+    uint32_t at = bigint_twos_complement_limb(ad, alen, aneg, i, &acarry);
+    uint32_t bt = bigint_twos_complement_limb(bd, blen, bneg, i, &bcarry);
     switch (op) {
-      case BIGINT_BAND: at[i] &= bt[i]; break;
-      case BIGINT_BOR:  at[i] |= bt[i]; break;
-      case BIGINT_BXOR: at[i] ^= bt[i]; break;
+      case BIGINT_BAND: result[i] = at & bt; break;
+      case BIGINT_BOR:  result[i] = at | bt; break;
+      case BIGINT_BXOR: result[i] = at ^ bt; break;
     }
   }
 
   bool negative = false;
-  size_t mcount = 0;
-  uint32_t *mag = bigint_from_twos_complement_limbs(at, width, &negative, &mcount);
-  free(at);
-  free(bt);
-  if (!mag) return js_mkerr(js, "oom");
-
-  ant_value_t out = js_mkbigint_limbs(js, mag, mcount, negative);
-  free(mag);
-  return out;
+  size_t count = bigint_twos_complement_to_magnitude(result, width, &negative);
+  return payload
+    ? bigint_finish_payload(out, payload, count, negative)
+    : js_mkbigint_limbs(js, result, count, negative);
 }
 
 ant_value_t bigint_bitand(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -624,20 +670,27 @@ ant_value_t bigint_bitnot(ant_t *js, ant_value_t value) {
   size_t width = (width_bits + 31u) / 32u;
   if (width == 0) width = 1;
 
-  uint32_t *twos = bigint_to_twos_complement_limbs(limbs, count, neg, width);
-  if (!twos) return js_mkerr(js, "oom");
-  for (size_t i = 0; i < width; i++) twos[i] = ~twos[i];
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
+
+  if (width > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_unary_payload(js, value, width, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    limbs = bigint_limbs(js, value, &count);
+  }
+
+  uint64_t carry = 1;
+  for (size_t i = 0; i < width; i++)
+    result[i] = ~bigint_twos_complement_limb(limbs, count, neg, i, &carry);
 
   bool out_neg = false;
-  size_t out_count = 0;
-  
-  uint32_t *mag = bigint_from_twos_complement_limbs(twos, width, &out_neg, &out_count);
-  free(twos); if (!mag) return js_mkerr(js, "oom");
-
-  ant_value_t out = js_mkbigint_limbs(js, mag, out_count, out_neg);
-  free(mag);
-  
-  return out;
+  size_t out_count = bigint_twos_complement_to_magnitude(result, width, &out_neg);
+  return payload
+    ? bigint_finish_payload(out, payload, out_count, out_neg)
+    : js_mkbigint_limbs(js, result, out_count, out_neg);
 }
 
 static inline unsigned clz32_nonzero(uint32_t v) {
@@ -1080,29 +1133,48 @@ ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
   const uint32_t *ad = bigint_limbs(js, a, &alen);
   const uint32_t *bd = bigint_limbs(js, b, &blen);
 
-  uint32_t *result = NULL;
+  size_t capacity = 0;
   size_t rlen = 0;
   bool rneg = false;
+  int cmp = 0;
 
   if (aneg == bneg) {
-    result = bigint_add_abs_limbs(ad, alen, bd, blen, &rlen);
+    capacity = (alen > blen ? alen : blen) + 1;
     rneg = aneg;
   } else {
-    int cmp = bigint_cmp_abs_limbs(ad, alen, bd, blen);
+    cmp = bigint_cmp_abs_limbs(ad, alen, bd, blen);
     if (cmp >= 0) {
-      result = bigint_sub_abs_limbs(ad, alen, bd, blen, &rlen);
+      capacity = alen;
       rneg = aneg;
     } else {
-      result = bigint_sub_abs_limbs(bd, blen, ad, alen, &rlen);
+      capacity = blen;
       rneg = bneg;
     }
   }
 
-  if (!result) return js_mkerr(js, "oom");
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
 
-  ant_value_t out = js_mkbigint_limbs(js, result, rlen, rneg);
-  free(result);
-  return out;
+  if (capacity > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    ad = bigint_limbs(js, a, &alen);
+    bd = bigint_limbs(js, b, &blen);
+  }
+
+  if (aneg == bneg)
+    rlen = bigint_add_abs_limbs(ad, alen, bd, blen, result);
+  else if (cmp >= 0)
+    rlen = bigint_sub_abs_limbs(ad, alen, bd, blen, result);
+  else
+    rlen = bigint_sub_abs_limbs(bd, blen, ad, alen, result);
+
+  return payload
+    ? bigint_finish_payload(out, payload, rlen, rneg)
+    : js_mkbigint_limbs(js, result, rlen, rneg);
 }
 
 ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1113,29 +1185,48 @@ ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
   const uint32_t *ad = bigint_limbs(js, a, &alen);
   const uint32_t *bd = bigint_limbs(js, b, &blen);
 
-  uint32_t *result = NULL;
+  size_t capacity = 0;
   size_t rlen = 0;
   bool rneg = false;
+  int cmp = 0;
 
   if (aneg != bneg) {
-    result = bigint_add_abs_limbs(ad, alen, bd, blen, &rlen);
+    capacity = (alen > blen ? alen : blen) + 1;
     rneg = aneg;
   } else {
-    int cmp = bigint_cmp_abs_limbs(ad, alen, bd, blen);
+    cmp = bigint_cmp_abs_limbs(ad, alen, bd, blen);
     if (cmp >= 0) {
-      result = bigint_sub_abs_limbs(ad, alen, bd, blen, &rlen);
+      capacity = alen;
       rneg = aneg;
     } else {
-      result = bigint_sub_abs_limbs(bd, blen, ad, alen, &rlen);
+      capacity = blen;
       rneg = !aneg;
     }
   }
 
-  if (!result) return js_mkerr(js, "oom");
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
 
-  ant_value_t out = js_mkbigint_limbs(js, result, rlen, rneg);
-  free(result);
-  return out;
+  if (capacity > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    ad = bigint_limbs(js, a, &alen);
+    bd = bigint_limbs(js, b, &blen);
+  }
+
+  if (aneg != bneg)
+    rlen = bigint_add_abs_limbs(ad, alen, bd, blen, result);
+  else if (cmp >= 0)
+    rlen = bigint_sub_abs_limbs(ad, alen, bd, blen, result);
+  else
+    rlen = bigint_sub_abs_limbs(bd, blen, ad, alen, result);
+
+  return payload
+    ? bigint_finish_payload(out, payload, rlen, rneg)
+    : js_mkbigint_limbs(js, result, rlen, rneg);
 }
 
 ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1146,13 +1237,24 @@ ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
   const uint32_t *ad = bigint_limbs(js, a, &alen);
   const uint32_t *bd = bigint_limbs(js, b, &blen);
 
-  uint32_t *result = bigint_mul_abs_limbs(ad, alen, bd, blen, &alen);
-  if (!result) return js_mkerr(js, "oom");
+  size_t capacity = alen + blen + 1;
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
 
-  bool rneg = (aneg != bneg) && !(alen == 1 && result[0] == 0);
-  ant_value_t out = js_mkbigint_limbs(js, result, alen, rneg);
-  free(result);
-  return out;
+  if (capacity > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    ad = bigint_limbs(js, a, &alen);
+    bd = bigint_limbs(js, b, &blen);
+  }
+
+  size_t rlen = bigint_mul_abs_limbs(ad, alen, bd, blen, result);
+  return payload
+    ? bigint_finish_payload(out, payload, rlen, aneg != bneg)
+    : js_mkbigint_limbs(js, result, rlen, aneg != bneg);
 }
 
 ant_value_t bigint_div(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1205,8 +1307,13 @@ ant_value_t bigint_neg(ant_t *js, ant_value_t a) {
   const uint32_t *limbs = bigint_limbs(js, a, &len);
   bool neg = bigint_is_negative(js, a);
 
-  if (limbs_is_zero(limbs, len)) return js_mkbigint_limbs(js, limbs, len, false);
-  return js_mkbigint_limbs(js, limbs, len, !neg);
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = bigint_alloc_unary_payload(js, a, len, &payload);
+  if (is_err(out)) return out;
+
+  limbs = bigint_limbs(js, a, &len);
+  memcpy(payload->limbs, limbs, len * sizeof(uint32_t));
+  return bigint_finish_payload(out, payload, len, !neg);
 }
 
 static inline bool bigint_is_odd(ant_t *js, ant_value_t v) {
@@ -1236,16 +1343,29 @@ ant_value_t bigint_shift_left(ant_t *js, ant_value_t value, uint64_t shift) {
   size_t count = 0;
   const uint32_t *limbs = bigint_limbs(js, value, &count);
 
-  if (limbs_is_zero(limbs, count)) return js_mkbigint(js, "0", 1, false);
+  if (limbs_is_zero(limbs, count)) return value;
 
-  uint32_t *result = NULL;
-  size_t rlen = 0;
-  result = bigint_shift_left_abs(limbs, count, shift, &rlen);
-  if (!result) return js_mkerr(js, "oom");
+  uint64_t limb_shift_u64 = shift >> 5;
+  if (limb_shift_u64 > SIZE_MAX - count - 1u) return js_mkerr(js, "oom");
+  size_t capacity = count + (size_t)limb_shift_u64 + 1u;
+  bool negative = bigint_is_negative(js, value);
 
-  ant_value_t out = js_mkbigint_limbs(js, result, rlen, bigint_is_negative(js, value));
-  free(result);
-  return out;
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
+
+  if (capacity > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_unary_payload(js, value, capacity, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    limbs = bigint_limbs(js, value, &count);
+  }
+
+  size_t rlen = bigint_shift_left_abs(limbs, count, shift, result);
+  return payload
+    ? bigint_finish_payload(out, payload, rlen, negative)
+    : js_mkbigint_limbs(js, result, rlen, negative);
 }
 
 ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
@@ -1254,33 +1374,36 @@ ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
   size_t count = 0;
   const uint32_t *limbs = bigint_limbs(js, value, &count);
 
-  if (limbs_is_zero(limbs, count)) return js_mkbigint(js, "0", 1, false);
+  if (limbs_is_zero(limbs, count)) return value;
 
   bool neg = bigint_is_negative(js, value);
   bool truncated = false;
 
-  size_t qlen = 0;
-  uint32_t *q = bigint_shift_right_abs(limbs, count, shift, &truncated, &qlen);
-  if (!q) return js_mkerr(js, "oom");
+  uint64_t limb_shift_u64 = shift >> 5;
+  size_t capacity = limb_shift_u64 >= count
+    ? 1u
+    : count - (size_t)limb_shift_u64 + (neg ? 1u : 0u);
 
-  if (!neg) {
-    ant_value_t out = js_mkbigint_limbs(js, q, qlen, false);
-    free(q);
-    return out;
+  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  bigint_payload_t *payload = NULL;
+  ant_value_t out = js_mkundef();
+  uint32_t *result = stack_limbs;
+
+  if (capacity > BIGINT_STACK_LIMBS) {
+    out = bigint_alloc_unary_payload(js, value, capacity, &payload);
+    if (is_err(out)) return out;
+    result = payload->limbs;
+    limbs = bigint_limbs(js, value, &count);
   }
 
-  if (truncated) {
-    size_t new_len = 0;
-    uint32_t *adj = bigint_add_u32(q, qlen, 1, &new_len);
-    free(q);
-    if (!adj) return js_mkerr(js, "oom");
-    q = adj;
-    qlen = new_len;
-  }
+  size_t qlen = bigint_shift_right_abs(limbs, count, shift, result, &truncated);
+  if (neg && truncated)
+    qlen = bigint_add_u32_inplace(result, qlen, capacity, 1);
 
-  ant_value_t out = js_mkbigint_limbs(js, q, qlen, !limbs_is_zero(q, qlen));
-  free(q);
-  return out;
+  bool negative = neg && !limbs_is_zero(result, qlen);
+  return payload
+    ? bigint_finish_payload(out, payload, qlen, negative)
+    : js_mkbigint_limbs(js, result, qlen, negative);
 }
 
 ant_value_t bigint_shift_right_logical(ant_t *js, ant_value_t value, uint64_t shift) {
@@ -1520,7 +1643,10 @@ static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int narg
 
 static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t val = js->this_val;
-  if (vtype(val) != T_BIGINT) return js_mkerr(js, "toString called on non-BigInt");
+  if (vtype(val) != T_BIGINT) {
+    val = unwrap_primitive(js, val);
+    if (vtype(val) != T_BIGINT) return js_mkerr(js, "toString called on non-BigInt");
+  }
 
   int radix = 10;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
@@ -1562,6 +1688,15 @@ static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nar
   return out;
 }
 
+static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t val = js->this_val;
+  if (vtype(val) != T_BIGINT) {
+    val = unwrap_primitive(js, val);
+    if (vtype(val) != T_BIGINT) return js_mkerr(js, "valueOf called on non-BigInt");
+  }
+  return val;
+}
+
 void init_bigint_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
@@ -1571,6 +1706,7 @@ void init_bigint_module(ant_t *js) {
   ant_value_t bigint_proto = js_mkobj(js);
   js_set_proto_init(bigint_proto, object_proto);
   defmethod(js, bigint_proto, "toString", 8, js_mkfun(builtin_bigint_toString));
+  defmethod(js, bigint_proto, "valueOf", 7, js_mkfun(builtin_bigint_valueOf));
 
   ant_value_t bigint_ctor_obj = mkobj(js, 0);
   js_set_proto_init(bigint_ctor_obj, function_proto);

@@ -10,6 +10,7 @@
 #include "modules/collections.h"
 
 #include "gc.h"
+#include "gc/bigints.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
@@ -314,6 +315,11 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
     return;
   }
 
+  if (t == T_BIGINT) {
+    gc_bigints_mark((const void *)(uintptr_t)(v & NANBOX_DATA_MASK));
+    return;
+  }
+
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
   ant_object_t *obj = (ant_object_t *)(uintptr_t)(v & NANBOX_DATA_MASK);
   
@@ -496,6 +502,8 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     }
     
     if (type == T_STR && g_str_mark) g_str_mark(js, w);
+    if (type == T_BIGINT)
+      gc_bigints_mark((const void *)(uintptr_t)(w & NANBOX_DATA_MASK));
   }
 }
 

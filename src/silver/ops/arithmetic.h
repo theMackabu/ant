@@ -8,35 +8,57 @@
 #include "silver/engine.h"
 #include "modules/bigint.h"
 
+static inline ant_value_t sv_add_to_primitive(ant_t *js, ant_value_t value) {
+  return is_object_type(value) 
+    ? js_to_primitive(js, value, 0) 
+    : value;
+}
+
+static inline ant_value_t sv_op_add_bigints(
+  sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r
+) {
+  ant_value_t res = bigint_add(js, l, r);
+  vm->stack[vm->sp++] = res;
+  return res;
+}
+
 static inline ant_value_t sv_op_add(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
+  
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) {
     vm->stack[vm->sp++] = tov(tod(l) + tod(r));
     return tov(0);
   }
-  ant_value_t lu = unwrap_primitive(js, l);
-  ant_value_t ru = unwrap_primitive(js, r);
-  if (vtype(lu) == T_BIGINT && vtype(ru) == T_BIGINT) {
-    ant_value_t res = bigint_add(js, lu, ru);
-    vm->stack[vm->sp++] = res;
-    return res;
-  }
-  if (vtype(lu) == T_BIGINT || vtype(ru) == T_BIGINT) {
-    return js_mkerr(js, "Cannot mix BigInt value and other types");
-  }
-  if (vtype(lu) == T_SYMBOL || vtype(ru) == T_SYMBOL) {
+  
+  if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT)
+    return sv_op_add_bigints(vm, js, l, r);
+
+  ant_value_t lu = sv_add_to_primitive(js, l);
+  if (is_err(lu)) return lu;
+  
+  ant_value_t ru = sv_add_to_primitive(js, r);
+  if (is_err(ru)) return ru;
+  
+  if (vtype(lu) == T_BIGINT && vtype(ru) == T_BIGINT)
+    return sv_op_add_bigints(vm, js, lu, ru);
+
+  if (vtype(lu) == T_SYMBOL || vtype(ru) == T_SYMBOL)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value");
-  }
+  
   if (is_non_numeric(lu) || is_non_numeric(ru)) {
-    ant_value_t l_str = coerce_to_str_concat(js, l);
+    ant_value_t l_str = coerce_to_str_concat(js, lu);
     if (is_err(l_str)) return l_str;
-    ant_value_t r_str = coerce_to_str_concat(js, r);
+    ant_value_t r_str = coerce_to_str_concat(js, ru);
     if (is_err(r_str)) return r_str;
     ant_value_t res = do_string_op(js, TOK_PLUS, l_str, r_str);
     vm->stack[vm->sp++] = res;
     return res;
   }
+  
+  if (vtype(lu) == T_BIGINT || vtype(ru) == T_BIGINT)
+    return js_mkerr(js, "Cannot mix BigInt value and other types");
+  
   vm->stack[vm->sp++] = tov(js_to_number(js, lu) + js_to_number(js, ru));
   return tov(0);
 }
