@@ -25,7 +25,7 @@ static void print_header(int num, const char *title) {
 }
 
 static ant_t *create_js_runtime(void *stack_base) {
-  ant_t *js = js_create_dynamic();
+  ant_t *js = ant_create();
   if (!js) {
     fprintf(stderr, "Failed to create JS runtime\n");
     return NULL;

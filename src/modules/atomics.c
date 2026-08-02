@@ -11,7 +11,6 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 
 #include "gc/modules.h"
 #include "modules/buffer.h"
@@ -1044,9 +1043,7 @@ static ant_value_t js_atomics_pause(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-void init_atomics_module(void) {
-  ant_t *js = rt->js;
-  
+void init_atomics_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t atomics = js_mkobj(js);
   

@@ -178,7 +178,7 @@ typedef struct {
   sv_ctor_prop_fb_t ctor_prop_fb;
 } sv_func_sidecar_t;
 
-_Static_assert(
+static_assert(
   _Alignof(sv_func_sidecar_t) > ant_sidecar,
   "function sidecar pointer uses low-bit tag"
 );
@@ -210,7 +210,7 @@ typedef struct {
   sv_type_info_t local_types[];
 } sv_func_metadata_t;
 
-_Static_assert(
+static_assert(
   _Alignof(sv_func_metadata_t) <= CODE_ARENA_ALIGNMENT,
   "function metadata alignment exceeds the code arena guarantee"
 );
@@ -394,7 +394,25 @@ struct sv_upvalue {
   uint8_t in_remember_set;
 };
 
-bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot);
+typedef struct sv_activation {
+  int frame_count;
+  int stack_count;
+  int handler_count;
+  size_t capacity;
+  sv_upvalue_t *open_upvalues;
+  sv_frame_t *frames;
+  ant_value_t *slots;
+  sv_handler_t *handlers;
+} sv_activation_t;
+
+sv_activation_t *sv_activation_capture(
+  sv_vm_t *vm, int entry_fp, 
+  sv_activation_t *reuse
+);
+
+bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act);
+void sv_activation_seal(ant_t *js, sv_activation_t *act);
+void sv_activation_discard(sv_vm_t *vm, int entry_fp);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
   if (uv->location != &uv->closed || uv->in_remember_set) return;
@@ -403,8 +421,8 @@ static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_val
   if (gc_value_is_heap_ref(new_val)) gc_remember_upvalue(js, uv);
 }
 
-static inline sv_upvalue_t *js_upvalue_alloc(void) {
-  return (sv_upvalue_t *)fixed_arena_alloc(&rt->js->upvalue_arena);
+static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
+  return (sv_upvalue_t *)fixed_arena_alloc(&js->upvalue_arena);
 }
 
 #define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
@@ -483,7 +501,7 @@ typedef struct {
 #define SV_TDZ      T_EMPTY
 #define SV_HANDLER_MAX (SV_TRY_MAX * 2)
 
-_Static_assert(SV_HANDLER_MAX <= UINT16_MAX,
+static_assert(SV_HANDLER_MAX <= UINT16_MAX,
   "frame handler indexes must fit in uint16_t");
 
 #define SV_FRAMES_HARD_MAX 65536
@@ -596,13 +614,9 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
+// TODO: use js->vm only
 static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
-  if (!js) return NULL;
-  if (js->active_async_coro) {
-    if (js->active_async_coro->sv_vm) return js->active_async_coro->sv_vm;
-    if (js->active_async_coro->owner_vm) return js->active_async_coro->owner_vm;
-  }
-  return js->vm;
+  return js ? js->vm : NULL;
 }
 
 static inline bool sv_is_strict_context(ant_t *js) {
@@ -1021,12 +1035,6 @@ static inline ant_value_t sv_call_closure(
 #define SV_CALL_FB_MISS_DISABLE 4
 
 #define SV_JIT_RETRY_INTERP    mkval(T_ERR, 1)
-#define SV_JIT_MAGIC           0xBA110ULL
-
-#define SV_JIT_BAILOUT \
-  (NANBOX_PREFIX \
-    | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) \
-    | SV_JIT_MAGIC)
   
 extern const char *const sv_op_names[OP__COUNT];
   

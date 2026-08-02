@@ -16,7 +16,6 @@
 #endif
 
 #define SV_DEFAULT_STACK_KB  984
-#define SV_ASYNC_STACK_KB    64
 #define SV_BYTES_PER_SLOT    ((int)sizeof(uint64_t))
 
 int sv_user_stack_size_kb = 0;
@@ -45,13 +44,7 @@ size_t os_thread_stack_size(void) {
 #endif
 }
 
-void sv_vm_limits(sv_vm_kind_t kind, int *out_stack_size, int *out_max_frames) {
-  if (kind == SV_VM_ASYNC) {
-    *out_stack_size = (SV_ASYNC_STACK_KB * 1024) / SV_BYTES_PER_SLOT;
-    *out_max_frames = 256;
-    return;
-  }
-
+void sv_vm_limits(int *out_stack_size, int *out_max_frames) {
   int stack_kb = (sv_user_stack_size_kb > 0)
     ? sv_user_stack_size_kb
     : SV_DEFAULT_STACK_KB;

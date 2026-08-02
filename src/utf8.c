@@ -52,12 +52,6 @@ static inline bool utf16_scan_cache_matches(const utf16_scan_cursor_t *cursor) {
     && utf16_scan_cache.byte_pos <= cursor->byte_len;
 }
 
-static inline void utf16_scan_cursor_resume_cached(utf16_scan_cursor_t *cursor) {
-  if (!utf16_scan_cache_matches(cursor)) return;
-  cursor->p = cursor->start + utf16_scan_cache.byte_pos;
-  cursor->utf16_pos = utf16_scan_cache.utf16_pos;
-}
-
 static inline void utf16_scan_cursor_resume_utf16(
   utf16_scan_cursor_t *cursor,
   size_t target_utf16
@@ -166,13 +160,6 @@ static inline bool utf16_scan_cursor_advance(
   return true;
 }
 
-static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
-  if (len == 0) { *seq_len = 0; return 0; }
-  utf8proc_int32_t cp;
-  *seq_len = (int)utf8_next(buf, (utf8proc_ssize_t)len, &cp);
-  return cp < 0 ? 0xFFFD : (uint32_t)cp;
-}
-
 static bool utf8_json_quote_reserve(char **buf, size_t *cap, size_t need) {
   if (need <= *cap) return true;
 
@@ -213,54 +200,101 @@ static bool utf8_json_quote_append_u_escape(
   return utf8_json_quote_append(buf, len, cap, escape, sizeof(escape));
 }
 
+static const char json_ascii_escape_action[128] = {
+  ['"'] = '"', ['\\'] = '\\',
+  ['\b'] = 'b', ['\f'] = 'f', ['\n'] = 'n', ['\r'] = 'r', ['\t'] = 't',
+  [0x00] = 'u', [0x01] = 'u', [0x02] = 'u', [0x03] = 'u', [0x04] = 'u', [0x05] = 'u',
+  [0x06] = 'u', [0x07] = 'u', [0x0b] = 'u', [0x0e] = 'u', [0x0f] = 'u', [0x10] = 'u',
+  [0x11] = 'u', [0x12] = 'u', [0x13] = 'u', [0x14] = 'u', [0x15] = 'u', [0x16] = 'u',
+  [0x17] = 'u', [0x18] = 'u', [0x19] = 'u', [0x1a] = 'u', [0x1b] = 'u', [0x1c] = 'u',
+  [0x1d] = 'u', [0x1e] = 'u', [0x1f] = 'u',
+};
+
+static inline size_t wtf8_decode_at(const char *str, size_t byte_len, size_t i, uint32_t *out_cp) {
+  unsigned char c = (unsigned char)str[i];
+
+  if (c < 0x80) {
+    *out_cp = c;
+    return 1;
+  }
+
+  size_t n = c < 0xC0 ? 0 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+  if (n == 0 || i + n > byte_len) return 0;
+
+  uint32_t cp = (uint32_t)(c & (0x7F >> n));
+  for (size_t k = 1; k < n; k++) {
+    if (((unsigned char)str[i + k] & 0xC0) != 0x80) return 0;
+    cp = (cp << 6) | ((uint32_t)str[i + k] & 0x3F);
+  }
+
+  *out_cp = cp;
+  return n;
+}
+
+static inline bool wtf8_is_high_surrogate(uint32_t cp) { return cp >= 0xD800 && cp <= 0xDBFF; }
+static inline bool wtf8_is_low_surrogate(uint32_t cp)  { return cp >= 0xDC00 && cp <= 0xDFFF; }
+
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len) {
-  size_t utf16_len = utf16_strlen(str, byte_len);
   size_t raw_len = 0;
-  size_t raw_cap = byte_len + 4;
-  
+  size_t raw_cap = byte_len + 12;
+
   char *raw = malloc(raw_cap);
-  if (!raw) return NULL;
+  if (!raw) {
+    if (out_len) *out_len = 0;
+    return NULL;
+  }
 
   if (!utf8_json_quote_append_char(&raw, &raw_len, &raw_cap, '"')) goto oom;
 
-  for (size_t i = 0; i < utf16_len; i++) {
-    uint32_t cu = utf16_code_unit_at(str, byte_len, i);
-    
-    if (cu >= 0xD800 && cu <= 0xDBFF && i + 1 < utf16_len) {
-    uint32_t cu2 = utf16_code_unit_at(str, byte_len, i + 1);
-    if (cu2 >= 0xDC00 && cu2 <= 0xDFFF) {
-      uint32_t cp = utf16_codepoint_at(str, byte_len, i);
-      char utf8[4];
-      int n = utf8_encode(cp, utf8);
-      if (n <= 0 || !utf8_json_quote_append(&raw, &raw_len, &raw_cap, utf8, (size_t)n)) goto oom;
+  size_t i = 0;
+  while (i < byte_len) {
+    unsigned char c = (unsigned char)str[i];
+
+    if (c < 0x80) {
+      char action = json_ascii_escape_action[c];
+      bool ok;
+
+      if (action == 0) ok = utf8_json_quote_append(&raw, &raw_len, &raw_cap, &str[i], 1);
+      else if (action == 'u') ok = utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, c);
+      else {
+        char two[2] = { '\\', action };
+        ok = utf8_json_quote_append(&raw, &raw_len, &raw_cap, two, 2);
+      }
+
+      if (!ok) goto oom;
       i++;
       continue;
-    }}
-    
-    if (cu >= 0xD800 && cu <= 0xDFFF) {
-      if (!utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, cu)) goto oom;
+    }
+
+    uint32_t cp;
+    size_t n = wtf8_decode_at(str, byte_len, i, &cp);
+    if (n == 0) {
+      if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, &str[i], 1)) goto oom;
+      i++;
       continue;
     }
-    
-    switch (cu) {
-      case '"':  if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\\"", 2)) goto oom; continue;
-      case '\\': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\\\", 2)) goto oom; continue;
-      case '\b': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\b", 2)) goto oom; continue;
-      case '\f': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\f", 2)) goto oom; continue;
-      case '\n': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\n", 2)) goto oom; continue;
-      case '\r': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\r", 2)) goto oom; continue;
-      case '\t': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\t", 2)) goto oom; continue;
-      default: break;
+
+    if (wtf8_is_high_surrogate(cp) && i + n < byte_len) {
+      uint32_t cp2;
+      size_t n2 = wtf8_decode_at(str, byte_len, i + n, &cp2);
+      if (n2 && wtf8_is_low_surrogate(cp2)) {
+        uint32_t full = 0x10000 + ((cp - 0xD800) << 10) + (cp2 - 0xDC00);
+        char utf8[4];
+        int en = utf8_encode(full, utf8);
+        if (en <= 0 || !utf8_json_quote_append(&raw, &raw_len, &raw_cap, utf8, (size_t)en)) goto oom;
+        i += n + n2;
+        continue;
+      }
     }
-    
-    if (cu < 0x20) {
-      if (!utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, cu)) goto oom;
+
+    if (wtf8_is_high_surrogate(cp) || wtf8_is_low_surrogate(cp)) {
+      if (!utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, cp)) goto oom;
+      i += n;
       continue;
     }
-    
-    char utf8[4];
-    int n = utf8_encode(cu, utf8);
-    if (n <= 0 || !utf8_json_quote_append(&raw, &raw_len, &raw_cap, utf8, (size_t)n)) goto oom;
+
+    if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, &str[i], n)) goto oom;
+    i += n;
   }
 
   if (!utf8_json_quote_append_char(&raw, &raw_len, &raw_cap, '"')) goto oom;
@@ -350,21 +384,6 @@ size_t utf8_strlen(const char *str, size_t byte_len) {
 }
 
 size_t utf16_strlen(const char *str, size_t byte_len) {
-  if (str_is_ascii(str)) return byte_len;
-
-  utf16_scan_cursor_t cursor;
-  utf16_scan_cursor_init(&cursor, str, byte_len);
-  utf16_scan_cursor_resume_cached(&cursor);
-
-  while (cursor.p < cursor.end) {
-    utf16_scan_cursor_advance(&cursor, cursor.end);
-  }
-
-  utf16_scan_cursor_store(&cursor);
-  return cursor.utf16_pos;
-}
-
-size_t utf16_strlen_bytes(const char *str, size_t byte_len) {
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);
 

@@ -1,6 +1,8 @@
 #ifndef MATH_MODULE_H
 #define MATH_MODULE_H
 
-void init_math_module(void);
+#include "types.h"
+
+void init_math_module(ant_t *js);
 
 #endif

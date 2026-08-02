@@ -6,7 +6,6 @@
 
 #include "gc/objects.h"
 #include "gc/bigints.h"
-#include "gc/refs.h"
 #include "gc/strings.h"
 #include "gc/ropes.h"
 
@@ -165,9 +164,6 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
   size_t live_before = js->obj_arena.live_count;
-
-  js->prop_refs_len = 0;
-  gc_refs_shrink(js);
 
   gc_bigints_begin(js);
   gc_strings_begin(js);

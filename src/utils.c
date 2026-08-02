@@ -194,25 +194,6 @@ char hex_char(int v) {
   return "0123456789abcdef"[v & 0x0f];
 }
 
-uint64_t hash_key(const char *key, size_t len) {
-  uint64_t hash = 14695981039346656037ULL;
-  size_t i = 0;
-  
-  for (; i + 8 <= len; i += 8) {
-    uint64_t word;
-    memcpy(&word, key + i, 8);
-    hash ^= word;
-    hash *= 1099511628211ULL;
-  }
-  
-  for (; i < len; i++) {
-    hash ^= (uint8_t)key[i];
-    hash *= 1099511628211ULL;
-  }
-  
-  return hash;
-}
-
 double half_to_double(uint16_t bits16) {
   uint32_t sign = ((uint32_t)bits16 & 0x8000u) << 16;
   uint32_t exp = ((uint32_t)bits16 >> 10) & 0x1fu;

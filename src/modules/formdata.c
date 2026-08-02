@@ -7,7 +7,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 
@@ -27,8 +26,6 @@ enum {
   FD_ITER_VALUES = 2
 };
 
-static ant_value_t g_formdata_proto      = 0;
-static ant_value_t g_formdata_iter_proto = 0;
 static fd_data_t *get_fd_data(ant_value_t obj);
 
 enum {
@@ -141,7 +138,7 @@ ant_value_t formdata_create_empty(ant_t *js) {
   if (!d) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_formdata_proto);
+  js_set_proto_init(obj, js->builtins.formdata_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
   js_set_native(obj, d, FORMDATA_NATIVE_TAG);
   
@@ -211,7 +208,7 @@ static ant_value_t extract_file_entry(
     }
     
     free(fname_owned);
-    js_set_proto_init(file_obj, g_file_proto);
+    js_set_proto_init(file_obj, js->builtins.file_proto);
     stored_val = file_obj;
   }
 
@@ -425,7 +422,7 @@ static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {
   st->kind = kind;
 
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_formdata_iter_proto);
+  js_set_proto_init(iter, js->builtins.formdata_iter_proto);
   js_set_native(iter, st, FORMDATA_ITER_NATIVE_TAG);
   js_set_slot_wb(js, iter, SLOT_DATA, fd_obj);
   js_set_finalizer(iter, formdata_iter_finalize);
@@ -454,7 +451,7 @@ static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!d) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_formdata_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.formdata_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
@@ -467,41 +464,40 @@ static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-void init_formdata_module(void) {
-  ant_t *js = rt->js;
+void init_formdata_module(ant_t *js) {
   ant_value_t g = js_glob(js);
-  g_formdata_proto = js_mkobj(js);
+  js->builtins.formdata_proto = js_mkobj(js);
 
-  js_set(js, g_formdata_proto, "append",  js_mkfun(js_formdata_append));
-  js_set(js, g_formdata_proto, "set",     js_mkfun(js_formdata_set));
-  js_set(js, g_formdata_proto, "get",     js_mkfun(js_formdata_get));
-  js_set(js, g_formdata_proto, "getAll",  js_mkfun(js_formdata_get_all));
-  js_set(js, g_formdata_proto, "has",     js_mkfun(js_formdata_has));
-  js_set(js, g_formdata_proto, "delete",  js_mkfun(js_formdata_delete));
-  js_set(js, g_formdata_proto, "forEach", js_mkfun(js_formdata_foreach));
-  js_set(js, g_formdata_proto, "entries", js_mkfun(js_formdata_entries));
-  js_set(js, g_formdata_proto, "keys",    js_mkfun(js_formdata_keys));
-  js_set(js, g_formdata_proto, "values",  js_mkfun(js_formdata_values));
+  js_set(js, js->builtins.formdata_proto, "append",  js_mkfun(js_formdata_append));
+  js_set(js, js->builtins.formdata_proto, "set",     js_mkfun(js_formdata_set));
+  js_set(js, js->builtins.formdata_proto, "get",     js_mkfun(js_formdata_get));
+  js_set(js, js->builtins.formdata_proto, "getAll",  js_mkfun(js_formdata_get_all));
+  js_set(js, js->builtins.formdata_proto, "has",     js_mkfun(js_formdata_has));
+  js_set(js, js->builtins.formdata_proto, "delete",  js_mkfun(js_formdata_delete));
+  js_set(js, js->builtins.formdata_proto, "forEach", js_mkfun(js_formdata_foreach));
+  js_set(js, js->builtins.formdata_proto, "entries", js_mkfun(js_formdata_entries));
+  js_set(js, js->builtins.formdata_proto, "keys",    js_mkfun(js_formdata_keys));
+  js_set(js, js->builtins.formdata_proto, "values",  js_mkfun(js_formdata_values));
 
-  js_set_sym(js, g_formdata_proto, get_iterator_sym(),    js_get(js, g_formdata_proto, "entries"));
-  js_set_sym(js, g_formdata_proto, get_toStringTag_sym(), js_mkstr(js, "FormData", 8));
+  js_set_sym(js, js->builtins.formdata_proto, get_iterator_sym(),    js_get(js, js->builtins.formdata_proto, "entries"));
+  js_set_sym(js, js->builtins.formdata_proto, get_toStringTag_sym(), js_mkstr(js, "FormData", 8));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_formdata_ctor));
-  js_mkprop_fast(js, ctor_obj, "prototype", 9, g_formdata_proto);
+  js_mkprop_fast(js, ctor_obj, "prototype", 9, js->builtins.formdata_proto);
   js_mkprop_fast(js, ctor_obj, "name", 4, js_mkstr(js, "FormData", 8));
   js_set_descriptor(js, ctor_obj, "name", 4, 0);
 
-  ant_value_t ctor = js_obj_to_func(ctor_obj);
-  js_set(js, g_formdata_proto, "constructor", ctor);
-  js_set_descriptor(js, g_formdata_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  ant_value_t ctor = js_obj_to_func(js, ctor_obj);
+  js_set(js, js->builtins.formdata_proto, "constructor", ctor);
+  js_set_descriptor(js, js->builtins.formdata_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   js_set(js, g, "FormData", ctor);
   js_set_descriptor(js, g, "FormData", 8, JS_DESC_W | JS_DESC_C);
 
-  g_formdata_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_formdata_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_formdata_iter_proto, "next", js_mkfun(formdata_iter_next));
-  js_set_descriptor(js, g_formdata_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_formdata_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js->builtins.formdata_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.formdata_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.formdata_iter_proto, "next", js_mkfun(formdata_iter_next));
+  js_set_descriptor(js, js->builtins.formdata_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->builtins.formdata_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
 }

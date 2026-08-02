@@ -397,8 +397,8 @@ char *esm_resolve_url(const char *specifier, const char *base_url) {
   return strdup(specifier);
 }
 
-char *esm_resolve(const char *specifier, const char *base_path, char FILE_RESOLVER) {
+char *esm_resolve(ant_t *js, const char *specifier, const char *base_path, char FILE_RESOLVER) {
   if (esm_is_data_url(specifier)) return strdup(specifier);
   if (esm_is_url(specifier) || esm_is_url(base_path)) return esm_resolve_url(specifier, base_path);
-  return file_resolver(specifier, base_path);
+  return file_resolver(js, specifier, base_path);
 }

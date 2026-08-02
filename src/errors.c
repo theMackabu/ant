@@ -61,14 +61,20 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   ant_output_stream_flush(out);
 }
 
-bool print_uncaught_throw(ant_t *js) {
-  if (!js->thrown_exists) return false;
-  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
-  
+ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback) {
+  ant_value_t value = js->thrown_exists ? js->thrown_value : fallback;
+
   js->thrown_exists = false;
   js->thrown_value = js_mkundef();
   js->thrown_stack = js_mkundef();
-  
+
+  return value;
+}
+
+bool print_uncaught_throw(ant_t *js) {
+  if (!js->thrown_exists) return false;
+  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
+  js_take_thrown(js, js_mkundef());
   return true;
 }
 
@@ -547,9 +553,8 @@ static bool append_error_context(
     bool was_clipped = (src_cols_limit > 0 && line_len > src_cols_limit);
 
     if (!io_no_color) {
-      size_t highlight_len = was_clipped ? (size_t)src_cols_limit : (size_t)line_len;
       highlight_js_line_clipped(
-        src + ls, highlight_len, (size_t)src_cols_limit,
+        src + ls, (size_t)line_len, (size_t)src_cols_limit,
         tagged, sizeof(tagged), &hl_state
       );
       crsprintf_stateful(rendered, sizeof(rendered), NULL, tagged);
@@ -826,14 +831,13 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
 
   int props_type = vtype(props);
-  if ((JS_TPFLG(props_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(props_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_merge_obj(js, err_obj, props);
-  }
+
   ant_value_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   int proto_type = vtype(proto);
-  if ((JS_TPFLG(proto_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
-  }
 
   js->thrown_exists = true;
   js->thrown_value = err_obj;

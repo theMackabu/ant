@@ -44,5 +44,5 @@ stdenvNoCC.mkDerivation {
 
   outputHashMode = "recursive";
   outputHashAlgo = "sha256";
-  outputHash = "sha256-BSnRtUGHIlBELVUJ5OfjDs9bYm+jI29xxFtHK699Cvo=";
+  outputHash = "sha256-ouA3V72yuWp8MnVDCL4OKjviwjT+MBGVksuR2Oh7g48=";
 }

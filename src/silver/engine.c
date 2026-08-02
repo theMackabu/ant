@@ -2,9 +2,15 @@
 #include "errors.h"
 #include <stdlib.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 #include "silver/engine.h"
 #include "silver/swarm.h"
-#include "modules/generator.h"
 #include "modules/regex.h"
 
 #include "ops/literals.h"
@@ -30,37 +36,92 @@
 #include "ops/objects.h"
 #include "ops/coercion.h"
 
-sv_vm_t *sv_vm_create(ant_t *js, sv_vm_kind_t kind) {
+enum {
+  SV_VM_GUARD_SIZE = (size_t)65536,
+  SV_STACK_RESERVE = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
+  SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
+  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
+};
+
+static void *sv_vm_reserve_storage(void) {
+#ifdef _WIN32
+  return VirtualAlloc(NULL, SV_VM_RESERVE, MEM_RESERVE, PAGE_READWRITE);
+#else
+  int flags = MAP_PRIVATE | MAP_ANON;
+#ifdef MAP_NORESERVE
+  flags |= MAP_NORESERVE;
+#endif
+  void *p = mmap(NULL, SV_VM_RESERVE, PROT_READ | PROT_WRITE, flags, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  if (mprotect((char *)p + SV_STACK_RESERVE, SV_VM_GUARD_SIZE, PROT_NONE) != 0) {
+    munmap(p, SV_VM_RESERVE);
+    return NULL;
+  }
+  return p;
+#endif
+}
+
+static void sv_vm_release_storage(void *base) {
+  if (!base) return;
+#ifdef _WIN32
+  VirtualFree(base, 0, MEM_RELEASE);
+#else
+  munmap(base, SV_VM_RESERVE);
+#endif
+}
+
+static bool sv_vm_commit_storage(void *addr, size_t bytes) {
+#ifdef _WIN32
+  return VirtualAlloc(addr, bytes, MEM_COMMIT, PAGE_READWRITE) != NULL;
+#else
+  (void)addr; (void)bytes;
+  return true;
+#endif
+}
+
+sv_vm_t *sv_vm_create(ant_t *js) {
   int stack_size, max_frames;
-  sv_vm_limits(kind, &stack_size, &max_frames);
+  sv_vm_limits(&stack_size, &max_frames);
+
+  if (stack_size > SV_STACK_HARD_MAX) stack_size = SV_STACK_HARD_MAX;
+  if (max_frames > SV_FRAMES_HARD_MAX) max_frames = SV_FRAMES_HARD_MAX;
 
   sv_vm_t *vm = calloc(1, sizeof(*vm));
   if (!vm) return NULL;
-  
+
   vm->js = js;
   vm->fp = -1;
-  
+
   vm->stack_size = stack_size;
   vm->max_frames = max_frames;
-  
+
   vm->suspended_entry_fp = -1;
   vm->suspended_saved_fp = -1;
-  
-  vm->stack = calloc((size_t)stack_size, sizeof(ant_value_t));
-  vm->frames = calloc((size_t)max_frames, sizeof(sv_frame_t));
-  
-  if (!vm->stack || !vm->frames) { 
-    sv_vm_destroy(vm);
+
+  void *base = sv_vm_reserve_storage();
+  if (!base) {
+    free(vm);
     return NULL;
   }
-  
+
+  vm->stack = (ant_value_t *)base;
+  vm->frames = (sv_frame_t *)((char *)base + SV_STACK_RESERVE + SV_VM_GUARD_SIZE);
+
+  if (
+    !sv_vm_commit_storage(vm->stack, (size_t)stack_size * sizeof(ant_value_t)) ||
+    !sv_vm_commit_storage(vm->frames, (size_t)max_frames * sizeof(sv_frame_t))
+  ) {
+    sv_vm_release_storage(base);
+    free(vm);
+    return NULL;
+  }
+
   return vm;
 }
 
 void sv_vm_destroy(sv_vm_t *vm) {
   if (!vm) return;
-  free(vm->stack);
-  free(vm->frames);
+  sv_vm_release_storage(vm->stack);
   free(vm);
 }
 
@@ -68,12 +129,8 @@ static bool sv_vm_grow_frames(sv_vm_t *vm) {
   int new_max = vm->max_frames * 2;
   if (new_max > SV_FRAMES_HARD_MAX) new_max = SV_FRAMES_HARD_MAX;
   if (new_max <= vm->max_frames) return false;
-  
-  sv_frame_t *nf = realloc(vm->frames, (size_t)new_max * sizeof(sv_frame_t));
-  if (!nf) return false;
-  vm->frames = nf;
+  if (!sv_vm_commit_storage(vm->frames, (size_t)new_max * sizeof(sv_frame_t))) return false;
   vm->max_frames = new_max;
-  
   return true;
 }
 
@@ -81,29 +138,212 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   int new_size = vm->stack_size * 2;
   if (new_size > SV_STACK_HARD_MAX) new_size = SV_STACK_HARD_MAX;
   if (new_size <= vm->stack_size) return false;
-  
-  ant_value_t *old = vm->stack;
-  int old_size = vm->stack_size;
-  
-  ant_value_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(ant_value_t));
-  if (!ns) return false;
-  
-  ptrdiff_t delta = ns - old;
-  vm->stack = ns;
+  if (!sv_vm_commit_storage(vm->stack, (size_t)new_size * sizeof(ant_value_t))) return false;
   vm->stack_size = new_size;
-  
-  if (delta != 0) {
-    for (int i = 0; i <= vm->fp; i++) {
-      if (vm->frames[i].bp) vm->frames[i].bp += delta;
-      if (vm->frames[i].lp) vm->frames[i].lp += delta;
-    }
-    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) if (
-      uv->location != &uv->closed &&
-      sv_slot_in_range(old, (size_t)old_size, uv->location)
-    ) uv->location += delta;
-  }
-  
   return true;
+}
+
+sv_activation_t *sv_activation_capture(sv_vm_t *vm, int entry_fp, sv_activation_t *reuse) {
+  if (!vm || vm->fp < 0 || entry_fp < 0 || entry_fp > vm->fp) return NULL;
+
+  sv_frame_t *entry_frame = &vm->frames[entry_fp];
+  int frame_count = vm->fp - entry_fp + 1;
+  int stack_base = entry_frame->prev_sp;
+  int stack_count = vm->sp - stack_base;
+  int handler_base = entry_frame->handler_base;
+  int handler_count = vm->handler_depth - handler_base;
+
+  if (stack_count < 0 || handler_count < 0) return NULL;
+
+  size_t frames_off = (sizeof(sv_activation_t) + 7) & ~(size_t)7;
+  size_t slots_off = frames_off + (size_t)frame_count * sizeof(sv_frame_t);
+  size_t handlers_off = slots_off + (size_t)stack_count * sizeof(ant_value_t);
+  size_t need = handlers_off + (size_t)handler_count * sizeof(sv_handler_t);
+
+  sv_activation_t *act = reuse;
+  if (!act || act->capacity < need) {
+    act = realloc(reuse, need);
+    if (!act) return NULL;
+    act->capacity = need;
+  }
+
+  act->frames = (sv_frame_t *)((char *)act + frames_off);
+  act->slots = (ant_value_t *)((char *)act + slots_off);
+  act->handlers = (sv_handler_t *)((char *)act + handlers_off);
+  
+  act->frame_count = frame_count;
+  act->stack_count = stack_count;
+  act->handler_count = handler_count;
+
+  ant_value_t *src_base = &vm->stack[stack_base];
+  if (stack_count > 0)
+    memcpy(act->slots, src_base, sizeof(ant_value_t) * (size_t)stack_count);
+
+  for (int i = 0; i < frame_count; i++) {
+    sv_frame_t *src = &vm->frames[entry_fp + i];
+    sv_frame_t *dst = &act->frames[i];
+    *dst = *src;
+
+    dst->prev_sp = src->prev_sp - stack_base;
+    dst->handler_base = (uint16_t)(src->handler_base - handler_base);
+    dst->handler_top = (uint16_t)(src->handler_top - handler_base);
+
+    if (src->bp) dst->bp = act->slots + (src->bp - src_base);
+    if (src->lp) dst->lp = act->slots + (src->lp - src_base);
+  }
+
+  for (int i = 0; i < frame_count; i++) if (vtype(act->frames[i].arguments_obj) != T_UNDEF) 
+    js_arguments_bind_direct(vm->js, act->frames[i].arguments_obj, &act->frames[i]);
+
+  for (int i = 0; i < handler_count; i++) {
+    sv_handler_t h = vm->handler_stack[handler_base + i];
+    h.saved_sp -= stack_base;
+    act->handlers[i] = h;
+  }
+
+  act->open_upvalues = NULL;
+  sv_upvalue_t **src_pp = &vm->open_upvalues;
+  sv_upvalue_t **dst_pp = &act->open_upvalues;
+  
+  while (*src_pp) {
+    sv_upvalue_t *uv = *src_pp;
+    if (stack_count <= 0 || !sv_slot_in_range(src_base, (size_t)stack_count, uv->location)) {
+      src_pp = &uv->next;
+      continue;
+    }
+
+    ptrdiff_t slot = uv->location - src_base;
+    *src_pp = uv->next;
+    uv->location = &act->slots[slot];
+    uv->next = NULL;
+    *dst_pp = uv;
+    dst_pp = &uv->next;
+  }
+
+  vm->fp = entry_fp - 1;
+  vm->sp = stack_base;
+  vm->handler_depth = handler_base;
+  vm->suspended = false;
+  vm->suspended_resume_pending = false;
+  vm->suspended_resume_is_error = false;
+  vm->suspended_resume_kind = SV_RESUME_NEXT;
+  vm->suspended_resume_value = js_mkundef();
+  vm->suspended_entry_fp = -1;
+  vm->suspended_saved_fp = -1;
+
+  return act;
+}
+
+bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
+  if (!vm || !act || act->frame_count < 1) return false;
+
+  while (vm->sp + act->stack_count > vm->stack_size)
+    if (!sv_vm_grow_stack(vm)) return false;
+  while (vm->fp + act->frame_count >= vm->max_frames)
+    if (!sv_vm_grow_frames(vm)) return false;
+  
+  if (vm->handler_depth + act->handler_count > SV_HANDLER_MAX) return false;
+
+  int entry_fp = vm->fp + 1;
+  int stack_base = vm->sp;
+  int handler_base = vm->handler_depth;
+  ant_value_t *dst_base = &vm->stack[stack_base];
+
+  if (act->stack_count > 0)
+    memcpy(dst_base, act->slots, sizeof(ant_value_t) * (size_t)act->stack_count);
+
+  for (int i = 0; i < act->frame_count; i++) {
+    sv_frame_t *src = &act->frames[i];
+    sv_frame_t *dst = &vm->frames[entry_fp + i];
+    *dst = *src;
+
+    dst->prev_sp = src->prev_sp + stack_base;
+    dst->handler_base = (uint16_t)(src->handler_base + handler_base);
+    dst->handler_top = (uint16_t)(src->handler_top + handler_base);
+
+    if (src->bp) dst->bp = dst_base + (src->bp - act->slots);
+    if (src->lp) dst->lp = dst_base + (src->lp - act->slots);
+
+    if (vtype(dst->arguments_obj) != T_UNDEF)
+      js_arguments_rebind_frame(vm->js, dst->arguments_obj, entry_fp + i);
+  }
+
+  for (int i = 0; i < act->handler_count; i++) {
+    sv_handler_t h = act->handlers[i];
+    h.saved_sp += stack_base;
+    vm->handler_stack[handler_base + i] = h;
+  }
+
+  if (act->open_upvalues) {
+    sv_upvalue_t *tail = act->open_upvalues;
+    for (sv_upvalue_t *uv = act->open_upvalues;; uv = uv->next) {
+      uv->location = dst_base + (uv->location - act->slots);
+      if (!uv->next) { tail = uv; break; }
+    }
+    tail->next = vm->open_upvalues;
+    vm->open_upvalues = act->open_upvalues;
+    act->open_upvalues = NULL;
+  }
+
+  vm->sp = stack_base + act->stack_count;
+  vm->fp = entry_fp + act->frame_count - 1;
+  vm->handler_depth = handler_base + act->handler_count;
+
+  vm->suspended = true;
+  vm->suspended_entry_fp = entry_fp;
+  vm->suspended_saved_fp = entry_fp - 1;
+
+  act->frame_count = 0;
+  return true;
+}
+
+static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
+  if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
+    js_arguments_detach(js, frame->arguments_obj);
+    frame->arguments_obj = js_mkundef();
+  }
+}
+
+void sv_activation_discard(sv_vm_t *vm, int entry_fp) {
+  if (!vm || entry_fp < 0 || entry_fp > vm->fp) return;
+
+  if (vm->open_upvalues) {
+  for (int f = vm->fp; f >= entry_fp; f--) {
+    ant_value_t *drop_bp = vm->frames[f].bp;
+    if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
+  }}
+
+  for (int f = vm->fp; f >= entry_fp; f--)
+    sv_drop_frame_runtime_state(vm->js, &vm->frames[f]);
+
+  vm->fp = entry_fp - 1;
+  vm->sp = vm->frames[entry_fp].prev_sp;
+  vm->handler_depth = vm->frames[entry_fp].handler_base;
+
+  vm->suspended = false;
+  vm->suspended_resume_pending = false;
+  vm->suspended_entry_fp = -1;
+  vm->suspended_saved_fp = -1;
+}
+
+void sv_activation_seal(ant_t *js, sv_activation_t *act) {
+  if (!js || !act || act->frame_count <= 0) return;
+
+  for (sv_upvalue_t *uv = act->open_upvalues; uv;) {
+    sv_upvalue_t *next = uv->next;
+    uv->closed = *uv->location;
+    uv->location = &uv->closed;
+    uv->next = NULL;
+    uv = next;
+  }
+  act->open_upvalues = NULL;
+
+  for (int i = 0; i < act->frame_count; i++) {
+    ant_value_t args_obj = act->frames[i].arguments_obj;
+    if (vtype(args_obj) == T_UNDEF) continue;
+    if (js_obj_ptr(args_obj)->mark_epoch == ANT_GC_DEAD) continue;
+    js_arguments_detach(js, args_obj);
+  }
 }
 
 #ifdef ANT_JIT
@@ -202,11 +442,6 @@ void js_set_error_site_from_vm_top(ant_t *js) {
   int bc_off = 0;
   if (frame->ip && func->code) bc_off = (int)(frame->ip - func->code);
   js_set_error_site_from_bc(js, func, bc_off, func->debug->filename);
-}
-
-// TODO: move to strings.c
-static inline bool sv_builder_has_cached_value(const ant_string_builder_t *builder) {
-  return builder && vtype(builder->cached) == T_STR;
 }
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
@@ -326,13 +561,6 @@ static inline void sv_record_slot_feedback(
   if (!frame || !func) return;
   if ((int)slot_idx < func->param_count) return;
   sv_tfb_record_local(func, (int)(slot_idx - func->param_count), value);
-}
-
-bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot) {
-  if (!vm || !slot) return false;
-  for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next)
-    if (uv->location == slot) return true;
-  return false;
 }
 
 ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
@@ -513,12 +741,6 @@ static inline void sv_sync_frame_locals(
   *frame = &vm->frames[vm->fp]; *func = (*frame)->func;
   *bp = (*frame)->bp; *lp = (*frame)->lp;
 }
-
-static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
-if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
-  js_arguments_detach(js, frame->arguments_obj);
-  frame->arguments_obj = js_mkundef();
-}}
 
 static inline ant_value_t sv_stage_frame_args(
   sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
@@ -1220,10 +1442,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         ? ip + sv_op_size[OP_JMP_FALSE]
         : ip + sv_op_size[OP_JMP_FALSE] + sv_get_i32(ip + 1);
     }
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
@@ -1239,46 +1458,31 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
         : ip + sv_op_size[OP_JMP_TRUE];
     }
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_FALSE_PEEK: { 
     uint8_t *prev = ip; ip = sv_op_jmp_false_peek(vm, js, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_TRUE_PEEK: { 
     uint8_t *prev = ip; ip = sv_op_jmp_true_peek(vm, js, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
   L_JMP_NOT_NULLISH: { 
     uint8_t *prev = ip; ip = sv_op_jmp_not_nullish(vm, ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
    
   L_JMP8: {
     uint8_t *prev = ip; ip = sv_op_jmp8(ip);
-    if (ip <= prev) {
-      js->prop_refs_len = 0;
-      JIT_OSR_BACK_EDGE();
-    }
+    if (ip <= prev) JIT_OSR_BACK_EDGE();
     DISPATCH();
   }
   
@@ -1853,7 +2057,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       goto sv_throw;
     }
     if (await_result.state == SV_AWAIT_SUSPENDED) {
-      if (await_result.handoff) vm_result = js_mkundef();
+      vm_result = js_mkundef();
       goto sv_leave;
     }
     NEXT(1);
@@ -1871,16 +2075,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     vm->suspended_saved_fp = entry_fp - 1;
     
     sv_await_result_t await_result = sv_await_value(vm, js, await_val);
-    if (await_result.state == SV_AWAIT_SUSPENDED && await_result.handoff) {
-      vm->suspended_entry_fp = -1;
-      vm->suspended_saved_fp = -1;
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+
+    if (await_result.state == SV_AWAIT_SUSPENDED) {
       vm_result = js_mkundef();
       goto sv_leave;
     }
-    
-    if (await_result.state == SV_AWAIT_SUSPENDED) goto sv_leave;
-    vm->suspended_entry_fp = -1;
-    vm->suspended_saved_fp = -1;
     
     if (await_result.state == SV_AWAIT_ERROR) {
       sv_err = await_result.value;
@@ -1893,15 +2094,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   
   L_YIELD: {
     ant_value_t yielded = vm->stack[--vm->sp];
-    coroutine_t *coro = sv_async_get_active_coro_for_vm(js, vm);
-    if (!coro || coro->type != CORO_GENERATOR)
-      coro = generator_get_coro_for_vm(js, vm);
+    coroutine_t *coro = sv_async_active_coro(js);
     if (!coro || coro->type != CORO_GENERATOR) {
       sv_err = js_mkerr(js, "yield can only be used inside generator functions");
       goto sv_throw;
     }
-    coro->yield_value = yielded;
-    coro->did_suspend = true;
     vm->suspended = true;
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;
@@ -1924,9 +2121,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_YIELD_STAR_NEXT:
   L_YIELD_STAR_THROW:
   L_YIELD_STAR_RETURN: {
-    coroutine_t *coro = sv_async_get_active_coro_for_vm(js, vm);
-    if (!coro || coro->type != CORO_GENERATOR)
-      coro = generator_get_coro_for_vm(js, vm);
+    coroutine_t *coro = sv_async_active_coro(js);
     if (!coro || coro->type != CORO_GENERATOR) {
       sv_err = js_mkerr(js, "yield can only be used inside generator functions");
       goto sv_throw;
@@ -1954,8 +2149,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       NEXT(3);
     }
 
-    coro->yield_value = yielded;
-    coro->did_suspend = true;
     vm->suspended = true;
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;

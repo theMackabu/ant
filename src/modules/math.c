@@ -3,7 +3,6 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 
 #include "modules/symbol.h"
 #include "modules/crypto.h"
@@ -274,9 +273,7 @@ static ant_value_t builtin_Math_trunc(ant_params_t) {
   return tov(trunc(x));
 }
 
-void init_math_module(void) {
-  ant_t *js = rt->js;
-  
+void init_math_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t math_obj = mkobj(js, 0);
   ant_value_t object_proto = js->sym.object_proto;

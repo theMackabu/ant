@@ -91,7 +91,7 @@ Dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
 - aklomp-base64 0.5.2
-- Ada URL 3.4.4
+- Ada URL 4.0.0
 - argtable3 3.3.1
 - BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
 - crprintf `HEAD`

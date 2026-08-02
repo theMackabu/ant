@@ -7,7 +7,6 @@
 #include <uv.h>
 
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 
 #include "silver/engine.h"
@@ -32,11 +31,21 @@ typedef struct timer_entry {
   struct timer_entry *prev;
 } timer_entry_t;
 
+enum {
+  MT_CALLBACK = 0,
+  MT_PROMISE_TRIGGER,
+  MT_THENABLE_JOB,
+};
+
 typedef struct microtask_entry {
   ant_value_t callback;
-  ant_value_t promise;
+  union {
+    ant_value_t promise;
+    ant_value_t this_val;
+  } u;
   struct microtask_entry *next;
   uint8_t argc;
+  uint8_t kind;
   ant_value_t argv[];
 } microtask_entry_t;
 
@@ -80,9 +89,6 @@ static struct {
   .active_timer_count = 0,
   .active_refed_timer_count = 0,
 };
-
-static ant_value_t g_timeout_proto = 0;
-static ant_value_t g_interval_proto = 0;
 
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
@@ -259,7 +265,7 @@ static ant_value_t timer_make_object(
   double delay_ms, int is_interval, ant_value_t timer_args
 ) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = is_interval ? g_interval_proto : g_timeout_proto;
+  ant_value_t proto = is_interval ? js->builtins.interval_proto : js->builtins.timeout_proto;
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set(js, obj, "delay", js_mknum(delay_ms));
@@ -678,7 +684,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   if (entry == NULL) return;
   
   entry->callback = callback;
-  entry->promise = js_mkundef();
+  entry->u.promise = js_mkundef();
   entry->next = NULL;
   entry->argc = 0;
   
@@ -692,11 +698,26 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   if (entry == NULL) return;
   
   entry->callback = callback;
-  entry->promise = js_mkundef();
+  entry->u.promise = js_mkundef();
   entry->next = NULL;
   entry->argc = (uint8_t)nargs;
   
   for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
+  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+}
+
+void queue_promise_thenable_job(ant_t *js, ant_value_t then_fn, ant_value_t thenable, ant_value_t resolve_fn, ant_value_t reject_fn) {
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + 2 * sizeof(ant_value_t));
+  if (entry == NULL) return;
+
+  entry->callback = then_fn;
+  entry->u.this_val = thenable;
+  entry->next = NULL;
+  entry->argc = 2;
+  entry->kind = MT_THENABLE_JOB;
+  entry->argv[0] = resolve_fn;
+  entry->argv[1] = reject_fn;
+
   queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
 }
 
@@ -705,7 +726,7 @@ void queue_next_tick(ant_t *js, ant_value_t callback) {
   if (entry == NULL) return;
 
   entry->callback = callback;
-  entry->promise = js_mkundef();
+  entry->u.promise = js_mkundef();
   entry->next = NULL;
   entry->argc = 0;
 
@@ -719,7 +740,7 @@ void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   if (entry == NULL) return;
 
   entry->callback = callback;
-  entry->promise = js_mkundef();
+  entry->u.promise = js_mkundef();
   entry->next = NULL;
   entry->argc = (uint8_t)nargs;
 
@@ -737,33 +758,46 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   }
   
   entry->callback = js_mkundef();
-  entry->promise = promise;
+  entry->u.promise = promise;
   entry->next = NULL;
-  
+  entry->kind = MT_PROMISE_TRIGGER;
+
   queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
 }
 
 static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) {
   if (!entry) return;
 
-  if (vtype(entry->promise) == T_PROMISE) {
+  if (entry->kind == MT_PROMISE_TRIGGER) {
     GC_ROOT_SAVE(root_mark, js);
-    ant_value_t promise = entry->promise;
-    
+    ant_value_t promise = entry->u.promise;
+
     GC_ROOT_PIN(js, promise);
     js_mark_promise_trigger_dequeued(js, promise);
     js_process_promise_handlers(js, promise);
     GC_ROOT_RESTORE(js, root_mark);
-    
+
     return;
   }
+
+  ant_value_t this_val = entry->kind == MT_THENABLE_JOB ? entry->u.this_val : js_mkundef();
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t callback = entry->callback;
   GC_ROOT_PIN(js, callback);
-  
+  GC_ROOT_PIN(js, this_val);
+
   for (uint8_t i = 0; i < entry->argc; i++) GC_ROOT_PIN(js, entry->argv[i]);
-  sv_vm_call(js->vm, js, callback, js_mkundef(), entry->argv, entry->argc, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, callback, this_val, entry->argv, entry->argc, NULL, false);
+
+  if (entry->kind == MT_THENABLE_JOB && is_err(result) && entry->argc == 2) {
+    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    ant_value_t rej_args[1] = { reject_value };
+    sv_vm_call(js->vm, js, entry->argv[1], js_mkundef(), rej_args, 1, NULL, false);
+  }
+
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -825,7 +859,7 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   timer_state.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
-  reap_retired_coroutines();
+  reap_retired_coroutines(js);
 }
 
 void process_microtasks(ant_t *js) {
@@ -895,30 +929,29 @@ static void timers_define_common(ant_t *js, ant_value_t obj) {
   js_set(js, obj, "queueMicrotask", js_mkfun(js_queue_microtask));
 }
 
-void init_timer_module() {  
-  ant_t *js = rt->js;
+void init_timer_module(ant_t *js) {
   timer_state.js = js;
 
-  g_timeout_proto = js_mkobj(js);
-  g_interval_proto = js_mkobj(js);
-  gc_register_root(&g_timeout_proto);
-  gc_register_root(&g_interval_proto);
+  js->builtins.timeout_proto = js_mkobj(js);
+  js->builtins.interval_proto = js_mkobj(js);
+  gc_register_root(&js->builtins.timeout_proto);
+  gc_register_root(&js->builtins.interval_proto);
 
-  js_set_proto_init(g_timeout_proto, js->sym.object_proto);
-  js_set(js, g_timeout_proto, "ref", js_mkfun(js_timer_ref));
-  js_set(js, g_timeout_proto, "unref", js_mkfun(js_timer_unref));
-  js_set(js, g_timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
-  js_set(js, g_timeout_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, g_timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
-  js_set_sym(js, g_timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+  js_set_proto_init(js->builtins.timeout_proto, js->sym.object_proto);
+  js_set(js, js->builtins.timeout_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, js->builtins.timeout_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, js->builtins.timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, js->builtins.timeout_proto, "refresh", js_mkfun(js_timer_refresh));
+  js_set_sym(js, js->builtins.timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
+  js_set_sym(js, js->builtins.timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 
-  js_set_proto_init(g_interval_proto, js->sym.object_proto);
-  js_set(js, g_interval_proto, "ref", js_mkfun(js_timer_ref));
-  js_set(js, g_interval_proto, "unref", js_mkfun(js_timer_unref));
-  js_set(js, g_interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
-  js_set(js, g_interval_proto, "refresh", js_mkfun(js_timer_refresh));
-  js_set_sym(js, g_interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
-  js_set_sym(js, g_interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+  js_set_proto_init(js->builtins.interval_proto, js->sym.object_proto);
+  js_set(js, js->builtins.interval_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, js->builtins.interval_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, js->builtins.interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set(js, js->builtins.interval_proto, "refresh", js_mkfun(js_timer_refresh));
+  js_set_sym(js, js->builtins.interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
+  js_set_sym(js, js->builtins.interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
 
   timers_define_common(js, js_glob(js));
 }
@@ -949,8 +982,6 @@ ant_value_t timers_promises_library(ant_t *js) {
 }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
-  if (is_object_type(g_timeout_proto)) mark(js, g_timeout_proto);
-  if (is_object_type(g_interval_proto)) mark(js, g_interval_proto);
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
     if (!t->active) continue;
     if (is_object_type(t->obj)) mark(js, t->obj);
@@ -959,22 +990,22 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->promise);
+    mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.microtasks_processing; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->promise);
+    mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.next_ticks; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->promise);
+    mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.next_ticks_processing; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->promise);
+    mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (immediate_entry_t *i = timer_state.immediates; i; i = i->next) {

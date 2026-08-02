@@ -14,7 +14,7 @@ typedef struct {
   bool per_message_deflate;
 } ant_websocket_server_options_t;
 
-void init_websocket_module(void);
+void init_websocket_module(ant_t *js);
 void gc_mark_websocket(ant_t *js, gc_mark_fn mark);
 
 ant_value_t ant_websocket_accept_server(

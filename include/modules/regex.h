@@ -16,7 +16,7 @@ typedef struct {
   bool multiline;
 } regex_match_args_t;
 
-void init_regex_module(void);
+void init_regex_module(ant_t *js);
 void cleanup_regex_module(void);
 void gc_sweep_regex_cache(void);
 void regexp_note_exec_property_write(void);

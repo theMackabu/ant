@@ -36,16 +36,16 @@ static inline bool sv_env_try_get_interned(
   ant_value_t current = env;
   while (is_object_type(current)) {
     if (current == js->global) {
-      if (lkp_proto(js, current, interned, len) == 0) return false;
+      if (!lkp_proto(js, current, interned, len).obj) return false;
       if (out) *out = js_getprop_fallback(js, current, interned);
       return true;
     }
 
     if (sv_eval_env_try_get(js, current, interned, len, out)) return true;
 
-    ant_offset_t off = lkp_interned(js, current, interned);
-    if (off != 0) {
-      if (out) *out = js_propref_load(js, off);
+    ant_prop_loc_t off = lkp_interned(current, interned);
+    if (off.obj) {
+      if (out) *out = js_prop_load(off);
       return true;
     }
 
@@ -73,7 +73,7 @@ static inline ant_value_t sv_env_put(
   ant_value_t val, bool is_strict
 ) {
   if (env == js->global) {
-    if (is_strict && lkp_proto(js, js->global, str, len) == 0)
+    if (is_strict && !lkp_proto(js, js->global, str, len).obj)
       return js_mkerr_typed(
         js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
     if (sv_global_try_store_own_data(
@@ -87,13 +87,13 @@ static inline ant_value_t sv_env_put(
 
   while (is_object_type(current)) {
     if (current == js->global) {
-      found = lkp_proto(js, current, str, len) != 0;
+      found = lkp_proto(js, current, str, len).obj;
       break;
     }
 
     ant_value_t binding_result;
     if (sv_eval_env_try_put(js, current, str, len, val, &binding_result)) return binding_result;
-    if (lkp_interned(js, current, str) != 0) {
+    if (lkp_interned(current, str).obj) {
       target = current;
       found = true;
       break;
@@ -118,11 +118,11 @@ static inline ant_value_t sv_env_delete(
   ant_value_t current = env;
   while (is_object_type(current)) {
     if (current == js->global) {
-      if (lkp_proto(js, current, str, len) == 0) return js_true;
+      if (!lkp_proto(js, current, str, len).obj) return js_true;
       return js_delete_prop(js, current, str, len);
     }
     if (sv_eval_env_has_binding(current, str, len)) return js_false;
-    if (lkp_interned(js, current, str) != 0)
+    if (lkp_interned(current, str).obj)
       return js_delete_prop(js, current, str, len);
     current = js_get_proto(js, current);
   }
@@ -264,7 +264,7 @@ static inline ant_value_t sv_op_get_global(
     return sv;
   }
   ant_value_t val = sv_global_get_interned_ic(js, a->str, func, ip);
-  if (is_undefined(val) && lkp_interned(js, js->global, a->str) == 0) return js_mkerr_typed(
+  if (is_undefined(val) && !lkp_interned(js->global, a->str).obj) return js_mkerr_typed(
     js, JS_ERR_REFERENCE, "'%.*s' is not defined",
     (int)a->len, a->str
   );
@@ -290,7 +290,7 @@ static inline ant_value_t sv_op_put_global(
   sv_frame_t *frame, sv_func_t *func, uint8_t *ip
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
-  if (sv_frame_is_strict(frame) && lkp_interned(js, js->global, a->str) == 0)
+  if (sv_frame_is_strict(frame) && !lkp_interned(js->global, a->str).obj)
     return js_mkerr_typed(
       js, JS_ERR_REFERENCE, "'%.*s' is not defined",
       (int)a->len, a->str);

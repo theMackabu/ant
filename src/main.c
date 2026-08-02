@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
@@ -341,27 +342,6 @@ static char *read_stdin(size_t *len) {
   return buf;
 }
 
-static char *read_file(const char *filename, size_t *len) {
-  FILE *fp = fopen(filename, "rb");
-  if (!fp) return NULL;
-  
-  fseek(fp, 0, SEEK_END);
-  long size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  
-  char *buffer = malloc(size + 1);
-  if (!buffer) {
-    fclose(fp);
-    return NULL;
-  }
-  
-  *len = fread(buffer, 1, size, fp);
-  fclose(fp);
-  buffer[*len] = '\0';
-  
-  return buffer;
-}
-
 static void eval_code(
   ant_t *js, const char *script, size_t len,
   const char *tag, bool should_print, bool module_type
@@ -482,8 +462,8 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, co
   int request_argc = 0;
   char **request_argv = build_sandbox_process_argv(argv0, sandbox, &request_argc);
   
-  ant_runtime_set_argv(request_argc, request_argv);
-  process_refresh_sandbox_argv();
+  ant_runtime_set_argv(js, request_argc, request_argv);
+  process_refresh_sandbox_argv(js);
 
   if (sandbox->cwd && chdir(sandbox->cwd) != 0) {
     fprintf(stderr, "sandbox daemon: failed to chdir to %s: %s\n", sandbox->cwd, strerror(errno));
@@ -492,7 +472,7 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, co
   }
 
   io_set_sandbox_terminal(sandbox->capabilities);
-  process_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
+  process_set_sandbox_terminal(js, sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
   tty_set_sandbox_terminal(sandbox->capabilities, sandbox->tty_rows, sandbox->tty_cols);
   ant_sandbox_policy_set_forwards(sandbox->forward_ports, sandbox->forward_count);
 
@@ -546,6 +526,8 @@ int main(int argc, char *argv[]) {
   
   #ifdef _WIN32
   ant_output_init_console();
+  #else
+  signal(SIGPIPE, SIG_IGN);
   #endif
   
   setup_console_colors();
@@ -857,7 +839,7 @@ int main(int argc, char *argv[]) {
   ant_t *js;
   volatile char stack_base;
   
-  if (!(js = js_create_dynamic())) {
+  if (!(js = ant_create())) {
     crfprintf(stderr, msg.ant_allocation_fatal);
     CLEANUP_ARGS_AND_ARGV();
     return EXIT_FAILURE;
@@ -870,63 +852,63 @@ int main(int argc, char *argv[]) {
   if (sandbox_daemon) ant_sandbox_set_guest_process(true);
   
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
-  if (web->count > 0) rt->flags |= ANT_RUNTIME_WEB;
+  if (web->count > 0) js->runtime.flags |= ANT_RUNTIME_WEB;
   
   if (sandbox_daemon) {
     io_set_sandbox_terminal(sandbox.capabilities);
-    process_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
+    process_set_sandbox_terminal(js, sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
     tty_set_sandbox_terminal(sandbox.capabilities, sandbox.tty_rows, sandbox.tty_cols);
     ant_sandbox_policy_set_forwards(sandbox.forward_ports, sandbox.forward_count);
   }
 
-  init_symbol_module();
-  init_iterator_module();
-  init_generator_module();
-  init_timer_module();
-  init_domexception_module();
-  init_globals_module();
-  init_intl_module();
-  init_wasm_module();
-  init_builtin_module();
-  init_buffer_module();
-  init_structured_clone_module();
-  init_abort_module();
-  init_headers_module();
-  init_blob_module();
-  init_formdata_module();
-  init_math_module();
-  init_bigint_module();
-  init_date_module();
-  init_regex_module();
-  init_collections_module();
-  init_queuing_strategies_module();
-  init_readable_stream_module();
-  init_writable_stream_module();
-  init_transform_stream_module();
-  init_codec_stream_module();
-  init_compression_stream_module();
-  init_fs_module();
-  init_atomics_module();
-  init_crypto_module();
-  init_request_module();
-  init_response_module();
-  init_fetch_module();
-  init_console_module();
-  init_json_module();
-  init_process_module();
-  init_tty_module();
-  init_events_module();
-  init_websocket_module();
-  init_performance_module();
-  init_uri_module();
-  init_url_module();
-  init_reflect_module();
-  init_textcodec_module();
-  init_eventsource_module();
-  init_sessionstorage_module();
-  init_localstorage_module();
-  init_navigator_module();
-  init_observable_module();
+  init_symbol_module(js);
+  init_iterator_module(js);
+  init_generator_module(js);
+  init_timer_module(js);
+  init_domexception_module(js);
+  init_globals_module(js);
+  init_intl_module(js);
+  init_wasm_module(js);
+  init_builtin_module(js);
+  init_buffer_module(js);
+  init_structured_clone_module(js);
+  init_abort_module(js);
+  init_headers_module(js);
+  init_blob_module(js);
+  init_formdata_module(js);
+  init_math_module(js);
+  init_bigint_module(js);
+  init_date_module(js);
+  init_regex_module(js);
+  init_collections_module(js);
+  init_queuing_strategies_module(js);
+  init_readable_stream_module(js);
+  init_writable_stream_module(js);
+  init_transform_stream_module(js);
+  init_codec_stream_module(js);
+  init_compression_stream_module(js);
+  init_fs_module(js);
+  init_atomics_module(js);
+  init_crypto_module(js);
+  init_request_module(js);
+  init_response_module(js);
+  init_fetch_module(js);
+  init_console_module(js);
+  init_json_module(js);
+  init_process_module(js);
+  init_tty_module(js);
+  init_events_module(js);
+  init_websocket_module(js);
+  init_performance_module(js);
+  init_uri_module(js);
+  init_url_module(js);
+  init_reflect_module(js);
+  init_textcodec_module(js);
+  init_eventsource_module(js);
+  init_sessionstorage_module(js);
+  init_localstorage_module(js);
+  init_navigator_module(js);
+  init_observable_module(js);
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
@@ -1014,7 +996,7 @@ int main(int argc, char *argv[]) {
   }
   
   else if (repl_mode) {
-    ant_repl_run(repl->count > 0 ? repl->sval[0] : NULL);
+    ant_repl_run(js, repl->count > 0 ? repl->sval[0] : NULL);
   }
   
   else if (stdin_mode) {

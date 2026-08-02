@@ -532,7 +532,9 @@ static void spawn_reporter(const char *payload, size_t payload_len) {
     if (null_out > STDERR_FILENO) close(null_out);
   }
 
+  signal(SIGPIPE, SIG_DFL);
   const char *exe = crash_exe_path[0] ? crash_exe_path : "ant";
+  
   char *const reporter_argv[] = {
     (char *)exe,
     "__internal-crash-report",

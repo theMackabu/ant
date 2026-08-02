@@ -93,18 +93,20 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
+  ant_value_t options = vm->stack[--vm->sp];
   ant_value_t specifier = vm->stack[--vm->sp];
   ant_value_t import_fn = js_get_module_import_binding(js);
-  
+
   if (vtype(import_fn) != T_FUNC && vtype(import_fn) != T_CFUNC)
     import_fn = js_getprop_fallback(js, js->global, "import");
-    
+
   if (vtype(import_fn) == T_FUNC || vtype(import_fn) == T_CFUNC) {
-    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, &specifier, 1, NULL, false);
+    ant_value_t call_args[2] = { specifier, options };
+    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, false);
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }
-  
+
   vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
   return tov(0);
 }
@@ -138,7 +140,7 @@ static inline bool sv_module_namespace_has_export(
 
   ant_value_t as_obj = js_as_obj(ns);
   if (is_proxy(as_obj)) return false;
-  if (lkp(js, as_obj, name, len) != 0) return true;
+  if (lkp(js, as_obj, name, len).obj) return true;
 
   prop_meta_t meta;
   return lookup_string_prop_meta(js, as_obj, name, len, &meta);
@@ -318,8 +320,8 @@ static inline bool sv_with_binding_is_unscopable(
       (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
     ) return false;
 
-    ant_offset_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
-    bool has_unscopables = unscopables_off != 0;
+    ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
+    bool has_unscopables = unscopables_off.obj;
     bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;
 
     if (!has_unscopables) {
@@ -351,7 +353,7 @@ static inline bool sv_with_binding_is_unscopable(
       }
       return false;
     }
-    if (unscopables_off != 0) unscopables = js_propref_load(js, unscopables_off);
+    if (unscopables_off.obj) unscopables = js_prop_load(unscopables_off);
   }
 
   if (is_proxy_obj || vtype(unscopables) == T_UNDEF)
@@ -374,8 +376,8 @@ static inline bool sv_with_binding_is_unscopable(
       prop_meta_t meta;
       if (lookup_string_prop_meta(js, cur_obj, a->str, a->len, &meta)) {
         if (meta.has_getter || meta.has_setter) break;
-        ant_offset_t off = lkp(js, cur_obj, a->str, a->len);
-        blocked = off != 0 ? js_propref_load(js, off) : js_mkundef();
+        ant_prop_loc_t off = lkp(js, cur_obj, a->str, a->len);
+        blocked = off.obj ? js_prop_load(off) : js_mkundef();
         got_blocked_fast = true;
         break;
       }
@@ -462,11 +464,11 @@ static inline bool sv_try_get_with_bound_value(
     if (!should_fallback) return false;
   }
 
-  if (lkp(js, with_obj, a->str, a->len) == 0) return false;
+  if (!lkp(js, with_obj, a->str, a->len).obj) return false;
   bool abrupt = false;
   if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
   if (abrupt) return true;
-  *out = sv_getprop_fallback_len(js, with_obj, a->str, (ant_offset_t)a->len);
+  *out = js_getprop_fallback_len(js, with_obj, a->str, a->len);
   
   return true;
 }
@@ -563,7 +565,7 @@ static inline ant_value_t sv_op_with_put_var(
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
       if (is_err(has)) return has;
       has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
 
     if (has_binding) {
       ant_value_t out = js_mkundef();
@@ -602,7 +604,7 @@ static inline ant_value_t sv_op_with_del_var(
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
       if (is_err(has)) return has;
       has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
 
     if (has_binding) {
       ant_value_t out = js_mkundef();

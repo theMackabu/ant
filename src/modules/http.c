@@ -50,14 +50,6 @@ static void ant_http_upload_chunk_cb(tlsuv_http_req_t *http_req, char *body, ssi
   free(body);
 }
 
-static char *ant_http_copy_slice(const char *src, size_t len) {
-  char *out = malloc(len + 1);
-  if (!out) return NULL;
-  memcpy(out, src, len);
-  out[len] = '\0';
-  return out;
-}
-
 static char *ant_http_build_host_url(const struct tlsuv_url_s *url) {
   size_t size = 0;
   char port_buf[16] = {0};

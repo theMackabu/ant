@@ -133,10 +133,6 @@ struct rpc_client {
   rpc_client_t *prev_active;
 };
 
-static ant_value_t g_rpc_server_proto = 0;
-static ant_value_t g_rpc_server_ctor = 0;
-static ant_value_t g_rpc_client_proto = 0;
-static ant_value_t g_rpc_client_ctor = 0;
 static rpc_server_t *g_active_servers = NULL;
 static rpc_client_t *g_active_clients = NULL;
 
@@ -1284,35 +1280,35 @@ static ant_value_t rpc_client_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void rpc_init_constructors(ant_t *js) {
-  if (g_rpc_server_ctor && g_rpc_client_ctor) return;
+  if (js->builtins.rpc_server_ctor && js->builtins.rpc_client_ctor) return;
 
   ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
 
-  g_rpc_server_proto = js_mkobj(js);
-  if (is_object_type(object_proto)) js_set_proto_init(g_rpc_server_proto, object_proto);
-  js_set(js, g_rpc_server_proto, "register", js_mkfun(rpc_server_register));
-  js_set(js, g_rpc_server_proto, "unregister", js_mkfun(rpc_server_unregister));
-  js_set(js, g_rpc_server_proto, "listen", js_mkfun(rpc_server_listen));
-  js_set(js, g_rpc_server_proto, "close", js_mkfun(rpc_server_close));
-  js_set_getter_desc(js, g_rpc_server_proto, "port", 4, js_mkfun(rpc_server_port_getter), JS_DESC_C);
-  js_set_sym(js, g_rpc_server_proto, get_toStringTag_sym(), js_mkstr(js, "RpcServer", 9));
-  g_rpc_server_ctor = js_make_ctor(js, rpc_server_ctor, g_rpc_server_proto, "RpcServer", 9);
+  js->builtins.rpc_server_proto = js_mkobj(js);
+  if (is_object_type(object_proto)) js_set_proto_init(js->builtins.rpc_server_proto, object_proto);
+  js_set(js, js->builtins.rpc_server_proto, "register", js_mkfun(rpc_server_register));
+  js_set(js, js->builtins.rpc_server_proto, "unregister", js_mkfun(rpc_server_unregister));
+  js_set(js, js->builtins.rpc_server_proto, "listen", js_mkfun(rpc_server_listen));
+  js_set(js, js->builtins.rpc_server_proto, "close", js_mkfun(rpc_server_close));
+  js_set_getter_desc(js, js->builtins.rpc_server_proto, "port", 4, js_mkfun(rpc_server_port_getter), JS_DESC_C);
+  js_set_sym(js, js->builtins.rpc_server_proto, get_toStringTag_sym(), js_mkstr(js, "RpcServer", 9));
+  js->builtins.rpc_server_ctor = js_make_ctor(js, rpc_server_ctor, js->builtins.rpc_server_proto, "RpcServer", 9);
 
-  g_rpc_client_proto = js_mkobj(js);
-  if (is_object_type(object_proto)) js_set_proto_init(g_rpc_client_proto, object_proto);
-  js_set(js, g_rpc_client_proto, "connect", js_mkfun(rpc_client_connect));
-  js_set(js, g_rpc_client_proto, "call", js_mkfun(rpc_client_call));
-  js_set(js, g_rpc_client_proto, "ping", js_mkfun(rpc_client_ping));
-  js_set(js, g_rpc_client_proto, "close", js_mkfun(rpc_client_close));
-  js_set_sym(js, g_rpc_client_proto, get_toStringTag_sym(), js_mkstr(js, "RpcClient", 9));
-  g_rpc_client_ctor = js_make_ctor(js, rpc_client_ctor, g_rpc_client_proto, "RpcClient", 9);
+  js->builtins.rpc_client_proto = js_mkobj(js);
+  if (is_object_type(object_proto)) js_set_proto_init(js->builtins.rpc_client_proto, object_proto);
+  js_set(js, js->builtins.rpc_client_proto, "connect", js_mkfun(rpc_client_connect));
+  js_set(js, js->builtins.rpc_client_proto, "call", js_mkfun(rpc_client_call));
+  js_set(js, js->builtins.rpc_client_proto, "ping", js_mkfun(rpc_client_ping));
+  js_set(js, js->builtins.rpc_client_proto, "close", js_mkfun(rpc_client_close));
+  js_set_sym(js, js->builtins.rpc_client_proto, get_toStringTag_sym(), js_mkstr(js, "RpcClient", 9));
+  js->builtins.rpc_client_ctor = js_make_ctor(js, rpc_client_ctor, js->builtins.rpc_client_proto, "RpcClient", 9);
 }
 
 ant_value_t rpc_library(ant_t *js) {
   rpc_init_constructors(js);
   ant_value_t lib = js_mkobj(js);
-  js_set(js, lib, "RpcServer", g_rpc_server_ctor);
-  js_set(js, lib, "RpcClient", g_rpc_client_ctor);
+  js_set(js, lib, "RpcServer", js->builtins.rpc_server_ctor);
+  js_set(js, lib, "RpcClient", js->builtins.rpc_client_ctor);
   js_set(js, lib, "default", lib);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "rpc", 3));
@@ -1320,10 +1316,6 @@ ant_value_t rpc_library(ant_t *js) {
 }
 
 void gc_mark_rpc(ant_t *js, gc_mark_fn mark) {
-  if (g_rpc_server_proto) mark(js, g_rpc_server_proto);
-  if (g_rpc_server_ctor) mark(js, g_rpc_server_ctor);
-  if (g_rpc_client_proto) mark(js, g_rpc_client_proto);
-  if (g_rpc_client_ctor) mark(js, g_rpc_client_ctor);
 
   for (rpc_server_t *server = g_active_servers; server; server = server->next_active) {
     mark(js, server->obj);
@@ -1348,9 +1340,4 @@ void gc_mark_rpc(ant_t *js, gc_mark_fn mark) {
 void cleanup_rpc_module(void) {
   while (g_active_servers) rpc_server_close_impl(g_active_servers);
   while (g_active_clients) rpc_client_close_impl(g_active_clients);
-  
-  g_rpc_server_proto = 0;
-  g_rpc_server_ctor = 0;
-  g_rpc_client_proto = 0;
-  g_rpc_client_ctor = 0;
 }

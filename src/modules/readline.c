@@ -27,7 +27,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "tty_ctrl.h"
@@ -53,6 +52,7 @@ typedef struct {
 } rl_history_t;
 
 typedef struct rl_interface {
+  ant_t *js;
   uint64_t id;
   ant_value_t input_stream;
   ant_value_t output_stream;
@@ -91,8 +91,6 @@ typedef struct rl_interface {
 
 static uint64_t next_interface_id = 1;
 static rl_interface_t *interfaces = NULL;
-static ant_value_t g_rl_async_iter_proto = 0;
-static ant_value_t g_rl_interface_proto = 0;
 
 static const char *rl_render_prompt(const rl_interface_t *iface) {
   if (!iface) return "";
@@ -193,18 +191,6 @@ static const char *rl_history_next(rl_history_t *hist) {
   }
   hist->current = hist->count;
   return "";
-}
-
-static void rl_history_free(rl_history_t *hist) {
-  if (hist->lines) {
-    for (int i = 0; i < hist->count; i++) {
-      free(hist->lines[i]);
-    }
-    free(hist->lines);
-    hist->lines = NULL;
-  }
-  hist->count = 0;
-  hist->current = -1;
 }
 
 #ifndef _WIN32
@@ -316,12 +302,6 @@ static void refresh_line(rl_interface_t *iface) {
   }
 
   iface->last_render_rows = end_cols > 0 ? end_cols / cols + 1 : 1;
-}
-
-static rl_interface_t *find_interface_by_id(uint64_t id) {
-  rl_interface_t *iface = NULL;
-  HASH_FIND(hh, interfaces, &id, sizeof(uint64_t), iface);
-  return iface;
 }
 
 static void set_line_buffer(rl_interface_t *iface, const char *line) {
@@ -474,7 +454,7 @@ static void stop_reading(rl_interface_t *iface) {
     iface->sigint_watcher_active = false;
   }
 #endif
-  if (!has_active_readline_interfaces()) process_stdin_detach_reader();
+  if (!has_active_readline_interfaces()) process_stdin_detach_reader(iface->js);
 }
 
 static bool rl_has_event_listener(ant_t *js, rl_interface_t *iface, const char *event_type) {
@@ -579,8 +559,7 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
   }
 }
 
-static void rl_feed_stdin_bytes(const char *buf, size_t len) {
-  ant_t *js = rt->js;
+static void rl_feed_stdin_bytes(ant_t *js, const char *buf, size_t len) {
   rl_interface_t *iface, *tmp;
 
   HASH_ITER(hh, interfaces, iface, tmp) {
@@ -592,8 +571,7 @@ static void rl_feed_stdin_bytes(const char *buf, size_t len) {
   }
 }
 
-static void rl_handle_stdin_eof(void) {
-  ant_t *js = rt->js;
+static void rl_handle_stdin_eof(ant_t *js) {
   rl_interface_t *iface, *tmp;
 
   HASH_ITER(hh, interfaces, iface, tmp) {
@@ -604,13 +582,13 @@ static void rl_handle_stdin_eof(void) {
 #ifndef _WIN32
 static void on_sigint(uv_signal_t *handle, int signum) {
   rl_interface_t *iface = (rl_interface_t *)handle->data;
-  ant_t *js = rt->js;
+  ant_t *js = iface->js;
 
   if (rl_has_event_listener(js, iface, "SIGINT")) {
     emit_event(js, iface, "SIGINT", NULL, 0);
-  } else if (process_has_event_listeners("SIGINT")) {
+  } else if (process_has_event_listeners(js, "SIGINT")) {
     ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
-    emit_process_event("SIGINT", &sig_arg, 1);
+    emit_process_event(js, "SIGINT", &sig_arg, 1);
   } else {
     uv_signal_stop(handle);
     raise(SIGINT);
@@ -637,9 +615,9 @@ static void start_reading(rl_interface_t *iface) {
   }
 #endif
 
-  if (is_tty && iface->terminal) process_enable_keypress_events();
+  if (is_tty && iface->terminal) process_enable_keypress_events(iface->js);
   iface->reading = true;
-  process_stdin_attach_reader(rl_feed_stdin_bytes, rl_handle_stdin_eof);
+  process_stdin_attach_reader(iface->js, rl_feed_stdin_bytes, rl_handle_stdin_eof);
 }
 
 static rl_interface_t *get_interface(ant_t *js, ant_value_t this_obj) {
@@ -997,18 +975,6 @@ static ant_value_t rl_interface_closed_getter(ant_t *js, ant_value_t *args, int 
   return js_bool(iface->closed);
 }
 
-static void free_interface(rl_interface_t *iface) {
-  if (!iface) return;
-  
-  HASH_DEL(interfaces, iface);
-  
-  free(iface->prompt);
-  free(iface->active_prompt);
-  free(iface->line_buffer);
-  rl_history_free(&iface->history);
-  free(iface);
-}
-
 static ant_value_t rl_clear_line(ant_t *js, ant_value_t *args, int nargs) {
   int dir = 0;
   if (!tty_ctrl_parse_clear_line_dir(args, nargs, 1, &dir)) return js_false;
@@ -1071,7 +1037,7 @@ static ant_value_t rl_emit_keypress_events(ant_t *js, ant_value_t *args, int nar
       return js_mkerr(js, "emitKeypressEvents only supports process.stdin");
     }
   }
-  process_enable_keypress_events();
+  process_enable_keypress_events(js);
   return js_mkundef();
 }
 
@@ -1219,15 +1185,15 @@ static ant_value_t rl_async_iter_return(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t rl_get_async_iter_proto(ant_t *js) {
-  if (is_object_type(g_rl_async_iter_proto)) return g_rl_async_iter_proto;
+  if (is_object_type(js->builtins.rl_async_iter_proto)) return js->builtins.rl_async_iter_proto;
 
-  g_rl_async_iter_proto = js_mkobj(js);
-  js_set(js, g_rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
-  js_set(js, g_rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
-  js_set_sym(js, g_rl_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
-  js_set_sym(js, g_rl_async_iter_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncIterator", 13));
+  js->builtins.rl_async_iter_proto = js_mkobj(js);
+  js_set(js, js->builtins.rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
+  js_set(js, js->builtins.rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
+  js_set_sym(js, js->builtins.rl_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  js_set_sym(js, js->builtins.rl_async_iter_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncIterator", 13));
 
-  return g_rl_async_iter_proto;
+  return js->builtins.rl_async_iter_proto;
 }
 
 static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int nargs) {
@@ -1270,28 +1236,28 @@ static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int
 }
 
 static ant_value_t rl_get_interface_proto(ant_t *js) {
-  if (is_object_type(g_rl_interface_proto)) return g_rl_interface_proto;
+  if (is_object_type(js->builtins.rl_interface_proto)) return js->builtins.rl_interface_proto;
 
-  g_rl_interface_proto = js_mkobj(js);
-  js_set_proto_init(g_rl_interface_proto, eventemitter_prototype(js));
+  js->builtins.rl_interface_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.rl_interface_proto, eventemitter_prototype(js));
 
-  js_set(js, g_rl_interface_proto, "close", js_mkfun(rl_interface_close));
-  js_set(js, g_rl_interface_proto, "pause", js_mkfun(rl_interface_pause));
-  js_set(js, g_rl_interface_proto, "resume", js_mkfun(rl_interface_resume));
-  js_set(js, g_rl_interface_proto, "prompt", js_mkfun(rl_interface_prompt));
-  js_set(js, g_rl_interface_proto, "setPrompt", js_mkfun(rl_interface_set_prompt));
-  js_set(js, g_rl_interface_proto, "getPrompt", js_mkfun(rl_interface_get_prompt));
-  js_set(js, g_rl_interface_proto, "write", js_mkfun(rl_interface_write));
-  js_set(js, g_rl_interface_proto, "question", js_mkfun(rl_interface_question_callback));
-  js_set(js, g_rl_interface_proto, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
+  js_set(js, js->builtins.rl_interface_proto, "close", js_mkfun(rl_interface_close));
+  js_set(js, js->builtins.rl_interface_proto, "pause", js_mkfun(rl_interface_pause));
+  js_set(js, js->builtins.rl_interface_proto, "resume", js_mkfun(rl_interface_resume));
+  js_set(js, js->builtins.rl_interface_proto, "prompt", js_mkfun(rl_interface_prompt));
+  js_set(js, js->builtins.rl_interface_proto, "setPrompt", js_mkfun(rl_interface_set_prompt));
+  js_set(js, js->builtins.rl_interface_proto, "getPrompt", js_mkfun(rl_interface_get_prompt));
+  js_set(js, js->builtins.rl_interface_proto, "write", js_mkfun(rl_interface_write));
+  js_set(js, js->builtins.rl_interface_proto, "question", js_mkfun(rl_interface_question_callback));
+  js_set(js, js->builtins.rl_interface_proto, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
 
-  js_set_getter_desc(js, g_rl_interface_proto, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, g_rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, g_rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_rl_interface_proto, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
-  js_set_sym(js, g_rl_interface_proto, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
+  js_set_getter_desc(js, js->builtins.rl_interface_proto, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->builtins.rl_interface_proto, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
+  js_set_sym(js, js->builtins.rl_interface_proto, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
 
-  return g_rl_interface_proto;
+  return js->builtins.rl_interface_proto;
 }
 
 static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) {
@@ -1302,7 +1268,8 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   
   rl_interface_t *iface = calloc(1, sizeof(rl_interface_t));
   if (!iface) return js_mkerr(js, "out of memory");
-  
+
+  iface->js = js;
   iface->id = next_interface_id++;
   iface->prompt = strdup(DEFAULT_PROMPT);
   iface->active_prompt = NULL;
@@ -1434,9 +1401,6 @@ ant_value_t readline_promises_library(ant_t *js) {
 }
 
 void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
-  if (g_rl_async_iter_proto) mark(js, g_rl_async_iter_proto);
-  if (g_rl_interface_proto) mark(js, g_rl_interface_proto);
-  
   rl_interface_t *iface, *tmp;
   HASH_ITER(hh, interfaces, iface, tmp) {
     mark(js, iface->input_stream);

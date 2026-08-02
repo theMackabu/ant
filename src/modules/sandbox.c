@@ -122,9 +122,6 @@ static bool sandbox_parse_memory_size(const char *input, unsigned long long *out
   return true;
 }
 
-static ant_value_t g_sandbox_proto = 0;
-static ant_value_t g_sandbox_ctor = 0;
-
 typedef struct {
   ant_t *js;
   ant_value_t obj;
@@ -667,7 +664,7 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   state->self = obj;
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_sandbox_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.sandbox_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, state, SANDBOX_NATIVE_TAG);
@@ -1424,28 +1421,27 @@ void gc_mark_sandbox(ant_t *js, gc_mark_fn mark) {
 }
 
 ant_value_t sandbox_library(ant_t *js) {
-  if (!g_sandbox_ctor) {
-    g_sandbox_proto = js_mkobj(js);
-    js_set(js, g_sandbox_proto, "run", js_mkfun_arity(sandbox_run, 1));
-    js_set(js, g_sandbox_proto, "eval", js_mkfun_arity(sandbox_eval, 1));
-    js_set(js, g_sandbox_proto, "send", js_mkfun_arity(sandbox_send, 1));
-    js_set(js, g_sandbox_proto, "receive", js_mkfun(sandbox_receive));
-    js_set(js, g_sandbox_proto, "once", js_mkfun_arity(sandbox_once, 1));
-    js_set(js, g_sandbox_proto, "next", js_mkfun(sandbox_messages_next));
-    js_set(js, g_sandbox_proto, "stats", js_mkfun(sandbox_stats));
-    js_set(js, g_sandbox_proto, "on", js_mkfun_arity(sandbox_on, 2));
-    js_set(js, g_sandbox_proto, "close", js_mkfun(sandbox_close));
-    js_set(js, g_sandbox_proto, "terminate", js_mkfun(sandbox_terminate));
-    js_set_getter_desc(js, g_sandbox_proto, "messages", 8, js_mkfun(sandbox_messages_getter), JS_DESC_C);
-    js_set_sym(js, g_sandbox_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
-    js_set_sym(js, g_sandbox_proto, get_toStringTag_sym(), js_mkstr(js, "Sandbox", 7));
-    g_sandbox_ctor = js_make_ctor(js, sandbox_ctor, g_sandbox_proto, "Sandbox", 7);
-    gc_register_root(&g_sandbox_proto);
-    gc_register_root(&g_sandbox_ctor);
+  if (!js->builtins.sandbox_ctor) {
+    js->builtins.sandbox_proto = js_mkobj(js);
+    js_set(js, js->builtins.sandbox_proto, "run", js_mkfun_arity(sandbox_run, 1));
+    js_set(js, js->builtins.sandbox_proto, "eval", js_mkfun_arity(sandbox_eval, 1));
+    js_set(js, js->builtins.sandbox_proto, "send", js_mkfun_arity(sandbox_send, 1));
+    js_set(js, js->builtins.sandbox_proto, "receive", js_mkfun(sandbox_receive));
+    js_set(js, js->builtins.sandbox_proto, "once", js_mkfun_arity(sandbox_once, 1));
+    js_set(js, js->builtins.sandbox_proto, "next", js_mkfun(sandbox_messages_next));
+    js_set(js, js->builtins.sandbox_proto, "stats", js_mkfun(sandbox_stats));
+    js_set(js, js->builtins.sandbox_proto, "on", js_mkfun_arity(sandbox_on, 2));
+    js_set(js, js->builtins.sandbox_proto, "close", js_mkfun(sandbox_close));
+    js_set(js, js->builtins.sandbox_proto, "terminate", js_mkfun(sandbox_terminate));
+    js_set_getter_desc(js, js->builtins.sandbox_proto, "messages", 8, js_mkfun(sandbox_messages_getter), JS_DESC_C);
+    js_set_sym(js, js->builtins.sandbox_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+    js_set_sym(js, js->builtins.sandbox_proto, get_toStringTag_sym(), js_mkstr(js, "Sandbox", 7));
+    js->builtins.sandbox_ctor = js_make_ctor(js, sandbox_ctor, js->builtins.sandbox_proto, "Sandbox", 7);
+    gc_register_root(&js->builtins.sandbox_ctor);
   }
 
   ant_value_t lib = js_mkobj(js);
-  js_set(js, lib, "Sandbox", g_sandbox_ctor);
+  js_set(js, lib, "Sandbox", js->builtins.sandbox_ctor);
   js_set(js, lib, "parentPort", sandbox_guest_parent_port(js));
   js_set(js, lib, "default", lib);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);

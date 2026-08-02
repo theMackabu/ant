@@ -34,10 +34,10 @@
 #include "tty_ctrl.h"
 #include "internal.h"
 #include "descriptors.h"
-#include "runtime.h"
 #include "silver/engine.h"
 #include "gc/modules.h"
 
+#include "modules/events.h"
 #include "modules/process.h"
 #include "sandbox/sandbox.h"
 #include "modules/tty.h"
@@ -54,37 +54,11 @@ extern char **environ;
 #define environ _environ
 #endif
 
-#define DEFAULT_MAX_LISTENERS 10
-#define INITIAL_LISTENER_CAPACITY 4
-
-typedef struct {
-  ant_value_t listener;
-  bool once;
-} ProcessEventListener;
-
-typedef struct {
-  char *event_type;
-  ProcessEventListener *listeners;
-  int listener_count;
-  int listener_capacity;
-  int emitting;
-  bool free_deferred;
-  UT_hash_handle hh;
-} ProcessEventType;
-
-static int max_listeners = DEFAULT_MAX_LISTENERS;
-static ProcessEventType *process_events = NULL;
-
 typedef struct {
   uv_signal_t handle;
   int signum;
   UT_hash_handle hh;
 } SignalHandle;
-
-static SignalHandle     *signal_handles = NULL;
-static ProcessEventType *stdin_events   = NULL;
-static ProcessEventType *stdout_events  = NULL;
-static ProcessEventType *stderr_events  = NULL;
 
 typedef struct {
   uv_tty_t tty;
@@ -98,22 +72,45 @@ typedef struct {
   char escape_buf[16];
 } stdin_state_t;
 
-static stdin_state_t stdin_state = {0};
-static uint64_t process_start_time = 0;
+struct ant_process_state {
+  ant_value_t process_obj;
+  ant_value_t stdin_obj;
+  ant_value_t stdout_obj;
+  ant_value_t stderr_obj;
+  SignalHandle *signal_handles;
 
-static stdin_byte_consumer_fn stdin_byte_consumer = NULL;
-static stdin_eof_fn stdin_byte_eof = NULL;
+  stdin_state_t stdin_state;
+  uint64_t process_start_time;
 
-static uint16_t sandbox_tty_rows = 24;
-static uint16_t sandbox_tty_cols = 80;
+  stdin_byte_consumer_fn stdin_byte_consumer;
+  stdin_eof_fn stdin_byte_eof;
 
-static bool sandbox_terminal_enabled = false;
-static uint32_t sandbox_terminal_capabilities = 0;
+  uint32_t sandbox_terminal_capabilities;
+  uint16_t sandbox_tty_rows;
+  uint16_t sandbox_tty_cols;
+  bool sandbox_terminal_enabled;
 
-#ifndef _WIN32
-static uv_signal_t sigwinch_handle;
-static bool sigwinch_initialized = false;
-#endif
+  #ifndef _WIN32
+  uv_signal_t sigwinch_handle;
+  bool sigwinch_initialized;
+  bool sigwinch_closing;
+  bool sigwinch_requested;
+  #endif
+};
+
+static ant_process_state_t *process_state(ant_t *js) {
+  if (js->process_state) return js->process_state;
+
+  ant_process_state_t *ps = calloc(1, sizeof(*ps));
+  if (!ps) return NULL;
+
+  ps->sandbox_tty_rows = 24;
+  ps->sandbox_tty_cols = 80;
+  ps->stdin_state.decoder = js_mkundef();
+
+  js->process_state = ps;
+  return ps;
+}
 
 typedef struct {
   const char *name;
@@ -222,96 +219,53 @@ static void init_signal_map(void) {
   
   size_t count = sizeof(entries) / sizeof(entries[0]);
   for (size_t i = 0; i < count; i++) {
+    SignalEntry *existing = NULL;
     HASH_ADD_KEYPTR(hh_name, signals_by_name, entries[i].name, strlen(entries[i].name), &entries[i]);
-    HASH_ADD(hh_num, signals_by_num, signum, sizeof(int), &entries[i]);
+    HASH_FIND(hh_num, signals_by_num, &entries[i].signum, sizeof(int), existing);
+    if (!existing) HASH_ADD(hh_num, signals_by_num, signum, sizeof(int), &entries[i]);
   }
   
   initialized = true;
 }
 
-static int get_signal_number(const char *name) {
+int process_signal_number(const char *name) {
+  if (!name || name[0] != 'S') return -1;
   init_signal_map();
   SignalEntry *entry = NULL;
   HASH_FIND(hh_name, signals_by_name, name, strlen(name), entry);
   return entry ? entry->signum : -1;
 }
 
-static const char *get_signal_name(int signum) {
+const char *process_signal_name(int signum) {
   init_signal_map();
   SignalEntry *entry = NULL;
   HASH_FIND(hh_num, signals_by_num, &signum, sizeof(int), entry);
   return entry ? entry->name : NULL;
 }
 
-static ProcessEventType *find_or_create_event(ProcessEventType **table, const char *event_type) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(*table, event_type, evt);
-  if (evt != NULL) evt->free_deferred = false;
-  if (evt == NULL) {
-    evt = malloc(sizeof(ProcessEventType));
-    *evt = (ProcessEventType){
-      .event_type = strdup(event_type),
-      .emitting = 0,
-      .listener_count = 0,
-      .free_deferred = false,
-      .listener_capacity = INITIAL_LISTENER_CAPACITY,
-      .listeners = malloc(sizeof(ProcessEventListener) * INITIAL_LISTENER_CAPACITY),
-    };
-    HASH_ADD_KEYPTR(hh, *table, evt->event_type, strlen(evt->event_type), evt);
-  }
-  
-  return evt;
-}
-
-static bool ensure_listener_capacity(ProcessEventType *evt) {
-  if (evt->listener_count >= evt->listener_capacity) {
-    int new_capacity = evt->listener_capacity * 2;
-    ProcessEventListener *new_listeners = realloc(evt->listeners, sizeof(ProcessEventListener) * new_capacity);
-    if (!new_listeners) return false;
-    evt->listeners = new_listeners;
-    evt->listener_capacity = new_capacity;
-  }
-  return true;
-}
-
-static void free_event_type(ProcessEventType **events, ProcessEventType *evt) {
-  if (!evt) return;
-  if (evt->emitting > 0) { evt->free_deferred = true; return; }
-  HASH_DEL(*events, evt);
-  
-  free(evt->listeners);
-  free(evt->event_type); free(evt);
-}
-
-static void check_listener_warning(const char *event) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event, evt);
-  if (evt && evt->listener_count == max_listeners) fprintf(stderr, 
-    "Warning: Possible EventEmitter memory leak detected. "
-    "%d '%s' listeners added. Use process.setMaxListeners() to increase limit.\n",
-    evt->listener_count, event
-  );
-}
-
 static void uv_signal_handler(uv_signal_t *handle, int signum) {
-  const char *name = get_signal_name(signum);
+  ant_t *js = handle->data;
+  const char *name = process_signal_name(signum);
   if (name) {
-    ant_value_t sig_arg = js_mkstr(rt->js, name, strlen(name));
-    emit_process_event(name, &sig_arg, 1);
+    ant_value_t sig_arg = js_mkstr(js, name, strlen(name));
+    emit_process_event(js, name, &sig_arg, 1);
   }
 }
 
-static void start_signal_watch(int signum) {
+static void start_signal_watch(ant_t *js, int signum) {
+  ant_process_state_t *ps = process_state(js);
   SignalHandle *sh = NULL;
-  HASH_FIND_INT(signal_handles, &signum, sh);
+  if (!ps) return;
+  HASH_FIND_INT(ps->signal_handles, &signum, sh);
   if (sh) return;
-  
+
   sh = malloc(sizeof(SignalHandle));
   sh->signum = signum;
   uv_signal_init(uv_default_loop(), &sh->handle);
+  sh->handle.data = js;
   uv_signal_start(&sh->handle, uv_signal_handler, signum);
   uv_unref((uv_handle_t *)&sh->handle);
-  HASH_ADD_INT(signal_handles, signum, sh);
+  HASH_ADD_INT(ps->signal_handles, signum, sh);
 }
 
 static void on_signal_handle_close(uv_handle_t *handle) {
@@ -319,79 +273,29 @@ static void on_signal_handle_close(uv_handle_t *handle) {
   free(sh);
 }
 
-static void stop_signal_watch(int signum) {
+static void stop_signal_watch(ant_t *js, int signum) {
+  ant_process_state_t *ps = process_state(js);
   SignalHandle *sh = NULL;
-  HASH_FIND_INT(signal_handles, &signum, sh);
+  if (!ps) return;
+  HASH_FIND_INT(ps->signal_handles, &signum, sh);
   if (!sh) return;
   
-  HASH_DEL(signal_handles, sh);
+  HASH_DEL(ps->signal_handles, sh);
   uv_signal_stop(&sh->handle);
   uv_close((uv_handle_t *)&sh->handle, on_signal_handle_close);
 }
 
 
-void emit_process_event(const char *event_type, ant_value_t *args, int nargs) {
-  if (!rt->js) return;
-  
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event_type, evt);
-  
-  if (evt == NULL || evt->listener_count == 0) return;
-  evt->emitting++; int i = 0;
-  
-  while (i < evt->listener_count) {
-    ProcessEventListener *listener = &evt->listeners[i];
-    sv_vm_call(rt->js->vm, rt->js, listener->listener, js_mkundef(), args, nargs, NULL, false);
-    
-    if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      } evt->listener_count--;
-    } else i++;
-  } evt->emitting--;
-
-  if (evt->listener_count == 0 || evt->free_deferred) {
-    int signum = get_signal_number(event_type);
-    if (signum > 0) stop_signal_watch(signum);
-    if (evt->emitting == 0) free_event_type(&process_events, evt);
-  }
+void emit_process_event(ant_t *js, const char *event_type, ant_value_t *args, int nargs) {
+  ant_process_state_t *ps = js->process_state;
+  if (!ps || !is_object_type(ps->process_obj)) return;
+  eventemitter_emit_args(js, ps->process_obj, event_type, args, nargs);
 }
 
-bool process_has_event_listeners(const char *event_type) {
-  ProcessEventType *evt = NULL;
-  if (!event_type) return false;
-  HASH_FIND_STR(process_events, event_type, evt);
-  return evt && evt->listener_count > 0;
-}
-
-static bool stdio_has_event_listener(ProcessEventType *events, const char *event_type) {
-  ProcessEventType *evt = NULL;
-  if (!event_type) return false;
-  HASH_FIND_STR(events, event_type, evt);
-  return evt && evt->listener_count > 0;
-}
-
-static void emit_stdio_event(ProcessEventType **events, const char *event_type, ant_value_t *args, int nargs) {
-  if (!rt->js) return;
-  ProcessEventType *evt = NULL;
-  
-  HASH_FIND_STR(*events, event_type, evt);
-  if (evt == NULL || evt->listener_count == 0) return;
-  
-  evt->emitting++;
-  int i = 0;
-  while (i < evt->listener_count) {
-    ProcessEventListener *listener = &evt->listeners[i];
-    sv_vm_call(rt->js->vm, rt->js, listener->listener, js_mkundef(), args, nargs, NULL, false);
-    if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) 
-        evt->listeners[j] = evt->listeners[j + 1];
-      evt->listener_count--;
-    } else i++;
-  } evt->emitting--;
-
-  if ((evt->listener_count == 0 || evt->free_deferred) && evt->emitting == 0)
-    free_event_type(events, evt);
+bool process_has_event_listeners(ant_t *js, const char *event_type) {
+  ant_process_state_t *ps = js->process_state;
+  if (!ps || !event_type || !is_object_type(ps->process_obj)) return false;
+  return eventemitter_listener_count(js, ps->process_obj, event_type) > 0;
 }
 
 static const char *stdin_escape_name(const char *seq, int len) {
@@ -493,6 +397,8 @@ static void emit_keypress_event(
   const char *sequence,
   size_t sequence_len
 ) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
   ant_value_t str_val = js_mkstr(js, str ? str : "", str ? str_len : 0);
   ant_value_t key_obj = js_mkobj(js);
 
@@ -511,47 +417,49 @@ static void emit_keypress_event(
   }
 
   ant_value_t args[2] = { str_val, key_obj };
-  emit_stdio_event(&stdin_events, "keypress", args, 2);
+  eventemitter_emit_args(js, ps->stdin_obj, "keypress", args, 2);
 }
 
 static void process_keypress_data(ant_t *js, const char *data, size_t len) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)data[i];
 
-    if (stdin_state.escape_state == 1) {
-      stdin_state.escape_buf[stdin_state.escape_len++] = (char)c;
+    if (ps->stdin_state.escape_state == 1) {
+      ps->stdin_state.escape_buf[ps->stdin_state.escape_len++] = (char)c;
       if (c == '[' || c == 'O') {
-        stdin_state.escape_state = 2;
+        ps->stdin_state.escape_state = 2;
         continue;
       }
 
       emit_keypress_event(js, "\x1b", 1, "escape", false, false, false, "\x1b", 1);
-      stdin_state.escape_state = 0;
-      stdin_state.escape_len = 0;
+      ps->stdin_state.escape_state = 0;
+      ps->stdin_state.escape_len = 0;
     }
 
-    if (stdin_state.escape_state == 2) {
-      stdin_state.escape_buf[stdin_state.escape_len++] = (char)c;
-      if ((c >= 'A' && c <= 'Z') || c == '~' || stdin_state.escape_len >= 15) {
+    if (ps->stdin_state.escape_state == 2) {
+      ps->stdin_state.escape_buf[ps->stdin_state.escape_len++] = (char)c;
+      if ((c >= 'A' && c <= 'Z') || c == '~' || ps->stdin_state.escape_len >= 15) {
         char sequence[18];
         size_t seq_len = 0;
         sequence[seq_len++] = '\x1b';
-        memcpy(sequence + seq_len, stdin_state.escape_buf, (size_t)stdin_state.escape_len);
-        seq_len += (size_t)stdin_state.escape_len;
+        memcpy(sequence + seq_len, ps->stdin_state.escape_buf, (size_t)ps->stdin_state.escape_len);
+        seq_len += (size_t)ps->stdin_state.escape_len;
 
-        const char *name = stdin_escape_name(stdin_state.escape_buf, stdin_state.escape_len);
+        const char *name = stdin_escape_name(ps->stdin_state.escape_buf, ps->stdin_state.escape_len);
         if (!name) name = "escape";
 
         emit_keypress_event(js, "", 0, name, false, false, false, sequence, seq_len);
-        stdin_state.escape_state = 0;
-        stdin_state.escape_len = 0;
+        ps->stdin_state.escape_state = 0;
+        ps->stdin_state.escape_len = 0;
       }
       continue;
     }
 
     if (c == 27) {
-      stdin_state.escape_state = 1;
-      stdin_state.escape_len = 0;
+      ps->stdin_state.escape_state = 1;
+      ps->stdin_state.escape_len = 0;
       continue;
     }
 
@@ -584,47 +492,30 @@ static void process_keypress_data(ant_t *js, const char *data, size_t len) {
 }
 
 static void process_keypress_flush(ant_t *js) {
-  if (stdin_state.escape_state == 1) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  if (ps->stdin_state.escape_state == 1) {
     emit_keypress_event(js, "\x1b", 1, "escape", false, false, false, "\x1b", 1);
-    stdin_state.escape_state = 0;
-    stdin_state.escape_len = 0;
+    ps->stdin_state.escape_state = 0;
+    ps->stdin_state.escape_len = 0;
   }
-}
-
-static bool remove_listener_from_events(ProcessEventType **events, const char *event, ant_value_t listener) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(*events, event, evt);
-  if (!evt) return false;
-  
-  for (int i = 0; i < evt->listener_count; i++) {
-    if (evt->listeners[i].listener != listener) continue;
-    memmove(
-      &evt->listeners[i], &evt->listeners[i + 1],
-      (size_t)(evt->listener_count - i - 1) * sizeof(ProcessEventListener)
-    );
-    
-    if (--evt->listener_count == 0) {
-      free_event_type(events, evt);
-      return true;
-    }
-    
-    return false;
-  }
-
-  return false;
 }
 
 static bool stdin_is_tty(void) {
   return uv_guess_handle(STDIN_FILENO) == UV_TTY;
 }
 
-static bool stdout_is_tty(void) {
-  if (sandbox_terminal_enabled) return (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDOUT_TTY) != 0;
+static bool stdout_is_tty(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return false;
+  if (ps->sandbox_terminal_enabled) return (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDOUT_TTY) != 0;
   return uv_guess_handle(STDOUT_FILENO) == UV_TTY;
 }
 
-static bool stderr_is_tty(void) {
-  if (sandbox_terminal_enabled) return (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDERR_TTY) != 0;
+static bool stderr_is_tty(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return false;
+  if (ps->sandbox_terminal_enabled) return (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_STDERR_TTY) != 0;
   return uv_guess_handle(STDERR_FILENO) == UV_TTY;
 }
 
@@ -645,11 +536,12 @@ static ant_value_t process_binding(ant_t *js, ant_value_t *args, int nargs) {
   return constants;
 }
 
-static void get_tty_size(int fd, int *rows, int *cols) {
+static void get_tty_size(ant_t *js, int fd, int *rows, int *cols) {
+  ant_process_state_t *ps = process_state(js);
   int out_rows = 24, out_cols = 80;
-  if (sandbox_terminal_enabled && (fd == STDOUT_FILENO || fd == STDERR_FILENO)) {
-    *rows = sandbox_tty_rows ? sandbox_tty_rows : 24;
-    *cols = sandbox_tty_cols ? sandbox_tty_cols : 80;
+  if (ps && ps->sandbox_terminal_enabled && (fd == STDOUT_FILENO || fd == STDERR_FILENO)) {
+    *rows = ps->sandbox_tty_rows ? ps->sandbox_tty_rows : 24;
+    *cols = ps->sandbox_tty_cols ? ps->sandbox_tty_cols : 80;
     return;
   }
 #ifndef _WIN32
@@ -672,57 +564,53 @@ static void get_tty_size(int fd, int *rows, int *cols) {
 }
 
 static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
-  if (!sandbox_terminal_enabled || !is_special_object(process_obj)) return;
+  ant_process_state_t *ps = process_state(js);
+  if (!ps || !ps->sandbox_terminal_enabled || !is_special_object(process_obj)) return;
 
   ant_value_t env_obj = js_get(js, process_obj, "env");
   if (!is_special_object(env_obj)) return;
 
-  if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
+  if (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_STRIP) {
     js_set(js, env_obj, "NO_COLOR", js_mkstr(js, "1", 1));
     js_delete_prop(js, env_obj, "FORCE_COLOR", 11);
   }
-  else if (sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) {
+  else if (ps->sandbox_terminal_capabilities & ANT_SANDBOX_CAP_COLOR_FORCE) {
     js_delete_prop(js, env_obj, "NO_COLOR", 8);
     js_set(js, env_obj, "FORCE_COLOR", js_mkstr(js, "1", 1));
   }
 }
 
-void process_refresh_sandbox_argv(void) {
-  ant_t *js = rt ? rt->js : NULL;
-  if (!js) return;
-
+void process_refresh_sandbox_argv(ant_t *js) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
 
   ant_value_t argv_arr = js_mkarr(js);
-  for (int i = 0; i < rt->argc; i++) {
-    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
-  }
+  for (int i = 0; i < js->runtime.argc; i++)
+    js_arr_push(js, argv_arr, js_mkstr(js, js->runtime.argv[i], strlen(js->runtime.argv[i])));
 
   js_set(js, process_obj, "argv", argv_arr);
-  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
-  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
+  js_set(js, process_obj, "argv0", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "execPath", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkundef());
 }
 
-void process_set_sandbox_terminal(uint32_t capabilities, uint16_t rows, uint16_t cols) {
-  sandbox_terminal_enabled = true;
-  sandbox_terminal_capabilities = capabilities;
+void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t rows, uint16_t cols) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ps->sandbox_terminal_enabled = true;
+  ps->sandbox_terminal_capabilities = capabilities;
 
-  sandbox_tty_rows = rows ? rows : 24;
-  sandbox_tty_cols = cols ? cols : 80;
-
-  ant_t *js = rt ? rt->js : NULL;
-  if (!js) return;
+  ps->sandbox_tty_rows = rows ? rows : 24;
+  ps->sandbox_tty_cols = cols ? cols : 80;
 
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
   process_update_sandbox_env(js, process_obj);
 
   ant_value_t stdout_obj = js_get(js, process_obj, "stdout");
-  if (is_special_object(stdout_obj)) js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
+  if (is_special_object(stdout_obj)) js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty(js)));
 
   ant_value_t stderr_obj = js_get(js, process_obj, "stderr");
-  if (is_special_object(stderr_obj)) js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
+  if (is_special_object(stderr_obj)) js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty(js)));
 }
 
 static bool stdin_set_raw_mode(bool enable) {
@@ -739,113 +627,170 @@ static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_bu
 #endif
 }
 
-static inline void emit_stdin_data_event(const uv_buf_t *buf, ssize_t nread) {
+static inline void emit_stdin_data_event(ant_t *js, const uv_buf_t *buf, ssize_t nread) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
   ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
   if (ab) memcpy(ab->data, buf->base, (size_t)nread);
 
   ant_value_t raw_val = ab
-    ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
-    : js_mkstr(rt->js, buf->base, (size_t)nread);
-  
-  ant_value_t data_val = is_object_type(stdin_state.decoder)
-    ? string_decoder_decode_value(rt->js, stdin_state.decoder, raw_val, false)
+    ? create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
+    : js_mkstr(js, buf->base, (size_t)nread);
+
+  ant_value_t data_val = is_object_type(ps->stdin_state.decoder)
+    ? string_decoder_decode_value(js, ps->stdin_state.decoder, raw_val, false)
     : raw_val;
 
   if (is_err(data_val)) data_val = raw_val;
-  emit_stdio_event(&stdin_events, "data", &data_val, 1);
+  eventemitter_emit_args(js, ps->stdin_obj, "data", &data_val, 1);
 }
 
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  if (!rt->js) goto cleanup;
+  ant_t *js = stream->data;
+  if (!js) goto cleanup;
+
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) goto cleanup;
   if (nread < 0) {
-    if (nread == UV_EOF && stdin_byte_eof) stdin_byte_eof();
+    if (nread == UV_EOF && ps->stdin_byte_eof) ps->stdin_byte_eof(js);
     goto cleanup;
   }
-  
-  if (nread == 0) goto cleanup;
-  if (!stdin_state.paused && stdio_has_event_listener(stdin_events, "data"))
-    emit_stdin_data_event(buf, nread);
 
+  if (nread == 0) goto cleanup;
+  if (!ps->stdin_state.paused && eventemitter_listener_count(js, ps->stdin_obj, "data") > 0)
+    emit_stdin_data_event(js, buf, nread);
+
+  bool want_keypress = ps->stdin_state.keypress_enabled
+    && eventemitter_listener_count(js, ps->stdin_obj, "keypress") > 0;
   bool fed_keypress = false;
+
   for (ssize_t i = 0; i < nread; i++) {
-    if (stdin_state.paused) break;
-    if (stdin_byte_consumer) stdin_byte_consumer(buf->base + i, 1);
-    if (stdin_state.keypress_enabled && stdio_has_event_listener(stdin_events, "keypress")) {
-      process_keypress_data(rt->js, buf->base + i, 1);
+    if (ps->stdin_state.paused) break;
+    if (ps->stdin_byte_consumer) ps->stdin_byte_consumer(js, buf->base + i, 1);
+    if (want_keypress) {
+      process_keypress_data(js, buf->base + i, 1);
       fed_keypress = true;
     }
   }
-  if (fed_keypress && !stdin_state.paused) process_keypress_flush(rt->js);
+  if (fed_keypress && !ps->stdin_state.paused) process_keypress_flush(js);
 
 cleanup:
   if (buf->base) free(buf->base);
 }
 
-static void stdin_start_reading(void) {
-  if (stdin_state.reading) return;
-  if (!stdin_state.tty_initialized) {
+static void stdin_start_reading(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  if (ps->stdin_state.reading) return;
+  if (!ps->stdin_state.tty_initialized) {
     uv_loop_t *loop = uv_default_loop();
-    if (uv_tty_init(loop, &stdin_state.tty, STDIN_FILENO, 1) != 0) return;
-    stdin_state.tty.data = NULL;
-    stdin_state.tty_initialized = true;
-    uv_unref((uv_handle_t *)&stdin_state.tty);
+    if (uv_tty_init(loop, &ps->stdin_state.tty, STDIN_FILENO, 1) != 0) return;
+    ps->stdin_state.tty.data = js;
+    ps->stdin_state.tty_initialized = true;
+    uv_unref((uv_handle_t *)&ps->stdin_state.tty);
   }
-  uv_ref((uv_handle_t *)&stdin_state.tty);
-  stdin_state.reading = true;
-  uv_read_start((uv_stream_t *)&stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
+  uv_ref((uv_handle_t *)&ps->stdin_state.tty);
+  ps->stdin_state.reading = true;
+  uv_read_start((uv_stream_t *)&ps->stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
 }
 
-static void stdin_stop_reading(void) {
-  if (!stdin_state.reading) return;
-  uv_read_stop((uv_stream_t *)&stdin_state.tty);
-  stdin_state.reading = false;
-  uv_unref((uv_handle_t *)&stdin_state.tty);
+static void stdin_stop_reading(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  if (!ps->stdin_state.reading) return;
+  uv_read_stop((uv_stream_t *)&ps->stdin_state.tty);
+  ps->stdin_state.reading = false;
+  uv_unref((uv_handle_t *)&ps->stdin_state.tty);
 }
 
-static void stdin_stop_reading_if_idle(void) {
-  if (stdin_byte_consumer) return;
-  if (stdio_has_event_listener(stdin_events, "data")) return;
-  stdin_stop_reading();
+static void stdin_stop_reading_if_idle(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  if (ps->stdin_byte_consumer) return;
+  if (eventemitter_listener_count(js, ps->stdin_obj, "data") > 0) return;
+  if (eventemitter_listener_count(js, ps->stdin_obj, "keypress") > 0) return;
+  stdin_stop_reading(js);
 }
 
-void process_stdin_attach_reader(stdin_byte_consumer_fn on_bytes, stdin_eof_fn on_eof) {
-  stdin_byte_consumer = on_bytes;
-  stdin_byte_eof = on_eof;
-  stdin_state.paused = false;
-  stdin_start_reading();
+void process_stdin_attach_reader(ant_t *js, stdin_byte_consumer_fn on_bytes, stdin_eof_fn on_eof) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ps->stdin_byte_consumer = on_bytes;
+  ps->stdin_byte_eof = on_eof;
+  ps->stdin_state.paused = false;
+  stdin_start_reading(js);
 }
 
-void process_stdin_detach_reader(void) {
-  stdin_byte_consumer = NULL;
-  stdin_byte_eof = NULL;
-  stdin_stop_reading_if_idle();
+void process_stdin_detach_reader(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ps->stdin_byte_consumer = NULL;
+  ps->stdin_byte_eof = NULL;
+  stdin_stop_reading_if_idle(js);
 }
 
 #ifndef _WIN32
 static void on_sigwinch(uv_signal_t *handle, int signum) {
-  if (!rt->js) return;
-  
-  ant_value_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
+  ant_t *js = handle->data;
+  if (!js) return;
+
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
-  
-  ant_value_t stdout_obj = js_get(rt->js, process_obj, "stdout");
+
+  ant_value_t stdout_obj = js_get(js, process_obj, "stdout");
   if (!is_special_object(stdout_obj)) return;
-  
-  emit_stdio_event(&stdout_events, "resize", NULL, 0);
+
+  eventemitter_emit_args(js, ps->stdout_obj, "resize", NULL, 0);
 }
 #endif
 
-static void start_sigwinch_handler(void) {
+static void start_sigwinch_handler(ant_t *js);
+
 #ifndef _WIN32
-  if (sigwinch_initialized) return;
+static void on_sigwinch_close(uv_handle_t *handle) {
+  ant_t *js = handle ? (ant_t *)handle->data : NULL;
+  ant_process_state_t *ps = js ? js->process_state : NULL;
+  if (!ps) return;
+
+  ps->sigwinch_initialized = false;
+  ps->sigwinch_closing = false;
+  if (ps->sigwinch_requested) start_sigwinch_handler(js);
+}
+#endif
+
+static void start_sigwinch_handler(ant_t *js) {
+#ifndef _WIN32
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ps->sigwinch_requested = true;
+  if (ps->sigwinch_initialized || ps->sigwinch_closing) return;
+
   uv_loop_t *loop = uv_default_loop();
-  if (uv_signal_init(loop, &sigwinch_handle) != 0) return;
-  if (uv_signal_start(&sigwinch_handle, on_sigwinch, SIGWINCH) != 0) {
-    uv_close((uv_handle_t *)&sigwinch_handle, NULL);
+  if (uv_signal_init(loop, &ps->sigwinch_handle) != 0) return;
+  ps->sigwinch_initialized = true;
+  ps->sigwinch_handle.data = js;
+  if (uv_signal_start(&ps->sigwinch_handle, on_sigwinch, SIGWINCH) != 0) {
+    ps->sigwinch_requested = false;
+    ps->sigwinch_closing = true;
+    uv_close((uv_handle_t *)&ps->sigwinch_handle, on_sigwinch_close);
     return;
   }
-  uv_unref((uv_handle_t *)&sigwinch_handle);
-  sigwinch_initialized = true;
+  uv_unref((uv_handle_t *)&ps->sigwinch_handle);
+#endif
+}
+
+static void stop_sigwinch_handler(ant_t *js) {
+#ifndef _WIN32
+  ant_process_state_t *ps = js ? js->process_state : NULL;
+  if (!ps) return;
+  ps->sigwinch_requested = false;
+  if (!ps->sigwinch_initialized || ps->sigwinch_closing) return;
+
+  uv_signal_stop(&ps->sigwinch_handle);
+  ps->sigwinch_closing = true;
+  uv_close((uv_handle_t *)&ps->sigwinch_handle, on_sigwinch_close);
 #endif
 }
 
@@ -856,6 +801,8 @@ static ant_value_t js_stdin_set_raw_mode(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t js_stdin_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
   
   ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
   ant_value_t decoder = string_decoder_create(js, encoding);
@@ -865,80 +812,26 @@ static ant_value_t js_stdin_set_encoding(ant_t *js, ant_value_t *args, int nargs
   encoding_str = js_tostring_val(js, encoding);
   if (is_err(encoding_str)) return encoding_str;
 
-  stdin_state.decoder = decoder;
+  ps->stdin_state.decoder = decoder;
   js_set(js, this_obj, "encoding", encoding_str);
   
   return this_obj;
 }
 
 static ant_value_t js_stdin_resume(ant_params_t) {
-  stdin_state.paused = false;
-  stdin_start_reading();
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
+  ps->stdin_state.paused = false;
+  stdin_start_reading(js);
   return js_getthis(js);
 }
 
 static ant_value_t js_stdin_pause(ant_params_t) {
-  stdin_state.paused = true;
-  stdin_stop_reading();
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
+  ps->stdin_state.paused = true;
+  stdin_stop_reading(js);
   return js_getthis(js);
-}
-
-static ant_value_t js_stdin_on(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-
-  ProcessEventType *evt = find_or_create_event(&stdin_events, event);
-  if (!ensure_listener_capacity(evt)) return this_obj;
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = false;
-  evt->listener_count++;
-  
-  if (strcmp(event, "data") == 0) { 
-    stdin_state.paused = false; 
-    stdin_start_reading();
-  }
-
-  return this_obj;
-}
-
-static ant_value_t js_stdin_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  
-  if (nargs < 1) {
-    ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, stdin_events, evt, tmp) {
-      free_event_type(&stdin_events, evt);
-    }
-    stdin_stop_reading_if_idle();
-    return this_obj;
-  }
-
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stdin_events, event, evt);
-  if (evt) free_event_type(&stdin_events, evt);
-  if (strcmp(event, "data") == 0) stdin_stop_reading_if_idle();
-
-  return this_obj;
-}
-
-static ant_value_t js_stdin_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  bool now_empty = remove_listener_from_events(&stdin_events, event, args[1]);
-  if (now_empty && strcmp(event, "data") == 0) stdin_stop_reading_if_idle();
-
-  return this_obj;
 }
 
 static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs, FILE *stream, int fd) {
@@ -963,80 +856,10 @@ static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
   return process_write_stream(js, args, nargs, stdout, STDOUT_FILENO);
 }
 
-static ant_value_t js_stdout_on(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-  
-  ProcessEventType *evt = find_or_create_event(&stdout_events, event);
-  if (!ensure_listener_capacity(evt)) return this_obj;
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = false;
-  evt->listener_count++;
-  
-  if (strcmp(event, "resize") == 0) start_sigwinch_handler();
-  
-  return this_obj;
-}
-
-static ant_value_t js_stdout_once(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-  
-  ProcessEventType *evt = find_or_create_event(&stdout_events, event);
-  if (!ensure_listener_capacity(evt)) return this_obj;
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = true;
-  evt->listener_count++;
-  
-  if (strcmp(event, "resize") == 0) start_sigwinch_handler();
-  
-  return this_obj;
-}
-
-static ant_value_t js_stdout_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  
-  if (nargs < 1) {
-    ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, stdout_events, evt, tmp) {
-      free_event_type(&stdout_events, evt);
-    }
-    return this_obj;
-  }
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stdout_events, event, evt);
-  if (evt) free_event_type(&stdout_events, evt);
-  
-  return this_obj;
-}
-
-static ant_value_t js_stdout_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  remove_listener_from_events(&stdout_events, event, args[1]);
-  return this_obj;
-}
-
 static ant_value_t js_stdout_get_window_size(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
-  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  get_tty_size(js, STDOUT_FILENO, &rows, &cols);
   ant_value_t arr = js_mkarr(js);
   js_arr_push(js, arr, js_mknum(cols));
   js_arr_push(js, arr, js_mknum(rows));
@@ -1046,13 +869,13 @@ static ant_value_t js_stdout_get_window_size(ant_t *js, ant_value_t *args, int n
 static ant_value_t js_stdout_rows_getter(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
-  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  get_tty_size(js, STDOUT_FILENO, &rows, &cols);
   return js_mknum(rows);
 }
 
 static ant_value_t js_stdout_columns_getter(ant_t *js, ant_value_t *args, int nargs) {
   int rows = 0, cols = 0;
-  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  get_tty_size(js, STDOUT_FILENO, &rows, &cols);
   return js_mknum(cols);
 }
 
@@ -1060,76 +883,12 @@ static ant_value_t js_stderr_write(ant_t *js, ant_value_t *args, int nargs) {
   return process_write_stream(js, args, nargs, stderr, STDERR_FILENO);
 }
 
-static ant_value_t js_stderr_on(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-  
-  ProcessEventType *evt = find_or_create_event(&stderr_events, event);
-  if (!ensure_listener_capacity(evt)) return this_obj;
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = false;
-  evt->listener_count++;
-  
-  return this_obj;
-}
-
-static ant_value_t js_stderr_once(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
-  
-  ProcessEventType *evt = find_or_create_event(&stderr_events, event);
-  if (!ensure_listener_capacity(evt)) return this_obj;
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = true;
-  evt->listener_count++;
-  
-  return this_obj;
-}
-
-static ant_value_t js_stderr_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  
-  if (nargs < 1) {
-    ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, stderr_events, evt, tmp) {
-      free_event_type(&stderr_events, evt);
-    }
-    return this_obj;
-  }
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stderr_events, event, evt);
-  if (evt) free_event_type(&stderr_events, evt);
-  
-  return this_obj;
-}
-
-static ant_value_t js_stderr_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  remove_listener_from_events(&stderr_events, event, args[1]);
-  return this_obj;
-}
-
 static ant_value_t process_uptime(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
   uint64_t now = uv_hrtime();
-  double seconds = (double)(now - process_start_time) / 1e9;
+  double seconds = (double)(now - ps->process_start_time) / 1e9;
   return js_mknum(seconds);
 }
 
@@ -1243,7 +1002,7 @@ static ant_value_t process_kill(ant_t *js, ant_value_t *args, int nargs) {
     } else if (vtype(args[1]) == T_STR) {
       char *sig_name = js_getstr(js, args[1], NULL);
       if (sig_name) {
-        int signum = get_signal_number(sig_name);
+        int signum = process_signal_number(sig_name);
         if (signum > 0) sig = signum;
         else return js_mkerr(js, "Unknown signal");
       }
@@ -1673,123 +1432,6 @@ static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_add(ant_t *js, ant_value_t *args, int nargs, bool once, bool prepend) {
-  if (nargs < 2) {
-    return js_mkerr(js, once ? "process.once requires 2 arguments" : "process.on requires 2 arguments");
-  }
-
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkerr(js, "event must be a string");
-
-  uint8_t listener_type = vtype(args[1]);
-  if (listener_type != T_FUNC && listener_type != T_CFUNC) {
-    return js_mkerr(js, "listener must be a function");
-  }
-
-  int signum = get_signal_number(event);
-  if (signum > 0) start_signal_watch(signum);
-
-  ProcessEventType *evt = find_or_create_event(&process_events, event);
-  if (!ensure_listener_capacity(evt)) return js_mkerr(js, "failed to allocate listener");
-
-  if (prepend && evt->listener_count > 0) {
-    memmove(
-      &evt->listeners[1],
-      &evt->listeners[0],
-      (size_t)evt->listener_count * sizeof(ProcessEventListener)
-    );
-    evt->listeners[0].listener = args[1];
-    evt->listeners[0].once = once;
-  } else {
-    evt->listeners[evt->listener_count].listener = args[1];
-    evt->listeners[evt->listener_count].once = once;
-  }
-
-  evt->listener_count++;
-  check_listener_warning(event);
-  return js_get(js, js_glob(js), "process");
-}
-
-static ant_value_t process_on(ant_t *js, ant_value_t *args, int nargs) {
-  return process_add(js, args, nargs, false, false);
-}
-
-static ant_value_t process_once(ant_t *js, ant_value_t *args, int nargs) {
-  return process_add(js, args, nargs, true, false);
-}
-
-static ant_value_t process_prepend_listener(ant_t *js, ant_value_t *args, int nargs) {
-  return process_add(js, args, nargs, false, true);
-}
-
-static ant_value_t process_prepend_once_listener(ant_t *js, ant_value_t *args, int nargs) {
-  return process_add(js, args, nargs, true, true);
-}
-
-static ant_value_t process_off(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t process_obj = js_get(js, js_glob(js), "process");
-  if (nargs < 2) return process_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return process_obj;
-  
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event, evt);
-  if (!evt) return process_obj;
-  
-  for (int i = 0; i < evt->listener_count; i++) {
-    if (evt->listeners[i].listener == args[1]) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      } evt->listener_count--;
-      break;
-    }
-  }
-  
-  if (evt->listener_count == 0) {
-    int signum = get_signal_number(event);
-    if (signum > 0) stop_signal_watch(signum);
-  }
-  
-  return process_obj;
-}
-
-static ant_value_t process_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t process_obj = js_get(js, js_glob(js), "process");
-  
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
-    char *event = js_getstr(js, args[0], NULL);
-    if (event) {
-      ProcessEventType *evt = NULL;
-      HASH_FIND_STR(process_events, event, evt);
-      if (evt) {
-        int signum = get_signal_number(event);
-        if (signum > 0) stop_signal_watch(signum);
-        free_event_type(&process_events, evt);
-      }
-    }
-  } else {
-    ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, process_events, evt, tmp) {
-      int signum = get_signal_number(evt->event_type);
-      if (signum > 0) stop_signal_watch(signum);
-      free_event_type(&process_events, evt);
-    }
-  }
-  
-  return process_obj;
-}
-
-static ant_value_t process_emit(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_false;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_false;
-  
-  emit_process_event(event, nargs > 1 ? &args[1] : NULL, nargs - 1);
-  return js_true;
-}
-
 static bool process_is_error_object(ant_value_t value) {
   if (is_err(value)) return true;
   return is_object_type(value) && js_get_slot(value, SLOT_ERROR_BRAND) == js_true;
@@ -1874,81 +1516,12 @@ static ant_value_t process_emit_warning(ant_t *js, ant_value_t *args, int nargs)
   fprintf(stderr, "%s: %.*s\n", type ? type : "Warning", (int)msg.len, msg.ptr);
   if (detail) fprintf(stderr, "%.*s\n", (int)detail_len, detail);
 
-  emit_process_event("warning", &warning_event_arg, 1);
+  emit_process_event(js, "warning", &warning_event_arg, 1);
   if (msg.needs_free) free((void *)msg.ptr);
   
   return js_mkundef();
 }
 
-static ant_value_t process_listener_count(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mknum(0);
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mknum(0);
-  
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event, evt);
-  
-  return js_mknum(evt ? evt->listener_count : 0);
-}
-
-static ant_value_t process_listeners_impl(ant_t *js, ant_value_t *args, int nargs, bool raw) {
-  (void)raw;
-  ant_value_t result = js_mkarr(js);
-  if (nargs < 1) return result;
-
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return result;
-
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event, evt);
-  if (!evt) return result;
-
-  for (int i = 0; i < evt->listener_count; i++) {
-    js_arr_push(js, result, evt->listeners[i].listener);
-  }
-
-  return result;
-}
-
-static ant_value_t process_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  return process_listeners_impl(js, args, nargs, false);
-}
-
-static ant_value_t process_raw_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  return process_listeners_impl(js, args, nargs, true);
-}
-
-static ant_value_t process_event_names(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args;
-  (void)nargs;
-  ant_value_t result = js_mkarr(js);
-  ProcessEventType *evt = NULL;
-  ProcessEventType *tmp = NULL;
-
-  HASH_ITER(hh, process_events, evt, tmp) {
-    if (evt->listener_count > 0) {
-      js_arr_push(js, result, js_mkstr(js, evt->event_type, strlen(evt->event_type)));
-    }
-  }
-
-  return result;
-}
-
-static ant_value_t process_set_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
-  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
-  
-  int n = (int)js_getnum(args[0]);
-  if (n < 0) return js_mkerr(js, "n must be non-negative");
-  
-  max_listeners = n;
-  return js_get(js, js_glob(js), "process");
-}
-
-static ant_value_t process_get_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mknum(max_listeners);
-}
 
 static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick requires a callback");
@@ -1961,6 +1534,62 @@ static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   else queue_next_tick_with_args(js, cb, args + 1, nargs - 1);
   
   return js_mkundef();
+}
+
+static bool process_event_key_is(
+  ant_t *js,
+  ant_value_t key,
+  const char *expected
+) {
+  const char *value = NULL;
+  size_t len = 0;
+  size_t expected_len = strlen(expected);
+
+  if (vtype(key) != T_STR) return false;
+  value = js_getstr(js, key, &len);
+  return value && len == expected_len && memcmp(value, expected, len) == 0;
+}
+
+static void process_listener_change(
+  ant_t *js,
+  ant_value_t target,
+  ant_value_t key,
+  ant_offset_t listener_count,
+  void *context
+) {
+  ant_process_state_t *ps = (ant_process_state_t *)context;
+  if (!ps || vtype(key) != T_STR) return;
+
+  if (target == ps->process_obj) {
+    const char *event = js_getstr(js, key, NULL);
+    int signum = event ? process_signal_number(event) : -1;
+    if (signum > 0) {
+      if (listener_count > 0) start_signal_watch(js, signum);
+      else stop_signal_watch(js, signum);
+    }
+    return;
+  }
+
+  if (
+    target == ps->stdin_obj && (
+      process_event_key_is(js, key, "data") ||
+      process_event_key_is(js, key, "keypress")
+    )
+  ) {
+    if (listener_count > 0) {
+      ps->stdin_state.paused = false;
+      stdin_start_reading(js);
+    } else stdin_stop_reading_if_idle(js);
+    return;
+  }
+
+  if (
+    target == ps->stdout_obj &&
+    process_event_key_is(js, key, "resize")
+  ) {
+    if (listener_count > 0) start_sigwinch_handler(js);
+    else stop_sigwinch_handler(js);
+  }
 }
 
 static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_methods) {
@@ -1985,21 +1614,8 @@ static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_m
   js_set(js, obj, "hrtime", hrtime_fn);
 
   if (include_event_methods) {
-    js_set(js, obj, "on", js_mkfun(process_on));
-    js_set_exact(js, obj, "addListener", js_get(js, obj, "on"));
-    js_set(js, obj, "once", js_mkfun(process_once));
-    js_set(js, obj, "prependListener", js_mkfun(process_prepend_listener));
-    js_set(js, obj, "prependOnceListener", js_mkfun(process_prepend_once_listener));
-    js_set(js, obj, "off", js_mkfun(process_off));
-    js_set_exact(js, obj, "removeListener", js_get(js, obj, "off"));
-    js_set(js, obj, "removeAllListeners", js_mkfun(process_remove_all_listeners));
-    js_set(js, obj, "emit", js_mkfun(process_emit));
-    js_set(js, obj, "listenerCount", js_mkfun(process_listener_count));
-    js_set(js, obj, "listeners", js_mkfun(process_listeners));
-    js_set(js, obj, "rawListeners", js_mkfun(process_raw_listeners));
-    js_set(js, obj, "eventNames", js_mkfun(process_event_names));
-    js_set(js, obj, "setMaxListeners", js_mkfun(process_set_max_listeners));
-    js_set(js, obj, "getMaxListeners", js_mkfun(process_get_max_listeners));
+    ant_value_t ee_proto = eventemitter_prototype(js);
+    if (is_object_type(ee_proto)) js_set_proto_init(obj, ee_proto);
   }
 
 #ifndef _WIN32
@@ -2028,12 +1644,15 @@ static void process_set_string(ant_t *js, ant_value_t obj, const char *key, cons
   js_set(js, obj, key, js_mkstr(js, value, strlen(value)));
 }
 
-void init_process_module() {
-  ant_t *js = rt->js;
+void init_process_module(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
   ant_value_t global = js_glob(js);
+  ant_value_t ee_proto = eventemitter_prototype(js);
 
-  stdin_state.decoder = js_mkundef();
-  process_start_time = uv_hrtime();
+  if (!ps) return;
+
+  ps->stdin_state.decoder = js_mkundef();
+  ps->process_start_time = uv_hrtime();
   ant_value_t process_proto = js_newobj(js);
 
   process_set_methods(js, process_proto, true);
@@ -2043,6 +1662,9 @@ void init_process_module() {
   ant_value_t env_obj = js_newobj(js);
   
   js_set_proto_init(process_obj, process_proto);
+  ps->process_obj = process_obj;
+  eventemitter_set_listener_change_hook(js, process_obj, process_listener_change, ps);
+  
   process_set_methods(js, process_obj, false);
   js_set(js, process_obj, "binding", js_mkfun(process_binding));
 
@@ -2060,14 +1682,23 @@ void init_process_module() {
   process_update_sandbox_env(js, process_obj);
   
   ant_value_t argv_arr = js_mkarr(js);
-  for (int i = 0; i < rt->argc; i++) {
-    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
-  }
-  
+  for (int i = 0; i < js->runtime.argc; i++) js_arr_push(
+    js, argv_arr, 
+    js_mkstr(js, js->runtime.argv[i], strlen(js->runtime.argv[i]))
+  );
+
   js_set(js, process_obj, "argv", argv_arr);
   js_set(js, process_obj, "execArgv", js_mkarr(js));
-  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
-  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
+  
+  js_set(js, process_obj, "argv0", js->runtime.argc > 0 
+    ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
+    : js_mkstr(js, "ant", 3)
+  );
+  
+  js_set(js, process_obj, "execPath", js->runtime.argc > 0 
+    ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
+    : js_mkundef()
+  );
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
@@ -2135,73 +1766,70 @@ void init_process_module() {
   #endif
   
   ant_value_t stdin_proto = js_mkobj(js);
+  if (is_object_type(ee_proto)) js_set_proto_init(stdin_proto, ee_proto);
   js_set(js, stdin_proto, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
   js_set(js, stdin_proto, "setEncoding", js_mkfun(js_stdin_set_encoding));
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
-  js_set(js, stdin_proto, "on", js_mkfun(js_stdin_on));
-  js_set(js, stdin_proto, "off", js_mkfun(js_stdin_remove_listener));
-  js_set_exact(js, stdin_proto, "removeListener", js_get(js, stdin_proto, "off"));
-  js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
   js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
   ant_value_t stdin_obj = js_mkobj(js);
   js_set_proto_init(stdin_obj, stdin_proto);
+  ps->stdin_obj = stdin_obj;
+  eventemitter_set_listener_change_hook(js, stdin_obj, process_listener_change, ps);
   js_set(js, stdin_obj, "isTTY", js_bool(stdin_is_tty()));
   js_set(js, stdin_obj, "encoding", js_mkundef());
   js_set(js, process_obj, "stdin", stdin_obj);
   
   ant_value_t stdout_proto = js_mkobj(js);
+  if (is_object_type(ee_proto)) js_set_proto_init(stdout_proto, ee_proto);
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
-  js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
-  js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
-  js_set(js, stdout_proto, "off", js_mkfun(js_stdout_remove_listener));
-  js_set_exact(js, stdout_proto, "removeListener", js_get(js, stdout_proto, "off"));
-  js_set(js, stdout_proto, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
   js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stdout_obj = js_mkobj(js);
   js_set_proto_init(stdout_obj, stdout_proto);
-  js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
+  ps->stdout_obj = stdout_obj;
+  eventemitter_set_listener_change_hook(js, stdout_obj, process_listener_change, ps);
+  js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty(js)));
   js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
   js_set(js, process_obj, "stdout", stdout_obj);
   
   ant_value_t stderr_proto = js_mkobj(js);
+  if (is_object_type(ee_proto)) js_set_proto_init(stderr_proto, ee_proto);
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
-  js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
-  js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
-  js_set(js, stderr_proto, "off", js_mkfun(js_stderr_remove_listener));
-  js_set_exact(js, stderr_proto, "removeListener", js_get(js, stderr_proto, "off"));
-  js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
   js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stderr_obj = js_mkobj(js);
   js_set_proto_init(stderr_obj, stderr_proto);
-  js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
+  ps->stderr_obj = stderr_obj;
+  eventemitter_set_listener_change_hook(js, stderr_obj, process_listener_change, ps);
+  js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty(js)));
   js_set(js, process_obj, "stderr", stderr_obj);
-  
   js_set(js, global, "process", process_obj);
 }
 
 
-bool has_active_stdin(void) { 
-  return stdin_state.reading; 
+bool has_active_stdin(ant_t *js) {
+  ant_process_state_t *ps = js->process_state;
+  return ps && ps->stdin_state.reading;
 }
 
 void gc_mark_process(ant_t *js, gc_mark_fn mark) {
-  ProcessEventType *tables[] = {process_events, stdin_events, stdout_events, stderr_events};
-  for (int t = 0; t < 4; t++) {
-    ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, tables[t], evt, tmp) 
-      for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
-  }
-  if (is_object_type(stdin_state.decoder)) mark(js, stdin_state.decoder);
+  ant_process_state_t *ps = js->process_state;
+  if (!ps) return;
+  if (is_object_type(ps->process_obj)) mark(js, ps->process_obj);
+  if (is_object_type(ps->stdin_obj)) mark(js, ps->stdin_obj);
+  if (is_object_type(ps->stdout_obj)) mark(js, ps->stdout_obj);
+  if (is_object_type(ps->stderr_obj)) mark(js, ps->stderr_obj);
+  if (is_object_type(ps->stdin_state.decoder)) mark(js, ps->stdin_state.decoder);
 }
 
-void process_enable_keypress_events(void) {
-  stdin_state.keypress_enabled = true;
-  stdin_state.escape_state = 0;
-  stdin_state.escape_len = 0;
+void process_enable_keypress_events(ant_t *js) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return;
+  ps->stdin_state.keypress_enabled = true;
+  ps->stdin_state.escape_state = 0;
+  ps->stdin_state.escape_len = 0;
 }

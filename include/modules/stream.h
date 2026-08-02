@@ -13,6 +13,8 @@ typedef struct {
   bool writing;
   bool pending_final;
   bool final_started;
+  bool draining;
+  bool sync;
   void *attached_state;
   stream_finalize_fn attached_state_finalize;
 } stream_private_state_t;

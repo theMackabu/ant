@@ -5,7 +5,6 @@
 #include "ant.h"
 #include "utf8.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 #include "modules/symbol.h"
@@ -313,8 +312,7 @@ void js_define_species_getter(ant_t *js, ant_value_t ctor) {
   js_set_sym_getter_desc(js, ctor, g_species, js_mkfun(sym_this_cb), JS_DESC_C);
 }
 
-void init_symbol_module(void) {
-  ant_t *js = rt->js;
+void init_symbol_module(ant_t *js) {
 
   js->sym.iterator_proto = js_mkundef();
   js->sym.array_iterator_proto = js_mkundef();
@@ -354,7 +352,7 @@ void init_symbol_module(void) {
   WELLKNOWN_SYMBOLS(SET_CTOR_SYM)
   #undef SET_CTOR_SYM
   
-  ant_value_t func_symbol = js_obj_to_func(symbol_ctor);
+  ant_value_t func_symbol = js_obj_to_func(js, symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);
 
   // set internal types before ant module snapshot
@@ -367,8 +365,9 @@ void init_symbol_module(void) {
   js_iter_register_advance(js->sym.array_iterator_proto, advance_array);
   js_iter_register_advance(js->sym.string_iterator_proto, advance_string);
   
-  js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
-  js_set_sym(js, array_proto, g_iterator, js_get(js, array_proto, "values"));
+  js_set_sym(js, js->Ant, g_toStringTag, js_mkstr(js, "Ant", 3));
+  js->sym.array_values_fn = js_get(js, array_proto, "values");
+  js_set_sym(js, array_proto, g_iterator, js->sym.array_values_fn);
 
   ant_value_t array_unscopables = js_mkobj(js);
   js_set(js, array_unscopables, "find", js_true);

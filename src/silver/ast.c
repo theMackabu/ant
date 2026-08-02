@@ -115,12 +115,6 @@ static inline const char *tok_str(P) {
   return &CODE[TOFF]; 
 }
 
-static inline bool eat(P, uint8_t tok) {
-  NEXT();
-  if (TOK == tok) { CONSUME(); return true; }
-  return false;
-}
-
 static inline void expect(P, uint8_t tok) {
   NEXT();
   if (TOK == tok) CONSUME();
@@ -834,7 +828,11 @@ static sv_ast_t *parse_primary(P) {
     if (NEXT() != TOK_LPAREN) return mk_ident("import", 6);
     CONSUME();
     sv_ast_t *n = mk(N_IMPORT);
-    n->right = parse_expr(p);
+    n->right = parse_assign(p);
+    if (NEXT() == TOK_COMMA && (CONSUME(), NEXT() != TOK_RPAREN)) {
+      n->left = parse_assign(p);
+      if (NEXT() == TOK_COMMA) CONSUME();
+    }
     expect(p, TOK_RPAREN);
     return n;
   }
@@ -1372,6 +1370,7 @@ static sv_ast_t *parse_paren_expr(P) {
   return left;
 }
 
+// TODO: move into a ast_contains 
 bool ast_references_arguments(const sv_ast_t *node) {
   if (!node) return false;
   if (node->type == N_IDENT && node->len == 9 && memcmp(node->str, "arguments", 9) == 0)
@@ -1391,6 +1390,60 @@ bool ast_references_arguments(const sv_ast_t *node) {
   for (int i = 0; i < node->args.count; i++)
     if (ast_references_arguments(node->args.items[i])) return true;
     
+  return false;
+}
+
+bool ast_contains_direct_suspend(const sv_ast_t *node, const sv_ast_t **out_offender) {
+  if (!node) return false;
+
+  if (node->type == N_AWAIT || node->type == N_YIELD) {
+    if (out_offender) *out_offender = node;
+    return true;
+  }
+
+  if (node->type == N_FUNC || node->type == N_ARROW) {
+    bool plain_arrow = (node->flags & FN_ARROW) && !(node->flags & FN_ASYNC);
+    if (!plain_arrow) return false;
+  }
+
+  if (ast_contains_direct_suspend(node->left, out_offender))         return true;
+  if (ast_contains_direct_suspend(node->right, out_offender))        return true;
+  if (ast_contains_direct_suspend(node->cond, out_offender))         return true;
+  if (ast_contains_direct_suspend(node->body, out_offender))         return true;
+  if (ast_contains_direct_suspend(node->catch_param, out_offender))  return true;
+  if (ast_contains_direct_suspend(node->catch_body, out_offender))   return true;
+  if (ast_contains_direct_suspend(node->finally_body, out_offender)) return true;
+  if (ast_contains_direct_suspend(node->init, out_offender))         return true;
+  if (ast_contains_direct_suspend(node->update, out_offender))       return true;
+
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_direct_suspend(node->args.items[i], out_offender)) return true;
+
+  return false;
+}
+
+bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender) {
+  if (!node) return false;
+
+  if (node->type == N_YIELD) {
+    if (out_offender) *out_offender = node;
+    return true;
+  }
+
+  if (node->type == N_FUNC || node->type == N_ARROW)            return false;
+  if (ast_contains_own_yield(node->left, out_offender))         return true;
+  if (ast_contains_own_yield(node->right, out_offender))        return true;
+  if (ast_contains_own_yield(node->cond, out_offender))         return true;
+  if (ast_contains_own_yield(node->body, out_offender))         return true;
+  if (ast_contains_own_yield(node->catch_param, out_offender))  return true;
+  if (ast_contains_own_yield(node->catch_body, out_offender))   return true;
+  if (ast_contains_own_yield(node->finally_body, out_offender)) return true;
+  if (ast_contains_own_yield(node->init, out_offender))         return true;
+  if (ast_contains_own_yield(node->update, out_offender))       return true;
+
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_own_yield(node->args.items[i], out_offender)) return true;
+
   return false;
 }
 

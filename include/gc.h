@@ -12,10 +12,10 @@
 #define GC_MAJOR_SCALE         2048u
 #define GC_POOL_PRESSURE_FLOOR (8u * 1024u * 1024u)
 
-#define GC_OBJ_TYPE_MASK (JS_TPFLG(T_OBJ) \
-  | JS_TPFLG(T_ARR)                       \
-  | JS_TPFLG(T_PROMISE)                   \
-  | JS_TPFLG(T_GENERATOR))
+#define GC_OBJ_TYPE_MASK (T_FLAG_FIND(T_OBJ) \
+  | T_FLAG_FIND(T_ARR)                       \
+  | T_FLAG_FIND(T_PROMISE)                   \
+  | T_FLAG_FIND(T_GENERATOR))
 
 typedef struct gc_func_mark_profile {
   bool enabled;

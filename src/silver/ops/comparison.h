@@ -295,7 +295,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   ant_value_t func_obj = js_func_obj(r);
   
   if (
-    lkp_sym(js, func_obj, has_instance_sym_off) != 0 ||
+    lkp_sym(func_obj, has_instance_sym_off).obj ||
     lookup_sym_descriptor(func_obj, has_instance_sym_off) != NULL
   ) return false;
 
@@ -303,14 +303,14 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   ant_value_t func_proto_obj = is_object_type(func_proto) ? js_as_obj(func_proto) : js_mkundef();
   
   if (is_object_type(func_proto_obj) && (
-    lkp_sym(js, func_proto_obj, has_instance_sym_off) != 0 ||
+    lkp_sym(func_proto_obj, has_instance_sym_off).obj ||
     lookup_sym_descriptor(func_proto_obj, has_instance_sym_off) != NULL
   )) return false;
 
-  ant_offset_t proto_off = lkp_interned(js, func_obj, js->intern.prototype);
-  if (proto_off == 0) return false;
+  ant_prop_loc_t proto_off = lkp_interned(func_obj, js->intern.prototype);
+  if (!proto_off.obj) return false;
 
-  ant_value_t proto = js_propref_load(js, proto_off);
+  ant_value_t proto = js_prop_load(proto_off);
   if (!is_object_type(proto)) return false;
   if (out_proto) *out_proto = proto;
   

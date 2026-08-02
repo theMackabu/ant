@@ -5,7 +5,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 
@@ -14,9 +13,6 @@
 #include "streams/brotli.h"
 #include "streams/compression.h"
 #include "streams/transform.h"
-
-ant_value_t g_cs_proto;
-ant_value_t g_ds_proto;
 
 enum {
   CS_Z_NATIVE_TAG = 0x43535a53u, // CSZS
@@ -236,7 +232,7 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_cs_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.cs_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? CS_BROTLI_NATIVE_TAG : CS_Z_NATIVE_TAG);
@@ -258,13 +254,7 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, transformer, "flush", flush_fn);
 
   ant_value_t ctor_args[1] = { transformer };
-  ant_value_t saved_new_target = js->new_target;
-  ant_value_t saved_this = js->this_val;
-  js->new_target = js_mknum(1);
-
-  ant_value_t ts_obj = js_ts_ctor(js, ctor_args, 1);
-  js->new_target = saved_new_target;
-  js->this_val = saved_this;
+  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
 
   if (is_err(ts_obj)) {
     if (fmt == ZFMT_BROTLI) brotli_stream_state_destroy(brotli);
@@ -363,7 +353,7 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_ds_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ds_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? DS_BROTLI_NATIVE_TAG : DS_Z_NATIVE_TAG);
@@ -385,14 +375,8 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, transformer, "flush", flush_fn);
 
   ant_value_t ctor_args[1] = { transformer };
-  ant_value_t saved_new_target = js->new_target;
-  ant_value_t saved_this = js->this_val;
-  js->new_target = js_mknum(1);
+  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
 
-  ant_value_t ts_obj = js_ts_ctor(js, ctor_args, 1);
-
-  js->new_target = saved_new_target;
-  js->this_val = saved_this;
   if (is_err(ts_obj)) {
     if (fmt == ZFMT_BROTLI) brotli_stream_state_destroy(brotli);
     else { inflateEnd(&st->strm); free(st); }
@@ -405,30 +389,24 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-void init_compression_stream_module(void) {
-  ant_t *js = rt->js;
+void init_compression_stream_module(ant_t *js) {
   ant_value_t g = js_glob(js);
 
-  g_cs_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_cs_proto, "readable", 8, js_mkfun(js_cs_get_readable), JS_DESC_C);
-  js_set_getter_desc(js, g_cs_proto, "writable", 8, js_mkfun(js_cs_get_writable), JS_DESC_C);
-  js_set_sym(js, g_cs_proto, get_toStringTag_sym(), js_mkstr(js, "CompressionStream", 17));
+  js->builtins.cs_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.cs_proto, "readable", 8, js_mkfun(js_cs_get_readable), JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.cs_proto, "writable", 8, js_mkfun(js_cs_get_writable), JS_DESC_C);
+  js_set_sym(js, js->builtins.cs_proto, get_toStringTag_sym(), js_mkstr(js, "CompressionStream", 17));
 
-  ant_value_t cs_ctor = js_make_ctor(js, js_cs_ctor, g_cs_proto, "CompressionStream", 17);
+  ant_value_t cs_ctor = js_make_ctor(js, js_cs_ctor, js->builtins.cs_proto, "CompressionStream", 17);
   js_set(js, g, "CompressionStream", cs_ctor);
   js_set_descriptor(js, g, "CompressionStream", 17, JS_DESC_W | JS_DESC_C);
 
-  g_ds_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_ds_proto, "readable", 8, js_mkfun(js_ds_get_readable), JS_DESC_C);
-  js_set_getter_desc(js, g_ds_proto, "writable", 8, js_mkfun(js_ds_get_writable), JS_DESC_C);
-  js_set_sym(js, g_ds_proto, get_toStringTag_sym(), js_mkstr(js, "DecompressionStream", 19));
+  js->builtins.ds_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.ds_proto, "readable", 8, js_mkfun(js_ds_get_readable), JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.ds_proto, "writable", 8, js_mkfun(js_ds_get_writable), JS_DESC_C);
+  js_set_sym(js, js->builtins.ds_proto, get_toStringTag_sym(), js_mkstr(js, "DecompressionStream", 19));
 
-  ant_value_t ds_ctor = js_make_ctor(js, js_ds_ctor, g_ds_proto, "DecompressionStream", 19);
+  ant_value_t ds_ctor = js_make_ctor(js, js_ds_ctor, js->builtins.ds_proto, "DecompressionStream", 19);
   js_set(js, g, "DecompressionStream", ds_ctor);
   js_set_descriptor(js, g, "DecompressionStream", 19, JS_DESC_W | JS_DESC_C);
-}
-
-void gc_mark_compression_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
-  mark(js, g_cs_proto);
-  mark(js, g_ds_proto);
 }

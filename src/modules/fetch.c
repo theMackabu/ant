@@ -14,7 +14,6 @@
 #include "errors.h"
 #include "inspector.h"
 #include "internal.h"
-#include "runtime.h"
 #include "esm/remote.h"
 #include "gc/modules.h"
 #include "modules/abort.h"
@@ -810,17 +809,12 @@ static void fetch_upload_schedule_next_read(fetch_request_t *req) {
 
 static void fetch_start_upload(fetch_request_t *req) {
   ant_t *js = req->js;
-  
+
   ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
   ant_value_t reader_args[1] = { stream };
-  ant_value_t saved = js->new_target;
-  ant_value_t reader = 0;
 
   if (!rs_is_stream(stream)) return;
-
-  js->new_target = g_reader_proto;
-  reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 
   if (is_err(reader)) {
     if (req->http_req) ant_http_request_cancel(req->http_req);
@@ -990,9 +984,9 @@ ant_value_t ant_fetch(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-void init_fetch_module() {
+void init_fetch_module(ant_t *js) {
   utarray_new(pending_requests, &ut_ptr_icd);
-  js_set(rt->js, rt->js->global, "fetch", js_mkfun_flags(ant_fetch, CFUNC_HAS_PROTOTYPE));
+  js_set(js, js->global, "fetch", js_mkfun_flags(ant_fetch, CFUNC_HAS_PROTOTYPE));
 }
 
 int has_pending_fetches(void) {
