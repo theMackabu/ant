@@ -124,13 +124,16 @@ typedef struct {
   ant_shape_t *shared_shape;
 } sv_obj_site_cache_t;
 
+#define SV_GF_IC_AUX_MISS_SHIFT 8u
+#define SV_GF_IC_WARMUP_ENABLE  16u
+#define SV_GF_IC_MISS_DISABLE   4u
+
 #define SV_GF_IC_AUX_WARMUP_MASK    ((uintptr_t)0xFFu)
 #define SV_GF_IC_AUX_MISS_MASK      ((uintptr_t)0xFF00u)
 #define SV_GF_IC_AUX_ACTIVE_BIT     ((uintptr_t)0x10000u)
-#define SV_GF_IC_AUX_MISS_SHIFT     8u
 
-#define SV_GF_IC_WARMUP_ENABLE      16u
-#define SV_GF_IC_MISS_DISABLE       4u
+#define SV_GF_IC_AUX_ALL_MASK \
+  (SV_GF_IC_AUX_WARMUP_MASK | SV_GF_IC_AUX_MISS_MASK | SV_GF_IC_AUX_ACTIVE_BIT)
 
 static inline uint8_t sv_gf_ic_warmup(uintptr_t aux) {
   return (uint8_t)(aux & SV_GF_IC_AUX_WARMUP_MASK);
@@ -899,20 +902,29 @@ static inline ant_value_t sv_vm_call(
   if (sv_check_c_stack_overflow(js))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
 
-  sv_call_mode_t mode = is_construct_call 
-    ? SV_CALL_MODE_CONSTRUCT 
+  sv_call_mode_t mode = is_construct_call
+    ? SV_CALL_MODE_CONSTRUCT
     : SV_CALL_MODE_NORMAL;
-  
+
+  if (!is_construct_call && vtype(func) == T_CFUNC) {
+    js->new_target = js_mkundef();
+    ant_value_t native_this = sv_call_normalize_this(js, this_val, mode);
+    if (out_this) *out_this = native_this;
+    ant_value_t native_res = sv_call_native(js, func, native_this, args, argc);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return native_res;
+  }
+
   sv_call_plan_t plan;
   ant_value_t err = sv_prepare_call(
     vm, js, func, this_val, args, argc,
     out_this, mode, &plan
   );
-  
+
   if (is_err(err)) return err;
   ant_value_t result = sv_execute_call_plan(vm, js, &plan, out_this);
   sv_vm_maybe_checkpoint_microtasks(js);
-  
+
   return result;
 }
 

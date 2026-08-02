@@ -30,6 +30,12 @@ scheduled.
   - Proposed fix: Mirror the success path — `wt_detach` + close handles with `wt_on_handle_closed` and `close_pending` accounting; drop `wt_cleanup` entirely (the success path deliberately leaks the struct; the failure path should match).
   - Status: backlog
 
+- Area: primitive receivers + prototype accessors
+  - Issue: A getter/setter defined on a type prototype (e.g. `Object.defineProperty(String.prototype, 'x', { get() {...} })`) never fires for primitive receivers — `"s".x` returns undefined where node runs the getter. Pre-existing on all binaries (installed release, pre-port master, current); the primitive lookup paths (`js_try_get_len` boxing path, `sv_prop_get_at` fallback) skip accessor invocation for proto-held accessors on primitives.
+  - Impact: Rare pattern (accessors on builtin prototypes), but a silent wrong-value divergence from node. The primitive-IC regression test pins only "warmed site agrees with cold access" for this case; fix the engine gap and the test can assert node's value.
+  - Proposed fix: In the primitive branch of `js_try_get_len` (and the field-IC slow path), when the proto-chain lookup lands on an accessor, invoke the getter with the primitive as `this` (`try_accessor_getter` with the unboxed receiver) instead of falling through to paths that load nothing.
+  - Status: backlog
+
 - Area: `src/modules/child_process.c` — Windows `spawnSync` option parity
   - Issue: The win32 `spawn_sync_impl` branch ignores `timeout`, `killSignal`, and `maxBuffer` entirely (the POSIX branch implements all three via the select loop and `sync_read_ctl_t`). The `output` array and `error` shape gaps were fixed 2026-08-02, but the three options silently do nothing on Windows.
   - Impact: `execSync`/`spawnSync` with a timeout can hang forever on Windows, and `maxBuffer` provides no protection; `tests/test_child_process_exec_sync_options.cjs` skips on win32 for exactly this reason, so CI would not catch a fix or a regression.

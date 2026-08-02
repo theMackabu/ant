@@ -628,6 +628,7 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   bool inherit_strict, ant_value_t this_val, ant_value_t eval_env
 );
 
+ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
 ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
