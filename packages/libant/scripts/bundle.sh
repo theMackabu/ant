@@ -34,13 +34,18 @@ bundle_lib() {
   fi
 
   if [ -n "$AR" ]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      mri_path() { cygpath -m "$1"; }
+    else
+      mri_path() { printf '%s\n' "$1"; }
+    fi
     {
-      echo "CREATE $OUTPUT.tmp"
+      echo "CREATE $(mri_path "$OUTPUT.tmp")"
       if [ -f "$OUTPUT" ]; then
-        echo "ADDLIB $OUTPUT"
+        echo "ADDLIB $(mri_path "$OUTPUT")"
       fi
       for lib in $LIBS; do
-        echo "ADDLIB $lib"
+        echo "ADDLIB $(mri_path "$lib")"
       done
       echo "SAVE"
       echo "END"
