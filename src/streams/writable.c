@@ -946,13 +946,7 @@ ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
 ant_value_t ws_acquire_writer(ant_t *js, ant_value_t stream_obj) {
   ant_value_t writer_args[1] = { stream_obj };
-  ant_value_t saved = js->new_target;
-  
-  js->new_target = js->builtins.ws_writer_proto;
-  ant_value_t writer = js_ws_writer_ctor(js, writer_args, 1);
-  js->new_target = saved;
-  
-  return writer;
+  return js_construct_native(js, js_ws_writer_ctor, writer_args, 1);
 }
 
 static ant_value_t js_ws_get_locked(ant_t *js, ant_value_t *args, int nargs) {
@@ -997,11 +991,7 @@ static ant_value_t js_ws_get_writer(ant_t *js, ant_value_t *args, int nargs) {
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
 
   ant_value_t writer_args[1] = { js->this_val };
-  ant_value_t saved_new_target = js->new_target;
-  js->new_target = js->builtins.ws_writer_proto;
-  ant_value_t writer = js_ws_writer_ctor(js, writer_args, 1);
-  js->new_target = saved_new_target;
-  return writer;
+  return js_construct_native(js, js_ws_writer_ctor, writer_args, 1);
 }
 
 static ant_value_t setup_ws_default_controller(

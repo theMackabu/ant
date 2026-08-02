@@ -371,11 +371,7 @@ ant_value_t readable_stream_pipe_to(
   }
 
   ant_value_t reader_args[1] = { source };
-  ant_value_t saved = js->new_target;
-  
-  js->new_target = js->builtins.reader_proto;
-  ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
   
   if (is_err(reader)) return pipe_create_rejected(js, js->thrown_value);
   rs->disturbed = true;
@@ -731,11 +727,7 @@ static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
 
   ant_value_t reader_args[1] = { js->this_val };
-  ant_value_t saved = js->new_target;
-  js->new_target = js->builtins.reader_proto;
-  
-  ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
   if (is_err(reader)) return reader;
 
   tee_state_t *st = calloc(1, sizeof(tee_state_t));

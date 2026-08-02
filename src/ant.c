@@ -3575,10 +3575,18 @@ ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_pr
     if (is_object_type(nt_proto)) instance_proto = nt_proto;
   }
 
-  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) 
-    instance_proto = fallback_proto;
-  
+  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) instance_proto = fallback_proto;
   return instance_proto;
+}
+
+ant_value_t js_construct_native(ant_t *js, ant_cfunc_t ctor, ant_value_t *args, int nargs) {
+  ant_value_t saved_new_target = js->new_target;
+
+  js->new_target = js_true;
+  ant_value_t result = ctor(js, args, nargs);
+  js->new_target = saved_new_target;
+
+  return result;
 }
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) {

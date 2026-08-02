@@ -581,13 +581,9 @@ static ant_value_t consume_body_from_stream(
   const char *body_type
 ) {
   ant_value_t reader_args[1] = { stream };
-  ant_value_t saved = js->new_target;
-  
-  js->new_target = js->builtins.reader_proto;
-  ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
-  
-  if (is_err(reader)) { 
+  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
+
+  if (is_err(reader)) {
     js_reject_promise(js, promise, reader);
     return promise;
   }

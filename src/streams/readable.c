@@ -708,11 +708,7 @@ static ant_value_t js_rs_get_reader(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t reader_args[1] = { js->this_val };
-  ant_value_t saved_new_target = js->new_target;
-  js->new_target = js->builtins.reader_proto;
-  ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved_new_target;
-  return reader;
+  return js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 }
 
 static ant_value_t js_rs_async_iter_next(ant_t *js, ant_value_t *args, int nargs) {

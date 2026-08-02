@@ -1256,18 +1256,13 @@ static void server_start_stream_read(server_request_t *req) {
 static bool server_request_ensure_reader(server_request_t *req) {
   ant_t *js;
   ant_value_t reader_args[1];
-  ant_value_t saved;
 
   if (!req || !is_object_type(req->response_obj)) return false;
   if (vtype(req->response_reader) != T_UNDEF) return true;
 
   js = req->server->js;
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
-
-  saved = js->new_target;
-  js->new_target = js->builtins.reader_proto;
-  req->response_reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  req->response_reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 
   return !is_err(req->response_reader);
 }

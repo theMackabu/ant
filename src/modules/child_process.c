@@ -1946,7 +1946,9 @@ static void sync_reader_init(sync_reader_t *reader, int fd) {
 
 static bool sync_reader_pump(sync_reader_t *reader, sync_read_ctl_t *ctl) {
   char chunk[4096];
+  
   ssize_t n = read(reader->fd, chunk, sizeof(chunk));
+  if (n < 0 && (errno == EINTR || errno == EAGAIN)) return true;
 
   if (n <= 0) {
     close_if_valid(reader->fd);
@@ -2296,11 +2298,22 @@ static ant_value_t sync_build_result(
     js_set(js, result, "signal", js_mknull());
   }
 
-  const char *failure = ctl->timed_out ? "ETIMEDOUT" : ctl->over_buffer ? "ENOBUFS" : NULL;
+  int failure = ctl->timed_out ? UV_ETIMEDOUT : ctl->over_buffer ? UV_ENOBUFS : 0;
   if (failure) {
+    const char *code = uv_err_name(failure);
+
+    char syscall[224];
     char message[256];
-    snprintf(message, sizeof(message), "spawnSync %s %s", opts->label, failure);
-    js_set(js, result, "error", js_make_error_silent(js, JS_ERR_GENERIC, message));
+    snprintf(syscall, sizeof(syscall), "spawnSync %s", opts->label);
+    snprintf(message, sizeof(message), "%s %s", syscall, code);
+
+    ant_value_t error = js_make_error_silent(js, JS_ERR_GENERIC, message);
+    if (is_object_type(error)) {
+      js_set(js, error, "code", js_mkstr(js, code, strlen(code)));
+      js_set(js, error, "errno", js_mknum((double)failure));
+      js_set(js, error, "syscall", js_mkstr(js, syscall, strlen(syscall)));
+    }
+    js_set(js, result, "error", error);
   }
 
   return result;

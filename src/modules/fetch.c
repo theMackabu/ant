@@ -809,17 +809,12 @@ static void fetch_upload_schedule_next_read(fetch_request_t *req) {
 
 static void fetch_start_upload(fetch_request_t *req) {
   ant_t *js = req->js;
-  
+
   ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
   ant_value_t reader_args[1] = { stream };
-  ant_value_t saved = js->new_target;
-  ant_value_t reader = 0;
 
   if (!rs_is_stream(stream)) return;
-
-  js->new_target = js->builtins.reader_proto;
-  reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  ant_value_t reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 
   if (is_err(reader)) {
     if (req->http_req) ant_http_request_cancel(req->http_req);

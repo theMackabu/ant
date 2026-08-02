@@ -222,13 +222,7 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, transformer, "flush", flush_fn);
 
   ant_value_t ctor_args[1] = { transformer };
-  ant_value_t saved_new_target = js->new_target;
-  ant_value_t saved_this = js->this_val;
-  js->new_target = js_mknum(1);
-
-  ant_value_t ts_obj = js_ts_ctor(js, ctor_args, 1);
-  js->new_target = saved_new_target;
-  js->this_val = saved_this;
+  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
 
   if (is_err(ts_obj)) { free(st); return ts_obj; }
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
@@ -397,15 +391,7 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, transformer, "flush", flush_fn);
 
   ant_value_t ctor_args[1] = { transformer };
-
-  ant_value_t saved_new_target = js->new_target;
-  ant_value_t saved_this = js->this_val;
-  js->new_target = js_mknum(1);
-
-  ant_value_t ts_obj = js_ts_ctor(js, ctor_args, 1);
-
-  js->new_target = saved_new_target;
-  js->this_val = saved_this;
+  ant_value_t ts_obj = js_construct_native(js, js_ts_ctor, ctor_args, 1);
 
   if (is_err(ts_obj)) { free(st); return ts_obj; }
   js_set_slot(obj, SLOT_ENTRIES, ts_obj);
