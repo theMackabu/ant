@@ -353,9 +353,9 @@ static void example_async_event_loop(void) {
   ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  init_symbol_module();
-  init_builtin_module();
-  init_timer_module();
+  init_symbol_module(js);
+  init_builtin_module(js);
+  init_timer_module(js);
 
   const char *code =
     "export let results = [];"
@@ -409,8 +409,7 @@ static void example_console_logging(void) {
   ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  init_console_module();
-
+  init_console_module(js);
 
   const char *code =
     "console.log('Hello from JavaScript!');"
@@ -436,8 +435,7 @@ static void example_global_this(void) {
   ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  init_console_module();
-
+  init_console_module(js);
 
   ant_value_t global = js_glob(js);
   js_set(js, global, "myNumber", js_mknum(42));

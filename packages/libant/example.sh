@@ -31,6 +31,7 @@ esac
 
 CC="${CC:-clang}"
 CXX="${CXX:-clang++}"
+CFLAGS="${CFLAGS:-} -std=gnu23"
 OBJ="$DIST_DIR/embed.o"
 
 echo "Compiling embed example..."
