@@ -30,7 +30,8 @@ export function targets() {
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
     'test_esm_package_self_reference.cjs',
-    'test_typeof_closure_assignment.mjs'
+    'test_typeof_closure_assignment.mjs',
+    'test_class_expression_name_scope.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

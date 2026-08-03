@@ -325,4 +325,30 @@ test('getter', temp.fahrenheit, 32);
 temp.fahrenheit = 212;
 test('setter', Math.round(temp.fahrenheit), 212);
 
+function outerBinding(a, b) {
+  return 'fn:' + a + b;
+}
+
+const Boxed = class outerBinding {
+  constructor(value) {
+    this.value = value;
+  }
+  clone() {
+    return new outerBinding(this.value);
+  }
+};
+
+test('class expression name does not leak', typeof outerBinding === 'function' && outerBinding !== Boxed, true);
+test('outer binding still callable', outerBinding(1, 2), 'fn:12');
+test('class expression inner name resolves', new Boxed(5).clone() instanceof Boxed, true);
+
+let shadowed = 'untouched';
+const Shadow = class shadowed {};
+test('class expression name leaves let binding alone', shadowed, 'untouched');
+test('class expression still constructs', typeof Shadow, 'function');
+
+class DeclaredBinding {}
+const DeclaredExpr = class DeclaredBinding {};
+test('class declaration binding survives a same-named expression', DeclaredBinding !== DeclaredExpr, true);
+
 summary();

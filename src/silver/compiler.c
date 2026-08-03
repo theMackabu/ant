@@ -2029,7 +2029,10 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
         mark_import_binding(c, idx, spec);
       }
-    } else if (decl_node->type == N_CLASS && decl_node->str) {
+    } else if (
+      decl_node->type == N_CLASS && decl_node->str &&
+      (decl_node->flags & FN_DECLARATION)
+    ) {
       int lb = c->local_count;
       ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
       if (c->local_count > lb) {
@@ -5932,7 +5935,10 @@ static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_loc
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
-  bool class_repl_top = is_repl_top_level(c);
+  // only class *declarations* bind their name in the enclosing scope; the name
+  // of a class expression is visible to the class body alone.
+  bool binds_outer_name = (node->flags & FN_DECLARATION) != 0;
+  bool class_repl_top = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
   bool has_static_name = false;
@@ -5941,7 +5947,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int method_emit_count = 0;
   int static_init_count = 0;
 
-  if (node->str) outer_name_local = resolve_local(c, node->str, node->len);
+  if (node->str && binds_outer_name)
+    outer_name_local = resolve_local(c, node->str, node->len);
   if (node->left) compile_expr(c, node->left);
   else emit_op(c, OP_UNDEF);
 
