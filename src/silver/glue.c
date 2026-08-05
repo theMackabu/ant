@@ -234,7 +234,7 @@ ant_value_t jit_helper_get_global(
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   ant_value_t out = sv_global_get_interned_ic(js, str, func, ip);
   if (ip && *ip == OP_GET_GLOBAL && is_undefined(out) &&
-      lkp_interned(js, js->global, str) == 0) {
+      !lkp_interned(js->global, str).obj) {
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%s' is not defined", str);
   }
   return out;
@@ -731,8 +731,8 @@ ant_value_t jit_helper_export(
   return sv_module_export_to_ns(js, ns, str, (size_t)len, value);
 }
 
-static inline sv_upvalue_t *jit_make_undef_upvalue(void) {
-  sv_upvalue_t *uv = js_upvalue_alloc();
+static inline sv_upvalue_t *jit_make_undef_upvalue(ant_t *js) {
+  sv_upvalue_t *uv = js_upvalue_alloc(js);
   uv->closed = js_mkundef();
   uv->location = &uv->closed;
   return uv;
@@ -747,7 +747,7 @@ static sv_upvalue_t *jit_capture_upvalue(
   while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
   if (*pp && (*pp)->location == slot) return *pp;
 
-  sv_upvalue_t *uv = js_upvalue_alloc();
+  sv_upvalue_t *uv = js_upvalue_alloc(vm->js);
   uv->location = slot;
   uv->next = *pp;
   *pp = uv;
@@ -839,7 +839,7 @@ ant_value_t jit_helper_closure(
     
     int idx = (int)desc->index - slot_base;
     if (!slots || idx < 0 || idx >= slot_count) {
-      closure->upvalues[i] = jit_make_undef_upvalue();
+      closure->upvalues[i] = jit_make_undef_upvalue(js);
       continue;
     }
     
@@ -1046,7 +1046,7 @@ ant_value_t jit_helper_put_global(
   sv_vm_t *vm, ant_t *js, ant_value_t val,
   const char *str, uint32_t len, int is_strict
 ) {
-  if (is_strict && lkp(js, js->global, str, len) == 0)
+  if (is_strict && !lkp(js, js->global, str, len).obj)
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int)len, str);
   ant_value_t key = js_mkstr(js, str, len);
   return js_setprop(js, js->global, key, val);

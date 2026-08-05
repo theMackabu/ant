@@ -11,6 +11,7 @@
 
 #include "ant.h"
 #include "internal.h"
+#include "numbers.h"
 #include "esm/library.h"
 #include "silver/engine.h"
 
@@ -20,7 +21,6 @@
 #include "modules/symbol.h"
 #include "modules/util.h"
 #include "modules/abort.h"
-#include "modules/collections.h"
 
 typedef struct {
   char *buf;
@@ -116,14 +116,12 @@ static bool util_sb_append_jsval(ant_t *js, util_sb_t *sb, ant_value_t v) {
   return ok;
 }
 
-static bool util_sb_append_json(ant_t *js, util_sb_t *sb, ant_value_t v) {
-  ant_value_t json = json_stringify_value(js, v);
-  if (vtype(json) != T_STR) {
-    return util_sb_append_n(sb, "[Circular]", 10);
-  }
-  size_t len = 0;
-  const char *s = js_getstr(js, json, &len);
-  return s ? util_sb_append_n(sb, s, len) : util_sb_append_n(sb, "[Circular]", 10);
+static bool util_sb_append_inspect(ant_t *js, util_sb_t *sb, ant_value_t v) {
+  char cbuf[512];
+  js_cstr_t cstr = js_inspect_cstr(js, v, cbuf, sizeof(cbuf));
+  bool ok = util_sb_append_n(sb, cstr.ptr, strlen(cstr.ptr));
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return ok;
 }
 
 static bool util_set_named_value(
@@ -408,89 +406,146 @@ static ant_value_t util_parse_args(ant_t *js, ant_value_t *args, int nargs) {
   return out;
 }
 
-static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int fmt_index) {
-  util_sb_t sb = {0};
-  if (fmt_index >= nargs) {
-    ant_value_t out = js_mkstr(js, "", 0);
-    free(sb.buf);
-    return out;
-  }
+static bool format_emit_number(const ant_format_sink_t *sink, void *ctx, double n, bool keep_negative_zero) {
+  char buf[64];
+  size_t len;
+  if (keep_negative_zero && n == 0 && signbit(n)) return sink->text(ctx, "-0", 2);
+  len = ant_number_to_shortest(n, buf, sizeof(buf));
+  return sink->text(ctx, buf, len);
+}
 
-  if (vtype(args[fmt_index]) != T_STR) {
-    for (int i = fmt_index; i < nargs; i++) {
-      if (i > fmt_index) util_sb_append_c(&sb, ' ');
-      util_sb_append_jsval(js, &sb, args[i]);
-    }
-    ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
-    free(sb.buf);
-    return out;
-  }
+static bool format_emit_bigint(ant_t *js, const ant_format_sink_t *sink, void *ctx, ant_value_t v) {
+  char cbuf[64];
+  js_cstr_t cstr = js_to_cstr(js, v, cbuf, sizeof(cbuf));
+  size_t len = strlen(cstr.ptr);
+  bool ok = sink->text(ctx, cstr.ptr, len);
+  if (ok && (len == 0 || cstr.ptr[len - 1] != 'n')) ok = sink->text(ctx, "n", 1);
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return ok;
+}
 
+static bool format_emit_json(ant_t *js, const ant_format_sink_t *sink, void *ctx, ant_value_t v) {
+  ant_value_t json = json_stringify_value(js, v);
+  size_t len = 0;
+  const char *s = vtype(json) == T_STR ? js_getstr(js, json, &len) : NULL;
+  return s ? sink->text(ctx, s, len) : sink->text(ctx, "[Circular]", 10);
+}
+
+static inline bool format_spec_is_known(char spec) {
+  return spec && strchr("sdifjoOc", spec) != NULL;
+}
+
+int ant_format_walk(
+  ant_t *js,
+  ant_value_t *args, int nargs, int fmt_index,
+  const ant_format_sink_t *sink, void *ctx
+) {
   size_t fmt_len = 0;
-  const char *fmt = js_getstr(js, args[fmt_index], &fmt_len);
+  const char *fmt = NULL;
+  size_t run = 0;
   int argi = fmt_index + 1;
 
+  if (
+    fmt_index >= nargs || 
+    vtype(args[fmt_index]) != T_STR
+  ) return fmt_index;
+  
+  fmt = js_getstr(js, args[fmt_index], &fmt_len);
+  if (!fmt) return fmt_index;
+
+  if (nargs - fmt_index == 1) {
+    sink->text(ctx, fmt, fmt_len);
+    return nargs;
+  }
+
   for (size_t i = 0; i < fmt_len; i++) {
-    if (fmt[i] != '%' || i + 1 >= fmt_len) {
-      util_sb_append_c(&sb, fmt[i]);
-      continue;
-    }
+    char spec = i + 1 < fmt_len ? fmt[i + 1] : '\0';
+    ant_value_t v;
+    bool ok = true;
 
-    char spec = fmt[i + 1];
+    if (fmt[i] != '%' || !spec) { run++; continue; }
+
     if (spec == '%') {
-      util_sb_append_c(&sb, '%');
-      i++;
-      continue;
+      if (!sink->text(ctx, fmt + i - run, run + 1)) return argi;
+      run = 0;
+      i++; continue;
     }
 
-    bool known = (
-      spec == 's' || spec == 'd' || spec == 'i' || spec == 'f' ||
-      spec == 'j' || spec == 'o' || spec == 'O' || spec == 'c'
-    );
+    if (!format_spec_is_known(spec) || argi >= nargs) { run++; continue; }
+    if (run && !sink->text(ctx, fmt + i - run, run)) return argi;
 
-    if (!known) {
-      util_sb_append_c(&sb, '%');
-      util_sb_append_c(&sb, spec);
-      i++;
-      continue;
-    }
-
-    ant_value_t v = (argi < nargs) ? args[argi++] : js_mkundef();
-
-    if (spec == 's') {
-      util_sb_append_jsval(js, &sb, v);
-    } else if (spec == 'd' || spec == 'i') {
-      double d = js_to_number(js, v);
-      char nb[64];
-      if (isnan(d)) snprintf(nb, sizeof(nb), "NaN");
-      else if (!isfinite(d)) snprintf(nb, sizeof(nb), d < 0 ? "-Infinity" : "Infinity");
-      else snprintf(nb, sizeof(nb), "%lld", (long long)d);
-      util_sb_append_n(&sb, nb, strlen(nb));
-    } else if (spec == 'f') {
-      double d = js_to_number(js, v);
-      char nb[64];
-      if (isnan(d)) snprintf(nb, sizeof(nb), "NaN");
-      else if (!isfinite(d)) snprintf(nb, sizeof(nb), d < 0 ? "-Infinity" : "Infinity");
-      else snprintf(nb, sizeof(nb), "%g", d);
-      util_sb_append_n(&sb, nb, strlen(nb));
-    } else if (spec == 'j') {
-      util_sb_append_json(js, &sb, v);
-    } else if (spec == 'o' || spec == 'O') {
-      util_sb_append_jsval(js, &sb, v);
-    } else if (spec == 'c') {
-      // style placeholder: consume arg, emit nothing.
-    }
-
+    run = 0;
+    v = args[argi++];
     i++;
+
+    switch (spec) {
+      case 'c': break;
+      case 's': case 'o': case 'O': ok = sink->value(ctx, v, spec); break;
+      case 'j': ok = format_emit_json(js, sink, ctx, v); break;
+
+      case 'd':
+        if (vtype(v) == T_BIGINT) ok = format_emit_bigint(js, sink, ctx, v);
+        else if (vtype(v) == T_SYMBOL) ok = sink->text(ctx, "NaN", 3);
+        else ok = format_emit_number(sink, ctx, js_to_number(js, v), true);
+        break;
+
+      case 'i':
+        if (vtype(v) == T_BIGINT) ok = format_emit_bigint(js, sink, ctx, v);
+        else if (vtype(v) == T_SYMBOL) ok = sink->text(ctx, "NaN", 3);
+        else ok = format_emit_number(sink, ctx, js_parse_int_value(js, v), false);
+        break;
+
+      case 'f':
+        if (vtype(v) == T_SYMBOL) ok = sink->text(ctx, "NaN", 3);
+        else ok = format_emit_number(sink, ctx, js_parse_float_value(js, v), false);
+        break;
+
+      default: break;
+    }
+
+    if (!ok) return argi;
   }
 
-  for (; argi < nargs; argi++) {
-    util_sb_append_c(&sb, ' ');
-    util_sb_append_jsval(js, &sb, args[argi]);
+  if (run) sink->text(ctx, fmt + fmt_len - run, run);
+  return argi;
+}
+
+typedef struct {
+  ant_t *js;
+  util_sb_t *sb;
+} util_format_ctx_t;
+
+static bool util_format_text(void *ctx, const char *s, size_t len) {
+  return util_sb_append_n(((util_format_ctx_t *)ctx)->sb, s, len);
+}
+
+static bool util_format_value(void *ctx, ant_value_t value, char spec) {
+  util_format_ctx_t *c = (util_format_ctx_t *)ctx;
+  return spec == 's'
+    ? util_sb_append_jsval(c->js, c->sb, value)
+    : util_sb_append_inspect(c->js, c->sb, value);
+}
+
+static const ant_format_sink_t util_format_sink = { 
+  util_format_text, 
+  util_format_value 
+};
+
+static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int fmt_index) {
+  util_sb_t sb = {0};
+  util_format_ctx_t ctx = { js, &sb };
+  
+  int start = ant_format_walk(js, args, nargs, fmt_index, &util_format_sink, &ctx);
+  ant_value_t out;
+
+  for (int i = start; i < nargs; i++) {
+    if (i > fmt_index) util_sb_append_c(&sb, ' ');
+    util_sb_append_jsval(js, &sb, args[i]);
   }
 
-  ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+  out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
   free(sb.buf);
+
   return out;
 }
 
@@ -506,7 +561,7 @@ static ant_value_t util_format_with_options(ant_t *js, ant_value_t *args, int na
 static ant_value_t util_inspect(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   char cbuf[512];
-  js_cstr_t cstr = js_to_cstr(js, args[0], cbuf, sizeof(cbuf));
+  js_cstr_t cstr = js_inspect_cstr(js, args[0], cbuf, sizeof(cbuf));
   ant_value_t out = js_mkstr(js, cstr.ptr, strlen(cstr.ptr));
   if (cstr.needs_free) free((void *)cstr.ptr);
   return out;
@@ -718,12 +773,12 @@ static ant_value_t util_types_is_bigint_object(ant_t *js, ant_value_t *args, int
 
 static ant_value_t util_types_is_map_iterator(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  return js_bool(util_has_proto_in_chain(js, args[0], g_map_iter_proto));
+  return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.map_iter_proto));
 }
 
 static ant_value_t util_types_is_set_iterator(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  return js_bool(util_has_proto_in_chain(js, args[0], g_set_iter_proto));
+  return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.set_iter_proto));
 }
 
 static ant_value_t util_types_is_module_namespace_object(ant_t *js, ant_value_t *args, int nargs) {

@@ -178,6 +178,12 @@ static void build_gc_const_tables(sv_func_t *func) {
   if (!marked_slots) return;
 
   int slot_count = 0;
+  for (int i = 0; i < func->const_count; i++) {
+    if (vtype(func->constants[i]) != T_BIGINT) continue;
+    marked_slots[i] = 1;
+    slot_count++;
+  }
+
   for (int pc = 0; pc < func->code_len;) {
     sv_op_t op = (sv_op_t)func->code[pc];
     int size = (op < OP__COUNT) ? sv_op_size[op] : 0;
@@ -2467,13 +2473,19 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
     }
 
     case N_IMPORT:
-      compile_expr(c, node->right);
       if (has_module_import_binding(c)) {
         emit_get_module_import_binding(c);
-        emit_op(c, OP_SWAP);
+        compile_expr(c, node->right);
+        if (node->left) compile_expr(c, node->left);
+        else emit_op(c, OP_UNDEF);
         emit_op(c, OP_CALL);
-        emit_u16(c, 1);
-      } else emit_op(c, OP_IMPORT);
+        emit_u16(c, 2);
+      } else {
+        compile_expr(c, node->right);
+        if (node->left) compile_expr(c, node->left);
+        else emit_op(c, OP_UNDEF);
+        emit_op(c, OP_IMPORT);
+      }
       break;
 
     case N_REGEXP:
@@ -2954,7 +2966,7 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (known && c->with_depth == 0) {
+      if (known && c->with_depth == 0 && c->locals[local].is_const) {
         emit_constant(c, js_mkstr_permanent(c->js, known, strlen(known)));
         return;
       }
@@ -3703,7 +3715,8 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   } else if (
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
-    inline_eval_can_compile_without_early_errors(c, program->args.items[0])
+    inline_eval_can_compile_without_early_errors(c, program->args.items[0]) &&
+    !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
     parse_arena_rewind(mark);
     c->js->thrown_exists = saved_thrown_exists;
@@ -4951,6 +4964,7 @@ static bool fold_static_typeof_compare(
   sv_ast_t *ident = typeof_node->right;
   int local = resolve_local(c, ident->str, ident->len);
   if (local < 0) return false;
+  if (c->with_depth > 0 || !c->locals[local].is_const) return false;
   const char *known = typeof_name_for_type(get_local_inferred_type(c, local));
   if (!known) return false;
 
@@ -5764,19 +5778,6 @@ static void emit_field_inits(sv_compiler_t *c, sv_ast_t **fields, int count) {
   }
 }
 
-
-static sv_ast_t *find_class_constructor(sv_ast_t *node) {
-  for (int i = 0; i < node->args.count; i++) {
-    sv_ast_t *m = node->args.items[i];
-    if (m->type == N_METHOD && m->left && m->left->type == N_IDENT &&
-        m->left->len == 11 &&
-        memcmp(m->left->str, "constructor", 11) == 0) {
-      return m;
-    }
-  }
-  return NULL;
-}
-
 static inline bool is_class_method_def(const sv_ast_t *m) {
   return 
     m && m->right && m->right->type == N_FUNC &&
@@ -6281,6 +6282,17 @@ sv_func_t *compile_function_body(
     comp.js, node, comp.is_strict,
     &has_own_use_strict, &has_non_simple_params, true
   )) return NULL;
+
+  if (!(node->flags & FN_GENERATOR)) {
+    const sv_ast_t *offender = NULL;
+    bool found = ast_contains_own_yield(node->body, &offender);
+    for (int i = 0; !found && i < node->args.count; i++)
+      found = ast_contains_own_yield(node->args.items[i], &offender);
+    if (found) {
+      js_mkerr_typed(comp.js, JS_ERR_SYNTAX, "yield is only valid in generator functions");
+      return NULL;
+    }
+  }
 
   if (has_own_use_strict) comp.is_strict = true;
   for (int i = 0; i < node->args.count; i++) {
@@ -6847,6 +6859,20 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
 sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
+
+  if (mode == SV_COMPILE_EVAL) {
+    const sv_ast_t *offender = NULL;
+    for (int i = 0; i < program->args.count; i++)
+      if (ast_contains_direct_suspend(program->args.items[i], &offender)) break;
+
+    if (offender) {
+      js_mkerr_typed(js, JS_ERR_SYNTAX, offender->type == N_AWAIT
+        ? "await is only valid in async functions and the top level bodies of modules"
+        : "yield is only valid in generator functions");
+      return NULL;
+    }
+  }
+  
   if (sv_compile_trace_unlikely) fprintf(
     stderr, "[compile] start kind=program mode=%d len=%u body=%d strict=%d\n",
     (int)mode, (unsigned)source_len,

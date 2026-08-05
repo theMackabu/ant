@@ -57,6 +57,7 @@ ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *
 ant_value_t js_capture_raw_stack(ant_t *js);
 ant_value_t js_build_callsite_array(ant_t *js);
 ant_value_t js_throw(ant_t *js, ant_value_t value);
+ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback);
 
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)

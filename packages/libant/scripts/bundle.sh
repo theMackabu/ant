@@ -12,41 +12,59 @@ bundle_lib() {
   OUTPUT="$BUILD_DIR/$NAME"
   
   echo "Bundling $NAME..."
-  
-  temp_dir=$(mktemp -d)
-  
+
   LIBS=$(find "$BUILD_DIR" -name '*.a' \
     ! -name 'libant.a' \
     ! -name 'libant-lto.a' \
     ! -name 'libpkg.a' \
     ! -path '*/.external/*' \
     2>/dev/null | grep -E -v "$EXCLUDE" | sort -u)
-  
-  cd "$temp_dir"
-  for lib in $LIBS; do
-    libname=$(basename "$lib" .a)
-    mkdir -p "$libname"
-    (cd "$libname" && llvm-ar x "$lib" 2>/dev/null || ar x "$lib")
-  done
-  
-  find . -name '*.o' > objects.txt
-  
-  if [ ! -s objects.txt ]; then
-    echo "No objects found, skipping $NAME"
-    rm -rf "$temp_dir"
-    cd "$SCRIPT_DIR"
+
+  if [ -z "$LIBS" ]; then
+    echo "No libraries found, skipping $NAME"
     return
   fi
-  
+
   if command -v llvm-ar >/dev/null 2>&1; then
-    llvm-ar rcs "$OUTPUT" $(cat objects.txt)
+    AR=llvm-ar
+  elif ar --version 2>/dev/null | head -n 1 | grep -q GNU; then
+    AR=ar
   else
-    ar rcs "$OUTPUT" $(cat objects.txt)
+    AR=""
   fi
-  
-  rm -rf "$temp_dir"
-  cd "$SCRIPT_DIR"
-  
+
+  if [ -n "$AR" ]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      mri_path() { cygpath -m "$1"; }
+    else
+      mri_path() { printf '%s\n' "$1"; }
+    fi
+    {
+      echo "CREATE $(mri_path "$OUTPUT.tmp")"
+      if [ -f "$OUTPUT" ]; then
+        echo "ADDLIB $(mri_path "$OUTPUT")"
+      fi
+      for lib in $LIBS; do
+        echo "ADDLIB $(mri_path "$lib")"
+      done
+      echo "SAVE"
+      echo "END"
+    } | "$AR" -M
+    mv "$OUTPUT.tmp" "$OUTPUT"
+  else
+    temp_dir=$(mktemp -d)
+    cd "$temp_dir"
+    for lib in $LIBS; do
+      libname=$(basename "$lib" .a)
+      mkdir -p "$libname"
+      (cd "$libname" && ar x "$lib")
+    done
+    find . -name '*.o' > objects.txt
+    ar rcs "$OUTPUT" $(cat objects.txt)
+    rm -rf "$temp_dir"
+    cd "$SCRIPT_DIR"
+  fi
+
   cp "$OUTPUT" "$DIST_DIR/"
   echo "Created: $DIST_DIR/$NAME ($(du -h "$OUTPUT" | cut -f1))"
 }

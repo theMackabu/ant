@@ -87,6 +87,8 @@ class Child {
     this.output = '';
     this.exitCode = null;
     this.proc = spawn(ANT, [entry, ...args]);
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
     this.proc.stdout.on('data', d => {
       this.output += d;
     });
@@ -296,7 +298,12 @@ export async function runSpec(target, opts) {
 }
 
 export async function runTest(target, opts) {
-  const child = new Child(target.entry);
+  const child = target.mem
+    ? new Child('-e', [
+        `process.on('beforeExit', () => console.log('[mem] rss ' + Math.round(process.memoryUsage().rss / 1048576) + 'MB')); import('./${target.entry}');`
+      ])
+    : new Child(target.entry);
+
   const code = await child.waitExit(opts.targetTimeoutMs);
   if (code === 'timeout') {
     child.kill();
@@ -305,7 +312,12 @@ export async function runTest(target, opts) {
   const errs = scanForErrors(child.output);
   if (code !== 0) return { ok: false, detail: `exit ${code}`, output: child.output };
   if (errs.length) return { ok: false, detail: 'error markers in output', output: errs.join('\n') };
-  return { ok: true };
+
+  const mem = [...child.output.matchAll(/\[mem\] rss (\d+)MB/g)].pop();
+  if (mem && target.maxRssMb && Number(mem[1]) > target.maxRssMb)
+    return { ok: false, detail: `rss ${mem[1]}MB exceeds max ${target.maxRssMb}MB` };
+
+  return { ok: true, detail: mem ? `rss ${mem[1]}MB / ${target.maxRssMb ?? '?'}MB max` : undefined };
 }
 
 export const runScript = runTest;
@@ -366,10 +378,10 @@ export async function runOha(target, opts) {
 
     let ohaOut = '';
     const oha = spawn('oha', [url, '-n', '50000', '-H', 'Accept-Encoding: identity', '--no-tui']);
-    oha.on('stdout', d => {
+    oha.stdout.on('data', d => {
       ohaOut += d;
     });
-    oha.on('stderr', d => {
+    oha.stderr.on('data', d => {
       ohaOut += d;
     });
     const done = await new Promise(resolve => {

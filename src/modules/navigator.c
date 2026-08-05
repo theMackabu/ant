@@ -13,7 +13,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 #include "modules/navigator.h"
@@ -128,7 +127,7 @@ static ant_value_t make_lock_handler(ant_t *js, ant_value_t cfunc, ant_value_t l
   js_set_slot(fn_obj, SLOT_DATA, data_obj);
   js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
   
-  return js_obj_to_func(fn_obj);
+  return js_obj_to_func(js, fn_obj);
 }
 
 static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
@@ -351,9 +350,7 @@ static ant_value_t locks_query(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-void init_navigator_module(void) {
-  ant_t *js = rt->js;
-  
+void init_navigator_module(ant_t *js) {
   ant_value_t navigator_obj = js_mkobj(js);
   
   js_set(js, navigator_obj, "hardwareConcurrency", js_mknum((double)get_hardware_concurrency()));

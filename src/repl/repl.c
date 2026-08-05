@@ -650,7 +650,7 @@ static cmd_result_t cmd_save(ant_t *js, ant_history_t *history, const char *arg)
 }
 
 static cmd_result_t cmd_stats(ant_t *js, ant_history_t *history, const char *arg) {
-  ant_value_t stats_fn = js_get(js, rt->ant_obj, "stats");
+  ant_value_t stats_fn = js_get(js, js->Ant, "stats");
   ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_emit(js, false, NULL, &result, 1);
   return CMD_OK;
@@ -853,8 +853,7 @@ static bool is_incomplete_input(const char *code, size_t len) {
   return incomplete;
 }
 
-void ant_repl_run(const char *startup_code) {
-  ant_t *js = rt->js;
+void ant_repl_run(ant_t *js, const char *startup_code) {
   ant_readline_install_signal_handler();
 
   js_set_filename(js, "[repl]");

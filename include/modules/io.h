@@ -29,7 +29,7 @@ typedef struct {
 #define C_WHITE   C("\x1b[37m")
 #define C_RED     C("\x1b[31m")
 
-void init_console_module(void);
+void init_console_module(ant_t *js);
 ant_value_t console_library(ant_t *js);
 
 void print_value_colored(const char *str, FILE *stream);

@@ -17,7 +17,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 
@@ -94,18 +93,7 @@ enum {
 static size_t g_wasm_import_env_count = 0;
 static size_t g_wasm_import_env_cap   = 0;
 
-static ant_value_t g_wasm_module_proto    = 0;
-static ant_value_t g_wasm_instance_proto  = 0;
-static ant_value_t g_wasm_global_proto    = 0;
-static ant_value_t g_wasm_memory_proto    = 0;
-static ant_value_t g_wasm_table_proto     = 0;
-static ant_value_t g_wasm_tag_proto       = 0;
-static ant_value_t g_wasm_exception_proto = 0;
 
-static ant_value_t g_wasm_compileerror_proto   = 0;
-static ant_value_t g_wasm_linkerror_proto      = 0;
-static ant_value_t g_wasm_runtimeerror_proto   = 0;
-static ant_value_t g_wasm_pending_import_throw = 0;
 
 static wasm_engine_t *g_wasm_engine                = NULL;
 static wasm_import_func_env_t **g_wasm_import_envs = NULL;
@@ -114,21 +102,21 @@ static wasm_instance_owner_t *g_wasm_instance_owners = NULL;
 static size_t g_wasm_instance_owner_count = 0;
 static size_t g_wasm_instance_owner_cap = 0;
 
-static void wasm_clear_pending_import_throw(void) {
+static void wasm_clear_pending_import_throw(ant_t *js) {
   g_wasm_pending_import_throw_exists = false;
-  g_wasm_pending_import_throw = js_mkundef();
+  js->mutable_roots.wasm_pending_import_throw = js_mkundef();
 }
 
-static void wasm_set_pending_import_throw(ant_value_t value) {
+static void wasm_set_pending_import_throw(ant_t *js, ant_value_t value) {
   g_wasm_pending_import_throw_exists = true;
-  g_wasm_pending_import_throw = value;
+  js->mutable_roots.wasm_pending_import_throw = value;
 }
 
-static ant_value_t wasm_consume_pending_import_throw(void) {
+static ant_value_t wasm_consume_pending_import_throw(ant_t *js) {
   ant_value_t value = g_wasm_pending_import_throw_exists
-    ? g_wasm_pending_import_throw
+    ? js->mutable_roots.wasm_pending_import_throw
     : js_mkundef();
-  wasm_clear_pending_import_throw();
+  wasm_clear_pending_import_throw(js);
   return value;
 }
 
@@ -244,11 +232,6 @@ static wasm_module_handle_t *wasm_module_handle(ant_value_t value) {
   return (wasm_module_handle_t *)js_get_native(value, WASM_MODULE_NATIVE_TAG);
 }
 
-static wasm_instance_handle_t *wasm_instance_handle(ant_value_t value) {
-  if (!js_check_brand(value, BRAND_WASM_INSTANCE)) return NULL;
-  return (wasm_instance_handle_t *)js_get_native(value, WASM_INSTANCE_NATIVE_TAG);
-}
-
 static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_wrap_kind_t kind) {
   if ((kind == WASM_EXTERN_WRAP_GLOBAL && !js_check_brand(value, BRAND_WASM_GLOBAL))
       || (kind == WASM_EXTERN_WRAP_MEMORY && !js_check_brand(value, BRAND_WASM_MEMORY))
@@ -269,15 +252,15 @@ static ant_value_t wasm_make_error(ant_t *js, ant_value_t proto, const char *nam
 }
 
 static ant_value_t wasm_make_compile_error(ant_t *js, const char *message) {
-  return wasm_make_error(js, g_wasm_compileerror_proto, "CompileError", message);
+  return wasm_make_error(js, js->builtins.wasm_compileerror_proto, "CompileError", message);
 }
 
 static ant_value_t wasm_make_link_error(ant_t *js, const char *message) {
-  return wasm_make_error(js, g_wasm_linkerror_proto, "LinkError", message);
+  return wasm_make_error(js, js->builtins.wasm_linkerror_proto, "LinkError", message);
 }
 
 static ant_value_t wasm_make_runtime_error(ant_t *js, const char *message) {
-  return wasm_make_error(js, g_wasm_runtimeerror_proto, "RuntimeError", message);
+  return wasm_make_error(js, js->builtins.wasm_runtimeerror_proto, "RuntimeError", message);
 }
 
 static ant_value_t wasm_error_value(ant_t *js, ant_value_t value) {
@@ -427,7 +410,7 @@ static ant_value_t wasm_wrap_module(ant_t *js, wasm_store_t *store, wasm_module_
   handle->module = module;
 
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_wasm_module_proto);
+  js_set_proto_init(obj, js->builtins.wasm_module_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WASM_MODULE));
   js_set_native(obj, handle, WASM_MODULE_NATIVE_TAG);
   return obj;
@@ -447,7 +430,7 @@ static void wasm_module_finalize(ant_t *js, ant_object_t *obj) {
 
 static ant_value_t wasm_wrap_instance(ant_t *js, wasm_instance_handle_t *handle, ant_value_t module_ref) {
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_wasm_instance_proto);
+  js_set_proto_init(obj, js->builtins.wasm_instance_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WASM_INSTANCE));
   js_set_native(obj, handle, WASM_INSTANCE_NATIVE_TAG);
   js_set_slot_wb(js, obj, SLOT_CTOR, module_ref);
@@ -560,12 +543,12 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
     }
   }
 
-  wasm_clear_pending_import_throw();
+  wasm_clear_pending_import_throw(js);
   trap = wasm_func_call(func, &wasm_args, &wasm_results);
   
   if (trap) {
     if (g_wasm_pending_import_throw_exists) {
-      result = wasm_consume_pending_import_throw();
+      result = wasm_consume_pending_import_throw(js);
       js_mark_errorlike_no_stack(js, result);
       wasm_val_vec_delete(&wasm_args);
       wasm_val_vec_delete(&wasm_results);
@@ -581,7 +564,7 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
     return js_throw(js, result);
   }
   
-  wasm_clear_pending_import_throw();
+  wasm_clear_pending_import_throw(js);
   result = wasm_js_from_result_vec(js, &wasm_results);
 
   wasm_val_vec_delete(&wasm_args);
@@ -632,7 +615,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
     }
     case WASM_EXTERN_GLOBAL: {
       ant_value_t obj = wasm_wrap_extern_object(
-        js, WASM_EXTERN_WRAP_GLOBAL, g_wasm_global_proto, BRAND_WASM_GLOBAL,
+        js, WASM_EXTERN_WRAP_GLOBAL, js->builtins.wasm_global_proto, BRAND_WASM_GLOBAL,
         NULL, false, wasm_extern_as_global(external), instance_obj
       );
       if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
@@ -640,7 +623,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
     }
     case WASM_EXTERN_MEMORY: {
       ant_value_t obj = wasm_wrap_extern_object(
-        js, WASM_EXTERN_WRAP_MEMORY, g_wasm_memory_proto, BRAND_WASM_MEMORY,
+        js, WASM_EXTERN_WRAP_MEMORY, js->builtins.wasm_memory_proto, BRAND_WASM_MEMORY,
         NULL, false, wasm_extern_as_memory(external), instance_obj
       );
       if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
@@ -648,7 +631,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
     }
     case WASM_EXTERN_TABLE: {
       ant_value_t obj = wasm_wrap_extern_object(
-        js, WASM_EXTERN_WRAP_TABLE, g_wasm_table_proto, BRAND_WASM_TABLE,
+        js, WASM_EXTERN_WRAP_TABLE, js->builtins.wasm_table_proto, BRAND_WASM_TABLE,
         NULL, false, wasm_extern_as_table(external), instance_obj
       );
       if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
@@ -882,7 +865,7 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
 
   if (is_err(result)) {
     ant_value_t thrown = js->thrown_exists ? js->thrown_value : result;
-    wasm_set_pending_import_throw(thrown);
+    wasm_set_pending_import_throw(js, thrown);
     
     const char *msg = "WebAssembly import threw";
     if (vtype(js->thrown_value) == T_OBJ) {
@@ -1110,7 +1093,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (imports && import_types.size > 0)
       import_vec = (wasm_extern_vec_t){ import_types.size, imports, import_types.size, sizeof(*imports), NULL };
 
-    wasm_clear_pending_import_throw();
+    wasm_clear_pending_import_throw(js);
     instance = wasm_instance_new_with_args(module_handle->store, module_handle->module, &import_vec, &trap, KILOBYTE(1024), 0);
   }
 
@@ -1127,7 +1110,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     
     if (trap) {
       if (g_wasm_pending_import_throw_exists) {
-        ant_value_t thrown = wasm_consume_pending_import_throw();
+        ant_value_t thrown = wasm_consume_pending_import_throw(js);
         js_mark_errorlike_no_stack(js, thrown);
         wasm_trap_delete(trap);
         return js_throw(js, thrown);
@@ -1138,7 +1121,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     return wasm_make_link_error(js, "Failed to instantiate WebAssembly module");
   }
   
-  wasm_clear_pending_import_throw();
+  wasm_clear_pending_import_throw(js);
   wasm_instance_exports(instance, &exports);
   wasm_module_exports(module_handle->module, &export_types);
 
@@ -1297,7 +1280,7 @@ static ant_value_t js_wasm_global_ctor(ant_t *js, ant_value_t *args, int nargs) 
   }
 
   result = wasm_wrap_extern_object(
-    js, WASM_EXTERN_WRAP_GLOBAL, g_wasm_global_proto, BRAND_WASM_GLOBAL,
+    js, WASM_EXTERN_WRAP_GLOBAL, js->builtins.wasm_global_proto, BRAND_WASM_GLOBAL,
     store, true, global, js_mkundef()
   );
   if (vtype(result) == T_OBJ) {
@@ -1531,7 +1514,7 @@ static ant_value_t js_wasm_memory_ctor(ant_t *js, ant_value_t *args, int nargs) 
   }
 
   result = wasm_wrap_extern_object(
-    js, WASM_EXTERN_WRAP_MEMORY, g_wasm_memory_proto, BRAND_WASM_MEMORY,
+    js, WASM_EXTERN_WRAP_MEMORY, js->builtins.wasm_memory_proto, BRAND_WASM_MEMORY,
     store, true, memory, js_mkundef()
   );
   if (vtype(result) != T_OBJ) {
@@ -1756,7 +1739,7 @@ static ant_value_t js_wasm_table_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   result = wasm_wrap_extern_object(
-    js, WASM_EXTERN_WRAP_TABLE, g_wasm_table_proto, BRAND_WASM_TABLE,
+    js, WASM_EXTERN_WRAP_TABLE, js->builtins.wasm_table_proto, BRAND_WASM_TABLE,
     store, true, table, js_mkundef()
   );
   if (vtype(result) == T_OBJ) {
@@ -1887,19 +1870,19 @@ static ant_value_t js_wasm_instantiate(ant_t *js, ant_value_t *args, int nargs) 
 static ant_value_t js_wasm_compile_error_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t msg = (nargs > 0) ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   if (is_err(msg)) return msg;
-  return wasm_make_error(js, g_wasm_compileerror_proto, "CompileError", js_str(js, msg));
+  return wasm_make_error(js, js->builtins.wasm_compileerror_proto, "CompileError", js_str(js, msg));
 }
 
 static ant_value_t js_wasm_link_error_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t msg = (nargs > 0) ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   if (is_err(msg)) return msg;
-  return wasm_make_error(js, g_wasm_linkerror_proto, "LinkError", js_str(js, msg));
+  return wasm_make_error(js, js->builtins.wasm_linkerror_proto, "LinkError", js_str(js, msg));
 }
 
 static ant_value_t js_wasm_runtime_error_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t msg = (nargs > 0) ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   if (is_err(msg)) return msg;
-  return wasm_make_error(js, g_wasm_runtimeerror_proto, "RuntimeError", js_str(js, msg));
+  return wasm_make_error(js, js->builtins.wasm_runtimeerror_proto, "RuntimeError", js_str(js, msg));
 }
 
 void gc_mark_wasm(ant_t *js, gc_mark_fn mark) {
@@ -1908,13 +1891,9 @@ void gc_mark_wasm(ant_t *js, gc_mark_fn mark) {
     mark(js, env->fn);
     mark(js, env->owner);
   }
-  
-  if (g_wasm_pending_import_throw_exists)
-    mark(js, g_wasm_pending_import_throw);
 }
 
-void init_wasm_module(void) {
-  ant_t *js = rt->js;
+void init_wasm_module(ant_t *js) {
   ant_value_t global = js_glob(js);
   
   ant_value_t error_proto = js_get_ctor_proto(js, "Error", 5);
@@ -1922,54 +1901,54 @@ void init_wasm_module(void) {
 
   if (!ensure_wasm_engine()) return;
 
-  g_wasm_module_proto = js_mkobj(js);
-  g_wasm_instance_proto = js_mkobj(js);
-  g_wasm_global_proto = js_mkobj(js);
-  g_wasm_memory_proto = js_mkobj(js);
-  g_wasm_table_proto = js_mkobj(js);
-  g_wasm_tag_proto = js_mkobj(js);
-  g_wasm_exception_proto = js_mkobj(js);
+  js->builtins.wasm_module_proto = js_mkobj(js);
+  js->builtins.wasm_instance_proto = js_mkobj(js);
+  js->builtins.wasm_global_proto = js_mkobj(js);
+  js->builtins.wasm_memory_proto = js_mkobj(js);
+  js->builtins.wasm_table_proto = js_mkobj(js);
+  js->builtins.wasm_tag_proto = js_mkobj(js);
+  js->builtins.wasm_exception_proto = js_mkobj(js);
 
-  g_wasm_compileerror_proto = js_mkobj(js);
-  g_wasm_linkerror_proto = js_mkobj(js);
-  g_wasm_runtimeerror_proto = js_mkobj(js);
+  js->builtins.wasm_compileerror_proto = js_mkobj(js);
+  js->builtins.wasm_linkerror_proto = js_mkobj(js);
+  js->builtins.wasm_runtimeerror_proto = js_mkobj(js);
 
-  js_set_proto_init(g_wasm_module_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_instance_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_global_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_memory_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_table_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_tag_proto, js->sym.object_proto);
-  js_set_proto_init(g_wasm_exception_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_module_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_instance_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_global_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_memory_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_table_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_tag_proto, js->sym.object_proto);
+  js_set_proto_init(js->builtins.wasm_exception_proto, js->sym.object_proto);
 
-  js_set_proto_init(g_wasm_compileerror_proto, error_proto);
-  js_set_proto_init(g_wasm_linkerror_proto, error_proto);
-  js_set_proto_init(g_wasm_runtimeerror_proto, error_proto);
+  js_set_proto_init(js->builtins.wasm_compileerror_proto, error_proto);
+  js_set_proto_init(js->builtins.wasm_linkerror_proto, error_proto);
+  js_set_proto_init(js->builtins.wasm_runtimeerror_proto, error_proto);
 
-  js_set(js, g_wasm_global_proto, "valueOf", js_mkfun(js_wasm_global_value_of));
-  js_set_getter_desc(js, g_wasm_global_proto, "value", 5, js_mkfun(js_wasm_global_value_getter), JS_DESC_C);
-  js_set_setter_desc(js, g_wasm_global_proto, "value", 5, js_mkfun(js_wasm_global_value_setter), JS_DESC_C);
+  js_set(js, js->builtins.wasm_global_proto, "valueOf", js_mkfun(js_wasm_global_value_of));
+  js_set_getter_desc(js, js->builtins.wasm_global_proto, "value", 5, js_mkfun(js_wasm_global_value_getter), JS_DESC_C);
+  js_set_setter_desc(js, js->builtins.wasm_global_proto, "value", 5, js_mkfun(js_wasm_global_value_setter), JS_DESC_C);
 
-  js_set_getter_desc(js, g_wasm_instance_proto, "exports", 7, js_mkfun(js_wasm_instance_exports_getter), JS_DESC_C);
-  js_set_getter_desc(js, g_wasm_memory_proto, "buffer", 6, js_mkfun(js_wasm_memory_buffer_getter), JS_DESC_C);
-  js_set(js, g_wasm_memory_proto, "grow", js_mkfun(js_wasm_memory_grow));
+  js_set_getter_desc(js, js->builtins.wasm_instance_proto, "exports", 7, js_mkfun(js_wasm_instance_exports_getter), JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.wasm_memory_proto, "buffer", 6, js_mkfun(js_wasm_memory_buffer_getter), JS_DESC_C);
+  js_set(js, js->builtins.wasm_memory_proto, "grow", js_mkfun(js_wasm_memory_grow));
 
-  js_set_getter_desc(js, g_wasm_table_proto, "length", 6, js_mkfun(js_wasm_table_length_getter), JS_DESC_C);
-  js_set(js, g_wasm_table_proto, "get", js_mkfun(js_wasm_table_get));
-  js_set(js, g_wasm_table_proto, "set", js_mkfun(js_wasm_table_set));
-  js_set(js, g_wasm_table_proto, "grow", js_mkfun(js_wasm_table_grow));
+  js_set_getter_desc(js, js->builtins.wasm_table_proto, "length", 6, js_mkfun(js_wasm_table_length_getter), JS_DESC_C);
+  js_set(js, js->builtins.wasm_table_proto, "get", js_mkfun(js_wasm_table_get));
+  js_set(js, js->builtins.wasm_table_proto, "set", js_mkfun(js_wasm_table_set));
+  js_set(js, js->builtins.wasm_table_proto, "grow", js_mkfun(js_wasm_table_grow));
 
-  ant_value_t module_ctor = js_make_ctor(js, js_wasm_module_ctor, g_wasm_module_proto, "Module", 6);
-  ant_value_t instance_ctor = js_make_ctor(js, js_wasm_instance_ctor, g_wasm_instance_proto, "Instance", 8);
-  ant_value_t global_ctor = js_make_ctor(js, js_wasm_global_ctor, g_wasm_global_proto, "Global", 6);
-  ant_value_t memory_ctor = js_make_ctor(js, js_wasm_memory_ctor, g_wasm_memory_proto, "Memory", 6);
-  ant_value_t table_ctor = js_make_ctor(js, js_wasm_table_ctor, g_wasm_table_proto, "Table", 5);
-  ant_value_t tag_ctor = js_make_ctor(js, js_wasm_tag_ctor, g_wasm_tag_proto, "Tag", 3);
-  ant_value_t exception_ctor = js_make_ctor(js, js_wasm_exception_ctor, g_wasm_exception_proto, "Exception", 9);
+  ant_value_t module_ctor = js_make_ctor(js, js_wasm_module_ctor, js->builtins.wasm_module_proto, "Module", 6);
+  ant_value_t instance_ctor = js_make_ctor(js, js_wasm_instance_ctor, js->builtins.wasm_instance_proto, "Instance", 8);
+  ant_value_t global_ctor = js_make_ctor(js, js_wasm_global_ctor, js->builtins.wasm_global_proto, "Global", 6);
+  ant_value_t memory_ctor = js_make_ctor(js, js_wasm_memory_ctor, js->builtins.wasm_memory_proto, "Memory", 6);
+  ant_value_t table_ctor = js_make_ctor(js, js_wasm_table_ctor, js->builtins.wasm_table_proto, "Table", 5);
+  ant_value_t tag_ctor = js_make_ctor(js, js_wasm_tag_ctor, js->builtins.wasm_tag_proto, "Tag", 3);
+  ant_value_t exception_ctor = js_make_ctor(js, js_wasm_exception_ctor, js->builtins.wasm_exception_proto, "Exception", 9);
 
-  ant_value_t compile_error_ctor = js_make_ctor(js, js_wasm_compile_error_ctor, g_wasm_compileerror_proto, "CompileError", 12);
-  ant_value_t link_error_ctor = js_make_ctor(js, js_wasm_link_error_ctor, g_wasm_linkerror_proto, "LinkError", 9);
-  ant_value_t runtime_error_ctor = js_make_ctor(js, js_wasm_runtime_error_ctor, g_wasm_runtimeerror_proto, "RuntimeError", 12);
+  ant_value_t compile_error_ctor = js_make_ctor(js, js_wasm_compile_error_ctor, js->builtins.wasm_compileerror_proto, "CompileError", 12);
+  ant_value_t link_error_ctor = js_make_ctor(js, js_wasm_link_error_ctor, js->builtins.wasm_linkerror_proto, "LinkError", 9);
+  ant_value_t runtime_error_ctor = js_make_ctor(js, js_wasm_runtime_error_ctor, js->builtins.wasm_runtimeerror_proto, "RuntimeError", 12);
 
   js_set(js, module_ctor, "imports", js_mkfun(js_wasm_module_imports));
   js_set(js, module_ctor, "exports", js_mkfun(js_wasm_module_exports));

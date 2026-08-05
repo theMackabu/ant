@@ -11,26 +11,6 @@
 #include <math.h>
 #include <stdlib.h>
 
-static inline ant_value_t sv_getprop_fallback_len(
-  ant_t *js, ant_value_t obj,
-  const char *key, ant_offset_t key_len
-) {
-  char small[64];
-  char *tmp = small;
-
-  if (key_len + 1 > (ant_offset_t)sizeof(small)) {
-    tmp = malloc((size_t)key_len + 1);
-    if (!tmp) return js_mkerr(js, "out of memory");
-  }
-
-  memcpy(tmp, key, (size_t)key_len);
-  tmp[key_len] = '\0';
-  ant_value_t out = js_getprop_fallback(js, obj, tmp);
-
-  if (tmp != small) free(tmp);
-  return out;
-}
-
 static inline ant_value_t sv_key_to_property_key(ant_t *js, ant_value_t key) {
   if (vtype(key) == T_SYMBOL) return key;
 
@@ -348,7 +328,7 @@ static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_valu
   ant_offset_t koff = vstr(js, key_str, &klen);
   
   const char *kptr = (const char *)(uintptr_t)(koff);
-  return sv_getprop_fallback_len(js, obj, kptr, klen);
+  return js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
 }
 
 static inline ant_value_t sv_prop_get_at(
@@ -398,7 +378,7 @@ static inline ant_value_t sv_prop_get_at(
     if (sv_try_get_shape_prop_with_receiver(
           js, proto, str, obj, &fast_out, &should_fallback)) return fast_out;
     if (should_fallback)
-      return sv_getprop_fallback_len(js, obj, str, (ant_offset_t)len);
+      return js_getprop_fallback_len(js, obj, str, (size_t)len);
   }
 
   if (t == T_OBJ || t == T_ARR || t == T_FUNC || t == T_PROMISE) {
@@ -418,7 +398,7 @@ static inline ant_value_t sv_prop_get_at(
     }
   }
 
-  return sv_getprop_fallback_len(js, obj, str, (ant_offset_t)len);
+  return js_getprop_fallback_len(js, obj, str, len);
 }
 
 static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *str, uint32_t len) {

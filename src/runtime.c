@@ -1,4 +1,4 @@
-#include "ant.h"
+#include "internal.h"
 #include "runtime.h"
 #include "descriptors.h"
 
@@ -29,17 +29,15 @@ typedef struct code_block {
   char data[];
 } code_block_t;
 
-_Static_assert(
+static_assert(
   (CODE_ARENA_ALIGNMENT & (CODE_ARENA_ALIGNMENT - 1u)) == 0,
   "code arena alignment must be a power of two"
 );
-_Static_assert(
+static_assert(
   offsetof(code_block_t, data) % CODE_ARENA_ALIGNMENT == 0,
   "code arena block payload must satisfy the arena alignment"
 );
 
-static struct ant_runtime runtime = {0};
-struct ant_runtime *const rt = &runtime;
 static intern_entry_t *code_interns = NULL;
 
 static code_block_t *code_arena_head     = NULL;
@@ -277,20 +275,15 @@ void code_arena_reset(void) {
   parse_arena_reset();
 }
 
-void destroy_runtime(ant_t *js) {
-  if (rt->js == js) memset(&runtime, 0, sizeof(runtime));
-}
-
-struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
+void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   ant_value_t global = js_glob(js);
-  
-  runtime = (struct ant_runtime){
-    .js = js,
-    .ant_obj = js_newobj(js),
-    .flags = 0, .argc = argc, .argv = argv,
-    .pid = (int)ant_getpid(),
-    .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
-  };
+
+  js->Ant = js_newobj(js);
+  js->runtime.flags = 0;
+  js->runtime.argc = argc;
+  js->runtime.argv = argv;
+  js->runtime.pid = (int)ant_getpid();
+  js->runtime.ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL;
 
   js_set(js, global, "onerror", js_mknull());
   js_set_descriptor(js, global, "onerror", 7, JS_DESC_W | JS_DESC_C);
@@ -313,18 +306,16 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
   js_set(js, global, "globalThis", global);
   js_set_descriptor(js, global, "globalThis", 10, JS_DESC_W | JS_DESC_C);
 
-  js_set(js, global, "Ant", runtime.ant_obj);
+  js_set(js, global, "Ant", js->Ant);
   js_set_descriptor(js, global, "Ant", 3, JS_DESC_E);
-
-  return &runtime;
 }
 
-void ant_runtime_set_argv(int argc, char **argv) {
+void ant_runtime_set_argv(ant_t *js, int argc, char **argv) {
   if (argc < 0 || (argc > 0 && argv == NULL)) {
-    runtime.argc = 0;
-    runtime.argv = NULL;
+    js->runtime.argc = 0;
+    js->runtime.argv = NULL;
     return;
   }
-  runtime.argc = argc;
-  runtime.argv = argv;
+  js->runtime.argc = argc;
+  js->runtime.argv = argv;
 }

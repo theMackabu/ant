@@ -20,7 +20,6 @@ utf8proc_ssize_t utf8_whatwg_decode(
 
 size_t utf8_strlen(const char *str, size_t byte_len);
 size_t utf16_strlen(const char *str, size_t byte_len);
-size_t utf16_strlen_bytes(const char *str, size_t byte_len);
 bool utf8_validate_bytes(const char *str, size_t byte_len);
 
 // replace WTF-8 lone-surrogate encodings (ED A0-BF xx) with U+FFFD

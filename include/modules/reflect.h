@@ -1,6 +1,8 @@
 #ifndef REFLECT_H
 #define REFLECT_H
 
-void init_reflect_module(void);
+#include "types.h"
+
+void init_reflect_module(ant_t *js);
 
 #endif

@@ -7,7 +7,6 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 #include "descriptors.h"
 
 #include "gc/modules.h"
@@ -42,7 +41,6 @@ static const UT_icd abort_listener_icd = { sizeof(abort_listener_t), NULL, NULL,
 static const UT_icd abort_value_icd    = { sizeof(ant_value_t),      NULL, NULL, NULL };
 
 static abort_timeout_entry_t *timeout_entries = NULL;
-static ant_value_t g_signal_proto = 0;
 static bool g_initialized = false;
 
 enum { ABORT_SIGNAL_NATIVE_TAG = 0x41534947u }; // ASIG
@@ -204,7 +202,7 @@ static ant_value_t make_new_signal(ant_t *js) {
   js_set_native(obj, data, ABORT_SIGNAL_NATIVE_TAG);
   js_set_finalizer(obj, abort_signal_finalize);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_ABORT_SIGNAL));
-  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_signal_proto);
+  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, js->builtins.signal_proto);
 
   js_set(js, obj, "aborted", js_false);
   js_set(js, obj, "reason", js_mkundef());
@@ -428,12 +426,11 @@ static ant_value_t abort_controller_abort(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-void init_abort_module(void) {
-  ant_t *js = rt->js;
+void init_abort_module(ant_t *js) {
   ant_value_t global = js_glob(js);
 
   ant_value_t signal_proto = js_mkobj(js);
-  g_signal_proto = signal_proto;
+  js->builtins.signal_proto = signal_proto;
   g_initialized = true;
 
   js_set(js, signal_proto, "addEventListener",    js_mkfun(abort_signal_add_event_listener));
@@ -447,7 +444,7 @@ void init_abort_module(void) {
   js_mkprop_fast(js, signal_ctor, "name", 4, ANT_STRING("AbortSignal"));
   js_set_descriptor(js, signal_ctor, "name", 4, 0);
 
-  ant_value_t signal_fn = js_obj_to_func_ex(signal_ctor, SV_CALL_IS_DEFAULT_CTOR);
+  ant_value_t signal_fn = js_obj_to_func_ex(js, signal_ctor, SV_CALL_IS_DEFAULT_CTOR);
   js_set(js, signal_fn, "abort",   js_mkfun(abort_signal_static_abort));
   js_set(js, signal_fn, "timeout", js_mkfun(abort_signal_static_timeout));
   js_set(js, signal_fn, "any",     js_mkfun(abort_signal_static_any));
@@ -465,7 +462,7 @@ void init_abort_module(void) {
   js_mkprop_fast(js, ctrl_ctor, "name", 4, ANT_STRING("AbortController"));
   js_set_descriptor(js, ctrl_ctor, "name", 4, 0);
 
-  ant_value_t ctrl_fn = js_obj_to_func(ctrl_ctor);
+  ant_value_t ctrl_fn = js_obj_to_func(js, ctrl_ctor);
   js_set(js, ctrl_proto, "constructor", ctrl_fn);
   js_set_descriptor(js, ctrl_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
@@ -474,7 +471,6 @@ void init_abort_module(void) {
 }
 
 void gc_mark_abort(ant_t *js, gc_mark_fn mark) {
-  if (g_initialized) mark(js, g_signal_proto);
   for (abort_timeout_entry_t *e = timeout_entries; e; e = e->next)
     if (!e->closed) mark(js, e->signal);
 }

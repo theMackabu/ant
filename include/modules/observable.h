@@ -1,6 +1,8 @@
 #ifndef OBSERVABLE_H
 #define OBSERVABLE_H
 
-void init_observable_module(void);
+#include "types.h"
+
+void init_observable_module(ant_t *js);
 
 #endif

@@ -285,11 +285,11 @@ ant_value_t assert_library(ant_t *js) {
   js_mkprop_fast(js, ae_ctor, "prototype", 9, ae_proto);
   js_mkprop_fast(js, ae_ctor, "name", 4, js_mkstr(js, "AssertionError", 14));
   
-  ant_value_t ae_fn = js_obj_to_func(ae_ctor);
+  ant_value_t ae_fn = js_obj_to_func(js, ae_ctor);
   js_set(js, ae_proto, "constructor", ae_fn);
   js_set(js, assert_obj, "AssertionError", ae_fn);
 
-  ant_value_t lib = js_obj_to_func(assert_obj);
+  ant_value_t lib = js_obj_to_func(js, assert_obj);
   js_set(js, lib, "default", lib);
   
   return lib;

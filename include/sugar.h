@@ -8,29 +8,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
-#include <minicoro.h>
-
-#define CORO_MALLOC(size) calloc(1, size)
-#define CORO_FREE(ptr) free(ptr)
-
-#define MCO_RESUME_SAVE(js_, mco_, res_) do {    \
-  void *_saved_cstk = (js_)->cstk.base;          \
-  size_t _saved_limit = (js_)->cstk.limit;       \
-  volatile char _stk_mark;                       \
-  if (!mco_running())                            \
-    (js_)->cstk.main_lo = (void *)&_stk_mark;    \
-  (res_) = mco_resume((mco_));                   \
-  (js_)->cstk.base = _saved_cstk;                \
-  (js_)->cstk.limit = _saved_limit;              \
-} while (0)
-
-#define MCO_CORO_STACK_ENTER(js_, mco_) do {     \
-  volatile char _coro_marker;                    \
-  (js_)->cstk.base = (void *)&_coro_marker;      \
-  (js_)->cstk.limit = (mco_)->stack_size;        \
-} while (0)
-
-#define CORO_PER_TICK_LIMIT 100000
 
 typedef enum {
   CORO_ASYNC_AWAIT,
@@ -40,61 +17,42 @@ typedef enum {
 
 typedef enum {
   CORO_HOLD_ACTIVE    = 1u << 0,
-  CORO_HOLD_PENDING   = 1u << 1,
   CORO_HOLD_GENERATOR = 1u << 2,
   CORO_HOLD_AWAIT     = 1u << 3,
 } coroutine_hold_t;
 
 typedef struct coroutine {
   ant_t *js;
-  
+
   ant_value_t this_val;
   ant_value_t super_val;
   ant_value_t new_target;
   ant_value_t result;
   ant_value_t async_func;
-  ant_value_t yield_value;
+  ant_value_t owner_gen;
   ant_value_t *args;
-  
+
   ant_value_t awaited_promise;
   ant_value_t async_promise;
   ant_module_t *module_eval_ctx;
+
+  union {
+    struct coroutine *active_parent;
+    struct coroutine *retired_next;
+  };
   
-  struct coroutine *active_parent;
   struct coroutine *active_prev;
-  
-  struct coroutine *prev;
-  struct coroutine *next;
-  
-  mco_coro *mco;
-  struct sv_vm *owner_vm;
-  struct sv_vm *sv_vm;
-  
-  ant_offset_t resume_point;
+  struct sv_activation *act;
   coroutine_type_t type;
-  
-  int owner_entry_fp;
-  int owner_saved_fp;
+
   int nargs;
-  
+  uint64_t gc_epoch;
   uint32_t refcount;
   uint8_t hold_bits;
-  
-  bool is_settled;
-  bool is_error;
-  bool is_done;
-  bool materialized;
-  bool mco_started;
-  bool is_ready;
-  bool did_suspend;
-  bool await_registered;
-  bool destroy_requested;
-} coroutine_t;
 
-typedef struct {
-  coroutine_t *head;
-  coroutine_t *tail;
-} coroutine_queue_t;
+  bool is_error;
+  bool await_registered;
+} coroutine_t;
 
 typedef enum {
   JS_AWAIT_PENDING = 0,
@@ -106,31 +64,26 @@ typedef struct {
   ant_value_t value;
 } js_await_result_t;
 
-extern coroutine_queue_t pending_coroutines;
-extern uint32_t coros_this_tick;
-
-void enqueue_coroutine(coroutine_t *coro);
-void remove_coroutine(coroutine_t *coro);
-
 void coroutine_retain(coroutine_t *coro);
 void coroutine_release(coroutine_t *coro);
 
 void coroutine_hold(coroutine_t *coro, uint8_t hold);
 void coroutine_unhold(coroutine_t *coro, uint8_t hold);
 
-void reap_retired_coroutines(void);
+void reap_retired_coroutines(ant_t *js);
 void free_coroutine(coroutine_t *coro);
 void coroutine_clear_await_registration(coroutine_t *coro);
 
-ant_value_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, ant_value_t closure_scope, ant_value_t *args, int nargs);
+ant_value_t start_async_in_coroutine(
+  ant_t *js, const char *code, size_t code_len,
+  ant_value_t closure_scope, ant_value_t *args, int nargs
+);
+
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
-
-bool has_ready_coroutines(void);
-bool has_pending_coroutines(void);
 
 #endif

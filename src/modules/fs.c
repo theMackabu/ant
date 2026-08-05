@@ -22,7 +22,6 @@
 #include "errors.h"
 #include "watch.h"
 #include "internal.h"
-#include "runtime.h"
 #include "descriptors.h"
 
 #include "gc/roots.h"
@@ -172,15 +171,6 @@ typedef struct {
   double dev, ino, nlink, uid, gid, rdev, size, blksize, blocks;
   double atime_ms, mtime_ms, ctime_ms, birthtime_ms;
 } fs_stat_fields_t;
-
-static ant_value_t g_dirent_proto      = 0;
-static ant_value_t g_fswatcher_proto   = 0;
-static ant_value_t g_fswatcher_ctor    = 0;
-static ant_value_t g_filehandle_proto  = 0;
-static ant_value_t g_readstream_proto  = 0;
-static ant_value_t g_readstream_ctor   = 0;
-static ant_value_t g_writestream_proto = 0;
-static ant_value_t g_writestream_ctor  = 0;
 
 static fs_watcher_t *active_watchers = NULL;
 static UT_array *pending_requests    = NULL;
@@ -620,42 +610,42 @@ static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, a
 
 static ant_value_t js_readstream_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "ReadStream() requires a path argument");
-  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), g_readstream_proto);
+  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto);
 }
 
 static ant_value_t js_writestream_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WriteStream() requires a path argument");
-  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), g_writestream_proto);
+  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto);
 }
 
 static ant_value_t builtin_fs_createReadStream(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "createReadStream() requires a path argument");
-  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), g_readstream_proto);
+  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto);
 }
 
 static ant_value_t builtin_fs_createWriteStream(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "createWriteStream() requires a path argument");
-  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), g_writestream_proto);
+  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto);
 }
 
 static void fs_init_stream_constructors(ant_t *js) {
-  if (g_readstream_ctor && g_writestream_ctor) return;
+  if (js->builtins.readstream_ctor && js->builtins.writestream_ctor) return;
 
   stream_init_constructors(js);
 
-  g_readstream_proto = js_mkobj(js);
-  js_set_proto_init(g_readstream_proto, stream_readable_prototype(js));
-  js_set(js, g_readstream_proto, "close", js_mkfun(fs_stream_close));
-  js_set_sym(js, g_readstream_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
-  g_readstream_ctor = js_make_ctor(js, js_readstream_ctor, g_readstream_proto, "ReadStream", 10);
-  js_set_proto_init(g_readstream_ctor, stream_readable_constructor(js));
+  js->builtins.readstream_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.readstream_proto, stream_readable_prototype(js));
+  js_set(js, js->builtins.readstream_proto, "close", js_mkfun(fs_stream_close));
+  js_set_sym(js, js->builtins.readstream_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
+  js->builtins.readstream_ctor = js_make_ctor(js, js_readstream_ctor, js->builtins.readstream_proto, "ReadStream", 10);
+  js_set_proto_init(js->builtins.readstream_ctor, stream_readable_constructor(js));
 
-  g_writestream_proto = js_mkobj(js);
-  js_set_proto_init(g_writestream_proto, stream_writable_prototype(js));
-  js_set(js, g_writestream_proto, "close", js_mkfun(fs_stream_close));
-  js_set_sym(js, g_writestream_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
-  g_writestream_ctor = js_make_ctor(js, js_writestream_ctor, g_writestream_proto, "WriteStream", 11);
-  js_set_proto_init(g_writestream_ctor, stream_writable_constructor(js));
+  js->builtins.writestream_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.writestream_proto, stream_writable_prototype(js));
+  js_set(js, js->builtins.writestream_proto, "close", js_mkfun(fs_stream_close));
+  js_set_sym(js, js->builtins.writestream_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
+  js->builtins.writestream_ctor = js_make_ctor(js, js_writestream_ctor, js->builtins.writestream_proto, "WriteStream", 11);
+  js_set_proto_init(js->builtins.writestream_ctor, stream_writable_constructor(js));
 }
 
 static ant_value_t fs_make_date(ant_t *js, double ms) {
@@ -994,21 +984,21 @@ static void fs_init_watch_constructors(ant_t *js) {
   ant_value_t ee_ctor = 0;
   ant_value_t ee_proto = 0;
 
-  if (g_fswatcher_proto && g_fswatcher_ctor) return;
+  if (js->builtins.fswatcher_proto && js->builtins.fswatcher_ctor) return;
 
   events = events_library(js);
   ee_ctor = js_get(js, events, "EventEmitter");
   ee_proto = js_get(js, ee_ctor, "prototype");
 
-  g_fswatcher_proto = js_mkobj(js);
-  js_set_proto_init(g_fswatcher_proto, ee_proto);
+  js->builtins.fswatcher_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.fswatcher_proto, ee_proto);
   
-  js_set(js, g_fswatcher_proto, "close", js_mkfun(js_fswatcher_close));
-  js_set(js, g_fswatcher_proto, "ref", js_mkfun(js_fswatcher_ref));
-  js_set(js, g_fswatcher_proto, "unref", js_mkfun(js_fswatcher_unref));
+  js_set(js, js->builtins.fswatcher_proto, "close", js_mkfun(js_fswatcher_close));
+  js_set(js, js->builtins.fswatcher_proto, "ref", js_mkfun(js_fswatcher_ref));
+  js_set(js, js->builtins.fswatcher_proto, "unref", js_mkfun(js_fswatcher_unref));
   
-  js_set_sym(js, g_fswatcher_proto, get_toStringTag_sym(), js_mkstr(js, "FSWatcher", 9));
-  g_fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, g_fswatcher_proto, "FSWatcher", 9);
+  js_set_sym(js, js->builtins.fswatcher_proto, get_toStringTag_sym(), js_mkstr(js, "FSWatcher", 9));
+  js->builtins.fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, js->builtins.fswatcher_proto, "FSWatcher", 9);
 }
 
 static bool fs_parse_watch_options(ant_t *js, ant_value_t *args, int nargs, fs_watch_options_t *out) {
@@ -1138,7 +1128,7 @@ static ant_value_t fs_watcher_make_object(ant_t *js, fs_watcher_t *watcher) {
   fs_init_watch_constructors(js);
 
   obj = js_mkobj(js);
-  js_set_proto_init(obj, g_fswatcher_proto);
+  js_set_proto_init(obj, js->builtins.fswatcher_proto);
   js_set_native(obj, watcher, FS_WATCHER_NATIVE_TAG);
   js_set_finalizer(obj, fs_watcher_finalize);
   watcher->obj = obj;
@@ -1640,16 +1630,16 @@ static ant_value_t builtin_fs_filehandle_writeFile(ant_t *js, ant_value_t *args,
 }
 
 static void fs_init_filehandle_proto(ant_t *js) {
-  if (is_object_type(g_filehandle_proto)) return;
-  g_filehandle_proto = js_mkobj(js);
-  js_set_native(g_filehandle_proto, NULL, FS_FILEHANDLE_NATIVE_TAG);
-  js_set(js, g_filehandle_proto, "close", js_mkfun(builtin_fs_filehandle_close));
-  js_set(js, g_filehandle_proto, "stat", js_mkfun(builtin_fs_filehandle_stat));
-  js_set(js, g_filehandle_proto, "sync", js_mkfun(builtin_fs_filehandle_sync));
-  js_set(js, g_filehandle_proto, "read", js_mkfun(builtin_fs_filehandle_read));
-  js_set(js, g_filehandle_proto, "write", js_mkfun(builtin_fs_filehandle_write));
-  js_set(js, g_filehandle_proto, "writeFile", js_mkfun(builtin_fs_filehandle_writeFile));
-  js_set_sym(js, g_filehandle_proto, get_toStringTag_sym(), js_mkstr(js, "FileHandle", 10));
+  if (is_object_type(js->builtins.filehandle_proto)) return;
+  js->builtins.filehandle_proto = js_mkobj(js);
+  js_set_native(js->builtins.filehandle_proto, NULL, FS_FILEHANDLE_NATIVE_TAG);
+  js_set(js, js->builtins.filehandle_proto, "close", js_mkfun(builtin_fs_filehandle_close));
+  js_set(js, js->builtins.filehandle_proto, "stat", js_mkfun(builtin_fs_filehandle_stat));
+  js_set(js, js->builtins.filehandle_proto, "sync", js_mkfun(builtin_fs_filehandle_sync));
+  js_set(js, js->builtins.filehandle_proto, "read", js_mkfun(builtin_fs_filehandle_read));
+  js_set(js, js->builtins.filehandle_proto, "write", js_mkfun(builtin_fs_filehandle_write));
+  js_set(js, js->builtins.filehandle_proto, "writeFile", js_mkfun(builtin_fs_filehandle_writeFile));
+  js_set_sym(js, js->builtins.filehandle_proto, get_toStringTag_sym(), js_mkstr(js, "FileHandle", 10));
 }
 
 static ant_value_t fs_make_filehandle(ant_t *js, int fd) {
@@ -1657,7 +1647,7 @@ static ant_value_t fs_make_filehandle(ant_t *js, int fd) {
   ant_value_t handle = js_mkobj(js);
   
   js_set_native(handle, NULL, FS_FILEHANDLE_NATIVE_TAG);
-  js_set_proto_init(handle, g_filehandle_proto);
+  js_set_proto_init(handle, js->builtins.filehandle_proto);
   js_set_slot(handle, SLOT_DATA, js_mknum((double)fd));
   js_set(js, handle, "fd", js_mknum((double)fd));
   
@@ -1970,7 +1960,7 @@ static void on_realpath_complete(uv_fs_t *uv_req) {
 
 static ant_value_t create_dirent_object(ant_t *js, const char *name, size_t name_len, uv_dirent_type_t type) {
   ant_value_t obj = js_newobj(js);
-  js_set_proto(obj, g_dirent_proto);
+  js_set_proto(js, obj, js->builtins.dirent_proto);
   js_set(js, obj, "name", js_mkstr(js, name, name_len));
   js_set_slot(obj, SLOT_DATA, tov((double)type));
   return obj;
@@ -2128,56 +2118,6 @@ static ant_value_t builtin_fs_readFileSync(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t builtin_fs_readBytesSync(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytesSync() path must be a string");
-  
-  size_t path_len;
-  char *path = js_getstr(js, args[0], &path_len);
-  if (!path) return js_mkerr(js, "Failed to get path string");
-  
-  char *path_cstr = strndup(path, path_len);
-  if (!path_cstr) return js_mkerr(js, "Out of memory");
-  
-  FILE *file = fopen(path_cstr, "rb");
-  if (!file) {
-    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
-    free(path_cstr);
-    return err;
-  }
-  
-  fseek(file, 0, SEEK_END);
-  long file_size = ftell(file);
-  fseek(file, 0, SEEK_SET);
-  
-  if (file_size < 0) {
-    fclose(file);
-    free(path_cstr);
-    return js_mkerr(js, "Failed to get file size");
-  }
-  
-  char *data = malloc(file_size);
-  if (!data) {
-    fclose(file);
-    free(path_cstr);
-    return js_mkerr(js, "Out of memory");
-  }
-  
-  size_t bytes_read = fread(data, 1, file_size, file);
-  fclose(file);
-  free(path_cstr);
-  
-  if (bytes_read != (size_t)file_size) {
-    free(data);
-    return js_mkerr(js, "Failed to read entire file");
-  }
-  
-  ant_value_t result = js_mkstr(js, data, file_size);
-  free(data);
-  
-  return result;
-}
-
 static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
@@ -2211,15 +2151,13 @@ static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_readBytes(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "readBytes() requires a path argument");
-  
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytes() path must be a string");
+static ant_value_t builtin_fs_stream(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "stream() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "stream() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
-  
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -4772,10 +4710,9 @@ static ant_value_t builtin_fs_unwatchFile(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-void init_fs_module(void) {
+void init_fs_module(ant_t *js) {
   utarray_new(pending_requests, &ut_ptr_icd);
-  
-  ant_t *js = rt->js;
+
   ant_value_t glob = js->global;
   
   ant_value_t stats_ctor = js_mkobj(js);
@@ -4790,18 +4727,17 @@ void init_fs_module(void) {
   js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
   js_set_descriptor(js, stats_ctor, "name", 4, 0);
   
-  js_set(js, glob, "Stats", js_obj_to_func(stats_ctor));
+  js_set(js, glob, "Stats", js_obj_to_func(js, stats_ctor));
 
-  g_dirent_proto = js_mkobj(js);
-  js_set(js, g_dirent_proto, "isFile", js_mkfun(dirent_isFile));
-  js_set(js, g_dirent_proto, "isDirectory", js_mkfun(dirent_isDirectory));
-  js_set(js, g_dirent_proto, "isSymbolicLink", js_mkfun(dirent_isSymbolicLink));
-  js_set(js, g_dirent_proto, "isBlockDevice", js_mkfun(dirent_isBlockDevice));
-  js_set(js, g_dirent_proto, "isCharacterDevice", js_mkfun(dirent_isCharacterDevice));
-  js_set(js, g_dirent_proto, "isFIFO", js_mkfun(dirent_isFIFO));
-  js_set(js, g_dirent_proto, "isSocket", js_mkfun(dirent_isSocket));
-  js_set_sym(js, g_dirent_proto, get_toStringTag_sym(), js_mkstr(js, "Dirent", 6));
-  gc_register_root(&g_dirent_proto);
+  js->builtins.dirent_proto = js_mkobj(js);
+  js_set(js, js->builtins.dirent_proto, "isFile", js_mkfun(dirent_isFile));
+  js_set(js, js->builtins.dirent_proto, "isDirectory", js_mkfun(dirent_isDirectory));
+  js_set(js, js->builtins.dirent_proto, "isSymbolicLink", js_mkfun(dirent_isSymbolicLink));
+  js_set(js, js->builtins.dirent_proto, "isBlockDevice", js_mkfun(dirent_isBlockDevice));
+  js_set(js, js->builtins.dirent_proto, "isCharacterDevice", js_mkfun(dirent_isCharacterDevice));
+  js_set(js, js->builtins.dirent_proto, "isFIFO", js_mkfun(dirent_isFIFO));
+  js_set(js, js->builtins.dirent_proto, "isSocket", js_mkfun(dirent_isSocket));
+  js_set_sym(js, js->builtins.dirent_proto, get_toStringTag_sym(), js_mkstr(js, "Dirent", 6));
 }
 
 static ant_value_t fs_callback_success_handler(ant_t *js, ant_value_t *args, int nargs) {
@@ -5092,7 +5028,7 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
   js_set(js, lib, "readSync", js_mkfun(builtin_fs_readSync));
   js_set(js, lib, "fsync", js_mkfun(builtin_fs_fsync));
-  js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
+  js_set(js, lib, "stream", js_mkfun(builtin_fs_stream));
   js_set(js, lib, "createReadStream", js_mkfun(builtin_fs_createReadStream));
   js_set(js, lib, "createWriteStream", js_mkfun(builtin_fs_createWriteStream));
   js_set(js, lib, "openSync", js_mkfun(builtin_fs_openSync));
@@ -5127,9 +5063,9 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "watch", js_mkfun(builtin_fs_watch));
   js_set(js, lib, "watchFile", js_mkfun(builtin_fs_watchFile));
   js_set(js, lib, "unwatchFile", js_mkfun(builtin_fs_unwatchFile));
-  js_set(js, lib, "FSWatcher", g_fswatcher_ctor);
-  js_set(js, lib, "ReadStream", g_readstream_ctor);
-  js_set(js, lib, "WriteStream", g_writestream_ctor);
+  js_set(js, lib, "FSWatcher", js->builtins.fswatcher_ctor);
+  js_set(js, lib, "ReadStream", js->builtins.readstream_ctor);
+  js_set(js, lib, "WriteStream", js->builtins.writestream_ctor);
   js_set(js, realpath_sync, "native", realpath_sync);
   
   js_set_getter_desc(
@@ -5169,14 +5105,6 @@ int has_pending_fs_ops(void) {
 
 void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
   fs_watcher_t *watcher = NULL;
-
-  if (g_fswatcher_proto) mark(js, g_fswatcher_proto);
-  if (g_fswatcher_ctor) mark(js, g_fswatcher_ctor);
-  if (g_filehandle_proto) mark(js, g_filehandle_proto);
-  if (g_readstream_proto) mark(js, g_readstream_proto);
-  if (g_readstream_ctor) mark(js, g_readstream_ctor);
-  if (g_writestream_proto) mark(js, g_writestream_proto);
-  if (g_writestream_ctor) mark(js, g_writestream_ctor);
   if (!pending_requests) return;
   
   unsigned int len = utarray_len(pending_requests);

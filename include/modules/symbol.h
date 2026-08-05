@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "internal.h" // IWYU pragma: keep
 
-void init_symbol_module(void);
+void init_symbol_module(ant_t *js);
 void js_define_species_getter(ant_t *js, ant_value_t ctor);
 
 #define ITER_STATE_PACK(kind, n)  ((uint32_t)(kind) << 28 | ((uint32_t)(n) & 0x0FFFFFFFU))

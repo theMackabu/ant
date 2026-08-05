@@ -7,7 +7,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "utf8.h"
@@ -57,16 +56,13 @@ enum {
   ITER_VALUES = 2
 };
 
-ant_value_t g_headers_proto      = 0;
-ant_value_t g_headers_iter_proto = 0;
-
 enum {
   HEADERS_NATIVE_TAG = 0x48445253u, // HDRS
   HEADERS_ITER_NATIVE_TAG = 0x48444954u // HDIT
 };
 
-static hdr_list_t *list_new(void) {
-  hdr_list_t *l = js_native_data_alloc(rt->js, sizeof(hdr_list_t));
+static hdr_list_t *list_new(ant_t *js) {
+  hdr_list_t *l = js_native_data_alloc(js, sizeof(hdr_list_t));
   if (!l) return NULL;
   l->head = NULL;
   l->tail = &l->head;
@@ -75,22 +71,22 @@ static hdr_list_t *list_new(void) {
   return l;
 }
 
-headers_data_t *headers_data_create(void) {
-  return list_new();
+headers_data_t *headers_data_create(ant_t *js) {
+  return list_new(js);
 }
 
-static void list_free(hdr_list_t *l) {
+static void list_free(ant_t *js, hdr_list_t *l) {
   if (!l) return;
   for (hdr_entry_t *e = l->head; e; ) {
     hdr_entry_t *n = e->next;
     if ((void *)e != (void *)l->inline_entry.bytes) free(e);
     e = n;
   }
-  js_native_data_free(rt->js, l);
+  js_native_data_free(js, l);
 }
 
-void headers_data_destroy(headers_data_t *data) {
-  list_free(data);
+void headers_data_destroy(ant_t *js, headers_data_t *data) {
+  list_free(js, data);
 }
 
 static hdr_list_t *get_list(ant_value_t obj) {
@@ -100,7 +96,7 @@ static hdr_list_t *get_list(ant_value_t obj) {
 static void headers_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
   hdr_list_t *list = get_list(value);
-  list_free(list);
+  list_free(js, list);
   js_clear_native(value, HEADERS_NATIVE_TAG);
 }
 
@@ -301,16 +297,16 @@ static bool list_append_raw(hdr_list_t *l, const char *lower_name, const char *v
     false);
 }
 
-headers_data_t *headers_data_copy(const headers_data_t *src) {
+headers_data_t *headers_data_copy(ant_t *js, const headers_data_t *src) {
   if (!src) return NULL;
-  headers_data_t *dst = list_new();
+  headers_data_t *dst = list_new(js);
   if (!dst) return NULL;
 
   for (const hdr_entry_t *e = src->head; e; e = e->next) {
     // a partial copy must not look like success: response cloning would
     // silently drop headers
     if (!list_append_raw(dst, e->name, e->value)) {
-      list_free(dst);
+      list_free(js, dst);
       return NULL;
     }
   }
@@ -655,7 +651,7 @@ static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kin
   st->kind  = kind;
 
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_headers_iter_proto);
+  js_set_proto_init(iter, js->builtins.headers_iter_proto);
   js_set_native(iter, st, HEADERS_ITER_NATIVE_TAG);
   js_set_finalizer(iter, headers_iter_finalize);
   js_set_slot_wb(js, iter, SLOT_AUX, headers_obj);
@@ -955,7 +951,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Headers constructor requires 'new'");
 
-  hdr_list_t *l = list_new();
+  hdr_list_t *l = list_new(js);
   if (!l) return js_mkerr(js, "out of memory");
 
   ant_value_t init = (nargs >= 1) ? args[0] : js_mkundef();
@@ -964,7 +960,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
     uint8_t t = vtype(init);
 
     if (t == T_NULL || (t != T_OBJ && t != T_ARR && t != T_FUNC && t != T_CFUNC)) {
-      list_free(l);
+      list_free(js, l);
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'Headers': The provided value is not of type 'HeadersInit'");
     }
@@ -975,11 +971,11 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t r;
     if (t == T_ARR || has_iter) r = init_from_sequence(js, l, init);
     else                        r = init_from_record(js, l, init);
-    if (is_err(r)) { list_free(l); return r; }
+    if (is_err(r)) { list_free(js, l); return r; }
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_headers_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.headers_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_native(obj, l, HEADERS_NATIVE_TAG);
@@ -989,7 +985,7 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t headers_create_empty(ant_t *js) {
-  hdr_list_t *l = list_new();
+  hdr_list_t *l = list_new(js);
   if (!l) return js_mkerr(js, "out of memory");
 
   return headers_create_from_data(js, l);
@@ -998,7 +994,7 @@ ant_value_t headers_create_empty(ant_t *js) {
 ant_value_t headers_create_from_data(ant_t *js, headers_data_t *data) {
   if (!data) return js_mkerr(js, "out of memory");
   ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_headers_proto);
+  js_set_proto_init(obj, js->builtins.headers_proto);
   js_set_native(obj, data, HEADERS_NATIVE_TAG);
   js_set_finalizer(obj, headers_finalize);
 
@@ -1287,45 +1283,44 @@ ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name) {
   return ret;
 }
 
-void init_headers_module(void) {
-  ant_t *js     = rt->js;
+void init_headers_module(ant_t *js) {
   ant_value_t g = js_glob(js);
 
   g_content_type_interned = intern_string("content-type", 12);
 
-  g_headers_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_headers_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_headers_iter_proto, "next", js_mkfun(headers_iter_next));
-  js_set_descriptor(js, g_headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
-  js_set_sym(js, g_headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
-  js_iter_register_advance(g_headers_iter_proto, advance_headers);
+  js->builtins.headers_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.headers_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.headers_iter_proto, "next", js_mkfun(headers_iter_next));
+  js_set_descriptor(js, js->builtins.headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, js->builtins.headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js_iter_register_advance(js->builtins.headers_iter_proto, advance_headers);
 
-  g_headers_proto = js_mkobj(js);
+  js->builtins.headers_proto = js_mkobj(js);
 
-  js_set(js, g_headers_proto, "append",       js_mkfun(js_headers_append));
-  js_set(js, g_headers_proto, "set",          js_mkfun(js_headers_set));
-  js_set(js, g_headers_proto, "get",          js_mkfun(js_headers_get));
-  js_set(js, g_headers_proto, "has",          js_mkfun(js_headers_has));
-  js_set(js, g_headers_proto, "delete",       js_mkfun(js_headers_delete));
-  js_set(js, g_headers_proto, "forEach",      js_mkfun(js_headers_for_each));
-  js_set(js, g_headers_proto, "keys",         js_mkfun(js_headers_keys));
-  js_set(js, g_headers_proto, "values",       js_mkfun(js_headers_values));
-  js_set(js, g_headers_proto, "entries",      js_mkfun(js_headers_entries));
-  js_set(js, g_headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
+  js_set(js, js->builtins.headers_proto, "append",       js_mkfun(js_headers_append));
+  js_set(js, js->builtins.headers_proto, "set",          js_mkfun(js_headers_set));
+  js_set(js, js->builtins.headers_proto, "get",          js_mkfun(js_headers_get));
+  js_set(js, js->builtins.headers_proto, "has",          js_mkfun(js_headers_has));
+  js_set(js, js->builtins.headers_proto, "delete",       js_mkfun(js_headers_delete));
+  js_set(js, js->builtins.headers_proto, "forEach",      js_mkfun(js_headers_for_each));
+  js_set(js, js->builtins.headers_proto, "keys",         js_mkfun(js_headers_keys));
+  js_set(js, js->builtins.headers_proto, "values",       js_mkfun(js_headers_values));
+  js_set(js, js->builtins.headers_proto, "entries",      js_mkfun(js_headers_entries));
+  js_set(js, js->builtins.headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
-  js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_get(js, g_headers_proto, "entries"));
-  js_set_sym(js, g_headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
-  js_set_sym(js, g_headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
+  js_set_sym(js, js->builtins.headers_proto, get_iterator_sym(),    js_get(js, js->builtins.headers_proto, "entries"));
+  js_set_sym(js, js->builtins.headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
+  js_set_sym(js, js->builtins.headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_headers_ctor));
-  js_mkprop_fast(js, ctor_obj, "prototype", 9, g_headers_proto);
+  js_mkprop_fast(js, ctor_obj, "prototype", 9, js->builtins.headers_proto);
   js_mkprop_fast(js, ctor_obj, "name", 4, js_mkstr(js, "Headers", 7));
   js_set_descriptor(js, ctor_obj, "name", 4, 0);
   
-  ant_value_t ctor = js_obj_to_func(ctor_obj);
-  js_set(js, g_headers_proto, "constructor", ctor);
-  js_set_descriptor(js, g_headers_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  ant_value_t ctor = js_obj_to_func(js, ctor_obj);
+  js_set(js, js->builtins.headers_proto, "constructor", ctor);
+  js_set_descriptor(js, js->builtins.headers_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   js_set(js, g, "Headers", ctor);
   js_set_descriptor(js, g, "Headers", 7, JS_DESC_W | JS_DESC_C);

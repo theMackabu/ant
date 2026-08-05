@@ -13,13 +13,10 @@ typedef struct {
   int64_t last_modified;
 } blob_data_t;
 
-void init_blob_module(void);
+void init_blob_module(ant_t *js);
 bool blob_is_blob(ant_t *js, ant_value_t obj);
 
 blob_data_t *blob_get_data(ant_value_t obj);
 ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char *type);
-
-extern ant_value_t g_blob_proto;
-extern ant_value_t g_file_proto;
 
 #endif

@@ -52,7 +52,7 @@ enum {
 
 ant_value_t buffer_library(ant_t *js);
 
-void init_buffer_module(void);
+void init_buffer_module(ant_t *js);
 void cleanup_buffer_module(void);
 void free_array_buffer_data(ArrayBufferData *data);
 

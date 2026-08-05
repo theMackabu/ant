@@ -537,8 +537,7 @@ static ant_value_t server_make_chunk(ant_t *js, const char *data, size_t len) {
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
 }
 
-static ant_value_t server_sse_enqueue(server_sse_state_t *state, char *data, size_t len) {
-  ant_t *js = rt->js;
+static ant_value_t server_sse_enqueue(ant_t *js, server_sse_state_t *state, char *data, size_t len) {
   if (!state || state->closed) {
     free(data);
     return js_mkundef();
@@ -603,7 +602,7 @@ static ant_value_t server_sse_send(ant_t *js, ant_value_t *args, int nargs) {
 
   out = ant_sse_format_event(data, event, id, retry, &out_len);
   if (!out) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-  return server_sse_enqueue(state, out, out_len);
+  return server_sse_enqueue(js, state, out, out_len);
 }
 
 static ant_value_t server_sse_comment(ant_t *js, ant_value_t *args, int nargs) {
@@ -618,7 +617,7 @@ static ant_value_t server_sse_comment(ant_t *js, ant_value_t *args, int nargs) {
   text = js_getstr(js, text_v, NULL);
   out = ant_sse_format_comment(text, &out_len);
   if (!out) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-  return server_sse_enqueue(state, out, out_len);
+  return server_sse_enqueue(js, state, out, out_len);
 }
 
 static ant_value_t server_sse_close(ant_t *js, ant_value_t *args, int nargs) {
@@ -920,7 +919,7 @@ static void server_append_upgrade_header(const char *name, const char *value, vo
 
 static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t response_obj, ant_value_t websocket_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  ant_value_t headers = response_get_headers(req->server->js, response_obj);
   
   ant_http1_buffer_t buf;
   server_upgrade_header_ctx_t ctx;
@@ -1026,7 +1025,7 @@ static void server_send_request_internal_error(server_request_t *req, const char
 
 static void server_finish_with_response(server_request_t *req, ant_value_t response_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  ant_value_t headers = response_get_headers(req->server->js, response_obj);
   ant_value_t websocket_obj = response_get_websocket(response_obj);
   
   ant_value_t stream = js_get_slot(response_obj, SLOT_RESPONSE_BODY_STREAM);
@@ -1257,22 +1256,16 @@ static void server_start_stream_read(server_request_t *req) {
 static bool server_request_ensure_reader(server_request_t *req) {
   ant_t *js;
   ant_value_t reader_args[1];
-  ant_value_t saved;
 
   if (!req || !is_object_type(req->response_obj)) return false;
   if (vtype(req->response_reader) != T_UNDEF) return true;
 
   js = req->server->js;
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
-
-  saved = js->new_target;
-  js->new_target = g_reader_proto;
-  req->response_reader = js_rs_reader_ctor(js, reader_args, 1);
-  js->new_target = saved;
+  req->response_reader = js_construct_native(js, js_rs_reader_ctor, reader_args, 1);
 
   return !is_err(req->response_reader);
 }
-
 
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   server_write_req_t *wr = (server_write_req_t *)user_data;

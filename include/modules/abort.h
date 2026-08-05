@@ -4,7 +4,7 @@
 #include "types.h"
 #include "gc/modules.h"
 
-void init_abort_module(void);
+void init_abort_module(ant_t *js);
 
 void gc_mark_abort(ant_t *js, gc_mark_fn mark);
 void signal_do_abort(ant_t *js, ant_value_t signal, ant_value_t reason);

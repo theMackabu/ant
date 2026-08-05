@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-void init_globals_module(void);
+void init_globals_module(ant_t *js);
 
 ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs);
 bool js_fire_unhandled_rejection(ant_t *js, ant_value_t promise_val, ant_value_t reason);

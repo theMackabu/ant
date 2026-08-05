@@ -7,7 +7,6 @@
 #include "ptr.h"
 #include "gc.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 #include "descriptors.h"
@@ -15,9 +14,6 @@
 #include "modules/bigint.h"
 #include "modules/collections.h"
 #include "modules/symbol.h"
-
-ant_value_t g_map_iter_proto = 0;
-ant_value_t g_set_iter_proto = 0;
 
 static bool can_be_held_weakly(ant_value_t value) {
   if (is_object_type(value) || vtype(value) == T_CFUNC) return true;
@@ -408,7 +404,7 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_map_iter_proto);
+  js_set_proto_init(iter, js->builtins.map_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, map_obj);
   js_set_native(iter, state, MAP_ITER_NATIVE_TAG);
   
@@ -461,7 +457,7 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_set_iter_proto);
+  js_set_proto_init(iter, js->builtins.set_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, set_obj);
   js_set_native(iter, state, SET_ITER_NATIVE_TAG);
   
@@ -1634,26 +1630,24 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   return ws_obj;
 }
 
-void init_collections_module(void) {
-  ant_t *js = rt->js;
-  
+void init_collections_module(ant_t *js) {
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
   
   ant_value_t iter_sym = get_iterator_sym();
   ant_value_t tag_sym = get_toStringTag_sym();
   
-  g_map_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_map_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_map_iter_proto, "next", js_mkfun(map_iter_next));
-  js_set_sym(js, g_map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
-  js_iter_register_advance(g_map_iter_proto, advance_map);
+  js->builtins.map_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.map_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.map_iter_proto, "next", js_mkfun(map_iter_next));
+  js_set_sym(js, js->builtins.map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
+  js_iter_register_advance(js->builtins.map_iter_proto, advance_map);
   
-  g_set_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_set_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_set_iter_proto, "next", js_mkfun(set_iter_next));
-  js_set_sym(js, g_set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
-  js_iter_register_advance(g_set_iter_proto, advance_set);
+  js->builtins.set_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.set_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.set_iter_proto, "next", js_mkfun(set_iter_next));
+  js_set_sym(js, js->builtins.set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
+  js_iter_register_advance(js->builtins.set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);
@@ -1678,7 +1672,7 @@ void init_collections_module(void) {
   js_set_descriptor(js, map_ctor, "name", 4, 0);
   js_set(js, map_ctor, "groupBy", js_mkfun(map_groupBy));
   js_define_species_getter(js, map_ctor);
-  js_set(js, glob, "Map", js_obj_to_func(map_ctor));
+  js_set(js, glob, "Map", js_obj_to_func(js, map_ctor));
   
   ant_value_t set_proto = js_mkobj(js);
   js_set_proto_init(set_proto, object_proto);
@@ -1707,7 +1701,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, set_ctor, "name", 4, ANT_STRING("Set"));
   js_set_descriptor(js, set_ctor, "name", 4, 0);
   js_define_species_getter(js, set_ctor);
-  js_set(js, glob, "Set", js_obj_to_func(set_ctor));
+  js_set(js, glob, "Set", js_obj_to_func(js, set_ctor));
   
   ant_value_t weakmap_proto = js_mkobj(js);
   js_set_proto_init(weakmap_proto, object_proto);
@@ -1723,7 +1717,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakmap_ctor, "prototype", 9, weakmap_proto);
   js_mkprop_fast(js, weakmap_ctor, "name", 4, ANT_STRING("WeakMap"));
   js_set_descriptor(js, weakmap_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakMap", js_obj_to_func(weakmap_ctor));
+  js_set(js, glob, "WeakMap", js_obj_to_func(js, weakmap_ctor));
   
   ant_value_t weakset_proto = js_mkobj(js);
   js_set_proto_init(weakset_proto, object_proto);
@@ -1737,7 +1731,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakset_ctor, "prototype", 9, weakset_proto);
   js_mkprop_fast(js, weakset_ctor, "name", 4, ANT_STRING("WeakSet"));
   js_set_descriptor(js, weakset_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakSet", js_obj_to_func(weakset_ctor));
+  js_set(js, glob, "WeakSet", js_obj_to_func(js, weakset_ctor));
   
   ant_value_t weakref_proto = js_mkobj(js);
   js_set_proto_init(weakref_proto, object_proto);
@@ -1749,7 +1743,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakref_ctor, "prototype", 9, weakref_proto);
   js_mkprop_fast(js, weakref_ctor, "name", 4, ANT_STRING("WeakRef"));
   js_set_descriptor(js, weakref_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakRef", js_obj_to_func(weakref_ctor));
+  js_set(js, glob, "WeakRef", js_obj_to_func(js, weakref_ctor));
   
   ant_value_t finreg_proto = js_mkobj(js);
   js_set_proto_init(finreg_proto, object_proto);
@@ -1762,5 +1756,5 @@ void init_collections_module(void) {
   js_mkprop_fast(js, finreg_ctor, "prototype", 9, finreg_proto);
   js_mkprop_fast(js, finreg_ctor, "name", 4, ANT_STRING("FinalizationRegistry"));
   js_set_descriptor(js, finreg_ctor, "name", 4, 0);
-  js_set(js, glob, "FinalizationRegistry", js_obj_to_func(finreg_ctor));
+  js_set(js, glob, "FinalizationRegistry", js_obj_to_func(js, finreg_ctor));
 }

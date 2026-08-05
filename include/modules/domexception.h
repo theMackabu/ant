@@ -4,7 +4,7 @@
 #include "types.h"
 #include "gc/modules.h"
 
-void init_domexception_module(void);
+void init_domexception_module(ant_t *js);
 void gc_mark_domexception(ant_t *js, gc_mark_fn mark);
 ant_value_t make_dom_exception(ant_t *js, const char *message, const char *name);
 

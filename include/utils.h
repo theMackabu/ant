@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include "hash.h" // IWYU pragma: keep
 
 typedef struct {
   char *ptr;
@@ -13,7 +14,6 @@ typedef struct {
 } cstr_buf_t;
 
 extern const char *const module_resolve_extensions[];
-uint64_t hash_key(const char *key, size_t len);
 
 double half_to_double(uint16_t bits16);
 uint16_t double_to_half(double value);

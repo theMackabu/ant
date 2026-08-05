@@ -20,7 +20,6 @@
 #include "ptr.h"
 #include "base64.h"
 #include "errors.h"
-#include "runtime.h"
 #include "gc/roots.h"
 #include "modules/crypto.h"
 #include "modules/buffer.h"
@@ -1897,8 +1896,7 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   return crypto_obj;
 }
 
-void init_crypto_module() {
-  ant_t *js = rt->js;
+void init_crypto_module(ant_t *js) {
   ant_value_t crypto_obj = create_crypto_obj(js);
   js_set(js, js_glob(js), "crypto", crypto_obj);
 }

@@ -4,7 +4,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "utf8.h"
 #include "utils.h"
 #include "modules/uri.h"
@@ -358,8 +357,7 @@ static ant_value_t js_unescape(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-void init_uri_module(void) {
-  ant_t *js = rt->js;
+void init_uri_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
 
   js_set(js, glob, "encodeURI", js_mkfun(js_encodeURI));

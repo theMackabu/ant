@@ -275,7 +275,7 @@ static inline void sv_op_define_class(
 
   if (vtype(ctor) == T_UNDEF) {
     ant_value_t ctor_obj = mkobj(js, 0);
-    ctor = js_obj_to_func_ex(ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
+    ctor = js_obj_to_func_ex(js, ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC)
       js_set_proto_init(ctor_obj, func_proto);

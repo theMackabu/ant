@@ -62,16 +62,13 @@ enum {
   SET_ITER_NATIVE_TAG = 0x53495452u  // SITR
 };
 
-void init_collections_module(void);
+void init_collections_module(ant_t *js);
 
 map_entry_t **get_map_from_obj(ant_value_t obj);
 set_entry_t **get_set_from_obj(ant_value_t obj);
 
 map_iterator_state_t *get_map_iter_state(ant_value_t obj);
 set_iterator_state_t *get_set_iter_state(ant_value_t obj);
-
-extern ant_value_t g_map_iter_proto;
-extern ant_value_t g_set_iter_proto;
 
 bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out);

@@ -19,14 +19,13 @@ typedef struct shape_index_entry {
   UT_hash_handle hh;
 } shape_index_entry_t;
 
-
 typedef struct shape_child_entry {
   uint64_t key;
   ant_shape_t *child;
   UT_hash_handle hh;
 } shape_child_entry_t;
 
-_Static_assert(
+static_assert(
   sizeof(shape_index_entry_t) == sizeof(shape_child_entry_t), 
   "entry pool requires index and child entries to be the same size"
 );
@@ -456,9 +455,8 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
   return shape_add_key(shape, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
 }
 
-bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_from) {
+bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return false;
-  if (swapped_from) *swapped_from = slot;
 
   const ant_shape_prop_t *dp = &shape->props[slot];
   uint64_t del_key = (dp->type == ANT_SHAPE_KEY_SYMBOL)
@@ -473,23 +471,15 @@ bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_
   }
 
   uint32_t last = shape->count - 1;
-  if (slot != last) {
-    shape->props[slot] = shape->props[last];
+  if (slot != last)
+    memmove(&shape->props[slot], &shape->props[slot + 1], (last - slot) * sizeof(*shape->props));
 
-    const ant_shape_prop_t *sp = &shape->props[slot];
-    uint64_t swap_key = (sp->type == ANT_SHAPE_KEY_SYMBOL)
-      ? shape_key_symbol(sp->key.sym_off)
-      : shape_key_interned(sp->key.interned);
-
-    shape_index_entry_t *swap_entry = NULL;
-    HASH_FIND(hh, shape->index, &swap_key, sizeof(swap_key), swap_entry);
-    if (swap_entry) swap_entry->slot = slot;
-    if (swapped_from) *swapped_from = last;
-  }
+  shape_index_entry_t *entry, *tmp;
+  HASH_ITER(hh, shape->index, entry, tmp) if (entry->slot > slot) entry->slot--;
 
   shape->count--;
   ant_ic_epoch_bump();
-  
+
   return true;
 }
 

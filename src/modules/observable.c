@@ -4,14 +4,11 @@
 
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 #include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/symbol.h"
 #include "modules/observable.h"
-
-
 
 static bool subscription_closed(ant_t *js, ant_value_t subscription) {
   ant_value_t observer = js_get_slot(subscription, SLOT_SUBSCRIPTION_OBSERVER);
@@ -221,7 +218,7 @@ static ant_value_t execute_subscriber(ant_t *js, ant_value_t subscriber, ant_val
     ant_value_t cleanupFunction = js_mkobj(js);
     js_set_slot(cleanupFunction, SLOT_DATA, subscriberResult);
     js_set_slot(cleanupFunction, SLOT_CFUNC, js_mkfun(js_cleanup_fn));
-    return js_obj_to_func(cleanupFunction);
+    return js_obj_to_func(js, cleanupFunction);
   }
   
   return js_mkerr_typed(js, JS_ERR_TYPE, "Subscriber must return a function, an object with unsubscribe, or undefined");
@@ -456,8 +453,7 @@ static ant_value_t js_observable_from(ant_t *js, ant_value_t *args, int nargs) {
   return js_observable_constructor(js, ctor_args, 1);
 }
 
-void init_observable_module(void) {
-  ant_t *js = rt->js;
+void init_observable_module(ant_t *js) {
   ant_value_t global = js_glob(js);
   
   ant_value_t observable_ctor = js_mkobj(js);
@@ -474,7 +470,7 @@ void init_observable_module(void) {
   js_set(js, observable_ctor, "of", js_mkfun(js_observable_of));
   js_set(js, observable_ctor, "from", js_mkfun(js_observable_from));
   
-  ant_value_t Observable = js_obj_to_func(observable_ctor);
+  ant_value_t Observable = js_obj_to_func(js, observable_ctor);
   js_set(js, observable_proto, "constructor", Observable);
   js_set(js, global, "Observable", Observable);
 }

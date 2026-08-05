@@ -4,8 +4,12 @@ console.log('Promise Tests\n');
 
 let resolved = false;
 let resolvedValue = null;
-let p = new Promise((resolve) => resolve(42));
+let p = new Promise(resolve => resolve(42));
+
 test('Promise instanceof', p instanceof Promise, true);
+test('Promise.prototype.constructor', Promise.prototype.constructor, Promise);
+test('Promise instance constructor', p.constructor, Promise);
+test('async promise constructor', (async () => {})().constructor, Promise);
 
 p.then(v => {
   resolved = true;
@@ -14,20 +18,30 @@ p.then(v => {
 
 let chainedValue = null;
 let p2 = new Promise(resolve => resolve(10));
-p2.then(v => v * 2).then(v => { chainedValue = v; });
+p2.then(v => v * 2).then(v => {
+  chainedValue = v;
+});
 
 let caughtError = null;
 let p3 = new Promise((_, reject) => reject('error'));
-p3.catch(e => { caughtError = e; });
+p3.catch(e => {
+  caughtError = e;
+});
 
 let staticValue = null;
-Promise.resolve('static').then(v => { staticValue = v; });
+Promise.resolve('static').then(v => {
+  staticValue = v;
+});
 
 let tryValue = null;
-Promise.try(() => 'try').then(v => { tryValue = v; });
+Promise.try(() => 'try').then(v => {
+  tryValue = v;
+});
 
 let finallyCalled = false;
-Promise.resolve('fin').finally(() => { finallyCalled = true; });
+Promise.resolve('fin').finally(() => {
+  finallyCalled = true;
+});
 
 setTimeout(() => {
   test('resolve called', resolved, true);
@@ -39,16 +53,19 @@ setTimeout(() => {
   test('finally called', finallyCalled, true);
 
   let allResolved = null;
-  Promise.all([Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)])
-    .then(arr => { allResolved = arr; });
+  Promise.all([Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)]).then(arr => {
+    allResolved = arr;
+  });
 
   let raceResolved = null;
-  Promise.race([Promise.resolve('first'), Promise.resolve('second')])
-    .then(v => { raceResolved = v; });
+  Promise.race([Promise.resolve('first'), Promise.resolve('second')]).then(v => {
+    raceResolved = v;
+  });
 
   let anyResolved = null;
-  Promise.any([Promise.reject('fail'), Promise.resolve('success')])
-    .then(v => { anyResolved = v; });
+  Promise.any([Promise.reject('fail'), Promise.resolve('success')]).then(v => {
+    anyResolved = v;
+  });
 
   setTimeout(() => {
     test('Promise.all length', allResolved?.length, 3);

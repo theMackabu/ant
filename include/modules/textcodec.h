@@ -24,7 +24,7 @@ typedef struct {
   bool bom_seen;
 } td_state_t;
 
-void init_textcodec_module(void);
+void init_textcodec_module(ant_t *js);
 td_state_t *td_state_new(td_encoding_t enc, bool fatal, bool ignore_bom);
 
 ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t input_len, bool stream);

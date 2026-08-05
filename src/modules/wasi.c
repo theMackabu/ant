@@ -341,7 +341,7 @@ static void wasi_bind_func_export(
   js_set_native(obj, fenv, WASI_FUNC_TAG);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, instance_obj);
   js_set_finalizer(obj, wasi_func_finalize);
-  js_set(js, exports_obj, name, js_obj_to_func(obj));
+  js_set(js, exports_obj, name, js_obj_to_func(js, obj));
   GC_ROOT_RESTORE(js, root_mark);
 }
 

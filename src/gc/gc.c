@@ -4,7 +4,7 @@
 #include "shapes.h"
 
 #include "gc/objects.h"
-#include "gc/refs.h"
+#include "gc/bigints.h"
 #include "gc/stats.h"
 #include "gc/strings.h"
 #include "gc/ropes.h"
@@ -218,14 +218,13 @@ void gc_run(ant_t *js) {
   uint64_t start_ns = gc_stats_begin();
   size_t live_before = js->obj_arena.live_count;
 
-  js->prop_refs_len = 0;
-  gc_refs_shrink(js);
-
+  gc_bigints_begin(js);
   gc_strings_begin(js);
   gc_ropes_begin(js);
   gc_objects_run(js, gc_mark_str);
   ant_ic_epoch_bump();
 
+  gc_bigints_sweep(js);
   gc_strings_sweep(js);
   gc_ropes_sweep(js);
 

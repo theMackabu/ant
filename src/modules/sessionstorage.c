@@ -4,7 +4,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 
@@ -158,8 +157,7 @@ static ant_value_t js_sessionstorage_length(ant_params_t) {
   return js_mknum((double)storage_length());
 }
 
-void init_sessionstorage_module(void) {
-  ant_t *js = rt->js;
+void init_sessionstorage_module(ant_t *js) {
   
   ant_value_t glob = js_glob(js);
   ant_value_t storage_obj = js_mkobj(js);

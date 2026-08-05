@@ -10,7 +10,10 @@ can reuse the decision history.
 
 ## Plans
 
+- [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)
 - [JIT PUT_FIELD GC Performance](jit-put-field-gc-performance.md)
+- [Module Import GC Flake](module-import-gc-flake.md)
+- [Property Reference Table Removal](property-reference-table-removal.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
 - [tlsuv WebSocket Buffered Read](tlsuv-websocket-buffered-read.md)
 - [Watch Supervisor](watch-supervisor.md)

@@ -673,12 +673,12 @@ static bool napi_parse_index_key(const char *str, size_t len, uint32_t *out) {
 
 static bool napi_seen_has_key(ant_t *js, ant_value_t seen, ant_value_t key) {
   if (vtype(key) == T_SYMBOL) {
-    return lkp_sym(js, seen, (ant_offset_t)vdata(key)) != 0;
+    return lkp_sym(seen, (ant_offset_t)vdata(key)).obj;
   }
 
   size_t len = 0;
   const char *str = js_getstr(js, key, &len);
-  return str && lkp(js, seen, str, len) != 0;
+  return str && lkp(js, seen, str, len).obj;
 }
 
 static bool napi_seen_add_key(ant_t *js, ant_value_t seen, ant_value_t key) {
@@ -1717,7 +1717,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_string_utf16(
   const char *str = js_getstr(nenv->js, (ant_value_t)value, &byte_len);
   if (!str) return napi_set_last(env, napi_string_expected, "string expected");
 
-  size_t utf16_len = utf16_strlen(str, byte_len);
+  size_t utf16_len = (size_t)str_utf16_len(nenv->js, (ant_value_t)value);
   if (result) *result = utf16_len;
   if (!buf || bufsize == 0) return napi_set_last(env, napi_ok, NULL);
 
@@ -2089,8 +2089,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
 
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
-    ant_offset_t off = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k));
-    ant_value_t out = off ? js_propref_load(nenv->js, off) : js_mkundef();
+    ant_prop_loc_t off = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k));
+    ant_value_t out = off.obj ? js_prop_load(off) : js_mkundef();
     if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
     *result = NAPI_RETURN(nenv, out);
     return napi_set_last(env, napi_ok, NULL);
@@ -2128,7 +2128,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_property(
 
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
-    *result = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k)) != 0;
+    *result = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k)).obj;
     return napi_set_last(env, napi_ok, NULL);
   }
 
@@ -2136,7 +2136,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_property(
   if (is_err(kstr) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, kstr);
   size_t len = 0;
   const char *s = js_getstr(nenv->js, kstr, &len);
-  *result = s && lkp_proto(nenv->js, (ant_value_t)object, s, len) != 0;
+  *result = s && lkp_proto(nenv->js, (ant_value_t)object, s, len).obj;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2209,7 +2209,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_named_property(
   if (!nenv || !nenv->js || !result || !utf8name || !is_object_type((ant_value_t)object)) {
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
-  *result = lkp_proto(nenv->js, (ant_value_t)object, utf8name, strlen(utf8name)) != 0;
+  *result = lkp_proto(nenv->js, (ant_value_t)object, utf8name, strlen(utf8name)).obj;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2265,7 +2265,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_element(
   }
   char idx[32];
   snprintf(idx, sizeof(idx), "%u", index);
-  *result = lkp_proto(nenv->js, (ant_value_t)object, idx, strlen(idx)) != 0;
+  *result = lkp_proto(nenv->js, (ant_value_t)object, idx, strlen(idx)).obj;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2425,7 +2425,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_own_property(
 
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
-    *result = lkp_sym(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k)) != 0;
+    *result = lkp_sym((ant_value_t)object, (ant_offset_t)vdata(k)).obj;
     return napi_set_last(env, napi_ok, NULL);
   }
 
@@ -2433,7 +2433,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_own_property(
   if (is_err(kstr) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, kstr);
   size_t len = 0;
   const char *s = js_getstr(nenv->js, kstr, &len);
-  *result = s && lkp(nenv->js, (ant_value_t)object, s, len) != 0;
+  *result = s && lkp(nenv->js, (ant_value_t)object, s, len).obj;
   return napi_set_last(env, napi_ok, NULL);
 }
 
