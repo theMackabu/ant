@@ -13,6 +13,7 @@
 #include "gc/bigints.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "gc/stats.h"
 #include "gc/modules.h"
 
 #include <stdlib.h>
@@ -131,6 +132,8 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   }
   obj->flags.in_remember_set = 1;
   js->remember_set[js->remember_set_len++] = obj;
+  if (__builtin_expect(gc_stats_enabled, 0))
+    gc_stats_note_remember(js->remember_set_len);
 }
 
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
@@ -592,6 +595,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->esm.import_meta);
   gc_mark_value(js, js->sym.object_proto);
   gc_mark_value(js, js->sym.array_proto);
+  gc_mark_value(js, js->sym.string_proto);
   gc_mark_value(js, js->sym.array_values_fn);
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->new_target);
@@ -741,6 +745,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     free(sidecar->native_entries);
     free(sidecar->proxy_state);
     free(sidecar->private_table.entries);
+    free((void *)sidecar->exotic_ops);
     free(sidecar);
     obj->extra_slots = NULL;
   } 
@@ -752,8 +757,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
 
   free(obj->overflow_prop);
   obj->overflow_prop = NULL;
-  free((void *)obj->exotic_ops);
-  obj->exotic_ops = NULL;
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 

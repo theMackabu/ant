@@ -42,6 +42,19 @@ A.prototype = {};
 assert.strictEqual(oldA instanceof A, false);
 assert.strictEqual(new A() instanceof A, true);
 
+function primitiveIsA(value) {
+  return value instanceof A;
+}
+for (let i = 0; i < 5000; i++)
+  assert.strictEqual(primitiveIsA('value'), false);
+Object.defineProperty(A, Symbol.hasInstance, {
+  configurable: true,
+  value(value) { return value === 'accepted'; },
+});
+assert.strictEqual(primitiveIsA('accepted'), true);
+delete A[Symbol.hasInstance];
+assert.strictEqual(primitiveIsA('accepted'), false);
+
 let hasInstanceCalls = 0;
 class Custom {
   static [Symbol.hasInstance](value) {

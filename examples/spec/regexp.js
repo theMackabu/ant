@@ -57,4 +57,37 @@ test('dotAll flag', re7.dotAll, true);
 
 test('sticky flag', /test/y.sticky, true);
 
+// legacy statics reflect the last separator match after split, on both
+// the generic path and the internal fast path
+'a,b;c'.split(/([,;])/);
+test('split updates RegExp.$1', RegExp.$1, ';');
+test('split updates RegExp.lastMatch', RegExp.lastMatch, ';');
+'x1y22z'.split(/(\d+)/);
+test('split statics track later match', RegExp.$1, '22');
+
+// a custom exec's index is integer-converted and clamped before the
+// replacer callback sees it
+function execWithIndex(idx) {
+  class R extends RegExp {
+    exec() {
+      if (this.done) return null;
+      this.done = true;
+      const m = ['b'];
+      m.index = idx;
+      return m;
+    }
+  }
+  return new R('b', 'g');
+}
+function replacerPosition(idx) {
+  let got;
+  'abcd'.replace(execWithIndex(idx), (...args) => { got = args[args.length - 2]; return ''; });
+  return got;
+}
+test('replacer index truncated', replacerPosition(1.5), 1);
+test('replacer index clamped low', replacerPosition(-3), 0);
+test('replacer index clamped high', replacerPosition(99), 4);
+test('replacer index NaN is zero', replacerPosition(NaN), 0);
+test('replacer index coerced', replacerPosition('2'), 2);
+
 summary();

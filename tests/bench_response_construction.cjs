@@ -1,5 +1,6 @@
 const iterations = Number(process.argv[2] || 50_000);
 const rounds = Number(process.argv[3] || 7);
+const filter = process.argv[4];
 
 function median(values) {
   const sorted = [];
@@ -14,6 +15,7 @@ function median(values) {
 let sink;
 
 function bench(name, fn, check) {
+  if (filter && name !== filter) return;
   for (let i = 0; i < 2_000; i++) sink = fn();
 
   const samples = [];

@@ -23,6 +23,11 @@ size_t utf16_strlen(const char *str, size_t byte_len);
 size_t byte_offset_to_utf16(const char *str, size_t byte_off);
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
 
+// replace WTF-8 lone-surrogate encodings (ED A0-BF xx) with U+FFFD
+// (EF BF BD) in place; both are 3 bytes, so the length is unchanged
+void utf8_replace_wtf8_surrogates(uint8_t *bytes, size_t len);
+bool utf8_validate_bytes(const char *str, size_t byte_len);
+
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
 uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);

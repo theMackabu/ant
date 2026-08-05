@@ -919,7 +919,7 @@ static void server_append_upgrade_header(const char *name, const char *value, vo
 
 static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t response_obj, ant_value_t websocket_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  ant_value_t headers = response_get_headers(req->server->js, response_obj);
   
   ant_http1_buffer_t buf;
   server_upgrade_header_ctx_t ctx;
@@ -1025,7 +1025,7 @@ static void server_send_request_internal_error(server_request_t *req, const char
 
 static void server_finish_with_response(server_request_t *req, ant_value_t response_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  ant_value_t headers = response_get_headers(req->server->js, response_obj);
   ant_value_t websocket_obj = response_get_websocket(response_obj);
   
   ant_value_t stream = js_get_slot(response_obj, SLOT_RESPONSE_BODY_STREAM);

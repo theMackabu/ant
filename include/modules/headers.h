@@ -4,6 +4,8 @@
 #include "types.h"
 #include "modules/symbol.h"
 
+typedef struct headers_data headers_data_t;
+
 typedef void (*headers_foreach_cb)(
   const char *name,
   const char *value,
@@ -27,8 +29,15 @@ bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool headers_init_has_name(ant_t *js, ant_value_t init, const char *name);
 bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value);
 
+headers_data_t *headers_data_create(ant_t *js);
+headers_data_t *headers_data_copy(ant_t *js, const headers_data_t *src);
+void headers_data_destroy(ant_t *js, headers_data_t *data);
+void headers_data_append_if_missing(headers_data_t *data, const char *name, const char *value);
+ant_value_t headers_data_init_from(ant_t *js, headers_data_t *data, ant_value_t init);
+
 ant_value_t headers_create_empty(ant_t *js);
 ant_value_t headers_create_from_init(ant_t *js, ant_value_t init);
+ant_value_t headers_create_from_data(ant_t *js, headers_data_t *data);
 ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init);
 ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name);
 ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v);

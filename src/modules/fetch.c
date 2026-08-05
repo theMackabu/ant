@@ -412,11 +412,7 @@ static ant_value_t fetch_headers_from_http(ant_t *js, const ant_http_header_t *h
   if (is_err(hdrs)) return hdrs;
 
   for (const ant_http_header_t *entry = headers; entry; entry = entry->next) {
-    ant_value_t step = headers_append_value(
-      js, hdrs,
-      js_mkstr(js, entry->name, strlen(entry->name)),
-      js_mkstr(js, entry->value, strlen(entry->value))
-    );
+    ant_value_t step = headers_append_literal(js, hdrs, entry->name, entry->value);
     if (is_err(step)) return step;
   }
 

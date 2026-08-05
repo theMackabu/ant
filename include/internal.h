@@ -63,6 +63,11 @@ static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
+// closure call_flags bit; bits 0-5 are SV_CALL_* in silver/engine.h
+static constexpr uint32_t JS_NATIVE_CTOR = 1u << 6;
+
+static constexpr uint32_t ANT_NATIVE_DATA_SLOT_SIZE = 256u;
+
 static constexpr int JS_ERR_NO_STACK       = 1 << 8;
 static constexpr int ROPE_MAX_DEPTH        = 4096;
 static constexpr int MAX_STRINGIFY_DEPTH   = 64;
@@ -72,7 +77,14 @@ static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,
+  STR_META_VALID_SHIFT = 58,
   STR_BUILDER_TAIL_CAP = 256,
+};
+
+enum {
+  STR_UTF_UNKNOWN = 0,
+  STR_UTF_VALID = 1,
+  STR_UTF_INVALID = 2, // WTF-8: lone-surrogate encodings present
 };
 
 enum: uint64_t {
@@ -186,6 +198,7 @@ struct ant_isolate_t {
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+  ant_fixed_arena_t native_data_arena;
   
   ant_value_t **c_roots;
   size_t c_root_count;
@@ -207,6 +220,7 @@ struct ant_isolate_t {
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
+  ant_value_t ascii_chars[128];
   
   struct {
     ant_value_t hooks;
@@ -228,6 +242,9 @@ struct ant_isolate_t {
     const char *set;
     const char *arguments;
     const char *callee;
+    const char *headers;
+    const char *status;
+    const char *status_text;
     const char *idx[10];
   } intern;
   
@@ -247,6 +264,7 @@ struct ant_isolate_t {
 
     ant_value_t object_proto;
     ant_value_t array_proto;
+    ant_value_t string_proto;
     ant_value_t array_values_fn;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
@@ -561,6 +579,7 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
+const char *intern_string_existing(const char *str, size_t len);
 size_t intern_length(const char *interned);
 
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
@@ -583,6 +602,7 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
+ant_value_t js_mkobj_with_shape(ant_t *js, ant_shape_t *shape);
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_value_t str_materialize(ant_t *js, ant_value_t value);
 
@@ -647,8 +667,13 @@ ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs
 ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
 
 bool js_is_array_includes_builtin(ant_value_t func);
+bool js_is_string_indexof_builtin(ant_value_t func);
+bool js_is_string_substring_builtin(ant_value_t func);
+
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_string_indexof_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
+ant_value_t js_string_substring_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
@@ -814,7 +839,17 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
 }
 
 static inline uint8_t str_flat_ascii_state(const ant_flat_string_t *flat) {
-  return flat ? (uint8_t)(flat->meta >> STR_META_ASCII_SHIFT) : STR_ASCII_UNKNOWN;
+  return flat ? (uint8_t)((flat->meta >> STR_META_ASCII_SHIFT) & 0x3) : STR_ASCII_UNKNOWN;
+}
+
+static inline uint8_t str_flat_utf_valid_state(const ant_flat_string_t *flat) {
+  return flat ? (uint8_t)((flat->meta >> STR_META_VALID_SHIFT) & 0x3) : STR_UTF_UNKNOWN;
+}
+
+static inline void str_flat_set_utf_valid_state(ant_flat_string_t *flat, uint8_t state) {
+  if (!flat) return;
+  flat->meta = (flat->meta & ~(UINT64_C(0x3) << STR_META_VALID_SHIFT))
+             | ((uint64_t)state << STR_META_VALID_SHIFT);
 }
 
 static inline ant_offset_t str_flat_cached_utf16_len(const ant_flat_string_t *flat) {
@@ -846,6 +881,23 @@ static inline bool str_is_ascii(const char *str) {
   return state == STR_ASCII_YES;
 }
 
+bool utf8_validate_bytes(const char *str, size_t byte_len);
+
+// UTF-8 validity is a property of immutable content, memoized like the
+// ascii state. Strings holding lone surrogates (WTF-8) are INVALID and
+// must never be matched with UTF checks disabled.
+static inline bool str_is_valid_utf8(const char *str) {
+  if (str_is_ascii(str)) return true; // may lazily initialize the meta word
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  uint8_t state = str_flat_utf_valid_state(flat);
+  if (state == STR_UTF_UNKNOWN) {
+    state = utf8_validate_bytes(flat->bytes, (size_t)flat->len)
+      ? STR_UTF_VALID : STR_UTF_INVALID;
+    str_flat_set_utf_valid_state(flat, state);
+  }
+  return state == STR_UTF_VALID;
+}
+
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {
   js_set(js, ctor_fn, name, ctor_fn);
   js_set(js, lib, name, ctor_fn);
@@ -869,7 +921,7 @@ static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t pr
   js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
   js_set_descriptor(js, obj, "name", 4, 0);
 
-  ant_value_t fn_val = js_obj_to_func(js, obj);
+  ant_value_t fn_val = js_obj_to_func_ex(js, obj, JS_NATIVE_CTOR);
   js_set(js, proto, "constructor", fn_val);
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 

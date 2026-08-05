@@ -393,6 +393,45 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   return cursor.utf16_pos;
 }
 
+void utf8_replace_wtf8_surrogates(uint8_t *bytes, size_t len) {
+  for (size_t i = 0; i + 2 < len; i++) {
+    if (bytes[i] != 0xed || (bytes[i + 1] & 0xe0) != 0xa0) continue;
+    memcpy(bytes + i, "\xef\xbf\xbd", 3);
+    i += 2;
+  }
+}
+
+// strict RFC 3629 validation: rejects overlongs, surrogates (WTF-8 lone
+// surrogate encodings ED A0-BF), values above U+10FFFF, and truncation
+bool utf8_validate_bytes(const char *str, size_t len) {
+  const unsigned char *s = (const unsigned char *)str;
+  const unsigned char *end = s + len;
+
+  while (s < end) {
+    unsigned char c = *s;
+    if (c < 0x80) { s++; continue; }
+
+    size_t cont;
+    unsigned char lo = 0x80, hi = 0xbf;
+    if (c >= 0xc2 && c <= 0xdf) cont = 1;
+    else if (c == 0xe0) { cont = 2; lo = 0xa0; }
+    else if (c >= 0xe1 && c <= 0xec) cont = 2;
+    else if (c == 0xed) { cont = 2; hi = 0x9f; }
+    else if (c == 0xee || c == 0xef) cont = 2;
+    else if (c == 0xf0) { cont = 3; lo = 0x90; }
+    else if (c >= 0xf1 && c <= 0xf3) cont = 3;
+    else if (c == 0xf4) { cont = 3; hi = 0x8f; }
+    else return false;
+
+    if ((size_t)(end - s) <= cont) return false;
+    if (s[1] < lo || s[1] > hi) return false;
+    for (size_t i = 2; i <= cont; i++)
+      if (s[i] < 0x80 || s[i] > 0xbf) return false;
+    s += cont + 1;
+  }
+  return true;
+}
+
 int utf16_index_to_byte_offset(
   const char *str,
   size_t byte_len,

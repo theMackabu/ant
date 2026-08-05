@@ -16,13 +16,15 @@ for (let i = 0; i < args.length; i++) {
   else groups.push(a);
 }
 
-let selected = targets();
+const allTargets = targets();
+let selected = allTargets;
 if (groups.length) selected = selected.filter(t => groups.includes(t.group));
 else selected = selected.filter(t => !t.defaultOff);
 if (only) selected = selected.filter(t => t.name.includes(only));
 
 if (!selected.length) {
-  console.log('no targets match; groups are: spec, tests, servers, scripts');
+  const availableGroups = [...new Set(allTargets.map(target => target.group))];
+  console.log(`no targets match; groups are: ${availableGroups.join(', ')}`);
   process.exit(2);
 }
 

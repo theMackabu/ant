@@ -339,12 +339,14 @@ static inline ant_value_t sv_instanceof_ic_eval(
     &lhs_proto, &lhs_proto_ptr
   );
   
-  if (!ic || !lhs_cacheable || vtype(r) != T_FUNC) goto slow_path;
+  if (!ic || vtype(r) != T_FUNC) goto slow_path;
 
   uint32_t cur_epoch = ant_ic_epoch_counter;
   uintptr_t rhs_id = (uintptr_t)vdata(r);
   
   if (ic->epoch != cur_epoch || ic->cached_aux != rhs_id) goto slow_path;
+  if (!is_object_type(l)) return js_false;
+  if (!lhs_cacheable) goto slow_path;
   if (lhs_proto == ic->guard.receiver_proto) return js_true;
 
   if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder)
@@ -357,12 +359,10 @@ slow_path:
   );
   ant_value_t ctor_proto = js_mkundef();
   
-  if (
-    !is_err(res) && ic && lhs_cacheable && vtype(res) == T_BOOL &&
-    sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto)
-  ) {
-    ic->cached_shape = lhs_ptr->shape;
-    ic->cached_holder = lhs_proto_ptr;
+  if (!is_err(res) && ic && vtype(res) == T_BOOL &&
+      sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto)) {
+    ic->cached_shape = lhs_cacheable ? lhs_ptr->shape : NULL;
+    ic->cached_holder = lhs_cacheable ? lhs_proto_ptr : NULL;
     ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);
     ic->epoch = ant_ic_epoch_counter;
     ic->cached_aux = (uintptr_t)vdata(r);
