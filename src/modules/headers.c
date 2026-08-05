@@ -37,7 +37,7 @@ struct headers_data {
 
 typedef struct headers_data hdr_list_t;
 
-_Static_assert(sizeof(headers_data_t) <= 256, "headers data exceeds native arena slot");
+static_assert(sizeof(headers_data_t) <= ANT_NATIVE_DATA_SLOT_SIZE, "headers data exceeds native arena slot");
 
 typedef struct {
   char *name;
@@ -453,7 +453,7 @@ static ant_value_t headers_append_name_value_js_n(
   return out;
 }
 
-static const char *g_content_type_interned;
+static const char *content_type_interned;
 
 static ant_value_t headers_append_lower_name_value_bytes_n(
   ant_t *js, hdr_list_t *l,
@@ -1125,7 +1125,7 @@ ant_value_t headers_data_init_from(ant_t *js, headers_data_t *data, ant_value_t 
       const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, 0);
       if (prop && prop->type == ANT_SHAPE_KEY_STRING &&
           !prop->has_getter && !prop->has_setter &&
-          prop->key.interned == g_content_type_interned) {
+          prop->key.interned == content_type_interned) {
         ant_value_t value = ant_object_prop_get_unchecked(obj, 0);
         if (vtype(value) == T_STR) {
           size_t value_len = 0;
@@ -1286,7 +1286,7 @@ ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name) {
 void init_headers_module(ant_t *js) {
   ant_value_t g = js_glob(js);
 
-  g_content_type_interned = intern_string("content-type", 12);
+  content_type_interned = intern_string("content-type", 12);
 
   js->builtins.headers_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.headers_iter_proto, js->sym.iterator_proto);

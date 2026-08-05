@@ -90,7 +90,12 @@ export function targets() {
     { group: 'examples', type: 'skip', name: 'jiti', reason: 'excluded for now' }
   );
 
-  const ms = (name, re, max, min = 0) => ({ name, re, min, max });
+  const ms = (name, re, max, min = 0) => {
+    // upstream's helper takes (min, max) — this guard catches a merged call
+    // site whose arguments were not swapped into this file's (max, min) order
+    if (min > max) throw new Error(`ms('${name}'): min ${min} > max ${max} (arguments swapped?)`);
+    return { name, re, min, max };
+  };
   const exact = (name, re, expected, count) => ({ name, re, expected, ...(count === undefined ? {} : { count }) });
   const nonNegative = (name, re) => ({ name, re, min: 0, max: Number.MAX_VALUE });
   list.push(

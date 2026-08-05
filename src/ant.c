@@ -74,7 +74,6 @@
 
 #define D(x) ((double)(x))
 
-#define ANT_NATIVE_DATA_SLOT_SIZE 256u
 #define ANT_NATIVE_DATA_ARENA_MAX (512ULL * 1024 * 1024)
 
 static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
@@ -12513,8 +12512,8 @@ ant_value_t js_string_substring_call(
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  bool ascii = str_is_ascii(str_ptr);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
+  bool ascii = utf16_len == (size_t)byte_len;
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
   

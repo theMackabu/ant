@@ -25,14 +25,13 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-static ant_shape_t *g_response_init_object_proto_shape;
-static uint32_t g_response_init_object_proto_epoch;
-
+static ant_shape_t *response_init_object_proto_shape;
+static uint32_t response_init_object_proto_epoch;
 
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
 static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=UTF-8";
 
-_Static_assert(sizeof(response_data_t) <= 256, "response data exceeds native arena slot");
+static_assert(sizeof(response_data_t) <= ANT_NATIVE_DATA_SLOT_SIZE, "response data exceeds native arena slot");
 
 static ant_value_t response_ensure_headers(ant_t *js, ant_value_t obj);
 
@@ -91,7 +90,7 @@ static response_data_t *data_new(ant_t *js) {
 }
 
 static response_data_t *data_dup(ant_t *js, const response_data_t *src) {
-  response_data_t *d = calloc(1, sizeof(response_data_t));
+  response_data_t *d = js_native_data_alloc(js, sizeof(response_data_t));
   url_state_t *su = NULL;
   url_state_t *du = NULL;
 
@@ -654,16 +653,16 @@ static ant_value_t response_init_get(
 
 static bool response_init_object_proto_has_no_status(ant_t *js, ant_object_t *object_proto) {
   if (!object_proto || !object_proto->shape) return false;
-  if (object_proto->shape == g_response_init_object_proto_shape &&
-      ant_ic_epoch_counter == g_response_init_object_proto_epoch)
+  if (object_proto->shape == response_init_object_proto_shape &&
+      ant_ic_epoch_counter == response_init_object_proto_epoch)
     return true;
 
   if (ant_shape_lookup_interned(object_proto->shape, js->intern.status) >= 0 ||
       ant_shape_lookup_interned(object_proto->shape, js->intern.status_text) >= 0)
     return false;
 
-  g_response_init_object_proto_shape = object_proto->shape;
-  g_response_init_object_proto_epoch = ant_ic_epoch_counter;
+  response_init_object_proto_shape = object_proto->shape;
+  response_init_object_proto_epoch = ant_ic_epoch_counter;
   return true;
 }
 

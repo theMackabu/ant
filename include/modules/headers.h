@@ -6,7 +6,6 @@
 
 typedef struct headers_data headers_data_t;
 
-
 typedef void (*headers_foreach_cb)(
   const char *name,
   const char *value,

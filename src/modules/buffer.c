@@ -2549,7 +2549,7 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
       }
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
     } else if (encoding == ENC_LATIN1 || encoding == ENC_ASCII) {
-      size_t unit_count = utf16_strlen(str, len);
+      size_t unit_count = (size_t)str_utf16_len(js, args[0]);
       ArrayBufferData *buffer = create_array_buffer_data(unit_count);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
 
@@ -3306,9 +3306,9 @@ static size_t buffer_encode_into(
 // byte length `str` would occupy under the encoding, without encoding it
 static size_t buffer_encoded_byte_length(BufferEncoding encoding, const char *str, size_t str_len) {
   switch (encoding) {
-    case ENC_UCS2: return utf16_strlen(str, str_len) * 2;
+    case ENC_UCS2: return (str_is_ascii(str) ? str_len : utf16_strlen(str, str_len)) * 2;
     case ENC_LATIN1:
-    case ENC_ASCII: return utf16_strlen(str, str_len);
+    case ENC_ASCII: return str_is_ascii(str) ? str_len : utf16_strlen(str, str_len);
     case ENC_HEX: return str_len / 2;
     case ENC_BASE64: {
       size_t effective = str_len;

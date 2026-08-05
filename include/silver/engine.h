@@ -434,6 +434,7 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 #define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
 #define SV_CALL_BORROWED_UPVALS  (1u << 4)
 #define SV_CALL_HAS_EVAL_ENV     (1u << 5)
+// bit 6 is JS_NATIVE_CTOR (internal.h)
 
 typedef struct sv_closure {
   uint32_t call_flags;

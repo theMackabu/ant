@@ -63,7 +63,10 @@ static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
+// closure call_flags bit; bits 0-5 are SV_CALL_* in silver/engine.h
 static constexpr uint32_t JS_NATIVE_CTOR = 1u << 6;
+
+static constexpr uint32_t ANT_NATIVE_DATA_SLOT_SIZE = 256u;
 
 static constexpr int JS_ERR_NO_STACK       = 1 << 8;
 static constexpr int ROPE_MAX_DEPTH        = 4096;
@@ -578,7 +581,6 @@ js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
 const char *intern_string_existing(const char *str, size_t len);
 size_t intern_length(const char *interned);
-
 
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
