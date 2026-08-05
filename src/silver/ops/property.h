@@ -356,7 +356,7 @@ static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_valu
 
   ant_offset_t klen = 0;
   ant_offset_t koff = vstr(js, key_str, &klen);
-  
+
   const char *kptr = (const char *)(uintptr_t)(koff);
   return js_getprop_fallback_len(js, obj, kptr, (size_t)klen);
 }

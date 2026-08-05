@@ -13,6 +13,9 @@
 #include "silver/swarm.h"
 #include "modules/regex.h"
 
+uint64_t sv_stat_call_call_fused;
+uint64_t sv_stat_call_call_generic;
+
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"
@@ -1602,6 +1605,21 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (is_super_call)
       frame->this = is_object_type(call_result) ? call_result : super_this_c;
     vm->stack[vm->sp++] = call_result;
+    NEXT(3);
+  }
+
+  L_CALL_CALL: {
+    uint8_t cc_n1 = ip[1];
+    uint8_t cc_n2 = ip[2];
+    int cc_total = 1 + (int)cc_n1 + (int)cc_n2;
+    ant_value_t *cc_base = &vm->stack[vm->sp - cc_total];
+    frame->ip = ip;
+    ant_value_t cc_result = sv_op_call_call(
+      vm, js, cc_base[0], cc_base + 1, (int)cc_n1, cc_base + 1 + cc_n1, (int)cc_n2);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    vm->sp -= cc_total;
+    if (is_err(cc_result)) { sv_err = cc_result; goto sv_throw; }
+    vm->stack[vm->sp++] = cc_result;
     NEXT(3);
   }
 

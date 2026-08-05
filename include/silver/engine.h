@@ -286,6 +286,14 @@ struct sv_func {
   bool is_tla: 1;
   bool is_derived_ctor: 1;
   bool has_dynamic_eval: 1;
+  /* Body is exactly `CLOSURE k; RETURN` for a fusable child: calling this
+     function only materializes a closure, so OP_CALL_CALL may skip it and
+     invoke the child directly (see sv_op_call_call). */
+  bool is_curried_step: 1;
+  /* No OP_CLOSURE/OP_THIS/eval/arguments/exports/backward jumps in the
+     body and <=SV_CLOSURE_INLINE_UPVALS upvalues, all local captures at
+     slot 0 — safe to run against a caller-synthesized upvalue array. */
+  bool is_fusable_leaf: 1;
 
 #ifdef ANT_JIT
   uint32_t call_count;

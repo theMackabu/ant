@@ -477,19 +477,77 @@ gc_run 2.0%, mkobj 1.9%, gc_scan_range 1.6%, close_upval 1.4%.
 consistent across rounds. Gates green on the 7a binary: spec 3712/0, jit
 0 fail, harness 167/0, DeltaBlue 4161, all GC regression micros.
 
-**7b NEXT (designed, not implemented) — curried-call fusion (~60M
-closures):** compiler flags `curried_step` funcs (body exactly
-`CLOSURE k; RETURN`) and `leaf` children (no OP_CLOSURE in body); a
-CALL-of-CALL fast path then runs the grandchild directly with a scratch
-upvalue array (param captures as stack cells, parent upvals passed
-through) — no intermediate closure. HAZARDS mapped: frame->closure
-identity (module_ctx chain, error-stack capture, arguments), stack cells
-must not outlive the call (guaranteed by leaf flag), GC scanning of
-scratch cells (safe: precise frame walk marks cell values; containment
-checks ignore non-arena cells). Needs devirt-fuzzer + full battery.
-**7c LATER**: monad-chain inlining (JIT inline bind/runM through MkM) —
-the remaining ~78M; and object-churn reduction (gc sweep touches ~150B
-per dead object; the arena walk is memory-bound).
+**7b LANDED (2026-08-05) — curried-call fusion:**
+- Compiler: `is_curried_step` (body `CLOSURE k [SET_NAME] [CLOSE_UPVAL]
+  RETURN` + unreachable epilogue — the naive 6-byte pattern matched
+  NOTHING; SET_NAME names the skipped intermediate, CLOSE_UPVAL closes
+  captures the fused path synthesizes pre-closed) and `is_fusable_leaf`
+  (opcode blacklist: closures/this/special-obj/eval/exports/try/await/
+  yield + any backward jump so no loops→no OSR; local captures only at
+  parent slot 0; <=4 upvalues). `OP_CALL_CALL n1:u8 n2:u8` emitted for
+  `X(a)(b...)` — plain non-member/super/eval inner callee, single inner
+  arg, all outer args effect-free (non-TDZ locals or literals; that's
+  when pre-evaluating them is spec-legal).
+- Runtime `sv_op_call_call` (ops/calls.h, shared by the interpreter case
+  and jit_helper_call_call): fuses via a C-stack `sv_closure_t fake`
+  (upvalues = its own inline_upvals; fresh capture as a C-stack closed
+  cell; in_remember_set=1 on both so gc_remember_* never list them;
+  frame callee = the step closure, a real heap value) — the intermediate
+  closure never exists. Fallback: two ordinary sv_vm_calls.
+- **CRITICAL LESSON — fuse only into JIT'd children.** v1 ran the child
+  via sv_call_closure (interpreter): newt Main went 44s → **84s** — the
+  fused frame interpreted the child and, through its tail calls, the
+  whole chain below it, wiping out the devirtualized JIT call path.
+  Discriminator: fused-path-disabled build ran 44.2s (generic routing of
+  32.7M chain calls through the helper is FREE). Fix: `if (!f2->jit_code)
+  goto generic` — cold children take the generic path (which is what
+  warms them up via normal tiering); hot children run their jit_code
+  directly against the fake closure (bailout → sv_jit_on_bailout +
+  interp fallback, mirroring sv_call_resolve_closure).
+
+7b results: newt fuses **11.96M** of 32.7M chain calls (rest are
+member-form inner callees / non-simple args — extension candidates).
+Interleaved A/B vs pinned 7a (/tmp/ant_p7a_bin vs /tmp/ant_p7b_bin):
+Main 42.5/46.8 → 41.2/43.3 = **−2.3s (−5%)**, both rounds faster. Gates:
+spec 3712/0, jit 0 fail, harness 168/0 (incl. new
+`tests/test_curried_call_fusion.cjs` — 18 semantics assertions covering
+mutation-through-cell, parent upvals, bound/member/throwing/default/rest
+cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
+`ANT_CLOSURE_STATS=1` prints `[call-call] fused/generic`.
+
+**7c scoping session (2026-08-05, late) — two candidates investigated and
+KILLED with data; record the negatives:**
+1. **Member-form chain fusion (CALL_CALL_METHOD): DEAD.** Post-7b site
+   counts prove the big monad sites are untouched by any syntactic
+   fusion — MkIORes intermediates are exactly 19,618,539 before AND
+   after 7b: their creating call (`return_(v)`) and consuming call
+   (`action(w)`) live in *different functions* (the IO action is stored,
+   then applied generically by the runner). No bytecode-local pattern
+   can reach them; only semantic inlining (real 7c) can.
+2. **Computed-key stub cache: built, validated, REVERTED.** A profile
+   sample showed jit_helper_get_elem at ~19% top-of-stack; per-caller
+   counters traced all 30.6M computed-key reads to newt's OWN
+   self-instrumentation (timedM/record/recordSpan/statFor —
+   `stats[name]`-style dictionary reads; also ~10.9M `(w)=>` wrapper
+   closures — the harness taxes itself, same for node). A megamorphic
+   (shape,key)->slot stub cache in sv_getprop_by_key achieved a 96.5%
+   hit rate — and was wall-time NEUTRAL (interleaved A/B: 42.5 vs 44.4
+   mean; pure dict micro: 66.8 vs 70.0ms). The cost is helper-call
+   framing + key conversion, not the final lookup; node's 6x on the
+   micro (11ms) comes from inline ICs in optimized code, not a better
+   hash. Reverted rather than keep unproven complexity in the hottest
+   property path.
+   **METHODOLOGY LESSON: an 8-second `sample` window lied — get_elem's
+   "19%" is ~2.4% over the full run (30M x ~33ns ~= 1s of 42s). Only
+   interleaved A/B counts as evidence for wall-time claims.**
+
+**Remaining 7c-class items, updated ranking:**
+1. Object-churn reduction (the 7a pattern deeper: the monad's records
+   drive both alloc cost and the ~9.6s of minors).
+2. Real monad inlining = general call-target-directed inlining +
+   allocation sinking in MIR (weeks; also the long-term-correct
+   machinery). The ~78M monad closures/records are only reachable this
+   way (see negative #1).
 
 ~2.5× on newt if everything lands (June: Prelude 6.2→2.47s, Main 70→~36s
 across the rounds), Octane geomean from ~1692 toward the June ~2600-class

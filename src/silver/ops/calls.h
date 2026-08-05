@@ -278,4 +278,108 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
   } else vm->stack[vm->sp++] = frame->this;
 }
 
+/* OP_CALL_CALL: `X(a)(b...)` where the compiler proved the outer args are
+   effect-free local/literal reads (so pre-evaluating them is unobservable).
+   When X is a curried step — body exactly `CLOSURE k; RETURN`, one param —
+   with a fusable leaf child, the step's only effect is materializing the
+   intermediate closure; skip it and run the child directly against a
+   closure synthesized on this C frame. The nested sv_call_closure runs the
+   child to completion, so the stack structs outlive the frame that points
+   at them; the conservative C-stack scan keeps the captured value alive
+   during any minor; in_remember_set=1 on both structs keeps them out of
+   every GC list (gc_remember_* early-return on the flag, and the clear
+   loops only touch listed entries). Anything else falls back to two
+   ordinary calls with identical semantics. */
+extern uint64_t sv_stat_call_call_fused;
+extern uint64_t sv_stat_call_call_generic;
+
+static inline ant_value_t sv_op_call_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t xv,
+  ant_value_t *args1, int n1, ant_value_t *args2, int n2
+) {
+#ifdef ANT_JIT
+  if (n1 == 1 && vtype(xv) == T_FUNC) {
+    sv_closure_t *c1 = js_func_closure(xv);
+    sv_func_t *f1 = c1->func;
+    if (
+      f1 && f1->is_curried_step &&
+      !(c1->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_EVAL_ENV))
+    ) {
+      uint32_t kidx = sv_get_u32(f1->code + 1);
+      sv_func_t *f2 = (sv_func_t *)(uintptr_t)vdata(f1->constants[kidx]);
+
+      /* Fuse only when the child is already JIT-compiled: the fused frame
+         would otherwise interpret the child (and, through its tail calls,
+         everything below it) — measured 2x slower on newt than just
+         allocating the intermediate. Cold children take the generic path,
+         which is exactly what warms them up. */
+      if (!f2->jit_code) goto cc_generic;
+
+      if (sv_check_c_stack_overflow(js))
+        return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK,
+          "Maximum call stack size exceeded");
+
+      sv_upvalue_t cell;
+      cell.location = &cell.closed;
+      cell.closed = args1[0];
+      cell.next = NULL;
+      cell.gc_epoch = 0;
+      cell.in_remember_set = 1;
+
+      sv_closure_t fake;
+      fake.call_flags = 0;
+      fake.bound_argc = 0;
+      fake.func = f2;
+      fake.upvalues = fake.inline_upvals;
+      fake.bound_this = js_mkundef();
+      fake.bound_argv = NULL;
+      fake.bound_args = js_mkundef();
+      fake.super_val = js_mkundef();
+      fake.func_obj = 0;
+      fake.js = js;
+      fake.module_ctx = c1->module_ctx;
+      fake.pending_name = NULL;
+      fake.pending_name_len = 0;
+      fake.in_remember_set = 1;
+      fake.gc_epoch = gc_get_epoch();
+
+      for (int i = 0; i < f2->upvalue_count; i++) {
+        sv_upval_desc_t *d = &f2->upval_descs[i];
+        fake.inline_upvals[i] = d->is_local ? &cell : c1->upvalues[d->index];
+      }
+
+      js->new_target = js_mkundef();
+      sv_stat_call_call_fused++;
+
+      sv_jit_enter(js);
+      ant_value_t result = ((sv_jit_func_t)f2->jit_code)(
+        vm, js_mkundef(), js_mkundef(), js_mkundef(),
+        args2, n2, &fake
+      );
+      sv_jit_leave(js);
+
+      if (sv_is_jit_bailout(result)) {
+        sv_jit_on_bailout(f2);
+        sv_call_ctx_t ctx = {
+          .this_val = js_mkundef(),
+          .super_val = js_mkundef(),
+          .args = args2,
+          .argc = n2,
+          .alloc = NULL,
+        };
+        result = sv_call_closure(vm, js, &fake, xv, &ctx, NULL);
+      }
+      sv_vm_maybe_checkpoint_microtasks(js);
+      return result;
+    }
+  }
+
+cc_generic:;
+#endif
+  sv_stat_call_call_generic++;
+  ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, n1, NULL, false);
+  if (is_err(r)) return r;
+  return sv_vm_call(vm, js, r, js_mkundef(), args2, n2, NULL, false);
+}
+
 #endif

@@ -240,6 +240,13 @@ ant_value_t jit_helper_call_method(
   return result;
 }
 
+ant_value_t jit_helper_call_call(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *base, int32_t n1, int32_t n2
+) {
+  return sv_op_call_call(vm, js, base[0], base + 1, (int)n1, base + 1 + n1, (int)n2);
+}
+
 ant_value_t jit_helper_apply(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,
@@ -1013,7 +1020,7 @@ ant_value_t jit_helper_put_field_ic(
 }
 
 ant_value_t jit_helper_get_elem(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, 
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t key, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t ot = vtype(obj);

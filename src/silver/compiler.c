@@ -3791,6 +3791,58 @@ static bool compile_direct_eval_call(
   return true;
 }
 
+/* Effect-free, order-insensitive argument: a literal or a resolved
+   non-TDZ local. Anything else (globals, members, upvalues, calls) may
+   observe evaluation order and blocks OP_CALL_CALL emission. */
+static bool fusion_arg_is_effect_free(sv_compiler_t *c, sv_ast_t *a) {
+  if (!a) return false;
+  switch (a->type) {
+    case N_NUMBER:
+    case N_STRING:
+    case N_BIGINT:
+    case N_BOOL:
+    case N_NULL:
+    case N_UNDEF:
+      return true;
+    case N_IDENT: {
+      int l = resolve_local(c, a->str, a->len);
+      return l >= 0 && !c->locals[l].is_tdz;
+    }
+    default:
+      return false;
+  }
+}
+
+/* `X(a)(b...)`: emit OP_CALL_CALL so the runtime can skip materializing
+   the intermediate closure when X is a curried step. Only for plain
+   (non-member, non-optional, non-super, non-eval) inner callees, single
+   inner arg, and effect-free outer args — the outer args are evaluated
+   before the inner call runs, which is unobservable only under those
+   conditions. */
+static bool compile_call_try_fused_chain(
+  sv_compiler_t *c, sv_ast_t *node, sv_ast_t *callee, bool has_spread
+) {
+  if (has_spread || c->with_depth != 0) return false;
+  if (callee->type != N_CALL) return false;
+  if (call_has_spread_arg(callee)) return false;
+  if (callee->args.count != 1) return false;
+  if (node->args.count > 14) return false;  /* 1 + n1 + n2 <= 16 (JIT args_buf) */
+  if (!callee->left) return false;
+  if (callee->left->type == N_MEMBER || callee->left->type == N_OPTIONAL) return false;
+  if (is_ident_name(callee->left, "super") || is_ident_name(callee->left, "eval")) return false;
+  for (int i = 0; i < node->args.count; i++)
+    if (!fusion_arg_is_effect_free(c, node->args.items[i])) return false;
+
+  compile_expr(c, callee->left);
+  compile_expr(c, callee->args.items[0]);
+  for (int i = 0; i < node->args.count; i++)
+    compile_expr(c, node->args.items[i]);
+  emit_op(c, OP_CALL_CALL);
+  emit(c, 1);
+  emit(c, (uint8_t)node->args.count);
+  return true;
+}
+
 void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
@@ -3843,6 +3895,8 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (compile_direct_eval_call(c, node, has_spread)) return;
+
+  if (compile_call_try_fused_chain(c, node, callee, has_spread)) return;
 
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
   compile_call_emit_invoke(c, node, kind, has_spread);
@@ -6341,6 +6395,95 @@ static uint16_t function_length_from_params(const sv_ast_t *node) {
   return length;
 }
 
+/* Fusable leaf (see sv_op_call_call): body safe to run against a
+   caller-synthesized upvalue array on the fusing frame's C stack. Rejects
+   anything that could capture the synthetic cells or frame identity
+   (closures, this/arguments/super/new.target, eval, exports, try
+   machinery) and any backward jump (no loops, hence no OSR against the
+   synthetic closure). Local captures must reference the parent's param
+   slot 0 — the only local a curried step's frame has. */
+static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
+  if (func->is_async || func->is_generator || func->has_dynamic_eval) return false;
+  if (func->is_derived_ctor) return false;
+  if (func->upvalue_count > SV_CLOSURE_INLINE_UPVALS) return false;
+
+  for (int i = 0; i < func->upvalue_count; i++)
+    if (func->upval_descs[i].is_local && func->upval_descs[i].index != 0) return false;
+
+  const uint8_t *ip = func->code;
+  const uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    switch (op) {
+      case OP_CLOSURE:
+      case OP_THIS:
+      case OP_SPECIAL_OBJ:
+      case OP_EVAL:
+      case OP_EXPORT:
+      case OP_EXPORT_ALL:
+      case OP_GET_SUPER_VAL:
+      case OP_TRY_PUSH:
+      case OP_TRY_PUSH_FINALLY:
+      case OP_CATCH:
+      case OP_FINALLY:
+      case OP_UNWIND_JMP:
+      case OP_AWAIT:
+      case OP_AWAIT_ITER_NEXT:
+      case OP_FOR_AWAIT_OF:
+      case OP_YIELD:
+      case OP_YIELD_STAR_INIT:
+      case OP_YIELD_STAR_NEXT:
+      case OP_YIELD_STAR_THROW:
+        return false;
+      case OP_JMP:
+      case OP_JMP_FALSE:
+      case OP_JMP_TRUE:
+      case OP_JMP_FALSE_PEEK:
+      case OP_JMP_TRUE_PEEK:
+      case OP_JMP_NOT_NULLISH:
+        if (sv_get_i32((uint8_t *)ip + 1) < 0) return false;
+        break;
+      case OP_JMP8:
+      case OP_JMP_FALSE8:
+      case OP_JMP_TRUE8:
+        if ((int8_t)ip[1] < 0) return false;
+        break;
+      default:
+        break;
+    }
+    int sz = sv_op_size[op];
+    if (sz <= 0) return false;
+    ip += sz;
+  }
+  return true;
+}
+
+/* Body is exactly `CLOSURE k; RETURN` with one param and a fusable child:
+   calling it only materializes the child closure. Children are compiled
+   before the parent finalizes, so the child's leaf flag is already set. */
+static bool sv_func_compute_curried_step(sv_func_t *func) {
+  if (func->is_async || func->is_generator || func->has_dynamic_eval) return false;
+  if (func->param_count != 1) return false;
+
+  /* Body must be CLOSURE k [SET_NAME] [CLOSE_UPVAL] RETURN; anything after
+     the RETURN is an unreachable epilogue. SET_NAME only names the
+     intermediate we skip; CLOSE_UPVAL closes frame captures the fused
+     path synthesizes pre-closed. */
+  const uint8_t *p = func->code;
+  const uint8_t *end = func->code + func->code_len;
+  if (end - p < 6 || p[0] != OP_CLOSURE) return false;
+  p += 5;
+  if (p < end && *p == OP_SET_NAME) p += sv_op_size[OP_SET_NAME];
+  if (p < end && *p == OP_CLOSE_UPVAL) p += sv_op_size[OP_CLOSE_UPVAL];
+  if (p >= end || *p != OP_RETURN) return false;
+
+  uint32_t kidx = sv_get_u32(func->code + 1);
+  if (kidx >= (uint32_t)func->const_count) return false;
+  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[kidx]);
+  if (!child) return false;
+  return child->is_fusable_leaf;
+}
+
 sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
@@ -6751,6 +6894,9 @@ sv_func_t *compile_function_body(
     if (sz <= 0) break;
     ip += sz;
   }}
+
+  func->is_fusable_leaf = sv_func_compute_fusable_leaf(func);
+  func->is_curried_step = sv_func_compute_curried_step(func);
 
   sv_compile_ctx_cleanup(&comp);
   return func;

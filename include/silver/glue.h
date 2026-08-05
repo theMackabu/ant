@@ -105,6 +105,11 @@ ant_value_t jit_helper_apply(
   ant_value_t *args, int argc
 );
 
+ant_value_t jit_helper_call_call(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *base, int32_t n1, int32_t n2
+);
+
 ant_value_t jit_helper_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *args, int argc, int start

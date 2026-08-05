@@ -17670,7 +17670,13 @@ void js_destroy(ant_t *js) {
   cleanup_events_module(js);
 
 #ifdef ANT_JIT
-  if (sv_closure_stats_enabled) sv_closure_site_dump();
+  if (sv_closure_stats_enabled) {
+    extern uint64_t sv_stat_call_call_fused, sv_stat_call_call_generic;
+    fprintf(stderr, "[call-call] fused=%llu generic=%llu\n",
+            (unsigned long long)sv_stat_call_call_fused,
+            (unsigned long long)sv_stat_call_call_generic);
+    sv_closure_site_dump();
+  }
 #endif
 
   extern size_t gc_stat_young_closure_freed, gc_stat_young_closure_promoted;
