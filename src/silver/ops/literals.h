@@ -52,11 +52,31 @@ static inline sv_obj_site_cache_t *sv_obj_site_for_ip(sv_func_t *func, uint8_t *
   return NULL;
 }
 
-static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
-  ant_value_t obj = mkobj(js, 0);
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, ip);
-  if (ptr && ptr->shape && site) {
+/* Apply the per-site shape cache to a fresh literal object. For static
+   literals (key_atoms set) the cached shape is the FINAL shape, built once
+   by walking the transition tree; the object is created pre-shaped with
+   undefined-initialized slots and the DEFINE_SLOTs that follow store
+   positionally. */
+static inline void sv_obj_site_apply(
+  ant_t *js, sv_func_t *func,
+  sv_obj_site_cache_t *site, ant_object_t *ptr
+) {
+  if (!ptr || !ptr->shape || !site) return;
+
+  if (!site->shared_shape && site->key_atoms && site->key_count) {
+    ant_shape_t *sh = ptr->shape;
+    ant_shape_retain(sh);
+    bool ok = true;
+    for (uint16_t i = 0; i < site->key_count && ok; i++) {
+      uint32_t ai = site->key_atoms[i];
+      if (ai >= (uint32_t)func->atom_count) { ok = false; break; }
+      ok = ant_shape_add_interned_tr(&sh, func->atoms[ai].str,
+                                     ANT_PROP_ATTR_DEFAULT, NULL);
+    }
+    if (ok) site->shared_shape = sh;
+    else ant_shape_release(sh);
+  }
+
   if (site->shared_shape) {
     if (site->shared_shape != ptr->shape) {
       ant_shape_retain(site->shared_shape);
@@ -65,11 +85,18 @@ static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t
     }
     uint32_t count = ant_shape_count(ptr->shape);
     if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(ptr, count);
-  } else {
+  } else if (!site->key_atoms) {
     site->shared_shape = ptr->shape;
     ant_shape_retain(site->shared_shape);
-  }}
-  
+  }
+}
+
+static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+  ant_value_t obj = mkobj(js, 0);
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, ip);
+  sv_obj_site_apply(js, func, site, ptr);
+
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   vm->stack[vm->sp++] = obj;

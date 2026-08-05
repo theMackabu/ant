@@ -20,6 +20,7 @@ Store in-progress execution plans here.
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Stream Property Surface](stream-property-surface.md)
+- [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
 - [UTF-16 Random-Access Index (fable carry-back)](utf16-random-access-index.md)
 - [WICG Observable Migration](wicg-observable.md)
 

@@ -997,6 +997,18 @@ static inline ant_value_t sv_try_direct_closure_jit(
 }
 #endif
 
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
+                                            ant_value_t func_val) {
+  if (c->func_obj) return c->func_obj;
+  sv_init_closure_function_object(js, c, func_val, c->module_ctx);
+  if (c->pending_name && c->func_obj) {
+    js_set_function_name(js, func_val, c->pending_name, c->pending_name_len);
+    c->pending_name = NULL;
+    c->pending_name_len = 0;
+  }
+  return c->func_obj;
+}
+
 ant_value_t sv_execute_entry(
   sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc
 ) {
@@ -1303,6 +1315,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GET_ELEM2:     { VM_CHECK(sv_op_get_elem2(vm, js, func, ip));   NEXT(1); }
   L_PUT_ELEM:      { VM_CHECK(sv_op_put_elem(vm, js));              NEXT(1); }
   L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip);          NEXT(5); }
+  L_DEFINE_SLOT:   { sv_op_define_slot(vm, js, func, ip);           NEXT(7); }
   L_GET_LENGTH:    { VM_CHECK(sv_op_get_length(vm, js));            NEXT(1); }
 
   L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));  NEXT(7); }

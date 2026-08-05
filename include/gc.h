@@ -5,12 +5,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define GC_MIN_TICK            1024
-#define GC_NURSERY_THRESHOLD   32768
-#define GC_FORCE_INTERVAL_MS   50
-#define GC_MAJOR_EVERY_N_MINOR 8
-#define GC_MAJOR_SCALE         2048u
-#define GC_POOL_PRESSURE_FLOOR (8u * 1024u * 1024u)
+static constexpr size_t GC_MAJOR_SCALE = 2048;
+static constexpr size_t GC_MIN_TICK    = 1024;
+
+static constexpr uint64_t GC_FORCE_INTERVAL_MS   = 50;
+static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
+
+static constexpr size_t GC_NURSERY_THRESHOLD         = 32768;
+static constexpr size_t GC_CLOSURE_NURSERY_THRESHOLD = 131072;
+/* Promotions since the last major that force one (~36MB of arena slots);
+   see the major_due clause in gc_maybe. */
+static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR    = 262144;
+/* Bytes of closure-arena watermark growth since the last major; the
+   watermark only rises when the free list is empty, i.e. when young
+   reclaim is not keeping up. */
+static constexpr size_t GC_CLOSURE_MAJOR_GROWTH      = 16u * 1024u * 1024u;
+
+static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(T_OBJ) \
   | T_FLAG_FIND(T_ARR)                       \
@@ -29,10 +40,14 @@ typedef struct gc_func_mark_profile {
 void gc_run(ant_t *js);
 void gc_run_minor(ant_t *js);
 void gc_maybe(ant_t *js);
+void gc_pressure(ant_t *js);
 
 void gc_remember_add(ant_t *js, ant_object_t *obj);
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value);
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv);
+void gc_remember_closure(ant_t *js, struct sv_closure *c);
+void gc_track_young_closure_slow(ant_t *js, struct sv_closure *c);
+void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv);
 
 size_t gc_live_major_threshold(ant_t *js);
 size_t gc_pool_major_threshold(ant_t *js);

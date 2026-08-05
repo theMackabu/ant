@@ -450,8 +450,8 @@ static uint16_t alloc_ic_idx(sv_compiler_t *c) {
   return (uint16_t)c->ic_count++;
 }
 
-static void sv_func_init_obj_sites(sv_func_t *func) {
-  if (!func || !func->code || func->code_len <= 0) return;
+static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
+  if (!func || !func->code || func->code_len <= 0) goto cleanup;
 
   uint32_t count = 0;
   for (int pc = 0; pc < func->code_len; ) {
@@ -460,7 +460,7 @@ static void sv_func_init_obj_sites(sv_func_t *func) {
     uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
     pc += (size > 0) ? size : 1;
   }
-  if (count == 0) return;
+  if (count == 0) goto cleanup;
 
   func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
   memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
@@ -472,6 +472,33 @@ static void sv_func_init_obj_sites(sv_func_t *func) {
     if (op == OP_OBJECT) func->obj_sites[idx++].bc_off = (uint32_t)pc;
     uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
     pc += (size > 0) ? size : 1;
+  }
+
+  if (c && c->shaped_site_count > 0) {
+    for (int s = 0; s < c->shaped_site_count; s++) {
+      uint16_t kc = c->shaped_sites[s].key_count;
+      if (kc == 0) continue;
+      for (uint32_t i = 0; i < count; i++) {
+        if (func->obj_sites[i].bc_off != c->shaped_sites[s].bc_off) continue;
+        uint32_t *ka = code_arena_bump((size_t)kc * sizeof(uint32_t));
+        if (!ka) break;
+        memcpy(ka, c->shaped_keys + c->shaped_sites[s].first_key,
+               (size_t)kc * sizeof(uint32_t));
+        func->obj_sites[i].key_atoms = ka;
+        func->obj_sites[i].key_count = kc;
+        break;
+      }
+    }
+  }
+
+cleanup:
+  if (c) {
+    free(c->shaped_sites);
+    free(c->shaped_keys);
+    c->shaped_sites = NULL;
+    c->shaped_keys = NULL;
+    c->shaped_site_count = c->shaped_site_cap = 0;
+    c->shaped_key_count = c->shaped_key_cap = 0;
   }
 }
 
@@ -3949,7 +3976,87 @@ void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+/* A literal qualifies for shape boilerplating when every property is a
+   plain, statically-named data property (no spread/computed/accessors,
+   no `__proto__:` colon form, no duplicate keys). */
+static bool object_literal_static_keys(
+  sv_ast_t *node,
+  const char **keys, uint32_t *lens, char (*numbuf)[32]
+) {
+  if (node->args.count == 0 || node->args.count > 32) return false;
+  for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *prop = node->args.items[i];
+    if (prop->type != N_PROPERTY) return false;
+    if (prop->flags & (FN_GETTER | FN_SETTER | FN_COMPUTED)) return false;
+    sv_ast_t *k = prop->left;
+    if (!k) return false;
+    if (k->type == N_IDENT && !is_quoted_ident_key(k)) {
+      if ((prop->flags & FN_COLON) && is_ident_str(k->str, k->len, "__proto__", 9))
+        return false;
+      keys[i] = k->str; lens[i] = k->len;
+    } else if (is_quoted_ident_key(k)) {
+      keys[i] = k->str + 1; lens[i] = k->len - 2;
+    } else if (k->type == N_STRING) {
+      keys[i] = k->str ? k->str : ""; lens[i] = k->len;
+    } else if (k->type == N_NUMBER) {
+      int nn = snprintf(numbuf[i], sizeof(numbuf[i]), "%g", k->num);
+      keys[i] = numbuf[i]; lens[i] = (uint32_t)nn;
+    } else return false;
+    for (int j = 0; j < i; j++)
+      if (lens[j] == lens[i] && memcmp(keys[j], keys[i], lens[i]) == 0)
+        return false;
+  }
+  return true;
+}
+
+static void record_shaped_site(sv_compiler_t *c, uint32_t bc_off,
+                               const uint32_t *atom_idx, uint16_t count) {
+  if (c->shaped_site_count >= c->shaped_site_cap) {
+    int cap = c->shaped_site_cap ? c->shaped_site_cap * 2 : 8;
+    void *next = realloc(c->shaped_sites, (size_t)cap * sizeof(*c->shaped_sites));
+    if (!next) return;
+    c->shaped_sites = next;
+    c->shaped_site_cap = cap;
+  }
+  if (c->shaped_key_count + count > c->shaped_key_cap) {
+    int cap = c->shaped_key_cap ? c->shaped_key_cap * 2 : 32;
+    while (cap < c->shaped_key_count + count) cap *= 2;
+    void *next = realloc(c->shaped_keys, (size_t)cap * sizeof(uint32_t));
+    if (!next) return;
+    c->shaped_keys = next;
+    c->shaped_key_cap = cap;
+  }
+  c->shaped_sites[c->shaped_site_count].bc_off = bc_off;
+  c->shaped_sites[c->shaped_site_count].first_key = (uint32_t)c->shaped_key_count;
+  c->shaped_sites[c->shaped_site_count].key_count = count;
+  c->shaped_site_count++;
+  memcpy(c->shaped_keys + c->shaped_key_count, atom_idx, (size_t)count * sizeof(uint32_t));
+  c->shaped_key_count += count;
+}
+
 void compile_object(sv_compiler_t *c, sv_ast_t *node) {
+  const char *skeys[32];
+  uint32_t slens[32];
+  char snum[32][32];
+  if (object_literal_static_keys(node, skeys, slens, snum)) {
+    uint32_t atom_idx[32];
+    for (int i = 0; i < node->args.count; i++)
+      atom_idx[i] = (uint32_t)add_atom(c, skeys[i], slens[i]);
+    uint32_t obj_off = (uint32_t)c->code_len;
+    emit_op(c, OP_OBJECT);
+    record_shaped_site(c, obj_off, atom_idx, (uint16_t)node->args.count);
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *prop = node->args.items[i];
+      if (prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left))
+        compile_expr_with_inferred_name(c, prop->right, prop->left->str, prop->left->len);
+      else compile_expr(c, prop->right);
+      emit_op(c, OP_DEFINE_SLOT);
+      emit_u32(c, atom_idx[i]);
+      emit_u16(c, (uint16_t)i);
+    }
+    return;
+  }
+
   emit_op(c, OP_OBJECT);
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *prop = node->args.items[i];
@@ -5865,7 +5972,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   fn->code = code_arena_bump((size_t)comp.code_len);
   memcpy(fn->code, comp.code, (size_t)comp.code_len);
   fn->code_len = comp.code_len;
-  sv_func_init_obj_sites(fn);
+  sv_func_init_obj_sites(&comp, fn);
 
   if (comp.const_count > 0) {
     fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
@@ -6093,7 +6200,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->code = code_arena_bump((size_t)comp.code_len);
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
     fn->code_len = comp.code_len;
-    sv_func_init_obj_sites(fn);
+    sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {
       fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
       memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
@@ -6557,7 +6664,7 @@ sv_func_t *compile_function_body(
   func->code = code_arena_bump((size_t)comp.code_len);
   memcpy(func->code, comp.code, (size_t)comp.code_len);
   func->code_len = comp.code_len;
-  sv_func_init_obj_sites(func);
+  sv_func_init_obj_sites(&comp, func);
 
   if (comp.const_count > 0) {
     func->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));

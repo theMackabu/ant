@@ -35,8 +35,6 @@ static inline ant_value_t sv_module_export_cstr(
   return sv_module_export_to_ns(js, js_module_eval_active_ns(js), name, len, value);
 }
 
-/* exports executed inside a function (live-binding writes) must target the
-   function's own module, not whichever module is currently mid-eval */
 static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value_t func_obj) {
   if (is_object_type(func_obj)) {
     ant_value_t ns = js_module_ctx_namespace(js_get_slot(func_obj, SLOT_MODULE_CTX));
@@ -46,8 +44,15 @@ static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value
 }
 
 static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
-  if (vtype(callee) == T_FUNC)
-    return sv_export_target_ns_from_func_obj(js, js_func_obj(callee));
+  if (vtype(callee) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(callee);
+    if (is_object_type(c->module_ctx)) {
+      ant_value_t ns = js_module_ctx_namespace(c->module_ctx);
+      if (vtype(ns) == T_OBJ) return ns;
+    }
+    return sv_export_target_ns_from_func_obj(
+      js, c->func_obj ? c->func_obj : js_mkundef());
+  }
   return js_module_eval_active_ns(js);
 }
 
@@ -310,7 +315,10 @@ static inline bool sv_with_binding_is_unscopable(
     ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
-    uint32_t cache_epoch = ant_ic_epoch_counter;
+    /* Negative cache fingerprints only the base + first proto; deeper
+       chain mutations are bounded by epoch wipes, so stay on the obj
+       epoch (minor + major) to keep the pre-split invalidation cadence. */
+    uint32_t cache_epoch = ant_ic_obj_epoch_counter;
 
     if (
       js->runtime_cache.with_no_unscopables_epoch == cache_epoch &&

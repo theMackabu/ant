@@ -239,6 +239,7 @@ struct ant_isolate_t {
     void *main_base;
     void *main_lo;
     size_t limit;
+    void *floor;
   } cstk;
 
   struct {
@@ -288,6 +289,9 @@ struct ant_isolate_t {
   
   size_t gc_last_live;
   size_t gc_pool_alloc;
+  size_t gc_closure_alloc;
+  size_t gc_closure_at_minor;
+  size_t gc_closure_wm_at_major;
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;
@@ -310,8 +314,32 @@ struct ant_isolate_t {
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;
-  
   struct sv_upvalue **remembered_upvalues;
+
+  size_t remembered_closure_len;
+  size_t remembered_closure_cap;
+  struct sv_closure **remembered_closures;
+
+  /* Young-generation rosters: closure/upvalue arena slots allocated since
+     the last collection. Minor GC sweeps unmarked entries (scavenge
+     semantics); marked entries are dropped, which promotes them to the
+     major-only lifecycle. Entries the tracker fails to record (OOM) are
+     simply promoted early. */
+  struct sv_closure **young_closures;
+  size_t young_closure_len;
+  size_t young_closure_cap;
+  struct sv_upvalue **young_upvalues;
+  size_t young_upvalue_len;
+  size_t young_upvalue_cap;
+  /* Roster length at which js_closure_alloc fires a minor: len after the
+     last sweep + GC_CLOSURE_NURSERY_THRESHOLD (aging keeps survivors in
+     the roster, so a fixed-length trigger would shrink the nursery). */
+  size_t young_closure_trigger;
+  /* Closures promoted out of the young roster since the last major; when
+     enough accumulate the arena is mostly promoted garbage and a major
+     is scheduled directly (see gc_maybe). */
+  size_t gc_closure_promoted_since_major;
+
   bool gc_remember_overflow;
 
   #ifdef ANT_JIT
@@ -455,8 +483,15 @@ static inline bool is_undefined(ant_value_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-static inline bool is_empty_slot(ant_value_t v) { 
-  return v == T_EMPTY; 
+static inline bool is_empty_slot(ant_value_t v) {
+  return v == T_EMPTY;
+}
+
+static inline void js_cstk_refresh_floor(ant_t *js) {
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit)
+    ? (void *)(base - js->cstk.limit)
+    : NULL;
 }
 
 static inline bool is_callable(ant_value_t v) {

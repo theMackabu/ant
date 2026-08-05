@@ -13,7 +13,7 @@ ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js);
+ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, int32_t bc_off);
 ant_value_t jit_helper_import_default(ant_t *js, ant_value_t ns);
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj);
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err);
@@ -175,6 +175,11 @@ void jit_helper_define_field(
   ant_value_t val, const char *str, uint32_t len
 );
 
+void jit_helper_define_slot(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
+  const char *str, uint32_t len, uint32_t slot
+);
+
 void jit_helper_define_method_comp(
   ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
@@ -188,6 +193,11 @@ void jit_helper_set_name(
 ant_value_t jit_helper_put_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t val, const char *str, uint32_t len
+);
+
+ant_value_t jit_helper_put_field_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
 );
 
 ant_value_t jit_helper_get_elem(
@@ -279,6 +289,12 @@ ant_value_t jit_helper_str_flush_local(
   ant_value_t *args, int argc,
   ant_value_t *locals, uint16_t slot_idx
 );
+
+/* ANT_CLOSURE_STATS=1: per-site closure allocation counters (keyed by the
+   child sv_func), dumped at isolate teardown. */
+extern bool sv_closure_stats_enabled;
+void sv_closure_site_count(struct sv_func *child);
+void sv_closure_site_dump(void);
 
 #endif
 #endif

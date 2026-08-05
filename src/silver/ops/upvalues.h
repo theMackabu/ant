@@ -50,8 +50,12 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
 
 static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value_t parent_func) {
   if (vtype(parent_func) == T_FUNC) {
-    ant_value_t module_ctx = js_get_slot(js_func_obj(parent_func), SLOT_MODULE_CTX);
-    if (is_object_type(module_ctx)) return module_ctx;
+    sv_closure_t *pc = js_func_closure(parent_func);
+    if (is_object_type(pc->module_ctx)) return pc->module_ctx;
+    if (pc->func_obj) {
+      ant_value_t module_ctx = js_get_slot(pc->func_obj, SLOT_MODULE_CTX);
+      if (is_object_type(module_ctx)) return module_ctx;
+    }
   }
 
   return js_module_eval_active_ctx(js);
@@ -64,6 +68,12 @@ static inline void sv_init_closure_function_object(
   ant_value_t module_ctx
 ) {
   sv_func_t *child = closure->func;
+  /* Lazy materialization writes a young func_obj into a closure that may
+     be old; closures on old objects are not traversed during minor GC, so
+     remember the closure (marked via gc_mark_closure on the next minor,
+     which promotes the func_obj subtree). Remembered before mkobj so the
+     whole materialization window is covered. */
+  gc_remember_closure(js, closure);
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
   if (is_err(func_obj) || !child) return;
@@ -182,7 +192,13 @@ static inline ant_value_t sv_op_closure(
   uint32_t idx = sv_get_u32(ip + 1);
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
 
-  sv_closure_t *closure = js_closure_alloc(js);
+#ifdef ANT_JIT
+  extern bool sv_closure_stats_enabled;
+  extern void sv_closure_site_count(sv_func_t *);
+  if (__builtin_expect(sv_closure_stats_enabled, 0)) sv_closure_site_count(child);
+#endif
+
+  sv_closure_t *closure = js_closure_alloc_hot(js);
   closure->func = child;
   closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
   closure->bound_argv = NULL;
@@ -192,7 +208,9 @@ static inline ant_value_t sv_op_closure(
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
   if (child->upvalue_count > 0) {
-  closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
+  closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+    ? closure->inline_upvals
+    : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
     if (desc->is_local) {
@@ -204,16 +222,23 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
-  
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
+
+  /* The function object (and its .prototype) materializes lazily on
+     first property/prototype access; see sv_closure_materialize_func_obj. */
+  closure->module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
+  closure->func_obj = 0;
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
-  
-  if (eval_env != js->global && is_object_type(closure->func_obj)) {
-    js_set_slot_wb(js, closure->func_obj, SLOT_EVAL_ENV, eval_env);
-    closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+
+  if (eval_env != js->global) {
+    /* Direct-eval environments live on the function object; materialize
+       now so the env can be attached (rare: direct eval only). */
+    ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
+    if (is_object_type(func_obj)) {
+      js_set_slot_wb(js, func_obj, SLOT_EVAL_ENV, eval_env);
+      closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+    }
   }
-  
+
   return js_mkundef();
 }
 

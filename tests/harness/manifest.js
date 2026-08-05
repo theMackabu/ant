@@ -48,7 +48,8 @@ export function targets() {
     ['test_arguments_async.cjs', 48],
     ['test_arguments_escaped_coro.js', 64],
     ['test_async_gen_leak.mjs', 48],
-    ['test_upvalue_gc.cjs', 384]
+    ['test_upvalue_gc.cjs', 384],
+    ['test_gc_closure_churn.cjs', 96]
   ];
   for (const [f, maxRssMb] of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true, maxRssMb });
 
@@ -221,6 +222,17 @@ export function targets() {
       ]
     }
   );
+
+  list.push({
+    group: 'jit',
+    type: 'demo',
+    name: 'jit_suite',
+    entry: 'examples/jit/run.js',
+    checks: [
+      { name: 'all tests passed, none failed', re: /passed: (\d+) failed: 0 total/, min: 125, max: 100000 },
+      { name: 'all files passed', re: /(\d+) files passed/, min: 9, max: 10000 }
+    ]
+  });
 
   list.push(
     { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 25000, minRps: 17500 },

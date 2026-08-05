@@ -5,6 +5,7 @@
 #include <uthash.h>
 
 uint32_t ant_ic_epoch_counter = 1;
+uint32_t ant_ic_obj_epoch_counter = 1;
 
 #define SHAPE_ENTRY_SIZE     sizeof(shape_index_entry_t)
 #define SHAPE_ENTRY_POOL_MAX 1024

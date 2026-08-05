@@ -22,14 +22,10 @@ void gc_sweep_regex_cache(void);
 void regexp_note_exec_property_write(void);
 void regexp_note_replace_property_write(void);
 
-static inline void regexp_note_property_write(
-  const char *name, size_t len
-) {
+static inline void regexp_note_property_write(const char *name, size_t len) {
   if (!name) return;
-  if (len == 4 && memcmp(name, "exec", 4) == 0)
-    regexp_note_exec_property_write();
-  else if (len == 7 && memcmp(name, "replace", 7) == 0)
-    regexp_note_replace_property_write();
+  if (len == 4 && name[0] == 'e' && memcmp(name, "exec", 4) == 0) regexp_note_exec_property_write();
+  else if (len == 7 && name[0] == 'r' && memcmp(name, "replace", 7) == 0) regexp_note_replace_property_write();
 }
 
 size_t js_to_pcre2_pattern(

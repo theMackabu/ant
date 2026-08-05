@@ -170,6 +170,7 @@ void gc_run(ant_t *js) {
   gc_ropes_begin(js);
   gc_objects_run(js, gc_mark_str);
   ant_ic_epoch_bump();
+  ant_ic_obj_epoch_bump();
 
   gc_bigints_sweep(js);
   gc_strings_sweep(js);
@@ -181,6 +182,10 @@ void gc_run(ant_t *js) {
 
   js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
+  js->gc_closure_alloc = 0;
+  js->gc_closure_at_minor = 0;
+  js->gc_closure_wm_at_major = js->closure_arena.watermark;
+  js->gc_closure_promoted_since_major = 0;
   js->gc_remember_overflow = false;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
@@ -195,12 +200,32 @@ void gc_run_minor(ant_t *js) {
     return;
   }
 
+  static int log_minors = -1;
+  if (__builtin_expect(log_minors < 0, 0)) log_minors = getenv("ANT_GC_LOG") != NULL;
+  extern size_t gc_stat_young_closure_promoted;
+  size_t roster_before = js->young_closure_len;
+  size_t uv_roster_before = js->young_upvalue_len;
+  size_t promoted_before = gc_stat_young_closure_promoted;
+  struct timespec log_t0;
+  if (log_minors) clock_gettime(CLOCK_MONOTONIC, &log_t0);
+
   size_t old_before   = js->old_live_count;
   size_t live_before  = js->obj_arena.live_count;
   size_t young_before = live_before > old_before ? live_before - old_before : 0;
 
   gc_objects_run_minor(js, NULL);
-  ant_ic_epoch_bump();
+
+  if (log_minors) {
+    struct timespec log_t1;
+    clock_gettime(CLOCK_MONOTONIC, &log_t1);
+    int64_t us = (int64_t)(log_t1.tv_sec - log_t0.tv_sec) * 1000000
+               + (int64_t)(log_t1.tv_nsec - log_t0.tv_nsec) / 1000;
+    fprintf(stderr, "[minor] closures=%zu upvals=%zu promoted=%zu young_objs=%zu us=%lld\n",
+            roster_before, uv_roster_before,
+            gc_stat_young_closure_promoted - promoted_before,
+            young_before, (long long)us);
+  }
+  ant_ic_obj_epoch_bump();
 
   js->gc_last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
@@ -208,9 +233,20 @@ void gc_run_minor(ant_t *js) {
 
   size_t survivors = js->obj_arena.live_count > old_before
     ? js->obj_arena.live_count - old_before : 0;
-    
+
+  js->gc_closure_at_minor = js->gc_closure_alloc;
   gc_adapt_nursery(young_before, survivors);
   gc_last_run_ms = gc_now_ms();
+}
+
+void gc_pressure(ant_t *js) {
+  /* Allocation-site pressure signal: same policy as gc_maybe but not
+     rate-limited by the tick gate (callers pre-filter on real pressure).
+     Routing through the shared policy keeps the minor:major cadence sane
+     (majors every N minors), which the u8 obj-epoch also relies on. */
+  if (__builtin_expect(gc_disabled, 0)) return;
+  gc_tick = GC_MIN_TICK;
+  gc_maybe(js);
 }
 
 void gc_maybe(ant_t *js) {
@@ -219,32 +255,51 @@ void gc_maybe(ant_t *js) {
   
   size_t live = js->obj_arena.live_count;
   size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
-  
-  if (young_count >= gc_nursery_threshold) {
+  size_t closure_young = js->gc_closure_alloc > js->gc_closure_at_minor
+    ? js->gc_closure_alloc - js->gc_closure_at_minor : 0;
+
+  if (young_count >= gc_nursery_threshold ||
+      closure_young >= GC_CLOSURE_NURSERY_THRESHOLD) {
     gc_tick = 0;
     size_t live_before_minor = js->obj_arena.live_count;
     size_t major_threshold = gc_live_major_threshold(js);
     size_t pool_threshold = gc_pool_major_threshold(js);
 
     gc_run_minor(js);
-    
+
     if (js->minor_gc_count >= gc_major_every_n) {
-      bool major_due = 
+      bool major_due =
         live_before_minor >= major_threshold ||
-        js->gc_pool_alloc >= pool_threshold;
-      
+        js->gc_pool_alloc >= pool_threshold ||
+        js->closure_arena.watermark - js->gc_closure_wm_at_major >=
+          GC_CLOSURE_MAJOR_GROWTH ||
+        /* Watermark growth is measured per major window and misses slow
+           accumulation (promotions can stay under GC_CLOSURE_MAJOR_GROWTH
+           every window forever); promoted-since-major is monotonic, so
+           steady promotion pressure eventually drains the arena. */
+        js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR;
+
       if (major_due) {
         js->minor_gc_count = 0;
         gc_run(js);
       }
     }
-    
+
     return;
   }
 
   size_t threshold = gc_live_major_threshold(js);
-  
+
   if (live >= threshold) {
+    gc_tick = 0;
+    gc_run(js);
+    return;
+  }
+
+  /* The closure arena is only swept by majors; if young reclaim is not
+     keeping up (watermark growing), schedule a major directly. */
+  if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
+      GC_CLOSURE_MAJOR_GROWTH) {
     gc_tick = 0;
     gc_run(js);
     return;

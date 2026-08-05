@@ -33,6 +33,7 @@
 #include "silver/lexer.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"
+#include "silver/glue.h"
 #include "silver/ops/using.h"
 #include "modules/regex.h"
 
@@ -2712,6 +2713,16 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
 // TODO: make get and set dry
 static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  {
+    ant_object_t *fast = array_obj_ptr(arr);
+    if (fast && fast->flags.fast_array && fast->u.array.data &&
+        idx < (ant_offset_t)fast->u.array.len &&
+        idx < (ant_offset_t)fast->u.array.cap) {
+      ant_value_t v = fast->u.array.data[idx];
+      if (!is_empty_slot(v)) return v;
+    }
+  }
+
   ant_offset_t semantic_len = get_array_length(js, arr);
   
   if (idx >= semantic_len) return js_mkundef();
@@ -6150,7 +6161,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
 
   if (orig->func && orig->func->upvalue_count > 0 && orig->upvalues) {
     size_t upvalue_bytes = sizeof(sv_upvalue_t *) * (size_t)orig->func->upvalue_count;
-    bound_closure->upvalues = malloc(upvalue_bytes);
+    bound_closure->upvalues = orig->func->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+      ? bound_closure->inline_upvals
+      : malloc(upvalue_bytes);
     if (!bound_closure->upvalues) return js_mkerr(js, "oom");
     memcpy(bound_closure->upvalues, orig->upvalues, upvalue_bytes);
   }
@@ -13436,26 +13449,39 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   ant_offset_t search_len, search_off = vstr(js, search, &search_len);
-  
-  ant_offset_t max_start = str_len;
-  double dstr_len = D(str_len);
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    double pos = tod(args[1]);
-    if (isnan(pos)) pos = dstr_len;
-    if (pos < 0) pos = 0;
-    if (pos > dstr_len) pos = dstr_len;
-    max_start = (ant_offset_t) pos;
-  }
-  
-  if (search_len == 0) return tov((double) (max_start > str_len ? str_len : max_start));
-  if (search_len > str_len) return tov(-1);
 
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   const char *search_ptr = (char *)(uintptr_t)(search_off);
+  size_t utf16_len = utf16_strlen(str_ptr, str_len);
 
-  ant_offset_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
-  for (ant_offset_t i = start + 1; i > 0; i--) {
-    if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0) return tov((double)(i - 1));
+  /* The position argument and the result are in UTF-16 code units; the
+     scan itself runs over UTF-8 bytes (matches can only start on
+     codepoint boundaries, UTF-8 being self-synchronizing). */
+  size_t max_start = utf16_len;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double pos = tod(args[1]);
+    if (isnan(pos)) pos = D(utf16_len);
+    if (pos < 0) pos = 0;
+    if (pos > D(utf16_len)) pos = D(utf16_len);
+    max_start = (size_t) pos;
+  }
+
+  if (search_len == 0) return tov(D(max_start));
+  if (search_len > str_len) return tov(-1);
+
+  size_t byte_limit;
+  if (max_start >= utf16_len) byte_limit = (size_t)str_len;
+  else {
+    int off = utf16_index_to_byte_offset(str_ptr, str_len, max_start, NULL);
+    if (off < 0) return tov(-1);
+    byte_limit = (size_t)off;
+  }
+  if (byte_limit > (size_t)str_len - search_len)
+    byte_limit = (size_t)str_len - search_len;
+
+  for (size_t i = byte_limit + 1; i > 0; i--) {
+    if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
+      return tov(D(byte_offset_to_utf16(str_ptr, i - 1)));
   }
   return tov(-1);
 }
@@ -15576,7 +15602,10 @@ static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ct
 }
 
 static inline ant_object_t *cached_function_proto_obj(ant_t *js) {
-  uint32_t cache_epoch = ant_ic_epoch_counter;
+  /* Raw pointer returned without revalidation; a rebound global Function
+     is only caught by epoch wipes, so stay on the obj epoch (minor +
+     major) to keep the pre-split invalidation cadence. */
+  uint32_t cache_epoch = ant_ic_obj_epoch_counter;
   if (
     js->runtime_cache.function_proto_epoch == cache_epoch &&
     js->runtime_cache.function_proto_obj
@@ -17082,6 +17111,10 @@ static ant_t *isolate_init(void *buf, size_t len) {
     fixed_arena_destroy(&js->obj_arena);
     return NULL;
   }
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+#ifdef ANT_JIT
+  sv_closure_stats_enabled = getenv("ANT_CLOSURE_STATS") != NULL;
+#endif
   
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
@@ -17636,6 +17669,20 @@ void js_destroy(ant_t *js) {
   cleanup_atomics_module(js);
   cleanup_events_module(js);
 
+#ifdef ANT_JIT
+  if (sv_closure_stats_enabled) sv_closure_site_dump();
+#endif
+
+  extern size_t gc_stat_young_closure_freed, gc_stat_young_closure_promoted;
+  if (getenv("ANT_GC_LOG"))
+    fprintf(stderr,
+            "[gc] young-closures freed=%zu promoted=%zu | arenas: closure wm=%zuMB live=%zu, "
+            "upvalue wm=%zuMB live=%zu, obj wm=%zuMB live=%zu\n",
+            gc_stat_young_closure_freed, gc_stat_young_closure_promoted,
+            js->closure_arena.watermark >> 20, js->closure_arena.live_count,
+            js->upvalue_arena.watermark >> 20, js->upvalue_arena.live_count,
+            js->obj_arena.watermark >> 20, js->obj_arena.live_count);
+
   fixed_arena_destroy(&js->obj_arena);
   fixed_arena_destroy(&js->closure_arena);
   fixed_arena_destroy(&js->upvalue_arena);
@@ -17651,6 +17698,18 @@ void js_destroy(ant_t *js) {
   free(js->remembered_upvalues);
   js->remembered_upvalues = NULL;
   js->remembered_upvalue_len = js->remembered_upvalue_cap = 0;
+
+  free(js->remembered_closures);
+  js->remembered_closures = NULL;
+  js->remembered_closure_len = js->remembered_closure_cap = 0;
+
+  free(js->young_closures);
+  js->young_closures = NULL;
+  js->young_closure_len = js->young_closure_cap = 0;
+
+  free(js->young_upvalues);
+  js->young_upvalues = NULL;
+  js->young_upvalue_len = js->young_upvalue_cap = 0;
 
   free(js->remember_set);
   js->remember_set = NULL;
@@ -17690,8 +17749,8 @@ void js_destroy(ant_t *js) {
 }
 
 inline double js_getnum(ant_value_t value) { return tod(value); }
-inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; }
-inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; }
+inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; js_cstk_refresh_floor(js); }
+inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; js_cstk_refresh_floor(js); }
 inline void js_set_filename(ant_t *js, const char *filename) { js->filename = filename; }
 
 inline ant_value_t js_mkundef(void) { return mkval(T_UNDEF, 0); }

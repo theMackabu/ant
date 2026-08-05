@@ -92,6 +92,7 @@ OP_DEF(  GET_ELEM,          1,   2,   1, none)      /* obj key -> val */
 OP_DEF(  GET_ELEM2,         1,   2,   2, none)      /* obj key -> obj val */
 OP_DEF(  PUT_ELEM,          1,   3,   0, none)      /* obj key val -> */
 OP_DEF(  DEFINE_FIELD,      5,   2,   1, atom)      /* obj val -> obj (own prop) */
+OP_DEF(  DEFINE_SLOT,       7,   2,   1, atom)      /* obj val -> obj (atom + slot:u16) */
 OP_DEF(  GET_LENGTH,        1,   1,   1, none)      /* obj -> length */
 
 OP_DEF(  GET_FIELD_OPT,    7,   1,   1, atom)       /* null-safe obj -> val (atom + ic_idx:u16) */
@@ -297,7 +298,9 @@ OP_FLAG(DUP                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(DUP2                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(NIP                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(SWAP                  , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(SWAP_UNDER            , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(ROT3L                 , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(ROT4_UNDER            , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(INSERT2               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(INSERT3               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 
@@ -312,6 +315,7 @@ OP_FLAG(GET_SLOT_RAW          , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(GET_ARG               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(SET_ARG               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT)
+OP_FLAG(PUT_ARG               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT)
 OP_FLAG(REST                  , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(GET_UPVAL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
@@ -338,6 +342,7 @@ OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_ELEM2             , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_ELEM              , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(DEFINE_FIELD          , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(DEFINE_SLOT           , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_LENGTH            , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_FIELD_OPT         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_ELEM_OPT          , SV_OPF_JIT_ELIGIBLE)

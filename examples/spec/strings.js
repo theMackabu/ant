@@ -119,6 +119,12 @@ test('bracket access astral trailing surrogate', '💙'[1].charCodeAt(0), 0xDC99
 test('concat', 'hello'.concat(' ', 'world'), 'hello world');
 
 test('lastIndexOf', 'hello world world'.lastIndexOf('world'), 12);
+test('lastIndexOf utf16 result', 'abc🎈def🎈xyz'.lastIndexOf('🎈'), 8);
+test('lastIndexOf utf16 position', 'abc🎈def🎈xyz'.lastIndexOf('🎈', 7), 3);
+test('lastIndexOf utf16 position on match', 'abc🎈def🎈xyz'.lastIndexOf('🎈', 8), 8);
+test('lastIndexOf astral search miss', 'abc🎈def'.lastIndexOf('💙'), -1);
+test('lastIndexOf empty search utf16 clamp', 'ab🎈cd'.lastIndexOf(''), 6);
+test('lastIndexOf empty search with position', 'ab🎈cd'.lastIndexOf('', 3), 3);
 
 test('String.fromCharCode', String.fromCharCode(65, 66, 67), 'ABC');
 test('String.raw tagged template', String.raw`line1\nline2`, 'line1\\nline2');

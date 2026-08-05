@@ -10,7 +10,56 @@
 #include "tokens.h"
 #include "silver/glue.h"
 
+bool sv_closure_stats_enabled;
+
+#define CLOSURE_SITE_SLOTS 8192
+static struct { sv_func_t *func; uint64_t count; } closure_sites[CLOSURE_SITE_SLOTS];
+
+void sv_closure_site_count(sv_func_t *child) {
+  size_t h = ((uintptr_t)child >> 4) & (CLOSURE_SITE_SLOTS - 1);
+  for (size_t probe = 0; probe < CLOSURE_SITE_SLOTS; probe++) {
+    size_t i = (h + probe) & (CLOSURE_SITE_SLOTS - 1);
+    if (closure_sites[i].func == child) { closure_sites[i].count++; return; }
+    if (!closure_sites[i].func) {
+      closure_sites[i].func = child;
+      closure_sites[i].count = 1;
+      return;
+    }
+  }
+}
+
+void sv_closure_site_dump(void) {
+  for (int rank = 0; rank < 30; rank++) {
+    uint64_t best = 0;
+    size_t best_i = 0;
+    for (size_t i = 0; i < CLOSURE_SITE_SLOTS; i++)
+      if (closure_sites[i].func && closure_sites[i].count > best) {
+        best = closure_sites[i].count;
+        best_i = i;
+      }
+    if (!best) break;
+    sv_func_t *f = closure_sites[best_i].func;
+    sv_func_debug_t *d = f->debug;
+    int snip_len = 0;
+    const char *snip = "";
+    if (d && d->source && d->source_end > d->source_start) {
+      snip = d->source + d->source_start;
+      snip_len = d->source_end - d->source_start;
+      if (snip_len > 100) snip_len = 100;
+    }
+    fprintf(stderr, "[closure-site] %12llu  %s (%s:%d) params=%u upvals=%d | %.*s\n",
+            (unsigned long long)best,
+            d && d->name ? d->name : "<anon>",
+            d && d->filename ? d->filename : "?",
+            d ? d->source_line : 0,
+            f->param_count, f->upvalue_count,
+            snip_len, snip);
+    closure_sites[best_i].func = NULL;
+  }
+}
+
 #include "ops/calls.h"
+#include "ops/literals.h"
 #include "ops/globals.h"
 #include "ops/property.h"
 #include "ops/iteration.h"
@@ -685,8 +734,15 @@ ant_value_t jit_helper_export(
   ant_t *js, sv_closure_t *closure,
   const char *str, uint32_t len, ant_value_t value
 ) {
-  ant_value_t func_obj = closure ? closure->func_obj : js_mkundef();
-  ant_value_t ns = sv_export_target_ns_from_func_obj(js, func_obj);
+  /* Lazy closures stash module_ctx directly; only fall back to the
+     function object when it was already materialized. */
+  ant_value_t ns = js_mkundef();
+  if (closure && is_object_type(closure->module_ctx))
+    ns = js_module_ctx_namespace(closure->module_ctx);
+  if (vtype(ns) != T_OBJ) {
+    ant_value_t func_obj = (closure && closure->func_obj) ? closure->func_obj : js_mkundef();
+    ns = sv_export_target_ns_from_func_obj(js, func_obj);
+  }
   return sv_module_export_to_ns(js, ns, str, (size_t)len, value);
 }
 
@@ -775,7 +831,9 @@ ant_value_t jit_helper_closure(
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
 
-  sv_closure_t *closure = js_closure_alloc(js);
+  if (__builtin_expect(sv_closure_stats_enabled, 0)) sv_closure_site_count(child);
+
+  sv_closure_t *closure = js_closure_alloc_hot(js);
   if (!closure) return mkval(T_ERR, 0);
 
   closure->func = child;
@@ -787,7 +845,9 @@ ant_value_t jit_helper_closure(
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
   if (child->upvalue_count > 0)
-    closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
+    closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+      ? closure->inline_upvals
+      : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -806,19 +866,24 @@ ant_value_t jit_helper_closure(
   }
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(
+  closure->module_ctx = sv_get_current_closure_module_ctx(
     js, mkval(T_FUNC, (uintptr_t)parent_closure)
   );
-  
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
+  closure->func_obj = 0;
+  closure->pending_name = name;
+  closure->pending_name_len = name_len;
+
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
-  
-  if (is_object_type(eval_env) && is_object_type(closure->func_obj)) {
-    js_set_slot_wb(js, closure->func_obj, SLOT_EVAL_ENV, eval_env);
-    closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+  if (is_object_type(eval_env)) {
+    /* Direct-eval environments live on the function object; materialize
+       now so the env can be attached (rare: direct eval only). */
+    ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
+    if (is_object_type(func_obj)) {
+      js_set_slot_wb(js, func_obj, SLOT_EVAL_ENV, eval_env);
+      closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+    }
   }
-  
-  if (name) js_set_function_name(js, func_val, name, name_len);
+
   return func_val;
 }
 
@@ -910,7 +975,15 @@ void jit_helper_define_field(
 void jit_helper_set_name(
   ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
-) { 
+) {
+  if (vtype(fn) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(fn);
+    if (!c->func_obj) {
+      c->pending_name = str;
+      c->pending_name_len = len;
+      return;
+    }
+  }
   js_set_function_name(js, fn, str, len);
 }
 
@@ -930,6 +1003,13 @@ ant_value_t jit_helper_put_field(
 ) {
   ant_value_t key = js_mkstr(js, str, len);
   return js_setprop(js, obj, key, val);
+}
+
+ant_value_t jit_helper_put_field_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
+) {
+  return sv_put_field_cached(js, obj, val, atom, ic);
 }
 
 ant_value_t jit_helper_get_elem(
@@ -984,11 +1064,30 @@ ant_value_t jit_helper_put_global(
   return js_setprop(js, js->global, key, val);
 }
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js) {
+ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, int32_t bc_off) {
   ant_value_t obj = mkobj(js, 0);
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  if (func && bc_off >= 0 && bc_off < func->code_len) {
+    sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, func->code + bc_off);
+    sv_obj_site_apply(js, func, site, ptr);
+  }
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
+}
+
+void jit_helper_define_slot(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
+  const char *str, uint32_t len, uint32_t slot
+) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (ptr && !ptr->flags.is_exotic && slot < ptr->prop_count) {
+    ant_object_prop_set_unchecked(ptr, slot, val);
+    gc_write_barrier(js, ptr, val);
+    return;
+  }
+  if (!sv_try_define_field_fast(js, obj, str, val))
+    js_define_own_prop(js, obj, str, len, val);
 }
 
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {

@@ -12,6 +12,7 @@
 #include "descriptors.h"
 #include "silver/engine.h"
 
+#include "gc.h"
 #include "gc/modules.h"
 #include "modules/abort.h"
 #include "modules/events.h"
@@ -105,6 +106,15 @@ struct ant_events_state {
   EventTypeList global_events;
 };
 // --- END: TO BE MIGRATED ---
+
+/* Listener values live in malloc'd sidecar arrays that minors only reach by
+   scanning the owning emitter object; old owners are skipped during minors,
+   so storing into the sidecar must remember the owner like any old->young
+   pointer store. */
+static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
+  if (!is_object_type(owner)) return;
+  gc_write_barrier(js, js_obj_ptr(owner), stored);
+}
 
 static EventTypeList *global_events_list(ant_t *js) {
   if (!js->events_state) js->events_state = ant_calloc(sizeof(*js->events_state));
@@ -851,8 +861,10 @@ static ant_value_t add_listener_to(ant_t *js, ant_value_t *args, int nargs, Even
     if (!cold) return js_mkerr(js, "out of memory");
     cold->signal = signal;
     cold->capture = capture;
+    emitter_write_barrier(js, evt->owner->target, signal);
   }
   utarray_push_back(evt->listeners, &entry);
+  emitter_write_barrier(js, evt->owner->target, cb);
   return js_mkundef();
 }
 
@@ -1008,6 +1020,7 @@ static bool eventemitter_add_listener_impl(
     cold->raw_callback = js_heavy_mkfun(js, js_eventemitter_once_wrapper, listener);
     if (is_callable(cold->raw_callback))
       js_set(js, cold->raw_callback, "listener", listener);
+    emitter_write_barrier(js, target, cold->raw_callback);
   }
 
   if (!prepend || utarray_len(evt->listeners) == 0) utarray_push_back(evt->listeners, &entry);
@@ -1021,6 +1034,8 @@ static bool eventemitter_add_listener_impl(
     evt->needs_reorder = true;
     utarray_push_back(evt->listeners, &entry);
   } else utarray_insert(evt->listeners, &entry, 0);
+
+  emitter_write_barrier(js, target, listener);
 
   int max_listeners = eventemitter_get_max_listeners_impl(target);
   unsigned int live = evt_live_count(evt);

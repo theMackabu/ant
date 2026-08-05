@@ -122,6 +122,8 @@ typedef struct {
 typedef struct {
   uint32_t bc_off;
   ant_shape_t *shared_shape;
+  const uint32_t *key_atoms;
+  uint16_t key_count;
 } sv_obj_site_cache_t;
 
 #define SV_GF_IC_AUX_MISS_SHIFT 8u
@@ -297,6 +299,7 @@ struct sv_func {
   
   bool jit_compile_failed;
   bool jit_compiling;
+  bool jit_loop_hot;
 #endif
 };
 
@@ -425,7 +428,17 @@ static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_val
 }
 
 static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
-  return (sv_upvalue_t *)fixed_arena_alloc(&js->upvalue_arena);
+  sv_upvalue_t *uv = (sv_upvalue_t *)fixed_arena_alloc(&js->upvalue_arena);
+  if (uv) {
+    /* Track, never trigger: upvalues are allocated mid-closure-creation
+       and a collection here could sweep the half-built closure. The
+       closure-alloc trigger provides the cadence. */
+    if (js->young_upvalue_len < js->young_upvalue_cap)
+      js->young_upvalues[js->young_upvalue_len++] = uv;
+    else
+      gc_track_young_upvalue_slow(js, uv);
+  }
+  return uv;
 }
 
 #define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
@@ -435,24 +448,93 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 #define SV_CALL_BORROWED_UPVALS  (1u << 4)
 #define SV_CALL_HAS_EVAL_ENV     (1u << 5)
 
+#define SV_CLOSURE_INLINE_UPVALS 4
+
 typedef struct sv_closure {
   uint32_t call_flags;
   int bound_argc;
   sv_func_t *func;
-  
+
+  /* Points at inline_upvals when upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+     (no heap array; the arena never moves elements, so the self-pointer is
+     stable). Free paths must skip arrays that alias inline storage. */
   sv_upvalue_t **upvalues;
+  sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
   ant_value_t bound_this;
   ant_value_t *bound_argv;
   ant_value_t bound_args;
   ant_value_t super_val;
+  /* 0 (raw) = function object not materialized yet; see js_func_obj. */
   ant_value_t func_obj;
-  
+
+  /* Captured at closure creation for lazy func_obj materialization.
+     `js` is the owning isolate — js_func_obj has no isolate argument
+     and there is no process-global isolate to reach for. */
+  ant_t *js;
+  ant_value_t module_ctx;
+  const char *pending_name;
+  uint32_t pending_name_len;
+  uint8_t in_remember_set;
+
   uint64_t gc_epoch;
 } sv_closure_t;
 
 static inline sv_closure_t *js_closure_alloc(ant_t *js) {
+  js->gc_closure_alloc++;
+  /* Generational closures: lazy closures allocate no objects, so closure
+     churn is invisible to the object-pressure GC triggers; run a minor
+     here once enough young closures accumulate. Minors sweep the young
+     rosters (scavenge semantics), so this reclaims at minor cost, not
+     major cost. Before the arena alloc so the fresh closure cannot be
+     swept mid-initialization. The trigger is roster-growth based
+     (survivors aging in the roster don't shrink the nursery): sweeps
+     reset it to len-after-sweep + GC_CLOSURE_NURSERY_THRESHOLD. */
+  if (js->young_closure_len >= js->young_closure_trigger)
+    gc_pressure(js);
   sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
-  if (c) c->gc_epoch = gc_get_epoch();
+  if (c) {
+    c->gc_epoch = gc_get_epoch();
+    c->js = js;
+    c->func_obj = 0;
+    c->module_ctx = mkval(T_UNDEF, 0);
+    c->pending_name = NULL;
+    c->pending_name_len = 0;
+    c->in_remember_set = 0;
+    if (js->young_closure_len < js->young_closure_cap)
+      js->young_closures[js->young_closure_len++] = c;
+    else
+      gc_track_young_closure_slow(js, c);
+  }
+  return c;
+}
+
+/* Hot-path variant for OP_CLOSURE / jit_helper_closure: skips the arena's
+   element memset. Every field a GC scan or sweep can observe is written
+   here (stale inline_upvals words beyond upvalue_count are fine — closure
+   upvalues are only ever walked precisely, to func->upvalue_count); the
+   caller must write the remaining fields, including `upvalues` (NULL when
+   upvalue_count == 0). */
+static inline sv_closure_t *js_closure_alloc_hot(ant_t *js) {
+  js->gc_closure_alloc++;
+  if (js->young_closure_len >= js->young_closure_trigger)
+    gc_pressure(js);
+  sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc_uninit(&js->closure_arena);
+  if (c) {
+    c->call_flags = 0;
+    c->upvalues = NULL;
+    c->bound_argv = NULL;
+    c->gc_epoch = gc_get_epoch();
+    c->js = js;
+    c->func_obj = 0;
+    c->module_ctx = mkval(T_UNDEF, 0);
+    c->pending_name = NULL;
+    c->pending_name_len = 0;
+    c->in_remember_set = 0;
+    if (js->young_closure_len < js->young_closure_cap)
+      js->young_closures[js->young_closure_len++] = c;
+    else
+      gc_track_young_closure_slow(js, c);
+  }
   return c;
 }
 
@@ -460,8 +542,14 @@ static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
 }
 
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
+                                            ant_value_t func_val);
+
 static inline ant_value_t js_func_obj(ant_value_t func) {
-  return js_func_closure(func)->func_obj;
+  sv_closure_t *c = js_func_closure(func);
+  if (__builtin_expect(c->func_obj == 0, 0))
+    return sv_closure_materialize_func_obj(c->js, c, func);
+  return c->func_obj;
 }
 
 static inline ant_value_t sv_closure_eval_env(const sv_closure_t *closure) {

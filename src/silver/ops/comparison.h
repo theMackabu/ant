@@ -347,7 +347,8 @@ static inline ant_value_t sv_instanceof_ic_eval(
   if (ic->epoch != cur_epoch || ic->cached_aux != rhs_id) goto slow_path;
   if (lhs_proto == ic->guard.receiver_proto) return js_true;
 
-  if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder)
+  if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
+      ic->guard.add.epoch == ant_ic_obj_epoch_counter)
     return js_bool(ic->cached_index != 0);
 
 slow_path:
@@ -367,8 +368,9 @@ slow_path:
     ic->epoch = ant_ic_epoch_counter;
     ic->cached_aux = (uintptr_t)vdata(r);
     ic->guard.receiver_proto = ctor_proto;
+    ic->guard.add.epoch = ant_ic_obj_epoch_counter;
   }
-  
+
   return res;
 }
 
@@ -394,6 +396,7 @@ static inline ant_value_t sv_isproto_ic_eval(
   if (
     ic && proto_ptr && obj_ptr &&
     ic->epoch == ant_ic_epoch_counter &&
+    ic->guard.add.epoch == ant_ic_obj_epoch_counter &&
     ic->cached_holder == proto_ptr &&
     (ant_object_t *)(uintptr_t)ic->cached_shape == obj_ptr
   ) {
@@ -406,6 +409,7 @@ static inline ant_value_t sv_isproto_ic_eval(
     ic->cached_shape = (ant_shape_t *)(uintptr_t)obj_ptr;
     ic->cached_index = found ? 1u : 0u;
     ic->epoch = ant_ic_epoch_counter;
+    ic->guard.add.epoch = ant_ic_obj_epoch_counter;
   }
   return js_bool(found);
 }
