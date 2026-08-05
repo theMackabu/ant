@@ -921,14 +921,26 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 
-static void gc_sweep_young(ant_t *js) {
-  ant_object_t **pp = &js->objects;
-  while (*pp) {
-  ant_object_t *obj = *pp;
-  if (obj->mark_epoch == gc_obj_epoch) pp = &obj->next; else {
-    *pp = obj->next;
-    gc_object_free(js, obj);
-  }}
+/* Minor-GC young pass: sweep and promote in ONE walk of the young list —
+   the list chase over ~176B objects is cache-miss bound, and the separate
+   sweep-then-promote walks paid it twice. The young list is detached up
+   front and survivors are linked into objects_old incrementally, so both
+   lists stay consistent if a finalizer runs mid-walk. */
+static void gc_sweep_young_and_promote(ant_t *js) {
+  ant_object_t *obj = js->objects;
+  js->objects = NULL;
+  while (obj) {
+    ant_object_t *next = obj->next;
+    if (next) __builtin_prefetch(next);
+    if (obj->mark_epoch == gc_obj_epoch) {
+      obj->flags.generation = 1;
+      obj->next = js->objects_old;
+      js->objects_old = obj;
+    } else {
+      gc_object_free(js, obj);
+    }
+    obj = next;
+  }
 }
 
 static void gc_promote_survivors(ant_t *js) {
@@ -1118,44 +1130,81 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   }
 }
 
+/* Accumulated minor-GC phase times (ns), ANT_GC_LOG only:
+   0=remember-set scans, 1=root marking, 2=young object sweep+promote,
+   3=closure/upvalue sweeps. Printed at isolate teardown. */
+uint64_t gc_stat_minor_phase_ns[4];
+
+static inline uint64_t gc_phase_now_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   if (!js) return;
-  
+
+  static int phase_log = -1;
+  if (__builtin_expect(phase_log < 0, 0)) phase_log = getenv("ANT_GC_LOG") != NULL;
+  uint64_t pt = phase_log ? gc_phase_now_ns() : 0;
+
   g_str_mark = str_mark;
   gc_epoch++;
-  
+
   if (gc_epoch == 0) gc_epoch = 1;
   gc_obj_epoch = (uint8_t)(gc_obj_epoch + 1u);
-  
+
   if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) {
     gc_obj_epoch = 1;
     gc_obj_epoch_wrapped(js);
   }
   g_minor_gc = true;
 
-  for (size_t i = 0; i < js->remember_set_len; i++) 
+  for (size_t i = 0; i < js->remember_set_len; i++)
     gc_scan_obj(js, js->remember_set[i]);
-  
+
   gc_mark_remembered_func_consts(js);
   gc_mark_remembered_upvalues(js);
   gc_mark_remembered_closures(js);
-  
-  for (size_t i = 0; i < js->remember_set_len; i++) 
+
+  for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
-  
+
   js->remember_set_len = 0;
+
+  if (phase_log) {
+    uint64_t t = gc_phase_now_ns();
+    gc_stat_minor_phase_ns[0] += t - pt;
+    pt = t;
+  }
+
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, true);
   g_minor_gc = false;
 
+  if (phase_log) {
+    uint64_t t = gc_phase_now_ns();
+    gc_stat_minor_phase_ns[1] += t - pt;
+    pt = t;
+  }
+
   gc_sweep_regex_cache();
-  gc_sweep_young(js);
+  gc_sweep_young_and_promote(js);
+
+  if (phase_log) {
+    uint64_t t = gc_phase_now_ns();
+    gc_stat_minor_phase_ns[2] += t - pt;
+    pt = t;
+  }
+
   gc_sweep_young_closures(js);
   gc_sweep_young_upvalues(js);
-  gc_promote_survivors(js);
   gc_clear_remembered_func_consts(js);
   gc_clear_remembered_closures(js);
   gc_clear_remembered_upvalues(js);
+
+  if (phase_log)
+    gc_stat_minor_phase_ns[3] += gc_phase_now_ns() - pt;
 
   // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
   // property values on old objects are not scanned during minor GC (old objects

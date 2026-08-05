@@ -17679,6 +17679,13 @@ void js_destroy(ant_t *js) {
   }
 #endif
 
+  extern uint64_t gc_stat_minor_phase_ns[4];
+  if (getenv("ANT_GC_LOG"))
+    fprintf(stderr,
+            "[gc-minor-phases] remember=%.2fs roots=%.2fs obj-sweep=%.2fs closure-sweep=%.2fs\n",
+            gc_stat_minor_phase_ns[0] / 1e9, gc_stat_minor_phase_ns[1] / 1e9,
+            gc_stat_minor_phase_ns[2] / 1e9, gc_stat_minor_phase_ns[3] / 1e9);
+
   extern size_t gc_stat_young_closure_freed, gc_stat_young_closure_promoted;
   if (getenv("ANT_GC_LOG"))
     fprintf(stderr,

@@ -541,13 +541,30 @@ KILLED with data; record the negatives:**
    "19%" is ~2.4% over the full run (30M x ~33ns ~= 1s of 42s). Only
    interleaved A/B counts as evidence for wall-time claims.**
 
-**Remaining 7c-class items, updated ranking:**
-1. Object-churn reduction (the 7a pattern deeper: the monad's records
-   drive both alloc cost and the ~9.6s of minors).
-2. Real monad inlining = general call-target-directed inlining +
-   allocation sinking in MIR (weeks; also the long-term-correct
-   machinery). The ~78M monad closures/records are only reachable this
-   way (see negative #1).
+**Object-churn installment 1 (2026-08-05, post-commit) — fused young
+sweep+promote:** minor phase breakdown (ANT_GC_LOG, accumulated
+full-run — trustworthy unlike `sample` windows): remember 0.41s, roots
+1.69s, **obj sweep+promote 5.53s**, closure sweeps 2.69s. The sweep and
+promote passes each pointer-chased the whole young list (~176B objects,
+cache-miss bound) — fused into ONE walk (`gc_sweep_young_and_promote`,
+detach-first + incremental old-list linking keeps lists consistent under
+mid-walk finalizers; +prefetch of next). Phase timer: obj phase 5.53 →
+**3.67s**. Main-level: 5-round interleaved A/B vs committed base mean
+43.25 → 42.57s (−0.7s; faster 3/5 — thermal noise σ≈1s swamps it at
+run level, the phase timer is the evidence). Roster prefetch in closure
+sweeps tried, measured nothing, dropped. Gates: harness 168/0,
+DeltaBlue 4119, spec/jit clean, GC micros green.
+
+**Remaining, updated ranking (now in the ~1s-class flat zone for GC
+mechanics):**
+1. Object-churn deeper cuts: mkobj-uninit (7a-style explicit-init audit,
+   ~176B memset x ~100M objects), slimmer ant_object_t. Each ~1s-class.
+2. Closure-sweep residual 2.6s + roots 1.7s — diminishing.
+3. Real monad inlining = general call-target-directed inlining +
+   allocation sinking in MIR (weeks; the long-term-correct machinery).
+   The ~78M monad closures/records are only reachable this way.
+4. The strategic fork: node-class needs an optimizing tier, not more
+   phases (last ~8x is codegen quality).
 
 ~2.5× on newt if everything lands (June: Prelude 6.2→2.47s, Main 70→~36s
 across the rounds), Octane geomean from ~1692 toward the June ~2600-class
