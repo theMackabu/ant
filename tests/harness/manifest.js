@@ -33,6 +33,7 @@ export function targets() {
     'test_esm_package_self_reference.cjs',
     'test_typeof_closure_assignment.mjs',
     'test_curried_call_fusion.cjs',
+    'test_regexp_internal_state.cjs',
     'test_double_bind.cjs',
     'test_numeric_literal_keys.cjs'
   ];

@@ -760,6 +760,85 @@ interleave ran hot for both pins: owner Main 43.322/44.818s versus final
 The temporary GC-stress hook was removed after focused regexp tests
 passed at stress 1/3 and the full spec passed 3712/0 at stress 10.
 
+**R1 follow-up — direct internal regexp state, 2026-08-06.** The
+V8-style direct-state experiments separated into two wins and one
+falsification:
+
+1. `regexp_flags_mask` now reads the attached compiled entry's immutable
+   `flags_mask`, or the regexp object's internal mask before first compile.
+   The public `flags` property is only a fallback for objects without internal
+   regexp state. This is both faster and semantically correct: shadowing the
+   public property cannot change `RegExpBuiltinExec`'s global/sticky behavior.
+   Counters on `bench_regex`: 19,590,903 calls, 19,590,900 direct compiled
+   reads, three internal-slot reads, zero cached-public reads and zero
+   reparses. Isolated non-PGO interleaving versus the pre-change native-payload
+   binary:
+
+   | Workload | Before (ms) | Direct flags (ms) | Median delta |
+   |---|---:|---:|---:|
+   | `test_gc_async` | 850.74, 859.40 | 826.60, 834.52 | **−2.9%** |
+   | `test_gc_coro` | 6863.12, 6854.88 | 6829.38, 6831.98 | −0.4% |
+   | regex route | 143.14, 144.60, 144.41, 144.55 | 132.79, 130.15, 128.87, 130.95 | **−9.6%** |
+   | regex token scan | 881.92, 865.63, 883.38, 873.81 | 727.68, 732.07, 714.98, 715.85 | **−17.8%** |
+   | regex identifier split | 1026.84, 997.77, 1032.26, 1021.34 | 833.67, 823.17, 810.54, 813.61 | **−20.1%** |
+
+2. `lastIndex` now has a guarded direct location cached on the shared compiled
+   entry. It is usable only for a non-proxy, non-exotic receiver with the
+   exact retained shape and an own writable data property at the cached slot.
+   Shape changes, accessors, read-only descriptors, proxies, and exotic
+   objects fall back to normal property semantics. The direct store still
+   executes the GC write barrier. `bench_regex` records 19,590,900 guarded
+   reads and 19,590,903 guarded writes out of 19,590,903 reads/writes total;
+   the first three reads populate the compiled entries. A new Node-parity
+   regression test covers public-flags shadowing, add/delete shape changes,
+   non-writable `lastIndex`, and alternating differently-shaped regexp
+   objects sharing the same compiled data.
+
+3. **Literal boilerplate sharing was WRONG for this runtime and was
+   reverted.** A feedback-site compiled-entry cache eliminated the async
+   workload's 200,000 per-object compiled-cache lookups exactly (1.4M direct
+   object-data hits, zero misses, one compiled-cache miss), but added site
+   lookup/reference work on every fresh literal. Interleaved direct-flags
+   versus literal-site candidate: async 841.98/839.68ms versus
+   850.45/862.54ms (**+1.9%**, worse); coro 6872.71/6952.32ms versus
+   6931.35/6917.32ms (flat). The entire experiment was removed; no literal
+   site table or compiled-entry site references remain.
+
+The final direct-flags + guarded-`lastIndex` source was retrained with a fresh
+macOS AArch64 PGO profile. Pinned hashes:
+pre-experiment fresh-PGO R1
+`/tmp/ant_r1_native_fresh_pgo_bin`
+(`f3482f161609ac411c03aef2d32e21d4`), final
+`/tmp/ant_r1_direct_state_fresh_pgo_bin`
+(`0ef8fdec844213b0d6f3f934ecadf24c`), installed ca8e720d
+`/tmp/ant_installed_ca8e720d_bin`
+(`33ea23ff2faa4c7f6c3302aff2e2d279`). Every row is AB/BA interleaved;
+two-sample medians are shown.
+
+| Workload | Pre-experiment R1 (ms) | Final direct state (ms) | Median delta |
+|---|---:|---:|---:|
+| `test_gc_async` | 768.62, 772.48 | 640.59, 632.83 | **−17.4%** |
+| `test_gc_coro` | 6419.91, 6418.73 | 6293.78, 6284.11 | **−2.0%** |
+| regex route | 115.46, 122.14 | 94.19, 96.19 | **−19.9%** |
+| regex token scan | 646.09, 642.35 | 420.66, 426.31 | **−34.3%** |
+| regex identifier split | 709.05, 707.16 | 472.92, 477.48 | **−32.9%** |
+
+| Workload | Installed Ant (ms) | Final direct state (ms) | Median delta |
+|---|---:|---:|---:|
+| `test_gc_async` | 914.34, 931.89 | 653.80, 632.72 | **−30.3%** |
+| `test_gc_coro` | 6644.40, 6663.48 | 6290.59, 6374.79 | **−4.8%** |
+| regex route | 142.93, 139.00 | 96.50, 97.07 | **−31.3%** |
+| regex token scan | 729.27, 724.29 | 489.15, 428.97 | **−36.8%** |
+| regex identifier split | 752.11, 758.98 | 477.80, 470.71 | **−37.2%** |
+
+Final gates after fresh PGO: spec 3712/0, JIT 9 files/0 fail, harness
+**171/0** (including the new parity test; async 646ms, coro 6287ms),
+express oha **17,797 RPS**, devirt fuzzer all seeds agree, and newt Main
+43.034s / 706MB max RSS (902MB peak footprint). A temporary
+`ANT_GC_STRESS` hook was re-added because the direct location retains a shape:
+the new and existing regexp fast-path tests passed at stress 1/3 and the full
+spec passed 3712/0 at stress 10; the hook was removed before finishing.
+
 Bonus observed while instrumenting: the [gc-majors] atexit dump does
 NOT count the direct `gc_run` at src/pool.c:311 (js_type_alloc
 pool-pressure) — 24/25 majors in this workload were uncounted; add a

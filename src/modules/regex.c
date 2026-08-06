@@ -25,6 +25,8 @@ typedef struct compiled_regex_cache_entry {
   uint8_t flags_mask;
   pcre2_code *code;
   pcre2_match_data *scratch_match_data;
+  ant_shape_t *lastindex_shape;
+  uint32_t lastindex_slot;
   uint32_t namecount;
   bool jit_ready;
   bool scratch_in_use;
@@ -62,14 +64,20 @@ static uint64_t rxstat_exec_internal, rxstat_shared_fast, rxstat_cache_hit,
   rxstat_interp_match, rxstat_max_cache, rxstat_inserts, rxstat_lit_obj,
   rxstat_exec_generic, rxstat_compiled_gen0_hit, rxstat_compiled_gen1_hit,
   rxstat_compiled_miss, rxstat_compiled_promotions, rxstat_compiled_evictions,
-  rxstat_match_dynamic;
+  rxstat_match_dynamic, rxstat_flags_calls, rxstat_flags_cached,
+  rxstat_flags_reparsed, rxstat_lastindex_reads, rxstat_lastindex_writes,
+  rxstat_lastindex_resets, rxstat_flags_direct,
+  rxstat_flags_internal, rxstat_lastindex_fast_reads,
+  rxstat_lastindex_fast_writes;
 static bool rxstat_enabled;
 static void rxstat_dump(void) {
   fprintf(stderr,
     "[regex-stats] exec_internal=%llu shared_fast=%llu generic_exec=%llu lit_obj=%llu\n"
     "[regex-stats] object-data hit=%llu miss=%llu attaches=%llu max_live=%llu\n"
     "[regex-stats] compiled-cache gen0=%llu gen1=%llu miss=%llu promotions=%llu evictions=%llu\n"
-    "[regex-stats] compiles=%llu jit_match=%llu interp_match=%llu dynamic-match-data=%llu\n",
+    "[regex-stats] compiles=%llu jit_match=%llu interp_match=%llu dynamic-match-data=%llu\n"
+    "[regex-stats] flags calls=%llu direct=%llu internal=%llu cached=%llu reparsed=%llu\n"
+    "[regex-stats] lastIndex reads=%llu writes=%llu resets=%llu fast-read=%llu fast-write=%llu\n",
     (unsigned long long)rxstat_exec_internal, (unsigned long long)rxstat_shared_fast,
     (unsigned long long)rxstat_exec_generic, (unsigned long long)rxstat_lit_obj,
     (unsigned long long)rxstat_cache_hit, (unsigned long long)rxstat_cache_miss,
@@ -83,7 +91,17 @@ static void rxstat_dump(void) {
     (unsigned long long)rxstat_compiles,
     (unsigned long long)rxstat_jit_match,
     (unsigned long long)rxstat_interp_match,
-    (unsigned long long)rxstat_match_dynamic);
+    (unsigned long long)rxstat_match_dynamic,
+    (unsigned long long)rxstat_flags_calls,
+    (unsigned long long)rxstat_flags_direct,
+    (unsigned long long)rxstat_flags_internal,
+    (unsigned long long)rxstat_flags_cached,
+    (unsigned long long)rxstat_flags_reparsed,
+    (unsigned long long)rxstat_lastindex_reads,
+    (unsigned long long)rxstat_lastindex_writes,
+    (unsigned long long)rxstat_lastindex_resets,
+    (unsigned long long)rxstat_lastindex_fast_reads,
+    (unsigned long long)rxstat_lastindex_fast_writes);
 }
 static void rxstat_init(void) {
   static bool done;
@@ -142,7 +160,28 @@ static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t fle
   return mask;
 }
 
-static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
+static inline uint8_t regexp_flags_mask(
+  ant_t *js,
+  ant_value_t regexp,
+  compiled_regex_cache_entry_t **compiled_out
+) {
+  if (rxstat_enabled) rxstat_flags_calls++;
+
+  compiled_regex_cache_entry_t *compiled = js_get_native(
+    regexp, REGEXP_NATIVE_TAG
+  );
+  if (compiled_out) *compiled_out = compiled;
+  if (compiled) {
+    if (rxstat_enabled) rxstat_flags_direct++;
+    return compiled->flags_mask;
+  }
+
+  ant_value_t internal_mask = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
+  if (vtype(internal_mask) == T_NUM) {
+    if (rxstat_enabled) rxstat_flags_internal++;
+    return (uint8_t)tod(internal_mask);
+  }
+
   ant_prop_loc_t flags_off = lkp(js, regexp, "flags", 5);
   if (!flags_off.obj) return 0;
 
@@ -151,8 +190,12 @@ static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
 
   ant_value_t cached_flags = js_get_slot(regexp, SLOT_REGEXP_FLAGS_STRING);
   ant_value_t cached = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
-  if (flags_val == cached_flags && vtype(cached) == T_NUM) return (uint8_t)tod(cached);
+  if (flags_val == cached_flags && vtype(cached) == T_NUM) {
+    if (rxstat_enabled) rxstat_flags_cached++;
+    return (uint8_t)tod(cached);
+  }
 
+  if (rxstat_enabled) rxstat_flags_reparsed++;
   ant_offset_t flen, foff = vstr(js, flags_val, &flen);
   uint8_t mask = regexp_parse_flags_mask((const char *)(uintptr_t)foff, flen);
   js_set_slot(regexp, SLOT_REGEXP_FLAGS_MASK, tov((double)mask));
@@ -735,6 +778,7 @@ static bool compiled_regex_key_matches(
 
 static void compiled_regex_entry_free(compiled_regex_cache_entry_t *entry) {
   if (!entry) return;
+  ant_shape_release(entry->lastindex_shape);
   pcre2_match_data_free(entry->scratch_match_data);
   pcre2_code_free(entry->code);
   free(entry->pattern);
@@ -1038,15 +1082,18 @@ static bool regexp_compile_shared_from_object(
 }
 
 static compiled_regex_cache_entry_t *regex_get_or_compile(
-  ant_t *js, ant_value_t regexp_obj, uint8_t flags_mask
+  ant_t *js,
+  ant_value_t regexp_obj,
+  uint8_t flags_mask,
+  compiled_regex_cache_entry_t *compiled
 ) {
   ant_regex_state_t *state = js->regex_state;
   if (!state) return NULL;
   ant_object_t *obj_ptr = js_obj_ptr(regexp_obj);
 
-  compiled_regex_cache_entry_t *compiled = js_get_native(
-    regexp_obj, REGEXP_NATIVE_TAG
-  );
+  if (!compiled) {
+    compiled = js_get_native(regexp_obj, REGEXP_NATIVE_TAG);
+  }
   if (compiled && compiled->flags_mask == flags_mask) {
     if (rxstat_enabled) rxstat_cache_hit++;
     return compiled;
@@ -1351,6 +1398,97 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
   return rc;
 }
 
+static bool regexp_lastindex_fast_location(
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp,
+  ant_object_t **out_obj,
+  uint32_t *out_slot
+) {
+  if (!compiled || !compiled->lastindex_shape || is_proxy(regexp)) return false;
+  ant_object_t *obj = js_obj_ptr(regexp);
+  if (
+    !obj || obj->flags.is_exotic ||
+    obj->shape != compiled->lastindex_shape ||
+    compiled->lastindex_slot >= obj->prop_count
+  ) return false;
+  *out_obj = obj;
+  *out_slot = compiled->lastindex_slot;
+  return true;
+}
+
+static void regexp_lastindex_cache_location(
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp
+) {
+  if (!compiled || is_proxy(regexp)) return;
+  ant_object_t *obj = js_obj_ptr(regexp);
+  if (!obj || obj->flags.is_exotic || !obj->shape) return;
+  if (
+    compiled->lastindex_shape == obj->shape &&
+    compiled->lastindex_slot < obj->prop_count
+  ) return;
+
+  const char *key = intern_string("lastIndex", 9);
+  if (!key) return;
+  int32_t found = ant_shape_lookup_interned(obj->shape, key);
+  if (found < 0 || (uint32_t)found >= obj->prop_count) return;
+
+  const ant_shape_prop_t *prop = ant_shape_prop_at(
+    obj->shape, (uint32_t)found
+  );
+  if (
+    !prop || prop->has_getter || prop->has_setter ||
+    !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
+  ) return;
+
+  if (compiled->lastindex_shape != obj->shape) {
+    ant_shape_retain(obj->shape);
+    ant_shape_release(compiled->lastindex_shape);
+    compiled->lastindex_shape = obj->shape;
+  }
+  compiled->lastindex_slot = (uint32_t)found;
+}
+
+static ant_value_t regexp_set_lastindex(
+  ant_t *js,
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp,
+  ant_value_t value
+) {
+  ant_object_t *obj;
+  uint32_t slot;
+  if (regexp_lastindex_fast_location(
+    compiled, regexp, &obj, &slot
+  )) {
+    ant_object_prop_set_unchecked(obj, slot, value);
+    gc_write_barrier(js, obj, value);
+    if (rxstat_enabled) rxstat_lastindex_fast_writes++;
+    return value;
+  }
+
+  ant_object_t *receiver = js_obj_ptr(regexp);
+  if (receiver && receiver->shape && !is_proxy(regexp)) {
+    const char *key = intern_string("lastIndex", 9);
+    int32_t found = key
+      ? ant_shape_lookup_interned(receiver->shape, key)
+      : -1;
+    if (found >= 0) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(
+        receiver->shape, (uint32_t)found
+      );
+      if (
+        prop && !prop->has_getter && !prop->has_setter &&
+        !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
+      ) {
+        return js_mkerr_typed(
+          js, JS_ERR_TYPE, "Cannot assign to read only property 'lastIndex'"
+        );
+      }
+    }
+  }
+  return setprop_cstr(js, regexp, "lastIndex", 9, value);
+}
+
 static ant_value_t regexp_exec_shared_fast(
   ant_t *js,
   ant_value_t regexp,
@@ -1372,7 +1510,7 @@ static ant_value_t regexp_exec_shared_fast(
   if (is_err(literal_result) || *used_fast_path) return literal_result;
 
   compiled_regex_cache_entry_t *compiled =
-    regex_get_or_compile(js, regexp, flags_mask);
+    regex_get_or_compile(js, regexp, flags_mask, NULL);
   if (!compiled) return js_mkundef();
 
   if (!truthy_only && compiled->namecount != 0) return js_mkundef();
@@ -1457,7 +1595,10 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   if (rxstat_enabled) rxstat_exec_internal++;
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  uint8_t flags_mask = regexp_flags_mask(js, regexp);
+  compiled_regex_cache_entry_t *compiled_hint;
+  uint8_t flags_mask = regexp_flags_mask(
+    js, regexp, &compiled_hint
+  );
   
   bool global_flag = (flags_mask & REGEXP_FLAG_GLOBAL) != 0;
   bool has_indices = (flags_mask & REGEXP_FLAG_HAS_INDICES) != 0;
@@ -1466,16 +1607,34 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   // TODO: reduce nesting
   PCRE2_SIZE start_offset = 0;
   if (global_flag || sticky_flag) {
-    ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
-    if (lastindex_off.obj) {
-      ant_value_t li_val = js_prop_load(lastindex_off);
-      if (vtype(li_val) == T_NUM) {
-        double li = tod(li_val);
-        if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
-        else {
-          if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) return js_mkerr(js, "oom");
-          return js_mknull();
+    if (rxstat_enabled) rxstat_lastindex_reads++;
+    ant_object_t *lastindex_obj;
+    uint32_t lastindex_slot;
+    ant_value_t li_val;
+    if (regexp_lastindex_fast_location(
+      compiled_hint, regexp, &lastindex_obj, &lastindex_slot
+    )) {
+      li_val = ant_object_prop_get_unchecked(lastindex_obj, lastindex_slot);
+      if (rxstat_enabled) rxstat_lastindex_fast_reads++;
+    } else {
+      ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
+      li_val = lastindex_off.obj
+        ? js_prop_load(lastindex_off)
+        : js_mkundef();
+    }
+    if (vtype(li_val) == T_NUM) {
+      double li = tod(li_val);
+      if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
+      else {
+        if (rxstat_enabled) {
+          rxstat_lastindex_writes++;
+          rxstat_lastindex_resets++;
         }
+        ant_value_t stored = regexp_set_lastindex(
+          js, compiled_hint, regexp, tov(0)
+        );
+        if (is_err(stored)) return stored;
+        return js_mknull();
       }
     }
   }
@@ -1490,8 +1649,9 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   }
 
   compiled_regex_cache_entry_t *compiled =
-    regex_get_or_compile(js, regexp, flags_mask);
+    regex_get_or_compile(js, regexp, flags_mask, compiled_hint);
   if (!compiled) return js_mknull();
+  regexp_lastindex_cache_location(compiled, regexp);
 
   uint32_t match_options = 0;
   if (sticky_flag) match_options |= PCRE2_ANCHORED;
@@ -1506,8 +1666,15 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   if (rc < 0) {
     regex_match_scope_end(&match_scope);
-    if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
-      return js_mkerr(js, "oom");
+    if (rxstat_enabled && (global_flag || sticky_flag)) {
+      rxstat_lastindex_writes++;
+      rxstat_lastindex_resets++;
+    }
+    if (global_flag || sticky_flag) {
+      ant_value_t stored = regexp_set_lastindex(
+        js, compiled, regexp, tov(0)
+      );
+      if (is_err(stored)) return stored;
     }
     return js_mknull();
   }
@@ -1516,9 +1683,13 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
-    if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) {
+    if (rxstat_enabled) rxstat_lastindex_writes++;
+    ant_value_t stored = regexp_set_lastindex(
+      js, compiled, regexp, next_idx
+    );
+    if (is_err(stored)) {
       regex_match_scope_end(&match_scope);
-      return js_mkerr(js, "oom");
+      return stored;
     }
   }
 
@@ -2073,7 +2244,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
-  uint8_t flags_mask = regexp_flags_mask(js, rx);
+  uint8_t flags_mask = regexp_flags_mask(js, rx, NULL);
   const char *needle;
   ant_offset_t needle_len;
   if (!regexp_plain_literal_pattern(js, rx, flags_mask, &needle, &needle_len)) return js_mkundef();
@@ -2143,7 +2314,7 @@ static ant_value_t regexp_search_plain_literal_fast(
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
-  uint8_t flags_mask = regexp_flags_mask(js, rx);
+  uint8_t flags_mask = regexp_flags_mask(js, rx, NULL);
   const char *needle;
   ant_offset_t needle_len;
   if (!regexp_plain_literal_pattern(js, rx, flags_mask, &needle, &needle_len)) return js_mkundef();
