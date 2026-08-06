@@ -32,11 +32,12 @@ Caveats found while measuring:
   "A/B" through the runner is self-vs-self. Measure by concatenating
   `tests/base.js + tests/<t>.js + harness.js` and running the file
   directly under each pinned binary. (Same trap family as `ant x`
-  execing the PATH binary.) FIXED 2026-08-06: the runner honors
-  `ANT_TEST_BIN` for children now.
-- **RegExp −6%**: small, consistent. Suspects: the `func_obj == 0`
-  branch now in every `js_as_obj` on functions, or the dense-array check
-  at the top of `arr_get`. Deferred; targeted look later.
+  execing the PATH binary.) FIXED 2026-08-06: children now use
+  `process.execPath`, so a runner invoked through a pinned binary uses that
+  exact binary without an override environment variable.
+- **RegExp −6% was historical and is resolved/superseded.** The current
+  tracked score is 930 versus master's 417; do not investigate the old
+  `func_obj == 0` / dense-`arr_get` suspects from the pre-RegExp-work tree.
 
 ## Implementation status (2026-08-03)
 
@@ -1013,8 +1014,9 @@ Fails the "both phases improve" gate on both ends — reverted cleanly.
 Do not retry without first re-establishing that a Prelude penalty
 exists at all.
 
-**Cleanup.** (1) examples/bench-v8/index.js honors `ANT_TEST_BIN` for
-benchmark children — runner-level A/Bs are no longer self-vs-self.
+**Cleanup.** (1) examples/bench-v8/index.js spawns benchmark children through
+`process.execPath` — runner-level A/Bs automatically inherit the exact pinned
+runner binary and cannot become self-vs-self through a stale env override.
 (2) ANT_GC_STRESS validation debt paid: temporary hook added to
 gc_maybe (shape from completed/module-import-gc-flake.md), battery run,
 hook REMOVED. Results: spec 3712/0 under stress=10; new regression

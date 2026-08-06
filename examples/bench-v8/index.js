@@ -58,8 +58,7 @@ try {
 }
 
 async function runAnt(entry) {
-  const binary = process.env.ANT_TEST_BIN || './build/ant';
-  const child = spawn(binary, [entry], { cwd: repoRoot });
+  const child = spawn(process.execPath, [entry], { cwd: repoRoot });
   let stdout = '';
 
   child.stdout.setEncoding('utf8');
