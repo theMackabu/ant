@@ -13,6 +13,7 @@ bool gc_disabled = false;
 
 static size_t   gc_tick = 0;
 static uint64_t gc_last_run_ms = 0;
+static uint64_t gc_last_major_ms = 0;
 
 static size_t   gc_nursery_threshold = GC_NURSERY_THRESHOLD;
 static uint32_t gc_major_every_n     = GC_MAJOR_EVERY_N_MINOR;
@@ -161,8 +162,11 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
     return;
 }
 
+uint64_t gc_stat_major_total;
+
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  gc_stat_major_total++;
   size_t live_before = js->obj_arena.live_count;
 
   gc_bigints_begin(js);
@@ -185,11 +189,13 @@ void gc_run(ant_t *js) {
   js->gc_closure_alloc = 0;
   js->gc_closure_at_minor = 0;
   js->gc_closure_wm_at_major = js->closure_arena.watermark;
+  js->gc_closure_wm_minor_tried = js->closure_arena.watermark;
   js->gc_closure_promoted_since_major = 0;
   js->gc_remember_overflow = false;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);
   gc_last_run_ms = gc_now_ms();
+  gc_last_major_ms = gc_last_run_ms;
 }
 
 void gc_run_minor(ant_t *js) {
@@ -268,16 +274,23 @@ void gc_maybe(ant_t *js) {
     gc_run_minor(js);
 
     if (js->minor_gc_count >= gc_major_every_n) {
-      bool major_due =
-        live_before_minor >= major_threshold ||
-        js->gc_pool_alloc >= pool_threshold ||
-        js->closure_arena.watermark - js->gc_closure_wm_at_major >=
-          GC_CLOSURE_MAJOR_GROWTH ||
+      extern uint64_t gc_stat_major_reason[4];
+      bool major_due = false;
+      if (live_before_minor >= major_threshold) {
+        gc_stat_major_reason[0]++; major_due = true;
+      } else if (js->gc_pool_alloc >= pool_threshold) {
+        gc_stat_major_reason[1]++; major_due = true;
+      } else if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
+                 GC_CLOSURE_MAJOR_GROWTH) {
+        gc_stat_major_reason[2]++; major_due = true;
+      } else if (
         /* Watermark growth is measured per major window and misses slow
            accumulation (promotions can stay under GC_CLOSURE_MAJOR_GROWTH
            every window forever); promoted-since-major is monotonic, so
            steady promotion pressure eventually drains the arena. */
-        js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR;
+        js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR) {
+        gc_stat_major_reason[3]++; major_due = true;
+      }
 
       if (major_due) {
         js->minor_gc_count = 0;
@@ -290,17 +303,39 @@ void gc_maybe(ant_t *js) {
 
   size_t threshold = gc_live_major_threshold(js);
 
+  /* Small live sets make the scaled threshold reachable by young churn
+     alone (express: 250+ majors/s from this check). Young reclaim is the
+     cheap response to live growth — only when live stays over the
+     threshold after a minor is the growth genuinely old-generation. */
   if (live >= threshold) {
+    extern uint64_t gc_stat_major_direct[4];
     gc_tick = 0;
-    gc_run(js);
+    gc_run_minor(js);
+    if (js->obj_arena.live_count >= threshold) {
+      gc_stat_major_direct[0]++;
+      gc_run(js);
+    }
     return;
   }
 
-  /* The closure arena is only swept by majors; if young reclaim is not
-     keeping up (watermark growing), schedule a major directly. */
+  /* Closure-arena watermark growth without minor pressure: workloads whose
+     churn rate stays under the closure nursery trigger (servers) reach
+     here with the young roster unswept. Try a cheap minor first — young
+     reclaim refills the free list and stalls the watermark, and the free
+     list's drain rate then sets the minor cadence. Only when the
+     watermark makes no new highs after a minor yet still exceeds the
+     budget is the growth genuinely promoted closures — run the major. */
   if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
       GC_CLOSURE_MAJOR_GROWTH) {
     gc_tick = 0;
+    extern uint64_t gc_stat_major_direct[4];
+    if (js->closure_arena.watermark > js->gc_closure_wm_minor_tried) {
+      js->gc_closure_wm_minor_tried = js->closure_arena.watermark;
+      gc_stat_major_direct[1]++;
+      gc_run_minor(js);
+      return;
+    }
+    gc_stat_major_direct[2]++;
     gc_run(js);
     return;
   }
@@ -317,6 +352,14 @@ void gc_maybe(ant_t *js) {
     return;
   }
 
+  /* Steady sub-threshold allocation (servers): the periodic backstop used
+     to run a FULL major here every interval — measured as the top profile
+     entry under express load. Minors reclaim the young accumulation at
+     ~ms cost; keep the major for a much longer period so old/pool garbage
+     still drains. */
   gc_tick = 0;
-  gc_run(js);
+  extern uint64_t gc_stat_major_direct[4];
+  gc_stat_major_direct[3]++;
+  if (gc_now_ms() - gc_last_major_ms >= GC_FORCE_MAJOR_INTERVAL_MS) gc_run(js);
+  else gc_run_minor(js);
 }

@@ -595,6 +595,43 @@ inner binding's this and args (`f.bind({x:1},10).bind({x:2},20)(30)` →
 bind path flattens onto orig->func without folding orig's bound state.
 File separately.**
 
+**Server RPS A/B vs installed prod binary (2026-08-05, late; interleaved
+3-round oha, ANT_TEST_BIN; prod = ca8e720d release without the stack):**
+h3 **+15%** (20.8k vs 18.1k), elysia **+11%** (64.7k vs 58.0k), hono even
+(30.2k vs 30.4k), **express −14% (13.5k vs 15.9k) — REAL, tight
+variance, all rounds.** Bisect via pinned phase binaries: all of
+base7/p7b/union sit in the same 13.6-14.1k band → the regression is in
+the committed June+Phase6 base, not the day's phases. Profiles: build's
+top entry is gc_run (majors) + ~2x per-request shape_lookup_interned;
+prod shows NO GC in top-13 (it never collects the closure arena — trades
+RSS for RPS). Two backstop fixes landed (battery green, newt 41.3s
+unchanged):
+1. Direct closure-watermark path in gc_maybe now tries a MINOR on new
+   watermark highs (free-list reuse stalls the watermark; its drain rate
+   becomes the minor cadence) and majors only when the watermark makes no
+   new highs yet stays over budget. Root cause: raising the closure
+   nursery 16k→128k inverted minor(131k roster) vs major(118k closures =
+   16MB watermark) trigger order — servers got majors instead of minors.
+2. The 50ms periodic force-backstop ran a FULL MAJOR each interval under
+   steady sub-threshold allocation; now minors at 50ms, major at 1s
+   (GC_FORCE_MAJOR_INTERVAL_MS).
+**The IC-invalidation theory above was WRONG — falsified by counters
+(ANT_IC_STATS per-family refill counts: 9 total refills across 100k
+requests). The real cause, found via per-major-path counters
+([gc-majors] atexit dump): the DIRECT `live >= gc_live_major_threshold`
+check fired 2,775 majors in 11s (252/s). Mechanism: after a major,
+threshold = ~1.5x post-major live; for a server's small live set that is
+reachable by YOUNG churn alone, long before the 32k nursery triggers a
+minor — when the adaptive `gc_use_nursery_major_floor` is off, every
+~7k young objects bought a FULL MAJOR. Fix (third instance of the same
+pattern): the direct live path runs a minor first and majors only if
+live stays over threshold (genuine old-gen growth). Majors 2775 → 80
+(all via the intended cadence path). RESULT: express 13.5k → 16.1k —
+regression ELIMINATED; final interleaved scoreboard vs prod: hono +3.6%,
+express even, h3 +15%, elysia +11% — build wins or ties all four with
+bounded closure memory. newt unchanged (41.5s). Battery green.
+ANT_IC_STATS=1 keeps the objepoch-refill + gc-majors atexit dump.**
+
 **Remaining, updated ranking (now in the ~1s-class flat zone for GC
 mechanics):**
 1. Object-churn deeper cuts: mkobj-uninit (7a-style explicit-init audit,

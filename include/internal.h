@@ -292,6 +292,10 @@ struct ant_isolate_t {
   size_t gc_closure_alloc;
   size_t gc_closure_at_minor;
   size_t gc_closure_wm_at_major;
+  /* Watermark at the last minor tried by the direct watermark path in
+     gc_maybe; a new high afterwards means a minor is worth trying again
+     before escalating to a major. */
+  size_t gc_closure_wm_minor_tried;
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;

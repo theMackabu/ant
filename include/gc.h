@@ -9,6 +9,9 @@ static constexpr size_t GC_MAJOR_SCALE = 2048;
 static constexpr size_t GC_MIN_TICK    = 1024;
 
 static constexpr uint64_t GC_FORCE_INTERVAL_MS   = 50;
+/* The periodic backstop runs minors at GC_FORCE_INTERVAL_MS; a full major
+   only this often (sub-threshold steady allocation, e.g. servers). */
+static constexpr uint64_t GC_FORCE_MAJOR_INTERVAL_MS = 1000;
 static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
 
 static constexpr size_t GC_NURSERY_THRESHOLD         = 32768;

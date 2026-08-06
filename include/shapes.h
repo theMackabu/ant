@@ -79,6 +79,8 @@ bool ant_gc_shapes_sweep(void);
 size_t ant_shape_total_bytes(void);
 extern uint32_t ant_ic_epoch_counter;
 extern uint32_t ant_ic_obj_epoch_counter;
+extern uint64_t sv_stat_objepoch_refill[4];
+void sv_objepoch_stats_init(void);
 
 static inline void ant_ic_epoch_bump(void) {
   ant_ic_epoch_counter++;

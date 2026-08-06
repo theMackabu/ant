@@ -1143,6 +1143,10 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
    3=closure/upvalue sweeps. Printed at isolate teardown. */
 uint64_t gc_stat_minor_phase_ns[4];
 
+/* Major triggers taken from the post-minor cadence check:
+   0=object live, 1=pool bytes, 2=closure watermark growth, 3=promoted count */
+uint64_t gc_stat_major_reason[4];
+
 static inline uint64_t gc_phase_now_ns(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);

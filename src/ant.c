@@ -15624,6 +15624,7 @@ static inline ant_object_t *cached_function_proto_obj(ant_t *js) {
     js->runtime_cache.function_proto_obj
   ) return js->runtime_cache.function_proto_obj;
 
+  sv_stat_objepoch_refill[0]++;
   ant_value_t proto = js_get_ctor_proto(js, "Function", 8);
   if (!is_object_type(proto)) return NULL;
   
@@ -17128,6 +17129,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
 #ifdef ANT_JIT
   sv_closure_stats_enabled = getenv("ANT_CLOSURE_STATS") != NULL;
 #endif
+  sv_objepoch_stats_init();
   
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
@@ -17701,11 +17703,19 @@ void js_destroy(ant_t *js) {
 #endif
 
   extern uint64_t gc_stat_minor_phase_ns[4];
-  if (getenv("ANT_GC_LOG"))
+  extern uint64_t gc_stat_major_reason[4];
+  if (getenv("ANT_GC_LOG")) {
     fprintf(stderr,
             "[gc-minor-phases] remember=%.2fs roots=%.2fs obj-sweep=%.2fs closure-sweep=%.2fs\n",
             gc_stat_minor_phase_ns[0] / 1e9, gc_stat_minor_phase_ns[1] / 1e9,
             gc_stat_minor_phase_ns[2] / 1e9, gc_stat_minor_phase_ns[3] / 1e9);
+    fprintf(stderr,
+            "[gc-major-reasons] obj-live=%llu pool=%llu closure-wm=%llu promoted=%llu\n",
+            (unsigned long long)gc_stat_major_reason[0],
+            (unsigned long long)gc_stat_major_reason[1],
+            (unsigned long long)gc_stat_major_reason[2],
+            (unsigned long long)gc_stat_major_reason[3]);
+  }
 
   extern size_t gc_stat_young_closure_freed, gc_stat_young_closure_promoted;
   if (getenv("ANT_GC_LOG"))
