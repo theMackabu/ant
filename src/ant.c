@@ -6088,7 +6088,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
 
-    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
+    if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
     if (bound_argc > 0) {
@@ -6120,7 +6122,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
 
-    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
+    if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
     if (bound_argc > 0) {
@@ -6159,7 +6163,12 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->func = orig->func;
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
-  bound_closure->bound_this = (orig->call_flags & SV_CALL_IS_ARROW) ? orig->bound_this : this_arg;
+  /* Re-binding a bound function must not rebind this: the inner binding
+     wins even when its bound value is undefined. */
+  bound_closure->bound_this =
+    (orig->call_flags & (SV_CALL_IS_ARROW | SV_CALL_HAS_BOUND_THIS))
+      ? orig->bound_this : this_arg;
+  bound_closure->call_flags |= SV_CALL_HAS_BOUND_THIS;
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
   /* call_flags copied from orig may already carry HAS_BOUND_ARGS
@@ -6181,8 +6190,16 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     memcpy(bound_closure->upvalues, orig->upvalues, upvalue_bytes);
   }
   
-  if (bound_argc > 0)
+  /* Fold the inner binding's args: outer bind args go AFTER the inner's
+     (spec: inner.args ++ outer.args ++ call args). */
+  int orig_bound_argc = (orig->call_flags & SV_CALL_HAS_BOUND_ARGS) ? orig->bound_argc : 0;
+  if (bound_argc > 0 || orig_bound_argc > 0) {
+    /* GC can run inside mkarr below; the union must already be on the
+       bound side (marker branches on the flag) with safe empty values. */
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
+    bound_closure->u.bound.argv = NULL;
+    bound_closure->u.bound.args_arr = js_mkundef();
+  }
 
   ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
   if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
@@ -6210,13 +6227,21 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
   set_slot(bound_func, SLOT_TARGET_FUNC, func);
   
-  if (bound_argc > 0) {
+  if (bound_argc > 0 || orig_bound_argc > 0) {
+    int total_bound_argc = orig_bound_argc + bound_argc;
     ant_value_t bound_arr = mkarr(js);
-    for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
+    for (int i = 0; i < orig_bound_argc; i++)
+      arr_set(js, bound_arr, (ant_offset_t)i, orig->u.bound.argv[i]);
+    for (int i = 0; i < bound_argc; i++)
+      arr_set(js, bound_arr, (ant_offset_t)(orig_bound_argc + i), bound_args[i]);
     bound_closure->u.bound.args_arr = bound_arr;
-    bound_closure->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-    memcpy(bound_closure->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-    bound_closure->bound_argc = bound_argc;
+    bound_closure->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)total_bound_argc);
+    if (!bound_closure->u.bound.argv) return js_mkerr(js, "oom");
+    if (orig_bound_argc > 0)
+      memcpy(bound_closure->u.bound.argv, orig->u.bound.argv, sizeof(ant_value_t) * (size_t)orig_bound_argc);
+    if (bound_argc > 0)
+      memcpy(bound_closure->u.bound.argv + orig_bound_argc, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+    bound_closure->bound_argc = total_bound_argc;
   }
 
   ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);

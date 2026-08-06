@@ -455,6 +455,7 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 #define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
 #define SV_CALL_BORROWED_UPVALS  (1u << 4)
 #define SV_CALL_HAS_EVAL_ENV     (1u << 5)
+#define SV_CALL_HAS_BOUND_THIS   (1u << 6)
 
 #define SV_CLOSURE_INLINE_UPVALS 4
 
@@ -468,6 +469,8 @@ typedef struct sv_closure {
      stable). Free paths must skip arrays that alias inline storage. */
   sv_upvalue_t **upvalues;
   sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
+  /* Ordinary closures consult this only with SV_CALL_HAS_BOUND_THIS;
+     arrows always carry their lexical this here. */
   ant_value_t bound_this;
   ant_value_t super_val;
   /* 0 (raw) = function object not materialized yet; see js_func_obj. */
@@ -864,7 +867,7 @@ static inline ant_value_t sv_call_resolve_bound(
   uint32_t flags = closure->call_flags;
 
   if (flags & SV_CALL_IS_ARROW) ctx->this_val = closure->bound_this;
-  else if (!sv_call_mode_is_construct(mode) && vtype(closure->bound_this) != T_UNDEF)
+  else if (!sv_call_mode_is_construct(mode) && (flags & SV_CALL_HAS_BOUND_THIS))
     ctx->this_val = closure->bound_this;
 
   if ((flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {

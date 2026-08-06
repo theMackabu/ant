@@ -1040,7 +1040,7 @@ static void mir_emit_resolve_call_this(MIR_context_t ctx, MIR_item_t fn,
                                        MIR_reg_t dst, MIR_reg_t r_closure,
                                        MIR_reg_t fallback_this,
                                        MIR_reg_t r_flags, MIR_reg_t r_bound) {
-  MIR_label_t not_arrow = MIR_new_label(ctx);
+  MIR_label_t use_bound = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn,
@@ -1053,37 +1053,26 @@ static void mir_emit_resolve_call_this(MIR_context_t ctx, MIR_item_t fn,
     MIR_new_insn(ctx, MIR_AND,
       MIR_new_reg_op(ctx, r_flags),
       MIR_new_reg_op(ctx, r_flags),
-      MIR_new_uint_op(ctx, SV_CALL_IS_ARROW)));
+      MIR_new_uint_op(ctx, SV_CALL_IS_ARROW | SV_CALL_HAS_BOUND_THIS)));
   MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ,
-      MIR_new_label_op(ctx, not_arrow),
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, use_bound),
       MIR_new_reg_op(ctx, r_flags),
       MIR_new_uint_op(ctx, 0)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, dst),
-      MIR_new_mem_op(ctx, MIR_JSVAL,
-        (MIR_disp_t)offsetof(sv_closure_t, bound_this),
-        r_closure, 0, 1)));
+      MIR_new_reg_op(ctx, fallback_this)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 
-  MIR_append_insn(ctx, fn, not_arrow);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_MOV,
-      MIR_new_reg_op(ctx, dst),
-      MIR_new_reg_op(ctx, fallback_this)));
+  MIR_append_insn(ctx, fn, use_bound);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_bound),
       MIR_new_mem_op(ctx, MIR_JSVAL,
         (MIR_disp_t)offsetof(sv_closure_t, bound_this),
         r_closure, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ,
-      MIR_new_label_op(ctx, done),
-      MIR_new_reg_op(ctx, r_bound),
-      MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, dst),
@@ -1732,6 +1721,7 @@ typedef struct {
   MIR_item_t call_proto, imp_call;
   MIR_item_t call_method_proto, imp_call_method;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
+  MIR_item_t self_proto; /* direct JIT->JIT dispatch for devirt-in-inline */
   MIR_reg_t r_args_buf;
 } jit_inline_ext_t;
 
@@ -3002,6 +2992,100 @@ static bool jit_emit_inline_body(
         MIR_reg_t nc_this = nc_method ? inl_vs[--isp] : inl_undef;
         MIR_reg_t nc_dst = nc_tail ? result : inl_vs[isp++];
 
+        /* Devirt-in-inline: mirror the main emitter's known-target
+           dispatch so calls inside an inline body stay JIT->JIT.
+           Routing them through the generic helpers instead measured
+           DeltaBlue −7% (that is why call-op inlining was gated off). */
+        MIR_label_t dv_generic = MIR_new_label(ctx);
+        MIR_label_t dv_done = MIR_new_label(ctx);
+        {
+          int dv_off = (int)(ip - callee->code);
+          char dv_rn[48];
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_cl", id, dv_off);
+          MIR_reg_t r_dv_cl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, dv_rn);
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_fn", id, dv_off);
+          MIR_reg_t r_dv_fn = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, dv_rn);
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_jp", id, dv_off);
+          MIR_reg_t r_dv_jp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, dv_rn);
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_this", id, dv_off);
+          MIR_reg_t r_dv_this = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, dv_rn);
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_sup", id, dv_off);
+          MIR_reg_t r_dv_sup = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, dv_rn);
+          snprintf(dv_rn, sizeof(dv_rn), "inl%d_dv%d_bnd", id, dv_off);
+          MIR_reg_t r_dv_bound = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, dv_rn);
+
+          /* super() cannot appear in inlineable bodies (derived ctors are
+             excluded), but a callee equal to the inlinee's super value gets
+             the generic path, matching the main emitter's dispatch order. */
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BEQ,
+              MIR_new_label_op(ctx, dv_generic),
+              MIR_new_reg_op(ctx, nc_fn),
+              MIR_new_reg_op(ctx, r_inl_super)));
+          mir_emit_get_closure(ctx, jit_func, r_dv_cl, nc_fn, r_bool, dv_generic);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_bool),
+              MIR_new_mem_op(ctx, MIR_T_U32,
+                (MIR_disp_t)offsetof(sv_closure_t, call_flags),
+                r_dv_cl, 0, 1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_AND,
+              MIR_new_reg_op(ctx, r_bool),
+              MIR_new_reg_op(ctx, r_bool),
+              MIR_new_uint_op(ctx, (uint64_t)SV_CALL_HAS_BOUND_ARGS)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BNE,
+              MIR_new_label_op(ctx, dv_generic),
+              MIR_new_reg_op(ctx, r_bool),
+              MIR_new_uint_op(ctx, 0)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_dv_fn),
+              MIR_new_mem_op(ctx, MIR_T_P,
+                (MIR_disp_t)offsetof(sv_closure_t, func),
+                r_dv_cl, 0, 1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_dv_sup),
+              MIR_new_mem_op(ctx, MIR_T_I64,
+                (MIR_disp_t)offsetof(sv_closure_t, super_val),
+                r_dv_cl, 0, 1)));
+          mir_emit_resolve_call_this(ctx, jit_func, r_dv_this, r_dv_cl,
+                                     nc_this, r_bool, r_dv_bound);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BEQ,
+              MIR_new_label_op(ctx, dv_generic),
+              MIR_new_reg_op(ctx, r_dv_fn),
+              MIR_new_int_op(ctx, 0)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_dv_jp),
+              MIR_new_mem_op(ctx, MIR_T_P,
+                (MIR_disp_t)offsetof(sv_func_t, jit_code),
+                r_dv_fn, 0, 1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BEQ,
+              MIR_new_label_op(ctx, dv_generic),
+              MIR_new_reg_op(ctx, r_dv_jp),
+              MIR_new_int_op(ctx, 0)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, ext->self_proto),
+              MIR_new_reg_op(ctx, r_dv_jp),
+              MIR_new_reg_op(ctx, nc_dst),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_dv_this),
+              MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+              MIR_new_reg_op(ctx, r_dv_sup),
+              MIR_new_reg_op(ctx, ext->r_args_buf),
+              MIR_new_int_op(ctx, (int64_t)nc_argc),
+              MIR_new_reg_op(ctx, r_dv_cl)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, dv_done)));
+        }
+        MIR_append_insn(ctx, jit_func, dv_generic);
+
         if (nc_method) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_call_insn(ctx, 12,
@@ -3030,6 +3114,7 @@ static bool jit_emit_inline_body(
               MIR_new_reg_op(ctx, ext->r_args_buf),
               MIR_new_int_op(ctx, (int64_t)nc_argc)));
         }
+        MIR_append_insn(ctx, jit_func, dv_done);
 
         if (nc_tail) {
           /* Tail position: the call's value (error or not) IS the return
@@ -6573,6 +6658,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               .call_method_proto = call_method_proto, .imp_call_method = imp_call_method,
               .imp_band = imp_band, .imp_bor = imp_bor, .imp_bxor = imp_bxor,
               .imp_shl = imp_shl, .imp_shr = imp_shr, .imp_ushr = imp_ushr,
+              .self_proto = self_proto,
               .r_args_buf = r_args_buf,
             };
             bool inlined = jit_emit_inline_body(
@@ -10221,6 +10307,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               .call_method_proto = call_method_proto, .imp_call_method = imp_call_method,
               .imp_band = imp_band, .imp_bor = imp_bor, .imp_bxor = imp_bxor,
               .imp_shl = imp_shl, .imp_shr = imp_shr, .imp_ushr = imp_ushr,
+              .self_proto = self_proto,
               .r_args_buf = r_args_buf,
             };
             (void)jit_emit_inline_body(

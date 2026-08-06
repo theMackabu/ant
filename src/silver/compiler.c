@@ -14,6 +14,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+
+#include "numbers.h"
+
+/* JS Number-to-String for numeric literal property keys. %g truncates at 6
+   significant digits ({123456789: 1} became key "1.23457e+08"). Literal
+   keys are non-negative, but 1e999-style literals overflow to Infinity. */
+static size_t literal_num_key(double num, char *buf, size_t cap) {
+  if (isnan(num)) return (size_t)snprintf(buf, cap, "NaN");
+  if (isinf(num)) return (size_t)snprintf(buf, cap, num > 0 ? "Infinity" : "-Infinity");
+  return ant_number_to_shortest(num, buf, cap);
+}
 
 enum {
   SV_ITER_HINT_GENERIC = 0,
@@ -273,8 +285,8 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
 
   if (key->type == N_NUMBER) {
     char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%g", key->num);
-    emit_constant(c, js_mkstr_permanent(c->js, buf, (size_t)n));
+    size_t n = literal_num_key(key->num, buf, sizeof(buf));
+    emit_constant(c, js_mkstr_permanent(c->js, buf, n));
     return;
   }
 
@@ -4053,7 +4065,7 @@ static bool object_literal_static_keys(
     } else if (k->type == N_STRING) {
       keys[i] = k->str ? k->str : ""; lens[i] = k->len;
     } else if (k->type == N_NUMBER) {
-      int nn = snprintf(numbuf[i], sizeof(numbuf[i]), "%g", k->num);
+      size_t nn = literal_num_key(k->num, numbuf[i], sizeof(numbuf[i]));
       keys[i] = numbuf[i]; lens[i] = (uint32_t)nn;
     } else return false;
     for (int j = 0; j < i; j++)
@@ -4157,7 +4169,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
         emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str ? prop->left->str : "", prop->left->len);
       } else if (prop->left->type == N_NUMBER) {
         char buf[32];
-        int n = snprintf(buf, sizeof(buf), "%g", prop->left->num);
+        size_t n = literal_num_key(prop->left->num, buf, sizeof(buf));
         emit_atom_op(c, OP_DEFINE_FIELD, buf, (uint32_t)n);
       } else emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str, prop->left->len);
     }

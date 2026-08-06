@@ -1,8 +1,13 @@
 # fable-perf-fixes Landing
 
 Status: all phases implemented + interleaved A/B validated (2026-08-03);
-GC-stress pass for 1b/2 still pending
-Last reviewed: 2026-08-03
+regression-fix session 2026-08-06 closed every open item (see the
+"Regression-fix session" section): R1 gc_async/coro FIXED (regex-cache
+O(n²) scan), R2 regex-vs-prod FALSIFIED (PGO build artifact), R3
+devirt-in-inline LANDED (call-op inlining re-enabled), R4 double-bind
+FIXED, R5 numeric literal keys FIXED, R6 adaptive nursery REJECTED with
+data, GC-stress pass DONE (hook removed).
+Last reviewed: 2026-08-06
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
 ## vs pinned base /tmp/ant_fable_base = master 66499b0b)
@@ -24,7 +29,8 @@ Caveats found while measuring:
   "A/B" through the runner is self-vs-self. Measure by concatenating
   `tests/base.js + tests/<t>.js + harness.js` and running the file
   directly under each pinned binary. (Same trap family as `ant x`
-  execing the PATH binary.) Fix the runner separately.
+  execing the PATH binary.) FIXED 2026-08-06: the runner honors
+  `ANT_TEST_BIN` for children now.
 - **RegExp −6%**: small, consistent. Suspects: the `func_obj == 0`
   branch now in every `js_as_obj` on functions, or the dense-array check
   at the top of `arr_get`. Deferred; targeted look later.
@@ -568,12 +574,11 @@ Results: mechanical set KEPT (Richards 2631→2662-2687, others neutral,
 all gates green). **Call-op inlining DISABLED after measurement:
 DeltaBlue 4271→3976 (−7%) — inlining a method turns its nested calls
 from devirtualized direct JIT->JIT (in its standalone compilation) into
-generic helper calls. The inline emitter cases remain, flag-gated off in
-opcode.h.** Conclusion: inline *coverage* was not the bottleneck; the
-main emitter's devirt call fastpaths are. The first concrete milestone
-of real 7c is therefore **devirt-in-inline** (known-target direct calls
-inside inline bodies), then virtual objects (allocation sinking) for
-RayTrace/EarleyBoyer/newt-monad wins.
+generic helper calls. RESOLVED 2026-08-06: devirt-in-inline landed and
+the CALL/CALL_METHOD/TAIL_CALL(_METHOD) SV_OPF_JIT_INLINEABLE flags are
+back ON (see the regression-fix session section).** Next 7c step:
+virtual objects (allocation sinking) for RayTrace/EarleyBoyer/newt-monad
+wins.
 
 **sv_closure_t bound/pending union (2026-08-05, late):** 136 → 120B.
 `{bound_argv, bound_args}` and `{pending_name, pending_name_len}` share a
@@ -646,32 +651,33 @@ World Tick avg 1.71 vs 1.79ms (−4.2%), Rendering avg 1.13 vs 1.25ms
 (**−9.8%** — the string-builder/literal-shape-heavy half). Net: ~7%
 faster for ~3MB more average RSS.
 **Two regressions in synthetic GC stress tests: test_gc_async +72%
-(0.87→1.51s), test_gc_coro +10% — caused by tonight's GC-path changes
-(bisected: union bin 0.89s). NOT major-count (56 explicit majors both,
-counters zero), NOT per-call regex speed (bench_regex flat across all
-binaries), NOT the young-fraction gate (added, no change). Profile:
-build spends 6x more self-time in regexp_exec_internal on FIXED work
-(200k regex calls both) — the 6 minors the build now runs appear to
-deopt a per-call regex path (suspect: an epoch-guarded regex/replace
-intrinsic cache wiped by ant_ic_obj_epoch_bump per minor). OPEN — a
-fresh-session item; both tests PASS their harness mem gates and all
-real workloads improved. Latent bug FIXED during the hunt (keep):
-gc_sweep_regex_cache treated old owners as dead during minors (old
-objects are never epoch-stamped in minors) — every minor freed the
-whole warm regex cache; now generation-aware (minor=true skips old
-owners).**
+(0.87→1.51s), test_gc_coro +10% — RESOLVED 2026-08-06 (see the
+regression-fix session section). The epoch-deopt theory was WRONG; the
+mechanism (pinned by ANT_REGEX_STATS counters) was the obj-keyed
+regex_cache's LINEAR lookup scan: regex literals create a fresh owner
+object per evaluation, entries pile up until a sweep, and the evening
+GC fixes made majors much rarer — 2.4e9 scan iterations over the run.
+Fixed with a pointer-keyed open-addressing index; async 1.51→0.82s
+(better than the union bisect point), coro 7.07→6.37s. The
+generation-aware gc_sweep_regex_cache fix was kept as instructed.**
 
-**Regex vs prod (tests/bench_regex.cjs, interleaved): −22% overall,
-sharpening the deferred bench-v8 RegExp 0.94x item.** Compile even,
-route matches +8%, token scan +20%, identifier split +26% — the
-regression concentrates in matching over the unicode corpus, i.e. the
-byte<->utf16 offset conversions per match/lastIndex that the June
-branch's u16_idx chunk index accelerated. That index remains
-deliberately excluded (unresolved +50% sequential-scan cost on re-port;
-see utf16-random-access-index.md) — re-landing it gated on solving the
-sequential cost is the fix path. Constant across all of today's pinned
-binaries (came with the June+Phase6 base; unrelated to the
-test_gc_async post-minor regex mystery above).
+**Regex vs prod (tests/bench_regex.cjs, interleaved): −22% overall —
+FALSIFIED as a code regression 2026-08-06.** The offset-conversion
+theory was WRONG twice over: (a) `src/utf8.c` is byte-identical between
+prod's commit (ca8e720d) and HEAD, and (b) bench_regex's "unicode
+corpus" is pure ASCII — the utf16 conversion paths never execute in the
+regressed benches. The real cause is a BUILD artifact: macos-aarch64
+releases are built with `-Dpgo=enabled` (.github/versions.json) and
+prod's PGO profile matched its source. Evidence (fixed-work token-scan
+micro): prod 673-689ms; pre-stack master 66499b0b built locally
+non-PGO 848-856ms (identical "regression" with none of the stack);
+66499b0b built WITH the checked-in profdata 700-705ms (= prod); current
+tree with the (now stale) profdata 795-832ms. The u16_idx index is
+therefore NOT a fix for any current regression — it stays an
+enhancement for non-ASCII positional ops, still gated on its +50%
+sequential cost. Action: regenerate meson/pgo/profiles from post-stack
+source at release time; never compare local non-PGO builds against the
+installed prod binary for C-runtime-heavy microbenches (new trap).
 
 **Remaining, updated ranking (now in the ~1s-class flat zone for GC
 mechanics):**
@@ -688,6 +694,122 @@ mechanics):**
 across the rounds), Octane geomean from ~1692 toward the June ~2600-class
 scores. The primitive-IC port already landed separately (charCodeAt 4.5×,
 primitive-miss path 7×).
+
+## Regression-fix session (2026-08-06) — every open R-item closed
+
+All changes uncommitted on `perf/vm-dispatch` on top of 50f99260. Final
+battery on the finished tree: spec 3712/0, jit 9 files/0 fail, harness
+**170**/0 (168 + test_double_bind + test_numeric_literal_keys; express
+oha 16.4k ≥ 16k), devirt fuzzer all seeds agree, newt Main in band
+(41.2-45.3s across the day — late-day readings ran hot; interleaved
+final-vs-r3-pin showed no systematic direction, r3 itself swung
+43.4/46.0), RSS 565-666MB.
+
+**R1 test_gc_async +72% / test_gc_coro +10% — FIXED.** Counters before
+code (new `ANT_REGEX_STATS=1`, kept, atexit dump like ANT_IC_STATS):
+1.4M regexp_exec_internal calls, 200k obj-cache misses+inserts (fresh
+regexp-literal owner object per replace call), **2.4e9 linear scan
+iterations** in regex_cache_lookup, max cache 3560 entries, 56
+compiles. The prior theories (epoch-deopt of an intrinsic, per-call
+regex speed) were wrong: the union bin was only "fast" because its
+pathological direct-path major rate (the express disease, 252/s)
+constantly wiped this cache; the evening GC fixes made majors rare and
+exposed the O(n) scan × O(n) entries growth. Fix: pointer-keyed
+open-addressing index over the flat entry array (`regex_cache_index`
+in src/modules/regex.c; tombstones on remove, index rebuilt in
+gc_sweep_regex_cache — the flat array remains the sweep walk). Results
+(interleaved, pinned): async 1.51→**0.82s** (union 0.85-0.88), coro
+7.07→**6.37s** (union 6.47-6.50). Also holds under ANT_GC_STRESS=3
+(0.82s). Bonus observed while instrumenting: the [gc-majors] atexit
+dump does NOT count the direct `gc_run` at src/pool.c:311
+(js_type_alloc pool-pressure) — 24/25 majors in this workload were
+uncounted; add a counter if majors need auditing again.
+
+**R2 regex −22% vs prod — FALSIFIED, no code change needed** (see the
+amended entry above for full evidence). PGO build artifact:
+macos-aarch64 prod is `-Dpgo=enabled` with profile data matching its
+source; identical "regression" reproduces on pre-stack master built
+locally, and disappears when 66499b0b is built with the checked-in
+profdata. bench_regex's regressed benches never execute utf16
+conversion code (ASCII corpus) and src/utf8.c is unchanged vs prod, so
+the u16_idx plan does not apply. The sequential-scan micro (Buffer.from
+ucs2 non-ASCII 100KB) is at parity with prod (19ms both) — no
+sequential regression exists on this tree either. The bench-v8 RegExp
+0.94x item (local-vs-local vs /tmp/ant_fable_base, so real) stays
+deferred with its two suspects (js_as_obj func_obj==0 branch, arr_get
+dense pre-check); note today's tree WINS the fixed-work token-scan
+micro vs a fresh local 66499b0b build (805-835 vs 848-856ms), so
+whatever remains is workload-specific to bench-v8's regexp.js.
+
+**R3 DeltaBlue call-op inlining — LANDED (devirt-in-inline).** The
+inline emitter's CALL/CALL_METHOD/TAIL_CALL(_METHOD) case now emits the
+main emitter's known-target dispatch before falling back to the generic
+helpers: super-value compare → tag check/closure extract →
+HAS_BOUND_ARGS → func load → resolve_call_this → jit_code load → direct
+call through `self_proto` (new field in jit_inline_ext_t, populated at
+both construction sites). SV_OPF_JIT_INLINEABLE re-enabled on all four
+call ops in opcode.h. Interleaved 3-round A/B vs same-day pre-R3 pin:
+DeltaBlue 4192/4247/4251 vs 4122/4161/4208 (flags-on now BEATS
+flags-off; the old 4271 bar was that day's thermal band — today's
+flags-off baseline measures ~4160), Richards 2637-2644 vs 2623-2658
+(holds), Crypto/Splay even, RayTrace −1-3% (one 2781 outlier in 5
+rounds, rest 2992-3086 vs 3010-3108 — noise-adjacent), EarleyBoyer
+6112 vs 5956 and NavierStokes 2764 vs 2633 (single runs, positive).
+Devirt fuzzer clean, full battery green.
+
+**R4 double-bind — FIXED + tests.** builtin_function_bind's T_FUNC path
+now keeps the inner binding's `bound_this` and concatenates orig's bound
+argv BEFORE the new args (`inner.args ++ outer.args ++ call args`). The
+union is switched to the bound side (argv=NULL/args_arr=undef) BEFORE
+mkarr can GC. A review follow-up found that the first version still used
+`undefined` as both a valid bound-this value and the "not bound" sentinel:
+an expanded deterministic bind-chain matrix reproduced **45/182**
+failures across direct and method calls. `SV_CALL_HAS_BOUND_THIS` now
+records the state explicitly in native, proxy, interpreter, tail-call,
+and JIT call paths. The final matrix adds native/proxy, explicit-call,
+tail-call, and constructor cases and passes **187/187 under both node
+and Ant**.
+`f.bind({x:1},10).bind({x:2},20)(30)` → this={x:1}, args [10,20,30] =
+node; triple bind, cfunc-target double bind (Math.max/min), arrow
+folding, name/length chain, constructors, and `undefined` bound-this
+retention all match node. tests/test_double_bind.cjs is in the harness
+REGRESSION_TESTS and retains the GC-churn survival check.
+
+**R5 numeric literal keys — FIXED + tests.** New `literal_num_key()`
+(compiler.c) routes all three %g sites (compile key emit ~276,
+object_literal_static_keys ~4056, DEFINE_FIELD fallback ~4160) through
+`ant_number_to_shortest` with NaN/±Infinity handling (1e999 literals
+overflow to Infinity). `{123456789:1}` → key "123456789";
+Object.keys ordering and exponent forms (1e21, 9007199254740993
+rounding) match node exactly. tests/test_numeric_literal_keys.cjs in
+the harness manifest.
+
+**R6 adaptive closure nursery — REJECTED with data, reverted.** The
+premise no longer holds: on today's tree Prelude at the fixed 131072
+threshold measures **~3.0s**, not the 3.6s recorded when the trade was
+banked — the +0.75s penalty was absorbed by later work (7a/fused
+sweep era). Measurements: per-minor survival (promoted/roster,
+ANT_GC_LOG) does NOT separate the phases (Prelude-only run: mean 3.74%,
+p50 2.64%; full run: mean 5.84%, p50 5.41% — overlapping), so
+survival-based sizing is unsound. A cumulative-allocation-based
+adaptive version (start 16384, double when total closure allocs cross
+8M/16M/32M, cap 131072; Prelude allocates ~7.6M total so it stays
+small) was implemented and interleaved-A/B'd: Prelude FLAT (3051/2933
+vs 3015/2998), Main **+1.4s both rounds** (44290/41957 vs 42826/40670).
+Fails the "both phases improve" gate on both ends — reverted cleanly.
+Do not retry without first re-establishing that a Prelude penalty
+exists at all.
+
+**Cleanup.** (1) examples/bench-v8/index.js honors `ANT_TEST_BIN` for
+benchmark children — runner-level A/Bs are no longer self-vs-self.
+(2) ANT_GC_STRESS validation debt paid: temporary hook added to
+gc_maybe (shape from completed/module-import-gc-flake.md), battery run,
+hook REMOVED. Results: spec 3712/0 under stress=10; new regression
+tests + test_gc_async pass under stress=1/3. Full spec under stress=3
+SIGSEGVs (worker-area teardown, PC=0) — reproduced IDENTICALLY on clean
+pre-stack master 66499b0b with the same hook, i.e. the pre-existing
+worker_threads teardown UAF documented in module-import-gc-flake.md,
+not this stack.
 
 ## Decision log
 
