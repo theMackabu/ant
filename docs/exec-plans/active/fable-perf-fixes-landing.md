@@ -636,6 +636,15 @@ ANT_IC_STATS=1 keeps the objepoch-refill + gc-majors atexit dump.**
 wins — fibonacci_recursive −33%, bench_gc_mark_func −36%, bench_dec −26%,
 bench_epoch −19%, test_async_gc −10%, bench_churn −4%; flat — pi,
 mandelbrot, event_loop, bench_gc, test_gc_large, test_gc_comprehensive.
+game-of-life RSS sampler (`ant game-of-life/sample.js 10 <bin>
+game-of-life/dist/play.js`, 10s, 21 samples): identical sawtooth envelope
+both binaries, no growth trend; build avg 32.7MB (23.7–42.1) vs prod
+29.9MB (22.4–39.6) — +~3MB avg from the 128k closure-nursery working set,
+same signature as the churn benches. Throughput (interleaved, 2x12s,
+play.js direct): build 4216/4186 ticks vs prod 3939/3910 = **+7.0%**;
+World Tick avg 1.71 vs 1.79ms (−4.2%), Rendering avg 1.13 vs 1.25ms
+(**−9.8%** — the string-builder/literal-shape-heavy half). Net: ~7%
+faster for ~3MB more average RSS.
 **Two regressions in synthetic GC stress tests: test_gc_async +72%
 (0.87→1.51s), test_gc_coro +10% — caused by tonight's GC-path changes
 (bisected: union bin 0.89s). NOT major-count (56 explicit majors both,
@@ -651,6 +660,18 @@ gc_sweep_regex_cache treated old owners as dead during minors (old
 objects are never epoch-stamped in minors) — every minor freed the
 whole warm regex cache; now generation-aware (minor=true skips old
 owners).**
+
+**Regex vs prod (tests/bench_regex.cjs, interleaved): −22% overall,
+sharpening the deferred bench-v8 RegExp 0.94x item.** Compile even,
+route matches +8%, token scan +20%, identifier split +26% — the
+regression concentrates in matching over the unicode corpus, i.e. the
+byte<->utf16 offset conversions per match/lastIndex that the June
+branch's u16_idx chunk index accelerated. That index remains
+deliberately excluded (unresolved +50% sequential-scan cost on re-port;
+see utf16-random-access-index.md) — re-landing it gated on solving the
+sequential cost is the fix path. Constant across all of today's pinned
+binaries (came with the June+Phase6 base; unrelated to the
+test_gc_async post-minor regex mystery above).
 
 **Remaining, updated ranking (now in the ~1s-class flat zone for GC
 mechanics):**
