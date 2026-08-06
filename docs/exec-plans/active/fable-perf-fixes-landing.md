@@ -1018,11 +1018,37 @@ benchmark children — runner-level A/Bs are no longer self-vs-self.
 (2) ANT_GC_STRESS validation debt paid: temporary hook added to
 gc_maybe (shape from completed/module-import-gc-flake.md), battery run,
 hook REMOVED. Results: spec 3712/0 under stress=10; new regression
-tests + test_gc_async pass under stress=1/3. Full spec under stress=3
-SIGSEGVs (worker-area teardown, PC=0) — reproduced IDENTICALLY on clean
-pre-stack master 66499b0b with the same hook, i.e. the pre-existing
-worker_threads teardown UAF documented in module-import-gc-flake.md,
-not this stack.
+tests + test_gc_async pass under stress=1/3. The intermittent full-spec
+stress=3 SIGSEGV (PC=0 in `uv__stream_io`) was reproduced IDENTICALLY on
+clean pre-stack master 66499b0b, but the original worker-teardown
+attribution was WRONG. `ANT_WT_TRACE` showed a successful spawn and no
+worker exit/teardown callback before the crash. The minimal reproducer was
+`websocket worker_threads`: a remote WebSocket close removed the socket
+from `g_active_websockets`, forced GC finalized its native state while the
+tlsuv transport was still live (`tr != NULL`), and the next loop turn
+serviced the stale transport. The fix keeps the WebSocket rooted until
+tlsuv transport close completion and makes tlsuv defer its close callback
+until that completion. Evidence: the former reproducer is clean 20/20
+with tracing plus 10/10 without tracing at stress=3; the full 3712-test
+spec is clean twice at stress=3. The temporary stress and trace hooks were
+removed.
+
+WebSocket performance/resource follow-up versus installed release
+`/Users/themackabu/.ant/bin/ant` (`ca8e720d`, pinned MD5
+`33ea23ff2faa4c7f6c3302aff2e2d279`; candidate pinned MD5
+`c29b799b8a18f09f67760cc69ea7d0d1`): after clearing localhost
+`TIME_WAIT`, four alternating interleaved rounds of 50 connections ×
+10,000 echoed messages measured installed 3.65/3.64/3.64/3.70s versus
+candidate 3.63/3.64/3.67/3.72s. Means 3.658s versus 3.665s, **+0.2% /
+flat**. The sockets were retained only to keep the release bug from
+invalidating the timing comparison. On the close-lifecycle workload,
+2,000 completed retained sockets left **2,010 open FDs** on installed
+Ant versus **10** on the candidate. Without retention, installed Ant
+SIGSEGVs during natural GC before completing 4,000 cycles while the
+candidate completes; with retention, installed Ant reaches `EMFILE`
+before 6,000 cycles while the candidate completes 10,000. The fix has
+no measurable message-throughput cost and removes the native transport
+leak/crash.
 
 ## Decision log
 
