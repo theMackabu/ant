@@ -332,14 +332,12 @@ static inline ant_value_t sv_op_call_call(
       fake.func = f2;
       fake.upvalues = fake.inline_upvals;
       fake.bound_this = js_mkundef();
-      fake.bound_argv = NULL;
-      fake.bound_args = js_mkundef();
       fake.super_val = js_mkundef();
       fake.func_obj = 0;
       fake.js = js;
       fake.module_ctx = c1->module_ctx;
-      fake.pending_name = NULL;
-      fake.pending_name_len = 0;
+      fake.u.pending.name = NULL;
+      fake.u.pending.len = 0;
       fake.in_remember_set = 1;
       fake.gc_epoch = gc_get_epoch();
 

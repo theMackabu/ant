@@ -469,19 +469,32 @@ typedef struct sv_closure {
   sv_upvalue_t **upvalues;
   sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
   ant_value_t bound_this;
-  ant_value_t *bound_argv;
-  ant_value_t bound_args;
   ant_value_t super_val;
   /* 0 (raw) = function object not materialized yet; see js_func_obj. */
   ant_value_t func_obj;
+
+  /* Discriminated by SV_CALL_HAS_BOUND_ARGS. The two sides never coexist:
+     bind() results carry bound args and always materialize func_obj at
+     creation, while the pending-name stash is only written/read while
+     func_obj == 0 (SET_NAME paths and sv_closure_materialize_func_obj
+     both check it). GC marking and both sweeps must branch on the flag —
+     freeing `pending.name` (code-arena memory) would corrupt the heap. */
+  union {
+    struct {
+      ant_value_t *argv;   /* malloc'd copy of the bound arguments */
+      ant_value_t args_arr; /* JS array keeping argv's contents alive */
+    } bound;
+    struct {
+      const char *name;
+      uint32_t len;
+    } pending;
+  } u;
 
   /* Captured at closure creation for lazy func_obj materialization.
      `js` is the owning isolate — js_func_obj has no isolate argument
      and there is no process-global isolate to reach for. */
   ant_t *js;
   ant_value_t module_ctx;
-  const char *pending_name;
-  uint32_t pending_name_len;
   uint8_t in_remember_set;
 
   uint64_t gc_epoch;
@@ -505,8 +518,8 @@ static inline sv_closure_t *js_closure_alloc(ant_t *js) {
     c->js = js;
     c->func_obj = 0;
     c->module_ctx = mkval(T_UNDEF, 0);
-    c->pending_name = NULL;
-    c->pending_name_len = 0;
+    c->u.pending.name = NULL;
+    c->u.pending.len = 0;
     c->in_remember_set = 0;
     if (js->young_closure_len < js->young_closure_cap)
       js->young_closures[js->young_closure_len++] = c;
@@ -530,13 +543,12 @@ static inline sv_closure_t *js_closure_alloc_hot(ant_t *js) {
   if (c) {
     c->call_flags = 0;
     c->upvalues = NULL;
-    c->bound_argv = NULL;
     c->gc_epoch = gc_get_epoch();
     c->js = js;
     c->func_obj = 0;
     c->module_ctx = mkval(T_UNDEF, 0);
-    c->pending_name = NULL;
-    c->pending_name_len = 0;
+    c->u.pending.name = NULL;
+    c->u.pending.len = 0;
     c->in_remember_set = 0;
     if (js->young_closure_len < js->young_closure_cap)
       js->young_closures[js->young_closure_len++] = c;
@@ -829,7 +841,7 @@ static inline ant_value_t *sv_prepend_bound_args(
   ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
   
   if (!combined) { *out_total = argc; return NULL; }
-  memcpy(combined, closure->bound_argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
+  memcpy(combined, closure->u.bound.argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
   memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
   
   *out_total = total;

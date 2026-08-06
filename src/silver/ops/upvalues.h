@@ -201,9 +201,7 @@ static inline ant_value_t sv_op_closure(
   sv_closure_t *closure = js_closure_alloc_hot(js);
   closure->func = child;
   closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
-  closure->bound_argv = NULL;
   closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 

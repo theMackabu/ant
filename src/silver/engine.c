@@ -1004,10 +1004,10 @@ ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
                                             ant_value_t func_val) {
   if (c->func_obj) return c->func_obj;
   sv_init_closure_function_object(js, c, func_val, c->module_ctx);
-  if (c->pending_name && c->func_obj) {
-    js_set_function_name(js, func_val, c->pending_name, c->pending_name_len);
-    c->pending_name = NULL;
-    c->pending_name_len = 0;
+  if (!(c->call_flags & SV_CALL_HAS_BOUND_ARGS) && c->u.pending.name && c->func_obj) {
+    js_set_function_name(js, func_val, c->u.pending.name, c->u.pending.len);
+    c->u.pending.name = NULL;
+    c->u.pending.len = 0;
   }
   return c->func_obj;
 }

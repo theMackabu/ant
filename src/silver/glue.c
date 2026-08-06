@@ -845,9 +845,7 @@ ant_value_t jit_helper_closure(
 
   closure->func = child;
   closure->bound_this = child->is_arrow ? this_val : js_mkundef();
-  closure->bound_argv = NULL;
   closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
@@ -877,8 +875,8 @@ ant_value_t jit_helper_closure(
     js, mkval(T_FUNC, (uintptr_t)parent_closure)
   );
   closure->func_obj = 0;
-  closure->pending_name = name;
-  closure->pending_name_len = name_len;
+  closure->u.pending.name = name;
+  closure->u.pending.len = name_len;
 
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
   if (is_object_type(eval_env)) {
@@ -986,8 +984,8 @@ void jit_helper_set_name(
   if (vtype(fn) == T_FUNC) {
     sv_closure_t *c = js_func_closure(fn);
     if (!c->func_obj) {
-      c->pending_name = str;
-      c->pending_name_len = len;
+      c->u.pending.name = str;
+      c->u.pending.len = len;
       return;
     }
   }

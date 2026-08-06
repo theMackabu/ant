@@ -555,6 +555,46 @@ run level, the phase timer is the evidence). Roster prefetch in closure
 sweeps tried, measured nothing, dropped. Gates: harness 168/0,
 DeltaBlue 4119, spec/jit clean, GC micros green.
 
+**Inline-emitter widening (2026-08-05, late) — mixed, decisive data:**
+Rejection histogram (`[inline-reject]`, per blocked call site) showed
+Richards blocked on PUT_FIELD/bitwise, DeltaBlue on CALL_METHOD (33
+sites) + size cap. Implemented: side-effect-sound inline discipline
+(side-effecting ops raise errors at the JOIN — never to `slow`, whose
+generic fallback re-executes the callee; after the first effect only
+never-slow ops + forward jumps allowed), jit_inline_ext_t plumbing, new
+inline cases for PUT_FIELD / GET_ELEM / GET_LENGTH / BAND..USHR
+(num-guarded) / CALL / CALL_METHOD / TAIL_CALL(_METHOD), cap 128→192.
+Results: mechanical set KEPT (Richards 2631→2662-2687, others neutral,
+all gates green). **Call-op inlining DISABLED after measurement:
+DeltaBlue 4271→3976 (−7%) — inlining a method turns its nested calls
+from devirtualized direct JIT->JIT (in its standalone compilation) into
+generic helper calls. The inline emitter cases remain, flag-gated off in
+opcode.h.** Conclusion: inline *coverage* was not the bottleneck; the
+main emitter's devirt call fastpaths are. The first concrete milestone
+of real 7c is therefore **devirt-in-inline** (known-target direct calls
+inside inline bodies), then virtual objects (allocation sinking) for
+RayTrace/EarleyBoyer/newt-monad wins.
+
+**sv_closure_t bound/pending union (2026-08-05, late):** 136 → 120B.
+`{bound_argv, bound_args}` and `{pending_name, pending_name_len}` share a
+union discriminated by SV_CALL_HAS_BOUND_ARGS — the sides never coexist
+because bind() results always materialize func_obj at creation while the
+pending stash is only touched when func_obj == 0 (SET_NAME writers and
+sv_closure_materialize_func_obj both check it; materialize additionally
+guards on the flag). GC marking and BOTH sweeps now branch on the flag —
+an unguarded free would free pending.name (code-arena memory). Audit
+subtleties: the T_FUNC bind path COPIES orig->call_flags, so a re-bound
+bound function inherits HAS_BOUND_ARGS with zero new args — union init
+must branch on the final flags. A/B (interleaved, 2 rounds, vs pinned
+fused-sweep base; includes the inline-widening diff): Main 42.1/42.9 →
+**41.2/41.1 (−1.3s, −3.2%)**, both rounds faster. Full battery green;
+newt RSS 959MB. **Pre-existing bug found during audit (NOT a
+regression — reproduced on the pre-union binary): double-bind drops the
+inner binding's this and args (`f.bind({x:1},10).bind({x:2},20)(30)` →
+[2,20,30] instead of spec's this={x:1}, args [10,20,30]) — the T_FUNC
+bind path flattens onto orig->func without folding orig's bound state.
+File separately.**
+
 **Remaining, updated ranking (now in the ~1s-class flat zone for GC
 mechanics):**
 1. Object-churn deeper cuts: mkobj-uninit (7a-style explicit-init audit,

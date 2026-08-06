@@ -489,11 +489,16 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   closure->upvalues = NULL;
   closure->func_obj = (vtype(obj) == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   closure->bound_this = js_mkundef();
-  closure->bound_argv = NULL;
   closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = flags;
+  if (flags & SV_CALL_HAS_BOUND_ARGS) {
+    closure->u.bound.argv = NULL;
+    closure->u.bound.args_arr = js_mkundef();
+  } else {
+    closure->u.pending.name = NULL;
+    closure->u.pending.len = 0;
+  }
   
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   if (func_obj) {
@@ -6087,9 +6092,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
     if (bound_argc > 0) {
-      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      if (!bc->bound_argv) return js_mkerr(js, "oom");
-      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+      bc->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+      if (!bc->u.bound.argv) return js_mkerr(js, "oom");
+      memcpy(bc->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
       bc->bound_argc = bound_argc;
     }
 
@@ -6119,8 +6124,8 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
     if (bound_argc > 0) {
-      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+      bc->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+      memcpy(bc->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
       bc->bound_argc = bound_argc;
     }
     
@@ -6155,9 +6160,17 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
   bound_closure->bound_this = (orig->call_flags & SV_CALL_IS_ARROW) ? orig->bound_this : this_arg;
-  bound_closure->bound_args = js_mkundef();
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
+  /* call_flags copied from orig may already carry HAS_BOUND_ARGS
+     (re-binding a bound function); the union must match the flag. */
+  if (bound_closure->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+    bound_closure->u.bound.argv = NULL;
+    bound_closure->u.bound.args_arr = js_mkundef();
+  } else {
+    bound_closure->u.pending.name = NULL;
+    bound_closure->u.pending.len = 0;
+  }
 
   if (orig->func && orig->func->upvalue_count > 0 && orig->upvalues) {
     size_t upvalue_bytes = sizeof(sv_upvalue_t *) * (size_t)orig->func->upvalue_count;
@@ -6200,9 +6213,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   if (bound_argc > 0) {
     ant_value_t bound_arr = mkarr(js);
     for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
-    bound_closure->bound_args = bound_arr;
-    bound_closure->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-    memcpy(bound_closure->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+    bound_closure->u.bound.args_arr = bound_arr;
+    bound_closure->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+    memcpy(bound_closure->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
     bound_closure->bound_argc = bound_argc;
   }
 
@@ -17671,6 +17684,14 @@ void js_destroy(ant_t *js) {
 
 #ifdef ANT_JIT
   if (sv_closure_stats_enabled) {
+    extern uint64_t sv_stat_inline_reject_by_op[], sv_stat_inline_reject_size;
+    fprintf(stderr, "[inline-reject] size=%llu",
+            (unsigned long long)sv_stat_inline_reject_size);
+    for (int t = 0; t < OP__COUNT; t++)
+      if (sv_stat_inline_reject_by_op[t])
+        fprintf(stderr, " %s=%llu", sv_op_names[t],
+                (unsigned long long)sv_stat_inline_reject_by_op[t]);
+    fprintf(stderr, "\n");
     extern uint64_t sv_stat_call_call_fused, sv_stat_call_call_generic;
     fprintf(stderr, "[call-call] fused=%llu generic=%llu\n",
             (unsigned long long)sv_stat_call_call_fused,

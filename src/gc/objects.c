@@ -264,8 +264,12 @@ static void gc_sweep_young_closures(ant_t *js) {
       free(c->upvalues);
     }
     c->upvalues = NULL;
-    free(c->bound_argv);
-    c->bound_argv = NULL;
+    /* union: only bound closures own a malloc'd argv; the other arm is
+       code-arena memory that must never reach free(). */
+    if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+      free(c->u.bound.argv);
+      c->u.bound.argv = NULL;
+    }
     fixed_arena_free_elem(ca, c);
   }
   js->young_closure_len = 0;
@@ -421,13 +425,15 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   if (c->func_obj) gc_mark_value(js, c->func_obj);
   gc_mark_value(js, c->module_ctx);
   gc_mark_value(js, c->bound_this);
-  gc_mark_value(js, c->bound_args);
   gc_mark_value(js, c->super_val);
 
   if (c->func)
     gc_mark_upvalue_cells(js, c->upvalues, (uint32_t)c->func->upvalue_count);
-  if (c->bound_argv)
-    for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->bound_argv[i]);
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+    gc_mark_value(js, c->u.bound.args_arr);
+    if (c->u.bound.argv)
+      for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound.argv[i]);
+  }
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {
@@ -1069,8 +1075,10 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
     }
     c->upvalues = NULL;
 
-    free(c->bound_argv);
-    c->bound_argv = NULL;
+    if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+      free(c->u.bound.argv);
+      c->u.bound.argv = NULL;
+    }
 
     *(void **)c = ca->free_list;
     ca->free_list = c;

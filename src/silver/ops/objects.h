@@ -116,8 +116,8 @@ static inline void sv_op_set_name(
   if (vtype(fn) == T_FUNC) {
     sv_closure_t *c = js_func_closure(fn);
     if (!c->func_obj) {
-      c->pending_name = a->str;
-      c->pending_name_len = a->len;
+      c->u.pending.name = a->str;
+      c->u.pending.len = a->len;
       return;
     }
   }
