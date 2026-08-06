@@ -7,6 +7,9 @@ O(n²) scan), R2 regex-vs-prod FALSIFIED (PGO build artifact), R3
 devirt-in-inline LANDED (call-op inlining re-enabled), R4 double-bind
 FIXED, R5 numeric literal keys FIXED, R6 adaptive nursery REJECTED with
 data, GC-stress pass DONE (hook removed).
+R1 follow-up on 2026-08-06 added canonical RegExp result shapes and guarded
+batched global match/replace: result-consuming `exec()` −21.8%, global
+match+replace −77.3%, final harness 172/0.
 Last reviewed: 2026-08-06
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -843,6 +846,97 @@ Bonus observed while instrumenting: the [gc-majors] atexit dump does
 NOT count the direct `gc_run` at src/pool.c:311 (js_type_alloc
 pool-pressure) — 24/25 majors in this workload were uncounted; add a
 counter if majors need auditing again.
+
+**R1 follow-up — canonical results and batched global execution,
+2026-08-06.** Counters rejected the initial assumption that canonical result
+allocation would speed `bench_regex`: that benchmark uses the truthy-only
+`while (re.exec(...))` intrinsic and creates **zero** result arrays. A
+fixed-work result-consuming micro instead records 1,602,000
+`regexp_exec_internal` calls, 1,600,000 result arrays and 3,200,000 capture
+slots. A separate global `match` + string `replace` micro recorded 3,204,000
+execs, 3,200,000 generic result arrays, 6,400,000 capture slots, 1,600,000
+results discarded by `@@match`, and 1,600,000 materialized only so
+`@@replace` could consume their offsets.
+
+Two changes landed:
+
+1. Ordinary and `d`-flag exec results use one canonical per-isolate array
+   shape for `index`, `input`, `groups`, and optional `indices`. The shape is
+   built off a fresh array shape, retained by the isolate, installed before
+   direct slot writes, and released at isolate cleanup. Stores retain the GC
+   write barriers. Named-group accessor construction remains on the generic
+   path. Property order and writable/enumerable/configurable descriptors match
+   Node.
+2. Built-in global `@@match` and string-replacement `@@replace` can iterate
+   PCRE2 offsets directly. `@@match` materializes only the final matched
+   strings; `@@replace` streams unmatched spans and substitutions into the
+   output buffer. Neither creates an intermediate JS exec-result object.
+   The guard requires a real non-proxy RegExp with internal slots, the exact
+   built-in data-property `exec`, internal `g`, compiled data, and a guarded
+   writable own `lastIndex` location. Accessors, custom exec, proxies,
+   read-only or shape-changed `lastIndex`, non-global regexps, and function
+   replacers use the generic semantic path.
+
+The isolated canonical-shape A/B used counter-only
+`/tmp/ant_regex_result_stats_base_bin`
+(`7f7fe1656191fa8375df653d3b2a`) and shape candidate
+`/tmp/ant_regex_result_shape_bin`
+(`94e318b6bec32cd4abe1908096fa478a`). Four AB/BA rounds:
+
+| Fixed work | Counter base (ms) | Canonical shape (ms) | Median delta |
+|---|---:|---:|---:|
+| 1.6M materialized `exec()` results | 336.29, 333.96, 333.36, 342.26 | 259.13, 260.88, 255.16, 262.98 | **−22.4%** |
+
+The final source was retrained with a fresh macOS AArch64 PGO profile.
+Pinned hashes: prior direct-state
+`/tmp/ant_r1_direct_state_fresh_pgo_bin`
+(`0ef8fdec844213b0d6f3f934ecadf24c`) versus final
+`/tmp/ant_regex_result_batch_fresh_pgo_bin`
+(`c6b47c2fc9d00ae0c54dd0913f57cfc0`). Four AB/BA rounds for the regex
+micros and two for the long GC rows:
+
+| Workload | Prior fresh PGO | Final fresh PGO | Median delta |
+|---|---:|---:|---:|
+| 1.6M materialized `exec()` results | 314.31, 313.04, 309.33, 311.21 ms | 238.67, 244.21, 248.40, 243.77 ms | **−21.8%** |
+| 2k global match + replace rounds | 617.95, 626.41, 620.67, 623.56 ms | 140.71, 136.61, 142.08, 142.70 ms | **−77.3%** |
+| `test_gc_async` | 0.62, 0.62 s | 0.38, 0.38 s | **−38.7%** |
+| `test_gc_coro` | 6.19, 6.20 s | 5.96, 5.96 s | **−3.8%** |
+
+The installed `$PATH` binary was separately pinned as
+`/tmp/ant_installed_regex_result_compare_bin`
+(`33ea23ff2faa4c7f6c3302aff2e2d279`). Four AB/BA rounds:
+
+| Workload | Installed Ant (ms) | Final fresh PGO (ms) | Median delta |
+|---|---:|---:|---:|
+| 1.6M materialized `exec()` results | 405.20, 395.02, 411.43, 412.53 | 264.63, 259.86, 269.77, 268.70 | **−34.7%** |
+| 2k global match + replace rounds | 838.63, 825.65, 843.63, 838.47 | 148.80, 159.74, 152.86, 161.52 | **−81.4%** |
+
+The final global micro has the same checksum while recording zero
+`exec_internal` calls, zero generic result arrays, 2,000 batched match calls
+with 1.6M results, 2,000 batched replace calls with 1.6M results, and zero
+guard rejections. The result-consuming micro records 1.6M canonical-shape
+hits and zero fallbacks.
+
+Eight interleaved fresh-PGO rounds on the existing truthy-only rows found no
+actionable regression. The machine shifted into a 7-10% slower thermal band
+halfway through both binaries; across all rounds, compile was −0.1%, route
++1.5%, token scan +0.8%, and identifier split +0.1%. Those deltas are within
+the established noise floor and, as the counters show, do not exercise either
+new optimization.
+
+`tests/test_regexp_result_batch.cjs` covers canonical shape/order/descriptors,
+captures and indices, global/sticky/Unicode-empty match and replace,
+substitutions and RegExp statics, plus read-only `lastIndex`, accessor/custom
+exec, and function-replacer fallbacks. It matches Node. Focused regexp tests
+passed under a temporary `ANT_GC_STRESS=1/3` hook. Full stress 10 reached the
+already-documented worker-teardown null-PC SIGSEGV after all relevant spec
+work; the hook was removed and the ordinary full spec passed.
+
+Final gates on the exact fresh-PGO artifact: spec 3712/0, JIT 9 files/0 fail,
+harness **172/0** (`test_gc_async` 398ms; express oha **18,048 RPS**),
+devirt fuzzer all four seeds agree, and newt Main 43.418s / 727MB max RSS
+(933MB peak footprint). The regenerated profile and source remain
+uncommitted.
 
 **R2 regex −22% vs prod — FALSIFIED, no code change needed** (see the
 amended entry above for full evidence). PGO build artifact:

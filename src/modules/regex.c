@@ -46,6 +46,14 @@ typedef struct {
   bool borrowed;
 } regex_match_scope_t;
 
+typedef struct {
+  ant_shape_t *shape;
+  uint32_t index_slot;
+  uint32_t input_slot;
+  uint32_t groups_slot;
+  uint32_t indices_slot;
+} regexp_result_shape_t;
+
 enum {
   REGEXP_FLAG_HAS_INDICES = 1 << 0,
   REGEXP_FLAG_GLOBAL      = 1 << 1,
@@ -68,7 +76,18 @@ static uint64_t rxstat_exec_internal, rxstat_shared_fast, rxstat_cache_hit,
   rxstat_flags_reparsed, rxstat_lastindex_reads, rxstat_lastindex_writes,
   rxstat_lastindex_resets, rxstat_flags_direct,
   rxstat_flags_internal, rxstat_lastindex_fast_reads,
-  rxstat_lastindex_fast_writes;
+  rxstat_lastindex_fast_writes, rxstat_result_arrays,
+  rxstat_result_captures, rxstat_result_named_groups,
+  rxstat_result_indices, rxstat_symbol_match_calls,
+  rxstat_symbol_match_results, rxstat_symbol_replace_calls,
+  rxstat_symbol_replace_results, rxstat_symbol_replace_func,
+  rxstat_symbol_replace_substitution, rxstat_result_shape_fast,
+  rxstat_result_shape_fallback, rxstat_batch_match_calls,
+  rxstat_batch_match_results, rxstat_batch_replace_calls,
+  rxstat_batch_replace_results, rxstat_batch_guard_rejects,
+  rxstat_batch_reject_state, rxstat_batch_reject_exec_location,
+  rxstat_batch_reject_exec_accessor, rxstat_batch_reject_exec_value,
+  rxstat_batch_reject_flags, rxstat_batch_reject_lastindex;
 static bool rxstat_enabled;
 static void rxstat_dump(void) {
   fprintf(stderr,
@@ -77,7 +96,12 @@ static void rxstat_dump(void) {
     "[regex-stats] compiled-cache gen0=%llu gen1=%llu miss=%llu promotions=%llu evictions=%llu\n"
     "[regex-stats] compiles=%llu jit_match=%llu interp_match=%llu dynamic-match-data=%llu\n"
     "[regex-stats] flags calls=%llu direct=%llu internal=%llu cached=%llu reparsed=%llu\n"
-    "[regex-stats] lastIndex reads=%llu writes=%llu resets=%llu fast-read=%llu fast-write=%llu\n",
+    "[regex-stats] lastIndex reads=%llu writes=%llu resets=%llu fast-read=%llu fast-write=%llu\n"
+    "[regex-stats] results arrays=%llu captures=%llu named=%llu indices=%llu shape-fast=%llu shape-fallback=%llu\n"
+    "[regex-stats] symbol-match calls=%llu discarded-results=%llu\n"
+    "[regex-stats] symbol-replace calls=%llu materialized-results=%llu func=%llu substitution=%llu\n"
+    "[regex-stats] batch match-calls=%llu match-results=%llu replace-calls=%llu replace-results=%llu guard-rejects=%llu\n"
+    "[regex-stats] batch-reject state=%llu exec-location=%llu exec-accessor=%llu exec-value=%llu flags=%llu lastIndex=%llu\n",
     (unsigned long long)rxstat_exec_internal, (unsigned long long)rxstat_shared_fast,
     (unsigned long long)rxstat_exec_generic, (unsigned long long)rxstat_lit_obj,
     (unsigned long long)rxstat_cache_hit, (unsigned long long)rxstat_cache_miss,
@@ -101,13 +125,48 @@ static void rxstat_dump(void) {
     (unsigned long long)rxstat_lastindex_writes,
     (unsigned long long)rxstat_lastindex_resets,
     (unsigned long long)rxstat_lastindex_fast_reads,
-    (unsigned long long)rxstat_lastindex_fast_writes);
+    (unsigned long long)rxstat_lastindex_fast_writes,
+    (unsigned long long)rxstat_result_arrays,
+    (unsigned long long)rxstat_result_captures,
+    (unsigned long long)rxstat_result_named_groups,
+    (unsigned long long)rxstat_result_indices,
+    (unsigned long long)rxstat_result_shape_fast,
+    (unsigned long long)rxstat_result_shape_fallback,
+    (unsigned long long)rxstat_symbol_match_calls,
+    (unsigned long long)rxstat_symbol_match_results,
+    (unsigned long long)rxstat_symbol_replace_calls,
+    (unsigned long long)rxstat_symbol_replace_results,
+    (unsigned long long)rxstat_symbol_replace_func,
+    (unsigned long long)rxstat_symbol_replace_substitution,
+    (unsigned long long)rxstat_batch_match_calls,
+    (unsigned long long)rxstat_batch_match_results,
+    (unsigned long long)rxstat_batch_replace_calls,
+    (unsigned long long)rxstat_batch_replace_results,
+    (unsigned long long)rxstat_batch_guard_rejects,
+    (unsigned long long)rxstat_batch_reject_state,
+    (unsigned long long)rxstat_batch_reject_exec_location,
+    (unsigned long long)rxstat_batch_reject_exec_accessor,
+    (unsigned long long)rxstat_batch_reject_exec_value,
+    (unsigned long long)rxstat_batch_reject_flags,
+    (unsigned long long)rxstat_batch_reject_lastindex);
 }
 static void rxstat_init(void) {
   static bool done;
   if (done) return;
   done = true;
   if (getenv("ANT_REGEX_STATS")) { rxstat_enabled = true; atexit(rxstat_dump); }
+}
+
+static inline void rxstat_note_result(
+  uint32_t captures,
+  bool named_groups,
+  bool has_indices
+) {
+  if (!rxstat_enabled) return;
+  rxstat_result_arrays++;
+  rxstat_result_captures += captures;
+  if (named_groups) rxstat_result_named_groups++;
+  if (has_indices) rxstat_result_indices++;
 }
 
 /* Compiled patterns, PCRE2 scratch state, and RegExp.prototype mutation
@@ -117,6 +176,9 @@ static void rxstat_init(void) {
 struct ant_regex_state {
   compiled_regex_cache_table_t compiled[2];
   size_t live_object_data;
+
+  regexp_result_shape_t result_shape;
+  regexp_result_shape_t result_indices_shape;
 
   pcre2_match_context *match_ctx;
   pcre2_jit_stack *jit_stack;
@@ -130,6 +192,94 @@ enum {
   REGEXP_NATIVE_TAG = 0x52454758u, /* REGX */
   REGEX_COMPILED_CACHE_MAX = 1024,
 };
+
+static bool regexp_result_shape_init(
+  regexp_result_shape_t *cache,
+  ant_object_t *array,
+  bool with_indices
+) {
+  if (cache->shape) return true;
+  if (!array || !array->shape) return false;
+
+  const char *index_key = intern_string("index", 5);
+  const char *input_key = intern_string("input", 5);
+  const char *groups_key = intern_string("groups", 6);
+  const char *indices_key = with_indices
+    ? intern_string("indices", 7)
+    : NULL;
+  if (!index_key || !input_key || !groups_key || (with_indices && !indices_key))
+    return false;
+
+  ant_shape_t *shape = ant_shape_clone(array->shape);
+  if (!shape) return false;
+
+  regexp_result_shape_t built = { .shape = shape };
+  bool ok =
+    ant_shape_add_interned(
+      shape, index_key, ANT_PROP_ATTR_DEFAULT, &built.index_slot
+    ) &&
+    ant_shape_add_interned(
+      shape, input_key, ANT_PROP_ATTR_DEFAULT, &built.input_slot
+    ) &&
+    ant_shape_add_interned(
+      shape, groups_key, ANT_PROP_ATTR_DEFAULT, &built.groups_slot
+    );
+  if (ok && with_indices) {
+    ok = ant_shape_add_interned(
+      shape, indices_key, ANT_PROP_ATTR_DEFAULT, &built.indices_slot
+    );
+  }
+  if (!ok) {
+    ant_shape_release(shape);
+    return false;
+  }
+
+  *cache = built;
+  return true;
+}
+
+static __attribute__((noinline)) bool regexp_result_apply_shape(
+  ant_t *js,
+  ant_value_t array_value,
+  ant_value_t index,
+  ant_value_t input,
+  ant_value_t groups,
+  ant_value_t indices,
+  bool with_indices
+) {
+  ant_regex_state_t *state = js->regex_state;
+  ant_object_t *array = js_obj_ptr(array_value);
+  if (!state || !array || array->type_tag != T_ARR) goto fallback;
+
+  regexp_result_shape_t *cache = with_indices
+    ? &state->result_indices_shape
+    : &state->result_shape;
+  if (!regexp_result_shape_init(cache, array, with_indices)) goto fallback;
+
+  if (array->shape != cache->shape) {
+    ant_shape_retain(cache->shape);
+    ant_shape_release(array->shape);
+    array->shape = cache->shape;
+  }
+  if (!js_obj_ensure_prop_capacity(array, with_indices ? 4 : 3))
+    goto fallback;
+
+  ant_object_prop_set_unchecked(array, cache->index_slot, index);
+  ant_object_prop_set_unchecked(array, cache->input_slot, input);
+  ant_object_prop_set_unchecked(array, cache->groups_slot, groups);
+  gc_write_barrier(js, array, input);
+  gc_write_barrier(js, array, groups);
+  if (with_indices) {
+    ant_object_prop_set_unchecked(array, cache->indices_slot, indices);
+    gc_write_barrier(js, array, indices);
+  }
+  if (rxstat_enabled) rxstat_result_shape_fast++;
+  return true;
+
+fallback:
+  if (rxstat_enabled) rxstat_result_shape_fallback++;
+  return false;
+}
 
 void regexp_note_exec_property_write(ant_t *js) {
   ant_regex_state_t *state = js->regex_state;
@@ -1343,6 +1493,7 @@ static ant_value_t regexp_exec_plain_literal_fast(
 
   if (truthy_only) return js_true;
 
+  rxstat_note_result(1, false, false);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) return result_arr;
 
@@ -1350,9 +1501,14 @@ static ant_value_t regexp_exec_plain_literal_fast(
   if (is_err(match_str)) return match_str;
   js_arr_push(js, result_arr, match_str);
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+  if (!regexp_result_apply_shape(
+    js, result_arr, tov((double)ovector[0]), str_arg,
+    js_mkundef(), js_mkundef(), false
+  )) {
+    if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+    if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
+    if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+  }
   return result_arr;
 }
 
@@ -1552,6 +1708,7 @@ static ant_value_t regexp_exec_shared_fast(
   }
 
   ant_value_t result;
+  rxstat_note_result(ovcount, false, false);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
     result = result_arr;
@@ -1572,17 +1729,22 @@ static ant_value_t regexp_exec_shared_fast(
     }
   }
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-  if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-  if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) {
-    result = js_mkerr(js, "oom");
-    goto done;
+  if (!regexp_result_apply_shape(
+    js, result_arr, tov((double)ovector[0]), str_arg,
+    js_mkundef(), js_mkundef(), false
+  )) {
+    if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) {
+      result = js_mkerr(js, "oom");
+      goto done;
+    }
+    if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) {
+      result = js_mkerr(js, "oom");
+      goto done;
+    }
+    if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) {
+      result = js_mkerr(js, "oom");
+      goto done;
+    }
   }
   result = result_arr;
 
@@ -1699,6 +1861,8 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   }
 
   ant_value_t result;
+  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
+  rxstat_note_result(ovcount, is_object_type(groups_meta), has_indices);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
     result = result_arr;
@@ -1719,31 +1883,43 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     }
   }
 
-  if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-  if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-
-  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
-  if (is_object_type(groups_meta)) {
-    js_set_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS, groups_meta);
-    js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
-    js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
-  } else if (is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-
+  ant_value_t indices = js_mkundef();
   if (has_indices) {
-    ant_value_t indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
+    indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
     if (is_err(indices)) {
       result = indices;
       goto done;
     }
+  }
+
+  bool shaped_result =
+    !is_object_type(groups_meta) &&
+    regexp_result_apply_shape(
+      js, result_arr, tov((double)ovector[0]), str_arg,
+      js_mkundef(), indices, has_indices
+    );
+  if (!shaped_result) {
+    if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) {
+      result = js_mkerr(js, "oom");
+      goto done;
+    }
+    if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) {
+      result = js_mkerr(js, "oom");
+      goto done;
+    }
+  }
+
+  if (is_object_type(groups_meta)) {
+    js_set_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS, groups_meta);
+    js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
+    js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
+  } else if (!shaped_result &&
+    is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) {
+    result = js_mkerr(js, "oom");
+    goto done;
+  }
+
+  if (has_indices && is_object_type(groups_meta)) {
     if (is_err(setprop_cstr(js, result_arr, "indices", 7, indices))) {
       result = js_mkerr(js, "oom");
       goto done;
@@ -2017,7 +2193,163 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
   return js_mkstr(js, buf, n);
 }
 
+static bool regexp_can_batch_builtin_exec(
+  ant_t *js,
+  ant_value_t rx,
+  compiled_regex_cache_entry_t **compiled_out,
+  uint8_t *flags_out
+) {
+  ant_regex_state_t *state = js->regex_state;
+  if (
+    !state || !regexp_can_use_internal_fast_path(js, rx)
+  ) {
+    if (rxstat_enabled) rxstat_batch_reject_state++;
+    goto reject;
+  }
+
+  ant_prop_loc_t exec_loc = lkp_proto(js, rx, "exec", 4);
+  if (
+    !exec_loc.obj || !exec_loc.obj->shape ||
+    exec_loc.obj->flags.is_exotic ||
+    exec_loc.slot >= exec_loc.obj->prop_count
+  ) {
+    if (rxstat_enabled) rxstat_batch_reject_exec_location++;
+    goto reject;
+  }
+
+  const ant_shape_prop_t *exec_prop = ant_shape_prop_at(
+    exec_loc.obj->shape, exec_loc.slot
+  );
+  if (!exec_prop || exec_prop->has_getter || exec_prop->has_setter) {
+    if (rxstat_enabled) rxstat_batch_reject_exec_accessor++;
+    goto reject;
+  }
+
+  ant_value_t exec_fn = js_prop_load(exec_loc);
+  if (
+    vtype(exec_fn) != T_CFUNC ||
+    !js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)
+  ) {
+    if (rxstat_enabled) rxstat_batch_reject_exec_value++;
+    goto reject;
+  }
+
+  compiled_regex_cache_entry_t *compiled_hint;
+  uint8_t flags = regexp_flags_mask(js, rx, &compiled_hint);
+  if (!(flags & REGEXP_FLAG_GLOBAL)) {
+    if (rxstat_enabled) rxstat_batch_reject_flags++;
+    goto reject;
+  }
+
+  compiled_regex_cache_entry_t *compiled = regex_get_or_compile(
+    js, rx, flags, compiled_hint
+  );
+  if (!compiled) {
+    if (rxstat_enabled) rxstat_batch_reject_flags++;
+    goto reject;
+  }
+
+  regexp_lastindex_cache_location(compiled, rx);
+  ant_object_t *lastindex_obj;
+  uint32_t lastindex_slot;
+  if (!regexp_lastindex_fast_location(
+    compiled, rx, &lastindex_obj, &lastindex_slot
+  )) {
+    if (rxstat_enabled) rxstat_batch_reject_lastindex++;
+    goto reject;
+  }
+
+  *compiled_out = compiled;
+  *flags_out = flags;
+  return true;
+
+reject:
+  if (rxstat_enabled) rxstat_batch_guard_rejects++;
+  return false;
+}
+
+static inline PCRE2_SIZE regexp_advance_empty_match(
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE offset,
+  bool full_unicode
+) {
+  if (full_unicode && offset < (PCRE2_SIZE)str_len) {
+    return offset + (PCRE2_SIZE)utf8_char_len_at(
+      str_ptr, str_len, (ant_offset_t)offset
+    );
+  }
+  return offset + 1;
+}
+
+static ant_value_t regexp_match_batch_fast(
+  ant_t *js,
+  ant_value_t rx,
+  ant_value_t str,
+  bool full_unicode,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  compiled_regex_cache_entry_t *compiled;
+  uint8_t flags;
+  if (!regexp_can_batch_builtin_exec(js, rx, &compiled, &flags))
+    return js_mkundef();
+
+  *used_fast_path = true;
+  if (rxstat_enabled) rxstat_batch_match_calls++;
+
+  ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+
+  ant_value_t matches = js_mkarr(js);
+  if (is_err(matches)) return matches;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  bool sticky = (flags & REGEXP_FLAG_STICKY) != 0;
+  PCRE2_SIZE offset = 0;
+  ant_offset_t count = 0;
+
+  while (offset <= (PCRE2_SIZE)str_len) {
+    regex_match_scope_t scope;
+    PCRE2_SIZE *ovector;
+    uint32_t ovcount;
+    int rc = compiled_regex_run(
+      js, compiled, str_ptr, str_len, offset,
+      sticky ? PCRE2_ANCHORED : 0, sticky,
+      &scope, &ovector, &ovcount
+    );
+    if (rc < 0) {
+      regex_match_scope_end(&scope);
+      break;
+    }
+
+    PCRE2_SIZE start = ovector[0];
+    PCRE2_SIZE end = ovector[1];
+    update_regexp_statics(js, str_ptr, ovector, ovcount);
+    ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
+    regex_match_scope_end(&scope);
+    if (is_err(match)) return match;
+    js_arr_push(js, matches, match);
+    count++;
+    if (rxstat_enabled) rxstat_batch_match_results++;
+
+    offset = end;
+    if (start == end) {
+      offset = regexp_advance_empty_match(
+        str_ptr, str_len, offset, full_unicode
+      );
+    }
+  }
+
+  stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+  return count == 0 ? js_mknull() : matches;
+}
+
 static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int nargs) {
+  if (rxstat_enabled) rxstat_symbol_match_calls++;
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@match] called on non-object");
@@ -2035,6 +2367,12 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
   if (is_err(unicode_val)) return unicode_val;
 
   bool full_unicode = js_truthy(js, unicode_val);
+  bool used_fast_path = false;
+  ant_value_t fast = regexp_match_batch_fast(
+    js, rx, str, full_unicode, &used_fast_path
+  );
+  if (is_err(fast) || used_fast_path) return fast;
+
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
 
   ant_value_t A = js_mkarr(js);
@@ -2045,6 +2383,7 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
     ant_value_t result = regexp_exec_abstract(js, rx, str);
     if (is_err(result)) return result;
     if (vtype(result) == T_NULL) return n == 0 ? js_mknull() : mkval(T_ARR, vdata(A));
+    if (rxstat_enabled) rxstat_symbol_match_results++;
 
     ant_value_t match_str = js_tostring_val(js, js_arr_get(js, result, 0));
     if (is_err(match_str)) return match_str;
@@ -2300,6 +2639,136 @@ static ant_value_t regexp_replace_plain_literal_fast(
   return ret;
 }
 
+static ant_value_t regexp_replace_batch_fast(
+  ant_t *js,
+  ant_value_t rx,
+  ant_value_t str,
+  ant_value_t replacement,
+  bool full_unicode,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  compiled_regex_cache_entry_t *compiled;
+  uint8_t flags;
+  if (!regexp_can_batch_builtin_exec(js, rx, &compiled, &flags))
+    return js_mkundef();
+
+  *used_fast_path = true;
+  if (rxstat_enabled) rxstat_batch_replace_calls++;
+
+  ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  ant_offset_t replacement_len, replacement_off = vstr(
+    js, replacement, &replacement_len
+  );
+  const char *replacement_ptr = (const char *)(uintptr_t)replacement_off;
+
+  size_t buf_cap = (size_t)str_len + 256;
+  char *buf = ant_calloc(buf_cap);
+  if (!buf) return js_mkerr(js, "oom");
+  size_t buf_len = 0;
+
+  bool sticky = (flags & REGEXP_FLAG_STICKY) != 0;
+  PCRE2_SIZE offset = 0;
+  PCRE2_SIZE next_src_pos = 0;
+  size_t match_count = 0;
+
+  while (offset <= (PCRE2_SIZE)str_len) {
+    regex_match_scope_t scope;
+    PCRE2_SIZE *ovector;
+    uint32_t ovcount;
+    int rc = compiled_regex_run(
+      js, compiled, str_ptr, str_len, offset,
+      sticky ? PCRE2_ANCHORED : 0, sticky,
+      &scope, &ovector, &ovcount
+    );
+    if (rc < 0) {
+      regex_match_scope_end(&scope);
+      break;
+    }
+
+    PCRE2_SIZE start = ovector[0];
+    PCRE2_SIZE end = ovector[1];
+    if (
+      start > next_src_pos &&
+      !str_buf_append(
+        &buf, &buf_len, &buf_cap,
+        str_ptr + next_src_pos, start - next_src_pos
+      )
+    ) {
+      regex_match_scope_end(&scope);
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
+
+    repl_capture_t captures[31];
+    int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
+    for (int i = 0; i < capture_count; i++) {
+      PCRE2_SIZE capture_start = ovector[2 * (i + 1)];
+      PCRE2_SIZE capture_end = ovector[2 * (i + 1) + 1];
+      captures[i] = capture_start == PCRE2_UNSET
+        ? (repl_capture_t){ NULL, 0 }
+        : (repl_capture_t){
+            str_ptr + capture_start,
+            (size_t)(capture_end - capture_start)
+          };
+    }
+
+    update_regexp_statics(js, str_ptr, ovector, ovcount);
+    bool replaced = repl_template(
+      replacement_ptr, replacement_len,
+      str_ptr + start, end - start,
+      str_ptr, str_len, start,
+      captures, capture_count,
+      &buf, &buf_len, &buf_cap
+    );
+    regex_match_scope_end(&scope);
+    if (!replaced) {
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
+
+    match_count++;
+    if (rxstat_enabled) rxstat_batch_replace_results++;
+    next_src_pos = end;
+    offset = end;
+    if (start == end) {
+      offset = regexp_advance_empty_match(
+        str_ptr, str_len, offset, full_unicode
+      );
+    }
+  }
+
+  if (
+    next_src_pos < (PCRE2_SIZE)str_len &&
+    !str_buf_append(
+      &buf, &buf_len, &buf_cap,
+      str_ptr + next_src_pos, (size_t)str_len - next_src_pos
+    )
+  ) {
+    free(buf);
+    return js_mkerr(js, "oom");
+  }
+
+  stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) {
+    free(buf);
+    return stored;
+  }
+  if (match_count == 0) {
+    free(buf);
+    return str;
+  }
+
+  ant_value_t result = js_mkstr(js, buf, buf_len);
+  free(buf);
+  return result;
+}
+
 static ant_value_t regexp_search_plain_literal_fast(
   ant_t *js,
   ant_value_t rx,
@@ -2414,6 +2883,7 @@ ant_value_t regexp_literal_exec_call(
       ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
       update_regexp_statics(js, str_ptr, ovector, 1);
 
+      rxstat_note_result(1, false, false);
       ant_value_t result_arr = js_mkarr(js);
       if (is_err(result_arr)) return result_arr;
 
@@ -2421,9 +2891,14 @@ ant_value_t regexp_literal_exec_call(
       if (is_err(match_str)) return match_str;
       js_arr_push(js, result_arr, match_str);
 
-      if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-      if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
-      if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+      if (!regexp_result_apply_shape(
+        js, result_arr, tov((double)ovector[0]), arg,
+        js_mkundef(), js_mkundef(), false
+      )) {
+        if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+        if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
+        if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+      }
       return result_arr;
     }
   }
@@ -2434,6 +2909,7 @@ ant_value_t regexp_literal_exec_call(
 }
 
 static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, int nargs) {
+  if (rxstat_enabled) rxstat_symbol_replace_calls++;
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@replace] called on non-object");
@@ -2442,10 +2918,13 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
   if (is_err(str)) return str;
   ant_value_t replace_value = nargs > 1 ? args[1] : js_mkundef();
   bool func_replace = (vtype(replace_value) == T_FUNC || vtype(replace_value) == T_CFUNC);
+  if (rxstat_enabled && func_replace) rxstat_symbol_replace_func++;
   ant_value_t replace_str = js_mkundef();
   if (!func_replace) {
     replace_str = js_tostring_val(js, replace_value);
     if (is_err(replace_str)) return replace_str;
+    if (rxstat_enabled && replacement_has_substitution(js, replace_str))
+      rxstat_symbol_replace_substitution++;
   }
 
   ant_value_t global_val = js_getprop_fallback(js, rx, "global");
@@ -2466,6 +2945,14 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     if (is_err(fast) || used_fast_path) return fast;
   }
 
+  if (global && !func_replace) {
+    bool used_fast_path = false;
+    ant_value_t fast = regexp_replace_batch_fast(
+      js, rx, str, replace_str, full_unicode, &used_fast_path
+    );
+    if (is_err(fast) || used_fast_path) return fast;
+  }
+
   ant_value_t results = js_mkarr(js);
   if (is_err(results)) return results;
   ant_offset_t nresults = 0;
@@ -2474,6 +2961,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_value_t result = regexp_exec_abstract(js, rx, str);
     if (is_err(result)) return result;
     if (vtype(result) == T_NULL) break;
+    if (rxstat_enabled) rxstat_symbol_replace_results++;
     js_arr_push(js, results, result);
     nresults++;
     if (!global) break;
@@ -3362,6 +3850,8 @@ void cleanup_regex_module(ant_t *js) {
   compiled_regex_table_clear(&state->compiled[0]);
   compiled_regex_table_clear(&state->compiled[1]);
 
+  ant_shape_release(state->result_shape.shape);
+  ant_shape_release(state->result_indices_shape.shape);
   pcre2_jit_stack_free(state->jit_stack);
   pcre2_match_context_free(state->match_ctx);
   free(state);
