@@ -714,16 +714,56 @@ compiles. The prior theories (epoch-deopt of an intrinsic, per-call
 regex speed) were wrong: the union bin was only "fast" because its
 pathological direct-path major rate (the express disease, 252/s)
 constantly wiped this cache; the evening GC fixes made majors rare and
-exposed the O(n) scan × O(n) entries growth. Fix: pointer-keyed
-open-addressing index over the flat entry array (`regex_cache_index`
-in src/modules/regex.c; tombstones on remove, index rebuilt in
-gc_sweep_regex_cache — the flat array remains the sweep walk). Results
-(interleaved, pinned): async 1.51→**0.82s** (union 0.85-0.88), coro
-7.07→**6.37s** (union 6.47-6.50). Also holds under ANT_GC_STRESS=3
-(0.82s). Bonus observed while instrumenting: the [gc-majors] atexit
-dump does NOT count the direct `gc_run` at src/pool.c:311
-(js_type_alloc pool-pressure) — 24/25 majors in this workload were
-uncounted; add a counter if majors need auditing again.
+exposed the O(n) scan × O(n) entries growth.
+
+The first fix (pointer-keyed open addressing over the owner array) proved
+the mechanism and restored async to ~0.82s. It is now superseded by the
+closer-to-V8 endpoint: each executed RegExp object stores its shared
+compiled entry directly in the object's native payload and releases that
+reference from its finalizer. Compiled PCRE2 data is shared through a
+per-isolate, bounded two-generation hash cache keyed by `(source, flags)`
+using `hash_key`/`ant_hash_mix`; majors age generation 0 into generation
+1 and discard the old generation 1, while minors do nothing. Match data
+uses a scoped reusable buffer; a nested use dynamically allocates its own
+buffer. The scope remains borrowed until the caller has consumed PCRE2's
+offset vector, avoiding a per-match capture copy. Match context, JIT stack,
+and RegExp prototype-mutation guards are per-isolate too. There is no
+owner table, tombstone, sweep walk, or rehash/rebuild path left.
+
+Pinned binaries for the architectural A/B:
+`/tmp/ant_r1_owner_bin` (`16fd839fb488cb139ec9e132677a3f36`)
+versus `/tmp/ant_r1_native_deliver_bin`
+(`cdd2b19cef0d171d2b777de2bf247e40`). Lower is better; the delta uses
+the median so the first 160.18ms route sample cannot inflate the claim.
+
+| Workload | Owner-table samples (ms) | Native-payload samples (ms) | Median delta |
+|---|---:|---:|---:|
+| `test_gc_async` | 849.16, 846.32 | 840.64, 827.66 | **−1.6%** |
+| `test_gc_coro` | 6523.77, 6768.44 | 6468.42, 6474.01 | **−2.6%** |
+| regex route matches | 160.18, 134.90, 133.57, 137.99 | 132.58, 133.38, 133.96, 134.92 | **−2.0%** |
+| regex token scan | 846.06, 858.19, 830.42, 837.87 | 812.96, 825.56, 796.29, 831.16 | **−2.7%** |
+| regex identifier split | 961.19, 971.05, 959.73, 974.53 | 955.70, 952.54, 944.50, 973.34 | **−1.2%** |
+| compile route regexp | 7.11, 7.68, 7.23, 7.08 | 7.01, 7.16, 7.29, 7.98 | +0.8% (noise) |
+
+The final counter signature is the same for async and coro: 1.4M execs,
+1.2M direct object-data hits, 200k first-use attaches, 199,943
+generation-0 compiled-cache hits, 56 generation-1 hits/promotions, one
+compiled-cache miss/compile, and zero dynamic match-data allocations.
+The regex micro records 19,590,900 direct hits after three attaches,
+three compiles, and zero dynamic allocations.
+
+Gates on the final tree: async 0.82-0.84s (≤0.95s), express **16,189
+RPS** (≥16k), harness 170/0, and newt below 1GB. The late-day newt
+interleave ran hot for both pins: owner Main 43.322/44.818s versus final
+44.415/44.880s; paired deltas +1.093s/+0.062s are within the documented
+~1s thermal sigma. Peak RSS averaged 960MB owner versus 951MB final.
+The temporary GC-stress hook was removed after focused regexp tests
+passed at stress 1/3 and the full spec passed 3712/0 at stress 10.
+
+Bonus observed while instrumenting: the [gc-majors] atexit dump does
+NOT count the direct `gc_run` at src/pool.c:311 (js_type_alloc
+pool-pressure) — 24/25 majors in this workload were uncounted; add a
+counter if majors need auditing again.
 
 **R2 regex −22% vs prod — FALSIFIED, no code change needed** (see the
 amended entry above for full evidence). PGO build artifact:

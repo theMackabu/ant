@@ -17,15 +17,17 @@ typedef struct {
 } regex_match_args_t;
 
 void init_regex_module(ant_t *js);
-void cleanup_regex_module(void);
-void gc_sweep_regex_cache(bool minor);
-void regexp_note_exec_property_write(void);
-void regexp_note_replace_property_write(void);
+void cleanup_regex_module(ant_t *js);
+void gc_age_regex_cache(ant_t *js, bool minor);
+void regexp_note_exec_property_write(ant_t *js);
+void regexp_note_replace_property_write(ant_t *js);
 
-static inline void regexp_note_property_write(const char *name, size_t len) {
+static inline void regexp_note_property_write(ant_t *js, const char *name, size_t len) {
   if (!name) return;
-  if (len == 4 && name[0] == 'e' && memcmp(name, "exec", 4) == 0) regexp_note_exec_property_write();
-  else if (len == 7 && name[0] == 'r' && memcmp(name, "replace", 7) == 0) regexp_note_replace_property_write();
+  if (len == 4 && name[0] == 'e' && memcmp(name, "exec", 4) == 0)
+    regexp_note_exec_property_write(js);
+  else if (len == 7 && name[0] == 'r' && memcmp(name, "replace", 7) == 0)
+    regexp_note_replace_property_write(js);
 }
 
 size_t js_to_pcre2_pattern(

@@ -4035,7 +4035,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
 
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
-  regexp_note_property_write(key, (size_t)klen);
+  regexp_note_property_write(js, key, (size_t)klen);
 
   if (array_obj_ptr(obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {
     ant_arguments_state_t *args_state = js_arguments_state(obj);
@@ -17708,6 +17708,7 @@ void js_destroy(ant_t *js) {
   cleanup_buffer_module();
   cleanup_atomics_module(js);
   cleanup_events_module(js);
+  cleanup_regex_module(js);
 
 #ifdef ANT_JIT
   if (sv_closure_stats_enabled) {

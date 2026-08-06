@@ -182,6 +182,7 @@ struct ant_isolate_t {
   ant_object_t *permanent_objects;
   ant_process_state_t *process_state;
   ant_events_state_t *events_state;
+  ant_regex_state_t *regex_state;
 
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;

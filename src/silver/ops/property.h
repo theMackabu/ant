@@ -681,7 +681,7 @@ static inline ant_value_t sv_put_field_cached(
   const sv_atom_t *a, sv_ic_entry_t *ic
 ) {
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
-  regexp_note_property_write(a->str, a->len);
+  regexp_note_property_write(js, a->str, a->len);
 
   if (ic && ptr && !ptr->flags.is_exotic && ptr->shape && ic->epoch == ant_ic_epoch_counter &&
       ic->cached_shape == ptr->shape && ic->cached_holder == ptr &&

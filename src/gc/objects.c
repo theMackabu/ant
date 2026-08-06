@@ -1054,7 +1054,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
 
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, false);
-  gc_sweep_regex_cache(false);
+  gc_age_regex_cache(js, false);
   gc_sweep(js);
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
@@ -1200,7 +1200,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
     pt = t;
   }
 
-  gc_sweep_regex_cache(true);
+  gc_age_regex_cache(js, true);
   gc_sweep_young_and_promote(js);
 
   if (phase_log) {
