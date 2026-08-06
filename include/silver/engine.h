@@ -835,13 +835,18 @@ typedef struct {
   ant_value_t func;
   sv_closure_t *closure;
   sv_call_ctx_t ctx;
+  ant_value_t inline_args[4];
 } sv_call_plan_t;
 
 static inline ant_value_t *sv_prepend_bound_args(
-  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total
+  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total,
+  ant_value_t *inline_args
 ) {
   int total = closure->bound_argc + argc;
-  ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
+  ant_value_t *combined =
+    total <= (int)(sizeof(((sv_call_plan_t *)0)->inline_args) / sizeof(ant_value_t))
+      ? inline_args
+      : malloc(sizeof(ant_value_t) * (size_t)total);
   
   if (!combined) { *out_total = argc; return NULL; }
   memcpy(combined, closure->u.bound.argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
@@ -862,7 +867,7 @@ static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val
 
 static inline ant_value_t sv_call_resolve_bound(
   ant_t *js, sv_closure_t *closure,
-  sv_call_ctx_t *ctx, sv_call_mode_t mode
+  sv_call_ctx_t *ctx, sv_call_mode_t mode, ant_value_t *inline_args
 ) {
   uint32_t flags = closure->call_flags;
 
@@ -872,11 +877,13 @@ static inline ant_value_t sv_call_resolve_bound(
 
   if ((flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
     int total;
-    ant_value_t *combined = sv_prepend_bound_args(closure, ctx->args, ctx->argc, &total);
+    ant_value_t *combined = sv_prepend_bound_args(
+      closure, ctx->args, ctx->argc, &total, inline_args
+    );
     if (!combined) return js_mkerr(js, "out of memory");
     ctx->args  = combined;
     ctx->argc  = total;
-    ctx->alloc = combined;
+    if (combined != inline_args) ctx->alloc = combined;
   }
 
   if (flags & SV_CALL_HAS_SUPER) ctx->super_val = closure->super_val;
@@ -944,7 +951,9 @@ static inline ant_value_t sv_prepare_call(
   sv_closure_t *closure = js_func_closure(func);
   plan->closure = closure;
 
-  ant_value_t err = sv_call_resolve_bound(js, closure, &plan->ctx, mode);
+  ant_value_t err = sv_call_resolve_bound(
+    js, closure, &plan->ctx, mode, plan->inline_args
+  );
   if (is_err(err)) return err;
 
   if (is_construct_call) plan->ctx.this_val = this_val;
