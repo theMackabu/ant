@@ -632,6 +632,26 @@ express even, h3 +15%, elysia +11% — build wins or ties all four with
 bounded closure memory. newt unchanged (41.5s). Battery green.
 ANT_IC_STATS=1 keeps the objepoch-refill + gc-majors atexit dump.**
 
+**Micro/demo/GC-bench A/B vs prod (interleaved, 2 rounds, wall+RSS):**
+wins — fibonacci_recursive −33%, bench_gc_mark_func −36%, bench_dec −26%,
+bench_epoch −19%, test_async_gc −10%, bench_churn −4%; flat — pi,
+mandelbrot, event_loop, bench_gc, test_gc_large, test_gc_comprehensive.
+**Two regressions in synthetic GC stress tests: test_gc_async +72%
+(0.87→1.51s), test_gc_coro +10% — caused by tonight's GC-path changes
+(bisected: union bin 0.89s). NOT major-count (56 explicit majors both,
+counters zero), NOT per-call regex speed (bench_regex flat across all
+binaries), NOT the young-fraction gate (added, no change). Profile:
+build spends 6x more self-time in regexp_exec_internal on FIXED work
+(200k regex calls both) — the 6 minors the build now runs appear to
+deopt a per-call regex path (suspect: an epoch-guarded regex/replace
+intrinsic cache wiped by ant_ic_obj_epoch_bump per minor). OPEN — a
+fresh-session item; both tests PASS their harness mem gates and all
+real workloads improved. Latent bug FIXED during the hunt (keep):
+gc_sweep_regex_cache treated old owners as dead during minors (old
+objects are never epoch-stamped in minors) — every minor freed the
+whole warm regex cache; now generation-aware (minor=true skips old
+owners).**
+
 **Remaining, updated ranking (now in the ~1s-class flat zone for GC
 mechanics):**
 1. Object-churn deeper cuts: mkobj-uninit (7a-style explicit-init audit,

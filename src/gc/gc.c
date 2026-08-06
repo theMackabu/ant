@@ -305,16 +305,19 @@ void gc_maybe(ant_t *js) {
 
   /* Small live sets make the scaled threshold reachable by young churn
      alone (express: 250+ majors/s from this check). Young reclaim is the
-     cheap response to live growth — only when live stays over the
-     threshold after a minor is the growth genuinely old-generation. */
+     cheap response — but only worth trying when the young fraction is
+     large enough to plausibly resolve the pressure; old-live-dominated
+     workloads (async/coro stress) go straight to the major, avoiding a
+     wasted minor before each legitimate one. */
   if (live >= threshold) {
     extern uint64_t gc_stat_major_direct[4];
     gc_tick = 0;
-    gc_run_minor(js);
-    if (js->obj_arena.live_count >= threshold) {
-      gc_stat_major_direct[0]++;
-      gc_run(js);
+    if (young_count >= live / 4) {
+      gc_run_minor(js);
+      if (js->obj_arena.live_count < threshold) return;
     }
+    gc_stat_major_direct[0]++;
+    gc_run(js);
     return;
   }
 

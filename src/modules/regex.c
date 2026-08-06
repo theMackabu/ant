@@ -2851,9 +2851,18 @@ void init_regex_module(ant_t *js) {
   regexp_exec_write_guard_armed = true;
 }
 
-void gc_sweep_regex_cache(void) {
+void gc_sweep_regex_cache(bool minor) {
   size_t write = 0;
   for (size_t i = 0; i < regex_cache_count; i++) {
+    /* Minors never stamp old objects (they are not traversed), so an old
+       owner reads as unmarked here; treating it as dead freed the whole
+       warm cache on every minor — regexes recompiled per collection.
+       Old owners are only collectable by majors, which mark properly. */
+    if (minor && regex_cache[i].obj && regex_cache[i].obj->flags.generation == 1) {
+      if (write != i) regex_cache[write] = regex_cache[i];
+      write++;
+      continue;
+    }
     if (!gc_obj_is_marked(regex_cache[i].obj)) {
       pcre2_match_data_free(regex_cache[i].match_data);
       compiled_regex_cache_release(regex_cache[i].compiled);

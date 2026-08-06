@@ -18,7 +18,7 @@ typedef struct {
 
 void init_regex_module(ant_t *js);
 void cleanup_regex_module(void);
-void gc_sweep_regex_cache(void);
+void gc_sweep_regex_cache(bool minor);
 void regexp_note_exec_property_write(void);
 void regexp_note_replace_property_write(void);
 
