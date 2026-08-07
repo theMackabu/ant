@@ -1,0 +1,35 @@
+{
+  "name": "@ant/bun-sqlite",
+  "version": "0.0.1",
+  "description": "bun:sqlite-compatible Database API over Ant's native ant:sqlite module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theMackabu/ant.git"
+  },
+  "type": "module",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "scripts": {
+    "test": "ant test/bun-sqlite.test.js"
+  },
+  "keywords": [
+    "sqlite",
+    "bun",
+    "ant",
+    "database"
+  ],
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
+}
