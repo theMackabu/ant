@@ -1726,6 +1726,7 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "pcre2", "10.47");
   process_set_string(js, versions_obj, "libffi", "3.5.2");
   process_set_string(js, versions_obj, "lmdb", "0.9.33");
+  process_set_string(js, versions_obj, "sqlite", "3.53.4");
   process_set_string(js, versions_obj, "utf8proc", "2.10.0");
   process_set_string(js, versions_obj, "zlib", "2.3.3");
   process_set_string(js, versions_obj, "v8", "14.1.146.11-node.25");

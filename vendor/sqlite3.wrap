@@ -1,0 +1,10 @@
+[wrap-file]
+directory = sqlite-amalgamation-3530400
+source_url = https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip
+source_filename = sqlite-amalgamation-3530400.zip
+source_hash = 1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/sqlite3_3.53.4-1/sqlite-amalgamation-3530400.zip
+patch_directory = sqlite3
+
+[provide]
+sqlite3 = sqlite3_dep

@@ -22,6 +22,7 @@ void gc_mark_events(ant_t *js, gc_mark_fn mark);
 void gc_mark_eventemitter_object(ant_t *js, ant_value_t obj, gc_mark_fn mark);
 void gc_finalize_events_object(ant_t *js, ant_value_t obj);
 void gc_mark_lmdb(ant_t *js, gc_mark_fn mark);
+void gc_mark_sqlite(ant_t *js, gc_mark_fn mark);
 void gc_mark_symbols(ant_t *js, gc_mark_fn mark);
 void gc_mark_esm(ant_t *js, gc_mark_fn mark);
 void gc_mark_worker_threads(ant_t *js, gc_mark_fn mark);

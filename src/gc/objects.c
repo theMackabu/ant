@@ -628,6 +628,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_eventsource(js, gc_mark_value);
   gc_mark_events(js, gc_mark_value);
   gc_mark_lmdb(js, gc_mark_value);
+  gc_mark_sqlite(js, gc_mark_value);
   gc_mark_symbols(js, gc_mark_value);
   gc_mark_esm(js, gc_mark_value);
   gc_mark_worker_threads(js, gc_mark_value);

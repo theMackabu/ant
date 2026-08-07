@@ -23,6 +23,7 @@ interface Versions {
   pcre2: string;
   libffi: string;
   lmdb: string;
+  sqlite: string;
   utf8proc: string;
   zlib: string;
   v8: string;

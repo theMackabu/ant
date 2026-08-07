@@ -68,6 +68,7 @@
 #include "modules/blob.h"
 #include "modules/collections.h"
 #include "modules/lmdb.h"
+#include "modules/sqlite.h"
 #include "modules/regex.h"
 #include "modules/globals.h"
 #include "modules/rpc.h"
@@ -17623,6 +17624,7 @@ void js_destroy(ant_t *js) {
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();
+  cleanup_sqlite_module();
 
   ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
   for (int i = 0; i < 3; i++) for (ant_object_t *obj = lists[i]; obj;) {

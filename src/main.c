@@ -66,6 +66,7 @@
 #include "modules/ffi.h"
 #include "modules/events.h"
 #include "modules/lmdb.h"
+#include "modules/sqlite.h"
 #include "modules/performance.h"
 #include "modules/uri.h"
 #include "modules/url.h"
@@ -913,6 +914,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
+  ant_register_library(sqlite_library, "ant:sqlite", "node:sqlite", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
   ant_register_library(sandbox_library, "ant:sandbox", NULL);
   

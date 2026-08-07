@@ -154,6 +154,11 @@ lmdb_dep = subproject('lmdb', default_options: [
   'programs=disabled'
 ]).get_variable('lmdb_dep')
 
+sqlite3_dep = subproject('sqlite3', default_options: [
+  'warning_level=0',
+  'optimization=s',
+]).get_variable('sqlite3_dep')
+
 nghttp2_dep = subproject('nghttp2', default_options: [
   'warning_level=0'
 ]).get_variable('libnghttp2_dep')
@@ -262,7 +267,7 @@ ant_format_deps = [
 ]
 
 ant_runtime_deps = [
-  ssl_dep, crypto_dep, uthash_dep, lmdb_dep, wamr_dep,
+  ssl_dep, crypto_dep, uthash_dep, lmdb_dep, sqlite3_dep, wamr_dep,
   double_conversion_dep, wirecall, skim_dep,
 ]
 
