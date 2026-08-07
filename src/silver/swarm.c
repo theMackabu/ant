@@ -305,6 +305,7 @@ static void mir_emit_get_length(
   MIR_reg_t obj, MIR_reg_t dst,
   MIR_reg_t r_vm, MIR_reg_t r_js, MIR_reg_t r_d_slot,
   MIR_item_t helper1_proto, MIR_item_t imp_get_length,
+  bool builder_slot,
   int owner_id, int bc_off
 ) {
   char tag_name[48], ptr_name[48], len_name[48], dbl_name[48];
@@ -321,6 +322,7 @@ static void mir_emit_get_length(
   MIR_label_t encode = MIR_new_label(ctx);
   MIR_label_t slow = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
+  MIR_label_t nonflat = builder_slot ? MIR_new_label(ctx) : slow;
 
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_URSH,
@@ -350,7 +352,7 @@ static void mir_emit_get_length(
       MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, slow),
+      MIR_new_label_op(ctx, nonflat),
       MIR_new_reg_op(ctx, tag),
       MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
   MIR_append_insn(ctx, fn,
@@ -389,6 +391,38 @@ static void mir_emit_get_length(
         (MIR_disp_t)offsetof(ant_flat_string_t, len), ptr, 0, 1)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, encode)));
+
+  if (builder_slot) {
+    MIR_append_insn(ctx, fn, nonflat);
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow),
+        MIR_new_reg_op(ctx, tag),
+        MIR_new_uint_op(ctx, STR_HEAP_TAG_BUILDER)));
+
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_AND,
+        MIR_new_reg_op(ctx, ptr),
+        MIR_new_reg_op(ctx, ptr),
+        MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, tag),
+        MIR_new_mem_op(ctx, MIR_T_U8,
+          (MIR_disp_t)offsetof(ant_string_builder_t, ascii_state), ptr, 0, 1)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow),
+        MIR_new_reg_op(ctx, tag),
+        MIR_new_uint_op(ctx, STR_ASCII_YES)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, len),
+        MIR_new_mem_op(ctx, MIR_T_U64,
+          (MIR_disp_t)offsetof(ant_string_builder_t, len), ptr, 0, 1)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, encode)));
+  }
 
   MIR_append_insn(ctx, fn, array);
   MIR_append_insn(ctx, fn,
@@ -1095,6 +1129,187 @@ static MIR_label_t mir_emit_string_builder_read_open(
       MIR_new_reg_op(ctx, r_js),
       MIR_new_reg_op(ctx, value)));
   return done;
+}
+
+static void mir_emit_string_builder_append_ascii_byte(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t lhs, MIR_reg_t rhs, MIR_reg_t result,
+  MIR_reg_t d_slot,
+  MIR_label_t slow, MIR_label_t done,
+  int owner_id, int bc_off
+) {
+  char tag_name[48], lhs_ptr_name[48], rhs_ptr_name[48];
+  char len_name[48], tail_len_name[48], byte_name[48], cached_name[48];
+  char cached_d_name[48];
+  snprintf(tag_name, sizeof(tag_name), "sab_tag_%d_%d", owner_id, bc_off);
+  snprintf(lhs_ptr_name, sizeof(lhs_ptr_name), "sab_lhs_%d_%d", owner_id, bc_off);
+  snprintf(rhs_ptr_name, sizeof(rhs_ptr_name), "sab_rhs_%d_%d", owner_id, bc_off);
+  snprintf(len_name, sizeof(len_name), "sab_len_%d_%d", owner_id, bc_off);
+  snprintf(tail_len_name, sizeof(tail_len_name), "sab_tail_%d_%d", owner_id, bc_off);
+  snprintf(byte_name, sizeof(byte_name), "sab_byte_%d_%d", owner_id, bc_off);
+  snprintf(cached_name, sizeof(cached_name), "sab_cache_%d_%d", owner_id, bc_off);
+  snprintf(cached_d_name, sizeof(cached_d_name), "sab_cache_d_%d_%d", owner_id, bc_off);
+
+  MIR_reg_t tag = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, tag_name);
+  MIR_reg_t lhs_ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, lhs_ptr_name);
+  MIR_reg_t rhs_ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, rhs_ptr_name);
+  MIR_reg_t len = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, len_name);
+  MIR_reg_t tail_len = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, tail_len_name);
+  MIR_reg_t byte = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, byte_name);
+  MIR_reg_t cached = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, cached_name);
+  MIR_reg_t cached_d = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, cached_d_name);
+  MIR_label_t cached_nonnum = MIR_new_label(ctx);
+  MIR_label_t cached_done = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, lhs),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, lhs_ptr),
+      MIR_new_reg_op(ctx, lhs),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, lhs_ptr),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_BUILDER)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, lhs_ptr),
+      MIR_new_reg_op(ctx, lhs_ptr),
+      MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, rhs),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, rhs_ptr),
+      MIR_new_reg_op(ctx, rhs),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, rhs_ptr),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(ant_flat_string_t, len), rhs_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, len),
+      MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, byte),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(ant_flat_string_t, bytes), rhs_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, byte),
+      MIR_new_int_op(ctx, 0x80)));
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, tail_len),
+      MIR_new_mem_op(ctx, MIR_T_U16,
+        (MIR_disp_t)offsetof(ant_string_builder_t, tail_len), lhs_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tail_len),
+      MIR_new_int_op(ctx, STR_BUILDER_TAIL_CAP)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, cached),
+      MIR_new_mem_op(ctx, MIR_JSVAL,
+        (MIR_disp_t)offsetof(ant_string_builder_t, cached), lhs_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGT,
+      MIR_new_label_op(ctx, cached_nonnum),
+      MIR_new_reg_op(ctx, cached),
+      MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  mir_i64_to_d(ctx, fn, cached_d, cached, d_slot);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DADD,
+      MIR_new_reg_op(ctx, cached_d),
+      MIR_new_reg_op(ctx, cached_d),
+      MIR_new_double_op(ctx, 1.0)));
+  mir_d_to_i64(ctx, fn, cached, cached_d, d_slot);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, cached_done)));
+  MIR_append_insn(ctx, fn, cached_nonnum);
+  mir_load_imm(ctx, fn, cached, mkval(T_UNDEF, 0));
+  MIR_append_insn(ctx, fn, cached_done);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(ant_string_builder_t, tail), lhs_ptr, tail_len, 1),
+      MIR_new_reg_op(ctx, byte)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_ADD,
+      MIR_new_reg_op(ctx, tail_len),
+      MIR_new_reg_op(ctx, tail_len),
+      MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U16,
+        (MIR_disp_t)offsetof(ant_string_builder_t, tail_len), lhs_ptr, 0, 1),
+      MIR_new_reg_op(ctx, tail_len)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(ant_string_builder_t, len), lhs_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_ADD,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_reg_op(ctx, len),
+      MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(ant_string_builder_t, len), lhs_ptr, 0, 1),
+      MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_JSVAL,
+        (MIR_disp_t)offsetof(ant_string_builder_t, cached), lhs_ptr, 0, 1),
+      MIR_new_reg_op(ctx, cached)));
+  mir_load_imm(ctx, fn, result, mkval(T_UNDEF, 0));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
 
 static void mir_emit_numeric_local_store_mirror(
@@ -3055,6 +3270,7 @@ static bool jit_emit_inline_body(
           ctx, jit_func, gl_obj, gl_dst,
           r_vm, r_js, *p_d_slot,
           ext->helper1_proto, ext->imp_get_length,
+          false,
           id, inl_bc_off
         );
         MIR_append_insn(ctx, jit_func,
@@ -7784,6 +8000,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_STR_APPEND_LOCAL: {
         uint16_t slot_idx = sv_get_u16(ip + 1);
         int pre_op_sp = vs.sp;
+        MIR_reg_t rhs;
+        MIR_reg_t lhs;
+        MIR_label_t slow = MIR_new_label(ctx);
+        MIR_label_t append_done = MIR_new_label(ctx);
+
         if ((int)slot_idx < param_count) {
           if (!writes_params) {
             MIR_label_t arg_in_range = MIR_new_label(ctx);
@@ -7801,7 +8022,24 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           }
 
           vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-          MIR_reg_t rhs = vstack_pop(&vs);
+          rhs = vstack_pop(&vs);
+
+          char lhs_name[48];
+          snprintf(lhs_name, sizeof(lhs_name), "sab_param_%d", bc_off);
+          lhs = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, lhs_name);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, lhs),
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)((int)slot_idx * (int)sizeof(ant_value_t)),
+                writes_params ? r_slotbuf : r_args, 0, 1)));
+
+          mir_emit_string_builder_append_ascii_byte(
+            ctx, jit_func, lhs, rhs, r_err_tmp,
+            r_d_slot,
+            slow, append_done, -1, bc_off
+          );
+          MIR_append_insn(ctx, jit_func, slow);
 
           MIR_append_insn(ctx, jit_func,
             MIR_new_call_insn(ctx, 11,
@@ -7821,7 +8059,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           if (local_idx >= (uint16_t)n_locals) { ok = false; break; }
 
           vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-          MIR_reg_t rhs = vstack_pop(&vs);
+          rhs = vstack_pop(&vs);
+
+          lhs = local_regs[local_idx];
+          mir_emit_string_builder_append_ascii_byte(
+            ctx, jit_func, lhs, rhs, r_err_tmp,
+            r_d_slot,
+            slow, append_done, -1, bc_off
+          );
+          MIR_append_insn(ctx, jit_func, slow);
 
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -7862,6 +8108,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           if (known_type_locals && known_type_locals[local_idx] != SV_TI_NUM)
             known_type_locals[local_idx] = SV_TI_UNKNOWN;
         }
+
+        MIR_append_insn(ctx, jit_func, append_done);
 
         mir_emit_bailout_check(ctx, jit_func, r_err_tmp,
           0, r_bailout_off, bc_off,
@@ -9639,12 +9887,24 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_GET_LENGTH: {
+        bool builder_length = false;
+        int raw_slot_size = sv_op_size[OP_GET_SLOT_RAW];
+        if (builder_target_slots && bc_off >= raw_slot_size) {
+          uint8_t *prev_ip = ip - raw_slot_size;
+          if (*prev_ip == OP_GET_SLOT_RAW) {
+            uint16_t slot_idx = sv_get_u16(prev_ip + 1);
+            int slot_count = param_count + n_locals;
+            builder_length = (int)slot_idx < slot_count &&
+              builder_target_slots[slot_idx];
+          }
+        }
         MIR_reg_t obj = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
         mir_emit_get_length(
           ctx, jit_func, obj, dst,
           r_vm, r_js, r_d_slot,
           helper1_proto, imp_get_length,
+          builder_length,
           -1, bc_off
         );
         break;

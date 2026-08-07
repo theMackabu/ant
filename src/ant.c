@@ -2009,9 +2009,12 @@ static inline ant_value_t rope_cached_flat(ant_value_t value) {
   return ptr->cached;
 }
 
-static inline void rope_set_cached_flat(ant_value_t rope, ant_value_t flat) {
+static inline void rope_canonicalize_flat(ant_value_t rope, ant_value_t flat) {
   ant_rope_heap_t *ptr = assert_rope_ptr(rope);
   ptr->cached = flat;
+  ptr->left = js_mkundef();
+  ptr->right = js_mkundef();
+  ptr->depth = 0;
 }
 
 static inline ant_string_builder_t *assert_builder_ptr(ant_value_t value) {
@@ -2123,7 +2126,8 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   if (vtype(cached) == T_NUM)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
 
-  rope_set_cached_flat(rope, flat);
+  /* The cached flat string is now the rope's complete representation. */
+  rope_canonicalize_flat(rope, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
   return flat;

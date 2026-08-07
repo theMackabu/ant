@@ -1357,6 +1357,72 @@ all four seeds agree, and newt Main **40.812s** / **41.20s wall** /
 snapshot/length tests passed at stress 1/3 and the full spec passed 3712/0 at
 stress 10. The hook was removed before the final rebuild and measurement.
 
+**String builder V8 follow-up — interpreter parity, inline append, canonical
+ropes, and direct builder length FIXED, 2026-08-07.** Temporary whole-run
+`ANT_STRING_STATS` counters separated four mechanisms before code changed:
+the cold/interpreter publication probe performed **200 builder reads and 200
+full materializations**, while the equivalent JIT read already made persistent
+snapshots; the append probe made **511,008 JIT helper calls**, with every hot
+append using an existing builder, flat ASCII RHS, and available tail capacity;
+the length loop performed **100,200 builder length helper calls with zero
+snapshots**; and final materialization walked **3,007 rope nodes**. The counters
+and their atexit hook were diagnostic only and are not retained.
+
+Interpreter local/argument reads now use the same persistent snapshot operation
+as JIT reads. The JIT inlines the allocation-free one-byte ASCII append case:
+it guards the builder and flat-string tags, byte length, ASCII byte, and tail
+capacity, then updates the tail, byte length, and optional cached UTF-16 length
+in place. All coercion, Unicode, spill, and non-builder cases retain the helper.
+The length emitter reads `builder->len` directly only for ASCII builders at
+sites the existing bytecode prescan proves can target a builder. An initial
+generic layout put the extra builder discrimination at every string-length
+site and regressed the flat `string_length` row from 0.99ns to 1.03--1.08ns;
+that form was rejected. Builder-target gating restored flat length to
+0.95ns while preserving the builder win.
+
+After a rope is flattened, its cached flat string is now its canonical
+representation: obsolete `left`/`right` edges are cleared and depth becomes
+zero. Every semantic traversal already checks `cached` before the children,
+and GC marks the cached flat string. A retained-root/major-GC probe with 64
+live 640KB roots fell from **10,462,480 bytes / 160 rope blocks** to
+**5,876,080 bytes / 90 blocks**. Two alternating AB/BA rounds improved that
+fixed workload from **242.483/239.330/239.724/243.616ms** to
+**176.654/174.580/169.516/173.879ms**. A separate leaf cursor was not justified:
+the counter showed one required tree walk, after which canonicalization makes
+the flat representation authoritative.
+
+The fixed-work mechanism experiments used the same pinned pre-follow-up
+`/tmp/ant_string_v8follow_base_bin`
+(`a9877a6a6ce09ea053be1803d44e2672`) and a separately pinned candidate after
+each named change. Their interleaved results were:
+
+| Workload | Pre-follow-up | Final | Delta |
+| --- | ---: | ---: | ---: |
+| cold interpreter publication | 1.522, 1.466, 1.442, 1.600ms | 0.019, 0.014, 0.016, 0.014ms | **−99.0%** |
+| JIT published append | 4.322, 4.110, 4.696, 4.164ms | 1.799, 1.738, 1.666, 1.763ms | **−59.0%** |
+| append + length each iteration | 1.294, 1.383, 1.397, 1.355ms | 0.443, 0.447, 0.407, 0.419ms | **−69.2%** |
+
+The final exact artifact is `/tmp/ant_string_v8follow_final_bin`
+(`b9e99b4851622afc9b51f644cdcb6180`). The real filtered `tests/bench.js`
+rows, also AB/BA against the base pin, measured `string_build1` at
+**9.28/9.30ns → 7.00/7.00ns** (**−24.6%**) and `string_build2` at
+**9.30/9.03ns → 7.19/7.21ns** (**−21.4%**). `string_length` held
+**1.00/0.96ns → 1.03/0.95ns** (non-directional). Regression coverage now
+includes the one-byte tail boundary, a cached length after every append, and
+continued use of a canonicalized rope across later concatenation and major-GC
+pressure. It also warms a builder-parameter append before calling it with the
+parameter absent, covering bailout stack reconstruction at the fast-path
+entry guard.
+
+Final exact-artifact gates: spec **3712/0**, JIT **9/0**, harness **174/0**
+(`test_gc_async` 385ms, `test_gc_coro` 5.898s; oha hono 34,619, express
+19,076, h3 22,603, elysia 65,016 RPS), and devirt fuzz all four seeds agree.
+Newt Main completed in **41.63s wall** with **704,167,936-byte max RSS**
+(901,399,728-byte peak footprint). A temporary `ANT_GC_STRESS` hook passed the
+focused mixed rope/builder probe at stress 1/3 and the full spec 3712/0 at
+stress 10. Both the stress hook and string counters were removed before the
+final rebuild and MD5 pin.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

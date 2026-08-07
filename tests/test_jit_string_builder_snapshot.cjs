@@ -134,4 +134,12 @@ function coldBranchAppendSnapshot(flag, n) {
 for (let i = 0; i < 300; i++) coldBranchAppendSnapshot(false, 20);
 assertEq(coldBranchAppendSnapshot(true, 3), '0xx:0xxx', 'cold-branch append snapshot');
 
+function appendParameter(value) {
+  for (let i = 0; i < 3; i++) value += 'x';
+  return value;
+}
+
+for (let i = 0; i < 300; i++) appendParameter('');
+assertEq(appendParameter(), 'undefinedxxx', 'missing builder parameter bailout');
+
 console.log('OK: test_jit_string_builder_snapshot');
