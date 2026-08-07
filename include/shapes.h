@@ -18,6 +18,7 @@
 typedef enum {
   ANT_SHAPE_KEY_STRING = 0,
   ANT_SHAPE_KEY_SYMBOL = 1,
+  ANT_SHAPE_KEY_DELETED = 2,
 } ant_shape_key_type_t;
 
 typedef struct {
@@ -51,18 +52,21 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
 bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot);
 bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);
 
-// Shifts each slot after the deleted one down by one, instead of swapping the last slot
-// into the hole. Slot order is property order, and the spec requires string keys in
-// insertion order. A swap breaks that: Object.keys, for-in and JSON.stringify then report
-// the wrong order after any delete but the last. obj_remove_prop_slot() shifts the values to match.
+// Marks a slot deleted without moving later properties. Slot order is property order,
+// and the spec requires string keys in insertion order. Reusing or swapping the hole
+// would make a re-added property appear in its old position. Deleted slots are compacted
+// stably once enough accumulate, so live property order is preserved.
 //
-// NOTE: a delete makes every ant_prop_loc_t for this shape stale. js_prop_load and
-// js_prop_store only bounds-check the slot against prop_count, so a stale one reads or
-// writes the neighbouring property. Never hold a location across a setter, proxy trap,
-// finalizer or other user callable; resolve it again afterwards. Every caller here does.
+// NOTE: deletion invalidates the removed property's ant_prop_loc_t, and compaction
+// invalidates locations for moved properties. Never hold a location across a setter,
+// proxy trap, finalizer or other user callable; resolve it again afterwards. Every
+// caller here does.
 bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot);
 
+// This is the physical slot span, including deleted slots until compaction.
 uint32_t ant_shape_count(const ant_shape_t *shape);
+bool ant_shape_should_compact(const ant_shape_t *shape);
+uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot);

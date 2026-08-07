@@ -13,7 +13,9 @@ match+replace −77.3%, final harness 172/0.
 R4 parity follow-up on 2026-08-06 fixed bound generator construction,
 bound-function prototype/new-target semantics, sloppy primitive `this`
 boxing, and the RegExp 32-capture result limit.
-Last reviewed: 2026-08-06
+A 2026-08-07 property-delete follow-up replaced the correctness-preserving
+quadratic slot shift with ordered tombstones and bounded stable compaction.
+Last reviewed: 2026-08-07
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
 ## vs pinned base /tmp/ant_fable_base = master 66499b0b)
@@ -1220,6 +1222,57 @@ candidate completes; with retention, installed Ant reaches `EMFILE`
 before 6,000 cycles while the candidate completes 10,000. The fix has
 no measurable message-throughput cost and removes the native transport
 leak/crash.
+
+**Property-delete follow-up — ordered tombstones FIXED, 2026-08-07.**
+The insertion-order correctness fix had made every successful delete shift
+all later shape metadata and object values, then walk the entire uthash index
+to decrement later slots. Whole-run diagnostic counters on the adaptive
+`prop_delete` micro recorded 1,880,000 deletes and **939,060,000** visits in
+each of those three loops (index entries, shape properties, and value slots).
+The counters were diagnostic only and are not retained in the final source.
+
+Deletion now removes the key from the shape index, clears the corresponding
+value, and leaves an ordered tombstone. Re-adding the key appends a new slot,
+which preserves ECMAScript insertion order. Trailing tombstones collapse
+immediately; after at least 32 interior tombstones, a stable compaction runs
+when holes equal or exceed live slots. Compaction updates each live hash
+entry's slot without allocation, so the object remains usable under memory
+pressure and its physical property span stays bounded. `ant_shape_prop_at`
+exposes tombstones as absent, and the existing global IC epoch bump
+invalidates slot caches before any moved slot can be reused.
+
+Pinned exact identities: pre-change
+`/tmp/ant_propdelete_current_bin`
+(`20c91ea2d59807bb95c0123cdba54016`) and final
+`/tmp/ant_propdelete_landed_bin`
+(`b84cabf7cf3c3c9dfc24fa659ad866f0`). Two alternating AB/BA rounds measured:
+
+| Workload | Pre-change | Final tombstones | Delta |
+| --- | ---: | ---: | ---: |
+| adaptive `prop_delete` | 1026.10, 1022.20 ns | 186.90, 184.18 ns | **−81.9% / 5.52x** |
+| 1k numeric, delete front | 1057.22, 1018.81 ns | 88.21, 94.35 ns | **−91.2%** |
+| 1k numeric, delete back | 455.04, 469.36 ns | 61.77, 66.12 ns | **−86.2%** |
+| 1k numeric, random delete | 850.69, 886.76 ns | 108.42, 114.25 ns | **−87.2%** |
+| 2k numeric, delete front | 4149.41, 4041.46 ns | 94.67, 95.50 ns | **−97.7%** |
+
+The 1k→2k front-delete candidate remains ~95 ns/delete while the old path
+quadruples, confirming the mechanism rather than an adaptive-benchmark
+artifact. Common `prop_read`, `prop_write`, `prop_update`, and
+`array_for_in` rows stayed within ~1%. `prop_create` was +2.6% in the final
+two-round confirmation but flat/reversed in the independent interleaved
+prototype run, so there is no repeatable regression signal.
+
+`tests/test_property_delete_compaction.cjs` matches Node and covers stable
+value/metadata pairing, delete/re-add ordering, symbols, integer keys,
+accessors, prototype fallback, warmed read/write caches, shared literal
+shapes, RegExp `lastIndex`, and repeated allocation churn. Final exact-artifact
+gates: spec **3712/0**, JIT **9/0**, harness **173/0**
+(`test_gc_async` 395ms, `test_gc_coro` 5.934s; oha express 18,648 RPS),
+devirt fuzzer all four seeds agree, and newt Main **41.746s** /
+976,322,560-byte max RSS. With a temporary `ANT_GC_STRESS` hook, the focused
+deletion/location/RegExp/async tests passed at stress 1/3 and the full spec
+passed 3712/0 at stress 10. The hook was removed, the final binary rebuilt,
+and its MD5 rechecked against the measured pin.
 
 ## Decision log
 

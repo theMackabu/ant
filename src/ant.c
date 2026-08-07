@@ -366,13 +366,30 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj) {
   return true;
 }
 
-static void obj_remove_prop_slot(ant_object_t *obj, uint32_t slot) {
+static void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
   if (!obj || slot >= obj->prop_count) return;
-  uint32_t last = obj->prop_count - 1;
-  for (uint32_t i = slot; i < last; i++)
-    ant_object_prop_set_unchecked(obj, i,
-    ant_object_prop_get_unchecked(obj, i + 1));
-  obj->prop_count--;
+  ant_object_prop_set_unchecked(obj, slot, js_mkundef());
+
+  uint32_t shape_count = ant_shape_count(obj->shape);
+  if (!ant_shape_should_compact(obj->shape)) {
+    obj->prop_count = shape_count;
+    return;
+  }
+
+  uint32_t dst = 0;
+  for (uint32_t src = 0; src < shape_count; src++) {
+    if (!ant_shape_prop_at(obj->shape, src)) continue;
+    if (dst != src) {
+      ant_object_prop_set_unchecked(
+        obj, dst, ant_object_prop_get_unchecked(obj, src)
+      );
+    }
+    dst++;
+  }
+  for (uint32_t i = dst; i < obj->prop_count; i++)
+    ant_object_prop_set_unchecked(obj, i, js_mkundef());
+
+  obj->prop_count = ant_shape_compact(obj->shape);
 }
 
 static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
@@ -5372,7 +5389,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
-  obj_remove_prop_slot(ptr, slot);
+  obj_delete_prop_slot(ptr, slot);
   
   return js_true;
 }
@@ -5407,7 +5424,7 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
-  obj_remove_prop_slot(ptr, slot);
+  obj_delete_prop_slot(ptr, slot);
   
   return js_true;
 }
