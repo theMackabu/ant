@@ -553,9 +553,78 @@ static ant_value_t sv_string_builder_new(ant_t *js) {
   );
   if (!builder) return js_mkerr(js, "string builder allocation failed");
   memset(builder, 0, sizeof(*builder));
+  builder->snapshot = js_mkundef();
   builder->cached = js_mkundef();
   builder->ascii_state = STR_ASCII_YES;
   return ant_mkbuilder_value(builder);
+}
+
+static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
+  ant_string_builder_t *builder = sv_string_builder_heap_ptr(value);
+  if (!builder) return value;
+
+  if (!builder->head && builder->tail_len == 0) {
+    ant_value_t snapshot = builder->snapshot;
+    if (vtype(snapshot) == T_STR) return snapshot;
+
+    ant_value_t cached = builder->cached;
+    if (vtype(cached) == T_STR &&
+        !str_is_heap_rope(cached) && !str_is_heap_builder(cached))
+      return cached;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  ant_value_t result = builder->snapshot;
+  GC_ROOT_PIN(js, result);
+  ant_value_t tail = js_mkundef();
+  GC_ROOT_PIN(js, tail);
+
+  for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+    ant_value_t piece = chunk->value;
+    if (vtype(result) != T_STR) result = piece;
+    else {
+      result = do_string_op(js, TOK_PLUS, result, piece);
+      if (is_err(result)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return result;
+      }
+    }
+  }
+
+  if (builder->tail_len > 0) {
+    tail = js_mkstr(js, builder->tail, builder->tail_len);
+    if (is_err(tail)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return tail;
+    }
+
+    if (vtype(result) != T_STR) result = tail;
+    else {
+      result = do_string_op(js, TOK_PLUS, result, tail);
+      if (is_err(result)) {
+        GC_ROOT_RESTORE(js, root_mark);
+        return result;
+      }
+    }
+  }
+
+  if (vtype(result) != T_STR) {
+    result = js_mkstr(js, "", 0);
+    if (is_err(result)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+  }
+
+  builder->snapshot = result;
+  builder->head = NULL;
+  builder->chunk_tail = NULL;
+  builder->tail_len = 0;
+  if (!str_is_heap_rope(result)) builder->cached = result;
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 static inline void sv_record_slot_feedback(
@@ -568,7 +637,7 @@ static inline void sv_record_slot_feedback(
 
 ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
   if (vtype(value) == T_STR && str_is_heap_builder(value))
-    return str_materialize(js, value);
+    return sv_string_builder_snapshot(js, value);
   return value;
 }
 

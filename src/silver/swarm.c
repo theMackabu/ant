@@ -247,6 +247,7 @@ static MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
 
 #define JIT_ERR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | T_ERR)
 #define JIT_STR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | T_STR)
+#define NANBOX_TARR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_ARR)
 
 
 /* Register-to-register bitcasts on targets with MIR_I2DB/MIR_D2IB
@@ -297,6 +298,129 @@ static void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
       MIR_new_reg_op(ctx, dst_i64),
       MIR_new_mem_op(ctx, MIR_T_I64, 0, slot, 0, 1)));
 #endif
+}
+
+static void mir_emit_get_length(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t obj, MIR_reg_t dst,
+  MIR_reg_t r_vm, MIR_reg_t r_js, MIR_reg_t r_d_slot,
+  MIR_item_t helper1_proto, MIR_item_t imp_get_length,
+  int owner_id, int bc_off
+) {
+  char tag_name[48], ptr_name[48], len_name[48], dbl_name[48];
+  snprintf(tag_name, sizeof(tag_name), "gl_tag_%d_%d", owner_id, bc_off);
+  snprintf(ptr_name, sizeof(ptr_name), "gl_ptr_%d_%d", owner_id, bc_off);
+  snprintf(len_name, sizeof(len_name), "gl_len_%d_%d", owner_id, bc_off);
+  snprintf(dbl_name, sizeof(dbl_name), "gl_dbl_%d_%d", owner_id, bc_off);
+  MIR_reg_t tag = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, tag_name);
+  MIR_reg_t ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, ptr_name);
+  MIR_reg_t len = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, len_name);
+  MIR_reg_t dbl = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, dbl_name);
+  MIR_label_t array = MIR_new_label(ctx);
+  MIR_label_t ascii = MIR_new_label(ctx);
+  MIR_label_t encode = MIR_new_label(ctx);
+  MIR_label_t slow = MIR_new_label(ctx);
+  MIR_label_t done = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, obj),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, array),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, NANBOX_TARR_TAG)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, JIT_STR_TAG)));
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, ptr),
+      MIR_new_reg_op(ctx, obj),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, ptr),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, STR_HEAP_TAG_FLAT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(ant_flat_string_t, meta), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, len),
+      MIR_new_uint_op(ctx, STR_META_ASCII_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, ascii),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, STR_ASCII_YES)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_reg_op(ctx, len),
+      MIR_new_uint_op(ctx, STR_META_UTF16_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, len),
+      MIR_new_uint_op(ctx, STR_UTF16_LEN_UNKNOWN)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, encode)));
+
+  MIR_append_insn(ctx, fn, ascii);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(ant_flat_string_t, len), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, encode)));
+
+  MIR_append_insn(ctx, fn, array);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, ptr),
+      MIR_new_reg_op(ctx, obj),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1)));
+
+  MIR_append_insn(ctx, fn, encode);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UI2D,
+      MIR_new_reg_op(ctx, dbl),
+      MIR_new_reg_op(ctx, len)));
+  mir_d_to_i64(ctx, fn, dst, dbl, r_d_slot);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+
+  MIR_append_insn(ctx, fn, slow);
+  MIR_append_insn(ctx, fn,
+    MIR_new_call_insn(ctx, 6,
+      MIR_new_ref_op(ctx, helper1_proto),
+      MIR_new_ref_op(ctx, imp_get_length),
+      MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, r_vm),
+      MIR_new_reg_op(ctx, r_js),
+      MIR_new_reg_op(ctx, obj)));
+  MIR_append_insn(ctx, fn, done);
 }
 
 
@@ -1014,7 +1138,6 @@ static void mir_emit_numeric_local_store_mirror(
 
 #define NANBOX_TFUNC_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_FUNC)
 #define NANBOX_TOBJ_TAG   ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_OBJ)
-#define NANBOX_TARR_TAG   ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_ARR)
 #define NANBOX_TPROM_TAG  ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_PROMISE)
 
 static void mir_emit_get_closure(MIR_context_t ctx, MIR_item_t fn,
@@ -2927,14 +3050,13 @@ static bool jit_emit_inline_body(
         INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t gl_obj = inl_vs[--isp];
         MIR_reg_t gl_dst = inl_vs[isp++];
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 6,
-            MIR_new_ref_op(ctx, ext->helper1_proto),
-            MIR_new_ref_op(ctx, ext->imp_get_length),
-            MIR_new_reg_op(ctx, gl_dst),
-            MIR_new_reg_op(ctx, r_vm),
-            MIR_new_reg_op(ctx, r_js),
-            MIR_new_reg_op(ctx, gl_obj)));
+        INL_ENSURE_D_SLOT();
+        mir_emit_get_length(
+          ctx, jit_func, gl_obj, gl_dst,
+          r_vm, r_js, *p_d_slot,
+          ext->helper1_proto, ext->imp_get_length,
+          id, inl_bc_off
+        );
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_URSH,
             MIR_new_reg_op(ctx, r_bool),
@@ -9519,59 +9641,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_LENGTH: {
         MIR_reg_t obj = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
-
-        char gl_tag_name[32], gl_ptr_name[32], gl_len_name[32], gl_dbl_name[32];
-        snprintf(gl_tag_name, sizeof(gl_tag_name), "gl_tag_%d", bc_off);
-        snprintf(gl_ptr_name, sizeof(gl_ptr_name), "gl_ptr_%d", bc_off);
-        snprintf(gl_len_name, sizeof(gl_len_name), "gl_len_%d", bc_off);
-        snprintf(gl_dbl_name, sizeof(gl_dbl_name), "gl_dbl_%d", bc_off);
-        MIR_reg_t gl_tag = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, gl_tag_name);
-        MIR_reg_t gl_ptr = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, gl_ptr_name);
-        MIR_reg_t gl_len = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, gl_len_name);
-        MIR_reg_t gl_dbl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_D, gl_dbl_name);
-        MIR_label_t gl_slow = MIR_new_label(ctx);
-        MIR_label_t gl_done = MIR_new_label(ctx);
-
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_URSH,
-            MIR_new_reg_op(ctx, gl_tag),
-            MIR_new_reg_op(ctx, obj),
-            MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_BNE,
-            MIR_new_label_op(ctx, gl_slow),
-            MIR_new_reg_op(ctx, gl_tag),
-            MIR_new_uint_op(ctx, NANBOX_TARR_TAG)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_AND,
-            MIR_new_reg_op(ctx, gl_ptr),
-            MIR_new_reg_op(ctx, obj),
-            MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, gl_len),
-            MIR_new_mem_op(ctx, MIR_T_U32,
-              (MIR_disp_t)offsetof(ant_object_t, u.array.len),
-              gl_ptr, 0, 1)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_UI2D,
-            MIR_new_reg_op(ctx, gl_dbl),
-            MIR_new_reg_op(ctx, gl_len)));
-        mir_d_to_i64(ctx, jit_func, dst, gl_dbl, r_d_slot);
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_JMP,
-            MIR_new_label_op(ctx, gl_done)));
-
-        MIR_append_insn(ctx, jit_func, gl_slow);
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 6,
-            MIR_new_ref_op(ctx, helper1_proto),
-            MIR_new_ref_op(ctx, imp_get_length),
-            MIR_new_reg_op(ctx, dst),
-            MIR_new_reg_op(ctx, r_vm),
-            MIR_new_reg_op(ctx, r_js),
-            MIR_new_reg_op(ctx, obj)));
-        MIR_append_insn(ctx, jit_func, gl_done);
+        mir_emit_get_length(
+          ctx, jit_func, obj, dst,
+          r_vm, r_js, r_d_slot,
+          helper1_proto, imp_get_length,
+          -1, bc_off
+        );
         break;
       }
 

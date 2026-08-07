@@ -149,6 +149,7 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
     if (!gc_ropes_contains(builder, sizeof(*builder), _Alignof(ant_string_builder_t))) return;
     if (!gc_ropes_mark(builder)) return;
+    gc_mark_str(js, builder->snapshot);
     gc_mark_value(js, builder->cached);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
       if (!gc_ropes_contains(chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;

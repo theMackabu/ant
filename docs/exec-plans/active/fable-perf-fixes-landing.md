@@ -1315,6 +1315,48 @@ devirt fuzzer all four seeds agree, and newt's final candidate run was
 **43.356s** / 987,365,376-byte max RSS. `maid preflight` and `git diff
 --check` also pass.
 
+**String length/build follow-up — direct length + persistent snapshots FIXED,
+2026-08-07.** All three regressions entered at PR #60, but they were two
+different mechanisms. `OP_GET_LENGTH` only recognized arrays, so every string
+receiver called the now-general `str_utf16_len` helper four times per loop.
+The JIT now reads flat ASCII byte length or an already-cached UTF-16 length
+directly, with unknown metadata, ropes, builders, and other receivers retaining
+the helper. Main and inline emission share one implementation. An inlined
+constant-string length micro improved from **436.646/439.426ms** to
+**245.189/245.203ms** over two alternating AB/BA rounds (**−44.0%**).
+
+The builder rows were not helper overhead. Temporary whole-run counters on a
+fixed 500,000-append `string_build1` run recorded **5,000 materializations, 0
+cache hits, and 1,250,250,000 copied bytes**: publishing `global_res` flattened
+the entire cumulative builder after every 100 appends. Builders now retain the
+immutable flat/rope string sealed by the last read as a prefix; a read only
+seals the newly appended chunks/tail into that prefix. Actual byte consumers
+still materialize lazily, and flattening compacts the builder back to one flat
+prefix. The prefix is traced by GC and participates in lazy UTF-16 length.
+`test_jit_string_builder_snapshot.cjs` now keeps 5,000 historical snapshots and
+checks aliases on both sides of the 4,096 rope-depth compaction boundary.
+
+Pinned exact identities: pre-change `/tmp/ant_string_current_base_bin`
+(`e4503096a665cd0b0f4a7c55358ef73e`) and final
+`/tmp/ant_string_final_bin` (`a9877a6a6ce09ea053be1803d44e2672`). Two
+alternating AB/BA rounds measured:
+
+| Workload | Pre-change | Final | Delta |
+| --- | ---: | ---: | ---: |
+| `string_length` | 2.87, 2.89ns | 1.00, 0.95ns | **−66.1% / 2.95x** |
+| `string_build1` | 127.06, 118.73ns | 9.33, 9.35ns | **−92.4% / 13.16x** |
+| `string_build2` | 126.35, 127.17ns | 8.91, 9.33ns | **−92.8% / 13.90x** |
+
+The old PR #50 builder score (about 7.4--7.8ns) remains semantically invalid;
+the correct persistent-snapshot path is now within roughly 2ns/append of it
+instead of 15x slower. Final exact-artifact gates: spec **3712/0**, JIT
+**9/0**, harness **174/0** (`test_gc_async` 423ms, `test_gc_coro` 6.532s;
+oha hono 31,927, express 18,195, h3 20,743, elysia 62,361 RPS), devirt fuzzer
+all four seeds agree, and newt Main **40.812s** / **41.20s wall** /
+899,432,448-byte max RSS. With the temporary `ANT_GC_STRESS` hook, focused
+snapshot/length tests passed at stress 1/3 and the full spec passed 3712/0 at
+stress 10. The hook was removed before the final rebuild and measurement.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

@@ -442,6 +442,7 @@ typedef struct ant_builder_chunk {
 
 typedef struct {
   ant_offset_t len;
+  ant_value_t snapshot; /* immutable prefix sealed by the last read */
   ant_builder_chunk_t *head;
   ant_builder_chunk_t *chunk_tail;
   ant_value_t cached;

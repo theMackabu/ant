@@ -2145,6 +2145,8 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
   }
 
   ant_string_builder_t *ptr = assert_builder_ptr(builder);
+  ant_value_t snapshot = ptr->snapshot;
+  GC_ROOT_PIN(js, snapshot);
   ant_value_t flat = js_mkstr(js, NULL, (size_t)ptr->len);
   
   GC_ROOT_PIN(js, flat);
@@ -2155,6 +2157,20 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)(uintptr_t)vdata(flat);
   size_t cursor = 0;
+
+  if (vtype(snapshot) == T_STR) {
+    snapshot = str_materialize(js, snapshot);
+    if (is_err(snapshot)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return snapshot;
+    }
+
+    ant_flat_string_t *snapshot_flat = ant_str_flat_ptr(snapshot);
+    if (snapshot_flat && snapshot_flat->len > 0) {
+      memcpy(flat_ptr->bytes, snapshot_flat->bytes, (size_t)snapshot_flat->len);
+      cursor = (size_t)snapshot_flat->len;
+    }
+  }
   
   for (ant_builder_chunk_t *chunk = ptr->head; chunk; chunk = chunk->next) {
     ant_value_t chunk_value = chunk->value;
@@ -2180,6 +2196,10 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
   str_flat_init_meta(flat_ptr, ptr->ascii_state);
   if (vtype(cached) == T_NUM)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
+  ptr->snapshot = flat;
+  ptr->head = NULL;
+  ptr->chunk_tail = NULL;
+  ptr->tail_len = 0;
   builder_set_cached_flat(builder, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
@@ -4945,6 +4965,8 @@ static ant_offset_t builder_utf16_len_lazy(ant_t *js, ant_value_t value) {
   ant_offset_t total = 0;
   if (builder->ascii_state == STR_ASCII_YES) total = builder->len;
   else {
+    if (vtype(builder->snapshot) == T_STR)
+      total += str_utf16_len(js, builder->snapshot);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next)
       total += str_utf16_len(js, chunk->value);
     total += (ant_offset_t)utf16_strlen(builder->tail, builder->tail_len);
