@@ -4468,7 +4468,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, active),
               r_vm, 0, 1),
             MIR_new_int_op(ctx, 0)));
-        mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+        /* The compiled function is still valid; this frame is simply not
+           ready to enter it at the current loop header. */
+        mir_load_imm(ctx, jit_func, r_bailout_val,
+                     (uint64_t)SV_JIT_RETRY_INTERP);
         MIR_append_insn(ctx, jit_func,
           MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_bailout_val)));
         MIR_append_insn(ctx, jit_func, osr_types_ok);
@@ -11283,6 +11286,7 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.n_locals  = nl;
   vm->jit_osr.lp        = frame->lp;
 
+  func->back_edge_count = 0;
   sv_jit_enter(js);
   ant_value_t result = jit(
     vm, frame->this, frame->new_target, frame->super_val,

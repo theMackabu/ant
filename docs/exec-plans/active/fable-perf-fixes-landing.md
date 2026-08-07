@@ -1274,6 +1274,47 @@ deletion/location/RegExp/async tests passed at stress 1/3 and the full spec
 passed 3712/0 at stress 10. The hook was removed, the final binary rebuilt,
 and its MD5 rechecked against the measured pin.
 
+**`array_for` follow-up — OSR entry rejection FIXED, 2026-08-07.** The
+regression was not loop codegen. Whole-function numeric feedback made the OSR
+prologue guard every inferred-numeric local before selecting the requested
+loop header. When the cumulative backedge threshold was reached in an early
+loop of a later invocation, locals initialized only by subsequent loops were
+still `undefined`. The prologue returned `SV_JIT_BAILOUT`, so
+`sv_jit_try_osr` called `sv_jit_on_bailout` and discarded otherwise-valid
+compiled code. `ANT_DEBUG=dump/vm:op-warn` pinned the failure at `op=entry`
+before any source opcode executed.
+
+An incompatible OSR frame now returns `SV_JIT_RETRY_INTERP`: execution
+continues from the same interpreter backedge without invalidating the compiled
+function. The backedge counter is reset immediately before every OSR attempt,
+which delays another attempt after any retry without adding a result-specific
+branch. A first prototype reset the counter in a new post-call branch; that
+changed `sv_jit_try_osr`'s control-flow hash, discarded its checked-in PGO
+counts, and lost both newt A/B rounds, so that form was rejected.
+
+Pinned identities are pre-change `/tmp/ant_array_osr_base_bin`
+(`ce879ea43dafeebfb695e513c0edeb5d`) and final
+`/tmp/ant_array_osr_candidate2_bin`
+(`e4503096a665cd0b0f4a7c55358ef73e`). Two alternating AB/BA rounds measured
+`array_for` at **21.00/20.64ns** before versus **3.34/3.21ns** after:
+**−84.3% / 6.36x faster**. The focused regression test fails on the base pin
+with `jit: bailout 1/5 ... op=entry` and passes on the final pin. Final newt
+A/B was non-directional within the host's approximately one-second noise:
+candidate/base **44.703/43.374s**, then base/candidate **43.545/43.356s**;
+RSS stayed below 1GB. The second-round candidate is in the existing thermal
+band, and the first-round loss did not repeat.
+
+This does not explain the separate installed-main `array_for_in` gap.
+`FOR_IN` remains JIT-ineligible, and the final pin's `js_for_in_keys` machine
+code is byte-identical to the base pin; do not attribute noisy 136--147ns
+readings of that row to the OSR change.
+
+Final exact-artifact gates: spec **3712/0**, JIT **9/0**, harness **174/0**
+(`test_gc_async` 402ms, `test_gc_coro` 6.508s; oha express 18,205 RPS),
+devirt fuzzer all four seeds agree, and newt's final candidate run was
+**43.356s** / 987,365,376-byte max RSS. `maid preflight` and `git diff
+--check` also pass.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies
