@@ -989,6 +989,45 @@ folding, name/length chain, constructors, and `undefined` bound-this
 retention all match node. tests/test_double_bind.cjs is in the harness
 REGRESSION_TESTS and retains the GC-churn survival check.
 
+**R4 follow-up — re-bound Proxy argument duplication FIXED,
+2026-08-06.** An independent parity pass found one hole in the 187-case
+matrix: a bound Proxy with inner arguments was flattened into the outer
+closure, but the copied `builtin_bound_proxy_call` wrapper still targeted
+the inner bound function. The outer closure prepended the folded arguments,
+then re-entering the inner closure prepended its arguments a second time:
+`px.bind(A, 1).bind(B, 2)(3)` produced `[1, 1, 2, 3]` instead of
+`[1, 2, 3]`; three bind levels compounded the duplication.
+
+The fix keeps the normalized folded closure and, only when the copied C
+entrypoint is `builtin_bound_proxy_call`, retargets `SLOT_TARGET_FUNC` to
+that wrapper's original Proxy. This preserves the Proxy apply/construct
+traps while invoking them exactly once; reverse nesting (a Proxy around a
+bound function) is unchanged. The checked-in deterministic matrix expanded
+from 187 to **360 assertions** by giving Proxy binds the same inner/outer
+`this` x argument-shape x direct/method coverage as ordinary functions,
+plus triple-bind and constructor trap-count cases. All 360 pass under both
+Node and Ant.
+
+Pinned same-work execution A/B (10M calls, identical checksum
+`1284991808` and 10M apply traps): pre-fix
+`/tmp/ant_r4_proxy_base_bin`
+(`64bb915ea970449bde866cb87575c68d`) versus candidate
+`/tmp/ant_r4_proxy_candidate_bin`
+(`520d763a4b3c25ab8a2a9a9d807c6ddf`). Four AB/BA rounds measured
+1125.978/1126.550/1108.872/1142.906ms versus
+1007.076/1020.279/1021.364/1006.123ms; median
+**1126.3 -> 1013.7ms (-10.0%)**. Removing the redundant wrapper traversal
+improves performance as well as parity.
+
+Final gates on the candidate: spec 3712/0, JIT 9 files/0 fail, devirt
+fuzzer all four seeds agree, and harness **172/0** (168 substantive rows
+plus all four oha rows after unsetting this shell's incompatible
+`NO_COLOR=1`; express 18,491 RPS). Async rows include gc_async 382ms and
+gc_coro 5.939s. newt completed in 44.09s wall with 966,197,248-byte max
+RSS (<1GB). The ordinary `build/` configuration still fails in the current
+Nix shell because the SDK cannot find `time.h`; the already-configured
+`build-pgo/` tree produced and validated the candidate.
+
 **R5 numeric literal keys — FIXED + tests.** New `literal_num_key()`
 (compiler.c) routes all three %g sites (compile key emit ~276,
 object_literal_static_keys ~4056, DEFINE_FIELD fallback ~4160) through

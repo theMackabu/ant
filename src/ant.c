@@ -6225,7 +6225,16 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   ant_value_t eval_env = get_slot(func_obj, SLOT_EVAL_ENV);
   if (is_object_type(eval_env))
     js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
-  set_slot(bound_func, SLOT_TARGET_FUNC, func);
+
+  ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+  ant_value_t call_target = func;
+  if (vtype(cfunc_slot) == T_CFUNC &&
+      js_cfunc_same_entrypoint(cfunc_slot, builtin_bound_proxy_call)) {
+    ant_value_t proxy_target = get_slot(func_obj, SLOT_TARGET_FUNC);
+    if (vtype(proxy_target) == T_OBJ && is_proxy(proxy_target))
+      call_target = proxy_target;
+  }
+  set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
   if (bound_argc > 0 || orig_bound_argc > 0) {
     int total_bound_argc = orig_bound_argc + bound_argc;
@@ -6244,7 +6253,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     bound_closure->bound_argc = total_bound_argc;
   }
 
-  ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
   if (vtype(cfunc_slot) == T_CFUNC) {
     set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
   }

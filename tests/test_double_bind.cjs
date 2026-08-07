@@ -34,22 +34,81 @@ check('cfunc double bind order', Math.min.bind(null, 5).bind(null, 2)(9), 2);
   check('cfunc undefined this stays bound', threw, true);
 }
 
-// Proxy-backed bound functions take a separate wrapper path.
+const thisCases = [
+  { name: 'undefined', value: undefined, seen: 'undefined' },
+  { name: 'object-a', value: { id: 'a' }, seen: 'a' },
+  { name: 'object-b', value: { id: 'b' }, seen: 'b' },
+];
+const argCases = [
+  { name: 'empty', values: [] },
+  { name: 'one', values: [11] },
+  { name: 'two', values: [11, 12] },
+];
+
+// Proxy-backed bound functions take a separate wrapper path. Re-binding
+// flattens the accumulated arguments, so that wrapper must target the Proxy
+// directly rather than re-entering the inner bound function.
 {
+  let applyCalls = 0;
+  let constructCalls = 0;
   const target = function () {
     'use strict';
-    return this === undefined ? 'undefined' : this.id;
+    const args = Array.from(arguments);
+    if (new.target) {
+      this.args = args;
+      return;
+    }
+    return [this === undefined ? 'undefined' : this.id, ...args];
   };
   const proxy = new Proxy(target, {
     apply(fn, thisArg, args) {
+      applyCalls++;
       return Reflect.apply(fn, thisArg, args);
     },
+    construct(fn, args) {
+      constructCalls++;
+      return Reflect.construct(fn, args);
+    },
   });
+
+  let expectedApplyCalls = 0;
+  for (const innerThis of thisCases) {
+    for (const outerThis of thisCases) {
+      for (const innerArgs of argCases) {
+        for (const outerArgs of argCases) {
+          const name = `${innerThis.name}/${outerThis.name}/${innerArgs.name}/${outerArgs.name}`;
+          const bound = proxy
+            .bind(innerThis.value, ...innerArgs.values)
+            .bind(outerThis.value, ...outerArgs.values);
+          const expected = [innerThis.seen, ...innerArgs.values, ...outerArgs.values, 99];
+          check(`proxy matrix direct ${name}`, bound(99), expected);
+          check(`proxy matrix method ${name}`, ({ bound }).bound(99), expected);
+          expectedApplyCalls += 2;
+        }
+      }
+    }
+  }
   check(
-    'proxy undefined this stays bound',
-    proxy.bind(undefined).bind({ id: 'outer' })(),
-    'undefined'
+    'proxy triple bind args',
+    proxy.bind({ id: 'inner' }, 1).bind({ id: 'middle' }, 2).bind({ id: 'outer' }, 3)(4),
+    ['inner', 1, 2, 3, 4]
   );
+  expectedApplyCalls++;
+  check('proxy apply trap once per call', applyCalls, expectedApplyCalls);
+
+  for (const innerArgs of argCases) {
+    for (const outerArgs of argCases) {
+      const BoundProxy = proxy
+        .bind({ id: 'inner' }, ...innerArgs.values)
+        .bind({ id: 'outer' }, ...outerArgs.values);
+      check(
+        `proxy construct args ${innerArgs.name}/${outerArgs.name}`,
+        new BoundProxy(99).args,
+        [...innerArgs.values, ...outerArgs.values, 99]
+      );
+    }
+  }
+  check('proxy construct trap once per call', constructCalls, argCases.length ** 2);
 }
 
 // arrows ignore every bound this but still fold args.
@@ -64,16 +123,6 @@ function strictThis() {
   'use strict';
   return [this === undefined ? 'undefined' : this.id, ...Array.from(arguments)];
 }
-const thisCases = [
-  { name: 'undefined', value: undefined, seen: 'undefined' },
-  { name: 'object-a', value: { id: 'a' }, seen: 'a' },
-  { name: 'object-b', value: { id: 'b' }, seen: 'b' },
-];
-const argCases = [
-  { name: 'empty', values: [] },
-  { name: 'one', values: [11] },
-  { name: 'two', values: [11, 12] },
-];
 
 for (const innerThis of thisCases) {
   for (const outerThis of thisCases) {
