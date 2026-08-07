@@ -28,6 +28,45 @@ for (const key of ['index', 'input', 'groups', 'indices']) {
   );
 }
 
+let capturePattern = '';
+for (let i = 0; i < 40; i++) capturePattern += '(.)';
+const manyCaptures = new RegExp(capturePattern, 'd').exec(
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'
+);
+assert(manyCaptures.length === 41, 'exec result includes captures beyond 31');
+assert(manyCaptures[32] === 'F', 'capture 32 value');
+assert(manyCaptures[40] === 'N', 'capture 40 value');
+assert(manyCaptures.indices.length === 41, 'indices include captures beyond 31');
+assertJson(manyCaptures.indices[40], [39, 40], 'capture 40 indices');
+assert(
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'.replace(
+    new RegExp(capturePattern, 'g'),
+    '$40-$32'
+  ) === 'N-F',
+  'batched replace can read captures beyond 31'
+);
+let replacerArgCount = 0;
+let replacerCapture40;
+'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'.replace(
+  new RegExp(capturePattern, 'g'),
+  function () {
+    replacerArgCount = arguments.length;
+    replacerCapture40 = arguments[40];
+    return 'ok';
+  }
+);
+assert(replacerArgCount === 43, 'function replacer receives every capture');
+assert(replacerCapture40 === 'N', 'function replacer capture 40 value');
+
+let namedCapturePattern = '';
+for (let i = 0; i < 39; i++) namedCapturePattern += '(.)';
+namedCapturePattern += '(?<last>.)';
+const namedManyCaptures = new RegExp(namedCapturePattern, 'd').exec(
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'
+);
+assert(namedManyCaptures.groups.last === 'N', 'named capture beyond 31');
+assertJson(namedManyCaptures.indices.groups.last, [39, 40], 'named indices beyond 31');
+
 let regexp = /a/g;
 assertJson('baac'.match(regexp), ['a', 'a'], 'global match');
 assert(regexp.lastIndex === 0, 'global match final lastIndex');

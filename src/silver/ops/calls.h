@@ -63,9 +63,10 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
   ant_value_t record_func = func;
-  js->new_target = new_target;
+  ant_value_t effective_new_target = new_target;
 
   if (vtype(func) == T_OBJ && is_proxy(func)) {
+    js->new_target = new_target;
     ant_value_t result = js_proxy_construct(js, func, args, argc, new_target);
     vm->sp -= argc + 2;
     if (is_err(result)) return result;
@@ -79,15 +80,15 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
-    ant_value_t proto_source = func;
-    ant_value_t func_obj = js_func_obj(func);
-    ant_value_t target_func = js_get_slot(func_obj, SLOT_TARGET_FUNC);
-    if (vtype(target_func) == T_FUNC) {
-      proto_source = target_func;
-      record_func = target_func;
+    proto = sv_prepare_construct_meta(
+      js, func, new_target, &effective_new_target, &record_func
+    );
+    if (is_err(proto)) {
+      vm->sp -= argc + 2;
+      return proto;
     }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
   }
+  js->new_target = effective_new_target;
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
@@ -150,7 +151,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
   ant_value_t record_func = func;
-  js->new_target = new_target;
+  ant_value_t effective_new_target = new_target;
 
   sv_call_args_t call;
   sv_call_args_reset(&call, args, (int)argc);
@@ -158,6 +159,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   if (is_err(norm)) { vm->sp -= argc + 2; return norm; }
 
   if (vtype(func) == T_OBJ && is_proxy(func)) {
+    js->new_target = new_target;
     ant_value_t result = js_proxy_construct(js, func, call.args, call.argc, new_target);
     sv_call_args_release(&call);
     vm->sp -= argc + 2;
@@ -173,15 +175,16 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
-    ant_value_t proto_source = func;
-    ant_value_t func_obj = js_func_obj(func);
-    ant_value_t target_func = js_get_slot(func_obj, SLOT_TARGET_FUNC);
-    if (vtype(target_func) == T_FUNC) {
-      proto_source = target_func;
-      record_func = target_func;
+    proto = sv_prepare_construct_meta(
+      js, func, new_target, &effective_new_target, &record_func
+    );
+    if (is_err(proto)) {
+      sv_call_args_release(&call);
+      vm->sp -= argc + 2;
+      return proto;
     }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
   }
+  js->new_target = effective_new_target;
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);

@@ -10,6 +10,9 @@ data, GC-stress pass DONE (hook removed).
 R1 follow-up on 2026-08-06 added canonical RegExp result shapes and guarded
 batched global match/replace: result-consuming `exec()` −21.8%, global
 match+replace −77.3%, final harness 172/0.
+R4 parity follow-up on 2026-08-06 fixed bound generator construction,
+bound-function prototype/new-target semantics, sloppy primitive `this`
+boxing, and the RegExp 32-capture result limit.
 Last reviewed: 2026-08-06
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -1027,6 +1030,80 @@ gc_coro 5.939s. newt completed in 44.09s wall with 966,197,248-byte max
 RSS (<1GB). The ordinary `build/` configuration still fails in the current
 Nix shell because the SDK cannot find `time.h`; the already-configured
 `build-pgo/` tree produced and validated the candidate.
+
+**R4 parity follow-up — bound prototypes/generators, sloppy `this`, and
+full RegExp captures FIXED, 2026-08-06.** The incidental parity audit found
+four older release defects:
+
+1. Bound generator functions were dispatched through the wrapper's missing
+   generator prototype, so `[...g.bind(obj)()]` threw instead of iterating.
+2. Sloppy functions received primitive `this` values unchanged instead of
+   boxing String/Number/Boolean/BigInt/Symbol values (and mapping nullish
+   values to the global object).
+3. Bound functions incorrectly had an own `prototype`; repeated binding then
+   made `new` use the wrapper prototype and wrapper `new.target` instead of
+   the ultimate target's.
+4. RegExp result and replacement paths silently stopped materializing
+   captures after capture 31.
+
+Bound metadata now names the ultimate target and is resolved consistently by
+ordinary/native/proxy calls, generator dispatch, `instanceof`, and all
+interpreter/JIT construct paths. Bound functions no longer create an own
+`prototype`. Construction normalizes an implicit bound wrapper `new.target`
+to the target while preserving an explicit distinct
+`Reflect.construct(..., newTarget)`; Proxy construct traps still run exactly
+once. Sloppy non-arrow functions normalize `this` in the interpreter and JIT,
+including fresh rooted primitive wrappers. The JIT only emits that work for
+functions whose bytecode observes or captures `this` (`OP_THIS`,
+`OP_CLOSURE`, or `OP_EVAL`), leaving unrelated and strict functions alone.
+
+RegExp result loops now use the complete PCRE2 ovector. Template replacement
+and function-replacer capture storage grows dynamically past the old stack
+capacity, so capture 40 works in `exec`, `d` indices, `$40`, named groups,
+and replacer arguments. The deterministic bound suite now passes **394/394**
+under both Node and Ant; `test_regexp_result_batch.cjs` covers 40-capture
+result/replacement behavior.
+
+The final source was retrained with the checked-in Darwin AArch64 PGO script.
+Pinned identities: pre-follow-up
+`/tmp/ant_bound_regex_baseline_bin`
+(`520d763a4b3c25ab8a2a9a9d807c6ddf`), fresh-PGO candidate
+`/tmp/ant_bound_regex_followup_fresh_pgo_bin`
+(`fde1bbba0c47c82eefca90f2629392d5`), and installed release
+`/Users/themackabu/.ant/bin/ant`
+(`33ea23ff2faa4c7f6c3302aff2e2d279`). Two alternating AB/BA rounds of
+fixed work measured:
+
+| Workload | Pre-follow-up median | Fresh PGO median | Delta |
+| --- | ---: | ---: | ---: |
+| Bind creation, 1M | 599.910ms | 220.755ms | **−63.2%** |
+| Double-bound call, 20M | 242.154ms | 242.403ms | +0.1% / flat |
+| Double-bound `new`, 5M | 299.450ms | 293.483ms | −2.0% |
+| Sloppy primitive `this`, 5M | 122.811ms | 488.838ms | **3.98x slower** |
+| Strict primitive `this`, 20M | 208.125ms | 208.071ms | flat |
+| RegExp 20 captures, 600k | 314.735ms | 310.769ms | −1.3% / flat |
+
+The sloppy row is an unavoidable equal-work but **not equal-semantics**
+comparison: the old binary skips the required wrapper allocation. The cost is
+confined to sloppy functions that observe or capture `this`; strict functions
+and sloppy functions that never use it do not pay the normalization.
+
+| Workload | Installed median | Fresh PGO median | Delta |
+| --- | ---: | ---: | ---: |
+| Bind creation, 1M | 602.934ms | 220.929ms | **−63.4%** |
+| Sloppy primitive `this`, 5M | 139.342ms | 485.540ms | **3.49x slower, required semantics** |
+| Strict primitive `this`, 20M | 258.029ms | 209.231ms | **−18.9%** |
+| RegExp 20 captures, 600k | 398.396ms | 309.152ms | **−22.4%** |
+
+Installed double-bound call/construct rows are excluded: their checksums
+differ because the installed release has the incorrect binding semantics.
+Final exact-artifact gates: spec 3712/0, JIT 9 files/0 fail, harness
+**172/0** (`test_gc_async` 394ms, `test_gc_coro` 6.499s, express oha
+18,414 RPS), devirt fuzzer all four seeds agree, and newt Main 43.139s /
+43.52s wall / 732,217,344-byte max RSS (931,497,112-byte peak footprint).
+The final routine `meson compile -C build` attempt still cannot link in the
+current Nix shell (`ld: library not found for -lm`); it removed `build/ant`,
+so the byte-identical validated pin was restored there and its MD5 rechecked.
 
 **R5 numeric literal keys — FIXED + tests.** New `literal_num_key()`
 (compiler.c) routes all three %g sites (compile key emit ~276,

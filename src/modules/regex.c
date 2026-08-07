@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <pcre2.h>
 
 #include "silver/engine.h"
@@ -1440,7 +1441,7 @@ static ant_value_t regexp_build_indices_result(
   ant_value_t indices_arr = js_mkarr(js);
   if (is_err(indices_arr)) return indices_arr;
 
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  for (uint32_t i = 0; i < ovcount; i++) {
     ant_value_t pair = regexp_build_indices_pair(js, ovector[2*i], ovector[2*i+1]);
     if (is_err(pair)) return pair;
     js_arr_push(js, indices_arr, pair);
@@ -1547,9 +1548,7 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
 
   if (rc >= 0) {
     *ovector = pcre2_get_ovector_pointer(scope->match_data);
-    uint32_t count = pcre2_get_ovector_count(scope->match_data);
-    if (count > 32) count = 32;
-    *ovcount = count;
+    *ovcount = pcre2_get_ovector_count(scope->match_data);
   }
   return rc;
 }
@@ -1714,7 +1713,7 @@ static ant_value_t regexp_exec_shared_fast(
     result = result_arr;
     goto done;
   }
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  for (uint32_t i = 0; i < ovcount; i++) {
     PCRE2_SIZE start = ovector[2*i];
     PCRE2_SIZE end = ovector[2*i+1];
     if (start == PCRE2_UNSET) {
@@ -1868,7 +1867,7 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     result = result_arr;
     goto done;
   }
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  for (uint32_t i = 0; i < ovcount; i++) {
     PCRE2_SIZE start = ovector[2*i];
     PCRE2_SIZE end = ovector[2*i+1];
     if (start == PCRE2_UNSET) {
@@ -2705,8 +2704,16 @@ static ant_value_t regexp_replace_batch_fast(
       return js_mkerr(js, "oom");
     }
 
-    repl_capture_t captures[31];
     int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
+    repl_capture_t captures_inline[31];
+    repl_capture_t *captures = capture_count <= 31
+      ? captures_inline
+      : ant_calloc(sizeof(*captures) * (size_t)capture_count);
+    if (capture_count > 31 && !captures) {
+      regex_match_scope_end(&scope);
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
     for (int i = 0; i < capture_count; i++) {
       PCRE2_SIZE capture_start = ovector[2 * (i + 1)];
       PCRE2_SIZE capture_end = ovector[2 * (i + 1) + 1];
@@ -2726,6 +2733,7 @@ static ant_value_t regexp_replace_batch_fast(
       captures, capture_count,
       &buf, &buf_len, &buf_cap
     );
+    if (captures != captures_inline) free(captures);
     regex_match_scope_end(&scope);
     if (!replaced) {
       free(buf);
@@ -3016,13 +3024,26 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_value_t replacement;
     if (func_replace) {
       ant_offset_t ncaptures = js_arr_len(js, result);
-      ant_value_t call_args[32];
+      if (ncaptures > INT_MAX - 2) {
+        free(buf);
+        return js_mkerr(js, "too many regexp captures");
+      }
+      int call_capacity = (int)ncaptures + 2;
+      ant_value_t call_args_inline[32];
+      ant_value_t *call_args = call_capacity <= 32
+        ? call_args_inline
+        : malloc(sizeof(*call_args) * (size_t)call_capacity);
+      if (!call_args) {
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
       int ca = 0;
-      for (ant_offset_t c = 0; c < ncaptures && ca < 30; c++)
+      for (ant_offset_t c = 0; c < ncaptures; c++)
         call_args[ca++] = js_arr_get(js, result, c);
       call_args[ca++] = tov((double)position);
       call_args[ca++] = str;
       replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, false);
+      if (call_args != call_args_inline) free(call_args);
     } else {
       replacement = replace_str;
     }

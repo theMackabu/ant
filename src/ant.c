@@ -5597,6 +5597,29 @@ static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
   return bval;
 }
 
+ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
+  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return js->global;
+  if (is_object_type(value) || vtype(value) == T_CFUNC) return value;
+
+  uint8_t type = vtype(value);
+  if (
+    type != T_STR && type != T_NUM && type != T_BOOL &&
+    type != T_BIGINT && type != T_SYMBOL
+  ) return value;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  ant_value_t wrapper = js_mkobj(js);
+  if (!is_err(wrapper)) {
+    GC_ROOT_PIN(js, wrapper);
+    js_set_slot_wb(js, wrapper, SLOT_PRIMITIVE, value);
+    ant_value_t proto = js_primitive_prototype(js, type);
+    if (is_object_type(proto)) js_set_proto_wb(js, wrapper, proto);
+  }
+  GC_ROOT_RESTORE(js, root_mark);
+  return wrapper;
+}
+
 static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
     ant_value_t obj_proto = js->sym.object_proto;
@@ -5608,14 +5631,8 @@ static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   uint8_t t = vtype(arg);
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return arg;
-  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL) {
-    ant_value_t wrapper = js_mkobj(js);
-    if (is_err(wrapper)) return wrapper;
-    set_slot(wrapper, SLOT_PRIMITIVE, arg);
-    ant_value_t proto = js_primitive_prototype(js, t);
-    if (vtype(proto) == T_OBJ) js_set_proto_init(wrapper, proto);
-    return wrapper;
-  }
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL)
+    return js_normalize_sloppy_this(js, arg);
   
   return arg;
 }
@@ -6014,11 +6031,24 @@ static ant_value_t builtin_bound_proxy_call(ant_t *js, ant_value_t *args, int na
   if (vtype(target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid bound proxy target");
 
   if (vtype(js->new_target) != T_UNDEF) {
-    ant_value_t ctor_this = js->this_val;
-    return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, &ctor_this, true);
+    return js_proxy_construct(js, target, args, nargs, js->new_target);
   }
 
   return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, NULL, false);
+}
+
+ant_value_t js_resolve_bound_target(ant_value_t value) {
+  for (int depth = 0; depth < 64 && vtype(value) == T_FUNC; depth++) {
+    sv_closure_t *closure = js_func_closure(value);
+    if (
+      !closure ||
+      !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+    ) break;
+    ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+    if (vtype(target) == T_UNDEF || target == value) break;
+    value = target;
+  }
+  return value;
 }
 
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
@@ -6106,8 +6136,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     );
     if (is_err(name_result)) return name_result;
 
-    ant_value_t proto_setup = setup_func_prototype(js, bound);
-    if (is_err(proto_setup)) return proto_setup;
     js_mark_constructor(bound_func, js_is_constructor(func));
 
     return bound;
@@ -6118,6 +6146,7 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     if (is_err(bound_func)) return bound_func;
     
     set_slot(bound_func, SLOT_CFUNC, func);
+    set_slot(bound_func, SLOT_TARGET_FUNC, func);
     
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
@@ -6138,9 +6167,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
       js, bound_func, "bound ", 6, target_name, target_name_len
     );
     if (is_err(name_result)) return name_result;
-    ant_value_t proto_setup = setup_func_prototype(js, bound);
-    
-    if (is_err(proto_setup)) return proto_setup;
     js_mark_constructor(bound_func, js_is_constructor(func));
     
     return bound;
@@ -6227,13 +6253,7 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
 
   ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
-  ant_value_t call_target = func;
-  if (vtype(cfunc_slot) == T_CFUNC &&
-      js_cfunc_same_entrypoint(cfunc_slot, builtin_bound_proxy_call)) {
-    ant_value_t proxy_target = get_slot(func_obj, SLOT_TARGET_FUNC);
-    if (vtype(proxy_target) == T_OBJ && is_proxy(proxy_target))
-      call_target = proxy_target;
-  }
+  ant_value_t call_target = js_resolve_bound_target(func);
   set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
   if (bound_argc > 0 || orig_bound_argc > 0) {
@@ -6265,9 +6285,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   
   if (is_err(name_result)) return name_result;
   ant_value_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
-  ant_value_t proto_setup = setup_func_prototype(js, bound);
-  
-  if (is_err(proto_setup)) return proto_setup;
   js_mark_constructor(bound_func, js_is_constructor(func));
   
   return bound;
@@ -15728,6 +15745,9 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.hasInstance is not callable");
     }
   }
+
+  ant_value_t bound_target = js_resolve_bound_target(r);
+  if (bound_target != r) return do_instanceof(js, l, bound_target);
 
   ant_prop_loc_t proto_off = lkp_interned(func_obj, js->intern.prototype);
   if (!proto_off.obj) return mkval(T_BOOL, 0);

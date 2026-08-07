@@ -125,6 +125,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_set_name);
   LOAD_EXT(jit_helper_stack_overflow);
   LOAD_EXT(jit_helper_stack_overflow_error);
+  LOAD_EXT(jit_helper_normalize_sloppy_this);
 #undef LOAD_EXT
   jc->externals_loaded = true;
 }
@@ -3243,6 +3244,7 @@ typedef struct {
   bool needs_close_upval;
   bool needs_tco_args;
   bool needs_ic_epoch;
+  bool needs_this;
   bool *builder_target_slots;
 } jit_features_t;
 
@@ -3264,6 +3266,8 @@ static jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
     if ((flags & SV_OPF_JIT_NEEDS_ITER_ROOTS) != 0) f.needs_iter_roots = true;
     if ((flags & SV_OPF_JIT_NEEDS_CLOSE_UPVAL) != 0) f.needs_close_upval = true;
     if ((flags & SV_OPF_JIT_NEEDS_IC_EPOCH) != 0) f.needs_ic_epoch = true;
+    if (op == OP_THIS || op == OP_CLOSURE || op == OP_EVAL)
+      f.needs_this = true;
     if ((flags & SV_OPF_BUILDER_TARGET) != 0 && f.builder_target_slots) {
       uint16_t slot = sv_get_u16(ip + 1);
       if ((int)slot < n_slots) f.builder_target_slots[slot] = true;
@@ -3593,6 +3597,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     1, &ts_ret, 2,
     MIR_T_I64, "js",
     MIR_JSVAL, "v");
+
+  MIR_type_t normalize_this_ret = MIR_JSVAL;
+  MIR_item_t normalize_this_proto = MIR_new_proto(ctx, "normalize_this_proto",
+    1, &normalize_this_ret, 2,
+    MIR_T_I64, "js",
+    MIR_JSVAL, "value");
 
   MIR_type_t sal_ret = MIR_JSVAL;
   MIR_item_t str_append_local_proto = MIR_new_proto(ctx, "sal_proto",
@@ -3936,6 +3946,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_delete      = MIR_new_import(ctx, "jit_helper_delete");
   MIR_item_t imp_set_name   = MIR_new_import(ctx, "jit_helper_set_name");
   MIR_item_t imp_stack_ovf_err  = MIR_new_import(ctx, "jit_helper_stack_overflow_error");
+  MIR_item_t imp_normalize_this =
+    MIR_new_import(ctx, "jit_helper_normalize_sloppy_this");
 
   MIR_item_t jit_func = MIR_new_func(ctx, fname,
     1, &ret_type,
@@ -4144,6 +4156,22 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_new_insn(ctx, MIR_ALLOCA,
       MIR_new_reg_op(ctx, r_call_out_this),
       MIR_new_uint_op(ctx, sizeof(ant_value_t))));
+
+  bool normalize_sloppy_this =
+    feat.needs_this && !func->is_strict && !func->is_arrow;
+  MIR_reg_t r_this_root = 0;
+  if (normalize_sloppy_this) {
+    r_this_root =
+      MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "this_root");
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_ALLOCA,
+        MIR_new_reg_op(ctx, r_this_root),
+        MIR_new_uint_op(ctx, sizeof(ant_value_t))));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_this_root, 0, 1),
+        MIR_new_reg_op(ctx, r_this_curr)));
+  }
 
   MIR_reg_t r_iter_roots = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "iter_roots");
   if (feat.needs_iter_roots && vs.max > 0) {
@@ -4596,6 +4624,72 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }                                                                   \
   MIR_append_insn(ctx, jit_func, no_error);                           \
 } while (0)
+
+  if (normalize_sloppy_this) {
+    MIR_label_t normalize_global = MIR_new_label(ctx);
+    MIR_label_t normalize_box = MIR_new_label(ctx);
+    MIR_label_t normalize_done = MIR_new_label(ctx);
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_UBLE,
+        MIR_new_label_op(ctx, normalize_box),
+        MIR_new_reg_op(ctx, r_this_curr),
+        MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_URSH,
+        MIR_new_reg_op(ctx, r_bool),
+        MIR_new_reg_op(ctx, r_this_curr),
+        MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, normalize_global),
+        MIR_new_reg_op(ctx, r_bool),
+        MIR_new_uint_op(ctx,
+          (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_UNDEF)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_BEQ,
+        MIR_new_label_op(ctx, normalize_global),
+        MIR_new_reg_op(ctx, r_bool),
+        MIR_new_uint_op(ctx,
+          (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)T_NULL)));
+    const uint8_t boxed_types[] = {
+      T_STR, T_BOOL, T_BIGINT, T_SYMBOL
+    };
+    for (size_t i = 0; i < sizeof(boxed_types); i++) {
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_BEQ,
+          MIR_new_label_op(ctx, normalize_box),
+          MIR_new_reg_op(ctx, r_bool),
+          MIR_new_uint_op(ctx,
+            (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) |
+            (uint64_t)boxed_types[i])));
+    }
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, normalize_done)));
+
+    MIR_append_insn(ctx, jit_func, normalize_global);
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_this_curr),
+        MIR_new_mem_op(ctx, MIR_JSVAL,
+          (MIR_disp_t)offsetof(ant_t, global), r_js, 0, 1)));
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, normalize_done)));
+
+    MIR_append_insn(ctx, jit_func, normalize_box);
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_call_insn(ctx, 5,
+        MIR_new_ref_op(ctx, normalize_this_proto),
+        MIR_new_ref_op(ctx, imp_normalize_this),
+        MIR_new_reg_op(ctx, r_this_curr),
+        MIR_new_reg_op(ctx, r_js),
+        MIR_new_reg_op(ctx, r_this_curr)));
+    JIT_EMIT_THROW_IF_ERROR(r_this_curr);
+    MIR_append_insn(ctx, jit_func, normalize_done);
+    MIR_append_insn(ctx, jit_func,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_this_root, 0, 1),
+        MIR_new_reg_op(ctx, r_this_curr)));
+  }
 
   while (ip < end) {
     int bc_off = (int)(ip - func->code);

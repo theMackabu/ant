@@ -178,6 +178,174 @@ function h(a, b, c, d) {}
 check('length folds', h.bind(0, 1).bind(0, 2).length, 2);
 check('name prefixes', f.bind({ x: 1 }, 10).bind({ x: 2 }, 20).name, 'bound bound f');
 
+// Bound functions do not define their own prototype property. Construction
+// unwraps every bound layer when selecting the instance prototype, while
+// retaining all bound arguments.
+{
+  function Constructor(...args) {
+    this.args = args;
+  }
+  Constructor.prototype.tag = 'target prototype';
+  const Inner = Constructor.bind({ ignored: 1 }, 1);
+  const Outer = Inner.bind({ ignored: 2 }, 2);
+  const instance = new Outer(3);
+  check('inner bound has no own prototype', Object.hasOwn(Inner, 'prototype'), false);
+  check('outer bound has no own prototype', Object.hasOwn(Outer, 'prototype'), false);
+  check(
+    'double-bound construction uses target prototype',
+    Object.getPrototypeOf(instance) === Constructor.prototype,
+    true
+  );
+  check('double-bound construction keeps target prototype values', instance.tag, 'target prototype');
+  check('double-bound construction instanceof target', instance instanceof Constructor, true);
+  check('double-bound construction instanceof inner', instance instanceof Inner, true);
+  check('double-bound construction instanceof outer', instance instanceof Outer, true);
+  check('double-bound construction args', instance.args, [1, 2, 3]);
+  check('double-bound constructor sees original new.target', (() => {
+    function NewTarget() {
+      this.seen = new.target;
+    }
+    const Bound = NewTarget.bind(null).bind(null);
+    return new Bound().seen === NewTarget;
+  })(), true);
+  check('Reflect.construct preserves explicit newTarget', (() => {
+    function Target() {
+      this.seen = new.target;
+    }
+    function Alternate() {}
+    const Bound = Target.bind(null).bind(null);
+    const value = Reflect.construct(Bound, [], Alternate);
+    return value.seen === Alternate && Object.getPrototypeOf(value) === Alternate.prototype;
+  })(), true);
+  check('bound native has no own prototype', Object.hasOwn(Math.max.bind(null), 'prototype'), false);
+  check('bound native constructor keeps target prototype', (() => {
+    const BoundArray = Array.bind(null, 3);
+    const value = new BoundArray();
+    return (
+      value.length === 3 &&
+      Object.getPrototypeOf(value) === Array.prototype &&
+      value instanceof Array &&
+      value instanceof BoundArray
+    );
+  })(), true);
+  check(
+    'bound proxy has no own prototype',
+    Object.hasOwn(new Proxy(Constructor, {}).bind(null), 'prototype'),
+    false
+  );
+}
+
+// A bound generator retains the target generator's instance prototype and is
+// therefore iterable. Like every bound function, it has no own prototype.
+{
+  function* generator() {
+    yield this.value;
+  }
+  const boundGenerator = generator.bind({ value: 7 });
+  check('bound generator has no own prototype', Object.hasOwn(boundGenerator, 'prototype'), false);
+  check('bound generator is iterable', [...boundGenerator()], [7]);
+  const reboundGenerator = boundGenerator.bind({ value: 8 });
+  const iterator = reboundGenerator();
+  check('re-bound generator is iterable', [...iterator], [7]);
+  check('bound generator instanceof target', iterator instanceof generator, true);
+  check('bound generator instanceof bound function', iterator instanceof boundGenerator, true);
+}
+
+// Ordinary sloppy functions box primitive receivers. Strict functions retain
+// the primitive value, including through bind.
+{
+  function sloppyThis() {
+    const value = this.valueOf();
+    const proto = Object.getPrototypeOf(this);
+    const wrapperPrototypeMatches =
+      (typeof value === 'number' && proto === Number.prototype) ||
+      (typeof value === 'string' && proto === String.prototype) ||
+      (typeof value === 'boolean' && proto === Boolean.prototype);
+    return [typeof this, wrapperPrototypeMatches, value];
+  }
+  function strictThisValue() {
+    'use strict';
+    return [typeof this, this];
+  }
+  check('sloppy call boxes number this', sloppyThis.call(7), ['object', true, 7]);
+  check(
+    'sloppy bind boxes string this',
+    sloppyThis.bind('value')(),
+    ['object', true, 'value']
+  );
+  check('sloppy call boxes boolean this', sloppyThis.call(true), ['object', true, true]);
+  check('sloppy call boxes bigint this', (() => {
+    function readBigInt() {
+      return [
+        typeof this,
+        Object.getPrototypeOf(this) === BigInt.prototype,
+        this.valueOf() === 7n,
+      ];
+    }
+    return readBigInt.call(7n);
+  })(), ['object', true, true]);
+  check('sloppy call boxes symbol this', (() => {
+    const symbol = Symbol('bound this');
+    function readSymbol() {
+      return [
+        typeof this,
+        Object.getPrototypeOf(this) === Symbol.prototype,
+        this.valueOf() === symbol,
+      ];
+    }
+    return readSymbol.call(symbol);
+  })(), ['object', true, true]);
+  check('sloppy null this uses globalThis', (() => {
+    function readThis() {
+      return this;
+    }
+    return readThis.call(null) === globalThis;
+  })(), true);
+  check('sloppy undefined this uses globalThis', (() => {
+    function readThis() {
+      return this;
+    }
+    return readThis.call(undefined) === globalThis;
+  })(), true);
+  check('strict call keeps primitive this', strictThisValue.call(7), ['number', 7]);
+  check('strict bind keeps primitive this', strictThisValue.bind('value')(), ['string', 'value']);
+  check('strict call keeps null this', strictThisValue.call(null), ['object', null]);
+  check('strict call keeps undefined this', strictThisValue.call(undefined), ['undefined', undefined]);
+
+  const warmedSloppy = sloppyThis.bind(7);
+  let warmedResult;
+  for (let i = 0; i < 500; i++) warmedResult = warmedSloppy();
+  check('JIT keeps sloppy bound this boxed', warmedResult, ['object', true, 7]);
+
+  function makeThisReader() {
+    return () => this;
+  }
+  const readThis = makeThisReader.call('captured');
+  check('sloppy arrow captures boxed this', typeof readThis(), 'object');
+}
+
+// A bound Proxy remains one construct operation and receives the normalized
+// target as newTarget.
+{
+  let constructCalls = 0;
+  let seenNewTarget;
+  function ProxyTarget() {
+    this.ok = true;
+  }
+  const proxy = new Proxy(ProxyTarget, {
+    construct(target, args, newTarget) {
+      constructCalls++;
+      seenNewTarget = newTarget;
+      return Reflect.construct(target, args);
+    },
+  });
+  const BoundProxy = proxy.bind(null).bind(null);
+  const value = new BoundProxy();
+  check('bound Proxy construct trap count', constructCalls, 1);
+  check('bound Proxy sees target newTarget', seenNewTarget === proxy, true);
+  check('bound Proxy construct result', value.ok, true);
+}
+
 // bound args survive GC: the args array must keep argv contents alive.
 {
   const bf = f.bind({ x: 4 }, { tag: 'kept' });

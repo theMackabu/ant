@@ -6,6 +6,7 @@
 
 int64_t jit_helper_stack_overflow(ant_t *js);
 int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
+ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value);
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);

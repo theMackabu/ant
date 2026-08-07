@@ -81,6 +81,10 @@ ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
   return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum JIT call stack size exceeded");
 }
 
+ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value) {
+  return js_normalize_sloppy_this(js, value);
+}
+
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) + tod(r));
   if (vtype(l) == T_STR && vtype(r) == T_STR) {
@@ -1217,24 +1221,23 @@ ant_value_t jit_helper_new(
   ant_value_t *args, int argc
 ) {
   ant_value_t record_func = func;
-  js->new_target = new_target;
+  ant_value_t effective_new_target = new_target;
 
-  if (vtype(func) == T_OBJ && is_proxy(func))
+  if (vtype(func) == T_OBJ && is_proxy(func)) {
+    js->new_target = new_target;
     return js_proxy_construct(js, func, args, argc, new_target);
+  }
   if (!js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
-    ant_value_t proto_source = func;
-    ant_value_t func_obj = js_func_obj(func);
-    ant_value_t target_func = js_get_slot(func_obj, SLOT_TARGET_FUNC);
-    if (vtype(target_func) == T_FUNC) {
-      proto_source = target_func;
-      record_func = target_func;
-    }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
+    proto = sv_prepare_construct_meta(
+      js, func, new_target, &effective_new_target, &record_func
+    );
+    if (is_err(proto)) return proto;
   }
+  js->new_target = effective_new_target;
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);

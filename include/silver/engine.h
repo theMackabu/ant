@@ -716,8 +716,8 @@ static inline bool sv_is_nullish_this(ant_value_t v) {
 
 static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
-  if (func->is_strict) return sv_is_nullish_this(this_val) ? js_mkundef() : this_val;
-  return sv_is_nullish_this(this_val) ? js->global : this_val;
+  if (func->is_strict) return this_val;
+  return js_normalize_sloppy_this(js, this_val);
 }
 
 static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
@@ -863,6 +863,40 @@ static inline bool sv_call_mode_is_construct(sv_call_mode_t mode) {
 static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val, sv_call_mode_t mode) {
   if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->global;
   return this_val;
+}
+
+static inline ant_value_t sv_prepare_construct_meta(
+  ant_t *js,
+  ant_value_t func,
+  ant_value_t requested_new_target,
+  ant_value_t *effective_new_target,
+  ant_value_t *record_func
+) {
+  ant_value_t target = js_resolve_bound_target(func);
+  ant_value_t new_target =
+    requested_new_target == func ? target : requested_new_target;
+
+  if (effective_new_target) *effective_new_target = new_target;
+  if (record_func && vtype(target) == T_FUNC) *record_func = target;
+
+  /*
+   * A bound Proxy performs the actual allocation in its [[Construct]]
+   * trap. Looking up its prototype here would duplicate the observable
+   * GetPrototypeFromConstructor performed by that path.
+   */
+  if (
+    requested_new_target == func &&
+    vtype(target) == T_OBJ && is_proxy(target)
+  ) return js_mkundef();
+
+  ant_value_t proto_source =
+    requested_new_target == func ? target : requested_new_target;
+  uint8_t source_type = vtype(proto_source);
+  if (
+    source_type != T_FUNC && source_type != T_CFUNC &&
+    !is_object_type(proto_source)
+  ) return js_mkundef();
+  return js_getprop_fallback(js, proto_source, "prototype");
 }
 
 static inline ant_value_t sv_call_resolve_bound(
