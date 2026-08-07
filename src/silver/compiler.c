@@ -6333,11 +6333,11 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       : add_atom(c, "", 0);
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, (uint32_t)atom);
-    emit(c, 1);
+    emit(c, 1 | (node->left ? 2 : 0));
   } else {
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
-    emit(c, 0);
+    emit(c, node->left ? 2 : 0);
   }
   
   if (consumed_inferred_name) {

@@ -872,7 +872,26 @@ static inline ant_value_t sv_prepare_construct_meta(
   ant_value_t *effective_new_target,
   ant_value_t *record_func
 ) {
-  ant_value_t target = js_resolve_bound_target(func);
+  sv_closure_t *closure = NULL;
+  if (vtype(func) == T_FUNC) {
+    closure = js_func_closure(func);
+    if (
+      closure &&
+      !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+    ) {
+      if (effective_new_target) *effective_new_target = requested_new_target;
+      if (record_func) *record_func = func;
+      ant_value_t proto = js_getprop_fallback(
+        js, requested_new_target, "prototype"
+      );
+      if (is_err(proto) || is_object_type(proto)) return proto;
+      return js->sym.object_proto;
+    }
+  }
+
+  ant_value_t target = closure
+    ? js_resolve_bound_target_known_bound(func)
+    : func;
   ant_value_t new_target =
     requested_new_target == func ? target : requested_new_target;
 
@@ -896,7 +915,9 @@ static inline ant_value_t sv_prepare_construct_meta(
     source_type != T_FUNC && source_type != T_CFUNC &&
     !is_object_type(proto_source)
   ) return js_mkundef();
-  return js_getprop_fallback(js, proto_source, "prototype");
+  ant_value_t proto = js_getprop_fallback(js, proto_source, "prototype");
+  if (is_err(proto) || is_object_type(proto)) return proto;
+  return js->sym.object_proto;
 }
 
 static inline ant_value_t sv_call_resolve_bound(

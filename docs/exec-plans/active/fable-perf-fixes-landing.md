@@ -1105,6 +1105,59 @@ The final routine `meson compile -C build` attempt still cannot link in the
 current Nix shell (`ld: library not found for -lm`); it removed `build/ant`,
 so the byte-identical validated pin was restored there and its MD5 rechecked.
 
+**R4 construction follow-up — bound Proxy/newTarget/class parity and
+cycle-safe target resolution FIXED, 2026-08-07.** The remaining construction
+audit found that Proxy and bound-Proxy paths did not consistently implement
+`IsConstructor`, `GetPrototypeFromConstructor`, or bound-function
+`newTarget` normalization. This affected Proxy construct traps that forward
+with `Reflect.construct`, `Reflect.construct(..., boundProxyNewTarget)`,
+Proxy-of-bound constructors, `class extends boundProxy`, and explicit
+`extends undefined`/non-constructors. The compiler now records whether class
+heritage was explicit; class creation validates Proxy constructors and
+prototype values; Reflect and Proxy construction validate constructors,
+preserve an explicit distinct `newTarget`, normalize an implicit bound
+wrapper to its target, and fall back to `Object.prototype` when the selected
+constructor prototype is not an object. The deterministic Node/Ant parity
+suite now passes **421/421** on both engines.
+
+The bound-target resolver no longer has the arbitrary 64-edge cutoff.
+`bind()` flattens `SLOT_TARGET_FUNC`, so the normal path performs one raw
+`get_slot` and returns the terminal target. Only an unexpected nested bound
+target enters a noinline/cold Floyd walker; a cycle is an explicit internal
+fatal invariant violation rather than a hang or a silently truncated target.
+Both the successor helper and walker are marked cold: the first version let
+LTO inline the entire walker into the hot resolver (about 0x720 bytes of
+emitted code), so it was rejected before final measurement. The resolver
+continues to use private `get_slot`; it does not cross the public
+`js_get_slot` abstraction.
+
+Pinned same-configuration identities: capped baseline
+`/tmp/ant_r4_construct_cyclecap_samebuild_bin`
+(`5814b78d65d37e79ee0c178a098dc87a`), exact final
+`/tmp/ant_r4_construct_cyclecheck_final_bin`
+(`20c91ea2d59807bb95c0123cdba54016`), and shared PGO data
+`900b4eb6b166aad116a8cca7369f36e9`. Four alternating AB/BA rounds on
+the cycle-safe implementation before the final cold-section-only placement,
+plus two exact-final confirmatory rounds, produced mixed sub-1.2% deltas with
+identical checksums:
+
+| Workload | Capped 4-round median | Cycle-safe 4-round median | Delta |
+| --- | ---: | ---: | ---: |
+| Bound `new`, 20M | 1168.0ms | 1169.4ms | +0.1% / flat |
+| Double-bound `new`, 20M | 1178.2ms | 1170.3ms | −0.7% / flat |
+| Reflect bound construct, 10M | 1150.2ms | 1159.4ms | +0.8% / flat |
+| Bound-Proxy `new`, 20M | 2918.8ms | 2887.7ms | −1.1% / flat |
+
+The exact-final two-round means were −0.8%, −0.9%, +1.2%, and +0.9%
+respectively, again mixed and within thermal noise. Final exact-artifact
+gates: spec **3712/0**, JIT **9/0**, harness **172/0**
+(`test_gc_async` 398ms, `test_gc_coro` 5.915s, express 19,083 RPS),
+devirt fuzzer all four seeds agree, and newt Main **42.28s** /
+843,808,768-byte max RSS (916,948,144-byte peak footprint). `maid preflight`
+and `git diff --check` are clean. This shell's `NO_COLOR=1` is incompatible
+with oha 1.14.0's strict boolean environment parser; the unchanged harness
+passes with `NO_COLOR=true`.
+
 **R5 numeric literal keys — FIXED + tests.** New `literal_num_key()`
 (compiler.c) routes all three %g sites (compile key emit ~276,
 object_literal_static_keys ~4056, DEFINE_FIELD fallback ~4160) through

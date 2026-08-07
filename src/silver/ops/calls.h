@@ -79,7 +79,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   }
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC) {
+  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );
@@ -174,7 +174,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   }
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC) {
+  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );

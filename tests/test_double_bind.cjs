@@ -346,6 +346,152 @@ check('name prefixes', f.bind({ x: 1 }, 10).bind({ x: 2 }, 20).name, 'bound boun
   check('bound Proxy construct result', value.ok, true);
 }
 
+// Bound Proxy construction follows the target's prototype only when the
+// bound wrapper is the implicit newTarget. An explicit bound/proxied
+// newTarget has no "prototype" and therefore falls back to Object.prototype.
+{
+  function ProxyConstructor(value) {
+    this.value = value;
+    this.seenNewTarget = new.target;
+  }
+  const proxy = new Proxy(ProxyConstructor, {});
+  const BoundProxy = proxy.bind(null, 17);
+  const ReboundProxy = BoundProxy.bind(null);
+
+  const single = new BoundProxy();
+  check(
+    'single bound Proxy construct target prototype',
+    Object.getPrototypeOf(single) === ProxyConstructor.prototype,
+    true
+  );
+  check('single bound Proxy construct instanceof target', single instanceof ProxyConstructor, true);
+  check('single bound Proxy construct instanceof bound', single instanceof BoundProxy, true);
+  check('single bound Proxy construct newTarget', single.seenNewTarget === proxy, true);
+
+  const double = new ReboundProxy();
+  check(
+    'double bound Proxy construct target prototype',
+    Object.getPrototypeOf(double) === ProxyConstructor.prototype,
+    true
+  );
+  check('double bound Proxy construct instanceof target', double instanceof ProxyConstructor, true);
+  check('double bound Proxy construct instanceof bound', double instanceof ReboundProxy, true);
+  check('double bound Proxy construct newTarget', double.seenNewTarget === proxy, true);
+
+  let trappedNewTarget;
+  const trappedProxy = new Proxy(ProxyConstructor, {
+    construct(target, args, newTarget) {
+      trappedNewTarget = newTarget;
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
+  const trapped = new (trappedProxy.bind(null, 18))();
+  check('bound Proxy trap accepts Proxy newTarget', trapped.value, 18);
+  check('bound Proxy trap receives Proxy newTarget', trappedNewTarget === trappedProxy, true);
+  check(
+    'bound Proxy trap result target prototype',
+    Object.getPrototypeOf(trapped) === ProxyConstructor.prototype,
+    true
+  );
+
+  let extendsError;
+  try {
+    class InvalidDerived extends BoundProxy {}
+  } catch (error) {
+    extendsError = error;
+  }
+  check('class extends bound Proxy throws', extendsError instanceof TypeError, true);
+
+  function ReflectTarget() {
+    this.seenNewTarget = new.target;
+  }
+  const reflected = Reflect.construct(ReflectTarget, [], BoundProxy);
+  check(
+    'Reflect.construct bound Proxy newTarget uses Object prototype',
+    Object.getPrototypeOf(reflected) === Object.prototype,
+    true
+  );
+  check(
+    'Reflect.construct preserves bound Proxy newTarget',
+    reflected.seenNewTarget === BoundProxy,
+    true
+  );
+  check('Reflect.construct bound Proxy result not target instance', reflected instanceof ProxyConstructor, false);
+
+  function PrimitivePrototypeTarget() {
+    this.seenNewTarget = new.target;
+  }
+  PrimitivePrototypeTarget.prototype = 1;
+  const primitivePrototypeResult = new PrimitivePrototypeTarget();
+  check(
+    'ordinary new primitive prototype uses Object prototype',
+    Object.getPrototypeOf(primitivePrototypeResult) === Object.prototype,
+    true
+  );
+  const primitiveNewTargetResult = Reflect.construct(
+    ReflectTarget, [], PrimitivePrototypeTarget
+  );
+  check(
+    'Reflect.construct primitive newTarget prototype uses Object prototype',
+    Object.getPrototypeOf(primitiveNewTargetResult) === Object.prototype,
+    true
+  );
+  check(
+    'Reflect.construct primitive prototype preserves newTarget',
+    primitiveNewTargetResult.seenNewTarget === PrimitivePrototypeTarget,
+    true
+  );
+
+  const proxyOfBound = new Proxy(ProxyConstructor.bind(null, 19), {});
+  const proxyOfBoundResult = new proxyOfBound();
+  check(
+    'Proxy of bound constructor uses Object prototype',
+    Object.getPrototypeOf(proxyOfBoundResult) === Object.prototype,
+    true
+  );
+  check('Proxy of bound constructor is not target instance', proxyOfBoundResult instanceof ProxyConstructor, false);
+
+  class Parent {
+    constructor(value) {
+      this.value = value;
+    }
+  }
+  const parentProxy = new Proxy(Parent, {});
+  class ValidDerived extends parentProxy {
+    constructor() {
+      super(20);
+    }
+  }
+  const derived = new ValidDerived();
+  check('class extends constructor Proxy remains valid', derived.value, 20);
+  check('class extends Proxy instance chain', derived instanceof Parent, true);
+  check('class extends Proxy constructor chain', Object.getPrototypeOf(ValidDerived) === parentProxy, true);
+  check(
+    'class extends Proxy prototype chain',
+    Object.getPrototypeOf(ValidDerived.prototype) === Parent.prototype,
+    true
+  );
+
+  let undefinedExtendsError;
+  try {
+    class InvalidUndefined extends undefined {}
+  } catch (error) {
+    undefinedExtendsError = error;
+  }
+  check('class extends explicit undefined throws', undefinedExtendsError instanceof TypeError, true);
+
+  let objectExtendsError;
+  try {
+    class InvalidObject extends {} {}
+  } catch (error) {
+    objectExtendsError = error;
+  }
+  check('class extends non-constructor object throws', objectExtendsError instanceof TypeError, true);
+
+  class NullDerived extends null {}
+  check('class extends null remains valid', Object.getPrototypeOf(NullDerived.prototype), null);
+}
+
 // bound args survive GC: the args array must keep argv contents alive.
 {
   const bf = f.bind({ x: 4 }, { tag: 'kept' });

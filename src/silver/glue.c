@@ -1231,7 +1231,7 @@ ant_value_t jit_helper_new(
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC) {
+  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );

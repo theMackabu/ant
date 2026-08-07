@@ -262,7 +262,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   return status;
 }
 
-static inline void sv_op_define_class(
+static inline ant_value_t sv_op_define_class(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
@@ -273,13 +273,13 @@ static inline void sv_op_define_class(
   uint32_t source_end = sv_get_u32(ip + 10);
   
   bool has_name = (cls_flags & 1) && (int)atom_idx < func->atom_count;
+  bool has_heritage = (cls_flags & 2) != 0;
   sv_atom_t *a = has_name ? &func->atoms[atom_idx] : NULL;
   ant_value_t ctor = vm->stack[vm->sp - 1];
   ant_value_t parent = vm->stack[vm->sp - 2];
   
   uint8_t pt = vtype(parent);
-  bool parent_is_object = is_object_type(parent);
-  bool parent_is_callable = (pt == T_FUNC || pt == T_CFUNC);
+  bool parent_is_callable = false;
 
   if (vtype(ctor) == T_UNDEF) {
     ant_value_t ctor_obj = mkobj(js, 0);
@@ -291,20 +291,30 @@ static inline void sv_op_define_class(
 
   ant_value_t proto = mkobj(js, 0);
 
-  if (pt == T_NULL) {
-    js_set_proto_init(proto, js_mknull());
-    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC) js_set_proto_wb(js, ctor, func_proto);
-  } else if (parent_is_object) {
-    ant_value_t parent_proto = js_getprop_fallback(js, parent, "prototype");
-    if (is_object_type(parent_proto)) js_set_proto_init(proto, parent_proto);
-    js_set_proto_wb(js, ctor, parent);
-  } else {
+  if (!has_heritage) {
     ant_value_t object_ctor = js_getprop_fallback(js, js->global, "Object");
     if (vtype(object_ctor) == T_FUNC) {
       ant_value_t object_proto = js_getprop_fallback(js, object_ctor, "prototype");
       if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);
     }
+  } else if (pt == T_NULL) {
+    js_set_proto_init(proto, js_mknull());
+    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) js_set_proto_wb(js, ctor, func_proto);
+  } else {
+    if (!js_is_constructor(parent))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Class extends value is not a constructor");
+
+    ant_value_t parent_proto = js_getprop_fallback(js, parent, "prototype");
+    if (is_err(parent_proto)) return parent_proto;
+    if (!is_object_type(parent_proto) && vtype(parent_proto) != T_NULL)
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE,
+        "Class extends value does not have a valid prototype property"
+      );
+    js_set_proto_init(proto, parent_proto);
+    js_set_proto_wb(js, ctor, parent);
+    parent_is_callable = true;
   }
   
   if (parent_is_callable) if (vtype(ctor) == T_FUNC) {
@@ -333,16 +343,19 @@ static inline void sv_op_define_class(
 
   vm->stack[vm->sp - 2] = ctor;
   vm->stack[vm->sp - 1] = proto;
+  return js_mkundef();
 }
 
-static inline void sv_op_define_class_comp(
+static inline ant_value_t sv_op_define_class_comp(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   ant_value_t name = vm->stack[vm->sp - 1];
   vm->sp--;
-  sv_op_define_class(vm, js, func, ip);
+  ant_value_t result = sv_op_define_class(vm, js, func, ip);
+  if (is_err(result)) return result;
   vm->stack[vm->sp++] = name;
+  return result;
 }
 
 #endif

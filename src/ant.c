@@ -6037,18 +6037,62 @@ static ant_value_t builtin_bound_proxy_call(ant_t *js, ant_value_t *args, int na
   return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, NULL, false);
 }
 
-ant_value_t js_resolve_bound_target(ant_value_t value) {
-  for (int depth = 0; depth < 64 && vtype(value) == T_FUNC; depth++) {
-    sv_closure_t *closure = js_func_closure(value);
-    if (
-      !closure ||
-      !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
-    ) break;
-    ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
-    if (vtype(target) == T_UNDEF || target == value) break;
-    value = target;
+static __attribute__((noinline, cold))
+bool js_bound_target_next(ant_value_t value, ant_value_t *next) {
+  if (vtype(value) != T_FUNC) return false;
+  sv_closure_t *closure = js_func_closure(value);
+  if (
+    !closure ||
+    !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return false;
+
+  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  if (vtype(target) == T_UNDEF) return false;
+  *next = target;
+  return true;
+}
+
+static __attribute__((noinline, cold))
+ant_value_t js_resolve_bound_target_slow(ant_value_t value) {
+  ant_value_t slow = value;
+  ant_value_t fast = value;
+  ant_value_t next;
+
+  for (;;) {
+    if (!js_bound_target_next(slow, &next)) break;
+    slow = next;
+    if (!js_bound_target_next(fast, &next)) break;
+    fast = next;
+    if (!js_bound_target_next(fast, &next)) break;
+    fast = next;
+    ANT_ASSERT(slow != fast, "bound target chain contains a cycle");
   }
+
+  while (js_bound_target_next(value, &next)) value = next;
   return value;
+}
+
+ant_value_t js_resolve_bound_target_known_bound(ant_value_t value) {
+  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  if (vtype(target) == T_UNDEF) return value;
+
+  sv_closure_t *closure =
+    vtype(target) == T_FUNC ? js_func_closure(target) : NULL;
+  if (
+    closure &&
+    (closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return js_resolve_bound_target_slow(value);
+  return target;
+}
+
+ant_value_t js_resolve_bound_target(ant_value_t value) {
+  sv_closure_t *closure =
+    vtype(value) == T_FUNC ? js_func_closure(value) : NULL;
+  if (
+    !closure ||
+    !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return value;
+  return js_resolve_bound_target_known_bound(value);
 }
 
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
@@ -16268,6 +16312,10 @@ bool js_is_constructor(ant_value_t value) {
       ant_object_t *obj = js_obj_ptr(js_func_obj(slow));
       return obj && obj->flags.is_constructor;
     }
+    if (t == T_CFUNC) {
+      const ant_cfunc_meta_t *meta = js_as_cfunc_meta(slow);
+      return meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
+    }
     if (t != T_OBJ) return false;
 
     ant_object_t *obj = js_obj_ptr(slow);
@@ -17040,11 +17088,6 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
 
   if (!js_is_constructor(target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-  if (vtype(target) == T_OBJ && is_proxy(target))
-    return js_proxy_construct(js, target, args, argc, new_target);
-  if (vtype(target) != T_FUNC)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-
   ant_value_t trap = proxy_get_method(js, handler, "construct");
   if (is_err(trap)) return trap;
   if (vtype(trap) != T_UNDEF) {
@@ -17059,16 +17102,37 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
       return result;
   }
 
+  if (vtype(target) == T_OBJ && is_proxy(target))
+    return js_proxy_construct(js, target, args, argc, new_target);
+
+  ant_value_t effective_new_target = new_target;
+  ant_value_t proto;
+  if (new_target != target) {
+    proto = js_getprop_fallback(js, new_target, "prototype");
+    if (!is_err(proto) && !is_object_type(proto))
+      proto = js->sym.object_proto;
+  } else {
+    ant_value_t record_func = target;
+    proto = sv_prepare_construct_meta(
+      js, target, new_target, &effective_new_target, &record_func
+    );
+  }
+  if (is_err(proto)) return proto;
+
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = js_getprop_fallback(js, new_target, "prototype");
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
   ant_value_t saved = js->new_target;
-  js->new_target = new_target;
+  js->new_target = effective_new_target;
   ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(js->vm, js, target, obj, args, argc, &ctor_this, true);
+  ant_value_t result = sv_vm_call(
+    js->vm, js, target, obj, args, argc, &ctor_this, true
+  );
   js->new_target = saved;
   if (is_err(result)) return result;
-  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
+  return is_object_type(result)
+    ? result
+    : (is_object_type(ctor_this) ? ctor_this : obj);
 }
 
 static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
