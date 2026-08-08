@@ -527,6 +527,8 @@ static inline bool sv_prim_ic_lookup(
   ant_shape_t *shape2 = NULL;
   
   if (sv_ic_probe_chain_absent(proto, a->str, &holder1, &shape2)) {
+    ant_shape_guard_absence(holder1->shape);
+    ant_shape_guard_absence(shape2);
     ic->cached_holder = holder1;
     ic->cached_shape = holder1->shape;
     ic->cached_index = 0;

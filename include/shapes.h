@@ -45,6 +45,7 @@ uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape);
 
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned);
 int32_t ant_shape_lookup_symbol(const ant_shape_t *shape, ant_offset_t sym_off);
+void ant_shape_guard_absence(ant_shape_t *shape);
 
 bool ant_shape_add_interned(ant_shape_t *shape, const char *interned, uint8_t attrs, uint32_t *out_slot);
 bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);

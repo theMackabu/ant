@@ -61,6 +61,23 @@ eq('String.prototype addition observed', probe("zz"), 77);
 delete String.prototype.lateAddedMethod;
 eq('deletion observed', probe("zz"), -1);
 
+// A computed-key insertion can mutate a detached prototype shape in place.
+// The negative IC must not treat an unchanged shape pointer as proof that the
+// property is still absent.
+const detachKey = 'lateComputedDetach';
+String.prototype[detachKey] = 1;
+delete String.prototype[detachKey];
+
+function probeComputed(s) { return s.lateComputedProp; }
+for (let i = 0; i < 3000; i++) probeComputed("zz");
+eq('warm computed-key miss site', probeComputed("zz"), undefined);
+const computedKey = ['late', 'Computed', 'Prop'].join('');
+String.prototype[computedKey] = 7;
+eq('computed prototype addition visible cold', "zz"[computedKey], 7);
+eq('computed prototype addition observed by warm site', probeComputed("zz"), 7);
+delete String.prototype[computedKey];
+eq('computed prototype deletion observed', probeComputed("zz"), undefined);
+
 function probe2(s) { return s.lateObjProtoProp === undefined ? -1 : s.lateObjProtoProp; }
 for (let i = 0; i < 3000; i++) probe2("zz");
 eq('warm miss site 2', probe2("zz"), -1);
@@ -68,6 +85,20 @@ Object.prototype.lateObjProtoProp = 88;                             // shape2 gu
 eq('Object.prototype addition observed', probe2("zz"), 88);
 delete Object.prototype.lateObjProtoProp;
 eq('obj proto deletion observed', probe2("zz"), -1);
+
+const objDetachKey = 'lateObjComputedDetach';
+Object.prototype[objDetachKey] = 1;
+delete Object.prototype[objDetachKey];
+
+function probeObjComputed(s) { return s.lateObjComputedProp; }
+for (let i = 0; i < 3000; i++) probeObjComputed("zz");
+eq('warm second-prototype computed-key miss', probeObjComputed("zz"), undefined);
+const objComputedKey = ['late', 'Obj', 'Computed', 'Prop'].join('');
+Object.prototype[objComputedKey] = 91;
+eq('second-prototype computed addition visible cold', "zz"[objComputedKey], 91);
+eq('second-prototype computed addition observed warm', probeObjComputed("zz"), 91);
+delete Object.prototype[objComputedKey];
+eq('second-prototype computed deletion observed', probeObjComputed("zz"), undefined);
 
 // accessor added to the proto after a warm miss: the warmed site must agree
 // with a cold access. (Whether proto accessors fire for primitive receivers at

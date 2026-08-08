@@ -100,6 +100,7 @@ struct ant_shape {
   uint32_t deleted_count;
   uint8_t inobj_limit;
   uint16_t gc_mark;
+  uint32_t absence_guard_epoch;
   
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
@@ -219,6 +220,14 @@ static bool shape_add_key(
   g_shape_bytes += sizeof(*idx);
   idx->key = key; idx->slot = slot;
   HASH_ADD(hh, shape->index, key, sizeof(key), idx);
+
+  if (
+    type == ANT_SHAPE_KEY_STRING &&
+    shape->absence_guard_epoch == ant_ic_epoch_counter
+  ) {
+    shape->absence_guard_epoch = 0;
+    ant_ic_epoch_bump();
+  }
 
   if (out_slot) *out_slot = slot;
   return true;
@@ -481,6 +490,10 @@ int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned
 int32_t ant_shape_lookup_symbol(const ant_shape_t *shape, ant_offset_t sym_off) {
   shape_index_entry_t *entry = shape_lookup(shape, shape_key_symbol(sym_off));
   return entry ? (int32_t)entry->slot : -1;
+}
+
+void ant_shape_guard_absence(ant_shape_t *shape) {
+  if (shape) shape->absence_guard_epoch = ant_ic_epoch_counter;
 }
 
 bool ant_shape_add_interned(ant_shape_t *shape, const char *interned, uint8_t attrs, uint32_t *out_slot) {
