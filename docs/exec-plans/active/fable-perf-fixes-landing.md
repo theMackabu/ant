@@ -1810,6 +1810,86 @@ the full spec at stress 10; the hook is absent from the final tree.
   18,473, h3 21,935, elysia 62,215 RPS), devirt fuzzer all four seeds
   agree. `examples/bench-v8/score.json` restored after runner side effects.
 
+**W4 — WebSocket close during connect (tlsuv connector cancel lifetime)
+FIXED, 2026-08-08.**
+- **Mechanism (trace-pinned, tracing removed):** `tlsuv_websocket_close()`
+  during a pending connect called `connector->cancel()` and then ran
+  `on_ws_close()` synchronously. Ant's close callback therefore emitted the
+  JS close event *inside* `close()` (readyState already 3 when `close()`
+  returned) and dropped the `g_active_websockets` root; GC then freed the
+  embedded `websocket_state_t`. The connector, however, always delivers its
+  callback once more after cancel (direct: `on_poll_close`/`on_resolve`
+  with `UV_ECANCELED`; proxy: `proxy_work_cb`/`on_proxy_connect`), so
+  `on_connect()` later re-entered the freed state — writing
+  `ws->connect_req`/`ws->conn_req` and invoking the public connect
+  callback through freed memory. A 200-socket close-immediately loop with
+  allocation churn SIGSEGVs the base binary in 80ms.
+- **Fix (vendor patch, not an Ant root extension):**
+  `tlsuv-websocket-connect-cancel-lifetime.patch`, applied after the
+  existing close-lifetime patch in `vendor/tlsuv.wrap`. The `connect_req`
+  branch of `tlsuv_websocket_close()` now only requests cancellation and
+  returns — `connect_req` stays owned by the connector and no close
+  completion runs. `on_connect()` clears `connect_req`, and when
+  `ws->closed` disposes any raced successful socket via a portable
+  `ws_discard_socket()` helper, clears `conn_req`, and calls
+  `on_ws_close()` exactly once — never starting TLS, installing a
+  transport, or invoking the public connect callback, and touching no
+  websocket state afterward (close_cb may free the owner).
+  `on_ws_close()` consumes `close_cb` before invoking it so no second
+  completion path can re-deliver. Ant's active-list root (removed in
+  `websocket_client_close_cb`) now provably outlives every connector
+  callback with no new Ant-side lifetime flag.
+- **Failing-first coverage:** native
+  `tests/test_websocket_connect_cancel.c` (meson target
+  `test-websocket-connect-cancel`, build_by_default false) drives a
+  deterministic fake connector whose `cancel()` completes on a libuv timer
+  and whose close callback frees the owning websocket; scenarios cover
+  cancelled-connect and success-after-cancel (socketpair; asserts the
+  raced fd is closed). On unpatched tlsuv it fails 4 ordering assertions
+  and SIGSEGVs (exit 139); patched it is fully green.
+  `tests/test_websocket_close_during_connect.cjs` (added to
+  `REGRESSION_TESTS`) opens 64 sockets against loopback, closes
+  immediately, asserts readyState stays CLOSING at `close()` return,
+  drops refs under churn, and requires exactly one close/zero open per
+  socket with natural drain; the base pin fails the CLOSING assertion
+  (readyState 3). ASan could not be used: both available runtimes (nix
+  clang 21.1.8 and Apple clang 17.0.0) deadlock in
+  `AsanInitInternal`/`InitializeShadowMemory` during libSystem init on
+  this macOS 26.5 host. Guard Malloc substituted: under
+  `DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib` the unpatched native
+  test SIGSEGVs deterministically at the deferred completion's write to
+  the freed websocket and the patched test passes clean.
+- **Validation:** focused JS regression + 200-round repro clean under a
+  temporary `ANT_GC_STRESS` hook (gc_maybe shape, removed after) at
+  stress 1 and 3; `websocket worker_threads` spec reproducer 20/20 at
+  stress 3; 10,000 immediate connect/close cycles complete in 0.37s with
+  all 10,000 closes, 0 opens, FDs 4→8 (constant lazy-init, not
+  per-cycle) and natural loop drain. Proxy-connector cancel path audited:
+  both stages deliver the callback exactly once after cancel, so deferred
+  close cannot hang behind an HTTP proxy.
+- **Patch hygiene:** developed against the pristine v0.40.13 tree
+  (`git archive` of the subproject HEAD + packagefiles overlay); all six
+  wrap patches forward-apply with zero fuzz and the result is
+  byte-identical to the live subproject; reverse-applying the W4 patch
+  restores the pre-W4 patched source; `maid reconfigure && maid build`
+  uses the patched source and both regressions stay green.
+- **Perf (echo workload, 50 conns × 10,000 messages each, fixed installed-ant
+  server, interleaved AB/BA):** base `/tmp/ant_w4_base_bin`
+  (`da535c6a2bedc999379074255b1b201a`, == the W3 fresh-PGO artifact)
+  2.922/2.945s vs candidate `/tmp/ant_w4_candidate_bin`
+  (`1a3c01118badcba3695af72dc68fe1bf`) 2.934/2.969s — **flat (+0.6%)**;
+  installed `~/.ant/bin/ant` 2.860/2.909s vs candidate 2.926/2.862s —
+  **flat (+0.3%)**.
+- **Gates on the exact pinned candidate:** spec **3713/0**, JIT suite
+  **125/125** (9/0 files), harness **179/0** with the new regression
+  (34ms; test_gc_async 382ms, test_gc_coro 6.338s; oha hono 35,009,
+  express 18,353, h3 21,991, elysia 65,847 RPS), newt Main **40.16s** /
+  **893,108,224-byte** max RSS (band ~41.7s/976MB), `maid preflight`
+  clean, `git diff --check` clean. No call-dispatch code changed, so the
+  devirt fuzzer was not required. Upstream tlsuv (cff10a26) still has the
+  synchronous `on_ws_close()`-after-cancel; candidate for an upstream
+  report.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

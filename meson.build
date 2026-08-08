@@ -201,6 +201,13 @@ executable(
 )
 
 executable(
+  'test-websocket-connect-cancel',
+  files('tests/test_websocket_connect_cancel.c'),
+  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
+  build_by_default: false
+)
+
+executable(
   'bench-allocator',
   files('tests/bench-allocator.c'),
   dependencies: [dependency('threads')] + allocator_deps,

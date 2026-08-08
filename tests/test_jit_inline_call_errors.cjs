@@ -85,6 +85,24 @@ assertSame(
 );
 assertSame(elemGetterCount, 1, "post-read bailout runs getter once");
 
+let elemKeyCoercionCount = 0;
+const elemObjectKey = {
+  toString() {
+    elemKeyCoercionCount++;
+    return "value";
+  }
+};
+assertSame(
+  inlineElemThenAdd({value: 1}, elemObjectKey, "s"),
+  "1s0",
+  "post-read bailout with object key result"
+);
+assertSame(
+  elemKeyCoercionCount,
+  1,
+  "post-read bailout coerces object key once"
+);
+
 const inlineFieldCaller = function (obj) {
   const inner = function (target) { return target.value; };
   return inner(obj) + 0;
