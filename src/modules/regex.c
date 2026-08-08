@@ -889,7 +889,10 @@ static ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str);
 static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs);
 
-static pcre2_match_context *regex_get_match_context(ant_t *js) {
+/* Every PCRE2 execution reaches this helper. Keep its entry independently
+   aligned so cold cache-management changes cannot perturb the hot layout. */
+static __attribute__((aligned(16)))
+pcre2_match_context *regex_get_match_context(ant_t *js) {
   ant_regex_state_t *state = js->regex_state;
   if (!state) return NULL;
   if (state->match_ctx) return state->match_ctx;
