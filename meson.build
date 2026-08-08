@@ -74,8 +74,30 @@ lib_sources = files(run_command(
   check: true
 ).stdout().strip().split())
 
+pkg_sources = files(
+  'src/pkg/build.zig',
+  'src/pkg/cache.zig',
+  'src/pkg/cli.zig',
+  'src/pkg/debug.zig',
+  'src/pkg/extractor.zig',
+  'src/pkg/fetcher.zig',
+  'src/pkg/intern.zig',
+  'src/pkg/json.zig',
+  'src/pkg/linker.zig',
+  'src/pkg/lockfile.zig',
+  'src/pkg/metadata.c',
+  'src/pkg/nghttp2.zig',
+  'src/pkg/platform.zig',
+  'src/pkg/process_env.zig',
+  'src/pkg/resolver.zig',
+  'src/pkg/root.zig',
+  'src/pkg/tlsuv.zig',
+  'src/pkg/uv.zig',
+)
+
 pkg_lib = custom_target(
   'pkg_zig',
+  input: pkg_sources,
   output: 'libpkg.a',
   command: [
     'sh', '-c',
@@ -93,7 +115,6 @@ pkg_lib = custom_target(
     'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
   },
   build_by_default: true,
-  build_always_stale: true
 )
 
 pkg_dep = declare_dependency(

@@ -180,19 +180,49 @@ typedef struct {
   int          max;
 } jit_vstack_t;
 
+typedef struct {
+  sv_func_t *known_func;
+  uint64_t known_const;
+  bool has_const;
+  uint8_t known_bool;
+} jit_value_info_t;
+
+static jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
+  jit_value_info_t info = {0};
+  if (vs->known_func) info.known_func = vs->known_func[idx];
+  if (vs->has_const && vs->has_const[idx]) {
+    info.has_const = true;
+    info.known_const = vs->known_const[idx];
+  }
+  if (vs->known_bool) info.known_bool = vs->known_bool[idx];
+  return info;
+}
+
+static void vstack_set_value_info(
+  jit_vstack_t *vs, int idx, jit_value_info_t info
+) {
+  if (vs->known_func) vs->known_func[idx] = info.known_func;
+  if (vs->has_const) {
+    vs->has_const[idx] = info.has_const;
+    if (info.has_const) vs->known_const[idx] = info.known_const;
+  }
+  if (vs->known_bool) vs->known_bool[idx] = info.known_bool;
+}
+
+static void vstack_clear_value_info(jit_vstack_t *vs, int idx) {
+  vstack_set_value_info(vs, idx, (jit_value_info_t){0});
+}
+
 static MIR_reg_t vstack_push(jit_vstack_t *vs) {
-  if (vs->known_func) vs->known_func[vs->sp] = NULL;
-  if (vs->slot_type) vs->slot_type[vs->sp] = 0; 
-  if (vs->has_const) vs->has_const[vs->sp] = false;
-  if (vs->known_bool) vs->known_bool[vs->sp] = 0;
+  vstack_clear_value_info(vs, vs->sp);
+  if (vs->slot_type) vs->slot_type[vs->sp] = 0;
   return vs->regs[vs->sp++];
 }
 
 static MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
-  if (vs->known_func) vs->known_func[vs->sp] = NULL;
+  vstack_clear_value_info(vs, vs->sp);
   if (vs->slot_type) vs->slot_type[vs->sp] = 0;
   if (vs->has_const) { vs->has_const[vs->sp] = true; vs->known_const[vs->sp] = val; }
-  if (vs->known_bool) vs->known_bool[vs->sp] = 0;
   return vs->regs[vs->sp++];
 }
 
@@ -6077,14 +6107,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
 
       case OP_DUP: {
-        sv_func_t *kf = vs.known_func[vs.sp - 1];
-        bool kc = vs.has_const && vs.has_const[vs.sp - 1];
-        uint64_t kcv = kc ? vs.known_const[vs.sp - 1] : 0;
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        jit_value_info_t info = vstack_value_info(&vs, vs.sp - 1);
         MIR_reg_t top = vstack_top(&vs);
         MIR_reg_t dst = vstack_push(&vs);
-        vs.known_func[vs.sp - 1] = kf;
-        if (kc && vs.has_const) { vs.has_const[vs.sp - 1] = true; vs.known_const[vs.sp - 1] = kcv; }
+        vstack_set_value_info(&vs, vs.sp - 1, info);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
@@ -6096,10 +6123,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (vs.sp < 2) { ok = false; break; }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 2);
+        jit_value_info_t ib = vstack_value_info(&vs, vs.sp - 1);
         MIR_reg_t ra = vs.regs[vs.sp - 2];
         MIR_reg_t rb = vs.regs[vs.sp - 1];
         MIR_reg_t da = vstack_push(&vs);
         MIR_reg_t db = vstack_push(&vs);
+        vstack_set_value_info(&vs, vs.sp - 2, ia);
+        vstack_set_value_info(&vs, vs.sp - 1, ib);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, da),
@@ -6116,14 +6147,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         int top_idx = vs.sp - 1;
         int dst_idx = vs.sp - 2;
         vstack_ensure_boxed(&vs, top_idx, ctx, jit_func, r_d_slot);
+        jit_value_info_t info = vstack_value_info(&vs, top_idx);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, vs.regs[dst_idx]),
             MIR_new_reg_op(ctx, vs.regs[top_idx])));
         vs.sp--;
         vs.slot_type[dst_idx] = SLOT_BOXED;
-        vs.known_func[dst_idx] = NULL;
-        if (vs.has_const) vs.has_const[dst_idx] = false;
+        vstack_set_value_info(&vs, dst_idx, info);
         break;
       }
 
@@ -6131,6 +6162,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (vs.sp < 2) { ok = false; break; }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 1);
+        jit_value_info_t io = vstack_value_info(&vs, vs.sp - 2);
         MIR_reg_t r_a   = vs.regs[vs.sp - 1];
         MIR_reg_t r_obj = vs.regs[vs.sp - 2];
         MIR_append_insn(ctx, jit_func,
@@ -6146,6 +6179,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, vs.regs[vs.sp - 2]),
             MIR_new_reg_op(ctx, r_tmp)));
         MIR_reg_t dup = vstack_push(&vs);
+        vstack_set_value_info(&vs, vs.sp - 3, ia);
+        vstack_set_value_info(&vs, vs.sp - 2, io);
+        vstack_set_value_info(&vs, vs.sp - 1, ia);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dup),
@@ -6158,6 +6194,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 1);
+        jit_value_info_t iprop = vstack_value_info(&vs, vs.sp - 2);
+        jit_value_info_t io = vstack_value_info(&vs, vs.sp - 3);
         MIR_reg_t r_a    = vs.regs[vs.sp - 1];
         MIR_reg_t r_prop = vs.regs[vs.sp - 2];
         MIR_reg_t r_obj  = vs.regs[vs.sp - 3];
@@ -6178,6 +6217,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, vs.regs[vs.sp - 3]),
             MIR_new_reg_op(ctx, r_tmp)));
         MIR_reg_t dup = vstack_push(&vs);
+        vstack_set_value_info(&vs, vs.sp - 4, ia);
+        vstack_set_value_info(&vs, vs.sp - 3, io);
+        vstack_set_value_info(&vs, vs.sp - 2, iprop);
+        vstack_set_value_info(&vs, vs.sp - 1, ia);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dup),
@@ -9844,6 +9887,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (vs.sp < 2) { ok = false; break; }
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 2);
+        jit_value_info_t ib = vstack_value_info(&vs, vs.sp - 1);
         MIR_reg_t ra = vs.regs[vs.sp - 2];
         MIR_reg_t rb = vs.regs[vs.sp - 1];
         MIR_append_insn(ctx, jit_func,
@@ -9858,6 +9903,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, rb),
             MIR_new_reg_op(ctx, r_tmp)));
+        vstack_set_value_info(&vs, vs.sp - 2, ib);
+        vstack_set_value_info(&vs, vs.sp - 1, ia);
         break;
       }
 
@@ -9865,6 +9912,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (vs.sp < 3) { ok = false; break; }
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 3);
+        jit_value_info_t ib = vstack_value_info(&vs, vs.sp - 2);
         MIR_reg_t ra = vs.regs[vs.sp - 3];
         MIR_reg_t rb = vs.regs[vs.sp - 2];
         MIR_append_insn(ctx, jit_func,
@@ -9879,8 +9928,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, rb),
             MIR_new_reg_op(ctx, r_tmp)));
-        if (vs.known_func) { vs.known_func[vs.sp - 3] = NULL; vs.known_func[vs.sp - 2] = NULL; }
-        if (vs.has_const)  { vs.has_const[vs.sp - 3] = false; vs.has_const[vs.sp - 2] = false; }
+        vstack_set_value_info(&vs, vs.sp - 3, ib);
+        vstack_set_value_info(&vs, vs.sp - 2, ia);
         break;
       }
 
@@ -9889,6 +9938,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 4, ctx, jit_func, r_d_slot);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 4);
+        jit_value_info_t ib = vstack_value_info(&vs, vs.sp - 3);
+        jit_value_info_t ic = vstack_value_info(&vs, vs.sp - 2);
         MIR_reg_t ra = vs.regs[vs.sp - 4];
         MIR_reg_t rb = vs.regs[vs.sp - 3];
         MIR_reg_t rc = vs.regs[vs.sp - 2];
@@ -9908,16 +9960,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, rb),
             MIR_new_reg_op(ctx, r_tmp)));
-        if (vs.known_func) {
-          vs.known_func[vs.sp - 4] = NULL;
-          vs.known_func[vs.sp - 3] = NULL;
-          vs.known_func[vs.sp - 2] = NULL;
-        }
-        if (vs.has_const) {
-          vs.has_const[vs.sp - 4] = false;
-          vs.has_const[vs.sp - 3] = false;
-          vs.has_const[vs.sp - 2] = false;
-        }
+        vstack_set_value_info(&vs, vs.sp - 4, ic);
+        vstack_set_value_info(&vs, vs.sp - 3, ia);
+        vstack_set_value_info(&vs, vs.sp - 2, ib);
         break;
       }
 
@@ -9926,6 +9971,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
+        jit_value_info_t ix = vstack_value_info(&vs, vs.sp - 3);
+        jit_value_info_t ia = vstack_value_info(&vs, vs.sp - 2);
+        jit_value_info_t ib = vstack_value_info(&vs, vs.sp - 1);
         MIR_reg_t rx = vs.regs[vs.sp - 3];
         MIR_reg_t ra = vs.regs[vs.sp - 2];
         MIR_reg_t rb = vs.regs[vs.sp - 1];
@@ -9945,6 +9993,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, rb),
             MIR_new_reg_op(ctx, r_tmp)));
+        vstack_set_value_info(&vs, vs.sp - 3, ia);
+        vstack_set_value_info(&vs, vs.sp - 2, ib);
+        vstack_set_value_info(&vs, vs.sp - 1, ix);
         break;
       }
 
@@ -10973,6 +11024,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t rs = vstack_top(&vs);
         mir_load_imm(ctx, jit_func, rs, mkval(T_UNDEF, 0));
         if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_BOXED;
+        vstack_clear_value_info(&vs, vs.sp - 1);
         if (vs.has_const) { 
           vs.has_const[vs.sp - 1] = true; 
           vs.known_const[vs.sp - 1] = mkval(T_UNDEF, 0);
@@ -11951,6 +12003,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         }
         if (catch_saved_sp >= 0) {
           vs.sp = catch_saved_sp + 1;
+          vstack_clear_value_info(&vs, catch_saved_sp);
+          vs.slot_type[catch_saved_sp] = SLOT_BOXED;
           MIR_append_insn(ctx, jit_func,
             MIR_new_call_insn(ctx, 6,
               MIR_new_ref_op(ctx, helper1_proto),
@@ -11966,6 +12020,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_NIP_CATCH: {
+        if (vs.sp < 2) { ok = false; break; }
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        jit_value_info_t info = vstack_value_info(&vs, vs.sp - 1);
         MIR_reg_t a = vs.regs[vs.sp - 1];
         MIR_reg_t below = vs.regs[vs.sp - 2];
         MIR_append_insn(ctx, jit_func,
@@ -11973,6 +12030,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, below),
             MIR_new_reg_op(ctx, a)));
         vs.sp--;
+        vs.slot_type[vs.sp - 1] = SLOT_BOXED;
+        vstack_set_value_info(&vs, vs.sp - 1, info);
         break;
       }
 

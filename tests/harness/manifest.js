@@ -18,6 +18,7 @@ export function targets() {
     'test_template_self_append.cjs',
     'test_global_accessor_read.cjs',
     'test_jit_inline_call_errors.cjs',
+    'test_jit_known_bool_stack.cjs',
     'test_string_length_accumulation.cjs',
     'test_property_location_stress.cjs',
     'test_primitive_ic_invalidation.cjs',

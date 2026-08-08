@@ -619,6 +619,44 @@ cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
   h3 20,778, elysia 61,937 RPS), and newt Main **42.791s** / **43.14s wall** /
   **611,827,712-byte max RSS**.
 
+**7b C4 review follow-up — JIT value-fact stack parity FIXED,
+2026-08-07:**
+- **Mechanism:** `known_bool` was indexed by virtual-stack position but did not
+  follow values through `DUP`, `NIP`, `INSERT`, `SWAP`, or `ROT` operations and
+  was not destroyed when `OP_VOID` overwrote its operand. The conditional-jump
+  fast path then trusted a stale boolean fact and interpreted the new non-boolean
+  value with the boolean representation. The minimal repro
+  `if (void (a === b)) return "T"` is correct while interpreted, then returns
+  `"T"` on call 100 when the function becomes JIT-compiled.
+- **Fix and invariant:** semantic facts (`known_func`, constant value, and
+  `known_bool`) are now captured, moved, copied, and cleared as one
+  `jit_value_info_t` bundle by the virtual-stack operations. `slot_type` remains
+  separate because it describes physical MIR representation rather than the JS
+  value. `OP_VOID` clears the old bundle before recording its new `undefined`
+  constant; catch-slot writes receive the same invalidation discipline. This
+  retains known-target dispatch and boolean jump specialization without allowing
+  one fact array to drift away from the value it describes.
+- **Correctness evidence:** pinned baseline `/tmp/ant_c4_base_bin`
+  (`00c666b96807bbe7f23ac25806f95d80`) fails the exact repro at call 100.
+  Candidate `/tmp/ant_c4_candidate_bin`
+  (`c0caa327ca5a8d85fbbb3a078bd9387d`) passes the new cold/hot regression and
+  100,000 warmed calls. The generated opcode suite remains **125/0** and all
+  four devirt-fuzz seeds agree.
+- **Performance evidence:** direct pinned AB/BA rounds over fixed bench-v8 work
+  were non-regressing. Richards was **2864/2849 → 2863/2835** (midpoint -0.3%),
+  DeltaBlue **4340/4465 → 4536/4558** (+3.3%), and their composite
+  **3525/3567 → 3604/3594** (+1.5%). With two rounds, claim only no regression;
+  the apparent gains may include rebuild/thermal noise.
+- **Final gates:** spec **3713/0**, JIT **9/0**, harness **176/0**
+  (`test_gc_async` 397ms, `test_gc_coro` 5.898s; hono 33,248, express 18,616,
+  h3 21,290, elysia 62,355 RPS), and newt Main **41.996s** / **42.37s wall** /
+  **612,777,984-byte max RSS**.
+- **Build-graph cleanup:** `pkg_zig` no longer uses
+  `build_always_stale: true`; its 18 actual Zig/C inputs are declared explicitly.
+  The first `maid build` after the change did not invoke Zig, and an immediate
+  unchanged second build reported `ninja: no work to do` in **351ms**. Package
+  source edits still dirty the target through the declared input list.
+
 **7c scoping session (2026-08-05, late) — two candidates investigated and
 KILLED with data; record the negatives:**
 1. **Member-form chain fusion (CALL_CALL_METHOD): DEAD.** Post-7b site
