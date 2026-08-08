@@ -52,6 +52,29 @@ function idx(s) { return s[1]; }
 for (let i = 0; i < 2000; i++) idx("abc");
 eq('string index access', idx("abc"), "b");
 
+// --- positive-cache shadowing: a level-2 hit depends on level 1 remaining
+// absent, even though the cached holder itself is unchanged.
+const inheritedIsPrototypeOf = Object.prototype.isPrototypeOf;
+function inherited1(s) { return s.isPrototypeOf; }
+for (let i = 0; i < 3000; i++) inherited1("zz");
+eq('warm level-2 primitive hit', inherited1("zz"), inheritedIsPrototypeOf);
+const shadowKey1 = ['is', 'Prototype', 'Of'].join('');
+String.prototype[shadowKey1] = 99;
+eq('computed level-1 shadow visible cold', "zz"[shadowKey1], 99);
+eq('computed level-1 shadow observed warm', inherited1("zz"), 99);
+delete String.prototype[shadowKey1];
+eq('computed level-1 shadow deletion observed', inherited1("zz"), inheritedIsPrototypeOf);
+
+const inheritedHasOwn = Object.prototype.hasOwnProperty;
+function inherited2(s) { return s.hasOwnProperty; }
+for (let i = 0; i < 3000; i++) inherited2("zz");
+eq('warm level-2 primitive transition hit', inherited2("zz"), inheritedHasOwn);
+String.prototype.hasOwnProperty = 123;
+eq('constant level-1 shadow visible cold', "zz".hasOwnProperty, 123);
+eq('constant level-1 shadow observed warm', inherited2("zz"), 123);
+delete String.prototype.hasOwnProperty;
+eq('constant level-1 shadow deletion observed', inherited2("zz"), inheritedHasOwn);
+
 // --- negative-cache invalidation: a warmed MISS site must observe late additions
 function probe(s) { return s.lateAddedMethod === undefined ? -1 : s.lateAddedMethod(); }
 for (let i = 0; i < 3000; i++) probe("zz");

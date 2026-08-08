@@ -228,6 +228,26 @@ static inline bool sv_ic_probe_get_chain(
   return false;
 }
 
+static inline void sv_ic_guard_absent_prefix(
+  ant_value_t start,
+  const ant_object_t *holder
+) {
+  ant_value_t cur = start;
+  sv_proto_guard_t guard;
+  sv_proto_guard_init(&guard);
+
+  while (is_object_type(cur)) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    if (!ptr || ptr == holder) return;
+    ant_shape_guard_absence(ptr->shape);
+
+    ant_value_t next = ptr->proto;
+    if (!is_object_type(next)) return;
+    cur = next;
+    if (sv_proto_guard_hit_cycle(&guard, cur)) return;
+  }
+}
+
 static inline uintptr_t sv_prim_neg_pack_shape(uintptr_t aux, const ant_shape_t *shape2) {
   return (aux & SV_GF_IC_AUX_ALL_MASK) | (
     ((uintptr_t)shape2 >> SV_PRIM_NEG_ALIGN_BITS) << SV_PRIM_NEG_AUX_SHIFT
@@ -513,6 +533,7 @@ static inline bool sv_prim_ic_lookup(
   uint32_t prop_idx = 0;
   
   if (sv_ic_probe_get_chain(proto, a->str, &holder, &prop_idx, out)) {
+    sv_ic_guard_absent_prefix(proto, holder);
     ic->cached_holder = holder;
     ic->cached_shape = holder->shape;
     ic->cached_index = prop_idx;

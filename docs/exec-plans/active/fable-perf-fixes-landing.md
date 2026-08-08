@@ -17,6 +17,8 @@ A 2026-08-07 property-delete follow-up replaced the correctness-preserving
 quadratic slot shift with ordered tombstones and bounded stable compaction.
 A 2026-08-07 curried-call review follow-up restored JavaScript argument
 evaluation order without giving up newt's 11.96M fused calls.
+A 2026-08-07 primitive-IC review follow-up made computed and transition-based
+prototype additions invalidate both warmed absence entries and inherited hits.
 Last reviewed: 2026-08-07
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -569,6 +571,53 @@ cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
   spec 3713/0, JIT 9/0 + generated 125/0, harness 175/0 (hono 34,473,
   express 18,707, h3 21,918, elysia 65,095 RPS), and all four devirt-fuzz
   seeds agree.
+
+**7b C2/C3 review follow-up — primitive IC invalidation FIXED,
+2026-08-07:**
+- **Mechanism:** `sv_ic_try_get_miss_prim` proved prototype-chain absence with
+  shape pointers. `ant_shape_add_interned_tr` may add a computed string key to
+  a detached shape in place, leaving that pointer unchanged and previously
+  leaving the global IC epoch unchanged. A warmed `s => s.k1` therefore kept
+  returning `undefined` after `String.prototype[computedKey] = 7`, even though
+  a cold computed access returned 7. The same stale result occurred when the
+  in-place addition was on the second guarded shape (`Object.prototype`).
+  A positive primitive hit had the complementary hole: when the cached holder
+  was level 2 (`Object.prototype`), `sv_ic_try_get_hit_prim` guarded that holder
+  but not the level-1 absence it depended on. After warming
+  `s => s.isPrototypeOf`, shadowing the key on `String.prototype` therefore
+  kept returning the cached level-2 function.
+- **Fix:** primitive negative fills mark every shape whose absence they cache;
+  positive fills mark each skipped prototype before the cached holder. A
+  successful in-place string-key insertion into a shape carrying a live mark
+  clears it and bumps the epoch. A transition-tree addition from a marked
+  source shape does the same, because positive hits do not otherwise retain
+  that intermediate shape pointer. Unmarked shapes take a zero-field fast
+  return and never load the global epoch. The hot positive and negative hit
+  paths are unchanged. This avoids both a hash lookup on every positive hit
+  and an unconditional epoch bump on every property addition. The mark occupies
+  the existing alignment gap in `ant_shape_t`, so its allocation size is
+  unchanged.
+- **Correctness evidence:** pinned base `/tmp/ant_c2_base_bin`
+  (`e8ed61858dd86ea730c71c0d565a3725`) fails both new computed-addition cases
+  while their cold accesses pass; Node and final
+  `/tmp/ant_c2_candidate_bin` (`41154daee76551f0e68a6293405a8d8b`) pass the
+  complete primitive-IC test. Regression coverage forces detached shapes and
+  checks both the first and second prototype guards, including deletion after
+  each addition. The positive follow-up base `/tmp/ant_c3_base_bin`
+  (`41154daee76551f0e68a6293405a8d8b`) fails both a computed in-place shadow and
+  a constant-key transition shadow while cold reads pass; Node and final
+  `/tmp/ant_c3_candidate_bin` (`00c666b96807bbe7f23ac25806f95d80`) pass both.
+- **Performance evidence:** a fixed 300-million primitive-miss micro was flat
+  over alternating AB/BA rounds: base **2.97/2.97s**, final **2.96/2.98s**.
+  The positive follow-up's fixed 300-million level-2 hit micro was also
+  non-regressing at **2.23/2.23s → 2.16/2.15s**. Property creation held at
+  **38.27/37.62ns → 37.45/38.14ns** after adding the zero-mark fast return.
+  Treat the apparent positive-hit improvement as rebuild/PGO noise rather than
+  a claimed win.
+- **Final gates:** spec **3713/0**, JIT **9/0**, harness **175/0**
+  (`test_gc_async` 402ms, `test_gc_coro` 5.941s; hono 32,840, express 18,166,
+  h3 20,778, elysia 61,937 RPS), and newt Main **42.791s** / **43.14s wall** /
+  **611,827,712-byte max RSS**.
 
 **7c scoping session (2026-08-05, late) — two candidates investigated and
 KILLED with data; record the negatives:**
