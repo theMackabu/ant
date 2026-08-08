@@ -127,6 +127,7 @@ typedef struct {
 } sv_obj_site_cache_t;
 
 #define SV_GF_IC_AUX_MISS_SHIFT 8u
+#define SV_GF_IC_PROTO_ID_SHIFT 32u
 #define SV_GF_IC_WARMUP_ENABLE  16u
 #define SV_GF_IC_MISS_DISABLE   4u
 

@@ -1798,22 +1798,22 @@ static bool mir_emit_put_field_ic_fastpath(
     return false;
 
   sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
-  char names[15][48];
-  MIR_reg_t regs[15];
-  static const char *suffix[15] = {
+  char names[14][48];
+  MIR_reg_t regs[14];
+  static const char *suffix[14] = {
     "ic", "ice", "ce", "op", "ot", "flags", "shape", "ics",
-    "holder", "idx", "pc", "limit", "overflow", "oi", "vtag"
+    "idx", "pc", "limit", "overflow", "oi", "vtag"
   };
-  for (int i = 0; i < 15; i++) {
+  for (int i = 0; i < 14; i++) {
     snprintf(names[i], sizeof(names[i]), "pf_%s_%d_%u", suffix[i],
              bc_off, (unsigned)ic_idx);
     regs[i] = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, names[i]);
   }
   MIR_reg_t ric = regs[0], rice = regs[1], rce = regs[2];
   MIR_reg_t optr = regs[3], otag = regs[4], flags = regs[5];
-  MIR_reg_t shape = regs[6], icshape = regs[7], holder = regs[8];
-  MIR_reg_t idx = regs[9], prop_count = regs[10], limit = regs[11];
-  MIR_reg_t overflow = regs[12], overflow_idx = regs[13], vtag = regs[14];
+  MIR_reg_t shape = regs[6], icshape = regs[7];
+  MIR_reg_t idx = regs[8], prop_count = regs[9], limit = regs[10];
+  MIR_reg_t overflow = regs[11], overflow_idx = regs[12], vtag = regs[13];
   char vp_name[48], rf_name[48], need_name[48];
   snprintf(vp_name, sizeof(vp_name), "pf_vp_%d_%u", bc_off, (unsigned)ic_idx);
   snprintf(rf_name, sizeof(rf_name), "pf_rf_%d_%u", bc_off, (unsigned)ic_idx);
@@ -1865,13 +1865,6 @@ static bool mir_emit_put_field_ic_fastpath(
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, shape), MIR_new_reg_op(ctx, icshape)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, holder),
-      MIR_new_mem_op(ctx, MIR_T_P,
-        (MIR_disp_t)offsetof(sv_ic_entry_t, cached_holder), ric, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, holder), MIR_new_reg_op(ctx, optr)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, idx),
       MIR_new_mem_op(ctx, MIR_T_U32,
@@ -2054,6 +2047,13 @@ static bool mir_emit_get_field_ic_fastpath(
   MIR_reg_t r_source = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_src_name);
   MIR_reg_t r_obj_proto = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_op_proto_name);
   MIR_reg_t r_ic_proto = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_ic_proto_name);
+  char gf_pp_name[32], gf_pid_name[32], gf_ipid_name[32];
+  snprintf(gf_pp_name, sizeof(gf_pp_name), "gf_pp_%d_%u", bc_off, (unsigned)ic_idx);
+  snprintf(gf_pid_name, sizeof(gf_pid_name), "gf_pid_%d_%u", bc_off, (unsigned)ic_idx);
+  snprintf(gf_ipid_name, sizeof(gf_ipid_name), "gf_ipid_%d_%u", bc_off, (unsigned)ic_idx);
+  MIR_reg_t r_proto_ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_pp_name);
+  MIR_reg_t r_proto_id = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_pid_name);
+  MIR_reg_t r_ic_proto_id = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_ipid_name);
 
   MIR_label_t load_overflow = MIR_new_label(ctx);
   MIR_label_t fast_done = MIR_new_label(ctx);
@@ -2143,6 +2143,31 @@ static bool mir_emit_get_field_ic_fastpath(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, r_obj_proto),
       MIR_new_reg_op(ctx, r_ic_proto)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, r_proto_ptr),
+      MIR_new_reg_op(ctx, r_obj_proto),
+      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_proto_id),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(ant_object_t, ic_identity), r_proto_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_ic_proto_id),
+      MIR_new_mem_op(ctx, MIR_T_U64,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, cached_aux), r_ic, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, r_ic_proto_id),
+      MIR_new_reg_op(ctx, r_ic_proto_id),
+      MIR_new_uint_op(ctx, SV_GF_IC_PROTO_ID_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, r_proto_id),
+      MIR_new_reg_op(ctx, r_ic_proto_id)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_holder),
@@ -8973,7 +8998,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
         if (mir_emit_get_field_ic_fastpath(
-          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow, r_ic_epoch_val)) {
+          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
+          r_ic_epoch_val)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -9028,7 +9054,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
         if (mir_emit_get_field_ic_fastpath(
-          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow, r_ic_epoch_val)) {
+          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
+          r_ic_epoch_val)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -9094,7 +9121,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, obj),
             MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
         if (mir_emit_get_field_ic_fastpath(
-          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow, r_ic_epoch_val)) {
+          ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
+          r_ic_epoch_val)) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));

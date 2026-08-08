@@ -19,6 +19,9 @@ A 2026-08-07 curried-call review follow-up restored JavaScript argument
 evaluation order without giving up newt's 11.96M fused calls.
 A 2026-08-07 primitive-IC review follow-up made computed and transition-based
 prototype additions invalidate both warmed absence entries and inherited hits.
+A 2026-08-07 minor-GC ABA review follow-up retained property-IC shapes and
+gave only raw cached prototype pointers lazy per-object identities, preserving
+the phase-1b minor-GC performance win without allowing address reuse to pass.
 Last reviewed: 2026-08-07
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -656,6 +659,65 @@ cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
   The first `maid build` after the change did not invoke Zig, and an immediate
   unchanged second build reported `ninja: no work to do` in **351ms**. Package
   source edits still dirty the target through the declared input list.
+
+**7b C5 review follow-up — minor-GC property-IC ABA FIXED,
+2026-08-07:**
+- **Mechanism:** phase 1b deliberately stopped bumping the main property-IC
+  epoch on minor collections, but a minor can free both an object arena slot
+  and that object's unique heap shape. The arena reuses object slots LIFO and
+  malloc may reuse the shape address before the next major. Pointer-only
+  property guards could therefore accept a different object or shape at the
+  same addresses. The JIT `PUT_FIELD` path had no key revalidation at all;
+  inherited gets could dereference a stale cached holder. The primitive entries
+  also lacked an obj-epoch guard, but their canonical prototype roots keep
+  their holder chain alive, so the audit found no minor-GC lifetime hole there.
+- **Tried and ruled out:** adding the obj epoch as a second global guard to
+  property JIT fast paths made a fixed 300-million inherited-read micro about
+  **11% slower**. Packing main and obj epochs into one 64-bit load made that
+  micro flat, but invalidated every property site after every minor and made
+  interleaved newt Main **41.448/42.214s -> 46.704/47.137s** (**+12.2%**).
+  Restoring the main-epoch minor bump has the same invalidation behavior and
+  would undo the measured purpose of phase 1b.
+- **Fix:** every property IC retains the shape pointer it caches, releasing the
+  prior shape when the monomorphic entry changes. A retained shape cannot be
+  freed and reused while the IC can compare or dereference it. Inherited object
+  gets additionally assign a lazy nonzero 32-bit identity to the first raw
+  prototype pointer they cache and compare that identity before dereferencing
+  the cached holder. Freshly reused arena slots are zeroed, identities are
+  isolate-local, and identity wrap bumps the main epoch before skipping zero.
+  A matching live first prototype keeps the rest of its chain traced; ordinary
+  prototype rewiring and guarded shadow additions already bump the main epoch.
+  Own get/put entries need only the retained shape, so their hot path remains a
+  shape/index IC. The put fast path no longer stores or compares a redundant raw
+  receiver pointer. Canonical primitive prototypes root their holder chains,
+  so their existing main-epoch and retained-shape guards are sufficient.
+- **Layout and performance evidence:** `ant_object_t` remains **152 bytes**
+  because the lazy identity uses its existing tail padding; `sv_ic_entry_t`
+  remains **64 bytes**, packing the identity into the high half of `cached_aux`.
+  Pinned identities are `/tmp/ant_c5_base_bin`
+  (`c0caa327ca5a8d85fbbb3a078bd9387d`) and `/tmp/ant_c5_final_bin`
+  (`7c232bc0ec9846dfcb77c4ea1d35b391`). Fixed-work AB/BA was flat: 300-million
+  inherited reads **603.38/605.35ms -> 605.95/603.96ms** (+0.10% at the
+  midpoint), and 150-million puts **336.82/341.66ms -> 337.78/341.15ms**
+  (+0.07%). Checksums were identical. Interleaved B/C/C/B newt Main was
+  **41.535/43.093s -> 42.825/43.253s** (+0.725s at the midpoint, inside the
+  approximately 1s thermal-noise band); mean max RSS was about **623MB ->
+  712MB**, below the 1GB gate.
+- **Regression coverage and stress:** `tests/test_ic_minor_aba.cjs` warms read
+  and write sites plus an inherited-holder site, drops the original
+  unique-shape receivers and prototype, forces repeated young churn, then
+  checks distinct replacement shapes, prototype data, and decoy slots. A
+  temporary `ANT_GC_STRESS` tick was added to `gc_maybe`, the focused ABA,
+  primitive-invalidation, and property-location tests passed at stress 1 and
+  3, the JIT suite passed at stress 3, and the full spec passed at stress 10;
+  the hook was removed before the final build. The stress-10 harness
+  had only forced-major performance failures (three 60s timeouts, the churn
+  timing range, and express's normal RPS floor), with no crash, UAF, wrong
+  result, or RSS failure.
+- **Final gates:** normal spec **3718/0**, JIT **9/0** with generated opcodes
+  **125/0**, harness **177/0** (`test_gc_async` 399ms, `test_gc_coro` 5.904s;
+  hono 33,273, express 18,068, h3 21,217, elysia 62,578 RPS), and all four
+  devirt-fuzz seeds agree.
 
 **7c scoping session (2026-08-05, late) — two candidates investigated and
 KILLED with data; record the negatives:**
