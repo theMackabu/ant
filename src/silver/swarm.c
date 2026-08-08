@@ -63,6 +63,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call_array_includes);
   LOAD_EXT(jit_helper_apply);
   LOAD_EXT(jit_helper_call_call);
+  LOAD_EXT(jit_helper_call_call_slot);
   LOAD_EXT(jit_helper_rest);
   LOAD_EXT(jit_helper_special_obj);
   LOAD_EXT(jit_helper_for_of);
@@ -4311,6 +4312,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I32, "n1",
     MIR_T_I32, "n2");
 
+  MIR_item_t call_call_slot_proto = MIR_new_proto(ctx, "call_call_slot_proto",
+    1, &call_call_ret,
+    5,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "arg1",
+    MIR_T_P,   "slot");
+
   MIR_type_t call_method_ret = MIR_JSVAL;
   MIR_item_t call_method_proto = MIR_new_proto(ctx, "callm_proto",
     1, &call_method_ret,
@@ -4723,6 +4733,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
   MIR_item_t imp_call_call = MIR_new_import(ctx, "jit_helper_call_call");
+  MIR_item_t imp_call_call_slot = MIR_new_import(ctx, "jit_helper_call_call_slot");
   MIR_item_t imp_rest  = MIR_new_import(ctx, "jit_helper_rest");
   MIR_item_t imp_special_obj = MIR_new_import(ctx, "jit_helper_special_obj");
   MIR_item_t imp_for_of      = MIR_new_import(ctx, "jit_helper_for_of");
@@ -11561,42 +11572,109 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_int_op(ctx, (int64_t)cc_n1),
             MIR_new_int_op(ctx, (int64_t)cc_n2)));
 
-        if (jit_try_depth > 0) {
-          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
-          MIR_label_t no_err = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_URSH,
-              MIR_new_reg_op(ctx, r_bool),
-              MIR_new_reg_op(ctx, r_cc_res),
-              MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BNE,
-              MIR_new_label_op(ctx, no_err),
-              MIR_new_reg_op(ctx, r_bool),
-              MIR_new_uint_op(ctx, JIT_ERR_TAG)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_MOV,
-              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
-              MIR_new_reg_op(ctx, r_cc_res)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_JMP,
-              MIR_new_label_op(ctx, h->catch_label)));
-          MIR_append_insn(ctx, jit_func, no_err);
+        JIT_EMIT_THROW_IF_ERROR(r_cc_res);
+        break;
+      }
+
+      case OP_CALL_CALL_SLOT: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        uint16_t cc_slot_idx = sv_get_u16(ip + 1);
+        if (vs.sp < 2) { ok = false; break; }
+
+        MIR_reg_t r_cc_arg1 = vstack_pop(&vs);
+        MIR_reg_t r_cc_func = vstack_pop(&vs);
+        char cc_slot_name[32];
+        snprintf(cc_slot_name, sizeof(cc_slot_name), "cc_slot_%d", bc_off);
+        MIR_reg_t r_cc_slot = MIR_new_func_reg(
+          ctx, jit_func->u.func, MIR_T_I64, cc_slot_name);
+
+        if ((int)cc_slot_idx < param_count) {
+          uint16_t idx = cc_slot_idx;
+          bool slot_backed = writes_params ||
+            (has_captured_params && captured_params && captured_params[idx]);
+          if (slot_backed) {
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_ADD,
+                MIR_new_reg_op(ctx, r_cc_slot),
+                MIR_new_reg_op(ctx, r_slotbuf),
+                MIR_new_int_op(ctx,
+                  (int64_t)idx * (int64_t)sizeof(ant_value_t))));
+          } else {
+            /* A non-captured parameter cannot be changed by X. Keep the
+               ordinary missing-argument behavior while giving the helper a
+               stable address. */
+            char cc_value_name[32];
+            snprintf(cc_value_name, sizeof(cc_value_name), "cc_value_%d", bc_off);
+            MIR_reg_t r_cc_value = MIR_new_func_reg(
+              ctx, jit_func->u.func, MIR_JSVAL, cc_value_name);
+            MIR_label_t arg_in_range = MIR_new_label(ctx);
+            MIR_label_t arg_done = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGT,
+                MIR_new_label_op(ctx, arg_in_range),
+                MIR_new_reg_op(ctx, r_argc),
+                MIR_new_int_op(ctx, (int64_t)idx)));
+            mir_load_imm(ctx, jit_func, r_cc_value, mkval(T_UNDEF, 0));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, arg_done)));
+            MIR_append_insn(ctx, jit_func, arg_in_range);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, r_cc_value),
+                MIR_new_mem_op(ctx, MIR_JSVAL,
+                  (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
+                  r_args, 0, 1)));
+            MIR_append_insn(ctx, jit_func, arg_done);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_args_buf, 0, 1),
+                MIR_new_reg_op(ctx, r_cc_value)));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, r_cc_slot),
+                MIR_new_reg_op(ctx, r_args_buf)));
+          }
         } else {
-          MIR_label_t no_err = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_URSH,
-              MIR_new_reg_op(ctx, r_bool),
-              MIR_new_reg_op(ctx, r_cc_res),
-              MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BNE,
-              MIR_new_label_op(ctx, no_err),
-              MIR_new_reg_op(ctx, r_bool),
-              MIR_new_uint_op(ctx, JIT_ERR_TAG)));
-          JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, r_cc_res));
-          MIR_append_insn(ctx, jit_func, no_err);
+          uint16_t idx = (uint16_t)(cc_slot_idx - (uint16_t)param_count);
+          if (idx >= (uint16_t)n_locals) { ok = false; break; }
+          bool slot_backed = has_captures && captured_locals && captured_locals[idx];
+          if (slot_backed) {
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_ADD,
+                MIR_new_reg_op(ctx, r_cc_slot),
+                MIR_new_reg_op(ctx, r_lbuf),
+                MIR_new_int_op(ctx,
+                  (int64_t)idx * (int64_t)sizeof(ant_value_t))));
+          } else {
+            /* D-only locals need a current boxed representation before the
+               helper can treat the temporary as an ant_value_t slot. */
+            if (dnum_locals && dnum_locals[idx])
+              mir_d_to_i64(
+                ctx, jit_func, local_regs[idx], local_d_regs[idx], r_d_slot);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_mem_op(ctx, MIR_JSVAL, 0, r_args_buf, 0, 1),
+                MIR_new_reg_op(ctx, local_regs[idx])));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, r_cc_slot),
+                MIR_new_reg_op(ctx, r_args_buf)));
+          }
         }
+
+        MIR_reg_t r_cc_res = vstack_push(&vs);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 8,
+            MIR_new_ref_op(ctx, call_call_slot_proto),
+            MIR_new_ref_op(ctx, imp_call_call_slot),
+            MIR_new_reg_op(ctx, r_cc_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_cc_func),
+            MIR_new_reg_op(ctx, r_cc_arg1),
+            MIR_new_reg_op(ctx, r_cc_slot)));
+
+        JIT_EMIT_THROW_IF_ERROR(r_cc_res);
         break;
       }
 

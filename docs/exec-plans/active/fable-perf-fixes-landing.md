@@ -15,6 +15,8 @@ bound-function prototype/new-target semantics, sloppy primitive `this`
 boxing, and the RegExp 32-capture result limit.
 A 2026-08-07 property-delete follow-up replaced the correctness-preserving
 quadratic slot shift with ordered tombstones and bounded stable compaction.
+A 2026-08-07 curried-call review follow-up restored JavaScript argument
+evaluation order without giving up newt's 11.96M fused calls.
 Last reviewed: 2026-08-07
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -501,8 +503,8 @@ consistent across rounds. Gates green on the 7a binary: spec 3712/0, jit
   yield + any backward jump so no loops→no OSR; local captures only at
   parent slot 0; <=4 upvalues). `OP_CALL_CALL n1:u8 n2:u8` emitted for
   `X(a)(b...)` — plain non-member/super/eval inner callee, single inner
-  arg, all outer args effect-free (non-TDZ locals or literals; that's
-  when pre-evaluating them is spec-legal).
+  arg, all outer args effect-free (literals or initialized const locals;
+  that's when pre-evaluating them is spec-legal).
 - Runtime `sv_op_call_call` (ops/calls.h, shared by the interpreter case
   and jit_helper_call_call): fuses via a C-stack `sv_closure_t fake`
   (upvalues = its own inline_upvals; fresh capture as a C-stack closed
@@ -529,6 +531,44 @@ spec 3712/0, jit 0 fail, harness 168/0 (incl. new
 mutation-through-cell, parent upvals, bound/member/throwing/default/rest
 cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
 `ANT_CLOSURE_STATS=1` prints `[call-call] fused/generic`.
+
+**7b C1 review follow-up — outer-argument order FIXED, 2026-08-07:**
+- **Mechanism:** the original `fusion_arg_is_effect_free` admitted every
+  resolved non-TDZ local. `OP_CALL_CALL` evaluates its complete stack input
+  before calling `X`, so `let b=1; function X(a){ b=99; return y=>y; }
+  X(0)(b)` returned 1 rather than 99 in both the interpreter and JIT. Checking
+  `local.captured` at that source position is also unsound: capture metadata is
+  discovered lazily, and a later closure can capture a binding used by an
+  earlier call site.
+- **Tried and ruled out:** restricting eager fusion to literals plus const
+  locals fixed semantics, but a pinned whole-newt counter run fell from
+  `[call-call] fused=11962008 generic=20775513` to
+  `fused=0 generic=1051774`. Interleaved newt measured Main
+  40.470/41.352s → 43.280/42.850s, a real ~2.15s (~5.3%) regression. Do not
+  re-land the const-only gate without an order-preserving replacement.
+- **Fix:** eager `OP_CALL_CALL` now accepts only literals and initialized const
+  locals. A single mutable local outer argument uses
+  `OP_CALL_CALL_SLOT slot:u16`: the curried-step fast path may read it directly
+  after proving `X` side-effect-free, while the generic path calls `X` first
+  and then reloads the current frame slot. The interpreter reacquires the slot
+  after `sv_vm_call` because VM storage may move. The JIT passes captured and
+  writable params/locals through their canonical slot buffers, and boxes an
+  uncaptured numeric local into stable temporary storage. Raw string-builder
+  slots are materialized only at the ordinary outer-read point.
+- **Evidence:** final pinned identities are the unsafe baseline
+  `/tmp/ant_c1_base_bin` (`213630b7ad3c3878d6be8f3bfe1d12dc`) and fixed
+  `/tmp/ant_c1_final_bin` (`e8ed61858dd86ea730c71c0d565a3725`). AB/BA newt
+  Main was 41.502/39.629s before versus 41.724/39.921s after (+0.26s,
+  +0.6% on the means, inside newt's ~1s thermal noise); max-RSS means were
+  ~892MB before and ~868MB after. The final counter run restored exactly
+  `fused=11962008 generic=20775513` and kept Main at 40.898s / 853MB RSS.
+- **Regression coverage and gates:** the curried-call test now checks the exact
+  former tautological hot-loop result plus cold/hot side-effect order, a
+  future-capture site, captured/plain/written parameters, d-only numeric
+  locals, try/catch routing, and fast/generic string-builder slots. Final gates:
+  spec 3713/0, JIT 9/0 + generated 125/0, harness 175/0 (hono 34,473,
+  express 18,707, h3 21,918, elysia 65,095 RPS), and all four devirt-fuzz
+  seeds agree.
 
 **7c scoping session (2026-08-05, late) — two candidates investigated and
 KILLED with data; record the negatives:**

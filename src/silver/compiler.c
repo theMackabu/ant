@@ -3803,9 +3803,11 @@ static bool compile_direct_eval_call(
   return true;
 }
 
-/* Effect-free, order-insensitive argument: a literal or a resolved
-   non-TDZ local. Anything else (globals, members, upvalues, calls) may
-   observe evaluation order and blocks OP_CALL_CALL emission. */
+/* Effect-free, order-insensitive argument: a literal or a resolved,
+   initialized const local. Mutable locals are not safe: the inner callee may
+   change one through a closure before the outer call would normally read it.
+   Anything else (globals, members, upvalues, calls) may observe evaluation
+   order and blocks OP_CALL_CALL emission. */
 static bool fusion_arg_is_effect_free(sv_compiler_t *c, sv_ast_t *a) {
   if (!a) return false;
   switch (a->type) {
@@ -3818,19 +3820,32 @@ static bool fusion_arg_is_effect_free(sv_compiler_t *c, sv_ast_t *a) {
       return true;
     case N_IDENT: {
       int l = resolve_local(c, a->str, a->len);
-      return l >= 0 && !c->locals[l].is_tdz;
+      return l >= 0 && c->locals[l].is_const && !c->locals[l].is_tdz;
     }
     default:
       return false;
   }
 }
 
+/* A single mutable local can still use the curried-call fast path when its
+   frame slot is carried by the opcode and loaded after the inner call on the
+   generic path. This is an evaluation recipe, not a captured-state guess:
+   capture discovery is lazy while compiling the surrounding function. */
+static int fusion_arg_deferred_slot(sv_compiler_t *c, sv_ast_t *a) {
+  if (!a || a->type != N_IDENT) return -1;
+  int l = resolve_local(c, a->str, a->len);
+  if (l < 0 || c->locals[l].is_tdz || c->locals[l].is_const) return -1;
+  int slot = local_to_frame_slot(c, l);
+  return slot <= UINT16_MAX ? slot : -1;
+}
+
 /* `X(a)(b...)`: emit OP_CALL_CALL so the runtime can skip materializing
    the intermediate closure when X is a curried step. Only for plain
    (non-member, non-optional, non-super, non-eval) inner callees, single
-   inner arg, and effect-free outer args — the outer args are evaluated
-   before the inner call runs, which is unobservable only under those
-   conditions. */
+   inner arg, and either effect-free outer args or one deferred local read.
+   OP_CALL_CALL may pre-evaluate its outer args; OP_CALL_CALL_SLOT preserves
+   ordinary call order by reading the local after the inner call whenever
+   the curried-step fast path cannot prove that call side-effect-free. */
 static bool compile_call_try_fused_chain(
   sv_compiler_t *c, sv_ast_t *node, sv_ast_t *callee, bool has_spread
 ) {
@@ -3842,11 +3857,21 @@ static bool compile_call_try_fused_chain(
   if (!callee->left) return false;
   if (callee->left->type == N_MEMBER || callee->left->type == N_OPTIONAL) return false;
   if (is_ident_name(callee->left, "super") || is_ident_name(callee->left, "eval")) return false;
-  for (int i = 0; i < node->args.count; i++)
-    if (!fusion_arg_is_effect_free(c, node->args.items[i])) return false;
+  int deferred_slot = -1;
+  if (node->args.count == 1)
+    deferred_slot = fusion_arg_deferred_slot(c, node->args.items[0]);
+  if (deferred_slot < 0) {
+    for (int i = 0; i < node->args.count; i++)
+      if (!fusion_arg_is_effect_free(c, node->args.items[i])) return false;
+  }
 
   compile_expr(c, callee->left);
   compile_expr(c, callee->args.items[0]);
+  if (deferred_slot >= 0) {
+    emit_op(c, OP_CALL_CALL_SLOT);
+    emit_u16(c, (uint16_t)deferred_slot);
+    return true;
+  }
   for (int i = 0; i < node->args.count; i++)
     compile_expr(c, node->args.items[i]);
   emit_op(c, OP_CALL_CALL);

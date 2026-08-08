@@ -1696,6 +1696,20 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_CALL_SLOT: {
+    uint16_t cc_slot = sv_get_u16(ip + 1);
+    ant_value_t cc_x = vm->stack[vm->sp - 2];
+    ant_value_t cc_arg1 = vm->stack[vm->sp - 1];
+    frame->ip = ip;
+    ant_value_t cc_result = sv_op_call_call_slot(
+      vm, js, cc_x, cc_arg1, cc_slot);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    vm->sp -= 2;
+    if (is_err(cc_result)) { sv_err = cc_result; goto sv_throw; }
+    vm->stack[vm->sp++] = cc_result;
+    NEXT(3);
+  }
+
   L_CALL_METHOD: {
     uint16_t call_argc = sv_get_u16(ip + 1);
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];

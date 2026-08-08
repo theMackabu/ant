@@ -174,6 +174,7 @@ OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> resu
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
 OP_DEF(  CALL_CALL,         3,   1,   1, npop)      /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
+OP_DEF(  CALL_CALL_SLOT,    3,   2,   1, loc)       /* X a -> X(a)(slot); slot read after X on fallback */
 OP_DEF(  RE_LITERAL_EXEC,   1,   3,   1, none)      /* pattern flags arg -> exec result */
 OP_DEF(  STR_RE_LITERAL_REPLACE, 1, 4, 1, none)     /* str pattern flags repl -> string */
 OP_DEF(  RE_EXEC_TRUTHY,    1,   3,   1, none)      /* this func arg -> bool */
@@ -411,6 +412,7 @@ OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
+OP_FLAG(CALL_CALL_SLOT        , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(TAIL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS)
 OP_FLAG(TAIL_CALL_METHOD      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS)
 OP_FLAG(NEW                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)

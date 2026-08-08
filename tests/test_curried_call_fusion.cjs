@@ -60,9 +60,73 @@ function hot(n) {
   for (let i = 0; i < n; i++) { const a = i, b = i + 1; s += add(a)(b); }
   return s;
 }
-eq('hot fused loop', hot(100000), 9999900000 + 100000 - 0 === 0 ? -1 : hot(1) + hot(2) - hot(1) - hot(2) + hot(100000));
+eq('hot fused loop', hot(100000), 10000000000);
 // simpler exact check:
 { let s = 0; for (let i = 0; i < 1000; i++) { const a = i, b = 2 * i; s += add(a)(b); } eq('fused loop sum', s, 3 * (999 * 1000) / 2); }
+
+// The inner call must run before a mutable outer argument is read.
+function sideEffectBeforeOuterArg(initial) {
+  let b = initial;
+  function X(a) { b = 99; return y => y; }
+  return X(0)(b);
+}
+eq('inner side effect before outer arg', sideEffectBeforeOuterArg(1), 99);
+{ let sum = 0; for (let i = 0; i < 100000; i++) sum += sideEffectBeforeOuterArg(i); eq('inner side effect before outer arg hot', sum, 9900000); }
+
+// Capture metadata is discovered lazily: this call site is compiled before
+// the later closure captures b, but its outer read must still remain deferred.
+function futureCaptureOrder() {
+  let b = 1, mutate = null;
+  function X(a) { if (mutate) mutate(); return y => y; }
+  const first = X(0)(b);
+  mutate = () => { b = 77; };
+  return first + X(0)(b);
+}
+eq('future capture preserves call order', futureCaptureOrder(), 78);
+{ let sum = 0; for (let i = 0; i < 100000; i++) sum += futureCaptureOrder(); eq('future capture preserves call order hot', sum, 7800000); }
+
+// Cover each JIT slot representation used by the deferred-read opcode.
+function capturedParamOrder(b) {
+  function X(a) { b = 41; return y => y + 1; }
+  return X(0)(b);
+}
+eq('captured parameter read is deferred', capturedParamOrder(1), 42);
+{ let sum = 0; for (let i = 0; i < 10000; i++) sum += capturedParamOrder(i); eq('captured parameter read is deferred hot', sum, 420000); }
+
+function plainParamFast(b) { return add(1)(b); }
+{ let sum = 0; for (let i = 0; i < 10000; i++) sum += plainParamFast(i); eq('plain parameter slot hot', sum, 50005000); }
+
+function writtenParamFast(b) { b += 1; return add(1)(b); }
+{ let sum = 0; for (let i = 0; i < 10000; i++) sum += writtenParamFast(i); eq('written parameter slot hot', sum, 50015000); }
+
+function numericLocalFast(n) {
+  let sum = 0;
+  for (let i = 0; i < n; i++) { let b = i + 1; sum += add(i)(b); }
+  return sum;
+}
+eq('numeric local slot hot', numericLocalFast(10000), 100000000);
+
+function deferredErrorCaught(b) {
+  try { return notfn(1)(b); } catch (e) { return e instanceof TypeError ? b : -1; }
+}
+{ let sum = 0; for (let i = 0; i < 10000; i++) sum += deferredErrorCaught(i); eq('deferred slot error enters catch', sum, 49995000); }
+
+const takeSecond = (a) => (b) => b;
+function builderSlotFast() {
+  let b = '';
+  for (let i = 0; i < 200; i++) b += 'x';
+  return takeSecond(0)(b).length;
+}
+eq('deferred builder slot fast path', builderSlotFast(), 200);
+
+function builderSlotGeneric() {
+  let b = '';
+  for (let i = 0; i < 200; i++) b += 'x';
+  function X(a) { b += 'z'; return y => y.length; }
+  return X(0)(b);
+}
+eq('deferred builder slot generic path', builderSlotGeneric(), 201);
+{ let sum = 0; for (let i = 0; i < 1000; i++) sum += builderSlotFast() + builderSlotGeneric(); eq('deferred builder slots hot', sum, 401000); }
 
 // closure identity: intermediates must be distinct fresh closures when observed
 const step = (a) => (b) => a + b;

@@ -251,6 +251,13 @@ ant_value_t jit_helper_call_call(
   return sv_op_call_call(vm, js, base[0], base + 1, (int)n1, base + 1 + n1, (int)n2);
 }
 
+ant_value_t jit_helper_call_call_slot(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t arg1, ant_value_t *slot
+) {
+  return sv_op_call_call_slot_ptr(vm, js, func, arg1, slot);
+}
+
 ant_value_t jit_helper_apply(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,

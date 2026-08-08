@@ -282,7 +282,9 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
 }
 
 /* OP_CALL_CALL: `X(a)(b...)` where the compiler proved the outer args are
-   effect-free local/literal reads (so pre-evaluating them is unobservable).
+   literal or const-local reads (so pre-evaluating them is unobservable).
+   OP_CALL_CALL_SLOT uses the same fast path but carries one outer local as a
+   deferred frame-slot read for the generic path.
    When X is a curried step — body exactly `CLOSURE k; RETURN`, one param —
    with a fusable leaf child, the step's only effect is materializing the
    intermediate closure; skip it and run the child directly against a
@@ -296,9 +298,10 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
 extern uint64_t sv_stat_call_call_fused;
 extern uint64_t sv_stat_call_call_generic;
 
-static inline ant_value_t sv_op_call_call(
+static inline bool sv_op_call_call_fused(
   sv_vm_t *vm, ant_t *js, ant_value_t xv,
-  ant_value_t *args1, int n1, ant_value_t *args2, int n2
+  ant_value_t *args1, int n1, ant_value_t *args2, int n2,
+  bool materialize_args2, ant_value_t *result_out
 ) {
 #ifdef ANT_JIT
   if (n1 == 1 && vtype(xv) == T_FUNC) {
@@ -316,11 +319,31 @@ static inline ant_value_t sv_op_call_call(
          everything below it) — measured 2x slower on newt than just
          allocating the intermediate. Cold children take the generic path,
          which is exactly what warms them up. */
-      if (!f2->jit_code) goto cc_generic;
+      if (!f2->jit_code) return false;
 
-      if (sv_check_c_stack_overflow(js))
-        return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK,
+      /* A deferred slot carries a raw string-builder value. Once these
+         guards succeed, skipping X is unobservable, so materialize at the
+         point the ordinary outer argument read would occur. Eager
+         OP_CALL_CALL arguments were already materialized by GET_LOCAL. */
+      if (materialize_args2) {
+        for (int i = 0; i < n2; i++) {
+          ant_value_t value = args2[i];
+          if (vtype(value) == T_STR && str_is_heap_builder(value)) {
+            value = sv_string_builder_read_value(js, value);
+            if (is_err(value)) {
+              *result_out = value;
+              return true;
+            }
+            args2[i] = value;
+          }
+        }
+      }
+
+      if (sv_check_c_stack_overflow(js)) {
+        *result_out = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK,
           "Maximum call stack size exceeded");
+        return true;
+      }
 
       sv_upvalue_t cell;
       cell.location = &cell.closed;
@@ -371,16 +394,90 @@ static inline ant_value_t sv_op_call_call(
         result = sv_call_closure(vm, js, &fake, xv, &ctx, NULL);
       }
       sv_vm_maybe_checkpoint_microtasks(js);
-      return result;
+      *result_out = result;
+      return true;
     }
   }
-
-cc_generic:;
+#else
+  (void)vm;
+  (void)js;
+  (void)xv;
+  (void)args1;
+  (void)n1;
+  (void)args2;
+  (void)n2;
+  (void)materialize_args2;
+  (void)result_out;
 #endif
+  return false;
+}
+
+static inline ant_value_t sv_op_call_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t xv,
+  ant_value_t *args1, int n1, ant_value_t *args2, int n2
+) {
+  ant_value_t result;
+  if (sv_op_call_call_fused(
+        vm, js, xv, args1, n1, args2, n2, false, &result))
+    return result;
   sv_stat_call_call_generic++;
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, n1, NULL, false);
   if (is_err(r)) return r;
   return sv_vm_call(vm, js, r, js_mkundef(), args2, n2, NULL, false);
+}
+
+/* Interpreter form: frame storage may move while the inner call runs, so the
+   slot address is reacquired before evaluating the outer argument. */
+static inline ant_value_t sv_op_call_call_slot(
+  sv_vm_t *vm, ant_t *js, ant_value_t xv, ant_value_t arg1,
+  uint16_t slot_idx
+) {
+  ant_value_t args1[1] = {arg1};
+  sv_frame_t *frame = vm->fp >= 0 ? &vm->frames[vm->fp] : NULL;
+  ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
+  ant_value_t arg2 = slot ? *slot : js_mkundef();
+  ant_value_t result;
+  if (sv_op_call_call_fused(
+        vm, js, xv, args1, 1, &arg2, 1, true, &result))
+    return result;
+
+  sv_stat_call_call_generic++;
+  ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, false);
+  if (is_err(r)) return r;
+
+  frame = vm->fp >= 0 ? &vm->frames[vm->fp] : NULL;
+  slot = sv_frame_slot_ptr(frame, slot_idx);
+  arg2 = slot ? *slot : js_mkundef();
+  if (vtype(arg2) == T_STR && str_is_heap_builder(arg2)) {
+    arg2 = sv_string_builder_read_value(js, arg2);
+    if (is_err(arg2)) return arg2;
+  }
+  return sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, false);
+}
+
+/* JIT form: captured/writable slots live in stable JIT frame storage; an
+   uncaptured local is materialized into a temporary slot because a nested
+   call cannot mutate it. */
+static inline ant_value_t sv_op_call_call_slot_ptr(
+  sv_vm_t *vm, ant_t *js, ant_value_t xv, ant_value_t arg1,
+  ant_value_t *slot
+) {
+  ant_value_t args1[1] = {arg1};
+  ant_value_t arg2 = slot ? *slot : js_mkundef();
+  ant_value_t result;
+  if (sv_op_call_call_fused(
+        vm, js, xv, args1, 1, &arg2, 1, true, &result))
+    return result;
+
+  sv_stat_call_call_generic++;
+  ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, false);
+  if (is_err(r)) return r;
+  arg2 = slot ? *slot : js_mkundef();
+  if (vtype(arg2) == T_STR && str_is_heap_builder(arg2)) {
+    arg2 = sv_string_builder_read_value(js, arg2);
+    if (is_err(arg2)) return arg2;
+  }
+  return sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, false);
 }
 
 #endif
