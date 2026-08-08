@@ -642,7 +642,8 @@ static inline bool sv_try_put_field_fast(
 }
 
 static inline bool sv_is_proto_atom(const sv_atom_t *a) {
-  return a && a->len == STR_PROTO_LEN && memcmp(a->str, STR_PROTO, STR_PROTO_LEN) == 0;
+  return a && a->len == sizeof("__proto__") - 1 &&
+    memcmp(a->str, "__proto__", sizeof("__proto__") - 1) == 0;
 }
 
 static inline void sv_ic_set_add_transition(

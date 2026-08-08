@@ -38,7 +38,8 @@ export function targets() {
     'test_jit_osr_entry_reject.cjs',
     'test_double_bind.cjs',
     'test_numeric_literal_keys.cjs',
-    'test_property_delete_compaction.cjs'
+    'test_property_delete_compaction.cjs',
+    'test_rope_large_property_concat.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

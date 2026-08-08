@@ -24,6 +24,7 @@ static uint32_t gc_major_pool_growth_x256 = 384;
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
 static bool gc_use_nursery_major_floor = true;
+static bool gc_rope_minor_marking = false;
 
 static uint64_t gc_now_ms(void) {
   struct timespec ts;
@@ -39,11 +40,15 @@ static size_t gc_scaled_threshold(size_t base_live, uint32_t growth_x256, size_t
 
 static size_t gc_pool_live_bytes(ant_t *js) {
   ant_pool_stats_t rope_stats = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t rope_young_stats = js_pool_stats(&js->rope_gc.young);
+  ant_pool_stats_t rope_old_stats = js_pool_stats(&js->rope_gc.old);
   ant_pool_stats_t symbol_stats = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t bigint_stats = js_class_pool_stats(&js->pool.bigint);
   ant_string_pool_stats_t string_stats = js_string_pool_stats(&js->pool.string);
 
   return rope_stats.used
+    + rope_young_stats.used
+    + rope_old_stats.used
     + symbol_stats.used
     + bigint_stats.used
     + string_stats.total.used;
@@ -117,16 +122,41 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
   }
 }
 
-static void gc_mark_str(ant_t *js, ant_value_t v) {
+static bool gc_mark_str_stack_push(
+  ant_value_t **stack, size_t *sp, size_t *cap,
+  ant_value_t *local, ant_value_t value
+) {
+  if (*sp == *cap) {
+    size_t next_cap = *cap * 2u;
+    ant_value_t *next = *stack == local
+      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
+      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
+    if (!next) return false;
+    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
+    *stack = next;
+    *cap = next_cap;
+  }
+  (*stack)[(*sp)++] = value;
+  return true;
+}
+
+static void gc_mark_str(ant_t *js, ant_value_t root) {
   static const void *dispatch[] = {
     [STR_HEAP_TAG_FLAT] = &&l_flat,
     [STR_HEAP_TAG_ROPE] = &&l_rope,
     [STR_HEAP_TAG_BUILDER] = &&l_builder,
   };
 
-  if (v <= NANBOX_PREFIX) return;
+  enum { GC_STR_LOCAL_STACK = 32 };
+  ant_value_t local[GC_STR_LOCAL_STACK];
+  ant_value_t *stack = local;
+  size_t sp = 0, cap = GC_STR_LOCAL_STACK;
+  ant_value_t v = root;
+
+  l_next:
+  if (v <= NANBOX_PREFIX) goto l_pop;
   uint8_t t = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
-  if (t != T_STR) return;
+  if (t != T_STR) goto l_pop;
 
   uintptr_t data = (uintptr_t)(v & NANBOX_DATA_MASK);
   uintptr_t tag = data & STR_HEAP_TAG_MASK;
@@ -137,49 +167,94 @@ static void gc_mark_str(ant_t *js, ant_value_t v) {
 
   l_rope: {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!gc_ropes_contains(rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) return;
-    if (!gc_ropes_mark(rope)) return;
-    gc_mark_str(js, rope->left);
-    gc_mark_str(js, rope->right);
-    gc_mark_str(js, rope->cached);
-    return;
+    if (!gc_ropes_contains(js, rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) goto l_pop;
+    if (!gc_ropes_mark(js, rope)) goto l_pop;
+
+    if (vtype(rope->cached) == T_STR) {
+      v = rope->cached;
+      goto l_next;
+    }
+
+    /* Visit the short right leaf first. Repeated append is left-heavy, so the
+       pending stack remains one entry instead of growing with rope depth. */
+    if (!gc_mark_str_stack_push(&stack, &sp, &cap, local, rope->left)) {
+      /* Allocation failure is exceptional; recursive fallback preserves GC
+         correctness while the normal deep-append shape stays iterative. */
+      gc_mark_str(js, rope->left);
+    }
+    v = rope->right;
+    goto l_next;
   }
 
   l_builder: {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
-    if (!gc_ropes_contains(builder, sizeof(*builder), _Alignof(ant_string_builder_t))) return;
-    if (!gc_ropes_mark(builder)) return;
+    if (!gc_ropes_contains(js, builder, sizeof(*builder), _Alignof(ant_string_builder_t))) goto l_pop;
+    if (!gc_ropes_mark(js, builder)) goto l_pop;
     gc_mark_str(js, builder->snapshot);
     gc_mark_value(js, builder->cached);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
-      if (!gc_ropes_contains(chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
-      if (gc_ropes_mark(chunk)) gc_mark_value(js, chunk->value);
+      if (!gc_ropes_contains(js, chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
+      if (gc_ropes_mark(js, chunk)) gc_mark_value(js, chunk->value);
     }
-    return;
+    goto l_pop;
   }
 
   l_flat:
-    if (data) gc_strings_mark(js, (const void *)data);
+    if (data && !gc_rope_minor_marking)
+      gc_strings_mark(js, (const void *)data);
+  l_pop:
+    if (sp > 0) {
+      v = stack[--sp];
+      goto l_next;
+    }
+    if (stack != local) free(stack);
     return;
 }
 
 uint64_t gc_stat_major_total;
 
+void gc_remember_builder(ant_t *js, ant_string_builder_t *builder) {
+  if (!js || !builder || builder->in_remember_set) return;
+  if (js->rope_gc.remembered_builder_len >= js->rope_gc.remembered_builder_cap) {
+    size_t cap = js->rope_gc.remembered_builder_cap
+      ? js->rope_gc.remembered_builder_cap * 2u : 64u;
+    ant_string_builder_t **items = (ant_string_builder_t **)realloc(
+      js->rope_gc.remembered_builders, cap * sizeof(*items)
+    );
+    if (!items) {
+      js->gc_remember_overflow = true;
+      return;
+    }
+    js->rope_gc.remembered_builders = items;
+    js->rope_gc.remembered_builder_cap = cap;
+  }
+  builder->in_remember_set = 1;
+  js->rope_gc.remembered_builders[js->rope_gc.remembered_builder_len++] = builder;
+}
+
+static void gc_clear_remembered_builders(ant_t *js) {
+  for (size_t i = 0; i < js->rope_gc.remembered_builder_len; i++)
+    js->rope_gc.remembered_builders[i]->in_remember_set = 0;
+  js->rope_gc.remembered_builder_len = 0;
+}
+
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+  if (!gc_ropes_begin(js, false)) return;
+
   gc_stat_major_total++;
   size_t live_before = js->obj_arena.live_count;
 
   gc_bigints_begin(js);
   gc_strings_begin(js);
-  gc_ropes_begin(js);
   gc_objects_run(js, gc_mark_str);
+  gc_clear_remembered_builders(js);
   ant_ic_epoch_bump();
   ant_ic_obj_epoch_bump();
 
   gc_bigints_sweep(js);
   gc_strings_sweep(js);
-  gc_ropes_sweep(js);
+  gc_ropes_sweep(js, false);
 
   js->gc_last_live = js->obj_arena.live_count;
   js->old_live_count = js->obj_arena.live_count;
@@ -187,6 +262,7 @@ void gc_run(ant_t *js) {
 
   js->gc_pool_last_live = gc_pool_live_bytes(js);
   js->gc_pool_alloc = 0;
+  js->rope_gc.young_alloc = 0;
   js->gc_closure_alloc = 0;
   js->gc_closure_at_minor = 0;
   js->gc_closure_wm_at_major = js->closure_arena.watermark;
@@ -206,6 +282,7 @@ void gc_run_minor(ant_t *js) {
     gc_run(js);
     return;
   }
+  if (!gc_ropes_begin(js, true)) return;
 
   static int log_minors = -1;
   if (__builtin_expect(log_minors < 0, 0)) log_minors = getenv("ANT_GC_LOG") != NULL;
@@ -220,7 +297,13 @@ void gc_run_minor(ant_t *js) {
   size_t live_before  = js->obj_arena.live_count;
   size_t young_before = live_before > old_before ? live_before - old_before : 0;
 
-  gc_objects_run_minor(js, NULL);
+  gc_rope_minor_marking = true;
+  for (size_t i = 0; i < js->rope_gc.remembered_builder_len; i++)
+    gc_mark_str(js, ant_mkbuilder_value(js->rope_gc.remembered_builders[i]));
+  gc_objects_run_minor(js, gc_mark_str);
+  gc_rope_minor_marking = false;
+  gc_clear_remembered_builders(js);
+  gc_ropes_sweep(js, true);
 
   if (log_minors) {
     struct timespec log_t1;
@@ -266,6 +349,7 @@ void gc_maybe(ant_t *js) {
     ? js->gc_closure_alloc - js->gc_closure_at_minor : 0;
 
   if (young_count >= gc_nursery_threshold ||
+      js->rope_gc.young_alloc >= GC_ROPE_NURSERY_THRESHOLD ||
       closure_young >= GC_CLOSURE_NURSERY_THRESHOLD) {
     gc_tick = 0;
     size_t live_before_minor = js->obj_arena.live_count;

@@ -2042,51 +2042,71 @@ static inline void builder_set_cached_flat(ant_value_t builder, ant_value_t flat
   ptr->cached = flat;
 }
 
-static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset_t *pos) {
+static bool rope_flatten_stack_push(
+  ant_value_t **stack, size_t *sp, size_t *cap,
+  ant_value_t *local, ant_value_t value
+) {
+  if (*sp == *cap) {
+    size_t next_cap = *cap * 2u;
+    ant_value_t *next = *stack == local
+      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
+      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
+    if (!next) return false;
+    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
+    *stack = next;
+    *cap = next_cap;
+  }
+  (*stack)[(*sp)++] = value;
+  return true;
+}
+
+/* Repeated append produces a left-heavy tree. Walk it right-to-left and write
+   backwards so that shape needs only one pending node instead of one entry per
+   append. Balanced and right-heavy trees spill into a growable stack. */
+static bool rope_flatten_into(
+  ant_t *js, ant_value_t str, char *dest, ant_offset_t total_len
+) {
   assert(vtype(str) == T_STR);
-  
-  if (!str_is_heap_rope(str)) {
-    const char *sptr;
-    ant_offset_t slen = assert_flat_string_len(str, &sptr);
-    memcpy(dest + *pos, sptr, slen);
-    *pos += slen; return;
-  }
-  
-  ant_value_t cached = rope_cached_flat(str);
-  if (vtype(cached) == T_STR && !str_is_heap_rope(cached)) {
-    const char *cptr;
-    ant_offset_t clen = assert_flat_string_len(cached, &cptr);
-    memcpy(dest + *pos, cptr, clen);
-    *pos += clen; return;
-  }
-  
-  ant_value_t stack[ROPE_MAX_DEPTH + 8];
-  int sp = 0; stack[sp++] = str;
-  
-  while (sp > 0) {
-    ant_value_t node = stack[--sp];
-    assert(vtype(node) == T_STR);
-    
-    if (!str_is_heap_rope(node)) {
-      const char *sptr;
-      ant_offset_t slen = assert_flat_string_len(node, &sptr);
-      memcpy(dest + *pos, sptr, slen);
-      *pos += slen; continue;
+  (void)js;
+
+  enum { ROPE_FLATTEN_LOCAL_STACK = 32 };
+  ant_value_t local[ROPE_FLATTEN_LOCAL_STACK];
+  ant_value_t *stack = local;
+  size_t sp = 0, cap = ROPE_FLATTEN_LOCAL_STACK;
+  ant_offset_t pos = total_len;
+  ant_value_t current = str;
+
+  for (;;) {
+    while (str_is_heap_rope(current)) {
+      ant_value_t cached = rope_cached_flat(current);
+      if (vtype(cached) == T_STR && !str_is_heap_rope(cached)) {
+        current = cached;
+        break;
+      }
+
+      ant_value_t left = rope_left(current);
+      current = rope_right(current);
+      if (!rope_flatten_stack_push(&stack, &sp, &cap, local, left)) {
+        if (stack != local) free(stack);
+        return false;
+      }
     }
-    
-    ant_value_t c = rope_cached_flat(node);
-    if (vtype(c) == T_STR && !str_is_heap_rope(c)) {
-      const char *cptr;
-      ant_offset_t clen = assert_flat_string_len(c, &cptr);
-      memcpy(dest + *pos, cptr, clen);
-      *pos += clen; continue;
+
+    const char *src;
+    ant_offset_t len = assert_flat_string_len(current, &src);
+    if (len > pos) {
+      if (stack != local) free(stack);
+      return false;
     }
-    
-    if (sp + 2 <= ROPE_MAX_DEPTH + 8) {
-      stack[sp++] = rope_right(node);
-      stack[sp++] = rope_left(node);
-    }
+    pos -= len;
+    memcpy(dest + pos, src, (size_t)len);
+
+    if (sp == 0) break;
+    current = stack[--sp];
   }
+
+  if (stack != local) free(stack);
+  return pos == 0;
 }
 
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
@@ -2113,14 +2133,15 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   }
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)(uintptr_t)vdata(flat);
-  ant_offset_t pos = 0;
-  
-  rope_flatten_into(js, rope, flat_ptr->bytes, &pos);
-  flat_ptr->bytes[pos] = '\0';
+  if (!rope_flatten_into(js, rope, flat_ptr->bytes, total_len)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "string flatten failed");
+  }
+  flat_ptr->bytes[total_len] = '\0';
   
   str_flat_init_meta(
     flat_ptr,
-    str_detect_ascii_bytes(flat_ptr->bytes, (size_t)pos)
+    str_detect_ascii_bytes(flat_ptr->bytes, (size_t)total_len)
   );
   
   if (vtype(cached) == T_NUM)
@@ -3141,12 +3162,20 @@ ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
 }
 
 static ant_value_t js_mkrope(ant_t *js, ant_value_t left, ant_value_t right, ant_offset_t total_len, uint16_t depth) {
-  ant_rope_heap_t *rope = (ant_rope_heap_t *)js_type_alloc(
-    js, ANT_ALLOC_ROPE, sizeof(*rope), _Alignof(ant_rope_heap_t)
-  );
+  if (js->rope_gc.young_alloc >= GC_ROPE_NURSERY_THRESHOLD) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, left);
+    GC_ROOT_PIN(js, right);
+    gc_pressure(js);
+    GC_ROOT_RESTORE(js, root_mark);
+  }
+
+  ant_rope_heap_t *rope = js_rope_alloc(js);
   if (!rope) return js_mkerr(js, "oom");
   rope->len = total_len;
   rope->depth = depth;
+  rope->flags = ANT_ROPE_FLAG_YOUNG;
+  rope->mark_epoch = 0;
   rope->left = left;
   rope->right = right;
   rope->cached = js_mkundef();
@@ -4987,12 +5016,16 @@ typedef struct {
 
 // TODO: make cleaner
 static ant_offset_t rope_utf16_len_lazy(ant_t *js, ant_value_t root) {
+  if (rope_depth(root) == UINT16_MAX) {
+    ant_value_t flat = rope_flatten(js, root);
+    return is_err(flat) ? 0 : flat_utf16_len(ant_str_flat_ptr(flat));
+  }
+
   enum { ROPE_UTF16_LOCAL_FRAMES = 64 };
   rope_utf16_frame_t local_frames[ROPE_UTF16_LOCAL_FRAMES];
   rope_utf16_frame_t *frames = local_frames;
   
   size_t frame_cap = ROPE_UTF16_LOCAL_FRAMES;
-  size_t max_frames = (size_t)rope_depth(root) + 1u;
   size_t sp = 0;
   
   ant_value_t current = root;
@@ -5009,14 +5042,19 @@ static ant_offset_t rope_utf16_len_lazy(ant_t *js, ant_value_t root) {
     else if (vtype(cached) == T_STR) result = str_utf16_len(js, cached);
     else {
       if (sp == frame_cap) {
-        rope_utf16_frame_t *expanded = malloc(max_frames * sizeof(*expanded));
+        size_t next_cap = frame_cap * 2u;
+        rope_utf16_frame_t *expanded = frames == local_frames
+          ? (rope_utf16_frame_t *)malloc(next_cap * sizeof(*expanded))
+          : (rope_utf16_frame_t *)realloc(frames, next_cap * sizeof(*expanded));
         if (!expanded) {
           ant_value_t flat = rope_flatten(js, root);
+          if (is_err(flat)) return 0;
           return flat_utf16_len(ant_str_flat_ptr(flat));
         }
-        memcpy(expanded, frames, sp * sizeof(*expanded));
+        if (frames == local_frames)
+          memcpy(expanded, frames, sp * sizeof(*expanded));
         frames = expanded;
-        frame_cap = max_frames;
+        frame_cap = next_cap;
       }
       frames[sp++] = (rope_utf16_frame_t){
         .rope = rope,
@@ -5078,37 +5116,34 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
     
     if (n2 == 0) return l;
     if (n1 == 0) return r;
-    
-    uint16_t left_depth = (vtype(l) == T_STR && str_is_heap_rope(l)) ? rope_depth(l) : 0;
-    uint16_t right_depth = (vtype(r) == T_STR && str_is_heap_rope(r)) ? rope_depth(r) : 0;
-    unsigned int new_depth = (unsigned int)(left_depth > right_depth ? left_depth : right_depth) + 1u;
-    
-    if (new_depth >= ROPE_MAX_DEPTH) {
-      ant_value_t flat_l = l, flat_r = r;
-      if (str_is_heap_rope(l)) flat_l = rope_flatten(js, l);
-      if (is_err(flat_l)) return flat_l;
-      if (str_is_heap_rope(r)) flat_r = rope_flatten(js, r);
-      if (is_err(flat_r)) return flat_r;
-      
-      ant_offset_t off1, off2, len1, len2;
-      off1 = vstr(js, flat_l, &len1);
-      off2 = vstr(js, flat_r, &len2);
-      
-      string_builder_t sb;
-      char static_buffer[512];
-      string_builder_init(&sb, static_buffer, sizeof(static_buffer));
-      
-      if (
-        !string_builder_append(&sb, (char *)(uintptr_t)(off1), len1) ||
-        !string_builder_append(&sb, (char *)(uintptr_t)(off2), len2)
-      ) {
-        string_builder_dispose(&sb);
-        return js_mkerr(js, "string concatenation failed");
+
+    /* Match V8's short-cons policy: copying tiny flat concatenations avoids
+       allocating and later walking a rope whose metadata exceeds its text. */
+    if (total_len < 13 && !str_is_heap_rope(l) && !str_is_heap_rope(r)) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, l);
+      GC_ROOT_PIN(js, r);
+      ant_value_t flat = js_mkstr(js, NULL, (size_t)total_len);
+      if (!is_err(flat)) {
+        ant_flat_string_t *out = ant_str_flat_ptr(flat);
+        ant_flat_string_t *left = ant_str_flat_ptr(l);
+        ant_flat_string_t *right = ant_str_flat_ptr(r);
+        memcpy(out->bytes, left->bytes, (size_t)n1);
+        memcpy(out->bytes + n1, right->bytes, (size_t)n2);
+        out->bytes[total_len] = '\0';
+        str_flat_init_meta(
+          out, str_detect_ascii_bytes(out->bytes, (size_t)total_len)
+        );
       }
-      
-      return string_builder_finalize(js, &sb);
+      GC_ROOT_RESTORE(js, root_mark);
+      return flat;
     }
     
+    uint16_t left_depth = str_is_heap_rope(l) ? rope_depth(l) : 0;
+    uint16_t right_depth = str_is_heap_rope(r) ? rope_depth(r) : 0;
+    unsigned int new_depth = (unsigned int)(left_depth > right_depth ? left_depth : right_depth) + 1u;
+
+    if (new_depth > UINT16_MAX) new_depth = UINT16_MAX;
     return js_mkrope(js, l, r, total_len, (uint16_t)new_depth);
   }
   
@@ -17326,7 +17361,10 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   ant_value_t proto_getter = js_mkfun(builtin_proto_getter);
   ant_value_t proto_setter = js_mkfun(builtin_proto_setter);
-  js_set_accessor_desc(js, object_proto, STR_PROTO, STR_PROTO_LEN, proto_getter, proto_setter, JS_DESC_C);
+  js_set_accessor_desc(
+    js, object_proto, "__proto__", sizeof("__proto__") - 1,
+    proto_getter, proto_setter, JS_DESC_C
+  );
   
   ant_value_t function_proto_obj = js_mkobj(js);
   set_proto(js, function_proto_obj, object_proto);
@@ -17908,6 +17946,14 @@ void js_destroy(ant_t *js) {
   js->remembered_closures = NULL;
   js->remembered_closure_len = js->remembered_closure_cap = 0;
 
+  free(js->rope_gc.remembered_builders);
+  js->rope_gc.remembered_builders = NULL;
+  js->rope_gc.remembered_builder_len = js->rope_gc.remembered_builder_cap = 0;
+
+  free(js->rope_gc.marks);
+  js->rope_gc.marks = NULL;
+  js->rope_gc.mark_count = js->rope_gc.mark_cap = 0;
+
   free(js->young_closures);
   js->young_closures = NULL;
   js->young_closure_len = js->young_closure_cap = 0;
@@ -17944,6 +17990,8 @@ void js_destroy(ant_t *js) {
   js->cfunc_name_cache.len = js->cfunc_name_cache.cap = 0;
 
   js_pool_destroy(&js->pool.rope);
+  js_pool_destroy(&js->rope_gc.young);
+  js_pool_destroy(&js->rope_gc.old);
   js_pool_destroy(&js->pool.symbol);
   js_pool_destroy(&js->pool.permanent);
   

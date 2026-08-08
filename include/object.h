@@ -114,6 +114,10 @@ typedef union ant_object_flags {
   uint8_t bytes[2];
 } ant_object_flags_t;
 
+#define ANT_OBJECT_FLAG_EXOTIC        (1u << 3)
+#define ANT_OBJECT_FLAG_GENERATION    (1u << 10)
+#define ANT_OBJECT_FLAG_REMEMBERED    (1u << 11)
+
 static_assert(
   sizeof(ant_object_flags_t) == 2,
   "ant_object_flags_t must cover the packed object bitfields"

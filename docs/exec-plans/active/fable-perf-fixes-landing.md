@@ -1423,6 +1423,72 @@ focused mixed rope/builder probe at stress 1/3 and the full spec 3712/0 at
 stress 10. Both the stress hook and string counters were removed before the
 final rebuild and MD5 pin.
 
+**Large-AST rope/JIT follow-up — iterative ropes, young allocation, direct
+string ADD, and guarded PUT_FIELD FIXED, 2026-08-07.** The remaining
+`todo/tests/ytdlp.js` generation cost was a retained output rope built by about
+1.4 million small property appends. The old defensive depth limit repeatedly
+flattened deep ropes. Removing that limit and writing a reverse iterative
+flatten reduced the pinned full workload from **5.10/5.12s** to
+**3.32/3.33s**. GC rope traversal is now iterative as well, so deep append
+trees no longer consume the C stack.
+
+Rope nodes now allocate in a per-isolate 8 MiB young pool. Minor collections
+trace young ropes from roots, remembered old objects, and mutable builders;
+live blocks promote and dead blocks recycle. The nursery improved the same
+pinned workload from **3.34/3.23s** to **3.04/3.03s**. Temporary whole-run
+logging showed six rope-pressure minors at roughly 8 MiB each and only two
+object-live majors on the full workload. Those diagnostic counters and their
+extra `ANT_GC_LOG` output were removed after validation.
+
+All rope mark metadata is owned by the isolate. An initial OOM fallback used a
+process-global isolate pointer and singleton fallback record; it was rejected.
+It also failed when the first mark-table allocation returned null because an
+early zero-count return bypassed linear lookup. The final design passes `js`
+explicitly into rope lookup/mark operations, counts the isolate's rope blocks,
+and reserves the complete table before changing any mark-cycle state. If that
+single reservation fails, collection returns before marking or sweeping and
+therefore conservatively retains every rope block. `rope_mark_find` remains a
+pure binary search with no pool-walking fallback. Four worker isolates
+concurrently build past the nursery threshold, collect, and materialize ropes
+in the worker-thread regression.
+
+At typed string-only `ADD` sites, generated code now loads flat/rope lengths,
+applies the 13-byte short-string policy, and bump-allocates a young rope from an
+existing pool block. Block allocation and collection remain in the C fallback.
+A monomorphic guarded `PUT_FIELD` emitter validates epoch, receiver shape,
+own-holder identity, slot bounds, exotic state, and the young-rope write
+barrier before writing the cached in-object or overflow slot. A 10-million
+property-append micro improved from **0.76/0.74s** to **0.68/0.67s**. The same
+primitives are available to inline emission; a separate fused
+`GET_FIELD + ADD + PUT_FIELD` path was not added because the inline-only
+differential was flat.
+
+Final clean pinned identities are pre-follow-up `/tmp/ant_rope_base_bin`
+(`b9e99b4851622afc9b51f644cdcb6180`) and per-isolate final
+`/tmp/ant_rope_final_bin` (`ec8ecbe1ce2f85ec50b91fb7304d4ffb`). Two clean
+AB/BA rounds measured **5.04/5.04s** before versus **3.14/3.13s** after
+(**−37.8%**) with checksum
+`3a8b0cfae9bd6f3499333e6da5aed0ac8c5f68ac` in every run. The final
+per-isolate ownership change was itself flat against the rejected global-state
+pin: **3.04/3.07s** versus **3.00/3.04s**.
+
+Filtered `tests/bench.js` AB/BA rows confirm the intended composition:
+`prop_write` **3.51/3.54ns → 1.58/1.58ns**, `prop_update`
+**4.92/4.85ns → 2.94/2.96ns**, `string_build1`
+**6.83/6.74ns → 2.70/2.69ns**, and `string_build2`
+**6.92/6.84ns → 2.76/2.83ns**. `array_push` and `array_for_of` appear about
+10--14% lower only in stale-profile local builds: no-rope and no-minor-tracing
+differential binaries reproduce the same result, while the compiler reports
+the untouched functions' checked-in PGO counts discarded after translation
+unit changes. Regenerate PGO at release time; do not special-case array code.
+
+Final gates after the per-isolate refactor: spec **3713/0** (one new concurrent
+worker assertion), JIT **9/0**, harness **175/0** (hono 34,552, express 18,988,
+h3 22,201, elysia 63,709 RPS), devirt fuzz all four seeds agree, and newt Main
+**41.516s** / **41.87s wall** / **779,829,248-byte max RSS**. The earlier
+temporary GC-stress pass covered focused rope/builder tests at stress 1/3 and
+the full spec at stress 10; the hook is absent from the final tree.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

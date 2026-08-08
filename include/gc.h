@@ -25,6 +25,7 @@ static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR    = 262144;
 static constexpr size_t GC_CLOSURE_MAJOR_GROWTH      = 16u * 1024u * 1024u;
 
 static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
+static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(T_OBJ) \
   | T_FLAG_FIND(T_ARR)                       \
@@ -49,6 +50,7 @@ void gc_remember_add(ant_t *js, ant_object_t *obj);
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value);
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv);
 void gc_remember_closure(ant_t *js, struct sv_closure *c);
+void gc_remember_builder(ant_t *js, ant_string_builder_t *builder);
 void gc_track_young_closure_slow(ant_t *js, struct sv_closure *c);
 void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv);
 
@@ -64,12 +66,15 @@ gc_func_mark_profile_t gc_func_mark_profile_get(void);
 static inline bool gc_value_is_heap_ref(ant_value_t v) {
   if (v <= NANBOX_PREFIX) return false;
   uint8_t type = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
-  return type == T_FUNC || (((1u << type) & GC_OBJ_TYPE_MASK) != 0);
+  return type == T_FUNC || type == T_STR || (((1u << type) & GC_OBJ_TYPE_MASK) != 0);
 }
 
 static inline bool gc_value_ref_is_young(ant_value_t v) {
   uint8_t type = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
   if (type == T_FUNC) return true;
+  if (type == T_STR)
+    return str_is_heap_rope(v) &&
+      (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
   ant_object_t *ref = (ant_object_t *)(uintptr_t)(v & NANBOX_DATA_MASK);
   return ref && ref->flags.generation == 0;
 }

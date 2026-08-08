@@ -618,6 +618,9 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
   }
 
   builder->snapshot = result;
+  if (str_is_heap_rope(result) &&
+      (ant_str_rope_ptr(result)->flags & ANT_ROPE_FLAG_YOUNG) != 0)
+    gc_remember_builder(js, builder);
   builder->head = NULL;
   builder->chunk_tail = NULL;
   builder->tail_len = 0;

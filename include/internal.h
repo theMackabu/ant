@@ -64,7 +64,6 @@ static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
 static constexpr int JS_ERR_NO_STACK       = 1 << 8;
-static constexpr int ROPE_MAX_DEPTH        = 4096;
 static constexpr int MAX_STRINGIFY_DEPTH   = 64;
 static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
 static constexpr int MAX_MULTIREF_OBJS     = 128;
@@ -399,6 +398,22 @@ struct ant_isolate_t {
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;
+
+  /* Cold, rope-specific generation state lives at the tail so adding the
+     nursery does not perturb offsets of the isolate's hot allocation fields. */
+  struct {
+    ant_pool_t young;
+    ant_pool_t old;
+    size_t young_alloc;
+    struct gc_rope_mark *marks;
+    size_t mark_count;
+    size_t mark_cap;
+    uint32_t mark_epoch;
+    bool minor_marking;
+    ant_string_builder_t **remembered_builders;
+    size_t remembered_builder_len;
+    size_t remembered_builder_cap;
+  } rope_gc;
 };
 
 enum {
@@ -440,7 +455,7 @@ typedef struct ant_builder_chunk {
   ant_value_t value;
 } ant_builder_chunk_t;
 
-typedef struct {
+struct ant_string_builder {
   ant_offset_t len;
   ant_value_t snapshot; /* immutable prefix sealed by the last read */
   ant_builder_chunk_t *head;
@@ -448,8 +463,9 @@ typedef struct {
   ant_value_t cached;
   uint16_t tail_len;
   uint8_t ascii_state;
+  uint8_t in_remember_set;
   char tail[STR_BUILDER_TAIL_CAP];
-} ant_string_builder_t;
+};
 
 typedef struct {
   const char *ptr;

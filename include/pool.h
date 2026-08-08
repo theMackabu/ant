@@ -59,10 +59,14 @@ typedef struct ant_large_string_alloc {
 typedef struct {
   ant_offset_t len;
   uint16_t depth;
+  uint16_t flags;
+  uint32_t mark_epoch;
   ant_value_t left;
   ant_value_t right;
   ant_value_t cached;
 } ant_rope_heap_t;
+
+#define ANT_ROPE_FLAG_YOUNG 1u
 
 typedef struct {
   ant_large_string_alloc_t *live;
@@ -149,12 +153,15 @@ void *js_type_alloc(
   size_t size, size_t align
 );
 
+ant_rope_heap_t *js_rope_alloc(ant_t *js);
+
 void *pool_alloc_chain(
   ant_pool_block_t **head, ant_pool_block_t **free_head, 
   size_t block_size, size_t size, size_t align
 );
 
 ant_pool_stats_t js_pool_stats(ant_pool_t *pool);
+ant_pool_stats_t js_rope_pool_stats(ant_t *js);
 ant_pool_stats_t js_class_pool_stats(ant_class_pool_t *pool);
 ant_string_pool_stats_t js_string_pool_stats(ant_string_pool_t *pool);
 

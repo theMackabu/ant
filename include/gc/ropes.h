@@ -5,9 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-void gc_ropes_begin(ant_t *js);
-void gc_ropes_sweep(ant_t *js);
-bool gc_ropes_contains(const void *ptr, size_t size, size_t align);
-bool gc_ropes_mark(const void *ptr);
+bool gc_ropes_begin(ant_t *js, bool minor);
+void gc_ropes_sweep(ant_t *js, bool minor);
+bool gc_ropes_contains(ant_t *js, const void *ptr, size_t size, size_t align);
+bool gc_ropes_mark(ant_t *js, const void *ptr);
 
 #endif

@@ -525,7 +525,7 @@ static bool inspector_exception_description(ant_t *js, ant_value_t err, sbuf_t *
 static size_t inspector_heap_used(ant_t *js) {
   if (!js) return 0;
   ant_string_pool_stats_t strings = js_string_pool_stats(&js->pool.string);
-  ant_pool_stats_t ropes = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t ropes = js_rope_pool_stats(js);
   ant_pool_stats_t symbols = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t permanent = js_pool_stats(&js->pool.permanent);
   ant_pool_stats_t bigints = js_class_pool_stats(&js->pool.bigint);
@@ -540,7 +540,7 @@ static size_t inspector_heap_used(ant_t *js) {
 static size_t inspector_heap_total(ant_t *js) {
   if (!js) return 0;
   ant_string_pool_stats_t strings = js_string_pool_stats(&js->pool.string);
-  ant_pool_stats_t ropes = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t ropes = js_rope_pool_stats(js);
   ant_pool_stats_t symbols = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t permanent = js_pool_stats(&js->pool.permanent);
   ant_pool_stats_t bigints = js_class_pool_stats(&js->pool.bigint);

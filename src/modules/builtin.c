@@ -180,7 +180,7 @@ static ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_newobj(js);
   
-  ant_pool_stats_t rope_s = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t rope_s = js_rope_pool_stats(js);
   ant_pool_stats_t sym_s = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t bigint_s = js_class_pool_stats(&js->pool.bigint);
   ant_string_pool_stats_t string_s = js_string_pool_stats(&js->pool.string);
