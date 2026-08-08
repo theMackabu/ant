@@ -147,13 +147,32 @@ static inline sv_ic_entry_t *sv_ic_slot_for_ip(sv_func_t *func, uint8_t *ip) {
   return &func->ic_slots[ic_idx];
 }
 
-static inline void sv_ic_set_cached_shape(
-  sv_ic_entry_t *ic, ant_shape_t *shape
+static inline void sv_ic_set_shape_ref(
+  ant_t *js,
+  sv_ic_entry_t *ic,
+  ant_shape_t **slot,
+  uint8_t mask,
+  ant_shape_t *shape
 ) {
-  if (!ic || ic->cached_shape == shape) return;
+  /* Only property IC shape fields enter this registry. Other IC families
+     alias cached_shape with non-shape pointers and must never be released. */
+  if (!ic || !slot || *slot == shape) return;
+  if ((ic->shape_ref_mask & mask) == 0) {
+    if (!shape || !sv_ic_shape_ref_register(js, slot)) return;
+    ic->shape_ref_mask |= mask;
+  }
+
   if (shape) ant_shape_retain(shape);
-  if (ic->cached_shape) ant_shape_release(ic->cached_shape);
-  ic->cached_shape = shape;
+  if (*slot) ant_shape_release(*slot);
+  *slot = shape;
+}
+
+static inline void sv_ic_set_cached_shape(
+  ant_t *js, sv_ic_entry_t *ic, ant_shape_t *shape
+) {
+  sv_ic_set_shape_ref(
+    js, ic, &ic->cached_shape, SV_IC_SHAPE_REF_CACHED, shape
+  );
 }
 
 #define SV_GF_IC_PROTO_ID_MASK \
@@ -580,7 +599,7 @@ static inline bool sv_prim_ic_lookup(
   if (sv_ic_probe_get_chain(proto, a->str, &holder, &prop_idx, out)) {
     sv_ic_guard_absent_prefix(proto, holder);
     ic->cached_holder = holder;
-    sv_ic_set_cached_shape(ic, holder->shape);
+    sv_ic_set_cached_shape(js, ic, holder->shape);
     ic->cached_index = prop_idx;
     ic->cached_is_own = false;
     ic->guard.receiver_proto = mkval(pt, 0);
@@ -597,7 +616,7 @@ static inline bool sv_prim_ic_lookup(
     ant_shape_guard_absence(holder1->shape);
     ant_shape_guard_absence(shape2);
     ic->cached_holder = holder1;
-    sv_ic_set_cached_shape(ic, holder1->shape);
+    sv_ic_set_cached_shape(js, ic, holder1->shape);
     ic->cached_index = 0;
     ic->cached_is_own = false;
     ic->guard.receiver_proto = mkval(pt, 1);
@@ -634,7 +653,7 @@ static inline ant_value_t sv_prop_get_field_ic(
     uint32_t prop_idx = 0;
     ant_value_t out = js_mkundef();
     if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &out)) {
-      sv_ic_set_cached_shape(ic, ptr->shape);
+      sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_holder = holder;
       ic->guard.receiver_proto = ptr->proto;
       ic->cached_index = prop_idx;
@@ -722,6 +741,7 @@ static inline bool sv_is_proto_atom(const sv_atom_t *a) {
 }
 
 static inline void sv_ic_set_add_transition(
+  ant_t *js,
   sv_ic_entry_t *ic,
   ant_shape_t *from,
   ant_shape_t *to,
@@ -730,23 +750,12 @@ static inline void sv_ic_set_add_transition(
 ) {
   if (!ic) return;
 
-  if (ic->guard.add.from_shape != from) {
-    if (ic->guard.add.from_shape) ant_shape_release(ic->guard.add.from_shape);
-    ic->guard.add.from_shape = NULL;
-    if (from) {
-      ant_shape_retain(from);
-      ic->guard.add.from_shape = from;
-    }
-  }
-
-  if (ic->guard.add.to_shape != to) {
-    if (ic->guard.add.to_shape) ant_shape_release(ic->guard.add.to_shape);
-    ic->guard.add.to_shape = NULL;
-    if (to) {
-      ant_shape_retain(to);
-      ic->guard.add.to_shape = to;
-    }
-  }
+  sv_ic_set_shape_ref(
+    js, ic, &ic->guard.add.from_shape, SV_IC_SHAPE_REF_ADD_FROM, from
+  );
+  sv_ic_set_shape_ref(
+    js, ic, &ic->guard.add.to_shape, SV_IC_SHAPE_REF_ADD_TO, to
+  );
 
   ic->guard.add.slot = slot;
   ic->guard.add.epoch = epoch;
@@ -797,7 +806,7 @@ static inline ant_value_t sv_put_field_cached(
       }
       ant_object_prop_set_unchecked(ptr, ic->guard.add.slot, val);
       gc_write_barrier(js, ptr, val);
-      sv_ic_set_cached_shape(ic, ptr->shape);
+      sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_index = ic->guard.add.slot;
       ic->epoch = ant_ic_epoch_counter;
       return val;
@@ -807,7 +816,7 @@ static inline ant_value_t sv_put_field_cached(
   uint32_t fast_idx = 0;
   if (sv_try_put_field_fast(js, obj, a, val, &fast_idx)) {
     if (ic && ptr && ptr->shape) {
-      sv_ic_set_cached_shape(ic, ptr->shape);
+      sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_index = fast_idx;
       ic->epoch = ant_ic_epoch_counter;
     }
@@ -838,7 +847,7 @@ static inline ant_value_t sv_put_field_cached(
           !prop->has_setter &&
           (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0 &&
           prop_idx < ptr->prop_count) {
-        sv_ic_set_cached_shape(ic, ptr->shape);
+        sv_ic_set_cached_shape(js, ic, ptr->shape);
         ic->cached_index = prop_idx;
         ic->epoch = ant_ic_epoch_counter;
         if (old_shape &&
@@ -849,7 +858,9 @@ static inline ant_value_t sv_put_field_cached(
             ptr->flags.extensible &&
             ptr->type_tag != T_ARR &&
             prop->attrs == ANT_PROP_ATTR_DEFAULT) {
-          sv_ic_set_add_transition(ic, old_shape, ptr->shape, prop_idx, ant_ic_epoch_counter);
+          sv_ic_set_add_transition(
+            js, ic, old_shape, ptr->shape, prop_idx, ant_ic_epoch_counter
+          );
         }
       }
     }

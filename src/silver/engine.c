@@ -16,6 +16,41 @@
 uint64_t sv_stat_call_call_fused;
 uint64_t sv_stat_call_call_generic;
 
+bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
+  if (!js || !slot) return false;
+
+  if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
+    size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
+    ant_shape_t ***slots = realloc(
+      js->ic_shape_ref_slots, cap * sizeof(*slots)
+    );
+    if (!slots) return false;
+    js->ic_shape_ref_slots = slots;
+    js->ic_shape_ref_cap = cap;
+  }
+
+  js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
+  return true;
+}
+
+void sv_ic_shape_refs_cleanup(ant_t *js) {
+  if (!js) return;
+
+  /* IC storage belongs to the code arena, so release its owned shapes before
+     js_destroy resets that arena and invalidates these field addresses. */
+  for (size_t i = 0; i < js->ic_shape_ref_len; i++) {
+    ant_shape_t **slot = js->ic_shape_ref_slots[i];
+    if (!slot || !*slot) continue;
+    ant_shape_t *shape = *slot;
+    *slot = NULL;
+    ant_shape_release(shape);
+  }
+
+  free(js->ic_shape_ref_slots);
+  js->ic_shape_ref_slots = NULL;
+  js->ic_shape_ref_len = js->ic_shape_ref_cap = 0;
+}
+
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"

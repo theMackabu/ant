@@ -186,7 +186,12 @@ struct ant_isolate_t {
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+
   uint32_t next_ic_object_identity;
+  /* Addresses of property-IC fields that own retained shapes. */
+  ant_shape_t ***ic_shape_ref_slots;
+  size_t ic_shape_ref_len;
+  size_t ic_shape_ref_cap;
   
   ant_value_t **c_roots;
   size_t c_root_count;

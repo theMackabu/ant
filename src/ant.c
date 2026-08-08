@@ -17863,6 +17863,7 @@ void js_destroy(ant_t *js) {
   }
   
   js_esm_cleanup_module_cache(js);
+  sv_ic_shape_refs_cleanup(js);
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();

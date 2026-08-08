@@ -117,7 +117,17 @@ typedef struct {
     } add;
   } guard;
   bool cached_is_own;
+  uint8_t shape_ref_mask;
 } sv_ic_entry_t;
+
+enum {
+  SV_IC_SHAPE_REF_CACHED   = 1u << 0,
+  SV_IC_SHAPE_REF_ADD_FROM = 1u << 1,
+  SV_IC_SHAPE_REF_ADD_TO   = 1u << 2,
+};
+
+bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot);
+void sv_ic_shape_refs_cleanup(ant_t *js);
 
 typedef struct {
   uint32_t bc_off;
