@@ -2376,6 +2376,22 @@ const char *intern_string(const char *str, size_t len) {
   return entry->str;
 }
 
+/* Lookup-only: shape keys are always interned, so a key this cannot find
+   is absent from every shape. Lets read paths miss without permanently
+   growing the intern table. */
+const char *intern_find(const char *str, size_t len) {
+  if (!intern_buckets) return NULL;
+
+  uint64_t h = hash_key(str, len);
+  size_t bucket = (size_t)(h & (intern_bucket_count - 1));
+
+  for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
+    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
+  }
+
+  return NULL;
+}
+
 size_t intern_length(const char *interned) {
   return ((const interned_string_t *)(const void *)interned)[-1].len;
 }

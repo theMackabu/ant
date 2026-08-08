@@ -25,6 +25,9 @@ the phase-1b minor-GC performance win without allowing address reuse to pass.
 A 2026-08-08 lifetime follow-up now releases those retained property-IC shapes
 at isolate teardown, and pins freshly compiled regexp data while named-group
 metadata allocation can run major GC.
+A 2026-08-08 W3 follow-up made inline-emitter property reads effect-free-or-
+bail, so inlined getters, proxy traps, and key coercions can no longer run
+twice; the checked-in Darwin AArch64 PGO profile was retrained on the result.
 Last reviewed: 2026-08-08
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -1744,6 +1747,68 @@ h3 22,201, elysia 63,709 RPS), devirt fuzz all four seeds agree, and newt Main
 **41.516s** / **41.87s wall** / **779,829,248-byte max RSS**. The earlier
 temporary GC-stress pass covered focused rope/builder tests at stress 1/3 and
 the full spec at stress 10; the hook is absent from the final tree.
+
+**W3 follow-up — inline property reads made effect-free-or-bail FIXED,
+2026-08-08.**
+- **Mechanism:** the inline emitter's GET_FIELD/GET_FIELD_OPT/GET_FIELD2/
+  GET_ELEM/GET_LENGTH cases called the full-semantics helpers and routed a
+  helper-produced T_ERR to the outer `slow` path, whose generic fallback
+  re-executes the entire callee. Getters, proxy traps, and property-key
+  coercions therefore ran twice. Pre-fix binary counters: computed-proxy
+  trap 2, successful-getter-then-ADD-bailout getter 2, length-proxy trap 2.
+- **Fix:** `sv_prop_get_field_ic` was factored into
+  `sv_try_prop_get_field_ic_no_effect` — the exact original IC machinery
+  (hit, data-only probe+fill, primitive IC, note-miss) returning false on
+  miss — plus a wrapper that falls back to `sv_prop_get_at`, byte-equivalent
+  for the interpreter and the main-emitter helper, so IC warmup behavior is
+  unchanged (the earlier rejected candidate bypassed the IC and cost
+  Richards 2898→2405). New inline-only helpers
+  (`jit_helper_get_field_inline`/`get_elem_inline`/`get_length_inline`) run
+  that IC primitive plus a found-only effect-free data-prop chain walk and
+  return `SV_JIT_BAILOUT` before anything that could invoke user code.
+  `mir_emit_inline_read_guard` routes bailout→`slow` (the callee has
+  observed zero effects, so generic re-execution is safe — property reads
+  are already forbidden after the first inline side effect), T_ERR→`join`
+  (raise without replay, same discipline as PUT_FIELD/CALL), value→continue
+  inline. A clean shape-chain miss BAILS rather than concluding `undefined`:
+  the generic fallback owns exotic index/interceptor semantics
+  (`arr["0"]`, function `length`, ...). New lookup-only `intern_find`
+  (ant.c) lets inline reads miss without permanently growing the intern
+  table. No `SV_OPF_JIT_INLINEABLE` flags changed; `jit_inlineable`
+  untouched; the inline MIR GET_FIELD IC fastpath still warms from the same
+  per-bytecode IC slot.
+- **Correctness evidence:** `tests/test_jit_inline_call_errors.cjs` was
+  extended with proxy-trap-runs-once cases for field, method-receiver
+  (GET_FIELD2), optional field, element, and length reads plus
+  getter-succeeds-then-inline-ADD-bailout cases for field and element. The
+  pinned pre-fix base `/tmp/ant_w3_base_bin`
+  (`1f92ff8c948c782f540cfbf236e3ff00`) fails it with the exact double-trap
+  signature (`expected 1, got 2`); the candidate and node pass. The
+  `/tmp/ant_w3_semantics.cjs` differential matrix is byte-identical to node.
+- **Perf isolation:** temporary counters (removed) showed Richards makes
+  10,000,456 inline field-helper calls with 10,000,456 IC hits and ZERO
+  bailouts — the fix's bail path never fires there. A stale-profile
+  Richards reading of −2.5% was isolated as the documented
+  PGO/translation-unit artifact: a semantically-identical C-only build
+  (emitter reverted, `/tmp/ant_w3_conly_bin`,
+  `adbbc4e72c22a704f9d4b61b6837c037`) reproduces the same drop, and
+  matched-condition A/B of the emitter change alone was flat on Richards,
+  positive on DeltaBlue both rounds, and ~5% faster on a fixed-work
+  inline data-read micro (`/tmp/w3_dataread.cjs`).
+- **Final numbers:** after retraining the checked-in Darwin AArch64 PGO
+  profile (meson/pgo/build.sh), AB/BA vs the pinned base measured Richards
+  3008/3008 → **3117/3124 (+3.7%)**, DeltaBlue 4794/4800 →
+  **5018/4992 (+4.4%)**, and the data-read micro 507/508ms →
+  **487/494ms**, identical checksums. Full bench-v8 on the final artifact:
+  Richards 3198, DeltaBlue 5098, Crypto 1540, RayTrace 3297, EarleyBoyer
+  7008, RegExp 938, Splay 4857, NavierStokes 3020. Pins: stale-profile
+  candidate `/tmp/ant_w3_final_bin`
+  (`2ff2b3409bdff8137048bc6b58b410dd`), fresh-PGO final
+  `/tmp/ant_w3_final_pgo_bin` (`da535c6a2bedc999379074255b1b201a`).
+- **Gates on the exact fresh-PGO artifact:** spec **3713/0**, JIT suite
+  **125/125** (0 files failed), harness **178/0** (hono 35,129, express
+  18,473, h3 21,935, elysia 62,215 RPS), devirt fuzzer all four seeds
+  agree. `examples/bench-v8/score.json` restored after runner side effects.
 
 ## Decision log
 

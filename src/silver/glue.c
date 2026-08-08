@@ -716,7 +716,7 @@ static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int3
 }
 
 ant_value_t jit_helper_get_field(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, 
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
   (void)vm;
@@ -727,6 +727,29 @@ ant_value_t jit_helper_get_field(
   if ((vtype(obj) == T_NULL || vtype(obj) == T_UNDEF) && is_err(out))
     jit_set_error_site_from_func(js, func, bc_off);
   return out;
+}
+
+/* Inline-body variant: must not invoke user code. Warms the same
+   per-bytecode IC as jit_helper_get_field, then tries a data-only chain
+   read; anything effectful (getters, proxies, exotic fallback semantics)
+   returns SV_JIT_BAILOUT so the outer slow path — which has observed zero
+   effects from this callee — executes the operation exactly once. */
+ant_value_t jit_helper_get_field_inline(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
+  (void)vm;
+  uint8_t *ip = NULL;
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  sv_atom_t atom = { .str = str, .len = len };
+  ant_value_t out = js_mkundef();
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, &atom, func, ip, &out))
+    return out;
+  /* Atom keys are interned at compile time, so the shape walk can use the
+     pointer directly. */
+  if (sv_try_get_data_prop_no_effect_interned(js, obj, str, len, &out))
+    return out;
+  return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
@@ -1006,11 +1029,26 @@ void jit_helper_set_name(
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
   if (vtype(obj) == T_ARR)
     return tov((double)(uint32_t)js_arr_len(js, obj));
-    
+
   if (vtype(obj) == T_STR)
     return tov((double)str_utf16_len(js, obj));
-  
+
   return js_getprop_fallback(js, obj, "length");
+}
+
+ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
+  (void)vm;
+  if (vtype(obj) == T_ARR)
+    return tov((double)(uint32_t)js_arr_len(js, obj));
+
+  if (vtype(obj) == T_STR)
+    return tov((double)str_utf16_len(js, obj));
+
+  ant_value_t out = js_mkundef();
+  if (js->intern.length &&
+      sv_try_get_data_prop_no_effect_interned(js, obj, js->intern.length, 6, &out))
+    return out;
+  return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_put_field(
@@ -1139,6 +1177,60 @@ ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_va
   if (sv_try_string_index_get(js, obj, key, &str_elem))
     return str_elem;
   return sv_getprop_by_key(js, obj, key);
+}
+
+ant_value_t jit_helper_get_elem_inline(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key
+) {
+  (void)vm;
+
+  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+    double d = tod(key);
+    if (d >= 0 && d == (uint32_t)d) {
+      /* Dense in-bounds non-hole reads only; holes and sparse/exotic
+         arrays need the semantic lookup, which may reach an accessor or
+         proxy on the prototype chain. */
+      ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+      if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array &&
+          ptr->u.array.data) {
+        uint32_t idx = (uint32_t)d;
+        if (idx < ptr->u.array.len && idx < ptr->u.array.cap) {
+          ant_value_t value = ptr->u.array.data[idx];
+          if (!is_empty_slot(value)) return value;
+        }
+      }
+      return SV_JIT_BAILOUT;
+    }
+  }
+
+  ant_value_t str_elem = js_mkundef();
+  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+
+  ant_value_t key_str;
+  switch (vtype(key)) {
+    case T_STR:
+      key_str = key;
+      break;
+    case T_NUM:
+    case T_BOOL:
+    case T_NULL:
+    case T_UNDEF:
+    case T_BIGINT:
+      key_str = js_tostring_val(js, key);
+      if (is_err(key_str)) return key_str;
+      break;
+    default:
+      /* Symbol lookups and object-key coercion may invoke user code; the
+         generic path must perform them exactly once. */
+      return SV_JIT_BAILOUT;
+  }
+
+  ant_offset_t key_len = 0;
+  ant_offset_t key_off = vstr(js, key_str, &key_len);
+  const char *key_ptr = (const char *)(uintptr_t)key_off;
+  ant_value_t out = js_mkundef();
+  return sv_try_get_data_prop_no_effect(js, obj, key_ptr, (size_t)key_len, &out)
+    ? out : SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t proto) {

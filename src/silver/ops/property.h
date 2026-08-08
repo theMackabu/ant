@@ -290,6 +290,99 @@ static inline bool sv_ic_probe_get_chain(
   return false;
 }
 
+/* Complete a property read only when the prototype chain provably yields an
+   ordinary data property without invoking user code. Accessors, exotic
+   receivers/holders (proxies), suspicious prototype cycles, and ABSENT keys
+   return false so an inline caller can bail out before any observable
+   effect. Absence must never be concluded as `undefined` here: after a clean
+   shape-chain miss the semantic path still consults js_getprop_fallback,
+   which owns exotic index/interceptor reads (array elements, function
+   length, ...). */
+static inline bool sv_try_get_data_prop_chain_no_effect(
+  ant_t *js,
+  ant_value_t obj,
+  const char *interned,
+  ant_value_t *out
+) {
+  if (!interned || !out || !is_object_type(obj)) return false;
+
+  ant_value_t cur = obj;
+  sv_proto_guard_t guard;
+  sv_proto_guard_init(&guard);
+  while (is_object_type(cur)) {
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
+    bool should_fallback = false;
+    if (sv_try_get_shape_data_prop(
+          js, ptr, interned, out, &should_fallback)) return true;
+    if (should_fallback) return false;
+
+    cur = ptr->proto;
+    if (!is_object_type(cur)) return false;
+    if (sv_proto_guard_hit_cycle(&guard, cur)) return false;
+  }
+
+  return false;
+}
+
+static inline bool sv_try_get_data_prop_no_effect_interned(
+  ant_t *js,
+  ant_value_t obj,
+  const char *interned,
+  size_t len,
+  ant_value_t *out
+) {
+  if (!interned || !out) return false;
+
+  uint8_t t = vtype(obj);
+  if (is_length_key(interned, len)) {
+    if (t == T_STR) {
+      *out = tov((double)str_utf16_len(js, obj));
+      return true;
+    }
+    if (t == T_OBJ) {
+      ant_value_t primitive = js_get_slot(obj, SLOT_PRIMITIVE);
+      if (vtype(primitive) == T_STR) {
+        *out = tov((double)str_utf16_len(js, primitive));
+        return true;
+      }
+    }
+    if (t == T_ARR) {
+      ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+      if (!ptr || ptr->flags.is_exotic) return false;
+      *out = tov((double)js_arr_len(js, js_as_obj(obj)));
+      return true;
+    }
+  }
+
+  if (is_object_type(obj))
+    return sv_try_get_data_prop_chain_no_effect(js, obj, interned, out);
+
+  switch (t) {
+    case T_STR:
+    case T_NUM:
+    case T_BOOL:
+    case T_BIGINT:
+    case T_SYMBOL: {
+      ant_value_t proto = js_primitive_prototype(js, t);
+      return sv_try_get_data_prop_chain_no_effect(js, proto, interned, out);
+    }
+    default: return false;
+  }
+}
+
+static inline bool sv_try_get_data_prop_no_effect(
+  ant_t *js,
+  ant_value_t obj,
+  const char *str,
+  size_t len,
+  ant_value_t *out
+) {
+  if (!str || !out) return false;
+  const char *interned = intern_find(str, len);
+  if (!interned) return false;
+  return sv_try_get_data_prop_no_effect_interned(js, obj, interned, len, out);
+}
+
 static inline void sv_ic_guard_absent_prefix(
   ant_value_t start,
   const ant_object_t *holder
@@ -629,30 +722,38 @@ static inline bool sv_prim_ic_lookup(
   return false;
 }
 
-static inline ant_value_t sv_prop_get_field_ic(
+/* The IC hit/probe/data-only portion of the GET_FIELD path: IC hit, chain
+   probe + fill, and the primitive IC. Never invokes user code — accessors,
+   proxies/exotics, and unprobeable chains return false. All IC warmup, hit,
+   miss, shape-ref, and prototype-identity behavior lives here so every
+   consumer (interpreter, main JIT helper, inline JIT helper) warms the same
+   per-bytecode IC entry. */
+static inline bool sv_try_prop_get_field_ic_no_effect(
   ant_t *js,
   ant_value_t obj,
   sv_atom_t *a,
   sv_func_t *func,
-  uint8_t *ip
+  uint8_t *ip,
+  ant_value_t *out
 ) {
   ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
   sv_ic_entry_t *ic = sv_ic_slot_for_ip(func, ip);
-  
+
   bool track_ic = ic && !is_length_key(a->str, a->len);
   bool track_obj = track_ic && ptr && !ptr->flags.is_exotic;
 
   ant_value_t hit = js_mkundef();
   if (track_obj && sv_ic_try_get_hit(ic, ptr, a, &hit)) {
     sv_gf_ic_note_success(ic);
-    return hit;
+    *out = hit;
+    return true;
   }
 
   if (track_obj) {
     ant_object_t *holder = NULL;
     uint32_t prop_idx = 0;
-    ant_value_t out = js_mkundef();
-    if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &out)) {
+    ant_value_t found = js_mkundef();
+    if (sv_ic_probe_get_chain(obj, a->str, &holder, &prop_idx, &found)) {
       sv_ic_set_cached_shape(js, ic, ptr->shape);
       ic->cached_holder = holder;
       ic->guard.receiver_proto = ptr->proto;
@@ -666,13 +767,30 @@ static inline ant_value_t sv_prop_get_field_ic(
           : sv_ic_object_identity(js, js_obj_ptr(js_as_obj(ptr->proto)))
       );
       sv_gf_ic_note_success(ic);
-      return out;
+      *out = found;
+      return true;
     }
   }
 
-  if (!ptr && track_ic && sv_prim_ic_lookup(js, obj, a, ic, &hit)) return hit;
+  if (!ptr && track_ic && sv_prim_ic_lookup(js, obj, a, ic, &hit)) {
+    *out = hit;
+    return true;
+  }
   if (track_ic) sv_gf_ic_note_miss(ic);
-  
+
+  return false;
+}
+
+static inline ant_value_t sv_prop_get_field_ic(
+  ant_t *js,
+  ant_value_t obj,
+  sv_atom_t *a,
+  sv_func_t *func,
+  uint8_t *ip
+) {
+  ant_value_t out = js_mkundef();
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, a, func, ip, &out))
+    return out;
   return sv_prop_get_at(js, obj, a->str, a->len, func, ip);
 }
 
