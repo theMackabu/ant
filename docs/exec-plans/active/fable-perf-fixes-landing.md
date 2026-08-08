@@ -22,7 +22,10 @@ prototype additions invalidate both warmed absence entries and inherited hits.
 A 2026-08-07 minor-GC ABA review follow-up retained property-IC shapes and
 gave only raw cached prototype pointers lazy per-object identities, preserving
 the phase-1b minor-GC performance win without allowing address reuse to pass.
-Last reviewed: 2026-08-07
+A 2026-08-08 lifetime follow-up now releases those retained property-IC shapes
+at isolate teardown, and pins freshly compiled regexp data while named-group
+metadata allocation can run major GC.
+Last reviewed: 2026-08-08
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
 ## vs pinned base /tmp/ant_fable_base = master 66499b0b)
@@ -718,6 +721,70 @@ cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
   **125/0**, harness **177/0** (`test_gc_async` 399ms, `test_gc_coro` 5.904s;
   hono 33,273, express 18,068, h3 21,217, elysia 62,578 RPS), and all four
   devirt-fuzz seeds agree.
+
+**7b C5 lifetime follow-up — property-IC shape ownership CLOSED,
+2026-08-08:**
+- **Mechanism:** retaining cached shapes closed the minor-GC ABA hole, but the
+  IC-owned references had no terminal release. IC slots are allocated in the
+  isolate's code arena and are not reclaimed per function, so the matching
+  ownership boundary is isolate teardown immediately before
+  `code_arena_reset`. A blanket scan of `cached_shape` is unsound because the
+  comparison IC family aliases that field with a raw object pointer.
+- **Fix:** the isolate records the address of each explicitly property-owned
+  shape field the first time that field acquires a retained reference. Teardown
+  releases exactly those registered fields before invalidating their code-arena
+  addresses. The registry covers property `cached_shape` and put-transition
+  `from_shape`/`to_shape`; comparison and global IC fields never enter it.
+  Registration failure leaves a new field uncached rather than creating an
+  untracked retained reference.
+- **Counter evidence:** temporary whole-run retain/release counters showed
+  **217/186 (31 outstanding)** for `test_ic_minor_aba.cjs` and **6104/6017
+  (87 outstanding)** for `test_primitive_ic_invalidation.cjs` before teardown
+  cleanup. The same tests ended at **217/217** and **6104/6104** afterward; the
+  property-location stress test ended at **39033/39033**. `sv_ic_entry_t`
+  remains **64 bytes** and `ant_object_t` remains **152 bytes**.
+- **Performance evidence:** pinned fixed-work B/C/C/B against the pre-cleanup
+  binary was flat for reads (**611.413/612.532ms -> 612.022/612.106ms**,
+  +0.015% at the midpoint) and within small noise for writes
+  (**340.395/339.284ms -> 342.427/342.555ms**, +0.78%). Exact checksums agreed.
+
+**R1 lifetime follow-up — `regex_get_or_compile` major-GC UAF FIXED,
+2026-08-08:**
+- **Mechanism:** a new compiled entry initially had only its two-generation
+  cache reference. `regexp_build_named_groups_meta` then read PCRE2's name
+  table while allocating one JS value per named capture. Two major collections
+  during that loop could age the entry out of both cache generations, free its
+  `pcre2_code`, and leave metadata construction reading freed memory. The later
+  `object_refs++` was too late.
+- **Counter/repro evidence:** a temporary exact stress hook forced two majors
+  inside named-group metadata construction and counted frees of the active
+  entry. The vulnerable binary returned a null named-capture result and
+  reported **1 live-entry free**. With the fix, the same forced-major run passed
+  and reported **0**.
+- **Fix:** take the future RegExp object's `object_refs` ownership immediately
+  after compilation, before any metadata allocation. Successful native
+  attachment transfers that already-held reference; every metadata, finalizer,
+  or attachment error path drops it and runs the normal maybe-free check. A
+  temporary `ANT_GC_STRESS` tick in `gc_maybe` passed the focused regexp-result
+  and IC-ABA tests at stress 1 and 3, then was removed.
+- **Hot-layout follow-up:** the small source change shortened
+  `regex_get_or_compile` by eight machine-code bytes, shifting the following
+  PCRE2 execution helper off a 16-byte boundary. Long fixed-work A/B showed
+  regressions of **2.1% route, 2.2% token scan, and 4.1% identifier split** even
+  though the ownership work is cold. Independently aligning
+  `regex_get_match_context`, which every PCRE2 execution reaches, removed that
+  accidental coupling. Final aligned candidate versus the pre-C6 binary was
+  **+0.69% route, -0.42% token scan, and -4.68% identifier split** at the
+  two-round midpoint: no remaining regex regression. Against the unaligned C6
+  binary, alignment improved those rows by about **5.7%, 3.8%, and 8.5%**.
+- **R1 and full gates:** `test_gc_async` was **396.13/390.84ms** and
+  `test_gc_coro` **5892.03/5883.34ms** in aligned-versus-unaligned B/C/C/B;
+  the final isolated harness measured **398ms** and **5.882s**. Newt was flat
+  at **42.55/43.18s -> 43.06/42.78s** (+0.13% at midpoint), with a final
+  **41.93s / 588,480,512-byte max-RSS** run. Final gates: spec **3713/0**,
+  JIT **9/0** with generated opcodes **125/0**, harness **177/0** (hono 31,535,
+  express 17,528, h3 21,171, elysia 61,581 RPS), and all devirt-fuzz seeds
+  agree.
 
 **7c scoping session (2026-08-05, late) — two candidates investigated and
 KILLED with data; record the negatives:**
