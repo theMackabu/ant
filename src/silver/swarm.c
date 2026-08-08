@@ -10528,6 +10528,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               builder_target_slots[slot_idx];
           }
         }
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t obj = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
         mir_emit_get_length(
