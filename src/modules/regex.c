@@ -1256,18 +1256,23 @@ static compiled_regex_cache_entry_t *regex_get_or_compile(
     js, regexp_obj, flags_mask, &compiled
   )) return NULL;
 
+  /* Metadata construction can allocate and run enough major collections to
+     age this entry out of both cache generations. Pin the reference that will
+     become the RegExp object's ownership before reading compiled PCRE2 data. */
+  compiled->object_refs++;
   ant_value_t groups_meta = regexp_build_named_groups_meta(js, compiled->code);
   if (is_err(groups_meta)) {
+    compiled->object_refs--;
     compiled_regex_entry_maybe_free(compiled);
     return NULL;
   }
 
   if (obj_ptr->finalizer && obj_ptr->finalizer != regexp_object_finalize) {
+    compiled->object_refs--;
     compiled_regex_entry_maybe_free(compiled);
     return NULL;
   }
 
-  compiled->object_refs++;
   js_set_native(regexp_obj, compiled, REGEXP_NATIVE_TAG);
   if (js_get_native(regexp_obj, REGEXP_NATIVE_TAG) != compiled) {
     compiled->object_refs--;
