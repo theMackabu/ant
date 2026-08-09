@@ -1962,6 +1962,45 @@ FIXED, 2026-08-08.**
   (first-byte gate already took the miss loop ~10× down; revisit only if a
   real workload shows lastIndexOf hot).
 
+**W7 — closure-arena free-list payload hardening FIXED, 2026-08-08.**
+- **Mechanism:** `fixed_arena_free_elem` stores its next pointer in the first
+  word of a freed slot, which intentionally overlays `sv_closure_t.call_flags`.
+  A major sweep clears and rebuilds the free list by walking every slot below
+  the watermark, including slots that were already free. Their stale epoch
+  enters the dead-closure branch, where the sweep therefore reads the low word
+  of a free-list pointer as `call_flags`. This was safe only because closure
+  slots are at least 8-byte aligned: pointer bits 0--2 are zero, so
+  `SV_CALL_HAS_BOUND_ARGS` (bit 0) does not make the sweep free the union's
+  stale `pending.name` code-arena pointer. `upvalues` was already cleared on
+  every free, so garbage `SV_CALL_BORROWED_UPVALS` bits could only alter a
+  `free(NULL)` decision.
+- **Fix:** both young and major closure sweeps now call one payload-release
+  helper. It frees argv only when the live closure owns bound arguments, then
+  unconditionally writes `u.bound.argv = NULL` before the free-list link
+  overwrites `call_flags`; already-free slots are therefore safe to revisit
+  independently of the stale union contents. Compile-time assertions require
+  `call_flags` to remain at offset zero and `SV_CALL_HAS_BOUND_ARGS` to remain
+  within the alignment-zero low bits. A layout or flag move that invalidates
+  the arena overlay contract now fails the build instead of silently making
+  major sweep unsafe.
+- **Coverage:** `test_gc_closure_churn.cjs` now adds 100,000 one-argument bound
+  closures to the existing ordinary-closure churn, exercising the malloc'd
+  argv arm and free-list reuse. With the temporary `ANT_GC_STRESS` hook, the
+  closure-churn and 421-case double-bind tests pass at stress 1 and 3, and the
+  full spec passes **3718/0** at stress 10. The hook was removed before the
+  final build.
+- **Final artifacts and gates:** clean baseline `/tmp/ant_w7_base_bin`
+  (`7af937ce177d7f444c6c21ddbc0acf14`), final candidate
+  `/tmp/ant_w7_candidate_bin` (`efd2fbc10f7802c8763979623fb9bbb3`, identical
+  to `build/ant`). Focused closure/bind tests pass; spec **3718/0**, JIT
+  **125/125** (9/0 files), harness **179/0** (`test_gc_closure_churn` 547ms /
+  61MB, `test_gc_async` 387ms, `test_gc_coro` 5.902s; oha hono 36,149,
+  express 18,612, h3 22,554, elysia 69,220 RPS). Two-round interleaved newt
+  AB/BA is non-directional within the approximately one-second host noise:
+  base/candidate **40.99/41.96s**, then candidate/base **41.58/41.72s**; all
+  candidate RSS readings remain below 1GB. No call-dispatch code changed, so
+  the devirt fuzzer was not required.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

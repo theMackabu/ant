@@ -19,6 +19,16 @@ let sink = 0;
 for (let i = 0; i < 5_000_000; i++) sink += make(i)();
 check('churn sum', sink === 12_499_997_500_000, `got ${sink}`);
 
+// Bound closures own a malloc'd argv in the closure union. Churn both the
+// bound payload and ordinary closures so GC stress can repeatedly sweep slots
+// that have already been threaded through the arena free list.
+function add(a, b) {
+  return a + b;
+}
+let boundSink = 0;
+for (let i = 0; i < 100_000; i++) boundSink += add.bind(null, i)(1);
+check('bound argv churn', boundSink === 5_000_050_000, `got ${boundSink}`);
+
 // retained closures interleaved with churn that drives many minors
 const kept = [];
 for (let i = 0; i < 100_000; i++) {

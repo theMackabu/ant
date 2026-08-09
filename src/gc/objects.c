@@ -67,6 +67,17 @@ static uint64_t gc_epoch = 0;
 static uint8_t gc_obj_epoch = 0;
 static bool g_minor_gc = false;
 
+static_assert(
+  offsetof(sv_closure_t, call_flags) == 0,
+  "closure arena free-list links must overlay call_flags"
+);
+
+static_assert(
+  SV_CALL_HAS_BOUND_ARGS < _Alignof(sv_closure_t),
+  "closure arena sweeps re-read call_flags from free-list links; "
+  "HAS_BOUND_ARGS must remain in the pointer-alignment-zero low bits"
+);
+
 static uint64_t gc_now_ns(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -243,6 +254,23 @@ void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv) {
 size_t gc_stat_young_closure_freed;
 size_t gc_stat_young_closure_promoted;
 
+static inline void gc_release_closure_payload(sv_closure_t *c) {
+  if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) &&
+      c->upvalues != c->inline_upvals) {
+    free(c->upvalues);
+  }
+  c->upvalues = NULL;
+
+  /* On the next major sweep, an already-free slot's call_flags contains
+     the low word of its free-list link. Closure-slot alignment keeps the
+     low flag bits clear, but leave the union safe even if that invariant
+     changes: only an owned bound argv is freed, then the pointer is always
+     cleared before fixed_arena_free_elem overlays call_flags. */
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS)
+    free(c->u.bound.argv);
+  c->u.bound.argv = NULL;
+}
+
 static void gc_sweep_young_closures(ant_t *js) {
   ant_fixed_arena_t *ca = &js->closure_arena;
   for (size_t i = 0; i < js->young_closure_len; i++) {
@@ -259,17 +287,7 @@ static void gc_sweep_young_closures(ant_t *js) {
       continue;
     }
     gc_stat_young_closure_freed++;
-    if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) &&
-        c->upvalues != c->inline_upvals) {
-      free(c->upvalues);
-    }
-    c->upvalues = NULL;
-    /* union: only bound closures own a malloc'd argv; the other arm is
-       code-arena memory that must never reach free(). */
-    if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
-      free(c->u.bound.argv);
-      c->u.bound.argv = NULL;
-    }
+    gc_release_closure_payload(c);
     fixed_arena_free_elem(ca, c);
   }
   js->young_closure_len = 0;
@@ -1069,16 +1087,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   
   if (c->gc_epoch == gc_epoch) ca->live_count++;
   else {
-    if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) &&
-        c->upvalues != c->inline_upvals) {
-      free(c->upvalues);
-    }
-    c->upvalues = NULL;
-
-    if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
-      free(c->u.bound.argv);
-      c->u.bound.argv = NULL;
-    }
+    gc_release_closure_payload(c);
 
     *(void **)c = ca->free_list;
     ca->free_list = c;
