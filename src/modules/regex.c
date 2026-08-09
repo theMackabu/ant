@@ -55,6 +55,15 @@ typedef struct {
   uint32_t indices_slot;
 } regexp_result_shape_t;
 
+typedef struct {
+  ant_value_t array;
+  ant_value_t index;
+  ant_value_t input;
+  ant_value_t groups_meta;
+  ant_value_t indices;
+  bool with_indices;
+} regexp_exec_result_ctx_t;
+
 enum {
   REGEXP_FLAG_HAS_INDICES = 1 << 0,
   REGEXP_FLAG_GLOBAL      = 1 << 1,
@@ -1465,6 +1474,38 @@ static ant_value_t regexp_build_indices_result(
   return indices_arr;
 }
 
+static ant_value_t regexp_attach_exec_result(ant_t *js,const regexp_exec_result_ctx_t *ctx) {
+  bool has_named_groups = is_object_type(ctx->groups_meta);
+  
+  if (!has_named_groups && regexp_result_apply_shape(
+    js, ctx->array, ctx->index, ctx->input, js_mkundef(),
+    ctx->indices, ctx->with_indices
+  )) return ctx->array;
+
+  if (
+    is_err(setprop_cstr(js, ctx->array, "index", 5, ctx->index)) ||
+    is_err(setprop_cstr(js, ctx->array, "input", 5, ctx->input))
+  ) return js_mkerr(js, "oom");
+
+  if (has_named_groups) {
+    js_set_slot(ctx->array, SLOT_REGEXP_RESULT_GROUPS, ctx->groups_meta);
+    js_set_slot(ctx->array, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
+    js_set_getter_desc(
+      js, js_as_obj(ctx->array), "groups", 6,
+      js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C
+    );
+  }
+  else if (is_err(setprop_cstr(js, ctx->array, "groups", 6, js_mkundef()))) 
+    return js_mkerr(js, "oom");
+
+  if (
+    ctx->with_indices &&
+    is_err(setprop_cstr(js, ctx->array, "indices", 7, ctx->indices))
+  ) return js_mkerr(js, "oom");
+
+  return ctx->array;
+}
+
 static const char *find_bytes(const char *haystack, ant_offset_t haystack_len, const char *needle, ant_offset_t needle_len);
 static bool regexp_plain_literal_pattern(
   ant_t *js,
@@ -1899,41 +1940,14 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     }
   }
 
-  bool shaped_result =
-    !is_object_type(groups_meta) &&
-    regexp_result_apply_shape(
-      js, result_arr, tov((double)ovector[0]), str_arg,
-      js_mkundef(), indices, has_indices
-    );
-  if (!shaped_result) {
-    if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-    if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-  }
-
-  if (is_object_type(groups_meta)) {
-    js_set_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS, groups_meta);
-    js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
-    js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
-  } else if (!shaped_result &&
-    is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) {
-    result = js_mkerr(js, "oom");
-    goto done;
-  }
-
-  if (has_indices && is_object_type(groups_meta)) {
-    if (is_err(setprop_cstr(js, result_arr, "indices", 7, indices))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-  }
-
-  result = result_arr;
+  result = regexp_attach_exec_result(js, &(regexp_exec_result_ctx_t) {
+    .array = result_arr,
+    .index = tov((double)ovector[0]),
+    .input = str_arg,
+    .groups_meta = groups_meta,
+    .indices = indices,
+    .with_indices = has_indices,
+  });
 
 done:
   regex_match_scope_end(&match_scope);

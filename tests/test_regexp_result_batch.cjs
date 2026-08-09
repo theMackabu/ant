@@ -14,6 +14,7 @@ assertJson(result, ['a', 'a', undefined], 'result captures');
 assert(result.index === 1, 'result index');
 assert(result.input === 'xa', 'result input');
 assert(result.groups === undefined, 'result groups');
+assert(Object.hasOwn(result, 'indices'), 'result owns indices');
 assertJson(result.indices, [[1, 2], [1, 2], undefined], 'result indices');
 assertJson(
   Object.keys(result),

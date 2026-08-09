@@ -1962,6 +1962,47 @@ FIXED, 2026-08-08.**
   (first-byte gate already took the miss loop ~10× down; revisit only if a
   real workload shows lastIndexOf hot).
 
+**W6 — RegExp result fallback attaches `indices` FIXED, 2026-08-08.**
+- **Bug:** the full exec-result tail treated shaped and generic attachment as
+  four interleaved decisions over `shaped_result`, `has_indices`, and named
+  groups. When `regexp_result_apply_shape()` declined a no-named-groups `/d`
+  result, the generic path attached `index`, `input`, and `groups`, but the
+  final `indices` write was gated on named groups. The completed `indices`
+  array was therefore dropped from the result.
+- **Failing-first proof:** a temporary
+  `ANT_REGEX_FORCE_RESULT_SHAPE_FALLBACK` branch (removed before the final
+  build) forced the real generic path. The unchanged tail, pinned as
+  `/tmp/ant_w6_forced_base_bin` (`5881db9a230326784ab9a769543c39e2`),
+  failed `tests/test_regexp_result_batch.cjs` at the first no-named `/d`
+  result with `result indices: undefined`. With the fix, forced candidate
+  `3622c527d43386030fb3f8786b6b7a1d` passes that suite and
+  `test_regexp_internal_state.cjs`.
+- **Fix/elegance:** `regexp_attach_exec_result()` takes one explicit result
+  context and owns the
+  complete decision. No named groups first attempts the canonical shaped
+  write; every declined or named-groups case takes one generic sequence:
+  `index`, `input`, `groups`, then `indices` whenever requested. This keeps
+  Node's property order, preserves the named-groups internal slots and lazy
+  getter, removes all attachment flags from `regexp_exec_internal`, and
+  returns the finished array or an allocation error directly.
+  The permanent regression adds an explicit own-`indices` assertion to the
+  existing value, property-order, and descriptor checks.
+- **Perf:** fixed-work result construction (5,000,000 no-named `/d` execs,
+  checksum 25,000,000), two-round interleaved AB/BA: clean base
+  `/tmp/ant_w6_base_bin` (`efd2fbc10f7802c8763979623fb9bbb3`)
+  **1546/1556ms** vs final candidate `/tmp/ant_w6_candidate_bin`
+  (`d81ddd1ae9ef4c404d62257d2c787934`) **1563/1541ms** — flat.
+- **Gates on the exact final pin:** focused result/batch and internal-state
+  suites pass; regexp spec 27/0; full spec **3718/0** (98/0 files), JIT
+  **125/125** (9/0 files), harness **179/0** (test_gc_async 396ms,
+  test_gc_coro 5.895s; oha hono 35,613, express 18,741, h3 21,944,
+  elysia 70,018 RPS). Two-round newt AB/BA stays in band: base/candidate
+  Main **40.70/42.11s**, then candidate/base **40.11/40.00s**; the 0.76s
+  median difference is within the documented approximately one-second host
+  noise, and candidate max RSS is 581/661MB. `maid preflight`,
+  `maid knowledge`, and `git diff --check` are clean. No GC lifecycle or
+  call dispatch changed, so GC stress and the devirt fuzzer were not required.
+
 **W7 — closure-arena free-list payload hardening FIXED, 2026-08-08.**
 - **Mechanism:** `fixed_arena_free_elem` stores its next pointer in the first
   word of a freed slot, which intentionally overlays `sv_closure_t.call_flags`.
