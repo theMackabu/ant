@@ -1990,16 +1990,16 @@ FIXED, 2026-08-08.**
 - **Perf:** fixed-work result construction (5,000,000 no-named `/d` execs,
   checksum 25,000,000), two-round interleaved AB/BA: clean base
   `/tmp/ant_w6_base_bin` (`efd2fbc10f7802c8763979623fb9bbb3`)
-  **1546/1556ms** vs final candidate `/tmp/ant_w6_candidate_bin`
-  (`d81ddd1ae9ef4c404d62257d2c787934`) **1563/1541ms** — flat.
+  **1565/1620ms** vs final candidate `/tmp/ant_w6_candidate_bin`
+  (`1e3a681f539f3ec87ce8a42f43cab3f2`) **1542/1548ms** — flat.
 - **Gates on the exact final pin:** focused result/batch and internal-state
   suites pass; regexp spec 27/0; full spec **3718/0** (98/0 files), JIT
-  **125/125** (9/0 files), harness **179/0** (test_gc_async 396ms,
-  test_gc_coro 5.895s; oha hono 35,613, express 18,741, h3 21,944,
-  elysia 70,018 RPS). Two-round newt AB/BA stays in band: base/candidate
-  Main **40.70/42.11s**, then candidate/base **40.11/40.00s**; the 0.76s
+  **125/125** (9/0 files), harness **179/0** (test_gc_async 389ms,
+  test_gc_coro 5.919s; oha hono 35,006, express 18,841, h3 21,646,
+  elysia 68,147 RPS). Two-round newt AB/BA stays in band: base/candidate
+  Main **40.36/43.16s**, then candidate/base **42.60/44.13s**; the 0.64s
   median difference is within the documented approximately one-second host
-  noise, and candidate max RSS is 581/661MB. `maid preflight`,
+  noise, and candidate max RSS is 611/617MB. `maid preflight`,
   `maid knowledge`, and `git diff --check` are clean. No GC lifecycle or
   call dispatch changed, so GC stress and the devirt fuzzer were not required.
 
