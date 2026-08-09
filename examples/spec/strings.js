@@ -125,6 +125,11 @@ test('lastIndexOf utf16 position on match', 'abc🎈def🎈xyz'.lastIndexOf('�
 test('lastIndexOf astral search miss', 'abc🎈def'.lastIndexOf('💙'), -1);
 test('lastIndexOf empty search utf16 clamp', 'ab🎈cd'.lastIndexOf(''), 6);
 test('lastIndexOf empty search with position', 'ab🎈cd'.lastIndexOf('', 3), 3);
+test('lastIndexOf mid-surrogate position floors', '𝔀b'.lastIndexOf('b', 1), -1);
+test('lastIndexOf mid-surrogate keeps earlier match', '𝔀b'.lastIndexOf('𝔀', 1), 0);
+test('lastIndexOf exact boundary after astral', '𝔀b'.lastIndexOf('b', 2), 2);
+test('lastIndexOf empty search mid-surrogate not floored', '𝔀b'.lastIndexOf('', 1), 1);
+test('lastIndexOf multibyte BMP boundary', 'éb'.lastIndexOf('b', 1), 1);
 
 test('String.fromCharCode', String.fromCharCode(65, 66, 67), 'ABC');
 test('String.raw tagged template', String.raw`line1\nline2`, 'line1\\nline2');

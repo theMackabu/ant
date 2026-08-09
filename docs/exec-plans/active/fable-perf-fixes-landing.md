@@ -28,6 +28,9 @@ metadata allocation can run major GC.
 A 2026-08-08 W3 follow-up made inline-emitter property reads effect-free-or-
 bail, so inlined getters, proxy traps, and key coercions can no longer run
 twice; the checked-in Darwin AArch64 PGO profile was retrained on the result.
+A 2026-08-08 W5 follow-up fixed `lastIndexOf` mid-surrogate positions (floor,
+not round-up) and split the builtin into ASCII/Unicode paths: ASCII misses
+~10.6×, position/late-hit cases ~200×, non-ASCII misses ~11× (spec now 3718/0).
 Last reviewed: 2026-08-08
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
@@ -1889,6 +1892,75 @@ FIXED, 2026-08-08.**
   devirt fuzzer was not required. Upstream tlsuv (cff10a26) still has the
   synchronous `on_ws_close()`-after-cancel; candidate for an upstream
   report.
+
+**W5 — `lastIndexOf` mid-surrogate position floor + ASCII/Unicode path split
+FIXED, 2026-08-08.**
+- **Bug:** `'𝔀b'.lastIndexOf('b', 1)` returned 2 (node: −1).
+  `utf16_index_to_byte_offset()` advances *through* an astral code point when
+  the requested UTF-16 index falls between its surrogate units, i.e. it
+  rounds the byte limit **up** past the position, admitting matches that
+  start after it. Per spec, candidate matches are limited by UTF-16 start
+  index, so a mid-surrogate position must **floor** to the code point start.
+  Empty searches return the original UTF-16 position unchanged (not floored).
+- **Mechanism (temporary counters, removed):** on a fixed-work micro
+  (`/tmp/w5_micro.js`, six cases), the pre-fix builtin did a full
+  `utf16_strlen()` scan on **every** call — 1200 scans for 1200 calls, 800
+  of them on pure-ASCII receivers — plus an offset conversion per
+  explicit-position call. After removing the scans, matching itself
+  dominated the remaining miss cost, which per plan justified a first-byte
+  gate ahead of `memcmp` in the reverse loop.
+- **Fix:**
+  - New `utf16_index_to_byte_offset_floor()` (utf8.c, decl utf8.h) using the
+    existing scan cursor/cache: exact boundary when the index is exact,
+    start of the astral code point when mid-surrogate, end-of-string when
+    clamped. `utf16_index_to_byte_offset()` is untouched — indexOf, padding,
+    and JSON keep their current semantics pending a separate audit.
+  - `builtin_string_lastIndexOf` (ant.c) split on the receiver's flat-string
+    ASCII flag. ASCII path: byte length *is* UTF-16 length; clamp position in
+    byte space, early −1 for a non-ASCII needle, match and report in byte
+    space — zero UTF-16 length scans, zero offset conversions by
+    construction. Unicode path: cached `str_utf16_len()` instead of a raw
+    `utf16_strlen()` scan, empty-search result preserved before boundary
+    conversion, position converted with the floor helper, result converted
+    only on hit. Both reverse loops gained a first-byte gate before `memcmp`.
+- **Correctness:** five new spec assertions in `examples/spec/strings.js`
+  (mid-surrogate floors to −1, earlier astral match still visible at the
+  floored position, exact post-astral boundary, empty search not floored,
+  multibyte-BMP boundary). A broader differential matrix
+  (`/tmp/w5_matrix.js`: 6 receivers × 8 needles × 17 positions incl.
+  negative, fractional, NaN, ±Infinity, consecutive astrals — 816 cases) is
+  byte-identical to node. Argument coercion (non-string needles, non-T_NUM
+  positions) deliberately unchanged — pre-existing separate concern.
+- **Perf (interleaved AB/BA × 2 rounds, `W5_N=20000`, base
+  `/tmp/ant_w5_base_bin` `91d5d0b9…`, measured candidate `3c20fa2f…`;
+  final pin `/tmp/ant_w5_candidate_bin` `b7b05445…` differs only in two
+  review fixes to the floor helper — the ASCII branch clamps out-of-range
+  indices to `byte_len` like the Unicode branch instead of returning −1,
+  and the return type is `size_t` (the `int` return wrapped negative for
+  byte offsets past `INT_MAX`; `ant_offset_t` is `uint64_t` with no
+  string-length cap, and the caller's cast-then-clamp would have admitted
+  end-of-string matches past the position on >2GiB receivers — the same
+  wrap class remains in the pre-existing `utf16_index_to_byte_offset`,
+  deferred audit). Perf sanity round on the final pin matches the
+  measured numbers, e.g. ascii_miss 153ms vs base 1683ms:** ascii_miss 1621/1639/1627/1651 → **150–155ms (~10.6×)**,
+  ascii_early 1642/1625/1648/1637 → **151–155ms**, ascii_late ~452 →
+  **~1.5ms**, ascii_pos ~453 → **~1.3ms**, uni_hit ~315 → **~1.5ms**,
+  uni_miss 1100–1123 → **100–103ms (~11×)**. Run-to-run noise ~2%; every
+  case improved far beyond it. Installed ant not used as verdict (PGO
+  configuration differs).
+- **Gates rerun in full on the exact final pin `b7b05445…`:** focused
+  strings spec 104/0, full spec **3718/0** (3713 + 5 new, 98/0 files), JIT
+  suite green (9/0 files, all sub-suites pass), harness **179/0**, newt
+  Main 43.29s/615MB vs pinned base 42.75s/566MB same-session A/B —
+  **flat** (the doc's 38–39s band reflects earlier ambient machine
+  state), `maid preflight` clean, `git diff --check` clean. No call
+  dispatch touched, so no devirt fuzzer run.
+- **Ruled out:** changing `utf16_index_to_byte_offset()` in place (would
+  silently shift indexOf/padStart/JSON semantics); demoting to a
+  per-call `utf16_strlen` cache (flat-string metadata cache already
+  exists via `str_utf16_len`); a Boyer–Moore-style reverse search
+  (first-byte gate already took the miss loop ~10× down; revisit only if a
+  real workload shows lastIndexOf hot).
 
 ## Decision log
 

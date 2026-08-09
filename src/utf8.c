@@ -431,6 +431,32 @@ int utf16_index_to_byte_offset(
   return (int)(cursor.p - cursor.start);
 }
 
+size_t utf16_index_to_byte_offset_floor(
+  const char *str,
+  size_t byte_len,
+  size_t utf16_idx
+) {
+  if (str_is_ascii(str)) {
+    if (utf16_idx > byte_len) return byte_len;
+    return utf16_idx;
+  }
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
+
+  while (cursor.p < cursor.end && cursor.utf16_pos < utf16_idx) {
+    size_t slen, units;
+    utf16_scan_decode(cursor.p, cursor.end, &slen, &units, NULL);
+    if (cursor.utf16_pos + units > utf16_idx) break;
+    cursor.p += slen;
+    cursor.utf16_pos += units;
+  }
+
+  utf16_scan_cursor_store(&cursor);
+  return (size_t)(cursor.p - cursor.start);
+}
+
 int utf16_range_to_byte_range(
   const char *str,
   size_t byte_len,

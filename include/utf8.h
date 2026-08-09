@@ -34,6 +34,12 @@ int utf16_index_to_byte_offset(
   size_t *out_char_bytes
 );
 
+size_t utf16_index_to_byte_offset_floor(
+  const char *str,
+  size_t byte_len,
+  size_t utf16_idx
+);
+
 int utf16_range_to_byte_range(
   const char *str,
   size_t byte_len,
