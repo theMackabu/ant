@@ -875,26 +875,18 @@ static void mir_emit_close_marked_slots(
   MIR_append_insn(ctx, fn, no_open);
 }
 
+/* The emitted checks only eliminate definitely unnecessary calls. The C
+   helper owns the closed/open-cell and young-reference policy. */
 static void mir_emit_upval_write_barrier(
   MIR_context_t ctx, MIR_item_t jit_func,
   MIR_item_t upval_barrier_proto, MIR_item_t imp_upval_barrier,
-  MIR_reg_t r_js, MIR_reg_t r_uv, MIR_reg_t r_loc, MIR_reg_t src, int un
+  MIR_reg_t r_js, MIR_reg_t r_uv, MIR_reg_t src, int un
 ) {
   MIR_label_t skip_barrier = MIR_new_label(ctx);
   char rn_tmp[32];
   snprintf(rn_tmp, sizeof(rn_tmp), "uvwb%d", un);
   MIR_reg_t r_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_tmp);
 
-  MIR_append_insn(ctx, jit_func,
-    MIR_new_insn(ctx, MIR_ADD,
-      MIR_new_reg_op(ctx, r_tmp),
-      MIR_new_reg_op(ctx, r_uv),
-      MIR_new_int_op(ctx, (int64_t)offsetof(sv_upvalue_t, closed))));
-  MIR_append_insn(ctx, jit_func,
-    MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, skip_barrier),
-      MIR_new_reg_op(ctx, r_loc),
-      MIR_new_reg_op(ctx, r_tmp)));
   MIR_append_insn(ctx, jit_func,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_tmp),
@@ -8218,7 +8210,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, src)));
         mir_emit_upval_write_barrier(ctx, jit_func,
           upval_barrier_proto, imp_upval_barrier,
-          r_js, r_uv, r_loc, src, un);
+          r_js, r_uv, src, un);
         break;
       }
 
@@ -8260,7 +8252,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, src)));
         mir_emit_upval_write_barrier(ctx, jit_func,
           upval_barrier_proto, imp_upval_barrier,
-          r_js, r_uv, r_loc, src, un);
+          r_js, r_uv, src, un);
         break;
       }
 

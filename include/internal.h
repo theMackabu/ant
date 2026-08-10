@@ -351,6 +351,7 @@ struct ant_isolate_t {
   size_t gc_closure_promoted_since_major;
 
   bool gc_remember_overflow;
+  bool gc_objects_running;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;

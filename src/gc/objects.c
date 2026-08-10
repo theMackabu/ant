@@ -159,7 +159,7 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
 }
 
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
-  if (!js || !uv || uv->in_remember_set) return;
+  if (!js || !uv || js->gc_objects_running || uv->in_remember_set) return;
 
   if (js->remembered_upvalue_len >= js->remembered_upvalue_cap) {
     size_t new_cap = js->remembered_upvalue_cap ? js->remembered_upvalue_cap * 2 : 64;
@@ -175,7 +175,7 @@ void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
 
 static void gc_mark_remembered_upvalues(ant_t *js) {
   for (size_t i = 0; i < js->remembered_upvalue_len; i++)
-    gc_mark_value(js, js->remembered_upvalues[i]->closed);
+    gc_mark_value(js, *js->remembered_upvalues[i]->location);
 }
 
 static void gc_clear_remembered_upvalues(ant_t *js) {
@@ -430,7 +430,9 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
     sv_upvalue_t *uv = cells[i];
     if (!uv) continue;
     uv->gc_epoch = gc_epoch;
-    if (uv->location == &uv->closed) gc_mark_value(js, uv->closed);
+    /* Open cells still point into live VM or activation storage here:
+       teardown seals every cell before freeing that storage, after marking. */
+    gc_mark_value(js, *uv->location);
   }
 }
 
@@ -1056,6 +1058,7 @@ void gc_objects_run(
   ant_t *js, gc_str_mark_fn str_mark, gc_extra_roots_fn extra_roots
 ) {
   if (!js) return;
+  js->gc_objects_running = true;
 
   g_str_mark = str_mark;
   if (g_gc_func_mark_profile.enabled) g_gc_func_mark_profile.collections++;
@@ -1159,6 +1162,12 @@ void gc_objects_run(
       if (ns) { gc_mark_stack = ns; gc_mark_cap = target; }
     }
   }
+
+  ANT_ASSERT(
+    js->remembered_upvalue_len == 0,
+    "upvalue remembered set mutated during collection"
+  );
+  js->gc_objects_running = false;
 }
 
 /* Accumulated minor-GC phase times (ns), ANT_GC_LOG only:
@@ -1178,6 +1187,7 @@ static inline uint64_t gc_phase_now_ns(void) {
 
 void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   if (!js) return;
+  js->gc_objects_running = true;
 
   static int phase_log = -1;
   if (__builtin_expect(phase_log < 0, 0)) phase_log = getenv("ANT_GC_LOG") != NULL;
@@ -1246,6 +1256,7 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   // are pre-marked but not traversed unless in the remember set), so their
   // gc_epoch would not be updated and they would be incorrectly freed.
   // closure/upvalue arenas are only swept on major GC `gc_objects_run`
+  js->gc_objects_running = false;
 }
 
 uint64_t gc_get_epoch(void) { 

@@ -253,6 +253,7 @@ sv_activation_t *sv_activation_capture(sv_vm_t *vm, int entry_fp, sv_activation_
     ptrdiff_t slot = uv->location - src_base;
     *src_pp = uv->next;
     uv->location = &act->slots[slot];
+    gc_upvalue_capture_barrier(vm->js, uv);
     uv->next = NULL;
     *dst_pp = uv;
     dst_pp = &uv->next;
@@ -371,6 +372,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
     sv_upvalue_t *next = uv->next;
     uv->closed = *uv->location;
     uv->location = &uv->closed;
+    gc_upvalue_write_barrier(js, uv, uv->closed);
     uv->next = NULL;
     uv = next;
   }

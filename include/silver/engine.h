@@ -440,10 +440,17 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act);
 void sv_activation_discard(sv_vm_t *vm, int entry_fp);
 
 static inline void gc_upvalue_write_barrier(ant_t *js, sv_upvalue_t *uv, ant_value_t new_val) {
-  if (uv->location != &uv->closed || uv->in_remember_set) return;
-  if (new_val <= NANBOX_PREFIX) return;
-  if (uv->gc_epoch == 0) return;
-  if (gc_value_is_heap_ref(new_val)) gc_remember_upvalue(js, uv);
+  if (uv->in_remember_set || uv->gc_epoch == 0) return;
+  if (new_val <= NANBOX_PREFIX || !gc_value_is_heap_ref(new_val)) return;
+  if (uv->location == &uv->closed || gc_value_ref_is_young(new_val))
+    gc_remember_upvalue(js, uv);
+}
+
+static inline void gc_upvalue_capture_barrier(ant_t *js, sv_upvalue_t *uv) {
+  if (uv->in_remember_set || uv->gc_epoch == 0) return;
+  ant_value_t value = *uv->location;
+  if (gc_value_is_heap_ref(value) && gc_value_ref_is_young(value))
+    gc_remember_upvalue(js, uv);
 }
 
 static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {

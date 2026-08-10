@@ -2091,6 +2091,125 @@ FIXED, 2026-08-08.**
   `git diff --check` are clean. No call-dispatch code changed, so the devirt
   fuzzer was not required.
 
+**W9 — suspended-activation open-upvalue reachability FIXED, 2026-08-09;
+review-hardened 2026-08-10.**
+- **Bug/mechanism:** an escaped closure can keep an upvalue cell alive after
+  the suspended generator that owns its open slot becomes unreachable.
+  `gc_mark_upvalue_cells()` marked that cell but marked its value only after
+  it was closed, so the dead generator's activation was the captured heap
+  value's only remaining tracing path. During the same collection the value
+  could be swept before `generator_finalize()` released the coroutine and
+  `sv_activation_seal()` copied the now-stale slot into `uv->closed`. A write
+  barrier in seal alone would be too late: remembered upvalues are scanned
+  before object sweeping, and the value may already be dead.
+- **Failing-first evidence:** the clean baseline `/tmp/ant_w9_base_bin`
+  (`f1f18d18b49ff97c5e32d4ccc7123b88`) reduced an object captured by the
+  escaped closure to `undefined {}` after generator abandonment and young
+  churn. Temporary `ANT_GC_LOG` counters on the behavior-identical base
+  recorded `sealed=1 sealed-heap=1 sealed-old-heap=1 sealed-dead-obj=1`
+  (and 1,887 reachable open heap-valued upvalue marks during the run), pinning
+  both the missing current-collection edge and the old-cell transition. All
+  counters were removed before the final build.
+- **Fix:** closure tracing now marks the value at `*uv->location` for every
+  reachable upvalue cell, open or closed. This makes the captured value live
+  during the collection that finalizes an otherwise-unreachable activation.
+  `sv_activation_seal()` also invokes the existing upvalue write barrier
+  immediately after switching `location` to `&closed`, preserving old-to-young
+  assignments when sealing happens outside a collection.
+- **Review follow-up:** finalizer-driven sealing can occur inside
+  `gc_objects_run()`. Remembering an upvalue there mutates the just-cleared
+  remembered set, after which the same major can free the cell and leave a
+  dangling entry for the next minor. A per-isolate `gc_objects_running` bit
+  now makes `gc_remember_upvalue()` inert during object collection, and a
+  major-end assertion pins the empty-set invariant. Deferring coroutine
+  destruction was rejected: without also rooting retired activations, the
+  same sweep could free their still-open cells before deferred sealing.
+  The review also confirmed a separate minor gap: after an old suspended
+  activation resumes, `sv_activation_capture()` can move an old open cell back
+  over a new young value while its old closure is hidden behind an old object.
+  Capture now remembers exactly that old-to-young edge, and the remembered
+  scan marks `*uv->location` so it works for open and closed cells.
+- **Open-write follow-up:** capture-time remembering was still only a snapshot.
+  After suspension, `PUT_UPVAL`/`SET_UPVAL` could write a fresh young heap
+  value through an old open cell into `activation->slots`; the write barrier
+  rejected every cell whose location was not `&uv->closed`, while activation
+  slots are not minor roots. Young-only churn could therefore free the value
+  while an escaped getter still logically owned it. The barrier now preserves
+  its existing closed-cell policy and additionally remembers an old open cell
+  exactly when the new heap reference is young. The JIT had duplicated the old
+  closed-only eligibility check before calling the shared helper; that check
+  was removed, while its cheap already-remembered, non-heap, and young-cell
+  rejections remain. The C helper is now the single owner of closed/open and
+  generation policy.
+- **Follow-up evidence:** the previous final candidate, with the old closure
+  and upvalue first promoted, returned `undefined` after resume plus one minor.
+  Existing logs showed that minor had `closures=0 upvals=0`; a temporary
+  counter then recorded exactly one `capture-old-open-young` transition before
+  it. The counter and temporary repro file were removed. The permanent test
+  promotes the holder/closure, resumes with a young object, re-suspends, and
+  checks the object and nested child after young churn.
+- **Open-write evidence:** `/private/tmp/repro_setupval_hole.js` first promoted
+  sibling getter/setter closures behind an old object, then assigned a fresh
+  object without resuming the generator. The review candidate returned
+  corrupted `undefined` contents in 3/3 runs. A temporary interpreter counter
+  recorded one rejected old-open-to-young write. After extending the shared
+  barrier, the raw repro passed but the warmed permanent test still failed;
+  a temporary JIT-helper counter recorded no corresponding call, pinning the
+  emitter's closed-only prefilter. With that removed, the permanent test makes
+  1,000 primitive writes to JIT the setter, writes a young object, and verifies
+  both it and its nested child after minor churn. The previous pin
+  `/tmp/ant_w9_review_candidate_bin` failed exactly those two assertions
+  (**14/2**); the final pin passes **16/0**. All temporary counters were removed.
+- **Coverage/stress:** `test_arguments_escaped_coro.js` retains the scalar
+  case and adds object, nested-child, and function-valued captures from an
+  abandoned suspended generator; baseline failed the object case, final
+  candidate passes all 16 assertions, including promoted capture and
+  post-suspension write cases.
+  The original temporary `ANT_GC_STRESS` pass completed that test and
+  `test_upvalue_gc.cjs` at stress 1 and 3, plus
+  `test_gc_closure_churn.cjs` at stress 3. The review-hardened test passed
+  again at stress 1 and 3. After the open-write fix it passed at stress 1 and
+  3 again, and the full `test_gc_closure_churn.cjs` completed all five phases
+  at stress 3. The hook is removed from the final tree.
+- **Perf (pinned interleaved AB/BA, two rounds):** base/candidate
+  `test_gc_async` **364.06/365.10ms**, then candidate/base
+  **361.66/372.16ms**; base/candidate `test_gc_coro`
+  **7065.23/7079.33ms**, then candidate/base **7212.00/7103.67ms** — flat.
+  Newt base/candidate **39.83/40.14s**, then candidate/base
+  **38.87/39.52s**; candidate max RSS **907,739,136/903,200,768 bytes**, below
+  the 1GB cap.
+- **Review-hardening perf (previous final
+  `/tmp/ant_w9_candidate_bin` `277ef796...` vs final
+  `/tmp/ant_w9_review_candidate_bin` `06b1e2d2...`, interleaved AB/BA, two
+  rounds):** async base **365.97/365.92ms** vs candidate
+  **359.84/368.22ms**; coro base **7142.30/6980.00ms** vs candidate
+  **7079.36/7079.62ms** — flat. Newt base **36.11/40.18s** vs candidate
+  **38.15/40.51s**; the cool-start skew did not repeat (round two +0.33s), and
+  the candidate's measured max RSS was **896,630,784 bytes**.
+- **Open-write perf (review pin `06b1e2d2...` versus final
+  `/tmp/ant_w9_open_write_candidate_bin` `90c7131e...`):** four interleaved
+  async rounds were base **379.43/371.08/357.18/354.38ms** versus candidate
+  **387.08/388.24/345.56/352.17ms**; pairwise direction reversed in the later
+  rounds and the aggregate delta was **+0.75%**. Two coro rounds were
+  base/candidate **6873.00/6919.80ms**, then candidate/base
+  **7070.95/7055.43ms** (**+0.45%** aggregate). Whole-run temporary counters
+  showed neither workload called the changed JIT helper, ruling out the early
+  async split as mechanism rather than merely labeling it noise. Newt
+  base/candidate was **38.91/39.94s**, then candidate/base
+  **38.99/37.95s**; the approximately one-second delta sits at the documented
+  host sigma, retired instructions changed only **+0.13–0.15%**, and a whole-run
+  counter found only **225** helper calls across approximately 552 billion
+  instructions (216 open-old, 9 open-young, 0 closed). Candidate max RSS was
+  **894,533,632/890,978,304 bytes**, below both base runs and the 1GB cap.
+- **Gates on final candidate `/tmp/ant_w9_open_write_candidate_bin`
+  (`90c7131ec24d14d0e530136da1dd4e69`, identical to `build/ant`):** focused
+  escaped-coroutine, upvalue, closure-churn, async, and coro tests pass; spec
+  **3718/0** (98/0 files), JIT **125/125** (9/0 files), harness **179/0**
+  (`test_gc_async` 379ms, `test_gc_coro` 7.017s; oha hono 36,448, express
+  18,526, h3 22,817, elysia 73,381 RPS), `maid preflight`, `maid knowledge`,
+  and `git diff --check` are clean. No call-dispatch code changed, so the
+  devirt fuzzer was not required.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies
