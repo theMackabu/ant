@@ -37,6 +37,7 @@ export function targets() {
     'test_curried_call_fusion.cjs',
     'test_regexp_internal_state.cjs',
     'test_regexp_result_batch.cjs',
+    'test_object_site_lookup.cjs',
     'test_jit_osr_entry_reject.cjs',
     'test_jit_dnum_get_length.cjs',
     'test_double_bind.cjs',

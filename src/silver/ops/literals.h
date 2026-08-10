@@ -44,12 +44,9 @@ static inline void sv_op_global(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline sv_obj_site_cache_t *sv_obj_site_for_ip(sv_func_t *func, uint8_t *ip) {
-  if (!func || !ip || !func->obj_sites || func->obj_site_count == 0) return NULL;
+  if (!func || !func->code || !ip) return NULL;
   uint32_t off = (uint32_t)(ip - func->code);
-  for (uint16_t i = 0; i < func->obj_site_count; i++) {
-    if (func->obj_sites[i].bc_off == off) return &func->obj_sites[i];
-  }
-  return NULL;
+  return sv_obj_site_for_offset(func, off);
 }
 
 /* Apply the per-site shape cache to a fresh literal object. For static

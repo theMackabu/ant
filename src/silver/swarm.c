@@ -4715,7 +4715,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "vm",
     MIR_T_I64, "js",
     MIR_T_P,   "func",
-    MIR_T_I32, "bc_off");
+    MIR_T_P,   "site");
 
   MIR_type_t arr_ret = MIR_JSVAL;
   MIR_item_t array_proto = MIR_new_proto(ctx, "arr_proto",
@@ -9874,6 +9874,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_OBJECT: {
+        sv_obj_site_cache_t *site = sv_obj_site_for_offset(
+          func, (uint32_t)bc_off
+        );
         MIR_reg_t dst = vstack_push(&vs);
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 7,
@@ -9883,7 +9886,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
-            MIR_new_int_op(ctx, bc_off)));
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)site)));
         break;
       }
 

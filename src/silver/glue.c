@@ -1118,13 +1118,15 @@ ant_value_t jit_helper_put_global(
   return js_setprop(js, js->global, key, val);
 }
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, int32_t bc_off) {
+ant_value_t jit_helper_object(
+  sv_vm_t *vm,
+  ant_t *js,
+  sv_func_t *func,
+  sv_obj_site_cache_t *site
+) {
   ant_value_t obj = mkobj(js, 0);
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  if (func && bc_off >= 0 && bc_off < func->code_len) {
-    sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, func->code + bc_off);
-    sv_obj_site_apply(js, func, site, ptr);
-  }
+  sv_obj_site_apply(js, func, site, ptr);
   ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;

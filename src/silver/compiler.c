@@ -476,7 +476,7 @@ static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
 
   func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
   memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
-  func->obj_site_count = (uint16_t)count;
+  func->obj_site_count = count;
 
   uint32_t idx = 0;
   for (int pc = 0; pc < func->code_len && idx < count; ) {

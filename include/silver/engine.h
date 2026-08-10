@@ -282,8 +282,8 @@ struct sv_func {
   int local_type_count;
   int upvalue_count;
 
+  uint32_t obj_site_count;
   uint16_t ic_count;
-  uint16_t obj_site_count;
   uint16_t param_count;
   uint16_t function_length;
 
@@ -297,14 +297,14 @@ struct sv_func {
   bool is_tla: 1;
   bool is_derived_ctor: 1;
   bool has_dynamic_eval: 1;
-  /* Body is exactly `CLOSURE k; RETURN` for a fusable child: calling this
-     function only materializes a closure, so OP_CALL_CALL may skip it and
-     invoke the child directly (see sv_op_call_call). */
   bool is_curried_step: 1;
-  /* No OP_CLOSURE/OP_THIS/eval/arguments/exports/backward jumps in the
-     body and <=SV_CLOSURE_INLINE_UPVALS upvalues, all local captures at
-     slot 0 — safe to run against a caller-synthesized upvalue array. */
   bool is_fusable_leaf: 1;
+
+#ifdef ANT_JIT
+  bool jit_compile_failed: 1;
+  bool jit_compiling: 1;
+  bool jit_loop_hot: 1;
+#endif
 
 #ifdef ANT_JIT
   uint32_t call_count;
@@ -315,12 +315,30 @@ struct sv_func {
 
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
-  
-  bool jit_compile_failed;
-  bool jit_compiling;
-  bool jit_loop_hot;
 #endif
 };
+
+/* Object sites are recorded while bytecode is scanned from low to high pc,
+   so both the interpreter and JIT compiler can resolve a bytecode offset
+   without walking every preceding allocation site. */
+static inline sv_obj_site_cache_t *sv_obj_site_for_offset(
+  sv_func_t *func,
+  uint32_t bc_off
+) {
+  if (!func || !func->obj_sites || func->obj_site_count == 0) return NULL;
+
+  uint32_t lo = 0;
+  uint32_t hi = func->obj_site_count;
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    uint32_t site_off = func->obj_sites[mid].bc_off;
+    if (site_off < bc_off) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo >= func->obj_site_count || func->obj_sites[lo].bc_off != bc_off)
+    return NULL;
+  return &func->obj_sites[lo];
+}
 
 static inline sv_func_metadata_t *sv_func_metadata(sv_func_t *func) {
   if (!func || !func->has_dynamic_eval) return NULL;

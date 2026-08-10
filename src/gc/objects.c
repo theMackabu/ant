@@ -386,7 +386,7 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
   for (int i = 0; i < func->child_func_count; i++) 
     gc_mark_func(js, func->child_funcs[i]);
     
-  for (int i = 0; i < func->obj_site_count; i++) {
+  for (uint32_t i = 0; i < func->obj_site_count; i++) {
     if (func->obj_sites) ant_gc_shapes_mark(func->obj_sites[i].shared_shape);
   }
 

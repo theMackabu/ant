@@ -2325,6 +2325,98 @@ review-hardened 2026-08-10.**
   hono **37,816**, express **18,638**, h3 **23,230**, elysia **71,158 RPS**).
   The devirtualization fuzzer agrees on all four seeds.
 
+**P3 — resolve object-literal allocation sites without linear scans FIXED,
+2026-08-10.**
+- **Mechanism:** both `OP_OBJECT` in the interpreter and `jit_helper_object`
+  linearly walked `func->obj_sites` from the first entry until finding the
+  current bytecode offset. The compiler records these sites while scanning
+  bytecode from low to high `pc`, so the array is strictly `bc_off`-ordered;
+  in JIT code the offset and therefore the exact site are compile-time
+  constants. A function with many object literals consequently paid for all
+  preceding sites on every allocation at a hot late site.
+- **Fix:** one shared lower-bound lookup now resolves an interpreter bytecode
+  offset in `O(log n)`. The JIT emitter performs that lookup once while
+  compiling `OP_OBJECT`, embeds the resulting `sv_obj_site_cache_t *`, and
+  passes it directly to `jit_helper_object`; the allocation hot path performs
+  no site lookup. Site storage and generated code share the code-arena
+  lifetime. A missing site remains the existing generic, unshaped-object
+  fallback, and `sv_obj_site_apply` remains the single owner of cached-shape
+  application and key-atom resolution.
+- **Coverage:** `tests/test_object_site_lookup.cjs` interleaves eight static
+  and computed object-literal sites, validates exact keys and values after JIT
+  warmup, and repeats the matrix in a `debugger`-containing function that is
+  forced through the interpreter. It passes under Ant and Node and is listed
+  in the permanent harness manifest.
+- **Perf (pinned interleaved AB/BA, two rounds):** baseline
+  `/tmp/ant_p3_base_bin` (`11fa934137959e89f3ab2a21317561d9`) versus
+  candidate `/tmp/ant_p3_candidate_bin`
+  (`fd9c68605532f595689ec464200eb2f1`, identical to the gated `build/ant`).
+  The fixed-work micro deliberately generates 256 object-literal sites and
+  allocates repeatedly at the final one, amplifying the removed scan; it is
+  mechanism evidence, not an estimate of whole-program improvement.
+
+  | Allocation path | Baseline samples (ms) | Candidate samples (ms) | Mean delta |
+  |---|---:|---:|---:|
+  | JIT, 5M allocations | 3030.14, 3058.24 | 2428.78, 2432.05 | **-20.3%** |
+  | interpreter, 250k allocations | 153.96, 154.41 | 122.84, 122.19 | **-20.5%** |
+
+- **Regression evidence:** newt reversed direction across the two pairs:
+  baseline/candidate Main **35.834/36.146s**, then candidate/baseline
+  **37.554/37.721s**. Candidate max RSS was **870/875MB**, below the 1GB cap;
+  both time deltas are inside the established approximately-one-second host
+  noise. Gates on the exact candidate: spec **3718/0** (98/0 files), JIT
+  **125/125** (9/0 files), and harness **180/0** (`test_gc_async` 330ms,
+  `test_gc_coro` 7.163s; oha hono **36,546**, express **18,582**, h3
+  **23,048**, elysia **69,792 RPS**). No call-dispatch code changed, so the
+  devirtualization fuzzer was not required. The touched control-flow profile
+  entries are stale; release PGO regeneration remains a separate final-build
+  step rather than part of this source-local A/B.
+
+- **Review hardening:** `obj_site_count` is now `uint32_t`, matching the
+  compiler's actual count and the maximum representable bytecode offset,
+  instead of truncating modulo 65,536 and silently dropping optimization for
+  later sites. The field is placed before the remaining `uint16_t` counters to
+  avoid needless alignment padding. A generated function with **65,537**
+  object-literal sites reaches the final site with the expected key/value. The
+  `code_len` check in the lookup was removed after audit: every recorded
+  `bc_off` comes from a scan bounded by `func->code_len`, and an arbitrary
+  out-of-range lookup cannot equal any entry, so the binary search's ordinary
+  not-found result is already the defensive behavior. On the 256-site
+  interpreter micro, original/final was **128.88/125.14ms** versus
+  **126.98/124.50ms** (approximately 1% faster, not claimed beyond noise).
+  Final review-hardened pin `/tmp/ant_p3_final_bin`
+  (`64463f4c76793ac4c9aec4cc76fc6493`) passes spec **3718/0**, JIT
+  **125/125**, and harness **180/0** (`test_gc_async` 350ms,
+  `test_gc_coro` 7.331s; oha hono **36,737**, express **19,477**, h3
+  **22,229**, elysia **72,918 RPS**). Newt Main was **39.559s** with
+  **883,818,496-byte** max RSS.
+
+**P4 — direct shaped object allocation REJECTED, 2026-08-10.** A temporary
+whole-run counter showed that the proposed specialization targets real work:
+newt made **155,139,179** JIT object allocations, of which **155,139,147**
+arrived at an already-built static shape, 32 built the shape, and zero were
+dynamic or missing; ready shapes represented **426,972,918** property slots.
+The prototype embedded the final shape and property count at JIT compile time
+and allocated directly with them, removing the root-shape retain/release,
+shape swap, `ant_shape_count`, and `sv_obj_site_apply` steady-state branches.
+It nevertheless did not reduce fixed work. Pinned AB/BA against the P3
+candidate measured the 5M-allocation JIT micro at baseline
+**2438.40/2455.65ms** versus shaped **2449.92/2452.65ms** (+0.2%, flat).
+Newt reversed direction: baseline/shaped Main **36.706/35.607s**, then
+shaped/baseline **36.992/36.102s** (aggregate -0.3%, inside host noise), with
+all RSS samples below 887MB. The extra allocator API and JIT helper were
+reverted; the temporary counter and environment hook were removed.
+
+**P5 — operand-carried object-site index REJECTED, 2026-08-10.** A correct
+`u32` site operand was prototyped rather than `u16`, so O(1) interpreter/JIT
+lookup would not reintroduce the 65,535-site ceiling. It expanded `OP_OBJECT`
+from one byte to five and filled the exact index during the existing post-pass.
+On 10x fixed interpreter work at the 256th site, the pinned widened-count
+baseline measured **1215.67/1226.27ms** versus operand
+**1363.31/1371.54ms**: a consistent **12.0% regression**. The bytecode-format
+change was reverted; the one-byte opcode plus binary search remains the better
+interpreter trade-off, while JIT code already embeds the resolved site pointer.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies
