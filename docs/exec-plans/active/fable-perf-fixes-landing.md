@@ -2266,6 +2266,53 @@ review-hardened 2026-08-10.**
   hono **36,552**, express **18,309**, h3 **22,922**, and elysia **74,218 RPS**.
   No call-dispatch code changed, so the devirt fuzzer was not required.
 
+**P2 — inline interpreter sloppy-`this` early-outs FIXED, 2026-08-10.**
+- **Mechanism/counters:** `sv_normalize_this_for_frame()` was inline, but every
+  non-arrow sloppy frame unconditionally crossed from `engine.c` into the
+  out-of-line `js_normalize_sloppy_this()` in `ant.c`, including values that
+  need no boxing, allocation, or GC work. Temporary whole-run counters on
+  fixed interpreter-only work recorded **3,200,006** calls: **1,600,004**
+  nullish receivers, **1,600,002** object receivers, and zero primitives.
+  The counters were removed before the candidate build.
+- **Fix:** the shared engine header now returns the realm global directly for
+  `undefined`/`null`, and returns heap objects plus native functions unchanged.
+  Only primitive and unusual values reach `js_normalize_sloppy_this()`; that
+  function remains the single owner of rooted wrapper allocation and
+  prototype setup. Strict functions and arrows retain their existing earlier
+  exits. Disassembly of the four interpreter frame-entry sites confirms the
+  old unconditional calls are now branches to the primitive slow path.
+- **PGO:** changing this inline branch tree invalidated the checked-in counts
+  for `sv_execute_frame`; the first stale-profile build was therefore rejected
+  as evidence. The profile was regenerated before final measurement. Baseline
+  `/tmp/ant_p2_base_bin` (`d55ebadfb79618a72a96917f461e62e7`) versus final
+  `/tmp/ant_p2_fresh_pgo_candidate_bin`
+  (`d3aa63fbeba02649c6d530e552fd1b0c`, identical to `build/ant`); final Darwin
+  AArch64 profile md5 `f263b4a3c012f94eb6c65229536d91bc`.
+- **Perf (pinned AB/BA, two rounds):** the micro uses a `debugger` opcode to
+  make the tiny callee permanently JIT-ineligible, while its caller loop can
+  still optimize. Checksums were identical.
+
+  | Interpreter workload | Baseline samples (ms) | Final samples (ms) | Mean delta |
+  |---|---:|---:|---:|
+  | nullish `this`, 100M calls | 2241.99, 2258.86 | 2200.08, 2167.81 | **-3.0%** |
+  | object `this`, 100M calls | 575.26, 573.78 | 580.53, 574.32 | +0.5% (flat) |
+  | primitive boxing, 10M calls | 877.54, 831.33 | 794.34, 797.78 | non-regression control |
+
+- **Regression evidence:** `test_gc_async` was baseline **367.19/367.31ms**
+  versus final **358.70/381.24ms**, and `test_gc_coro` baseline
+  **7283.46/7129.26ms** versus final **7258.18/7188.32ms**—both flat.
+  `tests/bench.js`'s relevant `func_call` row was baseline **0.87/1.00ns**
+  versus final **0.88/0.99ns**. Newt reversed direction across the two pairs:
+  base/final **36.70/38.86s**, then final/base **36.43/37.12s**; final retired
+  **546.9/547.5B** instructions versus baseline **552.8/553.1B** (about 1%
+  fewer), with **887/899MB** max RSS, ruling the wall split thermal.
+- **Gates on the exact final artifact:** existing sloppy/bound-`this` parity
+  remains **421/421**, Function-constructor strictness and direct-eval
+  strictness pass, spec **3718/0** (98/0 files), JIT **125/125** (9/0 files),
+  and harness **179/0** (`test_gc_async` 352ms, `test_gc_coro` 6.976s; oha
+  hono **37,816**, express **18,638**, h3 **23,230**, elysia **71,158 RPS**).
+  The devirtualization fuzzer agrees on all four seeds.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

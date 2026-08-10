@@ -735,6 +735,9 @@ static inline bool sv_is_nullish_this(ant_value_t v) {
 static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
   if (func->is_strict) return this_val;
+  uint8_t type = vtype(this_val);
+  if (type == T_UNDEF || type == T_NULL) return js->global;
+  if (is_object_type(this_val) || type == T_CFUNC) return this_val;
   return js_normalize_sloppy_this(js, this_val);
 }
 
