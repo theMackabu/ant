@@ -97,7 +97,8 @@ static uint64_t rxstat_exec_internal, rxstat_shared_fast, rxstat_cache_hit,
   rxstat_batch_replace_results, rxstat_batch_guard_rejects,
   rxstat_batch_reject_state, rxstat_batch_reject_exec_location,
   rxstat_batch_reject_exec_accessor, rxstat_batch_reject_exec_value,
-  rxstat_batch_reject_flags, rxstat_batch_reject_lastindex;
+  rxstat_batch_reject_flags, rxstat_batch_reject_lastindex,
+  rxstat_statics_updates, rxstat_statics_materialized;
 static bool rxstat_enabled;
 static void rxstat_dump(void) {
   fprintf(stderr,
@@ -111,7 +112,8 @@ static void rxstat_dump(void) {
     "[regex-stats] symbol-match calls=%llu discarded-results=%llu\n"
     "[regex-stats] symbol-replace calls=%llu materialized-results=%llu func=%llu substitution=%llu\n"
     "[regex-stats] batch match-calls=%llu match-results=%llu replace-calls=%llu replace-results=%llu guard-rejects=%llu\n"
-    "[regex-stats] batch-reject state=%llu exec-location=%llu exec-accessor=%llu exec-value=%llu flags=%llu lastIndex=%llu\n",
+    "[regex-stats] batch-reject state=%llu exec-location=%llu exec-accessor=%llu exec-value=%llu flags=%llu lastIndex=%llu\n"
+    "[regex-stats] statics snapshots=%llu materialized=%llu\n",
     (unsigned long long)rxstat_exec_internal, (unsigned long long)rxstat_shared_fast,
     (unsigned long long)rxstat_exec_generic, (unsigned long long)rxstat_lit_obj,
     (unsigned long long)rxstat_cache_hit, (unsigned long long)rxstat_cache_miss,
@@ -158,7 +160,9 @@ static void rxstat_dump(void) {
     (unsigned long long)rxstat_batch_reject_exec_accessor,
     (unsigned long long)rxstat_batch_reject_exec_value,
     (unsigned long long)rxstat_batch_reject_flags,
-    (unsigned long long)rxstat_batch_reject_lastindex);
+    (unsigned long long)rxstat_batch_reject_lastindex,
+    (unsigned long long)rxstat_statics_updates,
+    (unsigned long long)rxstat_statics_materialized);
 }
 static void rxstat_init(void) {
   static bool done;
@@ -179,6 +183,12 @@ static inline void rxstat_note_result(
   if (has_indices) rxstat_result_indices++;
 }
 
+enum {
+  REGEXP_STATIC_VALUE_COUNT = 11,
+  REGEXP_STATIC_OVECTOR_COUNT = 10,
+  REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1,
+};
+
 /* Compiled patterns, PCRE2 scratch state, and RegExp.prototype mutation
    guards belong to one isolate. RegExp objects point directly to shared
    compiled entries through their native payload; the cache below only keeps
@@ -192,6 +202,11 @@ struct ant_regex_state {
 
   pcre2_match_context *match_ctx;
   pcre2_jit_stack *jit_stack;
+
+  PCRE2_SIZE static_ovector[REGEXP_STATIC_OVECTOR_COUNT * 2];
+  uint16_t static_materialized_mask;
+  uint8_t static_ovcount;
+  bool static_pending;
 
   bool exec_write_guard_armed;
   bool exec_property_written;
@@ -391,15 +406,105 @@ static ant_value_t regexp_build_named_groups_meta(ant_t *js, pcre2_code *code) {
   return meta;
 }
 
-static inline ant_value_t regexp_static_value(ant_t *js, size_t idx) {
-  if (idx >= sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]))
-    return js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkundef();
-  return js->mutable_roots.regexp_static_values[idx] ? js->mutable_roots.regexp_static_values[idx] : (js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkundef());
+static inline ant_value_t regexp_static_empty(ant_t *js) {
+  return js->builtins.regexp_empty_string
+    ? js->builtins.regexp_empty_string
+    : js_mkundef();
 }
 
-static inline ant_value_t regexp_static_set(ant_t *js, size_t idx, ant_value_t value) {
-  if (idx < sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]))
+static inline void regexp_statics_clear_materialized(
+  ant_t *js,
+  ant_regex_state_t *state
+) {
+  uint16_t mask = state->static_materialized_mask;
+  if (mask == 0) return;
+
+  ant_value_t empty = regexp_static_empty(js);
+  while (mask) {
+    unsigned idx = (unsigned)__builtin_ctz((unsigned)mask);
+    js->mutable_roots.regexp_static_values[idx] = empty;
+    mask &= (uint16_t)(mask - 1);
+  }
+  state->static_materialized_mask = 0;
+}
+
+static ant_value_t regexp_static_materialize(ant_t *js, size_t idx) {
+  if (idx >= REGEXP_STATIC_VALUE_COUNT) return regexp_static_empty(js);
+
+  ant_regex_state_t *state = js->regex_state;
+  uint16_t bit = (uint16_t)(1u << idx);
+  if (
+    !state || !state->static_pending ||
+    (state->static_materialized_mask & bit)
+  ) {
+    ant_value_t value = js->mutable_roots.regexp_static_values[idx];
+    return value ? value : regexp_static_empty(js);
+  }
+
+  size_t capture = idx < 9 ? idx + 1 : 0;
+  ant_value_t value = regexp_static_empty(js);
+  if (
+    capture < state->static_ovcount &&
+    state->static_ovector[capture * 2] != PCRE2_UNSET
+  ) {
+    PCRE2_SIZE start = state->static_ovector[capture * 2];
+    PCRE2_SIZE end = state->static_ovector[capture * 2 + 1];
+    ant_offset_t subject_len;
+    ant_offset_t subject_off = vstr(
+      js, js->mutable_roots.regexp_static_subject, &subject_len
+    );
+    if (end < start || end > subject_len)
+      return js_mkerr(js, "invalid regexp static snapshot");
+    value = js_mkstr(
+      js,
+      (const char *)(uintptr_t)subject_off + start,
+      end - start
+    );
+    if (is_err(value)) return value;
+    if (rxstat_enabled) rxstat_statics_materialized++;
+  }
+
+  if (idx >= 9) {
+    js->mutable_roots.regexp_static_values[9] = value;
+    js->mutable_roots.regexp_static_values[10] = value;
+    state->static_materialized_mask |= (uint16_t)((1u << 9) | (1u << 10));
+  } else {
     js->mutable_roots.regexp_static_values[idx] = value;
+    state->static_materialized_mask |= bit;
+  }
+  if (state->static_materialized_mask == REGEXP_STATIC_ALL_MATERIALIZED) {
+    state->static_pending = false;
+    js->mutable_roots.regexp_static_subject = regexp_static_empty(js);
+  }
+  return value;
+}
+
+static inline ant_value_t regexp_static_value(ant_t *js, size_t idx) {
+  return regexp_static_materialize(js, idx);
+}
+
+static ant_value_t regexp_statics_materialize_all(ant_t *js) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state || !state->static_pending) return js_mkundef();
+
+  for (size_t i = 0; i < REGEXP_STATIC_OVECTOR_COUNT; i++) {
+    ant_value_t value = regexp_static_materialize(js, i);
+    if (is_err(value)) return value;
+  }
+  return js_mkundef();
+}
+
+static inline ant_value_t regexp_static_set(
+  ant_t *js,
+  size_t idx,
+  ant_value_t value
+) {
+  if (idx >= REGEXP_STATIC_VALUE_COUNT) return js_mkundef();
+  ant_value_t materialized = regexp_statics_materialize_all(js);
+  if (is_err(materialized)) return materialized;
+  js->mutable_roots.regexp_static_values[idx] = value;
+  if (js->regex_state)
+    js->regex_state->static_materialized_mask |= (uint16_t)(1u << idx);
   return js_mkundef();
 }
 
@@ -426,20 +531,57 @@ REGEXP_STATIC_ACCESSORS(amp, 10)
 
 #undef REGEXP_STATIC_ACCESSORS
 
-static void update_regexp_statics(ant_t *js, const char *str_ptr, PCRE2_SIZE *ovector, uint32_t ovcount) {
-  ant_value_t empty = js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkstr(js, "", 0);
+static void update_regexp_statics_eager(
+  ant_t *js,
+  const char *str_ptr,
+  PCRE2_SIZE *ovector,
+  uint32_t ovcount
+) {
+  ant_value_t empty = regexp_static_empty(js);
   for (int i = 1; i <= 9; i++) {
     ant_value_t val = empty;
-    if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET)
+    if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET) {
+      if (rxstat_enabled) rxstat_statics_materialized++;
       val = js_mkstr(js, str_ptr + ovector[2*i], ovector[2*i+1] - ovector[2*i]);
+    }
     js->mutable_roots.regexp_static_values[i - 1] = val;
   }
 
+  if (rxstat_enabled && ovcount > 0 && ovector[0] != PCRE2_UNSET)
+    rxstat_statics_materialized++;
   ant_value_t match0 = (ovcount > 0 && ovector[0] != PCRE2_UNSET)
     ? js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0])
     : empty;
   js->mutable_roots.regexp_static_values[9] = match0;
   js->mutable_roots.regexp_static_values[10] = match0;
+}
+
+static void update_regexp_statics(
+  ant_t *js,
+  ant_value_t subject,
+  const char *str_ptr,
+  PCRE2_SIZE *ovector,
+  uint32_t ovcount
+) {
+  if (rxstat_enabled) rxstat_statics_updates++;
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) {
+    update_regexp_statics_eager(js, str_ptr, ovector, ovcount);
+    return;
+  }
+
+  regexp_statics_clear_materialized(js, state);
+  js->mutable_roots.regexp_static_subject = subject;
+  uint32_t stored = ovcount < REGEXP_STATIC_OVECTOR_COUNT
+    ? ovcount
+    : REGEXP_STATIC_OVECTOR_COUNT;
+  memcpy(
+    state->static_ovector,
+    ovector,
+    (size_t)stored * 2 * sizeof(*ovector)
+  );
+  state->static_ovcount = (uint8_t)stored;
+  state->static_pending = true;
 }
 
 static inline bool is_pcre2_passthrough_escape(char c) {
@@ -1539,7 +1681,7 @@ static ant_value_t regexp_exec_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str_ptr, ovector, 1);
+  update_regexp_statics(js, str_arg, str_ptr, ovector, 1);
 
   if (truthy_only) return js_true;
 
@@ -1740,7 +1882,7 @@ static ant_value_t regexp_exec_shared_fast(
     return js_mknull();
   }
 
-  update_regexp_statics(js, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, str_ptr, ovector, ovcount);
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
@@ -1889,7 +2031,7 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     return js_mknull();
   }
 
-  update_regexp_statics(js, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, str_ptr, ovector, ovcount);
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
@@ -2348,7 +2490,7 @@ static ant_value_t regexp_match_batch_fast(
 
     PCRE2_SIZE start = ovector[0];
     PCRE2_SIZE end = ovector[1];
-    update_regexp_statics(js, str_ptr, ovector, ovcount);
+    update_regexp_statics(js, str, str_ptr, ovector, ovcount);
     ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
     regex_match_scope_end(&scope);
     if (is_err(match)) return match;
@@ -2637,7 +2779,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
 
     ovector[0] = (PCRE2_SIZE)(match - str_ptr);
     ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-    update_regexp_statics(js, str_ptr, ovector, 1);
+    update_regexp_statics(js, str, str_ptr, ovector, 1);
 
     scan = match + needle_len;
     if (!global) break;
@@ -2747,7 +2889,7 @@ static ant_value_t regexp_replace_batch_fast(
           };
     }
 
-    update_regexp_statics(js, str_ptr, ovector, ovcount);
+    update_regexp_statics(js, str, str_ptr, ovector, ovcount);
     bool replaced = repl_template(
       replacement_ptr, replacement_len,
       str_ptr + start, end - start,
@@ -2828,7 +2970,7 @@ static ant_value_t regexp_search_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str_ptr, ovector, 1);
+  update_regexp_statics(js, str, str_ptr, ovector, 1);
   return tov((double)ovector[0]);
 }
 
@@ -2911,7 +3053,7 @@ ant_value_t regexp_literal_exec_call(
       PCRE2_SIZE ovector[2];
       ovector[0] = (PCRE2_SIZE)(match - str_ptr);
       ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-      update_regexp_statics(js, str_ptr, ovector, 1);
+      update_regexp_statics(js, arg, str_ptr, ovector, 1);
 
       rxstat_note_result(1, false, false);
       ant_value_t result_arr = js_mkarr(js);
@@ -3619,7 +3761,7 @@ ant_value_t regexp_literal_replace_call(
 
         ovector[0] = (PCRE2_SIZE)(match - str_ptr);
         ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-        update_regexp_statics(js, str_ptr, ovector, 1);
+        update_regexp_statics(js, str, str_ptr, ovector, 1);
 
         scan = match + needle_len;
         if (!global) break;
@@ -3820,6 +3962,7 @@ void init_regex_module(ant_t *js) {
 
   ant_value_t empty = js_mkstr_permanent(js, "", 0);
   js->builtins.regexp_empty_string = empty;
+  js->mutable_roots.regexp_static_subject = empty;
   for (size_t i = 0; i < sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]); i++)
     js->mutable_roots.regexp_static_values[i] = empty;
 

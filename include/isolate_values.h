@@ -129,6 +129,7 @@ ANT_BUILTIN_ARR(zlib_protos, 9)
 
 #ifdef ANT_MUTABLE_ROOT
 ANT_MUTABLE_ROOT(wasm_pending_import_throw)
+ANT_MUTABLE_ROOT(regexp_static_subject)
 ANT_MUTABLE_ROOT_ARR(regexp_static_values, 11)
 #undef ANT_MUTABLE_ROOT
 #undef ANT_MUTABLE_ROOT_ARR

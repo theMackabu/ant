@@ -83,6 +83,45 @@ assert(regexp.lastIndex === 0, 'global sticky final lastIndex');
 regexp = /(a)(b)/g;
 assertJson('abxab'.match(regexp), ['ab', 'ab'], 'global capture match values');
 assert(RegExp.$1 === 'a' && RegExp.$2 === 'b', 'global match RegExp statics');
+assert(
+  RegExp.lastMatch === 'ab' && RegExp['$&'] === 'ab',
+  'global match RegExp static aliases'
+);
+
+RegExp.$1 = 'manual capture';
+RegExp.lastMatch = 'manual match';
+assert(RegExp.$1 === 'manual capture', 'RegExp static setter after lazy match');
+assert(RegExp.$2 === 'b', 'RegExp static setter preserves sibling captures');
+assert(RegExp.lastMatch === 'manual match', 'RegExp lastMatch setter');
+assert(RegExp['$&'] === 'ab', 'RegExp static aliases remain independently writable');
+
+/(z)/.test('z');
+assert(RegExp.$1 === 'z', 'next match replaces manually written capture');
+assert(RegExp.lastMatch === 'z' && RegExp['$&'] === 'z', 'next match replaces aliases');
+
+/(a)(b)?/.test('a');
+assert(RegExp.$1 === 'a' && RegExp.$2 === '', 'unmatched lazy capture is empty');
+
+(function leaveLazyStaticsAsOnlySubjectRoot() {
+  const subject = 'x'.repeat(10000) + 'left-right';
+  assert(/(left)-(right)$/.test(subject), 'lazy static lifetime setup');
+})();
+let staticChurn = [];
+for (let i = 0; i < 200000; i++) {
+  staticChurn.push({ i, nested: [i, i + 1] });
+  if (staticChurn.length > 1024) staticChurn = [];
+}
+assert(RegExp.$1 === 'left', 'lazy capture subject survives GC');
+staticChurn = [];
+for (let i = 0; i < 20000; i++) {
+  staticChurn.push({ i, nested: [i, i + 1] });
+  if (staticChurn.length > 1024) staticChurn = [];
+}
+assert(RegExp.$2 === 'right', 'partially materialized subject remains rooted');
+assert(
+  RegExp.lastMatch === 'left-right' && RegExp['$&'] === 'left-right',
+  'lazy match aliases survive GC'
+);
 
 regexp = /([a-z]+)(\d+)?/g;
 assert(

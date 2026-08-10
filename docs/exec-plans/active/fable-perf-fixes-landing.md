@@ -2210,6 +2210,62 @@ review-hardened 2026-08-10.**
   and `git diff --check` are clean. No call-dispatch code changed, so the
   devirt fuzzer was not required.
 
+**P1 — lazy RegExp legacy statics FIXED, 2026-08-10.**
+- **Mechanism/counters:** the global match and replace batch loops called
+  `update_regexp_statics()` after every successful match even when user code
+  never read `RegExp.$1` through `$9`, `lastMatch`, or `$&`. On fixed work with
+  3,001,500 successful matches, the baseline performed exactly **30,015,000**
+  legacy-static string allocations: ten per match. The result path separately
+  materialized match 0 where its API required it. This was the dominant
+  constant factor left in the new batch loops, not PCRE2 execution.
+- **Fix:** each isolate now keeps the latest group-0-through-group-9 PCRE2 byte
+  offsets plus a rooted subject and an eleven-bit materialization mask.
+  Successful matches copy the small offset snapshot and allocate no legacy
+  static strings. Each static getter materializes only its requested capture;
+  `lastMatch` and `$&` share one match-0 value. The existing independently
+  writable Ant accessors retain their prior behavior: a setter first
+  materializes the pending snapshot, then replaces only its own value. Once
+  all values exist, the now-unneeded subject root is released. Failure to
+  allocate the optional per-isolate regex state retains the old eager path.
+- **Counter proof:** on the same 3,001,500-match workload, final records
+  `snapshots=3001500 materialized=1000500`. All 1,000,500 materializations are
+  from the control loop that explicitly reads `$1`; the unused global match
+  and replace loops materialize **zero** legacy-static strings.
+- **Correctness/lifetime:** the permanent batch-result test now covers global
+  match statics, the two match-0 aliases, unmatched captures, independent
+  setter behavior, overwrite by the next match, and partial lazy reads after
+  the subject's last ordinary reference is dropped and allocation churn runs.
+  A separate differential matrix covering `exec`, `test`, global match and
+  replace, search, replacement callbacks, Unicode captures, unmatched
+  captures, and GC lifetime was byte-identical to Node. With a temporary
+  `ANT_GC_STRESS` tick in `gc_maybe` (removed before the final build), the
+  focused batch-result and internal-regex-state tests passed at stress 1 and 3.
+- **Perf (pinned interleaved AB/BA, two rounds, lower is better):** baseline
+  `/tmp/ant_p1_base_bin` (`ef3390c6e7c3f78a17ab983582d5ba33`) versus final
+  `/tmp/ant_p1_final_bin` (`d55ebadfb79618a72a96917f461e62e7`, identical to
+  `build/ant`). Checksums and corpus sizes were identical.
+
+  | Workload | Baseline samples (ms) | Final samples (ms) | Mean delta |
+  |---|---:|---:|---:|
+  | batch global match, statics unread | 118.56, 119.92 | 44.04, 44.00 | **-63.1% (2.71x)** |
+  | batch global replace, statics unread | 114.62, 113.93 | 36.10, 36.06 | **-68.4% (3.17x)** |
+  | `exec` loop reading `$1` every match | 372.81, 388.85 | 320.84, 316.89 | **-16.3%** |
+  | regex route matches | 95.20, 95.72 | 48.79, 49.96 | **-48.3%** |
+  | regex token scan | 441.85, 442.85 | 374.54, 377.42 | **-15.0%** |
+  | regex identifier split | 478.01, 480.36 | 399.55, 402.09 | **-16.4%** |
+  | compile route regexp | 6.50, 6.43 | 6.52, 6.44 | +0.2% (noise) |
+
+- **Regression gates on the exact pins:** `test_gc_async` baseline
+  **354.13/362.13ms** versus final **350.91/349.80ms**; `test_gc_coro`
+  baseline **7082.08/7065.27ms** versus final **7077.36/7077.10ms**—flat.
+  The earlier two-round newt interleave, before the cold subject-release
+  hardening, was base/candidate **41.01/41.44s**, then candidate/base
+  **38.51/38.93s** with candidate RSS **880/889MB**. The exact post-hardening
+  final gate was **39.12s / 893,304,832-byte** max RSS. Spec **3718/0** (98/0
+  files), JIT **125/125** (9/0 files), and harness **179/0** pass; oha measured
+  hono **36,552**, express **18,309**, h3 **22,922**, and elysia **74,218 RPS**.
+  No call-dispatch code changed, so the devirt fuzzer was not required.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies
