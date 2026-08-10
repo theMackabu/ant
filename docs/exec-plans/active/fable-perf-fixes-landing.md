@@ -2417,6 +2417,97 @@ baseline measured **1215.67/1226.27ms** versus operand
 change was reverted; the one-byte opcode plus binary search remains the better
 interpreter trade-off, while JIT code already embeds the resolved site pointer.
 
+**P6 (review label P4) — isolate prototype-property invalidation FIXED,
+2026-08-10.**
+- **Mechanism/counters:** every successful store to a property named
+  `prototype` called `ant_ic_epoch_bump()`, including the cached PUT_FIELD
+  hit itself. On fixed work containing 100,500 `F.prototype = X` stores,
+  temporary whole-run counters measured **100,500 global epoch bumps** and
+  only **50,250 stores entering with a matching put-IC epoch**: every store
+  invalidated its own IC, so the site alternated between hit and refill while
+  also flushing every unrelated IC in the process. The counters and benchmark
+  files were removed after measurement.
+- **Fix/C5 coordination:** each isolate now has a dedicated 32-bit
+  prototype-write epoch. Ordinary `prototype` stores bump that epoch, which
+  only the interpreter and JIT `instanceof` ICs guard. The field occupies the
+  alignment hole after `next_ic_object_identity`, and the comparison IC stores
+  its guard in the existing four-byte tail padding; `sv_ic_entry_t` remains
+  **64 bytes**, enforced by a static assertion. On wrap, a global epoch bump
+  prevents ABA. Actual `[[Prototype]]` rewires and shape invalidations retain
+  their existing global bumps.
+- **Intrinsic prototype roots:** the review's constructor-rebind case exposed
+  a deeper pre-existing semantic error: primitive receiver lookup followed the
+  mutable global `String`/`Number`/`Boolean` binding, whereas Node continues to
+  use the realm intrinsic after that global is rebound. The isolate now roots
+  the intrinsic Function, String, Number, Boolean, Promise, BigInt, and Symbol
+  prototypes beside its existing Object and Array roots, and
+  `js_primitive_prototype` returns them directly. This removes the constructor
+  tagging flag, global-binding invalidation, name comparisons, and JIT store
+  exclusions entirely; `js_get_ctor_proto` remains the generic dynamic helper
+  for call sites that actually request a named global constructor. The old
+  Function-prototype raw-pointer/epoch cache is also unnecessary because the
+  direct nanboxed root is stable. A first correct prototype that guarded every
+  primitive IC with the dedicated epoch remains rejected: it invalidated the
+  checked-in 10-billion-sample PGO profile and appeared 16-17% slower. A
+  controlled pair where both sides missed that PGO entry isolated the guard
+  itself to about 1.3%; direct intrinsic roots add no permanent IC guard.
+- **Pre-existing cached-add bug fixed:** the cached shape-transition store that
+  created a new own `prototype` did not bump any epoch on HEAD. A warm
+  `instanceof` IC that had resolved an inherited prototype could therefore
+  remain stale after the new own property shadowed it. All successful stores
+  now share `ant_prototype_property_write_invalidate`; the regression warms the add
+  transition on prototype-less arrow functions before checking the resulting
+  false-to-true `instanceof` change. This is a correctness fix in addition to
+  the global-epoch performance split and should be called out when committed.
+- **OOM hardening:** property addition changes the object's shape before its
+  value storage may need to grow. If that growth fails, the new key remains
+  observable with an undefined value. Both `mkprop` variants and the cached
+  add-transition path now invalidate immediately after the successful shape
+  transition, so even this half-mutated OOM state cannot retain stale
+  prototype IC results. Successful stores still perform exactly one
+  invalidation.
+- **Why not only skip non-callable holders:** the raw backing object passed by
+  descriptor-store paths does not uniformly retain the nanboxed function's
+  callable tag (ordinary functions are callable through their closure value,
+  while callable proxies use an object flag). A broad callable test there
+  would be unsound. The dedicated epoch is per-isolate, size-free, and avoids
+  global property-IC churn without guessing from an incomplete tag.
+- **Correctness coverage:** `tests/test_prototype_write_epoch.cjs` warms both
+  true and false `instanceof` results, then changes the constructor prototype
+  through assignment, an interleaved cached overwrite, a cached add-transition,
+  and `Object.defineProperty`; it also covers a hot non-callable property store,
+  primitive negative-IC mutation, and Node-identical warm-versus-fresh reads
+  after rebinding String, Number, Boolean, BigInt, Symbol, Function, and
+  Promise. The existing primitive-IC test retains its warmed wholesale
+  `String.prototype` replacement coverage, and the property-location stress
+  test remains green.
+- **JIT epoch-load audit:** the pre-existing `instanceof` and
+  `Object.prototype.isPrototypeOf` fast paths loaded the unsigned 32-bit global
+  epoch cache field as `MIR_T_I32` while loading the counter as `MIR_T_U32`.
+  MIR sign-extends the former and zero-extends the latter, forcing refills
+  throughout the upper half of the epoch cycle. Both loads now use
+  `MIR_T_U32`; MIR accepts either type, so this was a silent performance bug.
+- **Perf (pinned AB/BA, two rounds):** baseline
+  `/tmp/ant_p4_base_bin` (`c8f4f9a129ef66d621c5abe61aba2770`) versus the
+  measured candidate `/tmp/ant_p4_final_bin`
+  (`fb774aafc5d6be78778900a163891efa`). Fifty million callable prototype stores measured
+  baseline **473.72/472.47ms** versus final **374.68/380.53ms**, a **20.2%**
+  mean improvement. Hot `instanceof` was **259.76/259.51ms** versus
+  **261.19/262.32ms** (+0.8%, noise), and the unchanged primitive property
+  path was **429.00/434.41ms** versus **436.06/439.00ms** (+1.3%, within the
+  approximately-2% micro noise).
+- **Gates on the exact final artifact:** the intrinsic-root follow-up is pinned
+  as `/tmp/ant_p4_intrinsic_final_bin`
+  (`75c1081820c0ce9252c0322da91d04e7`, identical to `build/ant`). The focused
+  prototype-write test passes in both Ant and Node, and the original rebind
+  repro is Node-identical. Spec **3718/0** (98/0 files), JIT **125/125** (9/0
+  files), and harness **181/0** pass. The harness ran with the host's invalid
+  `NO_COLOR=1` removed; oha measured hono **34,460**, express **18,681**, h3
+  **22,165**, and elysia **67,083 RPS**. Newt Main completed in **38.08s** with
+  **883,474,432-byte** max RSS. `maid build`, `maid preflight`, and `git diff
+  --check` are clean. No call-dispatch code changed, so the devirtualization
+  fuzzer was not required.
+
 ## Decision log
 
 - 2026-08-02: port-per-feature over merge (swarm.c drift makes clean applies

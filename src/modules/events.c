@@ -1927,8 +1927,7 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   if (js->builtins.eventemitter_proto) return js->builtins.eventemitter_proto;
 
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t eventemitter_ctor = js_mkobj(js);
   ant_value_t eventemitter_proto = js_mkobj(js);
@@ -2011,8 +2010,7 @@ void init_events_module(ant_t *js) {
   js_set(js, global, "PromiseRejectionEvent", pre_fn);
 
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(global, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t eventtarget_proto = js_mkobj(js);
   js->builtins.eventtarget_proto = eventtarget_proto;

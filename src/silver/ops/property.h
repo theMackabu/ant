@@ -846,8 +846,7 @@ static inline bool sv_try_put_field_fast(
 
   ant_object_prop_set_unchecked(ptr, prop_idx, val);
   gc_write_barrier(js, ptr, val);
-
-  if (a->str == js->intern.prototype) ant_ic_epoch_bump();
+  ant_prototype_property_write_invalidate(js, ptr, a->str);
   if (out_index) *out_index = prop_idx;
   
   return true;
@@ -899,9 +898,7 @@ static inline ant_value_t sv_put_field_cached(
         (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0) {
       ant_object_prop_set_unchecked(ptr, ic->cached_index, val);
       gc_write_barrier(js, ptr, val);
-      /* `.prototype` rewrites must invalidate instanceof / primitive-IC
-         negative entries even on the cached path. */
-      if (a->str == js->intern.prototype) ant_ic_epoch_bump();
+      ant_prototype_property_write_invalidate(js, ptr, a->str);
       return val;
     }
   }
@@ -918,6 +915,9 @@ static inline ant_value_t sv_put_field_cached(
       ant_shape_retain(ic->guard.add.to_shape);
       ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
+      /* The new key is observable through the shape even if value-storage
+         growth fails, so invalidate before that allocation can fail. */
+      ant_prototype_property_write_invalidate(js, ptr, a->str);
       if (ic->guard.add.slot >= ptr->prop_count &&
           !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
         return js_mkerr(js, "oom");

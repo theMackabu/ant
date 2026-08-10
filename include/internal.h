@@ -188,7 +188,8 @@ struct ant_isolate_t {
   ant_fixed_arena_t upvalue_arena;
 
   uint32_t next_ic_object_identity;
-  /* Addresses of property-IC fields that own retained shapes. */
+  uint32_t prototype_write_epoch;
+
   ant_shape_t ***ic_shape_ref_slots;
   size_t ic_shape_ref_len;
   size_t ic_shape_ref_cap;
@@ -248,12 +249,20 @@ struct ant_isolate_t {
     void *floor;
   } cstk;
 
+  // rename to uppercase
   struct {
     uint64_t counter;
     struct sym_registry_entry *registry;
 
     ant_value_t object_proto;
     ant_value_t array_proto;
+    ant_value_t function_proto;
+    ant_value_t string_proto;
+    ant_value_t number_proto;
+    ant_value_t boolean_proto;
+    ant_value_t promise_proto;
+    ant_value_t bigint_proto;
+    ant_value_t symbol_proto;
     ant_value_t array_values_fn;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
@@ -383,15 +392,11 @@ struct ant_isolate_t {
   } cfunc_name_cache;
 
   struct {
-    ant_object_t *function_proto_obj;
     ant_object_t *with_no_unscopables_base;
     ant_object_t *with_no_unscopables_proto;
-
     void *with_no_unscopables_base_shape;
     void *with_no_unscopables_proto_shape;
-
     uint32_t with_no_unscopables_epoch;
-    uint32_t function_proto_epoch;
   } runtime_cache;
 
   struct {
@@ -423,6 +428,18 @@ struct ant_isolate_t {
     size_t remembered_builder_cap;
   } rope_gc;
 };
+
+static inline void ant_prototype_write_epoch_bump(ant_t *js) {
+  if (++js->prototype_write_epoch == 0) {
+    ant_ic_epoch_bump();
+    js->prototype_write_epoch = 1;
+  }
+}
+
+static inline void ant_prototype_property_write_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
+  if (!js || !holder || !key) return;
+  if (key == js->intern.prototype) ant_prototype_write_epoch_bump(js);
+}
 
 enum {
   STR_ASCII_UNKNOWN = 0,

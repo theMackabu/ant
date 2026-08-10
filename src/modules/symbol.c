@@ -333,6 +333,7 @@ void init_symbol_module(ant_t *js) {
   #undef INIT_SYM
 
   ant_value_t symbol_proto = js_mkobj(js);
+  js->sym.symbol_proto = symbol_proto;
   ant_value_t object_proto = js->sym.object_proto;
   
   if (is_object_type(object_proto)) js_set_proto_init(symbol_proto, object_proto);
@@ -381,13 +382,10 @@ void init_symbol_module(ant_t *js) {
   js_set(js, array_unscopables, "flatMap", js_true);
   js_set_sym(js, array_proto, g_unscopables, array_unscopables);
   
-  ant_value_t string_ctor = js_get(js, js_glob(js), "String");
-  ant_value_t string_proto = js_get(js, string_ctor, "prototype");
-  js_set_sym(js, string_proto, g_iterator, js_mkfun(string_iterator));
+  js_set_sym(js, js->sym.string_proto, g_iterator, js_mkfun(string_iterator));
   
   ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
-  ant_value_t promise_proto = js_get(js, promise_ctor, "prototype");
-  js_set_sym(js, promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
+  js_set_sym(js, js->sym.promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
 
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
   js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));

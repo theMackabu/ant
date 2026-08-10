@@ -1700,10 +1700,10 @@ static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int narg
 void init_bigint_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t bigint_proto = js_mkobj(js);
+  js->sym.bigint_proto = bigint_proto;
   js_set_proto_init(bigint_proto, object_proto);
   defmethod(js, bigint_proto, "toString", 8, js_mkfun(builtin_bigint_toString));
   defmethod(js, bigint_proto, "valueOf", 7, js_mkfun(builtin_bigint_valueOf));

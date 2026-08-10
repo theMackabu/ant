@@ -118,7 +118,13 @@ typedef struct {
   } guard;
   bool cached_is_own;
   uint8_t shape_ref_mask;
+  uint32_t prototype_epoch;
 } sv_ic_entry_t;
+
+static_assert(
+  sizeof(sv_ic_entry_t) == 64,
+  "IC entries must remain one cache line"
+);
 
 enum {
   SV_IC_SHAPE_REF_CACHED   = 1u << 0,

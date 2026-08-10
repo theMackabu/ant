@@ -1287,7 +1287,7 @@ void init_date_module(ant_t *js) {
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
   
-  ant_value_t function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
   ant_value_t date_proto = js_mkobj(js);
   
   js_set_proto_init(date_proto, object_proto);

@@ -766,11 +766,21 @@ static void gc_mark_roots(ant_t *js) {
 
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->Ant);
+  
   gc_mark_value(js, js->esm.hooks);
   gc_mark_value(js, js->esm.import_meta);
+  
   gc_mark_value(js, js->sym.object_proto);
   gc_mark_value(js, js->sym.array_proto);
+  gc_mark_value(js, js->sym.function_proto);
+  gc_mark_value(js, js->sym.string_proto);
+  gc_mark_value(js, js->sym.number_proto);
+  gc_mark_value(js, js->sym.boolean_proto);
+  gc_mark_value(js, js->sym.promise_proto);
+  gc_mark_value(js, js->sym.bigint_proto);
+  gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
+  
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->new_target);
   gc_mark_value(js, js->current_func);

@@ -1282,7 +1282,7 @@ static ant_value_t rpc_client_ctor(ant_t *js, ant_value_t *args, int nargs) {
 static void rpc_init_constructors(ant_t *js) {
   if (js->builtins.rpc_server_ctor && js->builtins.rpc_client_ctor) return;
 
-  ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
+  ant_value_t object_proto = js->sym.object_proto;
 
   js->builtins.rpc_server_proto = js_mkobj(js);
   if (is_object_type(object_proto)) js_set_proto_init(js->builtins.rpc_server_proto, object_proto);

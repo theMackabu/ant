@@ -344,7 +344,9 @@ static inline ant_value_t sv_instanceof_ic_eval(
   uint32_t cur_epoch = ant_ic_epoch_counter;
   uintptr_t rhs_id = (uintptr_t)vdata(r);
   
-  if (ic->epoch != cur_epoch || ic->cached_aux != rhs_id) goto slow_path;
+  if (ic->epoch != cur_epoch ||
+      ic->prototype_epoch != js->prototype_write_epoch ||
+      ic->cached_aux != rhs_id) goto slow_path;
   if (lhs_proto == ic->guard.receiver_proto) return js_true;
 
   if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
@@ -370,6 +372,7 @@ slow_path:
     ic->cached_aux = (uintptr_t)vdata(r);
     ic->guard.receiver_proto = ctor_proto;
     ic->guard.add.epoch = ant_ic_obj_epoch_counter;
+    ic->prototype_epoch = js->prototype_write_epoch;
   }
 
   return res;

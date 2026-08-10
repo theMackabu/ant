@@ -300,14 +300,6 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
   return true;
 }
 
-static inline bool prop_loc_invalidates_instanceof(ant_t *js, ant_prop_loc_t loc) {
-  if (!loc.obj || !loc.obj->shape) return false;
-  const ant_shape_prop_t *prop = ant_shape_prop_at(loc.obj->shape, loc.slot);
-  return
-    prop && prop->type == ANT_SHAPE_KEY_STRING &&
-    prop->key.interned == js->intern.prototype;
-}
-
 ant_value_t js_prop_load(ant_prop_loc_t loc) {
   if (!loc.obj || loc.slot >= loc.obj->prop_count) return js_mkundef();
   return ant_object_prop_get_unchecked(loc.obj, loc.slot);
@@ -317,7 +309,11 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value) {
   if (!loc.obj || loc.slot >= loc.obj->prop_count) return false;
   ant_object_prop_set_unchecked(loc.obj, loc.slot, value);
   gc_write_barrier(js, loc.obj, value);
-  if (prop_loc_invalidates_instanceof(js, loc)) ant_ic_epoch_bump();
+  const ant_shape_prop_t *prop = ant_shape_prop_at(loc.obj->shape, loc.slot);
+  if (prop && prop->type == ANT_SHAPE_KEY_STRING)
+    ant_prototype_property_write_invalidate(
+      js, loc.obj, prop->key.interned
+    );
   return true;
 }
 
@@ -3328,6 +3324,7 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
 
   uint32_t slot = 0;
   bool added = false;
+  const char *interned_key = NULL;
   if (vtype(k) == T_SYMBOL) {
     ant_offset_t sym_off = (ant_offset_t)vdata(k);
     int32_t found = ant_shape_lookup_symbol(ptr->shape, sym_off);
@@ -3350,8 +3347,8 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     if (!interned) return js_mkerr(js, "oom");
     v = js_expose_cfunc_for_key(js, v, interned, (size_t)klen);
     if (is_err(v)) return v;
+    interned_key = interned;
 
-    if (interned == js->intern.prototype) ant_ic_epoch_bump();
     int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
     
     if (found >= 0) {
@@ -3364,6 +3361,13 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     }
   }
 
+  /* A successful shape transition is observable even if growing the value
+     storage below fails, so invalidate before that allocation can fail. */
+  if (added && interned_key)
+    ant_prototype_property_write_invalidate(
+      js, ptr, interned_key
+    );
+
   if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
     return js_mkerr(js, "oom");
   }
@@ -3374,6 +3378,10 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  if (interned_key && !added)
+    ant_prototype_property_write_invalidate(
+      js, ptr, interned_key
+    );
 
   return v;
 }
@@ -3405,6 +3413,13 @@ static ant_value_t mkprop_interned_impl(
     added = true;
   }
 
+  /* Keep prototype ICs coherent with a shape transition even when
+     the following property-storage growth fails. */
+  if (added)
+    ant_prototype_property_write_invalidate(
+      js, ptr, interned_key
+    );
+
   if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
     return js_mkerr(js, "oom");
   }
@@ -3414,6 +3429,10 @@ static ant_value_t mkprop_interned_impl(
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  if (!added)
+    ant_prototype_property_write_invalidate(
+      js, ptr, interned_key
+    );
   
   return v;
 }
@@ -4730,14 +4749,14 @@ ant_value_t js_primitive_prototype(ant_t *js, uint8_t type) {
   switch (type) {
     case T_OBJ:       return js->sym.object_proto;
     case T_ARR:       return js->sym.array_proto;
+    case T_STR:       return js->sym.string_proto;
+    case T_NUM:       return js->sym.number_proto;
+    case T_BOOL:      return js->sym.boolean_proto;
+    case T_FUNC:      return js->sym.function_proto;
+    case T_PROMISE:   return js->sym.promise_proto;
+    case T_BIGINT:    return js->sym.bigint_proto;
+    case T_SYMBOL:    return js->sym.symbol_proto;
     case T_GENERATOR: return js->sym.generator_proto;
-    case T_STR:       return js_get_ctor_proto(js, "String", 6);
-    case T_NUM:       return js_get_ctor_proto(js, "Number", 6);
-    case T_BOOL:      return js_get_ctor_proto(js, "Boolean", 7);
-    case T_FUNC:      return js_get_ctor_proto(js, "Function", 8);
-    case T_PROMISE:   return js_get_ctor_proto(js, "Promise", 7);
-    case T_BIGINT:    return js_get_ctor_proto(js, "BigInt", 6);
-    case T_SYMBOL:    return js_get_ctor_proto(js, "Symbol", 6);
     default:          return js_mknull();
   }
 }
@@ -4757,7 +4776,7 @@ ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len
       ant_prop_loc_t loc = lkp_interned(as_obj, key_intern);
       if (loc.obj) return loc;
     } else if (t == T_CFUNC) {
-      ant_value_t func_proto = js_get_ctor_proto(js, "Function", 8);
+      ant_value_t func_proto = js->sym.function_proto;
       uint8_t ft = vtype(func_proto);
       if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
         ant_prop_loc_t loc = lkp_interned(js_as_obj(func_proto), key_intern);
@@ -14402,7 +14421,7 @@ ant_value_t js_mkpromise(ant_t *js) {
     set_slot(obj, SLOT_CTOR, promise_ctor);
   }
 
-  ant_value_t promise_proto = js_get_ctor_proto(js, "Promise", 7);
+  ant_value_t promise_proto = js->sym.promise_proto;
   if (is_object_type(promise_proto)) {
     js_set_proto_init(obj, promise_proto);
   }
@@ -14752,7 +14771,7 @@ static ant_value_t builtin_Promise(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t new_target = js->new_target;
   ant_value_t p_obj = js_as_obj(p);
 
-  ant_value_t promise_proto = js_get_ctor_proto(js, "Promise", 7);
+  ant_value_t promise_proto = js->sym.promise_proto;
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, promise_proto);
   GC_ROOT_PIN(js, instance_proto);
 
@@ -15833,25 +15852,8 @@ static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ct
   return mkval(T_BOOL, proto_chain_contains_cycle_safe(js, current, ctor_proto) ? 1 : 0);
 }
 
-static inline ant_object_t *cached_function_proto_obj(ant_t *js) {
-  /* Raw pointer returned without revalidation; a rebound global Function
-     is only caught by epoch wipes, so stay on the obj epoch (minor +
-     major) to keep the pre-split invalidation cadence. */
-  uint32_t cache_epoch = ant_ic_obj_epoch_counter;
-  if (
-    js->runtime_cache.function_proto_epoch == cache_epoch &&
-    js->runtime_cache.function_proto_obj
-  ) return js->runtime_cache.function_proto_obj;
-
-  sv_stat_objepoch_refill[0]++;
-  ant_value_t proto = js_get_ctor_proto(js, "Function", 8);
-  if (!is_object_type(proto)) return NULL;
-  
-  ant_object_t *cached = js_obj_ptr(js_as_obj(proto));
-  js->runtime_cache.function_proto_obj = cached;
-  js->runtime_cache.function_proto_epoch = cache_epoch;
-  
-  return cached;
+static inline ant_object_t *intrinsic_function_proto_obj(ant_t *js) {
+  return js_obj_ptr(js->sym.function_proto);
 }
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
@@ -15889,7 +15891,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
       }
     }
   } else {
-    ant_object_t *func_proto_ptr = cached_function_proto_obj(js);
+    ant_object_t *func_proto_ptr = intrinsic_function_proto_obj(js);
     if (func_proto_ptr && func_proto_ptr->shape &&
         ant_shape_lookup_symbol(func_proto_ptr->shape, has_instance_sym_off) >= 0) {
       use_slow_has_instance = true;
@@ -16346,10 +16348,7 @@ ant_value_t js_get_module_import_binding(ant_t *js) {
   }
 
   GC_ROOT_PIN(js, import_obj);
-  ant_value_t function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-
-  if (vtype(function_proto) == T_UNDEF)
-    function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
   GC_ROOT_PIN(js, function_proto);
 
   if (is_object_type(function_proto)) js_set_proto_wb(js, import_obj, function_proto);
@@ -17874,6 +17873,11 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js->sym.object_proto = object_proto;
   js->sym.array_proto = array_proto;
+  js->sym.function_proto = function_proto;
+  js->sym.string_proto = string_proto;
+  js->sym.number_proto = number_proto;
+  js->sym.boolean_proto = boolean_proto;
+  js->sym.promise_proto = promise_proto;
   js->owns_mem = false;
   js->max_size = 0;
   
@@ -18738,7 +18742,7 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
   }
   
   if (!off.obj && is_promise) {
-    ant_value_t promise_proto = js_get_ctor_proto(js, "Promise", 7);
+    ant_value_t promise_proto = js->sym.promise_proto;
     if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
       off = lkp(js, promise_proto, key, key_len);
       if (off.obj) { *out = js_prop_load(off); return true; }

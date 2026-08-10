@@ -904,12 +904,9 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
 }
 
 static void ffi_init_prototypes(ant_t *js) {
-  ant_value_t function_proto = 0;
-
   if (js->builtins.ffi_library_proto) return;
 
-  function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   js->builtins.ffi_library_proto = js_mkobj(js);
   js->builtins.ffi_function_proto = js_mkobj(js);

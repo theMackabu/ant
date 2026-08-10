@@ -3633,8 +3633,7 @@ ant_value_t buffer_library(ant_t *js) {
 void init_buffer_module(ant_t *js) {
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t arraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t arraybuffer_proto = js_mkobj(js);

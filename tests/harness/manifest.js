@@ -23,6 +23,7 @@ export function targets() {
     'test_string_length_accumulation.cjs',
     'test_property_location_stress.cjs',
     'test_primitive_ic_invalidation.cjs',
+    'test_prototype_write_epoch.cjs',
     'test_accessor_undefined_result.cjs',
     'test_array_define_fast_path.cjs',
     'test_nul_property_keys.cjs',

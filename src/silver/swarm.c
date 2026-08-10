@@ -10096,7 +10096,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           char inst_rt_name[32], inst_ro_name[32], inst_ica_name[32], inst_lt_name[32];
           char inst_lo_name[32], inst_lf_name[32], inst_lp_name[32], inst_icp_name[32];
           char inst_lpt_name[32], inst_lpo_name[32], inst_ls_name[32], inst_ich_name[32];
-          char inst_ics_name[32], inst_ici_name[32];
+          char inst_ics_name[32], inst_ici_name[32], inst_pe_name[32], inst_ipe_name[32];
           snprintf(inst_ic_name, sizeof(inst_ic_name), "inst_ic_%d_%u", bc_off, (unsigned)ic_idx);
           snprintf(inst_ice_name, sizeof(inst_ice_name), "inst_ice_%d_%u", bc_off, (unsigned)ic_idx);
           snprintf(inst_rt_name, sizeof(inst_rt_name), "inst_rt_%d_%u", bc_off, (unsigned)ic_idx);
@@ -10113,6 +10113,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           snprintf(inst_ich_name, sizeof(inst_ich_name), "inst_ich_%d_%u", bc_off, (unsigned)ic_idx);
           snprintf(inst_ics_name, sizeof(inst_ics_name), "inst_ics_%d_%u", bc_off, (unsigned)ic_idx);
           snprintf(inst_ici_name, sizeof(inst_ici_name), "inst_ici_%d_%u", bc_off, (unsigned)ic_idx);
+          snprintf(inst_pe_name, sizeof(inst_pe_name), "inst_pe_%d_%u", bc_off, (unsigned)ic_idx);
+          snprintf(inst_ipe_name, sizeof(inst_ipe_name), "inst_ipe_%d_%u", bc_off, (unsigned)ic_idx);
 
           MIR_reg_t r_ic = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ic_name);
           MIR_reg_t r_ic_epoch = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ice_name);
@@ -10130,6 +10132,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_reg_t r_ic_holder = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ich_name);
           MIR_reg_t r_ic_shape = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ics_name);
           MIR_reg_t r_ic_idx_val = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ici_name);
+          MIR_reg_t r_proto_epoch = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_pe_name);
+          MIR_reg_t r_ic_proto_epoch = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, inst_ipe_name);
           MIR_label_t direct_true = MIR_new_label(ctx);
 
           MIR_append_insn(ctx, jit_func,
@@ -10139,7 +10143,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, r_ic_epoch),
-              MIR_new_mem_op(ctx, MIR_T_I32,
+              MIR_new_mem_op(ctx, MIR_T_U32,
                 (MIR_disp_t)offsetof(sv_ic_entry_t, epoch), r_ic, 0, 1)));
           {
             char ice_cur_name[40];
@@ -10155,6 +10159,22 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_new_reg_op(ctx, r_ic_epoch),
                 MIR_new_reg_op(ctx, r_cur_ep)));
           }
+
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_proto_epoch),
+              MIR_new_mem_op(ctx, MIR_T_U32,
+                (MIR_disp_t)offsetof(ant_t, prototype_write_epoch), r_js, 0, 1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_ic_proto_epoch),
+              MIR_new_mem_op(ctx, MIR_T_U32,
+                (MIR_disp_t)offsetof(sv_ic_entry_t, prototype_epoch), r_ic, 0, 1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BNE,
+              MIR_new_label_op(ctx, slow),
+              MIR_new_reg_op(ctx, r_ic_proto_epoch),
+              MIR_new_reg_op(ctx, r_proto_epoch)));
 
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_URSH,
@@ -10398,7 +10418,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, r_ic_epoch),
-              MIR_new_mem_op(ctx, MIR_T_I32,
+              MIR_new_mem_op(ctx, MIR_T_U32,
                 (MIR_disp_t)offsetof(sv_ic_entry_t, epoch), r_ic, 0, 1)));
           {
             char cip_ce_name[40];
