@@ -31,7 +31,9 @@ twice; the checked-in Darwin AArch64 PGO profile was retrained on the result.
 A 2026-08-08 W5 follow-up fixed `lastIndexOf` mid-surrogate positions (floor,
 not round-up) and split the builtin into ASCII/Unicode paths: ASCII misses
 ~10.6×, position/late-hit cases ~200×, non-ASCII misses ~11× (spec now 3718/0).
-Last reviewed: 2026-08-08
+A 2026-08-09 W8 follow-up made rope-mark metadata OOM complete a conservative
+major instead of silently suppressing both minor and major collection.
+Last reviewed: 2026-08-09
 
 ## A/B results (2026-08-03, interleaved, order alternated across rounds,
 ## vs pinned base /tmp/ant_fable_base = master 66499b0b)
@@ -2041,6 +2043,53 @@ FIXED, 2026-08-08.**
   base/candidate **40.99/41.96s**, then candidate/base **41.58/41.72s**; all
   candidate RSS readings remain below 1GB. No call-dispatch code changed, so
   the devirt fuzzer was not required.
+
+**W8 — rope mark-table OOM fallback FIXED, 2026-08-09.**
+- **Bug/mechanism:** `gc_ropes_begin()` returned one boolean for both metadata
+  setup and collection policy. Failure to count or grow its per-isolate block
+  table made `gc_run()` and `gc_run_minor()` return before incrementing their
+  counters or collecting any ordinary objects. Under allocator pressure, every
+  later attempt could take the same exit while the heap kept growing toward
+  OOM. Merely retaining rope blocks is not sufficient: rope and builder
+  payloads can be the only owners of ordinary GC values, which would otherwise
+  be swept out from under the retained blocks.
+- **Fix:** begin now has explicit normal, retry-major, and
+  conservative-major results. A failed minor immediately invokes a major. If
+  that major cannot reserve the table either, it still runs the ordinary major
+  collector while treating all initialized words in the isolate's misc, old,
+  and young rope blocks as conservative roots. The sweep retains active misc
+  and old blocks, promotes every non-empty active young block, recycles empty
+  young blocks, resets nursery accounting, and trims only already-free blocks;
+  it requires no allocation. A failed geometric-growth `realloc` retries the
+  exact required table size before selecting fallback. Normal
+  tracing still uses the preallocated sorted table and binary lookup—there is
+  no pool walk in the normal pointer-mark path. The two mode bits fill existing
+  tail padding before the next pointer in `ant_t`.
+- **Stress:** a temporary `ANT_GC_STRESS` tick in `gc_maybe` (removed before
+  the final build) passed builder/rope focused tests at stress 1 and 3,
+  `worker_threads` 21/0 at stress 3, and the full spec **3718/0** at stress 10.
+- **Perf (pinned interleaved AB/BA):** exact pre-W8 base
+  `/tmp/ant_w8_base_bin` (`a477f5bbefa2787bac8a87cadebc8af6`)
+  versus final candidate `/tmp/ant_w8_candidate_bin`
+  (`8ce111fd7b3f7152038ef497ad602eb4`) on fixed-work ytdlp:
+  base **2.99/2.98s**, candidate **2.99/2.96s**, byte-identical output—flat.
+  Two-round newt AB/BA on those exact pins was base/candidate
+  **41.15/41.61s**, then candidate/base **39.87/40.76s**—non-directional
+  inside the documented approximately one-second host noise. Candidate RSS
+  was **900/895MB**, under the 1GB cap, and it retired approximately 0.6%
+  fewer instructions than base. A final review moved the conservative-mode
+  choice out of every string mark and into the once-per-major callback
+  selection, leaving the normal rope/builder marker without an added branch.
+- **Gates on post-review final build `f1f18d18…`:** the measured
+  `8ce111fd…` pin differs only in the OOM-only sweep cleanup (shared epilogue,
+  exact-size reserve retry, and empty-young-block recycle); no fault-injection
+  code remains. Focused rope and builder regressions pass; spec **3718/0**
+  (98/0 files), JIT **125/125** (9/0 files), harness **179/0**
+  (`test_gc_async` 382ms, `test_gc_coro` 7.040s; oha hono 37,000,
+  express 18,844, h3 22,325, elysia 76,030 RPS), newt Main **38.36s** /
+  **892,370,944-byte** max RSS. `maid preflight`, `maid knowledge`, and
+  `git diff --check` are clean. No call-dispatch code changed, so the devirt
+  fuzzer was not required.
 
 ## Decision log
 

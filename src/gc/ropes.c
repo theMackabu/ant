@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "gc/objects.h"
 #include "gc/ropes.h"
 #include "pool.h"
 
@@ -45,6 +46,12 @@ static bool rope_marks_reserve(ant_t *js, size_t needed) {
   gc_rope_mark_t *marks = (gc_rope_mark_t *)realloc(
     js->rope_gc.marks, cap * sizeof(*marks)
   );
+  if (!marks && cap != needed) {
+    cap = needed;
+    marks = (gc_rope_mark_t *)realloc(
+      js->rope_gc.marks, cap * sizeof(*marks)
+    );
+  }
   if (!marks) return false;
   js->rope_gc.marks = (struct gc_rope_mark *)marks;
   js->rope_gc.mark_cap = cap;
@@ -86,16 +93,23 @@ static void rope_nodes_clear_epochs(ant_pool_t *pool) {
   }
 }
 
-bool gc_ropes_begin(ant_t *js, bool minor) {
+gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor) {
   size_t needed = 0;
   if (!rope_marks_count_pool(&js->pool.rope, &needed) ||
       !rope_marks_count_pool(&js->rope_gc.old, &needed) ||
       !rope_marks_count_pool(&js->rope_gc.young, &needed) ||
-      !rope_marks_reserve(js, needed))
-    return false;
+      !rope_marks_reserve(js, needed)) {
+    js->rope_gc.mark_count = 0;
+    js->rope_gc.minor_marking = false;
+    js->rope_gc.conservative_marking = !minor;
+    return minor
+      ? GC_ROPES_BEGIN_RETRY_MAJOR
+      : GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
+  }
 
   js->rope_gc.mark_count = 0;
   js->rope_gc.minor_marking = minor;
+  js->rope_gc.conservative_marking = false;
   if (++js->rope_gc.mark_epoch == 0) {
     js->rope_gc.mark_epoch = 1;
     rope_nodes_clear_epochs(&js->rope_gc.old);
@@ -109,7 +123,22 @@ bool gc_ropes_begin(ant_t *js, bool minor) {
   if (js->rope_gc.mark_count > 1)
     qsort(js->rope_gc.marks, js->rope_gc.mark_count,
           sizeof(gc_rope_mark_t), rope_mark_cmp);
-  return true;
+  return GC_ROPES_BEGIN_NORMAL;
+}
+
+static void rope_mark_conservative_pool(ant_t *js, ant_pool_t *pool) {
+  for (ant_pool_block_t *b = pool->head; b; b = b->next)
+    if (b->used) gc_mark_conservative_range(js, b->data, b->used);
+}
+
+void gc_ropes_mark_conservative_roots(ant_t *js) {
+  if (!js || !js->rope_gc.conservative_marking) return;
+  /* Retaining the blocks is not enough: live rope and builder payloads may
+     be the only owners of ordinary GC values. Treat every initialized word
+     as a root before the ordinary heap is swept. */
+  rope_mark_conservative_pool(js, &js->pool.rope);
+  rope_mark_conservative_pool(js, &js->rope_gc.old);
+  rope_mark_conservative_pool(js, &js->rope_gc.young);
 }
 
 static gc_rope_mark_t *rope_mark_find(ant_t *js, const void *ptr) {
@@ -208,6 +237,17 @@ static void trim_rope_free_blocks(ant_pool_t *pool, int keep) {
 }
 
 void gc_ropes_sweep(ant_t *js, bool minor) {
+  if (js->rope_gc.conservative_marking) {
+    ANT_ASSERT(!minor, "conservative rope sweep must be a major");
+    for (ant_pool_block_t *b = js->rope_gc.young.head; b;) {
+      ant_pool_block_t *next = b->next;
+      unlink_rope_block(&js->rope_gc.young, b);
+      if (b->used) promote_rope_block(js, b);
+      else recycle_rope_block(&js->rope_gc.young, b);
+      b = next;
+    }
+  }
+
   gc_rope_mark_t *marks = (gc_rope_mark_t *)js->rope_gc.marks;
   size_t count = js->rope_gc.mark_count;
   for (size_t i = 0; i < count; i++) {
@@ -237,4 +277,5 @@ void gc_ropes_sweep(ant_t *js, bool minor) {
   js->rope_gc.young_alloc = 0;
   js->rope_gc.mark_count = 0;
   js->rope_gc.minor_marking = false;
+  js->rope_gc.conservative_marking = false;
 }

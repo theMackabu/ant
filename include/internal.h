@@ -416,6 +416,7 @@ struct ant_isolate_t {
     size_t mark_cap;
     uint32_t mark_epoch;
     bool minor_marking;
+    bool conservative_marking;
     ant_string_builder_t **remembered_builders;
     size_t remembered_builder_len;
     size_t remembered_builder_cap;

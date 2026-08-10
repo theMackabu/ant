@@ -672,6 +672,17 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
   }
 }
 
+void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
+  if (!js || !ptr || size < sizeof(uint64_t)) return;
+  /* Pool storage is word-aligned. Padding may be scanned via memcpy, but every
+     candidate sink validates containment; ignore an incomplete trailing word
+     rather than reading beyond the block's used range. */
+  size_t bytes = size & ~(sizeof(uint64_t) - 1u);
+  uintptr_t lo = (uintptr_t)ptr;
+  if (lo > UINTPTR_MAX - bytes) return;
+  gc_scan_range(js, lo, lo + bytes);
+}
+
 __attribute__((noinline))
 static void gc_scan_current_stack(ant_t *js) {
   jmp_buf jb;
@@ -1041,7 +1052,9 @@ void gc_pin_existing_objects(ant_t *js) {
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 }
 
-void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
+void gc_objects_run(
+  ant_t *js, gc_str_mark_fn str_mark, gc_extra_roots_fn extra_roots
+) {
   if (!js) return;
 
   g_str_mark = str_mark;
@@ -1070,6 +1083,7 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
     if (ns) { js->remember_set = ns; js->remember_set_cap = 256; }
   }
 
+  if (extra_roots) extra_roots(js);
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, false);
   gc_age_regex_cache(js, false);

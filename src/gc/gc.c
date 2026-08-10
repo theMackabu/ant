@@ -211,6 +211,15 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     return;
 }
 
+/* Conservative rope GC scans rope and builder storage directly, so this
+   callback only needs to retain their flat string leaves. */
+static void gc_mark_flat_str(ant_t *js, ant_value_t value) {
+  if (value <= NANBOX_PREFIX || vtype(value) != T_STR) return;
+  uintptr_t data = (uintptr_t)vdata(value);
+  if (data && (data & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT)
+    gc_strings_mark(js, (const void *)data);
+}
+
 uint64_t gc_stat_major_total;
 
 void gc_remember_builder(ant_t *js, ant_string_builder_t *builder) {
@@ -240,14 +249,22 @@ static void gc_clear_remembered_builders(ant_t *js) {
 
 void gc_run(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
-  if (!gc_ropes_begin(js, false)) return;
+  gc_ropes_begin_result_t rope_begin = gc_ropes_begin(js, false);
+  ANT_ASSERT(
+    rope_begin != GC_ROPES_BEGIN_RETRY_MAJOR,
+    "major rope marking cannot request another major"
+  );
 
   gc_stat_major_total++;
   size_t live_before = js->obj_arena.live_count;
 
   gc_bigints_begin(js);
   gc_strings_begin(js);
-  gc_objects_run(js, gc_mark_str);
+  bool conservative = rope_begin == GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
+  gc_objects_run(
+    js, conservative ? gc_mark_flat_str : gc_mark_str,
+    conservative ? gc_ropes_mark_conservative_roots : NULL
+  );
   gc_clear_remembered_builders(js);
   ant_ic_epoch_bump();
   ant_ic_obj_epoch_bump();
@@ -282,7 +299,10 @@ void gc_run_minor(ant_t *js) {
     gc_run(js);
     return;
   }
-  if (!gc_ropes_begin(js, true)) return;
+  if (gc_ropes_begin(js, true) != GC_ROPES_BEGIN_NORMAL) {
+    gc_run(js);
+    return;
+  }
 
   static int log_minors = -1;
   if (__builtin_expect(log_minors < 0, 0)) log_minors = getenv("ANT_GC_LOG") != NULL;
