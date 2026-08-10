@@ -75,119 +75,17 @@ enum {
   REGEXP_FLAG_STICKY      = 1 << 7,
 };
 
-/* ANT_REGEX_STATS=1: per-run regex path counters, dumped at exit (atexit,
-   works on servers where process.exit skips isolate teardown). */
-static uint64_t rxstat_exec_internal, rxstat_shared_fast, rxstat_cache_hit,
-  rxstat_cache_miss, rxstat_compiles, rxstat_jit_match,
-  rxstat_interp_match, rxstat_max_cache, rxstat_inserts, rxstat_lit_obj,
-  rxstat_exec_generic, rxstat_compiled_gen0_hit, rxstat_compiled_gen1_hit,
-  rxstat_compiled_miss, rxstat_compiled_promotions, rxstat_compiled_evictions,
-  rxstat_match_dynamic, rxstat_flags_calls, rxstat_flags_cached,
-  rxstat_flags_reparsed, rxstat_lastindex_reads, rxstat_lastindex_writes,
-  rxstat_lastindex_resets, rxstat_flags_direct,
-  rxstat_flags_internal, rxstat_lastindex_fast_reads,
-  rxstat_lastindex_fast_writes, rxstat_result_arrays,
-  rxstat_result_captures, rxstat_result_named_groups,
-  rxstat_result_indices, rxstat_symbol_match_calls,
-  rxstat_symbol_match_results, rxstat_symbol_replace_calls,
-  rxstat_symbol_replace_results, rxstat_symbol_replace_func,
-  rxstat_symbol_replace_substitution, rxstat_result_shape_fast,
-  rxstat_result_shape_fallback, rxstat_batch_match_calls,
-  rxstat_batch_match_results, rxstat_batch_replace_calls,
-  rxstat_batch_replace_results, rxstat_batch_guard_rejects,
-  rxstat_batch_reject_state, rxstat_batch_reject_exec_location,
-  rxstat_batch_reject_exec_accessor, rxstat_batch_reject_exec_value,
-  rxstat_batch_reject_flags, rxstat_batch_reject_lastindex,
-  rxstat_statics_updates, rxstat_statics_materialized;
-static bool rxstat_enabled;
-static void rxstat_dump(void) {
-  fprintf(stderr,
-    "[regex-stats] exec_internal=%llu shared_fast=%llu generic_exec=%llu lit_obj=%llu\n"
-    "[regex-stats] object-data hit=%llu miss=%llu attaches=%llu max_live=%llu\n"
-    "[regex-stats] compiled-cache gen0=%llu gen1=%llu miss=%llu promotions=%llu evictions=%llu\n"
-    "[regex-stats] compiles=%llu jit_match=%llu interp_match=%llu dynamic-match-data=%llu\n"
-    "[regex-stats] flags calls=%llu direct=%llu internal=%llu cached=%llu reparsed=%llu\n"
-    "[regex-stats] lastIndex reads=%llu writes=%llu resets=%llu fast-read=%llu fast-write=%llu\n"
-    "[regex-stats] results arrays=%llu captures=%llu named=%llu indices=%llu shape-fast=%llu shape-fallback=%llu\n"
-    "[regex-stats] symbol-match calls=%llu discarded-results=%llu\n"
-    "[regex-stats] symbol-replace calls=%llu materialized-results=%llu func=%llu substitution=%llu\n"
-    "[regex-stats] batch match-calls=%llu match-results=%llu replace-calls=%llu replace-results=%llu guard-rejects=%llu\n"
-    "[regex-stats] batch-reject state=%llu exec-location=%llu exec-accessor=%llu exec-value=%llu flags=%llu lastIndex=%llu\n"
-    "[regex-stats] statics snapshots=%llu materialized=%llu\n",
-    (unsigned long long)rxstat_exec_internal, (unsigned long long)rxstat_shared_fast,
-    (unsigned long long)rxstat_exec_generic, (unsigned long long)rxstat_lit_obj,
-    (unsigned long long)rxstat_cache_hit, (unsigned long long)rxstat_cache_miss,
-    (unsigned long long)rxstat_inserts,
-    (unsigned long long)rxstat_max_cache,
-    (unsigned long long)rxstat_compiled_gen0_hit,
-    (unsigned long long)rxstat_compiled_gen1_hit,
-    (unsigned long long)rxstat_compiled_miss,
-    (unsigned long long)rxstat_compiled_promotions,
-    (unsigned long long)rxstat_compiled_evictions,
-    (unsigned long long)rxstat_compiles,
-    (unsigned long long)rxstat_jit_match,
-    (unsigned long long)rxstat_interp_match,
-    (unsigned long long)rxstat_match_dynamic,
-    (unsigned long long)rxstat_flags_calls,
-    (unsigned long long)rxstat_flags_direct,
-    (unsigned long long)rxstat_flags_internal,
-    (unsigned long long)rxstat_flags_cached,
-    (unsigned long long)rxstat_flags_reparsed,
-    (unsigned long long)rxstat_lastindex_reads,
-    (unsigned long long)rxstat_lastindex_writes,
-    (unsigned long long)rxstat_lastindex_resets,
-    (unsigned long long)rxstat_lastindex_fast_reads,
-    (unsigned long long)rxstat_lastindex_fast_writes,
-    (unsigned long long)rxstat_result_arrays,
-    (unsigned long long)rxstat_result_captures,
-    (unsigned long long)rxstat_result_named_groups,
-    (unsigned long long)rxstat_result_indices,
-    (unsigned long long)rxstat_result_shape_fast,
-    (unsigned long long)rxstat_result_shape_fallback,
-    (unsigned long long)rxstat_symbol_match_calls,
-    (unsigned long long)rxstat_symbol_match_results,
-    (unsigned long long)rxstat_symbol_replace_calls,
-    (unsigned long long)rxstat_symbol_replace_results,
-    (unsigned long long)rxstat_symbol_replace_func,
-    (unsigned long long)rxstat_symbol_replace_substitution,
-    (unsigned long long)rxstat_batch_match_calls,
-    (unsigned long long)rxstat_batch_match_results,
-    (unsigned long long)rxstat_batch_replace_calls,
-    (unsigned long long)rxstat_batch_replace_results,
-    (unsigned long long)rxstat_batch_guard_rejects,
-    (unsigned long long)rxstat_batch_reject_state,
-    (unsigned long long)rxstat_batch_reject_exec_location,
-    (unsigned long long)rxstat_batch_reject_exec_accessor,
-    (unsigned long long)rxstat_batch_reject_exec_value,
-    (unsigned long long)rxstat_batch_reject_flags,
-    (unsigned long long)rxstat_batch_reject_lastindex,
-    (unsigned long long)rxstat_statics_updates,
-    (unsigned long long)rxstat_statics_materialized);
-}
-static void rxstat_init(void) {
-  static bool done;
-  if (done) return;
-  done = true;
-  if (getenv("ANT_REGEX_STATS")) { rxstat_enabled = true; atexit(rxstat_dump); }
-}
-
-static inline void rxstat_note_result(
-  uint32_t captures,
-  bool named_groups,
-  bool has_indices
-) {
-  if (!rxstat_enabled) return;
-  rxstat_result_arrays++;
-  rxstat_result_captures += captures;
-  if (named_groups) rxstat_result_named_groups++;
-  if (has_indices) rxstat_result_indices++;
-}
-
-enum {
-  REGEXP_STATIC_VALUE_COUNT = 11,
-  REGEXP_STATIC_OVECTOR_COUNT = 10,
-  REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1,
-};
+static constexpr int REGEXP_STATIC_CAPTURE_COUNT = 9;
+static constexpr int REGEXP_STATIC_OVECTOR_COUNT =
+  REGEXP_STATIC_CAPTURE_COUNT + 1;
+static constexpr int REGEXP_STATIC_IDX_LAST_MATCH =
+  REGEXP_STATIC_CAPTURE_COUNT;
+static constexpr int REGEXP_STATIC_IDX_AMP =
+  REGEXP_STATIC_IDX_LAST_MATCH + 1;
+static constexpr int REGEXP_STATIC_VALUE_COUNT =
+  REGEXP_STATIC_IDX_AMP + 1;
+static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED =
+  (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
 
 /* Compiled patterns, PCRE2 scratch state, and RegExp.prototype mutation
    guards belong to one isolate. RegExp objects point directly to shared
@@ -203,6 +101,11 @@ struct ant_regex_state {
   pcre2_match_context *match_ctx;
   pcre2_jit_stack *jit_stack;
 
+  /* While pending, a clear mask bit means the corresponding value is read
+     from static_ovector and the rooted subject; a set bit means the values
+     root is authoritative. Group 0 backs both lastMatch and $&, hence eleven
+     values but only ten offset pairs. After pending clears, the mask records
+     which value roots must be reset before the next snapshot. */
   PCRE2_SIZE static_ovector[REGEXP_STATIC_OVECTOR_COUNT * 2];
   uint16_t static_materialized_mask;
   uint8_t static_ovcount;
@@ -213,10 +116,8 @@ struct ant_regex_state {
   bool replace_property_written;
 };
 
-enum {
-  REGEXP_NATIVE_TAG = 0x52454758u, /* REGX */
-  REGEX_COMPILED_CACHE_MAX = 1024,
-};
+static constexpr uint32_t REGEXP_NATIVE_TAG = 0x52454758u; /* REGX */
+static constexpr size_t REGEX_COMPILED_CACHE_MAX = 1024;
 
 static bool regexp_result_shape_init(
   regexp_result_shape_t *cache,
@@ -298,11 +199,9 @@ static __attribute__((noinline)) bool regexp_result_apply_shape(
     ant_object_prop_set_unchecked(array, cache->indices_slot, indices);
     gc_write_barrier(js, array, indices);
   }
-  if (rxstat_enabled) rxstat_result_shape_fast++;
   return true;
 
 fallback:
-  if (rxstat_enabled) rxstat_result_shape_fallback++;
   return false;
 }
 
@@ -340,20 +239,16 @@ static inline uint8_t regexp_flags_mask(
   ant_value_t regexp,
   compiled_regex_cache_entry_t **compiled_out
 ) {
-  if (rxstat_enabled) rxstat_flags_calls++;
-
   compiled_regex_cache_entry_t *compiled = js_get_native(
     regexp, REGEXP_NATIVE_TAG
   );
   if (compiled_out) *compiled_out = compiled;
   if (compiled) {
-    if (rxstat_enabled) rxstat_flags_direct++;
     return compiled->flags_mask;
   }
 
   ant_value_t internal_mask = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
   if (vtype(internal_mask) == T_NUM) {
-    if (rxstat_enabled) rxstat_flags_internal++;
     return (uint8_t)tod(internal_mask);
   }
 
@@ -366,11 +261,9 @@ static inline uint8_t regexp_flags_mask(
   ant_value_t cached_flags = js_get_slot(regexp, SLOT_REGEXP_FLAGS_STRING);
   ant_value_t cached = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
   if (flags_val == cached_flags && vtype(cached) == T_NUM) {
-    if (rxstat_enabled) rxstat_flags_cached++;
     return (uint8_t)tod(cached);
   }
 
-  if (rxstat_enabled) rxstat_flags_reparsed++;
   ant_offset_t flen, foff = vstr(js, flags_val, &flen);
   uint8_t mask = regexp_parse_flags_mask((const char *)(uintptr_t)foff, flen);
   js_set_slot(regexp, SLOT_REGEXP_FLAGS_MASK, tov((double)mask));
@@ -417,7 +310,7 @@ static inline void regexp_statics_clear_materialized(
   ant_regex_state_t *state
 ) {
   uint16_t mask = state->static_materialized_mask;
-  if (mask == 0) return;
+  if (__builtin_expect(mask == 0, 1)) return;
 
   ant_value_t empty = regexp_static_empty(js);
   while (mask) {
@@ -428,7 +321,7 @@ static inline void regexp_statics_clear_materialized(
   state->static_materialized_mask = 0;
 }
 
-static ant_value_t regexp_static_materialize(ant_t *js, size_t idx) {
+static ant_value_t regexp_static_value(ant_t *js, size_t idx) {
   if (idx >= REGEXP_STATIC_VALUE_COUNT) return regexp_static_empty(js);
 
   ant_regex_state_t *state = js->regex_state;
@@ -441,7 +334,7 @@ static ant_value_t regexp_static_materialize(ant_t *js, size_t idx) {
     return value ? value : regexp_static_empty(js);
   }
 
-  size_t capture = idx < 9 ? idx + 1 : 0;
+  size_t capture = idx < REGEXP_STATIC_CAPTURE_COUNT ? idx + 1 : 0;
   ant_value_t value = regexp_static_empty(js);
   if (
     capture < state->static_ovcount &&
@@ -461,13 +354,15 @@ static ant_value_t regexp_static_materialize(ant_t *js, size_t idx) {
       end - start
     );
     if (is_err(value)) return value;
-    if (rxstat_enabled) rxstat_statics_materialized++;
   }
 
-  if (idx >= 9) {
-    js->mutable_roots.regexp_static_values[9] = value;
-    js->mutable_roots.regexp_static_values[10] = value;
-    state->static_materialized_mask |= (uint16_t)((1u << 9) | (1u << 10));
+  if (idx >= REGEXP_STATIC_IDX_LAST_MATCH) {
+    js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_LAST_MATCH] = value;
+    js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_AMP] = value;
+    state->static_materialized_mask |= (uint16_t)(
+      (1u << REGEXP_STATIC_IDX_LAST_MATCH) |
+      (1u << REGEXP_STATIC_IDX_AMP)
+    );
   } else {
     js->mutable_roots.regexp_static_values[idx] = value;
     state->static_materialized_mask |= bit;
@@ -479,32 +374,9 @@ static ant_value_t regexp_static_materialize(ant_t *js, size_t idx) {
   return value;
 }
 
-static inline ant_value_t regexp_static_value(ant_t *js, size_t idx) {
-  return regexp_static_materialize(js, idx);
-}
-
-static ant_value_t regexp_statics_materialize_all(ant_t *js) {
-  ant_regex_state_t *state = js->regex_state;
-  if (!state || !state->static_pending) return js_mkundef();
-
-  for (size_t i = 0; i < REGEXP_STATIC_OVECTOR_COUNT; i++) {
-    ant_value_t value = regexp_static_materialize(js, i);
-    if (is_err(value)) return value;
-  }
-  return js_mkundef();
-}
-
-static inline ant_value_t regexp_static_set(
-  ant_t *js,
-  size_t idx,
-  ant_value_t value
-) {
-  if (idx >= REGEXP_STATIC_VALUE_COUNT) return js_mkundef();
-  ant_value_t materialized = regexp_statics_materialize_all(js);
-  if (is_err(materialized)) return materialized;
-  js->mutable_roots.regexp_static_values[idx] = value;
-  if (js->regex_state)
-    js->regex_state->static_materialized_mask |= (uint16_t)(1u << idx);
+/* V8-compatible legacy static setters exist for descriptor compatibility but
+   intentionally ignore assignments. */
+static inline ant_value_t regexp_static_set(ant_t *js) {
   return js_mkundef();
 }
 
@@ -514,7 +386,8 @@ static inline ant_value_t regexp_static_set(
     return regexp_static_value(js, idx); \
   } \
   static ant_value_t regexp_static_set_##name(ant_t *js, ant_value_t *args, int nargs) { \
-    return regexp_static_set(js, idx, nargs > 0 ? args[0] : js_mkundef()); \
+    (void)args; (void)nargs; \
+    return regexp_static_set(js); \
   }
 
 REGEXP_STATIC_ACCESSORS(d1, 0)
@@ -526,47 +399,58 @@ REGEXP_STATIC_ACCESSORS(d6, 5)
 REGEXP_STATIC_ACCESSORS(d7, 6)
 REGEXP_STATIC_ACCESSORS(d8, 7)
 REGEXP_STATIC_ACCESSORS(d9, 8)
-REGEXP_STATIC_ACCESSORS(last_match, 9)
-REGEXP_STATIC_ACCESSORS(amp, 10)
+REGEXP_STATIC_ACCESSORS(last_match, REGEXP_STATIC_IDX_LAST_MATCH)
+REGEXP_STATIC_ACCESSORS(amp, REGEXP_STATIC_IDX_AMP)
 
 #undef REGEXP_STATIC_ACCESSORS
 
-static void update_regexp_statics_eager(
+static __attribute__((noinline, cold))
+void update_regexp_statics_eager(
   ant_t *js,
-  const char *str_ptr,
+  ant_value_t subject,
   PCRE2_SIZE *ovector,
   uint32_t ovcount
 ) {
+  ant_offset_t subject_len;
+  ant_offset_t subject_off = vstr(js, subject, &subject_len);
+  const char *str_ptr = (const char *)(uintptr_t)subject_off;
   ant_value_t empty = regexp_static_empty(js);
-  for (int i = 1; i <= 9; i++) {
+  for (int i = 1; i <= REGEXP_STATIC_CAPTURE_COUNT; i++) {
     ant_value_t val = empty;
-    if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET) {
-      if (rxstat_enabled) rxstat_statics_materialized++;
-      val = js_mkstr(js, str_ptr + ovector[2*i], ovector[2*i+1] - ovector[2*i]);
+    if ((uint32_t)i < ovcount) {
+      PCRE2_SIZE start = ovector[2*i];
+      PCRE2_SIZE end = ovector[2*i + 1];
+      if (
+        start != PCRE2_UNSET && end >= start && end <= subject_len
+      ) {
+        val = js_mkstr(js, str_ptr + start, end - start);
+        if (is_err(val)) val = empty;
+      }
     }
     js->mutable_roots.regexp_static_values[i - 1] = val;
   }
 
-  if (rxstat_enabled && ovcount > 0 && ovector[0] != PCRE2_UNSET)
-    rxstat_statics_materialized++;
-  ant_value_t match0 = (ovcount > 0 && ovector[0] != PCRE2_UNSET)
+  bool has_match0 = (
+    ovcount > 0 && ovector[0] != PCRE2_UNSET &&
+    ovector[1] >= ovector[0] && ovector[1] <= subject_len
+  );
+  ant_value_t match0 = has_match0
     ? js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0])
     : empty;
-  js->mutable_roots.regexp_static_values[9] = match0;
-  js->mutable_roots.regexp_static_values[10] = match0;
+  if (is_err(match0)) match0 = empty;
+  js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_LAST_MATCH] = match0;
+  js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_AMP] = match0;
 }
 
 static void update_regexp_statics(
   ant_t *js,
   ant_value_t subject,
-  const char *str_ptr,
   PCRE2_SIZE *ovector,
   uint32_t ovcount
 ) {
-  if (rxstat_enabled) rxstat_statics_updates++;
   ant_regex_state_t *state = js->regex_state;
   if (!state) {
-    update_regexp_statics_eager(js, str_ptr, ovector, ovcount);
+    update_regexp_statics_eager(js, subject, ovector, ovcount);
     return;
   }
 
@@ -1183,7 +1067,6 @@ static void compiled_regex_table_clear(
     compiled_regex_cache_entry_t *entry = table->slots[i];
     if (!entry) continue;
     if (entry->cache_refs > 0) entry->cache_refs--;
-    if (rxstat_enabled) rxstat_compiled_evictions++;
     compiled_regex_entry_maybe_free(entry);
   }
   free(table->slots);
@@ -1201,7 +1084,6 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_lookup(
     &state->compiled[0], key_hash, pattern, pattern_len, flags_mask
   );
   if (entry) {
-    if (rxstat_enabled) rxstat_compiled_gen0_hit++;
     return entry;
   }
 
@@ -1209,16 +1091,13 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_lookup(
     &state->compiled[1], key_hash, pattern, pattern_len, flags_mask
   );
   if (!entry) {
-    if (rxstat_enabled) rxstat_compiled_miss++;
     return NULL;
   }
 
-  if (rxstat_enabled) rxstat_compiled_gen1_hit++;
   bool inserted;
   if (compiled_regex_table_insert(&state->compiled[0], entry, &inserted) &&
       inserted) {
     entry->cache_refs++;
-    if (rxstat_enabled) rxstat_compiled_promotions++;
   }
   return entry;
 }
@@ -1236,7 +1115,6 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
     state, pattern, pattern_len, flags_mask, key_hash
   );
   if (cached) return cached;
-  if (rxstat_enabled) rxstat_compiles++;
 
   char pcre2_pattern[4096];
   size_t pcre2_len = js_to_pcre2_pattern(
@@ -1306,7 +1184,6 @@ static bool regex_match_scope_begin(
 
   scope->match_data = pcre2_match_data_create_from_pattern(entry->code, NULL);
   if (!scope->match_data) return false;
-  if (rxstat_enabled) rxstat_match_dynamic++;
   return true;
 }
 
@@ -1400,11 +1277,9 @@ static compiled_regex_cache_entry_t *regex_get_or_compile(
     compiled = js_get_native(regexp_obj, REGEXP_NATIVE_TAG);
   }
   if (compiled && compiled->flags_mask == flags_mask) {
-    if (rxstat_enabled) rxstat_cache_hit++;
     return compiled;
   }
   if (compiled) regexp_object_compiled_release(js, regexp_obj, compiled);
-  if (rxstat_enabled) rxstat_cache_miss++;
 
   if (!regexp_compile_shared_from_object(
     js, regexp_obj, flags_mask, &compiled
@@ -1435,11 +1310,6 @@ static compiled_regex_cache_entry_t *regex_get_or_compile(
   }
   js_set_finalizer(regexp_obj, regexp_object_finalize);
   state->live_object_data++;
-  if (rxstat_enabled) {
-    rxstat_inserts++;
-    if (state->live_object_data > rxstat_max_cache)
-      rxstat_max_cache = state->live_object_data;
-  }
   js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, groups_meta);
   return compiled;
 }
@@ -1681,11 +1551,10 @@ static ant_value_t regexp_exec_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str_arg, str_ptr, ovector, 1);
+  update_regexp_statics(js, str_arg, ovector, 1);
 
   if (truthy_only) return js_true;
 
-  rxstat_note_result(1, false, false);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) return result_arr;
 
@@ -1724,13 +1593,11 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
   pcre2_match_context *match_ctx = regex_get_match_context(js);
   int rc;
   if (compiled->jit_ready && !sticky) {
-    if (rxstat_enabled) rxstat_jit_match++;
     rc = pcre2_jit_match(
       compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
       match_options, scope->match_data, match_ctx
     );
   } else {
-    if (rxstat_enabled) rxstat_interp_match++;
     rc = pcre2_match(
       compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
       match_options, scope->match_data, match_ctx
@@ -1808,7 +1675,6 @@ static ant_value_t regexp_set_lastindex(
   )) {
     ant_object_prop_set_unchecked(obj, slot, value);
     gc_write_barrier(js, obj, value);
-    if (rxstat_enabled) rxstat_lastindex_fast_writes++;
     return value;
   }
 
@@ -1882,7 +1748,7 @@ static ant_value_t regexp_exec_shared_fast(
     return js_mknull();
   }
 
-  update_regexp_statics(js, str_arg, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, ovector, ovcount);
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
@@ -1898,7 +1764,6 @@ static ant_value_t regexp_exec_shared_fast(
   }
 
   ant_value_t result;
-  rxstat_note_result(ovcount, false, false);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
     result = result_arr;
@@ -1944,7 +1809,6 @@ done:
 }
 
 static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
-  if (rxstat_enabled) rxstat_exec_internal++;
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   compiled_regex_cache_entry_t *compiled_hint;
@@ -1959,7 +1823,6 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   // TODO: reduce nesting
   PCRE2_SIZE start_offset = 0;
   if (global_flag || sticky_flag) {
-    if (rxstat_enabled) rxstat_lastindex_reads++;
     ant_object_t *lastindex_obj;
     uint32_t lastindex_slot;
     ant_value_t li_val;
@@ -1967,7 +1830,6 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
       compiled_hint, regexp, &lastindex_obj, &lastindex_slot
     )) {
       li_val = ant_object_prop_get_unchecked(lastindex_obj, lastindex_slot);
-      if (rxstat_enabled) rxstat_lastindex_fast_reads++;
     } else {
       ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
       li_val = lastindex_off.obj
@@ -1978,10 +1840,6 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
       double li = tod(li_val);
       if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
       else {
-        if (rxstat_enabled) {
-          rxstat_lastindex_writes++;
-          rxstat_lastindex_resets++;
-        }
         ant_value_t stored = regexp_set_lastindex(
           js, compiled_hint, regexp, tov(0)
         );
@@ -1995,10 +1853,7 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   ant_value_t fast_result = regexp_exec_shared_fast(
     js, regexp, str_arg, flags_mask, global_flag, sticky_flag, start_offset, truthy_only, &used_fast_path
   );
-  if (is_err(fast_result) || used_fast_path) {
-    if (rxstat_enabled && used_fast_path) rxstat_shared_fast++;
-    return fast_result;
-  }
+  if (is_err(fast_result) || used_fast_path) return fast_result;
 
   compiled_regex_cache_entry_t *compiled =
     regex_get_or_compile(js, regexp, flags_mask, compiled_hint);
@@ -2018,10 +1873,6 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   if (rc < 0) {
     regex_match_scope_end(&match_scope);
-    if (rxstat_enabled && (global_flag || sticky_flag)) {
-      rxstat_lastindex_writes++;
-      rxstat_lastindex_resets++;
-    }
     if (global_flag || sticky_flag) {
       ant_value_t stored = regexp_set_lastindex(
         js, compiled, regexp, tov(0)
@@ -2031,11 +1882,10 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     return js_mknull();
   }
 
-  update_regexp_statics(js, str_arg, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, ovector, ovcount);
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
-    if (rxstat_enabled) rxstat_lastindex_writes++;
     ant_value_t stored = regexp_set_lastindex(
       js, compiled, regexp, next_idx
     );
@@ -2052,7 +1902,6 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
 
   ant_value_t result;
   ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
-  rxstat_note_result(ovcount, is_object_type(groups_meta), has_indices);
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
     result = result_arr;
@@ -2251,7 +2100,6 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value_t str, ant_value_t exec_fn) {
   if (vtype(exec_fn) == T_FUNC || vtype(exec_fn) == T_CFUNC) {
-    if (rxstat_enabled) rxstat_exec_generic++;
     ant_value_t call_args[1] = { str };
     ant_value_t result = sv_vm_call(js->vm, js, exec_fn, rx, call_args, 1, NULL, false);
     if (is_err(result)) return result;
@@ -2366,7 +2214,6 @@ static bool regexp_can_batch_builtin_exec(
   if (
     !state || !regexp_can_use_internal_fast_path(js, rx)
   ) {
-    if (rxstat_enabled) rxstat_batch_reject_state++;
     goto reject;
   }
 
@@ -2376,7 +2223,6 @@ static bool regexp_can_batch_builtin_exec(
     exec_loc.obj->flags.is_exotic ||
     exec_loc.slot >= exec_loc.obj->prop_count
   ) {
-    if (rxstat_enabled) rxstat_batch_reject_exec_location++;
     goto reject;
   }
 
@@ -2384,7 +2230,6 @@ static bool regexp_can_batch_builtin_exec(
     exec_loc.obj->shape, exec_loc.slot
   );
   if (!exec_prop || exec_prop->has_getter || exec_prop->has_setter) {
-    if (rxstat_enabled) rxstat_batch_reject_exec_accessor++;
     goto reject;
   }
 
@@ -2393,14 +2238,12 @@ static bool regexp_can_batch_builtin_exec(
     vtype(exec_fn) != T_CFUNC ||
     !js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)
   ) {
-    if (rxstat_enabled) rxstat_batch_reject_exec_value++;
     goto reject;
   }
 
   compiled_regex_cache_entry_t *compiled_hint;
   uint8_t flags = regexp_flags_mask(js, rx, &compiled_hint);
   if (!(flags & REGEXP_FLAG_GLOBAL)) {
-    if (rxstat_enabled) rxstat_batch_reject_flags++;
     goto reject;
   }
 
@@ -2408,7 +2251,6 @@ static bool regexp_can_batch_builtin_exec(
     js, rx, flags, compiled_hint
   );
   if (!compiled) {
-    if (rxstat_enabled) rxstat_batch_reject_flags++;
     goto reject;
   }
 
@@ -2418,7 +2260,6 @@ static bool regexp_can_batch_builtin_exec(
   if (!regexp_lastindex_fast_location(
     compiled, rx, &lastindex_obj, &lastindex_slot
   )) {
-    if (rxstat_enabled) rxstat_batch_reject_lastindex++;
     goto reject;
   }
 
@@ -2427,7 +2268,6 @@ static bool regexp_can_batch_builtin_exec(
   return true;
 
 reject:
-  if (rxstat_enabled) rxstat_batch_guard_rejects++;
   return false;
 }
 
@@ -2460,7 +2300,6 @@ static ant_value_t regexp_match_batch_fast(
     return js_mkundef();
 
   *used_fast_path = true;
-  if (rxstat_enabled) rxstat_batch_match_calls++;
 
   ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
   if (is_err(stored)) return stored;
@@ -2490,13 +2329,12 @@ static ant_value_t regexp_match_batch_fast(
 
     PCRE2_SIZE start = ovector[0];
     PCRE2_SIZE end = ovector[1];
-    update_regexp_statics(js, str, str_ptr, ovector, ovcount);
+    update_regexp_statics(js, str, ovector, ovcount);
     ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
     regex_match_scope_end(&scope);
     if (is_err(match)) return match;
     js_arr_push(js, matches, match);
     count++;
-    if (rxstat_enabled) rxstat_batch_match_results++;
 
     offset = end;
     if (start == end) {
@@ -2512,7 +2350,6 @@ static ant_value_t regexp_match_batch_fast(
 }
 
 static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int nargs) {
-  if (rxstat_enabled) rxstat_symbol_match_calls++;
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@match] called on non-object");
@@ -2546,7 +2383,6 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
     ant_value_t result = regexp_exec_abstract(js, rx, str);
     if (is_err(result)) return result;
     if (vtype(result) == T_NULL) return n == 0 ? js_mknull() : mkval(T_ARR, vdata(A));
-    if (rxstat_enabled) rxstat_symbol_match_results++;
 
     ant_value_t match_str = js_tostring_val(js, js_arr_get(js, result, 0));
     if (is_err(match_str)) return match_str;
@@ -2779,7 +2615,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
 
     ovector[0] = (PCRE2_SIZE)(match - str_ptr);
     ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-    update_regexp_statics(js, str, str_ptr, ovector, 1);
+    update_regexp_statics(js, str, ovector, 1);
 
     scan = match + needle_len;
     if (!global) break;
@@ -2818,7 +2654,6 @@ static ant_value_t regexp_replace_batch_fast(
     return js_mkundef();
 
   *used_fast_path = true;
-  if (rxstat_enabled) rxstat_batch_replace_calls++;
 
   ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
   if (is_err(stored)) return stored;
@@ -2889,7 +2724,7 @@ static ant_value_t regexp_replace_batch_fast(
           };
     }
 
-    update_regexp_statics(js, str, str_ptr, ovector, ovcount);
+    update_regexp_statics(js, str, ovector, ovcount);
     bool replaced = repl_template(
       replacement_ptr, replacement_len,
       str_ptr + start, end - start,
@@ -2905,7 +2740,6 @@ static ant_value_t regexp_replace_batch_fast(
     }
 
     match_count++;
-    if (rxstat_enabled) rxstat_batch_replace_results++;
     next_src_pos = end;
     offset = end;
     if (start == end) {
@@ -2970,7 +2804,7 @@ static ant_value_t regexp_search_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str, str_ptr, ovector, 1);
+  update_regexp_statics(js, str, ovector, 1);
   return tov((double)ovector[0]);
 }
 
@@ -3015,7 +2849,6 @@ static bool regexp_literal_exec_fast_parts(
 }
 
 static ant_value_t regexp_literal_object(ant_t *js, ant_value_t pattern, ant_value_t flags) {
-  if (rxstat_enabled) rxstat_lit_obj++;
   ant_value_t regexp_obj = mkobj(js, 0);
   if (is_err(regexp_obj)) return regexp_obj;
 
@@ -3053,9 +2886,8 @@ ant_value_t regexp_literal_exec_call(
       PCRE2_SIZE ovector[2];
       ovector[0] = (PCRE2_SIZE)(match - str_ptr);
       ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-      update_regexp_statics(js, arg, str_ptr, ovector, 1);
+      update_regexp_statics(js, arg, ovector, 1);
 
-      rxstat_note_result(1, false, false);
       ant_value_t result_arr = js_mkarr(js);
       if (is_err(result_arr)) return result_arr;
 
@@ -3081,7 +2913,6 @@ ant_value_t regexp_literal_exec_call(
 }
 
 static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, int nargs) {
-  if (rxstat_enabled) rxstat_symbol_replace_calls++;
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@replace] called on non-object");
@@ -3090,13 +2921,10 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
   if (is_err(str)) return str;
   ant_value_t replace_value = nargs > 1 ? args[1] : js_mkundef();
   bool func_replace = (vtype(replace_value) == T_FUNC || vtype(replace_value) == T_CFUNC);
-  if (rxstat_enabled && func_replace) rxstat_symbol_replace_func++;
   ant_value_t replace_str = js_mkundef();
   if (!func_replace) {
     replace_str = js_tostring_val(js, replace_value);
     if (is_err(replace_str)) return replace_str;
-    if (rxstat_enabled && replacement_has_substitution(js, replace_str))
-      rxstat_symbol_replace_substitution++;
   }
 
   ant_value_t global_val = js_getprop_fallback(js, rx, "global");
@@ -3133,7 +2961,6 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_value_t result = regexp_exec_abstract(js, rx, str);
     if (is_err(result)) return result;
     if (vtype(result) == T_NULL) break;
-    if (rxstat_enabled) rxstat_symbol_replace_results++;
     js_arr_push(js, results, result);
     nresults++;
     if (!global) break;
@@ -3761,7 +3588,7 @@ ant_value_t regexp_literal_replace_call(
 
         ovector[0] = (PCRE2_SIZE)(match - str_ptr);
         ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-        update_regexp_statics(js, str, str_ptr, ovector, 1);
+        update_regexp_statics(js, str, ovector, 1);
 
         scan = match + needle_len;
         if (!global) break;
@@ -3909,7 +3736,6 @@ match_string_pattern:;
 }
 
 void init_regex_module(ant_t *js) {
-  rxstat_init();
   if (!js->regex_state)
     js->regex_state = calloc(1, sizeof(*js->regex_state));
   ant_regex_state_t *state = js->regex_state;
@@ -3966,21 +3792,21 @@ void init_regex_module(ant_t *js) {
   for (size_t i = 0; i < sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]); i++)
     js->mutable_roots.regexp_static_values[i] = empty;
 
-  static ant_cfunc_meta_t stat_getters[11];
-  static ant_cfunc_meta_t stat_setters[11];
-  ant_cfunc_t getter_fns[11] = {
+  static ant_cfunc_meta_t stat_getters[REGEXP_STATIC_VALUE_COUNT];
+  static ant_cfunc_meta_t stat_setters[REGEXP_STATIC_VALUE_COUNT];
+  ant_cfunc_t getter_fns[REGEXP_STATIC_VALUE_COUNT] = {
     regexp_static_get_d1, regexp_static_get_d2, regexp_static_get_d3,
     regexp_static_get_d4, regexp_static_get_d5, regexp_static_get_d6,
     regexp_static_get_d7, regexp_static_get_d8, regexp_static_get_d9,
     regexp_static_get_last_match, regexp_static_get_amp
   };
-  ant_cfunc_t setter_fns[11] = {
+  ant_cfunc_t setter_fns[REGEXP_STATIC_VALUE_COUNT] = {
     regexp_static_set_d1, regexp_static_set_d2, regexp_static_set_d3,
     regexp_static_set_d4, regexp_static_set_d5, regexp_static_set_d6,
     regexp_static_set_d7, regexp_static_set_d8, regexp_static_set_d9,
     regexp_static_set_last_match, regexp_static_set_amp
   };
-  for (int i = 1; i <= 9; i++) {
+  for (int i = 1; i <= REGEXP_STATIC_CAPTURE_COUNT; i++) {
     char key[3] = {'$', (char)('0' + i), '\0'};
     stat_getters[i - 1] = (ant_cfunc_meta_t){ getter_fns[i - 1], NULL, 0, 0 };
     stat_setters[i - 1] = (ant_cfunc_meta_t){ setter_fns[i - 1], NULL, 1, 0 };
@@ -3992,12 +3818,28 @@ void init_regex_module(ant_t *js) {
     );
   }
   
-  stat_getters[9] = (ant_cfunc_meta_t){ getter_fns[9], NULL, 0, 0 };
-  stat_setters[9] = (ant_cfunc_meta_t){ setter_fns[9], NULL, 1, 0 };
-  js_set_accessor_desc(js, regexp_ctor, "lastMatch", 9, js_mkfun_meta(&stat_getters[9]), js_mkfun_meta(&stat_setters[9]), JS_DESC_C);
-  stat_getters[10] = (ant_cfunc_meta_t){ getter_fns[10], NULL, 0, 0 };
-  stat_setters[10] = (ant_cfunc_meta_t){ setter_fns[10], NULL, 1, 0 };
-  js_set_accessor_desc(js, regexp_ctor, "$&", 2, js_mkfun_meta(&stat_getters[10]), js_mkfun_meta(&stat_setters[10]), JS_DESC_C);
+  stat_getters[REGEXP_STATIC_IDX_LAST_MATCH] = (ant_cfunc_meta_t){
+    getter_fns[REGEXP_STATIC_IDX_LAST_MATCH], NULL, 0, 0
+  };
+  stat_setters[REGEXP_STATIC_IDX_LAST_MATCH] = (ant_cfunc_meta_t){
+    setter_fns[REGEXP_STATIC_IDX_LAST_MATCH], NULL, 1, 0
+  };
+  js_set_accessor_desc(
+    js, regexp_ctor, "lastMatch", 9,
+    js_mkfun_meta(&stat_getters[REGEXP_STATIC_IDX_LAST_MATCH]),
+    js_mkfun_meta(&stat_setters[REGEXP_STATIC_IDX_LAST_MATCH]), JS_DESC_C
+  );
+  stat_getters[REGEXP_STATIC_IDX_AMP] = (ant_cfunc_meta_t){
+    getter_fns[REGEXP_STATIC_IDX_AMP], NULL, 0, 0
+  };
+  stat_setters[REGEXP_STATIC_IDX_AMP] = (ant_cfunc_meta_t){
+    setter_fns[REGEXP_STATIC_IDX_AMP], NULL, 1, 0
+  };
+  js_set_accessor_desc(
+    js, regexp_ctor, "$&", 2,
+    js_mkfun_meta(&stat_getters[REGEXP_STATIC_IDX_AMP]),
+    js_mkfun_meta(&stat_setters[REGEXP_STATIC_IDX_AMP]), JS_DESC_C
+  );
   js_set(js, glob, "RegExp", regexp_func);
 
   ant_value_t string_ctor = js_get(js, glob, "String");

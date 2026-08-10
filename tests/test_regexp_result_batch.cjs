@@ -88,15 +88,17 @@ assert(
   'global match RegExp static aliases'
 );
 
-RegExp.$1 = 'manual capture';
+RegExp.$1 = 42;
+RegExp.$2 = 'manual capture';
 RegExp.lastMatch = 'manual match';
-assert(RegExp.$1 === 'manual capture', 'RegExp static setter after lazy match');
-assert(RegExp.$2 === 'b', 'RegExp static setter preserves sibling captures');
-assert(RegExp.lastMatch === 'manual match', 'RegExp lastMatch setter');
-assert(RegExp['$&'] === 'ab', 'RegExp static aliases remain independently writable');
+RegExp['$&'] = { manual: true };
+assert(RegExp.$1 === 'a', 'RegExp capture setter is ignored');
+assert(RegExp.$2 === 'b', 'ignored setter preserves sibling captures');
+assert(RegExp.lastMatch === 'ab', 'RegExp lastMatch setter is ignored');
+assert(RegExp['$&'] === 'ab', 'object RegExp static setter is ignored');
 
 /(z)/.test('z');
-assert(RegExp.$1 === 'z', 'next match replaces manually written capture');
+assert(RegExp.$1 === 'z', 'next match replaces prior capture');
 assert(RegExp.lastMatch === 'z' && RegExp['$&'] === 'z', 'next match replaces aliases');
 
 /(a)(b)?/.test('a');
@@ -107,6 +109,7 @@ assert(RegExp.$1 === 'a' && RegExp.$2 === '', 'unmatched lazy capture is empty')
   assert(/(left)-(right)$/.test(subject), 'lazy static lifetime setup');
 })();
 let staticChurn = [];
+// Force several collections while the legacy statics are the subject's root.
 for (let i = 0; i < 200000; i++) {
   staticChurn.push({ i, nested: [i, i + 1] });
   if (staticChurn.length > 1024) staticChurn = [];

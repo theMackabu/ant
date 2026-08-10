@@ -926,7 +926,7 @@ faster for ~3MB more average RSS.
 **Two regressions in synthetic GC stress tests: test_gc_async +72%
 (0.87→1.51s), test_gc_coro +10% — RESOLVED 2026-08-06 (see the
 regression-fix session section). The epoch-deopt theory was WRONG; the
-mechanism (pinned by ANT_REGEX_STATS counters) was the obj-keyed
+mechanism (pinned by temporary ANT_REGEX_STATS counters) was the obj-keyed
 regex_cache's LINEAR lookup scan: regex literals create a fresh owner
 object per evaluation, entries pile up until a sweep, and the evening
 GC fixes made majors much rarer — 2.4e9 scan iterations over the run.
@@ -979,7 +979,8 @@ final-vs-r3-pin showed no systematic direction, r3 itself swung
 43.4/46.0), RSS 565-666MB.
 
 **R1 test_gc_async +72% / test_gc_coro +10% — FIXED.** Counters before
-code (new `ANT_REGEX_STATS=1`, kept, atexit dump like ANT_IC_STATS):
+code (temporary `ANT_REGEX_STATS=1` atexit dump, removed after the regexp
+work closed):
 1.4M regexp_exec_internal calls, 200k obj-cache misses+inserts (fresh
 regexp-literal owner object per replace call), **2.4e9 linear scan
 iterations** in regex_cache_lookup, max cache 3560 entries, 56
@@ -2222,18 +2223,29 @@ review-hardened 2026-08-10.**
   offsets plus a rooted subject and an eleven-bit materialization mask.
   Successful matches copy the small offset snapshot and allocate no legacy
   static strings. Each static getter materializes only its requested capture;
-  `lastMatch` and `$&` share one match-0 value. The existing independently
-  writable Ant accessors retain their prior behavior: a setter first
-  materializes the pending snapshot, then replaces only its own value. Once
-  all values exist, the now-unneeded subject root is released. Failure to
-  allocate the optional per-isolate regex state retains the old eager path.
-- **Counter proof:** on the same 3,001,500-match workload, final records
+  `lastMatch` and `$&` share one match-0 value. The legacy setters now ignore
+  assignments like Node/V8, including non-string values. Once all values
+  exist, the now-unneeded subject root is released. Failure to allocate the
+  optional per-isolate regex state takes a cold outlined eager path; it derives
+  the subject bytes itself, validates every PCRE2 offset, and stores the
+  permanent empty string rather than an error value if string allocation
+  fails. Named constants replace the old magic capture/value indices.
+- **Bounded retention trade-off:** if the statics are never read, the latest
+  successful subject remains rooted until a later successful match replaces
+  it or the isolate is destroyed. This is at most one subject per isolate, not
+  an accumulating leak. Detaching subject data eagerly was rejected: doing it
+  per execution regressed the existing regex workloads by 20-30%, while doing
+  it only in batch paths made the synthetic global-replace case about 8%
+  slower. The bounded root is the better default unless retention appears in a
+  real whole-process profile.
+- **Temporary counter proof:** on the same 3,001,500-match workload, final records
   `snapshots=3001500 materialized=1000500`. All 1,000,500 materializations are
   from the control loop that explicitly reads `$1`; the unused global match
-  and replace loops materialize **zero** legacy-static strings.
+  and replace loops materialize **zero** legacy-static strings. The
+  `ANT_REGEX_STATS` scaffolding was removed after the regexp work closed.
 - **Correctness/lifetime:** the permanent batch-result test now covers global
   match statics, the two match-0 aliases, unmatched captures, independent
-  setter behavior, overwrite by the next match, and partial lazy reads after
+  ignored-setter behavior, overwrite by the next match, and partial lazy reads after
   the subject's last ordinary reference is dropped and allocation churn runs.
   A separate differential matrix covering `exec`, `test`, global match and
   replace, search, replacement callbacks, Unicode captures, unmatched
