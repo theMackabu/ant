@@ -728,15 +728,7 @@ ant_value_t jit_helper_export(
   ant_t *js, sv_closure_t *closure,
   const char *str, uint32_t len, ant_value_t value
 ) {
-  /* Lazy closures stash module_ctx directly; only fall back to the
-     function object when it was already materialized. */
-  ant_value_t ns = js_mkundef();
-  if (closure && is_object_type(closure->module_ctx))
-    ns = js_module_ctx_namespace(closure->module_ctx);
-  if (vtype(ns) != T_OBJ) {
-    ant_value_t func_obj = (closure && closure->func_obj) ? closure->func_obj : js_mkundef();
-    ns = sv_export_target_ns_from_func_obj(js, func_obj);
-  }
+  ant_value_t ns = sv_export_target_ns_from_closure(js, closure);
   return sv_module_export_to_ns(js, ns, str, (size_t)len, value);
 }
 

@@ -60,18 +60,25 @@ static inline void sv_obj_site_apply(
 ) {
   if (!ptr || !ptr->shape || !site) return;
 
-  if (!site->shared_shape && site->key_atoms && site->key_count) {
+  if (
+    !site->shared_shape && !site->shape_build_failed &&
+    site->key_atoms && site->key_count
+  ) {
     ant_shape_t *sh = ptr->shape;
     ant_shape_retain(sh);
     bool ok = true;
+    
     for (uint16_t i = 0; i < site->key_count && ok; i++) {
       uint32_t ai = site->key_atoms[i];
       if (ai >= (uint32_t)func->atom_count) { ok = false; break; }
-      ok = ant_shape_add_interned_tr(&sh, func->atoms[ai].str,
-                                     ANT_PROP_ATTR_DEFAULT, NULL);
+      ok = ant_shape_add_interned_tr(&sh, func->atoms[ai].str, ANT_PROP_ATTR_DEFAULT, NULL);
     }
+    
     if (ok) site->shared_shape = sh;
-    else ant_shape_release(sh);
+    else {
+      ant_shape_release(sh);
+      site->shape_build_failed = true;
+    }
   }
 
   if (site->shared_shape) {

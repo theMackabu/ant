@@ -18,6 +18,10 @@
 #include <stdio.h>
 
 static constexpr int SV_JIT_ARGS_BUF_CAP = 16;
+static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
+
+static constexpr uint8_t SV_CLASS_FLAG_HAS_NAME     = 1u << 0;
+static constexpr uint8_t SV_CLASS_FLAG_HAS_HERITAGE = 1u << 1;
 
 typedef enum {
   SV_DEFINE_METHOD_GETTER   = 1u << 0,
@@ -142,6 +146,7 @@ typedef struct {
   ant_shape_t *shared_shape;
   const uint32_t *key_atoms;
   uint16_t key_count;
+  bool shape_build_failed;
 } sv_obj_site_cache_t;
 
 static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
@@ -882,7 +887,7 @@ typedef struct {
   ant_value_t func;
   sv_closure_t *closure;
   sv_call_ctx_t ctx;
-  ant_value_t inline_args[4];
+  ant_value_t inline_args[SV_CALL_INLINE_ARGS_CAP];
 } sv_call_plan_t;
 
 static inline ant_value_t *sv_prepend_bound_args(
@@ -890,10 +895,9 @@ static inline ant_value_t *sv_prepend_bound_args(
   ant_value_t *inline_args
 ) {
   int total = closure->bound_argc + argc;
-  ant_value_t *combined =
-    total <= (int)(sizeof(((sv_call_plan_t *)0)->inline_args) / sizeof(ant_value_t))
-      ? inline_args
-      : malloc(sizeof(ant_value_t) * (size_t)total);
+  ant_value_t *combined = total <= SV_CALL_INLINE_ARGS_CAP
+    ? inline_args
+    : malloc(sizeof(ant_value_t) * (size_t)total);
   
   if (!combined) { *out_total = argc; return NULL; }
   memcpy(combined, closure->u.bound.argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);

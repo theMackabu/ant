@@ -349,20 +349,21 @@ static inline bool sv_op_call_call_fused(
       cell.gc_epoch = 0;
       cell.in_remember_set = 1;
 
-      sv_closure_t fake;
-      fake.call_flags = 0;
-      fake.bound_argc = 0;
-      fake.func = f2;
+      sv_closure_t fake = {
+        .call_flags = 0,
+        .bound_argc = 0,
+        .func = f2,
+        .upvalues = NULL,
+        .bound_this = js_mkundef(),
+        .super_val = js_mkundef(),
+        .func_obj = 0,
+        .u.pending = { .name = NULL, .len = 0 },
+        .js = js,
+        .module_ctx = c1->module_ctx,
+        .in_remember_set = 1,
+        .gc_epoch = gc_get_epoch(),
+      };
       fake.upvalues = fake.inline_upvals;
-      fake.bound_this = js_mkundef();
-      fake.super_val = js_mkundef();
-      fake.func_obj = 0;
-      fake.js = js;
-      fake.module_ctx = c1->module_ctx;
-      fake.u.pending.name = NULL;
-      fake.u.pending.len = 0;
-      fake.in_remember_set = 1;
-      fake.gc_epoch = gc_get_epoch();
 
       for (int i = 0; i < f2->upvalue_count; i++) {
         sv_upval_desc_t *d = &f2->upval_descs[i];

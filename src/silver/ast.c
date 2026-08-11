@@ -1085,7 +1085,8 @@ static sv_ast_t *parse_object(P) {
       CONSUME();
       prop->flags |= FN_COLON;
       if (prop->left && prop->left->type == N_IDENT &&
-          prop->left->len == 9 && memcmp(prop->left->str, "__proto__", 9) == 0) {
+          prop->left->len == sizeof("__proto__") - 1 &&
+          memcmp(prop->left->str, "__proto__", sizeof("__proto__") - 1) == 0) {
         if (proto_set) { SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Duplicate __proto__ fields are not allowed in object literals"); return n; }
         proto_set = true;
       }

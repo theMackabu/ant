@@ -43,30 +43,39 @@ static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value
   return js_module_eval_active_ns(js);
 }
 
-static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
-  if (vtype(callee) == T_FUNC) {
-    sv_closure_t *c = js_func_closure(callee);
-    if (is_object_type(c->module_ctx)) {
-      ant_value_t ns = js_module_ctx_namespace(c->module_ctx);
-      if (vtype(ns) == T_OBJ) return ns;
-    }
-    return sv_export_target_ns_from_func_obj(
-      js, c->func_obj ? c->func_obj : js_mkundef());
+static inline ant_value_t sv_export_target_ns_from_closure(ant_t *js, sv_closure_t *closure) {
+  if (closure && is_object_type(closure->module_ctx)) {
+    ant_value_t ns = js_module_ctx_namespace(closure->module_ctx);
+    if (vtype(ns) == T_OBJ) return ns;
   }
+  
+  ant_value_t func_obj = closure && closure->func_obj
+    ? closure->func_obj 
+    : js_mkundef();
+  
+  return sv_export_target_ns_from_func_obj(js, func_obj);
+}
+
+static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
+  if (vtype(callee) == T_FUNC)
+    return sv_export_target_ns_from_closure(js, js_func_closure(callee));
   return js_module_eval_active_ns(js);
 }
 
 static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
+  
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return tov(0);
-  if (t == T_NULL || t == T_UNDEF)
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Cannot convert undefined or null to object");
+  if (t == T_NULL || t == T_UNDEF) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  
   ant_value_t obj = mkobj(js, 0);
   ant_value_t obj_as_obj = js_as_obj(obj);
+  
   js_set_slot(obj_as_obj, SLOT_PRIMITIVE, v);
   vm->stack[vm->sp - 1] = obj;
+  
   return tov(0);
 }
 

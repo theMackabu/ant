@@ -278,8 +278,9 @@ static inline ant_value_t sv_op_define_class(
   uint32_t source_start = sv_get_u32(ip + 6);
   uint32_t source_end = sv_get_u32(ip + 10);
   
-  bool has_name = (cls_flags & 1) && (int)atom_idx < func->atom_count;
-  bool has_heritage = (cls_flags & 2) != 0;
+  bool has_name = (cls_flags & SV_CLASS_FLAG_HAS_NAME) && (int)atom_idx < func->atom_count;
+  bool has_heritage = (cls_flags & SV_CLASS_FLAG_HAS_HERITAGE) != 0;
+  
   sv_atom_t *a = has_name ? &func->atoms[atom_idx] : NULL;
   ant_value_t ctor = vm->stack[vm->sp - 1];
   ant_value_t parent = vm->stack[vm->sp - 2];

@@ -6,9 +6,10 @@
 
 #include "internal.h"
 #include "debug.h"
+#include "hash.h"
+#include "numbers.h"
 #include "tokens.h"
 #include "runtime.h"
-#include "utils.h"
 #include "ops/coercion.h"
 
 #include <stdlib.h>
@@ -16,16 +17,14 @@
 #include <stdio.h>
 #include <math.h>
 
-#include "numbers.h"
-
-/* JS Number-to-String for numeric literal property keys. %g truncates at 6
-   significant digits ({123456789: 1} became key "1.23457e+08"). Literal
-   keys are non-negative, but 1e999-style literals overflow to Infinity. */
 static size_t literal_num_key(double num, char *buf, size_t cap) {
   if (isnan(num)) return (size_t)snprintf(buf, cap, "NaN");
   if (isinf(num)) return (size_t)snprintf(buf, cap, num > 0 ? "Infinity" : "-Infinity");
   return ant_number_to_shortest(num, buf, cap);
 }
+
+static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
+static constexpr size_t SV_LITERAL_NUM_KEY_BUF_SIZE = 32;
 
 enum {
   SV_ITER_HINT_GENERIC = 0,
@@ -284,7 +283,7 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
   }
 
   if (key->type == N_NUMBER) {
-    char buf[32];
+    char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
     size_t n = literal_num_key(key->num, buf, sizeof(buf));
     emit_constant(c, js_mkstr_permanent(c->js, buf, n));
     return;
@@ -4057,14 +4056,15 @@ void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-/* A literal qualifies for shape boilerplating when every property is a
-   plain, statically-named data property (no spread/computed/accessors,
-   no `__proto__:` colon form, no duplicate keys). */
 static bool object_literal_static_keys(
   sv_ast_t *node,
-  const char **keys, uint32_t *lens, char (*numbuf)[32]
+  const char **keys, uint32_t *lens,
+  char (*numbuf)[SV_LITERAL_NUM_KEY_BUF_SIZE]
 ) {
-  if (node->args.count == 0 || node->args.count > 32) return false;
+  if (
+    node->args.count == 0 ||
+    node->args.count > SV_SHAPED_LITERAL_MAX_KEYS
+  ) return false;
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *prop = node->args.items[i];
     if (prop->type != N_PROPERTY) return false;
@@ -4072,7 +4072,10 @@ static bool object_literal_static_keys(
     sv_ast_t *k = prop->left;
     if (!k) return false;
     if (k->type == N_IDENT && !is_quoted_ident_key(k)) {
-      if ((prop->flags & FN_COLON) && is_ident_str(k->str, k->len, "__proto__", 9))
+      if (
+        (prop->flags & FN_COLON) &&
+        is_ident_str(k->str, k->len, "__proto__", sizeof("__proto__") - 1)
+      )
         return false;
       keys[i] = k->str; lens[i] = k->len;
     } else if (is_quoted_ident_key(k)) {
@@ -4116,11 +4119,12 @@ static void record_shaped_site(sv_compiler_t *c, uint32_t bc_off,
 }
 
 void compile_object(sv_compiler_t *c, sv_ast_t *node) {
-  const char *skeys[32];
-  uint32_t slens[32];
-  char snum[32][32];
+  const char *skeys[SV_SHAPED_LITERAL_MAX_KEYS];
+  uint32_t slens[SV_SHAPED_LITERAL_MAX_KEYS];
+  char snum[SV_SHAPED_LITERAL_MAX_KEYS][SV_LITERAL_NUM_KEY_BUF_SIZE];
+  
   if (object_literal_static_keys(node, skeys, slens, snum)) {
-    uint32_t atom_idx[32];
+    uint32_t atom_idx[SV_SHAPED_LITERAL_MAX_KEYS];
     for (int i = 0; i < node->args.count; i++)
       atom_idx[i] = (uint32_t)add_atom(c, skeys[i], slens[i]);
     uint32_t obj_off = (uint32_t)c->code_len;
@@ -4172,7 +4176,10 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       else compile_expr(c, prop->right);
       if ((prop->flags & FN_COLON) &&
           prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left) &&
-          is_ident_str(prop->left->str, prop->left->len, "__proto__", 9)) {
+          is_ident_str(
+            prop->left->str, prop->left->len,
+            "__proto__", sizeof("__proto__") - 1
+          )) {
         emit_op(c, OP_SET_PROTO);
         continue;
       }
@@ -4183,7 +4190,7 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       } else if (prop->left->type == N_STRING) {
         emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str ? prop->left->str : "", prop->left->len);
       } else if (prop->left->type == N_NUMBER) {
-        char buf[32];
+        char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
         size_t n = literal_num_key(prop->left->num, buf, sizeof(buf));
         emit_atom_op(c, OP_DEFINE_FIELD, buf, (uint32_t)n);
       } else emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str, prop->left->len);
@@ -6348,11 +6355,12 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       : add_atom(c, "", 0);
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, (uint32_t)atom);
-    emit(c, 1 | (node->left ? 2 : 0));
+    emit(c, SV_CLASS_FLAG_HAS_NAME |
+      (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
   } else {
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
-    emit(c, node->left ? 2 : 0);
+    emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
   }
   
   if (consumed_inferred_name) {
