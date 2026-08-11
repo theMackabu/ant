@@ -193,16 +193,12 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     return;
 }
 
-/* Conservative rope GC scans rope and builder storage directly, so this
-   callback only needs to retain their flat string leaves. */
 static void gc_mark_flat_str(ant_t *js, ant_value_t value) {
   if (value <= NANBOX_PREFIX || vtype(value) != T_STR) return;
   uintptr_t data = (uintptr_t)vdata(value);
   if (data && (data & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT)
     gc_strings_mark(js, (const void *)data);
 }
-
-uint64_t gc_stat_major_total;
 
 void gc_remember_builder(ant_t *js, ant_string_builder_t *builder) {
   if (!js || !builder || builder->in_remember_set) return;
@@ -237,11 +233,11 @@ void gc_run(ant_t *js) {
     "major rope marking cannot request another major"
   );
 
-  gc_stat_major_total++;
   size_t live_before = js->obj_arena.live_count;
 
   gc_bigints_begin(js);
   gc_strings_begin(js);
+  
   bool conservative = rope_begin == GC_ROPES_BEGIN_CONSERVATIVE_MAJOR;
   gc_objects_run(
     js, conservative ? gc_mark_flat_str : gc_mark_str,
@@ -286,15 +282,6 @@ void gc_run_minor(ant_t *js) {
     return;
   }
 
-  static int log_minors = -1;
-  if (__builtin_expect(log_minors < 0, 0)) log_minors = getenv("ANT_GC_LOG") != NULL;
-  extern size_t gc_stat_young_closure_promoted;
-  size_t roster_before = js->young_closure_len;
-  size_t uv_roster_before = js->young_upvalue_len;
-  size_t promoted_before = gc_stat_young_closure_promoted;
-  struct timespec log_t0;
-  if (log_minors) clock_gettime(CLOCK_MONOTONIC, &log_t0);
-
   size_t old_before   = js->old_live_count;
   size_t live_before  = js->obj_arena.live_count;
   size_t young_before = live_before > old_before ? live_before - old_before : 0;
@@ -305,16 +292,6 @@ void gc_run_minor(ant_t *js) {
   gc_clear_remembered_builders(js);
   gc_ropes_sweep(js, true);
 
-  if (log_minors) {
-    struct timespec log_t1;
-    clock_gettime(CLOCK_MONOTONIC, &log_t1);
-    int64_t us = (int64_t)(log_t1.tv_sec - log_t0.tv_sec) * 1000000
-               + (int64_t)(log_t1.tv_nsec - log_t0.tv_nsec) / 1000;
-    fprintf(stderr, "[minor] closures=%zu upvals=%zu promoted=%zu young_objs=%zu us=%lld\n",
-            roster_before, uv_roster_before,
-            gc_stat_young_closure_promoted - promoted_before,
-            young_before, (long long)us);
-  }
   ant_ic_obj_epoch_bump();
 
   js->gc_last_live = js->obj_arena.live_count;
@@ -359,22 +336,21 @@ void gc_maybe(ant_t *js) {
     gc_run_minor(js);
 
     if (js->minor_gc_count >= gc_major_every_n) {
-      extern uint64_t gc_stat_major_reason[4];
       bool major_due = false;
       if (live_before_minor >= major_threshold) {
-        gc_stat_major_reason[0]++; major_due = true;
+        major_due = true;
       } else if (js->gc_pool_alloc >= pool_threshold) {
-        gc_stat_major_reason[1]++; major_due = true;
+        major_due = true;
       } else if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
                  GC_CLOSURE_MAJOR_GROWTH) {
-        gc_stat_major_reason[2]++; major_due = true;
+        major_due = true;
       } else if (
         /* Watermark growth is measured per major window and misses slow
            accumulation (promotions can stay under GC_CLOSURE_MAJOR_GROWTH
            every window forever); promoted-since-major is monotonic, so
            steady promotion pressure eventually drains the arena. */
         js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR) {
-        gc_stat_major_reason[3]++; major_due = true;
+        major_due = true;
       }
 
       if (major_due) {
@@ -395,13 +371,11 @@ void gc_maybe(ant_t *js) {
      workloads (async/coro stress) go straight to the major, avoiding a
      wasted minor before each legitimate one. */
   if (live >= threshold) {
-    extern uint64_t gc_stat_major_direct[4];
     gc_tick = 0;
     if (young_count >= live / 4) {
       gc_run_minor(js);
       if (js->obj_arena.live_count < threshold) return;
     }
-    gc_stat_major_direct[0]++;
     gc_run(js);
     return;
   }
@@ -416,14 +390,11 @@ void gc_maybe(ant_t *js) {
   if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
       GC_CLOSURE_MAJOR_GROWTH) {
     gc_tick = 0;
-    extern uint64_t gc_stat_major_direct[4];
     if (js->closure_arena.watermark > js->gc_closure_wm_minor_tried) {
       js->gc_closure_wm_minor_tried = js->closure_arena.watermark;
-      gc_stat_major_direct[1]++;
       gc_run_minor(js);
       return;
     }
-    gc_stat_major_direct[2]++;
     gc_run(js);
     return;
   }
@@ -446,8 +417,6 @@ void gc_maybe(ant_t *js) {
      ~ms cost; keep the major for a much longer period so old/pool garbage
      still drains. */
   gc_tick = 0;
-  extern uint64_t gc_stat_major_direct[4];
-  gc_stat_major_direct[3]++;
   if (gc_now_ms() - gc_last_major_ms >= GC_FORCE_MAJOR_INTERVAL_MS) gc_run(js);
   else gc_run_minor(js);
 }

@@ -53,7 +53,7 @@ static bool rope_marks_reserve(ant_t *js, size_t needed) {
     );
   }
   if (!marks) return false;
-  js->rope_gc.marks = (struct gc_rope_mark *)marks;
+  js->rope_gc.marks = marks;
   js->rope_gc.mark_cap = cap;
   return true;
 }
@@ -72,7 +72,7 @@ static void rope_marks_add_pool(
 ) {
   for (ant_pool_block_t *b = pool->head; b; b = b->next) {
     if (b->used == 0) continue;
-    gc_rope_mark_t *marks = (gc_rope_mark_t *)js->rope_gc.marks;
+    gc_rope_mark_t *marks = js->rope_gc.marks;
     gc_rope_mark_t *m = &marks[js->rope_gc.mark_count++];
     m->base = (uintptr_t)b->data;
     m->end = m->base + b->used;
@@ -144,7 +144,7 @@ void gc_ropes_mark_conservative_roots(ant_t *js) {
 static gc_rope_mark_t *rope_mark_find(ant_t *js, const void *ptr) {
   if (!js || !ptr) return NULL;
   uintptr_t p = (uintptr_t)ptr;
-  gc_rope_mark_t *marks = (gc_rope_mark_t *)js->rope_gc.marks;
+  gc_rope_mark_t *marks = js->rope_gc.marks;
   size_t lo = 0, hi = js->rope_gc.mark_count;
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2u;
@@ -247,7 +247,7 @@ void gc_ropes_sweep(ant_t *js, bool minor) {
     }
   }
 
-  gc_rope_mark_t *marks = (gc_rope_mark_t *)js->rope_gc.marks;
+  gc_rope_mark_t *marks = js->rope_gc.marks;
   size_t count = js->rope_gc.mark_count;
   for (size_t i = 0; i < count; i++) {
     gc_rope_mark_t *m = &marks[i];

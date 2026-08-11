@@ -405,8 +405,8 @@ devirt fuzzer.
 Young-closure/young-upvalue rosters (`js_closure_alloc` appends; slow-path
 trackers in gc/objects.c) + young sweeps in `gc_objects_run_minor` that
 mirror the major arena sweep; trigger in `js_closure_alloc` at
-`GC_CLOSURE_NURSERY_THRESHOLD` via `gc_pressure`. `ANT_GC_LOG=1` prints
-freed/promoted counters at teardown.
+`GC_CLOSURE_NURSERY_THRESHOLD` via `gc_pressure`. Temporary teardown
+counters recorded freed/promoted closure totals during validation.
 
 Liveness bugs found and fixed (each was a hard crash):
 1. JIT open-upvalue chains are raw cell pointers on the C stack —
@@ -430,7 +430,7 @@ green (spec 3712/0, harness 167/0 incl. oha + new
 `tests/test_gc_closure_churn.cjs` [96MB mem cap], jit suite 0 fail).
 newt completes end-to-end; node baseline for newt: Main 3.34s, 309MB RSS.
 
-Tuning measurements (2026-08-05, per-minor log via ANT_GC_LOG):
+Tuning measurements (2026-08-05, via temporary per-minor logging):
 - At threshold 16384: 13,732 minors totaling **17.35s** of Main (~47s!),
   p50 854µs, avg roster exactly 16,384, ~988 promoted/minor (13.6M total),
   RSS 1.52GB. (The teardown `minors=` count resets at majors — use the
@@ -474,9 +474,9 @@ Splay 3373 / Richards 2557 = branch-expected). Closure GC is now
 
 ## Phase 7 — closure-volume attack (2026-08-05, measurement + first wins)
 
-**Measurement first** (ANT_CLOSURE_STATS=1 per-site counters, keyed by
-child sv_func, dumped at teardown; hooks in jit_helper_closure +
-sv_op_closure): newt Main's ~225M closures decompose into:
+**Measurement first** (temporary per-site counters, keyed by child sv_func,
+with hooks in jit_helper_closure + sv_op_closure): newt Main's ~225M closures
+decompose into:
 - **~60M+ eta-curried steps**: `(eta1) => KnownFn(eta0, eta1)` — instance
   method wrappers (`compare(ord)(x)(y)`), IO `return`. Created by calling
   the outer curried lambda, invoked exactly once, dropped. Locally
@@ -547,7 +547,7 @@ spec 3712/0, jit 0 fail, harness 168/0 (incl. new
 `tests/test_curried_call_fusion.cjs` — 18 semantics assertions covering
 mutation-through-cell, parent upvals, bound/member/throwing/default/rest
 cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
-`ANT_CLOSURE_STATS=1` prints `[call-call] fused/generic`.
+Temporary fused/generic counters confirmed the dispatch split and were removed.
 
 **7b C1 review follow-up — outer-argument order FIXED, 2026-08-07:**
 - **Mechanism:** the original `fusion_arg_is_effect_free` admitted every
@@ -559,7 +559,7 @@ cases), DeltaBlue 4271, Richards 2591, Splay 3586, GC micros green.
   earlier call site.
 - **Tried and ruled out:** restricting eager fusion to literals plus const
   locals fixed semantics, but a pinned whole-newt counter run fell from
-  `[call-call] fused=11962008 generic=20775513` to
+  `fused=11962008 generic=20775513` to
   `fused=0 generic=1051774`. Interleaved newt measured Main
   40.470/41.352s → 43.280/42.850s, a real ~2.15s (~5.3%) regression. Do not
   re-land the const-only gate without an order-preserving replacement.
@@ -822,7 +822,7 @@ KILLED with data; record the negatives:**
    interleaved A/B counts as evidence for wall-time claims.**
 
 **Object-churn installment 1 (2026-08-05, post-commit) — fused young
-sweep+promote:** minor phase breakdown (ANT_GC_LOG, accumulated
+sweep+promote:** minor phase breakdown (temporary accumulated whole-run
 full-run — trustworthy unlike `sample` windows): remember 0.41s, roots
 1.69s, **obj sweep+promote 5.53s**, closure sweeps 2.69s. The sweep and
 promote passes each pointer-chased the whole young list (~176B objects,
@@ -836,7 +836,7 @@ sweeps tried, measured nothing, dropped. Gates: harness 168/0,
 DeltaBlue 4119, spec/jit clean, GC micros green.
 
 **Inline-emitter widening (2026-08-05, late) — mixed, decisive data:**
-Rejection histogram (`[inline-reject]`, per blocked call site) showed
+A temporary rejection histogram (per blocked call site) showed
 Richards blocked on PUT_FIELD/bitwise, DeltaBlue on CALL_METHOD (33
 sites) + size cap. Implemented: side-effect-sound inline discipline
 (side-effecting ops raise errors at the JOIN — never to `slow`, whose
@@ -894,10 +894,10 @@ unchanged):
 2. The 50ms periodic force-backstop ran a FULL MAJOR each interval under
    steady sub-threshold allocation; now minors at 50ms, major at 1s
    (GC_FORCE_MAJOR_INTERVAL_MS).
-**The IC-invalidation theory above was WRONG — falsified by counters
-(ANT_IC_STATS per-family refill counts: 9 total refills across 100k
-requests). The real cause, found via per-major-path counters
-([gc-majors] atexit dump): the DIRECT `live >= gc_live_major_threshold`
+**The IC-invalidation theory above was WRONG — falsified by temporary
+per-family counters: 9 total refills across 100k requests. The real cause,
+found via temporary per-major-path counters: the DIRECT
+`live >= gc_live_major_threshold`
 check fired 2,775 majors in 11s (252/s). Mechanism: after a major,
 threshold = ~1.5x post-major live; for a server's small live set that is
 reachable by YOUNG churn alone, long before the 32k nursery triggers a
@@ -908,8 +908,8 @@ live stays over threshold (genuine old-gen growth). Majors 2775 → 80
 (all via the intended cadence path). RESULT: express 13.5k → 16.1k —
 regression ELIMINATED; final interleaved scoreboard vs prod: hono +3.6%,
 express even, h3 +15%, elysia +11% — build wins or ties all four with
-bounded closure memory. newt unchanged (41.5s). Battery green.
-ANT_IC_STATS=1 keeps the objepoch-refill + gc-majors atexit dump.**
+bounded closure memory. newt unchanged (41.5s). Battery green. The temporary
+refill and major-path counters were removed after validation.**
 
 **Micro/demo/GC-bench A/B vs prod (interleaved, 2 rounds, wall+RSS):**
 wins — fibonacci_recursive −33%, bench_gc_mark_func −36%, bench_dec −26%,
@@ -1114,7 +1114,7 @@ express oha **17,797 RPS**, devirt fuzzer all seeds agree, and newt Main
 the new and existing regexp fast-path tests passed at stress 1/3 and the full
 spec passed 3712/0 at stress 10; the hook was removed before finishing.
 
-Bonus observed while instrumenting: the [gc-majors] atexit dump does
+Bonus observed while instrumenting: the temporary major-path dump did
 NOT count the direct `gc_run` at src/pool.c:311 (js_type_alloc
 pool-pressure) — 24/25 majors in this workload were uncounted; add a
 counter if majors need auditing again.
@@ -1439,8 +1439,8 @@ the harness manifest.
 premise no longer holds: on today's tree Prelude at the fixed 131072
 threshold measures **~3.0s**, not the 3.6s recorded when the trade was
 banked — the +0.75s penalty was absorbed by later work (7a/fused
-sweep era). Measurements: per-minor survival (promoted/roster,
-ANT_GC_LOG) does NOT separate the phases (Prelude-only run: mean 3.74%,
+sweep era). Measurements: temporarily logged per-minor survival
+(promoted/roster) does NOT separate the phases (Prelude-only run: mean 3.74%,
 p50 2.64%; full run: mean 5.84%, p50 5.41% — overlapping), so
 survival-based sizing is unsound. A cumulative-allocation-based
 adaptive version (start 16384, double when total closure allocs cross
@@ -1704,7 +1704,7 @@ live blocks promote and dead blocks recycle. The nursery improved the same
 pinned workload from **3.34/3.23s** to **3.04/3.03s**. Temporary whole-run
 logging showed six rope-pressure minors at roughly 8 MiB each and only two
 object-live majors on the full workload. Those diagnostic counters and their
-extra `ANT_GC_LOG` output were removed after validation.
+extra output were removed after validation.
 
 All rope mark metadata is owned by the isolate. An initial OOM fallback used a
 process-global isolate pointer and singleton fallback record; it was rejected.
@@ -2107,7 +2107,7 @@ review-hardened 2026-08-10.**
 - **Failing-first evidence:** the clean baseline `/tmp/ant_w9_base_bin`
   (`f1f18d18b49ff97c5e32d4ccc7123b88`) reduced an object captured by the
   escaped closure to `undefined {}` after generator abandonment and young
-  churn. Temporary `ANT_GC_LOG` counters on the behavior-identical base
+  churn. Temporary GC counters on the behavior-identical base
   recorded `sealed=1 sealed-heap=1 sealed-old-heap=1 sealed-dead-obj=1`
   (and 1,887 reachable open heap-valued upvalue marks during the run), pinning
   both the missing current-collection edge and the old-cell transition. All

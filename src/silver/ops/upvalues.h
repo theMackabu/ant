@@ -188,13 +188,6 @@ static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
 static inline sv_closure_t *sv_closure_init(
   ant_t *js, sv_func_t *child, ant_value_t this_val
 ) {
-#ifdef ANT_JIT
-  extern bool sv_closure_stats_enabled;
-  extern void sv_closure_site_count(sv_func_t *);
-  if (__builtin_expect(sv_closure_stats_enabled, 0))
-    sv_closure_site_count(child);
-#endif
-
   sv_closure_t *closure = js_closure_alloc_hot(js);
   if (!closure) return NULL;
 

@@ -2570,19 +2570,13 @@ static bool jit_op_inline_pure_tail(sv_op_t op) {
   }
 }
 
-uint64_t sv_stat_inline_reject_by_op[OP__COUNT];
-uint64_t sv_stat_inline_reject_size;
-
 static bool jit_inlineable(sv_func_t *f) {
   if (!f) return false;
   if (f->is_async || f->is_generator) return false;
   // derived ctors need the super-rebound `this` returned from RETURN/
   // RETURN_UNDEF (see the main emission); the inline path doesn't model it
   if (f->is_derived_ctor) return false;
-  if (f->code_len > JIT_INLINE_MAX_BYTECODE) {
-    sv_stat_inline_reject_size++;
-    return false;
-  }
+  if (f->code_len > JIT_INLINE_MAX_BYTECODE) return false;
 
   uint8_t *ip  = f->code;
   uint8_t *end = f->code + f->code_len;
@@ -2591,10 +2585,7 @@ static bool jit_inlineable(sv_func_t *f) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) return false;
-    if ((sv_op_flags[op] & SV_OPF_JIT_INLINEABLE) == 0) {
-      sv_stat_inline_reject_by_op[op]++;
-      return false;
-    }
+    if ((sv_op_flags[op] & SV_OPF_JIT_INLINEABLE) == 0) return false;
     // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
     // the interpreter until JIT routes a real per-call activation/object
     // with matching lifetime and semantics.
@@ -2602,9 +2593,8 @@ static bool jit_inlineable(sv_func_t *f) {
 
     if (seen_effect) {
       if (op == OP_JMP) {
-        if (sv_get_i32(ip + 1) < 0) { sv_stat_inline_reject_by_op[op]++; return false; }
+        if (sv_get_i32(ip + 1) < 0) return false;
       } else if (!jit_op_inline_pure_tail(op) && !jit_op_inline_side_effect(op)) {
-        sv_stat_inline_reject_by_op[op]++;
         return false;
       }
     }

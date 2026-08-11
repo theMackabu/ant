@@ -375,16 +375,12 @@ static void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
   uint32_t dst = 0;
   for (uint32_t src = 0; src < shape_count; src++) {
     if (!ant_shape_prop_at(obj->shape, src)) continue;
-    if (dst != src) {
-      ant_object_prop_set_unchecked(
-        obj, dst, ant_object_prop_get_unchecked(obj, src)
-      );
-    }
+    if (dst != src)
+      ant_object_prop_set_unchecked(obj, dst, ant_object_prop_get_unchecked(obj, src));
     dst++;
   }
   for (uint32_t i = dst; i < obj->prop_count; i++)
     ant_object_prop_set_unchecked(obj, i, js_mkundef());
-
   obj->prop_count = ant_shape_compact(obj->shape);
 }
 
@@ -17373,12 +17369,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
     fixed_arena_destroy(&js->obj_arena);
     return NULL;
   }
+
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
-#ifdef ANT_JIT
-  sv_closure_stats_enabled = getenv("ANT_CLOSURE_STATS") != NULL;
-#endif
-  sv_objepoch_stats_init();
-  
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
   
@@ -17941,49 +17933,6 @@ void js_destroy(ant_t *js) {
   cleanup_atomics_module(js);
   cleanup_events_module(js);
   cleanup_regex_module(js);
-
-#ifdef ANT_JIT
-  if (sv_closure_stats_enabled) {
-    extern uint64_t sv_stat_inline_reject_by_op[], sv_stat_inline_reject_size;
-    fprintf(stderr, "[inline-reject] size=%llu",
-            (unsigned long long)sv_stat_inline_reject_size);
-    for (int t = 0; t < OP__COUNT; t++)
-      if (sv_stat_inline_reject_by_op[t])
-        fprintf(stderr, " %s=%llu", sv_op_names[t],
-                (unsigned long long)sv_stat_inline_reject_by_op[t]);
-    fprintf(stderr, "\n");
-    extern uint64_t sv_stat_call_call_fused, sv_stat_call_call_generic;
-    fprintf(stderr, "[call-call] fused=%llu generic=%llu\n",
-            (unsigned long long)sv_stat_call_call_fused,
-            (unsigned long long)sv_stat_call_call_generic);
-    sv_closure_site_dump();
-  }
-#endif
-
-  extern uint64_t gc_stat_minor_phase_ns[4];
-  extern uint64_t gc_stat_major_reason[4];
-  if (getenv("ANT_GC_LOG")) {
-    fprintf(stderr,
-            "[gc-minor-phases] remember=%.2fs roots=%.2fs obj-sweep=%.2fs closure-sweep=%.2fs\n",
-            gc_stat_minor_phase_ns[0] / 1e9, gc_stat_minor_phase_ns[1] / 1e9,
-            gc_stat_minor_phase_ns[2] / 1e9, gc_stat_minor_phase_ns[3] / 1e9);
-    fprintf(stderr,
-            "[gc-major-reasons] obj-live=%llu pool=%llu closure-wm=%llu promoted=%llu\n",
-            (unsigned long long)gc_stat_major_reason[0],
-            (unsigned long long)gc_stat_major_reason[1],
-            (unsigned long long)gc_stat_major_reason[2],
-            (unsigned long long)gc_stat_major_reason[3]);
-  }
-
-  extern size_t gc_stat_young_closure_freed, gc_stat_young_closure_promoted;
-  if (getenv("ANT_GC_LOG"))
-    fprintf(stderr,
-            "[gc] young-closures freed=%zu promoted=%zu | arenas: closure wm=%zuMB live=%zu, "
-            "upvalue wm=%zuMB live=%zu, obj wm=%zuMB live=%zu\n",
-            gc_stat_young_closure_freed, gc_stat_young_closure_promoted,
-            js->closure_arena.watermark >> 20, js->closure_arena.live_count,
-            js->upvalue_arena.watermark >> 20, js->upvalue_arena.live_count,
-            js->obj_arena.watermark >> 20, js->obj_arena.live_count);
 
   fixed_arena_destroy(&js->obj_arena);
   fixed_arena_destroy(&js->closure_arena);

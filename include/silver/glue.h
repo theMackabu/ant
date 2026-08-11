@@ -315,11 +315,5 @@ ant_value_t jit_helper_str_flush_local(
   ant_value_t *locals, uint16_t slot_idx
 );
 
-/* ANT_CLOSURE_STATS=1: per-site closure allocation counters (keyed by the
-   child sv_func), dumped at isolate teardown. */
-extern bool sv_closure_stats_enabled;
-void sv_closure_site_count(struct sv_func *child);
-void sv_closure_site_dump(void);
-
 #endif
 #endif

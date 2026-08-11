@@ -145,6 +145,19 @@ void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj) {
   pd->gc_pending_prev = NULL;
 }
 
+static constexpr size_t GC_REMEMBERED_ROSTER_RETAIN_CAP = 256;
+static constexpr size_t GC_YOUNG_ROSTER_RETAIN_CAP = 32768;
+
+static void *shrink_ptr_roster(void *entries, size_t *cap, size_t target_cap) {
+  if (*cap <= target_cap * 2) return entries;
+  void *shrunk = realloc(entries, target_cap * sizeof(void *));
+  
+  if (!shrunk) return entries;
+  *cap = target_cap;
+  
+  return shrunk;
+}
+
 void gc_remember_add(ant_t *js, ant_object_t *obj) {
   if (!obj || obj->flags.in_remember_set) return;
   if (js->remember_set_len >= js->remember_set_cap) {
@@ -183,10 +196,10 @@ static void gc_clear_remembered_upvalues(ant_t *js) {
     js->remembered_upvalues[i]->in_remember_set = 0;
   js->remembered_upvalue_len = 0;
 
-  if (js->remembered_upvalue_cap > 512) {
-    struct sv_upvalue **entries = realloc(js->remembered_upvalues, 256 * sizeof(*entries));
-    if (entries) { js->remembered_upvalues = entries; js->remembered_upvalue_cap = 256; }
-  }
+  js->remembered_upvalues = shrink_ptr_roster(
+    js->remembered_upvalues, &js->remembered_upvalue_cap,
+    GC_REMEMBERED_ROSTER_RETAIN_CAP
+  );
 }
 
 static void gc_mark_closure(ant_t *js, sv_closure_t *c);
@@ -216,10 +229,10 @@ static void gc_clear_remembered_closures(ant_t *js) {
     js->remembered_closures[i]->in_remember_set = 0;
   js->remembered_closure_len = 0;
 
-  if (js->remembered_closure_cap > 512) {
-    struct sv_closure **entries = realloc(js->remembered_closures, 256 * sizeof(*entries));
-    if (entries) { js->remembered_closures = entries; js->remembered_closure_cap = 256; }
-  }
+  js->remembered_closures = shrink_ptr_roster(
+    js->remembered_closures, &js->remembered_closure_cap,
+    GC_REMEMBERED_ROSTER_RETAIN_CAP
+  );
 }
 
 void gc_track_young_closure_slow(ant_t *js, struct sv_closure *c) {
@@ -251,9 +264,6 @@ void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv) {
    closures are marked before this runs). Marked entries are dropped from
    the roster, promoting them to the major-only lifecycle. Mirrors the
    per-closure freeing done by the major arena sweep. */
-size_t gc_stat_young_closure_freed;
-size_t gc_stat_young_closure_promoted;
-
 static inline void gc_release_closure_payload(sv_closure_t *c) {
   if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) &&
       c->upvalues != c->inline_upvals) {
@@ -282,21 +292,19 @@ static void gc_sweep_young_closures(ant_t *js) {
          requires rebuilding remembered slots during minor scans
          (V8-scavenger-style); residence in the large nursery already
          captures most of aging's benefit. */
-      gc_stat_young_closure_promoted++;
       js->gc_closure_promoted_since_major++;
       continue;
     }
-    gc_stat_young_closure_freed++;
     gc_release_closure_payload(c);
     fixed_arena_free_elem(ca, c);
   }
   js->young_closure_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 
-  if (js->young_closure_cap > 65536) {
-    struct sv_closure **entries = realloc(js->young_closures, 32768 * sizeof(*entries));
-    if (entries) { js->young_closures = entries; js->young_closure_cap = 32768; }
-  }
+  js->young_closures = shrink_ptr_roster(
+    js->young_closures, &js->young_closure_cap,
+    GC_YOUNG_ROSTER_RETAIN_CAP
+  );
 }
 
 static void gc_sweep_young_upvalues(ant_t *js) {
@@ -308,10 +316,10 @@ static void gc_sweep_young_upvalues(ant_t *js) {
   }
   js->young_upvalue_len = 0;
 
-  if (js->young_upvalue_cap > 65536) {
-    struct sv_upvalue **entries = realloc(js->young_upvalues, 32768 * sizeof(*entries));
-    if (entries) { js->young_upvalues = entries; js->young_upvalue_cap = 32768; }
-  }
+  js->young_upvalues = shrink_ptr_roster(
+    js->young_upvalues, &js->young_upvalue_cap,
+    GC_YOUNG_ROSTER_RETAIN_CAP
+  );
 }
 
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
@@ -1180,28 +1188,9 @@ void gc_objects_run(
   js->gc_objects_running = false;
 }
 
-/* Accumulated minor-GC phase times (ns), ANT_GC_LOG only:
-   0=remember-set scans, 1=root marking, 2=young object sweep+promote,
-   3=closure/upvalue sweeps. Printed at isolate teardown. */
-uint64_t gc_stat_minor_phase_ns[4];
-
-/* Major triggers taken from the post-minor cadence check:
-   0=object live, 1=pool bytes, 2=closure watermark growth, 3=promoted count */
-uint64_t gc_stat_major_reason[4];
-
-static inline uint64_t gc_phase_now_ns(void) {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-}
-
 void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   if (!js) return;
   js->gc_objects_running = true;
-
-  static int phase_log = -1;
-  if (__builtin_expect(phase_log < 0, 0)) phase_log = getenv("ANT_GC_LOG") != NULL;
-  uint64_t pt = phase_log ? gc_phase_now_ns() : 0;
 
   g_str_mark = str_mark;
   gc_epoch++;
@@ -1227,39 +1216,18 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
 
   js->remember_set_len = 0;
 
-  if (phase_log) {
-    uint64_t t = gc_phase_now_ns();
-    gc_stat_minor_phase_ns[0] += t - pt;
-    pt = t;
-  }
-
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, true);
   g_minor_gc = false;
 
-  if (phase_log) {
-    uint64_t t = gc_phase_now_ns();
-    gc_stat_minor_phase_ns[1] += t - pt;
-    pt = t;
-  }
-
   gc_age_regex_cache(js, true);
   gc_sweep_young_and_promote(js);
-
-  if (phase_log) {
-    uint64_t t = gc_phase_now_ns();
-    gc_stat_minor_phase_ns[2] += t - pt;
-    pt = t;
-  }
 
   gc_sweep_young_closures(js);
   gc_sweep_young_upvalues(js);
   gc_clear_remembered_func_consts(js);
   gc_clear_remembered_closures(js);
   gc_clear_remembered_upvalues(js);
-
-  if (phase_log)
-    gc_stat_minor_phase_ns[3] += gc_phase_now_ns() - pt;
 
   // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
   // property values on old objects are not scanned during minor GC (old objects

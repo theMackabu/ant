@@ -295,9 +295,6 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
    every GC list (gc_remember_* early-return on the flag, and the clear
    loops only touch listed entries). Anything else falls back to two
    ordinary calls with identical semantics. */
-extern uint64_t sv_stat_call_call_fused;
-extern uint64_t sv_stat_call_call_generic;
-
 static inline bool sv_op_call_call_fused(
   sv_vm_t *vm, ant_t *js, ant_value_t xv,
   ant_value_t *args1, int n1, ant_value_t *args2, int n2,
@@ -373,8 +370,6 @@ static inline bool sv_op_call_call_fused(
       }
 
       js->new_target = js_mkundef();
-      sv_stat_call_call_fused++;
-
       sv_jit_enter(js);
       ant_value_t result = ((sv_jit_func_t)f2->jit_code)(
         vm, js_mkundef(), js_mkundef(), js_mkundef(),
@@ -420,7 +415,6 @@ static inline ant_value_t sv_op_call_call(
   if (sv_op_call_call_fused(
         vm, js, xv, args1, n1, args2, n2, false, &result))
     return result;
-  sv_stat_call_call_generic++;
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, n1, NULL, false);
   if (is_err(r)) return r;
   return sv_vm_call(vm, js, r, js_mkundef(), args2, n2, NULL, false);
@@ -441,7 +435,6 @@ static inline ant_value_t sv_op_call_call_slot(
         vm, js, xv, args1, 1, &arg2, 1, true, &result))
     return result;
 
-  sv_stat_call_call_generic++;
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, false);
   if (is_err(r)) return r;
 
@@ -469,7 +462,6 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
         vm, js, xv, args1, 1, &arg2, 1, true, &result))
     return result;
 
-  sv_stat_call_call_generic++;
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, false);
   if (is_err(r)) return r;
   arg2 = slot ? *slot : js_mkundef();

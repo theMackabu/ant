@@ -354,8 +354,6 @@ static inline ant_value_t sv_instanceof_ic_eval(
     return js_bool(ic->cached_index != 0);
 
 slow_path:
-  sv_stat_objepoch_refill[2]++;
-  
   ant_value_t ctor_proto = js_mkundef();
   bool rhs_cacheable = ic && lhs_cacheable && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
   
@@ -405,7 +403,6 @@ static inline ant_value_t sv_isproto_ic_eval(
     return js_bool(ic->cached_index != 0);
   }
 
-  sv_stat_objepoch_refill[3]++;
   bool found = js_is_prototype_of(js, proto_obj, obj);
   if (ic && proto_ptr && obj_ptr) {
     ic->cached_holder = proto_ptr;

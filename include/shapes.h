@@ -63,10 +63,9 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
 // proxy trap, finalizer or other user callable; resolve it again afterwards. Every
 // caller here does.
 bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot);
-
-// This is the physical slot span, including deleted slots until compaction.
-uint32_t ant_shape_count(const ant_shape_t *shape);
 bool ant_shape_should_compact(const ant_shape_t *shape);
+
+uint32_t ant_shape_count(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 
@@ -84,8 +83,6 @@ bool ant_gc_shapes_sweep(void);
 size_t ant_shape_total_bytes(void);
 extern uint32_t ant_ic_epoch_counter;
 extern uint32_t ant_ic_obj_epoch_counter;
-extern uint64_t sv_stat_objepoch_refill[4];
-void sv_objepoch_stats_init(void);
 
 static inline void ant_ic_epoch_bump(void) {
   ant_ic_epoch_counter++;

@@ -13,9 +13,6 @@
 #include "silver/swarm.h"
 #include "modules/regex.h"
 
-uint64_t sv_stat_call_call_fused;
-uint64_t sv_stat_call_call_generic;
-
 bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
   if (!js || !slot) return false;
 

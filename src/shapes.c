@@ -1,46 +1,10 @@
 #include "shapes.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uthash.h>
 
 uint32_t ant_ic_epoch_counter = 1;
 uint32_t ant_ic_obj_epoch_counter = 1;
-
-/* ANT_IC_STATS=1: slow-path refill counts for the obj-epoch-guarded
-   cache families. 0=function_proto 1=with_unscopables 2=instanceof
-   3=is_prototype_of */
-uint64_t sv_stat_objepoch_refill[4];
-uint64_t gc_stat_major_direct[4];
-
-static void sv_objepoch_refill_dump(void) {
-  extern uint64_t gc_stat_major_total, gc_stat_major_reason[4];
-  fprintf(stderr,
-          "[objepoch-refills] function_proto=%llu unscopables=%llu instanceof=%llu is_proto=%llu\n",
-          (unsigned long long)sv_stat_objepoch_refill[0],
-          (unsigned long long)sv_stat_objepoch_refill[1],
-          (unsigned long long)sv_stat_objepoch_refill[2],
-          (unsigned long long)sv_stat_objepoch_refill[3]);
-  fprintf(stderr,
-          "[gc-majors] total=%llu cadence(live=%llu pool=%llu wm=%llu promoted=%llu) "
-          "direct(live=%llu wm-minor=%llu wm-major=%llu force=%llu)\n",
-          (unsigned long long)gc_stat_major_total,
-          (unsigned long long)gc_stat_major_reason[0],
-          (unsigned long long)gc_stat_major_reason[1],
-          (unsigned long long)gc_stat_major_reason[2],
-          (unsigned long long)gc_stat_major_reason[3],
-          (unsigned long long)gc_stat_major_direct[0],
-          (unsigned long long)gc_stat_major_direct[1],
-          (unsigned long long)gc_stat_major_direct[2],
-          (unsigned long long)gc_stat_major_direct[3]);
-}
-
-void sv_objepoch_stats_init(void) {
-  if (getenv("ANT_IC_STATS")) atexit(sv_objepoch_refill_dump);
-}
-
-#define SHAPE_ENTRY_SIZE     sizeof(shape_index_entry_t)
-#define SHAPE_ENTRY_POOL_MAX 1024
 
 static size_t g_shape_bytes          = 0;
 static size_t g_shape_entry_pool_len = 0;
@@ -57,6 +21,10 @@ typedef struct shape_child_entry {
   ant_shape_t *child;
   UT_hash_handle hh;
 } shape_child_entry_t;
+
+static constexpr size_t SHAPE_ENTRY_SIZE = sizeof(shape_index_entry_t);
+static constexpr size_t SHAPE_ENTRY_POOL_MAX = 1024;
+static constexpr uint32_t SHAPE_COMPACT_MIN_TOMBSTONES = 32;
 
 static_assert(
   sizeof(shape_index_entry_t) == sizeof(shape_child_entry_t), 
@@ -548,9 +516,7 @@ uint32_t ant_shape_count(const ant_shape_t *shape) {
 }
 
 bool ant_shape_should_compact(const ant_shape_t *shape) {
-  /* Keep isolated deletes O(1), then bound the physical span to roughly
-     twice the number of live slots once tombstones become material. */
-  if (!shape || shape->deleted_count < 32) return false;
+  if (!shape || shape->deleted_count < SHAPE_COMPACT_MIN_TOMBSTONES) return false;
   return shape->deleted_count >= shape->count - shape->deleted_count;
 }
 

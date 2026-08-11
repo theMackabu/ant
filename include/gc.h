@@ -8,23 +8,16 @@
 static constexpr size_t GC_MAJOR_SCALE = 2048;
 static constexpr size_t GC_MIN_TICK    = 1024;
 
-static constexpr uint64_t GC_FORCE_INTERVAL_MS   = 50;
-/* The periodic backstop runs minors at GC_FORCE_INTERVAL_MS; a full major
-   only this often (sub-threshold steady allocation, e.g. servers). */
+static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR     = 8;
+static constexpr uint64_t GC_FORCE_INTERVAL_MS       = 50;
 static constexpr uint64_t GC_FORCE_MAJOR_INTERVAL_MS = 1000;
-static constexpr uint32_t GC_MAJOR_EVERY_N_MINOR = 8;
 
 static constexpr size_t GC_NURSERY_THRESHOLD         = 32768;
 static constexpr size_t GC_CLOSURE_NURSERY_THRESHOLD = 131072;
-/* Promotions since the last major that force one (~36MB of arena slots);
-   see the major_due clause in gc_maybe. */
 static constexpr size_t GC_CLOSURE_PROMOTED_MAJOR    = 262144;
-/* Bytes of closure-arena watermark growth since the last major; the
-   watermark only rises when the free list is empty, i.e. when young
-   reclaim is not keeping up. */
-static constexpr size_t GC_CLOSURE_MAJOR_GROWTH      = 16u * 1024u * 1024u;
 
-static constexpr size_t GC_POOL_PRESSURE_FLOOR = 8u * 1024u * 1024u;
+static constexpr size_t GC_CLOSURE_MAJOR_GROWTH   = 16u * 1024u * 1024u;
+static constexpr size_t GC_POOL_PRESSURE_FLOOR    = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 
 #define GC_OBJ_TYPE_MASK (T_FLAG_FIND(T_OBJ) \

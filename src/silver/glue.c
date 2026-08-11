@@ -10,54 +10,6 @@
 #include "tokens.h"
 #include "silver/glue.h"
 
-bool sv_closure_stats_enabled;
-
-#define CLOSURE_SITE_SLOTS 8192
-static struct { sv_func_t *func; uint64_t count; } closure_sites[CLOSURE_SITE_SLOTS];
-
-void sv_closure_site_count(sv_func_t *child) {
-  size_t h = ((uintptr_t)child >> 4) & (CLOSURE_SITE_SLOTS - 1);
-  for (size_t probe = 0; probe < CLOSURE_SITE_SLOTS; probe++) {
-    size_t i = (h + probe) & (CLOSURE_SITE_SLOTS - 1);
-    if (closure_sites[i].func == child) { closure_sites[i].count++; return; }
-    if (!closure_sites[i].func) {
-      closure_sites[i].func = child;
-      closure_sites[i].count = 1;
-      return;
-    }
-  }
-}
-
-void sv_closure_site_dump(void) {
-  for (int rank = 0; rank < 30; rank++) {
-    uint64_t best = 0;
-    size_t best_i = 0;
-    for (size_t i = 0; i < CLOSURE_SITE_SLOTS; i++)
-      if (closure_sites[i].func && closure_sites[i].count > best) {
-        best = closure_sites[i].count;
-        best_i = i;
-      }
-    if (!best) break;
-    sv_func_t *f = closure_sites[best_i].func;
-    sv_func_debug_t *d = f->debug;
-    int snip_len = 0;
-    const char *snip = "";
-    if (d && d->source && d->source_end > d->source_start) {
-      snip = d->source + d->source_start;
-      snip_len = d->source_end - d->source_start;
-      if (snip_len > 100) snip_len = 100;
-    }
-    fprintf(stderr, "[closure-site] %12llu  %s (%s:%d) params=%u upvals=%d | %.*s\n",
-            (unsigned long long)best,
-            d && d->name ? d->name : "<anon>",
-            d && d->filename ? d->filename : "?",
-            d ? d->source_line : 0,
-            f->param_count, f->upvalue_count,
-            snip_len, snip);
-    closure_sites[best_i].func = NULL;
-  }
-}
-
 #include "ops/calls.h"
 #include "ops/literals.h"
 #include "ops/globals.h"

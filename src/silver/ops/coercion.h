@@ -327,8 +327,6 @@ static inline bool sv_with_binding_is_unscopable(
       proto_ptr == js->runtime_cache.with_no_unscopables_proto &&
       (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
     ) return false;
-    sv_stat_objepoch_refill[1]++;
-
     ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
     bool has_unscopables = unscopables_off.obj;
     bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;
