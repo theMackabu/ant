@@ -3853,7 +3853,7 @@ static bool compile_call_try_fused_chain(
   if (callee->type != N_CALL) return false;
   if (call_has_spread_arg(callee)) return false;
   if (callee->args.count != 1) return false;
-  if (node->args.count > 14) return false;  /* 1 + n1 + n2 <= 16 (JIT args_buf) */
+  if (node->args.count > SV_JIT_ARGS_BUF_CAP - 2) return false;
   if (!callee->left) return false;
   if (callee->left->type == N_MEMBER || callee->left->type == N_OPTIONAL) return false;
   if (is_ident_name(callee->left, "super") || is_ident_name(callee->left, "eval")) return false;

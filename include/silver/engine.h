@@ -17,6 +17,8 @@
 #include <string.h>
 #include <stdio.h>
 
+static constexpr int SV_JIT_ARGS_BUF_CAP = 16;
+
 typedef enum {
   SV_DEFINE_METHOD_GETTER   = 1u << 0,
   SV_DEFINE_METHOD_SETTER   = 1u << 1,
@@ -142,14 +144,14 @@ typedef struct {
   uint16_t key_count;
 } sv_obj_site_cache_t;
 
-#define SV_GF_IC_AUX_MISS_SHIFT 8u
-#define SV_GF_IC_PROTO_ID_SHIFT 32u
-#define SV_GF_IC_WARMUP_ENABLE  16u
-#define SV_GF_IC_MISS_DISABLE   4u
+static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
+static constexpr uint32_t SV_GF_IC_PROTO_ID_SHIFT = 32u;
+static constexpr uint32_t SV_GF_IC_WARMUP_ENABLE  = 16u;
+static constexpr uint32_t SV_GF_IC_MISS_DISABLE   = 4u;
 
-#define SV_GF_IC_AUX_WARMUP_MASK    ((uintptr_t)0xFFu)
-#define SV_GF_IC_AUX_MISS_MASK      ((uintptr_t)0xFF00u)
-#define SV_GF_IC_AUX_ACTIVE_BIT     ((uintptr_t)0x10000u)
+static constexpr uintptr_t SV_GF_IC_AUX_WARMUP_MASK = (uintptr_t)0xFFu;
+static constexpr uintptr_t SV_GF_IC_AUX_MISS_MASK   = (uintptr_t)0xFF00u;
+static constexpr uintptr_t SV_GF_IC_AUX_ACTIVE_BIT  = (uintptr_t)0x10000u;
 
 #define SV_GF_IC_AUX_ALL_MASK \
   (SV_GF_IC_AUX_WARMUP_MASK | SV_GF_IC_AUX_MISS_MASK | SV_GF_IC_AUX_ACTIVE_BIT)
@@ -178,8 +180,8 @@ bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32
 
 #ifdef ANT_JIT
 
-#define SV_TFB_CTOR_PROP_BINS 17
-#define SV_TFB_CTOR_PROP_OVERFLOW_FROM (SV_TFB_CTOR_PROP_BINS - 1)
+static constexpr uint32_t SV_TFB_CTOR_PROP_BINS = 17;
+static constexpr uint32_t SV_TFB_CTOR_PROP_OVERFLOW_FROM = SV_TFB_CTOR_PROP_BINS - 1;
 
 typedef struct {
   uint16_t    bc_off;

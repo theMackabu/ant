@@ -3877,7 +3877,7 @@ static bool jit_emit_inline_body(
         bool nc_method = (op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD);
         bool nc_tail = (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD);
         uint16_t nc_argc = sv_get_u16(ip + 1);
-        if (nc_argc > 16) return false;
+        if (nc_argc > SV_JIT_ARGS_BUF_CAP) return false;
         if (isp < (int)nc_argc + (nc_method ? 2 : 1)) return false;
         INL_FLUSH_ALL();
 
@@ -5062,7 +5062,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_reg_t r_args_buf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "args_buf");
   if (feat.needs_args_buf) {
-    int scratch_slots = 16;
+    int scratch_slots = SV_JIT_ARGS_BUF_CAP;
     if (vs.max > scratch_slots)  scratch_slots = vs.max;
     if (n_locals > scratch_slots) scratch_slots = n_locals;
     MIR_append_insn(ctx, jit_func,
@@ -7559,7 +7559,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CALL: {
         bool is_tail = (op == OP_TAIL_CALL);
         uint16_t call_argc = sv_get_u16(ip + 1);
-        if (call_argc > 16 || vs.sp < (int)call_argc + 1) { ok = false; break; }
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 1) { ok = false; break; }
 
         if (!is_tail) {
           sv_func_t *inline_callee = vs.known_func[vs.sp - call_argc - 1];
@@ -7582,8 +7583,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             } else if (inl_arg_base > 0) {
               vstack_ensure_boxed(&vs, inl_arg_base - 1, ctx, jit_func, r_d_slot);
             }
-            uint8_t inl_arg_num[16] = {0};
-            MIR_reg_t inl_arg_d[16] = {0};
+            uint8_t inl_arg_num[SV_JIT_ARGS_BUF_CAP] = {0};
+            MIR_reg_t inl_arg_d[SV_JIT_ARGS_BUF_CAP] = {0};
             for (int i = 0; i < (int)call_argc; i++) {
               inl_arg_num[i] = vs.slot_type &&
                                vs.slot_type[inl_arg_base + i] == SLOT_NUM;
@@ -11156,7 +11157,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_NEW: {
         uint16_t new_argc = sv_get_u16(ip + 1);
-        if (new_argc > 16 || vs.sp < (int)new_argc + 2) { ok = false; break; }
+        if (new_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)new_argc + 2) { ok = false; break; }
 
         for (int i = 0; i < (int)new_argc + 2; i++)
           vstack_ensure_boxed(&vs, vs.sp - 1 - i, ctx, jit_func, r_d_slot);
@@ -11226,7 +11228,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CALL_ARRAY_INCLUDES: {
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         uint16_t call_argc = sv_get_u16(ip + 1);
-        if (call_argc > 16 || vs.sp < (int)call_argc + 2) { ok = false; break; }
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 2) { ok = false; break; }
 
         MIR_reg_t r_arg_arr = r_args_buf;
         for (int i = (int)call_argc - 1; i >= 0; i--) {
@@ -11297,7 +11300,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         bool is_tail = (op == OP_TAIL_CALL_METHOD);
         uint16_t call_argc = sv_get_u16(ip + 1);
-        if (call_argc > 16 || vs.sp < (int)call_argc + 2) { ok = false; break; }
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 2) { ok = false; break; }
 
         MIR_label_t cm_devirt_slow = NULL;
         MIR_label_t cm_devirt_join = NULL;
@@ -11668,7 +11672,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint8_t cc_n1 = ip[1];
         uint8_t cc_n2 = ip[2];
         int cc_total = 1 + (int)cc_n1 + (int)cc_n2;
-        if (cc_total > 16 || vs.sp < cc_total) { ok = false; break; }
+        if (cc_total > SV_JIT_ARGS_BUF_CAP || vs.sp < cc_total) {
+          ok = false;
+          break;
+        }
 
         /* Store [X, args1..., args2...] contiguously into args_buf. */
         for (int i = cc_total - 1; i >= 0; i--) {
@@ -11802,7 +11809,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_APPLY: {
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         uint16_t apply_argc = sv_get_u16(ip + 1);
-        if (apply_argc > 16 || vs.sp < (int)apply_argc + 2) { ok = false; break; }
+        if (apply_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)apply_argc + 2) { ok = false; break; }
 
         int cn = call_n++;
         MIR_reg_t r_arg_arr = r_args_buf;
