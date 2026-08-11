@@ -21,6 +21,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+static constexpr int JIT_PARAM_HOIST_CAP = 8;
+static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
+
 typedef struct {
   MIR_context_t ctx;
   MIR_context_t ctx_hot;
@@ -1747,8 +1750,8 @@ static bool mir_emit_put_field_ic_fastpath(
   char names[14][48];
   MIR_reg_t regs[14];
   static const char *suffix[14] = {
-    "ic", "ice", "ce", "op", "ot", "flags", "shape", "ics",
-    "idx", "pc", "limit", "overflow", "oi", "vtag"
+    "ric", "rice", "rce", "optr", "otag", "flags", "shape", "icshape",
+    "idx", "prop_count", "limit", "overflow", "overflow_idx", "vtag"
   };
   for (int i = 0; i < 14; i++) {
     snprintf(names[i], sizeof(names[i]), "pf_%s_%d_%u", suffix[i],
@@ -4226,7 +4229,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   jit_load_externals_once(jc);
   bool jit_compile_hot = func->jit_loop_hot ||
-                         func->back_edge_count >= SV_JIT_OSR_THRESHOLD / 8;
+                         func->back_edge_count >= JIT_HOT_COMPILE_BACKEDGE_THRESHOLD;
   MIR_context_t ctx = jit_compile_hot ? jc->ctx_hot : jc->ctx;
 
   char fname[128];
@@ -5203,7 +5206,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_label_t self_tail_entry = MIR_new_label(ctx);
   MIR_append_insn(ctx, jit_func, self_tail_entry);
 
-  MIR_reg_t param_cache[8] = {0};
+  MIR_reg_t param_cache[JIT_PARAM_HOIST_CAP] = {0};
   {
     uint8_t read_mask = 0;
     uint8_t *pscan = func->code, *pend = func->code + func->code_len;
@@ -5213,11 +5216,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       if (psz == 0) break;
       if (pop_ == OP_GET_ARG) {
         uint16_t pidx = sv_get_u16(pscan + 1);
-        if (pidx < 8) read_mask |= (uint8_t)(1u << pidx);
+        if (pidx < JIT_PARAM_HOIST_CAP) read_mask |= (uint8_t)(1u << pidx);
       }
       pscan += psz;
     }
-    for (int i = 0; i < param_count && i < 8; i++) {
+    for (int i = 0; i < param_count && i < JIT_PARAM_HOIST_CAP; i++) {
       if (!(read_mask & (1u << i))) continue;
       if (writes_params || (captured_params && captured_params[i])) continue;
       char prn[16];
@@ -5639,7 +5642,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (idx < 8 && param_cache[idx]) {
+        if (idx < JIT_PARAM_HOIST_CAP && param_cache[idx]) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, dst),
@@ -9997,6 +10000,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool builder_length = false;
         int raw_slot_size = sv_op_size[OP_GET_SLOT_RAW];
         if (builder_target_slots && bc_off >= raw_slot_size) {
+          /* This byte may be an earlier instruction's operand, so it is only
+             a hint; the emitted builder path revalidates the runtime tag. */
           uint8_t *prev_ip = ip - raw_slot_size;
           if (*prev_ip == OP_GET_SLOT_RAW) {
             uint16_t slot_idx = sv_get_u16(prev_ip + 1);
