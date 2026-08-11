@@ -54,6 +54,13 @@ static abort_signal_data_t *get_signal_data(ant_value_t obj) {
   return (abort_signal_data_t *)js_get_native(obj, ABORT_SIGNAL_NATIVE_TAG);
 }
 
+static void abort_sidecar_write_barrier(
+  ant_t *js, ant_value_t owner, ant_value_t stored
+) {
+  if (!is_object_type(owner)) return;
+  gc_write_barrier(js, js_obj_ptr(owner), stored);
+}
+
 static abort_signal_data_t *get_signal_data_if_signal_object(ant_value_t obj) {
   if (!g_initialized || !is_object_type(obj)) return NULL;
   if (!js_check_brand(obj, BRAND_ABORT_SIGNAL)) return NULL;
@@ -240,9 +247,7 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
   abort_listener_t entry = { args[1], once };
   if (data->listeners) {
     utarray_push_back(data->listeners, &entry);
-    /* the listener array is a sidecar only reached by scanning the signal
-       object, which minors skip when the signal is old */
-    gc_write_barrier(js, js_obj_ptr(js_getthis(js)), args[1]);
+    abort_sidecar_write_barrier(js, js_getthis(js), args[1]);
   }
 
   return js_mkundef();
@@ -329,7 +334,7 @@ static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nar
     if (!d) continue;
     if (d->followers) {
       utarray_push_back(d->followers, &composite);
-      if (is_object_type(sig)) gc_write_barrier(js, js_obj_ptr(sig), composite);
+      abort_sidecar_write_barrier(js, sig, composite);
     }
   }
 
@@ -348,7 +353,7 @@ ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source) {
   if (d->aborted) signal_mark_aborted(js, composite, d->reason);
   else if (d->followers) {
     utarray_push_back(d->followers, &composite);
-    gc_write_barrier(js, js_obj_ptr(source), composite);
+    abort_sidecar_write_barrier(js, source, composite);
   }
 
   return composite;

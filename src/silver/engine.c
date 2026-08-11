@@ -1636,8 +1636,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async || closure->func->is_generator) goto call_fallback;
         #ifdef ANT_JIT
         {
-          ant_value_t jit_this = (
-            closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+          ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : js_mkundef();
           ant_value_t jit_result = sv_try_direct_closure_jit(
             vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
@@ -1654,7 +1653,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
-        if (closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+        if (sv_closure_has_lexical_this(closure))
           call_this = closure->bound_this;
         frame = &vm->frames[vm->fp];
         frame->ip = ip + 3;
@@ -1757,8 +1756,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async || closure->func->is_generator) goto call_method_fallback;
         #ifdef ANT_JIT
         {
-          ant_value_t jit_this = (
-            closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+          ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : call_this;
           ant_value_t jit_result = sv_try_direct_closure_jit(
             vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
@@ -1775,7 +1773,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
-        if (closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+        if (sv_closure_has_lexical_this(closure))
           call_this = closure->bound_this;
         frame = &vm->frames[vm->fp];
         frame->ip = ip + 3;
@@ -1930,7 +1928,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
             !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
-          if (closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+          if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
         }
@@ -1959,7 +1957,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
             !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
-          if (closure->func->is_arrow || (closure->call_flags & SV_CALL_HAS_BOUND_THIS))
+          if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
         }

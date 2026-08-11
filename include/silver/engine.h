@@ -552,70 +552,58 @@ typedef struct sv_closure {
   uint64_t gc_epoch;
 } sv_closure_t;
 
-static inline sv_closure_t *js_closure_alloc(ant_t *js) {
+static inline bool sv_closure_has_lexical_this(const sv_closure_t *closure) {
+  return 
+    closure->func->is_arrow || 
+    (closure->call_flags & SV_CALL_HAS_BOUND_THIS);
+}
+
+static inline void js_closure_alloc_prepare(ant_t *js) {
   js->gc_closure_alloc++;
-  /* Generational closures: lazy closures allocate no objects, so closure
-     churn is invisible to the object-pressure GC triggers; run a minor
-     here once enough young closures accumulate. Minors sweep the young
-     rosters (scavenge semantics), so this reclaims at minor cost, not
-     major cost. Before the arena alloc so the fresh closure cannot be
-     swept mid-initialization. The trigger is roster-growth based
-     (survivors aging in the roster don't shrink the nursery): sweeps
-     reset it to len-after-sweep + GC_CLOSURE_NURSERY_THRESHOLD. */
-  if (js->young_closure_len >= js->young_closure_trigger)
-    gc_pressure(js);
-  sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
-  if (c) {
-    c->gc_epoch = gc_get_epoch();
-    c->js = js;
-    c->func_obj = 0;
-    c->module_ctx = mkval(T_UNDEF, 0);
-    c->u.pending.name = NULL;
-    c->u.pending.len = 0;
-    c->in_remember_set = 0;
-    if (js->young_closure_len < js->young_closure_cap)
-      js->young_closures[js->young_closure_len++] = c;
-    else
-      gc_track_young_closure_slow(js, c);
-  }
+  if (js->young_closure_len >= js->young_closure_trigger) gc_pressure(js);
+}
+
+static inline sv_closure_t *js_closure_alloc_finish(
+  ant_t *js, sv_closure_t *c
+) {
+  c->gc_epoch = gc_get_epoch();
+  c->js = js;
+  c->func_obj = 0;
+  c->module_ctx = mkval(T_UNDEF, 0);
+  c->u.pending.name = NULL;
+  c->u.pending.len = 0;
+  c->in_remember_set = 0;
+  
+  if (js->young_closure_len < js->young_closure_cap)
+    js->young_closures[js->young_closure_len++] = c;
+  else gc_track_young_closure_slow(js, c);
+  
   return c;
 }
 
-/* Hot-path variant for OP_CLOSURE / jit_helper_closure: skips the arena's
-   element memset. Every field a GC scan or sweep can observe is written
-   here (stale inline_upvals words beyond upvalue_count are fine — closure
-   upvalues are only ever walked precisely, to func->upvalue_count); the
-   caller must write the remaining fields, including `upvalues` (NULL when
-   upvalue_count == 0). */
+static inline sv_closure_t *js_closure_alloc(ant_t *js) {
+  js_closure_alloc_prepare(js);
+  sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
+  if (!c) return NULL;
+  return js_closure_alloc_finish(js, c);
+}
+
 static inline sv_closure_t *js_closure_alloc_hot(ant_t *js) {
-  js->gc_closure_alloc++;
-  if (js->young_closure_len >= js->young_closure_trigger)
-    gc_pressure(js);
+  js_closure_alloc_prepare(js);
   sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc_uninit(&js->closure_arena);
-  if (c) {
-    c->call_flags = 0;
-    c->upvalues = NULL;
-    c->gc_epoch = gc_get_epoch();
-    c->js = js;
-    c->func_obj = 0;
-    c->module_ctx = mkval(T_UNDEF, 0);
-    c->u.pending.name = NULL;
-    c->u.pending.len = 0;
-    c->in_remember_set = 0;
-    if (js->young_closure_len < js->young_closure_cap)
-      js->young_closures[js->young_closure_len++] = c;
-    else
-      gc_track_young_closure_slow(js, c);
-  }
-  return c;
+  
+  if (!c) return NULL;
+  c->call_flags = 0;
+  c->upvalues = NULL;
+  
+  return js_closure_alloc_finish(js, c);
 }
 
 static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
 }
 
-ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
-                                            ant_value_t func_val);
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c, ant_value_t func_val);
 
 static inline ant_value_t js_func_obj(ant_value_t func) {
   sv_closure_t *c = js_func_closure(func);
@@ -916,6 +904,15 @@ static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val
   return this_val;
 }
 
+static inline ant_value_t sv_construct_prototype_from(
+  ant_t *js, ant_value_t proto_source
+) {
+  ant_value_t proto = js_getprop_fallback(js, proto_source, "prototype");
+  return (is_err(proto) || is_object_type(proto))
+    ? proto
+    : js->sym.object_proto;
+}
+
 static inline ant_value_t sv_prepare_construct_meta(
   ant_t *js,
   ant_value_t func,
@@ -932,11 +929,7 @@ static inline ant_value_t sv_prepare_construct_meta(
     ) {
       if (effective_new_target) *effective_new_target = requested_new_target;
       if (record_func) *record_func = func;
-      ant_value_t proto = js_getprop_fallback(
-        js, requested_new_target, "prototype"
-      );
-      if (is_err(proto) || is_object_type(proto)) return proto;
-      return js->sym.object_proto;
+      return sv_construct_prototype_from(js, requested_new_target);
     }
   }
 
@@ -966,9 +959,7 @@ static inline ant_value_t sv_prepare_construct_meta(
     source_type != T_FUNC && source_type != T_CFUNC &&
     !is_object_type(proto_source)
   ) return js_mkundef();
-  ant_value_t proto = js_getprop_fallback(js, proto_source, "prototype");
-  if (is_err(proto) || is_object_type(proto)) return proto;
-  return js->sym.object_proto;
+  return sv_construct_prototype_from(js, proto_source);
 }
 
 static inline ant_value_t sv_call_resolve_bound(
