@@ -1641,7 +1641,8 @@ static void mir_emit_string_concat_fastpath(
       MIR_new_reg_op(ctx, llen), MIR_new_reg_op(ctx, rlen)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_UBLT, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, len), MIR_new_int_op(ctx, 13)));
+      MIR_new_reg_op(ctx, len),
+      MIR_new_int_op(ctx, STR_SHORT_CONS_THRESHOLD)));
 
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, count),
@@ -1779,7 +1780,7 @@ static void mir_emit_string_concat_fastpath(
 }
 
 static bool mir_emit_put_field_ic_fastpath(
-  MIR_context_t ctx, MIR_item_t fn,
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js,
   sv_func_t *func, int bc_off, uint16_t ic_idx, sv_atom_t *atom,
   MIR_reg_t r_js, MIR_reg_t obj, MIR_reg_t val,
   MIR_label_t slow, MIR_reg_t r_global_epoch,
@@ -1787,10 +1788,11 @@ static bool mir_emit_put_field_ic_fastpath(
 ) {
   if (!func || !func->ic_slots || !atom) return false;
   if (ic_idx == UINT16_MAX || ic_idx >= func->ic_count) return false;
-  if (atom->len == 9 && memcmp(atom->str, "prototype", 9) == 0) return false;
-  if ((atom->len == 4 && memcmp(atom->str, "exec", 4) == 0) ||
-      (atom->len == 7 && memcmp(atom->str, "replace", 7) == 0))
-    return false;
+  if (
+    atom->str == js->intern.prototype ||
+    atom->str == js->intern.exec ||
+    atom->str == js->intern.replace
+  ) return false;
 
   sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
   char names[14][48];
@@ -2807,7 +2809,7 @@ static bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, u
 }
 
 static bool jit_emit_inline_body(
-  MIR_context_t ctx, MIR_item_t jit_func,
+  MIR_context_t ctx, MIR_item_t jit_func, ant_t *js,
   sv_func_t *callee,
   MIR_reg_t *arg_regs, int caller_argc,
   const uint8_t *arg_num, const MIR_reg_t *arg_d,
@@ -3771,7 +3773,8 @@ static bool jit_emit_inline_body(
         MIR_label_t pf_slow = MIR_new_label(ctx);
         MIR_label_t pf_ok = MIR_new_label(ctx);
         if (mir_emit_put_field_ic_fastpath(
-          ctx, jit_func, callee, (int)(ip - callee->code), pf_ic_idx, pf_atom,
+          ctx, jit_func, js, callee,
+          (int)(ip - callee->code), pf_ic_idx, pf_atom,
           r_js, pf_obj, pf_val, pf_slow, r_ic_epoch,
           ext->remember_obj_proto, ext->imp_remember_obj
         )) {
@@ -7719,7 +7722,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               .r_args_buf = r_args_buf,
             };
             bool inlined = jit_emit_inline_body(
-              ctx, jit_func, inline_callee,
+              ctx, jit_func, js, inline_callee,
               inl_arg_regs, (int)call_argc,
               inl_arg_num, inl_arg_d,
               r_call_res, inl_slow, inl_join,
@@ -9196,7 +9199,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_label_t slow = MIR_new_label(ctx);
         MIR_label_t no_err = MIR_new_label(ctx);
         if (mir_emit_put_field_ic_fastpath(
-          ctx, jit_func, func, bc_off, pf_ic_idx, atom,
+          ctx, jit_func, js, func, bc_off, pf_ic_idx, atom,
           r_js, obj, val, slow, r_ic_epoch_val,
           remember_obj_proto, imp_remember_obj
         )) {
@@ -11414,7 +11417,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               .r_args_buf = r_args_buf,
             };
             (void)jit_emit_inline_body(
-              ctx, jit_func, inline_callee,
+              ctx, jit_func, js, inline_callee,
               inl_arg_regs, (int)call_argc,
               NULL, NULL,
               r_inl_res, cm_devirt_slow, cm_devirt_join,

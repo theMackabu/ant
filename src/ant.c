@@ -3294,6 +3294,8 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.length = intern_string("length", 6);
   js->intern.buffer = intern_string("buffer", 6);
   js->intern.prototype = intern_string("prototype", 9);
+  js->intern.exec = intern_string("exec", 4);
+  js->intern.replace = intern_string("replace", 7);
   js->intern.constructor = intern_string("constructor", 11);
   js->intern.name = intern_string("name", 4);
   js->intern.message = intern_string("message", 7);
@@ -5152,9 +5154,10 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
     if (n2 == 0) return l;
     if (n1 == 0) return r;
 
-    /* Match V8's short-cons policy: copying tiny flat concatenations avoids
-       allocating and later walking a rope whose metadata exceeds its text. */
-    if (total_len < 13 && !str_is_heap_rope(l) && !str_is_heap_rope(r)) {
+    if (
+      total_len < STR_SHORT_CONS_THRESHOLD &&
+      !str_is_heap_rope(l) && !str_is_heap_rope(r)
+    ) {
       GC_ROOT_SAVE(root_mark, js);
       GC_ROOT_PIN(js, l);
       GC_ROOT_PIN(js, r);

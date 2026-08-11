@@ -63,11 +63,12 @@ static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
-static constexpr int JS_ERR_NO_STACK       = 1 << 8;
-static constexpr int MAX_STRINGIFY_DEPTH   = 64;
-static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
-static constexpr int MAX_MULTIREF_OBJS     = 128;
-static constexpr int MAX_DENSE_INITIAL_CAP = 8;
+static constexpr int JS_ERR_NO_STACK          = 1 << 8;
+static constexpr int MAX_STRINGIFY_DEPTH      = 64;
+static constexpr int MAX_PROTO_CHAIN_DEPTH    = 256;
+static constexpr int MAX_MULTIREF_OBJS        = 128;
+static constexpr int MAX_DENSE_INITIAL_CAP    = 8;
+static constexpr int STR_SHORT_CONS_THRESHOLD = 13;
 
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,
@@ -226,6 +227,8 @@ struct ant_isolate_t {
     const char *length;
     const char *buffer;
     const char *prototype;
+    const char *exec;
+    const char *replace;
     const char *constructor;
     const char *name;
     const char *message;
