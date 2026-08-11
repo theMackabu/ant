@@ -106,22 +106,28 @@ static inline void sv_op_define_method_comp(
   } else mkprop(js, obj, key_str, fn, data_attrs);
 }
 
+static inline void sv_set_name(
+  ant_t *js, ant_value_t fn,
+  const char *str, uint32_t len
+) {
+  if (vtype(fn) == T_FUNC) {
+    sv_closure_t *c = js_func_closure(fn);
+    if (!c->func_obj) {
+      c->u.pending.name = str;
+      c->u.pending.len = len;
+      return;
+    }
+  }
+  js_set_function_name(js, fn, str, len);
+}
+
 static inline void sv_op_set_name(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
-  ant_value_t fn = vm->stack[vm->sp - 1];
-  if (vtype(fn) == T_FUNC) {
-    sv_closure_t *c = js_func_closure(fn);
-    if (!c->func_obj) {
-      c->u.pending.name = a->str;
-      c->u.pending.len = a->len;
-      return;
-    }
-  }
-  js_set_function_name(js, fn, a->str, a->len);
+  sv_set_name(js, vm->stack[vm->sp - 1], a->str, a->len);
 }
 
 static inline void sv_op_set_name_comp(sv_vm_t *vm, ant_t *js) {

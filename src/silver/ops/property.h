@@ -1118,6 +1118,21 @@ static inline void sv_op_define_field(
     js_define_own_prop(js, obj, a->str, a->len, val);
 }
 
+static inline void sv_define_slot(
+  ant_t *js, ant_value_t obj, ant_value_t val,
+  const char *str, uint32_t len, uint32_t slot
+) {
+  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
+  if (ptr && !ptr->flags.is_exotic && slot < ptr->prop_count) {
+    ant_object_prop_set_unchecked(ptr, slot, val);
+    gc_write_barrier(js, ptr, val);
+    return;
+  }
+  /* Pre-shaping failed (allocation pressure); define by name. */
+  if (!sv_try_define_field_fast(js, obj, str, val))
+    js_define_own_prop(js, obj, str, len, val);
+}
+
 static inline void sv_op_define_slot(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
@@ -1126,16 +1141,8 @@ static inline void sv_op_define_slot(
   uint16_t slot = sv_get_u16(ip + 5);
   ant_value_t val = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
-  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
-  if (ptr && !ptr->flags.is_exotic && slot < ptr->prop_count) {
-    ant_object_prop_set_unchecked(ptr, slot, val);
-    gc_write_barrier(js, ptr, val);
-    return;
-  }
-  /* Pre-shaping failed (allocation pressure); define by name. */
   sv_atom_t *a = &func->atoms[idx];
-  if (!sv_try_define_field_fast(js, obj, a->str, val))
-    js_define_own_prop(js, obj, a->str, a->len, val);
+  sv_define_slot(js, obj, val, a->str, a->len, slot);
 }
 
 static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {

@@ -67,6 +67,7 @@ void sv_closure_site_dump(void) {
 #include "ops/comparison.h"
 #include "ops/coercion.h"
 #include "ops/private.h"
+#include "ops/objects.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
@@ -872,21 +873,8 @@ ant_value_t jit_helper_closure(
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
 
-  if (__builtin_expect(sv_closure_stats_enabled, 0)) sv_closure_site_count(child);
-
-  sv_closure_t *closure = js_closure_alloc_hot(js);
+  sv_closure_t *closure = sv_closure_init(js, child, this_val);
   if (!closure) return mkval(T_ERR, 0);
-
-  closure->func = child;
-  closure->bound_this = child->is_arrow ? this_val : js_mkundef();
-  closure->bound_argc = 0;
-  closure->super_val = js_mkundef();
-  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
-
-  if (child->upvalue_count > 0)
-    closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
-      ? closure->inline_upvals
-      : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -905,23 +893,11 @@ ant_value_t jit_helper_closure(
   }
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  closure->module_ctx = sv_get_current_closure_module_ctx(
-    js, mkval(T_FUNC, (uintptr_t)parent_closure)
-  );
-  closure->func_obj = 0;
-  closure->u.pending.name = name;
-  closure->u.pending.len = name_len;
-
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
-  if (is_object_type(eval_env)) {
-    /* Direct-eval environments live on the function object; materialize
-       now so the env can be attached (rare: direct eval only). */
-    ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
-    if (is_object_type(func_obj)) {
-      js_set_slot_wb(js, func_obj, SLOT_EVAL_ENV, eval_env);
-      closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
-    }
-  }
+  sv_closure_finish_init(
+    js, closure, func_val, mkval(T_FUNC, (uintptr_t)parent_closure),
+    name, name_len, eval_env, is_object_type(eval_env)
+  );
 
   return func_val;
 }
@@ -1015,15 +991,8 @@ void jit_helper_set_name(
   ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
 ) {
-  if (vtype(fn) == T_FUNC) {
-    sv_closure_t *c = js_func_closure(fn);
-    if (!c->func_obj) {
-      c->u.pending.name = str;
-      c->u.pending.len = len;
-      return;
-    }
-  }
-  js_set_function_name(js, fn, str, len);
+  [[clang::always_inline]]
+  sv_set_name(js, fn, str, len);
 }
 
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
@@ -1126,8 +1095,10 @@ ant_value_t jit_helper_object(
 ) {
   ant_value_t obj = mkobj(js, 0);
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  
   sv_obj_site_apply(js, func, site, ptr);
   ant_value_t proto = js->sym.object_proto;
+  
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -1136,26 +1107,21 @@ void jit_helper_define_slot(
   sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
   const char *str, uint32_t len, uint32_t slot
 ) {
-  ant_object_t *ptr = is_object_type(obj) ? js_obj_ptr(js_as_obj(obj)) : NULL;
-  if (ptr && !ptr->flags.is_exotic && slot < ptr->prop_count) {
-    ant_object_prop_set_unchecked(ptr, slot, val);
-    gc_write_barrier(js, ptr, val);
-    return;
-  }
-  if (!sv_try_define_field_fast(js, obj, str, val))
-    js_define_own_prop(js, obj, str, len, val);
+  [[clang::always_inline]]
+  sv_define_slot(js, obj, val, str, len, slot);
 }
 
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {
   ant_value_t arr = js_mkarr(js);
-  for (int i = 0; i < count; i++)
-    js_arr_push(js, arr, elements[i]);
+  for (int i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
   return arr;
 }
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
-  if (vtype(err) == T_ERR && js->thrown_exists &&
-      vtype(js->thrown_value) != T_UNDEF) {
+  if (
+    vtype(err) == T_ERR && js->thrown_exists &&
+    vtype(js->thrown_value) != T_UNDEF
+  ) {
     ant_value_t caught = js->thrown_value;
     js->thrown_value = js_mkundef();
     js->thrown_exists = false;

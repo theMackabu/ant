@@ -185,49 +185,46 @@ static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   return uv;
 }
 
-static inline ant_value_t sv_op_closure(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
-  sv_func_t *func, uint8_t *ip
+static inline sv_closure_t *sv_closure_init(
+  ant_t *js, sv_func_t *child, ant_value_t this_val
 ) {
-  uint32_t idx = sv_get_u32(ip + 1);
-  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
-
 #ifdef ANT_JIT
   extern bool sv_closure_stats_enabled;
   extern void sv_closure_site_count(sv_func_t *);
-  if (__builtin_expect(sv_closure_stats_enabled, 0)) sv_closure_site_count(child);
+  if (__builtin_expect(sv_closure_stats_enabled, 0))
+    sv_closure_site_count(child);
 #endif
 
   sv_closure_t *closure = js_closure_alloc_hot(js);
+  if (!closure) return NULL;
+
   closure->func = child;
-  closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
+  closure->bound_this = child->is_arrow ? this_val : js_mkundef();
   closure->bound_argc = 0;
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
-  if (child->upvalue_count > 0) {
-  closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
-    ? closure->inline_upvals
-    : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
-  for (int i = 0; i < child->upvalue_count; i++) {
-    sv_upval_desc_t *desc = &child->upval_descs[i];
-    if (desc->is_local) {
-      ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
-      if (!slot) slot = frame->bp;
-      closure->upvalues[i] = sv_capture_upvalue(vm, slot);
-    } else closure->upvalues[i] = frame->upvalues[desc->index];
-  }}
+  if (child->upvalue_count > 0)
+    closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+      ? closure->inline_upvals
+      : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
 
-  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  vm->stack[vm->sp++] = func_val;
+  return closure;
+}
 
+static inline void sv_closure_finish_init(
+  ant_t *js, sv_closure_t *closure, ant_value_t func_val,
+  ant_value_t parent_func, const char *name, uint32_t name_len,
+  ant_value_t eval_env, bool attach_eval_env
+) {
   /* The function object (and its .prototype) materializes lazily on
      first property/prototype access; see sv_closure_materialize_func_obj. */
-  closure->module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
+  closure->module_ctx = sv_get_current_closure_module_ctx(js, parent_func);
   closure->func_obj = 0;
-  ant_value_t eval_env = sv_frame_eval_env(js, frame);
+  closure->u.pending.name = name;
+  closure->u.pending.len = name_len;
 
-  if (eval_env != js->global) {
+  if (attach_eval_env) {
     /* Direct-eval environments live on the function object; materialize
        now so the env can be attached (rare: direct eval only). */
     ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
@@ -236,6 +233,34 @@ static inline ant_value_t sv_op_closure(
       closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
     }
   }
+}
+
+static inline ant_value_t sv_op_closure(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint8_t *ip
+) {
+  uint32_t idx = sv_get_u32(ip + 1);
+  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
+
+  sv_closure_t *closure = sv_closure_init(js, child, frame->this);
+  if (!closure) return mkval(T_ERR, 0);
+
+  for (int i = 0; i < child->upvalue_count; i++) {
+    sv_upval_desc_t *desc = &child->upval_descs[i];
+    if (desc->is_local) {
+      ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
+      if (!slot) slot = frame->bp;
+      closure->upvalues[i] = sv_capture_upvalue(vm, slot);
+    } else closure->upvalues[i] = frame->upvalues[desc->index];
+  }
+
+  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  vm->stack[vm->sp++] = func_val;
+  ant_value_t eval_env = sv_frame_eval_env(js, frame);
+  sv_closure_finish_init(
+    js, closure, func_val, frame->callee, NULL, 0,
+    eval_env, eval_env != js->global
+  );
 
   return js_mkundef();
 }
