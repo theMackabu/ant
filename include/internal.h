@@ -386,6 +386,7 @@ struct ant_isolate_t {
 
   bool gc_remember_overflow;
   bool gc_objects_running;
+  bool gc_use_nursery_major_floor;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;

@@ -205,15 +205,14 @@ static void recycle_rope_block(ant_pool_t *pool, ant_pool_block_t *block) {
 }
 
 static void promote_rope_block(ant_t *js, ant_pool_block_t *block) {
-  for (size_t off = 0; off + sizeof(ant_rope_heap_t) <= block->used;
-       off += sizeof(ant_rope_heap_t)) {
+  for (size_t off = 0; off + sizeof(ant_rope_heap_t) <= block->used; off += sizeof(ant_rope_heap_t)) {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(block->data + off);
     rope->flags &= (uint16_t)~ANT_ROPE_FLAG_YOUNG;
   }
 
   ant_pool_t *old = &js->rope_gc.old;
-  if (old->block_size == 0) old->block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   block->next = old->head;
+  
   if (old->head) old->head->prev = block;
   old->head = block;
 }

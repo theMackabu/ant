@@ -6936,7 +6936,7 @@ const char *const sv_op_names[OP__COUNT] = {
 
 enum {
   SVF_none, SVF_u8, SVF_i8, SVF_u16, SVF_i16, SVF_u32, SVF_i32,
-  SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
+  SVF_u8_u8, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
   SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref,
 };
 
@@ -6996,6 +6996,9 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
       break;
     case SVF_i32:
       fprintf(stderr, " [%d]", (int32_t)sv_get_u32(func->code + pc + 1));
+      break;
+    case SVF_u8_u8:
+      fprintf(stderr, " [%u], [%u]", func->code[pc + 1], func->code[pc + 2]);
       break;
     case SVF_atom: {
       uint32_t idx = sv_get_u32(func->code + pc + 1);

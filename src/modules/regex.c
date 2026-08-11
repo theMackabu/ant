@@ -1561,7 +1561,7 @@ static ant_value_t regexp_exec_plain_literal_fast(
   );
 }
 
-static __attribute__((always_inline)) inline int compiled_regex_run(
+static __attribute__((always_inline)) inline int compiled_regex_run_in_scope(
   ant_t *js,
   compiled_regex_cache_entry_t *compiled,
   const char *str_ptr,
@@ -1574,8 +1574,6 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
 ) {
   *ovector = NULL;
   *ovcount = 0;
-  if (!regex_match_scope_begin(compiled, scope))
-    return PCRE2_ERROR_NOMEMORY;
 
   pcre2_match_context *match_ctx = regex_get_match_context(js);
   uint32_t match_options = sticky ? PCRE2_ANCHORED : 0;
@@ -1597,6 +1595,28 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
     *ovcount = pcre2_get_ovector_count(scope->match_data);
   }
   return rc;
+}
+
+static __attribute__((always_inline)) inline int compiled_regex_run(
+  ant_t *js,
+  compiled_regex_cache_entry_t *compiled,
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE start_offset,
+  bool sticky,
+  regex_match_scope_t *scope,
+  PCRE2_SIZE **ovector,
+  uint32_t *ovcount
+) {
+  if (!regex_match_scope_begin(compiled, scope)) {
+    *ovector = NULL;
+    *ovcount = 0;
+    return PCRE2_ERROR_NOMEMORY;
+  }
+  return compiled_regex_run_in_scope(
+    js, compiled, str_ptr, str_len, start_offset, sticky,
+    scope, ovector, ovcount
+  );
 }
 
 static const ant_shape_prop_t *regexp_lastindex_lookup_own_property(
@@ -1735,21 +1755,10 @@ static ant_value_t regexp_exec_shared_fast(
   *used_fast_path = true;
   if (rc < 0) {
     regex_match_scope_end(&match_scope);
-    if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
-      return js_mkerr(js, "oom");
-    }
     return js_mknull();
   }
 
   update_regexp_statics(js, str_arg, ovector, ovcount);
-
-  if (global_flag || sticky_flag) {
-    ant_value_t next_idx = tov((double)ovector[1]);
-    if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) {
-      regex_match_scope_end(&match_scope);
-      return js_mkerr(js, "oom");
-    }
-  }
 
   if (truthy_only) {
     regex_match_scope_end(&match_scope);
@@ -2179,7 +2188,7 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
   return js_mkstr(js, buf, n);
 }
 
-static bool regexp_can_batch_builtin_exec(
+static bool regexp_prepare_batch_builtin_exec(
   ant_t *js,
   ant_value_t rx,
   compiled_regex_cache_entry_t **compiled_out,
@@ -2271,7 +2280,7 @@ static ant_value_t regexp_match_batch_fast(
 
   compiled_regex_cache_entry_t *compiled;
   uint8_t flags;
-  if (!regexp_can_batch_builtin_exec(js, rx, &compiled, &flags))
+  if (!regexp_prepare_batch_builtin_exec(js, rx, &compiled, &flags))
     return js_mkundef();
 
   *used_fast_path = true;
@@ -2288,35 +2297,37 @@ static ant_value_t regexp_match_batch_fast(
   PCRE2_SIZE offset = 0;
   ant_offset_t count = 0;
 
-  while (offset <= (PCRE2_SIZE)str_len) {
-    regex_match_scope_t scope;
-    PCRE2_SIZE *ovector;
-    uint32_t ovcount;
-    int rc = compiled_regex_run(
-      js, compiled, str_ptr, str_len, offset, sticky,
-      &scope, &ovector, &ovcount
-    );
-    if (rc < 0) {
-      regex_match_scope_end(&scope);
-      break;
-    }
-
-    PCRE2_SIZE start = ovector[0];
-    PCRE2_SIZE end = ovector[1];
-    update_regexp_statics(js, str, ovector, ovcount);
-    ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
-    regex_match_scope_end(&scope);
-    if (is_err(match)) return match;
-    js_arr_push(js, matches, match);
-    count++;
-
-    offset = end;
-    if (start == end) {
-      offset = regexp_advance_empty_match(
-        str_ptr, str_len, offset, full_unicode
+  regex_match_scope_t scope;
+  if (regex_match_scope_begin(compiled, &scope)) {
+    while (offset <= (PCRE2_SIZE)str_len) {
+      PCRE2_SIZE *ovector;
+      uint32_t ovcount;
+      int rc = compiled_regex_run_in_scope(
+        js, compiled, str_ptr, str_len, offset, sticky,
+        &scope, &ovector, &ovcount
       );
+      if (rc < 0) break;
+
+      PCRE2_SIZE start = ovector[0];
+      PCRE2_SIZE end = ovector[1];
+      update_regexp_statics(js, str, ovector, ovcount);
+      ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
+      if (is_err(match)) {
+        regex_match_scope_end(&scope);
+        return match;
+      }
+      js_arr_push(js, matches, match);
+      count++;
+
+      offset = end;
+      if (start == end) {
+        offset = regexp_advance_empty_match(
+          str_ptr, str_len, offset, full_unicode
+        );
+      }
     }
   }
+  regex_match_scope_end(&scope);
 
   stored = regexp_set_lastindex(js, compiled, rx, tov(0));
   if (is_err(stored)) return stored;
@@ -2571,7 +2582,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
   if (!first) return str;
 
   size_t cap = str_len + repl_len + 256;
-  char *buf = ant_calloc(cap);
+  char *buf = malloc(cap);
   if (!buf) return js_mkerr(js, "oom");
 
   size_t len = 0;
@@ -2624,7 +2635,7 @@ static ant_value_t regexp_replace_batch_fast(
 
   compiled_regex_cache_entry_t *compiled;
   uint8_t flags;
-  if (!regexp_can_batch_builtin_exec(js, rx, &compiled, &flags))
+  if (!regexp_prepare_batch_builtin_exec(js, rx, &compiled, &flags))
     return js_mkundef();
 
   *used_fast_path = true;
@@ -2640,7 +2651,7 @@ static ant_value_t regexp_replace_batch_fast(
   const char *replacement_ptr = (const char *)(uintptr_t)replacement_off;
 
   size_t buf_cap = (size_t)str_len + 256;
-  char *buf = ant_calloc(buf_cap);
+  char *buf = malloc(buf_cap);
   if (!buf) return js_mkerr(js, "oom");
   size_t buf_len = 0;
 
@@ -2649,78 +2660,78 @@ static ant_value_t regexp_replace_batch_fast(
   PCRE2_SIZE next_src_pos = 0;
   size_t match_count = 0;
 
-  while (offset <= (PCRE2_SIZE)str_len) {
-    regex_match_scope_t scope;
-    PCRE2_SIZE *ovector;
-    uint32_t ovcount;
-    int rc = compiled_regex_run(
-      js, compiled, str_ptr, str_len, offset, sticky,
-      &scope, &ovector, &ovcount
-    );
-    if (rc < 0) {
-      regex_match_scope_end(&scope);
-      break;
-    }
-
-    PCRE2_SIZE start = ovector[0];
-    PCRE2_SIZE end = ovector[1];
-    if (
-      start > next_src_pos &&
-      !str_buf_append(
-        &buf, &buf_len, &buf_cap,
-        str_ptr + next_src_pos, start - next_src_pos
-      )
-    ) {
-      regex_match_scope_end(&scope);
-      free(buf);
-      return js_mkerr(js, "oom");
-    }
-
-    int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
-    repl_capture_t captures_inline[31];
-    repl_capture_t *captures = capture_count <= 31
-      ? captures_inline
-      : ant_calloc(sizeof(*captures) * (size_t)capture_count);
-    if (capture_count > 31 && !captures) {
-      regex_match_scope_end(&scope);
-      free(buf);
-      return js_mkerr(js, "oom");
-    }
-    for (int i = 0; i < capture_count; i++) {
-      PCRE2_SIZE capture_start = ovector[2 * (i + 1)];
-      PCRE2_SIZE capture_end = ovector[2 * (i + 1) + 1];
-      captures[i] = capture_start == PCRE2_UNSET
-        ? (repl_capture_t){ NULL, 0 }
-        : (repl_capture_t){
-            str_ptr + capture_start,
-            (size_t)(capture_end - capture_start)
-          };
-    }
-
-    update_regexp_statics(js, str, ovector, ovcount);
-    bool replaced = repl_template(
-      replacement_ptr, replacement_len,
-      str_ptr + start, end - start,
-      str_ptr, str_len, start,
-      captures, capture_count,
-      &buf, &buf_len, &buf_cap
-    );
-    if (captures != captures_inline) free(captures);
-    regex_match_scope_end(&scope);
-    if (!replaced) {
-      free(buf);
-      return js_mkerr(js, "oom");
-    }
-
-    match_count++;
-    next_src_pos = end;
-    offset = end;
-    if (start == end) {
-      offset = regexp_advance_empty_match(
-        str_ptr, str_len, offset, full_unicode
+  regex_match_scope_t scope;
+  if (regex_match_scope_begin(compiled, &scope)) {
+    while (offset <= (PCRE2_SIZE)str_len) {
+      PCRE2_SIZE *ovector;
+      uint32_t ovcount;
+      int rc = compiled_regex_run_in_scope(
+        js, compiled, str_ptr, str_len, offset, sticky,
+        &scope, &ovector, &ovcount
       );
+      if (rc < 0) break;
+
+      PCRE2_SIZE start = ovector[0];
+      PCRE2_SIZE end = ovector[1];
+      if (
+        start > next_src_pos &&
+        !str_buf_append(
+          &buf, &buf_len, &buf_cap,
+          str_ptr + next_src_pos, start - next_src_pos
+        )
+      ) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+
+      int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
+      repl_capture_t captures_inline[31];
+      repl_capture_t *captures = capture_count <= 31
+        ? captures_inline
+        : malloc(sizeof(*captures) * (size_t)capture_count);
+      if (capture_count > 31 && !captures) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+      for (int i = 0; i < capture_count; i++) {
+        PCRE2_SIZE capture_start = ovector[2 * (i + 1)];
+        PCRE2_SIZE capture_end = ovector[2 * (i + 1) + 1];
+        captures[i] = capture_start == PCRE2_UNSET
+          ? (repl_capture_t){ NULL, 0 }
+          : (repl_capture_t){
+              str_ptr + capture_start,
+              (size_t)(capture_end - capture_start)
+            };
+      }
+
+      update_regexp_statics(js, str, ovector, ovcount);
+      bool replaced = repl_template(
+        replacement_ptr, replacement_len,
+        str_ptr + start, end - start,
+        str_ptr, str_len, start,
+        captures, capture_count,
+        &buf, &buf_len, &buf_cap
+      );
+      if (captures != captures_inline) free(captures);
+      if (!replaced) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+
+      match_count++;
+      next_src_pos = end;
+      offset = end;
+      if (start == end) {
+        offset = regexp_advance_empty_match(
+          str_ptr, str_len, offset, full_unicode
+        );
+      }
     }
   }
+  regex_match_scope_end(&scope);
 
   if (
     next_src_pos < (PCRE2_SIZE)str_len &&
@@ -2950,7 +2961,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   size_t buf_cap = str_len + 256;
-  char *buf = ant_calloc(buf_cap);
+  char *buf = malloc(buf_cap);
   if (!buf) return js_mkerr(js, "oom");
   size_t buf_len = 0;
   ant_offset_t next_src_pos = 0;
@@ -3019,7 +3030,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
       } else {
         ant_offset_t ncap = js_arr_len(js, result);
         int num_caps = ncap > 1 ? (int)(ncap - 1) : 0;
-        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : ant_calloc(sizeof(repl_capture_t) * (size_t)num_caps);
+        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : malloc(sizeof(repl_capture_t) * (size_t)num_caps);
         if (num_caps > 16 && !caps) {
           free(buf);
           return js_mkerr(js, "oom");
@@ -3402,7 +3413,7 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
     if (!found) return str;
 
     size_t cap = str_len + repl_len + 256, len = 0;
-    char *buf = (char *)ant_calloc(cap);
+    char *buf = (char *)malloc(cap);
     if (!buf) return js_mkerr(js, "oom");
     
     if (!str_buf_append(&buf, &len, &cap, str_ptr, match_pos)) { 
@@ -3435,7 +3446,7 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
     return ret;
   } else {
     size_t cap = str_len + repl_len + 256, len = 0;
-    char *buf = (char *)ant_calloc(cap);
+    char *buf = (char *)malloc(cap);
     if (!buf) return js_mkerr(js, "oom");
     
     ant_offset_t pos = 0;
@@ -3537,7 +3548,7 @@ ant_value_t regexp_literal_replace_call(
       if (!first) return str;
 
       size_t cap = str_len + repl_len + 256;
-      char *buf = ant_calloc(cap);
+      char *buf = malloc(cap);
       if (!buf) return js_mkerr(js, "oom");
 
       size_t len = 0;

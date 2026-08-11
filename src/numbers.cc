@@ -29,6 +29,12 @@ static constexpr size_t kPrecisionBufferSize =
 static constexpr size_t kExponentialBufferSize =
   DoubleToStringConverter::kMaxExponentialDigits + 8 + 1;
 
+static constexpr double kInt32Min =
+  static_cast<double>(std::numeric_limits<int32_t>::min());
+
+static constexpr double kInt32Max =
+  static_cast<double>(std::numeric_limits<int32_t>::max());
+
 static const StringToDoubleConverter kDecimalStringConverter(
   0, 0.0,
   std::numeric_limits<double>::quiet_NaN(),
@@ -236,17 +242,17 @@ static size_t ant_format_number(
 }
 
 extern "C" size_t ant_number_to_shortest(double value, char *buf, size_t len) {
-  if (value >= -2147483648.0 && value <= 2147483647.0) {
-  int32_t iv = (int32_t)value;
-  if ((double)iv == value) {
-    char tmp[12];
-    char *end = tmp + sizeof(tmp);
-    char *p = end;
-    uint32_t u = iv < 0 ? (uint32_t)(-(int64_t)iv) : (uint32_t)iv;
-    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
-    if (iv < 0) *--p = '-';
-    return copy_truncated_number_result(buf, len, p, (size_t)(end - p));
-  }
+  if (value >= kInt32Min && value <= kInt32Max) {
+    int32_t iv = (int32_t)value;
+    if ((double)iv == value) {
+      char tmp[12];
+      char *end = tmp + sizeof(tmp);
+      char *p = end;
+      uint32_t u = iv < 0 ? (uint32_t)(-(int64_t)iv) : (uint32_t)iv;
+      do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
+      if (iv < 0) *--p = '-';
+      return copy_truncated_number_result(buf, len, p, (size_t)(end - p));
+    }
   }
 
   char scratch[kShortestBufferSize];

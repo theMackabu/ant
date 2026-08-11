@@ -14,6 +14,9 @@
 #define SV_PRIM_NEG_ALIGN_BITS 3u
 #define SV_PRIM_NEG_AUX_SHIFT  17u
 
+static constexpr uintptr_t SV_PRIM_IC_HIT_DATA = 0;
+static constexpr uintptr_t SV_PRIM_IC_MISS_DATA = 1;
+
 static_assert(
   (SV_GF_IC_AUX_ALL_MASK >> SV_PRIM_NEG_AUX_SHIFT) == 0,
   "gf aux bits overlap the packed shape; raise SV_PRIM_NEG_AUX_SHIFT"
@@ -404,6 +407,15 @@ static inline void sv_ic_guard_absent_prefix(
 }
 
 static inline uintptr_t sv_prim_neg_pack_shape(uintptr_t aux, const ant_shape_t *shape2) {
+  /* The low 17 cached_aux bits belong to the get-field IC state. On 64-bit
+     targets the remaining 47 bits hold shape address bits 3..49: shapes are
+     allocator-aligned, and Ant requires heap pointers to fit in 50 bits. */
+#if UINTPTR_MAX > UINT32_MAX
+  ANT_ASSERT(
+    ((uintptr_t)shape2 >> 50) == 0,
+    "primitive IC shape pointer exceeds the 50-bit packed representation"
+  );
+#endif
   return (aux & SV_GF_IC_AUX_ALL_MASK) | (
     ((uintptr_t)shape2 >> SV_PRIM_NEG_ALIGN_BITS) << SV_PRIM_NEG_AUX_SHIFT
   );
@@ -421,7 +433,10 @@ static inline bool sv_ic_try_get_miss_prim(
   if (ic->epoch != ant_ic_epoch_counter) return false;
 
   ant_value_t marker = ic->guard.receiver_proto;
-  if (vdata(marker) != 1 || vtype(marker) != prim_type) return false;
+  if (
+    vdata(marker) != SV_PRIM_IC_MISS_DATA ||
+    vtype(marker) != prim_type
+  ) return false;
 
   ant_object_t *holder1 = ic->cached_holder;
   if (!holder1 || !holder1->shape || holder1->shape != ic->cached_shape) return false;
@@ -479,7 +494,10 @@ static inline bool sv_ic_try_get_hit_prim(
   if (ic->epoch != ant_ic_epoch_counter) return false;
 
   ant_value_t marker = ic->guard.receiver_proto;
-  if (vdata(marker) != 0 || vtype(marker) != prim_type) return false;
+  if (
+    vdata(marker) != SV_PRIM_IC_HIT_DATA ||
+    vtype(marker) != prim_type
+  ) return false;
 
   ant_object_t *holder = ic->cached_holder;
   if (!holder || holder->flags.is_exotic || !holder->shape) return false;
@@ -695,7 +713,9 @@ static inline bool sv_prim_ic_lookup(
     sv_ic_set_cached_shape(js, ic, holder->shape);
     ic->cached_index = prop_idx;
     ic->cached_is_own = false;
-    ic->guard.receiver_proto = mkval(pt, 0);
+    /* Primitive ICs overload receiver_proto: its tag records the receiver
+       primitive type, while its payload distinguishes a hit from a miss. */
+    ic->guard.receiver_proto = mkval(pt, SV_PRIM_IC_HIT_DATA);
     ic->epoch = ant_ic_epoch_counter;
     sv_gf_ic_set_proto_id(ic, 0);
     sv_gf_ic_note_success(ic);
@@ -712,7 +732,7 @@ static inline bool sv_prim_ic_lookup(
     sv_ic_set_cached_shape(js, ic, holder1->shape);
     ic->cached_index = 0;
     ic->cached_is_own = false;
-    ic->guard.receiver_proto = mkval(pt, 1);
+    ic->guard.receiver_proto = mkval(pt, SV_PRIM_IC_MISS_DATA);
     ic->cached_aux = sv_prim_neg_pack_shape(ic->cached_aux, shape2);
     ic->epoch = ant_ic_epoch_counter;
     *out = js_mkundef();

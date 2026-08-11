@@ -504,4 +504,4 @@ if (failures) {
   console.log(`${failures}/${assertions} failures`);
   process.exit(1);
 }
-console.log(`all ${assertions} double-bind tests passed`);
+console.log(`all ${assertions} function bind/construct tests passed`);

@@ -16,11 +16,13 @@ struct ant_pool_block {
   uint8_t data[];
 };
 
-#define ANT_POOL_SIZE_CLASS_COUNT  32
-#define ANT_POOL_ROPE_BLOCK_SIZE   (64u * 1024u)
-#define ANT_POOL_SYMBOL_BLOCK_SIZE (32u * 1024u)
-#define ANT_POOL_BIGINT_BLOCK_SIZE (64u * 1024u)
-#define ANT_POOL_STRING_BLOCK_SIZE (128u * 1024u)
+static constexpr size_t ANT_POOL_ROPE_BLOCK_SIZE   = 64u * 1024u;
+static constexpr size_t ANT_POOL_SYMBOL_BLOCK_SIZE = 32u * 1024u;
+static constexpr size_t ANT_POOL_BIGINT_BLOCK_SIZE = 64u * 1024u;
+static constexpr size_t ANT_POOL_STRING_BLOCK_SIZE = 128u * 1024u;
+
+static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
+static constexpr uint16_t ANT_ROPE_DEPTH_SATURATED = UINT16_MAX;
 
 typedef struct {
   ant_pool_block_t *head;

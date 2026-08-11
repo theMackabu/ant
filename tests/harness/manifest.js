@@ -41,7 +41,7 @@ export function targets() {
     'test_object_site_lookup.cjs',
     'test_jit_osr_entry_reject.cjs',
     'test_jit_dnum_get_length.cjs',
-    'test_double_bind.cjs',
+    'test_function_bind_construct.cjs',
     'test_numeric_literal_keys.cjs',
     'test_property_delete_compaction.cjs',
     'test_rope_large_property_concat.cjs',

@@ -1673,7 +1673,8 @@ static void mir_emit_string_concat_fastpath(
   MIR_append_insn(ctx, fn, depth_ready);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, depth_done),
-      MIR_new_reg_op(ctx, depth), MIR_new_uint_op(ctx, UINT16_MAX)));
+      MIR_new_reg_op(ctx, depth),
+      MIR_new_uint_op(ctx, ANT_ROPE_DEPTH_SATURATED)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, depth),
       MIR_new_reg_op(ctx, depth), MIR_new_int_op(ctx, 1)));

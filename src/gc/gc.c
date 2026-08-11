@@ -23,8 +23,6 @@ static uint32_t gc_major_pool_growth_x256 = 384;
 
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
-static bool gc_use_nursery_major_floor = true;
-static bool gc_rope_minor_marking = false;
 
 static uint64_t gc_now_ms(void) {
   struct timespec ts;
@@ -65,11 +63,11 @@ size_t gc_live_major_threshold(ant_t *js) {
   bool major_pays = gc_major_recl_ewma >= 51;      // >= 20% old-gen reclaim
   bool major_wasteful = gc_major_recl_ewma <= 13;  // <= 5% old-gen reclaim
 
-  if (gc_use_nursery_major_floor) {
-    if (nursery_sticky || (major_pays && !nursery_churn)) gc_use_nursery_major_floor = false;
-  } else if (nursery_churn || major_wasteful) gc_use_nursery_major_floor = true;
+  if (js->gc_use_nursery_major_floor) {
+    if (nursery_sticky || (major_pays && !nursery_churn)) js->gc_use_nursery_major_floor = false;
+  } else if (nursery_churn || major_wasteful) js->gc_use_nursery_major_floor = true;
 
-  if (!gc_use_nursery_major_floor) return threshold;
+  if (!js->gc_use_nursery_major_floor) return threshold;
   size_t nursery_floor = js->old_live_count + gc_nursery_threshold;
   
   return threshold < nursery_floor ? nursery_floor : threshold;
@@ -184,7 +182,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
   }
 
   l_flat:
-    if (data && !gc_rope_minor_marking)
+    if (data && !js->rope_gc.minor_marking)
       gc_strings_mark(js, (const void *)data);
   l_pop:
     if (sp > 0) {
@@ -301,11 +299,9 @@ void gc_run_minor(ant_t *js) {
   size_t live_before  = js->obj_arena.live_count;
   size_t young_before = live_before > old_before ? live_before - old_before : 0;
 
-  gc_rope_minor_marking = true;
   for (size_t i = 0; i < js->rope_gc.remembered_builder_len; i++)
     gc_mark_str(js, ant_mkbuilder_value(js->rope_gc.remembered_builders[i]));
   gc_objects_run_minor(js, gc_mark_str);
-  gc_rope_minor_marking = false;
   gc_clear_remembered_builders(js);
   gc_ropes_sweep(js, true);
 

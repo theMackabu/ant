@@ -5037,7 +5037,7 @@ typedef struct {
 
 // TODO: make cleaner
 static ant_offset_t rope_utf16_len_lazy(ant_t *js, ant_value_t root) {
-  if (rope_depth(root) == UINT16_MAX) {
+  if (rope_depth(root) == ANT_ROPE_DEPTH_SATURATED) {
     ant_value_t flat = rope_flatten(js, root);
     return is_err(flat) ? 0 : flat_utf16_len(ant_str_flat_ptr(flat));
   }
@@ -5165,7 +5165,8 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
     uint16_t right_depth = str_is_heap_rope(r) ? rope_depth(r) : 0;
     unsigned int new_depth = (unsigned int)(left_depth > right_depth ? left_depth : right_depth) + 1u;
 
-    if (new_depth > UINT16_MAX) new_depth = UINT16_MAX;
+    if (new_depth > ANT_ROPE_DEPTH_SATURATED)
+      new_depth = ANT_ROPE_DEPTH_SATURATED;
     return js_mkrope(js, l, r, total_len, (uint16_t)new_depth);
   }
   
@@ -16440,7 +16441,7 @@ bool js_is_constructor(ant_value_t value) {
     }
     if (t == T_CFUNC) {
       const ant_cfunc_meta_t *meta = js_as_cfunc_meta(slow);
-      return meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
+      return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
     }
     if (t != T_OBJ) return false;
 
@@ -17356,6 +17357,10 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js = (ant_t *)buf;
   js_init_intern_cache(js);
+  js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->gc_use_nursery_major_floor = true;
   
   if (!fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)) return NULL;
   if (!fixed_arena_init(&js->closure_arena, sizeof(sv_closure_t), offsetof(sv_closure_t, gc_epoch), ANT_CLOSURE_ARENA_MAX)) {
@@ -18261,6 +18266,11 @@ static bool js_cfunc_has_prototype(ant_value_t cfunc) {
   return meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
 }
 
+static bool js_cfunc_is_constructor(ant_value_t cfunc) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);
+  return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
+}
+
 static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bool mark_constructor) {
   ant_value_t func_obj = (vtype(func) == T_FUNC) 
     ? js_func_obj(func) 
@@ -18391,10 +18401,13 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
 
   ant_value_t promoted = js_obj_to_func(js, fn_obj);
 
+  bool is_constructor = js_cfunc_is_constructor(cfunc);
   if (js_cfunc_has_prototype(cfunc)) {
-    ant_value_t proto_result = setup_func_prototype_property(js, promoted, false);
+    ant_value_t proto_result = setup_func_prototype_property(
+      js, promoted, is_constructor
+    );
     if (is_err(proto_result)) return proto_result;
-  }
+  } else if (is_constructor) js_mark_constructor(promoted, true);
 
   if (js->cfunc_promote_cache.len >= js->cfunc_promote_cache.cap) {
     uint8_t new_cap = js->cfunc_promote_cache.cap ? js->cfunc_promote_cache.cap * 2 : 4;

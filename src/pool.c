@@ -338,15 +338,19 @@ void *js_type_alloc(ant_t *js, ant_alloc_kind_t kind, size_t size, size_t align)
 
 ant_rope_heap_t *js_rope_alloc(ant_t *js) {
   if (!js) return NULL;
+  
   ant_pool_t *pool = &js->rope_gc.young;
-  if (pool->block_size == 0) pool->block_size = ANT_POOL_ROPE_BLOCK_SIZE;
-
-  js->gc_pool_alloc += sizeof(ant_rope_heap_t);
-  js->rope_gc.young_alloc += sizeof(ant_rope_heap_t);
-  return (ant_rope_heap_t *)pool_alloc_chain(
+  ant_rope_heap_t *rope = (ant_rope_heap_t *)pool_alloc_chain(
     &pool->head, &pool->free_head, pool->block_size,
     sizeof(ant_rope_heap_t), _Alignof(ant_rope_heap_t)
   );
+  
+  if (!rope) return NULL;
+
+  js->gc_pool_alloc += sizeof(ant_rope_heap_t);
+  js->rope_gc.young_alloc += sizeof(ant_rope_heap_t);
+  
+  return rope;
 }
 
 void js_pool_destroy(ant_pool_t *pool) {
