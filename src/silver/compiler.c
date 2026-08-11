@@ -462,8 +462,8 @@ static uint16_t alloc_ic_idx(sv_compiler_t *c) {
   return (uint16_t)c->ic_count++;
 }
 
-static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
-  if (!func || !func->code || func->code_len <= 0) goto cleanup;
+static void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
+  if (!func || !func->code || func->code_len <= 0) return;
 
   uint32_t count = 0;
   for (int pc = 0; pc < func->code_len; ) {
@@ -472,7 +472,7 @@ static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
     uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
     pc += (size > 0) ? size : 1;
   }
-  if (count == 0) goto cleanup;
+  if (count == 0) return;
 
   func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
   memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
@@ -486,7 +486,7 @@ static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
     pc += (size > 0) ? size : 1;
   }
 
-  if (c && c->shaped_site_count > 0) {
+  if (c->shaped_site_count > 0) {
     for (int s = 0; s < c->shaped_site_count; s++) {
       uint16_t kc = c->shaped_sites[s].key_count;
       if (kc == 0) continue;
@@ -501,16 +501,6 @@ static void sv_func_init_obj_sites(sv_compiler_t *c, sv_func_t *func) {
         break;
       }
     }
-  }
-
-cleanup:
-  if (c) {
-    free(c->shaped_sites);
-    free(c->shaped_keys);
-    c->shaped_sites = NULL;
-    c->shaped_keys = NULL;
-    c->shaped_site_count = c->shaped_site_cap = 0;
-    c->shaped_key_count = c->shaped_key_cap = 0;
   }
 }
 
