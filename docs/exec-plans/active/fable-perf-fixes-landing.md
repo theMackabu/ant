@@ -177,8 +177,9 @@ Review follow-ups (2026-08-03, post code review):
   unlike the bench-v8 runner), and an adversarial recompile-churn micro
   (300 funcs x compile→OSR→type-churn→recompile: dead even, recompiles
   are tfb-bounded). All debug-stats scaffolding (`ANT_JIT_STATS`,
-  `ANT_GC_STATS`, `ANT_LAZY_STATS`) was removed after verification;
-  `ANT_JIT_OPT` remains (it selects behavior, not stats).
+  `ANT_GC_STATS`, `ANT_LAZY_STATS`) was removed after verification. The
+  temporary optimize-level override was subsequently removed after the opt1
+  fast tier and opt3 hot tier were finalized.
 - **Numeric literal keys via `%g`** (pre-existing, both paths): keys ≥ 7
   significant digits become exponent-form strings, e.g.
   `({123456789: 1})` gets key `"1.23457e+08"`. The port is faithful and
