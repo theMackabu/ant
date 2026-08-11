@@ -76,21 +76,12 @@ enum {
 };
 
 static constexpr int REGEXP_STATIC_CAPTURE_COUNT = 9;
-static constexpr int REGEXP_STATIC_OVECTOR_COUNT =
-  REGEXP_STATIC_CAPTURE_COUNT + 1;
-static constexpr int REGEXP_STATIC_IDX_LAST_MATCH =
-  REGEXP_STATIC_CAPTURE_COUNT;
-static constexpr int REGEXP_STATIC_IDX_AMP =
-  REGEXP_STATIC_IDX_LAST_MATCH + 1;
-static constexpr int REGEXP_STATIC_VALUE_COUNT =
-  REGEXP_STATIC_IDX_AMP + 1;
-static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED =
-  (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
+static constexpr int REGEXP_STATIC_OVECTOR_COUNT = REGEXP_STATIC_CAPTURE_COUNT + 1;
+static constexpr int REGEXP_STATIC_IDX_LAST_MATCH = REGEXP_STATIC_CAPTURE_COUNT;
+static constexpr int REGEXP_STATIC_IDX_AMP = REGEXP_STATIC_IDX_LAST_MATCH + 1;
+static constexpr int REGEXP_STATIC_VALUE_COUNT = REGEXP_STATIC_IDX_AMP + 1;
+static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
 
-/* Compiled patterns, PCRE2 scratch state, and RegExp.prototype mutation
-   guards belong to one isolate. RegExp objects point directly to shared
-   compiled entries through their native payload; the cache below only keeps
-   recently used compiled entries warm across object lifetimes. */
 struct ant_regex_state {
   compiled_regex_cache_table_t compiled[2];
   size_t live_object_data;
@@ -101,16 +92,11 @@ struct ant_regex_state {
   pcre2_match_context *match_ctx;
   pcre2_jit_stack *jit_stack;
 
-  /* While pending, a clear mask bit means the corresponding value is read
-     from static_ovector and the rooted subject; a set bit means the values
-     root is authoritative. Group 0 backs both lastMatch and $&, hence eleven
-     values but only ten offset pairs. After pending clears, the mask records
-     which value roots must be reset before the next snapshot. */
   PCRE2_SIZE static_ovector[REGEXP_STATIC_OVECTOR_COUNT * 2];
   uint16_t static_materialized_mask;
   uint8_t static_ovcount;
+  
   bool static_pending;
-
   bool exec_write_guard_armed;
   bool exec_property_written;
   bool replace_property_written;
@@ -389,8 +375,6 @@ static ant_value_t regexp_static_value(ant_t *js, size_t idx) {
   return value;
 }
 
-/* V8-compatible legacy static setters exist for descriptor compatibility but
-   intentionally ignore assignments. */
 static inline ant_value_t regexp_static_set(ant_t *js) {
   return js_mkundef();
 }
@@ -939,8 +923,6 @@ static ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str);
 static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs);
 
-/* Every PCRE2 execution reaches this helper. Keep its entry independently
-   aligned so cold cache-management changes cannot perturb the hot layout. */
 static __attribute__((aligned(16)))
 pcre2_match_context *regex_get_match_context(ant_t *js) {
   ant_regex_state_t *state = js->regex_state;
@@ -1300,9 +1282,6 @@ static compiled_regex_cache_entry_t *regex_get_or_compile(
     js, regexp_obj, flags_mask, &compiled
   )) return NULL;
 
-  /* Metadata construction can allocate and run enough major collections to
-     age this entry out of both cache generations. Pin the reference that will
-     become the RegExp object's ownership before reading compiled PCRE2 data. */
   compiled->object_refs++;
   ant_value_t groups_meta = regexp_build_named_groups_meta(js, compiled->code);
   if (is_err(groups_meta)) {
@@ -1588,7 +1567,6 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
   const char *str_ptr,
   ant_offset_t str_len,
   PCRE2_SIZE start_offset,
-  uint32_t match_options,
   bool sticky,
   regex_match_scope_t *scope,
   PCRE2_SIZE **ovector,
@@ -1600,6 +1578,7 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
     return PCRE2_ERROR_NOMEMORY;
 
   pcre2_match_context *match_ctx = regex_get_match_context(js);
+  uint32_t match_options = sticky ? PCRE2_ANCHORED : 0;
   int rc;
   if (compiled->jit_ready && !sticky) {
     rc = pcre2_jit_match(
@@ -1618,6 +1597,22 @@ static __attribute__((always_inline)) inline int compiled_regex_run(
     *ovcount = pcre2_get_ovector_count(scope->match_data);
   }
   return rc;
+}
+
+static const ant_shape_prop_t *regexp_lastindex_lookup_own_property(
+  ant_object_t *obj,
+  uint32_t *out_slot
+) {
+  if (!obj || !obj->shape) return NULL;
+
+  const char *key = intern_string("lastIndex", 9);
+  if (!key) return NULL;
+  int32_t found = ant_shape_lookup_interned(obj->shape, key);
+  if (found < 0 || (uint32_t)found >= obj->prop_count) return NULL;
+
+  uint32_t slot = (uint32_t)found;
+  if (out_slot) *out_slot = slot;
+  return ant_shape_prop_at(obj->shape, slot);
 }
 
 static bool regexp_lastindex_fast_location(
@@ -1650,13 +1645,9 @@ static void regexp_lastindex_cache_location(
     compiled->lastindex_slot < obj->prop_count
   ) return;
 
-  const char *key = intern_string("lastIndex", 9);
-  if (!key) return;
-  int32_t found = ant_shape_lookup_interned(obj->shape, key);
-  if (found < 0 || (uint32_t)found >= obj->prop_count) return;
-
-  const ant_shape_prop_t *prop = ant_shape_prop_at(
-    obj->shape, (uint32_t)found
+  uint32_t slot;
+  const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(
+    obj, &slot
   );
   if (
     !prop || prop->has_getter || prop->has_setter ||
@@ -1668,7 +1659,7 @@ static void regexp_lastindex_cache_location(
     ant_shape_release(compiled->lastindex_shape);
     compiled->lastindex_shape = obj->shape;
   }
-  compiled->lastindex_slot = (uint32_t)found;
+  compiled->lastindex_slot = slot;
 }
 
 static ant_value_t regexp_set_lastindex(
@@ -1688,23 +1679,17 @@ static ant_value_t regexp_set_lastindex(
   }
 
   ant_object_t *receiver = js_obj_ptr(regexp);
-  if (receiver && receiver->shape && !is_proxy(regexp)) {
-    const char *key = intern_string("lastIndex", 9);
-    int32_t found = key
-      ? ant_shape_lookup_interned(receiver->shape, key)
-      : -1;
-    if (found >= 0) {
-      const ant_shape_prop_t *prop = ant_shape_prop_at(
-        receiver->shape, (uint32_t)found
+  if (!is_proxy(regexp)) {
+    const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(
+      receiver, NULL
+    );
+    if (
+      prop && !prop->has_getter && !prop->has_setter &&
+      !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
+    ) {
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE, "Cannot assign to read only property 'lastIndex'"
       );
-      if (
-        prop && !prop->has_getter && !prop->has_setter &&
-        !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
-      ) {
-        return js_mkerr_typed(
-          js, JS_ERR_TYPE, "Cannot assign to read only property 'lastIndex'"
-        );
-      }
     }
   }
   return setprop_cstr(js, regexp, "lastIndex", 9, value);
@@ -1739,13 +1724,12 @@ static ant_value_t regexp_exec_shared_fast(
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
 
-  uint32_t match_options = sticky_flag ? PCRE2_ANCHORED : 0;
   regex_match_scope_t match_scope;
   PCRE2_SIZE *ovector;
   uint32_t ovcount;
   int rc = compiled_regex_run(
-    js, compiled, str_ptr, str_len, start_offset, match_options,
-    sticky_flag, &match_scope, &ovector, &ovcount
+    js, compiled, str_ptr, str_len, start_offset, sticky_flag,
+    &match_scope, &ovector, &ovcount
   );
 
   *used_fast_path = true;
@@ -1854,15 +1838,12 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   if (!compiled) return js_mknull();
   regexp_lastindex_cache_location(compiled, regexp);
 
-  uint32_t match_options = 0;
-  if (sticky_flag) match_options |= PCRE2_ANCHORED;
-
   regex_match_scope_t match_scope;
   PCRE2_SIZE *ovector;
   uint32_t ovcount;
   int rc = compiled_regex_run(
-    js, compiled, str_ptr, str_len, start_offset, match_options,
-    sticky_flag, &match_scope, &ovector, &ovcount
+    js, compiled, str_ptr, str_len, start_offset, sticky_flag,
+    &match_scope, &ovector, &ovcount
   );
 
   if (rc < 0) {
@@ -2312,8 +2293,7 @@ static ant_value_t regexp_match_batch_fast(
     PCRE2_SIZE *ovector;
     uint32_t ovcount;
     int rc = compiled_regex_run(
-      js, compiled, str_ptr, str_len, offset,
-      sticky ? PCRE2_ANCHORED : 0, sticky,
+      js, compiled, str_ptr, str_len, offset, sticky,
       &scope, &ovector, &ovcount
     );
     if (rc < 0) {
@@ -2674,8 +2654,7 @@ static ant_value_t regexp_replace_batch_fast(
     PCRE2_SIZE *ovector;
     uint32_t ovcount;
     int rc = compiled_regex_run(
-      js, compiled, str_ptr, str_len, offset,
-      sticky ? PCRE2_ANCHORED : 0, sticky,
+      js, compiled, str_ptr, str_len, offset, sticky,
       &scope, &ovector, &ovcount
     );
     if (rc < 0) {
@@ -3850,10 +3829,6 @@ void gc_age_regex_cache(ant_t *js, bool minor) {
   ant_regex_state_t *state = js->regex_state;
   if (!state || minor) return;
 
-  /* Generation 1 dies; generation 0 becomes generation 1. A hit in
-     generation 1 is also inserted into generation 0, so frequently reused
-     compiled data survives while cold entries lose their cache reference
-     after two major collections. RegExp objects hold independent references. */
   compiled_regex_table_clear(&state->compiled[1]);
   state->compiled[1] = state->compiled[0];
   memset(&state->compiled[0], 0, sizeof(state->compiled[0]));
