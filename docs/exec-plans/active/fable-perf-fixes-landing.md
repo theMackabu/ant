@@ -973,7 +973,7 @@ primitive-miss path 7×).
 
 All changes uncommitted on `perf/vm-dispatch` on top of 50f99260. Final
 battery on the finished tree: spec 3712/0, jit 9 files/0 fail, harness
-**170**/0 (168 + test_double_bind + test_numeric_literal_keys; express
+**170**/0 (168 + test_function_bind_construct + test_numeric_literal_keys; express
 oha 16.4k ≥ 16k), devirt fuzzer all seeds agree, newt Main in band
 (41.2-45.3s across the day — late-day readings ran hot; interleaved
 final-vs-r3-pin showed no systematic direction, r3 itself swung
@@ -1257,7 +1257,7 @@ and Ant**.
 `f.bind({x:1},10).bind({x:2},20)(30)` → this={x:1}, args [10,20,30] =
 node; triple bind, cfunc-target double bind (Math.max/min), arrow
 folding, name/length chain, constructors, and `undefined` bound-this
-retention all match node. tests/test_double_bind.cjs is in the harness
+retention all match node. tests/test_function_bind_construct.cjs is in the harness
 REGRESSION_TESTS and retains the GC-churn survival check.
 
 **R4 follow-up — re-bound Proxy argument duplication FIXED,
@@ -2522,6 +2522,57 @@ interpreter trade-off, while JIT code already embeds the resolved site pointer.
   **887,685,120-byte** max RSS, within the standing band. `maid build` passed;
   `maid preflight` and `git diff --check` are clean. No call-dispatch code
   changed, so the devirtualization fuzzer was not required.
+
+**P7 — post-review runtime cleanup FIXED, 2026-08-10.**
+- **Regex batch mechanics:** the two `lastIndex` stores in
+  `regexp_exec_shared_fast` were unreachable because that path rejects global
+  and sticky regexps before compilation. They are removed. Built-in global
+  match/replace now borrow one match-data scope for the whole non-reentrant
+  batch instead of begin/end around every match, and fully overwritten output
+  and capture buffers use `malloc` instead of zero-filling allocation. The
+  guard that compiles and warms the batch caches is named
+  `regexp_prepare_batch_builtin_exec`; the old predicate name understated its
+  side effects. The previously reviewed `rxstat_dump`/45-counter formatting
+  debt was already obsolete because `ANT_REGEX_STATS` and its counters had
+  been removed before this pass.
+- **Native constructor correctness:** C-function metadata now distinguishes
+  `CFUNC_HAS_PROTOTYPE` from `CFUNC_IS_CONSTRUCTOR`. `setTimeout` and the other
+  Web-style native functions may keep an own `prototype` without being valid
+  `Reflect.construct` targets, both before and after lazy promotion. Three
+  Reflect assertions pin direct rejection, prototype exposure, and rejection
+  after promotion.
+- **Bytecode/GC correctness:** `CALL_CALL` has a two-u8 disassembly format, so
+  its argument counts are no longer printed as one little-endian u16.
+  `js_rope_alloc` accounts GC pressure only after allocation succeeds. Minor
+  rope marking uses the isolate's existing `rope_gc.minor_marking` field
+  instead of a process-global duplicate, and all three rope-pool block sizes
+  are initialized together at isolate creation. The saturated rope-depth
+  value, primitive-IC hit/miss payloads, and the primitive negative-IC's
+  50-bit packed-pointer invariant are now named or documented; the packed
+  pointer is asserted before truncation.
+- **Review/test cleanup:** the integer fast path in `numbers.cc` uses named
+  `numeric_limits<int32_t>` bounds and normal indentation. The OSR-entry test
+  now first proves JIT bailout diagnostics are active with a deliberate
+  sentinel before asserting that the target function did not bail out.
+  `test_double_bind.cjs`, which had grown into 421 general bind/construct
+  assertions, is now `test_function_bind_construct.cjs` in the harness.
+- **Perf (pinned AB/BA, four rounds):** baseline
+  `/tmp/ant_cleanup_base_bin` (`cb95c16aa9881c63c85bf9f17e96e798`)
+  versus final `/tmp/ant_cleanup_candidate_bin`
+  (`19aefa84a8d462c71b8b63b541400ad0`; byte-identical to final `build/ant`).
+  Fixed work produced checksum 126,000,000 on every run. Global match measured
+  baseline **845/849/847/846ms** versus final **809/812/812/815ms**
+  (**4.1% faster**). Global replace measured **744/744/742/740ms** versus
+  **746/747/748/746ms** (+0.6%, within micro noise).
+- **Gates:** the temporary `ANT_GC_STRESS` hook passed a focused rope test at
+  stress 1, the Reflect regression at stress 3, and full spec **3721/0** at
+  stress 10, then was removed. The final binary passes spec **3721/0** (98/0
+  files), JIT **125/125** (9/0 files), harness **181/0** (`test_gc_async`
+  353ms, `test_gc_coro` 6.966s; oha hono **34,064**, express **17,844**, h3
+  **21,577**, elysia **65,335 RPS**), and all devirtualization-fuzzer seeds.
+  Newt Main completed in **41.14s** with **891,895,808-byte** max RSS.
+  `maid build`, `maid preflight`, `maid knowledge`, and `git diff --check`
+  are clean.
 
 ## Decision log
 
