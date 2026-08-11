@@ -6195,7 +6195,7 @@ ant_value_t js_resolve_bound_target(ant_value_t value) {
   return js_resolve_bound_target_known_bound(value);
 }
 
-static bool bound_argv_copy(
+static inline bool bound_argv_copy(
   sv_closure_t *closure,
   const ant_value_t *prefix, int prefix_count,
   const ant_value_t *suffix, int suffix_count
