@@ -486,19 +486,24 @@ static void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
   }
 
   if (c->shaped_site_count > 0) {
+    uint32_t i = 0;
     for (int s = 0; s < c->shaped_site_count; s++) {
       uint16_t kc = c->shaped_sites[s].key_count;
       if (kc == 0) continue;
-      for (uint32_t i = 0; i < count; i++) {
-        if (func->obj_sites[i].bc_off != c->shaped_sites[s].bc_off) continue;
-        uint32_t *ka = code_arena_bump((size_t)kc * sizeof(uint32_t));
-        if (!ka) break;
-        memcpy(ka, c->shaped_keys + c->shaped_sites[s].first_key,
-               (size_t)kc * sizeof(uint32_t));
-        func->obj_sites[i].key_atoms = ka;
-        func->obj_sites[i].key_count = kc;
-        break;
-      }
+      
+      while (i < count && func->obj_sites[i].bc_off < c->shaped_sites[s].bc_off) i++;
+      
+      if (i >= count) break;
+      if (func->obj_sites[i].bc_off != c->shaped_sites[s].bc_off) continue;
+      
+      uint32_t *ka = code_arena_bump((size_t)kc * sizeof(uint32_t));
+      if (!ka) continue;
+      
+      memcpy(ka, c->shaped_keys + c->shaped_sites[s].first_key, (size_t)kc * sizeof(uint32_t));
+      func->obj_sites[i].key_atoms = ka;
+      func->obj_sites[i].key_count = kc;
+      
+      i++;
     }
   }
 }
