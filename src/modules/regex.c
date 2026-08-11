@@ -75,12 +75,13 @@ enum {
   REGEXP_FLAG_STICKY      = 1 << 7,
 };
 
+static constexpr int REGEXP_INLINE_CAPTURES = 32;
 static constexpr int REGEXP_STATIC_CAPTURE_COUNT = 9;
+
 static constexpr int REGEXP_STATIC_OVECTOR_COUNT = REGEXP_STATIC_CAPTURE_COUNT + 1;
 static constexpr int REGEXP_STATIC_IDX_LAST_MATCH = REGEXP_STATIC_CAPTURE_COUNT;
 static constexpr int REGEXP_STATIC_IDX_AMP = REGEXP_STATIC_IDX_LAST_MATCH + 1;
 static constexpr int REGEXP_STATIC_VALUE_COUNT = REGEXP_STATIC_IDX_AMP + 1;
-static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
 
 struct ant_regex_state {
   compiled_regex_cache_table_t compiled[2];
@@ -103,7 +104,11 @@ struct ant_regex_state {
 };
 
 static constexpr uint32_t REGEXP_NATIVE_TAG = 0x52454758u; /* REGX */
+static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
+
 static constexpr size_t REGEX_COMPILED_CACHE_MAX = 1024;
+static constexpr size_t REGEX_COMPILED_TABLE_LOAD_NUM = 3;
+static constexpr size_t REGEX_COMPILED_TABLE_LOAD_DEN = 4;
 
 static bool regexp_result_shape_init(
   regexp_result_shape_t *cache,
@@ -403,12 +408,9 @@ REGEXP_STATIC_ACCESSORS(amp, REGEXP_STATIC_IDX_AMP)
 
 #undef REGEXP_STATIC_ACCESSORS
 
-static __attribute__((noinline, cold))
-void update_regexp_statics_eager(
-  ant_t *js,
-  ant_value_t subject,
-  PCRE2_SIZE *ovector,
-  uint32_t ovcount
+static __attribute__((noinline, cold)) void update_regexp_statics_eager(
+  ant_t *js, ant_value_t subject,
+  PCRE2_SIZE *ovector, uint32_t ovcount
 ) {
   ant_offset_t subject_len;
   ant_offset_t subject_off = vstr(js, subject, &subject_len);
@@ -1026,15 +1028,14 @@ static compiled_regex_cache_entry_t *compiled_regex_table_lookup(
 
 static bool compiled_regex_table_insert(
   compiled_regex_cache_table_t *table,
-  compiled_regex_cache_entry_t *entry,
-  bool *inserted
+  compiled_regex_cache_entry_t *entry
 ) {
-  *inserted = false;
   if (!table || !entry || table->count >= REGEX_COMPILED_CACHE_MAX)
     return false;
   if (
     !table->slots ||
-    (table->count + 1) * 4 >= table->cap * 3
+    (table->count + 1) * REGEX_COMPILED_TABLE_LOAD_DEN >=
+      table->cap * REGEX_COMPILED_TABLE_LOAD_NUM
   ) {
     if (!compiled_regex_table_resize(table, table->count + 1))
       return false;
@@ -1047,10 +1048,9 @@ static bool compiled_regex_table_insert(
     if (!existing) {
       table->slots[slot] = entry;
       table->count++;
-      *inserted = true;
       return true;
     }
-    if (existing == entry) return true;
+    if (existing == entry) return false;
     slot = (slot + 1) & mask;
   }
   return false;
@@ -1091,9 +1091,7 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_lookup(
     return NULL;
   }
 
-  bool inserted;
-  if (compiled_regex_table_insert(&state->compiled[0], entry, &inserted) &&
-      inserted) {
+  if (compiled_regex_table_insert(&state->compiled[0], entry)) {
     entry->cache_refs++;
   }
   return entry;
@@ -1154,9 +1152,7 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &entry->namecount);
   entry->jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
 
-  bool inserted;
-  if (compiled_regex_table_insert(&state->compiled[0], entry, &inserted) &&
-      inserted)
+  if (compiled_regex_table_insert(&state->compiled[0], entry))
     entry->cache_refs++;
   return entry;
 }
@@ -2686,11 +2682,11 @@ static ant_value_t regexp_replace_batch_fast(
       }
 
       int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
-      repl_capture_t captures_inline[31];
-      repl_capture_t *captures = capture_count <= 31
+      repl_capture_t captures_inline[REGEXP_INLINE_CAPTURES - 1];
+      repl_capture_t *captures = capture_count < REGEXP_INLINE_CAPTURES
         ? captures_inline
         : malloc(sizeof(*captures) * (size_t)capture_count);
-      if (capture_count > 31 && !captures) {
+      if (capture_count >= REGEXP_INLINE_CAPTURES && !captures) {
         regex_match_scope_end(&scope);
         free(buf);
         return js_mkerr(js, "oom");
@@ -2998,8 +2994,8 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
         return js_mkerr(js, "too many regexp captures");
       }
       int call_capacity = (int)ncaptures + 2;
-      ant_value_t call_args_inline[32];
-      ant_value_t *call_args = call_capacity <= 32
+      ant_value_t call_args_inline[REGEXP_INLINE_CAPTURES];
+      ant_value_t *call_args = call_capacity <= REGEXP_INLINE_CAPTURES
         ? call_args_inline
         : malloc(sizeof(*call_args) * (size_t)call_capacity);
       if (!call_args) {
