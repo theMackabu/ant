@@ -205,6 +205,21 @@ fallback:
   return false;
 }
 
+static ant_value_t regexp_attach_plain_exec_result(
+  ant_t *js, ant_value_t array, ant_value_t index, ant_value_t input
+) {
+  if (regexp_result_apply_shape(
+    js, array, index, input, js_mkundef(), js_mkundef(), false
+  )) return array;
+
+  if (
+    is_err(js_mkprop_fast(js, array, "index", 5, index)) ||
+    is_err(js_mkprop_fast(js, array, "input", 5, input)) ||
+    is_err(js_mkprop_fast(js, array, "groups", 6, js_mkundef()))
+  ) return js_mkerr(js, "oom");
+  return array;
+}
+
 void regexp_note_exec_property_write(ant_t *js) {
   ant_regex_state_t *state = js->regex_state;
   if (state && state->exec_write_guard_armed)
@@ -1562,15 +1577,9 @@ static ant_value_t regexp_exec_plain_literal_fast(
   if (is_err(match_str)) return match_str;
   js_arr_push(js, result_arr, match_str);
 
-  if (!regexp_result_apply_shape(
-    js, result_arr, tov((double)ovector[0]), str_arg,
-    js_mkundef(), js_mkundef(), false
-  )) {
-    if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-    if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
-    if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-  }
-  return result_arr;
+  return regexp_attach_plain_exec_result(
+    js, result_arr, tov((double)ovector[0]), str_arg
+  );
 }
 
 static __attribute__((always_inline)) inline int compiled_regex_run(
@@ -1784,24 +1793,9 @@ static ant_value_t regexp_exec_shared_fast(
     }
   }
 
-  if (!regexp_result_apply_shape(
-    js, result_arr, tov((double)ovector[0]), str_arg,
-    js_mkundef(), js_mkundef(), false
-  )) {
-    if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-    if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-    if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) {
-      result = js_mkerr(js, "oom");
-      goto done;
-    }
-  }
-  result = result_arr;
+  result = regexp_attach_plain_exec_result(
+    js, result_arr, tov((double)ovector[0]), str_arg
+  );
 
 done:
   regex_match_scope_end(&match_scope);
@@ -2895,15 +2889,9 @@ ant_value_t regexp_literal_exec_call(
       if (is_err(match_str)) return match_str;
       js_arr_push(js, result_arr, match_str);
 
-      if (!regexp_result_apply_shape(
-        js, result_arr, tov((double)ovector[0]), arg,
-        js_mkundef(), js_mkundef(), false
-      )) {
-        if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-        if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
-        if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-      }
-      return result_arr;
+      return regexp_attach_plain_exec_result(
+        js, result_arr, tov((double)ovector[0]), arg
+      );
     }
   }
 

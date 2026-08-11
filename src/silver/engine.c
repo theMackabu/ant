@@ -622,36 +622,27 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
     if (vtype(result) != T_STR) result = piece;
     else {
       result = do_string_op(js, TOK_PLUS, result, piece);
-      if (is_err(result)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return result;
-      }
+      if (is_err(result)) goto fail;
     }
   }
 
   if (builder->tail_len > 0) {
     tail = js_mkstr(js, builder->tail, builder->tail_len);
     if (is_err(tail)) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return tail;
+      result = tail;
+      goto fail;
     }
 
     if (vtype(result) != T_STR) result = tail;
     else {
       result = do_string_op(js, TOK_PLUS, result, tail);
-      if (is_err(result)) {
-        GC_ROOT_RESTORE(js, root_mark);
-        return result;
-      }
+      if (is_err(result)) goto fail;
     }
   }
 
   if (vtype(result) != T_STR) {
     result = js_mkstr(js, "", 0);
-    if (is_err(result)) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return result;
-    }
+    if (is_err(result)) goto fail;
   }
 
   builder->snapshot = result;
@@ -663,6 +654,10 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
   builder->tail_len = 0;
   if (!str_is_heap_rope(result)) builder->cached = result;
 
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+
+fail:
   GC_ROOT_RESTORE(js, root_mark);
   return result;
 }

@@ -2038,24 +2038,6 @@ static inline void builder_set_cached_flat(ant_value_t builder, ant_value_t flat
   ptr->cached = flat;
 }
 
-static bool rope_flatten_stack_push(
-  ant_value_t **stack, size_t *sp, size_t *cap,
-  ant_value_t *local, ant_value_t value
-) {
-  if (*sp == *cap) {
-    size_t next_cap = *cap * 2u;
-    ant_value_t *next = *stack == local
-      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
-      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
-    if (!next) return false;
-    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
-    *stack = next;
-    *cap = next_cap;
-  }
-  (*stack)[(*sp)++] = value;
-  return true;
-}
-
 /* Repeated append produces a left-heavy tree. Walk it right-to-left and write
    backwards so that shape needs only one pending node instead of one entry per
    append. Balanced and right-heavy trees spill into a growable stack. */
@@ -2082,7 +2064,9 @@ static bool rope_flatten_into(
 
       ant_value_t left = rope_left(current);
       current = rope_right(current);
-      if (!rope_flatten_stack_push(&stack, &sp, &cap, local, left)) {
+      if (!ant_value_stack_push_with_spill(
+        &stack, &sp, &cap, local, left
+      )) {
         if (stack != local) free(stack);
         return false;
       }
@@ -6211,6 +6195,29 @@ ant_value_t js_resolve_bound_target(ant_value_t value) {
   return js_resolve_bound_target_known_bound(value);
 }
 
+static bool bound_argv_copy(
+  sv_closure_t *closure,
+  const ant_value_t *prefix, int prefix_count,
+  const ant_value_t *suffix, int suffix_count
+) {
+  int total = prefix_count + suffix_count;
+  if (total == 0) {
+    closure->u.bound.argv = NULL;
+    closure->bound_argc = 0;
+    return true;
+  }
+
+  ant_value_t *argv = malloc(sizeof(*argv) * (size_t)total);
+  if (!argv) return false;
+  if (prefix_count > 0)
+    memcpy(argv, prefix, sizeof(*argv) * (size_t)prefix_count);
+  if (suffix_count > 0)
+    memcpy(argv + prefix_count, suffix, sizeof(*argv) * (size_t)suffix_count);
+  closure->u.bound.argv = argv;
+  closure->bound_argc = total;
+  return true;
+}
+
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t func = js->this_val;
   uint8_t func_type = vtype(func);
@@ -6283,12 +6290,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0) {
-      bc->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      if (!bc->u.bound.argv) return js_mkerr(js, "oom");
-      memcpy(bc->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-      bc->bound_argc = bound_argc;
-    }
+    if (bound_argc > 0 &&
+        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
+      return js_mkerr(js, "oom");
 
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     ant_value_t name_result = js_set_function_name_prefixed(
@@ -6316,11 +6320,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0) {
-      bc->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      memcpy(bc->u.bound.argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-      bc->bound_argc = bound_argc;
-    }
+    if (bound_argc > 0 &&
+        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
+      return js_mkerr(js, "oom");
     
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     ant_value_t name_result = js_set_function_name_prefixed(
@@ -6417,20 +6419,17 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
   
   if (bound_argc > 0 || orig_bound_argc > 0) {
-    int total_bound_argc = orig_bound_argc + bound_argc;
     ant_value_t bound_arr = mkarr(js);
     for (int i = 0; i < orig_bound_argc; i++)
       arr_set(js, bound_arr, (ant_offset_t)i, orig->u.bound.argv[i]);
     for (int i = 0; i < bound_argc; i++)
       arr_set(js, bound_arr, (ant_offset_t)(orig_bound_argc + i), bound_args[i]);
     bound_closure->u.bound.args_arr = bound_arr;
-    bound_closure->u.bound.argv = malloc(sizeof(ant_value_t) * (size_t)total_bound_argc);
-    if (!bound_closure->u.bound.argv) return js_mkerr(js, "oom");
-    if (orig_bound_argc > 0)
-      memcpy(bound_closure->u.bound.argv, orig->u.bound.argv, sizeof(ant_value_t) * (size_t)orig_bound_argc);
-    if (bound_argc > 0)
-      memcpy(bound_closure->u.bound.argv + orig_bound_argc, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-    bound_closure->bound_argc = total_bound_argc;
+    if (!bound_argv_copy(
+      bound_closure,
+      orig_bound_argc > 0 ? orig->u.bound.argv : NULL, orig_bound_argc,
+      bound_args, bound_argc
+    )) return js_mkerr(js, "oom");
   }
 
   if (vtype(cfunc_slot) == T_CFUNC) {

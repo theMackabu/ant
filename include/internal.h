@@ -70,6 +70,28 @@ static constexpr int MAX_MULTIREF_OBJS        = 128;
 static constexpr int MAX_DENSE_INITIAL_CAP    = 8;
 static constexpr int STR_SHORT_CONS_THRESHOLD = 13;
 
+static inline bool ant_value_stack_push_with_spill(
+  ant_value_t **stack, size_t *sp, size_t *cap,
+  ant_value_t *local, ant_value_t value
+) {
+  if (*sp == *cap) {
+    size_t next_cap = *cap * 2u;
+    
+    ant_value_t *next = *stack == local
+      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
+      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
+      
+    if (!next) return false;
+    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
+    
+    *stack = next;
+    *cap = next_cap;
+  }
+  
+  (*stack)[(*sp)++] = value;
+  return true;
+}
+
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,
   STR_BUILDER_TAIL_CAP = 256,

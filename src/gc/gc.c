@@ -122,24 +122,6 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
   }
 }
 
-static bool gc_mark_str_stack_push(
-  ant_value_t **stack, size_t *sp, size_t *cap,
-  ant_value_t *local, ant_value_t value
-) {
-  if (*sp == *cap) {
-    size_t next_cap = *cap * 2u;
-    ant_value_t *next = *stack == local
-      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
-      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
-    if (!next) return false;
-    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
-    *stack = next;
-    *cap = next_cap;
-  }
-  (*stack)[(*sp)++] = value;
-  return true;
-}
-
 static void gc_mark_str(ant_t *js, ant_value_t root) {
   static const void *dispatch[] = {
     [STR_HEAP_TAG_FLAT] = &&l_flat,
@@ -177,7 +159,9 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 
     /* Visit the short right leaf first. Repeated append is left-heavy, so the
        pending stack remains one entry instead of growing with rope depth. */
-    if (!gc_mark_str_stack_push(&stack, &sp, &cap, local, rope->left)) {
+    if (!ant_value_stack_push_with_spill(
+      &stack, &sp, &cap, local, rope->left
+    )) {
       /* Allocation failure is exceptional; recursive fallback preserves GC
          correctness while the normal deep-append shape stays iterative. */
       gc_mark_str(js, rope->left);
