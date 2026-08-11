@@ -355,16 +355,14 @@ static inline ant_value_t sv_instanceof_ic_eval(
 
 slow_path:
   sv_stat_objepoch_refill[2]++;
-  ant_value_t res = do_instanceof(js, l, r);
-  lhs_cacheable = sv_instanceof_lhs_cache_key(
-    l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr
-  );
-  ant_value_t ctor_proto = js_mkundef();
   
-  if (
-    !is_err(res) && ic && lhs_cacheable && vtype(res) == T_BOOL &&
-    sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto)
-  ) {
+  ant_value_t ctor_proto = js_mkundef();
+  bool rhs_cacheable = ic && lhs_cacheable && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
+  
+  ant_value_t res = do_instanceof(js, l, r);
+  lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+
+  if (!is_err(res) && rhs_cacheable && lhs_cacheable && vtype(res) == T_BOOL) {
     ic->cached_shape = lhs_ptr->shape;
     ic->cached_holder = lhs_proto_ptr;
     ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);

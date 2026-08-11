@@ -203,5 +203,45 @@ eq(
 globalThis.Promise = RealPromise;
 delete RealPromise.prototype.rebindProbe;
 
+// Cacheability belongs to the semantics at the start of instanceof. A custom
+// hook may delete itself while producing its result; that must not let the IC
+// stamp the custom result afterward as if ordinary instanceof had produced it.
+function SelfDeletingHasInstance() {}
+const selfDeletingValue = Object.create(
+  Object.create(SelfDeletingHasInstance.prototype)
+);
+Object.defineProperty(SelfDeletingHasInstance, Symbol.hasInstance, {
+  configurable: true,
+  value() {
+    delete SelfDeletingHasInstance[Symbol.hasInstance];
+    return false;
+  }
+});
+function coldSelfDeletingCheck(value) {
+  return value instanceof SelfDeletingHasInstance;
+}
+eq('cold self-deleting hasInstance custom result', coldSelfDeletingCheck(selfDeletingValue), false);
+eq('cold self-deleting hasInstance becomes ordinary', coldSelfDeletingCheck(selfDeletingValue), true);
+eq('cold self-deleting hasInstance stays ordinary', coldSelfDeletingCheck(selfDeletingValue), true);
+
+function WarmSelfDeletingHasInstance() {}
+const warmSelfDeletingValue = Object.create(
+  Object.create(WarmSelfDeletingHasInstance.prototype)
+);
+function warmSelfDeletingCheck(value) {
+  return value instanceof WarmSelfDeletingHasInstance;
+}
+warm(warmSelfDeletingCheck, warmSelfDeletingValue);
+Object.defineProperty(WarmSelfDeletingHasInstance, Symbol.hasInstance, {
+  configurable: true,
+  value() {
+    delete WarmSelfDeletingHasInstance[Symbol.hasInstance];
+    return false;
+  }
+});
+eq('warm self-deleting hasInstance custom result', warmSelfDeletingCheck(warmSelfDeletingValue), false);
+eq('warm self-deleting hasInstance becomes ordinary', warmSelfDeletingCheck(warmSelfDeletingValue), true);
+eq('warm self-deleting hasInstance stays ordinary', warmSelfDeletingCheck(warmSelfDeletingValue), true);
+
 if (failed) process.exit(1);
 console.log('OK: prototype-write epoch');

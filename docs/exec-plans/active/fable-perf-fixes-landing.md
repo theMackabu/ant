@@ -2481,6 +2481,16 @@ interpreter trade-off, while JIT code already embeds the resolved site pointer.
   Promise. The existing primitive-IC test retains its warmed wholesale
   `String.prototype` replacement coverage, and the property-location stress
   test remains green.
+- **Self-mutating `@@hasInstance` review fix:** the `instanceof` refill used to
+  decide whether the RHS was an ordinary cacheable constructor only after
+  `do_instanceof()` returned. A custom `Symbol.hasInstance` could delete itself
+  while returning `false`, causing that custom result to be stamped afterward
+  as an ordinary prototype-chain result. Cacheability is now snapshotted before
+  user code runs, while the LHS cache key is still recomputed afterward because
+  the hook may mutate the receiver. The exact cold and warmed repros failed as
+  `false/false/false` before the fix and now match Node's
+  `false/true/true`. The IC hit path is unchanged; this correctness-only
+  slow/refill-path reorder makes no new wall-time claim.
 - **JIT epoch-load audit:** the pre-existing `instanceof` and
   `Object.prototype.isPrototypeOf` fast paths loaded the unsigned 32-bit global
   epoch cache field as `MIR_T_I32` while loading the counter as `MIR_T_U32`.
@@ -2498,15 +2508,19 @@ interpreter trade-off, while JIT code already embeds the resolved site pointer.
   approximately-2% micro noise).
 - **Gates on the exact final artifact:** the intrinsic-root follow-up is pinned
   as `/tmp/ant_p4_intrinsic_final_bin`
-  (`75c1081820c0ce9252c0322da91d04e7`, identical to `build/ant`). The focused
+  (`75c1081820c0ce9252c0322da91d04e7`); the self-mutating `@@hasInstance`
+  review fix is pinned as `/tmp/ant_p4_hasinstance_final_bin`
+  (`67b8edc6761e0b1dc9f6a0518a1fef4e`, identical to `build/ant` at pin time).
+  The focused
   prototype-write test passes in both Ant and Node, and the original rebind
-  repro is Node-identical. Spec **3718/0** (98/0 files), JIT **125/125** (9/0
+  repro plus the cold and warmed self-deleting-hook repros are Node-identical.
+  On the reviewed final pin, spec **3718/0** (98/0 files), JIT **125/125** (9/0
   files), and harness **181/0** pass. The harness ran with the host's invalid
-  `NO_COLOR=1` removed; oha measured hono **34,460**, express **18,681**, h3
-  **22,165**, and elysia **67,083 RPS**. Newt Main completed in **38.08s** with
-  **883,474,432-byte** max RSS. `maid build`, `maid preflight`, and `git diff
-  --check` are clean. No call-dispatch code changed, so the devirtualization
-  fuzzer was not required.
+  `NO_COLOR=1` removed; oha measured hono **34,436**, express **18,073**, h3
+  **21,481**, and elysia **68,065 RPS**. Newt Main completed in **41.06s** with
+  **887,685,120-byte** max RSS, within the standing band. `maid build` passed;
+  `maid preflight` and `git diff --check` are clean. No call-dispatch code
+  changed, so the devirtualization fuzzer was not required.
 
 ## Decision log
 
