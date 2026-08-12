@@ -900,6 +900,16 @@ static inline ant_value_t defalias(ant_t *js, ant_value_t obj, const char *name,
   );
 }
 
+static inline void js_set_global_builtin(
+  ant_t *js,
+  const char *name,
+  ant_value_t value
+) {
+  size_t name_len = strlen(name);
+  js_set(js, js_glob(js), name, value);
+  js_set_descriptor(js, js_glob(js), name, name_len, JS_DESC_W | JS_DESC_C);
+}
+
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
 }

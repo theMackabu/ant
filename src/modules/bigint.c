@@ -1698,7 +1698,6 @@ static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int narg
 }
 
 void init_bigint_module(ant_t *js) {
-  ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
   ant_value_t function_proto = js->sym.function_proto;
 
@@ -1715,5 +1714,5 @@ void init_bigint_module(ant_t *js) {
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   js_setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
   js_setprop(js, bigint_ctor_obj, ANT_STRING("name"), ANT_STRING("BigInt"));
-  js_setprop(js, glob, js_mkstr(js, "BigInt", 6), js_obj_to_func(js, bigint_ctor_obj));
+  js_set_global_builtin(js, "BigInt", js_obj_to_func(js, bigint_ctor_obj));
 }

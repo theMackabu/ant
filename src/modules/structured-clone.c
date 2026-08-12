@@ -343,5 +343,8 @@ void init_structured_clone_module(ant_t *js) {
   ant_value_t global = js_glob(js);
 
   js_set(js, global, "structuredClone", js_mkfun(js_structured_clone));
-  js_set_descriptor(js, global, "structuredClone", 15, JS_DESC_W | JS_DESC_C);
+  js_set_descriptor(
+    js, global, "structuredClone", 15,
+    JS_DESC_W | JS_DESC_E | JS_DESC_C
+  );
 }

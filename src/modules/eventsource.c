@@ -462,7 +462,7 @@ void init_eventsource_module(ant_t *js) {
   js_set(js, js->builtins.eventsource_ctor, "CONNECTING", js_mknum(ES_CONNECTING));
   js_set(js, js->builtins.eventsource_ctor, "OPEN", js_mknum(ES_OPEN));
   js_set(js, js->builtins.eventsource_ctor, "CLOSED", js_mknum(ES_CLOSED));
-  js_set(js, global, "EventSource", js->builtins.eventsource_ctor);
+  js_set_global_builtin(js, "EventSource", js->builtins.eventsource_ctor);
 }
 
 void gc_mark_eventsource(ant_t *js, gc_mark_fn mark) {

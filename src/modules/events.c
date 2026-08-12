@@ -1986,28 +1986,28 @@ void init_events_module(ant_t *js) {
   js_set(js, event_fn, "CAPTURING_PHASE", js_mknum(1));
   js_set(js, event_fn, "AT_TARGET",       js_mknum(2));
   js_set(js, event_fn, "BUBBLING_PHASE",  js_mknum(3));
-  js_set(js, global, "Event", event_fn);
+  js_set_global_builtin(js, "Event", event_fn);
 
   js->builtins.customevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.customevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.customevent_proto, get_toStringTag_sym(), js_mkstr(js, "CustomEvent", 11));
 
   ant_value_t customevent_fn = js_make_ctor(js, js_customevent_ctor, js->builtins.customevent_proto, "CustomEvent", 11);
-  js_set(js, global, "CustomEvent", customevent_fn);
+  js_set_global_builtin(js, "CustomEvent", customevent_fn);
 
   js->builtins.errorevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.errorevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.errorevent_proto, get_toStringTag_sym(), js_mkstr(js, "ErrorEvent", 10));
 
   ant_value_t errorevent_fn = js_make_ctor(js, js_errorevent_ctor, js->builtins.errorevent_proto, "ErrorEvent", 10);
-  js_set(js, global, "ErrorEvent", errorevent_fn);
+  js_set_global_builtin(js, "ErrorEvent", errorevent_fn);
 
   js->builtins.promiserejectionevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.promiserejectionevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.promiserejectionevent_proto, get_toStringTag_sym(), js_mkstr(js, "PromiseRejectionEvent", 21));
 
   ant_value_t pre_fn = js_make_ctor(js, js_promiserejectionevent_ctor, js->builtins.promiserejectionevent_proto, "PromiseRejectionEvent", 21);
-  js_set(js, global, "PromiseRejectionEvent", pre_fn);
+  js_set_global_builtin(js, "PromiseRejectionEvent", pre_fn);
 
   ant_value_t object_proto = js->sym.object_proto;
   ant_value_t function_proto = js->sym.function_proto;
@@ -2033,7 +2033,7 @@ void init_events_module(ant_t *js) {
   js_set(js, global, "addEventListener",    js_mkfun(js_add_event_listener));
   js_set(js, global, "removeEventListener", js_mkfun(js_remove_event_listener));
   js_set(js, global, "dispatchEvent",       js_mkfun(js_dispatch_event));
-  js_set(js, global, "EventTarget",         eventtarget_fn);
+  js_set_global_builtin(js, "EventTarget", eventtarget_fn);
 }
 
 static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList *list) {

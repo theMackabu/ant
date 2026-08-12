@@ -17538,7 +17538,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
   
   ant_value_t err_ctor_func = js_obj_to_func(js, err_ctor_obj);
-  js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
+  js_set_global_builtin(js, "Error", err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   defmethod(js, err_ctor_func, "isError", 7, js_mkfun(builtin_error_isError));
@@ -17557,7 +17557,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
     ant_value_t ctor_func = js_obj_to_func(js, ctor); \
     js_setprop(js, proto, ANT_STRING("constructor"), ctor_func); \
     js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
-    js_setprop(js, glob, ANT_STRING(name_str), ctor_func); \
+    js_set_global_builtin(js, name_str, ctor_func); \
   } while(0)
   
   REGISTER_ERROR_SUBTYPE("EvalError");
@@ -17580,7 +17580,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, ctor, ANT_STRING("name"), ANT_STRING("AggregateError"));
   js_setprop(js, proto, ANT_STRING("constructor"), js_obj_to_func(js, ctor));
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("AggregateError"), js_obj_to_func(js, ctor));
+  js_set_global_builtin(js, "AggregateError", js_obj_to_func(js, ctor));
 
   ant_value_t suppressed_proto = js_mkobj(js);
   set_proto(js, suppressed_proto, error_proto);
@@ -17595,7 +17595,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t suppressed_ctor_func = js_obj_to_func(js, suppressed_ctor);
   js_setprop(js, suppressed_proto, ANT_STRING("constructor"), suppressed_ctor_func);
   js_set_descriptor(js, suppressed_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("SuppressedError"), suppressed_ctor_func);
+  js_set_global_builtin(js, "SuppressedError", suppressed_ctor_func);
 
   ant_value_t disposable_stack_proto = js_mkobj(js);
   set_proto(js, disposable_stack_proto, object_proto);
@@ -17614,7 +17614,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t disposable_stack_ctor_func = js_obj_to_func(js, disposable_stack_ctor);
   js_setprop(js, disposable_stack_proto, ANT_STRING("constructor"), disposable_stack_ctor_func);
   js_set_descriptor(js, disposable_stack_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("DisposableStack"), disposable_stack_ctor_func);
+  js_set_global_builtin(js, "DisposableStack", disposable_stack_ctor_func);
 
   ant_value_t async_disposable_stack_proto = js_mkobj(js);
   set_proto(js, async_disposable_stack_proto, object_proto);
@@ -17633,7 +17633,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t async_disposable_stack_ctor_func = js_obj_to_func(js, async_disposable_stack_ctor);
   js_setprop(js, async_disposable_stack_proto, ANT_STRING("constructor"), async_disposable_stack_ctor_func);
   js_set_descriptor(js, async_disposable_stack_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("AsyncDisposableStack"), async_disposable_stack_ctor_func);
+  js_set_global_builtin(js, "AsyncDisposableStack", async_disposable_stack_ctor_func);
   
   ant_value_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
@@ -17673,7 +17673,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
   js_setprop_readonly_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   ant_value_t obj_func = js_obj_to_func(js, obj_func_obj);
-  js_setprop(js, glob, js_mkstr(js, "Object", 6), obj_func);
+  js_set_global_builtin(js, "Object", obj_func);
   
   ant_value_t func_ctor_obj = mkobj(js, 0);
   set_proto(js, func_ctor_obj, function_proto);
@@ -17683,7 +17683,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_set_descriptor(js, func_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, func_ctor_obj, ANT_STRING("name"), ANT_STRING("Function"));
   ant_value_t func_ctor_func = js_obj_to_func(js, func_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Function", 8), func_ctor_func);
+  js_set_global_builtin(js, "Function", func_ctor_func);
   
   ant_value_t async_func_proto_obj = js_mkobj(js);
   set_proto(js, async_func_proto_obj, function_proto);
@@ -17749,7 +17749,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
   
   ant_value_t str_ctor_func = js_obj_to_func(js, str_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "String", 6), str_ctor_func);
+  js_set_global_builtin(js, "String", str_ctor_func);
   
   ant_value_t number_ctor_obj = mkobj(js, 0);
   set_proto(js, number_ctor_obj, function_proto);
@@ -17774,7 +17774,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
   js_setprop(js, number_ctor_obj, ANT_STRING("name"), ANT_STRING("Number"));
   ant_value_t number_ctor_func = js_obj_to_func(js, number_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Number", 6), number_ctor_func);
+  js_set_global_builtin(js, "Number", number_ctor_func);
   
   ant_value_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
@@ -17782,7 +17782,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
   js_setprop(js, bool_ctor_obj, ANT_STRING("name"), ANT_STRING("Boolean"));
   ant_value_t bool_ctor_func = js_obj_to_func(js, bool_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Boolean", 7), bool_ctor_func);
+  js_set_global_builtin(js, "Boolean", bool_ctor_func);
   
   ant_value_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
@@ -17796,7 +17796,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_set_descriptor(js, arr_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, arr_ctor_obj, ANT_STRING("name"), ANT_STRING("Array"));
   ant_value_t arr_ctor_func = js_obj_to_func(js, arr_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Array", 5), arr_ctor_func);
+  js_set_global_builtin(js, "Array", arr_ctor_func);
   
   ant_value_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
@@ -17804,7 +17804,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_mark_constructor(proxy_ctor_obj, true);
   defmethod(js, proxy_ctor_obj, "revocable", 9, js_mkfun(builtin_Proxy_revocable));
   js_setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
-  js_setprop(js, glob, js_mkstr(js, "Proxy", 5), js_obj_to_func(js, proxy_ctor_obj));
+  js_set_global_builtin(js, "Proxy", js_obj_to_func(js, proxy_ctor_obj));
   
   ant_value_t p_ctor_obj = mkobj(js, 0);
   set_proto(js, p_ctor_obj, function_proto);
@@ -17824,7 +17824,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, promise_proto, ANT_STRING("constructor"), p_ctor_func);
   js_set_descriptor(js, promise_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   js_setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
-  js_setprop(js, glob, js_mkstr(js, "Promise", 7), p_ctor_func);
+  js_set_global_builtin(js, "Promise", p_ctor_func);
   
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);
@@ -17832,7 +17832,9 @@ static ant_t *isolate_init(void *buf, size_t len) {
   defmethod(js, glob, "isNaN", 5, js_mkfun(builtin_global_isNaN));
   defmethod(js, glob, "isFinite", 8, js_mkfun(builtin_global_isFinite));
   defmethod(js, glob, "btoa", 4, js_mkfun(builtin_btoa));
+  js_set_descriptor(js, glob, "btoa", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   defmethod(js, glob, "atob", 4, js_mkfun(builtin_atob));
+  js_set_descriptor(js, glob, "atob", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   
   js_setprop(js, glob, js_mkstr(js, "NaN", 3), tov(JS_NAN));
   js_set_descriptor(js, glob, "NaN", 3, 0);
@@ -17845,7 +17847,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   set_proto(js, import_obj, function_proto);
   
   set_slot(import_obj, SLOT_CFUNC, js_mkfun(js_builtin_import));
-  js_setprop(js, glob, js_mkstr(js, "import", 6), js_obj_to_func(js, import_obj));
+  js_set_global_builtin(js, "import", js_obj_to_func(js, import_obj));
   
   js_setprop(js, object_proto, js_mkstr(js, "constructor", 11), obj_func);
   js_set_descriptor(js, object_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);

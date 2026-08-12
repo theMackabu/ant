@@ -1279,7 +1279,7 @@ void init_url_module(ant_t *js) {
   js_set_sym(js, js->builtins.usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
 
   ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, js->builtins.usp_proto, "URLSearchParams", 15);
-  js_set(js, glob, "URLSearchParams", usp_ctor);
+  js_set_global_builtin(js, "URLSearchParams", usp_ctor);
 
   js->builtins.url_proto = js_mkobj(js);
   js_set_accessor_desc(js, js->builtins.url_proto, "href", 4, js_mkfun(url_get_href), js_mkfun(url_set_href), JS_DESC_E | JS_DESC_C);
@@ -1310,7 +1310,7 @@ void init_url_module(ant_t *js) {
   js_set(js, js->builtins.url_ctor, "createObjectURL", js_mkfun_arity(url_create_object_url, 1));
   js_set(js, js->builtins.url_ctor, "parse",           js_mkfun_arity(url_parse, 1));
   js_set(js, js->builtins.url_ctor, "revokeObjectURL", js_mkfun_arity(url_revoke_object_url, 1));
-  js_set(js, glob, "URL", js->builtins.url_ctor);
+  js_set_global_builtin(js, "URL", js->builtins.url_ctor);
 }
 
 static ant_value_t builtin_fileURLToPath(ant_t *js, ant_value_t *args, int nargs) {

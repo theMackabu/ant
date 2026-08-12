@@ -3655,7 +3655,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t arraybuffer_ctor = js_obj_to_func(js, arraybuffer_ctor_obj);
   js_set(js, arraybuffer_proto, "constructor", arraybuffer_ctor);
   js_set_descriptor(js, arraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "ArrayBuffer", arraybuffer_ctor);
+  js_set_global_builtin(js, "ArrayBuffer", arraybuffer_ctor);
   
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
@@ -3729,7 +3729,7 @@ void init_buffer_module(ant_t *js) {
       ant_value_t name##_ctor = js_obj_to_func(js, name##_ctor_obj); \
       js_setprop(js, name##_proto, ANT_STRING("constructor"), name##_ctor); \
       js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
-      js_set(js, glob, #name, name##_ctor); \
+      js_set_global_builtin(js, #name, name##_ctor); \
     } while(0)
   
   SETUP_TYPEDARRAY(Int8Array, TYPED_ARRAY_INT8);
@@ -3791,7 +3791,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t dataview_ctor = js_obj_to_func(js, dataview_ctor_obj);
   js_set(js, dataview_proto, "constructor", dataview_ctor);
   js_set_descriptor(js, dataview_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "DataView", dataview_ctor);
+  js_set_global_builtin(js, "DataView", dataview_ctor);
   
   ant_value_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t sharedarraybuffer_proto = js_mkobj(js);
@@ -3810,7 +3810,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t sharedarraybuffer_ctor = js_obj_to_func(js, sharedarraybuffer_ctor_obj);
   js_set(js, sharedarraybuffer_proto, "constructor", sharedarraybuffer_ctor);
   js_set_descriptor(js, sharedarraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "SharedArrayBuffer", sharedarraybuffer_ctor);
+  js_set_global_builtin(js, "SharedArrayBuffer", sharedarraybuffer_ctor);
   
   ant_value_t buffer_ctor_obj = js_mkobj(js);
   ant_value_t buffer_proto = js_mkobj(js);
@@ -3863,7 +3863,7 @@ void init_buffer_module(ant_t *js) {
   ant_value_t buffer_ctor = js_obj_to_func(js, buffer_ctor_obj);
   js_set(js, buffer_proto, "constructor", buffer_ctor);
   js_set_descriptor(js, buffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "Buffer", buffer_ctor);
+  js_set_global_builtin(js, "Buffer", buffer_ctor);
 }
 
 void cleanup_buffer_module(void) {

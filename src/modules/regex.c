@@ -3814,7 +3814,7 @@ void init_regex_module(ant_t *js) {
     js_mkfun_meta(&stat_getters[REGEXP_STATIC_IDX_AMP]),
     js_mkfun_meta(&stat_setters[REGEXP_STATIC_IDX_AMP]), JS_DESC_C
   );
-  js_set(js, glob, "RegExp", regexp_func);
+  js_set_global_builtin(js, "RegExp", regexp_func);
 
   ant_value_t string_ctor = js_get(js, glob, "String");
   ant_value_t string_proto = js_get(js, string_ctor, "prototype");

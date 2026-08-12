@@ -354,7 +354,11 @@ void init_symbol_module(ant_t *js) {
   #undef SET_CTOR_SYM
   
   ant_value_t func_symbol = js_obj_to_func(js, symbol_ctor);
-  js_set(js, js_glob(js), "Symbol", func_symbol);
+  js_set_global_builtin(js, "Symbol", func_symbol);
+  mkprop(
+    js, js_glob(js), g_toStringTag, js_mkstr(js, "global", 6),
+    ANT_PROP_ATTR_CONFIGURABLE
+  );
 
   // set internal types before ant module snapshot
   ant_value_t array_ctor = js_get(js, js_glob(js), "Array");

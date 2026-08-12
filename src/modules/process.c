@@ -1807,7 +1807,7 @@ void init_process_module(ant_t *js) {
   eventemitter_set_listener_change_hook(js, stderr_obj, process_listener_change, ps);
   js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty(js)));
   js_set(js, process_obj, "stderr", stderr_obj);
-  js_set(js, global, "process", process_obj);
+  js_set_global_builtin(js, "process", process_obj);
 }
 
 
