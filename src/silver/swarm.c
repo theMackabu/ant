@@ -2645,6 +2645,11 @@ static void mir_emit_inline_read_guard(
 
 #define INL_MAX_LABELS 128
 
+static_assert(
+  JIT_INLINE_MAX_BYTECODE <= INL_MAX_LABELS * 2,
+  "inline label map must cover every minimum-size branch"
+);
+
 typedef struct {
   int          bc_off;
   MIR_label_t  label;
