@@ -1,13 +1,13 @@
 {
-  "score": 3175,
+  "score": 3236,
   "results": {
-    "Richards": 3206,
-    "DeltaBlue": 5203,
-    "Crypto": 1554,
-    "RayTrace": 3390,
-    "EarleyBoyer": 7380,
-    "RegExp": 964,
-    "Splay": 5321,
-    "NavierStokes": 3098
+    "Richards": 3255,
+    "DeltaBlue": 5231,
+    "Crypto": 1621,
+    "RayTrace": 3447,
+    "EarleyBoyer": 7517,
+    "RegExp": 983,
+    "Splay": 5501,
+    "NavierStokes": 3112
   }
 }
