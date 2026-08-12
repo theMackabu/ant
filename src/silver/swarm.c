@@ -3692,12 +3692,14 @@ static void jit_emit_inline_body(
         MIR_reg_t pf_obj = inl_vs[--isp];
         MIR_label_t pf_slow = MIR_new_label(ctx);
         MIR_label_t pf_ok = MIR_new_label(ctx);
-        if (mir_emit_put_field_ic_fastpath(
-          ctx, jit_func, js, callee,
-          (int)(ip - callee->code), pf_ic_idx, pf_atom,
-          r_js, pf_obj, pf_val, pf_slow, r_ic_epoch,
-          ext->remember_obj_proto, ext->imp_remember_obj
-        )) {
+        bool pf_fast = r_ic_epoch != 0 &&
+          mir_emit_put_field_ic_fastpath(
+            ctx, jit_func, js, callee,
+            (int)(ip - callee->code), pf_ic_idx, pf_atom,
+            r_js, pf_obj, pf_val, pf_slow, r_ic_epoch,
+            ext->remember_obj_proto, ext->imp_remember_obj
+          );
+        if (pf_fast) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, pf_ok)));
           MIR_append_insn(ctx, jit_func, pf_slow);
