@@ -110,10 +110,13 @@ typedef struct {
 typedef struct {
   ant_shape_t *cached_shape;
   ant_object_t *cached_holder;
+  
   uint32_t cached_index;
   uint32_t epoch;
   uintptr_t cached_aux;
-  // keep this union valid: each IC slot must belong to exactly one bytecode site/op
+  
+  // each IC slot belongs to one bytecode site/op. comparison ICs need both
+  // their direct-prototype value and object-lifetime epoch simultaneously.
   union {
     ant_value_t receiver_proto;
     struct {
@@ -122,7 +125,13 @@ typedef struct {
       uint32_t slot;
       uint32_t epoch;
     } add;
+    
+    struct {
+      ant_value_t receiver_proto;
+      uint32_t object_epoch;
+    } comparison;
   } guard;
+  
   bool cached_is_own;
   uint8_t shape_ref_mask;
   uint32_t prototype_epoch;

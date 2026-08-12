@@ -2551,6 +2551,19 @@ interpreter trade-off, while JIT code already embeds the resolved site pointer.
   MIR sign-extends the former and zero-extends the latter, forcing refills
   throughout the upper half of the epoch cycle. Both loads now use
   `MIR_T_U32`; MIR accepts either type, so this was a silent performance bug.
+- **IC layout hardening:** comparison ICs previously stored their direct
+  prototype through `guard.receiver_proto` and their object-lifetime epoch
+  through the non-overlapping tail of `guard.add`. That happened to fit but
+  contradicted the union's one-family-per-site invariant. An explicit
+  `guard.comparison` member now owns both values; property receiver guards and
+  add transitions retain their original members. The add member remains the
+  union's 24-byte maximum and the build-time assertion confirms
+  `sv_ic_entry_t` is still **64 bytes**. Pinned interleaved direct/deep
+  `instanceof` plus `isPrototypeOf` fixed work measured base
+  `/tmp/ant_ic_union_base_bin` (`974901e720124c5218973b6d353d00e2`)
+  **3641/3641/3635/3638ms** versus candidate
+  `/tmp/ant_ic_union_candidate_bin` (`b69cf4035c9429905f4b949a6d79f6af`)
+  **3638/3652/3650/3638ms** (**+0.16%, flat**) with identical checksums.
 - **Perf (pinned AB/BA, two rounds):** baseline
   `/tmp/ant_p4_base_bin` (`c8f4f9a129ef66d621c5abe61aba2770`) versus the
   measured candidate `/tmp/ant_p4_final_bin`

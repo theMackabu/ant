@@ -1493,7 +1493,9 @@ static void mir_emit_ic_obj_epoch_guard(
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, epoch_scratch),
       MIR_new_mem_op(ctx, MIR_T_U32,
-        (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.epoch), ic, 0, 1)));
+        (MIR_disp_t)offsetof(
+          sv_ic_entry_t, guard.comparison.object_epoch
+        ), ic, 0, 1)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE,
       MIR_new_label_op(ctx, slow),
@@ -9713,7 +9715,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, r_ic_direct_proto),
               MIR_new_mem_op(ctx, MIR_JSVAL,
-                (MIR_disp_t)offsetof(sv_ic_entry_t, guard.receiver_proto), r_ic, 0, 1)));
+                (MIR_disp_t)offsetof(
+                  sv_ic_entry_t, guard.comparison.receiver_proto
+                ), r_ic, 0, 1)));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_BEQ,
               MIR_new_label_op(ctx, direct_true),
