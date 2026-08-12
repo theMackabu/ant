@@ -33,7 +33,6 @@
 #include "silver/lexer.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"
-#include "silver/glue.h"
 #include "silver/swarm.h"
 #include "silver/ops/using.h"
 #include "modules/regex.h"
@@ -2353,9 +2352,6 @@ const char *intern_string(const char *str, size_t len) {
   return entry->str;
 }
 
-/* Lookup-only: shape keys are always interned, so a key this cannot find
-   is absent from every shape. Lets read paths miss without permanently
-   growing the intern table. */
 const char *intern_find(const char *str, size_t len) {
   if (!intern_buckets) return NULL;
 
@@ -3958,7 +3954,7 @@ bool lookup_prop_meta(
     if (key_kind == PROP_META_SYMBOL) {
       slot = ant_shape_lookup_symbol(cur_ptr->shape, sym_off);
     } else {
-      const char *interned_key = intern_string(key, klen);
+      const char *interned_key = intern_find(key, klen);
       if (interned_key) slot = ant_shape_lookup_interned(cur_ptr->shape, interned_key);
     }
 
@@ -4507,7 +4503,7 @@ ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern) {
 }
 
 inline ant_prop_loc_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   if (!search_intern) return ANT_PROP_LOC_NONE;
   return lkp_interned(obj, search_intern);
 }
@@ -4522,7 +4518,7 @@ inline ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *sear
 }
 
 static inline ant_value_t lkp_val(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *interned = intern_string(buf, len);
+  const char *interned = intern_find(buf, len);
   if (!interned) return js_mkundef();
   return lkp_interned_val(js, obj, interned);
 }
@@ -4579,7 +4575,7 @@ static inline ant_value_t lkp_sym_proto_val(ant_t *js, ant_value_t obj, ant_offs
 static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4623,7 +4619,7 @@ static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, si
 static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out) {
   *has_setter_out = false;
   *setter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4720,7 +4716,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
-  const char *interned = intern_string(name, len);
+  const char *interned = intern_find(name, len);
   ant_value_t ctor = lkp_interned_val(js, js->global, interned);
   if (vtype(ctor) != T_FUNC) return js_mknull();
   ant_value_t ctor_obj = js_as_obj(ctor);
@@ -4746,7 +4742,7 @@ ant_value_t js_primitive_prototype(ant_t *js, uint8_t type) {
 
 ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   uint8_t t = vtype(obj);
-  const char *key_intern = intern_string(key, len);
+  const char *key_intern = intern_find(key, len);
   if (!key_intern) return ANT_PROP_LOC_NONE;
 
   ant_value_t cur = obj;
