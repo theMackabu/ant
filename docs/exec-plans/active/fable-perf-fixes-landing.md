@@ -1755,6 +1755,59 @@ h3 22,201, elysia 63,709 RPS), devirt fuzz all four seeds agree, and newt Main
 temporary GC-stress pass covered focused rope/builder tests at stress 1/3 and
 the full spec at stress 10; the hook is absent from the final tree.
 
+**W1 — partial inline-body emission replay FIXED, 2026-08-11.**
+- **Mechanism:** `jit_emit_inline_body` emitted MIR directly into the caller,
+  but returned `false` when a nested `CALL`, `TAIL_CALL`, `CALL_METHOD`, or
+  `TAIL_CALL_METHOD` exceeded the fixed 16-entry JIT args buffer. A callee
+  prefix such as `box.writes++` was therefore already in the caller when the
+  direct-call path fell through to its generic fallback; the method path
+  ignored the return value and reached the same slow label. The prefix ran,
+  then the generic call re-ran the complete callee. A pinned base repro with a
+  `PUT_FIELD` followed by a 17-argument nested call observed two writes and
+  one nested call at the first hot outer invocation.
+- **Fix:** opcode metadata marks the four nested call families with
+  `SV_OPF_JIT_INLINE_ARGC`; the existing `jit_inlineable` bytecode scan rejects
+  `argc > SV_JIT_ARGS_BUF_CAP` before any MIR is appended, with no second
+  feasibility pass. `jit_emit_inline_body` is now `void`; every former
+  `return false`
+  is an `ANT_ASSERT` for a bytecode/compiler invariant (constant, local, atom,
+  stack, closure, label-map, or emitter coverage). Thus an admitted body
+  cannot silently become a partial emission, and future resource limits must
+  be added to feasibility rather than falling back after mutation. The broad
+  alternative -- duplicating stack simulation, branch-target tables, and
+  label preallocation in a second verifier -- was rejected because the VM
+  verifier already owns those invariants and the only reachable resource
+  rejection was nested-call argc.
+- **Correctness evidence:** `tests/test_jit_inline_call_errors.cjs` covers all
+  four call opcodes with a side-effecting prefix and exact result/write/call
+  counts. Pinned base `/tmp/ant_w1_base_bin`
+  (`5808c15b40ded381c6d8a257b37f88ae`) fails on the first direct case with
+  `expected 101, got 102`; the normal candidate, fresh-PGO final, and node all
+  pass every case. The emitter's bool recovery was removed from both direct
+  and method sites, so no caller can accidentally revive partial fallback.
+- **Performance (interleaved B/C/C/B):** a fixed-work control covering valid
+  16-argument direct and method inline calls, 64 million outer calls per run,
+  measured **1140/1147ms -> 1153/1137ms** (two-run mean **+0.1%**, identical
+  checksum and write counts). Full bench-v8 measured Richards
+  **3149/3181 -> 3181/3195 (+0.7%)** and DeltaBlue
+  **4901/5203 -> 5170/5164 (+2.3%)**; every other suite was non-regressing.
+  Gains outside the W1 path include the newly retrained PGO profile and are
+  not attributed to this fix. Interleaved newt wall time was
+  **39.13/39.54s -> 39.49/39.92s (+0.9%, noise-band)**; max RSS was
+  **867/864MB -> 897/895MB**, below the 1GB gate.
+- **Metadata-fold follow-up:** moving the nested-call argc check into the
+  existing opcode-metadata scan was flat against the preceding PGO pin on the
+  same 64-million-call control: **1110/1124ms -> 1111/1115ms** interleaved,
+  with identical checksum and direct/method write counts.
+- **Final artifact:** PGO was retrained with
+  `./meson/pgo/build.sh --force-no-nix`; the pinned binary is
+  `/tmp/ant_w1_opcode_pgo_bin` (`3e953764ed1d0136f81802f165730004`). Exact
+  artifact gates: spec **3721/0**, JIT **9/0** (125 generated cases), harness
+  **181/0** (hono 34,942, express 19,127, h3 21,898, elysia 71,043 RPS),
+  devirt fuzz all four seeds agree, and newt Main is **37.94s** /
+  **893,632,512-byte max RSS**. `examples/bench-v8/score.json` was restored
+  after the runner's generated-file side effect.
+
 **W3 follow-up — inline property reads made effect-free-or-bail FIXED,
 2026-08-08.**
 - **Mechanism:** the inline emitter's GET_FIELD/GET_FIELD_OPT/GET_FIELD2/

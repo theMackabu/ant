@@ -2581,26 +2581,30 @@ static bool jit_inlineable(sv_func_t *f) {
   uint8_t *ip  = f->code;
   uint8_t *end = f->code + f->code_len;
   bool seen_effect = false;
+  
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) return false;
-    if ((sv_op_flags[op] & SV_OPF_JIT_INLINEABLE) == 0) return false;
+
+    uint16_t flags = sv_op_flags[op];
+    if ((flags & SV_OPF_JIT_INLINEABLE) == 0) return false;
+    if ((flags & SV_OPF_JIT_INLINE_ARGC) != 0 && sv_get_u16(ip + 1) > SV_JIT_ARGS_BUF_CAP) return false;
+
     // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
     // the interpreter until JIT routes a real per-call activation/object
     // with matching lifetime and semantics.
     if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) return false;
 
     if (seen_effect) {
-      if (op == OP_JMP) {
-        if (sv_get_i32(ip + 1) < 0) return false;
-      } else if (!jit_op_inline_pure_tail(op) && !jit_op_inline_side_effect(op)) {
-        return false;
-      }
+      if (op == OP_JMP) { if (sv_get_i32(ip + 1) < 0) return false; } 
+      else if (!jit_op_inline_pure_tail(op) && !jit_op_inline_side_effect(op)) return false;
     }
+    
     if (jit_op_inline_side_effect(op)) seen_effect = true;
     ip += sz;
   }
+  
   return true;
 }
 
@@ -2676,21 +2680,6 @@ static MIR_label_t inl_label_lookup(inl_label_map_t *lm, int bc_off, int *out_sp
   return NULL;
 }
 
-static bool jit_inline_body_feasible(sv_func_t *callee) {
-  uint8_t *ip  = callee->code;
-  uint8_t *end = callee->code + callee->code_len;
-  while (ip < end) {
-    sv_op_t op = (sv_op_t)*ip;
-    int sz = sv_op_size[op];
-    if (sz == 0) return false;
-    switch (op) {
-      default: break;
-    }
-    ip += sz;
-  }
-  return true;
-}
-
 static bool jit_starts_numeric_const(sv_func_t *func, uint8_t *ip, uint8_t *end, int *out_size) {
   if (!func || !ip || ip >= end) return false;
   sv_op_t op = (sv_op_t)*ip;
@@ -2733,7 +2722,7 @@ static bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, u
   return false;
 }
 
-static bool jit_emit_inline_body(
+static void jit_emit_inline_body(
   MIR_context_t ctx, MIR_item_t jit_func, ant_t *js,
   sv_func_t *callee,
   MIR_reg_t *arg_regs, int caller_argc,
@@ -2869,7 +2858,8 @@ static bool jit_emit_inline_body(
       }
       case OP_CONST: {
         uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)callee->const_count) return false;
+        ANT_ASSERT(idx < (uint32_t)callee->const_count,
+                   "invalid inline constant index");
         ant_value_t cv = callee->constants[idx];
         MIR_reg_t dst = inl_vs[isp++];
         if (jit_const_is_heap(cv))
@@ -2880,7 +2870,8 @@ static bool jit_emit_inline_body(
       }
       case OP_CONST8: {
         uint8_t idx = sv_get_u8(ip + 1);
-        if (idx >= (uint8_t)callee->const_count) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)callee->const_count,
+                   "invalid inline constant index");
         ant_value_t cv = callee->constants[idx];
         MIR_reg_t dst = inl_vs[isp++];
         if (jit_const_is_heap(cv))
@@ -2904,7 +2895,8 @@ static bool jit_emit_inline_body(
 
       case OP_GET_LOCAL: {
         uint16_t idx = sv_get_u16(ip + 1);
-        if (idx >= (uint16_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_vs[isp++]),
@@ -2913,7 +2905,8 @@ static bool jit_emit_inline_body(
       }
       case OP_GET_LOCAL8: {
         uint8_t idx = sv_get_u8(ip + 1);
-        if (idx >= (uint8_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_vs[isp++]),
@@ -2923,7 +2916,8 @@ static bool jit_emit_inline_body(
       case OP_PUT_LOCAL: {
         INL_FLUSH_SLOT(isp - 1);
         uint16_t idx = sv_get_u16(ip + 1);
-        if (idx >= (uint16_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_locals[idx]),
@@ -2933,7 +2927,8 @@ static bool jit_emit_inline_body(
       case OP_PUT_LOCAL8: {
         INL_FLUSH_SLOT(isp - 1);
         uint8_t idx = sv_get_u8(ip + 1);
-        if (idx >= (uint8_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_locals[idx]),
@@ -2943,7 +2938,8 @@ static bool jit_emit_inline_body(
       case OP_SET_LOCAL: {
         INL_FLUSH_SLOT(isp - 1);
         uint16_t idx = sv_get_u16(ip + 1);
-        if (idx >= (uint16_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_locals[idx]),
@@ -2953,7 +2949,8 @@ static bool jit_emit_inline_body(
       case OP_SET_LOCAL8: {
         INL_FLUSH_SLOT(isp - 1);
         uint8_t idx = sv_get_u8(ip + 1);
-        if (idx >= (uint8_t)inl_n_locals) return false;
+        ANT_ASSERT((uint32_t)idx < (uint32_t)inl_n_locals,
+                   "invalid inline local index");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, inl_locals[idx]),
@@ -2962,7 +2959,8 @@ static bool jit_emit_inline_body(
       }
 
       case OP_GET_UPVAL: {
-        if (!r_inl_closure) return false;
+        ANT_ASSERT(r_inl_closure != 0,
+                   "inline upvalue access requires a closure");
         uint16_t idx = sv_get_u16(ip + 1);
         int un = inl_upval_n++;
         char rn_uvs[32], rn_uv[32], rn_loc[32];
@@ -3013,7 +3011,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_DUP2: {
-        if (isp < 2) return false;
+        ANT_ASSERT(isp >= 2, "invalid inline stack depth");
         INL_FLUSH_SLOT(isp - 1);
         INL_FLUSH_SLOT(isp - 2);
         MIR_reg_t ra = inl_vs[isp - 2];
@@ -3031,7 +3029,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_NIP: {
-        if (isp < 2) return false;
+        ANT_ASSERT(isp >= 2, "invalid inline stack depth");
         INL_FLUSH_SLOT(isp - 1);
         inl_num[isp - 2] = 0;
         MIR_append_insn(ctx, jit_func,
@@ -3043,7 +3041,7 @@ static bool jit_emit_inline_body(
       }
 
       case OP_INSERT2: {
-        if (isp < 2) return false;
+        ANT_ASSERT(isp >= 2, "invalid inline stack depth");
         INL_FLUSH_ALL();
         char tn[32]; snprintf(tn, sizeof(tn), "inl%d_ins2t", id);
         MIR_reg_t r_t = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, tn);
@@ -3069,7 +3067,7 @@ static bool jit_emit_inline_body(
         break;
       }
       case OP_INSERT3: {
-        if (isp < 3) return false;
+        ANT_ASSERT(isp >= 3, "invalid inline stack depth");
         INL_FLUSH_ALL();
         char tn[32]; snprintf(tn, sizeof(tn), "inl%d_ins3t", id);
         MIR_reg_t r_t = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, tn);
@@ -3452,7 +3450,7 @@ static bool jit_emit_inline_body(
         INL_FLUSH_ALL();
         int target = inl_bc_off + sz + sv_get_i32(ip + 1);
         MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
-        if (!lbl) return false;
+        ANT_ASSERT(lbl != NULL, "inline label map exhausted");
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl)));
         break;
@@ -3463,7 +3461,7 @@ static bool jit_emit_inline_body(
         MIR_reg_t cond = inl_vs[isp - 1];
         int target = inl_bc_off + sz + sv_get_i32(ip + 1);
         MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
-        if (!lbl) return false;
+        ANT_ASSERT(lbl != NULL, "inline label map exhausted");
         MIR_label_t done = MIR_new_label(ctx);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_BEQ,
@@ -3491,7 +3489,7 @@ static bool jit_emit_inline_body(
         int target = inl_bc_off + sz + (short_op ? (int8_t)sv_get_i8(ip + 1)
                                                   : sv_get_i32(ip + 1));
         MIR_label_t lbl = inl_label_for_offset(ctx, &inl_lm, target, isp);
-        if (!lbl) return false;
+        ANT_ASSERT(lbl != NULL, "inline label map exhausted");
 
         uint64_t cmp_bool = is_false_branch ? js_false : js_true;
         MIR_label_t lbl_not_bool = MIR_new_label(ctx);
@@ -3536,7 +3534,8 @@ static bool jit_emit_inline_body(
       case OP_GET_FIELD: {
         INL_FLUSH_SLOT(isp - 1);
         uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)callee->atom_count) return false;
+        ANT_ASSERT(idx < (uint32_t)callee->atom_count,
+                   "invalid inline atom index");
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t obj = inl_vs[--isp];
         MIR_reg_t dst = inl_vs[isp++];
@@ -3573,7 +3572,8 @@ static bool jit_emit_inline_body(
       case OP_GET_FIELD_OPT: {
         INL_FLUSH_SLOT(isp - 1);
         uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)callee->atom_count) return false;
+        ANT_ASSERT(idx < (uint32_t)callee->atom_count,
+                   "invalid inline atom index");
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t obj = inl_vs[--isp];
         MIR_reg_t dst = inl_vs[isp++];
@@ -3617,7 +3617,8 @@ static bool jit_emit_inline_body(
       case OP_GET_FIELD2: {
         INL_FLUSH_SLOT(isp - 1);
         uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)callee->atom_count) return false;
+        ANT_ASSERT(idx < (uint32_t)callee->atom_count,
+                   "invalid inline atom index");
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t obj = inl_vs[isp - 1];
         MIR_reg_t dst = inl_vs[isp++];
@@ -3642,7 +3643,8 @@ static bool jit_emit_inline_body(
       }
       case OP_GET_GLOBAL: {
         uint32_t idx = sv_get_u32(ip + 1);
-        if (idx >= (uint32_t)callee->atom_count) return false;
+        ANT_ASSERT(idx < (uint32_t)callee->atom_count,
+                   "invalid inline atom index");
         sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t dst = inl_vs[isp++];
         MIR_label_t gg_ok = MIR_new_label(ctx);
@@ -3679,7 +3681,8 @@ static bool jit_emit_inline_body(
         INL_FLUSH_SLOT(isp - 1);
         INL_FLUSH_SLOT(isp - 2);
         uint32_t pf_idx = sv_get_u32(ip + 1);
-        if (pf_idx >= (uint32_t)callee->atom_count) return false;
+        ANT_ASSERT(pf_idx < (uint32_t)callee->atom_count,
+                   "invalid inline atom index");
         sv_atom_t *pf_atom = &callee->atoms[pf_idx];
         uint16_t pf_ic_idx = sv_get_u16(ip + 5);
         sv_ic_entry_t *pf_ic = NULL;
@@ -3791,8 +3794,10 @@ static bool jit_emit_inline_body(
         bool nc_method = (op == OP_CALL_METHOD || op == OP_TAIL_CALL_METHOD);
         bool nc_tail = (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD);
         uint16_t nc_argc = sv_get_u16(ip + 1);
-        if (nc_argc > SV_JIT_ARGS_BUF_CAP) return false;
-        if (isp < (int)nc_argc + (nc_method ? 2 : 1)) return false;
+        ANT_ASSERT(nc_argc <= SV_JIT_ARGS_BUF_CAP,
+                   "nested inline call escaped feasibility");
+        ANT_ASSERT(isp >= (int)nc_argc + (nc_method ? 2 : 1),
+                   "invalid inline call stack depth");
         INL_FLUSH_ALL();
 
         for (int i = (int)nc_argc - 1; i >= 0; i--)
@@ -4000,11 +4005,10 @@ static bool jit_emit_inline_body(
         break;
 
       default:
-        return false;
+        ANT_ASSERT(false, "inlineable opcode has no emitter");
     }
     ip += sz;
   }
-  return true;
 }
 
 static void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm,  MIR_context_t ctx) {
@@ -7385,8 +7389,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           if (!inline_callee)
             inline_callee = sv_tfb_get_call_target(func, bc_off);
           bool speculative = (inline_callee && !vs.known_func[vs.sp - call_argc - 1]);
-          if (inline_callee && jit_inlineable(inline_callee)
-              && jit_inline_body_feasible(inline_callee)) {
+          if (inline_callee && jit_inlineable(inline_callee)) {
             int cn = call_n++;
             int inl_arg_base = vs.sp - (int)call_argc;
             if (jit_try_depth > 0) {
@@ -7518,7 +7521,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             else
               mir_load_imm(ctx, jit_func, r_inl_this, mkval(T_UNDEF, 0));
 
-            bool inlined = jit_emit_inline_body(
+            jit_emit_inline_body(
               ctx, jit_func, js, inline_callee,
               inl_arg_regs, (int)call_argc,
               inl_arg_num, inl_arg_d,
@@ -7532,46 +7535,40 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               special_obj_proto, imp_special_obj,
               &inline_ext);
 
-            if (inlined) {
-              MIR_append_insn(ctx, jit_func, inl_slow);
-              for (int i = 0; i < (int)call_argc; i++)
-                if (inl_arg_num[i])
-                  mir_d_to_i64(ctx, jit_func, inl_arg_regs[i],
-                               inl_arg_d[i], r_d_slot);
-              for (int i = 0; i < (int)call_argc; i++)
-                MIR_append_insn(ctx, jit_func,
-                  MIR_new_insn(ctx, MIR_MOV,
-                    MIR_new_mem_op(ctx, MIR_JSVAL,
-                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
-                      r_args_buf, 0, 1),
-                    MIR_new_reg_op(ctx, inl_arg_regs[i])));
-
-              char rn_sl_this[32];
-              snprintf(rn_sl_this, sizeof(rn_sl_this), "inl%d_slow_t", cn);
-              MIR_reg_t r_slow_this = MIR_new_func_reg(ctx, jit_func->u.func,
-                                                         MIR_JSVAL, rn_sl_this);
-              mir_load_imm(ctx, jit_func, r_slow_this, mkval(T_UNDEF, 0));
-
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_call_insn(ctx, 9,
-                  MIR_new_ref_op(ctx, call_proto),
-                  MIR_new_ref_op(ctx, imp_call),
-                  MIR_new_reg_op(ctx, r_call_res),
-                  MIR_new_reg_op(ctx, r_vm),
-                  MIR_new_reg_op(ctx, r_js),
-                  MIR_new_reg_op(ctx, r_inl_callee),
-                  MIR_new_reg_op(ctx, r_slow_this),
-                  MIR_new_reg_op(ctx, r_args_buf),
-                  MIR_new_int_op(ctx, (int64_t)call_argc)));
-
-              MIR_append_insn(ctx, jit_func, inl_join);
-              JIT_EMIT_THROW_IF_ERROR(r_call_res);
-              break;
-            }
-
             MIR_append_insn(ctx, jit_func, inl_slow);
+            for (int i = 0; i < (int)call_argc; i++)
+              if (inl_arg_num[i])
+                mir_d_to_i64(ctx, jit_func, inl_arg_regs[i],
+                             inl_arg_d[i], r_d_slot);
+            for (int i = 0; i < (int)call_argc; i++)
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_mem_op(ctx, MIR_JSVAL,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                    r_args_buf, 0, 1),
+                  MIR_new_reg_op(ctx, inl_arg_regs[i])));
+
+            char rn_sl_this[32];
+            snprintf(rn_sl_this, sizeof(rn_sl_this), "inl%d_slow_t", cn);
+            MIR_reg_t r_slow_this = MIR_new_func_reg(ctx, jit_func->u.func,
+                                                       MIR_JSVAL, rn_sl_this);
+            mir_load_imm(ctx, jit_func, r_slow_this, mkval(T_UNDEF, 0));
+
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_call_insn(ctx, 9,
+                MIR_new_ref_op(ctx, call_proto),
+                MIR_new_ref_op(ctx, imp_call),
+                MIR_new_reg_op(ctx, r_call_res),
+                MIR_new_reg_op(ctx, r_vm),
+                MIR_new_reg_op(ctx, r_js),
+                MIR_new_reg_op(ctx, r_inl_callee),
+                MIR_new_reg_op(ctx, r_slow_this),
+                MIR_new_reg_op(ctx, r_args_buf),
+                MIR_new_int_op(ctx, (int64_t)call_argc)));
+
             MIR_append_insn(ctx, jit_func, inl_join);
-            vs.sp = vs.sp - 1 + call_argc + 1;
+            JIT_EMIT_THROW_IF_ERROR(r_call_res);
+            break;
           }
         }
 
@@ -10655,8 +10652,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         
         if (!is_tail) {
           sv_func_t *inline_callee = sv_tfb_get_call_target(func, bc_off);
-          if (inline_callee && jit_inlineable(inline_callee)
-              && jit_inline_body_feasible(inline_callee)) {
+          if (inline_callee && jit_inlineable(inline_callee)) {
             int mcn = call_n++;
             cm_devirt_slow = MIR_new_label(ctx);
             cm_devirt_join = MIR_new_label(ctx);
@@ -10753,7 +10749,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               r_inl_recv, r_inl_flags, r_inl_bound
             );
 
-            (void)jit_emit_inline_body(
+            jit_emit_inline_body(
               ctx, jit_func, js, inline_callee,
               inl_arg_regs, (int)call_argc,
               NULL, NULL,

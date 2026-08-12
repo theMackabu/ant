@@ -200,4 +200,98 @@ try {
 } catch (_) {}
 assertSame(lengthTrapCount, 1, "inlined length proxy trap runs once");
 
+let largeDirectCalls = 0;
+function largeDirectTarget(
+  a0, a1, a2, a3, a4, a5, a6, a7, a8,
+  a9, a10, a11, a12, a13, a14, a15, a16
+) {
+  largeDirectCalls++;
+  return a0 + a16;
+}
+
+function inlineLargeCallBody(box, fn) {
+  box.writes = box.writes + 1;
+  fn(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2);
+  return 3;
+}
+function inlineLargeCallCaller(box) {
+  return inlineLargeCallBody(box, largeDirectTarget) + 0;
+}
+
+const largeCallBox = {writes: 0};
+for (let i = 0; i < 300; i++) {
+  const writesBefore = largeCallBox.writes;
+  const callsBefore = largeDirectCalls;
+  assertSame(inlineLargeCallCaller(largeCallBox), 3, "large nested CALL result");
+  assertSame(largeCallBox.writes, writesBefore + 1, "large nested CALL store runs once");
+  assertSame(largeDirectCalls, callsBefore + 1, "large nested CALL runs once");
+}
+
+function inlineLargeTailCallBody(box, fn) {
+  box.writes = box.writes + 1;
+  return fn(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2);
+}
+function inlineLargeTailCallCaller(box) {
+  return inlineLargeTailCallBody(box, largeDirectTarget) + 0;
+}
+
+const largeTailCallBox = {writes: 0};
+for (let i = 0; i < 300; i++) {
+  const writesBefore = largeTailCallBox.writes;
+  const callsBefore = largeDirectCalls;
+  assertSame(inlineLargeTailCallCaller(largeTailCallBox), 3, "large nested TAIL_CALL result");
+  assertSame(largeTailCallBox.writes, writesBefore + 1, "large nested TAIL_CALL store runs once");
+  assertSame(largeDirectCalls, callsBefore + 1, "large nested TAIL_CALL runs once");
+}
+
+let largeMethodCalls = 0;
+const largeMethodTarget = {
+  call(
+    a0, a1, a2, a3, a4, a5, a6, a7, a8,
+    a9, a10, a11, a12, a13, a14, a15, a16
+  ) {
+    largeMethodCalls++;
+    return a0 + a16;
+  }
+};
+
+function inlineLargeMethodBody(box, target) {
+  target.call(
+    box.writes = box.writes + 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+  );
+  return 3;
+}
+function inlineLargeMethodCaller(box) {
+  return inlineLargeMethodBody(box, largeMethodTarget) + 0;
+}
+
+const largeMethodBox = {writes: 0};
+for (let i = 0; i < 300; i++) {
+  largeMethodBox.writes = 0;
+  const callsBefore = largeMethodCalls;
+  assertSame(inlineLargeMethodCaller(largeMethodBox), 3, "large nested CALL_METHOD result");
+  assertSame(largeMethodBox.writes, 1, "large nested CALL_METHOD store runs once");
+  assertSame(largeMethodCalls, callsBefore + 1, "large nested CALL_METHOD runs once");
+}
+
+function inlineLargeTailMethodBody(box, target) {
+  return target.call(
+    box.writes = box.writes + 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+  );
+}
+function inlineLargeTailMethodCaller(box) {
+  return inlineLargeTailMethodBody(box, largeMethodTarget) + 0;
+}
+
+const largeTailMethodBox = {writes: 0};
+for (let i = 0; i < 300; i++) {
+  largeTailMethodBox.writes = 0;
+  const callsBefore = largeMethodCalls;
+  assertSame(inlineLargeTailMethodCaller(largeTailMethodBox), 3, "large nested TAIL_CALL_METHOD result");
+  assertSame(largeTailMethodBox.writes, 1, "large nested TAIL_CALL_METHOD store runs once");
+  assertSame(largeMethodCalls, callsBefore + 1, "large nested TAIL_CALL_METHOD runs once");
+}
+
 console.log("PASS");
