@@ -269,8 +269,7 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
 
 static inline ant_value_t sv_op_check_ctor(sv_vm_t *vm, ant_t *js) {
   if (vtype(sv_vm_get_new_target(vm, js)) == T_UNDEF)
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Class constructor cannot be invoked without 'new'");
+    return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
   return tov(0);
 }
 

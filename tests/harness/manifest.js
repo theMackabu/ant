@@ -14,6 +14,9 @@ export function targets() {
   const REGRESSION_TESTS = [
     'test_promise.cjs',
     'test_jit_derived_ctor.cjs',
+    'test_class_expression_name_scope.cjs',
+    'test_class_constructor_call.cjs',
+    'test_class_export_scope.mjs',
     'test_jit_string_builder_snapshot.cjs',
     'test_template_self_append.cjs',
     'test_global_accessor_read.cjs',

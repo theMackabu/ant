@@ -516,6 +516,9 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 #define SV_CALL_HAS_EVAL_ENV     (1u << 5)
 #define SV_CALL_HAS_BOUND_THIS   (1u << 6)
 
+static constexpr char SV_CLASS_CTOR_CALL_ERROR[] =
+  "Class constructor cannot be invoked without 'new'";
+
 #define SV_CLOSURE_INLINE_UPVALS 4
 
 typedef struct sv_closure {
@@ -1180,11 +1183,9 @@ static inline ant_value_t sv_call_default_ctor(
   sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   if (vtype(js->new_target) == T_UNDEF) {
-  sv_call_cleanup(js, ctx);
-  return js_mkerr_typed(
-    js, JS_ERR_TYPE, 
-    "Class constructor cannot be invoked without 'new'"
-  );}
+    sv_call_cleanup(js, ctx);
+    return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
+  }
 
   ant_value_t super_ctor = closure->super_val;
   uint8_t st = vtype(super_ctor);

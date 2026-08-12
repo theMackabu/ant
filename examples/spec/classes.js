@@ -325,4 +325,57 @@ test('getter', temp.fahrenheit, 32);
 temp.fahrenheit = 212;
 test('setter', Math.round(temp.fahrenheit), 212);
 
+function outerBinding(a, b) {
+  return 'fn:' + a + b;
+}
+
+const Boxed = class outerBinding {
+  constructor(value) {
+    this.value = value;
+  }
+  clone() {
+    return new outerBinding(this.value);
+  }
+};
+
+test('class expression name does not leak', typeof outerBinding === 'function' && outerBinding !== Boxed, true);
+test('outer binding still callable', outerBinding(1, 2), 'fn:12');
+test('class expression inner name resolves', new Boxed(5).clone() instanceof Boxed, true);
+
+let shadowed = 'untouched';
+const Shadow = class shadowed {};
+test('class expression name leaves let binding alone', shadowed, 'untouched');
+test('class expression still constructs', typeof Shadow, 'function');
+
+function classCallError(call) {
+  try {
+    call();
+    return 'no error';
+  } catch (error) {
+    return error.name + ': ' + error.message;
+  }
+}
+
+class ExplicitClassCall {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
+test(
+  'explicit class constructor requires new',
+  classCallError(() => ExplicitClassCall(1)),
+  "TypeError: Class constructor cannot be invoked without 'new'"
+);
+test('explicit class constructor still constructs', new ExplicitClassCall(2).value, 2);
+
+class FieldClassCall {
+  value = 3;
+}
+test(
+  'synthesized field constructor requires new',
+  classCallError(() => FieldClassCall()),
+  "TypeError: Class constructor cannot be invoked without 'new'"
+);
+
 summary();

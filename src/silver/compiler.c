@@ -2062,7 +2062,10 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
         mark_import_binding(c, idx, spec);
       }
-    } else if (decl_node->type == N_CLASS && decl_node->str) {
+    } else if (
+      decl_node->type == N_CLASS && decl_node->str &&
+      (decl_node->flags & FN_CLASS_DECL)
+    ) {
       int lb = c->local_count;
       ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
       if (c->local_count > lb) {
@@ -6132,7 +6135,9 @@ static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_loc
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
-  bool class_repl_top = is_repl_top_level(c);
+  bool binds_outer_name = node->str &&
+    (node->flags & FN_CLASS_DECL);
+  bool class_repl_top = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
   bool has_static_name = false;
@@ -6141,7 +6146,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int method_emit_count = 0;
   int static_init_count = 0;
 
-  if (node->str) outer_name_local = resolve_local(c, node->str, node->len);
+  if (binds_outer_name)
+    outer_name_local = resolve_local(c, node->str, node->len);
   if (node->left) compile_expr(c, node->left);
   else emit_op(c, OP_UNDEF);
 
@@ -6256,6 +6262,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (ctor_method && ctor_method->right) {
+    ctor_method->right->flags |= FN_CLASS_CTOR;
     if (node->left) ctor_method->right->flags |= FN_DERIVED_CTOR;
     c->field_inits = field_inits;
     c->field_init_count = field_count;
@@ -6269,6 +6276,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     sv_compiler_t comp;
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
+
+    emit_op(&comp, OP_CHECK_CTOR);
 
     if (node->left) {
       emit_op(&comp, OP_THIS);
@@ -6409,7 +6418,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(static_init_items);
   emit_get_local(c, ctor_local);
 
-  if (class_repl_top && node->str) {
+  if (class_repl_top) {
     emit_op(c, OP_DUP);
     emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
   } else if (outer_name_local >= 0) {
@@ -6565,6 +6574,8 @@ sv_func_t *compile_function_body(
 
   comp.param_locals = comp.local_count;
   bool repl_top = is_repl_top_level(&comp);
+
+  if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
   
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {

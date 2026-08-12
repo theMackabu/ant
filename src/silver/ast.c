@@ -1853,6 +1853,7 @@ static sv_ast_t *parse_export_stmt(P) {
       CONSUME();
       decl->left = parse_class(p);
       decl->left->src_off = class_off;
+      decl->left->flags |= FN_CLASS_DECL;
       if (NEXT() == TOK_SEMICOLON) CONSUME();
       return decl;
     }
@@ -1889,6 +1890,7 @@ static sv_ast_t *parse_export_stmt(P) {
     CONSUME();
     decl->left = parse_class(p);
     decl->left->src_off = class_off;
+    decl->left->flags |= FN_CLASS_DECL;
     if (!decl->left->str || decl->left->len == 0)
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "exported class declarations require a name");
     return decl;
@@ -2319,6 +2321,7 @@ static sv_ast_t *parse_stmt(P) {
     CONSUME();
     sv_ast_t *cls = parse_class(p);
     cls->src_off = class_off;
+    cls->flags |= FN_CLASS_DECL;
     return cls;
   }
 

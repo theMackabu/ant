@@ -7894,6 +7894,29 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
+      case OP_CHECK_CTOR: {
+        MIR_label_t has_new_target = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, has_new_target),
+            MIR_new_reg_op(ctx, r_new_target),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 8,
+            MIR_new_ref_op(ctx, throw_error_proto),
+            MIR_new_ref_op(ctx, imp_throw_error),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_uint_op(ctx,
+              (uint64_t)(uintptr_t)SV_CLASS_CTOR_CALL_ERROR),
+            MIR_new_uint_op(ctx, sizeof(SV_CLASS_CTOR_CALL_ERROR) - 1),
+            MIR_new_int_op(ctx, JS_ERR_TYPE)));
+        JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, r_err_tmp));
+        MIR_append_insn(ctx, jit_func, has_new_target);
+        break;
+      }
+
       case OP_SPECIAL_OBJ: {
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
