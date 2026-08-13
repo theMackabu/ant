@@ -393,6 +393,152 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   return cursor.utf16_pos;
 }
 
+bool utf8_validate_bytes(const char *str, size_t len) {
+  const unsigned char *s = (const unsigned char *)str;
+  const unsigned char *end = s + len;
+
+  while (s < end) {
+    unsigned char c = *s;
+    if (c < 0x80) {
+      s++;
+      continue;
+    }
+
+    size_t cont;
+    unsigned char lo = 0x80;
+    unsigned char hi = 0xbf;
+    if (c >= 0xc2 && c <= 0xdf) cont = 1;
+    else if (c == 0xe0) { cont = 2; lo = 0xa0; }
+    else if (c >= 0xe1 && c <= 0xec) cont = 2;
+    else if (c == 0xed) { cont = 2; hi = 0x9f; }
+    else if (c == 0xee || c == 0xef) cont = 2;
+    else if (c == 0xf0) { cont = 3; lo = 0x90; }
+    else if (c >= 0xf1 && c <= 0xf3) cont = 3;
+    else if (c == 0xf4) { cont = 3; hi = 0x8f; }
+    else return false;
+
+    if ((size_t)(end - s) <= cont) return false;
+    if (s[1] < lo || s[1] > hi) return false;
+    for (size_t i = 2; i <= cont; i++) {
+      if (s[i] < 0x80 || s[i] > 0xbf) return false;
+    }
+    s += cont + 1;
+  }
+  return true;
+}
+
+static bool utf8_wtf8_surrogate_at(
+  const uint8_t *str, size_t len, size_t pos, uint16_t *out
+) {
+  if (
+    pos + 2 >= len || str[pos] != 0xed ||
+    (str[pos + 1] & 0xe0) != 0xa0 ||
+    (str[pos + 2] & 0xc0) != 0x80
+  ) return false;
+
+  *out = (uint16_t)(
+    ((uint16_t)(str[pos] & 0x0f) << 12) |
+    ((uint16_t)(str[pos + 1] & 0x3f) << 6) |
+    (uint16_t)(str[pos + 2] & 0x3f)
+  );
+  return *out >= 0xd800 && *out <= 0xdfff;
+}
+
+static size_t utf8_export_wtf8(
+  const char *str, size_t str_len,
+  uint8_t *dst, size_t dst_len,
+  size_t *out_read_units
+) {
+  const uint8_t *src = (const uint8_t *)str;
+  size_t pos = 0;
+  size_t written = 0;
+  size_t read_units = 0;
+
+  while (pos < str_len) {
+    uint8_t encoded[4];
+    const uint8_t *piece = src + pos;
+    size_t consumed = 1;
+    size_t encoded_len = 3;
+    size_t units = 1;
+    uint16_t first;
+
+    if (utf8_wtf8_surrogate_at(src, str_len, pos, &first)) {
+      uint16_t second;
+      if (
+        first <= 0xdbff &&
+        utf8_wtf8_surrogate_at(src, str_len, pos + 3, &second) &&
+        second >= 0xdc00
+      ) {
+        uint32_t cp = UINT32_C(0x10000)
+          + ((uint32_t)(first - 0xd800) << 10)
+          + (uint32_t)(second - 0xdc00);
+        encoded_len = (size_t)utf8_encode(cp, (char *)encoded);
+        piece = encoded;
+        consumed = 6;
+        units = 2;
+      } else {
+        memcpy(encoded, "\xef\xbf\xbd", 3);
+        piece = encoded;
+        consumed = 3;
+      }
+    } else {
+      utf8proc_int32_t cp;
+      utf8proc_ssize_t n = utf8proc_iterate(
+        (const utf8proc_uint8_t *)(src + pos),
+        (utf8proc_ssize_t)(str_len - pos),
+        &cp
+      );
+      if (n > 0) {
+        consumed = (size_t)n;
+        encoded_len = consumed;
+        units = cp >= 0x10000 ? 2 : 1;
+      } else {
+        memcpy(encoded, "\xef\xbf\xbd", 3);
+        piece = encoded;
+      }
+    }
+
+    if (encoded_len > dst_len - written) break;
+    if (dst) memcpy(dst + written, piece, encoded_len);
+    written += encoded_len;
+    read_units += units;
+    pos += consumed;
+  }
+
+  if (out_read_units) *out_read_units = read_units;
+  return written;
+}
+
+size_t utf8_export_length(const char *str, size_t str_len) {
+  if (str_len == 0) return 0;
+  if (str_is_valid_utf8(str)) return str_len;
+  return utf8_export_wtf8(str, str_len, NULL, SIZE_MAX, NULL);
+}
+
+size_t utf8_export_into(
+  const char *str, size_t str_len,
+  uint8_t *dst, size_t dst_len,
+  size_t *out_read_units
+) {
+  if (str_len == 0) {
+    if (out_read_units) *out_read_units = 0;
+    return 0;
+  }
+  if (!str_is_valid_utf8(str)) {
+    return utf8_export_wtf8(
+      str, str_len, dst, dst_len, out_read_units
+    );
+  }
+
+  size_t len = str_len < dst_len ? str_len : dst_len;
+  if (len < str_len) {
+    while (len > 0 && ((uint8_t)str[len] & 0xc0) == 0x80) len--;
+  }
+  if (len > 0 && dst) memcpy(dst, str, len);
+  if (out_read_units) *out_read_units = utf16_strlen(str, len);
+  return len;
+}
+
 int utf16_index_to_byte_offset(
   const char *str,
   size_t byte_len,

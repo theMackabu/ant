@@ -2543,9 +2543,12 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
     } else {
       ArrayBufferData *buffer = create_array_buffer_data(len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-      
-      memcpy(buffer->data, str, len);
-      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
+
+      size_t written = len;
+      if (encoding == ENC_UTF8)
+        written = utf8_export_into(str, len, buffer->data, len, NULL);
+      else memcpy(buffer->data, str, len);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, written, "Buffer");
     }
   }
 
@@ -3184,15 +3187,23 @@ static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
   
   size_t str_len;
   char *str = js_getstr(js, args[0], &str_len);
+  
   size_t offset = 0;
   size_t length = ta_data->byte_length;
+  BufferEncoding encoding = ENC_UTF8;
   
-  if (nargs > 1 && vtype(args[1]) == T_NUM) {
-    offset = (size_t)js_getnum(args[1]);
-  }
-  
-  if (nargs > 2 && vtype(args[2]) == T_NUM) {
-    length = (size_t)js_getnum(args[2]);
+  for (int i = 1; i < nargs && i <= 3; i++) {
+    if (vtype(args[i]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[i], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+      break;
+    }
+    if (vtype(args[i]) == T_NUM) {
+      if (i == 1) offset = (size_t)js_getnum(args[i]);
+      else if (i == 2) length = (size_t)js_getnum(args[i]);
+    }
   }
   
   if (offset >= ta_data->byte_length) {
@@ -3203,7 +3214,10 @@ static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
   size_t to_write = (str_len < length) ? str_len : length;
   to_write = (to_write < available) ? to_write : available;
   
-  memcpy(ta_data->buffer->data + ta_data->byte_offset + offset, str, to_write);
+  uint8_t *dst = ta_data->buffer->data + ta_data->byte_offset + offset;
+  if (encoding == ENC_UTF8)
+    to_write = utf8_export_into(str, str_len, dst, to_write, NULL);
+  else memcpy(dst, str, to_write);
   return js_mknum((double)to_write);
 }
 
@@ -3471,7 +3485,17 @@ static ant_value_t js_buffer_byteLength(ant_t *js, ant_value_t *args, int nargs)
   
   if (vtype(arg) == T_STR) {
     size_t len;
-    js_getstr(js, arg, &len);
+    char *str = js_getstr(js, arg, &len);
+    BufferEncoding encoding = ENC_UTF8;
+    
+    if (nargs > 1 && vtype(args[1]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[1], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+    }
+    
+    if (encoding == ENC_UTF8) len = utf8_export_length(str, len);
     return js_mknum((double)len);
   }
   
