@@ -110,11 +110,24 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
   fmt_secs() {
     awk "BEGIN{printf \"%.1fs\", $1/1000}"
   }
+  check_new_profraws() {
+    local f
+    for f in "$RAW_DIR"/*.profraw; do
+      [ -e "$f" ] || continue
+      grep -qxF "$f" "$RAW_DIR/.checked" 2>/dev/null && continue
+      echo "$f" >> "$RAW_DIR/.checked"
+      if ! "$LLVM_PROFDATA" show "$f" >/dev/null 2>&1; then
+        echo "      [!] corrupt profile from $1: $(basename "$f") ($(wc -c < "$f" | tr -d ' ') bytes)"
+        mkdir -p /tmp/ant-pgo-corrupt && cp "$f" /tmp/ant-pgo-corrupt/ 2>/dev/null || true
+      fi
+    done
+  }
 
   if [ -f "$ROOT/examples/spec/run.js" ]; then
     start=$(now_ms)
     "$BUILD_DIR/ant" "$ROOT/examples/spec/run.js" --all >/dev/null 2>&1 || true
     echo "    - spec suite ($(fmt_secs $(( $(now_ms) - start ))))"
+    check_new_profraws "spec suite"
   fi
 
   echo "    - bench files in tests/"
@@ -130,6 +143,7 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
       note="  [exit $rc]"
     fi
     printf '      %-40s %8s%s\n' "$(basename "$bench")" "$elapsed" "$note"
+    check_new_profraws "$(basename "$bench")"
   done < <(find "$ROOT/tests" -maxdepth 2 -type f \( -name 'bench_*.js' -o -name 'bench_*.cjs' -o -name 'bench_*.mjs' \) ! -name 'bench_server.*' -print0)
 
   if [ -f "$PGO_DIR/train_server.js" ] && command -v curl >/dev/null 2>&1; then
@@ -168,6 +182,7 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
       fi
       wait "$SERVER_PID" 2>/dev/null || true
       printf '      %-40s %8s  [%s]%s\n' "bench_server.js" "$(fmt_secs $(( $(now_ms) - start )))" "$req_label" "$note"
+      check_new_profraws "bench_server.js"
     else
       kill -9 "$SERVER_PID" 2>/dev/null || true
       wait "$SERVER_PID" 2>/dev/null || true

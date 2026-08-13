@@ -514,6 +514,29 @@ for (;;) {
   if (!ant_sandbox_read_request_transport(sandbox)) return EXIT_FAILURE;
 }}
 
+#ifdef ANT_PGO_TRAINING
+extern int __llvm_profile_write_file(void);
+
+static void pgo_flush_on_signal(int sig) {
+  __llvm_profile_write_file();
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+static void pgo_ignore_sigterm_on_exit(void) {
+  signal(SIGTERM, SIG_IGN);
+}
+
+static void pgo_install_flush_handler(void) {
+  struct sigaction sa = {0};
+  sa.sa_handler = pgo_flush_on_signal;
+  sa.sa_flags = SA_RESTART;
+  sigfillset(&sa.sa_mask);
+  sigaction(SIGTERM, &sa, NULL);
+  atexit(pgo_ignore_sigterm_on_exit);
+}
+#endif
+
 int main(int argc, char *argv[]) {
   if (ant_sandbox_vm_helper_is_process(argv[0])) return ant_sandbox_vm_helper_process_main();
   bool internal_crash_report_mode = ant_crash_is_internal_report(argc, argv);
@@ -525,6 +548,9 @@ int main(int argc, char *argv[]) {
   ant_output_init_console();
   #else
   signal(SIGPIPE, SIG_IGN);
+  #ifdef ANT_PGO_TRAINING
+  pgo_install_flush_handler();
+  #endif
   #endif
   
   setup_console_colors();
