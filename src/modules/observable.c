@@ -453,9 +453,7 @@ static ant_value_t js_observable_from(ant_t *js, ant_value_t *args, int nargs) {
   return js_observable_constructor(js, ctor_args, 1);
 }
 
-void init_observable_module(ant_t *js) {
-  ant_value_t global = js_glob(js);
-  
+void init_observable_module(ant_t *js) {  
   ant_value_t observable_ctor = js_mkobj(js);
   ant_value_t observable_proto = js_mkobj(js);
   

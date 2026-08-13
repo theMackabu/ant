@@ -4712,8 +4712,6 @@ static ant_value_t builtin_fs_unwatchFile(ant_t *js, ant_value_t *args, int narg
 
 void init_fs_module(ant_t *js) {
   utarray_new(pending_requests, &ut_ptr_icd);
-
-  ant_value_t glob = js->global;
   
   ant_value_t stats_ctor = js_mkobj(js);
   ant_value_t stats_proto = js_mkobj(js);

@@ -98,6 +98,10 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
 
   echo "==> [2/3] Training (writes profraw to $RAW_DIR)"
   mkdir -p "$RAW_DIR"
+  # no %c (continuous mode) here: it would keep profiles of killed processes
+  # valid, but the runtime drops value profiling (indirect-call targets, memop
+  # sizes) in continuous mode, which costs the VM dispatch its call promotion.
+  # Truncated profiles from killed children are tolerated at merge instead.
   export LLVM_PROFILE_FILE="$RAW_DIR/profile-%p-%m.profraw"
 
   now_ms() {
@@ -178,7 +182,7 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
     echo "error: no .profraw files were produced; training crashed or wrote nothing" >&2
     exit 1
   fi
-  "$LLVM_PROFDATA" merge -output="$PROFDATA" "${raw[@]}"
+  "$LLVM_PROFDATA" merge --failure-mode=all -output="$PROFDATA" "${raw[@]}"
   echo "    $(ls -lh "$PROFDATA" | awk '{print $5}') of profile data"
 else
   mkdir -p "$PROFILE_DIR"

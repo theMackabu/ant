@@ -164,12 +164,28 @@ if get_option('linker_map')
   endif
 endif
 
+ant_link_depends = []
+if host_machine.system() == 'darwin'
+  ant_exports = custom_target('ant_exports',
+    input: [libant, libuv_lib],
+    output: 'ant.exports',
+    command: [python, files('meson/exports.py'), '@INPUT@'],
+    capture: true,
+  )
+  ant_link_args += [
+    '-Wl,-exported_symbols_list,' + ant_exports.full_path(),
+    '-Wl,-dead_strip',
+  ]
+  ant_link_depends += [ant_exports]
+endif
+
 ant_exe = executable(
   'ant',
   files('src/main.c') + [messages_h],
   dependencies: libant_dep,
   link_args: ant_link_args,
-  export_dynamic: true
+  link_depends: ant_link_depends,
+  export_dynamic: host_machine.system() != 'darwin'
 )
 
 if host_machine.system() == 'darwin' and get_option('codesign')

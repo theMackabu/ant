@@ -3710,8 +3710,8 @@ match_string_pattern:;
 }
 
 void init_regex_module(ant_t *js) {
-  if (!js->regex_state)
-    js->regex_state = calloc(1, sizeof(*js->regex_state));
+  if (!js->regex_state) js->regex_state = calloc(1, sizeof(*js->regex_state));
+  
   ant_regex_state_t *state = js->regex_state;
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;

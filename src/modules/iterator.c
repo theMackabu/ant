@@ -1229,10 +1229,9 @@ static ant_value_t async_iter_toArray(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 void init_iterator_module(ant_t *js) {
-  ant_value_t g = js_glob(js);
   ant_value_t iter_proto = js->sym.iterator_proto;
-
   js->builtins.wrap_iter_proto = js_mkobj(js);
+  
   js_set_proto_init(js->builtins.wrap_iter_proto, iter_proto);
   js_set(js, js->builtins.wrap_iter_proto, "next", js_mkfun(wrap_iter_next));
 

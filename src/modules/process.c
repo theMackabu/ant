@@ -1646,7 +1646,6 @@ static void process_set_string(ant_t *js, ant_value_t obj, const char *key, cons
 
 void init_process_module(ant_t *js) {
   ant_process_state_t *ps = process_state(js);
-  ant_value_t global = js_glob(js);
   ant_value_t ee_proto = eventemitter_prototype(js);
 
   if (!ps) return;

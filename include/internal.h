@@ -922,9 +922,10 @@ static inline void js_set_global_builtin(
   const char *name,
   ant_value_t value
 ) {
+  ant_value_t global = js->global;
   size_t name_len = strlen(name);
-  js_set(js, js_glob(js), name, value);
-  js_set_descriptor(js, js_glob(js), name, name_len, JS_DESC_W | JS_DESC_C);
+  js_set(js, global, name, value);
+  js_set_descriptor(js, global, name, name_len, JS_DESC_W | JS_DESC_C);
 }
 
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {

@@ -444,8 +444,6 @@ static ant_value_t abort_controller_abort(ant_t *js, ant_value_t *args, int narg
 }
 
 void init_abort_module(ant_t *js) {
-  ant_value_t global = js_glob(js);
-
   ant_value_t signal_proto = js_mkobj(js);
   js->builtins.signal_proto = signal_proto;
   g_initialized = true;

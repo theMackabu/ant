@@ -808,7 +808,6 @@ void ant_websocket_server_on_close(ant_t *js, ant_value_t socket_obj) {
 }
 
 void init_websocket_module(ant_t *js) {
-  ant_value_t global = js_glob(js);
   ant_value_t event_proto = js_get_ctor_proto(js, "Event", 5);
   ant_value_t eventtarget_proto = js_get_ctor_proto(js, "EventTarget", 11);
 

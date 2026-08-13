@@ -1251,8 +1251,6 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 void init_url_module(ant_t *js) {
-  ant_value_t glob = js->global;
-
   js->builtins.usp_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.usp_iter_proto, js->sym.iterator_proto);
   js_set(js, js->builtins.usp_iter_proto, "next", js_mkfun(usp_iter_next));

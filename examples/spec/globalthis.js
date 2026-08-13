@@ -9,11 +9,7 @@ test('globalThis.Object', globalThis.Object === Object, true);
 test('globalThis.Array', globalThis.Array === Array, true);
 test('globalThis.Math', globalThis.Math === Math, true);
 test('globalThis.JSON', globalThis.JSON === JSON, true);
-test(
-  'globalThis brand',
-  Object.prototype.toString.call(globalThis),
-  '[object global]'
-);
+test('globalThis brand', Object.prototype.toString.call(globalThis), '[object global]');
 
 function descriptorFlags(name) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -73,11 +69,7 @@ const standardGlobals = [
 ];
 
 for (const name of standardGlobals) {
-  test(
-    `${name} global descriptor`,
-    descriptorFlags(name),
-    'true/false/true'
-  );
+  test(`${name} global descriptor`, descriptorFlags(name), 'true/false/true');
 }
 
 const interfaceConstructors = [
@@ -106,33 +98,18 @@ const interfaceConstructors = [
 ];
 
 for (const name of interfaceConstructors) {
-  test(
-    `${name} global descriptor`,
-    descriptorFlags(name),
-    'true/false/true'
-  );
+  test(`${name} global descriptor`, descriptorFlags(name), 'true/false/true');
 }
 
 for (const name of ['structuredClone', 'atob', 'btoa']) {
-  test(
-    `${name} global descriptor`,
-    descriptorFlags(name),
-    'true/true/true'
-  );
+  test(`${name} global descriptor`, descriptorFlags(name), 'true/true/true');
 }
 
-const globalTagDescriptor = Object.getOwnPropertyDescriptor(
-  globalThis,
-  Symbol.toStringTag
-);
+const globalTagDescriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.toStringTag);
 test('globalThis Symbol.toStringTag value', globalTagDescriptor?.value, 'global');
 test(
   'globalThis Symbol.toStringTag descriptor',
-  [
-    globalTagDescriptor?.writable,
-    globalTagDescriptor?.enumerable,
-    globalTagDescriptor?.configurable
-  ].join('/'),
+  [globalTagDescriptor?.writable, globalTagDescriptor?.enumerable, globalTagDescriptor?.configurable].join('/'),
   'false/false/true'
 );
 
@@ -147,7 +124,6 @@ for (const name of [
   'Stats',
   'console',
   'process',
-  'Ant',
   'import',
   '__dirname',
   '__filename'

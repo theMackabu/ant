@@ -1967,9 +1967,10 @@ ant_value_t eventemitter_prototype(ant_t *js) {
 
 void init_events_module(ant_t *js) {
   ant_value_t global = js_glob(js);
+  
   js->builtins.isTrusted_getter = js_mkfun(js_event_get_isTrusted);
-
   js->builtins.event_proto = js_mkobj(js);
+  
   js_set_sym(js, js->builtins.event_proto, get_toStringTag_sym(), js_mkstr(js, "Event", 5));
   js_set(js, js->builtins.event_proto, "preventDefault",          js_mkfun(js_event_preventDefault));
   js_set(js, js->builtins.event_proto, "stopPropagation",         js_mkfun(js_event_stopPropagation));
