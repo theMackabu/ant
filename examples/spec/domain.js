@@ -18,8 +18,12 @@ outer.run(() => {
   transitions.push(domain.active === outer, process.domain === outer);
 });
 
-transitions.push(domain.active === null, process.domain === null);
-testDeep('run restores nested active domains', transitions, [true, true, true, true, true, true]);
+transitions.push(domain.active == null, process.domain == null);
+testDeep(
+  'run restores nested active domains',
+  transitions,
+  [true, true, true, true, true, true, true, true]
+);
 
 const member = {};
 outer.add(member);

@@ -102,6 +102,7 @@ enum {
   STR_UTF_UNKNOWN = 0,
   STR_UTF_VALID = 1,
   STR_UTF_INVALID = 2,
+  STR_UTF_INVALID_SAME_LENGTH = 3,
 };
 
 enum: uint64_t {
@@ -782,7 +783,7 @@ bool lookup_prop_meta(
 );
 
 size_t intern_length(const char *interned);
-size_t utf8_export_length(const char *str, size_t str_len);
+size_t utf8_export_length_slow(const char *str, size_t str_len);
 
 size_t utf8_export_into(
   const char *str, size_t str_len, uint8_t *dst, 
@@ -1000,6 +1001,16 @@ static inline bool str_is_valid_utf8(const char *str) {
   }
   
   return state == STR_UTF_VALID;
+}
+
+static inline size_t utf8_export_length(const char *str, size_t str_len) {
+  if (str_len == 0) return 0;
+  
+  uint8_t state = str_flat_utf_valid_state(str_flat_from_bytes(str));
+  if (state == STR_UTF_VALID || state == STR_UTF_INVALID_SAME_LENGTH) return str_len;  
+  if (state == STR_UTF_UNKNOWN && str_is_ascii(str)) return str_len;
+  
+  return utf8_export_length_slow(str, str_len);
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

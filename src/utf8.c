@@ -509,10 +509,16 @@ static size_t utf8_export_wtf8(
   return written;
 }
 
-size_t utf8_export_length(const char *str, size_t str_len) {
-  if (str_len == 0) return 0;
+size_t utf8_export_length_slow(const char *str, size_t str_len) {
   if (str_is_valid_utf8(str)) return str_len;
-  return utf8_export_wtf8(str, str_len, NULL, SIZE_MAX, NULL);
+
+  size_t len = utf8_export_wtf8(str, str_len, NULL, SIZE_MAX, NULL);
+  if (len == str_len) {
+    ant_flat_string_t *flat = str_flat_from_bytes(str);
+    str_flat_set_utf_valid_state(flat, STR_UTF_INVALID_SAME_LENGTH);
+  }
+  
+  return len;
 }
 
 size_t utf8_export_into(

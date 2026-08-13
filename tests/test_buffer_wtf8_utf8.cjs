@@ -76,6 +76,8 @@ assert.strictEqual(Buffer.from([0xef, 0xbf, 0xbd]).indexOf('\ud800'), -1);
    length. Exercise both initialization orders on immutable strings. */
 const lengthFirst = 'x\ud800y';
 assert.strictEqual(lengthFirst.length, 3);
+assert.strictEqual(Buffer.byteLength(lengthFirst), 5);
+assert.strictEqual(Buffer.byteLength(lengthFirst), 5);
 assert.strictEqual(Buffer.from(lengthFirst).toString('hex'), '78efbfbd79');
 assert.strictEqual(lengthFirst.length, 3);
 
@@ -88,6 +90,7 @@ assert.strictEqual(Buffer.from(validityFirst).toString('hex'), '78efbfbd79');
    they are one JavaScript surrogate pair and must export as one scalar. */
 const joinedPair = String.fromCharCode(0xd800) + String.fromCharCode(0xdc00);
 assert.strictEqual(joinedPair.length, 2);
+assert.strictEqual(Buffer.byteLength(joinedPair), 4);
 assert.strictEqual(Buffer.byteLength(joinedPair), 4);
 assert.strictEqual(Buffer.from(joinedPair).toString('hex'), 'f0908080');
 assert.strictEqual(hex(new TextEncoder().encode(joinedPair)), 'f0908080');
