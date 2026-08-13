@@ -180,8 +180,18 @@ static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_FUNC)
     return js_mkerr(js, "assert.throws: first argument must be a function");
   ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false);
+  
   if (!is_err(result))
     return js_mkerr(js, "Missing expected exception");
+
+  ant_value_t thrown = js_take_thrown(js, result);
+  if (nargs >= 2 && is_callable(args[1])) {
+    ant_value_t valid = sv_vm_call(js->vm, js, args[1], js_mkundef(), &thrown, 1, NULL, false);
+    if (is_err(valid)) return valid;
+    if (valid != js_true)
+      return assertion_error(js, "The validation function is expected to return true", js_mkundef());
+  }
+
   return js_mkundef();
 }
 

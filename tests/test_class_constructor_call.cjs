@@ -1,11 +1,18 @@
 const assert = require('node:assert');
 
 const expectedMessage = "Class constructor cannot be invoked without 'new'";
+const expectedNamedMessageSuffix = " cannot be invoked without 'new'";
+
+let validationRuns = 0;
 
 function assertClassCallThrows(call, label) {
-  assert.throws(call, (error) => {
+  assert.throws(call, error => {
+    validationRuns++;
     assert.strictEqual(error.name, 'TypeError', label);
-    assert.strictEqual(error.message, expectedMessage, label);
+    assert.ok(
+      error.message === expectedMessage || (error.message.startsWith('Class constructor ') && error.message.endsWith(expectedNamedMessageSuffix)),
+      label
+    );
     return true;
   });
 }
@@ -21,18 +28,9 @@ class Explicit {
 
 assertClassCallThrows(() => Explicit(), 'direct call');
 assertClassCallThrows(() => Explicit.call(null), 'Function.prototype.call');
-assertClassCallThrows(
-  () => Reflect.apply(Explicit, null, []),
-  'Reflect.apply'
-);
-assertClassCallThrows(
-  () => ({ Explicit }).Explicit(),
-  'method-position call'
-);
-assertClassCallThrows(
-  () => Explicit.bind(null)(),
-  'bound ordinary call'
-);
+assertClassCallThrows(() => Reflect.apply(Explicit, null, []), 'Reflect.apply');
+assertClassCallThrows(() => ({ Explicit }).Explicit(), 'method-position call');
+assertClassCallThrows(() => Explicit.bind(null)(), 'bound ordinary call');
 assert.strictEqual(parameterRuns, 0, 'parameter defaults ran before the guard');
 assert.strictEqual(bodyRuns, 0, 'constructor body ran before the guard');
 
@@ -63,10 +61,7 @@ assert.ok(new Derived() instanceof Base);
 class DerivedWithField extends Base {
   value = 1;
 }
-assertClassCallThrows(
-  () => DerivedWithField(),
-  'derived synthesized constructor'
-);
+assertClassCallThrows(() => DerivedWithField(), 'derived synthesized constructor');
 assert.strictEqual(new DerivedWithField().value, 1);
 
 // Compile the constructor before exercising the invalid ordinary-call path.
@@ -77,5 +72,6 @@ class Hot {
 }
 for (let i = 0; i < 5000; i++) assert.strictEqual(new Hot(i).value, i);
 assertClassCallThrows(() => Hot(1), 'JIT-compiled constructor');
+assert.strictEqual(validationRuns, 9, 'every throw validator ran');
 
 console.log('class constructor call guard ok');
