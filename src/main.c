@@ -349,8 +349,8 @@ static void eval_code(
   js_set_filename(js, tag);
   js_setup_import_meta(js, tag);
   
-  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, tag, strlen(tag)));
+  js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
+  js_set_global_builtin(js, "__filename", js_mkstr(js, tag, strlen(tag)));
   
   ant_value_t result;
   if (module_type) {
@@ -396,12 +396,12 @@ static int execute_module(ant_t *js, const char *filename) {
   ant_value_t default_export = 0;
   
   if (esm_is_url(filename)) {
-    js_set(js, js_glob(js), "__dirname", js_mkundef());
+    js_set_global_builtin(js, "__dirname", js_mkundef());
     specifier = js_mkstr(js, filename, strlen(filename));
   } else {
     char *file_path = strdup(filename);
     char *dir = dirname(file_path);
-    js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
+    js_set_global_builtin(js, "__dirname", js_mkstr(js, dir, strlen(dir)));
     free(file_path);
     
     use_path_owned = realpath(filename, NULL);
@@ -413,10 +413,7 @@ static int execute_module(ant_t *js, const char *filename) {
   if (interned) stable_use_path = interned;
   else stable_use_path = use_path;
   
-  js_set(js, js_glob(js), 
-    "__filename", 
-    js_mkstr(js, filename, strlen(filename))
-  );
+  js_set_global_builtin(js, "__filename", js_mkstr(js, filename, strlen(filename)));
   
   js_set_filename(js, stable_use_path);
   js_setup_import_meta(js, stable_use_path);

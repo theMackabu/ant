@@ -1362,7 +1362,7 @@ void init_date_module(ant_t *js) {
   js_setprop(js, date_ctor_obj, ANT_STRING("name"), ANT_STRING("Date"));
 
   ant_value_t date_ctor_func = js_obj_to_func(js, date_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Date", 4), date_ctor_func);
+  js_set_global_builtin(js, "Date", date_ctor_func);
 
   js_setprop(js, date_proto, js_mkstr(js, "constructor", 11), date_ctor_func);
   js_set_descriptor(js, date_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);

@@ -826,19 +826,19 @@ void init_websocket_module(ant_t *js) {
   js_set(js, js->builtins.websocket_ctor, "OPEN", js_mknum(WS_OPEN));
   js_set(js, js->builtins.websocket_ctor, "CLOSING", js_mknum(WS_CLOSING));
   js_set(js, js->builtins.websocket_ctor, "CLOSED", js_mknum(WS_CLOSED));
-  js_set(js, global, "WebSocket", js->builtins.websocket_ctor);
+  js_set_global_builtin(js, "WebSocket", js->builtins.websocket_ctor);
 
   js->builtins.message_event_proto = js_mkobj(js);
   if (is_object_type(event_proto)) js_set_proto_init(js->builtins.message_event_proto, event_proto);
   js_set_sym(js, js->builtins.message_event_proto, get_toStringTag_sym(), js_mkstr(js, "MessageEvent", 12));
   ant_value_t message_ctor = js_make_ctor(js, js_message_event_ctor, js->builtins.message_event_proto, "MessageEvent", 12);
-  js_set(js, global, "MessageEvent", message_ctor);
+  js_set_global_builtin(js, "MessageEvent", message_ctor);
 
   js->builtins.close_event_proto = js_mkobj(js);
   if (is_object_type(event_proto)) js_set_proto_init(js->builtins.close_event_proto, event_proto);
   js_set_sym(js, js->builtins.close_event_proto, get_toStringTag_sym(), js_mkstr(js, "CloseEvent", 10));
   ant_value_t close_ctor = js_make_ctor(js, js_close_event_ctor, js->builtins.close_event_proto, "CloseEvent", 10);
-  js_set(js, global, "CloseEvent", close_ctor);
+  js_set_global_builtin(js, "CloseEvent", close_ctor);
 }
 
 void gc_mark_websocket(ant_t *js, gc_mark_fn mark) {

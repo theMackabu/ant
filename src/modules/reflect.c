@@ -352,5 +352,5 @@ void init_reflect_module(ant_t *js) {
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
   js_set_sym(js, reflect_obj, get_toStringTag_sym(), js_mkstr(js, "Reflect", 7));
-  js_set(js, js->global, "Reflect", reflect_obj);
+  js_set_global_builtin(js, "Reflect", reflect_obj);
 }

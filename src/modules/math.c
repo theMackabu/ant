@@ -274,7 +274,6 @@ static ant_value_t builtin_Math_trunc(ant_params_t) {
 }
 
 void init_math_module(ant_t *js) {
-  ant_value_t glob = js_glob(js);
   ant_value_t math_obj = mkobj(js, 0);
   ant_value_t object_proto = js->sym.object_proto;
 
@@ -324,5 +323,5 @@ void init_math_module(ant_t *js) {
   js_setprop(js, math_obj, js_mkstr(js, "trunc", 5), js_mkfun(builtin_Math_trunc));
   
   js_set_sym(js, math_obj, get_toStringTag_sym(), js_mkstr(js, "Math", 4));
-  js_setprop(js, glob, js_mkstr(js, "Math", 4), math_obj);
+  js_set_global_builtin(js, "Math", math_obj);
 }

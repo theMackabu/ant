@@ -158,7 +158,6 @@ static ant_value_t js_sessionstorage_length(ant_params_t) {
 }
 
 void init_sessionstorage_module(ant_t *js) {
-  
   ant_value_t glob = js_glob(js);
   ant_value_t storage_obj = js_mkobj(js);
   

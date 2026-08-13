@@ -4727,7 +4727,7 @@ void init_fs_module(ant_t *js) {
   js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
   js_set_descriptor(js, stats_ctor, "name", 4, 0);
   
-  js_set(js, glob, "Stats", js_obj_to_func(js, stats_ctor));
+  js_set_global_builtin(js, "Stats", js_obj_to_func(js, stats_ctor));
 
   js->builtins.dirent_proto = js_mkobj(js);
   js_set(js, js->builtins.dirent_proto, "isFile", js_mkfun(dirent_isFile));

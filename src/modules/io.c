@@ -1322,5 +1322,5 @@ void init_console_module(ant_t *js) {
   console_apply_methods(js, console_obj);
   
   js_set(js, console_obj, "Console", js->builtins.console_ctor);
-  js_set(js, js_glob(js), "console", console_obj);
+  js_set_global_builtin(js, "console", console_obj);
 }

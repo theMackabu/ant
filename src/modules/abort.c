@@ -483,8 +483,8 @@ void init_abort_module(ant_t *js) {
   js_set(js, ctrl_proto, "constructor", ctrl_fn);
   js_set_descriptor(js, ctrl_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
-  js_set(js, global, "AbortController", ctrl_fn);
-  js_set(js, global, "AbortSignal",     signal_fn);
+  js_set_global_builtin(js, "AbortController", ctrl_fn);
+  js_set_global_builtin(js, "AbortSignal", signal_fn);
 }
 
 void gc_mark_abort(ant_t *js, gc_mark_fn mark) {
