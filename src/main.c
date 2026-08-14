@@ -72,6 +72,7 @@
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 #include "modules/date.h"
+#include "modules/temporal.h"
 #include "modules/math.h"
 #include "modules/bigint.h"
 #include "modules/regex.h"
@@ -902,6 +903,9 @@ int main(int argc, char *argv[]) {
   init_math_module(js);
   init_bigint_module(js);
   init_date_module(js);
+  #ifdef ANT_HAVE_TEMPORAL
+  init_temporal_module(js);
+  #endif
   init_regex_module(js);
   init_collections_module(js);
   init_queuing_strategies_module(js);

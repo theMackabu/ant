@@ -283,3 +283,5 @@ endif
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep, hypervisor_dep]
 endif
+
+subdir('temporal')

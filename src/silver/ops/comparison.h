@@ -88,15 +88,20 @@ static inline int sv_strcmp(ant_t *js, ant_value_t l, ant_value_t r) {
   return cmp < 0 ? -1 : 1;
 }
 
-static inline void sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *r) {
+static inline bool sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *r) {
   if (is_object_type(*l)) {
     ant_value_t prim = js_to_primitive(js, *l, 2);
-    if (!is_err(prim)) *l = prim;
+    if (is_err(prim)) return false;
+    *l = prim;
   }
+  
   if (is_object_type(*r)) {
     ant_value_t prim = js_to_primitive(js, *r, 2);
-    if (!is_err(prim)) *r = prim;
+    if (is_err(prim)) return false;
+    *r = prim;
   }
+  
+  return true;
 }
 
 typedef enum {
@@ -185,7 +190,7 @@ static inline ant_value_t sv_push_bigint_relational(
 static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) < tod(r));
@@ -204,7 +209,7 @@ static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) <= tod(r));
@@ -223,7 +228,7 @@ static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) > tod(r));
@@ -242,7 +247,7 @@ static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_ge(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) >= tod(r));

@@ -50,7 +50,9 @@ export function targets() {
     'test_rope_large_property_concat.cjs',
     'test_websocket_close_during_connect.cjs',
     'test_intern_table_bounded.cjs',
-    'test_buffer_wtf8_utf8.cjs'
+    'test_buffer_wtf8_utf8.cjs',
+    'test_bigint.js',
+    'test_temporal.js'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

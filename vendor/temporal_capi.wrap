@@ -1,0 +1,7 @@
+[wrap-file]
+directory = temporal_capi-0.2.6
+source_url = https://static.crates.io/crates/temporal_capi/temporal_capi-0.2.6.crate
+source_filename = temporal_capi-0.2.6.tar.gz
+source_hash = f48eb9ca4ca22caaa48d1e7a534ad3fd598a23d1a71945e8ad5ac0be501fa5f2
+patch_directory = temporal_capi
+diff_files = patches/temporal-capi-fs-provider.patch

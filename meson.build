@@ -139,7 +139,7 @@ libant = static_library(
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: [include, sandbox_backend_include],
-  dependencies: ant_deps + [pkg_dep]
+  dependencies: ant_deps + [pkg_dep] + temporal_link_deps
 )
 
 link_args = []
