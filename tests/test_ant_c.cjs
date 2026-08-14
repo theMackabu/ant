@@ -86,7 +86,7 @@ const bits = Ant.unsafe.c({
 `;
 
 assert.strictEqual(typeof bits, 'function');
-assert.strictEqual(bits(5), 0x01000101);
+assert.strictEqual(bits(5), 0x00000101);
 assert.strictEqual(bits(0xA5), 0x10100101);
 assert.throws(() => bits(), /expects 1 arguments, got 0/);
 assert.throws(() => bits('5'), /argument 1 must be a number/);
