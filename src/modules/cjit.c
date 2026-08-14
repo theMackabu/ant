@@ -13,6 +13,7 @@
 #include "ant.h"
 #include "ptr.h"
 #include "internal.h"
+#include "modules/bigint.h"
 #include "modules/cjit.h"
 
 #ifdef ANT_JIT
@@ -33,7 +34,7 @@ typedef struct {
 typedef enum {
   ANT_C_RETURNS_STATUS,
   ANT_C_RETURNS_STRING,
-  ANT_C_RETURNS_UINT32,
+  ANT_C_RETURNS_NUMBER,
 } ant_c_returns_t;
 
 typedef enum {
@@ -60,12 +61,15 @@ typedef union {
   uint64_t u64;
   float f32;
   double f64;
+  const char *string;
+  ffi_arg raw;
 } ant_c_arg_value_t;
 
 typedef struct {
   const char *name;
   ant_c_arg_type_t type;
   ffi_type *ffi;
+  MIR_type_t mir;
 } ant_c_arg_mapping_t;
 
 typedef struct {
@@ -75,6 +79,7 @@ typedef struct {
   ffi_type **ffi_arg_types;
   ant_c_arg_type_t *arg_types;
   ant_c_returns_t returns;
+  ant_c_arg_type_t return_type;
   size_t arg_count;
   char *entry_name;
 } ant_c_function_t;
@@ -83,17 +88,17 @@ static constexpr uint32_t ANT_C_FUNCTION_NATIVE_TAG = 0x434a4954u;
 static constexpr size_t ANT_C_MAX_ARGS = 16;
 
 static const ant_c_arg_mapping_t ANT_C_ARG_MAPPINGS[] = {
-  {"int8", ANT_C_ARG_INT8, &ffi_type_sint8},
-  {"uint8", ANT_C_ARG_UINT8, &ffi_type_uint8},
-  {"int16", ANT_C_ARG_INT16, &ffi_type_sint16},
-  {"uint16", ANT_C_ARG_UINT16, &ffi_type_uint16},
-  {"int", ANT_C_ARG_INT32, &ffi_type_sint32},
-  {"int32", ANT_C_ARG_INT32, &ffi_type_sint32},
-  {"uint32", ANT_C_ARG_UINT32, &ffi_type_uint32},
-  {"int64", ANT_C_ARG_INT64, &ffi_type_sint64},
-  {"uint64", ANT_C_ARG_UINT64, &ffi_type_uint64},
-  {"float", ANT_C_ARG_FLOAT, &ffi_type_float},
-  {"double", ANT_C_ARG_DOUBLE, &ffi_type_double},
+  {"int8",   ANT_C_ARG_INT8,   &ffi_type_sint8,  MIR_T_I8},
+  {"uint8",  ANT_C_ARG_UINT8,  &ffi_type_uint8,  MIR_T_U8},
+  {"int16",  ANT_C_ARG_INT16,  &ffi_type_sint16, MIR_T_I16},
+  {"uint16", ANT_C_ARG_UINT16, &ffi_type_uint16, MIR_T_U16},
+  {"int",    ANT_C_ARG_INT32,  &ffi_type_sint32, MIR_T_I32},
+  {"int32",  ANT_C_ARG_INT32,  &ffi_type_sint32, MIR_T_I32},
+  {"uint32", ANT_C_ARG_UINT32, &ffi_type_uint32, MIR_T_U32},
+  {"int64",  ANT_C_ARG_INT64,  &ffi_type_sint64, MIR_T_I64},
+  {"uint64", ANT_C_ARG_UINT64, &ffi_type_uint64, MIR_T_U64},
+  {"float",  ANT_C_ARG_FLOAT,  &ffi_type_float,  MIR_T_F},
+  {"double", ANT_C_ARG_DOUBLE, &ffi_type_double, MIR_T_D},
 };
 
 static bool ant_c_append(
@@ -225,15 +230,43 @@ static bool ant_c_pointer_sized_type(MIR_type_t type) {
 #endif
 }
 
-static bool ant_c_parse_arg_type(const char *name, ant_c_arg_type_t *type, ffi_type **ffi_type_out) {
+static bool ant_c_parse_type(
+  const char *name, ant_c_arg_type_t *type,
+  ffi_type **ffi_type_out, MIR_type_t *mir_type_out
+) {
   for (size_t i = 0; i < sizeof(ANT_C_ARG_MAPPINGS) / sizeof(ANT_C_ARG_MAPPINGS[0]); i++) {
     const ant_c_arg_mapping_t *mapping = &ANT_C_ARG_MAPPINGS[i];
     if (strcmp(name, mapping->name) != 0) continue;
-    *type = mapping->type;
-    *ffi_type_out = mapping->ffi;
+    if (type) *type = mapping->type;
+    if (ffi_type_out) *ffi_type_out = mapping->ffi;
+    if (mir_type_out) *mir_type_out = mapping->mir;
     return true;
   }
   return false;
+}
+
+static ant_value_t ant_c_result_to_js(
+  ant_t *js, ant_c_returns_t returns,
+  ant_c_arg_type_t return_type, const ant_c_arg_value_t *result
+) {
+  if (returns == ANT_C_RETURNS_STRING) return result->string
+    ? js_mkstr(js, result->string, strlen(result->string))
+    : js_mknull();
+
+  switch (return_type) {
+    case ANT_C_ARG_INT8: return js_mknum((double)result->i8);
+    case ANT_C_ARG_UINT8: return js_mknum((double)result->u8);
+    case ANT_C_ARG_INT16: return js_mknum((double)result->i16);
+    case ANT_C_ARG_UINT16: return js_mknum((double)result->u16);
+    case ANT_C_ARG_INT32: return js_mknum((double)result->i32);
+    case ANT_C_ARG_UINT32: return js_mknum((double)result->u32);
+    case ANT_C_ARG_INT64: return bigint_from_int64(js, result->i64);
+    case ANT_C_ARG_UINT64: return bigint_from_uint64(js, result->u64);
+    case ANT_C_ARG_FLOAT: return js_mknum((double)result->f32);
+    case ANT_C_ARG_DOUBLE: return js_mknum(result->f64);
+  }
+
+  return js_mkerr(js, "Ant.unsafe.c() has an unsupported return type");
 }
 
 static void ant_c_function_destroy(ant_c_function_t *function) {
@@ -269,14 +302,32 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
   memset(values, 0, sizeof(values));
 
   for (size_t i = 0; i < function->arg_count; i++) {
+    ffi_args[i] = &values[i];
+
+    if (function->arg_types[i] == ANT_C_ARG_INT64) {
+      if (vtype(args[i]) != T_BIGINT
+        || !bigint_to_int64_wrapping(js, args[i], &values[i].i64)) return js_mkerr(
+        js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a bigint",
+        function->entry_name, i + 1
+      );
+      continue;
+    }
+
+    if (function->arg_types[i] == ANT_C_ARG_UINT64) {
+      if (vtype(args[i]) != T_BIGINT
+        || !bigint_to_uint64_wrapping(js, args[i], &values[i].u64)) return js_mkerr(
+        js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a bigint",
+        function->entry_name, i + 1
+      );
+      continue;
+    }
+
     if (vtype(args[i]) != T_NUM) return js_mkerr(
       js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a number",
       function->entry_name, i + 1
     );
-    
+
     double number = js_getnum(args[i]);
-    ffi_args[i] = &values[i];
-    
     switch (function->arg_types[i]) {
       case ANT_C_ARG_INT8: values[i].i8 = (int8_t)number; break;
       case ANT_C_ARG_UINT8: values[i].u8 = (uint8_t)number; break;
@@ -284,34 +335,27 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
       case ANT_C_ARG_UINT16: values[i].u16 = (uint16_t)number; break;
       case ANT_C_ARG_INT32: values[i].i32 = (int32_t)number; break;
       case ANT_C_ARG_UINT32: values[i].u32 = (uint32_t)number; break;
-      case ANT_C_ARG_INT64: values[i].i64 = (int64_t)number; break;
-      case ANT_C_ARG_UINT64: values[i].u64 = (uint64_t)number; break;
+      case ANT_C_ARG_INT64:
+      case ANT_C_ARG_UINT64: break;
       case ANT_C_ARG_FLOAT: values[i].f32 = (float)number; break;
       case ANT_C_ARG_DOUBLE: values[i].f64 = number; break;
     }
   }
 
-  union {
-    const char *string;
-    uint32_t u32;
-  } result = {0};
+  ant_c_arg_value_t result = {0};
   
   ffi_call(
     &function->cif, function->entry_item->addr, &result,
     function->arg_count == 0 ? NULL : ffi_args
   );
 
-  if (function->returns == ANT_C_RETURNS_STRING) return result.string 
-    ? js_mkstr(js, result.string, strlen(result.string)) 
-    : js_mknull();
-  
-  return js_mknum((double)result.u32);
+  return ant_c_result_to_js(js, function->returns, function->return_type, &result);
 }
 
 static ant_value_t ant_c_make_function(
   ant_t *js, MIR_context_t ctx, MIR_item_t entry_item,
   const char *entry_name, ant_c_returns_t returns,
-  size_t arg_count,
+  ant_c_arg_type_t return_type, ffi_type *ffi_return_type, size_t arg_count,
   ant_c_arg_type_t *arg_types, ffi_type **ffi_arg_types
 ) {
   ant_c_function_t *function = calloc(1, sizeof(*function));
@@ -326,6 +370,7 @@ static ant_value_t ant_c_make_function(
   function->ctx = ctx;
   function->entry_item = entry_item;
   function->returns = returns;
+  function->return_type = return_type;
   function->arg_count = arg_count;
   function->entry_name = strdup(entry_name);
   
@@ -344,10 +389,6 @@ static ant_value_t ant_c_make_function(
     memcpy(function->ffi_arg_types, ffi_arg_types, arg_count * sizeof(*ffi_arg_types));
   }
 
-  ffi_type *ffi_return_type = returns == ANT_C_RETURNS_STRING
-    ? &ffi_type_pointer
-    : &ffi_type_uint32;
-  
   if (ffi_prep_cif(
     &function->cif, FFI_DEFAULT_ABI, (unsigned int)arg_count, 
     ffi_return_type, function->ffi_arg_types) != FFI_OK
@@ -369,7 +410,13 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
   const char *entry_name = "main";
+  const char *returns_name = "int";
+  
   ant_c_returns_t returns = ANT_C_RETURNS_STATUS;
+  ant_c_arg_type_t return_type = ANT_C_ARG_INT32;
+  
+  ffi_type *ffi_return_type = &ffi_type_sint32;
+  MIR_type_t mir_return_type = MIR_T_I32;
   
   bool return_function = false;
   size_t arg_count = 0;
@@ -394,12 +441,18 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
     ant_value_t returns_value = js_get(js, options_value, "returns");
     if (is_err(returns_value)) return returns_value;
     if (vtype(returns_value) != T_STR)
-      return js_mkerr(js, "Ant.unsafe.c() options.returns must be \"string\" or \"uint32\"");
+      return js_mkerr(js, "Ant.unsafe.c() options.returns must be a supported type");
 
-    const char *returns_name = js_getstr(js, returns_value, NULL);
-    if (strcmp(returns_name, "string") == 0) returns = ANT_C_RETURNS_STRING;
-    else if (strcmp(returns_name, "uint32") == 0) returns = ANT_C_RETURNS_UINT32;
-    else return js_mkerr(js, "Ant.unsafe.c() options.returns must be \"string\" or \"uint32\"");
+    returns_name = js_getstr(js, returns_value, NULL);
+    if (strcmp(returns_name, "string") == 0) {
+      returns = ANT_C_RETURNS_STRING;
+      ffi_return_type = &ffi_type_pointer;
+    } else {
+      returns = ANT_C_RETURNS_NUMBER;
+      if (!ant_c_parse_type(
+        returns_name, &return_type, &ffi_return_type, &mir_return_type
+      )) return js_mkerr(js, "Ant.unsafe.c() options.returns has an unsupported type");
+    }
 
     ant_value_t args_value = js_get(js, options_value, "args");
     if (is_err(args_value)) return args_value;
@@ -412,8 +465,7 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
         return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
       double length = js_getnum(length_value);
       if (length < 0 || length > (double)ANT_C_MAX_ARGS || length != (double)(size_t)length)
-        return js_mkerr(js, "Ant.unsafe.c() options.args supports at most %zu arguments",
-                        ANT_C_MAX_ARGS);
+        return js_mkerr(js, "Ant.unsafe.c() options.args supports at most %zu arguments", ANT_C_MAX_ARGS);
       arg_count = (size_t)length;
       return_function = true;
 
@@ -423,8 +475,7 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
         ant_value_t type_value = js_get(js, args_value, index);
         if (is_err(type_value)) return type_value;
         if (vtype(type_value) != T_STR
-            || !ant_c_parse_arg_type(js_getstr(js, type_value, NULL), &arg_types[i],
-                                     &ffi_arg_types[i]))
+          || !ant_c_parse_type(js_getstr(js, type_value, NULL), &arg_types[i], &ffi_arg_types[i], NULL))
           return js_mkerr(js, "Ant.unsafe.c() options.args[%zu] has an unsupported type", i);
       }
     }
@@ -440,7 +491,6 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
 
   struct c2mir_options options = {0};
   options.message_file = diagnostic_file ? diagnostic_file : stderr;
-
   int compiled = c2mir_compile(ctx, &options, ant_c_getc, &source, "<Ant.unsafe.c>", NULL);
 
   if (!compiled) {
@@ -476,25 +526,22 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
       && !entry_func->vararg_p && entry_func->nres == 1
       && entry_func->res_types[0] == MIR_T_I32;
   } else {
-    MIR_type_t expected_result = returns == ANT_C_RETURNS_STRING
-      ? (MIR_PTR64 ? MIR_T_I64 : MIR_T_I32)
-      : MIR_T_U32;
     valid_signature = entry_func->nargs == (return_function ? arg_count : 0)
       && !entry_func->vararg_p && entry_func->nres == 1
       && (returns == ANT_C_RETURNS_STRING
         ? ant_c_pointer_sized_type(entry_func->res_types[0])
-        : entry_func->res_types[0] == expected_result);
+        : entry_func->res_types[0] == mir_return_type);
   }
   if (!valid_signature) {
     c2mir_finish(ctx);
     MIR_finish(ctx);
     if (diagnostic_file) fclose(diagnostic_file);
-    if (returns == ANT_C_RETURNS_STRING)
-      return js_mkerr(js, "Ant.unsafe.c() string entry \"%s\" must return char * and accept %zu arguments",
-                      entry_name, return_function ? arg_count : 0);
-    if (returns == ANT_C_RETURNS_UINT32)
-      return js_mkerr(js, "Ant.unsafe.c() uint32 entry \"%s\" must return uint32_t and accept %zu arguments",
-                      entry_name, return_function ? arg_count : 0);
+    if (returns == ANT_C_RETURNS_STRING) return js_mkerr(
+      js, "Ant.unsafe.c() string entry \"%s\" must return char * and accept %zu arguments",
+      entry_name, return_function ? arg_count : 0);
+    if (returns == ANT_C_RETURNS_NUMBER) return js_mkerr(
+      js, "Ant.unsafe.c() entry \"%s\" must match return type \"%s\" and accept %zu arguments",
+      entry_name, returns_name, return_function ? arg_count : 0);
     return js_mkerr(js, "Ant.unsafe.c() main must return int and accept 0, 2, or 3 arguments");
   }
 
@@ -504,18 +551,22 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
 
   if (return_function) {
     if (diagnostic_file) fclose(diagnostic_file);
-    return ant_c_make_function(js, ctx, entry_item, entry_name, returns, arg_count, arg_types,
-                               ffi_arg_types);
+    return ant_c_make_function(
+      js, ctx, entry_item, entry_name, returns, return_type,
+      ffi_return_type, arg_count, arg_types, ffi_arg_types
+    );
   }
 
   ant_value_t result;
-  if (returns == ANT_C_RETURNS_STRING) {
-    const char *(*entry)(void) = (const char *(*)(void))entry_item->addr;
-    const char *string = entry();
-    result = string ? js_mkstr(js, string, strlen(string)) : js_mknull();
-  } else if (returns == ANT_C_RETURNS_UINT32) {
-    uint32_t (*entry)(void) = (uint32_t (*)(void))entry_item->addr;
-    result = js_mknum((double)entry());
+  if (returns != ANT_C_RETURNS_STATUS) {
+    ffi_cif cif;
+    if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, 0, ffi_return_type, NULL) != FFI_OK) {
+      result = js_mkerr(js, "Ant.unsafe.c() failed to prepare the entry call interface");
+    } else {
+      ant_c_arg_value_t native_result = {0};
+      ffi_call(&cif, entry_item->addr, &native_result, NULL);
+      result = ant_c_result_to_js(js, returns, return_type, &native_result);
+    }
   } else {
     char *entry_argv[] = {"Ant.unsafe.c", NULL};
     int status;

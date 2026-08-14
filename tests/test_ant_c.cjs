@@ -102,4 +102,36 @@ assert.throws(
   /must be used as a tagged template or called with options/,
 );
 
+assert.strictEqual(
+  Ant.unsafe.c({ entry: 'result', returns: 'int8' })`
+    #include <stdint.h>
+    int8_t result(void) { return -12; }
+  `,
+  -12,
+);
+
+assert.strictEqual(
+  Ant.unsafe.c({ entry: 'result', returns: 'double' })`
+    double result(void) { return 1.5; }
+  `,
+  1.5,
+);
+
+const negativeInt64 = Ant.unsafe.c({ entry: 'result', returns: 'int64' })`
+    #include <stdint.h>
+    int64_t result(void) { return -9007199254740993LL; }
+  `;
+assert.strictEqual(negativeInt64, -9007199254740993n);
+
+const addUint64 = Ant.unsafe.c({
+  entry: 'add',
+  args: ['uint64', 'uint64'],
+  returns: 'uint64',
+})`
+  #include <stdint.h>
+  uint64_t add(uint64_t left, uint64_t right) { return left + right; }
+`;
+assert.strictEqual(addUint64(9007199254740993n, 7n), 9007199254741000n);
+assert.throws(() => addUint64(1, 2n), /argument 1 must be a bigint/);
+
 console.log('Ant.unsafe.c tests passed');

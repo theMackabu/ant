@@ -5340,7 +5340,7 @@ bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r) {
   return vdata(l) == vdata(r);
 }
 
-static bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r) {
+bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r) {
   uint8_t t = vtype(l);
   if (t != vtype(r)) return false;
   if (t == T_UNDEF || t == T_NULL) return true;

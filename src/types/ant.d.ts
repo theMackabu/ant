@@ -108,17 +108,7 @@ interface AntRaw {
   gcMarkProfileReset(): void;
 }
 
-interface AntCStringOptions {
-  entry: string;
-  returns: 'string';
-}
-
-interface AntCUint32Options {
-  entry: string;
-  returns: 'uint32';
-}
-
-type AntCArgumentType =
+type AntCNumberType =
   | 'int8'
   | 'uint8'
   | 'int16'
@@ -126,29 +116,45 @@ type AntCArgumentType =
   | 'int'
   | 'int32'
   | 'uint32'
-  | 'int64'
-  | 'uint64'
   | 'float'
   | 'double';
 
-interface AntCStringFunctionOptions extends AntCStringOptions {
-  args: readonly AntCArgumentType[];
+type AntCBigIntType = 'int64' | 'uint64';
+
+type AntCArgumentType =
+  | AntCNumberType
+  | AntCBigIntType;
+
+type AntCReturnType = 'string' | AntCArgumentType;
+type AntCReturnValue<T extends AntCReturnType> =
+  T extends 'string' ? string | null :
+  T extends AntCBigIntType ? bigint : number;
+type AntCArgumentValues<T extends readonly AntCArgumentType[]> = {
+  [K in keyof T]: T[K] extends AntCBigIntType ? bigint : number;
+};
+
+interface AntCOptions<TReturn extends AntCReturnType> {
+  entry: string;
+  returns: TReturn;
 }
 
-interface AntCUint32FunctionOptions extends AntCUint32Options {
-  args: readonly AntCArgumentType[];
+interface AntCFunctionOptions<
+  TReturn extends AntCReturnType,
+  TArgs extends readonly AntCArgumentType[],
+> extends AntCOptions<TReturn> {
+  args: TArgs;
 }
 
 interface AntUnsafe {
   c(strings: TemplateStringsArray, ...values: unknown[]): number;
-  c(options: AntCUint32FunctionOptions):
-    (strings: TemplateStringsArray, ...values: unknown[]) => (...args: number[]) => number;
-  c(options: AntCStringFunctionOptions):
-    (strings: TemplateStringsArray, ...values: unknown[]) => (...args: number[]) => string | null;
-  c(options: AntCUint32Options):
-    (strings: TemplateStringsArray, ...values: unknown[]) => number;
-  c(options: AntCStringOptions):
-    (strings: TemplateStringsArray, ...values: unknown[]) => string | null;
+  c<
+    TReturn extends AntCReturnType,
+    const TArgs extends readonly AntCArgumentType[],
+  >(options: AntCFunctionOptions<TReturn, TArgs>):
+    (strings: TemplateStringsArray, ...values: unknown[]) =>
+      (...args: AntCArgumentValues<TArgs>) => AntCReturnValue<TReturn>;
+  c<TReturn extends AntCReturnType>(options: AntCOptions<TReturn>):
+    (strings: TemplateStringsArray, ...values: unknown[]) => AntCReturnValue<TReturn>;
 }
 
 interface AntCtorPropFeedback {
