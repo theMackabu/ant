@@ -108,6 +108,49 @@ interface AntRaw {
   gcMarkProfileReset(): void;
 }
 
+interface AntCStringOptions {
+  entry: string;
+  returns: 'string';
+}
+
+interface AntCUint32Options {
+  entry: string;
+  returns: 'uint32';
+}
+
+type AntCArgumentType =
+  | 'int8'
+  | 'uint8'
+  | 'int16'
+  | 'uint16'
+  | 'int'
+  | 'int32'
+  | 'uint32'
+  | 'int64'
+  | 'uint64'
+  | 'float'
+  | 'double';
+
+interface AntCStringFunctionOptions extends AntCStringOptions {
+  args: readonly AntCArgumentType[];
+}
+
+interface AntCUint32FunctionOptions extends AntCUint32Options {
+  args: readonly AntCArgumentType[];
+}
+
+interface AntUnsafe {
+  c(strings: TemplateStringsArray, ...values: unknown[]): number;
+  c(options: AntCUint32FunctionOptions):
+    (strings: TemplateStringsArray, ...values: unknown[]) => (...args: number[]) => number;
+  c(options: AntCStringFunctionOptions):
+    (strings: TemplateStringsArray, ...values: unknown[]) => (...args: number[]) => string | null;
+  c(options: AntCUint32Options):
+    (strings: TemplateStringsArray, ...values: unknown[]) => number;
+  c(options: AntCStringOptions):
+    (strings: TemplateStringsArray, ...values: unknown[]) => string | null;
+}
+
 interface AntCtorPropFeedback {
   samples: number;
   overflowFrom: number;
@@ -186,6 +229,7 @@ interface AntStatic {
   typeof(t: unknown): AntType | '??';
 
   raw: AntRaw;
+  unsafe: AntUnsafe;
   stats(): AntStatsResult;
   suppressReporting(): void;
 

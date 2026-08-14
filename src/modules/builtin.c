@@ -26,6 +26,7 @@
 #include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
+#include "modules/cjit.h"
 #include "modules/server.h"
 #include "modules/symbol.h"
 
@@ -478,6 +479,10 @@ void init_builtin_module(ant_t *js) {
   js_set(js, hl_fn, "render", js_mkfun(js_highlight_render));
   js_set(js, hl_fn, "tags", js_mkfun(js_highlight_tags));
   js_set(js, ant_obj, "highlight", hl_fn);
+
+  ant_value_t unsafe_obj = js_newobj(js);
+  init_cjit_module(js, unsafe_obj);
+  js_set(js, ant_obj, "unsafe", unsafe_obj);
 
   ant_value_t raw_obj = js_newobj(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, js_mkfun(js_raw_stack), JS_DESC_C);
