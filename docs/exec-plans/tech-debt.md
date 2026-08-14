@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-14
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -23,6 +23,12 @@ scheduled.
   - Impact: Remaining statics only matter if multi-isolate embedding is ever supported.
   - Proposed fix: If multi-isolate lands, sweep the remaining non-value module statics onto `ant_t` and migrate `js->sym` registration to central marking.
   - Status: mostly resolved; remainder parked (pending multi-isolate decision)
+
+- Area: `src/gc/objects.c` — process-static collection state
+  - Issue: The GC's mutable working state is shared across the process: `gc_mark_stack` and its indices, `gc_epoch`, the 8-bit `gc_obj_epoch`, `g_minor_gc`, `g_str_mark`, and function-mark profiling state. Concurrent collections from same-process isolates can race on that state. Sequential multi-isolate collection is also unsafe after `gc_obj_epoch` wraps because `gc_obj_epoch_wrapped()` clears mark bytes only in the isolate that triggered the wrap; another isolate can retain a stale byte that later compares equal to the global epoch.
+  - Impact: The current `worker_threads` implementation uses `uv_spawn`, so its workers are separate processes and unaffected. Native embedders can create multiple isolates in one process, however: concurrent use can corrupt collection state, while an epoch collision during interleaved sequential collections can make the marker skip an object and its outgoing edges.
+  - Proposed fix: Move collection-local mutable state onto `ant_t` or an isolate-owned collection context, including the mark stack, epochs, minor/major mode, string marker, and profiling/latching state. Make epoch access isolate-aware and clear each isolate's mark bytes independently. Document the embedding threading contract and add a C regression that drives two isolates through more than 254 interleaved collections; add a concurrent-collection test only if concurrent isolate use is supported.
+  - Status: backlog (pre-existing; required before same-process multi-isolate collection is supported)
 
 - Area: `src/modules/worker_threads.c` — spawn-failure path
   - Issue: The `new Worker(...)` synchronous failure branch calls `wt_cleanup(wt)` (plain `free`) while `wt` is still linked on `active_workers_head` (so `gc_mark_worker_threads` walks freed memory on every GC) and while `wt_spawn_worker`'s failure branches have `uv_close`d the embedded `stdout_pipe` with a NULL callback (uv still owns a closing handle inside the freed struct).
@@ -59,6 +65,12 @@ scheduled.
   - Issue: `sv_init_closure_function_object()` assigns `closure->func_obj` before proving that the backing function object and its required metadata were initialized successfully. Allocation failures in `mkobj()`, `.length` setup, or prototype setup can therefore leave a closure with an error or partially initialized `func_obj`.
   - Impact: This is an OOM-hardening issue rather than a normal JS-level repro; it likely needs allocator fault injection or a real process memory cap to observe reliably. If it does happen, the interpreter or JIT can expose a callable with invalid/incomplete function-object state.
   - Proposed fix: Make `sv_init_closure_function_object()` return a status value, assign `closure->func_obj` only after `mkobj()` succeeds, propagate failures from length/prototype setup, and have `sv_op_closure()` / `jit_helper_closure()` return the error instead of publishing `func_val`. Avoid fixing this by forcing generic bailout for `OP_CLOSURE`; that would risk large JIT/Newt regressions.
+  - Status: backlog
+
+- Area: Silver closure/upvalue allocation OOM handling
+  - Issue: `sv_closure_init()` does not check the external upvalue-pointer-array `calloc()` used when a child captures more than `SV_CLOSURE_INLINE_UPVALS` values. It returns a non-NULL closure with `closure->upvalues == NULL`, after which both `sv_op_closure()` and `jit_helper_closure()` immediately write through that pointer. The adjacent `sv_capture_upvalue()`, `jit_capture_upvalue()`, and `jit_make_undef_upvalue()` paths also dereference unchecked `js_upvalue_alloc()` results.
+  - Impact: A native allocation failure during ordinary closure creation causes undefined behavior, normally a NULL-pointer crash, instead of following the existing `T_ERR` OOM path. The external-array bug needs only five captured values; it is OOM-only, not an unreachable closure shape.
+  - Proposed fix: First check the `calloc()` result in `sv_closure_init()` and return `NULL`; both callers already propagate that result, and the initialized unreachable arena slot is safe for a later young/major sweep. Do not free the slot immediately without also removing its young-roster entry. Then audit upvalue-cell creation as a separate step: make allocation failure propagate through the capture loop without publishing a partially initialized closure or leaving partially linked open cells. Add normal 5+-capture interpreter/JIT/GC coverage, but do not add a production fault-injection hook solely for the OOM branch.
   - Status: backlog
 
 - Area: `src/modules/readline.c`
