@@ -33,6 +33,7 @@ export function targets() {
     'test_url_legacy_idna.cjs',
     'test_child_process_sigpipe_reset.cjs',
     'test_spawn_sync_stdin_pump.cjs',
+    'test_cli_stdin_script.cjs',
     'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',

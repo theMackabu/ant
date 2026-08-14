@@ -378,4 +378,50 @@ test(
   "TypeError: Class constructor cannot be invoked without 'new'"
 );
 
+class ArrowSuperBase {
+  constructor(value) {
+    this.value = value;
+    this.seenNewTarget = new.target;
+  }
+}
+
+class ArrowSuperDerived extends ArrowSuperBase {
+  constructor(value) {
+    const callSuper = () => super(value);
+    test('arrow super returns lexical this', callSuper(), this);
+  }
+}
+
+const arrowSuper = new ArrowSuperDerived(41);
+test('arrow super forwards arguments', arrowSuper.value, 41);
+test('arrow super preserves new.target', arrowSuper.seenNewTarget, ArrowSuperDerived);
+
+class SpreadArrowSuperDerived extends ArrowSuperBase {
+  constructor(...args) {
+    (() => super(...args))();
+  }
+}
+
+const spreadArrowSuper = new SpreadArrowSuperDerived(42);
+test('spread arrow super forwards arguments', spreadArrowSuper.value, 42);
+test(
+  'spread arrow super preserves new.target',
+  spreadArrowSuper.seenNewTarget,
+  SpreadArrowSuperDerived
+);
+
+class NestedArrowSuperDerived extends ArrowSuperBase {
+  constructor(value) {
+    (() => () => super(value))()();
+  }
+}
+
+const nestedArrowSuper = new NestedArrowSuperDerived(43);
+test('nested arrow super forwards arguments', nestedArrowSuper.value, 43);
+test(
+  'nested arrow super preserves new.target',
+  nestedArrowSuper.seenNewTarget,
+  NestedArrowSuperDerived
+);
+
 summary();
