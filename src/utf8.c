@@ -1,7 +1,7 @@
 #include "utf8.h"
 #include "utils.h"
 #include "internal.h"
-#include "gc/objects.h"
+#include "gc/strings.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +28,7 @@ typedef struct {
 static _Thread_local utf16_scan_cache_t utf16_scan_cache = { 0 };
 
 static inline void utf16_scan_cache_sync_epoch(void) {
-  uint64_t epoch = gc_get_epoch();
+  uint64_t epoch = gc_strings_sweep_epoch();
   if (utf16_scan_cache.epoch == epoch) return;
   utf16_scan_cache = (utf16_scan_cache_t){ .epoch = epoch };
 }
@@ -161,11 +161,12 @@ typedef struct {
 static _Thread_local struct {
   uint64_t epoch;
   size_t victim;
+  size_t mru;
   utf16_index_entry_t entries[UTF16_INDEX_WAYS];
 } utf16_index_cache;
 
 static void utf16_index_sync_epoch(void) {
-  uint64_t epoch = gc_get_epoch();
+  uint64_t epoch = gc_strings_sweep_epoch();
   if (utf16_index_cache.epoch == epoch) return;
 
   for (size_t i = 0; i < UTF16_INDEX_WAYS; i++) {
@@ -174,18 +175,15 @@ static void utf16_index_sync_epoch(void) {
   }
 
   utf16_index_cache.victim = 0;
+  utf16_index_cache.mru = 0;
   utf16_index_cache.epoch = epoch;
 }
 
-static const utf16_index_entry_t *utf16_index_get(const char *str, size_t byte_len) {
-  if (byte_len < UTF16_INDEX_MIN_BYTES || byte_len > UINT32_MAX) return NULL;
-
-  utf16_index_sync_epoch();
-  for (size_t i = 0; i < UTF16_INDEX_WAYS; i++) {
-    utf16_index_entry_t *entry = &utf16_index_cache.entries[i];
-    if (entry->str == str && entry->byte_len == byte_len) return entry;
-  }
-
+static __attribute__((noinline, cold)) 
+const utf16_index_entry_t *utf16_index_build(
+  utf16_index_entry_t *entry,
+  const char *str, size_t byte_len
+) {
   size_t max_points = byte_len / UTF16_INDEX_CHUNK + 2;
   utf16_index_point_t *points = malloc(max_points * sizeof(*points));
   if (!points) return NULL;
@@ -201,31 +199,55 @@ static const utf16_index_entry_t *utf16_index_get(const char *str, size_t byte_l
   while (p < end) {
     size_t slen, units;
     utf16_scan_decode(p, end, &slen, &units, NULL);
-    
+
     if (
-      utf16_pos + units > 
+      utf16_pos + units >
       point_count * UTF16_INDEX_CHUNK
     ) points[point_count++] = (utf16_index_point_t){
       .byte_off = (uint32_t)(p - start),
       .utf16_pos = (uint32_t)utf16_pos,
     };
-    
+
     utf16_pos += units;
     p += slen;
   }
 
-  utf16_index_entry_t *entry = &utf16_index_cache.entries[utf16_index_cache.victim];
-  utf16_index_cache.victim = (utf16_index_cache.victim + 1) % UTF16_INDEX_WAYS;
-  free(entry->points);
-  
-  *entry = (utf16_index_entry_t){
-    .str = str,
-    .byte_len = byte_len,
-    .points = points,
-    .point_count = point_count,
-  };
-  
+  entry->points = points;
+  entry->point_count = point_count;
   return entry;
+}
+
+static inline const utf16_index_entry_t *utf16_index_get(const char *str, size_t byte_len) {
+  if (byte_len < UTF16_INDEX_MIN_BYTES || byte_len > UINT32_MAX) return NULL;
+
+  utf16_index_sync_epoch();
+  utf16_index_entry_t *entry = NULL;
+  
+  utf16_index_entry_t *mru =
+    &utf16_index_cache.entries[utf16_index_cache.mru];
+  if (mru->str == str && mru->byte_len == byte_len) entry = mru;
+
+  for (size_t i = 0; !entry && i < UTF16_INDEX_WAYS; i++) {
+    if (i == utf16_index_cache.mru) continue;
+    utf16_index_entry_t *candidate = &utf16_index_cache.entries[i];
+    if (candidate->str == str && candidate->byte_len == byte_len) {
+      utf16_index_cache.mru = i;
+      entry = candidate;
+    }
+  }
+
+  if (!entry) {
+    entry = &utf16_index_cache.entries[utf16_index_cache.victim];
+    free(entry->points);
+    *entry = (utf16_index_entry_t){ .str = str, .byte_len = byte_len };
+    utf16_index_cache.mru = utf16_index_cache.victim;
+    utf16_index_cache.victim++;
+    if (utf16_index_cache.victim == UTF16_INDEX_WAYS) utf16_index_cache.victim = 0;
+    return NULL;
+  }
+
+  if (entry->points) return entry;
+  return utf16_index_build(entry, str, byte_len);
 }
 
 static inline void utf16_index_seek(
@@ -241,6 +263,21 @@ static inline void utf16_index_seek(
   if (checkpoint->utf16_pos <= cursor->utf16_pos) return;
   cursor->p = cursor->start + checkpoint->byte_off;
   cursor->utf16_pos = checkpoint->utf16_pos;
+}
+
+static inline void utf16_scan_cursor_resume_indexed(
+  utf16_scan_cursor_t *cursor,
+  size_t target
+) {
+  utf16_scan_cursor_resume_utf16(cursor, target);
+  if (
+    target <= cursor->utf16_pos || 
+    target - cursor->utf16_pos <= UTF16_INDEX_CHUNK
+  ) return;
+
+  const utf16_index_entry_t *index = 
+    utf16_index_get(cursor->str, cursor->byte_len);
+  if (index) utf16_index_seek(index, cursor, target);
 }
 
 static inline bool utf16_scan_cursor_advance(
@@ -662,7 +699,7 @@ int utf16_index_to_byte_offset(
 
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);
-  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
+  utf16_scan_cursor_resume_indexed(&cursor, utf16_idx);
   
   while (cursor.p < cursor.end && cursor.utf16_pos < utf16_idx) {
     utf16_scan_cursor_advance(&cursor, cursor.end);
@@ -728,7 +765,7 @@ int utf16_range_to_byte_range(
 
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);
-  utf16_scan_cursor_resume_utf16(&cursor, utf16_start);
+  utf16_scan_cursor_resume_indexed(&cursor, utf16_start);
 
   size_t b_start = 0, b_end = byte_len;
   int found_start = 0, found_end = 0;
@@ -909,7 +946,7 @@ uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) 
 
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);
-  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
+  utf16_scan_cursor_resume_indexed(&cursor, utf16_idx);
   
   while (cursor.p < cursor.end) {
     size_t slen, units;
