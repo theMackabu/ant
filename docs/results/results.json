@@ -4,17 +4,17 @@
     "binary_name": "ant"
   },
   "summary": {
-    "all": {"passed": 1510, "failed": 1, "pass_percent": 99.934},
+    "all": {"passed": 1511, "pass_percent": 100.0},
     "es1-5": {"passed": 420, "pass_percent": 100.0},
-    "es6": {"passed": 699, "failed": 1, "pass_percent": 99.857, "weight": 211.0, "weighted_pass_percent": 99.708},
+    "es6": {"passed": 700, "pass_percent": 100.0, "weight": 211.0, "weighted_pass_percent": 100.0},
     "es2016+": {"passed": 250, "pass_percent": 100.0, "weight": 151.0, "weighted_pass_percent": 100.0},
     "esnext": {"passed": 40, "pass_percent": 100.0, "weight": 27.0, "weighted_pass_percent": 100.0},
     "intl": {"passed": 28, "pass_percent": 100.0, "weight": 28.0, "weighted_pass_percent": 100.0}
   },
   "dirs": {
-    "compat-table": {"passed": 1090, "failed": 1, "pass_percent": 99.908, "weight": 463.0, "weighted_pass_percent": 99.867},
+    "compat-table": {"passed": 1091, "pass_percent": 100.0, "weight": 463.0, "weighted_pass_percent": 100.0},
     "compat-table/es5": {"passed": 73, "pass_percent": 100.0, "weight": 46.0, "weighted_pass_percent": 100.0},
-    "compat-table/es6": {"passed": 699, "failed": 1, "pass_percent": 99.857, "weight": 211.0, "weighted_pass_percent": 99.708},
+    "compat-table/es6": {"passed": 700, "pass_percent": 100.0, "weight": 211.0, "weighted_pass_percent": 100.0},
     "compat-table/es2016": {"passed": 14, "pass_percent": 100.0, "weight": 11.0, "weighted_pass_percent": 100.0},
     "compat-table/es2017": {"passed": 64, "pass_percent": 100.0, "weight": 25.0, "weighted_pass_percent": 100.0},
     "compat-table/es2018": {"passed": 22, "pass_percent": 100.0, "weight": 19.0, "weighted_pass_percent": 100.0},
@@ -781,7 +781,7 @@
     "compat-table/es6/arrow.5-param.js": "PASS",
     "compat-table/es6/arrow.bind.js": "PASS",
     "compat-table/es6/arrow.lexical-arguments.js": "PASS",
-    "compat-table/es6/arrow.lexical-super.constructor.js": "TypeError: Class constructor cannot be invoked without 'new'",
+    "compat-table/es6/arrow.lexical-super.constructor.js": "PASS",
     "compat-table/es6/arrow.lexical-super.methods.js": "PASS",
     "compat-table/es6/arrow.lexical-this.js": "PASS",
     "compat-table/es6/arrow.new-target.js": "PASS",

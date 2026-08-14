@@ -1362,6 +1362,24 @@ static void emit_put_local(sv_compiler_t *c, int local_idx);
 static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
+static void emit_lexical_new_target(sv_compiler_t *c) {
+  static const char nt_name[] = "\x01new.target";
+  int local = resolve_local(c, nt_name, sizeof(nt_name) - 1);
+  if (local >= 0) {
+    emit_get_local(c, local);
+    return;
+  }
+
+  int upval = resolve_upvalue(c, nt_name, sizeof(nt_name) - 1);
+  if (upval >= 0) {
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)upval);
+    return;
+  }
+
+  emit_op(c, OP_UNDEF);
+}
+
 static inline void emit_get_module_import_binding(sv_compiler_t *c) {
   emit_op(c, OP_SPECIAL_OBJ);
   emit(c, 3);
@@ -2319,19 +2337,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_NEW_TARGET: {
-      static const char nt_name[] = "\x01new.target";
-      int local = resolve_local(c, nt_name, sizeof(nt_name) - 1);
-      if (local >= 0) {
-        emit_get_local(c, local);
-      } else {
-        int upval = resolve_upvalue(c, nt_name, sizeof(nt_name) - 1);
-        if (upval >= 0) {
-          emit_op(c, OP_GET_UPVAL);
-          emit_u16(c, (uint16_t)upval);
-        } else {
-          emit_op(c, OP_UNDEF);
-        }
-      }
+      emit_lexical_new_target(c);
       break;
     }
 
@@ -3224,8 +3230,8 @@ static void compile_call_emit_invoke(
 ) {
   int argc = node->args.count;
   if (has_spread) {
-    if (sv_call_kind_has_receiver(kind)) emit_op(c, OP_SWAP);
-    else emit_op(c, OP_GLOBAL);
+    if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
+    else if (kind == SV_CALL_DIRECT) emit_op(c, OP_GLOBAL);
     compile_call_args_array(c, node);
     emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
@@ -3234,7 +3240,9 @@ static void compile_call_emit_invoke(
 
   for (int i = 0; i < argc; i++)
     compile_expr(c, node->args.items[i]);
-  emit_op(c, sv_call_kind_has_receiver(kind) ? OP_CALL_METHOD : OP_CALL);
+  emit_op(c,
+    kind == SV_CALL_SUPER ? OP_CALL_SUPER :
+    kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
   emit_u16(c, (uint16_t)argc);
 }
 
@@ -3242,6 +3250,11 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
   if (is_ident_name(callee, "super")) {
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
+    if (c->is_arrow) emit_lexical_new_target(c);
+    else {
+      emit_op(c, OP_SPECIAL_OBJ);
+      emit(c, 1);
+    }
     return SV_CALL_SUPER;
   }
 
@@ -6283,7 +6296,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(&comp, OP_THIS);
       emit_op(&comp, OP_SPECIAL_OBJ);
       emit(&comp, 2);
-      emit_op(&comp, OP_SWAP);
+      emit_op(&comp, OP_SPECIAL_OBJ);
+      emit(&comp, 1);
       emit_op(&comp, OP_SPECIAL_OBJ);
       emit(&comp, 0);
       emit_op(&comp, OP_SUPER_APPLY);

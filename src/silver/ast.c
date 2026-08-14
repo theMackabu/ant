@@ -1448,25 +1448,37 @@ bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender)
   return false;
 }
 
-static bool ast_references_new_target(const sv_ast_t *node) {
+static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {
   if (!node) return false;
   if (node->type == N_NEW_TARGET) return true;
   if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
 
-  if (ast_references_new_target(node->left))         return true;
-  if (ast_references_new_target(node->right))        return true;
-  if (ast_references_new_target(node->cond))         return true;
-  if (ast_references_new_target(node->body))         return true;
-  if (ast_references_new_target(node->catch_body))   return true;
-  if (ast_references_new_target(node->finally_body)) return true;
-  if (ast_references_new_target(node->catch_param))  return true;
-  if (ast_references_new_target(node->init))         return true;
-  if (ast_references_new_target(node->update))       return true;
+  bool lexical_arrow = in_arrow ||
+    (node->type == N_FUNC && (node->flags & FN_ARROW));
+  if (
+    lexical_arrow && node->type == N_CALL &&
+    node->left && node->left->type == N_IDENT &&
+    node->left->len == 5 && memcmp(node->left->str, "super", 5) == 0
+  ) return true;
+
+  if (ast_references_new_target_impl(node->left, lexical_arrow))         return true;
+  if (ast_references_new_target_impl(node->right, lexical_arrow))        return true;
+  if (ast_references_new_target_impl(node->cond, lexical_arrow))         return true;
+  if (ast_references_new_target_impl(node->body, lexical_arrow))         return true;
+  if (ast_references_new_target_impl(node->catch_body, lexical_arrow))   return true;
+  if (ast_references_new_target_impl(node->finally_body, lexical_arrow)) return true;
+  if (ast_references_new_target_impl(node->catch_param, lexical_arrow))  return true;
+  if (ast_references_new_target_impl(node->init, lexical_arrow))         return true;
+  if (ast_references_new_target_impl(node->update, lexical_arrow))       return true;
   
   for (int i = 0; i < node->args.count; i++)
-    if (ast_references_new_target(node->args.items[i])) return true;
+    if (ast_references_new_target_impl(node->args.items[i], lexical_arrow)) return true;
     
   return false;
+}
+
+static bool ast_references_new_target(const sv_ast_t *node) {
+  return ast_references_new_target_impl(node, false);
 }
 
 static sv_ast_t *parse_func(P) {

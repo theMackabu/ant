@@ -10673,6 +10673,68 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
+      case OP_CALL_SUPER: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        uint16_t call_argc = sv_get_u16(ip + 1);
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 3) { ok = false; break; }
+
+        for (int i = (int)call_argc - 1; i >= 0; i--) {
+          MIR_reg_t areg = vstack_pop(&vs);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                r_args_buf, 0, 1),
+              MIR_new_reg_op(ctx, areg)));
+        }
+
+        MIR_reg_t r_super_nt = vstack_pop(&vs);
+        MIR_reg_t r_super_fn = vstack_pop(&vs);
+        MIR_reg_t r_super_this = vstack_pop(&vs);
+        MIR_reg_t r_super_res = vstack_push(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_call_out_this, 0, 1),
+            MIR_new_reg_op(ctx, r_super_this)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 12,
+            MIR_new_ref_op(ctx, call_method_proto),
+            MIR_new_ref_op(ctx, imp_call_method),
+            MIR_new_reg_op(ctx, r_super_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_super_fn),
+            MIR_new_reg_op(ctx, r_super_this),
+            MIR_new_reg_op(ctx, r_args_buf),
+            MIR_new_int_op(ctx, (int64_t)call_argc),
+            MIR_new_reg_op(ctx, r_super_fn),
+            MIR_new_reg_op(ctx, r_super_nt),
+            MIR_new_reg_op(ctx, r_call_out_this)));
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        JIT_EMIT_THROW_IF_ERROR(r_super_res);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_this_curr),
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_call_out_this, 0, 1)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_super_res),
+            MIR_new_reg_op(ctx, r_this_curr)));
+        break;
+      }
+
       case OP_TAIL_CALL_METHOD:
       case OP_CALL_METHOD: {
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);

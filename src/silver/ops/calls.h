@@ -122,27 +122,52 @@ static inline ant_value_t sv_op_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return result;
 }
 
+static inline ant_value_t sv_op_call_super(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
+  uint16_t argc = sv_get_u16(ip + 1);
+  
+  ant_value_t *args = &vm->stack[vm->sp - argc];
+  ant_value_t new_target = vm->stack[vm->sp - argc - 1];
+  ant_value_t func = vm->stack[vm->sp - argc - 2];
+  ant_value_t this_val = vm->stack[vm->sp - argc - 3];
+
+  js->new_target = new_target;
+  ant_value_t super_this = this_val;
+  ant_value_t result = sv_vm_call(vm, js, func, this_val, args, argc, &super_this, true);
+  vm->sp -= argc + 3;
+  if (is_err(result)) return result;
+
+  ant_value_t effective_this = is_object_type(result) ? result : super_this;
+  if (frame) frame->this = effective_this;
+  vm->stack[vm->sp++] = effective_this;
+  
+  return effective_this;
+}
+
 static inline ant_value_t sv_op_super_apply(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   uint16_t argc = sv_get_u16(ip + 1);
+  
   ant_value_t *args = &vm->stack[vm->sp - argc];
-  ant_value_t this = vm->stack[vm->sp - argc - 1];
+  ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
+  ant_value_t this = vm->stack[vm->sp - argc - 3];
   sv_call_args_t call;
 
   sv_call_args_reset(&call, args, (int)argc);
   ant_value_t norm = sv_apply_normalize_args(js, &call);
   if (is_err(norm)) return norm;
 
-  if (frame) js->new_target = frame->new_target;
+  js->new_target = new_target;
   ant_value_t super_this = this;
-  ant_value_t result = sv_vm_call(
-    vm, js, func, this, call.args, call.argc, &super_this, true);
+  ant_value_t result = sv_vm_call(vm, js, func, this, call.args, call.argc, &super_this, true);
   sv_call_args_release(&call);
-  vm->sp -= argc + 2;
-  if (frame && !is_err(result))
-    frame->this = is_object_type(result) ? result : super_this;
-  if (!is_err(result)) vm->stack[vm->sp++] = result;
-  return result;
+  vm->sp -= argc + 3;
+  if (is_err(result)) return result;
+
+  ant_value_t effective_this = is_object_type(result) ? result : super_this;
+  if (frame) frame->this = effective_this;
+  vm->stack[vm->sp++] = effective_this;
+  
+  return effective_this;
 }
 
 static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {

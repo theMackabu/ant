@@ -1829,6 +1829,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_SUPER: {
+    VM_CHECK(sv_op_call_super(vm, js, frame, ip));
+    NEXT(3);
+  }
+
   L_CALL_ARRAY_INCLUDES: {
     uint16_t call_argc = sv_get_u16(ip + 1);
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];

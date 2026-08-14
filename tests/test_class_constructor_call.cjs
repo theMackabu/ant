@@ -64,6 +64,50 @@ class DerivedWithField extends Base {
 assertClassCallThrows(() => DerivedWithField(), 'derived synthesized constructor');
 assert.strictEqual(new DerivedWithField().value, 1);
 
+class ArrowBase {
+  constructor(value) {
+    this.value = value;
+    this.seenNewTarget = new.target;
+  }
+}
+class ArrowDerived extends ArrowBase {
+  constructor(value) {
+    const callSuper = () => super(value);
+    assert.strictEqual(callSuper(), this, 'arrow super() result');
+  }
+}
+for (let i = 0; i < 5000; i++) {
+  const value = new ArrowDerived(i);
+  assert.strictEqual(value.value, i, 'arrow super() argument');
+  assert.strictEqual(value.seenNewTarget, ArrowDerived, 'arrow super() new.target');
+}
+
+class SpreadArrowDerived extends ArrowBase {
+  constructor(...args) {
+    const callSuper = () => super(...args);
+    callSuper();
+  }
+}
+const spreadArrow = new SpreadArrowDerived(42);
+assert.strictEqual(spreadArrow.value, 42, 'spread arrow super() argument');
+assert.strictEqual(
+  spreadArrow.seenNewTarget, SpreadArrowDerived,
+  'spread arrow super() new.target'
+);
+
+class NestedArrowDerived extends ArrowBase {
+  constructor(value) {
+    const makeCallSuper = () => () => super(value);
+    makeCallSuper()();
+  }
+}
+const nestedArrow = new NestedArrowDerived(43);
+assert.strictEqual(nestedArrow.value, 43, 'nested arrow super() argument');
+assert.strictEqual(
+  nestedArrow.seenNewTarget, NestedArrowDerived,
+  'nested arrow super() new.target'
+);
+
 // Compile the constructor before exercising the invalid ordinary-call path.
 class Hot {
   constructor(value) {

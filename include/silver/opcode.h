@@ -172,6 +172,7 @@ OP_DEF(  JMP_TRUE8,         2,   1,   0, label8)    /* short conditional */
 
 OP_DEF(  CALL,              3,   1,   1, npop)      /* func args... -> result */
 OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> result */
+OP_DEF(  CALL_SUPER,        3,   3,   1, npop)      /* this super new.target args... -> this */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
 OP_DEF(  CALL_CALL,         3,   1,   1, u8_u8)     /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
@@ -183,7 +184,7 @@ OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
 OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */
 OP_DEF(  APPLY,             3,   3,   1, u16)       /* func this [args] -> result */
-OP_DEF(  SUPER_APPLY,       3,   3,   1, u16)       /* super this [args] -> result */
+OP_DEF(  SUPER_APPLY,       3,   4,   1, u16)       /* this super new.target [args] -> this */
 OP_DEF(  NEW_APPLY,         3,   2,   1, u16)       /* func new.target [args] -> obj */
 OP_DEF(  EVAL,              5,   1,   1, npop)      /* direct eval */
 OP_DEF(  RETURN,            1,   1,   0, none)
@@ -410,6 +411,7 @@ OP_FLAG(JMP_TRUE8             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 
 OP_FLAG(CALL                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_JIT_INLINE_ARGC)
 OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH | SV_OPF_JIT_INLINE_ARGC)
+OP_FLAG(CALL_SUPER            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
