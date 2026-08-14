@@ -18,6 +18,7 @@ Store in-progress execution plans here.
 - [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
+- [PCRE2 JIT Compiler Size Optimization](pcre2-jit-size-optimization.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Stream Property Surface](stream-property-surface.md)
 - [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
