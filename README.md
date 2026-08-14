@@ -48,11 +48,11 @@ curl -fsSL https://antjs.org/install | bash
 
 Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
 
-| Suite        | Pass rate | Notes                                      |
-| ------------ | --------- | ------------------------------------------ |
-| compat-table | **100%**  | 1511/1511 (ES1–ES5, ES6, ES2016+, ESNext)  |
-| Temporal     | **100%**  | 4603/4603 at revision 2026-08-10           |
-| test262      | ~68%      | Improving; focus is on real-world coverage |
+| Suite        | Pass rate | Notes                                     |
+| ------------ | --------- | ----------------------------------------- |
+| compat-table | **100%**  | 1511/1511 (ES1–ES5, ES6, ES2016+, ESNext) |
+| Temporal     | **100%**  | 4603/4603 at revision 2026-08-10          |
+| test262      | ~65%      | 34758/53578 at revision 2026-08-10        |
 
 ## Benchmarks
 
