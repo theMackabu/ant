@@ -101,17 +101,64 @@ The follow-up runtime code adds 16,432 bytes (16.0 KiB) between matched,
 stripped, ad-hoc-signed non-PGO artifacts. Applied to the isolated PCRE2
 saving, the combined net reduction remains about 271.9 KiB.
 
+## RegExp split batch follow-up
+
+The remaining absent-split route was still quadratic because
+`RegExp.prototype[@@split]` invoked a sticky match at every candidate byte,
+updated `lastIndex` through generic property operations, and allocated a
+temporary exec-result array for every successful match. The split algorithm
+now has a guarded ASCII built-in path that performs one unanchored PCRE2/JIT
+search for the next match and materializes split pieces and captures directly
+from the match ovector. An unmatched input reuses the original string value
+instead of copying it.
+
+The fast path runs only after the specified species construction has occurred,
+and only when the resulting splitter has genuine RegExp internal slots, the
+exact built-in data-property `exec`, sticky matching, and a guarded writable
+own `lastIndex`. Custom species, observable `exec`, read-only `lastIndex`, and
+non-ASCII subjects retain the generic algorithm.
+
+The exact non-PGO baseline and candidate use the same PCRE2 `-Oz` build and
+settings. Their SHA-256 hashes are
+`bc996bab8465ea3b7072c3ef28d09a1117a687d960c07b687ebb5716fd1b3145`
+and
+`bbfd5b316fb5043d065df5d804b507db09fb31d36cc7fd4eafe1f55ed133cf8e`.
+Fifteen serial alternating AB/BA pairs measured:
+
+| 16,000-byte split shape | Baseline | Candidate | Speedup | Candidate / Node 26.5.1 |
+| --- | ---: | ---: | ---: | ---: |
+| absent delimiter | 1,178.989 us/op | 1.379 us/op | 854.7x | 3.93x |
+| one sparse delimiter | 1,231.760 us/op | 6.321 us/op | 194.9x | 12.82x |
+| 8,000 dense delimiters | 2,091.699 us/op | 175.806 us/op | 11.9x | 1.49x |
+| 8,000 captured delimiters | 2,310.742 us/op | 298.206 us/op | 7.7x | 2.44x |
+| empty matcher | 5,738.403 us/op | 598.901 us/op | 9.6x | 1.96x |
+
+The isolated 8,000-byte absent case measured 588.845 us/op for the baseline,
+0.840 us/op for the candidate, and 0.179 us/op for Node across 15 pairs: a
+700.6x Ant speedup and a remaining 4.70x Node gap. The combined multi-shape
+probe's 8,000-byte absent row coincided with a deterministic collection phase, so
+the isolated measurement is used for that size.
+
+Twelve final AB/BA pairs of the normal RegExp benchmark stayed flat: compile
+`-1.33%`, route matching `-0.58%`, token scanning `-0.01%`, and identifier
+splitting `-0.56%`; every paired p10-p90 interval crossed zero. The split
+change adds 2,232 bytes to Mach-O `__text` and four bytes to unwind metadata,
+while both stripped artifacts remain 9,520,416 bytes because the containing
+segments do not grow.
+
 ## Validation status
 
 - Confirmed the isolated JIT compiler command uses `-Oz` while the surrounding
   PCRE2 target remains at `-O3`.
 - Confirmed the isolated PCRE2 change retains a 287.9 KiB signed-binary saving;
   the regex-path follow-up consumes 16.0 KiB of it.
-- Passed 11 focused RegExp correctness tests after the regex-path follow-up.
+- Passed 11 focused RegExp correctness tests after the split batch follow-up.
 - Passed the full spec suite: 3,886 tests across 100 files, zero failures.
 - Byte-for-byte differential probes match Node for 104 deterministic long-byte
-  search cases and match the exact pre-change Ant binary for valid UTF-8 and
-  lone-surrogate RegExp behavior.
+  search cases and 1,827 split cases, and match the exact pre-change Ant binary
+  for valid UTF-8 and lone-surrogate RegExp behavior.
 - Added regression coverage for long repeated-prefix searches, cached string
-  patterns, and absent sticky splits.
+  patterns, absent sticky splits, captures, limits, empty matches, legacy
+  RegExp statics, final `lastIndex`, non-ASCII fallback, and observable custom
+  split species behavior.
 - Passed `maid preflight` and `maid knowledge`.

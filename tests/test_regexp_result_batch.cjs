@@ -197,4 +197,96 @@ assert(
 );
 assert(replacerCalls === 2, 'function replacer call count');
 
+assertJson(
+  'a,b;c'.split(/([,;])/),
+  ['a', ',', 'b', ';', 'c'],
+  'batched split captures'
+);
+assert(RegExp.$1 === ';' && RegExp.lastMatch === ';', 'batched split RegExp statics');
+assertJson(
+  'a,b;c'.split(/([,;])/, 3),
+  ['a', ',', 'b'],
+  'batched split limit'
+);
+assertJson('abc'.split(/(?:)/), ['a', 'b', 'c'], 'batched empty split');
+assertJson('ab'.split(/(?=b)/), ['a', 'b'], 'batched lookahead split');
+assertJson('a'.split(/$/), ['a'], 'batched end-anchor split');
+assertJson('a'.split(/^/), ['a'], 'batched start-anchor split');
+assertJson('é,β'.split(/(,)/u), ['é', ',', 'β'], 'unicode split fallback');
+const unsetSplitCapture = 'a-b'.split(/-(x)?/);
+assertJson(unsetSplitCapture, ['a', undefined, 'b'], 'batched unset split capture');
+assert(unsetSplitCapture[1] === undefined, 'unset split capture remains undefined');
+
+let capturedSplitter;
+function CapturedSplitSpecies(pattern, flags) {
+  capturedSplitter = new RegExp(pattern, flags);
+  return capturedSplitter;
+}
+const capturedSplitSource = /,/;
+capturedSplitSource.constructor = {
+  [Symbol.species]: CapturedSplitSpecies,
+};
+assertJson('a,'.split(capturedSplitSource), ['a', ''], 'captured splitter tail');
+assert(capturedSplitter.lastIndex === 2, 'captured splitter successful final lastIndex');
+assertJson('a,b'.split(capturedSplitSource), ['a', 'b'], 'captured splitter miss');
+assert(capturedSplitter.lastIndex === 0, 'captured splitter failed final lastIndex');
+
+function ReadonlySplitSpecies(pattern, flags) {
+  const splitter = new RegExp(pattern, flags);
+  Object.defineProperty(splitter, 'lastIndex', {
+    value: 0,
+    writable: false,
+  });
+  return splitter;
+}
+const readonlySplitSource = /,/;
+readonlySplitSource.constructor = {
+  [Symbol.species]: ReadonlySplitSpecies,
+};
+let readonlySplitThrew = false;
+try {
+  'a,b'.split(readonlySplitSource);
+} catch (error) {
+  readonlySplitThrew = error instanceof TypeError;
+}
+assert(readonlySplitThrew, 'readonly split lastIndex must use generic semantics');
+
+let customSplitCalls = 0;
+const customSplitter = {
+  lastIndex: 0,
+  exec() {
+    customSplitCalls++;
+    return null;
+  },
+};
+function CustomSplitSpecies() {
+  return customSplitter;
+}
+const customSplitSource = /z/;
+customSplitSource.constructor = {
+  [Symbol.species]: CustomSplitSpecies,
+};
+assertJson('abc'.split(customSplitSource), ['abc'], 'custom splitter fallback');
+assert(customSplitCalls === 3, 'custom splitter exec call count');
+assert(customSplitter.lastIndex === 2, 'custom splitter final lastIndex');
+
+let splitExecGetterCalls = 0;
+function AccessorSplitSpecies(pattern, flags) {
+  const splitter = new RegExp(pattern, flags);
+  Object.defineProperty(splitter, 'exec', {
+    configurable: true,
+    get() {
+      splitExecGetterCalls++;
+      return builtinExec;
+    },
+  });
+  return splitter;
+}
+const accessorSplitSource = /z/;
+accessorSplitSource.constructor = {
+  [Symbol.species]: AccessorSplitSpecies,
+};
+assertJson('abc'.split(accessorSplitSource), ['abc'], 'accessor splitter fallback');
+assert(splitExecGetterCalls === 3, 'split exec getter must run once per RegExpExec');
+
 console.log('regexp result and batch fast paths ok');

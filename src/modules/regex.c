@@ -2214,11 +2214,14 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
   return js_mkstr(js, buf, n);
 }
 
-static bool regexp_prepare_batch_builtin_exec(
+static bool regexp_prepare_builtin_exec(
   ant_t *js,
   ant_value_t rx,
+  uint8_t required_flags,
   compiled_regex_cache_entry_t **compiled_out,
-  uint8_t *flags_out
+  uint8_t *flags_out,
+  ant_object_t **lastindex_obj_out,
+  uint32_t *lastindex_slot_out
 ) {
   ant_regex_state_t *state = js->regex_state;
   if (
@@ -2253,7 +2256,7 @@ static bool regexp_prepare_batch_builtin_exec(
 
   compiled_regex_cache_entry_t *compiled_hint;
   uint8_t flags = regexp_flags_mask(js, rx, &compiled_hint);
-  if (!(flags & REGEXP_FLAG_GLOBAL)) {
+  if ((flags & required_flags) != required_flags) {
     goto reject;
   }
 
@@ -2274,11 +2277,24 @@ static bool regexp_prepare_batch_builtin_exec(
   }
 
   *compiled_out = compiled;
-  *flags_out = flags;
+  if (flags_out) *flags_out = flags;
+  if (lastindex_obj_out) *lastindex_obj_out = lastindex_obj;
+  if (lastindex_slot_out) *lastindex_slot_out = lastindex_slot;
   return true;
 
 reject:
   return false;
+}
+
+static bool regexp_prepare_batch_builtin_exec(
+  ant_t *js,
+  ant_value_t rx,
+  compiled_regex_cache_entry_t **compiled_out,
+  uint8_t *flags_out
+) {
+  return regexp_prepare_builtin_exec(
+    js, rx, REGEXP_FLAG_GLOBAL, compiled_out, flags_out, NULL, NULL
+  );
 }
 
 static inline PCRE2_SIZE regexp_advance_empty_match(
@@ -3179,6 +3195,116 @@ static ant_value_t builtin_regexp_symbol_search(ant_t *js, ant_value_t *args, in
   return vtype(idx) == T_NUM ? idx : tov(-1);
 }
 
+static inline void regexp_split_store_lastindex(
+  ant_object_t *obj,
+  uint32_t slot,
+  PCRE2_SIZE value
+) {
+  ant_object_prop_set_unchecked(obj, slot, tov((double)value));
+}
+
+static ant_value_t regexp_split_batch_fast(
+  ant_t *js,
+  ant_value_t splitter,
+  ant_value_t str,
+  ant_value_t result,
+  uint32_t limit,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  if (!str_is_ascii(str_ptr)) return js_mkundef();
+
+  compiled_regex_cache_entry_t *compiled;
+  ant_object_t *lastindex_obj;
+  uint32_t lastindex_slot;
+  if (!regexp_prepare_builtin_exec(
+    js, splitter, REGEXP_FLAG_STICKY, &compiled, NULL,
+    &lastindex_obj, &lastindex_slot
+  )) return js_mkundef();
+
+  regex_match_scope_t scope;
+  if (!regex_match_scope_begin(compiled, &scope)) return js_mkundef();
+
+  *used_fast_path = true;
+
+  PCRE2_SIZE size = (PCRE2_SIZE)str_len;
+  PCRE2_SIZE p = 0;
+  PCRE2_SIZE q = 0;
+  uint32_t result_len = 0;
+
+  while (q < size) {
+    regexp_split_store_lastindex(lastindex_obj, lastindex_slot, q);
+
+    PCRE2_SIZE *ovector;
+    uint32_t ovcount;
+    int rc = compiled_regex_run_in_scope(
+      js, compiled, str_ptr, str_len, q, false,
+      &scope, &ovector, &ovcount
+    );
+    if (rc < 0 || ovector[0] >= size) {
+      regexp_split_store_lastindex(lastindex_obj, lastindex_slot, 0);
+      break;
+    }
+
+    PCRE2_SIZE start = ovector[0];
+    PCRE2_SIZE end = ovector[1];
+    regexp_split_store_lastindex(lastindex_obj, lastindex_slot, end);
+    update_regexp_statics(js, str, ovector, ovcount);
+
+    if (end == p) {
+      q = start + 1;
+      continue;
+    }
+
+    ant_value_t piece = js_mkstr(
+      js, str_ptr + p, (ant_offset_t)(start - p)
+    );
+    if (is_err(piece)) {
+      regex_match_scope_end(&scope);
+      return piece;
+    }
+    js_arr_push(js, result, piece);
+    if (++result_len == limit) {
+      regex_match_scope_end(&scope);
+      return result;
+    }
+
+    for (uint32_t i = 1; i < ovcount; i++) {
+      PCRE2_SIZE capture_start = ovector[2 * i];
+      PCRE2_SIZE capture_end = ovector[2 * i + 1];
+      ant_value_t capture = capture_start == PCRE2_UNSET
+        ? js_mkundef()
+        : js_mkstr(
+            js, str_ptr + capture_start,
+            (ant_offset_t)(capture_end - capture_start)
+          );
+      if (is_err(capture)) {
+        regex_match_scope_end(&scope);
+        return capture;
+      }
+      js_arr_push(js, result, capture);
+      if (++result_len == limit) {
+        regex_match_scope_end(&scope);
+        return result;
+      }
+    }
+
+    p = end;
+    q = p;
+  }
+
+  ant_value_t trailing = p == 0
+    ? str
+    : js_mkstr(js, str_ptr + p, (ant_offset_t)(size - p));
+  regex_match_scope_end(&scope);
+  if (is_err(trailing)) return trailing;
+  js_arr_push(js, result, trailing);
+  return result;
+}
+
 static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js_getthis(js);
   if (!is_object_type(rx))
@@ -3254,6 +3380,12 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
     if (vtype(z) == T_NULL) js_arr_push(js, A, str);
     return mkval(T_ARR, vdata(A));
   }
+
+  bool used_fast_path = false;
+  ant_value_t fast_result = regexp_split_batch_fast(
+    js, splitter, str, A, lim, &used_fast_path
+  );
+  if (is_err(fast_result) || used_fast_path) return fast_result;
 
   ant_offset_t p = 0, q = p;
   ant_value_t lastIndex_key = js_mkstr(js, "lastIndex", 9);
