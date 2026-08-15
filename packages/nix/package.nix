@@ -74,6 +74,7 @@ let
     c = '${antStdenv.cc}/bin/clang'
     cpp = '${antStdenv.cc}/bin/clang++'
   '';
+  cargoEnvTarget = stdenv.hostPlatform.rust.cargoEnvVarTarget;
 
   toolsNodeModules = importNpmLock.buildNodeModules {
     package = lib.importJSON ../../src/tools/package.json;
@@ -147,6 +148,11 @@ antStdenv.mkDerivation (finalAttrs: {
   env = {
     ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
     RUSTC = lib.getExe' rustToolchain "rustc";
+    "CARGO_TARGET_${cargoEnvTarget}_LINKER" = "${antStdenv.cc}/bin/clang";
+    "CC_${cargoEnvTarget}" = "${antStdenv.cc}/bin/clang";
+    "CXX_${cargoEnvTarget}" = "${antStdenv.cc}/bin/clang++";
+    HOST_CC = "${antStdenv.cc}/bin/clang";
+    HOST_CXX = "${antStdenv.cc}/bin/clang++";
     NIX_CFLAGS_COMPILE = optArgs;
   };
 
