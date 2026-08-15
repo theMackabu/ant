@@ -9,6 +9,14 @@ function runRejectedEntry(source) {
   return result.stderr;
 }
 
+function runRejectedMain(source) {
+  return runRejectedEntry(`
+    const template = [${JSON.stringify(source)}];
+    template.raw = template;
+    Ant.unsafe.c(template);
+  `);
+}
+
 assert.strictEqual(
   Ant.unsafe.c`
     #include <stdio.h>
@@ -74,6 +82,15 @@ assert.throws(
   `,
   /options\.entry must be a C identifier/,
 );
+
+for (const length of [NaN, Infinity, -Infinity]) {
+  assert.throws(
+    () => Ant.unsafe.c({ entry: 'result', args: { length }, returns: 'int' })`
+      int result(void) { return 0; }
+    `,
+    /options\.args supports at most/,
+  );
+}
 
 assert.throws(
   () => Ant.unsafe.c({ entry: 'missing', returns: 'string' })`
@@ -214,5 +231,17 @@ assert.match(
   `),
   /must match configured signature/,
 );
+
+for (const source of [
+  'int main(double argc, double argv) { return argc == argv; }',
+  'int main(int argc, int argv) { return argc + argv; }',
+  'int main(int argc, char **argv, double envp) { return argc + (argv != 0) + (envp != 0); }',
+  '#include <stdint.h>\nint main(uintptr_t argc, char **argv) { return argc + (argv != 0); }',
+]) {
+  assert.match(
+    runRejectedMain(source),
+    /main must return int and accept no arguments or int followed by one or two pointer-sized arguments/,
+  );
+}
 
 console.log('Ant.unsafe.c tests passed');

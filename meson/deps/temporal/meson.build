@@ -38,11 +38,47 @@ if temporal_opt.enabled() or temporal_opt.auto()
       error('Temporal does not support ' + host_machine.system())
     endif
 
+    temporal_build_cpu = build_machine.cpu_family()
+    temporal_build_cc = meson.get_compiler('c', native: true)
+    temporal_build_cc_target = run_command(
+      temporal_build_cc.cmd_array(), '-dumpmachine',
+      check: true,
+    ).stdout().strip()
+
+    if temporal_build_cpu != 'aarch64' and temporal_build_cpu != 'x86_64'
+      error('Temporal bootstrap does not support CPU family ' + temporal_build_cpu)
+    endif
+
+    if build_machine.system() == 'darwin'
+      temporal_rustup_host = temporal_build_cpu + '-apple-darwin'
+    elif build_machine.system() == 'windows'
+      if temporal_build_cc_target.contains('msvc')
+        temporal_rustup_host = temporal_build_cpu + '-pc-windows-msvc'
+      elif temporal_build_cc_target.contains('gnu') or temporal_build_cc_target.contains('mingw')
+        temporal_rustup_host = temporal_build_cpu + '-pc-windows-gnu'
+      else
+        error('Temporal cannot determine the bootstrap Windows ABI from compiler target ' + temporal_build_cc_target)
+      endif
+    elif build_machine.system() == 'linux'
+      if temporal_build_cc_target.contains('musl')
+        temporal_rustup_host = temporal_build_cpu + '-unknown-linux-musl'
+      elif temporal_build_cc_target.contains('gnu')
+        temporal_rustup_host = temporal_build_cpu + '-unknown-linux-gnu'
+      else
+        error('Temporal cannot determine the bootstrap Linux ABI from compiler target ' + temporal_build_cc_target)
+      endif
+    else
+      error('Temporal bootstrap does not support ' + build_machine.system())
+    endif
+
     temporal_lib_name = temporal_target.endswith('-windows-msvc') ? 'ant_temporal.lib' : 'libant_temporal.a'
     temporal_features = host_machine.system() == 'windows' ? 'tzdb-embedded' : 'fs-tzdb'
     temporal_include = temporal_capi_source / 'bindings/c'
 
-    message('Temporal Rust target: ' + temporal_target + ' (compiler: ' + temporal_cc_target + ')')
+    message(
+      'Temporal Rust target: ' + temporal_target + ' (compiler: ' + temporal_cc_target +
+      ', bootstrap host: ' + temporal_rustup_host + ')'
+    )
 
     temporal_lib = custom_target('temporal_staticlib',
       input: files(
@@ -57,7 +93,7 @@ if temporal_opt.enabled() or temporal_opt.auto()
         '--crate', src_root / 'src/temporal',
         '--temporal-capi', temporal_capi_source,
         '--cache', src_root / '.cache/temporal-rust',
-        '--rustup-host', temporal_target,
+        '--rustup-host', temporal_rustup_host,
         '--target', temporal_target,
         '--out', '@OUTPUT@',
         '--features', temporal_features,

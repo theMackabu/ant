@@ -372,10 +372,10 @@ static ant_value_t ant_c_parse_signature(
     return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
 
   double length = js_getnum(length_value);
-  if (length < 0 || length > (double)ANT_C_MAX_ARGS || length != (double)(size_t)length)
-    return js_mkerr(
-      js, "Ant.unsafe.c() options.args supports at most %zu arguments", ANT_C_MAX_ARGS
-    );
+  if (
+    !isfinite(length) || length < 0 || length > (double)ANT_C_MAX_ARGS ||
+    length != (double)(size_t)length
+  ) return js_mkerr(js, "Ant.unsafe.c() options.args supports at most %zu arguments", ANT_C_MAX_ARGS);
 
   signature->arg_count = (size_t)length;
   signature->return_function = true;
@@ -394,13 +394,25 @@ static ant_value_t ant_c_parse_signature(
   return js_mkundef();
 }
 
-static bool ant_c_signature_matches(
-  MIR_func_t entry_func, const ant_c_signature_t *signature
-) {
-  if (signature->returns == ANT_C_RETURNS_STATUS) return
-    (entry_func->nargs == 0 || entry_func->nargs == 2 || entry_func->nargs == 3)
-    && !entry_func->vararg_p && entry_func->nres == 1
-    && entry_func->res_types[0] == MIR_T_I32;
+static bool ant_c_signature_matches(MIR_func_t entry_func, const ant_c_signature_t *signature) {
+  if (signature->returns == ANT_C_RETURNS_STATUS) {
+    if (
+      (entry_func->nargs != 0 && entry_func->nargs != 2 && entry_func->nargs != 3) ||
+      entry_func->vararg_p || entry_func->nres != 1 ||
+      entry_func->res_types[0] != MIR_T_I32
+    ) return false;
+    
+    if (entry_func->nargs == 0) return true;
+    
+    if (
+      VARR_GET(MIR_var_t, entry_func->vars, 0).type != MIR_T_I32 ||
+      !ant_c_pointer_sized_type(VARR_GET(MIR_var_t, entry_func->vars, 1).type)
+    ) return false;
+    
+    return entry_func->nargs == 2 || ant_c_pointer_sized_type(
+      VARR_GET(MIR_var_t, entry_func->vars, 2).type
+    );
+  }
 
   size_t arg_count = signature->return_function ? signature->arg_count : 0;
   if (entry_func->nargs != arg_count || entry_func->vararg_p || entry_func->nres != 1) return false;
@@ -421,11 +433,17 @@ static ant_value_t ant_c_signature_error(
     js, "Ant.unsafe.c() string entry \"%s\" must return char * and match %zu configured arguments",
     signature->entry_name, arg_count
   );
+  
   if (signature->returns == ANT_C_RETURNS_NUMBER) return js_mkerr(
     js, "Ant.unsafe.c() entry \"%s\" must match configured signature with return type \"%s\" and %zu arguments",
     signature->entry_name, signature->returns_name, arg_count
   );
-  return js_mkerr(js, "Ant.unsafe.c() main must return int and accept 0, 2, or 3 arguments");
+  
+  return js_mkerr(
+    js,
+    "Ant.unsafe.c() main must return int and accept no arguments or int "
+    "followed by one or two pointer-sized arguments"
+  );
 }
 
 static ant_value_t ant_c_result_to_js(
