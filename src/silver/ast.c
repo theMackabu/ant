@@ -141,9 +141,10 @@ static bool program_has_module_syntax(const sv_ast_t *program) {
   return false;
 }
 
-static inline sv_ast_t *mk_num(double val) {
-  sv_ast_t *n = mk_plain(N_NUMBER);
+static inline sv_ast_t *mk_num(P, double val) {
+  sv_ast_t *n = mk(N_NUMBER);
   n->num = val;
+  n->src_end = (uint32_t)(TOFF + TLEN);
   return n;
 }
 
@@ -324,6 +325,8 @@ static sv_ast_t *parse_member_suffix(P, sv_ast_t *left, uint8_t la) {
       mem->right = parse_dot_property_name(p);
       if (!mem->right) return mk(N_EMPTY);
     }
+    mem->src_off = left ? left->src_off : mem->src_off;
+    mem->src_end = mem->right ? mem->right->src_end : (uint32_t)(TOFF + TLEN);
     return mem;
   }
 
@@ -334,6 +337,8 @@ static sv_ast_t *parse_member_suffix(P, sv_ast_t *left, uint8_t la) {
     mem->right = parse_expr(p);
     mem->flags = 1;
     expect(p, TOK_RBRACKET);
+    mem->src_off = left ? left->src_off : mem->src_off;
+    mem->src_end = (uint32_t)(TOFF + TLEN);
     return mem;
   }
 
@@ -589,12 +594,13 @@ static sv_ast_t *parse_primary(P) {
 
   l_number: {
     CONSUME();
-    return mk_num(tod(TVAL));
+    return mk_num(p, tod(TVAL));
   }
 
   l_string: {
     sv_ast_t *n = mk(N_STRING);
     sv_ast_set_string(n, sv_lexer_str_literal(&p->lx));
+    n->src_end = (uint32_t)(TOFF + TLEN);
     CONSUME();
     return n;
   }
@@ -604,15 +610,16 @@ static sv_ast_t *parse_primary(P) {
     sv_ast_t *n = mk(N_BIGINT);
     n->str = tok_str(p);
     n->len = (uint32_t)TLEN;
+    n->src_end = (uint32_t)(TOFF + TLEN);
     return n;
   }
 
-  l_true:  { CONSUME(); sv_ast_t *n = mk(N_BOOL); n->num = 1; return n; }
-  l_false: { CONSUME(); sv_ast_t *n = mk(N_BOOL); n->num = 0; return n; }
-  l_null:  { CONSUME(); return mk(N_NULL); }
-  l_undef: { CONSUME(); return mk(N_UNDEF); }
-  l_this:  { CONSUME(); return mk(N_THIS); }
-  l_globalthis: { CONSUME(); return mk(N_GLOBAL_THIS); }
+  l_true:  { CONSUME(); sv_ast_t *n = mk(N_BOOL); n->num = 1; n->src_end = (uint32_t)(TOFF + TLEN); return n; }
+  l_false: { CONSUME(); sv_ast_t *n = mk(N_BOOL); n->num = 0; n->src_end = (uint32_t)(TOFF + TLEN); return n; }
+  l_null:  { CONSUME(); sv_ast_t *n = mk(N_NULL); n->src_end = (uint32_t)(TOFF + TLEN); return n; }
+  l_undef: { CONSUME(); sv_ast_t *n = mk(N_UNDEF); n->src_end = (uint32_t)(TOFF + TLEN); return n; }
+  l_this:  { CONSUME(); sv_ast_t *n = mk(N_THIS); n->src_end = (uint32_t)(TOFF + TLEN); return n; }
+  l_globalthis: { CONSUME(); sv_ast_t *n = mk(N_GLOBAL_THIS); n->src_end = (uint32_t)(TOFF + TLEN); return n; }
 
   l_ident: {
     CONSUME();
@@ -636,6 +643,7 @@ static sv_ast_t *parse_primary(P) {
     expect(p, TOK_RPAREN);
     expr->flags |= FN_PAREN;
     if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_off = paren_off;
+    if (expr->type != N_FUNC && expr->type != N_CLASS) expr->src_end = (uint32_t)(TOFF + TLEN);
     return expr;
   }
 
@@ -671,6 +679,7 @@ static sv_ast_t *parse_primary(P) {
   l_template: {
     CONSUME();
     sv_ast_t *n = mk(N_TEMPLATE);
+    n->src_end = (uint32_t)(TOFF + TLEN);
     const uint8_t *in = (const uint8_t *)&CODE[TOFF];
     size_t tpl_len = TLEN;
     size_t i = 1;
@@ -726,19 +735,24 @@ static sv_ast_t *parse_primary(P) {
   }
 
   l_new: {
+    uint32_t new_off = (uint32_t)TOFF;
     CONSUME();
 
     if (NEXT() == TOK_DOT) {
       CONSUME();
       if (NEXT() == TOK_IDENTIFIER && TLEN == 6 && memcmp(tok_str(p), "target", 6) == 0) {
         CONSUME();
-        return mk(N_NEW_TARGET);
+        sv_ast_t *target = mk(N_NEW_TARGET);
+        target->src_off = new_off;
+        target->src_end = (uint32_t)(TOFF + TLEN);
+        return target;
       }
       sv_parse_unexpected_token(p);
       return mk(N_EMPTY);
     }
 
     sv_ast_t *n = mk(N_NEW);
+    n->src_off = new_off;
     sv_ast_t *callee = parse_primary(p);
     
     for (;;) {
@@ -761,7 +775,9 @@ static sv_ast_t *parse_primary(P) {
         if (NEXT() == TOK_COMMA) CONSUME();
         else break;
       } expect(p, TOK_RPAREN);
+      n->src_end = (uint32_t)(TOFF + TLEN);
     }
+    if (n->src_end <= n->src_off && n->left) n->src_end = n->left->src_end;
     return n;
   }
 
@@ -874,6 +890,7 @@ static sv_ast_t *parse_primary(P) {
     n->len = (uint32_t)(pattern_end - pattern_start);
     n->aux = &CODE[flags_start];
     n->aux_len = (uint32_t)(flags_end - flags_start);
+    n->src_end = (uint32_t)flags_end;
     CONSUMED = 1;
     return n;
   }
@@ -912,6 +929,7 @@ static sv_ast_t *parse_array(P) {
     else break;
   }
   expect(p, TOK_RBRACKET);
+  n->src_end = (uint32_t)(TOFF + TLEN);
   return n;
 }
 
@@ -969,10 +987,11 @@ static sv_ast_t *parse_object(P) {
         prop->flags |= FN_COMPUTED;
       } else if (TOK == TOK_NUMBER) {
         CONSUME();
-        prop->left = mk_num(tod(TVAL));
+        prop->left = mk_num(p, tod(TVAL));
       } else if (TOK == TOK_STRING) {
         prop->left = mk(N_STRING);
         sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
+        prop->left->src_end = (uint32_t)(TOFF + TLEN);
         CONSUME();
       } else {
         prop->left = mk_ident_from_tok(p);
@@ -1004,10 +1023,11 @@ static sv_ast_t *parse_object(P) {
           prop->flags |= FN_COMPUTED;
         } else if (TOK == TOK_NUMBER) {
           CONSUME();
-          prop->left = mk_num(tod(TVAL));
+          prop->left = mk_num(p, tod(TVAL));
         } else if (TOK == TOK_STRING) {
           prop->left = mk(N_STRING);
           sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
+          prop->left->src_end = (uint32_t)(TOFF + TLEN);
           CONSUME();
         } else {
           prop->left = mk_ident_from_tok(p);
@@ -1045,10 +1065,11 @@ static sv_ast_t *parse_object(P) {
           prop->flags |= FN_COMPUTED;
         } else if (TOK == TOK_NUMBER) {
           CONSUME();
-          prop->left = mk_num(tod(TVAL));
+          prop->left = mk_num(p, tod(TVAL));
         } else if (TOK == TOK_STRING) {
           prop->left = mk(N_STRING);
           sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
+          prop->left->src_end = (uint32_t)(TOFF + TLEN);
           CONSUME();
         } else {
           prop->left = mk_ident_from_tok(p);
@@ -1069,11 +1090,12 @@ static sv_ast_t *parse_object(P) {
     }
     else if (TOK == TOK_NUMBER) {
       CONSUME();
-      prop->left = mk_num(tod(TVAL));
+      prop->left = mk_num(p, tod(TVAL));
     }
     else if (TOK == TOK_STRING) {
       prop->left = mk(N_STRING);
       sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
+      prop->left->src_end = (uint32_t)(TOFF + TLEN);
       CONSUME();
     }
     else {
@@ -1112,6 +1134,7 @@ static sv_ast_t *parse_object(P) {
     else break;
   }
   expect(p, TOK_RBRACE);
+  n->src_end = (uint32_t)(TOFF + TLEN);
   return n;
 }
 
@@ -1137,6 +1160,8 @@ static sv_ast_t *parse_call(P) {
         else break;
       }
       expect(p, TOK_RPAREN);
+      call->src_off = n ? n->src_off : call->src_off;
+      call->src_end = (uint32_t)(TOFF + TLEN);
       n = call;
     } else if (la == TOK_DOT || la == TOK_LBRACKET) {
       n = parse_member_suffix(p, n, la);
@@ -1150,6 +1175,7 @@ static sv_ast_t *parse_call(P) {
         opt->right = parse_expr(p);
         opt->flags = 1;
         expect(p, TOK_RBRACKET);
+        opt->src_end = (uint32_t)(TOFF + TLEN);
       } else if (TOK == TOK_LPAREN) {
         sv_ast_t *call = mk(N_CALL);
         call->left = opt;
@@ -1160,6 +1186,8 @@ static sv_ast_t *parse_call(P) {
           else break;
         }
         expect(p, TOK_RPAREN);
+        call->src_off = n ? n->src_off : call->src_off;
+        call->src_end = (uint32_t)(TOFF + TLEN);
         n = call;
         continue;
       } else if (TOK == TOK_HASH) {
@@ -1175,6 +1203,8 @@ static sv_ast_t *parse_call(P) {
         opt->right = parse_dot_property_name(p);
         if (!opt->right) return mk(N_EMPTY);
       }
+      opt->src_off = n ? n->src_off : opt->src_off;
+      if (opt->src_end <= opt->src_off && opt->right) opt->src_end = opt->right->src_end;
       n = opt;
     } else if (la == TOK_TEMPLATE) {
       sv_ast_t *tagged = mk(N_TAGGED_TEMPLATE);
@@ -1204,6 +1234,8 @@ static sv_ast_t *parse_postfix(P) {
     sv_ast_t *u = mk(N_UPDATE);
     u->op = la;
     u->right = n;
+    u->src_off = n ? n->src_off : u->src_off;
+    u->src_end = (uint32_t)(TOFF + TLEN);
     return u;
   }
   return n;
@@ -1219,6 +1251,7 @@ static sv_ast_t *parse_unary(P) {
     n->op = (la == TOK_PLUS) ? TOK_UPLUS :
             (la == TOK_MINUS) ? TOK_UMINUS : la;
     n->right = parse_unary(p);
+    n->src_end = n->right ? n->right->src_end : n->src_end;
     if (NEXT() == TOK_EXP) {
       SV_MKERR_TYPED(
         JS, JS_ERR_SYNTAX,
@@ -1241,6 +1274,7 @@ static sv_ast_t *parse_unary(P) {
     n->op = la;
     n->right = target;
     n->flags = 1;
+    n->src_end = target ? target->src_end : n->src_end;
     return n;
   }
   if (la == TOK_THROW) {
@@ -1268,6 +1302,8 @@ static sv_ast_t *parse_binary(P, int min_prec) {
     bin->op = op;
     bin->left = left;
     bin->right = right;
+    bin->src_off = left ? left->src_off : bin->src_off;
+    bin->src_end = right ? right->src_end : bin->src_end;
     left = bin;
   }
   return left;
@@ -1282,6 +1318,8 @@ static sv_ast_t *parse_ternary(P) {
     n->left = parse_assign(p);
     expect(p, TOK_COLON);
     n->right = parse_assign(p);
+    n->src_off = cond ? cond->src_off : n->src_off;
+    n->src_end = n->right ? n->right->src_end : n->src_end;
     return n;
   }
   return cond;
@@ -1340,6 +1378,8 @@ static sv_ast_t *parse_assign(P) {
     n->op = op;
     n->left = left;
     n->right = parse_assign(p);
+    n->src_off = left ? left->src_off : n->src_off;
+    n->src_end = n->right ? n->right->src_end : n->src_end;
     return n;
   }
   return left;
@@ -1352,6 +1392,8 @@ static sv_ast_t *parse_expr(P) {
     sv_ast_t *n = mk(N_SEQUENCE);
     n->left = left;
     n->right = parse_assign(p);
+    n->src_off = left ? left->src_off : n->src_off;
+    n->src_end = n->right ? n->right->src_end : n->src_end;
     left = n;
   }
   return left;
@@ -1656,6 +1698,7 @@ static sv_ast_t *parse_block(P, bool directive_ctx) {
   sv_parse_stmt_list(p, &block->args, true, directive_ctx);
   if (JS->thrown_exists) return block;
   expect(p, TOK_RBRACE);
+  block->src_end = (uint32_t)(TOFF + TLEN);
   return block;
 }
 
@@ -1723,6 +1766,7 @@ static sv_ast_t *parse_import_stmt(P) {
   if (NEXT() == TOK_STRING) {
     sv_ast_t *spec = mk(N_STRING);
     sv_ast_set_string(spec, sv_lexer_str_literal(&p->lx));
+    spec->src_end = (uint32_t)(TOFF + TLEN);
     CONSUME();
     if (NEXT() == TOK_SEMICOLON) CONSUME();
     decl->right = spec;
@@ -1809,6 +1853,7 @@ parse_from:
 
   sv_ast_t *spec = mk(N_STRING);
   sv_ast_set_string(spec, sv_lexer_str_literal(&p->lx));
+  spec->src_end = (uint32_t)(TOFF + TLEN);
   CONSUME();
   decl->right = spec;
 
@@ -1955,6 +2000,7 @@ static sv_ast_t *parse_export_stmt(P) {
       }
       sv_ast_t *spec = mk(N_STRING);
       sv_ast_set_string(spec, sv_lexer_str_literal(&p->lx));
+      spec->src_end = (uint32_t)(TOFF + TLEN);
       decl->right = spec;
       decl->flags |= EX_FROM;
       CONSUME();
@@ -1987,6 +2033,7 @@ static sv_ast_t *parse_export_stmt(P) {
     }
     sv_ast_t *spec = mk(N_STRING);
     sv_ast_set_string(spec, sv_lexer_str_literal(&p->lx));
+    spec->src_end = (uint32_t)(TOFF + TLEN);
     decl->right = spec;
     decl->flags |= EX_FROM;
     CONSUME();

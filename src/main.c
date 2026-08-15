@@ -60,6 +60,7 @@
 #include "modules/request.h"
 #include "modules/response.h"
 #include "modules/shell.h"
+#include "modules/syntax.h"
 #include "modules/process.h"
 #include "modules/tty.h"
 #include "modules/path.h"
@@ -951,6 +952,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
   ant_register_library(sandbox_library, "ant:sandbox", NULL);
+  ant_register_library(syntax_library, "ant:syntax", NULL);
   
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);

@@ -23,6 +23,7 @@ typedef struct ant_object ant_object_t;
 typedef struct ant_shape  ant_shape_t;
 
 typedef struct sv_vm             sv_vm_t;
+typedef struct sv_ast            sv_ast_t;
 typedef struct sv_func           sv_func_t;
 typedef struct sv_upvalue        sv_upvalue_t;
 typedef struct sv_closure        sv_closure_t;
