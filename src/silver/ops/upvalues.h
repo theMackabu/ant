@@ -68,12 +68,8 @@ static inline void sv_init_closure_function_object(
   ant_value_t module_ctx
 ) {
   sv_func_t *child = closure->func;
-  /* Lazy materialization writes a young func_obj into a closure that may
-     be old; closures on old objects are not traversed during minor GC, so
-     remember the closure (marked via gc_mark_closure on the next minor,
-     which promotes the func_obj subtree). Remembered before mkobj so the
-     whole materialization window is covered. */
   gc_remember_closure(js, closure);
+  
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
   if (is_err(func_obj) || !child) return;
@@ -210,16 +206,12 @@ static inline void sv_closure_finish_init(
   ant_value_t parent_func, const char *name, uint32_t name_len,
   ant_value_t eval_env, bool attach_eval_env
 ) {
-  /* The function object (and its .prototype) materializes lazily on
-     first property/prototype access; see sv_closure_materialize_func_obj. */
   closure->module_ctx = sv_get_current_closure_module_ctx(js, parent_func);
   closure->func_obj = 0;
   closure->u.pending.name = name;
   closure->u.pending.len = name_len;
 
   if (attach_eval_env) {
-    /* Direct-eval environments live on the function object; materialize
-       now so the env can be attached (rare: direct eval only). */
     ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
     if (is_object_type(func_obj)) {
       js_set_slot_wb(js, func_obj, SLOT_EVAL_ENV, eval_env);

@@ -342,8 +342,6 @@ static void websocket_emit_close(websocket_state_t *ws, uint16_t code, const cha
 
 static void websocket_client_close_cb(uv_handle_t *handle) {
   websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)handle);
-  /* Event dispatch can collect the socket, so keep its active-list root until
-     tlsuv has released the transport and the JS callbacks have returned. */
   websocket_emit_close(ws, ws->client_close_code, "", ws->client_close_was_clean);
   websocket_remove_active(ws);
 }

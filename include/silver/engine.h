@@ -341,9 +341,6 @@ struct sv_func {
 #endif
 };
 
-/* Object sites are recorded while bytecode is scanned from low to high pc,
-   so both the interpreter and JIT compiler can resolve a bytecode offset
-   without walking every preceding allocation site. */
 static inline sv_obj_site_cache_t *sv_obj_site_for_offset(
   sv_func_t *func,
   uint32_t bc_off
@@ -497,13 +494,9 @@ static inline void gc_upvalue_capture_barrier(ant_t *js, sv_upvalue_t *uv) {
 static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
   sv_upvalue_t *uv = (sv_upvalue_t *)fixed_arena_alloc(&js->upvalue_arena);
   if (uv) {
-    /* Track, never trigger: upvalues are allocated mid-closure-creation
-       and a collection here could sweep the half-built closure. The
-       closure-alloc trigger provides the cadence. */
     if (js->young_upvalue_len < js->young_upvalue_cap)
       js->young_upvalues[js->young_upvalue_len++] = uv;
-    else
-      gc_track_young_upvalue_slow(js, uv);
+    else gc_track_young_upvalue_slow(js, uv);
   }
   return uv;
 }
@@ -524,30 +517,19 @@ static constexpr char SV_CLASS_CTOR_CALL_ERROR[] =
 typedef struct sv_closure {
   uint32_t call_flags;
   int bound_argc;
+  
   sv_func_t *func;
-
-  /* Points at inline_upvals when upvalue_count <= SV_CLOSURE_INLINE_UPVALS
-     (no heap array; the arena never moves elements, so the self-pointer is
-     stable). Free paths must skip arrays that alias inline storage. */
   sv_upvalue_t **upvalues;
   sv_upvalue_t *inline_upvals[SV_CLOSURE_INLINE_UPVALS];
-  /* Ordinary closures consult this only with SV_CALL_HAS_BOUND_THIS;
-     arrows always carry their lexical this here. */
+  
   ant_value_t bound_this;
   ant_value_t super_val;
-  /* 0 (raw) = function object not materialized yet; see js_func_obj. */
   ant_value_t func_obj;
 
-  /* Discriminated by SV_CALL_HAS_BOUND_ARGS. The two sides never coexist:
-     bind() results carry bound args and always materialize func_obj at
-     creation, while the pending-name stash is only written/read while
-     func_obj == 0 (SET_NAME paths and sv_closure_materialize_func_obj
-     both check it). GC marking and both sweeps must branch on the flag —
-     freeing `pending.name` (code-arena memory) would corrupt the heap. */
   union {
     struct {
-      ant_value_t *argv;   /* malloc'd copy of the bound arguments */
-      ant_value_t args_arr; /* JS array keeping argv's contents alive */
+      ant_value_t *argv;
+      ant_value_t args_arr;
     } bound;
     struct {
       const char *name;
@@ -555,13 +537,10 @@ typedef struct sv_closure {
     } pending;
   } u;
 
-  /* Captured at closure creation for lazy func_obj materialization.
-     `js` is the owning isolate — js_func_obj has no isolate argument
-     and there is no process-global isolate to reach for. */
   ant_t *js;
   ant_value_t module_ctx;
+  
   uint8_t in_remember_set;
-
   uint64_t gc_epoch;
 } sv_closure_t;
 
@@ -955,23 +934,22 @@ static inline ant_value_t sv_prepare_construct_meta(
   if (effective_new_target) *effective_new_target = new_target;
   if (record_func && vtype(target) == T_FUNC) *record_func = target;
 
-  /*
-   * A bound Proxy performs the actual allocation in its [[Construct]]
-   * trap. Looking up its prototype here would duplicate the observable
-   * GetPrototypeFromConstructor performed by that path.
-   */
   if (
     requested_new_target == func &&
     vtype(target) == T_OBJ && is_proxy(target)
   ) return js_mkundef();
 
   ant_value_t proto_source =
-    requested_new_target == func ? target : requested_new_target;
+    requested_new_target == func 
+    ? target : requested_new_target;
+  
   uint8_t source_type = vtype(proto_source);
+  
   if (
     source_type != T_FUNC && source_type != T_CFUNC &&
     !is_object_type(proto_source)
   ) return js_mkundef();
+  
   return sv_construct_prototype_from(js, proto_source);
 }
 

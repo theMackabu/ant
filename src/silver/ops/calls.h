@@ -305,20 +305,6 @@ static inline void sv_op_check_ctor_ret(sv_vm_t *vm, sv_frame_t *frame) {
   } else vm->stack[vm->sp++] = frame->this;
 }
 
-/* OP_CALL_CALL: `X(a)(b...)` where the compiler proved the outer args are
-   literal or const-local reads (so pre-evaluating them is unobservable).
-   OP_CALL_CALL_SLOT uses the same fast path but carries one outer local as a
-   deferred frame-slot read for the generic path.
-   When X is a curried step — body exactly `CLOSURE k; RETURN`, one param —
-   with a fusable leaf child, the step's only effect is materializing the
-   intermediate closure; skip it and run the child directly against a
-   closure synthesized on this C frame. The nested sv_call_closure runs the
-   child to completion, so the stack structs outlive the frame that points
-   at them; the conservative C-stack scan keeps the captured value alive
-   during any minor; in_remember_set=1 on both structs keeps them out of
-   every GC list (gc_remember_* early-return on the flag, and the clear
-   loops only touch listed entries). Anything else falls back to two
-   ordinary calls with identical semantics. */
 static inline bool sv_op_call_call_fused(
   sv_vm_t *vm, ant_t *js, ant_value_t xv,
   ant_value_t *args1, int n1, ant_value_t *args2, int n2,
@@ -334,18 +320,9 @@ static inline bool sv_op_call_call_fused(
     ) {
       uint32_t kidx = sv_get_u32(f1->code + 1);
       sv_func_t *f2 = (sv_func_t *)(uintptr_t)vdata(f1->constants[kidx]);
-
-      /* Fuse only when the child is already JIT-compiled: the fused frame
-         would otherwise interpret the child (and, through its tail calls,
-         everything below it) — measured 2x slower on newt than just
-         allocating the intermediate. Cold children take the generic path,
-         which is exactly what warms them up. */
       if (!f2->jit_code) return false;
 
-      /* A deferred slot carries a raw string-builder value. Once these
-         guards succeed, skipping X is unobservable, so materialize at the
-         point the ordinary outer argument read would occur. Eager
-         OP_CALL_CALL arguments were already materialized by GET_LOCAL. */
+      // TODO: reduce nesting
       if (materialize_args2) {
         for (int i = 0; i < n2; i++) {
           ant_value_t value = args2[i];
@@ -445,8 +422,6 @@ static inline ant_value_t sv_op_call_call(
   return sv_vm_call(vm, js, r, js_mkundef(), args2, n2, NULL, false);
 }
 
-/* Interpreter form: frame storage may move while the inner call runs, so the
-   slot address is reacquired before evaluating the outer argument. */
 static inline ant_value_t sv_op_call_call_slot(
   sv_vm_t *vm, ant_t *js, ant_value_t xv, ant_value_t arg1,
   uint16_t slot_idx
@@ -473,9 +448,6 @@ static inline ant_value_t sv_op_call_call_slot(
   return sv_vm_call(vm, js, r, js_mkundef(), &arg2, 1, NULL, false);
 }
 
-/* JIT form: captured/writable slots live in stable JIT frame storage; an
-   uncaptured local is materialized into a temporary slot because a nested
-   call cannot mutate it. */
 static inline ant_value_t sv_op_call_call_slot_ptr(
   sv_vm_t *vm, ant_t *js, ant_value_t xv, ant_value_t arg1,
   ant_value_t *slot

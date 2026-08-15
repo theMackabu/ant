@@ -682,26 +682,20 @@ ant_value_t jit_helper_get_field(
   return out;
 }
 
-/* Inline-body variant: must not invoke user code. Warms the same
-   per-bytecode IC as jit_helper_get_field, then tries a data-only chain
-   read; anything effectful (getters, proxies, exotic fallback semantics)
-   returns SV_JIT_BAILOUT so the outer slow path — which has observed zero
-   effects from this callee — executes the operation exactly once. */
 ant_value_t jit_helper_get_field_inline(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
   (void)vm;
   uint8_t *ip = NULL;
+  
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   sv_atom_t atom = { .str = str, .len = len };
   ant_value_t out = js_mkundef();
-  if (sv_try_prop_get_field_ic_no_effect(js, obj, &atom, func, ip, &out))
-    return out;
-  /* Atom keys are interned at compile time, so the shape walk can use the
-     pointer directly. */
-  if (sv_try_get_data_prop_no_effect_interned(js, obj, str, len, &out))
-    return out;
+  
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, &atom, func, ip, &out)) return out;
+  if (sv_try_get_data_prop_no_effect_interned(js, obj, str, len, &out)) return out;
+  
   return SV_JIT_BAILOUT;
 }
 
@@ -1099,12 +1093,9 @@ ant_value_t jit_helper_get_elem_inline(
   if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d) {
-      /* Dense in-bounds non-hole reads only; holes and sparse/exotic
-         arrays need the semantic lookup, which may reach an accessor or
-         proxy on the prototype chain. */
+      // TODO: reduce nesting
       ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-      if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array &&
-          ptr->u.array.data) {
+      if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array && ptr->u.array.data) {
         uint32_t idx = (uint32_t)d;
         if (idx < ptr->u.array.len && idx < ptr->u.array.cap) {
           ant_value_t value = ptr->u.array.data[idx];
@@ -1132,8 +1123,6 @@ ant_value_t jit_helper_get_elem_inline(
       if (is_err(key_str)) return key_str;
       break;
     default:
-      /* Symbol lookups and object-key coercion may invoke user code; the
-         generic path must perform them exactly once. */
       return SV_JIT_BAILOUT;
   }
 

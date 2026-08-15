@@ -12,42 +12,6 @@
 #include "silver/engine.h"
 #include "silver/swarm.h"
 #include "modules/regex.h"
-
-bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
-  if (!js || !slot) return false;
-
-  if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
-    size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
-    ant_shape_t ***slots = realloc(
-      js->ic_shape_ref_slots, cap * sizeof(*slots)
-    );
-    if (!slots) return false;
-    js->ic_shape_ref_slots = slots;
-    js->ic_shape_ref_cap = cap;
-  }
-
-  js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
-  return true;
-}
-
-void sv_ic_shape_refs_cleanup(ant_t *js) {
-  if (!js) return;
-
-  /* IC storage belongs to the code arena, so release its owned shapes before
-     js_destroy resets that arena and invalidates these field addresses. */
-  for (size_t i = 0; i < js->ic_shape_ref_len; i++) {
-    ant_shape_t **slot = js->ic_shape_ref_slots[i];
-    if (!slot || !*slot) continue;
-    ant_shape_t *shape = *slot;
-    *slot = NULL;
-    ant_shape_release(shape);
-  }
-
-  free(js->ic_shape_ref_slots);
-  js->ic_shape_ref_slots = NULL;
-  js->ic_shape_ref_len = js->ic_shape_ref_cap = 0;
-}
-
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"
@@ -71,12 +35,46 @@ void sv_ic_shape_refs_cleanup(ant_t *js) {
 #include "ops/objects.h"
 #include "ops/coercion.h"
 
+// TODO: constexpr
 enum {
-  SV_VM_GUARD_SIZE = (size_t)65536,
-  SV_STACK_RESERVE = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
+  SV_VM_GUARD_SIZE  = (size_t)65536,
+  SV_STACK_RESERVE  = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
   SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
-  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
+  SV_VM_RESERVE     = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
 };
+
+bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
+  if (!js || !slot) return false;
+
+  if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
+    size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
+    ant_shape_t ***slots = realloc(
+      js->ic_shape_ref_slots, cap * sizeof(*slots)
+    );
+    if (!slots) return false;
+    js->ic_shape_ref_slots = slots;
+    js->ic_shape_ref_cap = cap;
+  }
+
+  js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
+  return true;
+}
+
+void sv_ic_shape_refs_cleanup(ant_t *js) {
+  if (!js) return;
+
+  for (size_t i = 0; i < js->ic_shape_ref_len; i++) {
+    ant_shape_t **slot = js->ic_shape_ref_slots[i];
+    if (!slot || !*slot) continue;
+    ant_shape_t *shape = *slot;
+    *slot = NULL;
+    ant_shape_release(shape);
+  }
+
+  free(js->ic_shape_ref_slots);
+  js->ic_shape_ref_slots = NULL;
+  js->ic_shape_ref_len = js->ic_shape_ref_cap = 0;
+}
 
 static void *sv_vm_reserve_storage(void) {
 #ifdef _WIN32

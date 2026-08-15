@@ -155,7 +155,6 @@ typedef struct ant_object {
   uint8_t overflow_cap;
 
   ant_object_flags_t flags;
-  /* Lazily assigned when an IC caches this raw pointer. Arena reuse clears it. */
   uint32_t ic_identity;
 } ant_object_t;
 

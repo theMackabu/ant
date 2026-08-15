@@ -324,9 +324,6 @@ static inline bool sv_with_binding_is_unscopable(
     ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
-    /* Negative cache fingerprints only the base + first proto; deeper
-       chain mutations are bounded by epoch wipes, so stay on the obj
-       epoch (minor + major) to keep the pre-split invalidation cadence. */
     uint32_t cache_epoch = ant_ic_obj_epoch_counter;
 
     if (
@@ -336,6 +333,7 @@ static inline bool sv_with_binding_is_unscopable(
       proto_ptr == js->runtime_cache.with_no_unscopables_proto &&
       (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
     ) return false;
+    
     ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
     bool has_unscopables = unscopables_off.obj;
     bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;

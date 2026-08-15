@@ -103,10 +103,6 @@ bool gc_obj_is_marked(const ant_object_t *obj) {
   return obj && obj->mark_epoch == gc_obj_epoch;
 }
 
-/* gc_obj_epoch is a u8: after ~254 collections it recycles values, and an
-   old object whose frozen mark_epoch aliases the current epoch would be
-   skipped as already-visited, leaving its children unmarked for the next
-   sweep. Clear stale marks whenever the counter wraps. */
 static void gc_obj_epoch_wrapped(ant_t *js) {
   if (!js) return;
   for (ant_object_t *o = js->objects; o; o = o->next)
@@ -239,7 +235,6 @@ void gc_track_young_closure_slow(ant_t *js, struct sv_closure *c) {
   if (js->young_closure_len >= js->young_closure_cap) {
     size_t new_cap = js->young_closure_cap ? js->young_closure_cap * 2 : 1024;
     struct sv_closure **entries = realloc(js->young_closures, new_cap * sizeof(*entries));
-    /* Untracked entries are simply promoted early (major-only lifecycle). */
     if (!entries) return;
     js->young_closures = entries;
     js->young_closure_cap = new_cap;
@@ -258,26 +253,10 @@ void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv) {
   js->young_upvalues[js->young_upvalue_len++] = uv;
 }
 
-/* Scavenge the young rosters: entries unmarked by this collection's mark
-   phase are unreachable (every cross-minor container of closure references
-   is either a re-marked root or write-barrier-remembered, and remembered
-   closures are marked before this runs). Marked entries are dropped from
-   the roster, promoting them to the major-only lifecycle. Mirrors the
-   per-closure freeing done by the major arena sweep. */
 static inline void gc_release_closure_payload(sv_closure_t *c) {
-  if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) &&
-      c->upvalues != c->inline_upvals) {
-    free(c->upvalues);
-  }
+  if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) && c->upvalues != c->inline_upvals) free(c->upvalues);
   c->upvalues = NULL;
-
-  /* On the next major sweep, an already-free slot's call_flags contains
-     the low word of its free-list link. Closure-slot alignment keeps the
-     low flag bits clear, but leave the union safe even if that invariant
-     changes: only an owned bound argv is freed, then the pointer is always
-     cleared before fixed_arena_free_elem overlays call_flags. */
-  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS)
-    free(c->u.bound.argv);
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) free(c->u.bound.argv);
   c->u.bound.argv = NULL;
 }
 
@@ -286,18 +265,14 @@ static void gc_sweep_young_closures(ant_t *js) {
   for (size_t i = 0; i < js->young_closure_len; i++) {
     sv_closure_t *c = js->young_closures[i];
     if (c->gc_epoch == gc_epoch) {
-      /* Survived: promote immediately. Aging (keep one more minor) is NOT
-         sound here — remember-set entries are one-shot, so an old->young
-         reference would go unmarked at the closure's second minor. Aging
-         requires rebuilding remembered slots during minor scans
-         (V8-scavenger-style); residence in the large nursery already
-         captures most of aging's benefit. */
       js->gc_closure_promoted_since_major++;
       continue;
     }
+    
     gc_release_closure_payload(c);
     fixed_arena_free_elem(ca, c);
   }
+  
   js->young_closure_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 
@@ -438,8 +413,6 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
     sv_upvalue_t *uv = cells[i];
     if (!uv) continue;
     uv->gc_epoch = gc_epoch;
-    /* Open cells still point into live VM or activation storage here:
-       teardown seals every cell before freeing that storage, after marking. */
     gc_mark_value(js, *uv->location);
   }
 }
@@ -651,10 +624,6 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     if (fixed_arena_contains(&js->closure_arena, raw_closure))
       gc_mark_closure(js, raw_closure);
 
-    /* JIT frames hold open-upvalue chains as raw cell pointers on the C
-       stack (jit_open_upvalues); walk the chain so the young-upvalue
-       sweep cannot free live cells. Chain nodes are containment-checked
-       each hop since `w` may be a stale word. */
     sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
     while (raw_uv && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
       if (raw_uv->gc_epoch == gc_epoch) break;
@@ -684,9 +653,6 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
 
 void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
   if (!js || !ptr || size < sizeof(uint64_t)) return;
-  /* Pool storage is word-aligned. Padding may be scanned via memcpy, but every
-     candidate sink validates containment; ignore an incomplete trailing word
-     rather than reading beyond the block's used range. */
   size_t bytes = size & ~(sizeof(uint64_t) - 1u);
   uintptr_t lo = (uintptr_t)ptr;
   if (lo > UINTPTR_MAX - bytes) return;
@@ -852,18 +818,13 @@ static void gc_mark_roots(ant_t *js) {
   gc_drain_mark_stack(js);
 }
 
-/* Type tags whose objects carry payload the general path must free. */
-#define GC_FREE_PAYLOAD_MASK \
+#define GC_FREE_PAYLOAD_MASK                       \
   ((1u << T_ARR) | (1u << T_MAP) | (1u << T_SET) | \
    (1u << T_WEAKMAP) | (1u << T_WEAKSET))
 
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
 
-  /* Fast path: plain data objects — no finalizer, native tag, sidecar,
-     promise state, overflow props, exotic ops, or container payload. In
-     allocation-heavy code this is nearly every dead object, and the
-     general path below costs a branch ladder plus two libc calls each. */
   if ((((uintptr_t)obj->finalizer | (uintptr_t)obj->promise_state |
         (uintptr_t)obj->extra_slots | (uintptr_t)obj->overflow_prop |
         (uintptr_t)obj->exotic_ops) | obj->native.tag) == 0 &&
@@ -976,11 +937,6 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 
-/* Minor-GC young pass: sweep and promote in ONE walk of the young list —
-   the list chase over ~176B objects is cache-miss bound, and the separate
-   sweep-then-promote walks paid it twice. The young list is detached up
-   front and survivors are linked into objects_old incrementally, so both
-   lists stay consistent if a finalizer runs mid-walk. */
 static void gc_sweep_young_and_promote(ant_t *js) {
   ant_object_t *obj = js->objects;
   js->objects = NULL;
@@ -1064,9 +1020,6 @@ void gc_pin_existing_objects(ant_t *js) {
     js->objects_old = NULL;
   }
 
-  /* Everything alive at pin time is now held by permanent objects, which
-     minors never traverse; drain the young rosters so the closure/upvalue
-     scavenger treats all of it as old (mirrors the epoch stamping above). */
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
@@ -1142,9 +1095,6 @@ void gc_objects_run(
     }
   }
 
-  /* The full arena sweeps above already freed dead roster entries; clear
-     the young rosters so the next minor cannot touch freed slots.
-     Survivors are implicitly promoted. */
   js->young_closure_len = 0;
   js->young_upvalue_len = 0;
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
@@ -1229,11 +1179,6 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   gc_clear_remembered_closures(js);
   gc_clear_remembered_upvalues(js);
 
-  // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
-  // property values on old objects are not scanned during minor GC (old objects
-  // are pre-marked but not traversed unless in the remember set), so their
-  // gc_epoch would not be updated and they would be incorrectly freed.
-  // closure/upvalue arenas are only swept on major GC `gc_objects_run`
   js->gc_objects_running = false;
 }
 

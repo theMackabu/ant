@@ -133,9 +133,6 @@ static void rope_mark_conservative_pool(ant_t *js, ant_pool_t *pool) {
 
 void gc_ropes_mark_conservative_roots(ant_t *js) {
   if (!js || !js->rope_gc.conservative_marking) return;
-  /* Retaining the blocks is not enough: live rope and builder payloads may
-     be the only owners of ordinary GC values. Treat every initialized word
-     as a root before the ordinary heap is swept. */
   rope_mark_conservative_pool(js, &js->pool.rope);
   rope_mark_conservative_pool(js, &js->rope_gc.old);
   rope_mark_conservative_pool(js, &js->rope_gc.young);

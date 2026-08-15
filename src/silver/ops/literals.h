@@ -49,11 +49,6 @@ static inline sv_obj_site_cache_t *sv_obj_site_for_ip(sv_func_t *func, uint8_t *
   return sv_obj_site_for_offset(func, off);
 }
 
-/* Apply the per-site shape cache to a fresh literal object. For static
-   literals (key_atoms set) the cached shape is the FINAL shape, built once
-   by walking the transition tree; the object is created pre-shaped with
-   undefined-initialized slots and the DEFINE_SLOTs that follow store
-   positionally. */
 static inline void sv_obj_site_apply(
   ant_t *js, sv_func_t *func,
   sv_obj_site_cache_t *site, ant_object_t *ptr

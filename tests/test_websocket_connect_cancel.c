@@ -1,23 +1,3 @@
-/* Regression test for WebSocket close during connect (tlsuv connector cancel
- * lifetime). A deterministic fake connector records the connect callback and
- * completes cancellation asynchronously on the libuv loop, the way the real
- * direct connector does.
- *
- * Required behavior (tlsuv-websocket-connect-cancel-lifetime.patch):
- *   - tlsuv_websocket_close() while a connector request is outstanding must
- *     NOT run the close callback synchronously; it must defer completion to
- *     the connector callback.
- *   - cancellation completes exactly once, and the close callback runs
- *     exactly once, only after connector completion.
- *   - the user connection callback is not invoked for a user-requested close.
- *   - a raced successful connection (socket delivered after cancel) is
- *     disposed of instead of installing a transport.
- *
- * The close callback frees the owning websocket, mirroring Ant's GC. On the
- * unpatched code the deferred connector completion then touches freed memory;
- * an ASan build reports the use-after-free directly, and the ordering
- * assertions below fail on any build.
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +23,6 @@ static void check(int ok, const char *message) {
     g_failures++;
   }
 }
-
-/* ---- deterministic fake connector ---------------------------------------- */
 
 typedef struct fake_state_s {
   uv_timer_t timer;
@@ -83,7 +61,6 @@ static tlsuv_connector_req fake_connect(uv_loop_t *loop, const tlsuv_connector_t
 static void fake_cancel(tlsuv_connector_req req) {
   fake_state_t *f = (fake_state_t *)(uintptr_t)req;
   f->cancel_calls++;
-  /* complete asynchronously, like direct_cancel via on_poll_close/on_resolve */
   f->timer_active = 1;
   uv_timer_start(&f->timer, fake_complete_cb, 5, 0);
 }
@@ -106,8 +83,6 @@ static const tlsuv_connector_t fake_connector = {
   .cancel = fake_cancel,
   .free = fake_free,
 };
-
-/* ---- scenario driver ----------------------------------------------------- */
 
 typedef struct scenario_s {
   int in_close_call;
@@ -138,7 +113,6 @@ static void scn_close_cb(uv_handle_t *handle) {
   g_scn.close_cb_sync = g_scn.in_close_call;
   g_scn.close_cb_completions_seen = g_fake.completions;
   g_scn.tr_at_close = ws->tr;
-  /* the owner may release the websocket from its close callback */
   free(ws);
 }
 
@@ -189,12 +163,9 @@ static void run_scenario(const char *name, uv_os_sock_t deliver_sock, int delive
 }
 
 int main(void) {
-  /* 1. cancellation completes with UV_ECANCELED and no socket */
   run_scenario("cancelled connect", (uv_os_sock_t)-1, UV_ECANCELED);
 
 #ifndef _WIN32
-  /* 2. cancellation races a successful connection: the connector delivers a
-   *    live socket after close; it must be disposed, not installed */
   int sv[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
     fprintf(stderr, "FAIL: socketpair: %s\n", strerror(errno));

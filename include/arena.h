@@ -248,8 +248,6 @@ static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
   return p;
 }
 
-/* Like fixed_arena_alloc but skips the element memset. Callers must
-   initialize every field a GC scan or sweep can observe. */
 static inline void *fixed_arena_alloc_uninit(ant_fixed_arena_t *a) {
   if (a->free_list) {
     void *p = a->free_list;

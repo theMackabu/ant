@@ -107,10 +107,6 @@ struct ant_events_state {
 };
 // --- END: TO BE MIGRATED ---
 
-/* Listener values live in malloc'd sidecar arrays that minors only reach by
-   scanning the owning emitter object; old owners are skipped during minors,
-   so storing into the sidecar must remember the owner like any old->young
-   pointer store. */
 static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
   if (!is_object_type(owner)) return;
   gc_write_barrier(js, js_obj_ptr(owner), stored);

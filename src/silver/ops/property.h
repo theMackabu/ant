@@ -157,8 +157,6 @@ static inline void sv_ic_set_shape_ref(
   uint8_t mask,
   ant_shape_t *shape
 ) {
-  /* Only property IC shape fields enter this registry. Other IC families
-     alias cached_shape with non-shape pointers and must never be released. */
   if (!ic || !slot || *slot == shape) return;
   if ((ic->shape_ref_mask & mask) == 0) {
     if (!shape || !sv_ic_shape_ref_register(js, slot)) return;
@@ -225,9 +223,6 @@ static inline bool sv_ic_try_get_hit(
     source = receiver;
     prop_shape = receiver->shape;
   } else {
-    /* Value-compare the proto before touching the cached holder: a live
-       receiver with an unchanged proto (epoch-protected) pins the whole
-       chain, so the holder cannot have been freed. */
     if (receiver->proto != ic->guard.receiver_proto) return false;
     if (!is_object_type(receiver->proto)) return false;
     ant_object_t *proto = js_obj_ptr(js_as_obj(receiver->proto));
@@ -293,14 +288,6 @@ static inline bool sv_ic_probe_get_chain(
   return false;
 }
 
-/* Complete a property read only when the prototype chain provably yields an
-   ordinary data property without invoking user code. Accessors, exotic
-   receivers/holders (proxies), suspicious prototype cycles, and ABSENT keys
-   return false so an inline caller can bail out before any observable
-   effect. Absence must never be concluded as `undefined` here: after a clean
-   shape-chain miss the semantic path still consults js_getprop_fallback,
-   which owns exotic index/interceptor reads (array elements, function
-   length, ...). */
 static inline bool sv_try_get_data_prop_chain_no_effect(
   ant_t *js,
   ant_value_t obj,
@@ -407,9 +394,6 @@ static inline void sv_ic_guard_absent_prefix(
 }
 
 static inline uintptr_t sv_prim_neg_pack_shape(uintptr_t aux, const ant_shape_t *shape2) {
-  /* The low 17 cached_aux bits belong to the get-field IC state. On 64-bit
-     targets the remaining 47 bits hold shape address bits 3..49: shapes are
-     allocator-aligned, and Ant requires heap pointers to fit in 50 bits. */
 #if UINTPTR_MAX > UINT32_MAX
   ANT_ASSERT(
     ((uintptr_t)shape2 >> 50) == 0,
@@ -713,8 +697,6 @@ static inline bool sv_prim_ic_lookup(
     sv_ic_set_cached_shape(js, ic, holder->shape);
     ic->cached_index = prop_idx;
     ic->cached_is_own = false;
-    /* Primitive ICs overload receiver_proto: its tag records the receiver
-       primitive type, while its payload distinguishes a hit from a miss. */
     ic->guard.receiver_proto = mkval(pt, SV_PRIM_IC_HIT_DATA);
     ic->epoch = ant_ic_epoch_counter;
     sv_gf_ic_set_proto_id(ic, 0);
@@ -742,12 +724,6 @@ static inline bool sv_prim_ic_lookup(
   return false;
 }
 
-/* The IC hit/probe/data-only portion of the GET_FIELD path: IC hit, chain
-   probe + fill, and the primitive IC. Never invokes user code — accessors,
-   proxies/exotics, and unprobeable chains return false. All IC warmup, hit,
-   miss, shape-ref, and prototype-identity behavior lives here so every
-   consumer (interpreter, main JIT helper, inline JIT helper) warms the same
-   per-bytecode IC entry. */
 static inline bool sv_try_prop_get_field_ic_no_effect(
   ant_t *js,
   ant_value_t obj,
@@ -935,8 +911,6 @@ static inline ant_value_t sv_put_field_cached(
       ant_shape_retain(ic->guard.add.to_shape);
       ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
-      /* The new key is observable through the shape even if value-storage
-         growth fails, so invalidate before that allocation can fail. */
       ant_prototype_property_write_invalidate(js, ptr, a->str);
       if (ic->guard.add.slot >= ptr->prop_count &&
           !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
@@ -1148,7 +1122,6 @@ static inline void sv_define_slot(
     gc_write_barrier(js, ptr, val);
     return;
   }
-  /* Pre-shaping failed (allocation pressure); define by name. */
   if (!sv_try_define_field_fast(js, obj, str, val))
     js_define_own_prop(js, obj, str, len, val);
 }

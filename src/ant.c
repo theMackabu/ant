@@ -2034,19 +2034,13 @@ static inline void builder_set_cached_flat(ant_value_t builder, ant_value_t flat
   ptr->cached = flat;
 }
 
-/* Repeated append produces a left-heavy tree. Walk it right-to-left and write
-   backwards so that shape needs only one pending node instead of one entry per
-   append. Balanced and right-heavy trees spill into a growable stack. */
-static bool rope_flatten_into(
-  ant_t *js, ant_value_t str, char *dest, ant_offset_t total_len
-) {
+static bool rope_flatten_into(ant_value_t str, char *dest, ant_offset_t total_len) {
   assert(vtype(str) == T_STR);
-  (void)js;
 
-  enum { ROPE_FLATTEN_LOCAL_STACK = 32 };
-  ant_value_t local[ROPE_FLATTEN_LOCAL_STACK];
+  ant_value_t local[32];
   ant_value_t *stack = local;
-  size_t sp = 0, cap = ROPE_FLATTEN_LOCAL_STACK;
+  
+  size_t sp = 0, cap = 32;
   ant_offset_t pos = total_len;
   ant_value_t current = str;
 
@@ -2109,7 +2103,7 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   }
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)(uintptr_t)vdata(flat);
-  if (!rope_flatten_into(js, rope, flat_ptr->bytes, total_len)) {
+  if (!rope_flatten_into(rope, flat_ptr->bytes, total_len)) {
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkerr(js, "string flatten failed");
   }
@@ -2123,7 +2117,6 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   if (vtype(cached) == T_NUM)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
 
-  /* The cached flat string is now the rope's complete representation. */
   rope_canonicalize_flat(rope, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
@@ -3340,27 +3333,15 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     }
   }
 
-  /* A successful shape transition is observable even if growing the value
-     storage below fails, so invalidate before that allocation can fail. */
-  if (added && interned_key)
-    ant_prototype_property_write_invalidate(
-      js, ptr, interned_key
-    );
-
-  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
-    return js_mkerr(js, "oom");
-  }
-
-  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) {
-    return js_mkerr(js, "oom");
-  }
+  if (added && interned_key) ant_prototype_property_write_invalidate(js, ptr, interned_key);
+  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return js_mkerr(js, "oom");
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return js_mkerr(js, "oom");
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
-  if (interned_key && !added)
-    ant_prototype_property_write_invalidate(
-      js, ptr, interned_key
-    );
+  
+  if (interned_key && !added) 
+    ant_prototype_property_write_invalidate(js, ptr, interned_key);
 
   return v;
 }
@@ -3392,26 +3373,15 @@ static ant_value_t mkprop_interned_impl(
     added = true;
   }
 
-  /* Keep prototype ICs coherent with a shape transition even when
-     the following property-storage growth fails. */
-  if (added)
-    ant_prototype_property_write_invalidate(
-      js, ptr, interned_key
-    );
-
-  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
-    return js_mkerr(js, "oom");
-  }
-  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) {
-    return js_mkerr(js, "oom");
-  }
+  if (added) ant_prototype_property_write_invalidate(js, ptr, interned_key);
+  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return js_mkerr(js, "oom");
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return js_mkerr(js, "oom");
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  
   if (!added)
-    ant_prototype_property_write_invalidate(
-      js, ptr, interned_key
-    );
+    ant_prototype_property_write_invalidate(js, ptr, interned_key);
   
   return v;
 }
@@ -6345,16 +6315,15 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->func = orig->func;
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
-  /* Re-binding a bound function must not rebind this: the inner binding
-     wins even when its bound value is undefined. */
-  bound_closure->bound_this =
-    (orig->call_flags & (SV_CALL_IS_ARROW | SV_CALL_HAS_BOUND_THIS))
-      ? orig->bound_this : this_arg;
+  
+  bound_closure->bound_this = 
+    (orig->call_flags & (SV_CALL_IS_ARROW | SV_CALL_HAS_BOUND_THIS)) 
+    ? orig->bound_this : this_arg;
+  
   bound_closure->call_flags |= SV_CALL_HAS_BOUND_THIS;
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
-  /* call_flags copied from orig may already carry HAS_BOUND_ARGS
-     (re-binding a bound function); the union must match the flag. */
+  
   if (bound_closure->call_flags & SV_CALL_HAS_BOUND_ARGS) {
     bound_closure->u.bound.argv = NULL;
     bound_closure->u.bound.args_arr = js_mkundef();
@@ -6372,12 +6341,8 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     memcpy(bound_closure->upvalues, orig->upvalues, upvalue_bytes);
   }
   
-  /* Fold the inner binding's args: outer bind args go AFTER the inner's
-     (spec: inner.args ++ outer.args ++ call args). */
   int orig_bound_argc = (orig->call_flags & SV_CALL_HAS_BOUND_ARGS) ? orig->bound_argc : 0;
   if (bound_argc > 0 || orig_bound_argc > 0) {
-    /* GC can run inside mkarr below; the union must already be on the
-       bound side (marker branches on the flag) with safe empty values. */
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
     bound_closure->u.bound.argv = NULL;
     bound_closure->u.bound.args_arr = js_mkundef();
@@ -13670,8 +13635,6 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
   const char *search_ptr = (char *)(uintptr_t)(search_off);
 
   if (str_is_ascii(str_ptr)) {
-    /* Byte indices are UTF-16 indices: clamp, match, and report entirely
-       in byte space. */
     size_t max_start = (size_t)str_len;
     if (nargs >= 2 && vtype(args[1]) == T_NUM) {
       double pos = tod(args[1]);
@@ -13698,11 +13661,8 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
   }
 
   size_t utf16_len = (size_t)str_utf16_len(js, str);
-
-  /* The position argument and the result are in UTF-16 code units; the
-     scan itself runs over UTF-8 bytes (matches can only start on
-     codepoint boundaries, UTF-8 being self-synchronizing). */
   size_t max_start = utf16_len;
+  
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
     if (isnan(pos)) pos = D(utf16_len);
@@ -13716,11 +13676,8 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
 
   size_t byte_limit;
   if (max_start >= utf16_len) byte_limit = (size_t)str_len;
-  else {
-    /* A position inside an astral character floors to the start of that
-       character, so a match beginning after it stays excluded. */
-    byte_limit = utf16_index_to_byte_offset_floor(str_ptr, str_len, max_start);
-  }
+  else byte_limit = utf16_index_to_byte_offset_floor(str_ptr, str_len, max_start);
+
   if (byte_limit > (size_t)str_len - search_len)
     byte_limit = (size_t)str_len - search_len;
 
@@ -13730,6 +13687,7 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
         memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
       return tov(D(byte_offset_to_utf16(str_ptr, i - 1)));
   }
+  
   return tov(-1);
 }
 

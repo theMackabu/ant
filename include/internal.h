@@ -341,9 +341,6 @@ struct ant_isolate_t {
   size_t gc_closure_alloc;
   size_t gc_closure_at_minor;
   size_t gc_closure_wm_at_major;
-  /* Watermark at the last minor tried by the direct watermark path in
-     gc_maybe; a new high afterwards means a minor is worth trying again
-     before escalating to a major. */
   size_t gc_closure_wm_minor_tried;
   size_t gc_pool_last_live;
 
@@ -373,24 +370,15 @@ struct ant_isolate_t {
   size_t remembered_closure_cap;
   struct sv_closure **remembered_closures;
 
-  /* Young-generation rosters: closure/upvalue arena slots allocated since
-     the last collection. Minor GC sweeps unmarked entries (scavenge
-     semantics); marked entries are dropped, which promotes them to the
-     major-only lifecycle. Entries the tracker fails to record (OOM) are
-     simply promoted early. */
   struct sv_closure **young_closures;
   size_t young_closure_len;
   size_t young_closure_cap;
+  
   struct sv_upvalue **young_upvalues;
   size_t young_upvalue_len;
   size_t young_upvalue_cap;
-  /* Roster length at which js_closure_alloc fires a minor: len after the
-     last sweep + GC_CLOSURE_NURSERY_THRESHOLD (aging keeps survivors in
-     the roster, so a fixed-length trigger would shrink the nursery). */
+  
   size_t young_closure_trigger;
-  /* Closures promoted out of the young roster since the last major; when
-     enough accumulate the arena is mostly promoted garbage and a major
-     is scheduled directly (see gc_maybe). */
   size_t gc_closure_promoted_since_major;
 
   bool gc_remember_overflow;
@@ -446,18 +434,20 @@ struct ant_isolate_t {
   bool fatal_error;
   bool thrown_exists;
 
-  /* Cold, rope-specific generation state lives at the tail so adding the
-     nursery does not perturb offsets of the isolate's hot allocation fields. */
   struct {
     ant_pool_t young;
     ant_pool_t old;
+    
     size_t young_alloc;
     struct gc_rope_mark *marks;
+    
     size_t mark_count;
     size_t mark_cap;
+    
     uint32_t mark_epoch;
     bool minor_marking;
     bool conservative_marking;
+    
     ant_string_builder_t **remembered_builders;
     size_t remembered_builder_len;
     size_t remembered_builder_cap;
@@ -517,7 +507,7 @@ typedef struct ant_builder_chunk {
 
 struct ant_string_builder {
   ant_offset_t len;
-  ant_value_t snapshot; /* immutable prefix sealed by the last read */
+  ant_value_t snapshot;
   ant_builder_chunk_t *head;
   ant_builder_chunk_t *chunk_tail;
   ant_value_t cached;

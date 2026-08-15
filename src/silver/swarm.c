@@ -10021,8 +10021,6 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool builder_length = false;
         int raw_slot_size = sv_op_size[OP_GET_SLOT_RAW];
         if (builder_target_slots && bc_off >= raw_slot_size) {
-          /* This byte may be an earlier instruction's operand, so it is only
-             a hint; the emitted builder path revalidates the runtime tag. */
           uint8_t *prev_ip = ip - raw_slot_size;
           if (*prev_ip == OP_GET_SLOT_RAW) {
             uint16_t slot_idx = sv_get_u16(prev_ip + 1);

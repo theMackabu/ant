@@ -127,10 +127,10 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     [STR_HEAP_TAG_BUILDER] = &&l_builder,
   };
 
-  enum { GC_STR_LOCAL_STACK = 32 };
-  ant_value_t local[GC_STR_LOCAL_STACK];
+  ant_value_t local[32];
   ant_value_t *stack = local;
-  size_t sp = 0, cap = GC_STR_LOCAL_STACK;
+  
+  size_t sp = 0, cap = 32;
   ant_value_t v = root;
 
   l_next:
@@ -155,15 +155,10 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
       goto l_next;
     }
 
-    /* Visit the short right leaf first. Repeated append is left-heavy, so the
-       pending stack remains one entry instead of growing with rope depth. */
     if (!ant_value_stack_push_with_spill(
       &stack, &sp, &cap, local, rope->left
-    )) {
-      /* Allocation failure is exceptional; recursive fallback preserves GC
-         correctness while the normal deep-append shape stays iterative. */
-      gc_mark_str(js, rope->left);
-    }
+    )) gc_mark_str(js, rope->left);
+    
     v = rope->right;
     goto l_next;
   }
@@ -172,12 +167,15 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
     if (!gc_ropes_contains(js, builder, sizeof(*builder), _Alignof(ant_string_builder_t))) goto l_pop;
     if (!gc_ropes_mark(js, builder)) goto l_pop;
+    
     gc_mark_str(js, builder->snapshot);
     gc_mark_value(js, builder->cached);
+    
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
       if (!gc_ropes_contains(js, chunk, sizeof(*chunk), _Alignof(ant_builder_chunk_t))) break;
       if (gc_ropes_mark(js, chunk)) gc_mark_value(js, chunk->value);
     }
+    
     goto l_pop;
   }
 
@@ -307,10 +305,6 @@ void gc_run_minor(ant_t *js) {
 }
 
 void gc_pressure(ant_t *js) {
-  /* Allocation-site pressure signal: same policy as gc_maybe but not
-     rate-limited by the tick gate (callers pre-filter on real pressure).
-     Routing through the shared policy keeps the minor:major cadence sane
-     (majors every N minors), which the u8 obj-epoch also relies on. */
   if (__builtin_expect(gc_disabled, 0)) return;
   gc_tick = GC_MIN_TICK;
   gc_maybe(js);
@@ -345,10 +339,6 @@ void gc_maybe(ant_t *js) {
                  GC_CLOSURE_MAJOR_GROWTH) {
         major_due = true;
       } else if (
-        /* Watermark growth is measured per major window and misses slow
-           accumulation (promotions can stay under GC_CLOSURE_MAJOR_GROWTH
-           every window forever); promoted-since-major is monotonic, so
-           steady promotion pressure eventually drains the arena. */
         js->gc_closure_promoted_since_major >= GC_CLOSURE_PROMOTED_MAJOR) {
         major_due = true;
       }
@@ -363,13 +353,6 @@ void gc_maybe(ant_t *js) {
   }
 
   size_t threshold = gc_live_major_threshold(js);
-
-  /* Small live sets make the scaled threshold reachable by young churn
-     alone (express: 250+ majors/s from this check). Young reclaim is the
-     cheap response — but only worth trying when the young fraction is
-     large enough to plausibly resolve the pressure; old-live-dominated
-     workloads (async/coro stress) go straight to the major, avoiding a
-     wasted minor before each legitimate one. */
   if (live >= threshold) {
     gc_tick = 0;
     if (young_count >= live / 4) {
@@ -380,13 +363,6 @@ void gc_maybe(ant_t *js) {
     return;
   }
 
-  /* Closure-arena watermark growth without minor pressure: workloads whose
-     churn rate stays under the closure nursery trigger (servers) reach
-     here with the young roster unswept. Try a cheap minor first — young
-     reclaim refills the free list and stalls the watermark, and the free
-     list's drain rate then sets the minor cadence. Only when the
-     watermark makes no new highs after a minor yet still exceeds the
-     budget is the growth genuinely promoted closures — run the major. */
   if (js->closure_arena.watermark - js->gc_closure_wm_at_major >=
       GC_CLOSURE_MAJOR_GROWTH) {
     gc_tick = 0;
@@ -411,11 +387,6 @@ void gc_maybe(ant_t *js) {
     return;
   }
 
-  /* Steady sub-threshold allocation (servers): the periodic backstop used
-     to run a FULL major here every interval — measured as the top profile
-     entry under express load. Minors reclaim the young accumulation at
-     ~ms cost; keep the major for a much longer period so old/pool garbage
-     still drains. */
   gc_tick = 0;
   if (gc_now_ms() - gc_last_major_ms >= GC_FORCE_MAJOR_INTERVAL_MS) gc_run(js);
   else gc_run_minor(js);
