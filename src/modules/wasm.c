@@ -71,6 +71,8 @@ typedef struct {
   wasm_store_t *store;
   ant_value_t owner;
   ant_value_t fn;
+  wasm_valkind_t *result_kinds;
+  size_t result_count;
 } wasm_import_func_env_t;
 
 typedef struct {
@@ -142,6 +144,7 @@ static void wasm_unregister_import_env(wasm_import_func_env_t *env) {
 static void wasm_import_func_env_finalizer(void *env_ptr) {
   wasm_import_func_env_t *env = (wasm_import_func_env_t *)env_ptr;
   wasm_unregister_import_env(env);
+  free(env->result_kinds);
   free(env);
 }
 
@@ -149,6 +152,21 @@ static void wasm_delete_owned_globals(wasm_global_t **globals, size_t count) {
   if (!globals) return;
   for (size_t i = 0; i < count; i++)
     if (globals[i]) wasm_global_delete(globals[i]);
+}
+
+static void wasm_delete_owned_imports(
+  wasm_func_t **funcs,
+  size_t func_count,
+  wasm_global_t **globals,
+  size_t global_count
+) {
+  if (funcs) {
+    for (size_t i = 0; i < func_count; i++)
+      if (funcs[i]) wasm_func_delete(funcs[i]);
+  }
+  wasm_delete_owned_globals(globals, global_count);
+  free(funcs);
+  free(globals);
 }
 
 static bool wasm_register_instance_owner(wasm_instance_t *instance, ant_value_t owner) {
@@ -835,6 +853,14 @@ static ant_value_t wasm_property_get_nested(ant_t *js, ant_value_t base, const w
   return js_getprop_fallback(js, base, name && name->data ? name->data : "");
 }
 
+static wasm_trap_t *wasm_import_trap(wasm_import_func_env_t *env, const char *message) {
+  wasm_message_t trap_msg = WASM_EMPTY_VEC;
+  wasm_name_new_from_string_nt(&trap_msg, message);
+  wasm_trap_t *trap = wasm_trap_new(env->store, &trap_msg);
+  wasm_byte_vec_delete(&trap_msg);
+  return trap;
+}
+
 static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_t *args, wasm_val_vec_t *results) {
   wasm_import_func_env_t *env = (wasm_import_func_env_t *)env_ptr;
   ant_t *js = env->js;
@@ -880,32 +906,25 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
     return trap;
   }
 
-  if (results && results->size > 0) {
-  if (results->size == 1) {
-    if (!js_value_to_wasm(js, result, results->data[0].kind, &results->data[0])) {
-      wasm_name_new_from_string_nt(&trap_msg, "Unsupported import return value");
-      wasm_trap_t *trap = wasm_trap_new(env->store, &trap_msg);
-      wasm_byte_vec_delete(&trap_msg);
-      return trap;
-    }
-  } else {
-    if (vtype(result) != T_ARR) {
-      wasm_name_new_from_string_nt(&trap_msg, "Expected an array for multi-value return");
-      wasm_trap_t *trap = wasm_trap_new(env->store, &trap_msg);
-      wasm_byte_vec_delete(&trap_msg);
-      return trap;
-    }
+  if (!results || results->size == 0) return NULL;
 
-    for (size_t i = 0; i < results->size; i++) {
-      ant_value_t item = js_arr_get(js, result, (ant_offset_t)i);
-      if (!js_value_to_wasm(js, item, results->data[i].kind, &results->data[i])) {
-        wasm_name_new_from_string_nt(&trap_msg, "Unsupported import return value");
-        wasm_trap_t *trap = wasm_trap_new(env->store, &trap_msg);
-        wasm_byte_vec_delete(&trap_msg);
-        return trap;
-      }
-    }
-  }}
+  if (results->size != env->result_count)
+    return wasm_import_trap(env, "Mismatched import result arity");
+
+  if (results->size == 1) {
+    if (!js_value_to_wasm(js, result, env->result_kinds[0], &results->data[0]))
+      return wasm_import_trap(env, "Unsupported import return value");
+    return NULL;
+  }
+
+  if (vtype(result) != T_ARR)
+    return wasm_import_trap(env, "Expected an array for multi-value return");
+
+  for (size_t i = 0; i < results->size; i++) {
+    ant_value_t item = js_arr_get(js, result, (ant_offset_t)i);
+    if (!js_value_to_wasm(js, item, env->result_kinds[i], &results->data[i]))
+      return wasm_import_trap(env, "Unsupported import return value");
+  }
 
   return NULL;
 }
@@ -925,6 +944,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
   
   wasm_trap_t *trap = NULL;
   wasm_instance_t *instance = NULL;
+  ant_value_t import_error = js_mkundef();
   ant_value_t instance_obj = js_mkundef();
   ant_value_t exports_obj = js_mkobj(js);
   *out_instance = js_mkundef();
@@ -954,11 +974,8 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     owned_host_funcs = calloc(import_types.size, sizeof(*owned_host_funcs));
     owned_host_globals = calloc(import_types.size, sizeof(*owned_host_globals));
     if (!imports || !owned_host_funcs || !owned_host_globals) {
-      free(imports);
-      free(owned_host_funcs);
-      free(owned_host_globals);
-      wasm_importtype_vec_delete(&import_types);
-      return js_mkerr(js, "out of memory");
+      import_error = js_mkerr(js, "out of memory");
+      goto import_setup_failed;
     }
   }
 
@@ -974,31 +991,35 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
 
     if (kind == WASM_EXTERN_FUNC) {
       const wasm_functype_t *func_type = wasm_externtype_as_functype_const(extern_type);
+      const wasm_valtype_vec_t *result_types = wasm_functype_results(func_type);
       wasm_import_func_env_t *env = NULL;
 
       if (!is_callable(value)) {
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return wasm_make_link_error(js, "Missing function import");
+        import_error = wasm_make_link_error(js, "Missing function import");
+        goto import_setup_failed;
       }
 
       env = calloc(1, sizeof(*env));
       if (!env) {
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return js_mkerr(js, "out of memory");
+        import_error = js_mkerr(js, "out of memory");
+        goto import_setup_failed;
       }
 
       env->js = js;
       env->store = module_handle->store;
       env->owner = module_obj;
       env->fn = value;
+      env->result_count = result_types ? result_types->size : 0;
+      if (env->result_count > 0) {
+        env->result_kinds = calloc(env->result_count, sizeof(*env->result_kinds));
+        if (!env->result_kinds) {
+          free(env);
+          import_error = js_mkerr(js, "out of memory");
+          goto import_setup_failed;
+        }
+        for (size_t j = 0; j < env->result_count; j++)
+          env->result_kinds[j] = wasm_valtype_kind(result_types->data[j]);
+      }
       wasm_register_import_env(env);
 
 
@@ -1011,13 +1032,9 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
       );
 
       if (!owned_host_funcs[owned_host_func_count]) {
-        free(env);
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return wasm_make_link_error(js, "Failed to create function import");
+        wasm_import_func_env_finalizer(env);
+        import_error = wasm_make_link_error(js, "Failed to create function import");
+        goto import_setup_failed;
       }
 
       imports[i] = wasm_func_as_extern(owned_host_funcs[owned_host_func_count]);
@@ -1028,12 +1045,8 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (kind == WASM_EXTERN_MEMORY) {
       wasm_extern_handle_t *handle = wasm_extern_handle(value, WASM_EXTERN_WRAP_MEMORY);
       if (!handle || !handle->as.memory) {
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return wasm_make_link_error(js, "Missing memory import");
+        import_error = wasm_make_link_error(js, "Missing memory import");
+        goto import_setup_failed;
       }
       imports[i] = wasm_memory_as_extern(handle->as.memory);
       continue;
@@ -1042,12 +1055,8 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (kind == WASM_EXTERN_TABLE) {
       wasm_extern_handle_t *handle = wasm_extern_handle(value, WASM_EXTERN_WRAP_TABLE);
       if (!handle || !handle->as.table) {
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return wasm_make_link_error(js, "Missing table import");
+        import_error = wasm_make_link_error(js, "Missing table import");
+        goto import_setup_failed;
       }
       imports[i] = wasm_table_as_extern(handle->as.table);
       continue;
@@ -1072,16 +1081,12 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
         }
         char msg[256];
         snprintf(msg, sizeof(msg), "Missing global import %.*s.%.*s",
-                 (int)wasm_name_len(module_name),
-                 module_name && module_name->data ? module_name->data : "",
-                 (int)wasm_name_len(field_name),
-                 field_name && field_name->data ? field_name->data : "");
-        free(imports);
-        free(owned_host_funcs);
-        wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-        free(owned_host_globals);
-        wasm_importtype_vec_delete(&import_types);
-        return wasm_make_link_error(js, msg);
+          (int)wasm_name_len(module_name),
+          module_name && module_name->data ? module_name->data : "",
+          (int)wasm_name_len(field_name),
+          field_name && field_name->data ? field_name->data : "");
+        import_error = wasm_make_link_error(js, msg);
+        goto import_setup_failed;
       }
       imports[i] = wasm_global_as_extern(handle->as.global);
       continue;
@@ -1101,12 +1106,12 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
   wasm_importtype_vec_delete(&import_types);
 
   if (!instance) {
-    for (size_t i = 0; i < owned_host_func_count; i++) {
-      if (owned_host_funcs[i]) wasm_func_delete(owned_host_funcs[i]);
-    }
-    wasm_delete_owned_globals(owned_host_globals, owned_host_global_count);
-    free(owned_host_funcs);
-    free(owned_host_globals);
+    wasm_delete_owned_imports(
+      owned_host_funcs,
+      owned_host_func_count,
+      owned_host_globals,
+      owned_host_global_count
+    );
     
     if (trap) {
       if (g_wasm_pending_import_throw_exists) {
@@ -1166,6 +1171,17 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
 
   *out_instance = instance_obj;
   return js_mkundef();
+
+import_setup_failed:
+  free(imports);
+  wasm_delete_owned_imports(
+    owned_host_funcs,
+    owned_host_func_count,
+    owned_host_globals,
+    owned_host_global_count
+  );
+  wasm_importtype_vec_delete(&import_types);
+  return import_error;
 }
 
 static ant_value_t js_wasm_instance_ctor(ant_t *js, ant_value_t *args, int nargs) {
