@@ -1074,6 +1074,24 @@ static void compiled_regex_table_clear(
   memset(table, 0, sizeof(*table));
 }
 
+static void compiled_regex_cache_rotate(ant_regex_state_t *state) {
+  compiled_regex_table_clear(&state->compiled[1]);
+  state->compiled[1] = state->compiled[0];
+  memset(&state->compiled[0], 0, sizeof(state->compiled[0]));
+}
+
+static void compiled_regex_cache_admit_new(
+  ant_regex_state_t *state,
+  compiled_regex_cache_entry_t *entry
+) {
+  bool admitted = compiled_regex_table_insert(&state->compiled[0], entry);
+  if (!admitted && state->compiled[0].count >= REGEX_COMPILED_CACHE_MAX) {
+    compiled_regex_cache_rotate(state);
+    admitted = compiled_regex_table_insert(&state->compiled[0], entry);
+  }
+  if (admitted) entry->cache_refs++;
+}
+
 static compiled_regex_cache_entry_t *compiled_regex_cache_lookup(
   ant_regex_state_t *state,
   const char *pattern,
@@ -1156,8 +1174,7 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &entry->namecount);
   entry->jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
 
-  if (compiled_regex_table_insert(&state->compiled[0], entry))
-    entry->cache_refs++;
+  compiled_regex_cache_admit_new(state, entry);
   return entry;
 }
 
@@ -4070,10 +4087,7 @@ void init_regex_module(ant_t *js) {
 void gc_age_regex_cache(ant_t *js, bool minor) {
   ant_regex_state_t *state = js->regex_state;
   if (!state || minor) return;
-
-  compiled_regex_table_clear(&state->compiled[1]);
-  state->compiled[1] = state->compiled[0];
-  memset(&state->compiled[0], 0, sizeof(state->compiled[0]));
+  compiled_regex_cache_rotate(state);
 }
 
 void cleanup_regex_module(ant_t *js) {

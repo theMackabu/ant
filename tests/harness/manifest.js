@@ -40,6 +40,7 @@ export function targets() {
     'test_esm_package_self_reference.cjs',
     'test_typeof_closure_assignment.mjs',
     'test_curried_call_fusion.cjs',
+    'test_regexp_cache_admission.cjs',
     'test_regexp_internal_state.cjs',
     'test_regexp_result_batch.cjs',
     'test_object_site_lookup.cjs',
