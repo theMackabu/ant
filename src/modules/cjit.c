@@ -12,6 +12,7 @@
 #endif
 
 #include "ant.h"
+#include "gc/roots.h"
 #include "ptr.h"
 #include "internal.h"
 #include "modules/bigint.h"
@@ -77,6 +78,9 @@ static constexpr uint32_t ANT_C_FUNCTION_NATIVE_TAG = 0x434a4954u;
 static constexpr size_t ANT_C_MAX_ARGS = 16;
 
 typedef struct {
+  ant_value_t entry_value;
+  ant_value_t returns_value;
+  ant_value_t args_value;
   const char *entry_name;
   const char *returns_name;
   ant_c_returns_t returns;
@@ -322,6 +326,9 @@ static ant_value_t ant_c_parse_signature(
   ant_t *js, ant_value_t options_value, ant_c_signature_t *signature
 ) {
   *signature = (ant_c_signature_t){
+    .entry_value = js_mkundef(),
+    .returns_value = js_mkundef(),
+    .args_value = js_mkundef(),
     .entry_name = "main",
     .returns_name = "int",
     .returns = ANT_C_RETURNS_STATUS,
@@ -334,22 +341,22 @@ static ant_value_t ant_c_parse_signature(
   if (!is_object_type(options_value))
     return js_mkerr(js, "Ant.unsafe.c() options must be an object");
 
-  ant_value_t entry_value = js_get(js, options_value, "entry");
-  if (is_err(entry_value)) return entry_value;
-  if (vtype(entry_value) != T_STR)
+  signature->entry_value = js_get(js, options_value, "entry");
+  if (is_err(signature->entry_value)) return signature->entry_value;
+  if (vtype(signature->entry_value) != T_STR)
     return js_mkerr(js, "Ant.unsafe.c() options.entry must be a string");
 
   size_t entry_length;
-  signature->entry_name = js_getstr(js, entry_value, &entry_length);
+  signature->entry_name = js_getstr(js, signature->entry_value, &entry_length);
   if (!ant_c_identifier(signature->entry_name, entry_length))
     return js_mkerr(js, "Ant.unsafe.c() options.entry must be a C identifier");
 
-  ant_value_t returns_value = js_get(js, options_value, "returns");
-  if (is_err(returns_value)) return returns_value;
-  if (vtype(returns_value) != T_STR)
+  signature->returns_value = js_get(js, options_value, "returns");
+  if (is_err(signature->returns_value)) return signature->returns_value;
+  if (vtype(signature->returns_value) != T_STR)
     return js_mkerr(js, "Ant.unsafe.c() options.returns must be a supported type");
 
-  signature->returns_name = js_getstr(js, returns_value, NULL);
+  signature->returns_name = js_getstr(js, signature->returns_value, NULL);
   if (strcmp(signature->returns_name, "string") == 0) {
     signature->returns = ANT_C_RETURNS_STRING;
     signature->ffi_return_type = &ffi_type_pointer;
@@ -361,12 +368,13 @@ static ant_value_t ant_c_parse_signature(
     )) return js_mkerr(js, "Ant.unsafe.c() options.returns has an unsupported type");
   }
 
-  ant_value_t args_value = js_get(js, options_value, "args");
-  if (is_err(args_value) || vtype(args_value) == T_UNDEF) return args_value;
-  if (!is_object_type(args_value))
+  signature->args_value = js_get(js, options_value, "args");
+  if (is_err(signature->args_value) || vtype(signature->args_value) == T_UNDEF)
+    return signature->args_value;
+  if (!is_object_type(signature->args_value))
     return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
 
-  ant_value_t length_value = js_get(js, args_value, "length");
+  ant_value_t length_value = js_get(js, signature->args_value, "length");
   if (is_err(length_value)) return length_value;
   if (vtype(length_value) != T_NUM)
     return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
@@ -383,7 +391,7 @@ static ant_value_t ant_c_parse_signature(
   for (size_t i = 0; i < signature->arg_count; i++) {
     char index[24];
     snprintf(index, sizeof(index), "%zu", i);
-    ant_value_t type_value = js_get(js, args_value, index);
+    ant_value_t type_value = js_get(js, signature->args_value, index);
     
     if (is_err(type_value)) return type_value;
     if (vtype(type_value) != T_STR || !ant_c_parse_type(
@@ -638,11 +646,25 @@ static ant_value_t ant_c_make_function(
   }
 
   ant_value_t obj = js_newobj(js);
+  if (is_err(obj)) {
+    ant_c_function_destroy(function);
+    return obj;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, obj);
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(ant_c_function_call));
   js_set_native(obj, function, ANT_C_FUNCTION_NATIVE_TAG);
   js_set_finalizer(obj, ant_c_function_finalize);
-  
-  return js_obj_to_func(js, obj);
+
+  ant_value_t result = js_obj_to_func(js, obj);
+  if (is_err(result)) {
+    js_clear_native(obj, ANT_C_FUNCTION_NATIVE_TAG);
+    ant_c_function_destroy(function);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 static ant_value_t ant_c_call_configured_entry(
@@ -684,9 +706,19 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
   if (vtype(source_value) != T_STR)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
-  ant_c_signature_t signature;
+  ant_c_signature_t signature = {0};
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, source_value);
+  GC_ROOT_PIN(js, options_value);
+  GC_ROOT_PIN(js, signature.entry_value);
+  GC_ROOT_PIN(js, signature.returns_value);
+  GC_ROOT_PIN(js, signature.args_value);
+
   ant_value_t signature_error = ant_c_parse_signature(js, options_value, &signature);
-  if (is_err(signature_error)) return signature_error;
+  if (is_err(signature_error)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return signature_error;
+  }
 
   size_t source_len;
   const char *source_data = js_getstr(js, source_value, &source_len);
@@ -696,7 +728,11 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
     checked_source = ant_c_string_checked_source(
       source_data, source_len, &signature, &source_len
     );
-    if (!checked_source) return js_mkerr(js, "Out of memory");
+    if (!checked_source) {
+      ant_value_t error = js_mkerr(js, "Out of memory");
+      GC_ROOT_RESTORE(js, root_mark);
+      return error;
+    }
     source_data = checked_source;
   }
   
@@ -722,6 +758,7 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
       : js_mkerr(js, "Ant.unsafe.c() compilation failed");
 
     free(diagnostics);
+    GC_ROOT_RESTORE(js, root_mark);
     return error;
   }
 
@@ -732,11 +769,13 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
     c2mir_finish(ctx);
     MIR_finish(ctx);
     if (diagnostic_file) fclose(diagnostic_file);
-    return signature.returns == ANT_C_RETURNS_STATUS
+    ant_value_t error = signature.returns == ANT_C_RETURNS_STATUS
       ? js_mkerr(js, "Ant.unsafe.c() source must define main()")
       : js_mkerr(
         js, "Ant.unsafe.c() entry \"%s\" was not found", signature.entry_name
       );
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
   }
 
   MIR_func_t entry_func = MIR_get_item_func(ctx, entry_item);
@@ -744,7 +783,9 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
     c2mir_finish(ctx);
     MIR_finish(ctx);
     if (diagnostic_file) fclose(diagnostic_file);
-    return ant_c_signature_error(js, &signature);
+    ant_value_t error = ant_c_signature_error(js, &signature);
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
   }
 
   MIR_gen_init(ctx);
@@ -753,11 +794,13 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
 
   if (signature.return_function) {
     if (diagnostic_file) fclose(diagnostic_file);
-    return ant_c_make_function(
+    ant_value_t result = ant_c_make_function(
       js, ctx, entry_item, signature.entry_name, signature.returns,
       signature.return_type, signature.ffi_return_type, signature.arg_count,
       signature.arg_types, signature.ffi_arg_types
     );
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
   }
 
   ant_value_t result = signature.returns == ANT_C_RETURNS_STATUS
@@ -768,6 +811,7 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
   c2mir_finish(ctx);
   MIR_finish(ctx);
   if (diagnostic_file) fclose(diagnostic_file);
+  GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
 
@@ -786,9 +830,15 @@ static ant_value_t js_unsafe_c(ant_t *js, ant_value_t *args, int nargs) {
 
   if (nargs == 1 && is_object_type(args[0])) {
     ant_value_t tag = js_newobj(js);
+    if (is_err(tag)) return tag;
+
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, tag);
     js_set_slot(tag, SLOT_CFUNC, js_mkfun(ant_c_configured_tag));
     js_set_slot_wb(js, tag, SLOT_DATA, args[0]);
-    return js_obj_to_func(js, tag);
+    ant_value_t result = js_obj_to_func(js, tag);
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
   }
 
   return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template or called with options");

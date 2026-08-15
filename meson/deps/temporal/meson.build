@@ -7,10 +7,7 @@ if temporal_opt.enabled() or temporal_opt.auto()
     temporal_capi_source = temporal_capi_project.get_variable('temporal_capi_source_dir')
     temporal_capi_inputs = temporal_capi_project.get_variable('temporal_capi_build_inputs')
     temporal_cpu = host_machine.cpu_family()
-    temporal_cc_target = run_command(
-      cc.cmd_array(), '-dumpmachine',
-      check: true,
-    ).stdout().strip()
+    temporal_cc_syntax = cc.get_argument_syntax()
 
     if temporal_cpu != 'aarch64' and temporal_cpu != 'x86_64'
       error('Temporal does not support CPU family ' + temporal_cpu)
@@ -19,20 +16,22 @@ if temporal_opt.enabled() or temporal_opt.auto()
     if host_machine.system() == 'darwin'
       temporal_target = temporal_cpu + '-apple-darwin'
     elif host_machine.system() == 'windows'
-      if temporal_cc_target.contains('msvc')
+      if temporal_cc_syntax == 'msvc'
         temporal_target = temporal_cpu + '-pc-windows-msvc'
-      elif temporal_cc_target.contains('gnu') or temporal_cc_target.contains('mingw')
+      elif temporal_cc_syntax == 'gcc'
         temporal_target = temporal_cpu + '-pc-windows-gnu'
       else
-        error('Temporal cannot determine the Windows ABI from compiler target ' + temporal_cc_target)
+        error('Temporal cannot determine the Windows ABI from compiler argument syntax ' + temporal_cc_syntax)
       endif
     elif host_machine.system() == 'linux'
-      if temporal_cc_target.contains('musl')
-        temporal_target = temporal_cpu + '-unknown-linux-musl'
-      elif temporal_cc_target.contains('gnu')
+      temporal_glibc = cc.get_define(
+        '__GLIBC__',
+        prefix: '#include <features.h>',
+      )
+      if temporal_glibc != ''
         temporal_target = temporal_cpu + '-unknown-linux-gnu'
       else
-        error('Temporal cannot determine the Linux ABI from compiler target ' + temporal_cc_target)
+        temporal_target = temporal_cpu + '-unknown-linux-musl'
       endif
     else
       error('Temporal does not support ' + host_machine.system())
@@ -40,10 +39,7 @@ if temporal_opt.enabled() or temporal_opt.auto()
 
     temporal_build_cpu = build_machine.cpu_family()
     temporal_build_cc = meson.get_compiler('c', native: true)
-    temporal_build_cc_target = run_command(
-      temporal_build_cc.cmd_array(), '-dumpmachine',
-      check: true,
-    ).stdout().strip()
+    temporal_build_cc_syntax = temporal_build_cc.get_argument_syntax()
 
     if temporal_build_cpu != 'aarch64' and temporal_build_cpu != 'x86_64'
       error('Temporal bootstrap does not support CPU family ' + temporal_build_cpu)
@@ -52,20 +48,22 @@ if temporal_opt.enabled() or temporal_opt.auto()
     if build_machine.system() == 'darwin'
       temporal_rustup_host = temporal_build_cpu + '-apple-darwin'
     elif build_machine.system() == 'windows'
-      if temporal_build_cc_target.contains('msvc')
+      if temporal_build_cc_syntax == 'msvc'
         temporal_rustup_host = temporal_build_cpu + '-pc-windows-msvc'
-      elif temporal_build_cc_target.contains('gnu') or temporal_build_cc_target.contains('mingw')
+      elif temporal_build_cc_syntax == 'gcc'
         temporal_rustup_host = temporal_build_cpu + '-pc-windows-gnu'
       else
-        error('Temporal cannot determine the bootstrap Windows ABI from compiler target ' + temporal_build_cc_target)
+        error('Temporal cannot determine the bootstrap Windows ABI from compiler argument syntax ' + temporal_build_cc_syntax)
       endif
     elif build_machine.system() == 'linux'
-      if temporal_build_cc_target.contains('musl')
-        temporal_rustup_host = temporal_build_cpu + '-unknown-linux-musl'
-      elif temporal_build_cc_target.contains('gnu')
+      temporal_build_glibc = temporal_build_cc.get_define(
+        '__GLIBC__',
+        prefix: '#include <features.h>',
+      )
+      if temporal_build_glibc != ''
         temporal_rustup_host = temporal_build_cpu + '-unknown-linux-gnu'
       else
-        error('Temporal cannot determine the bootstrap Linux ABI from compiler target ' + temporal_build_cc_target)
+        temporal_rustup_host = temporal_build_cpu + '-unknown-linux-musl'
       endif
     else
       error('Temporal bootstrap does not support ' + build_machine.system())
@@ -76,7 +74,8 @@ if temporal_opt.enabled() or temporal_opt.auto()
     temporal_include = temporal_capi_source / 'bindings/c'
 
     message(
-      'Temporal Rust target: ' + temporal_target + ' (compiler: ' + temporal_cc_target +
+      'Temporal Rust target: ' + temporal_target + ' (compiler: ' + cc.get_id() +
+      '/' + temporal_cc_syntax +
       ', bootstrap host: ' + temporal_rustup_host + ')'
     )
 

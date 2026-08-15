@@ -17,6 +17,12 @@ function runRejectedMain(source) {
   `);
 }
 
+function churnHeap(count) {
+  const values = [];
+  for (let i = 0; i < count; i++) values.push({ index: i });
+  return values.length;
+}
+
 assert.strictEqual(
   Ant.unsafe.c`
     #include <stdio.h>
@@ -75,6 +81,33 @@ const describeNumber = Ant.unsafe.c({
   const char *describe_number(double value) { return value > 0 ? "positive" : "other"; }
 `;
 assert.strictEqual(describeNumber(1), 'positive');
+
+for (let i = 0; i < 140000; i++) {
+  const tag = Ant.unsafe.c({ entry: 'result', returns: 'int' });
+  tag.marker = i;
+  assert.strictEqual(tag.marker, i);
+}
+
+const gcSafeEntry = Ant.unsafe.c({
+  get entry() {
+    return ['gc', '_safe_entry'].join('');
+  },
+  get returns() {
+    assert.strictEqual(churnHeap(40000), 40000);
+    return ['i', 'n', 't'].join('');
+  },
+  get args() {
+    return {
+      get length() {
+        assert.strictEqual(churnHeap(40000), 40000);
+        return 0;
+      },
+    };
+  },
+})`
+  int gc_safe_entry(void) { return 73; }
+`;
+assert.strictEqual(gcSafeEntry(), 73);
 
 assert.throws(
   () => Ant.unsafe.c({ entry: 'not-an-identifier', returns: 'int' })`
