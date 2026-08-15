@@ -143,8 +143,8 @@ antStdenv.mkDerivation (finalAttrs: {
   };
 
   preConfigure = ''
-    export CC=${antStdenv.cc}/bin/cc
-    export CXX=${antStdenv.cc}/bin/c++
+    export CC=${antStdenv.cc}/bin/clang
+    export CXX=${antStdenv.cc}/bin/clang++
 
     export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
     export ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-local-cache
