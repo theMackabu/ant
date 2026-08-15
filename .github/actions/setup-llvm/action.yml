@@ -46,8 +46,14 @@ runs:
         apt-get update
         apt-get install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
 
+    - name: Install LLVM (macOS)
+      if: inputs.os_type == 'macos'
+      shell: bash
+      run: |
+        LLVM_FORMULA="llvm@${{ inputs.version }}"
+        brew list "$LLVM_FORMULA" &>/dev/null || brew install "$LLVM_FORMULA"
+
     # linux-musl: LLVM installed via apk in workflow setup step
-    # macos: LLVM installed via brew in workflow setup step
     # windows: Using MinGW toolchain
 
     - name: Set output paths
@@ -74,7 +80,7 @@ runs:
             echo "ld=lld" >> $GITHUB_OUTPUT
             ;;
           macos)
-            LLVM_PREFIX=$(brew --prefix llvm)
+            LLVM_PREFIX=$(brew --prefix "llvm@${{ inputs.version }}")
             echo "cc=$LLVM_PREFIX/bin/clang" >> $GITHUB_OUTPUT
             echo "cxx=$LLVM_PREFIX/bin/clang++" >> $GITHUB_OUTPUT
             echo "ar=$LLVM_PREFIX/bin/llvm-ar" >> $GITHUB_OUTPUT

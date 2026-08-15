@@ -19,7 +19,8 @@ if temporal_opt.enabled() or temporal_opt.auto()
       if temporal_cc_syntax == 'msvc'
         temporal_target = temporal_cpu + '-pc-windows-msvc'
       elif temporal_cc_syntax == 'gcc'
-        temporal_target = temporal_cpu + '-pc-windows-gnu'
+        temporal_windows_abi = temporal_cpu == 'aarch64' ? 'gnullvm' : 'gnu'
+        temporal_target = temporal_cpu + '-pc-windows-' + temporal_windows_abi
       else
         error('Temporal cannot determine the Windows ABI from compiler argument syntax ' + temporal_cc_syntax)
       endif
@@ -51,7 +52,8 @@ if temporal_opt.enabled() or temporal_opt.auto()
       if temporal_build_cc_syntax == 'msvc'
         temporal_rustup_host = temporal_build_cpu + '-pc-windows-msvc'
       elif temporal_build_cc_syntax == 'gcc'
-        temporal_rustup_host = temporal_build_cpu + '-pc-windows-gnu'
+        temporal_rustup_abi = temporal_build_cpu == 'aarch64' ? 'msvc' : 'gnu'
+        temporal_rustup_host = temporal_build_cpu + '-pc-windows-' + temporal_rustup_abi
       else
         error('Temporal cannot determine the bootstrap Windows ABI from compiler argument syntax ' + temporal_build_cc_syntax)
       endif

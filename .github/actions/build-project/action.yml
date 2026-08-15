@@ -111,25 +111,38 @@ runs:
           export CC_LD="${{ inputs.ld }}"
         fi
 
-        MESON_ARGS="-Db_lto=true --buildtype=release"
-        MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
-        MESON_ARGS="$MESON_ARGS -Ddeps_prefix_cmake=$DEPS_PREFIX"
-        MESON_ARGS="$MESON_ARGS -Dllvm_nm=${{ inputs.nm }}"
+        MESON_ARGS=(
+          -Db_lto=true
+          --buildtype=release
+          "-Dbuild_timestamp=${{ inputs.build_timestamp }}"
+          "-Ddeps_prefix_cmake=$DEPS_PREFIX"
+          "-Dllvm_nm=${{ inputs.nm }}"
+        )
 
         if [[ "${{ inputs.static_link }}" == "true" ]]; then
-          MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"
+          MESON_ARGS+=(--prefer-static -Dstatic_link=true)
         fi
 
         if [[ "$RUNNER_OS" == "macOS" ]]; then
-          MESON_ARGS="$MESON_ARGS -Dcodesign=false"
+          MESON_ARGS+=(-Dcodesign=false)
+          if [[ "${{ inputs.extra_meson_args }}" == *"-Dpgo=enabled"* ]]; then
+            source "$GITHUB_WORKSPACE/meson/pgo/flags.sh"
+            MESON_ARGS+=(
+              "-Dc_args=$ANT_PGO_FLAGS"
+              "-Dcpp_args=$ANT_PGO_FLAGS"
+            )
+          fi
         fi
 
         if [[ -n "${{ inputs.extra_meson_args }}" ]]; then
-          MESON_ARGS="$MESON_ARGS ${{ inputs.extra_meson_args }}"
+          read -r -a EXTRA_MESON_ARGS <<< "${{ inputs.extra_meson_args }}"
+          MESON_ARGS+=("${EXTRA_MESON_ARGS[@]}")
         fi
 
-        echo "Running: meson setup build $MESON_ARGS"
-        meson setup build $MESON_ARGS
+        printf 'Running: meson setup build'
+        printf ' %q' "${MESON_ARGS[@]}"
+        printf '\n'
+        meson setup build "${MESON_ARGS[@]}"
         meson compile -C build
 
     - name: Verify build

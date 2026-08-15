@@ -38,6 +38,7 @@ case "$(uname -m)" in
   *) echo "error: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
 PROFDATA="$PROFILE_DIR/ant-$KERNEL-$CPU.profdata"
+source "$PGO_DIR/flags.sh"
 
 LLVM_PROFDATA=""
 for cand in \
@@ -54,17 +55,6 @@ if [ -z "$LLVM_PROFDATA" ]; then
   echo "error: llvm-profdata not found (install Xcode CLT or add llvm to PATH)" >&2
   exit 1
 fi
-
-case "$(uname -m)" in
-  x86_64|i386|i686)
-    CPU_TUNE_FLAG="-march=native"
-    ;;
-  *)
-    CPU_TUNE_FLAG="-mcpu=native"
-    ;;
-esac
-
-EXTRA_FLAGS="$CPU_TUNE_FLAG -Qunused-arguments -fvisibility=hidden -fvisibility-inlines-hidden -fno-math-errno -fno-trapping-math -fno-stack-protector"
 
 SKIP_TRAIN=0
 for arg in "$@"; do
@@ -92,8 +82,8 @@ if [ "$SKIP_TRAIN" -eq 0 ]; then
     "-Dpgo_generate_dir=$RAW_DIR" \
     -Db_lto=false \
     -Dstrip=false \
-    "-Dc_args=$EXTRA_FLAGS" \
-    "-Dcpp_args=$EXTRA_FLAGS"
+    "-Dc_args=$ANT_PGO_FLAGS" \
+    "-Dcpp_args=$ANT_PGO_FLAGS"
   meson compile -C "$BUILD_DIR"
 
   echo "==> [2/3] Training (writes profraw to $RAW_DIR)"
@@ -215,8 +205,8 @@ meson setup "$BUILD_DIR" \
   -Dpgo=enabled \
   -Db_lto=true \
   -Db_lto_mode=default \
-  "-Dc_args=$EXTRA_FLAGS" \
-  "-Dcpp_args=$EXTRA_FLAGS"
+  "-Dc_args=$ANT_PGO_FLAGS" \
+  "-Dcpp_args=$ANT_PGO_FLAGS"
 meson compile -C "$BUILD_DIR"
 
 echo
