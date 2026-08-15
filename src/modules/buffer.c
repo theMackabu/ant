@@ -2961,6 +2961,14 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t result = js_mkstr(js, hex, len * 2);
     free(hex);
     return result;
+  } else if (encoding == ENC_LATIN1) {
+    size_t out_len;
+    char *out = latin1_to_utf8(data, len, &out_len);
+    if (!out) return js_mkerr(js, "Failed to decode buffer as Latin-1");
+
+    ant_value_t result = js_mkstr(js, out, out_len);
+    free(out);
+    return result;
   } else if (encoding == ENC_UCS2) {
     size_t char_count = len / 2;
     char *str = malloc(char_count * 3 + 1);
