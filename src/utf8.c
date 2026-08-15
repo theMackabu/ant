@@ -749,7 +749,7 @@ size_t utf16_index_to_byte_offset_floor(
   return (size_t)(cursor.p - cursor.start);
 }
 
-int utf16_range_to_byte_range(
+utf16_range_splits_t utf16_range_to_byte_range(
   const char *str,
   size_t byte_len,
   size_t utf16_start,
@@ -757,40 +757,60 @@ int utf16_range_to_byte_range(
   size_t *byte_start,
   size_t *byte_end
 ) {
+  utf16_range_splits_t splits = {0};
+  if (utf16_start >= utf16_end) {
+    *byte_start = 0;
+    *byte_end = 0;
+    return splits;
+  }
+
   if (str_is_ascii(str)) {
     *byte_start = (utf16_start <= byte_len) ? utf16_start : byte_len;
     *byte_end = (utf16_end <= byte_len) ? utf16_end : byte_len;
-    return 0;
+    return splits;
   }
 
   utf16_scan_cursor_t cursor;
   utf16_scan_cursor_init(&cursor, str, byte_len);
   utf16_scan_cursor_resume_indexed(&cursor, utf16_start);
 
-  size_t b_start = 0, b_end = byte_len;
-  int found_start = 0, found_end = 0;
-  
-  while (cursor.p < cursor.end) {
-    if (cursor.utf16_pos == utf16_start) {
-      b_start = (size_t)(cursor.p - cursor.start);
-      found_start = 1;
-    }
-    if (cursor.utf16_pos == utf16_end) {
-      b_end = (size_t)(cursor.p - cursor.start);
-      found_end = 1;
+  while (cursor.p < cursor.end && cursor.utf16_pos < utf16_start) {
+    size_t slen, units;
+    utf16_scan_decode(cursor.p, cursor.end, &slen, &units, NULL);
+
+    if (units == 2 && cursor.utf16_pos + 1 == utf16_start) {
+      uint32_t cp;
+      utf16_scan_decode(cursor.p, cursor.end, &slen, &units, &cp);
+      splits.prefix_surrogate = (uint16_t)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+      cursor.p += slen;
+      cursor.utf16_pos += units;
       break;
     }
-    utf16_scan_cursor_advance(&cursor, cursor.end);
+
+    cursor.p += slen;
+    cursor.utf16_pos += units;
   }
-  
-  if (!found_start && utf16_start >= cursor.utf16_pos) b_start = byte_len;
-  if (!found_end && utf16_end >= cursor.utf16_pos) b_end = byte_len;
-  
-  *byte_start = b_start;
-  *byte_end = b_end;
+
+  *byte_start = (size_t)(cursor.p - cursor.start);
+  while (cursor.p < cursor.end && cursor.utf16_pos < utf16_end) {
+    size_t slen, units;
+    utf16_scan_decode(cursor.p, cursor.end, &slen, &units, NULL);
+
+    if (units == 2 && cursor.utf16_pos + 1 == utf16_end) {
+      uint32_t cp;
+      utf16_scan_decode(cursor.p, cursor.end, &slen, &units, &cp);
+      splits.suffix_surrogate = (uint16_t)(0xD800 + ((cp - 0x10000) >> 10));
+      break;
+    }
+
+    cursor.p += slen;
+    cursor.utf16_pos += units;
+  }
+
+  *byte_end = (size_t)(cursor.p - cursor.start);
   utf16_scan_cursor_store(&cursor);
   
-  return 0;
+  return splits;
 }
 
 size_t byte_offset_to_utf16(const char *str, size_t byte_off) {

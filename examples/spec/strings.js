@@ -16,12 +16,19 @@ let js = 'JavaScript';
 test('substring start end', js.substring(0, 4), 'Java');
 test('substring start only', js.substring(4), 'Script');
 test('substring swaps if end < start', js.substring(10, 4), 'Script');
+test('substring astral leading surrogate', '𝄞'.substring(0, 1), '\uD834');
+test('substring astral trailing surrogate', '𝄞'.substring(1, 2), '\uDD1E');
 
 let fox = 'The quick brown fox';
 test('slice start end', fox.slice(0, 3), 'The');
 test('slice start only', fox.slice(10), 'brown fox');
 test('slice negative start', fox.slice(-3), 'fox');
 test('slice negative end', fox.slice(0, -4), 'The quick brown');
+test('slice astral leading surrogate', '𝄞'.slice(0, 1), '\uD834');
+test('slice astral trailing surrogate', '𝄞'.slice(1, 2), '\uDD1E');
+test('slice astral split boundaries', '𝄞x💙'.slice(1, 4), '\uDD1Ex\uD83D');
+test('substr astral leading surrogate', '𝄞'.substr(0, 1), '\uD834');
+test('substr astral trailing surrogate', '𝄞'.substr(1, 1), '\uDD1E');
 
 let csv = 'apple,banana,cherry';
 let parts = csv.split(',');
@@ -45,6 +52,8 @@ test('startsWith position clamps negative', 'Hello'.startsWith('Hello', -1), tru
 test('startsWith position clamps past end for empty search', 'Hello'.startsWith('', 99), true);
 test('startsWith position past end rejects non-empty search', 'Hello'.startsWith('H', 99), false);
 test('startsWith Hono query fast path shape', 'http://localhost:18080/?q=hello'.startsWith('q', 24), true);
+test('startsWith astral leading surrogate', '𝄞'.startsWith('\uD834'), true);
+test('startsWith astral trailing surrogate', '𝄞'.startsWith('\uDD1E', 1), true);
 
 test('endsWith true', 'index.html'.endsWith('.html'), true);
 test('endsWith false', 'index.html'.endsWith('.js'), false);
@@ -52,6 +61,8 @@ test('endsWith end position true', 'index.html'.endsWith('index', 5), true);
 test('endsWith end position false', 'index.html'.endsWith('.html', 5), false);
 test('endsWith end position clamps negative for empty search', 'index.html'.endsWith('', -1), true);
 test('endsWith end position clamps negative for non-empty search', 'index.html'.endsWith('i', -1), false);
+test('endsWith astral leading surrogate', '𝄞'.endsWith('\uD834', 1), true);
+test('endsWith astral trailing surrogate', '𝄞'.endsWith('\uDD1E'), true);
 
 test('toUpperCase', 'hello'.toUpperCase(), 'HELLO');
 test('toLowerCase', 'HELLO'.toLowerCase(), 'hello');

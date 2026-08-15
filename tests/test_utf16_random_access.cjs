@@ -19,6 +19,12 @@ assert.strictEqual(mixed.charCodeAt(offset + 2), 0xd834);
 assert.strictEqual(mixed.charCodeAt(offset + 3), 0xdd1e);
 assert.strictEqual(mixed.codePointAt(offset + 2), 0x1d11e);
 assert.strictEqual(mixed.slice(offset, offset + pattern.length), pattern);
+assert.strictEqual(mixed.slice(offset + 2, offset + 3), '\uD834');
+assert.strictEqual(mixed.slice(offset + 3, offset + 4), '\uDD1E');
+assert.strictEqual(mixed.startsWith('\uD834', offset + 2), true);
+assert.strictEqual(mixed.startsWith('\uDD1E', offset + 3), true);
+assert.strictEqual(mixed.endsWith('\uD834', offset + 3), true);
+assert.strictEqual(mixed.endsWith('\uDD1E', offset + 4), true);
 
 for (let round = 0; round < 12; round++) {
   let transient = `${round}:` + 'éΩ'.repeat(4_096) + ':done';

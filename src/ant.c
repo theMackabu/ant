@@ -277,7 +277,7 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
     entry->value = value;
     return true;
   }
-  
+
   uint8_t count = 0;
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
   ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
@@ -346,7 +346,7 @@ bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed) {
   for (uint32_t i = old_count; i < needed; i++) {
     ant_object_prop_set_unchecked(obj, i, js_mkundef());
   }
-  
+
   return true;
 }
 
@@ -4741,17 +4741,19 @@ ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len
   return ANT_PROP_LOC_NONE;
 }
 
+static inline size_t utf16_code_unit_to_wtf8(uint16_t code_unit, char out[4]) {
+  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+    out[0] = (char)(0xE0 | (code_unit >> 12));
+    out[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (code_unit & 0x3F));
+    return 3;
+  }
+  return (size_t)utf8_encode(code_unit, out);
+}
+
 static ant_value_t js_string_from_utf16_code_unit(ant_t *js, uint32_t code_unit) {
   char buf[4];
-  size_t out_len = 0;
-
-  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
-    buf[0] = (char)(0xE0 | (code_unit >> 12));
-    buf[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
-    buf[2] = (char)(0x80 | (code_unit & 0x3F));
-    out_len = 3;
-  } else out_len = (size_t)utf8_encode(code_unit, buf);
-
+  size_t out_len = utf16_code_unit_to_wtf8((uint16_t)code_unit, buf);
   return js_mkstr(js, buf, out_len);
 }
 
@@ -12597,15 +12599,92 @@ static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int narg
   return tov(-1);
 }
 
+static ant_value_t js_mkstr_utf16_range(
+  ant_t *js, const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end
+) {
+  size_t byte_start, byte_end;
+  utf16_range_splits_t splits = utf16_range_to_byte_range(
+    str, byte_len, utf16_start, utf16_end, &byte_start, &byte_end
+  );
+
+  if (!splits.prefix_surrogate && !splits.suffix_surrogate)
+    return js_mkstr(js, str + byte_start, byte_end - byte_start);
+
+  string_builder_t sb;
+  char static_buf[64]; char encoded[4];
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+
+  if (splits.prefix_surrogate) {
+    size_t len = utf16_code_unit_to_wtf8(splits.prefix_surrogate, encoded);
+    if (!string_builder_append(&sb, encoded, len)) goto oom;
+  }
+
+  if (!string_builder_append(
+    &sb, str + byte_start, byte_end - byte_start
+  )) goto oom;
+
+  if (splits.suffix_surrogate) {
+    size_t len = utf16_code_unit_to_wtf8(splits.suffix_surrogate, encoded);
+    if (!string_builder_append(&sb, encoded, len)) goto oom;
+  }
+
+  return string_builder_finalize(js, &sb);
+
+oom:
+  string_builder_dispose(&sb);
+  return js_mkerr(js, "oom");
+}
+
+static inline bool utf16_range_equals_bytes(
+  const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end,
+  const char *expected, size_t expected_len
+) {
+  size_t byte_start, byte_end;
+  utf16_range_splits_t splits = utf16_range_to_byte_range(
+    str, byte_len, utf16_start, utf16_end, &byte_start, &byte_end
+  );
+
+  size_t body_len = byte_end - byte_start;
+  if (!splits.prefix_surrogate && !splits.suffix_surrogate)
+    return body_len == expected_len && memcmp(str + byte_start, expected, expected_len) == 0;
+
+  size_t prefix_len = splits.prefix_surrogate ? 3 : 0;
+  size_t suffix_len = splits.suffix_surrogate ? 3 : 0;
+  if (prefix_len + body_len + suffix_len != expected_len) return false;
+
+  char encoded[4];
+  size_t pos = 0;
+
+  if (splits.prefix_surrogate) {
+    utf16_code_unit_to_wtf8(splits.prefix_surrogate, encoded);
+    if (memcmp(expected, encoded, 3) != 0) return false;
+    pos += 3;
+  }
+
+  if (body_len > 0 && memcmp(expected + pos, str + byte_start, body_len) != 0) return false;
+  pos += body_len;
+
+  if (splits.suffix_surrogate) {
+    utf16_code_unit_to_wtf8(splits.suffix_surrogate, encoded);
+    if (memcmp(expected + pos, encoded, 3) != 0) return false;
+  }
+
+  return true;
+}
+
 static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
+
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
+
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
-  
+
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     start = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
@@ -12622,9 +12701,7 @@ static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int na
     end = tmp;
   }
   
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
 }
 
 static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs) {
@@ -12654,9 +12731,7 @@ static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs
   }
   if (start + len > (ant_offset_t)utf16_len) len = (ant_offset_t)utf16_len - start;
   
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, start + len, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, start + len);
 }
 
 static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *args, int nargs) {
@@ -12896,9 +12971,7 @@ static ant_value_t builtin_string_slice(ant_t *js, ant_value_t *args, int nargs)
   }
   
   if (start > end) start = end;
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
 }
 
 static ant_value_t builtin_string_includes(ant_t *js, ant_value_t *args, int nargs) {
@@ -12977,12 +13050,10 @@ static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int n
   if (search_units > str_units - start) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
 
-  size_t byte_start = 0, byte_end = 0;
-  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
-  
-  return mkval(T_BOOL,
-    byte_end - byte_start == (size_t)search_len &&
-    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL, utf16_range_equals_bytes(
+    str_ptr, str_len, start, start + search_units,
+    search_ptr, search_len
+  ) ? 1 : 0);
 }
 
 static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nargs) {
@@ -13026,12 +13097,10 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
   if (start < 0) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
 
-  size_t byte_start = 0, byte_end = 0;
-  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
-  
-  return mkval(T_BOOL,
-    byte_end - byte_start == (size_t)search_len &&
-    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL, utf16_range_equals_bytes(
+    str_ptr, str_len, start, start + search_units,
+    search_ptr, search_len
+  ) ? 1 : 0);
 }
 
 static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nargs) {
