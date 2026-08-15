@@ -14,6 +14,9 @@
 , zig ? null
 , importNpmLock
 , overrideCC
+, rustPlatform
+, rustToolchain
+, runCommand
 , darwin ? null
 , callPackage
 , gitRev ? "unknown"
@@ -45,6 +48,25 @@ let
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix {};
+  cargoRoot = "src/temporal";
+  temporalCargoDeps = rustPlatform.fetchCargoVendor {
+    src = ../..;
+    inherit cargoRoot;
+    name = "ant-temporal-cargo-deps";
+    hash = "sha256-7Ny7Y3VdOB5GFS2SoUUhqIzTJsVRdjsPTon9ndKm5RA=";
+  };
+  rustStdCargoDeps = rustPlatform.fetchCargoVendor {
+    src = rustToolchain;
+    cargoRoot = "lib/rustlib/src/rust/library";
+    name = "ant-rust-std-cargo-deps";
+    hash = "sha256-kUUC6D6xrFap7+gn+lq1i3lBawfzbnUmDfB5QIvLnYA=";
+  };
+  temporalBuildCargoDeps = runCommand "ant-temporal-build-cargo-deps" {} ''
+    mkdir -p "$out"
+    cp -R ${rustStdCargoDeps}/. "$out/"
+    chmod -R u+w "$out"
+    cp -R ${temporalCargoDeps}/. "$out/"
+  '';
 
   toolsNodeModules = importNpmLock.buildNodeModules {
     package = lib.importJSON ../../src/tools/package.json;
@@ -88,7 +110,16 @@ antStdenv.mkDerivation (finalAttrs: {
     git
     curl
     zigPkg
-  ] ++ lib.optionals stdenv.isDarwin [ darwin.sigtool ];
+    rustPlatform.cargoSetupHook
+    rustToolchain
+  ] ++ lib.optionals stdenv.isDarwin [
+    darwin.sigtool
+    llvmPackages_21.llvm
+  ];
+
+  cargoDeps = temporalBuildCargoDeps;
+
+  inherit cargoRoot;
 
   postUnpack = ''
     chmod -R u+w "$sourceRoot/vendor"
@@ -100,11 +131,16 @@ antStdenv.mkDerivation (finalAttrs: {
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
     "-Dembed_example=disabled"
+  ] ++ lib.optionals stdenv.isDarwin [
+    "-Dllvm_nm=${lib.getExe' llvmPackages_21.llvm "llvm-nm"}"
   ] ++ lib.optionals enableNativeTuning [
     "-Dnative_tuning=enabled"
   ] ++ pgoFlags;
 
-  env.NIX_CFLAGS_COMPILE = optArgs;
+  env = {
+    ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
+    NIX_CFLAGS_COMPILE = optArgs;
+  };
 
   preConfigure = ''
     export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache

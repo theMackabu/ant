@@ -20,16 +20,22 @@ cache = os.path.join(os.path.abspath(args.cache), args.rustup_host)
 rustup_home = os.path.join(cache, "rustup")
 cargo_home = os.path.join(cache, "cargo")
 exe = ".exe" if "windows" in args.rustup_host else ""
-cargo = os.path.join(cargo_home, "bin", "cargo" + exe)
+provided_cargo = os.environ.get("ANT_TEMPORAL_CARGO")
+cargo = provided_cargo or os.path.join(cargo_home, "bin", "cargo" + exe)
 
 env = os.environ.copy()
-env["RUSTUP_HOME"] = rustup_home
-env["CARGO_HOME"] = cargo_home
 env["CARGO_TARGET_DIR"] = os.path.join(cache, "target")
-env["PATH"] = os.path.join(cargo_home, "bin") + os.pathsep + env.get("PATH", "")
 env["RUSTFLAGS"] = "-Zunstable-options -Cpanic=immediate-abort"
 
-if not os.path.exists(cargo):
+if provided_cargo:
+  if not os.path.isfile(cargo) or not os.access(cargo, os.X_OK):
+    raise SystemExit(f"temporal.py: ANT_TEMPORAL_CARGO is not executable: {cargo}")
+else:
+  env["RUSTUP_HOME"] = rustup_home
+  env["CARGO_HOME"] = cargo_home
+  env["PATH"] = os.path.join(cargo_home, "bin") + os.pathsep + env.get("PATH", "")
+
+if not provided_cargo and not os.path.exists(cargo):
   os.makedirs(cache, exist_ok=True)
   rustup_init = os.path.join(cache, "rustup-init" + exe)
   url = f"https://static.rust-lang.org/rustup/dist/{args.rustup_host}/rustup-init{exe}"
@@ -53,6 +59,8 @@ build = [
   "-Zbuild-std=std,panic_abort", "-Zbuild-std-features=optimize_for_size",
 ]
 
+if provided_cargo:
+  build += ["--offline"]
 if args.features:
   build += ["--features", args.features]
 subprocess.run(build, cwd=args.crate, env=env, check=True)

@@ -143,6 +143,10 @@ bootstrap, configure Meson with:
 meson setup build -Dtemporal=disabled
 ```
 
+Nix builds provide the same pinned toolchain and Cargo dependency set as
+fixed Nix inputs. They invoke the Temporal build in offline mode, so the Ant
+derivation does not need network access.
+
 ### Unix and macOS
 
 #### Unix prerequisites
