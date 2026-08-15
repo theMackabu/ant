@@ -1,4 +1,13 @@
 const assert = require('assert');
+const { spawnSync } = require('child_process');
+
+function runRejectedEntry(source) {
+  const result = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8' });
+  if (result.error) throw result.error;
+  assert.strictEqual(result.signal, null, result.stderr || result.stdout);
+  assert.notStrictEqual(result.status, 0, 'mismatched C entry signature was accepted');
+  return result.stderr;
+}
 
 assert.strictEqual(
   Ant.unsafe.c`
@@ -48,6 +57,22 @@ assert.strictEqual(
     const char *result(void) { return 0; }
   `,
   null,
+);
+
+const describeNumber = Ant.unsafe.c({
+  entry: 'describe_number',
+  args: ['double'],
+  returns: 'string',
+})`
+  const char *describe_number(double value) { return value > 0 ? "positive" : "other"; }
+`;
+assert.strictEqual(describeNumber(1), 'positive');
+
+assert.throws(
+  () => Ant.unsafe.c({ entry: 'not-an-identifier', returns: 'int' })`
+    int main(void) { return 0; }
+  `,
+  /options\.entry must be a C identifier/,
 );
 
 assert.throws(
@@ -133,5 +158,23 @@ const addUint64 = Ant.unsafe.c({
 `;
 assert.strictEqual(addUint64(9007199254740993n, 7n), 9007199254741000n);
 assert.throws(() => addUint64(1, 2n), /argument 1 must be a bigint/);
+
+assert.match(
+  runRejectedEntry(`
+    const template = ['unsigned long long result(void) { return 1; }'];
+    template.raw = template;
+    Ant.unsafe.c({ entry: 'result', returns: 'string' })(template);
+  `),
+  /string entry must return char \*/,
+);
+
+assert.match(
+  runRejectedEntry(`
+    const template = ['unsigned long long convert(unsigned long long value) { return value; }'];
+    template.raw = template;
+    Ant.unsafe.c({ entry: 'convert', args: ['double'], returns: 'uint64' })(template);
+  `),
+  /must match configured signature/,
+);
 
 console.log('Ant.unsafe.c tests passed');
