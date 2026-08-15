@@ -84,11 +84,13 @@ static void rope_marks_add_pool(
 }
 
 static void rope_nodes_clear_epochs(ant_pool_t *pool) {
-  for (ant_pool_block_t *b = pool->head; b; b = b->next) {
-  for (size_t off = 0; off + sizeof(ant_rope_heap_t) <= b->used; off += sizeof(ant_rope_heap_t)) {
+  for (ant_pool_block_t *b = pool->head; b; b = b->next) for (
+    size_t off = 0; off + sizeof(ant_rope_heap_t) <= 
+    b->used; off += sizeof(ant_rope_heap_t)
+  ) {
     ant_rope_heap_t *rope = (ant_rope_heap_t *)(b->data + off);
     rope->mark_epoch = 0;
-  }}
+  }
 }
 
 gc_ropes_begin_result_t gc_ropes_begin(ant_t *js, bool minor) {
