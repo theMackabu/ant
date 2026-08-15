@@ -25,6 +25,9 @@ inputs:
     description: RANLIB tool
     required: false
     default: ''
+  nm:
+    description: LLVM nm tool
+    required: true
   ld:
     description: Linker
     required: false
@@ -111,6 +114,7 @@ runs:
         MESON_ARGS="-Db_lto=true --buildtype=release"
         MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
         MESON_ARGS="$MESON_ARGS -Ddeps_prefix_cmake=$DEPS_PREFIX"
+        MESON_ARGS="$MESON_ARGS -Dllvm_nm=${{ inputs.nm }}"
 
         if [[ "${{ inputs.static_link }}" == "true" ]]; then
           MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"

@@ -190,6 +190,7 @@ jobs:
           cxx: ${{ steps.llvm.outputs.cxx }}
           ar: ${{ steps.llvm.outputs.ar }}
           ranlib: ${{ steps.llvm.outputs.ranlib }}
+          nm: ${{ steps.llvm.outputs.nm }}
           ld: ${{ steps.llvm.outputs.ld }}
           strip: ${{ steps.llvm.outputs.strip }}
           deps_prefix: ${{ github.workspace }}/.deps-cache

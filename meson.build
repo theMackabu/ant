@@ -166,10 +166,11 @@ endif
 
 ant_link_depends = []
 if host_machine.system() == 'darwin'
+  llvm_nm = find_program(get_option('llvm_nm'))
   ant_exports = custom_target('ant_exports',
     input: [libant, libuv_lib],
     output: 'ant.exports',
-    command: [python, files('meson/exports.py'), '@INPUT@'],
+    command: [python, files('meson/exports.py'), llvm_nm, '@INPUT@'],
     capture: true,
   )
   ant_link_args += [

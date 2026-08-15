@@ -11,3 +11,4 @@ option('pgo_generate_dir', type: 'string', value: '', description: 'emit LLVM PG
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
+option('llvm_nm', type: 'string', value: 'llvm-nm', description: 'LLVM nm executable used to inspect Darwin LTO archives')

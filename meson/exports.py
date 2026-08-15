@@ -5,9 +5,10 @@ PREFIXES = ("_napi_", "_uv_")
 EXCLUDE = ("_uv_link_",)
 
 symbols = set()
-for archive in sys.argv[1:]:
+nm_command = sys.argv[1]
+for archive in sys.argv[2:]:
   nm = subprocess.run(
-    ["nm", "-m", archive], capture_output=True, text=True, check=True
+    [nm_command, "-m", archive], capture_output=True, text=True, check=True
   )
   for line in nm.stdout.splitlines():
     if "(undefined)" in line or " private external " in line:
