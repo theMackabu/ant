@@ -336,7 +336,7 @@ static ant_value_t v8_get_heap_code_statistics(ant_t *js, ant_value_t *args, int
   size_t closure_structs = js->closure_arena.live_count * js->closure_arena.elem_size;
   size_t bytecode_alloc  = js->alloc_bytes.closures;
 
-  ant_pool_stats_t rope_stats = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t rope_stats = js_rope_pool_stats(js);
   ant_value_t obj = js_mkobj(js);
   
   js_set(js, obj, "code_and_metadata_size",      js_mknum((double)(closure_structs + bytecode_alloc)));

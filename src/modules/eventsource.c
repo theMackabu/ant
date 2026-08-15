@@ -447,10 +447,9 @@ static ant_value_t js_eventsource_close(ant_t *js, ant_value_t *args, int nargs)
 }
 
 void init_eventsource_module(ant_t *js) {
-  ant_value_t global = js_glob(js);
   ant_value_t eventtarget_proto = js_get_ctor_proto(js, "EventTarget", 11);
-
   js->builtins.eventsource_proto = js_mkobj(js);
+  
   if (is_object_type(eventtarget_proto)) js_set_proto_init(js->builtins.eventsource_proto, eventtarget_proto);
   js_set(js, js->builtins.eventsource_proto, "close", js_mkfun(js_eventsource_close));
   js_set(js, js->builtins.eventsource_proto, "CONNECTING", js_mknum(ES_CONNECTING));
@@ -462,7 +461,7 @@ void init_eventsource_module(ant_t *js) {
   js_set(js, js->builtins.eventsource_ctor, "CONNECTING", js_mknum(ES_CONNECTING));
   js_set(js, js->builtins.eventsource_ctor, "OPEN", js_mknum(ES_OPEN));
   js_set(js, js->builtins.eventsource_ctor, "CLOSED", js_mknum(ES_CLOSED));
-  js_set(js, global, "EventSource", js->builtins.eventsource_ctor);
+  js_set_global_builtin(js, "EventSource", js->builtins.eventsource_ctor);
 }
 
 void gc_mark_eventsource(ant_t *js, gc_mark_fn mark) {

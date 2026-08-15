@@ -211,6 +211,19 @@ typedef struct sv_compiler {
   const_dedup_entry_t *const_dedup;
   sv_line_table_t *line_table;
   sv_private_scope_t *private_scope;
+
+  struct sv_shaped_site { 
+    uint32_t bc_off;
+    uint32_t first_key;
+    uint16_t key_count;
+  } *shaped_sites;
+  
+  int shaped_site_count;
+  int shaped_site_cap;
+  
+  uint32_t *shaped_keys;
+  int shaped_key_count;
+  int shaped_key_cap;
 } sv_compiler_t;
 
 

@@ -59,13 +59,26 @@ static inline bool gc_get_stack_bounds(
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
 static gc_str_mark_fn g_str_mark = NULL;
 
-static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
+
+static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
+static void gc_mark_closure(ant_t *js, sv_closure_t *c);
 
 static uint64_t gc_epoch = 0;
 static uint8_t gc_obj_epoch = 0;
 static bool g_minor_gc = false;
+
+static_assert(
+  offsetof(sv_closure_t, call_flags) == 0,
+  "closure arena free-list links must overlay call_flags"
+);
+
+static_assert(
+  SV_CALL_HAS_BOUND_ARGS < _Alignof(sv_closure_t),
+  "closure arena sweeps re-read call_flags from free-list links; "
+  "HAS_BOUND_ARGS must remain in the pointer-alignment-zero low bits"
+);
 
 static uint64_t gc_now_ns(void) {
   struct timeval tv;
@@ -90,6 +103,16 @@ gc_func_mark_profile_t gc_func_mark_profile_get(void) {
 
 bool gc_obj_is_marked(const ant_object_t *obj) {
   return obj && obj->mark_epoch == gc_obj_epoch;
+}
+
+static void gc_obj_epoch_wrapped(ant_t *js) {
+  if (!js) return;
+  for (ant_object_t *o = js->objects; o; o = o->next)
+    if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
+  for (ant_object_t *o = js->objects_old; o; o = o->next)
+    if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
+  for (ant_object_t *o = js->permanent_objects; o; o = o->next)
+    if (o->mark_epoch != ANT_GC_DEAD) o->mark_epoch = 0;
 }
 
 void gc_root_pending_promise(ant_t *js, ant_object_t *obj) {
@@ -120,6 +143,19 @@ void gc_unroot_pending_promise(ant_t *js, ant_object_t *obj) {
   pd->gc_pending_prev = NULL;
 }
 
+static constexpr size_t GC_REMEMBERED_ROSTER_RETAIN_CAP = 256;
+static constexpr size_t GC_YOUNG_ROSTER_RETAIN_CAP = 32768;
+
+static void *shrink_ptr_roster(void *entries, size_t *cap, size_t target_cap) {
+  if (*cap <= target_cap * 2) return entries;
+  void *shrunk = realloc(entries, target_cap * sizeof(void *));
+  
+  if (!shrunk) return entries;
+  *cap = target_cap;
+  
+  return shrunk;
+}
+
 void gc_remember_add(ant_t *js, ant_object_t *obj) {
   if (!obj || obj->flags.in_remember_set) return;
   if (js->remember_set_len >= js->remember_set_cap) {
@@ -134,7 +170,7 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
 }
 
 void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
-  if (!js || !uv || uv->in_remember_set) return;
+  if (!js || !uv || js->gc_objects_running || uv->in_remember_set) return;
 
   if (js->remembered_upvalue_len >= js->remembered_upvalue_cap) {
     size_t new_cap = js->remembered_upvalue_cap ? js->remembered_upvalue_cap * 2 : 64;
@@ -150,7 +186,7 @@ void gc_remember_upvalue(ant_t *js, struct sv_upvalue *uv) {
 
 static void gc_mark_remembered_upvalues(ant_t *js) {
   for (size_t i = 0; i < js->remembered_upvalue_len; i++)
-    gc_mark_value(js, js->remembered_upvalues[i]->closed);
+    gc_mark_value(js, *js->remembered_upvalues[i]->location);
 }
 
 static void gc_clear_remembered_upvalues(ant_t *js) {
@@ -158,10 +194,107 @@ static void gc_clear_remembered_upvalues(ant_t *js) {
     js->remembered_upvalues[i]->in_remember_set = 0;
   js->remembered_upvalue_len = 0;
 
-  if (js->remembered_upvalue_cap > 512) {
-    struct sv_upvalue **entries = realloc(js->remembered_upvalues, 256 * sizeof(*entries));
-    if (entries) { js->remembered_upvalues = entries; js->remembered_upvalue_cap = 256; }
+  js->remembered_upvalues = shrink_ptr_roster(
+    js->remembered_upvalues, &js->remembered_upvalue_cap,
+    GC_REMEMBERED_ROSTER_RETAIN_CAP
+  );
+}
+
+void gc_remember_closure(ant_t *js, struct sv_closure *c) {
+  if (!js || !c || c->in_remember_set) return;
+
+  if (js->remembered_closure_len >= js->remembered_closure_cap) {
+    size_t new_cap = js->remembered_closure_cap ? js->remembered_closure_cap * 2 : 64;
+    struct sv_closure **entries = realloc(js->remembered_closures, new_cap * sizeof(*entries));
+    if (!entries) { js->gc_remember_overflow = true; return; }
+    js->remembered_closures = entries;
+    js->remembered_closure_cap = new_cap;
   }
+
+  c->in_remember_set = 1;
+  js->remembered_closures[js->remembered_closure_len++] = c;
+}
+
+static void gc_mark_remembered_closures(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_closure_len; i++)
+    gc_mark_closure(js, js->remembered_closures[i]);
+}
+
+static void gc_clear_remembered_closures(ant_t *js) {
+  for (size_t i = 0; i < js->remembered_closure_len; i++)
+    js->remembered_closures[i]->in_remember_set = 0;
+  js->remembered_closure_len = 0;
+
+  js->remembered_closures = shrink_ptr_roster(
+    js->remembered_closures, &js->remembered_closure_cap,
+    GC_REMEMBERED_ROSTER_RETAIN_CAP
+  );
+}
+
+void gc_track_young_closure_slow(ant_t *js, struct sv_closure *c) {
+  if (js->young_closure_len >= js->young_closure_cap) {
+    size_t new_cap = js->young_closure_cap ? js->young_closure_cap * 2 : 1024;
+    struct sv_closure **entries = realloc(js->young_closures, new_cap * sizeof(*entries));
+    if (!entries) return;
+    js->young_closures = entries;
+    js->young_closure_cap = new_cap;
+  }
+  js->young_closures[js->young_closure_len++] = c;
+}
+
+void gc_track_young_upvalue_slow(ant_t *js, struct sv_upvalue *uv) {
+  if (js->young_upvalue_len >= js->young_upvalue_cap) {
+    size_t new_cap = js->young_upvalue_cap ? js->young_upvalue_cap * 2 : 1024;
+    struct sv_upvalue **entries = realloc(js->young_upvalues, new_cap * sizeof(*entries));
+    if (!entries) return;
+    js->young_upvalues = entries;
+    js->young_upvalue_cap = new_cap;
+  }
+  js->young_upvalues[js->young_upvalue_len++] = uv;
+}
+
+static inline void gc_release_closure_payload(sv_closure_t *c) {
+  if (!(c->call_flags & SV_CALL_BORROWED_UPVALS) && c->upvalues != c->inline_upvals) free(c->upvalues);
+  c->upvalues = NULL;
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) free(c->u.bound.argv);
+  c->u.bound.argv = NULL;
+}
+
+static void gc_sweep_young_closures(ant_t *js) {
+  ant_fixed_arena_t *ca = &js->closure_arena;
+  for (size_t i = 0; i < js->young_closure_len; i++) {
+    sv_closure_t *c = js->young_closures[i];
+    if (c->gc_epoch == gc_epoch) {
+      js->gc_closure_promoted_since_major++;
+      continue;
+    }
+    
+    gc_release_closure_payload(c);
+    fixed_arena_free_elem(ca, c);
+  }
+  
+  js->young_closure_len = 0;
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
+
+  js->young_closures = shrink_ptr_roster(
+    js->young_closures, &js->young_closure_cap,
+    GC_YOUNG_ROSTER_RETAIN_CAP
+  );
+}
+
+static void gc_sweep_young_upvalues(ant_t *js) {
+  ant_fixed_arena_t *ua = &js->upvalue_arena;
+  for (size_t i = 0; i < js->young_upvalue_len; i++) {
+    struct sv_upvalue *uv = js->young_upvalues[i];
+    if (uv->gc_epoch == gc_epoch) continue;
+    fixed_arena_free_elem(ua, uv);
+  }
+  js->young_upvalue_len = 0;
+
+  js->young_upvalues = shrink_ptr_roster(
+    js->young_upvalues, &js->young_upvalue_cap,
+    GC_YOUNG_ROSTER_RETAIN_CAP
+  );
 }
 
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
@@ -236,7 +369,7 @@ static void gc_mark_func(ant_t *js, sv_func_t *func) {
   for (int i = 0; i < func->child_func_count; i++) 
     gc_mark_func(js, func->child_funcs[i]);
     
-  for (int i = 0; i < func->obj_site_count; i++) {
+  for (uint32_t i = 0; i < func->obj_site_count; i++) {
     if (func->obj_sites) ant_gc_shapes_mark(func->obj_sites[i].shared_shape);
   }
 
@@ -280,7 +413,7 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
     sv_upvalue_t *uv = cells[i];
     if (!uv) continue;
     uv->gc_epoch = gc_epoch;
-    if (uv->location == &uv->closed) gc_mark_value(js, uv->closed);
+    gc_mark_value(js, *uv->location);
   }
 }
 
@@ -290,15 +423,18 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   
   c->gc_epoch = gc_epoch;
   gc_mark_func(js, c->func);
-  gc_mark_value(js, c->func_obj);
+  if (c->func_obj) gc_mark_value(js, c->func_obj);
+  gc_mark_value(js, c->module_ctx);
   gc_mark_value(js, c->bound_this);
-  gc_mark_value(js, c->bound_args);
   gc_mark_value(js, c->super_val);
 
   if (c->func)
     gc_mark_upvalue_cells(js, c->upvalues, (uint32_t)c->func->upvalue_count);
-  if (c->bound_argv)
-    for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->bound_argv[i]);
+  if (c->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+    gc_mark_value(js, c->u.bound.args_arr);
+    if (c->u.bound.argv)
+      for (int i = 0; i < c->bound_argc; i++) gc_mark_value(js, c->u.bound.argv[i]);
+  }
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {
@@ -487,7 +623,15 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     sv_closure_t *raw_closure = (sv_closure_t *)(uintptr_t)w;
     if (fixed_arena_contains(&js->closure_arena, raw_closure))
       gc_mark_closure(js, raw_closure);
-      
+
+    sv_upvalue_t *raw_uv = (sv_upvalue_t *)(uintptr_t)w;
+    while (raw_uv && fixed_arena_contains(&js->upvalue_arena, raw_uv)) {
+      if (raw_uv->gc_epoch == gc_epoch) break;
+      raw_uv->gc_epoch = gc_epoch;
+      if (raw_uv->location == &raw_uv->closed) gc_mark_value(js, raw_uv->closed);
+      raw_uv = raw_uv->next;
+    }
+
     if (w <= NANBOX_PREFIX) continue;
     uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
     
@@ -505,6 +649,14 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     if (type == T_BIGINT)
       gc_bigints_mark((const void *)(uintptr_t)(w & NANBOX_DATA_MASK));
   }
+}
+
+void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
+  if (!js || !ptr || size < sizeof(uint64_t)) return;
+  size_t bytes = size & ~(sizeof(uint64_t) - 1u);
+  uintptr_t lo = (uintptr_t)ptr;
+  if (lo > UINTPTR_MAX - bytes) return;
+  gc_scan_range(js, lo, lo + bytes);
 }
 
 __attribute__((noinline))
@@ -588,11 +740,21 @@ static void gc_mark_roots(ant_t *js) {
 
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->Ant);
+  
   gc_mark_value(js, js->esm.hooks);
   gc_mark_value(js, js->esm.import_meta);
+  
   gc_mark_value(js, js->sym.object_proto);
   gc_mark_value(js, js->sym.array_proto);
+  gc_mark_value(js, js->sym.function_proto);
+  gc_mark_value(js, js->sym.string_proto);
+  gc_mark_value(js, js->sym.number_proto);
+  gc_mark_value(js, js->sym.boolean_proto);
+  gc_mark_value(js, js->sym.promise_proto);
+  gc_mark_value(js, js->sym.bigint_proto);
+  gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
+  
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->new_target);
   gc_mark_value(js, js->current_func);
@@ -656,8 +818,26 @@ static void gc_mark_roots(ant_t *js) {
   gc_drain_mark_stack(js);
 }
 
+#define GC_FREE_PAYLOAD_MASK                       \
+  ((1u << T_ARR) | (1u << T_MAP) | (1u << T_SET) | \
+   (1u << T_WEAKMAP) | (1u << T_WEAKSET))
+
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
+
+  if ((((uintptr_t)obj->finalizer | (uintptr_t)obj->promise_state |
+        (uintptr_t)obj->extra_slots | (uintptr_t)obj->overflow_prop |
+        (uintptr_t)obj->exotic_ops) | obj->native.tag) == 0 &&
+      (((1u << obj->type_tag) & GC_FREE_PAYLOAD_MASK) == 0)) {
+    obj->mark_epoch = ANT_GC_DEAD;
+    if (obj->shape) {
+      ant_shape_release(obj->shape);
+      obj->shape = NULL;
+    }
+    fixed_arena_free_elem(&js->obj_arena, obj);
+    return;
+  }
+
   if (obj->finalizer) obj->finalizer(js, obj);
   
   if (obj->native.tag != 0 || ant_object_has_sidecar(obj))
@@ -757,14 +937,19 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   fixed_arena_free_elem(&js->obj_arena, obj);
 }
 
-static void gc_sweep_young(ant_t *js) {
-  ant_object_t **pp = &js->objects;
-  while (*pp) {
-  ant_object_t *obj = *pp;
-  if (obj->mark_epoch == gc_obj_epoch) pp = &obj->next; else {
-    *pp = obj->next;
-    gc_object_free(js, obj);
-  }}
+static void gc_sweep_young_and_promote(ant_t *js) {
+  ant_object_t *obj = js->objects;
+  js->objects = NULL;
+  while (obj) {
+    ant_object_t *next = obj->next;
+    if (next) __builtin_prefetch(next);
+    if (obj->mark_epoch == gc_obj_epoch) {
+      obj->flags.generation = 1;
+      obj->next = js->objects_old;
+      js->objects_old = obj;
+    } else gc_object_free(js, obj);
+    obj = next;
+  }
 }
 
 static void gc_promote_survivors(ant_t *js) {
@@ -832,10 +1017,17 @@ void gc_pin_existing_objects(ant_t *js) {
     js->permanent_objects = js->objects_old;
     js->objects_old = NULL;
   }
+
+  js->young_closure_len = 0;
+  js->young_upvalue_len = 0;
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 }
 
-void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
+void gc_objects_run(
+  ant_t *js, gc_str_mark_fn str_mark, gc_extra_roots_fn extra_roots
+) {
   if (!js) return;
+  js->gc_objects_running = true;
 
   g_str_mark = str_mark;
   if (g_gc_func_mark_profile.enabled) g_gc_func_mark_profile.collections++;
@@ -844,7 +1036,10 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   if (gc_epoch == 0) gc_epoch = 1;
 
   gc_obj_epoch = (uint8_t)(gc_obj_epoch + 1u);
-  if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) gc_obj_epoch = 1;
+  if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) {
+    gc_obj_epoch = 1;
+    gc_obj_epoch_wrapped(js);
+  }
 
   ant_gc_shapes_begin();
   for (size_t i = 0; i < js->remember_set_len; i++)
@@ -853,15 +1048,17 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   
   gc_clear_remembered_func_consts(js);
   gc_clear_remembered_upvalues(js);
+  gc_clear_remembered_closures(js);
 
   if (js->remember_set_cap > 512) {
     ant_object_t **ns = realloc(js->remember_set, 256 * sizeof(*ns));
     if (ns) { js->remember_set = ns; js->remember_set_cap = 256; }
   }
 
+  if (extra_roots) extra_roots(js);
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, false);
-  gc_sweep_regex_cache();
+  gc_age_regex_cache(js, false);
   gc_sweep(js);
   
   if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
@@ -876,14 +1073,8 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   
   if (c->gc_epoch == gc_epoch) ca->live_count++;
   else {
-    if (!(c->call_flags & SV_CALL_BORROWED_UPVALS)) {
-      free(c->upvalues);
-      c->upvalues = NULL;
-    }
-    
-    free(c->bound_argv);
-    c->bound_argv = NULL;
-    
+    gc_release_closure_payload(c);
+
     *(void **)c = ca->free_list;
     ca->free_list = c;
   }}
@@ -901,6 +1092,10 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
       ua->free_list = slot;
     }
   }
+
+  js->young_closure_len = 0;
+  js->young_upvalue_len = 0;
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
 
   ant_fixed_arena_t *oa = &js->obj_arena;
   size_t new_wm = 0;
@@ -933,45 +1128,56 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
       if (ns) { gc_mark_stack = ns; gc_mark_cap = target; }
     }
   }
+
+  ANT_ASSERT(
+    js->remembered_upvalue_len == 0,
+    "upvalue remembered set mutated during collection"
+  );
+  js->gc_objects_running = false;
 }
 
 void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   if (!js) return;
-  
+  js->gc_objects_running = true;
+
   g_str_mark = str_mark;
   gc_epoch++;
-  
+
   if (gc_epoch == 0) gc_epoch = 1;
   gc_obj_epoch = (uint8_t)(gc_obj_epoch + 1u);
-  
-  if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) gc_obj_epoch = 1;
+
+  if (gc_obj_epoch == 0 || gc_obj_epoch == ANT_GC_DEAD) {
+    gc_obj_epoch = 1;
+    gc_obj_epoch_wrapped(js);
+  }
   g_minor_gc = true;
 
-  for (size_t i = 0; i < js->remember_set_len; i++) 
+  for (size_t i = 0; i < js->remember_set_len; i++)
     gc_scan_obj(js, js->remember_set[i]);
-  
+
   gc_mark_remembered_func_consts(js);
   gc_mark_remembered_upvalues(js);
-  
-  for (size_t i = 0; i < js->remember_set_len; i++) 
+  gc_mark_remembered_closures(js);
+
+  for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
-  
+
   js->remember_set_len = 0;
+
   gc_mark_roots(js);
   gc_clear_napi_weak_refs(js, true);
   g_minor_gc = false;
 
-  gc_sweep_regex_cache();
-  gc_sweep_young(js);
-  gc_promote_survivors(js);
+  gc_age_regex_cache(js, true);
+  gc_sweep_young_and_promote(js);
+
+  gc_sweep_young_closures(js);
+  gc_sweep_young_upvalues(js);
   gc_clear_remembered_func_consts(js);
+  gc_clear_remembered_closures(js);
   gc_clear_remembered_upvalues(js);
-  
-  // will NOT sweep closure/upvalue arenas here. old closures stored as T_FUNC
-  // property values on old objects are not scanned during minor GC (old objects
-  // are pre-marked but not traversed unless in the remember set), so their
-  // gc_epoch would not be updated and they would be incorrectly freed.
-  // closure/upvalue arenas are only swept on major GC `gc_objects_run`
+
+  js->gc_objects_running = false;
 }
 
 uint64_t gc_get_epoch(void) { 

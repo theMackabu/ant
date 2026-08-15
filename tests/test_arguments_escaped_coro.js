@@ -36,9 +36,18 @@ check("async[1]", asyncLeak[1], 7);
 
 // escaped closures over a dead suspended coroutine's locals must read the
 // frozen values through their (closed) upvalues, not the freed snapshot
-let closureLeak;
+let closureLeak, objectClosureLeak, functionClosureLeak;
 function abandonWithClosure() {
-  function* g() { let x = 1234; closureLeak = () => x; yield 1; x = 9999; }
+  function* g() {
+    let x = 1234;
+    let object = { marker: "object-live", nested: [7, 8] };
+    let callable = () => "function-live";
+    closureLeak = () => x;
+    objectClosureLeak = () => object;
+    functionClosureLeak = () => callable;
+    yield 1;
+    x = 9999;
+  }
   g().next();
 }
 abandonWithClosure();
@@ -47,6 +56,42 @@ junk = [];
 for (let i = 0; i < 200000; i++) { junk.push({ a: i, b: [i, i + 1] }); if (junk.length > 1024) junk = []; }
 
 check("closure upvalue", closureLeak(), 1234);
+check("object upvalue", objectClosureLeak().marker, "object-live");
+check("object upvalue child", objectClosureLeak().nested[1], 8);
+check("function upvalue", functionClosureLeak()(), "function-live");
+
+// An old closure and upvalue can be hidden behind an old object while its
+// activation is suspended. Writing through that open cell, and capturing it
+// again after resume, must both remember an old-to-young edge for the minor GC.
+const suspendedHolder = { read: null, write: null };
+let suspendedGenerator;
+function* resuspendWithYoungValue() {
+  let value = { marker: "before" };
+  suspendedHolder.read = () => value;
+  suspendedHolder.write = (next) => { value = next; };
+  yield 1;
+  value = { marker: "after", nested: [7, 8] };
+  yield 2;
+}
+
+suspendedGenerator = resuspendWithYoungValue();
+suspendedGenerator.next();
+junk = [];
+for (let i = 0; i < 100000; i++) { junk.push({ a: i, b: [i, i + 1] }); if (junk.length > 1024) junk = []; }
+check("open upvalue before resume", suspendedHolder.read().marker, "before");
+for (let i = 0; i < 1000; i++) suspendedHolder.write(i);
+check("open upvalue write warmup", suspendedHolder.read(), 999);
+suspendedHolder.write({ marker: "written", nested: [5, 6] });
+junk = [];
+for (let i = 0; i < 10000; i++) { junk.push({ a: i, b: [i, i + 1] }); if (junk.length > 1024) junk = []; }
+const written = suspendedHolder.read();
+check("open upvalue write", written && written.marker, "written");
+check("open upvalue write child", written && written.nested && written.nested[1], 6);
+suspendedGenerator.next();
+junk = [];
+for (let i = 0; i < 10000; i++) { junk.push({ a: i, b: [i, i + 1] }); if (junk.length > 1024) junk = []; }
+check("open upvalue after resume", suspendedHolder.read().marker, "after");
+check("open upvalue child after resume", suspendedHolder.read().nested[1], 8);
 
 console.log(`passed: ${pass}, failed: ${fail}`);
 if (fail) throw new Error("escaped state regression");

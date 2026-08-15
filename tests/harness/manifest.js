@@ -14,23 +14,46 @@ export function targets() {
   const REGRESSION_TESTS = [
     'test_promise.cjs',
     'test_jit_derived_ctor.cjs',
+    'test_class_expression_name_scope.cjs',
+    'test_class_constructor_call.cjs',
+    'test_class_export_scope.mjs',
     'test_jit_string_builder_snapshot.cjs',
     'test_template_self_append.cjs',
     'test_global_accessor_read.cjs',
     'test_jit_inline_call_errors.cjs',
+    'test_jit_known_bool_stack.cjs',
+    'test_ic_minor_aba.cjs',
     'test_string_length_accumulation.cjs',
     'test_property_location_stress.cjs',
+    'test_primitive_ic_invalidation.cjs',
+    'test_prototype_write_epoch.cjs',
     'test_accessor_undefined_result.cjs',
     'test_array_define_fast_path.cjs',
     'test_nul_property_keys.cjs',
     'test_url_legacy_idna.cjs',
     'test_child_process_sigpipe_reset.cjs',
     'test_spawn_sync_stdin_pump.cjs',
+    'test_cli_stdin_script.cjs',
     'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
     'test_stream_readable_to_web.cjs',
     'test_esm_package_self_reference.cjs',
-    'test_typeof_closure_assignment.mjs'
+    'test_typeof_closure_assignment.mjs',
+    'test_curried_call_fusion.cjs',
+    'test_regexp_internal_state.cjs',
+    'test_regexp_result_batch.cjs',
+    'test_object_site_lookup.cjs',
+    'test_jit_osr_entry_reject.cjs',
+    'test_jit_dnum_get_length.cjs',
+    'test_function_bind_construct.cjs',
+    'test_numeric_literal_keys.cjs',
+    'test_property_delete_compaction.cjs',
+    'test_rope_large_property_concat.cjs',
+    'test_websocket_close_during_connect.cjs',
+    'test_intern_table_bounded.cjs',
+    'test_buffer_wtf8_utf8.cjs',
+    'test_bigint.js',
+    'test_temporal.js'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 
@@ -47,7 +70,8 @@ export function targets() {
     ['test_arguments_async.cjs', 48],
     ['test_arguments_escaped_coro.js', 64],
     ['test_async_gen_leak.mjs', 48],
-    ['test_upvalue_gc.cjs', 384]
+    ['test_upvalue_gc.cjs', 384],
+    ['test_gc_closure_churn.cjs', 96]
   ];
   for (const [f, maxRssMb] of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true, maxRssMb });
 
@@ -221,11 +245,22 @@ export function targets() {
     }
   );
 
+  list.push({
+    group: 'jit',
+    type: 'demo',
+    name: 'jit_suite',
+    entry: 'examples/jit/run.js',
+    checks: [
+      { name: 'all tests passed, none failed', re: /passed: (\d+) failed: 0 total/, min: 125, max: 100000 },
+      { name: 'all files passed', re: /(\d+) files passed/, min: 9, max: 10000 }
+    ]
+  });
+
   list.push(
-    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 25000, minRps: 17500 },
-    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 46000 }
+    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 30000, minRps: 27500 },
+    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 18000, minRps: 16000 },
+    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 21000, minRps: 18000 },
+    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 58000 }
   );
 
   list.push({

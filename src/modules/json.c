@@ -1115,5 +1115,5 @@ void init_json_module(ant_t *js) {
   js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
   
   js_set_sym(js, json_obj, get_toStringTag_sym(), js_mkstr(js, "JSON", 4));
-  js_set(js, js_glob(js), "JSON", json_obj);
+  js_set_global_builtin(js, "JSON", json_obj);
 }

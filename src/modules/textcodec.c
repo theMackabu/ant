@@ -77,19 +77,8 @@ static ant_value_t js_textencoder_get_encoding(ant_t *js, ant_value_t *args, int
 ant_value_t te_encode(ant_t *js, const char *str, size_t str_len) {
   ArrayBufferData *ab = create_array_buffer_data(str_len);
   if (!ab) return js_mkerr(js, "out of memory");
-  
-  if (str_len > 0) {
-    const uint8_t *s = (const uint8_t *)str;
-    uint8_t *d = ab->data; size_t i = 0;
-    
-    while (i < str_len) {
-    if (s[i] == 0xED && i + 2 < str_len && s[i+1] >= 0xA0 && s[i+1] <= 0xBF) {
-      d[i] = 0xEF; d[i+1] = 0xBF; d[i+2] = 0xBD;
-      i += 3;
-    } else { d[i] = s[i]; i++; }}
-  }
-  
-  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, str_len, "Uint8Array");
+  size_t written = utf8_export_into(str, str_len, ab->data, str_len, NULL);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, written, "Uint8Array");
 }
 
 static ant_value_t js_textencoder_encode(ant_t *js, ant_value_t *args, int nargs) {
@@ -128,37 +117,16 @@ static ant_value_t js_textencoder_encode_into(ant_t *js, ant_value_t *args, int 
   if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "Second argument must be a Uint8Array");
 
   uint8_t *dest = (ta->buffer && !ta->buffer->is_detached)
-    ? ta->buffer->data + ta->byte_offset : NULL;
-  size_t available = ta->byte_length;
-
-  const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str;
-  utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
-  utf8proc_ssize_t pos = 0;
+    ? ta->buffer->data 
+    + ta->byte_offset : NULL;
   
-  size_t written = 0;
+  size_t available = ta->byte_length;
   size_t read_units = 0;
-
-  while (pos < src_len) {
-    utf8proc_int32_t cp;
-    utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    utf8proc_uint8_t tmp[4];
-    utf8proc_ssize_t enc_len;
-    
-    if (cp >= 0xD800 && cp <= 0xDFFF) {
-      tmp[0] = 0xEF; tmp[1] = 0xBF; tmp[2] = 0xBD;
-      enc_len = 3;
-    } else {
-      enc_len = (cp >= 0) ? utf8proc_encode_char(cp, tmp) : 0;
-      if (enc_len <= 0) { tmp[0] = 0xEF; tmp[1] = 0xBF; tmp[2] = 0xBD; enc_len = 3; }
-    }
-    
-    if (written + (size_t)enc_len > available) break;
-    if (dest) memcpy(dest + written, tmp, (size_t)enc_len);
-    
-    written += (size_t)enc_len;
-    pos += n;
-    read_units += (cp >= 0x10000 && cp <= 0x10FFFF) ? 2 : 1;
-  }
+  
+  size_t written = utf8_export_into(
+    str, str_len, dest, 
+    available, &read_units
+  );
 
   ant_value_t result = js_mkobj(js);
   js_set(js, result, "read", js_mknum((double)read_units));

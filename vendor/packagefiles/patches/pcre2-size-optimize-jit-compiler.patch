@@ -1,0 +1,59 @@
+--- a/meson.build
++++ b/meson.build
+@@ -64,6 +64,8 @@
+   not get_option('jit_sealloc').disabled(),
+ )
+ 
++jit_source = files('src/pcre2_jit_compile.c')
++
+ sources = files(
+   'src/pcre2_auto_possess.c',
+   'src/pcre2_chkdint.c',
+@@ -77,7 +79,6 @@
+   'src/pcre2_error.c',
+   'src/pcre2_extuni.c',
+   'src/pcre2_find_bracket.c',
+-  'src/pcre2_jit_compile.c',
+   'src/pcre2_maketables.c',
+   'src/pcre2_match.c',
+   'src/pcre2_match_data.c',
+@@ -227,9 +228,21 @@
+   set_variable(lib.underscorify() + '_link_args', value)
+ endforeach
+ 
++pcre2_8_jit_lib = static_library(
++  'pcre2-jit-8',
++  jit_source,
++  dependencies: jit_deps,
++  include_directories: includes,
++  c_args: [general_c_args, '-DPCRE2_CODE_UNIT_WIDTH=8'],
++  override_options: ['optimization=s'],
++  pic: true,
++  install: false,
++)
++
+ pcre2_8_lib = library(
+   'pcre2-8',
+   sources,
++  link_whole: pcre2_8_jit_lib,
+   dependencies: jit_deps,
+   include_directories: includes,
+   c_args: [general_c_args, '-DPCRE2_CODE_UNIT_WIDTH=8'],
+@@ -268,7 +281,7 @@
+ 
+ pcre2_16_lib = library(
+   'pcre2-16',
+-  sources,
++  [sources, jit_source],
+   dependencies: jit_deps,
+   include_directories: includes,
+   c_args: [general_c_args, '-DPCRE2_CODE_UNIT_WIDTH=16'],
+@@ -288,7 +301,7 @@
+ 
+ pcre2_32_lib = library(
+   'pcre2-32',
+-  sources,
++  [sources, jit_source],
+   dependencies: jit_deps,
+   include_directories: includes,
+   c_args: [general_c_args, '-DPCRE2_CODE_UNIT_WIDTH=32'],

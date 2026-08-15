@@ -1229,10 +1229,9 @@ static ant_value_t async_iter_toArray(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 void init_iterator_module(ant_t *js) {
-  ant_value_t g = js_glob(js);
   ant_value_t iter_proto = js->sym.iterator_proto;
-
   js->builtins.wrap_iter_proto = js_mkobj(js);
+  
   js_set_proto_init(js->builtins.wrap_iter_proto, iter_proto);
   js_set(js, js->builtins.wrap_iter_proto, "next", js_mkfun(wrap_iter_next));
 
@@ -1258,7 +1257,7 @@ void init_iterator_module(ant_t *js) {
   ant_value_t ctor = js_obj_to_func(js, ctor_obj);
   js_set(js, ctor, "from", js_mkfun(iter_from));
   js_set(js, iter_proto, "constructor", ctor);
-  js_set(js, g, "Iterator", ctor);
+  js_set_global_builtin(js, "Iterator", ctor);
 
   ant_value_t async_iter_proto = js_mkobj(js);
   js->sym.async_iterator_proto = async_iter_proto;
@@ -1274,7 +1273,7 @@ void init_iterator_module(ant_t *js) {
   
   ant_value_t async_ctor = js_obj_to_func(js, async_ctor_obj);
   js_set(js, async_iter_proto, "constructor", async_ctor);
-  js_set(js, g, "AsyncIterator", async_ctor);
+  js_set_global_builtin(js, "AsyncIterator", async_ctor);
 
   js->builtins.async_wrap_iter_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.async_wrap_iter_proto, async_iter_proto);

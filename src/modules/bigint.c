@@ -1,6 +1,7 @@
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
 #include "ant.h"
 #include "internal.h"
@@ -9,9 +10,11 @@
 #include "utils.h"
 #include "silver/lexer.h"
 
-#define BIGINT_BASE ((uint64_t)0x100000000ULL)
-#define BIGINT_DEC_GROUP_BASE 1000000000U
-#define BIGINT_STACK_LIMBS 32u
+static constexpr size_t BIGINT_LIMB_SIZE = 32;
+static constexpr size_t BIGINT_DOUBLE_PRECISION = DBL_MANT_DIG;
+
+static constexpr uint64_t BIGINT_BASE = UINT64_C(0x100000000);
+static constexpr uint32_t BIGINT_DEC_GROUP_BASE = UINT32_C(1000000000);
 
 typedef struct {
   uint8_t sign;
@@ -167,18 +170,95 @@ static ant_value_t bigint_finish_payload(
   return value;
 }
 
+static size_t bigint_abs_bitlen_limbs(const uint32_t *limbs, size_t count) {
+  while (count > 1 && limbs[count - 1] == 0) count--;
+  if (count == 1 && limbs[0] == 0) return 0;
+
+  uint32_t top = limbs[count - 1];
+#if defined(__GNUC__) || defined(__clang__)
+  unsigned lead = (unsigned)__builtin_clz(top);
+#else
+  unsigned lead = 0;
+  while ((top & 0x80000000u) == 0) {
+    top <<= 1;
+    lead++;
+  }
+#endif
+  return (count - 1) * BIGINT_LIMB_SIZE +
+    (BIGINT_LIMB_SIZE - (size_t)lead);
+}
+
+static uint64_t bigint_extract_u64(const uint32_t *limbs, size_t count, size_t bit_offset) {
+  size_t word = bit_offset / BIGINT_LIMB_SIZE;
+  unsigned shift = (unsigned)(bit_offset % BIGINT_LIMB_SIZE);
+  uint64_t value = (uint64_t)limbs[word] >> shift;
+
+  if (word + 1 < count)
+    value |= (uint64_t)limbs[word + 1] << (BIGINT_LIMB_SIZE - shift);
+  if (shift != 0 && word + 2 < count)
+    value |= (uint64_t)limbs[word + 2] << (64u - shift);
+  return value;
+}
+
+static bool bigint_test_bit(const uint32_t *limbs, size_t count, size_t bit) {
+  size_t word = bit / BIGINT_LIMB_SIZE;
+  if (word >= count) return false;
+  return ((limbs[word] >> (bit % BIGINT_LIMB_SIZE)) & 1u) != 0;
+}
+
+static bool bigint_any_bits_below(const uint32_t *limbs, size_t count, size_t bit_count) {
+  size_t full_words = bit_count / BIGINT_LIMB_SIZE;
+  for (size_t i = 0; i < full_words && i < count; i++) {
+    if (limbs[i] != 0) return true;
+  }
+
+  unsigned remaining = (unsigned)(bit_count % BIGINT_LIMB_SIZE);
+  if (remaining == 0 || full_words >= count) return false;
+  
+  uint32_t mask = (UINT32_C(1) << remaining) - 1u;
+  return (limbs[full_words] & mask) != 0;
+}
+
+static bool bigint_should_round_up(
+  const uint32_t *limbs, size_t count,
+  size_t discarded_bits, uint64_t significand
+) {
+  size_t halfway_bit = discarded_bits - 1;
+  if (!bigint_test_bit(limbs, count, halfway_bit)) return false;
+
+  bool above_halfway = bigint_any_bits_below(limbs, count, halfway_bit);
+  bool odd_significand = (significand & 1u) != 0;
+  
+  return above_halfway || odd_significand;
+}
+
 double bigint_to_double(ant_t *js, ant_value_t v) {
   size_t count;
   const uint32_t *limbs = bigint_limbs(js, v, &count);
-  if (limbs_is_zero(limbs, count)) return 0.0;
+  
+  size_t bit_length = bigint_abs_bitlen_limbs(limbs, count);
+  if (bit_length == 0) return 0.0;
 
-  double result = 0.0;
-  double base = 1.0;
-  for (size_t i = 0; i < count; i++) {
-    result += (double)limbs[i] * base;
-    base *= (double)BIGINT_BASE;
+  size_t discarded_bits = 
+    bit_length > BIGINT_DOUBLE_PRECISION
+    ? bit_length - BIGINT_DOUBLE_PRECISION : 0;
+    
+  uint64_t significand = bigint_extract_u64(limbs, count, discarded_bits);
+  if (discarded_bits != 0 && bigint_should_round_up(limbs, count, discarded_bits, significand)) {
+    significand++;
+    if (significand == (UINT64_C(1) << BIGINT_DOUBLE_PRECISION)) {
+      significand >>= 1;
+      bit_length++;
+    }
   }
 
+  double result;
+  if (bit_length <= BIGINT_DOUBLE_PRECISION) result = (double)significand;
+  else if (bit_length > DBL_MAX_EXP) result = HUGE_VAL; else result = ldexp(
+    (double)significand,
+    (int)(bit_length - BIGINT_DOUBLE_PRECISION)
+  );
+  
   return bigint_is_negative(js, v) ? -result : result;
 }
 
@@ -539,23 +619,6 @@ static uint32_t bigint_div_small_inplace(uint32_t *limbs, size_t count, uint32_t
   return (uint32_t)rem;
 }
 
-static size_t bigint_abs_bitlen_limbs(const uint32_t *limbs, size_t count) {
-  while (count > 1 && limbs[count - 1] == 0) count--;
-  if (count == 1 && limbs[0] == 0) return 0;
-
-  uint32_t top = limbs[count - 1];
-#if defined(__GNUC__) || defined(__clang__)
-  unsigned lead = (unsigned)__builtin_clz(top);
-#else
-  unsigned lead = 0;
-  while ((top & 0x80000000u) == 0) {
-    top <<= 1;
-    lead++;
-  }
-#endif
-  return (count - 1) * 32u + (32u - (size_t)lead);
-}
-
 static uint32_t bigint_twos_complement_limb(
   const uint32_t *limbs,
   size_t count,
@@ -615,12 +678,12 @@ static ant_value_t bigint_bitwise_binary(ant_t *js, ant_value_t a, ant_value_t b
   size_t width = (width_bits + 31u) / 32u;
   if (width == 0) width = 1;
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (width > BIGINT_STACK_LIMBS) {
+  if (width > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_binary_payload(js, a, b, width, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -670,12 +733,12 @@ ant_value_t bigint_bitnot(ant_t *js, ant_value_t value) {
   size_t width = (width_bits + 31u) / 32u;
   if (width == 0) width = 1;
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (width > BIGINT_STACK_LIMBS) {
+  if (width > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_unary_payload(js, value, width, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1152,12 +1215,12 @@ ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
     }
   }
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (capacity > BIGINT_STACK_LIMBS) {
+  if (capacity > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1204,12 +1267,12 @@ ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
     }
   }
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (capacity > BIGINT_STACK_LIMBS) {
+  if (capacity > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1238,12 +1301,12 @@ ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
   const uint32_t *bd = bigint_limbs(js, b, &blen);
 
   size_t capacity = alen + blen + 1;
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (capacity > BIGINT_STACK_LIMBS) {
+  if (capacity > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_binary_payload(js, a, b, capacity, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1350,12 +1413,12 @@ ant_value_t bigint_shift_left(ant_t *js, ant_value_t value, uint64_t shift) {
   size_t capacity = count + (size_t)limb_shift_u64 + 1u;
   bool negative = bigint_is_negative(js, value);
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (capacity > BIGINT_STACK_LIMBS) {
+  if (capacity > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_unary_payload(js, value, capacity, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1384,12 +1447,12 @@ ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
     ? 1u
     : count - (size_t)limb_shift_u64 + (neg ? 1u : 0u);
 
-  uint32_t stack_limbs[BIGINT_STACK_LIMBS];
+  uint32_t stack_limbs[BIGINT_LIMB_SIZE];
   bigint_payload_t *payload = NULL;
   ant_value_t out = js_mkundef();
   uint32_t *result = stack_limbs;
 
-  if (capacity > BIGINT_STACK_LIMBS) {
+  if (capacity > BIGINT_LIMB_SIZE) {
     out = bigint_alloc_unary_payload(js, value, capacity, &payload);
     if (is_err(out)) return out;
     result = payload->limbs;
@@ -1698,12 +1761,11 @@ static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int narg
 }
 
 void init_bigint_module(ant_t *js) {
-  ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t bigint_proto = js_mkobj(js);
+  js->sym.bigint_proto = bigint_proto;
   js_set_proto_init(bigint_proto, object_proto);
   defmethod(js, bigint_proto, "toString", 8, js_mkfun(builtin_bigint_toString));
   defmethod(js, bigint_proto, "valueOf", 7, js_mkfun(builtin_bigint_valueOf));
@@ -1715,5 +1777,5 @@ void init_bigint_module(ant_t *js) {
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   js_setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
   js_setprop(js, bigint_ctor_obj, ANT_STRING("name"), ANT_STRING("BigInt"));
-  js_setprop(js, glob, js_mkstr(js, "BigInt", 6), js_obj_to_func(js, bigint_ctor_obj));
+  js_set_global_builtin(js, "BigInt", js_obj_to_func(js, bigint_ctor_obj));
 }

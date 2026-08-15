@@ -58,6 +58,15 @@ ANT_BUILTIN(bytelength_qs_proto)
 ANT_BUILTIN(close_sentinel)
 ANT_BUILTIN(textencoder_proto)
 ANT_BUILTIN(textdecoder_proto)
+ANT_BUILTIN(temporal_namespace)
+ANT_BUILTIN(temporal_duration_proto)
+ANT_BUILTIN(temporal_instant_proto)
+ANT_BUILTIN(temporal_plain_date_proto)
+ANT_BUILTIN(temporal_plain_datetime_proto)
+ANT_BUILTIN(temporal_plain_monthday_proto)
+ANT_BUILTIN(temporal_plain_time_proto)
+ANT_BUILTIN(temporal_plain_yearmonth_proto)
+ANT_BUILTIN(temporal_zoned_datetime_proto)
 ANT_BUILTIN(tls_context_proto)
 ANT_BUILTIN(tls_context_ctor)
 ANT_BUILTIN(tls_socket_proto)
@@ -129,6 +138,7 @@ ANT_BUILTIN_ARR(zlib_protos, 9)
 
 #ifdef ANT_MUTABLE_ROOT
 ANT_MUTABLE_ROOT(wasm_pending_import_throw)
+ANT_MUTABLE_ROOT(regexp_static_subject)
 ANT_MUTABLE_ROOT_ARR(regexp_static_values, 11)
 #undef ANT_MUTABLE_ROOT
 #undef ANT_MUTABLE_ROOT_ARR

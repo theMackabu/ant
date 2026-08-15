@@ -587,7 +587,9 @@ ant_value_t sv_call_generator_closure_dispatch(
   js_set_native(gen, data, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
 
-  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
+  ant_value_t prototype_target = js_resolve_bound_target(callee_func);
+  ant_value_t instance_proto = js_get(js, prototype_target, "prototype");
+  
   if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
   else if (data->is_async && is_object_type(js->sym.async_generator_proto))
     js_set_proto_wb(js, gen, js->sym.async_generator_proto);

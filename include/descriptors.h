@@ -33,6 +33,7 @@ uint64_t make_desc_key(ant_value_t obj, const char *key, size_t klen);
 uint64_t make_sym_desc_key(ant_value_t obj, ant_offset_t sym_off);
 
 void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen, int flags);
+void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flags);
 void js_set_getter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, int flags);
 void js_set_setter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t setter, int flags);
 void js_set_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, ant_value_t setter, int flags);

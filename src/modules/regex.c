@@ -7,35 +7,63 @@
 #include "utils.h"
 #include "escape.h"
 #include "descriptors.h"
+#include "ptr.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <pcre2.h>
 
 #include "silver/engine.h"
 #include "modules/regex.h"
 #include "modules/symbol.h"
-#include "gc/objects.h"
 
-typedef struct compiled_regex_cache_entry compiled_regex_cache_entry_t;
-
-struct compiled_regex_cache_entry {
+typedef struct compiled_regex_cache_entry {
   char *pattern;
   size_t pattern_len;
+  uint64_t key_hash;
   uint8_t flags_mask;
   pcre2_code *code;
   pcre2_match_data *scratch_match_data;
+  ant_shape_t *lastindex_shape;
+  uint32_t lastindex_slot;
   uint32_t namecount;
   bool jit_ready;
-  size_t refcount;
-};
+  bool scratch_in_use;
+  size_t object_refs;
+  size_t active_refs;
+  uint8_t cache_refs;
+} compiled_regex_cache_entry_t;
 
 typedef struct {
-  ant_object_t *obj;
+  compiled_regex_cache_entry_t **slots;
+  size_t count;
+  size_t cap;
+} compiled_regex_cache_table_t;
+
+typedef struct {
   compiled_regex_cache_entry_t *compiled;
   pcre2_match_data *match_data;
-} regex_cache_entry_t;
+  bool borrowed;
+} regex_match_scope_t;
+
+typedef struct {
+  ant_shape_t *shape;
+  uint32_t index_slot;
+  uint32_t input_slot;
+  uint32_t groups_slot;
+  uint32_t indices_slot;
+} regexp_result_shape_t;
+
+typedef struct {
+  ant_value_t array;
+  ant_value_t index;
+  ant_value_t input;
+  ant_value_t groups_meta;
+  ant_value_t indices;
+  bool with_indices;
+} regexp_exec_result_ctx_t;
 
 enum {
   REGEXP_FLAG_HAS_INDICES = 1 << 0,
@@ -48,30 +76,153 @@ enum {
   REGEXP_FLAG_STICKY      = 1 << 7,
 };
 
-static regex_cache_entry_t *regex_cache = NULL;
-static compiled_regex_cache_entry_t **compiled_regex_cache = NULL;
+static constexpr int REGEXP_INLINE_CAPTURES = 32;
+static constexpr int REGEXP_STATIC_CAPTURE_COUNT = 9;
+static constexpr ant_offset_t REGEXP_PLAIN_LITERAL_MAX = 32;
 
-static pcre2_match_context *regex_match_ctx = NULL;
-static pcre2_jit_stack *regex_jit_stack = NULL;
+static constexpr int REGEXP_STATIC_OVECTOR_COUNT = REGEXP_STATIC_CAPTURE_COUNT + 1;
+static constexpr int REGEXP_STATIC_IDX_LAST_MATCH = REGEXP_STATIC_CAPTURE_COUNT;
+static constexpr int REGEXP_STATIC_IDX_AMP = REGEXP_STATIC_IDX_LAST_MATCH + 1;
+static constexpr int REGEXP_STATIC_VALUE_COUNT = REGEXP_STATIC_IDX_AMP + 1;
 
+struct ant_regex_state {
+  compiled_regex_cache_table_t compiled[2];
+  size_t live_object_data;
 
-static bool regexp_exec_write_guard_armed = false;
-static bool regexp_exec_property_written = false;
-static bool regexp_replace_property_written = false;
+  regexp_result_shape_t result_shape;
+  regexp_result_shape_t result_indices_shape;
 
-static size_t regex_cache_count = 0;
-static size_t regex_cache_cap = 0;
-static size_t compiled_regex_cache_count = 0;
-static size_t compiled_regex_cache_cap = 0;
+  pcre2_match_context *match_ctx;
+  pcre2_jit_stack *jit_stack;
 
-void regexp_note_exec_property_write(void) {
-  if (regexp_exec_write_guard_armed)
-    regexp_exec_property_written = true;
+  PCRE2_SIZE static_ovector[REGEXP_STATIC_OVECTOR_COUNT * 2];
+  uint16_t static_materialized_mask;
+  uint8_t static_ovcount;
+  
+  bool static_pending;
+  bool exec_write_guard_armed;
+  bool exec_property_written;
+  bool replace_property_written;
+};
+
+static constexpr uint32_t REGEXP_NATIVE_TAG = 0x52454758u; /* REGX */
+static constexpr uint16_t REGEXP_STATIC_ALL_MATERIALIZED = (1u << REGEXP_STATIC_VALUE_COUNT) - 1;
+
+static constexpr size_t REGEX_COMPILED_CACHE_MAX = 1024;
+static constexpr size_t REGEX_COMPILED_TABLE_LOAD_NUM = 3;
+static constexpr size_t REGEX_COMPILED_TABLE_LOAD_DEN = 4;
+
+static bool regexp_result_shape_init(
+  regexp_result_shape_t *cache,
+  ant_object_t *array,
+  bool with_indices
+) {
+  if (cache->shape) return true;
+  if (!array || !array->shape) return false;
+
+  const char *index_key = intern_string("index", 5);
+  const char *input_key = intern_string("input", 5);
+  const char *groups_key = intern_string("groups", 6);
+  const char *indices_key = with_indices
+    ? intern_string("indices", 7)
+    : NULL;
+  if (!index_key || !input_key || !groups_key || (with_indices && !indices_key))
+    return false;
+
+  ant_shape_t *shape = ant_shape_clone(array->shape);
+  if (!shape) return false;
+
+  regexp_result_shape_t built = { .shape = shape };
+  bool ok =
+    ant_shape_add_interned(
+      shape, index_key, ANT_PROP_ATTR_DEFAULT, &built.index_slot
+    ) &&
+    ant_shape_add_interned(
+      shape, input_key, ANT_PROP_ATTR_DEFAULT, &built.input_slot
+    ) &&
+    ant_shape_add_interned(
+      shape, groups_key, ANT_PROP_ATTR_DEFAULT, &built.groups_slot
+    );
+  if (ok && with_indices) {
+    ok = ant_shape_add_interned(
+      shape, indices_key, ANT_PROP_ATTR_DEFAULT, &built.indices_slot
+    );
+  }
+  if (!ok) {
+    ant_shape_release(shape);
+    return false;
+  }
+
+  *cache = built;
+  return true;
 }
 
-void regexp_note_replace_property_write(void) {
-  if (regexp_exec_write_guard_armed)
-    regexp_replace_property_written = true;
+static __attribute__((noinline)) bool regexp_result_apply_shape(
+  ant_t *js,
+  ant_value_t array_value,
+  ant_value_t index,
+  ant_value_t input,
+  ant_value_t groups,
+  ant_value_t indices,
+  bool with_indices
+) {
+  ant_regex_state_t *state = js->regex_state;
+  ant_object_t *array = js_obj_ptr(array_value);
+  if (!state || !array || array->type_tag != T_ARR) goto fallback;
+
+  regexp_result_shape_t *cache = with_indices
+    ? &state->result_indices_shape
+    : &state->result_shape;
+  if (!regexp_result_shape_init(cache, array, with_indices)) goto fallback;
+
+  if (array->shape != cache->shape) {
+    ant_shape_retain(cache->shape);
+    ant_shape_release(array->shape);
+    array->shape = cache->shape;
+  }
+  if (!js_obj_ensure_prop_capacity(array, with_indices ? 4 : 3))
+    goto fallback;
+
+  ant_object_prop_set_unchecked(array, cache->index_slot, index);
+  ant_object_prop_set_unchecked(array, cache->input_slot, input);
+  ant_object_prop_set_unchecked(array, cache->groups_slot, groups);
+  gc_write_barrier(js, array, input);
+  gc_write_barrier(js, array, groups);
+  if (with_indices) {
+    ant_object_prop_set_unchecked(array, cache->indices_slot, indices);
+    gc_write_barrier(js, array, indices);
+  }
+  return true;
+
+fallback:
+  return false;
+}
+
+static ant_value_t regexp_attach_plain_exec_result(
+  ant_t *js, ant_value_t array, ant_value_t index, ant_value_t input
+) {
+  if (regexp_result_apply_shape(
+    js, array, index, input, js_mkundef(), js_mkundef(), false
+  )) return array;
+
+  if (
+    is_err(js_mkprop_fast(js, array, "index", 5, index)) ||
+    is_err(js_mkprop_fast(js, array, "input", 5, input)) ||
+    is_err(js_mkprop_fast(js, array, "groups", 6, js_mkundef()))
+  ) return js_mkerr(js, "oom");
+  return array;
+}
+
+void regexp_note_exec_property_write(ant_t *js) {
+  ant_regex_state_t *state = js->regex_state;
+  if (state && state->exec_write_guard_armed)
+    state->exec_property_written = true;
+}
+
+void regexp_note_replace_property_write(ant_t *js) {
+  ant_regex_state_t *state = js->regex_state;
+  if (state && state->exec_write_guard_armed)
+    state->replace_property_written = true;
 }
 
 static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t flen) {
@@ -91,7 +242,24 @@ static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t fle
   return mask;
 }
 
-static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
+static inline uint8_t regexp_flags_mask(
+  ant_t *js,
+  ant_value_t regexp,
+  compiled_regex_cache_entry_t **compiled_out
+) {
+  compiled_regex_cache_entry_t *compiled = js_get_native(
+    regexp, REGEXP_NATIVE_TAG
+  );
+  if (compiled_out) *compiled_out = compiled;
+  if (compiled) {
+    return compiled->flags_mask;
+  }
+
+  ant_value_t internal_mask = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
+  if (vtype(internal_mask) == T_NUM) {
+    return (uint8_t)tod(internal_mask);
+  }
+
   ant_prop_loc_t flags_off = lkp(js, regexp, "flags", 5);
   if (!flags_off.obj) return 0;
 
@@ -100,7 +268,9 @@ static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
 
   ant_value_t cached_flags = js_get_slot(regexp, SLOT_REGEXP_FLAGS_STRING);
   ant_value_t cached = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
-  if (flags_val == cached_flags && vtype(cached) == T_NUM) return (uint8_t)tod(cached);
+  if (flags_val == cached_flags && vtype(cached) == T_NUM) {
+    return (uint8_t)tod(cached);
+  }
 
   ant_offset_t flen, foff = vstr(js, flags_val, &flen);
   uint8_t mask = regexp_parse_flags_mask((const char *)(uintptr_t)foff, flen);
@@ -137,15 +307,82 @@ static ant_value_t regexp_build_named_groups_meta(ant_t *js, pcre2_code *code) {
   return meta;
 }
 
-static inline ant_value_t regexp_static_value(ant_t *js, size_t idx) {
-  if (idx >= sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]))
-    return js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkundef();
-  return js->mutable_roots.regexp_static_values[idx] ? js->mutable_roots.regexp_static_values[idx] : (js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkundef());
+static inline ant_value_t regexp_static_empty(ant_t *js) {
+  return js->builtins.regexp_empty_string
+    ? js->builtins.regexp_empty_string
+    : js_mkundef();
 }
 
-static inline ant_value_t regexp_static_set(ant_t *js, size_t idx, ant_value_t value) {
-  if (idx < sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]))
+static inline void regexp_statics_clear_materialized(
+  ant_t *js,
+  ant_regex_state_t *state
+) {
+  uint16_t mask = state->static_materialized_mask;
+  if (__builtin_expect(mask == 0, 1)) return;
+
+  ant_value_t empty = regexp_static_empty(js);
+  while (mask) {
+    unsigned idx = (unsigned)__builtin_ctz((unsigned)mask);
+    js->mutable_roots.regexp_static_values[idx] = empty;
+    mask &= (uint16_t)(mask - 1);
+  }
+  state->static_materialized_mask = 0;
+}
+
+static ant_value_t regexp_static_value(ant_t *js, size_t idx) {
+  if (idx >= REGEXP_STATIC_VALUE_COUNT) return regexp_static_empty(js);
+
+  ant_regex_state_t *state = js->regex_state;
+  uint16_t bit = (uint16_t)(1u << idx);
+  if (
+    !state || !state->static_pending ||
+    (state->static_materialized_mask & bit)
+  ) {
+    ant_value_t value = js->mutable_roots.regexp_static_values[idx];
+    return value ? value : regexp_static_empty(js);
+  }
+
+  size_t capture = idx < REGEXP_STATIC_CAPTURE_COUNT ? idx + 1 : 0;
+  ant_value_t value = regexp_static_empty(js);
+  if (
+    capture < state->static_ovcount &&
+    state->static_ovector[capture * 2] != PCRE2_UNSET
+  ) {
+    PCRE2_SIZE start = state->static_ovector[capture * 2];
+    PCRE2_SIZE end = state->static_ovector[capture * 2 + 1];
+    ant_offset_t subject_len;
+    ant_offset_t subject_off = vstr(
+      js, js->mutable_roots.regexp_static_subject, &subject_len
+    );
+    if (end < start || end > subject_len)
+      return js_mkerr(js, "invalid regexp static snapshot");
+    value = js_mkstr(
+      js,
+      (const char *)(uintptr_t)subject_off + start,
+      end - start
+    );
+    if (is_err(value)) return value;
+  }
+
+  if (idx >= REGEXP_STATIC_IDX_LAST_MATCH) {
+    js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_LAST_MATCH] = value;
+    js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_AMP] = value;
+    state->static_materialized_mask |= (uint16_t)(
+      (1u << REGEXP_STATIC_IDX_LAST_MATCH) |
+      (1u << REGEXP_STATIC_IDX_AMP)
+    );
+  } else {
     js->mutable_roots.regexp_static_values[idx] = value;
+    state->static_materialized_mask |= bit;
+  }
+  if (state->static_materialized_mask == REGEXP_STATIC_ALL_MATERIALIZED) {
+    state->static_pending = false;
+    js->mutable_roots.regexp_static_subject = regexp_static_empty(js);
+  }
+  return value;
+}
+
+static inline ant_value_t regexp_static_set(ant_t *js) {
   return js_mkundef();
 }
 
@@ -155,7 +392,8 @@ static inline ant_value_t regexp_static_set(ant_t *js, size_t idx, ant_value_t v
     return regexp_static_value(js, idx); \
   } \
   static ant_value_t regexp_static_set_##name(ant_t *js, ant_value_t *args, int nargs) { \
-    return regexp_static_set(js, idx, nargs > 0 ? args[0] : js_mkundef()); \
+    (void)args; (void)nargs; \
+    return regexp_static_set(js); \
   }
 
 REGEXP_STATIC_ACCESSORS(d1, 0)
@@ -167,25 +405,70 @@ REGEXP_STATIC_ACCESSORS(d6, 5)
 REGEXP_STATIC_ACCESSORS(d7, 6)
 REGEXP_STATIC_ACCESSORS(d8, 7)
 REGEXP_STATIC_ACCESSORS(d9, 8)
-REGEXP_STATIC_ACCESSORS(last_match, 9)
-REGEXP_STATIC_ACCESSORS(amp, 10)
+REGEXP_STATIC_ACCESSORS(last_match, REGEXP_STATIC_IDX_LAST_MATCH)
+REGEXP_STATIC_ACCESSORS(amp, REGEXP_STATIC_IDX_AMP)
 
 #undef REGEXP_STATIC_ACCESSORS
 
-static void update_regexp_statics(ant_t *js, const char *str_ptr, PCRE2_SIZE *ovector, uint32_t ovcount) {
-  ant_value_t empty = js->builtins.regexp_empty_string ? js->builtins.regexp_empty_string : js_mkstr(js, "", 0);
-  for (int i = 1; i <= 9; i++) {
+static __attribute__((noinline, cold)) void update_regexp_statics_eager(
+  ant_t *js, ant_value_t subject,
+  PCRE2_SIZE *ovector, uint32_t ovcount
+) {
+  ant_offset_t subject_len;
+  ant_offset_t subject_off = vstr(js, subject, &subject_len);
+  const char *str_ptr = (const char *)(uintptr_t)subject_off;
+  ant_value_t empty = regexp_static_empty(js);
+  for (int i = 1; i <= REGEXP_STATIC_CAPTURE_COUNT; i++) {
     ant_value_t val = empty;
-    if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET)
-      val = js_mkstr(js, str_ptr + ovector[2*i], ovector[2*i+1] - ovector[2*i]);
+    if ((uint32_t)i < ovcount) {
+      PCRE2_SIZE start = ovector[2*i];
+      PCRE2_SIZE end = ovector[2*i + 1];
+      if (
+        start != PCRE2_UNSET && end >= start && end <= subject_len
+      ) {
+        val = js_mkstr(js, str_ptr + start, end - start);
+        if (is_err(val)) val = empty;
+      }
+    }
     js->mutable_roots.regexp_static_values[i - 1] = val;
   }
 
-  ant_value_t match0 = (ovcount > 0 && ovector[0] != PCRE2_UNSET)
+  bool has_match0 = (
+    ovcount > 0 && ovector[0] != PCRE2_UNSET &&
+    ovector[1] >= ovector[0] && ovector[1] <= subject_len
+  );
+  ant_value_t match0 = has_match0
     ? js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0])
     : empty;
-  js->mutable_roots.regexp_static_values[9] = match0;
-  js->mutable_roots.regexp_static_values[10] = match0;
+  if (is_err(match0)) match0 = empty;
+  js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_LAST_MATCH] = match0;
+  js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_AMP] = match0;
+}
+
+static void update_regexp_statics(
+  ant_t *js,
+  ant_value_t subject,
+  PCRE2_SIZE *ovector,
+  uint32_t ovcount
+) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) {
+    update_regexp_statics_eager(js, subject, ovector, ovcount);
+    return;
+  }
+
+  regexp_statics_clear_materialized(js, state);
+  js->mutable_roots.regexp_static_subject = subject;
+  uint32_t stored = ovcount < REGEXP_STATIC_OVECTOR_COUNT
+    ? ovcount
+    : REGEXP_STATIC_OVECTOR_COUNT;
+  memcpy(
+    state->static_ovector,
+    ovector,
+    (size_t)stored * 2 * sizeof(*ovector)
+  );
+  state->static_ovcount = (uint8_t)stored;
+  state->static_pending = true;
 }
 
 static inline bool is_pcre2_passthrough_escape(char c) {
@@ -644,66 +927,192 @@ static ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str);
 static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs);
 
-static regex_cache_entry_t *regex_cache_lookup(ant_object_t *obj) {
-  for (size_t i = 0; i < regex_cache_count; i++) {
-    if (regex_cache[i].obj == obj) return &regex_cache[i];
+static __attribute__((aligned(16)))
+pcre2_match_context *regex_get_match_context(ant_t *js) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) return NULL;
+  if (state->match_ctx) return state->match_ctx;
+
+  state->match_ctx = pcre2_match_context_create(NULL);
+  if (!state->match_ctx) return NULL;
+
+  state->jit_stack = pcre2_jit_stack_create(32 * 1024, 512 * 1024, NULL);
+  if (state->jit_stack) {
+    pcre2_jit_stack_assign(state->match_ctx, NULL, state->jit_stack);
+  }
+
+  return state->match_ctx;
+}
+
+static uint64_t compiled_regex_key_hash(
+  const char *pattern, size_t pattern_len, uint8_t flags_mask
+) {
+  return ant_hash_mix(
+    hash_key(pattern, pattern_len) ^ ant_hash_secret[0],
+    ((uint64_t)flags_mask << 32) ^ ant_hash_secret[4]
+  );
+}
+
+static bool compiled_regex_key_matches(
+  const compiled_regex_cache_entry_t *entry,
+  uint64_t key_hash,
+  const char *pattern,
+  size_t pattern_len,
+  uint8_t flags_mask
+) {
+  return entry && entry->key_hash == key_hash &&
+    entry->flags_mask == flags_mask &&
+    entry->pattern_len == pattern_len &&
+    memcmp(entry->pattern, pattern, pattern_len) == 0;
+}
+
+static void compiled_regex_entry_free(compiled_regex_cache_entry_t *entry) {
+  if (!entry) return;
+  ant_shape_release(entry->lastindex_shape);
+  pcre2_match_data_free(entry->scratch_match_data);
+  pcre2_code_free(entry->code);
+  free(entry->pattern);
+  free(entry);
+}
+
+static void compiled_regex_entry_maybe_free(
+  compiled_regex_cache_entry_t *entry
+) {
+  if (
+    entry && entry->object_refs == 0 &&
+    entry->active_refs == 0 && entry->cache_refs == 0
+  ) compiled_regex_entry_free(entry);
+}
+
+static bool compiled_regex_table_resize(
+  compiled_regex_cache_table_t *table, size_t need
+) {
+  if (!table || need > REGEX_COMPILED_CACHE_MAX) return false;
+  size_t cap = 64;
+  while (cap < need * 2) cap <<= 1;
+  if (table->cap >= cap) return true;
+
+  compiled_regex_cache_entry_t **slots = calloc(cap, sizeof(*slots));
+  if (!slots) return false;
+
+  for (size_t i = 0; i < table->cap; i++) {
+    compiled_regex_cache_entry_t *entry = table->slots[i];
+    if (!entry) continue;
+    size_t slot = (size_t)entry->key_hash & (cap - 1);
+    while (slots[slot]) slot = (slot + 1) & (cap - 1);
+    slots[slot] = entry;
+  }
+
+  free(table->slots);
+  table->slots = slots;
+  table->cap = cap;
+  return true;
+}
+
+static compiled_regex_cache_entry_t *compiled_regex_table_lookup(
+  const compiled_regex_cache_table_t *table,
+  uint64_t key_hash,
+  const char *pattern,
+  size_t pattern_len,
+  uint8_t flags_mask
+) {
+  if (!table || !table->slots || table->cap == 0) return NULL;
+  size_t mask = table->cap - 1;
+  size_t slot = (size_t)key_hash & mask;
+  for (size_t probe = 0; probe < table->cap; probe++) {
+    compiled_regex_cache_entry_t *entry = table->slots[slot];
+    if (!entry) return NULL;
+    if (compiled_regex_key_matches(
+      entry, key_hash, pattern, pattern_len, flags_mask
+    )) return entry;
+    slot = (slot + 1) & mask;
   }
   return NULL;
 }
 
-static pcre2_match_context *regex_get_match_context(void) {
-  if (regex_match_ctx) return regex_match_ctx;
-
-  regex_match_ctx = pcre2_match_context_create(NULL);
-  if (!regex_match_ctx) return NULL;
-
-  regex_jit_stack = pcre2_jit_stack_create(32 * 1024, 512 * 1024, NULL);
-  if (regex_jit_stack) {
-    pcre2_jit_stack_assign(regex_match_ctx, NULL, regex_jit_stack);
+static bool compiled_regex_table_insert(
+  compiled_regex_cache_table_t *table,
+  compiled_regex_cache_entry_t *entry
+) {
+  if (!table || !entry || table->count >= REGEX_COMPILED_CACHE_MAX)
+    return false;
+  if (
+    !table->slots ||
+    (table->count + 1) * REGEX_COMPILED_TABLE_LOAD_DEN >=
+      table->cap * REGEX_COMPILED_TABLE_LOAD_NUM
+  ) {
+    if (!compiled_regex_table_resize(table, table->count + 1))
+      return false;
   }
 
-  return regex_match_ctx;
+  size_t mask = table->cap - 1;
+  size_t slot = (size_t)entry->key_hash & mask;
+  for (size_t probe = 0; probe < table->cap; probe++) {
+    compiled_regex_cache_entry_t *existing = table->slots[slot];
+    if (!existing) {
+      table->slots[slot] = entry;
+      table->count++;
+      return true;
+    }
+    if (existing == entry) return false;
+    slot = (slot + 1) & mask;
+  }
+  return false;
 }
 
-static void compiled_regex_cache_release(compiled_regex_cache_entry_t *entry) {
-  if (!entry || entry->refcount == 0) return;
-  entry->refcount--;
-  if (entry->refcount != 0) return;
-
-  for (size_t i = 0; i < compiled_regex_cache_count; i++) {
-    if (compiled_regex_cache[i] == entry) {
-      pcre2_match_data_free(entry->scratch_match_data);
-      pcre2_code_free(entry->code);
-      free(entry->pattern);
-      free(entry);
-      compiled_regex_cache[i] = compiled_regex_cache[--compiled_regex_cache_count];
-      return;
-    }
+static void compiled_regex_table_clear(
+  compiled_regex_cache_table_t *table
+) {
+  if (!table) return;
+  for (size_t i = 0; i < table->cap; i++) {
+    compiled_regex_cache_entry_t *entry = table->slots[i];
+    if (!entry) continue;
+    if (entry->cache_refs > 0) entry->cache_refs--;
+    compiled_regex_entry_maybe_free(entry);
   }
+  free(table->slots);
+  memset(table, 0, sizeof(*table));
 }
 
 static compiled_regex_cache_entry_t *compiled_regex_cache_lookup(
+  ant_regex_state_t *state,
   const char *pattern,
   size_t pattern_len,
-  uint8_t flags_mask
+  uint8_t flags_mask,
+  uint64_t key_hash
 ) {
-  for (size_t i = 0; i < compiled_regex_cache_count; i++) {
-    compiled_regex_cache_entry_t *entry = compiled_regex_cache[i];
-    if (
-      entry->flags_mask == flags_mask &&
-      entry->pattern_len == pattern_len &&
-      memcmp(entry->pattern, pattern, pattern_len) == 0
-    ) return entry;
+  compiled_regex_cache_entry_t *entry = compiled_regex_table_lookup(
+    &state->compiled[0], key_hash, pattern, pattern_len, flags_mask
+  );
+  if (entry) {
+    return entry;
   }
-  return NULL;
+
+  entry = compiled_regex_table_lookup(
+    &state->compiled[1], key_hash, pattern, pattern_len, flags_mask
+  );
+  if (!entry) {
+    return NULL;
+  }
+
+  if (compiled_regex_table_insert(&state->compiled[0], entry)) {
+    entry->cache_refs++;
+  }
+  return entry;
 }
 
 static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
+  ant_regex_state_t *state,
   const char *pattern,
   size_t pattern_len,
   uint8_t flags_mask
 ) {
-  compiled_regex_cache_entry_t *cached = compiled_regex_cache_lookup(pattern, pattern_len, flags_mask);
+  uint64_t key_hash = compiled_regex_key_hash(
+    pattern, pattern_len, flags_mask
+  );
+  compiled_regex_cache_entry_t *cached = compiled_regex_cache_lookup(
+    state, pattern, pattern_len, flags_mask, key_hash
+  );
   if (cached) return cached;
 
   char pcre2_pattern[4096];
@@ -739,70 +1148,99 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   }
   if (pattern_len) memcpy(pattern_copy, pattern, pattern_len);
 
-  if (compiled_regex_cache_count >= compiled_regex_cache_cap) {
-    size_t new_cap = compiled_regex_cache_cap ? compiled_regex_cache_cap * 2 : 64;
-    compiled_regex_cache_entry_t **new_cache = realloc(
-      compiled_regex_cache,
-      new_cap * sizeof(compiled_regex_cache_entry_t *)
-    );
-    if (!new_cache) {
-      pcre2_code_free(re);
-      free(pattern_copy);
-      free(entry);
-      return NULL;
-    }
-    compiled_regex_cache = new_cache;
-    compiled_regex_cache_cap = new_cap;
-  }
-
   entry->pattern = pattern_copy;
   entry->pattern_len = pattern_len;
+  entry->key_hash = key_hash;
   entry->flags_mask = flags_mask;
   entry->code = re;
   pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &entry->namecount);
   entry->jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
-  entry->refcount = 0;
-  compiled_regex_cache[compiled_regex_cache_count++] = entry;
+
+  if (compiled_regex_table_insert(&state->compiled[0], entry))
+    entry->cache_refs++;
   return entry;
 }
 
-static pcre2_match_data *compiled_regex_scratch_match_data(compiled_regex_cache_entry_t *entry) {
-  if (!entry->scratch_match_data) {
-    entry->scratch_match_data = pcre2_match_data_create_from_pattern(entry->code, NULL);
-  }
-  return entry->scratch_match_data;
-}
-
-static regex_cache_entry_t *regex_cache_insert(
-  ant_object_t *obj,
-  compiled_regex_cache_entry_t *compiled,
-  pcre2_match_data *match_data
+static compiled_regex_cache_entry_t *compiled_regex_cache_acquire(
+  ant_t *js,
+  const char *pattern,
+  size_t pattern_len,
+  uint8_t flags_mask
 ) {
-  if (regex_cache_count >= regex_cache_cap) {
-    size_t new_cap = regex_cache_cap ? regex_cache_cap * 2 : 64;
-    regex_cache_entry_t *new_cache = realloc(regex_cache, new_cap * sizeof(regex_cache_entry_t));
-    if (!new_cache) return NULL;
-    regex_cache = new_cache;
-    regex_cache_cap = new_cap;
-  }
-  regex_cache_entry_t *entry = &regex_cache[regex_cache_count++];
-  entry->obj = obj;
-  entry->compiled = compiled;
-  entry->match_data = match_data;
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) return NULL;
+  compiled_regex_cache_entry_t *entry = compiled_regex_cache_get_or_compile(
+    state, pattern, pattern_len, flags_mask
+  );
+  if (entry) entry->active_refs++;
   return entry;
 }
 
-static void regex_cache_remove_at(size_t i) {
-  pcre2_match_data_free(regex_cache[i].match_data);
-  compiled_regex_cache_release(regex_cache[i].compiled);
-  regex_cache[i] = regex_cache[--regex_cache_count];
+static void compiled_regex_cache_release(
+  compiled_regex_cache_entry_t *entry
+) {
+  if (!entry) return;
+  ANT_ASSERT(entry->active_refs > 0, "active compiled regexp reference underflow");
+  entry->active_refs--;
+  compiled_regex_entry_maybe_free(entry);
 }
 
-typedef struct {
-  pcre2_code *code;
-  pcre2_match_data *match_data;
-  bool jit_ready;
-} compiled_regex_t;
+static bool regex_match_scope_begin(
+  compiled_regex_cache_entry_t *entry, regex_match_scope_t *scope
+) {
+  memset(scope, 0, sizeof(*scope));
+  scope->compiled = entry;
+  if (!entry) return false;
+
+  if (!entry->scratch_in_use) {
+    if (!entry->scratch_match_data)
+      entry->scratch_match_data =
+        pcre2_match_data_create_from_pattern(entry->code, NULL);
+    if (!entry->scratch_match_data) return false;
+    entry->scratch_in_use = true;
+    scope->match_data = entry->scratch_match_data;
+    scope->borrowed = true;
+    return true;
+  }
+
+  scope->match_data = pcre2_match_data_create_from_pattern(entry->code, NULL);
+  if (!scope->match_data) return false;
+  return true;
+}
+
+static void regex_match_scope_end(regex_match_scope_t *scope) {
+  if (!scope || !scope->match_data) return;
+  if (scope->borrowed) {
+    scope->compiled->scratch_in_use = false;
+  } else {
+    pcre2_match_data_free(scope->match_data);
+  }
+  scope->match_data = NULL;
+}
+
+static void regexp_object_compiled_release(
+  ant_t *js, ant_value_t regexp, compiled_regex_cache_entry_t *compiled
+) {
+  if (!compiled) return;
+  js_clear_native(regexp, REGEXP_NATIVE_TAG);
+  ant_regex_state_t *state = js->regex_state;
+  if (state && state->live_object_data > 0) state->live_object_data--;
+  if (compiled && compiled->object_refs > 0) compiled->object_refs--;
+  compiled_regex_entry_maybe_free(compiled);
+}
+
+static void regexp_object_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t regexp = js_obj_from_ptr(obj);
+  compiled_regex_cache_entry_t *compiled =
+    js_get_native(regexp, REGEXP_NATIVE_TAG);
+  regexp_object_compiled_release(js, regexp, compiled);
+}
+
+static void regexp_object_compiled_detach(ant_t *js, ant_value_t regexp) {
+  compiled_regex_cache_entry_t *compiled =
+    js_get_native(regexp, REGEXP_NATIVE_TAG);
+  regexp_object_compiled_release(js, regexp, compiled);
+}
 
 static bool regexp_source_pattern(ant_t *js, ant_value_t regexp_obj, const char **pattern_ptr, ant_offset_t *pattern_len) {
   ant_value_t source_val = js_get_slot(regexp_obj, SLOT_DATA);
@@ -836,54 +1274,62 @@ static bool regexp_compile_shared_from_object(
   const char *pattern_ptr;
   if (!regexp_source_pattern(js, regexp_obj, &pattern_ptr, &plen)) return false;
 
-  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_get_or_compile(pattern_ptr, plen, flags_mask);
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) return false;
+  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_get_or_compile(
+    state, pattern_ptr, plen, flags_mask
+  );
   if (!compiled) return false;
   *out = compiled;
   return true;
 }
 
-static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_regex_t *out) {
+static compiled_regex_cache_entry_t *regex_get_or_compile(
+  ant_t *js,
+  ant_value_t regexp_obj,
+  uint8_t flags_mask,
+  compiled_regex_cache_entry_t *compiled
+) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) return NULL;
   ant_object_t *obj_ptr = js_obj_ptr(regexp_obj);
-  uint8_t flags_mask = regexp_flags_mask(js, regexp_obj);
 
-  regex_cache_entry_t *cached = regex_cache_lookup(obj_ptr);
-  if (cached) {
-    out->code = cached->compiled->code;
-    out->match_data = cached->match_data;
-    out->jit_ready = cached->compiled->jit_ready;
-    return true;
+  if (!compiled) {
+    compiled = js_get_native(regexp_obj, REGEXP_NATIVE_TAG);
   }
-
-  compiled_regex_cache_entry_t *compiled;
-  if (!regexp_compile_shared_from_object(js, regexp_obj, flags_mask, &compiled)) return false;
-  compiled->refcount++;
-
-  pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(compiled->code, NULL);
-  if (!match_data) {
-    compiled_regex_cache_release(compiled);
-    return false;
+  if (compiled && compiled->flags_mask == flags_mask) {
+    return compiled;
   }
+  if (compiled) regexp_object_compiled_release(js, regexp_obj, compiled);
 
+  if (!regexp_compile_shared_from_object(
+    js, regexp_obj, flags_mask, &compiled
+  )) return NULL;
+
+  compiled->object_refs++;
   ant_value_t groups_meta = regexp_build_named_groups_meta(js, compiled->code);
-  
   if (is_err(groups_meta)) {
-    pcre2_match_data_free(match_data);
-    compiled_regex_cache_release(compiled);
-    return false;
+    compiled->object_refs--;
+    compiled_regex_entry_maybe_free(compiled);
+    return NULL;
   }
 
-  if (!regex_cache_insert(obj_ptr, compiled, match_data)) {
-    pcre2_match_data_free(match_data);
-    compiled_regex_cache_release(compiled);
-    return false;
+  if (obj_ptr->finalizer && obj_ptr->finalizer != regexp_object_finalize) {
+    compiled->object_refs--;
+    compiled_regex_entry_maybe_free(compiled);
+    return NULL;
   }
-  
+
+  js_set_native(regexp_obj, compiled, REGEXP_NATIVE_TAG);
+  if (js_get_native(regexp_obj, REGEXP_NATIVE_TAG) != compiled) {
+    compiled->object_refs--;
+    compiled_regex_entry_maybe_free(compiled);
+    return NULL;
+  }
+  js_set_finalizer(regexp_obj, regexp_object_finalize);
+  state->live_object_data++;
   js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, groups_meta);
-  out->code = compiled->code;
-  out->match_data = match_data;
-  out->jit_ready = compiled->jit_ready;
-  
-  return true;
+  return compiled;
 }
 
 static bool regexp_has_internal_slots(ant_t *js, ant_value_t value) {
@@ -1042,7 +1488,7 @@ static ant_value_t regexp_build_indices_result(
   ant_value_t indices_arr = js_mkarr(js);
   if (is_err(indices_arr)) return indices_arr;
 
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  for (uint32_t i = 0; i < ovcount; i++) {
     ant_value_t pair = regexp_build_indices_pair(js, ovector[2*i], ovector[2*i+1]);
     if (is_err(pair)) return pair;
     js_arr_push(js, indices_arr, pair);
@@ -1056,6 +1502,38 @@ static ant_value_t regexp_build_indices_result(
   } else if (is_err(setprop_cstr(js, indices_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
 
   return indices_arr;
+}
+
+static ant_value_t regexp_attach_exec_result(ant_t *js,const regexp_exec_result_ctx_t *ctx) {
+  bool has_named_groups = is_object_type(ctx->groups_meta);
+  
+  if (!has_named_groups && regexp_result_apply_shape(
+    js, ctx->array, ctx->index, ctx->input, js_mkundef(),
+    ctx->indices, ctx->with_indices
+  )) return ctx->array;
+
+  if (
+    is_err(setprop_cstr(js, ctx->array, "index", 5, ctx->index)) ||
+    is_err(setprop_cstr(js, ctx->array, "input", 5, ctx->input))
+  ) return js_mkerr(js, "oom");
+
+  if (has_named_groups) {
+    js_set_slot(ctx->array, SLOT_REGEXP_RESULT_GROUPS, ctx->groups_meta);
+    js_set_slot(ctx->array, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
+    js_set_getter_desc(
+      js, js_as_obj(ctx->array), "groups", 6,
+      js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C
+    );
+  }
+  else if (is_err(setprop_cstr(js, ctx->array, "groups", 6, js_mkundef()))) 
+    return js_mkerr(js, "oom");
+
+  if (
+    ctx->with_indices &&
+    is_err(setprop_cstr(js, ctx->array, "indices", 7, ctx->indices))
+  ) return js_mkerr(js, "oom");
+
+  return ctx->array;
 }
 
 static const char *find_bytes(const char *haystack, ant_offset_t haystack_len, const char *needle, ant_offset_t needle_len);
@@ -1091,7 +1569,7 @@ static ant_value_t regexp_exec_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str_ptr, ovector, 1);
+  update_regexp_statics(js, str_arg, ovector, 1);
 
   if (truthy_only) return js_true;
 
@@ -1102,10 +1580,164 @@ static ant_value_t regexp_exec_plain_literal_fast(
   if (is_err(match_str)) return match_str;
   js_arr_push(js, result_arr, match_str);
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-  return result_arr;
+  return regexp_attach_plain_exec_result(
+    js, result_arr, tov((double)ovector[0]), str_arg
+  );
+}
+
+static __attribute__((always_inline)) inline int compiled_regex_run_in_scope(
+  ant_t *js,
+  compiled_regex_cache_entry_t *compiled,
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE start_offset,
+  bool sticky,
+  regex_match_scope_t *scope,
+  PCRE2_SIZE **ovector,
+  uint32_t *ovcount
+) {
+  *ovector = NULL;
+  *ovcount = 0;
+
+  pcre2_match_context *match_ctx = regex_get_match_context(js);
+  uint32_t match_options = sticky ? PCRE2_ANCHORED : 0;
+  int rc;
+  if (__builtin_expect(compiled->jit_ready && !sticky, 1)) {
+    rc = pcre2_jit_match(
+      compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
+      match_options, scope->match_data, match_ctx
+    );
+  } else {
+    if (str_is_valid_utf8(str_ptr)) match_options |= PCRE2_NO_UTF_CHECK;
+    rc = pcre2_match(
+      compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset,
+      match_options, scope->match_data, match_ctx
+    );
+  }
+
+  if (rc >= 0) {
+    *ovector = pcre2_get_ovector_pointer(scope->match_data);
+    *ovcount = pcre2_get_ovector_count(scope->match_data);
+  }
+  return rc;
+}
+
+static __attribute__((always_inline)) inline int compiled_regex_run(
+  ant_t *js,
+  compiled_regex_cache_entry_t *compiled,
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE start_offset,
+  bool sticky,
+  regex_match_scope_t *scope,
+  PCRE2_SIZE **ovector,
+  uint32_t *ovcount
+) {
+  if (!regex_match_scope_begin(compiled, scope)) {
+    *ovector = NULL;
+    *ovcount = 0;
+    return PCRE2_ERROR_NOMEMORY;
+  }
+  return compiled_regex_run_in_scope(
+    js, compiled, str_ptr, str_len, start_offset, sticky,
+    scope, ovector, ovcount
+  );
+}
+
+static const ant_shape_prop_t *regexp_lastindex_lookup_own_property(
+  ant_object_t *obj,
+  uint32_t *out_slot
+) {
+  if (!obj || !obj->shape) return NULL;
+
+  const char *key = intern_string("lastIndex", 9);
+  if (!key) return NULL;
+  int32_t found = ant_shape_lookup_interned(obj->shape, key);
+  if (found < 0 || (uint32_t)found >= obj->prop_count) return NULL;
+
+  uint32_t slot = (uint32_t)found;
+  if (out_slot) *out_slot = slot;
+  return ant_shape_prop_at(obj->shape, slot);
+}
+
+static bool regexp_lastindex_fast_location(
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp,
+  ant_object_t **out_obj,
+  uint32_t *out_slot
+) {
+  if (!compiled || !compiled->lastindex_shape || is_proxy(regexp)) return false;
+  ant_object_t *obj = js_obj_ptr(regexp);
+  if (
+    !obj || obj->flags.is_exotic ||
+    obj->shape != compiled->lastindex_shape ||
+    compiled->lastindex_slot >= obj->prop_count
+  ) return false;
+  *out_obj = obj;
+  *out_slot = compiled->lastindex_slot;
+  return true;
+}
+
+static void regexp_lastindex_cache_location(
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp
+) {
+  if (!compiled || is_proxy(regexp)) return;
+  ant_object_t *obj = js_obj_ptr(regexp);
+  if (!obj || obj->flags.is_exotic || !obj->shape) return;
+  if (
+    compiled->lastindex_shape == obj->shape &&
+    compiled->lastindex_slot < obj->prop_count
+  ) return;
+
+  uint32_t slot;
+  const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(
+    obj, &slot
+  );
+  if (
+    !prop || prop->has_getter || prop->has_setter ||
+    !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
+  ) return;
+
+  if (compiled->lastindex_shape != obj->shape) {
+    ant_shape_retain(obj->shape);
+    ant_shape_release(compiled->lastindex_shape);
+    compiled->lastindex_shape = obj->shape;
+  }
+  compiled->lastindex_slot = slot;
+}
+
+static ant_value_t regexp_set_lastindex(
+  ant_t *js,
+  compiled_regex_cache_entry_t *compiled,
+  ant_value_t regexp,
+  ant_value_t value
+) {
+  ant_object_t *obj;
+  uint32_t slot;
+  if (regexp_lastindex_fast_location(
+    compiled, regexp, &obj, &slot
+  )) {
+    ant_object_prop_set_unchecked(obj, slot, value);
+    gc_write_barrier(js, obj, value);
+    return value;
+  }
+
+  ant_object_t *receiver = js_obj_ptr(regexp);
+  if (!is_proxy(regexp)) {
+    const ant_shape_prop_t *prop = regexp_lastindex_lookup_own_property(
+      receiver, NULL
+    );
+    if (
+      prop && !prop->has_getter && !prop->has_setter &&
+      !(prop->attrs & ANT_PROP_ATTR_WRITABLE)
+    ) {
+      return js_mkerr_typed(
+        js, JS_ERR_TYPE, "Cannot assign to read only property 'lastIndex'"
+      );
+    }
+  }
+  return setprop_cstr(js, regexp, "lastIndex", 9, value);
 }
 
 static ant_value_t regexp_exec_shared_fast(
@@ -1128,67 +1760,74 @@ static ant_value_t regexp_exec_shared_fast(
   );
   if (is_err(literal_result) || *used_fast_path) return literal_result;
 
-  compiled_regex_cache_entry_t *compiled;
-  if (!regexp_compile_shared_from_object(js, regexp, flags_mask, &compiled)) return js_mkundef();
+  compiled_regex_cache_entry_t *compiled =
+    regex_get_or_compile(js, regexp, flags_mask, NULL);
+  if (!compiled) return js_mkundef();
 
   if (!truthy_only && compiled->namecount != 0) return js_mkundef();
-
-  pcre2_match_data *match_data = compiled_regex_scratch_match_data(compiled);
-  if (!match_data) return js_mkundef();
 
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
 
-  int rc;
-  uint32_t match_options = sticky_flag ? PCRE2_ANCHORED : 0;
-  pcre2_match_context *match_ctx = regex_get_match_context();
-  if (compiled->jit_ready && !sticky_flag) {
-    rc = pcre2_jit_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
-  } else rc = pcre2_match(compiled->code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, match_data, match_ctx);
+  regex_match_scope_t match_scope;
+  PCRE2_SIZE *ovector;
+  uint32_t ovcount;
+  int rc = compiled_regex_run(
+    js, compiled, str_ptr, str_len, start_offset, sticky_flag,
+    &match_scope, &ovector, &ovcount
+  );
 
   *used_fast_path = true;
   if (rc < 0) {
-    if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
-      return js_mkerr(js, "oom");
-    }
+    regex_match_scope_end(&match_scope);
     return js_mknull();
   }
 
-  PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
-  uint32_t ovcount = pcre2_get_ovector_count(match_data);
-  update_regexp_statics(js, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, ovector, ovcount);
 
-  if (global_flag || sticky_flag) {
-    ant_value_t next_idx = tov((double)ovector[1]);
-    if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) return js_mkerr(js, "oom");
+  if (truthy_only) {
+    regex_match_scope_end(&match_scope);
+    return js_true;
   }
 
-  if (truthy_only) return js_true;
-
+  ant_value_t result;
   ant_value_t result_arr = js_mkarr(js);
-  if (is_err(result_arr)) return result_arr;
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  if (is_err(result_arr)) {
+    result = result_arr;
+    goto done;
+  }
+  for (uint32_t i = 0; i < ovcount; i++) {
     PCRE2_SIZE start = ovector[2*i];
     PCRE2_SIZE end = ovector[2*i+1];
     if (start == PCRE2_UNSET) {
       js_arr_push(js, result_arr, js_mkundef());
     } else {
       ant_value_t match_str = js_mkstr(js, str_ptr + start, end - start);
-      if (is_err(match_str)) return match_str;
+      if (is_err(match_str)) {
+        result = match_str;
+        goto done;
+      }
       js_arr_push(js, result_arr, match_str);
     }
   }
 
-  if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
-  if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-  return result_arr;
+  result = regexp_attach_plain_exec_result(
+    js, result_arr, tov((double)ovector[0]), str_arg
+  );
+
+done:
+  regex_match_scope_end(&match_scope);
+  return result;
 }
 
-static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
+static __attribute__((aligned(16)))
+ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
-  uint8_t flags_mask = regexp_flags_mask(js, regexp);
+  compiled_regex_cache_entry_t *compiled_hint;
+  uint8_t flags_mask = regexp_flags_mask(
+    js, regexp, &compiled_hint
+  );
   
   bool global_flag = (flags_mask & REGEXP_FLAG_GLOBAL) != 0;
   bool has_indices = (flags_mask & REGEXP_FLAG_HAS_INDICES) != 0;
@@ -1197,16 +1836,28 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   // TODO: reduce nesting
   PCRE2_SIZE start_offset = 0;
   if (global_flag || sticky_flag) {
-    ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
-    if (lastindex_off.obj) {
-      ant_value_t li_val = js_prop_load(lastindex_off);
-      if (vtype(li_val) == T_NUM) {
-        double li = tod(li_val);
-        if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
-        else {
-          if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) return js_mkerr(js, "oom");
-          return js_mknull();
-        }
+    ant_object_t *lastindex_obj;
+    uint32_t lastindex_slot;
+    ant_value_t li_val;
+    if (regexp_lastindex_fast_location(
+      compiled_hint, regexp, &lastindex_obj, &lastindex_slot
+    )) {
+      li_val = ant_object_prop_get_unchecked(lastindex_obj, lastindex_slot);
+    } else {
+      ant_prop_loc_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
+      li_val = lastindex_off.obj
+        ? js_prop_load(lastindex_off)
+        : js_mkundef();
+    }
+    if (vtype(li_val) == T_NUM) {
+      double li = tod(li_val);
+      if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
+      else {
+        ant_value_t stored = regexp_set_lastindex(
+          js, compiled_hint, regexp, tov(0)
+        );
+        if (is_err(stored)) return stored;
+        return js_mknull();
       }
     }
   }
@@ -1217,67 +1868,91 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
   );
   if (is_err(fast_result) || used_fast_path) return fast_result;
 
-  compiled_regex_t compiled;
-  if (!regex_get_or_compile(js, regexp, &compiled)) return js_mknull();
+  compiled_regex_cache_entry_t *compiled =
+    regex_get_or_compile(js, regexp, flags_mask, compiled_hint);
+  if (!compiled) return js_mknull();
+  regexp_lastindex_cache_location(compiled, regexp);
 
-  uint32_t match_options = 0;
-  if (sticky_flag) match_options |= PCRE2_ANCHORED;
-
-  int rc;
-  pcre2_match_context *match_ctx = regex_get_match_context();
-  if (compiled.jit_ready && !sticky_flag) {
-    rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
-  } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, match_ctx);
+  regex_match_scope_t match_scope;
+  PCRE2_SIZE *ovector;
+  uint32_t ovcount;
+  int rc = compiled_regex_run(
+    js, compiled, str_ptr, str_len, start_offset, sticky_flag,
+    &match_scope, &ovector, &ovcount
+  );
 
   if (rc < 0) {
-    if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
-      return js_mkerr(js, "oom");
+    regex_match_scope_end(&match_scope);
+    if (global_flag || sticky_flag) {
+      ant_value_t stored = regexp_set_lastindex(
+        js, compiled, regexp, tov(0)
+      );
+      if (is_err(stored)) return stored;
     }
     return js_mknull();
   }
 
-  PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(compiled.match_data);
-  uint32_t ovcount = pcre2_get_ovector_count(compiled.match_data);
-
-  update_regexp_statics(js, str_ptr, ovector, ovcount);
+  update_regexp_statics(js, str_arg, ovector, ovcount);
 
   if (global_flag || sticky_flag) {
     ant_value_t next_idx = tov((double)ovector[1]);
-    if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) return js_mkerr(js, "oom");
+    ant_value_t stored = regexp_set_lastindex(
+      js, compiled, regexp, next_idx
+    );
+    if (is_err(stored)) {
+      regex_match_scope_end(&match_scope);
+      return stored;
+    }
   }
 
-  if (truthy_only) return js_true;
+  if (truthy_only) {
+    regex_match_scope_end(&match_scope);
+    return js_true;
+  }
 
+  ant_value_t result;
+  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
   ant_value_t result_arr = js_mkarr(js);
-  if (is_err(result_arr)) return result_arr;
-  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+  if (is_err(result_arr)) {
+    result = result_arr;
+    goto done;
+  }
+  for (uint32_t i = 0; i < ovcount; i++) {
     PCRE2_SIZE start = ovector[2*i];
     PCRE2_SIZE end = ovector[2*i+1];
     if (start == PCRE2_UNSET) {
       js_arr_push(js, result_arr, js_mkundef());
     } else {
       ant_value_t match_str = js_mkstr(js, str_ptr + start, end - start);
+      if (is_err(match_str)) {
+        result = match_str;
+        goto done;
+      }
       js_arr_push(js, result_arr, match_str);
     }
   }
 
-  if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-  if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
-
-  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
-  if (is_object_type(groups_meta)) {
-    js_set_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS, groups_meta);
-    js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
-    js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
-  } else if (is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-
+  ant_value_t indices = js_mkundef();
   if (has_indices) {
-    ant_value_t indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
-    if (is_err(indices)) return indices;
-    if (is_err(setprop_cstr(js, result_arr, "indices", 7, indices))) return js_mkerr(js, "oom");
+    indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
+    if (is_err(indices)) {
+      result = indices;
+      goto done;
+    }
   }
 
-  return result_arr;
+  result = regexp_attach_exec_result(js, &(regexp_exec_result_ctx_t) {
+    .array = result_arr,
+    .index = tov((double)ovector[0]),
+    .input = str_arg,
+    .groups_meta = groups_meta,
+    .indices = indices,
+    .with_indices = has_indices,
+  });
+
+done:
+  regex_match_scope_end(&match_scope);
+  return result;
 }
 
 static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) {
@@ -1358,13 +2033,7 @@ static ant_value_t builtin_regexp_compile(ant_t *js, ant_value_t *args, int narg
   ant_offset_t flen, foff = vstr(js, flags, &flen);
   regexp_init_flags(js, rx, (const char *)(uintptr_t)(foff), flen, false);
 
-  ant_object_t *rx_ptr = js_obj_ptr(rx);
-  for (size_t i = 0; i < regex_cache_count; i++) {
-    if (regex_cache[i].obj == rx_ptr) {
-      regex_cache_remove_at(i);
-      break;
-    }
-  }
+  regexp_object_compiled_detach(js, rx);
 
   return rx;
 }
@@ -1545,6 +2214,168 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
   return js_mkstr(js, buf, n);
 }
 
+static bool regexp_prepare_builtin_exec(
+  ant_t *js,
+  ant_value_t rx,
+  uint8_t required_flags,
+  compiled_regex_cache_entry_t **compiled_out,
+  uint8_t *flags_out,
+  ant_object_t **lastindex_obj_out,
+  uint32_t *lastindex_slot_out
+) {
+  ant_regex_state_t *state = js->regex_state;
+  if (
+    !state || !regexp_can_use_internal_fast_path(js, rx)
+  ) {
+    goto reject;
+  }
+
+  ant_prop_loc_t exec_loc = lkp_proto(js, rx, "exec", 4);
+  if (
+    !exec_loc.obj || !exec_loc.obj->shape ||
+    exec_loc.obj->flags.is_exotic ||
+    exec_loc.slot >= exec_loc.obj->prop_count
+  ) {
+    goto reject;
+  }
+
+  const ant_shape_prop_t *exec_prop = ant_shape_prop_at(
+    exec_loc.obj->shape, exec_loc.slot
+  );
+  if (!exec_prop || exec_prop->has_getter || exec_prop->has_setter) {
+    goto reject;
+  }
+
+  ant_value_t exec_fn = js_prop_load(exec_loc);
+  if (
+    vtype(exec_fn) != T_CFUNC ||
+    !js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)
+  ) {
+    goto reject;
+  }
+
+  compiled_regex_cache_entry_t *compiled_hint;
+  uint8_t flags = regexp_flags_mask(js, rx, &compiled_hint);
+  if ((flags & required_flags) != required_flags) {
+    goto reject;
+  }
+
+  compiled_regex_cache_entry_t *compiled = regex_get_or_compile(
+    js, rx, flags, compiled_hint
+  );
+  if (!compiled) {
+    goto reject;
+  }
+
+  regexp_lastindex_cache_location(compiled, rx);
+  ant_object_t *lastindex_obj;
+  uint32_t lastindex_slot;
+  if (!regexp_lastindex_fast_location(
+    compiled, rx, &lastindex_obj, &lastindex_slot
+  )) {
+    goto reject;
+  }
+
+  *compiled_out = compiled;
+  if (flags_out) *flags_out = flags;
+  if (lastindex_obj_out) *lastindex_obj_out = lastindex_obj;
+  if (lastindex_slot_out) *lastindex_slot_out = lastindex_slot;
+  return true;
+
+reject:
+  return false;
+}
+
+static bool regexp_prepare_batch_builtin_exec(
+  ant_t *js,
+  ant_value_t rx,
+  compiled_regex_cache_entry_t **compiled_out,
+  uint8_t *flags_out
+) {
+  return regexp_prepare_builtin_exec(
+    js, rx, REGEXP_FLAG_GLOBAL, compiled_out, flags_out, NULL, NULL
+  );
+}
+
+static inline PCRE2_SIZE regexp_advance_empty_match(
+  const char *str_ptr,
+  ant_offset_t str_len,
+  PCRE2_SIZE offset,
+  bool full_unicode
+) {
+  if (full_unicode && offset < (PCRE2_SIZE)str_len) {
+    return offset + (PCRE2_SIZE)utf8_char_len_at(
+      str_ptr, str_len, (ant_offset_t)offset
+    );
+  }
+  return offset + 1;
+}
+
+static ant_value_t regexp_match_batch_fast(
+  ant_t *js,
+  ant_value_t rx,
+  ant_value_t str,
+  bool full_unicode,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  compiled_regex_cache_entry_t *compiled;
+  uint8_t flags;
+  if (!regexp_prepare_batch_builtin_exec(js, rx, &compiled, &flags))
+    return js_mkundef();
+
+  *used_fast_path = true;
+
+  ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+
+  ant_value_t matches = js_mkarr(js);
+  if (is_err(matches)) return matches;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  bool sticky = (flags & REGEXP_FLAG_STICKY) != 0;
+  PCRE2_SIZE offset = 0;
+  ant_offset_t count = 0;
+
+  regex_match_scope_t scope;
+  if (regex_match_scope_begin(compiled, &scope)) {
+    while (offset <= (PCRE2_SIZE)str_len) {
+      PCRE2_SIZE *ovector;
+      uint32_t ovcount;
+      int rc = compiled_regex_run_in_scope(
+        js, compiled, str_ptr, str_len, offset, sticky,
+        &scope, &ovector, &ovcount
+      );
+      if (rc < 0) break;
+
+      PCRE2_SIZE start = ovector[0];
+      PCRE2_SIZE end = ovector[1];
+      update_regexp_statics(js, str, ovector, ovcount);
+      ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
+      if (is_err(match)) {
+        regex_match_scope_end(&scope);
+        return match;
+      }
+      js_arr_push(js, matches, match);
+      count++;
+
+      offset = end;
+      if (start == end) {
+        offset = regexp_advance_empty_match(
+          str_ptr, str_len, offset, full_unicode
+        );
+      }
+    }
+  }
+  regex_match_scope_end(&scope);
+
+  stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+  return count == 0 ? js_mknull() : matches;
+}
+
 static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
@@ -1563,6 +2394,12 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
   if (is_err(unicode_val)) return unicode_val;
 
   bool full_unicode = js_truthy(js, unicode_val);
+  bool used_fast_path = false;
+  ant_value_t fast = regexp_match_batch_fast(
+    js, rx, str, full_unicode, &used_fast_path
+  );
+  if (is_err(fast) || used_fast_path) return fast;
+
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
 
   ant_value_t A = js_mkarr(js);
@@ -1707,12 +2544,66 @@ static ant_value_t builtin_string_matchAll(ant_t *js, ant_value_t *args, int nar
   return builtin_regexp_symbol_matchAll(js, ma_args, 1);
 }
 
+static __attribute__((noinline)) const char *find_bytes_long(
+  const char *haystack,
+  size_t haystack_len,
+  const char *needle,
+  size_t needle_len
+) {
+  size_t prefix_inline[128];
+  size_t *prefix = NULL;
+  if (needle_len <= sizeof(prefix_inline) / sizeof(prefix_inline[0]))
+    prefix = prefix_inline;
+  else if (needle_len <= SIZE_MAX / sizeof(*prefix))
+    prefix = malloc(needle_len * sizeof(*prefix));
+  if (!prefix) {
+    size_t last = haystack_len - needle_len;
+    for (size_t i = 0; i <= last; i++) {
+      if (
+        haystack[i] == needle[0] &&
+        memcmp(haystack + i, needle, needle_len) == 0
+      ) return haystack + i;
+    }
+    return NULL;
+  }
+
+  prefix[0] = 0;
+  for (size_t i = 1, matched = 0; i < needle_len; i++) {
+    while (matched && needle[i] != needle[matched])
+      matched = prefix[matched - 1];
+    if (needle[i] == needle[matched]) matched++;
+    prefix[i] = matched;
+  }
+
+  const char *result = NULL;
+  for (size_t i = 0, matched = 0; i < haystack_len; i++) {
+    while (matched && haystack[i] != needle[matched])
+      matched = prefix[matched - 1];
+    if (haystack[i] == needle[matched]) matched++;
+    if (matched == needle_len) {
+      result = haystack + i + 1 - needle_len;
+      break;
+    }
+  }
+
+  if (prefix != prefix_inline) free(prefix);
+  return result;
+}
+
 static const char *find_bytes(const char *haystack, ant_offset_t haystack_len, const char *needle, ant_offset_t needle_len) {
   if (needle_len == 0 || needle_len > haystack_len) return NULL;
+  if (needle_len > REGEXP_PLAIN_LITERAL_MAX) {
+    return find_bytes_long(
+      haystack, (size_t)haystack_len, needle, (size_t)needle_len
+    );
+  }
+
   ant_offset_t last = haystack_len - needle_len;
   for (ant_offset_t i = 0; i <= last; i++) {
-    if (haystack[i] == needle[0] && memcmp(haystack + i, needle, needle_len) == 0)
-      return haystack + i;
+    if (
+      haystack[i] == needle[0] &&
+      memcmp(haystack + i, needle, needle_len) == 0
+    ) return haystack + i;
   }
   return NULL;
 }
@@ -1729,7 +2620,7 @@ static bool replacement_has_substitution(ant_t *js, ant_value_t replacement) {
 }
 
 static bool regex_source_is_plain_literal(const char *source, ant_offset_t len) {
-  if (len == 0) return false;
+  if (len == 0 || len > REGEXP_PLAIN_LITERAL_MAX) return false;
   for (ant_offset_t i = 0; i < len; i++) {
     switch (source[i]) {
       case '\\': case '^': case '$': case '.': case '*': case '+': case '?':
@@ -1772,7 +2663,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
-  uint8_t flags_mask = regexp_flags_mask(js, rx);
+  uint8_t flags_mask = regexp_flags_mask(js, rx, NULL);
   const char *needle;
   ant_offset_t needle_len;
   if (!regexp_plain_literal_pattern(js, rx, flags_mask, &needle, &needle_len)) return js_mkundef();
@@ -1787,7 +2678,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
   if (!first) return str;
 
   size_t cap = str_len + repl_len + 256;
-  char *buf = ant_calloc(cap);
+  char *buf = malloc(cap);
   if (!buf) return js_mkerr(js, "oom");
 
   size_t len = 0;
@@ -1805,7 +2696,7 @@ static ant_value_t regexp_replace_plain_literal_fast(
 
     ovector[0] = (PCRE2_SIZE)(match - str_ptr);
     ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-    update_regexp_statics(js, str_ptr, ovector, 1);
+    update_regexp_statics(js, str, ovector, 1);
 
     scan = match + needle_len;
     if (!global) break;
@@ -1828,6 +2719,142 @@ static ant_value_t regexp_replace_plain_literal_fast(
   return ret;
 }
 
+static ant_value_t regexp_replace_batch_fast(
+  ant_t *js,
+  ant_value_t rx,
+  ant_value_t str,
+  ant_value_t replacement,
+  bool full_unicode,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  compiled_regex_cache_entry_t *compiled;
+  uint8_t flags;
+  if (!regexp_prepare_batch_builtin_exec(js, rx, &compiled, &flags))
+    return js_mkundef();
+
+  *used_fast_path = true;
+
+  ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) return stored;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  ant_offset_t replacement_len, replacement_off = vstr(
+    js, replacement, &replacement_len
+  );
+  const char *replacement_ptr = (const char *)(uintptr_t)replacement_off;
+
+  size_t buf_cap = (size_t)str_len + 256;
+  char *buf = malloc(buf_cap);
+  if (!buf) return js_mkerr(js, "oom");
+  size_t buf_len = 0;
+
+  bool sticky = (flags & REGEXP_FLAG_STICKY) != 0;
+  PCRE2_SIZE offset = 0;
+  PCRE2_SIZE next_src_pos = 0;
+  size_t match_count = 0;
+
+  regex_match_scope_t scope;
+  if (regex_match_scope_begin(compiled, &scope)) {
+    while (offset <= (PCRE2_SIZE)str_len) {
+      PCRE2_SIZE *ovector;
+      uint32_t ovcount;
+      int rc = compiled_regex_run_in_scope(
+        js, compiled, str_ptr, str_len, offset, sticky,
+        &scope, &ovector, &ovcount
+      );
+      if (rc < 0) break;
+
+      PCRE2_SIZE start = ovector[0];
+      PCRE2_SIZE end = ovector[1];
+      if (
+        start > next_src_pos &&
+        !str_buf_append(
+          &buf, &buf_len, &buf_cap,
+          str_ptr + next_src_pos, start - next_src_pos
+        )
+      ) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+
+      int capture_count = ovcount > 1 ? (int)(ovcount - 1) : 0;
+      repl_capture_t captures_inline[REGEXP_INLINE_CAPTURES - 1];
+      repl_capture_t *captures = capture_count < REGEXP_INLINE_CAPTURES
+        ? captures_inline
+        : malloc(sizeof(*captures) * (size_t)capture_count);
+      if (capture_count >= REGEXP_INLINE_CAPTURES && !captures) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+      for (int i = 0; i < capture_count; i++) {
+        PCRE2_SIZE capture_start = ovector[2 * (i + 1)];
+        PCRE2_SIZE capture_end = ovector[2 * (i + 1) + 1];
+        captures[i] = capture_start == PCRE2_UNSET
+          ? (repl_capture_t){ NULL, 0 }
+          : (repl_capture_t){
+              str_ptr + capture_start,
+              (size_t)(capture_end - capture_start)
+            };
+      }
+
+      update_regexp_statics(js, str, ovector, ovcount);
+      bool replaced = repl_template(
+        replacement_ptr, replacement_len,
+        str_ptr + start, end - start,
+        str_ptr, str_len, start,
+        captures, capture_count,
+        &buf, &buf_len, &buf_cap
+      );
+      if (captures != captures_inline) free(captures);
+      if (!replaced) {
+        regex_match_scope_end(&scope);
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
+
+      match_count++;
+      next_src_pos = end;
+      offset = end;
+      if (start == end) {
+        offset = regexp_advance_empty_match(
+          str_ptr, str_len, offset, full_unicode
+        );
+      }
+    }
+  }
+  regex_match_scope_end(&scope);
+
+  if (
+    next_src_pos < (PCRE2_SIZE)str_len &&
+    !str_buf_append(
+      &buf, &buf_len, &buf_cap,
+      str_ptr + next_src_pos, (size_t)str_len - next_src_pos
+    )
+  ) {
+    free(buf);
+    return js_mkerr(js, "oom");
+  }
+
+  stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+  if (is_err(stored)) {
+    free(buf);
+    return stored;
+  }
+  if (match_count == 0) {
+    free(buf);
+    return str;
+  }
+
+  ant_value_t result = js_mkstr(js, buf, buf_len);
+  free(buf);
+  return result;
+}
+
 static ant_value_t regexp_search_plain_literal_fast(
   ant_t *js,
   ant_value_t rx,
@@ -1842,7 +2869,7 @@ static ant_value_t regexp_search_plain_literal_fast(
   if (is_err(exec_fn)) return exec_fn;
   if (!js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) return js_mkundef();
 
-  uint8_t flags_mask = regexp_flags_mask(js, rx);
+  uint8_t flags_mask = regexp_flags_mask(js, rx, NULL);
   const char *needle;
   ant_offset_t needle_len;
   if (!regexp_plain_literal_pattern(js, rx, flags_mask, &needle, &needle_len)) return js_mkundef();
@@ -1857,12 +2884,13 @@ static ant_value_t regexp_search_plain_literal_fast(
   PCRE2_SIZE ovector[2];
   ovector[0] = (PCRE2_SIZE)(match - str_ptr);
   ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-  update_regexp_statics(js, str_ptr, ovector, 1);
+  update_regexp_statics(js, str, ovector, 1);
   return tov((double)ovector[0]);
 }
 
 static bool regexp_literal_exec_builtin_guard(ant_t *js) {
-  if (regexp_exec_property_written) return false;
+  ant_regex_state_t *state = js->regex_state;
+  if (!state || state->exec_property_written) return false;
 
   ant_value_t ctor = js_getprop_fallback(js, js_glob(js), "RegExp");
   if (is_err(ctor)) return false;
@@ -1938,7 +2966,7 @@ ant_value_t regexp_literal_exec_call(
       PCRE2_SIZE ovector[2];
       ovector[0] = (PCRE2_SIZE)(match - str_ptr);
       ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-      update_regexp_statics(js, str_ptr, ovector, 1);
+      update_regexp_statics(js, arg, ovector, 1);
 
       ant_value_t result_arr = js_mkarr(js);
       if (is_err(result_arr)) return result_arr;
@@ -1947,10 +2975,9 @@ ant_value_t regexp_literal_exec_call(
       if (is_err(match_str)) return match_str;
       js_arr_push(js, result_arr, match_str);
 
-      if (is_err(js_mkprop_fast(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
-      if (is_err(js_mkprop_fast(js, result_arr, "input", 5, arg))) return js_mkerr(js, "oom");
-      if (is_err(js_mkprop_fast(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
-      return result_arr;
+      return regexp_attach_plain_exec_result(
+        js, result_arr, tov((double)ovector[0]), arg
+      );
     }
   }
 
@@ -1992,6 +3019,14 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     if (is_err(fast) || used_fast_path) return fast;
   }
 
+  if (global && !func_replace) {
+    bool used_fast_path = false;
+    ant_value_t fast = regexp_replace_batch_fast(
+      js, rx, str, replace_str, full_unicode, &used_fast_path
+    );
+    if (is_err(fast) || used_fast_path) return fast;
+  }
+
   ant_value_t results = js_mkarr(js);
   if (is_err(results)) return results;
   ant_offset_t nresults = 0;
@@ -2022,7 +3057,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   size_t buf_cap = str_len + 256;
-  char *buf = ant_calloc(buf_cap);
+  char *buf = malloc(buf_cap);
   if (!buf) return js_mkerr(js, "oom");
   size_t buf_len = 0;
   ant_offset_t next_src_pos = 0;
@@ -2054,13 +3089,26 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_value_t replacement;
     if (func_replace) {
       ant_offset_t ncaptures = js_arr_len(js, result);
-      ant_value_t call_args[32];
+      if (ncaptures > INT_MAX - 2) {
+        free(buf);
+        return js_mkerr(js, "too many regexp captures");
+      }
+      int call_capacity = (int)ncaptures + 2;
+      ant_value_t call_args_inline[REGEXP_INLINE_CAPTURES];
+      ant_value_t *call_args = call_capacity <= REGEXP_INLINE_CAPTURES
+        ? call_args_inline
+        : malloc(sizeof(*call_args) * (size_t)call_capacity);
+      if (!call_args) {
+        free(buf);
+        return js_mkerr(js, "oom");
+      }
       int ca = 0;
-      for (ant_offset_t c = 0; c < ncaptures && ca < 30; c++)
+      for (ant_offset_t c = 0; c < ncaptures; c++)
         call_args[ca++] = js_arr_get(js, result, c);
       call_args[ca++] = tov((double)position);
       call_args[ca++] = str;
       replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, false);
+      if (call_args != call_args_inline) free(call_args);
     } else {
       replacement = replace_str;
     }
@@ -2078,7 +3126,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
       } else {
         ant_offset_t ncap = js_arr_len(js, result);
         int num_caps = ncap > 1 ? (int)(ncap - 1) : 0;
-        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : ant_calloc(sizeof(repl_capture_t) * (size_t)num_caps);
+        repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : malloc(sizeof(repl_capture_t) * (size_t)num_caps);
         if (num_caps > 16 && !caps) {
           free(buf);
           return js_mkerr(js, "oom");
@@ -2145,6 +3193,116 @@ static ant_value_t builtin_regexp_symbol_search(ant_t *js, ant_value_t *args, in
   ant_value_t idx = js_getprop_fallback(js, result, "index");
   if (is_err(idx)) return idx;
   return vtype(idx) == T_NUM ? idx : tov(-1);
+}
+
+static inline void regexp_split_store_lastindex(
+  ant_object_t *obj,
+  uint32_t slot,
+  PCRE2_SIZE value
+) {
+  ant_object_prop_set_unchecked(obj, slot, tov((double)value));
+}
+
+static ant_value_t regexp_split_batch_fast(
+  ant_t *js,
+  ant_value_t splitter,
+  ant_value_t str,
+  ant_value_t result,
+  uint32_t limit,
+  bool *used_fast_path
+) {
+  *used_fast_path = false;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  if (!str_is_ascii(str_ptr)) return js_mkundef();
+
+  compiled_regex_cache_entry_t *compiled;
+  ant_object_t *lastindex_obj;
+  uint32_t lastindex_slot;
+  if (!regexp_prepare_builtin_exec(
+    js, splitter, REGEXP_FLAG_STICKY, &compiled, NULL,
+    &lastindex_obj, &lastindex_slot
+  )) return js_mkundef();
+
+  regex_match_scope_t scope;
+  if (!regex_match_scope_begin(compiled, &scope)) return js_mkundef();
+
+  *used_fast_path = true;
+
+  PCRE2_SIZE size = (PCRE2_SIZE)str_len;
+  PCRE2_SIZE p = 0;
+  PCRE2_SIZE q = 0;
+  uint32_t result_len = 0;
+
+  while (q < size) {
+    regexp_split_store_lastindex(lastindex_obj, lastindex_slot, q);
+
+    PCRE2_SIZE *ovector;
+    uint32_t ovcount;
+    int rc = compiled_regex_run_in_scope(
+      js, compiled, str_ptr, str_len, q, false,
+      &scope, &ovector, &ovcount
+    );
+    if (rc < 0 || ovector[0] >= size) {
+      regexp_split_store_lastindex(lastindex_obj, lastindex_slot, 0);
+      break;
+    }
+
+    PCRE2_SIZE start = ovector[0];
+    PCRE2_SIZE end = ovector[1];
+    regexp_split_store_lastindex(lastindex_obj, lastindex_slot, end);
+    update_regexp_statics(js, str, ovector, ovcount);
+
+    if (end == p) {
+      q = start + 1;
+      continue;
+    }
+
+    ant_value_t piece = js_mkstr(
+      js, str_ptr + p, (ant_offset_t)(start - p)
+    );
+    if (is_err(piece)) {
+      regex_match_scope_end(&scope);
+      return piece;
+    }
+    js_arr_push(js, result, piece);
+    if (++result_len == limit) {
+      regex_match_scope_end(&scope);
+      return result;
+    }
+
+    for (uint32_t i = 1; i < ovcount; i++) {
+      PCRE2_SIZE capture_start = ovector[2 * i];
+      PCRE2_SIZE capture_end = ovector[2 * i + 1];
+      ant_value_t capture = capture_start == PCRE2_UNSET
+        ? js_mkundef()
+        : js_mkstr(
+            js, str_ptr + capture_start,
+            (ant_offset_t)(capture_end - capture_start)
+          );
+      if (is_err(capture)) {
+        regex_match_scope_end(&scope);
+        return capture;
+      }
+      js_arr_push(js, result, capture);
+      if (++result_len == limit) {
+        regex_match_scope_end(&scope);
+        return result;
+      }
+    }
+
+    p = end;
+    q = p;
+  }
+
+  ant_value_t trailing = p == 0
+    ? str
+    : js_mkstr(js, str_ptr + p, (ant_offset_t)(size - p));
+  regex_match_scope_end(&scope);
+  if (is_err(trailing)) return trailing;
+  js_arr_push(js, result, trailing);
+  return result;
 }
 
 static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int nargs) {
@@ -2223,6 +3381,12 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
     return mkval(T_ARR, vdata(A));
   }
 
+  bool used_fast_path = false;
+  ant_value_t fast_result = regexp_split_batch_fast(
+    js, splitter, str, A, lim, &used_fast_path
+  );
+  if (is_err(fast_result) || used_fast_path) return fast_result;
+
   ant_offset_t p = 0, q = p;
   ant_value_t lastIndex_key = js_mkstr(js, "lastIndex", 9);
 
@@ -2278,31 +3442,24 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
 }
 
 ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
-  char pcre2_pattern[4096];
-  
-  size_t pcre2_len = js_to_pcre2_pattern(
-    args.pattern_ptr, args.pattern_len,
-    pcre2_pattern, sizeof(pcre2_pattern),
-    false
+  uint8_t flags_mask = 0;
+  if (args.ignore_case) flags_mask |= REGEXP_FLAG_IGNORE_CASE;
+  if (args.multiline) flags_mask |= REGEXP_FLAG_MULTILINE;
+  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_acquire(
+    js, args.pattern_ptr, args.pattern_len, flags_mask
   );
+  if (!compiled) return js_mknull();
 
-  uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
-  if (args.ignore_case) options |= PCRE2_CASELESS;
-  if (args.multiline) options |= PCRE2_MULTILINE;
-
-  int errcode;
-  PCRE2_SIZE erroffset;
-  pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
-  if (re == NULL) return js_mknull();
-
-  pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
-  uint32_t capture_count;
-  pcre2_pattern_info(re, PCRE2_INFO_CAPTURECOUNT, &capture_count);
+  regex_match_scope_t scope;
+  if (!regex_match_scope_begin(compiled, &scope)) {
+    compiled_regex_cache_release(compiled);
+    return js_mknull();
+  }
 
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
-    pcre2_match_data_free(match_data);
-    pcre2_code_free(re);
+    regex_match_scope_end(&scope);
+    compiled_regex_cache_release(compiled);
     return result_arr;
   }
 
@@ -2310,23 +3467,27 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
   int match_count = 0;
 
   while (pos <= (PCRE2_SIZE)args.str_len) {
-    int rc = pcre2_match(re, (PCRE2_SPTR)args.str_ptr, args.str_len, pos, 0, match_data, regex_get_match_context());
+    PCRE2_SIZE *ovector;
+    uint32_t ovcount;
+    int rc = compiled_regex_run_in_scope(
+      js, compiled, args.str_ptr, args.str_len, pos, false,
+      &scope, &ovector, &ovcount
+    );
     if (rc < 0) break;
 
-    PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
     PCRE2_SIZE match_start = ovector[0];
     PCRE2_SIZE match_end = ovector[1];
 
     if (args.global) {
       ant_value_t match_str = js_mkstr(js, args.str_ptr + match_start, match_end - match_start);
       if (is_err(match_str)) {
-        pcre2_match_data_free(match_data);
-        pcre2_code_free(re);
+        regex_match_scope_end(&scope);
+        compiled_regex_cache_release(compiled);
         return match_str;
       }
       js_arr_push(js, result_arr, match_str);
     } else {
-      for (uint32_t i = 0; i <= capture_count; i++) {
+      for (uint32_t i = 0; i < ovcount; i++) {
         PCRE2_SIZE start = ovector[2*i];
         PCRE2_SIZE end = ovector[2*i+1];
         if (start == PCRE2_UNSET) {
@@ -2334,8 +3495,8 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
         } else {
           ant_value_t match_str = js_mkstr(js, args.str_ptr + start, end - start);
           if (is_err(match_str)) {
-            pcre2_match_data_free(match_data);
-            pcre2_code_free(re);
+            regex_match_scope_end(&scope);
+            compiled_regex_cache_release(compiled);
             return match_str;
           }
           js_arr_push(js, result_arr, match_str);
@@ -2351,8 +3512,8 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
     } else { pos = match_end; }
   }
 
-  pcre2_match_data_free(match_data);
-  pcre2_code_free(re);
+  regex_match_scope_end(&scope);
+  compiled_regex_cache_release(compiled);
 
   if (match_count == 0) return js_mknull();
   return result_arr;
@@ -2448,17 +3609,21 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
   if (!replace_all) {
     if (search_len > str_len) return str;
     ant_offset_t match_pos = 0;
-    bool found = false;
-    
-    for (ant_offset_t i = 0; i <= str_len - search_len; i++)
-      if (memcmp(str_ptr + i, search_ptr, search_len) == 0) { 
-        match_pos = i; found = true; break;
+    bool found = search_len == 0;
+    if (!found) {
+      const char *match = find_bytes(
+        str_ptr, str_len, search_ptr, search_len
+      );
+      if (match) {
+        match_pos = (ant_offset_t)(match - str_ptr);
+        found = true;
       }
+    }
       
     if (!found) return str;
 
     size_t cap = str_len + repl_len + 256, len = 0;
-    char *buf = (char *)ant_calloc(cap);
+    char *buf = (char *)malloc(cap);
     if (!buf) return js_mkerr(js, "oom");
     
     if (!str_buf_append(&buf, &len, &cap, str_ptr, match_pos)) { 
@@ -2491,23 +3656,47 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
     return ret;
   } else {
     size_t cap = str_len + repl_len + 256, len = 0;
-    char *buf = (char *)ant_calloc(cap);
+    char *buf = (char *)malloc(cap);
     if (!buf) return js_mkerr(js, "oom");
     
     ant_offset_t pos = 0;
     bool replaced = false;
-    
-    while (pos + (ant_offset_t)search_len <= str_len) {
-      if (search_len == 0 || memcmp(str_ptr + pos, search_ptr, search_len) == 0) {
+
+    if (search_len != 0) {
+      for (;;) {
+        const char *match = find_bytes(
+          str_ptr + pos, str_len - pos, search_ptr, search_len
+        );
+        if (!match) break;
+        ant_offset_t match_pos = (ant_offset_t)(match - str_ptr);
+        if (!str_buf_append(
+          &buf, &len, &cap, str_ptr + pos, match_pos - pos
+        )) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
         replaced = true;
-        ant_value_t err = emit_str_replacement(js, replacement, is_func, repl_ptr, repl_len, str_ptr, str, pos, search_len, &buf, &len, &cap);
+        ant_value_t err = emit_str_replacement(
+          js, replacement, is_func, repl_ptr, repl_len,
+          str_ptr, str, match_pos, search_len, &buf, &len, &cap
+        );
         if (vtype(err) == T_ERR) { free(buf); return err; }
-        if (search_len == 0) {
-          if (pos < str_len && !str_buf_append(&buf, &len, &cap, str_ptr + pos, 1)) { free(buf); return js_mkerr(js, "oom"); }
-          pos++;
-        } else pos += search_len;
-      } else {
-        if (!str_buf_append(&buf, &len, &cap, str_ptr + pos, 1)) { free(buf); return js_mkerr(js, "oom"); }
+        pos = match_pos + search_len;
+      }
+    } else {
+      while (pos <= str_len) {
+        replaced = true;
+        ant_value_t err = emit_str_replacement(
+          js, replacement, is_func, repl_ptr, repl_len,
+          str_ptr, str, pos, 0, &buf, &len, &cap
+        );
+        if (vtype(err) == T_ERR) { free(buf); return err; }
+        if (pos < str_len && !str_buf_append(
+          &buf, &len, &cap, str_ptr + pos, 1
+        )) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
         pos++;
       }
     }
@@ -2541,7 +3730,12 @@ static ant_value_t builtin_string_replaceAll(ant_t *js, ant_value_t *args, int n
 }
 
 static bool regexp_literal_replace_builtin_guard(ant_t *js) {
-  if (regexp_replace_property_written || regexp_exec_property_written) return false;
+  ant_regex_state_t *state = js->regex_state;
+  if (
+    !state ||
+    state->replace_property_written ||
+    state->exec_property_written
+  ) return false;
 
   ant_value_t string_ctor = js_getprop_fallback(js, js_glob(js), "String");
   if (is_err(string_ctor)) return false;
@@ -2588,7 +3782,7 @@ ant_value_t regexp_literal_replace_call(
       if (!first) return str;
 
       size_t cap = str_len + repl_len + 256;
-      char *buf = ant_calloc(cap);
+      char *buf = malloc(cap);
       if (!buf) return js_mkerr(js, "oom");
 
       size_t len = 0;
@@ -2606,7 +3800,7 @@ ant_value_t regexp_literal_replace_call(
 
         ovector[0] = (PCRE2_SIZE)(match - str_ptr);
         ovector[1] = ovector[0] + (PCRE2_SIZE)needle_len;
-        update_regexp_statics(js, str_ptr, ovector, 1);
+        update_regexp_statics(js, str, ovector, 1);
 
         scan = match + needle_len;
         if (!global) break;
@@ -2669,29 +3863,29 @@ search_string_pattern:;
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
 
-  char pcre2_pattern[4096];
-  size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, pattern_len, pcre2_pattern, sizeof(pcre2_pattern), false);
-  uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
+  compiled_regex_cache_entry_t *compiled = compiled_regex_cache_acquire(
+    js, pattern_ptr, pattern_len, 0
+  );
+  if (!compiled) return tov(-1);
 
-  int errcode;
-  PCRE2_SIZE erroffset;
-  pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
-  if (re == NULL) return tov(-1);
-
-  pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
-  int rc = pcre2_match(re, (PCRE2_SPTR)str_ptr, str_len, 0, 0, match_data, regex_get_match_context());
+  regex_match_scope_t scope;
+  PCRE2_SIZE *ovector;
+  uint32_t ovcount;
+  int rc = compiled_regex_run(
+    js, compiled, str_ptr, str_len, 0, false,
+    &scope, &ovector, &ovcount
+  );
 
   if (rc < 0) {
-    pcre2_match_data_free(match_data);
-    pcre2_code_free(re);
+    regex_match_scope_end(&scope);
+    compiled_regex_cache_release(compiled);
     return tov(-1);
   }
 
-  PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
   double result = (double)ovector[0];
 
-  pcre2_match_data_free(match_data);
-  pcre2_code_free(re);
+  regex_match_scope_end(&scope);
+  compiled_regex_cache_release(compiled);
 
   return tov(result);
 }
@@ -2751,6 +3945,9 @@ match_string_pattern:;
 }
 
 void init_regex_module(ant_t *js) {
+  if (!js->regex_state) js->regex_state = calloc(1, sizeof(*js->regex_state));
+  
+  ant_regex_state_t *state = js->regex_state;
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
 
@@ -2800,24 +3997,25 @@ void init_regex_module(ant_t *js) {
 
   ant_value_t empty = js_mkstr_permanent(js, "", 0);
   js->builtins.regexp_empty_string = empty;
+  js->mutable_roots.regexp_static_subject = empty;
   for (size_t i = 0; i < sizeof(js->mutable_roots.regexp_static_values) / sizeof(js->mutable_roots.regexp_static_values[0]); i++)
     js->mutable_roots.regexp_static_values[i] = empty;
 
-  static ant_cfunc_meta_t stat_getters[11];
-  static ant_cfunc_meta_t stat_setters[11];
-  ant_cfunc_t getter_fns[11] = {
+  static ant_cfunc_meta_t stat_getters[REGEXP_STATIC_VALUE_COUNT];
+  static ant_cfunc_meta_t stat_setters[REGEXP_STATIC_VALUE_COUNT];
+  ant_cfunc_t getter_fns[REGEXP_STATIC_VALUE_COUNT] = {
     regexp_static_get_d1, regexp_static_get_d2, regexp_static_get_d3,
     regexp_static_get_d4, regexp_static_get_d5, regexp_static_get_d6,
     regexp_static_get_d7, regexp_static_get_d8, regexp_static_get_d9,
     regexp_static_get_last_match, regexp_static_get_amp
   };
-  ant_cfunc_t setter_fns[11] = {
+  ant_cfunc_t setter_fns[REGEXP_STATIC_VALUE_COUNT] = {
     regexp_static_set_d1, regexp_static_set_d2, regexp_static_set_d3,
     regexp_static_set_d4, regexp_static_set_d5, regexp_static_set_d6,
     regexp_static_set_d7, regexp_static_set_d8, regexp_static_set_d9,
     regexp_static_set_last_match, regexp_static_set_amp
   };
-  for (int i = 1; i <= 9; i++) {
+  for (int i = 1; i <= REGEXP_STATIC_CAPTURE_COUNT; i++) {
     char key[3] = {'$', (char)('0' + i), '\0'};
     stat_getters[i - 1] = (ant_cfunc_meta_t){ getter_fns[i - 1], NULL, 0, 0 };
     stat_setters[i - 1] = (ant_cfunc_meta_t){ setter_fns[i - 1], NULL, 1, 0 };
@@ -2829,13 +4027,29 @@ void init_regex_module(ant_t *js) {
     );
   }
   
-  stat_getters[9] = (ant_cfunc_meta_t){ getter_fns[9], NULL, 0, 0 };
-  stat_setters[9] = (ant_cfunc_meta_t){ setter_fns[9], NULL, 1, 0 };
-  js_set_accessor_desc(js, regexp_ctor, "lastMatch", 9, js_mkfun_meta(&stat_getters[9]), js_mkfun_meta(&stat_setters[9]), JS_DESC_C);
-  stat_getters[10] = (ant_cfunc_meta_t){ getter_fns[10], NULL, 0, 0 };
-  stat_setters[10] = (ant_cfunc_meta_t){ setter_fns[10], NULL, 1, 0 };
-  js_set_accessor_desc(js, regexp_ctor, "$&", 2, js_mkfun_meta(&stat_getters[10]), js_mkfun_meta(&stat_setters[10]), JS_DESC_C);
-  js_set(js, glob, "RegExp", regexp_func);
+  stat_getters[REGEXP_STATIC_IDX_LAST_MATCH] = (ant_cfunc_meta_t){
+    getter_fns[REGEXP_STATIC_IDX_LAST_MATCH], NULL, 0, 0
+  };
+  stat_setters[REGEXP_STATIC_IDX_LAST_MATCH] = (ant_cfunc_meta_t){
+    setter_fns[REGEXP_STATIC_IDX_LAST_MATCH], NULL, 1, 0
+  };
+  js_set_accessor_desc(
+    js, regexp_ctor, "lastMatch", 9,
+    js_mkfun_meta(&stat_getters[REGEXP_STATIC_IDX_LAST_MATCH]),
+    js_mkfun_meta(&stat_setters[REGEXP_STATIC_IDX_LAST_MATCH]), JS_DESC_C
+  );
+  stat_getters[REGEXP_STATIC_IDX_AMP] = (ant_cfunc_meta_t){
+    getter_fns[REGEXP_STATIC_IDX_AMP], NULL, 0, 0
+  };
+  stat_setters[REGEXP_STATIC_IDX_AMP] = (ant_cfunc_meta_t){
+    setter_fns[REGEXP_STATIC_IDX_AMP], NULL, 1, 0
+  };
+  js_set_accessor_desc(
+    js, regexp_ctor, "$&", 2,
+    js_mkfun_meta(&stat_getters[REGEXP_STATIC_IDX_AMP]),
+    js_mkfun_meta(&stat_setters[REGEXP_STATIC_IDX_AMP]), JS_DESC_C
+  );
+  js_set_global_builtin(js, "RegExp", regexp_func);
 
   ant_value_t string_ctor = js_get(js, glob, "String");
   ant_value_t string_proto = js_get(js, string_ctor, "prototype");
@@ -2846,50 +4060,33 @@ void init_regex_module(ant_t *js) {
   defmethod(js, string_proto, "replace", 7, js_mkfun(builtin_string_replace));
   defmethod(js, string_proto, "replaceAll", 10, js_mkfun(builtin_string_replaceAll));
   
-  regexp_exec_property_written = false;
-  regexp_replace_property_written = false;
-  regexp_exec_write_guard_armed = true;
+  if (state) {
+    state->exec_property_written = false;
+    state->replace_property_written = false;
+    state->exec_write_guard_armed = true;
+  }
 }
 
-void gc_sweep_regex_cache(void) {
-  size_t write = 0;
-  for (size_t i = 0; i < regex_cache_count; i++) {
-    if (!gc_obj_is_marked(regex_cache[i].obj)) {
-      pcre2_match_data_free(regex_cache[i].match_data);
-      compiled_regex_cache_release(regex_cache[i].compiled);
-    } else {
-      if (write != i) regex_cache[write] = regex_cache[i];
-      write++;
-    }
-  }
-  regex_cache_count = write;
+void gc_age_regex_cache(ant_t *js, bool minor) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state || minor) return;
+
+  compiled_regex_table_clear(&state->compiled[1]);
+  state->compiled[1] = state->compiled[0];
+  memset(&state->compiled[0], 0, sizeof(state->compiled[0]));
 }
 
-void cleanup_regex_module(void) {
-  for (size_t i = 0; i < regex_cache_count; i++) {
-    pcre2_match_data_free(regex_cache[i].match_data);
-  }
-  free(regex_cache);
-  regex_cache = NULL;
-  regex_cache_count = 0;
-  regex_cache_cap = 0;
+void cleanup_regex_module(ant_t *js) {
+  ant_regex_state_t *state = js->regex_state;
+  if (!state) return;
 
-  for (size_t i = 0; i < compiled_regex_cache_count; i++) {
-    pcre2_match_data_free(compiled_regex_cache[i]->scratch_match_data);
-    pcre2_code_free(compiled_regex_cache[i]->code);
-    free(compiled_regex_cache[i]->pattern);
-    free(compiled_regex_cache[i]);
-  }
-  free(compiled_regex_cache);
-  compiled_regex_cache = NULL;
-  compiled_regex_cache_count = 0;
-  compiled_regex_cache_cap = 0;
+  compiled_regex_table_clear(&state->compiled[0]);
+  compiled_regex_table_clear(&state->compiled[1]);
 
-  pcre2_jit_stack_free(regex_jit_stack);
-  regex_jit_stack = NULL;
-  pcre2_match_context_free(regex_match_ctx);
-  regex_match_ctx = NULL;
-  regexp_exec_write_guard_armed = false;
-  regexp_exec_property_written = false;
-  regexp_replace_property_written = false;
+  ant_shape_release(state->result_shape.shape);
+  ant_shape_release(state->result_indices_shape.shape);
+  pcre2_jit_stack_free(state->jit_stack);
+  pcre2_match_context_free(state->match_ctx);
+  free(state);
+  js->regex_state = NULL;
 }

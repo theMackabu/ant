@@ -2,10 +2,6 @@
 path = "build"
 script = "meson compile"
 
-[tasks.build.cache]
-path = "src"
-target = ["build/ant"]
-
 [tasks.reconfigure]
 path = "build"
 script = "meson setup --reconfigure"

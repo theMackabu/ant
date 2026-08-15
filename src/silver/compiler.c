@@ -6,14 +6,25 @@
 
 #include "internal.h"
 #include "debug.h"
+#include "hash.h"
+#include "numbers.h"
 #include "tokens.h"
 #include "runtime.h"
-#include "utils.h"
 #include "ops/coercion.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+
+static size_t literal_num_key(double num, char *buf, size_t cap) {
+  if (isnan(num)) return (size_t)snprintf(buf, cap, "NaN");
+  if (isinf(num)) return (size_t)snprintf(buf, cap, num > 0 ? "Infinity" : "-Infinity");
+  return ant_number_to_shortest(num, buf, cap);
+}
+
+static constexpr int SV_SHAPED_LITERAL_MAX_KEYS = 32;
+static constexpr size_t SV_LITERAL_NUM_KEY_BUF_SIZE = 32;
 
 enum {
   SV_ITER_HINT_GENERIC = 0,
@@ -272,17 +283,15 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
   }
 
   if (key->type == N_NUMBER) {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%g", key->num);
-    emit_constant(c, js_mkstr_permanent(c->js, buf, (size_t)n));
+    char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
+    size_t n = literal_num_key(key->num, buf, sizeof(buf));
+    emit_constant(c, js_mkstr_permanent(c->js, buf, n));
     return;
   }
 
   if (key->type == N_IDENT) {
-    if (is_quoted_ident_key(key))
-      emit_constant(c, js_mkstr_permanent(c->js, key->str + 1, key->len - 2));
-    else
-      emit_constant(c, js_mkstr_permanent(c->js, key->str, key->len));
+    if (is_quoted_ident_key(key)) emit_constant(c, js_mkstr_permanent(c->js, key->str + 1, key->len - 2));
+    else emit_constant(c, js_mkstr_permanent(c->js, key->str, key->len));
     return;
   }
 
@@ -450,7 +459,7 @@ static uint16_t alloc_ic_idx(sv_compiler_t *c) {
   return (uint16_t)c->ic_count++;
 }
 
-static void sv_func_init_obj_sites(sv_func_t *func) {
+static void sv_func_init_obj_sites(const sv_compiler_t *c, sv_func_t *func) {
   if (!func || !func->code || func->code_len <= 0) return;
 
   uint32_t count = 0;
@@ -464,7 +473,7 @@ static void sv_func_init_obj_sites(sv_func_t *func) {
 
   func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
   memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
-  func->obj_site_count = (uint16_t)count;
+  func->obj_site_count = count;
 
   uint32_t idx = 0;
   for (int pc = 0; pc < func->code_len && idx < count; ) {
@@ -472,6 +481,28 @@ static void sv_func_init_obj_sites(sv_func_t *func) {
     if (op == OP_OBJECT) func->obj_sites[idx++].bc_off = (uint32_t)pc;
     uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
     pc += (size > 0) ? size : 1;
+  }
+
+  if (c->shaped_site_count > 0) {
+    uint32_t i = 0;
+    for (int s = 0; s < c->shaped_site_count; s++) {
+      uint16_t kc = c->shaped_sites[s].key_count;
+      if (kc == 0) continue;
+      
+      while (i < count && func->obj_sites[i].bc_off < c->shaped_sites[s].bc_off) i++;
+      
+      if (i >= count) break;
+      if (func->obj_sites[i].bc_off != c->shaped_sites[s].bc_off) continue;
+      
+      uint32_t *ka = code_arena_bump((size_t)kc * sizeof(uint32_t));
+      if (!ka) continue;
+      
+      memcpy(ka, c->shaped_keys + c->shaped_sites[s].first_key, (size_t)kc * sizeof(uint32_t));
+      func->obj_sites[i].key_atoms = ka;
+      func->obj_sites[i].key_count = kc;
+      
+      i++;
+    }
   }
 }
 
@@ -1329,6 +1360,24 @@ static void emit_put_local(sv_compiler_t *c, int local_idx);
 static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
+static void emit_lexical_new_target(sv_compiler_t *c) {
+  static const char nt_name[] = "\x01new.target";
+  int local = resolve_local(c, nt_name, sizeof(nt_name) - 1);
+  if (local >= 0) {
+    emit_get_local(c, local);
+    return;
+  }
+
+  int upval = resolve_upvalue(c, nt_name, sizeof(nt_name) - 1);
+  if (upval >= 0) {
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)upval);
+    return;
+  }
+
+  emit_op(c, OP_UNDEF);
+}
+
 static inline void emit_get_module_import_binding(sv_compiler_t *c) {
   emit_op(c, OP_SPECIAL_OBJ);
   emit(c, 3);
@@ -2029,7 +2078,10 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
         int idx = ensure_local_at_depth(c, spec->right->str, spec->right->len, true, c->scope_depth);
         mark_import_binding(c, idx, spec);
       }
-    } else if (decl_node->type == N_CLASS && decl_node->str) {
+    } else if (
+      decl_node->type == N_CLASS && decl_node->str &&
+      (decl_node->flags & FN_CLASS_DECL)
+    ) {
       int lb = c->local_count;
       ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
       if (c->local_count > lb) {
@@ -2283,19 +2335,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_NEW_TARGET: {
-      static const char nt_name[] = "\x01new.target";
-      int local = resolve_local(c, nt_name, sizeof(nt_name) - 1);
-      if (local >= 0) {
-        emit_get_local(c, local);
-      } else {
-        int upval = resolve_upvalue(c, nt_name, sizeof(nt_name) - 1);
-        if (upval >= 0) {
-          emit_op(c, OP_GET_UPVAL);
-          emit_u16(c, (uint16_t)upval);
-        } else {
-          emit_op(c, OP_UNDEF);
-        }
-      }
+      emit_lexical_new_target(c);
       break;
     }
 
@@ -3188,8 +3228,8 @@ static void compile_call_emit_invoke(
 ) {
   int argc = node->args.count;
   if (has_spread) {
-    if (sv_call_kind_has_receiver(kind)) emit_op(c, OP_SWAP);
-    else emit_op(c, OP_GLOBAL);
+    if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
+    else if (kind == SV_CALL_DIRECT) emit_op(c, OP_GLOBAL);
     compile_call_args_array(c, node);
     emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
@@ -3198,7 +3238,9 @@ static void compile_call_emit_invoke(
 
   for (int i = 0; i < argc; i++)
     compile_expr(c, node->args.items[i]);
-  emit_op(c, sv_call_kind_has_receiver(kind) ? OP_CALL_METHOD : OP_CALL);
+  emit_op(c,
+    kind == SV_CALL_SUPER ? OP_CALL_SUPER :
+    kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
   emit_u16(c, (uint16_t)argc);
 }
 
@@ -3206,6 +3248,11 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
   if (is_ident_name(callee, "super")) {
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
+    if (c->is_arrow) emit_lexical_new_target(c);
+    else {
+      emit_op(c, OP_SPECIAL_OBJ);
+      emit(c, 1);
+    }
     return SV_CALL_SUPER;
   }
 
@@ -3764,6 +3811,67 @@ static bool compile_direct_eval_call(
   return true;
 }
 
+static bool fusion_arg_is_effect_free(sv_compiler_t *c, sv_ast_t *a) {
+  if (!a) return false;
+  switch (a->type) {
+    case N_NUMBER:
+    case N_STRING:
+    case N_BIGINT:
+    case N_BOOL:
+    case N_NULL:
+    case N_UNDEF:
+      return true;
+    case N_IDENT: {
+      int l = resolve_local(c, a->str, a->len);
+      return l >= 0 && c->locals[l].is_const && !c->locals[l].is_tdz;
+    }
+    default:
+      return false;
+  }
+}
+
+static int fusion_arg_deferred_slot(sv_compiler_t *c, sv_ast_t *a) {
+  if (!a || a->type != N_IDENT) return -1;
+  int l = resolve_local(c, a->str, a->len);
+  if (l < 0 || c->locals[l].is_tdz || c->locals[l].is_const) return -1;
+  int slot = local_to_frame_slot(c, l);
+  return slot <= UINT16_MAX ? slot : -1;
+}
+
+static bool compile_call_try_fused_chain(
+  sv_compiler_t *c, sv_ast_t *node, sv_ast_t *callee, bool has_spread
+) {
+  if (has_spread || c->with_depth != 0) return false;
+  if (callee->type != N_CALL) return false;
+  if (call_has_spread_arg(callee)) return false;
+  if (callee->args.count != 1) return false;
+  if (node->args.count > SV_JIT_ARGS_BUF_CAP - 2) return false;
+  if (!callee->left) return false;
+  if (callee->left->type == N_MEMBER || callee->left->type == N_OPTIONAL) return false;
+  if (is_ident_name(callee->left, "super") || is_ident_name(callee->left, "eval")) return false;
+  int deferred_slot = -1;
+  if (node->args.count == 1)
+    deferred_slot = fusion_arg_deferred_slot(c, node->args.items[0]);
+  if (deferred_slot < 0) {
+    for (int i = 0; i < node->args.count; i++)
+      if (!fusion_arg_is_effect_free(c, node->args.items[i])) return false;
+  }
+
+  compile_expr(c, callee->left);
+  compile_expr(c, callee->args.items[0]);
+  if (deferred_slot >= 0) {
+    emit_op(c, OP_CALL_CALL_SLOT);
+    emit_u16(c, (uint16_t)deferred_slot);
+    return true;
+  }
+  for (int i = 0; i < node->args.count; i++)
+    compile_expr(c, node->args.items[i]);
+  emit_op(c, OP_CALL_CALL);
+  emit(c, 1);
+  emit(c, (uint8_t)node->args.count);
+  return true;
+}
+
 void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
@@ -3816,6 +3924,8 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (compile_direct_eval_call(c, node, has_spread)) return;
+
+  if (compile_call_try_fused_chain(c, node, callee, has_spread)) return;
 
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
   compile_call_emit_invoke(c, node, kind, has_spread);
@@ -3949,7 +4059,92 @@ void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static bool object_literal_static_keys(
+  sv_ast_t *node,
+  const char **keys, uint32_t *lens,
+  char (*numbuf)[SV_LITERAL_NUM_KEY_BUF_SIZE]
+) {
+  if (
+    node->args.count == 0 ||
+    node->args.count > SV_SHAPED_LITERAL_MAX_KEYS
+  ) return false;
+  for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *prop = node->args.items[i];
+    if (prop->type != N_PROPERTY) return false;
+    if (prop->flags & (FN_GETTER | FN_SETTER | FN_COMPUTED)) return false;
+    sv_ast_t *k = prop->left;
+    if (!k) return false;
+    if (k->type == N_IDENT && !is_quoted_ident_key(k)) {
+      if (
+        (prop->flags & FN_COLON) &&
+        is_ident_str(k->str, k->len, "__proto__", sizeof("__proto__") - 1)
+      )
+        return false;
+      keys[i] = k->str; lens[i] = k->len;
+    } else if (is_quoted_ident_key(k)) {
+      keys[i] = k->str + 1; lens[i] = k->len - 2;
+    } else if (k->type == N_STRING) {
+      keys[i] = k->str ? k->str : ""; lens[i] = k->len;
+    } else if (k->type == N_NUMBER) {
+      size_t nn = literal_num_key(k->num, numbuf[i], sizeof(numbuf[i]));
+      keys[i] = numbuf[i]; lens[i] = (uint32_t)nn;
+    } else return false;
+    for (int j = 0; j < i; j++)
+      if (lens[j] == lens[i] && memcmp(keys[j], keys[i], lens[i]) == 0)
+        return false;
+  }
+  return true;
+}
+
+static void record_shaped_site(sv_compiler_t *c, uint32_t bc_off,
+                               const uint32_t *atom_idx, uint16_t count) {
+  if (c->shaped_site_count >= c->shaped_site_cap) {
+    int cap = c->shaped_site_cap ? c->shaped_site_cap * 2 : 8;
+    void *next = realloc(c->shaped_sites, (size_t)cap * sizeof(*c->shaped_sites));
+    if (!next) return;
+    c->shaped_sites = next;
+    c->shaped_site_cap = cap;
+  }
+  if (c->shaped_key_count + count > c->shaped_key_cap) {
+    int cap = c->shaped_key_cap ? c->shaped_key_cap * 2 : 32;
+    while (cap < c->shaped_key_count + count) cap *= 2;
+    void *next = realloc(c->shaped_keys, (size_t)cap * sizeof(uint32_t));
+    if (!next) return;
+    c->shaped_keys = next;
+    c->shaped_key_cap = cap;
+  }
+  c->shaped_sites[c->shaped_site_count].bc_off = bc_off;
+  c->shaped_sites[c->shaped_site_count].first_key = (uint32_t)c->shaped_key_count;
+  c->shaped_sites[c->shaped_site_count].key_count = count;
+  c->shaped_site_count++;
+  memcpy(c->shaped_keys + c->shaped_key_count, atom_idx, (size_t)count * sizeof(uint32_t));
+  c->shaped_key_count += count;
+}
+
 void compile_object(sv_compiler_t *c, sv_ast_t *node) {
+  const char *skeys[SV_SHAPED_LITERAL_MAX_KEYS];
+  uint32_t slens[SV_SHAPED_LITERAL_MAX_KEYS];
+  char snum[SV_SHAPED_LITERAL_MAX_KEYS][SV_LITERAL_NUM_KEY_BUF_SIZE];
+  
+  if (object_literal_static_keys(node, skeys, slens, snum)) {
+    uint32_t atom_idx[SV_SHAPED_LITERAL_MAX_KEYS];
+    for (int i = 0; i < node->args.count; i++)
+      atom_idx[i] = (uint32_t)add_atom(c, skeys[i], slens[i]);
+    uint32_t obj_off = (uint32_t)c->code_len;
+    emit_op(c, OP_OBJECT);
+    record_shaped_site(c, obj_off, atom_idx, (uint16_t)node->args.count);
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *prop = node->args.items[i];
+      if (prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left))
+        compile_expr_with_inferred_name(c, prop->right, prop->left->str, prop->left->len);
+      else compile_expr(c, prop->right);
+      emit_op(c, OP_DEFINE_SLOT);
+      emit_u32(c, atom_idx[i]);
+      emit_u16(c, (uint16_t)i);
+    }
+    return;
+  }
+
   emit_op(c, OP_OBJECT);
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *prop = node->args.items[i];
@@ -3984,7 +4179,10 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       else compile_expr(c, prop->right);
       if ((prop->flags & FN_COLON) &&
           prop->left->type == N_IDENT && !is_quoted_ident_key(prop->left) &&
-          is_ident_str(prop->left->str, prop->left->len, "__proto__", 9)) {
+          is_ident_str(
+            prop->left->str, prop->left->len,
+            "__proto__", sizeof("__proto__") - 1
+          )) {
         emit_op(c, OP_SET_PROTO);
         continue;
       }
@@ -3995,8 +4193,8 @@ void compile_object(sv_compiler_t *c, sv_ast_t *node) {
       } else if (prop->left->type == N_STRING) {
         emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str ? prop->left->str : "", prop->left->len);
       } else if (prop->left->type == N_NUMBER) {
-        char buf[32];
-        int n = snprintf(buf, sizeof(buf), "%g", prop->left->num);
+        char buf[SV_LITERAL_NUM_KEY_BUF_SIZE];
+        size_t n = literal_num_key(prop->left->num, buf, sizeof(buf));
         emit_atom_op(c, OP_DEFINE_FIELD, buf, (uint32_t)n);
       } else emit_atom_op(c, OP_DEFINE_FIELD, prop->left->str, prop->left->len);
     }
@@ -5865,7 +6063,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   fn->code = code_arena_bump((size_t)comp.code_len);
   memcpy(fn->code, comp.code, (size_t)comp.code_len);
   fn->code_len = comp.code_len;
-  sv_func_init_obj_sites(fn);
+  sv_func_init_obj_sites(&comp, fn);
 
   if (comp.const_count > 0) {
     fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
@@ -5932,7 +6130,9 @@ static void compile_static_block(sv_compiler_t *c, sv_ast_t *block, int ctor_loc
 
 void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
-  bool class_repl_top = is_repl_top_level(c);
+  bool binds_outer_name = node->str &&
+    (node->flags & FN_CLASS_DECL);
+  bool class_repl_top = binds_outer_name && is_repl_top_level(c);
 
   sv_ast_t *ctor_method = NULL;
   bool has_static_name = false;
@@ -5941,7 +6141,8 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int method_emit_count = 0;
   int static_init_count = 0;
 
-  if (node->str) outer_name_local = resolve_local(c, node->str, node->len);
+  if (binds_outer_name)
+    outer_name_local = resolve_local(c, node->str, node->len);
   if (node->left) compile_expr(c, node->left);
   else emit_op(c, OP_UNDEF);
 
@@ -6056,6 +6257,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (ctor_method && ctor_method->right) {
+    ctor_method->right->flags |= FN_CLASS_CTOR;
     if (node->left) ctor_method->right->flags |= FN_DERIVED_CTOR;
     c->field_inits = field_inits;
     c->field_init_count = field_count;
@@ -6070,11 +6272,14 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     sv_compile_ctx_init_child(&comp, c, NULL, SV_COMPILE_SCRIPT);
     comp.is_strict = true;
 
+    emit_op(&comp, OP_CHECK_CTOR);
+
     if (node->left) {
       emit_op(&comp, OP_THIS);
       emit_op(&comp, OP_SPECIAL_OBJ);
       emit(&comp, 2);
-      emit_op(&comp, OP_SWAP);
+      emit_op(&comp, OP_SPECIAL_OBJ);
+      emit(&comp, 1);
       emit_op(&comp, OP_SPECIAL_OBJ);
       emit(&comp, 0);
       emit_op(&comp, OP_SUPER_APPLY);
@@ -6093,7 +6298,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->code = code_arena_bump((size_t)comp.code_len);
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
     fn->code_len = comp.code_len;
-    sv_func_init_obj_sites(fn);
+    sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {
       fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
       memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
@@ -6160,11 +6365,12 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       : add_atom(c, "", 0);
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, (uint32_t)atom);
-    emit(c, 1);
+    emit(c, SV_CLASS_FLAG_HAS_NAME |
+      (node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0));
   } else {
     emit_op(c, OP_DEFINE_CLASS);
     emit_u32(c, 0);
-    emit(c, 0);
+    emit(c, node->left ? SV_CLASS_FLAG_HAS_HERITAGE : 0);
   }
   
   if (consumed_inferred_name) {
@@ -6208,7 +6414,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(static_init_items);
   emit_get_local(c, ctor_local);
 
-  if (class_repl_top && node->str) {
+  if (class_repl_top) {
     emit_op(c, OP_DUP);
     emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
   } else if (outer_name_local >= 0) {
@@ -6232,6 +6438,85 @@ static uint16_t function_length_from_params(const sv_ast_t *node) {
     length++;
   }
   return length;
+}
+
+static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
+  if (func->is_async || func->is_generator || func->has_dynamic_eval) return false;
+  if (func->is_derived_ctor) return false;
+  if (func->upvalue_count > SV_CLOSURE_INLINE_UPVALS) return false;
+
+  for (int i = 0; i < func->upvalue_count; i++)
+    if (func->upval_descs[i].is_local && func->upval_descs[i].index != 0) return false;
+
+  const uint8_t *ip = func->code;
+  const uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    switch (op) {
+      case OP_CLOSURE:
+      case OP_THIS:
+      case OP_SPECIAL_OBJ:
+      case OP_EVAL:
+      case OP_EXPORT:
+      case OP_EXPORT_ALL:
+      case OP_GET_SUPER_VAL:
+      case OP_TRY_PUSH:
+      case OP_TRY_PUSH_FINALLY:
+      case OP_CATCH:
+      case OP_FINALLY:
+      case OP_UNWIND_JMP:
+      case OP_AWAIT:
+      case OP_AWAIT_ITER_NEXT:
+      case OP_FOR_AWAIT_OF:
+      case OP_YIELD:
+      case OP_YIELD_STAR_INIT:
+      case OP_YIELD_STAR_NEXT:
+      case OP_YIELD_STAR_THROW:
+        return false;
+      case OP_JMP:
+      case OP_JMP_FALSE:
+      case OP_JMP_TRUE:
+      case OP_JMP_FALSE_PEEK:
+      case OP_JMP_TRUE_PEEK:
+      case OP_JMP_NOT_NULLISH:
+        if (sv_get_i32((uint8_t *)ip + 1) < 0) return false;
+        break;
+      case OP_JMP8:
+      case OP_JMP_FALSE8:
+      case OP_JMP_TRUE8:
+        if ((int8_t)ip[1] < 0) return false;
+        break;
+      default:
+        break;
+    }
+    int sz = sv_op_size[op];
+    if (sz <= 0) return false;
+    ip += sz;
+  }
+  return true;
+}
+
+static bool sv_func_compute_curried_step(sv_func_t *func) {
+  if (func->is_async || func->is_generator || func->has_dynamic_eval) return false;
+  if (func->param_count != 1) return false;
+
+  const uint8_t *p = func->code;
+  const uint8_t *end = func->code + func->code_len;
+  
+  if (end - p < 6 || p[0] != OP_CLOSURE) return false;
+  p += 5;
+  
+  if (p < end && *p == OP_SET_NAME) p += sv_op_size[OP_SET_NAME];
+  if (p < end && *p == OP_CLOSE_UPVAL) p += sv_op_size[OP_CLOSE_UPVAL];
+  if (p >= end || *p != OP_RETURN) return false;
+
+  uint32_t kidx = sv_get_u32(func->code + 1);
+  if (kidx >= (uint32_t)func->const_count) return false;
+  
+  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[kidx]);
+  if (!child) return false;
+  
+  return child->is_fusable_leaf;
 }
 
 sv_func_t *compile_function_body(
@@ -6275,6 +6560,8 @@ sv_func_t *compile_function_body(
 
   comp.param_locals = comp.local_count;
   bool repl_top = is_repl_top_level(&comp);
+
+  if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
   
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
@@ -6557,7 +6844,7 @@ sv_func_t *compile_function_body(
   func->code = code_arena_bump((size_t)comp.code_len);
   memcpy(func->code, comp.code, (size_t)comp.code_len);
   func->code_len = comp.code_len;
-  sv_func_init_obj_sites(func);
+  sv_func_init_obj_sites(&comp, func);
 
   if (comp.const_count > 0) {
     func->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
@@ -6645,6 +6932,9 @@ sv_func_t *compile_function_body(
     ip += sz;
   }}
 
+  func->is_fusable_leaf = sv_func_compute_fusable_leaf(func);
+  func->is_curried_step = sv_func_compute_curried_step(func);
+
   sv_compile_ctx_cleanup(&comp);
   return func;
 }
@@ -6656,7 +6946,7 @@ const char *const sv_op_names[OP__COUNT] = {
 
 enum {
   SVF_none, SVF_u8, SVF_i8, SVF_u16, SVF_i16, SVF_u32, SVF_i32,
-  SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
+  SVF_u8_u8, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
   SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref,
 };
 
@@ -6716,6 +7006,9 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
       break;
     case SVF_i32:
       fprintf(stderr, " [%d]", (int32_t)sv_get_u32(func->code + pc + 1));
+      break;
+    case SVF_u8_u8:
+      fprintf(stderr, " [%u], [%u]", func->code[pc + 1], func->code[pc + 2]);
       break;
     case SVF_atom: {
       uint32_t idx = sv_get_u32(func->code + pc + 1);

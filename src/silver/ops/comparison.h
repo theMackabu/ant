@@ -88,15 +88,20 @@ static inline int sv_strcmp(ant_t *js, ant_value_t l, ant_value_t r) {
   return cmp < 0 ? -1 : 1;
 }
 
-static inline void sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *r) {
+static inline bool sv_coerce_relational(ant_t *js, ant_value_t *l, ant_value_t *r) {
   if (is_object_type(*l)) {
     ant_value_t prim = js_to_primitive(js, *l, 2);
-    if (!is_err(prim)) *l = prim;
+    if (is_err(prim)) return false;
+    *l = prim;
   }
+  
   if (is_object_type(*r)) {
     ant_value_t prim = js_to_primitive(js, *r, 2);
-    if (!is_err(prim)) *r = prim;
+    if (is_err(prim)) return false;
+    *r = prim;
   }
+  
+  return true;
 }
 
 typedef enum {
@@ -185,7 +190,7 @@ static inline ant_value_t sv_push_bigint_relational(
 static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) < tod(r));
@@ -204,7 +209,7 @@ static inline ant_value_t sv_op_lt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) <= tod(r));
@@ -223,7 +228,7 @@ static inline ant_value_t sv_op_le(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) > tod(r));
@@ -242,7 +247,7 @@ static inline ant_value_t sv_op_gt(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_ge(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];
   ant_value_t l = vm->stack[--vm->sp];
-  sv_coerce_relational(js, &l, &r);
+  if (!sv_coerce_relational(js, &l, &r)) return mkval(T_ERR, 0);
   uint8_t lt = vtype(l), rty = vtype(r);
   if (lt == T_NUM && rty == T_NUM) {
     vm->stack[vm->sp++] = mkval(T_BOOL, tod(l) >= tod(r));
@@ -344,31 +349,33 @@ static inline ant_value_t sv_instanceof_ic_eval(
   uint32_t cur_epoch = ant_ic_epoch_counter;
   uintptr_t rhs_id = (uintptr_t)vdata(r);
   
-  if (ic->epoch != cur_epoch || ic->cached_aux != rhs_id) goto slow_path;
-  if (lhs_proto == ic->guard.receiver_proto) return js_true;
+  if (ic->epoch != cur_epoch ||
+      ic->prototype_epoch != js->prototype_write_epoch ||
+      ic->cached_aux != rhs_id) goto slow_path;
+  if (lhs_proto == ic->guard.comparison.receiver_proto) return js_true;
 
-  if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder)
+  if (lhs_ptr->shape == ic->cached_shape && lhs_proto_ptr == ic->cached_holder &&
+      ic->guard.comparison.object_epoch == ant_ic_obj_epoch_counter)
     return js_bool(ic->cached_index != 0);
 
 slow_path:
-  ant_value_t res = do_instanceof(js, l, r);
-  lhs_cacheable = sv_instanceof_lhs_cache_key(
-    l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr
-  );
   ant_value_t ctor_proto = js_mkundef();
+  bool rhs_cacheable = ic && lhs_cacheable && sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto);
   
-  if (
-    !is_err(res) && ic && lhs_cacheable && vtype(res) == T_BOOL &&
-    sv_instanceof_rhs_ordinary_proto(js, r, &ctor_proto)
-  ) {
+  ant_value_t res = do_instanceof(js, l, r);
+  lhs_cacheable = sv_instanceof_lhs_cache_key(l, &lhs_ptr, &lhs_proto, &lhs_proto_ptr);
+
+  if (!is_err(res) && rhs_cacheable && lhs_cacheable && vtype(res) == T_BOOL) {
     ic->cached_shape = lhs_ptr->shape;
     ic->cached_holder = lhs_proto_ptr;
     ic->cached_index = (uint32_t)(vdata(res) ? 1u : 0u);
     ic->epoch = ant_ic_epoch_counter;
     ic->cached_aux = (uintptr_t)vdata(r);
-    ic->guard.receiver_proto = ctor_proto;
+    ic->guard.comparison.receiver_proto = ctor_proto;
+    ic->guard.comparison.object_epoch = ant_ic_obj_epoch_counter;
+    ic->prototype_epoch = js->prototype_write_epoch;
   }
-  
+
   return res;
 }
 
@@ -394,6 +401,7 @@ static inline ant_value_t sv_isproto_ic_eval(
   if (
     ic && proto_ptr && obj_ptr &&
     ic->epoch == ant_ic_epoch_counter &&
+    ic->guard.comparison.object_epoch == ant_ic_obj_epoch_counter &&
     ic->cached_holder == proto_ptr &&
     (ant_object_t *)(uintptr_t)ic->cached_shape == obj_ptr
   ) {
@@ -406,6 +414,7 @@ static inline ant_value_t sv_isproto_ic_eval(
     ic->cached_shape = (ant_shape_t *)(uintptr_t)obj_ptr;
     ic->cached_index = found ? 1u : 0u;
     ic->epoch = ant_ic_epoch_counter;
+    ic->guard.comparison.object_epoch = ant_ic_obj_epoch_counter;
   }
   return js_bool(found);
 }

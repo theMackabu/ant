@@ -1,4 +1,3 @@
-#include <math.h>
 #include <string.h>
 
 #include "ant.h"
@@ -42,27 +41,10 @@ static ant_value_t assert_if_error(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkerr(js, "ifError got unwanted exception: %s", msg ? msg : "(unknown)");
 }
 
-static bool values_strict_equal(ant_t *js, ant_value_t a, ant_value_t b) {
-  uint8_t ta = vtype(a), tb = vtype(b);
-  if (ta != tb) return false;
-  if (ta == T_NULL || ta == T_UNDEF) return true;
-  if (ta == T_BOOL) return a == b;
-  if (ta == T_NUM) {
-    double na = js_getnum(a), nb = js_getnum(b);
-    return (na == nb) || (isnan(na) && isnan(nb));
-  }
-  if (ta == T_STR) {
-    char *sa = js_getstr(js, a, NULL);
-    char *sb = js_getstr(js, b, NULL);
-    return sa && sb && strcmp(sa, sb) == 0;
-  }
-  return vdata(a) == vdata(b);
-}
-
 // TODO: make into global helper
 static bool values_loose_equal(ant_t *js, ant_value_t a, ant_value_t b) {
   uint8_t ta = vtype(a), tb = vtype(b);
-  if (ta == tb) return values_strict_equal(js, a, b);
+  if (ta == tb) return strict_eq_values(js, a, b);
   if ((ta == T_NULL && tb == T_UNDEF) || (ta == T_UNDEF && tb == T_NULL)) return true;
   if (ta == T_NUM && tb == T_STR) {
     char *sb = js_getstr(js, b, NULL);
@@ -113,7 +95,7 @@ static bool deep_equal_impl(ant_t *js, ant_value_t a, ant_value_t b, bool strict
     return true;
   }
 
-  return strict ? values_strict_equal(js, a, b) : values_loose_equal(js, a, b);
+  return strict ? same_value_values(js, a, b) : values_loose_equal(js, a, b);
 }
 
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict) {
@@ -136,14 +118,14 @@ static ant_value_t assert_not_equal(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t assert_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (!values_strict_equal(js, args[0], args[1]))
+  if (!same_value_values(js, args[0], args[1]))
     return assertion_error(js, "Expected values to be strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t assert_not_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (values_strict_equal(js, args[0], args[1]))
+  if (same_value_values(js, args[0], args[1]))
     return assertion_error(js, "Expected values to not be strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
@@ -180,8 +162,18 @@ static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_FUNC)
     return js_mkerr(js, "assert.throws: first argument must be a function");
   ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false);
+  
   if (!is_err(result))
     return js_mkerr(js, "Missing expected exception");
+
+  ant_value_t thrown = js_take_thrown(js, result);
+  if (nargs >= 2 && is_callable(args[1])) {
+    ant_value_t valid = sv_vm_call(js->vm, js, args[1], js_mkundef(), &thrown, 1, NULL, false);
+    if (is_err(valid)) return valid;
+    if (valid != js_true)
+      return assertion_error(js, "The validation function is expected to return true", js_mkundef());
+  }
+
   return js_mkundef();
 }
 

@@ -23,7 +23,13 @@ assert(flat.includes('len=11'), `expected flat string length, got ${JSON.stringi
 assert(flat.includes('ascii=yes'), `expected ASCII state, got ${JSON.stringify(flat)}`);
 assert(flat.includes('bytes="hello world"'), `expected byte preview, got ${JSON.stringify(flat)}`);
 
-const rope = run('console.inspect("a" + "b")');
+const shortConcat = run('console.inspect("a" + "b")');
+assert(
+  shortConcat.includes('<String flat '),
+  `expected tiny concatenation to copy flat, got ${JSON.stringify(shortConcat)}`
+);
+
+const rope = run('console.inspect("abcdefgh" + "ijklm")');
 assert(rope.includes('<String rope '), `expected rope string internals, got ${JSON.stringify(rope)}`);
 assert(rope.includes('depth=1'), `expected rope depth, got ${JSON.stringify(rope)}`);
 assert(rope.includes('cached=undefined'), `expected untouched rope cache, got ${JSON.stringify(rope)}`);

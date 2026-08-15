@@ -74,8 +74,30 @@ lib_sources = files(run_command(
   check: true
 ).stdout().strip().split())
 
+pkg_sources = files(
+  'src/pkg/build.zig',
+  'src/pkg/cache.zig',
+  'src/pkg/cli.zig',
+  'src/pkg/debug.zig',
+  'src/pkg/extractor.zig',
+  'src/pkg/fetcher.zig',
+  'src/pkg/intern.zig',
+  'src/pkg/json.zig',
+  'src/pkg/linker.zig',
+  'src/pkg/lockfile.zig',
+  'src/pkg/metadata.c',
+  'src/pkg/nghttp2.zig',
+  'src/pkg/platform.zig',
+  'src/pkg/process_env.zig',
+  'src/pkg/resolver.zig',
+  'src/pkg/root.zig',
+  'src/pkg/tlsuv.zig',
+  'src/pkg/uv.zig',
+)
+
 pkg_lib = custom_target(
   'pkg_zig',
+  input: pkg_sources,
   output: 'libpkg.a',
   command: [
     'sh', '-c',
@@ -93,7 +115,6 @@ pkg_lib = custom_target(
     'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
   },
   build_by_default: true,
-  build_always_stale: true
 )
 
 pkg_dep = declare_dependency(
@@ -118,7 +139,7 @@ libant = static_library(
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: [include, sandbox_backend_include],
-  dependencies: ant_deps + [pkg_dep]
+  dependencies: ant_deps + [pkg_dep] + temporal_link_deps
 )
 
 link_args = []
@@ -143,12 +164,28 @@ if get_option('linker_map')
   endif
 endif
 
+ant_link_depends = []
+if host_machine.system() == 'darwin'
+  ant_exports = custom_target('ant_exports',
+    input: [libant, libuv_lib],
+    output: 'ant.exports',
+    command: [python, files('meson/exports.py'), '@INPUT@'],
+    capture: true,
+  )
+  ant_link_args += [
+    '-Wl,-exported_symbols_list,' + ant_exports.full_path(),
+    '-Wl,-dead_strip',
+  ]
+  ant_link_depends += [ant_exports]
+endif
+
 ant_exe = executable(
   'ant',
   files('src/main.c') + [messages_h],
   dependencies: libant_dep,
   link_args: ant_link_args,
-  export_dynamic: true
+  link_depends: ant_link_depends,
+  export_dynamic: host_machine.system() != 'darwin'
 )
 
 if host_machine.system() == 'darwin' and get_option('codesign')
@@ -175,6 +212,13 @@ endif
 executable(
   'tlsuv-boringssl-smoke',
   files('tests/tlsuv_boringssl_smoke.c'),
+  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
+  build_by_default: false
+)
+
+executable(
+  'test-websocket-connect-cancel',
+  files('tests/test_websocket_connect_cancel.c'),
   dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
   build_by_default: false
 )

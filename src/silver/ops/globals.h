@@ -23,9 +23,11 @@ static inline bool sv_global_try_store_own_data(
   if (!prop || prop->has_getter || prop->has_setter ||
       (prop->attrs & ANT_PROP_ATTR_WRITABLE) == 0) return false;
 
-  regexp_note_property_write(interned, len);
+  regexp_note_property_write(js, interned, len);
   ant_object_prop_set_unchecked(ptr, (uint32_t)slot, val);
   gc_write_barrier(js, ptr, val);
+  ant_prototype_property_write_invalidate(js, ptr, interned);
+  
   return true;
 }
 

@@ -248,6 +248,32 @@ static inline void *fixed_arena_alloc(ant_fixed_arena_t *a) {
   return p;
 }
 
+static inline void *fixed_arena_alloc_uninit(ant_fixed_arena_t *a) {
+  if (a->free_list) {
+    void *p = a->free_list;
+    a->free_list = *(void **)p;
+    a->live_count++;
+    return p;
+  }
+
+  size_t needed = a->watermark + a->elem_size;
+  if (needed > a->committed) {
+    size_t grow = a->committed / 4;
+    if (grow < (64ULL * 1024)) grow = 64ULL * 1024;
+    if (grow > ARENA_GROW_INCREMENT) grow = ARENA_GROW_INCREMENT;
+    size_t new_committed = a->committed + grow;
+    if (new_committed > a->reserved) return NULL;
+    if (ant_arena_commit(a->base, a->committed, new_committed) != 0) return NULL;
+    a->committed = new_committed;
+  }
+
+  void *p = a->base + a->watermark;
+  a->watermark = needed;
+  a->live_count++;
+  
+  return p;
+}
+
 static inline void fixed_arena_free_elem(ant_fixed_arena_t *a, void *p) {
   if (!p) return;
   *(void **)p = a->free_list;

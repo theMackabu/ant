@@ -33,6 +33,7 @@
 #include "silver/lexer.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"
+#include "silver/swarm.h"
 #include "silver/ops/using.h"
 #include "modules/regex.h"
 
@@ -276,7 +277,7 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
     entry->value = value;
     return true;
   }
-  
+
   uint8_t count = 0;
   ant_object_sidecar_t *sidecar = ant_object_sidecar(obj);
   ant_extra_slot_t *entries = ant_object_extra_slots(obj, &count);
@@ -299,14 +300,6 @@ static bool obj_extra_set(ant_object_t *obj, internal_slot_t slot, ant_value_t v
   return true;
 }
 
-static inline bool prop_loc_invalidates_instanceof(ant_t *js, ant_prop_loc_t loc) {
-  if (!loc.obj || !loc.obj->shape) return false;
-  const ant_shape_prop_t *prop = ant_shape_prop_at(loc.obj->shape, loc.slot);
-  return
-    prop && prop->type == ANT_SHAPE_KEY_STRING &&
-    prop->key.interned == js->intern.prototype;
-}
-
 ant_value_t js_prop_load(ant_prop_loc_t loc) {
   if (!loc.obj || loc.slot >= loc.obj->prop_count) return js_mkundef();
   return ant_object_prop_get_unchecked(loc.obj, loc.slot);
@@ -316,7 +309,9 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value) {
   if (!loc.obj || loc.slot >= loc.obj->prop_count) return false;
   ant_object_prop_set_unchecked(loc.obj, loc.slot, value);
   gc_write_barrier(js, loc.obj, value);
-  if (prop_loc_invalidates_instanceof(js, loc)) ant_ic_epoch_bump();
+  const ant_shape_prop_t *prop = ant_shape_prop_at(loc.obj->shape, loc.slot);
+  if (prop && prop->type == ANT_SHAPE_KEY_STRING) 
+    ant_prototype_property_write_invalidate(js, loc.obj, prop->key.interned);
   return true;
 }
 
@@ -349,7 +344,7 @@ bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed) {
   for (uint32_t i = old_count; i < needed; i++) {
     ant_object_prop_set_unchecked(obj, i, js_mkundef());
   }
-  
+
   return true;
 }
 
@@ -365,13 +360,27 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj) {
   return true;
 }
 
-static void obj_remove_prop_slot(ant_object_t *obj, uint32_t slot) {
+static void obj_delete_prop_slot(ant_object_t *obj, uint32_t slot) {
   if (!obj || slot >= obj->prop_count) return;
-  uint32_t last = obj->prop_count - 1;
-  for (uint32_t i = slot; i < last; i++)
-    ant_object_prop_set_unchecked(obj, i,
-    ant_object_prop_get_unchecked(obj, i + 1));
-  obj->prop_count--;
+  ant_object_prop_set_unchecked(obj, slot, js_mkundef());
+
+  uint32_t shape_count = ant_shape_count(obj->shape);
+  if (!ant_shape_should_compact(obj->shape)) {
+    obj->prop_count = shape_count;
+    return;
+  }
+
+  uint32_t dst = 0;
+  for (uint32_t src = 0; src < shape_count; src++) {
+    if (!ant_shape_prop_at(obj->shape, src)) continue;
+    if (dst != src)
+      ant_object_prop_set_unchecked(obj, dst, ant_object_prop_get_unchecked(obj, src));
+    dst++;
+  }
+  
+  for (uint32_t i = dst; i < obj->prop_count; i++)
+    ant_object_prop_set_unchecked(obj, i, js_mkundef());
+  obj->prop_count = ant_shape_compact(obj->shape);
 }
 
 static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
@@ -488,11 +497,16 @@ ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags) {
   closure->upvalues = NULL;
   closure->func_obj = (vtype(obj) == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   closure->bound_this = js_mkundef();
-  closure->bound_argv = NULL;
   closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
   closure->super_val = js_mkundef();
   closure->call_flags = flags;
+  if (flags & SV_CALL_HAS_BOUND_ARGS) {
+    closure->u.bound.argv = NULL;
+    closure->u.bound.args_arr = js_mkundef();
+  } else {
+    closure->u.pending.name = NULL;
+    closure->u.pending.len = 0;
+  }
   
   ant_object_t *func_obj = js_obj_ptr(closure->func_obj);
   if (func_obj) {
@@ -593,7 +607,6 @@ static bool try_accessor_getter(ant_t *js, ant_value_t obj, const char *key, siz
 static bool try_dynamic_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
 static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out);
 
-static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type);
 static ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc);
 static ant_value_t js_cfunc_length_value(ant_value_t cfunc);
 static bool js_cfunc_has_prototype(ant_value_t cfunc);
@@ -636,8 +649,6 @@ static ant_value_t proxy_has_own(ant_t *js, ant_value_t proxy, ant_value_t key_v
 static ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
 static ant_value_t proxy_delete_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 static ant_value_t proxy_define_property(ant_t *js, ant_value_t proxy, ant_value_t key_val, ant_value_t descriptor);
-
-static ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len);
 static inline void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_len);
 
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val) {
@@ -1692,7 +1703,7 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
       size_t type_len = 0;
       
       ant_value_t proto = js_get_proto(js, obj);
-      ant_value_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
+      ant_value_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
       if (vtype(proto) == T_OBJ && vtype(buffer_proto) == T_OBJ && vdata(proto) == vdata(buffer_proto)) {
         type_name = "Buffer";
         type_len = 6;
@@ -1989,9 +2000,12 @@ static inline ant_value_t rope_cached_flat(ant_value_t value) {
   return ptr->cached;
 }
 
-static inline void rope_set_cached_flat(ant_value_t rope, ant_value_t flat) {
+static inline void rope_canonicalize_flat(ant_value_t rope, ant_value_t flat) {
   ant_rope_heap_t *ptr = assert_rope_ptr(rope);
   ptr->cached = flat;
+  ptr->left = js_mkundef();
+  ptr->right = js_mkundef();
+  ptr->depth = 0;
 }
 
 static inline ant_string_builder_t *assert_builder_ptr(ant_value_t value) {
@@ -2019,51 +2033,49 @@ static inline void builder_set_cached_flat(ant_value_t builder, ant_value_t flat
   ptr->cached = flat;
 }
 
-static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset_t *pos) {
+static bool rope_flatten_into(ant_value_t str, char *dest, ant_offset_t total_len) {
   assert(vtype(str) == T_STR);
+
+  ant_value_t local[32];
+  ant_value_t *stack = local;
   
-  if (!str_is_heap_rope(str)) {
-    const char *sptr;
-    ant_offset_t slen = assert_flat_string_len(str, &sptr);
-    memcpy(dest + *pos, sptr, slen);
-    *pos += slen; return;
-  }
-  
-  ant_value_t cached = rope_cached_flat(str);
-  if (vtype(cached) == T_STR && !str_is_heap_rope(cached)) {
-    const char *cptr;
-    ant_offset_t clen = assert_flat_string_len(cached, &cptr);
-    memcpy(dest + *pos, cptr, clen);
-    *pos += clen; return;
-  }
-  
-  ant_value_t stack[ROPE_MAX_DEPTH + 8];
-  int sp = 0; stack[sp++] = str;
-  
-  while (sp > 0) {
-    ant_value_t node = stack[--sp];
-    assert(vtype(node) == T_STR);
-    
-    if (!str_is_heap_rope(node)) {
-      const char *sptr;
-      ant_offset_t slen = assert_flat_string_len(node, &sptr);
-      memcpy(dest + *pos, sptr, slen);
-      *pos += slen; continue;
+  size_t sp = 0, cap = 32;
+  ant_offset_t pos = total_len;
+  ant_value_t current = str;
+
+  for (;;) {
+    while (str_is_heap_rope(current)) {
+      ant_value_t cached = rope_cached_flat(current);
+      if (vtype(cached) == T_STR && !str_is_heap_rope(cached)) {
+        current = cached;
+        break;
+      }
+
+      ant_value_t left = rope_left(current);
+      current = rope_right(current);
+      if (!ant_value_stack_push_with_spill(
+        &stack, &sp, &cap, local, left
+      )) {
+        if (stack != local) free(stack);
+        return false;
+      }
     }
-    
-    ant_value_t c = rope_cached_flat(node);
-    if (vtype(c) == T_STR && !str_is_heap_rope(c)) {
-      const char *cptr;
-      ant_offset_t clen = assert_flat_string_len(c, &cptr);
-      memcpy(dest + *pos, cptr, clen);
-      *pos += clen; continue;
+
+    const char *src;
+    ant_offset_t len = assert_flat_string_len(current, &src);
+    if (len > pos) {
+      if (stack != local) free(stack);
+      return false;
     }
-    
-    if (sp + 2 <= ROPE_MAX_DEPTH + 8) {
-      stack[sp++] = rope_right(node);
-      stack[sp++] = rope_left(node);
-    }
+    pos -= len;
+    memcpy(dest + pos, src, (size_t)len);
+
+    if (sp == 0) break;
+    current = stack[--sp];
   }
+
+  if (stack != local) free(stack);
+  return pos == 0;
 }
 
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
@@ -2090,20 +2102,21 @@ ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   }
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)(uintptr_t)vdata(flat);
-  ant_offset_t pos = 0;
-  
-  rope_flatten_into(js, rope, flat_ptr->bytes, &pos);
-  flat_ptr->bytes[pos] = '\0';
+  if (!rope_flatten_into(rope, flat_ptr->bytes, total_len)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "string flatten failed");
+  }
+  flat_ptr->bytes[total_len] = '\0';
   
   str_flat_init_meta(
     flat_ptr,
-    str_detect_ascii_bytes(flat_ptr->bytes, (size_t)pos)
+    str_detect_ascii_bytes(flat_ptr->bytes, (size_t)total_len)
   );
   
   if (vtype(cached) == T_NUM)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
 
-  rope_set_cached_flat(rope, flat);
+  rope_canonicalize_flat(rope, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
   return flat;
@@ -2125,6 +2138,8 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
   }
 
   ant_string_builder_t *ptr = assert_builder_ptr(builder);
+  ant_value_t snapshot = ptr->snapshot;
+  GC_ROOT_PIN(js, snapshot);
   ant_value_t flat = js_mkstr(js, NULL, (size_t)ptr->len);
   
   GC_ROOT_PIN(js, flat);
@@ -2135,6 +2150,20 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
 
   ant_flat_string_t *flat_ptr = (ant_flat_string_t *)(uintptr_t)vdata(flat);
   size_t cursor = 0;
+
+  if (vtype(snapshot) == T_STR) {
+    snapshot = str_materialize(js, snapshot);
+    if (is_err(snapshot)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return snapshot;
+    }
+
+    ant_flat_string_t *snapshot_flat = ant_str_flat_ptr(snapshot);
+    if (snapshot_flat && snapshot_flat->len > 0) {
+      memcpy(flat_ptr->bytes, snapshot_flat->bytes, (size_t)snapshot_flat->len);
+      cursor = (size_t)snapshot_flat->len;
+    }
+  }
   
   for (ant_builder_chunk_t *chunk = ptr->head; chunk; chunk = chunk->next) {
     ant_value_t chunk_value = chunk->value;
@@ -2160,6 +2189,10 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
   str_flat_init_meta(flat_ptr, ptr->ascii_state);
   if (vtype(cached) == T_NUM)
     str_flat_set_utf16_len(flat_ptr, (ant_offset_t)tod(cached));
+  ptr->snapshot = flat;
+  ptr->head = NULL;
+  ptr->chunk_tail = NULL;
+  ptr->tail_len = 0;
   builder_set_cached_flat(builder, flat);
   GC_ROOT_RESTORE(js, root_mark);
   
@@ -2309,6 +2342,19 @@ const char *intern_string(const char *str, size_t len) {
   intern_bytes += alloc_size;
   
   return entry->str;
+}
+
+const char *intern_find(const char *str, size_t len) {
+  if (!intern_buckets) return NULL;
+
+  uint64_t h = hash_key(str, len);
+  size_t bucket = (size_t)(h & (intern_bucket_count - 1));
+
+  for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
+    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
+  }
+
+  return NULL;
 }
 
 size_t intern_length(const char *interned) {
@@ -2715,6 +2761,16 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
 // TODO: make get and set dry
 static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  {
+    ant_object_t *fast = array_obj_ptr(arr);
+    if (fast && fast->flags.fast_array && fast->u.array.data &&
+        idx < (ant_offset_t)fast->u.array.len &&
+        idx < (ant_offset_t)fast->u.array.cap) {
+      ant_value_t v = fast->u.array.data[idx];
+      if (!is_empty_slot(v)) return v;
+    }
+  }
+
   ant_offset_t semantic_len = get_array_length(js, arr);
   
   if (idx >= semantic_len) return js_mkundef();
@@ -3087,12 +3143,20 @@ ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
 }
 
 static ant_value_t js_mkrope(ant_t *js, ant_value_t left, ant_value_t right, ant_offset_t total_len, uint16_t depth) {
-  ant_rope_heap_t *rope = (ant_rope_heap_t *)js_type_alloc(
-    js, ANT_ALLOC_ROPE, sizeof(*rope), _Alignof(ant_rope_heap_t)
-  );
+  if (js->rope_gc.young_alloc >= GC_ROPE_NURSERY_THRESHOLD) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, left);
+    GC_ROOT_PIN(js, right);
+    gc_pressure(js);
+    GC_ROOT_RESTORE(js, root_mark);
+  }
+
+  ant_rope_heap_t *rope = js_rope_alloc(js);
   if (!rope) return js_mkerr(js, "oom");
   rope->len = total_len;
   rope->depth = depth;
+  rope->flags = ANT_ROPE_FLAG_YOUNG;
+  rope->mark_epoch = 0;
   rope->left = left;
   rope->right = right;
   rope->cached = js_mkundef();
@@ -3199,6 +3263,8 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.length = intern_string("length", 6);
   js->intern.buffer = intern_string("buffer", 6);
   js->intern.prototype = intern_string("prototype", 9);
+  js->intern.exec = intern_string("exec", 4);
+  js->intern.replace = intern_string("replace", 7);
   js->intern.constructor = intern_string("constructor", 11);
   js->intern.name = intern_string("name", 4);
   js->intern.message = intern_string("message", 7);
@@ -3229,6 +3295,7 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
 
   uint32_t slot = 0;
   bool added = false;
+  const char *interned_key = NULL;
   if (vtype(k) == T_SYMBOL) {
     ant_offset_t sym_off = (ant_offset_t)vdata(k);
     int32_t found = ant_shape_lookup_symbol(ptr->shape, sym_off);
@@ -3247,11 +3314,14 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     ant_offset_t koff = vstr(js, k, &klen);
     const char *p = (const char *)(uintptr_t)(koff);
     const char *interned = intern_string(p, klen);
+    
     if (!interned) return js_mkerr(js, "oom");
     v = js_expose_cfunc_for_key(js, v, interned, (size_t)klen);
     if (is_err(v)) return v;
+    interned_key = interned;
 
     int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
+    
     if (found >= 0) {
       slot = (uint32_t)found;
       if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
@@ -3262,16 +3332,15 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     }
   }
 
-  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
-    return js_mkerr(js, "oom");
-  }
-
-  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) {
-    return js_mkerr(js, "oom");
-  }
+  if (added && interned_key) ant_prototype_property_write_invalidate(js, ptr, interned_key);
+  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return js_mkerr(js, "oom");
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return js_mkerr(js, "oom");
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  
+  if (interned_key && !added) 
+    ant_prototype_property_write_invalidate(js, ptr, interned_key);
 
   return v;
 }
@@ -3303,15 +3372,15 @@ static ant_value_t mkprop_interned_impl(
     added = true;
   }
 
-  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) {
-    return js_mkerr(js, "oom");
-  }
-  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) {
-    return js_mkerr(js, "oom");
-  }
+  if (added) ant_prototype_property_write_invalidate(js, ptr, interned_key);
+  if (added && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return js_mkerr(js, "oom");
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return js_mkerr(js, "oom");
   
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  
+  if (!added)
+    ant_prototype_property_write_invalidate(js, ptr, interned_key);
   
   return v;
 }
@@ -3505,7 +3574,7 @@ static inline bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, uint
     }
     
     if (T_FLAG_FIND(ct) & T_NEEDS_PROTO_FALLBACK) {
-      ant_value_t fallback = get_prototype_for_type(js, ct);
+      ant_value_t fallback = js_primitive_prototype(js, ct);
       uint8_t ft = vtype(fallback);
       if (ft == T_NULL || ft == T_UNDEF) return false;
       *cur = fallback;
@@ -3517,7 +3586,7 @@ static inline bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, uint
   }
 
   if (ct == T_STR || ct == T_NUM || ct == T_BOOL || ct == T_BIGINT || ct == T_SYMBOL) {
-    ant_value_t proto = get_prototype_for_type(js, ct);
+    ant_value_t proto = js_primitive_prototype(js, ct);
     uint8_t pt = vtype(proto);
     if (pt == T_NULL || pt == T_UNDEF) return false;
     *cur = proto; *t = pt;
@@ -3648,7 +3717,7 @@ static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiv
   
   bool receiver_is_array = (vtype(species_source) == T_ARR);
   if (!receiver_is_array) {
-    ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
+    ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
     if (is_object_type(array_proto) && is_object_type(species_source)) {
       receiver_is_array = proto_chain_contains(js, species_source, array_proto);
     }
@@ -3854,7 +3923,7 @@ bool lookup_prop_meta(
     if (key_kind == PROP_META_SYMBOL) {
       slot = ant_shape_lookup_symbol(cur_ptr->shape, sym_off);
     } else {
-      const char *interned_key = intern_string(key, klen);
+      const char *interned_key = intern_find(key, klen);
       if (interned_key) slot = ant_shape_lookup_interned(cur_ptr->shape, interned_key);
     }
 
@@ -3945,7 +4014,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
     ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
     const char *key = (char *)(uintptr_t)(koff);
     
-    ant_value_t proto = get_prototype_for_type(js, ot);
+    ant_value_t proto = js_primitive_prototype(js, ot);
     if (is_object_type(proto)) {
     ant_value_t setter = js_mkundef();
     bool has_setter = false;
@@ -4019,7 +4088,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
 
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *)(uintptr_t)(koff);
-  regexp_note_property_write(key, (size_t)klen);
+  regexp_note_property_write(js, key, (size_t)klen);
 
   if (array_obj_ptr(obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {
     ant_arguments_state_t *args_state = js_arguments_state(obj);
@@ -4403,7 +4472,7 @@ ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern) {
 }
 
 inline ant_prop_loc_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   if (!search_intern) return ANT_PROP_LOC_NONE;
   return lkp_interned(obj, search_intern);
 }
@@ -4418,7 +4487,7 @@ inline ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *sear
 }
 
 static inline ant_value_t lkp_val(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
-  const char *interned = intern_string(buf, len);
+  const char *interned = intern_find(buf, len);
   if (!interned) return js_mkundef();
   return lkp_interned_val(js, obj, interned);
 }
@@ -4475,7 +4544,7 @@ static inline ant_value_t lkp_sym_proto_val(ant_t *js, ant_value_t obj, ant_offs
 static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4519,7 +4588,7 @@ static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, si
 static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out) {
   *has_setter_out = false;
   *setter_out = js_mkundef();
-  const char *search_intern = intern_string(buf, len);
+  const char *search_intern = intern_find(buf, len);
   
   ant_value_t current = obj;
   proto_overflow_guard_t guard;
@@ -4569,7 +4638,7 @@ ant_value_t js_get_proto(ant_t *js, ant_value_t obj) {
   ant_value_t proto = ptr ? ptr->proto : js_mkundef();
   if (is_object_type(proto) || vtype(proto) == T_NULL) return proto;
   
-  if (t != T_OBJ) return get_prototype_for_type(js, t);
+  if (t != T_OBJ) return js_primitive_prototype(js, t);
   return js_mknull();
 }
 
@@ -4616,7 +4685,7 @@ void js_set_proto_wb(ant_t *js, ant_value_t obj, ant_value_t proto) {
 }
 
 ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
-  const char *interned = intern_string(name, len);
+  const char *interned = intern_find(name, len);
   ant_value_t ctor = lkp_interned_val(js, js->global, interned);
   if (vtype(ctor) != T_FUNC) return js_mknull();
   ant_value_t ctor_obj = js_as_obj(ctor);
@@ -4624,28 +4693,25 @@ ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
   return vtype(proto) == T_UNDEF ? js_mknull() : proto;
 }
 
-static inline ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len) {
-  return js_get_ctor_proto(js, name, len);
+ant_value_t js_primitive_prototype(ant_t *js, uint8_t type) {
+  switch (type) {
+    case T_OBJ:       return js->sym.object_proto;
+    case T_ARR:       return js->sym.array_proto;
+    case T_STR:       return js->sym.string_proto;
+    case T_NUM:       return js->sym.number_proto;
+    case T_BOOL:      return js->sym.boolean_proto;
+    case T_FUNC:      return js->sym.function_proto;
+    case T_PROMISE:   return js->sym.promise_proto;
+    case T_BIGINT:    return js->sym.bigint_proto;
+    case T_SYMBOL:    return js->sym.symbol_proto;
+    case T_GENERATOR: return js->sym.generator_proto;
+    default:          return js_mknull();
+  }
 }
-
-static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type) {
-switch (type) {
-  case T_OBJ:       return js->sym.object_proto;
-  case T_ARR:       return js->sym.array_proto;
-  case T_STR:       return get_ctor_proto(js, "String", 6);
-  case T_NUM:       return get_ctor_proto(js, "Number", 6);
-  case T_BOOL:      return get_ctor_proto(js, "Boolean", 7);
-  case T_FUNC:      return get_ctor_proto(js, "Function", 8);
-  case T_PROMISE:   return get_ctor_proto(js, "Promise", 7);
-  case T_GENERATOR: return js->sym.generator_proto;
-  case T_BIGINT:    return get_ctor_proto(js, "BigInt", 6);
-  case T_SYMBOL:    return get_ctor_proto(js, "Symbol", 6);
-  default:          return js_mknull();
-}}
 
 ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   uint8_t t = vtype(obj);
-  const char *key_intern = intern_string(key, len);
+  const char *key_intern = intern_find(key, len);
   if (!key_intern) return ANT_PROP_LOC_NONE;
 
   ant_value_t cur = obj;
@@ -4658,7 +4724,7 @@ ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len
       ant_prop_loc_t loc = lkp_interned(as_obj, key_intern);
       if (loc.obj) return loc;
     } else if (t == T_CFUNC) {
-      ant_value_t func_proto = get_ctor_proto(js, "Function", 8);
+      ant_value_t func_proto = js->sym.function_proto;
       uint8_t ft = vtype(func_proto);
       if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
         ant_prop_loc_t loc = lkp_interned(js_as_obj(func_proto), key_intern);
@@ -4674,17 +4740,19 @@ ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len
   return ANT_PROP_LOC_NONE;
 }
 
+static inline size_t utf16_code_unit_to_wtf8(uint16_t code_unit, char out[4]) {
+  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+    out[0] = (char)(0xE0 | (code_unit >> 12));
+    out[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (code_unit & 0x3F));
+    return 3;
+  }
+  return (size_t)utf8_encode(code_unit, out);
+}
+
 static ant_value_t js_string_from_utf16_code_unit(ant_t *js, uint32_t code_unit) {
   char buf[4];
-  size_t out_len = 0;
-
-  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
-    buf[0] = (char)(0xE0 | (code_unit >> 12));
-    buf[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
-    buf[2] = (char)(0x80 | (code_unit & 0x3F));
-    out_len = 3;
-  } else out_len = (size_t)utf8_encode(code_unit, buf);
-
+  size_t out_len = utf16_code_unit_to_wtf8((uint16_t)code_unit, buf);
   return js_mkstr(js, buf, out_len);
 }
 
@@ -4915,6 +4983,8 @@ static ant_offset_t builder_utf16_len_lazy(ant_t *js, ant_value_t value) {
   ant_offset_t total = 0;
   if (builder->ascii_state == STR_ASCII_YES) total = builder->len;
   else {
+    if (vtype(builder->snapshot) == T_STR)
+      total += str_utf16_len(js, builder->snapshot);
     for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next)
       total += str_utf16_len(js, chunk->value);
     total += (ant_offset_t)utf16_strlen(builder->tail, builder->tail_len);
@@ -4931,12 +5001,16 @@ typedef struct {
 
 // TODO: make cleaner
 static ant_offset_t rope_utf16_len_lazy(ant_t *js, ant_value_t root) {
+  if (rope_depth(root) == ANT_ROPE_DEPTH_SATURATED) {
+    ant_value_t flat = rope_flatten(js, root);
+    return is_err(flat) ? 0 : flat_utf16_len(ant_str_flat_ptr(flat));
+  }
+
   enum { ROPE_UTF16_LOCAL_FRAMES = 64 };
   rope_utf16_frame_t local_frames[ROPE_UTF16_LOCAL_FRAMES];
   rope_utf16_frame_t *frames = local_frames;
   
   size_t frame_cap = ROPE_UTF16_LOCAL_FRAMES;
-  size_t max_frames = (size_t)rope_depth(root) + 1u;
   size_t sp = 0;
   
   ant_value_t current = root;
@@ -4953,14 +5027,19 @@ static ant_offset_t rope_utf16_len_lazy(ant_t *js, ant_value_t root) {
     else if (vtype(cached) == T_STR) result = str_utf16_len(js, cached);
     else {
       if (sp == frame_cap) {
-        rope_utf16_frame_t *expanded = malloc(max_frames * sizeof(*expanded));
+        size_t next_cap = frame_cap * 2u;
+        rope_utf16_frame_t *expanded = frames == local_frames
+          ? (rope_utf16_frame_t *)malloc(next_cap * sizeof(*expanded))
+          : (rope_utf16_frame_t *)realloc(frames, next_cap * sizeof(*expanded));
         if (!expanded) {
           ant_value_t flat = rope_flatten(js, root);
+          if (is_err(flat)) return 0;
           return flat_utf16_len(ant_str_flat_ptr(flat));
         }
-        memcpy(expanded, frames, sp * sizeof(*expanded));
+        if (frames == local_frames)
+          memcpy(expanded, frames, sp * sizeof(*expanded));
         frames = expanded;
-        frame_cap = max_frames;
+        frame_cap = next_cap;
       }
       frames[sp++] = (rope_utf16_frame_t){
         .rope = rope,
@@ -5022,37 +5101,36 @@ ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
     
     if (n2 == 0) return l;
     if (n1 == 0) return r;
-    
-    uint16_t left_depth = (vtype(l) == T_STR && str_is_heap_rope(l)) ? rope_depth(l) : 0;
-    uint16_t right_depth = (vtype(r) == T_STR && str_is_heap_rope(r)) ? rope_depth(r) : 0;
-    unsigned int new_depth = (unsigned int)(left_depth > right_depth ? left_depth : right_depth) + 1u;
-    
-    if (new_depth >= ROPE_MAX_DEPTH) {
-      ant_value_t flat_l = l, flat_r = r;
-      if (str_is_heap_rope(l)) flat_l = rope_flatten(js, l);
-      if (is_err(flat_l)) return flat_l;
-      if (str_is_heap_rope(r)) flat_r = rope_flatten(js, r);
-      if (is_err(flat_r)) return flat_r;
-      
-      ant_offset_t off1, off2, len1, len2;
-      off1 = vstr(js, flat_l, &len1);
-      off2 = vstr(js, flat_r, &len2);
-      
-      string_builder_t sb;
-      char static_buffer[512];
-      string_builder_init(&sb, static_buffer, sizeof(static_buffer));
-      
-      if (
-        !string_builder_append(&sb, (char *)(uintptr_t)(off1), len1) ||
-        !string_builder_append(&sb, (char *)(uintptr_t)(off2), len2)
-      ) {
-        string_builder_dispose(&sb);
-        return js_mkerr(js, "string concatenation failed");
+
+    if (
+      total_len < STR_SHORT_CONS_THRESHOLD &&
+      !str_is_heap_rope(l) && !str_is_heap_rope(r)
+    ) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, l);
+      GC_ROOT_PIN(js, r);
+      ant_value_t flat = js_mkstr(js, NULL, (size_t)total_len);
+      if (!is_err(flat)) {
+        ant_flat_string_t *out = ant_str_flat_ptr(flat);
+        ant_flat_string_t *left = ant_str_flat_ptr(l);
+        ant_flat_string_t *right = ant_str_flat_ptr(r);
+        memcpy(out->bytes, left->bytes, (size_t)n1);
+        memcpy(out->bytes + n1, right->bytes, (size_t)n2);
+        out->bytes[total_len] = '\0';
+        str_flat_init_meta(
+          out, str_detect_ascii_bytes(out->bytes, (size_t)total_len)
+        );
       }
-      
-      return string_builder_finalize(js, &sb);
+      GC_ROOT_RESTORE(js, root_mark);
+      return flat;
     }
     
+    uint16_t left_depth = str_is_heap_rope(l) ? rope_depth(l) : 0;
+    uint16_t right_depth = str_is_heap_rope(r) ? rope_depth(r) : 0;
+    unsigned int new_depth = (unsigned int)(left_depth > right_depth ? left_depth : right_depth) + 1u;
+
+    if (new_depth > ANT_ROPE_DEPTH_SATURATED)
+      new_depth = ANT_ROPE_DEPTH_SATURATED;
     return js_mkrope(js, l, r, total_len, (uint16_t)new_depth);
   }
   
@@ -5233,7 +5311,7 @@ bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r) {
   return vdata(l) == vdata(r);
 }
 
-static bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r) {
+bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r) {
   uint8_t t = vtype(l);
   if (t != vtype(r)) return false;
   if (t == T_UNDEF || t == T_NULL) return true;
@@ -5359,7 +5437,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
-  obj_remove_prop_slot(ptr, slot);
+  obj_delete_prop_slot(ptr, slot);
   
   return js_true;
 }
@@ -5394,7 +5472,7 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
-  obj_remove_prop_slot(ptr, slot);
+  obj_delete_prop_slot(ptr, slot);
   
   return js_true;
 }
@@ -5584,6 +5662,29 @@ static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
   return bval;
 }
 
+ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value) {
+  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return js->global;
+  if (is_object_type(value) || vtype(value) == T_CFUNC) return value;
+
+  uint8_t type = vtype(value);
+  if (
+    type != T_STR && type != T_NUM && type != T_BOOL &&
+    type != T_BIGINT && type != T_SYMBOL
+  ) return value;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  ant_value_t wrapper = js_mkobj(js);
+  if (!is_err(wrapper)) {
+    GC_ROOT_PIN(js, wrapper);
+    js_set_slot_wb(js, wrapper, SLOT_PRIMITIVE, value);
+    ant_value_t proto = js_primitive_prototype(js, type);
+    if (is_object_type(proto)) js_set_proto_wb(js, wrapper, proto);
+  }
+  GC_ROOT_RESTORE(js, root_mark);
+  return wrapper;
+}
+
 static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
     ant_value_t obj_proto = js->sym.object_proto;
@@ -5595,14 +5696,8 @@ static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   uint8_t t = vtype(arg);
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return arg;
-  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL) {
-    ant_value_t wrapper = js_mkobj(js);
-    if (is_err(wrapper)) return wrapper;
-    set_slot(wrapper, SLOT_PRIMITIVE, arg);
-    ant_value_t proto = get_prototype_for_type(js, t);
-    if (vtype(proto) == T_OBJ) js_set_proto_init(wrapper, proto);
-    return wrapper;
-  }
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT || t == T_SYMBOL)
+    return js_normalize_sloppy_this(js, arg);
   
   return arg;
 }
@@ -6001,11 +6096,91 @@ static ant_value_t builtin_bound_proxy_call(ant_t *js, ant_value_t *args, int na
   if (vtype(target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid bound proxy target");
 
   if (vtype(js->new_target) != T_UNDEF) {
-    ant_value_t ctor_this = js->this_val;
-    return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, &ctor_this, true);
+    return js_proxy_construct(js, target, args, nargs, js->new_target);
   }
 
   return sv_vm_call(js->vm, js, target, js->this_val, args, nargs, NULL, false);
+}
+
+static __attribute__((noinline, cold))
+bool js_bound_target_next(ant_value_t value, ant_value_t *next) {
+  if (vtype(value) != T_FUNC) return false;
+  sv_closure_t *closure = js_func_closure(value);
+  if (
+    !closure ||
+    !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return false;
+
+  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  if (vtype(target) == T_UNDEF) return false;
+  *next = target;
+  return true;
+}
+
+static __attribute__((noinline, cold))
+ant_value_t js_resolve_bound_target_slow(ant_value_t value) {
+  ant_value_t slow = value;
+  ant_value_t fast = value;
+  ant_value_t next;
+
+  for (;;) {
+    if (!js_bound_target_next(slow, &next)) break;
+    slow = next;
+    if (!js_bound_target_next(fast, &next)) break;
+    fast = next;
+    if (!js_bound_target_next(fast, &next)) break;
+    fast = next;
+    ANT_ASSERT(slow != fast, "bound target chain contains a cycle");
+  }
+
+  while (js_bound_target_next(value, &next)) value = next;
+  return value;
+}
+
+ant_value_t js_resolve_bound_target_known_bound(ant_value_t value) {
+  ant_value_t target = get_slot(js_func_obj(value), SLOT_TARGET_FUNC);
+  if (vtype(target) == T_UNDEF) return value;
+
+  sv_closure_t *closure =
+    vtype(target) == T_FUNC ? js_func_closure(target) : NULL;
+  if (
+    closure &&
+    (closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return js_resolve_bound_target_slow(value);
+  return target;
+}
+
+ant_value_t js_resolve_bound_target(ant_value_t value) {
+  sv_closure_t *closure =
+    vtype(value) == T_FUNC ? js_func_closure(value) : NULL;
+  if (
+    !closure ||
+    !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))
+  ) return value;
+  return js_resolve_bound_target_known_bound(value);
+}
+
+static inline bool bound_argv_copy(
+  sv_closure_t *closure,
+  const ant_value_t *prefix, int prefix_count,
+  const ant_value_t *suffix, int suffix_count
+) {
+  int total = prefix_count + suffix_count;
+  if (total == 0) {
+    closure->u.bound.argv = NULL;
+    closure->bound_argc = 0;
+    return true;
+  }
+
+  ant_value_t *argv = malloc(sizeof(*argv) * (size_t)total);
+  if (!argv) return false;
+  if (prefix_count > 0)
+    memcpy(argv, prefix, sizeof(*argv) * (size_t)prefix_count);
+  if (suffix_count > 0)
+    memcpy(argv + prefix_count, suffix, sizeof(*argv) * (size_t)suffix_count);
+  closure->u.bound.argv = argv;
+  closure->bound_argc = total;
+  return true;
 }
 
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
@@ -6075,15 +6250,14 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
 
-    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
+    if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0) {
-      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      if (!bc->bound_argv) return js_mkerr(js, "oom");
-      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-      bc->bound_argc = bound_argc;
-    }
+    if (bound_argc > 0 &&
+        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
+      return js_mkerr(js, "oom");
 
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     ant_value_t name_result = js_set_function_name_prefixed(
@@ -6091,8 +6265,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     );
     if (is_err(name_result)) return name_result;
 
-    ant_value_t proto_setup = setup_func_prototype(js, bound);
-    if (is_err(proto_setup)) return proto_setup;
     js_mark_constructor(bound_func, js_is_constructor(func));
 
     return bound;
@@ -6103,27 +6275,25 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     if (is_err(bound_func)) return bound_func;
     
     set_slot(bound_func, SLOT_CFUNC, func);
+    set_slot(bound_func, SLOT_TARGET_FUNC, func);
     
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(bound_func, func_proto);
 
-    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
+    if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0) {
-      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-      bc->bound_argc = bound_argc;
-    }
+    if (bound_argc > 0 &&
+        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
+      return js_mkerr(js, "oom");
     
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     ant_value_t name_result = js_set_function_name_prefixed(
       js, bound_func, "bound ", 6, target_name, target_name_len
     );
     if (is_err(name_result)) return name_result;
-    ant_value_t proto_setup = setup_func_prototype(js, bound);
-    
-    if (is_err(proto_setup)) return proto_setup;
     js_mark_constructor(bound_func, js_is_constructor(func));
     
     return bound;
@@ -6146,20 +6316,38 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->func = orig->func;
   bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = NULL;
-  bound_closure->bound_this = (orig->call_flags & SV_CALL_IS_ARROW) ? orig->bound_this : this_arg;
-  bound_closure->bound_args = js_mkundef();
+  
+  bound_closure->bound_this = 
+    (orig->call_flags & (SV_CALL_IS_ARROW | SV_CALL_HAS_BOUND_THIS)) 
+    ? orig->bound_this : this_arg;
+  
+  bound_closure->call_flags |= SV_CALL_HAS_BOUND_THIS;
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
+  
+  if (bound_closure->call_flags & SV_CALL_HAS_BOUND_ARGS) {
+    bound_closure->u.bound.argv = NULL;
+    bound_closure->u.bound.args_arr = js_mkundef();
+  } else {
+    bound_closure->u.pending.name = NULL;
+    bound_closure->u.pending.len = 0;
+  }
 
   if (orig->func && orig->func->upvalue_count > 0 && orig->upvalues) {
     size_t upvalue_bytes = sizeof(sv_upvalue_t *) * (size_t)orig->func->upvalue_count;
-    bound_closure->upvalues = malloc(upvalue_bytes);
+    bound_closure->upvalues = orig->func->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+      ? bound_closure->inline_upvals
+      : malloc(upvalue_bytes);
     if (!bound_closure->upvalues) return js_mkerr(js, "oom");
     memcpy(bound_closure->upvalues, orig->upvalues, upvalue_bytes);
   }
   
-  if (bound_argc > 0)
+  int orig_bound_argc = (orig->call_flags & SV_CALL_HAS_BOUND_ARGS) ? orig->bound_argc : 0;
+  if (bound_argc > 0 || orig_bound_argc > 0) {
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
+    bound_closure->u.bound.argv = NULL;
+    bound_closure->u.bound.args_arr = js_mkundef();
+  }
 
   ant_value_t async_slot = get_slot(func_obj, SLOT_ASYNC);
   if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
@@ -6185,18 +6373,25 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   ant_value_t eval_env = get_slot(func_obj, SLOT_EVAL_ENV);
   if (is_object_type(eval_env))
     js_set_slot_wb(js, bound_func, SLOT_EVAL_ENV, eval_env);
-  set_slot(bound_func, SLOT_TARGET_FUNC, func);
-  
-  if (bound_argc > 0) {
-    ant_value_t bound_arr = mkarr(js);
-    for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
-    bound_closure->bound_args = bound_arr;
-    bound_closure->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
-    memcpy(bound_closure->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
-    bound_closure->bound_argc = bound_argc;
-  }
 
   ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
+  ant_value_t call_target = js_resolve_bound_target(func);
+  set_slot(bound_func, SLOT_TARGET_FUNC, call_target);
+  
+  if (bound_argc > 0 || orig_bound_argc > 0) {
+    ant_value_t bound_arr = mkarr(js);
+    for (int i = 0; i < orig_bound_argc; i++)
+      arr_set(js, bound_arr, (ant_offset_t)i, orig->u.bound.argv[i]);
+    for (int i = 0; i < bound_argc; i++)
+      arr_set(js, bound_arr, (ant_offset_t)(orig_bound_argc + i), bound_args[i]);
+    bound_closure->u.bound.args_arr = bound_arr;
+    if (!bound_argv_copy(
+      bound_closure,
+      orig_bound_argc > 0 ? orig->u.bound.argv : NULL, orig_bound_argc,
+      bound_args, bound_argc
+    )) return js_mkerr(js, "oom");
+  }
+
   if (vtype(cfunc_slot) == T_CFUNC) {
     set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
   }
@@ -6209,9 +6404,6 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   
   if (is_err(name_result)) return name_result;
   ant_value_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
-  ant_value_t proto_setup = setup_func_prototype(js, bound);
-  
-  if (is_err(proto_setup)) return proto_setup;
   js_mark_constructor(bound_func, js_is_constructor(func));
   
   return bound;
@@ -6233,7 +6425,7 @@ static ant_value_t builtin_Array(ant_t *js, ant_value_t *args, int nargs) {
   } else if (nargs > 0) for (int i = 0; i < nargs; i++) 
     arr_set(js, arr, (ant_offset_t)i, args[i]);
 
-  ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
+  ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, array_proto);
   
   if (is_object_type(instance_proto)) js_set_proto_init(arr, instance_proto);
@@ -6292,7 +6484,7 @@ static ant_value_t builtin_Error(ant_t *js, ant_value_t *args, int nargs) {
     this_val = js_mkobj(js);
     ant_value_t proto = lkp_interned_val(js, js_func_obj(js->current_func), js->intern.prototype);
     if (vtype(proto) != T_UNDEF) js_set_proto_init(this_val, proto);
-    else js_set_proto_init(this_val, get_ctor_proto(js, "Error", 5));
+    else js_set_proto_init(this_val, js_get_ctor_proto(js, "Error", 5));
   }
   
   if (nargs > 0) {
@@ -6366,7 +6558,7 @@ static ant_value_t builtin_AggregateError(ant_t *js, ant_value_t *args, int narg
     this_val = js_mkobj(js);
     ant_prop_loc_t proto_off = lkp_interned(js_func_obj(js->current_func), js->intern.prototype);
     if (proto_off.obj) js_set_proto_init(this_val, js_prop_load(proto_off));
-    else js_set_proto_init(this_val, get_ctor_proto(js, "AggregateError", 14));
+    else js_set_proto_init(this_val, js_get_ctor_proto(js, "AggregateError", 14));
   }
   
   ant_value_t errors = nargs > 0 ? args[0] : mkarr(js);
@@ -6401,7 +6593,7 @@ static ant_value_t builtin_SuppressedError(ant_t *js, ant_value_t *args, int nar
     this_val = js_mkobj(js);
     ant_prop_loc_t proto_off = lkp_interned(js_func_obj(js->current_func), js->intern.prototype);
     if (proto_off.obj) js_set_proto_init(this_val, js_prop_load(proto_off));
-    else js_set_proto_init(this_val, get_ctor_proto(js, "SuppressedError", 15));
+    else js_set_proto_init(this_val, js_get_ctor_proto(js, "SuppressedError", 15));
   }
 
   ant_value_t error = nargs > 0 ? args[0] : js_mkundef();
@@ -7828,11 +8020,11 @@ static ant_value_t builtin_object_getPrototypeOf(ant_t *js, ant_value_t *args, i
   uint8_t t = vtype(obj);
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) 
-    return get_prototype_for_type(js, t);
+    return js_primitive_prototype(js, t);
   if (t == T_CFUNC) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
     if (vtype(promoted) == T_FUNC) return get_proto(js, promoted);
-    return get_prototype_for_type(js, t);
+    return js_primitive_prototype(js, t);
   }
   
   if (is_object_type(obj)) {
@@ -7896,7 +8088,7 @@ static ant_value_t builtin_proto_getter(ant_t *js, ant_value_t *args, int nargs)
     return get_proto(js, this_val);
   }
   
-  return get_prototype_for_type(js, t);
+  return js_primitive_prototype(js, t);
 }
 
 static ant_value_t builtin_proto_setter(ant_t *js, ant_value_t *args, int nargs) {
@@ -9959,7 +10151,7 @@ static ant_value_t builtin_object_toString(ant_t *js, ant_value_t *args, int nar
     if (is_object_type(obj)) {
       tag_off = lkp_sym_proto(js, obj, sym_off);
     } else {
-      ant_value_t proto = get_prototype_for_type(js, t);
+      ant_value_t proto = js_primitive_prototype(js, t);
       if (is_object_type(proto)) {
         tag_off = lkp_sym_proto(js, proto, sym_off);
       }
@@ -12406,15 +12598,92 @@ static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int narg
   return tov(-1);
 }
 
+static ant_value_t js_mkstr_utf16_range(
+  ant_t *js, const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end
+) {
+  size_t byte_start, byte_end;
+  utf16_range_splits_t splits = utf16_range_to_byte_range(
+    str, byte_len, utf16_start, utf16_end, &byte_start, &byte_end
+  );
+
+  if (!splits.prefix_surrogate && !splits.suffix_surrogate)
+    return js_mkstr(js, str + byte_start, byte_end - byte_start);
+
+  string_builder_t sb;
+  char static_buf[64]; char encoded[4];
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+
+  if (splits.prefix_surrogate) {
+    size_t len = utf16_code_unit_to_wtf8(splits.prefix_surrogate, encoded);
+    if (!string_builder_append(&sb, encoded, len)) goto oom;
+  }
+
+  if (!string_builder_append(
+    &sb, str + byte_start, byte_end - byte_start
+  )) goto oom;
+
+  if (splits.suffix_surrogate) {
+    size_t len = utf16_code_unit_to_wtf8(splits.suffix_surrogate, encoded);
+    if (!string_builder_append(&sb, encoded, len)) goto oom;
+  }
+
+  return string_builder_finalize(js, &sb);
+
+oom:
+  string_builder_dispose(&sb);
+  return js_mkerr(js, "oom");
+}
+
+static inline bool utf16_range_equals_bytes(
+  const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end,
+  const char *expected, size_t expected_len
+) {
+  size_t byte_start, byte_end;
+  utf16_range_splits_t splits = utf16_range_to_byte_range(
+    str, byte_len, utf16_start, utf16_end, &byte_start, &byte_end
+  );
+
+  size_t body_len = byte_end - byte_start;
+  if (!splits.prefix_surrogate && !splits.suffix_surrogate)
+    return body_len == expected_len && memcmp(str + byte_start, expected, expected_len) == 0;
+
+  size_t prefix_len = splits.prefix_surrogate ? 3 : 0;
+  size_t suffix_len = splits.suffix_surrogate ? 3 : 0;
+  if (prefix_len + body_len + suffix_len != expected_len) return false;
+
+  char encoded[4];
+  size_t pos = 0;
+
+  if (splits.prefix_surrogate) {
+    utf16_code_unit_to_wtf8(splits.prefix_surrogate, encoded);
+    if (memcmp(expected, encoded, 3) != 0) return false;
+    pos += 3;
+  }
+
+  if (body_len > 0 && memcmp(expected + pos, str + byte_start, body_len) != 0) return false;
+  pos += body_len;
+
+  if (splits.suffix_surrogate) {
+    utf16_code_unit_to_wtf8(splits.suffix_surrogate, encoded);
+    if (memcmp(expected + pos, encoded, 3) != 0) return false;
+  }
+
+  return true;
+}
+
 static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
+
   ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
+
   ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
-  
+
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     start = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
@@ -12431,9 +12700,7 @@ static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int na
     end = tmp;
   }
   
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
 }
 
 static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs) {
@@ -12463,9 +12730,7 @@ static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs
   }
   if (start + len > (ant_offset_t)utf16_len) len = (ant_offset_t)utf16_len - start;
   
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, start + len, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, start + len);
 }
 
 static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *args, int nargs) {
@@ -12705,9 +12970,7 @@ static ant_value_t builtin_string_slice(ant_t *js, ant_value_t *args, int nargs)
   }
   
   if (start > end) start = end;
-  size_t byte_start, byte_end;
-  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
-  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
+  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
 }
 
 static ant_value_t builtin_string_includes(ant_t *js, ant_value_t *args, int nargs) {
@@ -12786,12 +13049,10 @@ static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int n
   if (search_units > str_units - start) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
 
-  size_t byte_start = 0, byte_end = 0;
-  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
-  
-  return mkval(T_BOOL,
-    byte_end - byte_start == (size_t)search_len &&
-    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL, utf16_range_equals_bytes(
+    str_ptr, str_len, start, start + search_units,
+    search_ptr, search_len
+  ) ? 1 : 0);
 }
 
 static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nargs) {
@@ -12835,12 +13096,10 @@ static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nar
   if (start < 0) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
 
-  size_t byte_start = 0, byte_end = 0;
-  utf16_range_to_byte_range(str_ptr, str_len, start, start + search_units, &byte_start, &byte_end);
-  
-  return mkval(T_BOOL,
-    byte_end - byte_start == (size_t)search_len &&
-    memcmp(str_ptr + byte_start, search_ptr, search_len) == 0 ? 1 : 0);
+  return mkval(T_BOOL, utf16_range_equals_bytes(
+    str_ptr, str_len, start, start + search_units,
+    search_ptr, search_len
+  ) ? 1 : 0);
 }
 
 static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nargs) {
@@ -13439,27 +13698,64 @@ static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int 
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   ant_offset_t search_len, search_off = vstr(js, search, &search_len);
-  
-  ant_offset_t max_start = str_len;
-  double dstr_len = D(str_len);
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    double pos = tod(args[1]);
-    if (isnan(pos)) pos = dstr_len;
-    if (pos < 0) pos = 0;
-    if (pos > dstr_len) pos = dstr_len;
-    max_start = (ant_offset_t) pos;
-  }
-  
-  if (search_len == 0) return tov((double) (max_start > str_len ? str_len : max_start));
-  if (search_len > str_len) return tov(-1);
 
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   const char *search_ptr = (char *)(uintptr_t)(search_off);
 
-  ant_offset_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
-  for (ant_offset_t i = start + 1; i > 0; i--) {
-    if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0) return tov((double)(i - 1));
+  if (str_is_ascii(str_ptr)) {
+    size_t max_start = (size_t)str_len;
+    if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+      double pos = tod(args[1]);
+      if (isnan(pos)) pos = D(str_len);
+      if (pos < 0) pos = 0;
+      if (pos > D(str_len)) pos = D(str_len);
+      max_start = (size_t) pos;
+    }
+
+    if (search_len == 0) return tov(D(max_start));
+    if (search_len > str_len || !str_is_ascii(search_ptr)) return tov(-1);
+
+    size_t byte_limit = max_start;
+    if (byte_limit > (size_t)str_len - search_len)
+      byte_limit = (size_t)str_len - search_len;
+
+    char first = search_ptr[0];
+    for (size_t i = byte_limit + 1; i > 0; i--) {
+      if (str_ptr[i - 1] == first &&
+          memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
+        return tov(D(i - 1));
+    }
+    return tov(-1);
   }
+
+  size_t utf16_len = (size_t)str_utf16_len(js, str);
+  size_t max_start = utf16_len;
+  
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double pos = tod(args[1]);
+    if (isnan(pos)) pos = D(utf16_len);
+    if (pos < 0) pos = 0;
+    if (pos > D(utf16_len)) pos = D(utf16_len);
+    max_start = (size_t) pos;
+  }
+
+  if (search_len == 0) return tov(D(max_start));
+  if (search_len > str_len) return tov(-1);
+
+  size_t byte_limit;
+  if (max_start >= utf16_len) byte_limit = (size_t)str_len;
+  else byte_limit = utf16_index_to_byte_offset_floor(str_ptr, str_len, max_start);
+
+  if (byte_limit > (size_t)str_len - search_len)
+    byte_limit = (size_t)str_len - search_len;
+
+  char first = search_ptr[0];
+  for (size_t i = byte_limit + 1; i > 0; i--) {
+    if (str_ptr[i - 1] == first &&
+        memcmp(str_ptr + i - 1, search_ptr, search_len) == 0)
+      return tov(D(byte_offset_to_utf16(str_ptr, i - 1)));
+  }
+  
   return tov(-1);
 }
 
@@ -14147,7 +14443,7 @@ ant_value_t js_mkpromise(ant_t *js) {
     set_slot(obj, SLOT_CTOR, promise_ctor);
   }
 
-  ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
+  ant_value_t promise_proto = js->sym.promise_proto;
   if (is_object_type(promise_proto)) {
     js_set_proto_init(obj, promise_proto);
   }
@@ -14497,7 +14793,7 @@ static ant_value_t builtin_Promise(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t new_target = js->new_target;
   ant_value_t p_obj = js_as_obj(p);
 
-  ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
+  ant_value_t promise_proto = js->sym.promise_proto;
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, promise_proto);
   GC_ROOT_PIN(js, instance_proto);
 
@@ -15578,21 +15874,8 @@ static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ct
   return mkval(T_BOOL, proto_chain_contains_cycle_safe(js, current, ctor_proto) ? 1 : 0);
 }
 
-static inline ant_object_t *cached_function_proto_obj(ant_t *js) {
-  uint32_t cache_epoch = ant_ic_epoch_counter;
-  if (
-    js->runtime_cache.function_proto_epoch == cache_epoch &&
-    js->runtime_cache.function_proto_obj
-  ) return js->runtime_cache.function_proto_obj;
-
-  ant_value_t proto = get_ctor_proto(js, "Function", 8);
-  if (!is_object_type(proto)) return NULL;
-  
-  ant_object_t *cached = js_obj_ptr(js_as_obj(proto));
-  js->runtime_cache.function_proto_obj = cached;
-  js->runtime_cache.function_proto_epoch = cache_epoch;
-  
-  return cached;
+static inline ant_object_t *intrinsic_function_proto_obj(ant_t *js) {
+  return js_obj_ptr(js->sym.function_proto);
 }
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
@@ -15630,7 +15913,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
       }
     }
   } else {
-    ant_object_t *func_proto_ptr = cached_function_proto_obj(js);
+    ant_object_t *func_proto_ptr = intrinsic_function_proto_obj(js);
     if (func_proto_ptr && func_proto_ptr->shape &&
         ant_shape_lookup_symbol(func_proto_ptr->shape, has_instance_sym_off) >= 0) {
       use_slow_has_instance = true;
@@ -15656,6 +15939,9 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
     }
   }
 
+  ant_value_t bound_target = js_resolve_bound_target(r);
+  if (bound_target != r) return do_instanceof(js, l, bound_target);
+
   ant_prop_loc_t proto_off = lkp_interned(func_obj, js->intern.prototype);
   if (!proto_off.obj) return mkval(T_BOOL, 0);
   
@@ -15664,7 +15950,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) return mkval(T_BOOL, 0);
   
   if (ltype == T_STR || ltype == T_NUM || ltype == T_BOOL) {
-    ant_value_t type_proto = get_prototype_for_type(js, ltype);
+    ant_value_t type_proto = js_primitive_prototype(js, ltype);
     return mkval(T_BOOL, vdata(ctor_proto) == vdata(type_proto) ? 1 : 0);
   }
   
@@ -16084,10 +16370,7 @@ ant_value_t js_get_module_import_binding(ant_t *js) {
   }
 
   GC_ROOT_PIN(js, import_obj);
-  ant_value_t function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-
-  if (vtype(function_proto) == T_UNDEF)
-    function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
   GC_ROOT_PIN(js, function_proto);
 
   if (is_object_type(function_proto)) js_set_proto_wb(js, import_obj, function_proto);
@@ -16174,6 +16457,10 @@ bool js_is_constructor(ant_value_t value) {
     if (t == T_FUNC) {
       ant_object_t *obj = js_obj_ptr(js_func_obj(slow));
       return obj && obj->flags.is_constructor;
+    }
+    if (t == T_CFUNC) {
+      const ant_cfunc_meta_t *meta = js_as_cfunc_meta(slow);
+      return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
     }
     if (t != T_OBJ) return false;
 
@@ -16947,11 +17234,6 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
 
   if (!js_is_constructor(target))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-  if (vtype(target) == T_OBJ && is_proxy(target))
-    return js_proxy_construct(js, target, args, argc, new_target);
-  if (vtype(target) != T_FUNC)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-
   ant_value_t trap = proxy_get_method(js, handler, "construct");
   if (is_err(trap)) return trap;
   if (vtype(trap) != T_UNDEF) {
@@ -16966,16 +17248,37 @@ ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, 
       return result;
   }
 
+  if (vtype(target) == T_OBJ && is_proxy(target))
+    return js_proxy_construct(js, target, args, argc, new_target);
+
+  ant_value_t effective_new_target = new_target;
+  ant_value_t proto;
+  if (new_target != target) {
+    proto = js_getprop_fallback(js, new_target, "prototype");
+    if (!is_err(proto) && !is_object_type(proto))
+      proto = js->sym.object_proto;
+  } else {
+    ant_value_t record_func = target;
+    proto = sv_prepare_construct_meta(
+      js, target, new_target, &effective_new_target, &record_func
+    );
+  }
+  if (is_err(proto)) return proto;
+
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = js_getprop_fallback(js, new_target, "prototype");
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
   ant_value_t saved = js->new_target;
-  js->new_target = new_target;
+  js->new_target = effective_new_target;
   ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(js->vm, js, target, obj, args, argc, &ctor_this, true);
+  ant_value_t result = sv_vm_call(
+    js->vm, js, target, obj, args, argc, &ctor_this, true
+  );
   js->new_target = saved;
   if (is_err(result)) return result;
-  return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
+  return is_object_type(result)
+    ? result
+    : (is_object_type(ctor_this) ? ctor_this : obj);
 }
 
 static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
@@ -17073,6 +17376,10 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js = (ant_t *)buf;
   js_init_intern_cache(js);
+  js->pool.rope.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
+  js->gc_use_nursery_major_floor = true;
   
   if (!fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)) return NULL;
   if (!fixed_arena_init(&js->closure_arena, sizeof(sv_closure_t), offsetof(sv_closure_t, gc_epoch), ANT_CLOSURE_ARENA_MAX)) {
@@ -17085,7 +17392,8 @@ static ant_t *isolate_init(void *buf, size_t len) {
     fixed_arena_destroy(&js->obj_arena);
     return NULL;
   }
-  
+
+  js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
   
@@ -17121,7 +17429,10 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   ant_value_t proto_getter = js_mkfun(builtin_proto_getter);
   ant_value_t proto_setter = js_mkfun(builtin_proto_setter);
-  js_set_accessor_desc(js, object_proto, STR_PROTO, STR_PROTO_LEN, proto_getter, proto_setter, JS_DESC_C);
+  js_set_accessor_desc(
+    js, object_proto, "__proto__", sizeof("__proto__") - 1,
+    proto_getter, proto_setter, JS_DESC_C
+  );
   
   ant_value_t function_proto_obj = js_mkobj(js);
   set_proto(js, function_proto_obj, object_proto);
@@ -17253,7 +17564,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
   
   ant_value_t err_ctor_func = js_obj_to_func(js, err_ctor_obj);
-  js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
+  js_set_global_builtin(js, "Error", err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   defmethod(js, err_ctor_func, "isError", 7, js_mkfun(builtin_error_isError));
@@ -17272,7 +17583,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
     ant_value_t ctor_func = js_obj_to_func(js, ctor); \
     js_setprop(js, proto, ANT_STRING("constructor"), ctor_func); \
     js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
-    js_setprop(js, glob, ANT_STRING(name_str), ctor_func); \
+    js_set_global_builtin(js, name_str, ctor_func); \
   } while(0)
   
   REGISTER_ERROR_SUBTYPE("EvalError");
@@ -17295,7 +17606,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, ctor, ANT_STRING("name"), ANT_STRING("AggregateError"));
   js_setprop(js, proto, ANT_STRING("constructor"), js_obj_to_func(js, ctor));
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("AggregateError"), js_obj_to_func(js, ctor));
+  js_set_global_builtin(js, "AggregateError", js_obj_to_func(js, ctor));
 
   ant_value_t suppressed_proto = js_mkobj(js);
   set_proto(js, suppressed_proto, error_proto);
@@ -17310,7 +17621,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t suppressed_ctor_func = js_obj_to_func(js, suppressed_ctor);
   js_setprop(js, suppressed_proto, ANT_STRING("constructor"), suppressed_ctor_func);
   js_set_descriptor(js, suppressed_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("SuppressedError"), suppressed_ctor_func);
+  js_set_global_builtin(js, "SuppressedError", suppressed_ctor_func);
 
   ant_value_t disposable_stack_proto = js_mkobj(js);
   set_proto(js, disposable_stack_proto, object_proto);
@@ -17329,7 +17640,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t disposable_stack_ctor_func = js_obj_to_func(js, disposable_stack_ctor);
   js_setprop(js, disposable_stack_proto, ANT_STRING("constructor"), disposable_stack_ctor_func);
   js_set_descriptor(js, disposable_stack_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("DisposableStack"), disposable_stack_ctor_func);
+  js_set_global_builtin(js, "DisposableStack", disposable_stack_ctor_func);
 
   ant_value_t async_disposable_stack_proto = js_mkobj(js);
   set_proto(js, async_disposable_stack_proto, object_proto);
@@ -17348,7 +17659,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   ant_value_t async_disposable_stack_ctor_func = js_obj_to_func(js, async_disposable_stack_ctor);
   js_setprop(js, async_disposable_stack_proto, ANT_STRING("constructor"), async_disposable_stack_ctor_func);
   js_set_descriptor(js, async_disposable_stack_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, glob, ANT_STRING("AsyncDisposableStack"), async_disposable_stack_ctor_func);
+  js_set_global_builtin(js, "AsyncDisposableStack", async_disposable_stack_ctor_func);
   
   ant_value_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
@@ -17388,7 +17699,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
   js_setprop_readonly_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   ant_value_t obj_func = js_obj_to_func(js, obj_func_obj);
-  js_setprop(js, glob, js_mkstr(js, "Object", 6), obj_func);
+  js_set_global_builtin(js, "Object", obj_func);
   
   ant_value_t func_ctor_obj = mkobj(js, 0);
   set_proto(js, func_ctor_obj, function_proto);
@@ -17398,7 +17709,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_set_descriptor(js, func_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, func_ctor_obj, ANT_STRING("name"), ANT_STRING("Function"));
   ant_value_t func_ctor_func = js_obj_to_func(js, func_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Function", 8), func_ctor_func);
+  js_set_global_builtin(js, "Function", func_ctor_func);
   
   ant_value_t async_func_proto_obj = js_mkobj(js);
   set_proto(js, async_func_proto_obj, function_proto);
@@ -17464,7 +17775,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
   
   ant_value_t str_ctor_func = js_obj_to_func(js, str_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "String", 6), str_ctor_func);
+  js_set_global_builtin(js, "String", str_ctor_func);
   
   ant_value_t number_ctor_obj = mkobj(js, 0);
   set_proto(js, number_ctor_obj, function_proto);
@@ -17489,7 +17800,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
   js_setprop(js, number_ctor_obj, ANT_STRING("name"), ANT_STRING("Number"));
   ant_value_t number_ctor_func = js_obj_to_func(js, number_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Number", 6), number_ctor_func);
+  js_set_global_builtin(js, "Number", number_ctor_func);
   
   ant_value_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
@@ -17497,7 +17808,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
   js_setprop(js, bool_ctor_obj, ANT_STRING("name"), ANT_STRING("Boolean"));
   ant_value_t bool_ctor_func = js_obj_to_func(js, bool_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Boolean", 7), bool_ctor_func);
+  js_set_global_builtin(js, "Boolean", bool_ctor_func);
   
   ant_value_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
@@ -17511,7 +17822,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_set_descriptor(js, arr_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, arr_ctor_obj, ANT_STRING("name"), ANT_STRING("Array"));
   ant_value_t arr_ctor_func = js_obj_to_func(js, arr_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Array", 5), arr_ctor_func);
+  js_set_global_builtin(js, "Array", arr_ctor_func);
   
   ant_value_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
@@ -17519,7 +17830,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_mark_constructor(proxy_ctor_obj, true);
   defmethod(js, proxy_ctor_obj, "revocable", 9, js_mkfun(builtin_Proxy_revocable));
   js_setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
-  js_setprop(js, glob, js_mkstr(js, "Proxy", 5), js_obj_to_func(js, proxy_ctor_obj));
+  js_set_global_builtin(js, "Proxy", js_obj_to_func(js, proxy_ctor_obj));
   
   ant_value_t p_ctor_obj = mkobj(js, 0);
   set_proto(js, p_ctor_obj, function_proto);
@@ -17539,7 +17850,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js_setprop(js, promise_proto, ANT_STRING("constructor"), p_ctor_func);
   js_set_descriptor(js, promise_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   js_setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
-  js_setprop(js, glob, js_mkstr(js, "Promise", 7), p_ctor_func);
+  js_set_global_builtin(js, "Promise", p_ctor_func);
   
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);
@@ -17547,7 +17858,9 @@ static ant_t *isolate_init(void *buf, size_t len) {
   defmethod(js, glob, "isNaN", 5, js_mkfun(builtin_global_isNaN));
   defmethod(js, glob, "isFinite", 8, js_mkfun(builtin_global_isFinite));
   defmethod(js, glob, "btoa", 4, js_mkfun(builtin_btoa));
+  js_set_descriptor(js, glob, "btoa", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   defmethod(js, glob, "atob", 4, js_mkfun(builtin_atob));
+  js_set_descriptor(js, glob, "atob", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   
   js_setprop(js, glob, js_mkstr(js, "NaN", 3), tov(JS_NAN));
   js_set_descriptor(js, glob, "NaN", 3, 0);
@@ -17560,7 +17873,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   set_proto(js, import_obj, function_proto);
   
   set_slot(import_obj, SLOT_CFUNC, js_mkfun(js_builtin_import));
-  js_setprop(js, glob, js_mkstr(js, "import", 6), js_obj_to_func(js, import_obj));
+  js_set_global_builtin(js, "import", js_obj_to_func(js, import_obj));
   
   js_setprop(js, object_proto, js_mkstr(js, "constructor", 11), obj_func);
   js_set_descriptor(js, object_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
@@ -17584,6 +17897,11 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   js->sym.object_proto = object_proto;
   js->sym.array_proto = array_proto;
+  js->sym.function_proto = function_proto;
+  js->sym.string_proto = string_proto;
+  js->sym.number_proto = number_proto;
+  js->sym.boolean_proto = boolean_proto;
+  js->sym.promise_proto = promise_proto;
   js->owns_mem = false;
   js->max_size = 0;
   
@@ -17620,6 +17938,10 @@ void js_destroy(ant_t *js) {
   }
   
   js_esm_cleanup_module_cache(js);
+#ifdef ANT_JIT
+  sv_jit_destroy(js);
+#endif
+  sv_ic_shape_refs_cleanup(js);
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();
@@ -17638,6 +17960,7 @@ void js_destroy(ant_t *js) {
   cleanup_buffer_module();
   cleanup_atomics_module(js);
   cleanup_events_module(js);
+  cleanup_regex_module(js);
 
   fixed_arena_destroy(&js->obj_arena);
   fixed_arena_destroy(&js->closure_arena);
@@ -17654,6 +17977,26 @@ void js_destroy(ant_t *js) {
   free(js->remembered_upvalues);
   js->remembered_upvalues = NULL;
   js->remembered_upvalue_len = js->remembered_upvalue_cap = 0;
+
+  free(js->remembered_closures);
+  js->remembered_closures = NULL;
+  js->remembered_closure_len = js->remembered_closure_cap = 0;
+
+  free(js->rope_gc.remembered_builders);
+  js->rope_gc.remembered_builders = NULL;
+  js->rope_gc.remembered_builder_len = js->rope_gc.remembered_builder_cap = 0;
+
+  free(js->rope_gc.marks);
+  js->rope_gc.marks = NULL;
+  js->rope_gc.mark_count = js->rope_gc.mark_cap = 0;
+
+  free(js->young_closures);
+  js->young_closures = NULL;
+  js->young_closure_len = js->young_closure_cap = 0;
+
+  free(js->young_upvalues);
+  js->young_upvalues = NULL;
+  js->young_upvalue_len = js->young_upvalue_cap = 0;
 
   free(js->remember_set);
   js->remember_set = NULL;
@@ -17683,6 +18026,8 @@ void js_destroy(ant_t *js) {
   js->cfunc_name_cache.len = js->cfunc_name_cache.cap = 0;
 
   js_pool_destroy(&js->pool.rope);
+  js_pool_destroy(&js->rope_gc.young);
+  js_pool_destroy(&js->rope_gc.old);
   js_pool_destroy(&js->pool.symbol);
   js_pool_destroy(&js->pool.permanent);
   
@@ -17693,8 +18038,8 @@ void js_destroy(ant_t *js) {
 }
 
 inline double js_getnum(ant_value_t value) { return tod(value); }
-inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; }
-inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; }
+inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; js_cstk_refresh_floor(js); }
+inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; js_cstk_refresh_floor(js); }
 inline void js_set_filename(ant_t *js, const char *filename) { js->filename = filename; }
 
 inline ant_value_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
@@ -17898,6 +18243,11 @@ static bool js_cfunc_has_prototype(ant_value_t cfunc) {
   return meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
 }
 
+static bool js_cfunc_is_constructor(ant_value_t cfunc) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);
+  return meta && (meta->flags & CFUNC_IS_CONSTRUCTOR) != 0;
+}
+
 static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bool mark_constructor) {
   ant_value_t func_obj = (vtype(func) == T_FUNC) 
     ? js_func_obj(func) 
@@ -18010,7 +18360,7 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
   ant_value_t fn_obj = mkobj(js, 0);
   set_slot(fn_obj, SLOT_CFUNC, cfunc);
 
-  ant_value_t proto = get_prototype_for_type(js, T_CFUNC);
+  ant_value_t proto = js_primitive_prototype(js, T_CFUNC);
   if (is_object_type(proto)) {
     ant_object_t *obj_ptr = js_obj_ptr(js_as_obj(fn_obj));
     if (obj_ptr) obj_ptr->proto = proto;
@@ -18028,10 +18378,13 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
 
   ant_value_t promoted = js_obj_to_func(js, fn_obj);
 
+  bool is_constructor = js_cfunc_is_constructor(cfunc);
   if (js_cfunc_has_prototype(cfunc)) {
-    ant_value_t proto_result = setup_func_prototype_property(js, promoted, false);
+    ant_value_t proto_result = setup_func_prototype_property(
+      js, promoted, is_constructor
+    );
     if (is_err(proto_result)) return proto_result;
-  }
+  } else if (is_constructor) js_mark_constructor(promoted, true);
 
   if (js->cfunc_promote_cache.len >= js->cfunc_promote_cache.cap) {
     uint8_t new_cap = js->cfunc_promote_cache.cap ? js->cfunc_promote_cache.cap * 2 : 4;
@@ -18173,7 +18526,7 @@ ant_value_t js_get_sym_with_receiver(ant_t *js, ant_value_t obj, ant_value_t sym
   
   if (!is_object_type(obj)) {
     if (ot == T_STR || ot == T_NUM || ot == T_BOOL || ot == T_BIGINT || ot == T_SYMBOL || ot == T_CFUNC) {
-      ant_value_t proto = get_prototype_for_type(js, ot);
+      ant_value_t proto = js_primitive_prototype(js, ot);
       if (!is_object_type(proto)) return js_mkundef();
       obj = js_as_obj(proto);
     } else return js_mkundef();
@@ -18353,8 +18706,20 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
     }
     
     if (t == T_STR && js_try_get_string_index(js, obj, key, key_len, out)) return true;
+
+    ant_value_t prim_proto = js_primitive_prototype(js, t);
+    if (is_object_type(prim_proto)) {
+      ant_prop_loc_t poff = lkp_proto(js, prim_proto, key, key_len);
+      if (poff.obj) {
+        const ant_shape_prop_t *prim_meta = prop_shape_meta(poff);
+        if (!(prim_meta && (prim_meta->has_getter || prim_meta->has_setter))) {
+          *out = js_prop_load(poff);
+          return true;
+        }
+      }
+    }
+
     ant_value_t boxed = mkobj(js, 0);
-    
     js_set_slot(js_as_obj(boxed), SLOT_PRIMITIVE, obj);
     obj = boxed; t = T_OBJ;
   }
@@ -18369,7 +18734,7 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
   }
   
   if (!off.obj && is_promise) {
-    ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
+    ant_value_t promise_proto = js->sym.promise_proto;
     if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
       off = lkp(js, promise_proto, key, key_len);
       if (off.obj) { *out = js_prop_load(off); return true; }

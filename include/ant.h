@@ -14,9 +14,8 @@
 #include <stdio.h>
 #include <inttypes.h>
 
-#define STR_PROTO "__proto__"
-#define STR_PROTO_LEN 9
-#define CFUNC_HAS_PROTOTYPE 0x01u
+static constexpr uint8_t CFUNC_HAS_PROTOTYPE  = 0x01u;
+static constexpr uint8_t CFUNC_IS_CONSTRUCTOR = 0x02u;
 
 #define ANT_ASSERT(cond, msg) ({                                            \
 if (!(cond)) {                                                              \

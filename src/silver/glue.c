@@ -11,6 +11,7 @@
 #include "silver/glue.h"
 
 #include "ops/calls.h"
+#include "ops/literals.h"
 #include "ops/globals.h"
 #include "ops/property.h"
 #include "ops/iteration.h"
@@ -18,6 +19,7 @@
 #include "ops/comparison.h"
 #include "ops/coercion.h"
 #include "ops/private.h"
+#include "ops/objects.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js) {
   volatile char marker;
@@ -30,6 +32,10 @@ int64_t jit_helper_stack_overflow(ant_t *js) {
 
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
   return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum JIT call stack size exceeded");
+}
+
+ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value) {
+  return js_normalize_sloppy_this(js, value);
 }
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
@@ -189,6 +195,20 @@ ant_value_t jit_helper_call_method(
   }
 
   return result;
+}
+
+ant_value_t jit_helper_call_call(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *base, int32_t n1, int32_t n2
+) {
+  return sv_op_call_call(vm, js, base[0], base + 1, (int)n1, base + 1 + n1, (int)n2);
+}
+
+ant_value_t jit_helper_call_call_slot(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t arg1, ant_value_t *slot
+) {
+  return sv_op_call_call_slot_ptr(vm, js, func, arg1, slot);
 }
 
 ant_value_t jit_helper_apply(
@@ -649,7 +669,7 @@ static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int3
 }
 
 ant_value_t jit_helper_get_field(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, 
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
   const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
 ) {
   (void)vm;
@@ -660,6 +680,23 @@ ant_value_t jit_helper_get_field(
   if ((vtype(obj) == T_NULL || vtype(obj) == T_UNDEF) && is_err(out))
     jit_set_error_site_from_func(js, func, bc_off);
   return out;
+}
+
+ant_value_t jit_helper_get_field_inline(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  const char *str, uint32_t len, sv_func_t *func, int32_t bc_off
+) {
+  (void)vm;
+  uint8_t *ip = NULL;
+  
+  if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
+  sv_atom_t atom = { .str = str, .len = len };
+  ant_value_t out = js_mkundef();
+  
+  if (sv_try_prop_get_field_ic_no_effect(js, obj, &atom, func, ip, &out)) return out;
+  if (sv_try_get_data_prop_no_effect_interned(js, obj, str, len, &out)) return out;
+  
+  return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
@@ -685,8 +722,7 @@ ant_value_t jit_helper_export(
   ant_t *js, sv_closure_t *closure,
   const char *str, uint32_t len, ant_value_t value
 ) {
-  ant_value_t func_obj = closure ? closure->func_obj : js_mkundef();
-  ant_value_t ns = sv_export_target_ns_from_func_obj(js, func_obj);
+  ant_value_t ns = sv_export_target_ns_from_closure(js, closure);
   return sv_module_export_to_ns(js, ns, str, (size_t)len, value);
 }
 
@@ -775,19 +811,8 @@ ant_value_t jit_helper_closure(
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
 
-  sv_closure_t *closure = js_closure_alloc(js);
+  sv_closure_t *closure = sv_closure_init(js, child, this_val);
   if (!closure) return mkval(T_ERR, 0);
-
-  closure->func = child;
-  closure->bound_this = child->is_arrow ? this_val : js_mkundef();
-  closure->bound_argv = NULL;
-  closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
-  closure->super_val = js_mkundef();
-  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
-
-  if (child->upvalue_count > 0)
-    closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -806,19 +831,12 @@ ant_value_t jit_helper_closure(
   }
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(
-    js, mkval(T_FUNC, (uintptr_t)parent_closure)
-  );
-  
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
-  
-  if (is_object_type(eval_env) && is_object_type(closure->func_obj)) {
-    js_set_slot_wb(js, closure->func_obj, SLOT_EVAL_ENV, eval_env);
-    closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
-  }
-  
-  if (name) js_set_function_name(js, func_val, name, name_len);
+  sv_closure_finish_init(
+    js, closure, func_val, mkval(T_FUNC, (uintptr_t)parent_closure),
+    name, name_len, eval_env, is_object_type(eval_env)
+  );
+
   return func_val;
 }
 
@@ -910,18 +928,34 @@ void jit_helper_define_field(
 void jit_helper_set_name(
   ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
-) { 
-  js_set_function_name(js, fn, str, len);
+) {
+  [[clang::always_inline]]
+  sv_set_name(js, fn, str, len);
 }
 
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
   if (vtype(obj) == T_ARR)
     return tov((double)(uint32_t)js_arr_len(js, obj));
-    
+
   if (vtype(obj) == T_STR)
     return tov((double)str_utf16_len(js, obj));
-  
+
   return js_getprop_fallback(js, obj, "length");
+}
+
+ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
+  (void)vm;
+  if (vtype(obj) == T_ARR)
+    return tov((double)(uint32_t)js_arr_len(js, obj));
+
+  if (vtype(obj) == T_STR)
+    return tov((double)str_utf16_len(js, obj));
+
+  ant_value_t out = js_mkundef();
+  if (js->intern.length &&
+      sv_try_get_data_prop_no_effect_interned(js, obj, js->intern.length, 6, &out))
+    return out;
+  return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_put_field(
@@ -932,8 +966,15 @@ ant_value_t jit_helper_put_field(
   return js_setprop(js, obj, key, val);
 }
 
+ant_value_t jit_helper_put_field_ic(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
+  ant_value_t val, const sv_atom_t *atom, sv_ic_entry_t *ic
+) {
+  return sv_put_field_cached(js, obj, val, atom, ic);
+}
+
 ant_value_t jit_helper_get_elem(
-  sv_vm_t *vm, ant_t *js, ant_value_t obj, 
+  sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t key, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t ot = vtype(obj);
@@ -984,23 +1025,41 @@ ant_value_t jit_helper_put_global(
   return js_setprop(js, js->global, key, val);
 }
 
-ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js) {
+ant_value_t jit_helper_object(
+  sv_vm_t *vm,
+  ant_t *js,
+  sv_func_t *func,
+  sv_obj_site_cache_t *site
+) {
   ant_value_t obj = mkobj(js, 0);
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  
+  sv_obj_site_apply(js, func, site, ptr);
   ant_value_t proto = js->sym.object_proto;
+  
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
 }
 
+void jit_helper_define_slot(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
+  const char *str, uint32_t len, uint32_t slot
+) {
+  [[clang::always_inline]]
+  sv_define_slot(js, obj, val, str, len, slot);
+}
+
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {
   ant_value_t arr = js_mkarr(js);
-  for (int i = 0; i < count; i++)
-    js_arr_push(js, arr, elements[i]);
+  for (int i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
   return arr;
 }
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
-  if (vtype(err) == T_ERR && js->thrown_exists &&
-      vtype(js->thrown_value) != T_UNDEF) {
+  if (
+    vtype(err) == T_ERR && js->thrown_exists &&
+    vtype(js->thrown_value) != T_UNDEF
+  ) {
     ant_value_t caught = js->thrown_value;
     js->thrown_value = js_mkundef();
     js->thrown_exists = false;
@@ -1024,6 +1083,55 @@ ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_va
   if (sv_try_string_index_get(js, obj, key, &str_elem))
     return str_elem;
   return sv_getprop_by_key(js, obj, key);
+}
+
+ant_value_t jit_helper_get_elem_inline(
+  sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key
+) {
+  (void)vm;
+
+  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+    double d = tod(key);
+    if (d >= 0 && d == (uint32_t)d) {
+      // TODO: reduce nesting
+      ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+      if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array && ptr->u.array.data) {
+        uint32_t idx = (uint32_t)d;
+        if (idx < ptr->u.array.len && idx < ptr->u.array.cap) {
+          ant_value_t value = ptr->u.array.data[idx];
+          if (!is_empty_slot(value)) return value;
+        }
+      }
+      return SV_JIT_BAILOUT;
+    }
+  }
+
+  ant_value_t str_elem = js_mkundef();
+  if (sv_try_string_index_get(js, obj, key, &str_elem)) return str_elem;
+
+  ant_value_t key_str;
+  switch (vtype(key)) {
+    case T_STR:
+      key_str = key;
+      break;
+    case T_NUM:
+    case T_BOOL:
+    case T_NULL:
+    case T_UNDEF:
+    case T_BIGINT:
+      key_str = js_tostring_val(js, key);
+      if (is_err(key_str)) return key_str;
+      break;
+    default:
+      return SV_JIT_BAILOUT;
+  }
+
+  ant_offset_t key_len = 0;
+  ant_offset_t key_off = vstr(js, key_str, &key_len);
+  const char *key_ptr = (const char *)(uintptr_t)key_off;
+  ant_value_t out = js_mkundef();
+  return sv_try_get_data_prop_no_effect(js, obj, key_ptr, (size_t)key_len, &out)
+    ? out : SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t proto) {
@@ -1113,24 +1221,23 @@ ant_value_t jit_helper_new(
   ant_value_t *args, int argc
 ) {
   ant_value_t record_func = func;
-  js->new_target = new_target;
+  ant_value_t effective_new_target = new_target;
 
-  if (vtype(func) == T_OBJ && is_proxy(func))
+  if (vtype(func) == T_OBJ && is_proxy(func)) {
+    js->new_target = new_target;
     return js_proxy_construct(js, func, args, argc, new_target);
+  }
   if (!js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC) {
-    ant_value_t proto_source = func;
-    ant_value_t func_obj = js_func_obj(func);
-    ant_value_t target_func = js_get_slot(func_obj, SLOT_TARGET_FUNC);
-    if (vtype(target_func) == T_FUNC) {
-      proto_source = target_func;
-      record_func = target_func;
-    }
-    proto = js_getprop_fallback(js, proto_source, "prototype");
+  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
+    proto = sv_prepare_construct_meta(
+      js, func, new_target, &effective_new_target, &record_func
+    );
+    if (is_err(proto)) return proto;
   }
+  js->new_target = effective_new_target;
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
