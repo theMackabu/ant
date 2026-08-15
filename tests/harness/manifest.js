@@ -13,6 +13,8 @@ export function targets() {
 
   const REGRESSION_TESTS = [
     'test_promise.cjs',
+    'test_ant_c.cjs',
+    'test_assert_bigint.cjs',
     'test_jit_derived_ctor.cjs',
     'test_class_expression_name_scope.cjs',
     'test_class_constructor_call.cjs',
@@ -43,6 +45,7 @@ export function targets() {
     'test_regexp_cache_admission.cjs',
     'test_regexp_internal_state.cjs',
     'test_regexp_result_batch.cjs',
+    'test_repl_global_descriptors.cjs',
     'test_object_site_lookup.cjs',
     'test_jit_osr_entry_reject.cjs',
     'test_jit_dnum_get_length.cjs',
@@ -53,6 +56,7 @@ export function targets() {
     'test_websocket_close_during_connect.cjs',
     'test_intern_table_bounded.cjs',
     'test_buffer_wtf8_utf8.cjs',
+    'test_utf16_random_access.cjs',
     'test_bigint.js',
     'test_temporal.js'
   ];

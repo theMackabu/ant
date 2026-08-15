@@ -1,7 +1,7 @@
 # Active Plans
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-08-14
 Owner: theMackabu
 
 Store in-progress execution plans here.
@@ -22,8 +22,6 @@ Store in-progress execution plans here.
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
 - [Stream Property Surface](stream-property-surface.md)
-- [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
-- [UTF-16 Random-Access Index (fable carry-back)](utf16-random-access-index.md)
 - [WICG Observable Migration](wicg-observable.md)
 
 Recommended sections:

@@ -62,16 +62,22 @@ Caveats found while measuring:
   tracked score is 930 versus master's 417; do not investigate the old
   `func_obj == 0` / dense-`arr_get` suspects from the pre-RegExp-work tree.
 
-## Implementation status (2026-08-03)
+## Historical implementation checkpoint (2026-08-03; superseded)
 
-All phases (1a, 1b, 2, 3, 4, 5) are implemented in one uncommitted tree on
+At this checkpoint, phases 1a, 1b, 2, 3, 4, and 5 were implemented in one
+uncommitted tree on
 `perf/vm-dispatch`. Per-phase smokes + gates run at time of writing:
 spec 3712/0 (3706 + 6 new lastIndexOf tests), harness 166/0 incl. oha
 floors, jit suite 125/125, devirt fuzzer all seeds agree,
-`test_jit_string_builder_snapshot` OK. **Not yet run**: interleaved newt /
+`test_jit_string_builder_snapshot` OK. **Pending at this checkpoint**:
+interleaved newt /
 bench-v8 A/B against `/tmp/ant_fable_base` for phases 1b–5 (Phase 1a was
 measured: object-literal micro 2.4×, newt ~2%, no regression), and the
 GC-stress pass for phases 1b/2.
+
+The completed results at the top of this document and the later regression-fix
+sessions supersede this checkpoint. Phase headings below preserve the landing
+sequence; they are not outstanding work.
 
 Deviations from the June diffs (deliberate, current-tree adaptations):
 - **1a**: shaped-site arrays additionally freed in `sv_compile_ctx_cleanup`
@@ -245,7 +251,7 @@ Recorded with the tree that includes the `claude-string-perf-fix` port
   from the June rounds is uncommitted**; the typed-inline work is inside
   `21aec5e6`.
 
-## Phase 1a — DEFINE_SLOT literal shape boilerplates (NEXT)
+## Phase 1a — DEFINE_SLOT literal shape boilerplates (DONE)
 
 Fully mapped from `9cfb48e3`; all anchors verified present on master. Goal:
 object literals with all-static keys build their final shape **once per
@@ -400,7 +406,7 @@ are the parts worth reusing.
 Gates: `tests/test_jit_string_builder_snapshot.cjs`, jit suite, newt,
 devirt fuzzer.
 
-## Phase 6 — generational closures (2026-08-05, implemented, tuning pending)
+## Phase 6 — generational closures (2026-08-05, implemented and tuned)
 
 Young-closure/young-upvalue rosters (`js_closure_alloc` appends; slow-path
 trackers in gc/objects.c) + young sweeps in `gc_objects_run_minor` that
@@ -472,7 +478,7 @@ re-run green (spec 3712/0, jit 0 fail, harness churn test, DeltaBlue 4212,
 Splay 3373 / Richards 2557 = branch-expected). Closure GC is now
 ~time-neutral vs base with bounded memory.
 
-## Phase 7 — closure-volume attack (2026-08-05, measurement + first wins)
+## Phase 7 — closure-volume attack (2026-08-05, measurement and wins landed)
 
 **Measurement first** (temporary per-site counters, keyed by child sv_func,
 with hooks in jit_helper_closure + sv_op_closure): newt Main's ~225M closures
