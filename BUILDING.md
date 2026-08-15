@@ -129,6 +129,12 @@ builds read the host IANA time-zone database through the filesystem provider;
 Windows builds embed the time-zone database. No system `rustc`, Cargo, or
 rustup installation is used.
 
+The Rust bootstrap and compilation target follow the configured C compiler's
+ABI. Alpine builds use the matching musl toolchain, and MSYS2/MinGW builds use
+the Windows GNU toolchain. CI preserves the ABI-specific Rustup, Cargo, and
+build caches between runs; local builds reuse the same data from
+`.cache/temporal-rust/`.
+
 The first build therefore needs network access to download the pinned
 toolchain and Cargo dependencies. To build without Temporal or the Rust
 bootstrap, configure Meson with:

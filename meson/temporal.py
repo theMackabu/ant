@@ -1,38 +1,25 @@
 import argparse
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
 import urllib.request
 
-RUSTUP_HOSTS = {
-  ("Darwin", "arm64"): "aarch64-apple-darwin",
-  ("Darwin", "x86_64"): "x86_64-apple-darwin",
-  ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
-  ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
-  ("Windows", "AMD64"): "x86_64-pc-windows-msvc",
-  ("Windows", "ARM64"): "aarch64-pc-windows-msvc",
-}
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--crate", required=True)
 parser.add_argument("--temporal-capi", required=True)
 parser.add_argument("--cache", required=True)
+parser.add_argument("--rustup-host", required=True)
 parser.add_argument("--target", required=True)
 parser.add_argument("--out", required=True)
 parser.add_argument("--features", default="")
 args = parser.parse_args()
 
-host = RUSTUP_HOSTS.get((platform.system(), platform.machine()))
-if host is None:
-  sys.exit(f"temporal.py: unsupported host {platform.system()}/{platform.machine()}")
-
-cache = os.path.abspath(args.cache)
+cache = os.path.join(os.path.abspath(args.cache), args.rustup_host)
 rustup_home = os.path.join(cache, "rustup")
 cargo_home = os.path.join(cache, "cargo")
-exe = ".exe" if platform.system() == "Windows" else ""
+exe = ".exe" if "windows" in args.rustup_host else ""
 cargo = os.path.join(cargo_home, "bin", "cargo" + exe)
 
 env = os.environ.copy()
@@ -45,7 +32,7 @@ env["RUSTFLAGS"] = "-Zunstable-options -Cpanic=immediate-abort"
 if not os.path.exists(cargo):
   os.makedirs(cache, exist_ok=True)
   rustup_init = os.path.join(cache, "rustup-init" + exe)
-  url = f"https://static.rust-lang.org/rustup/dist/{host}/rustup-init{exe}"
+  url = f"https://static.rust-lang.org/rustup/dist/{args.rustup_host}/rustup-init{exe}"
   print(f"temporal.py: fetching {url}", file=sys.stderr)
   urllib.request.urlretrieve(url, rustup_init)
   os.chmod(rustup_init, 0o755)
@@ -70,6 +57,6 @@ if args.features:
   build += ["--features", args.features]
 subprocess.run(build, cwd=args.crate, env=env, check=True)
 
-lib_name = "ant_temporal.lib" if "windows" in args.target else "libant_temporal.a"
+lib_name = "ant_temporal.lib" if args.target.endswith("-windows-msvc") else "libant_temporal.a"
 built = os.path.join(env["CARGO_TARGET_DIR"], args.target, "release", lib_name)
 shutil.copy2(built, args.out)

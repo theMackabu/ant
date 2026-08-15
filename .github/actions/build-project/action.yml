@@ -7,6 +7,9 @@ outputs:
     value: ${{ steps.version.outputs.version }}
 
 inputs:
+  platform:
+    description: Platform key used to isolate ABI-specific build caches
+    required: true
   cc:
     description: C compiler
     required: true
@@ -59,6 +62,14 @@ runs:
           vendor/*/
           build/vendor
         key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap', 'vendor/packagefiles/**', 'meson/deps/meson.build') }}
+
+    - name: Cache Temporal Rust toolchain and crates
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+      with:
+        path: .cache/temporal-rust
+        key: temporal-rust-${{ inputs.platform }}-${{ hashFiles('src/temporal/Cargo.toml', 'src/temporal/Cargo.lock', 'src/temporal/rust-toolchain.toml', 'vendor/temporal_capi.wrap', 'vendor/packagefiles/temporal_capi/**', 'vendor/packagefiles/patches/temporal-capi-fs-provider.patch', 'meson/temporal.py') }}
+        restore-keys: |
+          temporal-rust-${{ inputs.platform }}-
 
     - name: Configure and build
       shell: bash

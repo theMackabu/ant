@@ -185,6 +185,7 @@ jobs:
         id: build
         uses: ./.github/actions/build-project
         with:
+          platform: ${{ inputs.platform }}
           cc: ${{ steps.llvm.outputs.cc }}
           cxx: ${{ steps.llvm.outputs.cxx }}
           ar: ${{ steps.llvm.outputs.ar }}

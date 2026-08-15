@@ -6,18 +6,43 @@ if temporal_opt.enabled() or temporal_opt.auto()
   if temporal_capi_project.found()
     temporal_capi_source = temporal_capi_project.get_variable('temporal_capi_source_dir')
     temporal_capi_inputs = temporal_capi_project.get_variable('temporal_capi_build_inputs')
+    temporal_cpu = host_machine.cpu_family()
+    temporal_cc_target = run_command(
+      cc.cmd_array(), '-dumpmachine',
+      check: true,
+    ).stdout().strip()
 
-    if host_machine.system() == 'darwin'
-      temporal_target = host_machine.cpu_family() + '-apple-darwin'
-    elif host_machine.system() == 'windows'
-      temporal_target = host_machine.cpu_family() == 'aarch64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
-    else
-      temporal_target = host_machine.cpu_family() + '-unknown-linux-gnu'
+    if temporal_cpu != 'aarch64' and temporal_cpu != 'x86_64'
+      error('Temporal does not support CPU family ' + temporal_cpu)
     endif
 
-    temporal_lib_name = host_machine.system() == 'windows' ? 'ant_temporal.lib' : 'libant_temporal.a'
+    if host_machine.system() == 'darwin'
+      temporal_target = temporal_cpu + '-apple-darwin'
+    elif host_machine.system() == 'windows'
+      if temporal_cc_target.contains('msvc')
+        temporal_target = temporal_cpu + '-pc-windows-msvc'
+      elif temporal_cc_target.contains('gnu') or temporal_cc_target.contains('mingw')
+        temporal_target = temporal_cpu + '-pc-windows-gnu'
+      else
+        error('Temporal cannot determine the Windows ABI from compiler target ' + temporal_cc_target)
+      endif
+    elif host_machine.system() == 'linux'
+      if temporal_cc_target.contains('musl')
+        temporal_target = temporal_cpu + '-unknown-linux-musl'
+      elif temporal_cc_target.contains('gnu')
+        temporal_target = temporal_cpu + '-unknown-linux-gnu'
+      else
+        error('Temporal cannot determine the Linux ABI from compiler target ' + temporal_cc_target)
+      endif
+    else
+      error('Temporal does not support ' + host_machine.system())
+    endif
+
+    temporal_lib_name = temporal_target.endswith('-windows-msvc') ? 'ant_temporal.lib' : 'libant_temporal.a'
     temporal_features = host_machine.system() == 'windows' ? 'tzdb-embedded' : 'fs-tzdb'
     temporal_include = temporal_capi_source / 'bindings/c'
+
+    message('Temporal Rust target: ' + temporal_target + ' (compiler: ' + temporal_cc_target + ')')
 
     temporal_lib = custom_target('temporal_staticlib',
       input: files(
@@ -32,6 +57,7 @@ if temporal_opt.enabled() or temporal_opt.auto()
         '--crate', src_root / 'src/temporal',
         '--temporal-capi', temporal_capi_source,
         '--cache', src_root / '.cache/temporal-rust',
+        '--rustup-host', temporal_target,
         '--target', temporal_target,
         '--out', '@OUTPUT@',
         '--features', temporal_features,
