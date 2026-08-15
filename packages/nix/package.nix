@@ -139,12 +139,13 @@ antStdenv.mkDerivation (finalAttrs: {
 
   env = {
     ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
-    CC = "${antStdenv.cc}/bin/cc";
-    CXX = "${antStdenv.cc}/bin/c++";
     NIX_CFLAGS_COMPILE = optArgs;
   };
 
   preConfigure = ''
+    export CC=${antStdenv.cc}/bin/cc
+    export CXX=${antStdenv.cc}/bin/c++
+
     export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
     export ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-local-cache
     mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
