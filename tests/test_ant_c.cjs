@@ -116,6 +116,44 @@ assert.strictEqual(bits(0xA5), 0x10100101);
 assert.throws(() => bits(), /expects 1 arguments, got 0/);
 assert.throws(() => bits('5'), /argument 1 must be a number/);
 
+const acceptIntegers = Ant.unsafe.c({
+  entry: 'accept_integers',
+  args: ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'],
+  returns: 'int',
+})`
+  #include <stdint.h>
+  int accept_integers(
+    int8_t i8, uint8_t u8, int16_t i16,
+    uint16_t u16, int32_t i32, uint32_t u32
+  ) {
+    return i8 || u8 || i16 || u16 || i32 || u32;
+  }
+`;
+
+const integerLowerBounds = [-128, 0, -32768, 0, -2147483648, 0];
+const integerUpperBounds = [127, 255, 32767, 65535, 2147483647, 4294967295];
+assert.strictEqual(acceptIntegers(...integerLowerBounds), 1);
+assert.strictEqual(acceptIntegers(...integerUpperBounds), 1);
+
+const outOfRangeIntegers = [
+  [0, -129], [0, 128],
+  [1, -1], [1, 256],
+  [2, -32769], [2, 32768],
+  [3, -1], [3, 65536],
+  [4, -2147483649], [4, 2147483648],
+  [5, -1], [5, 4294967296],
+];
+for (const [index, value] of outOfRangeIntegers) {
+  const args = integerLowerBounds.slice();
+  args[index] = value;
+  assert.throws(() => acceptIntegers(...args), /finite integer within range/);
+}
+for (const value of [NaN, Infinity, -Infinity, 1.5]) {
+  const args = integerLowerBounds.slice();
+  args[4] = value;
+  assert.throws(() => acceptIntegers(...args), /finite integer within range/);
+}
+
 const interpolatedStatus = 11;
 assert.strictEqual(
   Ant.unsafe.c`int main(void) { return ${interpolatedStatus}; }`,

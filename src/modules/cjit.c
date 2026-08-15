@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ffi.h>
+#include <math.h>
 #include <stdint.h>
 
 #ifndef _WIN32
@@ -470,6 +471,53 @@ static void ant_c_function_finalize(ant_t *js, ant_object_t *obj) {
   js_clear_native(value, ANT_C_FUNCTION_NATIVE_TAG);
 }
 
+static bool ant_c_number_to_arg(
+  double number, ant_c_arg_type_t type, ant_c_arg_value_t *value
+) {
+  if (type == ANT_C_ARG_FLOAT) {
+    value->f32 = (float)number;
+    return true;
+  }
+  if (type == ANT_C_ARG_DOUBLE) {
+    value->f64 = number;
+    return true;
+  }
+  if (!isfinite(number) || trunc(number) != number) return false;
+
+  switch (type) {
+    case ANT_C_ARG_INT8:
+      if (number < INT8_MIN || number > INT8_MAX) return false;
+      value->i8 = (int8_t)number;
+      return true;
+    case ANT_C_ARG_UINT8:
+      if (number < 0 || number > UINT8_MAX) return false;
+      value->u8 = (uint8_t)number;
+      return true;
+    case ANT_C_ARG_INT16:
+      if (number < INT16_MIN || number > INT16_MAX) return false;
+      value->i16 = (int16_t)number;
+      return true;
+    case ANT_C_ARG_UINT16:
+      if (number < 0 || number > UINT16_MAX) return false;
+      value->u16 = (uint16_t)number;
+      return true;
+    case ANT_C_ARG_INT32:
+      if (number < INT32_MIN || number > INT32_MAX) return false;
+      value->i32 = (int32_t)number;
+      return true;
+    case ANT_C_ARG_UINT32:
+      if (number < 0 || number > UINT32_MAX) return false;
+      value->u32 = (uint32_t)number;
+      return true;
+    case ANT_C_ARG_INT64:
+    case ANT_C_ARG_UINT64:
+    case ANT_C_ARG_FLOAT:
+    case ANT_C_ARG_DOUBLE:
+      return false;
+  }
+  return false;
+}
+
 static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_c_function_t *function = js_get_native(js->current_func, ANT_C_FUNCTION_NATIVE_TAG);
   if (!function) return js_mkerr(js, "Ant.unsafe.c() compiled function is no longer available");
@@ -510,18 +558,10 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
     );
 
     double number = js_getnum(args[i]);
-    switch (function->arg_types[i]) {
-      case ANT_C_ARG_INT8: values[i].i8 = (int8_t)number; break;
-      case ANT_C_ARG_UINT8: values[i].u8 = (uint8_t)number; break;
-      case ANT_C_ARG_INT16: values[i].i16 = (int16_t)number; break;
-      case ANT_C_ARG_UINT16: values[i].u16 = (uint16_t)number; break;
-      case ANT_C_ARG_INT32: values[i].i32 = (int32_t)number; break;
-      case ANT_C_ARG_UINT32: values[i].u32 = (uint32_t)number; break;
-      case ANT_C_ARG_INT64:
-      case ANT_C_ARG_UINT64: break;
-      case ANT_C_ARG_FLOAT: values[i].f32 = (float)number; break;
-      case ANT_C_ARG_DOUBLE: values[i].f64 = number; break;
-    }
+    if (!ant_c_number_to_arg(number, function->arg_types[i], &values[i])) return js_mkerr(
+      js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a finite integer within range",
+      function->entry_name, i + 1
+    );
   }
 
   ant_c_arg_value_t result = {0};
