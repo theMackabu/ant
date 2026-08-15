@@ -17,6 +17,7 @@
 , rustPlatform
 , rustToolchain
 , runCommand
+, writeText
 , darwin ? null
 , callPackage
 , gitRev ? "unknown"
@@ -68,6 +69,12 @@ let
     cp -R ${temporalCargoDeps}/. "$out/"
   '';
 
+  mesonNativeFile = writeText "ant-meson-native.ini" ''
+    [binaries]
+    c = '${antStdenv.cc}/bin/clang'
+    cpp = '${antStdenv.cc}/bin/clang++'
+  '';
+
   toolsNodeModules = importNpmLock.buildNodeModules {
     package = lib.importJSON ../../src/tools/package.json;
     packageLock = lib.importJSON ../../src/tools/npm-shrinkwrap.json;
@@ -111,7 +118,6 @@ antStdenv.mkDerivation (finalAttrs: {
     curl
     zigPkg
     rustPlatform.cargoSetupHook
-    rustToolchain
   ] ++ lib.optionals stdenv.isDarwin [
     darwin.sigtool
     llvmPackages_21.llvm
@@ -128,6 +134,7 @@ antStdenv.mkDerivation (finalAttrs: {
   '';
 
   mesonFlags = [
+    "--native-file=${mesonNativeFile}"
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
     "-Dembed_example=disabled"
@@ -139,13 +146,11 @@ antStdenv.mkDerivation (finalAttrs: {
 
   env = {
     ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
+    RUSTC = lib.getExe' rustToolchain "rustc";
     NIX_CFLAGS_COMPILE = optArgs;
   };
 
   preConfigure = ''
-    export CC=${antStdenv.cc}/bin/clang
-    export CXX=${antStdenv.cc}/bin/clang++
-
     export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
     export ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-local-cache
     mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
