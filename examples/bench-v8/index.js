@@ -58,7 +58,7 @@ try {
 }
 
 async function runAnt(entry) {
-  const child = spawn('./build/ant', [entry], { cwd: repoRoot });
+  const child = spawn(process.execPath, [entry], { cwd: repoRoot });
   let stdout = '';
 
   child.stdout.setEncoding('utf8');

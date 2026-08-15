@@ -12,7 +12,6 @@
 #include "silver/engine.h"
 #include "silver/swarm.h"
 #include "modules/regex.h"
-
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"
@@ -36,12 +35,46 @@
 #include "ops/objects.h"
 #include "ops/coercion.h"
 
+// TODO: constexpr
 enum {
-  SV_VM_GUARD_SIZE = (size_t)65536,
-  SV_STACK_RESERVE = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
+  SV_VM_GUARD_SIZE  = (size_t)65536,
+  SV_STACK_RESERVE  = ((size_t)SV_STACK_HARD_MAX * sizeof(ant_value_t)),
   SV_FRAMES_RESERVE = ((size_t)SV_FRAMES_HARD_MAX * sizeof(sv_frame_t)),
-  SV_VM_RESERVE = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
+  SV_VM_RESERVE     = (SV_STACK_RESERVE + SV_VM_GUARD_SIZE + SV_FRAMES_RESERVE)
 };
+
+bool sv_ic_shape_ref_register(ant_t *js, ant_shape_t **slot) {
+  if (!js || !slot) return false;
+
+  if (js->ic_shape_ref_len >= js->ic_shape_ref_cap) {
+    size_t cap = js->ic_shape_ref_cap ? js->ic_shape_ref_cap * 2u : 64u;
+    ant_shape_t ***slots = realloc(
+      js->ic_shape_ref_slots, cap * sizeof(*slots)
+    );
+    if (!slots) return false;
+    js->ic_shape_ref_slots = slots;
+    js->ic_shape_ref_cap = cap;
+  }
+
+  js->ic_shape_ref_slots[js->ic_shape_ref_len++] = slot;
+  return true;
+}
+
+void sv_ic_shape_refs_cleanup(ant_t *js) {
+  if (!js) return;
+
+  for (size_t i = 0; i < js->ic_shape_ref_len; i++) {
+    ant_shape_t **slot = js->ic_shape_ref_slots[i];
+    if (!slot || !*slot) continue;
+    ant_shape_t *shape = *slot;
+    *slot = NULL;
+    ant_shape_release(shape);
+  }
+
+  free(js->ic_shape_ref_slots);
+  js->ic_shape_ref_slots = NULL;
+  js->ic_shape_ref_len = js->ic_shape_ref_cap = 0;
+}
 
 static void *sv_vm_reserve_storage(void) {
 #ifdef _WIN32
@@ -215,6 +248,7 @@ sv_activation_t *sv_activation_capture(sv_vm_t *vm, int entry_fp, sv_activation_
     ptrdiff_t slot = uv->location - src_base;
     *src_pp = uv->next;
     uv->location = &act->slots[slot];
+    gc_upvalue_capture_barrier(vm->js, uv);
     uv->next = NULL;
     *dst_pp = uv;
     dst_pp = &uv->next;
@@ -333,6 +367,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
     sv_upvalue_t *next = uv->next;
     uv->closed = *uv->location;
     uv->location = &uv->closed;
+    gc_upvalue_write_barrier(js, uv, uv->closed);
     uv->next = NULL;
     uv = next;
   }
@@ -550,9 +585,76 @@ static ant_value_t sv_string_builder_new(ant_t *js) {
   );
   if (!builder) return js_mkerr(js, "string builder allocation failed");
   memset(builder, 0, sizeof(*builder));
+  builder->snapshot = js_mkundef();
   builder->cached = js_mkundef();
   builder->ascii_state = STR_ASCII_YES;
   return ant_mkbuilder_value(builder);
+}
+
+static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
+  ant_string_builder_t *builder = sv_string_builder_heap_ptr(value);
+  if (!builder) return value;
+
+  if (!builder->head && builder->tail_len == 0) {
+    ant_value_t snapshot = builder->snapshot;
+    if (vtype(snapshot) == T_STR) return snapshot;
+
+    ant_value_t cached = builder->cached;
+    if (vtype(cached) == T_STR &&
+        !str_is_heap_rope(cached) && !str_is_heap_builder(cached))
+      return cached;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  ant_value_t result = builder->snapshot;
+  GC_ROOT_PIN(js, result);
+  ant_value_t tail = js_mkundef();
+  GC_ROOT_PIN(js, tail);
+
+  for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+    ant_value_t piece = chunk->value;
+    if (vtype(result) != T_STR) result = piece;
+    else {
+      result = do_string_op(js, TOK_PLUS, result, piece);
+      if (is_err(result)) goto fail;
+    }
+  }
+
+  if (builder->tail_len > 0) {
+    tail = js_mkstr(js, builder->tail, builder->tail_len);
+    if (is_err(tail)) {
+      result = tail;
+      goto fail;
+    }
+
+    if (vtype(result) != T_STR) result = tail;
+    else {
+      result = do_string_op(js, TOK_PLUS, result, tail);
+      if (is_err(result)) goto fail;
+    }
+  }
+
+  if (vtype(result) != T_STR) {
+    result = js_mkstr(js, "", 0);
+    if (is_err(result)) goto fail;
+  }
+
+  builder->snapshot = result;
+  if (str_is_heap_rope(result) &&
+      (ant_str_rope_ptr(result)->flags & ANT_ROPE_FLAG_YOUNG) != 0)
+    gc_remember_builder(js, builder);
+  builder->head = NULL;
+  builder->chunk_tail = NULL;
+  builder->tail_len = 0;
+  if (!str_is_heap_rope(result)) builder->cached = result;
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+
+fail:
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 static inline void sv_record_slot_feedback(
@@ -565,7 +667,7 @@ static inline void sv_record_slot_feedback(
 
 ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
   if (vtype(value) == T_STR && str_is_heap_builder(value))
-    return str_materialize(js, value);
+    return sv_string_builder_snapshot(js, value);
   return value;
 }
 
@@ -997,6 +1099,18 @@ static inline ant_value_t sv_try_direct_closure_jit(
 }
 #endif
 
+ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
+                                            ant_value_t func_val) {
+  if (c->func_obj) return c->func_obj;
+  sv_init_closure_function_object(js, c, func_val, c->module_ctx);
+  if (!(c->call_flags & SV_CALL_HAS_BOUND_ARGS) && c->u.pending.name && c->func_obj) {
+    js_set_function_name(js, func_val, c->u.pending.name, c->u.pending.len);
+    c->u.pending.name = NULL;
+    c->u.pending.len = 0;
+  }
+  return c->func_obj;
+}
+
 ant_value_t sv_execute_entry(
   sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc
 ) {
@@ -1303,6 +1417,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GET_ELEM2:     { VM_CHECK(sv_op_get_elem2(vm, js, func, ip));   NEXT(1); }
   L_PUT_ELEM:      { VM_CHECK(sv_op_put_elem(vm, js));              NEXT(1); }
   L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip);          NEXT(5); }
+  L_DEFINE_SLOT:   { sv_op_define_slot(vm, js, func, ip);           NEXT(7); }
   L_GET_LENGTH:    { VM_CHECK(sv_op_get_length(vm, js));            NEXT(1); }
 
   L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));  NEXT(7); }
@@ -1519,8 +1634,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async || closure->func->is_generator) goto call_fallback;
         #ifdef ANT_JIT
         {
-          ant_value_t jit_this = (
-            closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+          ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : js_mkundef();
           ant_value_t jit_result = sv_try_direct_closure_jit(
             vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
@@ -1537,7 +1651,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
-        if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF) call_this = closure->bound_this;
+        if (sv_closure_has_lexical_this(closure))
+          call_this = closure->bound_this;
         frame = &vm->frames[vm->fp];
         frame->ip = ip + 3;
         vm->sp -= call_argc + 1;
@@ -1592,6 +1707,35 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_CALL: {
+    uint8_t cc_n1 = ip[1];
+    uint8_t cc_n2 = ip[2];
+    int cc_total = 1 + (int)cc_n1 + (int)cc_n2;
+    ant_value_t *cc_base = &vm->stack[vm->sp - cc_total];
+    frame->ip = ip;
+    ant_value_t cc_result = sv_op_call_call(
+      vm, js, cc_base[0], cc_base + 1, (int)cc_n1, cc_base + 1 + cc_n1, (int)cc_n2);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    vm->sp -= cc_total;
+    if (is_err(cc_result)) { sv_err = cc_result; goto sv_throw; }
+    vm->stack[vm->sp++] = cc_result;
+    NEXT(3);
+  }
+
+  L_CALL_CALL_SLOT: {
+    uint16_t cc_slot = sv_get_u16(ip + 1);
+    ant_value_t cc_x = vm->stack[vm->sp - 2];
+    ant_value_t cc_arg1 = vm->stack[vm->sp - 1];
+    frame->ip = ip;
+    ant_value_t cc_result = sv_op_call_call_slot(
+      vm, js, cc_x, cc_arg1, cc_slot);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    vm->sp -= 2;
+    if (is_err(cc_result)) { sv_err = cc_result; goto sv_throw; }
+    vm->stack[vm->sp++] = cc_result;
+    NEXT(3);
+  }
+
   L_CALL_METHOD: {
     uint16_t call_argc = sv_get_u16(ip + 1);
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
@@ -1610,8 +1754,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async || closure->func->is_generator) goto call_method_fallback;
         #ifdef ANT_JIT
         {
-          ant_value_t jit_this = (
-            closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+          ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : call_this;
           ant_value_t jit_result = sv_try_direct_closure_jit(
             vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
@@ -1628,7 +1771,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
-        if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+        if (sv_closure_has_lexical_this(closure))
           call_this = closure->bound_this;
         frame = &vm->frames[vm->fp];
         frame->ip = ip + 3;
@@ -1681,6 +1824,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (is_super_call)
       frame->this = is_object_type(call_result) ? call_result : super_this_cm;
     vm->stack[vm->sp++] = call_result;
+    NEXT(3);
+  }
+
+  L_CALL_SUPER: {
+    VM_CHECK(sv_op_call_super(vm, js, frame, ip));
     NEXT(3);
   }
 
@@ -1783,7 +1931,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
             !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
-          if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+          if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
         }
@@ -1812,7 +1960,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
             !(closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))) {
-          if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+          if (sv_closure_has_lexical_this(closure))
             tc_this = closure->bound_this;
           goto tail_call_inline;
         }
@@ -2167,8 +2315,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_APPEND:              { sv_op_append(vm, js);                   NEXT(1); }
   L_COPY_DATA_PROPS:     { sv_op_copy_data_props(vm, js, ip);      NEXT(2); }
 
-  L_DEFINE_CLASS:       { sv_op_define_class(vm, js, func, ip);       NEXT(14); }
-  L_DEFINE_CLASS_COMP:  { sv_op_define_class_comp(vm, js, func, ip);  NEXT(14); }
+  L_DEFINE_CLASS:       { VM_CHECK(sv_op_define_class(vm, js, func, ip));      NEXT(14); }
+  L_DEFINE_CLASS_COMP:  { VM_CHECK(sv_op_define_class_comp(vm, js, func, ip)); NEXT(14); }
 
   L_TO_OBJECT:   { VM_CHECK(sv_op_to_object(vm, js));  NEXT(1); }
   L_TO_PROPKEY:  { sv_op_to_propkey(vm, js);           NEXT(1); }

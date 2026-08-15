@@ -94,6 +94,8 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->slot_types);
   free(ctx->deferred_exports);
   free(ctx->using_cleanups);
+  free(ctx->shaped_sites);
+  free(ctx->shaped_keys);
 
   const_dedup_entry_t *entry;
   const_dedup_entry_t *tmp;

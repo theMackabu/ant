@@ -89,6 +89,23 @@ function osrSnapshot() {
 
 assertEq(osrSnapshot(), '2000:8000', 'OSR local snapshot');
 
+function repeatedSnapshotChain() {
+  let value = '';
+  const snapshots = [];
+
+  for (let i = 0; i < 5_000; i++) {
+    value += 'x';
+    snapshots.push(value);
+  }
+
+  for (const length of [1, 255, 256, 2_000, 4_095, 4_096, 5_000]) {
+    assertEq(snapshots[length - 1].length, length, `snapshot length ${length}`);
+    assertEq(snapshots[length - 1], 'x'.repeat(length), `snapshot value ${length}`);
+  }
+}
+
+repeatedSnapshotChain();
+
 // Numeric-only type feedback must not specialize a local that a cold branch
 // can turn into a string builder: warm up with the append branch never taken,
 // then take it in JIT'd code and read the local at the loop head.
@@ -116,5 +133,13 @@ function coldBranchAppendSnapshot(flag, n) {
 
 for (let i = 0; i < 300; i++) coldBranchAppendSnapshot(false, 20);
 assertEq(coldBranchAppendSnapshot(true, 3), '0xx:0xxx', 'cold-branch append snapshot');
+
+function appendParameter(value) {
+  for (let i = 0; i < 3; i++) value += 'x';
+  return value;
+}
+
+for (let i = 0; i < 300; i++) appendParameter('');
+assertEq(appendParameter(), 'undefinedxxx', 'missing builder parameter bailout');
 
 console.log('OK: test_jit_string_builder_snapshot');

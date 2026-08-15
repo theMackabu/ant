@@ -1,0 +1,11 @@
+{
+  "name": "better-result",
+  "type": "module",
+  "dependencies": {
+    "better-result": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

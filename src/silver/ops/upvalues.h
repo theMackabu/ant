@@ -50,8 +50,12 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
 
 static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value_t parent_func) {
   if (vtype(parent_func) == T_FUNC) {
-    ant_value_t module_ctx = js_get_slot(js_func_obj(parent_func), SLOT_MODULE_CTX);
-    if (is_object_type(module_ctx)) return module_ctx;
+    sv_closure_t *pc = js_func_closure(parent_func);
+    if (is_object_type(pc->module_ctx)) return pc->module_ctx;
+    if (pc->func_obj) {
+      ant_value_t module_ctx = js_get_slot(pc->func_obj, SLOT_MODULE_CTX);
+      if (is_object_type(module_ctx)) return module_ctx;
+    }
   }
 
   return js_module_eval_active_ctx(js);
@@ -64,6 +68,8 @@ static inline void sv_init_closure_function_object(
   ant_value_t module_ctx
 ) {
   sv_func_t *child = closure->func;
+  gc_remember_closure(js, closure);
+  
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
   if (is_err(func_obj) || !child) return;
@@ -175,6 +181,45 @@ static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   return uv;
 }
 
+static inline sv_closure_t *sv_closure_init(
+  ant_t *js, sv_func_t *child, ant_value_t this_val
+) {
+  sv_closure_t *closure = js_closure_alloc_hot(js);
+  if (!closure) return NULL;
+
+  closure->func = child;
+  closure->bound_this = child->is_arrow ? this_val : js_mkundef();
+  closure->bound_argc = 0;
+  closure->super_val = js_mkundef();
+  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
+
+  if (child->upvalue_count > 0)
+    closure->upvalues = child->upvalue_count <= SV_CLOSURE_INLINE_UPVALS
+      ? closure->inline_upvals
+      : calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
+
+  return closure;
+}
+
+static inline void sv_closure_finish_init(
+  ant_t *js, sv_closure_t *closure, ant_value_t func_val,
+  ant_value_t parent_func, const char *name, uint32_t name_len,
+  ant_value_t eval_env, bool attach_eval_env
+) {
+  closure->module_ctx = sv_get_current_closure_module_ctx(js, parent_func);
+  closure->func_obj = 0;
+  closure->u.pending.name = name;
+  closure->u.pending.len = name_len;
+
+  if (attach_eval_env) {
+    ant_value_t func_obj = sv_closure_materialize_func_obj(js, closure, func_val);
+    if (is_object_type(func_obj)) {
+      js_set_slot_wb(js, func_obj, SLOT_EVAL_ENV, eval_env);
+      closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
+    }
+  }
+}
+
 static inline ant_value_t sv_op_closure(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
@@ -182,17 +227,9 @@ static inline ant_value_t sv_op_closure(
   uint32_t idx = sv_get_u32(ip + 1);
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
 
-  sv_closure_t *closure = js_closure_alloc(js);
-  closure->func = child;
-  closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
-  closure->bound_argv = NULL;
-  closure->bound_argc = 0;
-  closure->bound_args = js_mkundef();
-  closure->super_val = js_mkundef();
-  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
+  sv_closure_t *closure = sv_closure_init(js, child, frame->this);
+  if (!closure) return mkval(T_ERR, 0);
 
-  if (child->upvalue_count > 0) {
-  closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
     if (desc->is_local) {
@@ -200,20 +237,16 @@ static inline ant_value_t sv_op_closure(
       if (!slot) slot = frame->bp;
       closure->upvalues[i] = sv_capture_upvalue(vm, slot);
     } else closure->upvalues[i] = frame->upvalues[desc->index];
-  }}
+  }
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
-  
-  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
-  sv_init_closure_function_object(js, closure, func_val, module_ctx);
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
-  
-  if (eval_env != js->global && is_object_type(closure->func_obj)) {
-    js_set_slot_wb(js, closure->func_obj, SLOT_EVAL_ENV, eval_env);
-    closure->call_flags |= SV_CALL_HAS_EVAL_ENV;
-  }
-  
+  sv_closure_finish_init(
+    js, closure, func_val, frame->callee, NULL, 0,
+    eval_env, eval_env != js->global
+  );
+
   return js_mkundef();
 }
 

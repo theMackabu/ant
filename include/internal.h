@@ -63,16 +63,46 @@ static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
-static constexpr int JS_ERR_NO_STACK       = 1 << 8;
-static constexpr int ROPE_MAX_DEPTH        = 4096;
-static constexpr int MAX_STRINGIFY_DEPTH   = 64;
-static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
-static constexpr int MAX_MULTIREF_OBJS     = 128;
-static constexpr int MAX_DENSE_INITIAL_CAP = 8;
+static constexpr int JS_ERR_NO_STACK          = 1 << 8;
+static constexpr int MAX_STRINGIFY_DEPTH      = 64;
+static constexpr int MAX_PROTO_CHAIN_DEPTH    = 256;
+static constexpr int MAX_MULTIREF_OBJS        = 128;
+static constexpr int MAX_DENSE_INITIAL_CAP    = 8;
+static constexpr int STR_SHORT_CONS_THRESHOLD = 13;
+
+static inline bool ant_value_stack_push_with_spill(
+  ant_value_t **stack, size_t *sp, size_t *cap,
+  ant_value_t *local, ant_value_t value
+) {
+  if (*sp == *cap) {
+    size_t next_cap = *cap * 2u;
+    
+    ant_value_t *next = *stack == local
+      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
+      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
+      
+    if (!next) return false;
+    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
+    
+    *stack = next;
+    *cap = next_cap;
+  }
+  
+  (*stack)[(*sp)++] = value;
+  return true;
+}
 
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,
+  STR_META_VALID_SHIFT = 58,
   STR_BUILDER_TAIL_CAP = 256,
+};
+
+enum {
+  STR_UTF_UNKNOWN = 0,
+  STR_UTF_VALID = 1,
+  STR_UTF_INVALID = 2,
+  STR_UTF_INVALID_SAME_LENGTH = 3,
 };
 
 enum: uint64_t {
@@ -82,11 +112,12 @@ enum: uint64_t {
   STR_HEAP_TAG_BUILDER = 0x2,
 };
 
-enum: uint64_t {
-  STR_META_UTF16_MASK   = (UINT64_C(1) << STR_META_ASCII_SHIFT) - 1,
-  STR_META_ASCII_MASK   = ~STR_META_UTF16_MASK,
-  STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK,
-};
+static constexpr uint64_t STR_META_FIELD_MASK   = 0x3;
+static constexpr uint64_t STR_META_UTF16_MASK   = (UINT64_C(1) << STR_META_ASCII_SHIFT) - 1;
+static constexpr uint64_t STR_META_ASCII_MASK   = STR_META_FIELD_MASK << STR_META_ASCII_SHIFT;
+static constexpr uint64_t STR_META_VALID_MASK   = STR_META_FIELD_MASK << STR_META_VALID_SHIFT;
+static constexpr uint64_t STR_META_STATE_MASK   = ~STR_META_UTF16_MASK;
+static constexpr uint64_t STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK;
 
 #define T_FLAG_FIND(t) (1u << (t))
 #define T_MASK_HOLD ()
@@ -182,10 +213,18 @@ struct ant_isolate_t {
   ant_object_t *permanent_objects;
   ant_process_state_t *process_state;
   ant_events_state_t *events_state;
+  ant_regex_state_t *regex_state;
 
   ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+
+  uint32_t next_ic_object_identity;
+  uint32_t prototype_write_epoch;
+
+  ant_shape_t ***ic_shape_ref_slots;
+  size_t ic_shape_ref_len;
+  size_t ic_shape_ref_cap;
   
   ant_value_t **c_roots;
   size_t c_root_count;
@@ -219,6 +258,8 @@ struct ant_isolate_t {
     const char *length;
     const char *buffer;
     const char *prototype;
+    const char *exec;
+    const char *replace;
     const char *constructor;
     const char *name;
     const char *message;
@@ -239,14 +280,23 @@ struct ant_isolate_t {
     void *main_base;
     void *main_lo;
     size_t limit;
+    void *floor;
   } cstk;
 
+  // TODO: rename to uppercase
   struct {
     uint64_t counter;
     struct sym_registry_entry *registry;
 
     ant_value_t object_proto;
     ant_value_t array_proto;
+    ant_value_t function_proto;
+    ant_value_t string_proto;
+    ant_value_t number_proto;
+    ant_value_t boolean_proto;
+    ant_value_t promise_proto;
+    ant_value_t bigint_proto;
+    ant_value_t symbol_proto;
     ant_value_t array_values_fn;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
@@ -288,6 +338,10 @@ struct ant_isolate_t {
   
   size_t gc_last_live;
   size_t gc_pool_alloc;
+  size_t gc_closure_alloc;
+  size_t gc_closure_at_minor;
+  size_t gc_closure_wm_at_major;
+  size_t gc_closure_wm_minor_tried;
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;
@@ -310,9 +364,26 @@ struct ant_isolate_t {
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;
-  
   struct sv_upvalue **remembered_upvalues;
+
+  size_t remembered_closure_len;
+  size_t remembered_closure_cap;
+  struct sv_closure **remembered_closures;
+
+  struct sv_closure **young_closures;
+  size_t young_closure_len;
+  size_t young_closure_cap;
+  
+  struct sv_upvalue **young_upvalues;
+  size_t young_upvalue_len;
+  size_t young_upvalue_cap;
+  
+  size_t young_closure_trigger;
+  size_t gc_closure_promoted_since_major;
+
   bool gc_remember_overflow;
+  bool gc_objects_running;
+  bool gc_use_nursery_major_floor;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
@@ -344,15 +415,11 @@ struct ant_isolate_t {
   } cfunc_name_cache;
 
   struct {
-    ant_object_t *function_proto_obj;
     ant_object_t *with_no_unscopables_base;
     ant_object_t *with_no_unscopables_proto;
-
     void *with_no_unscopables_base_shape;
     void *with_no_unscopables_proto_shape;
-
     uint32_t with_no_unscopables_epoch;
-    uint32_t function_proto_epoch;
   } runtime_cache;
 
   struct {
@@ -366,7 +433,38 @@ struct ant_isolate_t {
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;
+
+  struct {
+    ant_pool_t young;
+    ant_pool_t old;
+    
+    size_t young_alloc;
+    struct gc_rope_mark *marks;
+    
+    size_t mark_count;
+    size_t mark_cap;
+    
+    uint32_t mark_epoch;
+    bool minor_marking;
+    bool conservative_marking;
+    
+    ant_string_builder_t **remembered_builders;
+    size_t remembered_builder_len;
+    size_t remembered_builder_cap;
+  } rope_gc;
 };
+
+static inline void ant_prototype_write_epoch_bump(ant_t *js) {
+  if (++js->prototype_write_epoch == 0) {
+    ant_ic_epoch_bump();
+    js->prototype_write_epoch = 1;
+  }
+}
+
+static inline void ant_prototype_property_write_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
+  if (!js || !holder || !key) return;
+  if (key == js->intern.prototype) ant_prototype_write_epoch_bump(js);
+}
 
 enum {
   STR_ASCII_UNKNOWN = 0,
@@ -407,15 +505,17 @@ typedef struct ant_builder_chunk {
   ant_value_t value;
 } ant_builder_chunk_t;
 
-typedef struct {
+struct ant_string_builder {
   ant_offset_t len;
+  ant_value_t snapshot;
   ant_builder_chunk_t *head;
   ant_builder_chunk_t *chunk_tail;
   ant_value_t cached;
   uint16_t tail_len;
   uint8_t ascii_state;
+  uint8_t in_remember_set;
   char tail[STR_BUILDER_TAIL_CAP];
-} ant_string_builder_t;
+};
 
 typedef struct {
   const char *ptr;
@@ -455,8 +555,14 @@ static inline bool is_undefined(ant_value_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-static inline bool is_empty_slot(ant_value_t v) { 
-  return v == T_EMPTY; 
+static inline bool is_empty_slot(ant_value_t v) {
+  return v == T_EMPTY;
+}
+
+static inline void js_cstk_refresh_floor(ant_t *js) {
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit) 
+    ? (void *)(base - js->cstk.limit) : NULL;
 }
 
 static inline bool is_callable(ant_value_t v) {
@@ -561,7 +667,7 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
-size_t intern_length(const char *interned);
+const char *intern_find(const char *str, size_t len);
 
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
@@ -621,13 +727,19 @@ sv_func_t *js_compile_parsed_bytecode(
 bool is_proxy(ant_value_t obj);
 bool is_array_value(ant_value_t value);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
+bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
+bool utf8_validate_bytes(const char *str, size_t byte_len);
 
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   ant_t *js, const char *buf, size_t len,
   bool inherit_strict, ant_value_t this_val, ant_value_t eval_env
 );
 
+ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
+ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value);
+ant_value_t js_resolve_bound_target(ant_value_t value);
+ant_value_t js_resolve_bound_target_known_bound(ant_value_t value);
 ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
@@ -658,6 +770,14 @@ bool lookup_prop_meta(
   prop_meta_key_t key_kind, 
   const char *key, size_t klen,
   ant_offset_t sym_off, prop_meta_t *out
+);
+
+size_t intern_length(const char *interned);
+size_t utf8_export_length_slow(const char *str, size_t str_len);
+
+size_t utf8_export_into(
+  const char *str, size_t str_len, uint8_t *dst, 
+  size_t dst_len, size_t *out_read_units
 );
 
 static inline ant_module_t *js_active_tla_module_ctx(ant_t *js) {
@@ -787,6 +907,17 @@ static inline ant_value_t defalias(ant_t *js, ant_value_t obj, const char *name,
   );
 }
 
+static inline void js_set_global_builtin(
+  ant_t *js,
+  const char *name,
+  ant_value_t value
+) {
+  ant_value_t global = js->global;
+  size_t name_len = strlen(name);
+  js_set(js, global, name, value);
+  js_set_descriptor(js, global, name, name_len, JS_DESC_W | JS_DESC_C);
+}
+
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
 }
@@ -814,7 +945,19 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
 }
 
 static inline uint8_t str_flat_ascii_state(const ant_flat_string_t *flat) {
-  return flat ? (uint8_t)(flat->meta >> STR_META_ASCII_SHIFT) : STR_ASCII_UNKNOWN;
+  if (!flat) return STR_ASCII_UNKNOWN;
+  return (uint8_t)((flat->meta & STR_META_ASCII_MASK) >> STR_META_ASCII_SHIFT);
+}
+
+static inline uint8_t str_flat_utf_valid_state(const ant_flat_string_t *flat) {
+  if (!flat) return STR_UTF_UNKNOWN;
+  return (uint8_t)((flat->meta & STR_META_VALID_MASK) >> STR_META_VALID_SHIFT);
+}
+
+static inline void str_flat_set_utf_valid_state(ant_flat_string_t *flat, uint8_t state) {
+  if (!flat) return;
+  flat->meta = (flat->meta & ~STR_META_VALID_MASK) | (
+    ((uint64_t)state << STR_META_VALID_SHIFT) & STR_META_VALID_MASK);
 }
 
 static inline ant_offset_t str_flat_cached_utf16_len(const ant_flat_string_t *flat) {
@@ -828,7 +971,7 @@ static inline void str_flat_init_meta(ant_flat_string_t *flat, uint8_t ascii_sta
 
 static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {
   if (!flat) return;
-  flat->meta = (flat->meta & STR_META_ASCII_MASK) | (len & STR_META_UTF16_MASK);
+  flat->meta = (flat->meta & STR_META_STATE_MASK) | (len & STR_META_UTF16_MASK);
 }
 
 static inline void str_set_ascii_state(const char *str, uint8_t state) {
@@ -844,6 +987,31 @@ static inline bool str_is_ascii(const char *str) {
     str_flat_init_meta(flat, state);
   }
   return state == STR_ASCII_YES;
+}
+
+static inline bool str_is_valid_utf8(const char *str) {
+  if (str_is_ascii(str)) return true;
+
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  uint8_t state = str_flat_utf_valid_state(flat);
+  
+  if (state == STR_UTF_UNKNOWN) {
+    state = utf8_validate_bytes(flat->bytes, (size_t)flat->len) 
+      ? STR_UTF_VALID : STR_UTF_INVALID;
+    str_flat_set_utf_valid_state(flat, state);
+  }
+  
+  return state == STR_UTF_VALID;
+}
+
+static inline size_t utf8_export_length(const char *str, size_t str_len) {
+  if (str_len == 0) return 0;
+  
+  uint8_t state = str_flat_utf_valid_state(str_flat_from_bytes(str));
+  if (state == STR_UTF_VALID || state == STR_UTF_INVALID_SAME_LENGTH) return str_len;  
+  if (state == STR_UTF_UNKNOWN && str_is_ascii(str)) return str_len;
+  
+  return utf8_export_length_slow(str, str_len);
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

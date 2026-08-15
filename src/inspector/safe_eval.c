@@ -14,6 +14,61 @@ static bool inspector_ident_char(char c, bool first) {
   return c == '_' || c == '$' || isalpha(uc) || (!first && isdigit(uc));
 }
 
+static bool inspector_safe_get_prop(
+  ant_t *js,
+  ant_value_t obj,
+  const char *key,
+  size_t key_len,
+  ant_value_t *out
+) {
+  if (!js || !key || !out || memchr(key, '\0', key_len)) return false;
+
+  uint8_t type = vtype(obj);
+  if (type == T_STR) {
+    if (key_len == 6 && memcmp(key, "length", 6) == 0) {
+      *out = tov((double)str_utf16_len(js, obj));
+      return true;
+    }
+    obj = js_primitive_prototype(js, type);
+  } else if (type == T_CFUNC) {
+    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
+    if (vtype(promoted) == T_FUNC) {
+      obj = promoted;
+    } else {
+      if (
+        (key_len == 4 && memcmp(key, "name", 4) == 0) ||
+        (key_len == 6 && memcmp(key, "length", 6) == 0)
+      ) {
+        *out = js_getprop_fallback_len(js, obj, key, key_len);
+        return !is_err(*out);
+      }
+      obj = js_primitive_prototype(js, type);
+    }
+  } else if (!is_object_type(obj)) return false;
+
+  for (int depth = 0; is_object_type(obj) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
+    ant_object_t *ptr = js_obj_ptr(obj);
+    ant_value_t current = js_obj_from_ptr(ptr);
+    if (!ptr) return false;
+    if (is_proxy(current)) return false;
+
+    ant_value_t value = js_mkundef();
+    if (js_try_get_own_data_prop(js, current, key, key_len, &value)) {
+      *out = value;
+      return true;
+    }
+
+    prop_meta_t meta;
+    if (lookup_string_prop_meta(js, current, key, key_len, &meta))
+      return false;
+
+    if (ptr && ptr->exotic_ops && ptr->exotic_ops->getter) return false;
+    obj = js_get_proto(js, current);
+  }
+
+  return false;
+}
+
 bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out) {
   if (!js || !expr || !out) return false;
   while (expr_len > 0 && isspace((unsigned char)*expr)) {
@@ -41,11 +96,13 @@ bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_le
     if (
       first_part &&
       (strcmp(key, "globalThis") == 0 || strcmp(key, "global") == 0 || strcmp(key, "this") == 0)
-    ) {
-      cur = js_glob(js);
-    } else {
-      if (first_part) cur = js_get(js, js_glob(js), key);
-      else cur = is_object_type(cur) || vtype(cur) == T_CFUNC ? js_get(js, cur, key) : js_mkundef();
+    ) cur = js_glob(js); else {
+      ant_value_t next = js_mkundef();
+      if (!inspector_safe_get_prop(
+        js, first_part ? js_glob(js) : cur,
+        key, len, &next
+      )) return false;
+      cur = next;
     }
 
     first_part = false;
@@ -153,36 +210,6 @@ static bool inspector_value_to_key(
   *out_key = buf;
   *out_key_len = len;
   return true;
-}
-
-static bool inspector_safe_get_prop(
-  ant_t *js,
-  ant_value_t obj,
-  const char *key,
-  size_t key_len,
-  ant_value_t *out
-) {
-  if (!js || !key || !out || memchr(key, '\0', key_len)) return false;
-  if (!is_object_type(obj) && vtype(obj) != T_CFUNC && vtype(obj) != T_STR)
-    return false;
-
-  char stack_key[128];
-  char *heap_key = NULL;
-  const char *key_z = stack_key;
-  if (key_len + 1 <= sizeof(stack_key)) {
-    memcpy(stack_key, key, key_len);
-    stack_key[key_len] = '\0';
-  } else {
-    heap_key = malloc(key_len + 1);
-    if (!heap_key) return false;
-    memcpy(heap_key, key, key_len);
-    heap_key[key_len] = '\0';
-    key_z = heap_key;
-  }
-
-  *out = js_getprop_fallback(js, obj, key_z);
-  free(heap_key);
-  return !is_err(*out);
 }
 
 static bool inspector_safe_get_existing_prop(

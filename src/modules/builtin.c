@@ -26,6 +26,7 @@
 #include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
+#include "modules/cjit.h"
 #include "modules/server.h"
 #include "modules/symbol.h"
 
@@ -180,7 +181,7 @@ static ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_newobj(js);
   
-  ant_pool_stats_t rope_s = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t rope_s = js_rope_pool_stats(js);
   ant_pool_stats_t sym_s = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t bigint_s = js_class_pool_stats(&js->pool.bigint);
   ant_string_pool_stats_t string_s = js_string_pool_stats(&js->pool.string);
@@ -478,6 +479,10 @@ void init_builtin_module(ant_t *js) {
   js_set(js, hl_fn, "render", js_mkfun(js_highlight_render));
   js_set(js, hl_fn, "tags", js_mkfun(js_highlight_tags));
   js_set(js, ant_obj, "highlight", hl_fn);
+
+  ant_value_t unsafe_obj = js_newobj(js);
+  init_cjit_module(js, unsafe_obj);
+  js_set(js, ant_obj, "unsafe", unsafe_obj);
 
   ant_value_t raw_obj = js_newobj(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, js_mkfun(js_raw_stack), JS_DESC_C);

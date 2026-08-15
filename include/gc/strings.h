@@ -4,8 +4,10 @@
 #include "types.h"
 #include <stdbool.h>
 
+uint64_t gc_strings_sweep_epoch(void);
+
 void gc_strings_begin(ant_t *js);
-void gc_strings_mark(ant_t *js, const void *ptr);
 void gc_strings_sweep(ant_t *js);
+void gc_strings_mark(ant_t *js, const void *ptr);
 
 #endif

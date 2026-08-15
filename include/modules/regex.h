@@ -17,29 +17,19 @@ typedef struct {
 } regex_match_args_t;
 
 void init_regex_module(ant_t *js);
-void cleanup_regex_module(void);
-void gc_sweep_regex_cache(void);
-void regexp_note_exec_property_write(void);
-void regexp_note_replace_property_write(void);
+void cleanup_regex_module(ant_t *js);
+void gc_age_regex_cache(ant_t *js, bool minor);
+void regexp_note_exec_property_write(ant_t *js);
+void regexp_note_replace_property_write(ant_t *js);
 
-static inline void regexp_note_property_write(
-  const char *name, size_t len
-) {
-  if (!name) return;
-  if (len == 4 && memcmp(name, "exec", 4) == 0)
-    regexp_note_exec_property_write();
-  else if (len == 7 && memcmp(name, "replace", 7) == 0)
-    regexp_note_replace_property_write();
-}
+ant_value_t is_regexp_like(ant_t *js, ant_value_t value);
+ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args);
+ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_name);
 
 size_t js_to_pcre2_pattern(
   const char *src, size_t src_len,
   char *dst, size_t dst_size, bool v_flag
 );
-
-ant_value_t is_regexp_like(ant_t *js, ant_value_t value);
-ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args);
-ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_name);
 
 bool regexp_exec_truthy_try_fast(
   ant_t *js,
@@ -63,5 +53,11 @@ ant_value_t regexp_literal_replace_call(
   ant_value_t flags,
   ant_value_t replacement
 );
+
+static inline void regexp_note_property_write(ant_t *js, const char *name, size_t len) {
+  if (!name) return;
+  if (len == 4 && name[0] == 'e' && memcmp(name, "exec", 4) == 0) regexp_note_exec_property_write(js);
+  else if (len == 7 && name[0] == 'r' && memcmp(name, "replace", 7) == 0) regexp_note_replace_property_write(js);
+}
 
 #endif

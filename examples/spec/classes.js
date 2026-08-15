@@ -325,4 +325,103 @@ test('getter', temp.fahrenheit, 32);
 temp.fahrenheit = 212;
 test('setter', Math.round(temp.fahrenheit), 212);
 
+function outerBinding(a, b) {
+  return 'fn:' + a + b;
+}
+
+const Boxed = class outerBinding {
+  constructor(value) {
+    this.value = value;
+  }
+  clone() {
+    return new outerBinding(this.value);
+  }
+};
+
+test('class expression name does not leak', typeof outerBinding === 'function' && outerBinding !== Boxed, true);
+test('outer binding still callable', outerBinding(1, 2), 'fn:12');
+test('class expression inner name resolves', new Boxed(5).clone() instanceof Boxed, true);
+
+let shadowed = 'untouched';
+const Shadow = class shadowed {};
+test('class expression name leaves let binding alone', shadowed, 'untouched');
+test('class expression still constructs', typeof Shadow, 'function');
+
+function classCallError(call) {
+  try {
+    call();
+    return 'no error';
+  } catch (error) {
+    return error.name + ': ' + error.message;
+  }
+}
+
+class ExplicitClassCall {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
+test(
+  'explicit class constructor requires new',
+  classCallError(() => ExplicitClassCall(1)),
+  "TypeError: Class constructor cannot be invoked without 'new'"
+);
+test('explicit class constructor still constructs', new ExplicitClassCall(2).value, 2);
+
+class FieldClassCall {
+  value = 3;
+}
+test(
+  'synthesized field constructor requires new',
+  classCallError(() => FieldClassCall()),
+  "TypeError: Class constructor cannot be invoked without 'new'"
+);
+
+class ArrowSuperBase {
+  constructor(value) {
+    this.value = value;
+    this.seenNewTarget = new.target;
+  }
+}
+
+class ArrowSuperDerived extends ArrowSuperBase {
+  constructor(value) {
+    const callSuper = () => super(value);
+    test('arrow super returns lexical this', callSuper(), this);
+  }
+}
+
+const arrowSuper = new ArrowSuperDerived(41);
+test('arrow super forwards arguments', arrowSuper.value, 41);
+test('arrow super preserves new.target', arrowSuper.seenNewTarget, ArrowSuperDerived);
+
+class SpreadArrowSuperDerived extends ArrowSuperBase {
+  constructor(...args) {
+    (() => super(...args))();
+  }
+}
+
+const spreadArrowSuper = new SpreadArrowSuperDerived(42);
+test('spread arrow super forwards arguments', spreadArrowSuper.value, 42);
+test(
+  'spread arrow super preserves new.target',
+  spreadArrowSuper.seenNewTarget,
+  SpreadArrowSuperDerived
+);
+
+class NestedArrowSuperDerived extends ArrowSuperBase {
+  constructor(value) {
+    (() => () => super(value))()();
+  }
+}
+
+const nestedArrowSuper = new NestedArrowSuperDerived(43);
+test('nested arrow super forwards arguments', nestedArrowSuper.value, 43);
+test(
+  'nested arrow super preserves new.target',
+  nestedArrowSuper.seenNewTarget,
+  NestedArrowSuperDerived
+);
+
 summary();

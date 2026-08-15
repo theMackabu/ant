@@ -107,6 +107,8 @@ enum {
   FN_CLASS_BODY       = 1 << 15,
   FN_MODULE_SYNTAX    = 1 << 16,
   FN_DERIVED_CTOR     = 1 << 17,
+  FN_CLASS_DECL       = 1 << 18,
+  FN_CLASS_CTOR       = 1 << 19,
 };
 
 enum {

@@ -38,10 +38,13 @@ typedef struct websocket_state_s {
   size_t fragment_cap;
   size_t max_payload_len;
   ant_ws_opcode_t fragment_opcode;
+  uint16_t client_close_code;
   uint8_t ready_state;
   bool is_client : 1;
   bool close_emitted : 1;
   bool active : 1;
+  bool client_close_started : 1;
+  bool client_close_was_clean : 1;
   bool fragmenting : 1;
   bool fragment_compressed : 1;
   bool per_message_deflate : 1;
@@ -327,7 +330,6 @@ static void websocket_emit_close(websocket_state_t *ws, uint16_t code, const cha
   ws->close_emitted = true;
   ws->ready_state = WS_CLOSED;
   websocket_fragment_clear(ws);
-  websocket_remove_active(ws);
   websocket_sync_state(ws);
 
   ant_t *js = ws->js;
@@ -340,7 +342,16 @@ static void websocket_emit_close(websocket_state_t *ws, uint16_t code, const cha
 
 static void websocket_client_close_cb(uv_handle_t *handle) {
   websocket_state_t *ws = websocket_from_client((tlsuv_websocket_t *)handle);
-  websocket_emit_close(ws, 1000, "", true);
+  websocket_emit_close(ws, ws->client_close_code, "", ws->client_close_was_clean);
+  websocket_remove_active(ws);
+}
+
+static void websocket_close_client(websocket_state_t *ws, uint16_t code, bool was_clean) {
+  if (!ws || ws->client_close_started) return;
+  ws->client_close_started = true;
+  ws->client_close_code = code;
+  ws->client_close_was_clean = was_clean;
+  tlsuv_websocket_close(&ws->client, websocket_client_close_cb);
 }
 
 static void websocket_client_connect_cb(uv_connect_t *req, int status) {
@@ -365,7 +376,7 @@ static void websocket_client_connect_cb(uv_connect_t *req, int status) {
   
   websocket_sync_state(ws);
   websocket_emit_simple(ws, "error");
-  websocket_emit_close(ws, 1006, "", false);
+  websocket_close_client(ws, 1006, false);
 }
 
 static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
@@ -383,7 +394,9 @@ static void websocket_client_read_cb(uv_stream_t *handle, ssize_t nread, const u
       ant_inspector_websocket_error(ws->inspector_request_id, uv_strerror((int)nread));
       websocket_emit_simple(ws, "error");
     }
-    websocket_emit_close(ws, nread == UV_EOF ? 1000 : 1006, "", nread == UV_EOF);
+    ws->ready_state = WS_CLOSING;
+    websocket_sync_state(ws);
+    websocket_close_client(ws, nread == UV_EOF ? 1000 : 1006, nread == UV_EOF);
   }
 }
 
@@ -486,6 +499,7 @@ static ant_value_t js_websocket_ctor(ant_t *js, ant_value_t *args, int nargs) {
     ws->ready_state = WS_CLOSED;
     ant_inspector_websocket_error(ws->inspector_request_id, "WebSocket initialization failed");
     websocket_sync_state(ws);
+    websocket_remove_active(ws);
     return obj;
   }
 
@@ -500,7 +514,7 @@ static ant_value_t js_websocket_ctor(ant_t *js, ant_value_t *args, int nargs) {
     
     websocket_sync_state(ws);
     websocket_emit_simple(ws, "error");
-    websocket_emit_close(ws, 1006, "", false);
+    websocket_close_client(ws, 1006, false);
   }
 
   return obj;
@@ -584,7 +598,7 @@ static ant_value_t js_websocket_close(ant_t *js, ant_value_t *args, int nargs) {
   ws->ready_state = WS_CLOSING;
   websocket_sync_state(ws);
   if (ws->is_client) {
-    tlsuv_websocket_close(&ws->client, websocket_client_close_cb);
+    websocket_close_client(ws, 1000, true);
   } else if (ws->server_conn) {
     size_t frame_len = 0;
     uint8_t *frame = ant_ws_encode_close_frame(code, reason, false, &frame_len);
@@ -788,10 +802,10 @@ void ant_websocket_server_on_close(ant_t *js, ant_value_t socket_obj) {
   if (!ws) return;
   ws->server_conn = NULL;
   websocket_emit_close(ws, 1000, "", true);
+  websocket_remove_active(ws);
 }
 
 void init_websocket_module(ant_t *js) {
-  ant_value_t global = js_glob(js);
   ant_value_t event_proto = js_get_ctor_proto(js, "Event", 5);
   ant_value_t eventtarget_proto = js_get_ctor_proto(js, "EventTarget", 11);
 
@@ -809,19 +823,19 @@ void init_websocket_module(ant_t *js) {
   js_set(js, js->builtins.websocket_ctor, "OPEN", js_mknum(WS_OPEN));
   js_set(js, js->builtins.websocket_ctor, "CLOSING", js_mknum(WS_CLOSING));
   js_set(js, js->builtins.websocket_ctor, "CLOSED", js_mknum(WS_CLOSED));
-  js_set(js, global, "WebSocket", js->builtins.websocket_ctor);
+  js_set_global_builtin(js, "WebSocket", js->builtins.websocket_ctor);
 
   js->builtins.message_event_proto = js_mkobj(js);
   if (is_object_type(event_proto)) js_set_proto_init(js->builtins.message_event_proto, event_proto);
   js_set_sym(js, js->builtins.message_event_proto, get_toStringTag_sym(), js_mkstr(js, "MessageEvent", 12));
   ant_value_t message_ctor = js_make_ctor(js, js_message_event_ctor, js->builtins.message_event_proto, "MessageEvent", 12);
-  js_set(js, global, "MessageEvent", message_ctor);
+  js_set_global_builtin(js, "MessageEvent", message_ctor);
 
   js->builtins.close_event_proto = js_mkobj(js);
   if (is_object_type(event_proto)) js_set_proto_init(js->builtins.close_event_proto, event_proto);
   js_set_sym(js, js->builtins.close_event_proto, get_toStringTag_sym(), js_mkstr(js, "CloseEvent", 10));
   ant_value_t close_ctor = js_make_ctor(js, js_close_event_ctor, js->builtins.close_event_proto, "CloseEvent", 10);
-  js_set(js, global, "CloseEvent", close_ctor);
+  js_set_global_builtin(js, "CloseEvent", close_ctor);
 }
 
 void gc_mark_websocket(ant_t *js, gc_mark_fn mark) {

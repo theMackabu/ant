@@ -13,6 +13,16 @@ function exerciseLocalBuilder(piece, unitsPerPiece) {
   assert(value.length === 8_000 * unitsPerPiece, 'final local builder length changed');
 }
 
+function exerciseSingleByteTailFastPath() {
+  let value = '';
+  for (let i = 0; i < 20_000; i++) {
+    value += 'x';
+    assert(value.length === i + 1, 'single-byte builder length changed');
+  }
+  assert(value.slice(255, 258) === 'xxx', 'single-byte tail boundary changed');
+  assert(value.slice(-3) === 'xxx', 'single-byte builder suffix changed');
+}
+
 function exercisePropertyRope(piece, unitsPerPiece) {
   const holder = { value: '' };
   let snapshot = '';
@@ -49,6 +59,7 @@ function exerciseLatePropertyRope(piece, unitsPerPiece) {
 
 exerciseLocalBuilder('x'.repeat(200), 200);
 exerciseLocalBuilder('\u{1f600}'.repeat(100), 200);
+exerciseSingleByteTailFastPath();
 exercisePropertyRope('x'.repeat(200), 200);
 exercisePropertyRope('\u{1f600}'.repeat(100), 200);
 exerciseLateLocalBuilder('x'.repeat(200), 200);

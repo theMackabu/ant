@@ -872,8 +872,8 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
   repl_decl_registry_t decl_registry = {0};
   g_repl_decl_registry = &decl_registry;
 
-  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
+  js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
+  js_set_global_builtin(js, "__filename", js_mkstr(js, "[repl]", 6));
 
   js_set(js, js_glob(js), "_", js_mkundef());
   js_set(js, js_glob(js), "_error", js_mkundef());

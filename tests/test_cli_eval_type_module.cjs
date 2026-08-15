@@ -22,7 +22,7 @@ assert.notEqual(defaultResult.status, 0, 'default -e should reject static import
 assert.match(defaultResult.stderr, /Cannot use import\/export syntax (?:outside a module|in CommonJS)/);
 
 const moduleResult = spawnSync(process.execPath, [
-  '--type=module',
+  '--input-type=module',
   '-e',
   "import { spawnSync } from 'node:child_process'; console.log(typeof spawnSync);",
 ], { encoding: 'utf8' });
@@ -33,7 +33,7 @@ assert.equal(moduleResult.status, 0, moduleResult.stderr);
 assert.equal(moduleResult.stdout.trim(), 'function');
 
 const exportResult = spawnSync(process.execPath, [
-  '--type=module',
+  '--input-type=module',
   '-e',
   "export const value = 42; console.log('export-ok');",
 ], { encoding: 'utf8' });

@@ -12,6 +12,7 @@
 #include "descriptors.h"
 #include "silver/engine.h"
 
+#include "gc.h"
 #include "gc/modules.h"
 #include "modules/abort.h"
 #include "modules/events.h"
@@ -105,6 +106,11 @@ struct ant_events_state {
   EventTypeList global_events;
 };
 // --- END: TO BE MIGRATED ---
+
+static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stored) {
+  if (!is_object_type(owner)) return;
+  gc_write_barrier(js, js_obj_ptr(owner), stored);
+}
 
 static EventTypeList *global_events_list(ant_t *js) {
   if (!js->events_state) js->events_state = ant_calloc(sizeof(*js->events_state));
@@ -851,8 +857,10 @@ static ant_value_t add_listener_to(ant_t *js, ant_value_t *args, int nargs, Even
     if (!cold) return js_mkerr(js, "out of memory");
     cold->signal = signal;
     cold->capture = capture;
+    emitter_write_barrier(js, evt->owner->target, signal);
   }
   utarray_push_back(evt->listeners, &entry);
+  emitter_write_barrier(js, evt->owner->target, cb);
   return js_mkundef();
 }
 
@@ -1008,6 +1016,7 @@ static bool eventemitter_add_listener_impl(
     cold->raw_callback = js_heavy_mkfun(js, js_eventemitter_once_wrapper, listener);
     if (is_callable(cold->raw_callback))
       js_set(js, cold->raw_callback, "listener", listener);
+    emitter_write_barrier(js, target, cold->raw_callback);
   }
 
   if (!prepend || utarray_len(evt->listeners) == 0) utarray_push_back(evt->listeners, &entry);
@@ -1022,7 +1031,9 @@ static bool eventemitter_add_listener_impl(
     utarray_push_back(evt->listeners, &entry);
   } else utarray_insert(evt->listeners, &entry, 0);
 
+  emitter_write_barrier(js, target, listener);
   int max_listeners = eventemitter_get_max_listeners_impl(target);
+  
   unsigned int live = evt_live_count(evt);
   if (
     max_listeners > 0 &&
@@ -1030,22 +1041,19 @@ static bool eventemitter_add_listener_impl(
     (int)live > max_listeners
   ) {
     evt->warned_max_listeners = true;
-    if (vtype(key) == T_STR) {
-      fprintf(
-        stderr,
-        "Warning: Possible EventEmitter memory leak detected. "
-        "%u %s listeners added. Use emitter.setMaxListeners() to increase limit.\n",
-        live,
-        js_str(js, key)
-      );
-    } else {
-      fprintf(
-        stderr,
-        "Warning: Possible EventEmitter memory leak detected. "
-        "%u listeners added for a Symbol event. Use emitter.setMaxListeners() to increase limit.\n",
-        live
-      );
-    }
+    if (vtype(key) == T_STR) fprintf(
+      stderr,
+      "Warning: Possible EventEmitter memory leak detected. "
+      "%u %s listeners added. Use emitter.setMaxListeners() to increase limit.\n",
+      live, js_str(js, key)
+    );
+    else fprintf(
+      stderr,
+      "Warning: Possible EventEmitter memory leak detected. "
+      "%u listeners added for a Symbol event. Use emitter.setMaxListeners() to increase limit.\n",
+      live
+    );
+    
   }
 
   evt_notify_listener_change(js, evt);
@@ -1912,8 +1920,7 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   if (js->builtins.eventemitter_proto) return js->builtins.eventemitter_proto;
 
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t eventemitter_ctor = js_mkobj(js);
   ant_value_t eventemitter_proto = js_mkobj(js);
@@ -1953,9 +1960,10 @@ ant_value_t eventemitter_prototype(ant_t *js) {
 
 void init_events_module(ant_t *js) {
   ant_value_t global = js_glob(js);
+  
   js->builtins.isTrusted_getter = js_mkfun(js_event_get_isTrusted);
-
   js->builtins.event_proto = js_mkobj(js);
+  
   js_set_sym(js, js->builtins.event_proto, get_toStringTag_sym(), js_mkstr(js, "Event", 5));
   js_set(js, js->builtins.event_proto, "preventDefault",          js_mkfun(js_event_preventDefault));
   js_set(js, js->builtins.event_proto, "stopPropagation",         js_mkfun(js_event_stopPropagation));
@@ -1972,32 +1980,31 @@ void init_events_module(ant_t *js) {
   js_set(js, event_fn, "CAPTURING_PHASE", js_mknum(1));
   js_set(js, event_fn, "AT_TARGET",       js_mknum(2));
   js_set(js, event_fn, "BUBBLING_PHASE",  js_mknum(3));
-  js_set(js, global, "Event", event_fn);
+  js_set_global_builtin(js, "Event", event_fn);
 
   js->builtins.customevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.customevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.customevent_proto, get_toStringTag_sym(), js_mkstr(js, "CustomEvent", 11));
 
   ant_value_t customevent_fn = js_make_ctor(js, js_customevent_ctor, js->builtins.customevent_proto, "CustomEvent", 11);
-  js_set(js, global, "CustomEvent", customevent_fn);
+  js_set_global_builtin(js, "CustomEvent", customevent_fn);
 
   js->builtins.errorevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.errorevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.errorevent_proto, get_toStringTag_sym(), js_mkstr(js, "ErrorEvent", 10));
 
   ant_value_t errorevent_fn = js_make_ctor(js, js_errorevent_ctor, js->builtins.errorevent_proto, "ErrorEvent", 10);
-  js_set(js, global, "ErrorEvent", errorevent_fn);
+  js_set_global_builtin(js, "ErrorEvent", errorevent_fn);
 
   js->builtins.promiserejectionevent_proto = js_mkobj(js);
   js_set_proto_init(js->builtins.promiserejectionevent_proto, js->builtins.event_proto);
   js_set_sym(js, js->builtins.promiserejectionevent_proto, get_toStringTag_sym(), js_mkstr(js, "PromiseRejectionEvent", 21));
 
   ant_value_t pre_fn = js_make_ctor(js, js_promiserejectionevent_ctor, js->builtins.promiserejectionevent_proto, "PromiseRejectionEvent", 21);
-  js_set(js, global, "PromiseRejectionEvent", pre_fn);
+  js_set_global_builtin(js, "PromiseRejectionEvent", pre_fn);
 
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(global, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t eventtarget_proto = js_mkobj(js);
   js->builtins.eventtarget_proto = eventtarget_proto;
@@ -2020,7 +2027,7 @@ void init_events_module(ant_t *js) {
   js_set(js, global, "addEventListener",    js_mkfun(js_add_event_listener));
   js_set(js, global, "removeEventListener", js_mkfun(js_remove_event_listener));
   js_set(js, global, "dispatchEvent",       js_mkfun(js_dispatch_event));
-  js_set(js, global, "EventTarget",         eventtarget_fn);
+  js_set_global_builtin(js, "EventTarget", eventtarget_fn);
 }
 
 static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList *list) {

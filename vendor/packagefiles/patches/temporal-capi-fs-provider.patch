@@ -1,0 +1,60 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index b5d5945..433249f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,6 +35,7 @@ repository = "https://github.com/boa-dev/temporal"
+ all-features = true
+ 
+ [features]
++fs_tzdb = ["timezone_provider/tzif"]
+ compiled_data = ["temporal_rs/compiled_data"]
+ zoneinfo64 = [
+     "dep:zoneinfo64",
+diff --git a/src/provider.rs b/src/provider.rs
+index 663caf6..238f84a 100644
+--- a/src/provider.rs
++++ b/src/provider.rs
+@@ -1,4 +1,6 @@
+ use core::marker::PhantomData;
++#[cfg(target_family = "unix")]
++use timezone_provider::tzif::FsTzdbProvider;
+ #[cfg(feature = "zoneinfo64")]
+ use timezone_provider::zoneinfo64::ZoneInfo64TzdbProvider;
+ 
+@@ -7,6 +9,11 @@ use timezone_provider::zoneinfo64::ZoneInfo64TzdbProvider;
+ macro_rules! with_provider(
+     ($provider:ident, |$p:ident| $code:expr) => {
+         match $provider.0 {
++            #[cfg(target_family = "unix")]
++            crate::provider::ProviderInner::Fs(ref fs) => {
++                let $p = fs;
++                $code
++            }
+             #[cfg(feature = "zoneinfo64")]
+             crate::provider::ProviderInner::ZoneInfo64(ref zi) => {
+                 let $p = zi;
+@@ -48,6 +56,14 @@ pub mod ffi {
+     pub struct Provider<'a>(pub(crate) ProviderInner<'a>);
+ 
+     impl<'a> Provider<'a> {
++        #[cfg(target_family = "unix")]
++        /// Construct a provider backed by the host's IANA TZif files.
++        pub fn new_fs() -> Box<Provider<'static>> {
++            Box::new(Provider(ProviderInner::Fs(
++                super::FsTzdbProvider::default(),
++            )))
++        }
++
+         #[cfg(feature = "zoneinfo64")]
+         /// Construct a provider backed by a zoneinfo64.res file
+         ///
+@@ -84,6 +100,9 @@ pub mod ffi {
+ }
+ 
+ pub(crate) enum ProviderInner<'a> {
++    #[cfg(target_family = "unix")]
++    Fs(FsTzdbProvider),
++
+     #[cfg(feature = "zoneinfo64")]
+     ZoneInfo64(ZoneInfo64TzdbProvider<'a>),
+ 

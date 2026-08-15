@@ -24,6 +24,11 @@ boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
 boringssl_opts.append_compile_args('c', '-g0')
 boringssl_opts.append_compile_args('cpp', '-g0')
 
+# drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
+# P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
+boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
+boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
+
 if host_machine.system() == 'windows'
   boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
   boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
@@ -90,6 +95,7 @@ subprojects_build = meson.project_build_root() / 'vendor'
 
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
 libuv_dep = subproject('libuv').get_variable('libuv_dep')
+libuv_lib = subproject('libuv').get_variable('libuv')
 
 zlib_ng_sub = subproject('zlib-ng', default_options: [
   'b_lto=false',
@@ -277,3 +283,5 @@ endif
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep, hypervisor_dep]
 endif
+
+subdir('temporal')

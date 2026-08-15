@@ -1044,7 +1044,6 @@ static ant_value_t js_atomics_pause(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 void init_atomics_module(ant_t *js) {
-  ant_value_t glob = js_glob(js);
   ant_value_t atomics = js_mkobj(js);
   
   js_set(js, atomics, "add", js_mkfun(js_atomics_add));
@@ -1063,7 +1062,7 @@ void init_atomics_module(ant_t *js) {
   js_set(js, atomics, "xor", js_mkfun(js_atomics_xor));
   
   js_set_sym(js, atomics, get_toStringTag_sym(), js_mkstr(js, "Atomics", 7));
-  js_set(js, glob, "Atomics", atomics);
+  js_set_global_builtin(js, "Atomics", atomics);
 }
 
 void gc_mark_atomics(ant_t *js, gc_mark_fn mark) {

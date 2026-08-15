@@ -1,7 +1,7 @@
 # Active Plans
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-08-14
 Owner: theMackabu
 
 Store in-progress execution plans here.
@@ -18,9 +18,10 @@ Store in-progress execution plans here.
 - [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
+- [PCRE2 JIT Compiler Size Optimization](pcre2-jit-size-optimization.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
+- [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
 - [Stream Property Surface](stream-property-surface.md)
-- [UTF-16 Random-Access Index (fable carry-back)](utf16-random-access-index.md)
 - [WICG Observable Migration](wicg-observable.md)
 
 Recommended sections:
