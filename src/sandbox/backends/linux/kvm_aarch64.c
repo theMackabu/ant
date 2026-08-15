@@ -654,28 +654,11 @@ static int ant_kvm_raise_spi(ant_hvf_vm_t *vm, uint32_t intid) {
   return rc != 0 ? rc : rc2;
 }
 
-static int ant_kvm_raise_ppi(ant_hvf_vm_t *vm, uint32_t ppi) {
-  if (ppi > KVM_ARM_IRQ_NUM_MASK) return -EINVAL;
-  uint32_t irq = (KVM_ARM_IRQ_TYPE_PPI << KVM_ARM_IRQ_TYPE_SHIFT) |
-                 (0u << KVM_ARM_IRQ_VCPU_SHIFT) |
-                 ((ppi & KVM_ARM_IRQ_NUM_MASK) << KVM_ARM_IRQ_NUM_SHIFT);
-  struct kvm_irq_level level = {
-    .irq = irq,
-    .level = 1,
-  };
-  int rc = ioctl(vm->vm_fd, KVM_IRQ_LINE, &level) == 0 ? 0 : -errno;
-  level.level = 0;
-  int rc2 = ioctl(vm->vm_fd, KVM_IRQ_LINE, &level) == 0 ? 0 : -errno;
-  return rc != 0 ? rc : rc2;
-}
-
 int ant_hvf_send_msi(ant_hvf_vm_t *vm, uint64_t addr, uint32_t data) {
-  (void)addr;
   return ant_kvm_raise_spi(vm, data);
 }
 
 static bool ant_kvm_gic_msi_write(ant_hvf_vm_t *vm, uint64_t addr, unsigned size, uint64_t value) {
-  (void)size;
   uint64_t off = addr - ANT_HVF_GIC_MSI_BASE;
   if ((off & ~3ull) != ANT_KVM_AARCH64_GICM_SET_SPI_NSR) return true;
   if (!vm->gic_msi_enabled) return true;
