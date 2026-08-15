@@ -139,6 +139,8 @@ antStdenv.mkDerivation (finalAttrs: {
 
   env = {
     ANT_TEMPORAL_CARGO = lib.getExe' rustToolchain "cargo";
+    CC = "${antStdenv.cc}/bin/cc";
+    CXX = "${antStdenv.cc}/bin/c++";
     NIX_CFLAGS_COMPILE = optArgs;
   };
 
