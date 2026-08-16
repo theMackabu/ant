@@ -50,8 +50,36 @@ try {
 
   assert.strictEqual(await $`false && echo bad; true && echo and; false || echo or`.text(), 'and\nor\n');
   assert.strictEqual(await $`printf abc | wc -c`.text(), '3\n');
+  assert.strictEqual(await $`echo continued | \
+    cat`.text(), 'continued\n');
   assert.strictEqual(await $`seq 1 10000 | wc -l`.text(), '10000\n');
   assert.strictEqual(await $`yes | head -1`.text(), 'y\n');
+
+  await expectShellRejection(
+    () => $`${''}`,
+    /executable cannot be empty/,
+    TypeError
+  );
+  for (const [invoke, pattern] of [
+    [() => $`while true; do echo bad; done`, /compound command.*while/i],
+    [() => $`name=value echo bad`, /variable assignment/i],
+    [() => $`echo "$HOME"`, /parameter expansion/i],
+    [() => $`echo $((1 + 2))`, /arithmetic expansion/i],
+    [() => $`echo $(pwd)`, /command substitution/i],
+  ]) {
+    await expectShellRejection(invoke, pattern, SyntaxError);
+  }
+  assert.strictEqual(await $`echo '$HOME'`.text(), '$HOME\n');
+  assert.strictEqual(await $`echo \$HOME`.text(), '$HOME\n');
+  assert.strictEqual(await $`echo name=value`.text(), 'name=value\n');
+
+  const unsupportedCompoundPath = path.join(tmpDir, 'unsupported-compound.txt');
+  await expectShellRejection(
+    () => $`echo must-not-run > ${unsupportedCompoundPath}; while true; do echo bad; done`,
+    /compound command.*while/i,
+    SyntaxError
+  );
+  assert.strictEqual(fs.existsSync(unsupportedCompoundPath), false);
 
   const cwdResult = await $`pwd; cd ${tmpDir}; pwd`;
   const cwdLines = cwdResult.stdout.trim().split('\n');

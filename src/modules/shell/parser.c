@@ -44,6 +44,8 @@ typedef enum {
 typedef struct {
   sh_token_kind_t kind;
   sh_word_t word;
+  bool keyword_eligible;
+  bool assignment_word;
 } sh_token_t;
 
 typedef struct {
@@ -202,12 +204,67 @@ static bool sh_take_matching_char(sh_input_t *input, unsigned char ch) {
   return true;
 }
 
+static bool sh_take_line_continuation(sh_input_t *input) {
+  sh_input_t saved = *input;
+  sh_input_event_t slash = sh_input_take(input);
+  sh_input_event_t newline = sh_input_take(input);
+  if (sh_event_is_char(slash, '\\') && sh_event_is_char(newline, '\n'))
+    return true;
+  *input = saved;
+  return false;
+}
+
+static bool sh_name_start(unsigned char ch) {
+  return ch == '_' || (ch >= 'a' && ch <= 'z') ||
+    (ch >= 'A' && ch <= 'Z');
+}
+
+static bool sh_name_continue(unsigned char ch) {
+  return sh_name_start(ch) || (ch >= '0' && ch <= '9');
+}
+
+static void sh_assignment_feed(
+  sh_token_t *token,
+  bool *candidate,
+  size_t *name_len,
+  unsigned char ch
+) {
+  if (token->assignment_word || !*candidate) return;
+  if (ch == '=') {
+    token->assignment_word = *name_len > 0;
+    *candidate = false;
+    return;
+  }
+  bool valid = *name_len == 0 ? sh_name_start(ch) : sh_name_continue(ch);
+  if (!valid) *candidate = false;
+  else (*name_len)++;
+}
+
+static const char *sh_dollar_expansion_error(const sh_input_t *input) {
+  sh_input_event_t next = sh_input_peek(input);
+  if (next.kind != SH_INPUT_CHAR) return NULL;
+  if (next.ch == '(') {
+    sh_input_t cursor = *input;
+    sh_input_take(&cursor);
+    return sh_event_is_char(sh_input_peek(&cursor), '(')
+      ? "arithmetic expansion is not implemented"
+      : "command substitution is not implemented";
+  }
+  if (next.ch == '{' || sh_name_start(next.ch) ||
+      (next.ch >= '0' && next.ch <= '9') ||
+      strchr("*@#?-$!", next.ch))
+    return "parameter expansion is not implemented";
+  return NULL;
+}
+
 static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
-  sh_token_t token = { .kind = SH_TOKEN_WORD };
+  sh_token_t token = { .kind = SH_TOKEN_WORD, .keyword_eligible = true };
   sh_buffer_t literal = {0};
   sh_quote_t quote = SH_QUOTE_NONE;
   sh_quote_t literal_quote = SH_QUOTE_NONE;
   bool word_started = false;
+  bool assignment_candidate = true;
+  size_t assignment_name_len = 0;
 
   for (;;) {
     sh_input_event_t event = sh_input_peek(&lexer->input);
@@ -218,6 +275,8 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       sh_input_take(&lexer->input);
       if (!sh_word_add_interpolation(&token.word, quote, event.interpolation)) goto oom;
       word_started = true;
+      token.keyword_eligible = false;
+      if (!token.assignment_word) assignment_candidate = false;
       literal_quote = quote;
       continue;
     }
@@ -251,8 +310,20 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
           sh_input_take(&lexer->input);
           if (next.ch != '\n' && !sh_buffer_append(&literal, next.ch)) goto oom;
           word_started = true;
+          token.keyword_eligible = false;
+          if (!token.assignment_word) assignment_candidate = false;
           continue;
         }
+      }
+      if (ch == '$') {
+        const char *message = sh_dollar_expansion_error(&lexer->input);
+        if (message) {
+          sh_set_error(lexer, "%s", message);
+          goto fail;
+        }
+      } else if (ch == '`') {
+        sh_set_error(lexer, "command substitution is not implemented");
+        goto fail;
       }
       if (!sh_buffer_append(&literal, ch)) goto oom;
       word_started = true;
@@ -265,6 +336,8 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       literal_quote = quote;
       if (!sh_word_add_literal(&token.word, quote, "", 0)) goto oom;
       word_started = true;
+      token.keyword_eligible = false;
+      if (!token.assignment_word) assignment_candidate = false;
       continue;
     }
     if (ch == '"') {
@@ -273,9 +346,13 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       literal_quote = quote;
       if (!sh_word_add_literal(&token.word, quote, "", 0)) goto oom;
       word_started = true;
+      token.keyword_eligible = false;
+      if (!token.assignment_word) assignment_candidate = false;
       continue;
     }
     if (ch == '\\') {
+      token.keyword_eligible = false;
+      if (!token.assignment_word) assignment_candidate = false;
       sh_input_event_t next = sh_input_take(&lexer->input);
       if (next.kind == SH_INPUT_EOF) {
         sh_set_error(lexer, "trailing backslash");
@@ -290,6 +367,19 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       word_started = true;
       continue;
     }
+    if (ch == '$') {
+      const char *message = sh_dollar_expansion_error(&lexer->input);
+      if (message) {
+        sh_set_error(lexer, "%s", message);
+        goto fail;
+      }
+    } else if (ch == '`') {
+      sh_set_error(lexer, "command substitution is not implemented");
+      goto fail;
+    }
+    sh_assignment_feed(
+      &token, &assignment_candidate, &assignment_name_len, ch
+    );
     if (!sh_buffer_append(&literal, ch)) goto oom;
     word_started = true;
   }
@@ -319,6 +409,8 @@ static sh_token_t sh_lex_next(sh_lexer_t *lexer) {
     sh_input_event_t event = sh_input_peek(&lexer->input);
     if (event.kind == SH_INPUT_EOF) return (sh_token_t){ .kind = SH_TOKEN_EOF };
     if (event.kind == SH_INPUT_INTERPOLATION) return sh_lex_word(lexer);
+    if (sh_event_is_char(event, '\\') &&
+        sh_take_line_continuation(&lexer->input)) continue;
     if (sh_is_space(event.ch)) {
       sh_input_take(&lexer->input);
       continue;
@@ -430,6 +522,24 @@ static void sh_pipeline_free(sh_pipeline_t *pipeline) {
   memset(pipeline, 0, sizeof(*pipeline));
 }
 
+static const char *sh_unsupported_command_keyword(const sh_token_t *token) {
+  if (!token->keyword_eligible || token->word.part_count != 1) return NULL;
+  const sh_word_part_t *part = &token->word.parts[0];
+  if (part->kind != SH_PART_LITERAL || part->quote != SH_QUOTE_NONE) return NULL;
+
+  static const char *const keywords[] = {
+    "!", "{", "}", "case", "do", "done", "elif", "else", "esac",
+    "fi", "for", "function", "if", "in", "select", "then", "time",
+    "until", "while",
+  };
+  for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+    size_t len = strlen(keywords[i]);
+    if (part->text_len == len && memcmp(part->text, keywords[i], len) == 0)
+      return keywords[i];
+  }
+  return NULL;
+}
+
 static bool sh_program_add_clause(sh_program_t *program, sh_clause_t *clause) {
   if (!sh_grow(
     (void **)&program->clauses, &program->clause_capacity,
@@ -462,6 +572,18 @@ static bool sh_parse_pipeline(
       sh_token_t token = *lookahead;
       memset(lookahead, 0, sizeof(*lookahead));
       if (token.kind == SH_TOKEN_WORD) {
+        if (command.word_count == 0 && token.assignment_word) {
+          sh_set_error(lexer, "variable assignments are not implemented");
+          sh_word_free(&token.word);
+          goto fail;
+        }
+        const char *keyword = command.word_count == 0
+          ? sh_unsupported_command_keyword(&token) : NULL;
+        if (keyword) {
+          sh_set_error(lexer, "compound command '%s' is not implemented", keyword);
+          sh_word_free(&token.word);
+          goto fail;
+        }
         if (!sh_command_add_word(&command, &token.word)) {
           sh_set_error(lexer, "out of memory while parsing command");
           sh_word_free(&token.word);

@@ -121,6 +121,11 @@ Repository examples and tests using the synchronous API move with the change.
     rooting, exception/finally behavior, and bailout handling across resumes.
     Confirm generated shell functions actually reach JIT code and benchmark
     them before changing hotness thresholds.
+18. [ ] Prioritize the next POSIX frontend milestone: implement assignment
+    words, parameter and arithmetic expansion, command substitution, and
+    `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
+    control flow directly to Silver bytecode, preserve shell-context semantics,
+    and add differential coverage against `dash` and Bash POSIX mode.
 
 ## Deferred POSIX work
 

@@ -1826,6 +1826,10 @@ static bool child_process_plan_add_values(
       break;
     }
   }
+  if (valid && argv[0][0] == '\0') {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Process executable cannot be empty");
+    valid = false;
+  }
   if (valid && !ant_process_plan_add_command(plan, argv, count)) {
     js_mkerr(js, "Out of memory");
     valid = false;
