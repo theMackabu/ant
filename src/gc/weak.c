@@ -241,6 +241,7 @@ static bool gc_weak_pending_ensure_next(
   gc_weak_pending_table_t *table, uint32_t capacity
 ) {
   if (capacity <= table->next_capacity) return true;
+  if ((size_t)capacity > SIZE_MAX / sizeof(*table->next)) return false;
   uint32_t *next = realloc(table->next, (size_t)capacity * sizeof(*next));
   if (!next) return false;
   table->next = next;
@@ -298,6 +299,10 @@ static void gc_weak_add_pending(
       ? table->pair_capacity * 2
       : 64;
     if (new_capacity < table->pair_capacity) {
+      js->weak_gc.pending_oom = true;
+      return;
+    }
+    if ((size_t)new_capacity > SIZE_MAX / sizeof(*table->pairs)) {
       js->weak_gc.pending_oom = true;
       return;
     }
@@ -483,7 +488,8 @@ static void gc_weak_prune_minor_edges(ant_t *js) {
       weakmap_table_t *table = js_get_native(
         collection, WEAKMAP_NATIVE_TAG
       );
-      if (table) weakmap_table_delete(table, edge->key);
+      if (table && weakmap_table_delete(table, edge->key))
+        table->gc_prune_pending = true;
     } else if (edge->kind == T_WEAKSET) {
       weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
       weakset_entry_t *entry = NULL;
@@ -493,6 +499,18 @@ static void gc_weak_prune_minor_edges(ant_t *js) {
         free(entry);
       }
     }
+  }
+
+  for (size_t i = 0; i < js->weak_gc.minor_edge_len; i++) {
+    typeof(*js->weak_gc.minor_edges) *edge = &js->weak_gc.minor_edges[i];
+    ant_object_t *obj = edge->owner;
+    if (edge->kind != T_WEAKMAP || !obj ||
+        obj->mark_epoch == ANT_GC_DEAD) continue;
+    weakmap_table_t *table = js_get_native(
+      js_obj_from_ptr(obj), WEAKMAP_NATIVE_TAG
+    );
+    if (table && table->gc_prune_pending)
+      weakmap_table_finish_prune(table);
   }
 }
 

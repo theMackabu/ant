@@ -23,9 +23,26 @@ typedef struct {
   char *path;
 } ant_process_plan_redirect_t;
 
+typedef enum {
+  ANT_PROCESS_PLAN_COMMAND_EXTERNAL = 0,
+  ANT_PROCESS_PLAN_COMMAND_NATIVE,
+} ant_process_plan_command_kind_t;
+
 typedef struct {
-  char **argv;
-  size_t argc;
+  ant_process_plan_command_kind_t kind;
+  union {
+    struct {
+      char **argv;
+      size_t argc;
+    } external;
+    struct {
+      char *stdout_data;
+      size_t stdout_len;
+      char *stderr_data;
+      size_t stderr_len;
+      int exit_code;
+    } native;
+  } as;
 } ant_process_plan_command_t;
 
 typedef struct {
@@ -36,6 +53,13 @@ typedef struct {
   char *cwd;
   ant_process_stderr_mode_t stderr_mode;
 } ant_process_plan_t;
+
+bool ant_process_plan_add_native_stage(
+  ant_process_plan_t *plan,
+  const char *stdout_data, size_t stdout_len,
+  const char *stderr_data, size_t stderr_len,
+  int exit_code
+);
 
 void ant_process_plan_init(ant_process_plan_t *plan);
 void ant_process_plan_dispose(ant_process_plan_t *plan);

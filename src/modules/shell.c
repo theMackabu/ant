@@ -18,8 +18,6 @@
 #include "silver/compiler.h"
 #include "silver/engine.h"
 
-enum { SH_COMPILED_PROGRAM_TAG = 0x53484346u }; // SHCF
-
 static void shell_compiled_program_free(sh_compiled_program_t *compiled) {
   if (!compiled) return;
   sh_program_free(&compiled->program);

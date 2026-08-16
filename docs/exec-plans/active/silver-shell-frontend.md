@@ -120,17 +120,19 @@ Repository examples and tests using the synchronous API move with the change.
     function and pass clause indexes to the native runner instead of emitting
     nested JavaScript plan literals. Specialize empty, single-clause, and
     multi-clause generated control-flow shapes.
-18. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
+18. [x] Represent native built-ins as process-plan stages inside pipelines.
+    Write their output through the pipeline descriptors asynchronously,
+    preserve last-stage status, and isolate stateful built-in contexts.
+19. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
     compiled frames, `OP_AWAIT` resume entry, interpreter/JIT handoff, GC
     rooting, exception/finally behavior, and bailout handling across resumes.
     Confirm generated shell functions actually reach JIT code and benchmark
     them before changing hotness thresholds.
-19. [ ] Prioritize the next POSIX frontend milestone: implement assignment
+20. [ ] Prioritize the next POSIX frontend milestone: implement assignment
     words, parameter and arithmetic expansion, command substitution, and
     `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
     control flow directly to Silver bytecode, preserve shell-context semantics,
     and add differential coverage against `dash` and Bash POSIX mode.
-
 ## Deferred POSIX work
 
 - tilde, parameter, arithmetic, field-splitting, pathname, and quote-removal
@@ -184,6 +186,11 @@ Repository examples and tests using the synchronous API move with the change.
   JavaScript objects on every invocation. Empty and single-clause programs use
   dedicated lowering shapes; multi-clause programs retain only the accumulator
   and connector control flow they require.
+- 2026-08-16: Process plans distinguish external processes from native stages.
+  A native stage owns its output and status, writes through the same descriptor
+  graph as an external process, and does not mutate the parent shell context.
+  This gives `:`, `exit`, `cd`, `echo`, `pwd`, `true`, and `false` pipeline
+  semantics without executable lookup or a second shell process.
 
 ## Validation status
 
@@ -236,14 +243,19 @@ Repository examples and tests using the synchronous API move with the change.
   against the saved pre-change binary, medians improved from 240.07 ms to
   228.75 ms for 20,000 cached single-clause invocations and from 137.44 ms to
   132.33 ms for 10,000 cached two-clause invocations.
+- After adding native pipeline stages, focused shell, child-process, collection,
+  WeakMap, WeakSet, and inspector GC tests passed, as did `maid preflight`,
+  `maid knowledge`, and the 3,922-test spec suite. Native `echo` pipelines
+  passed 100 repetitions each with 128 KiB consumed output and an ignored
+  downstream pipe. Six interleaved weak-collection comparisons found no
+  regression: set/get medians were 11.64/6.02 ms before and 11.57/5.65 ms
+  after; unique/shared weak-GC medians were 233.31/129.13 ms before and
+  227.24/128.76 ms after.
 
 ## Remaining risks
 
 - This is the first grammar slice, not POSIX compatibility. The expansion,
   compound-command, variable, special-built-in, and signal work listed above
   remains required.
-- Multi-stage pipelines currently use direct executable spawning for commands
-  that have a native single-command built-in. Native pipeline stages and their
-  isolated context semantics remain part of the pipeline-subshell work.
 - This milestone was built and exercised on macOS. The Windows and Linux paths
   still need platform CI coverage.

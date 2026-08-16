@@ -80,6 +80,7 @@ typedef struct {
   sh_program_t program;
 } sh_compiled_program_t;
 
+
 typedef struct {
   size_t segment;
   size_t offset;
@@ -95,6 +96,7 @@ bool sh_parse_segments(
 );
 
 void sh_program_free(sh_program_t *program);
+enum { SH_COMPILED_PROGRAM_TAG = 0x53484346u }; // SHCF
 
 char *sh_compile_program_source(
   const sh_program_t *program,

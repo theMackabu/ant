@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,12 +24,24 @@
 #include "process_stage.h"
 
 typedef struct ant_process_run ant_process_run_t;
+typedef struct ant_process_native_stage ant_process_native_stage_t;
 
 typedef struct {
   ant_process_stage_t process;
   ant_process_run_t *run;
+  ant_process_native_stage_t *native;
   size_t index;
 } ant_process_plan_stage_t;
+
+struct ant_process_native_stage {
+  uv_fs_t write_request;
+  ant_process_plan_stage_t *stage;
+  int stdout_fd;
+  int stderr_fd;
+  size_t offset;
+  bool writing_stderr;
+  bool write_failed;
+};
 
 typedef struct {
   uv_pipe_t handle;
@@ -61,12 +74,13 @@ struct ant_process_run {
   int open_error;
   int final_exit_code;
   int final_signal;
-  size_t remaining_processes;
+  size_t remaining_stages;
   ant_process_capture_t stdout_capture;
   ant_process_capture_t stderr_capture;
   ant_process_bytes_t stdout_bytes;
   ant_process_bytes_t stderr_bytes;
   bool spawned;
+  bool spawning;
   bool settled;
 };
 
@@ -89,9 +103,15 @@ void ant_process_plan_init(ant_process_plan_t *plan) {
 void ant_process_plan_dispose(ant_process_plan_t *plan) {
   if (!plan) return;
   for (size_t i = 0; i < plan->command_count; i++) {
-    for (size_t j = 0; j < plan->commands[i].argc; j++)
-      free(plan->commands[i].argv[j]);
-    free(plan->commands[i].argv);
+    ant_process_plan_command_t *command = &plan->commands[i];
+    if (command->kind == ANT_PROCESS_PLAN_COMMAND_EXTERNAL) {
+      for (size_t j = 0; j < command->as.external.argc; j++)
+        free(command->as.external.argv[j]);
+      free(command->as.external.argv);
+    } else {
+      free(command->as.native.stdout_data);
+      free(command->as.native.stderr_data);
+    }
   }
   free(plan->commands);
   for (size_t i = 0; i < plan->redirect_count; i++)
@@ -133,15 +153,68 @@ bool ant_process_plan_add_command(
   if (!commands) return false;
   plan->commands = commands;
   ant_process_plan_command_t *command = &commands[plan->command_count];
-  *command = (ant_process_plan_command_t){0};
-  command->argv = calloc(argc + 1, sizeof(*command->argv));
-  if (!command->argv) return false;
-  command->argc = argc;
+  *command = (ant_process_plan_command_t){
+    .kind = ANT_PROCESS_PLAN_COMMAND_EXTERNAL,
+  };
+  command->as.external.argv = calloc(
+    argc + 1, sizeof(*command->as.external.argv)
+  );
+  if (!command->as.external.argv) return false;
+  command->as.external.argc = argc;
   plan->command_count = next_count;
   for (size_t i = 0; i < argc; i++) {
-    command->argv[i] = strdup(argv[i]);
-    if (!command->argv[i]) return false;
+    command->as.external.argv[i] = strdup(argv[i]);
+    if (!command->as.external.argv[i]) return false;
   }
+  return true;
+}
+
+static bool process_plan_copy_bytes(
+  char **out, const char *data, size_t len
+) {
+  if (len == 0) {
+    *out = NULL;
+    return true;
+  }
+  if (len > SIZE_MAX - 1) return false;
+  char *copy = malloc(len + 1);
+  if (!copy) return false;
+  if (len) memcpy(copy, data, len);
+  copy[len] = '\0';
+  *out = copy;
+  return true;
+}
+
+bool ant_process_plan_add_native_stage(
+  ant_process_plan_t *plan,
+  const char *stdout_data, size_t stdout_len,
+  const char *stderr_data, size_t stderr_len,
+  int exit_code
+) {
+  if (!plan || (!stdout_data && stdout_len) || (!stderr_data && stderr_len))
+    return false;
+  if (plan->command_count == SIZE_MAX / sizeof(*plan->commands)) return false;
+  size_t next_count = plan->command_count + 1;
+  ant_process_plan_command_t *commands = realloc(
+    plan->commands, next_count * sizeof(*commands)
+  );
+  if (!commands) return false;
+  plan->commands = commands;
+  ant_process_plan_command_t *command = &commands[plan->command_count];
+  *command = (ant_process_plan_command_t){
+    .kind = ANT_PROCESS_PLAN_COMMAND_NATIVE,
+  };
+  plan->command_count = next_count;
+  if (!process_plan_copy_bytes(
+      &command->as.native.stdout_data,
+      stdout_data ? stdout_data : "", stdout_len
+    ) || !process_plan_copy_bytes(
+      &command->as.native.stderr_data,
+      stderr_data ? stderr_data : "", stderr_len
+    )) return false;
+  command->as.native.stdout_len = stdout_len;
+  command->as.native.stderr_len = stderr_len;
+  command->as.native.exit_code = exit_code;
   return true;
 }
 
@@ -199,6 +272,15 @@ static void process_close_pipeline_fds(ant_process_run_t *run) {
   process_close_fd(&run->stdin_fd);
   process_close_fd(&run->stdout_fd);
   process_close_fd(&run->stderr_fd);
+}
+
+static int process_dup_fd(int fd) {
+  if (fd < 0) return -1;
+#ifdef _WIN32
+  return _dup(fd);
+#else
+  return dup(fd);
+#endif
 }
 
 static void process_capture_alloc(uv_handle_t *handle, size_t suggested, uv_buf_t *buf) {
@@ -278,8 +360,126 @@ static void process_stage_exit(
       run->final_exit_code = exit_code;
     run->final_signal = signal;
   }
-  if (run->remaining_processes > 0) run->remaining_processes--;
+  if (run->remaining_stages > 0) run->remaining_stages--;
   process_run_try_finish(run);
+}
+
+static void process_native_stage_advance(ant_process_native_stage_t *native);
+
+static void process_native_stage_finish(ant_process_native_stage_t *native) {
+  ant_process_plan_stage_t *stage = native->stage;
+  ant_process_run_t *run = stage->run;
+  ant_process_plan_command_t *command = &run->plan.commands[stage->index];
+  process_close_fd(&native->stdout_fd);
+  process_close_fd(&native->stderr_fd);
+  if (stage->index + 1 == run->plan.command_count) {
+    run->final_exit_code = native->write_failed
+      ? 1 : command->as.native.exit_code;
+    run->final_signal = 0;
+  }
+  if (run->remaining_stages > 0) run->remaining_stages--;
+  if (!run->spawning) process_run_try_finish(run);
+}
+
+static void process_native_write_done(uv_fs_t *request) {
+  ant_process_native_stage_t *native = request->data;
+  ssize_t written = request->result;
+  uv_fs_req_cleanup(request);
+  if (written > 0) native->offset += (size_t)written;
+  else {
+    native->write_failed = true;
+    if (written < 0 && written != UV_EPIPE)
+      process_append_error(native->stage->run, "native pipeline stage", (int)written);
+    ant_process_plan_command_t *command =
+      &native->stage->run->plan.commands[native->stage->index];
+    native->offset = native->writing_stderr
+      ? command->as.native.stderr_len : command->as.native.stdout_len;
+  }
+  process_native_stage_advance(native);
+}
+
+static void process_native_stage_advance(ant_process_native_stage_t *native) {
+  ant_process_plan_command_t *command =
+    &native->stage->run->plan.commands[native->stage->index];
+
+  for (;;) {
+    const char *data = native->writing_stderr
+      ? command->as.native.stderr_data : command->as.native.stdout_data;
+    size_t len = native->writing_stderr
+      ? command->as.native.stderr_len : command->as.native.stdout_len;
+    int *fd = native->writing_stderr
+      ? &native->stderr_fd : &native->stdout_fd;
+    if (*fd >= 0 && native->offset < len) {
+      uv_buf_t buffer = uv_buf_init(
+        (char *)data + native->offset,
+        (unsigned int)((len - native->offset) > UINT_MAX
+          ? UINT_MAX : len - native->offset)
+      );
+      native->write_request.data = native;
+      int rc = uv_fs_write(
+        uv_default_loop(), &native->write_request,
+        *fd, &buffer, 1, -1, process_native_write_done
+      );
+      if (rc >= 0) return;
+      uv_fs_req_cleanup(&native->write_request);
+      native->write_failed = true;
+      if (rc != UV_EPIPE)
+        process_append_error(native->stage->run, "native pipeline stage", rc);
+    }
+    process_close_fd(fd);
+    if (!native->writing_stderr) {
+      native->writing_stderr = true;
+      native->offset = 0;
+      continue;
+    }
+    process_native_stage_finish(native);
+    return;
+  }
+}
+
+static void process_native_stage_start(
+  ant_process_run_t *run, ant_process_plan_stage_t *stage,
+  int stdout_fd, int stderr_fd
+) {
+  ant_process_plan_command_t *command = &run->plan.commands[stage->index];
+  if (command->as.native.stdout_len == 0 &&
+      command->as.native.stderr_len == 0) {
+    if (stage->index + 1 == run->plan.command_count) {
+      run->final_exit_code = command->as.native.exit_code;
+      run->final_signal = 0;
+    }
+    return;
+  }
+  ant_process_native_stage_t *native = calloc(1, sizeof(*native));
+  if (!native) {
+    process_append_error(run, "native pipeline stage", UV_ENOMEM);
+    if (stage->index + 1 == run->plan.command_count)
+      run->final_exit_code = 1;
+    return;
+  }
+  stage->native = native;
+  native->stage = stage;
+  native->stdout_fd = -1;
+  native->stderr_fd = -1;
+  int duplicate_error = 0;
+  if (command->as.native.stdout_len) {
+    native->stdout_fd = process_dup_fd(stdout_fd);
+    if (native->stdout_fd < 0) {
+      native->write_failed = true;
+      duplicate_error = uv_translate_sys_error(errno);
+    }
+  }
+  if (command->as.native.stderr_len) {
+    native->stderr_fd = process_dup_fd(stderr_fd);
+    if (native->stderr_fd < 0) {
+      native->write_failed = true;
+      if (!duplicate_error) duplicate_error = uv_translate_sys_error(errno);
+    }
+  }
+  if (duplicate_error)
+    process_append_error(run, "native pipeline stage", duplicate_error);
+  run->remaining_stages++;
+  process_native_stage_advance(native);
 }
 
 static bool process_make_pipe(int fds[2]) {
@@ -374,7 +574,8 @@ static void process_spawn(ant_process_run_t *run) {
     process_run_try_finish(run);
     return;
   }
-  run->remaining_processes = 0;
+  run->remaining_stages = 0;
+  run->spawning = true;
   for (size_t i = 0; !run->open_error && i < count; i++) {
     ant_process_plan_stage_t *stage = &run->stages[i];
     stage->run = run;
@@ -386,6 +587,11 @@ static void process_spawn(ant_process_run_t *run) {
     int stdin_fd = process_stage_stdin_fd(run, i);
     int stdout_fd = process_stage_stdout_fd(run, i);
     int stderr_fd = process_stage_stderr_fd(run);
+    ant_process_plan_command_t *command = &run->plan.commands[i];
+    if (command->kind == ANT_PROCESS_PLAN_COMMAND_NATIVE) {
+      process_native_stage_start(run, stage, stdout_fd, stderr_fd);
+      continue;
+    }
     if (stdin_fd >= 0) ant_process_stdio_inherit_fd(&stdio[0], stdin_fd);
     else ant_process_stdio_ignore(&stdio[0]);
     if (stdout_fd >= 0) ant_process_stdio_inherit_fd(&stdio[1], stdout_fd);
@@ -393,8 +599,8 @@ static void process_spawn(ant_process_run_t *run) {
     if (stderr_fd >= 0) ant_process_stdio_inherit_fd(&stdio[2], stderr_fd);
     else ant_process_stdio_ignore(&stdio[2]);
     ant_process_spawn_spec_t spec = {
-      .file = run->plan.commands[i].argv[0],
-      .args = run->plan.commands[i].argv,
+      .file = command->as.external.argv[0],
+      .args = command->as.external.argv,
       .cwd = run->plan.cwd,
       .stdio = stdio,
       .stdio_count = 3,
@@ -405,9 +611,10 @@ static void process_spawn(ant_process_run_t *run) {
       if (i + 1 == count) run->final_exit_code = 127;
       continue;
     }
-    run->remaining_processes++;
+    run->remaining_stages++;
   }
   process_close_pipeline_fds(run);
+  run->spawning = false;
   process_run_try_finish(run);
 }
 
@@ -492,16 +699,19 @@ static void process_run_free(ant_process_run_t *run) {
   process_close_pipeline_fds(run);
   process_close_fd(&run->capture_stdout_fds[0]);
   process_close_fd(&run->capture_stderr_fds[0]);
-  ant_process_plan_dispose(&run->plan);
   free(run->pipeline_fds);
+  if (run->stages) for (size_t i = 0; i < run->plan.command_count; i++)
+    free(run->stages[i].native);
   free(run->stages);
+  ant_process_plan_dispose(&run->plan);
   free(run->stdout_bytes.data);
   free(run->stderr_bytes.data);
   free(run);
 }
 
 static void process_run_try_finish(ant_process_run_t *run) {
-  if (!run || run->settled || !run->spawned || run->remaining_processes != 0)
+  if (!run || run->settled || !run->spawned || run->spawning ||
+      run->remaining_stages != 0)
     return;
   for (size_t i = 0; i < run->plan.command_count; i++)
     if (run->stages && run->stages[i].process.handle_open &&

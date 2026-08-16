@@ -181,13 +181,25 @@ static bool sh_push_command_word(
   return true;
 }
 
-static ant_value_t sh_run_builtin(
+static bool sh_path_is_absolute(const char *path, size_t len) {
+#ifdef _WIN32
+  return len > 0 && (
+    path[0] == '/' || path[0] == '\\' ||
+    (len > 2 && path[1] == ':' &&
+      (path[2] == '/' || path[2] == '\\'))
+  );
+#else
+  return len > 0 && path[0] == '/';
+#endif
+}
+
+static ant_value_t sh_run_builtin_result(
   ant_t *js,
   ant_value_t context,
   ant_value_t argv
 ) {
   ant_offset_t argc = js_arr_len(js, argv);
-  if (argc == 0) return sh_resolved_result(js, "", 0, "", 0, 0);
+  if (argc == 0) return sh_result(js, "", 0, "", 0, 0);
 
   ant_value_t name_value = js_arr_get(js, argv, 0);
   size_t name_len = 0;
@@ -195,11 +207,11 @@ static ant_value_t sh_run_builtin(
   if (!name) return js_mkundef();
 
   if (name_len == 4 && memcmp(name, "true", 4) == 0)
-    return sh_resolved_result(js, "", 0, "", 0, 0);
+    return sh_result(js, "", 0, "", 0, 0);
   if (name_len == 5 && memcmp(name, "false", 5) == 0)
-    return sh_resolved_result(js, "", 0, "", 0, 1);
+    return sh_result(js, "", 0, "", 0, 1);
   if (name_len == 1 && name[0] == ':')
-    return sh_resolved_result(js, "", 0, "", 0, 0);
+    return sh_result(js, "", 0, "", 0, 0);
 
   if (name_len == 4 && memcmp(name, "exit", 4) == 0) {
     int status = 0;
@@ -218,13 +230,9 @@ static ant_value_t sh_run_builtin(
         status = end && *end == '\0' ? (int)((unsigned long)parsed & 255u) : 2;
       }
     }
-    ant_value_t promise = js_mkpromise(js);
     ant_value_t result = sh_result(js, "", 0, "", 0, status);
-    
     js_set(js, result, "exited", js_true);
-    js_resolve_promise(js, promise, result);
-    
-    return promise;
+    return result;
   }
 
   if (name_len == 4 && memcmp(name, "echo", 4) == 0) {
@@ -234,27 +242,27 @@ static ant_value_t sh_run_builtin(
       if (!sh_value_append(js, &output, js_arr_get(js, argv, i))) goto echo_oom;
     }
     if (!sh_bytes_append(&output, "\n", 1)) goto echo_oom;
-    ant_value_t promise = sh_resolved_result(js, output.data, output.len, "", 0, 0);
+    ant_value_t result = sh_result(js, output.data, output.len, "", 0, 0);
     free(output.data);
-    return promise;
+    return result;
 echo_oom:
     free(output.data);
-    return sh_resolved_result(js, "", 0, "echo: out of memory\n", sizeof("echo: out of memory\n") - 1, 1);
+    return sh_result(js, "", 0, "echo: out of memory\n", sizeof("echo: out of memory\n") - 1, 1);
   }
 
   if (name_len == 3 && memcmp(name, "pwd", 3) == 0) {
     ant_value_t cwd = js_get(js, context, "cwd");
     size_t cwd_len = 0;
     char *cwd_text = js_getstr(js, cwd, &cwd_len);
-    if (!cwd_text) return sh_resolved_result(js, "", 0, "pwd: invalid cwd\n", sizeof("pwd: invalid cwd\n") - 1, 1);
+    if (!cwd_text) return sh_result(js, "", 0, "pwd: invalid cwd\n", sizeof("pwd: invalid cwd\n") - 1, 1);
     sh_bytes_t output = {0};
     if (!sh_bytes_append(&output, cwd_text, cwd_len) || !sh_bytes_append(&output, "\n", 1)) {
       free(output.data);
-      return sh_resolved_result(js, "", 0, "pwd: out of memory\n", sizeof("pwd: out of memory\n") - 1, 1);
+      return sh_result(js, "", 0, "pwd: out of memory\n", sizeof("pwd: out of memory\n") - 1, 1);
     }
-    ant_value_t promise = sh_resolved_result(js, output.data, output.len, "", 0, 0);
+    ant_value_t result = sh_result(js, output.data, output.len, "", 0, 0);
     free(output.data);
-    return promise;
+    return result;
   }
 
   if (name_len == 2 && memcmp(name, "cd", 2) == 0) {
@@ -262,7 +270,7 @@ echo_oom:
     if (argc > 1) target_value = js_arr_get(js, argv, 1);
     else {
       const char *home = getenv("HOME");
-      if (!home) return sh_resolved_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
+      if (!home) return sh_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
       target_value = js_mkstr(js, home, strlen(home));
     }
     size_t target_len = 0;
@@ -270,14 +278,14 @@ echo_oom:
     ant_value_t cwd_value = js_get(js, context, "cwd");
     size_t cwd_len = 0;
     char *cwd = js_getstr(js, cwd_value, &cwd_len);
-    if (!target || !cwd) return sh_resolved_result(js, "", 0, "cd: invalid path\n", sizeof("cd: invalid path\n") - 1, 1);
+    if (!target || !cwd) return sh_result(js, "", 0, "cd: invalid path\n", sizeof("cd: invalid path\n") - 1, 1);
 
     sh_bytes_t path = {0};
-    bool absolute = target_len > 0 && (target[0] == '/' || target[0] == '\\');
+    bool absolute = sh_path_is_absolute(target, target_len);
     if ((!absolute && (!sh_bytes_append(&path, cwd, cwd_len) ||
         !sh_bytes_append(&path, "/", 1))) || !sh_bytes_append(&path, target, target_len)) {
       free(path.data);
-      return sh_resolved_result(js, "", 0, "cd: out of memory\n", sizeof("cd: out of memory\n") - 1, 1);
+      return sh_result(js, "", 0, "cd: out of memory\n", sizeof("cd: out of memory\n") - 1, 1);
     }
 
     uv_fs_t request;
@@ -291,10 +299,10 @@ echo_oom:
       sh_bytes_append(&error, ": ", 2);
       sh_bytes_append(&error, reason, strlen(reason));
       sh_bytes_append(&error, "\n", 1);
-      ant_value_t promise = sh_resolved_result(js, "", 0, error.data, error.len, 1);
+      ant_value_t result = sh_result(js, "", 0, error.data, error.len, 1);
       free(error.data);
       uv_fs_req_cleanup(&request);
-      return promise;
+      return result;
     }
     const char *resolved = request.ptr;
     uv_fs_t stat_request;
@@ -309,17 +317,29 @@ echo_oom:
       sh_bytes_append(&error, ": ", 2);
       sh_bytes_append(&error, reason, strlen(reason));
       sh_bytes_append(&error, "\n", 1);
-      ant_value_t promise = sh_resolved_result(js, "", 0, error.data, error.len, 1);
+      ant_value_t result = sh_result(js, "", 0, error.data, error.len, 1);
       free(error.data);
       uv_fs_req_cleanup(&request);
-      return promise;
+      return result;
     }
     js_set(js, context, "cwd", js_mkstr(js, resolved, strlen(resolved)));
     uv_fs_req_cleanup(&request);
-    return sh_resolved_result(js, "", 0, "", 0, 0);
+    return sh_result(js, "", 0, "", 0, 0);
   }
 
   return js_mkundef();
+}
+
+static ant_value_t sh_run_builtin(
+  ant_t *js,
+  ant_value_t context,
+  ant_value_t argv
+) {
+  ant_value_t result = sh_run_builtin_result(js, context, argv);
+  if (is_undefined(result) || is_err(result)) return result;
+  ant_value_t promise = js_mkpromise(js);
+  js_resolve_promise(js, promise, result);
+  return promise;
 }
 
 static bool sh_build_command_argv(
@@ -351,14 +371,7 @@ static char *sh_resolve_path(
     js_mkerr_typed(js, JS_ERR_TYPE, "ant:shell: redirection paths cannot contain NUL bytes");
     return NULL;
   }
-#ifdef _WIN32
-  bool absolute = path_len > 0 && (
-    path[0] == '/' || path[0] == '\\' ||
-    (path_len > 2 && path[1] == ':' && (path[2] == '/' || path[2] == '\\'))
-  );
-#else
-  bool absolute = path_len > 0 && path[0] == '/';
-#endif
+  bool absolute = sh_path_is_absolute(path, path_len);
   if (absolute) {
     char *copy = malloc(path_len + 1);
     if (!copy) return NULL;
@@ -911,7 +924,12 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
           "ant:shell: redirection on an intermediate pipeline stage is not implemented yet\n",
           sizeof("ant:shell: redirection on an intermediate pipeline stage is not implemented yet\n") - 1, 2);
       }
-      js_arr_push(js, commands, argv);
+      ant_value_t stage_context = js_mkobj(js);
+      js_set(js, stage_context, "cwd", js_get(js, context, "cwd"));
+      ant_value_t builtin = sh_run_builtin_result(js, stage_context, argv);
+      if (is_err(builtin))
+        return sh_abrupt_or_error(js, "ant:shell: pipeline builtin failed");
+      js_arr_push(js, commands, is_undefined(builtin) ? argv : builtin);
     }
     
     ant_value_t redir_state = js_mkundef();

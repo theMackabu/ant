@@ -320,7 +320,9 @@ bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key) {
 }
 
 void weakmap_table_finish_prune(weakmap_table_t *table) {
-  if (!table || table->capacity == 0 || table->tombstones == 0) return;
+  if (!table) return;
+  table->gc_prune_pending = false;
+  if (table->capacity == 0 || table->tombstones == 0) return;
 
   if (table->count == 0) {
     memset(table->entries, 0, table->capacity * sizeof(*table->entries));
@@ -1172,7 +1174,7 @@ static ant_value_t weakmap_get(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t this_val = js->this_val;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
-  if (!table) return js_mkundef();
+  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!can_be_held_weakly(args[0])) return js_mkundef();
   
   weakmap_entry_t *entry = weakmap_table_find(table, args[0]);
@@ -1233,7 +1235,7 @@ static ant_value_t weakmap_delete(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t this_val = js->this_val;
   weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
-  if (!table) return js_false;
+  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!can_be_held_weakly(args[0])) return js_false;
   
   return js_bool(weakmap_table_delete(table, args[0]));

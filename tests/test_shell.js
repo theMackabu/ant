@@ -77,6 +77,33 @@ try {
 
   assert.strictEqual(await $`false && echo bad; true && echo and; false || echo or`.text(), 'and\nor\n');
   assert.strictEqual(await $`printf abc | wc -c`.text(), '3\n');
+  assert.strictEqual(await $`: | cat`.text(), '');
+  assert.strictEqual(await $`echo pipeline-builtin | cat`.text(), 'pipeline-builtin\n');
+  const largePipelineBuiltin = 'x'.repeat(256 * 1024 + 17);
+  assert.strictEqual(
+    await $`echo ${largePipelineBuiltin} | wc -c`.text(),
+    `${largePipelineBuiltin.length + 1}\n`
+  );
+  const ignoredPipelineBuiltin = await $`echo ${largePipelineBuiltin} | :`.nothrow();
+  assert.strictEqual(ignoredPipelineBuiltin.exitCode, 0);
+  assert.strictEqual(ignoredPipelineBuiltin.stderr, '');
+  assert.strictEqual(await $`cd ${tmpDir} | pwd`.text(), `${process.cwd()}\n`);
+  assert.strictEqual((await $`false | true`.nothrow()).exitCode, 0);
+  assert.strictEqual((await $`true | false`.nothrow()).exitCode, 1);
+  assert.strictEqual((await $`exit 7 | cat`.nothrow()).exitCode, 0);
+  assert.strictEqual((await $`printf ignored | exit 7`.nothrow()).exitCode, 7);
+  const pipelineBuiltinRedirectPath = path.join(tmpDir, 'pipeline-builtin.txt');
+  await $`printf ignored | echo redirected > ${pipelineBuiltinRedirectPath}`;
+  assert.strictEqual(
+    fs.readFileSync(pipelineBuiltinRedirectPath, 'utf8'),
+    'redirected\n'
+  );
+  const failedPipelineBuiltin = await $`
+    printf ignored | cd ${path.join(tmpDir, 'missing-pipeline-directory')} 2>&1
+  `.nothrow();
+  assert.strictEqual(failedPipelineBuiltin.exitCode, 1);
+  assert.strictEqual(failedPipelineBuiltin.stderr, '');
+  assert.match(failedPipelineBuiltin.stdout, /cd: .*missing-pipeline-directory/);
   assert.strictEqual(await $`echo continued | \
     cat`.text(), 'continued\n');
   assert.strictEqual(await $`seq 1 10000 | wc -l`.text(), '10000\n');

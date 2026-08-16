@@ -30,6 +30,7 @@ typedef struct weakmap_table {
   uint32_t count;
   uint32_t capacity;
   uint32_t tombstones;
+  bool gc_prune_pending; // Deduplicates table maintenance within a minor GC.
 } weakmap_table_t;
 
 typedef struct weakset_entry {
@@ -100,6 +101,7 @@ bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
 void weakmap_table_finish_prune(weakmap_table_t *table);
 void weakmap_table_free(weakmap_table_t *table);
 
+// key_obj 0 is an empty slot; key_obj 1 is a tombstone.
 static inline bool weakmap_entry_is_occupied(const weakmap_entry_t *entry) {
   return entry->key_obj != 0 && entry->key_obj != 1;
 }

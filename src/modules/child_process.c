@@ -1838,6 +1838,35 @@ static bool child_process_plan_add_values(
   return valid;
 }
 
+static bool child_process_plan_add_native_result(
+  ant_t *js, ant_process_plan_t *plan, ant_value_t result
+) {
+  ant_value_t stdout_value = js_get(js, result, "stdout");
+  ant_value_t stderr_value = js_get(js, result, "stderr");
+  ant_value_t exit_code_value = js_get(js, result, "exitCode");
+  
+  if (vtype(stdout_value) != T_STR || vtype(stderr_value) != T_STR ||
+      vtype(exit_code_value) != T_NUM) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid native pipeline stage");
+    return false;
+  }
+  
+  size_t stdout_len = 0;
+  size_t stderr_len = 0;
+  char *stdout_data = js_getstr(js, stdout_value, &stdout_len);
+  char *stderr_data = js_getstr(js, stderr_value, &stderr_len);
+  
+  if (!stdout_data || !stderr_data || !ant_process_plan_add_native_stage(
+    plan, stdout_data, stdout_len, stderr_data, stderr_len,
+    (int)js_getnum(exit_code_value)
+  )) {
+    js_mkerr(js, "Out of memory");
+    return false;
+  }
+  
+  return true;
+}
+
 ant_value_t child_process_exec_file_result(
   ant_t *js,
   ant_value_t file,
@@ -1873,7 +1902,14 @@ ant_value_t child_process_pipeline_result(
   if (!child_process_plan_apply_options(js, &plan, options)) goto invalid;
   for (ant_offset_t i = 0; i < js_arr_len(js, commands); i++) {
     ant_value_t command = js_arr_get(js, commands, i);
-    if (!child_process_plan_add_values(js, &plan, command)) goto invalid;
+    if (vtype(command) == T_ARR) {
+      if (!child_process_plan_add_values(js, &plan, command)) goto invalid;
+    } else if (is_special_object(command)) {
+      if (!child_process_plan_add_native_result(js, &plan, command)) goto invalid;
+    } else {
+      js_mkerr_typed(js, JS_ERR_TYPE, "Invalid pipeline stage");
+      goto invalid;
+    }
   }
   return ant_process_plan_submit(js, &plan);
 
