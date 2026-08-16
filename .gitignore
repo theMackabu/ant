@@ -5,6 +5,7 @@
 .superset
 
 .claude
+.agents
 .github/artifacts
 
 *.so

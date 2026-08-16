@@ -1866,7 +1866,12 @@ static bool child_process_plan_add_native_result(
     &stderr_data, &stderr_len
   );
   
-  if (!stdout_valid || !stderr_valid || !ant_process_plan_add_native_stage(
+  if (!stdout_valid || !stderr_valid) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid native pipeline stage payload");
+    return false;
+  }
+
+  if (!ant_process_plan_add_native_stage(
     plan, (const char *)stdout_data, stdout_len,
     (const char *)stderr_data, stderr_len,
     (int)js_getnum(exit_code_value)

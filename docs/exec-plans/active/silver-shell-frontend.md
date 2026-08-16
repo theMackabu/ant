@@ -34,18 +34,24 @@ Deliver an end-to-end Bun-style asynchronous API with:
 
 ```text
 shell source and interpolation slots
-    -> shell lexer/parser
+    -> bundled ant:shell JavaScript lexer/parser
     -> shell AST
-    -> Silver lowering
-    -> async sv_func_t
+    -> generated private async JavaScript
+    -> Silver compiler and bytecode
     -> Silver VM calls private shell intrinsics
     -> ShellContext and libuv process graph
 ```
 
-The shell compiler owns shell grammar and expansion semantics. It may lower to
-generated Silver AST or another private Silver compiler input, but the durable
-executable representation is `sv_func_t` bytecode. Native code owns only work
-that requires operating-system state or concurrent I/O.
+The public module lives at `src/builtins/ant/shell.mjs` and is bundled and
+registered as `ant:shell` by the ordinary builtin-module generator. It owns the
+shell grammar, template expansion, lowering, cache, result policy, and debug
+formatting. Its generated async JavaScript is private compiler input; template
+values remain separate parameters and are never concatenated into source. The
+durable executable representation is Silver bytecode.
+
+The native `ant:internal/shell_ops` module owns only process-plan construction,
+host cwd/filesystem operations, byte accumulation, and concurrent I/O. It is a
+substrate called by generated Silver code, not a shell AST interpreter.
 
 Shell lowering produces a typed native process plan. Both `ant:shell` and
 `node:child_process` submit that plan to one process substrate. The substrate
@@ -148,6 +154,11 @@ Repository examples and tests using the synchronous API move with the change.
     `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
     control flow directly to Silver bytecode, preserve shell-context semantics,
     and add differential coverage against `dash` and Bash POSIX mode.
+23. [x] Move the shell frontend and public API into the bundled
+    `src/builtins/ant/shell.mjs` module. Register the remaining C boundary as
+    `ant:internal/shell_ops`, move its registrar under `src/modules/shell/`, and
+    remove the obsolete C lexer, parser, compiler, descriptor walker, public
+    promise wrapper, and debug formatter.
 
 ## Deferred POSIX work
 
@@ -217,10 +228,21 @@ Repository examples and tests using the synchronous API move with the change.
   itself. Native code expands individual dynamic descriptors and submits the
   completed typed process graph; it no longer walks clauses, commands, and
   redirections as a second interpreter.
+- 2026-08-16: Implement `ant:shell` through the same generated builtin-module
+  path as JavaScript `node:*` modules. JavaScript owns grammar and public shell
+  semantics; `ant:internal/shell_ops` is the narrow native host bridge. Dynamic
+  async functions remain Silver compiler input, so this keeps one language VM
+  while removing more than two thousand lines of C frontend code.
 
 ## Validation status
 
 - `meson compile -C build`: passed.
+- An exact release/LTO/PGO comparison against pre-change `81147b7e` measured
+  the bundled JavaScript frontend at +6.5% for 20,000 cached `true` calls,
+  +7.8% for 10,000 dynamic built-in calls, +4.3% for 10,000 two-clause calls,
+  and +0.8% for 300 external processes. Cold import plus first compilation adds
+  0.62 ms. The executable is 52,160 bytes smaller, including 49,152 fewer text
+  bytes.
 - `./build/ant tests/test_shell.js`: passed, including structured interpolation,
   control operators, stateful `cd`, ordered and large redirections, early
   pipeline exit, failed-stage cleanup, weak-cache reuse, and throw/nothrow

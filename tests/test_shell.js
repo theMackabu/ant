@@ -149,6 +149,32 @@ try {
   assert.strictEqual(cwdLines.length, 2);
   assert.strictEqual(cwdLines[1], fs.realpathSync(tmpDir));
 
+  if (process.platform === 'win32') {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalHomeDrive = process.env.HOMEDRIVE;
+    const originalHomePath = process.env.HOMEPATH;
+    const restore = (name, value) => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    try {
+      delete process.env.HOME;
+      process.env.USERPROFILE = tmpDir;
+      assert.strictEqual((await $`cd; pwd`).text().trim(), fs.realpathSync(tmpDir));
+
+      delete process.env.USERPROFILE;
+      process.env.HOMEDRIVE = tmpDir.slice(0, 2);
+      process.env.HOMEPATH = tmpDir.slice(2);
+      assert.strictEqual((await $`cd; pwd`).text().trim(), fs.realpathSync(tmpDir));
+    } finally {
+      restore('HOME', originalHome);
+      restore('USERPROFILE', originalUserProfile);
+      restore('HOMEDRIVE', originalHomeDrive);
+      restore('HOMEPATH', originalHomePath);
+    }
+  }
+
   const redirectPath = path.join(tmpDir, 'redirect.txt');
   await $`printf hello > ${redirectPath}`;
   await $`printf world >> ${redirectPath}`;

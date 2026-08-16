@@ -92,9 +92,15 @@ static void process_prepare_next_redirect(ant_process_run_t *run);
 ant_value_t ant_process_plan_rejected_result(
   ant_t *js, ant_value_t error
 ) {
+  GC_ROOT_SAVE(root_mark, js);
   error = js_take_thrown(js, error);
+  GC_ROOT_PIN(js, error);
   ant_value_t promise = js_mkpromise(js);
-  js_reject_promise(js, promise, error);
+  if (!is_err(promise)) {
+    GC_ROOT_PIN(js, promise);
+    js_reject_promise(js, promise, error);
+  }
+  GC_ROOT_RESTORE(js, root_mark);
   return promise;
 }
 
@@ -395,8 +401,10 @@ static void process_native_stage_finish(ant_process_native_stage_t *native) {
   process_close_fd(&native->stdout_fd);
   process_close_fd(&native->stderr_fd);
   if (stage->index + 1 == run->plan.command_count) {
-    run->final_exit_code = native->write_failed
+    int exit_code = native->write_failed
       ? 1 : command->as.native.exit_code;
+    if (exit_code != 0 || run->final_exit_code == 0)
+      run->final_exit_code = exit_code;
     run->final_signal = 0;
   }
   if (run->remaining_stages > 0) run->remaining_stages--;
@@ -467,7 +475,9 @@ static void process_native_stage_start(
   if (command->as.native.stdout_len == 0 &&
       command->as.native.stderr_len == 0) {
     if (stage->index + 1 == run->plan.command_count) {
-      run->final_exit_code = command->as.native.exit_code;
+      int exit_code = command->as.native.exit_code;
+      if (exit_code != 0 || run->final_exit_code == 0)
+        run->final_exit_code = exit_code;
       run->final_signal = 0;
     }
     return;
@@ -826,6 +836,7 @@ result_error: {
     ant_value_t error = run->js->thrown_exists
       ? run->js->thrown_value : js_mkerr(run->js, "Out of memory");
     error = js_take_thrown(run->js, error);
+    GC_ROOT_PIN(run->js, error);
     js_reject_promise(run->js, run->promise, error);
     GC_ROOT_RESTORE(run->js, root_mark);
     gc_unroot_pending_promise(run->js, js_obj_ptr(run->promise));
@@ -854,6 +865,7 @@ static ant_value_t process_plan_submit_native_immediate(
   );
   if (is_err(result)) {
     ant_value_t error = js_take_thrown(js, result);
+    GC_ROOT_PIN(js, error);
     js_reject_promise(js, promise, error);
   } else js_resolve_promise(js, promise, result);
   ant_process_plan_dispose(plan);

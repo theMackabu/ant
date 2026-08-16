@@ -218,13 +218,38 @@ echo_oom:
     return result;
   }
 
+  // TODO: reduce nesting
   if (name_len == 2 && memcmp(name, "cd", 2) == 0) {
     ant_value_t target_value;
     if (argc > 1) target_value = js_arr_get(js, argv, 1);
     else {
       const char *home = getenv("HOME");
-      if (!home) return sh_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
+#ifdef _WIN32
+      sh_bytes_t windows_home = {0};
+      if (!home || !home[0]) home = getenv("USERPROFILE");
+      if (!home || !home[0]) {
+        const char *drive = getenv("HOMEDRIVE");
+        const char *path = getenv("HOMEPATH");
+        if (drive && drive[0] && path && path[0]) {
+          if (!sh_bytes_append(&windows_home, drive, strlen(drive)) ||
+              !sh_bytes_append(&windows_home, path, strlen(path))) {
+            free(windows_home.data);
+            return js_mkerr(js, "Out of memory");
+          }
+          home = windows_home.data;
+        }
+      }
+#endif
+      if (!home || !home[0]) {
+#ifdef _WIN32
+        free(windows_home.data);
+#endif
+        return sh_result(js, "", 0, "cd: HOME not set\n", sizeof("cd: HOME not set\n") - 1, 1);
+      }
       target_value = js_mkstr(js, home, strlen(home));
+#ifdef _WIN32
+      free(windows_home.data);
+#endif
     }
     size_t target_len = 0;
     char *target = js_getstr(js, target_value, &target_len);
