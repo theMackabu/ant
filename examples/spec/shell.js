@@ -13,7 +13,16 @@ test('shell has nothrow method', typeof pending.nothrow, 'function');
 const result = await pending;
 test('shell has exitCode', typeof result.exitCode, 'number');
 test('shell exitCode success', result.exitCode, 0);
-test('shell stdout content', result.stdout, 'hello\n');
+test('shell output class name', result.constructor.name, 'ShellOutput');
+test('shell stdout is bytes', result.stdout instanceof Uint8Array, true);
+test('shell stderr is bytes', result.stderr instanceof Uint8Array, true);
+test('shell stdout content', result.text(), 'hello\n');
+test('shell output text method', typeof result.text, 'function');
+test('shell output json method', typeof result.json, 'function');
+test('shell output arrayBuffer method', typeof result.arrayBuffer, 'function');
+test('shell output bytes method', typeof result.bytes, 'function');
+test('shell output blob method', typeof result.blob, 'function');
+test('shell output lines method', typeof result.lines, 'function');
 
 test('shell text returns string', typeof (await $`echo hello`.text()), 'string');
 test('shell text content', await $`echo hello`.text(), 'hello\n');

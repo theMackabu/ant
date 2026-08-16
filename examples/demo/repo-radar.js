@@ -2,6 +2,9 @@
 
 import { $ } from 'ant:shell';
 
+const decoder = new TextDecoder();
+const stderrText = result => decoder.decode(result.stderr);
+
 const args = process.argv.slice(2);
 const showAll = args.includes('--all');
 const query = args.find(arg => arg !== '--all') || 'TODO';
@@ -12,7 +15,7 @@ if (rootResult.exitCode !== 0) {
   process.exit(1);
 }
 
-const root = rootResult.stdout.trim();
+const root = rootResult.text().trim();
 const srcDir = `${root}/src`;
 const includeDir = `${root}/include`;
 const search = () => $`rg -n --color never --glob '*.{c,h,js,ts}' -- ${query} ${srcDir} ${includeDir}`.nothrow();
@@ -20,14 +23,16 @@ const relative = line => (line.startsWith(`${root}/`) ? line.slice(root.length +
 
 if (showAll) {
   const result = await search();
-  const results = result.stdout.trim() ? result.stdout.trim().split('\n') : [];
+  const output = result.text().trim();
+  const results = output ? output.split('\n') : [];
 
   if (result.exitCode === 127) {
     console.error('ripgrep is not installed');
     process.exit(result.exitCode);
   }
   if (result.exitCode > 1) {
-    if (result.stderr.trim()) console.error(result.stderr.trim());
+    const error = stderrText(result).trim();
+    if (error) console.error(error);
     process.exit(result.exitCode);
   }
 
@@ -52,11 +57,14 @@ const dim = value => color('2', value);
 const bold = value => (ansi ? `\x1b[1m${value}\x1b[22m` : value);
 const edge = cyan('│');
 
-const branch = branchResult.stdout.trim() || 'detached HEAD';
-const commits = commitsResult.stdout.trim() ? commitsResult.stdout.trim().split('\n') : [];
-const changes = changesResult.stdout.trim() ? changesResult.stdout.trim().split('\n') : [];
-const sourceFiles = filesResult.stdout.trim() || '?';
-const matches = matchesResult.stdout.trim() ? matchesResult.stdout.trim().split('\n') : [];
+const branch = branchResult.text().trim() || 'detached HEAD';
+const commitText = commitsResult.text().trim();
+const commits = commitText ? commitText.split('\n') : [];
+const changeText = changesResult.text().trim();
+const changes = changeText ? changeText.split('\n') : [];
+const sourceFiles = filesResult.text().trim() || '?';
+const matchText = matchesResult.text().trim();
+const matches = matchText ? matchText.split('\n') : [];
 
 const width = 76;
 const rule = (left, title = '', titleStyle = value => value, right = '─') => {

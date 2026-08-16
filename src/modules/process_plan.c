@@ -19,7 +19,9 @@
 #include "ant.h"
 #include "errors.h"
 #include "gc/objects.h"
+#include "gc/roots.h"
 #include "internal.h"
+#include "modules/buffer.h"
 #include "modules/process.h"
 #include "process_stage.h"
 
@@ -711,32 +713,92 @@ static void process_run_free(ant_process_run_t *run) {
 
 static void process_run_try_finish(ant_process_run_t *run) {
   if (!run || run->settled || !run->spawned || run->spawning ||
-      run->remaining_stages != 0)
-    return;
+    run->remaining_stages != 0) return;
+  
   for (size_t i = 0; i < run->plan.command_count; i++)
     if (run->stages && run->stages[i].process.handle_open &&
-        !run->stages[i].process.closed)
-      return;
+      !run->stages[i].process.closed) return;
+  
   if (run->stdout_capture.initialized && !run->stdout_capture.closed) return;
   if (run->stderr_capture.initialized && !run->stderr_capture.closed) return;
   run->settled = true;
+
+  GC_ROOT_SAVE(root_mark, run->js);
+  GC_ROOT_PIN(run->js, run->promise);
   ant_value_t result = js_mkobj(run->js);
-  js_set(run->js, result, "stdout", js_mkstr(
-    run->js, run->stdout_bytes.data ? run->stdout_bytes.data : "",
-    run->stdout_bytes.len
-  ));
-  js_set(run->js, result, "stderr", js_mkstr(
-    run->js, run->stderr_bytes.data ? run->stderr_bytes.data : "",
-    run->stderr_bytes.len
-  ));
+  
+  GC_ROOT_PIN(run->js, result);
+  ant_value_t stdout_value;
+  ant_value_t stderr_value;
+  
+  if (run->plan.result_mode == ANT_PROCESS_RESULT_BYTES) {
+    ArrayBufferData *stdout_buffer = create_array_buffer_data(
+      run->stdout_bytes.len
+    );
+    if (!stdout_buffer) goto result_oom;
+    if (run->stdout_bytes.len) memcpy(
+      stdout_buffer->data, run->stdout_bytes.data, run->stdout_bytes.len
+    );
+    stdout_value = create_typed_array(
+      run->js, TYPED_ARRAY_UINT8, stdout_buffer,
+      0, run->stdout_bytes.len, "Uint8Array"
+    );
+    if (is_err(stdout_value)) goto result_oom;
+    GC_ROOT_PIN(run->js, stdout_value);
+
+    ArrayBufferData *stderr_buffer = create_array_buffer_data(
+      run->stderr_bytes.len
+    );
+    if (!stderr_buffer) goto result_oom;
+    if (run->stderr_bytes.len) memcpy(
+      stderr_buffer->data, run->stderr_bytes.data, run->stderr_bytes.len
+    );
+    stderr_value = create_typed_array(
+      run->js, TYPED_ARRAY_UINT8, stderr_buffer,
+      0, run->stderr_bytes.len, "Uint8Array"
+    );
+    if (is_err(stderr_value)) goto result_oom;
+  } else {
+    stdout_value = js_mkstr(
+      run->js, run->stdout_bytes.data ? run->stdout_bytes.data : "",
+      run->stdout_bytes.len
+    );
+    if (is_err(stdout_value)) goto result_oom;
+    GC_ROOT_PIN(run->js, stdout_value);
+    stderr_value = js_mkstr(
+      run->js, run->stderr_bytes.data ? run->stderr_bytes.data : "",
+      run->stderr_bytes.len
+    );
+    if (is_err(stderr_value)) goto result_oom;
+  }
+  
+  GC_ROOT_PIN(run->js, stderr_value);
+  js_set(run->js, result, "stdout", stdout_value);
+  js_set(run->js, result, "stderr", stderr_value);
   js_set(run->js, result, "exitCode", js_mknum((double)run->final_exit_code));
+  
   const char *signal_name = process_signal_name(run->final_signal);
   js_set(run->js, result, "signalCode", signal_name
     ? js_mkstr(run->js, signal_name, strlen(signal_name)) : js_mknull());
+  
   js_set(run->js, result, "exited", js_false);
   js_resolve_promise(run->js, run->promise, result);
+  
+  GC_ROOT_RESTORE(run->js, root_mark);
   gc_unroot_pending_promise(run->js, js_obj_ptr(run->promise));
   process_run_free(run);
+  
+  return;
+
+result_oom: {
+    ant_value_t error = run->js->thrown_exists
+      ? run->js->thrown_value : js_mkerr(run->js, "Out of memory");
+    error = js_take_thrown(run->js, error);
+    js_reject_promise(run->js, run->promise, error);
+    GC_ROOT_RESTORE(run->js, root_mark);
+    gc_unroot_pending_promise(run->js, js_obj_ptr(run->promise));
+    process_run_free(run);
+  }
 }
 
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan) {

@@ -12,6 +12,7 @@
 #include "gc/objects.h"
 #include "gc/roots.h"
 #include "internal.h"
+#include "modules/buffer.h"
 #include "modules/child_process.h"
 #include "ptr.h"
 
@@ -20,6 +21,13 @@ typedef struct {
   size_t len;
   size_t capacity;
 } sh_bytes_t;
+
+typedef struct {
+  sh_bytes_t stdout_bytes;
+  sh_bytes_t stderr_bytes;
+} sh_output_accumulator_t;
+
+enum { SH_OUTPUT_ACCUMULATOR_TAG = 0x53484143u }; // SHAC
 
 static bool sh_bytes_reserve(sh_bytes_t *bytes, size_t additional) {
   if (additional > SIZE_MAX - bytes->len - 1) return false;
@@ -45,6 +53,30 @@ static bool sh_bytes_append(sh_bytes_t *bytes, const char *data, size_t len) {
   return true;
 }
 
+static ant_value_t sh_make_byte_array(
+  ant_t *js, const char *data, size_t len
+) {
+  ArrayBufferData *buffer = create_array_buffer_data(len);
+  if (!buffer) return js_mkerr(js, "Out of memory");
+  if (len) memcpy(buffer->data, data, len);
+  return create_typed_array(
+    js, TYPED_ARRAY_UINT8, buffer, 0, len, "Uint8Array"
+  );
+}
+
+static void sh_output_accumulator_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t context = js_obj_from_ptr(obj);
+  sh_output_accumulator_t *accumulator = js_get_native(
+    context, SH_OUTPUT_ACCUMULATOR_TAG
+  );
+  if (accumulator) {
+    free(accumulator->stdout_bytes.data);
+    free(accumulator->stderr_bytes.data);
+    free(accumulator);
+  }
+  js_clear_native(context, SH_OUTPUT_ACCUMULATOR_TAG);
+}
+
 static ant_value_t sh_result(
   ant_t *js,
   const char *stdout_text,
@@ -53,12 +85,36 @@ static ant_value_t sh_result(
   size_t stderr_len,
   int exit_code
 ) {
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", js_mkstr(js, stdout_text ? stdout_text : "", stdout_len));
-  js_set(js, result, "stderr", js_mkstr(js, stderr_text ? stderr_text : "", stderr_len));
+  
+  GC_ROOT_PIN(js, result);
+  ant_value_t stdout_value = sh_make_byte_array(
+    js, stdout_text ? stdout_text : "", stdout_len
+  );
+  
+  if (is_err(stdout_value)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return stdout_value;
+  }
+  
+  GC_ROOT_PIN(js, stdout_value);
+  ant_value_t stderr_value = sh_make_byte_array(
+    js, stderr_text ? stderr_text : "", stderr_len
+  );
+  
+  if (is_err(stderr_value)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return stderr_value;
+  }
+  
+  js_set(js, result, "stdout", stdout_value);
+  js_set(js, result, "stderr", stderr_value);
   js_set(js, result, "exitCode", js_mknum((double)exit_code));
   js_set(js, result, "signalCode", js_mknull());
   js_set(js, result, "exited", js_false);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return result;
 }
 
@@ -70,10 +126,25 @@ static ant_value_t sh_resolved_result(
   size_t stderr_len,
   int exit_code
 ) {
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t promise = js_mkpromise(js);
-  js_resolve_promise(js, promise, sh_result(
-    js, stdout_text, stdout_len, stderr_text, stderr_len, exit_code
-  ));
+  if (is_err(promise)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
+  }
+  
+  GC_ROOT_PIN(js, promise);
+  ant_value_t result = sh_result(
+    js, stdout_text, stdout_len, 
+    stderr_text, stderr_len, exit_code
+  );
+  
+  if (is_err(result)) {
+    ant_value_t error = js_take_thrown(js, result);
+    js_reject_promise(js, promise, error);
+  } else js_resolve_promise(js, promise, result);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return promise;
 }
 
@@ -337,8 +408,18 @@ static ant_value_t sh_run_builtin(
 ) {
   ant_value_t result = sh_run_builtin_result(js, context, argv);
   if (is_undefined(result) || is_err(result)) return result;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  
   ant_value_t promise = js_mkpromise(js);
+  if (is_err(promise)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
+  }
+  
   js_resolve_promise(js, promise, result);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return promise;
 }
 
@@ -469,12 +550,21 @@ static void sh_append_result_stderr(
 ) {
   ant_value_t old = js_get(js, result, "stderr");
   size_t old_len = 0;
-  char *old_text = vtype(old) == T_STR ? js_getstr(js, old, &old_len) : NULL;
+  
+  const uint8_t *old_text = NULL;
+  bool has_old = buffer_source_get_bytes(js, old, &old_text, &old_len);
+  
   sh_bytes_t combined = {0};
-  if (old_text) sh_bytes_append(&combined, old_text, old_len);
+  if (has_old) sh_bytes_append(
+    &combined, (const char *)old_text, old_len
+  );
+  
   sh_bytes_append(&combined, text, text_len);
-  js_set(js, result, "stderr", js_mkstr(js,
-    combined.data ? combined.data : "", combined.len));
+  js_set(js, result, "stderr", sh_make_byte_array(
+    js, combined.data ? 
+    combined.data : "", combined.len
+  ));
+  
   free(combined.data);
 }
 
@@ -636,8 +726,10 @@ static void sh_redirect_write_next(sh_redirect_write_t *write) {
 
   if (write->chunk_offset >= write->chunk_len) {
     size_t source_len = 0;
-    char *source = js_getstr(write->js, target->text, &source_len);
-    if (!source || source_len < target->text_len) {
+    const uint8_t *source = NULL;
+    if (!buffer_source_get_bytes(
+        write->js, target->text, &source, &source_len
+      ) || source_len < target->text_len) {
       write->failure = UV_EIO;
       sh_redirect_write_close(write);
       return;
@@ -781,32 +873,52 @@ static ant_value_t sh_apply_redirections_fulfilled(
   GC_ROOT_PIN(js, stderr_value);
   size_t stdout_len = 0;
   size_t stderr_len = 0;
-  char *stdout_text = vtype(stdout_value) == T_STR
-    ? js_getstr(js, stdout_value, &stdout_len) : NULL;
-  char *stderr_text = vtype(stderr_value) == T_STR
-    ? js_getstr(js, stderr_value, &stderr_len) : NULL;
+  
+  const uint8_t *stdout_text = NULL;
+  const uint8_t *stderr_text = NULL;
+  
+  bool has_stdout = buffer_source_get_bytes(
+    js, stdout_value,
+    &stdout_text, &stdout_len
+  );
+  
+  bool has_stderr = buffer_source_get_bytes(
+    js, stderr_value,
+    &stderr_text, &stderr_len
+  );
+  
+  if (!has_stdout || !has_stderr) {
+    ant_value_t error = js_mkerr_typed(
+      js, JS_ERR_TYPE, "Invalid shell redirection output"
+    );
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
 
   ant_value_t output_path = js_get(js, state, "outputPath");
   ant_value_t redirections = js_get(js, state, "redirections");
   ant_value_t stderr_path = js_get(js, state, "stderrPath");
+  
   GC_ROOT_PIN(js, output_path);
   GC_ROOT_PIN(js, redirections);
   GC_ROOT_PIN(js, stderr_path);
+  
   ant_value_t stderr_mode_value = js_get(js, state, "stderrMode");
   int stderr_mode = vtype(stderr_mode_value) == T_NUM
     ? (int)js_getnum(stderr_mode_value) : 0;
 
   sh_bytes_t captured_stdout = {0};
-  if (vtype(output_path) != T_STR && stdout_text)
-    sh_bytes_append(&captured_stdout, stdout_text, stdout_len);
-  if (stderr_mode == 1 && stderr_text)
-    sh_bytes_append(&captured_stdout, stderr_text, stderr_len);
+  if (vtype(output_path) != T_STR)
+    sh_bytes_append(&captured_stdout, (const char *)stdout_text, stdout_len);
+  if (stderr_mode == 1)
+    sh_bytes_append(&captured_stdout, (const char *)stderr_text, stderr_len);
 
-  js_set(js, result, "stdout", js_mkstr(js,
+  js_set(js, result, "stdout", sh_make_byte_array(js,
     captured_stdout.data ? captured_stdout.data : "", captured_stdout.len));
   free(captured_stdout.data);
-  js_set(js, result, "stderr", stderr_mode == 0 && stderr_text
-    ? js_mkstr(js, stderr_text, stderr_len) : js_mkstr(js, "", 0));
+  js_set(js, result, "stderr", stderr_mode == 0
+    ? sh_make_byte_array(js, (const char *)stderr_text, stderr_len)
+    : sh_make_byte_array(js, "", 0));
 
   size_t redirection_count = vtype(redirections) == T_ARR
     ? (size_t)js_arr_len(js, redirections) : 0;
@@ -830,7 +942,7 @@ static ant_value_t sh_apply_redirections_fulfilled(
   }
   
   size_t spec_count = 0;
-  ant_value_t empty_text = js_mkstr(js, "", 0);
+  ant_value_t empty_text = sh_make_byte_array(js, "", 0);
   GC_ROOT_PIN(js, empty_text);
   size_t output_index = 0;
   
@@ -877,7 +989,7 @@ static ant_value_t sh_apply_redirections(
     js_heavy_mkfun(js, sh_apply_redirections_fulfilled, state), js_mkundef());
 }
 
-ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_run_raw(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 4 || !is_special_object(args[0]) || vtype(args[2]) != T_NUM ||
       vtype(args[3]) != T_ARR) {
     return sh_resolved_result(js, "", 0, "ant:shell: invalid compiled pipeline\n", sizeof("ant:shell: invalid compiled pipeline\n") - 1, 2);
@@ -970,7 +1082,83 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
   return child_process_exec_file_result(js, file, child_argv, options);
 }
 
-ant_value_t sh_runtime_context(ant_t *js) {
+static ant_value_t sh_accumulate_fulfilled(
+  ant_t *js, ant_value_t *args, int nargs
+) {
+  ant_value_t context = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t result = nargs > 0 ? args[0] : js_mkundef();
+  
+  sh_output_accumulator_t *accumulator = js_get_native(context, SH_OUTPUT_ACCUMULATOR_TAG);
+  if (!accumulator || !is_special_object(result))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
+
+  const uint8_t *stdout_bytes = NULL;
+  const uint8_t *stderr_bytes = NULL;
+  
+  size_t stdout_len = 0;
+  size_t stderr_len = 0;
+  
+  if (!buffer_source_get_bytes(
+      js, js_get(js, result, "stdout"), &stdout_bytes, &stdout_len
+    ) || !buffer_source_get_bytes(
+      js, js_get(js, result, "stderr"), &stderr_bytes, &stderr_len
+    )) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell output");
+
+  if (!sh_bytes_append(
+      &accumulator->stdout_bytes, (const char *)stdout_bytes, stdout_len
+    ) || !sh_bytes_append(
+      &accumulator->stderr_bytes, (const char *)stderr_bytes, stderr_len
+    )) return js_mkerr(js, "Out of memory");
+  return result;
+}
+
+ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result = sh_runtime_run_raw(js, args, nargs);
+  if (vtype(result) != T_PROMISE || nargs < 2) return result;
+  sh_compiled_program_t *compiled = js_get_native(
+    args[1], SH_COMPILED_PROGRAM_TAG
+  );
+  if (!compiled || compiled->program.clause_count <= 1) return result;
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  GC_ROOT_PIN(js, args[0]);
+  ant_value_t accumulated = js_promise_then(
+    js, result, js_heavy_mkfun(js, sh_accumulate_fulfilled, args[0]),
+    js_mkundef()
+  );
+  GC_ROOT_RESTORE(js, root_mark);
+  return accumulated;
+}
+
+ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_special_object(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
+  sh_output_accumulator_t *accumulator = js_get_native(
+    args[0], SH_OUTPUT_ACCUMULATOR_TAG
+  );
+  if (!accumulator)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
+
+  ant_value_t last = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t exit_code_value = is_special_object(last)
+    ? js_get(js, last, "exitCode") : js_mknum(0);
+  int exit_code = vtype(exit_code_value) == T_NUM
+    ? (int)js_getnum(exit_code_value) : 0;
+  ant_value_t result = sh_result(
+    js,
+    accumulator->stdout_bytes.data ? accumulator->stdout_bytes.data : "",
+    accumulator->stdout_bytes.len,
+    accumulator->stderr_bytes.data ? accumulator->stderr_bytes.data : "",
+    accumulator->stderr_bytes.len,
+    exit_code
+  );
+  if (is_err(result)) return result;
+  if (is_special_object(last))
+    js_set(js, result, "signalCode", js_get(js, last, "signalCode"));
+  return result;
+}
+
+ant_value_t sh_runtime_context(ant_t *js, bool needs_accumulator) {
   size_t capacity = 256;
   char *cwd = NULL;
   int rc;
@@ -991,8 +1179,32 @@ ant_value_t sh_runtime_context(ant_t *js) {
     return js_mkerr(js, "Failed to get current directory: %s", uv_strerror(rc));
   }
 
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t context = js_mkobj(js);
+  if (is_err(context)) {
+    free(cwd);
+    GC_ROOT_RESTORE(js, root_mark);
+    return context;
+  }
+  GC_ROOT_PIN(js, context);
+  if (needs_accumulator) {
+    sh_output_accumulator_t *accumulator = calloc(1, sizeof(*accumulator));
+    if (!accumulator) {
+      free(cwd);
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr(js, "Out of memory");
+    }
+    js_set_native(context, accumulator, SH_OUTPUT_ACCUMULATOR_TAG);
+    if (js_get_native(context, SH_OUTPUT_ACCUMULATOR_TAG) != accumulator) {
+      free(accumulator);
+      free(cwd);
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr(js, "Out of memory");
+    }
+    js_set_finalizer(context, sh_output_accumulator_finalize);
+  }
   js_set(js, context, "cwd", js_mkstr(js, cwd, strlen(cwd)));
   free(cwd);
+  GC_ROOT_RESTORE(js, root_mark);
   return context;
 }

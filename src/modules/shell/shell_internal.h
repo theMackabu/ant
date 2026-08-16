@@ -105,6 +105,7 @@ char *sh_compile_program_source(
 );
 
 ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t sh_runtime_context(ant_t *js);
+ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_context(ant_t *js, bool needs_accumulator);
 
 #endif

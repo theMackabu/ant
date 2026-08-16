@@ -1845,19 +1845,30 @@ static bool child_process_plan_add_native_result(
   ant_value_t stderr_value = js_get(js, result, "stderr");
   ant_value_t exit_code_value = js_get(js, result, "exitCode");
   
-  if (vtype(stdout_value) != T_STR || vtype(stderr_value) != T_STR ||
-      vtype(exit_code_value) != T_NUM) {
+  if (vtype(exit_code_value) != T_NUM) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Invalid native pipeline stage");
     return false;
   }
   
   size_t stdout_len = 0;
   size_t stderr_len = 0;
-  char *stdout_data = js_getstr(js, stdout_value, &stdout_len);
-  char *stderr_data = js_getstr(js, stderr_value, &stderr_len);
   
-  if (!stdout_data || !stderr_data || !ant_process_plan_add_native_stage(
-    plan, stdout_data, stdout_len, stderr_data, stderr_len,
+  const uint8_t *stdout_data = NULL;
+  const uint8_t *stderr_data = NULL;
+  
+  bool stdout_valid = buffer_source_get_bytes(
+    js, stdout_value, 
+    &stdout_data, &stdout_len
+  );
+  
+  bool stderr_valid = buffer_source_get_bytes(
+    js, stderr_value, 
+    &stderr_data, &stderr_len
+  );
+  
+  if (!stdout_valid || !stderr_valid || !ant_process_plan_add_native_stage(
+    plan, (const char *)stdout_data, stdout_len,
+    (const char *)stderr_data, stderr_len,
     (int)js_getnum(exit_code_value)
   )) {
     js_mkerr(js, "Out of memory");
@@ -1875,8 +1886,11 @@ ant_value_t child_process_exec_file_result(
 ) {
   ant_process_plan_t plan;
   ant_process_plan_init(&plan);
+  plan.result_mode = ANT_PROCESS_RESULT_BYTES;
+  
   ant_value_t values = js_mkarr(js);
   js_arr_push(js, values, file);
+  
   if (vtype(argv) == T_ARR) for (ant_offset_t i = 0; i < js_arr_len(js, argv); i++)
     js_arr_push(js, values, js_arr_get(js, argv, i));
   if (!child_process_plan_apply_options(js, &plan, options) ||
@@ -1885,6 +1899,7 @@ ant_value_t child_process_exec_file_result(
     return ant_process_plan_rejected_result(js,
       js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
   }
+  
   return ant_process_plan_submit(js, &plan);
 }
 
@@ -1899,6 +1914,7 @@ ant_value_t child_process_pipeline_result(
   }
   ant_process_plan_t plan;
   ant_process_plan_init(&plan);
+  plan.result_mode = ANT_PROCESS_RESULT_BYTES;
   if (!child_process_plan_apply_options(js, &plan, options)) goto invalid;
   for (ant_offset_t i = 0; i < js_arr_len(js, commands); i++) {
     ant_value_t command = js_arr_get(js, commands, i);

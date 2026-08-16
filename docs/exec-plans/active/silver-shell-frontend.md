@@ -25,8 +25,9 @@ Deliver an end-to-end Bun-style asynchronous API with:
 - `<`, `>`, `>>`, and `2>&1` redirections;
 - native `echo`, `pwd`, `cd`, `true`, and `false` built-ins;
 - direct executable spawning for other commands;
-- captured stdout/stderr and exit status;
-- `.text()`, `.lines()`, and `.nothrow()` result controls;
+- byte-backed stdout/stderr and exit status;
+- `.text()`, `.json()`, `.arrayBuffer()`, `.bytes()`, `.blob()`, `.lines()`,
+  and `.nothrow()` result controls;
 - compilation cached by tagged-template identity.
 
 ## Architecture
@@ -66,6 +67,11 @@ const output = await $`printf hello`;
 const text = await $`printf hello`.text();
 const failed = await $`exit 7`.nothrow();
 ```
+
+Resolved commands produce a named `ShellOutput`. Its `stdout` and `stderr`
+properties are `Uint8Array` values. Conversion methods decode or expose stdout
+without forcing the process substrate through an intermediate JavaScript
+string. Shell output remains captured by default.
 
 Nonzero status rejects by default. `.nothrow()` changes only the public promise
 policy; the compiled shell always receives exit status as ordinary control-flow
@@ -123,12 +129,16 @@ Repository examples and tests using the synchronous API move with the change.
 18. [x] Represent native built-ins as process-plan stages inside pipelines.
     Write their output through the pipeline descriptors asynchronously,
     preserve last-stage status, and isolate stateful built-in contexts.
-19. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
+19. [x] Keep shell capture, built-in results, redirections, and multi-clause
+    accumulation byte-backed. Expose a shared `ShellOutput` prototype with
+    synchronous conversion methods while preserving asynchronous methods on
+    `ShellPromise`.
+20. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
     compiled frames, `OP_AWAIT` resume entry, interpreter/JIT handoff, GC
     rooting, exception/finally behavior, and bailout handling across resumes.
     Confirm generated shell functions actually reach JIT code and benchmark
     them before changing hotness thresholds.
-20. [ ] Prioritize the next POSIX frontend milestone: implement assignment
+21. [ ] Prioritize the next POSIX frontend milestone: implement assignment
     words, parameter and arithmetic expansion, command substitution, and
     `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
     control flow directly to Silver bytecode, preserve shell-context semantics,
@@ -191,6 +201,10 @@ Repository examples and tests using the synchronous API move with the change.
   graph as an external process, and does not mutate the parent shell context.
   This gives `:`, `exit`, `cd`, `echo`, `pwd`, `true`, and `false` pipeline
   semantics without executable lookup or a second shell process.
+- 2026-08-16: Keep shell output byte-backed from process capture through public
+  settlement. Process plans select text output only for adapters that require
+  it; shell redirections and multi-clause accumulation do not decode. Public
+  results use a shared `ShellOutput` prototype and expose `Uint8Array` output.
 
 ## Validation status
 

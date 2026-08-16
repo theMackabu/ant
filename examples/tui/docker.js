@@ -2,6 +2,7 @@ import { Screen, List, Input, colors, box, keys, codes, confirm, alert, pad, pad
 import { $ } from 'ant:shell';
 
 const screen = new Screen({ fullscreen: true, hideCursor: true });
+const decoder = new TextDecoder();
 
 let containers = [];
 
@@ -26,11 +27,11 @@ const containerList = new List({
 async function runDocker(command, label) {
   const result = await command.nothrow();
   if (result.exitCode !== 0) {
-    const output = (result.stderr || result.stdout).trim();
+    const output = (decoder.decode(result.stderr) || result.text()).trim();
     state.lastError = output || `Command failed: ${label}`;
     return null;
   }
-  return result.stdout;
+  return result.text();
 }
 
 function isRunning(container) {

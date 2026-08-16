@@ -95,9 +95,7 @@ char *sh_compile_program_source(
 
   sh_source_t source = {0};
   if (program->clause_count == 0) {
-    sh_source_cstr(&source,
-      "return {stdout:\"\",stderr:\"\",exitCode:0,signalCode:null};"
-    );
+    sh_source_cstr(&source, "return __finish(__ctx,null);");
     goto done;
   }
   
@@ -106,7 +104,7 @@ char *sh_compile_program_source(
     goto done;
   }
 
-  sh_source_cstr(&source, "let __out=\"\",__err=\"\",__result;");
+  sh_source_cstr(&source, "let __result;");
   for (size_t i = 0; i < program->clause_count; i++) {
     const sh_clause_t *clause = &program->clauses[i];
     if (clause->connector == SH_CONNECT_AND)
@@ -118,18 +116,13 @@ char *sh_compile_program_source(
       &source, "__result=await __run(__ctx,__plan,%zu,__values);", i
     );
     sh_source_cstr(&source,
-      "__out+=__result.stdout;__err+=__result.stderr;"
-      "if(__result.exited)return {stdout:__out,stderr:__err,"
-      "exitCode:__result.exitCode,signalCode:__result.signalCode};"
+      "if(__result.exited)return __finish(__ctx,__result);"
     );
 
     if (clause->connector != SH_CONNECT_ALWAYS) sh_source_cstr(&source, "}");
   }
 
-  sh_source_cstr(&source,
-    "return {stdout:__out,stderr:__err,exitCode:__result.exitCode,"
-    "signalCode:__result.signalCode};"
-  );
+  sh_source_cstr(&source, "return __finish(__ctx,__result);");
 
 done:
   if (source.failed) {

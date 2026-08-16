@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "types.h"
 
@@ -10,6 +11,11 @@ typedef enum {
   ANT_PROCESS_STDERR_CAPTURE = 0,
   ANT_PROCESS_STDERR_TO_STDOUT,
 } ant_process_stderr_mode_t;
+
+typedef enum {
+  ANT_PROCESS_RESULT_TEXT = 0,
+  ANT_PROCESS_RESULT_BYTES,
+} ant_process_result_mode_t;
 
 typedef enum {
   ANT_PROCESS_REDIRECT_STDIN = 0,
@@ -51,7 +57,8 @@ typedef struct {
   ant_process_plan_redirect_t *redirects;
   size_t redirect_count;
   char *cwd;
-  ant_process_stderr_mode_t stderr_mode;
+  uint8_t stderr_mode;
+  uint8_t result_mode;
 } ant_process_plan_t;
 
 bool ant_process_plan_add_native_stage(
