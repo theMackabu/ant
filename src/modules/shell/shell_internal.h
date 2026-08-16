@@ -109,7 +109,13 @@ char *sh_debug_program_plan_source(
   size_t *source_len
 );
 
-ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_word(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_command(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_redirect_word(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t sh_runtime_context(ant_t *js, bool needs_accumulator);
 

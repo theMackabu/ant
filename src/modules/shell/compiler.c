@@ -211,6 +211,112 @@ char *sh_debug_program_plan_source(
   return source.data;
 }
 
+static bool sh_word_is_static(const sh_word_t *word) {
+  if (!word) return false;
+  for (size_t i = 0; i < word->part_count; i++)
+    if (word->parts[i].kind != SH_PART_LITERAL) return false;
+  return true;
+}
+
+static bool sh_source_static_word(
+  sh_source_t *source, const sh_word_t *word
+) {
+  if (!sh_word_is_static(word) || !sh_source_cstr(source, "\"")) return false;
+  for (size_t i = 0; i < word->part_count; i++) {
+    const sh_word_part_t *part = &word->parts[i];
+    for (size_t j = 0; j < part->text_len; j++) {
+      unsigned char ch = (unsigned char)part->text[j];
+      switch (ch) {
+        case '"': if (!sh_source_cstr(source, "\\\"")) return false; break;
+        case '\\': if (!sh_source_cstr(source, "\\\\")) return false; break;
+        case '\b': if (!sh_source_cstr(source, "\\b")) return false; break;
+        case '\f': if (!sh_source_cstr(source, "\\f")) return false; break;
+        case '\n': if (!sh_source_cstr(source, "\\n")) return false; break;
+        case '\r': if (!sh_source_cstr(source, "\\r")) return false; break;
+        case '\t': if (!sh_source_cstr(source, "\\t")) return false; break;
+        default:
+          if (ch < 0x20) {
+            if (!sh_source_format(source, "\\u%04x", ch)) return false;
+          } else if (!sh_source_append(source, part->text + j, 1)) return false;
+          break;
+      }
+    }
+  }
+  return sh_source_cstr(source, "\"");
+}
+
+static bool sh_command_is_static(const sh_command_t *command) {
+  if (!command) return false;
+  for (size_t i = 0; i < command->word_count; i++)
+    if (!sh_word_is_static(&command->words[i])) return false;
+  return true;
+}
+
+static bool sh_compile_command(
+  sh_source_t *source, const sh_command_t *command,
+  size_t clause_index, size_t command_index, size_t command_count
+) {
+  bool direct_static = sh_command_is_static(command) &&
+    command->word_count <= 32;
+  if (!direct_static) {
+    for (size_t i = 0; i < command->word_count; i++) {
+      const sh_word_t *word = &command->words[i];
+      if (sh_word_is_static(word)) {
+        if (!sh_source_cstr(source, "__arg(__exec,")) return false;
+        if (!sh_source_static_word(source, word)) return false;
+        if (!sh_source_cstr(source, ");")) return false;
+      } else if (!sh_source_format(
+        source, "__word(__exec,__plan,%zu,%zu,%zu,__values);",
+        clause_index, command_index, i
+      )) return false;
+    }
+  }
+
+  for (size_t i = 0; i < command->redir_count; i++) {
+    const sh_redir_t *redir = &command->redirs[i];
+    if (redir->kind == SH_REDIR_STDERR_TO_STDOUT) {
+      if (!sh_source_format(
+        source, "__redirect(__exec,__ctx,%u,null,%zu,%zu);",
+        (unsigned)redir->kind, command_index, command_count
+      )) return false;
+    } else if (sh_word_is_static(&redir->target)) {
+      if (!sh_source_format(
+        source, "__redirect(__exec,__ctx,%u,",
+        (unsigned)redir->kind
+      )) return false;
+      if (!sh_source_static_word(source, &redir->target)) return false;
+      if (!sh_source_format(
+        source, ",%zu,%zu);", command_index, command_count
+      )) return false;
+    } else if (!sh_source_format(
+      source,
+      "__redirectWord(__exec,__ctx,__plan,%zu,%zu,%zu,__values,%zu);",
+      clause_index, command_index, i, command_count
+    )) return false;
+  }
+
+  if (!sh_source_format(
+    source, "__command(__exec,__ctx,%zu", command_count
+  )) return false;
+  if (direct_static) for (size_t i = 0; i < command->word_count; i++) {
+    if (!sh_source_cstr(source, ",")) return false;
+    if (!sh_source_static_word(source, &command->words[i])) return false;
+  }
+  return sh_source_cstr(source, ");");
+}
+
+static bool sh_compile_pipeline(
+  sh_source_t *source, const sh_pipeline_t *pipeline, size_t clause_index
+) {
+  if (!sh_source_cstr(source, "__exec=__begin(__ctx);")) return false;
+  for (size_t i = 0; i < pipeline->command_count; i++)
+    if (!sh_compile_command(
+      source, &pipeline->commands[i], clause_index, i,
+      pipeline->command_count
+    )) return false;
+  return sh_source_cstr(source, "__result=await __submit(__ctx,__exec);");
+}
+
 char *sh_compile_program_source(
   const sh_program_t *program,
   size_t *source_len,
@@ -225,13 +331,8 @@ char *sh_compile_program_source(
     sh_source_cstr(&source, "return __finish(__ctx,null);");
     goto done;
   }
-  
-  if (program->clause_count == 1) {
-    sh_source_cstr(&source, "return await __run(__ctx,__plan,0,__values);");
-    goto done;
-  }
 
-  sh_source_cstr(&source, "let __result;");
+  sh_source_cstr(&source, "let __exec,__result;");
   for (size_t i = 0; i < program->clause_count; i++) {
     const sh_clause_t *clause = &program->clauses[i];
     if (clause->connector == SH_CONNECT_AND)
@@ -239,17 +340,17 @@ char *sh_compile_program_source(
     else if (clause->connector == SH_CONNECT_OR)
       sh_source_cstr(&source, "if(__result.exitCode!==0){");
 
-    sh_source_format(
-      &source, "__result=await __run(__ctx,__plan,%zu,__values);", i
-    );
-    sh_source_cstr(&source,
+    sh_compile_pipeline(&source, &clause->pipeline, i);
+    if (program->clause_count > 1) sh_source_cstr(&source,
       "if(__result.exited)return __finish(__ctx,__result);"
     );
 
     if (clause->connector != SH_CONNECT_ALWAYS) sh_source_cstr(&source, "}");
   }
 
-  sh_source_cstr(&source, "return __finish(__ctx,__result);");
+  if (program->clause_count == 1)
+    sh_source_cstr(&source, "return __result;");
+  else sh_source_cstr(&source, "return __finish(__ctx,__result);");
 
 done:
   if (source.failed) {

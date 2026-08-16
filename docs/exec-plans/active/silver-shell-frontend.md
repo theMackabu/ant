@@ -123,9 +123,9 @@ Repository examples and tests using the synchronous API move with the change.
     events in its adapter, and keep shell pipeline aggregation in the process
     plan orchestrator.
 17. [x] Retain the immutable parsed shell program beside its cached Silver
-    function and pass clause indexes to the native runner instead of emitting
-    nested JavaScript plan literals. Specialize empty, single-clause, and
-    multi-clause generated control-flow shapes.
+    function. As an intermediate migration step, pass clause indexes to the
+    native runner instead of emitting nested JavaScript plan literals, and
+    specialize empty, single-clause, and multi-clause control-flow shapes.
 18. [x] Represent native built-ins as process-plan stages inside pipelines.
     Write their output through the pipeline descriptors asynchronously,
     preserve last-stage status, and isolate stateful built-in contexts.
@@ -133,16 +133,22 @@ Repository examples and tests using the synchronous API move with the change.
     accumulation byte-backed. Expose a shared `ShellOutput` prototype with
     synchronous conversion methods while preserving asynchronous methods on
     `ShellPromise`.
-20. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
+20. [x] Replace the clause-index native AST walker with direct Silver lowering.
+    Emit ordinary Silver calls, locals, branches, and `await` around granular
+    word-expansion, command-building, redirection, and process-submit intrinsics.
+    Keep immutable descriptors in the cached native plan and submit each
+    complete pipeline as one typed process graph.
+21. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
     compiled frames, `OP_AWAIT` resume entry, interpreter/JIT handoff, GC
     rooting, exception/finally behavior, and bailout handling across resumes.
     Confirm generated shell functions actually reach JIT code and benchmark
     them before changing hotness thresholds.
-21. [ ] Prioritize the next POSIX frontend milestone: implement assignment
+22. [ ] Prioritize the next POSIX frontend milestone: implement assignment
     words, parameter and arithmetic expansion, command substitution, and
     `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
     control flow directly to Silver bytecode, preserve shell-context semantics,
     and add differential coverage against `dash` and Bash POSIX mode.
+
 ## Deferred POSIX work
 
 - tilde, parameter, arithmetic, field-splitting, pathname, and quote-removal
@@ -205,6 +211,12 @@ Repository examples and tests using the synchronous API move with the change.
   settlement. Process plans select text output only for adapters that require
   it; shell redirections and multi-clause accumulation do not decode. Public
   results use a shared `ShellOutput` prototype and expose `Uint8Array` output.
+- 2026-08-16: Treat clause-index selection as an intermediate milestone, not
+  the final lowering architecture. Generated Silver now constructs each static
+  pipeline through direct shell intrinsics and performs connector control flow
+  itself. Native code expands individual dynamic descriptors and submits the
+  completed typed process graph; it no longer walks clauses, commands, and
+  redirections as a second interpreter.
 
 ## Validation status
 
@@ -265,6 +277,21 @@ Repository examples and tests using the synchronous API move with the change.
   regression: set/get medians were 11.64/6.02 ms before and 11.57/5.65 ms
   after; unique/shared weak-GC medians were 233.31/129.13 ms before and
   227.24/128.76 ms after.
+- After direct Silver lowering, `tests/test_shell.js`,
+  `tests/test_debug_shell_compile.cjs`, every `tests/test_child_process_*.cjs`
+  test, `maid preflight`, and `maid knowledge` passed. The full 100-file spec
+  suite passed 3,931 tests with zero failures. Generated code now contains
+  direct begin, word, command, redirection, submit, await, and connector
+  operations, and no reference to the removed clause-level `__run` walker.
+- A deterministic 552-case child-process differential covering `spawnSync`,
+  `execFileSync`, and `execSync` matched both the saved pre-lowering Ant binary
+  and Node for cwd, environment, input, output, and nonzero-status variants.
+- Three interleaved performance pairs against the saved plan-walker binary put
+  20,000 cached one-clause native commands at 281-285 ms versus 302-303 ms and
+  10,000 cached two-clause native commands at 223-225 ms versus 246-248 ms.
+  Five hundred external `printf` invocations remained effectively flat at
+  roughly 1.80-1.82 seconds. The single native-stage process-plan fast path
+  avoids kernel capture pipes while preserving the shared submission API.
 
 ## Remaining risks
 

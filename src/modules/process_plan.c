@@ -171,6 +171,26 @@ bool ant_process_plan_add_command(
   return true;
 }
 
+bool ant_process_plan_take_command(
+  ant_process_plan_t *plan, char **argv, size_t argc
+) {
+  if (!plan || !argv || argc == 0 || !argv[0] || argv[0][0] == '\0')
+    return false;
+  if (plan->command_count == SIZE_MAX / sizeof(*plan->commands)) return false;
+  size_t next_count = plan->command_count + 1;
+  ant_process_plan_command_t *commands = realloc(
+    plan->commands, next_count * sizeof(*commands)
+  );
+  if (!commands) return false;
+  plan->commands = commands;
+  commands[plan->command_count] = (ant_process_plan_command_t){
+    .kind = ANT_PROCESS_PLAN_COMMAND_EXTERNAL,
+    .as.external = { .argv = argv, .argc = argc },
+  };
+  plan->command_count = next_count;
+  return true;
+}
+
 static bool process_plan_copy_bytes(
   char **out, const char *data, size_t len
 ) {
@@ -711,6 +731,68 @@ static void process_run_free(ant_process_run_t *run) {
   free(run);
 }
 
+static ant_value_t process_plan_make_result(
+  ant_t *js, ant_process_result_mode_t result_mode,
+  const char *stdout_data, size_t stdout_len,
+  const char *stderr_data, size_t stderr_len,
+  int exit_code, int signal, bool exited
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t result = js_mkobj(js);
+  if (is_err(result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+  GC_ROOT_PIN(js, result);
+  ant_value_t stdout_value;
+  ant_value_t stderr_value;
+
+  if (result_mode == ANT_PROCESS_RESULT_BYTES) {
+    ArrayBufferData *stdout_buffer = create_array_buffer_data(stdout_len);
+    if (!stdout_buffer) goto oom;
+    if (stdout_len) memcpy(stdout_buffer->data, stdout_data, stdout_len);
+    stdout_value = create_typed_array(
+      js, TYPED_ARRAY_UINT8, stdout_buffer, 0, stdout_len, "Uint8Array"
+    );
+    if (is_err(stdout_value)) goto failed;
+    GC_ROOT_PIN(js, stdout_value);
+
+    ArrayBufferData *stderr_buffer = create_array_buffer_data(stderr_len);
+    if (!stderr_buffer) goto oom;
+    if (stderr_len) memcpy(stderr_buffer->data, stderr_data, stderr_len);
+    stderr_value = create_typed_array(
+      js, TYPED_ARRAY_UINT8, stderr_buffer, 0, stderr_len, "Uint8Array"
+    );
+    if (is_err(stderr_value)) goto failed;
+  } else {
+    stdout_value = js_mkstr(js, stdout_data ? stdout_data : "", stdout_len);
+    if (is_err(stdout_value)) goto failed;
+    GC_ROOT_PIN(js, stdout_value);
+    stderr_value = js_mkstr(js, stderr_data ? stderr_data : "", stderr_len);
+    if (is_err(stderr_value)) goto failed;
+  }
+
+  GC_ROOT_PIN(js, stderr_value);
+  js_set(js, result, "stdout", stdout_value);
+  js_set(js, result, "stderr", stderr_value);
+  js_set(js, result, "exitCode", js_mknum((double)exit_code));
+  const char *signal_name = process_signal_name(signal);
+  js_set(js, result, "signalCode", signal_name
+    ? js_mkstr(js, signal_name, strlen(signal_name)) : js_mknull());
+  js_set(js, result, "exited", js_bool(exited));
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+
+oom:
+  js_mkerr(js, "Out of memory");
+failed: {
+    ant_value_t error = js->thrown_exists
+      ? mkval(T_ERR, 0) : js_mkerr(js, "Out of memory");
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
+}
+
 static void process_run_try_finish(ant_process_run_t *run) {
   if (!run || run->settled || !run->spawned || run->spawning ||
     run->remaining_stages != 0) return;
@@ -725,63 +807,13 @@ static void process_run_try_finish(ant_process_run_t *run) {
 
   GC_ROOT_SAVE(root_mark, run->js);
   GC_ROOT_PIN(run->js, run->promise);
-  ant_value_t result = js_mkobj(run->js);
-  
-  GC_ROOT_PIN(run->js, result);
-  ant_value_t stdout_value;
-  ant_value_t stderr_value;
-  
-  if (run->plan.result_mode == ANT_PROCESS_RESULT_BYTES) {
-    ArrayBufferData *stdout_buffer = create_array_buffer_data(
-      run->stdout_bytes.len
-    );
-    if (!stdout_buffer) goto result_oom;
-    if (run->stdout_bytes.len) memcpy(
-      stdout_buffer->data, run->stdout_bytes.data, run->stdout_bytes.len
-    );
-    stdout_value = create_typed_array(
-      run->js, TYPED_ARRAY_UINT8, stdout_buffer,
-      0, run->stdout_bytes.len, "Uint8Array"
-    );
-    if (is_err(stdout_value)) goto result_oom;
-    GC_ROOT_PIN(run->js, stdout_value);
-
-    ArrayBufferData *stderr_buffer = create_array_buffer_data(
-      run->stderr_bytes.len
-    );
-    if (!stderr_buffer) goto result_oom;
-    if (run->stderr_bytes.len) memcpy(
-      stderr_buffer->data, run->stderr_bytes.data, run->stderr_bytes.len
-    );
-    stderr_value = create_typed_array(
-      run->js, TYPED_ARRAY_UINT8, stderr_buffer,
-      0, run->stderr_bytes.len, "Uint8Array"
-    );
-    if (is_err(stderr_value)) goto result_oom;
-  } else {
-    stdout_value = js_mkstr(
-      run->js, run->stdout_bytes.data ? run->stdout_bytes.data : "",
-      run->stdout_bytes.len
-    );
-    if (is_err(stdout_value)) goto result_oom;
-    GC_ROOT_PIN(run->js, stdout_value);
-    stderr_value = js_mkstr(
-      run->js, run->stderr_bytes.data ? run->stderr_bytes.data : "",
-      run->stderr_bytes.len
-    );
-    if (is_err(stderr_value)) goto result_oom;
-  }
-  
-  GC_ROOT_PIN(run->js, stderr_value);
-  js_set(run->js, result, "stdout", stdout_value);
-  js_set(run->js, result, "stderr", stderr_value);
-  js_set(run->js, result, "exitCode", js_mknum((double)run->final_exit_code));
-  
-  const char *signal_name = process_signal_name(run->final_signal);
-  js_set(run->js, result, "signalCode", signal_name
-    ? js_mkstr(run->js, signal_name, strlen(signal_name)) : js_mknull());
-  
-  js_set(run->js, result, "exited", js_false);
+  ant_value_t result = process_plan_make_result(
+    run->js, (ant_process_result_mode_t)run->plan.result_mode,
+    run->stdout_bytes.data, run->stdout_bytes.len,
+    run->stderr_bytes.data, run->stderr_bytes.len,
+    run->final_exit_code, run->final_signal, run->plan.exited
+  );
+  if (is_err(result)) goto result_error;
   js_resolve_promise(run->js, run->promise, result);
   
   GC_ROOT_RESTORE(run->js, root_mark);
@@ -790,7 +822,7 @@ static void process_run_try_finish(ant_process_run_t *run) {
   
   return;
 
-result_oom: {
+result_error: {
     ant_value_t error = run->js->thrown_exists
       ? run->js->thrown_value : js_mkerr(run->js, "Out of memory");
     error = js_take_thrown(run->js, error);
@@ -801,12 +833,43 @@ result_oom: {
   }
 }
 
+static ant_value_t process_plan_submit_native_immediate(
+  ant_t *js, ant_process_plan_t *plan
+) {
+  ant_process_plan_command_t *command = &plan->commands[0];
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t promise = js_mkpromise(js);
+  if (is_err(promise)) {
+    ant_value_t error = promise;
+    ant_process_plan_dispose(plan);
+    GC_ROOT_RESTORE(js, root_mark);
+    return ant_process_plan_rejected_result(js, error);
+  }
+  GC_ROOT_PIN(js, promise);
+  ant_value_t result = process_plan_make_result(
+    js, (ant_process_result_mode_t)plan->result_mode,
+    command->as.native.stdout_data, command->as.native.stdout_len,
+    command->as.native.stderr_data, command->as.native.stderr_len,
+    command->as.native.exit_code, 0, plan->exited
+  );
+  if (is_err(result)) {
+    ant_value_t error = js_take_thrown(js, result);
+    js_reject_promise(js, promise, error);
+  } else js_resolve_promise(js, promise, result);
+  ant_process_plan_dispose(plan);
+  GC_ROOT_RESTORE(js, root_mark);
+  return promise;
+}
+
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan) {
   if (!plan || plan->command_count == 0) {
     ant_value_t error = js_mkerr(js, "invalid process plan");
     ant_process_plan_dispose(plan);
     return ant_process_plan_rejected_result(js, error);
   }
+  if (plan->command_count == 1 && plan->redirect_count == 0 &&
+      plan->commands[0].kind == ANT_PROCESS_PLAN_COMMAND_NATIVE)
+    return process_plan_submit_native_immediate(js, plan);
   
   ant_process_run_t *run = calloc(1, sizeof(*run));
   if (!run) {

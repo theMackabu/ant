@@ -59,6 +59,7 @@ typedef struct {
   char *cwd;
   uint8_t stderr_mode;
   uint8_t result_mode;
+  bool exited;
 } ant_process_plan_t;
 
 bool ant_process_plan_add_native_stage(
@@ -72,6 +73,7 @@ void ant_process_plan_init(ant_process_plan_t *plan);
 void ant_process_plan_dispose(ant_process_plan_t *plan);
 
 bool ant_process_plan_add_command(ant_process_plan_t *plan, const char *const *argv, size_t argc);
+bool ant_process_plan_take_command(ant_process_plan_t *plan, char **argv, size_t argc);
 bool ant_process_plan_add_redirect(ant_process_plan_t *plan, ant_process_redirect_kind_t kind, const char *path);
 
 ant_value_t ant_process_plan_rejected_result(ant_t *js, ant_value_t error);

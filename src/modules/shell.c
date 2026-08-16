@@ -501,7 +501,13 @@ static sh_compiled_program_t *shell_compile(
   }
 
   static const sv_param_t params[] = {
-    SV_PARAM("__run"),
+    SV_PARAM("__begin"),
+    SV_PARAM("__arg"),
+    SV_PARAM("__word"),
+    SV_PARAM("__command"),
+    SV_PARAM("__redirect"),
+    SV_PARAM("__redirectWord"),
+    SV_PARAM("__submit"),
     SV_PARAM("__finish"),
     SV_PARAM("__ctx"),
     SV_PARAM("__values"),
@@ -509,7 +515,7 @@ static sh_compiled_program_t *shell_compile(
   };
   
   compiled->func = sv_compile_function_with_params(
-    js, params, 5, source,
+    js, params, 11, source,
     source_len, true
   );
   
@@ -599,7 +605,13 @@ static void shell_debug_dump_invocation(
   ant_value_t context, ant_value_t values
 ) {
   fputs("[shell:invoke] bindings\n", stderr);
-  fputs("__run = [native sh_runtime_run]\n", stderr);
+  fputs("__begin = [native sh_runtime_begin]\n", stderr);
+  fputs("__arg = [native sh_runtime_arg]\n", stderr);
+  fputs("__word = [native sh_runtime_word]\n", stderr);
+  fputs("__command = [native sh_runtime_command]\n", stderr);
+  fputs("__redirect = [native sh_runtime_redirect]\n", stderr);
+  fputs("__redirectWord = [native sh_runtime_redirect_word]\n", stderr);
+  fputs("__submit = [native sh_runtime_submit]\n", stderr);
   fputs("__finish = [native sh_runtime_finish]\n", stderr);
   fputs("__ctx = { cwd: ", stderr);
   shell_debug_write_value(js, stderr, js_get(js, context, "cwd"), 0);
@@ -675,14 +687,20 @@ static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs)
     shell_debug_dump_invocation(js, compiled, context, values);
   
   ant_value_t call_args[] = {
-    js_mkfun(sh_runtime_run),
+    js_mkfun(sh_runtime_begin),
+    js_mkfun(sh_runtime_arg),
+    js_mkfun(sh_runtime_word),
+    js_mkfun(sh_runtime_command),
+    js_mkfun(sh_runtime_redirect),
+    js_mkfun(sh_runtime_redirect_word),
+    js_mkfun(sh_runtime_submit),
     js_mkfun(sh_runtime_finish),
     context, values, holder,
   };
   
   ant_value_t raw_promise = sv_call_compiled_zero_upvalues(
     js, compiled->func, 
-    js_mkundef(), call_args, 5
+    js_mkundef(), call_args, 11
   );
   
   GC_ROOT_PIN(js, raw_promise);

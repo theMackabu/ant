@@ -45,13 +45,22 @@ assert(
   `missing shell source header\n${result.stderr}`
 );
 assert(
-  result.stderr.includes('return await __run(__ctx,__plan,0,__values);'),
-  `missing specialized single-clause entry\n${result.stderr}`
+  result.stderr.includes('__exec=__begin(__ctx);') &&
+    result.stderr.includes('__word(__exec,__plan,0,0,1,__values);') &&
+    result.stderr.includes('__command(__exec,__ctx,1);') &&
+    result.stderr.includes('__result=await __submit(__ctx,__exec);'),
+  `missing direct dynamic-word lowering\n${result.stderr}`
 );
 assert(
   result.stderr.includes('if(__result.exitCode===0){') &&
-    result.stderr.includes('__run(__ctx,__plan,1,__values)'),
+    result.stderr.includes(
+      '__command(__exec,__ctx,1,"printf","conditional-output");'
+    ),
   `missing specialized connector control flow\n${result.stderr}`
+);
+assert(
+  !result.stderr.includes('__run(__ctx,__plan'),
+  `native shell plan walker must not appear in lowered code\n${result.stderr}`
 );
 assert(
   result.stderr.includes('[shell:compile] __plan (') &&
@@ -61,7 +70,10 @@ assert(
 );
 assert(
   result.stderr.includes('[shell:invoke] bindings') &&
-    result.stderr.includes('__run = [native sh_runtime_run]') &&
+    result.stderr.includes('__begin = [native sh_runtime_begin]') &&
+    result.stderr.includes('__word = [native sh_runtime_word]') &&
+    result.stderr.includes('__command = [native sh_runtime_command]') &&
+    result.stderr.includes('__submit = [native sh_runtime_submit]') &&
     result.stderr.includes('__finish = [native sh_runtime_finish]') &&
     result.stderr.includes('__ctx = { cwd: "') &&
     result.stderr.includes('__values = ["shell-output"]') &&
@@ -73,8 +85,9 @@ const jsLines = result.stderr.split('\n').filter((line, index, lines) =>
   index > 0 && lines[index - 1].startsWith('[shell:compile] JavaScript')
 );
 assert(
-  jsLines.every(line => !line.includes('"printf"') && !line.includes('[[[')),
-  `static pipeline data should remain outside executable JavaScript\n${result.stderr}`
+  jsLines.some(line => line.includes('"printf","conditional-output"')) &&
+    jsLines.every(line => !line.includes('[[[')),
+  `static words should lower to constants without plan arrays\n${result.stderr}`
 );
 
 console.log('debug shell compile test passed');
