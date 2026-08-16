@@ -19059,10 +19059,6 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
     };
   }
 
-  js_eval_completion_kind_t kind = func->is_tla
-    ? JS_EVAL_ASYNC_ENTRY
-    : JS_EVAL_COMPLETE;
-  
   js_async_entry_t *async_entry = NULL;
   ant_value_t value = mode == SV_COMPILE_EVAL
     ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env)
@@ -19071,7 +19067,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   return (js_eval_result_t){
     .value = value,
     .async_entry = async_entry,
-    .kind = kind,
+    .kind = async_entry ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
   };
 }
 

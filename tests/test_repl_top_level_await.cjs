@@ -38,6 +38,7 @@ if pid == 0:
 tick = bytes([96])
 actions = [
     ('write', b"await Promise.resolve(42)\\r"),
+    ('write', b"if (false) await Promise.resolve(); 44\\r"),
     ('write', b"const replAwaitValue = await Promise.resolve(7)\\r"),
     ('write', b"replAwaitValue\\r"),
     ('write', b"Promise.resolve(9)\\r"),
@@ -146,6 +147,7 @@ const output = `${result.stdout || ''}${result.stderr || ''}`;
 assert.strictEqual(result.status, 0, output);
 
 assert.match(output, /\r?\n42\r?\n/, output);
+assert.match(output, /\r?\nPromise \{\r?\n  44,/, output);
 assert.match(output, /\r?\nundefined\r?\n/, output);
 assert.match(output, /\r?\n7\r?\n/, output);
 assert.match(output, /\r?\nPromise \{\r?\n  9,/, output);
