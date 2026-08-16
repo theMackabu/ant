@@ -32,6 +32,9 @@
 #include "gc/modules.h"
 #include "silver/engine.h"
 
+#include "process_plan.h"
+#include "process_stage.h"
+
 #include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/events.h"
@@ -74,7 +77,7 @@ typedef enum {
 
 struct child_process_s {
   ant_t *js;
-  uv_process_t process;
+  ant_process_stage_t process;
   uv_pipe_t stdin_pipe;
   uv_pipe_t stdout_pipe;
   uv_pipe_t stderr_pipe;
@@ -113,9 +116,6 @@ struct child_process_s {
   child_write_req_t *pending_writes;
   char *cwd;
   stdio_mode_t stdio_modes[3];
-  struct child_process_s *stdout_target;
-  struct child_process_s *stdin_source;
-  int pipeline_refs;
   bool end_stdin_when_writes_finish;
   bool suppress_stdin_errors;
   struct child_process_s *next;
@@ -272,19 +272,6 @@ static void remove_pending_child(child_process_t *cp) {
 static void free_child_process(child_process_t *cp) {
   if (!cp) return;
 
-  if (cp->stdout_target) {
-    child_process_t *target = cp->stdout_target;
-    cp->stdout_target = NULL;
-    if (target->stdin_source == cp) target->stdin_source = NULL;
-    if (target->pipeline_refs > 0) target->pipeline_refs--;
-    try_free_child(target);
-  }
-  if (cp->stdin_source) {
-    child_process_t *source = cp->stdin_source;
-    cp->stdin_source = NULL;
-    if (source->stdout_target == cp) source->stdout_target = NULL;
-  }
-
   if (vtype(cp->child_obj) == T_OBJ) {
     js_set_slot(cp->child_obj, SLOT_DATA, js_mkundef());
     js_clear_native(cp->child_obj, CHILD_PROCESS_NATIVE_TAG);
@@ -312,8 +299,8 @@ static void try_free_child(child_process_t *cp) {
   if (!cp) return;
 
   if (cp->exited && cp->stdout_closed && cp->stderr_closed &&
-      cp->pending_closes == 0 && cp->pipeline_refs == 0 &&
-      !cp->pending_writes) {
+    (!cp->process.handle_open || cp->process.closed) &&
+    cp->pending_closes == 0 && !cp->pending_writes) {
     remove_pending_child(cp);
     free_child_process(cp);
   }
@@ -392,27 +379,6 @@ static void check_completion(child_process_t *cp) {
   }
 }
 
-static void child_finish_stdout_target(child_process_t *cp) {
-  if (!cp || !cp->stdout_target) return;
-  child_process_t *target = cp->stdout_target;
-  cp->stdout_target = NULL;
-  if (target->stdin_source == cp) target->stdin_source = NULL;
-  target->end_stdin_when_writes_finish = true;
-  if (!target->pending_writes) (void)child_end_impl(target);
-  if (target->pipeline_refs > 0) target->pipeline_refs--;
-  try_free_child(target);
-}
-
-static void child_break_stdin_source(child_process_t *target) {
-  if (!target || !target->stdin_source) return;
-  child_process_t *source = target->stdin_source;
-  target->stdin_source = NULL;
-  if (source->stdout_target == target) source->stdout_target = NULL;
-  if (target->pipeline_refs > 0) target->pipeline_refs--;
-  close_child_pipe(source, CHILD_STREAM_STDOUT, true);
-  check_completion(source);
-}
-
 static ant_value_t child_spawn_failure_cb(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t child = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   child_process_t *cp = get_child_process(child);
@@ -441,8 +407,6 @@ static ant_value_t child_spawn_failure_cb(ant_t *js, ant_value_t *args, int narg
   cp->exited = true;
   cp->exit_code = cp->spawn_error;
   cp->term_signal = 0;
-  child_break_stdin_source(cp);
-  child_finish_stdout_target(cp);
   check_completion(cp);
 
   return js_mkundef();
@@ -494,8 +458,11 @@ static void close_child_pipe(child_process_t *cp, child_stream_kind_t kind, bool
   close_child_handle(cp, (uv_handle_t *)pipe);
 }
 
-static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
-  child_process_t *cp = (child_process_t *)proc->data;
+static void on_process_exit(
+  ant_process_stage_t *process, int64_t exit_status, int term_signal
+) {
+  child_process_t *cp = process ? process->owner : NULL;
+  if (!cp) return;
   cp->exit_code = exit_status;
   cp->term_signal = term_signal;
   cp->exited = true;
@@ -508,11 +475,14 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
   ant_value_t exit_args[2] = { exit_code_val, signal_val };
   emit_event(cp, "exit", exit_args, 2);
 
-  child_break_stdin_source(cp);
-  close_child_handle(cp, (uv_handle_t *)proc);
   close_child_pipe(cp, CHILD_STREAM_STDIN, false);
   
   check_completion(cp);
+}
+
+static void on_process_close(ant_process_stage_t *process) {
+  child_process_t *cp = process ? process->owner : NULL;
+  if (cp) try_free_child(cp);
 }
 
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
@@ -556,11 +526,7 @@ static void on_child_read(
       *acc_len += nread;
     }
 
-    if (is_stdout && cp->stdout_target) {
-      ant_value_t chunk = js_mkstr(cp->js, buf->base, (size_t)nread);
-      (void)child_write_impl(cp->js, cp->stdout_target, chunk, js_mkundef());
-      *seen += (size_t)nread;
-    } else if (vtype(obj) == T_OBJ) {
+    if (vtype(obj) == T_OBJ) {
       ant_value_t accepted = stream_readable_push(
         cp->js, obj,
         make_buffer_chunk(cp->js, buf->base, (size_t)nread),
@@ -586,7 +552,6 @@ static void on_child_read(
       if (vtype(obj) == T_OBJ) eventemitter_emit_args(cp->js, obj, "error", err_args, 1);
     }
 
-    if (is_stdout) child_finish_stdout_target(cp);
     close_child_pipe(cp, kind, true);
     check_completion(cp);
   }
@@ -622,7 +587,7 @@ static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  int result = uv_process_kill(&cp->process, sig);
+  int result = ant_process_stage_kill(&cp->process, sig);
   if (result == 0) js_set(js, this_obj, "killed", js_true);
   return js_bool(result == 0);
 }
@@ -763,7 +728,7 @@ static ant_value_t child_ref(ant_t *js, ant_value_t *args, int nargs) {
   if (!cp) return this_obj;
   cp->keep_alive = true;
   
-  if (!uv_is_closing((uv_handle_t *)&cp->process)) uv_ref((uv_handle_t *)&cp->process);
+  ant_process_stage_ref(&cp->process);
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
     uv_handle_t *h = (uv_handle_t *)child_pipe(cp, i);
     if (child_stdio_is_pipe(cp, i) && !uv_is_closing(h)) uv_ref(h);
@@ -779,7 +744,7 @@ static ant_value_t child_unref(ant_t *js, ant_value_t *args, int nargs) {
   if (!cp) return this_obj;
   cp->keep_alive = false;
   
-  if (!uv_is_closing((uv_handle_t *)&cp->process)) uv_unref((uv_handle_t *)&cp->process);
+  ant_process_stage_unref(&cp->process);
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
     uv_handle_t *h = (uv_handle_t *)child_pipe(cp, i);
     if (child_stdio_is_pipe(cp, i) && !uv_is_closing(h)) uv_unref(h);
@@ -994,7 +959,7 @@ static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   if (is_object_type(js->builtins.child_process_proto)) js_set_proto_init(obj, js->builtins.child_process_proto);
   
   js_set_native(obj, cp, CHILD_PROCESS_NATIVE_TAG);
-  js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
+  js_set(js, obj, "pid", js_mknum((double)ant_process_stage_pid(&cp->process)));
   js_set(js, obj, "exitCode", js_mknull());
   js_set(js, obj, "signalCode", js_mknull());
   js_set(js, obj, "killed", js_false);
@@ -1042,6 +1007,13 @@ static char **parse_args_array(ant_t *js, ant_value_t arr, int *count) {
     if (vtype(val) == T_STR) {
       size_t arg_len;
       char *arg = js_getstr(js, val, &arg_len);
+      if (arg && memchr(arg, '\0', arg_len)) {
+        for (int j = 0; j < i; j++) free(args[j]);
+        free(args);
+        *count = -1;
+        js_mkerr_typed(js, JS_ERR_TYPE, "Child process arguments cannot contain NUL bytes");
+        return NULL;
+      }
       args[i] = strndup(arg, arg_len);
     } else args[i] = strdup("");
   }
@@ -1203,6 +1175,8 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
+  if (cmd && memchr(cmd, '\0', cmd_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Child process command cannot contain NUL bytes");
   char *cmd_str = strndup(cmd, cmd_len);
   
   char **spawn_args = NULL;
@@ -1214,6 +1188,10 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t options_arg = child_process_options_arg(args, nargs);
   
   if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
+  if (spawn_argc < 0) {
+    free(cmd_str);
+    return mkval(T_ERR, 0);
+  }
   
   stdio_mode_t stdio_modes[3] = { 
     STDIO_PIPE, STDIO_PIPE, STDIO_PIPE 
@@ -1256,7 +1234,9 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   cp->promise = js_mkundef();
   cp->keep_alive = true;
   memcpy(cp->stdio_modes, stdio_modes, sizeof(stdio_modes));
-  cp->process.data = cp;
+  ant_process_stage_init(
+    &cp->process, cp, on_process_exit, on_process_close
+  );
   
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
   if (stdio_modes[i] == STDIO_PIPE) {
@@ -1268,11 +1248,14 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   uv_stdio_container_t stdio[3];
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
   if (stdio_modes[i] == STDIO_INHERIT) {
-    stdio[i].flags = UV_INHERIT_FD;
-    stdio[i].data.fd = i;
-  } else if (stdio_modes[i] == STDIO_IGNORE) stdio[i].flags = UV_IGNORE; else {
-    stdio[i].flags = UV_CREATE_PIPE | (i == CHILD_STREAM_STDIN ? UV_READABLE_PIPE : UV_WRITABLE_PIPE);
-    stdio[i].data.stream = (uv_stream_t *)child_pipe(cp, i);
+    ant_process_stdio_inherit_fd(&stdio[i], i);
+  } else if (stdio_modes[i] == STDIO_IGNORE) {
+    ant_process_stdio_ignore(&stdio[i]);
+  } else {
+    ant_process_stdio_create_pipe(
+      &stdio[i], (uv_stream_t *)child_pipe(cp, i),
+      i == CHILD_STREAM_STDIN
+    );
   }}
   
   char **final_args;
@@ -1312,20 +1295,19 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
     spawn_args = NULL;
   }
   
-  uv_process_options_t options = {0};
-  options.exit_cb = on_process_exit;
-  options.file = final_args[0];
-  options.args = final_args;
-  options.stdio_count = 3;
-  options.stdio = stdio;
-  options.env = env;
-  
-  if (cwd) options.cwd = cwd;
-  if (detached) options.flags = UV_PROCESS_DETACHED;
-  int r = uv_spawn(uv_default_loop(), &cp->process, &options);
+  ant_process_spawn_spec_t spec = {
+    .file = final_args[0],
+    .args = final_args,
+    .env = env,
+    .cwd = cwd,
+    .flags = detached ? UV_PROCESS_DETACHED : 0,
+    .stdio = stdio,
+    .stdio_count = 3,
+  };
+  int r = ant_process_stage_spawn(&cp->process, &spec);
 
   char spawn_file[192];
-  snprintf(spawn_file, sizeof(spawn_file), "%s", options.file ? options.file : "");
+  snprintf(spawn_file, sizeof(spawn_file), "%s", spec.file ? spec.file : "");
 
   if (use_shell) {
     free(final_args[0]);
@@ -1387,6 +1369,8 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
+  if (cmd && memchr(cmd, '\0', cmd_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Child process command cannot contain NUL bytes");
   char *cmd_str = strndup(cmd, cmd_len);
   
   char *cwd = NULL;
@@ -1422,15 +1406,19 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   
   cp->stdout_pipe.data = cp;
   cp->stderr_pipe.data = cp;
-  cp->process.data = cp;
+  ant_process_stage_init(
+    &cp->process, cp, on_process_exit, on_process_close
+  );
   cp->stdin_closed = true;
   
   uv_stdio_container_t stdio[3];
-  stdio[0].flags = UV_IGNORE;
-  stdio[1].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
-  stdio[1].data.stream = (uv_stream_t *)&cp->stdout_pipe;
-  stdio[2].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
-  stdio[2].data.stream = (uv_stream_t *)&cp->stderr_pipe;
+  ant_process_stdio_ignore(&stdio[0]);
+  ant_process_stdio_create_pipe(
+    &stdio[1], (uv_stream_t *)&cp->stdout_pipe, false
+  );
+  ant_process_stdio_create_pipe(
+    &stdio[2], (uv_stream_t *)&cp->stderr_pipe, false
+  );
   
   char *shell_args[4];
   shell_args[0] = "/bin/sh";
@@ -1438,15 +1426,14 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   shell_args[2] = cmd_str;
   shell_args[3] = NULL;
   
-  uv_process_options_t options = {0};
-  options.exit_cb = on_process_exit;
-  options.file = "/bin/sh";
-  options.args = shell_args;
-  options.stdio_count = 3;
-  options.stdio = stdio;
-  
-  if (cwd) options.cwd = cwd;
-  int r = uv_spawn(uv_default_loop(), &cp->process, &options);
+  ant_process_spawn_spec_t spec = {
+    .file = "/bin/sh",
+    .args = shell_args,
+    .cwd = cwd,
+    .stdio = stdio,
+    .stdio_count = 3,
+  };
+  int r = ant_process_stage_spawn(&cp->process, &spec);
   free(cmd_str);
   
   if (r < 0) {
@@ -1740,46 +1727,123 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   return child;
 }
 
-static ant_value_t child_process_result_callback(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t promise = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  if (vtype(promise) != T_PROMISE) return js_mkundef();
+static ant_value_t child_process_rejected_result(
+  ant_t *js, ant_value_t error
+) {
+  if (js->thrown_exists) error = js->thrown_value;
+  js->thrown_exists = false;
+  js->thrown_value = js_mkundef();
+  js->thrown_stack = js_mkundef();
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, error);
+  return promise;
+}
 
-  ant_value_t error = nargs > 0 ? args[0] : js_mknull();
-  ant_value_t stdout_val = nargs > 1 ? args[1] : js_mkstr(js, "", 0);
-  ant_value_t stderr_val = nargs > 2 ? args[2] : js_mkstr(js, "", 0);
-  ant_value_t exit_code = js_mknum(0);
-  ant_value_t signal_code = js_mknull();
+static bool child_process_plan_copy_string(
+  ant_t *js, ant_value_t value, const char *description, char **out
+) {
+  if (vtype(value) != T_STR) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", description);
+    return false;
+  }
+  size_t len = 0;
+  char *text = js_getstr(js, value, &len);
+  if (!text || memchr(text, '\0', len)) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "%s cannot contain NUL bytes", description);
+    return false;
+  }
+  char *copy = malloc(len + 1);
+  if (!copy) {
+    js_mkerr(js, "Out of memory");
+    return false;
+  }
+  if (len) memcpy(copy, text, len);
+  copy[len] = '\0';
+  *out = copy;
+  return true;
+}
 
-  if (!is_null(error) && !is_undefined(error)) {
-    ant_value_t code = is_object_type(error) ? js_get(js, error, "code") : js_mkundef();
-    ant_value_t signal = is_object_type(error) ? js_get(js, error, "signal") : js_mkundef();
-    exit_code = vtype(code) == T_NUM ? code
-      : vtype(signal) == T_STR ? js_mknum(128) : js_mknum(127);
-    if (vtype(signal) == T_STR) signal_code = signal;
-
-    size_t stderr_len = 0;
-    if (vtype(stderr_val) == T_STR) (void)js_getstr(js, stderr_val, &stderr_len);
-    ant_value_t message = is_object_type(error) ? js_get(js, error, "message") : js_mkundef();
-    if (stderr_len == 0 && vtype(message) == T_STR) {
-      size_t message_len = 0;
-      char *message_text = js_getstr(js, message, &message_len);
-      char *diagnostic = malloc(message_len + 1);
-      if (diagnostic) {
-        if (message_len) memcpy(diagnostic, message_text, message_len);
-        diagnostic[message_len] = '\n';
-        stderr_val = js_mkstr(js, diagnostic, message_len + 1);
-        free(diagnostic);
-      }
+static bool child_process_plan_apply_options(
+  ant_t *js, ant_process_plan_t *plan, ant_value_t options
+) {
+  if (!is_special_object(options)) return true;
+  ant_value_t cwd = js_get(js, options, "cwd");
+  if (!is_undefined(cwd) && !child_process_plan_copy_string(
+    js, cwd, "Child process cwd", &plan->cwd
+  )) return false;
+  ant_value_t redirects = js_get(js, options, "redirections");
+  if (is_undefined(redirects)) return true;
+  if (vtype(redirects) != T_ARR) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Child process redirections must be an array");
+    return false;
+  }
+  for (ant_offset_t i = 0; i < js_arr_len(js, redirects); i++) {
+    ant_value_t redirect = js_arr_get(js, redirects, i);
+    ant_value_t kind_value = is_special_object(redirect)
+      ? js_get(js, redirect, "kind") : js_mkundef();
+    if (vtype(kind_value) != T_NUM) {
+      js_mkerr_typed(js, JS_ERR_TYPE, "Invalid child process redirection");
+      return false;
+    }
+    int kind = (int)js_getnum(kind_value);
+    if (kind < ANT_PROCESS_REDIRECT_STDIN ||
+        kind > ANT_PROCESS_REDIRECT_STDERR_TO_STDOUT) {
+      js_mkerr_typed(js, JS_ERR_TYPE, "Invalid child process redirection kind");
+      return false;
+    }
+    char *path = NULL;
+    if (kind != ANT_PROCESS_REDIRECT_STDERR_TO_STDOUT &&
+        !child_process_plan_copy_string(
+          js, js_get(js, redirect, "path"),
+          "Child process redirection path", &path
+        )) return false;
+    bool added = ant_process_plan_add_redirect(
+      plan, (ant_process_redirect_kind_t)kind, path
+    );
+    free(path);
+    if (!added) {
+      js_mkerr(js, "Out of memory");
+      return false;
     }
   }
+  return true;
+}
 
-  ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", stdout_val);
-  js_set(js, result, "stderr", stderr_val);
-  js_set(js, result, "exitCode", exit_code);
-  js_set(js, result, "signalCode", signal_code);
-  js_resolve_promise(js, promise, result);
-  return js_mkundef();
+static bool child_process_plan_add_values(
+  ant_t *js, ant_process_plan_t *plan, ant_value_t values
+) {
+  if (vtype(values) != T_ARR || js_arr_len(js, values) == 0) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Process command must be a non-empty array");
+    return false;
+  }
+  size_t count = (size_t)js_arr_len(js, values);
+  const char **argv = calloc(count, sizeof(*argv));
+  if (!argv) {
+    js_mkerr(js, "Out of memory");
+    return false;
+  }
+  bool valid = true;
+  for (size_t i = 0; i < count; i++) {
+    ant_value_t value = js_arr_get(js, values, (ant_offset_t)i);
+    size_t len = 0;
+    if (vtype(value) != T_STR) {
+      js_mkerr_typed(js, JS_ERR_TYPE, "Child process arguments must be strings");
+      valid = false;
+      break;
+    }
+    argv[i] = js_getstr(js, value, &len);
+    if (!argv[i] || memchr(argv[i], '\0', len)) {
+      js_mkerr_typed(js, JS_ERR_TYPE, "Child process arguments cannot contain NUL bytes");
+      valid = false;
+      break;
+    }
+  }
+  if (valid && !ant_process_plan_add_command(plan, argv, count)) {
+    js_mkerr(js, "Out of memory");
+    valid = false;
+  }
+  free(argv);
+  return valid;
 }
 
 ant_value_t child_process_exec_file_result(
@@ -1788,107 +1852,19 @@ ant_value_t child_process_exec_file_result(
   ant_value_t argv,
   ant_value_t options
 ) {
-  ant_value_t promise = js_mkpromise(js);
-  ant_value_t callback = js_heavy_mkfun(js, child_process_result_callback, promise);
-  ant_value_t args[4] = { file, argv, options, callback };
-  ant_value_t child = builtin_execFile(js, args, 4);
-
-  child_process_t *spawned = get_child_process(child);
-  if (spawned) {
-    spawned->suppress_stdin_errors = true;
-    ant_value_t input = is_special_object(options)
-      ? js_get(js, options, "input") : js_mkundef();
-    if (!is_undefined(input)) (void)child_write_impl(js, spawned, input, js_mkundef());
-    spawned->end_stdin_when_writes_finish = true;
-    if (!spawned->pending_writes) {
-      spawned->end_stdin_when_writes_finish = false;
-      (void)child_end_impl(spawned);
-    }
+  ant_process_plan_t plan;
+  ant_process_plan_init(&plan);
+  ant_value_t values = js_mkarr(js);
+  js_arr_push(js, values, file);
+  if (vtype(argv) == T_ARR) for (ant_offset_t i = 0; i < js_arr_len(js, argv); i++)
+    js_arr_push(js, values, js_arr_get(js, argv, i));
+  if (!child_process_plan_apply_options(js, &plan, options) ||
+      !child_process_plan_add_values(js, &plan, values)) {
+    ant_process_plan_dispose(&plan);
+    return child_process_rejected_result(js,
+      js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
   }
-
-  if (is_err(child) || js->thrown_exists) {
-    ant_value_t error = js->thrown_exists ? js->thrown_value : child;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
-    js_reject_promise(js, promise, error);
-  }
-
-  return promise;
-}
-
-static ant_value_t child_process_concat_strings(
-  ant_t *js,
-  ant_value_t left,
-  ant_value_t right
-) {
-  size_t left_len = 0;
-  size_t right_len = 0;
-  char *left_text = vtype(left) == T_STR ? js_getstr(js, left, &left_len) : NULL;
-  char *right_text = vtype(right) == T_STR ? js_getstr(js, right, &right_len) : NULL;
-  if ((!left_text && left_len) || (!right_text && right_len) ||
-      left_len > SIZE_MAX - right_len) return js_mkerr(js, "Out of memory");
-  char *joined = malloc(left_len + right_len);
-  if (!joined && left_len + right_len) return js_mkerr(js, "Out of memory");
-  if (left_len) memcpy(joined, left_text, left_len);
-  if (right_len) memcpy(joined + left_len, right_text, right_len);
-  ant_value_t result = js_mkstr(js, joined ? joined : "", left_len + right_len);
-  free(joined);
-  return result;
-}
-
-static ant_value_t child_process_pipeline_error(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  if (!is_special_object(state) || nargs < 1 || !is_object_type(args[0]))
-    return js_mkundef();
-
-  ant_value_t message = js_get(js, args[0], "message");
-  if (vtype(message) != T_STR) return js_mkundef();
-  ant_value_t combined = child_process_concat_strings(
-    js, js_get(js, state, "stderr"), message
-  );
-  if (is_err(combined)) return combined;
-  combined = child_process_concat_strings(js, combined, js_mkstr(js, "\n", 1));
-  if (!is_err(combined)) js_set(js, state, "stderr", combined);
-  return js_mkundef();
-}
-
-static ant_value_t child_process_pipeline_close(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t callback_state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  ant_value_t state = js_get(js, callback_state, "state");
-  ant_value_t child = js_get(js, callback_state, "child");
-  bool is_last = js_truthy(js, js_get(js, callback_state, "last"));
-  if (!is_special_object(state) || !is_special_object(child)) return js_mkundef();
-
-  ant_value_t stderr_text = js_get(js, child, "stderrText");
-  ant_value_t combined = child_process_concat_strings(
-    js, js_get(js, state, "stderr"), stderr_text
-  );
-  if (!is_err(combined)) js_set(js, state, "stderr", combined);
-
-  if (is_last) {
-    js_set(js, state, "stdout", js_get(js, child, "stdoutText"));
-    ant_value_t exit_code = nargs > 0 ? args[0] : js_get(js, child, "exitCode");
-    if (vtype(exit_code) != T_NUM) exit_code = js_mknum(128);
-    else if (js_getnum(exit_code) < 0) exit_code = js_mknum(127);
-    js_set(js, state, "exitCode", exit_code);
-    js_set(js, state, "signalCode", nargs > 1 ? args[1] : js_mknull());
-  }
-
-  ant_value_t remaining_value = js_get(js, state, "remaining");
-  int remaining = vtype(remaining_value) == T_NUM
-    ? (int)js_getnum(remaining_value) - 1 : 0;
-  js_set(js, state, "remaining", js_mknum((double)remaining));
-  if (remaining > 0) return js_mkundef();
-
-  ant_value_t result = js_mkobj(js);
-  js_set(js, result, "stdout", js_get(js, state, "stdout"));
-  js_set(js, result, "stderr", js_get(js, state, "stderr"));
-  js_set(js, result, "exitCode", js_get(js, state, "exitCode"));
-  js_set(js, result, "signalCode", js_get(js, state, "signalCode"));
-  ant_value_t promise = js_get_slot(state, SLOT_DATA);
-  if (vtype(promise) == T_PROMISE) js_resolve_promise(js, promise, result);
-  return js_mkundef();
+  return ant_process_plan_submit(js, &plan);
 }
 
 ant_value_t child_process_pipeline_result(
@@ -1896,80 +1872,23 @@ ant_value_t child_process_pipeline_result(
   ant_value_t commands,
   ant_value_t options
 ) {
-  ant_value_t promise = js_mkpromise(js);
   if (vtype(commands) != T_ARR || js_arr_len(js, commands) == 0) {
-    js_reject_promise(js, promise, js_mkerr(js, "pipeline requires at least one command"));
-    return promise;
+    return child_process_rejected_result(js,
+      js_mkerr(js, "pipeline requires at least one command"));
   }
-
-  ant_offset_t count = js_arr_len(js, commands);
-  child_process_t **processes = calloc((size_t)count, sizeof(*processes));
-  if (!processes) {
-    js_reject_promise(js, promise, js_mkerr(js, "Out of memory"));
-    return promise;
-  }
-
-  ant_value_t state = js_mkobj(js);
-  js_set_slot(state, SLOT_DATA, promise);
-  js_set(js, state, "remaining", js_mknum((double)count));
-  js_set(js, state, "stdout", js_mkstr(js, "", 0));
-  js_set(js, state, "stderr", js_mkstr(js, "", 0));
-  js_set(js, state, "exitCode", js_mknum(0));
-  js_set(js, state, "signalCode", js_mknull());
-
-  for (ant_offset_t i = 0; i < count; i++) {
+  ant_process_plan_t plan;
+  ant_process_plan_init(&plan);
+  if (!child_process_plan_apply_options(js, &plan, options)) goto invalid;
+  for (ant_offset_t i = 0; i < js_arr_len(js, commands); i++) {
     ant_value_t command = js_arr_get(js, commands, i);
-    if (vtype(command) != T_ARR || js_arr_len(js, command) == 0) {
-      free(processes);
-      js_reject_promise(js, promise, js_mkerr(js, "pipeline contains an empty command"));
-      return promise;
-    }
-    ant_value_t file = js_arr_get(js, command, 0);
-    ant_value_t argv = js_mkarr(js);
-    for (ant_offset_t j = 1; j < js_arr_len(js, command); j++)
-      js_arr_push(js, argv, js_arr_get(js, command, j));
-    ant_value_t spawn_args[] = { file, argv, options };
-    ant_value_t child = builtin_spawn(js, spawn_args, 3);
-    processes[i] = get_child_process(child);
-    if (!processes[i]) {
-      free(processes);
-      js_reject_promise(js, promise, is_err(child)
-        ? child : js_mkerr(js, "failed to create pipeline process"));
-      return promise;
-    }
-    processes[i]->suppress_stdin_errors = true;
-    processes[i]->collect_output = true;
+    if (!child_process_plan_add_values(js, &plan, command)) goto invalid;
+  }
+  return ant_process_plan_submit(js, &plan);
 
-    ant_value_t callback_state = js_mkobj(js);
-    js_set(js, callback_state, "state", state);
-    js_set(js, callback_state, "child", child);
-    js_set(js, callback_state, "last", js_bool(i + 1 == count));
-    eventemitter_add_listener(
-      js, child, "close",
-      js_heavy_mkfun(js, child_process_pipeline_close, callback_state), true
-    );
-    eventemitter_add_listener(
-      js, child, "error",
-      js_heavy_mkfun(js, child_process_pipeline_error, state), true
-    );
-  }
-
-  for (ant_offset_t i = 0; i + 1 < count; i++) {
-    processes[i]->stdout_target = processes[i + 1];
-    processes[i + 1]->stdin_source = processes[i];
-    processes[i + 1]->pipeline_refs++;
-  }
-  ant_value_t input = is_special_object(options)
-    ? js_get(js, options, "input") : js_mkundef();
-  if (!is_undefined(input))
-    (void)child_write_impl(js, processes[0], input, js_mkundef());
-  processes[0]->end_stdin_when_writes_finish = true;
-  if (!processes[0]->pending_writes) {
-    processes[0]->end_stdin_when_writes_finish = false;
-    (void)child_end_impl(processes[0]);
-  }
-  free(processes);
-  return promise;
+invalid:
+  ant_process_plan_dispose(&plan);
+  return child_process_rejected_result(js,
+    js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
 }
 
 static bool sync_encoding_wants_string(ant_t *js, ant_value_t options_arg) {
@@ -2031,6 +1950,10 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   ant_value_t options_arg = child_process_options_arg(args, nargs);
 
   if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
+  if (spawn_argc < 0) {
+    free(cmd_str);
+    return mkval(T_ERR, 0);
+  }
 
   if (is_special_object(options_arg)) {
     ant_value_t input_val = js_get(js, options_arg, "input");
@@ -2631,6 +2554,8 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   size_t command_len = 0;
   char *command = js_getstr(js, args[0], &command_len);
   if (!command) return js_mkerr(js, "Command must be a string");
+  if (memchr(command, '\0', command_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Child process command cannot contain NUL bytes");
 
   sync_res_t res = {0};
   res.command = strndup(command, command_len);
@@ -2638,6 +2563,10 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
 
   if (nargs >= 2 && vtype(args[1]) == T_ARR)
     res.args = parse_args_array(js, args[1], &res.arg_count);
+  if (res.arg_count < 0) {
+    free(res.command);
+    return mkval(T_ERR, 0);
+  }
 
   sync_opts_t opts;
   sync_parse_options(js, child_process_options_arg(args, nargs), force_shell, &opts, &res);

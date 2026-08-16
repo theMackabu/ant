@@ -8,6 +8,7 @@
 #include "gc.h"
 #include "errors.h"
 #include "internal.h"
+#include "gc/weak.h"
 #include "silver/engine.h"
 #include "descriptors.h"
 
@@ -81,14 +82,14 @@ static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *
   if (!collection_key_reserve(out, out->len)) return false;
   out->bytes[0] = tag;
   memcpy(out->bytes + 1, &key, sizeof(ant_value_t));
-  
+
   return true;
 }
 
 static map_entry_t *map_find_entry(ant_t *js, map_entry_t **map_ptr, ant_value_t key_val) {
   collection_key_t key;
   if (!collection_key_init(js, key_val, &key)) return NULL;
-  
+
   map_entry_t *entry = NULL;
   HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
   collection_key_free(&key);
@@ -216,6 +217,7 @@ ant_value_t collections_make_weakmap(ant_t *js) {
   ant_value_t prototype = js_get_ctor_proto(js, "WeakMap", 7);
   if (is_special_object(prototype)) js_set_proto_init(weakmap, prototype);
   js_set_native(weakmap, head, WEAKMAP_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(weakmap));
   return weakmap;
 }
 
@@ -248,6 +250,7 @@ bool collections_weakmap_set(
   entry->value = value;
   ant_object_t *object = js_obj_ptr(weakmap);
   if (object) {
+    gc_weak_remember_map(js, object, key, value);
     gc_write_barrier(js, object, key);
     gc_write_barrier(js, object, value);
   }
@@ -1039,6 +1042,7 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_object_t *wm_obj = js_obj_ptr(this_val);
   if (wm_obj) {
+    gc_weak_remember_map(js, wm_obj, key_obj, args[1]);
     gc_write_barrier(js, wm_obj, key_obj);
     gc_write_barrier(js, wm_obj, args[1]);
   }
@@ -1117,6 +1121,7 @@ static ant_value_t weakmap_upsert(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_object_t *wm_obj = js_obj_ptr(this_val);
   if (wm_obj) {
+    gc_weak_remember_map(js, wm_obj, key_obj, value);
     gc_write_barrier(js, wm_obj, key_obj);
     gc_write_barrier(js, wm_obj, value);
   }
@@ -1164,6 +1169,12 @@ static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
     entry->value_obj = value_obj;
     HASH_ADD(hh, *ws_ptr, value_obj, sizeof(ant_value_t), entry);
   }
+
+  ant_object_t *ws_obj = js_obj_ptr(this_val);
+  if (ws_obj) {
+    gc_weak_remember_set(js, ws_obj, value_obj);
+    gc_write_barrier(js, ws_obj, value_obj);
+  }
   
   return this_val;
 }
@@ -1202,6 +1213,13 @@ static ant_value_t weakset_delete(ant_t *js, ant_value_t *args, int nargs) {
   return js_false;
 }
 
+static void weakref_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  weakref_state_t *state = js_get_native(value, WEAKREF_NATIVE_TAG);
+  free(state);
+  js_clear_native(value, WEAKREF_NATIVE_TAG);
+}
+
 static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !can_be_held_weakly(args[0])) {
     return js_mkerr(js, "WeakRef target must be an object");
@@ -1210,18 +1228,26 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wr_obj = js_mkobj(js);
   ant_value_t wr_proto = js_get_ctor_proto(js, "WeakRef", 7);
   if (is_special_object(wr_proto)) js_set_proto_init(wr_obj, wr_proto);
-  js_set_slot(wr_obj, SLOT_DATA, args[0]);
+  weakref_state_t *state = ant_calloc(sizeof(*state));
+
+  if (!state) return js_mkerr(js, "out of memory");
+  state->target = args[0];
+
+  js_set_native(wr_obj, state, WEAKREF_NATIVE_TAG);
+  js_obj_ptr(wr_obj)->finalizer = weakref_finalize;
+  gc_weak_register(js, js_obj_ptr(wr_obj));
+  gc_weak_keep_alive(js, args[0]);
   
   return wr_obj;
 }
 
 static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_val = js->this_val;
   if (vtype(this_val) != T_OBJ) return js_mkundef();
   
-  ant_value_t target = js_get_slot(this_val, SLOT_DATA);
-  if (vtype(target) != T_OBJ) return js_mkundef();
+  weakref_state_t *state = js_get_native(this_val, WEAKREF_NATIVE_TAG);
+  ant_value_t target = state ? state->target : js_mkundef();
+  if (vtype(target) != T_UNDEF) gc_weak_keep_alive(js, target);
   
   return target;
 }
@@ -1642,6 +1668,7 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
   js_set_native(wm_obj, wm_head, WEAKMAP_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(wm_obj));
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
   ant_value_t init_result = weakmap_init_from_iterable(js, wm_obj, wm_head, args[0]);
@@ -1672,6 +1699,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
   js_set_native(ws_obj, ws_head, WEAKSET_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(ws_obj));
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
   ant_value_t init_result = weakset_init_from_iterable(js, ws_obj, ws_head, args[0]);

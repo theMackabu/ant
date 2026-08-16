@@ -112,6 +112,10 @@ Repository examples and tests using the synchronous API move with the change.
     symbol keys, nested maps, and long ephemeron chains.
 15. [x] Relocate private shell declarations under `src/modules/shell/`, clean
     formatting, and repeat focused and broad validation.
+16. [x] Replace the parallel `uv_process_t` lifecycle implementations with a
+    shared native process-stage core. Keep `node:child_process` streams and
+    events in its adapter, and keep shell pipeline aggregation in the process
+    plan orchestrator.
 
 ## Deferred POSIX work
 
@@ -150,6 +154,10 @@ Repository examples and tests using the synchronous API move with the change.
   a key-indexed worklist. Minor collections process young collections plus
   remembered weak edges, avoiding repeated scans of old WeakMaps. WeakRef
   targets are retained through the current microtask checkpoint.
+- 2026-08-16: A process plan is pipeline orchestration, not the shared process
+  primitive itself. Extract a native process stage below both adapters so the
+  public child-process API retains live streams while shell plans retain kernel
+  pipe graphs and aggregate completion results.
 
 ## Validation status
 
@@ -180,6 +188,12 @@ Repository examples and tests using the synchronous API move with the change.
 - `./build/ant examples/spec/run.js --all`: 3,920 passed, 0 failed across
   100 spec files.
 - `maid preflight` and `maid knowledge`: passed.
+- After the shared process-stage extraction, `meson setup --reconfigure build`,
+  `meson compile -C build`, every `tests/test_child_process_*.cjs` test, and
+  `tests/test_shell.js` passed. A fresh 552-case differential matched clean Ant
+  `3d0df5b4` in all 548 non-NUL cases and Node in 547; the sole Node difference
+  is the pre-existing synchronous ENOENT result shape. All four NUL cases
+  reject like Node and intentionally differ from the older truncating behavior.
 
 ## Remaining risks
 
