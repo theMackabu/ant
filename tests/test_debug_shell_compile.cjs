@@ -12,7 +12,8 @@ const scriptPath = path.join(tmpDir, 'shell.mjs');
 fs.writeFileSync(
   scriptPath,
   'import {$} from "ant:shell";\n' +
-  'console.log(await $`printf shell-output`.text());\n' +
+  'const word = "shell-output";\n' +
+  'console.log(await $`printf ${word}`.text());\n' +
   'console.log(await $`true && printf conditional-output`.text());\n'
 );
 
@@ -53,8 +54,27 @@ assert(
   `missing specialized connector control flow\n${result.stderr}`
 );
 assert(
-  !result.stderr.includes('"printf"') && !result.stderr.includes('[[['),
-  `static pipeline data should not be emitted as JavaScript arrays\n${result.stderr}`
+  result.stderr.includes('[shell:compile] __plan (') &&
+    result.stderr.includes('"literal":"printf"') &&
+    result.stderr.includes('"interpolation":0'),
+  `missing compiled shell plan\n${result.stderr}`
+);
+assert(
+  result.stderr.includes('[shell:invoke] bindings') &&
+    result.stderr.includes('__run = [native sh_runtime_run]') &&
+    result.stderr.includes('__finish = [native sh_runtime_finish]') &&
+    result.stderr.includes('__ctx = { cwd: "') &&
+    result.stderr.includes('__values = ["shell-output"]') &&
+    result.stderr.includes('__plan = [compiled shell plan: 1 clause]'),
+  `missing shell invocation bindings\n${result.stderr}`
+);
+
+const jsLines = result.stderr.split('\n').filter((line, index, lines) =>
+  index > 0 && lines[index - 1].startsWith('[shell:compile] JavaScript')
+);
+assert(
+  jsLines.every(line => !line.includes('"printf"') && !line.includes('[[[')),
+  `static pipeline data should remain outside executable JavaScript\n${result.stderr}`
 );
 
 console.log('debug shell compile test passed');

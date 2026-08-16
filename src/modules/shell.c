@@ -489,6 +489,15 @@ static sh_compiled_program_t *shell_compile(
     fprintf(stderr, "[shell:compile] JavaScript (%zu bytes)\n", source_len);
     if (source_len) fwrite(source, 1, source_len, stderr);
     fputc('\n', stderr);
+
+    size_t plan_len = 0;
+    char *plan = sh_debug_program_plan_source(&compiled->program, &plan_len);
+    fprintf(stderr, "[shell:compile] __plan (%zu bytes)\n", plan_len);
+    if (plan) {
+      if (plan_len) fwrite(plan, 1, plan_len, stderr);
+      free(plan);
+    } else fputs("<unavailable>", stderr);
+    fputc('\n', stderr);
   }
 
   static const sv_param_t params[] = {
@@ -510,6 +519,102 @@ static sh_compiled_program_t *shell_compile(
     return NULL;
   }
   return compiled;
+}
+
+static void shell_debug_write_string(
+  FILE *stream, const char *text, size_t len
+) {
+  fputc('"', stream);
+  for (size_t i = 0; i < len; i++) {
+    unsigned char ch = (unsigned char)text[i];
+    switch (ch) {
+      case '"': fputs("\\\"", stream); break;
+      case '\\': fputs("\\\\", stream); break;
+      case '\b': fputs("\\b", stream); break;
+      case '\f': fputs("\\f", stream); break;
+      case '\n': fputs("\\n", stream); break;
+      case '\r': fputs("\\r", stream); break;
+      case '\t': fputs("\\t", stream); break;
+      default:
+        if (ch < 0x20) fprintf(stream, "\\u%04x", ch);
+        else fputc(ch, stream);
+        break;
+    }
+  }
+  fputc('"', stream);
+}
+
+static void shell_debug_write_value(
+  ant_t *js, FILE *stream, ant_value_t value, unsigned depth
+) {
+  switch (vtype(value)) {
+    case T_STR: {
+      size_t len = 0;
+      const char *text = js_getstr(js, value, &len);
+      shell_debug_write_string(stream, text ? text : "", text ? len : 0);
+      break;
+    }
+    case T_NUM: fprintf(stream, "%.17g", js_getnum(value)); break;
+    case T_BOOL: fputs(js_truthy(js, value) ? "true" : "false", stream); break;
+    case T_NULL: fputs("null", stream); break;
+    case T_UNDEF: fputs("undefined", stream); break;
+    case T_ARR: {
+      if (depth >= 4) {
+        fputs("<array>", stream);
+        break;
+      }
+      ant_offset_t len = js_arr_len(js, value);
+      ant_offset_t shown = len < 32 ? len : 32;
+      fputc('[', stream);
+      for (ant_offset_t i = 0; i < shown; i++) {
+        if (i) fputs(", ", stream);
+        shell_debug_write_value(js, stream, js_arr_get(js, value, i), depth + 1);
+      }
+      if (shown < len) fprintf(stream, ", ... %u more", (unsigned)(len - shown));
+      fputc(']', stream);
+      break;
+    }
+    case T_TYPEDARRAY: {
+      TypedArrayData *typed = buffer_get_typedarray_data(value);
+      fprintf(
+        stream, "<%s length=%zu>",
+        typed ? buffer_typedarray_type_name(typed->type) : "TypedArray",
+        typed ? typed->length : 0
+      );
+      break;
+    }
+    case T_BIGINT: fputs("<bigint>", stream); break;
+    case T_SYMBOL: fputs("<symbol>", stream); break;
+    case T_FUNC:
+    case T_CFUNC: fputs("<function>", stream); break;
+    case T_PROMISE: fputs("<promise>", stream); break;
+    case T_GENERATOR: fputs("<generator>", stream); break;
+    case T_ERR: fputs("<error>", stream); break;
+    default: fputs("<object>", stream); break;
+  }
+}
+
+static void shell_debug_dump_invocation(
+  ant_t *js, const sh_compiled_program_t *compiled,
+  ant_value_t context, ant_value_t values
+) {
+  fputs("[shell:invoke] bindings\n", stderr);
+  fputs("__run = [native sh_runtime_run]\n", stderr);
+  fputs("__finish = [native sh_runtime_finish]\n", stderr);
+  fputs("__ctx = { cwd: ", stderr);
+  shell_debug_write_value(js, stderr, js_get(js, context, "cwd"), 0);
+  fprintf(
+    stderr, ", accumulator: %s }\n",
+    compiled->program.clause_count == 1 ? "false" : "true"
+  );
+  fputs("__values = ", stderr);
+  shell_debug_write_value(js, stderr, values, 0);
+  fputc('\n', stderr);
+  fprintf(
+    stderr, "__plan = [compiled shell plan: %zu clause%s]\n",
+    compiled->program.clause_count,
+    compiled->program.clause_count == 1 ? "" : "s"
+  );
 }
 
 static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs) {
@@ -565,6 +670,9 @@ static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs)
     return context;
   }
   GC_ROOT_PIN(js, context);
+
+  if (sv_dump_shell_unlikely)
+    shell_debug_dump_invocation(js, compiled, context, values);
   
   ant_value_t call_args[] = {
     js_mkfun(sh_runtime_run),
