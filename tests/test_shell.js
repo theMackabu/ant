@@ -119,13 +119,35 @@ try {
     cat`.text(),
     'continued\n'
   );
+  assert.strictEqual(
+    await $`printf multiline-pipe |
+
+    cat`.text(),
+    'multiline-pipe'
+  );
+  assert.strictEqual(
+    await $`false ||
+
+    echo multiline-or`.text(),
+    'multiline-or\n'
+  );
+  assert.strictEqual(
+    await $`true &&
+
+    echo multiline-and`.text(),
+    'multiline-and\n'
+  );
   assert.strictEqual(await $`seq 1 10000 | wc -l`.text(), '10000\n');
   assert.strictEqual(await $`yes | head -1`.text(), 'y\n');
 
   await expectShellRejection(() => $`${''}`, /executable cannot be empty/, TypeError);
   for (const [invoke, pattern] of [
     [() => $`while true; do echo bad; done`, /compound command.*while/i],
+    [() => $`whi\
+le true`, /compound command.*while/i],
     [() => $`name=value echo bad`, /variable assignment/i],
+    [() => $`NA\
+ME=value echo bad`, /variable assignment/i],
     [() => $`echo "$HOME"`, /parameter expansion/i],
     [() => $`echo $((1 + 2))`, /arithmetic expansion/i],
     [() => $`echo $(pwd)`, /command substitution/i]
@@ -220,6 +242,8 @@ try {
 
   const unsupportedFdPath = path.join(tmpDir, 'unsupported-fd.txt');
   await expectShellRejection(() => $`printf must-not-run 2>${unsupportedFdPath}`, /numeric file descriptor/, SyntaxError);
+  await expectShellRejection(() => $`printf must-not-run 2>&10`, /numeric file descriptor/, SyntaxError);
+  await expectShellRejection(() => $`printf must-not-run 2>&1foo`, /numeric file descriptor/, SyntaxError);
   assert.strictEqual(fs.existsSync(unsupportedFdPath), false);
 
   const merged = await $`ls ${path.join(tmpDir, 'missing')} 2>&1`.nothrow();

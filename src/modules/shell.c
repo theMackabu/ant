@@ -1,5 +1,3 @@
-#include "shell_internal.h"
-
 #include <uv.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -9,12 +7,21 @@
 #include <sys/stat.h>
 
 #include "ant.h"
-#include "gc/objects.h"
+#include "debug.h"
 #include "gc/roots.h"
 #include "internal.h"
 #include "modules/buffer.h"
-#include "../process_plan.h"
+#include "modules/shell.h"
+#include "modules/symbol.h"
+#include "process_plan.h"
 #include "ptr.h"
+
+typedef enum {
+  SH_REDIR_STDIN = 0,
+  SH_REDIR_STDOUT,
+  SH_REDIR_STDOUT_APPEND,
+  SH_REDIR_STDERR_TO_STDOUT,
+} sh_redir_kind_t;
 
 typedef struct {
   char *data;
@@ -95,34 +102,34 @@ static ant_value_t sh_result(
 ) {
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t result = js_mkobj(js);
-  
+
   GC_ROOT_PIN(js, result);
   ant_value_t stdout_value = sh_make_byte_array(
     js, stdout_text ? stdout_text : "", stdout_len
   );
-  
+
   if (is_err(stdout_value)) {
     GC_ROOT_RESTORE(js, root_mark);
     return stdout_value;
   }
-  
+
   GC_ROOT_PIN(js, stdout_value);
   ant_value_t stderr_value = sh_make_byte_array(
     js, stderr_text ? stderr_text : "", stderr_len
   );
-  
+
   if (is_err(stderr_value)) {
     GC_ROOT_RESTORE(js, root_mark);
     return stderr_value;
   }
-  
+
   js_set(js, result, "stdout", stdout_value);
   js_set(js, result, "stderr", stderr_value);
   js_set(js, result, "exitCode", js_mknum((double)exit_code));
   js_set(js, result, "signalCode", js_mknull());
   js_set(js, result, "exited", js_false);
   GC_ROOT_RESTORE(js, root_mark);
-  
+
   return result;
 }
 
@@ -407,7 +414,7 @@ static char *sh_resolve_path_text(
   return joined;
 }
 
-ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_special_object(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell context");
   ant_value_t cwd_value = js_get(js, args[0], "cwd");
@@ -442,7 +449,7 @@ ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
   return holder;
 }
 
-ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   if (!builder || nargs < 2 || vtype(args[1]) != T_STR)
@@ -534,7 +541,7 @@ static ant_value_t sh_process_builder_add_builtin(
   return js_mkundef();
 }
 
-ant_value_t sh_runtime_command(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_command(ant_t *js, ant_value_t *args, int nargs) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   size_t command_count = 0;
@@ -607,7 +614,7 @@ static ant_value_t sh_process_builder_add_redirect(
   return added ? js_mkundef() : js_mkerr(js, "Out of memory");
 }
 
-ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   size_t kind, command_index, command_count;
@@ -634,7 +641,7 @@ static ant_value_t sh_accumulate_fulfilled(
   ant_t *js, ant_value_t *args, int nargs
 );
 
-ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs) {
   sh_process_builder_t *builder = nargs > 1
     ? sh_process_builder_get(args[1]) : NULL;
   if (!builder || nargs < 2 || !is_special_object(args[0]) || builder->argc)
@@ -663,17 +670,17 @@ static ant_value_t sh_accumulate_fulfilled(
 ) {
   ant_value_t context = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t result = nargs > 0 ? args[0] : js_mkundef();
-  
+
   sh_output_accumulator_t *accumulator = js_get_native(context, SH_OUTPUT_ACCUMULATOR_TAG);
   if (!accumulator || !is_special_object(result))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
 
   const uint8_t *stdout_bytes = NULL;
   const uint8_t *stderr_bytes = NULL;
-  
+
   size_t stdout_len = 0;
   size_t stderr_len = 0;
-  
+
   if (!buffer_source_get_bytes(
       js, js_get(js, result, "stdout"), &stdout_bytes, &stdout_len
     ) || !buffer_source_get_bytes(
@@ -688,7 +695,7 @@ static ant_value_t sh_accumulate_fulfilled(
   return result;
 }
 
-ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_special_object(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
   sh_output_accumulator_t *accumulator = js_get_native(
@@ -716,7 +723,10 @@ ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-ant_value_t sh_runtime_context(ant_t *js, bool needs_accumulator) {
+static ant_value_t sh_runtime_context(
+  ant_t *js, ant_value_t *args, int nargs
+) {
+  bool needs_accumulator = nargs > 0 && js_truthy(js, args[0]);
   size_t capacity = 256;
   char *cwd = NULL;
   int rc;
@@ -765,4 +775,20 @@ ant_value_t sh_runtime_context(ant_t *js, bool needs_accumulator) {
   free(cwd);
   GC_ROOT_RESTORE(js, root_mark);
   return context;
+}
+
+ant_value_t shell_ops_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+
+  js_set(js, lib, "begin", js_mkfun(sh_runtime_begin));
+  js_set(js, lib, "arg", js_mkfun(sh_runtime_arg));
+  js_set(js, lib, "command", js_mkfun(sh_runtime_command));
+  js_set(js, lib, "redirect", js_mkfun(sh_runtime_redirect));
+  js_set(js, lib, "submit", js_mkfun(sh_runtime_submit));
+  js_set(js, lib, "finish", js_mkfun(sh_runtime_finish));
+  js_set(js, lib, "context", js_mkfun(sh_runtime_context));
+  js_set(js, lib, "debugEnabled", sv_dump_shell_unlikely ? js_true : js_false);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "shell ops", 9));
+
+  return lib;
 }

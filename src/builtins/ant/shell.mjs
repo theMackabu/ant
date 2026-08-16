@@ -106,6 +106,10 @@ function isOperatorStart(ch) {
   return ch === '|' || ch === '&' || ch === ';' || ch === '\n' || ch === '<' || ch === '>';
 }
 
+function isTokenBoundary(event) {
+  return event.kind === 'eof' || (event.kind === 'char' && (isSpace(event.ch) || isOperatorStart(event.ch)));
+}
+
 function isNameStart(ch) {
   return ch === '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 }
@@ -276,14 +280,14 @@ class ShellLexer {
         continue;
       }
       if (ch === '\\') {
-        keywordEligible = false;
-        disableAssignment();
         const next = this.input.take();
         if (next.kind === 'eof') syntaxError(this.input, 'trailing backslash');
         if (next.kind === 'interpolation') {
           syntaxError(this.input, 'backslash cannot escape an interpolation boundary');
         }
         if (next.ch === '\n') continue;
+        keywordEligible = false;
+        disableAssignment();
         literal += next.ch;
         wordStarted = true;
         continue;
@@ -368,7 +372,7 @@ class ShellLexer {
       const offset = this.input.offset;
       const boundaryPending = this.input.boundaryPending;
       this.input.take();
-      if (takeMatching(this.input, '>') && takeMatching(this.input, '&') && takeMatching(this.input, '1')) {
+      if (takeMatching(this.input, '>') && takeMatching(this.input, '&') && takeMatching(this.input, '1') && isTokenBoundary(this.input.peek())) {
         return { kind: TOKEN_REDIR_STDERR_TO_STDOUT };
       }
       this.input.segment = segment;
@@ -463,9 +467,9 @@ function parseTemplate(segments) {
       commands.push({ words, redirections });
       if (token.kind !== TOKEN_PIPE) break;
       token = lexer.next();
+      while (token.kind === TOKEN_NEWLINE) token = lexer.next();
       if (
         token.kind === TOKEN_EOF ||
-        token.kind === TOKEN_NEWLINE ||
         token.kind === TOKEN_SEMICOLON ||
         token.kind === TOKEN_AND ||
         token.kind === TOKEN_OR ||
@@ -487,14 +491,11 @@ function parseTemplate(segments) {
     if (connector === CONNECT_ALWAYS) {
       while (token.kind === TOKEN_NEWLINE) token = lexer.next();
       if (token.kind === TOKEN_EOF) break;
-    } else if (
-      token.kind === TOKEN_EOF ||
-      token.kind === TOKEN_NEWLINE ||
-      token.kind === TOKEN_SEMICOLON ||
-      token.kind === TOKEN_AND ||
-      token.kind === TOKEN_OR
-    ) {
-      syntaxError(lexer.input, 'conditional operator requires a following command');
+    } else {
+      while (token.kind === TOKEN_NEWLINE) token = lexer.next();
+      if (token.kind === TOKEN_EOF || token.kind === TOKEN_SEMICOLON || token.kind === TOKEN_AND || token.kind === TOKEN_OR) {
+        syntaxError(lexer.input, 'conditional operator requires a following command');
+      }
     }
   }
   return clauses;
