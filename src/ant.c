@@ -1715,12 +1715,32 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
         type_name = "TypedArray";
         type_len = 10;
       }
+
+      uint8_t *data = ta->buffer->data + ta->byte_offset;
+      if (type_len == 6 && memcmp(type_name, "Buffer", 6) == 0) {
+        size_t shown = ta->byte_length < BUFFER_INSPECT_MAX_BYTES
+          ? ta->byte_length
+          : BUFFER_INSPECT_MAX_BYTES;
+
+        n += cpy(buf + n, REMAIN(n, len), "<Buffer", 7);
+        for (size_t i = 0; i < shown; i++) {
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), " %02x", data[i]);
+        }
+        if (shown < ta->byte_length) {
+          size_t remaining = ta->byte_length - shown;
+          n += (size_t) snprintf(
+            buf + n, REMAIN(n, len), " ... %zu more byte%s",
+            remaining, remaining == 1 ? "" : "s"
+          );
+        }
+        n += cpy(buf + n, REMAIN(n, len), shown == 0 ? " >" : ">", shown == 0 ? 2 : 1);
+        pop_stringify();
+        return n;
+      }
       
       n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
       n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
       n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
-      
-      uint8_t *data = ta->buffer->data + ta->byte_offset;
       
       for (size_t i = 0; i < ta->length && i < 100; i++) {
         if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
