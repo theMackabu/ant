@@ -28,6 +28,14 @@ void ant_readline_install_signal_handler(void) {
 #endif
 }
 
+bool ant_readline_interrupt_pending(void) {
+  return ctrl_c_pressed > 0;
+}
+
+void ant_readline_clear_interrupt(void) {
+  ctrl_c_pressed = 0;
+}
+
 int repl_terminal_cols(void) {
   int cols = 80;
 #ifdef _WIN32

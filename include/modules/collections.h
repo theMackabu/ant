@@ -73,4 +73,12 @@ set_iterator_state_t *get_set_iter_state(ant_value_t obj);
 bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out);
 
+ant_value_t collections_make_weakmap(ant_t *js);
+ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key);
+
+bool collections_weakmap_set(
+  ant_t *js, ant_value_t weakmap,
+  ant_value_t key, ant_value_t value
+);
+
 #endif

@@ -20,6 +20,8 @@ typedef enum {
 
 void ant_readline_install_signal_handler(void);
 void ant_readline_shutdown(void);
+bool ant_readline_interrupt_pending(void);
+void ant_readline_clear_interrupt(void);
 
 void ant_history_init(ant_history_t *hist, int capacity);
 void ant_history_add(ant_history_t *hist, const char *line);

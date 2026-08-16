@@ -631,6 +631,11 @@ ant_value_t sv_execute_eval_entry(
   ant_value_t this_val, ant_value_t eval_env
 );
 
+ant_value_t sv_call_compiled(
+  ant_t *js, sv_func_t *func,
+  ant_value_t this_val, ant_value_t *args, int argc
+);
+
 #ifdef ANT_JIT
 typedef struct {
   bool active;

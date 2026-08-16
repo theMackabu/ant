@@ -1,12 +1,20 @@
 declare module 'ant:shell' {
-  interface ShellResult {
+  interface ShellOutput {
     stdout: string;
     stderr: string;
     exitCode: number;
-    text(): string;
-    lines(): string[];
+    signalCode: string | null;
   }
 
-  function $(strings: TemplateStringsArray, ...values: unknown[]): ShellResult;
-  function $(command: string): ShellResult;
+  interface ShellPromise extends PromiseLike<ShellOutput> {
+    catch<TResult = never>(
+      onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null
+    ): Promise<ShellOutput | TResult>;
+    nothrow(): ShellPromise;
+    text(): Promise<string>;
+    lines(): Promise<string[]>;
+  }
+
+  function $(strings: TemplateStringsArray, ...values: unknown[]): ShellPromise;
+  function $(command: string): ShellPromise;
 }

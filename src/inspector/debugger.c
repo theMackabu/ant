@@ -2,7 +2,6 @@
 
 #include "ant.h"
 #include "bind.h"
-#include "reactor.h"
 #include "internal.h"
 
 #include <stdio.h>
@@ -173,14 +172,16 @@ void inspector_send_registered_scripts(inspector_client_t *client) {
     inspector_send_script_parsed(client, script);
 }
 
-static void inspector_eval_source(inspector_client_t *client, int id, const char *source, size_t source_len) {
+static void inspector_eval_source(
+  inspector_client_t *client, int id,
+  const char *source, size_t source_len, bool await_promise
+) {
   const char *prev_filename = client->js->filename;
   inspector_clear_exception_state(client->js);
   js_set_filename(client->js, "[inspector]");
-  ant_value_t result = js_eval_bytecode_repl(client->js, source ? source : "", source_len);
-  js_reactor_pump_repl_nowait(client->js);
+  js_eval_result_t evaluation = js_eval_bytecode_repl(client->js, source ? source : "", source_len);
   js_set_filename(client->js, prev_filename);
-  inspector_send_eval_result(client, id, result);
+  inspector_send_eval_completion(client, id, evaluation.value, await_promise);
 }
 
 void inspector_compile_script(inspector_client_t *client, int id, yyjson_val *params) {
@@ -225,7 +226,10 @@ void inspector_run_script(inspector_client_t *client, int id, yyjson_val *params
     return;
   }
   
-  inspector_eval_source(client, id, script->source, script->source_len);
+  inspector_eval_source(
+    client, id, script->source, script->source_len,
+    inspector_param_bool(params, "awaitPromise")
+  );
 }
 
 void inspector_get_script_source(inspector_client_t *client, int id, yyjson_val *params) {

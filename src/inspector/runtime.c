@@ -2,7 +2,6 @@
 #include "bind.h"
 #include "pool.h"
 #include "errors.h"
-#include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
 
@@ -48,7 +47,7 @@ static bool inspector_parse_object_id(const char *object_id, uint32_t *id) {
   return true;
 }
 
-static bool inspector_object_for_id(const char *object_id, ant_value_t *out) {
+bool inspector_object_for_id(const char *object_id, ant_value_t *out) {
   uint32_t id = 0;
   if (!inspector_parse_object_id(object_id, &id)) return false;
   for (inspector_object_handle_t *h = g_inspector.object_handles; h; h = h->next) {
@@ -559,10 +558,14 @@ void inspector_send_execution_context(inspector_client_t *client) {
   );
 }
 
-void inspector_send_eval_result(inspector_client_t *client, int id, ant_value_t result) {
+static void inspector_send_eval_result_kind(
+  inspector_client_t *client, int id, ant_value_t result, bool force_exception
+) {
   ant_t *js = client->js;
-  bool exception = is_err(result) || js->thrown_exists;
-  ant_value_t exception_value = exception ? inspector_exception_value(js, result) : js_mkundef();
+  bool exception = force_exception || is_err(result) || js->thrown_exists;
+  ant_value_t exception_value = force_exception
+    ? result
+    : (exception ? inspector_exception_value(js, result) : js_mkundef());
 
   sbuf_t b = {0};
   if (!sbuf_append(&b, "{\"result\":")) goto oom;
@@ -586,6 +589,146 @@ oom:
   inspector_send_error(client, id, -32000, "Out of memory");
 }
 
+void inspector_send_eval_result(inspector_client_t *client, int id, ant_value_t result) {
+  inspector_send_eval_result_kind(client, id, result, false);
+}
+
+static inspector_await_t *inspector_take_pending_await(uint32_t await_id) {
+  inspector_await_t **link = &g_inspector.pending_awaits;
+  while (*link) {
+    inspector_await_t *pending = *link;
+    if (pending->id == await_id) {
+      *link = pending->next;
+      pending->next = NULL;
+      return pending;
+    }
+    link = &pending->next;
+  }
+  return NULL;
+}
+
+static uint32_t inspector_current_await_id(ant_t *js) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (vtype(state) != T_NUM) return 0;
+  double id = js_getnum(state);
+  return id > 0 && id <= UINT32_MAX ? (uint32_t)id : 0;
+}
+
+static ant_value_t inspector_await_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
+  inspector_await_t *pending = inspector_take_pending_await(inspector_current_await_id(js));
+  if (!pending) return js_mkundef();
+
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
+  for (inspector_client_t *client = g_inspector.clients; client; client = client->next) {
+    if (client->id == pending->client_id) {
+      inspector_send_eval_result_kind(client, pending->request_id, value, false);
+      break;
+    }
+  }
+  free(pending);
+  return js_mkundef();
+}
+
+static ant_value_t inspector_await_rejected(ant_t *js, ant_value_t *args, int nargs) {
+  inspector_await_t *pending = inspector_take_pending_await(inspector_current_await_id(js));
+  if (!pending) return js_mkundef();
+
+  ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
+  for (inspector_client_t *client = g_inspector.clients; client; client = client->next) {
+    if (client->id == pending->client_id) {
+      inspector_send_eval_result_kind(client, pending->request_id, reason, true);
+      break;
+    }
+  }
+  free(pending);
+  return js_mkundef();
+}
+
+static bool inspector_defer_eval_result(
+  inspector_client_t *client, int request_id, ant_value_t *result
+) {
+  ant_t *js = client->js;
+  ant_value_t promise = js_promise_assimilate_awaitable(js, *result);
+  *result = promise;
+  if (is_err(promise) || js->thrown_exists || vtype(promise) != T_PROMISE) return false;
+
+  inspector_await_t *pending = calloc(1, sizeof(*pending));
+  if (!pending) {
+    inspector_send_error(client, request_id, -32000, "Out of memory");
+    return true;
+  }
+
+  pending->id = ++g_inspector.next_await_id;
+  if (pending->id == 0) pending->id = ++g_inspector.next_await_id;
+  pending->client_id = client->id;
+  pending->request_id = request_id;
+  pending->next = g_inspector.pending_awaits;
+  g_inspector.pending_awaits = pending;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, promise);
+  ant_value_t state = js_mknum((double)pending->id);
+  ant_value_t fulfilled = js_heavy_mkfun(js, inspector_await_fulfilled, state);
+  GC_ROOT_PIN(js, fulfilled);
+  ant_value_t rejected = js_heavy_mkfun(js, inspector_await_rejected, state);
+  GC_ROOT_PIN(js, rejected);
+  ant_value_t chained = js_promise_then(js, promise, fulfilled, rejected);
+  GC_ROOT_PIN(js, chained);
+
+  if (is_err(fulfilled) || is_err(rejected) || is_err(chained) || js->thrown_exists) {
+    inspector_await_t *failed = inspector_take_pending_await(pending->id);
+    free(failed);
+    GC_ROOT_RESTORE(js, root_mark);
+    inspector_clear_exception_state(js);
+    inspector_send_error(client, request_id, -32000, "Unable to await promise");
+    return true;
+  }
+
+  js_mark_promise_rejection_handled_chain(js, chained);
+  GC_ROOT_RESTORE(js, root_mark);
+  return true;
+}
+
+void inspector_send_eval_completion(
+  inspector_client_t *client, int id, ant_value_t result, bool await_promise
+) {
+  bool deferred = await_promise && !is_err(result) && !client->js->thrown_exists &&
+    inspector_defer_eval_result(client, id, &result);
+  if (!deferred) inspector_send_eval_result(client, id, result);
+}
+
+void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params) {
+  yyjson_val *object_id_val = params ? yyjson_obj_get(params, "promiseObjectId") : NULL;
+  const char *object_id = object_id_val && yyjson_is_str(object_id_val)
+    ? yyjson_get_str(object_id_val)
+    : NULL;
+  ant_value_t promise = js_mkundef();
+  if (!inspector_object_for_id(object_id, &promise) || vtype(promise) != T_PROMISE) {
+    inspector_send_error(client, id, -32602, "Runtime.awaitPromise requires a promise objectId");
+    return;
+  }
+  inspector_send_eval_completion(client, id, promise, true);
+}
+
+void inspector_cancel_client_awaits(uint64_t client_id) {
+  inspector_await_t **link = &g_inspector.pending_awaits;
+  while (*link) {
+    inspector_await_t *pending = *link;
+    if (pending->client_id == client_id) {
+      *link = pending->next;
+      free(pending);
+    } else link = &pending->next;
+  }
+}
+
+void inspector_clear_pending_awaits(void) {
+  while (g_inspector.pending_awaits) {
+    inspector_await_t *pending = g_inspector.pending_awaits;
+    g_inspector.pending_awaits = pending->next;
+    free(pending);
+  }
+}
+
 void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
   yyjson_val *expr_val = params ? yyjson_obj_get(params, "expression") : NULL;
   if (!expr_val || !yyjson_is_str(expr_val)) {
@@ -603,17 +746,18 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
     ant_value_t safe_result = js_mkundef();
     if (inspector_eval_safe_expr(client->js, expr, expr_len, &safe_result)) {
       inspector_send_eval_result(client, id, safe_result);
-    } else {
-      inspector_send_side_effect_blocked(client, id);
-    }
+    } else inspector_send_side_effect_blocked(client, id);
     return;
   }
 
   js_set_filename(client->js, "[inspector]");
-  ant_value_t result = js_eval_bytecode_repl(client->js, expr, expr_len);
-  js_reactor_pump_repl_nowait(client->js);
+  js_eval_result_t evaluation = js_eval_bytecode_repl(client->js, expr, expr_len);
   js_set_filename(client->js, prev_filename);
-  inspector_send_eval_result(client, id, result);
+  
+  inspector_send_eval_completion(
+    client, id, evaluation.value, 
+    inspector_param_bool(params, "awaitPromise")
+  );
 }
 
 void inspector_get_heap_usage(inspector_client_t *client, int id) {

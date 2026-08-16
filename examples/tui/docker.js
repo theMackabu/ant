@@ -23,14 +23,14 @@ const containerList = new List({
   renderItem: container => formatContainer(container)
 });
 
-function runDocker(command) {
-  const result = $(command);
+async function runDocker(command) {
+  const result = await $(command).nothrow();
   if (result.exitCode !== 0) {
-    const output = result.text().trim();
+    const output = (result.stderr || result.stdout).trim();
     state.lastError = output || `Command failed: ${command}`;
     return null;
   }
-  return result.text();
+  return result.stdout;
 }
 
 function isRunning(container) {
@@ -89,9 +89,9 @@ function applyFilter() {
   containerList.setItems(filtered);
 }
 
-function refreshContainers() {
+async function refreshContainers() {
   state.lastError = '';
-  const output = runDocker("docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'");
+  const output = await runDocker("docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'");
   if (output === null) {
     containers = [];
     containerList.setItems([]);
@@ -168,25 +168,25 @@ function runAction(action, container) {
   confirm(screen, {
     title: `${verb} Container`,
     message: `Run: docker ${action} ${container.name}?`
-  }).then(confirmed => {
+  }).then(async confirmed => {
     if (!confirmed) {
       render();
       return;
     }
 
-    const output = runDocker(`docker ${action} ${container.id}`);
+    const output = await runDocker(`docker ${action} ${container.id}`);
     if (output === null) {
       alert(screen, {
         title: 'Docker Error',
         message: state.lastError || 'Docker command failed.'
-      }).then(() => {
-        refreshContainers();
+      }).then(async () => {
+        await refreshContainers();
         render();
       });
       return;
     }
 
-    refreshContainers();
+    await refreshContainers();
     render();
   });
 }
@@ -240,8 +240,7 @@ function handleKey(key) {
       render();
       return;
     case 'r':
-      refreshContainers();
-      render();
+      refreshContainers().then(() => render());
       return;
     case keys.ENTER: {
       const selected = containerList.getSelected();
@@ -282,12 +281,12 @@ screen.onKey(handleKey);
 screen.onResize(() => render());
 
 screen.start();
-refreshContainers();
+await refreshContainers();
 render();
 
-setInterval(() => {
+setInterval(async () => {
   if (!screen.hasModal()) {
-    refreshContainers();
+    await refreshContainers();
     render();
   }
 }, 4000);

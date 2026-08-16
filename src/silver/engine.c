@@ -1,6 +1,7 @@
 #include "gc.h"
 #include "errors.h"
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -1117,6 +1118,30 @@ ant_value_t sv_execute_entry(
   return sv_execute_entry_common(
     vm, func, NULL, 0, js_mkundef(), js_mkundef(),
     this_val, args, argc, js_mkundef(), NULL
+  );
+}
+
+ant_value_t sv_call_compiled(
+  ant_t *js, sv_func_t *func,
+  ant_value_t this_val, ant_value_t *args, int argc
+) {
+  if (!js || !js->vm || !func || func->upvalue_count != 0)
+    return js_mkerr(js, "invalid generated function");
+
+  sv_closure_t *closure = sv_closure_init(js, func, this_val);
+  if (!closure) return js_mkerr(js, "out of memory for generated function");
+  
+  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  const char *name = func->debug ? func->debug->name : NULL;
+  
+  sv_closure_finish_init(
+    js, closure, func_val, js_mkundef(),
+    name, name ? (uint32_t)strlen(name) : 0, js_mkundef(), false
+  );
+  
+  return sv_vm_call(
+    js->vm, js, func_val, this_val, 
+    args, argc, NULL, false
   );
 }
 

@@ -14391,6 +14391,19 @@ static ant_promise_state_t *get_promise_data(ant_t *js, ant_value_t promise, boo
   return entry;
 }
 
+js_promise_settlement_t js_promise_get_settlement(
+  ant_t *js, ant_value_t promise, ant_value_t *value_out
+) {
+  if (value_out) *value_out = js_mkundef();
+  ant_promise_state_t *pd = get_promise_data(js, promise, false);
+
+  if (!pd) return JS_PROMISE_INVALID;
+  if (pd->state == 0) return JS_PROMISE_PENDING;
+  if (value_out) *value_out = pd->value;
+
+  return pd->state == 1 ? JS_PROMISE_FULFILLED : JS_PROMISE_REJECTED;
+}
+
 static uint32_t get_promise_id(ant_t *js, ant_value_t p) {
   ant_promise_state_t *pd = get_promise_data(js, p, false);
   return pd ? pd->promise_id : 0;
@@ -14478,7 +14491,7 @@ ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfi
   return result;
 }
 
-static void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise) {
+void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise) {
   ant_value_t current = promise;
 
   while (vtype(current) == T_PROMISE) {
@@ -18981,7 +18994,7 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   );
 }
 
-static inline ant_value_t js_eval_bytecode_mode(
+static inline js_eval_result_t js_eval_bytecode_mode_result(
   ant_t *js, const char *buf, size_t len, 
   sv_compile_mode_t mode, bool parse_strict,
   ant_value_t eval_this, ant_value_t eval_env
@@ -18993,21 +19006,42 @@ static inline ant_value_t js_eval_bytecode_mode(
 
   if (!program) {
     parse_arena_rewind(parse_mark);
-    if (js->thrown_exists) return mkval(T_ERR, 0);
-    return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
+    ant_value_t value = js->thrown_exists
+      ? mkval(T_ERR, 0)
+      : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
+    return (js_eval_result_t){ .value = value, .kind = JS_EVAL_COMPLETE };
   }
 
   sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode);
   parse_arena_rewind(parse_mark);
 
   if (!func) {
-    if (js->thrown_exists) return mkval(T_ERR, 0);
-    return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
+    ant_value_t value = js->thrown_exists
+      ? mkval(T_ERR, 0)
+      : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
+    return (js_eval_result_t){ .value = value, .kind = JS_EVAL_COMPLETE };
   }
 
-  if (mode == SV_COMPILE_EVAL)
-    return js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env);
-  return js_execute_compiled_bytecode(js, func);
+  js_eval_completion_kind_t kind = func->is_tla
+    ? JS_EVAL_ASYNC_ENTRY
+    : JS_EVAL_COMPLETE;
+  
+  ant_value_t value = mode == SV_COMPILE_EVAL
+    ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env)
+    : js_execute_compiled_bytecode(js, func);
+  
+  return (js_eval_result_t){ .value = value, .kind = kind };
+}
+
+static inline ant_value_t js_eval_bytecode_mode(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool parse_strict,
+  ant_value_t eval_this, ant_value_t eval_env
+) {
+  return js_eval_bytecode_mode_result(
+    js, buf, len, mode, 
+    parse_strict, eval_this, eval_env
+  ).value;
 }
 
 ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
@@ -19048,9 +19082,11 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   );
 }
 
-ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(
-    js, buf, len, SV_COMPILE_REPL, 
+js_eval_result_t js_eval_bytecode_repl(
+  ant_t *js, const char *buf, size_t len
+) {
+  return js_eval_bytecode_mode_result(
+    js, buf, len, SV_COMPILE_REPL,
     false, js_mkundef(), js_mkundef()
   );
 }

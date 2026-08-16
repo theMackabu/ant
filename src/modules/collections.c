@@ -204,6 +204,56 @@ static weakmap_entry_t **get_weakmap_from_obj(ant_value_t obj) {
   return (weakmap_entry_t **)js_get_native(obj, WEAKMAP_NATIVE_TAG);
 }
 
+ant_value_t collections_make_weakmap(ant_t *js) {
+  ant_value_t weakmap = js_mkobj(js);
+  if (is_err(weakmap)) return weakmap;
+
+  weakmap_entry_t **head = ant_calloc(sizeof(*head));
+  if (!head) return js_mkerr(js, "out of memory");
+  *head = NULL;
+
+  js_obj_ptr(weakmap)->type_tag = T_WEAKMAP;
+  ant_value_t prototype = js_get_ctor_proto(js, "WeakMap", 7);
+  if (is_special_object(prototype)) js_set_proto_init(weakmap, prototype);
+  js_set_native(weakmap, head, WEAKMAP_NATIVE_TAG);
+  return weakmap;
+}
+
+ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key) {
+  weakmap_entry_t **head = get_weakmap_from_obj(weakmap);
+  if (!head || !can_be_held_weakly(key)) return js_mkundef();
+
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *head, &key, sizeof(key), entry);
+  return entry ? entry->value : js_mkundef();
+}
+
+bool collections_weakmap_set(
+  ant_t *js,
+  ant_value_t weakmap,
+  ant_value_t key,
+  ant_value_t value
+) {
+  weakmap_entry_t **head = get_weakmap_from_obj(weakmap);
+  if (!head || !can_be_held_weakly(key)) return false;
+
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *head, &key, sizeof(key), entry);
+  if (!entry) {
+    entry = ant_calloc(sizeof(*entry));
+    if (!entry) return false;
+    entry->key_obj = key;
+    HASH_ADD(hh, *head, key_obj, sizeof(key), entry);
+  }
+  entry->value = value;
+  ant_object_t *object = js_obj_ptr(weakmap);
+  if (object) {
+    gc_write_barrier(js, object, key);
+    gc_write_barrier(js, object, value);
+  }
+  return true;
+}
+
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;

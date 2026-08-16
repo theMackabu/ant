@@ -1,77 +1,99 @@
+import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { $ } from 'ant:shell';
 
-console.log('Testing $ shell command execution...');
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-shell-'));
 
-console.log('\n=== Test 1: Simple echo ===');
-const result1 = $`echo "Hello, world!"`;
-const text1 = result1.text();
-console.log('Output:', text1);
-if (text1 !== 'Hello, world!') {
-  throw new Error('Expected "Hello, world!" but got: ' + text1);
-}
-if (result1.exitCode !== 0) {
-  throw new Error('Expected exit code 0 but got: ' + result1.exitCode);
+try {
+  const simple = await $`echo "Hello, world!"`;
+  assert.strictEqual(simple.stdout, 'Hello, world!\n');
+  assert.strictEqual(simple.stderr, '');
+  assert.strictEqual(simple.exitCode, 0);
+  assert.strictEqual(simple.signalCode, null);
+  assert.strictEqual(await $`printf text`.text(), 'text');
+  assert.deepStrictEqual(await $`printf "line1\nline2\nline3\n"`.lines(), [
+    'line1',
+    'line2',
+    'line3'
+  ]);
+
+  const unsafe = 'one; echo interpolated-source-was-executed';
+  assert.strictEqual(await $`echo ${unsafe}`.text(), `${unsafe}\n`);
+  assert.strictEqual(await $`printf '<%s>' ${['one two', 'three']}`.text(), '<one two><three>');
+
+  assert.strictEqual(await $`false && echo bad; true && echo and; false || echo or`.text(), 'and\nor\n');
+  assert.strictEqual(await $`printf abc | wc -c`.text(), '3\n');
+  assert.strictEqual(await $`seq 1 10000 | wc -l`.text(), '10000\n');
+  assert.strictEqual(await $`yes | head -1`.text(), 'y\n');
+
+  const cwdResult = await $`pwd; cd ${tmpDir}; pwd`;
+  const cwdLines = cwdResult.stdout.trim().split('\n');
+  assert.strictEqual(cwdLines.length, 2);
+  assert.strictEqual(cwdLines[1], fs.realpathSync(tmpDir));
+
+  const redirectPath = path.join(tmpDir, 'redirect.txt');
+  await $`printf hello > ${redirectPath}`;
+  await $`printf world >> ${redirectPath}`;
+  assert.strictEqual(await $`cat < ${redirectPath}`.text(), 'helloworld');
+  assert.strictEqual(fs.readFileSync(redirectPath, 'utf8'), 'helloworld');
+  assert.notStrictEqual((await $`cd ${redirectPath}`.nothrow()).exitCode, 0);
+
+  const merged = await $`ls ${path.join(tmpDir, 'missing')} 2>&1`.nothrow();
+  assert.notStrictEqual(merged.exitCode, 0);
+  assert.strictEqual(merged.stderr, '');
+  assert.ok(merged.stdout.length > 0);
+
+  const mergedPath = path.join(tmpDir, 'merged.txt');
+  const mergedToFile = await $`ls ${path.join(tmpDir, 'missing-a')} > ${mergedPath} 2>&1`.nothrow();
+  assert.strictEqual(mergedToFile.stdout, '');
+  assert.strictEqual(mergedToFile.stderr, '');
+  assert.ok(fs.readFileSync(mergedPath, 'utf8').length > 0);
+
+  const stdoutPath = path.join(tmpDir, 'stdout-only.txt');
+  const duplicatedFirst = await $`ls ${path.join(tmpDir, 'missing-b')} 2>&1 > ${stdoutPath}`.nothrow();
+  assert.ok(duplicatedFirst.stdout.length > 0);
+  assert.strictEqual(duplicatedFirst.stderr, '');
+  assert.strictEqual(fs.readFileSync(stdoutPath, 'utf8'), '');
+
+  const failed = await $`exit 7`.nothrow();
+  assert.strictEqual(failed.exitCode, 7);
+  const missingCommand = await $`ant-shell-command-that-does-not-exist`.nothrow();
+  assert.strictEqual(missingCommand.exitCode, 127);
+  assert.ok(missingCommand.stderr.includes('ENOENT'));
+  const missingInPipeline = await $`ant-shell-command-that-does-not-exist | cat`.nothrow();
+  assert.strictEqual(missingInPipeline.exitCode, 0);
+  assert.ok(missingInPipeline.stderr.includes('ENOENT'));
+  const missingAtPipelineEnd = await $`printf input | ant-shell-command-that-does-not-exist`.nothrow();
+  assert.strictEqual(missingAtPipelineEnd.exitCode, 127);
+  assert.ok(missingAtPipelineEnd.stderr.includes('ENOENT'));
+  let thrown;
+  try {
+    await $`exit 8`;
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof Error);
+  assert.strictEqual(thrown.exitCode, 8);
+  assert.strictEqual(await $`exit 9`.catch(error => error.exitCode), 9);
+
+  async function cached(value) {
+    return $`printf %s ${value}`.text();
+  }
+  assert.strictEqual(await cached('first'), 'first');
+  assert.strictEqual(await cached('second'), 'second');
+
+  assert.strictEqual(await $('printf string-argument').text(), 'string-argument');
+  let syntaxThrown = false;
+  try {
+    $`echo "unterminated`;
+  } catch (error) {
+    syntaxThrown = error instanceof SyntaxError;
+  }
+  assert.strictEqual(syntaxThrown, true);
+} finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
-console.log('\n=== Test 2: Multi-line output ===');
-const result2 = $`echo "line1\nline2\nline3"`;
-const lines2 = result2.lines();
-console.log('Line count:', lines2.length);
-console.log('Line 0:', lines2[0]);
-console.log('Line 1:', lines2[1]);
-console.log('Line 2:', lines2[2]);
-
-if (lines2.length !== 3) {
-  throw new Error('Expected 3 lines but got: ' + lines2.length);
-}
-if (lines2[0] !== 'line1') {
-  throw new Error('Expected "line1" but got: ' + lines2[0]);
-}
-if (lines2[1] !== 'line2') {
-  throw new Error('Expected "line2" but got: ' + lines2[1]);
-}
-if (lines2[2] !== 'line3') {
-  throw new Error('Expected "line3" but got: ' + lines2[2]);
-}
-
-console.log('\n=== Test 3: ls command ===');
-const result3 = $`ls tests/test_shell.js`;
-const text3 = result3.text();
-console.log('Output:', text3);
-if (!text3.includes('test_shell.js')) {
-  throw new Error('Expected output to contain test_shell.js');
-}
-
-console.log('\n=== Test 4: pwd command ===');
-const result4 = $`pwd`;
-const text4 = result4.text();
-console.log('Current directory:', text4);
-if (text4.length === 0) {
-  throw new Error('Expected non-empty pwd output');
-}
-
-console.log('\n=== Test 5: .text() method ===');
-const result5 = $`echo "test text method"`;
-const text5 = result5.text();
-console.log('Text:', text5);
-if (text5 !== 'test text method') {
-  throw new Error('Expected "test text method" but got: ' + text5);
-}
-
-console.log('\n=== Test 6: Listing files with .lines() ===');
-const result6 = $`ls tests/*.cjs | head -5`;
-const lines6 = result6.lines();
-console.log('Found', lines6.length, 'files');
-for (let i = 0; i < lines6.length && i < 3; i++) {
-  console.log('  -', lines6[i]);
-}
-
-console.log('\n=== Test 7: date command ===');
-const result7 = $`date +%Y`;
-const year = result7.text();
-console.log('Current year:', year);
-if (year.length !== 4) {
-  throw new Error('Expected 4-digit year');
-}
-
-console.log('\n✓ All $ shell tests passed!');
+console.log('ant:shell Silver frontend tests passed');
