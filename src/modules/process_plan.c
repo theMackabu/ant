@@ -221,8 +221,11 @@ static void process_capture_read(uv_stream_t *stream, ssize_t nread, const uv_bu
   if (capture && nread > 0) {
     ant_process_bytes_t *bytes = capture->stdout_stream
       ? &capture->run->stdout_bytes : &capture->run->stderr_bytes;
-    if (!process_bytes_append(bytes, buf->base, (size_t)nread))
+    if (!process_bytes_append(bytes, buf->base, (size_t)nread)) {
       capture->run->open_error = UV_ENOMEM;
+      capture->run->final_exit_code = 1;
+      process_append_error(capture->run, "process capture", UV_ENOMEM);
+    }
   }
   free(buf->base);
   if (!capture || nread >= 0 || uv_is_closing((uv_handle_t *)stream)) return;
@@ -270,7 +273,9 @@ static void process_stage_exit(
   if (!stage) return;
   ant_process_run_t *run = stage->run;
   if (stage->index + 1 == run->plan.command_count) {
-    run->final_exit_code = signal ? 128 + signal : (int)status;
+    int exit_code = signal ? 128 + signal : (int)status;
+    if (exit_code != 0 || run->final_exit_code == 0)
+      run->final_exit_code = exit_code;
     run->final_signal = signal;
   }
   if (run->remaining_processes > 0) run->remaining_processes--;
@@ -518,6 +523,7 @@ static void process_run_try_finish(ant_process_run_t *run) {
   const char *signal_name = process_signal_name(run->final_signal);
   js_set(run->js, result, "signalCode", signal_name
     ? js_mkstr(run->js, signal_name, strlen(signal_name)) : js_mknull());
+  js_set(run->js, result, "exited", js_false);
   js_resolve_promise(run->js, run->promise, result);
   gc_unroot_pending_promise(run->js, js_obj_ptr(run->promise));
   process_run_free(run);

@@ -24,6 +24,20 @@ try {
   assert.strictEqual(simple.exitCode, 0);
   assert.strictEqual(simple.signalCode, null);
   assert.strictEqual(await $`printf text`.text(), 'text');
+  let finallyCalls = 0;
+  const finallyResult = await $`printf finally`.finally(() => finallyCalls++);
+  assert.strictEqual(finallyResult.stdout, 'finally');
+  assert.strictEqual(finallyCalls, 1);
+  let rejectedFinallyCalls = 0;
+  let finallyFailure;
+  try {
+    await $`exit 18`.finally(() => rejectedFinallyCalls++);
+  } catch (error) {
+    finallyFailure = error;
+  }
+  assert.ok(finallyFailure instanceof Error);
+  assert.strictEqual(finallyFailure.exitCode, 18);
+  assert.strictEqual(rejectedFinallyCalls, 1);
   assert.deepStrictEqual(await $`printf "line1\nline2\nline3\n"`.lines(), [
     'line1',
     'line2',

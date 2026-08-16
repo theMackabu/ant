@@ -192,6 +192,49 @@ async function main() {
     );
 
     await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__multiValueEphemeronState = (() => {
+        const firstMap = new WeakMap();
+        const secondMap = new WeakMap();
+        const triggerMap = new WeakMap();
+        const root = {};
+        const key = {};
+        const first = {};
+        const second = {};
+        firstMap.set(key, first);
+        secondMap.set(key, second);
+        triggerMap.set(root, key);
+        return {
+          firstMap,
+          secondMap,
+          triggerMap,
+          root,
+          firstRef: new WeakRef(first),
+          secondRef: new WeakRef(second),
+        };
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveMultiValueEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: `[
+        __multiValueEphemeronState.firstRef.deref(),
+        __multiValueEphemeronState.secondRef.deref(),
+      ].every(value => value !== undefined)`,
+    });
+    assert.equal(liveMultiValueEphemeron.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__multiValueEphemeronState.root = null; 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadMultiValueEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: `[
+        __multiValueEphemeronState.firstRef.deref(),
+        __multiValueEphemeronState.secondRef.deref(),
+      ].every(value => value === undefined)`,
+    });
+    assert.equal(deadMultiValueEphemeron.result.value, true);
+
+    await cdp.send('Runtime.evaluate', {
       expression: `globalThis.__typedWeakKeyState = (() => {
         const makeKey = [
           () => [],

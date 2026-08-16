@@ -1133,8 +1133,15 @@ ant_value_t sv_call_compiled_zero_upvalues(
   if (!js || !js->vm || !func || func->upvalue_count != 0)
     return js_mkerr(js, "invalid generated function");
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, this_val);
+  for (int i = 0; i < argc; i++) GC_ROOT_PIN(js, args[i]);
+
   sv_closure_t *closure = sv_closure_init(js, func, this_val);
-  if (!closure) return js_mkerr(js, "out of memory for generated function");
+  if (!closure) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkerr(js, "out of memory for generated function");
+  }
   
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   const char *name = func->debug ? func->debug->name : NULL;
@@ -1144,10 +1151,12 @@ ant_value_t sv_call_compiled_zero_upvalues(
     name, name ? (uint32_t)strlen(name) : 0, js_mkundef(), false
   );
   
-  return sv_vm_call(
+  ant_value_t result = sv_vm_call(
     js->vm, js, func_val, this_val, 
     args, argc, NULL, false
   );
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 ant_value_t sv_execute_eval_entry(

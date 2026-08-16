@@ -10,6 +10,7 @@ declare module 'ant:shell' {
     catch<TResult = never>(
       onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null
     ): Promise<ShellOutput | TResult>;
+    finally(onFinally?: (() => void) | null): Promise<ShellOutput>;
     nothrow(): ShellPromise;
     text(): Promise<string>;
     lines(): Promise<string[]>;

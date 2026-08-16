@@ -8,9 +8,15 @@
 #include <stdlib.h>
 #include <uthash.h>
 
+typedef struct gc_weak_pending_value {
+  ant_value_t value;
+  struct gc_weak_pending_value *next;
+} gc_weak_pending_value_t;
+
 typedef struct gc_weak_pending_entry {
   ant_value_t key;
   ant_value_t value;
+  gc_weak_pending_value_t *additional_values;
   UT_hash_handle hh;
 } gc_weak_pending_entry_t;
 
@@ -132,6 +138,12 @@ static void gc_weak_clear_pending(ant_t *js) {
   gc_weak_pending_entry_t *head = js ? js->weak_gc.pending : NULL;
   gc_weak_pending_entry_t *entry, *tmp;
   HASH_ITER(hh, head, entry, tmp) {
+    gc_weak_pending_value_t *value = entry->additional_values;
+    while (value) {
+      gc_weak_pending_value_t *next = value->next;
+      free(value);
+      value = next;
+    }
     HASH_DEL(head, entry);
     free(entry);
   }
@@ -155,14 +167,29 @@ static bool gc_weak_is_collection(const ant_object_t *obj) {
 static void gc_weak_add_pending(
   ant_t *js, ant_value_t key, ant_value_t value
 ) {
-  gc_weak_pending_entry_t *entry = malloc(sizeof(*entry));
+  gc_weak_pending_entry_t *head = js->weak_gc.pending;
+  gc_weak_pending_entry_t *entry = NULL;
+  HASH_FIND(hh, head, &key, sizeof(key), entry);
+  if (entry) {
+    gc_weak_pending_value_t *additional = malloc(sizeof(*additional));
+    if (!additional) {
+      js->weak_gc.pending_oom = true;
+      return;
+    }
+    additional->value = value;
+    additional->next = entry->additional_values;
+    entry->additional_values = additional;
+    return;
+  }
+
+  entry = malloc(sizeof(*entry));
   if (!entry) {
     js->weak_gc.pending_oom = true;
     return;
   }
   entry->key = key;
   entry->value = value;
-  gc_weak_pending_entry_t *head = js->weak_gc.pending;
+  entry->additional_values = NULL;
   HASH_ADD(hh, head, key, sizeof(key), entry);
   js->weak_gc.pending = head;
 }
@@ -171,16 +198,21 @@ void gc_weak_key_marked(ant_t *js, ant_value_t key) {
   if (!js || !js->weak_gc.pending_active || !js->weak_gc.mark) return;
   gc_weak_pending_entry_t *head = js->weak_gc.pending;
   gc_weak_pending_entry_t *entry = NULL;
-  do {
-    HASH_FIND(hh, head, &key, sizeof(key), entry);
-    if (!entry) break;
-    ant_value_t value = entry->value;
-    HASH_DEL(head, entry);
-    free(entry);
-    js->weak_gc.pending = head;
-    js->weak_gc.mark(js, value);
-    head = js->weak_gc.pending;
-  } while (true);
+  HASH_FIND(hh, head, &key, sizeof(key), entry);
+  if (!entry) return;
+
+  HASH_DEL(head, entry);
+  js->weak_gc.pending = head;
+  js->weak_gc.mark(js, entry->value);
+
+  gc_weak_pending_value_t *value = entry->additional_values;
+  while (value) {
+    gc_weak_pending_value_t *next = value->next;
+    js->weak_gc.mark(js, value->value);
+    free(value);
+    value = next;
+  }
+  free(entry);
 }
 
 static void gc_weak_process_map(ant_t *js, ant_object_t *obj) {

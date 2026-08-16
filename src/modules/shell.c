@@ -96,6 +96,20 @@ static ant_value_t shell_promise_catch(ant_t *js, ant_value_t *args, int nargs) 
   return js_promise_then(js, promise, js_mkundef(), rejected);
 }
 
+static ant_value_t shell_promise_finally(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t promise = js_get(js, state, "promise");
+  if (vtype(promise) != T_PROMISE) return js_mkerr(js, "Invalid shell promise");
+
+  ant_value_t finally_method = js_get(js, promise, "finally");
+  if (!is_callable(finally_method)) return js_mkerr(js, "Invalid Promise.finally");
+  ant_value_t callback = nargs > 0 ? args[0] : js_mkundef();
+  return sv_vm_call(
+    js->vm, js, finally_method, promise,
+    &callback, 1, NULL, false
+  );
+}
+
 static ant_value_t shell_promise_text(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
@@ -127,6 +141,7 @@ static ant_value_t shell_wrap_promise(ant_t *js, ant_value_t raw_promise) {
   js_set(js, state, "wrapper", wrapper);
   js_set(js, wrapper, "then", js_heavy_mkfun(js, shell_promise_then, state));
   js_set(js, wrapper, "catch", js_heavy_mkfun(js, shell_promise_catch, state));
+  js_set(js, wrapper, "finally", js_heavy_mkfun(js, shell_promise_finally, state));
   js_set(js, wrapper, "nothrow", js_heavy_mkfun(js, shell_promise_nothrow, state));
   js_set(js, wrapper, "text", js_heavy_mkfun(js, shell_promise_text, state));
   js_set(js, wrapper, "lines", js_heavy_mkfun(js, shell_promise_lines, state));
