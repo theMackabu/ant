@@ -8968,27 +8968,9 @@ static ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_
     } else {
       if (!has_value) value = js_mkundef();      
       ant_value_t prop_key = sym_key ? prop : js_mkstr(js, prop_str, prop_len);
-      uint8_t prop_attrs = ANT_PROP_ATTR_ENUMERABLE
-        | (writable ? ANT_PROP_ATTR_WRITABLE : 0)
-        | (configurable ? ANT_PROP_ATTR_CONFIGURABLE : 0);
-      mkprop(js, as_obj, prop_key, value, prop_attrs);
-      if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
-
-      if (obj_ptr && obj_ptr->shape) {
-        if (!js_obj_ensure_unique_shape(obj_ptr)) return js_mkerr(js, "oom");
-        if (sym_key) {
-          ant_shape_set_attrs_symbol(obj_ptr->shape, sym_off, attrs);
-          int32_t slot = ant_shape_lookup_symbol(obj_ptr->shape, sym_off);
-          if (slot >= 0) ant_shape_clear_accessor_slot(obj_ptr->shape, (uint32_t)slot);
-        } else {
-          const char *interned = intern_string(prop_str, prop_len);
-          if (interned) {
-            ant_shape_set_attrs_interned(obj_ptr->shape, interned, attrs);
-            int32_t slot = ant_shape_lookup_interned(obj_ptr->shape, interned);
-            if (slot >= 0) ant_shape_clear_accessor_slot(obj_ptr->shape, (uint32_t)slot);
-          }
-        }
-      }
+      if (is_err(prop_key)) return prop_key;
+      ant_value_t added = mkprop_exact_attrs(js, as_obj, prop_key, value, attrs);
+      if (is_err(added)) return added;
     }
   }
 
