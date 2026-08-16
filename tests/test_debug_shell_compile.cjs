@@ -46,7 +46,8 @@ assert(
 );
 assert(
   result.stderr.includes('__exec=__begin(__ctx);') &&
-    result.stderr.includes('__word(__exec,__plan,0,0,1,__values);') &&
+    result.stderr.includes('__wordValue=__values[0];') &&
+    result.stderr.includes('__arg(__exec,String(__wordValue));') &&
     result.stderr.includes('__command(__exec,__ctx,1);') &&
     result.stderr.includes('__result=await __submit(__ctx,__exec);'),
   `missing direct dynamic-word lowering\n${result.stderr}`
@@ -71,13 +72,13 @@ assert(
 assert(
   result.stderr.includes('[shell:invoke] bindings') &&
     result.stderr.includes('__begin = [native sh_runtime_begin]') &&
-    result.stderr.includes('__word = [native sh_runtime_word]') &&
+    result.stderr.includes('__arg = [native sh_runtime_arg]') &&
     result.stderr.includes('__command = [native sh_runtime_command]') &&
     result.stderr.includes('__submit = [native sh_runtime_submit]') &&
     result.stderr.includes('__finish = [native sh_runtime_finish]') &&
     result.stderr.includes('__ctx = { cwd: "') &&
     result.stderr.includes('__values = ["shell-output"]') &&
-    result.stderr.includes('__plan = [compiled shell plan: 1 clause]'),
+    result.stderr.includes('__plan = [JavaScript shell plan: 1 clause]'),
   `missing shell invocation bindings\n${result.stderr}`
 );
 

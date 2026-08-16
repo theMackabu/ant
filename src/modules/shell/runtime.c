@@ -352,140 +352,6 @@ static bool sh_number_index(ant_value_t value, size_t *index) {
   return true;
 }
 
-static const sh_word_t *sh_compiled_word(
-  ant_value_t holder, ant_value_t clause_value,
-  ant_value_t command_value, ant_value_t word_value
-) {
-  sh_compiled_program_t *compiled = js_get_native(
-    holder, SH_COMPILED_PROGRAM_TAG
-  );
-  size_t clause_index, command_index, word_index;
-  if (!compiled || !sh_number_index(clause_value, &clause_index) ||
-      !sh_number_index(command_value, &command_index) ||
-      !sh_number_index(word_value, &word_index) ||
-      clause_index >= compiled->program.clause_count) return NULL;
-  const sh_pipeline_t *pipeline =
-    &compiled->program.clauses[clause_index].pipeline;
-  if (command_index >= pipeline->command_count) return NULL;
-  const sh_command_t *command = &pipeline->commands[command_index];
-  return word_index < command->word_count ? &command->words[word_index] : NULL;
-}
-
-static const sh_redir_t *sh_compiled_redirect(
-  ant_value_t holder, ant_value_t clause_value,
-  ant_value_t command_value, ant_value_t redirect_value
-) {
-  sh_compiled_program_t *compiled = js_get_native(
-    holder, SH_COMPILED_PROGRAM_TAG
-  );
-  size_t clause_index, command_index, redirect_index;
-  if (!compiled || !sh_number_index(clause_value, &clause_index) ||
-      !sh_number_index(command_value, &command_index) ||
-      !sh_number_index(redirect_value, &redirect_index) ||
-      clause_index >= compiled->program.clause_count) return NULL;
-  const sh_pipeline_t *pipeline =
-    &compiled->program.clauses[clause_index].pipeline;
-  if (command_index >= pipeline->command_count) return NULL;
-  const sh_command_t *command = &pipeline->commands[command_index];
-  return redirect_index < command->redir_count
-    ? &command->redirs[redirect_index] : NULL;
-}
-
-static bool sh_process_builder_append_value(
-  ant_t *js, sh_process_builder_t *builder, ant_value_t value
-) {
-  ant_value_t string = vtype(value) == T_STR
-    ? value : js_tostring_val(js, value);
-  if (is_err(string)) return false;
-  size_t len = 0;
-  const char *text = js_getstr(js, string, &len);
-  if (text && memchr(text, '\0', len)) {
-    js_mkerr_typed(
-      js, JS_ERR_TYPE,
-      "ant:shell: command arguments cannot contain NUL bytes"
-    );
-    return false;
-  }
-  return text && sh_process_builder_append(builder, text, len);
-}
-
-static bool sh_process_builder_expand_word(
-  ant_t *js, sh_process_builder_t *builder,
-  const sh_word_t *word, ant_value_t values
-) {
-  if (!word || vtype(values) != T_ARR) return false;
-  if (word->part_count == 1) {
-    const sh_word_part_t *part = &word->parts[0];
-    if (part->kind == SH_PART_INTERPOLATION &&
-        part->quote == SH_QUOTE_NONE &&
-        part->interpolation < (size_t)js_arr_len(js, values)) {
-      ant_value_t value = js_arr_get(
-        js, values, (ant_offset_t)part->interpolation
-      );
-      if (vtype(value) == T_ARR) {
-        ant_offset_t count = js_arr_len(js, value);
-        for (ant_offset_t i = 0; i < count; i++)
-          if (!sh_process_builder_append_value(
-            js, builder, js_arr_get(js, value, i)
-          )) return false;
-        return true;
-      }
-    }
-  }
-
-  sh_bytes_t bytes = {0};
-  for (size_t i = 0; i < word->part_count; i++) {
-    const sh_word_part_t *part = &word->parts[i];
-    if (part->kind == SH_PART_LITERAL) {
-      if (!sh_bytes_append(
-        &bytes, part->text ? part->text : "", part->text_len
-      )) goto fail;
-    } else if (part->kind == SH_PART_INTERPOLATION &&
-               part->interpolation < (size_t)js_arr_len(js, values)) {
-      if (!sh_value_append(js, &bytes, js_arr_get(
-        js, values, (ant_offset_t)part->interpolation
-      ))) goto fail;
-    } else goto fail;
-  }
-  if (bytes.data && memchr(bytes.data, '\0', bytes.len)) {
-    js_mkerr_typed(
-      js, JS_ERR_TYPE,
-      "ant:shell: command arguments cannot contain NUL bytes"
-    );
-    free(bytes.data);
-    return false;
-  }
-  bool appended = sh_process_builder_append(
-    builder, bytes.data ? bytes.data : "", bytes.len
-  );
-  free(bytes.data);
-  return appended;
-
-fail:
-  free(bytes.data);
-  return false;
-}
-
-static bool sh_expand_redirect_word(
-  ant_t *js, const sh_word_t *word, ant_value_t values, sh_bytes_t *bytes
-) {
-  if (!word || vtype(values) != T_ARR) return false;
-  for (size_t i = 0; i < word->part_count; i++) {
-    const sh_word_part_t *part = &word->parts[i];
-    if (part->kind == SH_PART_LITERAL) {
-      if (!sh_bytes_append(
-        bytes, part->text ? part->text : "", part->text_len
-      )) return false;
-    } else if (part->kind == SH_PART_INTERPOLATION &&
-               part->interpolation < (size_t)js_arr_len(js, values)) {
-      if (!sh_value_append(js, bytes, js_arr_get(
-        js, values, (ant_offset_t)part->interpolation
-      ))) return false;
-    } else return false;
-  }
-  return true;
-}
-
 static char *sh_resolve_path_text(
   ant_t *js, ant_value_t context, const char *path, size_t path_len
 ) {
@@ -563,20 +429,6 @@ ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs) {
   );
   if (!text || !sh_process_builder_append(builder, text, len))
     return js_mkerr(js, "Out of memory");
-  return js_mkundef();
-}
-
-ant_value_t sh_runtime_word(ant_t *js, ant_value_t *args, int nargs) {
-  sh_process_builder_t *builder = nargs > 0
-    ? sh_process_builder_get(args[0]) : NULL;
-  const sh_word_t *word = nargs >= 5
-    ? sh_compiled_word(args[1], args[2], args[3], args[4]) : NULL;
-  if (!builder || !word || nargs < 6 || vtype(args[5]) != T_ARR)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell word");
-  if (!sh_process_builder_expand_word(js, builder, word, args[5])) {
-    if (js->thrown_exists) return mkval(T_ERR, 0);
-    return js_mkerr(js, "Out of memory");
-  }
   return js_mkundef();
 }
 
@@ -751,33 +603,6 @@ ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) {
     js, builder, args[1], kind, target, target_len,
     command_index, command_count
   );
-}
-
-ant_value_t sh_runtime_redirect_word(
-  ant_t *js, ant_value_t *args, int nargs
-) {
-  sh_process_builder_t *builder = nargs > 0
-    ? sh_process_builder_get(args[0]) : NULL;
-  const sh_redir_t *redirect = nargs >= 6
-    ? sh_compiled_redirect(args[2], args[3], args[4], args[5]) : NULL;
-  size_t command_index, command_count;
-  if (!builder || !redirect || nargs < 8 || !is_special_object(args[1]) ||
-      vtype(args[6]) != T_ARR ||
-      !sh_number_index(args[4], &command_index) ||
-      !sh_number_index(args[7], &command_count))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell redirection");
-  sh_bytes_t target = {0};
-  if (!sh_expand_redirect_word(js, &redirect->target, args[6], &target)) {
-    free(target.data);
-    return js->thrown_exists ? mkval(T_ERR, 0) : js_mkerr(js, "Out of memory");
-  }
-  ant_value_t result = sh_process_builder_add_redirect(
-    js, builder, args[1], (size_t)redirect->kind,
-    target.data ? target.data : "", target.len,
-    command_index, command_count
-  );
-  free(target.data);
-  return result;
 }
 
 static ant_value_t sh_accumulate_fulfilled(
