@@ -92,10 +92,8 @@ void ant_readline_drain_interrupt_wake(void) {
 
 void ant_readline_shutdown_signal_bridge(void) {
 #ifndef _WIN32
-  for (int i = 0; i < 2; i++) {
-    if (signal_pipe[i] >= 0) close(signal_pipe[i]);
-    signal_pipe[i] = -1;
-  }
+  // some signal handlers may still be running on another thread during shutdown.
+  // keep the close-on-exec descriptors valid until process exit.
 #endif
 }
 
