@@ -23,13 +23,24 @@ typedef struct set_entry {
 typedef struct weakmap_entry {
   ant_value_t key_obj;
   ant_value_t value;
-  UT_hash_handle hh;
 } weakmap_entry_t;
+
+typedef struct weakmap_table {
+  weakmap_entry_t *entries;
+  uint32_t count;
+  uint32_t capacity;
+  uint32_t tombstones;
+  bool gc_prune_pending; // Deduplicates table maintenance within a minor GC.
+} weakmap_table_t;
 
 typedef struct weakset_entry {
   ant_value_t value_obj;
   UT_hash_handle hh;
 } weakset_entry_t;
+
+typedef struct weakref_state {
+  ant_value_t target;
+} weakref_state_t;
 
 typedef enum {
   ITER_TYPE_MAP_VALUES,
@@ -57,6 +68,7 @@ enum {
   
   WEAKMAP_NATIVE_TAG = 0x574d4150u, // WMAP
   WEAKSET_NATIVE_TAG = 0x57534554u, // WSET
+  WEAKREF_NATIVE_TAG = 0x57524546u, // WREF
   
   MAP_ITER_NATIVE_TAG = 0x4d495452u, // MITR
   SET_ITER_NATIVE_TAG = 0x53495452u  // SITR
@@ -72,5 +84,32 @@ set_iterator_state_t *get_set_iter_state(ant_value_t obj);
 
 bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out);
+
+ant_value_t collections_make_weakmap(ant_t *js);
+ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key);
+
+bool collections_weakmap_set(
+  ant_t *js, ant_value_t weakmap,
+  ant_value_t key, ant_value_t value
+);
+
+weakmap_entry_t *weakmap_table_find(
+  weakmap_table_t *table, ant_value_t key
+);
+
+bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
+void weakmap_table_finish_prune(weakmap_table_t *table);
+void weakmap_table_free(weakmap_table_t *table);
+
+// key_obj 0 is an empty slot; key_obj 1 is a tombstone.
+static inline bool weakmap_entry_is_occupied(const weakmap_entry_t *entry) {
+  return entry->key_obj != 0 && entry->key_obj != 1;
+}
+
+static inline uint32_t weak_collection_key_hash(ant_value_t key) {
+  uint32_t hash = (uint32_t)key ^ (uint32_t)(key >> 32);
+  hash = ((hash >> 16) ^ hash) * UINT32_C(0x45d9f3b);
+  return (hash >> 16) ^ hash;
+}
 
 #endif

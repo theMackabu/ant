@@ -8,10 +8,12 @@
 
 #include "errors.h"
 #include "internal.h"
-
 #include "silver/engine.h"
+
+#include "gc/weak.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
+
 #include "modules/abort.h"
 #include "modules/timer.h"
 #include "modules/symbol.h"
@@ -843,6 +845,7 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   microtask_entry_t *batch = NULL;
 
   if (!js || js->microtasks_draining) return;
+  bool at_job_boundary = js->vm_exec_depth == 0;
   js->microtasks_draining = true;
 
   while (timer_state.next_ticks != NULL || timer_state.microtasks != NULL) {
@@ -859,6 +862,7 @@ static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejectio
   timer_state.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
+  if (at_job_boundary) gc_weak_clear_kept_alive(js);
   reap_retired_coroutines(js);
 }
 

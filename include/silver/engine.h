@@ -542,6 +542,7 @@ typedef struct sv_closure {
   ant_value_t module_ctx;
   
   uint8_t in_remember_set;
+  uint8_t generation;
   uint64_t gc_epoch;
 } sv_closure_t;
 
@@ -566,6 +567,7 @@ static inline sv_closure_t *js_closure_alloc_finish(
   c->u.pending.name = NULL;
   c->u.pending.len = 0;
   c->in_remember_set = 0;
+  c->generation = 0;
   
   if (js->young_closure_len < js->young_closure_cap)
     js->young_closures[js->young_closure_len++] = c;
@@ -629,6 +631,11 @@ ant_value_t sv_execute_closure_entry(
 ant_value_t sv_execute_eval_entry(
   sv_vm_t *vm, sv_func_t *func,
   ant_value_t this_val, ant_value_t eval_env
+);
+
+ant_value_t sv_call_compiled_zero_upvalues(
+  ant_t *js, sv_func_t *func,
+  ant_value_t this_val, ant_value_t *args, int argc
 );
 
 #ifdef ANT_JIT

@@ -25,7 +25,6 @@
 // Ant does not enforce these as allocation limits
 #define BUFFER_COMPAT_MAX_LENGTH 4294967296.0
 #define BUFFER_COMPAT_MAX_STRING_LENGTH 536870888.0
-#define BUFFER_COMPAT_INSPECT_MAX_BYTES 50.0
 
 static size_t ta_metadata_bytes     = 0;
 static size_t buffer_registry_count = 0;
@@ -3654,7 +3653,7 @@ ant_value_t buffer_library(ant_t *js) {
   js_set(js, lib, "constants", buffer_make_constants(js));
   js_set(js, lib, "kMaxLength", js_mknum(BUFFER_COMPAT_MAX_LENGTH));
   js_set(js, lib, "kStringMaxLength", js_mknum(BUFFER_COMPAT_MAX_STRING_LENGTH));
-  js_set(js, lib, "INSPECT_MAX_BYTES", js_mknum(BUFFER_COMPAT_INSPECT_MAX_BYTES));
+  js_set(js, lib, "INSPECT_MAX_BYTES", js_mknum(BUFFER_INSPECT_MAX_BYTES));
 
   return lib;
 }

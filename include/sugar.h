@@ -82,7 +82,9 @@ ant_value_t start_async_in_coroutine(
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 
+js_async_entry_t *js_eval_async_entry_create(coroutine_t *coro);
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
+
 void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 

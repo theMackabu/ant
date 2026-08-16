@@ -117,6 +117,10 @@ static void route_runtime_evaluate(inspector_client_t *client, int id, yyjson_va
   inspector_eval(client, id, params);
 }
 
+static void route_runtime_await_promise(inspector_client_t *client, int id, yyjson_val *params) {
+  inspector_await_promise(client, id, params);
+}
+
 static void route_runtime_compile_script(inspector_client_t *client, int id, yyjson_val *params) {
   inspector_compile_script(client, id, params);
 }
@@ -164,6 +168,7 @@ static const inspector_route_t k_routes[] = {
   {"Network.setAttachDebugStack", route_empty},
   {"Network.setBlockedURLs", route_empty},
   {"Profiler.enable", route_empty},
+  {"Runtime.awaitPromise", route_runtime_await_promise},
   {"Runtime.compileScript", route_runtime_compile_script},
   {"Runtime.discardConsoleEntries", route_discard_console},
   {"Runtime.enable", route_runtime_enable},

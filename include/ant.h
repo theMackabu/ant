@@ -41,12 +41,38 @@ ant_t *ant_create();
 ant_value_t js_glob(ant_t *);
 void js_mark_constructor(ant_value_t value, bool is_constructor);
 
+typedef enum: uint8_t {
+  JS_EVAL_COMPLETE,
+  JS_EVAL_ASYNC_ENTRY,
+} js_eval_completion_kind_t;
+
+typedef struct {
+  ant_value_t value;
+  js_async_entry_t *async_entry;
+  js_eval_completion_kind_t kind;
+} js_eval_result_t;
+
+typedef enum: uint8_t {
+  JS_PROMISE_INVALID,
+  JS_PROMISE_PENDING,
+  JS_PROMISE_FULFILLED,
+  JS_PROMISE_REJECTED,
+} js_promise_settlement_t;
+
+js_promise_settlement_t js_promise_get_settlement(
+  ant_t *js, ant_value_t promise, 
+  ant_value_t *value_out
+);
+
 // TODO: improve naming
 ant_value_t js_eval_bytecode(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
-ant_value_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
+js_eval_result_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
+
+bool js_eval_async_entry_cancel(js_async_entry_t *entry);
+void js_eval_async_entry_release(js_async_entry_t *entry);
 
 void js_destroy(ant_t *);
 bool js_truthy(ant_t *, ant_value_t);
@@ -202,6 +228,8 @@ void js_setup_import_meta(ant_t *js, const char *filename);
 void js_process_promise_handlers(ant_t *js, ant_value_t promise);
 void js_mark_promise_trigger_dequeued(ant_t *js, ant_value_t promise);
 bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
+
+void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise);
 bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);

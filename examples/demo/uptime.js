@@ -4,7 +4,7 @@ import { $ } from 'ant:shell';
 import { uptime as osUptime, loadavg } from 'ant:os';
 
 const uptime = osUptime();
-const users = $`who | wc -l`.text().trim();
+const users = (await $`who | wc -l`.text()).trim();
 
 const days = Math.floor(uptime / 86400);
 const hours = Math.floor((uptime % 86400) / 3600);

@@ -165,6 +165,7 @@ static void ant_debug_apply(const char *key, const char *val) {
 
   else if (strcmp(key, "dump/compile") == 0) {
     if (strcmp(val, "trace") == 0) sv_debug_enable(SV_DEBUG_COMPILE);
+    if (strcmp(val, "shell") == 0) sv_debug_enable(SV_DEBUG_DUMP_SHELL);
   }
 
   else if (strcmp(key, "dump/crprintf") == 0) {
@@ -947,13 +948,13 @@ int main(int argc, char *argv[]) {
   init_navigator_module(js);
   init_observable_module(js);
   
-  ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   ant_register_library(rpc_library, "ant:rpc", NULL);
   ant_register_library(sandbox_library, "ant:sandbox", NULL);
   ant_register_library(syntax_library, "ant:syntax", NULL);
   
+  ant_register_library(shell_ops_library, "ant:internal/shell_ops", NULL);
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata", NULL);

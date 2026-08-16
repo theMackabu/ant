@@ -28,7 +28,12 @@ test('crypto toStringTag', Object.prototype.toString.call(crypto), '[object Cryp
 
 test('path toStringTag', Object.prototype.toString.call(path), '[object path]');
 test('fs toStringTag', Object.prototype.toString.call(fs), '[object fs]');
-test('shell toStringTag', Object.prototype.toString.call(shell), '[object shell]');
+test('shell toStringTag', Object.prototype.toString.call(shell), '[object Module]');
+test('shell namespace tag', shell[Symbol.toStringTag], 'Module');
+const shellTagDescriptor = Object.getOwnPropertyDescriptor(shell, Symbol.toStringTag);
+test('shell namespace tag writable', shellTagDescriptor.writable, false);
+test('shell namespace tag enumerable', shellTagDescriptor.enumerable, false);
+test('shell namespace tag configurable', shellTagDescriptor.configurable, false);
 test('ffi toStringTag', Object.prototype.toString.call(ffi), '[object FFI]');
 
 test('JSON default import', typeof testJson, 'object');
@@ -42,9 +47,11 @@ test('JSON named import count', count, 42);
 test('text default import type', typeof textContent, 'string');
 test('text default import value', textContent, 'Hello from text file\n');
 
-const absTargetUrl = typeof import.meta.resolve === 'function'
-  ? import.meta.resolve('./import_abs_target.js')
-  : import.meta.url.replace(/\/modules\.js$/, '/import_abs_target.js');
+const absTargetUrl =
+  typeof import.meta.resolve === 'function'
+    ? import.meta.resolve('./import_abs_target.js')
+    : import.meta.url.replace(/\/modules\.js$/, '/import_abs_target.js');
+
 const absTargetLooksRight = /\/import_abs_target\.js$/.test(absTargetUrl);
 test('absolute file URL target resolves to fixture', absTargetLooksRight, true);
 

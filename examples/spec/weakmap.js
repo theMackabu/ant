@@ -34,4 +34,14 @@ const ws = new WeakSet([nativeFunction, symbol]);
 test('weakset native function value', ws.has(nativeFunction), true);
 test('weakset non-registered symbol value', ws.has(symbol), true);
 
+for (const method of ['get', 'delete']) {
+  let error;
+  try {
+    WeakMap.prototype[method].call({}, {});
+  } catch (caught) {
+    error = caught;
+  }
+  test(`weakmap ${method} invalid receiver throws TypeError`, error instanceof TypeError, true);
+}
+
 summary();

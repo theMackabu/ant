@@ -89,45 +89,62 @@ static inline ant_value_t sv_capture_tla_module_ctx(ant_t *js, coroutine_t *coro
   return js_mkundef();
 }
 
-static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t this_val) {
+static inline ant_value_t sv_start_tla(
+  ant_t *js, sv_func_t *func, ant_value_t this_val,
+  js_async_entry_t **async_entry_out
+) {
+  if (async_entry_out) *async_entry_out = NULL;
   ant_value_t promise = js_mkpromise(js);
+  
   if (func) {
     GC_ROOT_SAVE(root_mark, js);
     GC_ROOT_PIN(js, this_val);
     GC_ROOT_PIN(js, promise);
-
+    
     coroutine_t *coro = (coroutine_t *)calloc(1, sizeof(coroutine_t));
     if (!coro) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "out of memory for TLA coroutine");
     }
-
+    
     sv_async_init_activation(
       coro, js, promise, this_val,
       js_mkundef(), js_mkundef(), js_mkundef(), 0
     );
-
+    
     ant_value_t module_res = sv_capture_tla_module_ctx(js, coro);
     if (is_err(module_res)) {
       coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return module_res;
     }
-
+    
+    js_async_entry_t *async_entry = async_entry_out
+      ? js_eval_async_entry_create(coro)
+      : NULL;
+    
+    if (async_entry_out && !async_entry) {
+      coroutine_release(coro);
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr(js, "out of memory for async entry handle");
+    }
+    
     sv_async_link_activation(js, coro);
-
     ant_value_t result = sv_execute_entry(
       js->vm, func,
       this_val, NULL, 0
     );
     sv_async_unlink_activation(js, coro);
-
+    
     if (coro->act && coro->act->frame_count > 0) {
+      if (async_entry_out) *async_entry_out = async_entry;
       coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
     }
-
+    
+    js_eval_async_entry_release(async_entry);
+    
     if (is_err(result)) {
       ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
@@ -200,7 +217,7 @@ static inline ant_value_t sv_start_async_closure(
       coro, js, promise, this_val,
       super_val, js->new_target, callee_func, argc
     );
-  
+    
     sv_async_link_activation(js, coro);
     ant_value_t result = sv_execute_closure_entry(
       caller_vm, closure, callee_func, 

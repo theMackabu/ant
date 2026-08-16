@@ -4,6 +4,8 @@
 #include "http/websocket.h"
 #include "json.h"
 #include "modules/crypto.h"
+#include "reactor.h"
+#include "sugar.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -279,7 +281,9 @@ static void inspector_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_bu
 
 static void inspector_client_closed(uv_handle_t *handle) {
   inspector_client_t *client = (inspector_client_t *)handle;
+  inspector_cancel_client_awaits(client->id);
   inspector_client_t **p = &g_inspector.clients;
+  
   while (*p) {
     if (*p == client) {
       *p = client->next;
@@ -287,6 +291,7 @@ static void inspector_client_closed(uv_handle_t *handle) {
     }
     p = &(*p)->next;
   }
+  
   free(client->read_buf);
   free(client);
 }
@@ -324,6 +329,8 @@ static void inspector_connection_cb(uv_stream_t *server, int status) {
   inspector_client_t *client = calloc(1, sizeof(*client));
   if (!client) return;
   client->js = g_inspector.js;
+  client->id = ++g_inspector.next_client_id;
+  if (client->id == 0) client->id = ++g_inspector.next_client_id;
   uv_tcp_init(uv_default_loop(), &client->handle);
   client->handle.data = client;
   if (uv_accept(server, (uv_stream_t *)&client->handle) != 0) {
@@ -372,6 +379,7 @@ void ant_inspector_stop(void) {
     uv_close((uv_handle_t *)&c->handle, inspector_client_closed);
   uv_close((uv_handle_t *)&g_inspector.server, NULL);
   inspector_clear_console_events();
+  inspector_clear_pending_awaits();
   while (g_inspector.scripts) {
     inspector_script_t *script = g_inspector.scripts;
     g_inspector.scripts = script->next;
@@ -391,7 +399,10 @@ void ant_inspector_stop(void) {
 }
 
 void ant_inspector_wait_for_session(void) {
-  while (g_inspector.started && (!g_inspector.attached || g_inspector.waiting_for_debugger))
+  while (g_inspector.started && (!g_inspector.attached || g_inspector.waiting_for_debugger)) {
     uv_run(uv_default_loop(), UV_RUN_ONCE);
+    js_poll_events(g_inspector.js);
+    reap_retired_coroutines(g_inspector.js);
+  }
   if (g_inspector.started) uv_unref((uv_handle_t *)&g_inspector.server);
 }

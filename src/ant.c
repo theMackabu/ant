@@ -24,6 +24,7 @@
 #include "gc.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "gc/weak.h"
 
 #include "esm/remote.h"
 #include "esm/loader.h"
@@ -94,9 +95,9 @@ typedef struct interned_string {
 } interned_string_t;
 
 typedef struct {
-  uint32_t id;
-  uint32_t flags;
+  uint64_t gc_epoch;
   const char *key;
+  uint32_t flags;
   uint32_t desc_len;
   char desc[];
 } ant_symbol_heap_t;
@@ -1714,12 +1715,32 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
         type_name = "TypedArray";
         type_len = 10;
       }
+
+      uint8_t *data = ta->buffer->data + ta->byte_offset;
+      if (type_len == 6 && memcmp(type_name, "Buffer", 6) == 0) {
+        size_t shown = ta->byte_length < BUFFER_INSPECT_MAX_BYTES
+          ? ta->byte_length
+          : BUFFER_INSPECT_MAX_BYTES;
+
+        n += cpy(buf + n, REMAIN(n, len), "<Buffer", 7);
+        for (size_t i = 0; i < shown; i++) {
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), " %02x", data[i]);
+        }
+        if (shown < ta->byte_length) {
+          size_t remaining = ta->byte_length - shown;
+          n += (size_t) snprintf(
+            buf + n, REMAIN(n, len), " ... %zu more byte%s",
+            remaining, remaining == 1 ? "" : "s"
+          );
+        }
+        n += cpy(buf + n, REMAIN(n, len), shown == 0 ? " >" : ">", shown == 0 ? 2 : 1);
+        pop_stringify();
+        return n;
+      }
       
       n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
       n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
       n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
-      
-      uint8_t *data = ta->buffer->data + ta->byte_offset;
       
       for (size_t i = 0; i < ta->length && i < 100; i++) {
         if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
@@ -3286,12 +3307,15 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.idx[9] = intern_string("9", 1);
 }
 
-ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs) {
+static inline ant_value_t mkprop_impl(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v,
+  uint8_t attrs, bool default_attrs
+) {
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   
   if (!ptr || !ptr->shape) return js_mkerr(js, "invalid object");
-  if (!attrs) attrs = ANT_PROP_ATTR_DEFAULT;
+  if (default_attrs && !attrs) attrs = ANT_PROP_ATTR_DEFAULT;
 
   uint32_t slot = 0;
   bool added = false;
@@ -3343,6 +3367,18 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     ant_prototype_property_write_invalidate(js, ptr, interned_key);
 
   return v;
+}
+
+ant_value_t mkprop(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs
+) {
+  return mkprop_impl(js, obj, k, v, attrs, true);
+}
+
+ant_value_t mkprop_exact_attrs(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs
+) {
+  return mkprop_impl(js, obj, k, v, attrs, false);
 }
 
 static ant_value_t mkprop_interned_impl(
@@ -4371,20 +4407,20 @@ typedef struct sym_registry_entry {
 } sym_registry_entry_t;
 
 ant_value_t js_mksym(ant_t *js, const char *desc) {
-  uint32_t id = (uint32_t)(++js->sym.counter);
   bool has_desc = desc != NULL;
   
   size_t desc_len = has_desc ? strlen(desc) : 0;
-  size_t total = sizeof(ant_symbol_heap_t) + (has_desc ? desc_len + 1 : 0);
+  size_t total = offsetof(ant_symbol_heap_t, desc) +
+    (has_desc ? desc_len + 1 : 0);
   
   ant_symbol_heap_t *sym_ptr = (ant_symbol_heap_t *)js_type_alloc(
     js, ANT_ALLOC_SYMBOL, total, 
     _Alignof(ant_symbol_heap_t)
   ); if (!sym_ptr) return js_mkerr(js, "oom");
 
-  sym_ptr->id = id;
-  sym_ptr->flags = has_desc ? SYM_FLAG_HAS_DESC : 0;
+  sym_ptr->gc_epoch = 0;
   sym_ptr->key = NULL;
+  sym_ptr->flags = has_desc ? SYM_FLAG_HAS_DESC : 0;
   sym_ptr->desc_len = (uint32_t)desc_len;
   
   if (has_desc) {
@@ -4455,6 +4491,26 @@ const char *js_sym_key(ant_value_t sym) {
   uint32_t flags = sym_get_flags(sym);
   if (!(flags & SYM_FLAG_GLOBAL) || (flags & SYM_FLAG_WELL_KNOWN)) return NULL;
   return (const char *)sym_get_key_ptr(sym);
+}
+
+bool js_symbol_gc_mark(ant_value_t sym, uint64_t epoch) {
+  if (vtype(sym) != T_SYMBOL) return false;
+  ant_symbol_heap_t *ptr = sym_ptr(sym);
+  if (!ptr || ptr->gc_epoch == epoch) return false;
+  ptr->gc_epoch = epoch;
+  return true;
+}
+
+bool js_symbol_gc_is_marked(ant_value_t sym, uint64_t epoch) {
+  if (vtype(sym) != T_SYMBOL) return false;
+  ant_symbol_heap_t *ptr = sym_ptr(sym);
+  return ptr && ptr->gc_epoch == epoch;
+}
+
+bool js_symbol_gc_is_permanent(ant_value_t sym) {
+  if (vtype(sym) != T_SYMBOL) return false;
+  uint32_t flags = sym_get_flags(sym);
+  return (flags & (SYM_FLAG_GLOBAL | SYM_FLAG_WELL_KNOWN)) != 0;
 }
 
 static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
@@ -8912,27 +8968,9 @@ static ant_value_t object_define_property(ant_t *js, ant_value_t obj, ant_value_
     } else {
       if (!has_value) value = js_mkundef();      
       ant_value_t prop_key = sym_key ? prop : js_mkstr(js, prop_str, prop_len);
-      uint8_t prop_attrs = ANT_PROP_ATTR_ENUMERABLE
-        | (writable ? ANT_PROP_ATTR_WRITABLE : 0)
-        | (configurable ? ANT_PROP_ATTR_CONFIGURABLE : 0);
-      mkprop(js, as_obj, prop_key, value, prop_attrs);
-      if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
-
-      if (obj_ptr && obj_ptr->shape) {
-        if (!js_obj_ensure_unique_shape(obj_ptr)) return js_mkerr(js, "oom");
-        if (sym_key) {
-          ant_shape_set_attrs_symbol(obj_ptr->shape, sym_off, attrs);
-          int32_t slot = ant_shape_lookup_symbol(obj_ptr->shape, sym_off);
-          if (slot >= 0) ant_shape_clear_accessor_slot(obj_ptr->shape, (uint32_t)slot);
-        } else {
-          const char *interned = intern_string(prop_str, prop_len);
-          if (interned) {
-            ant_shape_set_attrs_interned(obj_ptr->shape, interned, attrs);
-            int32_t slot = ant_shape_lookup_interned(obj_ptr->shape, interned);
-            if (slot >= 0) ant_shape_clear_accessor_slot(obj_ptr->shape, (uint32_t)slot);
-          }
-        }
-      }
+      if (is_err(prop_key)) return prop_key;
+      ant_value_t added = mkprop_exact_attrs(js, as_obj, prop_key, value, attrs);
+      if (is_err(added)) return added;
     }
   }
 
@@ -14391,6 +14429,19 @@ static ant_promise_state_t *get_promise_data(ant_t *js, ant_value_t promise, boo
   return entry;
 }
 
+js_promise_settlement_t js_promise_get_settlement(
+  ant_t *js, ant_value_t promise, ant_value_t *value_out
+) {
+  if (value_out) *value_out = js_mkundef();
+  ant_promise_state_t *pd = get_promise_data(js, promise, false);
+
+  if (!pd) return JS_PROMISE_INVALID;
+  if (pd->state == 0) return JS_PROMISE_PENDING;
+  if (value_out) *value_out = pd->value;
+
+  return pd->state == 1 ? JS_PROMISE_FULFILLED : JS_PROMISE_REJECTED;
+}
+
 static uint32_t get_promise_id(ant_t *js, ant_value_t p) {
   ant_promise_state_t *pd = get_promise_data(js, p, false);
   return pd ? pd->promise_id : 0;
@@ -14478,7 +14529,7 @@ ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfi
   return result;
 }
 
-static void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise) {
+void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise) {
   ant_value_t current = promise;
 
   while (vtype(current) == T_PROMISE) {
@@ -14650,7 +14701,6 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
     GC_ROOT_RESTORE(js, root_mark);
     return;
   }
-
   if (vtype(val) == T_PROMISE) {
     if (vdata(js_as_obj(val)) == vdata(js_as_obj(p))) {
       ant_value_t err = js_mkerr(js, "TypeError: Chaining cycle");
@@ -17931,6 +17981,7 @@ ant_t *ant_create() {
 void js_destroy(ant_t *js) {
   if (js == NULL) return;
   reap_retired_coroutines(js);
+  gc_weak_cleanup(js);
 
   if (js->vm) {
     sv_vm_destroy(js->vm);
@@ -18955,14 +19006,20 @@ sv_func_t *js_compile_parsed_bytecode(
   return func;
 }
 
-ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func) {
+ant_value_t js_execute_compiled_bytecode(
+  ant_t *js, sv_func_t *func,
+  js_async_entry_t **async_entry_out
+) {
+  if (async_entry_out) *async_entry_out = NULL;
   js_clear_error_site(js);
+
   ant_value_t result;
   // TODO: this-newtarget-frame-migration
   ant_value_t saved_this = js->this_val;
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
-  if (func->is_tla) result = sv_execute_entry_tla(js, func, js->this_val);
+  if (func->is_tla)
+    result = sv_execute_entry_tla(js, func, js->this_val, async_entry_out);
   else result = sv_execute_entry(sv_vm_get_active(js), func, js->this_val, NULL, 0);
 
   js->this_val = saved_this;
@@ -18981,7 +19038,7 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   );
 }
 
-static inline ant_value_t js_eval_bytecode_mode(
+static inline js_eval_result_t js_eval_bytecode_mode_result(
   ant_t *js, const char *buf, size_t len, 
   sv_compile_mode_t mode, bool parse_strict,
   ant_value_t eval_this, ant_value_t eval_env
@@ -18993,21 +19050,53 @@ static inline ant_value_t js_eval_bytecode_mode(
 
   if (!program) {
     parse_arena_rewind(parse_mark);
-    if (js->thrown_exists) return mkval(T_ERR, 0);
-    return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
+    ant_value_t value = js->thrown_exists
+      ? mkval(T_ERR, 0)
+      : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
+    
+    return (js_eval_result_t){
+      .value = value,
+      .async_entry = NULL,
+      .kind = JS_EVAL_COMPLETE,
+    };
   }
 
   sv_func_t *func = js_compile_parsed_bytecode(js, program, buf, len, mode);
   parse_arena_rewind(parse_mark);
 
   if (!func) {
-    if (js->thrown_exists) return mkval(T_ERR, 0);
-    return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
+    ant_value_t value = js->thrown_exists
+      ? mkval(T_ERR, 0)
+      : js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
+    
+    return (js_eval_result_t){
+      .value = value,
+      .async_entry = NULL,
+      .kind = JS_EVAL_COMPLETE,
+    };
   }
 
-  if (mode == SV_COMPILE_EVAL)
-    return js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env);
-  return js_execute_compiled_bytecode(js, func);
+  js_async_entry_t *async_entry = NULL;
+  ant_value_t value = mode == SV_COMPILE_EVAL
+    ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env)
+    : js_execute_compiled_bytecode(js, func, mode == SV_COMPILE_REPL ? &async_entry : NULL);
+  
+  return (js_eval_result_t){
+    .value = value,
+    .async_entry = async_entry,
+    .kind = async_entry ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
+  };
+}
+
+static inline ant_value_t js_eval_bytecode_mode(
+  ant_t *js, const char *buf, size_t len,
+  sv_compile_mode_t mode, bool parse_strict,
+  ant_value_t eval_this, ant_value_t eval_env
+) {
+  return js_eval_bytecode_mode_result(
+    js, buf, len, mode, 
+    parse_strict, eval_this, eval_env
+  ).value;
 }
 
 ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
@@ -19048,9 +19137,11 @@ ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   );
 }
 
-ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
-  return js_eval_bytecode_mode(
-    js, buf, len, SV_COMPILE_REPL, 
+js_eval_result_t js_eval_bytecode_repl(
+  ant_t *js, const char *buf, size_t len
+) {
+  return js_eval_bytecode_mode_result(
+    js, buf, len, SV_COMPILE_REPL,
     false, js_mkundef(), js_mkundef()
   );
 }

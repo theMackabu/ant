@@ -82,6 +82,71 @@ static inline bool io_is_digit_ascii(char c) {
   return c >= '0' && c <= '9';
 }
 
+static inline bool io_is_hex_byte(const char *p) {
+  return
+    isxdigit((unsigned char)p[0]) &&
+    isxdigit((unsigned char)p[1]) &&
+    (p[2] == ' ' || p[2] == '>');
+}
+
+static const char *io_color_hex_bytes(const char *p, ant_output_stream_t *out) {
+  while (true) {
+    if (io_is_hex_byte(p)) {
+      ant_output_stream_append_cstr(out, JSON_NUMBER);
+      ant_output_stream_putc(out, *p++);
+      ant_output_stream_putc(out, *p++);
+      ant_output_stream_append_cstr(out, C_RESET);
+      continue;
+    }
+
+    if (p[0] == ' ' && io_is_hex_byte(p + 1)) {
+      ant_output_stream_putc(out, *p++);
+      continue;
+    }
+
+    return p;
+  }
+}
+
+static size_t io_binary_type_len(const char *p) {
+  #define MATCH_BINARY_TYPE(name) do { \
+    size_t len = sizeof(name) - 1; \
+    if (strncmp(p, name, len) == 0 && \
+        (p[len] == '(' || p[len] == ' ' || p[len] == '{')) return len; \
+  } while (0)
+
+  switch (*p) {
+    case 'A': MATCH_BINARY_TYPE("ArrayBuffer"); break;
+    case 'S': MATCH_BINARY_TYPE("SharedArrayBuffer"); break;
+    case 'D': MATCH_BINARY_TYPE("DataView"); break;
+    case 'I':
+      MATCH_BINARY_TYPE("Int8Array");
+      MATCH_BINARY_TYPE("Int16Array");
+      MATCH_BINARY_TYPE("Int32Array");
+      break;
+    case 'U':
+      MATCH_BINARY_TYPE("Uint8Array");
+      MATCH_BINARY_TYPE("Uint8ClampedArray");
+      MATCH_BINARY_TYPE("Uint16Array");
+      MATCH_BINARY_TYPE("Uint32Array");
+      break;
+    case 'F':
+      MATCH_BINARY_TYPE("Float16Array");
+      MATCH_BINARY_TYPE("Float32Array");
+      MATCH_BINARY_TYPE("Float64Array");
+      break;
+    case 'B':
+      MATCH_BINARY_TYPE("BigInt64Array");
+      MATCH_BINARY_TYPE("BigUint64Array");
+      MATCH_BINARY_TYPE("Buffer");
+      break;
+    case 'T': MATCH_BINARY_TYPE("TypedArray"); break;
+  }
+
+  #undef MATCH_BINARY_TYPE
+  return 0;
+}
+
 static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
   if (!no_color) {
     return ant_output_stream_append_cstr(out, str);
@@ -239,7 +304,10 @@ quote:
   ant_output_stream_append_cstr(out, (is_key && brace_depth > 0) ? JSON_KEY : JSON_STRING);
   ant_output_stream_putc(out, *p++);
   while (*p) {
-    if (*p == '\\' && p[1]) { ant_output_stream_putc(out, *p++); ant_output_stream_putc(out, *p++); continue; }
+    if (*p == '\\' && p[1]) { 
+      ant_output_stream_putc(out, *p++); 
+      ant_output_stream_putc(out, *p++); continue; 
+    }
     if (*p == string_char) { ant_output_stream_putc(out, *p++); break; }
     ant_output_stream_putc(out, *p++);
   }
@@ -247,11 +315,15 @@ quote:
   goto next;
 
 lbrace:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE);
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   brace_depth++; is_key = true; goto next;
 
 rbrace:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE);
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   brace_depth--; is_key = false; goto next;
 
 lbrack:
@@ -279,11 +351,15 @@ lbrack:
     case 'U': if (memcmp(p + 2, "int8Contents]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'P': if (memcmp(p + 2, "romise]", 7) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
   }
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   array_depth++; is_key = false; goto next;
 
 rbrack:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   array_depth--; is_key = false; goto next;
 
 colon:
@@ -306,6 +382,8 @@ number: {
   ant_output_stream_append_cstr(out, JSON_NUMBER);
   while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
     ant_output_stream_putc(out, *p++);
+  if (*p == 'n' && !isalnum((unsigned char)p[1]) && p[1] != '_' && p[1] != '$')
+    ant_output_stream_putc(out, *p++);
   ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
@@ -319,12 +397,16 @@ minus: {
     }
   }
   if (memcmp(p + 1, "Infinity", 8) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
-    ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_append_cstr(out, "-Infinity"); ant_output_stream_append_cstr(out, C_RESET);
+    ant_output_stream_append_cstr(out, JSON_NUMBER); 
+    ant_output_stream_append_cstr(out, "-Infinity"); 
+    ant_output_stream_append_cstr(out, C_RESET);
     p += 9; goto next;
   }
   if (p[1] >= '0' && p[1] <= '9') {
     ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_putc(out, *p++);
     while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
+      ant_output_stream_putc(out, *p++);
+    if (*p == 'n' && !isalnum((unsigned char)p[1]) && p[1] != '_' && p[1] != '$')
       ant_output_stream_putc(out, *p++);
     ant_output_stream_append_cstr(out, C_RESET);
     goto next;
@@ -336,25 +418,48 @@ lt:
   if (memcmp(p, "<pen", 4) == 0) { is_key = false; EMIT_UNTIL('>', C_CYAN) }
   if (memcmp(p, "<rej", 4) == 0) { is_key = false; EMIT_UNTIL('>', C_CYAN) }
 
-  if (p[1] == '>' || (isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2]))) {
-    ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++);
-    ant_output_stream_append_cstr(out, JSON_WHITE);
-    while (*p && *p != '>') ant_output_stream_putc(out, *p++);
+  if (strncmp(p, "<Buffer", 7) == 0 && (p[7] == ' ' || p[7] == '>')) {
+    ant_output_stream_append_cstr(out, JSON_BRACE);
+    ant_output_stream_putc(out, *p++);
     ant_output_stream_append_cstr(out, C_RESET);
-    if (*p == '>') { ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET); }
+    ant_output_stream_append(out, p, 6);
+    p += 6;
+    p = io_color_hex_bytes(p, out);
     goto next;
   }
 
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  if (p[1] == '>' || io_is_hex_byte(p + 1)) {
+    ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++);
+    p = io_color_hex_bytes(p, out);
+    if (*p == '>') { 
+      ant_output_stream_append_cstr(out, JSON_BRACE); 
+      ant_output_stream_putc(out, *p++); 
+      ant_output_stream_append_cstr(out, C_RESET); 
+    }
+    goto next;
+  }
+
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 gt:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 alpha:
   if (memcmp(p, "Object [", 8) == 0) { EMIT_UNTIL(']', JSON_TAG) }
   if (memcmp(p, "Symbol(", 7) == 0) { EMIT_UNTIL(')', JSON_STRING) }
+
+  size_t type_len = io_binary_type_len(p);
+  if (type_len > 0) {
+    ant_output_stream_append(out, p, type_len);
+    p += type_len;
+    goto next;
+  }
 
   EMIT_TYPE("Map", 3, JSON_STRING)
   EMIT_TYPE("Set", 3, JSON_STRING)

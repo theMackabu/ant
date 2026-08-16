@@ -12,6 +12,7 @@ typedef struct inspector_client inspector_client_t;
 typedef struct inspector_script inspector_script_t;
 
 typedef struct inspector_object_handle inspector_object_handle_t;
+typedef struct inspector_await inspector_await_t;
 typedef struct inspector_network_entry inspector_network_entry_t;
 typedef struct inspector_console_event inspector_console_event_t;
 
@@ -24,6 +25,7 @@ typedef struct {
 struct inspector_client {
   uv_tcp_t handle;
   ant_t *js;
+  uint64_t id;
   bool websocket;
   bool runtime_enabled;
   bool console_enabled;
@@ -40,6 +42,13 @@ struct inspector_object_handle {
   uint32_t id;
   ant_value_t value;
   inspector_object_handle_t *next;
+};
+
+struct inspector_await {
+  uint32_t id;
+  uint64_t client_id;
+  int request_id;
+  inspector_await_t *next;
 };
 
 struct inspector_network_entry {
@@ -78,6 +87,7 @@ typedef struct {
   char uuid[37];
   inspector_client_t *clients;
   inspector_object_handle_t *object_handles;
+  inspector_await_t *pending_awaits;
   inspector_network_entry_t *network_entries;
   inspector_console_event_t *console_events_head;
   inspector_console_event_t *console_events_tail;
@@ -85,6 +95,8 @@ typedef struct {
   size_t console_event_count;
   size_t network_entry_count;
   uint32_t next_object_id;
+  uint32_t next_await_id;
+  uint64_t next_client_id;
   uint64_t next_network_request_id;
   int next_script_id;
   int entry_script_id;
@@ -120,6 +132,7 @@ double inspector_timestamp_seconds(void);
 double inspector_wall_time_seconds(void);
 
 bool inspector_is_remote_handle_value(ant_value_t value);
+bool inspector_object_for_id(const char *object_id, ant_value_t *out);
 bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out);
 void inspector_send_execution_context(inspector_client_t *client);
 void inspector_eval(inspector_client_t *client, int id, yyjson_val *params);
@@ -130,8 +143,12 @@ void inspector_clear_console_events(void);
 void inspector_replay_console_events(inspector_client_t *client);
 void inspector_clear_exception_state(ant_t *js);
 void inspector_send_eval_result(inspector_client_t *client, int id, ant_value_t result);
+void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *params);
+void inspector_cancel_client_awaits(uint64_t client_id);
+void inspector_clear_pending_awaits(void);
 bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out);
 bool inspector_eval_safe_expr(ant_t *js, const char *expr, size_t expr_len, ant_value_t *out);
+void inspector_send_eval_completion( inspector_client_t *client, int id, ant_value_t result, bool await_promise);
 
 bool inspector_is_url_like(const char *path);
 char *inspector_make_script_url(const char *path);

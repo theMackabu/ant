@@ -11,6 +11,7 @@
 
 #include "modules/json.h"
 #include "modules/napi.h"
+#include "modules/symbol.h"
 #include "modules/uri.h"
 
 #include "silver/ast.h"
@@ -441,8 +442,19 @@ static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
 
 static ant_value_t esm_make_namespace_object(ant_t *js) {
   ant_value_t ns = js_mkobj(js);
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, ns);
+
+  ant_value_t tag = js_mkstr(js, "Module", 6);
+  GC_ROOT_PIN(js, tag);
+  
+  ant_value_t tag_sym = get_toStringTag_sym();
+  mkprop_exact_attrs(js, ns, tag_sym, tag, 0);
+
   js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
   js_set_slot(ns, SLOT_MODULE_LOADING, js_true);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return ns;
 }
 
@@ -455,9 +467,8 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, value);
 
-  ant_value_t ns = js_mkobj(js);
+  ant_value_t ns = esm_make_namespace_object(js);
   GC_ROOT_PIN(js, ns);
-  js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
 
   if (is_object_type(value)) {
     ant_value_t keys = js_own_property_keys(js, value, false, true);
@@ -482,6 +493,7 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
   mod->default_export = value;
   mod->is_loaded = true;
   mod->is_loading = false;
+  js_set_slot(ns, SLOT_MODULE_LOADING, js_mkundef());
 
   GC_ROOT_RESTORE(js, root_mark);
   return ns;
@@ -1221,7 +1233,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
       return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     }
 
-    return js_execute_compiled_bytecode(js, func);
+    return js_execute_compiled_bytecode(js, func, NULL);
   }
 
   parse_arena_rewind(parse_mark);
