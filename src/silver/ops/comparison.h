@@ -298,6 +298,8 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
 
   ant_offset_t has_instance_sym_off = (ant_offset_t)vdata(get_hasInstance_sym());
   ant_value_t func_obj = js_func_obj(r);
+  ant_object_t *func_ptr = js_obj_ptr(func_obj);
+  if (!func_ptr || !func_ptr->shape) return false;
   
   if (
     lkp_sym(func_obj, has_instance_sym_off).obj ||
@@ -306,6 +308,8 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
 
   ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
   ant_value_t func_proto_obj = is_object_type(func_proto) ? js_as_obj(func_proto) : js_mkundef();
+  ant_object_t *func_proto_ptr = is_object_type(func_proto_obj) ? js_obj_ptr(func_proto_obj) : NULL;
+  if (!func_proto_ptr || !func_proto_ptr->shape) return false;
   
   if (is_object_type(func_proto_obj) && (
     lkp_sym(func_proto_obj, has_instance_sym_off).obj ||
@@ -317,6 +321,9 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
 
   ant_value_t proto = js_prop_load(proto_off);
   if (!is_object_type(proto)) return false;
+
+  ant_shape_guard_absence(func_ptr->shape);
+  ant_shape_guard_absence(func_proto_ptr->shape);
   if (out_proto) *out_proto = proto;
   
   return true;

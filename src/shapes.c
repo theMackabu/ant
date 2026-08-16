@@ -292,6 +292,7 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
     int32_t slot = ant_shape_lookup_symbol(child, sym_off);
     if (slot >= 0) {
       if (out_slot) *out_slot = (uint32_t)slot;
+      shape_invalidate_guarded_absence(shape);
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -309,7 +310,8 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
 
   ant_shape_t *next = ant_shape_clone(shared);
   if (!next) return false;
-  
+
+  shape_invalidate_guarded_absence(shape);
   ant_shape_release(shape);
   *shape_pp = next;
   
