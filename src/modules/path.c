@@ -163,6 +163,33 @@ static ant_value_t path_make_string(ant_t *js, const char *src, size_t len) {
   return js_mkstr(js, src, len);
 }
 
+static const char *path_get_nonempty_string(ant_t *js, ant_value_t value, size_t *len) {
+  *len = 0;
+  if (vtype(value) != T_STR) return NULL;
+
+  const char *str = js_getstr(js, value, len);
+  return str && *len > 0 ? str : NULL;
+}
+
+static bool path_append(char result[PATH_MAX], size_t *pos, const char *str, size_t len) {
+  if (!str || len == 0 || len >= PATH_MAX - *pos) return false;
+
+  memcpy(result + *pos, str, len);
+  *pos += len;
+  return true;
+}
+
+static void path_append_ext(char result[PATH_MAX], size_t *pos, const char *ext, size_t ext_len) {
+  if (!ext || ext_len == 0) return;
+
+  size_t dot_len = ext[0] == '.' ? 0 : 1;
+  size_t remaining = PATH_MAX - *pos;
+  if (remaining <= dot_len || ext_len >= remaining - dot_len) return;
+
+  if (dot_len) result[(*pos)++] = '.';
+  path_append(result, pos, ext, ext_len);
+}
+
 static ant_value_t builtin_path_basename(ant_t *js, ant_value_t *args, int nargs) {
   path_style_t style = path_current_style(js);
   if (nargs < 1) return js_mkerr(js, "basename() requires a path argument");
@@ -753,60 +780,26 @@ static ant_value_t builtin_path_format(ant_t *js, ant_value_t *args, int nargs) 
   
   char result[PATH_MAX] = {0};
   size_t pos = 0;
-  
-  bool has_dir = false;
-  if (vtype(dir_val) == T_STR) {
-    size_t len;
-    char *str = js_getstr(js, dir_val, &len);
-    if (str && len > 0) {
-      has_dir = true;
-      if (pos + len < PATH_MAX) {
-        memcpy(result + pos, str, len);
-        pos += len;
-        if (result[pos - 1] != sep && pos < PATH_MAX - 1) {
-          result[pos++] = sep;
-        }
-      }
-    }
-  }
-  if (!has_dir && vtype(root_val) == T_STR) {
-    size_t len;
-    char *str = js_getstr(js, root_val, &len);
-    if (str && len > 0 && pos + len < PATH_MAX) {
-      memcpy(result + pos, str, len);
-      pos += len;
-    }
-  }
-  
-  bool has_base = false;
-  if (vtype(base_val) == T_STR) {
-    size_t len;
-    char *str = js_getstr(js, base_val, &len);
-    if (str && len > 0) {
-      has_base = true;
-      if (pos + len < PATH_MAX) {
-        memcpy(result + pos, str, len);
-        pos += len;
-      }
-    }
-  }
-  if (!has_base) {
-    if (vtype(name_val) == T_STR) {
-      size_t len;
-      char *str = js_getstr(js, name_val, &len);
-      if (str && len > 0 && pos + len < PATH_MAX) {
-        memcpy(result + pos, str, len);
-        pos += len;
-      }
-    }
-    if (vtype(ext_val) == T_STR) {
-      size_t len;
-      char *str = js_getstr(js, ext_val, &len);
-      if (str && len > 0 && pos + len < PATH_MAX) {
-        memcpy(result + pos, str, len);
-        pos += len;
-      }
-    }
+
+  size_t dir_len;
+  const char *dir = path_get_nonempty_string(js, dir_val, &dir_len);
+  bool append_sep = dir != NULL;
+  if (!dir) dir = path_get_nonempty_string(js, root_val, &dir_len);
+
+  if (path_append(result, &pos, dir, dir_len) && append_sep && result[pos - 1] != sep && pos < PATH_MAX - 1)
+    result[pos++] = sep;
+
+  size_t base_len;
+  const char *base = path_get_nonempty_string(js, base_val, &base_len);
+  if (base) path_append(result, &pos, base, base_len);
+  else {
+    size_t name_len;
+    const char *name = path_get_nonempty_string(js, name_val, &name_len);
+    path_append(result, &pos, name, name_len);
+
+    size_t ext_len;
+    const char *ext = path_get_nonempty_string(js, ext_val, &ext_len);
+    path_append_ext(result, &pos, ext, ext_len);
   }
   
   return js_mkstr(js, result, pos);
