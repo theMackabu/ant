@@ -411,6 +411,7 @@ struct ant_isolate_t {
     bool minor_edge_overflow;
     bool pending_active;
     bool pending_oom;
+    bool kept_alive_overflow;
   } weak_gc;
 
   #ifdef ANT_JIT

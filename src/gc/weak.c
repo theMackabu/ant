@@ -74,31 +74,58 @@ void gc_weak_remember_set(ant_t *js, ant_object_t *obj, ant_value_t key) {
 
 void gc_weak_keep_alive(ant_t *js, ant_value_t value) {
   if (!js || value <= NANBOX_PREFIX) return;
-  if (js->weak_gc.kept_alive_len &&
-      js->weak_gc.kept_alive[js->weak_gc.kept_alive_len - 1] == value)
-    return;
+  
+  if (
+    js->weak_gc.kept_alive_len &&
+    js->weak_gc.kept_alive[js->weak_gc.kept_alive_len - 1] == value
+  ) return;
+
   if (js->weak_gc.kept_alive_len == js->weak_gc.kept_alive_cap) {
     size_t next_cap = js->weak_gc.kept_alive_cap
       ? js->weak_gc.kept_alive_cap * 2
       : 16;
+      
     ant_value_t *grown = realloc(
-      js->weak_gc.kept_alive, next_cap * sizeof(*grown)
+      js->weak_gc.kept_alive, 
+      next_cap * sizeof(*grown)
     );
-    if (!grown) return;
+    
+    if (!grown) {
+      js->weak_gc.kept_alive_overflow = true;
+      return;
+    }
+    
     js->weak_gc.kept_alive = grown;
     js->weak_gc.kept_alive_cap = next_cap;
   }
+  
   js->weak_gc.kept_alive[js->weak_gc.kept_alive_len++] = value;
 }
 
 void gc_weak_clear_kept_alive(ant_t *js) {
-  if (js) js->weak_gc.kept_alive_len = 0;
+  if (!js) return;
+  js->weak_gc.kept_alive_len = 0;
+  js->weak_gc.kept_alive_overflow = false;
 }
+
+static void gc_weak_mark_all_weakrefs(ant_t *js, ant_object_t *objects, gc_weak_mark_fn mark) {
+for (ant_object_t *obj = objects; obj; obj = obj->next) {
+  weakref_state_t *state = js_get_native(js_obj_from_ptr(obj),  WEAKREF_NATIVE_TAG);
+  if (!state) continue;
+  mark(js, js_obj_from_ptr(obj));
+  mark(js, state->target);
+}}
 
 void gc_weak_mark_kept_alive(ant_t *js, gc_weak_mark_fn mark) {
   if (!js || !mark) return;
   for (size_t i = 0; i < js->weak_gc.kept_alive_len; i++)
     mark(js, js->weak_gc.kept_alive[i]);
+
+  if (__builtin_expect(js->weak_gc.kept_alive_overflow, 0)) {
+    gc_weak_mark_all_weakrefs(js, js->objects, mark);
+    gc_weak_mark_all_weakrefs(js, js->objects_old, mark);
+    gc_weak_mark_all_weakrefs(js, js->permanent_objects, mark);
+  }
 }
 
 static void gc_weak_clear_pending(ant_t *js) {
