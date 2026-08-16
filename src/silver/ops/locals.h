@@ -11,7 +11,7 @@ static inline ant_value_t sv_op_get_local(
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t value = lp[idx];
   if (vtype(value) == T_STR && str_is_heap_builder(value)) {
-    value = str_materialize(js, value);
+    value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }
   vm->stack[vm->sp++] = value;
@@ -43,7 +43,7 @@ static inline ant_value_t sv_op_get_local8(
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t value = lp[idx];
   if (vtype(value) == T_STR && str_is_heap_builder(value)) {
-    value = str_materialize(js, value);
+    value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }
   vm->stack[vm->sp++] = value;
@@ -95,7 +95,7 @@ static inline ant_value_t sv_op_get_local_chk(
     );
   }
   if (vtype(val) == T_STR && str_is_heap_builder(val)) {
-    val = str_materialize(js, val);
+    val = sv_string_builder_read_value(js, val);
     if (is_err(val)) return val;
   }
   vm->stack[vm->sp++] = val;
@@ -144,7 +144,7 @@ static inline ant_value_t sv_op_get_arg(sv_vm_t *vm, ant_t *js, sv_frame_t *fram
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t value = sv_frame_get_arg_value(frame, idx);
   if (vtype(value) == T_STR && str_is_heap_builder(value)) {
-    value = str_materialize(js, value);
+    value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }
   vm->stack[vm->sp++] = value;

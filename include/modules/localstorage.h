@@ -1,6 +1,8 @@
 #ifndef LOCALSTORAGE_H
 #define LOCALSTORAGE_H
 
-void init_localstorage_module(void);
+#include "types.h"
+
+void init_localstorage_module(ant_t *js);
 
 #endif

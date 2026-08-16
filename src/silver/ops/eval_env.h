@@ -37,7 +37,7 @@ static inline sv_upvalue_t *sv_eval_capture_upvalue(sv_vm_t *vm, ant_value_t *sl
   while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
   if (*pp && (*pp)->location == slot) return *pp;
 
-  sv_upvalue_t *uv = js_upvalue_alloc();
+  sv_upvalue_t *uv = js_upvalue_alloc(vm->js);
   if (!uv) return NULL;
 
   uv->location = slot;

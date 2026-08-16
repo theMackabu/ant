@@ -3,7 +3,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 
@@ -105,7 +104,7 @@ static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
   char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_false;
   
-  return js_bool(lkp_proto(js, target, key_str, key_len) > 0);
+  return js_bool(lkp_proto(js, target, key_str, key_len).obj);
 }
 
 static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nargs) {
@@ -153,11 +152,11 @@ static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t args_arr = args[1];
   ant_value_t new_target = (nargs >= 3) ? args[2] : target;
   
-  if (vtype(target) != T_FUNC && vtype(target) != T_CFUNC) {
+  if (!js_is_constructor(target)) {
     return js_mkerr(js, "Reflect.construct: first argument must be a constructor");
   }
   
-  if (vtype(new_target) != T_FUNC && vtype(new_target) != T_CFUNC) {
+  if (nargs >= 3 && !js_is_constructor(new_target)) {
     return js_mkerr(js, "Reflect.construct: third argument must be a constructor");
   }
   
@@ -179,20 +178,37 @@ static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  ant_value_t new_obj = js_mkobj(js);
-  ant_value_t proto = js_get(js, new_target, "prototype");
-  if (vtype(proto) == T_OBJ) js_set_proto_init(new_obj, proto);
-
+  ant_value_t result;
   ant_value_t saved_new_target = js->new_target;
-  js->new_target = new_target;
+  if (vtype(target) == T_OBJ && is_proxy(target)) {
+    result = js_proxy_construct(js, target, call_args, arg_count, new_target);
+  } else {
+    ant_value_t effective_new_target = new_target;
+    ant_value_t record_func = target;
+    ant_value_t proto = sv_prepare_construct_meta(
+      js, target, new_target, &effective_new_target, &record_func
+    );
+    if (is_err(proto)) {
+      js->new_target = saved_new_target;
+      if (call_args) free(call_args);
+      return proto;
+    }
 
-  ant_value_t result = sv_vm_call(js->vm, js, target, new_obj, call_args, arg_count, NULL, true);
+    ant_value_t new_obj = js_mkobj(js);
+    if (is_object_type(proto)) js_set_proto_init(new_obj, proto);
+    js->new_target = effective_new_target;
+
+    ant_value_t ctor_this = new_obj;
+    result = sv_vm_call(
+      js->vm, js, target, new_obj, call_args, arg_count, &ctor_this, true
+    );
+    if (!is_err(result) && !is_object_type(result))
+      result = is_object_type(ctor_this) ? ctor_this : new_obj;
+  }
   js->new_target = saved_new_target;
   
   if (call_args) free(call_args);
-  if (is_object_type(result)) return result;
-  
-  return new_obj;
+  return result;
 }
 
 static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
@@ -318,8 +334,7 @@ static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int 
   return js_true;
 }
 
-void init_reflect_module(void) {
-  ant_t *js = rt->js;
+void init_reflect_module(ant_t *js) {
   ant_value_t reflect_obj = js_mkobj(js);
   
   js_set(js, reflect_obj, "get", js_mkfun(reflect_get));
@@ -337,5 +352,5 @@ void init_reflect_module(void) {
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
   js_set_sym(js, reflect_obj, get_toStringTag_sym(), js_mkstr(js, "Reflect", 7));
-  js_set(js, js->global, "Reflect", reflect_obj);
+  js_set_global_builtin(js, "Reflect", reflect_obj);
 }

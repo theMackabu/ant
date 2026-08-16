@@ -7,17 +7,14 @@
 #include "ptr.h"
 #include "gc.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
+#include "gc/weak.h"
 #include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/bigint.h"
 #include "modules/collections.h"
 #include "modules/symbol.h"
-
-ant_value_t g_map_iter_proto = 0;
-ant_value_t g_set_iter_proto = 0;
 
 static bool can_be_held_weakly(ant_value_t value) {
   if (is_object_type(value) || vtype(value) == T_CFUNC) return true;
@@ -85,14 +82,14 @@ static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *
   if (!collection_key_reserve(out, out->len)) return false;
   out->bytes[0] = tag;
   memcpy(out->bytes + 1, &key, sizeof(ant_value_t));
-  
+
   return true;
 }
 
 static map_entry_t *map_find_entry(ant_t *js, map_entry_t **map_ptr, ant_value_t key_val) {
   collection_key_t key;
   if (!collection_key_init(js, key_val, &key)) return NULL;
-  
+
   map_entry_t *entry = NULL;
   HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
   collection_key_free(&key);
@@ -202,10 +199,196 @@ set_entry_t **get_set_from_obj(ant_value_t obj) {
   return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
 }
 
-static weakmap_entry_t **get_weakmap_from_obj(ant_value_t obj) {
+static weakmap_table_t *get_weakmap_from_obj(
+  ant_value_t obj, ant_object_t **object_out
+) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
-  return (weakmap_entry_t **)js_get_native(obj, WEAKMAP_NATIVE_TAG);
+  if (object_out) *object_out = ptr;
+  return (weakmap_table_t *)js_get_native(obj, WEAKMAP_NATIVE_TAG);
+}
+
+static uint32_t weakmap_table_find_slot(
+  weakmap_table_t *table, ant_value_t key, uint32_t hash,
+  bool *found
+) {
+  uint32_t mask = table->capacity - 1;
+  uint32_t slot = hash & mask;
+  uint32_t first_tombstone = UINT32_MAX;
+
+  for (;;) {
+    ant_value_t stored_key = table->entries[slot].key_obj;
+    if (stored_key == 0) {
+      *found = false;
+      return first_tombstone != UINT32_MAX ? first_tombstone : slot;
+    }
+    if (stored_key == key) {
+      *found = true;
+      return slot;
+    }
+    if (stored_key == 1 && first_tombstone == UINT32_MAX)
+      first_tombstone = slot;
+    slot = (slot + 1) & mask;
+  }
+}
+
+static bool weakmap_table_rehash(
+  weakmap_table_t *table, uint32_t new_capacity
+) {
+  weakmap_entry_t *new_entries = calloc(
+    new_capacity, sizeof(*new_entries)
+  );
+  if (!new_entries) return false;
+
+  weakmap_entry_t *old_entries = table->entries;
+  uint32_t old_capacity = table->capacity;
+  table->entries = new_entries;
+  table->capacity = new_capacity;
+  table->count = 0;
+  table->tombstones = 0;
+
+  for (uint32_t i = 0; i < old_capacity; i++) {
+    weakmap_entry_t entry = old_entries[i];
+    if (!weakmap_entry_is_occupied(&entry)) continue;
+
+    bool found = false;
+    uint32_t slot = weakmap_table_find_slot(
+      table, entry.key_obj, weak_collection_key_hash(entry.key_obj), &found
+    );
+    table->entries[slot] = entry;
+    table->count++;
+  }
+
+  free(old_entries);
+  return true;
+}
+
+weakmap_entry_t *weakmap_table_find(
+  weakmap_table_t *table, ant_value_t key
+) {
+  if (!table || table->capacity == 0) return NULL;
+  bool found = false;
+  uint32_t slot = weakmap_table_find_slot(
+    table, key, weak_collection_key_hash(key), &found
+  );
+  return found ? &table->entries[slot] : NULL;
+}
+
+static bool weakmap_table_store(
+  weakmap_table_t *table, ant_value_t key, ant_value_t value
+) {
+  if (!table) return false;
+  if (table->capacity == 0 && !weakmap_table_rehash(table, 8))
+    return false;
+
+  uint32_t hash = weak_collection_key_hash(key);
+  bool found = false;
+  uint32_t slot = weakmap_table_find_slot(table, key, hash, &found);
+  if (found) {
+    table->entries[slot].value = value;
+    return true;
+  }
+
+  uint64_t used = (uint64_t)table->count + table->tombstones + 1;
+  if (used * 4 >= (uint64_t)table->capacity * 3) {
+    uint32_t new_capacity = table->capacity;
+    if (table->tombstones <= table->count) {
+      if (new_capacity > UINT32_MAX / 2) return false;
+      new_capacity *= 2;
+    }
+    if (!weakmap_table_rehash(table, new_capacity)) return false;
+    slot = weakmap_table_find_slot(table, key, hash, &found);
+  }
+
+  if (table->entries[slot].key_obj == 1) table->tombstones--;
+  table->entries[slot] = (weakmap_entry_t){
+    .key_obj = key,
+    .value = value
+  };
+  table->count++;
+  return true;
+}
+
+bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key) {
+  weakmap_entry_t *entry = weakmap_table_find(table, key);
+  if (!entry) return false;
+  entry->key_obj = 1;
+  entry->value = 0;
+  table->count--;
+  table->tombstones++;
+  return true;
+}
+
+void weakmap_table_finish_prune(weakmap_table_t *table) {
+  if (!table) return;
+  table->gc_prune_pending = false;
+  if (table->capacity == 0 || table->tombstones == 0) return;
+
+  if (table->count == 0) {
+    memset(table->entries, 0, table->capacity * sizeof(*table->entries));
+    table->tombstones = 0;
+    return;
+  }
+
+  if (table->tombstones > table->count)
+    (void)weakmap_table_rehash(table, table->capacity);
+}
+
+void weakmap_table_free(weakmap_table_t *table) {
+  if (!table) return;
+  free(table->entries);
+  free(table);
+}
+
+ant_value_t collections_make_weakmap(ant_t *js) {
+  ant_value_t weakmap = js_mkobj(js);
+  if (is_err(weakmap)) return weakmap;
+
+  weakmap_table_t *table = ant_calloc(sizeof(*table));
+  if (!table) return js_mkerr(js, "out of memory");
+
+  js_obj_ptr(weakmap)->type_tag = T_WEAKMAP;
+  ant_value_t prototype = js_get_ctor_proto(js, "WeakMap", 7);
+  if (is_special_object(prototype)) js_set_proto_init(weakmap, prototype);
+  js_set_native(weakmap, table, WEAKMAP_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(weakmap));
+  return weakmap;
+}
+
+ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key) {
+  weakmap_table_t *table = get_weakmap_from_obj(weakmap, NULL);
+  if (!table || !can_be_held_weakly(key)) return js_mkundef();
+
+  weakmap_entry_t *entry = weakmap_table_find(table, key);
+  return entry ? entry->value : js_mkundef();
+}
+
+static inline bool weakmap_store_entry(
+  ant_t *js,
+  ant_object_t *object,
+  weakmap_table_t *table,
+  ant_value_t key,
+  ant_value_t value
+) {
+  if (!weakmap_table_store(table, key, value)) return false;
+  if (object && object->flags.generation == 1) {
+    gc_weak_remember_map(js, object, key, value);
+    gc_write_barrier(js, object, key);
+    gc_write_barrier(js, object, value);
+  }
+  return true;
+}
+
+bool collections_weakmap_set(
+  ant_t *js,
+  ant_value_t weakmap,
+  ant_value_t key,
+  ant_value_t value
+) {
+  ant_object_t *object = NULL;
+  weakmap_table_t *table = get_weakmap_from_obj(weakmap, &object);
+  if (!table || !can_be_held_weakly(key)) return false;
+  return weakmap_store_entry(js, object, table, key, value);
 }
 
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
@@ -408,7 +591,7 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_map_iter_proto);
+  js_set_proto_init(iter, js->builtins.map_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, map_obj);
   js_set_native(iter, state, MAP_ITER_NATIVE_TAG);
   
@@ -461,7 +644,7 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_proto_init(iter, g_set_iter_proto);
+  js_set_proto_init(iter, js->builtins.set_iter_proto);
   js_set_slot_wb(js, iter, SLOT_DATA, set_obj);
   js_set_native(iter, state, SET_ITER_NATIVE_TAG);
   
@@ -973,29 +1156,15 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "WeakMap.set() requires 2 arguments");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
+  ant_object_t *object = NULL;
+  weakmap_table_t *table = get_weakmap_from_obj(this_val, &object);
+  if (!table) return js_mkerr(js, "Invalid WeakMap object");
   
   if (!can_be_held_weakly(args[0]))
     return js_mkerr(js, "WeakMap key must be an object");
-  
-  ant_value_t key_obj = args[0];
-  weakmap_entry_t *entry;
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
-  
-  if (entry) entry->value = args[1]; else {
-    entry = ant_calloc(sizeof(weakmap_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->key_obj = key_obj;
-    entry->value = args[1];
-    HASH_ADD(hh, *wm_ptr, key_obj, sizeof(ant_value_t), entry);
-  }
-  
-  ant_object_t *wm_obj = js_obj_ptr(this_val);
-  if (wm_obj) {
-    gc_write_barrier(js, wm_obj, key_obj);
-    gc_write_barrier(js, wm_obj, args[1]);
-  }
+
+  if (!weakmap_store_entry(js, object, table, args[0], args[1]))
+    return js_mkerr(js, "out of memory");
   
   return this_val;
 }
@@ -1004,13 +1173,11 @@ static ant_value_t weakmap_get(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.get() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_mkundef();
+  weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
+  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!can_be_held_weakly(args[0])) return js_mkundef();
   
-  ant_value_t key_obj = args[0];
-  weakmap_entry_t *entry;
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
+  weakmap_entry_t *entry = weakmap_table_find(table, args[0]);
   return entry ? entry->value : js_mkundef();
 }
 
@@ -1018,22 +1185,20 @@ static ant_value_t weakmap_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.has() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
+  weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
+  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!can_be_held_weakly(args[0])) return js_false;
   
-  ant_value_t key_obj = args[0];
-  weakmap_entry_t *entry;
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
-  return js_bool(entry != NULL);
+  return js_bool(weakmap_table_find(table, args[0]) != NULL);
 }
 
 static ant_value_t weakmap_upsert(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 3) return js_mkerr(js, "WeakMap.upsert() requires 3 arguments");
 
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
+  ant_object_t *object = NULL;
+  weakmap_table_t *table = get_weakmap_from_obj(this_val, &object);
+  if (!table) return js_mkerr(js, "Invalid WeakMap object");
 
   if (!can_be_held_weakly(args[0]))
     return js_mkerr(js, "WeakMap key must be an object");
@@ -1046,8 +1211,7 @@ static ant_value_t weakmap_upsert(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap.upsert insert callback must be callable");
 
   ant_value_t key_obj = args[0];
-  weakmap_entry_t *entry;
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
+  weakmap_entry_t *entry = weakmap_table_find(table, key_obj);
 
   ant_value_t value;
   if (entry) {
@@ -1060,20 +1224,8 @@ static ant_value_t weakmap_upsert(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_err(value)) return value;
 
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
-  if (entry) entry->value = value; else {
-    entry = ant_calloc(sizeof(weakmap_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->key_obj = key_obj;
-    entry->value = value;
-    HASH_ADD(hh, *wm_ptr, key_obj, sizeof(ant_value_t), entry);
-  }
-
-  ant_object_t *wm_obj = js_obj_ptr(this_val);
-  if (wm_obj) {
-    gc_write_barrier(js, wm_obj, key_obj);
-    gc_write_barrier(js, wm_obj, value);
-  }
+  if (!weakmap_store_entry(js, object, table, key_obj, value))
+    return js_mkerr(js, "out of memory");
 
   return value;
 }
@@ -1082,19 +1234,11 @@ static ant_value_t weakmap_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "WeakMap.delete() requires 1 argument");
   
   ant_value_t this_val = js->this_val;
-  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(this_val);
-  if (!wm_ptr) return js_false;
+  weakmap_table_t *table = get_weakmap_from_obj(this_val, NULL);
+  if (!table) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WeakMap object");
   if (!can_be_held_weakly(args[0])) return js_false;
   
-  ant_value_t key_obj = args[0];
-  weakmap_entry_t *entry;
-  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(ant_value_t), entry);
-  if (entry) {
-    HASH_DEL(*wm_ptr, entry);
-    free(entry);
-    return js_true;
-  }
-  return js_false;
+  return js_bool(weakmap_table_delete(table, args[0]));
 }
 
 static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
@@ -1117,6 +1261,12 @@ static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value_obj = value_obj;
     HASH_ADD(hh, *ws_ptr, value_obj, sizeof(ant_value_t), entry);
+  }
+
+  ant_object_t *ws_obj = js_obj_ptr(this_val);
+  if (ws_obj) {
+    gc_weak_remember_set(js, ws_obj, value_obj);
+    gc_write_barrier(js, ws_obj, value_obj);
   }
   
   return this_val;
@@ -1156,6 +1306,13 @@ static ant_value_t weakset_delete(ant_t *js, ant_value_t *args, int nargs) {
   return js_false;
 }
 
+static void weakref_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  weakref_state_t *state = js_get_native(value, WEAKREF_NATIVE_TAG);
+  free(state);
+  js_clear_native(value, WEAKREF_NATIVE_TAG);
+}
+
 static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !can_be_held_weakly(args[0])) {
     return js_mkerr(js, "WeakRef target must be an object");
@@ -1164,18 +1321,26 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wr_obj = js_mkobj(js);
   ant_value_t wr_proto = js_get_ctor_proto(js, "WeakRef", 7);
   if (is_special_object(wr_proto)) js_set_proto_init(wr_obj, wr_proto);
-  js_set_slot(wr_obj, SLOT_DATA, args[0]);
+  weakref_state_t *state = ant_calloc(sizeof(*state));
+
+  if (!state) return js_mkerr(js, "out of memory");
+  state->target = args[0];
+
+  js_set_native(wr_obj, state, WEAKREF_NATIVE_TAG);
+  js_obj_ptr(wr_obj)->finalizer = weakref_finalize;
+  gc_weak_register(js, js_obj_ptr(wr_obj));
+  gc_weak_keep_alive(js, args[0]);
   
   return wr_obj;
 }
 
 static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_val = js->this_val;
   if (vtype(this_val) != T_OBJ) return js_mkundef();
   
-  ant_value_t target = js_get_slot(this_val, SLOT_DATA);
-  if (vtype(target) != T_OBJ) return js_mkundef();
+  weakref_state_t *state = js_get_native(this_val, WEAKREF_NATIVE_TAG);
+  ant_value_t target = state ? state->target : js_mkundef();
+  if (vtype(target) != T_UNDEF) gc_weak_keep_alive(js, target);
   
   return target;
 }
@@ -1399,7 +1564,11 @@ close_iter:
   return result;
 }
 
-static ant_value_t weakmap_init_from_iterable(ant_t *js, ant_value_t wm_obj, weakmap_entry_t **wm_head, ant_value_t iterable) {
+static ant_value_t weakmap_init_from_iterable(
+  ant_t *js, ant_value_t wm_obj,
+  weakmap_table_t *table, ant_value_t iterable
+) {
+  ant_object_t *wm_object = js_obj_ptr(wm_obj);
   ant_value_t adder = js_getprop_fallback(js, wm_obj, "set");
   if (is_err(adder)) return adder;
   if (!is_callable(adder))
@@ -1441,22 +1610,10 @@ static ant_value_t weakmap_init_from_iterable(ant_t *js, ant_value_t wm_obj, wea
       goto close_iter;
     }
 
-    weakmap_entry_t *wm_entry;
-    HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
-    if (wm_entry) {
-      wm_entry->value = value;
-      continue;
-    }
-    
-    wm_entry = ant_calloc(sizeof(weakmap_entry_t));
-    if (!wm_entry) {
+    if (!weakmap_store_entry(js, wm_object, table, key, value)) {
       result = js_mkerr(js, "out of memory");
       goto close_iter;
     }
-    
-    wm_entry->key_obj = key;
-    wm_entry->value = value;
-    HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
   }
 
   return result;
@@ -1589,16 +1746,18 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(wm_obj, instance_proto);
   
-  weakmap_entry_t **wm_head = ant_calloc(sizeof(weakmap_entry_t *));
-  if (!wm_head) return js_mkerr(js, "out of memory");
-  *wm_head = NULL;
+  weakmap_table_t *table = ant_calloc(sizeof(*table));
+  if (!table) return js_mkerr(js, "out of memory");
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
-  js_set_native(wm_obj, wm_head, WEAKMAP_NATIVE_TAG);
+  js_set_native(wm_obj, table, WEAKMAP_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(wm_obj));
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
-  ant_value_t init_result = weakmap_init_from_iterable(js, wm_obj, wm_head, args[0]);
+  ant_value_t init_result = weakmap_init_from_iterable(
+    js, wm_obj, table, args[0]
+  );
   if (is_err(init_result)) return init_result;
   
   return wm_obj;
@@ -1626,6 +1785,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
   js_set_native(ws_obj, ws_head, WEAKSET_NATIVE_TAG);
+  gc_weak_register(js, js_obj_ptr(ws_obj));
   
   if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
   ant_value_t init_result = weakset_init_from_iterable(js, ws_obj, ws_head, args[0]);
@@ -1634,26 +1794,22 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   return ws_obj;
 }
 
-void init_collections_module(void) {
-  ant_t *js = rt->js;
-  
-  ant_value_t glob = js->global;
-  ant_value_t object_proto = js->sym.object_proto;
-  
+void init_collections_module(ant_t *js) {
+  ant_value_t object_proto = js->sym.object_proto;  
   ant_value_t iter_sym = get_iterator_sym();
   ant_value_t tag_sym = get_toStringTag_sym();
   
-  g_map_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_map_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_map_iter_proto, "next", js_mkfun(map_iter_next));
-  js_set_sym(js, g_map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
-  js_iter_register_advance(g_map_iter_proto, advance_map);
+  js->builtins.map_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.map_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.map_iter_proto, "next", js_mkfun(map_iter_next));
+  js_set_sym(js, js->builtins.map_iter_proto, tag_sym, js_mkstr(js, "Map Iterator", 12));
+  js_iter_register_advance(js->builtins.map_iter_proto, advance_map);
   
-  g_set_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_set_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_set_iter_proto, "next", js_mkfun(set_iter_next));
-  js_set_sym(js, g_set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
-  js_iter_register_advance(g_set_iter_proto, advance_set);
+  js->builtins.set_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.set_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.set_iter_proto, "next", js_mkfun(set_iter_next));
+  js_set_sym(js, js->builtins.set_iter_proto, tag_sym, js_mkstr(js, "Set Iterator", 12));
+  js_iter_register_advance(js->builtins.set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);
@@ -1678,7 +1834,7 @@ void init_collections_module(void) {
   js_set_descriptor(js, map_ctor, "name", 4, 0);
   js_set(js, map_ctor, "groupBy", js_mkfun(map_groupBy));
   js_define_species_getter(js, map_ctor);
-  js_set(js, glob, "Map", js_obj_to_func(map_ctor));
+  js_set_global_builtin(js, "Map", js_obj_to_func(js, map_ctor));
   
   ant_value_t set_proto = js_mkobj(js);
   js_set_proto_init(set_proto, object_proto);
@@ -1707,7 +1863,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, set_ctor, "name", 4, ANT_STRING("Set"));
   js_set_descriptor(js, set_ctor, "name", 4, 0);
   js_define_species_getter(js, set_ctor);
-  js_set(js, glob, "Set", js_obj_to_func(set_ctor));
+  js_set_global_builtin(js, "Set", js_obj_to_func(js, set_ctor));
   
   ant_value_t weakmap_proto = js_mkobj(js);
   js_set_proto_init(weakmap_proto, object_proto);
@@ -1723,7 +1879,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakmap_ctor, "prototype", 9, weakmap_proto);
   js_mkprop_fast(js, weakmap_ctor, "name", 4, ANT_STRING("WeakMap"));
   js_set_descriptor(js, weakmap_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakMap", js_obj_to_func(weakmap_ctor));
+  js_set_global_builtin(js, "WeakMap", js_obj_to_func(js, weakmap_ctor));
   
   ant_value_t weakset_proto = js_mkobj(js);
   js_set_proto_init(weakset_proto, object_proto);
@@ -1737,7 +1893,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakset_ctor, "prototype", 9, weakset_proto);
   js_mkprop_fast(js, weakset_ctor, "name", 4, ANT_STRING("WeakSet"));
   js_set_descriptor(js, weakset_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakSet", js_obj_to_func(weakset_ctor));
+  js_set_global_builtin(js, "WeakSet", js_obj_to_func(js, weakset_ctor));
   
   ant_value_t weakref_proto = js_mkobj(js);
   js_set_proto_init(weakref_proto, object_proto);
@@ -1749,7 +1905,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, weakref_ctor, "prototype", 9, weakref_proto);
   js_mkprop_fast(js, weakref_ctor, "name", 4, ANT_STRING("WeakRef"));
   js_set_descriptor(js, weakref_ctor, "name", 4, 0);
-  js_set(js, glob, "WeakRef", js_obj_to_func(weakref_ctor));
+  js_set_global_builtin(js, "WeakRef", js_obj_to_func(js, weakref_ctor));
   
   ant_value_t finreg_proto = js_mkobj(js);
   js_set_proto_init(finreg_proto, object_proto);
@@ -1762,5 +1918,5 @@ void init_collections_module(void) {
   js_mkprop_fast(js, finreg_ctor, "prototype", 9, finreg_proto);
   js_mkprop_fast(js, finreg_ctor, "name", 4, ANT_STRING("FinalizationRegistry"));
   js_set_descriptor(js, finreg_ctor, "name", 4, 0);
-  js_set(js, glob, "FinalizationRegistry", js_obj_to_func(finreg_ctor));
+  js_set_global_builtin(js, "FinalizationRegistry", js_obj_to_func(js, finreg_ctor));
 }

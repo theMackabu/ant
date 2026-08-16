@@ -26,6 +26,10 @@ const throwingImportFixture = new Uint8Array([
   0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 2, 12, 1, 3, 101, 110, 118, 4, 102, 97, 105, 108, 0, 0, 3, 2, 1, 0, 7, 7, 1, 3, 114, 117, 110, 0, 1,
   10, 6, 1, 4, 0, 16, 0, 11
 ]);
+const f64ImportFixture = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 124, 2, 11, 1, 3, 101, 110, 118, 3, 110, 111, 119, 0, 0, 3, 2, 1, 0, 7, 8, 1, 4, 99, 97, 108, 108, 0, 1,
+  10, 6, 1, 4, 0, 16, 0, 11
+]);
 
 assert(WebAssembly.validate(incrementer) === true, 'incrementer.wasm should validate');
 
@@ -106,6 +110,18 @@ try {
   assert(error.stack === undefined, 'error-like import throws should not grow a synthetic stack');
 }
 assert(sawErrorlikeThrow, 'error-like import throws should escape the wasm call');
+
+const f64ImportModule = new WebAssembly.Module(f64ImportFixture);
+function callImportedF64(value) {
+  return new WebAssembly.Instance(f64ImportModule, {
+    env: { now: () => value }
+  }).exports.call();
+}
+assert(callImportedF64(123.5) === 123.5, 'f64 imports should preserve small fractional returns');
+assert(
+  callImportedF64(1786817701000) === 1786817701000,
+  'f64 imports should preserve epoch-sized returns'
+);
 
 const compiled = await WebAssembly.compile(incrementer);
 assert(compiled instanceof WebAssembly.Module, 'WebAssembly.compile() should resolve a module');

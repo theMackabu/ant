@@ -44,6 +44,7 @@ typedef struct {
 } DataViewData;
 
 enum {
+  BUFFER_INSPECT_MAX_BYTES      = 50,
   BUFFER_ARRAYBUFFER_NATIVE_TAG = 0x41425546u, // ABUF
   BUFFER_TYPEDARRAY_NATIVE_TAG  = 0x54594152u, // TYAR
   BUFFER_DATAVIEW_NATIVE_TAG    = 0x44564957u, // DVIW
@@ -51,7 +52,7 @@ enum {
 
 ant_value_t buffer_library(ant_t *js);
 
-void init_buffer_module(void);
+void init_buffer_module(ant_t *js);
 void cleanup_buffer_module(void);
 void free_array_buffer_data(ArrayBufferData *data);
 

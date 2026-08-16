@@ -1,0 +1,24 @@
+[package]
+name = "ant-temporal"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+temporal_capi = "=0.2.6"
+
+[features]
+fs-tzdb = ["temporal_capi/fs_tzdb"]
+# Windows has no /usr/share/zoneinfo, so the IANA tzdb gets embedded there;
+# unix builds resolve zones at runtime via FsTzdbProvider instead
+tzdb-embedded = ["temporal_capi/compiled_data"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

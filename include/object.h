@@ -91,7 +91,7 @@ typedef struct {
   uint8_t flags;
 } ant_object_sidecar_t;
 
-_Static_assert(
+static_assert(
   _Alignof(ant_object_sidecar_t) > ant_sidecar, 
   "object sidecar pointer uses low-bit tag"
 );
@@ -114,17 +114,15 @@ typedef union ant_object_flags {
   uint8_t bytes[2];
 } ant_object_flags_t;
 
-_Static_assert(
+// TODO: constexpr
+#define ANT_OBJECT_FLAG_EXOTIC     (1u << 3)
+#define ANT_OBJECT_FLAG_GENERATION (1u << 10)
+#define ANT_OBJECT_FLAG_REMEMBERED (1u << 11)
+
+static_assert(
   sizeof(ant_object_flags_t) == 2,
   "ant_object_flags_t must cover the packed object bitfields"
 );
-
-typedef struct ant_prop_ref {
-  ant_object_t *obj;
-  uint32_t slot;
-  bool valid;
-  bool invalidates_instanceof;
-} ant_prop_ref_t;
 
 typedef struct ant_object {
   struct ant_object *next;
@@ -150,8 +148,6 @@ typedef struct ant_object {
   } u;
 
   uint32_t prop_count;
-  uint32_t propref_count;
-
   uint8_t mark_epoch;
   uint8_t type_tag;
   uint8_t inobj_limit;
@@ -160,6 +156,7 @@ typedef struct ant_object {
   uint8_t overflow_cap;
 
   ant_object_flags_t flags;
+  uint32_t ic_identity;
 } ant_object_t;
 
 static inline bool ant_object_has_sidecar(const ant_object_t *obj) {

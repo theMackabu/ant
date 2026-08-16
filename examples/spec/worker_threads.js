@@ -81,6 +81,24 @@ async function run() {
   const exitCode = await worker.terminate();
   test('terminate resolves to numeric exit code', typeof exitCode, 'number');
 
+  const ropeCount = 220_000;
+  const ropeWorkers = Array.from(
+    { length: 4 },
+    () => new Worker(workerUrl, { workerData: { ropeStress: ropeCount } })
+  );
+  const ropeResults = await Promise.all(ropeWorkers.map(current =>
+    new Promise((resolve, reject) => {
+      current.once('message', resolve);
+      current.once('exit', code => {
+        if (code !== 0) reject(new Error(`rope worker exited early with code ${code}`));
+      });
+    })
+  ));
+  test('concurrent worker rope GC', ropeResults.every(result =>
+    result.ok && result.length === ropeCount + 13 && result.tail === 'xxxx'
+  ), true);
+  await Promise.all(ropeWorkers.map(current => current.terminate()));
+
   summary();
 }
 

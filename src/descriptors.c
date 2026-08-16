@@ -1,5 +1,5 @@
 #include "gc.h"
-#include "utils.h"
+#include "hash.h"
 #include "shapes.h"
 #include "internal.h"
 #include "descriptors.h"
@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <string.h>
 
+// TODO: move to isolate
 descriptor_entry_t *desc_registry = NULL;
 
 static descriptor_entry_t arr_length_desc = {
@@ -278,6 +279,31 @@ void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen,
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_desc(js, obj, key, klen);
+  apply_registry_desc_update(
+    entry, flags, true,
+    false, false, js_mkundef(),
+    false, false, js_mkundef()
+  );
+}
+
+void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flags) {
+  assert(is_canonical_desc_obj(obj) && "js_set_sym_descriptor expects js_as_obj(...)");
+  if (!is_canonical_desc_obj(obj) || vtype(sym) != T_SYMBOL) return;
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
+
+  ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
+  if (prop) {
+    apply_shape_desc_update(
+      prop, flags, true,
+      false, false, js_mkundef(),
+      false, false, js_mkundef()
+    );
+    ant_ic_epoch_bump();
+    return;
+  }
+
+  if (!desc_registry_allowed(obj)) return;
+  descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
   apply_registry_desc_update(
     entry, flags, true,
     false, false, js_mkundef(),

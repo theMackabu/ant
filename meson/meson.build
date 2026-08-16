@@ -21,7 +21,6 @@ add_project_arguments(
   '-Wundef',
   '-Wconversion',
   '-Wno-sign-conversion',
-  '-Wno-unused-function',
   '-Wno-unused-parameter',
   '-Wno-deprecated-declarations',
   language: 'c'
@@ -88,7 +87,7 @@ if pgo_generate_dir != ''
     error('pgo_generate_dir requires Clang/Apple Clang, found c=' + pgo_c_id + ', cpp=' + pgo_cpp_id)
   endif
   pgo_generate_args = ['-fprofile-generate=' + pgo_generate_dir]
-  add_project_arguments(pgo_generate_args, language: ['c', 'cpp'])
+  add_project_arguments(pgo_generate_args + ['-DANT_PGO_TRAINING=1'], language: ['c', 'cpp'])
   add_project_link_arguments(pgo_generate_args, language: ['c', 'cpp'])
   message('  pgo: generate (' + pgo_generate_dir + ')')
 elif pgo.enabled()

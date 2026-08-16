@@ -5,7 +5,6 @@
 #include "ant.h"
 #include "utf8.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 #include "modules/symbol.h"
@@ -313,8 +312,7 @@ void js_define_species_getter(ant_t *js, ant_value_t ctor) {
   js_set_sym_getter_desc(js, ctor, g_species, js_mkfun(sym_this_cb), JS_DESC_C);
 }
 
-void init_symbol_module(void) {
-  ant_t *js = rt->js;
+void init_symbol_module(ant_t *js) {
 
   js->sym.iterator_proto = js_mkundef();
   js->sym.array_iterator_proto = js_mkundef();
@@ -335,6 +333,7 @@ void init_symbol_module(void) {
   #undef INIT_SYM
 
   ant_value_t symbol_proto = js_mkobj(js);
+  js->sym.symbol_proto = symbol_proto;
   ant_value_t object_proto = js->sym.object_proto;
   
   if (is_object_type(object_proto)) js_set_proto_init(symbol_proto, object_proto);
@@ -354,8 +353,13 @@ void init_symbol_module(void) {
   WELLKNOWN_SYMBOLS(SET_CTOR_SYM)
   #undef SET_CTOR_SYM
   
-  ant_value_t func_symbol = js_obj_to_func(symbol_ctor);
-  js_set(js, js_glob(js), "Symbol", func_symbol);
+  ant_value_t func_symbol = js_obj_to_func(js, symbol_ctor);
+  js_set_global_builtin(js, "Symbol", func_symbol);
+  
+  mkprop(
+    js, js_glob(js), g_toStringTag, js_mkstr(js, "global", 6),
+    ANT_PROP_ATTR_CONFIGURABLE
+  );
 
   // set internal types before ant module snapshot
   ant_value_t array_ctor = js_get(js, js_glob(js), "Array");
@@ -367,8 +371,9 @@ void init_symbol_module(void) {
   js_iter_register_advance(js->sym.array_iterator_proto, advance_array);
   js_iter_register_advance(js->sym.string_iterator_proto, advance_string);
   
-  js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
-  js_set_sym(js, array_proto, g_iterator, js_get(js, array_proto, "values"));
+  js_set_sym(js, js->Ant, g_toStringTag, js_mkstr(js, "Ant", 3));
+  js->sym.array_values_fn = js_get(js, array_proto, "values");
+  js_set_sym(js, array_proto, g_iterator, js->sym.array_values_fn);
 
   ant_value_t array_unscopables = js_mkobj(js);
   js_set(js, array_unscopables, "find", js_true);
@@ -380,15 +385,12 @@ void init_symbol_module(void) {
   js_set(js, array_unscopables, "values", js_true);
   js_set(js, array_unscopables, "flat", js_true);
   js_set(js, array_unscopables, "flatMap", js_true);
-  js_set_sym(js, array_proto, g_unscopables, array_unscopables);
   
-  ant_value_t string_ctor = js_get(js, js_glob(js), "String");
-  ant_value_t string_proto = js_get(js, string_ctor, "prototype");
-  js_set_sym(js, string_proto, g_iterator, js_mkfun(string_iterator));
+  js_set_sym(js, array_proto, g_unscopables, array_unscopables);
+  js_set_sym(js, js->sym.string_proto, g_iterator, js_mkfun(string_iterator));
   
   ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
-  ant_value_t promise_proto = js_get(js, promise_ctor, "prototype");
-  js_set_sym(js, promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
+  js_set_sym(js, js->sym.promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
 
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
   js_set_sym(js, async_func_proto, g_toStringTag, js_mkstr(js, "AsyncFunction", 13));

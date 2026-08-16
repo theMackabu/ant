@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const process_env = @import("process_env.zig");
 const io = std.Io.Threaded.global_single_threaded.io();
 
 pub const cli = @import("cli.zig");
@@ -38,15 +39,7 @@ fn getAbsoluteEnv(name: [:0]const u8) ?[]const u8 {
 }
 
 fn currentEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
-  const environ: std.process.Environ = switch (builtin.os.tag) {
-    .windows => .{ .block = .global },
-    else => blk: {
-      var env_count: usize = 0;
-      while (std.c.environ[env_count] != null) : (env_count += 1) {}
-      break :blk .{ .block = .{ .slice = std.c.environ[0..env_count :null] } };
-    },
-  };
-  return environ.createMap(allocator);
+  return process_env.current().createMap(allocator);
 }
 
 fn scriptShell() []const u8 {
@@ -2611,7 +2604,7 @@ fn runTrustedPostinstall(
     return false;
   };
 
-  var process_io_state: std.Io.Threaded = .init(allocator, .{});
+  var process_io_state = process_env.initThreaded(allocator);
   defer process_io_state.deinit();
   const process_io = process_io_state.io();
 
@@ -3789,7 +3782,7 @@ fn runScriptCommand(
     &[_][]const u8{ scriptShell(), "/c", script_z }
   else &[_][]const u8{ scriptShell(), "-c", script_z };
 
-  var process_io_state: std.Io.Threaded = .init(allocator, .{});
+  var process_io_state = process_env.initThreaded(allocator);
   defer process_io_state.deinit();
   const process_io = process_io_state.io();
 

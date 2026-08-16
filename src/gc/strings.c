@@ -1,6 +1,7 @@
 #include "internal.h"
 #include "gc/strings.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,6 +31,9 @@ static int g_string_mark_cap = 0;
 static gc_large_string_mark_t *g_large_string_marks = NULL;
 static int g_large_string_mark_count = 0;
 static int g_large_string_mark_cap = 0;
+
+static uint64_t g_strings_sweep_epoch = 1;
+uint64_t gc_strings_sweep_epoch(void) { return g_strings_sweep_epoch; }
 
 static gc_bitmap_t bitmap_alloc(size_t n_slots) {
   size_t nbytes = (n_slots + 7u) / 8u;
@@ -317,4 +321,7 @@ void gc_strings_sweep(ant_t *js) {
 
   g_string_mark_count = 0;
   g_large_string_mark_count = 0;
+  g_strings_sweep_epoch++;
+  
+  if (g_strings_sweep_epoch == 0) g_strings_sweep_epoch = 1;
 }

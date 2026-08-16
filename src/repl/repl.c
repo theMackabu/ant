@@ -548,6 +548,45 @@ typedef enum {
   REPL_PRINT_STARTUP,
 } repl_print_mode_t;
 
+typedef enum {
+  REPL_EVAL_COMPLETED,
+  REPL_EVAL_INTERRUPTED,
+} repl_eval_status_t;
+
+static bool repl_eval_interrupt_pending(void *ctx) {
+  (void)ctx;
+  return ant_readline_interrupt_pending();
+}
+
+static repl_eval_status_t repl_evaluate(
+  ant_t *js, const char *code, size_t len, ant_value_t *result_out
+) {
+  js_eval_result_t evaluation = js_eval_bytecode_repl(js, code, len);
+  ant_value_t result = evaluation.value;
+
+  if (evaluation.kind == JS_EVAL_ASYNC_ENTRY && !js->thrown_exists) {
+    js_reactor_await_status_t await_status = js_reactor_blocking_await_promise(
+      js, result, &result, 
+      repl_eval_interrupt_pending, NULL
+    );
+    if (await_status == JS_REACTOR_AWAIT_INTERRUPTED) {
+      (void)js_eval_async_entry_cancel(evaluation.async_entry);
+      js_eval_async_entry_release(evaluation.async_entry);
+      ant_readline_clear_interrupt();
+      return REPL_EVAL_INTERRUPTED;
+    }
+    js_eval_async_entry_release(evaluation.async_entry);
+    if (await_status == JS_REACTOR_AWAIT_REJECTED) js_throw(js, result);
+    else if (await_status == JS_REACTOR_AWAIT_INVALID) result = js_mkerr(js, "invalid top-level await completion");
+  } else {
+    js_eval_async_entry_release(evaluation.async_entry);
+    js_reactor_pump_repl_nowait(js);
+  }
+
+  if (result_out) *result_out = result;
+  return REPL_EVAL_COMPLETED;
+}
+
 static void repl_eval_chunk(
   ant_t *js, repl_decl_registry_t *decl_registry,
   const char *code, size_t len,
@@ -560,8 +599,11 @@ static void repl_eval_chunk(
   }
 
   repl_clear_exception_state(js);
-  ant_value_t result = js_eval_bytecode_repl(js, code, len);
-  js_reactor_pump_repl_nowait(js);
+  ant_value_t result = js_mkundef();
+  if (repl_evaluate(js, code, len, &result) == REPL_EVAL_INTERRUPTED) {
+    fputs("^C\n", stdout);
+    return;
+  }
 
   if (js->thrown_exists) {
     js_set(js, js_glob(js), "_error", js->thrown_value);
@@ -650,7 +692,7 @@ static cmd_result_t cmd_save(ant_t *js, ant_history_t *history, const char *arg)
 }
 
 static cmd_result_t cmd_stats(ant_t *js, ant_history_t *history, const char *arg) {
-  ant_value_t stats_fn = js_get(js, rt->ant_obj, "stats");
+  ant_value_t stats_fn = js_get(js, js->Ant, "stats");
   ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_emit(js, false, NULL, &result, 1);
   return CMD_OK;
@@ -707,9 +749,12 @@ static cmd_result_t cmd_copy(ant_t *js, ant_history_t *history, const char *arg)
   }
 
   repl_clear_exception_state(js);
-  ant_value_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
+  ant_value_t result = js_mkundef();
+  if (repl_evaluate(js, arg, strlen(arg), &result) == REPL_EVAL_INTERRUPTED) {
+    fputs("^C\n", stdout);
+    return CMD_OK;
+  }
 
-  js_reactor_pump_repl_nowait(js);
   if (js->thrown_exists) {
     js_set(js, js_glob(js), "_error", js->thrown_value);
     if (print_uncaught_throw(js)) return CMD_OK;
@@ -853,8 +898,7 @@ static bool is_incomplete_input(const char *code, size_t len) {
   return incomplete;
 }
 
-void ant_repl_run(const char *startup_code) {
-  ant_t *js = rt->js;
+void ant_repl_run(ant_t *js, const char *startup_code) {
   ant_readline_install_signal_handler();
 
   js_set_filename(js, "[repl]");
@@ -873,8 +917,8 @@ void ant_repl_run(const char *startup_code) {
   repl_decl_registry_t decl_registry = {0};
   g_repl_decl_registry = &decl_registry;
 
-  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
+  js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
+  js_set_global_builtin(js, "__filename", js_mkstr(js, "[repl]", 6));
 
   js_set(js, js_glob(js), "_", js_mkundef());
   js_set(js, js_glob(js), "_error", js_mkundef());

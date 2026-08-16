@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "types.h"
 
-void init_crypto_module(void);
+void init_crypto_module(ant_t *js);
 ant_value_t crypto_library(ant_t *js);
 
 int crypto_fill_random(void *buf, size_t len);

@@ -5,6 +5,7 @@
 #include "types.h"
 
 typedef struct {
+  char *href;
   char *protocol;
   char *username;
   char *password;
@@ -16,7 +17,7 @@ typedef struct {
 } url_state_t;
 
 
-void init_url_module(void);
+void init_url_module(ant_t *js);
 void url_state_clear(url_state_t *s);
 void url_free_state(url_state_t *s);
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj);
@@ -24,13 +25,16 @@ bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj);
 ant_value_t url_library(ant_t *js);
 url_state_t *url_get_state(ant_value_t obj);
 ant_value_t make_url_obj(ant_t *js, url_state_t *s);
+ant_value_t url_resolve_object_url(ant_t *js, const char *url);
 
 char *build_href(const url_state_t *s);
 char *usp_serialize(ant_t *js, ant_value_t usp);
 char *form_urlencode(const char *str);
 char *form_urlencode_n(const char *str, size_t len);
 char *form_urldecode(const char *str);
+char *form_urldecode_len(const char *str, size_t *out_len);
 char *url_decode_component(const char *str);
+char *url_decode_component_len(const char *str, size_t *out_len);
 
 int parse_url_to_state(
   const char *url_str, 

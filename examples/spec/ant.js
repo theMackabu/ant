@@ -46,6 +46,9 @@ test('typeof undefined', Ant.typeof(undefined), 'undefined');
 test('typeof boolean', Ant.typeof(true), 'boolean');
 
 test('stats is function', typeof Ant.stats, 'function');
+test('c is not top-level', typeof Ant.c, 'undefined');
+test('unsafe is object', typeof Ant.unsafe, 'object');
+test('unsafe.c is function', typeof Ant.unsafe.c, 'function');
 test('raw is object', typeof Ant.raw, 'object');
 test('raw.typeof is function', typeof Ant.raw.typeof, 'function');
 test('sleep is function', typeof Ant.sleep, 'function');

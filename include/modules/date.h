@@ -69,7 +69,7 @@ typedef struct {
   ant_value_t (*fn)(ant_t *, ant_value_t *, int);
 } date_method_entry_t;
 
-void init_date_module(void);
+void init_date_module(ant_t *js);
 bool is_date_instance(ant_value_t value);
 
 ant_value_t get_date_string(

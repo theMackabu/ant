@@ -327,7 +327,7 @@ ant_readline_result_t ant_readline_with_preview(
   if (out_line) *out_line = NULL;
 
   repl_render_set_highlight_state(line_state);
-  ctrl_c_pressed = 0;
+  ant_readline_clear_interrupt();
   char *line = read_line_with_history(hist, prompt, preview_fn, preview_ctx);
 
   if (ctrl_c_pressed > 0) {

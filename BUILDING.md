@@ -15,6 +15,7 @@ If you can reproduce a test failure, search for it in the <br>
   - [Official binary platforms and toolchains](#official-binary-platforms-and-toolchains)
 - [Building Ant on supported platforms](#building-ant-on-supported-platforms)
   - [Prerequisites](#prerequisites)
+  - [Temporal toolchain](#temporal-toolchain)
   - [Unix and macOS](#unix-and-macos)
     - [Unix prerequisites](#unix-prerequisites)
     - [macOS prerequisites](#macos-prerequisites)
@@ -91,6 +92,7 @@ Dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
 - aklomp-base64 0.5.2
+- Ada URL 4.0.0
 - argtable3 3.3.1
 - BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
 - crprintf `HEAD`
@@ -105,13 +107,45 @@ and are fetched automatically:
 - nghttp2 1.68.0
 - PCRE2 10.47
 - tlsuv 0.40.13
-- uriparser 1.0.0
+- temporal_capi 0.2.6 / temporal_rs 0.2.6
 - utf8proc 2.10.0
 - uthash 2.3.0
 - uuidv7-h `HEAD`
 - wasm-micro-runtime `92f40918bbfad35546a1512b10bd25eaa31add4d`
 - yyjson 0.12.0
 - zlib-ng 2.3.3
+
+### Temporal toolchain
+
+Temporal support is enabled by default, but Rust is not a local build
+prerequisite. On the first Temporal build, `meson/temporal.py` installs the
+pinned `nightly-2026-08-12` toolchain and its `rust-src` component into
+`.cache/temporal-rust/`, then builds the locked `temporal_capi` 0.2.6 and
+`temporal_rs` 0.2.6 dependency graph. The cache is outside the Meson build
+directory, so it survives a clean build-directory setup.
+
+The Rust static library is built with a size-optimized standard library. Unix
+builds read the host IANA time-zone database through the filesystem provider;
+Windows builds embed the time-zone database. No system `rustc`, Cargo, or
+rustup installation is used.
+
+The Rust bootstrap and compilation target follow the configured C compiler's
+ABI. Alpine builds use the matching musl toolchain, and MSYS2/MinGW builds use
+the Windows GNU toolchain. CI preserves the ABI-specific Rustup, Cargo, and
+build caches between runs; local builds reuse the same data from
+`.cache/temporal-rust/`.
+
+The first build therefore needs network access to download the pinned
+toolchain and Cargo dependencies. To build without Temporal or the Rust
+bootstrap, configure Meson with:
+
+```bash
+meson setup build -Dtemporal=disabled
+```
+
+Nix builds provide the same pinned toolchain and Cargo dependency set as
+fixed Nix inputs. They invoke the Temporal build in offline mode, so the Ant
+derivation does not need network access.
 
 ### Unix and macOS
 
@@ -453,13 +487,14 @@ To verify:
 
 Configure options are set via `meson setup` or `meson configure`:
 
-| Option              | Type    | Default    | Description                                           |
-| ------------------- | ------- | ---------- | ----------------------------------------------------- |
-| `allocator`         | combo   | `mimalloc` | Runtime malloc implementation (`mimalloc`, `system`)  |
-| `static_link`       | boolean | `false`    | Statically link the final binary                      |
-| `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles |
-| `build_timestamp`   | string  | (auto)     | Embedded build timestamp metadata                     |
-| `deps_prefix_cmake` | string  | (empty)    | Prefix path for cmake dependency lookup               |
+| Option              | Type    | Default    | Description                                              |
+| ------------------- | ------- | ---------- | -------------------------------------------------------- |
+| `allocator`         | combo   | `mimalloc` | Runtime malloc implementation (`mimalloc`, `system`)     |
+| `static_link`       | boolean | `false`    | Statically link the final binary                         |
+| `temporal`          | feature | `enabled`  | Build the Temporal API using the hermetic Rust toolchain |
+| `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles    |
+| `build_timestamp`   | string  | (auto)     | Embedded build timestamp metadata                        |
+| `deps_prefix_cmake` | string  | (empty)    | Prefix path for cmake dependency lookup                  |
 
 Standard Meson built-in options used by Ant:
 

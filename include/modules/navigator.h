@@ -1,6 +1,8 @@
 #ifndef NAVIGATOR_H
 #define NAVIGATOR_H
 
-void init_navigator_module(void);
+#include "types.h"
+
+void init_navigator_module(ant_t *js);
 
 #endif

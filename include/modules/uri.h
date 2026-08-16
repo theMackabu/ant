@@ -3,7 +3,7 @@
 
 #include "types.h"
 
-void init_uri_module(void);
+void init_uri_module(ant_t *js);
 
 ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs);

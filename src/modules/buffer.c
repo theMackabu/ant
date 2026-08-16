@@ -11,7 +11,6 @@
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
-#include "runtime.h"
 #include "gc/roots.h"
 #include "descriptors.h"
 
@@ -26,14 +25,13 @@
 // Ant does not enforce these as allocation limits
 #define BUFFER_COMPAT_MAX_LENGTH 4294967296.0
 #define BUFFER_COMPAT_MAX_STRING_LENGTH 536870888.0
-#define BUFFER_COMPAT_INSPECT_MAX_BYTES 50.0
 
 static size_t ta_metadata_bytes     = 0;
 static size_t buffer_registry_count = 0;
 static size_t buffer_registry_cap   = 0;
 
-static ArrayBufferData **buffer_registry   = NULL;
-static ant_value_t g_typedarray_iter_proto = 0;
+// TODO: move to isolate
+static ArrayBufferData **buffer_registry = NULL;
 
 static void *ta_meta_alloc(size_t size) {
   void *ptr = ant_calloc(size);
@@ -207,7 +205,7 @@ static ant_value_t ta_values(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_VALUES, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -215,7 +213,7 @@ static ant_value_t ta_keys(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_KEYS, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -223,7 +221,7 @@ static ant_value_t ta_entries(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
   js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_ENTRIES, 0)));
-  js_set_proto_init(iter, g_typedarray_iter_proto);
+  js_set_proto_init(iter, js->builtins.typedarray_iter_proto);
   return iter;
 }
 
@@ -647,31 +645,6 @@ static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, 
   R_FLOAT32: *out = (double)((float *)data)[index];    return true;
   R_FLOAT64: *out = ((double *)data)[index];           return true;
   R_FAIL:    return false;
-}
-
-static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, double value) {
-  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached || index >= ta_data->length) return false;
-  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
-
-  static const void *dispatch[] = {
-    &&W_INT8, &&W_UINT8, &&W_UINT8_CLAMPED, &&W_INT16, &&W_UINT16,
-    &&W_INT32, &&W_UINT32, &&W_FLOAT16, &&W_FLOAT32, &&W_FLOAT64, &&W_FAIL, &&W_FAIL
-  };
-
-  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_FAIL;
-  goto *dispatch[ta_data->type];
-
-  W_INT8:    ((int8_t *)data)[index] = (int8_t)js_to_int32(value);     return true;
-  W_UINT8:   data[index] = (uint8_t)js_to_uint32(value);               return true;
-  W_UINT8_CLAMPED: data[index] = typedarray_to_uint8_clamped(value);   return true;
-  W_INT16:   ((int16_t *)data)[index] = (int16_t)js_to_int32(value);   return true;
-  W_UINT16:  ((uint16_t *)data)[index] = (uint16_t)js_to_uint32(value); return true;
-  W_INT32:   ((int32_t *)data)[index] = js_to_int32(value);            return true;
-  W_UINT32:  ((uint32_t *)data)[index] = js_to_uint32(value);          return true;
-  W_FLOAT16: ((uint16_t *)data)[index] = double_to_half(value); return true;
-  W_FLOAT32: ((float *)data)[index] = (float)value;       return true;
-  W_FLOAT64: ((double *)data)[index] = value;             return true;
-  W_FAIL:    return false;
 }
 
 static ant_value_t js_typedarray_every(ant_t *js, ant_value_t *args, int nargs) {
@@ -2555,7 +2528,7 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
       free(decoded);
       return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
     } else if (encoding == ENC_UCS2) {
-      size_t unit_count = utf16_strlen(str, len);
+      size_t unit_count = (size_t)str_utf16_len(js, args[0]);
       size_t decoded_len = unit_count * 2;
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
@@ -2569,9 +2542,12 @@ static ant_value_t js_buffer_from(ant_t *js, ant_value_t *args, int nargs) {
     } else {
       ArrayBufferData *buffer = create_array_buffer_data(len);
       if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-      
-      memcpy(buffer->data, str, len);
-      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
+
+      size_t written = len;
+      if (encoding == ENC_UTF8)
+        written = utf8_export_into(str, len, buffer->data, len, NULL);
+      else memcpy(buffer->data, str, len);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, written, "Buffer");
     }
   }
 
@@ -2984,6 +2960,14 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t result = js_mkstr(js, hex, len * 2);
     free(hex);
     return result;
+  } else if (encoding == ENC_LATIN1) {
+    size_t out_len;
+    char *out = latin1_to_utf8(data, len, &out_len);
+    if (!out) return js_mkerr(js, "Failed to decode buffer as Latin-1");
+
+    ant_value_t result = js_mkstr(js, out, out_len);
+    free(out);
+    return result;
   } else if (encoding == ENC_UCS2) {
     size_t char_count = len / 2;
     char *str = malloc(char_count * 3 + 1);
@@ -3106,7 +3090,7 @@ static ant_value_t buffer_encode_search_string(ant_t *js, ant_value_t value, Buf
     *out_len = decoded_len;
     *owned = decoded;
   } else if (encoding == ENC_UCS2) {
-    size_t unit_count = utf16_strlen(str, len);
+    size_t unit_count = (size_t)str_utf16_len(js, str_value);
     size_t decoded_len = unit_count * 2;
     uint8_t *decoded = malloc(decoded_len == 0 ? 1 : decoded_len);
     if (!decoded) return js_mkerr(js, "Failed to allocate string");
@@ -3210,26 +3194,34 @@ static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
   
   size_t str_len;
   char *str = js_getstr(js, args[0], &str_len);
+  
   size_t offset = 0;
   size_t length = ta_data->byte_length;
+  BufferEncoding encoding = ENC_UTF8;
   
-  if (nargs > 1 && vtype(args[1]) == T_NUM) {
-    offset = (size_t)js_getnum(args[1]);
+  for (int i = 1; i < nargs && i <= 3; i++) {
+    if (vtype(args[i]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[i], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+      break;
+    }
+    if (vtype(args[i]) == T_NUM) {
+      if (i == 1) offset = (size_t)js_getnum(args[i]);
+      else if (i == 2) length = (size_t)js_getnum(args[i]);
+    }
   }
   
-  if (nargs > 2 && vtype(args[2]) == T_NUM) {
-    length = (size_t)js_getnum(args[2]);
-  }
-  
-  if (offset >= ta_data->byte_length) {
-    return js_mknum(0);
-  }
-  
+  if (offset >= ta_data->byte_length) return js_mknum(0);  
   size_t available = ta_data->byte_length - offset;
   size_t to_write = (str_len < length) ? str_len : length;
   to_write = (to_write < available) ? to_write : available;
   
-  memcpy(ta_data->buffer->data + ta_data->byte_offset + offset, str, to_write);
+  uint8_t *dst = ta_data->buffer->data + ta_data->byte_offset + offset;
+  if (encoding == ENC_UTF8)
+    to_write = utf8_export_into(str, str_len, dst, to_write, NULL);
+  else memcpy(dst, str, to_write);
   return js_mknum((double)to_write);
 }
 
@@ -3497,7 +3489,17 @@ static ant_value_t js_buffer_byteLength(ant_t *js, ant_value_t *args, int nargs)
   
   if (vtype(arg) == T_STR) {
     size_t len;
-    js_getstr(js, arg, &len);
+    char *str = js_getstr(js, arg, &len);
+    BufferEncoding encoding = ENC_UTF8;
+    
+    if (nargs > 1 && vtype(args[1]) == T_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[1], &enc_len);
+      BufferEncoding parsed = parse_encoding(enc_str, enc_len);
+      if (parsed != ENC_UNKNOWN) encoding = parsed;
+    }
+    
+    if (encoding == ENC_UTF8) len = utf8_export_length(str, len);
     return js_mknum((double)len);
   }
   
@@ -3651,18 +3653,15 @@ ant_value_t buffer_library(ant_t *js) {
   js_set(js, lib, "constants", buffer_make_constants(js));
   js_set(js, lib, "kMaxLength", js_mknum(BUFFER_COMPAT_MAX_LENGTH));
   js_set(js, lib, "kStringMaxLength", js_mknum(BUFFER_COMPAT_MAX_STRING_LENGTH));
-  js_set(js, lib, "INSPECT_MAX_BYTES", js_mknum(BUFFER_COMPAT_INSPECT_MAX_BYTES));
+  js_set(js, lib, "INSPECT_MAX_BYTES", js_mknum(BUFFER_INSPECT_MAX_BYTES));
 
   return lib;
 }
 
-void init_buffer_module() {
-  ant_t *js = rt->js;
-  
+void init_buffer_module(ant_t *js) {
   ant_value_t glob = js->global;
   ant_value_t object_proto = js->sym.object_proto;
-  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
-  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t function_proto = js->sym.function_proto;
 
   ant_value_t arraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t arraybuffer_proto = js_mkobj(js);
@@ -3681,10 +3680,10 @@ void init_buffer_module() {
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   js_set(js, arraybuffer_ctor_obj, "isView", js_mkfun(js_arraybuffer_isView));
   js_define_species_getter(js, arraybuffer_ctor_obj);
-  ant_value_t arraybuffer_ctor = js_obj_to_func(arraybuffer_ctor_obj);
+  ant_value_t arraybuffer_ctor = js_obj_to_func(js, arraybuffer_ctor_obj);
   js_set(js, arraybuffer_proto, "constructor", arraybuffer_ctor);
   js_set_descriptor(js, arraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "ArrayBuffer", arraybuffer_ctor);
+  js_set_global_builtin(js, "ArrayBuffer", arraybuffer_ctor);
   
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
@@ -3723,14 +3722,14 @@ void init_buffer_module() {
   js_mkprop_fast(js, typedarray_ctor_obj, "name", 4, ANT_STRING("TypedArray"));
   js_set_descriptor(js, typedarray_ctor_obj, "name", 4, 0);
   
-  ant_value_t typedarray_ctor = js_obj_to_func(typedarray_ctor_obj);
+  ant_value_t typedarray_ctor = js_obj_to_func(js, typedarray_ctor_obj);
   js_set(js, typedarray_proto, "constructor", typedarray_ctor);
   js_set_descriptor(js, typedarray_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
-  g_typedarray_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_typedarray_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
-  js_iter_register_advance(g_typedarray_iter_proto, advance_typedarray);
+  js->builtins.typedarray_iter_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.typedarray_iter_proto, js->sym.iterator_proto);
+  js_set(js, js->builtins.typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
+  js_iter_register_advance(js->builtins.typedarray_iter_proto, advance_typedarray);
 
   js_set(js, typedarray_proto, "values", js_mkfun(ta_values));
   js_set(js, typedarray_proto, "keys", js_mkfun(ta_keys));
@@ -3755,10 +3754,10 @@ void init_buffer_module() {
       js_define_species_getter(js, name##_ctor_obj); \
       js_set(js, name##_ctor_obj, "from", js_mkfun(js_##name##_from)); \
       js_set(js, name##_ctor_obj, "of", js_mkfun(js_##name##_of)); \
-      ant_value_t name##_ctor = js_obj_to_func(name##_ctor_obj); \
+      ant_value_t name##_ctor = js_obj_to_func(js, name##_ctor_obj); \
       js_setprop(js, name##_proto, ANT_STRING("constructor"), name##_ctor); \
       js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
-      js_set(js, glob, #name, name##_ctor); \
+      js_set_global_builtin(js, #name, name##_ctor); \
     } while(0)
   
   SETUP_TYPEDARRAY(Int8Array, TYPED_ARRAY_INT8);
@@ -3817,10 +3816,10 @@ void init_buffer_module() {
   js_mkprop_fast(js, dataview_ctor_obj, "name", 4, ANT_STRING("DataView"));
   js_set_descriptor(js, dataview_ctor_obj, "name", 4, 0);
   
-  ant_value_t dataview_ctor = js_obj_to_func(dataview_ctor_obj);
+  ant_value_t dataview_ctor = js_obj_to_func(js, dataview_ctor_obj);
   js_set(js, dataview_proto, "constructor", dataview_ctor);
   js_set_descriptor(js, dataview_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "DataView", dataview_ctor);
+  js_set_global_builtin(js, "DataView", dataview_ctor);
   
   ant_value_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t sharedarraybuffer_proto = js_mkobj(js);
@@ -3836,10 +3835,10 @@ void init_buffer_module() {
   js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
   js_define_species_getter(js, sharedarraybuffer_ctor_obj);
   
-  ant_value_t sharedarraybuffer_ctor = js_obj_to_func(sharedarraybuffer_ctor_obj);
+  ant_value_t sharedarraybuffer_ctor = js_obj_to_func(js, sharedarraybuffer_ctor_obj);
   js_set(js, sharedarraybuffer_proto, "constructor", sharedarraybuffer_ctor);
   js_set_descriptor(js, sharedarraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "SharedArrayBuffer", sharedarraybuffer_ctor);
+  js_set_global_builtin(js, "SharedArrayBuffer", sharedarraybuffer_ctor);
   
   ant_value_t buffer_ctor_obj = js_mkobj(js);
   ant_value_t buffer_proto = js_mkobj(js);
@@ -3889,10 +3888,10 @@ void init_buffer_module() {
   js_mkprop_fast(js, buffer_ctor_obj, "name", 4, ANT_STRING("Buffer"));
   js_set_descriptor(js, buffer_ctor_obj, "name", 4, 0);
   
-  ant_value_t buffer_ctor = js_obj_to_func(buffer_ctor_obj);
+  ant_value_t buffer_ctor = js_obj_to_func(js, buffer_ctor_obj);
   js_set(js, buffer_proto, "constructor", buffer_ctor);
   js_set_descriptor(js, buffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_set(js, glob, "Buffer", buffer_ctor);
+  js_set_global_builtin(js, "Buffer", buffer_ctor);
 }
 
 void cleanup_buffer_module(void) {

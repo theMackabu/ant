@@ -32,7 +32,6 @@
 #include "errors.h"
 #include "output.h"
 #include "internal.h"
-#include "runtime.h"
 #include "sandbox/sandbox.h"
 #include "tty_ctrl.h"
 #include "silver/engine.h"
@@ -42,11 +41,6 @@
 #include "modules/events.h"
 #include "modules/symbol.h"
 #include "modules/tty.h"
-
-static ant_value_t g_tty_readstream_proto = 0;
-static ant_value_t g_tty_readstream_ctor = 0;
-static ant_value_t g_tty_writestream_proto = 0;
-static ant_value_t g_tty_writestream_ctor = 0;
 
 static uint16_t g_sandbox_tty_rows = 24;
 static uint16_t g_sandbox_tty_cols = 80;
@@ -785,7 +779,7 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
     return stdin_obj;
   }}
 
-  ant_value_t obj = stream_construct_readable(js, g_tty_readstream_proto, js_mkundef());
+  ant_value_t obj = stream_construct_readable(js, js->builtins.tty_readstream_proto, js_mkundef());
   if (is_err(obj)) return obj;
 
   state = calloc(1, sizeof(*state));
@@ -823,7 +817,7 @@ static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, in
     }
   }
 
-  ant_value_t obj = stream_construct_writable(js, g_tty_writestream_proto, js_mkundef());
+  ant_value_t obj = stream_construct_writable(js, js->builtins.tty_writestream_proto, js_mkundef());
   if (is_err(obj)) return obj;
 
   ensure_stream_common_props(js, obj, fd);
@@ -855,32 +849,31 @@ static void setup_writestream_proto(ant_t *js, ant_value_t proto) {
 }
 
 static void tty_init_stream_constructors(ant_t *js) {
-  if (g_tty_readstream_ctor && g_tty_writestream_ctor) return;
+  if (js->builtins.tty_readstream_ctor && js->builtins.tty_writestream_ctor) return;
   stream_init_constructors(js);
 
-  g_tty_readstream_proto = js_mkobj(js);
-  js_set_proto_init(g_tty_readstream_proto, stream_readable_prototype(js));
-  setup_readstream_proto(js, g_tty_readstream_proto);
+  js->builtins.tty_readstream_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.tty_readstream_proto, stream_readable_prototype(js));
+  setup_readstream_proto(js, js->builtins.tty_readstream_proto);
   
-  g_tty_readstream_ctor = js_make_ctor(js, tty_read_stream_constructor, g_tty_readstream_proto, "ReadStream", 10);
-  js_set_proto_init(g_tty_readstream_ctor, stream_readable_constructor(js));
+  js->builtins.tty_readstream_ctor = js_make_ctor(js, tty_read_stream_constructor, js->builtins.tty_readstream_proto, "ReadStream", 10);
+  js_set_proto_init(js->builtins.tty_readstream_ctor, stream_readable_constructor(js));
   
-  gc_register_root(&g_tty_readstream_proto);
-  gc_register_root(&g_tty_readstream_ctor);
+  gc_register_root(&js->builtins.tty_readstream_proto);
+  gc_register_root(&js->builtins.tty_readstream_ctor);
 
-  g_tty_writestream_proto = js_mkobj(js);
-  js_set_proto_init(g_tty_writestream_proto, stream_writable_prototype(js));
-  setup_writestream_proto(js, g_tty_writestream_proto);
+  js->builtins.tty_writestream_proto = js_mkobj(js);
+  js_set_proto_init(js->builtins.tty_writestream_proto, stream_writable_prototype(js));
+  setup_writestream_proto(js, js->builtins.tty_writestream_proto);
   
-  g_tty_writestream_ctor = js_make_ctor(js, tty_write_stream_constructor, g_tty_writestream_proto, "WriteStream", 11);
-  js_set_proto_init(g_tty_writestream_ctor, stream_writable_constructor(js));
+  js->builtins.tty_writestream_ctor = js_make_ctor(js, tty_write_stream_constructor, js->builtins.tty_writestream_proto, "WriteStream", 11);
+  js_set_proto_init(js->builtins.tty_writestream_ctor, stream_writable_constructor(js));
   
-  gc_register_root(&g_tty_writestream_proto);
-  gc_register_root(&g_tty_writestream_ctor);
+  gc_register_root(&js->builtins.tty_writestream_proto);
+  gc_register_root(&js->builtins.tty_writestream_ctor);
 }
 
-void init_tty_module(void) {
-  ant_t *js = rt->js;
+void init_tty_module(ant_t *js) {
   if (!js) return;
   tty_init_stream_constructors(js);
 
@@ -941,8 +934,8 @@ ant_value_t tty_library(ant_t *js) {
   tty_init_stream_constructors(js);
 
   js_set(js, lib, "isatty", js_mkfun(tty_isatty));
-  js_set(js, lib, "ReadStream", g_tty_readstream_ctor);
-  js_set(js, lib, "WriteStream", g_tty_writestream_ctor);
+  js_set(js, lib, "ReadStream", js->builtins.tty_readstream_ctor);
+  js_set(js, lib, "WriteStream", js->builtins.tty_writestream_ctor);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "tty", 3));
 
   return lib;

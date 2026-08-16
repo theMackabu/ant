@@ -491,7 +491,7 @@ static void watch_graph_add_specifier(const char *specifier, bool prefer_require
   watch_graph_context_t *ctx = (watch_graph_context_t *)data;
   if (!watch_is_local_specifier(specifier)) return;
 
-  char *resolved = js_esm_resolve_path_for_watch(specifier, ctx->base_path, prefer_require);
+  char *resolved = js_esm_resolve_path_for_watch(NULL, specifier, ctx->base_path, prefer_require);
   if (!resolved) return;
 
   if (esm_is_url(resolved)) {

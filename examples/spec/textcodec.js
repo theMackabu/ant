@@ -56,6 +56,20 @@ test('TextDecoder case insensitive', new TextDecoder('UTF-8').encoding, 'utf-8')
 test('TextDecoder utf-16le label', new TextDecoder('utf-16le').encoding, 'utf-16le');
 test('TextDecoder utf-16be label', new TextDecoder('utf-16be').encoding, 'utf-16be');
 test('TextDecoder utf-16 alias', new TextDecoder('utf-16').encoding, 'utf-16le');
+
+for (const label of [
+  'ansi_x3.4-1968', 'ascii', 'cp1252', 'cp819', 'csisolatin1', 'ibm819',
+  'iso-8859-1', 'iso-ir-100', 'iso8859-1', 'iso88591', 'iso_8859-1',
+  'iso_8859-1:1987', 'l1', 'latin1', 'us-ascii', 'windows-1252', 'x-cp1252',
+]) {
+  test(`TextDecoder ${label} alias`, new TextDecoder(label).encoding, 'windows-1252');
+}
+test(
+  'TextDecoder latin1 uses windows-1252',
+  new TextDecoder('latin1').decode(new Uint8Array([0x80, 0x91, 0xa3, 0xff])),
+  '\u20AC\u2018\u00A3\u00FF'
+);
+
 testThrows('TextDecoder invalid label', () => new TextDecoder('bogus'));
 testThrows('TextDecoder without new throws', () => TextDecoder());
 

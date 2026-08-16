@@ -231,4 +231,62 @@ assertSame(
 );
 delete globalThis.__antAccessorTypeofSelf;
 
+globalThis.__antSelfReassign = function (x) {
+  if (x) return __antSelfReassign;
+  return null;
+};
+const reassignOrig = globalThis.__antSelfReassign;
+for (let i = 0; i < 300; i++) {
+  assertSame(reassignOrig(1), reassignOrig, "self global warmup");
+}
+globalThis.__antSelfReassign = "replaced";
+assertSame(
+  reassignOrig(1),
+  "replaced",
+  "guard deopt must use the already-read value"
+);
+delete globalThis.__antSelfReassign;
+
+globalThis.__antSelfDeleted = function (x) {
+  if (x) return __antSelfDeleted;
+  return null;
+};
+const deletedOrig = globalThis.__antSelfDeleted;
+for (let i = 0; i < 300; i++) {
+  assertSame(deletedOrig(1), deletedOrig, "self global warmup");
+}
+delete globalThis.__antSelfDeleted;
+let deletedThrew = false;
+try {
+  deletedOrig(1);
+} catch (e) {
+  deletedThrew = e instanceof ReferenceError;
+}
+assertSame(
+  deletedThrew,
+  true,
+  "guarded read of a deleted global must throw, not resume with a value"
+);
+
+globalThis.__antSelfAccessor = function (x) {
+  if (x) return __antSelfAccessor;
+  return null;
+};
+const accessorOrig = globalThis.__antSelfAccessor;
+for (let i = 0; i < 300; i++) {
+  assertSame(accessorOrig(1), accessorOrig, "self global warmup");
+}
+let accessorGets = 0;
+Object.defineProperty(globalThis, "__antSelfAccessor", {
+  configurable: true,
+  get() { accessorGets++; return 42; },
+});
+assertSame(accessorOrig(1), 42, "guard deopt through accessor global");
+assertSame(
+  accessorGets,
+  1,
+  "guard deopt must not invoke the getter a second time"
+);
+delete globalThis.__antSelfAccessor;
+
 console.log("PASS");

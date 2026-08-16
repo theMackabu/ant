@@ -44,11 +44,13 @@ typedef struct {
 } key_event_t;
 
 int repl_terminal_cols(void);
+int ant_readline_interrupt_fd(void);
 bool repl_input_pending(void);
 
 key_event_t repl_read_key(void);
 extern volatile sig_atomic_t ctrl_c_pressed;
 
+void ant_readline_drain_interrupt_wake(void);
 void repl_jump_cursor(int x_pos, int y_offset);
 void repl_clear_to_end(void);
 void repl_set_cursor_visible(bool visible);

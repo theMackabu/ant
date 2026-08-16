@@ -13,9 +13,36 @@ typedef struct {
   int pend_pos;
 } utf8_dec_t;
 
+typedef struct {
+  uint16_t prefix_surrogate;
+  uint16_t suffix_surrogate;
+} utf16_range_splits_t;
+
 utf8proc_ssize_t utf8_whatwg_decode(
   utf8_dec_t *dec, const uint8_t *src, size_t len,
   char *out, bool fatal, bool stream
+);
+
+int utf16_index_to_byte_offset(
+  const char *str,
+  size_t byte_len,
+  size_t utf16_idx,
+  size_t *out_char_bytes
+);
+
+size_t utf16_index_to_byte_offset_floor(
+  const char *str,
+  size_t byte_len,
+  size_t utf16_idx
+);
+
+utf16_range_splits_t utf16_range_to_byte_range(
+  const char *str,
+  size_t byte_len,
+  size_t utf16_start,
+  size_t utf16_end,
+  size_t *byte_start,
+  size_t *byte_end
 );
 
 size_t utf8_strlen(const char *str, size_t byte_len);
@@ -25,23 +52,9 @@ size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
 
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
+
+bool utf8_validate_bytes(const char *str, size_t byte_len);
 uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);
-
-int utf16_index_to_byte_offset(
-  const char *str,
-  size_t byte_len,
-  size_t utf16_idx,
-  size_t *out_char_bytes
-);
-
-int utf16_range_to_byte_range(
-  const char *str,
-  size_t byte_len,
-  size_t utf16_start,
-  size_t utf16_end,
-  size_t *byte_start,
-  size_t *byte_end
-);
 
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx);
 uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx);

@@ -5,6 +5,7 @@
 .superset
 
 .claude
+.agents
 .github/artifacts
 
 *.so
@@ -35,6 +36,7 @@ node_modules
 /wpt
 /tools
 /zoo.sh
+/test262.sh
 
 /vendor/*/
 /vendor/.wraplock

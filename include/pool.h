@@ -16,11 +16,16 @@ struct ant_pool_block {
   uint8_t data[];
 };
 
-#define ANT_POOL_SIZE_CLASS_COUNT  32
-#define ANT_POOL_ROPE_BLOCK_SIZE   (64u * 1024u)
-#define ANT_POOL_SYMBOL_BLOCK_SIZE (32u * 1024u)
-#define ANT_POOL_BIGINT_BLOCK_SIZE (64u * 1024u)
-#define ANT_POOL_STRING_BLOCK_SIZE (128u * 1024u)
+// TODO: constexpr
+#define ANT_ROPE_FLAG_YOUNG 1u
+
+static constexpr size_t ANT_POOL_ROPE_BLOCK_SIZE   = 64u * 1024u;
+static constexpr size_t ANT_POOL_SYMBOL_BLOCK_SIZE = 32u * 1024u;
+static constexpr size_t ANT_POOL_BIGINT_BLOCK_SIZE = 64u * 1024u;
+static constexpr size_t ANT_POOL_STRING_BLOCK_SIZE = 128u * 1024u;
+
+static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
+static constexpr uint16_t ANT_ROPE_DEPTH_SATURATED = UINT16_MAX;
 
 typedef struct {
   ant_pool_block_t *head;
@@ -52,13 +57,15 @@ typedef struct ant_large_string_alloc {
   uint32_t quarantine_epoch;
   uint8_t marked;
   ant_offset_t len;
-  uint8_t is_ascii;
+  uint64_t meta;
   char bytes[];
 } ant_large_string_alloc_t;
 
 typedef struct {
   ant_offset_t len;
   uint16_t depth;
+  uint16_t flags;
+  uint32_t mark_epoch;
   ant_value_t left;
   ant_value_t right;
   ant_value_t cached;
@@ -144,6 +151,12 @@ void js_pool_destroy(ant_pool_t *pool);
 void js_class_pool_destroy(ant_class_pool_t *pool);
 void js_string_pool_destroy(ant_string_pool_t *pool);
 
+ant_rope_heap_t *js_rope_alloc(ant_t *js);
+ant_pool_stats_t js_pool_stats(ant_pool_t *pool);
+ant_pool_stats_t js_rope_pool_stats(ant_t *js);
+ant_pool_stats_t js_class_pool_stats(ant_class_pool_t *pool);
+ant_string_pool_stats_t js_string_pool_stats(ant_string_pool_t *pool);
+
 void *js_type_alloc(
   ant_t *js, ant_alloc_kind_t kind,
   size_t size, size_t align
@@ -153,9 +166,5 @@ void *pool_alloc_chain(
   ant_pool_block_t **head, ant_pool_block_t **free_head, 
   size_t block_size, size_t size, size_t align
 );
-
-ant_pool_stats_t js_pool_stats(ant_pool_t *pool);
-ant_pool_stats_t js_class_pool_stats(ant_class_pool_t *pool);
-ant_string_pool_stats_t js_string_pool_stats(ant_string_pool_t *pool);
 
 #endif

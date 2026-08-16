@@ -104,7 +104,7 @@ for (const file of files) {
 
   let result;
   try {
-    result = spawnSync(antBinary, [relativeFile], { cwd: repoRoot });
+    result = spawnSync(antBinary, [relativeFile], { cwd: repoRoot, encoding: 'utf8' });
   } catch (error) {
     const elapsed = performance.now() - start;
     const message = error && error.stack ? String(error.stack) : String(error);

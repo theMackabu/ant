@@ -1,27 +1,28 @@
 declare module 'child_process' {
   import { EventEmitter } from 'events';
+  import { Readable, Writable } from 'stream';
 
   interface SpawnResult {
     stdout: string;
     stderr: string;
     exitCode: number;
-    signalCode: number | null;
+    signalCode: string | null;
     pid: number;
   }
 
   class ChildProcess extends EventEmitter {
-    stdout: string;
-    stderr: string;
+    stdout: Readable | null;
+    stderr: Readable | null;
+    stdin: Writable | null;
     exitCode: number | null;
-    signalCode: number | null;
+    signalCode: string | null;
     pid: number;
     killed: boolean;
-    on(event: 'exit', listener: (code: number, signal: number | null) => void): ChildProcess;
-    on(event: 'close', listener: (code: number, signal: number | null) => void): ChildProcess;
+    on(event: 'exit', listener: (code: number | null, signal: string | null) => void): ChildProcess;
+    on(event: 'close', listener: (code: number | null, signal: string | null) => void): ChildProcess;
     on(event: 'error', listener: (err: Error) => void): ChildProcess;
-    on(event: 'data', listener: (data: string) => void): ChildProcess;
     once(event: string, listener: (...args: unknown[]) => void): ChildProcess;
-    kill(signal?: number): boolean;
+    kill(signal?: number | string): boolean;
     write(data: string): void;
     end(): void;
   }
@@ -49,6 +50,28 @@ declare module 'child_process' {
     shell?: boolean;
     env?: Record<string, string>;
     stdio?: 'pipe' | 'inherit' | 'ignore' | Array<'pipe' | 'inherit' | 'ignore'>;
+    timeout?: number;
+    killSignal?: string | number;
+  }
+
+  interface SpawnSyncResult {
+    stdout: string;
+    stderr: string;
+    status: number | null;
+    signal: string | null;
+    pid: number;
+    error?: Error;
+  }
+
+  type ExecSyncOptions = Omit<SpawnSyncOptions, 'shell'>;
+
+  interface ExecSyncError extends Error {
+    status: number | null;
+    signal: string | null;
+    stdout: string;
+    stderr: string;
+    pid: number;
+    cmd: string;
   }
 
   interface ForkOptions {
@@ -65,9 +88,11 @@ declare module 'child_process' {
     options: ExecOptions | undefined,
     callback: (err: Error | null, stdout: string, stderr: string) => void
   ): ChildProcess;
-  function execSync(command: string): string;
-  function spawnSync(command: string, args?: string[], options?: SpawnSyncOptions): SpawnResult;
-  function spawnSync(command: string, options?: SpawnSyncOptions): SpawnResult;
+  function execSync(command: string, options?: ExecSyncOptions): string;
+  function execFileSync(file: string, args?: string[], options?: SpawnSyncOptions): string;
+  function execFileSync(file: string, options?: SpawnSyncOptions): string;
+  function spawnSync(command: string, args?: string[], options?: SpawnSyncOptions): SpawnSyncResult;
+  function spawnSync(command: string, options?: SpawnSyncOptions): SpawnSyncResult;
   function fork(modulePath: string, options?: ForkOptions): ChildProcess & Promise<SpawnResult>;
 }
 

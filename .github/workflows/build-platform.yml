@@ -90,7 +90,7 @@ jobs:
       - name: Setup macOS environment
         if: startsWith(inputs.platform, 'macos')
         run: |
-          for pkg in meson ninja llvm jq; do
+          for pkg in meson ninja jq; do
             brew list "$pkg" &>/dev/null || brew install "$pkg"
           done
 
@@ -185,10 +185,12 @@ jobs:
         id: build
         uses: ./.github/actions/build-project
         with:
+          platform: ${{ inputs.platform }}
           cc: ${{ steps.llvm.outputs.cc }}
           cxx: ${{ steps.llvm.outputs.cxx }}
           ar: ${{ steps.llvm.outputs.ar }}
           ranlib: ${{ steps.llvm.outputs.ranlib }}
+          nm: ${{ steps.llvm.outputs.nm }}
           ld: ${{ steps.llvm.outputs.ld }}
           strip: ${{ steps.llvm.outputs.strip }}
           deps_prefix: ${{ github.workspace }}/.deps-cache

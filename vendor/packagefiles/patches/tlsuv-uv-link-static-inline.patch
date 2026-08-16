@@ -1,0 +1,22 @@
+diff --git a/deps/uv_link_t/include/uv_link_t.h b/deps/uv_link_t/include/uv_link_t.h
+index 833fc16..006220b 100644
+--- a/deps/uv_link_t/include/uv_link_t.h
++++ b/deps/uv_link_t/include/uv_link_t.h
+@@ -114,7 +114,7 @@ void uv_link_propagate_close(uv_link_t* link, uv_link_t* source,
+ int uv_link_read_start(uv_link_t* link);
+ int uv_link_read_stop(uv_link_t* link);
+ 
+-static int uv_link_write(uv_link_t* link, const uv_buf_t bufs[],
++static inline int uv_link_write(uv_link_t* link, const uv_buf_t bufs[],
+                          unsigned int nbufs, uv_stream_t* send_handle,
+                          uv_link_write_cb cb, void* arg) {
+   return uv_link_propagate_write(link, link, bufs, nbufs, send_handle, cb, arg);
+@@ -124,7 +124,7 @@ int uv_link_try_write(uv_link_t* link,
+                       const uv_buf_t bufs[],
+                       unsigned int nbufs);
+ 
+-static int uv_link_shutdown(uv_link_t* link, uv_link_shutdown_cb cb,
++static inline int uv_link_shutdown(uv_link_t* link, uv_link_shutdown_cb cb,
+                             void* arg) {
+   return uv_link_propagate_shutdown(link, link, cb, arg);
+ }

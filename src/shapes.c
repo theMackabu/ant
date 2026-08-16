@@ -1,13 +1,10 @@
 #include "shapes.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uthash.h>
 
 uint32_t ant_ic_epoch_counter = 1;
-
-#define SHAPE_ENTRY_SIZE     sizeof(shape_index_entry_t)
-#define SHAPE_ENTRY_POOL_MAX 1024
+uint32_t ant_ic_obj_epoch_counter = 1;
 
 static size_t g_shape_bytes          = 0;
 static size_t g_shape_entry_pool_len = 0;
@@ -19,14 +16,17 @@ typedef struct shape_index_entry {
   UT_hash_handle hh;
 } shape_index_entry_t;
 
-
 typedef struct shape_child_entry {
   uint64_t key;
   ant_shape_t *child;
   UT_hash_handle hh;
 } shape_child_entry_t;
 
-_Static_assert(
+static constexpr size_t SHAPE_ENTRY_SIZE = sizeof(shape_index_entry_t);
+static constexpr size_t SHAPE_ENTRY_POOL_MAX = 1024;
+static constexpr uint32_t SHAPE_COMPACT_MIN_TOMBSTONES = 32;
+
+static_assert(
   sizeof(shape_index_entry_t) == sizeof(shape_child_entry_t), 
   "entry pool requires index and child entries to be the same size"
 );
@@ -65,8 +65,10 @@ struct ant_shape {
   uint32_t ref_count;
   uint32_t count;
   uint32_t cap;
+  uint32_t deleted_count;
   uint8_t inobj_limit;
   uint16_t gc_mark;
+  uint32_t absence_guard_epoch;
   
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
@@ -75,6 +77,16 @@ struct ant_shape {
   
   uint64_t parent_key;
 };
+
+static inline void shape_invalidate_guarded_absence(ant_shape_t *shape) {
+  if (!shape || shape->absence_guard_epoch == 0) return;
+  if (shape->absence_guard_epoch != ant_ic_epoch_counter) {
+    shape->absence_guard_epoch = 0;
+    return;
+  }
+  shape->absence_guard_epoch = 0;
+  ant_ic_epoch_bump();
+}
 
 static ant_shape_t *g_root_shapes[ANT_INOBJ_MAX_SLOTS + 1];
 static inline uint8_t shape_clamp_inobj_limit(uint8_t limit) {
@@ -112,6 +124,7 @@ static bool shape_rebuild_index(ant_shape_t *shape) {
 
   for (uint32_t i = 0; i < shape->count; i++) {
     const ant_shape_prop_t *prop = &shape->props[i];
+    if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
     
     uint64_t key = (prop->type == ANT_SHAPE_KEY_SYMBOL)
       ? shape_key_symbol(prop->key.sym_off)
@@ -186,6 +199,9 @@ static bool shape_add_key(
   idx->key = key; idx->slot = slot;
   HASH_ADD(hh, shape->index, key, sizeof(key), idx);
 
+  if (type == ANT_SHAPE_KEY_STRING)
+    shape_invalidate_guarded_absence(shape);
+
   if (out_slot) *out_slot = slot;
   return true;
 }
@@ -234,6 +250,7 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
     int32_t slot = ant_shape_lookup_interned(child, interned);
     if (slot >= 0) {
       if (out_slot) *out_slot = (uint32_t)slot;
+      shape_invalidate_guarded_absence(shape);
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -251,7 +268,8 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
 
   ant_shape_t *next = ant_shape_clone(shared);
   if (!next) return false;
-  
+
+  shape_invalidate_guarded_absence(shape);
   ant_shape_release(shape);
   *shape_pp = next;
   
@@ -274,6 +292,7 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
     int32_t slot = ant_shape_lookup_symbol(child, sym_off);
     if (slot >= 0) {
       if (out_slot) *out_slot = (uint32_t)slot;
+      shape_invalidate_guarded_absence(shape);
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -291,7 +310,8 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
 
   ant_shape_t *next = ant_shape_clone(shared);
   if (!next) return false;
-  
+
+  shape_invalidate_guarded_absence(shape);
   ant_shape_release(shape);
   *shape_pp = next;
   
@@ -326,6 +346,7 @@ ant_shape_t *ant_shape_clone(const ant_shape_t *shape) {
   
   g_shape_bytes += sizeof(*copy);
   copy->ref_count = 1;
+  copy->deleted_count = shape->deleted_count;
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
 
   if (shape->count > 0) {
@@ -448,6 +469,10 @@ int32_t ant_shape_lookup_symbol(const ant_shape_t *shape, ant_offset_t sym_off) 
   return entry ? (int32_t)entry->slot : -1;
 }
 
+void ant_shape_guard_absence(ant_shape_t *shape) {
+  if (shape) shape->absence_guard_epoch = ant_ic_epoch_counter;
+}
+
 bool ant_shape_add_interned(ant_shape_t *shape, const char *interned, uint8_t attrs, uint32_t *out_slot) {
   return shape_add_key(shape, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
 }
@@ -456,11 +481,12 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
   return shape_add_key(shape, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
 }
 
-bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_from) {
+bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return false;
-  if (swapped_from) *swapped_from = slot;
 
   const ant_shape_prop_t *dp = &shape->props[slot];
+  if (dp->type == ANT_SHAPE_KEY_DELETED) return false;
+  
   uint64_t del_key = (dp->type == ANT_SHAPE_KEY_SYMBOL)
     ? shape_key_symbol(dp->key.sym_off)
     : shape_key_interned(dp->key.interned);
@@ -472,24 +498,19 @@ bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot, uint32_t *swapped_
     shape_entry_free(del_entry);
   }
 
-  uint32_t last = shape->count - 1;
-  if (slot != last) {
-    shape->props[slot] = shape->props[last];
+  memset(&shape->props[slot], 0, sizeof(shape->props[slot]));
+  shape->props[slot].type = ANT_SHAPE_KEY_DELETED;
+  shape->deleted_count++;
 
-    const ant_shape_prop_t *sp = &shape->props[slot];
-    uint64_t swap_key = (sp->type == ANT_SHAPE_KEY_SYMBOL)
-      ? shape_key_symbol(sp->key.sym_off)
-      : shape_key_interned(sp->key.interned);
-
-    shape_index_entry_t *swap_entry = NULL;
-    HASH_FIND(hh, shape->index, &swap_key, sizeof(swap_key), swap_entry);
-    if (swap_entry) swap_entry->slot = slot;
-    if (swapped_from) *swapped_from = last;
+  while (
+    shape->count > 0 &&
+    shape->props[shape->count - 1].type == ANT_SHAPE_KEY_DELETED
+  ) {
+    shape->count--;
+    shape->deleted_count--;
   }
-
-  shape->count--;
-  ant_ic_epoch_bump();
   
+  ant_ic_epoch_bump();
   return true;
 }
 
@@ -497,13 +518,49 @@ uint32_t ant_shape_count(const ant_shape_t *shape) {
   return shape ? shape->count : 0;
 }
 
+bool ant_shape_should_compact(const ant_shape_t *shape) {
+  if (!shape || shape->deleted_count < SHAPE_COMPACT_MIN_TOMBSTONES) return false;
+  return shape->deleted_count >= shape->count - shape->deleted_count;
+}
+
+uint32_t ant_shape_compact(ant_shape_t *shape) {
+  if (!shape || shape->deleted_count == 0) return shape ? shape->count : 0;
+
+  uint32_t dst = 0;
+  for (uint32_t src = 0; src < shape->count; src++) {
+    ant_shape_prop_t *prop = &shape->props[src];
+    if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
+
+    uint64_t key = (prop->type == ANT_SHAPE_KEY_SYMBOL)
+      ? shape_key_symbol(prop->key.sym_off)
+      : shape_key_interned(prop->key.interned);
+    
+    shape_index_entry_t *entry = NULL;
+    HASH_FIND(hh, shape->index, &key, sizeof(key), entry);
+    if (entry) entry->slot = dst;
+    if (dst != src) shape->props[dst] = *prop;
+    dst++;
+  }
+
+  if (dst < shape->count) memset(&shape->props[dst], 0,
+    (shape->count - dst) * sizeof(*shape->props)
+  );
+  
+  shape->count = dst;
+  shape->deleted_count = 0;
+  
+  return dst;
+}
+
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return NULL;
+  if (shape->props[slot].type == ANT_SHAPE_KEY_DELETED) return NULL;
   return &shape->props[slot];
 }
 
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return NULL;
+  if (shape->props[slot].type == ANT_SHAPE_KEY_DELETED) return NULL;
   return &shape->props[slot];
 }
 

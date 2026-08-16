@@ -35,8 +35,6 @@ static inline ant_value_t sv_module_export_cstr(
   return sv_module_export_to_ns(js, js_module_eval_active_ns(js), name, len, value);
 }
 
-/* exports executed inside a function (live-binding writes) must target the
-   function's own module, not whichever module is currently mid-eval */
 static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value_t func_obj) {
   if (is_object_type(func_obj)) {
     ant_value_t ns = js_module_ctx_namespace(js_get_slot(func_obj, SLOT_MODULE_CTX));
@@ -45,23 +43,39 @@ static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value
   return js_module_eval_active_ns(js);
 }
 
+static inline ant_value_t sv_export_target_ns_from_closure(ant_t *js, sv_closure_t *closure) {
+  if (closure && is_object_type(closure->module_ctx)) {
+    ant_value_t ns = js_module_ctx_namespace(closure->module_ctx);
+    if (vtype(ns) == T_OBJ) return ns;
+  }
+  
+  ant_value_t func_obj = closure && closure->func_obj
+    ? closure->func_obj 
+    : js_mkundef();
+  
+  return sv_export_target_ns_from_func_obj(js, func_obj);
+}
+
 static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
   if (vtype(callee) == T_FUNC)
-    return sv_export_target_ns_from_func_obj(js, js_func_obj(callee));
+    return sv_export_target_ns_from_closure(js, js_func_closure(callee));
   return js_module_eval_active_ns(js);
 }
 
 static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
+  
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return tov(0);
-  if (t == T_NULL || t == T_UNDEF)
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Cannot convert undefined or null to object");
+  if (t == T_NULL || t == T_UNDEF) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  
   ant_value_t obj = mkobj(js, 0);
   ant_value_t obj_as_obj = js_as_obj(obj);
+  
   js_set_slot(obj_as_obj, SLOT_PRIMITIVE, v);
   vm->stack[vm->sp - 1] = obj;
+  
   return tov(0);
 }
 
@@ -69,6 +83,17 @@ static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   if (vtype(v) != T_STR && vtype(v) != T_SYMBOL)
     vm->stack[vm->sp - 1] = coerce_to_str(js, v);
+}
+
+static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
+  ant_value_t v = vm->stack[vm->sp - 1];
+  if (vtype(v) == T_STR) return js_mkundef();
+  
+  ant_value_t out = js_template_to_string(js, v);
+  if (is_err(out)) return out;
+  
+  vm->stack[vm->sp - 1] = out;
+  return js_mkundef();
 }
 
 static inline void sv_op_is_undef(sv_vm_t *vm) {
@@ -82,18 +107,20 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
 }
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
+  ant_value_t options = vm->stack[--vm->sp];
   ant_value_t specifier = vm->stack[--vm->sp];
   ant_value_t import_fn = js_get_module_import_binding(js);
-  
+
   if (vtype(import_fn) != T_FUNC && vtype(import_fn) != T_CFUNC)
     import_fn = js_getprop_fallback(js, js->global, "import");
-    
+
   if (vtype(import_fn) == T_FUNC || vtype(import_fn) == T_CFUNC) {
-    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, &specifier, 1, NULL, false);
+    ant_value_t call_args[2] = { specifier, options };
+    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, false);
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }
-  
+
   vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
   return tov(0);
 }
@@ -127,7 +154,7 @@ static inline bool sv_module_namespace_has_export(
 
   ant_value_t as_obj = js_as_obj(ns);
   if (is_proxy(as_obj)) return false;
-  if (lkp(js, as_obj, name, len) != 0) return true;
+  if (lkp(js, as_obj, name, len).obj) return true;
 
   prop_meta_t meta;
   return lookup_string_prop_meta(js, as_obj, name, len, &meta);
@@ -297,7 +324,7 @@ static inline bool sv_with_binding_is_unscopable(
     ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
-    uint32_t cache_epoch = ant_ic_epoch_counter;
+    uint32_t cache_epoch = ant_ic_obj_epoch_counter;
 
     if (
       js->runtime_cache.with_no_unscopables_epoch == cache_epoch &&
@@ -306,9 +333,9 @@ static inline bool sv_with_binding_is_unscopable(
       proto_ptr == js->runtime_cache.with_no_unscopables_proto &&
       (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
     ) return false;
-
-    ant_offset_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
-    bool has_unscopables = unscopables_off != 0;
+    
+    ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
+    bool has_unscopables = unscopables_off.obj;
     bool saw_exotic = base_ptr && base_ptr->flags.is_exotic;
 
     if (!has_unscopables) {
@@ -340,7 +367,7 @@ static inline bool sv_with_binding_is_unscopable(
       }
       return false;
     }
-    if (unscopables_off != 0) unscopables = js_propref_load(js, unscopables_off);
+    if (unscopables_off.obj) unscopables = js_prop_load(unscopables_off);
   }
 
   if (is_proxy_obj || vtype(unscopables) == T_UNDEF)
@@ -363,8 +390,8 @@ static inline bool sv_with_binding_is_unscopable(
       prop_meta_t meta;
       if (lookup_string_prop_meta(js, cur_obj, a->str, a->len, &meta)) {
         if (meta.has_getter || meta.has_setter) break;
-        ant_offset_t off = lkp(js, cur_obj, a->str, a->len);
-        blocked = off != 0 ? js_propref_load(js, off) : js_mkundef();
+        ant_prop_loc_t off = lkp(js, cur_obj, a->str, a->len);
+        blocked = off.obj ? js_prop_load(off) : js_mkundef();
         got_blocked_fast = true;
         break;
       }
@@ -451,11 +478,11 @@ static inline bool sv_try_get_with_bound_value(
     if (!should_fallback) return false;
   }
 
-  if (lkp(js, with_obj, a->str, a->len) == 0) return false;
+  if (!lkp(js, with_obj, a->str, a->len).obj) return false;
   bool abrupt = false;
   if (sv_with_binding_is_unscopable(js, with_obj, a, out, &abrupt)) return false;
   if (abrupt) return true;
-  *out = sv_getprop_fallback_len(js, with_obj, a->str, (ant_offset_t)a->len);
+  *out = js_getprop_fallback_len(js, with_obj, a->str, a->len);
   
   return true;
 }
@@ -552,7 +579,7 @@ static inline ant_value_t sv_op_with_put_var(
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
       if (is_err(has)) return has;
       has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
 
     if (has_binding) {
       ant_value_t out = js_mkundef();
@@ -591,7 +618,7 @@ static inline ant_value_t sv_op_with_del_var(
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
       if (is_err(has)) return has;
       has_binding = js_truthy(js, has);
-    } else has_binding = lkp(js, frame->with_obj, a->str, a->len) != 0;
+    } else has_binding = lkp(js, frame->with_obj, a->str, a->len).obj;
 
     if (has_binding) {
       ant_value_t out = js_mkundef();

@@ -6,7 +6,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 
@@ -271,11 +270,9 @@ static ant_value_t js_localstorage_setFile(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-void init_localstorage_module() {
-  ant_t *js = rt->js;
-  
+void init_localstorage_module(ant_t *js) {
   ant_value_t glob = js_glob(js);
-  const char *file_path = rt->ls_fp;
+  const char *file_path = js->runtime.ls_fp;
   
   if (file_path) {
     storage_file_path = strdup(file_path);

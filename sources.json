@@ -11,16 +11,20 @@
       "src/cli/*.c",
       "src/sandbox/*.c",
       "src/inspector/*.c",
-      "src/modules/*.c",
+      "src/modules/**/*.c",
       "src/streams/*.c",
       "src/silver/*.c",
       "src/http/*.c",
       "src/net/*.c"
     ],
-    "exclude": ["src/main.c"]
+    "exclude": [
+      "src/main.c"
+    ]
   },
   "library": {
-    "files": ["src/cli/version.c"],
+    "files": [
+      "src/cli/version.c"
+    ],
     "patterns": [
       "src/*.c",
       "src/*.cc",
@@ -31,13 +35,15 @@
       "src/esm/*.c",
       "src/sandbox/*.c",
       "src/inspector/*.c",
-      "src/modules/*.c",
+      "src/modules/**/*.c",
       "src/streams/*.c",
       "src/silver/*.c",
       "src/http/*.c",
       "src/net/*.c"
     ],
-    "exclude": ["src/main.c"]
+    "exclude": [
+      "src/main.c"
+    ]
   },
   "sandbox_backend": {
     "sections": {
@@ -56,7 +62,9 @@
         ]
       },
       "darwin": {
-        "files": ["src/sandbox/backends/darwin/backend.c"]
+        "files": [
+          "src/sandbox/backends/darwin/backend.c"
+        ]
       },
       "darwin_hvf": {
         "files": [
@@ -75,13 +83,19 @@
         ]
       },
       "windows": {
-        "files": ["src/sandbox/backends/windows/backend.c"]
+        "files": [
+          "src/sandbox/backends/windows/backend.c"
+        ]
       }
     }
   },
   "core": {
-    "patterns": ["src/core/**/*.ts"],
-    "exclude": ["src/core/index.ts"]
+    "patterns": [
+      "src/core/**/*.ts"
+    ],
+    "exclude": [
+      "src/core/index.ts"
+    ]
   },
   "builtins": {
     "patterns": [

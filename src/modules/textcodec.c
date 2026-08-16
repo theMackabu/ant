@@ -5,7 +5,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "utf8.h"
@@ -13,9 +12,6 @@
 #include "modules/textcodec.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
-
-static ant_value_t g_textencoder_proto = 0;
-static ant_value_t g_textdecoder_proto = 0;
 
 enum { TEXT_DECODER_NATIVE_TAG = 0x54444543u }; // TDEC
 
@@ -40,14 +36,37 @@ static void td_finalize(ant_t *js, ant_object_t *obj) {
 
 static int resolve_encoding(const char *s, size_t len) {
   static const struct { const char *label; uint8_t len; td_encoding_t enc; } map[] = {
-    {"unicode-1-1-utf-8", 17, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
-    {"unicode20utf8",     13, TD_ENC_UTF8},    {"utf-8",          5, TD_ENC_UTF8},
-    {"utf8",               4, TD_ENC_UTF8},    {"x-unicode20utf8",17, TD_ENC_UTF8},
-    {"windows-1252",      12, TD_ENC_WINDOWS_1252}, {"ascii",           5, TD_ENC_WINDOWS_1252},
-    {"unicodefffe",       11, TD_ENC_UTF16BE}, {"utf-16be",        8, TD_ENC_UTF16BE},
-    {"csunicode",          9, TD_ENC_UTF16LE}, {"iso-10646-ucs-2",16, TD_ENC_UTF16LE},
-    {"ucs-2",              5, TD_ENC_UTF16LE}, {"unicode",         7, TD_ENC_UTF16LE},
-    {"unicodefeff",       11, TD_ENC_UTF16LE}, {"utf-16",          6, TD_ENC_UTF16LE},
+    {"unicode-1-1-utf-8", 17, TD_ENC_UTF8},
+    {"unicode11utf8",     13, TD_ENC_UTF8},
+    {"unicode20utf8",     13, TD_ENC_UTF8},
+    {"utf-8",              5, TD_ENC_UTF8},
+    {"utf8",               4, TD_ENC_UTF8},
+    {"x-unicode20utf8",   17, TD_ENC_UTF8},
+    {"ansi_x3.4-1968",    14, TD_ENC_WINDOWS_1252},
+    {"ascii",              5, TD_ENC_WINDOWS_1252},
+    {"cp1252",             6, TD_ENC_WINDOWS_1252},
+    {"cp819",              5, TD_ENC_WINDOWS_1252},
+    {"csisolatin1",       11, TD_ENC_WINDOWS_1252},
+    {"ibm819",             6, TD_ENC_WINDOWS_1252},
+    {"iso-8859-1",        10, TD_ENC_WINDOWS_1252},
+    {"iso-ir-100",        10, TD_ENC_WINDOWS_1252},
+    {"iso8859-1",          9, TD_ENC_WINDOWS_1252},
+    {"iso88591",           8, TD_ENC_WINDOWS_1252},
+    {"iso_8859-1",        10, TD_ENC_WINDOWS_1252},
+    {"iso_8859-1:1987",   15, TD_ENC_WINDOWS_1252},
+    {"l1",                 2, TD_ENC_WINDOWS_1252},
+    {"latin1",             6, TD_ENC_WINDOWS_1252},
+    {"us-ascii",           8, TD_ENC_WINDOWS_1252},
+    {"windows-1252",      12, TD_ENC_WINDOWS_1252},
+    {"x-cp1252",           8, TD_ENC_WINDOWS_1252},
+    {"unicodefffe",       11, TD_ENC_UTF16BE},
+    {"utf-16be",           8, TD_ENC_UTF16BE},
+    {"csunicode",          9, TD_ENC_UTF16LE},
+    {"iso-10646-ucs-2",   16, TD_ENC_UTF16LE},
+    {"ucs-2",              5, TD_ENC_UTF16LE},
+    {"unicode",            7, TD_ENC_UTF16LE},
+    {"unicodefeff",       11, TD_ENC_UTF16LE},
+    {"utf-16",             6, TD_ENC_UTF16LE},
     {"utf-16le",           8, TD_ENC_UTF16LE},
     {"iso-8859-2",        10, TD_ENC_ISO_8859_2},
     {NULL, 0, 0}
@@ -81,19 +100,8 @@ static ant_value_t js_textencoder_get_encoding(ant_t *js, ant_value_t *args, int
 ant_value_t te_encode(ant_t *js, const char *str, size_t str_len) {
   ArrayBufferData *ab = create_array_buffer_data(str_len);
   if (!ab) return js_mkerr(js, "out of memory");
-  
-  if (str_len > 0) {
-    const uint8_t *s = (const uint8_t *)str;
-    uint8_t *d = ab->data; size_t i = 0;
-    
-    while (i < str_len) {
-    if (s[i] == 0xED && i + 2 < str_len && s[i+1] >= 0xA0 && s[i+1] <= 0xBF) {
-      d[i] = 0xEF; d[i+1] = 0xBF; d[i+2] = 0xBD;
-      i += 3;
-    } else { d[i] = s[i]; i++; }}
-  }
-  
-  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, str_len, "Uint8Array");
+  size_t written = utf8_export_into(str, str_len, ab->data, str_len, NULL);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, written, "Uint8Array");
 }
 
 static ant_value_t js_textencoder_encode(ant_t *js, ant_value_t *args, int nargs) {
@@ -132,37 +140,16 @@ static ant_value_t js_textencoder_encode_into(ant_t *js, ant_value_t *args, int 
   if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "Second argument must be a Uint8Array");
 
   uint8_t *dest = (ta->buffer && !ta->buffer->is_detached)
-    ? ta->buffer->data + ta->byte_offset : NULL;
-  size_t available = ta->byte_length;
-
-  const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str;
-  utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
-  utf8proc_ssize_t pos = 0;
+    ? ta->buffer->data 
+    + ta->byte_offset : NULL;
   
-  size_t written = 0;
+  size_t available = ta->byte_length;
   size_t read_units = 0;
-
-  while (pos < src_len) {
-    utf8proc_int32_t cp;
-    utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    utf8proc_uint8_t tmp[4];
-    utf8proc_ssize_t enc_len;
-    
-    if (cp >= 0xD800 && cp <= 0xDFFF) {
-      tmp[0] = 0xEF; tmp[1] = 0xBF; tmp[2] = 0xBD;
-      enc_len = 3;
-    } else {
-      enc_len = (cp >= 0) ? utf8proc_encode_char(cp, tmp) : 0;
-      if (enc_len <= 0) { tmp[0] = 0xEF; tmp[1] = 0xBF; tmp[2] = 0xBD; enc_len = 3; }
-    }
-    
-    if (written + (size_t)enc_len > available) break;
-    if (dest) memcpy(dest + written, tmp, (size_t)enc_len);
-    
-    written += (size_t)enc_len;
-    pos += n;
-    read_units += (cp >= 0x10000 && cp <= 0x10FFFF) ? 2 : 1;
-  }
+  
+  size_t written = utf8_export_into(
+    str, str_len, dest, 
+    available, &read_units
+  );
 
   ant_value_t result = js_mkobj(js);
   js_set(js, result, "read", js_mknum((double)read_units));
@@ -175,7 +162,7 @@ static ant_value_t js_textencoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextEncoder constructor requires 'new'");
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_textencoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textencoder_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -424,7 +411,7 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_textdecoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textdecoder_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TEXT_DECODER_NATIVE_TAG);
@@ -433,28 +420,27 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   return obj;
 }
 
-void init_textcodec_module(void) {
-  ant_t *js = rt->js;
+void init_textcodec_module(ant_t *js) {
   ant_value_t g = js_glob(js);
 
-  g_textencoder_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_textencoder_proto, "encoding", 8, js_mkfun(js_textencoder_get_encoding), JS_DESC_C);
-  js_set(js, g_textencoder_proto, "encode",     js_mkfun(js_textencoder_encode));
-  js_set(js, g_textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
-  js_set_sym(js, g_textencoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
+  js->builtins.textencoder_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.textencoder_proto, "encoding", 8, js_mkfun(js_textencoder_get_encoding), JS_DESC_C);
+  js_set(js, js->builtins.textencoder_proto, "encode",     js_mkfun(js_textencoder_encode));
+  js_set(js, js->builtins.textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
+  js_set_sym(js, js->builtins.textencoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
   
-  ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, g_textencoder_proto, "TextEncoder", 11);
+  ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, js->builtins.textencoder_proto, "TextEncoder", 11);
   js_set(js, g, "TextEncoder", te_ctor);
   js_set_descriptor(js, g, "TextEncoder", 11, JS_DESC_W | JS_DESC_C);
 
-  g_textdecoder_proto = js_mkobj(js);
-  js_set_getter_desc(js, g_textdecoder_proto, "encoding",  8, js_mkfun(js_textdecoder_get_encoding),  JS_DESC_C);
-  js_set_getter_desc(js, g_textdecoder_proto, "fatal",     5, js_mkfun(js_textdecoder_get_fatal),     JS_DESC_C);
-  js_set_getter_desc(js, g_textdecoder_proto, "ignoreBOM", 9, js_mkfun(js_textdecoder_get_ignore_bom), JS_DESC_C);
-  js_set(js, g_textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
-  js_set_sym(js, g_textdecoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
+  js->builtins.textdecoder_proto = js_mkobj(js);
+  js_set_getter_desc(js, js->builtins.textdecoder_proto, "encoding",  8, js_mkfun(js_textdecoder_get_encoding),  JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.textdecoder_proto, "fatal",     5, js_mkfun(js_textdecoder_get_fatal),     JS_DESC_C);
+  js_set_getter_desc(js, js->builtins.textdecoder_proto, "ignoreBOM", 9, js_mkfun(js_textdecoder_get_ignore_bom), JS_DESC_C);
+  js_set(js, js->builtins.textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
+  js_set_sym(js, js->builtins.textdecoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
   
-  ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, g_textdecoder_proto, "TextDecoder", 11);
+  ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, js->builtins.textdecoder_proto, "TextDecoder", 11);
   js_set(js, g, "TextDecoder", td_ctor);
   js_set_descriptor(js, g, "TextDecoder", 11, JS_DESC_W | JS_DESC_C);
 }

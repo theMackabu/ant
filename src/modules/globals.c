@@ -15,7 +15,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "silver/engine.h"
@@ -163,11 +162,10 @@ void js_fire_rejection_handled(ant_t *js, ant_value_t promise_val, ant_value_t r
   sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, false);
 }
 
-void init_globals_module(void) {
-  ant_t *js = rt->js;
+void init_globals_module(ant_t *js) {
   ant_value_t global = js_glob(js);
 
-  if (rt->flags & ANT_RUNTIME_WEB) {
+  if (js->runtime.flags & ANT_RUNTIME_WEB) {
     js_set(js, global, "location", make_global_location(js));
     js_set_descriptor(js, global, "location", 8, JS_DESC_W | JS_DESC_C);
   }

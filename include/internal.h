@@ -54,35 +54,83 @@
 //   vdata(v)          = v & 0x7FFFFFFFFFFF
 //   is_tagged(v)      = v > PREFIX
 
-#define NANBOX_TYPE_MASK   0x1F
-#define NANBOX_TYPE_SHIFT  0x2F
-#define NANBOX_HEAP_OFFSET 0x8
-#define NANBOX_PREFIX      0xFFF0000000000000ULL
-#define NANBOX_DATA_MASK   0x00007FFFFFFFFFFFULL
+static constexpr uint64_t NANBOX_TYPE_MASK  = 0x1F;
+static constexpr uint64_t NANBOX_TYPE_SHIFT = 0x2F;
+static constexpr uint64_t NANBOX_PREFIX     = 0xFFF0000000000000;
+static constexpr uint64_t NANBOX_DATA_MASK  = 0x00007FFFFFFFFFFF;
 
-#define JS_ERR_NO_STACK  (1 << 8)
-#define JS_TPFLG(t)      (1u << (t))
+static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
+static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
+static constexpr uint32_t PROTO_WALK_F_LOOKUP      = 1u << 1;
 
-#define ROPE_MAX_DEPTH        4096
-#define MAX_STRINGIFY_DEPTH   64
-#define MAX_PROTO_CHAIN_DEPTH 256
-#define MAX_MULTIREF_OBJS     128
-#define MAX_DENSE_INITIAL_CAP 8
+static constexpr int JS_ERR_NO_STACK          = 1 << 8;
+static constexpr int MAX_STRINGIFY_DEPTH      = 64;
+static constexpr int MAX_PROTO_CHAIN_DEPTH    = 256;
+static constexpr int MAX_MULTIREF_OBJS        = 128;
+static constexpr int MAX_DENSE_INITIAL_CAP    = 8;
+static constexpr int STR_SHORT_CONS_THRESHOLD = 13;
 
-#define PROTO_WALK_F_OBJECT_ONLY (1u << 0)
-#define PROTO_WALK_F_LOOKUP      (1u << 1)
+static inline bool ant_value_stack_push_with_spill(
+  ant_value_t **stack, size_t *sp, size_t *cap,
+  ant_value_t *local, ant_value_t value
+) {
+  if (*sp == *cap) {
+    size_t next_cap = *cap * 2u;
+    
+    ant_value_t *next = *stack == local
+      ? (ant_value_t *)malloc(next_cap * sizeof(*next))
+      : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
+      
+    if (!next) return false;
+    if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
+    
+    *stack = next;
+    *cap = next_cap;
+  }
+  
+  (*stack)[(*sp)++] = value;
+  return true;
+}
 
-#define STR_BUILDER_TAIL_CAP 256u
-#define STR_HEAP_TAG_MASK    0x3ULL
-#define STR_HEAP_TAG_FLAT    0x0ULL
-#define STR_HEAP_TAG_ROPE    0x1ULL
-#define STR_HEAP_TAG_BUILDER 0x2ULL
+enum: uint64_t {
+  STR_META_ASCII_SHIFT = 56,
+  STR_META_VALID_SHIFT = 58,
+  STR_BUILDER_TAIL_CAP = 256,
+};
 
-#define T_EMPTY                (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | 0xDEADULL)
-#define T_SPECIAL_OBJECT_MASK  (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR))
-#define T_NEEDS_PROTO_FALLBACK (JS_TPFLG(T_FUNC) | JS_TPFLG(T_ARR) | JS_TPFLG(T_PROMISE) | JS_TPFLG(T_GENERATOR))
-#define T_OBJECT_MASK          (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR) | JS_TPFLG(T_FUNC) | JS_TPFLG(T_PROMISE) | JS_TPFLG(T_GENERATOR))
-#define T_NON_NUMERIC_MASK     (JS_TPFLG(T_STR)  | JS_TPFLG(T_ARR) | JS_TPFLG(T_FUNC) | JS_TPFLG(T_CFUNC) | JS_TPFLG(T_OBJ) | JS_TPFLG(T_GENERATOR))
+enum {
+  STR_UTF_UNKNOWN = 0,
+  STR_UTF_VALID = 1,
+  STR_UTF_INVALID = 2,
+  STR_UTF_INVALID_SAME_LENGTH = 3,
+};
+
+enum: uint64_t {
+  STR_HEAP_TAG_MASK    = 0x3,
+  STR_HEAP_TAG_FLAT    = 0x0,
+  STR_HEAP_TAG_ROPE    = 0x1,
+  STR_HEAP_TAG_BUILDER = 0x2,
+};
+
+static constexpr uint64_t STR_META_FIELD_MASK   = 0x3;
+static constexpr uint64_t STR_META_UTF16_MASK   = (UINT64_C(1) << STR_META_ASCII_SHIFT) - 1;
+static constexpr uint64_t STR_META_ASCII_MASK   = STR_META_FIELD_MASK << STR_META_ASCII_SHIFT;
+static constexpr uint64_t STR_META_VALID_MASK   = STR_META_FIELD_MASK << STR_META_VALID_SHIFT;
+static constexpr uint64_t STR_META_STATE_MASK   = ~STR_META_UTF16_MASK;
+static constexpr uint64_t STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK;
+
+#define T_FLAG_FIND(t) (1u << (t))
+#define T_MASK_HOLD ()
+#define T_MASK_EXPAND(...) T_MASK_E1(T_MASK_E1(T_MASK_E1(T_MASK_E1(__VA_ARGS__))))
+#define T_MASK_E1(...)     T_MASK_E2(T_MASK_E2(T_MASK_E2(T_MASK_E2(__VA_ARGS__))))
+#define T_MASK_E2(...)     __VA_ARGS__
+#define T_MASK_STEP(a, ...) \
+  T_FLAG_FIND(a) __VA_OPT__(| T_MASK_AGAIN T_MASK_HOLD (__VA_ARGS__))
+#define T_MASK_AGAIN() T_MASK_STEP
+#define T_MASK(...) (T_MASK_EXPAND(T_MASK_STEP(__VA_ARGS__)))
+
+#define ANT_SENTINEL(payload) \
+  (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | (payload))
 
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
@@ -122,6 +170,33 @@ enum {
   T_SENTINEL = NANBOX_TYPE_MASK
 };
 
+enum: uint32_t {
+  T_SPECIAL_OBJECT_MASK  = T_MASK(T_OBJ, T_ARR),
+  T_NEEDS_PROTO_FALLBACK = T_MASK(T_FUNC, T_ARR, T_PROMISE, T_GENERATOR),
+  T_OBJECT_MASK          = T_MASK(T_OBJ, T_ARR, T_FUNC, T_PROMISE, T_GENERATOR),
+  T_NON_NUMERIC_MASK     = T_MASK(T_STR, T_ARR, T_FUNC, T_CFUNC, T_OBJ, T_GENERATOR),
+};
+
+static_assert(T_MASK(T_OBJ) == T_FLAG_FIND(T_OBJ), "T_MASK single");
+
+static_assert(
+  T_NON_NUMERIC_MASK == (
+    T_FLAG_FIND(T_STR)   | 
+    T_FLAG_FIND(T_ARR)   | 
+    T_FLAG_FIND(T_FUNC)  | 
+    T_FLAG_FIND(T_CFUNC) |
+    T_FLAG_FIND(T_OBJ)   |
+    T_FLAG_FIND(T_GENERATOR)),
+  "T_MASK variadic expansion"
+);
+
+enum: ant_value_t {
+  T_EMPTY             = ANT_SENTINEL(0xDEADULL),  // empty slot / array hole / TDZ
+  SV_JIT_BAILOUT      = ANT_SENTINEL(0xBA110ULL), // JIT -> interpreter bailout
+  SV_AITER_ARRAY_TAG  = ANT_SENTINEL(0xFA1ULL),   // for-await plain-array mode
+  SV_AITER_AWAIT_MARK = ANT_SENTINEL(0xFA2ULL),   // for-await element await resume
+};
+
 typedef struct {
   const char *src;
   const char *filename;
@@ -133,21 +208,30 @@ typedef struct {
 
 struct ant_isolate_t {
   sv_vm_t *vm;
-  
-  ant_module_t *module;
+
   ant_object_t *objects;
   ant_object_t *permanent_objects;
-  
-  ant_fixed_arena_t obj_arena;
-  ant_prop_ref_t *prop_refs;
+  ant_process_state_t *process_state;
+  ant_events_state_t *events_state;
+  ant_regex_state_t *regex_state;
 
+  ant_fixed_arena_t obj_arena;
   ant_fixed_arena_t closure_arena;
   ant_fixed_arena_t upvalue_arena;
+
+  uint32_t next_ic_object_identity;
+  uint32_t prototype_write_epoch;
+
+  ant_shape_t ***ic_shape_ref_slots;
+  size_t ic_shape_ref_len;
+  size_t ic_shape_ref_cap;
   
   ant_value_t **c_roots;
   size_t c_root_count;
   size_t c_root_cap;
+  
   struct gc_temp_root_scope *temp_roots;
+  struct coroutine *retired_coroutines;
 
   const char *code;
   const char *filename;
@@ -156,6 +240,7 @@ struct ant_isolate_t {
   void *jit_ctx;
   #endif
   
+  ant_value_t Ant;
   ant_value_t global;
   ant_value_t this_val;
   ant_value_t new_target;
@@ -163,9 +248,18 @@ struct ant_isolate_t {
   ant_value_t length_str;
   
   struct {
+    ant_value_t hooks;
+    ant_value_t import_meta;
+    ant_esm_state_t *state;
+    ant_module_t *module_stack;
+  } esm;
+  
+  struct {
     const char *length;
     const char *buffer;
     const char *prototype;
+    const char *exec;
+    const char *replace;
     const char *constructor;
     const char *name;
     const char *message;
@@ -186,14 +280,23 @@ struct ant_isolate_t {
     void *main_base;
     void *main_lo;
     size_t limit;
+    void *floor;
   } cstk;
 
+  // TODO: rename to uppercase
   struct {
-    uint64_t counter;
     struct sym_registry_entry *registry;
 
     ant_value_t object_proto;
     ant_value_t array_proto;
+    ant_value_t function_proto;
+    ant_value_t string_proto;
+    ant_value_t number_proto;
+    ant_value_t boolean_proto;
+    ant_value_t promise_proto;
+    ant_value_t bigint_proto;
+    ant_value_t symbol_proto;
+    ant_value_t array_values_fn;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;
@@ -201,11 +304,22 @@ struct ant_isolate_t {
     ant_value_t async_generator_proto;
     ant_value_t async_iterator_proto;
   } sym;
+
+  struct {
+    #define ANT_BUILTIN(name) ant_value_t name;
+    #define ANT_BUILTIN_ARR(name, n) ant_value_t name[n];
+    #include "isolate_values.h"
+  } builtins;
+
+  struct {
+    #define ANT_MUTABLE_ROOT(name) ant_value_t name;
+    #define ANT_MUTABLE_ROOT_ARR(name, n) ant_value_t name[n];
+    #include "isolate_values.h"
+  } mutable_roots;
   
   ant_offset_t max_size;
-  ant_offset_t prop_refs_len;
-  ant_offset_t prop_refs_cap;
   js_error_site_t errsite;
+  double perf_time_origin_ms;
 
   struct {
     ant_pool_t rope;
@@ -218,10 +332,15 @@ struct ant_isolate_t {
   struct {
     size_t closures;
     size_t upvalues;
+    size_t arrays;
   } alloc_bytes;
   
   size_t gc_last_live;
   size_t gc_pool_alloc;
+  size_t gc_closure_alloc;
+  size_t gc_closure_at_minor;
+  size_t gc_closure_wm_at_major;
+  size_t gc_closure_wm_minor_tried;
   size_t gc_pool_last_live;
 
   ant_object_t *objects_old;
@@ -244,9 +363,56 @@ struct ant_isolate_t {
 
   size_t remembered_upvalue_len;
   size_t remembered_upvalue_cap;
-  
   struct sv_upvalue **remembered_upvalues;
+
+  size_t remembered_closure_len;
+  size_t remembered_closure_cap;
+  struct sv_closure **remembered_closures;
+
+  struct sv_closure **young_closures;
+  size_t young_closure_len;
+  size_t young_closure_cap;
+  
+  struct sv_upvalue **young_upvalues;
+  size_t young_upvalue_len;
+  size_t young_upvalue_cap;
+  
+  size_t young_closure_trigger;
+  size_t gc_closure_promoted_since_major;
+
   bool gc_remember_overflow;
+  bool gc_objects_running;
+  bool gc_use_nursery_major_floor;
+
+  struct {
+    ant_object_t **collections;
+    size_t collection_len;
+    size_t collection_cap;
+    
+    ant_value_t *kept_alive;
+    size_t kept_alive_len;
+    size_t kept_alive_cap;
+    
+    struct {
+      ant_object_t *owner;
+      ant_value_t key;
+      ant_value_t value;
+      uint8_t kind;
+    } *minor_edges;
+    
+    size_t minor_edge_len;
+    size_t minor_edge_cap;
+    
+    void *pending;
+    void (*mark)(ant_t *js, ant_value_t value);
+    bool (*key_alive)(ant_t *js, ant_value_t key);
+    
+    bool registry_overflow;
+    bool minor_edge_overflow;
+    bool pending_active;
+    bool pending_oom;
+    bool kept_alive_overflow;
+  } weak_gc;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
@@ -278,21 +444,56 @@ struct ant_isolate_t {
   } cfunc_name_cache;
 
   struct {
-    ant_object_t *function_proto_obj;
     ant_object_t *with_no_unscopables_base;
     ant_object_t *with_no_unscopables_proto;
-
     void *with_no_unscopables_base_shape;
     void *with_no_unscopables_proto_shape;
-
     uint32_t with_no_unscopables_epoch;
-    uint32_t function_proto_epoch;
   } runtime_cache;
+
+  struct {
+    char **argv;
+    const char *ls_fp;
+    int argc;
+    int pid;
+    unsigned int flags;
+  } runtime;
 
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;
+
+  struct {
+    ant_pool_t young;
+    ant_pool_t old;
+    
+    size_t young_alloc;
+    struct gc_rope_mark *marks;
+    
+    size_t mark_count;
+    size_t mark_cap;
+    
+    uint32_t mark_epoch;
+    bool minor_marking;
+    bool conservative_marking;
+    
+    ant_string_builder_t **remembered_builders;
+    size_t remembered_builder_len;
+    size_t remembered_builder_cap;
+  } rope_gc;
 };
+
+static inline void ant_prototype_write_epoch_bump(ant_t *js) {
+  if (++js->prototype_write_epoch == 0) {
+    ant_ic_epoch_bump();
+    js->prototype_write_epoch = 1;
+  }
+}
+
+static inline void ant_prototype_property_write_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
+  if (!js || !holder || !key) return;
+  if (key == js->intern.prototype) ant_prototype_write_epoch_bump(js);
+}
 
 enum {
   STR_ASCII_UNKNOWN = 0,
@@ -302,24 +503,48 @@ enum {
 
 typedef struct {
   ant_offset_t len;
-  uint8_t is_ascii;
+  uint64_t meta;
   char bytes[];
 } ant_flat_string_t;
+
+static_assert(
+  sizeof(ant_flat_string_t) == 16,
+  "flat string header must remain 16 bytes"
+);
+
+static_assert(
+  offsetof(ant_flat_string_t, bytes) == sizeof(ant_flat_string_t),
+  "flat string bytes must follow packed metadata"
+);
+
+static_assert(
+  offsetof(ant_large_string_alloc_t, meta) - offsetof(ant_large_string_alloc_t, len) ==
+    offsetof(ant_flat_string_t, meta),
+  "large and pooled string metadata layouts must match"
+);
+
+static_assert(
+  offsetof(ant_large_string_alloc_t, bytes) - offsetof(ant_large_string_alloc_t, len) ==
+    offsetof(ant_flat_string_t, bytes),
+  "large and pooled string byte layouts must match"
+);
 
 typedef struct ant_builder_chunk {
   struct ant_builder_chunk *next;
   ant_value_t value;
 } ant_builder_chunk_t;
 
-typedef struct {
+struct ant_string_builder {
   ant_offset_t len;
+  ant_value_t snapshot;
   ant_builder_chunk_t *head;
   ant_builder_chunk_t *chunk_tail;
   ant_value_t cached;
   uint16_t tail_len;
   uint8_t ascii_state;
+  uint8_t in_remember_set;
   char tail[STR_BUILDER_TAIL_CAP];
-} ant_string_builder_t;
+};
 
 typedef struct {
   const char *ptr;
@@ -359,8 +584,14 @@ static inline bool is_undefined(ant_value_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-static inline bool is_empty_slot(ant_value_t v) { 
-  return v == T_EMPTY; 
+static inline bool is_empty_slot(ant_value_t v) {
+  return v == T_EMPTY;
+}
+
+static inline void js_cstk_refresh_floor(ant_t *js) {
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit) 
+    ? (void *)(base - js->cstk.limit) : NULL;
 }
 
 static inline bool is_callable(ant_value_t v) {
@@ -396,18 +627,24 @@ ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t k
 
 ant_value_t tov(double d);
 double tod(ant_value_t v);
+
 double js_to_number(ant_t *js, ant_value_t arg);
+double js_parse_int_value(ant_t *js, ant_value_t arg);
+double js_parse_float_value(ant_t *js, ant_value_t arg);
 
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed);
 bool js_obj_ensure_unique_shape(ant_object_t *obj);
 
-ant_value_t js_propref_load(ant_t *js, ant_offset_t handle);
+ant_value_t js_template_to_string(ant_t *js, ant_value_t v);
+ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
+
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
+ant_value_t mkprop_exact_attrs(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
+
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
-ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
 // TODO: move into builder.c
 typedef struct {
@@ -438,6 +675,7 @@ bool js_inspect_header_for(js_inspect_builder_t *builder, ant_value_t obj, const
 ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder);
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
+ant_value_t js_construct_native(ant_t *js, ant_cfunc_t ctor, ant_value_t *args, int nargs);
 
 ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs);
@@ -447,7 +685,8 @@ ant_value_t js_create_arguments_object(ant_t *js, sv_vm_t *vm, ant_value_t calle
 
 void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
-void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, sv_vm_t *vm, int frame_index);
+void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index);
+void js_arguments_bind_direct(ant_t *js, ant_value_t obj, struct sv_frame *frame);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -458,20 +697,24 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 const char *intern_string(const char *str, size_t len);
+const char *intern_find(const char *str, size_t len);
+
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
+js_cstr_t js_inspect_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
 
-ant_value_t  lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
-ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern);
+ant_value_t lkp_interned_val(ant_t *js, ant_value_t obj, const char *search_intern);
+ant_prop_loc_t lkp_interned(ant_value_t obj, const char *search_intern);
 
-ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
-ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);
+ant_prop_loc_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
+ant_prop_loc_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);
 
-ant_offset_t lkp_sym(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
-ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
+ant_prop_loc_t lkp_sym(ant_value_t obj, ant_offset_t sym_off);
+ant_prop_loc_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 
 ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len);
 ant_offset_t vstrlen(ant_t *js, ant_value_t value);
 ant_offset_t str_len_fast(ant_t *js, ant_value_t str);
+ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 
 ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
@@ -514,14 +757,20 @@ sv_func_t *js_compile_parsed_bytecode(
 bool is_proxy(ant_value_t obj);
 bool is_array_value(ant_value_t value);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
+bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
+bool utf8_validate_bytes(const char *str, size_t byte_len);
 
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   ant_t *js, const char *buf, size_t len,
   bool inherit_strict, ant_value_t this_val, ant_value_t eval_env
 );
 
-ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func);
+ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
+ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value);
+ant_value_t js_resolve_bound_target(ant_value_t value);
+ant_value_t js_resolve_bound_target_known_bound(ant_value_t value);
+ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func, js_async_entry_t **async_entry_out);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
 ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs);
@@ -553,6 +802,14 @@ bool lookup_prop_meta(
   ant_offset_t sym_off, prop_meta_t *out
 );
 
+size_t intern_length(const char *interned);
+size_t utf8_export_length_slow(const char *str, size_t str_len);
+
+size_t utf8_export_into(
+  const char *str, size_t str_len, uint8_t *dst, 
+  size_t dst_len, size_t *out_read_units
+);
+
 static inline ant_module_t *js_active_tla_module_ctx(ant_t *js) {
   if (!js) return NULL;
   for (coroutine_t *coro = js->active_async_coro; coro; coro = coro->active_parent)
@@ -578,7 +835,7 @@ static inline ant_value_t js_current_func_module_ns(ant_t *js) {
 }
 
 static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
-  ant_module_t *ctx = js->module;
+  ant_module_t *ctx = js->esm.module_stack;
   if (ctx) return ctx->module_ns;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   if (ctx) return ctx->module_ns;
@@ -586,7 +843,7 @@ static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
 }
 
 static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
-  ant_module_t *ctx = js->module;
+  ant_module_t *ctx = js->esm.module_stack;
   if (ctx) return ctx->module_ctx;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   return ctx ? ctx->module_ctx : js_mkundef();
@@ -607,7 +864,7 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
 }
 
 static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
-  ant_module_t *ctx = js->module;
+  ant_module_t *ctx = js->esm.module_stack;
   if (ctx) return ctx->format;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   return ctx ? ctx->format : MODULE_EVAL_FORMAT_UNKNOWN;
@@ -680,6 +937,17 @@ static inline ant_value_t defalias(ant_t *js, ant_value_t obj, const char *name,
   );
 }
 
+static inline void js_set_global_builtin(
+  ant_t *js,
+  const char *name,
+  ant_value_t value
+) {
+  ant_value_t global = js->global;
+  size_t name_len = strlen(name);
+  js_set(js, global, name, value);
+  js_set_descriptor(js, global, name, name_len, JS_DESC_W | JS_DESC_C);
+}
+
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
 }
@@ -706,17 +974,74 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   return STR_ASCII_YES;
 }
 
+static inline uint8_t str_flat_ascii_state(const ant_flat_string_t *flat) {
+  if (!flat) return STR_ASCII_UNKNOWN;
+  return (uint8_t)((flat->meta & STR_META_ASCII_MASK) >> STR_META_ASCII_SHIFT);
+}
+
+static inline uint8_t str_flat_utf_valid_state(const ant_flat_string_t *flat) {
+  if (!flat) return STR_UTF_UNKNOWN;
+  return (uint8_t)((flat->meta & STR_META_VALID_MASK) >> STR_META_VALID_SHIFT);
+}
+
+static inline void str_flat_set_utf_valid_state(ant_flat_string_t *flat, uint8_t state) {
+  if (!flat) return;
+  flat->meta = (flat->meta & ~STR_META_VALID_MASK) | (
+    ((uint64_t)state << STR_META_VALID_SHIFT) & STR_META_VALID_MASK);
+}
+
+static inline ant_offset_t str_flat_cached_utf16_len(const ant_flat_string_t *flat) {
+  return flat ? (ant_offset_t)(flat->meta & STR_META_UTF16_MASK) : STR_UTF16_LEN_UNKNOWN;
+}
+
+static inline void str_flat_init_meta(ant_flat_string_t *flat, uint8_t ascii_state) {
+  if (!flat) return;
+  flat->meta = ((uint64_t)ascii_state << STR_META_ASCII_SHIFT) | STR_UTF16_LEN_UNKNOWN;
+}
+
+static inline void str_flat_set_utf16_len(ant_flat_string_t *flat, ant_offset_t len) {
+  if (!flat) return;
+  flat->meta = (flat->meta & STR_META_STATE_MASK) | (len & STR_META_UTF16_MASK);
+}
+
 static inline void str_set_ascii_state(const char *str, uint8_t state) {
   ant_flat_string_t *flat = str_flat_from_bytes(str);
-  flat->is_ascii = state;
+  str_flat_init_meta(flat, state);
 }
 
 static inline bool str_is_ascii(const char *str) {
   ant_flat_string_t *flat = str_flat_from_bytes(str);
-  if (flat->is_ascii == STR_ASCII_UNKNOWN) {
-    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  uint8_t state = str_flat_ascii_state(flat);
+  if (state == STR_ASCII_UNKNOWN) {
+    state = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+    str_flat_init_meta(flat, state);
   }
-  return flat->is_ascii == STR_ASCII_YES;
+  return state == STR_ASCII_YES;
+}
+
+static inline bool str_is_valid_utf8(const char *str) {
+  if (str_is_ascii(str)) return true;
+
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  uint8_t state = str_flat_utf_valid_state(flat);
+  
+  if (state == STR_UTF_UNKNOWN) {
+    state = utf8_validate_bytes(flat->bytes, (size_t)flat->len) 
+      ? STR_UTF_VALID : STR_UTF_INVALID;
+    str_flat_set_utf_valid_state(flat, state);
+  }
+  
+  return state == STR_UTF_VALID;
+}
+
+static inline size_t utf8_export_length(const char *str, size_t str_len) {
+  if (str_len == 0) return 0;
+  
+  uint8_t state = str_flat_utf_valid_state(str_flat_from_bytes(str));
+  if (state == STR_UTF_VALID || state == STR_UTF_INVALID_SAME_LENGTH) return str_len;  
+  if (state == STR_UTF_UNKNOWN && str_is_ascii(str)) return str_len;
+  
+  return utf8_export_length_slow(str, str_len);
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {
@@ -742,7 +1067,7 @@ static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t pr
   js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
   js_set_descriptor(js, obj, "name", 4, 0);
 
-  ant_value_t fn_val = js_obj_to_func(obj);
+  ant_value_t fn_val = js_obj_to_func(js, obj);
   js_set(js, proto, "constructor", fn_val);
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 

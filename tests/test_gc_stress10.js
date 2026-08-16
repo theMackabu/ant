@@ -40,7 +40,7 @@ for (let frame = 0; frame < 50000; frame++) {
   const a = stats.alloc, M = 1024 * 1024;
   const total = (stats.pools.totalUsed + a.total) / M;
   console.log(
-    `frame ${frame}: pools ${(stats.pools.totalUsed/M).toFixed(1)}MB obj ${(a.objects/M).toFixed(1)}MB shp ${(a.shapes/M).toFixed(1)}MB arr ${(a.arrays/M).toFixed(1)}MB refs ${(a.propRefs/M).toFixed(1)}MB cls ${(a.closures/M).toFixed(1)}MB uv ${(a.upvalues/M).toFixed(1)}MB ov ${(a.overflow/M).toFixed(1)}MB | ${total.toFixed(1)}MB rss ${(stats.rss/M).toFixed(1)}MB ${elapsed}s`
+    `frame ${frame}: pools ${(stats.pools.totalUsed/M).toFixed(1)}MB obj ${(a.objects/M).toFixed(1)}MB shp ${(a.shapes/M).toFixed(1)}MB arr ${(a.arrays/M).toFixed(1)}MB cls ${(a.closures/M).toFixed(1)}MB uv ${(a.upvalues/M).toFixed(1)}MB ov ${(a.overflow/M).toFixed(1)}MB | ${total.toFixed(1)}MB rss ${(stats.rss/M).toFixed(1)}MB ${elapsed}s`
   );
 }
 

@@ -4,14 +4,11 @@
 #include "common.h"
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 #include "descriptors.h"
 
-#include "gc/modules.h"
 #include "modules/symbol.h"
 #include "modules/domexception.h"
 
-static ant_value_t g_domexception_proto = 0;
 static bool g_initialized = false;
 
 static const struct { const char *name; int code; } domex_codes[] = {
@@ -124,7 +121,7 @@ ant_value_t make_dom_exception(ant_t *js, const char *message, const char *name)
   int code = name_to_code(name);
 
   ant_value_t obj = js_mkobj(js);
-  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_domexception_proto);
+  if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, js->builtins.domexception_proto);
 
   js_set(js, obj, "message", js_mkstr(js, message, msg_len));
   js_set(js, obj, "name",    js_mkstr(js, name,    name_len));
@@ -136,12 +133,11 @@ ant_value_t make_dom_exception(ant_t *js, const char *message, const char *name)
   return obj;
 }
 
-void init_domexception_module(void) {
-  ant_t *js = rt->js;
+void init_domexception_module(ant_t *js) {
   ant_value_t global = js_glob(js);
-
   ant_value_t proto = js_mkobj(js);
-  g_domexception_proto = proto;
+  
+  js->builtins.domexception_proto = proto;
   g_initialized = true;
 
   ant_value_t error_proto = js_get_ctor_proto(js, "Error", 5);
@@ -163,14 +159,10 @@ void init_domexception_module(void) {
   js_set_descriptor(js, ctor, "name", 4, 0);
   set_constants(js, ctor);
 
-  ant_value_t fn = js_obj_to_func(ctor);
+  ant_value_t fn = js_obj_to_func(js, ctor);
   js_set(js, proto, "constructor", fn);
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   js_set(js, global, "DOMException", fn);
   js_set_descriptor(js, global, "DOMException", 12, JS_DESC_W | JS_DESC_C);
-}
-
-void gc_mark_domexception(ant_t *js, gc_mark_fn mark) {
-  if (g_initialized) mark(js, g_domexception_proto);
 }

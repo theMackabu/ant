@@ -70,6 +70,30 @@ const p = Reflect.construct(Point, [3, 4]);
 test('Reflect.construct x', p.x, 3);
 test('Reflect.construct y', p.y, 4);
 
+let nativeConstructError;
+try {
+  Reflect.construct(setTimeout, [() => {}, 0]);
+} catch (error) {
+  nativeConstructError = error;
+}
+test(
+  'Reflect.construct rejects native non-constructor',
+  nativeConstructError instanceof TypeError,
+  true
+);
+test('native non-constructor may expose prototype', typeof setTimeout.prototype, 'object');
+nativeConstructError = undefined;
+try {
+  Reflect.construct(setTimeout, [() => {}, 0]);
+} catch (error) {
+  nativeConstructError = error;
+}
+test(
+  'Reflect.construct still rejects promoted native non-constructor',
+  nativeConstructError instanceof TypeError,
+  true
+);
+
 function greet(greeting) {
   return greeting + ' ' + this.name;
 }

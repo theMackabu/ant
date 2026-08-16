@@ -4,29 +4,15 @@
 #include "types.h"
 struct arg_file;
 
-#define ANT_RUNTIME_CRYPTO_INIT (1u << 0)
-#define ANT_RUNTIME_WEB         (1u << 1)
-
 #define CODE_ARENA_BLOCK_SIZE (64 * 1024)
 #define CODE_ARENA_ALIGNMENT  8u
-
-struct ant_runtime {
-  ant_t *js;
-  char **argv;
-  ant_value_t ant_obj;
-  int argc;
-  int pid;
-  unsigned int flags;
-  const char *ls_fp;
-};
 
 typedef struct {
   void *block;
   size_t used;
 } code_arena_mark_t;
 
-extern struct ant_runtime *const rt;
-struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p);
+void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p);
 
 size_t code_arena_get_memory(void);
 const char *code_arena_alloc(const char *code, size_t len);
@@ -43,8 +29,7 @@ void parse_arena_rewind(code_arena_mark_t mark);
 void parse_arena_reset(void);
 void *parse_arena_bump(size_t size);
 
-void destroy_runtime(ant_t *js);
 void *code_arena_bump(size_t size);
-void ant_runtime_set_argv(int argc, char **argv);
+void ant_runtime_set_argv(ant_t *js, int argc, char **argv);
 
 #endif

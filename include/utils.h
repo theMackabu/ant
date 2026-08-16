@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include "hash.h" // IWYU pragma: keep
 
 typedef struct {
   char *ptr;
@@ -13,7 +14,6 @@ typedef struct {
 } cstr_buf_t;
 
 extern const char *const module_resolve_extensions[];
-uint64_t hash_key(const char *key, size_t len);
 
 double half_to_double(uint16_t bits16);
 uint16_t double_to_half(double value);
@@ -24,6 +24,13 @@ char *resolve_typescript_source_fallback(const char *filename);
 
 int hex_digit(char c);
 int is_typescript_file(const char *filename);
+
+typedef enum {
+  ANT_TS_SOURCE_AUTO = 0,
+  ANT_TS_SOURCE_MODULE,
+  ANT_TS_SOURCE_SCRIPT,
+  ANT_TS_SOURCE_COMMONJS,
+} ant_ts_source_mode_t;
 
 int ant_mkdir_p(const char *path);
 int ant_user_bin_path(char *out, size_t out_size);
@@ -38,6 +45,15 @@ int strip_typescript_inplace(
   char **buffer,
   size_t len,
   const char *filename,
+  size_t *out_len,
+  const char **error_detail
+);
+
+int transform_typescript(
+  char **buffer,
+  size_t len,
+  const char *filename,
+  ant_ts_source_mode_t source_mode,
   size_t *out_len,
   const char **error_detail
 );

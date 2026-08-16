@@ -18,7 +18,6 @@
 #include "internal.h"
 #include "errors.h"
 #include "descriptors.h"
-#include "runtime.h"
 #include "silver/engine.h"
 #include "modules/date.h"
 #include "modules/symbol.h"
@@ -1284,12 +1283,9 @@ static void date_define_methods(
   );
 }
 
-void init_date_module(void) {
-  ant_t *js = rt->js;
-  ant_value_t glob = js->global;
-  ant_value_t object_proto = js->sym.object_proto;
-  
-  ant_value_t function_proto = js_get_ctor_proto(js, "Function", 8);
+void init_date_module(ant_t *js) {
+  ant_value_t object_proto = js->sym.object_proto;  
+  ant_value_t function_proto = js->sym.function_proto;
   ant_value_t date_proto = js_mkobj(js);
   
   js_set_proto_init(date_proto, object_proto);
@@ -1363,8 +1359,8 @@ void init_date_module(void) {
   js_setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
   js_setprop(js, date_ctor_obj, ANT_STRING("name"), ANT_STRING("Date"));
 
-  ant_value_t date_ctor_func = js_obj_to_func(date_ctor_obj);
-  js_setprop(js, glob, js_mkstr(js, "Date", 4), date_ctor_func);
+  ant_value_t date_ctor_func = js_obj_to_func(js, date_ctor_obj);
+  js_set_global_builtin(js, "Date", date_ctor_func);
 
   js_setprop(js, date_proto, js_mkstr(js, "constructor", 11), date_ctor_func);
   js_set_descriptor(js, date_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);

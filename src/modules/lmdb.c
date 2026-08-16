@@ -1056,9 +1056,9 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_mkprop_fast(js, txn_ctor_obj, "name", 4, ANT_STRING("LMDBTxn"));
   js_set_descriptor(js, txn_ctor_obj, "name", 4, 0);
 
-  lmdb_types.env_ctor = js_obj_to_func(env_ctor_obj);
-  lmdb_types.db_ctor = js_obj_to_func(db_ctor_obj);
-  lmdb_types.txn_ctor = js_obj_to_func(txn_ctor_obj);
+  lmdb_types.env_ctor = js_obj_to_func(js, env_ctor_obj);
+  lmdb_types.db_ctor = js_obj_to_func(js, db_ctor_obj);
+  lmdb_types.txn_ctor = js_obj_to_func(js, txn_ctor_obj);
   lmdb_types.env_proto = env_proto;
   lmdb_types.db_proto = db_proto;
   lmdb_types.txn_proto = txn_proto;

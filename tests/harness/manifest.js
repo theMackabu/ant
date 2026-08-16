@@ -13,13 +13,73 @@ export function targets() {
 
   const REGRESSION_TESTS = [
     'test_promise.cjs',
-    'test_arguments_async.cjs',
-    'test_upvalue_gc.cjs',
+    'test_ant_c.cjs',
+    'test_syntax.cjs',
+    'test_assert_bigint.cjs',
     'test_jit_derived_ctor.cjs',
+    'test_class_expression_name_scope.cjs',
+    'test_class_constructor_call.cjs',
+    'test_class_export_scope.mjs',
+    'test_jit_string_builder_snapshot.cjs',
+    'test_template_self_append.cjs',
+    'test_global_accessor_read.cjs',
+    'test_jit_inline_call_errors.cjs',
+    'test_jit_known_bool_stack.cjs',
+    'test_ic_minor_aba.cjs',
+    'test_string_length_accumulation.cjs',
+    'test_property_location_stress.cjs',
+    'test_primitive_ic_invalidation.cjs',
+    'test_prototype_write_epoch.cjs',
+    'test_accessor_undefined_result.cjs',
+    'test_array_define_fast_path.cjs',
+    'test_nul_property_keys.cjs',
+    'test_url_legacy_idna.cjs',
+    'test_child_process_sigpipe_reset.cjs',
+    'test_spawn_sync_stdin_pump.cjs',
+    'test_cli_stdin_script.cjs',
+    'test_child_process_exec_sync_options.cjs',
     'test_node_http_incoming_message_readable.cjs',
-    'test_stream_readable_to_web.cjs'
+    'test_stream_readable_to_web.cjs',
+    'test_esm_package_self_reference.cjs',
+    'test_typeof_closure_assignment.mjs',
+    'test_curried_call_fusion.cjs',
+    'test_regexp_cache_admission.cjs',
+    'test_regexp_internal_state.cjs',
+    'test_regexp_result_batch.cjs',
+    'test_repl_global_descriptors.cjs',
+    'test_object_site_lookup.cjs',
+    'test_jit_osr_entry_reject.cjs',
+    'test_jit_dnum_get_length.cjs',
+    'test_function_bind_construct.cjs',
+    'test_numeric_literal_keys.cjs',
+    'test_property_delete_compaction.cjs',
+    'test_rope_large_property_concat.cjs',
+    'test_websocket_close_during_connect.cjs',
+    'test_intern_table_bounded.cjs',
+    'test_buffer_wtf8_utf8.cjs',
+    'test_utf16_random_access.cjs',
+    'test_bigint.js',
+    'test_temporal.js'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
+
+  const ASYNC_TESTS = [
+    ['test_gc_async.js', 96],
+    ['test_gc_coro.js', 96],
+    ['test_gc_in_coro.js', 64],
+    ['test_async_gc.js', 48],
+    ['test_async_coroutines.cjs', 48],
+    ['test_async_generator_gc_liveness.cjs', 64],
+    ['test_coro_resume_safety.js', 48],
+    ['test_coro_this.js', 48],
+    ['test_minicoro_concurrent.cjs', 48],
+    ['test_arguments_async.cjs', 48],
+    ['test_arguments_escaped_coro.js', 64],
+    ['test_async_gen_leak.mjs', 48],
+    ['test_upvalue_gc.cjs', 384],
+    ['test_gc_closure_churn.cjs', 96]
+  ];
+  for (const [f, maxRssMb] of ASYNC_TESTS) list.push({ group: 'async', type: 'test', name: `tests/${f}`, entry: `tests/${f}`, mem: true, maxRssMb });
 
   list.push(
     { group: 'servers', type: 'server', name: 'hono', entry: 'examples/npm/hono/src/index.ts' },
@@ -28,7 +88,11 @@ export function targets() {
     { group: 'servers', type: 'server', name: 'elysia', entry: 'examples/npm/elysia' }
   );
 
-  const scrubPid = [[/\b\d{3,7}\b/g, '<pid>']];
+  const scrubPid = [
+    [/\bpid \d+\b/g, 'pid <pid>'],
+    [/\bppid=\d+/g, 'ppid=<pid>'],
+    [/\bgot \d+ pids\b/g, 'got <pid> pids']
+  ];
   list.push(
     { group: 'examples', type: 'snapshot', name: 'smoke', entry: 'examples/npm/smoke/index.js' },
     { group: 'examples', type: 'snapshot', name: 'djot', entry: 'examples/npm/djot/index.ts' },
@@ -165,19 +229,44 @@ export function targets() {
     }
   );
 
+  list.push(
+    {
+      group: 'perf',
+      type: 'demo',
+      name: 'bench_dec',
+      entry: 'tests/bench_dec.js',
+      checks: [ms('duration ms', /([\d.]+)ms/, 100, 600)]
+    },
+    {
+      group: 'perf',
+      type: 'demo',
+      name: 'bench_churn',
+      entry: 'tests/bench_churn.js',
+      checks: [
+        ms('gen churn ms', /gen-churn: ([\d.]+)ms/, 100, 1300),
+        ms('async churn ms', /async-churn: ([\d.]+)ms/, 25, 400),
+        { name: 'gen total', re: /gen-churn: [\d.]+ms (\d+)/, min: 9000000, max: 9000000 },
+        { name: 'async total', re: /async-churn: [\d.]+ms (\d+)/, min: 1350000, max: 1350000 }
+      ]
+    }
+  );
+
   list.push({
-    group: 'perf',
+    group: 'jit',
     type: 'demo',
-    name: 'bench_dec',
-    entry: 'tests/bench_dec.js',
-    checks: [ms('duration ms', /([\d.]+)ms/, 100, 600)]
+    name: 'jit_suite',
+    entry: 'examples/jit/run.js',
+    checks: [
+      { name: 'all tests passed, none failed', re: /passed: (\d+) failed: 0 total/, min: 125, max: 100000 },
+      { name: 'all files passed', re: /(\d+) files passed/, min: 9, max: 10000 }
+    ]
   });
 
   list.push(
-    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 25000, minRps: 17500 },
-    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 15000, minRps: 10500 },
-    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 46000 }
+    { group: 'oha', type: 'oha', name: 'hono rps', entry: 'examples/npm/hono/src/index.ts', refRps: 30000, minRps: 27500 },
+    { group: 'oha', type: 'oha', name: 'express rps', entry: 'examples/npm/express/index.cjs', refRps: 18000, minRps: 16000 },
+    { group: 'oha', type: 'oha', name: 'h3 rps', entry: 'examples/npm/h3', refRps: 21000, minRps: 18000 },
+    { group: 'oha', type: 'oha', name: 'elysia rps', entry: 'examples/npm/elysia', refRps: 66000, minRps: 58000 }
   );
 
   list.push({

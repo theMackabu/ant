@@ -26,6 +26,7 @@
 #include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
+#include "modules/cjit.h"
 #include "modules/server.h"
 #include "modules/symbol.h"
 
@@ -104,8 +105,8 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
     js_arr_push(js, bins, js_mknum((double)sv_tfb_ctor_prop_bin(fn, i)));
   js_set(js, out, "bins", bins);
 
-  if (fn->name) js_set(js, out, "name", js_mkstr(js, fn->name, strlen(fn->name)));
-  if (fn->filename) js_set(js, out, "filename", js_mkstr(js, fn->filename, strlen(fn->filename)));
+  if (fn->debug->name) js_set(js, out, "name", js_mkstr(js, fn->debug->name, strlen(fn->debug->name)));
+  if (fn->debug->filename) js_set(js, out, "filename", js_mkstr(js, fn->debug->filename, strlen(fn->debug->filename)));
 
   return out;
 #endif
@@ -180,7 +181,7 @@ static ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_newobj(js);
   
-  ant_pool_stats_t rope_s = js_pool_stats(&js->pool.rope);
+  ant_pool_stats_t rope_s = js_rope_pool_stats(js);
   ant_pool_stats_t sym_s = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t bigint_s = js_class_pool_stats(&js->pool.bigint);
   ant_string_pool_stats_t string_s = js_string_pool_stats(&js->pool.string);
@@ -248,8 +249,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   size_t promise_bytes  = 0;
   size_t proxy_bytes    = 0;
   size_t exotic_bytes   = 0;
-  size_t array_bytes    = 0;
-  
+
   for (int pass = 0; pass < 3; pass++) {
     ant_object_t *head = pass == 0 ? js->objects : pass == 1 ? js->objects_old : js->permanent_objects;
     for (ant_object_t *obj = head; obj; obj = obj->next) {
@@ -265,8 +265,6 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
       if (ant_object_proxy_state(obj)) proxy_bytes += sizeof(ant_proxy_state_t);
       if (ant_object_has_sidecar(obj)) extra_bytes += sizeof(ant_object_sidecar_t);
       if (obj->exotic_ops) exotic_bytes += sizeof(ant_exotic_ops_t);
-      if (obj->type_tag == T_ARR && obj->u.array.data)
-        array_bytes += obj->u.array.cap * sizeof(ant_value_t);
     }
   }
 
@@ -278,18 +276,16 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, alloc, "promises", js_mknum((double)promise_bytes));
   js_set(js, alloc, "proxies", js_mknum((double)proxy_bytes));
   js_set(js, alloc, "exotic", js_mknum((double)exotic_bytes));
-  js_set(js, alloc, "arrays", js_mknum((double)array_bytes));
+  js_set(js, alloc, "arrays", js_mknum((double)js->alloc_bytes.arrays));
   
   size_t shape_bytes = ant_shape_total_bytes();
   js_set(js, alloc, "shapes", js_mknum((double)shape_bytes));
   js_set(js, alloc, "closures", js_mknum((double)js->alloc_bytes.closures));
   js_set(js, alloc, "upvalues", js_mknum((double)js->alloc_bytes.upvalues));
-  js_set(js, alloc, "propRefs", js_mknum((double)(js->prop_refs_cap * sizeof(ant_prop_ref_t))));
 
   size_t alloc_total = obj_bytes + overflow_bytes + extra_bytes
-    + promise_bytes + proxy_bytes + exotic_bytes + array_bytes
-    + shape_bytes + js->alloc_bytes.closures + js->alloc_bytes.upvalues
-    + js->prop_refs_cap * sizeof(ant_prop_ref_t);
+    + promise_bytes + proxy_bytes + exotic_bytes + js->alloc_bytes.arrays
+    + shape_bytes + js->alloc_bytes.closures + js->alloc_bytes.upvalues;
   
   js_set(js, alloc, "total", js_mknum((double)alloc_total));
   js_set(js, result, "alloc", alloc);
@@ -464,9 +460,8 @@ static ant_value_t js_highlight_tags(ant_t *js, ant_value_t *args, int nargs) {
   return hl_get_tagged(js, args, nargs);
 }
 
-void init_builtin_module() {
-  ant_t *js = rt->js;
-  ant_value_t ant_obj = rt->ant_obj;
+void init_builtin_module(ant_t *js) {
+  ant_value_t ant_obj = js->Ant;
 
   js_set(js, ant_obj, "match", js_mkfun(js_match));
   js_set(js, ant_obj, "serve", js_mkfun_arity(js_serve, 1));
@@ -478,12 +473,16 @@ void init_builtin_module() {
   js_set(js, ant_obj, "suppressReporting", js_mkfun(js_suppress_reporting));
   
   ant_value_t hl_obj = js_newobj(js);
-  ant_value_t hl_fn = js_obj_to_func(hl_obj);
+  ant_value_t hl_fn = js_obj_to_func(js, hl_obj);
   
   js_set_slot(hl_obj, SLOT_CFUNC, js_mkfun(js_highlight));
   js_set(js, hl_fn, "render", js_mkfun(js_highlight_render));
   js_set(js, hl_fn, "tags", js_mkfun(js_highlight_tags));
   js_set(js, ant_obj, "highlight", hl_fn);
+
+  ant_value_t unsafe_obj = js_newobj(js);
+  init_cjit_module(js, unsafe_obj);
+  js_set(js, ant_obj, "unsafe", unsafe_obj);
 
   ant_value_t raw_obj = js_newobj(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, js_mkfun(js_raw_stack), JS_DESC_C);

@@ -23,13 +23,11 @@ typedef struct {
   bool body_used;
 } response_data_t;
 
-extern ant_value_t g_response_proto;
-
 response_data_t *response_get_data(ant_value_t obj);
 ant_value_t response_get_headers(ant_value_t obj);
 ant_value_t response_get_websocket(ant_value_t obj);
 
-void init_response_module(void);
+void init_response_module(ant_t *js);
 void response_set_websocket(ant_value_t obj, ant_value_t websocket);
 
 ant_value_t response_create(

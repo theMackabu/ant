@@ -22,6 +22,9 @@ outputs:
   ranlib:
     description: RANLIB path
     value: ${{ steps.paths.outputs.ranlib }}
+  nm:
+    description: NM path
+    value: ${{ steps.paths.outputs.nm }}
   strip:
     description: Strip path
     value: ${{ steps.paths.outputs.strip }}
@@ -43,8 +46,14 @@ runs:
         apt-get update
         apt-get install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
 
+    - name: Install LLVM (macOS)
+      if: inputs.os_type == 'macos'
+      shell: bash
+      run: |
+        LLVM_FORMULA="llvm@${{ inputs.version }}"
+        brew list "$LLVM_FORMULA" &>/dev/null || brew install "$LLVM_FORMULA"
+
     # linux-musl: LLVM installed via apk in workflow setup step
-    # macos: LLVM installed via brew in workflow setup step
     # windows: Using MinGW toolchain
 
     - name: Set output paths
@@ -57,6 +66,7 @@ runs:
             echo "cxx=clang++-${{ inputs.version }}" >> $GITHUB_OUTPUT
             echo "ar=llvm-ar-${{ inputs.version }}" >> $GITHUB_OUTPUT
             echo "ranlib=llvm-ranlib-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "nm=llvm-nm-${{ inputs.version }}" >> $GITHUB_OUTPUT
             echo "strip=llvm-strip-${{ inputs.version }}" >> $GITHUB_OUTPUT
             echo "ld=lld-${{ inputs.version }}" >> $GITHUB_OUTPUT
             ;;
@@ -65,15 +75,17 @@ runs:
             echo "cxx=clang++" >> $GITHUB_OUTPUT
             echo "ar=llvm-ar" >> $GITHUB_OUTPUT
             echo "ranlib=llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "nm=llvm-nm" >> $GITHUB_OUTPUT
             echo "strip=llvm-strip" >> $GITHUB_OUTPUT
             echo "ld=lld" >> $GITHUB_OUTPUT
             ;;
           macos)
-            LLVM_PREFIX=$(brew --prefix llvm)
+            LLVM_PREFIX=$(brew --prefix "llvm@${{ inputs.version }}")
             echo "cc=$LLVM_PREFIX/bin/clang" >> $GITHUB_OUTPUT
             echo "cxx=$LLVM_PREFIX/bin/clang++" >> $GITHUB_OUTPUT
             echo "ar=$LLVM_PREFIX/bin/llvm-ar" >> $GITHUB_OUTPUT
             echo "ranlib=$LLVM_PREFIX/bin/llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "nm=$LLVM_PREFIX/bin/llvm-nm" >> $GITHUB_OUTPUT
             echo "strip=strip" >> $GITHUB_OUTPUT
             echo "ld=" >> $GITHUB_OUTPUT
             ;;
@@ -82,6 +94,7 @@ runs:
             echo "cxx=clang++" >> $GITHUB_OUTPUT
             echo "ar=llvm-ar" >> $GITHUB_OUTPUT
             echo "ranlib=llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "nm=llvm-nm" >> $GITHUB_OUTPUT
             echo "strip=llvm-strip" >> $GITHUB_OUTPUT
             echo "ld=lld" >> $GITHUB_OUTPUT
             ;;

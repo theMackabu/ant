@@ -194,25 +194,6 @@ char hex_char(int v) {
   return "0123456789abcdef"[v & 0x0f];
 }
 
-uint64_t hash_key(const char *key, size_t len) {
-  uint64_t hash = 14695981039346656037ULL;
-  size_t i = 0;
-  
-  for (; i + 8 <= len; i += 8) {
-    uint64_t word;
-    memcpy(&word, key + i, 8);
-    hash ^= word;
-    hash *= 1099511628211ULL;
-  }
-  
-  for (; i < len; i++) {
-    hash ^= (uint8_t)key[i];
-    hash *= 1099511628211ULL;
-  }
-  
-  return hash;
-}
-
 double half_to_double(uint16_t bits16) {
   uint32_t sign = ((uint32_t)bits16 & 0x8000u) << 16;
   uint32_t exp = ((uint32_t)bits16 >> 10) & 0x1fu;
@@ -292,14 +273,13 @@ int is_typescript_file(const char *filename) {
   return (strcmp(ext, ".ts") == 0 || strcmp(ext, ".mts") == 0 || strcmp(ext, ".cts") == 0);
 }
 
-int strip_typescript_inplace(
+int transform_typescript(
   char **buffer, size_t len,
-  const char *filename, size_t *out_len,
-  const char **error_detail
+  const char *filename, ant_ts_source_mode_t source_mode,
+  size_t *out_len, const char **error_detail
 ) {
   if (out_len) *out_len = len;
   if (error_detail) *error_detail = NULL;
-  if (!is_typescript_file(filename)) return 0;
 
   if (!buffer || !*buffer) {
     if (error_detail) *error_detail = "null input/output passed";
@@ -315,10 +295,18 @@ int strip_typescript_inplace(
 
   skim_context_reset(&ts_strip_context);
   skim_error_t strip_error = SKIM_ERR_TRANSFORM_FAILED;
+  skim_source_mode_t skim_mode = SKIM_SOURCE_AUTO;
+  
+  switch (source_mode) {
+    case ANT_TS_SOURCE_MODULE:   skim_mode = SKIM_SOURCE_MODULE; break;
+    case ANT_TS_SOURCE_SCRIPT:   skim_mode = SKIM_SOURCE_SCRIPT; break;
+    case ANT_TS_SOURCE_COMMONJS: skim_mode = SKIM_SOURCE_COMMONJS; break;
+    case ANT_TS_SOURCE_AUTO:     break;
+  }
 
   const char *stripped = skim_strip_typescript_borrowed(
     &ts_strip_context, input, len, filename, 
-    SKIM_SOURCE_AUTO, NULL,
+    skim_mode, NULL,
     &stripped_len, &strip_error, error_buf, sizeof(error_buf)
   );
 
@@ -348,6 +336,20 @@ int strip_typescript_inplace(
   if (out_len) *out_len = stripped_len;
 
   return 0;
+}
+
+int strip_typescript_inplace(
+  char **buffer, size_t len,
+  const char *filename, size_t *out_len,
+  const char **error_detail
+) {
+  if (out_len) *out_len = len;
+  if (error_detail) *error_detail = NULL;
+  if (!is_typescript_file(filename)) return 0;
+  return transform_typescript(
+    buffer, len, filename, ANT_TS_SOURCE_AUTO,
+    out_len, error_detail
+  );
 }
 
 static bool is_entrypoint_script_extension(const char *ext) {

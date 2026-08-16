@@ -4,9 +4,9 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "runtime.h"
 #include "utf8.h"
 #include "utils.h"
+#include "internal.h"
 #include "modules/uri.h"
 
 static const unsigned char uri_unreserved[256] = {
@@ -358,14 +358,13 @@ static ant_value_t js_unescape(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-void init_uri_module(void) {
-  ant_t *js = rt->js;
-  ant_value_t glob = js_glob(js);
-
-  js_set(js, glob, "encodeURI", js_mkfun(js_encodeURI));
-  js_set(js, glob, "encodeURIComponent", js_mkfun(js_encodeURIComponent));
-  js_set(js, glob, "decodeURI", js_mkfun(js_decodeURI));
-  js_set(js, glob, "decodeURIComponent", js_mkfun(js_decodeURIComponent));
-  js_set(js, glob, "escape", js_mkfun(js_escape));
-  js_set(js, glob, "unescape", js_mkfun(js_unescape));
+void init_uri_module(ant_t *js) {
+  js_set_global_builtin(js, "encodeURI", js_mkfun(js_encodeURI));
+  js_set_global_builtin(js, "encodeURIComponent", js_mkfun(js_encodeURIComponent));
+  
+  js_set_global_builtin(js, "decodeURI", js_mkfun(js_decodeURI));
+  js_set_global_builtin(js, "decodeURIComponent", js_mkfun(js_decodeURIComponent));
+  
+  js_set_global_builtin(js, "escape", js_mkfun(js_escape));
+  js_set_global_builtin(js, "unescape", js_mkfun(js_unescape));
 }

@@ -24,6 +24,11 @@ boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
 boringssl_opts.append_compile_args('c', '-g0')
 boringssl_opts.append_compile_args('cpp', '-g0')
 
+# drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
+# P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
+boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
+boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
+
 if host_machine.system() == 'windows'
   boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
   boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
@@ -90,6 +95,7 @@ subprojects_build = meson.project_build_root() / 'vendor'
 
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
 libuv_dep = subproject('libuv').get_variable('libuv_dep')
+libuv_lib = subproject('libuv').get_variable('libuv')
 
 zlib_ng_sub = subproject('zlib-ng', default_options: [
   'b_lto=false',
@@ -128,9 +134,8 @@ uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
-minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
-uriparser_dep = subproject('uriparser').get_variable('uriparser_dep')
+ada_dep = subproject('ada').get_variable('ada_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
 
@@ -254,11 +259,11 @@ endif
 ant_core_deps = [
   libffi_dep, crprintf_dep, argtable3_dep,
   llhttp, pcre2_dep, libuv_dep, base64_dep,
-  yyjson_dep, minicoro_dep, uuidv7_dep, tlsuv_dep, cares_dep,
+  yyjson_dep, uuidv7_dep, tlsuv_dep, cares_dep,
 ]
 
 ant_format_deps = [
-  uriparser_dep, utf8proc_dep,
+  ada_dep, utf8proc_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep, brotli_enc_dep,
 ]
 
@@ -278,3 +283,5 @@ endif
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep, hypervisor_dep]
 endif
+
+subdir('temporal')

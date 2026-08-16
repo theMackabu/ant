@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #ifndef _WIN32
+#include <fcntl.h>
 #include <sys/select.h>
 #endif
 
@@ -9,22 +10,92 @@ volatile sig_atomic_t ctrl_c_pressed = 0;
 
 #ifndef _WIN32
 static struct termios saved_tio;
+static int signal_pipe[2] = { -1, -1 };
 #endif
 
 static void sigint_handler(int sig) {
   (void)sig;
   ctrl_c_pressed++;
+#ifndef _WIN32
+  if (signal_pipe[1] >= 0) {
+    int saved_errno = errno;
+    unsigned char wake = 1;
+    (void)write(signal_pipe[1], &wake, 1);
+    errno = saved_errno;
+  }
+#endif
 }
 
+// TODO: reduce nesting
 void ant_readline_install_signal_handler(void) {
 #ifdef _WIN32
   signal(SIGINT, sigint_handler);
 #else
+  if (signal_pipe[0] < 0) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) == 0) {
+      bool configured =
+        pipe_fds[0] < FD_SETSIZE && pipe_fds[1] < FD_SETSIZE;
+      for (int i = 0; i < 2; i++) {
+        if (!configured) break;
+        int status_flags = fcntl(pipe_fds[i], F_GETFL, 0);
+        int descriptor_flags = fcntl(pipe_fds[i], F_GETFD, 0);
+        if (
+          status_flags < 0 || descriptor_flags < 0 ||
+          fcntl(pipe_fds[i], F_SETFL, status_flags | O_NONBLOCK) < 0 ||
+          fcntl(pipe_fds[i], F_SETFD, descriptor_flags | FD_CLOEXEC) < 0
+        ) {
+          configured = false;
+          break;
+        }
+      }
+
+      if (configured) {
+        signal_pipe[0] = pipe_fds[0];
+        signal_pipe[1] = pipe_fds[1];
+      } else {
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+      }
+    }
+  }
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = sigint_handler;
   sigemptyset(&sa.sa_mask);
   sigaction(SIGINT, &sa, NULL);
+#endif
+}
+
+bool ant_readline_interrupt_pending(void) {
+  return ctrl_c_pressed > 0;
+}
+
+void ant_readline_clear_interrupt(void) {
+  ctrl_c_pressed = 0;
+  ant_readline_drain_interrupt_wake();
+}
+
+int ant_readline_interrupt_fd(void) {
+#ifdef _WIN32
+  return -1;
+#else
+  return signal_pipe[0];
+#endif
+}
+
+void ant_readline_drain_interrupt_wake(void) {
+#ifndef _WIN32
+  if (signal_pipe[0] < 0) return;
+  unsigned char buffer[64];
+  while (read(signal_pipe[0], buffer, sizeof(buffer)) > 0) {}
+#endif
+}
+
+void ant_readline_shutdown_signal_bridge(void) {
+#ifndef _WIN32
+  // some signal handlers may still be running on another thread during shutdown.
+  // keep the close-on-exec descriptors valid until process exit.
 #endif
 }
 
@@ -123,23 +194,42 @@ bool repl_input_pending(void) {
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
+    int signal_fd = ant_readline_interrupt_fd();
+    if (signal_fd >= 0) FD_SET(signal_fd, &fds);
 
     struct timeval timeout = {0, 0};
-    int ready = select(STDIN_FILENO + 1, &fds, NULL, NULL, &timeout);
+    int max_fd = signal_fd > STDIN_FILENO ? signal_fd : STDIN_FILENO;
+    int ready = select(max_fd + 1, &fds, NULL, NULL, &timeout);
     if (ready < 0 && errno == EINTR && ctrl_c_pressed == 0) continue;
 
-    return ready > 0 && FD_ISSET(STDIN_FILENO, &fds);
+    return ready > 0 && (
+      FD_ISSET(STDIN_FILENO, &fds) ||
+      (signal_fd >= 0 && FD_ISSET(signal_fd, &fds))
+    );
   }
 }
 
 static int repl_read_byte(void) {
   unsigned char c = 0;
-  ssize_t n;
-  do {
-    n = read(STDIN_FILENO, &c, 1);
-  } while (n < 0 && errno == EINTR && ctrl_c_pressed == 0);
-
-  return (n == 1) ? (int)c : EOF;
+  for (;;) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    int signal_fd = ant_readline_interrupt_fd();
+    if (signal_fd >= 0) FD_SET(signal_fd, &fds);
+    int max_fd = signal_fd > STDIN_FILENO ? signal_fd : STDIN_FILENO;
+    int ready = select(max_fd + 1, &fds, NULL, NULL, NULL);
+    if (ready < 0) {
+      if (errno == EINTR && ctrl_c_pressed == 0) continue;
+      return EOF;
+    }
+    if (signal_fd >= 0 && FD_ISSET(signal_fd, &fds)) {
+      ant_readline_drain_interrupt_wake();
+      return EOF;
+    }
+    if (FD_ISSET(STDIN_FILENO, &fds))
+      return read(STDIN_FILENO, &c, 1) == 1 ? (int)c : EOF;
+  }
 }
 
 key_event_t repl_read_key(void) {

@@ -293,6 +293,10 @@ test('Buffer.from BINARY (case insensitive)', Buffer.from('Hello', 'BINARY').toS
 test('Buffer.toString latin1', latin1Buf.toString('latin1'), 'Hello');
 test('Buffer.toString binary', latin1Buf.toString('binary'), 'Hello');
 
+const latin1Bytes = Buffer.from([0x80, 0x91, 0xa3, 0xff]);
+test('Buffer.toString latin1 preserves high bytes', latin1Bytes.toString('latin1'), '\u0080\u0091\u00A3\u00FF');
+test('Buffer.toString binary preserves high bytes', latin1Bytes.toString('binary'), '\u0080\u0091\u00A3\u00FF');
+
 const ucs2Buf = Buffer.from('Hi', 'ucs2');
 test('Buffer.from ucs2 length', ucs2Buf.length, 4); // 2 chars * 2 bytes
 test('Buffer.from ucs-2 length', Buffer.from('Hi', 'ucs-2').length, 4);

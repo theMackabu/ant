@@ -61,14 +61,20 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   ant_output_stream_flush(out);
 }
 
-bool print_uncaught_throw(ant_t *js) {
-  if (!js->thrown_exists) return false;
-  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
-  
+ant_value_t js_take_thrown(ant_t *js, ant_value_t fallback) {
+  ant_value_t value = js->thrown_exists ? js->thrown_value : fallback;
+
   js->thrown_exists = false;
   js->thrown_value = js_mkundef();
   js->thrown_stack = js_mkundef();
-  
+
+  return value;
+}
+
+bool print_uncaught_throw(ant_t *js) {
+  if (!js->thrown_exists) return false;
+  print_error_value(js, js->thrown_value, js->thrown_stack, NULL);
+  js_take_thrown(js, js_mkundef());
   return true;
 }
 
@@ -373,7 +379,7 @@ static int error_context_src_cols_limit(int gutter_w) {
 }
 
 static const char *error_frame_name(ant_t *js, sv_frame_t *frame, sv_func_t *func) {
-  if (func && func->name && func->name[0]) return func->name;
+  if (func && func->debug->name && func->debug->name[0]) return func->debug->name;
   if (js && frame && vtype(frame->callee) == T_FUNC) {
     ant_offset_t name_len = 0;
     const char *name = get_str_prop(js, js_func_obj(frame->callee), "name", 4, &name_len);
@@ -415,16 +421,17 @@ static bool error_fill_vm_frame_view(
   sv_func_t *func = frame->func;
 
   out->name = error_frame_name(js, frame, func);
-  out->file = (func && func->filename) ? func->filename : fallback_file;
-  out->line = (func && func->source_line > 0) ? func->source_line : 1;
+  out->file = (func && func->debug->filename) ? func->debug->filename : fallback_file;
+  out->line = (func && func->debug->source_line > 0) ? func->debug->source_line : 1;
   out->col = 1;
   out->index = i;
   out->depth = depth;
 
-  if (func && func->srcpos && frame->ip) {
+  if (func && func->debug->srcpos && frame->ip) {
     uint32_t l, c;
     if (sv_lookup_srcpos(func, (int)(frame->ip - func->code), &l, &c)) {
-      out->line = (int)l; out->col = (int)c;
+      out->line = (int)l; 
+      out->col = (int)c;
     }
   }
 
@@ -546,9 +553,8 @@ static bool append_error_context(
     bool was_clipped = (src_cols_limit > 0 && line_len > src_cols_limit);
 
     if (!io_no_color) {
-      size_t highlight_len = was_clipped ? (size_t)src_cols_limit : (size_t)line_len;
       highlight_js_line_clipped(
-        src + ls, highlight_len, (size_t)src_cols_limit,
+        src + ls, (size_t)line_len, (size_t)src_cols_limit,
         tagged, sizeof(tagged), &hl_state
       );
       crsprintf_stateful(rendered, sizeof(rendered), NULL, tagged);
@@ -825,14 +831,13 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
 
   int props_type = vtype(props);
-  if ((JS_TPFLG(props_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(props_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_merge_obj(js, err_obj, props);
-  }
+
   ant_value_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   int proto_type = vtype(proto);
-  if ((JS_TPFLG(proto_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if ((T_FLAG_FIND(proto_type) & T_SPECIAL_OBJECT_MASK) != 0)
     js_set_proto_init(err_obj, proto);
-  }
 
   js->thrown_exists = true;
   js->thrown_value = err_obj;

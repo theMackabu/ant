@@ -23,12 +23,11 @@
 #include "errors.h"
 #include "output.h"
 #include "internal.h"
-#include "runtime.h"
 #include "utils.h"
 #include "inspector.h"
-#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/io.h"
+#include "modules/util.h"
 #include "sandbox/sandbox.h"
 #include "modules/symbol.h"
 
@@ -36,9 +35,6 @@ bool io_no_color = false;
 
 static bool g_sandbox_terminal_enabled = false;
 static uint32_t g_sandbox_terminal_capabilities = 0;
-
-static ant_value_t g_console_proto = 0;
-static ant_value_t g_console_ctor = 0;
 
 static bool io_fd_is_tty(int fd) {
   if (g_sandbox_terminal_enabled) {
@@ -86,8 +82,73 @@ static inline bool io_is_digit_ascii(char c) {
   return c >= '0' && c <= '9';
 }
 
-static bool io_print_to_output(const char *str, ant_output_stream_t *out) {
-  if (!io_no_color) {
+static inline bool io_is_hex_byte(const char *p) {
+  return
+    isxdigit((unsigned char)p[0]) &&
+    isxdigit((unsigned char)p[1]) &&
+    (p[2] == ' ' || p[2] == '>');
+}
+
+static const char *io_color_hex_bytes(const char *p, ant_output_stream_t *out) {
+  while (true) {
+    if (io_is_hex_byte(p)) {
+      ant_output_stream_append_cstr(out, JSON_NUMBER);
+      ant_output_stream_putc(out, *p++);
+      ant_output_stream_putc(out, *p++);
+      ant_output_stream_append_cstr(out, C_RESET);
+      continue;
+    }
+
+    if (p[0] == ' ' && io_is_hex_byte(p + 1)) {
+      ant_output_stream_putc(out, *p++);
+      continue;
+    }
+
+    return p;
+  }
+}
+
+static size_t io_binary_type_len(const char *p) {
+  #define MATCH_BINARY_TYPE(name) do { \
+    size_t len = sizeof(name) - 1; \
+    if (strncmp(p, name, len) == 0 && \
+        (p[len] == '(' || p[len] == ' ' || p[len] == '{')) return len; \
+  } while (0)
+
+  switch (*p) {
+    case 'A': MATCH_BINARY_TYPE("ArrayBuffer"); break;
+    case 'S': MATCH_BINARY_TYPE("SharedArrayBuffer"); break;
+    case 'D': MATCH_BINARY_TYPE("DataView"); break;
+    case 'I':
+      MATCH_BINARY_TYPE("Int8Array");
+      MATCH_BINARY_TYPE("Int16Array");
+      MATCH_BINARY_TYPE("Int32Array");
+      break;
+    case 'U':
+      MATCH_BINARY_TYPE("Uint8Array");
+      MATCH_BINARY_TYPE("Uint8ClampedArray");
+      MATCH_BINARY_TYPE("Uint16Array");
+      MATCH_BINARY_TYPE("Uint32Array");
+      break;
+    case 'F':
+      MATCH_BINARY_TYPE("Float16Array");
+      MATCH_BINARY_TYPE("Float32Array");
+      MATCH_BINARY_TYPE("Float64Array");
+      break;
+    case 'B':
+      MATCH_BINARY_TYPE("BigInt64Array");
+      MATCH_BINARY_TYPE("BigUint64Array");
+      MATCH_BINARY_TYPE("Buffer");
+      break;
+    case 'T': MATCH_BINARY_TYPE("TypedArray"); break;
+  }
+
+  #undef MATCH_BINARY_TYPE
+  return 0;
+}
+
+static bool io_print_to_output(const char *str, ant_output_stream_t *out, bool no_color) {
+  if (!no_color) {
     return ant_output_stream_append_cstr(out, str);
   }
 
@@ -211,8 +272,10 @@ static int io_iso_utc_token_len(const char *p) {
     p += len; goto next; \
   }
 
-static void print_value_colored_to_output(const char *str, ant_output_stream_t *out) {
-  if (io_no_color) { io_print_to_output(str, out); return; }
+static void print_value_colored_to_output(
+  const char *str, ant_output_stream_t *out, bool no_color
+) {
+  if (no_color) { io_print_to_output(str, out, true); return; }
 
   static void *dispatch[] = {
     [CC_NUL] = &&done, [CC_QUOTE] = &&quote, [CC_ESCAPE] = &&other,
@@ -241,7 +304,10 @@ quote:
   ant_output_stream_append_cstr(out, (is_key && brace_depth > 0) ? JSON_KEY : JSON_STRING);
   ant_output_stream_putc(out, *p++);
   while (*p) {
-    if (*p == '\\' && p[1]) { ant_output_stream_putc(out, *p++); ant_output_stream_putc(out, *p++); continue; }
+    if (*p == '\\' && p[1]) { 
+      ant_output_stream_putc(out, *p++); 
+      ant_output_stream_putc(out, *p++); continue; 
+    }
     if (*p == string_char) { ant_output_stream_putc(out, *p++); break; }
     ant_output_stream_putc(out, *p++);
   }
@@ -249,11 +315,15 @@ quote:
   goto next;
 
 lbrace:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE);
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   brace_depth++; is_key = true; goto next;
 
 rbrace:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE);
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   brace_depth--; is_key = false; goto next;
 
 lbrack:
@@ -281,11 +351,15 @@ lbrack:
     case 'U': if (memcmp(p + 2, "int8Contents]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'P': if (memcmp(p + 2, "romise]", 7) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
   }
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   array_depth++; is_key = false; goto next;
 
 rbrack:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   array_depth--; is_key = false; goto next;
 
 colon:
@@ -308,6 +382,8 @@ number: {
   ant_output_stream_append_cstr(out, JSON_NUMBER);
   while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
     ant_output_stream_putc(out, *p++);
+  if (*p == 'n' && !isalnum((unsigned char)p[1]) && p[1] != '_' && p[1] != '$')
+    ant_output_stream_putc(out, *p++);
   ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
@@ -321,12 +397,16 @@ minus: {
     }
   }
   if (memcmp(p + 1, "Infinity", 8) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
-    ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_append_cstr(out, "-Infinity"); ant_output_stream_append_cstr(out, C_RESET);
+    ant_output_stream_append_cstr(out, JSON_NUMBER); 
+    ant_output_stream_append_cstr(out, "-Infinity"); 
+    ant_output_stream_append_cstr(out, C_RESET);
     p += 9; goto next;
   }
   if (p[1] >= '0' && p[1] <= '9') {
     ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_putc(out, *p++);
     while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
+      ant_output_stream_putc(out, *p++);
+    if (*p == 'n' && !isalnum((unsigned char)p[1]) && p[1] != '_' && p[1] != '$')
       ant_output_stream_putc(out, *p++);
     ant_output_stream_append_cstr(out, C_RESET);
     goto next;
@@ -338,25 +418,48 @@ lt:
   if (memcmp(p, "<pen", 4) == 0) { is_key = false; EMIT_UNTIL('>', C_CYAN) }
   if (memcmp(p, "<rej", 4) == 0) { is_key = false; EMIT_UNTIL('>', C_CYAN) }
 
-  if (p[1] == '>' || (isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2]))) {
-    ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++);
-    ant_output_stream_append_cstr(out, JSON_WHITE);
-    while (*p && *p != '>') ant_output_stream_putc(out, *p++);
+  if (strncmp(p, "<Buffer", 7) == 0 && (p[7] == ' ' || p[7] == '>')) {
+    ant_output_stream_append_cstr(out, JSON_BRACE);
+    ant_output_stream_putc(out, *p++);
     ant_output_stream_append_cstr(out, C_RESET);
-    if (*p == '>') { ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET); }
+    ant_output_stream_append(out, p, 6);
+    p += 6;
+    p = io_color_hex_bytes(p, out);
     goto next;
   }
 
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  if (p[1] == '>' || io_is_hex_byte(p + 1)) {
+    ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++);
+    p = io_color_hex_bytes(p, out);
+    if (*p == '>') { 
+      ant_output_stream_append_cstr(out, JSON_BRACE); 
+      ant_output_stream_putc(out, *p++); 
+      ant_output_stream_append_cstr(out, C_RESET); 
+    }
+    goto next;
+  }
+
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 gt:
-  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_append_cstr(out, JSON_BRACE); 
+  ant_output_stream_putc(out, *p++); 
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 alpha:
   if (memcmp(p, "Object [", 8) == 0) { EMIT_UNTIL(']', JSON_TAG) }
   if (memcmp(p, "Symbol(", 7) == 0) { EMIT_UNTIL(')', JSON_STRING) }
+
+  size_t type_len = io_binary_type_len(p);
+  if (type_len > 0) {
+    ant_output_stream_append(out, p, type_len);
+    p += type_len;
+    goto next;
+  }
 
   EMIT_TYPE("Map", 3, JSON_STRING)
   EMIT_TYPE("Set", 3, JSON_STRING)
@@ -397,7 +500,7 @@ other:
 void print_value_colored(const char *str, FILE *stream) {
   ant_output_stream_t *out = ant_output_stream(stream);
   ant_output_stream_begin(out);
-  print_value_colored_to_output(str, out);
+  print_value_colored_to_output(str, out, io_no_color);
   ant_output_stream_flush(out);
 }
 
@@ -422,7 +525,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
 
   if (stack) {
     ant_output_stream_begin(out);
-    io_print_to_output(stack, out);
+    io_print_to_output(stack, out, io_no_color);
     ant_output_stream_putc(out, '\n');
     ant_output_stream_flush(out);
     return;
@@ -439,7 +542,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
     ant_output_stream_flush(err_out);
   } else {
     ant_output_stream_begin(out);
-    print_value_colored_to_output(cstr.ptr, out);
+    print_value_colored_to_output(cstr.ptr, out, io_no_color);
     ant_output_stream_putc(out, '\n');
     ant_output_stream_flush(out);
   }
@@ -546,34 +649,70 @@ static ant_value_t console_get_state_map(ant_t *js, ant_value_t this_obj, const 
   return map;
 }
 
+typedef struct {
+  ant_t *js;
+  ant_output_stream_t *out;
+  bool color_values;
+  bool ok;
+} console_format_ctx_t;
+
+static bool console_emit_value(console_format_ctx_t *c, ant_value_t value, bool plain) {
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(c->js, value, cbuf, sizeof(cbuf));
+
+  if (plain) c->ok = io_print_to_output(cstr.ptr, c->out, io_no_color);
+  else print_value_colored_to_output(cstr.ptr, c->out, io_no_color || !c->color_values);
+
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return c->ok;
+}
+
+static bool console_format_text(void *ctx, const char *s, size_t len) {
+  console_format_ctx_t *c = (console_format_ctx_t *)ctx;
+  c->ok = c->ok && ant_output_stream_append(c->out, s, len);
+  return c->ok;
+}
+
+static bool console_emit_inspected(console_format_ctx_t *c, ant_value_t value) {
+  char cbuf[256];
+  js_cstr_t cstr = js_inspect_cstr(c->js, value, cbuf, sizeof(cbuf));
+
+  c->ok = io_print_to_output(cstr.ptr, c->out, io_no_color);
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return c->ok;
+}
+
+static bool console_format_value(void *ctx, ant_value_t value, char spec) {
+  console_format_ctx_t *c = (console_format_ctx_t *)ctx;
+  if ((spec == 'o' || spec == 'O') && vtype(value) == T_STR)
+    return console_emit_inspected(c, value);
+  return console_emit_value(c, value, spec == 's' && vtype(value) == T_STR);
+}
+
+static const ant_format_sink_t console_format_sink = {
+  console_format_text, 
+  console_format_value
+};
+
 static bool console_write_args_to_stream(
   ant_t *js, ant_output_stream_t *out,
   ant_value_t *args, int nargs, bool color_values
 ) {
-  for (int i = 0; i < nargs; i++) {
-    if (i && !ant_output_stream_putc(out, ' ')) return false;
+  console_format_ctx_t ctx = { js, out, color_values, true };
+  int start = ant_format_walk(js, args, nargs, 0, &console_format_sink, &ctx);
+  if (!ctx.ok) return false;
+
+  for (int i = start; i < nargs; i++) {
+    if ((i || start) && !ant_output_stream_putc(out, ' ')) return false;
 
     if (vtype(args[i]) == T_OBJ) {
     const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
     if (stack) {
-      if (!io_print_to_output(stack, out)) return false;
+      if (!io_print_to_output(stack, out, io_no_color)) return false;
       continue;
     }}
 
-    char cbuf[512];
-    js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-    bool ok = true;
-
-    if (vtype(args[i]) == T_STR) ok = io_print_to_output(cstr.ptr, out);
-    else {
-      bool saved_no_color = io_no_color;
-      io_no_color = saved_no_color || !color_values;
-      if (ok) print_value_colored_to_output(cstr.ptr, out);
-      io_no_color = saved_no_color;
-    }
-
-    if (cstr.needs_free) free((void *)cstr.ptr);
-    if (!ok) return false;
+    if (!console_emit_value(&ctx, args[i], vtype(args[i]) == T_STR)) return false;
   }
 
   return true;
@@ -639,26 +778,6 @@ ant_value_t console_emit_current(
 ) {
   return console_emit_with_this(js, js_getthis(js), use_stderr, prefix, args, nargs);
 }
-
-static void console_write_args_to_output(ant_t *js, ant_output_stream_t *out, ant_value_t *args, int nargs) {
-for (int i = 0; i < nargs; i++) {
-  if (i) ant_output_stream_putc(out, ' ');
-  
-  if (vtype(args[i]) == T_OBJ) {
-  const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
-  if (stack) {
-    io_print_to_output(stack, out);
-    continue;
-  }}
-  
-  char cbuf[512];
-  js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-  
-  if (vtype(args[i]) == T_STR) io_print_to_output(cstr.ptr, out);
-  else print_value_colored_to_output(cstr.ptr, out);
-  
-  if (cstr.needs_free) free((void *)cstr.ptr);
-}}
 
 static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
   ant_inspector_console_api_called(js, "log", args, nargs);
@@ -945,7 +1064,7 @@ static void inspect_string_value(
       stream,
       " len=%" PRIu64 " ascii=%s bytes=",
       (uint64_t)flat->len,
-      inspect_ascii_state(flat->is_ascii)
+      inspect_ascii_state(str_flat_ascii_state(flat))
     );
     inspect_string_bytes(stream, flat->bytes, (size_t)flat->len);
     fprintf(stream, ">");
@@ -1239,9 +1358,9 @@ static void console_apply_methods(ant_t *js, ant_value_t console_obj) {
 }
 
 static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_console_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.console_proto);
   ant_value_t console_obj = js_mkobj(js);
-  js_set_proto_init(console_obj, is_special_object(proto) ? proto : g_console_proto);
+  js_set_proto_init(console_obj, is_special_object(proto) ? proto : js->builtins.console_proto);
 
   ant_value_t stdout_obj = js_mkundef();
   ant_value_t stderr_obj = js_mkundef();
@@ -1271,23 +1390,20 @@ static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int narg
 }
 
 static void console_ensure_constructor(ant_t *js) {
-  if (g_console_ctor) return;
+  if (js->builtins.console_ctor) return;
   
-  g_console_proto = js_mkobj(js);
-  console_apply_methods(js, g_console_proto);
+  js->builtins.console_proto = js_mkobj(js);
+  console_apply_methods(js, js->builtins.console_proto);
   
-  js_set_sym(js, g_console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
-  g_console_ctor = js_make_ctor(js, js_console_constructor, g_console_proto, "Console", 7);
-  
-  gc_register_root(&g_console_proto);
-  gc_register_root(&g_console_ctor);
+  js_set_sym(js, js->builtins.console_proto, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  js->builtins.console_ctor = js_make_ctor(js, js_console_constructor, js->builtins.console_proto, "Console", 7);
 }
 
 static ant_value_t console_create_default(ant_t *js) {
   console_ensure_constructor(js);
   ant_value_t console_obj = js_mkobj(js);
   
-  js_set_proto_init(console_obj, g_console_proto);
+  js_set_proto_init(console_obj, js->builtins.console_proto);
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_COUNTS, js_mkobj(js));
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_TIMERS, js_mkobj(js));
   js_set_slot(console_obj, SLOT_CONSOLE_GROUP_INDENT, js_mknum(2));
@@ -1300,18 +1416,16 @@ static ant_value_t console_create_default(ant_t *js) {
 ant_value_t console_library(ant_t *js) {
   ant_value_t console_obj = console_create_default(js);
   
-  js_set(js, console_obj, "Console", g_console_ctor);
+  js_set(js, console_obj, "Console", js->builtins.console_ctor);
   js_set(js, console_obj, "default", console_obj);
   
   return console_obj;
 }
 
-void init_console_module() {
-  ant_t *js = rt->js;
-  
+void init_console_module(ant_t *js) {
   ant_value_t console_obj = console_create_default(js);
   console_apply_methods(js, console_obj);
   
-  js_set(js, console_obj, "Console", g_console_ctor);
-  js_set(js, js_glob(js), "console", console_obj);
+  js_set(js, console_obj, "Console", js->builtins.console_ctor);
+  js_set_global_builtin(js, "console", console_obj);
 }

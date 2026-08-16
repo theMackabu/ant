@@ -5,7 +5,6 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "runtime.h"
 #include "sugar.h"
 
 #include "gc/roots.h"
@@ -182,9 +181,13 @@ static coroutine_t *generator_coro(ant_value_t gen) {
 static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   generator_data_t *data = generator_data(gen);
   if (data && data->coro == coro) data->coro = NULL;
-  if (coro) coroutine_unhold(coro, CORO_HOLD_GENERATOR);
+  if (coro) {
+    coro->owner_gen = js_mkundef();
+    coroutine_unhold(coro, CORO_HOLD_GENERATOR);
+  }
 }
 
+// TODO: collapse
 coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
   return generator_coro(gen);
 }
@@ -198,44 +201,10 @@ void generator_mark_for_gc(ant_t *js, ant_value_t gen) {
   }
 }
 
-static ant_value_t generator_find_owner_in_list(ant_object_t *head, coroutine_t *coro) {
-  for (ant_object_t *obj = head; obj; obj = obj->next) {
-    ant_value_t candidate = js_obj_from_ptr(obj);
-    generator_data_t *data = generator_data(candidate);
-    if (data && data->coro == coro) return candidate;
-  }
-  return js_mkundef();
-}
-
-static ant_value_t generator_find_owner(ant_t *js, coroutine_t *coro) {
-  ant_value_t gen = generator_find_owner_in_list(js->objects, coro);
-  if (vtype(gen) != T_UNDEF) return gen;
-  gen = generator_find_owner_in_list(js->objects_old, coro);
-  if (vtype(gen) != T_UNDEF) return gen;
-  return generator_find_owner_in_list(js->permanent_objects, coro);
-}
-
-static coroutine_t *generator_find_coro_for_vm_in_list(ant_object_t *head, sv_vm_t *vm) {
-  for (ant_object_t *obj = head; obj; obj = obj->next) {
-    generator_data_t *data = generator_data(js_obj_from_ptr(obj));
-    if (data && data->coro && data->coro->sv_vm == vm && data->coro->owner_vm == vm) return data->coro;
-  }
-  return NULL;
-}
-
-coroutine_t *generator_get_coro_for_vm(ant_t *js, sv_vm_t *vm) {
-  if (!js || !vm) return NULL;
-  coroutine_t *coro = generator_find_coro_for_vm_in_list(js->objects, vm);
-  if (coro) return coro;
-  coro = generator_find_coro_for_vm_in_list(js->objects_old, vm);
-  if (coro) return coro;
-  return generator_find_coro_for_vm_in_list(js->permanent_objects, vm);
-}
-
 bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t result) {
   if (!coro || coro->type != CORO_GENERATOR || vtype(coro->async_promise) != T_PROMISE) return false;
 
-  ant_value_t gen = generator_find_owner(js, coro);
+  ant_value_t gen = coro->owner_gen;
   generator_data_t *data = generator_data(gen);
   if (!data || !data->is_async) return false;
 
@@ -264,7 +233,7 @@ bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t 
     return true;
   }
 
-  if (coro->sv_vm && coro->sv_vm->suspended) {
+  if (coro->act && coro->act->frame_count > 0) {
     if (vtype(coro->awaited_promise) != T_UNDEF) {
       generator_set_state(gen, GEN_EXECUTING);
       GC_ROOT_RESTORE(js, root_mark);
@@ -318,8 +287,8 @@ static ant_value_t generator_resume_kind(
   GC_ROOT_PIN(js, gen);
   GC_ROOT_PIN(js, resume_value);
   coroutine_t *coro = generator_coro(gen);
-  
-  if (!coro || !coro->sv_vm) {
+
+  if (!coro || (!coro->act && generator_state(gen) != GEN_SUSPENDED_START)) {
     generator_set_state(gen, GEN_COMPLETED);
     if (resume_kind == SV_RESUME_THROW) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -382,23 +351,43 @@ static ant_value_t generator_resume_kind(
   js->active_async_coro = coro;
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 
+  sv_vm_t *exec_vm = sv_vm_get_active(js);
   ant_value_t result;
+  
   if (state == GEN_SUSPENDED_START) {
     sv_closure_t *closure = (vtype(coro->async_func) == T_FUNC) ? js_func_closure(coro->async_func) : NULL;
     if (!closure || !closure->func) result = js_mkerr(js, "invalid generator function");
     else result = sv_execute_closure_entry(
-      coro->sv_vm, closure, coro->async_func,
+      exec_vm, closure, coro->async_func,
       coro->super_val, coro->this_val, coro->args, coro->nargs, NULL
     );
-  } else {
-    coro->sv_vm->suspended_resume_value = resume_value;
-    coro->sv_vm->suspended_resume_is_error = (resume_kind == SV_RESUME_THROW);
-    coro->sv_vm->suspended_resume_kind = resume_kind;
-    coro->sv_vm->suspended_resume_pending = true;
-    result = sv_resume_suspended(coro->sv_vm);
+  } else if (coro->act && sv_activation_install(exec_vm, coro->act)) {
+    exec_vm->suspended_resume_value = resume_value;
+    exec_vm->suspended_resume_is_error = (resume_kind == SV_RESUME_THROW);
+    exec_vm->suspended_resume_kind = resume_kind;
+    exec_vm->suspended_resume_pending = true;
+    result = sv_resume_suspended(exec_vm);
+  } else result = js_mkerr(js, "generator activation lost");
+
+  bool suspended_now = true;
+  bool yielded_here = exec_vm->suspended && exec_vm->suspended_entry_fp >= 0;
+  
+  if (yielded_here) {
+    sv_activation_t *act = sv_activation_capture(
+      exec_vm, exec_vm->suspended_entry_fp, 
+      coro->act
+    );
+    
+    if (act) coro->act = act; else {
+      sv_activation_discard(exec_vm, exec_vm->suspended_entry_fp);
+      suspended_now = false;
+      result = js_mkerr(js, "out of memory capturing generator activation");
+    }
   }
   
+  if (suspended_now) suspended_now = coro->act && coro->act->frame_count > 0;
   GC_ROOT_PIN(js, result);
+  
   js->active_async_coro = saved_active;
   if (saved_active) saved_active->active_prev = NULL;
   
@@ -413,9 +402,10 @@ static ant_value_t generator_resume_kind(
     return result;
   }
 
-  if (coro->sv_vm && coro->sv_vm->suspended) {
+  if (suspended_now) {
     if (generator_is_async(gen) && vtype(coro->awaited_promise) != T_UNDEF) {
       generator_set_state(gen, GEN_EXECUTING);
+      
       if (vtype(coro->async_promise) != T_PROMISE) {
         coro->async_promise = js_mkpromise(js);
         GC_ROOT_PIN(js, coro->async_promise);
@@ -500,8 +490,7 @@ static ant_value_t generator_async_dispose(ant_t *js, ant_value_t *args, int nar
   return generator_return(js, NULL, 0);
 }
 
-void init_generator_module(void) {
-  ant_t *js = rt->js;
+void init_generator_module(ant_t *js) {
   ant_value_t proto = js_mkobj(js);
   
   js->sym.generator_proto = proto;
@@ -529,7 +518,7 @@ void init_generator_module(void) {
     js_set_descriptor(js, async_proto, "constructor", 11, JS_DESC_C);
   }
   
-  init_async_iterator_helpers();
+  init_async_iterator_helpers(js);
 }
 
 ant_value_t sv_call_generator_closure_dispatch(
@@ -538,22 +527,15 @@ ant_value_t sv_call_generator_closure_dispatch(
   ant_value_t this_val, ant_value_t *args, int argc
 ) {
   if (!closure || !closure->func) return js_mkerr(js, "invalid generator function");
-
-  sv_vm_t *gen_vm = sv_vm_create(js, SV_VM_ASYNC);
-  if (!gen_vm) return js_mkerr(js, "out of memory for generator VM");
-
-  coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
-  if (!coro) {
-    sv_vm_destroy(gen_vm);
-    return js_mkerr(js, "out of memory for generator");
-  }
+  
+  coroutine_t *coro = (coroutine_t *)calloc(1, sizeof(coroutine_t));
+  if (!coro) return js_mkerr(js, "out of memory for generator");
 
   ant_value_t *copied_args = NULL;
   if (argc > 0 && args) {
-    copied_args = (ant_value_t *)CORO_MALLOC(sizeof(ant_value_t) * (size_t)argc);
+    copied_args = (ant_value_t *)calloc(1, sizeof(ant_value_t) * (size_t)argc);
     if (!copied_args) {
-      sv_vm_destroy(gen_vm);
-      CORO_FREE(coro);
+      free(coro);
       return js_mkerr(js, "out of memory for generator args");
     }
     memcpy(copied_args, args, sizeof(ant_value_t) * (size_t)argc);
@@ -561,17 +543,15 @@ ant_value_t sv_call_generator_closure_dispatch(
 
   ant_value_t gen = js_mkgenerator(js);
   if (is_err(gen)) {
-    if (copied_args) CORO_FREE(copied_args);
-    sv_vm_destroy(gen_vm);
-    CORO_FREE(coro);
+    if (copied_args) free(copied_args);
+    free(coro);
     return gen;
   }
 
   generator_data_t *data = (generator_data_t *)calloc(1, sizeof(*data));
   if (!data) {
-    if (copied_args) CORO_FREE(copied_args);
-    sv_vm_destroy(gen_vm);
-    CORO_FREE(coro);
+    if (copied_args) free(copied_args);
+    free(coro);
     return js_mkerr(js, "out of memory for generator data");
   }
 
@@ -584,26 +564,15 @@ ant_value_t sv_call_generator_closure_dispatch(
     .awaited_promise = js_mkundef(),
     .result = js_mkundef(),
     .async_func = callee_func,
+    .owner_gen = gen,
     .args = copied_args,
     .nargs = argc,
     .active_parent = NULL,
-    .is_settled = false,
     .is_error = false,
-    .is_done = false,
-    .resume_point = 0,
-    .yield_value = js_mkundef(),
     .async_promise = js_mkundef(),
-    .next = NULL,
-    .mco = NULL,
-    .owner_vm = gen_vm,
-    .sv_vm = gen_vm,
-    .mco_started = false,
-    .is_ready = false,
-    .did_suspend = false,
     .refcount = 1,
     .hold_bits = 0,
     .await_registered = false,
-    .destroy_requested = false,
   };
 
   *data = (generator_data_t){
@@ -611,13 +580,16 @@ ant_value_t sv_call_generator_closure_dispatch(
     .state = GEN_SUSPENDED_START,
     .is_async = closure->func->is_async,
   };
+  
   coroutine_hold(coro, CORO_HOLD_GENERATOR);
   coroutine_release(coro);
 
   js_set_native(gen, data, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
 
-  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
+  ant_value_t prototype_target = js_resolve_bound_target(callee_func);
+  ant_value_t instance_proto = js_get(js, prototype_target, "prototype");
+  
   if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
   else if (data->is_async && is_object_type(js->sym.async_generator_proto))
     js_set_proto_wb(js, gen, js->sym.async_generator_proto);
