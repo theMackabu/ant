@@ -6,19 +6,30 @@
 #include "modules/collections.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include <uthash.h>
 
-typedef struct gc_weak_pending_value {
-  ant_value_t value;
-  struct gc_weak_pending_value *next;
-} gc_weak_pending_value_t;
-
-typedef struct gc_weak_pending_entry {
+typedef struct gc_weak_pending_pair {
   ant_value_t key;
   ant_value_t value;
-  gc_weak_pending_value_t *additional_values;
-  UT_hash_handle hh;
-} gc_weak_pending_entry_t;
+} gc_weak_pending_pair_t;
+
+typedef struct gc_weak_pending_index_entry {
+  ant_value_t key;
+  uint32_t head;
+} gc_weak_pending_index_entry_t;
+
+typedef struct gc_weak_pending_table {
+  gc_weak_pending_pair_t *pairs;
+  uint32_t *next;
+  gc_weak_pending_index_entry_t *index;
+  uint32_t pair_count;
+  uint32_t pair_capacity;
+  uint32_t next_capacity;
+  uint32_t index_capacity;
+  uint32_t index_count;
+  uint32_t index_tombstones;
+} gc_weak_pending_table_t;
 
 void gc_weak_register(ant_t *js, ant_object_t *obj) {
   if (!js || !obj || js->weak_gc.registry_overflow) return;
@@ -135,24 +146,24 @@ void gc_weak_mark_kept_alive(ant_t *js, gc_weak_mark_fn mark) {
 }
 
 static void gc_weak_clear_pending(ant_t *js) {
-  gc_weak_pending_entry_t *head = js ? js->weak_gc.pending : NULL;
-  gc_weak_pending_entry_t *entry, *tmp;
-  HASH_ITER(hh, head, entry, tmp) {
-    gc_weak_pending_value_t *value = entry->additional_values;
-    while (value) {
-      gc_weak_pending_value_t *next = value->next;
-      free(value);
-      value = next;
-    }
-    HASH_DEL(head, entry);
-    free(entry);
-  }
-  if (js) js->weak_gc.pending = NULL;
+  gc_weak_pending_table_t *table = js ? js->weak_gc.pending : NULL;
+  if (!table) return;
+  table->pair_count = 0;
+  if (table->index)
+    memset(table->index, 0, table->index_capacity * sizeof(*table->index));
+  table->index_count = 0;
+  table->index_tombstones = 0;
 }
 
 void gc_weak_cleanup(ant_t *js) {
   if (!js) return;
-  gc_weak_clear_pending(js);
+  gc_weak_pending_table_t *pending = js->weak_gc.pending;
+  if (pending) {
+    free(pending->pairs);
+    free(pending->next);
+    free(pending->index);
+    free(pending);
+  }
   free(js->weak_gc.collections);
   free(js->weak_gc.kept_alive);
   free(js->weak_gc.minor_edges);
@@ -164,74 +175,231 @@ static bool gc_weak_is_collection(const ant_object_t *obj) {
     obj->type_tag == T_WEAKSET || obj->native.tag == WEAKREF_NATIVE_TAG);
 }
 
+static uint32_t gc_weak_pending_index_find_slot(
+  gc_weak_pending_table_t *table, ant_value_t key,
+  uint32_t hash, bool *found
+) {
+  uint32_t mask = table->index_capacity - 1;
+  uint32_t slot = hash & mask;
+  uint32_t first_tombstone = UINT32_MAX;
+
+  for (;;) {
+    ant_value_t stored_key = table->index[slot].key;
+    if (stored_key == 0) {
+      *found = false;
+      return first_tombstone != UINT32_MAX ? first_tombstone : slot;
+    }
+    if (stored_key == key) {
+      *found = true;
+      return slot;
+    }
+    if (stored_key == 1 && first_tombstone == UINT32_MAX)
+      first_tombstone = slot;
+    slot = (slot + 1) & mask;
+  }
+}
+
+static bool gc_weak_pending_rehash(
+  gc_weak_pending_table_t *table, uint32_t new_capacity
+) {
+  gc_weak_pending_index_entry_t *new_index = calloc(
+    new_capacity, sizeof(*new_index)
+  );
+  if (!new_index) return false;
+
+  gc_weak_pending_index_entry_t *old_index = table->index;
+  uint32_t old_capacity = table->index_capacity;
+  table->index = new_index;
+  table->index_capacity = new_capacity;
+  table->index_count = 0;
+  table->index_tombstones = 0;
+
+  for (uint32_t i = 0; i < old_capacity; i++) {
+    gc_weak_pending_index_entry_t entry = old_index[i];
+    if (entry.key == 0 || entry.key == 1) continue;
+    bool found = false;
+    uint32_t slot = gc_weak_pending_index_find_slot(
+      table, entry.key, weak_collection_key_hash(entry.key), &found
+    );
+    table->index[slot] = entry;
+    table->index_count++;
+  }
+
+  free(old_index);
+  return true;
+}
+
+static gc_weak_pending_table_t *gc_weak_pending_get(ant_t *js) {
+  gc_weak_pending_table_t *table = js->weak_gc.pending;
+  if (table) return table;
+  table = calloc(1, sizeof(*table));
+  if (table) js->weak_gc.pending = table;
+  return table;
+}
+
+static bool gc_weak_pending_ensure_next(
+  gc_weak_pending_table_t *table, uint32_t capacity
+) {
+  if (capacity <= table->next_capacity) return true;
+  uint32_t *next = realloc(table->next, (size_t)capacity * sizeof(*next));
+  if (!next) return false;
+  table->next = next;
+  table->next_capacity = capacity;
+  return true;
+}
+
+static bool gc_weak_pending_index_add(
+  gc_weak_pending_table_t *table, uint32_t pair_index
+) {
+  ant_value_t key = table->pairs[pair_index].key;
+  if (table->index_capacity == 0 && !gc_weak_pending_rehash(table, 64))
+    return false;
+
+  uint32_t hash = weak_collection_key_hash(key);
+  bool found = false;
+  uint32_t slot = gc_weak_pending_index_find_slot(
+    table, key, hash, &found
+  );
+  if (!found) {
+    uint64_t used = (uint64_t)table->index_count +
+      table->index_tombstones + 1;
+    if (used * 4 >= (uint64_t)table->index_capacity * 3) {
+      if (table->index_capacity > UINT32_MAX / 2) return false;
+      if (!gc_weak_pending_rehash(
+        table, table->index_capacity * 2
+      )) return false;
+      slot = gc_weak_pending_index_find_slot(
+        table, key, hash, &found
+      );
+    }
+
+    if (table->index[slot].key == 1) table->index_tombstones--;
+    table->index[slot].key = key;
+    table->index[slot].head = 0;
+    table->index_count++;
+  }
+
+  table->next[pair_index] = table->index[slot].head;
+  table->index[slot].head = pair_index + 1;
+  return true;
+}
+
 static void gc_weak_add_pending(
   ant_t *js, ant_value_t key, ant_value_t value
 ) {
-  gc_weak_pending_entry_t *head = js->weak_gc.pending;
-  gc_weak_pending_entry_t *entry = NULL;
-  HASH_FIND(hh, head, &key, sizeof(key), entry);
-  if (entry) {
-    gc_weak_pending_value_t *additional = malloc(sizeof(*additional));
-    if (!additional) {
-      js->weak_gc.pending_oom = true;
-      return;
-    }
-    additional->value = value;
-    additional->next = entry->additional_values;
-    entry->additional_values = additional;
-    return;
-  }
-
-  entry = malloc(sizeof(*entry));
-  if (!entry) {
+  gc_weak_pending_table_t *table = gc_weak_pending_get(js);
+  if (!table) {
     js->weak_gc.pending_oom = true;
     return;
   }
-  entry->key = key;
-  entry->value = value;
-  entry->additional_values = NULL;
-  HASH_ADD(hh, head, key, sizeof(key), entry);
-  js->weak_gc.pending = head;
+
+  if (table->pair_count == table->pair_capacity) {
+    uint32_t new_capacity = table->pair_capacity
+      ? table->pair_capacity * 2
+      : 64;
+    if (new_capacity < table->pair_capacity) {
+      js->weak_gc.pending_oom = true;
+      return;
+    }
+    gc_weak_pending_pair_t *pairs = realloc(
+      table->pairs, (size_t)new_capacity * sizeof(*pairs)
+    );
+    if (!pairs) {
+      js->weak_gc.pending_oom = true;
+      return;
+    }
+    table->pairs = pairs;
+    table->pair_capacity = new_capacity;
+  }
+
+  uint32_t pair_index = table->pair_count++;
+  table->pairs[pair_index] = (gc_weak_pending_pair_t){
+    .key = key,
+    .value = value
+  };
+
+  if (js->weak_gc.pending_active &&
+      (!gc_weak_pending_ensure_next(table, table->pair_capacity) ||
+       !gc_weak_pending_index_add(table, pair_index)))
+    js->weak_gc.pending_oom = true;
 }
 
 void gc_weak_key_marked(ant_t *js, ant_value_t key) {
   if (!js || !js->weak_gc.pending_active || !js->weak_gc.mark) return;
-  gc_weak_pending_entry_t *head = js->weak_gc.pending;
-  gc_weak_pending_entry_t *entry = NULL;
-  HASH_FIND(hh, head, &key, sizeof(key), entry);
-  if (!entry) return;
+  gc_weak_pending_table_t *table = js->weak_gc.pending;
+  if (!table || table->index_capacity == 0) return;
 
-  HASH_DEL(head, entry);
-  js->weak_gc.pending = head;
-  js->weak_gc.mark(js, entry->value);
+  bool found = false;
+  uint32_t slot = gc_weak_pending_index_find_slot(
+    table, key, weak_collection_key_hash(key), &found
+  );
+  if (!found) return;
 
-  gc_weak_pending_value_t *value = entry->additional_values;
-  while (value) {
-    gc_weak_pending_value_t *next = value->next;
-    js->weak_gc.mark(js, value->value);
-    free(value);
-    value = next;
+  gc_weak_pending_index_entry_t *entry = &table->index[slot];
+  uint32_t next = entry->head;
+  entry->key = 1;
+  entry->head = 0;
+  table->index_count--;
+  table->index_tombstones++;
+
+  while (next) {
+    uint32_t pair_index = next - 1;
+    next = table->next[pair_index];
+    js->weak_gc.mark(js, table->pairs[pair_index].value);
   }
-  free(entry);
+}
+
+static bool gc_weak_prepare_pending(ant_t *js) {
+  gc_weak_pending_table_t *table = js->weak_gc.pending;
+  if (!table || table->pair_count == 0) return true;
+
+  bool has_live_key = false;
+  for (uint32_t i = 0; i < table->pair_count; i++) {
+    if (js->weak_gc.key_alive(js, table->pairs[i].key)) {
+      has_live_key = true;
+      break;
+    }
+  }
+  if (!has_live_key) return true;
+
+  if (!gc_weak_pending_ensure_next(table, table->pair_capacity))
+    return false;
+  for (uint32_t i = 0; i < table->pair_count; i++)
+    if (!gc_weak_pending_index_add(table, i)) return false;
+
+  js->weak_gc.pending_active = true;
+  for (uint32_t i = 0; i < table->pair_count; i++) {
+    ant_value_t key = table->pairs[i].key;
+    if (js->weak_gc.key_alive(js, key)) gc_weak_key_marked(js, key);
+  }
+  return true;
 }
 
 static void gc_weak_process_map(ant_t *js, ant_object_t *obj) {
   if (!obj || obj->type_tag != T_WEAKMAP ||
       !js->weak_gc.mark || !js->weak_gc.key_alive) return;
-  weakmap_entry_t **head = js_get_native(
+  weakmap_table_t *table = js_get_native(
     js_obj_from_ptr(obj), WEAKMAP_NATIVE_TAG
   );
-  if (!head) return;
-  weakmap_entry_t *entry, *tmp;
-  HASH_ITER(hh, *head, entry, tmp) {
+  if (!table) return;
+  for (uint32_t i = 0; i < table->capacity; i++) {
+    weakmap_entry_t *entry = &table->entries[i];
+    if (!weakmap_entry_is_occupied(entry)) continue;
+    if (js->weak_gc.pending_oom) {
+      js->weak_gc.mark(js, entry->key_obj);
+      js->weak_gc.mark(js, entry->value);
+      continue;
+    }
     if (js->weak_gc.key_alive(js, entry->key_obj))
       js->weak_gc.mark(js, entry->value);
-    else gc_weak_add_pending(js, entry->key_obj, entry->value);
+    else gc_weak_add_pending(
+      js, entry->key_obj, entry->value
+    );
   }
 }
 
 void gc_weak_collection_marked(ant_t *js, ant_object_t *obj) {
-  if (js && js->weak_gc.pending_active && obj->type_tag == T_WEAKMAP)
+  if (js && js->weak_gc.mark && obj->type_tag == T_WEAKMAP)
     gc_weak_process_map(js, obj);
 }
 
@@ -241,10 +409,11 @@ static void gc_weak_mark_all_in_collection(ant_t *js, ant_object_t *obj) {
   if (weakref) js->weak_gc.mark(js, weakref->target);
 
   if (obj->type_tag == T_WEAKMAP) {
-    weakmap_entry_t **head = js_get_native(collection, WEAKMAP_NATIVE_TAG);
-    if (!head) return;
-    weakmap_entry_t *entry, *tmp;
-    HASH_ITER(hh, *head, entry, tmp) {
+    weakmap_table_t *table = js_get_native(collection, WEAKMAP_NATIVE_TAG);
+    if (!table) return;
+    for (uint32_t i = 0; i < table->capacity; i++) {
+      weakmap_entry_t *entry = &table->entries[i];
+      if (!weakmap_entry_is_occupied(entry)) continue;
       js->weak_gc.mark(js, entry->key_obj);
       js->weak_gc.mark(js, entry->value);
     }
@@ -264,14 +433,18 @@ static void gc_weak_prune_collection(ant_t *js, ant_object_t *obj) {
     weakref->target = js_mkundef();
 
   if (obj->type_tag == T_WEAKMAP) {
-    weakmap_entry_t **head = js_get_native(collection, WEAKMAP_NATIVE_TAG);
-    if (!head) return;
-    weakmap_entry_t *entry, *tmp;
-    HASH_ITER(hh, *head, entry, tmp) {
+    weakmap_table_t *table = js_get_native(collection, WEAKMAP_NATIVE_TAG);
+    if (!table) return;
+    for (uint32_t i = 0; i < table->capacity; i++) {
+      weakmap_entry_t *entry = &table->entries[i];
+      if (!weakmap_entry_is_occupied(entry)) continue;
       if (js->weak_gc.key_alive(js, entry->key_obj)) continue;
-      HASH_DEL(*head, entry);
-      free(entry);
+      entry->key_obj = 1;
+      entry->value = 0;
+      table->count--;
+      table->tombstones++;
     }
+    weakmap_table_finish_prune(table);
   } else if (obj->type_tag == T_WEAKSET) {
     weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
     if (!head) return;
@@ -292,8 +465,9 @@ static void gc_weak_process_minor_edges(ant_t *js) {
     if (edge->kind == T_WEAKMAP) {
       if (js->weak_gc.key_alive(js, edge->key))
         js->weak_gc.mark(js, edge->value);
-      else
+      else {
         gc_weak_add_pending(js, edge->key, edge->value);
+      }
     }
   }
 }
@@ -306,13 +480,10 @@ static void gc_weak_prune_minor_edges(ant_t *js) {
         js->weak_gc.key_alive(js, edge->key)) continue;
     ant_value_t collection = js_obj_from_ptr(obj);
     if (edge->kind == T_WEAKMAP) {
-      weakmap_entry_t **head = js_get_native(collection, WEAKMAP_NATIVE_TAG);
-      weakmap_entry_t *entry = NULL;
-      if (head) HASH_FIND(hh, *head, &edge->key, sizeof(edge->key), entry);
-      if (entry) {
-        HASH_DEL(*head, entry);
-        free(entry);
-      }
+      weakmap_table_t *table = js_get_native(
+        collection, WEAKMAP_NATIVE_TAG
+      );
+      if (table) weakmap_table_delete(table, edge->key);
     } else if (edge->kind == T_WEAKSET) {
       weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
       weakset_entry_t *entry = NULL;
@@ -370,7 +541,7 @@ void gc_weak_process(
     goto done;
   }
 
-  js->weak_gc.pending_active = true;
+  js->weak_gc.pending_active = false;
   js->weak_gc.pending_oom = false;
   for (size_t i = 0; i < js->weak_gc.collection_len; i++) {
     ant_object_t *obj = js->weak_gc.collections[i];
@@ -380,6 +551,11 @@ void gc_weak_process(
   }
   if (minor) gc_weak_process_minor_edges(js);
   drain(js);
+
+  if (!js->weak_gc.pending_oom && !gc_weak_prepare_pending(js))
+    js->weak_gc.pending_oom = true;
+  if (!js->weak_gc.pending_oom && js->weak_gc.pending_active)
+    drain(js);
 
   if (js->weak_gc.pending_oom) {
     gc_weak_clear_pending(js);

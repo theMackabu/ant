@@ -168,6 +168,12 @@ Repository examples and tests using the synchronous API move with the change.
   primitive itself. Extract a native process stage below both adapters so the
   public child-process API retains live streams while shell plans retain kernel
   pipe graphs and aggregate completion results.
+- 2026-08-16: Store WeakMap entries in a compact open-addressed identity table
+  instead of allocating one UTHash node per entry. During collection, first
+  accumulate unresolved ephemerons in a contiguous pair list. Build the
+  key-indexed worklist only when the first drain makes a pending key live; the
+  common all-dead case therefore avoids hash construction while long and
+  reversed ephemeron chains retain linear fixed-point processing.
 
 ## Validation status
 
@@ -193,6 +199,14 @@ Repository examples and tests using the synchronous API move with the change.
   77-78 ms). A 100,000-entry live WeakMap construction stress case was roughly
   7% slower than the old strong-marking implementation; this is isolated to
   weak-edge mutation and avoids the earlier repeated full-table minor scans.
+- A later 12-run serial AB/BA comparison against optimized `3d0df5b4` measured
+  300,000 WeakMap inserts at 11.06 ms versus 22.31 ms and lookups at 5.35 ms
+  versus 15.73 ms. Dead-key GC churn improved from 241.49 ms to 228.24 ms for
+  unique keys and from 154.78 ms to 123.94 ms when keys were shared across
+  maps. Equivalent allocation/churn without WeakMap operations took 189.96 ms
+  and 107.27 ms, so proposed 150 ms and 90 ms GC targets are below the current
+  non-WeakMap workload floor. The 300,000-entry operation run also reduced
+  maximum RSS from 107.5 MB to 96.0 MB.
 - `./build/ant tests/test_collections_constructor_iterables.cjs`: passed.
 - `./build/ant tests/test_weakmap.js`: passed.
 - `./build/ant examples/spec/run.js --all`: 3,920 passed, 0 failed across

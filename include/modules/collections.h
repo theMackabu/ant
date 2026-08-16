@@ -23,8 +23,14 @@ typedef struct set_entry {
 typedef struct weakmap_entry {
   ant_value_t key_obj;
   ant_value_t value;
-  UT_hash_handle hh;
 } weakmap_entry_t;
+
+typedef struct weakmap_table {
+  weakmap_entry_t *entries;
+  uint32_t count;
+  uint32_t capacity;
+  uint32_t tombstones;
+} weakmap_table_t;
 
 typedef struct weakset_entry {
   ant_value_t value_obj;
@@ -85,5 +91,23 @@ bool collections_weakmap_set(
   ant_t *js, ant_value_t weakmap,
   ant_value_t key, ant_value_t value
 );
+
+weakmap_entry_t *weakmap_table_find(
+  weakmap_table_t *table, ant_value_t key
+);
+
+bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
+void weakmap_table_finish_prune(weakmap_table_t *table);
+void weakmap_table_free(weakmap_table_t *table);
+
+static inline bool weakmap_entry_is_occupied(const weakmap_entry_t *entry) {
+  return entry->key_obj != 0 && entry->key_obj != 1;
+}
+
+static inline uint32_t weak_collection_key_hash(ant_value_t key) {
+  uint32_t hash = (uint32_t)key ^ (uint32_t)(key >> 32);
+  hash = ((hash >> 16) ^ hash) * UINT32_C(0x45d9f3b);
+  return (hash >> 16) ^ hash;
+}
 
 #endif

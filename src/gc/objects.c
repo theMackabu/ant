@@ -942,11 +942,9 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     }
     case T_WEAKMAP: {
       ant_value_t value = js_obj_from_ptr(obj);
-      weakmap_entry_t **head = (weakmap_entry_t **)js_get_native(value, WEAKMAP_NATIVE_TAG);
-      if (head) {
-        weakmap_entry_t *e, *tmp;
-        HASH_ITER(hh, *head, e, tmp) { HASH_DEL(*head, e); free(e); }
-        free(head);
+      weakmap_table_t *table = js_get_native(value, WEAKMAP_NATIVE_TAG);
+      if (table) {
+        weakmap_table_free(table);
         js_clear_native(value, WEAKMAP_NATIVE_TAG);
       }
       break;
