@@ -266,6 +266,7 @@ static void gc_sweep_young_closures(ant_t *js) {
   for (size_t i = 0; i < js->young_closure_len; i++) {
     sv_closure_t *c = js->young_closures[i];
     if (c->gc_epoch == gc_epoch) {
+      c->generation = 1;
       js->gc_closure_promoted_since_major++;
       continue;
     }
@@ -423,6 +424,8 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   if (c->gc_epoch == gc_epoch) return;
   
   c->gc_epoch = gc_epoch;
+  if (js->weak_gc.pending_active)
+    gc_weak_key_marked(js, mkval(T_FUNC, (uintptr_t)c));
   gc_mark_func(js, c->func);
   if (c->func_obj) gc_mark_value(js, c->func_obj);
   gc_mark_value(js, c->module_ctx);
@@ -566,6 +569,14 @@ while (gc_mark_sp > 0) {
 static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
   uint8_t type = vtype(key);
   if (type == T_CFUNC) return true;
+
+  if (type == T_FUNC) {
+    sv_closure_t *closure = js_func_closure(key);
+    if (!closure || !fixed_arena_contains(&js->closure_arena, closure))
+      return false;
+    return (g_minor_gc && closure->generation == 1) ||
+      closure->gc_epoch == gc_epoch;
+  }
   
   if (type == T_SYMBOL) {
     if (g_minor_gc) return true;
@@ -587,10 +598,18 @@ static bool gc_weak_collection_live(const ant_object_t *obj) {
     obj->mark_epoch == gc_obj_epoch || obj->flags.gc_permanent);
 }
 
+static ant_value_t gc_weak_key_from_marked_object(ant_object_t *obj) {
+switch (obj->type_tag) {
+  case T_ARR:
+  case T_PROMISE:
+  case T_GENERATOR: return mkval(obj->type_tag, (uintptr_t)obj);
+  default: return js_obj_from_ptr(obj);
+}}
+
 static void gc_drain_mark_stack_weak(ant_t *js) {
 while (gc_mark_sp > 0) {
   ant_object_t *obj = gc_mark_stack[--gc_mark_sp];
-  gc_weak_key_marked(js, js_obj_from_ptr(obj));
+  gc_weak_key_marked(js, gc_weak_key_from_marked_object(obj));
   gc_weak_collection_marked(js, obj);
   gc_scan_obj(js, obj);
 }}
@@ -1109,7 +1128,10 @@ void gc_objects_run(
   for (size_t off = 0; off < ca->watermark; off += ca->elem_size) {
   sv_closure_t *c = (sv_closure_t *)(ca->base + off);
   
-  if (c->gc_epoch == gc_epoch) ca->live_count++;
+  if (c->gc_epoch == gc_epoch) {
+    c->generation = 1;
+    ca->live_count++;
+  }
   else {
     gc_release_closure_payload(c);
 

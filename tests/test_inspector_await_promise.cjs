@@ -192,37 +192,104 @@ async function main() {
     );
 
     await cdp.send('Runtime.evaluate', {
-      expression: `globalThis.__minorWeakState = {
-        map: new WeakMap(),
-        key: null,
-        valueRef: null,
-      }; 1`,
+      expression: `globalThis.__typedWeakKeyState = (() => {
+        const makeKey = [
+          () => [],
+          () => Promise.resolve(),
+          () => (function* () {})(),
+          () => function () {},
+        ];
+        return makeKey.map(createKey => {
+          const map = new WeakMap();
+          const root = {};
+          const key = createKey();
+          const value = {};
+          map.set(key, value);
+          map.set(root, key);
+          return {
+            map,
+            set: new WeakSet([key]),
+            root,
+            valueRef: new WeakRef(value),
+          };
+        });
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveTypedKeyEphemerons = await cdp.send('Runtime.evaluate', {
+      expression: `__typedWeakKeyState
+        .map(state => {
+          const key = state.map.get(state.root);
+          return Boolean(state.valueRef.deref()) &&
+            state.map.has(key) && state.set.has(key);
+        })
+        .join(',')`,
+    });
+    assert.equal(
+      liveTypedKeyEphemerons.result.value,
+      'true,true,true,true',
+      String(liveTypedKeyEphemerons.result.value)
+    );
+    await cdp.send('Runtime.evaluate', {
+      expression: '__typedWeakKeyState.forEach(state => { state.root = null }); 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadTypedKeyEphemerons = await cdp.send('Runtime.evaluate', {
+      expression: `__typedWeakKeyState
+        .map(state => state.valueRef.deref() === undefined)
+        .join(',')`,
+    });
+    assert.equal(
+      deadTypedKeyEphemerons.result.value,
+      'true,true,true,true',
+      String(deadTypedKeyEphemerons.result.value)
+    );
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__minorWeakState = Array.from(
+        { length: 4 },
+        () => ({ map: new WeakMap(), root: {}, valueRef: null })
+      ); 1`,
     });
     await cdp.send('HeapProfiler.collectGarbage');
     await cdp.send('Runtime.evaluate', {
       expression: `(() => {
-        const key = {};
-        const value = {};
-        __minorWeakState.key = key;
-        __minorWeakState.map.set(key, value);
-        __minorWeakState.valueRef = new WeakRef(value);
+        const keys = [
+          [],
+          Promise.resolve(),
+          (function* () {})(),
+          function () {},
+        ];
+        __minorWeakState.forEach((state, index) => {
+          const value = {};
+          const key = keys[index];
+          state.map.set(key, value);
+          state.map.set(state.root, key);
+          state.valueRef = new WeakRef(value);
+        });
       })(); 1`,
     });
     await cdp.send('Runtime.evaluate', {
       expression: 'for (let i = 0; i < 250000; i++) ({ i }); 1',
     });
     const youngEphemeron = await cdp.send('Runtime.evaluate', {
-      expression: 'Boolean(__minorWeakState.valueRef.deref())',
+      expression: `__minorWeakState
+        .map(state => Boolean(state.valueRef.deref()))
+        .join(',')`,
     });
-    assert.equal(youngEphemeron.result.value, true);
+    assert.equal(youngEphemeron.result.value, 'true,true,true,true');
     await cdp.send('Runtime.evaluate', {
-      expression: '__minorWeakState.key = null; for (let i = 0; i < 250000; i++) ({ i }); 1',
+      expression: `__minorWeakState.forEach(state => { state.root = null });
+        for (let i = 0; i < 250000; i++) ({ i }); 1`,
     });
     await cdp.send('HeapProfiler.collectGarbage');
     const deadYoungEphemeron = await cdp.send('Runtime.evaluate', {
-      expression: '__minorWeakState.valueRef.deref() === undefined',
+      expression: `__minorWeakState
+        .map(state => state.valueRef.deref() === undefined)
+        .join(',')`,
     });
-    assert.equal(deadYoungEphemeron.result.value, true);
+    assert.equal(deadYoungEphemeron.result.value, 'true,true,true,true');
 
     await cdp.send('Runtime.evaluate', {
       expression: `globalThis.__weakSymbolState = (() => {
