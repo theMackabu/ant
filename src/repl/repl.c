@@ -565,17 +565,23 @@ static repl_eval_status_t repl_evaluate(
   ant_value_t result = evaluation.value;
 
   if (evaluation.kind == JS_EVAL_ASYNC_ENTRY && !js->thrown_exists) {
-    js_reactor_await_status_t await_status = js_reactor_await_promise(
+    js_reactor_await_status_t await_status = js_reactor_blocking_await_promise(
       js, result, &result, 
       repl_eval_interrupt_pending, NULL
     );
     if (await_status == JS_REACTOR_AWAIT_INTERRUPTED) {
+      (void)js_eval_async_entry_cancel(evaluation.async_entry);
+      js_eval_async_entry_release(evaluation.async_entry);
       ant_readline_clear_interrupt();
       return REPL_EVAL_INTERRUPTED;
     }
+    js_eval_async_entry_release(evaluation.async_entry);
     if (await_status == JS_REACTOR_AWAIT_REJECTED) js_throw(js, result);
     else if (await_status == JS_REACTOR_AWAIT_INVALID) result = js_mkerr(js, "invalid top-level await completion");
-  } else js_reactor_pump_repl_nowait(js);
+  } else {
+    js_eval_async_entry_release(evaluation.async_entry);
+    js_reactor_pump_repl_nowait(js);
+  }
 
   if (result_out) *result_out = result;
   return REPL_EVAL_COMPLETED;

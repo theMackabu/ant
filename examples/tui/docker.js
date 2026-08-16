@@ -23,11 +23,11 @@ const containerList = new List({
   renderItem: container => formatContainer(container)
 });
 
-async function runDocker(command) {
-  const result = await $(command).nothrow();
+async function runDocker(command, label) {
+  const result = await command.nothrow();
   if (result.exitCode !== 0) {
     const output = (result.stderr || result.stdout).trim();
-    state.lastError = output || `Command failed: ${command}`;
+    state.lastError = output || `Command failed: ${label}`;
     return null;
   }
   return result.stdout;
@@ -91,7 +91,7 @@ function applyFilter() {
 
 async function refreshContainers() {
   state.lastError = '';
-  const output = await runDocker("docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'");
+  const output = await runDocker($`docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'`, 'docker ps -a');
   if (output === null) {
     containers = [];
     containerList.setItems([]);
@@ -174,7 +174,7 @@ function runAction(action, container) {
       return;
     }
 
-    const output = await runDocker(`docker ${action} ${container.id}`);
+    const output = await runDocker($`docker ${action} ${container.id}`, `docker ${action} ${container.id}`);
     if (output === null) {
       alert(screen, {
         title: 'Docker Error',

@@ -1,4 +1,4 @@
-#include "modules/shell_internal.h"
+#include "shell_internal.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -263,6 +263,7 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       if (!sh_flush_literal(&token.word, literal_quote, &literal)) goto oom;
       quote = SH_QUOTE_SINGLE;
       literal_quote = quote;
+      if (!sh_word_add_literal(&token.word, quote, "", 0)) goto oom;
       word_started = true;
       continue;
     }
@@ -270,6 +271,7 @@ static sh_token_t sh_lex_word(sh_lexer_t *lexer) {
       if (!sh_flush_literal(&token.word, literal_quote, &literal)) goto oom;
       quote = SH_QUOTE_DOUBLE;
       literal_quote = quote;
+      if (!sh_word_add_literal(&token.word, quote, "", 0)) goto oom;
       word_started = true;
       continue;
     }
@@ -366,6 +368,17 @@ static sh_token_t sh_lex_next(sh_lexer_t *lexer) {
         sh_take_matching_char(&lexer->input, '&') &&
         sh_take_matching_char(&lexer->input, '1')) {
       return (sh_token_t){ .kind = SH_TOKEN_REDIR_STDERR_TO_STDOUT };
+    }
+    lexer->input = saved;
+  }
+
+  if (event.ch >= '0' && event.ch <= '9') {
+    sh_input_t saved = lexer->input;
+    do event = sh_input_take(&lexer->input);
+    while ((event = sh_input_peek(&lexer->input)).kind == SH_INPUT_CHAR && event.ch >= '0' && event.ch <= '9');
+    if (event.kind == SH_INPUT_CHAR && (event.ch == '<' || event.ch == '>')) {
+      sh_set_error(lexer, "numeric file descriptor redirection is not implemented");
+      return (sh_token_t){ .kind = SH_TOKEN_ERROR };
     }
     lexer->input = saved;
   }

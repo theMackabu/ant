@@ -1221,7 +1221,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
       return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     }
 
-    return js_execute_compiled_bytecode(js, func);
+    return js_execute_compiled_bytecode(js, func, NULL);
   }
 
   parse_arena_rewind(parse_mark);

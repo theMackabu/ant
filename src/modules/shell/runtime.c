@@ -1,4 +1,4 @@
-#include "modules/shell_internal.h"
+#include "shell_internal.h"
 
 #include <uv.h>
 #include <limits.h>
@@ -56,6 +56,7 @@ static ant_value_t sh_result(
   js_set(js, result, "stderr", js_mkstr(js, stderr_text ? stderr_text : "", stderr_len));
   js_set(js, result, "exitCode", js_mknum((double)exit_code));
   js_set(js, result, "signalCode", js_mknull());
+  js_set(js, result, "exited", js_false);
   return result;
 }
 
@@ -80,6 +81,36 @@ static bool sh_value_append(ant_t *js, sh_bytes_t *bytes, ant_value_t value) {
   size_t len = 0;
   char *text = js_getstr(js, string, &len);
   return text && sh_bytes_append(bytes, text, len);
+}
+
+static ant_value_t sh_reject_current_exception(ant_t *js) {
+  ant_value_t error = js->thrown_exists ? js->thrown_value : js_mkerr(js, "ant:shell failed");
+  js->thrown_exists = false;
+  js->thrown_value = js_mkundef();
+  js->thrown_stack = js_mkundef();
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, error);
+  return promise;
+}
+
+static ant_value_t sh_abrupt_or_error(ant_t *js, const char *message) {
+  if (!js->thrown_exists) js_mkerr(js, "%s", message);
+  return sh_reject_current_exception(js);
+}
+
+static ant_value_t sh_rejected_type_error(ant_t *js, const char *message) {
+  js_mkerr_typed(js, JS_ERR_TYPE, "%s", message);
+  return sh_reject_current_exception(js);
+}
+
+static bool sh_argv_has_nul(ant_t *js, ant_value_t argv) {
+  ant_offset_t count = js_arr_len(js, argv);
+  for (ant_offset_t i = 0; i < count; i++) {
+    size_t len = 0;
+    char *text = js_getstr(js, js_arr_get(js, argv, i), &len);
+    if (text && memchr(text, '\0', len)) return true;
+  }
+  return false;
 }
 
 static bool sh_build_word(
@@ -199,7 +230,13 @@ static ant_value_t sh_run_builtin(
         status = end && *end == '\0' ? (int)((unsigned long)parsed & 255u) : 2;
       }
     }
-    return sh_resolved_result(js, "", 0, "", 0, status);
+    ant_value_t promise = js_mkpromise(js);
+    ant_value_t result = sh_result(js, "", 0, "", 0, status);
+    
+    js_set(js, result, "exited", js_true);
+    js_resolve_promise(js, promise, result);
+    
+    return promise;
   }
 
   if (name_len == 4 && memcmp(name, "echo", 4) == 0) {
@@ -327,6 +364,10 @@ static char *sh_resolve_path(
   size_t path_len = 0;
   char *path = js_getstr(js, path_value, &path_len);
   if (!path) return NULL;
+  if (memchr(path, '\0', path_len)) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "ant:shell: redirection paths cannot contain NUL bytes");
+    return NULL;
+  }
 #ifdef _WIN32
   bool absolute = path_len > 0 && (
     path[0] == '/' || path[0] == '\\' ||
@@ -356,79 +397,17 @@ static char *sh_resolve_path(
   return joined;
 }
 
-static bool sh_read_redirect_file(
-  ant_t *js,
-  const char *path,
-  ant_value_t *contents,
-  int *error_code
-) {
-  uv_fs_t request;
-  int fd = uv_fs_open(uv_default_loop(), &request, path, O_RDONLY, 0, NULL);
-  uv_fs_req_cleanup(&request);
-  if (fd < 0) {
-    *error_code = fd;
-    return false;
-  }
-
-  sh_bytes_t bytes = {0};
-  int64_t offset = 0;
-  for (;;) {
-    char chunk[16384];
-    uv_buf_t buffer = uv_buf_init(chunk, sizeof(chunk));
-    int read = uv_fs_read(uv_default_loop(), &request, fd, &buffer, 1, offset, NULL);
-    uv_fs_req_cleanup(&request);
-    if (read < 0) {
-      *error_code = read;
-      free(bytes.data);
-      uv_fs_close(uv_default_loop(), &request, fd, NULL);
-      uv_fs_req_cleanup(&request);
-      return false;
-    }
-    if (read == 0) break;
-    if (!sh_bytes_append(&bytes, chunk, (size_t)read)) {
-      *error_code = UV_ENOMEM;
-      free(bytes.data);
-      uv_fs_close(uv_default_loop(), &request, fd, NULL);
-      uv_fs_req_cleanup(&request);
-      return false;
-    }
-    offset += read;
-  }
-  uv_fs_close(uv_default_loop(), &request, fd, NULL);
-  uv_fs_req_cleanup(&request);
-  *contents = js_mkstr(js, bytes.data ? bytes.data : "", bytes.len);
-  free(bytes.data);
-  return !is_err(*contents);
-}
-
-static ant_value_t sh_redirection_error(
-  ant_t *js,
-  const char *path,
-  int error_code
-) {
-  sh_bytes_t message = {0};
-  sh_bytes_append(&message, "ant:shell: ", sizeof("ant:shell: ") - 1);
-  sh_bytes_append(&message, path, strlen(path));
-  sh_bytes_append(&message, ": ", 2);
-  const char *reason = uv_strerror(error_code);
-  sh_bytes_append(&message, reason, strlen(reason));
-  sh_bytes_append(&message, "\n", 1);
-  ant_value_t promise = sh_resolved_result(js, "", 0,
-    message.data, message.len, 1);
-  free(message.data);
-  return promise;
-}
-
 static bool sh_prepare_redirections(
   ant_t *js,
   ant_value_t context,
   ant_value_t redirs,
   ant_value_t values,
   ant_value_t options,
-  ant_value_t *state_out,
-  ant_value_t *error_promise
+  ant_value_t *state_out
 ) {
   ant_value_t state = js_mkobj(js);
+  ant_value_t redirect_plan = js_mkarr(js);
+  js_set(js, options, "redirections", redirect_plan);
   js_set(js, state, "outputPath", js_mkundef());
   js_set(js, state, "outputAppend", js_false);
   js_set(js, state, "stderrMode", js_mknum(0));
@@ -443,6 +422,9 @@ static bool sh_prepare_redirections(
     if (vtype(kind_value) != T_NUM) return false;
     int kind = (int)js_getnum(kind_value);
     if (kind == SH_REDIR_STDERR_TO_STDOUT) {
+      ant_value_t action = js_mkobj(js);
+      js_set(js, action, "kind", js_mknum(SH_REDIR_STDERR_TO_STDOUT));
+      js_arr_push(js, redirect_plan, action);
       ant_value_t output_path = js_get(js, state, "outputPath");
       if (vtype(output_path) == T_STR) {
         js_set(js, state, "stderrMode", js_mknum(2));
@@ -460,31 +442,17 @@ static bool sh_prepare_redirections(
     char *path = sh_resolve_path(js, context, target);
     if (!path) return false;
 
+    ant_value_t action = js_mkobj(js);
+    js_set(js, action, "kind", js_mknum((double)kind));
+    js_set(js, action, "path", js_mkstr(js, path, strlen(path)));
+    js_arr_push(js, redirect_plan, action);
+
     if (kind == SH_REDIR_STDIN) {
-      ant_value_t contents = js_mkundef();
-      int error_code = 0;
-      if (!sh_read_redirect_file(js, path, &contents, &error_code)) {
-        *error_promise = sh_redirection_error(js, path, error_code);
-        free(path);
-        return false;
-      }
-      js_set(js, options, "input", contents);
       free(path);
       continue;
     }
 
     bool append = kind == SH_REDIR_STDOUT_APPEND;
-    int flags = O_CREAT | O_WRONLY | (append ? O_APPEND : O_TRUNC);
-    uv_fs_t request;
-    int fd = uv_fs_open(uv_default_loop(), &request, path, flags, 0666, NULL);
-    uv_fs_req_cleanup(&request);
-    if (fd < 0) {
-      *error_promise = sh_redirection_error(js, path, fd);
-      free(path);
-      return false;
-    }
-    uv_fs_close(uv_default_loop(), &request, fd, NULL);
-    uv_fs_req_cleanup(&request);
     js_set(js, state, "outputPath", js_mkstr(js, path, strlen(path)));
     js_set(js, state, "outputAppend", js_bool(append));
     free(path);
@@ -533,7 +501,7 @@ static bool sh_write_redirect_file(
   char *path = js_getstr(js, path_value, &path_len);
   if (!path || (!text && text_len)) return false;
 
-  int flags = O_CREAT | O_WRONLY | (append ? O_APPEND : 0);
+  int flags = O_CREAT | O_WRONLY | (append ? O_APPEND : O_TRUNC);
   uv_fs_t request;
   int fd = uv_fs_open(uv_default_loop(), &request, path, flags, 0666, NULL);
   uv_fs_req_cleanup(&request);
@@ -659,8 +627,9 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
       ant_value_t redirs = js_mkundef();
       if (!sh_build_command_argv(
         js, js_arr_get(js, pipeline, i), values, &argv, &redirs
-      )) return sh_resolved_result(js, "", 0,
-        "ant:shell: invalid pipeline command\n", sizeof("ant:shell: invalid pipeline command\n") - 1, 2);
+      )) return sh_abrupt_or_error(js, "ant:shell: invalid pipeline command");
+      if (sh_argv_has_nul(js, argv))
+        return sh_rejected_type_error(js, "ant:shell: command arguments cannot contain NUL bytes");
       ant_offset_t redir_count = js_arr_len(js, redirs);
       for (ant_offset_t j = 0; j < redir_count; j++) {
         ant_value_t redir = js_arr_get(js, redirs, j);
@@ -676,31 +645,30 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
       }
       js_arr_push(js, commands, argv);
     }
+    
     ant_value_t redir_state = js_mkundef();
-    ant_value_t redir_error = js_mkundef();
     if (!sh_prepare_redirections(
-      js, context, pipeline_redirs, values, options, &redir_state, &redir_error
-    )) return is_undefined(redir_error)
-      ? sh_resolved_result(js, "", 0, "ant:shell: invalid redirection\n",
-          sizeof("ant:shell: invalid redirection\n") - 1, 2)
-      : redir_error;
-    return sh_apply_redirections(js,
-      child_process_pipeline_result(js, commands, options), redir_state);
+      js, context, pipeline_redirs, values, options, &redir_state
+    )) return js->thrown_exists ? sh_reject_current_exception(js)
+      : js_mkerr(js, "ant:shell: invalid redirection");
+    return child_process_pipeline_result(js, commands, options);
   }
 
   ant_value_t command = js_arr_get(js, pipeline, 0);
   ant_value_t argv = js_mkundef();
   ant_value_t redirs = js_mkundef();
+  
   if (!sh_build_command_argv(js, command, values, &argv, &redirs))
-    return sh_resolved_result(js, "", 0, "ant:shell: invalid command\n", sizeof("ant:shell: invalid command\n") - 1, 2);
+    return sh_abrupt_or_error(js, "ant:shell: invalid command");
+    
+  if (sh_argv_has_nul(js, argv))
+    return sh_rejected_type_error(js, "ant:shell: command arguments cannot contain NUL bytes");
+    
   ant_value_t redir_state = js_mkundef();
-  ant_value_t redir_error = js_mkundef();
   if (!sh_prepare_redirections(
-    js, context, redirs, values, options, &redir_state, &redir_error
-  )) return is_undefined(redir_error)
-    ? sh_resolved_result(js, "", 0, "ant:shell: invalid redirection\n",
-        sizeof("ant:shell: invalid redirection\n") - 1, 2)
-    : redir_error;
+    js, context, redirs, values, options, &redir_state
+  )) return js->thrown_exists ? sh_reject_current_exception(js)
+    : js_mkerr(js, "ant:shell: invalid redirection");
 
   if (js_arr_len(js, argv) == 0) return sh_resolved_result(js, "", 0, "", 0, 0);
 
@@ -712,8 +680,7 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
   for (ant_offset_t i = 1; i < js_arr_len(js, argv); i++)
     js_arr_push(js, child_argv, js_arr_get(js, argv, i));
 
-  return sh_apply_redirections(js,
-    child_process_exec_file_result(js, file, child_argv, options), redir_state);
+  return child_process_exec_file_result(js, file, child_argv, options);
 }
 
 ant_value_t sh_runtime_context(ant_t *js) {

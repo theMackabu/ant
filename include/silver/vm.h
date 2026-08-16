@@ -30,7 +30,8 @@ ant_value_t sv_execute_entry(
 
 ant_value_t sv_execute_entry_tla(
   ant_t *js, sv_func_t *func, 
-  ant_value_t this_val
+  ant_value_t this_val,
+  js_async_entry_t **async_entry_out
 );
 
 ant_value_t sv_resume_suspended(sv_vm_t *vm);

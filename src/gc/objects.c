@@ -13,6 +13,7 @@
 #include "gc/bigints.h"
 #include "gc/objects.h"
 #include "gc/roots.h"
+#include "gc/weak.h"
 #include "gc/modules.h"
 
 #include <stdlib.h>
@@ -456,6 +457,13 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
     return;
   }
 
+  if (t == T_SYMBOL) {
+    bool newly_marked = js_symbol_gc_mark(v, gc_epoch);
+    if (newly_marked && js->weak_gc.pending_active)
+      gc_weak_key_marked(js, v);
+    return;
+  }
+
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
   ant_object_t *obj = (ant_object_t *)(uintptr_t)(v & NANBOX_DATA_MASK);
   
@@ -485,17 +493,6 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     }}
   } 
   
-  else if (obj->type_tag == T_WEAKMAP) {
-    ant_value_t value = js_obj_from_ptr(obj);
-    weakmap_entry_t **head = (weakmap_entry_t **)js_get_native(value, WEAKMAP_NATIVE_TAG);
-    if (head) {
-    weakmap_entry_t *e, *tmp;
-    HASH_ITER(hh, *head, e, tmp) {
-      gc_mark_value(js, e->key_obj);
-      gc_mark_value(js, e->value);
-    }}
-  } 
-  
   else if (obj->type_tag == T_SET) {
     ant_value_t value = js_obj_from_ptr(obj);
     set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
@@ -512,6 +509,8 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
+    if (prop && prop->type == ANT_SHAPE_KEY_SYMBOL)
+      gc_mark_value(js, mkval(T_SYMBOL, prop->key.sym_off));
     if (prop && prop->has_getter) gc_mark_value(js, prop->getter);
     if (prop && prop->has_setter) gc_mark_value(js, prop->setter);
   }}
@@ -561,6 +560,38 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
 static void gc_drain_mark_stack(ant_t *js) {
 while (gc_mark_sp > 0) {
   ant_object_t *obj = gc_mark_stack[--gc_mark_sp];
+  gc_scan_obj(js, obj);
+}}
+
+static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
+  uint8_t type = vtype(key);
+  if (type == T_CFUNC) return true;
+  
+  if (type == T_SYMBOL) {
+    if (g_minor_gc) return true;
+    return js_symbol_gc_is_permanent(key) ||
+      js_symbol_gc_is_marked(key, gc_epoch);
+  }
+  
+  if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return false;
+  ant_object_t *obj = js_obj_ptr(key);
+  if (!obj || !fixed_arena_contains(&js->obj_arena, obj) ||
+      obj->mark_epoch == ANT_GC_DEAD) return false;
+  
+  return (g_minor_gc && obj->flags.generation == 1) ||
+    obj->mark_epoch == gc_obj_epoch || obj->flags.gc_permanent;
+}
+
+static bool gc_weak_collection_live(const ant_object_t *obj) {
+  return obj && ((g_minor_gc && obj->flags.generation == 1) ||
+    obj->mark_epoch == gc_obj_epoch || obj->flags.gc_permanent);
+}
+
+static void gc_drain_mark_stack_weak(ant_t *js) {
+while (gc_mark_sp > 0) {
+  ant_object_t *obj = gc_mark_stack[--gc_mark_sp];
+  gc_weak_key_marked(js, js_obj_from_ptr(obj));
+  gc_weak_collection_marked(js, obj);
   gc_scan_obj(js, obj);
 }}
 
@@ -774,6 +805,7 @@ static void gc_mark_roots(ant_t *js) {
   for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++)
     gc_mark_value(js, js->cfunc_promote_cache.promoted[i]);
 
+  gc_weak_mark_kept_alive(js, gc_mark_value);
   gc_visit_roots(js, gc_mark_value);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
@@ -1057,6 +1089,12 @@ void gc_objects_run(
 
   if (extra_roots) extra_roots(js);
   gc_mark_roots(js);
+  
+  gc_weak_process(
+    js, false, gc_mark_value, gc_drain_mark_stack_weak,
+    gc_weak_key_alive, gc_weak_collection_live
+  );
+  
   gc_clear_napi_weak_refs(js, false);
   gc_age_regex_cache(js, false);
   gc_sweep(js);
@@ -1161,10 +1199,14 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
 
   for (size_t i = 0; i < js->remember_set_len; i++)
     js->remember_set[i]->flags.in_remember_set = 0;
-
   js->remember_set_len = 0;
 
   gc_mark_roots(js);
+  gc_weak_process(
+    js, true, gc_mark_value, gc_drain_mark_stack_weak,
+    gc_weak_key_alive, gc_weak_collection_live
+  );
+  
   gc_clear_napi_weak_refs(js, true);
   g_minor_gc = false;
 

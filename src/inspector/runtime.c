@@ -741,11 +741,12 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
 
   const char *prev_filename = client->js->filename;
   inspector_clear_exception_state(client->js);
+  bool await_promise = inspector_param_bool(params, "awaitPromise");
 
   if (inspector_param_bool(params, "throwOnSideEffect")) {
     ant_value_t safe_result = js_mkundef();
     if (inspector_eval_safe_expr(client->js, expr, expr_len, &safe_result)) {
-      inspector_send_eval_result(client, id, safe_result);
+      inspector_send_eval_completion(client, id, safe_result, await_promise);
     } else inspector_send_side_effect_blocked(client, id);
     return;
   }
@@ -754,10 +755,8 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
   js_eval_result_t evaluation = js_eval_bytecode_repl(client->js, expr, expr_len);
   js_set_filename(client->js, prev_filename);
   
-  inspector_send_eval_completion(
-    client, id, evaluation.value, 
-    inspector_param_bool(params, "awaitPromise")
-  );
+  inspector_send_eval_completion(client, id, evaluation.value, await_promise);
+  js_eval_async_entry_release(evaluation.async_entry);
 }
 
 void inspector_get_heap_usage(inspector_client_t *client, int id) {

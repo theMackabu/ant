@@ -182,6 +182,7 @@ static void inspector_eval_source(
   js_eval_result_t evaluation = js_eval_bytecode_repl(client->js, source ? source : "", source_len);
   js_set_filename(client->js, prev_filename);
   inspector_send_eval_completion(client, id, evaluation.value, await_promise);
+  js_eval_async_entry_release(evaluation.async_entry);
 }
 
 void inspector_compile_script(inspector_client_t *client, int id, yyjson_val *params) {

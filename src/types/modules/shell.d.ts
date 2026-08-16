@@ -16,5 +16,4 @@ declare module 'ant:shell' {
   }
 
   function $(strings: TemplateStringsArray, ...values: unknown[]): ShellPromise;
-  function $(command: string): ShellPromise;
 }

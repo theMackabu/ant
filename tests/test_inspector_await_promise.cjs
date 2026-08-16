@@ -74,6 +74,7 @@ async function waitForExit(child) {
 }
 
 async function main() {
+  const weakChainLength = Number(process.env.ANT_WEAK_CHAIN_LENGTH || 512);
   const port = await reservePort();
   const child = spawn(process.execPath, [
     `--inspect-wait=127.0.0.1:${port}`,
@@ -125,6 +126,212 @@ async function main() {
       awaitPromise: true,
     });
     assert.equal(awaitedThenable.result.value, 45);
+
+    await cdp.send('Runtime.evaluate', {
+      expression: 'globalThis.__safeAwaitPromise = Promise.resolve(46)',
+    });
+    const safeAwaited = await cdp.send('Runtime.evaluate', {
+      expression: 'globalThis.__safeAwaitPromise',
+      throwOnSideEffect: true,
+      awaitPromise: true,
+    });
+    assert.equal(safeAwaited.result.value, 46);
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__weakCollectionState = (() => {
+        const map = new WeakMap();
+        const liveKey = {};
+        const liveValue = {};
+        map.set(liveKey, liveValue);
+
+        const cycleMap = new WeakMap();
+        let cycleKey = {};
+        let cycleValue = { key: cycleKey };
+        cycleMap.set(cycleKey, cycleValue);
+
+        const set = new WeakSet();
+        let setKey = {};
+        set.add(setKey);
+
+        const state = {
+          map,
+          liveKey,
+          liveValueRef: new WeakRef(liveValue),
+          cycleMap,
+          cycleKeyRef: new WeakRef(cycleKey),
+          cycleValueRef: new WeakRef(cycleValue),
+          set,
+          setKeyRef: new WeakRef(setKey),
+        };
+        cycleKey = cycleValue = setKey = null;
+        return state;
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: 'Boolean(__weakCollectionState.liveValueRef.deref())',
+    });
+    assert.equal(liveEphemeron.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__weakCollectionState.liveKey = null; 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadWeakEntries = await cdp.send('Runtime.evaluate', {
+      expression: `[
+        __weakCollectionState.liveValueRef.deref(),
+        __weakCollectionState.cycleKeyRef.deref(),
+        __weakCollectionState.cycleValueRef.deref(),
+        __weakCollectionState.setKeyRef.deref(),
+      ].map(value => value === undefined).join(',')`,
+    });
+    assert.equal(
+      deadWeakEntries.result.value,
+      'true,true,true,true',
+      String(deadWeakEntries.result.value)
+    );
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__minorWeakState = {
+        map: new WeakMap(),
+        key: null,
+        valueRef: null,
+      }; 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const key = {};
+        const value = {};
+        __minorWeakState.key = key;
+        __minorWeakState.map.set(key, value);
+        __minorWeakState.valueRef = new WeakRef(value);
+      })(); 1`,
+    });
+    await cdp.send('Runtime.evaluate', {
+      expression: 'for (let i = 0; i < 250000; i++) ({ i }); 1',
+    });
+    const youngEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: 'Boolean(__minorWeakState.valueRef.deref())',
+    });
+    assert.equal(youngEphemeron.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__minorWeakState.key = null; for (let i = 0; i < 250000; i++) ({ i }); 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadYoungEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: '__minorWeakState.valueRef.deref() === undefined',
+    });
+    assert.equal(deadYoungEphemeron.result.value, true);
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__weakSymbolState = (() => {
+        const map = new WeakMap();
+        const owner = {};
+        let key = Symbol('weak-key');
+        const value = {};
+        owner[key] = true;
+        map.set(key, value);
+        const set = new WeakSet([key]);
+        const state = {
+          map,
+          set,
+          owner,
+          keyRef: new WeakRef(key),
+          valueRef: new WeakRef(value),
+        };
+        key = null;
+        return state;
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveSymbolEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: `Boolean(__weakSymbolState.valueRef.deref()) &&
+        __weakSymbolState.set.has(Reflect.ownKeys(__weakSymbolState.owner)[0])`,
+    });
+    assert.equal(liveSymbolEphemeron.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__weakSymbolState.owner = null; 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadSymbolEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: `__weakSymbolState.keyRef.deref() === undefined &&
+        __weakSymbolState.valueRef.deref() === undefined`,
+    });
+    assert.equal(deadSymbolEphemeron.result.value, true);
+
+    const sameJobWeakRef = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        let target = {};
+        const ref = new WeakRef(target);
+        target = null;
+        for (let i = 0; i < 250000; i++) ({ i });
+        return Boolean(ref.deref());
+      })()`,
+    });
+    assert.equal(sameJobWeakRef.result.value, true);
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__ephemeronChainState = (() => {
+        const map = new WeakMap();
+        const keys = Array.from({ length: ${weakChainLength} }, () => ({}));
+        for (let i = keys.length - 2; i >= 0; i--)
+          map.set(keys[i], keys[i + 1]);
+        const state = {
+          map,
+          root: keys[0],
+          tailRef: new WeakRef(keys[keys.length - 1]),
+        };
+        return state;
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveEphemeronChain = await cdp.send('Runtime.evaluate', {
+      expression: 'Boolean(__ephemeronChainState.tailRef.deref())',
+    });
+    assert.equal(liveEphemeronChain.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__ephemeronChainState.root = null; 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadEphemeronChain = await cdp.send('Runtime.evaluate', {
+      expression: '__ephemeronChainState.tailRef.deref() === undefined',
+    });
+    assert.equal(deadEphemeronChain.result.value, true);
+
+    await cdp.send('Runtime.evaluate', {
+      expression: `globalThis.__nestedEphemeronState = (() => {
+        const outer = new WeakMap();
+        const inner = new WeakMap();
+        const root = {};
+        const innerKey = {};
+        const tail = {};
+        inner.set(innerKey, tail);
+        outer.set(root, inner);
+        return {
+          outer,
+          root,
+          innerKey,
+          tailRef: new WeakRef(tail),
+        };
+      })(); 1`,
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    const liveNestedEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: 'Boolean(__nestedEphemeronState.tailRef.deref())',
+    });
+    assert.equal(liveNestedEphemeron.result.value, true);
+    await cdp.send('Runtime.evaluate', {
+      expression: '__nestedEphemeronState.root = __nestedEphemeronState.innerKey = null; 1',
+    });
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const deadNestedEphemeron = await cdp.send('Runtime.evaluate', {
+      expression: '__nestedEphemeronState.tailRef.deref() === undefined',
+    });
+    assert.equal(deadNestedEphemeron.result.value, true);
 
     const rejected = await cdp.send('Runtime.evaluate', {
       expression: "Promise.reject(new Error('inspector-await-boom'))",

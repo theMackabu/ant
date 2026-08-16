@@ -31,6 +31,10 @@ typedef struct weakset_entry {
   UT_hash_handle hh;
 } weakset_entry_t;
 
+typedef struct weakref_state {
+  ant_value_t target;
+} weakref_state_t;
+
 typedef enum {
   ITER_TYPE_MAP_VALUES,
   ITER_TYPE_MAP_KEYS,
@@ -57,6 +61,7 @@ enum {
   
   WEAKMAP_NATIVE_TAG = 0x574d4150u, // WMAP
   WEAKSET_NATIVE_TAG = 0x57534554u, // WSET
+  WEAKREF_NATIVE_TAG = 0x57524546u, // WREF
   
   MAP_ITER_NATIVE_TAG = 0x4d495452u, // MITR
   SET_ITER_NATIVE_TAG = 0x53495452u  // SITR

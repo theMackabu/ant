@@ -15,6 +15,7 @@ void repl_render_shutdown(void) {
 
 void ant_readline_shutdown(void) {
   repl_render_shutdown();
+  ant_readline_shutdown_signal_bridge();
 }
 
 void repl_render_set_highlight_state(highlight_state state) {

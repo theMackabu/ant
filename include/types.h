@@ -18,6 +18,7 @@ typedef struct ant_events_state   ant_events_state_t;
 typedef struct ant_esm_state      ant_esm_state_t;
 typedef struct ant_regex_state    ant_regex_state_t;
 typedef struct ant_string_builder ant_string_builder_t;
+typedef struct js_async_entry     js_async_entry_t;
 
 typedef struct ant_object ant_object_t;
 typedef struct ant_shape  ant_shape_t;

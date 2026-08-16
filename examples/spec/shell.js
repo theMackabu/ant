@@ -33,6 +33,12 @@ test('shell interpolation', await $`echo hello ${name}`.text(), 'hello world\n')
 const failResult = await $`exit 1`.nothrow();
 test('shell exit code failure', failResult.exitCode, 1);
 
-test('shell string arg', await $('echo string arg').text(), 'string arg\n');
+let stringCallError;
+try {
+  $('echo string arg');
+} catch (error) {
+  stringCallError = error;
+}
+test('shell rejects string calls', stringCallError instanceof TypeError, true);
 
 summary();

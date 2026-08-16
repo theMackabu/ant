@@ -21,8 +21,12 @@ expressions or draining unrelated event-loop work.
   explicit `awaitPromise` policy instead of the REPL's implicit TLA policy.
 - Inspector promise responses are deferred through promise reactions so CDP
   handlers never enter a nested libuv run loop.
-- The reactor advances libuv until the target settles and uses a bounded wakeup
-  interval so Ctrl+C can interrupt an otherwise dormant await.
+- The reactor advances libuv until the target settles and uses a wakeable signal
+  source so Ctrl+C can interrupt an otherwise dormant await without polling.
+- Structured asynchronous evaluation returns an opaque handle retaining its
+  suspended Silver coroutine. Interrupting a REPL wait cancels and releases
+  that handle, so resolving the abandoned await cannot resume user code. The
+  association does not become part of ordinary Promise state.
 - Interactive evaluation and `.copy` share the same completion path.
 
 ## Task list
@@ -38,6 +42,15 @@ expressions or draining unrelated event-loop work.
 7. [x] Consolidate the value-only and structured REPL evaluator APIs.
 8. [x] Route inspector evaluation and `Runtime.awaitPromise` through deferred
    promise responses.
+9. [x] Replace timer polling and thread-dependent signal delivery with a
+   wakeable signal bridge.
+10. [x] Add explicit asynchronous-entry cancellation and PTY coverage proving
+    that interrupted code cannot resume later.
+11. [x] Cover Ctrl+C at the prompt after a completed fetch request.
+12. [x] Route the inspector side-effect-safe evaluator through the same
+    `awaitPromise` completion path.
+13. [x] Rename and document the blocking host reactor and zero-upvalue Silver
+    entry APIs.
 
 ## Decision log
 
@@ -52,6 +65,12 @@ expressions or draining unrelated event-loop work.
 - 2026-08-15: Inspector awaiting must not call the synchronous reactor waiter.
   Promise reactions preserve CDP responsiveness and avoid re-entering the
   inspector WebSocket dispatcher from a nested `uv_run()`.
+- 2026-08-15: Interrupting a REPL await is cancellation, not merely a stopped
+  host wait. The async-entry coroutine must be detached and retired before the
+  prompt is restored.
+- 2026-08-15: Keep host cancellation out of `ant_promise_state_t`. Only
+  structured asynchronous evaluator results receive an opaque coroutine handle;
+  ordinary Promise and async-function state retain their existing layout.
 
 ## Validation status
 
@@ -72,5 +91,5 @@ expressions or draining unrelated event-loop work.
 
 ## Follow-ups
 
-- Ctrl+C stops waiting and restores the prompt, but general cancellation of a
-  suspended JavaScript coroutine remains a separate runtime capability.
+- General user-facing Promise cancellation remains out of scope. The new
+  cancellation primitive is private to host-owned asynchronous entry jobs.

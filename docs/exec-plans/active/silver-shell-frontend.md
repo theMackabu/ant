@@ -46,6 +46,12 @@ generated Silver AST or another private Silver compiler input, but the durable
 executable representation is `sv_func_t` bytecode. Native code owns only work
 that requires operating-system state or concurrent I/O.
 
+Shell lowering produces a typed native process plan. Both `ant:shell` and
+`node:child_process` submit that plan to one process substrate. The substrate
+opens redirection descriptors asynchronously, wires pipeline stages with OS
+pipes, starts the complete graph, and reports status/output without constructing
+JavaScript ChildProcess objects or relaying intermediate bytes through JS.
+
 Pipelines are submitted as a complete process graph. The implementation must
 start all stages before awaiting completion; sequentially awaiting individual
 stages is incorrect and can deadlock.
@@ -93,6 +99,19 @@ Repository examples and tests using the synchronous API move with the change.
 8. [x] Migrate in-repository callers to async usage.
 9. [x] Run focused shell tests, adjacent child-process and collection tests,
    `maid preflight`, knowledge validation, and the complete spec suite.
+10. [x] Add regressions for interpolation abrupt completions, unsupported file
+    descriptors, `exit`, embedded NUL, and empty quoted fragments.
+11. [x] Replace positional JS-array process IR with a typed native process plan
+    shared by `ant:shell` and `node:child_process`.
+12. [x] Wire pipelines with OS pipes and redirections with asynchronously opened
+    descriptors; remove intermediate EventEmitter relays and whole-file buffers.
+13. [x] Remove the dynamic `$(string)` overload and migrate repository callers
+    to tagged templates only.
+14. [x] Implement WeakMap ephemeron and WeakSet weak-key collection semantics,
+    with major and minor GC regressions for the template cache dependency,
+    symbol keys, nested maps, and long ephemeron chains.
+15. [x] Relocate private shell declarations under `src/modules/shell/`, clean
+    formatting, and repeat focused and broad validation.
 
 ## Deferred POSIX work
 
@@ -120,14 +139,42 @@ Repository examples and tests using the synchronous API move with the change.
 - 2026-08-15: Preserve ordered descriptor duplication for the supported
   redirections. For example, `2>&1 >file` and `>file 2>&1` have different
   destinations even though cross-stream byte interleaving remains deferred.
+- 2026-08-15: Accept only tagged-template calls. Dynamic source strings consume
+  monotonic Silver code memory and discard structured interpolation, so the
+  legacy `$(string)` overload is removed rather than cached.
+- 2026-08-15: Process graphs use native typed plans and kernel pipes. JavaScript
+  ChildProcess/EventEmitter objects are public adapters, not an internal shell
+  transport.
+- 2026-08-15: Weak collections register once per isolate instead of adding type
+  checks to ordinary object tracing. Major collections resolve ephemerons with
+  a key-indexed worklist. Minor collections process young collections plus
+  remembered weak edges, avoiding repeated scans of old WeakMaps. WeakRef
+  targets are retained through the current microtask checkpoint.
 
 ## Validation status
 
 - `meson compile -C build`: passed.
 - `./build/ant tests/test_shell.js`: passed, including structured interpolation,
-  control operators, stateful `cd`, ordered redirection, early pipeline exit,
-  missing executable handling, weak-cache reuse, and throw/nothrow policy.
+  control operators, stateful `cd`, ordered and large redirections, early
+  pipeline exit, failed-stage cleanup, weak-cache reuse, and throw/nothrow
+  policy. A 50-run repetition also passed.
 - Focused child-process tests selected by `test_child_process*`: passed.
+- `./build/ant tests/test_child_process_nul.cjs`: passed.
+- A deterministic 552-case differential child-process fuzz run matched the
+  pre-change Ant binary for every non-NUL case. `spawnSync`, `execFile`, and
+  `exec` result payloads matched Node apart from the already-known ENOENT and
+  successful `spawn` event-shape differences. All four embedded-NUL cases now
+  reject instead of silently truncating; Node also rejects them.
+- `./build/ant tests/test_inspector_await_promise.cjs`: passed, including major
+  and minor WeakMap ephemeron and WeakSet weak-key collection cases,
+  nonregistered symbol keys, same-job WeakRef retention, nested WeakMaps, and a
+  reversed 512-link ephemeron chain. Stress runs remained linear through
+  400,000 reversed links.
+- Serial AB/BA allocation runs against an optimized clean-HEAD build showed no
+  meaningful ordinary-allocation regression (medians overlapped at roughly
+  77-78 ms). A 100,000-entry live WeakMap construction stress case was roughly
+  7% slower than the old strong-marking implementation; this is isolated to
+  weak-edge mutation and avoids the earlier repeated full-table minor scans.
 - `./build/ant tests/test_collections_constructor_iterables.cjs`: passed.
 - `./build/ant tests/test_weakmap.js`: passed.
 - `./build/ant examples/spec/run.js --all`: 3,920 passed, 0 failed across
@@ -139,13 +186,8 @@ Repository examples and tests using the synchronous API move with the change.
 - This is the first grammar slice, not POSIX compatibility. The expansion,
   compound-command, variable, special-built-in, and signal work listed above
   remains required.
-- Redirection data is currently captured and applied through libuv file I/O.
-  Descriptor destinations respect source order, but exact stdout/stderr byte
-  interleaving requires native descriptor wiring.
 - Multi-stage pipelines currently use direct executable spawning for commands
   that have a native single-command built-in. Native pipeline stages and their
   isolated context semantics remain part of the pipeline-subshell work.
-- Pipeline forwarding queues libuv writes and propagates early close/SIGPIPE,
-  but it does not yet apply a bounded high-water mark for backpressure.
 - This milestone was built and exercised on macOS. The Windows and Linux paths
   still need platform CI coverage.

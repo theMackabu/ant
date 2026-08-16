@@ -2,6 +2,7 @@
 #include "gc/roots.h"
 #include "sugar.h"
 #include "reactor.h"
+#include "readline.h"
 #include "internal.h" // IWYU pragma: keep
 
 #include "modules/fs.h"
@@ -67,8 +68,17 @@ void js_reactor_pump_repl_nowait(ant_t *js) {
   reap_retired_coroutines(js);
 }
 
-static void reactor_await_wake_cb(uv_timer_t *timer) {
+static void reactor_blocking_await_fallback_wake_cb(uv_timer_t *timer) {
   (void)timer;
+}
+
+static void reactor_blocking_await_signal_cb(
+  uv_poll_t *poll, int status, int events
+) {
+  (void)poll;
+  (void)status;
+  (void)events;
+  ant_readline_drain_interrupt_wake();
 }
 
 static void reactor_await_close_cb(uv_handle_t *handle) {
@@ -76,7 +86,7 @@ static void reactor_await_close_cb(uv_handle_t *handle) {
   if (closed) *closed = true;
 }
 
-js_reactor_await_status_t js_reactor_await_promise(
+js_reactor_await_status_t js_reactor_blocking_await_promise(
   ant_t *js, ant_value_t promise, ant_value_t *value_out,
   js_reactor_interrupt_fn interrupted, void *interrupt_ctx
 ) {
@@ -100,11 +110,21 @@ js_reactor_await_status_t js_reactor_await_promise(
   js_mark_promise_rejection_handled_chain(js, promise);
 
   uv_loop_t *loop = uv_default_loop();
-  uv_timer_t wake_timer;
+  uv_poll_t signal_poll;
   
-  bool wake_timer_initialized = uv_timer_init(loop, &wake_timer) == 0;
+  int signal_fd = ant_readline_interrupt_fd();
+  bool signal_poll_initialized = signal_fd >= 0 &&
+    uv_poll_init(loop, &signal_poll, signal_fd) == 0;
+    
+  bool signal_poll_started = signal_poll_initialized &&
+    uv_poll_start(&signal_poll, UV_READABLE, reactor_blocking_await_signal_cb) == 0;
+  
+  uv_timer_t wake_timer;
+  bool wake_timer_initialized = !signal_poll_started &&
+    uv_timer_init(loop, &wake_timer) == 0;
+  
   bool wake_timer_started = wake_timer_initialized &&
-    uv_timer_start(&wake_timer, reactor_await_wake_cb, 16, 16) == 0;
+    uv_timer_start(&wake_timer, reactor_blocking_await_fallback_wake_cb, 16, 16) == 0;
 
   js_reactor_await_status_t status = JS_REACTOR_AWAIT_INVALID;
   for (;;) {
@@ -141,6 +161,14 @@ js_reactor_await_status_t js_reactor_await_promise(
     wake_timer.data = &wake_timer_closed;
     uv_close((uv_handle_t *)&wake_timer, reactor_await_close_cb);
     while (!wake_timer_closed) uv_run(loop, UV_RUN_ONCE);
+  }
+  
+  if (signal_poll_initialized) {
+    if (signal_poll_started) uv_poll_stop(&signal_poll);
+    bool signal_poll_closed = false;
+    signal_poll.data = &signal_poll_closed;
+    uv_close((uv_handle_t *)&signal_poll, reactor_await_close_cb);
+    while (!signal_poll_closed) uv_run(loop, UV_RUN_ONCE);
   }
 
   if (

@@ -48,6 +48,7 @@ typedef enum: uint8_t {
 
 typedef struct {
   ant_value_t value;
+  js_async_entry_t *async_entry;
   js_eval_completion_kind_t kind;
 } js_eval_result_t;
 
@@ -69,6 +70,9 @@ ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
 ant_value_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
 js_eval_result_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
+
+bool js_eval_async_entry_cancel(js_async_entry_t *entry);
+void js_eval_async_entry_release(js_async_entry_t *entry);
 
 void js_destroy(ant_t *);
 bool js_truthy(ant_t *, ant_value_t);

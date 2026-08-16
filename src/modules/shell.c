@@ -9,7 +9,7 @@
 #include "internal.h"
 #include "ptr.h"
 #include "modules/collections.h"
-#include "modules/shell_internal.h"
+#include "shell/shell_internal.h"
 #include "modules/symbol.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"
@@ -234,41 +234,31 @@ static sv_func_t *shell_compile(
 }
 
 static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "$() requires a command or template string");
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "$() requires a tagged template");
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
 
   const char **segments = NULL;
   size_t *lengths = NULL;
   size_t segment_count = 0;
   
-  const char *single_segment[1];
-  size_t single_length[1];
-  ant_value_t cache_key = js_mkundef();
+  if (!is_special_object(args[0]) || !shell_template_segments(
+    js, args[0], &segments,
+    &lengths, &segment_count
+  )) return js_mkerr_typed(js, JS_ERR_TYPE, "$() must be used as a tagged template");
 
-  if (vtype(args[0]) == T_STR) {
-    single_segment[0] = js_getstr(js, args[0], &single_length[0]);
-    if (!single_segment[0]) return js_mkerr(js, "Invalid shell command string");
-    segments = single_segment;
-    lengths = single_length;
-    segment_count = 1;
-  } else if (is_special_object(args[0])) {
-    if (!shell_template_segments(
-      js, args[0], &segments, &lengths, &segment_count
-    )) return js_mkerr(js, "$() requires a valid template string");
-    cache_key = args[0];
-  } else return js_mkerr(js, "$() requires a command or template string");
+  ant_value_t cache_key = args[0];
+  sv_func_t *compiled = shell_cache_lookup(js, state, cache_key);
 
-  sv_func_t *compiled = is_undefined(cache_key)
-    ? NULL : shell_cache_lookup(js, state, cache_key);
   if (!compiled) {
     compiled = shell_compile(js, segments, lengths, segment_count);
-    if (!is_undefined(cache_key) && compiled)
-      shell_cache_store(js, state, cache_key, compiled);
+    if (compiled) shell_cache_store(js, state, cache_key, compiled);
   }
 
-  if (segments != single_segment) free((void *)segments);
-  if (lengths != single_length) free(lengths);
-  if (!compiled) return js->thrown_exists ? mkval(T_ERR, 0) : js_mkerr(js, "Shell compilation failed");
+  free((void *)segments);
+  free(lengths);
+  if (!compiled) return js->thrown_exists
+    ? mkval(T_ERR, 0)
+    : js_mkerr(js, "Shell compilation failed");
 
   ant_value_t values = js_mkarr(js);
   for (int i = 1; i < nargs; i++) js_arr_push(js, values, args[i]);
@@ -277,7 +267,7 @@ static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs)
   if (is_err(context)) return context;
   
   ant_value_t call_args[] = { js_mkfun(sh_runtime_run), context, values, };
-  ant_value_t raw_promise = sv_call_compiled(js, compiled, js_mkundef(), call_args, 3);
+  ant_value_t raw_promise = sv_call_compiled_zero_upvalues(js, compiled, js_mkundef(), call_args, 3);
   
   return shell_wrap_promise(js, raw_promise);
 }

@@ -285,7 +285,6 @@ struct ant_isolate_t {
 
   // TODO: rename to uppercase
   struct {
-    uint64_t counter;
     struct sym_registry_entry *registry;
 
     ant_value_t object_proto;
@@ -384,6 +383,35 @@ struct ant_isolate_t {
   bool gc_remember_overflow;
   bool gc_objects_running;
   bool gc_use_nursery_major_floor;
+
+  struct {
+    ant_object_t **collections;
+    size_t collection_len;
+    size_t collection_cap;
+    
+    ant_value_t *kept_alive;
+    size_t kept_alive_len;
+    size_t kept_alive_cap;
+    
+    struct {
+      ant_object_t *owner;
+      ant_value_t key;
+      ant_value_t value;
+      uint8_t kind;
+    } *minor_edges;
+    
+    size_t minor_edge_len;
+    size_t minor_edge_cap;
+    
+    void *pending;
+    void (*mark)(ant_t *js, ant_value_t value);
+    bool (*key_alive)(ant_t *js, ant_value_t key);
+    
+    bool registry_overflow;
+    bool minor_edge_overflow;
+    bool pending_active;
+    bool pending_oom;
+  } weak_gc;
 
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
@@ -740,7 +768,7 @@ ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
 ant_value_t js_normalize_sloppy_this(ant_t *js, ant_value_t value);
 ant_value_t js_resolve_bound_target(ant_value_t value);
 ant_value_t js_resolve_bound_target_known_bound(ant_value_t value);
-ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func);
+ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func, js_async_entry_t **async_entry_out);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
 ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs);

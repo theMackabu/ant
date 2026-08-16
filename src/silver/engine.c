@@ -825,6 +825,7 @@ void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), 
   for (int i = 0; i <= vm->fp; i++) if (vm->frames[i].func) visitor(ctx, vm->frames[i].func);
 }
 
+// TODO: move to header?
 ant_value_t sv_call_async_closure_dispatch(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, ant_value_t super_val,
@@ -833,8 +834,12 @@ ant_value_t sv_call_async_closure_dispatch(
   return sv_start_async_closure(vm, js, closure, callee_func, super_val, this_val, args, argc);
 }
 
-ant_value_t sv_execute_entry_tla(ant_t *js, sv_func_t *func, ant_value_t this_val) {
-  return sv_start_tla(js, func, this_val);
+// TODO: move to header?
+ant_value_t sv_execute_entry_tla(
+  ant_t *js, sv_func_t *func, ant_value_t this_val,
+  js_async_entry_t **async_entry_out
+) {
+  return sv_start_tla(js, func, this_val, async_entry_out);
 }
 
 static inline void sv_sync_frame_locals(
@@ -1121,7 +1126,7 @@ ant_value_t sv_execute_entry(
   );
 }
 
-ant_value_t sv_call_compiled(
+ant_value_t sv_call_compiled_zero_upvalues(
   ant_t *js, sv_func_t *func,
   ant_value_t this_val, ant_value_t *args, int argc
 ) {

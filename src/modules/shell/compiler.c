@@ -1,4 +1,4 @@
-#include "modules/shell_internal.h"
+#include "shell_internal.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -176,6 +176,8 @@ char *sh_compile_program_source(
     sh_source_cstr(&source,
       ",__values);__out+=__result.stdout;__err+=__result.stderr;"
       "__status=__result.exitCode;__signal=__result.signalCode;"
+      "if(__result.exited)return {stdout:__out,stderr:__err,"
+      "exitCode:__status,signalCode:__signal};"
     );
 
     if (clause->connector != SH_CONNECT_ALWAYS) sh_source_cstr(&source, "}");
