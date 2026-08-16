@@ -7,6 +7,7 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <utarray.h>
 
 #ifdef _WIN32
@@ -1751,6 +1752,18 @@ static bool child_process_plan_copy_string(
   return true;
 }
 
+static bool child_process_plan_number_to_int(
+  ant_value_t value, int *out
+) {
+  if (vtype(value) != T_NUM) return false;
+  double number = js_getnum(value);
+  if (!isfinite(number) || trunc(number) != number ||
+      number < (double)INT_MIN || number > (double)INT_MAX)
+    return false;
+  *out = (int)number;
+  return true;
+}
+
 static bool child_process_plan_apply_options(
   ant_t *js, ant_process_plan_t *plan, ant_value_t options
 ) {
@@ -1773,8 +1786,9 @@ static bool child_process_plan_apply_options(
       js_mkerr_typed(js, JS_ERR_TYPE, "Invalid child process redirection");
       return false;
     }
-    int kind = (int)js_getnum(kind_value);
-    if (kind < ANT_PROCESS_REDIRECT_STDIN ||
+    int kind;
+    if (!child_process_plan_number_to_int(kind_value, &kind) ||
+        kind < ANT_PROCESS_REDIRECT_STDIN ||
         kind > ANT_PROCESS_REDIRECT_STDERR_TO_STDOUT) {
       js_mkerr_typed(js, JS_ERR_TYPE, "Invalid child process redirection kind");
       return false;
@@ -1844,8 +1858,9 @@ static bool child_process_plan_add_native_result(
   ant_value_t stdout_value = js_get(js, result, "stdout");
   ant_value_t stderr_value = js_get(js, result, "stderr");
   ant_value_t exit_code_value = js_get(js, result, "exitCode");
-  
-  if (vtype(exit_code_value) != T_NUM) {
+
+  int exit_code;
+  if (!child_process_plan_number_to_int(exit_code_value, &exit_code)) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Invalid native pipeline stage");
     return false;
   }
@@ -1874,7 +1889,7 @@ static bool child_process_plan_add_native_result(
   if (!ant_process_plan_add_native_stage(
     plan, (const char *)stdout_data, stdout_len,
     (const char *)stderr_data, stderr_len,
-    (int)js_getnum(exit_code_value)
+    exit_code
   )) {
     js_mkerr(js, "Out of memory");
     return false;
