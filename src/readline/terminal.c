@@ -34,8 +34,10 @@ void ant_readline_install_signal_handler(void) {
   if (signal_pipe[0] < 0) {
     int pipe_fds[2];
     if (pipe(pipe_fds) == 0) {
-      bool configured = true;
+      bool configured =
+        pipe_fds[0] < FD_SETSIZE && pipe_fds[1] < FD_SETSIZE;
       for (int i = 0; i < 2; i++) {
+        if (!configured) break;
         int status_flags = fcntl(pipe_fds[i], F_GETFL, 0);
         int descriptor_flags = fcntl(pipe_fds[i], F_GETFD, 0);
         if (

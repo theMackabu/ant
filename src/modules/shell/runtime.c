@@ -409,6 +409,7 @@ static bool sh_prepare_redirections(
   ant_value_t state = js_mkobj(js);
   ant_value_t redirect_plan = js_mkarr(js);
   js_set(js, options, "redirections", redirect_plan);
+  js_set(js, state, "redirections", redirect_plan);
   js_set(js, state, "outputPath", js_mkundef());
   js_set(js, state, "outputAppend", js_false);
   js_set(js, state, "stderrMode", js_mknum(0));
@@ -511,7 +512,7 @@ typedef struct {
   ant_t *js;
   ant_value_t promise;
   ant_value_t result;
-  sh_redirect_target_t targets[2];
+  sh_redirect_target_t *targets;
   size_t target_count;
   size_t target_index;
   size_t written_total;
@@ -530,6 +531,7 @@ static void sh_redirect_write_dispose(sh_redirect_write_t *write) {
   if (!write) return;
   for (size_t i = 0; i < write->target_count; i++)
     free(write->targets[i].path);
+  free(write->targets);
   free(write->chunk);
   free(write);
 }
@@ -701,6 +703,8 @@ static ant_value_t sh_write_redirect_files(
   write->result = result;
   write->fd = -1;
   write->target_count = spec_count;
+  write->targets = calloc(spec_count, sizeof(*write->targets));
+  if (!write->targets) goto oom;
 
   size_t max_text_len = 0;
   for (size_t i = 0; i < spec_count; i++) {
@@ -786,8 +790,10 @@ static ant_value_t sh_apply_redirections_fulfilled(
     ? js_getstr(js, stderr_value, &stderr_len) : NULL;
 
   ant_value_t output_path = js_get(js, state, "outputPath");
+  ant_value_t redirections = js_get(js, state, "redirections");
   ant_value_t stderr_path = js_get(js, state, "stderrPath");
   GC_ROOT_PIN(js, output_path);
+  GC_ROOT_PIN(js, redirections);
   GC_ROOT_PIN(js, stderr_path);
   ant_value_t stderr_mode_value = js_get(js, state, "stderrMode");
   int stderr_mode = vtype(stderr_mode_value) == T_NUM
@@ -805,15 +811,48 @@ static ant_value_t sh_apply_redirections_fulfilled(
   js_set(js, result, "stderr", stderr_mode == 0 && stderr_text
     ? js_mkstr(js, stderr_text, stderr_len) : js_mkstr(js, "", 0));
 
-  sh_redirect_spec_t specs[2];
+  size_t redirection_count = vtype(redirections) == T_ARR
+    ? (size_t)js_arr_len(js, redirections) : 0;
+  size_t output_count = 0;
+  for (size_t i = 0; i < redirection_count; i++) {
+    ant_value_t action = js_arr_get(js, redirections, (ant_offset_t)i);
+    ant_value_t kind_value = js_get(js, action, "kind");
+    if (vtype(kind_value) != T_NUM) continue;
+    int kind = (int)js_getnum(kind_value);
+    if (kind == SH_REDIR_STDOUT || kind == SH_REDIR_STDOUT_APPEND)
+      output_count++;
+  }
+  
+  size_t spec_capacity = output_count + (stderr_mode == 2 ? 1 : 0);
+  sh_redirect_spec_t *specs = spec_capacity
+    ? calloc(spec_capacity, sizeof(*specs)) : NULL;
+  if (spec_capacity && !specs) {
+    ant_value_t error = js_mkerr(js, "Out of memory");
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
+  
   size_t spec_count = 0;
-  if (vtype(output_path) == T_STR)
+  ant_value_t empty_text = js_mkstr(js, "", 0);
+  GC_ROOT_PIN(js, empty_text);
+  size_t output_index = 0;
+  
+  for (size_t i = 0; i < redirection_count; i++) {
+    ant_value_t action = js_arr_get(js, redirections, (ant_offset_t)i);
+    ant_value_t path = js_get(js, action, "path");
+    ant_value_t kind_value = js_get(js, action, "kind");
+    if (vtype(kind_value) != T_NUM) continue;
+    int kind = (int)js_getnum(kind_value);
+    if (kind != SH_REDIR_STDOUT && kind != SH_REDIR_STDOUT_APPEND) continue;
+    bool final_output = ++output_index == output_count;
     specs[spec_count++] = (sh_redirect_spec_t){
-      .path = output_path,
-      .text = stdout_value,
-      .text_len = stdout_len,
-      .append = js_truthy(js, js_get(js, state, "outputAppend")),
+      .path = path,
+      .text = final_output ? stdout_value : empty_text,
+      .text_len = final_output ? stdout_len : 0,
+      .append = kind == SH_REDIR_STDOUT_APPEND,
     };
+  }
+  
   if (stderr_mode == 2 && vtype(stderr_path) == T_STR) {
     bool append = js_truthy(js, js_get(js, state, "stderrAppend"));
     if (sh_same_path(js, output_path, stderr_path)) append = true;
@@ -827,6 +866,7 @@ static ant_value_t sh_apply_redirections_fulfilled(
 
   ant_value_t redirected = spec_count
     ? sh_write_redirect_files(js, result, specs, spec_count) : result;
+  free(specs);
   GC_ROOT_RESTORE(js, root_mark);
   return redirected;
 }
@@ -908,7 +948,9 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
   )) return js->thrown_exists ? sh_reject_current_exception(js)
     : js_mkerr(js, "ant:shell: invalid redirection");
 
-  if (js_arr_len(js, argv) == 0) return sh_resolved_result(js, "", 0, "", 0, 0);
+  if (js_arr_len(js, argv) == 0) return sh_apply_redirections(
+    js, sh_resolved_result(js, "", 0, "", 0, 0), redir_state
+  );
 
   ant_value_t builtin = sh_run_builtin(js, context, argv);
   if (!is_undefined(builtin)) return sh_apply_redirections(js, builtin, redir_state);

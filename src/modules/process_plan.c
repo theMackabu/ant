@@ -530,11 +530,18 @@ static void process_run_try_finish(ant_process_run_t *run) {
 }
 
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan) {
-  if (!js || !plan || plan->command_count == 0)
-    return ant_process_plan_rejected_result(js, js_mkerr(js, "invalid process plan"));
+  if (!plan || plan->command_count == 0) {
+    ant_value_t error = js_mkerr(js, "invalid process plan");
+    ant_process_plan_dispose(plan);
+    return ant_process_plan_rejected_result(js, error);
+  }
   
   ant_process_run_t *run = calloc(1, sizeof(*run));
-  if (!run) return ant_process_plan_rejected_result(js, js_mkerr(js, "out of memory"));
+  if (!run) {
+    ant_value_t error = js_mkerr(js, "out of memory");
+    ant_process_plan_dispose(plan);
+    return ant_process_plan_rejected_result(js, error);
+  }
   
   run->js = js;
   run->plan = *plan;

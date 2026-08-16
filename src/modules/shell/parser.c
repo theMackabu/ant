@@ -33,7 +33,8 @@ typedef enum {
   SH_TOKEN_PIPE,
   SH_TOKEN_AND,
   SH_TOKEN_OR,
-  SH_TOKEN_SEQUENCE,
+  SH_TOKEN_NEWLINE,
+  SH_TOKEN_SEMICOLON,
   SH_TOKEN_REDIR_STDIN,
   SH_TOKEN_REDIR_STDOUT,
   SH_TOKEN_REDIR_STDOUT_APPEND,
@@ -418,7 +419,7 @@ static sh_token_t sh_lex_next(sh_lexer_t *lexer) {
     if (event.ch == '#') {
       do event = sh_input_take(&lexer->input);
       while (event.kind != SH_INPUT_EOF && !sh_event_is_char(event, '\n'));
-      if (sh_event_is_char(event, '\n')) return (sh_token_t){ .kind = SH_TOKEN_SEQUENCE };
+      if (sh_event_is_char(event, '\n')) return (sh_token_t){ .kind = SH_TOKEN_NEWLINE };
       return (sh_token_t){ .kind = SH_TOKEN_EOF };
     }
     break;
@@ -427,9 +428,13 @@ static sh_token_t sh_lex_next(sh_lexer_t *lexer) {
   sh_input_event_t event = sh_input_peek(&lexer->input);
   if (event.kind != SH_INPUT_CHAR) return sh_lex_word(lexer);
 
-  if (event.ch == '\n' || event.ch == ';') {
+  if (event.ch == '\n') {
     sh_input_take(&lexer->input);
-    return (sh_token_t){ .kind = SH_TOKEN_SEQUENCE };
+    return (sh_token_t){ .kind = SH_TOKEN_NEWLINE };
+  }
+  if (event.ch == ';') {
+    sh_input_take(&lexer->input);
+    return (sh_token_t){ .kind = SH_TOKEN_SEMICOLON };
   }
   if (event.ch == '|') {
     sh_input_take(&lexer->input);
@@ -631,7 +636,7 @@ static bool sh_parse_pipeline(
       break;
     }
 
-    if (!have_content || command.word_count == 0) {
+    if (!have_content) {
       sh_set_error(lexer, "expected a command");
       goto fail;
     }
@@ -641,7 +646,8 @@ static bool sh_parse_pipeline(
     }
     if (lookahead->kind != SH_TOKEN_PIPE) return true;
     *lookahead = sh_lex_next(lexer);
-    if (lookahead->kind == SH_TOKEN_EOF || lookahead->kind == SH_TOKEN_SEQUENCE ||
+    if (lookahead->kind == SH_TOKEN_EOF || lookahead->kind == SH_TOKEN_NEWLINE ||
+        lookahead->kind == SH_TOKEN_SEMICOLON ||
         lookahead->kind == SH_TOKEN_AND || lookahead->kind == SH_TOKEN_OR ||
         lookahead->kind == SH_TOKEN_PIPE) {
       sh_set_error(lexer, "pipeline requires a command after '|'");
@@ -675,7 +681,7 @@ bool sh_parse_segments(
   };
 
   sh_token_t token = sh_lex_next(&lexer);
-  while (token.kind == SH_TOKEN_SEQUENCE) token = sh_lex_next(&lexer);
+  while (token.kind == SH_TOKEN_NEWLINE) token = sh_lex_next(&lexer);
   sh_connector_t connector = SH_CONNECT_ALWAYS;
 
   while (token.kind != SH_TOKEN_EOF) {
@@ -693,7 +699,8 @@ bool sh_parse_segments(
 
     if (token.kind == SH_TOKEN_AND) connector = SH_CONNECT_AND;
     else if (token.kind == SH_TOKEN_OR) connector = SH_CONNECT_OR;
-    else if (token.kind == SH_TOKEN_SEQUENCE) connector = SH_CONNECT_ALWAYS;
+    else if (token.kind == SH_TOKEN_NEWLINE || token.kind == SH_TOKEN_SEMICOLON)
+      connector = SH_CONNECT_ALWAYS;
     else if (token.kind == SH_TOKEN_EOF) break;
     else {
       sh_set_error(&lexer, "unexpected token after command");
@@ -702,9 +709,10 @@ bool sh_parse_segments(
 
     token = sh_lex_next(&lexer);
     if (connector == SH_CONNECT_ALWAYS) {
-      while (token.kind == SH_TOKEN_SEQUENCE) token = sh_lex_next(&lexer);
+      while (token.kind == SH_TOKEN_NEWLINE) token = sh_lex_next(&lexer);
       if (token.kind == SH_TOKEN_EOF) break;
-    } else if (token.kind == SH_TOKEN_EOF || token.kind == SH_TOKEN_SEQUENCE ||
+    } else if (token.kind == SH_TOKEN_EOF || token.kind == SH_TOKEN_NEWLINE ||
+               token.kind == SH_TOKEN_SEMICOLON ||
                token.kind == SH_TOKEN_AND || token.kind == SH_TOKEN_OR) {
       sh_set_error(&lexer, "conditional operator requires a following command");
       goto fail;

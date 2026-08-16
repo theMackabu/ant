@@ -132,6 +132,19 @@ try {
   assert.strictEqual(fs.readFileSync(builtinRedirectPath, 'utf8'), '');
   await $`true >> ${builtinRedirectPath}`;
   assert.strictEqual(fs.readFileSync(builtinRedirectPath, 'utf8'), '');
+
+  const firstBuiltinRedirectPath = path.join(tmpDir, 'builtin-first.txt');
+  const finalBuiltinRedirectPath = path.join(tmpDir, 'builtin-final.txt');
+  fs.writeFileSync(firstBuiltinRedirectPath, 'stale');
+  await $`echo ordered > ${firstBuiltinRedirectPath} > ${finalBuiltinRedirectPath}`;
+  assert.strictEqual(fs.readFileSync(firstBuiltinRedirectPath, 'utf8'), '');
+  assert.strictEqual(fs.readFileSync(finalBuiltinRedirectPath, 'utf8'), 'ordered\n');
+
+  const redirectionOnlyPath = path.join(tmpDir, 'redirection-only.txt');
+  fs.writeFileSync(redirectionOnlyPath, 'stale');
+  await $`> ${redirectionOnlyPath}`;
+  assert.strictEqual(fs.readFileSync(redirectionOnlyPath, 'utf8'), '');
+
   const missingRedirectPath = path.join(tmpDir, 'missing', 'output.txt');
   const failedBuiltinRedirect = await $`echo unwritten > ${missingRedirectPath}`.nothrow();
   assert.strictEqual(failedBuiltinRedirect.exitCode, 1);
@@ -227,6 +240,20 @@ try {
     syntaxThrown = error instanceof SyntaxError;
   }
   assert.strictEqual(syntaxThrown, true);
+
+  const invalidSeparatorPath = path.join(tmpDir, 'invalid-separator.txt');
+  for (const invoke of [
+    () => $`; echo unexpected > ${invalidSeparatorPath}`,
+    () => $`echo one;; echo unexpected > ${invalidSeparatorPath}`,
+  ]) {
+    await expectShellRejection(invoke, /expected a command|unexpected separator/i, SyntaxError);
+  }
+  assert.strictEqual(fs.existsSync(invalidSeparatorPath), false);
+  assert.strictEqual(await $`
+
+echo newline-separated
+
+`.text(), 'newline-separated\n');
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
