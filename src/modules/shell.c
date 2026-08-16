@@ -7,6 +7,7 @@
 #include "ant.h"
 #include "debug.h"
 #include "errors.h"
+#include "gc/roots.h"
 #include "internal.h"
 #include "ptr.h"
 
@@ -17,10 +18,21 @@
 #include "silver/compiler.h"
 #include "silver/engine.h"
 
-enum { SHELL_COMPILED_FUNC_TAG = 0x53484346u }; // SHCF
+enum { SH_COMPILED_PROGRAM_TAG = 0x53484346u }; // SHCF
 
-static ant_value_t shell_compiled_holder(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mkundef();
+static void shell_compiled_program_free(sh_compiled_program_t *compiled) {
+  if (!compiled) return;
+  sh_program_free(&compiled->program);
+  free(compiled);
+}
+
+static void shell_compiled_holder_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t holder = js_obj_from_ptr(obj);
+  sh_compiled_program_t *compiled = js_get_native(
+    holder, SH_COMPILED_PROGRAM_TAG
+  );
+  shell_compiled_program_free(compiled);
+  js_clear_native(holder, SH_COMPILED_PROGRAM_TAG);
 }
 
 static ant_value_t shell_policy_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
@@ -29,6 +41,9 @@ static ant_value_t shell_policy_fulfilled(ant_t *js, ant_value_t *args, int narg
   if (!is_special_object(result)) return result;
 
   ant_value_t exit_code = js_get(js, result, "exitCode");
+  ant_value_t exited = js_get(js, result, "exited");
+  if (!is_undefined(exited))
+    (void)js_delete_prop(js, result, "exited", sizeof("exited") - 1);
   ant_value_t nothrow = js_get(js, state, "nothrow");
   if (vtype(exit_code) != T_NUM || (int)js_getnum(exit_code) == 0 || js_truthy(js, nothrow))
     return result;
@@ -148,25 +163,36 @@ static ant_value_t shell_wrap_promise(ant_t *js, ant_value_t raw_promise) {
   return wrapper;
 }
 
-static sv_func_t *shell_cache_lookup(ant_t *js, ant_value_t state, ant_value_t key) {
-  ant_value_t cache = js_get(js, state, "cache");
-  ant_value_t holder = collections_weakmap_get(cache, key);
-  return (sv_func_t *)js_get_native(holder, SHELL_COMPILED_FUNC_TAG);
-}
-
-static void shell_cache_store(
+static sh_compiled_program_t *shell_cache_lookup(
   ant_t *js,
   ant_value_t state,
   ant_value_t key,
-  sv_func_t *compiled
+  ant_value_t *holder_out
 ) {
   ant_value_t cache = js_get(js, state, "cache");
-  ant_value_t holder = js_heavy_mkfun_native(
-    js, shell_compiled_holder, 
-    compiled, SHELL_COMPILED_FUNC_TAG
+  ant_value_t holder = collections_weakmap_get(cache, key);
+  sh_compiled_program_t *compiled = js_get_native(
+    holder, SH_COMPILED_PROGRAM_TAG
   );
-  
+  if (compiled && holder_out) *holder_out = holder;
+  return compiled;
+}
+
+static ant_value_t shell_cache_store(
+  ant_t *js,
+  ant_value_t state,
+  ant_value_t key,
+  sh_compiled_program_t *compiled
+) {
+  ant_value_t cache = js_get(js, state, "cache");
+  ant_value_t holder = js_mkobj(js);
+  js_set_native(holder, compiled, SH_COMPILED_PROGRAM_TAG);
+
+  if (js_get_native(holder, SH_COMPILED_PROGRAM_TAG) != compiled)
+    return js_mkundef();
+  js_set_finalizer(holder, shell_compiled_holder_finalize);
   (void)collections_weakmap_set(js, cache, key, holder);
+  return holder;
 }
 
 static bool shell_template_segments(
@@ -212,27 +238,36 @@ static bool shell_template_segments(
   return true;
 }
 
-static sv_func_t *shell_compile(
+static sh_compiled_program_t *shell_compile(
   ant_t *js,
   const char *const *segments,
   const size_t *lengths,
   size_t segment_count
 ) {
-  sh_program_t program = {0};
+  sh_compiled_program_t *compiled = calloc(1, sizeof(*compiled));
+  if (!compiled) {
+    js_mkerr(js, "Out of memory");
+    return NULL;
+  }
   sh_parse_error_t error = {0};
   
-  if (!sh_parse_segments(segments, lengths, segment_count, &program, &error)) {
+  if (!sh_parse_segments(
+    segments, lengths, segment_count, &compiled->program, &error
+  )) {
     js_mkerr_typed(js, JS_ERR_SYNTAX, "ant:shell: %s at template segment %zu offset %zu",
     error.message[0] ? error.message : "parse error", error.segment, error.offset);
+    shell_compiled_program_free(compiled);
     return NULL;
   }
 
   size_t source_len = 0;
-  char *source = sh_compile_program_source(&program, &source_len, &error);
-  sh_program_free(&program);
+  char *source = sh_compile_program_source(
+    &compiled->program, &source_len, &error
+  );
   
   if (!source) {
     js_mkerr(js, "ant:shell: %s", error.message[0] ? error.message : "compile error");
+    shell_compiled_program_free(compiled);
     return NULL;
   }
 
@@ -246,14 +281,19 @@ static sv_func_t *shell_compile(
     SV_PARAM("__run"),
     SV_PARAM("__ctx"),
     SV_PARAM("__values"),
+    SV_PARAM("__plan"),
   };
   
-  sv_func_t *compiled = sv_compile_function_with_params(
-    js, params, 3, source, 
+  compiled->func = sv_compile_function_with_params(
+    js, params, 4, source,
     source_len, true
   );
   
   free(source);
+  if (!compiled->func) {
+    shell_compiled_program_free(compiled);
+    return NULL;
+  }
   return compiled;
 }
 
@@ -271,11 +311,22 @@ static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs)
   )) return js_mkerr_typed(js, JS_ERR_TYPE, "$() must be used as a tagged template");
 
   ant_value_t cache_key = args[0];
-  sv_func_t *compiled = shell_cache_lookup(js, state, cache_key);
+  ant_value_t holder = js_mkundef();
+  sh_compiled_program_t *compiled = shell_cache_lookup(
+    js, state, cache_key, &holder
+  );
 
+  // TODO: reduce nesting
   if (!compiled) {
     compiled = shell_compile(js, segments, lengths, segment_count);
-    if (compiled) shell_cache_store(js, state, cache_key, compiled);
+    if (compiled) {
+      holder = shell_cache_store(js, state, cache_key, compiled);
+      if (is_undefined(holder)) {
+        shell_compiled_program_free(compiled);
+        compiled = NULL;
+        js_mkerr(js, "Out of memory");
+      }
+    }
   }
 
   free((void *)segments);
@@ -284,16 +335,35 @@ static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs)
     ? mkval(T_ERR, 0)
     : js_mkerr(js, "Shell compilation failed");
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, holder);
   ant_value_t values = js_mkarr(js);
+  
+  GC_ROOT_PIN(js, values);
   for (int i = 1; i < nargs; i++) js_arr_push(js, values, args[i]);
   
   ant_value_t context = sh_runtime_context(js);
-  if (is_err(context)) return context;
+  if (is_err(context)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return context;
+  }
+  GC_ROOT_PIN(js, context);
   
-  ant_value_t call_args[] = { js_mkfun(sh_runtime_run), context, values, };
-  ant_value_t raw_promise = sv_call_compiled_zero_upvalues(js, compiled, js_mkundef(), call_args, 3);
+  ant_value_t call_args[] = {
+    js_mkfun(sh_runtime_run),
+    context, values, holder,
+  };
   
-  return shell_wrap_promise(js, raw_promise);
+  ant_value_t raw_promise = sv_call_compiled_zero_upvalues(
+    js, compiled->func, 
+    js_mkundef(), call_args, 4
+  );
+  
+  GC_ROOT_PIN(js, raw_promise);
+  ant_value_t wrapper = shell_wrap_promise(js, raw_promise);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return wrapper;
 }
 
 ant_value_t shell_library(ant_t *js) {

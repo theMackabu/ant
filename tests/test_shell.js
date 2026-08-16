@@ -23,6 +23,19 @@ try {
   assert.strictEqual(simple.stderr, '');
   assert.strictEqual(simple.exitCode, 0);
   assert.strictEqual(simple.signalCode, null);
+  assert.deepStrictEqual(Object.keys(simple).sort(), [
+    'exitCode',
+    'signalCode',
+    'stderr',
+    'stdout'
+  ]);
+  assert.deepStrictEqual(await $`
+  `, {
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+    signalCode: null
+  });
   assert.strictEqual(await $`printf text`.text(), 'text');
   let finallyCalls = 0;
   const finallyResult = await $`printf finally`.finally(() => finallyCalls++);
@@ -194,6 +207,7 @@ try {
 
   const failed = await $`exit 7`.nothrow();
   assert.strictEqual(failed.exitCode, 7);
+  assert.strictEqual('exited' in failed, false);
   const exitedEarly = await $`printf before; exit 17; printf after`.nothrow();
   assert.strictEqual(exitedEarly.exitCode, 17);
   assert.strictEqual(exitedEarly.stdout, 'before');

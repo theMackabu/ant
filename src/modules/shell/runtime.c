@@ -13,6 +13,7 @@
 #include "gc/roots.h"
 #include "internal.h"
 #include "modules/child_process.h"
+#include "ptr.h"
 
 typedef struct {
   char *data;
@@ -116,31 +117,24 @@ static bool sh_argv_has_nul(ant_t *js, ant_value_t argv) {
 
 static bool sh_build_word(
   ant_t *js,
-  ant_value_t parts,
+  const sh_word_t *word_plan,
   ant_value_t values,
   ant_value_t *out
 ) {
-  if (vtype(parts) != T_ARR) return false;
+  if (!word_plan || vtype(values) != T_ARR) return false;
   sh_bytes_t word = {0};
-  ant_offset_t part_count = js_arr_len(js, parts);
 
-  for (ant_offset_t i = 0; i < part_count; i++) {
-    ant_value_t part = js_arr_get(js, parts, i);
-    if (vtype(part) != T_ARR || js_arr_len(js, part) < 3) goto fail;
-    ant_value_t kind_value = js_arr_get(js, part, 0);
-    if (vtype(kind_value) != T_NUM) goto fail;
-    int kind = (int)js_getnum(kind_value);
-
-    if (kind == SH_PART_LITERAL) {
-      ant_value_t literal = js_arr_get(js, part, 2);
-      if (vtype(literal) != T_STR || !sh_value_append(js, &word, literal)) goto fail;
-    } else if (kind == SH_PART_INTERPOLATION) {
-      ant_value_t index_value = js_arr_get(js, part, 2);
-      if (vtype(index_value) != T_NUM) goto fail;
-      int index = (int)js_getnum(index_value);
-      if (index < 0 || vtype(values) != T_ARR || (ant_offset_t)index >= js_arr_len(js, values))
-        goto fail;
-      if (!sh_value_append(js, &word, js_arr_get(js, values, (ant_offset_t)index))) goto fail;
+  for (size_t i = 0; i < word_plan->part_count; i++) {
+    const sh_word_part_t *part = &word_plan->parts[i];
+    if (part->kind == SH_PART_LITERAL) {
+      if (!sh_bytes_append(
+        &word, part->text ? part->text : "", part->text_len
+      )) goto fail;
+    } else if (part->kind == SH_PART_INTERPOLATION) {
+      if (part->interpolation >= (size_t)js_arr_len(js, values)) goto fail;
+      if (!sh_value_append(js, &word, js_arr_get(
+        js, values, (ant_offset_t)part->interpolation
+      ))) goto fail;
     } else goto fail;
   }
 
@@ -156,34 +150,27 @@ fail:
 static bool sh_push_command_word(
   ant_t *js,
   ant_value_t argv,
-  ant_value_t word,
+  const sh_word_t *word,
   ant_value_t values
 ) {
-  if (vtype(word) != T_ARR) return false;
+  if (!word || vtype(values) != T_ARR) return false;
 
-  // TODO: reduce nesting
-  if (js_arr_len(js, word) == 1) {
-    ant_value_t part = js_arr_get(js, word, 0);
-    if (vtype(part) == T_ARR && js_arr_len(js, part) >= 3) {
-      ant_value_t kind_value = js_arr_get(js, part, 0);
-      ant_value_t quote_value = js_arr_get(js, part, 1);
-      ant_value_t index_value = js_arr_get(js, part, 2);
-      if (vtype(kind_value) == T_NUM && (int)js_getnum(kind_value) == SH_PART_INTERPOLATION &&
-          vtype(quote_value) == T_NUM && (int)js_getnum(quote_value) == SH_QUOTE_NONE &&
-          vtype(index_value) == T_NUM && vtype(values) == T_ARR) {
-        int index = (int)js_getnum(index_value);
-        if (index >= 0 && (ant_offset_t)index < js_arr_len(js, values)) {
-          ant_value_t value = js_arr_get(js, values, (ant_offset_t)index);
-          if (vtype(value) == T_ARR) {
-            ant_offset_t count = js_arr_len(js, value);
-            for (ant_offset_t i = 0; i < count; i++) {
-              ant_value_t item = js_tostring_val(js, js_arr_get(js, value, i));
-              if (is_err(item)) return false;
-              js_arr_push(js, argv, item);
-            }
-            return true;
-          }
+  if (word->part_count == 1) {
+    const sh_word_part_t *part = &word->parts[0];
+    if (part->kind == SH_PART_INTERPOLATION &&
+        part->quote == SH_QUOTE_NONE &&
+        part->interpolation < (size_t)js_arr_len(js, values)) {
+      ant_value_t value = js_arr_get(
+        js, values, (ant_offset_t)part->interpolation
+      );
+      if (vtype(value) == T_ARR) {
+        ant_offset_t count = js_arr_len(js, value);
+        for (ant_offset_t i = 0; i < count; i++) {
+          ant_value_t item = js_tostring_val(js, js_arr_get(js, value, i));
+          if (is_err(item)) return false;
+          js_arr_push(js, argv, item);
         }
+        return true;
       }
     }
   }
@@ -337,23 +324,18 @@ echo_oom:
 
 static bool sh_build_command_argv(
   ant_t *js,
-  ant_value_t command,
+  const sh_command_t *command,
   ant_value_t values,
-  ant_value_t *argv_out,
-  ant_value_t *redirs_out
+  ant_value_t *argv_out
 ) {
-  if (vtype(command) != T_ARR || js_arr_len(js, command) < 2) return false;
-  ant_value_t words = js_arr_get(js, command, 0);
-  ant_value_t redirs = js_arr_get(js, command, 1);
-  if (vtype(words) != T_ARR || vtype(redirs) != T_ARR) return false;
+  if (!command) return false;
 
   ant_value_t argv = js_mkarr(js);
-  ant_offset_t word_count = js_arr_len(js, words);
-  for (ant_offset_t i = 0; i < word_count; i++) {
-    if (!sh_push_command_word(js, argv, js_arr_get(js, words, i), values)) return false;
+  for (size_t i = 0; i < command->word_count; i++) {
+    if (!sh_push_command_word(js, argv, &command->words[i], values))
+      return false;
   }
   *argv_out = argv;
-  *redirs_out = redirs;
   return true;
 }
 
@@ -401,11 +383,12 @@ static char *sh_resolve_path(
 static bool sh_prepare_redirections(
   ant_t *js,
   ant_value_t context,
-  ant_value_t redirs,
+  const sh_pipeline_t *pipeline,
   ant_value_t values,
   ant_value_t options,
   ant_value_t *state_out
 ) {
+  if (!pipeline) return false;
   ant_value_t state = js_mkobj(js);
   ant_value_t redirect_plan = js_mkarr(js);
   js_set(js, options, "redirections", redirect_plan);
@@ -416,48 +399,49 @@ static bool sh_prepare_redirections(
   js_set(js, state, "stderrPath", js_mkundef());
   js_set(js, state, "stderrAppend", js_false);
 
-  ant_offset_t count = js_arr_len(js, redirs);
-  for (ant_offset_t i = 0; i < count; i++) {
-    ant_value_t redir = js_arr_get(js, redirs, i);
-    if (vtype(redir) != T_ARR || js_arr_len(js, redir) < 1) return false;
-    ant_value_t kind_value = js_arr_get(js, redir, 0);
-    if (vtype(kind_value) != T_NUM) return false;
-    int kind = (int)js_getnum(kind_value);
-    if (kind == SH_REDIR_STDERR_TO_STDOUT) {
-      ant_value_t action = js_mkobj(js);
-      js_set(js, action, "kind", js_mknum(SH_REDIR_STDERR_TO_STDOUT));
-      js_arr_push(js, redirect_plan, action);
-      ant_value_t output_path = js_get(js, state, "outputPath");
-      if (vtype(output_path) == T_STR) {
-        js_set(js, state, "stderrMode", js_mknum(2));
-        js_set(js, state, "stderrPath", output_path);
-        js_set(js, state, "stderrAppend", js_get(js, state, "outputAppend"));
-      } else {
-        js_set(js, state, "stderrMode", js_mknum(1));
-        js_set(js, state, "stderrPath", js_mkundef());
+  for (size_t command_index = 0;
+       command_index < pipeline->command_count;
+       command_index++) {
+    const sh_command_t *command = &pipeline->commands[command_index];
+    for (size_t i = 0; i < command->redir_count; i++) {
+      const sh_redir_t *redir = &command->redirs[i];
+      sh_redir_kind_t kind = redir->kind;
+      if (kind == SH_REDIR_STDERR_TO_STDOUT) {
+        ant_value_t action = js_mkobj(js);
+        js_set(js, action, "kind", js_mknum(SH_REDIR_STDERR_TO_STDOUT));
+        js_arr_push(js, redirect_plan, action);
+        ant_value_t output_path = js_get(js, state, "outputPath");
+        if (vtype(output_path) == T_STR) {
+          js_set(js, state, "stderrMode", js_mknum(2));
+          js_set(js, state, "stderrPath", output_path);
+          js_set(js, state, "stderrAppend", js_get(js, state, "outputAppend"));
+        } else {
+          js_set(js, state, "stderrMode", js_mknum(1));
+          js_set(js, state, "stderrPath", js_mkundef());
+        }
+        continue;
       }
-      continue;
-    }
-    if (js_arr_len(js, redir) < 2) return false;
-    ant_value_t target = js_mkundef();
-    if (!sh_build_word(js, js_arr_get(js, redir, 1), values, &target)) return false;
-    char *path = sh_resolve_path(js, context, target);
-    if (!path) return false;
 
-    ant_value_t action = js_mkobj(js);
-    js_set(js, action, "kind", js_mknum((double)kind));
-    js_set(js, action, "path", js_mkstr(js, path, strlen(path)));
-    js_arr_push(js, redirect_plan, action);
+      ant_value_t target = js_mkundef();
+      if (!sh_build_word(js, &redir->target, values, &target)) return false;
+      char *path = sh_resolve_path(js, context, target);
+      if (!path) return false;
 
-    if (kind == SH_REDIR_STDIN) {
+      ant_value_t action = js_mkobj(js);
+      js_set(js, action, "kind", js_mknum((double)kind));
+      js_set(js, action, "path", js_mkstr(js, path, strlen(path)));
+      js_arr_push(js, redirect_plan, action);
+
+      if (kind == SH_REDIR_STDIN) {
+        free(path);
+        continue;
+      }
+
+      bool append = kind == SH_REDIR_STDOUT_APPEND;
+      js_set(js, state, "outputPath", js_mkstr(js, path, strlen(path)));
+      js_set(js, state, "outputAppend", js_bool(append));
       free(path);
-      continue;
     }
-
-    bool append = kind == SH_REDIR_STDOUT_APPEND;
-    js_set(js, state, "outputPath", js_mkstr(js, path, strlen(path)));
-    js_set(js, state, "outputAppend", js_bool(append));
-    free(path);
   }
 
   *state_out = state;
@@ -881,15 +865,27 @@ static ant_value_t sh_apply_redirections(
 }
 
 ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 3 || !is_special_object(args[0]) || vtype(args[1]) != T_ARR ||
-      vtype(args[2]) != T_ARR) {
+  if (nargs < 4 || !is_special_object(args[0]) || vtype(args[2]) != T_NUM ||
+      vtype(args[3]) != T_ARR) {
     return sh_resolved_result(js, "", 0, "ant:shell: invalid compiled pipeline\n", sizeof("ant:shell: invalid compiled pipeline\n") - 1, 2);
   }
 
   ant_value_t context = args[0];
-  ant_value_t pipeline = args[1];
-  ant_value_t values = args[2];
-  ant_offset_t command_count = js_arr_len(js, pipeline);
+  sh_compiled_program_t *compiled = js_get_native(
+    args[1], SH_COMPILED_PROGRAM_TAG
+  );
+  double clause_number = js_getnum(args[2]);
+  if (!compiled || clause_number != clause_number || clause_number < 0 ||
+      clause_number >= (double)compiled->program.clause_count) {
+    return sh_resolved_result(js, "", 0, "ant:shell: invalid compiled pipeline\n", sizeof("ant:shell: invalid compiled pipeline\n") - 1, 2);
+  }
+  size_t clause_index = (size_t)clause_number;
+  if (clause_number != (double)clause_index)
+    return sh_resolved_result(js, "", 0, "ant:shell: invalid compiled pipeline\n", sizeof("ant:shell: invalid compiled pipeline\n") - 1, 2);
+  const sh_pipeline_t *pipeline =
+    &compiled->program.clauses[clause_index].pipeline;
+  ant_value_t values = args[3];
+  size_t command_count = pipeline->command_count;
   if (command_count == 0) return sh_resolved_result(js, "", 0, "", 0, 0);
 
   ant_value_t options = js_mkobj(js);
@@ -899,44 +895,37 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
   // TODO: reduce nesting
   if (command_count > 1) {
     ant_value_t commands = js_mkarr(js);
-    ant_value_t pipeline_redirs = js_mkarr(js);
-    for (ant_offset_t i = 0; i < command_count; i++) {
+    for (size_t i = 0; i < command_count; i++) {
       ant_value_t argv = js_mkundef();
-      ant_value_t redirs = js_mkundef();
       if (!sh_build_command_argv(
-        js, js_arr_get(js, pipeline, i), values, &argv, &redirs
+        js, &pipeline->commands[i], values, &argv
       )) return sh_abrupt_or_error(js, "ant:shell: invalid pipeline command");
       if (sh_argv_has_nul(js, argv))
         return sh_rejected_type_error(js, "ant:shell: command arguments cannot contain NUL bytes");
-      ant_offset_t redir_count = js_arr_len(js, redirs);
-      for (ant_offset_t j = 0; j < redir_count; j++) {
-        ant_value_t redir = js_arr_get(js, redirs, j);
-        int kind = vtype(redir) == T_ARR && js_arr_len(js, redir) > 0 &&
-          vtype(js_arr_get(js, redir, 0)) == T_NUM
-          ? (int)js_getnum(js_arr_get(js, redir, 0)) : -1;
+      const sh_command_t *command = &pipeline->commands[i];
+      for (size_t j = 0; j < command->redir_count; j++) {
+        sh_redir_kind_t kind = command->redirs[j].kind;
         bool allowed = (i == 0 && kind == SH_REDIR_STDIN) ||
           (i + 1 == command_count && kind != SH_REDIR_STDIN);
         if (!allowed) return sh_resolved_result(js, "", 0,
           "ant:shell: redirection on an intermediate pipeline stage is not implemented yet\n",
           sizeof("ant:shell: redirection on an intermediate pipeline stage is not implemented yet\n") - 1, 2);
-        js_arr_push(js, pipeline_redirs, redir);
       }
       js_arr_push(js, commands, argv);
     }
     
     ant_value_t redir_state = js_mkundef();
     if (!sh_prepare_redirections(
-      js, context, pipeline_redirs, values, options, &redir_state
+      js, context, pipeline, values, options, &redir_state
     )) return js->thrown_exists ? sh_reject_current_exception(js)
       : js_mkerr(js, "ant:shell: invalid redirection");
     return child_process_pipeline_result(js, commands, options);
   }
 
-  ant_value_t command = js_arr_get(js, pipeline, 0);
+  const sh_command_t *command = &pipeline->commands[0];
   ant_value_t argv = js_mkundef();
-  ant_value_t redirs = js_mkundef();
   
-  if (!sh_build_command_argv(js, command, values, &argv, &redirs))
+  if (!sh_build_command_argv(js, command, values, &argv))
     return sh_abrupt_or_error(js, "ant:shell: invalid command");
     
   if (sh_argv_has_nul(js, argv))
@@ -944,7 +933,7 @@ ant_value_t sh_runtime_run(ant_t *js, ant_value_t *args, int nargs) {
     
   ant_value_t redir_state = js_mkundef();
   if (!sh_prepare_redirections(
-    js, context, redirs, values, options, &redir_state
+    js, context, pipeline, values, options, &redir_state
   )) return js->thrown_exists ? sh_reject_current_exception(js)
     : js_mkerr(js, "ant:shell: invalid redirection");
 

@@ -116,12 +116,16 @@ Repository examples and tests using the synchronous API move with the change.
     shared native process-stage core. Keep `node:child_process` streams and
     events in its adapter, and keep shell pipeline aggregation in the process
     plan orchestrator.
-17. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
+17. [x] Retain the immutable parsed shell program beside its cached Silver
+    function and pass clause indexes to the native runner instead of emitting
+    nested JavaScript plan literals. Specialize empty, single-clause, and
+    multi-clause generated control-flow shapes.
+18. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
     compiled frames, `OP_AWAIT` resume entry, interpreter/JIT handoff, GC
     rooting, exception/finally behavior, and bailout handling across resumes.
     Confirm generated shell functions actually reach JIT code and benchmark
     them before changing hotness thresholds.
-18. [ ] Prioritize the next POSIX frontend milestone: implement assignment
+19. [ ] Prioritize the next POSIX frontend milestone: implement assignment
     words, parameter and arithmetic expansion, command substitution, and
     `while`, `until`, `for`, `if`, and `case` compound commands. Lower their
     control flow directly to Silver bytecode, preserve shell-context semantics,
@@ -174,6 +178,12 @@ Repository examples and tests using the synchronous API move with the change.
   key-indexed worklist only when the first drain makes a pending key live; the
   common all-dead case therefore avoids hash construction while long and
   reversed ephemeron chains retain linear fixed-point processing.
+- 2026-08-16: Cache the immutable native shell AST and its Silver function in
+  one weakly held object. Generated Silver selects a clause by index, so static
+  words, commands, redirections, and pipeline arrays are not rebuilt as
+  JavaScript objects on every invocation. Empty and single-clause programs use
+  dedicated lowering shapes; multi-clause programs retain only the accumulator
+  and connector control flow they require.
 
 ## Validation status
 
@@ -218,6 +228,14 @@ Repository examples and tests using the synchronous API move with the change.
   `3d0df5b4` in all 548 non-NUL cases and Node in 547; the sole Node difference
   is the pre-existing synchronous ENOENT result shape. All four NUL cases
   reject like Node and intentionally differ from the older truncating behavior.
+- After typed-plan caching and lowering specialization, `meson compile -C
+  build`, `tests/test_shell.js`, `tests/test_debug_shell_compile.cjs`, every
+  `tests/test_child_process_*.cjs` test, `maid preflight`, `maid knowledge`, and
+  the 3,920-test spec suite passed. The representative single-pipeline dump
+  shrank from 445 generated JavaScript bytes to 44. In eight interleaved pairs
+  against the saved pre-change binary, medians improved from 240.07 ms to
+  228.75 ms for 20,000 cached single-clause invocations and from 137.44 ms to
+  132.33 ms for 10,000 cached two-clause invocations.
 
 ## Remaining risks
 

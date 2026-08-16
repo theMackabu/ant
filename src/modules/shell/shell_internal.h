@@ -76,6 +76,11 @@ typedef struct {
 } sh_program_t;
 
 typedef struct {
+  sv_func_t *func;
+  sh_program_t program;
+} sh_compiled_program_t;
+
+typedef struct {
   size_t segment;
   size_t offset;
   char message[160];

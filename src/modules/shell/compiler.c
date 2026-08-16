@@ -84,72 +84,6 @@ static bool sh_source_format(sh_source_t *source, const char *fmt, ...) {
   return true;
 }
 
-static bool sh_source_js_string(sh_source_t *source, const char *text, size_t len) {
-  if (!sh_source_cstr(source, "\"")) return false;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char ch = (unsigned char)text[i];
-    switch (ch) {
-      case '"': if (!sh_source_cstr(source, "\\\"")) return false; break;
-      case '\\': if (!sh_source_cstr(source, "\\\\")) return false; break;
-      case '\b': if (!sh_source_cstr(source, "\\b")) return false; break;
-      case '\f': if (!sh_source_cstr(source, "\\f")) return false; break;
-      case '\n': if (!sh_source_cstr(source, "\\n")) return false; break;
-      case '\r': if (!sh_source_cstr(source, "\\r")) return false; break;
-      case '\t': if (!sh_source_cstr(source, "\\t")) return false; break;
-      default:
-        if (ch < 0x20) {
-          if (!sh_source_format(source, "\\u%04x", ch)) return false;
-        } else if (!sh_source_append(source, (const char *)&text[i], 1)) return false;
-        break;
-    }
-  }
-  return sh_source_cstr(source, "\"");
-}
-
-static bool sh_compile_word(sh_source_t *source, const sh_word_t *word) {
-  if (!sh_source_cstr(source, "[")) return false;
-  for (size_t i = 0; i < word->part_count; i++) {
-    const sh_word_part_t *part = &word->parts[i];
-    if (i && !sh_source_cstr(source, ",")) return false;
-    if (part->kind == SH_PART_LITERAL) {
-      if (!sh_source_format(source, "[0,%u,", (unsigned)part->quote) ||
-        !sh_source_js_string(source, part->text, part->text_len) ||
-        !sh_source_cstr(source, "]")) return false;
-    } else if (!sh_source_format(
-      source, "[1,%u,%zu]", (unsigned)part->quote, part->interpolation
-    )) return false;
-  }
-  return sh_source_cstr(source, "]");
-}
-
-static bool sh_compile_command(sh_source_t *source, const sh_command_t *command) {
-  if (!sh_source_cstr(source, "[[")) return false;
-  for (size_t i = 0; i < command->word_count; i++) {
-    if (i && !sh_source_cstr(source, ",")) return false;
-    if (!sh_compile_word(source, &command->words[i])) return false;
-  }
-  if (!sh_source_cstr(source, "],[")) return false;
-  for (size_t i = 0; i < command->redir_count; i++) {
-    const sh_redir_t *redir = &command->redirs[i];
-    if (i && !sh_source_cstr(source, ",")) return false;
-    if (!sh_source_format(source, "[%u", (unsigned)redir->kind)) return false;
-    if (redir->kind != SH_REDIR_STDERR_TO_STDOUT) {
-      if (!sh_source_cstr(source, ",") || !sh_compile_word(source, &redir->target)) return false;
-    }
-    if (!sh_source_cstr(source, "]")) return false;
-  }
-  return sh_source_cstr(source, "]]");
-}
-
-static bool sh_compile_pipeline(sh_source_t *source, const sh_pipeline_t *pipeline) {
-  if (!sh_source_cstr(source, "[")) return false;
-  for (size_t i = 0; i < pipeline->command_count; i++) {
-    if (i && !sh_source_cstr(source, ",")) return false;
-    if (!sh_compile_command(source, &pipeline->commands[i])) return false;
-  }
-  return sh_source_cstr(source, "]");
-}
-
 char *sh_compile_program_source(
   const sh_program_t *program,
   size_t *source_len,
@@ -160,33 +94,44 @@ char *sh_compile_program_source(
   if (!program) return NULL;
 
   sh_source_t source = {0};
-  sh_source_cstr(&source,
-    "let __out=\"\",__err=\"\",__status=0,__signal=null,__result;"
-  );
+  if (program->clause_count == 0) {
+    sh_source_cstr(&source,
+      "return {stdout:\"\",stderr:\"\",exitCode:0,signalCode:null};"
+    );
+    goto done;
+  }
+  
+  if (program->clause_count == 1) {
+    sh_source_cstr(&source, "return await __run(__ctx,__plan,0,__values);");
+    goto done;
+  }
 
+  sh_source_cstr(&source, "let __out=\"\",__err=\"\",__result;");
   for (size_t i = 0; i < program->clause_count; i++) {
     const sh_clause_t *clause = &program->clauses[i];
     if (clause->connector == SH_CONNECT_AND)
-      sh_source_cstr(&source, "if(__status===0){");
+      sh_source_cstr(&source, "if(__result.exitCode===0){");
     else if (clause->connector == SH_CONNECT_OR)
-      sh_source_cstr(&source, "if(__status!==0){");
+      sh_source_cstr(&source, "if(__result.exitCode!==0){");
 
-    sh_source_cstr(&source, "__result=await __run(__ctx,");
-    sh_compile_pipeline(&source, &clause->pipeline);
+    sh_source_format(
+      &source, "__result=await __run(__ctx,__plan,%zu,__values);", i
+    );
     sh_source_cstr(&source,
-      ",__values);__out+=__result.stdout;__err+=__result.stderr;"
-      "__status=__result.exitCode;__signal=__result.signalCode;"
+      "__out+=__result.stdout;__err+=__result.stderr;"
       "if(__result.exited)return {stdout:__out,stderr:__err,"
-      "exitCode:__status,signalCode:__signal};"
+      "exitCode:__result.exitCode,signalCode:__result.signalCode};"
     );
 
     if (clause->connector != SH_CONNECT_ALWAYS) sh_source_cstr(&source, "}");
   }
 
   sh_source_cstr(&source,
-    "return {stdout:__out,stderr:__err,exitCode:__status,signalCode:__signal};"
+    "return {stdout:__out,stderr:__err,exitCode:__result.exitCode,"
+    "signalCode:__result.signalCode};"
   );
 
+done:
   if (source.failed) {
     free(source.data);
     if (error) snprintf(error->message, sizeof(error->message),
