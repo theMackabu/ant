@@ -120,8 +120,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
     uv_poll_start(&signal_poll, UV_READABLE, reactor_blocking_await_signal_cb) == 0;
   
   uv_timer_t wake_timer;
-  bool wake_timer_initialized = !signal_poll_started &&
-    uv_timer_init(loop, &wake_timer) == 0;
+  bool wake_timer_initialized = uv_timer_init(loop, &wake_timer) == 0;
   
   bool wake_timer_started = wake_timer_initialized &&
     uv_timer_start(&wake_timer, reactor_blocking_await_fallback_wake_cb, 16, 16) == 0;
@@ -148,11 +147,7 @@ js_reactor_await_status_t js_reactor_blocking_await_promise(
       break;
     }
 
-    if (wake_timer_started) uv_run(loop, UV_RUN_ONCE);
-    else {
-      uv_run(loop, UV_RUN_NOWAIT);
-      uv_sleep(1);
-    }
+    uv_run(loop, UV_RUN_ONCE);
   }
 
   if (wake_timer_initialized) {

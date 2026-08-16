@@ -26,15 +26,36 @@ static void sigint_handler(int sig) {
 #endif
 }
 
+// TODO: reduce nesting
 void ant_readline_install_signal_handler(void) {
 #ifdef _WIN32
   signal(SIGINT, sigint_handler);
 #else
-  if (signal_pipe[0] < 0 && pipe(signal_pipe) == 0) for (int i = 0; i < 2; i++) {
-    int flags = fcntl(signal_pipe[i], F_GETFL, 0);
-    if (flags >= 0) (void)fcntl(signal_pipe[i], F_SETFL, flags | O_NONBLOCK);
-    flags = fcntl(signal_pipe[i], F_GETFD, 0);
-    if (flags >= 0) (void)fcntl(signal_pipe[i], F_SETFD, flags | FD_CLOEXEC);
+  if (signal_pipe[0] < 0) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) == 0) {
+      bool configured = true;
+      for (int i = 0; i < 2; i++) {
+        int status_flags = fcntl(pipe_fds[i], F_GETFL, 0);
+        int descriptor_flags = fcntl(pipe_fds[i], F_GETFD, 0);
+        if (
+          status_flags < 0 || descriptor_flags < 0 ||
+          fcntl(pipe_fds[i], F_SETFL, status_flags | O_NONBLOCK) < 0 ||
+          fcntl(pipe_fds[i], F_SETFD, descriptor_flags | FD_CLOEXEC) < 0
+        ) {
+          configured = false;
+          break;
+        }
+      }
+
+      if (configured) {
+        signal_pipe[0] = pipe_fds[0];
+        signal_pipe[1] = pipe_fds[1];
+      } else {
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+      }
+    }
   }
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
