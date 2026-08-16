@@ -16,6 +16,7 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "gc/objects.h"
 #include "internal.h"
 #include "modules/process.h"
@@ -71,6 +72,15 @@ struct ant_process_run {
 
 static void process_run_try_finish(ant_process_run_t *run);
 static void process_prepare_next_redirect(ant_process_run_t *run);
+
+ant_value_t ant_process_plan_rejected_result(
+  ant_t *js, ant_value_t error
+) {
+  error = js_take_thrown(js, error);
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, error);
+  return promise;
+}
 
 void ant_process_plan_init(ant_process_plan_t *plan) {
   if (plan) *plan = (ant_process_plan_t){0};
@@ -515,24 +525,31 @@ static void process_run_try_finish(ant_process_run_t *run) {
 
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan) {
   if (!js || !plan || plan->command_count == 0)
-    return js_mkerr(js, "invalid process plan");
+    return ant_process_plan_rejected_result(js, js_mkerr(js, "invalid process plan"));
+  
   ant_process_run_t *run = calloc(1, sizeof(*run));
-  if (!run) return js_mkerr(js, "out of memory");
+  if (!run) return ant_process_plan_rejected_result(js, js_mkerr(js, "out of memory"));
+  
   run->js = js;
   run->plan = *plan;
   *plan = (ant_process_plan_t){0};
+  
   run->stdin_fd = -1;
   run->stdout_fd = -1;
   run->stderr_fd = -1;
   run->capture_stdout_fds[0] = run->capture_stdout_fds[1] = -1;
   run->capture_stderr_fds[0] = run->capture_stderr_fds[1] = -1;
   run->promise = js_mkpromise(js);
+  
   if (is_err(run->promise)) {
+    ant_value_t error = run->promise;
     process_run_free(run);
-    return run->promise;
+    return ant_process_plan_rejected_result(js, error);
   }
-  gc_root_pending_promise(js, js_obj_ptr(run->promise));
+  
+  ant_value_t promise = run->promise;
+  gc_root_pending_promise(js, js_obj_ptr(promise));
 
   process_prepare_next_redirect(run);
-  return run->promise;
+  return promise;
 }

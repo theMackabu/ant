@@ -1727,18 +1727,6 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   return child;
 }
 
-static ant_value_t child_process_rejected_result(
-  ant_t *js, ant_value_t error
-) {
-  if (js->thrown_exists) error = js->thrown_value;
-  js->thrown_exists = false;
-  js->thrown_value = js_mkundef();
-  js->thrown_stack = js_mkundef();
-  ant_value_t promise = js_mkpromise(js);
-  js_reject_promise(js, promise, error);
-  return promise;
-}
-
 static bool child_process_plan_copy_string(
   ant_t *js, ant_value_t value, const char *description, char **out
 ) {
@@ -1861,7 +1849,7 @@ ant_value_t child_process_exec_file_result(
   if (!child_process_plan_apply_options(js, &plan, options) ||
       !child_process_plan_add_values(js, &plan, values)) {
     ant_process_plan_dispose(&plan);
-    return child_process_rejected_result(js,
+    return ant_process_plan_rejected_result(js,
       js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
   }
   return ant_process_plan_submit(js, &plan);
@@ -1873,7 +1861,7 @@ ant_value_t child_process_pipeline_result(
   ant_value_t options
 ) {
   if (vtype(commands) != T_ARR || js_arr_len(js, commands) == 0) {
-    return child_process_rejected_result(js,
+    return ant_process_plan_rejected_result(js,
       js_mkerr(js, "pipeline requires at least one command"));
   }
   ant_process_plan_t plan;
@@ -1887,7 +1875,7 @@ ant_value_t child_process_pipeline_result(
 
 invalid:
   ant_process_plan_dispose(&plan);
-  return child_process_rejected_result(js,
+  return ant_process_plan_rejected_result(js,
     js->thrown_exists ? js->thrown_value : js_mkerr(js, "Invalid process plan"));
 }
 

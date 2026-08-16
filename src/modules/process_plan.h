@@ -43,6 +43,7 @@ void ant_process_plan_dispose(ant_process_plan_t *plan);
 bool ant_process_plan_add_command(ant_process_plan_t *plan, const char *const *argv, size_t argc);
 bool ant_process_plan_add_redirect(ant_process_plan_t *plan, ant_process_redirect_kind_t kind, const char *path);
 
+ant_value_t ant_process_plan_rejected_result(ant_t *js, ant_value_t error);
 ant_value_t ant_process_plan_submit(ant_t *js, ant_process_plan_t *plan);
 
 #endif
