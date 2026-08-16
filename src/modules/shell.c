@@ -5,12 +5,15 @@
 #include <string.h>
 
 #include "ant.h"
+#include "debug.h"
 #include "errors.h"
 #include "internal.h"
 #include "ptr.h"
+
 #include "modules/collections.h"
 #include "shell/shell_internal.h"
 #include "modules/symbol.h"
+
 #include "silver/compiler.h"
 #include "silver/engine.h"
 
@@ -216,6 +219,12 @@ static sv_func_t *shell_compile(
   if (!source) {
     js_mkerr(js, "ant:shell: %s", error.message[0] ? error.message : "compile error");
     return NULL;
+  }
+
+  if (sv_dump_shell_unlikely) {
+    fprintf(stderr, "[shell:compile] JavaScript (%zu bytes)\n", source_len);
+    if (source_len) fwrite(source, 1, source_len, stderr);
+    fputc('\n', stderr);
   }
 
   static const sv_param_t params[] = {

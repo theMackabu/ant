@@ -165,6 +165,7 @@ static void ant_debug_apply(const char *key, const char *val) {
 
   else if (strcmp(key, "dump/compile") == 0) {
     if (strcmp(val, "trace") == 0) sv_debug_enable(SV_DEBUG_COMPILE);
+    if (strcmp(val, "shell") == 0) sv_debug_enable(SV_DEBUG_DUMP_SHELL);
   }
 
   else if (strcmp(key, "dump/crprintf") == 0) {
