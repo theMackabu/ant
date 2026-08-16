@@ -65,6 +65,36 @@ try {
   assert.strictEqual(fs.readFileSync(redirectPath, 'utf8'), 'helloworld');
   assert.notStrictEqual((await $`cd ${redirectPath}`.nothrow()).exitCode, 0);
 
+  const builtinRedirectPath = path.join(tmpDir, 'builtin-redirect.txt');
+  const builtinRedirectText = 'x'.repeat(256 * 1024 + 17);
+  let builtinRedirectYielded = false;
+  const builtinRedirect = $`echo ${builtinRedirectText} > ${builtinRedirectPath}`;
+  setTimeout(() => { builtinRedirectYielded = true; }, 0);
+  await builtinRedirect;
+  assert.strictEqual(builtinRedirectYielded, true);
+  assert.strictEqual(
+    fs.readFileSync(builtinRedirectPath, 'utf8'),
+    `${builtinRedirectText}\n`
+  );
+  await $`echo tail >> ${builtinRedirectPath}`;
+  assert.strictEqual(
+    fs.readFileSync(builtinRedirectPath, 'utf8'),
+    `${builtinRedirectText}\ntail\n`
+  );
+  await $`echo replacement > ${builtinRedirectPath}`;
+  assert.strictEqual(
+    fs.readFileSync(builtinRedirectPath, 'utf8'),
+    'replacement\n'
+  );
+  await $`true > ${builtinRedirectPath}`;
+  assert.strictEqual(fs.readFileSync(builtinRedirectPath, 'utf8'), '');
+  await $`true >> ${builtinRedirectPath}`;
+  assert.strictEqual(fs.readFileSync(builtinRedirectPath, 'utf8'), '');
+  const missingRedirectPath = path.join(tmpDir, 'missing', 'output.txt');
+  const failedBuiltinRedirect = await $`echo unwritten > ${missingRedirectPath}`.nothrow();
+  assert.strictEqual(failedBuiltinRedirect.exitCode, 1);
+  assert.match(failedBuiltinRedirect.stderr, /no such file or directory/i);
+
   const unsupportedFdPath = path.join(tmpDir, 'unsupported-fd.txt');
   await expectShellRejection(
     () => $`printf must-not-run 2>${unsupportedFdPath}`,

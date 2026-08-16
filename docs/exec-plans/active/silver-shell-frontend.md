@@ -1,7 +1,7 @@
 # Silver Shell Frontend
 
 Status: active
-Last reviewed: 2026-08-15
+Last reviewed: 2026-08-16
 Owner: theMackabu
 
 ## Goal
@@ -116,6 +116,11 @@ Repository examples and tests using the synchronous API move with the change.
     shared native process-stage core. Keep `node:child_process` streams and
     events in its adapter, and keep shell pipeline aggregation in the process
     plan orchestrator.
+17. [ ] Extend the Swarm/MIR JIT to async functions, including suspension-safe
+    compiled frames, `OP_AWAIT` resume entry, interpreter/JIT handoff, GC
+    rooting, exception/finally behavior, and bailout handling across resumes.
+    Confirm generated shell functions actually reach JIT code and benchmark
+    them before changing hotness thresholds.
 
 ## Deferred POSIX work
 

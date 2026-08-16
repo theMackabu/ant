@@ -1,7 +1,6 @@
 #include "shell_internal.h"
 
 #include <uv.h>
-#include <limits.h>
 #include <stdint.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -10,6 +9,8 @@
 #include <sys/stat.h>
 
 #include "ant.h"
+#include "gc/objects.h"
+#include "gc/roots.h"
 #include "internal.h"
 #include "modules/child_process.h"
 
@@ -489,56 +490,275 @@ static bool sh_same_path(ant_t *js, ant_value_t left, ant_value_t right) {
     memcmp(left_text, right_text, left_len) == 0;
 }
 
-static bool sh_write_redirect_file(
-  ant_t *js,
-  ant_value_t result,
-  ant_value_t path_value,
-  const char *text,
-  size_t text_len,
-  bool append
-) {
-  size_t path_len = 0;
-  char *path = js_getstr(js, path_value, &path_len);
-  if (!path || (!text && text_len)) return false;
+#define SH_REDIRECT_WRITE_CHUNK_SIZE (64u * 1024u)
 
-  int flags = O_CREAT | O_WRONLY | (append ? O_APPEND : O_TRUNC);
+typedef struct {
+  ant_value_t path;
+  ant_value_t text;
+  size_t text_len;
+  bool append;
+} sh_redirect_spec_t;
+
+typedef struct {
+  char *path;
+  size_t path_len;
+  ant_value_t text;
+  size_t text_len;
+  bool append;
+} sh_redirect_target_t;
+
+typedef struct {
+  ant_t *js;
+  ant_value_t promise;
+  ant_value_t result;
+  sh_redirect_target_t targets[2];
+  size_t target_count;
+  size_t target_index;
+  size_t written_total;
+  size_t chunk_offset;
+  size_t chunk_len;
+  char *chunk;
+  uv_file fd;
+  int failure;
   uv_fs_t request;
-  int fd = uv_fs_open(uv_default_loop(), &request, path, flags, 0666, NULL);
-  uv_fs_req_cleanup(&request);
-  int failure = fd < 0 ? fd : 0;
+} sh_redirect_write_t;
 
-  size_t written_total = 0;
-  while (!failure && written_total < text_len) {
-    size_t remaining = text_len - written_total;
-    unsigned int chunk_len = remaining > UINT_MAX ? UINT_MAX : (unsigned int)remaining;
-    uv_buf_t buffer = uv_buf_init((char *)text + written_total, chunk_len);
-    int written = uv_fs_write(
-      uv_default_loop(), &request, fd, &buffer, 1,
-      append ? -1 : (int64_t)written_total, NULL
-    );
-    uv_fs_req_cleanup(&request);
-    if (written <= 0) failure = written < 0 ? written : UV_EIO;
-    else written_total += (size_t)written;
-  }
+static void sh_redirect_write_next(sh_redirect_write_t *write);
+static void sh_redirect_write_open_done(uv_fs_t *request);
 
-  if (fd >= 0) {
-    int close_result = uv_fs_close(uv_default_loop(), &request, fd, NULL);
-    uv_fs_req_cleanup(&request);
-    if (!failure && close_result < 0) failure = close_result;
-  }
-  if (!failure) return true;
+static void sh_redirect_write_dispose(sh_redirect_write_t *write) {
+  if (!write) return;
+  for (size_t i = 0; i < write->target_count; i++)
+    free(write->targets[i].path);
+  free(write->chunk);
+  free(write);
+}
 
+static void sh_redirect_write_finish(sh_redirect_write_t *write) {
+  ant_t *js = write->js;
+  ant_value_t promise = write->promise;
+  ant_value_t result = write->result;
+  sh_redirect_write_dispose(write);
+  js_resolve_promise(js, promise, result);
+  gc_unroot_pending_promise(js, js_obj_ptr(promise));
+}
+
+static void sh_redirect_write_report_error(sh_redirect_write_t *write) {
+  sh_redirect_target_t *target = &write->targets[write->target_index];
   sh_bytes_t message = {0};
   sh_bytes_append(&message, "ant:shell: ", sizeof("ant:shell: ") - 1);
-  sh_bytes_append(&message, path, path_len);
+  sh_bytes_append(&message, target->path, target->path_len);
   sh_bytes_append(&message, ": ", 2);
-  const char *reason = uv_strerror(failure);
+  const char *reason = uv_strerror(write->failure);
   sh_bytes_append(&message, reason, strlen(reason));
   sh_bytes_append(&message, "\n", 1);
-  sh_append_result_stderr(js, result, message.data, message.len);
+  sh_append_result_stderr(
+    write->js, write->result, message.data ? message.data : "", message.len
+  );
   free(message.data);
-  js_set(js, result, "exitCode", js_mknum(1));
-  return false;
+  js_set(write->js, write->result, "exitCode", js_mknum(1));
+}
+
+static void sh_redirect_write_advance(sh_redirect_write_t *write) {
+  if (write->failure) sh_redirect_write_report_error(write);
+  write->target_index++;
+  sh_redirect_write_next(write);
+}
+
+static void sh_redirect_write_close_done(uv_fs_t *request) {
+  sh_redirect_write_t *write = request->data;
+  int close_result = (int)request->result;
+  uv_fs_req_cleanup(request);
+  write->fd = -1;
+  if (!write->failure && close_result < 0) write->failure = close_result;
+  sh_redirect_write_advance(write);
+}
+
+static void sh_redirect_write_close(sh_redirect_write_t *write) {
+  int rc = uv_fs_close(
+    uv_default_loop(), &write->request, write->fd,
+    sh_redirect_write_close_done
+  );
+  if (rc >= 0) return;
+
+  uv_fs_req_cleanup(&write->request);
+  uv_fs_t close_request;
+  (void)uv_fs_close(NULL, &close_request, write->fd, NULL);
+  uv_fs_req_cleanup(&close_request);
+  write->fd = -1;
+  if (!write->failure) write->failure = rc;
+  sh_redirect_write_advance(write);
+}
+
+static void sh_redirect_write_done(uv_fs_t *request) {
+  sh_redirect_write_t *write = request->data;
+  int64_t written = request->result;
+  uv_fs_req_cleanup(request);
+
+  if (written <= 0) {
+    write->failure = written < 0 ? (int)written : UV_EIO;
+    sh_redirect_write_close(write);
+    return;
+  }
+
+  write->written_total += (size_t)written;
+  write->chunk_offset += (size_t)written;
+  sh_redirect_write_next(write);
+}
+
+static void sh_redirect_write_next(sh_redirect_write_t *write) {
+  if (write->target_index >= write->target_count) {
+    sh_redirect_write_finish(write);
+    return;
+  }
+
+  sh_redirect_target_t *target = &write->targets[write->target_index];
+  if (write->fd < 0) {
+    write->failure = 0;
+    write->written_total = 0;
+    write->chunk_offset = 0;
+    write->chunk_len = 0;
+    int flags = O_CREAT | O_WRONLY | (target->append ? O_APPEND : O_TRUNC);
+    int rc = uv_fs_open(
+      uv_default_loop(), &write->request, target->path, flags, 0666,
+      sh_redirect_write_open_done
+    );
+    if (rc >= 0) return;
+    uv_fs_req_cleanup(&write->request);
+    write->failure = rc;
+    sh_redirect_write_advance(write);
+    return;
+  }
+
+  if (write->written_total >= target->text_len) {
+    sh_redirect_write_close(write);
+    return;
+  }
+
+  if (write->chunk_offset >= write->chunk_len) {
+    size_t source_len = 0;
+    char *source = js_getstr(write->js, target->text, &source_len);
+    if (!source || source_len < target->text_len) {
+      write->failure = UV_EIO;
+      sh_redirect_write_close(write);
+      return;
+    }
+    size_t remaining = target->text_len - write->written_total;
+    write->chunk_len = remaining < SH_REDIRECT_WRITE_CHUNK_SIZE
+      ? remaining : SH_REDIRECT_WRITE_CHUNK_SIZE;
+    write->chunk_offset = 0;
+    memcpy(write->chunk, source + write->written_total, write->chunk_len);
+  }
+
+  size_t remaining = write->chunk_len - write->chunk_offset;
+  uv_buf_t buffer = uv_buf_init(
+    write->chunk + write->chunk_offset, (unsigned int)remaining
+  );
+  int64_t offset = target->append ? -1 : (int64_t)write->written_total;
+  int rc = uv_fs_write(
+    uv_default_loop(), &write->request, write->fd, &buffer, 1, offset,
+    sh_redirect_write_done
+  );
+  if (rc >= 0) return;
+  uv_fs_req_cleanup(&write->request);
+  write->failure = rc;
+  sh_redirect_write_close(write);
+}
+
+static void sh_redirect_write_open_done(uv_fs_t *request) {
+  sh_redirect_write_t *write = request->data;
+  int open_result = (int)request->result;
+  uv_fs_req_cleanup(request);
+  if (open_result < 0) {
+    write->failure = open_result;
+    sh_redirect_write_advance(write);
+    return;
+  }
+  write->fd = open_result;
+  sh_redirect_write_next(write);
+}
+
+static ant_value_t sh_write_redirect_files(
+  ant_t *js,
+  ant_value_t result,
+  sh_redirect_spec_t *specs,
+  size_t spec_count
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, result);
+  for (size_t i = 0; i < spec_count; i++) {
+    GC_ROOT_PIN(js, specs[i].path);
+    GC_ROOT_PIN(js, specs[i].text);
+  }
+
+  sh_redirect_write_t *write = calloc(1, sizeof(*write));
+  if (!write) {
+    ant_value_t error = js_mkerr(js, "Out of memory");
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
+  write->js = js;
+  write->result = result;
+  write->fd = -1;
+  write->target_count = spec_count;
+
+  size_t max_text_len = 0;
+  for (size_t i = 0; i < spec_count; i++) {
+    size_t path_len = 0;
+    char *path = js_getstr(js, specs[i].path, &path_len);
+    if (!path) goto oom;
+    write->targets[i].path = malloc(path_len + 1);
+    if (!write->targets[i].path) goto oom;
+    memcpy(write->targets[i].path, path, path_len);
+    write->targets[i].path[path_len] = '\0';
+    write->targets[i].path_len = path_len;
+    write->targets[i].text = specs[i].text;
+    write->targets[i].text_len = specs[i].text_len;
+    write->targets[i].append = specs[i].append;
+    if (specs[i].text_len > max_text_len) max_text_len = specs[i].text_len;
+  }
+
+  if (max_text_len) {
+    size_t chunk_size = max_text_len < SH_REDIRECT_WRITE_CHUNK_SIZE
+      ? max_text_len : SH_REDIRECT_WRITE_CHUNK_SIZE;
+    write->chunk = malloc(chunk_size);
+    if (!write->chunk) goto oom;
+  }
+
+  write->promise = js_mkpromise(js);
+  if (is_err(write->promise)) {
+    ant_value_t error = write->promise;
+    sh_redirect_write_dispose(write);
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
+  ant_value_t promise = write->promise;
+  GC_ROOT_PIN(js, promise);
+
+  ant_value_t roots = js_mkarr(js);
+  if (is_err(roots)) {
+    ant_value_t error = roots;
+    sh_redirect_write_dispose(write);
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
+  GC_ROOT_PIN(js, roots);
+  js_arr_push(js, roots, result);
+  for (size_t i = 0; i < spec_count; i++) js_arr_push(js, roots, specs[i].text);
+  js_set_slot_wb(js, promise, SLOT_DATA, roots);
+  gc_root_pending_promise(js, js_obj_ptr(promise));
+  write->request.data = write;
+  sh_redirect_write_next(write);
+  GC_ROOT_RESTORE(js, root_mark);
+  return promise;
+
+oom:
+  sh_redirect_write_dispose(write);
+  {
+    ant_value_t error = js_mkerr(js, "Out of memory");
+    GC_ROOT_RESTORE(js, root_mark);
+    return error;
+  }
 }
 
 static ant_value_t sh_apply_redirections_fulfilled(
@@ -550,8 +770,14 @@ static ant_value_t sh_apply_redirections_fulfilled(
   ant_value_t result = nargs > 0 ? args[0] : js_mkundef();
   if (!is_special_object(result)) return result;
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, state);
+  GC_ROOT_PIN(js, result);
+
   ant_value_t stdout_value = js_get(js, result, "stdout");
   ant_value_t stderr_value = js_get(js, result, "stderr");
+  GC_ROOT_PIN(js, stdout_value);
+  GC_ROOT_PIN(js, stderr_value);
   size_t stdout_len = 0;
   size_t stderr_len = 0;
   char *stdout_text = vtype(stdout_value) == T_STR
@@ -561,6 +787,8 @@ static ant_value_t sh_apply_redirections_fulfilled(
 
   ant_value_t output_path = js_get(js, state, "outputPath");
   ant_value_t stderr_path = js_get(js, state, "stderrPath");
+  GC_ROOT_PIN(js, output_path);
+  GC_ROOT_PIN(js, stderr_path);
   ant_value_t stderr_mode_value = js_get(js, state, "stderrMode");
   int stderr_mode = vtype(stderr_mode_value) == T_NUM
     ? (int)js_getnum(stderr_mode_value) : 0;
@@ -577,20 +805,30 @@ static ant_value_t sh_apply_redirections_fulfilled(
   js_set(js, result, "stderr", stderr_mode == 0 && stderr_text
     ? js_mkstr(js, stderr_text, stderr_len) : js_mkstr(js, "", 0));
 
-  if (vtype(output_path) == T_STR) {
-    bool append = js_truthy(js, js_get(js, state, "outputAppend"));
-    (void)sh_write_redirect_file(
-      js, result, output_path, stdout_text, stdout_len, append
-    );
-  }
+  sh_redirect_spec_t specs[2];
+  size_t spec_count = 0;
+  if (vtype(output_path) == T_STR)
+    specs[spec_count++] = (sh_redirect_spec_t){
+      .path = output_path,
+      .text = stdout_value,
+      .text_len = stdout_len,
+      .append = js_truthy(js, js_get(js, state, "outputAppend")),
+    };
   if (stderr_mode == 2 && vtype(stderr_path) == T_STR) {
     bool append = js_truthy(js, js_get(js, state, "stderrAppend"));
     if (sh_same_path(js, output_path, stderr_path)) append = true;
-    (void)sh_write_redirect_file(
-      js, result, stderr_path, stderr_text, stderr_len, append
-    );
+    specs[spec_count++] = (sh_redirect_spec_t){
+      .path = stderr_path,
+      .text = stderr_value,
+      .text_len = stderr_len,
+      .append = append,
+    };
   }
-  return result;
+
+  ant_value_t redirected = spec_count
+    ? sh_write_redirect_files(js, result, specs, spec_count) : result;
+  GC_ROOT_RESTORE(js, root_mark);
+  return redirected;
 }
 
 static ant_value_t sh_apply_redirections(
