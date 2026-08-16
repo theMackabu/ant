@@ -1,7 +1,7 @@
 declare module 'ant:shell' {
   interface ShellOutput {
-    stdout: Uint8Array;
-    stderr: Uint8Array;
+    stdout: Uint8Array & BufferMethods;
+    stderr: Uint8Array & BufferMethods;
     exitCode: number;
     signalCode: string | null;
     text(): string;

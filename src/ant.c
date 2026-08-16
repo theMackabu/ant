@@ -3307,12 +3307,15 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.idx[9] = intern_string("9", 1);
 }
 
-ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs) {
+static inline ant_value_t mkprop_impl(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v,
+  uint8_t attrs, bool default_attrs
+) {
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
   
   if (!ptr || !ptr->shape) return js_mkerr(js, "invalid object");
-  if (!attrs) attrs = ANT_PROP_ATTR_DEFAULT;
+  if (default_attrs && !attrs) attrs = ANT_PROP_ATTR_DEFAULT;
 
   uint32_t slot = 0;
   bool added = false;
@@ -3364,6 +3367,18 @@ ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uin
     ant_prototype_property_write_invalidate(js, ptr, interned_key);
 
   return v;
+}
+
+ant_value_t mkprop(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs
+) {
+  return mkprop_impl(js, obj, k, v, attrs, true);
+}
+
+ant_value_t mkprop_exact_attrs(
+  ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs
+) {
+  return mkprop_impl(js, obj, k, v, attrs, false);
 }
 
 static ant_value_t mkprop_interned_impl(

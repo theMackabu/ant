@@ -24,6 +24,10 @@ try {
   const simple = await $`echo "Hello, world!"`;
   assert.ok(simple.stdout instanceof Uint8Array);
   assert.ok(simple.stderr instanceof Uint8Array);
+  assert.ok(Buffer.isBuffer(simple.stdout));
+  assert.ok(Buffer.isBuffer(simple.stderr));
+  assert.strictEqual(simple.stdout.toString('utf8'), 'Hello, world!\n');
+  assert.strictEqual(simple.stdout.toString('hex'), '48656c6c6f2c20776f726c64210a');
   assert.strictEqual(decode(simple.stdout), 'Hello, world!\n');
   assert.strictEqual(decode(simple.stderr), '');
   assert.strictEqual(simple.exitCode, 0);
@@ -40,6 +44,7 @@ try {
   assert.deepStrictEqual(jsonOutput.json(), { ok: true });
   const binaryOutput = await $`printf %b ${'\\377\\000A'}`;
   assert.deepStrictEqual(Array.from(binaryOutput.stdout), [255, 0, 65]);
+  assert.strictEqual(binaryOutput.stdout.toString('hex'), 'ff0041');
   assert.deepStrictEqual(Array.from(binaryOutput.bytes()), [255, 0, 65]);
   const binaryRedirectPath = path.join(tmpDir, 'binary-output.bin');
   await $`printf %b ${'\\377\\000A'} > ${binaryRedirectPath}`;
@@ -305,6 +310,8 @@ ME=value echo bad`, /variable assignment/i],
   assert.strictEqual(thrown.exitCode, 8);
   assert.ok(thrown.stdout instanceof Uint8Array);
   assert.ok(thrown.stderr instanceof Uint8Array);
+  assert.ok(Buffer.isBuffer(thrown.stdout));
+  assert.ok(Buffer.isBuffer(thrown.stderr));
   assert.strictEqual(await $`exit 9`.catch(error => error.exitCode), 9);
 
   async function cached(value) {

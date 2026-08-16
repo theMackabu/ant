@@ -74,9 +74,7 @@ static ant_value_t sh_make_byte_array(
   ArrayBufferData *buffer = create_array_buffer_data(len);
   if (!buffer) return js_mkerr(js, "Out of memory");
   if (len) memcpy(buffer->data, data, len);
-  return create_typed_array(
-    js, TYPED_ARRAY_UINT8, buffer, 0, len, "Uint8Array"
-  );
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
 }
 
 static void sh_output_accumulator_finalize(ant_t *js, ant_object_t *obj) {

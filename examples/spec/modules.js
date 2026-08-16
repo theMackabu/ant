@@ -30,6 +30,10 @@ test('path toStringTag', Object.prototype.toString.call(path), '[object path]');
 test('fs toStringTag', Object.prototype.toString.call(fs), '[object fs]');
 test('shell toStringTag', Object.prototype.toString.call(shell), '[object Module]');
 test('shell namespace tag', shell[Symbol.toStringTag], 'Module');
+const shellTagDescriptor = Object.getOwnPropertyDescriptor(shell, Symbol.toStringTag);
+test('shell namespace tag writable', shellTagDescriptor.writable, false);
+test('shell namespace tag enumerable', shellTagDescriptor.enumerable, false);
+test('shell namespace tag configurable', shellTagDescriptor.configurable, false);
 test('ffi toStringTag', Object.prototype.toString.call(ffi), '[object FFI]');
 
 test('JSON default import', typeof testJson, 'object');

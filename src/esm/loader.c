@@ -447,14 +447,9 @@ static ant_value_t esm_make_namespace_object(ant_t *js) {
 
   ant_value_t tag = js_mkstr(js, "Module", 6);
   GC_ROOT_PIN(js, tag);
-  ant_value_t tag_sym = get_toStringTag_sym();
-  ant_value_t tag_result = mkprop(
-    js, ns, tag_sym, tag, ANT_PROP_ATTR_CONFIGURABLE
-  );
   
-  ant_object_t *ns_ptr = js_obj_ptr(ns);
-  if (!is_err(tag_result) && ns_ptr && js_obj_ensure_unique_shape(ns_ptr))
-    ant_shape_set_attrs_symbol(ns_ptr->shape, (ant_offset_t)vdata(tag_sym), 0);
+  ant_value_t tag_sym = get_toStringTag_sym();
+  mkprop_exact_attrs(js, ns, tag_sym, tag, 0);
 
   js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
   js_set_slot(ns, SLOT_MODULE_LOADING, js_true);
