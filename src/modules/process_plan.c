@@ -762,7 +762,7 @@ static ant_value_t process_plan_make_result(
     if (!stdout_buffer) goto oom;
     if (stdout_len) memcpy(stdout_buffer->data, stdout_data, stdout_len);
     stdout_value = create_typed_array(
-      js, TYPED_ARRAY_UINT8, stdout_buffer, 0, stdout_len, "Uint8Array"
+      js, TYPED_ARRAY_UINT8, stdout_buffer, 0, stdout_len, "Buffer"
     );
     if (is_err(stdout_value)) goto failed;
     GC_ROOT_PIN(js, stdout_value);
@@ -771,7 +771,7 @@ static ant_value_t process_plan_make_result(
     if (!stderr_buffer) goto oom;
     if (stderr_len) memcpy(stderr_buffer->data, stderr_data, stderr_len);
     stderr_value = create_typed_array(
-      js, TYPED_ARRAY_UINT8, stderr_buffer, 0, stderr_len, "Uint8Array"
+      js, TYPED_ARRAY_UINT8, stderr_buffer, 0, stderr_len, "Buffer"
     );
     if (is_err(stderr_value)) goto failed;
   } else {
