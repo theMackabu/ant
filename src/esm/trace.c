@@ -23,6 +23,7 @@ typedef struct {
   char *spec;
   bool is_require;
   bool lenient;
+  bool optional;
   uint32_t line;
 } trace_spec_t;
 
@@ -40,6 +41,8 @@ typedef struct {
 
   trace_index_entry_t *module_map;
   trace_index_entry_t *edge_set;
+
+  uint32_t try_depth;
 
   trace_spec_t *specs;
   uint32_t spec_count, spec_cap;
@@ -224,7 +227,7 @@ static bool trace_push_spec(trace_ctx_t *ctx, const char *spec, uint32_t len, bo
   if (!trace_grow((void **)&ctx->specs, ctx->spec_count, &ctx->spec_cap, sizeof(*ctx->specs))) return false;
   char *copy = strndup(spec, len);
   if (!copy) return false;
-  ctx->specs[ctx->spec_count++] = (trace_spec_t){ copy, is_require, lenient, line };
+  ctx->specs[ctx->spec_count++] = (trace_spec_t){ copy, is_require, lenient, ctx->try_depth > 0, line };
   return true;
 }
 
@@ -266,7 +269,7 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
     case N_IMPORT:
       if (node->right && node->right->type == N_STRING && node->right->str) {
         if (!trace_push_spec(ctx, node->right->str, node->right->len, false, false, node->line)) return false;
-      } else {
+      } else if (ctx->try_depth == 0) {
         trace_warn(ctx, "%s:%u: import() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled", file, node->line);
       }
       break;
@@ -276,11 +279,21 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
         const sv_ast_t *arg = node->args.items[0];
         if (arg && arg->type == N_STRING && arg->str) {
           if (!trace_push_spec(ctx, arg->str, arg->len, true, false, node->line)) return false;
-        } else {
+        } else if (ctx->try_depth == 0) {
           trace_warn(ctx, "%s:%u: require() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled", file, node->line);
         }
       }
       break;
+
+    case N_TRY: {
+      ctx->try_depth++;
+      bool try_ok = trace_scan_ast(ctx, file, node->body);
+      ctx->try_depth--;
+      if (!try_ok) return false;
+      if (!trace_scan_ast(ctx, file, node->catch_param)) return false;
+      if (!trace_scan_ast(ctx, file, node->catch_body)) return false;
+      return trace_scan_ast(ctx, file, node->finally_body);
+    }
 
     case N_NEW:
       if (node_is_ident(node->left, "URL", 3) && node->args.count >= 2) {
@@ -355,6 +368,10 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
   char *file_url_path = esm_file_url_to_path(js, spec);
   if (!file_url_path && esm_is_url(spec)) {
     if (sp->lenient) return 0;
+    if (sp->optional) {
+      trace_warn(ctx, "%s:%u: remote import \"%s\" inside try/catch was not bundled; it will throw at runtime", parent_path, sp->line, spec);
+      return 0;
+    }
     trace_set_error(r, "%s:%u: cannot compile remote import \"%s\"", parent_path, sp->line, spec);
     return -1;
   }
@@ -370,13 +387,18 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
       trace_warn(ctx, "%s:%u: new URL(\"%s\", import.meta.url) target was not bundled", parent_path, sp->line, spec);
       return 0;
     }
+    if (sp->optional) {
+      trace_warn(ctx, "%s:%u: optional module \"%s\" was not found; the require/import inside try/catch will throw at runtime", parent_path, sp->line, spec);
+      return 0;
+    }
     trace_set_error(r, "%s:%u: cannot resolve module \"%s\"", parent_path, sp->line, spec);
     return -1;
   }
 
   size_t rlen = strlen(resolved);
   if (rlen > 5 && strcmp(resolved + rlen - 5, ".node") == 0) {
-    if (sp->lenient) {
+    if (sp->lenient || sp->optional) {
+      if (sp->optional) trace_warn(ctx, "%s:%u: native addon \"%s\" inside try/catch was not bundled; it will throw at runtime", parent_path, sp->line, spec);
       free(resolved);
       return 0;
     }
@@ -491,6 +513,7 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
 
   for (uint32_t i = 0; i < ctx->spec_count; i++) free(ctx->specs[i].spec);
   ctx->spec_count = 0;
+  ctx->try_depth = 0;
 
   bool scan_ok = trace_scan_ast(ctx, abs_path, program);
   parse_arena_rewind(mark);
