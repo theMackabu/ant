@@ -39,4 +39,10 @@ ant_value_t js_esm_import_sync_cstr_from_require(ant_t *js, const char *specifie
 ant_value_t js_esm_eval_module_source(ant_t *js, const char *resolved_path, const char *js_code, size_t js_len, ant_value_t ns);
 ant_value_t js_esm_import_dynamic_ex(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs, ant_value_t *out_tla_promise);
 
+struct ant_bundle;
+#define ANT_INTERNAL_RUN_ENV "ANT_INTERNAL_RUN"
+
+bool js_esm_bundle_active(ant_t *js);
+bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle);
+
 #endif

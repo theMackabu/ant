@@ -114,6 +114,7 @@ runs:
         MESON_ARGS=(
           -Db_lto=true
           --buildtype=release
+          -Druntime_binary=enabled
           "-Dbuild_timestamp=${{ inputs.build_timestamp }}"
           "-Ddeps_prefix_cmake=$DEPS_PREFIX"
           "-Dllvm_nm=${{ inputs.nm }}"
@@ -159,15 +160,18 @@ runs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
         if [[ "$RUNNER_OS" == "macOS" ]]; then
-          NON_SYSTEM_DYLIBS=$(otool -L build/${{ inputs.binary_name }} \
-            | tail -n +2 \
-            | awk '{print $1}' \
-            | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
-          if [[ -n "$NON_SYSTEM_DYLIBS" ]]; then
-            echo "Error: macOS release binary references non-system libraries:"
-            echo "$NON_SYSTEM_DYLIBS"
-            exit 1
-          fi
+          for bin in build/${{ inputs.binary_name }} build/ant-runtime; do
+            [[ -f "$bin" ]] || continue
+            NON_SYSTEM_DYLIBS=$(otool -L "$bin" \
+              | tail -n +2 \
+              | awk '{print $1}' \
+              | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+            if [[ -n "$NON_SYSTEM_DYLIBS" ]]; then
+              echo "Error: macOS release binary $bin references non-system libraries:"
+              echo "$NON_SYSTEM_DYLIBS"
+              exit 1
+            fi
+          done
         fi
 
     - name: Strip binary
@@ -181,6 +185,16 @@ runs:
           ${{ inputs.strip }} -x build/${{ inputs.binary_name }}
           codesign --force --sign - --entitlements meson/ant.entitlements build/${{ inputs.binary_name }}
           codesign --verify --verbose build/${{ inputs.binary_name }}
+          if [[ -f build/ant-runtime ]]; then
+            ${{ inputs.strip }} -x build/ant-runtime
+            codesign --force --sign - build/ant-runtime
+            codesign --verify --verbose build/ant-runtime
+          fi
         else
           ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
+          for runtime in build/ant-runtime build/ant-runtime.exe; do
+            if [[ -f "$runtime" ]]; then
+              ${{ inputs.strip }} --strip-unneeded "$runtime"
+            fi
+          done
         fi

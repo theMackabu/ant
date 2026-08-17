@@ -27,6 +27,7 @@ import {
   latestManifest,
   resolveAnt,
   resolveNanosArtifact,
+  resolveRuntime,
   versionCheck,
   versionManifest,
 } from './resolver';
@@ -206,9 +207,11 @@ app.on(['GET', 'HEAD'], '/v1/download/:kind/:name', async c => {
   const artifact =
     params.kind === 'ant'
       ? await resolveAnt(c.env, resolveTarget(params.name), url, options)
-      : params.kind === 'sandbox'
-        ? await resolveNanosArtifact(c.env, 'sandbox', resolveArch(params.name), url, options)
-        : await resolveNanosArtifact(c.env, 'kernel', resolveArch(params.name), url, options);
+      : params.kind === 'runtime'
+        ? await resolveRuntime(c.env, resolveTarget(params.name), url, options)
+        : params.kind === 'sandbox'
+          ? await resolveNanosArtifact(c.env, 'sandbox', resolveArch(params.name), url, options)
+          : await resolveNanosArtifact(c.env, 'kernel', resolveArch(params.name), url, options);
 
   return downloadArtifact(c.req.raw, c.env, c.executionCtx, artifact);
 });
@@ -298,13 +301,17 @@ function manifestArtifacts(manifest: unknown): ResolvedArtifact[] {
   if (!manifest || typeof manifest !== 'object') return [];
   const body = manifest as {
     ant?: unknown[];
+    runtime?: unknown[];
     sandbox?: unknown[];
     kernel?: unknown[];
   };
 
-  return [...(body.ant || []), ...(body.sandbox || []), ...(body.kernel || [])].filter(
-    isAvailableArtifact,
-  );
+  return [
+    ...(body.ant || []),
+    ...(body.runtime || []),
+    ...(body.sandbox || []),
+    ...(body.kernel || []),
+  ].filter(isAvailableArtifact);
 }
 
 function isAvailableArtifact(value: unknown): value is ResolvedArtifact {

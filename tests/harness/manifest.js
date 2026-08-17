@@ -59,7 +59,8 @@ export function targets() {
     'test_buffer_wtf8_utf8.cjs',
     'test_utf16_random_access.cjs',
     'test_bigint.js',
-    'test_temporal.js'
+    'test_temporal.js',
+    'test_compile_basic.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

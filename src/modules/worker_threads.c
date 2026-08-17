@@ -29,6 +29,7 @@ extern char **environ;
 #include "ptr.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "esm/loader.h"
 #include "silver/engine.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
@@ -769,10 +770,12 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   ant_value_t this_obj = js_getthis(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, js_mkundef());
 
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == T_UNDEF) 
     return js_mkerr(js, "Worker constructor requires 'new'");
-  }
+  
   if (nargs < 1) return js_mkerr(js, "Worker() requires a filename or URL");
+  // workers are disabled in compiled executables until isolates are fully done
+  if (js_esm_bundle_active(js)) return js_mkerr(js, "Worker is not available in compiled executables");
   if (is_object_type(this_obj) && is_object_type(proto)) js_set_proto_init(this_obj, proto);
 
   char *script_path = wt_path_from_specifier(js, args[0]);

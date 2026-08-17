@@ -206,6 +206,8 @@ jobs:
           name: ${{ steps.config.outputs.artifact_name }}
           path: |
             build/${{ steps.config.outputs.binary_name }}
+            build/ant-runtime
+            build/ant-runtime.exe
             build/*.dll
 
       - name: Save version info

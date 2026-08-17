@@ -5,7 +5,11 @@
 #include <stdbool.h>
 #include <yyjson.h>
 
+struct ant_bundle;
+
 struct ant_esm_state {
+  const struct ant_bundle *bundle;
+  
   struct esm_resolve_cache_entry      *resolve_cache;
   struct esm_base_dir_cache_entry     *base_dir_cache;
   struct esm_package_dir_cache_entry  *package_dir_cache;

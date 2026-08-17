@@ -281,7 +281,13 @@ if get_option('jit')
 endif
 
 if host_machine.system() == 'darwin'
-  ant_deps += [security_dep, hypervisor_dep]
+  ant_deps += [security_dep]
+endif
+
+ant_slim_deps = ant_deps
+
+if host_machine.system() == 'darwin'
+  ant_deps += [hypervisor_dep]
 endif
 
 subdir('temporal')

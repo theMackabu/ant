@@ -538,7 +538,12 @@ static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
 
   size_t len = 0;
-  char *data = js_getstr(js, args[0], &len);
+  const char *data = NULL;
+  const uint8_t *bytes = NULL;
+
+  if (buffer_source_get_bytes(js, args[0], &bytes, &len)) data = (const char *)bytes;
+  else data = js_getstr(js, args[0], &len);
+
   if (!data) return js_false;
 
   ant_value_t cb = js_mkundef();

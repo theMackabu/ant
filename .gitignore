@@ -32,6 +32,7 @@
 
 node_modules
 !/tests/node_modules
+!/tests/fixtures/compile-app/node_modules
 
 /wpt
 /tools

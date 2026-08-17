@@ -29,7 +29,9 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "utils.h"
 
+#include "esm/loader.h"
 #include "gc/modules.h"
 #include "silver/engine.h"
 
@@ -2832,29 +2834,18 @@ static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   char *path_str = strndup(path, path_len);
   char exe_path[1024];
-  
-#if defined(__APPLE__)
-  uint32_t size = sizeof(exe_path);
-  if (_NSGetExecutablePath(exe_path, &size) != 0) {
+
+  if (ant_get_exe_path(exe_path, sizeof(exe_path), js->runtime.argc, js->runtime.argv) != 0) {
     free(path_str);
     return js_mkerr(js, "Failed to get executable path");
   }
-#elif defined(__linux__)
-  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-  if (len == -1) {
-    free(path_str);
-    return js_mkerr(js, "Failed to get executable path");
-  }
-  exe_path[len] = '\0';
-#else
-  strncpy(exe_path, "ant", sizeof(exe_path));
-#endif
-  
+
+  bool bundled = js_esm_bundle_active(js);
   ant_value_t spawn_args[3];
   spawn_args[0] = js_mkstr(js, exe_path, strlen(exe_path));
-  
+
   ant_value_t args_arr = js_mkarr(js);
-  js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
+  if (!bundled) js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
   
   if (nargs >= 2 && is_special_object(args[1])) {
     ant_value_t exec_args = js_get(js, args[1], "execArgv");
@@ -2872,10 +2863,13 @@ static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   
   spawn_args[1] = args_arr;
   spawn_args[2] = js_mkobj(js);
-  
+
+  if (bundled) uv_os_setenv(ANT_INTERNAL_RUN_ENV, path_str);
+  ant_value_t result = builtin_spawn(js, spawn_args, 3);
+  if (bundled) uv_os_unsetenv(ANT_INTERNAL_RUN_ENV);
+
   free(path_str);
-  
-  return builtin_spawn(js, spawn_args, 3);
+  return result;
 }
 
 ant_value_t child_process_library(ant_t *js) {

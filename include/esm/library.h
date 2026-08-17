@@ -20,4 +20,6 @@ ant_value_t js_esm_load_registered_library(
   size_t spec_len, bool *loaded
 );
 
+bool js_esm_is_registered_library(const char *specifier, size_t spec_len);
+
 #endif

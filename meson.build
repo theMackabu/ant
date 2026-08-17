@@ -209,6 +209,91 @@ if host_machine.system() == 'darwin' and get_option('codesign')
   )
 endif
 
+runtime_binary = get_option('runtime_binary')
+if not runtime_binary.disabled()
+  runtime_sources = files(run_command(
+    python, files('meson/sources.py'), files('sources.json'), 'runtime',
+    check: true
+  ).stdout().strip().split())
+
+  build_runtime_by_default = runtime_binary.enabled()
+
+  runtime_c_args = []
+  ant_runtime_link_args = link_args
+  if host_machine.system() == 'windows'
+    ant_runtime_link_args += ['-Wl,--stack,134217728']
+  elif host_machine.system() == 'darwin'
+    ant_runtime_link_args += ['-Wl,-stack_size,0x2000000']
+  else
+    ant_runtime_link_args += ['-Wl,-z,stack-size=134217728']
+  endif
+  if host_machine.system() != 'darwin'
+    runtime_c_args += ['-ffunction-sections', '-fdata-sections']
+    ant_runtime_link_args += ['-Wl,--gc-sections']
+  endif
+
+  libant_runtime = static_library(
+    'ant-runtime-core',
+    runtime_sources + [
+      builtin_bundle_h,
+      snapshot_h,
+      messages_h,
+      theme_h
+    ],
+    include_directories: [include],
+    c_args: runtime_c_args,
+    dependencies: ant_slim_deps,
+    build_by_default: build_runtime_by_default,
+  )
+
+  ant_runtime_link_depends = []
+  if host_machine.system() == 'darwin'
+    ant_runtime_exports = custom_target('ant_runtime_exports',
+      input: [libant_runtime, libuv_lib],
+      output: 'ant-runtime.exports',
+      command: [python, files('meson/exports.py'), llvm_nm, '@INPUT@'],
+      capture: true,
+    )
+    ant_runtime_link_args += [
+      '-Wl,-exported_symbols_list,' + ant_runtime_exports.full_path(),
+      '-Wl,-dead_strip',
+    ]
+    ant_runtime_link_depends += [ant_runtime_exports]
+  endif
+
+  ant_runtime_exe = executable(
+    'ant-runtime',
+    files('src/main_runtime.c') + [messages_h],
+    dependencies: declare_dependency(
+      link_with: libant_runtime,
+      include_directories: [include],
+      dependencies: ant_slim_deps + temporal_link_deps
+    ),
+    link_args: ant_runtime_link_args,
+    link_depends: ant_runtime_link_depends,
+    export_dynamic: false,
+    build_by_default: build_runtime_by_default,
+  )
+
+  if host_machine.system() == 'darwin' and get_option('codesign')
+    custom_target(
+      'ant_runtime_codesign',
+      output: 'ant-runtime.codesign.stamp',
+      command: [
+        'sh', '-c',
+        '"$1" -x "$2" && "$3" --force --sign - "$2" && touch "$4"',
+        'ant-runtime-codesign',
+        find_program('strip'),
+        ant_runtime_exe,
+        codesign,
+        '@OUTPUT@',
+      ],
+      depends: ant_runtime_exe,
+      build_by_default: build_runtime_by_default,
+    )
+  endif
+endif
+
 # move to meson/tests
 executable(
   'tlsuv-boringssl-smoke',

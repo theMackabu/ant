@@ -18,7 +18,9 @@
       "src/net/*.c"
     ],
     "exclude": [
-      "src/main.c"
+      "src/main.c",
+      "src/main_runtime.c",
+      "src/modules/sandbox_stub.c"
     ]
   },
   "library": {
@@ -42,7 +44,34 @@
       "src/net/*.c"
     ],
     "exclude": [
-      "src/main.c"
+      "src/main.c",
+      "src/main_runtime.c",
+      "src/modules/sandbox_stub.c"
+    ]
+  },
+  "runtime": {
+    "files": [
+      "src/sandbox/policy.c",
+      "src/modules/sandbox_stub.c"
+    ],
+    "patterns": [
+      "src/*.c",
+      "src/*.cc",
+      "src/gc/*.c",
+      "src/readline/*.c",
+      "src/highlight/*.c",
+      "src/esm/*.c",
+      "src/inspector/*.c",
+      "src/modules/**/*.c",
+      "src/streams/*.c",
+      "src/silver/*.c",
+      "src/http/*.c",
+      "src/net/*.c"
+    ],
+    "exclude": [
+      "src/main.c",
+      "src/modules/sandbox.c",
+      "src/main_runtime.c"
     ]
   },
   "sandbox_backend": {
