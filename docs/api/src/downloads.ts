@@ -113,7 +113,10 @@ export async function annotateGzipSizes(env: Env, body: unknown): Promise<unknow
   await Promise.all(
     manifestSections(clone).flatMap(items =>
       items.map(async item => {
-        if (!isResolvedArtifact(item) || !item.gzip_url || !item.zip_entry) return;
+        if (!isResolvedArtifact(item) || !item.zip_entry) return;
+        const plain = await env.DOWNLOADS.head(downloadCacheKey(item, 'plain'));
+        item.artifact.size_in_bytes = plain ? plain.size : 0;
+        if (!item.gzip_url) return;
         const object = await env.DOWNLOADS.head(downloadCacheKey(item, 'gzip-file'));
         if (object) item.gzip_size_in_bytes = object.size;
       }),
@@ -357,8 +360,13 @@ function r2DownloadResponse(
 }
 
 function manifestSections(body: object): unknown[][] {
-  const manifest = body as { sandbox?: unknown[]; kernel?: unknown[] };
-  return [manifest.sandbox || [], manifest.kernel || []];
+  const manifest = body as {
+    ant?: unknown[];
+    runtime?: unknown[];
+    sandbox?: unknown[];
+    kernel?: unknown[];
+  };
+  return [manifest.ant || [], manifest.runtime || [], manifest.sandbox || [], manifest.kernel || []];
 }
 
 function isResolvedArtifact(value: unknown): value is ResolvedArtifact {

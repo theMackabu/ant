@@ -2,6 +2,7 @@
 
 #include "cli/compile.h"
 #include "cli/version.h"
+#include "download.h"
 #include "cli/misc.h"
 
 #include "ant.h"
@@ -131,10 +132,12 @@ static int compile_copy_file(const char *src_path, FILE *dst, char *err, size_t 
 }
 
 static bool compile_runtime_cache_path(char *out, size_t out_len) {
+  char suffix[128];
   char dir[4096];
-  if (ant_xdg_cache_path(dir, sizeof(dir), "compile") != 0) return false;
+  if ((size_t)snprintf(suffix, sizeof(suffix), "compile/%s", ANT_GIT_LONGHASH) >= sizeof(suffix)) return false;
+  if (ant_xdg_cache_path(dir, sizeof(dir), suffix) != 0) return false;
   if (ant_mkdir_p(dir) != 0) return false;
-  return (size_t)snprintf(out, out_len, "%s/ant-runtime-%s", dir, ANT_GIT_LONGHASH) < out_len;
+  return (size_t)snprintf(out, out_len, "%s/ant-runtime", dir) < out_len;
 }
 
 static int compile_download_runtime(FILE *dst, char *err, size_t err_len) {
@@ -191,6 +194,7 @@ static int compile_write_runtime(FILE *out, const char *runtime_path, bool no_ca
     return compile_download_runtime(out, err, err_len);
   }
 
+  ant_cache_prune_revisions("compile", ANT_GIT_LONGHASH);
   return compile_copy_file(cache_path, out, err, err_len);
 }
 

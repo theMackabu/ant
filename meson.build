@@ -123,6 +123,8 @@ pkg_dep = declare_dependency(
   dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
 )
 
+section_gc_c_args = host_machine.system() != 'darwin' ? ['-ffunction-sections', '-fdata-sections'] : []
+
 libant = static_library(
   'ant',
   lib_sources + sandbox_backend_sources + [
@@ -133,6 +135,7 @@ libant = static_library(
   ],
   install: true,
   include_directories: [include, sandbox_backend_include],
+  c_args: section_gc_c_args,
   dependencies: ant_deps
 )
 
@@ -180,13 +183,21 @@ if host_machine.system() == 'darwin'
   ant_link_depends += [ant_exports]
 endif
 
+if host_machine.system() == 'linux'
+  ant_link_args += [
+    '-Wl,--gc-sections',
+    '-Wl,--dynamic-list=' + meson.current_source_dir() / 'meson/ant.dynlist',
+  ]
+  ant_link_depends += files('meson/ant.dynlist')
+endif
+
 ant_exe = executable(
   'ant',
   files('src/main.c') + [messages_h],
   dependencies: libant_dep,
   link_args: ant_link_args,
   link_depends: ant_link_depends,
-  export_dynamic: host_machine.system() != 'darwin'
+  export_dynamic: host_machine.system() == 'windows'
 )
 
 if host_machine.system() == 'darwin' and get_option('codesign')

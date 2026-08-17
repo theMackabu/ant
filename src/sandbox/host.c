@@ -5,6 +5,7 @@
 #include "modules/io.h"
 #include "sandbox/sandbox.h"
 #include "utils.h"
+#include "download.h"
 
 #include <errno.h>
 #include <dirent.h>
@@ -76,54 +77,6 @@ static int sandbox_cache_root(char *out, size_t out_size) {
 static int sandbox_join_path(char *out, size_t out_size, const char *dir, const char *name) {
   int written = snprintf(out, out_size, "%s/%s", dir, name);
   return written < 0 || (size_t)written >= out_size ? -ENAMETOOLONG : 0;
-}
-
-static int sandbox_remove_tree(const char *path) {
-  struct stat st;
-  if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -errno;
-  if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) return unlink(path) == 0 ? 0 : -errno;
-
-  DIR *dir = opendir(path);
-  if (!dir) return -errno;
-  int rc = 0;
-  struct dirent *ent = NULL;
-  
-  while ((ent = readdir(dir))) {
-    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-    char child[4096];
-    int written = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
-    if (written < 0 || (size_t)written >= sizeof(child)) {
-      rc = -ENAMETOOLONG;
-      break;
-    }
-    int child_rc = sandbox_remove_tree(child);
-    if (child_rc != 0 && rc == 0) rc = child_rc;
-  }
-  closedir(dir);
-  if (rc != 0) return rc;
-  return rmdir(path) == 0 ? 0 : -errno;
-}
-
-static void sandbox_prune_old_cache_dirs(const char *current_dir) {
-  char root[4096];
-  if (!current_dir || sandbox_cache_root(root, sizeof(root)) != 0) return;
-
-  DIR *dir = opendir(root);
-  if (!dir) return;
-
-  struct dirent *ent = NULL;
-  while ((ent = readdir(dir))) {
-    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-    if (strcmp(ent->d_name, ANT_GIT_LONGHASH) == 0) continue;
-
-    char child[4096];
-    int written = snprintf(child, sizeof(child), "%s/%s", root, ent->d_name);
-    if (written < 0 || (size_t)written >= sizeof(child)) continue;
-    if (strcmp(child, current_dir) == 0) continue;
-    (void)sandbox_remove_tree(child);
-  }
-
-  closedir(dir);
 }
 
 static int sandbox_resolve_asset(
@@ -277,7 +230,7 @@ int ant_sandbox_assets_resolve(ant_sandbox_assets_t *assets, char *err, size_t e
 
   snprintf(assets->image, sizeof(assets->image), "%s", image_path);
   snprintf(assets->kernel, sizeof(assets->kernel), "%s", kernel_path);
-  if (!using_overrides) sandbox_prune_old_cache_dirs(assets->cache_dir);
+  if (!using_overrides) ant_cache_prune_revisions("sandbox", ANT_GIT_LONGHASH);
 
   return 0;
 }
@@ -301,7 +254,7 @@ void ant_sandbox_launch_options_cleanup(ant_sandbox_launch_options_t *opts) {
   if (!opts) return;
   for (size_t i = 0; i < opts->temp_dir_count; i++) {
     if (sandbox_is_managed_temp_dir(opts->temp_dirs[i])) {
-      (void)sandbox_remove_tree(opts->temp_dirs[i]);
+      (void)ant_remove_tree(opts->temp_dirs[i]);
     }
     opts->temp_dirs[i][0] = '\0';
   }
@@ -389,7 +342,7 @@ int ant_sandbox_launch_add_mount(
     char resolved[4096];
     if (!realpath(temp_dir, resolved)) {
       rc = -errno;
-      if (sandbox_is_managed_temp_dir(temp_dir)) (void)sandbox_remove_tree(temp_dir);
+      if (sandbox_is_managed_temp_dir(temp_dir)) (void)ant_remove_tree(temp_dir);
       return rc;
     }
     snprintf(opts->temp_dirs[opts->temp_dir_count],

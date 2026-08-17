@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-PREFIXES = ("_napi_", "_uv_")
+PREFIXES = ("_napi_", "_node_api_", "_uv_")
 EXCLUDE = ("_uv_link_",)
 
 symbols = set()
