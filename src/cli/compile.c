@@ -236,17 +236,16 @@ int ant_cmd_compile(int argc, char **argv) {
   ant_trace_result_t trace = {0};
   char tmp_path[4096] = {0};
 
-  if (help->count > 0) {
+  if (help->count > 0 || nerrors > 0 || entry->count == 0) {
+    if (help->count == 0 && entry->count == 0) crfprintf(stderr, "{error}: missing entry script\n\n");
+    else if (help->count == 0 && nerrors > 0) print_errors(stderr, end);
+
     crprintf("<bold>Usage:</> ant compile [flags] <entry>\n\n");
     crprintf("Compile a script and its imports into a standalone executable.\n\n");
     crprintf("<bold>Flags:</>\n");
     print_flags_help(stdout, argtable);
-    rc = EXIT_SUCCESS;
-    goto cleanup;
-  }
 
-  if (nerrors > 0) {
-    print_errors(stdout, end);
+    rc = help->count > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     goto cleanup;
   }
 
