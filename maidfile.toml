@@ -28,6 +28,18 @@ script = "ant .github/agents/check_repo_structure.js"
 [tasks.validate_changes]
 script = "ant .github/agents/route_validation.js"
 
+[tasks.lint_builtins]
+script = [
+  "npm ci --prefix tools/oxlint --ignore-scripts --no-audit --no-fund",
+  "npm exec --prefix tools/oxlint -- oxlint --config .oxlintrc.json src/builtins"
+]
+
+[tasks.lint_c]
+script = "python3 tools/lint_c.py"
+
+[tasks.lint_c_all]
+script = "python3 tools/lint_c.py --all"
+
 [tasks.setup]
 script = ['meson subprojects download', 'meson setup build --wipe']
 

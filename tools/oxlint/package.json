@@ -1,0 +1,9 @@
+{
+  "name": "@ant/oxlint-tools",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
+    "oxlint": "1.78.0"
+  }
+}

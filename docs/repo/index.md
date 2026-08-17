@@ -14,6 +14,7 @@ workflow. Start with the smallest document that answers the task at hand.
 - Build instructions: [../../BUILDING.md](../../BUILDING.md)
 - Contribution guide: [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
 - Test selection guide: [testing.md](testing.md)
+- Clang-Tidy warning baseline: [clang-tidy-warning-baseline.md](clang-tidy-warning-baseline.md)
 - Execution plans and tech debt: [../exec-plans/index.md](../exec-plans/index.md)
 
 ## How To Use This Knowledge Base

@@ -1,0 +1,22 @@
+---
+Checks: >-
+  -*,
+  clang-analyzer-core.*,
+  clang-analyzer-deadcode.DeadStores,
+  clang-analyzer-unix.Malloc,
+  clang-analyzer-unix.MallocSizeof,
+  bugprone-macro-parentheses,
+  bugprone-macro-repeated-side-effects,
+  bugprone-misplaced-pointer-arithmetic-in-alloc,
+  bugprone-misplaced-widening-cast,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-memory-comparison,
+  bugprone-suspicious-memset-usage,
+  bugprone-undefined-memory-manipulation,
+  cert-err33-c,
+  readability-redundant-casting
+HeaderFilterRegex: '(^|/)(include|src)/'
+ExcludeHeaderFilterRegex: '(^|/)(build|vendor)/'
+SystemHeaders: false
+CheckOptions:
+  cert-err33-c.AllowCastToVoid: 'true'

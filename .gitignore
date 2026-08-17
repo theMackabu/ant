@@ -49,3 +49,13 @@ node_modules
 bun.lock
 pnpm-lock.yaml
 package-lock.json
+
+!/tools/
+/tools/*
+!/tools/oxlint/
+/tools/oxlint/node_modules/
+!/tools/oxlint/anti-slop/
+!/tools/oxlint/anti-slop/**
+!/tools/oxlint/package.json
+!/tools/oxlint/package-lock.json
+!/tools/lint_c.py

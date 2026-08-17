@@ -15,6 +15,28 @@ This guide keeps validation proportional to the change while still protecting ru
 - Validate repo knowledge docs: `maid knowledge`
 - Validate changed-file boundaries: `maid structure`
 - Ask the harness what to run for the current diff: `maid validate_changes`
+- Lint bundled JavaScript: `maid lint_builtins`
+- Lint changed C source lines: `maid lint_c`
+- Lint every Ant-owned C translation unit: `maid lint_c_all`
+
+## Static Analysis
+
+`maid lint_builtins` installs the locked tooling under `tools/oxlint/` and
+applies the anti-slop plugin to `src/builtins/`. The bundled modules are dynamic
+Node-compatible boundaries, so their scoped override permits runtime `typeof`
+dispatch and the engine-domain term `shape`. The remaining rules stay enabled,
+including the TypeScript contract rules for future `.mts` builtins.
+
+`maid lint_c` reads `build/compile_commands.json` and enforces Clang-Tidy
+diagnostics only on changed lines in Ant-owned C translation units. Changed
+headers require `maid lint_c_all` because one header can affect many translation
+units. The full command is report-only while the initial baseline is reviewed.
+Both commands exclude generated and vendored code.
+
+The C lint requires Clang-Tidy 21 or newer, matching the repository LLVM
+toolchain. Set `ANT_CLANG_TIDY` to an explicit executable when it is not on
+`PATH`. Run `maid setup` or configure Meson before linting if the compilation
+database does not exist.
 
 ## Validation By Change Type
 

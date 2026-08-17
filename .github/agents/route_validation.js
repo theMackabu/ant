@@ -145,6 +145,26 @@ function main() {
       }
     }
 
+    if (filePath.startsWith('src/builtins/')) {
+      addRecommendation(recommendations, 'maid lint_builtins', 'bundled JavaScript changed');
+    }
+
+    if (/^(include|src)\/.+\.(c|cc|cpp)$/u.test(filePath)) {
+      addRecommendation(recommendations, 'maid lint_c', 'Ant-owned C source changed');
+    }
+
+    if (/^(include|src)\/.+\.(h|hh|hpp)$/u.test(filePath)) {
+      addRecommendation(recommendations, 'maid lint_c_all', 'a C header can affect multiple translation units');
+    }
+
+    if (filePath === '.oxlintrc.json' || filePath.startsWith('tools/oxlint/')) {
+      addRecommendation(recommendations, 'maid lint_builtins', 'bundled JavaScript lint policy changed');
+    }
+
+    if (filePath === '.clang-tidy' || filePath === 'tools/lint_c.py') {
+      addRecommendation(recommendations, 'maid lint_c_all', 'C lint policy changed');
+    }
+
     if (
       filePath === 'meson.build' ||
       filePath.startsWith('meson/') ||
