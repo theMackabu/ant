@@ -1314,20 +1314,29 @@ static void weakref_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || !can_be_held_weakly(args[0])) {
+  if (vtype(js->new_target) == T_UNDEF)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakRef constructor requires 'new'");
+
+  if (nargs < 1 || !can_be_held_weakly(args[0]))
     return js_mkerr(js, "WeakRef target must be an object");
-  }
   
-  ant_value_t wr_obj = js_mkobj(js);
+  ant_value_t wr_obj = js->this_val;
+  if (vtype(wr_obj) != T_OBJ) wr_obj = js_mkobj(js);
+  if (is_err(wr_obj)) return wr_obj;
+
   ant_value_t wr_proto = js_get_ctor_proto(js, "WeakRef", 7);
-  if (is_special_object(wr_proto)) js_set_proto_init(wr_obj, wr_proto);
+  ant_value_t instance_proto = js_instance_proto_from_new_target(js, wr_proto);
+  if (is_special_object(instance_proto)) js_set_proto_init(wr_obj, instance_proto);
+
   weakref_state_t *state = ant_calloc(sizeof(*state));
 
   if (!state) return js_mkerr(js, "out of memory");
   state->target = args[0];
 
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+    js_set_slot(wr_obj, SLOT_CTOR, js->new_target);
   js_set_native(wr_obj, state, WEAKREF_NATIVE_TAG);
-  js_obj_ptr(wr_obj)->finalizer = weakref_finalize;
+  js_set_finalizer(wr_obj, weakref_finalize);
   gc_weak_register(js, js_obj_ptr(wr_obj));
   gc_weak_keep_alive(js, args[0]);
   
@@ -1336,10 +1345,15 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  if (vtype(this_val) != T_OBJ) return js_mkundef();
-  
-  weakref_state_t *state = js_get_native(this_val, WEAKREF_NATIVE_TAG);
-  ant_value_t target = state ? state->target : js_mkundef();
+  weakref_state_t *state = vtype(this_val) == T_OBJ 
+    ? js_get_native(this_val, WEAKREF_NATIVE_TAG) : NULL;
+    
+  if (!state) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "WeakRef.prototype.deref called on incompatible receiver"
+  );
+
+  ant_value_t target = state->target;
   if (vtype(target) != T_UNDEF) gc_weak_keep_alive(js, target);
   
   return target;
