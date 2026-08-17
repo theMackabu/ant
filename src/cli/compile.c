@@ -30,10 +30,20 @@
 #define getpid _getpid
 #endif
 
+bool ant_compile_bypass_revision = false;
+
 typedef struct {
   char download_url[2048];
   uint64_t size;
 } compile_runtime_info_t;
+
+static int64_t compile_tell(FILE *f) {
+#ifdef _WIN32
+  return _ftelli64(f);
+#else
+  return (int64_t)ftello(f);
+#endif
+}
 
 static const char *compile_json_string(yyjson_val *obj, const char *key) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
@@ -65,7 +75,7 @@ static int compile_manifest_select_runtime(const char *json, size_t json_len, co
       if (available && yyjson_is_bool(available) && !yyjson_get_bool(available)) continue;
 
       const char *revision = compile_json_string(item, "revision");
-      if (!revision || strcmp(revision, ANT_GIT_LONGHASH) != 0) {
+      if (!ant_compile_bypass_revision && (!revision || strcmp(revision, ANT_GIT_LONGHASH) != 0)) {
         wrong_revision = true;
         continue;
       }
@@ -120,30 +130,68 @@ static int compile_copy_file(const char *src_path, FILE *dst, char *err, size_t 
   return 0;
 }
 
-static int compile_write_runtime(FILE *out, const char *runtime_path, char *err, size_t err_len) {
-  if (runtime_path) return compile_copy_file(runtime_path, out, err, err_len);
+static bool compile_runtime_cache_path(char *out, size_t out_len) {
+  char dir[4096];
+  if (ant_xdg_cache_path(dir, sizeof(dir), "compile") != 0) return false;
+  if (ant_mkdir_p(dir) != 0) return false;
+  return (size_t)snprintf(out, out_len, "%s/ant-runtime-%s", dir, ANT_GIT_LONGHASH) < out_len;
+}
 
+static int compile_download_runtime(FILE *dst, char *err, size_t err_len) {
   char *manifest = NULL;
   size_t manifest_len = 0;
-  int rc = ant_manifest_fetch(&manifest, &manifest_len, err, err_len);
-  if (rc != 0) return -1;
+  if (ant_manifest_fetch(&manifest, &manifest_len, err, err_len) != 0) return -1;
 
   compile_runtime_info_t info;
-  rc = compile_manifest_select_runtime(manifest, manifest_len, &info, err, err_len);
+  int rc = compile_manifest_select_runtime(manifest, manifest_len, &info, err, err_len);
   free(manifest);
   if (rc != 0) return -1;
 
-  if (ant_http_download_file(info.download_url, out, "Downloading ant-runtime", err, err_len) != 0) return -1;
+  if (ant_http_download_file(info.download_url, dst, "Downloading ant-runtime", err, err_len) != 0) return -1;
 
   if (info.size > 0) {
-    long written = ftell(out);
+    int64_t written = compile_tell(dst);
     if (written < 0 || (uint64_t)written != info.size) {
-      snprintf(err, err_len, "downloaded runtime is %ld bytes, manifest expects %llu",
-        written, (unsigned long long)info.size);
+      snprintf(err, err_len, "downloaded runtime is %lld bytes, manifest expects %llu",
+        (long long)written, (unsigned long long)info.size);
       return -1;
     }
   }
   return 0;
+}
+
+static int compile_write_runtime(FILE *out, const char *runtime_path, bool no_cache, char *err, size_t err_len) {
+  if (runtime_path) return compile_copy_file(runtime_path, out, err, err_len);
+
+  char cache_path[4096];
+  bool cached = !no_cache && compile_runtime_cache_path(cache_path, sizeof(cache_path));
+
+  if (cached) {
+    FILE *probe = fopen(cache_path, "rb");
+    if (probe) {
+      fclose(probe);
+      return compile_copy_file(cache_path, out, err, err_len);
+    }
+  }
+
+  if (!cached) return compile_download_runtime(out, err, err_len);
+
+  char cache_tmp[4096];
+  if ((size_t)snprintf(cache_tmp, sizeof(cache_tmp), "%s.tmp.%ld", cache_path, (long)getpid()) >= sizeof(cache_tmp)) {
+    return compile_download_runtime(out, err, err_len);
+  }
+
+  FILE *cf = fopen(cache_tmp, "wb");
+  if (!cf) return compile_download_runtime(out, err, err_len);
+
+  int rc = compile_download_runtime(cf, err, err_len);
+  if (fclose(cf) != 0 || rc != 0 || rename(cache_tmp, cache_path) != 0) {
+    remove(cache_tmp);
+    if (rc != 0) return -1;
+    return compile_download_runtime(out, err, err_len);
+  }
+
+  return compile_copy_file(cache_path, out, err, err_len);
 }
 
 #ifdef __APPLE__
@@ -263,10 +311,11 @@ int ant_cmd_compile(int argc, char **argv) {
   struct arg_file *outfile = arg_file0("o", "outfile", "<path>", "output executable path");
   struct arg_file *runtime = arg_file0(NULL, "runtime", "<path>", "use a local ant-runtime binary instead of downloading");
   struct arg_file *root = arg_file0(NULL, "root", "<dir>", "pack root for embedded module paths");
+  struct arg_lit *no_cache = arg_lit0(NULL, "no-cache", "always download the runtime instead of using the cache");
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_end *end = arg_end(20);
 
-  void *argtable[] = { entry, outfile, runtime, root, help, end };
+  void *argtable[] = { entry, outfile, runtime, root, no_cache, help, end };
   int nerrors = arg_parse(argc, argv, argtable);
 
   int rc = EXIT_FAILURE;
@@ -358,7 +407,7 @@ int ant_cmd_compile(int argc, char **argv) {
   }
 
   char err[512] = {0};
-  if (compile_write_runtime(out, runtime->count > 0 ? runtime->filename[0] : NULL, err, sizeof(err)) != 0) {
+  if (compile_write_runtime(out, runtime->count > 0 ? runtime->filename[0] : NULL, no_cache->count > 0, err, sizeof(err)) != 0) {
     crfprintf(stderr, "{error}: %s\n", err);
     fclose(out);
     goto cleanup;

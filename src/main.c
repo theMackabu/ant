@@ -113,6 +113,10 @@ static void ant_debug_apply(const char *key, const char *val) {
   else if (strcmp(key, "sandbox") == 0) {
     if (strcmp(val, "bypass-manifest") == 0) ant_sandbox_assets_bypass_manifest = true;
   }
+
+  else if (strcmp(key, "compile") == 0) {
+    if (strcmp(val, "bypass-abi") == 0) ant_compile_bypass_revision = true;
+  }
 }
 
 static inline void setup_console_colors(void) {

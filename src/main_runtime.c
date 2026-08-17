@@ -78,8 +78,12 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  const char *debug_env = getenv("ANT_DEBUG");
+  bool bypass_abi = debug_env && strstr(debug_env, "compile:bypass-abi");
+  if (bypass_abi) fprintf(stderr, "ant-runtime: compile:bypass-abi active; skipping revision check\n");
+
   ant_bundle_t bundle;
-  ant_bundle_status_t status = ant_bundle_open(exe_path, ANT_GIT_LONGHASH, &bundle);
+  ant_bundle_status_t status = ant_bundle_open(exe_path, bypass_abi ? NULL : ANT_GIT_LONGHASH, &bundle);
 
   if (status == ANT_BUNDLE_ERR_NO_TRAILER) {
     fprintf(stderr,

@@ -484,18 +484,15 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
 
   if (!program && r->modules[idx].lenient) {
     parse_arena_rewind(mark);
-    if (original) {
-      free(content);
-      r->modules[idx].data = original;
-      r->modules[idx].data_len = size;
-    }
+    free(content);
+    r->modules[idx].data = original;
+    r->modules[idx].data_len = size;
     r->modules[idx].kind = (uint8_t)ESM_MODULE_KIND_TEXT;
     r->modules[idx].format = MODULE_EVAL_FORMAT_UNKNOWN;
     r->modules[idx].lenient_text = true;
     return 0;
   }
   free(original);
-  original = NULL;
 
   if (!program) {
     if (format == MODULE_EVAL_FORMAT_ESM) {
