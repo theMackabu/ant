@@ -268,8 +268,11 @@ ant_bundle_status_t ant_bundle_open(const char *exe_path, const char *expected_a
   out->abi_hash[sizeof(out->abi_hash) - 1] = '\0';
 
   if (expected_abi && strncmp(out->abi_hash, expected_abi, sizeof(out->abi_hash)) != 0) {
-    status = ANT_BUNDLE_ERR_ABI;
-    goto fail;
+    char found[ANT_BUNDLE_ABI_HASH_MAX];
+    memcpy(found, out->abi_hash, sizeof(found));
+    ant_bundle_close(out);
+    memcpy(out->abi_hash, found, sizeof(out->abi_hash));
+    return ANT_BUNDLE_ERR_ABI;
   }
 
   uint64_t mods_off = sizeof(hdr);

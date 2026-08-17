@@ -87,6 +87,14 @@ int main(int argc, char *argv[]) {
       "This binary is a runtime stub; standalone executables are produced with `ant compile <entry>`.\n");
     return EXIT_FAILURE;
   }
+  
+  if (status == ANT_BUNDLE_ERR_ABI) {
+    fprintf(stderr,
+      "ant-runtime: %s\n  runtime revision: %s\n  program revision: %s\nRecompile with a matching ant (`ant compile <entry>`).\n",
+      ant_bundle_status_str(status), ANT_GIT_LONGHASH, bundle.abi_hash);
+    return EXIT_FAILURE;
+  }
+  
   if (status != ANT_BUNDLE_OK) {
     fprintf(stderr, "ant-runtime: %s (%s)\n", ant_bundle_status_str(status), exe_path);
     return EXIT_FAILURE;
