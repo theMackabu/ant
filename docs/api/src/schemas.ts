@@ -54,7 +54,7 @@ export const VersionQuerySchema = z
   }));
 
 export const DownloadParamsSchema = z.object({
-  kind: z.enum(['ant', 'sandbox', 'kernel']),
+  kind: z.enum(['ant', 'runtime', 'sandbox', 'kernel']),
   name: z.string().min(1),
 });
 

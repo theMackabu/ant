@@ -51,6 +51,20 @@ export async function latestManifest(url: URL, env: Env, options: RequestOptions
     ),
   );
 
+  const runtime = await Promise.all(
+    antTargets.map(target =>
+      resolveManifestEntry(
+        {
+          target: target.key,
+          os: target.os,
+          arch: target.arch,
+          libc: target.libc,
+        },
+        () => resolveRuntime(env, target, url, options),
+      ),
+    ),
+  );
+
   const sandbox = await Promise.all(
     ['x64', 'aarch64'].map(arch =>
       resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'sandbox', arch, url, options)),
@@ -67,6 +81,7 @@ export async function latestManifest(url: URL, env: Env, options: RequestOptions
     schema: 1,
     generated_at: new Date().toISOString(),
     ant,
+    runtime,
     sandbox,
     kernel,
   };
@@ -83,6 +98,18 @@ export async function versionManifest(env: Env, version: string) {
         libc: target.libc,
       },
       () => resolveReleaseAsset(env, release, 'ant', target.artifact),
+    ),
+  );
+
+  const runtime = antTargets.map(target =>
+    resolveManifestEntry(
+      {
+        target: target.key,
+        os: target.os,
+        arch: target.arch,
+        libc: target.libc,
+      },
+      () => resolveReleaseAsset(env, release, 'runtime', `ant-runtime-${target.key}`),
     ),
   );
 
@@ -103,6 +130,7 @@ export async function versionManifest(env: Env, version: string) {
     version: releaseInfo(release),
     generated_at: new Date().toISOString(),
     ant: await Promise.all(ant),
+    runtime: await Promise.all(runtime),
     sandbox: await Promise.all(sandbox),
     kernel: await Promise.all(kernel),
   };
@@ -194,6 +222,38 @@ export async function resolveAnt(
     if (!isNotFound(error)) throw error;
     return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url, options);
   }
+}
+
+export async function resolveRuntime(
+  env: Env,
+  target: AntTarget,
+  url: URL,
+  options: RequestOptions = {},
+): Promise<ResolvedArtifact> {
+  const filename = target.os === 'windows' ? 'ant-runtime.exe' : 'ant-runtime';
+  const ant = await resolveAnt(env, target, url, options);
+
+  if (ant.source.type === 'actions') {
+    const download = new URL(ant.download_url);
+    download.pathname = `/v1/download/runtime/${encodeURIComponent(target.key)}`;
+    return {
+      ...ant,
+      kind: 'runtime',
+      name: `ant-runtime-${target.key}`,
+      download_url: download.toString(),
+      zip_entry: filename,
+      filename,
+    };
+  }
+
+  return resolveReleaseArtifact(
+    env,
+    'runtime',
+    `ant-runtime-${target.key}`,
+    target.key,
+    url,
+    options,
+  );
 }
 
 export async function resolveNamedArtifact(

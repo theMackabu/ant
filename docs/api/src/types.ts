@@ -10,7 +10,7 @@ export type Env = {
   CACHE_TTL_SECONDS?: string;
 };
 
-export type ArtifactKind = 'ant' | 'sandbox' | 'kernel';
+export type ArtifactKind = 'ant' | 'runtime' | 'sandbox' | 'kernel';
 
 export type AntTarget = {
   key: string;

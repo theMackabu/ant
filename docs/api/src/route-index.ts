@@ -15,6 +15,7 @@ export function routeIndex(url: URL) {
       check: route(url, '/v1/check?target={target}&current={version}'),
       downloads: {
         ant: route(url, '/v1/download/ant/{target}'),
+        runtime: route(url, '/v1/download/runtime/{target}'),
         sandbox: route(url, '/v1/download/sandbox/{arch}'),
         kernel: route(url, '/v1/download/kernel/{arch}'),
       },
@@ -28,6 +29,11 @@ export function routeIndex(url: URL) {
           url,
           `/v1/version?target=${encodeURIComponent(target.key)}&current={version}`,
         ),
+      })),
+      runtime: antTargets.map(target => ({
+        name: `ant-runtime-${target.key}`,
+        aliases: target.aliases,
+        url: route(url, `/v1/download/runtime/${encodeURIComponent(target.key)}`),
       })),
       sandbox: arches.map(arch => ({
         name: `sandbox-${arch}`,
