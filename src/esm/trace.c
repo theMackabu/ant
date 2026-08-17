@@ -452,9 +452,12 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   uint8_t *original = NULL;
   if (r->modules[idx].lenient) {
     original = malloc(size + 1);
-    if (original) {
-      memcpy(original, content, size + 1);
+    if (!original) {
+      trace_set_error(r, "out of memory while tracing module graph");
+      free(content);
+      return -1;
     }
+    memcpy(original, content, size + 1);
   }
 
   size_t js_len = size;
