@@ -204,6 +204,17 @@ done:
 }
 #endif
 
+static const char *entry_dir_name(const char *entry_path, size_t *len) {
+  const char *dir_end = strrchr(entry_path, '/');
+  if (!dir_end || dir_end == entry_path) return NULL;
+
+  const char *dir_start = dir_end - 1;
+  while (dir_start > entry_path && dir_start[-1] != '/') dir_start--;
+
+  *len = (size_t)(dir_end - dir_start);
+  return *len ? dir_start : NULL;
+}
+
 static void compile_default_output(const char *entry_path, char *out, size_t out_len) {
   const char *base = strrchr(entry_path, '/');
   base = base ? base + 1 : entry_path;
@@ -212,8 +223,13 @@ static void compile_default_output(const char *entry_path, char *out, size_t out
   snprintf(name, sizeof(name), "%s", base);
   char *dot = strrchr(name, '.');
   if (dot && dot != name) *dot = '\0';
-  if (!name[0]) snprintf(name, sizeof(name), "app");
 
+  size_t dir_len = 0;
+  const char *dir = NULL;
+  if (strcmp(name, "index") == 0 || strcmp(name, "main") == 0) dir = entry_dir_name(entry_path, &dir_len);
+  if (dir) snprintf(name, sizeof(name), "%.*s", (int)dir_len, dir);
+
+  if (!name[0]) snprintf(name, sizeof(name), "app");
   snprintf(out, out_len, "./%s", name);
 }
 

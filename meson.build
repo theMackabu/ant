@@ -281,10 +281,11 @@ if not runtime_binary.disabled()
       output: 'ant-runtime.codesign.stamp',
       command: [
         'sh', '-c',
-        '"$1" --force --sign - "$2" && touch "$3"',
+        '"$1" -x "$2" && "$3" --force --sign - "$2" && touch "$4"',
         'ant-runtime-codesign',
-        codesign,
+        find_program('strip'),
         ant_runtime_exe,
+        codesign,
         '@OUTPUT@',
       ],
       depends: ant_runtime_exe,

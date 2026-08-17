@@ -182,6 +182,16 @@ runs:
           ${{ inputs.strip }} -x build/${{ inputs.binary_name }}
           codesign --force --sign - --entitlements meson/ant.entitlements build/${{ inputs.binary_name }}
           codesign --verify --verbose build/${{ inputs.binary_name }}
+          if [[ -f build/ant-runtime ]]; then
+            ${{ inputs.strip }} -x build/ant-runtime
+            codesign --force --sign - build/ant-runtime
+            codesign --verify --verbose build/ant-runtime
+          fi
         else
           ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
+          for runtime in build/ant-runtime build/ant-runtime.exe; do
+            if [[ -f "$runtime" ]]; then
+              ${{ inputs.strip }} --strip-unneeded "$runtime"
+            fi
+          done
         fi
