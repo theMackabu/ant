@@ -192,9 +192,10 @@ runs:
           fi
         else
           ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
-          for runtime in build/ant-runtime build/ant-runtime.exe; do
+          for runtime in build/ant-runtime.exe build/ant-runtime; do
             if [[ -f "$runtime" ]]; then
               ${{ inputs.strip }} --strip-unneeded "$runtime"
+              break
             fi
           done
         fi
