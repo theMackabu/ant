@@ -10,9 +10,16 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #define ANT_MKDIR(path) _mkdir(path)
 #else
+#include <limits.h>
+#include <unistd.h>
 #define ANT_MKDIR(path) mkdir(path, 0755)
+#endif
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
 #endif
 
 const char *const module_resolve_extensions[] = {
@@ -178,6 +185,35 @@ int ant_user_bin_path(char *out, size_t out_size) {
   int written = snprintf(out, out_size, "%s/.local/bin", home);
 #endif
   return (written < 0 || (size_t)written >= out_size) ? -1 : 0;
+}
+
+int ant_get_exe_path(char *out, size_t out_len, int argc, char **argv) {
+  if (!out || out_len == 0) return -1;
+  out[0] = '\0';
+
+#ifdef _WIN32
+  DWORD len = GetModuleFileNameA(NULL, out, (DWORD)out_len);
+  if (len > 0 && len < out_len) return 0;
+#else
+#ifdef __APPLE__
+  char tmp[PATH_MAX];
+  uint32_t size = (uint32_t)sizeof(tmp);
+  if (_NSGetExecutablePath(tmp, &size) == 0) {
+    char resolved[PATH_MAX];
+    const char *src = realpath(tmp, resolved) ? resolved : tmp;
+    if ((size_t)snprintf(out, out_len, "%s", src) < out_len) return 0;
+  }
+#elif defined(__linux__)
+  ssize_t len = readlink("/proc/self/exe", out, out_len - 1);
+  if (len > 0) {
+    out[len] = '\0';
+    return 0;
+  }
+#endif
+#endif
+
+  if (argc > 0 && argv && argv[0] && (size_t)snprintf(out, out_len, "%s", argv[0]) < out_len) return 0;
+  return -1;
 }
 
 int hex_digit(char c) {

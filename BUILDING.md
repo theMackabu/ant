@@ -493,6 +493,7 @@ Configure options are set via `meson setup` or `meson configure`:
 | `static_link`       | boolean | `false`    | Statically link the final binary                         |
 | `temporal`          | feature | `enabled`  | Build the Temporal API using the hermetic Rust toolchain |
 | `pgo`               | feature | `auto`     | Use matching `meson/pgo/profiles/*.profdata` profiles    |
+| `runtime_binary`    | feature | `auto`     | Tooling-free `ant-runtime` used by `ant compile`         |
 | `build_timestamp`   | string  | (auto)     | Embedded build timestamp metadata                        |
 | `deps_prefix_cmake` | string  | (empty)    | Prefix path for cmake dependency lookup                  |
 

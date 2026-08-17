@@ -199,32 +199,7 @@ static void init_report_controls() {
 }
 
 static void init_exe_path(int argc, char **argv) {
-#ifdef _WIN32
-  DWORD len = GetModuleFileNameA(NULL, crash_exe_path, (DWORD)sizeof(crash_exe_path));
-  if (len > 0 && len < sizeof(crash_exe_path)) return;
-#else
-#ifdef __APPLE__
-  uint32_t size = (uint32_t)sizeof(crash_exe_path);
-  char tmp[ANT_CRASH_EXE_PATH_MAX];
-  if (_NSGetExecutablePath(tmp, &size) == 0) {
-    char *resolved = realpath(tmp, crash_exe_path);
-    if (resolved) return;
-    strncpy(crash_exe_path, tmp, sizeof(crash_exe_path) - 1);
-    crash_exe_path[sizeof(crash_exe_path) - 1] = '\0';
-    return;
-  }
-#elif defined(__linux__)
-  ssize_t len = readlink("/proc/self/exe", crash_exe_path, sizeof(crash_exe_path) - 1);
-  if (len > 0) {
-    crash_exe_path[len] = '\0';
-    return;
-  }
-#endif
-#endif
-  if (argc > 0 && argv && argv[0]) {
-    strncpy(crash_exe_path, argv[0], sizeof(crash_exe_path) - 1);
-    crash_exe_path[sizeof(crash_exe_path) - 1] = '\0';
-  }
+  ant_get_exe_path(crash_exe_path, sizeof(crash_exe_path), argc, argv);
 }
 
 static const char *os_name(void) {

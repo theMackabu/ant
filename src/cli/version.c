@@ -367,6 +367,24 @@ static int ant_fetch_latest(ant_latest_info_t *latest, progress_t *progress, cha
   return rc;
 }
 
+const char *ant_release_platform_target(void) {
+  return ant_platform_target();
+}
+
+int ant_manifest_fetch(char **body_out, size_t *body_len_out, char *err, size_t err_len) {
+  const char *url = getenv("ANT_MANIFEST_URL");
+  if (!url || !url[0]) url = ANT_MANIFEST_URL;
+  return version_http_get(url, NULL, NULL, NULL, body_out, body_len_out, err, err_len);
+}
+
+int ant_http_download_file(const char *url, FILE *file, const char *label, char *err, size_t err_len) {
+  progress_t progress;
+  progress_start(&progress, label);
+  int rc = version_http_get(url, file, label, &progress, NULL, NULL, err, err_len);
+  progress_stop(&progress);
+  return rc;
+}
+
 bool ant_version_print_update_hint(FILE *out) {
   if (!out || getenv("ANT_NO_VERSION_CHECK")) return false;
   char err[256] = {0};

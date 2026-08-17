@@ -22,6 +22,7 @@
 #include "internal.h"
 #include "reactor.h"
 #include "runtime.h"
+#include "vfs_bundle.h"
 #include "gc/roots.h"
 #include "utils.h"
 
@@ -1058,6 +1059,14 @@ static char *esm_resolve_relative_path(ant_t *js, const char *specifier, const c
 static char *esm_resolve_path_cond_uncached(ant_t *js, const char *specifier, const char *base_path, bool prefer_require) {
   if (!specifier || !specifier[0]) return NULL;
 
+  const ant_bundle_t *vfs = js && js->esm.state ? js->esm.state->bundle : NULL;
+  if (vfs) {
+    const char *hit = ant_bundle_resolve(vfs, base_path, specifier, prefer_require);
+    if (hit) return strdup(hit);
+    if (esm_path_is_absolute(specifier) && ant_bundle_has_key(vfs, specifier)) return strdup(specifier);
+    if (base_path && ant_bundle_has_key(vfs, base_path)) return NULL;
+  }
+
   if (esm_path_is_absolute(specifier)) {
     return esm_resolve_absolute(js, specifier);
   }
@@ -1289,6 +1298,10 @@ static esm_module_kind_t esm_classify_module_kind(const char *resolved_path) {
   if (esm_is_image(resolved_path)) return ESM_MODULE_KIND_IMAGE;
   if (esm_is_native(resolved_path)) return ESM_MODULE_KIND_NATIVE;
   return ESM_MODULE_KIND_CODE;
+}
+
+esm_module_kind_t esm_classify_kind_for_path(const char *resolved_path) {
+  return esm_classify_module_kind(resolved_path);
 }
 
 esm_module_t *esm_find_module(ant_t *js, const char *module_key) {
@@ -1885,6 +1898,28 @@ ant_value_t esm_get_or_load_ex(
     if (!mod) return js_mkerr(js, "Cannot create module");
   }
   return esm_load_module(js, mod);
+}
+
+bool js_esm_bundle_active(ant_t *js) {
+  return js && js->esm.state && js->esm.state->bundle;
+}
+
+bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle) {
+  ant_esm_state_t *st = esm_state(js);
+  if (!st) return false;
+  st->bundle = bundle;
+
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    const ant_bundle_module_t *m = &bundle->modules[i];
+    esm_module_t *mod = esm_create_module(
+      js, m->key, m->key, m->key,
+      (ant_module_format_t)m->format,
+      m->data, (size_t)m->data_len,
+      false, (esm_module_kind_t)m->kind
+    );
+    if (!mod) return false;
+  }
+  return true;
 }
 
 static ant_value_t esm_get_or_load(

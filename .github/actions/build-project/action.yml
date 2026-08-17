@@ -114,6 +114,7 @@ runs:
         MESON_ARGS=(
           -Db_lto=true
           --buildtype=release
+          -Druntime_binary=enabled
           "-Dbuild_timestamp=${{ inputs.build_timestamp }}"
           "-Ddeps_prefix_cmake=$DEPS_PREFIX"
           "-Dllvm_nm=${{ inputs.nm }}"
