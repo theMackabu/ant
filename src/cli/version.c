@@ -355,9 +355,13 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
   return rc;
 }
 
-static int ant_fetch_latest(ant_latest_info_t *latest, progress_t *progress, char *err, size_t err_len) {
+static const char *version_manifest_url(void) {
   const char *url = getenv("ANT_MANIFEST_URL");
-  if (!url || !url[0]) url = ANT_MANIFEST_URL;
+  return url && url[0] ? url : ANT_MANIFEST_URL;
+}
+
+static int ant_fetch_latest(ant_latest_info_t *latest, progress_t *progress, char *err, size_t err_len) {
+  const char *url = version_manifest_url();
   char *manifest = NULL;
   size_t manifest_len = 0;
   int rc = version_http_get(url, NULL, progress ? "Checking latest version" : NULL, progress, &manifest, &manifest_len, err, err_len);
@@ -372,9 +376,7 @@ const char *ant_release_platform_target(void) {
 }
 
 int ant_manifest_fetch(char **body_out, size_t *body_len_out, char *err, size_t err_len) {
-  const char *url = getenv("ANT_MANIFEST_URL");
-  if (!url || !url[0]) url = ANT_MANIFEST_URL;
-  return version_http_get(url, NULL, NULL, NULL, body_out, body_len_out, err, err_len);
+  return version_http_get(version_manifest_url(), NULL, NULL, NULL, body_out, body_len_out, err, err_len);
 }
 
 int ant_http_download_file(const char *url, FILE *file, const char *label, char *err, size_t err_len) {

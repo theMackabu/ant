@@ -204,8 +204,8 @@ int ant_get_exe_path(char *out, size_t out_len, int argc, char **argv) {
     if ((size_t)snprintf(out, out_len, "%s", src) < out_len) return 0;
   }
 #elif defined(__linux__)
-  ssize_t len = readlink("/proc/self/exe", out, out_len - 1);
-  if (len > 0) {
+  ssize_t len = readlink("/proc/self/exe", out, out_len);
+  if (len > 0 && (size_t)len < out_len) {
     out[len] = '\0';
     return 0;
   }

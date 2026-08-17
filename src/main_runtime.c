@@ -135,7 +135,14 @@ int main(int argc, char *argv[]) {
 
   ant_runtime_init(js, proc_argc, proc_argv, NULL);
   ant_bootstrap_modules(js);
-  js_esm_bundle_activate(js, &bundle);
+
+  if (!js_esm_bundle_activate(js, &bundle)) {
+    fprintf(stderr, "ant-runtime: failed to load embedded program\n");
+    js_destroy(js);
+    ant_bundle_close(&bundle);
+    free(proc_argv);
+    return EXIT_FAILURE;
+  }
 
   int js_result;
   if (internal_crash_report_mode) {

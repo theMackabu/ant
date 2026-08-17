@@ -133,7 +133,17 @@ static int compile_write_runtime(FILE *out, const char *runtime_path, char *err,
   free(manifest);
   if (rc != 0) return -1;
 
-  return ant_http_download_file(info.download_url, out, "Downloading ant-runtime", err, err_len) == 0 ? 0 : -1;
+  if (ant_http_download_file(info.download_url, out, "Downloading ant-runtime", err, err_len) != 0) return -1;
+
+  if (info.size > 0) {
+    long written = ftell(out);
+    if (written < 0 || (uint64_t)written != info.size) {
+      snprintf(err, err_len, "downloaded runtime is %ld bytes, manifest expects %llu",
+        written, (unsigned long long)info.size);
+      return -1;
+    }
+  }
+  return 0;
 }
 
 #ifdef __APPLE__
@@ -145,8 +155,8 @@ static int compile_run_codesign(const char *path, bool remove) {
   if (pid == 0) {
     int devnull = open("/dev/null", O_WRONLY);
     if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); }
-    if (remove) execlp("codesign", "codesign", "--remove-signature", path, (char *)NULL);
-    else execlp("codesign", "codesign", "--force", "--sign", "-", path, (char *)NULL);
+    if (remove) execl("/usr/bin/codesign", "codesign", "--remove-signature", path, (char *)NULL);
+    else execl("/usr/bin/codesign", "codesign", "--force", "--sign", "-", path, (char *)NULL);
     _exit(127);
   }
   int status = 0;
@@ -204,19 +214,34 @@ done:
 }
 #endif
 
+static bool compile_is_path_sep(char c) {
+#ifdef _WIN32
+  if (c == '\\') return true;
+#endif
+  return c == '/';
+}
+
+static const char *compile_last_sep(const char *path) {
+  const char *last = NULL;
+  for (const char *p = path; *p; p++) {
+    if (compile_is_path_sep(*p)) last = p;
+  }
+  return last;
+}
+
 static const char *entry_dir_name(const char *entry_path, size_t *len) {
-  const char *dir_end = strrchr(entry_path, '/');
+  const char *dir_end = compile_last_sep(entry_path);
   if (!dir_end || dir_end == entry_path) return NULL;
 
   const char *dir_start = dir_end - 1;
-  while (dir_start > entry_path && dir_start[-1] != '/') dir_start--;
+  while (dir_start > entry_path && !compile_is_path_sep(dir_start[-1])) dir_start--;
 
   *len = (size_t)(dir_end - dir_start);
   return *len ? dir_start : NULL;
 }
 
 static void compile_default_output(const char *entry_path, char *out, size_t out_len) {
-  const char *base = strrchr(entry_path, '/');
+  const char *base = compile_last_sep(entry_path);
   base = base ? base + 1 : entry_path;
 
   char name[512];

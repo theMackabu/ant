@@ -50,6 +50,24 @@ static uint64_t align8(uint64_t n) {
   return (n + 7u) & ~7ull;
 }
 
+static int bundle_seek(FILE *f, uint64_t off) {
+#ifdef _WIN32
+  return _fseeki64(f, (long long)off, SEEK_SET);
+#else
+  return fseeko(f, (off_t)off, SEEK_SET);
+#endif
+}
+
+static int64_t bundle_size(FILE *f) {
+#ifdef _WIN32
+  if (_fseeki64(f, 0, SEEK_END) != 0) return -1;
+  return _ftelli64(f);
+#else
+  if (fseeko(f, 0, SEEK_END) != 0) return -1;
+  return (int64_t)ftello(f);
+#endif
+}
+
 typedef struct {
   char *buf;
   size_t len;
@@ -149,8 +167,7 @@ int ant_bundle_write(FILE *f, const ant_bundle_build_t *build) {
   }
   uint64_t payload_size = data_cursor;
 
-  if (fseek(f, 0, SEEK_END) != 0) goto done;
-  long end = ftell(f);
+  int64_t end = bundle_size(f);
   if (end < 0) goto done;
 
   uint64_t payload_offset = align8((uint64_t)end);
@@ -200,7 +217,7 @@ static bool footer_valid(const ant_bundle_footer_t *footer, uint64_t footer_off)
 #define ANT_BUNDLE_SCAN_MAX (4u << 20)
 
 static bool find_footer(FILE *f, uint64_t file_size, ant_bundle_footer_t *out) {
-  if (fseek(f, (long)(file_size - sizeof(*out)), SEEK_SET) == 0 &&
+  if (bundle_seek(f, file_size - sizeof(*out)) == 0 &&
       fread(out, 1, sizeof(*out), f) == sizeof(*out) &&
       footer_valid(out, file_size - sizeof(*out))) {
     return true;
@@ -211,7 +228,7 @@ static bool find_footer(FILE *f, uint64_t file_size, ant_bundle_footer_t *out) {
   uint8_t *tail = malloc((size_t)scan_len);
   if (!tail) return false;
 
-  if (fseek(f, (long)scan_start, SEEK_SET) != 0 ||
+  if (bundle_seek(f, scan_start) != 0 ||
       fread(tail, 1, (size_t)scan_len, f) != (size_t)scan_len) {
     free(tail);
     return false;
@@ -241,9 +258,9 @@ ant_bundle_status_t ant_bundle_open(const char *exe_path, const char *expected_a
   ant_bundle_status_t status = ANT_BUNDLE_ERR_CORRUPT;
   ant_bundle_footer_t footer;
 
-  if (fseek(f, 0, SEEK_END) != 0) { status = ANT_BUNDLE_ERR_IO; goto fail; }
-  long file_size = ftell(f);
-  if (file_size < (long)sizeof(footer)) { status = ANT_BUNDLE_ERR_NO_TRAILER; goto fail; }
+  int64_t file_size = bundle_size(f);
+  if (file_size < 0) { status = ANT_BUNDLE_ERR_IO; goto fail; }
+  if (file_size < (int64_t)sizeof(footer)) { status = ANT_BUNDLE_ERR_NO_TRAILER; goto fail; }
 
   if (!find_footer(f, (uint64_t)file_size, &footer)) {
     status = ANT_BUNDLE_ERR_NO_TRAILER;
@@ -254,7 +271,7 @@ ant_bundle_status_t ant_bundle_open(const char *exe_path, const char *expected_a
   if (!out->payload) { status = ANT_BUNDLE_ERR_OOM; goto fail; }
   out->payload_size = (size_t)footer.payload_size;
 
-  if (fseek(f, (long)footer.payload_offset, SEEK_SET) != 0 ||
+  if (bundle_seek(f, footer.payload_offset) != 0 ||
       fread(out->payload, 1, out->payload_size, f) != out->payload_size) {
     status = ANT_BUNDLE_ERR_IO;
     goto fail;

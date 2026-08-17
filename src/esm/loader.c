@@ -1907,7 +1907,6 @@ bool js_esm_bundle_active(ant_t *js) {
 bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle) {
   ant_esm_state_t *st = esm_state(js);
   if (!st) return false;
-  st->bundle = bundle;
 
   for (uint32_t i = 0; i < bundle->module_count; i++) {
     const ant_bundle_module_t *m = &bundle->modules[i];
@@ -1919,6 +1918,8 @@ bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle) {
     );
     if (!mod) return false;
   }
+
+  st->bundle = bundle;
   return true;
 }
 

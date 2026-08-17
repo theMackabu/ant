@@ -12,6 +12,7 @@ typedef struct {
   uint8_t format;
   uint8_t kind;
   bool lenient;
+  bool lenient_text;
   uint8_t *data;
   size_t data_len;
 } ant_trace_module_t;

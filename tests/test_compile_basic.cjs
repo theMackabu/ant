@@ -5,12 +5,13 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ant = path.resolve(process.execPath);
-const repoRoot = path.dirname(path.dirname(ant));
-const runtime = path.join(repoRoot, 'build', 'ant-runtime');
+const buildDir = path.dirname(ant);
+const repoRoot = path.dirname(buildDir);
+const runtime = path.join(buildDir, 'ant-runtime');
 const fixture = path.join(repoRoot, 'tests', 'fixtures', 'compile-app', 'index.ts');
 
 if (!fs.existsSync(runtime)) {
-  console.log('skip: build/ant-runtime not built (ninja -C build ant-runtime)');
+  console.log(`skip: ${runtime} not built (ninja -C build ant-runtime)`);
   process.exit(0);
 }
 
@@ -36,6 +37,7 @@ try {
   assert.ok(stdout.includes('dirname: /$ant'), stdout);
 
   r = spawnSync(out, ['--throw'], { encoding: 'utf8', cwd: os.homedir() });
+  assert.equal(r.status, 0, `unhandled TLA rejection exits 0 like plain ant, got ${r.status}`);
   assert.match(r.stderr, /\/\$ant\/lib\/util\.ts:\d+:\d+/, r.stderr);
   assert.match(r.stderr, /kaboom/, r.stderr);
 

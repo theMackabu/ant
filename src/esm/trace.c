@@ -27,13 +27,42 @@ typedef struct {
 } trace_spec_t;
 
 typedef struct {
+  const char *key;
+  char *owned_key;
+  uint32_t idx;
+  UT_hash_handle hh;
+} trace_index_entry_t;
+
+typedef struct {
   ant_trace_result_t *result;
   const char *root;
   size_t root_len;
 
+  trace_index_entry_t *module_map;
+  trace_index_entry_t *edge_set;
+
   trace_spec_t *specs;
   uint32_t spec_count, spec_cap;
 } trace_ctx_t;
+
+static void trace_index_free(trace_index_entry_t **map) {
+  trace_index_entry_t *e, *tmp;
+  HASH_ITER(hh, *map, e, tmp) {
+    HASH_DEL(*map, e);
+    free(e->owned_key);
+    free(e);
+  }
+}
+
+static bool trace_index_add(trace_index_entry_t **map, const char *key, char *owned_key, uint32_t idx) {
+  trace_index_entry_t *e = calloc(1, sizeof(*e));
+  if (!e) return false;
+  e->key = key;
+  e->owned_key = owned_key;
+  e->idx = idx;
+  HASH_ADD_KEYPTR(hh, *map, e->key, strlen(e->key), e);
+  return true;
+}
 
 static bool trace_grow(void **items, uint32_t count, uint32_t *cap, size_t item_size) {
   if (count < *cap) return true;
@@ -114,15 +143,14 @@ static char *trace_virtual_key(trace_ctx_t *ctx, const char *abs_path) {
   return strdup(key);
 }
 
-static int trace_find_module(const ant_trace_result_t *r, const char *abs_path) {
-  for (uint32_t i = 0; i < r->module_count; i++) {
-    if (strcmp(r->modules[i].abs_path, abs_path) == 0) return (int)i;
-  }
-  return -1;
+static int trace_find_module(trace_ctx_t *ctx, const char *abs_path) {
+  trace_index_entry_t *e = NULL;
+  HASH_FIND_STR(ctx->module_map, abs_path, e);
+  return e ? (int)e->idx : -1;
 }
 
 static int trace_add_module(trace_ctx_t *ctx, const char *abs_path, bool lenient) {
-  int existing = trace_find_module(ctx->result, abs_path);
+  int existing = trace_find_module(ctx, abs_path);
   if (existing >= 0) {
     if (!lenient) ctx->result->modules[existing].lenient = false;
     return existing;
@@ -148,20 +176,45 @@ static int trace_add_module(trace_ctx_t *ctx, const char *abs_path, bool lenient
     .data = NULL,
     .data_len = 0,
   };
+
+  if (!trace_index_add(&ctx->module_map, abs_copy, NULL, r->module_count)) {
+    free(abs_copy);
+    free(key);
+    return -1;
+  }
   return (int)r->module_count++;
 }
 
 static bool trace_add_edge(trace_ctx_t *ctx, uint32_t parent, const char *spec, uint32_t child, bool is_require) {
   ant_trace_result_t *r = ctx->result;
-  for (uint32_t i = 0; i < r->edge_count; i++) {
-    ant_trace_edge_t *e = &r->edges[i];
-    if (e->parent_idx == parent && e->child_idx == child && e->is_require == is_require && strcmp(e->spec, spec) == 0)
-      return true;
+
+  size_t edge_key_len = strlen(spec) + 48;
+  char *edge_key = malloc(edge_key_len);
+  if (!edge_key) return false;
+  snprintf(edge_key, edge_key_len, "%u|%u|%d|%s", parent, child, is_require ? 1 : 0, spec);
+
+  trace_index_entry_t *existing = NULL;
+  HASH_FIND_STR(ctx->edge_set, edge_key, existing);
+  if (existing) {
+    free(edge_key);
+    return true;
   }
 
-  if (!trace_grow((void **)&r->edges, r->edge_count, &r->edge_cap, sizeof(*r->edges))) return false;
+  if (!trace_grow((void **)&r->edges, r->edge_count, &r->edge_cap, sizeof(*r->edges))) {
+    free(edge_key);
+    return false;
+  }
   char *spec_copy = strdup(spec);
-  if (!spec_copy) return false;
+  if (!spec_copy) {
+    free(edge_key);
+    return false;
+  }
+
+  if (!trace_index_add(&ctx->edge_set, edge_key, edge_key, r->edge_count)) {
+    free(edge_key);
+    free(spec_copy);
+    return false;
+  }
 
   r->edges[r->edge_count++] = (ant_trace_edge_t){ parent, spec_copy, child, is_require };
   return true;
@@ -374,12 +427,21 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
     return 0;
   }
 
+  uint8_t *original = NULL;
+  if (r->modules[idx].lenient) {
+    original = malloc(size + 1);
+    if (original) {
+      memcpy(original, content, size + 1);
+    }
+  }
+
   size_t js_len = size;
   const char *strip_detail = NULL;
   int strip_result = strip_typescript_inplace(&content, size, abs_path, &js_len, &strip_detail);
   if (strip_result < 0) {
     trace_set_error(r, "TypeScript error in %s: %s", abs_path, strip_detail ? strip_detail : "strip failed");
     free(content);
+    free(original);
     return -1;
   }
 
@@ -397,10 +459,18 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
 
   if (!program && r->modules[idx].lenient) {
     parse_arena_rewind(mark);
+    if (original) {
+      free(content);
+      r->modules[idx].data = original;
+      r->modules[idx].data_len = size;
+    }
     r->modules[idx].kind = (uint8_t)ESM_MODULE_KIND_TEXT;
     r->modules[idx].format = MODULE_EVAL_FORMAT_UNKNOWN;
+    r->modules[idx].lenient_text = true;
     return 0;
   }
+  free(original);
+  original = NULL;
 
   if (!program) {
     if (format == MODULE_EVAL_FORMAT_ESM) {
@@ -462,17 +532,43 @@ int ant_esm_trace_graph(ant_t *js, const char *entry_abs_path, const char *root_
   }
   out->entry_idx = (uint32_t)entry;
 
-  for (uint32_t i = 0; i < out->module_count; i++) {
-    if (trace_process_module(js, &ctx, i) != 0) goto fail;
+  uint32_t processed = 0;
+  for (;;) {
+    while (processed < out->module_count) {
+      if (trace_process_module(js, &ctx, processed) != 0) goto fail;
+      processed++;
+    }
+
+    bool reprocessed = false;
+    for (uint32_t i = 0; i < processed; i++) {
+      ant_trace_module_t *m = &out->modules[i];
+      if (!m->lenient_text || m->lenient) continue;
+
+      free(m->data);
+      m->data = NULL;
+      m->data_len = 0;
+      m->kind = (uint8_t)ESM_MODULE_KIND_CODE;
+      m->format = MODULE_EVAL_FORMAT_UNKNOWN;
+      m->lenient_text = false;
+
+      if (trace_process_module(js, &ctx, i) != 0) goto fail;
+      reprocessed = true;
+    }
+
+    if (!reprocessed && processed == out->module_count) break;
   }
 
   for (uint32_t i = 0; i < ctx.spec_count; i++) free(ctx.specs[i].spec);
   free(ctx.specs);
+  trace_index_free(&ctx.module_map);
+  trace_index_free(&ctx.edge_set);
   return 0;
 
 fail:
   for (uint32_t i = 0; i < ctx.spec_count; i++) free(ctx.specs[i].spec);
   free(ctx.specs);
+  trace_index_free(&ctx.module_map);
+  trace_index_free(&ctx.edge_set);
   return -1;
 }
 
