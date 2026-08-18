@@ -69,6 +69,7 @@
 #include "modules/events.h"
 #include "modules/blob.h"
 #include "modules/collections.h"
+#include "modules/cron.h"
 #include "modules/lmdb.h"
 #include "modules/regex.h"
 #include "modules/globals.h"
@@ -17980,6 +17981,7 @@ ant_t *ant_create() {
 
 void js_destroy(ant_t *js) {
   if (js == NULL) return;
+  cleanup_cron_module(js);
   reap_retired_coroutines(js);
   gc_weak_cleanup(js);
 

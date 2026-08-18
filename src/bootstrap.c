@@ -17,6 +17,7 @@
 #include "modules/fs.h"
 #include "modules/crypto.h"
 #include "modules/timer.h"
+#include "modules/cron.h"
 #include "modules/json.h"
 #include "modules/fetch.h"
 #include "modules/request.h"
@@ -102,6 +103,7 @@ void ant_bootstrap_modules(ant_t *js) {
   init_math_module(js);
   init_bigint_module(js);
   init_date_module(js);
+  init_cron_module(js);
   #ifdef ANT_HAVE_TEMPORAL
   init_temporal_module(js);
   #endif
@@ -186,4 +188,5 @@ void ant_bootstrap_modules(ant_t *js) {
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
+  js_set_descriptor(js, js_as_obj(js->Ant), "cron", 4, JS_DESC_W | JS_DESC_E);
 }

@@ -827,6 +827,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_weak_mark_kept_alive(js, gc_mark_value);
   gc_visit_roots(js, gc_mark_value);
   gc_mark_timers(js, gc_mark_value);
+  gc_mark_cron(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
   gc_mark_fetch(js, gc_mark_value);
   gc_mark_fs(js, gc_mark_value);

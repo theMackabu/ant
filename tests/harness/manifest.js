@@ -60,6 +60,11 @@ export function targets() {
     'test_utf16_random_access.cjs',
     'test_bigint.js',
     'test_temporal.js',
+    'test_ant_cron.cjs',
+    'test_ant_cron_cli.cjs',
+    'test_ant_cron_linux.cjs',
+    'test_ant_cron_os.cjs',
+    'test_ant_cron_windows.cjs',
     'test_compile_basic.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
@@ -112,6 +117,16 @@ export function targets() {
   const nowMs = Date.now();
   const ms = (name, re, min = 0.0001, max = 120000) => ({ name, re, min, max });
   list.push(
+    {
+      group: 'demos',
+      type: 'demo',
+      name: 'cron',
+      entry: 'examples/demo/cron.js',
+      checks: [
+        { name: 'yearly UTC year', re: /@yearly\s+-> (\d+)-01-01T00:00:00\.000Z/, min: 2027, max: 2027 },
+        { name: 'CronJob lifecycle method count', re: /lifecycle methods: (\d+)/, min: 4, max: 4 }
+      ]
+    },
     {
       group: 'demos',
       type: 'demo',

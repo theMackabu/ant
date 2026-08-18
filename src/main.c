@@ -48,6 +48,7 @@
 #include "sandbox/vm.h"
 #include "modules/io.h"
 #include "modules/server.h"
+#include "modules/cron.h"
 #include "modules/process.h"
 #include "modules/tty.h"
 #include "modules/sandbox.h"
@@ -185,7 +186,9 @@ static bool is_valued_flag(const char *arg) {
     strcmp(arg, "--eval") == 0 || 
     strcmp(arg, "--repl") == 0 ||
     strcmp(arg, "--input-type") == 0 ||
-    strcmp(arg, "--localstorage-file") == 0;
+    strcmp(arg, "--localstorage-file") == 0 ||
+    strcmp(arg, "--cron-title") == 0 ||
+    strcmp(arg, "--cron-period") == 0;
 }
 
 static int find_argv_token_index(int argc, char **argv, const char *token) {
@@ -331,7 +334,7 @@ static void eval_code(
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
-static int execute_module(ant_t *js, const char *filename) {
+static int execute_module(ant_t *js, const char *filename, const char *cron_period) {
   char *use_path_owned = NULL;
   
   const char *use_path = filename;
@@ -374,6 +377,8 @@ static int execute_module(ant_t *js, const char *filename) {
   }
 
   default_export = js_get(js, ns, "default");
+  if (cron_period) return cron_run_scheduled_export(js, default_export, cron_period);
+
   return server_maybe_start_from_export(js, default_export);
 }
 
@@ -433,7 +438,7 @@ static int execute_sandbox_request(ant_t *js, ant_sandbox_request_t *sandbox, co
       crfprintf(stderr, msg.module_not_found, sandbox->entry);
       rc = EXIT_FAILURE;
     } else {
-      rc = execute_module(js, resolved_file);
+      rc = execute_module(js, resolved_file, NULL);
       js_run_event_loop(js);
       free(resolved_file);
     }
@@ -599,6 +604,8 @@ int main(int argc, char *argv[]) {
     X(struct arg_lit *, web, arg_lit0(NULL, "web", "enable web-compatible globals")) \
     X(struct arg_lit *, no_clear_screen, arg_lit0(NULL, "no-clear-screen", "keep output when restarting in watch mode")) \
     X(struct arg_file *, localstorage_file, arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence")) \
+    X(struct arg_str *, cron_title, arg_str0(NULL, "cron-title", "<title>", NULL)) \
+    X(struct arg_str *, cron_period, arg_str0(NULL, "cron-period", "<schedule>", NULL)) \
     X(struct arg_file *, file, arg_filen(NULL, NULL, NULL, 0, argc, NULL)) \
     X(struct arg_lit *, version, arg_lit0("v", "version", "display version information and exit")) \
     X(struct arg_lit *, version_raw, arg_lit0(NULL, "version-raw", "raw version number for scripts")) \
@@ -648,6 +655,18 @@ int main(int argc, char *argv[]) {
 
   if (no_clear_screen->count > 0 && watch->count == 0) {
     crfprintf(stderr, msg.misuse_clear_screen);
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
+
+  if ((cron_title->count > 0) != (cron_period->count > 0)) {
+    fprintf(stderr, "Error: --cron-title and --cron-period must be used together.\n");
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
+
+  if (cron_period->count > 0 && (eval->count > 0 || repl->count > 0 || file->count != 1)) {
+    fprintf(stderr, "Error: cron execution requires exactly one script file.\n");
     CLEANUP_ARGS_AND_ARGV();
     return EXIT_FAILURE;
   }
@@ -891,7 +910,7 @@ int main(int argc, char *argv[]) {
     }
     
     fl = resolved_file;
-    js_result = execute_module(js, fl);
+    js_result = execute_module(js, fl, cron_period->count > 0 ? cron_period->sval[0] : NULL);
     js_run_event_loop(js);
     
     free(resolved_file);

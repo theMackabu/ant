@@ -199,6 +199,17 @@ jobs:
           extra_meson_args: ${{ steps.config.outputs.extra_meson_args }}
           binary_name: ${{ steps.config.outputs.binary_name }}
 
+      - name: Test cron scheduler backend
+        shell: bash
+        run: |
+          ANT_BIN="./build/${{ steps.config.outputs.binary_name }}"
+          "$ANT_BIN" tests/test_ant_cron.cjs
+          case "${{ inputs.platform }}" in
+            linux-*) "$ANT_BIN" tests/test_ant_cron_linux.cjs ;;
+            macos-*) "$ANT_BIN" tests/test_ant_cron_os.cjs ;;
+            windows-*) "$ANT_BIN" tests/test_ant_cron_windows.cjs ;;
+          esac
+
       # === UPLOAD ARTIFACTS ===
       - name: Upload binary
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f

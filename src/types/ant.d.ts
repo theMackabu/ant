@@ -224,6 +224,56 @@ interface AntServer {
   eventSource(): AntEventSourceStream;
 }
 
+interface AntCronOptions {
+  tz?: string;
+}
+
+type AntCronSchedule =
+  | '@yearly'
+  | '@annually'
+  | '@monthly'
+  | '@weekly'
+  | '@daily'
+  | '@midnight'
+  | '@hourly'
+  | '* * * * *'
+  | '0 * * * *'
+  | '0 0 * * *'
+  | '0 0 * * 0'
+  | '0 0 1 * *'
+  | '0 0 1 1 *'
+  | `${string} ${string} ${string} ${string} ${string}`
+  | (string & {});
+
+interface AntCronJob {
+  readonly cron: string;
+  ref(): AntCronJob;
+  stop(): AntCronJob;
+  unref(): AntCronJob;
+  [Symbol.dispose](): void;
+}
+
+interface AntCronController {
+  readonly cron: string;
+  readonly type: 'scheduled';
+  readonly scheduledTime: number;
+}
+
+interface AntCron {
+  (
+    schedule: AntCronSchedule,
+    handler: (this: AntCronJob) => unknown,
+    options?: AntCronOptions,
+  ): AntCronJob;
+  (path: string, schedule: AntCronSchedule, title: string): Promise<void>;
+  parse(
+    expression: AntCronSchedule,
+    relativeDate?: Date | number,
+    options?: AntCronOptions,
+  ): Date | null;
+  remove(title: string): Promise<void>;
+}
+
 interface AntStatic {
   version: string;
   target: string;
@@ -245,6 +295,7 @@ interface AntStatic {
 
   signal(signum: number, handler: (signum: number) => void): void;
   serve(options: AntServeOptions): AntServer;
+  cron: AntCron;
 }
 
 declare const Ant: AntStatic;

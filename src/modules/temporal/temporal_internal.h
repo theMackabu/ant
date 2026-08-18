@@ -97,6 +97,8 @@ typedef struct {
 } temporal_partial_zdt_t;
 
 Provider *temporal_provider(ant_t *js);
+
+size_t temporal_system_time_zone(char *buffer, size_t capacity);
 uint32_t temporal_native_tag(temporal_kind_t kind);
 
 ant_value_t temporal_make_function(

@@ -48,12 +48,21 @@ if host_machine.system() == 'windows'
   secur32_dep = cc.find_library('secur32', required: true)
   ntdll_dep = cc.find_library('ntdll', required: true)
   crypt32_dep = cc.find_library('crypt32', required: true)
+  advapi32_dep = cc.find_library('advapi32', required: true)
   userenv_dep = cc.find_library('userenv', required: true)
   ws2_32_dep = cc.find_library('ws2_32', required: true)
   iphlpapi_dep = cc.find_library('iphlpapi', required: true)
   pathcch_dep = cc.find_library('pathcch', required: true)
   dbghelp_dep = cc.find_library('dbghelp', required: true)
-  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep, pathcch_dep, dbghelp_dep]
+  ole32_dep = cc.find_library('ole32', required: true)
+  oleaut32_dep = cc.find_library('oleaut32', required: true)
+  taskschd_dep = cc.find_library('taskschd', required: true)
+  win_deps = [
+    secur32_dep, ntdll_dep, crypt32_dep,
+    advapi32_dep, userenv_dep, ws2_32_dep,
+    iphlpapi_dep, pathcch_dep, dbghelp_dep,
+    ole32_dep, oleaut32_dep, taskschd_dep
+  ]
 elif host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
   hypervisor_dep = dependency('appleframeworks', modules: ['Hypervisor'], required: true)
