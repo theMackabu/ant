@@ -14,6 +14,7 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "utils.h"
+#include "pack.h"
 #include "vfs_bundle.h"
 #include "silver/vm.h"
 #include "esm/loader.h"
@@ -82,8 +83,16 @@ int main(int argc, char *argv[]) {
   bool bypass_abi = debug_env && strstr(debug_env, "compile:bypass-abi");
   if (bypass_abi) fprintf(stderr, "ant-runtime: compile:bypass-abi active; skipping revision check\n");
 
+  const char *packed_exe = getenv(ANT_PACK_ENV_EXE);
+  bool packed = packed_exe && packed_exe[0];
+  const char *bundle_path = exe_path;
+
+  #ifdef __linux__
+  if (packed) bundle_path = "/proc/self/exe";
+  #endif
+
   ant_bundle_t bundle;
-  ant_bundle_status_t status = ant_bundle_open(exe_path, bypass_abi ? NULL : ANT_GIT_LONGHASH, &bundle);
+  ant_bundle_status_t status = ant_bundle_open(bundle_path, bypass_abi ? NULL : ANT_GIT_LONGHASH, &bundle);
 
   if (status == ANT_BUNDLE_ERR_NO_TRAILER) {
     fprintf(stderr,
@@ -100,7 +109,7 @@ int main(int argc, char *argv[]) {
   }
   
   if (status != ANT_BUNDLE_OK) {
-    fprintf(stderr, "ant-runtime: %s (%s)\n", ant_bundle_status_str(status), exe_path);
+    fprintf(stderr, "ant-runtime: %s (%s)\n", ant_bundle_status_str(status), bundle_path);
     return EXIT_FAILURE;
   }
 
@@ -116,9 +125,17 @@ int main(int argc, char *argv[]) {
 
   int user_argc = argc > 1 ? argc - 1 : 0;
   int proc_argc = 2 + user_argc;
-  
+
+  if (packed) {
+    #ifdef _WIN32
+    _putenv(ANT_PACK_ENV_EXE "=");
+    #else
+    unsetenv(ANT_PACK_ENV_EXE);
+    #endif
+  }
+
   char **proc_argv = try_oom(sizeof(char *) * (size_t)(proc_argc + 1));
-  proc_argv[0] = exe_path;
+  proc_argv[0] = packed ? (char *)packed_exe : exe_path;
   proc_argv[1] = (char *)entry_mod->key;
   
   for (int i = 0; i < user_argc; i++) proc_argv[2 + i] = argv[1 + i];

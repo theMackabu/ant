@@ -9,6 +9,9 @@
 #include "bootstrap.h"
 #include "runtime.h"
 #include "utils.h"
+#include "compress.h"
+#include "progress.h"
+#include "pack.h"
 #include "vfs_bundle.h"
 #include "esm/trace.h"
 #include "silver/vm.h"
@@ -20,6 +23,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <yyjson.h>
+#include <zlib.h>
+
+#ifdef __linux__
+#include "stub_data.h"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -292,6 +300,70 @@ static const char *entry_dir_name(const char *entry_path, size_t *len) {
   return *len ? dir_start : NULL;
 }
 
+#ifdef __linux__
+static int compile_pack_gzip(const char *path, char *err, size_t err_len) {
+  size_t len = 0;
+  uint8_t *data = NULL;
+
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    snprintf(err, err_len, "cannot reopen %s: %s", path, strerror(errno));
+    return -1;
+  }
+  if (fseeko(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+  off_t size = ftello(f);
+  if (size <= 0 || fseeko(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
+
+  data = malloc((size_t)size);
+  if (!data || fread(data, 1, (size_t)size, f) != (size_t)size) {
+    free(data);
+    fclose(f);
+    snprintf(err, err_len, "failed reading %s", path);
+    return -1;
+  }
+  fclose(f);
+  len = (size_t)size;
+
+  uLongf packed_cap = compressBound((uLong)len);
+  uint8_t *packed = malloc(packed_cap);
+  if (!packed) { free(data); return -1; }
+
+  if (compress2(packed, &packed_cap, data, (uLong)len, 9) != Z_OK) {
+    snprintf(err, err_len, "failed to compress runtime image");
+    free(packed);
+    free(data);
+    return -1;
+  }
+  free(data);
+
+  FILE *out = fopen(path, "wb");
+  if (!out) {
+    snprintf(err, err_len, "cannot rewrite %s: %s", path, strerror(errno));
+    free(packed);
+    return -1;
+  }
+
+  ant_pack_footer_t footer = {0};
+  memcpy(footer.magic, ANT_PACK_MAGIC, sizeof(footer.magic));
+  footer.version = ANT_PACK_VERSION;
+  footer.payload_offset = ant_stub_image_len;
+  footer.payload_size = packed_cap;
+  footer.original_size = len;
+
+  bool ok =
+    fwrite(ant_stub_image, 1, ant_stub_image_len, out) == ant_stub_image_len &&
+    fwrite(packed, 1, packed_cap, out) == packed_cap &&
+    fwrite(&footer, 1, sizeof(footer), out) == sizeof(footer);
+
+  free(packed);
+  if (fclose(out) != 0 || !ok) {
+    snprintf(err, err_len, "failed writing packed executable");
+    return -1;
+  }
+  return 0;
+}
+#endif
+
 static void compile_default_output(const char *entry_path, char *out, size_t out_len) {
   const char *base = compile_last_sep(entry_path);
   base = base ? base + 1 : entry_path;
@@ -316,17 +388,20 @@ int ant_cmd_compile(int argc, char **argv) {
   struct arg_file *runtime = arg_file0(NULL, "runtime", "<path>", "use a local ant-runtime binary instead of downloading");
   struct arg_file *root = arg_file0(NULL, "root", "<dir>", "pack root for embedded module paths");
   struct arg_lit *no_cache = arg_lit0(NULL, "no-cache", "always download the runtime instead of using the cache");
+  struct arg_lit *no_compress = arg_lit0(NULL, "no-compress", "do not compress the output executable");
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_end *end = arg_end(20);
 
-  void *argtable[] = { entry, outfile, runtime, root, no_cache, help, end };
+  void *argtable[] = { entry, outfile, runtime, root, no_cache, no_compress, help, end };
   int nerrors = arg_parse(argc, argv, argtable);
 
   int rc = EXIT_FAILURE;
   char *resolved_entry = NULL;
   char *entry_abs = NULL;
+  
   ant_t *js = NULL;
   bool traced = false;
+  
   ant_trace_result_t trace = {0};
   char tmp_path[4096] = {0};
 
@@ -467,6 +542,7 @@ int ant_cmd_compile(int argc, char **argv) {
   free(edges);
 
   long total_size = write_rc == 0 ? ftell(out) : -1;
+  long long packed_size = 0;
   if (fclose(out) != 0) write_rc = -1;
 
   if (write_rc != 0) {
@@ -498,24 +574,60 @@ int ant_cmd_compile(int argc, char **argv) {
   }
 #endif
 
+#ifdef __linux__
+  if (no_compress->count == 0) {
+    err[0] = '\0';
+    progress_t pack_progress;
+    progress_start(&pack_progress, "Compressing");
+    int pack_rc = compile_pack_gzip(tmp_path, err, sizeof(err));
+    progress_stop(&pack_progress);
+    if (pack_rc != 0) {
+      crfprintf(stderr, "{error}: %s\n", err[0] ? err : "failed to pack executable");
+      goto cleanup;
+    }
+    struct stat packed_st;
+    if (stat(tmp_path, &packed_st) == 0) packed_size = (long long)packed_st.st_size;
+  }
+#endif
+
   if (rename(tmp_path, out_path) != 0) {
     crfprintf(stderr, "{error}: failed to write %s: %s\n", out_path, strerror(errno));
     goto cleanup;
   }
   tmp_path[0] = '\0';
 
+  uint64_t compressed_bytes = 0;
+  bool compressed = false;
+
+  if (no_compress->count == 0 && ant_fs_compress_supported()) {
+    progress_t compress_progress;
+    progress_start(&compress_progress, "Compressing");
+    compressed = ant_fs_compress(out_path, NULL, &compressed_bytes) == 0;
+    progress_stop(&compress_progress);
+  }
+
   uint64_t embedded_bytes = 0;
   for (uint32_t i = 0; i < trace.module_count; i++) embedded_bytes += trace.modules[i].data_len;
 
-  crprintf("<bold>Compiled</> <bright_green>%s</>\n", out_path);
+  char embedded_str[64];
   if (embedded_bytes < 1024) {
-    crprintf("<dim>%u module%s, %llu bytes embedded, %ld KB total</>\n",
-      trace.module_count, trace.module_count == 1 ? "" : "s",
-      (unsigned long long)embedded_bytes, total_size > 0 ? total_size / 1024 : 0);
+    snprintf(embedded_str, sizeof(embedded_str), "%llu bytes", (unsigned long long)embedded_bytes);
   } else {
-    crprintf("<dim>%u module%s, %llu KB embedded, %ld KB total</>\n",
-      trace.module_count, trace.module_count == 1 ? "" : "s",
-      (unsigned long long)(embedded_bytes / 1024), total_size > 0 ? total_size / 1024 : 0);
+    snprintf(embedded_str, sizeof(embedded_str), "%llu KB", (unsigned long long)(embedded_bytes / 1024));
+  }
+
+  char size_str[64];
+  snprintf(size_str, sizeof(size_str), "%ld KB total", total_size > 0 ? total_size / 1024 : 0);
+
+  crprintf("<bold>Compiled</> <bright_green>%s</>\n", out_path);
+  crprintf("<dim>%u module%s, %s embedded, %s</>\n",
+    trace.module_count, trace.module_count == 1 ? "" : "s", embedded_str, size_str);
+
+  if (compressed) {
+    crprintf("<dim>Compressed to <bright_green>%llu KB</> on disk</>\n",
+      (unsigned long long)(compressed_bytes / 1024));
+  } else if (packed_size > 0) {
+    crprintf("<dim>Compressed to <bright_green>%lld KB</></>\n", (long long)(packed_size / 1024));
   }
 
   rc = EXIT_SUCCESS;

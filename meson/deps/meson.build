@@ -56,6 +56,7 @@ if host_machine.system() == 'windows'
   win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep, pathcch_dep, dbghelp_dep]
 elif host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
+  compression_dep = cc.find_library('compression', required: true)
   hypervisor_dep = dependency('appleframeworks', modules: ['Hypervisor'], required: true)
   win_deps = []
 else
@@ -281,7 +282,7 @@ if get_option('jit')
 endif
 
 if host_machine.system() == 'darwin'
-  ant_deps += [security_dep]
+  ant_deps += [security_dep, compression_dep]
 endif
 
 ant_slim_deps = ant_deps

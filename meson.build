@@ -191,9 +191,29 @@ if host_machine.system() == 'linux'
   ant_link_depends += files('meson/ant.dynlist')
 endif
 
+if host_machine.system() == 'linux'
+  ant_stub = executable(
+    'ant-stub',
+    files('src/stub/stub.c'),
+    include_directories: include,
+    dependencies: [zlib_dep],
+    c_args: ['-Os'],
+    build_by_default: true,
+  )
+
+  stub_h = custom_target('stub_h',
+    input: ant_stub,
+    output: 'stub_data.h',
+    command: [python, files('meson/bin2c.py'), '@INPUT@', 'ant_stub_image'],
+    capture: true,
+  )
+else
+  stub_h = []
+endif
+
 ant_exe = executable(
   'ant',
-  files('src/main.c') + [messages_h],
+  files('src/main.c') + [messages_h] + stub_h,
   dependencies: libant_dep,
   link_args: ant_link_args,
   link_depends: ant_link_depends,
