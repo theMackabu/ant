@@ -477,13 +477,27 @@ an adjacent data file. The aggregate alone is insufficient.
   fixed-work measurements, then confirm the original tick-477 display.
 - 2026-08-15: Instrument iteration, calls, ICs, Map string keys, builders, JIT
   coverage, and GC before choosing an implementation.
+- 2026-08-18: Replace the 32-byte heap scratch buffer in numeric
+  `js_tostring_val()` with stack storage as a Phase 3A checkpoint. The change
+  leaves pooled-string allocation unchanged at 770,288 bytes per 6,000-key
+  probe, but eight serial interleaved diagnostic rounds measured
+  `${x}-${y}` plus `Map.get()` at 109.83ns/cell before and 94.92ns/cell after
+  (-13.6%). Six serial interleaved deterministic `World.render()` rounds
+  measured 853.90us/render before and 757.37us/render after (-11.3%). These
+  are directional, not Evidence Table results: the runs were not CPU-pinned,
+  and LLVM discarded the stale PGO count for the changed function.
 
 ## Validation Status
 
 - Plan document created.
 - Current dirty property-IC work was not modified.
-- No new baseline, counters, code changes, builds, or tests have been run for
-  this plan yet.
+- Numeric `js_tostring_val()` stack scratch checkpoint implemented. `maid
+  build`, focused template/coercion tests, the 3,962-test spec suite, `maid
+  preflight`, and `git diff --check` pass. The current Maid task set does not
+  provide `lint_c`; the attempted command reported that the task does not
+  exist.
+- The Phase 3A fused numeric/ASCII template path and pinned acceptance evidence
+  remain pending.
 
 ## Definition of Done
 

@@ -2658,10 +2658,9 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   L_OBJ:   return js_call_toString(js, value);
   
   L_NUM: {
-    buf = (char *)ant_calloc(32);
-    len = strnum(value, buf, 32);
-    ant_value_t result = js_mkstr(js, buf, len);
-    free(buf); return result;
+    char num_buf[32];
+    len = strnum(value, num_buf, sizeof(num_buf));
+    return js_mkstr(js, num_buf, len);
   }
     
   L_BIGINT: {
