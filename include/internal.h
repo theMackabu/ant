@@ -206,6 +206,21 @@ typedef struct {
   bool valid;
 } js_error_site_t;
 
+typedef struct {
+  ant_object_t *base;
+  ant_object_t *proto;
+  ant_shape_t *base_shape;
+  ant_shape_t *proto_shape;
+  uint32_t object_epoch;
+} ant_with_unscopables_cache_t;
+
+typedef struct {
+  ant_object_t *object;
+  ant_shape_t *shape;
+  ant_value_t proto;
+  uint32_t epoch;
+} ant_to_primitive_cache_t;
+
 struct ant_isolate_t {
   sv_vm_t *vm;
 
@@ -444,11 +459,8 @@ struct ant_isolate_t {
   } cfunc_name_cache;
 
   struct {
-    ant_object_t *with_no_unscopables_base;
-    ant_object_t *with_no_unscopables_proto;
-    void *with_no_unscopables_base_shape;
-    void *with_no_unscopables_proto_shape;
-    uint32_t with_no_unscopables_epoch;
+    ant_with_unscopables_cache_t with_unscopables_absent;
+    ant_to_primitive_cache_t to_primitive_absent;
   } runtime_cache;
 
   struct {

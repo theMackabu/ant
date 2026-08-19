@@ -324,14 +324,16 @@ static inline bool sv_with_binding_is_unscopable(
     ant_object_t *base_ptr = js_obj_ptr(js_as_obj(with_obj));
     ant_value_t base_proto = (base_ptr && is_object_type(base_ptr->proto)) ? base_ptr->proto : js_mknull();
     ant_object_t *proto_ptr = is_object_type(base_proto) ? js_obj_ptr(js_as_obj(base_proto)) : NULL;
+    
     uint32_t cache_epoch = ant_ic_obj_epoch_counter;
+    ant_with_unscopables_cache_t *cache = &js->runtime_cache.with_unscopables_absent;
 
     if (
-      js->runtime_cache.with_no_unscopables_epoch == cache_epoch &&
-      base_ptr == js->runtime_cache.with_no_unscopables_base &&
-      (void *)(base_ptr ? base_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_base_shape &&
-      proto_ptr == js->runtime_cache.with_no_unscopables_proto &&
-      (void *)(proto_ptr ? proto_ptr->shape : NULL) == js->runtime_cache.with_no_unscopables_proto_shape
+      cache->object_epoch == cache_epoch &&
+      base_ptr == cache->base &&
+      (base_ptr ? base_ptr->shape : NULL) == cache->base_shape &&
+      proto_ptr == cache->proto &&
+      (proto_ptr ? proto_ptr->shape : NULL) == cache->proto_shape
     ) return false;
     
     ant_prop_loc_t unscopables_off = lkp_sym_proto(js, with_obj, sym_off);
@@ -357,21 +359,27 @@ static inline bool sv_with_binding_is_unscopable(
     }
 
     if (!has_unscopables) {
-      ant_value_t proto_proto = (proto_ptr && is_object_type(proto_ptr->proto)) ? proto_ptr->proto : js_mknull();
+      ant_value_t proto_proto = (proto_ptr && is_object_type(proto_ptr->proto)) 
+        ? proto_ptr->proto : js_mknull();
+        
       if (!saw_exotic && !is_object_type(proto_proto)) {
-        js->runtime_cache.with_no_unscopables_base = base_ptr;
-        js->runtime_cache.with_no_unscopables_base_shape = (void *)(base_ptr ? base_ptr->shape : NULL);
-        js->runtime_cache.with_no_unscopables_proto = proto_ptr;
-        js->runtime_cache.with_no_unscopables_proto_shape = (void *)(proto_ptr ? proto_ptr->shape : NULL);
-        js->runtime_cache.with_no_unscopables_epoch = cache_epoch;
+        cache->base = base_ptr;
+        cache->base_shape = base_ptr ? base_ptr->shape : NULL;
+        cache->proto = proto_ptr;
+        cache->proto_shape = proto_ptr ? proto_ptr->shape : NULL;
+        cache->object_epoch = cache_epoch;
       }
+      
       return false;
     }
-    if (unscopables_off.obj) unscopables = js_prop_load(unscopables_off);
+    
+    if (unscopables_off.obj) 
+      unscopables = js_prop_load(unscopables_off);
   }
 
   if (is_proxy_obj || vtype(unscopables) == T_UNDEF)
     unscopables = js_get_sym(js, with_obj, unscopables_sym);
+  
   if (is_err(unscopables)) {
     *out = unscopables;
     *abrupt = true;
@@ -379,7 +387,6 @@ static inline bool sv_with_binding_is_unscopable(
   }
 
   if (!is_object_type(unscopables)) return false;
-
   ant_value_t blocked = js_mkundef();
   bool got_blocked_fast = false;
 
