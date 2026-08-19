@@ -1,12 +1,12 @@
 import fs from 'fs';
-import { join } from 'path';
 import { spawnSync } from 'child_process';
 
-const basePath = import.meta.dirname;
-const indexPath = join(basePath, 'ant.json');
+const indexPath = new URL('../../docs/results/test262-results.json', import.meta.url);
 
 const data = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-const entries = Object.entries(data.passes).sort();
+const entries = Object.entries(data.tests)
+  .map(([name, result]) => [name.replace(/^test\//, ''), result === 'PASS'])
+  .sort();
 
 const stats = {
   total: entries.length,
@@ -157,9 +157,7 @@ function flattenStats(value, prefix = '', out = [], styled = true) {
 
 function collectMemorySnapshot() {
   const mem = Ant.stats();
-  const gcProfile = Ant.raw && typeof Ant.raw.gcMarkProfile === 'function'
-    ? Ant.raw.gcMarkProfile()
-    : null;
+  const gcProfile = Ant.raw && typeof Ant.raw.gcMarkProfile === 'function' ? Ant.raw.gcMarkProfile() : null;
 
   return { mem, gcProfile };
 }
@@ -198,7 +196,7 @@ function refreshMemoryCache() {
     plainLines: buildMemoryLinesFromSnapshot(snapshot, false),
     displayLines: [],
     cols: 0,
-    updatedAt: Date.now(),
+    updatedAt: Date.now()
   };
   rebuildMemoryDisplayCache();
 }
@@ -214,10 +212,12 @@ function ensureMemoryCache() {
 }
 
 function hasGcMarkProfileControls() {
-  return Ant.raw
-    && typeof Ant.raw.gcMarkProfile === 'function'
-    && typeof Ant.raw.gcMarkProfileEnable === 'function'
-    && typeof Ant.raw.gcMarkProfileReset === 'function';
+  return (
+    Ant.raw &&
+    typeof Ant.raw.gcMarkProfile === 'function' &&
+    typeof Ant.raw.gcMarkProfileEnable === 'function' &&
+    typeof Ant.raw.gcMarkProfileReset === 'function'
+  );
 }
 
 function toggleGcMarkProfile() {
@@ -229,9 +229,7 @@ function toggleGcMarkProfile() {
   const current = Ant.raw.gcMarkProfile();
   const enabled = Ant.raw.gcMarkProfileEnable(!current.enabled);
   refreshMemoryCache();
-  setMemoryStatus(enabled
-    ? `${c.green}GC mark profiler enabled${c.reset}`
-    : `${c.yellow}GC mark profiler disabled${c.reset}`);
+  setMemoryStatus(enabled ? `${c.green}GC mark profiler enabled${c.reset}` : `${c.yellow}GC mark profiler disabled${c.reset}`);
   return true;
 }
 
@@ -263,14 +261,15 @@ function setMemoryStatus(message) {
 
 function copyMemoryStats() {
   const text = ensureMemoryCache().plainLines.join('\n') + '\n';
-  const commands = process.platform === 'win32'
-    ? [{ command: 'clip', args: [] }]
-    : [
-        { command: 'pbcopy', args: [] },
-        { command: 'wl-copy', args: [] },
-        { command: 'xclip', args: ['-selection', 'clipboard'] },
-        { command: 'xsel', args: ['--clipboard', '--input'] }
-      ];
+  const commands =
+    process.platform === 'win32'
+      ? [{ command: 'clip', args: [] }]
+      : [
+          { command: 'pbcopy', args: [] },
+          { command: 'wl-copy', args: [] },
+          { command: 'xclip', args: ['-selection', 'clipboard'] },
+          { command: 'xsel', args: ['--clipboard', '--input'] }
+        ];
 
   for (const { command, args } of commands) {
     try {
@@ -397,10 +396,12 @@ function buildScreen() {
 
     lines.push(' '.repeat(cols));
     const status = memoryStatusText();
-    lines.push(pad(
-      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · r refresh · e profiler · R reset profiler · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`,
-      cols
-    ));
+    lines.push(
+      pad(
+        `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · r refresh · e profiler · R reset profiler · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`,
+        cols
+      )
+    );
     linesArePadded = true;
   }
 
