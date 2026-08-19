@@ -8,6 +8,7 @@
 #include "escape.h"
 #include "descriptors.h"
 #include "ptr.h"
+#include "gc/roots.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1988,30 +1989,70 @@ static ant_value_t builtin_regexp_toString(ant_t *js, ant_value_t *args, int nar
   if (!is_object_type(regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "toString called on non-object");
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, regexp);
+
   ant_value_t source_val = js_getprop_fallback(js, regexp, "source");
-  if (is_err(source_val)) return source_val;
+  if (is_err(source_val)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return source_val;
+  }
+  
   ant_value_t source_str = js_tostring_val(js, source_val);
-  if (is_err(source_str)) return source_str;
+  GC_ROOT_PIN(js, source_str);
+  if (is_err(source_str)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return source_str;
+  }
 
   ant_value_t flags_val = js_getprop_fallback(js, regexp, "flags");
-  if (is_err(flags_val)) return flags_val;
+  if (is_err(flags_val)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return flags_val;
+  }
+  
   ant_value_t flags_str = js_tostring_val(js, flags_val);
-  if (is_err(flags_str)) return flags_str;
+  GC_ROOT_PIN(js, flags_str);
+  if (is_err(flags_str)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return flags_str;
+  }
 
   ant_offset_t src_len, src_off = vstr(js, source_str, &src_len);
   ant_offset_t fl_len, fl_off = vstr(js, flags_str, &fl_len);
 
-  size_t total = 1 + src_len + 1 + fl_len;
-  char *buf = ant_calloc(total + 1);
-  if (!buf) return js_mkerr(js, "oom");
-  size_t n = 0;
-  buf[n++] = '/';
-  memcpy(buf + n, (const void *)(uintptr_t)src_off, src_len); n += src_len;
-  buf[n++] = '/';
-  memcpy(buf + n, (const void *)(uintptr_t)fl_off, fl_len); n += fl_len;
+  if ((size_t)fl_len > SIZE_MAX - 2 ||
+      (size_t)src_len > SIZE_MAX - (size_t)fl_len - 2) {
+    ant_value_t err = js_mkerr(js, "string too large");
+    GC_ROOT_RESTORE(js, root_mark);
+    return err;
+  }
+  
+  size_t total = (size_t)src_len + (size_t)fl_len + 2;
+  ant_value_t result = js_mkstr(js, NULL, total);
+  GC_ROOT_PIN(js, result);
+  if (is_err(result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
 
-  ant_value_t result = js_mkstr(js, buf, n);
-  free(buf);
+  ant_flat_string_t *flat = (ant_flat_string_t *)(uintptr_t)vdata(result);
+  src_off = vstr(js, source_str, &src_len);
+  fl_off = vstr(js, flags_str, &fl_len);
+  
+  size_t n = 0;
+  flat->bytes[n++] = '/';
+  memcpy(flat->bytes + n, (const void *)(uintptr_t)src_off, (size_t)src_len);
+  
+  n += (size_t)src_len;
+  flat->bytes[n++] = '/';
+  memcpy(flat->bytes + n, (const void *)(uintptr_t)fl_off, (size_t)fl_len);
+  
+  n += (size_t)fl_len;
+  flat->bytes[n] = '\0';
+  str_flat_init_meta(flat, str_detect_ascii_bytes(flat->bytes, n));
+
+  GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
 
@@ -2075,10 +2116,16 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
 
   ant_offset_t slen, soff = vstr(js, args[0], &slen);
   const char *src = (const char *)(uintptr_t)(soff);
-
-  size_t buf_cap = slen * 6 + 1;
-  char *buf = ant_calloc(buf_cap);
+  if ((size_t)slen > (SIZE_MAX - 1) / 6) return js_mkerr(js, "string too large");
+  
+  size_t capacity = (size_t)slen * 6 + 1;
+  char static_buf[256];
+  
+  bool needs_free = capacity > sizeof(static_buf);
+  char *buf = needs_free ? (char *)ant_calloc(capacity) : static_buf;
   if (!buf) return js_mkerr(js, "oom");
+
+  static const char hex[] = "0123456789abcdef";
   size_t di = 0;
   bool first = true;
 
@@ -2091,37 +2138,45 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
         (const utf8proc_uint8_t *)&src[si],
         (utf8proc_ssize_t)(slen - si), &cp
       );
-      for (int b = 0; b < bytes && si < slen; b++)
-        buf[di++] = src[si++];
+      if (bytes <= 0) bytes = 1;
+      if ((size_t)bytes > (size_t)slen - si) bytes = (int)((size_t)slen - si);
+      memcpy(buf + di, src + si, (size_t)bytes);
+      di += (size_t)bytes;
+      si += (size_t)bytes;
       first = false;
       continue;
     }
 
-    if (first && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
-      di += snprintf(buf + di, buf_cap - di, "\\x%02x", c);
-      si++; first = false;
-      continue;
-    }
+    bool short_escape = c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+    bool hex_escape = 
+      (first && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) 
+      || is_other_punctuator(c) || c == ' ';
 
-    if (is_syntax_char(c)) {
-      buf[di++] = '\\'; buf[di++] = c;
-      si++; first = false;
-      continue;
-    }
+    if (short_escape) {
+      buf[di++] = '\\';
+      switch (c) {
+        case '\t': buf[di++] = 't'; break;
+        case '\n': buf[di++] = 'n'; break;
+        case '\v': buf[di++] = 'v'; break;
+        case '\f': buf[di++] = 'f'; break;
+        default:   buf[di++] = 'r'; break;
+      }
+    } else if (hex_escape) {
+      buf[di++] = '\\';
+      buf[di++] = 'x';
+      buf[di++] = hex[c >> 4];
+      buf[di++] = hex[c & 0x0F];
+    } else if (is_syntax_char(c)) {
+      buf[di++] = '\\';
+      buf[di++] = (char)c;
+    } else buf[di++] = (char)c;
 
-    if (is_other_punctuator(c) || c == ' ' || c == '\t' || c == '\n' ||
-        c == '\r' || c == '\v' || c == '\f') {
-      di += snprintf(buf + di, buf_cap - di, "\\x%02x", c);
-      si++; first = false;
-      continue;
-    }
-
-    buf[di++] = c;
-    si++; first = false;
+    si++;
+    first = false;
   }
 
   ant_value_t result = js_mkstr(js, buf, di);
-  free(buf);
+  if (needs_free) free(buf);
   return result;
 }
 

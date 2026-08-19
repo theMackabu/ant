@@ -486,6 +486,15 @@ an adjacent data file. The aggregate alone is insufficient.
   measured 853.90us/render before and 757.37us/render after (-11.3%). These
   are directional, not Evidence Table results: the runs were not CPU-pinned,
   and LLVM discarded the stale PGO count for the changed function.
+- 2026-08-18: A follow-up string-allocation audit found that several property
+  APIs and `Array.prototype.toLocaleString()` treated `tostr()`'s required
+  length as bytes written into fixed buffers. Long values therefore caused
+  out-of-bounds reads and corrupted strings. Route property keys through one
+  growable `ToPropertyKey` path, invoke each array element's
+  `toLocaleString()` method, and retain stack-first or direct-final-string
+  allocation in the audited concat, join, character, BigInt, and RegExp paths.
+  Treat the allocation reductions as structural until pinned A/B measurements
+  establish their runtime effect.
 
 ## Validation Status
 
@@ -496,6 +505,11 @@ an adjacent data file. The aggregate alone is insufficient.
   preflight`, and `git diff --check` pass. The current Maid task set does not
   provide `lint_c`; the attempted command reported that the task does not
   exist.
+- Long property keys, element-localized strings, concat/join ordering,
+  stack-spill character construction, BigInt formatting, and direct RegExp
+  output are covered by `tests/test_string_coercion_allocation_paths.cjs`.
+  The focused regression, Node differential checks, regex tests, GC tests, and
+  the 3,962-test spec suite pass on the rebuilt candidate.
 - The Phase 3A fused numeric/ASCII template path and pinned acceptance evidence
   remain pending.
 
