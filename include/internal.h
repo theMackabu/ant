@@ -171,10 +171,11 @@ enum {
 };
 
 enum: uint32_t {
-  T_SPECIAL_OBJECT_MASK  = T_MASK(T_OBJ, T_ARR),
-  T_NEEDS_PROTO_FALLBACK = T_MASK(T_FUNC, T_ARR, T_PROMISE, T_GENERATOR),
-  T_OBJECT_MASK          = T_MASK(T_OBJ, T_ARR, T_FUNC, T_PROMISE, T_GENERATOR),
-  T_NON_NUMERIC_MASK     = T_MASK(T_STR, T_ARR, T_FUNC, T_CFUNC, T_OBJ, T_GENERATOR),
+  T_BOXABLE_PRIMITIVE_MASK = T_MASK(T_STR, T_NUM, T_BOOL, T_BIGINT, T_SYMBOL),
+  T_SPECIAL_OBJECT_MASK    = T_MASK(T_OBJ, T_ARR),
+  T_NEEDS_PROTO_FALLBACK   = T_MASK(T_FUNC, T_ARR, T_PROMISE, T_GENERATOR),
+  T_OBJECT_MASK            = T_MASK(T_OBJ, T_ARR, T_FUNC, T_PROMISE, T_GENERATOR),
+  T_NON_NUMERIC_MASK       = T_MASK(T_STR, T_ARR, T_FUNC, T_CFUNC, T_OBJ, T_GENERATOR),
 };
 
 static_assert(T_MASK(T_OBJ) == T_FLAG_FIND(T_OBJ), "T_MASK single");
@@ -218,7 +219,8 @@ typedef struct {
   ant_object_t *object;
   ant_shape_t *shape;
   ant_value_t proto;
-  uint32_t epoch;
+  uint32_t own_valueof_data_slot;
+  uint32_t ic_epoch;
 } ant_to_primitive_cache_t;
 
 struct ant_isolate_t {
@@ -821,6 +823,10 @@ size_t utf8_export_into(
   const char *str, size_t str_len, uint8_t *dst, 
   size_t dst_len, size_t *out_read_units
 );
+
+static inline bool is_boxable_primitive_type(uint8_t type) {
+  return (T_FLAG_FIND(type) & T_BOXABLE_PRIMITIVE_MASK) != 0;
+}
 
 static inline ant_module_t *js_active_tla_module_ctx(ant_t *js) {
   if (!js) return NULL;

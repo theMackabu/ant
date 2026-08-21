@@ -33,10 +33,32 @@ equal(
 );
 assert(keyed.hasOwnProperty(longBigInt), 'hasOwnProperty uses the full key');
 assert(keyed.propertyIsEnumerable(longBigInt), 'propertyIsEnumerable uses the full key');
+assert(
+  ({ undefined: 1 }).hasOwnProperty(),
+  'hasOwnProperty treats an omitted key as undefined',
+);
+assert(
+  Object.hasOwn({ undefined: 1 }),
+  'Object.hasOwn treats an omitted key as undefined',
+);
 
 const fromEntries = Object.fromEntries([[longBigInt, 23]]);
 equal(Object.keys(fromEntries)[0], longDigits, 'fromEntries preserves a long BigInt key');
 equal(fromEntries[longDigits], 23, 'fromEntries stores the expected value');
+equal(
+  Object.fromEntries([[undefined, 29]]).undefined,
+  29,
+  'fromEntries accepts undefined as a property key',
+);
+
+let proxyDefineKey;
+Object.defineProperty(new Proxy({}, {
+  defineProperty(_target, key) {
+    proxyDefineKey = key;
+    return true;
+  },
+}), 12345678901234567890n, { value: 1 });
+equal(proxyDefineKey, '12345678901234567890', 'proxy defineProperty receives a string key');
 
 const keyCoercionOrder = [];
 const longObjectKey = {
@@ -172,6 +194,16 @@ const numericPrototype = {
 Object.setPrototypeOf(cachedPrototypeNumber, numericPrototype);
 equal(Number(cachedPrototypeNumber), 13, 'changing the prototype invalidates primitive lookup');
 
+const cachedValueMutation = {
+  valueOf() { return 17; },
+  toString() { return '23'; },
+};
+equal(Number(cachedValueMutation), 17, 'cached own valueOf before replacement');
+cachedValueMutation.valueOf = () => 19;
+equal(Number(cachedValueMutation), 19, 'cached own valueOf loads its current value');
+cachedValueMutation.valueOf = 1;
+equal(Number(cachedValueMutation), 23, 'non-callable cached valueOf falls through to toString');
+
 const originalNumberToLocaleString = Number.prototype.toLocaleString;
 let numberLocaleCalls = 0;
 Number.prototype.toLocaleString = function (locales) {
@@ -224,12 +256,153 @@ const joined = [
 ].join(separator);
 equal(joinOrder.join(','), 'separator,first', 'join coerces separator and elements once in order');
 equal(joined, `${'a'.repeat(300)}::42::true`, 'join result');
+
+const genericJoinOrder = [];
+const genericJoinReceiver = new Proxy({ 0: 'value', length: 1 }, {
+  get(target, key, receiver) {
+    genericJoinOrder.push(`get:${String(key)}`);
+    return Reflect.get(target, key, receiver);
+  },
+});
+const genericJoinSeparator = {
+  toString() {
+    genericJoinOrder.push('separator');
+    return ':';
+  },
+};
+equal(
+  Array.prototype.join.call(genericJoinReceiver, genericJoinSeparator),
+  'value',
+  'generic join result',
+);
+equal(
+  genericJoinOrder.join(','),
+  'get:length,separator,get:0',
+  'join reads length before coercing the separator',
+);
 equal(
   Array(300).fill('abc').join('::'),
   `abc${'::abc'.repeat(299)}`,
   'packed primitive join writes a long result directly',
 );
 throws(() => [Symbol('x')].join(','), 'join rejects implicit Symbol conversion');
+
+const originalObjectToLocaleString = Object.prototype.toLocaleString;
+let stringLocaleOverrideCalls = 0;
+Object.prototype.toLocaleString = function () {
+  stringLocaleOverrideCalls++;
+  return `localized:${this}`;
+};
+equal(
+  ['a', 'b'].toLocaleString(),
+  'localized:a,localized:b',
+  'string array toLocaleString observes an overridden inherited method',
+);
+equal(stringLocaleOverrideCalls, 2, 'string locale override is called per element');
+Object.prototype.toLocaleString = originalObjectToLocaleString;
+
+const originalStringToString = String.prototype.toString;
+let stringToStringOverrideCalls = 0;
+String.prototype.toString = function () {
+  stringToStringOverrideCalls++;
+  return `string:${originalStringToString.call(this)}`;
+};
+equal(
+  ['a', 'b'].toLocaleString(),
+  'string:a,string:b',
+  'string array toLocaleString observes an overridden toString method',
+);
+equal(stringToStringOverrideCalls, 2, 'string toString override is called per element');
+String.prototype.toString = originalStringToString;
+
+const objectLocaleDescriptor = Object.getOwnPropertyDescriptor(
+  Object.prototype,
+  'toLocaleString',
+);
+let objectLocaleGetterCalls = 0;
+Object.defineProperty(Object.prototype, 'toLocaleString', {
+  configurable: true,
+  get() {
+    objectLocaleGetterCalls++;
+    return function () { return 'object-accessor'; };
+  },
+});
+equal(
+  ['a', 'b'].toLocaleString(),
+  'object-accessor,object-accessor',
+  'string array toLocaleString invokes an inherited primitive accessor',
+);
+equal(objectLocaleGetterCalls, 2, 'inherited locale accessor is invoked per element');
+Object.defineProperty(Object.prototype, 'toLocaleString', objectLocaleDescriptor);
+
+const stringToStringDescriptor = Object.getOwnPropertyDescriptor(
+  String.prototype,
+  'toString',
+);
+let stringToStringGetterCalls = 0;
+Object.defineProperty(String.prototype, 'toString', {
+  configurable: true,
+  get() {
+    stringToStringGetterCalls++;
+    return function () { return 'string-accessor'; };
+  },
+});
+equal(
+  ['a', 'b'].toLocaleString(),
+  'string-accessor,string-accessor',
+  'Object toLocaleString invokes a primitive String prototype accessor',
+);
+equal(stringToStringGetterCalls, 2, 'String accessor is invoked per element');
+Object.defineProperty(String.prototype, 'toString', stringToStringDescriptor);
+
+const primitiveAccessorKey = '__ant_primitive_accessor__';
+Object.defineProperty(BigInt.prototype, primitiveAccessorKey, {
+  configurable: true,
+  get: function () {
+    'use strict';
+    return this;
+  },
+});
+const accessorSymbol = Symbol('accessor receiver');
+Object.defineProperty(Symbol.prototype, primitiveAccessorKey, {
+  configurable: true,
+  get: function () {
+    'use strict';
+    return this;
+  },
+});
+assert(
+  (17n)[primitiveAccessorKey] === 17n,
+  'BigInt prototype accessors receive the primitive receiver',
+);
+assert(
+  accessorSymbol[primitiveAccessorKey] === accessorSymbol,
+  'Symbol prototype accessors receive the primitive receiver',
+);
+delete BigInt.prototype[primitiveAccessorKey];
+delete Symbol.prototype[primitiveAccessorKey];
+
+Object.defineProperty(Object.prototype, primitiveAccessorKey, {
+  configurable: true,
+  value: 42,
+});
+Object.defineProperty(String.prototype, primitiveAccessorKey, {
+  configurable: true,
+  set(_) {},
+});
+equal(
+  'value'[primitiveAccessorKey],
+  undefined,
+  'a setter-only primitive property shadows older prototype data',
+);
+delete String.prototype[primitiveAccessorKey];
+delete Object.prototype[primitiveAccessorKey];
+
+equal(
+  ['a\0b', 'c'].toLocaleString(),
+  'a\0b,c',
+  'string array locale fast path preserves embedded NUL bytes',
+);
 
 const charCodes = Array(300).fill(65);
 equal(String.fromCharCode(...charCodes), 'A'.repeat(300), 'fromCharCode grows past stack storage');
