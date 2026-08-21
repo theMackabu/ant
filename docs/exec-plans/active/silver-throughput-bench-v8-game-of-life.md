@@ -495,6 +495,33 @@ an adjacent data file. The aggregate alone is insufficient.
   allocation in the audited concat, join, character, BigInt, and RegExp paths.
   Treat the allocation reductions as structural until pinned A/B measurements
   establish their runtime effect.
+- 2026-08-19: Keep property-key conversion separate from property-key storage.
+  A stack-first `property_key_view_t` now carries exact bytes or a Symbol
+  through ordinary property operations and materializes a pooled JS string
+  only when a Proxy trap must observe the key as a JavaScript value. This
+  restores the short-BigInt lookup path without reintroducing fixed-buffer
+  truncation, and roots newly produced keys across GC-capable work.
+- 2026-08-19: Cache the own data-property slot for the ordinary-number-hint
+  `valueOf` lookup, not the callable stored in that slot. Shape, prototype, and
+  IC-epoch validation reject structural or prototype changes, while reading
+  the current slot value preserves same-shape replacement semantics.
+- 2026-08-19: Keep the generic `Array.prototype.join` path single-pass because
+  getters and coercions are observable. Read `length` before converting the
+  separator, root values across the loop, and use a larger stack-first builder.
+  Add a direct-final-string `toLocaleString` path only for packed string arrays
+  whose String and Object prototype methods are still the exact builtins.
+- 2026-08-19: Keep direct String and Symbol property keys in an inline
+  `property_key_view_t` front end, with all coercing and allocating cases in an
+  out-of-line slow helper. Name the view's JS root and owned C buffer
+  explicitly, free only an owned buffer, and centralize the decision to pin a
+  key before Proxy materialization. Exact interned writes do not compute a
+  length when C-function exposure is disabled.
+- 2026-08-19: Resolve primitive property accessors in the shared property
+  lookup with the original primitive as receiver. This fixes inherited
+  `toLocaleString` and `toString` getters without a locale-only special case,
+  and preserves setter-only shadowing. Scan direct array elements before the
+  packed-string locale prototype guard and carry source ASCII metadata into
+  the final flat string instead of rescanning the output.
 
 ## Validation Status
 
@@ -510,6 +537,29 @@ an adjacent data file. The aggregate alone is insufficient.
   output are covered by `tests/test_string_coercion_allocation_paths.cjs`.
   The focused regression, Node differential checks, regex tests, GC tests, and
   the 3,962-test spec suite pass on the rebuilt candidate.
+- The 2026-08-19 coercion follow-up passes the focused Node differential file,
+  targeted Proxy/property/array tests, and the 3,962-test spec suite. Six-run
+  serial interleaved medians against Ant 0.14 show 20-digit BigInt property-key
+  paths 4.6-9.4% faster, generic join 2.1% faster, `Number(object)` 42.4%
+  faster, the shared-shape Number case 32.1% faster, and four- and 64-string
+  `toLocaleString` cases 121.3% and 143.5% higher-throughput. Checksums match.
+  These are diagnostic controls rather than Evidence Table results because the
+  host was not CPU-pinned. The 100-digit key cases remain correct where Ant
+  0.14 truncated or corrupted output. EarleyBoyer is bimodal in both binaries;
+  12 paired rounds have a -0.24% median current/release throughput difference,
+  so the earlier unpaired decline is not attributed to this change.
+- The implementation-review follow-up passes the focused coercion regression,
+  Node differentials for inherited primitive accessors, `maid preflight`,
+  `maid validate_changes`, `maid structure`, `maid knowledge`, the release
+  build, `git diff --check`, and the 3,962-test spec suite. An eight-round
+  fresh-process interleaved comparison used the same configured Meson tree:
+  before binary `5a8bc5a6206` and after binary `2c85be7830e2`. Checksums match;
+  median throughput improved 3.8% for `Object.hasOwn`, 3.7% for
+  `hasOwnProperty`, 2.4% for `propertyIsEnumerable`, 0.6% for
+  `getOwnPropertyDescriptor`, 27.8% for packed 64-string locale output, and
+  6.1% for packed 64-number locale output. These are attributable diagnostic
+  controls, not Evidence Table results, because the host was not CPU-pinned
+  and the checked-in PGO profile was not regenerated.
 - The Phase 3A fused numeric/ASCII template path and pinned acceptance evidence
   remain pending.
 

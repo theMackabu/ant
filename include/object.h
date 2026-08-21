@@ -260,6 +260,10 @@ static inline ant_private_table_t *ant_object_private_table(const ant_object_t *
   return sidecar ? (ant_private_table_t *)&sidecar->private_table : NULL;
 }
 
+static inline uint32_t ant_object_overflow_cap(const ant_object_t *obj) {
+  return obj->overflow_cap ? (1u << obj->overflow_cap) : 0;
+}
+
 static inline uint32_t ant_object_inobj_limit(const ant_object_t *obj) {
   if (!obj) return ANT_INOBJ_MAX_SLOTS;
   uint32_t limit = obj->inobj_limit;

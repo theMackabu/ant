@@ -36,6 +36,7 @@ void gc_pop_roots(ant_t *js, size_t mark);
 void gc_visit_roots(ant_t *js, gc_root_visitor_t visitor);
 void gc_temp_root_scope_begin(ant_t *js, gc_temp_root_scope_t *scope);
 void gc_temp_root_scope_end(gc_temp_root_scope_t *scope);
+void gc_temp_root_truncate(gc_temp_root_scope_t *scope, size_t mark);
 
 ant_value_t gc_temp_root_get(gc_temp_root_handle_t handle);
 gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t value);

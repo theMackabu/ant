@@ -11721,7 +11721,6 @@ ant_value_t sv_jit_try_compile_and_call(
   return result;
 }
 
-
 ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, sv_func_t *func,
@@ -11729,12 +11728,16 @@ ant_value_t sv_jit_try_osr(
 ) {
   sv_closure_t osr_closure;
   sv_closure_t *closure;
-  if (vtype(frame->callee) == T_FUNC) {
-    closure = js_func_closure(frame->callee);
-  } else {
+  if (vtype(frame->callee) == T_FUNC) closure = js_func_closure(frame->callee);
+  else {
     memset(&osr_closure, 0, sizeof(osr_closure));
-    osr_closure.func     = func;
-    osr_closure.upvalues = frame->upvalues;
+    osr_closure.func       = func;
+    osr_closure.upvalues   = frame->upvalues;
+    osr_closure.js         = js;
+    osr_closure.bound_this = js_mkundef();
+    osr_closure.super_val  = js_mkundef();
+    osr_closure.module_ctx = js_mkundef();
+    osr_closure.gc_epoch   = gc_get_epoch();
     closure = &osr_closure;
   }
 

@@ -82,6 +82,10 @@ gc_temp_root_handle_t gc_temp_root_add(gc_temp_root_scope_t *scope, ant_value_t 
   return handle;
 }
 
+void gc_temp_root_truncate(gc_temp_root_scope_t *scope, size_t mark) {
+  if (scope && mark < scope->len) scope->len = mark;
+}
+
 bool gc_temp_root_set(gc_temp_root_handle_t handle, ant_value_t value) {
   if (!handle.scope || handle.index >= handle.scope->len) return false;
   handle.scope->items[handle.index] = value;
