@@ -68,13 +68,15 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
 
     size_t idx, max;
     yyjson_val *item;
-    
+    size_t mark = roots->len;
+
     yyjson_arr_foreach(val, idx, max, item) {
       ant_value_t elem = yyjson_to_jsval(js, item, roots);
       if (is_err(elem)) return elem;
       js_arr_push(js, arr, elem);
+      gc_temp_root_truncate(roots, mark);
     }
-    
+
     return arr;
   }
   
@@ -88,10 +90,13 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     if (ptr && count > 1) js_obj_ensure_prop_capacity(ptr, (uint32_t)count);
 
     size_t idx, max; yyjson_val *key, *item;
+    size_t mark = roots->len;
+
     yyjson_obj_foreach(val, idx, max, key, item) {
       ant_value_t v = yyjson_to_jsval(js, item, roots);
       if (is_err(v)) return v;
       if (is_err(mkprop_append_fast(js, obj, yyjson_get_str(key), yyjson_get_len(key), v))) return json_parse_oom(js);
+      gc_temp_root_truncate(roots, mark);
     }
 
     return obj;
@@ -839,6 +844,7 @@ static ant_value_t apply_reviver(
 ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
+  
   gc_temp_root_scope_t temp_roots;
   gc_temp_root_scope_begin(js, &temp_roots);
   
