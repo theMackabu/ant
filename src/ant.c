@@ -10637,7 +10637,7 @@ static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
   return new_len;
 }
 
-void js_arr_reserve(ant_t *js, ant_value_t arr, ant_offset_t n) {
+void js_arr_reserve(ant_t *js, ant_value_t arr, uint32_t n) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) return;
   ant_offset_t doff = get_dense_buf(arr);
   if (!doff) return;

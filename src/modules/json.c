@@ -64,7 +64,7 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     if (!json_temp_pin(roots, arr)) return json_parse_oom(js);
 
     size_t count = yyjson_arr_size(val);
-    if (count > 4) js_arr_reserve(js, arr, (ant_offset_t)count);
+    if (count > MAX_DENSE_INITIAL_CAP) js_arr_reserve(js, arr, (uint32_t)count);
 
     size_t idx, max;
     yyjson_val *item;
@@ -87,7 +87,7 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
 
     size_t count = yyjson_obj_size(val);
     ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-    if (ptr && count > 1) js_obj_ensure_prop_capacity(ptr, (uint32_t)count);
+    if (ptr && count > 1) (void)js_obj_ensure_prop_capacity(ptr, (uint32_t)count);
 
     size_t idx, max; yyjson_val *key, *item;
     size_t mark = roots->len;
