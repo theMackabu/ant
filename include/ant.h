@@ -170,6 +170,7 @@ void js_set_symbol(ant_t *, ant_value_t obj, const char *key, ant_value_t val);
 bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value);
 void js_merge_obj(ant_t *, ant_value_t dst, ant_value_t src);
 void js_arr_push(ant_t *, ant_value_t arr, ant_value_t val);
+void js_arr_reserve(ant_t *, ant_value_t arr, ant_offset_t n);
 void js_set_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_wb(ant_t *, ant_value_t obj, ant_value_t proto);
 void js_set_proto_init(ant_value_t obj, ant_value_t proto);

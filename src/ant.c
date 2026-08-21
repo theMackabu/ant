@@ -325,16 +325,19 @@ bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed) {
 
   if (needed > inobj_limit) {
     uint32_t overflow_needed = needed - inobj_limit;
-    if (overflow_needed > obj->overflow_cap) {
-      uint32_t new_cap = obj->overflow_cap ? (uint32_t)obj->overflow_cap * 2 : 4;
-      while (new_cap < overflow_needed) new_cap *= 2;
+    if (overflow_needed > ant_object_overflow_cap(obj)) {
+      uint8_t shift = obj->overflow_cap ? (uint8_t)(obj->overflow_cap + 1) : 2;
+      while (shift < 31 && (1u << shift) < overflow_needed) shift++;
+      if ((1u << shift) < overflow_needed) return false;
+
+      ant_value_t *next = realloc(
+        obj->overflow_prop,
+        sizeof(*next) * (size_t)(1u << shift)
+      );
       
-      if (new_cap > 255) new_cap = overflow_needed;
-      ant_value_t *next = realloc(obj->overflow_prop, sizeof(*next) * new_cap);
       if (!next) return false;
-      
       obj->overflow_prop = next;
-      obj->overflow_cap = (uint8_t)new_cap;
+      obj->overflow_cap = shift;
     }
   } else if (obj->overflow_prop) {
     free(obj->overflow_prop);
@@ -3474,6 +3477,31 @@ ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t l
   const char *interned = intern_string(key, len);
   if (!interned) return js_mkerr(js, "oom");
   return mkprop_interned(js, obj, interned, v, 0);
+}
+
+ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
+  const char *interned = intern_string(key, len);
+  if (!interned) return js_mkerr(js, "oom");
+
+  obj = js_as_obj(obj);
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || !ptr->shape) return js_mkerr(js, "invalid object");
+
+  uint32_t slot = 0;
+  int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
+  
+  if (found >= 0) slot = (uint32_t)found;
+  else if (!ant_shape_add_interned_tr(&ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &slot))
+    return js_mkerr(js, "oom");
+
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape)))
+    return js_mkerr(js, "oom");
+
+  ant_object_prop_set_unchecked(ptr, slot, v);
+  gc_write_barrier(js, ptr, v);
+  ant_prototype_property_write_invalidate(js, ptr, interned);
+  
+  return v;
 }
 
 static void set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t val) {
@@ -10607,6 +10635,13 @@ static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
   array_len_set(js, arr, len);
 
   return new_len;
+}
+
+void js_arr_reserve(ant_t *js, ant_value_t arr, ant_offset_t n) {
+  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) return;
+  ant_offset_t doff = get_dense_buf(arr);
+  if (!doff) return;
+  if (n > dense_capacity(doff)) dense_grow(js, arr, n);
 }
 
 void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
