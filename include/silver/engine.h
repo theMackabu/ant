@@ -193,8 +193,6 @@ static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, b
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 
-#ifdef ANT_JIT
-
 static constexpr uint32_t SV_TFB_CTOR_PROP_BINS = 17;
 static constexpr uint32_t SV_TFB_CTOR_PROP_OVERFLOW_FROM = SV_TFB_CTOR_PROP_BINS - 1;
 
@@ -221,8 +219,6 @@ static_assert(
   _Alignof(sv_func_sidecar_t) > ant_sidecar,
   "function sidecar pointer uses low-bit tag"
 );
-
-#endif
 
 typedef struct {
   const char *name;
@@ -286,13 +282,11 @@ struct sv_func {
     sv_func_metadata_t *metadata;
   } type_data;
 
-#ifdef ANT_JIT
   void *jit_code;
   uint8_t *type_feedback;
   uint8_t *local_type_feedback;
+  
   sv_call_target_fb_t *call_target_fb;
-#endif
-
   uint64_t gc_epoch;
 
   int code_len;
@@ -323,13 +317,10 @@ struct sv_func {
   bool is_curried_step: 1;
   bool is_fusable_leaf: 1;
 
-#ifdef ANT_JIT
   bool jit_compile_failed: 1;
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
-#endif
 
-#ifdef ANT_JIT
   uint32_t call_count;
   uint32_t back_edge_count;
   uint32_t jit_bailout_tfb_ver;
@@ -338,7 +329,6 @@ struct sv_func {
 
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
-#endif
 };
 
 static inline sv_obj_site_cache_t *sv_obj_site_for_offset(
@@ -638,7 +628,6 @@ ant_value_t sv_call_compiled_zero_upvalues(
   ant_value_t this_val, ant_value_t *args, int argc
 );
 
-#ifdef ANT_JIT
 typedef struct {
   bool active;
   int bc_offset;
@@ -646,7 +635,6 @@ typedef struct {
   int n_locals;
   ant_value_t *lp;
 } sv_jit_osr_t;
-#endif
 
 #define SV_TRY_MAX  64
 #define SV_TDZ      T_EMPTY
@@ -683,7 +671,6 @@ struct sv_vm {
   int suspended_saved_fp;
   ant_value_t suspended_resume_value;
 
-#ifdef ANT_JIT
   struct {
     bool active;
     int64_t ip_offset;
@@ -696,7 +683,6 @@ struct sv_vm {
   } jit_resume;
 
   sv_jit_osr_t jit_osr;
-#endif
 };
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }
@@ -1240,8 +1226,6 @@ static inline ant_value_t sv_call_closure(
   return result;
 }
 
-#ifdef ANT_JIT
-
 #define SV_TFB_NUM   (1 << 0)
 #define SV_TFB_STR   (1 << 1)
 #define SV_TFB_BOOL  (1 << 2)
@@ -1572,29 +1556,6 @@ static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) 
   
   return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - fb->samples);
 }
-#endif
-
-#ifndef ANT_JIT
-static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
-  (void)ctor_func;
-  (void)instance;
-}
-
-static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
-  (void)ctor_func;
-  return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-}
-
-static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
-  (void)ctor_func;
-  return false;
-}
-
-static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
-  (void)ctor_func;
-  return 0;
-}
-#endif
 
 static inline ant_value_t sv_call_resolve_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
@@ -1604,7 +1565,6 @@ static inline ant_value_t sv_call_resolve_closure(
     return sv_call_generator_closure(vm, js, closure, callee_func, ctx);
   if (closure->func->is_async)
     return sv_call_async_closure(vm, js, closure, callee_func, ctx);
-#ifdef ANT_JIT
   if (!closure->func->is_generator) {
     sv_func_t *fn = closure->func;
     if (fn->jit_code) {
@@ -1628,7 +1588,6 @@ static inline ant_value_t sv_call_resolve_closure(
       }
     }
   }
-#endif
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
 }
 

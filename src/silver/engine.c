@@ -382,7 +382,6 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
   }
 }
 
-#ifdef ANT_JIT
 static inline void sv_clear_jit_resume(sv_vm_t *vm) {
   vm->jit_resume.active = false;
   vm->jit_resume.ip_offset = 0;
@@ -393,7 +392,6 @@ static inline void sv_clear_jit_resume(sv_vm_t *vm) {
   vm->jit_resume.vstack = NULL;
   vm->jit_resume.vstack_sp = 0;
 }
-#endif
 
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col) {
   if (!func || !func->debug->srcpos || func->debug->srcpos_count <= 0) return false;
@@ -1048,7 +1046,6 @@ static inline ant_value_t sv_execute_entry_common(
   return result;
 }
 
-#ifdef ANT_JIT
 static inline ant_value_t sv_try_direct_closure_jit(
   sv_vm_t *vm, ant_t *js, sv_func_t *caller_func, uint8_t *caller_ip, sv_frame_t *caller_frame,
   sv_closure_t *closure, ant_value_t jit_this, ant_value_t *call_args, int call_argc
@@ -1103,7 +1100,6 @@ static inline ant_value_t sv_try_direct_closure_jit(
   }
   return jit_result;
 }
-#endif
 
 ant_value_t sv_closure_materialize_func_obj(ant_t *js, sv_closure_t *c,
                                             ant_value_t func_val) {
@@ -1231,14 +1227,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   if (!resuming) {
   ant_value_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
   if (is_err(stage_err)) {
-    #ifdef ANT_JIT
     if (vm->jit_resume.active) sv_clear_jit_resume(vm);
-    #endif
     vm_result = stage_err;
     goto sv_leave;
   }}
   
-  #ifdef ANT_JIT
   if (!resuming && vm->jit_resume.active) {
     ip = func->code + vm->jit_resume.ip_offset;
     frame->ip = ip;
@@ -1267,7 +1260,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       uv->location = &entry_lp[slot];
     }}
   }
-  #endif
   
   if (!resuming) {
     frame->bp = entry_bp;
@@ -1277,7 +1269,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   ant_value_t *bp = frame->bp;
   ant_value_t *lp = frame->lp;
 
-  #ifdef ANT_JIT
   if (!resuming && vm->jit_resume.active) {
     for (int64_t i = 0; i < vm->jit_resume.vstack_sp; i++)
       vm->stack[vm->sp++] = vm->jit_resume.vstack[i];
@@ -1325,7 +1316,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
     sv_clear_jit_resume(vm);
   }
-  #endif
 
   static const void *dispatch[OP__COUNT] = {
     #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = &&L_##name,
@@ -1344,7 +1334,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   #define DISPATCH() goto *dispatch[*ip]
   #define NEXT(n)    ({ ip += (n); DISPATCH(); })
 
-  #ifdef ANT_JIT
   #define JIT_OSR_BACK_EDGE() do {                                          \
     if (!func->jit_compile_failed) {                                        \
       if (!sv_func_type_feedback(func)) sv_tfb_ensure(func);                \
@@ -1371,9 +1360,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       }                                                                     \
     }                                                                       \
   } while (0)
-  #else
-  #define JIT_OSR_BACK_EDGE() ((void)0)
-  #endif
   if (resuming) {
     bool yield_star_resume = ip && (
       *ip == OP_YIELD_STAR_NEXT ||
@@ -1671,7 +1657,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))
           goto call_fallback;
         if (closure->func->is_async || closure->func->is_generator) goto call_fallback;
-        #ifdef ANT_JIT
         {
           ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : js_mkundef();
@@ -1685,7 +1670,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
             DISPATCH();
           }
         }
-        #endif
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
@@ -1791,7 +1775,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))
           goto call_method_fallback;
         if (closure->func->is_async || closure->func->is_generator) goto call_method_fallback;
-        #ifdef ANT_JIT
         {
           ant_value_t jit_this = sv_closure_has_lexical_this(closure)
             ? closure->bound_this : call_this;
@@ -1805,7 +1788,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
             DISPATCH();
           }
         }
-        #endif
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
           sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;

@@ -139,6 +139,7 @@ base64_dep = declare_dependency(
   compile_args: ['-DBASE64_STATIC_DEFINE'],
 )
 
+mir_dep = subproject('mir').get_variable('mir_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
@@ -281,13 +282,7 @@ ant_runtime_deps = [
   double_conversion_dep, wirecall, skim_dep,
 ]
 
-ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps
-
-if get_option('jit')
-  mir_dep = subproject('mir').get_variable('mir_dep')
-  ant_deps += [mir_dep]
-  add_project_arguments('-DANT_JIT', language: 'c')
-endif
+ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps + mir_dep
 
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep]

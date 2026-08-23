@@ -1,9 +1,9 @@
 #ifndef SILVER_JIT_H
 #define SILVER_JIT_H
 
-#ifdef ANT_JIT
 #include "silver/engine.h"
 
+// TODO: make more dynamic
 #define SV_JIT_OSR_THRESHOLD 500
 
 void sv_jit_init(ant_t *js);
@@ -20,5 +20,4 @@ ant_value_t sv_jit_try_osr(
   int bc_offset
 );
 
-#endif
 #endif

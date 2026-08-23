@@ -31,9 +31,6 @@ script = "ant .github/agents/route_validation.js"
 [tasks.setup]
 script = ['meson subprojects download', 'meson setup build --wipe']
 
-[tasks.no_jit]
-script = ['meson subprojects download', 'meson setup build --wipe -Djit=false']
-
 [tasks.asan]
 script = ['meson subprojects download', 'meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false']
 

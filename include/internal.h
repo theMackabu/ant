@@ -225,6 +225,7 @@ typedef struct {
 
 struct ant_isolate_t {
   sv_vm_t *vm;
+  void *jit_ctx;
 
   ant_object_t *objects;
   ant_object_t *permanent_objects;
@@ -252,10 +253,6 @@ struct ant_isolate_t {
 
   const char *code;
   const char *filename;
-
-  #ifdef ANT_JIT
-  void *jit_ctx;
-  #endif
   
   ant_value_t Ant;
   ant_value_t global;
@@ -431,11 +428,9 @@ struct ant_isolate_t {
     bool kept_alive_overflow;
   } weak_gc;
 
-  #ifdef ANT_JIT
   uint32_t jit_active_depth;
-  #endif
-
   uint32_t vm_exec_depth;
+  
   bool microtasks_draining;
   struct coroutine *active_async_coro;
 

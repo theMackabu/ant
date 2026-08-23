@@ -81,9 +81,6 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
   if (nargs < 1) return js_mkerr(js, "Ant.raw.ctorPropFeedback() requires 1 argument");
   if (vtype(args[0]) != T_FUNC) return js_mkerr(js, "constructor must be a function");
 
-#ifndef ANT_JIT
-  return js_mkerr(js, "constructor property feedback requires ANT_JIT");
-#else
   ant_value_t ctor = args[0];
   ant_value_t ctor_obj = js_func_obj(ctor);
   ant_value_t target_func = js_get_slot(ctor_obj, SLOT_TARGET_FUNC);
@@ -109,7 +106,6 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
   if (fn->debug->filename) js_set(js, out, "filename", js_mkstr(js, fn->debug->filename, strlen(fn->debug->filename)));
 
   return out;
-#endif
 }
 
 static ant_value_t js_raw_gc_mark_profile(ant_t *js, ant_value_t *args, int nargs) {

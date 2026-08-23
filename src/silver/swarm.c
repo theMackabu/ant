@@ -1,5 +1,3 @@
-#ifdef ANT_JIT
-
 #include "silver/swarm.h"
 #include "silver/glue.h"
 #include "silver/engine.h"
@@ -11783,4 +11781,3 @@ ant_value_t sv_jit_try_osr(
   return result;
 }
 
-#endif 

@@ -310,7 +310,6 @@ static inline bool sv_op_call_call_fused(
   ant_value_t *args1, int n1, ant_value_t *args2, int n2,
   bool materialize_args2, ant_value_t *result_out
 ) {
-#ifdef ANT_JIT
   if (n1 == 1 && vtype(xv) == T_FUNC) {
     sv_closure_t *c1 = js_func_closure(xv);
     sv_func_t *f1 = c1->func;
@@ -395,17 +394,6 @@ static inline bool sv_op_call_call_fused(
       return true;
     }
   }
-#else
-  (void)vm;
-  (void)js;
-  (void)xv;
-  (void)args1;
-  (void)n1;
-  (void)args2;
-  (void)n2;
-  (void)materialize_args2;
-  (void)result_out;
-#endif
   return false;
 }
 

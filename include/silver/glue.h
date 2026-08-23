@@ -1,7 +1,6 @@
 #ifndef SILVER_GLUE_H
 #define SILVER_GLUE_H
 
-#ifdef ANT_JIT
 #include "silver/engine.h"
 
 int64_t jit_helper_stack_overflow(ant_t *js);
@@ -316,5 +315,4 @@ ant_value_t jit_helper_str_flush_local(
   ant_value_t *locals, uint16_t slot_idx
 );
 
-#endif
 #endif

@@ -1,5 +1,3 @@
-#ifdef ANT_JIT
-
 #include <math.h>
 #include <stdlib.h>
 
@@ -1252,4 +1250,3 @@ ant_value_t jit_helper_new(
   return final_obj;
 }
 
-#endif

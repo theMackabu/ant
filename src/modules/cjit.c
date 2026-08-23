@@ -18,15 +18,12 @@
 #include "modules/bigint.h"
 #include "modules/cjit.h"
 
-#ifdef ANT_JIT
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmacro-redefined"
 #include "c2mir/c2mir.h"
 #include "mir-gen.h"
 #pragma GCC diagnostic pop
-#endif
 
-#ifdef ANT_JIT
 typedef struct {
   const char *data;
   size_t len;
@@ -843,11 +840,6 @@ static ant_value_t js_unsafe_c(ant_t *js, ant_value_t *args, int nargs) {
 
   return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template or called with options");
 }
-#else
-static ant_value_t js_unsafe_c(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mkerr(js, "Ant.unsafe.c() requires a JIT-enabled Ant build");
-}
-#endif
 
 void init_cjit_module(ant_t *js, ant_value_t unsafe_obj) {
   js_set(js, unsafe_obj, "c", js_mkfun_arity(js_unsafe_c, 1));
