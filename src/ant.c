@@ -9908,15 +9908,10 @@ static ant_value_t builtin_object_isSealed(ant_t *js, ant_value_t *args, int nar
   return js_false;
 }
 
-typedef struct {
-  // TODO: cleanup
-  ant_value_t result;
-} object_from_entries_iter_ctx_t;
-
 static iter_action_t object_from_entries_iter_cb(ant_t *js, ant_value_t entry, void *ctx, ant_value_t *out) {
-  object_from_entries_iter_ctx_t *state = ctx;
+  ant_value_t *result = ctx;
   GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, state->result);
+  GC_ROOT_PIN(js, *result);
   GC_ROOT_PIN(js, entry);
 
   if (vtype(entry) != T_ARR && vtype(entry) != T_OBJ) {
@@ -9947,9 +9942,9 @@ static iter_action_t object_from_entries_iter_cb(ant_t *js, ant_value_t entry, v
     GC_ROOT_PIN(js, key_view.js_key);
 
   ant_value_t added = key_view.is_symbol
-    ? mkprop(js, state->result, key_view.js_key, val, 0)
+    ? mkprop(js, *result, key_view.js_key, val, 0)
     : mkprop_bytes(
-      js, state->result, key_view.bytes, 
+      js, *result, key_view.bytes,
       key_view.length, val, 0
     );
     
@@ -9960,9 +9955,9 @@ static iter_action_t object_from_entries_iter_cb(ant_t *js, ant_value_t entry, v
     return ITER_ERROR;
   }
 
-  *out = state->result;
+  *out = *result;
   GC_ROOT_RESTORE(js, root_mark);
-  
+
   return ITER_CONTINUE;
 }
 
@@ -9973,12 +9968,10 @@ static ant_value_t builtin_object_fromEntries(ant_t *js, ant_value_t *args, int 
   ant_value_t iterable = args[0];
   GC_ROOT_PIN(js, iterable);
 
-  object_from_entries_iter_ctx_t ctx = {
-    .result = js_mkobj(js),
-  };
-  GC_ROOT_PIN(js, ctx.result);
+  ant_value_t result = js_mkobj(js);
+  GC_ROOT_PIN(js, result);
 
-  ant_value_t iter_result = iter_foreach(js, iterable, object_from_entries_iter_cb, &ctx);
+  ant_value_t iter_result = iter_foreach(js, iterable, object_from_entries_iter_cb, &result);
   if (is_err(iter_result)) {
     if (vtype(iterable) == T_ARR || vtype(iterable) == T_OBJ || vtype(iterable) == T_FUNC) {
       GC_ROOT_RESTORE(js, root_mark);
@@ -9989,7 +9982,6 @@ static ant_value_t builtin_object_fromEntries(ant_t *js, ant_value_t *args, int 
     return err;
   }
 
-  ant_value_t result = ctx.result;
   GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
