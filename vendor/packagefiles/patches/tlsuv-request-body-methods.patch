@@ -1,56 +1,23 @@
 diff --git a/src/http.c b/src/http.c
 --- a/src/http.c
 +++ b/src/http.c
-@@ -1043,10 +1043,6 @@ void tlsuv_http_req_end(tlsuv_http_req_t *req) {
- }
- 
+@@ -1045,6 +1045,2 @@ void tlsuv_http_req_end(tlsuv_http_req_t *req) {
  int tlsuv_http_req_data(tlsuv_http_req_t *req, const char *body, size_t bodylen, tlsuv_http_body_cb cb) {
 -    if (strcmp(req->method, "POST") != 0 && strcmp(req->method, "PUT") != 0) {
 -        return UV_EINVAL;
 -    }
 -
      if (req->state > headers_sent) {
-         return UV_EINVAL;
-     }
 diff --git a/src/http_req.c b/src/http_req.c
 --- a/src/http_req.c
 +++ b/src/http_req.c
-@@ -277,22 +277,22 @@ ssize_t http_req_write(tlsuv_http_req_t* req, char* buf, size_t maxlen) {
-     }
-     CHECK_APPEND(len, snprintf(buf + len, maxlen - len, " HTTP/1.1\r\n"));
- 
--    if (strcmp(req->method, "POST") == 0 ||
--        strcmp(req->method, "PUT") == 0 ||
+@@ -280,7 +280,8 @@ ssize_t http_req_write(tlsuv_http_req_t* req, char* buf, size_t maxlen) {
+     if (strcmp(req->method, "POST") == 0 ||
+         strcmp(req->method, "PUT") == 0 ||
 -        strcmp(req->method, "PATCH") == 0) {
--        if (!req->req_chunked && req->req_body_size == -1) {
--            size_t req_len = 0;
--            struct body_chunk_s* chunk = req->req_body;
--            while (chunk != NULL) {
--                req_len += chunk->len;
--                chunk = chunk->next;
--            }
--            req->req_body_size = (ssize_t)req_len;
--            char length_str[16];
--            snprintf(length_str, sizeof(length_str), "%zd", req_len);
--            set_http_header(&req->req_headers, "Content-Length", length_str);
--        }
--    }
-+    if (!req->req_chunked && req->req_body_size == -1 &&
-+        (req->req_body != NULL ||
-+         strcmp(req->method, "POST") == 0 ||
-+         strcmp(req->method, "PUT") == 0 ||
-+         strcmp(req->method, "PATCH") == 0)) {
-+        size_t req_len = 0;
-+        struct body_chunk_s* chunk = req->req_body;
-+        while (chunk != NULL) {
-+            req_len += chunk->len;
-+            chunk = chunk->next;
-+        }
-+        req->req_body_size = (ssize_t)req_len;
-+        char length_str[16];
-+        snprintf(length_str, sizeof(length_str), "%zd", req_len);
-+        set_http_header(&req->req_headers, "Content-Length", length_str);
-+    }
- 
-     tlsuv_http_hdr* h;
-     LIST_FOREACH(h, &req->req_headers, _next)
++        strcmp(req->method, "PATCH") == 0 ||
++        req->req_body != NULL) {
+         if (!req->req_chunked && req->req_body_size == -1) {
+             size_t req_len = 0;
+             struct body_chunk_s* chunk = req->req_body;
+             while (chunk != NULL) {
