@@ -8824,9 +8824,9 @@ static ant_value_t object_has_own(
 }
 
 static ant_value_t builtin_object_hasOwn(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return mkval(T_BOOL, 0);
+  ant_value_t target = nargs >= 1 ? js_object_view(args[0]) : js_mkundef();
   ant_value_t key = nargs >= 2 ? args[1] : js_mkundef();
-  return object_has_own(js, js_object_view(args[0]), key);
+  return object_has_own(js, target, key);
 }
 
 static ant_value_t builtin_object_groupBy(ant_t *js, ant_value_t *args, int nargs) {
