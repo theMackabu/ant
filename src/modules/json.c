@@ -3,7 +3,6 @@
 #include <string.h>
 #include <math.h>
 #include <yyjson.h>
-#include <uthash.h>
 
 #include "gc/roots.h"
 #include "utf8.h"
@@ -14,20 +13,6 @@
 #include "silver/engine.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
-
-typedef struct {
-  const char *key;
-  size_t key_len;
-  UT_hash_handle hh;
-} json_key_entry_t;
-
-static void json_key_hash_free(json_key_entry_t **hash) {
-  json_key_entry_t *entry, *tmp;
-  HASH_ITER(hh, *hash, entry, tmp) {
-    HASH_DEL(*hash, entry);
-    free(entry);
-  }
-}
 
 static inline bool json_value_needs_temp_root(ant_value_t value) {
   if (value <= NANBOX_PREFIX) return false;
@@ -77,15 +62,21 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     ant_value_t arr = js_mkarr(js);
     if (is_err(arr)) return arr;
     if (!json_temp_pin(roots, arr)) return json_parse_oom(js);
+
+    size_t count = yyjson_arr_size(val);
+    if (count > MAX_DENSE_INITIAL_CAP) js_arr_reserve(js, arr, (uint32_t)count);
+
     size_t idx, max;
     yyjson_val *item;
-    
+    size_t mark = roots->len;
+
     yyjson_arr_foreach(val, idx, max, item) {
       ant_value_t elem = yyjson_to_jsval(js, item, roots);
       if (is_err(elem)) return elem;
       js_arr_push(js, arr, elem);
+      gc_temp_root_truncate(roots, mark);
     }
-    
+
     return arr;
   }
   
@@ -93,53 +84,21 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     ant_value_t obj = js_newobj(js);
     if (is_err(obj)) return obj;
     if (!json_temp_pin(roots, obj)) return json_parse_oom(js);
-    
+
+    size_t count = yyjson_obj_size(val);
+    ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+    if (ptr && count > 1) (void)js_obj_ensure_prop_capacity(ptr, (uint32_t)count);
+
     size_t idx, max; yyjson_val *key, *item;
-    json_key_entry_t *hash = NULL, *entry;
+    size_t mark = roots->len;
 
     yyjson_obj_foreach(val, idx, max, key, item) {
-    const char *k = yyjson_get_str(key);
-
-    size_t klen = yyjson_get_len(key);
-    ant_value_t v = yyjson_to_jsval(js, item, roots);
-    if (is_err(v)) {
-      json_key_hash_free(&hash);
-      return v;
+      ant_value_t v = yyjson_to_jsval(js, item, roots);
+      if (is_err(v)) return v;
+      if (is_err(mkprop_append_fast(js, obj, yyjson_get_str(key), yyjson_get_len(key), v))) return json_parse_oom(js);
+      gc_temp_root_truncate(roots, mark);
     }
 
-    HASH_FIND(hh, hash, k, klen, entry);
-    if (entry) {
-      const char *interned = intern_string(k, klen);
-      ant_prop_loc_t loc = interned ? lkp_interned(obj, interned) : ANT_PROP_LOC_NONE;
-
-      if (loc.obj) js_prop_store(js, loc, v);
-      else {
-        ant_value_t key_str = js_mkstr(js, k, klen);
-        if (is_err(key_str)) {
-          json_key_hash_free(&hash);
-          return key_str;
-        }
-        ant_value_t set = js_setprop(js, obj, key_str, v);
-        if (is_err(set)) {
-          json_key_hash_free(&hash);
-          return set;
-        }
-      }
-    } else {
-      if (is_err(js_mkprop_fast(js, obj, k, klen, v))) {
-        json_key_hash_free(&hash);
-        return json_parse_oom(js);
-      }
-      entry = malloc(sizeof(json_key_entry_t));
-      if (!entry) {
-        json_key_hash_free(&hash);
-        return json_parse_oom(js);
-      }
-      entry->key = k; entry->key_len = klen;
-      HASH_ADD_KEYPTR(hh, hash, entry->key, entry->key_len, entry);
-    }}
-
-    json_key_hash_free(&hash);
     return obj;
   }
   
@@ -885,6 +844,7 @@ static ant_value_t apply_reviver(
 ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
+  
   gc_temp_root_scope_t temp_roots;
   gc_temp_root_scope_begin(js, &temp_roots);
   

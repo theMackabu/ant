@@ -38,6 +38,7 @@ typedef struct {
 ant_shape_t *ant_shape_new(void);
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit);
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape);
+ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra);
 
 void ant_shape_retain(ant_shape_t *shape);
 void ant_shape_release(ant_shape_t *shape);

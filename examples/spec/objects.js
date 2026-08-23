@@ -181,6 +181,50 @@ testDeep(
   { a: 1, b: 2 }
 );
 
+test(
+  'Object.fromEntries preserves native function identity under an alias',
+  Object.fromEntries([['alias', Math.max]]).alias === Math.max,
+  true
+);
+test(
+  'Object.fromEntries does not rename an aliased native function',
+  Object.fromEntries([['alias', Math.max]]).alias.name,
+  Math.max.name
+);
+test(
+  'Object.fromEntries aliases of one native function match each other',
+  Object.fromEntries([['a', Array.prototype.push]]).a ===
+    Object.fromEntries([['b', Array.prototype.push]]).b,
+  true
+);
+test(
+  'Object.fromEntries preserves native function identity under a symbol key',
+  (() => {
+    const key = Symbol('alias');
+    return Object.fromEntries([[key, Math.min]])[key] === Math.min;
+  })(),
+  true
+);
+test(
+  'Object.fromEntries result inherits from Object.prototype',
+  Object.getPrototypeOf(Object.fromEntries([['a', 1]])) === Object.prototype,
+  true
+);
+test(
+  'Object.fromEntries result has Object.prototype methods',
+  Object.fromEntries([['a', 1]]).hasOwnProperty('a'),
+  true
+);
+test(
+  'Object.defineProperty preserves native function identity under an alias',
+  (() => {
+    const o = {};
+    Object.defineProperty(o, 'alias', { value: Math.max, configurable: true });
+    return o.alias === Math.max;
+  })(),
+  true
+);
+
 let descriptorSource = {};
 const descriptorSymbol = Symbol('descriptor');
 Object.defineProperty(descriptorSource, 'hidden', {

@@ -311,6 +311,7 @@ typedef struct {
   bool has_accept_language;
   bool has_sec_fetch_mode;
   bool has_accept_encoding;
+  bool has_content_length;
 } fetch_header_builder_t;
 
 static void fetch_collect_header(const char *name, const char *value, void *ctx) {
@@ -323,6 +324,8 @@ static void fetch_collect_header(const char *name, const char *value, void *ctx)
   if (name && strcasecmp(name, "accept-language") == 0) builder->has_accept_language = true;
   if (name && strcasecmp(name, "sec-fetch-mode") == 0) builder->has_sec_fetch_mode = true;
   if (name && strcasecmp(name, "accept-encoding") == 0) builder->has_accept_encoding = true;
+  if (name && strcasecmp(name, "content-length") == 0) builder->has_content_length = true;
+
   header = calloc(1, sizeof(ant_http_header_t));
   if (!header) {
     builder->failed = true;
@@ -331,6 +334,7 @@ static void fetch_collect_header(const char *name, const char *value, void *ctx)
 
   header->name = strdup(name ? name : "");
   header->value = strdup(value ? value : "");
+
   if (!header->name || !header->value) {
     free(header->name);
     free(header->value);
@@ -370,11 +374,14 @@ static bool fetch_append_header(fetch_header_builder_t *builder, const char *nam
 
 static ant_http_header_t *fetch_build_http_headers(ant_value_t request_obj) {
   fetch_header_builder_t builder = {0};
+  request_data_t *request = request_get_data(request_obj);
+
   char user_agent[256] = {0};
+  char content_length[32] = {0};
 
   builder.tail = &builder.head;
   headers_for_each(request_get_headers(request_obj), fetch_collect_header, &builder);
-  
+
   if (builder.failed) {
     ant_http_headers_free(builder.head);
     return NULL;
@@ -395,6 +402,13 @@ static ant_http_header_t *fetch_build_http_headers(ant_value_t request_obj) {
   if (!builder.has_accept_encoding && !fetch_append_header(&builder, "accept-encoding", "br, gzip, deflate")) {
     ant_http_headers_free(builder.head);
     return NULL;
+  }
+  if (request && request->has_body && !request->body_is_stream && !builder.has_content_length) {
+    snprintf(content_length, sizeof(content_length), "%zu", request->body_size);
+    if (!fetch_append_header(&builder, "content-length", content_length)) {
+      ant_http_headers_free(builder.head);
+      return NULL;
+    }
   }
   if (builder.has_user_agent) return builder.head;
 
