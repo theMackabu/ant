@@ -561,16 +561,24 @@ static bool cron_fields_from_epoch(
   cron_fields_t *out,
   ant_value_t *error
 ) {
-  (void)js;
-  (void)error;
   time_t seconds = (time_t)(epoch_ms / 1000);
   struct tm value = {0};
 #ifdef _WIN32
-  if (zone.utc) gmtime_s(&value, &seconds);
-  else localtime_s(&value, &seconds);
+  errno_t result = zone.utc
+    ? gmtime_s(&value, &seconds)
+    : localtime_s(&value, &seconds);
+  if (result != 0) {
+    *error = js_mkerr(js, "failed to convert cron time");
+    return false;
+  }
 #else
-  if (zone.utc) gmtime_r(&seconds, &value);
-  else localtime_r(&seconds, &value);
+  struct tm *result = zone.utc
+    ? gmtime_r(&seconds, &value)
+    : localtime_r(&seconds, &value);
+  if (!result) {
+    *error = js_mkerr(js, "failed to convert cron time");
+    return false;
+  }
 #endif
   out->year = value.tm_year + 1900;
   out->month = value.tm_mon + 1;
