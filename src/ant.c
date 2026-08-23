@@ -327,15 +327,17 @@ bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed) {
     uint32_t overflow_needed = needed - inobj_limit;
     if (overflow_needed > ant_object_overflow_cap(obj)) {
       uint8_t shift = obj->overflow_cap ? (uint8_t)(obj->overflow_cap + 1) : 2;
-      while (shift < 31 && (1u << shift) < overflow_needed) shift++;
-      if ((1u << shift) < overflow_needed) return false;
+      if (shift > 31) return false;
 
-      ant_value_t *next = realloc(
-        obj->overflow_prop,
-        sizeof(*next) * (size_t)(1u << shift)
-      );
-      
+      while (shift < 31 && ((uint32_t)1 << shift) < overflow_needed) shift++;
+      if (((uint32_t)1 << shift) < overflow_needed) return false;
+
+      size_t slots = (size_t)1 << shift;
+      if (slots > SIZE_MAX / sizeof(ant_value_t)) return false;
+
+      ant_value_t *next = realloc(obj->overflow_prop, sizeof(*next) * slots);
       if (!next) return false;
+      
       obj->overflow_prop = next;
       obj->overflow_cap = shift;
     }
