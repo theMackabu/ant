@@ -565,8 +565,13 @@ static bool cron_fields_from_epoch(
   (void)error;
   time_t seconds = (time_t)(epoch_ms / 1000);
   struct tm value = {0};
+#ifdef _WIN32
+  if (zone.utc) gmtime_s(&value, &seconds);
+  else localtime_s(&value, &seconds);
+#else
   if (zone.utc) gmtime_r(&seconds, &value);
   else localtime_r(&seconds, &value);
+#endif
   out->year = value.tm_year + 1900;
   out->month = value.tm_mon + 1;
   out->day = value.tm_mday;
