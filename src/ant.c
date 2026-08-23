@@ -2782,12 +2782,17 @@ static inline void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant
 
 static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) {
   ant_object_t *obj = js_obj_ptr(js_as_obj(arr));
+  
   if (!obj) return 0;
+  if (needed > UINT32_MAX) return 0;
 
   ant_offset_t old_cap = obj->u.array.cap;
   ant_offset_t new_cap = old_cap ? old_cap : MAX_DENSE_INITIAL_CAP;
-  
+
   while (new_cap < needed) new_cap *= 2;
+  if (new_cap > UINT32_MAX) new_cap = UINT32_MAX;
+  if ((size_t)new_cap > SIZE_MAX / sizeof(ant_value_t)) return 0;
+
   ant_value_t *next = realloc(obj->u.array.data, sizeof(*next) * (size_t)new_cap);
   if (!next) return 0;
 
@@ -3468,9 +3473,14 @@ ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key
   );
 }
 
+/* "exact" here means the value is stored as given: unlike mkprop_interned this
+ skips MKPROP_EXPOSE_CFUNC, so a cfunc keeps whatever .name it already had.
+ attribute handling is identical to mkprop_interned, zero attrs still become
+ ANT_PROP_ATTR_DEFAULT. it is not the interned counterpart of
+ mkprop_exact_attrs, which is the one that suppresses the defaults. */
 ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs) {
   return mkprop_interned_attrs_impl(
-    js, obj, interned_key, 0, v, 
+    js, obj, interned_key, 0, v,
     attrs, MKPROP_USE_DEFAULT_ATTRS
   );
 }
