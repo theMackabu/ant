@@ -3386,6 +3386,13 @@ static ant_value_t mkprop_bytes_attrs_impl(
   return mkprop_interned_attrs_impl(js, obj, interned, key_len, v, attrs, mode);
 }
 
+static inline ant_value_t mkprop_bytes_exact_attrs(
+  ant_t *js, ant_value_t obj, const char *key, size_t key_len,
+  ant_value_t v, uint8_t attrs
+) {
+  return mkprop_bytes_attrs_impl(js, obj, key, key_len, v, attrs, 0);
+}
+
 static inline ant_value_t mkprop_bytes(
   ant_t *js, ant_value_t obj, const char *key, size_t key_len,
   ant_value_t v, uint8_t attrs
@@ -3393,16 +3400,6 @@ static inline ant_value_t mkprop_bytes(
   return mkprop_bytes_attrs_impl(
     js, obj, key, key_len, v, attrs,
     MKPROP_USE_DEFAULT_ATTRS | MKPROP_EXPOSE_CFUNC
-  );
-}
-
-static inline ant_value_t mkprop_bytes_exact_attrs(
-  ant_t *js, ant_value_t obj, const char *key, size_t key_len,
-  ant_value_t v, uint8_t attrs
-) {
-  return mkprop_bytes_attrs_impl(
-    js, obj, key, key_len, v, 
-    attrs, MKPROP_EXPOSE_CFUNC
   );
 }
 
@@ -9951,12 +9948,14 @@ static iter_action_t object_from_entries_iter_cb(ant_t *js, ant_value_t entry, v
   if (property_key_view_requires_pin(&key_view, false))
     GC_ROOT_PIN(js, key_view.js_key);
 
-  ant_value_t added = key_view.is_symbol
-    ? mkprop(js, *result, key_view.js_key, val, 0)
-    : mkprop_bytes(
-      js, *result, key_view.bytes,
-      key_view.length, val, 0
-    );
+  ant_value_t added;
+  if (key_view.is_symbol) added = mkprop(js, *result, key_view.js_key, val, 0);
+  else {
+    const char *interned = intern_string(key_view.bytes, key_view.length);
+    added = interned
+      ? mkprop_interned_exact(js, *result, interned, val, 0)
+      : js_mkerr(js, "oom");
+  }
     
   property_key_view_dispose(&key_view);
   if (is_err(added)) {
@@ -9978,7 +9977,7 @@ static ant_value_t builtin_object_fromEntries(ant_t *js, ant_value_t *args, int 
   ant_value_t iterable = args[0];
   GC_ROOT_PIN(js, iterable);
 
-  ant_value_t result = js_mkobj(js);
+  ant_value_t result = js_newobj(js);
   GC_ROOT_PIN(js, result);
 
   ant_value_t iter_result = iter_foreach(js, iterable, object_from_entries_iter_cb, &result);
