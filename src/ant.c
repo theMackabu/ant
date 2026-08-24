@@ -17,6 +17,7 @@
 #include "runtime.h"
 #include "internal.h"
 #include "errors.h"
+#include "handles.h"
 #include "descriptors.h"
 #include "shapes.h"
 #include "numbers.h"
@@ -18808,13 +18809,13 @@ inline ant_value_t js_glob(ant_t *js) { return js->global; }
 
 ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta) {
   if (!meta) return mkval(T_CFUNC, 0);
-  uint64_t handle = ant_cfunc_handle_intern(meta);
-  return handle ? mkval(T_CFUNC, handle) : mkval(T_ERR, 0);
+  const ant_cfunc_meta_t *stored = ant_cfunc_meta_intern(meta);
+  return stored ? mkref(T_CFUNC, stored) : mkval(T_ERR, 0);
 }
 
 ant_value_t js_mkfun_dyn(ant_cfunc_t fn) {
-  uint64_t handle = ant_cfunc_handle_for_entrypoint(fn);
-  return handle ? mkval(T_CFUNC, handle) : mkval(T_ERR, 0);
+  const ant_cfunc_meta_t *stored = ant_cfunc_meta_for_entrypoint(fn);
+  return stored ? mkref(T_CFUNC, stored) : mkval(T_ERR, 0);
 }
 
 inline ant_value_t js_getthis(ant_t *js) { return js->this_val; }
@@ -19074,9 +19075,9 @@ ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name
     js->cfunc_name_cache.cap = new_cap;
   }
 
-  uint64_t named_handle = ant_cfunc_handle_create(&named_meta);
-  ant_value_t named = named_handle
-    ? mkval(T_CFUNC, named_handle)
+  const ant_cfunc_meta_t *stored = ant_cfunc_meta_create(&named_meta);
+  ant_value_t named = stored
+    ? mkref(T_CFUNC, stored)
     : mkval(T_ERR, 0);
     
   if (is_err(named)) return js_mkerr(js, "oom");
