@@ -615,13 +615,13 @@ static bool napi_make_bigint_limbs(
   payload->pad[2] = 0;
   payload->limb_count = (uint32_t)count;
   memcpy(payload->limbs, limbs, limbs_bytes);
-  *out = mkval(T_BIGINT, (uint64_t)(uintptr_t)payload);
+  *out = mkref(T_BIGINT, payload);
   
   return true;
 }
 
 static const napi_bigint_payload_t *napi_bigint_payload(napi_value value) {
-  return (const napi_bigint_payload_t *)(uintptr_t)vdata((ant_value_t)value);
+  return (const napi_bigint_payload_t *)vptr((ant_value_t)value);
 }
 
 static const uint32_t *napi_bigint_limbs(napi_value value, size_t *count) {

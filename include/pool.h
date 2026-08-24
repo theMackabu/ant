@@ -1,12 +1,18 @@
 #ifndef ANT_POOL_H
 #define ANT_POOL_H
 
-#include "arena.h"
+#include "cage.h"
 #include "types.h"
-
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
 
 struct ant_pool_block {
   struct ant_pool_block *next;
@@ -114,12 +120,12 @@ static inline void pool_free_set_next(ant_pool_block_t *b, ant_pool_block_t *n) 
 }
 
 static inline void pool_block_free(ant_pool_block_t *block) {
-  ant_arena_free(block, sizeof(ant_pool_block_t) + block->cap);
+  ant_cage_free(block, sizeof(ant_pool_block_t) + block->cap);
 }
 
 static inline ant_pool_block_t *pool_block_alloc(size_t cap) {
-  ant_pool_block_t *b = (ant_pool_block_t *)ant_os_alloc(
-    sizeof(ant_pool_block_t) + cap
+  ant_pool_block_t *b = (ant_pool_block_t *)ant_cage_alloc(
+    sizeof(ant_pool_block_t) + cap, sizeof(void *)
   );
   
   if (!b) return NULL;

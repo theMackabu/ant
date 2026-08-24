@@ -57,17 +57,16 @@ extern bool gc_disabled;
 gc_func_mark_profile_t gc_func_mark_profile_get(void);
 
 static inline bool gc_value_is_heap_ref(ant_value_t v) {
-  if (v <= NANBOX_PREFIX) return false;
-  uint8_t type = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  if (!is_tagged(v)) return false;
+  uint8_t type = vtype_tagged(v);
   return type == T_FUNC || type == T_STR || (((1u << type) & GC_OBJ_TYPE_MASK) != 0);
 }
 
 static inline bool gc_value_ref_is_young(ant_value_t v) {
-  uint8_t type = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  uint8_t type = vtype_tagged(v);
   if (type == T_FUNC) return true;
-  if (type == T_STR) 
-    return str_is_heap_rope(v) && (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
-  ant_object_t *ref = (ant_object_t *)(uintptr_t)(v & NANBOX_DATA_MASK);
+  if (type == T_STR) return str_is_heap_rope(v) && (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
+  ant_object_t *ref = (ant_object_t *)vptr_tagged(v);
   return ref && ref->flags.generation == 0;
 }
 

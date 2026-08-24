@@ -90,7 +90,7 @@ void gc_weak_remember_set(ant_t *js, ant_object_t *obj, ant_value_t key) {
 }
 
 void gc_weak_keep_alive(ant_t *js, ant_value_t value) {
-  if (!js || value <= NANBOX_PREFIX) return;
+  if (!js || !is_tagged(value)) return;
   
   if (
     js->weak_gc.kept_alive_len &&

@@ -7,6 +7,7 @@
 #include "internal.h"
 #include "debug.h"
 #include "shapes.h"
+#include "gc/roots.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmacro-redefined"
@@ -18,6 +19,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>
 
 static constexpr int JIT_PARAM_HOIST_CAP = 8;
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
@@ -274,6 +276,46 @@ static MIR_label_t label_for_branch(MIR_context_t ctx, jit_label_map_t *lm,
 #define SV_JIT_HAS_BITCAST 0
 #endif
 
+static _Atomic unsigned int jit_ref_reg_id = 0;
+
+static MIR_reg_t jit_ref_reg(
+  MIR_context_t ctx, MIR_item_t fn, const char *prefix
+) {
+  char name[48];
+  unsigned int id = atomic_fetch_add_explicit(
+    &jit_ref_reg_id, 1, memory_order_relaxed
+  );
+  snprintf(name, sizeof(name), "%s_%u", prefix, id);
+  return MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+}
+
+static void mir_emit_decode_ref(
+  MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t value
+) {
+  MIR_reg_t base = jit_ref_reg(ctx, fn, "cage_base");
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, base),
+      MIR_new_uint_op(ctx, (uint64_t)ant_cage_base())));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, dst), MIR_new_reg_op(ctx, base)));
+}
+
+static void mir_emit_encode_ref(
+  MIR_context_t ctx, MIR_item_t fn, MIR_reg_t dst, MIR_reg_t ptr
+) {
+  MIR_reg_t base = jit_ref_reg(ctx, fn, "cage_base");
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, base),
+      MIR_new_uint_op(ctx, (uint64_t)ant_cage_base())));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_SUB, MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, ptr), MIR_new_reg_op(ctx, base)));
+}
+
 static void mir_i64_to_d(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst_d, MIR_reg_t src_i64,
                          MIR_reg_t slot) {
@@ -298,6 +340,7 @@ static void mir_i64_to_d(MIR_context_t ctx, MIR_item_t fn,
 static void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
                          MIR_reg_t dst_i64, MIR_reg_t src_d,
                          MIR_reg_t slot) {
+  MIR_label_t done = MIR_new_label(ctx);
 #if SV_JIT_HAS_BITCAST
   (void)slot;
   MIR_append_insn(ctx, fn,
@@ -314,6 +357,13 @@ static void mir_d_to_i64(MIR_context_t ctx, MIR_item_t fn,
       MIR_new_reg_op(ctx, dst_i64),
       MIR_new_mem_op(ctx, MIR_T_I64, 0, slot, 0, 1)));
 #endif
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, dst_i64), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, dst_i64),
+      MIR_new_uint_op(ctx, UINT64_C(0x7FF8000000000000))));
+  MIR_append_insn(ctx, fn, done);
 }
 
 static void mir_emit_get_length(
@@ -356,11 +406,7 @@ static void mir_emit_get_length(
       MIR_new_reg_op(ctx, tag),
       MIR_new_uint_op(ctx, JIT_STR_TAG)));
 
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, ptr),
-      MIR_new_reg_op(ctx, obj),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, ptr, obj);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_AND,
       MIR_new_reg_op(ctx, tag),
@@ -441,11 +487,7 @@ static void mir_emit_get_length(
   }
 
   MIR_append_insn(ctx, fn, array);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, ptr),
-      MIR_new_reg_op(ctx, obj),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, ptr, obj);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, len),
@@ -628,11 +670,12 @@ static void mir_emit_self_binding_guard(
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, tag_tmp),
       MIR_new_uint_op(ctx, func_tag)));
+  mir_emit_encode_ref(ctx, fn, expected_tmp, closure);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_OR,
       MIR_new_reg_op(ctx, expected_tmp),
       MIR_new_reg_op(ctx, tag_tmp),
-      MIR_new_reg_op(ctx, closure)));
+      MIR_new_reg_op(ctx, expected_tmp)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BEQ,
       MIR_new_label_op(ctx, match),
@@ -659,11 +702,12 @@ static void mir_emit_self_binding_guard_value_kept(
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, tag_tmp),
       MIR_new_uint_op(ctx, func_tag)));
+  mir_emit_encode_ref(ctx, fn, expected_tmp, closure);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_OR,
       MIR_new_reg_op(ctx, expected_tmp),
       MIR_new_reg_op(ctx, tag_tmp),
-      MIR_new_reg_op(ctx, closure)));
+      MIR_new_reg_op(ctx, expected_tmp)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BEQ,
       MIR_new_label_op(ctx, match),
@@ -1148,11 +1192,7 @@ static void mir_emit_string_builder_append_ascii_byte(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, tag),
       MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, lhs_ptr),
-      MIR_new_reg_op(ctx, lhs),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, lhs_ptr, lhs);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_AND,
       MIR_new_reg_op(ctx, tag),
@@ -1179,11 +1219,7 @@ static void mir_emit_string_builder_append_ascii_byte(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, tag),
       MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, rhs_ptr),
-      MIR_new_reg_op(ctx, rhs),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, rhs_ptr, rhs);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_AND,
       MIR_new_reg_op(ctx, tag),
@@ -1342,11 +1378,7 @@ static void mir_emit_get_closure(MIR_context_t ctx, MIR_item_t fn,
       MIR_new_label_op(ctx, fallback),
       MIR_new_reg_op(ctx, r_tag),
       MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, dst),
-      MIR_new_reg_op(ctx, v),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, dst, v);
 }
 
 static void mir_emit_resolve_call_this(MIR_context_t ctx, MIR_item_t fn,
@@ -1432,21 +1464,13 @@ static void mir_emit_value_to_objptr_or_jmp(
       MIR_new_label_op(ctx, slow)));
 
   MIR_append_insn(ctx, fn, is_obj);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, out_ptr),
-      MIR_new_reg_op(ctx, v),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, out_ptr, v);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_JMP,
       MIR_new_label_op(ctx, done)));
 
   MIR_append_insn(ctx, fn, is_func);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, out_ptr),
-      MIR_new_reg_op(ctx, v),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, out_ptr, v);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, out_ptr),
@@ -1458,11 +1482,7 @@ static void mir_emit_value_to_objptr_or_jmp(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, out_ptr),
       MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, out_ptr),
-      MIR_new_reg_op(ctx, out_ptr),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, out_ptr, out_ptr);
   MIR_append_insn(ctx, fn, done);
 }
 
@@ -1515,9 +1535,7 @@ static void mir_emit_string_concat_classify_side(
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, tag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, ptr),
-      MIR_new_reg_op(ctx, value), MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, ptr, value);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, tag),
       MIR_new_reg_op(ctx, ptr), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
@@ -1713,9 +1731,10 @@ static void mir_emit_string_concat_fastpath(
       MIR_new_mem_op(ctx, MIR_JSVAL,
         (MIR_disp_t)offsetof(ant_rope_heap_t, cached), ptr, 0, 1),
       MIR_new_reg_op(ctx, tmp)));
+  mir_emit_encode_ref(ctx, fn, dst, ptr);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_OR, MIR_new_reg_op(ctx, dst),
-      MIR_new_reg_op(ctx, ptr),
+      MIR_new_reg_op(ctx, dst),
       MIR_new_uint_op(ctx, mkval(T_STR, STR_HEAP_TAG_ROPE))));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
@@ -1860,9 +1879,7 @@ static bool mir_emit_put_field_ic_fastpath(
     MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
 
   MIR_append_insn(ctx, fn, classify_string);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vptr),
-      MIR_new_reg_op(ctx, val), MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, vptr, val);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vtag),
       MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
@@ -2092,11 +2109,7 @@ static bool mir_emit_get_field_ic_fastpath(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, r_obj_proto),
       MIR_new_reg_op(ctx, r_ic_proto)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND,
-      MIR_new_reg_op(ctx, r_proto_ptr),
-      MIR_new_reg_op(ctx, r_obj_proto),
-      MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+  mir_emit_decode_ref(ctx, fn, r_proto_ptr, r_obj_proto);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_proto_id),
@@ -2429,7 +2442,7 @@ static sv_func_t *scan_closure_child(sv_func_t *func, uint8_t *ip) {
   ant_value_t cv = func->constants[idx];
   if (vtype(cv) != T_NTARG) return NULL;
 
-  return (sv_func_t *)(uintptr_t)vdata(cv);
+  return (sv_func_t *)vptr(cv);
 }
 
 typedef enum {
@@ -7436,14 +7449,21 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                                                      MIR_T_I64, inl_flags_rn);
             MIR_reg_t r_inl_bound = MIR_new_func_reg(ctx, jit_func->u.func,
                                                      MIR_JSVAL, inl_bound_rn);
+            MIR_reg_t r_pre_tag = jit_ref_reg(ctx, jit_func, "inline_tag");
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_URSH,
+                MIR_new_reg_op(ctx, r_pre_tag),
+                MIR_new_reg_op(ctx, r_inl_callee),
+                MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_BNE,
+                MIR_new_label_op(ctx, inl_slow),
+                MIR_new_reg_op(ctx, r_pre_tag),
+                MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
             {
               char cl_rn[32]; snprintf(cl_rn, sizeof(cl_rn), "inl%d_cl", cn);
               r_inl_cl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, cl_rn);
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_insn(ctx, MIR_AND,
-                  MIR_new_reg_op(ctx, r_inl_cl),
-                  MIR_new_reg_op(ctx, r_inl_callee),
-                  MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+              mir_emit_decode_ref(ctx, jit_func, r_inl_cl, r_inl_callee);
             }
             {
               char nt_rn[32], sup_rn[32];
@@ -7463,20 +7483,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             }
 
             if (speculative) {
-              char gt_rn[32]; snprintf(gt_rn, sizeof(gt_rn), "inl%d_gt", cn);
-              MIR_reg_t r_guard_tag = MIR_new_func_reg(ctx, jit_func->u.func,
-                                                        MIR_T_I64, gt_rn);
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_insn(ctx, MIR_URSH,
-                  MIR_new_reg_op(ctx, r_guard_tag),
-                  MIR_new_reg_op(ctx, r_inl_callee),
-                  MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-              MIR_append_insn(ctx, jit_func,
-                MIR_new_insn(ctx, MIR_BNE,
-                  MIR_new_label_op(ctx, inl_slow),
-                  MIR_new_reg_op(ctx, r_guard_tag),
-                  MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
-
+              MIR_reg_t r_guard_tag = jit_ref_reg(ctx, jit_func, "inline_flags");
               char gf_rn[32]; snprintf(gf_rn, sizeof(gf_rn), "inl%d_gf", cn);
               MIR_reg_t r_guard_fn = MIR_new_func_reg(ctx, jit_func->u.func,
                                                        MIR_T_I64, gf_rn);
@@ -10793,11 +10800,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_new_reg_op(ctx, r_inl_tag),
                 MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
 
-            MIR_append_insn(ctx, jit_func,
-              MIR_new_insn(ctx, MIR_AND,
-                MIR_new_reg_op(ctx, r_inl_cl),
-                MIR_new_reg_op(ctx, r_inl_callee),
-                MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+            mir_emit_decode_ref(ctx, jit_func, r_inl_cl, r_inl_callee);
 
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
@@ -11531,12 +11534,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         }
         MIR_reg_t dst = vstack_push(&vs);
         ant_value_t cv = func->constants[idx];
-        sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(cv);
+        sv_func_t *child = (sv_func_t *)vptr(cv);
         jit_child_kind_t child_kind = classify_child_closure_kind(func, child);
         MIR_reg_t r_child_slots = r_tmp2;
         int child_slot_base = 0;
         int child_slot_count = 0;
-        vs.known_func[vs.sp - 1] = (sv_func_t *)(uintptr_t)vdata(cv);
+        vs.known_func[vs.sp - 1] = child;
         switch (child_kind) {
           case JIT_CHILD_PLAIN:
           case JIT_CHILD_INHERITED_ONLY:
@@ -11724,19 +11727,25 @@ ant_value_t sv_jit_try_osr(
   sv_frame_t *frame, sv_func_t *func,
   int bc_offset
 ) {
-  sv_closure_t osr_closure;
   sv_closure_t *closure;
+  ant_value_t osr_closure_value = js_mkundef();
+  size_t root_mark = gc_root_scope(js);
+  if (!gc_push_root(js, &osr_closure_value)) return SV_JIT_RETRY_INTERP;
   if (vtype(frame->callee) == T_FUNC) closure = js_func_closure(frame->callee);
   else {
-    memset(&osr_closure, 0, sizeof(osr_closure));
-    osr_closure.func       = func;
-    osr_closure.upvalues   = frame->upvalues;
-    osr_closure.js         = js;
-    osr_closure.bound_this = js_mkundef();
-    osr_closure.super_val  = js_mkundef();
-    osr_closure.module_ctx = js_mkundef();
-    osr_closure.gc_epoch   = gc_get_epoch();
-    closure = &osr_closure;
+    closure = js_closure_alloc(js);
+    if (!closure) {
+      gc_pop_roots(js, root_mark);
+      return SV_JIT_RETRY_INTERP;
+    }
+    osr_closure_value = mkref(T_FUNC, closure);
+    closure->func = func;
+    closure->upvalues = frame->upvalues;
+    closure->js = js;
+    closure->bound_this = js_mkundef();
+    closure->super_val = js_mkundef();
+    closure->module_ctx = js_mkundef();
+    closure->gc_epoch = gc_get_epoch();
   }
 
   sv_jit_func_t jit;
@@ -11747,10 +11756,14 @@ ant_value_t sv_jit_try_osr(
     if (func->code_len > 512) {
       func->call_count = SV_JIT_THRESHOLD + 1;
       func->back_edge_count = 0;
+      gc_pop_roots(js, root_mark);
       return SV_JIT_RETRY_INTERP;
     }
     jit = sv_jit_compile(js, func, closure);
-    if (!jit) return SV_JIT_RETRY_INTERP;
+    if (!jit) {
+      gc_pop_roots(js, root_mark);
+      return SV_JIT_RETRY_INTERP;
+    }
     func->jit_code = (void *)jit;
     sv_jit_compile_callees(js, func);
   }
@@ -11772,6 +11785,7 @@ ant_value_t sv_jit_try_osr(
     vm, frame->this, frame->new_target, frame->super_val,
     frame->bp, frame->argc, closure);
   sv_jit_leave(js);
+  gc_pop_roots(js, root_mark);
 
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(func);
@@ -11780,4 +11794,3 @@ ant_value_t sv_jit_try_osr(
 
   return result;
 }
-

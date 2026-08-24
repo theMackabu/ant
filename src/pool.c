@@ -132,7 +132,9 @@ static ant_large_string_alloc_t *large_string_alloc_fresh(size_t flat_size) {
   size_t needed = offsetof(ant_large_string_alloc_t, bytes) + payload_capacity + 1u;
   size_t alloc_size = align_up_size(needed, pool_page_size());
   
-  ant_large_string_alloc_t *alloc = (ant_large_string_alloc_t *)ant_os_alloc(alloc_size);
+  ant_large_string_alloc_t *alloc = (ant_large_string_alloc_t *)
+    ant_cage_alloc(alloc_size, sizeof(void *));
+  
   if (!alloc) return NULL;
 
   alloc->next = NULL;
@@ -462,7 +464,7 @@ void js_string_pool_destroy(ant_string_pool_t *pool) {
   ant_large_string_alloc_t *cur = lists[i];
   while (cur) {
     ant_large_string_alloc_t *next = cur->next;
-    ant_arena_free(cur, cur->alloc_size);
+    ant_cage_free(cur, cur->alloc_size);
     cur = next;
   }}
 

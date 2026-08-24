@@ -300,13 +300,13 @@ static void gc_sweep_young_upvalues(ant_t *js) {
 }
 
 void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value_t value) {
-  if (!js || !func || value <= NANBOX_PREFIX) return;
-  uint8_t type = (value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  if (!js || !func || !is_tagged(value)) return;
+  uint8_t type = vtype_tagged(value);
   
   if (type != T_FUNC) {
     if (type == T_STR) goto remember;
     if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
-    ant_object_t *obj = (ant_object_t *)(uintptr_t)(value & NANBOX_DATA_MASK);
+    ant_object_t *obj = (ant_object_t *)vptr_tagged(value);
     if (!obj || obj->flags.generation != 0) return;
   }
 
@@ -425,7 +425,7 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   
   c->gc_epoch = gc_epoch;
   if (js->weak_gc.pending_active)
-    gc_weak_key_marked(js, mkval(T_FUNC, (uintptr_t)c));
+    gc_weak_key_marked(js, mkref(T_FUNC, c));
   gc_mark_func(js, c->func);
   if (c->func_obj) gc_mark_value(js, c->func_obj);
   gc_mark_value(js, c->module_ctx);
@@ -442,11 +442,11 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
 }
 
 void gc_mark_value(ant_t *js, ant_value_t v) {
-  if (v <= NANBOX_PREFIX) return;
-  uint8_t t = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  if (!is_tagged(v)) return;
+  uint8_t t = vtype_tagged(v);
 
   if (t == T_FUNC) {
-    gc_mark_closure(js, (sv_closure_t *)(uintptr_t)(v & NANBOX_DATA_MASK));
+    gc_mark_closure(js, (sv_closure_t *)vptr_tagged(v));
     return;
   }
 
@@ -456,7 +456,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (t == T_BIGINT) {
-    gc_bigints_mark((const void *)(uintptr_t)(v & NANBOX_DATA_MASK));
+    gc_bigints_mark((const void *)vptr_tagged(v));
     return;
   }
 
@@ -468,7 +468,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
-  ant_object_t *obj = (ant_object_t *)(uintptr_t)(v & NANBOX_DATA_MASK);
+  ant_object_t *obj = (ant_object_t *)vptr_tagged(v);
   
   if (!obj) return;
   gc_grey_obj(js, obj);
@@ -602,7 +602,7 @@ static ant_value_t gc_weak_key_from_marked_object(ant_object_t *obj) {
 switch (obj->type_tag) {
   case T_ARR:
   case T_PROMISE:
-  case T_GENERATOR: return mkval(obj->type_tag, (uintptr_t)obj);
+  case T_GENERATOR: return mkref(obj->type_tag, obj);
   default: return js_obj_from_ptr(obj);
 }}
 
@@ -682,22 +682,22 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       raw_uv = raw_uv->next;
     }
 
-    if (w <= NANBOX_PREFIX) continue;
-    uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+    if (!is_tagged(w)) continue;
+    uint8_t type = vtype_tagged(w);
     
     if ((1u << type) & GC_OBJ_TYPE_MASK) {
-      ant_object_t *obj = (ant_object_t *)(uintptr_t)(w & NANBOX_DATA_MASK);
+      ant_object_t *obj = (ant_object_t *)vptr_tagged(w);
       if (obj) gc_grey_obj(js, obj);
     }
     
     if (type == T_FUNC) {
-      sv_closure_t *c = (sv_closure_t *)(uintptr_t)(w & NANBOX_DATA_MASK);
+      sv_closure_t *c = (sv_closure_t *)vptr_tagged(w);
       if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
     }
     
     if (type == T_STR && g_str_mark) g_str_mark(js, w);
     if (type == T_BIGINT)
-      gc_bigints_mark((const void *)(uintptr_t)(w & NANBOX_DATA_MASK));
+      gc_bigints_mark((const void *)vptr_tagged(w));
   }
 }
 

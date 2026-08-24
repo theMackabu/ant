@@ -336,7 +336,7 @@ static inline ant_value_t sv_op_define_class(
     vtype(ctor) == T_FUNC && func->debug->source &&
     source_end > source_start && source_end <= (uint32_t)func->debug->source_len
   ) {
-    js_set_slot(ctor, SLOT_CODE, mkval(T_NTARG, (uintptr_t)(func->debug->source + source_start)));
+    js_set_slot(ctor, SLOT_CODE, mkref(T_NTARG, func->debug->source + source_start));
     js_set_slot(ctor, SLOT_CODE_LEN, tov((double)(source_end - source_start)));
   }
   

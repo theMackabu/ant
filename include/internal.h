@@ -2,6 +2,8 @@
 #define ANT_INTERNAL_H
 
 #include "ant.h"
+#include "handles.h"
+#include "value.h"
 #include "object.h"
 #include "pool.h"
 #include "sugar.h"
@@ -13,51 +15,6 @@
 
 #include <assert.h>
 #include <string.h>
-
-// An IEEE 754 double-precision float is a 64-bit value with bits laid out like:
-//
-// 1 Sign bit
-// | 11 Exponent bits
-// | |          52 Mantissa (i.e. fraction) bits
-// | |          |
-// S[Exponent-][Mantissa------------------------------------------]
-//
-// A NaN is any value where all exponent bits are set and the mantissa is
-// non-zero. That means there are a *lot* of bit patterns that all represent
-// NaN. NaN tagging takes advantage of this by repurposing those unused
-// patterns to encode non-numeric values.
-//
-// We define a NANBOX_PREFIX as the upper 12 bits all set (0xFFF0...):
-//
-// 1111 1111 1111 0000 0000 0000 ... 0000
-// [sign+exp all 1s  ] [mantissa all 0s  ]
-//
-// This corresponds to -Infinity in IEEE 754. Any 64-bit value strictly
-// greater than this prefix is a tagged (non-numeric) value. Any value less
-// than or equal to it is an unmodified double — so numeric math is free.
-//
-// For tagged values, we carve the remaining 52 mantissa bits into two fields:
-//
-// 1111 1111 1111 TTTTT DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
-// [-- prefix ---][type][--------------- 47-bit data --------------------]
-//
-// The 5-bit type tag (bits 51–47) encodes up to 31 distinct types: objects,
-// strings, booleans, undefined, null, functions, closures, errors, etc.
-// The 47-bit data field holds either a heap offset (for heap-resident types
-// like objects and strings) or an immediate value (e.g. 1 for true, 0 for
-// false).
-//
-// Encoding and decoding are simple:
-//
-//   mkval(type, data) = PREFIX | (type << 47) | (data & 0x7FFFFFFFFFFF)
-//   vtype(v)          = is_tagged(v) ? (v >> 47) & 0x1F : T_NUM
-//   vdata(v)          = v & 0x7FFFFFFFFFFF
-//   is_tagged(v)      = v > PREFIX
-
-static constexpr uint64_t NANBOX_TYPE_MASK  = 0x1F;
-static constexpr uint64_t NANBOX_TYPE_SHIFT = 0x2F;
-static constexpr uint64_t NANBOX_PREFIX     = 0xFFF0000000000000;
-static constexpr uint64_t NANBOX_DATA_MASK  = 0x00007FFFFFFFFFFF;
 
 static constexpr uint32_t ANT_RUNTIME_WEB = 1u << 0;
 static constexpr uint32_t PROTO_WALK_F_OBJECT_ONLY = 1u << 0;
@@ -129,46 +86,9 @@ static constexpr uint64_t STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK;
 #define T_MASK_AGAIN() T_MASK_STEP
 #define T_MASK(...) (T_MASK_EXPAND(T_MASK_STEP(__VA_ARGS__)))
 
-#define ANT_SENTINEL(payload) \
-  (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | (payload))
-
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
 #define is_special_object(v) ((1u << vtype(v)) & T_SPECIAL_OBJECT_MASK)
-
-enum {
-  // heap-resident
-  T_OBJ = 0,
-  T_STR = 1,
-  T_ARR = 2,
-
-  // objects
-  T_FUNC,
-  T_CFUNC,
-  T_PROMISE,
-  T_GENERATOR,
-
-  // primitives
-  T_UNDEF,
-  T_NULL,
-  T_BOOL,
-  T_NUM,
-  T_BIGINT,
-  T_SYMBOL,
-
-  // internal
-  T_ERR,
-  T_TYPEDARRAY,
-  T_NTARG,
-
-  // collections 
-  T_MAP,
-  T_SET,
-  T_WEAKMAP,
-  T_WEAKSET,
-
-  T_SENTINEL = NANBOX_TYPE_MASK
-};
 
 enum: uint32_t {
   T_BOXABLE_PRIMITIVE_MASK = T_MASK(T_STR, T_NUM, T_BOOL, T_BIGINT, T_SYMBOL),
@@ -192,10 +112,10 @@ static_assert(
 );
 
 enum: ant_value_t {
-  T_EMPTY             = ANT_SENTINEL(0xDEADULL),  // empty slot / array hole / TDZ
-  SV_JIT_BAILOUT      = ANT_SENTINEL(0xBA110ULL), // JIT -> interpreter bailout
-  SV_AITER_ARRAY_TAG  = ANT_SENTINEL(0xFA1ULL),   // for-await plain-array mode
-  SV_AITER_AWAIT_MARK = ANT_SENTINEL(0xFA2ULL),   // for-await element await resume
+  T_EMPTY             = ANT_SENTINEL_TAG | 0xDEADULL,
+  SV_JIT_BAILOUT      = ANT_SENTINEL_TAG | 0xBA110ULL,
+  SV_AITER_ARRAY_TAG  = ANT_SENTINEL_TAG | 0xFA1ULL,
+  SV_AITER_AWAIT_MARK = ANT_SENTINEL_TAG | 0xFA2ULL,
 };
 
 typedef struct {
@@ -612,7 +532,7 @@ static inline bool is_callable(ant_value_t v) {
 }
 
 static inline const ant_cfunc_meta_t *js_as_cfunc_meta(ant_value_t fn_val) {
-  return (const ant_cfunc_meta_t *)(uintptr_t)vdata(fn_val);
+  return ant_cfunc_handle_get(vdata(fn_val));
 }
 
 static inline ant_cfunc_t js_as_cfunc(ant_value_t fn_val) {
@@ -633,9 +553,6 @@ static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) 
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args, int *out_count);
 ant_value_t js_proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
-
-ant_value_t tov(double d);
-double tod(ant_value_t v);
 
 double js_to_number(ant_t *js, ant_value_t arg);
 double js_parse_int_value(ant_t *js, ant_value_t arg);
@@ -726,7 +643,6 @@ ant_offset_t vstrlen(ant_t *js, ant_value_t value);
 ant_offset_t str_len_fast(ant_t *js, ant_value_t str);
 ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 
-ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
@@ -898,19 +814,19 @@ static inline bool str_is_heap_builder(ant_value_t value) {
 }
 
 static inline ant_rope_heap_t *ant_str_rope_ptr(ant_value_t value) {
-  return (ant_rope_heap_t *)(uintptr_t)(vdata(value) & ~STR_HEAP_TAG_MASK);
+  return (ant_rope_heap_t *)vptr_masked(value, STR_HEAP_TAG_MASK);
 }
 
 static inline ant_string_builder_t *ant_str_builder_ptr(ant_value_t value) {
-  return (ant_string_builder_t *)(uintptr_t)(vdata(value) & ~STR_HEAP_TAG_MASK);
+  return (ant_string_builder_t *)vptr_masked(value, STR_HEAP_TAG_MASK);
 }
 
 static inline ant_value_t ant_mkrope_value(ant_rope_heap_t *rope) {
-  return mkval(T_STR, ((uintptr_t)rope) | STR_HEAP_TAG_ROPE);
+  return mkref_tagged(T_STR, rope, STR_HEAP_TAG_ROPE);
 }
 
 static inline ant_value_t ant_mkbuilder_value(ant_string_builder_t *builder) {
-  return mkval(T_STR, ((uintptr_t)builder) | STR_HEAP_TAG_BUILDER);
+  return mkref_tagged(T_STR, builder, STR_HEAP_TAG_BUILDER);
 }
 
 static inline int js_brand_id(ant_value_t obj) {
@@ -969,7 +885,7 @@ static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
 static inline ant_flat_string_t *ant_str_flat_ptr(ant_value_t value) {
   if (vtype(value) != T_STR) return NULL;
   if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return NULL;
-  return (ant_flat_string_t *)(uintptr_t)vdata(value);
+  return (ant_flat_string_t *)vptr(value);
 }
 
 static inline ant_flat_string_t *large_string_flat_ptr(ant_large_string_alloc_t *alloc) {

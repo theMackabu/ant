@@ -225,7 +225,7 @@ static inline ant_value_t sv_op_closure(
   sv_func_t *func, uint8_t *ip
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
-  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
+  sv_func_t *child = (sv_func_t *)vptr(func->constants[idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, frame->this);
   if (!closure) return mkval(T_ERR, 0);
@@ -239,7 +239,7 @@ static inline ant_value_t sv_op_closure(
     } else closure->upvalues[i] = frame->upvalues[desc->index];
   }
 
-  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  ant_value_t func_val = mkref(T_FUNC, closure);
   vm->stack[vm->sp++] = func_val;
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
   sv_closure_finish_init(

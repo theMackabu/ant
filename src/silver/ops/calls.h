@@ -318,7 +318,7 @@ static inline bool sv_op_call_call_fused(
       !(c1->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_EVAL_ENV))
     ) {
       uint32_t kidx = sv_get_u32(f1->code + 1);
-      sv_func_t *f2 = (sv_func_t *)(uintptr_t)vdata(f1->constants[kidx]);
+      sv_func_t *f2 = (sv_func_t *)vptr(f1->constants[kidx]);
       if (!f2->jit_code) return false;
 
       // TODO: reduce nesting

@@ -181,7 +181,7 @@ static void large_string_trim_reusable(ant_large_string_space_t *space) {
     ant_large_string_alloc_t *next = cur->next;
     reusable_capacity -= cur->capacity;
     large_string_unlink(&space->reusable, cur);
-    ant_arena_free(cur, cur->alloc_size);
+    ant_cage_free(cur, cur->alloc_size);
     cur = next;
   }
 }

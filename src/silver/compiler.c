@@ -176,7 +176,7 @@ static void build_gc_const_tables(sv_func_t *func) {
       
       for (int i = 0; i < func->const_count; i++) {
         if (vtype(func->constants[i]) != T_NTARG) continue;
-        sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
+        sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
         child->parent = func;
         func->child_funcs[out++] = child;
       } 
@@ -2156,7 +2156,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
 static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   sv_func_t *fn = compile_function_body(c, node, SV_COMPILE_SCRIPT);
   if (!fn) return;
-  int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
+  int idx = add_constant(c, mkref(T_NTARG, fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
   emit_set_function_name(c, node->str, node->len);
@@ -4219,7 +4219,7 @@ void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
   
-  int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
+  int idx = add_constant(c, mkref(T_NTARG, fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
 
@@ -6104,7 +6104,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
 
   sv_compile_ctx_cleanup(&comp);
 
-  return add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
+  return add_constant(c, mkref(T_NTARG, fn));
 }
 
 static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_local) {
@@ -6340,7 +6340,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     sv_compile_ctx_cleanup(&comp);
-    int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
+    int idx = add_constant(c, mkref(T_NTARG, fn));
     emit_op(c, OP_CLOSURE);
     emit_u32(c, (uint32_t)idx);
   } else emit_op(c, OP_UNDEF);
@@ -6513,7 +6513,7 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   uint32_t kidx = sv_get_u32(func->code + 1);
   if (kidx >= (uint32_t)func->const_count) return false;
   
-  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[kidx]);
+  sv_func_t *child = (sv_func_t *)vptr(func->constants[kidx]);
   if (!child) return false;
   
   return child->is_fusable_leaf;
@@ -7090,8 +7090,8 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
       fprintf(stderr, "           %d: <String[%d]: #%.*s>\n", i, (int)slen, (int)slen, (const char *)(uintptr_t)soff);
     } else if (t == T_NUM) {
       fprintf(stderr, "           %d: <Number [%g]>\n", i, tod(v));
-    } else if (t == T_CFUNC) {
-      sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(v);
+    } else if (t == T_NTARG) {
+      sv_func_t *child = (sv_func_t *)vptr(v);
       const char *cname = child->debug->name ? child->debug->name : "";
       fprintf(stderr, "           %d: <SharedFunctionInfo %s>\n", i, cname);
     } else fprintf(stderr, "           %d: <Unknown type=%d>\n", i, t);
@@ -7110,7 +7110,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
   for (int i = 0; i < func->const_count; i++) {
   if (vtype(func->constants[i]) == T_NTARG) {
-    sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
+    sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
     char child_label[256];
     snprintf(child_label, sizeof(child_label), "%s/closure[%d]", label, i);
     sv_disasm(js, child, child_label);
