@@ -37,15 +37,25 @@
 //
 // The 5-bit type tag (bits 51–47) encodes up to 31 distinct types: objects,
 // strings, booleans, undefined, null, functions, closures, errors, etc.
-// The 47-bit data field holds either a heap offset (for heap-resident types
-// like objects and strings) or an immediate value (e.g. 1 for true, 0 for
-// false).
+//
+// Managed references are not stored as raw pointers. Ant reserves a contiguous
+// virtual-address cage of up to 2^44 bytes and allocates managed data, including
+// native-function metadata, inside it. The payload stores the object's offset
+// from the cage base. Decoding adds the process-local cage base back, so the
+// representation does not depend on pointers fitting in 47 bits. Offset zero
+// represents null; the cage allocator leaves its first page unused.
+//
+// Payloads that are not managed references hold immediate data, such as 1 for
+// true and 0 for false. Full pointers that must remain outside the cage, such as
+// external typed-array data, are represented by IDs in a separate handle table.
 //
 // Encoding and decoding are simple:
 //
 //   mkval(type, data) = PREFIX | (type << 47) | (data & 0x7FFFFFFFFFFF)
+//   mkref(type, ptr)   = mkval(type, ptr - cage_base)
 //   vtype(v)          = is_tagged(v) ? (v >> 47) & 0x1F : T_NUM
 //   vdata(v)          = v & 0x7FFFFFFFFFFF
+//   vptr(v)           = cage_base + vdata(v)
 //   is_tagged(v)      = v > PREFIX
 
 static constexpr uint64_t NANBOX_TYPE_MASK  = 0x1F;
