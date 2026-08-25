@@ -14,7 +14,7 @@ typedef enum {
 
 static inline void sv_using_array_clear(ant_value_t arr) {
   ant_object_t *ptr = js_obj_ptr(js_as_obj(arr));
-  if (ptr && ptr->type_tag == T_ARR) ptr->u.array.len = 0;
+  if (ptr && ptr->type_tag == kTypeArray) ptr->u.array.len = 0;
 }
 
 static inline ant_value_t sv_make_suppressed_error_value(
@@ -55,7 +55,7 @@ static inline ant_value_t sv_disposal_error_value(ant_t *js, ant_value_t result)
   }
 
   if (is_err(result)) {
-    if (vdata(result) != 0) return mkval(T_OBJ, vdata(result));
+    if (vdata(result) != 0) return mkval(kTypeObject, vdata(result));
     return js_make_error_silent(js, JS_ERR_INTERNAL, "unknown disposal error");
   }
 
@@ -65,7 +65,7 @@ static inline ant_value_t sv_disposal_error_value(ant_t *js, ant_value_t result)
 static inline ant_value_t sv_suppress_disposal_error(
   ant_t *js, ant_value_t error, ant_value_t previous
 ) {
-  if (vtype(previous) == T_UNDEF) return error;
+  if (vtype(previous) == kTypeUndefined) return error;
   return sv_make_suppressed_error_value(js, error, previous);
 }
 
@@ -74,7 +74,7 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
   ant_value_t value = js_arr_get(js, record, 1);
   ant_value_t method = js_arr_get(js, record, 2);
   
-  int kind = vtype(kind_v) == T_NUM 
+  int kind = vtype(kind_v) == kTypeNumber
     ? (int)js_getnum(kind_v) : -1;
 
   ant_value_t this_arg = kind == SV_DISPOSAL_RECORD_USE ? value : js_mkundef();
@@ -86,7 +86,7 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
   if (!is_callable(method))
     return js_mkerr_typed(js, JS_ERR_TYPE, "disposer is not callable");
   
-  if (vtype(method) == T_CFUNC) {
+  if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = this_arg;
     ant_value_t result = js_as_cfunc(method)(js, args, nargs);
@@ -98,10 +98,10 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
 }
 
 static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, bool is_async) {
-  if (vtype(resource) == T_NULL || vtype(resource) == T_UNDEF) return js_mkundef();
+  if (vtype(resource) == kTypeNull || vtype(resource) == kTypeUndefined) return js_mkundef();
 
   ant_value_t method = js_get_sym(js, resource, is_async ? get_asyncDispose_sym() : get_dispose_sym());
-  if (is_async && (vtype(method) == T_UNDEF || vtype(method) == T_NULL)) method = js_get_sym(js, resource, get_dispose_sym());
+  if (is_async && (vtype(method) == kTypeUndefined || vtype(method) == kTypeNull)) method = js_get_sym(js, resource, get_dispose_sym());
     
   if (!is_callable(method)) return js_mkerr_typed(
     js, JS_ERR_TYPE, is_async 
@@ -109,7 +109,7 @@ static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, b
       : "resource is not disposable"
   );
 
-  if (vtype(method) == T_CFUNC) {
+  if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = resource;
     ant_value_t result = js_as_cfunc(method)(js, NULL, 0);
@@ -123,10 +123,10 @@ static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, b
 static inline ant_value_t sv_using_push(
   ant_t *js, ant_value_t entries, ant_value_t resource, bool is_async
 ) {
-  if (vtype(resource) == T_NULL || vtype(resource) == T_UNDEF)
+  if (vtype(resource) == kTypeNull || vtype(resource) == kTypeUndefined)
     return resource;
   
-  if (vtype(entries) != T_ARR)
+  if (vtype(entries) != kTypeArray)
     return js_mkerr_typed(js, JS_ERR_TYPE, "invalid using disposal stack");
 
   GC_ROOT_SAVE(root_mark, js);
@@ -134,7 +134,7 @@ static inline ant_value_t sv_using_push(
   GC_ROOT_PIN(js, resource);
 
   ant_value_t method = js_get_sym(js, resource, is_async ? get_asyncDispose_sym() : get_dispose_sym());
-  if (is_async && (vtype(method) == T_UNDEF || vtype(method) == T_NULL)) method = js_get_sym(js, resource, get_dispose_sym());
+  if (is_async && (vtype(method) == kTypeUndefined || vtype(method) == kTypeNull)) method = js_get_sym(js, resource, get_dispose_sym());
   
   GC_ROOT_PIN(js, method);
   if (!is_callable(method)) {
@@ -183,7 +183,7 @@ static inline ant_value_t sv_dispose_records_sync(
     GC_ROOT_RESTORE(js, iter_mark);
   }
 
-  if (throw_completion && vtype(*completion) != T_UNDEF) {
+  if (throw_completion && vtype(*completion) != kTypeUndefined) {
     ant_value_t thrown = js_throw(js, *completion);
     return thrown;
   }
@@ -194,7 +194,7 @@ static inline ant_value_t sv_dispose_records_sync(
 static inline ant_value_t sv_using_dispose_sync(
   ant_t *js, ant_value_t entries, ant_value_t completion, bool throw_completion
 ) {
-  if (vtype(entries) != T_ARR) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid using disposal stack");
+  if (vtype(entries) != kTypeArray) return js_mkerr_typed(js, JS_ERR_TYPE, "invalid using disposal stack");
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, entries);
@@ -271,7 +271,7 @@ static inline ant_value_t sv_async_dispose_continue(
   }
 
   ant_value_t idx_v = js_get_slot(state, SLOT_ITER_STATE);
-  ant_offset_t idx = vtype(idx_v) == T_NUM ? (ant_offset_t)js_getnum(idx_v) : 0;
+  ant_offset_t idx = vtype(idx_v) == kTypeNumber ? (ant_offset_t)js_getnum(idx_v) : 0;
 
   while (idx > 0) {
     GC_ROOT_SAVE(iter_mark, js);
@@ -292,7 +292,7 @@ static inline ant_value_t sv_async_dispose_continue(
       continue;
     }
     
-    if (vtype(result) == T_PROMISE) {
+    if (vtype(result) == kTypePromise) {
       ant_value_t on_fulfilled = js_heavy_mkfun(js, sv_async_dispose_on_fulfilled, state);
       GC_ROOT_PIN(js, on_fulfilled);
       ant_value_t on_rejected = js_heavy_mkfun(js, sv_async_dispose_on_rejected, state);
@@ -306,7 +306,7 @@ static inline ant_value_t sv_async_dispose_continue(
     GC_ROOT_RESTORE(js, iter_mark);
   }
 
-  if (vtype(completion) != T_UNDEF) js_reject_promise(js, result_promise, completion);
+  if (vtype(completion) != kTypeUndefined) js_reject_promise(js, result_promise, completion);
   else js_resolve_promise(js, result_promise, js_mkundef());
 
   GC_ROOT_RESTORE(js, root_mark);
@@ -325,7 +325,7 @@ static inline ant_value_t sv_using_dispose_async(
   GC_ROOT_PIN(js, result_promise);
   GC_ROOT_PIN(js, completion);
 
-  if (vtype(entries) != T_ARR) {
+  if (vtype(entries) != kTypeArray) {
     ant_value_t error = js_make_error_silent(js, JS_ERR_TYPE, "invalid using disposal stack");
     GC_ROOT_PIN(js, error);
     js_reject_promise(js, result_promise, error);

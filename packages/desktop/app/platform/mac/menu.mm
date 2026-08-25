@@ -24,7 +24,7 @@ ant_value_t DesktopMenuAppend(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t DesktopMenuInsert(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t menu = js_getthis(js);
   ant_value_t template_value = js_get(js, menu, "_template");
-  if (!is_array_value(template_value) || nargs < 2 || vtype(args[0]) != T_NUM || !is_object_type(args[1])) {
+  if (!is_array_value(template_value) || nargs < 2 || vtype(args[0]) != kTypeNumber || !is_object_type(args[1])) {
     return js_mkerr(js, "menu.insert(position, item) requires an index and MenuItem");
   }
   ant_offset_t count = js_arr_len(js, template_value);
@@ -67,7 +67,7 @@ ant_value_t DesktopGetApplicationMenu(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t DesktopSetApplicationMenu(ant_t *js, ant_value_t *args, int nargs) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid application menu receiver");
-  if (nargs < 1 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
+  if (nargs < 1 || vtype(args[0]) == kTypeNull || vtype(args[0]) == kTypeUndefined) {
     NSApp.mainMenu = nil;
     state->application_menu = js_mkundef();
     js_set_slot_wb(js, state->app, SLOT_AUX, js_mkundef());

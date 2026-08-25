@@ -14,11 +14,15 @@ on:
       version:
         description: Build version
         value: ${{ jobs.build.outputs.version }}
+      bench_v8_score:
+        description: bench-v8 geometric-mean score
+        value: ${{ jobs.build.outputs.bench_v8_score }}
 
 jobs:
   build:
     outputs:
       version: ${{ steps.build.outputs.version }}
+      bench_v8_score: ${{ steps.bench_v8.outputs.score }}
     # runs-on/container/shell must be hardcoded
     runs-on: |-
       ${{ case(
@@ -209,6 +213,36 @@ jobs:
             macos-*) "$ANT_BIN" tests/test_ant_cron_os.cjs ;;
             windows-*) "$ANT_BIN" tests/test_ant_cron_windows.cjs ;;
           esac
+
+      - name: Run bench-v8
+        id: bench_v8
+        shell: bash
+        run: |
+          RESULT_DIR="bench-v8-results"
+          RESULT_PATH="$RESULT_DIR/${{ inputs.platform }}.json"
+          ANT_BIN="./build/${{ steps.config.outputs.binary_name }}"
+
+          mkdir -p "$RESULT_DIR"
+          "$ANT_BIN" examples/bench-v8/index.js
+          cp examples/bench-v8/score.json "$RESULT_PATH"
+
+          SCORE=$(jq -er '.score | numbers' "$RESULT_PATH")
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## bench-v8"
+            echo
+            echo "| Platform | Score |"
+            echo "|---|---:|"
+            echo '| `${{ inputs.platform }}` | '"$SCORE"' |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench-v8 score
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: bench-v8-${{ inputs.platform }}
+          path: bench-v8-results/${{ inputs.platform }}.json
+          if-no-files-found: error
 
       # === UPLOAD ARTIFACTS ===
       - name: Upload binary

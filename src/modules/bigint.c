@@ -122,7 +122,7 @@ static ant_value_t bigint_alloc_payload(
   payload->limb_count = (uint32_t)capacity;
   *payload_out = payload;
   
-  return mkref(T_BIGINT, payload);
+  return mkref(kTypeBigInt, payload);
 }
 
 static ant_value_t bigint_alloc_binary_payload(
@@ -377,7 +377,7 @@ static uint64_t bigint_low_u64(ant_t *js, ant_value_t value) {
 }
 
 bool bigint_to_uint64_wrapping(ant_t *js, ant_value_t value, uint64_t *out) {
-  if (!out || vtype(value) != T_BIGINT) return false;
+  if (!out || vtype(value) != kTypeBigInt) return false;
   uint64_t low = bigint_low_u64(js, value);
   *out = bigint_is_negative(js, value) ? (uint64_t)(0 - low) : low;
   return true;
@@ -1569,9 +1569,9 @@ size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len) {
 }
 
 ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
-  if (vtype(arg) == T_BIGINT) return arg;
+  if (vtype(arg) == kTypeBigInt) return arg;
 
-  if (vtype(arg) == T_NUM) {
+  if (vtype(arg) == kTypeNumber) {
     double d = tod(arg);
     if (!isfinite(d)) return js_mkerr(js, "Cannot convert Infinity or NaN to BigInt");
     if (d != trunc(d)) return js_mkerr(js, "Cannot convert non-integer to BigInt");
@@ -1591,7 +1591,7 @@ ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
     return out;
   }
 
-  if (vtype(arg) == T_STR) {
+  if (vtype(arg) == kTypeString) {
     ant_offset_t slen;
     ant_offset_t off = vstr(js, arg, &slen);
     const char *str = (const char *)(uintptr_t)(off);
@@ -1613,13 +1613,13 @@ ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
     return bigint_from_string_digits(js, str + start, end - start, neg, false);
   }
 
-  if (vtype(arg) == T_BOOL) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
+  if (vtype(arg) == kTypeBool) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
 
   return js_mkerr(js, "Cannot convert to BigInt");
 }
 
 static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
+  if (vtype(js->new_target) != kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
   if (nargs < 1) return js_mkbigint(js, "0", 1, false);
 
   return bigint_from_value(js, args[0]);
@@ -1633,7 +1633,7 @@ static ant_value_t bigint_to_u64(ant_t *js, ant_value_t value, uint64_t *out) {
 }
 
 ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out) {
-  if (vtype(arg) == T_BIGINT) return bigint_to_u64(js, arg, bits_out);
+  if (vtype(arg) == kTypeBigInt) return bigint_to_u64(js, arg, bits_out);
 
   double bits = js_to_number(js, arg);
   if (!isfinite(bits) || bits < 0 || bits != floor(bits)) {
@@ -1655,7 +1655,7 @@ static ant_value_t builtin_BigInt_asIntN(ant_t *js, ant_value_t *args, int nargs
   ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
 
-  if (vtype(args[1]) != T_BIGINT) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  if (vtype(args[1]) != kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
   ant_value_t mod = bigint_pow2(js, bits);
@@ -1689,7 +1689,7 @@ static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int narg
   ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
 
-  if (vtype(args[1]) != T_BIGINT) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  if (vtype(args[1]) != kTypeBigInt) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
   ant_value_t mod = bigint_pow2(js, bits);
@@ -1709,13 +1709,13 @@ static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int narg
 
 static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t val = js->this_val;
-  if (vtype(val) != T_BIGINT) {
+  if (vtype(val) != kTypeBigInt) {
     val = unwrap_primitive(js, val);
-    if (vtype(val) != T_BIGINT) return js_mkerr(js, "toString called on non-BigInt");
+    if (vtype(val) != kTypeBigInt) return js_mkerr(js, "toString called on non-BigInt");
   }
 
   int radix = 10;
-  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
     radix = (int)tod(args[0]);
     if (radix < 2 || radix > 36) return js_mkerr(js, "radix must be between 2 and 36");
   }
@@ -1756,9 +1756,9 @@ static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t val = js->this_val;
-  if (vtype(val) != T_BIGINT) {
+  if (vtype(val) != kTypeBigInt) {
     val = unwrap_primitive(js, val);
-    if (vtype(val) != T_BIGINT) return js_mkerr(js, "valueOf called on non-BigInt");
+    if (vtype(val) != kTypeBigInt) return js_mkerr(js, "valueOf called on non-BigInt");
   }
   return val;
 }

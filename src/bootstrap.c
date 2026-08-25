@@ -3,7 +3,6 @@
 #include <crprintf.h>
 
 #include "ant.h"
-#include "internal.h"
 #include "bootstrap.h"
 #include "snapshot.h"
 #include "messages.h"
@@ -187,6 +186,6 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_standard_library("stream/web", stream_web_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
-  if (vtype(snapshot_result) == T_ERR) crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
+  if (vtype(snapshot_result) == kTypeError) crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   js_set_descriptor(js, js_as_obj(js->Ant), "cron", 4, JS_DESC_W | JS_DESC_E);
 }

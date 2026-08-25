@@ -62,7 +62,7 @@ jobs:
       source_revision: ${{ github.sha }}
 
   summary:
-    name: Version
+    name: Build summary
     needs: [build]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && needs.build.result != 'skipped' }}
@@ -74,6 +74,13 @@ jobs:
         with:
           pattern: version-*
           path: versions
+
+      - name: Download bench-v8 artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: bench-v8-*
+          path: bench-v8-results
 
       - name: Generate summary
         id: version
@@ -95,7 +102,33 @@ jobs:
           fi
 
           echo "value=${UNIQUE[0]}" >> "$GITHUB_OUTPUT"
-          echo "## Build Version: \`${UNIQUE[0]}\`" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Version: \`${UNIQUE[0]}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          PLATFORMS=(
+            linux-glibc-x64
+            linux-glibc-aarch64
+            linux-musl-x64
+            linux-musl-aarch64
+            macos-x64
+            macos-aarch64
+            windows-x64
+          )
+
+          {
+            echo
+            echo "## bench-v8"
+            echo
+            echo "| Platform | Score |"
+            echo "|---|---:|"
+            for platform in "${PLATFORMS[@]}"; do
+              result="bench-v8-results/bench-v8-$platform/$platform.json"
+              score="N/A"
+              if [[ -f "$result" ]]; then
+                score=$(jq -r '.score // "N/A"' "$result")
+              fi
+              echo "| \`$platform\` | $score |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
   refresh-manifest:
     name: Refresh manifest

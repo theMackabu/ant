@@ -6,8 +6,8 @@ ant_value_t DesktopNativeIpcReply(ant_t *js, ant_value_t *args, int nargs) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid desktop IPC binding");
   (void)state;
-  if (nargs != 4 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM || vtype(args[2]) != T_BOOL ||
-      vtype(args[3]) != T_STR) {
+  if (nargs != 4 || vtype(args[0]) != kTypeNumber || vtype(args[1]) != kTypeNumber || vtype(args[2]) != kTypeBool ||
+      vtype(args[3]) != kTypeString) {
     return js_mkerr(js, "invalid native IPC reply");
   }
   ant_desktop_window_state_t *window = ant_desktop_window_find((ant_desktop_window_id_t)js_getnum(args[0]));
@@ -23,7 +23,7 @@ ant_value_t DesktopNativeIpcReply(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static const char *IpcChannelArgument(ant_t *js, ant_value_t *args, int nargs, size_t *length) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) return NULL;
+  if (nargs < 1 || vtype(args[0]) != kTypeString) return NULL;
   return js_getstr(js, args[0], length);
 }
 
@@ -36,7 +36,7 @@ ant_value_t DesktopIpcMainHandle(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "ipcMain.handle(channel, handler) requires a non-empty channel and function");
   }
   ant_value_t current = js_get(js, state->ipc_handlers, channel);
-  if (vtype(current) != T_UNDEF) { return js_mkerr(js, "an IPC handler is already registered for %s", channel); }
+  if (vtype(current) != kTypeUndefined) { return js_mkerr(js, "an IPC handler is already registered for %s", channel); }
   js_set(js, state->ipc_handlers, channel, args[1]);
   return js_mkundef();
 }

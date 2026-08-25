@@ -260,7 +260,7 @@ static inline ant_value_t sv_op_get_global(
 ) {
   sv_atom_t *a = &func->atoms[sv_get_u32(ip + 1)];
   ant_value_t super_val = sv_vm_get_super_val(vm);
-  if (a->len == 5 && memcmp(a->str, "super", 5) == 0 && vtype(super_val) != T_UNDEF) {
+  if (a->len == 5 && memcmp(a->str, "super", 5) == 0 && vtype(super_val) != kTypeUndefined) {
     ant_value_t sv = super_val;
     vm->stack[vm->sp++] = sv;
     return sv;

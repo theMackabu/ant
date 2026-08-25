@@ -43,22 +43,22 @@ static ant_value_t syntax_read_options(
     .ts_mode = ANT_TS_SOURCE_AUTO,
   };
 
-  if (vtype(options) == T_UNDEF) return js_mkundef();
+  if (vtype(options) == kTypeUndefined) return js_mkundef();
   if (!is_object_type(options))
     return syntax_type_error(js, function, "options must be an object");
 
   ant_value_t filename = js_get(js, options, "filename");
   if (is_err(filename)) return filename;
-  if (vtype(filename) != T_UNDEF) {
-    if (vtype(filename) != T_STR)
+  if (vtype(filename) != kTypeUndefined) {
+    if (vtype(filename) != kTypeString)
       return syntax_type_error(js, function, "options.filename must be a string");
     out->filename = js_getstr(js, filename, NULL);
   }
 
   ant_value_t source_type = js_get(js, options, "sourceType");
   if (is_err(source_type)) return source_type;
-  if (vtype(source_type) != T_UNDEF) {
-    if (vtype(source_type) != T_STR)
+  if (vtype(source_type) != kTypeUndefined) {
+    if (vtype(source_type) != kTypeString)
       return syntax_type_error(js, function, "options.sourceType must be a string");
     size_t len = 0;
     const char *value = js_getstr(js, source_type, &len);
@@ -92,8 +92,8 @@ static ant_value_t syntax_read_options(
   if (for_parse) {
     ant_value_t locations = js_get(js, options, "locations");
     if (is_err(locations)) return locations;
-    if (vtype(locations) != T_UNDEF) {
-      if (vtype(locations) != T_BOOL)
+    if (vtype(locations) != kTypeUndefined) {
+      if (vtype(locations) != kTypeBool)
         return syntax_type_error(js, function, "options.locations must be a boolean");
       out->locations = locations == js_true;
     }
@@ -103,7 +103,7 @@ static ant_value_t syntax_read_options(
 }
 
 static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "stripTypes", "source must be a string");
 
   syntax_options_t options;
@@ -158,7 +158,7 @@ static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "parseJavaScript", "source must be a string");
 
   syntax_options_t options;
@@ -186,7 +186,7 @@ static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int 
   if (!program) {
     parse_arena_rewind(mark);
     js->filename = saved_filename;
-    if (js->thrown_exists) return mkval(T_ERR, 0);
+    if (js->thrown_exists) return mkval(kTypeError, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
   }
 
@@ -209,7 +209,7 @@ static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int 
     if (!program) {
       parse_arena_rewind(mark);
       js->filename = saved_filename;
-      if (js->thrown_exists) return mkval(T_ERR, 0);
+      if (js->thrown_exists) return mkval(kTypeError, 0);
       return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
     }
   }

@@ -16,7 +16,7 @@ void ant_renderer_runtime_set_stack_base(void *stack_base) {
 
 static char *CopyJson(ant_value_t value) {
   ant_value_t json = json_stringify_value(renderer_runtime, value);
-  if (vtype(json) != T_STR) return NULL;
+  if (vtype(json) != kTypeString) return NULL;
   size_t length = 0;
   const char *text = js_getstr(renderer_runtime, json, &length);
   char *copy = malloc(length + 1);
@@ -29,8 +29,8 @@ static char *CopyJson(ant_value_t value) {
 static ant_value_t Response(bool ok, ant_value_t value) {
   if (!ok && is_err(value)) {
     if (vdata(value) != 0) {
-      ant_value_t message = js_get(renderer_runtime, mkval(T_OBJ, vdata(value)), "message");
-      if (vtype(message) == T_STR) value = message;
+      ant_value_t message = js_get(renderer_runtime, mkval(kTypeObject, vdata(value)), "message");
+      if (vtype(message) == kTypeString) value = message;
     }
     if (is_err(value)) {
       const char *text = js_str(renderer_runtime, value);
@@ -82,7 +82,7 @@ char *ant_renderer_runtime_describe(const char *specifier) {
   ant_offset_t count = js_arr_len(renderer_runtime, keys);
   for (ant_offset_t index = 0; index < count; index++) {
     ant_value_t key = js_arr_get(renderer_runtime, keys, index);
-    if (vtype(key) != T_STR) continue;
+    if (vtype(key) != kTypeString) continue;
     size_t length = 0;
     const char *name = js_getstr(renderer_runtime, key, &length);
     char *stable_name = malloc(length + 1);
@@ -93,8 +93,8 @@ char *ant_renderer_runtime_describe(const char *specifier) {
     ant_value_t entry = js_mkobj(renderer_runtime);
     js_set(renderer_runtime, entry, "name", key);
     js_set(renderer_runtime, entry, "callable", js_bool(is_callable(value)));
-    if (!is_callable(value) && (vtype(value) == T_UNDEF || vtype(value) == T_NULL || vtype(value) == T_BOOL ||
-                                vtype(value) == T_NUM || vtype(value) == T_STR)) {
+    if (!is_callable(value) && (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull || vtype(value) == kTypeBool ||
+                                vtype(value) == kTypeNumber || vtype(value) == kTypeString)) {
       js_set(renderer_runtime, entry, "value", value);
     }
     js_arr_push(renderer_runtime, exports, entry);
@@ -128,7 +128,7 @@ char *ant_renderer_runtime_call(const char *specifier, const char *name, const c
     sv_vm_call_explicit_this(renderer_runtime->vm, renderer_runtime, function, module, values, (int)count);
   free(values);
   if (is_err(result)) return CopyJson(Response(false, result));
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     return CopyJson(
       Response(false, js_mkerr(renderer_runtime, "asynchronous Ant module results are not integrated yet")));
   }

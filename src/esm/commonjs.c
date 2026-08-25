@@ -37,14 +37,14 @@ static ant_value_t cjs_module_exports_setter(ant_t *js, ant_value_t *args, int n
 }
 
 static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "require() expects a string specifier");
 
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t data = js_get_slot(fn, SLOT_DATA);
   const char *base_path = js_module_eval_active_filename(js);
 
-  if (vtype(data) == T_STR) {
+  if (vtype(data) == kTypeString) {
     ant_offset_t path_len = 0;
     ant_offset_t path_off = vstr(js, data, &path_len);
     base_path = (const char *)(uintptr_t)(path_off);
@@ -53,16 +53,16 @@ static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ns = js_esm_import_sync_from_require(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
-  if (vtype(ns) == T_OBJ) {
+  if (vtype(ns) == kTypeObject) {
     ant_value_t default_export = js_get_slot(ns, SLOT_DEFAULT);
-    if (vtype(default_export) != T_UNDEF) return default_export;
+    if (vtype(default_export) != kTypeUndefined) return default_export;
   }
   
   return ns;
 }
 
 static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "require.resolve() expects a string specifier");
   }
 
@@ -70,7 +70,7 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
   ant_value_t data = js_get_slot(fn, SLOT_DATA);
   const char *base_path = js_module_eval_active_filename(js);
 
-  if (vtype(data) == T_STR) {
+  if (vtype(data) == kTypeString) {
     ant_offset_t data_len = 0;
     ant_offset_t data_off = vstr(js, data, &data_len);
     base_path = (const char *)(uintptr_t)(data_off);
@@ -78,7 +78,7 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
 
   ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], base_path);
   if (is_err(resolved)) return resolved;
-  if (vtype(resolved) != T_STR) return resolved;
+  if (vtype(resolved) != kTypeString) return resolved;
 
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, resolved, &len);
@@ -118,7 +118,7 @@ static bool copy_own_prop(
 
   value = js_get(js, src, key);
   if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) == T_UNDEF) return true;
+  if (vtype(value) == kTypeUndefined) return true;
 
   ant_value_t res = setprop_cstr(js, dst, key, key_len, value);
   if (is_err(res)) { *err = res; return false; }
@@ -174,7 +174,7 @@ static ant_value_t esm_eval_commonjs_function(
   );
 
   if (!compiled) {
-    if (js->thrown_exists) return mkval(T_ERR, 0);
+    if (js->thrown_exists) return mkval(kTypeError, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
 
@@ -248,7 +248,7 @@ ant_value_t esm_load_commonjs_module(
     filename_val, dirname_val
   );
   
-  if (vtype(result) == T_PROMISE) js_run_event_loop(js);
+  if (vtype(result) == kTypePromise) js_run_event_loop(js);
   js_set(js, module_obj, "loaded", js_true);
   ant_value_t exports_val = js_get(js, module_obj, "exports");
   

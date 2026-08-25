@@ -797,7 +797,7 @@ oom:
   js_mkerr(js, "Out of memory");
 failed: {
     ant_value_t error = js->thrown_exists
-      ? mkval(T_ERR, 0) : js_mkerr(js, "Out of memory");
+      ? mkval(kTypeError, 0) : js_mkerr(js, "Out of memory");
     GC_ROOT_RESTORE(js, root_mark);
     return error;
   }

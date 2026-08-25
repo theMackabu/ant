@@ -28,12 +28,12 @@ static inline ant_value_t sv_apply_normalize_args(ant_t *js, sv_call_args_t *a) 
 
   ant_value_t arg_array = a->args[0];
   uint8_t t = vtype(arg_array);
-  if (t == T_UNDEF || t == T_NULL) {
+  if (t == kTypeUndefined || t == kTypeNull) {
     a->args = NULL;
     a->argc = 0;
     return js_mkundef();
   }
-  if (t != T_ARR) {
+  if (t != kTypeArray) {
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "apply arguments must be an array or null/undefined");
   }
@@ -65,7 +65,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
-  if (vtype(func) == T_OBJ && is_proxy(func)) {
+  if (vtype(func) == kTypeObject && is_proxy(func)) {
     js->new_target = new_target;
     ant_value_t result = js_proxy_construct(js, func, args, argc, new_target);
     vm->sp -= argc + 2;
@@ -79,7 +79,7 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   }
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
+  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );
@@ -183,7 +183,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t norm = sv_apply_normalize_args(js, &call);
   if (is_err(norm)) { vm->sp -= argc + 2; return norm; }
 
-  if (vtype(func) == T_OBJ && is_proxy(func)) {
+  if (vtype(func) == kTypeObject && is_proxy(func)) {
     js->new_target = new_target;
     ant_value_t result = js_proxy_construct(js, func, call.args, call.argc, new_target);
     sv_call_args_release(&call);
@@ -199,7 +199,7 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   }
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
+  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );
@@ -276,7 +276,7 @@ static inline ant_value_t sv_eval_in_frame(
 
 static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   ant_value_t code = vm->stack[--vm->sp];
-  if (vtype(code) != T_STR) {
+  if (vtype(code) != kTypeString) {
     vm->stack[vm->sp++] = code;
     return code;
   }
@@ -293,7 +293,7 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
 }
 
 static inline ant_value_t sv_op_check_ctor(sv_vm_t *vm, ant_t *js) {
-  if (vtype(sv_vm_get_new_target(vm, js)) == T_UNDEF)
+  if (vtype(sv_vm_get_new_target(vm, js)) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
   return tov(0);
 }
@@ -310,7 +310,7 @@ static inline bool sv_op_call_call_fused(
   ant_value_t *args1, int n1, ant_value_t *args2, int n2,
   bool materialize_args2, ant_value_t *result_out
 ) {
-  if (n1 == 1 && vtype(xv) == T_FUNC) {
+  if (n1 == 1 && vtype(xv) == kTypeFunction) {
     sv_closure_t *c1 = js_func_closure(xv);
     sv_func_t *f1 = c1->func;
     if (
@@ -325,7 +325,7 @@ static inline bool sv_op_call_call_fused(
       if (materialize_args2) {
         for (int i = 0; i < n2; i++) {
           ant_value_t value = args2[i];
-          if (vtype(value) == T_STR && str_is_heap_builder(value)) {
+          if (vtype(value) == kTypeString && str_is_heap_builder(value)) {
             value = sv_string_builder_read_value(js, value);
             if (is_err(value)) {
               *result_out = value;
@@ -429,7 +429,7 @@ static inline ant_value_t sv_op_call_call_slot(
   frame = vm->fp >= 0 ? &vm->frames[vm->fp] : NULL;
   slot = sv_frame_slot_ptr(frame, slot_idx);
   arg2 = slot ? *slot : js_mkundef();
-  if (vtype(arg2) == T_STR && str_is_heap_builder(arg2)) {
+  if (vtype(arg2) == kTypeString && str_is_heap_builder(arg2)) {
     arg2 = sv_string_builder_read_value(js, arg2);
     if (is_err(arg2)) return arg2;
   }
@@ -450,7 +450,7 @@ static inline ant_value_t sv_op_call_call_slot_ptr(
   ant_value_t r = sv_vm_call(vm, js, xv, js_mkundef(), args1, 1, NULL, false);
   if (is_err(r)) return r;
   arg2 = slot ? *slot : js_mkundef();
-  if (vtype(arg2) == T_STR && str_is_heap_builder(arg2)) {
+  if (vtype(arg2) == kTypeString && str_is_heap_builder(arg2)) {
     arg2 = sv_string_builder_read_value(js, arg2);
     if (is_err(arg2)) return arg2;
   }

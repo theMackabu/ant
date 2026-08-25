@@ -589,7 +589,7 @@ static ant_value_t crash_report_print_url(ant_t *js, ant_value_t *args, int narg
   if (nargs < 1) return js_mkundef();
 
   size_t len = 0;
-  const char *s = vtype(args[0]) == T_STR ? js_getstr(js, args[0], &len) : NULL;
+  const char *s = vtype(args[0]) == kTypeString ? js_getstr(js, args[0], &len) : NULL;
   
   if (!s || len == 0) {
     if (!crash_report_status_printed) {
@@ -677,7 +677,7 @@ static ant_value_t crash_get(ant_t *js, ant_value_t obj, const char *key) {
 
 static const char *crash_get_string(ant_t *js, ant_value_t obj, const char *key, size_t *len, const char *fallback) {
   ant_value_t value = crash_get(js, obj, key);
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     const char *s = js_getstr(js, value, len);
     if (s) return s;
   }
@@ -687,7 +687,7 @@ static const char *crash_get_string(ant_t *js, ant_value_t obj, const char *key,
 
 static unsigned long long crash_get_uint(ant_t *js, ant_value_t obj, const char *key) {
   ant_value_t value = crash_get(js, obj, key);
-  if (vtype(value) != T_NUM) return 0;
+  if (vtype(value) != kTypeNumber) return 0;
   double n = js_getnum(value);
   if (n <= 0) return 0;
   return (unsigned long long)n;
@@ -711,7 +711,7 @@ static void crash_print_quoted_value(ant_t *js, ant_value_t value) {
   size_t len = 0;
   const char *s = NULL;
   
-  if (vtype(value) == T_STR) s = js_getstr(js, value, &len);
+  if (vtype(value) == kTypeString) s = js_getstr(js, value, &len);
   if (!s) {
     s = "<unknown>";
     len = strlen(s);
@@ -732,7 +732,7 @@ static void crash_print_string_value(ant_t *js, ant_value_t value) {
   size_t len = 0;
   const char *s = NULL;
   
-  if (vtype(value) == T_STR) s = js_getstr(js, value, &len);
+  if (vtype(value) == kTypeString) s = js_getstr(js, value, &len);
   if (!s) {
     s = "<unknown>";
     len = strlen(s);
@@ -747,7 +747,7 @@ static void crash_print_string_value(ant_t *js, ant_value_t value) {
 
 static void crash_print_args(ant_t *js, ant_value_t argv) {
   crfprintf(stderr, "<dim>Args:");
-  if (vtype(argv) != T_ARR || js_arr_len(js, argv) == 0) {
+  if (vtype(argv) != kTypeArray || js_arr_len(js, argv) == 0) {
     fputs(" \"ant\"\n", stderr);
     return;
   }
@@ -763,7 +763,7 @@ static void crash_print_args(ant_t *js, ant_value_t argv) {
 static void crash_print_frames(ant_t *js, ant_value_t report) {
   ant_value_t frames = crash_get(js, report, "frames");
   crfprintf(stderr, "<dim>Native backtrace:</>\n");
-  if (vtype(frames) != T_ARR || js_arr_len(js, frames) == 0) {
+  if (vtype(frames) != kTypeArray || js_arr_len(js, frames) == 0) {
     crfprintf(stderr, "  <dim>(no native frames were captured)</>\n\n");
     return;
   }
@@ -856,7 +856,7 @@ int ant_crash_run_internal_report(ant_t *js) {
   }
 
   ant_value_t report_json = js_json_stringify(js, &report, 1);
-  if (vtype(report_json) != T_STR) {
+  if (vtype(report_json) != kTypeString) {
     crash_report_print_upload_failed();
     free(payload);
     return EXIT_FAILURE;

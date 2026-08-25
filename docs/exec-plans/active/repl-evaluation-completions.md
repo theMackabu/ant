@@ -54,7 +54,7 @@ expressions or draining unrelated event-loop work.
 
 ## Decision log
 
-- 2026-08-15: Do not infer asynchronous entry completion from `T_PROMISE`.
+- 2026-08-15: Do not infer asynchronous entry completion from `kTypePromise`.
   The compiler's `is_tla` provenance is carried through a structured result so
   `Promise.resolve(1)` remains a normal Promise-valued REPL expression.
 - 2026-08-15: Do not use `js_run_event_loop()` for REPL evaluation. A targeted

@@ -133,7 +133,7 @@ static inline bool sv_eval_binding_store(
   
   if (
     binding->kind == SV_EVAL_BIND_PARAM &&
-    vtype(state->arguments_obj) != T_UNDEF
+    vtype(state->arguments_obj) != kTypeUndefined
   ) js_arguments_sync_slot(js, state->arguments_obj, binding->index, value);
     
   return true;

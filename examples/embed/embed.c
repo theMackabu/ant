@@ -51,9 +51,9 @@ static void example_basic_eval(void) {
   const char *code = "1 + 2 * 3";
   ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
 
-  if (vtype(result) == T_NUM) {
+  if (vtype(result) == kTypeNumber) {
     printf("  Result: %g\n", js_getnum(result));
-  } else if (vtype(result) == T_ERR) {
+  } else if (vtype(result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, result));
   }
 
@@ -72,7 +72,7 @@ static ant_value_t my_add(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t my_greet(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "greet() expects a string");
   }
 
@@ -172,13 +172,13 @@ static void example_error_handling(void) {
 
   const char *bad_code = "let x = {";
   ant_value_t r1 = js_eval_bytecode_eval(js, bad_code, strlen(bad_code));
-  if (vtype(r1) == T_ERR) {
+  if (vtype(r1) == kTypeError) {
     printf("  Syntax error:    %s\n", js_str(js, r1));
   }
 
   const char *ref_err = "undefinedVariable + 1";
   ant_value_t r2 = js_eval_bytecode_eval(js, ref_err, strlen(ref_err));
-  if (vtype(r2) == T_ERR) {
+  if (vtype(r2) == kTypeError) {
     printf("  Reference error: %s\n", js_str(js, r2));
   }
 
@@ -187,7 +187,7 @@ static void example_error_handling(void) {
 
   const char *type_err = "add('not', 'numbers')";
   ant_value_t r3 = js_eval_bytecode_eval(js, type_err, strlen(type_err));
-  if (vtype(r3) == T_ERR) {
+  if (vtype(r3) == kTypeError) {
     printf("  Type error:      %s\n", js_str(js, r3));
   }
 
@@ -216,7 +216,7 @@ static void example_call_js_from_c(void) {
     code, strlen(code), ns
   );
   
-  if (vtype(eval_result) == T_ERR) {
+  if (vtype(eval_result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, eval_result));
     js_destroy(js);
     return;
@@ -323,7 +323,7 @@ static void example_stateful_session(void) {
   ant_value_t eval_result = js_esm_eval_module_source(
     js, "embed_stateful_session.mjs", code, strlen(code), ns
   );
-  if (vtype(eval_result) == T_ERR) {
+  if (vtype(eval_result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, eval_result));
     js_destroy(js);
     return;
@@ -332,7 +332,7 @@ static void example_stateful_session(void) {
   ant_value_t increment = js_get(js, ns, "increment");
   for (int i = 0; i < 3; i++) {
     ant_value_t call_result = sv_vm_call(js->vm, js, increment, js_mkundef(), NULL, 0, NULL, false);
-    if (vtype(call_result) == T_ERR) {
+    if (vtype(call_result) == kTypeError) {
       printf("  Error in increment %d: %s\n", i + 1, js_str(js, call_result));
       js_destroy(js);
       return;
@@ -382,7 +382,7 @@ static void example_async_event_loop(void) {
   ant_value_t result = js_esm_eval_module_source(
     js, "embed_async_event_loop.mjs", code, strlen(code), ns
   );
-  if (vtype(result) == T_ERR) {
+  if (vtype(result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, result));
     js_destroy(js);
     return;
@@ -421,7 +421,7 @@ static void example_console_logging(void) {
     "'done'";
 
   ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
-  if (vtype(result) == T_ERR) {
+  if (vtype(result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, result));
   }
 
@@ -465,7 +465,7 @@ static void example_global_this(void) {
     "console.log(this)";
 
   ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
-  if (vtype(result) == T_ERR) {
+  if (vtype(result) == kTypeError) {
     printf("  Error: %s\n", js_str(js, result));
   }
 

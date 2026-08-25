@@ -23,26 +23,26 @@ ant_value_t DesktopBrowserWindowCtor(ant_t *js, ant_value_t *args, int nargs) {
   if (is_object_type(web_preferences)) {
     ant_value_t ant_integration = js_get(js, web_preferences, "antIntegration");
     ant_value_t node_integration_value = js_get(js, web_preferences, "nodeIntegration");
-    if (vtype(node_integration_value) != T_UNDEF && vtype(node_integration_value) != T_BOOL) {
+    if (vtype(node_integration_value) != kTypeUndefined && vtype(node_integration_value) != kTypeBool) {
       return js_mkerr(js, "webPreferences.nodeIntegration must be a boolean");
     }
-    if (vtype(ant_integration) != T_UNDEF && vtype(ant_integration) != T_BOOL) {
+    if (vtype(ant_integration) != kTypeUndefined && vtype(ant_integration) != kTypeBool) {
       return js_mkerr(js, "webPreferences.antIntegration must be a boolean");
     }
-    if (vtype(node_integration_value) == T_BOOL && vtype(ant_integration) == T_BOOL &&
+    if (vtype(node_integration_value) == kTypeBool && vtype(ant_integration) == kTypeBool &&
         js_truthy(js, node_integration_value) != js_truthy(js, ant_integration)) {
       return js_mkerr(js, "webPreferences.antIntegration and nodeIntegration must match");
     }
-    ant_value_t integration = vtype(ant_integration) == T_BOOL ? ant_integration : node_integration_value;
-    if (vtype(integration) == T_BOOL) node_integration = js_truthy(js, integration);
+    ant_value_t integration = vtype(ant_integration) == kTypeBool ? ant_integration : node_integration_value;
+    if (vtype(integration) == kTypeBool) node_integration = js_truthy(js, integration);
   }
   BOOL context_isolation = OptionBool(js, web_preferences, "contextIsolation", YES);
   if (sandbox && node_integration) { return js_mkerr(js, "webPreferences.nodeIntegration requires sandbox: false"); }
   NSString *preload_path = nil;
   if (is_object_type(web_preferences)) {
     ant_value_t preload = js_get(js, web_preferences, "preload");
-    if (vtype(preload) != T_UNDEF) {
-      if (vtype(preload) != T_STR) { return js_mkerr(js, "webPreferences.preload must be a file path"); }
+    if (vtype(preload) != kTypeUndefined) {
+      if (vtype(preload) != kTypeString) { return js_mkerr(js, "webPreferences.preload must be a file path"); }
       preload_path = OptionString(js, web_preferences, "preload");
       if (!preload_path.isAbsolutePath) {
         preload_path = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:preload_path];
@@ -75,11 +75,11 @@ ant_value_t DesktopBrowserWindowCtor(ant_t *js, ant_value_t *args, int nargs) {
 
   if (nargs > 0 && is_object_type(args[0])) {
     ant_value_t value = js_get(js, args[0], "width");
-    if (vtype(value) == T_NUM && js_getnum(value) > 0) width = js_getnum(value);
+    if (vtype(value) == kTypeNumber && js_getnum(value) > 0) width = js_getnum(value);
     value = js_get(js, args[0], "height");
-    if (vtype(value) == T_NUM && js_getnum(value) > 0) height = js_getnum(value);
+    if (vtype(value) == kTypeNumber && js_getnum(value) > 0) height = js_getnum(value);
     value = js_get(js, args[0], "title");
-    if (vtype(value) == T_STR) {
+    if (vtype(value) == kTypeString) {
       size_t length = 0;
       const char *text = js_getstr(js, value, &length);
       title = [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];
@@ -253,7 +253,7 @@ ant_value_t DesktopBrowserWindowCtor(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t web_preferences = js_get(js, args[0], "webPreferences");
     if (is_object_type(web_preferences)) {
       ant_value_t capabilities = js_get(js, web_preferences, "capabilities");
-      if (vtype(capabilities) != T_UNDEF) { js_set(js, object, "preloadCapabilities", capabilities); }
+      if (vtype(capabilities) != kTypeUndefined) { js_set(js, object, "preloadCapabilities", capabilities); }
     }
   }
   return object;
@@ -278,7 +278,7 @@ ant_value_t LoadURL(ant_t *js, ant_desktop_window_state_t *state, NSString *url,
 ant_value_t DesktopBrowserWindowLoadURL(ant_t *js, ant_value_t *args, int nargs) {
   ant_desktop_window_state_t *state = ant_desktop_window_from_value(js, js_getthis(js));
   if (!state) return js_mkerr(js, "invalid BrowserWindow receiver");
-  if (nargs < 1 || vtype(args[0]) != T_STR) { return js_mkerr(js, "loadURL(url) requires a string"); }
+  if (nargs < 1 || vtype(args[0]) != kTypeString) { return js_mkerr(js, "loadURL(url) requires a string"); }
   size_t length = 0;
   const char *text = js_getstr(js, args[0], &length);
   NSString *url = [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];
@@ -288,7 +288,7 @@ ant_value_t DesktopBrowserWindowLoadURL(ant_t *js, ant_value_t *args, int nargs)
 ant_value_t DesktopBrowserWindowLoadFile(ant_t *js, ant_value_t *args, int nargs) {
   ant_desktop_window_state_t *state = ant_desktop_window_from_value(js, js_getthis(js));
   if (!state) return js_mkerr(js, "invalid BrowserWindow receiver");
-  if (nargs < 1 || vtype(args[0]) != T_STR) { return js_mkerr(js, "loadFile(path) requires a string"); }
+  if (nargs < 1 || vtype(args[0]) != kTypeString) { return js_mkerr(js, "loadFile(path) requires a string"); }
   size_t length = 0;
   const char *text = js_getstr(js, args[0], &length);
   NSString *path = [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];

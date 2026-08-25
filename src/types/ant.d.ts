@@ -10,13 +10,16 @@ type AntType =
   | 'array'
   | 'function'
   | 'cfunc'
-  | 'closure'
   | 'promise'
   | 'generator'
   | 'err'
   | 'typedarray'
-  | 'ffi'
-  | 'ntarg';
+  | 'functioninfo'
+  | 'map'
+  | 'set'
+  | 'weakmap'
+  | 'weakset'
+  | 'sourcecode';
 
 type AntHost =
   | 'cygwin'

@@ -148,12 +148,12 @@ static bool ant_c_append(
 }
 
 static ant_value_t ant_c_template_source(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_ARR)
+  if (nargs < 1 || vtype(args[0]) != kTypeArray)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
   ant_value_t raw = js_get(js, args[0], "raw");
   if (is_err(raw)) return raw;
-  if (vtype(raw) != T_ARR)
+  if (vtype(raw) != kTypeArray)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
   ant_offset_t literal_count = js_arr_len(js, raw);
@@ -166,7 +166,7 @@ static ant_value_t ant_c_template_source(ant_t *js, ant_value_t *args, int nargs
   
   for (ant_offset_t i = 0; i < literal_count; i++) {
     ant_value_t literal = js_arr_get(js, raw, i);
-    if (vtype(literal) != T_STR) {
+    if (vtype(literal) != kTypeString) {
       free(buffer);
       return js_mkerr(js, "Ant.unsafe.c received an invalid template object");
     }
@@ -334,13 +334,13 @@ static ant_value_t ant_c_parse_signature(
     .mir_return_type = MIR_T_I32,
   };
   
-  if (vtype(options_value) == T_UNDEF) return js_mkundef();
+  if (vtype(options_value) == kTypeUndefined) return js_mkundef();
   if (!is_object_type(options_value))
     return js_mkerr(js, "Ant.unsafe.c() options must be an object");
 
   signature->entry_value = js_get(js, options_value, "entry");
   if (is_err(signature->entry_value)) return signature->entry_value;
-  if (vtype(signature->entry_value) != T_STR)
+  if (vtype(signature->entry_value) != kTypeString)
     return js_mkerr(js, "Ant.unsafe.c() options.entry must be a string");
 
   size_t entry_length;
@@ -350,7 +350,7 @@ static ant_value_t ant_c_parse_signature(
 
   signature->returns_value = js_get(js, options_value, "returns");
   if (is_err(signature->returns_value)) return signature->returns_value;
-  if (vtype(signature->returns_value) != T_STR)
+  if (vtype(signature->returns_value) != kTypeString)
     return js_mkerr(js, "Ant.unsafe.c() options.returns must be a supported type");
 
   signature->returns_name = js_getstr(js, signature->returns_value, NULL);
@@ -366,14 +366,14 @@ static ant_value_t ant_c_parse_signature(
   }
 
   signature->args_value = js_get(js, options_value, "args");
-  if (is_err(signature->args_value) || vtype(signature->args_value) == T_UNDEF)
+  if (is_err(signature->args_value) || vtype(signature->args_value) == kTypeUndefined)
     return signature->args_value;
   if (!is_object_type(signature->args_value))
     return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
 
   ant_value_t length_value = js_get(js, signature->args_value, "length");
   if (is_err(length_value)) return length_value;
-  if (vtype(length_value) != T_NUM)
+  if (vtype(length_value) != kTypeNumber)
     return js_mkerr(js, "Ant.unsafe.c() options.args must be an array");
 
   double length = js_getnum(length_value);
@@ -391,7 +391,7 @@ static ant_value_t ant_c_parse_signature(
     ant_value_t type_value = js_get(js, signature->args_value, index);
     
     if (is_err(type_value)) return type_value;
-    if (vtype(type_value) != T_STR || !ant_c_parse_type(
+    if (vtype(type_value) != kTypeString || !ant_c_parse_type(
       js_getstr(js, type_value, NULL), &signature->arg_types[i],
       &signature->ffi_arg_types[i], &signature->mir_arg_types[i]
     )) return js_mkerr(js, "Ant.unsafe.c() options.args[%zu] has an unsupported type", i);
@@ -558,7 +558,7 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
     ffi_args[i] = &values[i];
 
     if (function->arg_types[i] == ANT_C_ARG_INT64) {
-      if (vtype(args[i]) != T_BIGINT
+      if (vtype(args[i]) != kTypeBigInt
         || !bigint_to_int64_wrapping(js, args[i], &values[i].i64)) return js_mkerr(
         js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a bigint",
         function->entry_name, i + 1
@@ -567,7 +567,7 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
     }
 
     if (function->arg_types[i] == ANT_C_ARG_UINT64) {
-      if (vtype(args[i]) != T_BIGINT
+      if (vtype(args[i]) != kTypeBigInt
         || !bigint_to_uint64_wrapping(js, args[i], &values[i].u64)) return js_mkerr(
         js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a bigint",
         function->entry_name, i + 1
@@ -575,7 +575,7 @@ static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) 
       continue;
     }
 
-    if (vtype(args[i]) != T_NUM) return js_mkerr(
+    if (vtype(args[i]) != kTypeNumber) return js_mkerr(
       js, "Ant.unsafe.c() entry \"%s\" argument %zu must be a number",
       function->entry_name, i + 1
     );
@@ -700,7 +700,7 @@ static ant_value_t ant_c_call_status_entry(
 }
 
 static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_t options_value) {
-  if (vtype(source_value) != T_STR)
+  if (vtype(source_value) != kTypeString)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
   ant_c_signature_t signature = {0};
@@ -819,7 +819,7 @@ static ant_value_t ant_c_configured_tag(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t js_unsafe_c(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs >= 1 && vtype(args[0]) == T_ARR) {
+  if (nargs >= 1 && vtype(args[0]) == kTypeArray) {
     ant_value_t source = ant_c_template_source(js, args, nargs);
     if (is_err(source)) return source;
     return ant_c_compile(js, source, js_mkundef());

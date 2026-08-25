@@ -81,7 +81,7 @@ static inline void sv_op_define_method_comp(
     if (is_err(named)) return;
   }
   
-  if (vtype(key) == T_SYMBOL) {
+  if (vtype(key) == kTypeSymbol) {
     if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
     if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
     mkprop(js, obj, key, fn, data_attrs);
@@ -89,7 +89,7 @@ static inline void sv_op_define_method_comp(
   }
   
   ant_value_t key_str = sv_key_to_propstr(js, key);
-  if ((is_getter || is_setter) && vtype(key_str) == T_STR) {
+  if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
@@ -98,7 +98,7 @@ static inline void sv_op_define_method_comp(
     return;
   }
   
-  if (vtype(key_str) == T_STR) {
+  if (vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
@@ -110,7 +110,7 @@ static inline void sv_set_name(
   ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
 ) {
-  if (vtype(fn) == T_FUNC) {
+  if (vtype(fn) == kTypeFunction) {
     sv_closure_t *c = js_func_closure(fn);
     if (!c->func_obj) {
       c->u.pending.name = str;
@@ -141,7 +141,7 @@ static inline void sv_op_set_proto(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[vm->sp - 1];
   
   uint8_t pt = vtype(proto);
-  if (pt == T_OBJ || pt == T_NULL || pt == T_FUNC || pt == T_ARR) js_set_proto_wb(js, obj, proto);
+  if (pt == kTypeObject || pt == kTypeNull || pt == kTypeFunction || pt == kTypeArray) js_set_proto_wb(js, obj, proto);
 }
 
 static inline void sv_op_set_home_obj(sv_vm_t *vm, ant_t *js) {
@@ -178,7 +178,7 @@ static inline void sv_op_copy_data_props(
   while (js_prop_iter_next_key(&iter, &key, NULL)) {
     if (!js_is_own_enumerable_prop(js, src, source_ptr, &key)) continue;
     if (key.is_symbol) {
-      ant_value_t prop_key = mkval(T_SYMBOL, key.sym_off);
+      ant_value_t prop_key = mkval(kTypeSymbol, key.sym_off);
       val = js_get_sym(js, src, prop_key);
       js_setprop(js, dst, prop_key, val);
     } else {
@@ -196,17 +196,17 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t iterable = vm->stack[--vm->sp];
   ant_value_t arr = vm->stack[vm->sp - 1];
-  if (vtype(arr) != T_ARR)
+  if (vtype(arr) != kTypeArray)
     return js_mkerr(js, "spread target is not an array");
 
-  if (vtype(iterable) == T_ARR) {
+  if (vtype(iterable) == kTypeArray) {
     ant_offset_t len = js_arr_len(js, iterable);
     for (ant_offset_t i = 0; i < len; i++)
       js_arr_push(js, arr, js_arr_get(js, iterable, i));
     return tov(0);
   }
 
-  if (vtype(iterable) == T_STR) {
+  if (vtype(iterable) == kTypeString) {
     if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
       iterable = str_materialize(js, iterable);
       if (is_err(iterable)) return iterable;
@@ -229,7 +229,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
   uint8_t ft = vtype(iter_fn);
-  if (ft != T_FUNC && ft != T_CFUNC)
+  if (ft != kTypeFunction && ft != kTypeBuiltin)
     return js_mkerr(js, "not iterable");
 
   ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
@@ -242,7 +242,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   for (;;) {
     ant_value_t next_method = js_getprop_fallback(js, iterator, "next");
     ft = vtype(next_method);
-    if (ft != T_FUNC && ft != T_CFUNC) {
+    if (ft != kTypeFunction && ft != kTypeBuiltin) {
       status = js_mkerr(js, "iterator.next is not a function");
       break;
     }
@@ -288,11 +288,11 @@ static inline ant_value_t sv_op_define_class(
   uint8_t pt = vtype(parent);
   bool parent_is_callable = false;
 
-  if (vtype(ctor) == T_UNDEF) {
+  if (vtype(ctor) == kTypeUndefined) {
     ant_value_t ctor_obj = mkobj(js, 0);
     ctor = js_obj_to_func_ex(js, ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC)
+    if (vtype(func_proto) == kTypeFunction)
       js_set_proto_init(ctor_obj, func_proto);
   }
 
@@ -300,21 +300,21 @@ static inline ant_value_t sv_op_define_class(
 
   if (!has_heritage) {
     ant_value_t object_ctor = js_getprop_fallback(js, js->global, "Object");
-    if (vtype(object_ctor) == T_FUNC) {
+    if (vtype(object_ctor) == kTypeFunction) {
       ant_value_t object_proto = js_getprop_fallback(js, object_ctor, "prototype");
       if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);
     }
-  } else if (pt == T_NULL) {
+  } else if (pt == kTypeNull) {
     js_set_proto_init(proto, js_mknull());
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC) js_set_proto_wb(js, ctor, func_proto);
+    if (vtype(func_proto) == kTypeFunction) js_set_proto_wb(js, ctor, func_proto);
   } else {
     if (!js_is_constructor(parent))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Class extends value is not a constructor");
 
     ant_value_t parent_proto = js_getprop_fallback(js, parent, "prototype");
     if (is_err(parent_proto)) return parent_proto;
-    if (!is_object_type(parent_proto) && vtype(parent_proto) != T_NULL) return js_mkerr_typed(
+    if (!is_object_type(parent_proto) && vtype(parent_proto) != kTypeNull) return js_mkerr_typed(
       js, JS_ERR_TYPE,
       "Class extends value does not have a valid prototype property"
     );
@@ -323,25 +323,25 @@ static inline ant_value_t sv_op_define_class(
     parent_is_callable = true;
   }
   
-  if (parent_is_callable) if (vtype(ctor) == T_FUNC) {
+  if (parent_is_callable) if (vtype(ctor) == kTypeFunction) {
     sv_closure_t *c = js_func_closure(ctor);
     c->super_val = parent;
     c->call_flags |= SV_CALL_HAS_SUPER;
   }
 
-  if (vtype(ctor) == T_FUNC)
+  if (vtype(ctor) == kTypeFunction)
     js_mark_constructor(js_func_obj(ctor), true);
   
   if (
-    vtype(ctor) == T_FUNC && func->debug->source &&
+    vtype(ctor) == kTypeFunction && func->debug->source &&
     source_end > source_start && source_end <= (uint32_t)func->debug->source_len
   ) {
-    js_set_slot(ctor, SLOT_CODE, mkref(T_NTARG, func->debug->source + source_start));
+    js_set_slot(ctor, SLOT_CODE, mkref(kTypeSourceCode, func->debug->source + source_start));
     js_set_slot(ctor, SLOT_CODE_LEN, tov((double)(source_end - source_start)));
   }
   
   setprop_interned(js, proto, "constructor", 11, ctor);
-  ant_value_t ctor_obj = (vtype(ctor) == T_FUNC) ? js_func_obj(ctor) : ctor;
+  ant_value_t ctor_obj = (vtype(ctor) == kTypeFunction) ? js_func_obj(ctor) : ctor;
   js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
   
   if (has_name) 

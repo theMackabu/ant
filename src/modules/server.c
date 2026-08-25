@@ -511,7 +511,7 @@ static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t reque
   ant_value_t result = js_mkundef();
 
   js->this_val = server->export_obj;
-  if (vtype(server->fetch_fn) == T_CFUNC) result = js_as_cfunc(server->fetch_fn)(js, args, 2);
+  if (vtype(server->fetch_fn) == kTypeBuiltin) result = js_as_cfunc(server->fetch_fn)(js, args, 2);
   else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, false);
   js->this_val = saved_this;
   
@@ -576,25 +576,25 @@ static ant_value_t server_sse_send(ant_t *js, ant_value_t *args, int nargs) {
     retry_v = js_get(js, input, "retry");
   }
 
-  if (vtype(data_v) != T_UNDEF && vtype(data_v) != T_NULL) {
+  if (vtype(data_v) != kTypeUndefined && vtype(data_v) != kTypeNull) {
     data_s = js_tostring_val(js, data_v);
     if (is_err(data_s)) return data_s;
     data = js_getstr(js, data_s, NULL);
   }
   
-  if (vtype(event_v) != T_UNDEF && vtype(event_v) != T_NULL) {
+  if (vtype(event_v) != kTypeUndefined && vtype(event_v) != kTypeNull) {
     event_s = js_tostring_val(js, event_v);
     if (is_err(event_s)) return event_s;
     event = js_getstr(js, event_s, NULL);
   }
   
-  if (vtype(id_v) != T_UNDEF && vtype(id_v) != T_NULL) {
+  if (vtype(id_v) != kTypeUndefined && vtype(id_v) != kTypeNull) {
     id_s = js_tostring_val(js, id_v);
     if (is_err(id_s)) return id_s;
     id = js_getstr(js, id_s, NULL);
   }
   
-  if (vtype(retry_v) != T_UNDEF && vtype(retry_v) != T_NULL) {
+  if (vtype(retry_v) != kTypeUndefined && vtype(retry_v) != kTypeNull) {
     retry_s = js_tostring_val(js, retry_v);
     if (is_err(retry_s)) return retry_s;
     retry = js_getstr(js, retry_s, NULL);
@@ -730,7 +730,7 @@ static ant_value_t server_upgrade_websocket(ant_t *js, ant_value_t *args, int na
 static ant_value_t server_abort_signal_task(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t payload = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t signal = 0; ant_value_t reason = 0;
-  if (vtype(payload) != T_OBJ) return js_mkundef();
+  if (vtype(payload) != kTypeObject) return js_mkundef();
 
   signal = js_get(js, payload, "signal");
   reason = js_get(js, payload, "reason");
@@ -764,7 +764,7 @@ static void server_abort_request(server_request_t *req, const char *message) {
 
   js = req->server->js;
   abort_reason = js_get_slot(req->request_obj, SLOT_REQUEST_ABORT_REASON);
-  if (vtype(abort_reason) != T_UNDEF) return;
+  if (vtype(abort_reason) != kTypeUndefined) return;
 
   reason = make_dom_exception(js, 
     message ? message : "The request was aborted", "AbortError"
@@ -780,7 +780,7 @@ static void server_abort_request(server_request_t *req, const char *message) {
 static bool server_response_chunk(server_request_t *req, ant_value_t value, const uint8_t **out, size_t *len) {
   blob_data_t *blob = NULL;
 
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     *out = (const uint8_t *)js_getstr(req->server->js, value, len);
     if (!*out) *len = 0;
     return true;
@@ -815,7 +815,7 @@ static void server_cancel_response_body(server_request_t *req, const char *messa
   );
   
   result = readable_stream_cancel(js, stream, reason);
-  if (vtype(result) == T_PROMISE) promise_mark_handled(result);
+  if (vtype(result) == kTypePromise) promise_mark_handled(result);
 }
 
 static void server_start_stream_read(server_request_t *req);
@@ -1139,7 +1139,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
     return;
   }
 
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     ant_value_t fulfill = server_mkreqfun(js, server_on_response_fulfill, req);
     ant_value_t reject = server_mkreqfun(js, server_on_response_reject, req);
     ant_value_t then_result = 0;
@@ -1258,7 +1258,7 @@ static bool server_request_ensure_reader(server_request_t *req) {
   ant_value_t reader_args[1];
 
   if (!req || !is_object_type(req->response_obj)) return false;
-  if (vtype(req->response_reader) != T_UNDEF) return true;
+  if (vtype(req->response_reader) != kTypeUndefined) return true;
 
   js = req->server->js;
   reader_args[0] = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
@@ -1614,14 +1614,14 @@ static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_expor
     ant_value_t tls = js_get(js, default_export, "tls");
 
     *looks_like_config =
-      vtype(fetch)           != T_UNDEF ||
-      vtype(port)            != T_UNDEF ||
-      vtype(hostname)        != T_UNDEF ||
-      vtype(idle_timeout)    != T_UNDEF ||
-      vtype(request_timeout) != T_UNDEF ||
-      vtype(websocket)       != T_UNDEF ||
-      vtype(unix_path)       != T_UNDEF ||
-      vtype(tls)             != T_UNDEF;
+      vtype(fetch)           != kTypeUndefined ||
+      vtype(port)            != kTypeUndefined ||
+      vtype(hostname)        != kTypeUndefined ||
+      vtype(idle_timeout)    != kTypeUndefined ||
+      vtype(request_timeout) != kTypeUndefined ||
+      vtype(websocket)       != kTypeUndefined ||
+      vtype(unix_path)       != kTypeUndefined ||
+      vtype(tls)             != kTypeUndefined;
   }
 
   return false;
@@ -1697,8 +1697,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   unix_v = js_get(js, default_export, "unix");
   tls_v = js_get(js, default_export, "tls");
   
-  if (vtype(unix_v) != T_UNDEF && vtype(unix_v) != T_NULL) {
-    if (vtype(unix_v) != T_STR) {
+  if (vtype(unix_v) != kTypeUndefined && vtype(unix_v) != kTypeNull) {
+    if (vtype(unix_v) != kTypeString) {
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server unix must be a string");
@@ -1712,7 +1712,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     }
   }
   
-  if (vtype(tls_v) != T_UNDEF && vtype(tls_v) != T_NULL) {
+  if (vtype(tls_v) != kTypeUndefined && vtype(tls_v) != kTypeNull) {
     free(server->unix_path);
     free(server->hostname);
     free(server);
@@ -1725,8 +1725,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   request_timeout_v = js_get(js, default_export, "requestTimeout");
   websocket_v = js_get(js, default_export, "websocket");
 
-  if (vtype(port_v) != T_UNDEF && vtype(port_v) != T_NULL) {
-    if (vtype(port_v) != T_NUM) {
+  if (vtype(port_v) != kTypeUndefined && vtype(port_v) != kTypeNull) {
+    if (vtype(port_v) != kTypeNumber) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
@@ -1741,9 +1741,9 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     }
   }
 
-  if (vtype(hostname_v) != T_UNDEF && vtype(hostname_v) != T_NULL) {
+  if (vtype(hostname_v) != kTypeUndefined && vtype(hostname_v) != kTypeNull) {
     char *next_hostname = NULL;
-    if (vtype(hostname_v) != T_STR) {
+    if (vtype(hostname_v) != kTypeString) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
@@ -1760,9 +1760,9 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     server->hostname = next_hostname;
   }
 
-  if (vtype(idle_timeout_v) != T_UNDEF && vtype(idle_timeout_v) != T_NULL) {
+  if (vtype(idle_timeout_v) != kTypeUndefined && vtype(idle_timeout_v) != kTypeNull) {
     double timeout = 0;
-    if (vtype(idle_timeout_v) != T_NUM) {
+    if (vtype(idle_timeout_v) != kTypeNumber) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
@@ -1778,9 +1778,9 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     server->idle_timeout_ms = (uint64_t)(timeout * 1000.0);
   }
 
-  if (vtype(request_timeout_v) != T_UNDEF && vtype(request_timeout_v) != T_NULL) {
+  if (vtype(request_timeout_v) != kTypeUndefined && vtype(request_timeout_v) != kTypeNull) {
     double timeout = 0;
-    if (vtype(request_timeout_v) != T_NUM) {
+    if (vtype(request_timeout_v) != kTypeNumber) {
       free(server->unix_path);
       free(server->hostname);
       free(server);
@@ -1798,7 +1798,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     server->request_timeout_ms = (uint64_t)(timeout * 1000.0);
   }
 
-  if (vtype(websocket_v) != T_UNDEF && vtype(websocket_v) != T_NULL) {
+  if (vtype(websocket_v) != kTypeUndefined && vtype(websocket_v) != kTypeNull) {
     ant_value_t ws_idle_timeout_v = 0;
     ant_value_t ws_max_payload_v = 0;
     ant_value_t ws_deflate_v = 0;
@@ -1814,9 +1814,9 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     ws_max_payload_v = js_get(js, websocket_v, "maxPayloadLength");
     ws_deflate_v = js_get(js, websocket_v, "perMessageDeflate");
 
-    if (vtype(ws_idle_timeout_v) != T_UNDEF && vtype(ws_idle_timeout_v) != T_NULL) {
+    if (vtype(ws_idle_timeout_v) != kTypeUndefined && vtype(ws_idle_timeout_v) != kTypeNull) {
       double timeout = 0;
-      if (vtype(ws_idle_timeout_v) != T_NUM) {
+      if (vtype(ws_idle_timeout_v) != kTypeNumber) {
         free(server->unix_path);
         free(server->hostname);
         free(server);
@@ -1832,9 +1832,9 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
       server->websocket_idle_timeout_ms = (uint64_t)(timeout * 1000.0);
     }
 
-    if (vtype(ws_max_payload_v) != T_UNDEF && vtype(ws_max_payload_v) != T_NULL) {
+    if (vtype(ws_max_payload_v) != kTypeUndefined && vtype(ws_max_payload_v) != kTypeNull) {
       double max_payload = 0;
-      if (vtype(ws_max_payload_v) != T_NUM) {
+      if (vtype(ws_max_payload_v) != kTypeNumber) {
         free(server->unix_path);
         free(server->hostname);
         free(server);
@@ -1850,8 +1850,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
       server->websocket_max_payload_len = (size_t)max_payload;
     }
 
-    if (vtype(ws_deflate_v) != T_UNDEF && vtype(ws_deflate_v) != T_NULL) {
-      if (vtype(ws_deflate_v) != T_BOOL && !is_object_type(ws_deflate_v)) {
+    if (vtype(ws_deflate_v) != kTypeUndefined && vtype(ws_deflate_v) != kTypeNull) {
+      if (vtype(ws_deflate_v) != kTypeBool && !is_object_type(ws_deflate_v)) {
         free(server->unix_path);
         free(server->hostname);
         free(server);

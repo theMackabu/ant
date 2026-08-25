@@ -37,7 +37,7 @@ static int run_bundle_entry(ant_t *js, const ant_bundle_module_t *entry) {
   ant_value_t ns = js_esm_import_sync_cstr(js, key, strlen(key));
   if (print_uncaught_throw(js)) return EXIT_FAILURE;
 
-  if (vtype(ns) == T_ERR) {
+  if (vtype(ns) == kTypeError) {
     fprintf(stderr, "%s\n", js_str(js, ns));
     return EXIT_FAILURE;
   }

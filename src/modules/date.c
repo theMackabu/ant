@@ -70,19 +70,19 @@ static inline int to_upper_ascii(int c) {
 static inline bool date_is_primitive(ant_value_t v) {
   uint8_t t = vtype(v);
   return 
-    t == T_STR 
-    || t == T_NUM
-    || t == T_BOOL
-    || t == T_NULL
-    || t == T_UNDEF
-    || t == T_SYMBOL
-    || t == T_BIGINT;
+    t == kTypeString
+    || t == kTypeNumber
+    || t == kTypeBool
+    || t == kTypeNull
+    || t == kTypeUndefined
+    || t == kTypeSymbol
+    || t == kTypeBigInt;
 }
 
 bool is_date_instance(ant_value_t value) {
   if (!is_object_type(value)) return false;
   ant_value_t brand = js_get_slot(js_as_obj(value), SLOT_BRAND);
-  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_DATE;
+  return vtype(brand) == kTypeNumber && (int)js_getnum(brand) == BRAND_DATE;
 }
 
 static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, ant_value_t *err) {
@@ -92,7 +92,7 @@ static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, a
   }
   
   ant_value_t t = js_get_slot(js_as_obj(this_val), SLOT_DATA);
-  *out = (vtype(t) == T_NUM) ? tod(t) : JS_NAN;
+  *out = (vtype(t) == kTypeNumber) ? tod(t) : JS_NAN;
   return true;
 }
 
@@ -811,7 +811,7 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     DATE_STRING_PART_ALL
   };
 
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     val = (double)date_now();
     
     ant_value_t tmp = js_mkobj(js);
@@ -831,12 +831,12 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     
     if (is_object_type(input) && is_date_instance(input)) {
       ant_value_t tv = js_get_slot(js_as_obj(input), SLOT_DATA);
-      val = (vtype(tv) == T_NUM) ? tod(tv) : JS_NAN;
+      val = (vtype(tv) == kTypeNumber) ? tod(tv) : JS_NAN;
       val = date_timeclip(val);
     } else {
       ant_value_t prim = js_to_primitive(js, input, 0);
       if (is_err(prim)) return prim;
-      if (vtype(prim) == T_STR) {
+      if (vtype(prim) == kTypeString) {
         if (!date_parse_string_to_ms(js, prim, &val)) return js_mkerr_typed(js, JS_ERR_INTERNAL, "Date parse failed");
       } else val = js_to_number(js, prim);
       val = date_timeclip(val);
@@ -1180,17 +1180,17 @@ static ant_value_t builtin_Date_setYear(ant_t *js, ant_value_t *args, int nargs)
 
 static ant_value_t date_to_primitive_number(ant_t *js, ant_value_t obj) {
   ant_value_t to_primitive_sym = get_toPrimitive_sym();
-  if (vtype(to_primitive_sym) == T_SYMBOL) {
+  if (vtype(to_primitive_sym) == kTypeSymbol) {
     ant_value_t ex = js_get_sym(js, obj, to_primitive_sym);
     uint8_t et = vtype(ex);
-    if (et == T_FUNC || et == T_CFUNC) {
+    if (et == kTypeFunction || et == kTypeBuiltin) {
       ant_value_t hint = js_mkstr(js, "number", 6);
       ant_value_t result = sv_vm_call(js->vm, js, ex, obj, &hint, 1, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
       return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
     }
-    if (et != T_UNDEF) {
+    if (et != kTypeUndefined) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.toPrimitive is not a function");
     }
   }
@@ -1199,7 +1199,7 @@ static ant_value_t date_to_primitive_number(ant_t *js, ant_value_t obj) {
   for (int i = 0; i < 2; i++) {
     ant_value_t method = js_getprop_fallback(js, obj, methods[i]);
     uint8_t mt = vtype(method);
-    if (mt == T_FUNC || mt == T_CFUNC) {
+    if (mt == kTypeFunction || mt == kTypeBuiltin) {
       ant_value_t result = sv_vm_call(js->vm, js, method, obj, NULL, 0, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
@@ -1218,13 +1218,13 @@ static ant_value_t builtin_Date_toJSON(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t tv = date_to_primitive_number(js, obj);
   if (is_err(tv)) return tv;
 
-  if (vtype(tv) == T_NUM && !isfinite(tod(tv))) {
+  if (vtype(tv) == kTypeNumber && !isfinite(tod(tv))) {
     return js_mknull();
   }
 
   ant_value_t method = js_getprop_fallback(js, obj, "toISOString");
   uint8_t mt = vtype(method);
-  if (mt != T_FUNC && mt != T_CFUNC) {
+  if (mt != kTypeFunction && mt != kTypeBuiltin) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "object needs toISOString method");
   }
 
@@ -1238,7 +1238,7 @@ static ant_value_t date_toPrimitive(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   int hint_num;
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
+  if (nargs > 0 && vtype(args[0]) == kTypeString) {
     size_t hint_len = 0;
     const char *hint = js_getstr(js, args[0], &hint_len);
     if (!hint) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid hint");
@@ -1262,7 +1262,7 @@ static ant_value_t date_toPrimitive(ant_t *js, ant_value_t *args, int nargs) {
   for (int i = 0; i < 2; i++) {
     ant_value_t method = js_getprop_fallback(js, this_val, methods[i]);
     uint8_t mt = vtype(method);
-    if (mt == T_FUNC || mt == T_CFUNC) {
+    if (mt == kTypeFunction || mt == kTypeBuiltin) {
       ant_value_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
@@ -1341,7 +1341,7 @@ void init_date_module(ant_t *js) {
   date_define_methods(js, date_proto, kDateProtoMethods, DATE_COUNT_OF(kDateProtoMethods));
 
   ant_value_t to_primitive_sym = get_toPrimitive_sym();
-  if (vtype(to_primitive_sym) == T_SYMBOL) {
+  if (vtype(to_primitive_sym) == kTypeSymbol) {
     js_set_sym(js, date_proto, to_primitive_sym, js_mkfun(date_toPrimitive));
   }
 

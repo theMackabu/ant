@@ -3,19 +3,19 @@
 BOOL OptionBool(ant_t *js, ant_value_t options, const char *name, BOOL fallback) {
   if (!is_object_type(options)) return fallback;
   ant_value_t value = js_get(js, options, name);
-  return vtype(value) == T_BOOL ? js_truthy(js, value) : fallback;
+  return vtype(value) == kTypeBool ? js_truthy(js, value) : fallback;
 }
 
 double OptionNumber(ant_t *js, ant_value_t options, const char *name, double fallback) {
   if (!is_object_type(options)) return fallback;
   ant_value_t value = js_get(js, options, name);
-  return vtype(value) == T_NUM ? js_getnum(value) : fallback;
+  return vtype(value) == kTypeNumber ? js_getnum(value) : fallback;
 }
 
 NSString *OptionString(ant_t *js, ant_value_t options, const char *name) {
   if (!is_object_type(options)) return nil;
   ant_value_t value = js_get(js, options, name);
-  if (vtype(value) != T_STR) return nil;
+  if (vtype(value) != kTypeString) return nil;
   size_t length = 0;
   const char *text = js_getstr(js, value, &length);
   return [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];
@@ -33,7 +33,7 @@ NSString *CapabilityManifest(ant_t *js, ant_value_t options, NSString **error) {
   ant_value_t web_preferences = js_get(js, options, "webPreferences");
   if (!is_object_type(web_preferences)) return @"";
   ant_value_t capabilities = js_get(js, web_preferences, "capabilities");
-  if (vtype(capabilities) == T_UNDEF) return @"";
+  if (vtype(capabilities) == kTypeUndefined) return @"";
   if (!is_array_value(capabilities)) {
     if (error) *error = @"webPreferences.capabilities must be an array";
     return nil;
@@ -52,7 +52,7 @@ NSString *CapabilityManifest(ant_t *js, ant_value_t options, NSString **error) {
     ant_offset_t access_count = js_arr_len(js, access);
     for (ant_offset_t access_index = 0; access_index < access_count; access_index++) {
       ant_value_t access_value = js_arr_get(js, access, access_index);
-      if (vtype(access_value) != T_STR) {
+      if (vtype(access_value) != kTypeString) {
         if (error) *error = @"IPC access values must be strings";
         return nil;
       }

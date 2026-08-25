@@ -180,7 +180,7 @@ Initially select only exact JIT-known child functions with:
 
 At the `OP_CLOSURE` site, emit preflight guards before mutations, allocate the
 closure slot with the shared arena emitter, initialize the complete
-`sv_closure_t`, append it to the young roster, and produce the `T_FUNC` value.
+`sv_closure_t`, append it to the young roster, and produce the `kTypeFunction` value.
 Any failed guard branches to the existing 14-argument
 `jit_helper_closure` call.
 

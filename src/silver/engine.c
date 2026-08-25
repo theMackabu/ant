@@ -226,7 +226,7 @@ sv_activation_t *sv_activation_capture(sv_vm_t *vm, int entry_fp, sv_activation_
     if (src->lp) dst->lp = act->slots + (src->lp - src_base);
   }
 
-  for (int i = 0; i < frame_count; i++) if (vtype(act->frames[i].arguments_obj) != T_UNDEF) 
+  for (int i = 0; i < frame_count; i++) if (vtype(act->frames[i].arguments_obj) != kTypeUndefined)
     js_arguments_bind_direct(vm->js, act->frames[i].arguments_obj, &act->frames[i]);
 
   for (int i = 0; i < handler_count; i++) {
@@ -299,7 +299,7 @@ bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
     if (src->bp) dst->bp = dst_base + (src->bp - act->slots);
     if (src->lp) dst->lp = dst_base + (src->lp - act->slots);
 
-    if (vtype(dst->arguments_obj) != T_UNDEF)
+    if (vtype(dst->arguments_obj) != kTypeUndefined)
       js_arguments_rebind_frame(vm->js, dst->arguments_obj, entry_fp + i);
   }
 
@@ -333,7 +333,7 @@ bool sv_activation_install(sv_vm_t *vm, sv_activation_t *act) {
 }
 
 static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
-  if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
+  if (frame && vtype(frame->arguments_obj) != kTypeUndefined) {
     js_arguments_detach(js, frame->arguments_obj);
     frame->arguments_obj = js_mkundef();
   }
@@ -376,7 +376,7 @@ void sv_activation_seal(ant_t *js, sv_activation_t *act) {
 
   for (int i = 0; i < act->frame_count; i++) {
     ant_value_t args_obj = act->frames[i].arguments_obj;
-    if (vtype(args_obj) == T_UNDEF) continue;
+    if (vtype(args_obj) == kTypeUndefined) continue;
     if (js_obj_ptr(args_obj)->mark_epoch == ANT_GC_DEAD) continue;
     js_arguments_detach(js, args_obj);
   }
@@ -479,12 +479,12 @@ void js_set_error_site_from_vm_top(ant_t *js) {
 }
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
-  if (vtype(value) != T_STR || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
+  if (vtype(value) != kTypeString || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
   return (ant_flat_string_t *)vptr(value);
 }
 
 static inline ant_string_builder_t *sv_string_builder_heap_ptr(ant_value_t value) {
-  if (vtype(value) != T_STR || !str_is_heap_builder(value)) return NULL;
+  if (vtype(value) != kTypeString || !str_is_heap_builder(value)) return NULL;
   return ant_str_builder_ptr(value);
 }
 
@@ -512,14 +512,14 @@ static inline void sv_builder_record_flat(
   if (!builder || !flat) return;
   ant_value_t cached = builder->cached;
   builder->len += flat->len;
-  builder->cached = vtype(cached) == T_NUM
+  builder->cached = vtype(cached) == kTypeNumber
     ? tov(tod(cached) + (double)str_utf16_len(js, value))
     : js_mkundef();
   sv_builder_note_ascii(builder, sv_builder_chunk_ascii_state(flat));
 }
 
 static ant_value_t sv_builder_normalize_chunk(ant_t *js, ant_value_t value) {
-  if (vtype(value) != T_STR) return js_mkerr(js, "string builder expects string chunk");
+  if (vtype(value) != kTypeString) return js_mkerr(js, "string builder expects string chunk");
   return str_materialize(js, value);
 }
 
@@ -596,10 +596,10 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
 
   if (!builder->head && builder->tail_len == 0) {
     ant_value_t snapshot = builder->snapshot;
-    if (vtype(snapshot) == T_STR) return snapshot;
+    if (vtype(snapshot) == kTypeString) return snapshot;
 
     ant_value_t cached = builder->cached;
-    if (vtype(cached) == T_STR &&
+    if (vtype(cached) == kTypeString &&
         !str_is_heap_rope(cached) && !str_is_heap_builder(cached))
       return cached;
   }
@@ -613,7 +613,7 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
 
   for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
     ant_value_t piece = chunk->value;
-    if (vtype(result) != T_STR) result = piece;
+    if (vtype(result) != kTypeString) result = piece;
     else {
       result = do_string_op(js, TOK_PLUS, result, piece);
       if (is_err(result)) goto fail;
@@ -627,14 +627,14 @@ static ant_value_t sv_string_builder_snapshot(ant_t *js, ant_value_t value) {
       goto fail;
     }
 
-    if (vtype(result) != T_STR) result = tail;
+    if (vtype(result) != kTypeString) result = tail;
     else {
       result = do_string_op(js, TOK_PLUS, result, tail);
       if (is_err(result)) goto fail;
     }
   }
 
-  if (vtype(result) != T_STR) {
+  if (vtype(result) != kTypeString) {
     result = js_mkstr(js, "", 0);
     if (is_err(result)) goto fail;
   }
@@ -665,7 +665,7 @@ static inline void sv_record_slot_feedback(
 }
 
 ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
-  if (vtype(value) == T_STR && str_is_heap_builder(value))
+  if (vtype(value) == kTypeString && str_is_heap_builder(value))
     return sv_string_builder_snapshot(js, value);
   return value;
 }
@@ -685,7 +685,7 @@ ant_value_t sv_string_builder_flush_slot(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint16_t slot_idx
 ) {
   ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
-  if (!slot || vtype(*slot) != T_STR || !str_is_heap_builder(*slot)) return js_mkundef();
+  if (!slot || vtype(*slot) != kTypeString || !str_is_heap_builder(*slot)) return js_mkundef();
 
   ant_value_t out = str_materialize(js, *slot);
   if (is_err(out)) return out;
@@ -715,7 +715,7 @@ ant_value_t sv_string_builder_append_slot(
     return js_mkundef();
   }
 
-  if (vtype(lhs) == T_NUM && vtype(rhs) == T_NUM) {
+  if (vtype(lhs) == kTypeNumber && vtype(rhs) == kTypeNumber) {
     *slot = tov(tod(lhs) + tod(rhs));
     sv_record_slot_feedback(frame, func, slot_idx, *slot);
     return js_mkundef();
@@ -776,7 +776,7 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   if (*slot == lhs)
     return sv_string_builder_append_slot(vm, js, frame, func, slot_idx, rhs);
 
-  if (vtype(lhs) == T_NUM && vtype(rhs) == T_NUM) {
+  if (vtype(lhs) == kTypeNumber && vtype(rhs) == kTypeNumber) {
     *slot = tov(tod(lhs) + tod(rhs));
     sv_record_slot_feedback(frame, func, slot_idx, *slot);
     return js_mkundef();
@@ -921,7 +921,7 @@ static inline ant_value_t sv_yield_star_call_method(
   ant_value_t method = js_getprop_fallback(js, iterator, name);
   uint8_t mt = vtype(method);
   
-  if (mt != T_FUNC && mt != T_CFUNC) {
+  if (mt != kTypeFunction && mt != kTypeBuiltin) {
     *out_value = js_mkundef();
     *out_done = true;
     return js_mkundef();
@@ -959,7 +959,7 @@ static inline ant_value_t sv_yield_star_next(
     ant_value_t next_method = lp[base + 1];
     
     uint8_t nt = vtype(next_method);
-    if (nt != T_FUNC && nt != T_CFUNC)
+    if (nt != kTypeFunction && nt != kTypeBuiltin)
       return js_mkerr(js, "iterator.next is not a function");
       
     ant_value_t call_args[1] = { sent };
@@ -993,7 +993,7 @@ static inline ant_value_t sv_yield_star_throw(
   ant_value_t throw_method = js_getprop_fallback(js, iterator, "throw");
   uint8_t tt = vtype(throw_method);
   
-  if (tt != T_FUNC && tt != T_CFUNC) {
+  if (tt != kTypeFunction && tt != kTypeBuiltin) {
     ant_value_t close_status = sv_yield_star_close_iterator(vm, js, iterator);
     if (is_err(close_status)) return close_status;
     return js_throw(js, thrown);
@@ -1027,7 +1027,7 @@ static inline ant_value_t sv_execute_entry_common(
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t eval_env, ant_value_t *out_this
 ) {
-  if (!vm || !vm->js || !func) return mkval(T_ERR, 0);
+  if (!vm || !vm->js || !func) return mkval(kTypeError, 0);
   ant_t *js = vm->js;
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
@@ -1139,7 +1139,7 @@ ant_value_t sv_call_compiled_zero_upvalues(
     return js_mkerr(js, "out of memory for generated function");
   }
   
-  ant_value_t func_val = mkref(T_FUNC, closure);
+  ant_value_t func_val = mkref(kTypeFunction, closure);
   const char *name = func->debug ? func->debug->name : NULL;
   
   sv_closure_finish_init(
@@ -1169,7 +1169,7 @@ ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
   ant_value_t this_val, ant_value_t *args, int argc, ant_value_t *out_this
 ) {
-  if (!closure || !closure->func) return mkval(T_ERR, 0);
+  if (!closure || !closure->func) return mkval(kTypeError, 0);
   return sv_execute_entry_common(
     vm, closure->func, closure->upvalues, closure->func->upvalue_count, callee_func,
     super_val, this_val, args, argc, sv_closure_eval_env(closure), out_this
@@ -1461,7 +1461,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ADD: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
-    if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
+    if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
       vm->sp--; vm->stack[vm->sp - 1] = tov(tod(l) + tod(r)); NEXT(1);
     }
     VM_CHECK(sv_op_add(vm, js)); NEXT(1);
@@ -1477,7 +1477,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_SUB: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
-    if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
+    if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
       vm->sp--; vm->stack[vm->sp - 1] = tov(tod(l) - tod(r)); NEXT(1);
     }
     VM_CHECK(sv_op_sub(vm, js)); NEXT(1);
@@ -1532,8 +1532,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_LT: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
-    if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
-      vm->sp--; vm->stack[vm->sp - 1] = mkval(T_BOOL, tod(l) < tod(r)); NEXT(1);
+    if (__builtin_expect(vtype(l) == kTypeNumber && vtype(r) == kTypeNumber, 1)) {
+      vm->sp--; vm->stack[vm->sp - 1] = mkval(kTypeBool, tod(l) < tod(r)); NEXT(1);
     }
     VM_CHECK(sv_op_lt(vm, js)); NEXT(1);
   }
@@ -1573,7 +1573,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_JMP_FALSE: {
     uint8_t *prev = ip;
     ant_value_t v = vm->stack[--vm->sp];
-    if (__builtin_expect(vtype(v) == T_BOOL, 1)) {
+    if (__builtin_expect(vtype(v) == kTypeBool, 1)) {
       ip = vdata(v) 
         ? ip + sv_op_size[OP_JMP_FALSE]
         : ip + sv_op_size[OP_JMP_FALSE] + sv_get_i32(ip + 1);
@@ -1589,7 +1589,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_JMP_TRUE: {
     uint8_t *prev = ip;
     ant_value_t v = vm->stack[--vm->sp];
-    if (__builtin_expect(vtype(v) == T_BOOL, 1)) {
+    if (__builtin_expect(vtype(v) == kTypeBool, 1)) {
       ip = vdata(v) 
         ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
         : ip + sv_op_size[OP_JMP_TRUE];
@@ -1648,10 +1648,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     
     bool is_super_call =
-      (vtype(frame->super_val) != T_UNDEF && call_func == frame->super_val);
+      (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
     ant_value_t call_this = is_super_call ? frame->this : js_mkundef();
 
-    if (!is_super_call && vtype(frame->new_target) == T_UNDEF && vtype(call_func) == T_FUNC) {
+    if (!is_super_call && vtype(frame->new_target) == kTypeUndefined && vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))
@@ -1766,10 +1766,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
     
     bool is_super_call =
-      (vtype(frame->super_val) != T_UNDEF && call_func == frame->super_val);
+      (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
 
-    if (!is_super_call && vtype(frame->new_target) == T_UNDEF &&
-        vtype(call_func) == T_FUNC) {
+    if (!is_super_call && vtype(frame->new_target) == kTypeUndefined &&
+        vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (closure->call_flags & (SV_CALL_HAS_BOUND_ARGS | SV_CALL_HAS_SUPER))
@@ -1880,7 +1880,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_result;
 
     if (
-      vtype(call_func) == T_CFUNC &&
+      vtype(call_func) == kTypeBuiltin &&
       js_cfunc_same_entrypoint(call_func, builtin_object_isPrototypeOf)
     ) call_result = sv_isproto_ic_eval(js, call_this, call_arg, func, ip); else {
       ant_value_t call_args[1] = { call_arg };
@@ -1906,7 +1906,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       ant_value_t raw_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);
       sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
       if (is_err(raw_result)) call_result = raw_result;
-      else call_result = mkval(T_BOOL, js_truthy(js, raw_result) ? 1 : 0);
+      else call_result = mkval(kTypeBool, js_truthy(js, raw_result) ? 1 : 0);
     }
     
     vm->sp -= 3;
@@ -1946,8 +1946,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     tc_this = js_mkundef();
 
     if (vm->handler_depth == frame->handler_base &&
-        vtype(frame->new_target) == T_UNDEF &&
-        vtype(call_func) == T_FUNC) {
+        vtype(frame->new_target) == kTypeUndefined &&
+        vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
@@ -1975,8 +1975,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     tc_this = vm->stack[vm->sp - call_argc - 2];
 
     if (vm->handler_depth == frame->handler_base &&
-        vtype(frame->new_target) == T_UNDEF &&
-        vtype(call_func) == T_FUNC) {
+        vtype(frame->new_target) == kTypeUndefined &&
+        vtype(call_func) == kTypeFunction) {
       sv_closure_t *closure = js_func_closure(call_func);
       if (closure->func != NULL) {
         if (!closure->func->is_async && !closure->func->is_generator &&
@@ -2431,7 +2431,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
 ant_value_t sv_resume_suspended(sv_vm_t *vm) {
   if (!vm || !vm->suspended || !vm->suspended_resume_pending || vm->fp < 0)
-    return mkval(T_ERR, 0);
+    return mkval(kTypeError, 0);
 
   // crash-resistance for missing frames 
   if (vm->suspended_entry_fp < 0 || vm->suspended_entry_fp > vm->fp) {
@@ -2445,7 +2445,7 @@ ant_value_t sv_resume_suspended(sv_vm_t *vm) {
     
     return vm->js
       ? js_mkerr(vm->js, "invalid suspended entry frame")
-      : mkval(T_ERR, 0);
+      : mkval(kTypeError, 0);
   }
 
   int saved_fp = vm->suspended_saved_fp;
@@ -2462,7 +2462,7 @@ ant_value_t sv_resume_suspended(sv_vm_t *vm) {
     
     return vm->js
       ? js_mkerr(vm->js, "invalid suspended frame state")
-      : mkval(T_ERR, 0);
+      : mkval(kTypeError, 0);
   }
 
   ant_value_t result = sv_execute_frame(

@@ -21,8 +21,8 @@ bool ws_is_stream(ant_value_t obj) {
 
 bool ws_is_writer(ant_value_t obj) {
   return js_check_brand(obj, BRAND_WRITABLE_STREAM_WRITER)
-    && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
-    && vtype(js_get_slot(obj, SLOT_WS_READY)) == T_PROMISE;
+    && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == kTypePromise
+    && vtype(js_get_slot(obj, SLOT_WS_READY)) == kTypePromise;
 }
 
 bool ws_is_controller(ant_value_t obj) {
@@ -132,12 +132,12 @@ ant_value_t ws_writer_ready(ant_value_t writer_obj) {
 
 static void ws_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value) {
   ant_value_t arr = ws_ctrl_queue(ctrl_obj);
-  if (vtype(arr) == T_ARR) js_arr_push(js, arr, value);
+  if (vtype(arr) == kTypeArray) js_arr_push(js, arr, value);
 }
 
 static ant_value_t ws_ctrl_queue_shift(ant_t *js, ant_value_t ctrl_obj) {
   ant_value_t arr = ws_ctrl_queue(ctrl_obj);
-  if (vtype(arr) != T_ARR) return js_mkundef();
+  if (vtype(arr) != kTypeArray) return js_mkundef();
   ant_object_t *aobj = js_obj_ptr(arr);
   if (aobj->u.array.len == 0) return js_mkundef();
   ant_value_t val = aobj->u.array.data[0];
@@ -150,7 +150,7 @@ static ant_value_t ws_ctrl_queue_shift(ant_t *js, ant_value_t ctrl_obj) {
 
 static ant_value_t ws_ctrl_queue_peek(ant_t *js, ant_value_t ctrl_obj) {
   ant_value_t arr = ws_ctrl_queue(ctrl_obj);
-  if (vtype(arr) != T_ARR) return js_mkundef();
+  if (vtype(arr) != kTypeArray) return js_mkundef();
   ant_object_t *aobj = js_obj_ptr(arr);
   if (aobj->u.array.len == 0) return js_mkundef();
   return aobj->u.array.data[0];
@@ -158,19 +158,19 @@ static ant_value_t ws_ctrl_queue_peek(ant_t *js, ant_value_t ctrl_obj) {
 
 static bool ws_ctrl_queue_empty(ant_value_t ctrl_obj) {
   ant_value_t arr = ws_ctrl_queue(ctrl_obj);
-  if (vtype(arr) != T_ARR) return true;
+  if (vtype(arr) != kTypeArray) return true;
   ant_object_t *aobj = js_obj_ptr(arr);
   return aobj->u.array.len == 0;
 }
 
 static void ws_write_reqs_push(ant_t *js, ant_value_t stream_obj, ant_value_t promise) {
   ant_value_t arr = ws_stream_write_requests(js, stream_obj);
-  if (vtype(arr) == T_ARR) js_arr_push(js, arr, promise);
+  if (vtype(arr) == kTypeArray) js_arr_push(js, arr, promise);
 }
 
 static ant_value_t ws_write_reqs_shift(ant_t *js, ant_value_t stream_obj) {
   ant_value_t arr = ws_stream_write_requests(js, stream_obj);
-  if (vtype(arr) != T_ARR) return js_mkundef();
+  if (vtype(arr) != kTypeArray) return js_mkundef();
   ant_object_t *aobj = js_obj_ptr(arr);
   if (aobj->u.array.len == 0) return js_mkundef();
   ant_value_t val = aobj->u.array.data[0];
@@ -189,7 +189,7 @@ static void ws_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant
 
   ant_value_t promise = val;
   GC_ROOT_PIN(js, promise);
-  if (vtype(promise) != T_PROMISE) {
+  if (vtype(promise) != kTypePromise) {
     promise = js_mkpromise(js);
     GC_ROOT_PIN(js, promise);
     js_resolve_promise(js, promise, val);
@@ -327,7 +327,7 @@ void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
   ant_value_t stored_error = ws_stream_stored_error(stream_obj);
 
   ant_value_t wr_arr = ws_stream_write_requests(js, stream_obj);
-  if (vtype(wr_arr) == T_ARR) {
+  if (vtype(wr_arr) == kTypeArray) {
     ant_offset_t len = js_arr_len(js, wr_arr);
     for (ant_offset_t i = 0; i < len; i++)
       js_reject_promise(js, js_arr_get(js, wr_arr, i), stored_error);
@@ -757,7 +757,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
       js_reject_promise(js, p, err);
       return p;
     }
-    if (vtype(size_result) == T_NUM) chunk_size = js_getnum(size_result);
+    if (vtype(size_result) == kTypeNumber) chunk_size = js_getnum(size_result);
     else chunk_size = js_to_number(js, size_result);
   }
 
@@ -898,7 +898,7 @@ static ant_value_t js_ws_writer_write(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter requires a stream argument");
@@ -1039,7 +1039,7 @@ static ant_value_t setup_ws_default_controller(
 }
 
 static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream constructor requires 'new'");
 
   ant_value_t underlying_sink = js_mkundef();
@@ -1135,13 +1135,13 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, underlying_sink, start_args, 1, NULL, false);
     if (is_err(start_result)) return start_result;
 
-    if (vtype(start_result) == T_PROMISE) {
+    if (vtype(start_result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
       js_promise_then(js, start_result, resolve_fn, reject_fn);
     }
 
-    if (vtype(start_result) != T_PROMISE) {
+    if (vtype(start_result) != kTypePromise) {
       ant_value_t resolved = js_mkpromise(js);
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);

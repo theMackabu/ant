@@ -163,7 +163,7 @@ static bool extract_buffer_source_body(
   size_t src_len = 0;
 
   if (!((
-    vtype(body_val) == T_TYPEDARRAY || vtype(body_val) == T_OBJ) &&
+    vtype(body_val) == kTypeTypedArray || vtype(body_val) == kTypeObject) &&
     buffer_source_get_bytes(js, body_val, &src, &src_len))
   ) return false;
 
@@ -256,7 +256,7 @@ static bool extract_string_body(
   size_t len = 0;
   const char *s = NULL;
 
-  if (vtype(body_val) != T_STR) {
+  if (vtype(body_val) != kTypeString) {
   body_val = js_tostring_val(js, body_val);
   if (is_err(body_val)) {
     *err_out = body_val;
@@ -281,12 +281,12 @@ static bool extract_body(
   *out_stream = js_mkundef();
   *err_out = js_mkundef();
 
-  if (vtype(body_val) == T_NULL || vtype(body_val) == T_UNDEF) return true;
+  if (vtype(body_val) == kTypeNull || vtype(body_val) == kTypeUndefined) return true;
   if (extract_buffer_source_body(js, body_val, out_data, out_size, err_out)) return true;
-  if (vtype(body_val) == T_OBJ && rs_is_stream(body_val)) return extract_stream_body(js, body_val, out_stream, err_out);
-  if (vtype(body_val) == T_OBJ && extract_blob_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
-  if (vtype(body_val) == T_OBJ && extract_urlsearchparams_body(js, body_val, out_data, out_size, out_type)) return true;
-  if (vtype(body_val) == T_OBJ && extract_formdata_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
+  if (vtype(body_val) == kTypeObject && rs_is_stream(body_val)) return extract_stream_body(js, body_val, out_stream, err_out);
+  if (vtype(body_val) == kTypeObject && extract_blob_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
+  if (vtype(body_val) == kTypeObject && extract_urlsearchparams_body(js, body_val, out_data, out_size, out_type)) return true;
+  if (vtype(body_val) == kTypeObject && extract_formdata_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
   
   return extract_string_body(js, body_val, out_data, out_size, out_type, err_out);
 }
@@ -342,7 +342,7 @@ static void response_apply_content_type(
   }
 
   combined = headers_get_value(js, headers, "content-type");
-  if (!is_err(combined) && vtype(combined) == T_STR)
+  if (!is_err(combined) && vtype(combined) == kTypeString)
     response_maybe_normalize_text_content_type(
       js, headers, js_getstr(js, combined, NULL), body_type);
 }
@@ -360,7 +360,7 @@ static const char *response_effective_body_type(ant_t *js, ant_value_t resp_obj,
   ant_value_t headers = js_get_slot(resp_obj, SLOT_RESPONSE_HEADERS);
   if (!headers_is_headers(headers)) return d ? d->body_type : NULL;
   ant_value_t ct = headers_get_value(js, headers, "content-type");
-  if (vtype(ct) == T_STR) return js_getstr(js, ct, NULL);
+  if (vtype(ct) == kTypeString) return js_getstr(js, ct, NULL);
   return d ? d->body_type : NULL;
 }
 
@@ -510,7 +510,7 @@ static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t done_val = js_get(js, result, "done");
   ant_value_t value = js_get(js, result, "value");
 
-  if (vtype(done_val) == T_BOOL && done_val == js_true) {
+  if (vtype(done_val) == kTypeBool && done_val == js_true) {
     size_t size = 0;
     ant_value_t chunk_err = js_mkundef();
     uint8_t *data = concat_uint8_chunks(js, chunks, &size, &chunk_err);
@@ -519,13 +519,13 @@ static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
       return js_mkundef();
     }
     ant_value_t type_v = js_get(js, state, "type");
-    const char *body_type = (vtype(type_v) == T_STR) ? js_getstr(js, type_v, NULL) : NULL;
+    const char *body_type = (vtype(type_v) == kTypeString) ? js_getstr(js, type_v, NULL) : NULL;
     resolve_body_promise(js, promise, data, size, body_type, mode, true);
     free(data);
     return js_mkundef();
   }
 
-  if (vtype(value) != T_UNDEF && vtype(value) != T_NULL) js_arr_push(js, chunks, value);
+  if (vtype(value) != kTypeUndefined && vtype(value) != kTypeNull) js_arr_push(js, chunks, value);
   stream_schedule_next_read(js, state, reader);
   return js_mkundef();
 }
@@ -641,8 +641,8 @@ static ant_value_t response_init_status(ant_t *js, ant_value_t init, response_da
   ant_value_t status_v = js_get(js, init, "status");
   double status_num = 200;
 
-  if (vtype(status_v) != T_UNDEF) {
-    status_num = (vtype(status_v) == T_NUM) ? js_getnum(status_v) : js_to_number(js, status_v);
+  if (vtype(status_v) != kTypeUndefined) {
+    status_num = (vtype(status_v) == kTypeNumber) ? js_getnum(status_v) : js_to_number(js, status_v);
   }
 
   if (status_num < 200 || status_num > 599 || status_num != (int)status_num) {
@@ -659,8 +659,8 @@ static ant_value_t response_init_status_text(ant_t *js, ant_value_t init, respon
   const char *status_text = NULL;
   char *dup = NULL;
 
-  if (vtype(status_text_v) == T_UNDEF) return js_mkundef();
-  if (vtype(status_text_v) != T_STR) {
+  if (vtype(status_text_v) == kTypeUndefined) return js_mkundef();
+  if (vtype(status_text_v) != kTypeString) {
     status_text_v = js_tostring_val(js, status_text_v);
     if (is_err(status_text_v)) return status_text_v;
   }
@@ -687,7 +687,7 @@ static ant_value_t response_apply_body(
   size_t body_size = 0;
   char *body_type = NULL;
 
-  if (vtype(body_val) == T_NULL || vtype(body_val) == T_UNDEF) return js_mkundef();
+  if (vtype(body_val) == kTypeNull || vtype(body_val) == kTypeUndefined) return js_mkundef();
 
   if (!extract_body(js, body_val, &body_data, &body_size, &body_type, &body_stream, &body_err)) {
     return is_err(body_err) ? body_err : js_mkerr(js, "Failed to extract body");
@@ -722,13 +722,13 @@ static ant_value_t response_init_common(
   ant_value_t step = js_mkundef();
 
   if (!resp) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
-  if (vtype(init) != T_UNDEF) {
+  if (vtype(init) != kTypeUndefined) {
     ant_value_t init_headers = js_get(js, init, "headers");
     step = response_init_status(js, init, resp);
     if (is_err(step)) return step;
     step = response_init_status_text(js, init, resp);
     if (is_err(step)) return step;
-    if (vtype(init_headers) != T_UNDEF) {
+    if (vtype(init_headers) != kTypeUndefined) {
       step = headers_init_from(js, headers, init_headers);
       if (is_err(step)) return step;
     }
@@ -769,12 +769,12 @@ static ant_value_t response_new(ant_t *js, bool immutable_headers) {
 
 static ant_value_t js_response_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t body = (nargs >= 1) ? args[0] : js_mknull();
-  ant_value_t init = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
+  ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t obj = 0;
   ant_value_t proto = 0;
   ant_value_t step = 0;
 
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response constructor requires 'new'");
   }
 
@@ -836,12 +836,12 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
   url_state_t parsed = {0};
   char *href = NULL;
 
-  if (vtype(url_v) != T_STR) {
+  if (vtype(url_v) != kTypeString) {
     url_v = js_tostring_val(js, url_v);
     if (is_err(url_v)) return url_v;
   }
 
-  status = (vtype(status_v) == T_NUM) ? (int)js_getnum(status_v) : (int)js_to_number(js, status_v);
+  status = (vtype(status_v) == kTypeNumber) ? (int)js_getnum(status_v) : (int)js_to_number(js, status_v);
   if (!is_redirect_status(status)) {
     return js_mkerr_typed(js, JS_ERR_RANGE, "Response.redirect status must be 301, 302, 303, 307, or 308");
   }
@@ -876,7 +876,7 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t init = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
+  ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t stringify = 0;
   ant_value_t obj = 0;
   ant_value_t headers = 0;
@@ -886,12 +886,12 @@ static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nar
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json requires 1 argument");
   stringify = json_stringify_value(js, args[0]);
   if (is_err(stringify)) return stringify;
-  if (vtype(stringify) == T_UNDEF) {
+  if (vtype(stringify) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json data is not JSON serializable");
   }
 
   init_has_content_type =
-    vtype(init) != T_UNDEF &&
+    vtype(init) != kTypeUndefined &&
     headers_init_has_name(js, js_get(js, init, "headers"), "content-type");
 
   obj = response_new(js, false);
@@ -997,7 +997,7 @@ RES_GETTER_END
 
 static ant_value_t response_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
   ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
-  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Response";
+  const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Response";
 
   js_inspect_builder_t builder;
   if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
@@ -1086,7 +1086,7 @@ static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
   if (!rs_is_stream(src_stream)) return obj;
 
   ant_value_t branches = readable_stream_tee(js, src_stream);
-  if (!is_err(branches) && vtype(branches) == T_ARR) {
+  if (!is_err(branches) && vtype(branches) == kTypeArray) {
     ant_value_t b1 = js_arr_get(js, branches, 0);
     ant_value_t b2 = js_arr_get(js, branches, 1);
     js_set_slot_wb(js, this, SLOT_RESPONSE_BODY_STREAM, b1);

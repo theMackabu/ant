@@ -868,7 +868,7 @@ pending stash is only touched when func_obj == 0 (SET_NAME writers and
 sv_closure_materialize_func_obj both check it; materialize additionally
 guards on the flag). GC marking and BOTH sweeps now branch on the flag —
 an unguarded free would free pending.name (code-arena memory). Audit
-subtleties: the T_FUNC bind path COPIES orig->call_flags, so a re-bound
+subtleties: the kTypeFunction bind path COPIES orig->call_flags, so a re-bound
 bound function inherits HAS_BOUND_ARGS with zero new args — union init
 must branch on the final flags. A/B (interleaved, 2 rounds, vs pinned
 fused-sweep base; includes the inline-widening diff): Main 42.1/42.9 →
@@ -876,7 +876,7 @@ fused-sweep base; includes the inline-widening diff): Main 42.1/42.9 →
 newt RSS 959MB. **Pre-existing bug found during audit (NOT a
 regression — reproduced on the pre-union binary): double-bind drops the
 inner binding's this and args (`f.bind({x:1},10).bind({x:2},20)(30)` →
-[2,20,30] instead of spec's this={x:1}, args [10,20,30]) — the T_FUNC
+[2,20,30] instead of spec's this={x:1}, args [10,20,30]) — the kTypeFunction
 bind path flattens onto orig->func without folding orig's bound state.
 File separately.**
 
@@ -1248,7 +1248,7 @@ rounds, rest 2992-3086 vs 3010-3108 — noise-adjacent), EarleyBoyer
 6112 vs 5956 and NavierStokes 2764 vs 2633 (single runs, positive).
 Devirt fuzzer clean, full battery green.
 
-**R4 double-bind — FIXED + tests.** builtin_function_bind's T_FUNC path
+**R4 double-bind — FIXED + tests.** builtin_function_bind's kTypeFunction path
 now keeps the inner binding's `bound_this` and concatenates orig's bound
 argv BEFORE the new args (`inner.args ++ outer.args ++ call args`). The
 union is switched to the bound side (argv=NULL/args_arr=undef) BEFORE
@@ -1818,7 +1818,7 @@ the full spec at stress 10; the hook is absent from the final tree.
 2026-08-08.**
 - **Mechanism:** the inline emitter's GET_FIELD/GET_FIELD_OPT/GET_FIELD2/
   GET_ELEM/GET_LENGTH cases called the full-semantics helpers and routed a
-  helper-produced T_ERR to the outer `slow` path, whose generic fallback
+  helper-produced kTypeError to the outer `slow` path, whose generic fallback
   re-executes the entire callee. Getters, proxy traps, and property-key
   coercions therefore ran twice. Pre-fix binary counters: computed-proxy
   trap 2, successful-getter-then-ADD-bailout getter 2, length-proxy trap 2.
@@ -1834,7 +1834,7 @@ the full spec at stress 10; the hook is absent from the final tree.
   return `SV_JIT_BAILOUT` before anything that could invoke user code.
   `mir_emit_inline_read_guard` routes bailout→`slow` (the callee has
   observed zero effects, so generic re-execution is safe — property reads
-  are already forbidden after the first inline side effect), T_ERR→`join`
+  are already forbidden after the first inline side effect), kTypeError→`join`
   (raise without replay, same discipline as PUT_FIELD/CALL), value→continue
   inline. A clean shape-chain miss BAILS rather than concluding `undefined`:
   the generic fallback owns exotic index/interceptor semantics
@@ -1992,7 +1992,7 @@ FIXED, 2026-08-08.**
   multibyte-BMP boundary). A broader differential matrix
   (`/tmp/w5_matrix.js`: 6 receivers × 8 needles × 17 positions incl.
   negative, fractional, NaN, ±Infinity, consecutive astrals — 816 cases) is
-  byte-identical to node. Argument coercion (non-string needles, non-T_NUM
+  byte-identical to node. Argument coercion (non-string needles, non-kTypeNumber
   positions) deliberately unchanged — pre-existing separate concern.
 - **Perf (interleaved AB/BA × 2 rounds, `W5_N=20000`, base
   `/tmp/ant_w5_base_bin` `91d5d0b9…`, measured candidate `3c20fa2f…`;

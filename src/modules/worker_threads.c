@@ -136,10 +136,10 @@ static void wt_port_set_closed(ant_t *js, ant_value_t port, bool closed) {
 
 static bool wt_port_queue_dequeue(ant_t *js, ant_value_t port, ant_value_t *out) {
   ant_value_t queue = js_get_slot(port, SLOT_WT_PORT_QUEUE);
-  if (vtype(queue) != T_ARR) return false;
+  if (vtype(queue) != kTypeArray) return false;
 
   ant_value_t head_val = js_get_slot(port, SLOT_WT_PORT_HEAD);
-  ant_offset_t head = (vtype(head_val) == T_NUM) ? (ant_offset_t)js_getnum(head_val) : 0;
+  ant_offset_t head = (vtype(head_val) == kTypeNumber) ? (ant_offset_t)js_getnum(head_val) : 0;
   ant_offset_t len = js_arr_len(js, queue);
   if (len <= 0 || head >= len) {
     js_set_slot(port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
@@ -170,7 +170,7 @@ static bool wt_port_queue_dequeue(ant_t *js, ant_value_t port, ant_value_t *out)
 
 static void wt_port_queue_push(ant_t *js, ant_value_t port, ant_value_t value) {
   ant_value_t queue = js_get_slot(port, SLOT_WT_PORT_QUEUE);
-  if (vtype(queue) != T_ARR) {
+  if (vtype(queue) != kTypeArray) {
     queue = js_mkarr(js);
     js_set_slot(port, SLOT_WT_PORT_QUEUE, queue);
     js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
@@ -483,14 +483,14 @@ static char *wt_path_from_specifier(ant_t *js, ant_value_t spec) {
   const char *raw = NULL;
   size_t len = 0;
 
-  if (vtype(spec) == T_STR) {
+  if (vtype(spec) == kTypeString) {
     raw = js_getstr(js, spec, &len);
   } else if (is_object_type(spec)) {
     ant_value_t pathname = js_get(js, spec, "pathname");
-    if (vtype(pathname) == T_STR) raw = js_getstr(js, pathname, &len);
+    if (vtype(pathname) == kTypeString) raw = js_getstr(js, pathname, &len);
     if (!raw) {
       ant_value_t href = js_get(js, spec, "href");
-      if (vtype(href) == T_STR) raw = js_getstr(js, href, &len);
+      if (vtype(href) == kTypeString) raw = js_getstr(js, href, &len);
     }
   }
 
@@ -576,7 +576,7 @@ static int wt_spawn_worker(
 }
 
 static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.on(event, listener) requires (string, function)");
   }
 
@@ -597,7 +597,7 @@ static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t worker_threads_worker_once(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.once(event, listener) requires (string, function)");
   }
 
@@ -685,7 +685,7 @@ static ant_value_t worker_threads_message_port_post_message(ant_t *js, ant_value
 }
 
 static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.on(event, listener) requires (string, function)");
   }
   ant_value_t this_obj = js_getthis(js);
@@ -703,7 +703,7 @@ static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, 
 }
 
 static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.once(event, listener) requires (string, function)");
   }
   ant_value_t this_obj = js_getthis(js);
@@ -752,7 +752,7 @@ static ant_value_t worker_threads_message_port_ctor(ant_t *js, ant_value_t *args
 }
 
 static ant_value_t worker_threads_message_channel_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr(js, "MessageChannel constructor requires 'new'");
   }
 
@@ -770,7 +770,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   ant_value_t this_obj = js_getthis(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, js_mkundef());
 
-  if (vtype(js->new_target) == T_UNDEF) 
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr(js, "Worker constructor requires 'new'");
   
   if (nargs < 1) return js_mkerr(js, "Worker() requires a filename or URL");
@@ -790,7 +790,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
     if (!is_undefined(worker_data)) {
       ant_value_t stringify_args[1] = {worker_data};
       ant_value_t json = js_json_stringify(js, stringify_args, 1);
-      if (vtype(json) != T_STR) {
+      if (vtype(json) != kTypeString) {
         free(script_path);
         return js_mkerr(js, "Worker options.workerData must be JSON-serializable");
       }
@@ -812,7 +812,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   ant_value_t env_store = wt_get_or_create_env_store(js);
   ant_value_t env_stringify_args[1] = {env_store};
   ant_value_t env_json = js_json_stringify(js, env_stringify_args, 1);
-  if (vtype(env_json) != T_STR) {
+  if (vtype(env_json) != kTypeString) {
     free(script_path);
     free(worker_data_heap);
     return js_mkerr(js, "setEnvironmentData values must be JSON-serializable");
@@ -867,7 +867,7 @@ static ant_value_t worker_threads_parent_post_message(ant_t *js, ant_value_t *ar
   ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t stringify_args[1] = {value};
   ant_value_t json = js_json_stringify(js, stringify_args, 1);
-  if (vtype(json) != T_STR) return js_mkerr(js, "parentPort.postMessage payload must be JSON-serializable");
+  if (vtype(json) != kTypeString) return js_mkerr(js, "parentPort.postMessage payload must be JSON-serializable");
 
   size_t json_len = 0;
   const char *json_str = js_getstr(js, json, &json_len);
@@ -915,11 +915,11 @@ static ant_value_t worker_threads_set_environment_data(ant_t *js, ant_value_t *a
 
   ant_value_t key_stringify_args[1] = {args[0]};
   ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1);
-  if (vtype(key_json) != T_STR) return js_mkerr(js, "setEnvironmentData key must be JSON-serializable");
+  if (vtype(key_json) != kTypeString) return js_mkerr(js, "setEnvironmentData key must be JSON-serializable");
 
   ant_value_t value_stringify_args[1] = {args[1]};
   ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1);
-  if (vtype(value_json) != T_STR) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
+  if (vtype(value_json) != kTypeString) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
 
   ant_value_t cloned = json_parse_value(js, value_json);
   if (is_err(cloned)) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
@@ -940,7 +940,7 @@ static ant_value_t worker_threads_get_environment_data(ant_t *js, ant_value_t *a
 
   ant_value_t key_stringify_args[1] = {args[0]};
   ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1);
-  if (vtype(key_json) != T_STR) return js_mkundef();
+  if (vtype(key_json) != kTypeString) return js_mkundef();
 
   size_t key_len = 0;
   const char *key_ptr = js_getstr(js, key_json, &key_len);

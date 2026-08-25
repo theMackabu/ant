@@ -53,7 +53,7 @@ static ant_value_t sc_clone_typed_array(
   ant_t *js, ant_value_t key, TypedArrayData *ta_data, sc_entry_t **seen
 ) {
   ant_value_t existing = sc_lookup(seen, key);
-  if (vtype(existing) != T_UNDEF) return existing;
+  if (vtype(existing) != kTypeUndefined) return existing;
   
   if (!ta_data || !ta_data->buffer) return js_throw(
     js, make_dom_exception(js, "TypedArray could not be cloned", "DataCloneError")
@@ -78,8 +78,8 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   uint8_t t = vtype(val);
   TypedArrayData *ta_data = NULL;
 
-  if (t == T_UNDEF || t == T_NULL || t == T_BOOL || t == T_NUM || t == T_BIGINT || t == T_STR) return val;
-  if (t == T_SYMBOL) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
+  if (t == kTypeUndefined || t == kTypeNull || t == kTypeBool || t == kTypeNumber || t == kTypeBigInt || t == kTypeString) return val;
+  if (t == kTypeSymbol) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
 
   if (is_object_type(val)) {
     ta_data = buffer_get_typedarray_data(val);
@@ -89,19 +89,19 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return sc_clone_typed_array(js, val, ta_data, seen);
   }
 
-  if (t == T_TYPEDARRAY) {
+  if (t == kTypeTypedArray) {
     return sc_clone_typed_array(js, val, (TypedArrayData *)js_gettypedarray(val), seen);
   }
 
-  if (t == T_FUNC || t == T_CFUNC)
+  if (t == kTypeFunction || t == kTypeBuiltin)
     return js_throw(js, make_dom_exception(js, "() => {} could not be cloned", "DataCloneError"));
-  if (t == T_PROMISE || t == T_GENERATOR)
+  if (t == kTypePromise || t == kTypeGenerator)
     return js_throw(js, make_dom_exception(js, "Value could not be cloned", "DataCloneError"));
   if (!is_object_type(val))
     return js_throw(js, make_dom_exception(js, "Value could not be cloned", "DataCloneError"));
 
   ant_value_t existing = sc_lookup(seen, val);
-  if (vtype(existing) != T_UNDEF) return existing;
+  if (vtype(existing) != kTypeUndefined) return existing;
 
   ArrayBufferData *abd = buffer_get_arraybuffer_data(val);
   if (abd) {
@@ -157,7 +157,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return clone;
   }
 
-  if (t == T_ARR) {
+  if (t == kTypeArray) {
     ant_value_t clone = js_mkarr(js);
     sc_add(seen, val, clone);
     
@@ -175,12 +175,12 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (!obj_ptr)
     return js_throw(js, make_dom_exception(js, "Value could not be cloned", "DataCloneError"));
 
-  if (obj_ptr->type_tag == T_WEAKMAP || obj_ptr->type_tag == T_WEAKSET)
+  if (obj_ptr->type_tag == kTypeWeakMap || obj_ptr->type_tag == kTypeWeakSet)
     return js_throw(js, make_dom_exception(js, "WeakMap/WeakSet could not be cloned", "DataCloneError"));
 
-  if (obj_ptr->type_tag == T_MAP) {
+  if (obj_ptr->type_tag == kTypeMap) {
     ant_value_t clone = js_mkobj(js);
-    js_obj_ptr(clone)->type_tag = T_MAP;
+    js_obj_ptr(clone)->type_tag = kTypeMap;
 
     ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
     if (is_special_object(map_proto)) js_set_proto_init(clone, map_proto);
@@ -215,9 +215,9 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return clone;
   }
 
-  if (obj_ptr->type_tag == T_SET) {
+  if (obj_ptr->type_tag == kTypeSet) {
     ant_value_t clone = js_mkobj(js);
-    js_obj_ptr(clone)->type_tag = T_SET;
+    js_obj_ptr(clone)->type_tag = kTypeSet;
     
     ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
     if (is_special_object(set_proto)) js_set_proto_init(clone, set_proto);
@@ -264,7 +264,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     js_set_slot(clone, SLOT_ERROR_BRAND, js_true);
 
     ant_value_t err_type = js_get_slot(val, SLOT_ERR_TYPE);
-    if (vtype(err_type) != T_UNDEF) js_set_slot(clone, SLOT_ERR_TYPE, err_type);
+    if (vtype(err_type) != kTypeUndefined) js_set_slot(clone, SLOT_ERR_TYPE, err_type);
 
     return clone;
   }
@@ -322,7 +322,7 @@ ant_value_t js_structured_clone(ant_t *js, ant_value_t *args, int nargs) {
 
   if (nargs < 2 || !is_object_type(args[1])) goto clone;
   ant_value_t xfer_arr = js_get(js, args[1], "transfer");
-  if (vtype(xfer_arr) != T_ARR) goto clone;
+  if (vtype(xfer_arr) != kTypeArray) goto clone;
 
   ant_offset_t xfer_len = js_arr_len(js, xfer_arr);
   for (ant_offset_t i = 0; i < xfer_len; i++) {

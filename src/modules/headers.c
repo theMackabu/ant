@@ -257,12 +257,12 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
   const char *name = NULL;
   const char *value = NULL;
 
-  if (vtype(name_v) != T_STR) {
+  if (vtype(name_v) != kTypeString) {
     name_v = js_tostring_val(js, name_v);
     if (is_err(name_v)) return name_v;
   }
   
-  if (vtype(value_v) != T_STR) {
+  if (vtype(value_v) != kTypeString) {
     value_v = js_tostring_val(js, value_v);
     if (is_err(value_v)) return value_v;
   }
@@ -301,7 +301,7 @@ static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq)
   ant_value_t pair;
   while (js_iter_next(js, &it, &pair)) {
     uint8_t pt = vtype(pair);
-    if (pt != T_ARR && pt != T_OBJ) {
+    if (pt != kTypeArray && pt != kTypeObject) {
       js_iter_close(js, &it);
       return js_mkerr_typed(js, JS_ERR_TYPE, "Each header init pair must be a sequence");
     }
@@ -412,8 +412,8 @@ static ant_value_t js_headers_set(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t name_v  = args[0];
   ant_value_t value_v = args[1];
-  if (vtype(name_v)  != T_STR) { name_v  = js_tostring_val(js, name_v);  if (is_err(name_v))  return name_v;  }
-  if (vtype(value_v) != T_STR) { value_v = js_tostring_val(js, value_v); if (is_err(value_v)) return value_v; }
+  if (vtype(name_v)  != kTypeString) { name_v  = js_tostring_val(js, name_v);  if (is_err(name_v))  return name_v;  }
+  if (vtype(value_v) != kTypeString) { value_v = js_tostring_val(js, value_v); if (is_err(value_v)) return value_v; }
 
   const char *name  = js_getstr(js, name_v, NULL);
   const char *value = js_getstr(js, value_v, NULL);
@@ -443,7 +443,7 @@ static ant_value_t js_headers_get(ant_t *js, ant_value_t *args, int nargs) {
   if (!l) return js_mknull();
 
   ant_value_t name_v = args[0];
-  if (vtype(name_v) != T_STR) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
+  if (vtype(name_v) != kTypeString) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
   const char *name = js_getstr(js, name_v, NULL);
   if (!is_valid_name(name)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
 
@@ -503,7 +503,7 @@ static ant_value_t js_headers_has(ant_t *js, ant_value_t *args, int nargs) {
   if (!l) return js_false;
 
   ant_value_t name_v = args[0];
-  if (vtype(name_v) != T_STR) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
+  if (vtype(name_v) != kTypeString) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
   const char *name = js_getstr(js, name_v, NULL);
   if (!is_valid_name(name)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
 
@@ -527,7 +527,7 @@ static ant_value_t js_headers_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(guard_err)) return guard_err;
 
   ant_value_t name_v = args[0];
-  if (vtype(name_v) != T_STR) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
+  if (vtype(name_v) != kTypeString) { name_v = js_tostring_val(js, name_v); if (is_err(name_v)) return name_v; }
   const char *name = js_getstr(js, name_v, NULL);
   if (!is_valid_name(name)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
 
@@ -555,7 +555,7 @@ static ant_value_t js_headers_for_each(ant_t *js, ant_value_t *args, int nargs) 
 
   ant_value_t cb = args[0];
   uint8_t cbt = vtype(cb);
-  if (cbt != T_FUNC && cbt != T_CFUNC)
+  if (cbt != kTypeFunction && cbt != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Headers.forEach callback must be callable");
 
   ant_value_t this_obj = js->this_val;
@@ -595,7 +595,7 @@ static ant_value_t js_headers_entries(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t headers_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
   ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
-  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Headers";
+  const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Headers";
 
   js_inspect_builder_t builder;
   if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
@@ -623,7 +623,7 @@ static ant_value_t headers_inspect(ant_t *js, ant_value_t *args, int nargs) {
 
   for (hdr_entry_t *e = list->head; e; e = e->next) {
     ant_value_t existing = js_get(js, out, e->name);
-    if (vtype(existing) == T_UNDEF) {
+    if (vtype(existing) == kTypeUndefined) {
       js_set(js, out, e->name, js_mkstr(js, e->value, strlen(e->value)));
       continue;
     }
@@ -649,7 +649,7 @@ static ant_value_t headers_inspect(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Headers constructor requires 'new'");
 
   hdr_list_t *l = list_new();
@@ -657,20 +657,20 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t init = (nargs >= 1) ? args[0] : js_mkundef();
 
-  if (vtype(init) != T_UNDEF) {
+  if (vtype(init) != kTypeUndefined) {
     uint8_t t = vtype(init);
 
-    if (t == T_NULL || (t != T_OBJ && t != T_ARR && t != T_FUNC && t != T_CFUNC)) {
+    if (t == kTypeNull || (t != kTypeObject && t != kTypeArray && t != kTypeFunction && t != kTypeBuiltin)) {
       list_free(l);
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'Headers': The provided value is not of type 'HeadersInit'");
     }
 
     ant_value_t iter_fn = js_get_sym(js, init, get_iterator_sym());
-    bool has_iter = (vtype(iter_fn) == T_FUNC || vtype(iter_fn) == T_CFUNC);
+    bool has_iter = (vtype(iter_fn) == kTypeFunction || vtype(iter_fn) == kTypeBuiltin);
 
     ant_value_t r;
-    if (t == T_ARR || has_iter) r = init_from_sequence(js, l, init);
+    if (t == kTypeArray || has_iter) r = init_from_sequence(js, l, init);
     else                        r = init_from_record(js, l, init);
     if (is_err(r)) { list_free(l); return r; }
   }
@@ -789,14 +789,14 @@ ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
   uint8_t ht = vtype(init);
 
   if (!get_list(hdrs)) return js_mkerr(js, "Invalid Headers object");
-  if (ht == T_UNDEF) return js_mkundef();
+  if (ht == kTypeUndefined) return js_mkundef();
 
   if (headers_is_headers(init)) {
     headers_copy_from(js, hdrs, init);
     return js_mkundef();
   }
 
-  if (ht == T_ARR) {
+  if (ht == kTypeArray) {
     ant_offset_t len = js_arr_len(js, init);
     for (ant_offset_t i = 0; i < len; i++) {
       ant_value_t pair = js_arr_get(js, init, i);
@@ -808,7 +808,7 @@ ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
     return js_mkundef();
   }
 
-  if (ht == T_OBJ) {
+  if (ht == kTypeObject) {
     ant_iter_t it = js_prop_iter_begin(js, init);
     const char *key = NULL;
     size_t key_len = 0;
@@ -841,13 +841,13 @@ ant_value_t headers_create_from_init(ant_t *js, ant_value_t init) {
 bool headers_init_has_name(ant_t *js, ant_value_t init, const char *name) {
   uint8_t ht = vtype(init);
 
-  if (ht == T_UNDEF) return false;
+  if (ht == kTypeUndefined) return false;
   if (headers_is_headers(init)) {
     ant_value_t value = headers_get_value(js, init, name);
-    return !is_err(value) && vtype(value) != T_NULL;
+    return !is_err(value) && vtype(value) != kTypeNull;
   }
 
-  if (ht == T_ARR) {
+  if (ht == kTypeArray) {
     ant_offset_t len = js_arr_len(js, init);
     for (ant_offset_t i = 0; i < len; i++) {
       ant_value_t pair = js_arr_get(js, init, i);
@@ -855,7 +855,7 @@ bool headers_init_has_name(ant_t *js, ant_value_t init, const char *name) {
       const char *key = NULL;
       if (js_arr_len(js, pair) < 1) continue;
       key_v = js_arr_get(js, pair, 0);
-      if (vtype(key_v) != T_STR) {
+      if (vtype(key_v) != kTypeString) {
         key_v = js_tostring_val(js, key_v);
         if (is_err(key_v)) continue;
       }
@@ -865,7 +865,7 @@ bool headers_init_has_name(ant_t *js, ant_value_t init, const char *name) {
     return false;
   }
 
-  if (ht == T_OBJ) {
+  if (ht == kTypeObject) {
     ant_iter_t it = js_prop_iter_begin(js, init);
     const char *key = NULL;
     size_t key_len = 0;

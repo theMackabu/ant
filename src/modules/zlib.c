@@ -103,8 +103,8 @@ static bool zlib_is_brotli_kind(zlib_kind_t kind) {
 
 static bool zlib_option_int(ant_t *js, ant_value_t opts, const char *key, int *out) {
   ant_value_t v = js_get(js, opts, key);
-  if (vtype(v) == T_UNDEF || vtype(v) == T_NULL) return true;
-  if (vtype(v) != T_NUM) return false;
+  if (vtype(v) == kTypeUndefined || vtype(v) == kTypeNull) return true;
+  if (vtype(v) != kTypeNumber) return false;
   *out = (int)js_to_number(js, v);
   return true;
 }
@@ -331,7 +331,7 @@ static ant_value_t js_zlib_process_chunk(ant_t *js, ant_value_t *args, int nargs
     buffer_source_get_bytes(js, args[0], &input, &input_len);
 
   int flush_flag = Z_NO_FLUSH;
-  if (nargs >= 2 && vtype(args[1]) == T_NUM)
+  if (nargs >= 2 && vtype(args[1]) == kTypeNumber)
     flush_flag = (int)js_getnum(args[1]);
 
   return zlib_process_chunk_sync(js, st, input, input_len, flush_flag);
@@ -343,7 +343,7 @@ static ant_value_t js_zlib_write(ant_t *js, ant_value_t *args, int nargs) {
   if (st->destroyed) return js_false;
   if (st->ended) return js_false;
 
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull)
     return js_true;
 
   const uint8_t *bytes = NULL;
@@ -384,7 +384,7 @@ static ant_value_t js_zlib_end(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid zlib stream");
   if (st->destroyed || st->ended) return self;
 
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t write_args[1] = { args[0] };
     js_zlib_write(js, write_args, 1);
   }
@@ -418,7 +418,7 @@ static ant_value_t js_zlib_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t cb = js_mkundef();
   if (nargs > 0 && is_callable(args[0])) cb = args[0];
   else {
-    if (nargs > 0 && vtype(args[0]) == T_NUM) flush = (int)js_getnum(args[0]);
+    if (nargs > 0 && vtype(args[0]) == kTypeNumber) flush = (int)js_getnum(args[0]);
     if (nargs > 1 && is_callable(args[1])) cb = args[1];
   }
 
@@ -816,7 +816,7 @@ static ant_value_t js_zlib_crc32(ant_t *js, ant_value_t *args, int nargs) {
   size_t len = 0;
   uLong init_val = 0;
 
-  if (nargs >= 2 && vtype(args[1]) == T_NUM)
+  if (nargs >= 2 && vtype(args[1]) == kTypeNumber)
     init_val = (uLong)js_getnum(args[1]);
 
   if (!get_input_bytes(js, args[0], &bytes, &len))

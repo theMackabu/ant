@@ -166,7 +166,7 @@ static ant_value_t net_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == T_CFUNC) result = js_as_cfunc(fn)(js, args, nargs);
+  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
   js->this_val = saved_this;
   return result;
@@ -214,7 +214,7 @@ static bool net_parse_write_args(ant_t *js, ant_value_t *args, int nargs, net_wr
   out->callback = js_mkundef();
   out->error = js_mkundef();
 
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return true;
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return true;
   value = args[0];
 
   if (!buffer_source_get_bytes(js, value, &out->bytes, &out->len)) {
@@ -253,43 +253,43 @@ static bool net_parse_listen_args(ant_t *js, ant_value_t *args, int nargs, net_l
 
   if (nargs == 0) return true;
 
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     out->port = (int)js_getnum(args[0]);
-    if (nargs > 1 && vtype(args[1]) == T_STR) {
+    if (nargs > 1 && vtype(args[1]) == kTypeString) {
       size_t len = 0;
       out->host = js_getstr(js, args[1], &len);
     }
-    if (nargs > 2 && vtype(args[2]) == T_NUM) out->backlog = (int)js_getnum(args[2]);
+    if (nargs > 2 && vtype(args[2]) == kTypeNumber) out->backlog = (int)js_getnum(args[2]);
     if (nargs > 3 && is_callable(args[3])) out->callback = args[3];
     else if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
     else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
     return true;
   }
 
-  if (vtype(args[0]) == T_OBJ) {
+  if (vtype(args[0]) == kTypeObject) {
     ant_value_t value = js_get(js, args[0], "path");
-    if (vtype(value) == T_STR) {
+    if (vtype(value) == kTypeString) {
       out->path = js_getstr(js, value, NULL);
     }
 
     value = js_get(js, args[0], "port");
-    if (vtype(value) == T_NUM) out->port = (int)js_getnum(value);
+    if (vtype(value) == kTypeNumber) out->port = (int)js_getnum(value);
     value = js_get(js, args[0], "host");
-    if (vtype(value) == T_STR) {
+    if (vtype(value) == kTypeString) {
       size_t len = 0;
       out->host = js_getstr(js, value, &len);
     }
     
     value = js_get(js, args[0], "backlog");
-    if (vtype(value) == T_NUM) out->backlog = (int)js_getnum(value);
+    if (vtype(value) == kTypeNumber) out->backlog = (int)js_getnum(value);
     if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
     
     return true;
   }
 
-  if (vtype(args[0]) == T_STR) {
+  if (vtype(args[0]) == kTypeString) {
     out->path = js_getstr(js, args[0], NULL);
-    if (nargs > 1 && vtype(args[1]) == T_NUM) out->backlog = (int)js_getnum(args[1]);
+    if (nargs > 1 && vtype(args[1]) == kTypeNumber) out->backlog = (int)js_getnum(args[1]);
     if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
     else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
     return true;
@@ -318,50 +318,50 @@ static bool net_parse_connect_args(ant_t *js, ant_value_t *args, int nargs, net_
     return false;
   }
 
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     out->port = (int)js_getnum(args[0]);
-    if (nargs > 1 && vtype(args[1]) == T_STR) out->host = js_getstr(js, args[1], NULL);
+    if (nargs > 1 && vtype(args[1]) == kTypeString) out->host = js_getstr(js, args[1], NULL);
     if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
     else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
     return true;
   }
 
-  if (vtype(args[0]) == T_STR) {
+  if (vtype(args[0]) == kTypeString) {
     out->path = js_getstr(js, args[0], NULL);
     if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
     return true;
   }
 
-  if (vtype(args[0]) == T_OBJ) {
+  if (vtype(args[0]) == kTypeObject) {
     value = js_get(js, args[0], "path");
-    if (vtype(value) == T_STR) out->path = js_getstr(js, value, NULL);
+    if (vtype(value) == kTypeString) out->path = js_getstr(js, value, NULL);
 
     value = js_get(js, args[0], "socketPath");
-    if (!out->path && vtype(value) == T_STR) out->path = js_getstr(js, value, NULL);
+    if (!out->path && vtype(value) == kTypeString) out->path = js_getstr(js, value, NULL);
 
     value = js_get(js, args[0], "port");
-    if (vtype(value) == T_NUM) out->port = (int)js_getnum(value);
+    if (vtype(value) == kTypeNumber) out->port = (int)js_getnum(value);
 
     value = js_get(js, args[0], "host");
-    if (vtype(value) == T_STR) out->host = js_getstr(js, value, NULL);
+    if (vtype(value) == kTypeString) out->host = js_getstr(js, value, NULL);
 
     value = js_get(js, args[0], "hostname");
-    if (vtype(value) == T_STR) out->host = js_getstr(js, value, NULL);
+    if (vtype(value) == kTypeString) out->host = js_getstr(js, value, NULL);
 
     value = js_get(js, args[0], "allowHalfOpen");
-    if (vtype(value) != T_UNDEF) out->allow_half_open = js_truthy(js, value);
+    if (vtype(value) != kTypeUndefined) out->allow_half_open = js_truthy(js, value);
 
     value = js_get(js, args[0], "timeout");
-    if (vtype(value) == T_NUM && js_getnum(value) > 0) out->timeout_ms = (uint64_t)js_getnum(value);
+    if (vtype(value) == kTypeNumber && js_getnum(value) > 0) out->timeout_ms = (uint64_t)js_getnum(value);
 
     value = js_get(js, args[0], "noDelay");
-    if (vtype(value) != T_UNDEF) out->no_delay = js_truthy(js, value);
+    if (vtype(value) != kTypeUndefined) out->no_delay = js_truthy(js, value);
 
     value = js_get(js, args[0], "keepAlive");
-    if (vtype(value) != T_UNDEF) out->keep_alive = js_truthy(js, value);
+    if (vtype(value) != kTypeUndefined) out->keep_alive = js_truthy(js, value);
 
     value = js_get(js, args[0], "keepAliveInitialDelay");
-    if (vtype(value) == T_NUM && js_getnum(value) > 0)
+    if (vtype(value) == kTypeNumber && js_getnum(value) > 0)
       out->keep_alive_initial_delay_secs = (unsigned int)(js_getnum(value) / 1000.0);
 
     if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
@@ -457,7 +457,7 @@ static ant_value_t net_socket_emit_connect_error(ant_t *js, ant_value_t *args, i
   ant_value_t status_val = is_object_type(state) ? js_get(js, state, "status") : js_mknum(UV_EIO);
   
   net_socket_t *socket = net_socket_data(socket_obj);
-  int status = vtype(status_val) == T_NUM ? (int)js_getnum(status_val) : UV_EIO;
+  int status = vtype(status_val) == kTypeNumber ? (int)js_getnum(status_val) : UV_EIO;
   
   ant_value_t err = 0;
   if (!socket) return js_mkundef();
@@ -573,26 +573,26 @@ static ant_value_t net_isIPv6(ant_t *js, ant_value_t *args, int nargs) {
 static void net_server_apply_options(ant_t *js, net_server_t *server, ant_value_t options) {
   ant_value_t value = 0;
 
-  if (!server || vtype(options) != T_OBJ) return;
+  if (!server || vtype(options) != kTypeObject) return;
 
   value = js_get(js, options, "allowHalfOpen");
-  if (vtype(value) != T_UNDEF) server->allow_half_open = js_truthy(js, value);
+  if (vtype(value) != kTypeUndefined) server->allow_half_open = js_truthy(js, value);
 
   value = js_get(js, options, "pauseOnConnect");
-  if (vtype(value) != T_UNDEF) server->pause_on_connect = js_truthy(js, value);
+  if (vtype(value) != kTypeUndefined) server->pause_on_connect = js_truthy(js, value);
 
   value = js_get(js, options, "noDelay");
-  if (vtype(value) != T_UNDEF) server->no_delay = js_truthy(js, value);
+  if (vtype(value) != kTypeUndefined) server->no_delay = js_truthy(js, value);
 
   value = js_get(js, options, "keepAlive");
-  if (vtype(value) != T_UNDEF) server->keep_alive = js_truthy(js, value);
+  if (vtype(value) != kTypeUndefined) server->keep_alive = js_truthy(js, value);
 
   value = js_get(js, options, "keepAliveInitialDelay");
-  if (vtype(value) == T_NUM && js_getnum(value) > 0)
+  if (vtype(value) == kTypeNumber && js_getnum(value) > 0)
     server->keep_alive_initial_delay_secs = (unsigned int)(js_getnum(value) / 1000.0);
 
   value = js_get(js, options, "backlog");
-  if (vtype(value) == T_NUM && js_getnum(value) > 0)
+  if (vtype(value) == kTypeNumber && js_getnum(value) > 0)
     server->backlog = (int)js_getnum(value);
 }
 
@@ -610,7 +610,7 @@ static void net_socket_on_read(ant_conn_t *conn, ssize_t nread, void *user_data)
   offset = total - (size_t)nread;
   buffer = ant_conn_buffer(conn) + offset;
 
-  if (vtype(socket->encoding) == T_STR)
+  if (vtype(socket->encoding) == kTypeString)
     chunk = js_mkstr(socket->js, buffer, (size_t)nread);
   else chunk = net_make_buffer_chunk(socket->js, buffer, (size_t)nread);
 
@@ -726,7 +726,7 @@ static ant_value_t js_net_socket_ctor(ant_t *js, ant_value_t *args, int nargs) {
   net_socket_t *socket = NULL;
   bool allow_half_open = false;
 
-  if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+  if (nargs > 0 && vtype(args[0]) == kTypeObject) {
     ant_value_t value = js_get(js, args[0], "allowHalfOpen");
     allow_half_open = js_truthy(js, value);
   }
@@ -765,7 +765,7 @@ static ant_value_t js_net_socket_resume(ant_t *js, ant_value_t *args, int nargs)
 static ant_value_t js_net_socket_setEncoding(ant_t *js, ant_value_t *args, int nargs) {
   net_socket_t *socket = net_require_socket(js, js_getthis(js));
   if (!socket) return js->thrown_value;
-  socket->encoding = nargs > 0 && vtype(args[0]) != T_UNDEF ? js_tostring_val(js, args[0]) : js_mkundef();
+  socket->encoding = nargs > 0 && vtype(args[0]) != kTypeUndefined ? js_tostring_val(js, args[0]) : js_mkundef();
   return js_getthis(js);
 }
 
@@ -774,7 +774,7 @@ static ant_value_t js_net_socket_setTimeout(ant_t *js, ant_value_t *args, int na
   double timeout = 0;
 
   if (!socket) return js->thrown_value;
-  if (nargs > 0 && vtype(args[0]) == T_NUM) timeout = js_getnum(args[0]);
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber) timeout = js_getnum(args[0]);
   if (socket->conn) ant_conn_set_timeout_ms(socket->conn, timeout > 0 ? (uint64_t)timeout : 0);
   net_socket_sync_state(socket);
 
@@ -795,7 +795,7 @@ static ant_value_t js_net_socket_setNoDelay(ant_t *js, ant_value_t *args, int na
 static ant_value_t js_net_socket_setKeepAlive(ant_t *js, ant_value_t *args, int nargs) {
   net_socket_t *socket = net_require_socket(js, js_getthis(js));
   bool enable = nargs > 0 && js_truthy(js, args[0]);
-  unsigned int delay = nargs > 1 && vtype(args[1]) == T_NUM ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
+  unsigned int delay = nargs > 1 && vtype(args[1]) == kTypeNumber ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
   if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_set_keep_alive(socket->conn, enable, delay);
   return js_getthis(js);
@@ -871,7 +871,7 @@ static ant_value_t js_net_socket_destroy(ant_t *js, ant_value_t *args, int nargs
   net_socket_t *socket = net_require_socket(js, js_getthis(js));
   if (!socket) return js->thrown_value;
 
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t err = args[0];
     socket->had_error = true;
     net_emit(js, socket->obj, "error", &err, 1);
@@ -947,7 +947,7 @@ static ant_value_t js_net_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_server_create(js);
 
   if (!server) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-  if (nargs > 0 && vtype(args[0]) == T_OBJ) net_server_apply_options(js, server, args[0]);
+  if (nargs > 0 && vtype(args[0]) == kTypeObject) net_server_apply_options(js, server, args[0]);
   if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "connection", args[0], false);
   else if (nargs > 1 && is_callable(args[1])) net_add_listener(js, server->obj, "connection", args[1], false);
 
@@ -1174,7 +1174,7 @@ static ant_value_t js_net_getDefaultAutoSelectFamilyAttemptTimeout(ant_t *js, an
 }
 
 static ant_value_t js_net_setDefaultAutoSelectFamilyAttemptTimeout(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
     double value = js_getnum(args[0]);
     if (value > 0 && value < 10) value = 10;
     if (value > 0) g_default_auto_select_family_attempt_timeout = value;
@@ -1256,6 +1256,6 @@ void gc_mark_net(ant_t *js, gc_mark_fn mark) {
     
   for (socket = g_active_sockets; socket; socket = socket->next_active) {
     mark(js, socket->obj);
-    if (vtype(socket->encoding) != T_UNDEF) mark(js, socket->encoding);
+    if (vtype(socket->encoding) != kTypeUndefined) mark(js, socket->encoding);
   }
 }

@@ -87,18 +87,18 @@ static ant_value_t domexception_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t self = js_getthis(js);
 
   const char *msg;
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined) {
     msg = "";
-  } else if (vtype(args[0]) == T_STR) {
+  } else if (vtype(args[0]) == kTypeString) {
     msg = js_getstr(js, args[0], NULL);
     if (!msg) msg = "";
   } else {
     ant_value_t str_val = js_tostring_val(js, args[0]);
-    msg = (vtype(str_val) == T_STR) ? js_getstr(js, str_val, NULL) : "";
+    msg = (vtype(str_val) == kTypeString) ? js_getstr(js, str_val, NULL) : "";
     if (!msg) msg = "";
   }
 
-  const char *name = (nargs >= 2 && vtype(args[1]) == T_STR) ? js_getstr(js, args[1], NULL) : "Error";
+  const char *name = (nargs >= 2 && vtype(args[1]) == kTypeString) ? js_getstr(js, args[1], NULL) : "Error";
   if (!name) name = "Error";
 
   int code = name_to_code(name);
@@ -141,7 +141,7 @@ void init_domexception_module(ant_t *js) {
   g_initialized = true;
 
   ant_value_t error_proto = js_get_ctor_proto(js, "Error", 5);
-  if (vtype(error_proto) != T_UNDEF) js_set_proto_init(proto, error_proto);
+  if (vtype(error_proto) != kTypeUndefined) js_set_proto_init(proto, error_proto);
 
   js_set(js, proto, "name",    js_mkstr(js, "Error", 5));
   js_set(js, proto, "message", js_mkstr(js, "",      0));

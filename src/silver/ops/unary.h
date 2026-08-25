@@ -9,7 +9,7 @@
 
 static inline void sv_op_not(sv_vm_t *vm, ant_t *js) {
   ant_value_t a = vm->stack[--vm->sp];
-  vm->stack[vm->sp++] = mkval(T_BOOL, !js_truthy(js, a));
+  vm->stack[vm->sp++] = mkval(kTypeBool, !js_truthy(js, a));
 }
 
 static inline void sv_op_typeof(sv_vm_t *vm, ant_t *js) {
@@ -20,7 +20,7 @@ static inline void sv_op_typeof(sv_vm_t *vm, ant_t *js) {
 
 static inline void sv_op_void(sv_vm_t *vm) {
   vm->sp--;
-  vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
+  vm->stack[vm->sp++] = mkval(kTypeUndefined, 0);
 }
 
 static inline ant_value_t sv_op_delete(sv_vm_t *vm, ant_t *js) {
@@ -28,21 +28,21 @@ static inline ant_value_t sv_op_delete(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
   ant_value_t key_str = js_mkundef();
 
-  if (vtype(key) == T_SYMBOL) {
+  if (vtype(key) == kTypeSymbol) {
     ant_value_t result = js_delete_sym_prop(js, obj, key);
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
     return js_mkundef();
   } else key_str = coerce_to_str(js, key);
 
-  if (!is_err(key_str) && vtype(key_str) == T_STR) {
+  if (!is_err(key_str) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
     ant_value_t result = js_delete_prop(js, obj, kptr, klen);
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
-  } else vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+  } else vm->stack[vm->sp++] = mkval(kTypeBool, 0);
 
   return js_mkundef();
 }

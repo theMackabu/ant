@@ -75,7 +75,7 @@ static bool repl_preview_format_value(
   if (!js || !out || out_len == 0) return false;
   out[0] = '\0';
 
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     char *str = js_getstr(js, value, NULL);
     if (!str) return false;
     if (out_len > 2) {

@@ -231,7 +231,7 @@ function benchComputedMissingLongKey(n) {
 console.log('property hotspot benchmark');
 console.log('scale=' + SCALE);
 
-section('1. lkp_proto T_CFUNC branch re-interns');
+section('1. lkp_proto kTypeBuiltin branch re-interns');
 console.log('sanity parseInt.call=' + (typeof parseInt.call));
 bench('cfunc_proto_call_apply', benchCfuncProtoCallApply, scaledIters(2_000_000));
 bench('cfunc_proto_bind', benchCfuncProtoBind, scaledIters(1_500_000));

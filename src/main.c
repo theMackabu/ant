@@ -321,11 +321,11 @@ static void eval_code(
     js, result, cbuf_stack, sizeof(cbuf_stack)
   );
   
-  if (vtype(result) == T_ERR) {
+  if (vtype(result) == kTypeError) {
     fprintf(stderr, "%s\n", cstr.ptr);
     js_result = EXIT_FAILURE;
   } else if (should_print) {
-    if (vtype(result) == T_STR) printf("%s\n", cstr.ptr ? cstr.ptr : "");
+    if (vtype(result) == kTypeString) printf("%s\n", cstr.ptr ? cstr.ptr : "");
     else if (cstr.ptr && strcmp(cstr.ptr, "undefined") != 0) {
       print_value_colored(cstr.ptr, stdout); printf("\n");
     }
@@ -371,7 +371,7 @@ static int execute_module(ant_t *js, const char *filename, const char *cron_peri
   free(use_path_owned);
   if (print_uncaught_throw(js)) return EXIT_FAILURE;
   
-  if (vtype(ns) == T_ERR) {
+  if (vtype(ns) == kTypeError) {
     fprintf(stderr, "%s\n", js_str(js, ns));
     return EXIT_FAILURE;
   }

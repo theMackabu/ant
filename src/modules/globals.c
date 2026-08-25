@@ -83,16 +83,16 @@ ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs) {
   const char *msg = "";
   uint8_t et = vtype(error);
   
-  if (et == T_STR) {
+  if (et == kTypeString) {
     msg = js_str(js, error);
-  } else if (et == T_OBJ) {
+  } else if (et == kTypeObject) {
     const char *m = get_str_prop(js, error, "message", 7, NULL);
     if (m && *m) msg = m;
   }
   
   if (!*msg) {
     ant_value_t str = js_tostring_val(js, error);
-    if (vtype(str) == T_STR) { const char *s = js_str(js, str); if (s) msg = s; }
+    if (vtype(str) == kTypeString) { const char *s = js_str(js, str); if (s) msg = s; }
   }
 
   const char *filename = "";
@@ -101,7 +101,7 @@ ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs) {
   if (!filename) filename = "";
 
   ant_value_t loc = js_get(js, global, "location");
-  if (vtype(loc) == T_OBJ) {
+  if (vtype(loc) == kTypeObject) {
     const char *href = get_str_prop(js, loc, "href", 4, NULL);
     if (href && *href) filename = href;
   }
@@ -118,7 +118,7 @@ ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t handler = js_get(js, global, "onerror");
   
   uint8_t ht = vtype(handler);
-  if (ht == T_FUNC || ht == T_CFUNC) {
+  if (ht == kTypeFunction || ht == kTypeBuiltin) {
     ant_value_t msg_str  = js_mkstr(js, msg, strlen(msg));
     ant_value_t file_str = js_mkstr(js, filename, strlen(filename));
     ant_value_t call_args[5] = { msg_str, file_str, js_mknum(lineno), js_mknum(colno), error };
@@ -133,7 +133,7 @@ bool js_fire_unhandled_rejection(ant_t *js, ant_value_t promise_val, ant_value_t
   ant_value_t handler = js_get(js, global, "onunhandledrejection");
   
   uint8_t ht = vtype(handler);
-  if (ht != T_FUNC && ht != T_CFUNC) return false;
+  if (ht != kTypeFunction && ht != kTypeBuiltin) return false;
 
   ant_value_t event = js_mkobj(js);
   js_set(js, event, "type",    js_mkstr(js, "unhandledrejection", 18));
@@ -151,7 +151,7 @@ void js_fire_rejection_handled(ant_t *js, ant_value_t promise_val, ant_value_t r
   ant_value_t handler = js_get(js, global, "onrejectionhandled");
   
   uint8_t ht = vtype(handler);
-  if (ht != T_FUNC && ht != T_CFUNC) return;
+  if (ht != kTypeFunction && ht != kTypeBuiltin) return;
 
   ant_value_t event = js_mkobj(js);
   js_set(js, event, "type",    js_mkstr(js, "rejectionhandled", 16));

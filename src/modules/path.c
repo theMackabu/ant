@@ -39,7 +39,7 @@ static path_style_t path_host_style(void) {
 
 static path_style_t path_current_style(ant_t *js) {
   ant_value_t data = js_get_slot(js->current_func, SLOT_DATA);
-  if (vtype(data) == T_NUM) {
+  if (vtype(data) == kTypeNumber) {
     int style = (int)js_getnum(data);
     if (style == PATH_STYLE_WIN32) return PATH_STYLE_WIN32;
     if (style == PATH_STYLE_POSIX) return PATH_STYLE_POSIX;
@@ -165,7 +165,7 @@ static ant_value_t path_make_string(ant_t *js, const char *src, size_t len) {
 
 static const char *path_get_nonempty_string(ant_t *js, ant_value_t value, size_t *len) {
   *len = 0;
-  if (vtype(value) != T_STR) return NULL;
+  if (vtype(value) != kTypeString) return NULL;
 
   const char *str = js_getstr(js, value, len);
   return str && *len > 0 ? str : NULL;
@@ -193,7 +193,7 @@ static void path_append_ext(char result[PATH_MAX], size_t *pos, const char *ext,
 static ant_value_t builtin_path_basename(ant_t *js, ant_value_t *args, int nargs) {
   path_style_t style = path_current_style(js);
   if (nargs < 1) return js_mkerr(js, "basename() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "basename() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "basename() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -204,7 +204,7 @@ static ant_value_t builtin_path_basename(ant_t *js, ant_value_t *args, int nargs
   const char *base = path + start;
   size_t base_len = end > start ? end - start : 0;
   
-  if (nargs >= 2 && vtype(args[1]) == T_STR) {
+  if (nargs >= 2 && vtype(args[1]) == kTypeString) {
     size_t ext_len;
     char *ext = js_getstr(js, args[1], &ext_len);
     
@@ -221,7 +221,7 @@ static ant_value_t builtin_path_dirname(ant_t *js, ant_value_t *args, int nargs)
   path_style_t style = path_current_style(js);
   
   if (nargs < 1) return js_mkerr(js, "dirname() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "dirname() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "dirname() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -258,7 +258,7 @@ static ant_value_t builtin_path_extname(ant_t *js, ant_value_t *args, int nargs)
   path_style_t style = path_current_style(js);
   
   if (nargs < 1) return js_mkerr(js, "extname() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "extname() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "extname() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -380,7 +380,7 @@ fail:
 static ant_value_t builtin_path_normalize(ant_t *js, ant_value_t *args, int nargs) {
   path_style_t style = path_current_style(js);
   if (nargs < 1) return js_mkerr(js, "normalize() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "normalize() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "normalize() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -413,7 +413,7 @@ static ant_value_t builtin_path_join(ant_t *js, ant_value_t *args, int nargs) {
   int valid_segments = 0;
   
   for (int i = 0; i < nargs; i++) {
-  if (vtype(args[i]) == T_STR) {
+  if (vtype(args[i]) == kTypeString) {
   segments[valid_segments] = js_getstr(js, args[i], &lengths[valid_segments]);
   if (segments[valid_segments] && lengths[valid_segments] > 0) {
     total_len += lengths[valid_segments] + 1; // +1 for separator
@@ -498,7 +498,7 @@ static ant_value_t builtin_path_resolve(ant_t *js, ant_value_t *args, int nargs)
     char *segment = NULL;
     size_t prefix_len = 0;
 
-    if (vtype(args[i]) != T_STR) continue;
+    if (vtype(args[i]) != kTypeString) continue;
 
     segment = js_getstr(js, args[i], &seg_len);
     if (!segment || seg_len == 0) continue;
@@ -590,8 +590,8 @@ static ant_value_t builtin_path_relative(ant_t *js, ant_value_t *args, int nargs
   
   char sep = path_sep_char(style);
   if (nargs < 2) return js_mkerr(js, "relative() requires from and to arguments");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "relative() from must be a string");
-  if (vtype(args[1]) != T_STR) return js_mkerr(js, "relative() to must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "relative() from must be a string");
+  if (vtype(args[1]) != kTypeString) return js_mkerr(js, "relative() to must be a string");
   
   size_t from_len, to_len;
   char *from = js_getstr(js, args[0], &from_len);
@@ -702,7 +702,7 @@ relative_fail:
 static ant_value_t builtin_path_isAbsolute(ant_t *js, ant_value_t *args, int nargs) {
   path_style_t style = path_current_style(js);
   if (nargs < 1) return js_mkerr(js, "isAbsolute() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "isAbsolute() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "isAbsolute() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -715,7 +715,7 @@ static ant_value_t builtin_path_isAbsolute(ant_t *js, ant_value_t *args, int nar
 static ant_value_t builtin_path_parse(ant_t *js, ant_value_t *args, int nargs) {
   path_style_t style = path_current_style(js);
   if (nargs < 1) return js_mkerr(js, "parse() requires a path argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "parse() path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "parse() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);

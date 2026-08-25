@@ -14,7 +14,7 @@ bool temporal_plain_time_from_value(
   ZonedDateTime *zdt = is_object_type(value)
     ? js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG) : NULL;
   if (zdt) { *out = temporal_rs_ZonedDateTime_to_plain_time(zdt); return true; }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -33,7 +33,7 @@ bool temporal_plain_time_from_value(
 }
 
 static ant_value_t temporal_plain_time_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.PlainTime");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.PlainTime");
   int64_t fields[6] = {0};
   ant_value_t err = js_mkundef();
   for (int i = 0; i < 6 && i < nargs; i++)
@@ -53,7 +53,7 @@ static ant_value_t temporal_plain_time_from(ant_t *js, ant_value_t *args, int na
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.PlainTime.from requires an argument");
   ant_value_t err = js_mkundef();
   ArithmeticOverflow_option overflow = {0};
-  if (vtype(args[0]) == T_STR || js_get_native(args[0], TEMPORAL_PLAIN_TIME_TAG) ||
+  if (vtype(args[0]) == kTypeString || js_get_native(args[0], TEMPORAL_PLAIN_TIME_TAG) ||
       js_get_native(args[0], TEMPORAL_PLAIN_DATETIME_TAG) ||
       js_get_native(args[0], TEMPORAL_ZONED_DATETIME_TAG)) {
     PlainTime *time;

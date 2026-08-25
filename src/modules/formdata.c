@@ -156,7 +156,7 @@ static ant_value_t entry_to_js_value(ant_t *js, ant_value_t values_arr, fd_entry
 }
 
 static const char *resolve_name(ant_t *js, ant_value_t *name_v) {
-  if (vtype(*name_v) != T_STR) {
+  if (vtype(*name_v) != kTypeString) {
     *name_v = js_tostring_val(js, *name_v);
     if (is_err(*name_v)) return NULL;
   }
@@ -171,7 +171,7 @@ static ant_value_t extract_file_entry(
   if (!bd) return js_mkerr_typed(js, JS_ERR_TYPE, "FormData value must be a string, Blob, or File");
 
   bool is_file = (bd->name != NULL);
-  bool no_filename_override = (vtype(filename_v) == T_UNDEF);
+  bool no_filename_override = (vtype(filename_v) == kTypeUndefined);
 
   ant_value_t stored_val;
 
@@ -183,7 +183,7 @@ static ant_value_t extract_file_entry(
     
     if (!no_filename_override) {
       ant_value_t fv = filename_v;
-      if (vtype(fv) != T_STR) { fv = js_tostring_val(js, fv); if (is_err(fv)) return fv; }
+      if (vtype(fv) != kTypeString) { fv = js_tostring_val(js, fv); if (is_err(fv)) return fv; }
       fname_owned = strdup(js_getstr(js, fv, NULL));
       fname = fname_owned;
     } 
@@ -226,7 +226,7 @@ ant_value_t formdata_append_string(ant_t *js, ant_value_t fd, ant_value_t name_v
   const char *name = resolve_name(js, &name_v);
   if (!name) return name_v;
 
-  if (vtype(value_v) != T_STR) {
+  if (vtype(value_v) != kTypeString) {
     value_v = js_tostring_val(js, value_v);
     if (is_err(value_v)) return value_v;
   }
@@ -262,7 +262,7 @@ static ant_value_t js_formdata_append(ant_t *js, ant_value_t *args, int nargs) {
     return extract_file_entry(js, d, values_arr, name, val, fname, false);
   }
 
-  if (vtype(val) != T_STR) { val = js_tostring_val(js, val); if (is_err(val)) return val; }
+  if (vtype(val) != kTypeString) { val = js_tostring_val(js, val); if (is_err(val)) return val; }
   return fd_append_str(d, name, js_getstr(js, val, NULL)) ? js_mkundef() : js_mkerr(js, "out of memory");
 }
 
@@ -282,7 +282,7 @@ static ant_value_t js_formdata_set(ant_t *js, ant_value_t *args, int nargs) {
     return extract_file_entry(js, d, values_arr, name, val, fname, true);
   }
 
-  if (vtype(val) != T_STR) { val = js_tostring_val(js, val); if (is_err(val)) return val; }
+  if (vtype(val) != kTypeString) { val = js_tostring_val(js, val); if (is_err(val)) return val; }
   fd_delete_name(d, name);
   return fd_append_str(d, name, js_getstr(js, val, NULL)) ? js_mkundef() : js_mkerr(js, "out of memory");
 }
@@ -442,9 +442,9 @@ static ant_value_t js_formdata_values(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData constructor requires 'new'");
-  if (nargs >= 1 && vtype(args[0]) != T_UNDEF)
+  if (nargs >= 1 && vtype(args[0]) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData does not support a form element argument");
 
   fd_data_t *d = fd_data_new();

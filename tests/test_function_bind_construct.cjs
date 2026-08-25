@@ -21,7 +21,7 @@ check('outer bind no args', f.bind({ x: 1 }, 10).bind({ x: 2 })(30), [1, 10, 30]
 check('single bind unchanged', f.bind({ x: 7 }, 8)(9), [7, 8, 9]);
 
 // cfunc target: first bind produces a closure over the native, the second
-// bind takes the T_FUNC re-bind path.
+// bind takes the kTypeFunction re-bind path.
 check('cfunc double bind args', Math.max.bind(null, 1).bind(null, 2)(3), 3);
 check('cfunc double bind order', Math.min.bind(null, 5).bind(null, 2)(9), 2);
 {

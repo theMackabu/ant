@@ -93,7 +93,7 @@ static ant_value_t eventsource_call(ant_t *js, ant_value_t fn, ant_value_t this_
   ant_value_t saved_this = js->this_val;
   ant_value_t result = js_mkundef();
   js->this_val = this_val;
-  if (vtype(fn) == T_CFUNC) result = js_as_cfunc(fn)(js, args, nargs);
+  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
   js->this_val = saved_this;
   return result;
@@ -395,7 +395,7 @@ static ant_value_t eventsource_create_object(ant_t *js) {
 }
 
 static ant_value_t js_eventsource_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "EventSource constructor requires 'new'");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "EventSource URL is required");
 
@@ -417,7 +417,7 @@ static ant_value_t js_eventsource_ctor(ant_t *js, ant_value_t *args, int nargs) 
   
   if (nargs > 1 && is_object_type(args[1])) {
     ant_value_t with_credentials = js_get(js, args[1], "withCredentials");
-    if (vtype(with_credentials) != T_UNDEF) es->with_credentials = js_truthy(js, with_credentials);
+    if (vtype(with_credentials) != kTypeUndefined) es->with_credentials = js_truthy(js, with_credentials);
   }
   
   if (!es->url || !es->last_event_id) {

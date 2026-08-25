@@ -263,7 +263,7 @@ static wasm_extern_handle_t *wasm_extern_handle(ant_value_t value, wasm_extern_w
 
 static ant_value_t wasm_make_error(ant_t *js, ant_value_t proto, const char *name, const char *message) {
   ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, message ? message : "");
-  if (vtype(err) != T_OBJ) return err;
+  if (vtype(err) != kTypeObject) return err;
   js_set(js, err, "name", js_mkstr(js, name, strlen(name)));
   if (is_object_type(proto)) js_set_proto_init(err, proto);
   return err;
@@ -338,9 +338,9 @@ static ant_value_t wasm_value_to_js(ant_t *js, const wasm_val_t *value) {
 }
 
 static bool js_value_to_i64(ant_t *js, ant_value_t value, int64_t *out) {
-  if (vtype(value) == T_BIGINT) {
+  if (vtype(value) == kTypeBigInt) {
     ant_value_t str_val = js_tostring_val(js, value);
-    if (is_err(str_val) || vtype(str_val) != T_STR) return false;
+    if (is_err(str_val) || vtype(str_val) != kTypeString) return false;
     const char *str = js_str(js, str_val);
     if (!str) return false;
     char *end = NULL;
@@ -374,11 +374,11 @@ static bool js_value_to_wasm(ant_t *js, ant_value_t value, wasm_valkind_t kind, 
       return true;
     case WASM_EXTERNREF:
       out->of.ref = NULL;
-      return vtype(value) == T_NULL || vtype(value) == T_UNDEF;
+      return vtype(value) == kTypeNull || vtype(value) == kTypeUndefined;
     case WASM_FUNCREF: {
       ant_value_t state;
       wasm_func_handle_t *handle;
-      if (vtype(value) == T_NULL || vtype(value) == T_UNDEF) {
+      if (vtype(value) == kTypeNull || vtype(value) == kTypeUndefined) {
         out->of.ref = NULL;
         return true;
       }
@@ -636,7 +636,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
         js, WASM_EXTERN_WRAP_GLOBAL, js->builtins.wasm_global_proto, BRAND_WASM_GLOBAL,
         NULL, false, wasm_extern_as_global(external), instance_obj
       );
-      if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
+      if (vtype(obj) == kTypeObject) js_set_finalizer(obj, wasm_extern_finalize);
       return obj;
     }
     case WASM_EXTERN_MEMORY: {
@@ -644,7 +644,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
         js, WASM_EXTERN_WRAP_MEMORY, js->builtins.wasm_memory_proto, BRAND_WASM_MEMORY,
         NULL, false, wasm_extern_as_memory(external), instance_obj
       );
-      if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
+      if (vtype(obj) == kTypeObject) js_set_finalizer(obj, wasm_extern_finalize);
       return obj;
     }
     case WASM_EXTERN_TABLE: {
@@ -652,7 +652,7 @@ static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, c
         js, WASM_EXTERN_WRAP_TABLE, js->builtins.wasm_table_proto, BRAND_WASM_TABLE,
         NULL, false, wasm_extern_as_table(external), instance_obj
       );
-      if (vtype(obj) == T_OBJ) js_set_finalizer(obj, wasm_extern_finalize);
+      if (vtype(obj) == kTypeObject) js_set_finalizer(obj, wasm_extern_finalize);
       return obj;
     }
     default:
@@ -695,7 +695,7 @@ static ant_value_t wasm_module_from_bytes(ant_t *js, ant_value_t value, ant_valu
   }
 
   *out_module = wasm_wrap_module(js, store, module);
-  if (vtype(*out_module) == T_OBJ) {
+  if (vtype(*out_module) == kTypeObject) {
     wasm_module_handle_t *handle = wasm_module_handle(*out_module);
     if (handle && binary.size > 0) {
       handle->bytes = malloc(binary.size);
@@ -715,14 +715,14 @@ static ant_value_t js_wasm_module_ctor(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t module = js_mkundef();
   ant_value_t err;
 
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Module constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Module requires a BufferSource");
 
   err = wasm_module_from_bytes(js, args[0], &module);
   if (is_err(err)) return err;
-  if (vtype(module) != T_OBJ) return js_throw(js, wasm_error_value(js, err));
+  if (vtype(module) != kTypeObject) return js_throw(js, wasm_error_value(js, err));
   return module;
 }
 
@@ -894,7 +894,7 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
     wasm_set_pending_import_throw(js, thrown);
     
     const char *msg = "WebAssembly import threw";
-    if (vtype(js->thrown_value) == T_OBJ) {
+    if (vtype(js->thrown_value) == kTypeObject) {
       const char *message = get_str_prop(js, js->thrown_value, "message", 7, NULL);
       if (message && *message) msg = message;
     }
@@ -917,7 +917,7 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
     return NULL;
   }
 
-  if (vtype(result) != T_ARR)
+  if (vtype(result) != kTypeArray)
     return wasm_import_trap(env, "Expected an array for multi-value return");
 
   for (size_t i = 0; i < results->size; i++) {
@@ -1148,7 +1148,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
 
     instance_obj = wasm_wrap_instance(js, inst_handle, module_obj);
   }
-  if (vtype(instance_obj) != T_OBJ) {
+  if (vtype(instance_obj) != kTypeObject) {
     wasm_exporttype_vec_delete(&export_types);
     return instance_obj;
   }
@@ -1189,12 +1189,12 @@ static ant_value_t js_wasm_instance_ctor(ant_t *js, ant_value_t *args, int nargs
   ant_value_t import_obj = (nargs >= 2 && is_object_type(args[1])) ? args[1] : js_mkundef();
   ant_value_t err;
 
-  if (vtype(js->new_target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Instance constructor requires 'new'");
+  if (vtype(js->new_target) == kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Instance constructor requires 'new'");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Instance requires a module");
 
   err = wasm_instantiate_module(js, args[0], import_obj, &instance);
   if (is_err(err)) return err;
-  if (vtype(instance) != T_OBJ) return js_throw(js, wasm_error_value(js, err));
+  if (vtype(instance) != kTypeObject) return js_throw(js, wasm_error_value(js, err));
   
   return instance;
 }
@@ -1261,7 +1261,7 @@ static ant_value_t js_wasm_global_ctor(ant_t *js, ant_value_t *args, int nargs) 
   wasm_val_t initial = WASM_INIT_VAL;
   ant_value_t result;
 
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Global constructor requires 'new'");
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Global requires a descriptor object");
@@ -1299,7 +1299,7 @@ static ant_value_t js_wasm_global_ctor(ant_t *js, ant_value_t *args, int nargs) 
     js, WASM_EXTERN_WRAP_GLOBAL, js->builtins.wasm_global_proto, BRAND_WASM_GLOBAL,
     store, true, global, js_mkundef()
   );
-  if (vtype(result) == T_OBJ) {
+  if (vtype(result) == kTypeObject) {
     wasm_extern_handle_t *handle = wasm_extern_handle(result, WASM_EXTERN_WRAP_GLOBAL);
     if (handle) {
       handle->use_cached_value = true;
@@ -1328,13 +1328,13 @@ static bool wasm_parse_memory_descriptor(ant_t *js, ant_value_t descriptor, wasm
   }
 
   initial_val = js_get(js, descriptor, "initial");
-  if (vtype(initial_val) == T_UNDEF || !wasm_to_page_count(js, initial_val, &initial_pages)) {
+  if (vtype(initial_val) == kTypeUndefined || !wasm_to_page_count(js, initial_val, &initial_pages)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Memory descriptor requires a valid initial page count");
     return false;
   }
 
   maximum_val = js_get(js, descriptor, "maximum");
-  if (vtype(maximum_val) != T_UNDEF) {
+  if (vtype(maximum_val) != kTypeUndefined) {
     if (!wasm_to_page_count(js, maximum_val, &maximum_pages)) {
       *err = js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Memory descriptor maximum must be a valid page count");
       return false;
@@ -1407,13 +1407,13 @@ static bool wasm_parse_table_descriptor(ant_t *js, ant_value_t descriptor, wasm_
   }
 
   initial_val = js_get(js, descriptor, "initial");
-  if (vtype(initial_val) == T_UNDEF || !wasm_to_page_count(js, initial_val, &initial)) {
+  if (vtype(initial_val) == kTypeUndefined || !wasm_to_page_count(js, initial_val, &initial)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table descriptor requires a valid initial length");
     return false;
   }
 
   maximum_val = js_get(js, descriptor, "maximum");
-  if (vtype(maximum_val) != T_UNDEF) {
+  if (vtype(maximum_val) != kTypeUndefined) {
     if (!wasm_to_page_count(js, maximum_val, &maximum)) {
       *err = js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table descriptor maximum must be a valid length");
       return false;
@@ -1432,7 +1432,7 @@ static bool wasm_parse_table_descriptor(ant_t *js, ant_value_t descriptor, wasm_
 
 static bool wasm_table_value_ok(ant_t *js, wasm_valkind_t element, ant_value_t value, ant_value_t *err) {
   if (element == WASM_EXTERNREF) return true;
-  if (vtype(value) == T_NULL || vtype(value) == T_UNDEF) return true;
+  if (vtype(value) == kTypeNull || vtype(value) == kTypeUndefined) return true;
   if (is_callable(value)) {
     ant_value_t state = js_get_slot(value, SLOT_DATA);
     wasm_func_handle_t *func_handle = is_object_type(state)
@@ -1510,7 +1510,7 @@ static ant_value_t js_wasm_memory_ctor(ant_t *js, ant_value_t *args, int nargs) 
   wasm_memory_t *memory = NULL;
   ant_value_t err, result;
 
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Memory constructor requires 'new'");
   if (!ensure_wasm_engine())
     return js_mkerr(js, "Failed to initialize WebAssembly engine");
@@ -1533,7 +1533,7 @@ static ant_value_t js_wasm_memory_ctor(ant_t *js, ant_value_t *args, int nargs) 
     js, WASM_EXTERN_WRAP_MEMORY, js->builtins.wasm_memory_proto, BRAND_WASM_MEMORY,
     store, true, memory, js_mkundef()
   );
-  if (vtype(result) != T_OBJ) {
+  if (vtype(result) != kTypeObject) {
     wasm_memory_delete(memory);
     wasm_store_delete(store);
     return result;
@@ -1582,7 +1582,7 @@ static ant_value_t js_wasm_table_get(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t entries = js_get(js, js->this_val, "__wasmTableEntries");
     if (is_object_type(entries)) {
       ant_value_t retained = wasm_table_entry_get(js, entries, index);
-      if (vtype(retained) != T_UNDEF && vtype(retained) != T_NULL)
+      if (vtype(retained) != kTypeUndefined && vtype(retained) != kTypeNull)
         return retained;
     }
   }
@@ -1628,7 +1628,7 @@ static ant_value_t js_wasm_table_set(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkundef();
   }
 
-  if (!(vtype(args[1]) == T_NULL || vtype(args[1]) == T_UNDEF)) {
+  if (!(vtype(args[1]) == kTypeNull || vtype(args[1]) == kTypeUndefined)) {
     ant_value_t state;
     wasm_func_handle_t *func_handle;
     
@@ -1655,7 +1655,7 @@ static ant_value_t js_wasm_table_set(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t entries = js_get(js, js->this_val, "__wasmTableEntries");
     if (is_object_type(entries))
       wasm_table_entry_set(js, entries, index,
-                           vtype(args[1]) == T_UNDEF ? js_mknull()
+                           vtype(args[1]) == kTypeUndefined ? js_mknull()
                                                       : args[1]);
   }
   
@@ -1681,7 +1681,7 @@ static ant_value_t js_wasm_table_grow(ant_t *js, ant_value_t *args, int nargs) {
     return err;
 
   if (handle->standalone_table_element == WASM_FUNCREF) {
-    if (!(vtype(init) == T_NULL || vtype(init) == T_UNDEF)) {
+    if (!(vtype(init) == kTypeNull || vtype(init) == kTypeUndefined)) {
       ant_value_t state;
       wasm_func_handle_t *func_handle;
 
@@ -1705,7 +1705,7 @@ static ant_value_t js_wasm_table_grow(ant_t *js, ant_value_t *args, int nargs) {
     if (is_object_type(entries)) {
       for (uint32_t i = old_size; i < old_size + delta; i++)
         wasm_table_entry_set(js, entries, i,
-                             vtype(init) == T_UNDEF ? js_mknull() : init);
+                             vtype(init) == kTypeUndefined ? js_mknull() : init);
     }
     handle->standalone_table_size = wasm_table_size(handle->as.table);
     return js_mknum((double)old_size);
@@ -1734,7 +1734,7 @@ static ant_value_t js_wasm_table_ctor(ant_t *js, ant_value_t *args, int nargs) {
   wasm_table_t *table = NULL;
   ant_value_t err, result;
 
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table constructor requires 'new'");
   if (!ensure_wasm_engine())
     return js_mkerr(js, "Failed to initialize WebAssembly engine");
@@ -1758,7 +1758,7 @@ static ant_value_t js_wasm_table_ctor(ant_t *js, ant_value_t *args, int nargs) {
     js, WASM_EXTERN_WRAP_TABLE, js->builtins.wasm_table_proto, BRAND_WASM_TABLE,
     store, true, table, js_mkundef()
   );
-  if (vtype(result) == T_OBJ) {
+  if (vtype(result) == kTypeObject) {
     ant_value_t entries = js_mkobj(js);
     wasm_extern_handle_t *handle = wasm_extern_handle(result, WASM_EXTERN_WRAP_TABLE);
     if (!handle || is_err(entries)) {
@@ -1832,7 +1832,7 @@ static ant_value_t js_wasm_compile(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   err = wasm_module_from_bytes(js, args[0], &module);
-  if (is_err(err) || vtype(module) != T_OBJ) {
+  if (is_err(err) || vtype(module) != kTypeObject) {
     wasm_reject_with_error(js, promise, wasm_error_value(js, err));
     return promise;
   }
@@ -1855,7 +1855,7 @@ static ant_value_t js_wasm_instantiate(ant_t *js, ant_value_t *args, int nargs) 
 
   if (wasm_module_handle(args[0])) {
     err = wasm_instantiate_module(js, args[0], import_obj, &instance);
-    if (is_err(err) || vtype(instance) != T_OBJ) {
+    if (is_err(err) || vtype(instance) != kTypeObject) {
       wasm_reject_with_error(js, promise, wasm_error_value(js, err));
       return promise;
     }
@@ -1864,13 +1864,13 @@ static ant_value_t js_wasm_instantiate(ant_t *js, ant_value_t *args, int nargs) 
   }
 
   err = wasm_module_from_bytes(js, args[0], &module);
-  if (is_err(err) || vtype(module) != T_OBJ) {
+  if (is_err(err) || vtype(module) != kTypeObject) {
     wasm_reject_with_error(js, promise, wasm_error_value(js, err));
     return promise;
   }
 
   err = wasm_instantiate_module(js, module, import_obj, &instance);
-  if (is_err(err) || vtype(instance) != T_OBJ) {
+  if (is_err(err) || vtype(instance) != kTypeObject) {
     wasm_reject_with_error(js, promise, wasm_error_value(js, err));
     return promise;
   }

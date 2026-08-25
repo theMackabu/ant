@@ -20,10 +20,10 @@ static constexpr size_t GC_CLOSURE_MAJOR_GROWTH   = 16u * 1024u * 1024u;
 static constexpr size_t GC_POOL_PRESSURE_FLOOR    = 8u * 1024u * 1024u;
 static constexpr size_t GC_ROPE_NURSERY_THRESHOLD = 8u * 1024u * 1024u;
 
-#define GC_OBJ_TYPE_MASK (T_FLAG_FIND(T_OBJ) \
-  | T_FLAG_FIND(T_ARR)                       \
-  | T_FLAG_FIND(T_PROMISE)                   \
-  | T_FLAG_FIND(T_GENERATOR))
+#define GC_OBJ_TYPE_MASK (T_FLAG_FIND(kTypeObject) \
+  | T_FLAG_FIND(kTypeArray)                        \
+  | T_FLAG_FIND(kTypePromise)                      \
+  | T_FLAG_FIND(kTypeGenerator))
 
 typedef struct gc_func_mark_profile {
   bool enabled;
@@ -59,13 +59,16 @@ gc_func_mark_profile_t gc_func_mark_profile_get(void);
 static inline bool gc_value_is_heap_ref(ant_value_t v) {
   if (!is_tagged(v)) return false;
   uint8_t type = vtype_tagged(v);
-  return type == T_FUNC || type == T_STR || (((1u << type) & GC_OBJ_TYPE_MASK) != 0);
+  return 
+    type == kTypeFunction || 
+    type == kTypeString   || 
+    (((1u << type) & GC_OBJ_TYPE_MASK) != 0);
 }
 
 static inline bool gc_value_ref_is_young(ant_value_t v) {
   uint8_t type = vtype_tagged(v);
-  if (type == T_FUNC) return true;
-  if (type == T_STR) return str_is_heap_rope(v) && (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
+  if (type == kTypeFunction) return true;
+  if (type == kTypeString) return str_is_heap_rope(v) && (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
   ant_object_t *ref = (ant_object_t *)vptr_tagged(v);
   return ref && ref->flags.generation == 0;
 }

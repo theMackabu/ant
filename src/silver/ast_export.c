@@ -44,8 +44,8 @@ static bool syntax_value_needs_root(ant_value_t value) {
   if (!is_tagged(value)) return false;
   uint8_t type = vtype(value);
   return 
-    type == T_STR  || type == T_OBJ || type == T_ARR ||
-    type == T_FUNC || type == T_BIGINT;
+    type == kTypeString  || type == kTypeObject || type == kTypeArray ||
+    type == kTypeFunction || type == kTypeBigInt;
 }
 
 static ant_value_t syntax_pin(syntax_export_ctx_t *ctx, ant_value_t value) {

@@ -18,8 +18,8 @@ static inline bool json_value_needs_temp_root(ant_value_t value) {
   if (!is_tagged(value)) return false;
   
   static const uint32_t mask =
-    (1u << T_STR) | (1u << T_OBJ) | (1u << T_ARR) | (1u << T_FUNC) |
-    (1u << T_PROMISE) | (1u << T_GENERATOR) | (1u << T_SYMBOL) | (1u << T_BIGINT);
+    (1u << kTypeString) | (1u << kTypeObject) | (1u << kTypeArray) | (1u << kTypeFunction) |
+    (1u << kTypePromise) | (1u << kTypeGenerator) | (1u << kTypeSymbol) | (1u << kTypeBigInt);
     
   uint8_t t = vtype(value);
   return t < 32 && (mask >> t) & 1;
@@ -134,7 +134,7 @@ typedef struct {
 } json_cycle_ctx;
 
 static inline bool json_has_abort(json_cycle_ctx *ctx) {
-  return ctx->has_cycle || vtype(ctx->error) != T_UNDEF;
+  return ctx->has_cycle || vtype(ctx->error) != kTypeUndefined;
 }
 
 static inline ant_value_t json_normalize_error(ant_value_t value) {
@@ -159,7 +159,7 @@ static inline void json_set_holder(json_cycle_ctx *ctx, ant_value_t value) {
 }
 
 static void json_capture_error(json_cycle_ctx *ctx, ant_value_t value) {
-  if (vtype(ctx->error) != T_UNDEF) return;
+  if (vtype(ctx->error) != kTypeUndefined) return;
   if (ctx->js->thrown_exists) {
     json_set_error(ctx, ctx->js->thrown_value);
     ctx->js->thrown_exists = false;
@@ -329,11 +329,11 @@ static int is_key_in_replacer_arr(ant_t *js, json_cycle_ctx *ctx, const char *ke
   ant_value_t item = js_get(js, ctx->replacer_arr, idxstr);
   int type = vtype(item);
   
-  if (type == T_STR) {
+  if (type == kTypeString) {
     size_t item_len;
     char *item_str = js_getstr(js, item, &item_len);
     if (key_matches(item_str, item_len, key, key_len)) return 1;
-  } else if (type == T_NUM) {
+  } else if (type == kTypeNumber) {
     char numstr[32];
     snprintf(numstr, sizeof(numstr), "%.0f", js_getnum(item));
     if (key_matches(numstr, strlen(numstr), key, key_len)) return 1;
@@ -529,7 +529,7 @@ static bool json_collect_own_keys(
   ant_t *js, ant_value_t val, const char ***out_keys, size_t *out_count,
   const char **inline_keys, size_t inline_cap
 ) {
-  if (vtype(val) != T_OBJ || is_proxy(val)) return false;
+  if (vtype(val) != kTypeObject || is_proxy(val)) return false;
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(val));
   if (!ptr || !ptr->shape || ptr->flags.is_exotic) return false;
@@ -694,37 +694,37 @@ static json_write_t json_write_impl(
   json_write_t result;
 
   switch (vtype(val)) {
-    case T_NULL: return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
-    case T_BOOL:
+    case kTypeNull: return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
+    case kTypeBool:
       return json_out_write(out, val == js_true ? "true" : "false", val == js_true ? 4 : 5)
         ? JSON_W_OK : JSON_W_ABORT;
 
-    case T_UNDEF:
-    case T_FUNC:
-    case T_CFUNC:
-    case T_SYMBOL:
+    case kTypeUndefined:
+    case kTypeFunction:
+    case kTypeBuiltin:
+    case kTypeSymbol:
       return in_array ? (json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT) : JSON_W_SKIP;
 
-    case T_BIGINT:
+    case kTypeBigInt:
       json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_TYPE,"Do not know how to serialize a BigInt"));
       return JSON_W_ABORT;
 
-    case T_NUM: return json_out_number(out, js_getnum(val)) ? JSON_W_OK : JSON_W_ABORT;
-    case T_STR: return json_out_quoted(ctx->js, out, val) ? JSON_W_OK : JSON_W_ABORT;
+    case kTypeNumber: return json_out_number(out, js_getnum(val)) ? JSON_W_OK : JSON_W_ABORT;
+    case kTypeString: return json_out_quoted(ctx->js, out, val) ? JSON_W_OK : JSON_W_ABORT;
 
-    case T_OBJ:
-    case T_ARR: break;
+    case kTypeObject:
+    case kTypeArray: break;
     default: return json_out_write(out, "null", 4) ? JSON_W_OK : JSON_W_ABORT;
   }
 
-  if (vtype(val) == T_OBJ) {
+  if (vtype(val) == kTypeObject) {
     ant_value_t prim = js_get_slot(val, SLOT_PRIMITIVE);
     switch (vtype(prim)) {
-      case T_NUM:  return json_out_number(out, js_getnum(prim)) ? JSON_W_OK : JSON_W_ABORT;
-      case T_STR:  return json_out_quoted(ctx->js, out, prim) ? JSON_W_OK : JSON_W_ABORT;
-      case T_BOOL: return json_out_write(out, prim == js_true ? "true" : "false", prim == js_true ? 4 : 5) ? JSON_W_OK : JSON_W_ABORT;
+      case kTypeNumber:  return json_out_number(out, js_getnum(prim)) ? JSON_W_OK : JSON_W_ABORT;
+      case kTypeString:  return json_out_quoted(ctx->js, out, prim) ? JSON_W_OK : JSON_W_ABORT;
+      case kTypeBool: return json_out_write(out, prim == js_true ? "true" : "false", prim == js_true ? 4 : 5) ? JSON_W_OK : JSON_W_ABORT;
 
-      case T_BIGINT: 
+      case kTypeBigInt:
         json_capture_error(ctx, js_mkerr_typed(ctx->js, JS_ERR_TYPE, "Do not know how to serialize a BigInt"));
         return JSON_W_ABORT;
 
@@ -795,7 +795,7 @@ static void apply_reviver_to_array(
   char idxstr[32];
   size_t idx_len = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
   ant_value_t new_elem = apply_reviver(js, value, idxstr, reviver, roots);
-  if (vtype(new_elem) == T_UNDEF) js_delete_prop(js, value, idxstr, idx_len);
+  if (vtype(new_elem) == kTypeUndefined) js_delete_prop(js, value, idxstr, idx_len);
   else {
     ant_value_t key_val = js_mkstr(js, idxstr, idx_len);
     if (is_err(key_val)) return;
@@ -811,7 +811,7 @@ static void apply_reviver_to_object(
   gc_temp_root_scope_t *roots
 ) {
   ant_value_t keys = json_snapshot_keys(js, value);
-  if (is_err(keys) || vtype(keys) != T_ARR) return;
+  if (is_err(keys) || vtype(keys) != kTypeArray) return;
   if (!json_temp_pin(roots, keys)) return;
 
   ant_offset_t key_count = js_arr_len(js, keys);
@@ -821,7 +821,7 @@ static void apply_reviver_to_object(
     char *key = js_getstr(js, key_val, &key_len);
     if (!key) continue;
     ant_value_t new_val = apply_reviver(js, value, key, reviver, roots);
-    if (vtype(new_val) == T_UNDEF) js_delete_prop(js, value, key, key_len);
+    if (vtype(new_val) == kTypeUndefined) js_delete_prop(js, value, key, key_len);
     else js_set(js, value, key, new_val);
   }
 }
@@ -836,14 +836,14 @@ static ant_value_t apply_reviver(
   ant_value_t val = js_get(js, holder, key);
   
   if (is_array_value(val)) apply_reviver_to_array(js, val, reviver, roots);
-  else if (vtype(val) == T_OBJ) apply_reviver_to_object(js, val, reviver, roots);
+  else if (vtype(val) == kTypeObject) apply_reviver_to_object(js, val, reviver, roots);
 
   return apply_reviver_call(js, holder, key, reviver, roots);
 }
 
 ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "JSON.parse() argument must be a string");
   
   gc_temp_root_scope_t temp_roots;
   gc_temp_root_scope_begin(js, &temp_roots);
@@ -900,9 +900,9 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
 
   if (is_special_object(space)) {
     uint8_t boxed = vtype(js_get_slot(space, SLOT_PRIMITIVE));
-    if (boxed != T_NUM && boxed != T_STR) return true;
+    if (boxed != kTypeNumber && boxed != kTypeString) return true;
 
-    ant_value_t prim = boxed == T_NUM
+    ant_value_t prim = boxed == kTypeNumber
       ? js_to_primitive(js, space, 0)
       : js_tostring_val(js, space);
 
@@ -913,7 +913,7 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
     space = prim;
   }
 
-  if (vtype(space) == T_NUM) {
+  if (vtype(space) == kTypeNumber) {
     double d = js_getnum(space);
     if (isnan(d) || d < 1) return true;
     size_t n = d > 10 ? 10 : (size_t)d;
@@ -922,7 +922,7 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
     return true;
   }
 
-  if (vtype(space) != T_STR) return true;
+  if (vtype(space) != kTypeString) return true;
 
   size_t byte_len = 0;
   char *str = js_getstr(js, space, &byte_len);
@@ -976,7 +976,7 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   
   int top_type = vtype(args[0]);
   
-  if (nargs < 2 && top_type == T_STR) {
+  if (nargs < 2 && top_type == kTypeString) {
     size_t byte_len = 0;
     size_t raw_len = 0;
     
@@ -1004,7 +1004,7 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   else if (is_special_object(replacer)) {
   ant_value_t len_val = js_get(js, replacer, "length");
   
-  if (vtype(len_val) == T_NUM) {
+  if (vtype(len_val) == kTypeNumber) {
     ctx.replacer_arr = replacer;
     ctx.replacer_arr_len = (int)js_getnum(len_val);
     if (!json_ctx_pin_value(&ctx, replacer)) {
@@ -1025,7 +1025,7 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
     goto cleanup;
   }
   
-  if (vtype(root_holder) == T_UNDEF && vtype(ctx.error) != T_UNDEF) {
+  if (vtype(root_holder) == kTypeUndefined && vtype(ctx.error) != kTypeUndefined) {
     result = ctx.error;
     goto cleanup;
   }
@@ -1033,7 +1033,7 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   json_set_holder(&ctx, root_holder);
   json_write_t root = json_write_with_key(&ctx, &out, "", args[0], 0, 0);
   
-  if (vtype(ctx.error) != T_UNDEF) {
+  if (vtype(ctx.error) != kTypeUndefined) {
     ant_value_t error = json_normalize_error(ctx.error);
     result = is_err(error) ? error : js_throw(js, error);
     goto cleanup;

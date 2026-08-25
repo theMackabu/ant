@@ -396,23 +396,23 @@ uint8_t *ant_sandbox_build_result_payload(ant_t *js, ant_value_t value, size_t *
   uint64_t number_bits = 0;
 
   switch (vtype(value)) {
-    case T_UNDEF:
+    case kTypeUndefined:
       type = ANT_SANDBOX_VALUE_UNDEFINED;
       break;
-    case T_NULL:
+    case kTypeNull:
       type = ANT_SANDBOX_VALUE_NULL;
       break;
-    case T_BOOL:
+    case kTypeBool:
       type = ANT_SANDBOX_VALUE_BOOL;
       bool_value = value == js_true ? 1u : 0u;
       break;
-    case T_NUM: {
+    case kTypeNumber: {
       type = ANT_SANDBOX_VALUE_NUMBER;
       double number = js_getnum(value);
       memcpy(&number_bits, &number, sizeof(number_bits));
       break;
     }
-    case T_STR:
+    case kTypeString:
       type = ANT_SANDBOX_VALUE_STRING;
       value_str = js_getstr(js, value, &value_len);
       break;
@@ -469,7 +469,7 @@ uint8_t *ant_sandbox_build_error_payload(
   const char *name = "Error";
   const char *message = "";
   const char *stack = "";
-  if (vtype(obj) == T_OBJ) {
+  if (vtype(obj) == kTypeObject) {
     const char *n = get_str_prop(js, obj, "name", 4, NULL);
     const char *m = get_str_prop(js, obj, "message", 7, NULL);
     const char *s = get_str_prop(js, obj, "stack", 5, NULL);
@@ -480,7 +480,7 @@ uint8_t *ant_sandbox_build_error_payload(
     message = js_str(js, value);
   }
 
-  if (!*stack && vtype(fallback_stack) == T_STR) stack = js_getstr(js, fallback_stack, NULL);
+  if (!*stack && vtype(fallback_stack) == kTypeString) stack = js_getstr(js, fallback_stack, NULL);
 
   char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
     js, value, cbuf_stack, sizeof(cbuf_stack)

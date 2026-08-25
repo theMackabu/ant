@@ -400,7 +400,7 @@ ant_value_t wasi_instantiate(
     ? js_get(js, wasi_opts, "preopens")
     : js_mkundef();
 
-  if (vtype(preopens_val) == T_ARR && js_arr_len(js, preopens_val) > 0) {
+  if (vtype(preopens_val) == kTypeArray && js_arr_len(js, preopens_val) > 0) {
     dir_count = (int)js_arr_len(js, preopens_val);
     if (dir_count > WASM_MAX_ARGS) dir_count = WASM_MAX_ARGS;
     for (int i = 0; i < dir_count; i++) {
@@ -410,12 +410,12 @@ ant_value_t wasi_instantiate(
     dirs = dir_buf;
   }
 
-  int argc = vtype(args_val) == T_ARR ? (int)js_arr_len(js, args_val) : 0;
+  int argc = vtype(args_val) == kTypeArray ? (int)js_arr_len(js, args_val) : 0;
   if (argc < 1) argc = 1;
   if (argc > WASM_MAX_ARGS) argc = WASM_MAX_ARGS;
 
   char *argv[argc];
-  if (vtype(args_val) == T_ARR) {
+  if (vtype(args_val) == kTypeArray) {
     for (int i = 0; i < argc; i++) {
       char *s = js_getstr(js, js_arr_get(js, args_val, (ant_offset_t)i), NULL);
       argv[i] = s ? s : (char *)"";

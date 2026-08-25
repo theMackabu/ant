@@ -26,7 +26,7 @@ static descriptor_entry_t arr_length_desc = {
 };
 
 static inline bool is_canonical_desc_obj(ant_value_t obj) {
-  return vtype(obj) == T_OBJ;
+  return vtype(obj) == kTypeObject;
 }
 
 static inline bool is_exotic_desc_obj(ant_value_t obj) {
@@ -97,7 +97,7 @@ descriptor_entry_t *lookup_descriptor(ant_value_t obj, const char *key, size_t k
   if (!is_canonical_desc_obj(obj)) return NULL;
 
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (klen == 6 && memcmp(key, "length", 6) == 0 && ptr && ptr->type_tag == T_ARR)
+  if (klen == 6 && memcmp(key, "length", 6) == 0 && ptr && ptr->type_tag == kTypeArray)
     return &arr_length_desc;
 
   if (!is_exotic_desc_obj(obj)) return NULL;
@@ -186,7 +186,7 @@ static bool ensure_symbol_shape_slot(ant_t *js, ant_value_t obj, ant_offset_t sy
 
   int32_t slot = ant_shape_lookup_symbol(ptr->shape, sym_off);
   if (slot < 0) {
-    ant_value_t sym = mkval(T_SYMBOL, sym_off);
+    ant_value_t sym = mkval(kTypeSymbol, sym_off);
     if (is_err(mkprop(js, obj, sym, js_mkundef(), 0))) return false;
     slot = ant_shape_lookup_symbol(ptr->shape, sym_off);
     if (slot < 0) return false;
@@ -288,7 +288,7 @@ void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen,
 
 void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_descriptor expects js_as_obj(...)");
-  if (!is_canonical_desc_obj(obj) || vtype(sym) != T_SYMBOL) return;
+  if (!is_canonical_desc_obj(obj) || vtype(sym) != kTypeSymbol) return;
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
 
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
@@ -390,7 +390,7 @@ void js_set_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t kl
 void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t getter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_getter_desc expects js_as_obj(...)");
   if (!is_canonical_desc_obj(obj)) return;
-  if (vtype(sym) != T_SYMBOL) return;
+  if (vtype(sym) != kTypeSymbol) return;
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
 
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
@@ -417,7 +417,7 @@ void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
 void js_set_sym_setter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t setter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_setter_desc expects js_as_obj(...)");
   if (!is_canonical_desc_obj(obj)) return;
-  if (vtype(sym) != T_SYMBOL) return;
+  if (vtype(sym) != kTypeSymbol) return;
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
 
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);

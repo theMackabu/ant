@@ -9,7 +9,7 @@ static bool temporal_plain_yearmonth_from_value(ant_t *js, ant_value_t value, Pl
     *out = temporal_rs_PlainYearMonth_clone(yearmonth);
     return true;
   }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -35,10 +35,10 @@ static bool temporal_plain_yearmonth_from_value(ant_t *js, ant_value_t value, Pl
 }
 
 static ant_value_t temporal_plain_yearmonth_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.PlainYearMonth");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.PlainYearMonth");
   int64_t year = 0, month = 0, reference_day = 1;
   ant_value_t err = js_mkundef();
-  if ((nargs > 0 && vtype(args[0]) == T_UNDEF) || (nargs > 1 && vtype(args[1]) == T_UNDEF))
+  if ((nargs > 0 && vtype(args[0]) == kTypeUndefined) || (nargs > 1 && vtype(args[1]) == kTypeUndefined))
     return js_mkerr_typed(js, JS_ERR_RANGE, "Temporal.PlainYearMonth fields must be finite numbers");
   if (
     (nargs > 0 && !temporal_integer(js, args[0], 0, &year, &err)) ||
@@ -66,7 +66,7 @@ static ant_value_t temporal_plain_yearmonth_from(ant_t *js, ant_value_t *args, i
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.PlainYearMonth.from requires an argument");
   ant_value_t err = js_mkundef();
   ArithmeticOverflow_option overflow = {0};
-  if (vtype(args[0]) == T_STR || js_get_native(args[0], TEMPORAL_PLAIN_YEARMONTH_TAG)) {
+  if (vtype(args[0]) == kTypeString || js_get_native(args[0], TEMPORAL_PLAIN_YEARMONTH_TAG)) {
     PlainYearMonth *value;
     if (!temporal_plain_yearmonth_from_value(js, args[0], &value, &err)) return err;
     if (!temporal_overflow_option(js, nargs > 1 ? args[1] : js_mkundef(), &overflow, &err)) {
@@ -265,10 +265,10 @@ static ant_value_t temporal_plain_yearmonth_with(ant_t *js, ant_value_t *args, i
   }
   ant_value_t disallowed = js_get(js, args[0], "calendar");
   if (is_err(disallowed)) return disallowed;
-  if (vtype(disallowed) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is not allowed");
+  if (vtype(disallowed) != kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is not allowed");
   disallowed = js_get(js, args[0], "timeZone");
   if (is_err(disallowed)) return disallowed;
-  if (vtype(disallowed) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "timeZone is not allowed");
+  if (vtype(disallowed) != kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "timeZone is not allowed");
   AnyCalendarKind calendar = temporal_rs_Calendar_kind(temporal_rs_PlainYearMonth_calendar(self));
   temporal_partial_date_t partial;
   if (!temporal_partial_date_impl(js, args[0], calendar, &partial, false, true, false, &err)) return err;

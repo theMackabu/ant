@@ -82,11 +82,11 @@ static void gc_weak_remember_edge(
 void gc_weak_remember_map(
   ant_t *js, ant_object_t *obj, ant_value_t key, ant_value_t value
 ) {
-  gc_weak_remember_edge(js, obj, key, value, T_WEAKMAP);
+  gc_weak_remember_edge(js, obj, key, value, kTypeWeakMap);
 }
 
 void gc_weak_remember_set(ant_t *js, ant_object_t *obj, ant_value_t key) {
-  gc_weak_remember_edge(js, obj, key, js_mkundef(), T_WEAKSET);
+  gc_weak_remember_edge(js, obj, key, js_mkundef(), kTypeWeakSet);
 }
 
 void gc_weak_keep_alive(ant_t *js, ant_value_t value) {
@@ -171,8 +171,8 @@ void gc_weak_cleanup(ant_t *js) {
 }
 
 static bool gc_weak_is_collection(const ant_object_t *obj) {
-  return obj && (obj->type_tag == T_WEAKMAP ||
-    obj->type_tag == T_WEAKSET || obj->native.tag == WEAKREF_NATIVE_TAG);
+  return obj && (obj->type_tag == kTypeWeakMap ||
+    obj->type_tag == kTypeWeakSet || obj->native.tag == WEAKREF_NATIVE_TAG);
 }
 
 static uint32_t gc_weak_pending_index_find_slot(
@@ -381,7 +381,7 @@ static bool gc_weak_prepare_pending(ant_t *js) {
 }
 
 static void gc_weak_process_map(ant_t *js, ant_object_t *obj) {
-  if (!obj || obj->type_tag != T_WEAKMAP ||
+  if (!obj || obj->type_tag != kTypeWeakMap ||
       !js->weak_gc.mark || !js->weak_gc.key_alive) return;
   weakmap_table_t *table = js_get_native(
     js_obj_from_ptr(obj), WEAKMAP_NATIVE_TAG
@@ -404,7 +404,7 @@ static void gc_weak_process_map(ant_t *js, ant_object_t *obj) {
 }
 
 void gc_weak_collection_marked(ant_t *js, ant_object_t *obj) {
-  if (js && js->weak_gc.mark && obj->type_tag == T_WEAKMAP)
+  if (js && js->weak_gc.mark && obj->type_tag == kTypeWeakMap)
     gc_weak_process_map(js, obj);
 }
 
@@ -413,7 +413,7 @@ static void gc_weak_mark_all_in_collection(ant_t *js, ant_object_t *obj) {
   weakref_state_t *weakref = js_get_native(collection, WEAKREF_NATIVE_TAG);
   if (weakref) js->weak_gc.mark(js, weakref->target);
 
-  if (obj->type_tag == T_WEAKMAP) {
+  if (obj->type_tag == kTypeWeakMap) {
     weakmap_table_t *table = js_get_native(collection, WEAKMAP_NATIVE_TAG);
     if (!table) return;
     for (uint32_t i = 0; i < table->capacity; i++) {
@@ -422,7 +422,7 @@ static void gc_weak_mark_all_in_collection(ant_t *js, ant_object_t *obj) {
       js->weak_gc.mark(js, entry->key_obj);
       js->weak_gc.mark(js, entry->value);
     }
-  } else if (obj->type_tag == T_WEAKSET) {
+  } else if (obj->type_tag == kTypeWeakSet) {
     weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
     if (!head) return;
     weakset_entry_t *entry, *tmp;
@@ -437,7 +437,7 @@ static void gc_weak_prune_collection(ant_t *js, ant_object_t *obj) {
   if (weakref && !js->weak_gc.key_alive(js, weakref->target))
     weakref->target = js_mkundef();
 
-  if (obj->type_tag == T_WEAKMAP) {
+  if (obj->type_tag == kTypeWeakMap) {
     weakmap_table_t *table = js_get_native(collection, WEAKMAP_NATIVE_TAG);
     if (!table) return;
     for (uint32_t i = 0; i < table->capacity; i++) {
@@ -450,7 +450,7 @@ static void gc_weak_prune_collection(ant_t *js, ant_object_t *obj) {
       table->tombstones++;
     }
     weakmap_table_finish_prune(table);
-  } else if (obj->type_tag == T_WEAKSET) {
+  } else if (obj->type_tag == kTypeWeakSet) {
     weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
     if (!head) return;
     weakset_entry_t *entry, *tmp;
@@ -467,7 +467,7 @@ static void gc_weak_process_minor_edges(ant_t *js) {
     typeof(*js->weak_gc.minor_edges) *edge = &js->weak_gc.minor_edges[i];
     if (!js->weak_gc.key_alive || !edge->owner ||
         edge->owner->mark_epoch == ANT_GC_DEAD) continue;
-    if (edge->kind == T_WEAKMAP) {
+    if (edge->kind == kTypeWeakMap) {
       if (js->weak_gc.key_alive(js, edge->key))
         js->weak_gc.mark(js, edge->value);
       else {
@@ -484,13 +484,13 @@ static void gc_weak_prune_minor_edges(ant_t *js) {
     if (!obj || obj->mark_epoch == ANT_GC_DEAD ||
         js->weak_gc.key_alive(js, edge->key)) continue;
     ant_value_t collection = js_obj_from_ptr(obj);
-    if (edge->kind == T_WEAKMAP) {
+    if (edge->kind == kTypeWeakMap) {
       weakmap_table_t *table = js_get_native(
         collection, WEAKMAP_NATIVE_TAG
       );
       if (table && weakmap_table_delete(table, edge->key))
         table->gc_prune_pending = true;
-    } else if (edge->kind == T_WEAKSET) {
+    } else if (edge->kind == kTypeWeakSet) {
       weakset_entry_t **head = js_get_native(collection, WEAKSET_NATIVE_TAG);
       weakset_entry_t *entry = NULL;
       if (head) HASH_FIND(hh, *head, &edge->key, sizeof(edge->key), entry);
@@ -504,7 +504,7 @@ static void gc_weak_prune_minor_edges(ant_t *js) {
   for (size_t i = 0; i < js->weak_gc.minor_edge_len; i++) {
     typeof(*js->weak_gc.minor_edges) *edge = &js->weak_gc.minor_edges[i];
     ant_object_t *obj = edge->owner;
-    if (edge->kind != T_WEAKMAP || !obj ||
+    if (edge->kind != kTypeWeakMap || !obj ||
         obj->mark_epoch == ANT_GC_DEAD) continue;
     weakmap_table_t *table = js_get_native(
       js_obj_from_ptr(obj), WEAKMAP_NATIVE_TAG
@@ -563,7 +563,7 @@ void gc_weak_process(
   js->weak_gc.pending_oom = false;
   for (size_t i = 0; i < js->weak_gc.collection_len; i++) {
     ant_object_t *obj = js->weak_gc.collections[i];
-    if (collection_live(obj) && obj->type_tag == T_WEAKMAP &&
+    if (collection_live(obj) && obj->type_tag == kTypeWeakMap &&
         (!minor || obj->flags.generation == 0))
       gc_weak_process_map(js, obj);
   }

@@ -298,32 +298,32 @@ static void lmdb_txn_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static bool option_bool(ant_t *js, ant_value_t options, const char *key, bool fallback) {
-  if (vtype(options) != T_OBJ) return fallback;
+  if (vtype(options) != kTypeObject) return fallback;
   ant_value_t val = js_get(js, options, key);
-  if (vtype(val) == T_UNDEF) return fallback;
+  if (vtype(val) == kTypeUndefined) return fallback;
   return js_truthy(js, val);
 }
 
 static unsigned int option_uint(ant_t *js, ant_value_t options, const char *key, unsigned int fallback) {
-  if (vtype(options) != T_OBJ) return fallback;
+  if (vtype(options) != kTypeObject) return fallback;
   ant_value_t val = js_get(js, options, key);
-  if (vtype(val) != T_NUM) return fallback;
+  if (vtype(val) != kTypeNumber) return fallback;
   double n = js_getnum(val);
   if (n < 0.0) return fallback;
   return (unsigned int)n;
 }
 
 static size_t option_size(ant_t *js, ant_value_t options, const char *key, size_t fallback) {
-  if (vtype(options) != T_OBJ) return fallback;
+  if (vtype(options) != kTypeObject) return fallback;
   ant_value_t val = js_get(js, options, key);
-  if (vtype(val) != T_NUM) return fallback;
+  if (vtype(val) != kTypeNumber) return fallback;
   double n = js_getnum(val);
   if (n < 0.0) return fallback;
   return (size_t)n;
 }
 
 static bool js_to_mdb_val(ant_t *js, ant_value_t input, MDB_val *out) {
-  if (vtype(input) == T_STR) {
+  if (vtype(input) == kTypeString) {
     size_t len = 0;
     const char *str = js_getstr(js, input, &len);
     if (!str) return false;
@@ -332,7 +332,7 @@ static bool js_to_mdb_val(ant_t *js, ant_value_t input, MDB_val *out) {
     return true;
   }
 
-  if (vtype(input) == T_OBJ) {
+  if (vtype(input) == kTypeObject) {
     TypedArrayData *ta = buffer_get_typedarray_data(input);
     if (ta) {
       if (!ta->buffer || !ta->buffer->data) return false;
@@ -366,13 +366,13 @@ static ant_value_t mdb_val_to_js(ant_t *js, MDB_val *val, bool as_string) {
   }
 
   ant_value_t out = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, ab->length, "Uint8Array");
-  if (vtype(out) == T_ERR) free_array_buffer_data(ab);
+  if (vtype(out) == kTypeError) free_array_buffer_data(ab);
   return out;
 }
 
 static bool parse_get_encoding(ant_t *js, ant_value_t encoding, bool *as_string) {
-  if (vtype(encoding) == T_UNDEF) return true;
-  if (vtype(encoding) != T_STR) return false;
+  if (vtype(encoding) == kTypeUndefined) return true;
+  if (vtype(encoding) != kTypeString) return false;
 
   size_t len = 0;
   const char *mode = js_getstr(js, encoding, &len);
@@ -391,7 +391,7 @@ static bool parse_get_encoding(ant_t *js, ant_value_t encoding, bool *as_string)
 }
 
 static ant_value_t lmdb_open(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "lmdb.open(path, options?) requires a string path");
   }
 
@@ -485,10 +485,10 @@ static ant_value_t lmdb_env_open_db(ant_t *js, ant_value_t *args, int nargs) {
   size_t name_len = 0;
   ant_value_t options = js_mkundef();
 
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
+  if (nargs > 0 && vtype(args[0]) == kTypeString) {
     name = js_getstr(js, args[0], &name_len);
     if (nargs > 1) options = args[1];
-  } else if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+  } else if (nargs > 0 && vtype(args[0]) == kTypeObject) {
     options = args[0];
   }
 
@@ -732,7 +732,7 @@ static ant_value_t lmdb_txn_del(ant_t *js, ant_value_t *args, int nargs) {
 
   MDB_val value;
   MDB_val *value_ptr = NULL;
-  if (nargs > 2 && vtype(args[2]) != T_UNDEF) {
+  if (nargs > 2 && vtype(args[2]) != kTypeUndefined) {
     if (!js_to_mdb_val(js, args[2], &value)) return js_mkerr(js, "LMDB value must be string, ArrayBuffer, or TypedArray");
     value_ptr = &value;
   }
@@ -882,7 +882,7 @@ static ant_value_t lmdb_db_del(ant_t *js, ant_value_t *args, int nargs) {
 
   MDB_val value;
   MDB_val *value_ptr = NULL;
-  if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
+  if (nargs > 1 && vtype(args[1]) != kTypeUndefined) {
     if (!js_to_mdb_val(js, args[1], &value)) {
       mdb_txn_abort(txn);
       return js_mkerr(js, "LMDB value must be string, ArrayBuffer, or TypedArray");
@@ -932,9 +932,9 @@ static ant_value_t lmdb_db_drop(ant_t *js, ant_value_t *args, int nargs) {
   if (db->env->read_only) return js_mkerr(js, "Cannot drop on read-only LMDB env");
 
   bool del_db = true;
-  if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+  if (nargs > 0 && vtype(args[0]) == kTypeObject) {
     del_db = option_bool(js, args[0], "delete", true);
-  } else if (nargs > 0 && vtype(args[0]) != T_UNDEF) {
+  } else if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
     del_db = js_truthy(js, args[0]);
   }
 
@@ -981,7 +981,7 @@ static ant_value_t lmdb_db_close(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t lmdb_strerror_fn(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_NUM) {
+  if (nargs < 1 || vtype(args[0]) != kTypeNumber) {
     return js_mkerr(js, "lmdb.strerror(code) requires a numeric code");
   }
   int code = (int)js_getnum(args[0]);

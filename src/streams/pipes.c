@@ -39,7 +39,7 @@ static void pipes_chain_promise(
 
   ant_value_t promise = value;
   GC_ROOT_PIN(js, promise);
-  if (vtype(promise) != T_PROMISE) {
+  if (vtype(promise) != kTypePromise) {
     promise = js_mkpromise(js);
     GC_ROOT_PIN(js, promise);
     js_resolve_promise(js, promise, value);
@@ -506,11 +506,11 @@ static void tee_release_reader(ant_t *js, ant_value_t state) {
 static void tee_resolve_cancel_promises(ant_t *js, ant_value_t state) {
   ant_value_t p1 = js_get_slot(state, SLOT_RS_CLOSED);
   ant_value_t p2 = js_get_slot(state, SLOT_RS_SIZE);
-  if (vtype(p1) == T_PROMISE) {
+  if (vtype(p1) == kTypePromise) {
     js_resolve_promise(js, p1, js_mkundef());
     js_set_slot(state, SLOT_RS_CLOSED, js_mkundef());
   }
-  if (vtype(p2) == T_PROMISE) {
+  if (vtype(p2) == kTypePromise) {
     js_resolve_promise(js, p2, js_mkundef());
     js_set_slot(state, SLOT_RS_SIZE, js_mkundef());
   }
@@ -519,11 +519,11 @@ static void tee_resolve_cancel_promises(ant_t *js, ant_value_t state) {
 static void tee_reject_cancel_promises(ant_t *js, ant_value_t state, ant_value_t error) {
   ant_value_t p1 = js_get_slot(state, SLOT_RS_CLOSED);
   ant_value_t p2 = js_get_slot(state, SLOT_RS_SIZE);
-  if (vtype(p1) == T_PROMISE) {
+  if (vtype(p1) == kTypePromise) {
     js_reject_promise(js, p1, error);
     js_set_slot(state, SLOT_RS_CLOSED, js_mkundef());
   }
-  if (vtype(p2) == T_PROMISE) {
+  if (vtype(p2) == kTypePromise) {
     js_reject_promise(js, p2, error);
     js_set_slot(state, SLOT_RS_SIZE, js_mkundef());
   }
@@ -566,7 +566,7 @@ static void tee_enqueue_branch(ant_t *js, ant_value_t branch_stream, ant_value_t
     ant_value_t sa[1] = { value };
     ant_value_t sr = sv_vm_call(js->vm, js, size_fn, js_mkundef(), sa, 1, NULL, false);
     if (!is_err(sr))
-      chunk_size = vtype(sr) == T_NUM ? js_getnum(sr) : js_to_number(js, sr);
+      chunk_size = vtype(sr) == kTypeNumber ? js_getnum(sr) : js_to_number(js, sr);
   }
 
   rs_ctrl_queue_push(js, ctrl, value);
@@ -687,7 +687,7 @@ static ant_value_t tee_branch_cancel(ant_t *js, ant_value_t *args, int nargs) {
 
   if (already_canceled) {
     ant_value_t existing = js_get_slot(state, promise_slot);
-    if (vtype(existing) == T_PROMISE) return existing;
+    if (vtype(existing) == kTypePromise) return existing;
     ant_value_t resolved = js_mkpromise(js);
     js_resolve_promise(js, resolved, js_mkundef());
     return resolved;

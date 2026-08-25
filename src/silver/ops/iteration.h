@@ -30,7 +30,7 @@ static inline bool sv_is_map_iter(
   map_iterator_state_t **out_state,
   iter_type_t *out_type
 ) {
-  if (vtype(obj) != T_OBJ) return false;
+  if (vtype(obj) != kTypeObject) return false;
   
   if (
     !js->builtins.map_iter_proto || 
@@ -51,7 +51,7 @@ static inline bool sv_is_set_iter(
   set_iterator_state_t **out_state,
   iter_type_t *out_type
 ) {
-  if (vtype(obj) != T_OBJ) return false;
+  if (vtype(obj) != kTypeObject) return false;
   
   if (
     !js->builtins.set_iter_proto || 
@@ -70,14 +70,14 @@ static inline bool sv_is_set_iter(
 static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
 
-  if (vtype(iterable) == T_ARR) {
+  if (vtype(iterable) == kTypeArray) {
     vm->stack[vm->sp++] = iterable;
     vm->stack[vm->sp++] = tov(0);
     vm->stack[vm->sp++] = tov(SV_ITER_ARRAY);
     return tov(0);
   }
 
-  if (vtype(iterable) == T_STR) {
+  if (vtype(iterable) == kTypeString) {
     if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
       GC_ROOT_SAVE(str_root_mark, js);
       GC_ROOT_PIN(js, iterable);
@@ -147,7 +147,7 @@ static inline bool sv_array_iter_pristine(ant_t *js, ant_value_t arr) {
 static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
 
-  if (vtype(iterable) == T_ARR && sv_array_iter_pristine(js, iterable)) {
+  if (vtype(iterable) == kTypeArray && sv_array_iter_pristine(js, iterable)) {
     vm->stack[vm->sp++] = iterable;
     vm->stack[vm->sp++] = tov(0);
     vm->stack[vm->sp++] = SV_AITER_ARRAY_TAG;
@@ -347,12 +347,12 @@ static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
   ant_value_t value = js_mkundef();
   sv_iter_result_unpack(js, obj, &done, &value);
   vm->stack[vm->sp++] = value;
-  vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
+  vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
 }
 
 static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
   ant_value_t tag_val = vm->stack[vm->sp - 1];
-  if (vtype(tag_val) != T_NUM) {
+  if (vtype(tag_val) != kTypeNumber) {
     vm->sp -= 3;
     return;
   }
@@ -421,7 +421,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     ant_value_t value = vm->stack[--vm->sp];
     vm->stack[vm->sp - 1] = SV_AITER_ARRAY_TAG;
     vm->stack[vm->sp++] = value;
-    vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+    vm->stack[vm->sp++] = mkval(kTypeBool, 0);
     return out;
   }
 
@@ -432,7 +432,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
     if (idx >= (int)len) {
       vm->stack[vm->sp++] = js_mkundef();
-      vm->stack[vm->sp++] = mkval(T_BOOL, 1);
+      vm->stack[vm->sp++] = mkval(kTypeBool, 1);
       return out;
     }
 
@@ -441,7 +441,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
     if (!is_object_type(value)) {
       vm->stack[vm->sp++] = value;
-      vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+      vm->stack[vm->sp++] = mkval(kTypeBool, 0);
       return out;
     }
 
@@ -455,13 +455,13 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
     vm->stack[vm->sp - 1] = SV_AITER_ARRAY_TAG;
     vm->stack[vm->sp++] = awaited.value;
-    vm->stack[vm->sp++] = mkval(T_BOOL, 0);
+    vm->stack[vm->sp++] = mkval(kTypeBool, 0);
     return out;
   }
 
   bool has_resumed_value = vm->sp >= 5 &&
-    vtype(vm->stack[vm->sp - 2]) == T_BOOL &&
-    vtype(vm->stack[vm->sp - 3]) == T_NUM &&
+    vtype(vm->stack[vm->sp - 2]) == kTypeBool &&
+    vtype(vm->stack[vm->sp - 3]) == kTypeNumber &&
     (int)js_getnum(vm->stack[vm->sp - 3]) == SV_ITER_GENERIC;
 
   if (has_resumed_value) {
@@ -474,7 +474,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t result = js_mkundef();
   bool has_resumed_result = vm->sp >= 4 &&
-    vtype(vm->stack[vm->sp - 2]) == T_NUM &&
+    vtype(vm->stack[vm->sp - 2]) == kTypeNumber &&
     (int)js_getnum(vm->stack[vm->sp - 2]) == SV_ITER_GENERIC;
 
   if (has_resumed_result) result = vm->stack[--vm->sp];
@@ -498,7 +498,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     };
   }
 
-  if (!has_resumed_result && vtype(result) == T_PROMISE) {
+  if (!has_resumed_result && vtype(result) == kTypePromise) {
     vm->suspended_entry_fp = vm->fp;
     vm->suspended_saved_fp = vm->fp - 1;
     
@@ -524,8 +524,8 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     .value = value
   };
   
-  if (vtype(value) == T_PROMISE) {
-    vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
+  if (vtype(value) == kTypePromise) {
+    vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
     vm->suspended_entry_fp = vm->fp;
     vm->suspended_saved_fp = vm->fp - 1;
     
@@ -539,7 +539,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   }
   
   vm->stack[vm->sp++] = value;
-  vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
+  vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
   
   return out;
 }

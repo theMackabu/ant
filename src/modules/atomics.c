@@ -860,7 +860,7 @@ static ant_value_t js_atomics_wait(ant_t *js, ant_value_t *args, int nargs) {
   int32_t expected_value = (int32_t)js_getnum(args[2]);
   int64_t timeout_ms = -1;
   
-  if (nargs > 3 && vtype(args[3]) == T_NUM) {
+  if (nargs > 3 && vtype(args[3]) == kTypeNumber) {
     timeout_ms = (int64_t)js_getnum(args[3]);
   }
   
@@ -931,7 +931,7 @@ static ant_value_t js_atomics_notify(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   int count = -1;
-  if (nargs > 2 && vtype(args[2]) == T_NUM) {
+  if (nargs > 2 && vtype(args[2]) == kTypeNumber) {
     count = (int)js_getnum(args[2]);
   }
   
@@ -967,7 +967,7 @@ static ant_value_t js_atomics_waitAsync(ant_t *js, ant_value_t *args, int nargs)
   int32_t current_value = atomic_load(atomic_ptr);
   double timeout_ms = HUGE_VAL;
 
-  if (nargs > 3 && vtype(args[3]) == T_NUM) {
+  if (nargs > 3 && vtype(args[3]) == kTypeNumber) {
     timeout_ms = js_getnum(args[3]);
     if (isnan(timeout_ms)) timeout_ms = HUGE_VAL;
     else if (timeout_ms < 0) timeout_ms = 0;

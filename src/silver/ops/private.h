@@ -17,7 +17,7 @@ enum {
 static inline uint32_t sv_private_hash_token(ant_value_t token) {
   if (is_object_type(token)) {
     ant_value_t cached = js_get_slot(token, SLOT_DATA);
-    if (vtype(cached) == T_NUM) return (uint32_t)js_getnum(cached);
+    if (vtype(cached) == kTypeNumber) return (uint32_t)js_getnum(cached);
   }
 
   uint64_t x = token ^ (token >> 33);
@@ -181,7 +181,7 @@ static inline ant_value_t sv_private_get_value(
   ant_value_t token, bool optional
 ) {
   if (!is_object_type(obj)) {
-    if (optional && (vtype(obj) == T_UNDEF || vtype(obj) == T_NULL)) return js_mkundef();
+    if (optional && (vtype(obj) == kTypeUndefined || vtype(obj) == kTypeNull)) return js_mkundef();
     return sv_private_missing(js);
   }
 
@@ -189,13 +189,13 @@ static inline ant_value_t sv_private_get_value(
   if (!entry) return sv_private_missing(js);
 
   ant_value_t kind_val = sv_private_entry_get(entry, 1);
-  int kind = vtype(kind_val) == T_NUM
+  int kind = vtype(kind_val) == kTypeNumber
     ? (int)js_getnum(kind_val)
     : SV_PRIVATE_FIELD;
 
   if (kind == SV_PRIVATE_ACCESSOR) {
     ant_value_t getter = sv_private_entry_get(entry, 3);
-    if (vtype(getter) == T_UNDEF)
+    if (vtype(getter) == kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Private accessor has no getter");
     return sv_vm_call_explicit_this(vm, js, getter, obj, NULL, 0);
   }
@@ -231,7 +231,7 @@ static inline ant_value_t sv_private_put_value(
   if (!entry) return sv_private_missing(js);
 
   ant_value_t kind_val = sv_private_entry_get(entry, 1);
-  int kind = vtype(kind_val) == T_NUM ? (int)js_getnum(kind_val) : SV_PRIVATE_FIELD;
+  int kind = vtype(kind_val) == kTypeNumber ? (int)js_getnum(kind_val) : SV_PRIVATE_FIELD;
 
   if (kind == SV_PRIVATE_FIELD) {
     ant_value_t set = sv_private_entry_set(js, obj, entry, 2, val);
@@ -241,7 +241,7 @@ static inline ant_value_t sv_private_put_value(
 
   if (kind == SV_PRIVATE_ACCESSOR) {
     ant_value_t setter = sv_private_entry_get(entry, 4);
-    if (vtype(setter) == T_UNDEF)
+    if (vtype(setter) == kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Private accessor has no setter");
     ant_value_t args[1] = { val };
     ant_value_t result = sv_vm_call_explicit_this(vm, js, setter, obj, args, 1);
@@ -285,12 +285,12 @@ static inline ant_value_t sv_op_def_private(sv_vm_t *vm, ant_t *js, uint8_t *ip)
     }
     
     ant_value_t kind_val = sv_private_entry_get(entry, 1);
-    int kind = vtype(kind_val) == T_NUM ? (int)js_getnum(kind_val) : SV_PRIVATE_FIELD;
+    int kind = vtype(kind_val) == kTypeNumber ? (int)js_getnum(kind_val) : SV_PRIVATE_FIELD;
     if (kind != SV_PRIVATE_ACCESSOR)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine private member");
       
     ant_offset_t slot = def_kind == SV_PRIVATE_GETTER ? 3 : 4;
-    if (vtype(sv_private_entry_get(entry, slot)) != T_UNDEF)
+    if (vtype(sv_private_entry_get(entry, slot)) != kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot redefine private accessor");
     return sv_private_entry_set(js, obj, entry, slot, val);
   }

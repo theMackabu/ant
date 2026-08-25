@@ -154,11 +154,11 @@ ant_value_t temporal_string_from_write(ant_t *js, DiplomatWrite *write) {
 bool temporal_to_string_view(
   ant_t *js, ant_value_t value, DiplomatStringView *out, ant_value_t *root, ant_value_t *err
 ) {
-  if (vtype(value) == T_SYMBOL) {
+  if (vtype(value) == kTypeSymbol) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
     return false;
   }
-  *root = vtype(value) == T_STR ? value : coerce_to_str(js, value);
+  *root = vtype(value) == kTypeString ? value : coerce_to_str(js, value);
   if (is_err(*root)) {
     *err = *root;
     return false;
@@ -178,7 +178,7 @@ bool temporal_to_number(
 ) {
   ant_value_t primitive = is_object_type(value) ? js_to_primitive(js, value, 2) : value;
   if (is_err(primitive)) { *err = primitive; return false; }
-  if (vtype(primitive) == T_SYMBOL || vtype(primitive) == T_BIGINT) {
+  if (vtype(primitive) == kTypeSymbol || vtype(primitive) == kTypeBigInt) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert value to a number");
     return false;
   }
@@ -189,7 +189,7 @@ bool temporal_to_number(
 bool temporal_integer(
   ant_t *js, ant_value_t value, int64_t default_value, int64_t *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) {
+  if (vtype(value) == kTypeUndefined) {
     *out = default_value;
     return true;
   }
@@ -207,7 +207,7 @@ bool temporal_integer(
 bool temporal_integral(
   ant_t *js, ant_value_t value, int64_t default_value, int64_t *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) { *out = default_value; return true; }
+  if (vtype(value) == kTypeUndefined) { *out = default_value; return true; }
   double number;
   if (!temporal_to_number(js, value, &number, err)) return false;
   if (!isfinite(number) || trunc(number) != number || number < (double)INT64_MIN ||
@@ -222,13 +222,13 @@ bool temporal_integral(
 bool temporal_i128_from_value(
   ant_t *js, ant_value_t value, I128Nanoseconds *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_NUM) {
+  if (vtype(value) == kTypeNumber) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Number to a BigInt");
     return false;
   }
   ant_value_t bigint = bigint_from_value(js, value);
   if (is_err(bigint)) {
-    *err = vtype(value) == T_STR
+    *err = vtype(value) == kTypeString
       ? js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid BigInt syntax")
       : bigint;
     return false;
@@ -287,7 +287,7 @@ bool temporal_time_zone_from_value(
     ZonedDateTime *zdt = js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG);
     if (zdt) { *out = temporal_rs_ZonedDateTime_timezone(zdt); return true; }
   }
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "time zone must be a string");
     return false;
   }
@@ -340,7 +340,7 @@ bool temporal_partial_time(
   for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
     ant_value_t field = js_get(js, value, fields[i].name);
     if (is_err(field)) { *err = field; return false; }
-    if (vtype(field) == T_UNDEF) continue;
+    if (vtype(field) == kTypeUndefined) continue;
     int64_t integer;
     if (!temporal_integer(js, field, 0, &integer, err)) return false;
     any = true;
@@ -386,7 +386,7 @@ bool temporal_calendar_kind(
   ant_t *js, ant_value_t value, AnyCalendarKind default_kind,
   AnyCalendarKind *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) { *out = default_kind; return true; }
+  if (vtype(value) == kTypeUndefined) { *out = default_kind; return true; }
   if (is_object_type(value)) {
     const Calendar *calendar = temporal_calendar_from_object(value);
     if (!calendar) {
@@ -396,7 +396,7 @@ bool temporal_calendar_kind(
     *out = temporal_rs_Calendar_kind(calendar);
     return true;
   }
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "calendar must be a string or a Temporal object");
     return false;
   }
@@ -417,7 +417,7 @@ bool temporal_calendar_identifier_kind(
   ant_t *js, ant_value_t value, AnyCalendarKind default_kind,
   AnyCalendarKind *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) { *out = default_kind; return true; }
+  if (vtype(value) == kTypeUndefined) { *out = default_kind; return true; }
   if (is_object_type(value)) {
     const Calendar *calendar = temporal_calendar_from_object(value);
     if (!calendar) {
@@ -427,7 +427,7 @@ bool temporal_calendar_identifier_kind(
     *out = temporal_rs_Calendar_kind(calendar);
     return true;
   }
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "calendar must be a string or a Temporal object");
     return false;
   }
@@ -444,9 +444,9 @@ bool temporal_calendar_kind_from_property(
   ant_t *js, ant_value_t value, AnyCalendarKind default_kind,
   AnyCalendarKind *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF || is_object_type(value))
+  if (vtype(value) == kTypeUndefined || is_object_type(value))
     return temporal_calendar_kind(js, value, default_kind, out, err);
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "calendar must be a string or a Temporal object");
     return false;
   }
@@ -462,7 +462,7 @@ bool temporal_month_code_syntax(
     string = js_to_primitive(js, string, 1);
     if (is_err(string)) { *err = string; return false; }
   }
-  if (vtype(string) != T_STR) {
+  if (vtype(string) != kTypeString) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "monthCode must be a string");
     return false;
   }
@@ -517,7 +517,7 @@ bool temporal_partial_date_impl(
   if (include_day) {
     ant_value_t day = js_get(js, value, "day");
     if (is_err(day)) { *err = day; return false; }
-    if (vtype(day) != T_UNDEF) {
+    if (vtype(day) != kTypeUndefined) {
       int64_t integer;
       if (!temporal_integer(js, day, 0, &integer, err)) return false;
       if (integer < 1) {
@@ -532,7 +532,7 @@ bool temporal_partial_date_impl(
   if (!iso_calendar) {
     ant_value_t era = js_get(js, value, "era");
     if (is_err(era)) { *err = era; return false; }
-    if (vtype(era) != T_UNDEF) {
+    if (vtype(era) != kTypeUndefined) {
       if (!temporal_to_string_view(js, era, &out->partial.era, &out->era_root, err)) return false;
       any = true;
     }
@@ -541,7 +541,7 @@ bool temporal_partial_date_impl(
     if (i == 1 && iso_calendar) continue;
     ant_value_t field = js_get(js, value, numbers[i].name);
     if (is_err(field)) { *err = field; return false; }
-    if (vtype(field) != T_UNDEF) {
+    if (vtype(field) != kTypeUndefined) {
       int64_t integer;
       if (!temporal_integer(js, field, 0, &integer, err)) return false;
       if (numbers[i].bits == 8) {
@@ -565,7 +565,7 @@ bool temporal_partial_date_impl(
     if (i == 2) {
       ant_value_t month_code = js_get(js, value, "monthCode");
       if (is_err(month_code)) { *err = month_code; return false; }
-      if (vtype(month_code) != T_UNDEF) {
+      if (vtype(month_code) != kTypeUndefined) {
         if (!temporal_month_code_syntax(js, month_code, &out->partial.month_code,
                                         &out->month_code_root, err)) return false;
         any = true;
@@ -593,7 +593,7 @@ bool temporal_integer_property(
 ) {
   ant_value_t value = js_get(js, object, name);
   if (is_err(value)) { *err = value; return false; }
-  *present = vtype(value) != T_UNDEF;
+  *present = vtype(value) != kTypeUndefined;
   if (!*present) return true;
   if (!temporal_integer(js, value, 0, integer, err)) return false;
   if (*integer < minimum || *integer > maximum) {
@@ -618,13 +618,13 @@ bool temporal_validate_partial_object(
   }
   ant_value_t disallowed = js_get(js, value, "calendar");
   if (is_err(disallowed)) { *err = disallowed; return false; }
-  if (vtype(disallowed) != T_UNDEF) {
+  if (vtype(disallowed) != kTypeUndefined) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "calendar is not allowed in a partial value");
     return false;
   }
   disallowed = js_get(js, value, "timeZone");
   if (is_err(disallowed)) { *err = disallowed; return false; }
-  if (vtype(disallowed) != T_UNDEF) {
+  if (vtype(disallowed) != kTypeUndefined) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "timeZone is not allowed in a partial value");
     return false;
   }
@@ -634,8 +634,8 @@ bool temporal_validate_partial_object(
 bool temporal_options_object(
   ant_t *js, ant_value_t value, bool string_allowed, ant_value_t *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) { *out = js_mkundef(); return true; }
-  if (string_allowed && vtype(value) == T_STR) { *out = value; return true; }
+  if (vtype(value) == kTypeUndefined) { *out = js_mkundef(); return true; }
+  if (string_allowed && vtype(value) == kTypeString) { *out = value; return true; }
   if (!is_object_type(value)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "options must be an object");
     return false;
@@ -698,7 +698,7 @@ bool temporal_rounding_mode_from_value(
 bool temporal_rounding_increment(
   ant_t *js, ant_value_t value, OptionU32 *out, ant_value_t *err
 ) {
-  if (vtype(value) == T_UNDEF) return true;
+  if (vtype(value) == kTypeUndefined) return true;
   double number;
   if (!temporal_to_number(js, value, &number, err)) return false;
   if (!isfinite(number)) {
@@ -721,11 +721,11 @@ bool temporal_rounding_options(
   memset(out, 0, sizeof(*out));
   ant_value_t options;
   if (!temporal_options_object(js, input, true, &options, err)) return false;
-  if (vtype(options) == T_UNDEF && require_smallest) {
+  if (vtype(options) == kTypeUndefined && require_smallest) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "round options are required");
     return false;
   }
-  if (vtype(options) == T_STR) {
+  if (vtype(options) == kTypeString) {
     Unit unit;
     if (!temporal_unit_from_value(js, options, false, &unit, err)) return false;
     out->smallest_unit = (Unit_option){.ok = unit, .is_ok = true};
@@ -735,7 +735,7 @@ bool temporal_rounding_options(
   if (is_object_type(options)) {
     if (allow_largest) {
       value = js_get(js, options, "largestUnit"); if (is_err(value)) { *err = value; return false; }
-      if (vtype(value) != T_UNDEF) {
+      if (vtype(value) != kTypeUndefined) {
         Unit unit; if (!temporal_unit_from_value(js, value, true, &unit, err)) return false;
         out->largest_unit = (Unit_option){.ok = unit, .is_ok = true};
       }
@@ -743,12 +743,12 @@ bool temporal_rounding_options(
     value = js_get(js, options, "roundingIncrement"); if (is_err(value)) { *err = value; return false; }
     if (!temporal_rounding_increment(js, value, &out->increment, err)) return false;
     value = js_get(js, options, "roundingMode"); if (is_err(value)) { *err = value; return false; }
-    if (vtype(value) != T_UNDEF) {
+    if (vtype(value) != kTypeUndefined) {
       RoundingMode parsed; if (!temporal_rounding_mode_from_value(js, value, &parsed, err)) return false;
       out->rounding_mode = (RoundingMode_option){.ok = parsed, .is_ok = true};
     }
     value = js_get(js, options, "smallestUnit"); if (is_err(value)) { *err = value; return false; }
-    if (vtype(value) != T_UNDEF) {
+    if (vtype(value) != kTypeUndefined) {
       Unit unit; if (!temporal_unit_from_value(js, value, false, &unit, err)) return false;
       out->smallest_unit = (Unit_option){.ok = unit, .is_ok = true};
     } else if (require_smallest) {
@@ -765,7 +765,7 @@ bool temporal_rounding_options(
 bool temporal_difference_settings(
   ant_t *js, ant_value_t input, DifferenceSettings *out, ant_value_t *err
 ) {
-  if (vtype(input) != T_UNDEF && !is_object_type(input)) {
+  if (vtype(input) != kTypeUndefined && !is_object_type(input)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "options must be an object");
     return false;
   }
@@ -788,7 +788,7 @@ bool temporal_overflow_option(
   if (!is_object_type(options)) return true;
   ant_value_t value = js_get(js, options, "overflow");
   if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) == T_UNDEF) return true;
+  if (vtype(value) == kTypeUndefined) return true;
   DiplomatStringView view; ant_value_t root;
   if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
   if (temporal_string_equals(view, "constrain"))
@@ -835,14 +835,14 @@ bool temporal_zdt_options(
   if (!is_object_type(options)) return true;
   ant_value_t value = js_get(js, options, "disambiguation");
   if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     Disambiguation parsed;
     if (!temporal_disambiguation_value(js, value, &parsed, err)) return false;
     *disambiguation = (Disambiguation_option){.ok = parsed, .is_ok = true};
   }
   value = js_get(js, options, "offset");
   if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     OffsetDisambiguation parsed;
     if (!temporal_offset_disambiguation_value(js, value, &parsed, err)) return false;
     *offset = (OffsetDisambiguation_option){.ok = parsed, .is_ok = true};
@@ -864,7 +864,7 @@ bool temporal_to_string_options(
   ant_value_t value;
   if (fields & TEMPORAL_TOSTRING_CALENDAR) {
     value = js_get(js, options, "calendarName"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     DiplomatStringView view; ant_value_t root; if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
     if (temporal_string_equals(view, "auto")) out->calendar = DisplayCalendar_Auto;
     else if (temporal_string_equals(view, "always")) out->calendar = DisplayCalendar_Always;
@@ -875,8 +875,8 @@ bool temporal_to_string_options(
   }
   if (fields & TEMPORAL_TOSTRING_DIGITS) {
     value = js_get(js, options, "fractionalSecondDigits"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
-    if (vtype(value) == T_NUM) {
+  if (vtype(value) != kTypeUndefined) {
+    if (vtype(value) == kTypeNumber) {
       double number = floor(tod(value));
       if (!isfinite(number) || number < 0 || number > 9) {
         *err = js_mkerr_typed(js, JS_ERR_RANGE, "invalid fractionalSecondDigits"); return false;
@@ -890,7 +890,7 @@ bool temporal_to_string_options(
   }
   if (fields & TEMPORAL_TOSTRING_OFFSET) {
     value = js_get(js, options, "offset"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     DiplomatStringView view; ant_value_t root; if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
     if (temporal_string_equals(view, "auto")) out->offset = DisplayOffset_Auto;
     else if (temporal_string_equals(view, "never")) out->offset = DisplayOffset_Never;
@@ -899,28 +899,28 @@ bool temporal_to_string_options(
   }
   if (fields & TEMPORAL_TOSTRING_ROUNDING_MODE) {
     value = js_get(js, options, "roundingMode"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     RoundingMode parsed; if (!temporal_rounding_mode_from_value(js, value, &parsed, err)) return false;
     out->rounding.rounding_mode = (RoundingMode_option){.ok = parsed, .is_ok = true};
   }
   }
   if (fields & TEMPORAL_TOSTRING_SMALLEST_UNIT) {
     value = js_get(js, options, "smallestUnit"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     Unit unit; if (!temporal_unit_from_value(js, value, false, &unit, err)) return false;
     out->rounding.smallest_unit = (Unit_option){.ok = unit, .is_ok = true};
   }
   }
   if (fields & TEMPORAL_TOSTRING_TIME_ZONE) {
     value = js_get(js, options, "timeZone"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     TimeZone parsed; if (!temporal_time_zone_from_value(js, value, &parsed, err)) return false;
     out->time_zone = (TimeZone_option){.ok = parsed, .is_ok = true};
   }
   }
   if (fields & TEMPORAL_TOSTRING_TIME_ZONE_NAME) {
     value = js_get(js, options, "timeZoneName"); if (is_err(value)) { *err = value; return false; }
-  if (vtype(value) != T_UNDEF) {
+  if (vtype(value) != kTypeUndefined) {
     DiplomatStringView view; ant_value_t root; if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
     if (temporal_string_equals(view, "auto")) out->time_zone_name = DisplayTimeZone_Auto;
     else if (temporal_string_equals(view, "never")) out->time_zone_name = DisplayTimeZone_Never;
@@ -941,7 +941,7 @@ bool temporal_relative_to(
   ant_t *js, ant_value_t input, temporal_relative_to_t *out, ant_value_t *err
 ) {
   memset(out, 0, sizeof(*out));
-  if (vtype(input) == T_UNDEF) return true;
+  if (vtype(input) == kTypeUndefined) return true;
   if (is_object_type(input)) {
     PlainDate *date = js_get_native(input, TEMPORAL_PLAIN_DATE_TAG);
     ZonedDateTime *zoned = js_get_native(input, TEMPORAL_ZONED_DATETIME_TAG);
@@ -969,7 +969,7 @@ bool temporal_relative_to(
       }
     }
   } else {
-    if (vtype(input) != T_STR) {
+    if (vtype(input) != kTypeString) {
       *err = js_mkerr_typed(js, JS_ERR_TYPE, "relativeTo must be a string or object");
       return false;
     }
@@ -1002,7 +1002,7 @@ bool temporal_relative_to(
 bool temporal_relative_to_from_options(
   ant_t *js, ant_value_t options, temporal_relative_to_t *out, ant_value_t *err
 ) {
-  if (vtype(options) == T_UNDEF) { memset(out, 0, sizeof(*out)); return true; }
+  if (vtype(options) == kTypeUndefined) { memset(out, 0, sizeof(*out)); return true; }
   if (!is_object_type(options)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "options must be an object"); return false;
   }

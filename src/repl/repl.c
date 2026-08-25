@@ -617,8 +617,8 @@ static void repl_eval_chunk(
   }
 
   if (print_mode == REPL_PRINT_LOAD) {
-    if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
-    else if (vtype(result) != T_UNDEF) printf("%s\n", js_str(js, result));
+    if (vtype(result) == kTypeError) fprintf(stderr, "%s\n", js_str(js, result));
+    else if (vtype(result) != kTypeUndefined) printf("%s\n", js_str(js, result));
   }
 }
 

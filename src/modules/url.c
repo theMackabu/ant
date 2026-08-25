@@ -44,10 +44,10 @@ static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) 
 
   ant_value_t length = js_get(js, arr, "length");
   if (is_err(length)) return length;
-  if (js->thrown_exists) return mkval(T_ERR, 0);
+  if (js->thrown_exists) return mkval(kTypeError, 0);
   
   double len_num = js_to_number(js, length);
-  if (js->thrown_exists) return mkval(T_ERR, 0);
+  if (js->thrown_exists) return mkval(kTypeError, 0);
   
   if (isnan(len_num) || !isfinite(len_num))
     return js_mkerr_typed(js, JS_ERR_TYPE, "URLSearchParams sequence length must be finite");
@@ -59,7 +59,7 @@ static ant_value_t usp_array_len(ant_t *js, ant_value_t arr, ant_offset_t *out) 
 static ant_value_t usp_array_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   ant_value_t value = js_arr_get(js, arr, idx);
   if (is_err(value)) return value;
-  if (js->thrown_exists) return mkval(T_ERR, 0);
+  if (js->thrown_exists) return mkval(kTypeError, 0);
   return value;
 }
 
@@ -313,16 +313,16 @@ char *build_href(const url_state_t *s) {
 }
 
 static const char *coerce_to_string(ant_t *js, ant_value_t val, size_t *len) {
-  if (vtype(val) == T_STR) return js_getstr(js, val, len);
+  if (vtype(val) == kTypeString) return js_getstr(js, val, len);
   if (is_object_type(val)) {
     ant_value_t href = js_getprop_fallback(js, val, "href");
-    if (vtype(href) == T_STR) return js_getstr(js, href, len);
+    if (vtype(href) == kTypeString) return js_getstr(js, href, len);
   }
   return NULL;
 }
 
 static ant_value_t url_string_value(ant_t *js, ant_value_t value) {
-  return vtype(value) == T_STR ? value : js_tostring_val(js, value);
+  return vtype(value) == kTypeString ? value : js_tostring_val(js, value);
 }
 
 typedef bool (*ada_url_setter_t)(ada_url, const char *, size_t);
@@ -570,7 +570,7 @@ static ant_value_t url_get_searchParams(ant_t *js, ant_value_t *args, int nargs)
   if (!url_get_state(js->this_val))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   ant_value_t usp = js_get_slot(js->this_val, SLOT_ENTRIES);
-  if (vtype(usp) == T_OBJ) return usp;
+  if (vtype(usp) == kTypeObject) return usp;
   return js_mkundef();
 }
 
@@ -777,7 +777,7 @@ ant_value_t url_resolve_object_url(ant_t *js, const char *url) {
     return js_mkundef();
 
   ant_value_t store = js_get_slot(js->builtins.url_ctor, SLOT_DATA);
-  if (vtype(store) != T_ARR) return js_mkundef();
+  if (vtype(store) != kTypeArray) return js_mkundef();
 
   size_t url_len = object_url_key_length(url);
   ant_offset_t len = js_arr_len(js, store);
@@ -807,7 +807,7 @@ static ant_value_t url_create_object_url(ant_t *js, ant_value_t *args, int nargs
   ant_value_t url_value = js_mkstr(js, url, strlen(url));
 
   ant_value_t store = js_get_slot(js->builtins.url_ctor, SLOT_DATA);
-  if (vtype(store) != T_ARR) {
+  if (vtype(store) != kTypeArray) {
     store = js_mkarr(js);
     js_set_slot_wb(js, js->builtins.url_ctor, SLOT_DATA, store);
   }
@@ -831,7 +831,7 @@ static ant_value_t url_revoke_object_url(ant_t *js, ant_value_t *args, int nargs
   url_len = object_url_key_length(url);
 
   ant_value_t store = js_get_slot(js->builtins.url_ctor, SLOT_DATA);
-  if (vtype(store) != T_ARR) return js_mkundef();
+  if (vtype(store) != kTypeArray) return js_mkundef();
 
   ant_value_t next = js_mkarr(js);
   ant_offset_t len = js_arr_len(js, store);
@@ -849,7 +849,7 @@ static ant_value_t url_revoke_object_url(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknull();
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   if (is_err(key_sv)) return js_mknull();
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_mknull();
@@ -867,7 +867,7 @@ static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_mkarr(js);
   if (nargs < 1) return result;
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   if (is_err(key_sv)) return result;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return result;
@@ -885,13 +885,13 @@ static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   if (is_err(key_sv)) return js_false;
   const char *key = js_getstr(js, key_sv, NULL);
   if (!key) return js_false;
   const char *match_val = NULL;
   if (nargs >= 2 && !is_undefined(args[1])) {
-    ant_value_t mv_sv = (vtype(args[1]) == T_STR) ? args[1] : js_tostring_val(js, args[1]);
+    ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
     if (!is_err(mv_sv)) match_val = js_getstr(js, mv_sv, NULL);
   }
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -910,10 +910,10 @@ static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
   if (is_err(key_sv)) return js_mkundef();
-  ant_value_t val_sv = (vtype(args[1]) == T_STR) ? args[1] : js_tostring_val(js, args[1]);
+  ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
   
   if (is_err(val_sv)) return js_mkundef();
   const char *key = js_getstr(js, key_sv, NULL);
@@ -953,10 +953,10 @@ static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
   if (is_err(key_sv)) return js_mkundef();
-  ant_value_t val_sv = (vtype(args[1]) == T_STR) ? args[1] : js_tostring_val(js, args[1]);
+  ant_value_t val_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
   
   if (is_err(val_sv)) return js_mkundef();
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -974,7 +974,7 @@ static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  ant_value_t key_sv = (vtype(args[0]) == T_STR) ? args[0] : js_tostring_val(js, args[0]);
+  ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
   if (is_err(key_sv)) return js_mkundef();
   const char *key = js_getstr(js, key_sv, NULL);
@@ -983,7 +983,7 @@ static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
   const char *match_val = NULL;
   
   if (nargs >= 2 && !is_undefined(args[1])) {
-    ant_value_t mv_sv = (vtype(args[1]) == T_STR) ? args[1] : js_tostring_val(js, args[1]);
+    ant_value_t mv_sv = (vtype(args[1]) == kTypeString) ? args[1] : js_tostring_val(js, args[1]);
     if (!is_err(mv_sv)) match_val = js_getstr(js, mv_sv, NULL);
   }
   
@@ -1080,7 +1080,7 @@ static ant_value_t usp_sort(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t usp_iter_next(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state_v = js_get_slot(js->this_val, SLOT_ITER_STATE);
-  if (vtype(state_v) != T_NUM) return js_iter_result(js, false, js_mkundef());
+  if (vtype(state_v) != kTypeNumber) return js_iter_result(js, false, js_mkundef());
 
   uint32_t state = (uint32_t)js_getnum(state_v);
   uint32_t kind  = ITER_STATE_KIND(state);
@@ -1149,7 +1149,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t init = args[0];
   uint8_t t = vtype(init);
 
-  if (t == T_STR) {
+  if (t == kTypeString) {
     const char *s = js_getstr(js, init, NULL);
     if (s) {
       const char *q = (s[0] == '?') ? s + 1 : s;
@@ -1158,11 +1158,11 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
     return obj;
   }
 
-  bool init_is_array = t == T_ARR;
-  if (!init_is_array && t == T_OBJ) {
+  bool init_is_array = t == kTypeArray;
+  if (!init_is_array && t == kTypeObject) {
     ant_value_t is_array_res = js_is_array_value_checked(js, init, &init_is_array);
     if (is_err(is_array_res)) return is_array_res;
-    if (js->thrown_exists) return mkval(T_ERR, 0);
+    if (js->thrown_exists) return mkval(kTypeError, 0);
   }
 
   if (init_is_array) {
@@ -1174,11 +1174,11 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
       ant_value_t pair = usp_array_get(js, init, i);
       if (is_err(pair)) return pair;
       
-      bool pair_is_array = vtype(pair) == T_ARR;
-      if (!pair_is_array && vtype(pair) == T_OBJ) {
+      bool pair_is_array = vtype(pair) == kTypeArray;
+      if (!pair_is_array && vtype(pair) == kTypeObject) {
         ant_value_t is_array_res = js_is_array_value_checked(js, pair, &pair_is_array);
         if (is_err(is_array_res)) return is_array_res;
-        if (js->thrown_exists) return mkval(T_ERR, 0);
+        if (js->thrown_exists) return mkval(kTypeError, 0);
       }
       
       if (!pair_is_array)
@@ -1199,10 +1199,10 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
       ant_value_t pv = usp_array_get(js, pair, 1);
       if (is_err(pv)) return pv;
       
-      ant_value_t ksv = (vtype(pk) == T_STR) ? pk : js_tostring_val(js, pk);
+      ant_value_t ksv = (vtype(pk) == kTypeString) ? pk : js_tostring_val(js, pk);
       if (is_err(ksv)) return ksv;
       
-      ant_value_t vsv = (vtype(pv) == T_STR) ? pv : js_tostring_val(js, pv);
+      ant_value_t vsv = (vtype(pv) == kTypeString) ? pv : js_tostring_val(js, pv);
       if (is_err(vsv)) return vsv;
       
       ant_value_t entry = js_mkarr(js);
@@ -1216,7 +1216,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_special_object(init)) {
     ant_value_t src = js_get_slot(init, SLOT_ENTRIES);
-    if (vtype(src) == T_ARR) {
+    if (vtype(src) == kTypeArray) {
       ant_offset_t len = js_arr_len(js, src);
       for (ant_offset_t i = 0; i < len; i++) {
         ant_value_t entry = js_arr_get(js, src, i);
@@ -1236,7 +1236,7 @@ static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t val;
     
     while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-      ant_value_t sv = (vtype(val) == T_STR) ? val : js_tostring_val(js, val);
+      ant_value_t sv = (vtype(val) == kTypeString) ? val : js_tostring_val(js, val);
       if (is_err(sv)) { js_prop_iter_end(&it); return sv; }
       ant_value_t entry = js_mkarr(js);
       js_arr_push(js, entry, js_mkstr(js, key, key_len));
@@ -1336,7 +1336,7 @@ static ant_value_t builtin_fileURLToPath(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t builtin_pathToFileURL(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "pathToFileURL requires a string argument");
     
   size_t len;
@@ -1371,7 +1371,7 @@ static bool url_fmt_get_string_prop(
   *out = js_get(js, obj, name);
   if (is_undefined(*out) || is_null(*out)) return false;
 
-  ant_value_t str_val = vtype(*out) == T_STR ? *out : js_tostring_val(js, *out);
+  ant_value_t str_val = vtype(*out) == kTypeString ? *out : js_tostring_val(js, *out);
   if (is_err(str_val)) return false;
 
   *out = str_val;
@@ -1424,7 +1424,7 @@ static bool url_fmt_append_query_object(ant_t *js, url_fmt_buf_t *b, ant_value_t
       return false;
     }
     
-    ant_value_t str_val = vtype(val) == T_STR ? val : js_tostring_val(js, val);
+    ant_value_t str_val = vtype(val) == kTypeString ? val : js_tostring_val(js, val);
     if (is_err(str_val)) {
       js_prop_iter_end(&it);
       return false;
@@ -1457,7 +1457,7 @@ static ant_value_t builtin_url_parse(ant_t *js, ant_value_t *args, int nargs) {
   size_t len = 0;
   const char *value = NULL;
 
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "The \"url\" argument must be of type string");
 
   value = js_getstr(js, args[0], &len);
@@ -1543,7 +1543,7 @@ static ant_value_t builtin_url_format(ant_t *js, ant_value_t *args, int nargs) {
     if (!url_fmt_append_n(&b, search, search_len)) goto oom;
   } else {
     ant_value_t query = js_get(js, obj, "query");
-    if (vtype(query) == T_STR) {
+    if (vtype(query) == kTypeString) {
       size_t qlen = 0;
       const char *q = js_getstr(js, query, &qlen);
       if (q && qlen > 0) {

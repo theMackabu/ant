@@ -15,7 +15,7 @@ static inline ant_value_t sv_module_export_to_ns(
   const char *name, size_t len,
   ant_value_t value
 ) {
-  if (vtype(module_ns) != T_OBJ)
+  if (vtype(module_ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
   ant_value_t set_res = setprop_cstr(js, module_ns, name, len, value);
@@ -38,7 +38,7 @@ static inline ant_value_t sv_module_export_cstr(
 static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value_t func_obj) {
   if (is_object_type(func_obj)) {
     ant_value_t ns = js_module_ctx_namespace(js_get_slot(func_obj, SLOT_MODULE_CTX));
-    if (vtype(ns) == T_OBJ) return ns;
+    if (vtype(ns) == kTypeObject) return ns;
   }
   return js_module_eval_active_ns(js);
 }
@@ -46,7 +46,7 @@ static inline ant_value_t sv_export_target_ns_from_func_obj(ant_t *js, ant_value
 static inline ant_value_t sv_export_target_ns_from_closure(ant_t *js, sv_closure_t *closure) {
   if (closure && is_object_type(closure->module_ctx)) {
     ant_value_t ns = js_module_ctx_namespace(closure->module_ctx);
-    if (vtype(ns) == T_OBJ) return ns;
+    if (vtype(ns) == kTypeObject) return ns;
   }
   
   ant_value_t func_obj = closure && closure->func_obj
@@ -57,7 +57,7 @@ static inline ant_value_t sv_export_target_ns_from_closure(ant_t *js, sv_closure
 }
 
 static inline ant_value_t sv_export_target_ns(ant_t *js, ant_value_t callee) {
-  if (vtype(callee) == T_FUNC)
+  if (vtype(callee) == kTypeFunction)
     return sv_export_target_ns_from_closure(js, js_func_closure(callee));
   return js_module_eval_active_ns(js);
 }
@@ -66,8 +66,8 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
   
-  if (t == T_OBJ || t == T_ARR || t == T_FUNC) return tov(0);
-  if (t == T_NULL || t == T_UNDEF) 
+  if (t == kTypeObject || t == kTypeArray || t == kTypeFunction) return tov(0);
+  if (t == kTypeNull || t == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
   
   ant_value_t obj = mkobj(js, 0);
@@ -81,13 +81,13 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
 
 static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  if (vtype(v) != T_STR && vtype(v) != T_SYMBOL)
+  if (vtype(v) != kTypeString && vtype(v) != kTypeSymbol)
     vm->stack[vm->sp - 1] = coerce_to_str(js, v);
 }
 
 static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  if (vtype(v) == T_STR) return js_mkundef();
+  if (vtype(v) == kTypeString) return js_mkundef();
   
   ant_value_t out = js_template_to_string(js, v);
   if (is_err(out)) return out;
@@ -98,12 +98,12 @@ static inline ant_value_t sv_op_to_string(sv_vm_t *vm, ant_t *js) {
 
 static inline void sv_op_is_undef(sv_vm_t *vm) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp - 1] = mkval(T_BOOL, vtype(v) == T_UNDEF);
+  vm->stack[vm->sp - 1] = mkval(kTypeBool, vtype(v) == kTypeUndefined);
 }
 
 static inline void sv_op_is_null(sv_vm_t *vm) {
   ant_value_t v = vm->stack[vm->sp - 1];
-  vm->stack[vm->sp - 1] = mkval(T_BOOL, vtype(v) == T_NULL);
+  vm->stack[vm->sp - 1] = mkval(kTypeBool, vtype(v) == kTypeNull);
 }
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
@@ -111,17 +111,17 @@ static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
   ant_value_t specifier = vm->stack[--vm->sp];
   ant_value_t import_fn = js_get_module_import_binding(js);
 
-  if (vtype(import_fn) != T_FUNC && vtype(import_fn) != T_CFUNC)
+  if (vtype(import_fn) != kTypeFunction && vtype(import_fn) != kTypeBuiltin)
     import_fn = js_getprop_fallback(js, js->global, "import");
 
-  if (vtype(import_fn) == T_FUNC || vtype(import_fn) == T_CFUNC) {
+  if (vtype(import_fn) == kTypeFunction || vtype(import_fn) == kTypeBuiltin) {
     ant_value_t call_args[2] = { specifier, options };
     ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, false);
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }
 
-  vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
+  vm->stack[vm->sp++] = mkval(kTypeUndefined, 0);
   return tov(0);
 }
 
@@ -133,9 +133,9 @@ static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline ant_value_t sv_import_default_value(ant_value_t ns) {
-  if (vtype(ns) == T_OBJ) {
+  if (vtype(ns) == kTypeObject) {
     ant_value_t slot_val = js_get_slot(ns, SLOT_DEFAULT);
-    if (vtype(slot_val) != T_UNDEF) return slot_val;
+    if (vtype(slot_val) != kTypeUndefined) return slot_val;
   }
   return ns;
 }
@@ -167,10 +167,10 @@ static inline const char *sv_module_namespace_display_name(ant_t *js, ant_value_
   if (!is_object_type(module_ctx)) return NULL;
 
   ant_value_t display_name = js_get(js, module_ctx, "displayName");
-  if (vtype(display_name) == T_STR) return js_getstr(js, display_name, NULL);
+  if (vtype(display_name) == kTypeString) return js_getstr(js, display_name, NULL);
 
   ant_value_t filename = js_get(js, module_ctx, "filename");
-  if (vtype(filename) != T_STR) return NULL;
+  if (vtype(filename) != kTypeString) return NULL;
   
   return js_getstr(js, filename, NULL);
 }
@@ -196,9 +196,9 @@ static inline ant_value_t sv_import_named_value(
   const char *name,
   uint32_t len
 ) {
-  if (vtype(ns) == T_OBJ && !is_proxy(js_as_obj(ns))) {
+  if (vtype(ns) == kTypeObject && !is_proxy(js_as_obj(ns))) {
     ant_value_t value = js_get(js, ns, name);
-    if (vtype(value) != T_UNDEF) return value;
+    if (vtype(value) != kTypeUndefined) return value;
     if (
       sv_module_namespace_has_export(js, ns, name, len) ||
       js_get_slot(ns, SLOT_MODULE_LOADING) == js_true
@@ -250,7 +250,7 @@ static inline ant_value_t sv_op_export(
 
 static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   ant_value_t ns = vm->stack[--vm->sp];
-  if (vtype(ns) != T_OBJ)
+  if (vtype(ns) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot re-export from non-object module");
 
   ant_iter_t iter = js_prop_iter_begin(js, ns);
@@ -314,7 +314,7 @@ static inline bool sv_with_binding_is_unscopable(
   *abrupt = false;
 
   ant_value_t unscopables_sym = get_unscopables_sym();
-  if (vtype(unscopables_sym) != T_SYMBOL) return false;
+  if (vtype(unscopables_sym) != kTypeSymbol) return false;
 
   bool is_proxy_obj = is_proxy(js_as_obj(with_obj));
   ant_value_t unscopables = js_mkundef();
@@ -377,7 +377,7 @@ static inline bool sv_with_binding_is_unscopable(
       unscopables = js_prop_load(unscopables_off);
   }
 
-  if (is_proxy_obj || vtype(unscopables) == T_UNDEF)
+  if (is_proxy_obj || vtype(unscopables) == kTypeUndefined)
     unscopables = js_get_sym(js, with_obj, unscopables_sym);
   
   if (is_err(unscopables)) {
@@ -504,7 +504,7 @@ static inline ant_value_t sv_op_with_get_var(
   uint16_t fb_idx   = sv_get_u16(ip + 6);
   sv_atom_t *a = &func->atoms[atom_idx];
 
-  if (vtype(frame->with_obj) != T_UNDEF) {
+  if (vtype(frame->with_obj) != kTypeUndefined) {
   ant_value_t val = js_mkundef();
   if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
     if (is_err(val)) return val;
@@ -538,7 +538,7 @@ static inline ant_value_t sv_op_with_get_call(
   uint16_t fb_idx = sv_get_u16(ip + 6);
   sv_atom_t *a = &func->atoms[atom_idx];
 
-  if (vtype(frame->with_obj) != T_UNDEF) {
+  if (vtype(frame->with_obj) != kTypeUndefined) {
     ant_value_t val = js_mkundef();
     if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
       if (is_err(val)) return val;
@@ -580,7 +580,7 @@ static inline ant_value_t sv_op_with_put_var(
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t val = vm->stack[--vm->sp];
 
-  if (vtype(frame->with_obj) != T_UNDEF) {
+  if (vtype(frame->with_obj) != kTypeUndefined) {
     bool has_binding = false;
     if (is_proxy(js_as_obj(frame->with_obj))) {
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
@@ -619,7 +619,7 @@ static inline ant_value_t sv_op_with_del_var(
   uint32_t atom_idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[atom_idx];
   
-  if (vtype(frame->with_obj) != T_UNDEF) {
+  if (vtype(frame->with_obj) != kTypeUndefined) {
     bool has_binding = false;
     if (is_proxy(js_as_obj(frame->with_obj))) {
       ant_value_t has = js_proxy_has(js, frame->with_obj, a->str, a->len);
@@ -648,7 +648,7 @@ fallback:
   if (is_err(result)) return result;
   bool ok = js_truthy(js, result);
   
-  vm->stack[vm->sp++] = mkval(T_BOOL, ok);
+  vm->stack[vm->sp++] = mkval(kTypeBool, ok);
   return js_mkundef();
 }
 
@@ -674,7 +674,7 @@ static inline void sv_op_special_obj(
     return;
   }
 
-  if (vtype(frame->arguments_obj) == T_UNDEF) {
+  if (vtype(frame->arguments_obj) == kTypeUndefined) {
     int mapped_count = sv_frame_is_strict(frame) || !frame->func ? 0 : frame->func->param_count;
     if (mapped_count > frame->argc) mapped_count = frame->argc;
     frame->arguments_obj = js_create_arguments_object(

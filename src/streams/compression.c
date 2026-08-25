@@ -39,7 +39,7 @@ static int zfmt_window_bits(zformat_t fmt, bool decompress) {
 }
 
 static int parse_format(ant_t *js, ant_value_t arg, zformat_t *out) {
-  if (vtype(arg) != T_STR) return -1;
+  if (vtype(arg) != kTypeString) return -1;
   size_t len;
   const char *s = js_getstr(js, arg, &len);
   if (!s) return -1;
@@ -207,7 +207,7 @@ static ant_value_t js_cs_get_writable(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CompressionStream constructor requires 'new'");
 
   if (nargs < 1)
@@ -329,7 +329,7 @@ static ant_value_t js_ds_get_writable(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "DecompressionStream constructor requires 'new'");
 
   if (nargs < 1)

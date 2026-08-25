@@ -146,7 +146,7 @@ static void timer_release_callback_args(timer_entry_t *entry) {
 
 static int timer_copy_args_from_object(ant_t *js, timer_entry_t *entry, ant_value_t obj) {
   ant_value_t args_arr = js_get_slot(obj, SLOT_AUX);
-  ant_offset_t len = vtype(args_arr) == T_ARR ? js_arr_len(js, args_arr) : 0;
+  ant_offset_t len = vtype(args_arr) == kTypeArray ? js_arr_len(js, args_arr) : 0;
 
   timer_release_args(entry);
   if (len == 0) return 0;
@@ -175,10 +175,10 @@ static ant_value_t timer_to_primitive(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t timer_inspect(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t id_val = js_get_slot(this_obj, SLOT_DATA);
-  int timer_id = vtype(id_val) == T_NUM ? (int)js_getnum(id_val) : 0;
+  int timer_id = vtype(id_val) == kTypeNumber ? (int)js_getnum(id_val) : 0;
 
   ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
-  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Timeout";
+  const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Timeout";
 
   js_inspect_builder_t builder;
   if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
@@ -226,7 +226,7 @@ static ant_value_t js_timer_has_ref(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
-  if (vtype(arg) == T_NUM) return (int)js_getnum(arg);
+  if (vtype(arg) == kTypeNumber) return (int)js_getnum(arg);
   return (int)js_getnum(js_get_slot(arg, SLOT_DATA));
 }
 
@@ -313,7 +313,7 @@ static ant_value_t js_timer_refresh(ant_t *js, ant_value_t *args, int nargs) {
   if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return this_obj;
 
   if (!entry->active) {
-    if (vtype(entry->callback) == T_UNDEF) {
+    if (vtype(entry->callback) == kTypeUndefined) {
       entry->callback = js_get(js, this_obj, "callback");
       if (!is_callable(entry->callback)) return this_obj;
       if (timer_copy_args_from_object(js, entry, this_obj) != 0)
@@ -482,7 +482,7 @@ static ant_value_t timers_promises_get_state(ant_t *js) {
 
 static ant_value_t timers_promises_abort_reason(ant_t *js, ant_value_t signal) {
   ant_value_t reason = abort_signal_get_reason(signal);
-  if (vtype(reason) != T_UNDEF && vtype(reason) != T_NULL) return reason;
+  if (vtype(reason) != kTypeUndefined && vtype(reason) != kTypeNull) return reason;
   return js_mkerr_typed(js, JS_ERR_TYPE, "The operation was aborted");
 }
 
@@ -542,7 +542,7 @@ static ant_value_t timers_promises_on_abort(ant_t *js, ant_value_t *args, int na
   handle = js_get(js, state, "handle");
   is_immediate = js_get(js, state, "isImmediate");
 
-  if (vtype(handle) != T_UNDEF && vtype(handle) != T_NULL) {
+  if (vtype(handle) != kTypeUndefined && vtype(handle) != kTypeNull) {
     clear_args[0] = handle;
     if (js_truthy(js, is_immediate)) js_clear_immediate(js, clear_args, 1);
     else js_clear_timeout(js, clear_args, 1);
@@ -566,14 +566,14 @@ static bool timers_promises_parse_options(
   if (signal_out) *signal_out = js_mkundef();
   if (error_out) *error_out = js_mkundef();
 
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return true;
-  if (vtype(value) != T_OBJ) {
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return true;
+  if (vtype(value) != kTypeObject) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Timer options must be an object");
     return false;
   }
 
   signal = js_get(js, value, "signal");
-  if (vtype(signal) != T_UNDEF && vtype(signal) != T_NULL && !abort_signal_is_signal(signal)) {
+  if (vtype(signal) != kTypeUndefined && vtype(signal) != kTypeNull && !abort_signal_is_signal(signal)) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "options.signal must be an AbortSignal");
     return false;
   }

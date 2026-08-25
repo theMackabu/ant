@@ -42,13 +42,13 @@ ant_value_t request_get_headers(ant_value_t obj) {
 ant_value_t request_get_signal(ant_t *js, ant_value_t obj) {
   ant_value_t signal = js_get_slot(obj, SLOT_REQUEST_SIGNAL);
 
-  if (vtype(signal) != T_UNDEF) return signal;
+  if (vtype(signal) != kTypeUndefined) return signal;
   signal = abort_signal_create_dependent(js, js_mkundef());
   
   if (is_err(signal)) return signal;
   ant_value_t abort_reason = js_get_slot(obj, SLOT_REQUEST_ABORT_REASON);
   
-  if (vtype(abort_reason) != T_UNDEF) signal_do_abort(js, signal, abort_reason);
+  if (vtype(abort_reason) != kTypeUndefined) signal_do_abort(js, signal, abort_reason);
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
   
   return signal;
@@ -274,7 +274,7 @@ static const char *request_effective_body_type(ant_t *js, ant_value_t req_obj, r
   ant_value_t headers = js_get_slot(req_obj, SLOT_REQUEST_HEADERS);
   if (!headers_is_headers(headers)) return d ? d->body_type : NULL;
   ant_value_t ct = headers_get_value(js, headers, "content-type");
-  if (vtype(ct) == T_STR) return js_getstr(js, ct, NULL);
+  if (vtype(ct) == kTypeString) return js_getstr(js, ct, NULL);
   return d ? d->body_type : NULL;
 }
 
@@ -308,7 +308,7 @@ static bool extract_buffer_source_body(
   size_t src_len = 0;
 
   if (!((
-    vtype(body_val) == T_TYPEDARRAY || vtype(body_val) == T_OBJ) &&
+    vtype(body_val) == kTypeTypedArray || vtype(body_val) == kTypeObject) &&
     buffer_source_get_bytes(js, body_val, &src, &src_len))
   ) return false;
 
@@ -406,7 +406,7 @@ static bool extract_string_body(
   size_t len = 0;
   const char *s = NULL;
 
-  if (vtype(body_val) != T_STR) {
+  if (vtype(body_val) != kTypeString) {
   body_val = js_tostring_val(js, body_val);
   if (is_err(body_val)) {
     *err_out = body_val;
@@ -431,12 +431,12 @@ static bool extract_body(
   *out_stream = js_mkundef();
   *err_out    = js_mkundef();
 
-  if (vtype(body_val) == T_NULL || vtype(body_val) == T_UNDEF) return true;
+  if (vtype(body_val) == kTypeNull || vtype(body_val) == kTypeUndefined) return true;
   if (extract_buffer_source_body(js, body_val, out_data, out_size, err_out)) return true;
-  if (vtype(body_val) == T_OBJ && rs_is_stream(body_val)) return extract_stream_body(js, body_val, out_stream, err_out);
-  if (vtype(body_val) == T_OBJ && extract_blob_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
-  if (vtype(body_val) == T_OBJ && extract_urlsearchparams_body(js, body_val, out_data, out_size, out_type)) return true;
-  if (vtype(body_val) == T_OBJ && extract_formdata_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
+  if (vtype(body_val) == kTypeObject && rs_is_stream(body_val)) return extract_stream_body(js, body_val, out_stream, err_out);
+  if (vtype(body_val) == kTypeObject && extract_blob_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
+  if (vtype(body_val) == kTypeObject && extract_urlsearchparams_body(js, body_val, out_data, out_size, out_type)) return true;
+  if (vtype(body_val) == kTypeObject && extract_formdata_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
   
   return extract_string_body(js, body_val, out_data, out_size, out_type, err_out);
 }
@@ -506,7 +506,7 @@ static uint8_t *concat_chunks(ant_t *js, ant_value_t chunks, size_t *out_size) {
 
   for (ant_offset_t i = 0; i < n; i++) {
   ant_value_t chunk = js_arr_get(js, chunks, i);
-  if (vtype(chunk) == T_TYPEDARRAY) {
+  if (vtype(chunk) == kTypeTypedArray) {
     TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(chunk);
     if (ta && ta->buffer && !ta->buffer->is_detached) total += ta->byte_length;
   }}
@@ -518,7 +518,7 @@ static uint8_t *concat_chunks(ant_t *js, ant_value_t chunks, size_t *out_size) {
   for (ant_offset_t i = 0; i < n; i++) {
   ant_value_t chunk = js_arr_get(js, chunks, i);
   
-  if (vtype(chunk) == T_TYPEDARRAY) {
+  if (vtype(chunk) == kTypeTypedArray) {
   TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(chunk);
   if (ta && ta->buffer && !ta->buffer->is_detached && ta->byte_length > 0) {
     memcpy(buf + pos, ta->buffer->data + ta->byte_offset, ta->byte_length);
@@ -558,17 +558,17 @@ static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t done_val = js_get(js, result, "done");
   ant_value_t value    = js_get(js, result, "value");
 
-  if (vtype(done_val) == T_BOOL && done_val == js_true) {
+  if (vtype(done_val) == kTypeBool && done_val == js_true) {
     size_t size = 0;
     uint8_t *data = concat_chunks(js, chunks, &size);
     ant_value_t type_v = js_get(js, state, "type");
-    const char *body_type = (vtype(type_v) == T_STR) ? js_getstr(js, type_v, NULL) : NULL;
+    const char *body_type = (vtype(type_v) == kTypeString) ? js_getstr(js, type_v, NULL) : NULL;
     resolve_body_promise(js, promise, data, size, body_type, mode, true);
     free(data);
     return js_mkundef();
   }
 
-  if (vtype(value) != T_UNDEF && vtype(value) != T_NULL)
+  if (vtype(value) != kTypeUndefined && vtype(value) != kTypeNull)
     js_arr_push(js, chunks, value);
 
   stream_schedule_next_read(js, state, js_mkundef(), reader);
@@ -724,7 +724,7 @@ static ant_value_t request_copy_source_body(ant_t *js, ant_value_t req_obj, ant_
   ant_value_t branches = readable_stream_tee(js, src_stream);
   
   if (is_err(branches)) return branches;
-  if (vtype(branches) != T_ARR) {
+  if (vtype(branches) != kTypeArray) {
     return js_mkerr_typed(js, JS_ERR_TYPE,
     "Failed to construct 'Request': tee() did not return branches");
   }
@@ -856,7 +856,7 @@ REQ_GETTER_END
 
 static ant_value_t request_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
   ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
-  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Request";
+  const char *tag = vtype(tag_val) == kTypeString ? js_getstr(js, tag_val, NULL) : "Request";
 
   js_inspect_builder_t builder;
   if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
@@ -947,7 +947,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t src_stream = js_get_slot(this, SLOT_REQUEST_BODY_STREAM);
   if (rs_is_stream(src_stream)) {
   ant_value_t branches = readable_stream_tee(js, src_stream);
-  if (!is_err(branches) && vtype(branches) == T_ARR) {
+  if (!is_err(branches) && vtype(branches) == kTypeArray) {
     ant_value_t b1 = js_arr_get(js, branches, 0);
     ant_value_t b2 = js_arr_get(js, branches, 1);
     js_set_slot_wb(js, this, SLOT_REQUEST_BODY_STREAM, b1);
@@ -959,8 +959,8 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
 
 static const char *init_str(ant_t *js, ant_value_t init, const char *key, size_t klen, ant_value_t *err_out) {
   ant_value_t v = js_get(js, init, key);
-  if (vtype(v) == T_UNDEF) return NULL;
-  if (vtype(v) != T_STR) {
+  if (vtype(v) == kTypeUndefined) return NULL;
+  if (vtype(v) != kTypeString) {
     v = js_tostring_val(js, v);
     if (is_err(v)) { *err_out = v; return NULL; }
   }
@@ -980,7 +980,7 @@ static ant_value_t request_new_from_input(
   *out_input_signal = js_mkundef();
 
   if (
-    vtype(input) == T_OBJ && 
+    vtype(input) == kTypeObject &&
     js_check_brand(input, BRAND_REQUEST)
   ) src = get_data(input);
 
@@ -989,7 +989,7 @@ static ant_value_t request_new_from_input(
     const char *url_str = NULL;
     url_state_t parsed = {0};
 
-    if (vtype(input) != T_STR) {
+    if (vtype(input) != kTypeString) {
       input = js_tostring_val(js, input);
       if (is_err(input)) return input;
     }
@@ -1039,7 +1039,7 @@ static ant_value_t request_apply_init_options(
   const char *integ = NULL;
   const char *method_val = NULL;
 
-  if (vtype(win) != T_UNDEF && vtype(win) != T_NULL) {
+  if (vtype(win) != kTypeUndefined && vtype(win) != kTypeNull) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': 'window' must be null");
   }
 
@@ -1128,7 +1128,7 @@ static ant_value_t request_apply_init_options(
   }
 
   ant_value_t ka = js_get(js, init, "keepalive");
-  if (vtype(ka) != T_UNDEF) req->keepalive = js_truthy(js, ka);
+  if (vtype(ka) != kTypeUndefined) req->keepalive = js_truthy(js, ka);
 
   method_val = init_str(js, init, "method", 6, &err);
   if (is_err(err)) return err;
@@ -1147,9 +1147,9 @@ static ant_value_t request_apply_init_options(
   }
 
   ant_value_t sig_val = js_get(js, init, "signal");
-  if (vtype(sig_val) == T_UNDEF) return js_mkundef();
+  if (vtype(sig_val) == kTypeUndefined) return js_mkundef();
   
-  if (vtype(sig_val) == T_NULL) {
+  if (vtype(sig_val) == kTypeNull) {
     *input_signal = js_mkundef();
     return js_mkundef();
   }
@@ -1165,7 +1165,7 @@ static ant_value_t request_apply_init_options(
 static ant_value_t request_create_ctor_headers(ant_t *js, ant_value_t input) {
   ant_value_t headers = headers_create_empty(js);
   if (is_err(headers)) return headers;
-  if (vtype(input) != T_OBJ) return headers;
+  if (vtype(input) != kTypeObject) return headers;
 
   ant_value_t src_hdrs = js_get_slot(input, SLOT_REQUEST_HEADERS);
   headers_copy_from(js, headers, src_hdrs);
@@ -1174,7 +1174,7 @@ static ant_value_t request_create_ctor_headers(ant_t *js, ant_value_t input) {
 
 static ant_value_t request_apply_init_headers(ant_t *js, ant_value_t init, ant_value_t headers) {
   ant_value_t init_headers = js_get(js, init, "headers");
-  if (vtype(init_headers) == T_UNDEF) return headers;
+  if (vtype(init_headers) == kTypeUndefined) return headers;
   return headers_create_from_init(js, init_headers);
 }
 
@@ -1183,10 +1183,10 @@ static ant_value_t request_parse_duplex(ant_t *js, ant_value_t init, bool *out_d
   ant_value_t duplex_str_v = duplex_val;
   const char *duplex_str = NULL;
 
-  *out_duplex_provided = vtype(duplex_val) != T_UNDEF;
+  *out_duplex_provided = vtype(duplex_val) != kTypeUndefined;
   if (!*out_duplex_provided) return js_mkundef();
 
-  if (vtype(duplex_str_v) != T_STR) {
+  if (vtype(duplex_str_v) != kTypeString) {
     duplex_str_v = js_tostring_val(js, duplex_str_v);
     if (is_err(duplex_str_v)) return duplex_str_v;
   }
@@ -1205,19 +1205,19 @@ static ant_value_t request_apply_ctor_body(
 ) {
   if (init_provided) {
     ant_value_t body_val = js_get(js, init, "body");
-    bool init_body_present = vtype(body_val) != T_UNDEF;
+    bool init_body_present = vtype(body_val) != kTypeUndefined;
     bool input_body_present = src && src->has_body;
     bool effective_body_present =
-      (init_body_present && vtype(body_val) != T_NULL) ||
-      (input_body_present && (!init_body_present || vtype(body_val) == T_NULL));
+      (init_body_present && vtype(body_val) != kTypeNull) ||
+      (input_body_present && (!init_body_present || vtype(body_val) == kTypeNull));
 
     if ((strcmp(req->method, "GET") == 0 || strcmp(req->method, "HEAD") == 0) && effective_body_present) {
       return js_mkerr_typed(js, JS_ERR_TYPE,
       "Failed to construct 'Request': Request with GET/HEAD method cannot have body");
     }
 
-    if (vtype(body_val) == T_UNDEF) return js_mkundef();
-    if (vtype(body_val) == T_NULL) {
+    if (vtype(body_val) == kTypeUndefined) return js_mkundef();
+    if (vtype(body_val) == kTypeNull) {
       request_clear_body(js, req_obj, req);
       return js_mkundef();
     }
@@ -1250,9 +1250,9 @@ static ant_value_t request_apply_ctor_body(
 }
 
 static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t init = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
+  ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
 
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires at least 1 argument");
@@ -1271,7 +1271,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t headers = 0;
   
   bool duplex_provided = false;
-  init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
+  init_provided = (vtype(init) == kTypeObject || vtype(init) == kTypeArray);
   
   step = request_new_from_input(js, input, &req, &src, &input_signal);
   if (is_err(step)) return step;
@@ -1337,7 +1337,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_value_t init) {
-  bool init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
+  bool init_provided = (vtype(init) == kTypeObject || vtype(init) == kTypeArray);
   
   request_data_t *req = NULL;
   request_data_t *src = NULL;

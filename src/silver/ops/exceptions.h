@@ -228,7 +228,7 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       }
 
       ant_value_t caught = err;
-      if (vtype(err) == T_ERR && js->thrown_exists) {
+      if (vtype(err) == kTypeError && js->thrown_exists) {
         caught = js->thrown_value;
         js->thrown_value = js_mkundef();
         js->thrown_exists = false;

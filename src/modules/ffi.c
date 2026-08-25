@@ -180,7 +180,7 @@ static ffi_value_type_id_t ffi_type_id_from_name(const char *name) {
 }
 
 static ffi_marshaled_type_t ffi_marshaled_type_from_value(ant_t *js, ant_value_t value) {
-  if (vtype(value) != T_STR) return ffi_marshaled_type_unknown();
+  if (vtype(value) != kTypeString) return ffi_marshaled_type_unknown();
   return ffi_marshaled_type_make(
     ffi_type_id_from_name(js_getstr(js, value, NULL)), 
     js_getstr(js, value, NULL)
@@ -226,12 +226,12 @@ static bool ffi_parse_signature(
   returns_val = js_get(js, value, "returns");
   args_val = js_get(js, value, "args");
 
-  if (vtype(returns_val) == T_UNDEF || vtype(args_val) == T_UNDEF) {
+  if (vtype(returns_val) == kTypeUndefined || vtype(args_val) == kTypeUndefined) {
     returns_val = js_get(js, value, "0");
     args_val = js_get(js, value, "1");
   }
 
-  if (vtype(returns_val) != T_STR) {
+  if (vtype(returns_val) != kTypeString) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFI return type must be a string");
     return false;
   }
@@ -256,7 +256,7 @@ static bool ffi_parse_signature(
   }
 
   ant_value_t len_val = js_get(js, args_val, "length");
-  arg_count = vtype(len_val) == T_NUM ? (size_t)js_getnum(len_val) : 0;
+  arg_count = vtype(len_val) == kTypeNumber ? (size_t)js_getnum(len_val) : 0;
 
   if (arg_count > 0) {
     out->args = calloc(arg_count, sizeof(*out->args));
@@ -320,7 +320,7 @@ static bool ffi_parse_signature(
 }
 
 static ffi_marshaled_type_t ffi_infer_variadic_type(ant_value_t value) {
-  if (vtype(value) == T_STR) return ffi_marshaled_type_make(FFI_VALUE_STRING, "string");
+  if (vtype(value) == kTypeString) return ffi_marshaled_type_make(FFI_VALUE_STRING, "string");
   if (ffi_is_nullish(value)) return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
   
   if (is_object_type(value) && js_check_native_tag(value, FFI_POINTER_NATIVE_TAG))
@@ -329,14 +329,14 @@ static ffi_marshaled_type_t ffi_infer_variadic_type(ant_value_t value) {
   if (is_object_type(value) && js_check_native_tag(value, FFI_CALLBACK_NATIVE_TAG))
     return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
     
-  if (vtype(value) == T_NUM) {
+  if (vtype(value) == kTypeNumber) {
     double number = js_getnum(value);
     double truncated = js_to_int32(number);
     if (number == truncated) return ffi_marshaled_type_make(FFI_VALUE_INT, "int");
     return ffi_marshaled_type_make(FFI_VALUE_DOUBLE, "double");
   }
   
-  if (vtype(value) == T_BOOL) return ffi_marshaled_type_make(FFI_VALUE_INT, "int");
+  if (vtype(value) == kTypeBool) return ffi_marshaled_type_make(FFI_VALUE_INT, "int");
   return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
 }
 
@@ -956,7 +956,7 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   ffi_init_prototypes(js);
 
   path_val = js_tostring_val(js, args[0]);
-  if (is_err(path_val) || vtype(path_val) != T_STR) return path_val;
+  if (is_err(path_val) || vtype(path_val) != kTypeString) return path_val;
   path = js_getstr(js, path_val, &path_len);
   if (!path) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid library path");
 
@@ -1012,7 +1012,7 @@ ant_value_t ffi_library_define(ant_t *js, ant_value_t *args, int nargs) {
   if (!library) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFILibrary");
   if (library->closed) return js_mkerr_typed(js, JS_ERR_TYPE, "FFILibrary is closed");
   
-  if (nargs < 2 || vtype(args[0]) != T_STR) {
+  if (nargs < 2 || vtype(args[0]) != kTypeString) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "define(name, signature) requires a symbol name and signature");
   }
 
@@ -1042,7 +1042,7 @@ ant_value_t ffi_library_call(ant_t *js, ant_value_t *args, int nargs) {
 
   if (!library) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFILibrary");
   if (library->closed) return js_mkerr_typed(js, JS_ERR_TYPE, "FFILibrary is closed");
-  if (nargs < 1 || vtype(args[0]) != T_STR) {
+  if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "call(name, ...args) requires a symbol name");
   }
 
@@ -1137,7 +1137,7 @@ ant_value_t ffi_function_call(ant_t *js, ant_value_t *args, int nargs) {
   } else ffi_call(&function->cif, function->func_ptr, &result, call_args);
 
 cleanup:
-  if (vtype(error) != T_UNDEF) {
+  if (vtype(error) != kTypeUndefined) {
     size_t i;
     for (i = 0; i < actual_argc; i++) free(scratch ? scratch[i] : NULL);
     free(dynamic_types);
@@ -1173,7 +1173,7 @@ static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs) {
   ffi_pointer_region_t *region = NULL;
   size_t size = 0;
 
-  if (nargs < 1 || vtype(args[0]) != T_NUM) {
+  if (nargs < 1 || vtype(args[0]) != kTypeNumber) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "alloc(size) requires a numeric size");
   }
 
@@ -1290,7 +1290,7 @@ ant_value_t ffi_pointer_offset(ant_t *js, ant_value_t *args, int nargs) {
   size_t offset = 0;
 
   if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
-  if (nargs < 1 || vtype(args[0]) != T_NUM) {
+  if (nargs < 1 || vtype(args[0]) != kTypeNumber) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer.offset(bytes) requires a numeric byte offset");
   }
 
