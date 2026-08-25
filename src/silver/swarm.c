@@ -3255,7 +3255,14 @@ static void jit_emit_inline_body(
       }
 
       case OP_NEG: {
-        INL_FLUSH_SLOT(isp - 1);
+        if (inl_num[isp - 1]) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_DNEG,
+              MIR_new_reg_op(ctx, inl_d[isp - 1]),
+              MIR_new_reg_op(ctx, inl_d[isp - 1])));
+          break;
+        }
+
         MIR_reg_t rs = inl_vs[isp - 1];
         mir_emit_is_num_guard(ctx, jit_func, r_bool, rs, slow);
 
@@ -6722,7 +6729,18 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_NEG: {
-        if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_BOXED;
+        int top_idx = vs.sp - 1;
+        bool input_is_num = vs.slot_type && vs.slot_type[top_idx] == SLOT_NUM;
+        vstack_clear_value_info(&vs, top_idx);
+
+        if (input_is_num) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_DNEG,
+              MIR_new_reg_op(ctx, vs.d_regs[top_idx]),
+              MIR_new_reg_op(ctx, vs.d_regs[top_idx])));
+          break;
+        }
+
         MIR_reg_t rs = vstack_top(&vs);  
         MIR_label_t slow = MIR_new_label(ctx);
         MIR_label_t done = MIR_new_label(ctx);
