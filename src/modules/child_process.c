@@ -165,7 +165,7 @@ static void child_stream_call_callback(
 );
 
 static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
-  if (vtype(s) != T_STR) {
+  if (vtype(s) != kTypeString) {
     fprintf(out, "%s\n", js_str(js, s));
     return;
   }
@@ -179,17 +179,17 @@ static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
 
 static void log_listener_error(ant_t *js, const char *event_name, ant_value_t err) {
   ant_value_t thrown_stack = js->thrown_stack;
-  if (vtype(thrown_stack) == T_STR) {
+  if (vtype(thrown_stack) == kTypeString) {
     fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
     fprint_js_str_raw(stderr, js, thrown_stack);
     return;
   }
 
   ant_value_t thrown_value = js->thrown_value;
-  ant_value_t src = (vtype(thrown_value) != T_UNDEF) ? thrown_value : err;
+  ant_value_t src = (vtype(thrown_value) != kTypeUndefined) ? thrown_value : err;
   
   ant_value_t stack = js_get(js, src, "stack");
-  if (vtype(stack) == T_STR) {
+  if (vtype(stack) == kTypeString) {
     fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
     fprint_js_str_raw(stderr, js, stack);
     return;
@@ -199,13 +199,13 @@ static void log_listener_error(ant_t *js, const char *event_name, ant_value_t er
   ant_value_t message = js_get(js, src, "message");
 
   const char *detail = NULL;
-  if (vtype(name) == T_STR && vtype(message) == T_STR) {
+  if (vtype(name) == kTypeString && vtype(message) == kTypeString) {
     const char *name_s = js_str(js, name);
     const char *msg_s = js_str(js, message);
     if (msg_s && msg_s[0]) fprintf(stderr, "Error in child_process '%s' listener: %s: %s\n", event_name, name_s, msg_s);
     else detail = name_s;
   } 
-  else if (vtype(message) == T_STR) detail = js_str(js, message);
+  else if (vtype(message) == kTypeString) detail = js_str(js, message);
   else detail = js_str(js, src);
   
   if (detail) fprintf(stderr, "Error in child_process '%s' listener: %s\n", event_name, detail);
@@ -213,7 +213,7 @@ static void log_listener_error(ant_t *js, const char *event_name, ant_value_t er
 }
 
 static void emit_event(child_process_t *cp, const char *name, ant_value_t *args, int nargs) {
-  if (vtype(cp->child_obj) != T_OBJ) return;
+  if (vtype(cp->child_obj) != kTypeObject) return;
   eventemitter_emit_args(cp->js, cp->child_obj, name, args, nargs);
 }
 
@@ -275,14 +275,14 @@ static void remove_pending_child(child_process_t *cp) {
 static void free_child_process(child_process_t *cp) {
   if (!cp) return;
 
-  if (vtype(cp->child_obj) == T_OBJ) {
+  if (vtype(cp->child_obj) == kTypeObject) {
     js_set_slot(cp->child_obj, SLOT_DATA, js_mkundef());
     js_clear_native(cp->child_obj, CHILD_PROCESS_NATIVE_TAG);
   }
   
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
     ant_value_t obj = child_stream_obj(cp, i);
-    if (vtype(obj) != T_OBJ) continue;
+    if (vtype(obj) != kTypeObject) continue;
     js_set_slot(obj, SLOT_DATA, js_mkundef());
     js_clear_native(obj, CHILD_STREAM_NATIVE_TAG);
   }
@@ -332,12 +332,12 @@ static void check_completion(child_process_t *cp) {
     ant_value_t exit_code_val = child_exit_code_value(cp);
     ant_value_t signal_val = child_signal_value(cp->js, cp->term_signal);
 
-    if (vtype(cp->stdout_obj) == T_OBJ) {
+    if (vtype(cp->stdout_obj) == kTypeObject) {
       js_set(cp->js, cp->stdout_obj, "text", stdout_val);
       js_set(cp->js, cp->stdout_obj, "length", js_mknum((double)cp->stdout_seen));
     }
     
-    if (vtype(cp->stderr_obj) == T_OBJ) {
+    if (vtype(cp->stderr_obj) == kTypeObject) {
       js_set(cp->js, cp->stderr_obj, "text", stderr_val);
       js_set(cp->js, cp->stderr_obj, "length", js_mknum((double)cp->stderr_seen));
     }
@@ -350,7 +350,7 @@ static void check_completion(child_process_t *cp) {
     ant_value_t close_args[2] = { exit_code_val, signal_val };
     emit_event(cp, "close", close_args, 2);
     
-    if (vtype(cp->promise) != T_UNDEF) {
+    if (vtype(cp->promise) != kTypeUndefined) {
       ant_value_t result = js_mkobj(cp->js);
       js_set(cp->js, result, "stdout", stdout_val);
       js_set(cp->js, result, "stderr", stderr_val);
@@ -455,7 +455,7 @@ static void close_child_pipe(child_process_t *cp, child_stream_kind_t kind, bool
 
   if (kind != CHILD_STREAM_STDIN) {
     ant_value_t obj = child_stream_obj(cp, kind);
-    if (vtype(obj) == T_OBJ) stream_readable_push(cp->js, obj, js_mknull(), js_mkundef());
+    if (vtype(obj) == kTypeObject) stream_readable_push(cp->js, obj, js_mknull(), js_mkundef());
   }
 
   close_child_handle(cp, (uv_handle_t *)pipe);
@@ -529,7 +529,7 @@ static void on_child_read(
       *acc_len += nread;
     }
 
-    if (vtype(obj) == T_OBJ) {
+    if (vtype(obj) == kTypeObject) {
       ant_value_t accepted = stream_readable_push(
         cp->js, obj,
         make_buffer_chunk(cp->js, buf->base, (size_t)nread),
@@ -552,7 +552,7 @@ static void on_child_read(
     if (nread != UV_EOF) {
       ant_value_t err_args[1] = { js_mkstr(cp->js, uv_strerror((int)nread), (int)strlen(uv_strerror((int)nread))) };
       if (is_stdout) emit_event(cp, "error", err_args, 1);
-      if (vtype(obj) == T_OBJ) eventemitter_emit_args(cp->js, obj, "error", err_args, 1);
+      if (vtype(obj) == kTypeObject) eventemitter_emit_args(cp->js, obj, "error", err_args, 1);
     }
 
     close_child_pipe(cp, kind, true);
@@ -577,9 +577,9 @@ static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
   
   int sig = SIGTERM;
   if (nargs > 0) {
-    if (vtype(args[0]) == T_NUM) {
+    if (vtype(args[0]) == kTypeNumber) {
       sig = (int)js_getnum(args[0]);
-    } else if (vtype(args[0]) == T_STR) {
+    } else if (vtype(args[0]) == kTypeString) {
       size_t sig_len;
       char *sig_str = js_getstr(js, args[0], &sig_len);
       if (sig_len == 7 && strncmp(sig_str, "SIGTERM", 7) == 0) sig = SIGTERM;
@@ -633,7 +633,7 @@ static void on_child_write_done(uv_write_t *req, int status) {
       write->cp->js, write->callback, NULL, 0
     );
   } else if (status < 0 && write->cp && !write->cp->suppress_stdin_errors &&
-             vtype(write->cp->stdin_obj) == T_OBJ) {
+             vtype(write->cp->stdin_obj) == kTypeObject) {
     callback_args[0] = js_mkerr(
       write->cp->js, "%s", uv_strerror(status)
     );
@@ -664,7 +664,7 @@ static ant_value_t child_write_impl(
   const char *data = NULL;
   size_t data_len = 0;
   
-  if (vtype(data_arg) == T_STR) {
+  if (vtype(data_arg) == kTypeString) {
     data = js_getstr(js, data_arg, &data_len);
     if (!data) return js_mkerr(js, "Data must be a string or Buffer");
   } else {
@@ -1007,7 +1007,7 @@ static char **parse_args_array(ant_t *js, ant_value_t arr, int *count) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     ant_value_t val = js_get(js, arr, idx);
-    if (vtype(val) == T_STR) {
+    if (vtype(val) == kTypeString) {
       size_t arg_len;
       char *arg = js_getstr(js, val, &arg_len);
       if (arg && memchr(arg, '\0', arg_len)) {
@@ -1038,15 +1038,15 @@ static ant_value_t child_process_command_value(
   char *command;
   size_t at;
 
-  if (vtype(file) != T_STR) return js_mkundef();
+  if (vtype(file) != kTypeString) return js_mkundef();
   file_text = js_getstr(js, file, &file_len);
-  argc = vtype(argv) == T_ARR ? js_arr_len(js, argv) : 0;
+  argc = vtype(argv) == kTypeArray ? js_arr_len(js, argv) : 0;
   total = file_len;
 
   for (ant_offset_t i = 0; i < argc; i++) {
     ant_value_t arg = js_arr_get(js, argv, i);
     size_t arg_len = 0;
-    if (vtype(arg) == T_STR) js_getstr(js, arg, &arg_len);
+    if (vtype(arg) == kTypeString) js_getstr(js, arg, &arg_len);
     if (arg_len > SIZE_MAX - 2 || total > SIZE_MAX - arg_len - 2)
       return js_mkundef();
     total += arg_len + 1;
@@ -1060,7 +1060,7 @@ static ant_value_t child_process_command_value(
   for (ant_offset_t i = 0; i < argc; i++) {
     ant_value_t arg = js_arr_get(js, argv, i);
     size_t arg_len = 0;
-    char *arg_text = vtype(arg) == T_STR
+    char *arg_text = vtype(arg) == kTypeString
       ? js_getstr(js, arg, &arg_len)
       : NULL;
     command[at++] = ' ';
@@ -1086,7 +1086,7 @@ static void free_args_array(char **args, int count) {
 
 static ant_value_t child_process_options_arg(ant_value_t *args, int nargs) {
   if (nargs >= 3 && is_special_object(args[2])) return args[2];
-  if (nargs >= 2 && vtype(args[1]) != T_ARR && is_special_object(args[1])) return args[1];
+  if (nargs >= 2 && vtype(args[1]) != kTypeArray && is_special_object(args[1])) return args[1];
   return js_mkundef();
 }
 
@@ -1094,7 +1094,7 @@ static char **parse_env_object(ant_t *js, ant_value_t env_obj) {
   if (!is_special_object(env_obj)) return NULL;
 
   ant_value_t keys = js_own_property_keys(js, env_obj, false, true);
-  if (is_err(keys) || vtype(keys) != T_ARR) return NULL;
+  if (is_err(keys) || vtype(keys) != kTypeArray) return NULL;
 
   ant_offset_t len = js_arr_len(js, keys);
   char **env = calloc((size_t)len + 1, sizeof(char *));
@@ -1103,7 +1103,7 @@ static char **parse_env_object(ant_t *js, ant_value_t env_obj) {
   size_t out = 0;
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t key_val = js_arr_get(js, keys, i);
-    if (vtype(key_val) != T_STR) continue;
+    if (vtype(key_val) != kTypeString) continue;
 
     size_t key_len = 0;
     char *key = js_getstr(js, key_val, &key_len);
@@ -1118,8 +1118,8 @@ static char **parse_env_object(ant_t *js, ant_value_t env_obj) {
       continue;
     }
 
-    ant_value_t value_str = vtype(value) == T_STR ? value : js_tostring_val(js, value);
-    if (is_err(value_str) || vtype(value_str) != T_STR) {
+    ant_value_t value_str = vtype(value) == kTypeString ? value : js_tostring_val(js, value);
+    if (is_err(value_str) || vtype(value_str) != kTypeString) {
       free(key_cstr);
       continue;
     }
@@ -1154,7 +1154,7 @@ static void free_env_array(char **env) {
 }
 
 static stdio_mode_t parse_stdio_mode(ant_t *js, ant_value_t val) {
-  if (vtype(val) != T_STR) return STDIO_PIPE;
+  if (vtype(val) != kTypeString) return STDIO_PIPE;
   char *s = js_getstr(js, val, NULL);
   if (strcmp(s, "inherit") == 0) return STDIO_INHERIT;
   if (strcmp(s, "ignore") == 0) return STDIO_IGNORE;
@@ -1162,7 +1162,7 @@ static stdio_mode_t parse_stdio_mode(ant_t *js, ant_value_t val) {
 }
 
 static void parse_stdio_option(ant_t *js, ant_value_t stdio_val, stdio_mode_t *modes) {
-if (vtype(stdio_val) == T_STR) {
+if (vtype(stdio_val) == kTypeString) {
   stdio_mode_t mode = parse_stdio_mode(js, stdio_val);
   for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) modes[i] = mode;
 } else if (is_special_object(stdio_val)) {
@@ -1174,7 +1174,7 @@ if (vtype(stdio_val) == T_STR) {
 
 static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -1190,10 +1190,10 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   bool detached = false;
   ant_value_t options_arg = child_process_options_arg(args, nargs);
   
-  if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
+  if (nargs >= 2 && vtype(args[1]) == kTypeArray) spawn_args = parse_args_array(js, args[1], &spawn_argc);
   if (spawn_argc < 0) {
     free(cmd_str);
-    return mkval(T_ERR, 0);
+    return mkval(kTypeError, 0);
   }
   
   stdio_mode_t stdio_modes[3] = { 
@@ -1202,7 +1202,7 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   
   if (is_special_object(options_arg)) {
     ant_value_t cwd_val = js_get(js, options_arg, "cwd");
-    if (vtype(cwd_val) == T_STR) {
+    if (vtype(cwd_val) == kTypeString) {
       size_t cwd_len;
       char *cwd_str = js_getstr(js, cwd_val, &cwd_len);
       cwd = strndup(cwd_str, cwd_len);
@@ -1367,7 +1367,7 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t callback = js_mkundef();
 
   if (nargs < 1) return js_mkerr(js, "exec() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
   if (nargs >= 2 && is_callable(args[nargs - 1])) callback = args[nargs - 1];
   
   size_t cmd_len;
@@ -1379,7 +1379,7 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   char *cwd = NULL;
   if (nargs >= 2 && is_special_object(args[1])) {
     ant_value_t cwd_val = js_get(js, args[1], "cwd");
-    if (vtype(cwd_val) == T_STR) {
+    if (vtype(cwd_val) == kTypeString) {
       size_t cwd_len;
       char *cwd_s = js_getstr(js, cwd_val, &cwd_len);
       cwd = strndup(cwd_s, cwd_len);
@@ -1518,14 +1518,14 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   ant_value_t command_val = js_get(js, ctx, "command");
   ant_value_t cb_args[3];
   bool exited_nonzero =
-    vtype(exit_code_val) == T_NUM && (int)js_getnum(exit_code_val) != 0;
-  bool was_signaled = vtype(signal_code_val) == T_STR;
+    vtype(exit_code_val) == kTypeNumber && (int)js_getnum(exit_code_val) != 0;
+  bool was_signaled = vtype(signal_code_val) == kTypeString;
 
   if (!is_callable(callback)) return js_mkundef();
 
   ant_value_t spawn_error = js_get(js, ctx, "spawnError");
   if (is_object_type(spawn_error)) {
-    if (vtype(command_val) == T_STR) js_set(js, spawn_error, "cmd", command_val);
+    if (vtype(command_val) == kTypeString) js_set(js, spawn_error, "cmd", command_val);
     js_set(js, spawn_error, "killed", js_false);
     cb_args[0] = spawn_error;
     cb_args[1] = js_mkstr(js, "", 0);
@@ -1537,10 +1537,10 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   if (exited_nonzero || was_signaled) {
     size_t command_len = 0;
     size_t stderr_len = 0;
-    char *command = vtype(command_val) == T_STR
+    char *command = vtype(command_val) == kTypeString
       ? js_getstr(js, command_val, &command_len)
       : NULL;
-    char *stderr_text = vtype(stderr_val) == T_STR
+    char *stderr_text = vtype(stderr_val) == kTypeString
       ? js_getstr(js, stderr_val, &stderr_len)
       : NULL;
     char fallback_message[256];
@@ -1596,7 +1596,7 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
       js_set(js, cb_args[0], "code", was_signaled ? js_mknull() : exit_code_val);
       js_set(js, cb_args[0], "signal", signal_val);
       js_set(js, cb_args[0], "killed", js_get(js, child, "killed"));
-      if (vtype(command_val) == T_STR) js_set(js, cb_args[0], "cmd", command_val);
+      if (vtype(command_val) == kTypeString) js_set(js, cb_args[0], "cmd", command_val);
     }
   } else cb_args[0] = js_mknull();
 
@@ -1604,7 +1604,7 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   cb_args[2] = stderr_val;
 
   ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
-  if (vtype(result) == T_ERR) log_listener_error(js, "execFile", result);
+  if (vtype(result) == kTypeError) log_listener_error(js, "execFile", result);
   return js_mkundef();
 }
 
@@ -1613,11 +1613,11 @@ static ant_value_t exec_file_promisify_callback(ant_t *js, ant_value_t *args, in
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
+  if (vtype(settled) == kTypeBool && settled == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
 
   ant_value_t promise = js_get_slot(state, SLOT_DATA);
-  if (vtype(promise) != T_PROMISE) return js_mkundef();
+  if (vtype(promise) != kTypePromise) return js_mkundef();
 
   ant_value_t stdout_val = nargs > 1 ? args[1] : js_mkstr(js, "", 0);
   ant_value_t stderr_val = nargs > 2 ? args[2] : js_mkstr(js, "", 0);
@@ -1666,7 +1666,7 @@ static ant_value_t exec_callback_promisified_call(ant_t *js, ant_value_t *args, 
   ); free(call_args);
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  bool is_settled = (vtype(settled) == T_BOOL && settled == js_true);
+  bool is_settled = (vtype(settled) == kTypeBool && settled == js_true);
   
   if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
     ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
@@ -1689,7 +1689,7 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t child;
 
   if (nargs < 1) return js_mkerr(js, "execFile() requires a file");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "File must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "File must be a string");
 
   if (nargs >= 2 && is_callable(args[nargs - 1])) {
     callback = args[nargs - 1];
@@ -1697,7 +1697,7 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   if (nargs >= 2) {
-    if (vtype(args[1]) == T_ARR) {
+    if (vtype(args[1]) == kTypeArray) {
       argv = args[1];
       if (nargs >= 3 && is_special_object(args[2])) options = args[2];
     } else if (is_special_object(args[1])) options = args[1];
@@ -1708,7 +1708,7 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   spawn_args[2] = options;
 
   child = builtin_spawn(js, spawn_args, 3);
-  if (vtype(child) != T_OBJ || !is_callable(callback)) return child;
+  if (vtype(child) != kTypeObject || !is_callable(callback)) return child;
 
   {
     child_process_t *spawned = get_child_process(child);
@@ -1733,7 +1733,7 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
 static bool child_process_plan_copy_string(
   ant_t *js, ant_value_t value, const char *description, char **out
 ) {
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", description);
     return false;
   }
@@ -1757,7 +1757,7 @@ static bool child_process_plan_copy_string(
 static bool child_process_plan_number_to_int(
   ant_value_t value, int *out
 ) {
-  if (vtype(value) != T_NUM) return false;
+  if (vtype(value) != kTypeNumber) return false;
   double number = js_getnum(value);
   if (!isfinite(number) || trunc(number) != number ||
       number < (double)INT_MIN || number > (double)INT_MAX)
@@ -1776,7 +1776,7 @@ static bool child_process_plan_apply_options(
   )) return false;
   ant_value_t redirects = js_get(js, options, "redirections");
   if (is_undefined(redirects)) return true;
-  if (vtype(redirects) != T_ARR) {
+  if (vtype(redirects) != kTypeArray) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Child process redirections must be an array");
     return false;
   }
@@ -1784,7 +1784,7 @@ static bool child_process_plan_apply_options(
     ant_value_t redirect = js_arr_get(js, redirects, i);
     ant_value_t kind_value = is_special_object(redirect)
       ? js_get(js, redirect, "kind") : js_mkundef();
-    if (vtype(kind_value) != T_NUM) {
+    if (vtype(kind_value) != kTypeNumber) {
       js_mkerr_typed(js, JS_ERR_TYPE, "Invalid child process redirection");
       return false;
     }
@@ -1816,7 +1816,7 @@ static bool child_process_plan_apply_options(
 static bool child_process_plan_add_values(
   ant_t *js, ant_process_plan_t *plan, ant_value_t values
 ) {
-  if (vtype(values) != T_ARR || js_arr_len(js, values) == 0) {
+  if (vtype(values) != kTypeArray || js_arr_len(js, values) == 0) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Process command must be a non-empty array");
     return false;
   }
@@ -1830,7 +1830,7 @@ static bool child_process_plan_add_values(
   for (size_t i = 0; i < count; i++) {
     ant_value_t value = js_arr_get(js, values, (ant_offset_t)i);
     size_t len = 0;
-    if (vtype(value) != T_STR) {
+    if (vtype(value) != kTypeString) {
       js_mkerr_typed(js, JS_ERR_TYPE, "Child process arguments must be strings");
       valid = false;
       break;
@@ -1913,7 +1913,7 @@ ant_value_t child_process_exec_file_result(
   ant_value_t values = js_mkarr(js);
   js_arr_push(js, values, file);
   
-  if (vtype(argv) == T_ARR) for (ant_offset_t i = 0; i < js_arr_len(js, argv); i++)
+  if (vtype(argv) == kTypeArray) for (ant_offset_t i = 0; i < js_arr_len(js, argv); i++)
     js_arr_push(js, values, js_arr_get(js, argv, i));
   if (!child_process_plan_apply_options(js, &plan, options) ||
       !child_process_plan_add_values(js, &plan, values)) {
@@ -1930,7 +1930,7 @@ ant_value_t child_process_pipeline_result(
   ant_value_t commands,
   ant_value_t options
 ) {
-  if (vtype(commands) != T_ARR || js_arr_len(js, commands) == 0) {
+  if (vtype(commands) != kTypeArray || js_arr_len(js, commands) == 0) {
     return ant_process_plan_rejected_result(js,
       js_mkerr(js, "pipeline requires at least one command"));
   }
@@ -1940,7 +1940,7 @@ ant_value_t child_process_pipeline_result(
   if (!child_process_plan_apply_options(js, &plan, options)) goto invalid;
   for (ant_offset_t i = 0; i < js_arr_len(js, commands); i++) {
     ant_value_t command = js_arr_get(js, commands, i);
-    if (vtype(command) == T_ARR) {
+    if (vtype(command) == kTypeArray) {
       if (!child_process_plan_add_values(js, &plan, command)) goto invalid;
     } else if (is_special_object(command)) {
       if (!child_process_plan_add_native_result(js, &plan, command)) goto invalid;
@@ -1961,7 +1961,7 @@ static bool sync_encoding_wants_string(ant_t *js, ant_value_t options_arg) {
   if (!is_special_object(options_arg)) return false;
 
   ant_value_t encoding_val = js_get(js, options_arg, "encoding");
-  if (vtype(encoding_val) != T_STR) return false;
+  if (vtype(encoding_val) != kTypeString) return false;
 
   size_t encoding_len = 0;
   char *encoding = js_getstr(js, encoding_val, &encoding_len);
@@ -1975,7 +1975,7 @@ static bool sync_value_bytes(ant_t *js, ant_value_t value, const char **out, siz
   *out = NULL;
   *len = 0;
 
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     *out = js_getstr(js, value, len);
     return *out != NULL;
   }
@@ -2002,7 +2002,7 @@ static ant_value_t sync_make_output(ant_t *js, const char *bytes, size_t len, bo
 #ifdef _WIN32
 static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -2015,15 +2015,15 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   bool use_shell = force_shell;
   ant_value_t options_arg = child_process_options_arg(args, nargs);
 
-  if (nargs >= 2 && vtype(args[1]) == T_ARR) spawn_args = parse_args_array(js, args[1], &spawn_argc);
+  if (nargs >= 2 && vtype(args[1]) == kTypeArray) spawn_args = parse_args_array(js, args[1], &spawn_argc);
   if (spawn_argc < 0) {
     free(cmd_str);
-    return mkval(T_ERR, 0);
+    return mkval(kTypeError, 0);
   }
 
   if (is_special_object(options_arg)) {
     ant_value_t input_val = js_get(js, options_arg, "input");
-    if (vtype(input_val) == T_STR) {
+    if (vtype(input_val) == kTypeString) {
       input = js_getstr(js, input_val, &input_len);
     }
     if (!use_shell) use_shell = js_truthy(js, js_get(js, options_arg, "shell"));
@@ -2436,11 +2436,11 @@ typedef struct {
 static const size_t SYNC_MAX_BUFFER_DEFAULT = 1024 * 1024;
 
 static int sync_parse_kill_signal(ant_t *js, ant_value_t value, int fallback) {
-  if (vtype(value) == T_NUM) {
+  if (vtype(value) == kTypeNumber) {
     int resolved = (int)js_getnum(value);
     return resolved > 0 ? resolved : fallback;
   }
-  if (vtype(value) != T_STR) return fallback;
+  if (vtype(value) != kTypeString) return fallback;
 
   size_t len = 0;
   char *name = js_getstr(js, value, &len);
@@ -2467,7 +2467,7 @@ static void sync_parse_options(
   if (!is_special_object(options)) return;
 
   ant_value_t cwd_val = js_get(js, options, "cwd");
-  if (vtype(cwd_val) == T_STR) {
+  if (vtype(cwd_val) == kTypeString) {
     size_t cwd_len = 0;
     char *cwd = js_getstr(js, cwd_val, &cwd_len);
     if (cwd) res->cwd = strndup(cwd, cwd_len);
@@ -2478,7 +2478,7 @@ static void sync_parse_options(
   res->env = parse_env_object(js, js_get(js, options, "env"));
 
   ant_value_t shell_val = js_get(js, options, "shell");
-  if (vtype(shell_val) == T_STR) {
+  if (vtype(shell_val) == kTypeString) {
     size_t shell_len = 0;
     char *shell = js_getstr(js, shell_val, &shell_len);
     if (shell && shell_len > 0) {
@@ -2490,13 +2490,13 @@ static void sync_parse_options(
   opts->encode_as_string = sync_encoding_wants_string(js, options);
 
   ant_value_t timeout_val = js_get(js, options, "timeout");
-  if (vtype(timeout_val) == T_NUM) {
+  if (vtype(timeout_val) == kTypeNumber) {
     double ms = js_getnum(timeout_val);
     if (ms > 0 && ms < (double)INT_MAX) opts->timeout_ms = (int)ms;
   }
 
   ant_value_t max_buffer_val = js_get(js, options, "maxBuffer");
-  if (vtype(max_buffer_val) == T_NUM) {
+  if (vtype(max_buffer_val) == kTypeNumber) {
     double bytes = js_getnum(max_buffer_val);
     if (bytes >= 0) opts->max_buffer = bytes >= (double)SIZE_MAX ? SIZE_MAX : (size_t)bytes;
   }
@@ -2615,7 +2615,7 @@ static ant_value_t sync_build_result(
 }
 static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
   size_t command_len = 0;
   char *command = js_getstr(js, args[0], &command_len);
@@ -2627,11 +2627,11 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   res.command = strndup(command, command_len);
   if (!res.command) return js_mkerr(js, "Out of memory");
 
-  if (nargs >= 2 && vtype(args[1]) == T_ARR)
+  if (nargs >= 2 && vtype(args[1]) == kTypeArray)
     res.args = parse_args_array(js, args[1], &res.arg_count);
   if (res.arg_count < 0) {
     free(res.command);
-    return mkval(T_ERR, 0);
+    return mkval(kTypeError, 0);
   }
 
   sync_opts_t opts;
@@ -2712,8 +2712,8 @@ static ant_value_t sync_result_error(
   ant_value_t status = js_get(js, result, "status");
   ant_value_t signal = js_get(js, result, "signal");
 
-  bool failed_status = vtype(status) == T_NUM && (int)js_getnum(status) != 0;
-  bool signalled = vtype(signal) == T_STR;
+  bool failed_status = vtype(status) == kTypeNumber && (int)js_getnum(status) != 0;
+  bool signalled = vtype(signal) == kTypeString;
   if (!is_object_type(spawn_error) && !failed_status && !signalled) return js_mkundef();
 
   ant_value_t stdout_val = js_get(js, result, "stdout");
@@ -2723,7 +2723,7 @@ static ant_value_t sync_result_error(
   if (is_object_type(spawn_error)) {
     ant_value_t existing = js_get(js, spawn_error, "message");
     size_t existing_len = 0;
-    char *existing_str = vtype(existing) == T_STR ? js_getstr(js, existing, &existing_len) : NULL;
+    char *existing_str = vtype(existing) == kTypeString ? js_getstr(js, existing, &existing_len) : NULL;
     snprintf(
       message, sizeof(message), "%.*s",
       (int)(existing_len < sizeof(message) - 1 ? existing_len : sizeof(message) - 1),
@@ -2731,7 +2731,7 @@ static ant_value_t sync_result_error(
     );
   } else {
     size_t command_len = 0;
-    char *command_str = vtype(command_val) == T_STR ? js_getstr(js, command_val, &command_len) : NULL;
+    char *command_str = vtype(command_val) == kTypeString ? js_getstr(js, command_val, &command_len) : NULL;
     const char *stderr_str = NULL;
     size_t stderr_len = 0;
     sync_value_bytes(js, stderr_val, &stderr_str, &stderr_len);
@@ -2762,7 +2762,7 @@ static ant_value_t sync_result_error(
 
 static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
   ant_value_t spawn_args[3];
   spawn_args[0] = args[0];
@@ -2770,11 +2770,11 @@ static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
   spawn_args[2] = nargs >= 2 ? args[1] : js_mkundef();
 
   ant_value_t result = spawn_sync_impl(js, spawn_args, 3, true);
-  if (vtype(result) != T_OBJ) return result;
+  if (vtype(result) != kTypeObject) return result;
 
   ant_value_t options = spawn_args[2];
   bool stdio_specified =
-    is_special_object(options) && vtype(js_get(js, options, "stdio")) != T_UNDEF;
+    is_special_object(options) && vtype(js_get(js, options, "stdio")) != kTypeUndefined;
 
   if (!stdio_specified) {
     const char *stderr_str = NULL;
@@ -2801,10 +2801,10 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
   ant_value_t spawn_args[3];
 
   if (nargs < 1) return js_mkerr(js, "execFileSync() requires a file");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "File must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "File must be a string");
 
   if (nargs >= 2) {
-    if (vtype(args[1]) == T_ARR) {
+    if (vtype(args[1]) == kTypeArray) {
       argv = args[1];
       if (nargs >= 3 && is_special_object(args[2])) options = args[2];
     } else if (is_special_object(args[1])) options = args[1];
@@ -2815,10 +2815,10 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
   spawn_args[2] = options;
 
   ant_value_t result = builtin_spawnSync(js, spawn_args, 3);
-  if (vtype(result) != T_OBJ) return result;
+  if (vtype(result) != kTypeObject) return result;
 
   ant_value_t command = child_process_command_value(js, args[0], argv);
-  if (vtype(command) != T_STR) command = args[0];
+  if (vtype(command) != kTypeString) command = args[0];
 
   ant_value_t error = sync_result_error(js, result, command, "execFileSync");
   if (is_object_type(error)) return js_throw(js, error);
@@ -2828,7 +2828,7 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
 
 static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Module path must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Module path must be a string");
   size_t path_len;
   
   char *path = js_getstr(js, args[0], &path_len);

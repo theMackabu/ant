@@ -150,7 +150,7 @@ typedef enum {
 
 // TODO: keep WebCrypto AlgorithmIdentifier handling aligned with supported subtle algorithms.
 static ant_value_t crypto_subtle_get_algorithm_name(ant_t *js, ant_value_t algorithm) {
-  if (vtype(algorithm) == T_STR) return js_tostring_val(js, algorithm);
+  if (vtype(algorithm) == kTypeString) return js_tostring_val(js, algorithm);
   if (is_object_type(algorithm)) {
     ant_value_t name = js_get(js, algorithm, "name");
     if (is_err(name)) return name;
@@ -378,7 +378,7 @@ static ant_value_t crypto_get_input_bytes(
   str = js_getstr(js, string_val, &str_len);
   if (!str) return js_mkerr(js, "Failed to convert hash input to string");
 
-  if (vtype(encoding_val) == T_STR) {
+  if (vtype(encoding_val) == kTypeString) {
     size_t enc_len = 0;
     const char *enc_str = js_getstr(js, encoding_val, &enc_len);
     if (enc_str) enc = crypto_parse_encoding(enc_str, enc_len);
@@ -455,7 +455,7 @@ static const EVP_MD *crypto_digest_from_algorithm(ant_t *js, ant_value_t algorit
 static const EVP_MD *crypto_hmac_digest_from_algorithm(ant_t *js, ant_value_t algorithm) {
   if (is_object_type(algorithm)) {
     ant_value_t hash = js_get(js, algorithm, "hash");
-    if (is_object_type(hash) || vtype(hash) == T_STR) {
+    if (is_object_type(hash) || vtype(hash) == kTypeString) {
       const EVP_MD *md = crypto_digest_from_algorithm(js, hash);
       if (md) return md;
     }
@@ -512,7 +512,7 @@ static ant_value_t crypto_require_hash_state(
 static ant_value_t crypto_digest_result(
   ant_t *js, const uint8_t *digest, size_t digest_len, ant_value_t encoding_val
 ) {
-  if (vtype(encoding_val) != T_STR) return crypto_make_buffer(js, digest, digest_len);
+  if (vtype(encoding_val) != kTypeString) return crypto_make_buffer(js, digest, digest_len);
 
   size_t enc_len = 0;
   const char *enc = js_getstr(js, encoding_val, &enc_len);
@@ -658,14 +658,14 @@ static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int 
   }
 
   size_t offset = 0;
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     double num = js_to_number(js, args[1]);
     if (num < 0) return js_mkerr(js, "randomFillSync offset must be non-negative");
     offset = (size_t)num;
   }
 
   size_t size = len - offset;
-  if (nargs >= 3 && vtype(args[2]) != T_UNDEF) {
+  if (nargs >= 3 && vtype(args[2]) != kTypeUndefined) {
     double num = js_to_number(js, args[2]);
     if (num < 0) return js_mkerr(js, "randomFillSync size must be non-negative");
     size = (size_t)num;
@@ -863,7 +863,7 @@ static ant_value_t crypto_make_key_object(
 }
 
 static ant_value_t crypto_subtle_import_key_impl(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 3 || vtype(args[0]) != T_STR) {
+  if (nargs < 3 || vtype(args[0]) != kTypeString) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.importKey requires format, keyData, and algorithm");
   }
 
@@ -1057,7 +1057,7 @@ static ant_value_t crypto_aes_gcm_crypt(
 
   int tag_len = 16;
   ant_value_t tag_len_val = js_get(js, algorithm, "tagLength");
-  if (vtype(tag_len_val) == T_NUM) {
+  if (vtype(tag_len_val) == kTypeNumber) {
     tag_len = (int)(js_getnum(tag_len_val) / 8.0);
     if (tag_len <= 0 || tag_len > 16) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid AES-GCM tagLength");
   }
@@ -1421,7 +1421,7 @@ static ant_value_t crypto_require_cipher_state(
 static ant_value_t crypto_cipher_bytes_result(
   ant_t *js, uint8_t *bytes, size_t len, ant_value_t encoding
 ) {
-  if (vtype(encoding) == T_STR) return crypto_digest_result(js, bytes, len, encoding);
+  if (vtype(encoding) == kTypeString) return crypto_digest_result(js, bytes, len, encoding);
   return crypto_make_buffer(js, bytes, len);
 }
 
@@ -1568,7 +1568,7 @@ static ant_value_t crypto_create_cipheriv(ant_t *js, ant_value_t *args, int narg
   const uint8_t *iv = NULL;
   size_t iv_len = 0;
   uint8_t *iv_owned = NULL;
-  if (vtype(args[2]) != T_NULL && vtype(args[2]) != T_UNDEF) {
+  if (vtype(args[2]) != kTypeNull && vtype(args[2]) != kTypeUndefined) {
     err = crypto_get_input_bytes(js, args[2], js_mkundef(), &iv, &iv_len, &iv_owned);
     if (is_err(err)) {
       if (key_owned) free(key_owned);
@@ -1691,7 +1691,7 @@ static ant_value_t js_crypto_pbkdf2_sync(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t js_crypto_pbkdf2(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 6 || (vtype(args[5]) != T_FUNC && vtype(args[5]) != T_CFUNC)) {
+  if (nargs < 6 || (vtype(args[5]) != kTypeFunction && vtype(args[5]) != kTypeBuiltin)) {
     return js_mkerr(js, "pbkdf2 requires a callback");
   }
   ant_value_t result = crypto_pbkdf2_result(js, args[0], args[1], args[2], args[3], args[4]);
@@ -1718,16 +1718,16 @@ static ant_value_t crypto_scrypt_result(ant_t *js, ant_value_t *args, int nargs,
   uint64_t N = 16384, r = 8, p = 1, maxmem = 32 * 1024 * 1024;
   if (options_index >= 0 && options_index < nargs && is_object_type(args[options_index])) {
     ant_value_t v = js_get(js, args[options_index], "N");
-    if (vtype(v) == T_UNDEF) v = js_get(js, args[options_index], "cost");
-    if (vtype(v) == T_NUM) N = (uint64_t)js_getnum(v);
+    if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "cost");
+    if (vtype(v) == kTypeNumber) N = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "r");
-    if (vtype(v) == T_UNDEF) v = js_get(js, args[options_index], "blockSize");
-    if (vtype(v) == T_NUM) r = (uint64_t)js_getnum(v);
+    if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "blockSize");
+    if (vtype(v) == kTypeNumber) r = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "p");
-    if (vtype(v) == T_UNDEF) v = js_get(js, args[options_index], "parallelization");
-    if (vtype(v) == T_NUM) p = (uint64_t)js_getnum(v);
+    if (vtype(v) == kTypeUndefined) v = js_get(js, args[options_index], "parallelization");
+    if (vtype(v) == kTypeNumber) p = (uint64_t)js_getnum(v);
     v = js_get(js, args[options_index], "maxmem");
-    if (vtype(v) == T_NUM) maxmem = (uint64_t)js_getnum(v);
+    if (vtype(v) == kTypeNumber) maxmem = (uint64_t)js_getnum(v);
   }
 
   uint8_t *out = malloc((size_t)keylen ? (size_t)keylen : 1);
@@ -1760,8 +1760,8 @@ static ant_value_t js_crypto_scrypt_sync(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t js_crypto_scrypt(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 4) return js_mkerr(js, "scrypt requires a callback");
-  int callback_index = (vtype(args[3]) == T_FUNC || vtype(args[3]) == T_CFUNC) ? 3 : 4;
-  if (callback_index >= nargs || (vtype(args[callback_index]) != T_FUNC && vtype(args[callback_index]) != T_CFUNC)) {
+  int callback_index = (vtype(args[3]) == kTypeFunction || vtype(args[3]) == kTypeBuiltin) ? 3 : 4;
+  if (callback_index >= nargs || (vtype(args[callback_index]) != kTypeFunction && vtype(args[callback_index]) != kTypeBuiltin)) {
     return js_mkerr(js, "scrypt requires a callback");
   }
   ant_value_t result = crypto_scrypt_result(js, args, nargs, callback_index == 3 ? -1 : 3);

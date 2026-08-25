@@ -87,7 +87,7 @@ static bool byte_buf_append(byte_buf_t *b, const uint8_t *data, size_t len) {
 static ant_value_t process_blob_part(ant_t *js, byte_buf_t *buf, ant_value_t part) {
   uint8_t t = vtype(part);
 
-  if (t == T_TYPEDARRAY) {
+  if (t == kTypeTypedArray) {
     TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(part);
     if (!ta || !ta->buffer) return js_mkundef();
     if (!byte_buf_append(buf, ta->buffer->data + ta->byte_offset, ta->byte_length))
@@ -95,7 +95,7 @@ static ant_value_t process_blob_part(ant_t *js, byte_buf_t *buf, ant_value_t par
     return js_mkundef();
   }
 
-  if (t == T_OBJ) {
+  if (t == kTypeObject) {
     TypedArrayData *ta = buffer_get_typedarray_data(part);
     if (ta && ta->buffer && !ta->buffer->is_detached) {
       if (!byte_buf_append(buf, ta->buffer->data + ta->byte_offset, ta->byte_length)) return js_mkerr(js, "out of memory");
@@ -113,7 +113,7 @@ static ant_value_t process_blob_part(ant_t *js, byte_buf_t *buf, ant_value_t par
     }
   }
 
-  ant_value_t str = (t == T_STR) ? part : js_tostring_val(js, part);
+  ant_value_t str = (t == kTypeString) ? part : js_tostring_val(js, part);
   if (is_err(str)) return str;
 
   size_t len;
@@ -127,9 +127,9 @@ static ant_value_t process_blob_part(ant_t *js, byte_buf_t *buf, ant_value_t par
 
 static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t parts) {
   uint8_t t = vtype(parts);
-  if (t == T_UNDEF || t == T_NULL) return js_mkundef();
+  if (t == kTypeUndefined || t == kTypeNull) return js_mkundef();
 
-  if (t != T_OBJ && t != T_ARR && t != T_FUNC)
+  if (t != kTypeObject && t != kTypeArray && t != kTypeFunction)
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
 
@@ -237,7 +237,7 @@ static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
   size_t blob_size = bd ? bd->size : 0;
 
   ssize_t start = 0;
-  if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
+  if (nargs >= 1 && vtype(args[0]) != kTypeUndefined) {
     double d = js_to_number(js, args[0]);
     start = (ssize_t)d;
     if (start < 0) start = (ssize_t)blob_size + start;
@@ -246,7 +246,7 @@ static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ssize_t end = (ssize_t)blob_size;
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     double d = js_to_number(js, args[1]);
     end = (ssize_t)d;
     if (end < 0) end = (ssize_t)blob_size + end;
@@ -261,9 +261,9 @@ static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
 
   const char *new_type = (bd && bd->type) ? bd->type : "";
   char *type_owned = NULL;
-  if (nargs >= 3 && vtype(args[2]) != T_UNDEF) {
+  if (nargs >= 3 && vtype(args[2]) != kTypeUndefined) {
     ant_value_t tv = args[2];
-    if (vtype(tv) != T_STR) { tv = js_tostring_val(js, tv); if (is_err(tv)) return tv; }
+    if (vtype(tv) != kTypeString) { tv = js_tostring_val(js, tv); if (is_err(tv)) return tv; }
     type_owned = normalize_mime_type(js_getstr(js, tv, NULL));
     new_type = type_owned;
   }
@@ -295,14 +295,14 @@ static ant_value_t js_blob_stream(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Blob constructor requires 'new'");
 
   byte_buf_t buf = {NULL, 0, 0};
 
-  if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
+  if (nargs >= 1 && vtype(args[0]) != kTypeUndefined) {
     uint8_t pt = vtype(args[0]);
-    if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC)
+    if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction)
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
     ant_value_t r = process_blob_parts(js, &buf, args[0]);
@@ -312,9 +312,9 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   const char *type_str = "";
   char *type_owned = NULL;
 
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF && vtype(args[1]) != T_NULL) {
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined && vtype(args[1]) != kTypeNull) {
     uint8_t ot = vtype(args[1]);
-    if (ot != T_OBJ && ot != T_ARR && ot != T_FUNC && ot != T_CFUNC) {
+    if (ot != kTypeObject && ot != kTypeArray && ot != kTypeFunction && ot != kTypeBuiltin) {
       free(buf.buf);
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'Blob': The 'options' argument is not an object.");
@@ -322,8 +322,8 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
     // access "endings" before "type" per lexicographic order (WPT requirement)
     (void)js_get(js, args[1], "endings");
     ant_value_t type_v = js_get(js, args[1], "type");
-    if (vtype(type_v) != T_UNDEF) {
-      if (vtype(type_v) != T_STR) {
+    if (vtype(type_v) != kTypeUndefined) {
+      if (vtype(type_v) != kTypeString) {
         type_v = js_tostring_val(js, type_v);
         if (is_err(type_v)) { free(buf.buf); return type_v; }
       }
@@ -348,16 +348,16 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "File constructor requires 'new'");
   if (nargs < 2)
     return js_mkerr_typed(js, JS_ERR_TYPE, "File constructor requires at least 2 arguments");
 
   byte_buf_t buf = {NULL, 0, 0};
 
-  if (vtype(args[0]) != T_UNDEF) {
+  if (vtype(args[0]) != kTypeUndefined) {
     uint8_t pt = vtype(args[0]);
-    if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
+    if (pt != kTypeObject && pt != kTypeArray && pt != kTypeFunction) {
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Failed to construct 'File': The provided value cannot be converted to a sequence.");
     }
@@ -366,7 +366,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t name_v = args[1];
-  if (vtype(name_v) != T_STR) {
+  if (vtype(name_v) != kTypeString) {
     name_v = js_tostring_val(js, name_v);
     if (is_err(name_v)) { free(buf.buf); return name_v; }
   }
@@ -379,13 +379,13 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   clock_gettime(CLOCK_REALTIME, &ts);
   int64_t last_modified = (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000);
 
-  if (nargs >= 3 && vtype(args[2]) != T_UNDEF && vtype(args[2]) != T_NULL) {
+  if (nargs >= 3 && vtype(args[2]) != kTypeUndefined && vtype(args[2]) != kTypeNull) {
     ant_value_t opts = args[2];
     uint8_t ot = vtype(opts);
-    if (ot == T_OBJ || ot == T_ARR) {
+    if (ot == kTypeObject || ot == kTypeArray) {
       ant_value_t type_v = js_get(js, opts, "type");
-      if (vtype(type_v) != T_UNDEF) {
-        if (vtype(type_v) != T_STR) {
+      if (vtype(type_v) != kTypeUndefined) {
+        if (vtype(type_v) != kTypeString) {
           type_v = js_tostring_val(js, type_v);
           if (is_err(type_v)) { free(buf.buf); return type_v; }
         }
@@ -393,7 +393,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
         type_str = type_owned;
       }
       ant_value_t lm_v = js_get(js, opts, "lastModified");
-      if (vtype(lm_v) != T_UNDEF) {
+      if (vtype(lm_v) != kTypeUndefined) {
         double d = js_to_number(js, lm_v);
         if (d == d) last_modified = (int64_t)d;
       }

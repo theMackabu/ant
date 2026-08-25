@@ -72,18 +72,18 @@ static bool ser_val(ant_t *js, enc_t *e, ant_value_t val, int depth) {
   if (depth > 64) return false;
   uint8_t t = vtype(val);
 
-  if (t == T_UNDEF) return enc_u8(e, 'U');
-  if (t == T_NULL)  return enc_u8(e, 'N');
-  if (t == T_BOOL)  return enc_u8(e, (val == js_true) ? 'T' : 'F');
+  if (t == kTypeUndefined) return enc_u8(e, 'U');
+  if (t == kTypeNull)  return enc_u8(e, 'N');
+  if (t == kTypeBool)  return enc_u8(e, (val == js_true) ? 'T' : 'F');
 
-  if (t == T_NUM) {
+  if (t == kTypeNumber) {
     double d = js_getnum(val);
     if (isnan(d)) return enc_u8(e, 'Z');
     if (!enc_u8(e, 'D')) return false;
     return enc_bytes(e, &d, 8);
   }
 
-  if (t == T_STR) {
+  if (t == kTypeString) {
     size_t slen;
     const char *s = js_getstr(js, val, &slen);
     if (!s) { s = ""; slen = 0; }
@@ -92,7 +92,7 @@ static bool ser_val(ant_t *js, enc_t *e, ant_value_t val, int depth) {
     return enc_bytes(e, s, slen);
   }
 
-  if (t == T_ARR) {
+  if (t == kTypeArray) {
     ant_offset_t n = js_arr_len(js, val);
     if (!enc_u8(e, 'A'))           return false;
     if (!enc_u32(e, (uint32_t)n))  return false;
@@ -102,7 +102,7 @@ static bool ser_val(ant_t *js, enc_t *e, ant_value_t val, int depth) {
     return true;
   }
 
-  if (t == T_OBJ) {
+  if (t == kTypeObject) {
     uint32_t count = 0;
     ant_iter_t it = js_prop_iter_begin(js, val);
     const char *k; size_t klen; ant_value_t v;

@@ -136,7 +136,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
   l_next:
   if (!is_tagged(v)) goto l_pop;
   uint8_t t = vtype_tagged(v);
-  if (t != T_STR) goto l_pop;
+  if (t != kTypeString) goto l_pop;
 
   uintptr_t tag = (uintptr_t)(vdata(v) & STR_HEAP_TAG_MASK);
   uintptr_t data = (uintptr_t)vptr_masked(v, STR_HEAP_TAG_MASK);
@@ -150,7 +150,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
     if (!gc_ropes_contains(js, rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) goto l_pop;
     if (!gc_ropes_mark(js, rope)) goto l_pop;
 
-    if (vtype(rope->cached) == T_STR) {
+    if (vtype(rope->cached) == kTypeString) {
       v = rope->cached;
       goto l_next;
     }
@@ -192,7 +192,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 }
 
 static void gc_mark_flat_str(ant_t *js, ant_value_t value) {
-  if (!is_tagged(value) || vtype(value) != T_STR) return;
+  if (!is_tagged(value) || vtype(value) != kTypeString) return;
   if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return;
   const void *ptr = vptr_masked(value, STR_HEAP_TAG_MASK);
   if (ptr) gc_strings_mark(js, ptr);

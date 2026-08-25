@@ -8,22 +8,27 @@ Ant.typeof = function (t) {
   const value = Ant.raw.typeof(t);
 
   const types = {
-    T_OBJ: 'object',
-    T_STR: 'string',
-    T_ARR: 'array',
-    T_FUNC: 'function',
-    T_CFUNC: 'cfunc',
-    T_PROMISE: 'promise',
-    T_GENERATOR: 'generator',
-    T_UNDEF: 'undefined',
-    T_NULL: 'null',
-    T_BOOL: 'boolean',
-    T_NUM: 'number',
-    T_BIGINT: 'bigint',
-    T_SYMBOL: 'symbol',
-    T_TYPEDARRAY: 'typedarray',
-    T_ERR: 'err',
-    T_NTARG: 'ntarg'
+    kTypeObject: 'object',
+    kTypeString: 'string',
+    kTypeArray: 'array',
+    kTypeFunction: 'function',
+    kTypeBuiltin: 'cfunc',
+    kTypePromise: 'promise',
+    kTypeGenerator: 'generator',
+    kTypeUndefined: 'undefined',
+    kTypeNull: 'null',
+    kTypeBool: 'boolean',
+    kTypeNumber: 'number',
+    kTypeBigInt: 'bigint',
+    kTypeSymbol: 'symbol',
+    kTypeTypedArray: 'typedarray',
+    kTypeError: 'err',
+    kTypeFunctionInfo: 'functioninfo',
+    kTypeMap: 'map',
+    kTypeSet: 'set',
+    kTypeWeakMap: 'weakmap',
+    kTypeWeakSet: 'weakset',
+    kTypeSourceCode: 'sourcecode'
   } as const;
 
   const names = Object.values(types);

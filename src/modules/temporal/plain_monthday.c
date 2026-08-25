@@ -9,7 +9,7 @@ static bool temporal_plain_monthday_from_value(
   PlainMonthDay *monthday = is_object_type(value)
     ? js_get_native(value, TEMPORAL_PLAIN_MONTHDAY_TAG) : NULL;
   if (monthday) { *out = temporal_rs_PlainMonthDay_clone(monthday); return true; }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view; ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
     temporal_rs_PlainMonthDay_from_utf8_result result = temporal_rs_PlainMonthDay_from_utf8(view);
@@ -26,7 +26,7 @@ static bool temporal_plain_monthday_from_value(
 }
 
 static ant_value_t temporal_plain_monthday_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.PlainMonthDay");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.PlainMonthDay");
   int64_t month = 0, day = 0, reference_year = 1972; ant_value_t err = js_mkundef();
   if ((nargs > 0 && !temporal_integer(js, args[0], 0, &month, &err)) ||
       (nargs > 1 && !temporal_integer(js, args[1], 0, &day, &err))) return err;
@@ -48,7 +48,7 @@ static ant_value_t temporal_plain_monthday_ctor(ant_t *js, ant_value_t *args, in
 static ant_value_t temporal_plain_monthday_from(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.PlainMonthDay.from requires an argument");
   ant_value_t err = js_mkundef(); ArithmeticOverflow_option overflow = {0};
-  if (vtype(args[0]) == T_STR || js_get_native(args[0], TEMPORAL_PLAIN_MONTHDAY_TAG)) {
+  if (vtype(args[0]) == kTypeString || js_get_native(args[0], TEMPORAL_PLAIN_MONTHDAY_TAG)) {
     PlainMonthDay *value;
     if (!temporal_plain_monthday_from_value(js, args[0], &value, &err)) return err;
     if (!temporal_overflow_option(js, nargs > 1 ? args[1] : js_mkundef(), &overflow, &err)) {

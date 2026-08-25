@@ -17,8 +17,8 @@
 #include "modules/symbol.h"
 
 static bool can_be_held_weakly(ant_value_t value) {
-  if (is_object_type(value) || vtype(value) == T_CFUNC) return true;
-  return vtype(value) == T_SYMBOL && js_sym_key(value) == NULL;
+  if (is_object_type(value) || vtype(value) == kTypeBuiltin) return true;
+  return vtype(value) == kTypeSymbol && js_sym_key(value) == NULL;
 }
 
 typedef struct {
@@ -28,7 +28,7 @@ typedef struct {
 } collection_key_t;
 
 static ant_value_t normalize_map_key(ant_value_t key) {
-  if (vtype(key) == T_NUM) {
+  if (vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d == 0.0 && signbit(d)) return js_mknum(0.0);
   }
@@ -59,7 +59,7 @@ static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *
   ant_value_t key = normalize_map_key(input);
   uint8_t tag = (uint8_t)vtype(key);
 
-  if (vtype(key) == T_STR) {
+  if (vtype(key) == kTypeString) {
     size_t str_len = 0;
     const char *str = js_getstr(js, key, &str_len);
     out->len = 1 + str_len;
@@ -69,7 +69,7 @@ static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *
     return true;
   }
 
-  if (vtype(key) == T_BIGINT) {
+  if (vtype(key) == kTypeBigInt) {
     size_t str_len = bigint_digits_len(js, key) + (bigint_is_negative(js, key) ? 1 : 0);
     out->len = 1 + str_len;
     if (!collection_key_reserve(out, out->len)) return false;
@@ -189,13 +189,13 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
 
 map_entry_t **get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || ptr->type_tag != T_MAP) return NULL;
+  if (!ptr || ptr->type_tag != kTypeMap) return NULL;
   return (map_entry_t **)js_get_native(obj, MAP_NATIVE_TAG);
 }
 
 set_entry_t **get_set_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || ptr->type_tag != T_SET) return NULL;
+  if (!ptr || ptr->type_tag != kTypeSet) return NULL;
   return (set_entry_t **)js_get_native(obj, SET_NATIVE_TAG);
 }
 
@@ -203,7 +203,7 @@ static weakmap_table_t *get_weakmap_from_obj(
   ant_value_t obj, ant_object_t **object_out
 ) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
+  if (!ptr || ptr->type_tag != kTypeWeakMap) return NULL;
   if (object_out) *object_out = ptr;
   return (weakmap_table_t *)js_get_native(obj, WEAKMAP_NATIVE_TAG);
 }
@@ -347,7 +347,7 @@ ant_value_t collections_make_weakmap(ant_t *js) {
   weakmap_table_t *table = ant_calloc(sizeof(*table));
   if (!table) return js_mkerr(js, "out of memory");
 
-  js_obj_ptr(weakmap)->type_tag = T_WEAKMAP;
+  js_obj_ptr(weakmap)->type_tag = kTypeWeakMap;
   ant_value_t prototype = js_get_ctor_proto(js, "WeakMap", 7);
   if (is_special_object(prototype)) js_set_proto_init(weakmap, prototype);
   js_set_native(weakmap, table, WEAKMAP_NATIVE_TAG);
@@ -393,7 +393,7 @@ bool collections_weakmap_set(
 
 static weakset_entry_t **get_weakset_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
-  if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;
+  if (!ptr || ptr->type_tag != kTypeWeakSet) return NULL;
   return (weakset_entry_t **)js_get_native(obj, WEAKSET_NATIVE_TAG);
 }
 
@@ -532,7 +532,7 @@ static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(this_val);
   
-  if (nargs < 1 || vtype(args[0]) != T_FUNC)
+  if (nargs < 1 || vtype(args[0]) != kTypeFunction)
     return js_mkerr(js, "forEach requires a callback function");
   
   ant_value_t callback = args[0];
@@ -736,7 +736,7 @@ static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(this_val);
   
-  if (nargs < 1 || vtype(args[0]) != T_FUNC)
+  if (nargs < 1 || vtype(args[0]) != kTypeFunction)
     return js_mkerr(js, "forEach requires a callback function");
   
   ant_value_t callback = args[0];
@@ -756,7 +756,7 @@ static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t make_set_result(ant_t *js, set_entry_t ***out_set) {
   ant_value_t set_obj = js_mkobj(js);
   if (is_err(set_obj)) return set_obj;
-  js_obj_ptr(set_obj)->type_tag = T_SET;
+  js_obj_ptr(set_obj)->type_tag = kTypeSet;
 
   ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
   if (is_special_object(set_proto)) js_set_proto_init(set_obj, set_proto);
@@ -812,7 +812,7 @@ static ant_value_t get_set_record(ant_t *js, ant_value_t value, const char *meth
   ant_value_t size = js_getprop_fallback(js, value, "size");
   if (is_err(size)) return size;
   
-  if (vtype(size) == T_BIGINT || vtype(size) == T_SYMBOL)
+  if (vtype(size) == kTypeBigInt || vtype(size) == kTypeSymbol)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Set.%s() requires a numeric size", method);
   double num_size = js_to_number(js, size);
   if (isnan(num_size))
@@ -1314,14 +1314,14 @@ static void weakref_finalize(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakRef constructor requires 'new'");
 
   if (nargs < 1 || !can_be_held_weakly(args[0]))
     return js_mkerr(js, "WeakRef target must be an object");
   
   ant_value_t wr_obj = js->this_val;
-  if (vtype(wr_obj) != T_OBJ) wr_obj = js_mkobj(js);
+  if (vtype(wr_obj) != kTypeObject) wr_obj = js_mkobj(js);
   if (is_err(wr_obj)) return wr_obj;
 
   ant_value_t wr_proto = js_get_ctor_proto(js, "WeakRef", 7);
@@ -1333,7 +1333,7 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   if (!state) return js_mkerr(js, "out of memory");
   state->target = args[0];
 
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
     js_set_slot(wr_obj, SLOT_CTOR, js->new_target);
   js_set_native(wr_obj, state, WEAKREF_NATIVE_TAG);
   js_set_finalizer(wr_obj, weakref_finalize);
@@ -1345,7 +1345,7 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  weakref_state_t *state = vtype(this_val) == T_OBJ 
+  weakref_state_t *state = vtype(this_val) == kTypeObject
     ? js_get_native(this_val, WEAKREF_NATIVE_TAG) : NULL;
     
   if (!state) return js_mkerr_typed(
@@ -1354,13 +1354,13 @@ static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
   );
 
   ant_value_t target = state->target;
-  if (vtype(target) != T_UNDEF) gc_weak_keep_alive(js, target);
+  if (vtype(target) != kTypeUndefined) gc_weak_keep_alive(js, target);
   
   return target;
 }
 
 static ant_value_t builtin_FinalizationRegistry(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC)) {
+  if (nargs < 1 || (vtype(args[0]) != kTypeFunction && vtype(args[0]) != kTypeBuiltin)) {
     return js_mkerr(js, "FinalizationRegistry callback must be a function");
   }
   
@@ -1376,9 +1376,9 @@ static ant_value_t builtin_FinalizationRegistry(ant_t *js, ant_value_t *args, in
 
 static ant_value_t finreg_register(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  if (vtype(this_val) != T_OBJ) return js_mkundef();
+  if (vtype(this_val) != kTypeObject) return js_mkundef();
   
-  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+  if (nargs < 1 || vtype(args[0]) != kTypeObject) {
     return js_mkerr(js, "FinalizationRegistry.register target must be an object");
   }
   
@@ -1386,12 +1386,12 @@ static ant_value_t finreg_register(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t held_value = nargs > 1 ? args[1] : js_mkundef();
   ant_value_t unregister_token = nargs > 2 ? args[2] : js_mkundef();
   
-  if (vdata(target) == vdata(held_value) && vtype(held_value) == T_OBJ) {
+  if (vdata(target) == vdata(held_value) && vtype(held_value) == kTypeObject) {
     return js_mkerr(js, "target and held value must not be the same");
   }
   
   ant_value_t registrations = js_get_slot(this_val, SLOT_MAP);
-  if (vtype(registrations) != T_ARR) return js_mkundef();
+  if (vtype(registrations) != kTypeArray) return js_mkundef();
   
   ant_value_t entry = js_mkarr(js);
   ant_offset_t len = js_arr_len(js, registrations);
@@ -1414,24 +1414,24 @@ static ant_value_t finreg_register(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t finreg_unregister(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
-  if (vtype(this_val) != T_OBJ) return js_false;
+  if (vtype(this_val) != kTypeObject) return js_false;
   
-  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+  if (nargs < 1 || vtype(args[0]) != kTypeObject) {
     return js_mkerr(js, "FinalizationRegistry.unregister token must be an object");
   }
   
   ant_value_t token = args[0];
   ant_value_t registrations = js_get_slot(this_val, SLOT_MAP);
-  if (vtype(registrations) != T_ARR) return js_false;
+  if (vtype(registrations) != kTypeArray) return js_false;
   
   ant_offset_t len = js_arr_len(js, registrations);
   bool removed = false;
   
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t entry = js_arr_get(js, registrations, i);
-    if (vtype(entry) != T_ARR) continue;
+    if (vtype(entry) != kTypeArray) continue;
     ant_value_t entry_token = js_arr_get(js, entry, 2);
-    if (vtype(entry_token) == T_OBJ && vdata(entry_token) == vdata(token)) {
+    if (vtype(entry_token) == kTypeObject && vdata(entry_token) == vdata(token)) {
       char idx[16];
       size_t idx_len = uint_to_str(idx, sizeof(idx), i);
       js_setprop(js, registrations, js_mkstr(js, idx, idx_len), js_mkundef());
@@ -1448,11 +1448,11 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t items = args[0];
   ant_value_t callback = args[1];
   
-  if (vtype(callback) != T_FUNC && vtype(callback) != T_CFUNC)
+  if (vtype(callback) != kTypeFunction && vtype(callback) != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
   
   ant_value_t map_obj = js_mkobj(js);
-  js_obj_ptr(map_obj)->type_tag = T_MAP;
+  js_obj_ptr(map_obj)->type_tag = kTypeMap;
   
   ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
   if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
@@ -1488,7 +1488,7 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static bool is_original_collection_adder(ant_value_t adder, ant_cfunc_t fn) {
-  return vtype(adder) == T_CFUNC && js_cfunc_same_entrypoint(adder, fn);
+  return vtype(adder) == kTypeBuiltin && js_cfunc_same_entrypoint(adder, fn);
 }
 
 static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_entry_t **map_head, ant_value_t iterable) {
@@ -1509,7 +1509,7 @@ static ant_value_t map_init_from_iterable(ant_t *js, ant_value_t map_obj, map_en
   
   while (js_iter_next(js, &it, &entry)) {
     uint8_t entry_t = vtype(entry);
-    if (entry_t != T_ARR && entry_t != T_OBJ) {
+    if (entry_t != kTypeArray && entry_t != kTypeObject) {
       result = js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must be pair sequences");
       goto close_iter;
     }
@@ -1599,7 +1599,7 @@ static ant_value_t weakmap_init_from_iterable(
   
   while (js_iter_next(js, &it, &entry)) {
     uint8_t entry_t = vtype(entry);
-    if (entry_t != T_ARR && entry_t != T_OBJ) {
+    if (entry_t != kTypeArray && entry_t != kTypeObject) {
       result = js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must be pair sequences");
       goto close_iter;
     }
@@ -1686,14 +1686,14 @@ close_iter:
 }
 
 static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor requires 'new'");
   }
   
   ant_value_t map_obj = js->this_val;
-  if (vtype(map_obj) != T_OBJ) map_obj = js_mkobj(js);
+  if (vtype(map_obj) != kTypeObject) map_obj = js_mkobj(js);
   if (is_err(map_obj)) return map_obj;
-  js_obj_ptr(map_obj)->type_tag = T_MAP;
+  js_obj_ptr(map_obj)->type_tag = kTypeMap;
   
   ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, map_proto);
@@ -1704,11 +1704,11 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
     js_set_slot(map_obj, SLOT_CTOR, js->new_target);
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
   
-  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return map_obj;
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return map_obj;
   ant_value_t init_result = map_init_from_iterable(js, map_obj, map_head, args[0]);
   if (is_err(init_result)) return init_result;
   
@@ -1716,14 +1716,14 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor requires 'new'");
   }
   
   ant_value_t set_obj = js->this_val;
-  if (vtype(set_obj) != T_OBJ) set_obj = js_mkobj(js);
+  if (vtype(set_obj) != kTypeObject) set_obj = js_mkobj(js);
   if (is_err(set_obj)) return set_obj;
-  js_obj_ptr(set_obj)->type_tag = T_SET;
+  js_obj_ptr(set_obj)->type_tag = kTypeSet;
   
   ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, set_proto);
@@ -1734,11 +1734,11 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
     js_set_slot(set_obj, SLOT_CTOR, js->new_target);
   js_set_native(set_obj, set_head, SET_NATIVE_TAG);
   
-  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return set_obj;
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return set_obj;
   ant_value_t init_result = set_init_from_iterable(js, set_obj, set_head, args[0]);
   if (is_err(init_result)) return init_result;
   
@@ -1746,14 +1746,14 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor requires 'new'");
   }
   
   ant_value_t wm_obj = js->this_val;
-  if (vtype(wm_obj) != T_OBJ) wm_obj = js_mkobj(js);
+  if (vtype(wm_obj) != kTypeObject) wm_obj = js_mkobj(js);
   if (is_err(wm_obj)) return wm_obj;
-  js_obj_ptr(wm_obj)->type_tag = T_WEAKMAP;
+  js_obj_ptr(wm_obj)->type_tag = kTypeWeakMap;
   
   ant_value_t wm_proto = js_get_ctor_proto(js, "WeakMap", 7);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, wm_proto);
@@ -1763,12 +1763,12 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   weakmap_table_t *table = ant_calloc(sizeof(*table));
   if (!table) return js_mkerr(js, "out of memory");
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
     js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
   js_set_native(wm_obj, table, WEAKMAP_NATIVE_TAG);
   gc_weak_register(js, js_obj_ptr(wm_obj));
   
-  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return wm_obj;
   ant_value_t init_result = weakmap_init_from_iterable(
     js, wm_obj, table, args[0]
   );
@@ -1778,14 +1778,14 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor requires 'new'");
   }
   
   ant_value_t ws_obj = js->this_val;
-  if (vtype(ws_obj) != T_OBJ) ws_obj = js_mkobj(js);
+  if (vtype(ws_obj) != kTypeObject) ws_obj = js_mkobj(js);
   if (is_err(ws_obj)) return ws_obj;
-  js_obj_ptr(ws_obj)->type_tag = T_WEAKSET;
+  js_obj_ptr(ws_obj)->type_tag = kTypeWeakSet;
   
   ant_value_t ws_proto = js_get_ctor_proto(js, "WeakSet", 7);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, ws_proto);
@@ -1796,12 +1796,12 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   if (!ws_head) return js_mkerr(js, "out of memory");
   *ws_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
+  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
     js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
   js_set_native(ws_obj, ws_head, WEAKSET_NATIVE_TAG);
   gc_weak_register(js, js_obj_ptr(ws_obj));
   
-  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
+  if (nargs == 0 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return ws_obj;
   ant_value_t init_result = weakset_init_from_iterable(js, ws_obj, ws_head, args[0]);
   if (is_err(init_result)) return init_result;
   

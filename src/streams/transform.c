@@ -16,7 +16,7 @@
 #include "streams/writable.h"
 
 static inline bool ts_has_stream_shape(ant_value_t obj) {
-  return vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+  return vtype(js_get_slot(obj, SLOT_DATA)) == kTypeNumber
     && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES))
     && ws_is_stream(js_get_slot(obj, SLOT_CTOR));
 }
@@ -25,7 +25,7 @@ static inline bool ts_has_controller_shape(ant_value_t obj) {
   ant_value_t ts_obj = js_get_slot(obj, SLOT_DATA);
   return is_object_type(ts_obj)
     && js_check_brand(ts_obj, BRAND_TRANSFORM_STREAM)
-    && vtype(js_get_slot(ts_obj, SLOT_DATA)) == T_NUM
+    && vtype(js_get_slot(ts_obj, SLOT_DATA)) == kTypeNumber
     && js_get_slot(ts_obj, SLOT_DEFAULT) == obj;
 }
 
@@ -202,7 +202,7 @@ static void ts_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant
 
   ant_value_t promise = val;
   GC_ROOT_PIN(js, promise);
-  if (vtype(promise) != T_PROMISE) {
+  if (vtype(promise) != kTypePromise) {
     promise = js_mkpromise(js);
     GC_ROOT_PIN(js, promise);
     js_resolve_promise(js, promise, val);
@@ -227,7 +227,7 @@ static void ts_error(ant_t *js, ant_value_t ts_obj, ant_value_t e) {
 
   if (ts_get_backpressure(ts_obj)) {
     ant_value_t bp = ts_bp_promise(ts_obj);
-    if (vtype(bp) == T_PROMISE) js_resolve_promise(js, bp, js_mkundef());
+    if (vtype(bp) == kTypePromise) js_resolve_promise(js, bp, js_mkundef());
     ts_set_bp_flag(ts_obj, false);
   }
 }
@@ -243,7 +243,7 @@ static void ts_error_writable_and_unblock_write(ant_t *js, ant_value_t ts_obj, a
 
   if (ts_get_backpressure(ts_obj)) {
     ant_value_t bp = ts_bp_promise(ts_obj);
-    if (vtype(bp) == T_PROMISE) js_resolve_promise(js, bp, js_mkundef());
+    if (vtype(bp) == kTypePromise) js_resolve_promise(js, bp, js_mkundef());
     ts_set_bp_flag(ts_obj, false);
   }
 }
@@ -251,7 +251,7 @@ static void ts_error_writable_and_unblock_write(ant_t *js, ant_value_t ts_obj, a
 static void ts_set_backpressure(ant_t *js, ant_value_t ts_obj, bool backpressure) {
   if (ts_get_backpressure(ts_obj)) {
     ant_value_t bp = ts_bp_promise(ts_obj);
-    if (vtype(bp) == T_PROMISE) js_resolve_promise(js, bp, js_mkundef());
+    if (vtype(bp) == kTypePromise) js_resolve_promise(js, bp, js_mkundef());
   }
   ant_value_t new_bp = js_mkpromise(js);
   js_set_slot_wb(js, ts_obj, SLOT_AUX, new_bp);
@@ -283,7 +283,7 @@ ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) 
 
 void ts_ctrl_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t e) {
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
-  if (vtype(ts_cancel_promise(ts_obj)) == T_PROMISE && ts_cancel_has_user_handler(ts_obj))
+  if (vtype(ts_cancel_promise(ts_obj)) == kTypePromise && ts_cancel_has_user_handler(ts_obj))
     js_set_slot_wb(js, ts_obj, SLOT_RS_SIZE, e);
   ts_error(js, ts_obj, e);
   ts_error_writable_and_unblock_write(js, ts_obj, e);
@@ -378,7 +378,7 @@ static ant_value_t ts_cancel_base_reject(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_value_t cancel_fn, ant_value_t reason, bool started_by_abort) {
   ant_value_t existing = ts_cancel_promise(ts_obj);
-  if (vtype(existing) == T_PROMISE) return existing;
+  if (vtype(existing) == kTypePromise) return existing;
 
   ant_value_t p = js_mkpromise(js);
   promise_mark_handled(p);
@@ -518,13 +518,13 @@ static ant_value_t ts_sink_write_bp_resolve(ant_t *js, ant_value_t *args, int na
     if (!is_object_type(err))
       err = js_make_error_silent(js, JS_ERR_TYPE, "WritableStream is in erroring state");
     ant_value_t fp = ts_ctrl_finish_promise(ctrl_obj);
-    if (vtype(fp) == T_PROMISE) js_reject_promise(js, fp, err);
+    if (vtype(fp) == kTypePromise) js_reject_promise(js, fp, err);
     return js_mkundef();
   }
 
   ant_value_t transform_p = ts_ctrl_perform_transform(js, ctrl_obj, chunk);
   ant_value_t fp = ts_ctrl_finish_promise(ctrl_obj);
-  if (vtype(fp) == T_PROMISE) {
+  if (vtype(fp) == kTypePromise) {
     ant_value_t resolve_fn = js_heavy_mkfun(js, ts_transform_resolve, fp);
     ant_value_t rej_wrapper = js_mkobj(js);
     js_set_slot(rej_wrapper, SLOT_DATA, fp);
@@ -575,7 +575,7 @@ static ant_value_t ts_sink_abort(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t cancel_fn = ts_ctrl_cancel_fn(ctrl_obj);
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   
-  bool joined_source_cancel = vtype(ts_cancel_promise(ts_obj)) == T_PROMISE && !ts_cancel_started_by_abort(ts_obj);
+  bool joined_source_cancel = vtype(ts_cancel_promise(ts_obj)) == kTypePromise && !ts_cancel_started_by_abort(ts_obj);
   if (joined_source_cancel && ts_cancel_has_user_handler(ts_obj))
     js_set_slot(ts_obj, SLOT_WS_WRITE, js_true);
 
@@ -639,7 +639,7 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
   promise_mark_handled(p);
 
   ant_value_t cancel_p = ts_cancel_promise(ts_obj);
-  if (vtype(cancel_p) == T_PROMISE) {
+  if (vtype(cancel_p) == kTypePromise) {
     ant_value_t wrapper = js_mkobj(js);
     js_set_slot(wrapper, SLOT_DATA, p);
     js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
@@ -818,7 +818,7 @@ static ant_value_t ts_start_reject(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream constructor requires 'new'");
 
   ant_value_t transformer = js_mkundef();
@@ -1010,13 +1010,13 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, transformer, start_args, 1, NULL, false);
     if (is_err(start_result)) { return start_result; }
 
-    if (vtype(start_result) == T_PROMISE) {
+    if (vtype(start_result) == kTypePromise) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, ts_start_resolve, ts_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, ts_start_reject, ts_obj);
       js_promise_then(js, start_result, resolve_fn, reject_fn);
     }
 
-    if (vtype(start_result) != T_PROMISE) {
+    if (vtype(start_result) != kTypePromise) {
       ant_value_t resolved = js_mkpromise(js);
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, ts_start_resolve, ts_obj);

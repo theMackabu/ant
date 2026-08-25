@@ -53,7 +53,7 @@
 //
 //   mkval(type, data) = PREFIX | (type << 47) | (data & 0x7FFFFFFFFFFF)
 //   mkref(type, ptr)   = mkval(type, ptr - cage_base)
-//   vtype(v)          = is_tagged(v) ? (v >> 47) & 0x1F : T_NUM
+//   vtype(v)          = is_tagged(v) ? (v >> 47) & 0x1F : kTypeNumber
 //   vdata(v)          = v & 0x7FFFFFFFFFFF
 //   vptr(v)           = vdata(v) ? cage_base + vdata(v) : NULL
 //   is_tagged(v)      = v > PREFIX
@@ -63,32 +63,33 @@ static constexpr uint64_t NANBOX_TYPE_SHIFT = 47;
 static constexpr uint64_t NANBOX_PREFIX     = UINT64_C(0xFFF0000000000000);
 static constexpr uint64_t NANBOX_DATA_MASK  = UINT64_C(0x00007FFFFFFFFFFF);
 
-enum: int {
-  T_OBJ = 0, // TODO: kTypeObject
-  T_STR,
-  T_ARR,
-  T_FUNC,
-  T_CFUNC,
-  T_PROMISE,
-  T_GENERATOR,
-  T_UNDEF,
-  T_NULL,
-  T_BOOL,
-  T_NUM,
-  T_BIGINT,
-  T_SYMBOL,
-  T_ERR,
-  T_TYPEDARRAY,
-  T_NTARG,
-  T_MAP,
-  T_SET,
-  T_WEAKMAP,
-  T_WEAKSET,
-  T_SENTINEL = NANBOX_TYPE_MASK
-};
+typedef enum: uint8_t {
+  kTypeObject = 0,
+  kTypeString,
+  kTypeArray,
+  kTypeFunction,
+  kTypeBuiltin,
+  kTypePromise,
+  kTypeGenerator,
+  kTypeUndefined,
+  kTypeNull,
+  kTypeBool,
+  kTypeNumber,
+  kTypeBigInt,
+  kTypeSymbol,
+  kTypeError,
+  kTypeTypedArray,
+  kTypeFunctionInfo,
+  kTypeMap,
+  kTypeSet,
+  kTypeWeakMap,
+  kTypeWeakSet,
+  kTypeSourceCode,
+  kTypeSentinel = NANBOX_TYPE_MASK
+} ant_value_type_t;
 
-static constexpr ant_value_t ANT_BOOL_TAG = NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT);
-static constexpr ant_value_t ANT_SENTINEL_TAG = NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT);
+static constexpr ant_value_t ANT_BOOL_TAG = NANBOX_PREFIX | ((ant_value_t)kTypeBool << NANBOX_TYPE_SHIFT);
+static constexpr ant_value_t ANT_SENTINEL_TAG = NANBOX_PREFIX | ((ant_value_t)kTypeSentinel << NANBOX_TYPE_SHIFT);
 
 static constexpr ant_value_t js_false = ANT_BOOL_TAG;
 static constexpr ant_value_t js_true  = ANT_BOOL_TAG | 1;
@@ -101,30 +102,30 @@ static inline bool is_tagged(ant_value_t value) {
   return value > NANBOX_PREFIX;
 }
 
-static inline uint8_t vtype_tagged(ant_value_t value) {
-  return (uint8_t)((value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK);
+static inline ant_value_type_t vtype_tagged(ant_value_t value) {
+  return (ant_value_type_t)((value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK);
 }
 
-static inline uint8_t vtype(ant_value_t value) {
-  return is_tagged(value) ? vtype_tagged(value) : (uint8_t)T_NUM;
+static inline ant_value_type_t vtype(ant_value_t value) {
+  return is_tagged(value) ? vtype_tagged(value) : kTypeNumber;
 }
 
 static inline uint64_t vdata(ant_value_t value) {
   return value & NANBOX_DATA_MASK;
 }
 
-static inline ant_value_t mkval(uint8_t type, uint64_t payload) {
+static inline ant_value_t mkval(ant_value_type_t type, uint64_t payload) {
   return NANBOX_PREFIX
     | ((ant_value_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT)
     | (payload & NANBOX_DATA_MASK);
 }
 
-static inline ant_value_t mkref(uint8_t type, const void *ptr) {
+static inline ant_value_t mkref(ant_value_type_t type, const void *ptr) {
   return mkval(type, ant_cage_encode(ptr));
 }
 
 static inline ant_value_t mkref_tagged(
-  uint8_t type, const void *ptr, uint64_t tag
+  ant_value_type_t type, const void *ptr, uint64_t tag
 ) {
   return mkval(type, ant_cage_encode(ptr) | tag);
 }

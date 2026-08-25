@@ -137,7 +137,7 @@ static ant_value_t js_sessionstorage_key(ant_t *js, ant_value_t *args, int nargs
     return js_mkerr(js, "Failed to execute 'key' on 'Storage': 1 argument required");
   }
   
-  if (vtype(args[0]) != T_NUM) {
+  if (vtype(args[0]) != kTypeNumber) {
     return js_mknull();
   }
   

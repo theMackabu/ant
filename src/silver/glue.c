@@ -37,8 +37,8 @@ ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value) {
 }
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) + tod(r));
-  if (vtype(l) == T_STR && vtype(r) == T_STR) {
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) + tod(r));
+  if (vtype(l) == kTypeString && vtype(r) == kTypeString) {
     GC_ROOT_SAVE(root_mark, js);
     GC_ROOT_PIN(js, l);
     GC_ROOT_PIN(js, r);
@@ -50,27 +50,27 @@ ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 }
 
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) - tod(r));
-  if ((vtype(l) == T_NUM || vtype(l) == T_STR) && (vtype(r) == T_NUM || vtype(r) == T_STR)) {
-    double ld = (vtype(l) == T_NUM) ? tod(l) : js_to_number(js, l);
-    double rd = (vtype(r) == T_NUM) ? tod(r) : js_to_number(js, r);
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) - tod(r));
+  if ((vtype(l) == kTypeNumber || vtype(l) == kTypeString) && (vtype(r) == kTypeNumber || vtype(r) == kTypeString)) {
+    double ld = (vtype(l) == kTypeNumber) ? tod(l) : js_to_number(js, l);
+    double rd = (vtype(r) == kTypeNumber) ? tod(r) : js_to_number(js, r);
     return tov(ld - rd);
   }
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_mul(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) * tod(r));
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) * tod(r));
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_div(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) / tod(r));
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(tod(l) / tod(r));
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(fmod(tod(l), tod(r)));
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return tov(fmod(tod(l), tod(r)));
   return SV_JIT_BAILOUT;
 }
 
@@ -150,14 +150,14 @@ ant_value_t jit_helper_str_flush_local(
 }
 
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) < tod(r));
-  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) < 0);
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) < tod(r));
+  if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) < 0);
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_le(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) <= tod(r));
-  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) <= 0);
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) <= tod(r));
+  if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) <= 0);
   return SV_JIT_BAILOUT;
 }
 
@@ -176,7 +176,7 @@ ant_value_t jit_helper_call_method(
   ant_value_t super_val, ant_value_t new_target,
   ant_value_t *out_this
 ) {
-  bool is_super_call = (vtype(super_val) != T_UNDEF && func == super_val);
+  bool is_super_call = (vtype(super_val) != kTypeUndefined && func == super_val);
   ant_value_t call_this = this_val;
 
   if (is_super_call) js->new_target = new_target;
@@ -313,7 +313,7 @@ void jit_helper_define_method_comp(
     if (is_err(named)) return;
   }
   
-  if (vtype(key) == T_SYMBOL) {
+  if (vtype(key) == kTypeSymbol) {
     if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, accessor_desc); return; }
     if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, accessor_desc); return; }
     mkprop(js, obj, key, fn, data_attrs);
@@ -321,7 +321,7 @@ void jit_helper_define_method_comp(
   }
   
   ant_value_t key_str = sv_key_to_propstr(js, key);
-  if ((is_getter || is_setter) && vtype(key_str) == T_STR) {
+  if ((is_getter || is_setter) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
@@ -330,7 +330,7 @@ void jit_helper_define_method_comp(
     return;
   }
   
-  if (vtype(key_str) == T_STR) {
+  if (vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
@@ -509,7 +509,7 @@ ant_value_t jit_helper_for_of(
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, iterable);
 
-  if (vtype(iterable) == T_ARR) {
+  if (vtype(iterable) == kTypeArray) {
     iter_buf[0] = iterable;
     iter_buf[1] = tov(0);
     iter_buf[2] = tov(SV_ITER_ARRAY);
@@ -517,7 +517,7 @@ ant_value_t jit_helper_for_of(
     return tov(0);
   }
 
-  if (vtype(iterable) == T_STR) {
+  if (vtype(iterable) == kTypeString) {
     if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
       iterable = str_materialize(js, iterable);
       if (is_err(iterable)) {
@@ -589,7 +589,7 @@ ant_value_t jit_helper_destructure_next(
 }
 
 ant_value_t jit_helper_seq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  return mkval(T_BOOL, strict_eq_values(js, l, r));
+  return mkval(kTypeBool, strict_eq_values(js, l, r));
 }
 
 ant_value_t jit_helper_in(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
@@ -606,15 +606,15 @@ ant_value_t jit_helper_throw(sv_vm_t *vm, ant_t *js, ant_value_t val) {
 
 ant_value_t jit_helper_ne(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   ant_value_t eq = sv_abstract_eq(js, l, r);
-  return mkval(T_BOOL, !vdata(eq));
+  return mkval(kTypeBool, !vdata(eq));
 }
 
 ant_value_t jit_helper_sne(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  return mkval(T_BOOL, !strict_eq_values(js, l, r));
+  return mkval(kTypeBool, !strict_eq_values(js, l, r));
 }
 
 ant_value_t jit_helper_not(sv_vm_t *vm, ant_t *js, ant_value_t v) {
-  return mkval(T_BOOL, !js_truthy(js, v));
+  return mkval(kTypeBool, !js_truthy(js, v));
 }
 
 ant_value_t jit_helper_instanceof(
@@ -635,7 +635,7 @@ ant_value_t jit_helper_call_is_proto(
 ) {
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  if (vtype(call_func) == T_CFUNC && js_cfunc_same_entrypoint(call_func, builtin_object_isPrototypeOf)) {
+  if (vtype(call_func) == kTypeBuiltin && js_cfunc_same_entrypoint(call_func, builtin_object_isPrototypeOf)) {
     return sv_isproto_ic_eval(js, call_this, arg, func, ip);
   }
   ant_value_t args[1] = { arg };
@@ -675,7 +675,7 @@ ant_value_t jit_helper_get_field(
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
   sv_atom_t atom = { .str = str, .len = len };
   ant_value_t out = sv_prop_get_field_ic(js, obj, &atom, func, ip);
-  if ((vtype(obj) == T_NULL || vtype(obj) == T_UNDEF) && is_err(out))
+  if ((vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) && is_err(out))
     jit_set_error_site_from_func(js, func, bc_off);
   return out;
 }
@@ -698,7 +698,7 @@ ant_value_t jit_helper_get_field_inline(
 }
 
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
-  if (vtype(v) == T_STR || vtype(v) == T_SYMBOL) return v;
+  if (vtype(v) == kTypeString || vtype(v) == kTypeSymbol) return v;
   return coerce_to_str(js, v);
 }
 
@@ -810,7 +810,7 @@ ant_value_t jit_helper_closure(
   sv_func_t *child = (sv_func_t *)vptr(parent_func->constants[const_idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, this_val);
-  if (!closure) return mkval(T_ERR, 0);
+  if (!closure) return mkval(kTypeError, 0);
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -828,10 +828,10 @@ ant_value_t jit_helper_closure(
     closure->upvalues[i] = jit_capture_upvalue(vm, open_upvalues, &slots[idx]);
   }
 
-  ant_value_t func_val = mkref(T_FUNC, closure);
+  ant_value_t func_val = mkref(kTypeFunction, closure);
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
   sv_closure_finish_init(
-    js, closure, func_val, mkref(T_FUNC, parent_closure),
+    js, closure, func_val, mkref(kTypeFunction, parent_closure),
     name, name_len, eval_env, is_object_type(eval_env)
   );
 
@@ -896,7 +896,7 @@ ant_value_t jit_helper_bailout_resume(
   ant_value_t *locals, int64_t n_locals,
   int64_t bc_offset
 ) {
-  if (!closure || !closure->func) return mkval(T_ERR, 0);
+  if (!closure || !closure->func) return mkval(kTypeError, 0);
   sv_func_t *fn = closure->func;
   sv_jit_on_bailout_at(fn, "resume", (int)bc_offset);
 
@@ -910,7 +910,7 @@ ant_value_t jit_helper_bailout_resume(
   vm->jit_resume.vstack_sp  = vstack_sp;
 
   return sv_execute_closure_entry(
-    vm, closure, mkref(T_FUNC, closure),
+    vm, closure, mkref(kTypeFunction, closure),
     js_mkundef(), this_val, args, argc, NULL
   );
 }
@@ -932,10 +932,10 @@ void jit_helper_set_name(
 }
 
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
-  if (vtype(obj) == T_ARR)
+  if (vtype(obj) == kTypeArray)
     return tov((double)(uint32_t)js_arr_len(js, obj));
 
-  if (vtype(obj) == T_STR)
+  if (vtype(obj) == kTypeString)
     return tov((double)str_utf16_len(js, obj));
 
   return js_getprop_fallback(js, obj, "length");
@@ -943,10 +943,10 @@ ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
 
 ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
   (void)vm;
-  if (vtype(obj) == T_ARR)
+  if (vtype(obj) == kTypeArray)
     return tov((double)(uint32_t)js_arr_len(js, obj));
 
-  if (vtype(obj) == T_STR)
+  if (vtype(obj) == kTypeString)
     return tov((double)str_utf16_len(js, obj));
 
   ant_value_t out = js_mkundef();
@@ -976,11 +976,11 @@ ant_value_t jit_helper_get_elem(
   ant_value_t key, sv_func_t *func, int32_t bc_off
 ) {
   uint8_t ot = vtype(obj);
-  if (ot == T_NULL || ot == T_UNDEF) {
+  if (ot == kTypeNull || ot == kTypeUndefined) {
     jit_set_error_site_from_func(js, func, bc_off);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
@@ -1008,7 +1008,7 @@ ant_value_t jit_helper_put_elem(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t val
 ) {
-  if (vtype(key) == T_SYMBOL) return js_setprop(js, obj, key, val);
+  if (vtype(key) == kTypeSymbol) return js_setprop(js, obj, key, val);
   ant_value_t key_jv = sv_key_to_propstr(js, key);
   return js_setprop(js, obj, key_jv, val);
 }
@@ -1035,7 +1035,7 @@ ant_value_t jit_helper_object(
   sv_obj_site_apply(js, func, site, ptr);
   ant_value_t proto = js->sym.object_proto;
   
-  if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
+  if (vtype(proto) == kTypeObject) js_set_proto_init(obj, proto);
   return obj;
 }
 
@@ -1055,8 +1055,8 @@ ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int 
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {
   if (
-    vtype(err) == T_ERR && js->thrown_exists &&
-    vtype(js->thrown_value) != T_UNDEF
+    vtype(err) == kTypeError && js->thrown_exists &&
+    vtype(js->thrown_value) != kTypeUndefined
   ) {
     ant_value_t caught = js->thrown_value;
     js->thrown_value = js_mkundef();
@@ -1072,7 +1072,7 @@ ant_value_t jit_helper_throw_error(
 ) { return js_mkerr_typed(js, (js_err_type_t)err_type, "%.*s", (int)len, str); }
 
 ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
@@ -1088,7 +1088,7 @@ ant_value_t jit_helper_get_elem_inline(
 ) {
   (void)vm;
 
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d) {
       // TODO: reduce nesting
@@ -1109,14 +1109,14 @@ ant_value_t jit_helper_get_elem_inline(
 
   ant_value_t key_str;
   switch (vtype(key)) {
-    case T_STR:
+    case kTypeString:
       key_str = key;
       break;
-    case T_NUM:
-    case T_BOOL:
-    case T_NULL:
-    case T_UNDEF:
-    case T_BIGINT:
+    case kTypeNumber:
+    case kTypeBool:
+    case kTypeNull:
+    case kTypeUndefined:
+    case kTypeBigInt:
       key_str = js_tostring_val(js, key);
       if (is_err(key_str)) return key_str;
       break;
@@ -1134,83 +1134,83 @@ ant_value_t jit_helper_get_elem_inline(
 
 ant_value_t jit_helper_set_proto(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t proto) {
   uint8_t pt = vtype(proto);
-  if (pt == T_OBJ || pt == T_NULL || pt == T_FUNC || pt == T_ARR) js_set_proto_wb(js, obj, proto);
+  if (pt == kTypeObject || pt == kTypeNull || pt == kTypeFunction || pt == kTypeArray) js_set_proto_wb(js, obj, proto);
   return js_mkundef();
 }
 
 ant_value_t jit_helper_band(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
   int32_t ai = js_to_int32(tod(l));
   int32_t bi = js_to_int32(tod(r));
   return tov((double)(ai & bi));
 }
 
 ant_value_t jit_helper_bor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (!((vtype(l) == T_NUM || vtype(l) == T_STR) && (vtype(r) == T_NUM || vtype(r) == T_STR))) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32((vtype(l) == T_NUM) ? tod(l) : js_to_number(js, l));
-  int32_t bi = js_to_int32((vtype(r) == T_NUM) ? tod(r) : js_to_number(js, r));
+  if (!((vtype(l) == kTypeNumber || vtype(l) == kTypeString) && (vtype(r) == kTypeNumber || vtype(r) == kTypeString))) return SV_JIT_BAILOUT;
+  int32_t ai = js_to_int32((vtype(l) == kTypeNumber) ? tod(l) : js_to_number(js, l));
+  int32_t bi = js_to_int32((vtype(r) == kTypeNumber) ? tod(r) : js_to_number(js, r));
   return tov((double)(ai | bi));
 }
 
 ant_value_t jit_helper_bxor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
   int32_t ai = js_to_int32(tod(l));
   int32_t bi = js_to_int32(tod(r));
   return tov((double)(ai ^ bi));
 }
 
 ant_value_t jit_helper_bnot(sv_vm_t *vm, ant_t *js, ant_value_t v) {
-  if (vtype(v) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(v) != kTypeNumber) return SV_JIT_BAILOUT;
   return tov((double)(~js_to_int32(tod(v))));
 }
 
 ant_value_t jit_helper_shl(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
   int32_t ai = js_to_int32(tod(l));
   uint32_t bi = js_to_uint32(tod(r));
   return tov((double)(ai << (bi & 0x1f)));
 }
 
 ant_value_t jit_helper_shr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
   int32_t ai = js_to_int32(tod(l));
   uint32_t bi = js_to_uint32(tod(r));
   return tov((double)(ai >> (bi & 0x1f)));
 }
 
 ant_value_t jit_helper_ushr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
+  if (vtype(l) != kTypeNumber || vtype(r) != kTypeNumber) return SV_JIT_BAILOUT;
   uint32_t ai = js_to_uint32(tod(l));
   uint32_t bi = js_to_uint32(tod(r));
   return tov((double)(ai >> (bi & 0x1f)));
 }
 
 ant_value_t jit_helper_gt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) > tod(r));
-  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) > 0);
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) > tod(r));
+  if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) > 0);
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_ge(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) >= tod(r));
-  if (vtype(l) == T_STR && vtype(r) == T_STR) return js_bool(sv_strcmp(js, l, r) >= 0);
+  if (vtype(l) == kTypeNumber && vtype(r) == kTypeNumber) return js_bool(tod(l) >= tod(r));
+  if (vtype(l) == kTypeString && vtype(r) == kTypeString) return js_bool(sv_strcmp(js, l, r) >= 0);
   return SV_JIT_BAILOUT;
 }
 
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
   ant_value_t key_str = js_mkundef();
 
-  if (vtype(key) == T_SYMBOL) 
+  if (vtype(key) == kTypeSymbol)
     return js_delete_sym_prop(js, obj, key);
   else key_str = coerce_to_str(js, key);
 
-  if (!is_err(key_str) && vtype(key_str) == T_STR) {
+  if (!is_err(key_str) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
     return js_delete_prop(js, obj, kptr, klen);
   }
-  return mkval(T_BOOL, 0);
+  return mkval(kTypeBool, 0);
 }
 
 ant_value_t jit_helper_new(
@@ -1221,7 +1221,7 @@ ant_value_t jit_helper_new(
   ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
-  if (vtype(func) == T_OBJ && is_proxy(func)) {
+  if (vtype(func) == kTypeObject && is_proxy(func)) {
     js->new_target = new_target;
     return js_proxy_construct(js, func, args, argc, new_target);
   }
@@ -1229,7 +1229,7 @@ ant_value_t jit_helper_new(
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
-  if (vtype(func) == T_FUNC || vtype(func) == T_CFUNC) {
+  if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
     proto = sv_prepare_construct_meta(
       js, func, new_target, &effective_new_target, &record_func
     );

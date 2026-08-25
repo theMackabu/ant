@@ -406,7 +406,7 @@ static bool cron_resolve_zone(
 ) {
   ant_value_t zone_value = js_mkundef();
   char system_zone[256];
-  if (vtype(options) != T_UNDEF && vtype(options) != T_NULL) {
+  if (vtype(options) != kTypeUndefined && vtype(options) != kTypeNull) {
     if (!is_object_type(options)) {
       *error = js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron options must be an object");
       return false;
@@ -417,10 +417,10 @@ static bool cron_resolve_zone(
       return false;
     }
   }
-  if (vtype(zone_value) == T_UNDEF || vtype(zone_value) == T_NULL) {
+  if (vtype(zone_value) == kTypeUndefined || vtype(zone_value) == kTypeNull) {
     size_t len = temporal_system_time_zone(system_zone, sizeof(system_zone));
     zone_value = js_mkstr(js, system_zone, len);
-  } else if (vtype(zone_value) != T_STR) {
+  } else if (vtype(zone_value) != kTypeString) {
     *error = js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron options.tz must be a string");
     return false;
   }
@@ -526,7 +526,7 @@ static bool cron_resolve_zone(
   ant_value_t *error
 ) {
   out->utc = false;
-  if (vtype(options) != T_UNDEF && vtype(options) != T_NULL) {
+  if (vtype(options) != kTypeUndefined && vtype(options) != kTypeNull) {
     if (!is_object_type(options)) {
       *error = js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron options must be an object");
       return false;
@@ -536,8 +536,8 @@ static bool cron_resolve_zone(
       *error = js_throw(js, js_take_thrown(js, tz));
       return false;
     }
-    if (vtype(tz) != T_UNDEF && vtype(tz) != T_NULL) {
-      if (vtype(tz) != T_STR) {
+    if (vtype(tz) != kTypeUndefined && vtype(tz) != kTypeNull) {
+      if (vtype(tz) != kTypeString) {
         *error = js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron options.tz must be a string");
         return false;
       }
@@ -761,13 +761,13 @@ static bool cron_relative_ms(
   int64_t *out,
   ant_value_t *error
 ) {
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) {
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) {
     *out = cron_now_ms();
     return true;
   }
   ant_value_t number = value;
   if (is_date_instance(value)) number = js_get_slot(value, SLOT_DATA);
-  if (vtype(number) != T_NUM || !isfinite(js_getnum(number))) {
+  if (vtype(number) != kTypeNumber || !isfinite(js_getnum(number))) {
     *error = js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron.parse() relativeDate must be a Date or number");
     return false;
   }
@@ -927,7 +927,7 @@ static void cron_timer_callback(uv_timer_t *timer) {
     return;
   }
 
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     if (!job->stopped && !job->closing) {
       const uint64_t keepalive_interval = UINT64_C(24) * 60 * 60 * 1000;
       uv_timer_start(
@@ -1016,7 +1016,7 @@ static ant_value_t cron_job_dispose(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t cron_parse(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron.parse() expects a string cron expression as the first argument");
 
   size_t source_len = 0;
@@ -1044,7 +1044,7 @@ static ant_value_t cron_create_job(
   ant_value_t handler,
   ant_value_t options
 ) {
-  if (vtype(schedule) != T_STR)
+  if (vtype(schedule) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string cron expression");
   if (!is_callable(handler))
     return js_mkerr_typed(
@@ -2407,10 +2407,10 @@ static ant_value_t cron_queue_request(ant_t *js, cron_os_request_t *request) {
 }
 
 static ant_value_t cron_register_os(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 3 || vtype(args[0]) != T_STR || vtype(args[1]) != T_STR || vtype(args[2]) != T_STR) {
-    if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 3 || vtype(args[0]) != kTypeString || vtype(args[1]) != kTypeString || vtype(args[2]) != kTypeString) {
+    if (nargs < 1 || vtype(args[0]) != kTypeString)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string path as the first argument");
-    if (nargs < 2 || vtype(args[1]) != T_STR)
+    if (nargs < 2 || vtype(args[1]) != kTypeString)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string schedule as the second argument");
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string title as the third argument");
   }
@@ -2466,7 +2466,7 @@ static ant_value_t cron_register_os(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t cron_remove_os(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron.remove() expects a string title");
   size_t title_len = 0;
   const char *title_value = js_getstr(js, args[0], &title_len);
@@ -2613,7 +2613,7 @@ int cron_run_scheduled_export(
     else print_error_value(js, result, js_mkundef(), NULL);
     return EXIT_FAILURE;
   }
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     ant_value_t settled = js_mkundef();
     js_reactor_await_status_t status = js_reactor_blocking_await_promise(
       js, result, &settled, NULL, NULL

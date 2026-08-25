@@ -438,7 +438,7 @@ static char *esm_try_resolve_relative_typescript_source_fallback(
 
 static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
   ant_value_t default_val = js_get_slot(ns, SLOT_DEFAULT);
-  return vtype(default_val) != T_UNDEF ? default_val : ns;
+  return vtype(default_val) != kTypeUndefined ? default_val : ns;
 }
 
 static ant_value_t esm_make_namespace_object(ant_t *js) {
@@ -481,7 +481,7 @@ static ant_value_t esm_complete_value_module(ant_t *js, esm_module_t *mod, ant_v
     ant_offset_t len = js_arr_len(js, keys);
     for (ant_offset_t i = 0; i < len; i++) {
       key = js_arr_get(js, keys, i);
-      if (vtype(key) != T_STR) continue;
+      if (vtype(key) != kTypeString) continue;
       const char *key_str = js_getstr(js, key, NULL);
       js_setprop(js, ns, key, js_get(js, value, key_str));
     }
@@ -1238,7 +1238,7 @@ static ant_value_t esm_eval_ambiguous_js_source(
     ); parse_arena_rewind(parse_mark);
     
     if (!func) {
-      if (js->thrown_exists) return mkval(T_ERR, 0);
+      if (js->thrown_exists) return mkval(kTypeError, 0);
       return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
     }
 
@@ -1544,7 +1544,7 @@ static ant_value_t esm_parse_module_record(
     }
 
     ant_value_t err = js->thrown_exists
-      ? mkval(T_ERR, 0)
+      ? mkval(kTypeError, 0)
       : js_mkerr_typed(
           js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
           "Unexpected parse error in module: %s",
@@ -1851,7 +1851,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   );
   
   free(content);
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     if (js->esm.state && js->esm.state->dynamic_import_depth > 0) {
       mod->has_tla = true;
       mod->tla_promise = result;
@@ -2121,7 +2121,7 @@ ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spe
 }
 
 static ant_value_t esm_import_from_attrs(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t attrs) {
-  if (vtype(specifier) != T_STR)
+  if (vtype(specifier) != kTypeString)
     return js_mkerr(js, "import() requires a string specifier");
 
   ant_offset_t spec_len = 0;
@@ -2136,7 +2136,7 @@ ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char
 }
 
 ant_value_t js_esm_import_sync_from_require(ant_t *js, ant_value_t specifier, const char *base_path) {
-  if (vtype(specifier) != T_STR)
+  if (vtype(specifier) != kTypeString)
     return js_mkerr(js, "require() expects a string specifier");
     
   ant_offset_t spec_len = 0;
@@ -2240,7 +2240,7 @@ HASH_ITER(hh, st->modules, mod, tmp) {
 
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
   const ant_builtin_bundle_alias_t *bundle = NULL;
-  if (vtype(specifier) != T_STR) {
+  if (vtype(specifier) != kTypeString) {
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   }
 
@@ -2285,7 +2285,7 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
 
 ant_value_t js_esm_resolve_specifier_require(ant_t *js, ant_value_t specifier, const char *base_path) {
   const ant_builtin_bundle_alias_t *bundle = NULL;
-  if (vtype(specifier) != T_STR) {
+  if (vtype(specifier) != kTypeString) {
     return js_mkerr(js, "require.resolve() expects a string specifier");
   }
 

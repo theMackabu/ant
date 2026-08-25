@@ -141,7 +141,7 @@ static EventType *make_event_type(ant_t *js, ant_value_t js_key) {
   EventType *evt = ant_calloc(sizeof(EventType));
   if (!evt) return NULL;
   evt->js_key = js_key;
-  if (vtype(js_key) == T_STR) evt->key_bytes = js_getstr(js, js_key, &evt->key_len);
+  if (vtype(js_key) == kTypeString) evt->key_bytes = js_getstr(js, js_key, &evt->key_len);
   utarray_new(evt->listeners, &event_listener_icd);
   return evt;
 }
@@ -393,7 +393,7 @@ static EventType *evt_list_find(ant_t *js, EventTypeList *list, ant_value_t js_k
   const char *probe = NULL;
   size_t probe_len = 0;
 
-  if (vtype(js_key) == T_STR) probe = js_getstr(js, js_key, &probe_len);
+  if (vtype(js_key) == kTypeString) probe = js_getstr(js, js_key, &probe_len);
 
   for (unsigned int i = 0; i < list->count; i++) {
     EventType *evt = list->types[i];
@@ -440,7 +440,7 @@ static EventTypeList *get_or_create_emitter_events(ant_t *js, ant_value_t this_o
 }
 
 static EventType *find_or_create_global_event_type(ant_t *js, ant_value_t js_key) {
-  if (vtype(js_key) != T_STR && vtype(js_key) != T_SYMBOL) return NULL;
+  if (vtype(js_key) != kTypeString && vtype(js_key) != kTypeSymbol) return NULL;
   EventTypeList *list = global_events_list(js);
   return list ? evt_list_find_or_create(js, list, js_key) : NULL;
 }
@@ -453,7 +453,7 @@ static EventType *find_global_event_type(ant_t *js, ant_value_t js_key) {
 static EventType *find_or_create_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
   EventTypeList *events = NULL;
 
-  if (vtype(js_key) != T_STR && vtype(js_key) != T_SYMBOL) return NULL;
+  if (vtype(js_key) != kTypeString && vtype(js_key) != kTypeSymbol) return NULL;
   events = get_or_create_emitter_events(js, this_obj);
 
   return events ? evt_list_find_or_create(js, events, js_key) : NULL;
@@ -473,7 +473,7 @@ static EventType *find_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_v
 
 static inline ant_value_t evt_key_from_arg(ant_value_t arg) {
   uint8_t t = vtype(arg);
-  return (t == T_STR || t == T_SYMBOL) ? arg : 0;
+  return (t == kTypeString || t == kTypeSymbol) ? arg : 0;
 }
 
 static bool is_eventemitter_instance(ant_value_t target) {
@@ -486,7 +486,7 @@ static bool is_eventtarget_instance(ant_value_t target) {
 
 static int eventemitter_get_max_listeners_impl(ant_value_t target) {
   ant_value_t slot = js_get_slot(target, SLOT_EVENT_MAX_LISTENERS);
-  if (vtype(slot) == T_NUM) {
+  if (vtype(slot) == kTypeNumber) {
     int n = (int)js_getnum(slot);
     return n >= 0 ? n : EVENTS_DEFAULT_MAX_LISTENERS;
   }
@@ -564,19 +564,19 @@ static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, 
 }
 
 static ant_value_t js_event_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Event constructor requires 'new'");
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Event constructor: type argument is required");
 
   ant_value_t type_val = args[0];
-  if (vtype(type_val) != T_STR) {
+  if (vtype(type_val) != kTypeString) {
     type_val = js_tostring_val(js, type_val);
     if (is_err(type_val)) return type_val;
   }
 
   bool bubbles = false, cancelable = false;
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == kTypeObject) {
     ant_value_t b = js_get(js, args[1], "bubbles");
     ant_value_t c = js_get(js, args[1], "cancelable");
     if (is_err(b)) return b;
@@ -605,7 +605,7 @@ static ant_value_t js_eventemitter_ctor(ant_t *js, ant_value_t *args, int nargs)
     return this_obj;
   }
 
-  if (vtype(js->new_target) != T_UNDEF) {
+  if (vtype(js->new_target) != kTypeUndefined) {
     ant_value_t obj = js_mkobj(js);
     ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.eventemitter_proto);
     if (is_object_type(proto)) js_set_proto_init(obj, proto);
@@ -657,7 +657,7 @@ static ant_value_t js_event_composedPath(ant_t *js, ant_value_t *args, int nargs
 static ant_value_t js_event_initEvent(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs >= 1) {
-    ant_value_t type_val = vtype(args[0]) == T_STR ? args[0] : js_tostring_val(js, args[0]);
+    ant_value_t type_val = vtype(args[0]) == kTypeString ? args[0] : js_tostring_val(js, args[0]);
     if (!is_err(type_val)) js_set(js, this_obj, "type", type_val);
   }
   if (nargs >= 2) js_set(js, this_obj, "bubbles",   js_bool(js_truthy(js, args[1])));
@@ -670,20 +670,20 @@ static ant_value_t js_event_initEvent(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_customevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CustomEvent constructor requires 'new'");
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CustomEvent constructor: type argument is required");
 
   ant_value_t type_val = args[0];
-  if (vtype(type_val) != T_STR) {
+  if (vtype(type_val) != kTypeString) {
     type_val = js_tostring_val(js, type_val);
     if (is_err(type_val)) return type_val;
   }
 
   bool bubbles = false, cancelable = false;
   ant_value_t detail = js_mknull();
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == kTypeObject) {
     ant_value_t b = js_get(js, args[1], "bubbles");
     ant_value_t c = js_get(js, args[1], "cancelable");
     ant_value_t d = js_get(js, args[1], "detail");
@@ -691,7 +691,7 @@ static ant_value_t js_customevent_ctor(ant_t *js, ant_value_t *args, int nargs) 
     if (is_err(c)) return c;
     bubbles    = js_truthy(js, b);
     cancelable = js_truthy(js, c);
-    if (vtype(d) != T_UNDEF) detail = d;
+    if (vtype(d) != kTypeUndefined) detail = d;
   }
 
   ant_value_t this_obj = js_mkobj(js);
@@ -704,13 +704,13 @@ static ant_value_t js_customevent_ctor(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t js_errorevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "ErrorEvent constructor requires 'new'");
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "ErrorEvent constructor: type argument is required");
 
   ant_value_t type_val = args[0];
-  if (vtype(type_val) != T_STR) {
+  if (vtype(type_val) != kTypeString) {
     type_val = js_tostring_val(js, type_val);
     if (is_err(type_val)) return type_val;
   }
@@ -722,7 +722,7 @@ static ant_value_t js_errorevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t colno    = js_mknum(0);
   ant_value_t error    = js_mknull();
 
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == kTypeObject) {
     ant_value_t b  = js_get(js, args[1], "bubbles");
     ant_value_t c  = js_get(js, args[1], "cancelable");
     ant_value_t m  = js_get(js, args[1], "message");
@@ -734,11 +734,11 @@ static ant_value_t js_errorevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(c)) return c;
     bubbles    = js_truthy(js, b);
     cancelable = js_truthy(js, c);
-    if (vtype(m) != T_UNDEF) { message  = js_tostring_val(js, m); if (is_err(message))  return message;  }
-    if (vtype(f) != T_UNDEF) { filename = js_tostring_val(js, f); if (is_err(filename)) return filename; }
-    if (vtype(l) != T_UNDEF) lineno = l;
-    if (vtype(co) != T_UNDEF) colno = co;
-    if (vtype(e) != T_UNDEF) error = e;
+    if (vtype(m) != kTypeUndefined) { message  = js_tostring_val(js, m); if (is_err(message))  return message;  }
+    if (vtype(f) != kTypeUndefined) { filename = js_tostring_val(js, f); if (is_err(filename)) return filename; }
+    if (vtype(l) != kTypeUndefined) lineno = l;
+    if (vtype(co) != kTypeUndefined) colno = co;
+    if (vtype(e) != kTypeUndefined) error = e;
   }
 
   ant_value_t this_obj = js_mkobj(js);
@@ -755,13 +755,13 @@ static ant_value_t js_errorevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_promiserejectionevent_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "PromiseRejectionEvent constructor requires 'new'");
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "PromiseRejectionEvent constructor: type argument is required");
 
   ant_value_t type_val = args[0];
-  if (vtype(type_val) != T_STR) {
+  if (vtype(type_val) != kTypeString) {
     type_val = js_tostring_val(js, type_val);
     if (is_err(type_val)) return type_val;
   }
@@ -770,7 +770,7 @@ static ant_value_t js_promiserejectionevent_ctor(ant_t *js, ant_value_t *args, i
   ant_value_t promise = js_mkundef();
   ant_value_t reason  = js_mkundef();
 
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == kTypeObject) {
     ant_value_t b = js_get(js, args[1], "bubbles");
     ant_value_t c = js_get(js, args[1], "cancelable");
     ant_value_t p = js_get(js, args[1], "promise");
@@ -779,8 +779,8 @@ static ant_value_t js_promiserejectionevent_ctor(ant_t *js, ant_value_t *args, i
     if (is_err(c)) return c;
     bubbles    = js_truthy(js, b);
     cancelable = js_truthy(js, c);
-    if (vtype(p) != T_UNDEF) promise = p;
-    if (vtype(r) != T_UNDEF) reason  = r;
+    if (vtype(p) != kTypeUndefined) promise = p;
+    if (vtype(r) != kTypeUndefined) reason  = r;
   }
 
   ant_value_t this_obj = js_mkobj(js);
@@ -794,7 +794,7 @@ static ant_value_t js_promiserejectionevent_ctor(ant_t *js, ant_value_t *args, i
 }
 
 static ant_value_t js_eventtarget_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "EventTarget constructor requires 'new'");
 
   ant_value_t this_obj = js_getthis(js);
@@ -806,23 +806,23 @@ static bool parse_addEventListener_options(ant_t *js, ant_value_t *args, int nar
   *once = false; *capture = false; *signal = js_mkundef();
   if (nargs < 3) return true;
   ant_value_t opts = args[2];
-  if (vtype(opts) == T_BOOL) {
+  if (vtype(opts) == kTypeBool) {
     *capture = js_truthy(js, opts);
     return true;
   }
-  if (vtype(opts) != T_OBJ) return true;
+  if (vtype(opts) != kTypeObject) return true;
 
   ant_value_t sig = js_get(js, opts, "signal");
-  if (vtype(sig) == T_NULL) return false;
-  if (vtype(sig) != T_UNDEF) {
+  if (vtype(sig) == kTypeNull) return false;
+  if (vtype(sig) != kTypeUndefined) {
     if (!abort_signal_is_signal(sig)) return false;
     *signal = sig;
   }
 
   ant_value_t o = js_get(js, opts, "once");
   ant_value_t ca = js_get(js, opts, "capture");
-  if (vtype(o) != T_UNDEF)  *once    = js_truthy(js, o);
-  if (vtype(ca) != T_UNDEF) *capture = js_truthy(js, ca);
+  if (vtype(o) != kTypeUndefined)  *once    = js_truthy(js, o);
+  if (vtype(ca) != kTypeUndefined) *capture = js_truthy(js, ca);
   return true;
 }
 
@@ -834,12 +834,12 @@ static ant_value_t add_listener_to(ant_t *js, ant_value_t *args, int nargs, Even
   if (!parse_addEventListener_options(js, args, nargs, &once, &capture, &signal))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to execute 'addEventListener': signal is not an AbortSignal");
 
-  if (vtype(signal) != T_UNDEF && abort_signal_is_aborted(signal)) return js_mkundef();
+  if (vtype(signal) != kTypeUndefined && abort_signal_is_aborted(signal)) return js_mkundef();
 
   ant_value_t cb = args[1];
   uint8_t cbt = vtype(cb);
-  if (cbt == T_NULL || cbt == T_UNDEF) return js_mkundef();
-  if (cbt != T_FUNC && cbt != T_CFUNC) return js_mkundef();
+  if (cbt == kTypeNull || cbt == kTypeUndefined) return js_mkundef();
+  if (cbt != kTypeFunction && cbt != kTypeBuiltin) return js_mkundef();
 
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
@@ -852,7 +852,7 @@ static ant_value_t add_listener_to(ant_t *js, ant_value_t *args, int nargs, Even
     .dead_gen = 0,
     .meta = once ? ENTRY_ONCE : 0,
   };
-  if (once || capture || vtype(signal) != T_UNDEF) {
+  if (once || capture || vtype(signal) != kTypeUndefined) {
     EventListenerCold *cold = entry_ensure_cold(evt, &entry);
     if (!cold) return js_mkerr(js, "out of memory");
     cold->signal = signal;
@@ -870,15 +870,15 @@ static ant_value_t remove_listener_from(ant_t *js, ant_value_t *args, int nargs,
   bool capture = false;
   if (nargs >= 3) {
   ant_value_t opts = args[2];
-  if (vtype(opts) == T_BOOL) capture = js_truthy(js, opts);
-  else if (vtype(opts) == T_OBJ) {
+  if (vtype(opts) == kTypeBool) capture = js_truthy(js, opts);
+  else if (vtype(opts) == kTypeObject) {
     ant_value_t ca = js_get(js, opts, "capture");
-    if (vtype(ca) != T_UNDEF) capture = js_truthy(js, ca);
+    if (vtype(ca) != kTypeUndefined) capture = js_truthy(js, ca);
   }}
 
   ant_value_t cb = (nargs >= 2) ? args[1] : js_mkundef();
   uint8_t cbt = vtype(cb);
-  if (cbt == T_NULL || cbt == T_UNDEF) return js_mkundef();
+  if (cbt == kTypeNull || cbt == kTypeUndefined) return js_mkundef();
 
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
@@ -912,13 +912,13 @@ static ant_value_t dispatch_event_to(ant_t *js, ant_value_t event_obj, EventType
     if (!entry_live(entry)) continue;
     if (entry_once(entry)) evt_consume(js, evt, i);
 
-    if (vtype(signal) != T_UNDEF && abort_signal_is_aborted(signal)) {
+    if (vtype(signal) != kTypeUndefined && abort_signal_is_aborted(signal)) {
       evt_retire(js, evt, i);
       continue;
     }
 
     uint8_t t = vtype(cb);
-    if (t != T_FUNC && t != T_CFUNC) continue;
+    if (t != kTypeFunction && t != kTypeBuiltin) continue;
 
     eventemitter_call_listener(js, cb, js_mkundef(), call_args, 1);
     if (data && data->stop_immediate) break;
@@ -1001,7 +1001,7 @@ static bool eventemitter_add_listener_impl(
 
   if (!is_object_type(target) || !key) return false;
   t = vtype(listener);
-  if (t != T_FUNC && t != T_CFUNC) return false;
+  if (t != kTypeFunction && t != kTypeBuiltin) return false;
 
   evt = find_or_create_emitter_event_type(js, target, key);
   if (!evt) return false;
@@ -1041,7 +1041,7 @@ static bool eventemitter_add_listener_impl(
     (int)live > max_listeners
   ) {
     evt->warned_max_listeners = true;
-    if (vtype(key) == T_STR) fprintf(
+    if (vtype(key) == kTypeString) fprintf(
       stderr,
       "Warning: Possible EventEmitter memory leak detected. "
       "%u %s listeners added. Use emitter.setMaxListeners() to increase limit.\n",
@@ -1070,7 +1070,7 @@ static bool eventemitter_remove_listener_impl(
 
   if (!is_object_type(target) || !key) return false;
   t = vtype(listener);
-  if (t != T_FUNC && t != T_CFUNC) return false;
+  if (t != kTypeFunction && t != kTypeBuiltin) return false;
 
   evt = find_emitter_event_type(js, target, key);
   if (!evt) return false;
@@ -1143,17 +1143,17 @@ static bool eventemitter_dispatch(
     if (entry->dead_gen != 0 && entry->dead_gen < gen) continue;
     if (entry_once(entry)) evt_consume(js, evt, i);
 
-    if (vtype(signal) != T_UNDEF && abort_signal_is_aborted(signal)) {
+    if (vtype(signal) != kTypeUndefined && abort_signal_is_aborted(signal)) {
       evt_retire(js, evt, i);
       continue;
     }
 
-    if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC) continue;
+    if (vtype(cb) != kTypeFunction && vtype(cb) != kTypeBuiltin) continue;
     ant_value_t result = eventemitter_call_listener(js, cb, target, args, nargs);
     invoked = true;
 
-    if (vtype(result) == T_ERR) {
-      if (vtype(evt->js_key) == T_STR) fprintf(stderr, "Error in event listener for %s: ", js_str(js, evt->js_key));
+    if (vtype(result) == kTypeError) {
+      if (vtype(evt->js_key) == kTypeString) fprintf(stderr, "Error in event listener for %s: ", js_str(js, evt->js_key));
       else fprintf(stderr, "Error in event listener: ");
       fprintf(stderr, "%s\n", js_str(js, result));
     }
@@ -1324,7 +1324,7 @@ static ant_value_t js_eventemitter_removeAllListeners(ant_t *js, ant_value_t *ar
   ant_value_t this_obj = js_getthis(js);
   EventTypeList *events = NULL;
 
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined) {
     events = find_emitter_events(this_obj);
     if (!events) return this_obj;
 
@@ -1355,7 +1355,7 @@ static ant_value_t js_eventemitter_listenerCount(ant_t *js, ant_value_t *args, i
 
 static ant_value_t js_eventemitter_setMaxListeners(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
-  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
+  if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "n must be a number");
 
   int n = (int)js_getnum(args[0]);
   if (n < 0) return js_mkerr(js, "n must be non-negative");
@@ -1404,10 +1404,10 @@ static ant_value_t js_events_once_listener(ant_t *js, ant_value_t *args, int nar
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t promise = js_get_slot(state, SLOT_DATA);
-  if (vtype(promise) != T_PROMISE) return js_mkundef();
+  if (vtype(promise) != kTypePromise) return js_mkundef();
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
+  if (vtype(settled) == kTypeBool && settled == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
 
   ant_value_t signal = js_get(js, state, "signal");
@@ -1441,10 +1441,10 @@ static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, i
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t promise = js_get_slot(state, SLOT_DATA);
-  if (vtype(promise) != T_PROMISE) return js_mkundef();
+  if (vtype(promise) != kTypePromise) return js_mkundef();
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
+  if (vtype(settled) == kTypeBool && settled == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
 
   ant_value_t signal = js_get(js, state, "signal");
@@ -1454,7 +1454,7 @@ static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, i
   js_events_once_remove_listener_from_target(js, state);
     
   ant_value_t reason = abort_signal_get_reason(signal);
-  if (vtype(reason) == T_UNDEF) reason = js_mkerr(js, "The operation was aborted");
+  if (vtype(reason) == kTypeUndefined) reason = js_mkerr(js, "The operation was aborted");
   js_reject_promise(js, promise, reason);
   
   return js_mkundef();
@@ -1462,13 +1462,13 @@ static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, i
 
 static bool js_events_once_is_abort_key(ant_t *js, ant_value_t key) {
   size_t key_len = 0;
-  const char *key_str = vtype(key) == T_STR ? js_getstr(js, key, &key_len) : NULL;
+  const char *key_str = vtype(key) == kTypeString ? js_getstr(js, key, &key_len) : NULL;
   return key_str && key_len == 5 && memcmp(key_str, "abort", 5) == 0;
 }
 
 static void js_events_once_reject_aborted(ant_t *js, ant_value_t promise, ant_value_t signal) {
   ant_value_t reason = abort_signal_get_reason(signal);
-  if (vtype(reason) == T_UNDEF) reason = js_mkerr(js, "The operation was aborted");
+  if (vtype(reason) == kTypeUndefined) reason = js_mkerr(js, "The operation was aborted");
   js_reject_promise(js, promise, reason);
 }
 
@@ -1559,7 +1559,7 @@ static ant_value_t js_events_disposable_dispose(ant_t *js, ant_value_t *args, in
   if (!is_object_type(state)) return js_mkundef();
 
   ant_value_t disposed = js_get_slot(state, SLOT_SETTLED);
-  if (vtype(disposed) == T_BOOL && disposed == js_true) return js_mkundef();
+  if (vtype(disposed) == kTypeBool && disposed == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
 
   ant_value_t signal = js_get(js, state, "signal");
@@ -1594,7 +1594,7 @@ static ant_value_t js_events_add_abort_listener(ant_t *js, ant_value_t *args, in
 
 static ant_value_t js_events_set_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "setMaxListeners requires at least 1 argument");
-  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
+  if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "n must be a number");
 
   int n = (int)js_getnum(args[0]);
   if (n < 0) return js_mkerr(js, "n must be non-negative");
@@ -1643,11 +1643,11 @@ static void events_on_queue_compact(ant_t *js, ant_value_t state, const char *ar
   ant_value_t arr = js_get(js, state, arr_name);
   ant_value_t head_val = js_get(js, state, head_name);
   
-  ant_offset_t head = vtype(head_val) == T_NUM ? (ant_offset_t)js_getnum(head_val) : 0;
-  ant_offset_t len = vtype(arr) == T_ARR ? js_arr_len(js, arr) : 0;
+  ant_offset_t head = vtype(head_val) == kTypeNumber ? (ant_offset_t)js_getnum(head_val) : 0;
+  ant_offset_t len = vtype(arr) == kTypeArray ? js_arr_len(js, arr) : 0;
   ant_value_t compact = 0;
 
-  if (vtype(arr) != T_ARR || head == 0) return;
+  if (vtype(arr) != kTypeArray || head == 0) return;
   if (head < len && (head < 32 || head * 2 < len)) return;
 
   compact = js_mkarr(js);
@@ -1662,10 +1662,10 @@ static ant_value_t events_on_queue_shift(ant_t *js, ant_value_t state, const cha
   ant_value_t arr = js_get(js, state, arr_name);
   ant_value_t head_val = js_get(js, state, head_name);
   
-  ant_offset_t head = vtype(head_val) == T_NUM ? (ant_offset_t)js_getnum(head_val) : 0;
+  ant_offset_t head = vtype(head_val) == kTypeNumber ? (ant_offset_t)js_getnum(head_val) : 0;
   ant_value_t value = 0;
 
-  if (vtype(arr) != T_ARR || head >= js_arr_len(js, arr)) return js_mkundef();
+  if (vtype(arr) != kTypeArray || head >= js_arr_len(js, arr)) return js_mkundef();
   js_set(js, state, head_name, js_mknum((double)(head + 1)));
   
   value = js_arr_get(js, arr, head);
@@ -1717,7 +1717,7 @@ static void events_on_detach(ant_t *js, ant_value_t state) {
 static void events_on_finish_parked(ant_t *js, ant_value_t state) {
   for (;;) {
     ant_value_t parked = events_on_queue_shift(js, state, "parked", "parkedHead");
-    if (vtype(parked) != T_PROMISE) return;
+    if (vtype(parked) != kTypePromise) return;
     js_resolve_promise(js, parked, events_on_iter_result(js, js_mkundef(), true));
   }
 }
@@ -1726,7 +1726,7 @@ static void events_on_fail(ant_t *js, ant_value_t state, ant_value_t reason) {
   events_on_detach(js, state);
 
   ant_value_t parked = events_on_queue_shift(js, state, "parked", "parkedHead");
-  if (vtype(parked) == T_PROMISE) {
+  if (vtype(parked) == kTypePromise) {
     js_reject_promise(js, parked, reason);
     events_on_finish_parked(js, state);
   } else js_set(js, state, "storedError", reason);
@@ -1740,7 +1740,7 @@ static ant_value_t js_events_on_event_cb(ant_t *js, ant_value_t *args, int nargs
   for (int i = 0; i < nargs; i++) js_arr_push(js, values, args[i]);
 
   ant_value_t parked = events_on_queue_shift(js, state, "parked", "parkedHead");
-  if (vtype(parked) == T_PROMISE)
+  if (vtype(parked) == kTypePromise)
     js_resolve_promise(js, parked, events_on_iter_result(js, values, false));
   else js_arr_push(js, js_get(js, state, "buffer"), values);
 
@@ -1762,7 +1762,7 @@ static ant_value_t events_make_abort_error(ant_t *js, ant_value_t signal) {
   js_set(js, error, "code", js_mkstr(js, "ABORT_ERR", 9));
 
   ant_value_t reason = abort_signal_get_reason(signal);
-  if (vtype(reason) != T_UNDEF) js_set(js, error, "cause", reason);
+  if (vtype(reason) != kTypeUndefined) js_set(js, error, "cause", reason);
   return error;
 }
 
@@ -1865,7 +1865,7 @@ static ant_value_t js_events_on(ant_t *js, ant_value_t *args, int nargs) {
     if (is_err(registered)) return registered;
 
     size_t key_len = 0;
-    const char *key_str = vtype(key) == T_STR ? js_getstr(js, key, &key_len) : NULL;
+    const char *key_str = vtype(key) == kTypeString ? js_getstr(js, key, &key_len) : NULL;
     bool key_is_error = key_str && key_len == 5 && memcmp(key_str, "error", 5) == 0;
 
     if (!key_is_error) {
@@ -2034,14 +2034,14 @@ static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventTypeList 
   if (!list) return;
   for (unsigned int t = 0; t < list->count; t++) {
   EventType *evt = list->types[t];
-  if (vtype(evt->js_key) == T_STR || vtype(evt->js_key) == T_SYMBOL) mark(js, evt->js_key);
+  if (vtype(evt->js_key) == kTypeString || vtype(evt->js_key) == kTypeSymbol) mark(js, evt->js_key);
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
     mark(js, e->callback);
     ant_value_t raw_callback = entry_raw_callback(evt, e);
     ant_value_t signal = entry_signal(evt, e);
-    if (vtype(raw_callback) != T_UNDEF) mark(js, raw_callback);
-    if (vtype(signal) != T_UNDEF) mark(js, signal);
+    if (vtype(raw_callback) != kTypeUndefined) mark(js, raw_callback);
+    if (vtype(signal) != kTypeUndefined) mark(js, signal);
   }
 }}
 

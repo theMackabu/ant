@@ -24,15 +24,15 @@ static bool inspector_safe_get_prop(
   if (!js || !key || !out || memchr(key, '\0', key_len)) return false;
 
   uint8_t type = vtype(obj);
-  if (type == T_STR) {
+  if (type == kTypeString) {
     if (key_len == 6 && memcmp(key, "length", 6) == 0) {
       *out = tov((double)str_utf16_len(js, obj));
       return true;
     }
     obj = js_primitive_prototype(js, type);
-  } else if (type == T_CFUNC) {
+  } else if (type == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) == T_FUNC) {
+    if (vtype(promoted) == kTypeFunction) {
       obj = promoted;
     } else {
       if (
@@ -124,11 +124,11 @@ bool inspector_eval_safe_member_expr(ant_t *js, const char *expr, size_t expr_le
 
 static bool inspector_value_is_primitive_key(ant_value_t value) {
   switch (vtype(value)) {
-    case T_STR:
-    case T_NUM:
-    case T_BOOL:
-    case T_NULL:
-    case T_UNDEF:
+    case kTypeString:
+    case kTypeNumber:
+    case kTypeBool:
+    case kTypeNull:
+    case kTypeUndefined:
       return true;
     default:
       return false;
@@ -190,7 +190,7 @@ static bool inspector_value_to_key(
   if (!js || !buf || buf_len == 0 || !out_key || !out_key_len) return false;
   if (!inspector_value_is_primitive_key(value)) return false;
 
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     size_t len = 0;
     const char *str = js_getstr(js, value, &len);
     if (!str || memchr(str, '\0', len)) return false;
@@ -298,7 +298,7 @@ static bool inspector_safe_abstract_eq(
   uint8_t lt = vtype(left);
   uint8_t rtype = vtype(right);
 
-  if ((lt == T_NULL && rtype == T_UNDEF) || (lt == T_UNDEF && rtype == T_NULL)) {
+  if ((lt == kTypeNull && rtype == kTypeUndefined) || (lt == kTypeUndefined && rtype == kTypeNull)) {
     *out = true;
     return true;
   }
@@ -306,15 +306,15 @@ static bool inspector_safe_abstract_eq(
     *out = strict_eq_values(js, left, right);
     return true;
   }
-  if (lt == T_BOOL) {
+  if (lt == kTypeBool) {
     left = tov(vdata(left) ? 1.0 : 0.0);
-    lt = T_NUM;
+    lt = kTypeNumber;
   }
-  if (rtype == T_BOOL) {
+  if (rtype == kTypeBool) {
     right = tov(vdata(right) ? 1.0 : 0.0);
-    rtype = T_NUM;
+    rtype = kTypeNumber;
   }
-  if ((lt == T_NUM && rtype == T_STR) || (lt == T_STR && rtype == T_NUM)) {
+  if ((lt == kTypeNumber && rtype == kTypeString) || (lt == kTypeString && rtype == kTypeNumber)) {
     *out = js_to_number(js, left) == js_to_number(js, right);
     return true;
   }
@@ -387,7 +387,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
           }
           return inspector_safe_eval_ast(js, node->right, out);
         case TOK_NULLISH:
-          if (vtype(left) != T_NULL && vtype(left) != T_UNDEF) {
+          if (vtype(left) != kTypeNull && vtype(left) != kTypeUndefined) {
             *out = left;
             return true;
           }
@@ -402,7 +402,7 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       switch (node->op) {
         case TOK_PLUS:
           if (is_object_type(left) || is_object_type(right)) return false;
-          if (vtype(left) == T_STR || vtype(right) == T_STR) {
+          if (vtype(left) == kTypeString || vtype(right) == kTypeString) {
             ant_value_t l_str = coerce_to_str_concat(js, left);
             ant_value_t r_str = coerce_to_str_concat(js, right);
             if (is_err(l_str) || is_err(r_str)) return false;
@@ -444,11 +444,11 @@ static bool inspector_safe_eval_ast(ant_t *js, sv_ast_t *node, ant_value_t *out)
       ant_value_t obj = js_mkundef();
       if (!node->left || !node->right || !inspector_safe_eval_ast(js, node->left, &obj))
         return false;
-      if (node->type == N_OPTIONAL && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
+      if (node->type == N_OPTIONAL && (vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined)) {
         *out = js_mkundef();
         return true;
       }
-      if (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF) return false;
+      if (vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) return false;
 
       char key_buf[128];
       const char *key = NULL;

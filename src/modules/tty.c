@@ -326,7 +326,7 @@ static bool read_env_object_value(
   if (!is_special_object(env_obj) || !key || !buf || buf_len == 0) return false;
 
   ant_value_t value = js_get(js, env_obj, key);
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return false;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return false;
 
   ant_value_t str_val = js_tostring_val(js, value);
   size_t len = 0;
@@ -652,7 +652,7 @@ static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int 
   if (nargs > 1) {
     if (is_callable(args[1])) {
       cb = args[1];
-    } else if (vtype(args[1]) == T_UNDEF) {
+    } else if (vtype(args[1]) == kTypeUndefined) {
       // no-op
     } else if (tty_ctrl_parse_int_value(args[1], &y)) {
       has_y = true;
@@ -727,7 +727,7 @@ static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int
   ant_value_t env_obj = js_mkundef();
 
   if (nargs > 0) {
-    if (vtype(args[0]) == T_NUM) {
+    if (vtype(args[0]) == kTypeNumber) {
       int parsed_count = 16;
       if (!tty_ctrl_parse_int_value(args[0], &parsed_count)) {
         return js_mkerr_typed(js, JS_ERR_TYPE, "hasColors(count[, env]) count must be an integer");
@@ -735,7 +735,7 @@ static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int
       count = parsed_count;
     } else if (is_special_object(args[0])) {
       env_obj = args[0];
-    } else if (vtype(args[0]) != T_UNDEF) {
+    } else if (vtype(args[0]) != kTypeUndefined) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "hasColors(count[, env]) invalid first argument");
     }
   }
@@ -780,7 +780,7 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
   ant_value_t stdin_obj = get_process_stream(js, "stdin");
   if (is_special_object(stdin_obj)) {
     ensure_stream_common_props(js, stdin_obj, fd);
-    if (vtype(js_get(js, stdin_obj, "isRaw")) == T_UNDEF) js_set(js, stdin_obj, "isRaw", js_false);
+    if (vtype(js_get(js, stdin_obj, "isRaw")) == kTypeUndefined) js_set(js, stdin_obj, "isRaw", js_false);
     return stdin_obj;
   }}
 
@@ -888,7 +888,7 @@ void init_tty_module(ant_t *js) {
   ant_value_t stdin_obj = js_get(js, process_obj, "stdin");
   if (is_special_object(stdin_obj)) {
     ensure_stream_common_props(js, stdin_obj, ANT_STDIN_FD);
-    if (vtype(js_get(js, stdin_obj, "isRaw")) == T_UNDEF) js_set(js, stdin_obj, "isRaw", js_false);
+    if (vtype(js_get(js, stdin_obj, "isRaw")) == kTypeUndefined) js_set(js, stdin_obj, "isRaw", js_false);
 
     ant_value_t stdin_proto = js_get_proto(js, stdin_obj);
     if (is_special_object(stdin_proto)) {

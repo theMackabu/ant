@@ -75,7 +75,7 @@ static inline void sv_async_init_activation(
 }
 
 static inline ant_value_t sv_capture_tla_module_ctx(ant_t *js, coroutine_t *coro) {
-  if (!js || !coro || !js->esm.module_stack || vtype(js->esm.module_stack->module_ns) != T_OBJ)
+  if (!js || !coro || !js->esm.module_stack || vtype(js->esm.module_stack->module_ns) != kTypeObject)
     return js_mkundef();
 
   ant_module_t *ctx = calloc(1, sizeof(ant_module_t));
@@ -259,7 +259,7 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
     out.value = value;
     return out;
   }
-  if (vtype(value) != T_PROMISE) {
+  if (vtype(value) != kTypePromise) {
     out.value = value;
     return out;
   }

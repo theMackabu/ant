@@ -258,7 +258,7 @@ static ant_value_t sandbox_guest_send(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t sandbox_guest_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1]))
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "parentPort.on('message', handler) requires a handler");
   const char *event = js_getstr(js, args[0], NULL);
   if (!event || strcmp(event, "message") != 0)
@@ -386,9 +386,9 @@ static int sandbox_for_each_string(
   const char *name, sandbox_string_cb_t cb,
   void *udata, ant_value_t *error_out
 ) {
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return 0;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return 0;
 
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     const char *str = js_getstr(js, value, NULL);
     if (!str) {
       *error_out = js_mkerr(js, "oom");
@@ -397,11 +397,11 @@ static int sandbox_for_each_string(
     return cb(js, str, udata);
   }
 
-  if (vtype(value) == T_ARR) {
+  if (vtype(value) == kTypeArray) {
     ant_offset_t len = js_arr_len(js, value);
     for (ant_offset_t i = 0; i < len; i++) {
       ant_value_t item = js_arr_get(js, value, i);
-      if (vtype(item) != T_STR) {
+      if (vtype(item) != kTypeString) {
         *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "%s entries must be strings", name);
         return -EINVAL;
       }
@@ -454,15 +454,15 @@ static ant_value_t sandbox_apply_string_list_option(
   
   int rc = sandbox_for_each_string(js, value, type_name, cb, udata, &error);
   if (rc == 0) return js_mkundef();
-  if (vtype(error) != T_UNDEF) return error;
+  if (vtype(error) != kTypeUndefined) return error;
   
   return js_mkerr_typed(js, JS_ERR_TYPE, "invalid %s option", key);
 }
 
 static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_value_t opts) {
-  if (vtype(opts) == T_UNDEF || vtype(opts) == T_NULL) return js_mkundef();
+  if (vtype(opts) == kTypeUndefined || vtype(opts) == kTypeNull) return js_mkundef();
 
-  if (vtype(opts) == T_STR) {
+  if (vtype(opts) == kTypeString) {
     sandbox_mount_parse_t mount_ctx = { .state = state, .readonly = true };
     const char *opts_str = js_getstr(js, opts, NULL);
     
@@ -494,8 +494,8 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
     : result;
 
   ant_value_t cwd = js_get(js, opts, "cwd");
-  if (vtype(cwd) != T_UNDEF && vtype(cwd) != T_NULL) {
-    if (vtype(cwd) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "cwd must be a string");
+  if (vtype(cwd) != kTypeUndefined && vtype(cwd) != kTypeNull) {
+    if (vtype(cwd) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "cwd must be a string");
     const char *cwd_str = js_getstr(js, cwd, NULL);
     
     if (!cwd_str || cwd_str[0] != '/') return js_mkerr_typed(js, JS_ERR_TYPE, "cwd must be an absolute guest path");
@@ -506,25 +506,25 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   }
 
   ant_value_t verbose = js_get(js, opts, "verbose");
-  if (vtype(verbose) != T_UNDEF && vtype(verbose) != T_NULL) state->verbose = js_truthy(js, verbose);
+  if (vtype(verbose) != kTypeUndefined && vtype(verbose) != kTypeNull) state->verbose = js_truthy(js, verbose);
 
   ant_value_t timeout = js_get(js, opts, "timeoutMs");
-  if (vtype(timeout) == T_UNDEF) timeout = js_get(js, opts, "timeout");
+  if (vtype(timeout) == kTypeUndefined) timeout = js_get(js, opts, "timeout");
   
-  if (vtype(timeout) != T_UNDEF && vtype(timeout) != T_NULL) {
-    if (vtype(timeout) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "timeoutMs must be a number");
+  if (vtype(timeout) != kTypeUndefined && vtype(timeout) != kTypeNull) {
+    if (vtype(timeout) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "timeoutMs must be a number");
     double n = js_getnum(timeout);
     if (n < 0 || n > UINT_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "timeoutMs is out of range");
     state->timeout_ms = (unsigned int)n;
   }
 
   ant_value_t boot_timeout = js_get(js, opts, "bootTimeoutMs");
-  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "bootTimeout");
-  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "requestTimeoutMs");
-  if (vtype(boot_timeout) == T_UNDEF) boot_timeout = js_get(js, opts, "requestTimeout");
+  if (vtype(boot_timeout) == kTypeUndefined) boot_timeout = js_get(js, opts, "bootTimeout");
+  if (vtype(boot_timeout) == kTypeUndefined) boot_timeout = js_get(js, opts, "requestTimeoutMs");
+  if (vtype(boot_timeout) == kTypeUndefined) boot_timeout = js_get(js, opts, "requestTimeout");
   
-  if (vtype(boot_timeout) != T_UNDEF && vtype(boot_timeout) != T_NULL) {
-    if (vtype(boot_timeout) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "bootTimeoutMs must be a number");
+  if (vtype(boot_timeout) != kTypeUndefined && vtype(boot_timeout) != kTypeNull) {
+    if (vtype(boot_timeout) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "bootTimeoutMs must be a number");
     double n = js_getnum(boot_timeout);
     
     if (n < 0 || n > UINT_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "bootTimeoutMs is out of range");
@@ -532,8 +532,8 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   }
 
   ant_value_t cpu_time = js_get(js, opts, "cpuTimeMs");
-  if (vtype(cpu_time) != T_UNDEF && vtype(cpu_time) != T_NULL) {
-    if (vtype(cpu_time) != T_NUM)
+  if (vtype(cpu_time) != kTypeUndefined && vtype(cpu_time) != kTypeNull) {
+    if (vtype(cpu_time) != kTypeNumber)
       return js_mkerr_typed(js, JS_ERR_TYPE, "cpuTimeMs must be a number");
     double n = js_getnum(cpu_time);
     if (!isfinite(n) || n < 0 || n > UINT_MAX)
@@ -543,20 +543,20 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
 
   ant_value_t memory_mb = js_get(js, opts, "memoryMb");
   ant_value_t memory = js_get(js, opts, "memory");
-  if (vtype(memory_mb) != T_UNDEF && vtype(memory_mb) != T_NULL) {
-    if (vtype(memory_mb) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "memoryMb must be a number");
+  if (vtype(memory_mb) != kTypeUndefined && vtype(memory_mb) != kTypeNull) {
+    if (vtype(memory_mb) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "memoryMb must be a number");
     double n = js_getnum(memory_mb);
     long double bytes = (long double)n * 1024.0L * 1024.0L;
     if (!isfinite(n) || n <= 0 || bytes > (long double)ULLONG_MAX)
       return js_mkerr_typed(js, JS_ERR_RANGE, "memoryMb is out of range");
     state->memory_size = (unsigned long long)bytes;
-  } else if (vtype(memory) != T_UNDEF && vtype(memory) != T_NULL) {
-    if (vtype(memory) == T_NUM) {
+  } else if (vtype(memory) != kTypeUndefined && vtype(memory) != kTypeNull) {
+    if (vtype(memory) == kTypeNumber) {
       double n = js_getnum(memory);
       if (!isfinite(n) || n <= 0 || (long double)n > (long double)ULLONG_MAX)
         return js_mkerr_typed(js, JS_ERR_RANGE, "memory is out of range");
       state->memory_size = (unsigned long long)n;
-    } else if (vtype(memory) == T_STR) {
+    } else if (vtype(memory) == kTypeString) {
       const char *value = js_getstr(js, memory, NULL);
       if (!sandbox_parse_memory_size(value, &state->memory_size))
         return js_mkerr_typed(js, JS_ERR_TYPE, "memory must be bytes or a size such as '256mb'");
@@ -566,14 +566,14 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
     return js_mkerr_typed(js, JS_ERR_RANGE, "memory must be at least 64mb");
 
   ant_value_t tty = js_get(js, opts, "tty");
-  if (vtype(tty) != T_UNDEF && vtype(tty) != T_NULL) {
+  if (vtype(tty) != kTypeUndefined && vtype(tty) != kTypeNull) {
     if (js_truthy(js, tty)) state->capabilities |= ANT_SANDBOX_CAP_STDOUT_TTY | ANT_SANDBOX_CAP_STDERR_TTY;
     else state->capabilities &= ~(ANT_SANDBOX_CAP_STDOUT_TTY | ANT_SANDBOX_CAP_STDERR_TTY);
   }
 
   ant_value_t rows = js_get(js, opts, "ttyRows");
-  if (vtype(rows) != T_UNDEF && vtype(rows) != T_NULL) {
-    if (vtype(rows) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyRows must be a number");
+  if (vtype(rows) != kTypeUndefined && vtype(rows) != kTypeNull) {
+    if (vtype(rows) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyRows must be a number");
     double n = js_getnum(rows);
     
     if (n < 1 || n > UINT16_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "ttyRows is out of range");
@@ -581,8 +581,8 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   }
 
   ant_value_t cols = js_get(js, opts, "ttyCols");
-  if (vtype(cols) != T_UNDEF && vtype(cols) != T_NULL) {
-    if (vtype(cols) != T_NUM) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyCols must be a number");
+  if (vtype(cols) != kTypeUndefined && vtype(cols) != kTypeNull) {
+    if (vtype(cols) != kTypeNumber) return js_mkerr_typed(js, JS_ERR_TYPE, "ttyCols must be a number");
     double n = js_getnum(cols);
     
     if (n < 1 || n > UINT16_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "ttyCols is out of range");
@@ -590,8 +590,8 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   }
 
   ant_value_t color = js_get(js, opts, "color");
-  if (vtype(color) != T_UNDEF && vtype(color) != T_NULL) {
-    if (vtype(color) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "color must be 'auto', 'force', 'strip', or 'preserve'");
+  if (vtype(color) != kTypeUndefined && vtype(color) != kTypeNull) {
+    if (vtype(color) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "color must be 'auto', 'force', 'strip', or 'preserve'");
     const char *policy = js_getstr(js, color, NULL);
     
     if (strcmp(policy, "auto") == 0) {
@@ -611,7 +611,7 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
 }
 
 static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox constructor requires 'new'");
 
   if (ant_sandbox_is_guest_process())
@@ -890,7 +890,7 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
     bool matches = waiter->type == NULL;
     if (waiter->type) {
       ant_value_t type = is_object_type(message) ? js_get(js, message, "type") : js_mkundef();
-      if (vtype(type) == T_STR) {
+      if (vtype(type) == kTypeString) {
         const char *value = js_getstr(js, type, NULL);
         matches = value && strcmp(value, waiter->type) == 0;
       }
@@ -1064,7 +1064,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox already has a running entry"));
   if (state->async_initialized)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox is still finishing its previous entry"));
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.run(entry, argv?) requires an entry string"));
 
   char *entry = js_getstr(js, args[0], NULL);
@@ -1072,8 +1072,8 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
   char **argv = NULL; int argc = 0;
 
   // TODO: reduce nesting split into helpers
-  if (nargs >= 2 && vtype(args[1]) != T_UNDEF && vtype(args[1]) != T_NULL) {
-    if (vtype(args[1]) == T_ARR) {
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined && vtype(args[1]) != kTypeNull) {
+    if (vtype(args[1]) == kTypeArray) {
       ant_offset_t len = js_arr_len(js, args[1]);
       if (len > INT32_MAX) return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_RANGE, "argv is too large"));
       argv = calloc((size_t)len + 1, sizeof(*argv));
@@ -1081,7 +1081,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
       argc = (int)len;
       for (ant_offset_t i = 0; i < len; i++) {
         ant_value_t item = js_arr_get(js, args[1], i);
-        if (vtype(item) != T_STR) {
+        if (vtype(item) != kTypeString) {
           free(argv);
           return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
         }
@@ -1096,7 +1096,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
       argv = calloc((size_t)argc + 1, sizeof(*argv));
       if (!argv) return sandbox_rejected(js, js_mkerr(js, "out of memory"));
       for (int i = 0; i < argc; i++) {
-        if (vtype(args[i + 1]) != T_STR) {
+        if (vtype(args[i + 1]) != kTypeString) {
           free(argv);
           return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "argv entries must be strings"));
         }
@@ -1168,7 +1168,7 @@ static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
   if (!state) return sandbox_rejected(js, state_error);
   if (state->running)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.eval() is unavailable while an entry is running"));
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.eval(source) requires a source string"));
 
   size_t request_len = 0;
@@ -1324,7 +1324,7 @@ static ant_value_t sandbox_receive(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t sandbox_once(ant_t *js, ant_value_t *args, int nargs) {
   sandbox_state_t *state = sandbox_get_state(js->this_val);
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE,
       "Sandbox.once(type) requires a message type string"));
   const char *type = js_getstr(js, args[0], NULL);
@@ -1363,7 +1363,7 @@ static ant_value_t sandbox_stats(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t sandbox_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1]))
+  if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.on('message', handler) requires a handler");
   const char *event = js_getstr(js, args[0], NULL);
   if (!event || strcmp(event, "message") != 0)

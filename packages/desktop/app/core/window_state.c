@@ -53,7 +53,7 @@ ant_desktop_window_state_t *ant_desktop_window_find(ant_desktop_window_id_t iden
 ant_desktop_window_state_t *ant_desktop_window_from_value(ant_t *js, ant_value_t value) {
   if (!is_object_type(value)) return NULL;
   ant_value_t identifier = js_get(js, value, "_nativeId");
-  return vtype(identifier) == T_NUM ? ant_desktop_window_find((ant_desktop_window_id_t)js_getnum(identifier)) : NULL;
+  return vtype(identifier) == kTypeNumber ? ant_desktop_window_find((ant_desktop_window_id_t)js_getnum(identifier)) : NULL;
 }
 
 size_t ant_desktop_window_count(void) {

@@ -175,14 +175,14 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   
   ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, false);
   
-  if (vtype(result) == T_ERR) {
+  if (vtype(result) == kTypeError) {
     release_lock(name);
     js_reject_promise(js, outer_promise, result);
     process_pending_requests(js);
     return;
   }
   
-  if (vtype(result) == T_PROMISE) {
+  if (vtype(result) == kTypePromise) {
     ant_value_t name_str = js_mkstr(js, name, strlen(name));
     ant_value_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
     ant_value_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
@@ -253,7 +253,7 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
     
     if (is_special_object(options)) {
       ant_value_t mode_val = js_get(js, options, "mode");
-      if (vtype(mode_val) == T_STR) {
+      if (vtype(mode_val) == kTypeString) {
         size_t mode_len;
         char *mode_str = js_getstr(js, mode_val, &mode_len);
         if (mode_str && strcmp(mode_str, "shared") == 0) mode = LOCK_MODE_SHARED;
@@ -263,7 +263,7 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  if (vtype(callback) != T_FUNC) {
+  if (vtype(callback) != kTypeFunction) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Callback must be a function");
   }
   
@@ -273,7 +273,7 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t null_val = js_mknull();
     ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
     
-    if (vtype(result) == T_PROMISE) {
+    if (vtype(result) == kTypePromise) {
       ant_value_t on_resolve = make_lock_handler(
         js, js_mkfun(lock_then_handler),
         js_mkstr(js, "", 0), promise

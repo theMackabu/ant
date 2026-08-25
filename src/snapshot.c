@@ -15,7 +15,7 @@ ant_value_t ant_load_snapshot(ant_t *js) {
   gc_pin_existing_objects(js);
   builtin_object_freeze(js, &js->Ant, 1);
   
-  return vtype(result) == T_ERR ? result : js_true;
+  return vtype(result) == kTypeError ? result : js_true;
 }
 
 const uint8_t *ant_get_snapshot_source(size_t *len) {

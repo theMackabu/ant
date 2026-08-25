@@ -42,8 +42,8 @@ static bool http_writer_append_raw_headers(
   ant_offset_t len = 0;
 
   if (error_out) *error_out = js_mkundef();
-  if (vtype(raw_headers) == T_UNDEF || vtype(raw_headers) == T_NULL) return true;
-  if (vtype(raw_headers) != T_ARR) {
+  if (vtype(raw_headers) == kTypeUndefined || vtype(raw_headers) == kTypeNull) return true;
+  if (vtype(raw_headers) != kTypeArray) {
     if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "rawHeaders must be an array");
     return false;
   }
@@ -84,7 +84,7 @@ static bool http_writer_append_raw_headers(
     if (!ant_http1_buffer_appendf(buf, "%s: %s\r\n", name, value)) break;
   }
 
-  if (buf->failed && error_out && vtype(*error_out) == T_UNDEF)
+  if (buf->failed && error_out && vtype(*error_out) == kTypeUndefined)
     *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
   return !buf->failed;
 }
@@ -104,7 +104,7 @@ static bool http_writer_parse_bytes(
   if (bytes_out) *bytes_out = NULL;
   if (len_out) *len_out = 0;
   
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return true;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return true;
   if (buffer_source_get_bytes(js, value, bytes_out, len_out)) return true;
 
   str_value = js_tostring_val(js, value);
@@ -170,13 +170,13 @@ static ant_value_t js_http_writer_write_basic_response(ant_t *js, ant_value_t *a
   const char *content_type = NULL;
   bool keep_alive = false;
 
-  if (nargs > 1 && vtype(args[1]) != T_UNDEF && vtype(args[1]) != T_NULL) {
+  if (nargs > 1 && vtype(args[1]) != kTypeUndefined && vtype(args[1]) != kTypeNull) {
     ant_value_t status_text_value = js_tostring_val(js, args[1]);
     if (is_err(status_text_value)) return status_text_value;
     status_text = js_getstr(js, status_text_value, NULL);
   }
 
-  if (nargs > 2 && vtype(args[2]) != T_UNDEF && vtype(args[2]) != T_NULL) {
+  if (nargs > 2 && vtype(args[2]) != kTypeUndefined && vtype(args[2]) != kTypeNull) {
     ant_value_t content_type_value = js_tostring_val(js, args[2]);
     if (is_err(content_type_value)) return content_type_value;
     content_type = js_getstr(js, content_type_value, NULL);
@@ -207,7 +207,7 @@ static ant_value_t js_http_writer_write_head(ant_t *js, ant_value_t *args, int n
   bool keep_alive = false;
   int index = 1;
 
-  if (nargs > index && vtype(args[index]) != T_UNDEF && vtype(args[index]) != T_NULL && vtype(args[index]) != T_ARR) {
+  if (nargs > index && vtype(args[index]) != kTypeUndefined && vtype(args[index]) != kTypeNull && vtype(args[index]) != kTypeArray) {
     ant_value_t status_text_value = js_tostring_val(js, args[index]);
     if (is_err(status_text_value)) return status_text_value;
     status_text = js_getstr(js, status_text_value, NULL);

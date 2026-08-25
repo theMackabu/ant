@@ -524,7 +524,7 @@ an adjacent data file. The aggregate alone is insufficient.
   the final flat string instead of rescanning the output.
 - 2026-08-24: Separate native-function metadata from the external-pointer
   handle table. Copy metadata into 64 KiB cage-backed slabs, store its cage
-  offset directly in `T_CFUNC`, and keep `hash_key` plus locking confined to
+  offset directly in `kTypeBuiltin`, and keep `hash_key` plus locking confined to
   cold interning. Before binary `cb81b2dcdc36` and fresh-PGO candidate
   `e9e518d2b0b2` produced a 62.492ms and 59.144ms median, respectively, across
   35 interleaved five-million-call `Map.get()` samples (-5.36%). Three
@@ -534,6 +534,17 @@ an adjacent data file. The aggregate alone is insufficient.
   controls rather than Evidence Table results because the host was not
   CPU-pinned; they reject the stale-profile 3.5% whole-tick regression but do
   not establish a whole-game speedup.
+- 2026-08-24: Run bench-v8 after every official platform build. Preserve each
+  complete score document in a `bench-v8-<platform>` artifact and show the
+  geometric-mean scores together in the all-platform and musl workflow
+  summaries. Treat hosted-runner scores as diagnostic history, not acceptance
+  evidence or a required performance threshold, because runner load and
+  hardware differ across platforms and runs.
+- 2026-08-24: Give the NaN-box type tags the fixed-width `ant_value_type_t`
+  type and descriptive `kType*` names. Split the former `T_NTARG` tag because
+  it carried two incompatible cage references: `kTypeFunctionInfo` now guards
+  `sv_func_t` constant-pool entries, while `kTypeSourceCode` guards source
+  pointers in function code slots.
 
 ## Validation Status
 
@@ -577,6 +588,12 @@ an adjacent data file. The aggregate alone is insufficient.
   test, focused native-call, collection, JIT, GC, and NaN tests, `maid
   preflight`, `git diff --check`, and the 3,969-test spec suite. The regenerated
   profile is `b3fc1eab241f`.
+- The platform bench-v8 workflow passes local YAML parsing and an end-to-end
+  benchmark run with all eight results and the aggregate score present in the
+  generated JSON document.
+- The value-tag rename and split pass a full clean incremental rebuild, focused
+  cage, native-call, closure, inline-call, function bind/construct, and native
+  function-object tests, plus the 3,969-test spec suite.
 - The Phase 3A fused numeric/ASCII template path and pinned acceptance evidence
   remain pending.
 

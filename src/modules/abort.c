@@ -233,10 +233,10 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
   if (data->aborted) return js_mkundef();
 
   bool once = false;
-  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
+  if (nargs >= 3 && vtype(args[2]) == kTypeObject) {
     ant_value_t once_val = js_get(js, args[2], "once");
-    if (vtype(once_val) != T_UNDEF) once = js_truthy(js, once_val);
-  } else if (nargs >= 3 && vtype(args[2]) == T_BOOL) once = js_truthy(js, args[2]);
+    if (vtype(once_val) != kTypeUndefined) once = js_truthy(js, once_val);
+  } else if (nargs >= 3 && vtype(args[2]) == kTypeBool) once = js_truthy(js, args[2]);
 
   unsigned int n = abort_array_len(data->listeners);
   for (unsigned int i = 0; i < n; i++) {
@@ -279,7 +279,7 @@ static ant_value_t abort_signal_dispatch_event(ant_t *js, ant_value_t *args, int
   if (nargs < 1) return js_false;
 
   const char *type = NULL;
-  if (vtype(args[0]) == T_OBJ) type = js_getstr(js, js_get(js, args[0], "type"), NULL);
+  if (vtype(args[0]) == kTypeObject) type = js_getstr(js, js_get(js, args[0], "type"), NULL);
   else type = js_getstr(js, args[0], NULL);
 
   if (!type || strcmp(type, "abort") != 0) return js_true;
@@ -300,7 +300,7 @@ static ant_value_t abort_signal_throw_if_aborted(ant_t *js, ant_value_t *args, i
 
 // AbortSignal.abort(reason?)
 static ant_value_t abort_signal_static_abort(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t reason = (nargs >= 1 && vtype(args[0]) != T_UNDEF)
+  ant_value_t reason = (nargs >= 1 && vtype(args[0]) != kTypeUndefined)
     ? args[0]
     : make_abort_error(js);
 
@@ -313,7 +313,7 @@ static ant_value_t abort_signal_static_abort(ant_t *js, ant_value_t *args, int n
 
 // AbortSignal.any(signals)
 static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_ARR)
+  if (nargs < 1 || vtype(args[0]) != kTypeArray)
     return js_mkerr(js, "AbortSignal.any: argument must be an array of AbortSignal objects");
 
   ant_value_t composite = make_new_signal(js);
@@ -345,7 +345,7 @@ ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source) {
   ant_value_t composite = make_new_signal(js);
   
   if (is_err(composite)) return composite;
-  if (vtype(source) != T_OBJ && vtype(source) != T_ARR) return composite;
+  if (vtype(source) != kTypeObject && vtype(source) != kTypeArray) return composite;
 
   abort_signal_data_t *d = get_signal_data(source);
   if (!d) return composite;
@@ -435,7 +435,7 @@ static ant_value_t abort_controller_abort(ant_t *js, ant_value_t *args, int narg
   abort_signal_data_t *data = get_signal_data(signal);
   if (!data || data->aborted) return js_mkundef();
 
-  ant_value_t reason = (nargs >= 1 && vtype(args[0]) != T_UNDEF)
+  ant_value_t reason = (nargs >= 1 && vtype(args[0]) != kTypeUndefined)
     ? args[0]
     : make_abort_error(js);
 

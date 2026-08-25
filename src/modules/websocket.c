@@ -135,7 +135,7 @@ static ant_value_t websocket_call(ant_t *js, ant_value_t fn, ant_value_t this_va
   ant_value_t saved_this = js->this_val;
   ant_value_t result = js_mkundef();
   js->this_val = this_val;
-  if (vtype(fn) == T_CFUNC) result = js_as_cfunc(fn)(js, args, nargs);
+  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
   js->this_val = saved_this;
   return result;
@@ -474,7 +474,7 @@ static ant_value_t websocket_create_object(ant_t *js) {
 }
 
 static ant_value_t js_websocket_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebSocket constructor requires 'new'");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "WebSocket URL is required");
 
@@ -584,12 +584,12 @@ static ant_value_t js_websocket_send(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_websocket_close(ant_t *js, ant_value_t *args, int nargs) {
   websocket_state_t *ws = websocket_data(js_getthis(js));
-  uint16_t code = nargs > 0 && vtype(args[0]) == T_NUM ? (uint16_t)js_getnum(args[0]) : 1000;
+  uint16_t code = nargs > 0 && vtype(args[0]) == kTypeNumber ? (uint16_t)js_getnum(args[0]) : 1000;
   const char *reason = NULL;
 
   if (!ws) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket");
   if (ws->ready_state == WS_CLOSED || ws->ready_state == WS_CLOSING) return js_mkundef();
-  if (nargs > 1 && vtype(args[1]) != T_UNDEF && vtype(args[1]) != T_NULL) {
+  if (nargs > 1 && vtype(args[1]) != kTypeUndefined && vtype(args[1]) != kTypeNull) {
     ant_value_t reason_val = js_tostring_val(js, args[1]);
     if (is_err(reason_val)) return reason_val;
     reason = js_getstr(js, reason_val, NULL);
@@ -609,7 +609,7 @@ static ant_value_t js_websocket_close(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_message_event_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "MessageEvent constructor requires 'new'");
   ant_value_t type_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "message", 7);
   if (is_err(type_val)) return type_val;
@@ -618,14 +618,14 @@ static ant_value_t js_message_event_ctor(ant_t *js, ant_value_t *args, int nargs
   ant_value_t data = js_mknull();
   if (is_object_type(init)) {
     ant_value_t d = js_get(js, init, "data");
-    if (vtype(d) != T_UNDEF) data = d;
+    if (vtype(d) != kTypeUndefined) data = d;
   }
   js_set(js, event, "data", data);
   return event;
 }
 
 static ant_value_t js_close_event_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CloseEvent constructor requires 'new'");
   ant_value_t type_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "close", 5);
   if (is_err(type_val)) return type_val;
@@ -638,9 +638,9 @@ static ant_value_t js_close_event_ctor(ant_t *js, ant_value_t *args, int nargs) 
     ant_value_t was_clean = js_get(js, init, "wasClean");
     ant_value_t code = js_get(js, init, "code");
     ant_value_t reason = js_get(js, init, "reason");
-    if (vtype(was_clean) != T_UNDEF) js_set(js, event, "wasClean", js_bool(js_truthy(js, was_clean)));
-    if (vtype(code) != T_UNDEF) js_set(js, event, "code", js_mknum(js_to_number(js, code)));
-    if (vtype(reason) != T_UNDEF) {
+    if (vtype(was_clean) != kTypeUndefined) js_set(js, event, "wasClean", js_bool(js_truthy(js, was_clean)));
+    if (vtype(code) != kTypeUndefined) js_set(js, event, "code", js_mknum(js_to_number(js, code)));
+    if (vtype(reason) != kTypeUndefined) {
       ant_value_t reason_str = js_tostring_val(js, reason);
       if (!is_err(reason_str)) js_set(js, event, "reason", reason_str);
     }

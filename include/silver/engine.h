@@ -553,7 +553,7 @@ static inline sv_closure_t *js_closure_alloc_finish(
   c->gc_epoch = gc_get_epoch();
   c->js = js;
   c->func_obj = 0;
-  c->module_ctx = mkval(T_UNDEF, 0);
+  c->module_ctx = mkval(kTypeUndefined, 0);
   c->u.pending.name = NULL;
   c->u.pending.len = 0;
   c->in_remember_set = 0;
@@ -606,9 +606,9 @@ static inline ant_value_t sv_closure_eval_env(const sv_closure_t *closure) {
 
 static inline ant_value_t js_as_obj(ant_value_t v) {
   uint8_t t = vtype(v);
-  if (t == T_OBJ) return v;
-  if (t == T_FUNC) return js_func_obj(v);
-  return mkval(T_OBJ, vdata(v));
+  if (t == kTypeObject) return v;
+  if (t == kTypeFunction) return js_func_obj(v);
+  return mkval(kTypeObject, vdata(v));
 }
 
 ant_value_t sv_execute_closure_entry(
@@ -733,16 +733,16 @@ static inline bool sv_slot_in_vm_stack(const sv_vm_t *vm, const ant_value_t *slo
 
 static inline bool sv_is_nullish_this(ant_value_t v) {
   return 
-    vtype(v) == T_UNDEF || vtype(v) == T_NULL ||
-    (vtype(v) == T_OBJ && vdata(v) == 0);
+    vtype(v) == kTypeUndefined || vtype(v) == kTypeNull ||
+    (vtype(v) == kTypeObject && vdata(v) == 0);
 }
 
 static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
   if (func->is_strict) return this_val;
   uint8_t type = vtype(this_val);
-  if (type == T_UNDEF || type == T_NULL) return js->global;
-  if (is_object_type(this_val) || type == T_CFUNC) return this_val;
+  if (type == kTypeUndefined || type == kTypeNull) return js->global;
+  if (is_object_type(this_val) || type == kTypeBuiltin) return this_val;
   return js_normalize_sloppy_this(js, this_val);
 }
 
@@ -788,7 +788,7 @@ static inline void sv_frame_set_arg_value(ant_t *js, sv_frame_t *frame, uint16_t
   int arg_slots = sv_frame_arg_slots(frame);
   if (!frame || !frame->bp || (int)idx >= arg_slots) return;
   frame->bp[idx] = val;
-  if (vtype(frame->arguments_obj) != T_UNDEF)
+  if (vtype(frame->arguments_obj) != kTypeUndefined)
     js_arguments_sync_slot(js, frame->arguments_obj, idx, val);
 }
 
@@ -907,7 +907,7 @@ static inline ant_value_t sv_prepare_construct_meta(
   ant_value_t *record_func
 ) {
   sv_closure_t *closure = NULL;
-  if (vtype(func) == T_FUNC) {
+  if (vtype(func) == kTypeFunction) {
     closure = js_func_closure(func);
     if (closure && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
       if (effective_new_target) *effective_new_target = requested_new_target;
@@ -922,11 +922,11 @@ static inline ant_value_t sv_prepare_construct_meta(
     requested_new_target == func ? target : requested_new_target;
 
   if (effective_new_target) *effective_new_target = new_target;
-  if (record_func && vtype(target) == T_FUNC) *record_func = target;
+  if (record_func && vtype(target) == kTypeFunction) *record_func = target;
 
   if (
     requested_new_target == func &&
-    vtype(target) == T_OBJ && is_proxy(target)
+    vtype(target) == kTypeObject && is_proxy(target)
   ) return js_mkundef();
 
   ant_value_t proto_source =
@@ -936,7 +936,7 @@ static inline ant_value_t sv_prepare_construct_meta(
   uint8_t source_type = vtype(proto_source);
   
   if (
-    source_type != T_FUNC && source_type != T_CFUNC &&
+    source_type != kTypeFunction && source_type != kTypeBuiltin &&
     !is_object_type(proto_source)
   ) return js_mkundef();
   
@@ -1005,7 +1005,7 @@ static inline ant_value_t sv_prepare_call(
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
-  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+  if (is_construct_call && vtype(func) == kTypeObject && is_proxy(func)) {
     plan->kind = SV_CALL_EXEC_PROXY_CONSTRUCT;
     return js_mkundef();
   }
@@ -1013,18 +1013,18 @@ static inline ant_value_t sv_prepare_call(
   if (is_construct_call && !js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
-  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+  if (!is_construct_call && vtype(func) == kTypeObject && is_proxy(func)) {
     plan->kind = SV_CALL_EXEC_PROXY_APPLY;
     return js_mkundef();
   }
 
-  if (vtype(func) == T_CFUNC) {
+  if (vtype(func) == kTypeBuiltin) {
     plan->ctx.this_val = sv_call_normalize_this(js, this_val, mode);
     if (out_this) *out_this = plan->ctx.this_val;
     return js_mkundef();
   }
 
-  if (vtype(func) != T_FUNC)
+  if (vtype(func) != kTypeFunction)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));
 
   sv_closure_t *closure = js_func_closure(func);
@@ -1105,7 +1105,7 @@ static inline ant_value_t sv_vm_call(
     ? SV_CALL_MODE_CONSTRUCT
     : SV_CALL_MODE_NORMAL;
 
-  if (!is_construct_call && vtype(func) == T_CFUNC) {
+  if (!is_construct_call && vtype(func) == kTypeBuiltin) {
     js->new_target = js_mkundef();
     ant_value_t native_this = sv_call_normalize_this(js, this_val, mode);
     
@@ -1153,7 +1153,7 @@ static inline ant_value_t sv_call_default_ctor(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
-  if (vtype(js->new_target) == T_UNDEF) {
+  if (vtype(js->new_target) == kTypeUndefined) {
     sv_call_cleanup(js, ctx);
     return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
   }
@@ -1161,7 +1161,7 @@ static inline ant_value_t sv_call_default_ctor(
   ant_value_t super_ctor = closure->super_val;
   uint8_t st = vtype(super_ctor);
   
-  if (st == T_FUNC || st == T_CFUNC) {
+  if (st == kTypeFunction || st == kTypeBuiltin) {
     ant_value_t super_this = ctx->this_val;
     ant_value_t result = sv_vm_call(
       vm, js, super_ctor, ctx->this_val,
@@ -1243,7 +1243,7 @@ static inline ant_value_t sv_call_closure(
 #define SV_JIT_BAILOUT_LIMIT    5
 #define SV_CALL_FB_MISS_DISABLE 4
 
-#define SV_JIT_RETRY_INTERP    mkval(T_ERR, 1)
+#define SV_JIT_RETRY_INTERP    mkval(kTypeError, 1)
   
 extern const char *const sv_op_names[OP__COUNT];
   
@@ -1325,9 +1325,9 @@ ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
 );
 
 static inline uint8_t sv_tfb_classify(ant_value_t v) {
-  if (vtype(v) == T_NUM) return SV_TFB_NUM;
-  if (vtype(v) == T_STR) return SV_TFB_STR;
-  if (vtype(v) == T_BOOL) return SV_TFB_BOOL;
+  if (vtype(v) == kTypeNumber) return SV_TFB_NUM;
+  if (vtype(v) == kTypeString) return SV_TFB_STR;
+  if (vtype(v) == kTypeBool) return SV_TFB_BOOL;
   return SV_TFB_OTHER;
 }
 
@@ -1496,7 +1496,7 @@ static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t s
 }
 
 static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
-  if (vtype(ctor_func) != T_FUNC) return;
+  if (vtype(ctor_func) != kTypeFunction) return;
   if (!is_object_type(instance)) return;
   
   sv_closure_t *closure = js_func_closure(ctor_func);
@@ -1524,7 +1524,7 @@ static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_valu
 }
 
 static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != T_FUNC) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  if (vtype(ctor_func) != kTypeFunction) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
   sv_closure_t *closure = js_func_closure(ctor_func);
   if (!closure || !closure->func) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
 
@@ -1536,7 +1536,7 @@ static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
 }
 
 static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != T_FUNC) return false;
+  if (vtype(ctor_func) != kTypeFunction) return false;
   sv_closure_t *closure = js_func_closure(ctor_func);
   if (!closure || !closure->func) return false;
   sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(closure->func, false);
@@ -1544,7 +1544,7 @@ static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
 }
 
 static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != T_FUNC) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
+  if (vtype(ctor_func) != kTypeFunction) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
   sv_closure_t *closure = js_func_closure(ctor_func);
   
   if (!closure || !closure->func) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;

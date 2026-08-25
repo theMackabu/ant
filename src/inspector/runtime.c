@@ -68,16 +68,16 @@ static bool inspector_append_object_id(sbuf_t *out, uint32_t id) {
 
 static const char *inspector_function_name(ant_t *js, ant_value_t value, size_t *len) {
   if (len) *len = 0;
-  if (vtype(value) == T_CFUNC) {
+  if (vtype(value) == kTypeBuiltin) {
     const ant_cfunc_meta_t *meta = js_as_cfunc_meta(value);
     if (!meta || !meta->name) return NULL;
     if (len) *len = strlen(meta->name);
     return meta->name;
   }
 
-  if (vtype(value) != T_FUNC) return NULL;
+  if (vtype(value) != kTypeFunction) return NULL;
   ant_value_t name = js_get(js, value, "name");
-  if (vtype(name) != T_STR) {
+  if (vtype(name) != kTypeString) {
     ant_value_t cfunc = js_get_slot(js_func_obj(value), SLOT_CFUNC);
     return inspector_function_name(js, cfunc, len);
   }
@@ -98,36 +98,36 @@ static const char *inspector_object_tag(ant_t *js, ant_value_t value, size_t *le
   if (len) *len = 0;
   if (!js || !inspector_is_remote_handle_value(value)) return NULL;
   ant_value_t tag = js_get_sym(js, value, get_toStringTag_sym());
-  if (vtype(tag) != T_STR) return NULL;
+  if (vtype(tag) != kTypeString) return NULL;
   return js_getstr(js, tag, len);
 }
 
 static bool inspector_append_preview_value(ant_t *js, ant_value_t value, sbuf_t *out) {
   uint8_t type = vtype(value);
   switch (type) {
-    case T_UNDEF:
+    case kTypeUndefined:
       return sbuf_append(out, "\"type\":\"undefined\",\"value\":\"undefined\"");
-    case T_NULL:
+    case kTypeNull:
       return sbuf_append(out, "\"type\":\"object\",\"subtype\":\"null\",\"value\":\"null\"");
-    case T_BOOL:
+    case kTypeBool:
       return sbuf_appendf(out, "\"type\":\"boolean\",\"value\":\"%s\"", value == js_true ? "true" : "false");
-    case T_NUM: {
+    case kTypeNumber: {
       double n = js_getnum(value);
       if (isnan(n)) return sbuf_append(out, "\"type\":\"number\",\"value\":\"NaN\"");
       if (isinf(n)) return sbuf_appendf(out, "\"type\":\"number\",\"value\":\"%sInfinity\"", n < 0 ? "-" : "");
       return sbuf_appendf(out, "\"type\":\"number\",\"value\":\"%.17g\"", n);
     }
-    case T_STR: {
+    case kTypeString: {
       size_t len = 0;
       const char *s = js_getstr(js, value, &len);
       if (!sbuf_append(out, "\"type\":\"string\",\"value\":")) return false;
       return sbuf_json_string_len(out, s, len);
     }
-    case T_FUNC: {
+    case kTypeFunction: {
       if (!sbuf_append(out, "\"type\":\"function\",\"value\":")) return false;
       return inspector_append_function_description(js, value, out);
     }
-    case T_CFUNC: {
+    case kTypeBuiltin: {
       if (!sbuf_append(out, "\"type\":\"function\",\"value\":")) return false;
       return inspector_append_function_description(js, value, out);
     }
@@ -141,15 +141,15 @@ static bool inspector_append_preview_value(ant_t *js, ant_value_t value, sbuf_t 
         if (value == js_glob(js)) {
           class_name = "global";
           desc = "global";
-        } else if (type == T_ARR) {
+        } else if (type == kTypeArray) {
           class_name = "Array";
           desc = "Array";
           subtype = "array";
-        } else if (type == T_PROMISE) {
+        } else if (type == kTypePromise) {
           class_name = "Promise";
           desc = "Promise";
           subtype = "promise";
-        } else if (type == T_GENERATOR) {
+        } else if (type == kTypeGenerator) {
           class_name = "Generator";
           desc = "Generator";
           subtype = "generator";
@@ -266,13 +266,13 @@ static bool inspector_append_object_preview(
 bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out) {
   uint8_t type = vtype(value);
   switch (type) {
-    case T_UNDEF:
+    case kTypeUndefined:
       return sbuf_append(out, "{\"type\":\"undefined\"}");
-    case T_NULL:
+    case kTypeNull:
       return sbuf_append(out, "{\"type\":\"object\",\"subtype\":\"null\",\"value\":null}");
-    case T_BOOL:
+    case kTypeBool:
       return sbuf_appendf(out, "{\"type\":\"boolean\",\"value\":%s}", value == js_true ? "true" : "false");
-    case T_NUM: {
+    case kTypeNumber: {
       double n = js_getnum(value);
       if (isnan(n)) return sbuf_append(out, "{\"type\":\"number\",\"unserializableValue\":\"NaN\",\"description\":\"NaN\"}");
       if (isinf(n)) return sbuf_appendf(
@@ -281,7 +281,7 @@ bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out)
       );
       return sbuf_appendf(out, "{\"type\":\"number\",\"value\":%.17g,\"description\":\"%.17g\"}", n, n);
     }
-    case T_STR: {
+    case kTypeString: {
       size_t len = 0;
       const char *s = js_getstr(js, value, &len);
       if (!sbuf_append(out, "{\"type\":\"string\",\"value\":")) return false;
@@ -290,15 +290,15 @@ bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out)
       if (!sbuf_json_string_len(out, s, len)) return false;
       return sbuf_append(out, "}");
     }
-    case T_CFUNC: {
+    case kTypeBuiltin: {
       ant_value_t promoted = js_cfunc_promote(js, value);
-      if (vtype(promoted) == T_FUNC) return inspector_value_to_remote_object(js, promoted, out);
+      if (vtype(promoted) == kTypeFunction) return inspector_value_to_remote_object(js, promoted, out);
 
       if (!sbuf_append(out, "{\"type\":\"function\",\"className\":\"Function\",\"description\":")) return false;
       if (!inspector_append_function_description(js, value, out)) return false;
       return sbuf_append(out, "}");
     }
-    case T_FUNC: {
+    case kTypeFunction: {
       uint32_t object_id = inspector_object_handle_id(js, value);
       sbuf_t desc = {0};
       if (!inspector_append_function_description(js, value, &desc)) {
@@ -336,15 +336,15 @@ bool inspector_value_to_remote_object(ant_t *js, ant_value_t value, sbuf_t *out)
         if (value == js_glob(js)) {
           class_name = "global";
           desc = "global";
-        } else if (type == T_ARR) {
+        } else if (type == kTypeArray) {
           class_name = "Array";
           desc = "Array";
           subtype = "array";
-        } else if (type == T_PROMISE) {
+        } else if (type == kTypePromise) {
           class_name = "Promise";
           desc = "Promise";
           subtype = "promise";
-        } else if (type == T_GENERATOR) {
+        } else if (type == kTypeGenerator) {
           class_name = "Generator";
           desc = "Generator";
           subtype = "generator";
@@ -492,22 +492,22 @@ void inspector_clear_exception_state(ant_t *js) {
 
 static ant_value_t inspector_exception_value(ant_t *js, ant_value_t result) {
   if (js && js->thrown_exists) return js->thrown_value;
-  if (vtype(result) == T_ERR && vdata(result) != 0) return mkval(T_OBJ, vdata(result));
+  if (vtype(result) == kTypeError && vdata(result) != 0) return mkval(kTypeObject, vdata(result));
   return result;
 }
 
 static bool inspector_exception_description(ant_t *js, ant_value_t err, sbuf_t *out) {
   if (!js || !out) return false;
-  if (vtype(err) == T_OBJ) {
+  if (vtype(err) == kTypeObject) {
     ant_value_t stack = js_get(js, err, "stack");
-    if (vtype(stack) == T_STR) {
+    if (vtype(stack) == kTypeString) {
       size_t len = 0;
       const char *s = js_getstr(js, stack, &len);
       return sbuf_json_string_len(out, s, len);
     }
 
     ant_value_t message = js_get(js, err, "message");
-    if (vtype(message) == T_STR) {
+    if (vtype(message) == kTypeString) {
       size_t len = 0;
       const char *s = js_getstr(js, message, &len);
       return sbuf_json_string_len(out, s, len);
@@ -609,7 +609,7 @@ static inspector_await_t *inspector_take_pending_await(uint32_t await_id) {
 
 static uint32_t inspector_current_await_id(ant_t *js) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
-  if (vtype(state) != T_NUM) return 0;
+  if (vtype(state) != kTypeNumber) return 0;
   double id = js_getnum(state);
   return id > 0 && id <= UINT32_MAX ? (uint32_t)id : 0;
 }
@@ -650,7 +650,7 @@ static bool inspector_defer_eval_result(
   ant_t *js = client->js;
   ant_value_t promise = js_promise_assimilate_awaitable(js, *result);
   *result = promise;
-  if (is_err(promise) || js->thrown_exists || vtype(promise) != T_PROMISE) return false;
+  if (is_err(promise) || js->thrown_exists || vtype(promise) != kTypePromise) return false;
 
   inspector_await_t *pending = calloc(1, sizeof(*pending));
   if (!pending) {
@@ -703,7 +703,7 @@ void inspector_await_promise(inspector_client_t *client, int id, yyjson_val *par
     ? yyjson_get_str(object_id_val)
     : NULL;
   ant_value_t promise = js_mkundef();
-  if (!inspector_object_for_id(object_id, &promise) || vtype(promise) != T_PROMISE) {
+  if (!inspector_object_for_id(object_id, &promise) || vtype(promise) != kTypePromise) {
     inspector_send_error(client, id, -32602, "Runtime.awaitPromise requires a promise objectId");
     return;
   }
@@ -833,7 +833,7 @@ void inspector_get_properties(inspector_client_t *client, int id, yyjson_val *pa
 
   if (!sbuf_append(&b, "],\"internalProperties\":[")) goto oom;
   ant_value_t proto = js_get_proto(client->js, object);
-  if (inspector_is_remote_handle_value(proto) || vtype(proto) == T_NULL) {
+  if (inspector_is_remote_handle_value(proto) || vtype(proto) == kTypeNull) {
     if (!sbuf_append(&b, "{\"name\":\"[[Prototype]]\",\"value\":")) goto oom;
     if (!inspector_value_to_remote_object(client->js, proto, &b)) goto oom;
     if (!sbuf_append(&b, "}")) goto oom;

@@ -507,7 +507,7 @@ void print_value_colored(const char *str, FILE *stream) {
 void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   ant_output_stream_t *out = ant_output_stream(stream);
 
-  if (vtype(val) == T_STR) {
+  if (vtype(val) == kTypeString) {
     char *str = js_getstr(js, val, NULL);
     ant_output_stream_begin(out);
     ant_output_stream_append_cstr(out, C(JSON_STRING));
@@ -520,7 +520,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
     return;
   }
 
-  if (vtype(val) == T_OBJ && vtype(js_get_slot(val, SLOT_ERR_TYPE)) != T_UNDEF) {
+  if (vtype(val) == kTypeObject && vtype(js_get_slot(val, SLOT_ERR_TYPE)) != kTypeUndefined) {
   const char *stack = get_str_prop(js, val, "stack", 5, NULL);
 
   if (stack) {
@@ -534,7 +534,7 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, val, cbuf, sizeof(cbuf));
 
-  if (vtype(val) == T_ERR) {
+  if (vtype(val) == kTypeError) {
     ant_output_stream_t *err_out = ant_output_stream(stderr);
     ant_output_stream_begin(err_out);
     ant_output_stream_append_cstr(err_out, cstr.ptr);
@@ -559,7 +559,7 @@ static ant_value_t console_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == T_CFUNC) result = js_as_cfunc(fn)(js, args, nargs);
+  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
   js->this_val = saved_this;
 
@@ -618,12 +618,12 @@ static bool console_output_put_indent(ant_output_stream_t *out, int total) {
 
 static int console_get_group_indentation(ant_t *js, ant_value_t this_obj) {
   ant_value_t value = is_special_object(this_obj) ? js_get_slot(this_obj, SLOT_CONSOLE_GROUP_INDENT) : js_mkundef();
-  return vtype(value) == T_NUM ? (int)js_getnum(value) : 2;
+  return vtype(value) == kTypeNumber ? (int)js_getnum(value) : 2;
 }
 
 static int console_get_group_level(ant_t *js, ant_value_t this_obj) {
   ant_value_t value = is_special_object(this_obj) ? js_get_slot(this_obj, SLOT_CONSOLE_GROUP_LEVEL) : js_mkundef();
-  return vtype(value) == T_NUM ? (int)js_getnum(value) : 0;
+  return vtype(value) == kTypeNumber ? (int)js_getnum(value) : 0;
 }
 
 static void console_set_group_level(ant_t *js, ant_value_t this_obj, int level) {
@@ -684,9 +684,9 @@ static bool console_emit_inspected(console_format_ctx_t *c, ant_value_t value) {
 
 static bool console_format_value(void *ctx, ant_value_t value, char spec) {
   console_format_ctx_t *c = (console_format_ctx_t *)ctx;
-  if ((spec == 'o' || spec == 'O') && vtype(value) == T_STR)
+  if ((spec == 'o' || spec == 'O') && vtype(value) == kTypeString)
     return console_emit_inspected(c, value);
-  return console_emit_value(c, value, spec == 's' && vtype(value) == T_STR);
+  return console_emit_value(c, value, spec == 's' && vtype(value) == kTypeString);
 }
 
 static const ant_format_sink_t console_format_sink = {
@@ -705,14 +705,14 @@ static bool console_write_args_to_stream(
   for (int i = start; i < nargs; i++) {
     if ((i || start) && !ant_output_stream_putc(out, ' ')) return false;
 
-    if (vtype(args[i]) == T_OBJ) {
+    if (vtype(args[i]) == kTypeObject) {
     const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
     if (stack) {
       if (!io_print_to_output(stack, out, io_no_color)) return false;
       continue;
     }}
 
-    if (!console_emit_value(&ctx, args[i], vtype(args[i]) == T_STR)) return false;
+    if (!console_emit_value(&ctx, args[i], vtype(args[i]) == kTypeString)) return false;
   }
 
   return true;
@@ -817,7 +817,7 @@ static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
   ant_inspector_console_api_called(js, "trace", args, nargs);
   console_emit_current(js, true, "Trace:", args, nargs);
   ant_value_t stack = js_capture_raw_stack(js);
-  if (vtype(stack) == T_STR) {
+  if (vtype(stack) == kTypeString) {
     size_t stack_len = 0;
     const char *stack_str = js_getstr(js, stack, &stack_len);
     console_write_string(js, this_obj, true, stack_str, stack_len);
@@ -835,9 +835,9 @@ static ant_value_t js_console_time(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
-  if (nargs > 0 && vtype(args[0]) == T_STR) label = js_getstr(js, args[0], NULL);
+  if (nargs > 0 && vtype(args[0]) == kTypeString) label = js_getstr(js, args[0], NULL);
   ant_value_t timers = console_get_state_map(js, this_obj, "timers");
-  if (is_special_object(timers) && vtype(js_get(js, timers, label)) != T_UNDEF) {
+  if (is_special_object(timers) && vtype(js_get(js, timers, label)) != kTypeUndefined) {
     ant_value_t warn_args[1] = { js_mkstr(js, "Timer already exists", 20) };
     return console_emit_current(js, true, NULL, warn_args, 1);
   }
@@ -850,11 +850,11 @@ static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
-  if (nargs > 0 && vtype(args[0]) == T_STR) label = js_getstr(js, args[0], NULL);
+  if (nargs > 0 && vtype(args[0]) == kTypeString) label = js_getstr(js, args[0], NULL);
   ant_value_t timers = console_get_state_map(js, this_obj, "timers");
   ant_value_t start = is_special_object(timers) ? js_get(js, timers, label) : js_mkundef();
   
-  if (vtype(start) != T_NUM) {
+  if (vtype(start) != kTypeNumber) {
     ant_value_t warn_args[1] = { js_mkstr(js, "Timer does not exist", 19) };
     return console_emit_current(js, true, NULL, warn_args, 1);
   }
@@ -874,7 +874,7 @@ static ant_value_t js_console_timeLog(ant_t *js, ant_value_t *args, int nargs) {
   const char *label = "default";
   int extra_start = 0;
   
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
+  if (nargs > 0 && vtype(args[0]) == kTypeString) {
     label = js_getstr(js, args[0], NULL);
     extra_start = 1;
   }
@@ -882,7 +882,7 @@ static ant_value_t js_console_timeLog(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t timers = console_get_state_map(js, this_obj, "timers");
   ant_value_t start = is_special_object(timers) ? js_get(js, timers, label) : js_mkundef();
   
-  if (vtype(start) != T_NUM) {
+  if (vtype(start) != kTypeNumber) {
     ant_value_t warn_args[1] = { js_mkstr(js, "Timer does not exist", 19) };
     return console_emit_current(js, true, NULL, warn_args, 1);
   }
@@ -906,11 +906,11 @@ static ant_value_t js_console_count(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
-  if (nargs > 0 && vtype(args[0]) == T_STR) label = js_getstr(js, args[0], NULL);
+  if (nargs > 0 && vtype(args[0]) == kTypeString) label = js_getstr(js, args[0], NULL);
   ant_value_t counts = console_get_state_map(js, this_obj, "counts");
   ant_value_t current = is_special_object(counts) ? js_get(js, counts, label) : js_mkundef();
   
-  double next = vtype(current) == T_NUM ? js_getnum(current) + 1 : 1;
+  double next = vtype(current) == kTypeNumber ? js_getnum(current) + 1 : 1;
   js_set(js, counts, label, js_mknum(next));
   
   char buf[256];
@@ -923,7 +923,7 @@ static ant_value_t js_console_count(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_console_countReset(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
-  if (nargs > 0 && vtype(args[0]) == T_STR) label = js_getstr(js, args[0], NULL);
+  if (nargs > 0 && vtype(args[0]) == kTypeString) label = js_getstr(js, args[0], NULL);
   ant_value_t counts = console_get_state_map(js, this_obj, "counts");
   js_delete_prop(js, counts, label, strlen(label));
   return js_mkundef();
@@ -962,26 +962,27 @@ static const char *get_slot_name(internal_slot_t slot) {
 
 static const char *get_type_name(int type) {
   static const char *type_names[] = {
-    [T_OBJ]        = "object",
-    [T_STR]        = "string",
-    [T_ARR]        = "array",
-    [T_FUNC]       = "function",
-    [T_CFUNC]      = "function",
-    [T_PROMISE]    = "Promise",
-    [T_GENERATOR]  = "Generator",
-    [T_UNDEF]      = "undefined",
-    [T_NULL]       = "null",
-    [T_BOOL]       = "boolean",
-    [T_NUM]        = "number",
-    [T_BIGINT]     = "bigint",
-    [T_SYMBOL]     = "symbol",
-    [T_ERR]        = "error",
-    [T_TYPEDARRAY] = "TypedArray",
-    [T_NTARG]      = "ntarg",
-    [T_MAP]        = "map",
-    [T_SET]        = "set",
-    [T_WEAKMAP]    = "weakmap",
-    [T_WEAKSET]    = "weakset"
+    [kTypeObject]        = "object",
+    [kTypeString]        = "string",
+    [kTypeArray]        = "array",
+    [kTypeFunction]       = "function",
+    [kTypeBuiltin]      = "function",
+    [kTypePromise]    = "Promise",
+    [kTypeGenerator]  = "Generator",
+    [kTypeUndefined]      = "undefined",
+    [kTypeNull]       = "null",
+    [kTypeBool]       = "boolean",
+    [kTypeNumber]        = "number",
+    [kTypeBigInt]     = "bigint",
+    [kTypeSymbol]     = "symbol",
+    [kTypeError]        = "error",
+    [kTypeTypedArray] = "TypedArray",
+    [kTypeFunctionInfo] = "functioninfo",
+    [kTypeSourceCode] = "sourcecode",
+    [kTypeMap]        = "map",
+    [kTypeSet]        = "set",
+    [kTypeWeakMap]    = "weakmap",
+    [kTypeWeakSet]    = "weakset"
   };
   
   size_t num_types = sizeof(type_names) / sizeof(type_names[0]);
@@ -1091,7 +1092,7 @@ static void inspect_string_value(
       (uint64_t)rope->len,
       (unsigned)rope->depth
     );
-    if (vtype(rope->cached) == T_UNDEF) fprintf(stream, "undefined");
+    if (vtype(rope->cached) == kTypeUndefined) fprintf(stream, "undefined");
     else inspect_value(js, rope->cached, stream, depth + 1, visited);
     fprintf(stream, "> {\n");
 
@@ -1135,7 +1136,7 @@ static void inspect_string_value(
       (void *)builder->chunk_tail,
       (unsigned)builder->tail_len
     );
-    if (vtype(builder->cached) == T_UNDEF) fprintf(stream, "undefined");
+    if (vtype(builder->cached) == kTypeUndefined) fprintf(stream, "undefined");
     else inspect_value(js, builder->cached, stream, depth + 1, visited);
     fprintf(stream, "> {\n");
 
@@ -1171,32 +1172,32 @@ static void inspect_string_value(
 void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_visited_t *visited) {
   int t = vtype(val);
   
-  if (t == T_UNDEF) { fprintf(stream, "undefined"); return; }
-  if (t == T_NULL)  { fprintf(stream, "null"); return; }
-  if (t == T_BOOL)  { fprintf(stream, val == js_true ? "true" : "false"); return; }
-  if (t == T_NUM)   { fprintf(stream, "%g", js_getnum(val)); return; }
-  if (t == T_ERR)   { fprintf(stream, "[Error]"); return; }
+  if (t == kTypeUndefined) { fprintf(stream, "undefined"); return; }
+  if (t == kTypeNull)  { fprintf(stream, "null"); return; }
+  if (t == kTypeBool)  { fprintf(stream, val == js_true ? "true" : "false"); return; }
+  if (t == kTypeNumber)   { fprintf(stream, "%g", js_getnum(val)); return; }
+  if (t == kTypeError)   { fprintf(stream, "[Error]"); return; }
   
-  if (t == T_STR) {
+  if (t == kTypeString) {
     inspect_string_value(js, val, stream, depth, visited);
     return;
   }
   
-  if (t == T_SYMBOL) {
+  if (t == kTypeSymbol) {
     const char *desc = js_sym_desc(val);
     fprintf(stream, "Symbol(%s)", desc ? desc : "");
     return;
   }
   
-  if (t == T_OBJ || t == T_FUNC || t == T_PROMISE || t == T_ARR) {
+  if (t == kTypeObject || t == kTypeFunction || t == kTypePromise || t == kTypeArray) {
     if (depth > 10) fprintf(stream, "<%s @%" PRIu64 " ...>", get_type_name(t), (uint64_t)vdata(js_as_obj(val)));
     else inspect_object(js, val, stream, depth, visited);
     return;
   }
   
-  if (t == T_CFUNC) {
+  if (t == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_lookup_promoted(js, val);
-    if (vtype(promoted) == T_FUNC) {
+    if (vtype(promoted) == kTypeFunction) {
       if (depth > 10) fprintf(stream, "<Function @%" PRIu64 " ...>", (uint64_t)vdata(js_as_obj(promoted)));
       else inspect_object(js, promoted, stream, depth, visited);
       return;
@@ -1231,7 +1232,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
   }
   
   inspect_mark_visited(visited, obj_off);
-  fprintf(stream, "<%s @%llu> {\n", type == T_FUNC ? "Function" : (type == T_PROMISE ? "Promise" : "Object"), (u64)obj_off);
+  fprintf(stream, "<%s @%llu> {\n", type == kTypeFunction ? "Function" : (type == kTypePromise ? "Promise" : "Object"), (u64)obj_off);
   
   int inner_depth = depth + 1;
   inspect_print_indent(stream, inner_depth);
@@ -1240,7 +1241,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
   for (int slot = SLOT_NONE + 1; slot < SLOT_MAX; slot++) {
     ant_value_t slot_val = js_get_slot(obj, (internal_slot_t)slot);
     int t = vtype(slot_val);
-    if (t == T_UNDEF) continue;
+    if (t == kTypeUndefined) continue;
     
     inspect_print_indent(stream, inner_depth + 1);
     fprintf(stream, "[[%s]]: ", get_slot_name((internal_slot_t)slot));
@@ -1254,9 +1255,9 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
         fprintf(stream, "%.0f", js_getnum(slot_val));
         break;
       default:
-        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (uintptr_t)vdata(js_as_obj(slot_val))))
+        if ((t == kTypeObject || t == kTypeFunction || t == kTypePromise) && inspect_was_visited(visited, (uintptr_t)vdata(js_as_obj(slot_val))))
           fprintf(stream, "[Circular *%llu]", (u64)vdata(js_as_obj(slot_val)));
-        else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
+        else if (t == kTypeObject || t == kTypeFunction || t == kTypePromise)
           fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(js_as_obj(slot_val)));
         else
           inspect_value(js, slot_val, stream, inner_depth + 1, visited);
@@ -1291,7 +1292,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
   ant_value_t proto = js_get_proto(js, obj);
   inspect_print_indent(stream, inner_depth);
   fprintf(stream, "[[Prototype]]: ");
-  if (vtype(proto) == T_NULL) {
+  if (vtype(proto) == kTypeNull) {
     fprintf(stream, "null\n");
   } else {
     fprintf(stream, "\n");
@@ -1371,13 +1372,13 @@ static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int narg
     stdout_obj = js_get(js, options, "stdout");
     stderr_obj = js_get(js, options, "stderr");
     ant_value_t gi = js_get(js, options, "groupIndentation");
-    if (vtype(gi) == T_NUM) group_indentation = (int)js_getnum(gi);
+    if (vtype(gi) == kTypeNumber) group_indentation = (int)js_getnum(gi);
   } else {
     if (nargs >= 1) stdout_obj = args[0];
     if (nargs >= 2) stderr_obj = args[1];
   }
 
-  if (vtype(stderr_obj) == T_UNDEF) stderr_obj = stdout_obj;
+  if (vtype(stderr_obj) == kTypeUndefined) stderr_obj = stdout_obj;
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_STDOUT, stdout_obj);
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_STDERR, stderr_obj);
   js_set_slot_wb(js, console_obj, SLOT_CONSOLE_COUNTS, js_mkobj(js));

@@ -158,7 +158,7 @@ static ant_value_t tls_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == T_CFUNC) result = js_as_cfunc(fn)(js, args, nargs);
+  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
   js->this_val = saved_this;
   return result;
@@ -214,10 +214,10 @@ static void tls_socket_sync_state(ant_tls_socket_t *socket) {
 
 static void tls_define_default_socket_state(ant_t *js, ant_value_t obj) {
   if (!is_object_type(obj)) return;
-  if (vtype(js_get(js, obj, "encrypted")) == T_UNDEF) js_set(js, obj, "encrypted", js_true);
-  if (vtype(js_get(js, obj, "authorized")) == T_UNDEF) js_set(js, obj, "authorized", js_true);
-  if (vtype(js_get(js, obj, "authorizationError")) == T_UNDEF) js_set(js, obj, "authorizationError", js_mknull());
-  if (vtype(js_get(js, obj, "secureConnecting")) == T_UNDEF) js_set(js, obj, "secureConnecting", js_false);
+  if (vtype(js_get(js, obj, "encrypted")) == kTypeUndefined) js_set(js, obj, "encrypted", js_true);
+  if (vtype(js_get(js, obj, "authorized")) == kTypeUndefined) js_set(js, obj, "authorized", js_true);
+  if (vtype(js_get(js, obj, "authorizationError")) == kTypeUndefined) js_set(js, obj, "authorizationError", js_mknull());
+  if (vtype(js_get(js, obj, "secureConnecting")) == kTypeUndefined) js_set(js, obj, "secureConnecting", js_false);
 }
 
 static bool tls_socket_push_read(
@@ -347,7 +347,7 @@ static ant_value_t tls_socket_drain_read_queue(ant_t *js, ant_value_t *args, int
   ) {
     tls_read_chunk_t *chunk = socket->read_head;
     size_t len = chunk->len - chunk->off;
-    ant_value_t data = vtype(socket->encoding) == T_STR
+    ant_value_t data = vtype(socket->encoding) == kTypeString
       ? js_mkstr(js, chunk->data + chunk->off, len)
       : tls_make_buffer_chunk(js, chunk->data + chunk->off, len);
     
@@ -390,7 +390,7 @@ static bool tls_value_bytes(
   if (bytes_out) *bytes_out = NULL;
   if (len_out) *len_out = 0;
 
-  if (vtype(value) == T_UNDEF || vtype(value) == T_NULL) return true;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return true;
   if (buffer_source_get_bytes(js, value, &buffer_bytes, len_out)) {
     if (bytes_out) *bytes_out = (const char *)buffer_bytes;
     return true;
@@ -439,7 +439,7 @@ static bool tls_parse_write_args(
   if (callback_out) *callback_out = js_mkundef();
   if (error_out) *error_out = js_mkundef();
 
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return true;
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) return true;
   value = args[0];
 
   if (!buffer_source_get_bytes(js, value, bytes_out, len_out)) {
@@ -545,7 +545,7 @@ static void tls_socket_on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_
     socket->bytes_read += (uint64_t)nread;
     tls_socket_sync_state(socket);
     if (eventemitter_listener_count(js, socket->obj, "data") > 0) {
-      if (vtype(socket->encoding) == T_STR)
+      if (vtype(socket->encoding) == kTypeString)
         chunk = js_mkstr(js, buf->base, (size_t)nread);
       else chunk = tls_make_buffer_chunk(js, buf->base, (size_t)nread);
       if (is_err(chunk)) {
@@ -617,7 +617,7 @@ static ant_value_t js_tls_socket_read(ant_t *js, ant_value_t *args, int nargs) {
   if (!socket) return js->thrown_value;
   if (!socket->read_head || socket->read_len == 0) return js_mknull();
 
-  if (nargs > 0 && vtype(args[0]) == T_NUM && js_getnum(args[0]) > 0)
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber && js_getnum(args[0]) > 0)
     wanted = (size_t)js_getnum(args[0]);
   if (wanted == 0 || wanted > socket->read_len) wanted = socket->read_len;
 
@@ -643,7 +643,7 @@ static ant_value_t js_tls_socket_read(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
 
-  if (vtype(socket->encoding) == T_STR)
+  if (vtype(socket->encoding) == kTypeString)
     out = js_mkstr(js, data, copied);
   else out = tls_make_buffer_chunk(js, data, copied);
   free(data);
@@ -716,7 +716,7 @@ static ant_value_t js_tls_socket_end(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_getthis(js);
 
   if (!socket) return js->thrown_value;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     result = js_tls_socket_write(js, args, nargs);
     if (is_err(result)) return result;
   }
@@ -729,7 +729,7 @@ static ant_value_t js_tls_socket_destroy(ant_t *js, ant_value_t *args, int nargs
   ant_tls_socket_t *socket = tls_require_socket(js, js_getthis(js));
   if (!socket) return js->thrown_value;
 
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t err = args[0];
     socket->had_error = true;
     tls_emit(js, socket->obj, "error", &err, 1);
@@ -758,7 +758,7 @@ static ant_value_t js_tls_socket_setEncoding(ant_t *js, ant_value_t *args, int n
   ant_value_t encoding = js_mkundef();
 
   if (!socket) return js->thrown_value;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF) {
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
     encoding = js_tostring_val(js, args[0]);
     if (is_err(encoding)) return encoding;
   }
@@ -777,7 +777,7 @@ static ant_value_t js_tls_socket_setNoDelay(ant_t *js, ant_value_t *args, int na
 static ant_value_t js_tls_socket_setKeepAlive(ant_t *js, ant_value_t *args, int nargs) {
   ant_tls_socket_t *socket = tls_require_socket(js, js_getthis(js));
   bool enable = nargs > 0 && js_truthy(js, args[0]);
-  unsigned int delay = nargs > 1 && vtype(args[1]) == T_NUM ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
+  unsigned int delay = nargs > 1 && vtype(args[1]) == kTypeNumber ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
   if (!socket) return js->thrown_value;
   tlsuv_stream_keepalive(&socket->stream, enable ? 1 : 0, delay);
   return js_getthis(js);
@@ -786,7 +786,7 @@ static ant_value_t js_tls_socket_setKeepAlive(ant_t *js, ant_value_t *args, int 
 static ant_value_t js_tls_socket_setTimeout(ant_t *js, ant_value_t *args, int nargs) {
   ant_tls_socket_t *socket = tls_require_socket(js, js_getthis(js));
   if (!socket) return js->thrown_value;
-  socket->timeout_ms = nargs > 0 && vtype(args[0]) == T_NUM && js_getnum(args[0]) > 0 ? (uint64_t)js_getnum(args[0]) : 0;
+  socket->timeout_ms = nargs > 0 && vtype(args[0]) == kTypeNumber && js_getnum(args[0]) > 0 ? (uint64_t)js_getnum(args[0]) : 0;
   tls_socket_sync_state(socket);
   if (nargs > 1 && is_callable(args[1]))
     eventemitter_add_listener(js, socket->obj, "timeout", args[1], true);
@@ -957,12 +957,12 @@ static ant_value_t js_tls_create_context(ant_t *js, ant_value_t *args, int nargs
   size_t cert_len = 0;
   int rc = 0;
 
-  if (vtype(options) != T_UNDEF && vtype(options) != T_NULL && vtype(options) != T_OBJ)
+  if (vtype(options) != kTypeUndefined && vtype(options) != kTypeNull && vtype(options) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TLS context options must be an object");
 
   tls_init_context_proto(js);
 
-  if (vtype(options) == T_OBJ) {
+  if (vtype(options) == kTypeObject) {
     ca_v = js_get(js, options, "ca");
     key_v = js_get(js, options, "key");
     cert_v = js_get(js, options, "cert");
@@ -1063,7 +1063,7 @@ static ant_value_t js_tls_set_config_path(ant_t *js, ant_value_t *args, int narg
   const char *path = NULL;
   int rc = 0;
 
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) {
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined || vtype(args[0]) == kTypeNull) {
     rc = tlsuv_set_config_path(NULL);
     if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
     return js_mkundef();
@@ -1084,7 +1084,7 @@ static ant_value_t js_tls_set_config_path(ant_t *js, ant_value_t *args, int narg
 static bool tls_socket_set_alpn(ant_t *js, ant_tls_socket_t *socket, ant_value_t protocols) {
   ant_offset_t len = 0;
 
-  if (!socket || vtype(protocols) != T_ARR) return true;
+  if (!socket || vtype(protocols) != kTypeArray) return true;
   len = js_arr_len(js, protocols);
   if (len <= 0) return true;
 
@@ -1108,11 +1108,11 @@ static bool tls_socket_set_alpn(ant_t *js, ant_tls_socket_t *socket, ant_value_t
 
 static void tls_copy_connect_option(ant_t *js, ant_value_t dst, ant_value_t src, const char *key) {
   ant_value_t value = js_get(js, src, key);
-  if (vtype(value) != T_UNDEF) js_set(js, dst, key, value);
+  if (vtype(value) != kTypeUndefined) js_set(js, dst, key, value);
 }
 
 static void tls_copy_connect_options(ant_t *js, ant_value_t dst, ant_value_t src) {
-  if (vtype(src) != T_OBJ) return;
+  if (vtype(src) != kTypeObject) return;
   tls_copy_connect_option(js, dst, src, "host");
   tls_copy_connect_option(js, dst, src, "hostname");
   tls_copy_connect_option(js, dst, src, "port");
@@ -1136,11 +1136,11 @@ static ant_value_t tls_normalize_connect_options(
     argc--;
   }
 
-  if (argc == 1 && vtype(args[0]) == T_OBJ) return args[0];
-  if (argc > 0 && vtype(args[0]) == T_NUM) js_set(js, options, "port", args[0]);
-  if (argc > 1 && vtype(args[1]) == T_STR) js_set(js, options, "host", args[1]);
-  if (argc > 1 && vtype(args[1]) == T_OBJ) tls_copy_connect_options(js, options, args[1]);
-  if (argc > 2 && vtype(args[2]) == T_OBJ) tls_copy_connect_options(js, options, args[2]);
+  if (argc == 1 && vtype(args[0]) == kTypeObject) return args[0];
+  if (argc > 0 && vtype(args[0]) == kTypeNumber) js_set(js, options, "port", args[0]);
+  if (argc > 1 && vtype(args[1]) == kTypeString) js_set(js, options, "host", args[1]);
+  if (argc > 1 && vtype(args[1]) == kTypeObject) tls_copy_connect_options(js, options, args[1]);
+  if (argc > 2 && vtype(args[2]) == kTypeObject) tls_copy_connect_options(js, options, args[2]);
   return options;
 }
 
@@ -1154,17 +1154,17 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   int port = 443;
   int rc = 0;
 
-  if (vtype(options) != T_OBJ)
+  if (vtype(options) != kTypeObject)
     return js_mkerr_typed(js, JS_ERR_TYPE, "tls.connect requires an options object");
 
   value = js_get(js, options, "host");
-  if (vtype(value) == T_STR) host = js_getstr(js, value, NULL);
+  if (vtype(value) == kTypeString) host = js_getstr(js, value, NULL);
   value = js_get(js, options, "hostname");
-  if (vtype(value) == T_STR) host = js_getstr(js, value, NULL);
+  if (vtype(value) == kTypeString) host = js_getstr(js, value, NULL);
   value = js_get(js, options, "port");
-  if (vtype(value) == T_NUM) port = (int)js_getnum(value);
+  if (vtype(value) == kTypeNumber) port = (int)js_getnum(value);
   value = js_get(js, options, "servername");
-  if (vtype(value) == T_STR) servername = js_getstr(js, value, NULL);
+  if (vtype(value) == kTypeString) servername = js_getstr(js, value, NULL);
   if (!servername || !*servername) servername = host;
 
   tls_init_socket_proto(js);
@@ -1315,9 +1315,9 @@ void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
 
   for (socket = g_active_tls_sockets; socket; socket = socket->next_active) {
     mark(js, socket->obj);
-    if (vtype(socket->encoding) != T_UNDEF) mark(js, socket->encoding);
-    if (vtype(socket->secure_context) != T_UNDEF) mark(js, socket->secure_context);
+    if (vtype(socket->encoding) != kTypeUndefined) mark(js, socket->encoding);
+    if (vtype(socket->secure_context) != kTypeUndefined) mark(js, socket->secure_context);
     for (tls_write_req_t *write = socket->writes; write; write = write->next) 
-      if (vtype(write->callback) != T_UNDEF) mark(js, write->callback);
+      if (vtype(write->callback) != kTypeUndefined) mark(js, write->callback);
   }
 }

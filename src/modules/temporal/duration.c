@@ -34,7 +34,7 @@ static bool temporal_duration_partial(
       *err = field;
       return false;
     }
-    if (vtype(field) == T_UNDEF) continue;
+    if (vtype(field) == kTypeUndefined) continue;
     any = true;
     if (fields[i].floating) {
       double number;
@@ -71,7 +71,7 @@ bool temporal_duration_from_value(
     *out = temporal_rs_Duration_clone(duration);
     return true;
   }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -96,18 +96,18 @@ bool temporal_duration_from_value(
 }
 
 static ant_value_t temporal_duration_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.Duration");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.Duration");
   int64_t fields[8] = {0};
   double microseconds = 0, nanoseconds = 0;
   ant_value_t err = js_mkundef();
   for (int i = 0; i < 8 && i < nargs; i++)
     if (!temporal_integral(js, args[i], 0, &fields[i], &err)) return err;
-  if (nargs > 8 && vtype(args[8]) != T_UNDEF) {
+  if (nargs > 8 && vtype(args[8]) != kTypeUndefined) {
     if (!temporal_to_number(js, args[8], &microseconds, &err)) return err;
     if (!isfinite(microseconds) || trunc(microseconds) != microseconds)
       return js_mkerr_typed(js, JS_ERR_RANGE, "Temporal field must be a finite integer");
   }
-  if (nargs > 9 && vtype(args[9]) != T_UNDEF) {
+  if (nargs > 9 && vtype(args[9]) != kTypeUndefined) {
     if (!temporal_to_number(js, args[9], &nanoseconds, &err)) return err;
     if (!isfinite(nanoseconds) || trunc(nanoseconds) != nanoseconds)
       return js_mkerr_typed(js, JS_ERR_RANGE, "Temporal field must be a finite integer");
@@ -288,7 +288,7 @@ static ant_value_t temporal_duration_round(ant_t *js, ant_value_t *args, int nar
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "round options are required");
   RoundingOptions options = {0};
   temporal_relative_to_t relative = {0};
-  if (vtype(args[0]) == T_STR) {
+  if (vtype(args[0]) == kTypeString) {
     Unit unit;
     if (!temporal_unit_from_value(js, args[0], false, &unit, &err)) return err;
     options.smallest_unit = (Unit_option){.ok = unit, .is_ok = true};
@@ -299,7 +299,7 @@ static ant_value_t temporal_duration_round(ant_t *js, ant_value_t *args, int nar
       return js_mkerr_typed(js, JS_ERR_TYPE, "round options are required");
     ant_value_t value = js_get(js, object, "largestUnit");
     if (is_err(value)) return value;
-    if (vtype(value) != T_UNDEF) {
+    if (vtype(value) != kTypeUndefined) {
       Unit unit; if (!temporal_unit_from_value(js, value, true, &unit, &err)) return err;
       options.largest_unit = (Unit_option){.ok = unit, .is_ok = true};
     }
@@ -313,7 +313,7 @@ static ant_value_t temporal_duration_round(ant_t *js, ant_value_t *args, int nar
     }
     value = js_get(js, object, "roundingMode");
     if (is_err(value)) { temporal_relative_to_destroy(&relative); return value; }
-    if (vtype(value) != T_UNDEF) {
+    if (vtype(value) != kTypeUndefined) {
       RoundingMode mode;
       if (!temporal_rounding_mode_from_value(js, value, &mode, &err)) {
         temporal_relative_to_destroy(&relative); return err;
@@ -322,7 +322,7 @@ static ant_value_t temporal_duration_round(ant_t *js, ant_value_t *args, int nar
     }
     value = js_get(js, object, "smallestUnit");
     if (is_err(value)) { temporal_relative_to_destroy(&relative); return value; }
-    if (vtype(value) != T_UNDEF) {
+    if (vtype(value) != kTypeUndefined) {
       Unit unit;
       if (!temporal_unit_from_value(js, value, false, &unit, &err)) {
         temporal_relative_to_destroy(&relative); return err;
@@ -383,7 +383,7 @@ static ant_value_t temporal_duration_total(ant_t *js, ant_value_t *args, int nar
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "total options are required");
   ant_value_t unit_value;
   temporal_relative_to_t relative = {0};
-  if (vtype(args[0]) == T_STR) unit_value = args[0];
+  if (vtype(args[0]) == kTypeString) unit_value = args[0];
   else if (is_object_type(args[0])) {
     ant_value_t relative_value = js_get(js, args[0], "relativeTo");
     if (is_err(relative_value)) return relative_value;
@@ -392,7 +392,7 @@ static ant_value_t temporal_duration_total(ant_t *js, ant_value_t *args, int nar
   }
   else return js_mkerr_typed(js, JS_ERR_TYPE, "total options must be a string or object");
   if (is_err(unit_value)) { temporal_relative_to_destroy(&relative); return unit_value; }
-  if (vtype(unit_value) == T_UNDEF) {
+  if (vtype(unit_value) == kTypeUndefined) {
     temporal_relative_to_destroy(&relative);
     return js_mkerr_typed(js, JS_ERR_RANGE, "unit is required");
   }

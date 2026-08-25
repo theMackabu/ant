@@ -14,8 +14,9 @@
 #define ANT_WRITE_FD write
 #endif
 
+#include "ant.h"
+#include "value.h"
 #include "tty_ctrl.h"
-#include "internal.h"
 
 bool tty_ctrl_write_fd(int fd, const char *data, size_t len) {
   if (fd < 0 || !data) return false;
@@ -51,7 +52,7 @@ bool tty_ctrl_write_stream(FILE *stream, const char *data, size_t len, bool flus
 }
 
 bool tty_ctrl_parse_int_value(ant_value_t value, int *out) {
-  if (vtype(value) != T_NUM) return false;
+  if (vtype(value) != kTypeNumber) return false;
   double d = js_getnum(value);
   if (!isfinite(d)) return false;
   if (d < (double)INT_MIN || d > (double)INT_MAX) return false;
@@ -73,7 +74,7 @@ int tty_ctrl_normalize_coord(int value) {
 
 bool tty_ctrl_parse_clear_line_dir(ant_value_t *args, int nargs, int dir_index, int *dir_out) {
   int dir = 0;
-  if (nargs > dir_index && vtype(args[dir_index]) != T_UNDEF) {
+  if (nargs > dir_index && vtype(args[dir_index]) != kTypeUndefined) {
     if (!tty_ctrl_parse_int_value(args[dir_index], &dir)) return false;
   }
   *dir_out = tty_ctrl_normalize_clear_line_dir(dir);
@@ -95,7 +96,7 @@ bool tty_ctrl_parse_cursor_to_args(
   out->has_y = false;
   out->y = 0;
 
-  if (nargs > y_index && vtype(args[y_index]) != T_UNDEF) {
+  if (nargs > y_index && vtype(args[y_index]) != kTypeUndefined) {
     int y = 0;
     if (!tty_ctrl_parse_int_value(args[y_index], &y)) return false;
     out->has_y = true;

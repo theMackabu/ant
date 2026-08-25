@@ -303,8 +303,8 @@ void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value
   if (!js || !func || !is_tagged(value)) return;
   uint8_t type = vtype_tagged(value);
   
-  if (type != T_FUNC) {
-    if (type == T_STR) goto remember;
+  if (type != kTypeFunction) {
+    if (type == kTypeString) goto remember;
     if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
     ant_object_t *obj = (ant_object_t *)vptr(value);
     if (!obj || obj->flags.generation != 0) return;
@@ -425,7 +425,7 @@ static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   
   c->gc_epoch = gc_epoch;
   if (js->weak_gc.pending_active)
-    gc_weak_key_marked(js, mkref(T_FUNC, c));
+    gc_weak_key_marked(js, mkref(kTypeFunction, c));
   gc_mark_func(js, c->func);
   if (c->func_obj) gc_mark_value(js, c->func_obj);
   gc_mark_value(js, c->module_ctx);
@@ -445,22 +445,22 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   if (!is_tagged(v)) return;
   uint8_t t = vtype_tagged(v);
 
-  if (t == T_FUNC) {
+  if (t == kTypeFunction) {
     gc_mark_closure(js, (sv_closure_t *)vptr(v));
     return;
   }
 
-  if (t == T_STR && g_str_mark) {
+  if (t == kTypeString && g_str_mark) {
     g_str_mark(js, v);
     return;
   }
 
-  if (t == T_BIGINT) {
+  if (t == kTypeBigInt) {
     gc_bigints_mark((const void *)vptr(v));
     return;
   }
 
-  if (t == T_SYMBOL) {
+  if (t == kTypeSymbol) {
     bool newly_marked = js_symbol_gc_mark(v, gc_epoch);
     if (newly_marked && js->weak_gc.pending_active)
       gc_weak_key_marked(js, v);
@@ -478,14 +478,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   ant_gc_shapes_mark(obj->shape);
   gc_mark_value(js, obj->proto);
 
-  if (obj->type_tag != T_ARR) gc_mark_value(js, obj->u.data.value);
-  if (obj->type_tag == T_GENERATOR) {
+  if (obj->type_tag != kTypeArray) gc_mark_value(js, obj->u.data.value);
+  if (obj->type_tag == kTypeGenerator) {
     coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
     if (coro) gc_mark_coroutine(js, coro);
     generator_mark_for_gc(js, js_obj_from_ptr(obj));
   }
 
-  if (obj->type_tag == T_MAP) {
+  if (obj->type_tag == kTypeMap) {
     ant_value_t value = js_obj_from_ptr(obj);
     map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
     if (head) {
@@ -496,7 +496,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     }}
   } 
   
-  else if (obj->type_tag == T_SET) {
+  else if (obj->type_tag == kTypeSet) {
     ant_value_t value = js_obj_from_ptr(obj);
     set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
     if (head) {
@@ -513,7 +513,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
     if (prop && prop->type == ANT_SHAPE_KEY_SYMBOL)
-      gc_mark_value(js, mkval(T_SYMBOL, prop->key.sym_off));
+      gc_mark_value(js, mkval(kTypeSymbol, prop->key.sym_off));
     if (prop && prop->has_getter) gc_mark_value(js, prop->getter);
     if (prop && prop->has_setter) gc_mark_value(js, prop->setter);
   }}
@@ -524,7 +524,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     for (uint8_t i = 0; i < extra_count; i++) gc_mark_value(js, extra_slots[i].value);
   }
 
-  if (obj->type_tag == T_ARR && obj->u.array.data) {
+  if (obj->type_tag == kTypeArray && obj->u.array.data) {
     uint32_t n = obj->u.array.len < obj->u.array.cap ? obj->u.array.len : obj->u.array.cap;
     for (uint32_t i = 0; i < n; i++) gc_mark_value(js, obj->u.array.data[i]);
   }
@@ -568,9 +568,9 @@ while (gc_mark_sp > 0) {
 
 static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
   uint8_t type = vtype(key);
-  if (type == T_CFUNC) return true;
+  if (type == kTypeBuiltin) return true;
 
-  if (type == T_FUNC) {
+  if (type == kTypeFunction) {
     sv_closure_t *closure = js_func_closure(key);
     if (!closure || !fixed_arena_contains(&js->closure_arena, closure))
       return false;
@@ -578,7 +578,7 @@ static bool gc_weak_key_alive(ant_t *js, ant_value_t key) {
       closure->gc_epoch == gc_epoch;
   }
   
-  if (type == T_SYMBOL) {
+  if (type == kTypeSymbol) {
     if (g_minor_gc) return true;
     return js_symbol_gc_is_permanent(key) ||
       js_symbol_gc_is_marked(key, gc_epoch);
@@ -600,9 +600,9 @@ static bool gc_weak_collection_live(const ant_object_t *obj) {
 
 static ant_value_t gc_weak_key_from_marked_object(ant_object_t *obj) {
 switch (obj->type_tag) {
-  case T_ARR:
-  case T_PROMISE:
-  case T_GENERATOR: return mkref(obj->type_tag, obj);
+  case kTypeArray:
+  case kTypePromise:
+  case kTypeGenerator: return mkref(obj->type_tag, obj);
   default: return js_obj_from_ptr(obj);
 }}
 
@@ -690,13 +690,13 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
       if (obj) gc_grey_obj(js, obj);
     }
     
-    if (type == T_FUNC) {
+    if (type == kTypeFunction) {
       sv_closure_t *c = (sv_closure_t *)vptr(w);
       if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
     }
     
-    if (type == T_STR && g_str_mark) g_str_mark(js, w);
-    if (type == T_BIGINT)
+    if (type == kTypeString && g_str_mark) g_str_mark(js, w);
+    if (type == kTypeBigInt)
       gc_bigints_mark((const void *)vptr(w));
   }
 }
@@ -871,8 +871,8 @@ static void gc_mark_roots(ant_t *js) {
 }
 
 #define GC_FREE_PAYLOAD_MASK                       \
-  ((1u << T_ARR) | (1u << T_MAP) | (1u << T_SET) | \
-   (1u << T_WEAKMAP) | (1u << T_WEAKSET))
+  ((1u << kTypeArray) | (1u << kTypeMap) | (1u << kTypeSet) | \
+   (1u << kTypeWeakMap) | (1u << kTypeWeakSet))
 
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
@@ -911,7 +911,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
     obj->promise_state = NULL;
   }
 
-  if (obj->type_tag == T_ARR && obj->u.array.data) {
+  if (obj->type_tag == kTypeArray && obj->u.array.data) {
     size_t bytes = (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
     js->alloc_bytes.arrays = js->alloc_bytes.arrays > bytes ? js->alloc_bytes.arrays - bytes : 0;
     free(obj->u.array.data);
@@ -919,7 +919,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
   }
 
   switch (obj->type_tag) {
-    case T_MAP: {
+    case kTypeMap: {
       ant_value_t value = js_obj_from_ptr(obj);
       map_entry_t **head = (map_entry_t **)js_get_native(value, MAP_NATIVE_TAG);
       if (head) {
@@ -930,7 +930,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       }
       break;
     }
-    case T_SET: {
+    case kTypeSet: {
       ant_value_t value = js_obj_from_ptr(obj);
       set_entry_t **head = (set_entry_t **)js_get_native(value, SET_NATIVE_TAG);
       if (head) {
@@ -941,7 +941,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       }
       break;
     }
-    case T_WEAKMAP: {
+    case kTypeWeakMap: {
       ant_value_t value = js_obj_from_ptr(obj);
       weakmap_table_t *table = js_get_native(value, WEAKMAP_NATIVE_TAG);
       if (table) {
@@ -950,7 +950,7 @@ void gc_object_free(ant_t *js, ant_object_t *obj) {
       }
       break;
     }
-    case T_WEAKSET: {
+    case kTypeWeakSet: {
       ant_value_t value = js_obj_from_ptr(obj);
       weakset_entry_t **head = (weakset_entry_t **)js_get_native(value, WEAKSET_NATIVE_TAG);
       if (head) {

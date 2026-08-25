@@ -15,8 +15,8 @@ static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame
   
   sv_func_t *current_func = frame ? frame->func : NULL;
   bool use_ctor_prototype =
-    vtype(obj) == T_FUNC &&
-    vtype(receiver) != T_FUNC &&
+    vtype(obj) == kTypeFunction &&
+    vtype(receiver) != kTypeFunction &&
     current_func &&
     !current_func->is_static;
 
@@ -24,7 +24,7 @@ static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame
   if (use_ctor_prototype) proto = js_getprop_fallback(js, obj, "prototype");
   else proto = js_get_proto(js, obj);
   
-  if (vtype(prop) == T_SYMBOL) {
+  if (vtype(prop) == kTypeSymbol) {
     vm->stack[vm->sp++] = js_get_sym_with_receiver(js, proto, prop, receiver);
     return;
   }

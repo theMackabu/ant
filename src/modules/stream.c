@@ -63,14 +63,14 @@ static ant_value_t stream_pipes(ant_t *js, ant_value_t stream_obj) {
 static bool stream_key_is_cstr(ant_t *js, ant_value_t value, const char *expected) {
   size_t len = 0;
   const char *s = NULL;
-  if (vtype(value) != T_STR) return false;
+  if (vtype(value) != kTypeString) return false;
   s = js_getstr(js, value, &len);
   return s && len == strlen(expected) && memcmp(s, expected, len) == 0;
 }
 
 static ant_value_t stream_event_key(ant_t *js, ant_value_t value) {
   uint8_t t = vtype(value);
-  if (t == T_STR || t == T_SYMBOL) return value;
+  if (t == kTypeString || t == kTypeSymbol) return value;
   return js_mkerr(js, "event must be a string or Symbol");
 }
 
@@ -177,7 +177,7 @@ static ant_value_t stream_readable_decode_chunk(
 
 static bool stream_value_is_empty_string(ant_t *js, ant_value_t value) {
   size_t len = 0;
-  if (vtype(value) != T_STR) return false;
+  if (vtype(value) != kTypeString) return false;
   (void)js_getstr(js, value, &len);
   return len == 0;
 }
@@ -207,10 +207,10 @@ static ant_value_t stream_normalize_chunk(
 
   if (
     object_mode || is_null(chunk) || is_undefined(chunk) ||
-    vtype(chunk) == T_TYPEDARRAY || buffer_is_binary_source(chunk)
+    vtype(chunk) == kTypeTypedArray || buffer_is_binary_source(chunk)
   ) return chunk;
 
-  if (vtype(chunk) == T_STR) return stream_make_buffer(js, chunk, encoding);
+  if (vtype(chunk) == kTypeString) return stream_make_buffer(js, chunk, encoding);
 
   str_val = js_tostring_val(js, chunk);
   if (is_err(str_val)) return str_val;
@@ -227,7 +227,7 @@ static ant_value_t stream_readable_buffer(ant_t *js, ant_value_t stream_obj) {
 static ant_offset_t stream_readable_buffer_head(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
   ant_value_t head = is_object_type(state) ? js_get(js, state, "bufferHead") : js_mkundef();
-  return vtype(head) == T_NUM ? (ant_offset_t)js_getnum(head) : 0;
+  return vtype(head) == kTypeNumber ? (ant_offset_t)js_getnum(head) : 0;
 }
 
 static void stream_set_readable_buffer_head(ant_t *js, ant_value_t stream_obj, ant_offset_t head) {
@@ -238,7 +238,7 @@ static void stream_set_readable_buffer_head(ant_t *js, ant_value_t stream_obj, a
 static ant_offset_t stream_readable_buffer_len(ant_t *js, ant_value_t stream_obj) {
   ant_value_t buffer = stream_readable_buffer(js, stream_obj);
   ant_offset_t head = stream_readable_buffer_head(js, stream_obj);
-  ant_offset_t len = vtype(buffer) == T_ARR ? js_arr_len(js, buffer) : 0;
+  ant_offset_t len = vtype(buffer) == kTypeArray ? js_arr_len(js, buffer) : 0;
   return len > head ? len - head : 0;
 }
 
@@ -254,10 +254,10 @@ static void stream_compact_readable_buffer(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
   ant_value_t buffer = stream_readable_buffer(js, stream_obj);
   ant_offset_t head = stream_readable_buffer_head(js, stream_obj);
-  ant_offset_t len = vtype(buffer) == T_ARR ? js_arr_len(js, buffer) : 0;
+  ant_offset_t len = vtype(buffer) == kTypeArray ? js_arr_len(js, buffer) : 0;
   ant_value_t compact = 0;
 
-  if (!is_object_type(state) || vtype(buffer) != T_ARR) return;
+  if (!is_object_type(state) || vtype(buffer) != kTypeArray) return;
   if (head == 0) return;
   
   if (head >= len) {
@@ -281,27 +281,27 @@ static void stream_buffer_push(ant_t *js, ant_value_t stream_obj, ant_value_t va
   ant_value_t length = 0;
   bool object_mode = false;
 
-  if (!is_object_type(state) || vtype(buffer) != T_ARR) return;
+  if (!is_object_type(state) || vtype(buffer) != kTypeArray) return;
   js_arr_push(js, buffer, value);
   object_mode = js_truthy(js, js_get(js, state, "objectMode"));
   length = js_get(js, state, "length");
-  js_set(js, state, "length", js_mknum((vtype(length) == T_NUM ? tod(length) : 0) + stream_chunk_size(js, value, object_mode)));
+  js_set(js, state, "length", js_mknum((vtype(length) == kTypeNumber ? tod(length) : 0) + stream_chunk_size(js, value, object_mode)));
 }
 
 static ant_value_t stream_buffer_shift(ant_t *js, ant_value_t stream_obj) {
   ant_value_t buffer = stream_readable_buffer(js, stream_obj);
   ant_offset_t head = stream_readable_buffer_head(js, stream_obj);
-  ant_offset_t len = vtype(buffer) == T_ARR ? js_arr_len(js, buffer) : 0;
+  ant_offset_t len = vtype(buffer) == kTypeArray ? js_arr_len(js, buffer) : 0;
   ant_value_t value = js_mkundef();
 
-  if (vtype(buffer) != T_ARR || head >= len) return js_mkundef();
+  if (vtype(buffer) != kTypeArray || head >= len) return js_mkundef();
   value = js_arr_get(js, buffer, head);
   ant_value_t state = stream_readable_state(js, stream_obj);
   
   if (is_object_type(state)) {
     ant_value_t length = js_get(js, state, "length");
     bool object_mode = js_truthy(js, js_get(js, state, "objectMode"));
-    double next_length = (vtype(length) == T_NUM ? tod(length) : 0) - stream_chunk_size(js, value, object_mode);
+    double next_length = (vtype(length) == kTypeNumber ? tod(length) : 0) - stream_chunk_size(js, value, object_mode);
     js_set(js, state, "length", js_mknum(next_length > 0 ? next_length : 0));
     js_set(js, state, "dataEmitted", js_true);
   }
@@ -318,7 +318,7 @@ static bool stream_listener_count_positive(ant_t *js, ant_value_t target, const 
 
   args[0] = js_mkstr(js, event_name, strlen(event_name));
   result = stream_call_prop(js, target, "listenerCount", args, 1);
-  return vtype(result) == T_NUM && js_getnum(result) > 0;
+  return vtype(result) == kTypeNumber && js_getnum(result) > 0;
 }
 
 static void stream_remove_listener(
@@ -364,7 +364,7 @@ static double stream_default_high_water_mark(bool object_mode) {
 
 static double stream_high_water_mark_from_options(ant_t *js, ant_value_t options, bool object_mode) {
   ant_value_t hwm = stream_get_option(js, options, "highWaterMark");
-  return (vtype(hwm) == T_NUM && js_getnum(hwm) > 0)
+  return (vtype(hwm) == kTypeNumber && js_getnum(hwm) > 0)
     ? js_getnum(hwm)
     : stream_default_high_water_mark(object_mode);
 }
@@ -423,7 +423,7 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
 static ant_value_t js_writable_length_getter(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = stream_writable_state(js, js_getthis(js));
   ant_value_t length = is_object_type(state) ? js_get(js, state, "length") : js_mknum(0);
-  return vtype(length) == T_NUM ? length : js_mknum(0);
+  return vtype(length) == kTypeNumber ? length : js_mknum(0);
 }
 
 static ant_value_t js_writable_need_drain_getter(ant_t *js, ant_value_t *args, int nargs) {
@@ -455,7 +455,7 @@ static ant_value_t js_writable_finished_getter(ant_t *js, ant_value_t *args, int
 static ant_value_t js_writable_hwm_getter(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = stream_writable_state(js, js_getthis(js));
   ant_value_t hwm = is_object_type(state) ? js_get(js, state, "highWaterMark") : js_mkundef();
-  return vtype(hwm) == T_NUM ? hwm : js_mknum(0);
+  return vtype(hwm) == kTypeNumber ? hwm : js_mknum(0);
 }
 
 static void stream_define_writable_accessors(ant_t *js, ant_value_t proto) {
@@ -581,7 +581,7 @@ static ant_value_t js_stream_is_paused(ant_t *js, ant_value_t *args, int nargs) 
 
 static void stream_pipe_remove_state(ant_t *js, ant_value_t source, ant_value_t state_obj) {
   ant_value_t pipes = stream_pipes(js, source);
-  ant_offset_t len = vtype(pipes) == T_ARR ? js_arr_len(js, pipes) : 0;
+  ant_offset_t len = vtype(pipes) == kTypeArray ? js_arr_len(js, pipes) : 0;
   ant_value_t next = js_mkarr(js);
 
   for (ant_offset_t i = 0; i < len; i++) {
@@ -710,7 +710,7 @@ static ant_value_t js_stream_unpipe(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_err(source)) return source;
   pipes = stream_pipes(js, source);
-  if (vtype(pipes) != T_ARR) return source;
+  if (vtype(pipes) != kTypeArray) return source;
 
   matches = js_mkarr(js);
   len = js_arr_len(js, pipes);
@@ -915,7 +915,7 @@ ant_value_t stream_readable_maybe_read(ant_t *js, ant_value_t stream_obj) {
 
   hwm = js_get(js, state, "highWaterMark");
   length = js_get(js, state, "length");
-  if (vtype(hwm) == T_NUM && vtype(length) == T_NUM && tod(length) >= tod(hwm))
+  if (vtype(hwm) == kTypeNumber && vtype(length) == kTypeNumber && tod(length) >= tod(hwm))
     return js_mkundef();
 
   read_fn = js_getprop_fallback(js, stream_obj, "_read");
@@ -960,8 +960,8 @@ ant_value_t stream_readable_push_value(
   ant_value_t high_water_mark = js_get(js, state, "highWaterMark");
   
   return js_bool(
-    vtype(length) != T_NUM ||
-    vtype(high_water_mark) != T_NUM ||
+    vtype(length) != kTypeNumber ||
+    vtype(high_water_mark) != kTypeNumber ||
     tod(length) < tod(high_water_mark)
   );
 }
@@ -983,7 +983,7 @@ static ant_value_t js_readable_read(ant_t *js, ant_value_t *args, int nargs) {
   state = stream_readable_state(js, stream_obj);
   if (!is_object_type(state)) return js_mknull();
 
-  if (nargs > 0 && vtype(args[0]) == T_NUM && tod(args[0]) == 0.0) {
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber && tod(args[0]) == 0.0) {
     stream_readable_maybe_read(js, stream_obj);
     return js_mknull();
   }
@@ -1109,22 +1109,22 @@ static void stream_writable_set_length(
 
 static ant_offset_t stream_writable_buffer_head(ant_t *js, ant_value_t state) {
   ant_value_t head = js_get(js, state, "bufferHead");
-  return vtype(head) == T_NUM ? (ant_offset_t)js_getnum(head) : 0;
+  return vtype(head) == kTypeNumber ? (ant_offset_t)js_getnum(head) : 0;
 }
 
 static bool stream_writable_has_buffered(ant_t *js, ant_value_t state) {
   ant_value_t buffer = js_get(js, state, "buffer");
   ant_offset_t head = stream_writable_buffer_head(js, state);
-  return vtype(buffer) == T_ARR && head < js_arr_len(js, buffer);
+  return vtype(buffer) == kTypeArray && head < js_arr_len(js, buffer);
 }
 
 static void stream_writable_compact_buffer(ant_t *js, ant_value_t state) {
   ant_value_t buffer = js_get(js, state, "buffer");
   ant_offset_t head = stream_writable_buffer_head(js, state);
-  ant_offset_t len = vtype(buffer) == T_ARR ? js_arr_len(js, buffer) : 0;
+  ant_offset_t len = vtype(buffer) == kTypeArray ? js_arr_len(js, buffer) : 0;
   ant_value_t compact = 0;
 
-  if (vtype(buffer) != T_ARR || head == 0) return;
+  if (vtype(buffer) != kTypeArray || head == 0) return;
   if (head < len && (head < 32 || head * 2 < len)) return;
 
   compact = js_mkarr(js);
@@ -1146,7 +1146,7 @@ static void stream_writable_enqueue(
   ant_value_t buffer = js_get(js, state, "buffer");
   ant_value_t entry = js_mkobj(js);
 
-  if (vtype(buffer) != T_ARR) {
+  if (vtype(buffer) != kTypeArray) {
     buffer = js_mkarr(js);
     js_set(js, state, "buffer", buffer);
     js_set(js, state, "bufferHead", js_mknum(0));
@@ -1162,7 +1162,7 @@ static void stream_writable_enqueue(
 static ant_value_t stream_writable_dequeue(ant_t *js, ant_value_t state) {
   ant_value_t buffer = js_get(js, state, "buffer");
   ant_offset_t head = stream_writable_buffer_head(js, state);
-  ant_offset_t len = vtype(buffer) == T_ARR ? js_arr_len(js, buffer) : 0;
+  ant_offset_t len = vtype(buffer) == kTypeArray ? js_arr_len(js, buffer) : 0;
   ant_value_t entry = js_mkundef();
 
   if (head >= len) return entry;
@@ -1217,8 +1217,8 @@ static ant_value_t stream_writable_write_done(ant_t *js, ant_value_t *args, int 
 
   if (is_object_type(state)) {
     ant_value_t length_value = js_get(js, state, "length");
-    length = vtype(length_value) == T_NUM ? js_getnum(length_value) : 0;
-    if (vtype(size) == T_NUM) length -= js_getnum(size);
+    length = vtype(length_value) == kTypeNumber ? js_getnum(length_value) : 0;
+    if (vtype(size) == kTypeNumber) length -= js_getnum(size);
     stream_writable_set_length(js, stream_obj, state, length);
     has_buffered = stream_writable_has_buffered(js, state);
   }
@@ -1276,7 +1276,7 @@ static ant_value_t stream_writable_write_done(ant_t *js, ant_value_t *args, int 
       js_get(js, next, "chunk"),
       js_get(js, next, "encoding"),
       js_get(js, next, "callback"),
-      vtype(next_size) == T_NUM ? js_getnum(next_size) : 0
+      vtype(next_size) == kTypeNumber ? js_getnum(next_size) : 0
     )) break;
   }
   
@@ -1408,8 +1408,8 @@ static ant_value_t stream_writable_write_impl(
   chunk_size = stream_chunk_size(js, normalized, object_mode);
   length_value = js_get(js, state, "length");
   high_water_mark = js_get(js, state, "highWaterMark");
-  length = (vtype(length_value) == T_NUM ? js_getnum(length_value) : 0) + chunk_size;
-  hwm = vtype(high_water_mark) == T_NUM
+  length = (vtype(length_value) == kTypeNumber ? js_getnum(length_value) : 0) + chunk_size;
+  hwm = vtype(high_water_mark) == kTypeNumber
     ? js_getnum(high_water_mark)
     : stream_default_high_water_mark(object_mode);
   accepted = length < hwm;
@@ -1960,7 +1960,7 @@ static ant_value_t stream_readable_from_step(ant_t *js, ant_value_t *args, int n
   else next_result = stream_call_prop(js, iterator, "next", NULL, 0);
 
   if (is_err(next_result)) return stream_readable_from_fail(js, state_obj, next_result);
-  if (vtype(next_result) == T_PROMISE) {
+  if (vtype(next_result) == kTypePromise) {
     then_result = js_promise_then(js, next_result, on_resolve, on_reject);
     promise_mark_handled(then_result);
     return js_mkundef();
@@ -2379,7 +2379,7 @@ static ant_value_t js_stream_get_default_high_water_mark(ant_t *js, ant_value_t 
 }
 
 static ant_value_t js_stream_set_default_high_water_mark(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[1]) != T_NUM || js_getnum(args[1]) < 0)
+  if (nargs < 2 || vtype(args[1]) != kTypeNumber || js_getnum(args[1]) < 0)
     return js_mkerr_typed(js, JS_ERR_RANGE, "setDefaultHighWaterMark requires a non-negative number");
 
   bool object_mode = js_truthy(js, args[0]);

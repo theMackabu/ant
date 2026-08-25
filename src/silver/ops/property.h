@@ -29,11 +29,11 @@ static_assert(
 );
 
 static inline ant_value_t sv_key_to_property_key(ant_t *js, ant_value_t key) {
-  if (vtype(key) == T_SYMBOL) return key;
+  if (vtype(key) == kTypeSymbol) return key;
 
   ant_value_t prim = is_object_type(key) ? js_to_primitive(js, key, 1) : key;
   if (is_err(prim)) return prim;
-  if (vtype(prim) == T_SYMBOL) return prim;
+  if (vtype(prim) == kTypeSymbol) return prim;
 
   return js_tostring_val(js, prim);
 }
@@ -48,27 +48,27 @@ static inline ant_value_t sv_mk_nullish_read_error_by_key(
   uint8_t ot = vtype(obj);
   ant_value_t key_str = sv_key_to_propstr(js, key);
 
-  if (!is_err(key_str) && vtype(key_str) == T_STR) {
+  if (!is_err(key_str) && vtype(key_str) == kTypeString) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
     
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot read properties of %s (reading '%.*s')",
-      ot == T_NULL ? "null" : "undefined", (int)klen, kptr
+      ot == kTypeNull ? "null" : "undefined", (int)klen, kptr
     );
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE,
     "Cannot read properties of %s",
-    ot == T_NULL ? "null" : "undefined"
+    ot == kTypeNull ? "null" : "undefined"
   );
 }
 
 static inline ant_object_t *sv_array_obj_ptr(ant_value_t obj) {
   if (!is_object_type(obj)) return NULL;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-  return (ptr && ptr->type_tag == T_ARR) ? ptr : NULL;
+  return (ptr && ptr->type_tag == kTypeArray) ? ptr : NULL;
 }
 
 static inline bool sv_try_get_shape_data_prop(
@@ -325,18 +325,18 @@ static inline bool sv_try_get_data_prop_no_effect_interned(
 
   uint8_t t = vtype(obj);
   if (is_length_key(interned, len)) {
-    if (t == T_STR) {
+    if (t == kTypeString) {
       *out = tov((double)str_utf16_len(js, obj));
       return true;
     }
-    if (t == T_OBJ) {
+    if (t == kTypeObject) {
       ant_value_t primitive = js_get_slot(obj, SLOT_PRIMITIVE);
-      if (vtype(primitive) == T_STR) {
+      if (vtype(primitive) == kTypeString) {
         *out = tov((double)str_utf16_len(js, primitive));
         return true;
       }
     }
-    if (t == T_ARR) {
+    if (t == kTypeArray) {
       ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
       if (!ptr || ptr->flags.is_exotic) return false;
       *out = tov((double)js_arr_len(js, js_as_obj(obj)));
@@ -348,11 +348,11 @@ static inline bool sv_try_get_data_prop_no_effect_interned(
     return sv_try_get_data_prop_chain_no_effect(js, obj, interned, out);
 
   switch (t) {
-    case T_STR:
-    case T_NUM:
-    case T_BOOL:
-    case T_BIGINT:
-    case T_SYMBOL: {
+    case kTypeString:
+    case kTypeNumber:
+    case kTypeBool:
+    case kTypeBigInt:
+    case kTypeSymbol: {
       ant_value_t proto = js_primitive_prototype(js, t);
       return sv_try_get_data_prop_chain_no_effect(js, proto, interned, out);
     }
@@ -528,10 +528,10 @@ static inline void sv_gf_ic_note_miss(sv_ic_entry_t *ic) {
 static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_value_t key) {
   ant_value_t prop_key = sv_key_to_property_key(js, key);
   if (is_err(prop_key)) return prop_key;
-  if (vtype(prop_key) == T_SYMBOL) return js_get_sym(js, obj, prop_key);
+  if (vtype(prop_key) == kTypeSymbol) return js_get_sym(js, obj, prop_key);
 
   ant_value_t key_str = prop_key;
-  if (is_err(key_str) || vtype(key_str) != T_STR) return js_mkundef();
+  if (is_err(key_str) || vtype(key_str) != kTypeString) return js_mkundef();
 
   ant_offset_t klen = 0;
   ant_offset_t koff = vstr(js, key_str, &klen);
@@ -546,25 +546,25 @@ static inline ant_value_t sv_prop_get_at(
 ) {
   uint8_t t = vtype(obj);
 
-  if (t == T_NULL || t == T_UNDEF) {
+  if (t == kTypeNull || t == kTypeUndefined) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot read properties of %s (reading '%.*s')",
-      t == T_NULL ? "null" : "undefined", (int)len, str);
+      t == kTypeNull ? "null" : "undefined", (int)len, str);
   }
 
   ant_value_t str_prim = js_mkundef();
   ant_value_t sym_prim = js_mkundef();
 
-  if (t == T_STR) str_prim = obj;
-  else if (t == T_SYMBOL) sym_prim = obj;
-  else if (t == T_OBJ) {
+  if (t == kTypeString) str_prim = obj;
+  else if (t == kTypeSymbol) sym_prim = obj;
+  else if (t == kTypeObject) {
     ant_value_t prim = js_get_slot(obj, SLOT_PRIMITIVE);
-    if (vtype(prim) == T_STR) str_prim = prim;
-    else if (vtype(prim) == T_SYMBOL) sym_prim = prim;
+    if (vtype(prim) == kTypeString) str_prim = prim;
+    else if (vtype(prim) == kTypeSymbol) sym_prim = prim;
   }
 
-  if (vtype(str_prim) == T_STR && is_length_key(str, len)) {
+  if (vtype(str_prim) == kTypeString && is_length_key(str, len)) {
     return tov((double)str_utf16_len(js, str_prim));
   }
 
@@ -573,14 +573,14 @@ static inline ant_value_t sv_prop_get_at(
     if (arr_ptr) return tov((double)js_arr_len(js, js_as_obj(obj)));
   }
 
-  if (vtype(sym_prim) == T_SYMBOL && len == 11 &&
+  if (vtype(sym_prim) == kTypeSymbol && len == 11 &&
       memcmp(str, "description", 11) == 0) {
     const char *desc = js_sym_desc(sym_prim);
     if (desc) return js_mkstr(js, desc, strlen(desc));
     return js_mkundef();
   }
 
-  if (t == T_OBJ || t == T_ARR || t == T_FUNC || t == T_PROMISE) {
+  if (t == kTypeObject || t == kTypeArray || t == kTypeFunction || t == kTypePromise) {
     ant_value_t cur = obj;
     sv_proto_guard_t guard;
     sv_proto_guard_init(&guard);
@@ -604,7 +604,7 @@ static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *st
 }
 
 static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
-  if (vtype(key) == T_NUM) {
+  if (vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (!isfinite(d) || d < 0.0) return false;
     double di = floor(d);
@@ -613,7 +613,7 @@ static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t 
     return true;
   }
 
-  if (vtype(key) != T_STR) return false;
+  if (vtype(key) != kTypeString) return false;
 
   ant_offset_t klen = 0;
   ant_offset_t koff = vstr(js, key, &klen);
@@ -635,11 +635,11 @@ static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t 
 
 static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
   ant_value_t str = obj;
-  if (vtype(obj) == T_OBJ) {
+  if (vtype(obj) == kTypeObject) {
     ant_value_t prim = js_get_slot(obj, SLOT_PRIMITIVE);
-    if (vtype(prim) == T_STR) str = prim;
+    if (vtype(prim) == kTypeString) str = prim;
   }
-  if (vtype(str) != T_STR) return false;
+  if (vtype(str) != kTypeString) return false;
 
   size_t idx = 0;
   if (!sv_parse_string_index_key(js, key, &idx)) return false;
@@ -676,8 +676,8 @@ static inline bool sv_prim_ic_lookup(
 ) {
   uint8_t pt = vtype(obj);
   
-  if (pt != T_STR && pt != T_NUM && pt != T_BOOL) return false;
-  if (pt == T_STR && a->len > 0 && a->str[0] >= '0' && a->str[0] <= '9') return false;
+  if (pt != kTypeString && pt != kTypeNumber && pt != kTypeBool) return false;
+  if (pt == kTypeString && a->len > 0 && a->str[0] >= '0' && a->str[0] <= '9') return false;
 
   if (sv_ic_try_get_hit_prim(ic, pt, a, out)) {
     sv_gf_ic_note_success(ic);
@@ -825,7 +825,7 @@ static inline bool sv_try_put_field_fast(
 
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
-  if (ptr->type_tag == T_ARR && is_length_key(a->str, a->len)) return false;
+  if (ptr->type_tag == kTypeArray && is_length_key(a->str, a->len)) return false;
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, a->str);
   if (slot < 0) return false;
@@ -899,7 +899,7 @@ static inline ant_value_t sv_put_field_cached(
 
   if (ic && ptr && !ptr->flags.is_exotic && ptr->shape &&
       !ptr->flags.frozen && !ptr->flags.sealed && ptr->flags.extensible &&
-      ptr->type_tag != T_ARR &&
+      ptr->type_tag != kTypeArray &&
       !sv_is_proto_atom(a) &&
       ic->guard.add.epoch == ant_ic_epoch_counter &&
       ic->guard.add.from_shape == ptr->shape &&
@@ -966,7 +966,7 @@ static inline ant_value_t sv_put_field_cached(
             !ptr->flags.frozen &&
             !ptr->flags.sealed &&
             ptr->flags.extensible &&
-            ptr->type_tag != T_ARR &&
+            ptr->type_tag != kTypeArray &&
             prop->attrs == ANT_PROP_ATTR_DEFAULT) {
           sv_ic_set_add_transition(
             js, ic, old_shape, ptr->shape, prop_idx, ant_ic_epoch_counter
@@ -1000,12 +1000,12 @@ static inline ant_value_t sv_op_get_elem(
   ant_value_t obj = vm->stack[--vm->sp];
   uint8_t ot = vtype(obj);
 
-  if (ot == T_NULL || ot == T_UNDEF) {
+  if (ot == kTypeNull || ot == kTypeUndefined) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d) {
       vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
@@ -1033,12 +1033,12 @@ static inline ant_value_t sv_op_get_elem2(
   ant_value_t obj = vm->stack[vm->sp - 1];
 
   uint8_t ot = vtype(obj);
-  if (ot == T_NULL || ot == T_UNDEF) {
+  if (ot == kTypeNull || ot == kTypeUndefined) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->debug->filename);
     return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
-  if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
+  if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
     if (d >= 0 && d == (uint32_t)d) {
       vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
@@ -1078,7 +1078,7 @@ static inline bool sv_try_define_field_fast(
   ant_value_t as_obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(as_obj);
   if (!ptr || ptr->flags.is_exotic || !ptr->shape) return false;
-  if (ptr->type_tag == T_ARR) return false;
+  if (ptr->type_tag == kTypeArray) return false;
   if (ptr->flags.frozen || ptr->flags.sealed || !ptr->flags.extensible) return false;
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, interned_key);
@@ -1139,12 +1139,12 @@ static inline void sv_op_define_slot(
 static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
 
-  if (vtype(obj) == T_ARR) {
+  if (vtype(obj) == kTypeArray) {
     vm->stack[vm->sp++] = tov((double)(uint32_t)js_arr_len(js, obj));
     return js_mkundef();
   }
   
-  if (vtype(obj) == T_STR) {
+  if (vtype(obj) == kTypeString) {
     vm->stack[vm->sp++] = tov((double)str_utf16_len(js, obj));
     return js_mkundef();
   }

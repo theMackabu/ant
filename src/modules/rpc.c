@@ -186,7 +186,7 @@ static char *rpc_strdup_len(const char *str, size_t len) {
 }
 
 static char *rpc_value_to_cstring(ant_t *js, ant_value_t value, const char *what) {
-  if (vtype(value) != T_STR) {
+  if (vtype(value) != kTypeString) {
     ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "%s must be a string", what);
     (void)err;
     return NULL;
@@ -229,21 +229,21 @@ static ant_value_t rpc_parse_integrity_options(
   if (!is_object_type(options)) return js_mkundef();
 
   ant_value_t iv = js_get(js, options, "integrity");
-  if (vtype(iv) == T_NUM) {
+  if (vtype(iv) == kTypeNumber) {
     uint32_t raw = (uint32_t)js_getnum(iv);
     if (raw & ~(WIRECALL_INTEGRITY_CHECKSUM | WIRECALL_INTEGRITY_MAC))
       return js_mkerr_typed(js, JS_ERR_RANGE, "invalid rpc integrity");
     *integrity = raw;
-  } else if (vtype(iv) == T_STR) {
+  } else if (vtype(iv) == kTypeString) {
     const char *s = js_getstr(js, iv, NULL);
     if (!rpc_parse_integrity_name(s, integrity))
       return js_mkerr_typed(js, JS_ERR_RANGE, "invalid rpc integrity '%s'", s ? s : "");
-  } else if (vtype(iv) != T_UNDEF && vtype(iv) != T_NULL) {
+  } else if (vtype(iv) != kTypeUndefined && vtype(iv) != kTypeNull) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "rpc integrity must be a string or number");
   }
 
   ant_value_t key = js_get(js, options, "macKey");
-  if (vtype(key) == T_STR) {
+  if (vtype(key) == kTypeString) {
     size_t len = 0;
     const char *s = js_getstr(js, key, &len);
     if (len != 16) return js_mkerr_typed(js, JS_ERR_TYPE, "rpc macKey must be exactly 16 bytes");
@@ -256,7 +256,7 @@ static ant_value_t rpc_parse_integrity_options(
       return js_mkerr_typed(js, JS_ERR_TYPE, "rpc macKey must be exactly 16 bytes");
     memcpy(mac_key, bytes, 16);
     *has_mac_key = true;
-  } else if (vtype(key) != T_UNDEF && vtype(key) != T_NULL) {
+  } else if (vtype(key) != kTypeUndefined && vtype(key) != kTypeNull) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "rpc macKey must be a string or bytes");
   }
 
@@ -268,10 +268,10 @@ static ant_value_t rpc_parse_integrity_options(
 
 static ant_value_t rpc_get_error_value(ant_t *js, const char *prefix, const char *name, ant_value_t reason) {
   const char *msg = NULL;
-  if (vtype(reason) == T_ERR && js->thrown_exists) reason = js->thrown_value;
+  if (vtype(reason) == kTypeError && js->thrown_exists) reason = js->thrown_value;
   if (is_object_type(reason)) {
     ant_value_t message = js_get(js, reason, "message");
-    if (vtype(message) == T_STR) msg = js_getstr(js, message, NULL);
+    if (vtype(message) == kTypeString) msg = js_getstr(js, message, NULL);
   }
   if (!msg) msg = js_str(js, reason);
   return js_mkerr(js, "%s '%s' failed: %s", prefix, name ? name : "<unknown>", msg ? msg : "error");
@@ -279,10 +279,10 @@ static ant_value_t rpc_get_error_value(ant_t *js, const char *prefix, const char
 
 static int rpc_write_js_value(ant_t *js, wirecall_writer *writer, ant_value_t value, const char **error) {
   uint8_t type = vtype(value);
-  if (type == T_NULL) return wirecall_writer_null(writer);
-  if (type == T_BOOL) return wirecall_writer_bool(writer, value == js_true || vdata(value) != 0);
-  if (type == T_NUM) return wirecall_writer_f64(writer, js_getnum(value));
-  if (type == T_BIGINT) {
+  if (type == kTypeNull) return wirecall_writer_null(writer);
+  if (type == kTypeBool) return wirecall_writer_bool(writer, value == js_true || vdata(value) != 0);
+  if (type == kTypeNumber) return wirecall_writer_f64(writer, js_getnum(value));
+  if (type == kTypeBigInt) {
     if (bigint_is_negative(js, value)) {
       ant_value_t min = bigint_from_int64(js, INT64_MIN);
       ant_value_t max = bigint_from_int64(js, INT64_MAX);
@@ -309,7 +309,7 @@ static int rpc_write_js_value(ant_t *js, wirecall_writer *writer, ant_value_t va
     }
     return wirecall_writer_u64(writer, out);
   }
-  if (type == T_STR) {
+  if (type == kTypeString) {
     size_t len = 0;
     const char *str = js_getstr(js, value, &len);
     if (len > UINT32_MAX) {
@@ -381,7 +381,7 @@ static ant_value_t rpc_values_to_js_array(ant_t *js, const wirecall_value *value
 }
 
 static int rpc_write_js_array(ant_t *js, wirecall_writer *writer, ant_value_t arr, const char **error) {
-  if (vtype(arr) != T_ARR) {
+  if (vtype(arr) != kTypeArray) {
     if (error) *error = "rpc handler must return an array";
     return -1;
   }
@@ -567,7 +567,7 @@ static void rpc_run_task(ant_t *js, rpc_deferred_task_t *task) {
   ant_value_t result = sv_vm_call(js->vm, js, task->route->handler, js_mkundef(), call_args, 1, NULL, false);
   GC_ROOT_PIN(js, result);
 
-  bool result_is_awaitable = vtype(result) == T_PROMISE || (is_object_type(result) && is_callable(js_get(js, result, "then")));
+  bool result_is_awaitable = vtype(result) == kTypePromise || (is_object_type(result) && is_callable(js_get(js, result, "then")));
   if (is_err(result) || (js->thrown_exists && !result_is_awaitable)) {
     rpc_complete_task(task, result, true);
     js->thrown_exists = false;
@@ -581,8 +581,8 @@ static void rpc_run_task(ant_t *js, rpc_deferred_task_t *task) {
     task->pending_promise = true;
     ant_value_t awaited = js_promise_assimilate_awaitable(js, result);
     GC_ROOT_PIN(js, awaited);
-    if (vtype(result) == T_PROMISE) promise_mark_handled(result);
-    if (vtype(awaited) == T_PROMISE) promise_mark_handled(awaited);
+    if (vtype(result) == kTypePromise) promise_mark_handled(result);
+    if (vtype(awaited) == kTypePromise) promise_mark_handled(awaited);
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
@@ -782,7 +782,7 @@ static ant_value_t rpc_server_listen(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t opts = args[0];
   char port_buf[32];
   ant_value_t port_val = js_get(js, opts, "port");
-  if (vtype(port_val) != T_NUM) {
+  if (vtype(port_val) != kTypeNumber) {
     js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer.listen options.port must be a number"));
     return promise;
   }
@@ -790,7 +790,7 @@ static ant_value_t rpc_server_listen(ant_t *js, ant_value_t *args, int nargs) {
 
   char *host = NULL;
   ant_value_t host_val = js_get(js, opts, "host");
-  if (vtype(host_val) == T_STR) host = rpc_value_to_cstring(js, host_val, "host");
+  if (vtype(host_val) == kTypeString) host = rpc_value_to_cstring(js, host_val, "host");
   else host = strdup("127.0.0.1");
   if (!host) {
     js_reject_promise(js, promise, js_mkerr(js, "out of memory"));
@@ -808,7 +808,7 @@ static ant_value_t rpc_server_listen(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t workers_val = js_get(js, opts, "workers");
-  if (vtype(workers_val) == T_NUM) {
+  if (vtype(workers_val) == kTypeNumber) {
     uint32_t workers = (uint32_t)js_getnum(workers_val);
     if (workers > 0 && wirecall_server_set_workers(server->server, workers) != 0) {
       free(host);
@@ -882,7 +882,7 @@ static ant_value_t rpc_server_close(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t rpc_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer constructor requires new");
 
   rpc_server_t *server = calloc(1, sizeof(*server));
@@ -916,7 +916,7 @@ static ant_value_t rpc_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
       }
     }
     js_prop_iter_end(&iter);
-  } else if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+  } else if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer routes must be an object");
   }
 
@@ -1096,7 +1096,7 @@ static ant_value_t rpc_client_connect(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t rpc_client_call(ant_t *js, ant_value_t *args, int nargs) {
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return js->thrown_value;
-  if (nargs < 2 || vtype(args[1]) != T_ARR)
+  if (nargs < 2 || vtype(args[1]) != kTypeArray)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient.call requires name and args array");
 
   char *name = rpc_value_to_cstring(js, args[0], "procedure name");
@@ -1208,7 +1208,7 @@ static void rpc_client_finalizer(ant_t *js, ant_object_t *obj) {
 }
 
 static ant_value_t rpc_client_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient constructor requires new");
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient requires options");
@@ -1216,10 +1216,10 @@ static ant_value_t rpc_client_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t opts = args[0];
   ant_value_t host_val = js_get(js, opts, "host");
   ant_value_t port_val = js_get(js, opts, "port");
-  char *host = vtype(host_val) == T_STR ? rpc_value_to_cstring(js, host_val, "host") : strdup("127.0.0.1");
+  char *host = vtype(host_val) == kTypeString ? rpc_value_to_cstring(js, host_val, "host") : strdup("127.0.0.1");
   if (!host) return js->thrown_exists ? js->thrown_value : js_mkerr(js, "out of memory");
   char port_buf[32];
-  if (vtype(port_val) != T_NUM) {
+  if (vtype(port_val) != kTypeNumber) {
     free(host);
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient options.port must be a number");
   }
@@ -1319,7 +1319,7 @@ void gc_mark_rpc(ant_t *js, gc_mark_fn mark) {
 
   for (rpc_server_t *server = g_active_servers; server; server = server->next_active) {
     mark(js, server->obj);
-    if (vtype(server->listen_promise) == T_PROMISE) mark(js, server->listen_promise);
+    if (vtype(server->listen_promise) == kTypePromise) mark(js, server->listen_promise);
     for (rpc_route_t *route = server->routes; route; route = route->next)
       if (is_callable(route->handler)) mark(js, route->handler);
     for (rpc_deferred_task_t *task = server->tasks_head; task; task = task->next)
@@ -1330,9 +1330,9 @@ void gc_mark_rpc(ant_t *js, gc_mark_fn mark) {
     mark(js, client->obj);
     pthread_mutex_lock(&client->mutex);
     for (rpc_client_op_t *op = client->head; op; op = op->next)
-      if (vtype(op->promise) == T_PROMISE) mark(js, op->promise);
+      if (vtype(op->promise) == kTypePromise) mark(js, op->promise);
     for (rpc_client_op_t *op = client->done_head; op; op = op->done_next)
-      if (vtype(op->promise) == T_PROMISE) mark(js, op->promise);
+      if (vtype(op->promise) == kTypePromise) mark(js, op->promise);
     pthread_mutex_unlock(&client->mutex);
   }
 }

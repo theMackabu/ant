@@ -30,13 +30,13 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
   const char *stack = NULL; bool no_stack = false;
   ant_output_stream_begin(out);
   
-  if (vtype(obj) == T_OBJ) {
+  if (vtype(obj) == kTypeObject) {
     ant_value_t err_type = js_get_slot(obj, SLOT_ERR_TYPE);
-    no_stack = vtype(err_type) == T_NUM && ((int)js_getnum(err_type) & JS_ERR_NO_STACK);
+    no_stack = vtype(err_type) == kTypeNumber && ((int)js_getnum(err_type) & JS_ERR_NO_STACK);
     if (!no_stack) stack = get_str_prop(js, obj, "stack", 5, NULL);
   }
   
-  if (!no_stack && !stack && vtype(fallback_stack) == T_STR) {
+  if (!no_stack && !stack && vtype(fallback_stack) == kTypeString) {
     ant_offset_t slen;
     ant_offset_t soff = vstr(js, fallback_stack, &slen);
     stack = (const char *)(uintptr_t)(soff);
@@ -48,7 +48,7 @@ void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack,
     ant_output_stream_append_cstr(out, stack);
     size_t n = strlen(stack);
     if (n == 0 || stack[n - 1] != '\n') ant_output_stream_putc(out, '\n');
-  } else if (vtype(obj) == T_OBJ) {
+  } else if (vtype(obj) == kTypeObject) {
     const char *name = get_str_prop(js, obj, "name", 4, NULL);
     const char *msg = get_str_prop(js, obj, "message", 7, NULL);
     
@@ -84,7 +84,7 @@ bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value) {
 }
 
 bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value) {
-  if (vtype(value) != T_OBJ) return false;
+  if (vtype(value) != kTypeObject) return false;
   if (js_get_slot(value, SLOT_ERROR_BRAND) == js_true) return false;
 
   const char *name = get_str_prop(js, value, "name", 4, NULL);
@@ -92,7 +92,7 @@ bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value) {
   if ((!name || !*name) && (!message || !*message)) return false;
 
   ant_value_t err_type = js_get_slot(value, SLOT_ERR_TYPE);
-  int base_type = vtype(err_type) == T_NUM ? (int)js_getnum(err_type) : JS_ERR_GENERIC;
+  int base_type = vtype(err_type) == kTypeNumber ? (int)js_getnum(err_type) : JS_ERR_GENERIC;
 
   js_set(js, value, "stack", js_mkundef());
   js_set_slot(value, SLOT_ERR_TYPE, js_mknum((double)(base_type | JS_ERR_NO_STACK)));
@@ -238,21 +238,21 @@ static size_t append_error_value(errbuf_t *eb, ant_t *js, size_t used, ant_value
   ant_offset_t msg_len = 0;
 
   static const void *type_dispatch[] = {
-    [T_STR] = &&l_type_str,
-    [T_OBJ] = &&l_type_obj,
-    [T_FUNC] = &&l_type_default,
-    [T_ARR] = &&l_type_default,
-    [T_PROMISE] = &&l_type_default,
-    [T_GENERATOR] = &&l_type_default,
-    [T_BIGINT] = &&l_type_default,
-    [T_NUM] = &&l_type_default,
-    [T_BOOL] = &&l_type_default,
-    [T_SYMBOL] = &&l_type_default,
-    [T_CFUNC] = &&l_type_default,
-    [T_TYPEDARRAY] = &&l_type_default,
-    [T_ERR] = &&l_type_default,
-    [T_UNDEF] = &&l_type_default,
-    [T_NULL] = &&l_type_default,
+    [kTypeString] = &&l_type_str,
+    [kTypeObject] = &&l_type_obj,
+    [kTypeFunction] = &&l_type_default,
+    [kTypeArray] = &&l_type_default,
+    [kTypePromise] = &&l_type_default,
+    [kTypeGenerator] = &&l_type_default,
+    [kTypeBigInt] = &&l_type_default,
+    [kTypeNumber] = &&l_type_default,
+    [kTypeBool] = &&l_type_default,
+    [kTypeSymbol] = &&l_type_default,
+    [kTypeBuiltin] = &&l_type_default,
+    [kTypeTypedArray] = &&l_type_default,
+    [kTypeError] = &&l_type_default,
+    [kTypeUndefined] = &&l_type_default,
+    [kTypeNull] = &&l_type_default,
   };
 
   uint8_t t = vtype(value);
@@ -380,7 +380,7 @@ static int error_context_src_cols_limit(int gutter_w) {
 
 static const char *error_frame_name(ant_t *js, sv_frame_t *frame, sv_func_t *func) {
   if (func && func->debug->name && func->debug->name[0]) return func->debug->name;
-  if (js && frame && vtype(frame->callee) == T_FUNC) {
+  if (js && frame && vtype(frame->callee) == kTypeFunction) {
     ant_offset_t name_len = 0;
     const char *name = get_str_prop(js, js_func_obj(frame->callee), "name", 4, &name_len);
     if (name && name_len > 0) return name;
@@ -795,7 +795,7 @@ static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant
 
 void js_capture_stack(ant_t *js, ant_value_t err_obj) {
   ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_ERROR_OBJECT, err_obj);
-  if (vtype(stack_str) != T_STR) return;
+  if (vtype(stack_str) != kTypeString) return;
 
   js_set(js, err_obj, "stack", stack_str);
   js_set_descriptor(js, js_as_obj(err_obj), "stack", 5, JS_DESC_W | JS_DESC_C);
@@ -805,7 +805,7 @@ void js_capture_stack(ant_t *js, ant_value_t err_obj) {
 js_err_type_t get_error_type(ant_t *js) {
   if (!js->thrown_exists) return JS_ERR_GENERIC;
   ant_value_t err_type = js_get_slot(js->thrown_value, SLOT_ERR_TYPE);
-  if (vtype(err_type) != T_NUM) return JS_ERR_GENERIC;
+  if (vtype(err_type) != kTypeNumber) return JS_ERR_GENERIC;
   return (js_err_type_t)((int)js_getnum(err_type) & ~JS_ERR_NO_STACK);
 }
 
@@ -847,7 +847,7 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   }
 
   js_clear_error_site(js);
-  return mkval(T_ERR, vdata(err_obj));
+  return mkval(kTypeError, vdata(err_obj));
 }
 
 ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message) {
@@ -867,32 +867,32 @@ ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *
 }
 
 ant_value_t js_throw(ant_t *js, ant_value_t value) {
-  if (vtype(value) == T_OBJ) {
+  if (vtype(value) == kTypeObject) {
     ant_value_t existing = js_get(js, value, "stack");
-    if (vtype(existing) == T_STR) {
+    if (vtype(existing) == kTypeString) {
       js->thrown_exists = true;
       js->thrown_value = value;
       js_clear_error_site(js);
-      return mkval(T_ERR, vdata(value));
+      return mkval(kTypeError, vdata(value));
     }
     ant_value_t slot = js_get_slot(value, SLOT_ERR_TYPE);
-    if (vtype(slot) == T_NUM && ((int)js_getnum(slot) & JS_ERR_NO_STACK)) {
+    if (vtype(slot) == kTypeNumber && ((int)js_getnum(slot) & JS_ERR_NO_STACK)) {
       js->thrown_exists = true;
       js->thrown_value = value;
       js_clear_error_site(js);
-      return mkval(T_ERR, vdata(value));
+      return mkval(kTypeError, vdata(value));
     }
   }
 
   ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
-  if (vtype(stack_str) != T_STR) {
+  if (vtype(stack_str) != kTypeString) {
     js->thrown_exists = true;
     js->thrown_value = value;
     js_clear_error_site(js);
-    return mkval(T_ERR, 0);
+    return mkval(kTypeError, 0);
   }
 
-  if (vtype(value) == T_OBJ) {
+  if (vtype(value) == kTypeObject) {
     js_set(js, value, "stack", stack_str);
     js_set_descriptor(js, js_as_obj(value), "stack", 5, JS_DESC_W | JS_DESC_C);
   }
@@ -902,7 +902,7 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
   js->thrown_stack = stack_str;
   js_clear_error_site(js);
   
-  return mkval(T_ERR, 0);
+  return mkval(kTypeError, 0);
 }
 
 enum { 
@@ -914,7 +914,7 @@ enum {
 
 static ant_value_t callsite_field(ant_t *js, int field) {
   ant_value_t data = js_get_slot(js->this_val, SLOT_DATA);
-  if (vtype(data) != T_ARR) return js_mkundef();
+  if (vtype(data) != kTypeArray) return js_mkundef();
   return js_arr_get(js, data, field);
 }
 
@@ -941,8 +941,8 @@ static ant_value_t callsite_toString(ant_t *js, ant_value_t *args, int nargs) {
 
   const char *n = js_str(js, name);
   const char *f = js_str(js, file);
-  int l = vtype(line) == T_NUM ? (int)js_getnum(line) : 0;
-  int c = vtype(col)  == T_NUM ? (int)js_getnum(col)  : 0;
+  int l = vtype(line) == kTypeNumber ? (int)js_getnum(line) : 0;
+  int c = vtype(col)  == kTypeNumber ? (int)js_getnum(col)  : 0;
 
   char buf[512];
   int len = snprintf(buf, sizeof(buf), "%s (%s:%d:%d)", n, f, l, c);

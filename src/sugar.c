@@ -126,7 +126,7 @@ void coroutine_clear_await_registration(coroutine_t *coro) {
   coro->await_registered = false;
   coro->awaited_promise = js_mkundef();
 
-  if (js && vtype(promise) == T_PROMISE)
+  if (js && vtype(promise) == kTypePromise)
     js_promise_clear_await_coroutine(js, promise, coro);
 
   coroutine_unhold(coro, CORO_HOLD_AWAIT);
@@ -231,7 +231,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t me = js->current_func;
   ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
-  if (vtype(coro_val) != T_NUM) return js_mkundef();
+  if (vtype(coro_val) != kTypeNumber) return js_mkundef();
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
@@ -246,7 +246,7 @@ ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t me = js->current_func;
   ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
   
-  if (vtype(coro_val) != T_NUM) return js_mkundef();
+  if (vtype(coro_val) != kTypeNumber) return js_mkundef();
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();

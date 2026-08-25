@@ -127,7 +127,7 @@ static void patch_u32(sv_compiler_t *c, int offset, uint32_t val) {
 }
 
 static int add_constant(sv_compiler_t *c, ant_value_t val) {
-  if (vtype(val) == T_STR) {
+  if (vtype(val) == kTypeString) {
     ant_offset_t slen;
     ant_offset_t off = vstr(c->js, val, &slen);
     const char *sptr = (const char *)(uintptr_t)off;
@@ -166,7 +166,7 @@ static void build_gc_const_tables(sv_func_t *func) {
 
   int child_count = 0;
   for (int i = 0; i < func->const_count; i++) {
-    if (vtype(func->constants[i]) == T_NTARG) child_count++;
+    if (vtype(func->constants[i]) == kTypeFunctionInfo) child_count++;
   }
 
   if (child_count > 0) {
@@ -175,7 +175,7 @@ static void build_gc_const_tables(sv_func_t *func) {
       int out = 0;
       
       for (int i = 0; i < func->const_count; i++) {
-        if (vtype(func->constants[i]) != T_NTARG) continue;
+        if (vtype(func->constants[i]) != kTypeFunctionInfo) continue;
         sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
         child->parent = func;
         func->child_funcs[out++] = child;
@@ -190,7 +190,7 @@ static void build_gc_const_tables(sv_func_t *func) {
 
   int slot_count = 0;
   for (int i = 0; i < func->const_count; i++) {
-    if (vtype(func->constants[i]) != T_BIGINT) continue;
+    if (vtype(func->constants[i]) != kTypeBigInt) continue;
     marked_slots[i] = 1;
     slot_count++;
   }
@@ -2156,7 +2156,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
 static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   sv_func_t *fn = compile_function_body(c, node, SV_COMPILE_SCRIPT);
   if (!fn) return;
-  int idx = add_constant(c, mkref(T_NTARG, fn));
+  int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
   emit_set_function_name(c, node->str, node->len);
@@ -4219,7 +4219,7 @@ void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
   
-  int idx = add_constant(c, mkref(T_NTARG, fn));
+  int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
 
@@ -6104,7 +6104,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
 
   sv_compile_ctx_cleanup(&comp);
 
-  return add_constant(c, mkref(T_NTARG, fn));
+  return add_constant(c, mkref(kTypeFunctionInfo, fn));
 }
 
 static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_local) {
@@ -6340,7 +6340,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     }
     
     sv_compile_ctx_cleanup(&comp);
-    int idx = add_constant(c, mkref(T_NTARG, fn));
+    int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
     emit_op(c, OP_CLOSURE);
     emit_u32(c, (uint32_t)idx);
   } else emit_op(c, OP_UNDEF);
@@ -7084,13 +7084,13 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   for (int i = 0; i < func->const_count; i++) {
     ant_value_t v = func->constants[i];
     uint8_t t = vtype(v);
-    if (t == T_STR) {
+    if (t == kTypeString) {
       ant_offset_t slen;
       ant_offset_t soff = vstr(js, v, &slen);
       fprintf(stderr, "           %d: <String[%d]: #%.*s>\n", i, (int)slen, (int)slen, (const char *)(uintptr_t)soff);
-    } else if (t == T_NUM) {
+    } else if (t == kTypeNumber) {
       fprintf(stderr, "           %d: <Number [%g]>\n", i, tod(v));
-    } else if (t == T_NTARG) {
+    } else if (t == kTypeFunctionInfo) {
       sv_func_t *child = (sv_func_t *)vptr(v);
       const char *cname = child->debug->name ? child->debug->name : "";
       fprintf(stderr, "           %d: <SharedFunctionInfo %s>\n", i, cname);
@@ -7109,7 +7109,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   fprintf(stderr, "\n");
 
   for (int i = 0; i < func->const_count; i++) {
-  if (vtype(func->constants[i]) == T_NTARG) {
+  if (vtype(func->constants[i]) == kTypeFunctionInfo) {
     sv_func_t *child = (sv_func_t *)vptr(func->constants[i]);
     char child_label[256];
     snprintf(child_label, sizeof(child_label), "%s/closure[%d]", label, i);

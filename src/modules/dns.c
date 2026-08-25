@@ -88,7 +88,7 @@ static void dns_query_cb(void *arg, int status, int timeouts, unsigned char *abu
 }
 
 static int dns_rrtype_from_value(ant_t *js, ant_value_t value) {
-  if (vtype(value) == T_UNDEF) return DNS_TYPE_A;
+  if (vtype(value) == kTypeUndefined) return DNS_TYPE_A;
   size_t len = 0;
   const char *rrtype = js_getstr(js, value, &len);
   if (!rrtype) return -1;

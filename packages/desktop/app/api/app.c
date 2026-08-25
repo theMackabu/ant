@@ -22,7 +22,7 @@ ant_value_t DesktopAppQuit(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 ant_value_t DesktopAppGetPath(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) return js_mkerr(js, "app.getPath(name) requires a string");
+  if (nargs < 1 || vtype(args[0]) != kTypeString) return js_mkerr(js, "app.getPath(name) requires a string");
   size_t length = 0;
   const char *name = js_getstr(js, args[0], &length);
   if (length == 0 || length >= 32) return js_mkerr(js, "unknown app path: %.*s", (int)length, name);

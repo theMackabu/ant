@@ -20,11 +20,11 @@ static inline void sv_op_const8(sv_vm_t *vm, sv_func_t *func, uint8_t *ip) {
 }
 
 static inline void sv_op_undef(sv_vm_t *vm) {
-  vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
+  vm->stack[vm->sp++] = mkval(kTypeUndefined, 0);
 }
 
 static inline void sv_op_null(sv_vm_t *vm) {
-  vm->stack[vm->sp++] = mkval(T_NULL, 0);
+  vm->stack[vm->sp++] = mkval(kTypeNull, 0);
 }
 
 static inline void sv_op_true(sv_vm_t *vm) {
@@ -97,7 +97,7 @@ static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t
   sv_obj_site_apply(js, func, site, ptr);
 
   ant_value_t proto = js->sym.object_proto;
-  if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
+  if (vtype(proto) == kTypeObject) js_set_proto_init(obj, proto);
   vm->stack[vm->sp++] = obj;
 }
 
@@ -134,14 +134,14 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t regexp_obj = mkobj(js, 0);
   ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
-  if (vtype(regexp_proto) == T_OBJ) js_set_proto_init(regexp_obj, regexp_proto);
+  if (vtype(regexp_proto) == kTypeObject) js_set_proto_init(regexp_obj, regexp_proto);
 
   js_mkprop_fast(js, regexp_obj, "source", 6, pattern);
   js_set_slot(regexp_obj, SLOT_DATA, pattern);
 
   ant_offset_t flen = 0;
   const char *fstr = "";
-  if (vtype(flags) == T_STR) {
+  if (vtype(flags) == kTypeString) {
     ant_offset_t foff;
     foff = vstr(js, flags, &flen);
     fstr = (const char *)(uintptr_t)(foff);
@@ -173,14 +173,14 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t flags_value = js_mkstr(js, sorted, si);
   js_mkprop_fast(js, regexp_obj, "flags", 5, flags_value);
-  js_mkprop_fast(js, regexp_obj, "hasIndices", 10, mkval(T_BOOL, d ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "global", 6, mkval(T_BOOL, g ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "multiline", 9, mkval(T_BOOL, m ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "dotAll", 6, mkval(T_BOOL, s ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "unicode", 7, mkval(T_BOOL, u ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "unicodeSets", 11, mkval(T_BOOL, v ? 1 : 0));
-  js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "hasIndices", 10, mkval(kTypeBool, d ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "global", 6, mkval(kTypeBool, g ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(kTypeBool, i ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "multiline", 9, mkval(kTypeBool, m ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "dotAll", 6, mkval(kTypeBool, s ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "unicode", 7, mkval(kTypeBool, u ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "unicodeSets", 11, mkval(kTypeBool, v ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(kTypeBool, y ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "lastIndex", 9, tov(0));
   
   js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_MASK, tov((double)(

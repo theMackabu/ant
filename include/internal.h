@@ -85,28 +85,35 @@ static constexpr uint64_t STR_UTF16_LEN_UNKNOWN = STR_META_UTF16_MASK;
 #define T_MASK_AGAIN() T_MASK_STEP
 #define T_MASK(...) (T_MASK_EXPAND(T_MASK_STEP(__VA_ARGS__)))
 
+static_assert(T_MASK(kTypeObject) == T_FLAG_FIND(kTypeObject));
+
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
 #define is_special_object(v) ((1u << vtype(v)) & T_SPECIAL_OBJECT_MASK)
 
-enum: uint32_t {
-  T_BOXABLE_PRIMITIVE_MASK = T_MASK(T_STR, T_NUM, T_BOOL, T_BIGINT, T_SYMBOL),
-  T_SPECIAL_OBJECT_MASK    = T_MASK(T_OBJ, T_ARR),
-  T_NEEDS_PROTO_FALLBACK   = T_MASK(T_FUNC, T_ARR, T_PROMISE, T_GENERATOR),
-  T_OBJECT_MASK            = T_MASK(T_OBJ, T_ARR, T_FUNC, T_PROMISE, T_GENERATOR),
-  T_NON_NUMERIC_MASK       = T_MASK(T_STR, T_ARR, T_FUNC, T_CFUNC, T_OBJ, T_GENERATOR),
-};
-
-static_assert(T_MASK(T_OBJ) == T_FLAG_FIND(T_OBJ), "T_MASK single");
+static constexpr uint32_t T_SPECIAL_OBJECT_MASK = 
+  T_MASK(kTypeObject, kTypeArray);
+  
+static constexpr uint32_t T_BOXABLE_PRIMITIVE_MASK = 
+  T_MASK(kTypeString, kTypeNumber, kTypeBool, kTypeBigInt, kTypeSymbol);
+  
+static constexpr uint32_t T_NEEDS_PROTO_FALLBACK = 
+  T_MASK(kTypeFunction, kTypeArray, kTypePromise, kTypeGenerator);
+  
+static constexpr uint32_t T_OBJECT_MASK = 
+  T_MASK(kTypeObject, kTypeArray, kTypeFunction, kTypePromise, kTypeGenerator);
+  
+static constexpr uint32_t T_NON_NUMERIC_MASK = 
+  T_MASK(kTypeString, kTypeArray, kTypeFunction, kTypeBuiltin, kTypeObject, kTypeGenerator);
 
 static_assert(
   T_NON_NUMERIC_MASK == (
-    T_FLAG_FIND(T_STR)   | 
-    T_FLAG_FIND(T_ARR)   | 
-    T_FLAG_FIND(T_FUNC)  | 
-    T_FLAG_FIND(T_CFUNC) |
-    T_FLAG_FIND(T_OBJ)   |
-    T_FLAG_FIND(T_GENERATOR)),
+    T_FLAG_FIND(kTypeString)   |
+    T_FLAG_FIND(kTypeArray)    |
+    T_FLAG_FIND(kTypeFunction) |
+    T_FLAG_FIND(kTypeBuiltin)  |
+    T_FLAG_FIND(kTypeObject)   |
+    T_FLAG_FIND(kTypeGenerator)),
   "T_MASK variadic expansion"
 );
 
@@ -501,15 +508,15 @@ typedef enum {
 } prop_meta_key_t;
 
 static inline bool is_err(ant_value_t v) { 
-  return vtype(v) == T_ERR; 
+  return vtype(v) == kTypeError;
 }
 
 static inline bool is_null(ant_value_t v) { 
-  return vtype(v) == T_NULL; 
+  return vtype(v) == kTypeNull;
 }
 
 static inline bool is_undefined(ant_value_t v) { 
-  return vtype(v) == T_UNDEF; 
+  return vtype(v) == kTypeUndefined;
 }
 
 static inline bool is_empty_slot(ant_value_t v) {
@@ -524,8 +531,8 @@ static inline void js_cstk_refresh_floor(ant_t *js) {
 
 static inline bool is_callable(ant_value_t v) {
   uint8_t t = vtype(v);
-  if (t == T_FUNC || t == T_CFUNC) return true;
-  if (t != T_OBJ) return false;
+  if (t == kTypeFunction || t == kTypeBuiltin) return true;
+  if (t != kTypeObject) return false;
   ant_object_t *obj = js_obj_ptr(v);
   return obj && obj->flags.is_callable;
 }
@@ -700,7 +707,7 @@ ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, a
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
 ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs);
 
-const char *typestr(uint8_t t);
+const char *typestr(ant_value_type_t t);
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val);
 ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r);
 ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
@@ -787,7 +794,7 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
   ant_value_t module_ctx = js_module_eval_active_ctx(js);
   if (is_object_type(module_ctx)) {
     ant_value_t filename = js_get(js, module_ctx, "filename");
-    if (vtype(filename) == T_STR) return js_getstr(js, filename, NULL);
+    if (vtype(filename) == kTypeString) return js_getstr(js, filename, NULL);
   }
   return js->filename;
 }
@@ -805,11 +812,11 @@ static inline bool is_length_key(const char *key, size_t len) {
 
 // TODO: move strings helpers to strings.h
 static inline bool str_is_heap_rope(ant_value_t value) {
-  return vtype(value) == T_STR && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_ROPE);
+  return vtype(value) == kTypeString && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_ROPE);
 }
 
 static inline bool str_is_heap_builder(ant_value_t value) {
-  return vtype(value) == T_STR && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_BUILDER);
+  return vtype(value) == kTypeString && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_BUILDER);
 }
 
 static inline ant_rope_heap_t *ant_str_rope_ptr(ant_value_t value) {
@@ -821,17 +828,17 @@ static inline ant_string_builder_t *ant_str_builder_ptr(ant_value_t value) {
 }
 
 static inline ant_value_t ant_mkrope_value(ant_rope_heap_t *rope) {
-  return mkref_tagged(T_STR, rope, STR_HEAP_TAG_ROPE);
+  return mkref_tagged(kTypeString, rope, STR_HEAP_TAG_ROPE);
 }
 
 static inline ant_value_t ant_mkbuilder_value(ant_string_builder_t *builder) {
-  return mkref_tagged(T_STR, builder, STR_HEAP_TAG_BUILDER);
+  return mkref_tagged(kTypeString, builder, STR_HEAP_TAG_BUILDER);
 }
 
 static inline int js_brand_id(ant_value_t obj) {
   if (!is_object_type(obj)) return BRAND_NONE;
   ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM ? (int)js_getnum(brand) : BRAND_NONE;
+  return vtype(brand) == kTypeNumber ? (int)js_getnum(brand) : BRAND_NONE;
 }
 
 static inline bool js_check_brand(ant_value_t obj, int brand) {
@@ -882,7 +889,7 @@ static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
 }
 
 static inline ant_flat_string_t *ant_str_flat_ptr(ant_value_t value) {
-  if (vtype(value) != T_STR) return NULL;
+  if (vtype(value) != kTypeString) return NULL;
   if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return NULL;
   return (ant_flat_string_t *)vptr(value);
 }

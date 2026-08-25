@@ -708,7 +708,7 @@ static void apply_mac_to_iface(ant_t *js, ant_value_t result, const char *name, 
   if (!is_special_object(iface_arr)) return;
   
   ant_value_t len_val = js_get(js, iface_arr, "length");
-  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == kTypeNumber) ? (int)js_getnum(len_val) : 0;
   
   for (int i = 0; i < len; i++) {
     char idx[16];
@@ -785,7 +785,7 @@ static ant_value_t os_userInfo(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t os_getPriority(ant_t *js, ant_value_t *args, int nargs) {
   int pid = 0;
-  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
     pid = (int)js_getnum(args[0]);
   }
   
@@ -802,12 +802,12 @@ static ant_value_t os_setPriority(ant_t *js, ant_value_t *args, int nargs) {
   int priority = 0;
   
   if (nargs == 1) {
-    if (vtype(args[0]) != T_NUM) {
+    if (vtype(args[0]) != kTypeNumber) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "priority must be a number");
     }
     priority = (int)js_getnum(args[0]);
   } else if (nargs >= 2) {
-    if (vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) {
+    if (vtype(args[0]) != kTypeNumber || vtype(args[1]) != kTypeNumber) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "pid and priority must be numbers");
     }
     pid = (int)js_getnum(args[0]);

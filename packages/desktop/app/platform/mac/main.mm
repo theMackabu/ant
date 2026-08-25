@@ -46,12 +46,12 @@ static void RemoveTemporaryApplication(NSString *temporary_root) {
 }
 
 static const char *RuntimeErrorDetail(ant_t *js, ant_value_t error) {
-  if (vtype(error) != T_ERR || vdata(error) == 0) return js_str(js, error);
-  ant_value_t object = mkval(T_OBJ, vdata(error));
+  if (vtype(error) != kTypeError || vdata(error) == 0) return js_str(js, error);
+  ant_value_t object = mkval(kTypeObject, vdata(error));
   ant_value_t stack = js_get(js, object, "stack");
-  if (vtype(stack) == T_STR) return js_str(js, stack);
+  if (vtype(stack) == kTypeString) return js_str(js, stack);
   ant_value_t message = js_get(js, object, "message");
-  return vtype(message) == T_STR ? js_str(js, message) : js_str(js, error);
+  return vtype(message) == kTypeString ? js_str(js, message) : js_str(js, error);
 }
 
 static dispatch_source_t InstallDevelopmentReloadSignal(void) {

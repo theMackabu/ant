@@ -40,7 +40,7 @@ static void general_signal_handler(int signum) {
   ant_t *js = signal_handlers[signum].js;
   ant_value_t handler = signal_handlers[signum].handler;
   
-  if (js && vtype(handler) != T_UNDEF) {
+  if (js && vtype(handler) != kTypeUndefined) {
     ant_value_t args[] = {js_mknum(signum)};
     sv_vm_call(js->vm, js, handler, js_mkundef(), args, 1, NULL, false);
   }
@@ -79,12 +79,12 @@ static ant_value_t js_raw_typeof(ant_t *js, ant_value_t *args, int nargs) {
 // Ant.raw.ctorPropFeedback(constructorFn)
 static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.ctorPropFeedback() requires 1 argument");
-  if (vtype(args[0]) != T_FUNC) return js_mkerr(js, "constructor must be a function");
+  if (vtype(args[0]) != kTypeFunction) return js_mkerr(js, "constructor must be a function");
 
   ant_value_t ctor = args[0];
   ant_value_t ctor_obj = js_func_obj(ctor);
   ant_value_t target_func = js_get_slot(ctor_obj, SLOT_TARGET_FUNC);
-  if (vtype(target_func) == T_FUNC) ctor = target_func;
+  if (vtype(target_func) == kTypeFunction) ctor = target_func;
 
   sv_closure_t *closure = js_func_closure(ctor);
   if (!closure || !closure->func) return js_mkundef();
@@ -339,9 +339,9 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm_info, &vm_count) == KERN_SUCCESS) {
     js_set(js, result, "rss", js_mknum((double)vm_info.phys_footprint));
     js_set(js, result, "physFootprint", js_mknum((double)vm_info.phys_footprint));
-  } else if (vtype(js_get(js, result, "rss")) == T_UNDEF) {
+  } else if (vtype(js_get(js, result, "rss")) == kTypeUndefined) {
     ant_value_t resident = js_get(js, result, "residentSize");
-    if (vtype(resident) != T_UNDEF) js_set(js, result, "rss", resident);
+    if (vtype(resident) != kTypeUndefined) js_set(js, result, "rss", resident);
   }
 #elif defined(__linux__)
   struct rusage usage;
@@ -380,7 +380,7 @@ static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t arm = js_mkundef();
 
   while (js_prop_iter_next_val(&iter, &key, &arm)) {
-    if (vtype(key) == T_SYMBOL) continue;
+    if (vtype(key) == kTypeSymbol) continue;
     
     const char *ks = js_getstr(js, key, NULL);
     if (!ks) continue;
@@ -392,15 +392,15 @@ static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
     
     if (
       strcmp(ks, "true") == 0 
-      && vtype(guard_arm) == T_UNDEF
+      && vtype(guard_arm) == kTypeUndefined
     ) guard_arm = arm;
   }
 
   js_prop_iter_end(&iter);
-  if (vtype(guard_arm) != T_UNDEF) return match_resolve_arm(js, guard_arm, value);
+  if (vtype(guard_arm) != kTypeUndefined) return match_resolve_arm(js, guard_arm, value);
   
   ant_value_t fallback = js_get_sym(js, arms, get_default_sym());
-  if (vtype(fallback) != T_UNDEF) return match_resolve_arm(js, fallback, value);
+  if (vtype(fallback) != kTypeUndefined) return match_resolve_arm(js, fallback, value);
 
   return js_mkundef();
 }
@@ -437,7 +437,7 @@ static ant_value_t hl_render_tagged(ant_t *js, ant_value_t tagged) {
 
 static ant_value_t js_highlight(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight() requires 1 argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight() argument must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight() argument must be a string");
 
   ant_value_t tagged = hl_get_tagged(js, args, nargs);
   if (is_err(tagged)) return tagged;
@@ -446,13 +446,13 @@ static ant_value_t js_highlight(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_highlight_render(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight.render() requires 1 argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight.render() argument must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight.render() argument must be a string");
   return hl_render_tagged(js, args[0]);
 }
 
 static ant_value_t js_highlight_tags(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight.tags() requires 1 argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight.tags() argument must be a string");
+  if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight.tags() argument must be a string");
   return hl_get_tagged(js, args, nargs);
 }
 

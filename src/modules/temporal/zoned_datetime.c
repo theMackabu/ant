@@ -51,7 +51,7 @@ bool temporal_partial_zdt(
       *err = era;
       return false;
     }
-    if (vtype(era) != T_UNDEF) {
+    if (vtype(era) != kTypeUndefined) {
       if (!temporal_to_string_view(js, era, &out->partial.date.era, &out->era_root, err)) return false;
       any = true;
     }
@@ -67,7 +67,7 @@ bool temporal_partial_zdt(
     *err = month_code;
     return false;
   }
-  if (vtype(month_code) != T_UNDEF) {
+  if (vtype(month_code) != kTypeUndefined) {
     if (!temporal_month_code_syntax(js, month_code, &out->partial.date.month_code, &out->month_code_root, err))
       return false;
     any = true;
@@ -78,8 +78,8 @@ bool temporal_partial_zdt(
     *err = offset;
     return false;
   }
-  if (vtype(offset) != T_UNDEF) {
-    if (vtype(offset) != T_STR && !is_object_type(offset)) {
+  if (vtype(offset) != kTypeUndefined) {
+    if (vtype(offset) != kTypeString && !is_object_type(offset)) {
       *err = js_mkerr_typed(js, JS_ERR_TYPE, "offset must be a string");
       return false;
     }
@@ -102,11 +102,11 @@ bool temporal_partial_zdt(
       *err = zone;
       return false;
     }
-    if (vtype(zone) == T_UNDEF && require_time_zone) {
+    if (vtype(zone) == kTypeUndefined && require_time_zone) {
       *err = js_mkerr_typed(js, JS_ERR_TYPE, "timeZone is required");
       return false;
     }
-    if (vtype(zone) != T_UNDEF) {
+    if (vtype(zone) != kTypeUndefined) {
       TimeZone parsed;
       if (!temporal_time_zone_from_value(js, zone, &parsed, err)) return false;
       out->partial.timezone = (TimeZone_option){.ok = parsed, .is_ok = true};
@@ -136,7 +136,7 @@ static bool temporal_zdt_from_value_options(
     *out = temporal_rs_ZonedDateTime_clone(zdt);
     return true;
   }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -174,13 +174,13 @@ static bool temporal_zdt_from_value(ant_t *js, ant_value_t value, ZonedDateTime 
 }
 
 static ant_value_t temporal_zdt_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.ZonedDateTime");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.ZonedDateTime");
   if (nargs < 2)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.ZonedDateTime requires epoch nanoseconds and a time zone");
   I128Nanoseconds ns;
   ant_value_t err = js_mkundef();
   if (!temporal_i128_from_value(js, args[0], &ns, &err)) return err;
-  if (vtype(args[1]) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "time zone must be a string");
+  if (vtype(args[1]) != kTypeString) return js_mkerr_typed(js, JS_ERR_TYPE, "time zone must be a string");
   DiplomatStringView zone_view;
   ant_value_t zone_root;
   if (!temporal_to_string_view(js, args[1], &zone_view, &zone_root, &err)) return err;
@@ -205,7 +205,7 @@ static ant_value_t temporal_zdt_from(ant_t *js, ant_value_t *args, int nargs) {
   OffsetDisambiguation_option offset = {0};
   ArithmeticOverflow_option overflow = {0};
   ZonedDateTime *native = is_object_type(args[0]) ? js_get_native(args[0], TEMPORAL_ZONED_DATETIME_TAG) : NULL;
-  if (vtype(args[0]) == T_STR) {
+  if (vtype(args[0]) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, args[0], &view, &root, &err)) return err;
@@ -523,7 +523,7 @@ static ant_value_t temporal_zdt_with_calendar(ant_t *js, ant_value_t *args, int 
   ant_value_t err = js_mkundef();
   ZonedDateTime *self = temporal_zdt_this(js, "Temporal.ZonedDateTime.prototype.withCalendar", &err);
   if (!self) return err;
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is required");
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is required");
   AnyCalendarKind calendar;
   if (!temporal_calendar_kind(js, args[0], AnyCalendarKind_Iso, &calendar, &err)) return err;
   return temporal_wrap(js, TEMPORAL_ZONED_DATETIME, temporal_rs_ZonedDateTime_with_calendar(self, calendar));
@@ -544,7 +544,7 @@ static ant_value_t temporal_zdt_with_plain_time(ant_t *js, ant_value_t *args, in
   ZonedDateTime *self = temporal_zdt_this(js, "Temporal.ZonedDateTime.prototype.withPlainTime", &err);
   if (!self) return err;
   PlainTime *time = NULL;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && !temporal_plain_time_from_value(js, args[0], &time, &err)) return err;
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && !temporal_plain_time_from_value(js, args[0], &time, &err)) return err;
   temporal_rs_ZonedDateTime_with_plain_time_and_provider_result r =
     temporal_rs_ZonedDateTime_with_plain_time_and_provider(self, time, temporal_provider(js));
   if (time) temporal_rs_PlainTime_destroy(time);
@@ -562,11 +562,11 @@ static ant_value_t temporal_zdt_with(ant_t *js, ant_value_t *args, int nargs) {
   }
   ant_value_t calendar_value = js_get(js, args[0], "calendar");
   if (is_err(calendar_value)) return calendar_value;
-  if (vtype(calendar_value) != T_UNDEF)
+  if (vtype(calendar_value) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is not allowed in ZonedDateTime.with");
   ant_value_t zone_value = js_get(js, args[0], "timeZone");
   if (is_err(zone_value)) return zone_value;
-  if (vtype(zone_value) != T_UNDEF)
+  if (vtype(zone_value) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "timeZone is not allowed in ZonedDateTime.with");
   AnyCalendarKind calendar = temporal_rs_Calendar_kind(temporal_rs_ZonedDateTime_calendar(self));
   temporal_partial_zdt_t partial;
@@ -590,7 +590,7 @@ static ant_value_t temporal_zdt_get_transition(ant_t *js, ant_value_t *args, int
   if (is_object_type(args[0])) {
     direction_value = js_get(js, args[0], "direction");
     if (is_err(direction_value)) return direction_value;
-  } else if (vtype(args[0]) != T_STR) {
+  } else if (vtype(args[0]) != kTypeString) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "options must be a string or object");
   }
   DiplomatStringView view;

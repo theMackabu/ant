@@ -14,7 +14,7 @@ static bool temporal_plain_date_from_value(
   ZonedDateTime *zdt = is_object_type(value)
     ? js_get_native(value, TEMPORAL_ZONED_DATETIME_TAG) : NULL;
   if (zdt) { *out = temporal_rs_ZonedDateTime_to_plain_date(zdt); return true; }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -34,12 +34,12 @@ static bool temporal_plain_date_from_value(
 }
 
 static ant_value_t temporal_plain_date_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.PlainDate");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.PlainDate");
   int64_t year = 0, month = 0, day = 0;
   ant_value_t err = js_mkundef();
-  if ((nargs > 0 && vtype(args[0]) == T_UNDEF) ||
-      (nargs > 1 && vtype(args[1]) == T_UNDEF) ||
-      (nargs > 2 && vtype(args[2]) == T_UNDEF))
+  if ((nargs > 0 && vtype(args[0]) == kTypeUndefined) ||
+      (nargs > 1 && vtype(args[1]) == kTypeUndefined) ||
+      (nargs > 2 && vtype(args[2]) == kTypeUndefined))
     return js_mkerr_typed(js, JS_ERR_RANGE, "Temporal.PlainDate fields must be finite numbers");
   if ((nargs > 0 && !temporal_integer(js, args[0], 0, &year, &err)) ||
       (nargs > 1 && !temporal_integer(js, args[1], 0, &month, &err)) ||
@@ -60,7 +60,7 @@ static ant_value_t temporal_plain_date_from(ant_t *js, ant_value_t *args, int na
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.PlainDate.from requires an argument");
   ArithmeticOverflow_option overflow = {0};
   ant_value_t err = js_mkundef();
-  if (vtype(args[0]) == T_STR || js_get_native(args[0], TEMPORAL_PLAIN_DATE_TAG) ||
+  if (vtype(args[0]) == kTypeString || js_get_native(args[0], TEMPORAL_PLAIN_DATE_TAG) ||
       js_get_native(args[0], TEMPORAL_PLAIN_DATETIME_TAG) ||
       js_get_native(args[0], TEMPORAL_ZONED_DATETIME_TAG)) {
     PlainDate *date;
@@ -280,7 +280,7 @@ static ant_value_t temporal_plain_date_with_calendar(ant_t *js, ant_value_t *arg
   ant_value_t err = js_mkundef();
   PlainDate *self = temporal_plain_date_this(js, "Temporal.PlainDate.prototype.withCalendar", &err);
   if (!self) return err;
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is required");
   AnyCalendarKind calendar;
   if (!temporal_calendar_kind(js, args[0], AnyCalendarKind_Iso, &calendar, &err)) return err;
@@ -292,7 +292,7 @@ static ant_value_t temporal_plain_date_to_plain_datetime(ant_t *js, ant_value_t 
   PlainDate *self = temporal_plain_date_this(js, "Temporal.PlainDate.prototype.toPlainDateTime", &err);
   if (!self) return err;
   PlainTime *time = NULL;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF &&
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined &&
       !temporal_plain_time_from_value(js, args[0], &time, &err)) return err;
   temporal_rs_PlainDate_to_plain_date_time_result result =
     temporal_rs_PlainDate_to_plain_date_time(self, time);
@@ -335,7 +335,7 @@ static ant_value_t temporal_plain_date_to_zdt(ant_t *js, ant_value_t *args, int 
   TimeZone zone;
   if (!temporal_time_zone_from_value(js, zone_value, &zone, &err)) return err;
   PlainTime *time = NULL;
-  if (vtype(time_value) != T_UNDEF &&
+  if (vtype(time_value) != kTypeUndefined &&
       !temporal_plain_time_from_value(js, time_value, &time, &err)) return err;
   temporal_rs_PlainDate_to_zoned_date_time_with_provider_result result =
     temporal_rs_PlainDate_to_zoned_date_time_with_provider(self, zone, time, temporal_provider(js));

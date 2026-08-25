@@ -10,7 +10,7 @@ static inline ant_value_t sv_op_get_local(
 ) {
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t value = lp[idx];
-  if (vtype(value) == T_STR && str_is_heap_builder(value)) {
+  if (vtype(value) == kTypeString && str_is_heap_builder(value)) {
     value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }
@@ -42,7 +42,7 @@ static inline ant_value_t sv_op_get_local8(
 ) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t value = lp[idx];
-  if (vtype(value) == T_STR && str_is_heap_builder(value)) {
+  if (vtype(value) == kTypeString && str_is_heap_builder(value)) {
     value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }
@@ -94,7 +94,7 @@ static inline ant_value_t sv_op_get_local_chk(
       "Cannot access variable before initialization"
     );
   }
-  if (vtype(val) == T_STR && str_is_heap_builder(val)) {
+  if (vtype(val) == kTypeString && str_is_heap_builder(val)) {
     val = sv_string_builder_read_value(js, val);
     if (is_err(val)) return val;
   }
@@ -143,7 +143,7 @@ static inline ant_value_t sv_op_put_local_chk(
 static inline ant_value_t sv_op_get_arg(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t value = sv_frame_get_arg_value(frame, idx);
-  if (vtype(value) == T_STR && str_is_heap_builder(value)) {
+  if (vtype(value) == kTypeString && str_is_heap_builder(value)) {
     value = sv_string_builder_read_value(js, value);
     if (is_err(value)) return value;
   }

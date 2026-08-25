@@ -167,7 +167,7 @@ static ant_value_t js_sd_write(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
   if (nargs < 1) return js_mkstr(js, "", 0);
 
-  if (vtype(args[0]) == T_STR) {
+  if (vtype(args[0]) == kTypeString) {
     size_t slen;
     const char *s = js_getstr(js, args[0], &slen);
     return s ? js_mkstr(js, s, slen) : js_mkstr(js, "", 0);
@@ -196,8 +196,8 @@ static ant_value_t js_sd_end(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
   int enc = SD_ENC_UTF8;
   if (!is_undefined(encoding)) {
-  ant_value_t label_val = (vtype(encoding) == T_STR) ? encoding : coerce_to_str(js, encoding);
-  if (!is_err(label_val) && vtype(label_val) == T_STR) {
+  ant_value_t label_val = (vtype(encoding) == kTypeString) ? encoding : coerce_to_str(js, encoding);
+  if (!is_err(label_val) && vtype(label_val) == kTypeString) {
     size_t llen;
     const char *label = js_getstr(js, label_val, &llen);
     if (label) enc = sd_parse_encoding(label, llen);
@@ -239,7 +239,7 @@ ant_value_t string_decoder_decode_value(
   sd_state_t *st = sd_get_state(decoder);
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
 
-  if (vtype(chunk) == T_STR) {
+  if (vtype(chunk) == kTypeString) {
     size_t slen = 0;
     const char *s = js_getstr(js, chunk, &slen);
     return s ? js_mkstr(js, s, slen) : js_mkstr(js, "", 0);
@@ -254,7 +254,7 @@ ant_value_t string_decoder_decode_value(
 }
 
 static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "StringDecoder constructor requires 'new'");
     
   ant_value_t encoding = nargs > 0 ? args[0] : js_mkundef();

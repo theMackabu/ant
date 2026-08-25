@@ -132,7 +132,7 @@ static ant_value_t sh_result(
 }
 
 static bool sh_value_append(ant_t *js, sh_bytes_t *bytes, ant_value_t value) {
-  ant_value_t string = vtype(value) == T_STR ? value : js_tostring_val(js, value);
+  ant_value_t string = vtype(value) == kTypeString ? value : js_tostring_val(js, value);
   if (is_err(string)) return false;
   size_t len = 0;
   char *text = js_getstr(js, string, &len);
@@ -373,7 +373,7 @@ static bool sh_process_builder_append(
 }
 
 static bool sh_number_index(ant_value_t value, size_t *index) {
-  if (vtype(value) != T_NUM) return false;
+  if (vtype(value) != kTypeNumber) return false;
   double number = js_getnum(value);
   if (number != number || number < 0 || number > (double)SIZE_MAX) return false;
   size_t converted = (size_t)number;
@@ -450,7 +450,7 @@ static ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
-  if (!builder || nargs < 2 || vtype(args[1]) != T_STR)
+  if (!builder || nargs < 2 || vtype(args[1]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell argument");
   size_t len = 0;
   const char *text = js_getstr(js, args[1], &len);
@@ -524,7 +524,7 @@ static ant_value_t sh_process_builder_add_builtin(
     js, stdout_value, &stdout_bytes, &stdout_len
   ) && buffer_source_get_bytes(
     js, stderr_value, &stderr_bytes, &stderr_len
-  ) && vtype(exit_value) == T_NUM;
+  ) && vtype(exit_value) == kTypeNumber;
   if (!valid || !ant_process_plan_add_native_stage(
     &builder->plan, (const char *)stdout_bytes, stdout_len,
     (const char *)stderr_bytes, stderr_len, (int)js_getnum(exit_value)
@@ -548,7 +548,7 @@ static ant_value_t sh_runtime_command(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell command");
 
   for (int i = 3; i < nargs; i++) {
-    if (vtype(args[i]) != T_STR)
+    if (vtype(args[i]) != kTypeString)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell argument");
     size_t len = 0;
     const char *text = js_getstr(js, args[i], &len);
@@ -604,7 +604,7 @@ static ant_value_t sh_process_builder_add_redirect(
   }
   char *path = sh_resolve_path_text(js, context, target, target_len);
   if (!path) return js->thrown_exists
-    ? mkval(T_ERR, 0) : js_mkerr(js, "Out of memory");
+    ? mkval(kTypeError, 0) : js_mkerr(js, "Out of memory");
   bool added = ant_process_plan_add_redirect(
     &builder->plan, process_kind, path
   );
@@ -625,7 +625,7 @@ static ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) 
     return sh_process_builder_add_redirect(
       js, builder, args[1], kind, NULL, 0, command_index, command_count
     );
-  if (vtype(args[3]) != T_STR)
+  if (vtype(args[3]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid compiled shell redirection");
   size_t target_len = 0;
   const char *target = js_getstr(js, args[3], &target_len);
@@ -647,7 +647,7 @@ static ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs) {
       js, js_mkerr(js, "Invalid compiled process plan")
     );
   ant_value_t result = ant_process_plan_submit(js, &builder->plan);
-  if (vtype(result) != T_PROMISE) return result;
+  if (vtype(result) != kTypePromise) return result;
   sh_output_accumulator_t *accumulator = js_get_native(
     args[0], SH_OUTPUT_ACCUMULATOR_TAG
   );
@@ -705,7 +705,7 @@ static ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t last = nargs > 1 ? args[1] : js_mkundef();
   ant_value_t exit_code_value = is_special_object(last)
     ? js_get(js, last, "exitCode") : js_mknum(0);
-  int exit_code = vtype(exit_code_value) == T_NUM
+  int exit_code = vtype(exit_code_value) == kTypeNumber
     ? (int)js_getnum(exit_code_value) : 0;
   ant_value_t result = sh_result(
     js,

@@ -523,7 +523,7 @@ static ant_value_t process_binding(ant_t *js, ant_value_t *args, int nargs) {
   const char *name;
   ant_value_t constants;
 
-  if (nargs < 1 || vtype(args[0]) != T_STR)
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "process.binding() requires a module name");
 
   name = js_getstr(js, args[0], NULL);
@@ -899,10 +899,10 @@ static ant_value_t process_uptime(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t process_hrtime(ant_t *js, ant_value_t *args, int nargs) {
   uint64_t now = uv_hrtime();
   
-  if (nargs > 0 && vtype(args[0]) == T_ARR) {
+  if (nargs > 0 && vtype(args[0]) == kTypeArray) {
     ant_value_t prev_sec = js_get(js, args[0], "0");
     ant_value_t prev_nsec = js_get(js, args[0], "1");
-    if (vtype(prev_sec) == T_NUM && vtype(prev_nsec) == T_NUM) {
+    if (vtype(prev_sec) == kTypeNumber && vtype(prev_nsec) == kTypeNumber) {
       uint64_t prev = (uint64_t)js_getnum(prev_sec) * 1000000000ULL + (uint64_t)js_getnum(prev_nsec);
       now = now - prev;
     }
@@ -979,8 +979,8 @@ static ant_value_t process_cpu_usage(ant_t *js, ant_value_t *args, int nargs) {
     if (nargs > 0 && is_special_object(args[0])) {
       ant_value_t prev_user = js_get(js, args[0], "user");
       ant_value_t prev_system = js_get(js, args[0], "system");
-      if (vtype(prev_user) == T_NUM) user_usec -= (int64_t)js_getnum(prev_user);
-      if (vtype(prev_system) == T_NUM) sys_usec -= (int64_t)js_getnum(prev_system);
+      if (vtype(prev_user) == kTypeNumber) user_usec -= (int64_t)js_getnum(prev_user);
+      if (vtype(prev_system) == kTypeNumber) sys_usec -= (int64_t)js_getnum(prev_system);
     }
     
     js_set(js, obj, "user", js_mknum((double)user_usec));
@@ -995,15 +995,15 @@ static ant_value_t process_cpu_usage(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t process_kill(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.kill requires at least 1 argument");
-  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "pid must be a number");
+  if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "pid must be a number");
   
   int pid = (int)js_getnum(args[0]);
   int sig = SIGTERM;
   
   if (nargs > 1) {
-    if (vtype(args[1]) == T_NUM) {
+    if (vtype(args[1]) == kTypeNumber) {
       sig = (int)js_getnum(args[1]);
-    } else if (vtype(args[1]) == T_STR) {
+    } else if (vtype(args[1]) == kTypeString) {
       char *sig_name = js_getstr(js, args[1], NULL);
       if (sig_name) {
         int signum = process_signal_number(sig_name);
@@ -1039,7 +1039,7 @@ static ant_value_t process_umask(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum(0);
 #else
-  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
     int new_mask = (int)js_getnum(args[0]);
     int old_mask = umask((mode_t)new_mask);
     return js_mknum(old_mask);
@@ -1092,9 +1092,9 @@ static ant_value_t process_setuid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setuid requires 1 argument");
   
   uid_t uid;
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     uid = (uid_t)js_getnum(args[0]);
-  } else if (vtype(args[0]) == T_STR) {
+  } else if (vtype(args[0]) == kTypeString) {
     char *name = js_getstr(js, args[0], NULL);
     struct passwd *pwd = getpwnam(name);
     if (!pwd) return js_mkerr(js, "setuid user not found");
@@ -1111,9 +1111,9 @@ static ant_value_t process_setgid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setgid requires 1 argument");
   
   gid_t gid;
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     gid = (gid_t)js_getnum(args[0]);
-  } else if (vtype(args[0]) == T_STR) {
+  } else if (vtype(args[0]) == kTypeString) {
     char *name = js_getstr(js, args[0], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "setgid group not found");
@@ -1130,9 +1130,9 @@ static ant_value_t process_seteuid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.seteuid requires 1 argument");
   
   uid_t uid;
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     uid = (uid_t)js_getnum(args[0]);
-  } else if (vtype(args[0]) == T_STR) {
+  } else if (vtype(args[0]) == kTypeString) {
     char *name = js_getstr(js, args[0], NULL);
     struct passwd *pwd = getpwnam(name);
     if (!pwd) return js_mkerr(js, "seteuid user not found");
@@ -1149,9 +1149,9 @@ static ant_value_t process_setegid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setegid requires 1 argument");
   
   gid_t gid;
-  if (vtype(args[0]) == T_NUM) {
+  if (vtype(args[0]) == kTypeNumber) {
     gid = (gid_t)js_getnum(args[0]);
-  } else if (vtype(args[0]) == T_STR) {
+  } else if (vtype(args[0]) == kTypeString) {
     char *name = js_getstr(js, args[0], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "setegid group not found");
@@ -1165,7 +1165,7 @@ static ant_value_t process_setegid(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t process_setgroups(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_ARR) {
+  if (nargs < 1 || vtype(args[0]) != kTypeArray) {
     return js_mkerr(js, "process.setgroups requires an array");
   }
   
@@ -1179,9 +1179,9 @@ static ant_value_t process_setgroups(ant_t *js, ant_value_t *args, int nargs) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     ant_value_t val = js_get(js, args[0], idx);
-    if (vtype(val) == T_NUM) {
+    if (vtype(val) == kTypeNumber) {
       groups[i] = (gid_t)js_getnum(val);
-    } else if (vtype(val) == T_STR) {
+    } else if (vtype(val) == kTypeString) {
       char *name = js_getstr(js, val, NULL);
       struct group *grp = getgrnam(name);
       if (!grp) { free(groups); return js_mkerr(js, "group not found"); }
@@ -1207,9 +1207,9 @@ static ant_value_t process_initgroups(ant_t *js, ant_value_t *args, int nargs) {
   if (!user) return js_mkerr(js, "user must be a string");
   
   gid_t gid;
-  if (vtype(args[1]) == T_NUM) {
+  if (vtype(args[1]) == kTypeNumber) {
     gid = (gid_t)js_getnum(args[1]);
-  } else if (vtype(args[1]) == T_STR) {
+  } else if (vtype(args[1]) == kTypeString) {
     char *name = js_getstr(js, args[1], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "group not found");
@@ -1313,7 +1313,7 @@ static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
 static ant_value_t process_exit(ant_t *js, ant_value_t *args, int nargs) {
   int code = 0;
   
-  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
     code = (int)js_getnum(args[0]);
   }
   
@@ -1351,7 +1351,7 @@ static void env_foreach(ant_t *js, ant_value_t env_obj, env_iter_cb cb, void *ct
   const char *key; size_t key_len; ant_value_t value;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    if (vtype(value) != T_STR) continue;
+    if (vtype(value) != kTypeString) continue;
     
     CSTR_BUF(buf, 256);
     char *key_str = CSTR_INIT(buf, key, key_len);
@@ -1452,9 +1452,9 @@ static void process_get_warning_options(
   ant_value_t code_val = js_get(js, options, "code");
   ant_value_t detail_val = js_get(js, options, "detail");
 
-  if (vtype(type_val) == T_STR) *type = js_getstr(js, type_val, NULL);
-  if (vtype(code_val) == T_STR) *code = js_getstr(js, code_val, NULL);
-  if (vtype(detail_val) == T_STR) *detail = (const char *)(uintptr_t)vstr(js, detail_val, detail_len);
+  if (vtype(type_val) == kTypeString) *type = js_getstr(js, type_val, NULL);
+  if (vtype(code_val) == kTypeString) *code = js_getstr(js, code_val, NULL);
+  if (vtype(detail_val) == kTypeString) *detail = (const char *)(uintptr_t)vstr(js, detail_val, detail_len);
 }
 
 static ant_value_t process_make_warning_object(
@@ -1484,11 +1484,11 @@ static ant_value_t process_emit_warning(ant_t *js, ant_value_t *args, int nargs)
   ant_offset_t detail_len = 0;
 
   if (nargs >= 2) {
-    if (vtype(args[1]) == T_STR) type = js_getstr(js, args[1], NULL);
+    if (vtype(args[1]) == kTypeString) type = js_getstr(js, args[1], NULL);
     else process_get_warning_options(js, args[1], &type, &code, &detail, &detail_len);
   }
 
-  if (nargs >= 3 && vtype(args[2]) == T_STR) code = js_getstr(js, args[2], NULL);
+  if (nargs >= 3 && vtype(args[2]) == kTypeString) code = js_getstr(js, args[2], NULL);
 
   char msg_buf[512];
   js_cstr_t msg = {0};
@@ -1531,7 +1531,7 @@ static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick requires a callback");
     
   ant_value_t cb = args[0];
-  if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC)
+  if (vtype(cb) != kTypeFunction && vtype(cb) != kTypeBuiltin)
     return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick callback is not a function");
     
   if (nargs <= 1) queue_next_tick(js, cb);
@@ -1549,7 +1549,7 @@ static bool process_event_key_is(
   size_t len = 0;
   size_t expected_len = strlen(expected);
 
-  if (vtype(key) != T_STR) return false;
+  if (vtype(key) != kTypeString) return false;
   value = js_getstr(js, key, &len);
   return value && len == expected_len && memcmp(value, expected, len) == 0;
 }
@@ -1562,7 +1562,7 @@ static void process_listener_change(
   void *context
 ) {
   ant_process_state_t *ps = (ant_process_state_t *)context;
-  if (!ps || vtype(key) != T_STR) return;
+  if (!ps || vtype(key) != kTypeString) return;
 
   if (target == ps->process_obj) {
     const char *event = js_getstr(js, key, NULL);

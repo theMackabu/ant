@@ -212,7 +212,7 @@ temporarily re-adding the walk alongside the counter:
 
 ```c
 // in src/modules/builtin.c, inside the existing 3-pass object loop
-if (obj->type_tag == T_ARR && obj->u.array.data)
+if (obj->type_tag == kTypeArray && obj->u.array.data)
   array_bytes += obj->u.array.cap * sizeof(ant_value_t);
 ...
 js_set(js, alloc, "arraysCounter", js_mknum((double)js->alloc_bytes.arrays));

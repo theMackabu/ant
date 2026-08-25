@@ -212,7 +212,7 @@ size_t temporal_system_time_zone(char *buffer, size_t capacity) {
 static bool temporal_now_zone(
   ant_t *js, ant_value_t value, TimeZone *out, ant_value_t *err
 ) {
-  if (vtype(value) != T_UNDEF) return temporal_time_zone_from_value(js, value, out, err);
+  if (vtype(value) != kTypeUndefined) return temporal_time_zone_from_value(js, value, out, err);
   char name[256]; size_t len = temporal_system_time_zone(name, sizeof(name));
   temporal_rs_TimeZone_try_from_str_with_provider_result result =
     temporal_rs_TimeZone_try_from_str_with_provider((DiplomatStringView){name, len}, temporal_provider(js));

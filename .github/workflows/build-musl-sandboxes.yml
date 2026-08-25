@@ -63,6 +63,13 @@ jobs:
     needs: [build-musl, sandbox-x64, sandbox-aarch64]
     if: ${{ always() && !cancelled() }}
     steps:
+      - name: Download bench-v8 artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: bench-v8-*
+          path: bench-v8-results
+
       - name: Summary
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
@@ -78,3 +85,19 @@ jobs:
           Each sandbox artifact contains the paired `ant-sandbox-<arch>.img`
           and `ant-kernel-<arch>.img` files.
           SUMMARY
+
+          {
+            echo
+            echo "## bench-v8"
+            echo
+            echo "| Platform | Score |"
+            echo "|---|---:|"
+            for platform in linux-musl-x64 linux-musl-aarch64; do
+              result="bench-v8-results/bench-v8-$platform/$platform.json"
+              score="N/A"
+              if [[ -f "$result" ]]; then
+                score=$(jq -r '.score // "N/A"' "$result")
+              fi
+              echo "| \`$platform\` | $score |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -89,7 +89,7 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
   size_t str_len = 0;
   const char *str = NULL;
 
-  if (vtype(chunk) == T_STR) {
+  if (vtype(chunk) == kTypeString) {
     str = js_getstr(js, chunk, &str_len);
   } else {
     ant_value_t sv = js_tostring_val(js, chunk);
@@ -203,7 +203,7 @@ static ant_value_t js_tes_get_writable(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextEncoderStream constructor requires 'new'");
 
   tes_state_t *st = calloc(1, sizeof(tes_state_t));
@@ -341,12 +341,12 @@ static int tds_resolve_encoding(const char *s, size_t len) {
 }
 
 static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoderStream constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
   if (nargs > 0 && !is_undefined(args[0])) {
-    ant_value_t label = (vtype(args[0]) == T_STR) ? args[0] : coerce_to_str(js, args[0]);
+    ant_value_t label = (vtype(args[0]) == kTypeString) ? args[0] : coerce_to_str(js, args[0]);
     if (is_err(label)) return label;
     
     size_t llen;
@@ -368,10 +368,10 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs > 1 && is_object_type(args[1])) {
     ant_value_t fv = js_getprop_fallback(js, args[1], "fatal");
     if (is_err(fv)) return fv;
-    if (vtype(fv) != T_UNDEF) fatal = js_truthy(js, fv);
+    if (vtype(fv) != kTypeUndefined) fatal = js_truthy(js, fv);
     ant_value_t bv = js_getprop_fallback(js, args[1], "ignoreBOM");
     if (is_err(bv)) return bv;
-    if (vtype(bv) != T_UNDEF) ignore_bom = js_truthy(js, bv);
+    if (vtype(bv) != kTypeUndefined) ignore_bom = js_truthy(js, bv);
   }
 
   td_state_t *st = td_state_new(enc, fatal, ignore_bom);

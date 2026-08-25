@@ -17,7 +17,7 @@ static bool temporal_instant_from_value(
     *out = temporal_rs_ZonedDateTime_to_instant(zdt);
     return true;
   }
-  if (vtype(value) != T_STR && !is_object_type(value)) {
+  if (vtype(value) != kTypeString && !is_object_type(value)) {
     *err = js_mkerr_typed(js, JS_ERR_TYPE, "Instant-like value must be a string or Temporal object");
     return false;
   }
@@ -31,7 +31,7 @@ static bool temporal_instant_from_value(
 }
 
 static ant_value_t temporal_instant_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.Instant");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.Instant");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.Instant requires epoch nanoseconds");
   I128Nanoseconds ns;
   ant_value_t err = js_mkundef();
@@ -50,7 +50,7 @@ static ant_value_t temporal_instant_from(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t temporal_instant_from_epoch_milliseconds(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF)
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_RANGE, "epoch milliseconds must be an integral number");
   int64_t milliseconds;
   ant_value_t err = js_mkundef();

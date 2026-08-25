@@ -174,7 +174,7 @@ static void legacy_query_add(
     return;
   }
 
-  if (vtype(existing) == T_ARR) {
+  if (vtype(existing) == kTypeArray) {
     js_arr_push(js, existing, value);
     return;
   }

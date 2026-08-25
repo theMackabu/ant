@@ -49,7 +49,7 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
 }
 
 static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value_t parent_func) {
-  if (vtype(parent_func) == T_FUNC) {
+  if (vtype(parent_func) == kTypeFunction) {
     sv_closure_t *pc = js_func_closure(parent_func);
     if (is_object_type(pc->module_ctx)) return pc->module_ctx;
     if (pc->func_obj) {
@@ -93,23 +93,23 @@ static inline void sv_init_closure_function_object(
   if (child->is_async && child->is_generator) {
     js_set_slot(func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_generator_proto = js_get_slot(js->global, SLOT_ASYNC_GENERATOR_PROTO);
-    if (vtype(async_generator_proto) == T_FUNC) js_set_proto_init(func_obj, async_generator_proto);
+    if (vtype(async_generator_proto) == kTypeFunction) js_set_proto_init(func_obj, async_generator_proto);
   }
   
   else if (child->is_async) {
     js_set_slot(func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
-    if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
+    if (vtype(async_proto) == kTypeFunction) js_set_proto_init(func_obj, async_proto);
   }
   
   else if (child->is_generator) {
     ant_value_t generator_proto = js_get_slot(js->global, SLOT_GENERATOR_PROTO);
-    if (vtype(generator_proto) == T_FUNC) js_set_proto_init(func_obj, generator_proto);
+    if (vtype(generator_proto) == kTypeFunction) js_set_proto_init(func_obj, generator_proto);
   }
   
   else {
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
+    if (vtype(func_proto) == kTypeFunction) js_set_proto_init(func_obj, func_proto);
   }
 }
 
@@ -124,7 +124,7 @@ static inline ant_value_t sv_op_get_upval(
     JS_ERR_REFERENCE, 
     "Cannot access variable before initialization"
   );
-  if (vtype(val) == T_STR && str_is_heap_builder(val)) {
+  if (vtype(val) == kTypeString && str_is_heap_builder(val)) {
     val = str_materialize(js, val);
     if (is_err(val)) return val;
   }
@@ -228,7 +228,7 @@ static inline ant_value_t sv_op_closure(
   sv_func_t *child = (sv_func_t *)vptr(func->constants[idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, frame->this);
-  if (!closure) return mkval(T_ERR, 0);
+  if (!closure) return mkval(kTypeError, 0);
 
   for (int i = 0; i < child->upvalue_count; i++) {
     sv_upval_desc_t *desc = &child->upval_descs[i];
@@ -239,7 +239,7 @@ static inline ant_value_t sv_op_closure(
     } else closure->upvalues[i] = frame->upvalues[desc->index];
   }
 
-  ant_value_t func_val = mkref(T_FUNC, closure);
+  ant_value_t func_val = mkref(kTypeFunction, closure);
   vm->stack[vm->sp++] = func_val;
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
   sv_closure_finish_init(

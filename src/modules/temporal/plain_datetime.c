@@ -52,7 +52,7 @@ static bool temporal_partial_datetime_impl(
       *err = era;
       return false;
     }
-    if (vtype(era) != T_UNDEF) {
+    if (vtype(era) != kTypeUndefined) {
       if (!temporal_to_string_view(js, era, &out->partial.date.era, &out->era_root, err)) return false;
       any = true;
     }
@@ -68,7 +68,7 @@ static bool temporal_partial_datetime_impl(
     *err = month_code;
     return false;
   }
-  if (vtype(month_code) != T_UNDEF) {
+  if (vtype(month_code) != kTypeUndefined) {
     if (!temporal_month_code_syntax(js, month_code, &out->partial.date.month_code, &out->month_code_root, err))
       return false;
     any = true;
@@ -126,7 +126,7 @@ static bool temporal_plain_datetime_from_value(ant_t *js, ant_value_t value, Pla
     *out = result.ok;
     return true;
   }
-  if (vtype(value) == T_STR) {
+  if (vtype(value) == kTypeString) {
     DiplomatStringView view;
     ant_value_t root;
     if (!temporal_to_string_view(js, value, &view, &root, err)) return false;
@@ -152,12 +152,12 @@ static bool temporal_plain_datetime_from_value(ant_t *js, ant_value_t value, Pla
 }
 
 static ant_value_t temporal_plain_datetime_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF) return temporal_require_new(js, "Temporal.PlainDateTime");
+  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.PlainDateTime");
   int64_t fields[9] = {0};
   ant_value_t err = js_mkundef();
   if (
-    (nargs > 0 && vtype(args[0]) == T_UNDEF) || (nargs > 1 && vtype(args[1]) == T_UNDEF) ||
-    (nargs > 2 && vtype(args[2]) == T_UNDEF)
+    (nargs > 0 && vtype(args[0]) == kTypeUndefined) || (nargs > 1 && vtype(args[1]) == kTypeUndefined) ||
+    (nargs > 2 && vtype(args[2]) == kTypeUndefined)
   )
     return js_mkerr_typed(js, JS_ERR_RANGE, "Temporal.PlainDateTime date fields must be finite numbers");
   for (int i = 0; i < 9 && i < nargs; i++)
@@ -193,7 +193,7 @@ static ant_value_t temporal_plain_datetime_from(ant_t *js, ant_value_t *args, in
   ant_value_t err = js_mkundef();
   ArithmeticOverflow_option overflow = {0};
   if (
-    vtype(args[0]) == T_STR || js_get_native(args[0], TEMPORAL_PLAIN_DATETIME_TAG) ||
+    vtype(args[0]) == kTypeString || js_get_native(args[0], TEMPORAL_PLAIN_DATETIME_TAG) ||
     js_get_native(args[0], TEMPORAL_PLAIN_DATE_TAG) || js_get_native(args[0], TEMPORAL_ZONED_DATETIME_TAG)
   ) {
     PlainDateTime *value;
@@ -429,7 +429,7 @@ static ant_value_t temporal_plain_datetime_with_calendar(ant_t *js, ant_value_t 
   ant_value_t err = js_mkundef();
   PlainDateTime *self = temporal_plain_datetime_this(js, "Temporal.PlainDateTime.prototype.withCalendar", &err);
   if (!self) return err;
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is required");
+  if (nargs < 1 || vtype(args[0]) == kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "calendar is required");
   AnyCalendarKind calendar;
   if (!temporal_calendar_kind(js, args[0], AnyCalendarKind_Iso, &calendar, &err)) return err;
   return temporal_wrap(js, TEMPORAL_PLAIN_DATETIME, temporal_rs_PlainDateTime_with_calendar(self, calendar));
@@ -439,7 +439,7 @@ static ant_value_t temporal_plain_datetime_with_plain_time(ant_t *js, ant_value_
   PlainDateTime *self = temporal_plain_datetime_this(js, "Temporal.PlainDateTime.prototype.withPlainTime", &err);
   if (!self) return err;
   PlainTime *time = NULL;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && !temporal_plain_time_from_value(js, args[0], &time, &err)) return err;
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined && !temporal_plain_time_from_value(js, args[0], &time, &err)) return err;
   temporal_rs_PlainDateTime_with_time_result r = temporal_rs_PlainDateTime_with_time(self, time);
   if (time) temporal_rs_PlainTime_destroy(time);
   if (!r.is_ok) return temporal_error(js, r.err);
@@ -467,12 +467,12 @@ static ant_value_t temporal_plain_datetime_to_zdt(ant_t *js, ant_value_t *args, 
   TimeZone zone;
   if (!temporal_time_zone_from_value(js, args[0], &zone, &err)) return err;
   Disambiguation disambiguation = Disambiguation_Compatible;
-  if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
+  if (nargs > 1 && vtype(args[1]) != kTypeUndefined) {
     ant_value_t options;
     if (!temporal_options_object(js, args[1], false, &options, &err)) return err;
     ant_value_t value = js_get(js, options, "disambiguation");
     if (is_err(value)) return value;
-    if (vtype(value) != T_UNDEF && !temporal_disambiguation_value(js, value, &disambiguation, &err)) return err;
+    if (vtype(value) != kTypeUndefined && !temporal_disambiguation_value(js, value, &disambiguation, &err)) return err;
   }
   temporal_rs_PlainDateTime_to_zoned_date_time_with_provider_result r =
     temporal_rs_PlainDateTime_to_zoned_date_time_with_provider(self, zone, disambiguation, temporal_provider(js));

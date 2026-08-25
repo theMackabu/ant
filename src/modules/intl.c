@@ -117,7 +117,7 @@ static ant_value_t intl_validate_locale_string(ant_t *js, ant_value_t locale) {
 }
 
 static ant_value_t intl_locale_from_list_entry(ant_t *js, ant_value_t input) {
-  if (vtype(input) != T_STR && !is_object_type(input))
+  if (vtype(input) != kTypeString && !is_object_type(input))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Language ID should be string or object");
 
   ant_value_t locale = js_tostring_val(js, input);
@@ -126,20 +126,20 @@ static ant_value_t intl_locale_from_list_entry(ant_t *js, ant_value_t input) {
 }
 
 static ant_value_t intl_resolve_locale(ant_t *js, ant_value_t input) {
-  if (vtype(input) == T_UNDEF) return intl_default_locale(js);
-  if (vtype(input) == T_NULL)
+  if (vtype(input) == kTypeUndefined) return intl_default_locale(js);
+  if (vtype(input) == kTypeNull)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
 
-  if (vtype(input) == T_STR) return intl_validate_locale_string(js, input);
+  if (vtype(input) == kTypeString) return intl_validate_locale_string(js, input);
 
-  if (vtype(input) == T_ARR) {
+  if (vtype(input) == kTypeArray) {
     if (js_arr_len(js, input) == 0) return intl_default_locale(js);
     return intl_locale_from_list_entry(js, js_get(js, input, "0"));
   }
 
   if (is_object_type(input)) {
     ant_value_t length = js_get(js, input, "length");
-    if (vtype(length) == T_UNDEF) return intl_default_locale(js);
+    if (vtype(length) == kTypeUndefined) return intl_default_locale(js);
     if (!(js_to_number(js, length) > 0)) return intl_default_locale(js);
     return intl_locale_from_list_entry(js, js_get(js, input, "0"));
   }
@@ -148,10 +148,10 @@ static ant_value_t intl_resolve_locale(ant_t *js, ant_value_t input) {
 }
 
 static ant_value_t intl_get_option_string(ant_t *js, ant_value_t options, const char *key, const char *fallback) {
-  if (vtype(options) != T_OBJ) return js_mkstr(js, fallback, strlen(fallback));
+  if (vtype(options) != kTypeObject) return js_mkstr(js, fallback, strlen(fallback));
 
   ant_value_t value = js_get(js, options, key);
-  if (vtype(value) == T_UNDEF) return js_mkstr(js, fallback, strlen(fallback));
+  if (vtype(value) == kTypeUndefined) return js_mkstr(js, fallback, strlen(fallback));
 
   ant_value_t str = js_tostring_val(js, value);
   if (is_err(str)) return str;
@@ -246,7 +246,7 @@ static ant_value_t intl_collator_resolved_options(ant_t *js, ant_value_t *args, 
     ? js_get(js, this_obj, "locale") 
     : js_mkundef();
   
-  if (vtype(locale) != T_STR) locale = js_mkstr(js, "en-US", 5);
+  if (vtype(locale) != kTypeString) locale = js_mkstr(js, "en-US", 5);
   js_set(js, obj, "locale", locale);
   
   return obj;
@@ -333,8 +333,8 @@ static ant_value_t intl_dtf_resolved_options(ant_t *js, ant_value_t *args, int n
   ant_value_t locale = is_object_type(this_obj) ? js_get(js, this_obj, "locale") : js_mkundef();
   ant_value_t time_zone = is_object_type(this_obj) ? js_get(js, this_obj, "timeZone") : js_mkundef();
 
-  if (vtype(locale) != T_STR) locale = js_mkstr(js, "en-US", 5);
-  if (vtype(time_zone) != T_STR) time_zone = js_mkstr(js, "UTC", 3);
+  if (vtype(locale) != kTypeString) locale = js_mkstr(js, "en-US", 5);
+  if (vtype(time_zone) != kTypeString) time_zone = js_mkstr(js, "UTC", 3);
 
   js_set(js, obj, "locale", locale);
   js_set(js, obj, "timeZone", time_zone);
@@ -404,7 +404,7 @@ static bool intl_ascii_is_word_byte(const char *segment, size_t len) {
 
 static const char *intl_segmenter_granularity(ant_t *js, ant_value_t segmenter, size_t *len) {
   ant_value_t granularity = js_get(js, segmenter, "granularity");
-  if (vtype(granularity) != T_STR) {
+  if (vtype(granularity) != kTypeString) {
     if (len) *len = 8;
     return "grapheme";
   }
@@ -453,7 +453,7 @@ static ant_value_t intl_segmenter_resolved_options(ant_t *js, ant_value_t *args,
   const char *granularity = intl_segmenter_granularity(js, this_obj, &granularity_len);
 
   ant_value_t locale = is_object_type(this_obj) ? js_get(js, this_obj, "locale") : js_mkundef();
-  if (vtype(locale) != T_STR) locale = js_mkstr(js, "en-US", 5);
+  if (vtype(locale) != kTypeString) locale = js_mkstr(js, "en-US", 5);
 
   js_set(js, obj, "locale", locale);
   js_set(js, obj, "granularity", js_mkstr(js, granularity, granularity_len));
@@ -468,7 +468,7 @@ static ant_value_t intl_collator_constructor(ant_t *js, ant_value_t *args, int n
   ant_value_t obj = intl_create_instance(js, js->builtins.intl_collator_proto);
   js_set(js, obj, "locale", locale);
 
-  if (nargs > 1 && vtype(args[1]) == T_OBJ && js_truthy(js, js_get(js, args[1], "numeric"))) {
+  if (nargs > 1 && vtype(args[1]) == kTypeObject && js_truthy(js, js_get(js, args[1], "numeric"))) {
     js_set(js, obj, "compare", js_mkfun(intl_collator_compare_numeric));
     js_set(js, obj, "numeric", js_true);
   }
