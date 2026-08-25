@@ -45,8 +45,19 @@ exec = true
 script = "nix develop --command zsh"
 
 [tasks.install]
-script = ["maid build -q", '''
+script = ['''
 #!/usr/bin/env bash
+set -euo pipefail
+
+meson compile -C build
+meson compile -C build ant-runtime
+
+revision=$(./build/ant -e 'console.log(Ant.revision)')
+runtime_dir="$HOME/.ant/compile/$revision"
+
+mkdir -p "$runtime_dir"
+cp ./build/ant-runtime "$runtime_dir/ant-runtime"
+
 if which ant >/dev/null 2>&1; then
   dir=$(dirname "$(which ant)")
   cp ./build/ant "$dir/ant"

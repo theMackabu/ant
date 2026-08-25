@@ -217,6 +217,7 @@ struct ant_isolate_t {
     ant_value_t string_proto;
     ant_value_t number_proto;
     ant_value_t boolean_proto;
+    ant_value_t promise_ctor;
     ant_value_t promise_proto;
     ant_value_t bigint_proto;
     ant_value_t symbol_proto;
