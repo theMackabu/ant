@@ -31,10 +31,6 @@ if (!(cond)) {                                                              \
 #define JS_INF     ((double)INFINITY)
 #define JS_NEG_INF ((double)(-INFINITY))
 
-#define js_true    (NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
-#define js_false   (NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT))
-#define js_bool(x) (js_false | (ant_value_t)!!(x))
-
 // create a new ant isolate
 ant_t *ant_create();
 
@@ -183,10 +179,6 @@ ant_value_t js_get_proto(ant_t *, ant_value_t obj);
 ant_value_t js_get_ctor_proto(ant_t *, const char *name, size_t len);
 ant_value_t js_tostring_val(ant_t *js, ant_value_t value);
 
-uint8_t vtype(ant_value_t val);
-size_t vdata(ant_value_t val);
-bool js_is_constructor(ant_value_t value);
-
 ant_object_t *js_obj_ptr(ant_value_t val);
 ant_value_t js_obj_from_ptr(ant_object_t *obj);
 
@@ -212,6 +204,7 @@ typedef struct {
 ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
 void js_prop_iter_end(ant_iter_t *iter);
 
+bool js_is_constructor(ant_value_t value);
 bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value);
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);

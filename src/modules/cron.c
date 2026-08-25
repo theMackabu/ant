@@ -2154,7 +2154,7 @@ static int cron_windows_register(
   cron_text_t xml = {0};
   bool built = cron_text_appendf(
     &xml,
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<?xml version=\"1.0\"?>"
     "<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">"
     "<Triggers>%s</Triggers><Principals><Principal id=\"Author\"><UserId>%s</UserId>"
     "<LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>"

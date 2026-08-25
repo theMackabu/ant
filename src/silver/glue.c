@@ -807,7 +807,7 @@ ant_value_t jit_helper_closure(
   sv_upvalue_t **open_upvalues
 ) {
   sv_func_t *parent_func = parent_closure->func;
-  sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
+  sv_func_t *child = (sv_func_t *)vptr(parent_func->constants[const_idx]);
 
   sv_closure_t *closure = sv_closure_init(js, child, this_val);
   if (!closure) return mkval(T_ERR, 0);
@@ -828,10 +828,10 @@ ant_value_t jit_helper_closure(
     closure->upvalues[i] = jit_capture_upvalue(vm, open_upvalues, &slots[idx]);
   }
 
-  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  ant_value_t func_val = mkref(T_FUNC, closure);
   ant_value_t eval_env = sv_closure_eval_env(parent_closure);
   sv_closure_finish_init(
-    js, closure, func_val, mkval(T_FUNC, (uintptr_t)parent_closure),
+    js, closure, func_val, mkref(T_FUNC, parent_closure),
     name, name_len, eval_env, is_object_type(eval_env)
   );
 
@@ -910,7 +910,7 @@ ant_value_t jit_helper_bailout_resume(
   vm->jit_resume.vstack_sp  = vstack_sp;
 
   return sv_execute_closure_entry(
-    vm, closure, mkval(T_FUNC, (uintptr_t)closure), 
+    vm, closure, mkref(T_FUNC, closure),
     js_mkundef(), this_val, args, argc, NULL
   );
 }
@@ -1249,4 +1249,3 @@ ant_value_t jit_helper_new(
   sv_tfb_record_ctor_prop_count(record_func, final_obj);
   return final_obj;
 }
-

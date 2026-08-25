@@ -2036,7 +2036,7 @@ static ant_value_t builtin_regexp_toString(ant_t *js, ant_value_t *args, int nar
     return result;
   }
 
-  ant_flat_string_t *flat = (ant_flat_string_t *)(uintptr_t)vdata(result);
+  ant_flat_string_t *flat = (ant_flat_string_t *)vptr(result);
   src_off = vstr(js, source_str, &src_len);
   fl_off = vstr(js, flags_str, &fl_len);
   

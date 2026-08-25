@@ -73,7 +73,7 @@ static void bigint_normalize_limbs(uint32_t *limbs, size_t *count) {
 }
 
 static inline const bigint_payload_t *bigint_payload(ant_value_t v) {
-  return (const bigint_payload_t *)(uintptr_t)vdata(v);
+  return (const bigint_payload_t *)vptr(v);
 }
 
 static inline bool limbs_is_zero(const uint32_t *limbs, size_t count) {
@@ -109,8 +109,10 @@ static ant_value_t bigint_alloc_payload(
     return js_mkerr(js, "oom");
 
   bigint_payload_t *payload = (bigint_payload_t *)js_type_alloc(
-    js, ANT_ALLOC_BIGINT, payload_size, _Alignof(bigint_payload_t)
+    js, ANT_ALLOC_BIGINT, 
+    payload_size, _Alignof(bigint_payload_t)
   );
+  
   if (!payload) return js_mkerr(js, "oom");
 
   payload->sign = 0;
@@ -119,7 +121,8 @@ static ant_value_t bigint_alloc_payload(
   payload->pad[2] = 0;
   payload->limb_count = (uint32_t)capacity;
   *payload_out = payload;
-  return mkval(T_BIGINT, (uintptr_t)payload);
+  
+  return mkref(T_BIGINT, payload);
 }
 
 static ant_value_t bigint_alloc_binary_payload(

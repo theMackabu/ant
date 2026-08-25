@@ -522,6 +522,18 @@ an adjacent data file. The aggregate alone is insufficient.
   and preserves setter-only shadowing. Scan direct array elements before the
   packed-string locale prototype guard and carry source ASCII metadata into
   the final flat string instead of rescanning the output.
+- 2026-08-24: Separate native-function metadata from the external-pointer
+  handle table. Copy metadata into 64 KiB cage-backed slabs, store its cage
+  offset directly in `T_CFUNC`, and keep `hash_key` plus locking confined to
+  cold interning. Before binary `cb81b2dcdc36` and fresh-PGO candidate
+  `e9e518d2b0b2` produced a 62.492ms and 59.144ms median, respectively, across
+  35 interleaved five-million-call `Map.get()` samples (-5.36%). Three
+  interleaved Game of Life pairs measured median rendering at 0.802ms and
+  0.789ms (-1.62%), completed ticks at 3,988 and 3,982 (-0.15%), and average
+  whole-tick time at 1.695ms and 1.711ms (+0.94%). These are diagnostic
+  controls rather than Evidence Table results because the host was not
+  CPU-pinned; they reject the stale-profile 3.5% whole-tick regression but do
+  not establish a whole-game speedup.
 
 ## Validation Status
 
@@ -560,6 +572,11 @@ an adjacent data file. The aggregate alone is insufficient.
   6.1% for packed 64-number locale output. These are attributable diagnostic
   controls, not Evidence Table results, because the host was not CPU-pinned
   and the checked-in PGO profile was not regenerated.
+- The 2026-08-24 native-function metadata change passes the fresh Darwin
+  AArch64 PGO build, the 5,000-entry multi-slab metadata/external-handle stress
+  test, focused native-call, collection, JIT, GC, and NaN tests, `maid
+  preflight`, `git diff --check`, and the 3,969-test spec suite. The regenerated
+  profile is `b3fc1eab241f`.
 - The Phase 3A fused numeric/ASCII template path and pinned acceptance evidence
   remain pending.
 

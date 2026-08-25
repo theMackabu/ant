@@ -480,7 +480,7 @@ void js_set_error_site_from_vm_top(ant_t *js) {
 
 static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
   if (vtype(value) != T_STR || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
-  return (ant_flat_string_t *)(uintptr_t)vdata(value);
+  return (ant_flat_string_t *)vptr(value);
 }
 
 static inline ant_string_builder_t *sv_string_builder_heap_ptr(ant_value_t value) {
@@ -1139,7 +1139,7 @@ ant_value_t sv_call_compiled_zero_upvalues(
     return js_mkerr(js, "out of memory for generated function");
   }
   
-  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  ant_value_t func_val = mkref(T_FUNC, closure);
   const char *name = func->debug ? func->debug->name : NULL;
   
   sv_closure_finish_init(

@@ -15,7 +15,7 @@
 #include "modules/symbol.h"
 
 static inline bool json_value_needs_temp_root(ant_value_t value) {
-  if (value <= NANBOX_PREFIX) return false;
+  if (!is_tagged(value)) return false;
   
   static const uint32_t mask =
     (1u << T_STR) | (1u << T_OBJ) | (1u << T_ARR) | (1u << T_FUNC) |

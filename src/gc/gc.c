@@ -134,19 +134,19 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
   ant_value_t v = root;
 
   l_next:
-  if (v <= NANBOX_PREFIX) goto l_pop;
-  uint8_t t = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  if (!is_tagged(v)) goto l_pop;
+  uint8_t t = vtype_tagged(v);
   if (t != T_STR) goto l_pop;
 
-  uintptr_t data = (uintptr_t)(v & NANBOX_DATA_MASK);
-  uintptr_t tag = data & STR_HEAP_TAG_MASK;
+  uintptr_t tag = (uintptr_t)(vdata(v) & STR_HEAP_TAG_MASK);
+  uintptr_t data = (uintptr_t)vptr_masked(v, STR_HEAP_TAG_MASK);
 
   if (tag < sizeof(dispatch) / sizeof(*dispatch) && dispatch[tag])
     goto *dispatch[tag];
   goto l_flat;
 
   l_rope: {
-    ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
+    ant_rope_heap_t *rope = (ant_rope_heap_t *)data;
     if (!gc_ropes_contains(js, rope, sizeof(*rope), _Alignof(ant_rope_heap_t))) goto l_pop;
     if (!gc_ropes_mark(js, rope)) goto l_pop;
 
@@ -164,7 +164,7 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
   }
 
   l_builder: {
-    ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
+    ant_string_builder_t *builder = (ant_string_builder_t *)data;
     if (!gc_ropes_contains(js, builder, sizeof(*builder), _Alignof(ant_string_builder_t))) goto l_pop;
     if (!gc_ropes_mark(js, builder)) goto l_pop;
     
@@ -192,10 +192,10 @@ static void gc_mark_str(ant_t *js, ant_value_t root) {
 }
 
 static void gc_mark_flat_str(ant_t *js, ant_value_t value) {
-  if (value <= NANBOX_PREFIX || vtype(value) != T_STR) return;
-  uintptr_t data = (uintptr_t)vdata(value);
-  if (data && (data & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_FLAT)
-    gc_strings_mark(js, (const void *)data);
+  if (!is_tagged(value) || vtype(value) != T_STR) return;
+  if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return;
+  const void *ptr = vptr_masked(value, STR_HEAP_TAG_MASK);
+  if (ptr) gc_strings_mark(js, ptr);
 }
 
 void gc_remember_builder(ant_t *js, ant_string_builder_t *builder) {

@@ -138,20 +138,8 @@ typedef enum {
   BRAND_TEMPLATE_OBJECT
 } object_brand_id_t;
 
-static inline void *mantissa_chk(void *p, const char *func) {
-  if (!p || ((uintptr_t)p >> 47) == 0) goto ok;
-
-  fprintf(
-    stderr,
-    "FATAL: %s returned pointer %p outside 47-bit NaN-boxing range\n"
-    "Please report this issue with your OS/architecture details.\n", func, p
-  );
-  
-  abort();
-  ok: return p;
-}
-
-#define ant_calloc(size)       mantissa_chk(calloc(1, size),    "calloc")
-#define ant_realloc(ptr, size) mantissa_chk(realloc(ptr, size), "realloc")
+// TODO: remove
+#define ant_calloc(size)       calloc(1, size)
+#define ant_realloc(ptr, size) realloc(ptr, size)
 
 #endif

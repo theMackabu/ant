@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "cage.h"
 #include "runtime.h"
 #include "descriptors.h"
 
@@ -26,6 +27,7 @@ typedef struct code_block {
   struct code_block *next;
   size_t used;
   size_t capacity;
+  size_t alloc_size;
   char data[];
 } code_block_t;
 
@@ -74,12 +76,15 @@ static code_block_t *code_arena_new_block(size_t min_size) {
   size_t capacity = CODE_ARENA_BLOCK_SIZE;
   if (min_size > capacity) capacity = min_size;
 
-  code_block_t *block = malloc(sizeof(code_block_t) + capacity);
+  size_t alloc_size = sizeof(code_block_t) + capacity;
+  code_block_t *block = ant_cage_alloc(alloc_size, _Alignof(code_block_t));
+  
   if (!block) return NULL;
-
   block->next = NULL;
   block->used = 0;
   block->capacity = capacity;
+  block->alloc_size = alloc_size;
+  
   return block;
 }
 
@@ -136,7 +141,7 @@ static void arena_rewind_plain(
     code_block_t *block = *head;
     while (block) {
       code_block_t *next = block->next;
-      free(block);
+      ant_cage_free(block, block->alloc_size);
       block = next;
     }
     *head = NULL;
@@ -150,7 +155,7 @@ static void arena_rewind_plain(
   code_block_t *b = target->next;
   while (b) {
     code_block_t *next = b->next;
-    free(b);
+    ant_cage_free(b, b->alloc_size);
     b = next;
   }
 
@@ -210,7 +215,8 @@ void code_arena_rewind(code_arena_mark_t mark) {
     
     while (block) {
       code_block_t *next = block->next;
-      free(block); block = next;
+      ant_cage_free(block, block->alloc_size); 
+      block = next;
     }
     
     code_arena_head = NULL;
@@ -228,7 +234,8 @@ void code_arena_rewind(code_arena_mark_t mark) {
   
   while (b) {
     code_block_t *next = b->next;
-    free(b); b = next;
+    ant_cage_free(b, b->alloc_size); 
+    b = next;
   }
   
   target->next = NULL;
@@ -266,7 +273,7 @@ void code_arena_reset(void) {
   code_block_t *block = code_arena_head;
   while (block) {
     code_block_t *next = block->next;
-    free(block);
+    ant_cage_free(block, block->alloc_size);
     block = next;
   }
   
