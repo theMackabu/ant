@@ -306,7 +306,7 @@ void gc_remember_func_const(ant_t *js, sv_func_t *func, uint32_t slot, ant_value
   if (type != kTypeFunction) {
     if (type == kTypeString) goto remember;
     if (((1u << type) & GC_OBJ_TYPE_MASK) == 0) return;
-    ant_object_t *obj = (ant_object_t *)vptr_tagged(value);
+    ant_object_t *obj = (ant_object_t *)vptr(value);
     if (!obj || obj->flags.generation != 0) return;
   }
 
@@ -446,7 +446,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   uint8_t t = vtype_tagged(v);
 
   if (t == kTypeFunction) {
-    gc_mark_closure(js, (sv_closure_t *)vptr_tagged(v));
+    gc_mark_closure(js, (sv_closure_t *)vptr(v));
     return;
   }
 
@@ -456,7 +456,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (t == kTypeBigInt) {
-    gc_bigints_mark((const void *)vptr_tagged(v));
+    gc_bigints_mark((const void *)vptr(v));
     return;
   }
 
@@ -468,7 +468,7 @@ void gc_mark_value(ant_t *js, ant_value_t v) {
   }
 
   if (!((1u << t) & GC_OBJ_TYPE_MASK)) return;
-  ant_object_t *obj = (ant_object_t *)vptr_tagged(v);
+  ant_object_t *obj = (ant_object_t *)vptr(v);
   
   if (!obj) return;
   gc_grey_obj(js, obj);
@@ -686,18 +686,18 @@ static void gc_scan_range(ant_t *js, uintptr_t lo, uintptr_t hi) {
     uint8_t type = vtype_tagged(w);
     
     if ((1u << type) & GC_OBJ_TYPE_MASK) {
-      ant_object_t *obj = (ant_object_t *)vptr_tagged(w);
+      ant_object_t *obj = (ant_object_t *)vptr(w);
       if (obj) gc_grey_obj(js, obj);
     }
     
     if (type == kTypeFunction) {
-      sv_closure_t *c = (sv_closure_t *)vptr_tagged(w);
+      sv_closure_t *c = (sv_closure_t *)vptr(w);
       if (c && fixed_arena_contains(&js->closure_arena, c)) gc_mark_closure(js, c);
     }
     
     if (type == kTypeString && g_str_mark) g_str_mark(js, w);
     if (type == kTypeBigInt)
-      gc_bigints_mark((const void *)vptr_tagged(w));
+      gc_bigints_mark((const void *)vptr(w));
   }
 }
 

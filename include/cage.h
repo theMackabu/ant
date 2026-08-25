@@ -33,12 +33,8 @@ static inline uint64_t ant_cage_encode(const void *ptr) {
   return (uint64_t)((uintptr_t)ptr - ant_cage_base_address);
 }
 
-static inline void *ant_cage_decode_nonnull(uint64_t offset) {
-  return (void *)(ant_cage_base_address + offset);
-}
-
 static inline void *ant_cage_decode(uint64_t offset) {
-  return offset ? ant_cage_decode_nonnull(offset) : NULL;
+  return offset ? (void *)(ant_cage_base_address + offset) : NULL;
 }
 
 #endif

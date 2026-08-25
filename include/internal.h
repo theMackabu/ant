@@ -538,8 +538,7 @@ static inline bool is_callable(ant_value_t v) {
 }
 
 static inline const ant_cfunc_meta_t *js_as_cfunc_meta(ant_value_t fn_val) {
-  uint64_t offset = vdata(fn_val);
-  return offset ? (const ant_cfunc_meta_t *)ant_cage_decode_nonnull(offset) : NULL;
+  return (const ant_cfunc_meta_t *)ant_cage_decode(vdata(fn_val));
 }
 
 static inline ant_cfunc_t js_as_cfunc(ant_value_t fn_val) {

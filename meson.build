@@ -106,12 +106,9 @@ pkg_lib = custom_target(
   env: {
     'ZIG': zig.full_path(),
     'ANT_VERSION': ant_version,
-
     'PKG_ZIG_DIR': pkg_zig_dir, 'PKG_BUILD_DIR': pkg_build_dir,
     'LMDB_INCLUDE': lmdb_include_path, 'ZLIB_INCLUDE': zlib_include_path,
     'LIBUV_INCLUDE': libuv_include_path, 'YYJSON_INCLUDE': yyjson_include_path,
-
-    'PKG_TARGET': host_machine.cpu_family() + '-' + host_machine.system(),
     'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
   },
   build_by_default: true,
