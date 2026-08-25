@@ -117,7 +117,7 @@ static size_t intern_bucket_count = 0;
 static bool intern_table_init(void) {
   if (intern_buckets) return true;
   intern_bucket_count = INTERN_BUCKET_MIN;
-  intern_buckets = ant_calloc(sizeof(*intern_buckets) * intern_bucket_count);
+  intern_buckets = calloc(1, sizeof(*intern_buckets) * intern_bucket_count);
   if (!intern_buckets) {
     intern_bucket_count = 0;
     return false;
@@ -128,7 +128,7 @@ static bool intern_table_init(void) {
 static bool intern_table_rehash(size_t new_bucket_count) {
   if (!intern_buckets || new_bucket_count < INTERN_BUCKET_MIN) return false;
 
-  interned_string_t **next = ant_calloc(sizeof(*next) * new_bucket_count);
+  interned_string_t **next = calloc(1, sizeof(*next) * new_bucket_count);
   if (!next) return false;
 
   for (size_t i = 0; i < intern_bucket_count; i++) {
@@ -2333,7 +2333,7 @@ const char *intern_string(const char *str, size_t len) {
   }
   
   size_t alloc_size = sizeof(interned_string_t) + len + 1;
-  interned_string_t *entry = (interned_string_t *)ant_calloc(alloc_size);
+  interned_string_t *entry = (interned_string_t *)calloc(1, alloc_size);
   if (!entry) return NULL;
   
   entry->str = (char *)(entry + 1);
@@ -2519,11 +2519,11 @@ static size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
 
 static char *tostr_alloc(ant_t *js, ant_value_t value) {
   size_t cap = 64;
-  char *buf = ant_calloc(cap);
+  char *buf = calloc(1, cap);
   size_t n = tostr(js, value, buf, cap);
   if (n >= cap) {
     free(buf);
-    buf = ant_calloc(n + 1);
+    buf = calloc(1, n + 1);
     tostr(js, value, buf, n + 1);
   }
   return buf;
@@ -2572,7 +2572,7 @@ static js_cstr_t js_cstr_impl(
 
   if (!buf || capacity == 0) {
     capacity = 64;
-    buf = ant_calloc(capacity);
+    buf = calloc(1, capacity);
     if (!buf) return out;
     out.needs_free = true;
   }
@@ -2590,8 +2590,8 @@ static js_cstr_t js_cstr_impl(
 
     size_t new_capacity = capacity * 2;
     char *next = out.needs_free 
-      ? ant_realloc(buf, new_capacity) 
-      : ant_calloc(new_capacity);
+      ? realloc(buf, new_capacity) 
+      : calloc(1, new_capacity);
     
     if (!next) {
       if (out.needs_free) free(buf);
@@ -2653,7 +2653,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
     
     size_t capacity = buflen + 2;
     bool needs_free = capacity > sizeof(bigint_stack_buf);
-    buf = needs_free ? (char *)ant_calloc(capacity) : bigint_stack_buf;
+    buf = needs_free ? (char *)calloc(1, capacity) : bigint_stack_buf;
     
     if (!buf) return js_mkerr(js, "oom");
     len = strbigint(js, value, buf, capacity);
@@ -2691,7 +2691,7 @@ const char *js_str(ant_t *js, ant_value_t value) {
   scan_refs(js, value);
   
   size_t capacity = 4096;
-  char *buf = (char *)ant_calloc(capacity);
+  char *buf = (char *)calloc(1, capacity);
   if (!buf) return "";
   
   size_t len;
@@ -2703,7 +2703,7 @@ const char *js_str(ant_t *js, ant_value_t value) {
     if (len < capacity - 1) break;
     
     capacity *= 2;
-    buf = (char *)ant_realloc(buf, capacity);
+    buf = (char *)realloc(buf, capacity);
     if (!buf) return "";
   }
   
@@ -4542,7 +4542,7 @@ ant_value_t js_mksym_for(ant_t *js, const char *key) {
   ptr->flags |= SYM_FLAG_GLOBAL;
   ptr->key = interned;
 
-  sym_registry_entry_t *entry = ant_calloc(sizeof(sym_registry_entry_t));
+  sym_registry_entry_t *entry = calloc(1, sizeof(sym_registry_entry_t));
   if (entry) {
     entry->key = interned;
     entry->sym = sym;
@@ -4996,8 +4996,8 @@ static bool string_builder_append(string_builder_t *sb, const char *data, size_t
     }
     
     char *new_buffer = sb->is_dynamic
-      ? (char *)ant_realloc(sb->buffer, new_capacity)
-      : (char *)ant_calloc(new_capacity);
+      ? (char *)realloc(sb->buffer, new_capacity)
+      : (char *)calloc(1, new_capacity);
       
     if (!new_buffer) return false;
     if (!sb->is_dynamic && sb->size > 0) memcpy(new_buffer, sb->buffer, sb->size);
@@ -5615,7 +5615,7 @@ static ant_value_t property_key_view_init_slow(
         return js_mkundef();
       }
 
-      char *output = (char *)ant_calloc(length + 1);
+      char *output = (char *)calloc(1, length + 1);
       if (!output) return js_mkerr(js, "oom");
       key->heap_bytes = output;
       key->length = strbigint(js, value, output, length + 1);
@@ -6274,7 +6274,7 @@ ant_value_t extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_arg
   int len = (int)raw_len;
   if (len <= 0) return js_mkundef();
   
-  ant_value_t *args_out = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * len);
+  ant_value_t *args_out = (ant_value_t *)calloc(1, sizeof(ant_value_t) * len);
   if (!args_out) return js_mkerr(js, "out of memory");
 
   if (vtype(arr) == kTypeArray) {
@@ -6308,7 +6308,7 @@ static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int n
     const char *name = get_func_name(js, func, &name_len);
     if (name && name_len > 0) {
       size_t total = 9 + name_len + 21 + 1;
-      char *buf = ant_calloc(total);
+      char *buf = calloc(1, total);
       size_t n = 0;
       n += cpy(buf + n, total - n, "function ", 9);
       n += cpy(buf + n, total - n, name, name_len);
@@ -6329,7 +6329,7 @@ static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int n
     const char *name = get_func_name(js, func, &name_len);
     if (name && name_len > 0) {
       size_t total = 9 + name_len + 21 + 1;
-      char *buf = ant_calloc(total);
+      char *buf = calloc(1, total);
       size_t n = 0;
       n += cpy(buf + n, total - n, "function ", 9);
       n += cpy(buf + n, total - n, name, name_len);
@@ -6364,7 +6364,7 @@ static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int n
         size_t body_len = code_len - params_len;
         
         size_t len = (is_async ? 6 : 0) + params_len + 4 + body_len + 1;
-        char *buf = ant_calloc(len);
+        char *buf = calloc(1, len);
         size_t n = 0;
         
         if (is_async) n += cpy(buf + n, REMAIN(n, len), "async ", 6);
@@ -13892,7 +13892,7 @@ static ant_value_t builtin_string_html(ant_t *js, ant_value_t *args, int nargs, 
     ? (1 + attr_len + 2 + escaped_len + 1) 
     : 0) + 1 + (size_t)str_len + 2 + tag_len + 1;
   
-  char *buf = (char *)ant_calloc(total);
+  char *buf = (char *)calloc(1, total);
   if (!buf) return js_mkerr(js, "oom");
 
   size_t pos = 0;
@@ -14481,7 +14481,7 @@ static ant_value_t builtin_string_concat(ant_t *js, ant_value_t *args, int nargs
       return err;
     }
     
-    str_args = (ant_value_t *)ant_calloc((size_t)nargs * sizeof(*str_args));
+    str_args = (ant_value_t *)calloc(1, (size_t)nargs * sizeof(*str_args));
     if (!str_args) {
       ant_value_t err = js_mkerr(js, "oom");
       GC_ROOT_RESTORE(js, root_mark);
@@ -14622,7 +14622,7 @@ static ant_value_t builtin_string_fromCodePoint(ant_t *js, ant_value_t *args, in
   size_t capacity = (size_t)nargs * 4;
   char static_buf[256];
   bool needs_free = capacity > sizeof(static_buf);
-  char *buf = needs_free ? (char *)ant_calloc(capacity) : static_buf;
+  char *buf = needs_free ? (char *)calloc(1, capacity) : static_buf;
   if (!buf) return js_mkerr(js, "oom");
 
   size_t len = 0;
@@ -15086,7 +15086,7 @@ static size_t strpromise(ant_t *js, ant_value_t value, char *buf, size_t len) {
     content = "<pending>";
   } else if (pd->state == 2) {
     char *val = tostr_alloc(js, pd->value);
-    allocated = ant_calloc(strlen(val) + 12);
+    allocated = calloc(1, strlen(val) + 12);
     sprintf(allocated, "<rejected> %s", val);
     free(val);
     content = allocated;
@@ -17405,7 +17405,7 @@ static ant_value_t proxy_get_with_receiver(ant_t *js, ant_value_t proxy, const c
   char *owned_key = NULL;
   char *key_cstr = key_buf;
   if (key_len >= sizeof(key_buf)) {
-    owned_key = ant_calloc(key_len + 1);
+    owned_key = calloc(1, key_len + 1);
     if (!owned_key) return js_mkerr(js, "oom");
     key_cstr = owned_key;
   }
@@ -18046,7 +18046,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   ant_object_t *proxy_ptr = js_obj_ptr(proxy_obj);
   if (!proxy_ptr) return js_mkerr(js, "out of memory");
 
-  ant_proxy_state_t *data = (ant_proxy_state_t *)ant_calloc(sizeof(ant_proxy_state_t));
+  ant_proxy_state_t *data = (ant_proxy_state_t *)calloc(1, sizeof(ant_proxy_state_t));
   if (!data) return js_mkerr(js, "out of memory");
 
   data->target = target;

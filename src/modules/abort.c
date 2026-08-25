@@ -189,7 +189,7 @@ void abort_signal_remove_listener(ant_t *js, ant_value_t signal, ant_value_t cal
 }
 
 static ant_value_t make_new_signal(ant_t *js) {
-  abort_signal_data_t *data = ant_calloc(sizeof(abort_signal_data_t));
+  abort_signal_data_t *data = calloc(1, sizeof(abort_signal_data_t));
   if (!data) return js_mkerr(js, "AbortSignal: out of memory");
 
   data->aborted = false;
@@ -398,7 +398,7 @@ static ant_value_t abort_signal_static_timeout(ant_t *js, ant_value_t *args, int
   ant_value_t signal = make_new_signal(js);
   if (is_err(signal)) return signal;
 
-  abort_timeout_entry_t *entry = ant_calloc(sizeof(abort_timeout_entry_t));
+  abort_timeout_entry_t *entry = calloc(1, sizeof(abort_timeout_entry_t));
   if (!entry) return js_mkerr(js, "AbortSignal.timeout: out of memory");
 
   entry->js = js;

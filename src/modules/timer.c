@@ -122,7 +122,7 @@ static timer_entry_t *find_timer_entry_by_id(int timer_id) {
 static int timer_copy_args(timer_entry_t *entry, ant_value_t *args, int nargs) {
   entry->nargs = nargs > 2 ? nargs - 2 : 0;
   if (entry->nargs > 0) {
-    entry->args = ant_calloc(sizeof(ant_value_t) * entry->nargs);
+    entry->args = calloc(1, sizeof(ant_value_t) * entry->nargs);
     if (!entry->args) return -1;
     memcpy(entry->args, args + 2, sizeof(ant_value_t) * entry->nargs);
   } else entry->args = NULL;
@@ -151,7 +151,7 @@ static int timer_copy_args_from_object(ant_t *js, timer_entry_t *entry, ant_valu
   timer_release_args(entry);
   if (len == 0) return 0;
 
-  entry->args = ant_calloc(sizeof(ant_value_t) * (size_t)len);
+  entry->args = calloc(1, sizeof(ant_value_t) * (size_t)len);
   if (!entry->args) return -1;
   entry->nargs = (int)len;
   for (ant_offset_t i = 0; i < len; i++) entry->args[i] = js_arr_get(js, args_arr, i);
@@ -346,7 +346,7 @@ static ant_value_t js_set_timeout(ant_t *js, ant_value_t *args, int nargs) {
   uint64_t ms = delay_ms >= 1 ? (uint64_t)delay_ms : 0;
   ant_value_t timer_args = timer_make_args_array(js, args, nargs);
   
-  timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
+  timer_entry_t *entry = calloc(1, sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
   
   if (timer_copy_args(entry, args, nargs) < 0) {
@@ -382,7 +382,7 @@ static ant_value_t js_set_interval(ant_t *js, ant_value_t *args, int nargs) {
   uint64_t ms = delay_ms >= 1 ? (uint64_t)delay_ms : 1;
   ant_value_t timer_args = timer_make_args_array(js, args, nargs);
   
-  timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
+  timer_entry_t *entry = calloc(1, sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
   
   if (timer_copy_args(entry, args, nargs) < 0) {
@@ -429,7 +429,7 @@ static ant_value_t js_set_immediate(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t callback = args[0];
   
-  immediate_entry_t *entry = ant_calloc(sizeof(immediate_entry_t));
+  immediate_entry_t *entry = calloc(1, sizeof(immediate_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate immediate");
   }
@@ -682,7 +682,7 @@ empty:
 }
 
 void queue_microtask(ant_t *js, ant_value_t callback) {
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
   if (entry == NULL) return;
   
   entry->callback = callback;
@@ -696,7 +696,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
   if (nargs <= 0) { queue_microtask(js, callback); return; }
   
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
   if (entry == NULL) return;
   
   entry->callback = callback;
@@ -709,7 +709,7 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
 }
 
 void queue_promise_thenable_job(ant_t *js, ant_value_t then_fn, ant_value_t thenable, ant_value_t resolve_fn, ant_value_t reject_fn) {
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + 2 * sizeof(ant_value_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t) + 2 * sizeof(ant_value_t));
   if (entry == NULL) return;
 
   entry->callback = then_fn;
@@ -724,7 +724,7 @@ void queue_promise_thenable_job(ant_t *js, ant_value_t then_fn, ant_value_t then
 }
 
 void queue_next_tick(ant_t *js, ant_value_t callback) {
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
   if (entry == NULL) return;
 
   entry->callback = callback;
@@ -738,7 +738,7 @@ void queue_next_tick(ant_t *js, ant_value_t callback) {
 void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
   if (nargs <= 0) { queue_next_tick(js, callback); return; }
 
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
   if (entry == NULL) return;
 
   entry->callback = callback;
@@ -753,7 +753,7 @@ void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
 void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   if (!js_mark_promise_trigger_queued(js, promise)) return;
 
-  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
   if (entry == NULL) {
     js_mark_promise_trigger_dequeued(js, promise);
     return;

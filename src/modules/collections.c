@@ -127,7 +127,7 @@ static bool map_store_entry(
     return true;
   }
 
-  entry = ant_calloc(sizeof(map_entry_t));
+  entry = calloc(1, sizeof(map_entry_t));
   if (!entry) {
     collection_key_free(&key);
     return false;
@@ -164,7 +164,7 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
     return true;
   }
 
-  entry = ant_calloc(sizeof(set_entry_t));
+  entry = calloc(1, sizeof(set_entry_t));
   if (!entry) {
     collection_key_free(&key);
     return false;
@@ -344,7 +344,7 @@ ant_value_t collections_make_weakmap(ant_t *js) {
   ant_value_t weakmap = js_mkobj(js);
   if (is_err(weakmap)) return weakmap;
 
-  weakmap_table_t *table = ant_calloc(sizeof(*table));
+  weakmap_table_t *table = calloc(1, sizeof(*table));
   if (!table) return js_mkerr(js, "out of memory");
 
   js_obj_ptr(weakmap)->type_tag = kTypeWeakMap;
@@ -583,7 +583,7 @@ static ant_value_t map_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
   map_entry_t **map_ptr = get_map_from_obj(map_obj);
   
-  map_iterator_state_t *state = ant_calloc(sizeof(map_iterator_state_t));
+  map_iterator_state_t *state = calloc(1, sizeof(map_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
   
   state->head = map_ptr;
@@ -636,7 +636,7 @@ static ant_value_t set_iter_next(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {
   set_entry_t **set_ptr = get_set_from_obj(set_obj);
   
-  set_iterator_state_t *state = ant_calloc(sizeof(set_iterator_state_t));
+  set_iterator_state_t *state = calloc(1, sizeof(set_iterator_state_t));
   if (!state) return js_mkerr(js, "out of memory");
   
   state->head = set_ptr;
@@ -761,7 +761,7 @@ static ant_value_t make_set_result(ant_t *js, set_entry_t ***out_set) {
   ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
   if (is_special_object(set_proto)) js_set_proto_init(set_obj, set_proto);
 
-  set_entry_t **set_head = ant_calloc(sizeof(set_entry_t *));
+  set_entry_t **set_head = calloc(1, sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
@@ -1257,7 +1257,7 @@ static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
   HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(ant_value_t), entry);
   
   if (!entry) {
-    entry = ant_calloc(sizeof(weakset_entry_t));
+    entry = calloc(1, sizeof(weakset_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value_obj = value_obj;
     HASH_ADD(hh, *ws_ptr, value_obj, sizeof(ant_value_t), entry);
@@ -1328,7 +1328,7 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, wr_proto);
   if (is_special_object(instance_proto)) js_set_proto_init(wr_obj, instance_proto);
 
-  weakref_state_t *state = ant_calloc(sizeof(*state));
+  weakref_state_t *state = calloc(1, sizeof(*state));
 
   if (!state) return js_mkerr(js, "out of memory");
   state->target = args[0];
@@ -1457,7 +1457,7 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
   if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
   
-  map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
+  map_entry_t **map_head = calloc(1, sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   js_set_native(map_obj, map_head, MAP_NATIVE_TAG);
@@ -1668,7 +1668,7 @@ static ant_value_t weakset_init_from_iterable(ant_t *js, ant_value_t ws_obj, wea
     HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
     if (entry) continue;
     
-    entry = ant_calloc(sizeof(weakset_entry_t));
+    entry = calloc(1, sizeof(weakset_entry_t));
     if (!entry) {
       result = js_mkerr(js, "out of memory");
       goto close_iter;
@@ -1700,7 +1700,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   
   if (is_special_object(instance_proto)) js_set_proto_init(map_obj, instance_proto);
   
-  map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
+  map_entry_t **map_head = calloc(1, sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
@@ -1730,7 +1730,7 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(set_obj, instance_proto);
   
-  set_entry_t **set_head = ant_calloc(sizeof(set_entry_t *));
+  set_entry_t **set_head = calloc(1, sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
@@ -1760,7 +1760,7 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(wm_obj, instance_proto);
   
-  weakmap_table_t *table = ant_calloc(sizeof(*table));
+  weakmap_table_t *table = calloc(1, sizeof(*table));
   if (!table) return js_mkerr(js, "out of memory");
   
   if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin)
@@ -1792,7 +1792,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_special_object(instance_proto)) js_set_proto_init(ws_obj, instance_proto);
   
-  weakset_entry_t **ws_head = ant_calloc(sizeof(weakset_entry_t *));
+  weakset_entry_t **ws_head = calloc(1, sizeof(weakset_entry_t *));
   if (!ws_head) return js_mkerr(js, "out of memory");
   *ws_head = NULL;
   

@@ -48,7 +48,7 @@ enum {
 };
 
 static hdr_list_t *list_new(void) {
-  hdr_list_t *l = ant_calloc(sizeof(hdr_list_t));
+  hdr_list_t *l = calloc(1, sizeof(hdr_list_t));
   if (!l) return NULL;
   l->head = NULL;
   l->tail = &l->head;
@@ -148,7 +148,7 @@ static ant_value_t headers_require_mutable(ant_t *js, ant_value_t headers) {
 }
 
 static void list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
-  hdr_entry_t *e = ant_calloc(sizeof(hdr_entry_t));
+  hdr_entry_t *e = calloc(1, sizeof(hdr_entry_t));
   if (!e) return;
   e->name  = strdup(lower_name);
   e->value = strdup(value);
@@ -373,7 +373,7 @@ static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kin
   hdr_list_t *l = get_list(headers_obj);
   if (!l) return js_mkerr(js, "Invalid Headers object");
 
-  hdr_iter_t *st = ant_calloc(sizeof(hdr_iter_t));
+  hdr_iter_t *st = calloc(1, sizeof(hdr_iter_t));
   if (!st) return js_mkerr(js, "out of memory");
   
   st->list  = l;

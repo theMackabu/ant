@@ -117,7 +117,7 @@ static descriptor_entry_t *get_or_create_desc(ant_t *js, ant_value_t obj, const 
   descriptor_entry_t *entry = registry_lookup_desc(obj, key, klen);
   if (entry) return entry;
 
-  entry = (descriptor_entry_t *)ant_calloc(sizeof(descriptor_entry_t) + klen + 1);
+  entry = (descriptor_entry_t *)calloc(1, sizeof(descriptor_entry_t) + klen + 1);
   if (!entry) return NULL;
 
   entry->key = make_desc_key(obj, key, klen);
@@ -143,7 +143,7 @@ static descriptor_entry_t *get_or_create_sym_desc(ant_value_t obj, ant_offset_t 
   descriptor_entry_t *entry = registry_lookup_sym_desc(obj, sym_off);
   if (entry) return entry;
 
-  entry = (descriptor_entry_t *)ant_calloc(sizeof(descriptor_entry_t));
+  entry = (descriptor_entry_t *)calloc(1, sizeof(descriptor_entry_t));
   if (!entry) return NULL;
 
   entry->key = make_sym_desc_key(obj, sym_off);

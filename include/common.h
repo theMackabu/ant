@@ -138,8 +138,4 @@ typedef enum {
   BRAND_TEMPLATE_OBJECT
 } object_brand_id_t;
 
-// TODO: remove
-#define ant_calloc(size)       calloc(1, size)
-#define ant_realloc(ptr, size) realloc(ptr, size)
-
 #endif

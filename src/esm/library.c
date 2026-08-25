@@ -36,7 +36,7 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
 
   va_start(args, name);
   while (alias != NULL) {
-    ant_library_entry_t *lib = (ant_library_entry_t *)ant_calloc(sizeof(ant_library_entry_t));
+    ant_library_entry_t *lib = (ant_library_entry_t *)calloc(1, sizeof(ant_library_entry_t));
     if (!lib) break;
     
     strncpy(lib->name, alias, sizeof(lib->name) - 1);

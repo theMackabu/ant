@@ -185,7 +185,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
     if (is_special_object(map_proto)) js_set_proto_init(clone, map_proto);
     
-    map_entry_t **new_head = ant_calloc(sizeof(map_entry_t *));
+    map_entry_t **new_head = calloc(1, sizeof(map_entry_t *));
     if (!new_head) return js_mkerr(js, "out of memory");
     
     *new_head = NULL;
@@ -199,7 +199,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
       if (is_err(vc)) return vc;
       
-      map_entry_t *ne = ant_calloc(sizeof(map_entry_t));
+      map_entry_t *ne = calloc(1, sizeof(map_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
       
       ne->key = (unsigned char *)strdup((const char *)e->key);
@@ -222,7 +222,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
     if (is_special_object(set_proto)) js_set_proto_init(clone, set_proto);
     
-    set_entry_t **new_head = ant_calloc(sizeof(set_entry_t *));
+    set_entry_t **new_head = calloc(1, sizeof(set_entry_t *));
     if (!new_head) return js_mkerr(js, "out of memory");
     *new_head = NULL;
     js_set_native(clone, new_head, SET_NATIVE_TAG);
@@ -235,7 +235,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
       if (is_err(vc)) return vc;
 
-      set_entry_t *ne = ant_calloc(sizeof(set_entry_t));
+      set_entry_t *ne = calloc(1, sizeof(set_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
       
       ne->key = (unsigned char *)strdup((const char *)e->key);

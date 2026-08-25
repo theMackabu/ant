@@ -34,7 +34,7 @@ static size_t buffer_registry_cap   = 0;
 static ArrayBufferData **buffer_registry = NULL;
 
 static void *ta_meta_alloc(size_t size) {
-  void *ptr = ant_calloc(size);
+  void *ptr = calloc(1, size);
   if (!ptr) return NULL;
   ta_metadata_bytes += size;
   return ptr;
@@ -282,7 +282,7 @@ static inline void buffer_string_bounds(
 }
 
 ArrayBufferData *create_array_buffer_data(size_t length) {
-  ArrayBufferData *data = ant_calloc(sizeof(ArrayBufferData) + length);
+  ArrayBufferData *data = calloc(1, sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
   
   data->data = (uint8_t *)(data + 1);

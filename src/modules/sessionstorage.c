@@ -28,7 +28,7 @@ static void storage_set_item(const char *key, size_t key_len, const char *value,
     free(entry);
   }
   
-  entry = ant_calloc(sizeof(storage_entry_t) + key_len + 1 + value_len + 1);
+  entry = calloc(1, sizeof(storage_entry_t) + key_len + 1 + value_len + 1);
   if (!entry) return;
   
   entry->key = (char *)(entry + 1);

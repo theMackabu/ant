@@ -107,7 +107,7 @@ static void list_remove_txn(lmdb_env_handle_t *env, lmdb_txn_handle_t *target) {
 }
 
 static void register_env_ref(ant_value_t obj, lmdb_env_handle_t *env) {
-  lmdb_env_ref_t *ref = ant_calloc(sizeof(lmdb_env_ref_t));
+  lmdb_env_ref_t *ref = calloc(1, sizeof(lmdb_env_ref_t));
   if (!ref) return;
   ref->obj = obj;
   ref->env = env;
@@ -116,7 +116,7 @@ static void register_env_ref(ant_value_t obj, lmdb_env_handle_t *env) {
 }
 
 static void register_db_ref(ant_value_t obj, lmdb_db_handle_t *db) {
-  lmdb_db_ref_t *ref = ant_calloc(sizeof(lmdb_db_ref_t));
+  lmdb_db_ref_t *ref = calloc(1, sizeof(lmdb_db_ref_t));
   if (!ref) return;
   ref->obj = obj;
   ref->db = db;
@@ -125,7 +125,7 @@ static void register_db_ref(ant_value_t obj, lmdb_db_handle_t *db) {
 }
 
 static void register_txn_ref(ant_value_t obj, lmdb_txn_handle_t *txn) {
-  lmdb_txn_ref_t *ref = ant_calloc(sizeof(lmdb_txn_ref_t));
+  lmdb_txn_ref_t *ref = calloc(1, sizeof(lmdb_txn_ref_t));
   if (!ref) return;
   ref->obj = obj;
   ref->txn = txn;
@@ -461,7 +461,7 @@ static ant_value_t lmdb_open(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "lmdb_env_open('%s') failed: %s", path, mdb_strerror(rc));
   }
 
-  lmdb_env_handle_t *handle = ant_calloc(sizeof(lmdb_env_handle_t));
+  lmdb_env_handle_t *handle = calloc(1, sizeof(lmdb_env_handle_t));
   if (!handle) {
     mdb_env_close(env);
     return js_mkerr(js, "Out of memory");
@@ -528,7 +528,7 @@ static ant_value_t lmdb_env_open_db(ant_t *js, ant_value_t *args, int nargs) {
     if (rc != 0) return js_mkerr(js, "lmdb_txn_commit failed: %s", mdb_strerror(rc));
   }
 
-  lmdb_db_handle_t *db = ant_calloc(sizeof(lmdb_db_handle_t));
+  lmdb_db_handle_t *db = calloc(1, sizeof(lmdb_db_handle_t));
   if (!db) {
     mdb_dbi_close(env->env, dbi);
     return js_mkerr(js, "Out of memory");
@@ -562,7 +562,7 @@ static ant_value_t lmdb_env_begin_txn(ant_t *js, ant_value_t *args, int nargs) {
   int rc = mdb_txn_begin(env->env, NULL, read_only ? MDB_RDONLY : 0U, &txn);
   if (rc != 0) return js_mkerr(js, "lmdb_txn_begin failed: %s", mdb_strerror(rc));
 
-  lmdb_txn_handle_t *handle = ant_calloc(sizeof(lmdb_txn_handle_t));
+  lmdb_txn_handle_t *handle = calloc(1, sizeof(lmdb_txn_handle_t));
   if (!handle) {
     mdb_txn_abort(txn);
     return js_mkerr(js, "Out of memory");

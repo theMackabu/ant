@@ -113,7 +113,7 @@ static void emitter_write_barrier(ant_t *js, ant_value_t owner, ant_value_t stor
 }
 
 static EventTypeList *global_events_list(ant_t *js) {
-  if (!js->events_state) js->events_state = ant_calloc(sizeof(*js->events_state));
+  if (!js->events_state) js->events_state = calloc(1, sizeof(*js->events_state));
   return js->events_state ? &js->events_state->global_events : NULL;
 }
 
@@ -138,7 +138,7 @@ static void evt_list_free(EventTypeList *list) {
 }
 
 static EventType *make_event_type(ant_t *js, ant_value_t js_key) {
-  EventType *evt = ant_calloc(sizeof(EventType));
+  EventType *evt = calloc(1, sizeof(EventType));
   if (!evt) return NULL;
   evt->js_key = js_key;
   if (vtype(js_key) == kTypeString) evt->key_bytes = js_getstr(js, js_key, &evt->key_len);
@@ -181,7 +181,7 @@ static EventListenerCold *entry_ensure_cold(
   const uint32_t max_id = UINT32_MAX >> ENTRY_ID_SHIFT;
   if (cold) return cold;
 
-  cold = ant_calloc(sizeof(*cold));
+  cold = calloc(1, sizeof(*cold));
   if (!cold) return NULL;
 
   do {
@@ -431,7 +431,7 @@ static EventTypeList *find_emitter_events(ant_value_t this_obj) {
 static EventTypeList *get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
   EventTypeList *events = find_emitter_events(this_obj);
   if (!events) {
-    events = ant_calloc(sizeof(*events));
+    events = calloc(1, sizeof(*events));
     if (!events) return NULL;
     events->target = this_obj;
     js_set_native(this_obj, events, EVENT_EMITTER_NATIVE_TAG);
@@ -559,7 +559,7 @@ static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, 
   if (js->builtins.isTrusted_getter)
     js_set_accessor_desc(js, obj, "isTrusted", 9, js->builtins.isTrusted_getter, js_mkundef(), 0);
 
-  event_data_t *data = ant_calloc(sizeof(event_data_t));
+  event_data_t *data = calloc(1, sizeof(event_data_t));
   if (data) js_set_native(obj, data, EVENT_NATIVE_TAG);
 }
 

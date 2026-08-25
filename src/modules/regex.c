@@ -2122,7 +2122,7 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
   char static_buf[256];
   
   bool needs_free = capacity > sizeof(static_buf);
-  char *buf = needs_free ? (char *)ant_calloc(capacity) : static_buf;
+  char *buf = needs_free ? (char *)calloc(1, capacity) : static_buf;
   if (!buf) return js_mkerr(js, "oom");
 
   static const char hex[] = "0123456789abcdef";
@@ -3137,7 +3137,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
 #define SB_APPEND(data, dlen) do { \
   if (buf_len + (dlen) >= buf_cap) { \
     buf_cap = (buf_len + (dlen) + 1) * 2; \
-    char *nb = ant_realloc(buf, buf_cap); \
+    char *nb = realloc(buf, buf_cap); \
     if (!nb) { free(buf); return js_mkerr(js, "oom"); } \
     buf = nb; \
   } \
@@ -3595,7 +3595,7 @@ static bool str_buf_append(char **buf, size_t *len, size_t *cap, const char *dat
   if (n == 0) return true;
   if (*len + n >= *cap) {
     size_t new_cap = (*len + n + 1) * 2;
-    char *nb = (char *)ant_realloc(*buf, new_cap);
+    char *nb = (char *)realloc(*buf, new_cap);
     if (!nb) return false;
     *buf = nb;
     *cap = new_cap;
