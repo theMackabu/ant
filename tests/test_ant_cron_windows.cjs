@@ -29,17 +29,31 @@ function writeOperation(name, source) {
 }
 
 function run(file, extraEnv = {}) {
-  const result = spawnSync(ant, ['--no-color', file], {
-    cwd: root,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      ANT_CRON_SCHTASKS: `"${ant}" "${helper}"`,
-      ANT_CRON_XML_COPY: xmlCopy,
-      ANT_CRON_ARGV_COPY: argvCopy,
-      ...extraEnv,
-    },
-  });
+  const overrides = {
+    ANT_CRON_SCHTASKS: `"${ant}" "${helper}"`,
+    ANT_CRON_XML_COPY: xmlCopy,
+    ANT_CRON_ARGV_COPY: argvCopy,
+    ...extraEnv,
+  };
+  const previous = Object.entries(overrides).map(([key]) => ({
+    key,
+    exists: Object.prototype.hasOwnProperty.call(process.env, key),
+    value: process.env[key],
+  }));
+  for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
+  let result;
+  try {
+    result = spawnSync(ant, ['--no-color', file], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env },
+    });
+  } finally {
+    for (const entry of previous) {
+      if (entry.exists) process.env[entry.key] = entry.value;
+      else delete process.env[entry.key];
+    }
+  }
   if (result.error) throw result.error;
   assert.strictEqual(
     result.status,
@@ -79,6 +93,7 @@ try {
     'register.mjs',
     'await Ant.cron("./worker.mjs", "0 9 * * MON-FRI", "weekday_job");\n'
   );
+  assert.match(xml, /^<\?xml version="1\.0"\?>/);
   assert.match(xml, /<LogonType>S4U<\/LogonType>/);
   assert.strictEqual((xml.match(/<CalendarTrigger>/g) || []).length, 1);
   assert.match(xml, /<Monday\/>/);
