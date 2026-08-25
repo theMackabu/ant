@@ -62,7 +62,7 @@ endif
 subdir('meson')
 
 messages_h = custom_target('messages_h',
-  input: '../../src/core/messages.toml',
+  input: '../../src/cli/messages.toml',
   output: 'messages.h',
   command: [python, files('../../meson/messages.py'), '@INPUT@'],
   capture: true,
@@ -82,7 +82,7 @@ lib_sources = files(run_command(
 
 libant_core = static_library(
   'ant_core',
-  lib_sources + sandbox_backend_sources + [builtin_bundle_h, snapshot_h, messages_h, theme_h],
+  lib_sources + sandbox_backend_sources + [builtins_h, messages_h, theme_h],
   include_directories: [include, sandbox_backend_include],
   dependencies: ant_deps,
 )
@@ -90,7 +90,7 @@ libant_core = static_library(
 if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
-    lib_sources + sandbox_backend_sources + [builtin_bundle_h, snapshot_h, messages_h, theme_h],
+    lib_sources + sandbox_backend_sources + [builtins_h, messages_h, theme_h],
     include_directories: [include, sandbox_backend_include],
     dependencies: ant_deps,
     override_options: ['b_lto=true'],

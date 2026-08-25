@@ -32,6 +32,46 @@ function toFormat(filePath) {
   return 'MODULE_EVAL_FORMAT_UNKNOWN';
 }
 
+function toDefineReplacements(rawDefinitions) {
+  return rawDefinitions.reduce((replacements, definition) => {
+    const pivot = definition.indexOf('=');
+    if (pivot === -1) {
+      throw new Error(`Invalid bootstrap definition: ${definition}`);
+    }
+
+    const key = definition.slice(0, pivot);
+    let value = definition.slice(pivot + 1);
+
+    if (value === 'true') value = true;
+    else if (value === 'false') value = false;
+
+    replacements[`import.meta.env.${key}`] = JSON.stringify(value);
+    return replacements;
+  }, {});
+}
+
+function isBootstrapSource(rootDir, filePath) {
+  const relativePath = path.relative(rootDir, filePath).replaceAll('\\', '/');
+  return relativePath.startsWith('bootstrap/');
+}
+
+async function bundleBootstrap(entryPath, replacements) {
+  const output = await esbuild.build({
+    entryPoints: [entryPath],
+    bundle: true,
+    write: false,
+    minify: true,
+    format: 'esm',
+    define: replacements
+  });
+
+  if (output.outputFiles.length !== 1) {
+    throw new Error(`Expected exactly one bundled output for ${entryPath}`);
+  }
+
+  return output.outputFiles[0].contents;
+}
+
 async function bundleBuiltin(entryPath, format) {
   const output = await esbuild.build({
     entryPoints: [entryPath],
@@ -61,7 +101,7 @@ async function bundleBuiltin(entryPath, format) {
   return output.outputFiles[0].contents;
 }
 
-function generateHeader(rootDir, bundles) {
+function generateBuiltinHeader(rootDir, bundles) {
   const lines = [];
 
   lines.push('/* Auto-generated builtin bundle data. DO NOT EDIT. */');
@@ -111,17 +151,51 @@ function generateHeader(rootDir, bundles) {
   return lines.join('\n') + '\n';
 }
 
+function generateSnapshotHeader(inputFile, bytes) {
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    lines.push('  ' + bytes.slice(i, i + 16).join(', '));
+  }
+
+  return `/* Auto-generated snapshot from ${inputFile} */
+/* DO NOT EDIT - Generated during build */
+
+#ifndef ANT_SNAPSHOT_DATA_H
+#define ANT_SNAPSHOT_DATA_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+static const uint8_t ant_snapshot_source[] = {
+${lines.join(',\n')}
+};
+
+/* bundled source size: ${bytes.length} bytes */
+static const size_t ant_snapshot_source_len = ${bytes.length};
+
+#endif /* ANT_SNAPSHOT_DATA_H */
+`;
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length < 3) {
-    console.error(`Usage: ${process.argv[1]} <builtins-root> <output.h> <entry...>`);
+  const separator = args.indexOf('--');
+  if (args.length < 6 || separator < 4) {
+    console.error(
+      `Usage: ${process.argv[1]} <builtins-root> <builtin-output.h> <snapshot-output.h> ` + '<bootstrap-entry> [KEY=value...] -- <entry...>'
+    );
     process.exit(1);
   }
 
-  const [builtinsRoot, outputFile, ...entryFiles] = args;
+  const [builtinsRoot, builtinOutputFile, snapshotOutputFile, bootstrapEntry] = args;
+  const rawDefinitions = args.slice(4, separator);
+  const entryFiles = args.slice(separator + 1);
+  const replacements = toDefineReplacements(rawDefinitions);
   const bundles = [];
 
   for (const entryPath of entryFiles) {
+    if (isBootstrapSource(builtinsRoot, entryPath)) continue;
+
     const specifier = toSpecifier(builtinsRoot, entryPath);
     const format = toFormat(entryPath);
     const bytes = await bundleBuiltin(entryPath, format);
@@ -129,14 +203,21 @@ async function main() {
     bundles.push({ entryPath, specifier, specifiers, format, bytes });
   }
 
-  const header = generateHeader(builtinsRoot, bundles);
+  const snapshotBytes = await bundleBootstrap(bootstrapEntry, replacements);
+  const builtinHeader = generateBuiltinHeader(builtinsRoot, bundles);
+  const snapshotHeader = generateSnapshotHeader(bootstrapEntry, snapshotBytes);
   const totalBundledBytes = bundles.reduce((sum, bundle) => sum + bundle.bytes.length, 0);
 
-  writeFileSync(outputFile, header);
+  writeFileSync(builtinOutputFile, builtinHeader);
+  writeFileSync(snapshotOutputFile, snapshotHeader);
 
-  console.log(`builtin bundle generated successfully: ${outputFile}`);
-  console.log(`  bundled size: ${totalBundledBytes} bytes`);
-  console.log(`  modules: ${bundles.length}`);
+  console.log(`builtins generated successfully:`);
+  console.log(`  builtin bundle: ${builtinOutputFile}`);
+  console.log(`  builtin modules: ${bundles.length}`);
+  console.log(`  builtin size: ${totalBundledBytes} bytes`);
+  console.log(`  bootstrap snapshot: ${snapshotOutputFile}`);
+  console.log(`  bootstrap size: ${snapshotBytes.length} bytes`);
+  console.log(`  bootstrap replacements: ${Object.keys(replacements).length}`);
 }
 
 main().catch(error => {

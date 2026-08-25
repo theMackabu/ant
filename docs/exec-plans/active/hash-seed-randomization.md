@@ -72,7 +72,7 @@ So randomization cannot simply be switched on. The two uses have to be separated
    `descriptors.c`, `silver/compiler.c`, and the intern table itself. In-memory only is the
    expectation; confirm it.
 3. **Decide the seed source.** Per-process from the OS CSPRNG at isolate init is the usual
-   answer. Note the snapshot machinery (`meson/snapshot`) may bake tables into the binary --
+   answer. Note the bootstrap snapshot machinery (`meson/builtins`) may bake tables into the binary --
    check whether a snapshot restores intern-table state, because a snapshot taken under one
    seed cannot be restored under another.
 4. **Measure.** The seed becomes a runtime value rather than a compile-time constant, so the

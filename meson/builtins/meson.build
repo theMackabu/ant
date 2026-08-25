@@ -5,16 +5,24 @@ builtin_files = files(run_command(
   check: true
 ).stdout().strip().split())
 
-builtin_bundle_h = custom_target(
-  'builtin_bundle',
+builtins_h = custom_target(
+  'builtins',
   input: builtin_files,
-  output: 'builtin_bundle_data.h',
+  output: ['builtin_bundle_data.h', 'snapshot_data.h'],
   depends: tools_npm_ci,
   command: [
     node,
-    src_root / 'src' / 'tools' / 'gen_builtin_bundle.js',
+    src_root / 'src' / 'tools' / 'gen_builtins.js',
     src_root / 'src' / 'builtins',
-    '@OUTPUT@',
+    '@OUTPUT0@',
+    '@OUTPUT1@',
+    src_root / 'src' / 'builtins' / 'bootstrap' / 'index.ts',
+    'VERSION=' + ant_version,
+    'GIT_HASH=' + git_longhash,
+    'BUILD_TIMESTAMP=' + timestamp,
+    'TARGET=' + target_triple,
+    'HOST=' + host_machine.system(),
+    '--',
     '@INPUT@',
   ],
 )

@@ -56,7 +56,7 @@ endif
 subdir('meson')
 
 messages_h = custom_target('messages_h',
-  input: 'src/core/messages.toml',
+  input: 'src/cli/messages.toml',
   output: 'messages.h',
   command: [python, files('meson/messages.py'), '@INPUT@'],
   capture: true,
@@ -125,8 +125,7 @@ section_gc_c_args = host_machine.system() != 'darwin' ? ['-ffunction-sections', 
 libant = static_library(
   'ant',
   lib_sources + sandbox_backend_sources + [
-    builtin_bundle_h,
-    snapshot_h,
+    builtins_h,
     messages_h,
     theme_h
   ],
@@ -243,8 +242,7 @@ if not runtime_binary.disabled()
   libant_runtime = static_library(
     'ant-runtime-core',
     runtime_sources + [
-      builtin_bundle_h,
-      snapshot_h,
+      builtins_h,
       messages_h,
       theme_h
     ],

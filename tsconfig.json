@@ -9,5 +9,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
-  "include": ["src/types/**/*.d.ts", "src/core/**/*", "examples/**/*"]
+  "include": ["src/types/**/*.d.ts", "src/builtins/**/*", "examples/**/*"]
 }

@@ -137,5 +137,4 @@ tools_npm_ci = custom_target(
   ],
 )
 
-subdir('snapshot')
 subdir('builtins')

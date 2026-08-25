@@ -26,7 +26,7 @@ exposing Node's internal binding interface to user code.
 
 - `src/builtins/node/` already contains bundled JavaScript implementations of
   several `node:*` modules.
-- `src/tools/gen_builtin_bundle.js` bundles those modules at build time,
+- `src/tools/gen_builtins.js` bundles those modules at build time,
   preserves imports of `node:*` and `ant:*` modules as externals, and registers
   both prefixed and unprefixed aliases.
 - `src/esm/builtin_bundle.c` and `src/esm/loader.c` load bundled JavaScript
@@ -142,7 +142,7 @@ exposing Node's internal binding interface to user code.
 
 ### 3. Teach the builtin pipeline about vendored Node sources
 
-- [ ] Extend `gen_builtin_bundle.js` to distinguish Ant-authored builtins,
+- [ ] Extend `gen_builtins.js` to distinguish Ant-authored builtins,
       upstream Node sources, and private internal dependencies.
 - [ ] Preserve useful source names and stack traces after bundling.
 - [ ] Confirm esbuild does not rewrite required property access, primordial

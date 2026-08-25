@@ -35,17 +35,17 @@ meant to answer "where should this change live?" before anyone starts editing.
 ### Host platform surface
 
 - `src/modules/` implements built-in modules and runtime-facing JS APIs.
-- `src/builtins/` holds bundled JavaScript shims and Node-compatible modules.
+- `src/builtins/` holds the JavaScript bootstrap, bundled shims, and
+  Node-compatible modules.
 - `src/http/`, `src/net/`, and `src/streams/` provide protocol, networking, and
   streaming support.
 - `src/esm/` handles module loading, export wiring, and built-in bundle access.
 
 ### Tooling and generated inputs
 
-- `src/tools/` generates bundled sources such as the builtin bundle and JS
-  snapshot.
-- `src/core/` stores TypeScript sources and runtime metadata that feed
-  generation steps.
+- `src/tools/gen_builtins.js` generates both the JavaScript bootstrap snapshot
+  and the independently loadable builtin-module bundle.
+- `src/cli/messages.toml` stores the runtime and command-line message catalog.
 - `src/pkg/` is the Zig package manager.
 - TypeScript stripping is provided by the Skim Meson subproject.
 - `meson/` and the root [meson.build](meson.build) describe the build graph,

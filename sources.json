@@ -118,14 +118,6 @@
       }
     }
   },
-  "core": {
-    "patterns": [
-      "src/core/**/*.ts"
-    ],
-    "exclude": [
-      "src/core/index.ts"
-    ]
-  },
   "builtins": {
     "patterns": [
       "src/builtins/**/*.cts",
