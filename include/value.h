@@ -55,7 +55,7 @@
 //   mkref(type, ptr)   = mkval(type, ptr - cage_base)
 //   vtype(v)          = is_tagged(v) ? (v >> 47) & 0x1F : T_NUM
 //   vdata(v)          = v & 0x7FFFFFFFFFFF
-//   vptr(v)           = cage_base + vdata(v)
+//   vptr(v)           = vdata(v) ? cage_base + vdata(v) : NULL
 //   is_tagged(v)      = v > PREFIX
 
 static constexpr uint64_t NANBOX_TYPE_MASK  = 0x1F;
@@ -130,15 +130,11 @@ static inline ant_value_t mkref_tagged(
 }
 
 static inline void *vptr(ant_value_t value) {
-  return ant_cage_decode_nonnull(vdata(value));
+  return ant_cage_decode(vdata(value));
 }
 
 static inline void *vptr_masked(ant_value_t value, uint64_t tag_mask) {
-  return ant_cage_decode_nonnull(vdata(value) & ~tag_mask);
-}
-
-static inline void *vptr_tagged(ant_value_t value) {
-  return ant_cage_decode_nonnull(value & NANBOX_DATA_MASK);
+  return ant_cage_decode(vdata(value) & ~tag_mask);
 }
 
 static inline double tod(ant_value_t value) {

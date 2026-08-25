@@ -66,7 +66,7 @@ static inline bool gc_value_ref_is_young(ant_value_t v) {
   uint8_t type = vtype_tagged(v);
   if (type == T_FUNC) return true;
   if (type == T_STR) return str_is_heap_rope(v) && (ant_str_rope_ptr(v)->flags & ANT_ROPE_FLAG_YOUNG) != 0;
-  ant_object_t *ref = (ant_object_t *)vptr_tagged(v);
+  ant_object_t *ref = (ant_object_t *)vptr(v);
   return ref && ref->flags.generation == 0;
 }
 
