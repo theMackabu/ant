@@ -24,9 +24,13 @@
 #else
 #include <io.h>
 #include <process.h>
+#include <windows.h>
 #define getpid _getpid
 #define strcasecmp _stricmp
 #endif
+
+#define ANT_VERSION_CHECK_INTERVAL_SECONDS (72u * 60u * 60u)
+#define ANT_VERSION_CHECK_CACHE_FILE "version-check.json"
 
 typedef struct {
   char target[64];
@@ -44,6 +48,14 @@ typedef struct {
   bool ok;
 } ant_version_parts_t;
 
+typedef struct {
+  uint64_t checked_at;
+  char manifest_url[2048];
+  char target[64];
+  ant_latest_info_t latest;
+  bool has_latest;
+} ant_version_cache_t;
+
 static const char *version_json_string(yyjson_val *obj, const char *key) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
   return val && yyjson_is_str(val) ? yyjson_get_str(val) : NULL;
@@ -52,6 +64,15 @@ static const char *version_json_string(yyjson_val *obj, const char *key) {
 static uint64_t version_json_uint(yyjson_val *obj, const char *key) {
   yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
   return val && yyjson_is_uint(val) ? yyjson_get_uint(val) : 0;
+}
+
+static bool version_json_copy_string(yyjson_val *obj, const char *key, char *out, size_t out_len) {
+  yyjson_val *val = obj && yyjson_is_obj(obj) ? yyjson_obj_get(obj, key) : NULL;
+  if (!val || !yyjson_is_str(val) || !out || out_len == 0) return false;
+  size_t len = yyjson_get_len(val);
+  if (len >= out_len) return false;
+  memcpy(out, yyjson_get_str(val), len + 1);
+  return true;
 }
 
 static const char *ant_platform_target(void) {
@@ -187,17 +208,163 @@ static int ant_fetch_latest(ant_latest_info_t *latest, progress_t *progress, cha
   return rc;
 }
 
+static bool ant_version_cache_paths(
+  char *dir, size_t dir_len,
+  char *path, size_t path_len
+) {
+  if (ant_xdg_cache_path(dir, dir_len, NULL) != 0) return false;
+  int written = snprintf(path, path_len, "%s/%s", dir, ANT_VERSION_CHECK_CACHE_FILE);
+  return written >= 0 && (size_t)written < path_len;
+}
+
+static bool ant_version_cache_read(ant_version_cache_t *cache) {
+  if (!cache) return false;
+  memset(cache, 0, sizeof(*cache));
+
+  char dir[4096];
+  char path[4096];
+  if (!ant_version_cache_paths(dir, sizeof(dir), path, sizeof(path))) return false;
+
+  yyjson_doc *doc = yyjson_read_file(path, 0, NULL, NULL);
+  if (!doc) return false;
+
+  bool ok = false;
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  if (
+    root && yyjson_is_obj(root) &&
+    version_json_copy_string(root, "manifest_url", cache->manifest_url, sizeof(cache->manifest_url)) &&
+    version_json_copy_string(root, "target", cache->target, sizeof(cache->target))
+  ) {
+    cache->checked_at = version_json_uint(root, "checked_at");
+    yyjson_val *latest = yyjson_obj_get(root, "latest");
+    if (latest && yyjson_is_obj(latest)) {
+      cache->has_latest = version_json_copy_string(
+        latest, "version", cache->latest.version, sizeof(cache->latest.version)
+      );
+      if (cache->has_latest) {
+        snprintf(cache->latest.target, sizeof(cache->latest.target), "%s", cache->target);
+        cache->latest.build_timestamp = version_json_uint(latest, "build_timestamp");
+      }
+    }
+    ok = cache->checked_at != 0;
+  }
+
+  yyjson_doc_free(doc);
+  if (!ok) memset(cache, 0, sizeof(*cache));
+  return ok;
+}
+
+static int ant_version_cache_replace(const char *tmp_path, const char *path) {
+#ifdef _WIN32
+  return MoveFileExA(
+    tmp_path, path,
+    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+  ) ? 0 : -1;
+#else
+  return rename(tmp_path, path);
+#endif
+}
+
+static void ant_version_cache_write(const ant_version_cache_t *cache) {
+  if (!cache || cache->checked_at == 0 || !cache->manifest_url[0] || !cache->target[0]) return;
+
+  char dir[4096];
+  char path[4096];
+  if (!ant_version_cache_paths(dir, sizeof(dir), path, sizeof(path))) return;
+  if (ant_mkdir_p(dir) != 0) return;
+
+  char tmp_path[4096];
+  int written = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld", path, (long)getpid());
+  if (written < 0 || (size_t)written >= sizeof(tmp_path)) return;
+
+  yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+  if (!doc) return;
+  yyjson_mut_val *root = yyjson_mut_obj(doc);
+  if (!root) {
+    yyjson_mut_doc_free(doc);
+    return;
+  }
+  yyjson_mut_doc_set_root(doc, root);
+  yyjson_mut_obj_add_uint(doc, root, "checked_at", cache->checked_at);
+  yyjson_mut_obj_add_strcpy(doc, root, "manifest_url", cache->manifest_url);
+  yyjson_mut_obj_add_strcpy(doc, root, "target", cache->target);
+  if (cache->has_latest) {
+    yyjson_mut_val *latest = yyjson_mut_obj_add_obj(doc, root, "latest");
+    if (latest) {
+      yyjson_mut_obj_add_strcpy(doc, latest, "version", cache->latest.version);
+      yyjson_mut_obj_add_uint(doc, latest, "build_timestamp", cache->latest.build_timestamp);
+    }
+  }
+
+  bool saved = yyjson_mut_write_file(tmp_path, doc, 0, NULL, NULL);
+  yyjson_mut_doc_free(doc);
+  if (!saved || ant_version_cache_replace(tmp_path, path) != 0) remove(tmp_path);
+}
+
+static bool ant_version_cache_scope_matches(
+  const ant_version_cache_t *cache,
+  const char *manifest_url,
+  const char *target
+) {
+  return cache && manifest_url && target &&
+    strcmp(cache->manifest_url, manifest_url) == 0 &&
+    strcmp(cache->target, target) == 0;
+}
+
+static bool ant_version_cache_is_fresh(const ant_version_cache_t *cache, uint64_t now) {
+  return cache && cache->checked_at <= now &&
+    now - cache->checked_at < ANT_VERSION_CHECK_INTERVAL_SECONDS;
+}
+
+static void ant_version_cache_store_latest(const ant_latest_info_t *latest) {
+  if (!latest) return;
+  time_t now = time(NULL);
+  if (now <= 0) return;
+
+  ant_version_cache_t cache = {0};
+  cache.checked_at = (uint64_t)now;
+  snprintf(cache.manifest_url, sizeof(cache.manifest_url), "%s", ant_manifest_url());
+  snprintf(cache.target, sizeof(cache.target), "%s", ant_platform_target());
+  cache.latest = *latest;
+  cache.has_latest = latest->version[0] != '\0';
+  ant_version_cache_write(&cache);
+}
+
 const char *ant_release_platform_target(void) {
   return ant_platform_target();
 }
 
 bool ant_version_print_update_hint(FILE *out) {
   if (!out || getenv("ANT_NO_VERSION_CHECK")) return false;
-  char err[256] = {0};
-  ant_latest_info_t latest;
-  if (ant_fetch_latest(&latest, NULL, err, sizeof(err)) != 0) return false;
-  if (!ant_latest_is_newer(&latest)) return false;
-  crfprintf(out, "<yellow>update available</>: %s <green>(ant upgrade)</>\n", latest.version);
+
+  const char *manifest_url = ant_manifest_url();
+  const char *target = ant_platform_target();
+  time_t now_time = time(NULL);
+  uint64_t now = now_time > 0 ? (uint64_t)now_time : 0;
+
+  ant_version_cache_t cache;
+  bool cache_matches = ant_version_cache_read(&cache) &&
+    ant_version_cache_scope_matches(&cache, manifest_url, target);
+
+  if (!cache_matches) memset(&cache, 0, sizeof(cache));
+
+  if (!cache_matches || !ant_version_cache_is_fresh(&cache, now)) {
+    char err[256] = {0};
+    ant_latest_info_t latest;
+    int rc = ant_fetch_latest(&latest, NULL, err, sizeof(err));
+
+    cache.checked_at = now;
+    snprintf(cache.manifest_url, sizeof(cache.manifest_url), "%s", manifest_url);
+    snprintf(cache.target, sizeof(cache.target), "%s", target);
+    if (rc == 0) {
+      cache.latest = latest;
+      cache.has_latest = true;
+    }
+    ant_version_cache_write(&cache);
+  }
+
+  if (!cache.has_latest || !ant_latest_is_newer(&cache.latest)) return false;
+  crfprintf(out, "<yellow>update available</>: %s <green>(ant upgrade)</>\n", cache.latest.version);
   return true;
 }
 
@@ -229,6 +396,7 @@ int ant_upgrade(int argc, char **argv) {
     fprintf(stderr, "ant upgrade: %s\n", err[0] ? err : "failed to check latest version");
     return EXIT_FAILURE;
   }
+  ant_version_cache_store_latest(&latest);
 
   if (!ant_latest_is_newer(&latest)) {
     crprintf("<bright_green>Ant is already up to date.</> <dim>(%s for %s)</>\n", ANT_VERSION, latest.target);
