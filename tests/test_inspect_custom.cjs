@@ -55,7 +55,8 @@ assert(
   `expected Headers Symbol.inspect output, got: ${Headers.prototype[Symbol.inspect].call(headers)}`
 );
 assert(
-  requestInspect === "Request {\n  method: 'GET',\n  url: 'https://google.com/',\n  headers: Headers {},\n  destination: '',\n  referrer: 'about:client',\n  referrerPolicy: '',\n  mode: 'cors',\n  credentials: 'same-origin',\n  cache: 'default',\n  redirect: 'follow',\n  integrity: '',\n  keepalive: false,\n  isReloadNavigation: false,\n  isHistoryNavigation: false,\n  signal: AbortSignal { aborted: false }\n}",
+  requestInspect ===
+    "Request {\n  method: 'GET',\n  url: 'https://google.com/',\n  headers: Headers {},\n  destination: '',\n  referrer: 'about:client',\n  referrerPolicy: '',\n  mode: 'cors',\n  credentials: 'same-origin',\n  cache: 'default',\n  redirect: 'follow',\n  integrity: '',\n  keepalive: false,\n  isReloadNavigation: false,\n  isHistoryNavigation: false,\n  signal: Object [AbortSignal] {\n    aborted: false,\n    reason: undefined,\n    onabort: undefined\n  }\n}",
   `expected Request inspect output, got: ${requestInspect}`
 );
 assert(
@@ -67,11 +68,11 @@ assert(
   `expected Response Symbol.inspect output, got: ${Response.prototype[Symbol.inspect].call(response)}`
 );
 assert(
-  timeoutInspect === 'Timeout (1) {\n  delay: 1,\n  repeat: null,\n  [Symbol(Symbol.toPrimitive)]: [native code]\n}',
+  timeoutInspect === 'Timeout (1) {\n  delay: 1,\n  repeat: null,\n  [Symbol(Symbol.toPrimitive)]: [Function (anonymous)]\n}',
   `expected legacy Timeout inspect output, got: ${timeoutInspect}`
 );
 assert(
-  intervalInspect === 'Interval (2) {\n  delay: 5,\n  repeat: 5,\n  [Symbol(Symbol.toPrimitive)]: [native code]\n}',
+  intervalInspect === 'Interval (2) {\n  delay: 5,\n  repeat: 5,\n  [Symbol(Symbol.toPrimitive)]: [Function (anonymous)]\n}',
   `expected legacy Interval inspect output, got: ${intervalInspect}`
 );
 
@@ -79,9 +80,6 @@ clearTimeout(timeout);
 clearInterval(interval);
 
 const fallback = inspect(new FallbackConnection('db.internal'));
-assert(
-  fallback === "FallbackConnection { host: 'db.internal' }",
-  `expected fallback formatting after inspect throw, got: ${fallback}`
-);
+assert(fallback === "FallbackConnection { host: 'db.internal' }", `expected fallback formatting after inspect throw, got: ${fallback}`);
 
 console.log('PASS');

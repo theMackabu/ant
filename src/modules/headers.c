@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "builder.h"
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"

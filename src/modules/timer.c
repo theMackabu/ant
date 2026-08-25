@@ -7,6 +7,7 @@
 #include <uv.h>
 
 #include "errors.h"
+#include "builder.h"
 #include "internal.h"
 #include "silver/engine.h"
 
