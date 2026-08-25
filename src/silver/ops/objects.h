@@ -336,8 +336,14 @@ static inline ant_value_t sv_op_define_class(
     vtype(ctor) == T_FUNC && func->debug->source &&
     source_end > source_start && source_end <= (uint32_t)func->debug->source_len
   ) {
-    js_set_slot(ctor, SLOT_CODE, mkref(T_NTARG, func->debug->source + source_start));
-    js_set_slot(ctor, SLOT_CODE_LEN, tov((double)(source_end - source_start)));
+    size_t source_len = (size_t)(source_end - source_start);
+    const char *source = func->debug->source + source_start;
+    
+    if (!ant_cage_contains(source)) source = code_arena_alloc(source, source_len);
+    if (source && ant_cage_contains(source)) {
+      js_set_slot(ctor, SLOT_CODE, mkref(T_NTARG, source));
+      js_set_slot(ctor, SLOT_CODE_LEN, tov((double)source_len));
+    }
   }
   
   setprop_interned(js, proto, "constructor", 11, ctor);

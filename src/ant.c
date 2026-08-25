@@ -3539,15 +3539,11 @@ static ant_value_t get_slot(ant_value_t obj, internal_slot_t slot) {
   return obj_extra_get(ptr, slot);
 }
 
-static void set_func_code_ptr(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
-  set_slot(func_obj, SLOT_CODE, mkref(T_NTARG, code));
-  set_slot(func_obj, SLOT_CODE_LEN, tov((double)len));
-}
-
 static void set_func_code(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
   const char *arena_code = code_arena_alloc(code, len);
-  if (!arena_code) return;
-  set_func_code_ptr(js, func_obj, arena_code, len);
+  if (!arena_code || !ant_cage_contains(arena_code)) return;
+  set_slot(func_obj, SLOT_CODE, mkref(T_NTARG, arena_code));
+  set_slot(func_obj, SLOT_CODE_LEN, tov((double)len));
 }
 
 static inline ant_object_t *js_to_primitive_cache_object(ant_value_t value) {
@@ -6047,7 +6043,7 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
     ant_value_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
-    set_func_code_ptr(js, func_obj, "(){}", 4);
+    set_func_code(js, func_obj, "(){}", 4);
     if (is_async && is_generator) {
       set_slot(func_obj, SLOT_ASYNC, js_true);
       ant_value_t async_generator_proto = get_slot(js_glob(js), SLOT_ASYNC_GENERATOR_PROTO);
