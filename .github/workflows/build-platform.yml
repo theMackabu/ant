@@ -214,6 +214,11 @@ jobs:
             windows-*) "$ANT_BIN" tests/test_ant_cron_windows.cjs ;;
           esac
 
+      - name: Test Windows self-upgrade replacement
+        if: inputs.platform == 'windows-x64'
+        shell: bash
+        run: ./build/${{ steps.config.outputs.binary_name }} tests/test_upgrade_replace.cjs
+
       - name: Run bench-v8
         id: bench_v8
         shell: bash

@@ -381,6 +381,99 @@ static int ant_install_path(char *out, size_t out_len) {
   return written < 0 || (size_t)written >= out_len ? -ENAMETOOLONG : 0;
 }
 
+#ifdef _WIN32
+static void ant_windows_error_message(
+  DWORD code, char *out, size_t out_len
+) {
+  if (!out || out_len == 0) return;
+
+  char message[256] = {0};
+  DWORD written = FormatMessageA(
+    FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+    NULL, code, 0, message, (DWORD)sizeof(message), NULL
+  );
+  while (written > 0 && (message[written - 1] == '\r' || message[written - 1] == '\n'))
+    message[--written] = '\0';
+
+  if (written > 0)
+    snprintf(out, out_len, "%s (Windows error %lu)", message, (unsigned long)code);
+  else
+    snprintf(out, out_len, "Windows error %lu", (unsigned long)code);
+}
+#endif
+
+static int ant_install_downloaded(
+  const char *tmp_path,
+  const char *install_path,
+  char *err,
+  size_t err_len
+) {
+#ifdef _WIN32
+  char backup_path[4096];
+  int written = snprintf(backup_path, sizeof(backup_path), "%s.old", install_path);
+  if (written < 0 || (size_t)written >= sizeof(backup_path)) {
+    snprintf(err, err_len, "backup path is too long");
+    remove(tmp_path);
+    return -1;
+  }
+
+  DWORD attrs = GetFileAttributesA(install_path);
+  bool had_existing = attrs != INVALID_FILE_ATTRIBUTES;
+  if (!had_existing) {
+    DWORD code = GetLastError();
+    if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) {
+      ant_windows_error_message(code, err, err_len);
+      remove(tmp_path);
+      return -1;
+    }
+  } else if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+    snprintf(err, err_len, "install path is a directory");
+    remove(tmp_path);
+    return -1;
+  }
+
+  const DWORD move_flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+  if (had_existing && !MoveFileExA(install_path, backup_path, move_flags)) {
+    DWORD code = GetLastError();
+    ant_windows_error_message(code, err, err_len);
+    remove(tmp_path);
+    return -1;
+  }
+
+  if (MoveFileExA(tmp_path, install_path, move_flags)) return 0;
+
+  DWORD install_error = GetLastError();
+  char install_message[256];
+  ant_windows_error_message(install_error, install_message, sizeof(install_message));
+  if (!had_existing) {
+    snprintf(err, err_len, "%s", install_message);
+    remove(tmp_path);
+    return -1;
+  }
+
+  if (MoveFileExA(backup_path, install_path, move_flags)) {
+    snprintf(err, err_len, "%s; restored the previous executable", install_message);
+    remove(tmp_path);
+    return -1;
+  }
+
+  DWORD rollback_error = GetLastError();
+  char rollback_message[256];
+  ant_windows_error_message(rollback_error, rollback_message, sizeof(rollback_message));
+  snprintf(
+    err, err_len,
+    "%s; also failed to restore %s: %s; downloaded executable remains at %s",
+    install_message, backup_path, rollback_message, tmp_path
+  );
+  return -1;
+#else
+  if (rename(tmp_path, install_path) == 0) return 0;
+  snprintf(err, err_len, "%s", strerror(errno));
+  remove(tmp_path);
+  return -1;
+#endif
+}
+
 int ant_upgrade(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -448,9 +541,8 @@ int ant_upgrade(int argc, char **argv) {
   }
 #endif
 
-  if (rename(tmp_path, install_path) != 0) {
-    fprintf(stderr, "ant upgrade: failed to install %s: %s\n", install_path, strerror(errno));
-    remove(tmp_path);
+  if (ant_install_downloaded(tmp_path, install_path, err, sizeof(err)) != 0) {
+    fprintf(stderr, "ant upgrade: failed to install %s: %s\n", install_path, err);
     return EXIT_FAILURE;
   }
 

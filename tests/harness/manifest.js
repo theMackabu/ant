@@ -63,6 +63,7 @@ export function targets() {
     'test_ant_cron.cjs',
     'test_ant_cron_cli.cjs',
     'test_version_check_cache.cjs',
+    'test_upgrade_replace.cjs',
     'test_ant_cron_linux.cjs',
     'test_ant_cron_os.cjs',
     'test_ant_cron_windows.cjs',
