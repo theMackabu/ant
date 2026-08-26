@@ -226,16 +226,23 @@ jobs:
           "$ANT_BIN" examples/bench-v8/index.js
           cp examples/bench-v8/score.json "$RESULT_PATH"
 
-          SCORE=$(jq -er '.score | numbers' "$RESULT_PATH")
+          SCORE=$(jq -er '
+            [
+              .score,
+              .results.Richards,
+              .results.DeltaBlue,
+              .results.Crypto,
+              .results.RayTrace,
+              .results.EarleyBoyer,
+              .results.RegExp,
+              .results.Splay,
+              .results.NavierStokes
+            ]
+            | if all(.[]; type == "number") then .[0]
+              else error("bench-v8 result contains missing or non-numeric scores")
+              end
+          ' "$RESULT_PATH")
           echo "score=$SCORE" >> "$GITHUB_OUTPUT"
-
-          {
-            echo "## bench-v8"
-            echo
-            echo "| Platform | Score |"
-            echo "|---|---:|"
-            echo '| `${{ inputs.platform }}` | '"$SCORE"' |'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload bench-v8 score
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f

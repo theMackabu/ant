@@ -54,6 +54,10 @@ typedef enum {
   OP__COUNT
 } sv_op_t;
 
+typedef enum {
+  SV_STABLE_BUILTIN_PROMISE_RESOLVE = 0,
+} sv_stable_builtin_t;
+
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
 #include "silver/opcode.h"

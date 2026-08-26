@@ -31,6 +31,27 @@ assertEqual(
   'constructor value'
 );
 
+let speciesGetterCalls = 0;
+const observableConstructor = {};
+Object.defineProperty(observableConstructor, Symbol.species, {
+  get() {
+    speciesGetterCalls++;
+    return Promise;
+  },
+});
+const speciesPromise = Promise.resolve('species value');
+setConstructor(speciesPromise, observableConstructor);
+assertEqual(
+  'constructor mutation preserves resolving-function value',
+  await new Promise(resolve => resolve(speciesPromise)),
+  'species value'
+);
+assertEqual(
+  'constructor mutation invalidates canonical adoption species guard',
+  speciesGetterCalls,
+  1
+);
+
 function setThen(target, value) {
   target.then = value;
 }

@@ -319,6 +319,15 @@ bool js_prop_store(ant_t *js, ant_prop_loc_t loc, ant_value_t value) {
   return true;
 }
 
+void ant_symbol_property_mutation_invalidate(
+  ant_t *js, ant_object_t *holder, ant_offset_t sym_off
+) {
+  if (
+    sym_off == (ant_offset_t)vdata(get_species_sym()) &&
+    holder == js_obj_ptr(js->sym.promise_ctor)
+  ) js->promise_species_protector_invalid = true;
+}
+
 bool js_obj_ensure_prop_capacity(ant_object_t *obj, uint32_t needed) {
   if (!obj) return false;
   uint32_t inobj_limit = ant_object_inobj_limit(obj);
@@ -2906,6 +2915,8 @@ static ant_value_t mkprop_symbol_attrs_impl(
 
   ant_object_prop_set_unchecked(ptr, slot, v);
   gc_write_barrier(js, ptr, v);
+  ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
+  
   return v;
 }
 
@@ -3679,6 +3690,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
     if (existing.obj) {
       if (is_const_prop(existing)) return js_mkerr(js, "assignment to constant");
       js_prop_store(js, existing, v);
+      ant_symbol_property_mutation_invalidate(js, existing.obj, sym_off);
       return v;
     }
     
@@ -5309,6 +5321,7 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
   if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
+  ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
   obj_delete_prop_slot(ptr, slot);
   
   return js_true;
@@ -8755,7 +8768,10 @@ static ant_value_t object_define_property_keyed(
       
       if (is_nonconfig && is_readonly && has_value && !same_value_values(js, js_prop_load(existing_off), value))
         return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
-      if (has_value) js_prop_store(js, existing_off, value);
+      if (has_value) {
+        js_prop_store(js, existing_off, value);
+        if (sym_key) ant_symbol_property_mutation_invalidate(js, existing_off.obj, sym_off);
+      }
       if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
 
       if (existing_off.obj) {
@@ -14986,23 +15002,11 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
     }
 
     if (is_callable(then_prop)) {
-      ant_value_t res_fn = js_mkundef();
-      ant_value_t rej_fn = js_mkundef();
-      ant_value_t pair_result = make_promise_resolving_functions(js, p, &res_fn, &rej_fn);
-      
-      GC_ROOT_PIN(js, pair_result);
-      GC_ROOT_PIN(js, res_fn);
-      GC_ROOT_PIN(js, rej_fn);
-      
-      if (is_err(pair_result)) {
-        ant_value_t reject_val = js_take_thrown(js, pair_result);
-        GC_ROOT_PIN(js, reject_val);
-        js_reject_promise(js, p, reject_val);
-        GC_ROOT_RESTORE(js, root_mark);
-        return;
+      if (!queue_promise_thenable_job(js, p, val, then_prop)) {
+        ant_value_t err = js_mkerr(js, "out of memory queuing Promise job");
+        GC_ROOT_PIN(js, err);
+        js_reject_promise(js, p, err);
       }
-
-      queue_promise_thenable_job(js, then_prop, val, res_fn, rej_fn);
       GC_ROOT_RESTORE(js, root_mark);
       
       return;
@@ -15014,6 +15018,85 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
   
   gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), val);
   if (promise_has_handlers(pd)) queue_promise_trigger(js, p);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
+void js_process_promise_thenable_job(
+  ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, promise);
+  GC_ROOT_PIN(js, thenable);
+  GC_ROOT_PIN(js, then_fn);
+
+  if (
+    vtype(thenable) == kTypePromise &&
+    then_fn == js->sym.promise_then &&
+    !js->promise_species_protector_invalid &&
+    get_slot(thenable, SLOT_PROTO) == js->sym.promise_proto
+  ) {
+    ant_promise_state_t *source = get_promise_data(js, thenable, false);
+    promise_handler_t handler = {
+      js_mkundef(), js_mkundef(), 
+      promise, NULL
+    };
+
+    if (!promise_handler_append(source, &handler)) {
+      ant_value_t err = js_mkerr(js, "out of memory adopting Promise");
+      GC_ROOT_PIN(js, err);
+      js_reject_promise(js, promise, err);
+      GC_ROOT_RESTORE(js, root_mark);
+      return;
+    }
+
+    gc_write_barrier(js, js_obj_ptr(js_as_obj(thenable)), promise);
+    js_mark_promise_rejection_handled_chain(js, thenable);
+    if (source->state == 0)
+      gc_root_pending_promise(js, js_obj_ptr(js_as_obj(thenable)));
+    else queue_promise_trigger(js, thenable);
+
+    GC_ROOT_RESTORE(js, root_mark);
+    return;
+  }
+
+  ant_value_t resolve_fn = js_mkundef();
+  ant_value_t reject_fn = js_mkundef();
+  ant_value_t pair_result = make_promise_resolving_functions(
+    js, promise, 
+    &resolve_fn, &reject_fn
+  );
+  
+  GC_ROOT_PIN(js, pair_result);
+  GC_ROOT_PIN(js, resolve_fn);
+  GC_ROOT_PIN(js, reject_fn);
+  
+  if (is_err(pair_result)) {
+    ant_value_t reject_val = js_take_thrown(js, pair_result);
+    GC_ROOT_PIN(js, reject_val);
+    js_reject_promise(js, promise, reject_val);
+    GC_ROOT_RESTORE(js, root_mark);
+    return;
+  }
+
+  ant_value_t then_args[] = { resolve_fn, reject_fn };
+  ant_value_t result = sv_vm_call(
+    js->vm, js, then_fn, thenable,
+    then_args, 2, NULL, false
+  );
+  
+  if (is_err(result) || js->thrown_exists) {
+    ant_value_t reject_val = js->thrown_exists ? js->thrown_value : result;
+    GC_ROOT_PIN(js, reject_val);
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    ant_value_t reject_args[] = { reject_val };
+    sv_vm_call(
+      js->vm, js, reject_fn, js_mkundef(), 
+      reject_args, 1, NULL, false
+    );
+  }
+
   GC_ROOT_RESTORE(js, root_mark);
 }
 
@@ -18443,7 +18526,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   set_proto(js, p_ctor_obj, function_proto);
   set_slot(p_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Promise));
   
-  defmethod(js, p_ctor_obj, "resolve", 7, js_mkfun(builtin_Promise_resolve));
+  js->sym.promise_resolve = defmethod(js, p_ctor_obj, "resolve", 7, js_mkfun(builtin_Promise_resolve));
   defmethod(js, p_ctor_obj, "reject", 6, js_mkfun(builtin_Promise_reject));
   defmethod(js, p_ctor_obj, "try", 3, js_mkfun(builtin_Promise_try));
   defmethod(js, p_ctor_obj, "withResolvers", 13, js_mkfun(builtin_Promise_withResolvers));
@@ -19095,6 +19178,7 @@ void js_set_sym(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t val) {
   if (existing.obj) {
     if (is_const_prop(existing)) return;
     js_prop_store(js, existing, val);
+    ant_symbol_property_mutation_invalidate(js, existing.obj, sym_off);
   } else mkprop(js, obj, sym, val, 0);
 }
 

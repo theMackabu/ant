@@ -12,6 +12,21 @@ typedef struct {
   ant_value_t *alloc;
 } sv_call_args_t;
 
+static inline ant_value_t sv_op_call_stable_builtin(
+  sv_vm_t *vm, ant_t *js, sv_stable_builtin_t kind,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc
+) {
+  if (
+    kind == SV_STABLE_BUILTIN_PROMISE_RESOLVE && argc == 1 &&
+    call_this == js->sym.promise_ctor &&
+    call_func == js->sym.promise_resolve
+  ) return js_promise_assimilate_awaitable(js, args[0]);
+
+  return sv_vm_call(
+    vm, js, call_func, call_this, args, argc, NULL, false);
+}
+
 static inline void sv_call_args_reset(sv_call_args_t *a, ant_value_t *args, int argc) {
   a->args = args;
   a->argc = argc;

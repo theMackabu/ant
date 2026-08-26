@@ -52,6 +52,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call);
   LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_call_array_includes);
+  LOAD_EXT(jit_helper_call_stable_builtin);
   LOAD_EXT(jit_helper_apply);
   LOAD_EXT(jit_helper_call_call);
   LOAD_EXT(jit_helper_call_call_slot);
@@ -1743,7 +1744,8 @@ static void mir_emit_promise_protector_invalidation(
   MIR_reg_t r_js, MIR_reg_t obj_ptr
 ) {
   size_t protector_offset;
-  if (atom->str == js->intern.constructor)
+  bool invalidates_species = atom->str == js->intern.constructor;
+  if (invalidates_species)
     protector_offset = offsetof(ant_t, promise_constructor_protector_invalid);
   else if (atom->str == js->intern.then)
     protector_offset = offsetof(ant_t, promise_then_protector_invalid);
@@ -1777,6 +1779,13 @@ static void mir_emit_promise_protector_invalidation(
       MIR_new_mem_op(ctx, MIR_T_U8,
         (MIR_disp_t)protector_offset, r_js, 0, 1),
       MIR_new_int_op(ctx, 1)));
+  if (invalidates_species)
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_U8,
+          (MIR_disp_t)offsetof(ant_t, promise_species_protector_invalid),
+          r_js, 0, 1),
+        MIR_new_int_op(ctx, 1)));
   MIR_append_insn(ctx, fn, done);
 }
 
@@ -2578,6 +2587,7 @@ typedef struct {
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
   MIR_item_t call_method_proto, imp_call_method;
+  MIR_item_t stable_call_proto, imp_call_stable_builtin;
   MIR_item_t imp_band, imp_bor, imp_bxor, imp_shl, imp_shr, imp_ushr;
   MIR_item_t self_proto;
   MIR_reg_t r_args_buf;
@@ -2588,6 +2598,7 @@ static bool jit_op_inline_side_effect(sv_op_t op) {
     case OP_PUT_FIELD:
     case OP_CALL:
     case OP_CALL_METHOD:
+    case OP_CALL_STABLE_BUILTIN:
     case OP_TAIL_CALL:
     case OP_TAIL_CALL_METHOD:
       return true;
@@ -2636,6 +2647,10 @@ static bool jit_inlineable(sv_func_t *f) {
     uint16_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_INLINEABLE) == 0) return false;
     if ((flags & SV_OPF_JIT_INLINE_ARGC) != 0 && sv_get_u16(ip + 1) > SV_JIT_ARGS_BUF_CAP) return false;
+    if (
+      op == OP_CALL_STABLE_BUILTIN &&
+      sv_get_u16(ip + 2) > SV_JIT_ARGS_BUF_CAP
+    ) return false;
 
     // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
     // the interpreter until JIT routes a real per-call activation/object
@@ -3750,10 +3765,11 @@ static void jit_emit_inline_body(
         MIR_reg_t pf_obj = inl_vs[--isp];
         MIR_label_t pf_slow = MIR_new_label(ctx);
         MIR_label_t pf_ok = MIR_new_label(ctx);
+        int pf_name_off = -(id * 100000 + inl_bc_off + 1);
         bool pf_fast = r_ic_epoch != 0 &&
           mir_emit_put_field_ic_fastpath(
             ctx, jit_func, js, callee,
-            (int)(ip - callee->code), pf_ic_idx, pf_atom,
+            pf_name_off, pf_ic_idx, pf_atom,
             r_js, pf_obj, pf_val, pf_slow, r_ic_epoch,
             ext->remember_obj_proto, ext->imp_remember_obj
           );
@@ -3846,6 +3862,61 @@ static void jit_emit_inline_body(
         }
         mir_call_helper2(ctx, jit_func, bw_rd,
                          helper2_proto, bw_imp, r_vm, r_js, bw_rl, bw_rr);
+        break;
+      }
+
+      case OP_CALL_STABLE_BUILTIN: {
+        int stable_kind = ip[1];
+        uint16_t stable_argc = sv_get_u16(ip + 2);
+        ANT_ASSERT(stable_argc <= SV_JIT_ARGS_BUF_CAP,
+                   "nested stable-builtin call escaped feasibility");
+        ANT_ASSERT(isp >= (int)stable_argc + 2,
+                   "invalid inline stable-builtin call stack depth");
+        INL_FLUSH_ALL();
+
+        for (int i = (int)stable_argc - 1; i >= 0; i--)
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                ext->r_args_buf, 0, 1),
+              MIR_new_reg_op(ctx, inl_vs[isp - (int)stable_argc + i])));
+        isp -= (int)stable_argc;
+        MIR_reg_t stable_fn = inl_vs[--isp];
+        MIR_reg_t stable_this = inl_vs[--isp];
+        MIR_reg_t stable_dst = inl_vs[isp++];
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 10,
+            MIR_new_ref_op(ctx, ext->stable_call_proto),
+            MIR_new_ref_op(ctx, ext->imp_call_stable_builtin),
+            MIR_new_reg_op(ctx, stable_dst),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_int_op(ctx, stable_kind),
+            MIR_new_reg_op(ctx, stable_fn),
+            MIR_new_reg_op(ctx, stable_this),
+            MIR_new_reg_op(ctx, ext->r_args_buf),
+            MIR_new_int_op(ctx, (int64_t)stable_argc)));
+
+        MIR_label_t stable_ok = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, stable_dst),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, stable_ok),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, result),
+            MIR_new_reg_op(ctx, stable_dst)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
+        MIR_append_insn(ctx, jit_func, stable_ok);
         break;
       }
 
@@ -4333,6 +4404,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
 
+  MIR_item_t stable_call_proto = MIR_new_proto(ctx, "stable_call_proto",
+    1, &call_ret,
+    7,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js_p",
+    MIR_T_I32, "kind",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_T_P,   "args",
+    MIR_T_I32, "argc");
+
   MIR_type_t call_call_ret = MIR_JSVAL;
   MIR_item_t call_call_proto = MIR_new_proto(ctx, "call_call_proto",
     1, &call_call_ret,
@@ -4762,6 +4844,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call  = MIR_new_import(ctx, "jit_helper_call");
   MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
   MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
+  MIR_item_t imp_call_stable_builtin = MIR_new_import(ctx, "jit_helper_call_stable_builtin");
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
   MIR_item_t imp_call_call = MIR_new_import(ctx, "jit_helper_call_call");
   MIR_item_t imp_call_call_slot = MIR_new_import(ctx, "jit_helper_call_call_slot");
@@ -5050,6 +5133,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     .imp_remember_obj = imp_remember_obj,
     .call_proto = call_proto, .imp_call = imp_call,
     .call_method_proto = call_method_proto, .imp_call_method = imp_call_method,
+    .stable_call_proto = stable_call_proto,
+    .imp_call_stable_builtin = imp_call_stable_builtin,
     .imp_band = imp_band, .imp_bor = imp_bor, .imp_bxor = imp_bxor,
     .imp_shl = imp_shl, .imp_shr = imp_shr, .imp_ushr = imp_ushr,
     .self_proto = self_proto,
@@ -10717,6 +10802,55 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_call_res),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_reg_op(ctx, r_arg_arr),
+            MIR_new_int_op(ctx, (int64_t)call_argc)));
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        JIT_EMIT_THROW_IF_ERROR(r_call_res);
+        break;
+      }
+
+      case OP_CALL_STABLE_BUILTIN: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        int stable_kind = ip[1];
+        uint16_t call_argc = sv_get_u16(ip + 2);
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 2) { ok = false; break; }
+
+        MIR_reg_t r_arg_arr = r_args_buf;
+        for (int i = (int)call_argc - 1; i >= 0; i--) {
+          MIR_reg_t areg = vstack_pop(&vs);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                r_arg_arr, 0, 1),
+              MIR_new_reg_op(ctx, areg)));
+        }
+
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_reg_t r_call_res = vstack_push(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 10,
+            MIR_new_ref_op(ctx, stable_call_proto),
+            MIR_new_ref_op(ctx, imp_call_stable_builtin),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_int_op(ctx, stable_kind),
             MIR_new_reg_op(ctx, r_call_func),
             MIR_new_reg_op(ctx, r_call_this),
             MIR_new_reg_op(ctx, r_arg_arr),

@@ -14,6 +14,7 @@ can reuse the decision history.
 - [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
 - [Module Import GC Flake](module-import-gc-flake.md)
 - [Promise Resolution and Await Semantics](promise-resolution-semantics.md)
+- [Promise Resolution Performance](promise-resolution-performance.md)
 - [Property Reference Table Removal](property-reference-table-removal.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
 - [tlsuv HTTP Request Body Methods](tlsuv-http-request-body-methods.md)

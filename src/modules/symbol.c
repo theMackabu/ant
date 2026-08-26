@@ -389,7 +389,7 @@ void init_symbol_module(ant_t *js) {
   js_set_sym(js, array_proto, g_unscopables, array_unscopables);
   js_set_sym(js, js->sym.string_proto, g_iterator, js_mkfun(string_iterator));
   
-  ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
+  ant_value_t promise_ctor = js->sym.promise_ctor;
   js_set_sym(js, js->sym.promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
 
   ant_value_t async_func_proto = js_get_slot(js_glob(js), SLOT_ASYNC_PROTO);
@@ -403,6 +403,8 @@ void init_symbol_module(ant_t *js) {
 
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
+  // These one-time bootstrap definitions establish the protected baseline.
+  js->promise_species_protector_invalid = false;
 }
 
 void gc_mark_symbols(ant_t *js, gc_mark_fn mark) {

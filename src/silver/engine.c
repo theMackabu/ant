@@ -1873,6 +1873,24 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_STABLE_BUILTIN: {
+    sv_stable_builtin_t kind = (sv_stable_builtin_t)ip[1];
+    uint16_t call_argc = sv_get_u16(ip + 2);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
+
+    frame->ip = ip;
+    ant_value_t call_result = sv_op_call_stable_builtin(
+      vm, js, kind, call_func, call_this, call_args, call_argc);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= call_argc + 2;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(4);
+  }
+
   L_CALL_IS_PROTO: {
     ant_value_t call_arg  = vm->stack[vm->sp - 1];
     ant_value_t call_func = vm->stack[vm->sp - 2];

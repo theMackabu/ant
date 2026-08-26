@@ -85,6 +85,7 @@ export function targets() {
     ['test_async_gen_leak.mjs', 48],
     ['test_promise_subclass_await.mjs', 48],
     ['test_promise_protector_hot_store.mjs', 48],
+    ['test_promise_resolution_fastpaths.mjs', 48],
     ['test_tla_repeated_await.mjs', 48],
     ['test_upvalue_gc.cjs', 384],
     ['test_gc_closure_churn.cjs', 96]

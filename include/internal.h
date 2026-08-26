@@ -141,6 +141,7 @@ struct ant_isolate_t {
   uint32_t prototype_write_epoch;
 
   bool promise_constructor_protector_invalid;
+  bool promise_species_protector_invalid;
   bool promise_then_protector_invalid;
 
   ant_shape_t ***ic_shape_ref_slots;
@@ -223,6 +224,7 @@ struct ant_isolate_t {
     ant_value_t boolean_proto;
     ant_value_t promise_ctor;
     ant_value_t promise_proto;
+    ant_value_t promise_resolve;
     ant_value_t promise_then;
     ant_value_t bigint_proto;
     ant_value_t symbol_proto;
@@ -432,8 +434,10 @@ static inline void ant_property_mutation_invalidate(
     ? js_obj_ptr(js->sym.promise_proto) : NULL;
 
   if (!holder->promise_state && holder != promise_proto) return;
-  if (invalidates_constructor) js->promise_constructor_protector_invalid = true;
-  else js->promise_then_protector_invalid = true;
+  if (invalidates_constructor) {
+    js->promise_constructor_protector_invalid = true;
+    js->promise_species_protector_invalid = true;
+  } else js->promise_then_protector_invalid = true;
 }
 
 typedef struct {
@@ -540,6 +544,7 @@ void js_arguments_detach(ant_t *js, ant_value_t obj);
 void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
 void js_arguments_rebind_frame(ant_t *js, ant_value_t obj, int frame_index);
 void js_arguments_bind_direct(ant_t *js, ant_value_t obj, struct sv_frame *frame);
+void ant_symbol_property_mutation_invalidate(ant_t *js, ant_object_t *holder, ant_offset_t sym_off);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -626,6 +631,7 @@ ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs
 ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
 
 bool js_is_array_includes_builtin(ant_value_t func);
+
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
 

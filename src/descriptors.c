@@ -303,6 +303,7 @@ void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flag
       false, false, js_mkundef()
     );
 
+    ant_symbol_property_mutation_invalidate(js, js_obj_ptr(obj), sym_off);
     ant_ic_epoch_bump();
     return;
   }
@@ -436,6 +437,7 @@ void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
       false, false, js_mkundef()
     );
 
+    ant_symbol_property_mutation_invalidate(js, js_obj_ptr(obj), sym_off);
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), getter);
 
@@ -468,6 +470,7 @@ void js_set_sym_setter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
       true, true, setter
     );
 
+    ant_symbol_property_mutation_invalidate(js, js_obj_ptr(obj), sym_off);
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), setter);
 

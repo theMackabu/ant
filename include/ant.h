@@ -205,11 +205,13 @@ ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
 void js_prop_iter_end(ant_iter_t *iter);
 
 bool js_is_constructor(ant_value_t value);
+bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
+bool js_copy_exotic_own_props(ant_t *js, ant_value_t dst, ant_value_t src);
+bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);
 bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value);
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
-bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);
+bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 bool js_is_own_enumerable_prop(ant_t *js, ant_value_t source, ant_object_t *source_ptr, const ant_iter_key_t *key);
-bool js_copy_exotic_own_props(ant_t *js, ant_value_t dst, ant_value_t src);
 
 ant_value_t js_obj_to_func(ant_t *js, ant_value_t obj);
 ant_value_t js_obj_to_func_ex(ant_t *js, ant_value_t obj, uint8_t flags);
@@ -221,12 +223,11 @@ void js_check_unhandled_rejections(ant_t *js);
 void js_setup_import_meta(ant_t *js, const char *filename);
 void js_process_promise_handlers(ant_t *js, ant_value_t promise);
 void js_mark_promise_trigger_dequeued(ant_t *js, ant_value_t promise);
-bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
 
 void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise);
-bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out);
 void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);
+void js_process_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn);
 
 typedef ant_value_t (*js_getter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);

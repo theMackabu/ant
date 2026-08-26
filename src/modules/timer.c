@@ -38,6 +38,7 @@ enum {
   MT_CALLBACK = 0,
   MT_PROMISE_TRIGGER,
   MT_THENABLE_JOB,
+  MT_AWAIT_RESUME,
 };
 
 typedef struct microtask_entry {
@@ -45,6 +46,7 @@ typedef struct microtask_entry {
   union {
     ant_value_t promise;
     ant_value_t this_val;
+    coroutine_t *coro;
   } u;
   struct microtask_entry *next;
   uint8_t argc;
@@ -709,19 +711,41 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
 }
 
-void queue_promise_thenable_job(ant_t *js, ant_value_t then_fn, ant_value_t thenable, ant_value_t resolve_fn, ant_value_t reject_fn) {
-  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t) + 2 * sizeof(ant_value_t));
-  if (entry == NULL) return;
+bool queue_promise_thenable_job(ant_t *js, ant_value_t promise, ant_value_t thenable, ant_value_t then_fn) {
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t) + sizeof(ant_value_t));
+  if (entry == NULL) return false;
 
   entry->callback = then_fn;
   entry->u.this_val = thenable;
   entry->next = NULL;
-  entry->argc = 2;
+  entry->argc = 1;
   entry->kind = MT_THENABLE_JOB;
-  entry->argv[0] = resolve_fn;
-  entry->argv[1] = reject_fn;
+  entry->argv[0] = promise;
 
-  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+  queue_microtask_entry(
+    &timer_state.microtasks, 
+    &timer_state.microtasks_tail, entry
+  );
+  
+  return true;
+}
+
+bool queue_await_resume_job(coroutine_t *coro, ant_value_t value) {
+  microtask_entry_t *entry = calloc(1, sizeof(microtask_entry_t));
+  if (entry == NULL) return false;
+
+  entry->callback = value;
+  entry->u.coro = coro;
+  entry->next = NULL;
+  entry->kind = MT_AWAIT_RESUME;
+
+  coroutine_retain(coro);
+  queue_microtask_entry(
+    &timer_state.microtasks, 
+    &timer_state.microtasks_tail, entry
+  );
+  
+  return true;
 }
 
 void queue_next_tick(ant_t *js, ant_value_t callback) {
@@ -783,7 +807,30 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
     return;
   }
 
-  ant_value_t this_val = entry->kind == MT_THENABLE_JOB ? entry->u.this_val : js_mkundef();
+  if (entry->kind == MT_THENABLE_JOB) {
+    js_process_promise_thenable_job(
+      js, entry->argv[0], 
+      entry->u.this_val, entry->callback
+    );
+    return;
+  }
+
+  if (entry->kind == MT_AWAIT_RESUME) {
+    GC_ROOT_SAVE(root_mark, js);
+    ant_value_t value = entry->callback;
+    coroutine_t *coro = entry->u.coro;
+    GC_ROOT_PIN(js, value);
+
+    if (coro->await_registered)
+      settle_and_resume_coroutine(js, coro, value, false);
+
+    coroutine_release(coro);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return;
+  }
+
+  ant_value_t this_val = js_mkundef();
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t callback = entry->callback;
@@ -791,16 +838,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
   GC_ROOT_PIN(js, this_val);
 
   for (uint8_t i = 0; i < entry->argc; i++) GC_ROOT_PIN(js, entry->argv[i]);
-  ant_value_t result = sv_vm_call(js->vm, js, callback, this_val, entry->argv, entry->argc, NULL, false);
-
-  if (entry->kind == MT_THENABLE_JOB && is_err(result) && entry->argc == 2) {
-    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
-    js->thrown_exists = false;
-    js->thrown_value = js_mkundef();
-    js->thrown_stack = js_mkundef();
-    ant_value_t rej_args[1] = { reject_value };
-    sv_vm_call(js->vm, js, entry->argv[1], js_mkundef(), rej_args, 1, NULL, false);
-  }
+  sv_vm_call(js->vm, js, callback, this_val, entry->argv, entry->argc, NULL, false);
 
   GC_ROOT_RESTORE(js, root_mark);
 }
@@ -996,12 +1034,14 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->u.promise);
+    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
+    else mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.microtasks_processing; m; m = m->next) {
     mark(js, m->callback);
-    mark(js, m->u.promise);
+    if (m->kind == MT_AWAIT_RESUME) gc_mark_coroutine(js, m->u.coro);
+    else mark(js, m->u.promise);
     for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.next_ticks; m; m = m->next) {
