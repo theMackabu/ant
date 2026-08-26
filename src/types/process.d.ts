@@ -56,6 +56,8 @@ interface ReadStream {
   setEncoding(encoding?: string): this;
   resume(): this;
   pause(): this;
+  ref(): this;
+  unref(): this;
   on(event: string, listener: EventListener): this;
   off(event: string, listener: EventListener): this;
   removeListener(event: string, listener: EventListener): this;

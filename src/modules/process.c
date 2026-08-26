@@ -47,6 +47,7 @@
 #include "modules/timer.h"
 #include "modules/string_decoder.h"
 #include "modules/fs.h"
+#include "modules/stream.h"
 
 #ifndef _WIN32
 extern char **environ;
@@ -65,6 +66,7 @@ typedef struct {
   bool tty_initialized;
   bool reading;
   bool paused;
+  bool refed;
   bool keypress_enabled;
   ant_value_t decoder;
   int escape_state;
@@ -107,6 +109,7 @@ static ant_process_state_t *process_state(ant_t *js) {
   ps->sandbox_tty_rows = 24;
   ps->sandbox_tty_cols = 80;
   ps->stdin_state.decoder = js_mkundef();
+  ps->stdin_state.refed = true;
 
   js->process_state = ps;
   return ps;
@@ -627,9 +630,10 @@ static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_bu
 #endif
 }
 
-static inline void emit_stdin_data_event(ant_t *js, const uv_buf_t *buf, ssize_t nread) {
+static inline ant_value_t make_stdin_data_value(ant_t *js, const uv_buf_t *buf, ssize_t nread) {
   ant_process_state_t *ps = process_state(js);
-  if (!ps) return;
+  if (!ps) return js_mkundef();
+  
   ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
   if (ab) memcpy(ab->data, buf->base, (size_t)nread);
 
@@ -642,7 +646,7 @@ static inline void emit_stdin_data_event(ant_t *js, const uv_buf_t *buf, ssize_t
     : raw_val;
 
   if (is_err(data_val)) data_val = raw_val;
-  eventemitter_emit_args(js, ps->stdin_obj, "data", &data_val, 1);
+  return data_val;
 }
 
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -657,8 +661,17 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   }
 
   if (nread == 0) goto cleanup;
-  if (!ps->stdin_state.paused && eventemitter_listener_count(js, ps->stdin_obj, "data") > 0)
-    emit_stdin_data_event(js, buf, nread);
+  bool want_data = !ps->stdin_state.paused && eventemitter_listener_count(js, ps->stdin_obj, "data") > 0;
+  bool want_readable = !ps->stdin_state.paused && eventemitter_listener_count(js, ps->stdin_obj, "readable") > 0;
+
+  if (want_data || want_readable) {
+    ant_value_t data_val = make_stdin_data_value(js, buf, nread);
+    if (want_readable) {
+      ant_value_t pushed = stream_readable_push(js, ps->stdin_obj, data_val, js_mkundef());
+      if (!is_err(pushed)) eventemitter_emit_args(js, ps->stdin_obj, "readable", NULL, 0);
+    }
+    if (want_data) eventemitter_emit_args(js, ps->stdin_obj, "data", &data_val, 1);
+  }
 
   bool want_keypress = ps->stdin_state.keypress_enabled
     && eventemitter_listener_count(js, ps->stdin_obj, "keypress") > 0;
@@ -687,9 +700,9 @@ static void stdin_start_reading(ant_t *js) {
     if (uv_tty_init(loop, &ps->stdin_state.tty, STDIN_FILENO, 1) != 0) return;
     ps->stdin_state.tty.data = js;
     ps->stdin_state.tty_initialized = true;
-    uv_unref((uv_handle_t *)&ps->stdin_state.tty);
   }
-  uv_ref((uv_handle_t *)&ps->stdin_state.tty);
+  if (ps->stdin_state.refed) uv_ref((uv_handle_t *)&ps->stdin_state.tty);
+  else uv_unref((uv_handle_t *)&ps->stdin_state.tty);
   ps->stdin_state.reading = true;
   uv_read_start((uv_stream_t *)&ps->stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
 }
@@ -709,6 +722,7 @@ static void stdin_stop_reading_if_idle(ant_t *js) {
   if (ps->stdin_byte_consumer) return;
   if (eventemitter_listener_count(js, ps->stdin_obj, "data") > 0) return;
   if (eventemitter_listener_count(js, ps->stdin_obj, "keypress") > 0) return;
+  if (eventemitter_listener_count(js, ps->stdin_obj, "readable") > 0) return;
   stdin_stop_reading(js);
 }
 
@@ -831,6 +845,24 @@ static ant_value_t js_stdin_pause(ant_params_t) {
   if (!ps) return js_mkerr(js, "out of memory");
   ps->stdin_state.paused = true;
   stdin_stop_reading(js);
+  return js_getthis(js);
+}
+
+static ant_value_t js_stdin_ref(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
+  ps->stdin_state.refed = true;
+  if (ps->stdin_state.tty_initialized)
+    uv_ref((uv_handle_t *)&ps->stdin_state.tty);
+  return js_getthis(js);
+}
+
+static ant_value_t js_stdin_unref(ant_params_t) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "out of memory");
+  ps->stdin_state.refed = false;
+  if (ps->stdin_state.tty_initialized)
+    uv_unref((uv_handle_t *)&ps->stdin_state.tty);
   return js_getthis(js);
 }
 
@@ -1577,7 +1609,8 @@ static void process_listener_change(
   if (
     target == ps->stdin_obj && (
       process_event_key_is(js, key, "data") ||
-      process_event_key_is(js, key, "keypress")
+      process_event_key_is(js, key, "keypress") ||
+      process_event_key_is(js, key, "readable")
     )
   ) {
     if (listener_count > 0) {
@@ -1774,6 +1807,8 @@ void init_process_module(ant_t *js) {
   js_set(js, stdin_proto, "setEncoding", js_mkfun(js_stdin_set_encoding));
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
+  js_set(js, stdin_proto, "ref", js_mkfun(js_stdin_ref));
+  js_set(js, stdin_proto, "unref", js_mkfun(js_stdin_unref));
   js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
   ant_value_t stdin_obj = js_mkobj(js);
@@ -1816,7 +1851,7 @@ void init_process_module(ant_t *js) {
 
 bool has_active_stdin(ant_t *js) {
   ant_process_state_t *ps = js->process_state;
-  return ps && ps->stdin_state.reading;
+  return ps && ps->stdin_state.reading && ps->stdin_state.refed;
 }
 
 void gc_mark_process(ant_t *js, gc_mark_fn mark) {
