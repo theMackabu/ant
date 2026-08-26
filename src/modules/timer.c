@@ -797,6 +797,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
     ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
     ant_value_t rej_args[1] = { reject_value };
     sv_vm_call(js->vm, js, entry->argv[1], js_mkundef(), rej_args, 1, NULL, false);
   }

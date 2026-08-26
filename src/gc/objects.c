@@ -800,7 +800,9 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->sym.string_proto);
   gc_mark_value(js, js->sym.number_proto);
   gc_mark_value(js, js->sym.boolean_proto);
+  gc_mark_value(js, js->sym.promise_ctor);
   gc_mark_value(js, js->sym.promise_proto);
+  gc_mark_value(js, js->sym.promise_then);
   gc_mark_value(js, js->sym.bigint_proto);
   gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);
