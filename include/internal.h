@@ -180,6 +180,8 @@ struct ant_isolate_t {
     const char *exec;
     const char *replace;
     const char *constructor;
+    const char *promise;
+    const char *resolve;
     const char *then;
     const char *name;
     const char *message;
@@ -409,11 +411,6 @@ struct ant_isolate_t {
     size_t remembered_builder_len;
     size_t remembered_builder_cap;
   } rope_gc;
-
-  struct {
-    const char *promise;
-    const char *resolve;
-  } promise_intern;
 };
 
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {
@@ -428,13 +425,13 @@ static inline void ant_property_mutation_invalidate(
 ) {
   if (!js || !holder || !key) return;
 
-  if (key == js->promise_intern.promise) {
+  if (key == js->intern.promise) {
     if (holder == js_obj_ptr(js->global)) 
       js->promise_resolve_lookup_protector_invalid = true;
     return;
   }
 
-  if (key == js->promise_intern.resolve) {
+  if (key == js->intern.resolve) {
     if (
       is_object_type(js->sym.promise_ctor) &&
       holder == js_obj_ptr(js->sym.promise_ctor)

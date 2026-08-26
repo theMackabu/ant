@@ -24,13 +24,13 @@ static inline ant_value_t sv_load_stable_builtin(
     return js->sym.promise_resolve;
   }
 
-  if (!lkp_proto(js, js->global, js->promise_intern.promise, 7).obj)
+  if (!lkp_proto(js, js->global, js->intern.promise, 7).obj)
     return js_mkerr_typed(js, JS_ERR_REFERENCE, "'Promise' is not defined");
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t receiver = js_getprop_fallback(
     js, js->global, 
-    js->promise_intern.promise
+    js->intern.promise
   );
 
   GC_ROOT_PIN(js, receiver);
@@ -41,7 +41,7 @@ static inline ant_value_t sv_load_stable_builtin(
 
   ant_value_t func = js_getprop_fallback(
     js, receiver, 
-    js->promise_intern.resolve
+    js->intern.resolve
   );
   
   *receiver_out = receiver;

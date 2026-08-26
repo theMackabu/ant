@@ -1897,8 +1897,8 @@ static void mir_emit_promise_protector_invalidation(
 ) {
   bool invalidates_constructor = atom->str == js->intern.constructor;
   bool invalidates_then = atom->str == js->intern.then;
-  bool invalidates_global_promise = atom->str == js->promise_intern.promise;
-  bool invalidates_promise_resolve = atom->str == js->promise_intern.resolve;
+  bool invalidates_global_promise = atom->str == js->intern.promise;
+  bool invalidates_promise_resolve = atom->str == js->intern.resolve;
 
   if (
     !invalidates_constructor && !invalidates_then &&

@@ -2795,8 +2795,8 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.exec = intern_string("exec", 4);
   js->intern.replace = intern_string("replace", 7);
   js->intern.constructor = intern_string("constructor", 11);
-  js->promise_intern.promise = intern_string("Promise", 7);
-  js->promise_intern.resolve = intern_string("resolve", 7);
+  js->intern.promise = intern_string("Promise", 7);
+  js->intern.resolve = intern_string("resolve", 7);
   js->intern.then = intern_string("then", 4);
   js->intern.name = intern_string("name", 4);
   js->intern.message = intern_string("message", 7);
