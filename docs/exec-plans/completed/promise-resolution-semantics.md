@@ -44,9 +44,10 @@ work.
 
 The constructor and `then` protectors remove observable property lookup from
 the canonical native-Promise paths. Ordinary JIT property stores emit no new
-runtime instructions. Correct primitive `await` still allocates an intrinsic
-wrapper and suspends through the microtask queue; a direct coroutine-resume
-microtask is a separate optimization.
+runtime instructions. Correct primitive `await` suspends and resumes through a
+dedicated coroutine-resume microtask without allocating an intermediate
+intrinsic wrapper Promise. Extending that direct path beyond primitives remains
+a separate optimization.
 
 The Promise resolution benchmarks accept an optional case selector so
 candidate and baseline runs can measure one path per fresh process. A second

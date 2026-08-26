@@ -176,6 +176,76 @@ assertEqual(
   await Promise.any([new LazyPromise('any parsed')]),
   'any parsed'
 );
+assertEqual(
+  'Promise.any accepts Set iterables',
+  await Promise.any(new Set([Promise.reject('set rejection'), 'set value'])),
+  'set value'
+);
+
+function* promiseAnyValues() {
+  yield Promise.reject('generator rejection');
+  yield 'generator value';
+}
+assertEqual(
+  'Promise.any accepts generator iterables',
+  await Promise.any(promiseAnyValues()),
+  'generator value'
+);
+
+function* promiseCombinatorValues() {
+  yield Promise.resolve('first');
+  yield Promise.resolve('second');
+}
+assertEqual(
+  'Promise.all accepts generator iterables',
+  (await Promise.all(promiseCombinatorValues())).join(','),
+  'first,second'
+);
+assertEqual(
+  'Promise.allSettled accepts generator iterables',
+  (await Promise.allSettled(promiseCombinatorValues()))
+    .map(result => result.value)
+    .join(','),
+  'first,second'
+);
+assertEqual(
+  'Promise.race accepts generator iterables',
+  await Promise.race(promiseCombinatorValues()),
+  'first'
+);
+
+function* promiseAnyRejections() {
+  yield Promise.reject('first rejection');
+  yield Promise.reject('second rejection');
+}
+let promiseAnyAggregate;
+try {
+  await Promise.any(promiseAnyRejections());
+} catch (error) {
+  promiseAnyAggregate = error;
+}
+assertEqual(
+  'Promise.any generator rejects with AggregateError',
+  promiseAnyAggregate instanceof AggregateError,
+  true
+);
+assertEqual(
+  'Promise.any preserves generator rejection order',
+  promiseAnyAggregate.errors.join(','),
+  'first rejection,second rejection'
+);
+
+let nonIterableAnyRejected = false;
+try {
+  await Promise.any({});
+} catch {
+  nonIterableAnyRejected = true;
+}
+assertEqual(
+  'Promise.any rejects non-iterable objects',
+  nonIterableAnyRejected,
+  true
+);
 
 let combinatorResolveGets = 0;
 let combinatorResolveCalls = 0;

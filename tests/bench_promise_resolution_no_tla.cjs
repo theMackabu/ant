@@ -13,9 +13,9 @@ const benchmarkCases = [
 // Select one case to compare candidate and baseline in separate fresh processes.
 
 if (
-  !(asyncIterations > 0) ||
-  !(syncIterations > 0) ||
-  !(rounds > 0) ||
+  !(Number.isSafeInteger(asyncIterations) && asyncIterations > 0) ||
+  !(Number.isSafeInteger(syncIterations) && syncIterations > 0) ||
+  !(Number.isSafeInteger(rounds) && rounds > 0) ||
   (selectedCase !== 'all' && !benchmarkCases.includes(selectedCase))
 ) {
   throw new Error(

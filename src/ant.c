@@ -16009,9 +16009,7 @@ static ant_value_t builtin_Promise_all(ant_t *js, ant_value_t *args, int nargs) 
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  uint8_t t = vtype(iterable);
-  
-  if (t != kTypeArray && t != kTypeObject) {
+  if (!is_object_type(iterable)) {
     ant_value_t err = js_mkerr(js, "Promise.all requires an iterable");
     ant_value_t result = promise_reject_abrupt(
       js, result_promise, result_reject, err
@@ -16110,9 +16108,7 @@ static ant_value_t builtin_Promise_allSettled(ant_t *js, ant_value_t *args, int 
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  uint8_t t = vtype(iterable);
-  
-  if (t != kTypeArray && t != kTypeObject) {
+  if (!is_object_type(iterable)) {
     ant_value_t err = js_mkerr(js, "Promise.allSettled requires an iterable");
     ant_value_t result = promise_reject_abrupt(
       js, result_promise, 
@@ -16242,8 +16238,7 @@ static ant_value_t builtin_Promise_race(ant_t *js, ant_value_t *args, int nargs)
 
   ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
   GC_ROOT_PIN(js, iterable);
-  uint8_t t = vtype(iterable);
-  if (t != kTypeArray && t != kTypeObject) {
+  if (!is_object_type(iterable)) {
     ant_value_t err = js_mkerr(js, "Promise.race requires an iterable");
     ant_value_t result = promise_reject_abrupt(
       js, result_promise, 
@@ -16340,6 +16335,78 @@ static ant_value_t builtin_Promise_any_reject_handler(ant_t *js, ant_value_t *ar
   );
 }
 
+typedef struct {
+  ant_value_t tracker;
+  ant_value_t ctor;
+  ant_value_t promise_resolve;
+  int index;
+} promise_any_iter_ctx_t;
+
+static iter_action_t promise_any_iter_cb(
+  ant_t *js, ant_value_t value, void *ctx, ant_value_t *out
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  promise_any_iter_ctx_t *pctx = (promise_any_iter_ctx_t *)ctx;
+  ant_value_t item = promise_call_one(
+    js, pctx->promise_resolve,
+    pctx->ctor, value
+  );
+
+  GC_ROOT_PIN(js, item);
+  if (is_err(item)) {
+    *out = item;
+    GC_ROOT_RESTORE(js, root_mark);
+    return ITER_ERROR;
+  }
+
+  ant_value_t resolve_obj = mkobj(js, 0);
+  if (is_err(resolve_obj)) {
+    *out = resolve_obj;
+    GC_ROOT_RESTORE(js, root_mark);
+    return ITER_ERROR;
+  }
+
+  GC_ROOT_PIN(js, resolve_obj);
+  set_slot(resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_resolve_handler));
+  set_slot(resolve_obj, SLOT_SETTLED, js_false);
+  set_slot(resolve_obj, SLOT_DATA, pctx->tracker);
+  set_slot(resolve_obj, SLOT_AUX, tov((double)pctx->index));
+
+  ant_value_t resolve_fn = js_obj_to_func(js, resolve_obj);
+  GC_ROOT_PIN(js, resolve_fn);
+
+  ant_value_t reject_obj = mkobj(js, 0);
+  if (is_err(reject_obj)) {
+    *out = reject_obj;
+    GC_ROOT_RESTORE(js, root_mark);
+    return ITER_ERROR;
+  }
+
+  GC_ROOT_PIN(js, reject_obj);
+  set_slot(reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_reject_handler));
+  set_slot(reject_obj, SLOT_DATA, resolve_fn);
+
+  ant_value_t reject_fn = js_obj_to_func(js, reject_obj);
+  GC_ROOT_PIN(js, reject_fn);
+
+  int remaining = (int)tod(get_slot(pctx->tracker, SLOT_MAP)) + 1;
+  set_slot(pctx->tracker, SLOT_MAP, tov((double)remaining));
+
+  ant_value_t then_result = promise_invoke_then(
+    js, item, resolve_fn, reject_fn
+  );
+  if (is_err(then_result)) {
+    *out = then_result;
+    GC_ROOT_RESTORE(js, root_mark);
+    return ITER_ERROR;
+  }
+
+  pctx->index++;
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return ITER_CONTINUE;
+}
+
 static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) {
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t ctor = js->this_val;
@@ -16348,12 +16415,12 @@ static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t result_promise = js_mkundef();
   ant_value_t result_resolve = js_mkundef();
   ant_value_t result_reject = js_mkundef();
-  
+
   ant_value_t capability_result = new_promise_capability(
-    js, ctor, &result_promise, 
+    js, ctor, &result_promise,
     &result_resolve, &result_reject
   );
-  
+
   GC_ROOT_PIN(js, result_promise);
   GC_ROOT_PIN(js, result_resolve);
   GC_ROOT_PIN(js, result_reject);
@@ -16366,35 +16433,23 @@ static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) 
   GC_ROOT_PIN(js, promise_resolve);
   if (is_err(promise_resolve)) {
     ant_value_t result = promise_reject_abrupt(
-      js, result_promise, 
+      js, result_promise,
       result_reject, promise_resolve
     );
     GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
 
-  ant_value_t arr = nargs > 0 ? args[0] : js_mkundef();
-  GC_ROOT_PIN(js, arr);
-  if (vtype(arr) != kTypeArray) {
-    ant_value_t err = js_mkerr(js, "Promise.any requires an array");
+  ant_value_t iterable = nargs > 0 ? args[0] : js_mkundef();
+  GC_ROOT_PIN(js, iterable);
+  if (!is_object_type(iterable)) {
+    ant_value_t err = js_mkerr(js, "Promise.any requires an iterable");
     ant_value_t result = promise_reject_abrupt(
-      js, result_promise, 
+      js, result_promise,
       result_reject, err
     );
     GC_ROOT_RESTORE(js, root_mark);
     return result;
-  }
-
-  int len = (int)get_array_length(js, arr);
-  if (len == 0) {
-    ant_value_t errors = mkarr(js);
-    GC_ROOT_PIN(js, errors);
-    ant_value_t reject_result = promise_call_one(
-      js, result_reject, js_mkundef(), 
-      mk_aggregate_error(js, errors)
-    );
-    GC_ROOT_RESTORE(js, root_mark);
-    return is_err(reject_result) ? reject_result : result_promise;
   }
 
   ant_value_t tracker = mkobj(js, 0);
@@ -16405,65 +16460,49 @@ static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) 
   js_set_slot_wb(js, tracker, SLOT_DATA, result_resolve);
   js_set_slot_wb(js, tracker, SLOT_AUX, result_reject);
   js_set_slot_wb(js, tracker, SLOT_ENTRIES, errors);
-  set_slot(tracker, SLOT_MAP, tov((double)len));
+  set_slot(tracker, SLOT_MAP, tov(1.0));
   set_slot(tracker, SLOT_SETTLED, js_false);
-  
+
+  promise_any_iter_ctx_t ctx = {
+    .tracker = tracker,
+    .ctor = ctor,
+    .promise_resolve = promise_resolve,
+    .index = 0
+  };
+  ant_value_t iter_result = iter_foreach(
+    js, iterable,
+    promise_any_iter_cb, &ctx
+  );
+
+  if (is_err(iter_result)) {
+    ant_value_t result = promise_reject_abrupt(
+      js, result_promise,
+      result_reject, iter_result
+    );
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  int len = ctx.index;
   ant_offset_t doff = get_dense_buf(errors);
   if (doff) {
     if ((ant_offset_t)len > dense_capacity(doff)) doff = dense_grow(js, errors, (ant_offset_t)len);
     if (doff) array_len_set(js, errors, (ant_offset_t)len);
   }
 
-  for (int i = 0; i < len; i++) {
-    ant_value_t item = promise_call_one(
-      js, promise_resolve, ctor,
-      arr_get(js, arr, (ant_offset_t)i)
+  int remaining = (int)tod(get_slot(tracker, SLOT_MAP)) - 1;
+  set_slot(tracker, SLOT_MAP, tov((double)remaining));
+
+  if (remaining == 0) {
+    set_slot(tracker, SLOT_SETTLED, js_true);
+    ant_value_t reject_result = promise_call_one(
+      js, result_reject, js_mkundef(),
+      mk_aggregate_error(js, errors)
     );
-    GC_ROOT_PIN(js, item);
-    if (is_err(item)) {
-      ant_value_t result = promise_reject_abrupt(
-        js, result_promise, 
-        result_reject, item
-      );
-      GC_ROOT_RESTORE(js, root_mark);
-      return result;
-    }
 
-    ant_value_t resolve_obj = mkobj(js, 0);
-    if (is_err(resolve_obj)) {
+    if (is_err(reject_result)) {
       GC_ROOT_RESTORE(js, root_mark);
-      return resolve_obj;
-    }
-    
-    GC_ROOT_PIN(js, resolve_obj);
-    set_slot(resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_resolve_handler));
-    set_slot(resolve_obj, SLOT_SETTLED, js_false);
-    set_slot(resolve_obj, SLOT_DATA, tracker);
-    set_slot(resolve_obj, SLOT_AUX, tov((double)i));
-
-    ant_value_t resolve_fn = js_obj_to_func(js, resolve_obj);
-    GC_ROOT_PIN(js, resolve_fn);
-
-    ant_value_t reject_obj = mkobj(js, 0);
-    if (is_err(reject_obj)) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return reject_obj;
-    }
-    
-    GC_ROOT_PIN(js, reject_obj);
-    set_slot(reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_reject_handler));
-    set_slot(reject_obj, SLOT_DATA, resolve_fn);
-
-    ant_value_t reject_fn = js_obj_to_func(js, reject_obj);
-    GC_ROOT_PIN(js, reject_fn);
-    ant_value_t then_result = promise_invoke_then(js, item, resolve_fn, reject_fn);
-    if (is_err(then_result)) {
-      ant_value_t result = promise_reject_abrupt(
-        js, result_promise,
-        result_reject, then_result
-      );
-      GC_ROOT_RESTORE(js, root_mark);
-      return result;
+      return reject_result;
     }
   }
 
