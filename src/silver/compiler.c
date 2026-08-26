@@ -614,6 +614,13 @@ static inline bool has_module_import_binding(const sv_compiler_t *c) {
   return false;
 }
 
+static inline bool has_active_with_scope(const sv_compiler_t *c) {
+  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (cur->with_depth > 0) return true;
+  }
+  return false;
+}
+
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing;
 }
@@ -3343,7 +3350,7 @@ static bool compile_call_stable_builtin(
     return false;
 
   bool can_load_intrinsic =
-    c->with_depth == 0 && !c->inherits_eval_env &&
+    !has_active_with_scope(c) && !c->inherits_eval_env &&
     resolve_local(c, "Promise", 7) == -1 &&
     resolve_upvalue(c, "Promise", 7) == -1;
 

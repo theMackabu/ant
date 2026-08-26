@@ -1393,14 +1393,16 @@ static void mir_emit_call_stable_builtin(
   MIR_label_t done = MIR_new_label(ctx);
 
   if (!known_intrinsic) {
+    mir_load_const_slot(ctx, fn, guard, &js->sym.promise_ctor);
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
         MIR_new_reg_op(ctx, call_this),
-        MIR_new_uint_op(ctx, js->sym.promise_ctor)));
+        MIR_new_reg_op(ctx, guard)));
+    mir_load_const_slot(ctx, fn, guard, &js->sym.promise_resolve);
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
         MIR_new_reg_op(ctx, call_func),
-        MIR_new_uint_op(ctx, js->sym.promise_resolve)));
+        MIR_new_reg_op(ctx, guard)));
   }
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_URSH,
@@ -1427,10 +1429,11 @@ static void mir_emit_call_stable_builtin(
       MIR_new_reg_op(ctx, proto),
       MIR_new_mem_op(ctx, MIR_JSVAL,
         (MIR_disp_t)offsetof(ant_object_t, proto), ptr, 0, 1)));
+  mir_load_const_slot(ctx, fn, guard, &js->sym.promise_proto);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, proto),
-      MIR_new_uint_op(ctx, js->sym.promise_proto)));
+      MIR_new_reg_op(ctx, guard)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, dst),
@@ -1484,8 +1487,8 @@ static void mir_emit_load_stable_builtin(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, guard),
       MIR_new_int_op(ctx, 0)));
-  mir_load_imm(ctx, fn, receiver, js->sym.promise_ctor);
-  mir_load_imm(ctx, fn, func, js->sym.promise_resolve);
+  mir_load_const_slot(ctx, fn, receiver, &js->sym.promise_ctor);
+  mir_load_const_slot(ctx, fn, func, &js->sym.promise_resolve);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 
