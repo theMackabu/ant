@@ -662,6 +662,13 @@ ant_value_t jit_helper_call_stable_builtin(
     call_func, call_this, args, argc);
 }
 
+ant_value_t jit_helper_load_stable_builtin(
+  ant_t *js, int kind, ant_value_t *receiver_out
+) {
+  return sv_load_stable_builtin(
+    js, (sv_stable_builtin_t)kind, receiver_out);
+}
+
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   const char *ts = is_callable(v) ? "function" : typestr(vtype(v));
   return js_mkstr(js, ts, strlen(ts));

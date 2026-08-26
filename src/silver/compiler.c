@@ -670,7 +670,7 @@ static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
     sv_local_t *loc = &c->locals[i];
     if (loc->name_len == len && memcmp(loc->name, name, len) == 0) return i;
   }
-  
+
   return -1;
 }
 
@@ -3342,8 +3342,19 @@ static bool compile_call_stable_builtin(
   if (!is_ident_str(callee->right->str, callee->right->len, "resolve", 7))
     return false;
 
-  compile_expr(c, callee->left);
-  compile_receiver_property_get(c, callee);
+  bool can_load_intrinsic =
+    c->with_depth == 0 && !c->inherits_eval_env &&
+    resolve_local(c, "Promise", 7) == -1 &&
+    resolve_upvalue(c, "Promise", 7) == -1;
+
+  if (can_load_intrinsic) {
+    emit_op(c, OP_LOAD_STABLE_BUILTIN);
+    emit(c, SV_STABLE_BUILTIN_PROMISE_RESOLVE);
+  } else {
+    compile_expr(c, callee->left);
+    compile_receiver_property_get(c, callee);
+  }
+
   compile_expr(c, node->args.items[0]);
   emit_op(c, OP_CALL_STABLE_BUILTIN);
   emit(c, SV_STABLE_BUILTIN_PROMISE_RESOLVE);

@@ -82,6 +82,7 @@ OP_DEF(  CLOSE_UPVAL,       3,   0,   0, loc)       /* close upvalues >= loc */
 OP_DEF(  GET_GLOBAL,        7,   0,   1, atom)      /* push global[atom] (atom + ic_idx:u16) */
 OP_DEF(  GET_GLOBAL_UNDEF,  7,   0,   1, atom)      /* push undefined if missing (atom + ic_idx:u16) */
 OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
+OP_DEF(  LOAD_STABLE_BUILTIN, 2, 0,   2, u8)        /* push protected receiver + function (kind:u8) */
 
 OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
 OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
@@ -332,6 +333,7 @@ OP_FLAG(CLOSE_UPVAL           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPV
 OP_FLAG(GET_GLOBAL            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_GLOBAL_UNDEF      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(PUT_GLOBAL            , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(LOAD_STABLE_BUILTIN   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(GET_EVAL_GLOBAL       , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_EVAL_GLOBAL_UNDEF , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_EVAL_GLOBAL       , SV_OPF_JIT_ELIGIBLE)

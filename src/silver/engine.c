@@ -1435,6 +1435,16 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_GET_GLOBAL_UNDEF:  { VM_CHECK(sv_op_get_global_undef(vm, js, func, ip));   NEXT(7); }
   L_PUT_GLOBAL:        { VM_CHECK(sv_op_put_global(vm, js, frame, func, ip));  NEXT(5); }
 
+  L_LOAD_STABLE_BUILTIN: {
+    ant_value_t receiver;
+    ant_value_t stable_func = sv_load_stable_builtin(
+      js, (sv_stable_builtin_t)ip[1], &receiver);
+    if (is_err(stable_func)) { sv_err = stable_func; goto sv_throw; }
+    vm->stack[vm->sp++] = receiver;
+    vm->stack[vm->sp++] = stable_func;
+    NEXT(2);
+  }
+
   L_GET_FIELD:     { VM_CHECK(sv_op_get_field(vm, js, func, ip));   NEXT(7); }
   L_GET_FIELD2:    { VM_CHECK(sv_op_get_field2(vm, js, func, ip));  NEXT(7); }
   L_PUT_FIELD:     { VM_CHECK(sv_op_put_field(vm, js, func, ip));   NEXT(7); }

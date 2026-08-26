@@ -2795,6 +2795,8 @@ static void js_init_intern_cache(ant_t *js) {
   js->intern.exec = intern_string("exec", 4);
   js->intern.replace = intern_string("replace", 7);
   js->intern.constructor = intern_string("constructor", 11);
+  js->promise_intern.promise = intern_string("Promise", 7);
+  js->promise_intern.resolve = intern_string("resolve", 7);
   js->intern.then = intern_string("then", 4);
   js->intern.name = intern_string("name", 4);
   js->intern.message = intern_string("message", 7);
@@ -12916,23 +12918,27 @@ static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs
   
   if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
   
-  double d_start = tod(args[0]);
+  double d_start = js_to_number(js, args[0]);
+  if (isnan(d_start)) d_start = 0;
+  else d_start = trunc(d_start);
+
   ant_offset_t start;
-  if (d_start < 0) {
+  if (d_start <= -(double)utf16_len) {
+    start = 0;
+  } else if (d_start < 0) {
     start = (ant_offset_t)((double)utf16_len + d_start);
-    if ((int)start < 0) start = 0;
+  } else if (d_start >= (double)utf16_len) {
+    start = (ant_offset_t)utf16_len;
   } else {
     start = (ant_offset_t)d_start;
   }
-  if (start > (ant_offset_t)utf16_len) start = (ant_offset_t)utf16_len;
   
   ant_offset_t len = (ant_offset_t)utf16_len - start;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double d = tod(args[1]);
-    if (d < 0) d = 0;
-    len = (ant_offset_t)d;
+  if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
+    double d = js_to_number(js, args[1]);
+    if (isnan(d) || d <= 0) len = 0;
+    else if (d < (double)len) len = (ant_offset_t)d;
   }
-  if (start + len > (ant_offset_t)utf16_len) len = (ant_offset_t)utf16_len - start;
   
   return js_mkstr_utf16_range(js, str_ptr, byte_len, start, start + len);
 }
@@ -18593,6 +18599,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->sym.boolean_proto = boolean_proto;
   js->sym.promise_ctor = p_ctor_func;
   js->sym.promise_proto = promise_proto;
+  js->promise_resolve_lookup_protector_invalid = false;
   js->owns_mem = false;
   js->max_size = 0;
   
