@@ -7,6 +7,7 @@ OP_FMT(i16)
 OP_FMT(u32)
 OP_FMT(i32)
 OP_FMT(u8_u8)
+OP_FMT(u8_u16)
 OP_FMT(atom)
 OP_FMT(atom_u8)
 OP_FMT(label)
@@ -81,6 +82,7 @@ OP_DEF(  CLOSE_UPVAL,       3,   0,   0, loc)       /* close upvalues >= loc */
 OP_DEF(  GET_GLOBAL,        7,   0,   1, atom)      /* push global[atom] (atom + ic_idx:u16) */
 OP_DEF(  GET_GLOBAL_UNDEF,  7,   0,   1, atom)      /* push undefined if missing (atom + ic_idx:u16) */
 OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
+OP_DEF(  LOAD_STABLE_BUILTIN, 2, 0,   2, u8)        /* push protected receiver + function (kind:u8) */
 
 OP_DEF(  GET_EVAL_GLOBAL,       7,   0,   1, atom)  /* resolve through direct-eval environment */
 OP_DEF(  GET_EVAL_GLOBAL_UNDEF, 7,   0,   1, atom)  /* eval lookup, undefined if missing */
@@ -175,6 +177,7 @@ OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> resu
 OP_DEF(  CALL_SUPER,        3,   3,   1, npop)      /* this super new.target args... -> this */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
+OP_DEF(  CALL_STABLE_BUILTIN, 4, 2,   1, u8_u16)    /* this func args... -> result (kind:u8 argc:u16) */
 OP_DEF(  CALL_CALL,         3,   1,   1, u8_u8)     /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
 OP_DEF(  CALL_CALL_SLOT,    3,   2,   1, loc)       /* X a -> X(a)(slot); slot read after X on fallback */
 OP_DEF(  RE_LITERAL_EXEC,   1,   3,   1, none)      /* pattern flags arg -> exec result */
@@ -330,6 +333,7 @@ OP_FLAG(CLOSE_UPVAL           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPV
 OP_FLAG(GET_GLOBAL            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_GLOBAL_UNDEF      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(PUT_GLOBAL            , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(LOAD_STABLE_BUILTIN   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(GET_EVAL_GLOBAL       , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_EVAL_GLOBAL_UNDEF , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(PUT_EVAL_GLOBAL       , SV_OPF_JIT_ELIGIBLE)
@@ -414,6 +418,7 @@ OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(CALL_SUPER            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_STABLE_BUILTIN   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_CALL_SLOT        , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(TAIL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS | SV_OPF_JIT_INLINE_ARGC)

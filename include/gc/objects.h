@@ -13,6 +13,8 @@ uint64_t gc_get_epoch(void);
 bool gc_obj_is_marked(const ant_object_t *obj);
 
 void gc_mark_value(ant_t *js, ant_value_t v);
+void gc_mark_closure(ant_t *js, sv_closure_t *c);
+void gc_mark_coroutine(ant_t *js, coroutine_t *coro);
 void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count);
 void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size);
 

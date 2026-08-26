@@ -99,6 +99,16 @@ ant_value_t jit_helper_call_array_includes(
   ant_value_t *args, int argc
 );
 
+ant_value_t jit_helper_call_stable_builtin(
+  sv_vm_t *vm, ant_t *js, int kind,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc
+);
+
+ant_value_t jit_helper_load_stable_builtin(
+  ant_t *js, int kind, ant_value_t *receiver_out
+);
+
 ant_value_t jit_helper_apply(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,

@@ -17,6 +17,11 @@ typedef struct {
   ant_value_t value;
 } sv_await_result_t;
 
+static inline bool sv_await_type_is_primitive(ant_value_type_t type) {
+  return type == kTypeUndefined || type == kTypeNull ||
+    ((T_FLAG_FIND(type) & T_BOXABLE_PRIMITIVE_MASK) != 0);
+}
+
 static inline void sv_async_link_activation(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
   coro->active_parent = js->active_async_coro;
@@ -253,29 +258,53 @@ static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value
     .value = js_mkundef(),
   };
 
-  value = js_promise_assimilate_awaitable(js, value);
-  if (is_err(value)) {
-    out.state = SV_AWAIT_ERROR;
-    out.value = value;
-    return out;
-  }
-  if (vtype(value) != kTypePromise) {
-    out.value = value;
-    return out;
-  }
+  coroutine_t *coro = NULL;
+  ant_value_type_t value_type = vtype(value);
+  if (
+    value_type != kTypePromise &&
+    sv_await_type_is_primitive(value_type)
+  ) {
+    coro = sv_async_active_coro(js);
+    if (!coro) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = js_mkerr(js, "await can only be used inside async functions");
+      return out;
+    }
 
-  coroutine_t *coro = sv_async_active_coro(js);
-  if (!coro) {
-    out.state = SV_AWAIT_ERROR;
-    out.value = js_mkerr(js, "await can only be used inside async functions");
-    return out;
-  }
+    if (!queue_await_resume_job(coro, value)) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = js_mkerr(js, "out of memory queuing await resume");
+      return out;
+    }
 
-  js_await_result_t await_result = js_promise_await_coroutine(js, value, coro);
-  if (await_result.state == JS_AWAIT_ERROR) {
-    out.state = SV_AWAIT_ERROR;
-    out.value = js_throw(js, await_result.value);
-    return out;
+    coro->awaited_promise = js_mkundef();
+    coro->await_registered = true;
+    coroutine_hold(coro, CORO_HOLD_AWAIT);
+  } else {
+    value = js_promise_assimilate_awaitable(js, value);
+    if (is_err(value)) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = value;
+      return out;
+    }
+    if (vtype(value) != kTypePromise) {
+      out.value = value;
+      return out;
+    }
+
+    coro = sv_async_active_coro(js);
+    if (!coro) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = js_mkerr(js, "await can only be used inside async functions");
+      return out;
+    }
+
+    js_await_result_t await_result = js_promise_await_coroutine(js, value, coro);
+    if (await_result.state == JS_AWAIT_ERROR) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = js_throw(js, await_result.value);
+      return out;
+    }
   }
 
   int entry_fp = vm->suspended_entry_fp;

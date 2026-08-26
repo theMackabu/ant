@@ -57,14 +57,12 @@ static inline bool gc_get_stack_bounds(
   return true;
 }
 
+// TODO: move to isolate
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
 static gc_str_mark_fn g_str_mark = NULL;
 
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
-
-static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
-static void gc_mark_closure(ant_t *js, sv_closure_t *c);
 
 static uint64_t gc_epoch = 0;
 static uint8_t gc_obj_epoch = 0;
@@ -419,7 +417,7 @@ void gc_mark_upvalue_cells(ant_t *js, sv_upvalue_t *const *cells, uint32_t count
   }
 }
 
-static void gc_mark_closure(ant_t *js, sv_closure_t *c) {
+void gc_mark_closure(ant_t *js, sv_closure_t *c) {
   if (!c) return;
   if (c->gc_epoch == gc_epoch) return;
   
@@ -735,7 +733,7 @@ static void gc_scan_other_stacks(ant_t *js) {
   }
 }
 
-static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
+void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   if (!c || c->gc_epoch == gc_epoch) return;
   c->gc_epoch = gc_epoch;
   
@@ -800,7 +798,10 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->sym.string_proto);
   gc_mark_value(js, js->sym.number_proto);
   gc_mark_value(js, js->sym.boolean_proto);
+  gc_mark_value(js, js->sym.promise_ctor);
   gc_mark_value(js, js->sym.promise_proto);
+  gc_mark_value(js, js->sym.promise_resolve);
+  gc_mark_value(js, js->sym.promise_then);
   gc_mark_value(js, js->sym.bigint_proto);
   gc_mark_value(js, js->sym.symbol_proto);
   gc_mark_value(js, js->sym.array_values_fn);

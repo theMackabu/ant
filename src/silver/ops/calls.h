@@ -12,6 +12,59 @@ typedef struct {
   ant_value_t *alloc;
 } sv_call_args_t;
 
+static inline ant_value_t sv_load_stable_builtin(
+  ant_t *js, sv_stable_builtin_t kind, ant_value_t *receiver_out
+) {
+  *receiver_out = js_mkundef();
+  if (kind != SV_STABLE_BUILTIN_PROMISE_RESOLVE)
+    return js_mkerr(js, "invalid stable builtin");
+
+  if (!js->promise_resolve_lookup_protector_invalid) {
+    *receiver_out = js->sym.promise_ctor;
+    return js->sym.promise_resolve;
+  }
+
+  if (!lkp_proto(js, js->global, js->intern.promise, 7).obj)
+    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'Promise' is not defined");
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t receiver = js_getprop_fallback(
+    js, js->global, 
+    js->intern.promise
+  );
+
+  GC_ROOT_PIN(js, receiver);
+  if (is_err(receiver)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return receiver;
+  }
+
+  ant_value_t func = js_getprop_fallback(
+    js, receiver, 
+    js->intern.resolve
+  );
+  
+  *receiver_out = receiver;
+  GC_ROOT_RESTORE(js, root_mark);
+
+  return func;
+}
+
+static inline ant_value_t sv_op_call_stable_builtin(
+  sv_vm_t *vm, ant_t *js, sv_stable_builtin_t kind,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc
+) {
+  if (
+    kind == SV_STABLE_BUILTIN_PROMISE_RESOLVE && argc == 1 &&
+    call_this == js->sym.promise_ctor &&
+    call_func == js->sym.promise_resolve
+  ) return js_promise_assimilate_awaitable(js, args[0]);
+
+  return sv_vm_call(
+    vm, js, call_func, call_this, args, argc, NULL, false);
+}
+
 static inline void sv_call_args_reset(sv_call_args_t *a, ant_value_t *args, int argc) {
   a->args = args;
   a->argc = argc;

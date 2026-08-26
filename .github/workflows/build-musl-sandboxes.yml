@@ -70,7 +70,7 @@ jobs:
           pattern: bench-v8-*
           path: bench-v8-results
 
-      - name: Summary
+      - name: Summarize sandbox artifacts
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
           ## Musl sandbox artifacts
@@ -86,18 +86,63 @@ jobs:
           and `ant-kernel-<arch>.img` files.
           SUMMARY
 
+      - name: Generate bench-v8 summary
+        id: bench_v8_summary
+        run: |
+          PLATFORMS=(linux-musl-x64 linux-musl-aarch64)
+          LABELS=(Overall Richards DeltaBlue Crypto RayTrace EarleyBoyer RegExp Splay NavierStokes)
+          FILTERS=(
+            .score
+            .results.Richards
+            .results.DeltaBlue
+            .results.Crypto
+            .results.RayTrace
+            .results.EarleyBoyer
+            .results.RegExp
+            .results.Splay
+            .results.NavierStokes
+          )
+          found=false
+
           {
-            echo
             echo "## bench-v8"
             echo
-            echo "| Platform | Score |"
-            echo "|---|---:|"
-            for platform in linux-musl-x64 linux-musl-aarch64; do
+            printf '| Platform'
+            for label in "${LABELS[@]}"; do
+              printf ' | %s' "$label"
+            done
+            echo ' |'
+
+            printf '|---'
+            for _ in "${LABELS[@]}"; do
+              printf '|---:'
+            done
+            echo '|'
+
+            for platform in "${PLATFORMS[@]}"; do
               result="bench-v8-results/bench-v8-$platform/$platform.json"
-              score="N/A"
+              printf '| `%s`' "$platform"
               if [[ -f "$result" ]]; then
-                score=$(jq -r '.score // "N/A"' "$result")
+                found=true
+                for filter in "${FILTERS[@]}"; do
+                  value=$(jq -r "$filter | if type == \"number\" then . else \"N/A\" end" "$result")
+                  printf ' | %s' "$value"
+                done
+              else
+                for _ in "${LABELS[@]}"; do
+                  printf ' | N/A'
+                done
               fi
-              echo "| \`$platform\` | $score |"
+              echo ' |'
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Consolidate bench-v8 artifacts
+        if: ${{ steps.bench_v8_summary.outputs.found == 'true' }}
+        uses: actions/upload-artifact/merge@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: bench-v8-results
+          pattern: bench-v8-*
+          delete-merged: true

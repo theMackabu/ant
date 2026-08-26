@@ -614,6 +614,13 @@ static inline bool has_module_import_binding(const sv_compiler_t *c) {
   return false;
 }
 
+static inline bool has_active_with_scope(const sv_compiler_t *c) {
+  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (cur->with_depth > 0) return true;
+  }
+  return false;
+}
+
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing;
 }
@@ -670,7 +677,7 @@ static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
     sv_local_t *loc = &c->locals[i];
     if (loc->name_len == len && memcmp(loc->name, name, len) == 0) return i;
   }
-  
+
   return -1;
 }
 
@@ -3329,6 +3336,40 @@ static bool compile_call_array_includes_intrinsic(
   return true;
 }
 
+static bool compile_call_stable_builtin(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count != 1) return false;
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  
+  // TODO: (feat) to be expanded into more builtins as needed
+  if (!is_ident_name(callee->left, "Promise")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "resolve", 7))
+    return false;
+
+  bool can_load_intrinsic =
+    !has_active_with_scope(c) && !c->inherits_eval_env &&
+    resolve_local(c, "Promise", 7) == -1 &&
+    resolve_upvalue(c, "Promise", 7) == -1;
+
+  if (can_load_intrinsic) {
+    emit_op(c, OP_LOAD_STABLE_BUILTIN);
+    emit(c, SV_STABLE_BUILTIN_PROMISE_RESOLVE);
+  } else {
+    compile_expr(c, callee->left);
+    compile_receiver_property_get(c, callee);
+  }
+
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_CALL_STABLE_BUILTIN);
+  emit(c, SV_STABLE_BUILTIN_PROMISE_RESOLVE);
+  emit_u16(c, 1);
+  
+  return true;
+}
+
 static bool regexp_literal_exec_arg_is_simple(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return false;
   switch (node->type) {
@@ -3891,6 +3932,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
 
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_call_stable_builtin(c, node, has_spread))
     return;
 
   if (compile_regexp_literal_exec_intrinsic(c, node, has_spread))
@@ -6946,7 +6990,7 @@ const char *const sv_op_names[OP__COUNT] = {
 
 enum {
   SVF_none, SVF_u8, SVF_i8, SVF_u16, SVF_i16, SVF_u32, SVF_i32,
-  SVF_u8_u8, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
+  SVF_u8_u8, SVF_u8_u16, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
   SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref,
 };
 
@@ -7009,6 +7053,10 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
       break;
     case SVF_u8_u8:
       fprintf(stderr, " [%u], [%u]", func->code[pc + 1], func->code[pc + 2]);
+      break;
+    case SVF_u8_u16:
+      fprintf(stderr, " [%u], [%u]", func->code[pc + 1],
+        sv_get_u16(func->code + pc + 2));
       break;
     case SVF_atom: {
       uint32_t idx = sv_get_u32(func->code + pc + 1);

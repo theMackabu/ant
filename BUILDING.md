@@ -263,8 +263,11 @@ You can install the built binary using:
 maid install
 ```
 
-This copies the binary to the directory of an existing `ant` installation, or
-falls back to `~/.ant/bin/`. It also creates an `antx` symlink.
+This rebuilds `ant` and `ant-runtime` with the full hash of the current commit.
+It copies the runtime to `~/.ant/compile/<commit>/ant-runtime`, where
+`ant compile` can find the matching revision. The CLI is copied to the
+directory of an existing `ant` installation, or falls back to `~/.ant/bin/`.
+The command also creates an `antx` symlink.
 
 Alternatively, copy the binary manually:
 

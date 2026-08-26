@@ -29,6 +29,9 @@ test('slice astral trailing surrogate', '𝄞'.slice(1, 2), '\uDD1E');
 test('slice astral split boundaries', '𝄞x💙'.slice(1, 4), '\uDD1Ex\uD83D');
 test('substr astral leading surrogate', '𝄞'.substr(0, 1), '\uD834');
 test('substr astral trailing surrogate', '𝄞'.substr(1, 1), '\uDD1E');
+test('substr coerces string start', 'abcdef'.substr('2', 3), 'cde');
+test('substr coerces string length', 'abcdef'.substr(2, '3'), 'cde');
+test('substr truncates negative fractional start', 'abcdef'.substr(-1.5), 'f');
 
 let csv = 'apple,banana,cherry';
 let parts = csv.split(',');
