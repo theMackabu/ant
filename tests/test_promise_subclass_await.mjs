@@ -266,6 +266,34 @@ Object.defineProperty(CombinatorPromise, 'resolve', {
   },
 });
 
+const subclassRejectReason = new Error('subclass reject');
+const subclassRejected = CombinatorPromise.reject(subclassRejectReason);
+assertEqual(
+  'Promise.reject constructs receiver capability',
+  subclassRejected.constructedBySubclass,
+  true
+);
+await assertRejectsWith(
+  'Promise.reject uses receiver reject function',
+  subclassRejected,
+  subclassRejectReason
+);
+
+const subclassTryReason = new Error('subclass try rejection');
+const subclassTried = CombinatorPromise.try(() => {
+  throw subclassTryReason;
+});
+assertEqual(
+  'Promise.try rejection constructs receiver capability',
+  subclassTried.constructedBySubclass,
+  true
+);
+await assertRejectsWith(
+  'Promise.try rejection uses receiver reject function',
+  subclassTried,
+  subclassTryReason
+);
+
 const subclassAll = CombinatorPromise.all([1, 2]);
 assertEqual('Promise.all constructs receiver capability', subclassAll.constructedBySubclass, true);
 assertEqual('Promise.all calls receiver resolve per item', (await subclassAll).join(','), '1,2');

@@ -15296,6 +15296,24 @@ static ant_value_t new_promise_capability(
   return js_mkundef();
 }
 
+static ant_value_t promise_call_one(
+  ant_t *js, ant_value_t fn, ant_value_t this_val, ant_value_t value
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, fn);
+  GC_ROOT_PIN(js, this_val);
+  GC_ROOT_PIN(js, value);
+
+  ant_value_t args[] = { value };
+  ant_value_t result = sv_vm_call(
+    js->vm, js, fn, 
+    this_val, args, 1, NULL, false
+  );
+  
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
 static ant_value_t promise_resolve_with_ctor(ant_t *js, ant_value_t ctor, ant_value_t val) {
   if (strict_eq_values(js, ctor, js->sym.promise_ctor)) return js_promise_assimilate_awaitable(js, val);
   if (!js_is_constructor(ctor)) return js_mkerr_typed(js, JS_ERR_TYPE, "Promise.resolve receiver is not a constructor");
@@ -15322,12 +15340,12 @@ static ant_value_t promise_resolve_with_ctor(ant_t *js, ant_value_t ctor, ant_va
   ant_value_t promise = js_mkundef();
   ant_value_t resolve = js_mkundef();
   ant_value_t reject = js_mkundef();
-  
+
   ant_value_t capability_result = new_promise_capability(
-    js, ctor, &promise, 
+    js, ctor, &promise,
     &resolve, &reject
   );
-  
+
   if (is_err(capability_result)) {
     GC_ROOT_RESTORE(js, root_mark);
     return capability_result;
@@ -15356,11 +15374,41 @@ static ant_value_t builtin_Promise_resolve(ant_t *js, ant_value_t *args, int nar
   return promise_resolve_with_ctor(js, js->this_val, val);
 }
 
+static ant_value_t promise_reject_with_ctor(
+  ant_t *js, ant_value_t ctor, ant_value_t val
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, ctor);
+  GC_ROOT_PIN(js, val);
+
+  ant_value_t promise = js_mkundef();
+  ant_value_t resolve = js_mkundef();
+  ant_value_t reject = js_mkundef();
+  
+  ant_value_t capability_result = new_promise_capability(
+    js, ctor, &promise, 
+    &resolve, &reject
+  );
+  
+  if (is_err(capability_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return capability_result;
+  }
+
+  GC_ROOT_PIN(js, promise);
+  GC_ROOT_PIN(js, reject);
+
+  ant_value_t reject_result = promise_call_one(
+    js, reject, js_mkundef(), val
+  );
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return is_err(reject_result) ? reject_result : promise;
+}
+
 static ant_value_t builtin_Promise_reject(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t val = nargs > 0 ? args[0] : js_mkundef();
-  ant_value_t p = js_mkpromise(js);
-  js_reject_promise(js, p, val);
-  return p;
+  return promise_reject_with_ctor(js, js->this_val, val);
 }
 
 static void promise_init_derived_promise(
@@ -15658,22 +15706,6 @@ static ant_value_t builtin_Promise_withResolvers(ant_t *js, ant_value_t *args, i
   js_setprop(js, result, js_mkstr(js, "resolve", 7), res_fn);
   js_setprop(js, result, js_mkstr(js, "reject", 6), rej_fn);
 
-  GC_ROOT_RESTORE(js, root_mark);
-  return result;
-}
-
-static ant_value_t promise_call_one(
-  ant_t *js, ant_value_t fn, ant_value_t this_val, ant_value_t value
-) {
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, fn);
-  GC_ROOT_PIN(js, this_val);
-  GC_ROOT_PIN(js, value);
-
-  ant_value_t args[] = { value };
-  ant_value_t result = sv_vm_call(
-    js->vm, js, fn, this_val, args, 1, NULL, false
-  );
   GC_ROOT_RESTORE(js, root_mark);
   return result;
 }
@@ -16853,18 +16885,18 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
     if (!is_object_type(args[1])) {
       ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The second argument to import() must be an object"));
-      return builtin_Promise_reject(js, &err, 1);
+      return promise_reject_with_ctor(js, js->sym.promise_ctor, err);
     }
 
     attrs = js_get(js, args[1], "with");
     if (is_err(attrs)) {
       ant_value_t reject_val = js_take_thrown(js, attrs);
-      return builtin_Promise_reject(js, &reject_val, 1);
+      return promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
     }
 
     if (vtype(attrs) != kTypeUndefined && !is_object_type(attrs)) {
       ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "The 'with' option must be an object"));
-      return builtin_Promise_reject(js, &err, 1);
+      return promise_reject_with_ctor(js, js->sym.promise_ctor, err);
     }
 
     if (is_object_type(attrs)) {
@@ -16884,12 +16916,12 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
         if (is_err(val)) {
           ant_value_t reject_val = js_take_thrown(js, val);
           GC_ROOT_RESTORE(js, root_mark);
-          return builtin_Promise_reject(js, &reject_val, 1);
+          return promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
         }
         if (vtype(val) != kTypeString) {
           ant_value_t err = js_take_thrown(js, js_mkerr_typed(js, JS_ERR_TYPE, "Import attribute values must be strings"));
           GC_ROOT_RESTORE(js, root_mark);
-          return builtin_Promise_reject(js, &err, 1);
+          return promise_reject_with_ctor(js, js->sym.promise_ctor, err);
         }
       }
       GC_ROOT_RESTORE(js, root_mark);
@@ -16901,7 +16933,7 @@ ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_err(ns)) {
     ant_value_t reject_val = js_take_thrown(js, ns);
-    return builtin_Promise_reject(js, &reject_val, 1);
+    return promise_reject_with_ctor(js, js->sym.promise_ctor, reject_val);
   }
 
   if (vtype(tla_promise) == kTypePromise) {
