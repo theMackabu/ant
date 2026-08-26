@@ -19466,7 +19466,7 @@ static bool js_try_get_len(ant_t *js, ant_value_t obj, const char *key, size_t k
     off = lkp_proto(js, obj, key, key_len);
     if (off.obj) {
       const ant_shape_prop_t *meta = prop_shape_meta(off);
-      if (meta->has_getter) {
+      if (meta && meta->has_getter) {
         *out = call_proto_accessor(
           js, obj, meta->getter, 
           true, NULL, 0, false
