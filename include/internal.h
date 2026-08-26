@@ -139,6 +139,9 @@ struct ant_isolate_t {
 
   uint32_t next_ic_object_identity;
   uint32_t prototype_write_epoch;
+  
+  bool promise_constructor_protector_invalid;
+  bool promise_then_protector_invalid;
 
   ant_shape_t ***ic_shape_ref_slots;
   size_t ic_shape_ref_len;
@@ -175,6 +178,7 @@ struct ant_isolate_t {
     const char *exec;
     const char *replace;
     const char *constructor;
+    const char *then;
     const char *name;
     const char *message;
     const char *done;
@@ -219,6 +223,7 @@ struct ant_isolate_t {
     ant_value_t boolean_proto;
     ant_value_t promise_ctor;
     ant_value_t promise_proto;
+    ant_value_t promise_then;
     ant_value_t bigint_proto;
     ant_value_t symbol_proto;
     ant_value_t array_values_fn;
@@ -410,9 +415,25 @@ static inline void ant_prototype_write_epoch_bump(ant_t *js) {
   }
 }
 
-static inline void ant_prototype_property_write_invalidate(ant_t *js, ant_object_t *holder, const char *key) {
+static inline void ant_property_mutation_invalidate(
+  ant_t *js, ant_object_t *holder, const char *key
+) {
   if (!js || !holder || !key) return;
-  if (key == js->intern.prototype) ant_prototype_write_epoch_bump(js);
+  
+  if (key == js->intern.prototype) {
+    ant_prototype_write_epoch_bump(js);
+    return;
+  }
+
+  bool invalidates_constructor = key == js->intern.constructor;
+  if (!invalidates_constructor && key != js->intern.then) return;
+
+  ant_object_t *promise_proto = is_object_type(js->sym.promise_proto)
+    ? js_obj_ptr(js->sym.promise_proto) : NULL;
+  
+  if (!holder->promise_state && holder != promise_proto) return;
+  if (invalidates_constructor) js->promise_constructor_protector_invalid = true;
+  else js->promise_then_protector_invalid = true;
 }
 
 typedef struct {
