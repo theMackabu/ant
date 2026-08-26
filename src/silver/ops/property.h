@@ -840,7 +840,7 @@ static inline bool sv_try_put_field_fast(
 
   ant_object_prop_set_unchecked(ptr, prop_idx, val);
   gc_write_barrier(js, ptr, val);
-  ant_prototype_property_write_invalidate(js, ptr, a->str);
+  ant_property_mutation_invalidate(js, ptr, a->str);
   if (out_index) *out_index = prop_idx;
   
   return true;
@@ -892,7 +892,7 @@ static inline ant_value_t sv_put_field_cached(
         (prop->attrs & ANT_PROP_ATTR_WRITABLE) != 0) {
       ant_object_prop_set_unchecked(ptr, ic->cached_index, val);
       gc_write_barrier(js, ptr, val);
-      ant_prototype_property_write_invalidate(js, ptr, a->str);
+      ant_property_mutation_invalidate(js, ptr, a->str);
       return val;
     }
   }
@@ -909,7 +909,7 @@ static inline ant_value_t sv_put_field_cached(
       ant_shape_retain(ic->guard.add.to_shape);
       ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
-      ant_prototype_property_write_invalidate(js, ptr, a->str);
+      ant_property_mutation_invalidate(js, ptr, a->str);
       if (ic->guard.add.slot >= ptr->prop_count &&
           !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
         return js_mkerr(js, "oom");
@@ -1092,6 +1092,7 @@ static inline bool sv_try_define_field_fast(
     if (prop->attrs != ANT_PROP_ATTR_DEFAULT) return false;
     ant_object_prop_set_unchecked(ptr, idx, val);
     gc_write_barrier(js, ptr, val);
+    ant_property_mutation_invalidate(js, ptr, interned_key);
     return true;
   }
 
@@ -1118,6 +1119,7 @@ static inline void sv_define_slot(
   if (ptr && !ptr->flags.is_exotic && slot < ptr->prop_count) {
     ant_object_prop_set_unchecked(ptr, slot, val);
     gc_write_barrier(js, ptr, val);
+    ant_property_mutation_invalidate(js, ptr, str);
     return;
   }
   if (!sv_try_define_field_fast(js, obj, str, val))

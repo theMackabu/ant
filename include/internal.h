@@ -33,18 +33,18 @@ static inline bool ant_value_stack_push_with_spill(
 ) {
   if (*sp == *cap) {
     size_t next_cap = *cap * 2u;
-    
+
     ant_value_t *next = *stack == local
       ? (ant_value_t *)malloc(next_cap * sizeof(*next))
       : (ant_value_t *)realloc(*stack, next_cap * sizeof(*next));
-      
+
     if (!next) return false;
     if (*stack == local) memcpy(next, local, *sp * sizeof(*next));
-    
+
     *stack = next;
     *cap = next_cap;
   }
-  
+
   (*stack)[(*sp)++] = value;
   return true;
 }
@@ -65,19 +65,19 @@ static_assert(T_MASK(kTypeObject) == T_FLAG_FIND(kTypeObject));
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
 #define is_special_object(v) ((1u << vtype(v)) & T_SPECIAL_OBJECT_MASK)
 
-static constexpr uint32_t T_SPECIAL_OBJECT_MASK = 
+static constexpr uint32_t T_SPECIAL_OBJECT_MASK =
   T_MASK(kTypeObject, kTypeArray);
-  
-static constexpr uint32_t T_BOXABLE_PRIMITIVE_MASK = 
+
+static constexpr uint32_t T_BOXABLE_PRIMITIVE_MASK =
   T_MASK(kTypeString, kTypeNumber, kTypeBool, kTypeBigInt, kTypeSymbol);
-  
-static constexpr uint32_t T_NEEDS_PROTO_FALLBACK = 
+
+static constexpr uint32_t T_NEEDS_PROTO_FALLBACK =
   T_MASK(kTypeFunction, kTypeArray, kTypePromise, kTypeGenerator);
-  
-static constexpr uint32_t T_OBJECT_MASK = 
+
+static constexpr uint32_t T_OBJECT_MASK =
   T_MASK(kTypeObject, kTypeArray, kTypeFunction, kTypePromise, kTypeGenerator);
-  
-static constexpr uint32_t T_NON_NUMERIC_MASK = 
+
+static constexpr uint32_t T_NON_NUMERIC_MASK =
   T_MASK(kTypeString, kTypeArray, kTypeFunction, kTypeBuiltin, kTypeObject, kTypeGenerator);
 
 static_assert(
@@ -139,38 +139,38 @@ struct ant_isolate_t {
 
   uint32_t next_ic_object_identity;
   uint32_t prototype_write_epoch;
-  
+
   bool promise_constructor_protector_invalid;
   bool promise_then_protector_invalid;
 
   ant_shape_t ***ic_shape_ref_slots;
   size_t ic_shape_ref_len;
   size_t ic_shape_ref_cap;
-  
+
   ant_value_t **c_roots;
   size_t c_root_count;
   size_t c_root_cap;
-  
+
   struct gc_temp_root_scope *temp_roots;
   struct coroutine *retired_coroutines;
 
   const char *code;
   const char *filename;
-  
+
   ant_value_t Ant;
   ant_value_t global;
   ant_value_t this_val;
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
-  
+
   struct {
     ant_value_t hooks;
     ant_value_t import_meta;
     ant_esm_state_t *state;
     ant_module_t *module_stack;
   } esm;
-  
+
   struct {
     const char *length;
     const char *buffer;
@@ -189,7 +189,7 @@ struct ant_isolate_t {
     const char *callee;
     const char *idx[10];
   } intern;
-  
+
   ant_value_t thrown_value;
   ant_value_t thrown_stack;
 
@@ -246,7 +246,7 @@ struct ant_isolate_t {
     #define ANT_MUTABLE_ROOT_ARR(name, n) ant_value_t name[n];
     #include "isolate_values.h"
   } mutable_roots;
-  
+
   ant_offset_t max_size;
   js_error_site_t errsite;
   double perf_time_origin_ms;
@@ -264,7 +264,7 @@ struct ant_isolate_t {
     size_t upvalues;
     size_t arrays;
   } alloc_bytes;
-  
+
   size_t gc_last_live;
   size_t gc_pool_alloc;
   size_t gc_closure_alloc;
@@ -275,7 +275,7 @@ struct ant_isolate_t {
 
   ant_object_t *objects_old;
   ant_object_t *pending_promises;
-  
+
   size_t old_live_count;
   size_t minor_gc_count;
 
@@ -302,11 +302,11 @@ struct ant_isolate_t {
   struct sv_closure **young_closures;
   size_t young_closure_len;
   size_t young_closure_cap;
-  
+
   struct sv_upvalue **young_upvalues;
   size_t young_upvalue_len;
   size_t young_upvalue_cap;
-  
+
   size_t young_closure_trigger;
   size_t gc_closure_promoted_since_major;
 
@@ -318,25 +318,25 @@ struct ant_isolate_t {
     ant_object_t **collections;
     size_t collection_len;
     size_t collection_cap;
-    
+
     ant_value_t *kept_alive;
     size_t kept_alive_len;
     size_t kept_alive_cap;
-    
+
     struct {
       ant_object_t *owner;
       ant_value_t key;
       ant_value_t value;
       uint8_t kind;
     } *minor_edges;
-    
+
     size_t minor_edge_len;
     size_t minor_edge_cap;
-    
+
     void *pending;
     void (*mark)(ant_t *js, ant_value_t value);
     bool (*key_alive)(ant_t *js, ant_value_t key);
-    
+
     bool registry_overflow;
     bool minor_edge_overflow;
     bool pending_active;
@@ -346,7 +346,7 @@ struct ant_isolate_t {
 
   uint32_t jit_active_depth;
   uint32_t vm_exec_depth;
-  
+
   bool microtasks_draining;
   struct coroutine *active_async_coro;
 
@@ -391,17 +391,17 @@ struct ant_isolate_t {
   struct {
     ant_pool_t young;
     ant_pool_t old;
-    
+
     size_t young_alloc;
     struct gc_rope_mark *marks;
-    
+
     size_t mark_count;
     size_t mark_cap;
-    
+
     uint32_t mark_epoch;
     bool minor_marking;
     bool conservative_marking;
-    
+
     ant_string_builder_t **remembered_builders;
     size_t remembered_builder_len;
     size_t remembered_builder_cap;
@@ -419,7 +419,7 @@ static inline void ant_property_mutation_invalidate(
   ant_t *js, ant_object_t *holder, const char *key
 ) {
   if (!js || !holder || !key) return;
-  
+
   if (key == js->intern.prototype) {
     ant_prototype_write_epoch_bump(js);
     return;
@@ -430,7 +430,7 @@ static inline void ant_property_mutation_invalidate(
 
   ant_object_t *promise_proto = is_object_type(js->sym.promise_proto)
     ? js_obj_ptr(js->sym.promise_proto) : NULL;
-  
+
   if (!holder->promise_state && holder != promise_proto) return;
   if (invalidates_constructor) js->promise_constructor_protector_invalid = true;
   else js->promise_then_protector_invalid = true;
@@ -451,15 +451,15 @@ typedef enum {
   PROP_META_SYMBOL = 1,
 } prop_meta_key_t;
 
-static inline bool is_err(ant_value_t v) { 
+static inline bool is_err(ant_value_t v) {
   return vtype(v) == kTypeError;
 }
 
-static inline bool is_null(ant_value_t v) { 
+static inline bool is_null(ant_value_t v) {
   return vtype(v) == kTypeNull;
 }
 
-static inline bool is_undefined(ant_value_t v) { 
+static inline bool is_undefined(ant_value_t v) {
   return vtype(v) == kTypeUndefined;
 }
 
@@ -469,7 +469,7 @@ static inline bool is_empty_slot(ant_value_t v) {
 
 static inline void js_cstk_refresh_floor(ant_t *js) {
   uintptr_t base = (uintptr_t)js->cstk.base;
-  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit) 
+  js->cstk.floor = (js->cstk.base != NULL && js->cstk.limit != 0 && base > js->cstk.limit)
     ? (void *)(base - js->cstk.limit) : NULL;
 }
 
@@ -634,13 +634,13 @@ void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
 
 bool lookup_prop_meta(
   ant_t *js, ant_value_t cur_obj,
-  prop_meta_key_t key_kind, 
+  prop_meta_key_t key_kind,
   const char *key, size_t klen,
   ant_offset_t sym_off, prop_meta_t *out
 );
 
 const char *get_class_name(
-  ant_t *js, ant_value_t obj, 
+  ant_t *js, ant_value_t obj,
   ant_offset_t *out_len, const char *skip
 );
 
@@ -744,7 +744,7 @@ static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const
 static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
   const char *interned = intern_string(name, len);
   if (!interned) return js_mkerr(js, "oom");
-  
+
   return mkprop_interned(
     js, obj, interned, fn,
     ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE

@@ -1737,6 +1737,49 @@ static void mir_emit_string_concat_fastpath(
   MIR_append_insn(ctx, fn, done);
 }
 
+static void mir_emit_promise_protector_invalidation(
+  MIR_context_t ctx, MIR_item_t fn, ant_t *js,
+  sv_atom_t *atom, int bc_off, uint16_t ic_idx,
+  MIR_reg_t r_js, MIR_reg_t obj_ptr
+) {
+  size_t protector_offset;
+  if (atom->str == js->intern.constructor)
+    protector_offset = offsetof(ant_t, promise_constructor_protector_invalid);
+  else if (atom->str == js->intern.then)
+    protector_offset = offsetof(ant_t, promise_then_protector_invalid);
+  else return;
+
+  char state_name[48];
+  snprintf(
+    state_name, sizeof(state_name), "pf_ps_%d_%u",
+    bc_off, (unsigned)ic_idx
+  );
+  MIR_reg_t promise_state = MIR_new_func_reg(
+    ctx, fn->u.func, MIR_T_I64, state_name
+  );
+  MIR_label_t invalidate = MIR_new_label(ctx);
+  MIR_label_t done = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, promise_state),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(ant_object_t, promise_state), obj_ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, invalidate),
+      MIR_new_reg_op(ctx, promise_state), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, obj_ptr),
+      MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)js_obj_ptr(js->sym.promise_proto))));
+  MIR_append_insn(ctx, fn, invalidate);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)protector_offset, r_js, 0, 1),
+      MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn, done);
+}
+
 static bool mir_emit_put_field_ic_fastpath(
   MIR_context_t ctx, MIR_item_t fn, ant_t *js,
   sv_func_t *func, int bc_off, uint16_t ic_idx, sv_atom_t *atom,
@@ -1937,6 +1980,9 @@ static bool mir_emit_put_field_ic_fastpath(
       MIR_new_reg_op(ctx, r_js),
       MIR_new_reg_op(ctx, optr)));
   MIR_append_insn(ctx, fn, done);
+  mir_emit_promise_protector_invalidation(
+    ctx, fn, js, atom, bc_off, ic_idx, r_js, optr
+  );
   return true;
 }
 

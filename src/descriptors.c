@@ -46,7 +46,7 @@ static bool ensure_added_shape_slot_storage(ant_object_t *ptr, uint32_t slot) {
   if (!ptr || !ptr->shape) return false;
   if (!js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return false;
   if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return false;
-  
+
   return true;
 }
 
@@ -264,24 +264,24 @@ static void apply_registry_desc_update(
 
 void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_descriptor expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   ant_shape_prop_t *prop = ensure_string_shape_prop(js, obj, key, klen);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, true,
       false, false, js_mkundef(),
       false, false, js_mkundef()
     );
-    
+
     ant_ic_epoch_bump();
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_desc(js, obj, key, klen);
-  
+
   apply_registry_desc_update(
     entry, flags, true,
     false, false, js_mkundef(),
@@ -291,25 +291,25 @@ void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen,
 
 void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_descriptor expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj) || vtype(sym) != kTypeSymbol) return;
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, true,
       false, false, js_mkundef(),
       false, false, js_mkundef()
     );
-    
+
     ant_ic_epoch_bump();
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
-  
+
   apply_registry_desc_update(
     entry, flags, true,
     false, false, js_mkundef(),
@@ -319,31 +319,31 @@ void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flag
 
 void js_set_getter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_getter_desc expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   ant_shape_prop_t *prop = ensure_string_shape_prop(js, obj, key, klen);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, false,
       true, true, getter,
       false, false, js_mkundef()
     );
-    
+
     ant_property_mutation_invalidate(
-      js, js_obj_ptr(obj), 
+      js, js_obj_ptr(obj),
       prop->key.interned
     );
-    
+
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), getter);
-    
+
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_desc(js, obj, key, klen);
-  
+
   apply_registry_desc_update(
     entry, flags, false,
     true, true, getter,
@@ -353,31 +353,31 @@ void js_set_getter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen
 
 void js_set_setter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t setter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_setter_desc expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   ant_shape_prop_t *prop = ensure_string_shape_prop(js, obj, key, klen);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, false,
       false, false, js_mkundef(),
       true, true, setter
     );
-    
+
     ant_property_mutation_invalidate(
-      js, js_obj_ptr(obj), 
+      js, js_obj_ptr(obj),
       prop->key.interned
     );
-    
+
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), setter);
-    
+
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_desc(js, obj, key, klen);
-  
+
   apply_registry_desc_update(
     entry, flags, false,
     false, false, js_mkundef(),
@@ -387,32 +387,32 @@ void js_set_setter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen
 
 void js_set_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, ant_value_t setter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_accessor_desc expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   ant_shape_prop_t *prop = ensure_string_shape_prop(js, obj, key, klen);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, false,
       true, true, getter,
       true, true, setter
     );
-    
+
     ant_property_mutation_invalidate(
       js, js_obj_ptr(obj),
       prop->key.interned
     );
-    
+
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), getter);
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), setter);
-    
+
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_desc(js, obj, key, klen);
-  
+
   apply_registry_desc_update(
     entry, flags, false,
     true, true, getter,
@@ -422,29 +422,29 @@ void js_set_accessor_desc(ant_t *js, ant_value_t obj, const char *key, size_t kl
 
 void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t getter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_getter_desc expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   if (vtype(sym) != kTypeSymbol) return;
-  
+
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, false,
       true, true, getter,
       false, false, js_mkundef()
     );
-    
+
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), getter);
-    
+
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
-  
+
   apply_registry_desc_update(
     entry, flags, false,
     true, true, getter,
@@ -454,29 +454,29 @@ void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
 
 void js_set_sym_setter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t setter, int flags) {
   assert(is_canonical_desc_obj(obj) && "js_set_sym_setter_desc expects js_as_obj(...)");
-  
+
   if (!is_canonical_desc_obj(obj)) return;
   if (vtype(sym) != kTypeSymbol) return;
-  
+
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   ant_shape_prop_t *prop = ensure_symbol_shape_prop(js, obj, sym_off);
-  
+
   if (prop) {
     apply_shape_desc_update(
       prop, flags, false,
       false, false, js_mkundef(),
       true, true, setter
     );
-    
+
     ant_ic_epoch_bump();
     gc_write_barrier(js, js_obj_ptr(js_as_obj(obj)), setter);
-    
+
     return;
   }
 
   if (!desc_registry_allowed(obj)) return;
   descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
-  
+
   apply_registry_desc_update(
     entry, flags, false,
     false, false, js_mkundef(),
