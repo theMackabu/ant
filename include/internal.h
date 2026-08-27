@@ -129,6 +129,8 @@ struct ant_isolate_t {
 
   ant_object_t *objects;
   ant_object_t *permanent_objects;
+  
+  descriptor_entry_t *desc_registry;
   ant_process_state_t *process_state;
   ant_events_state_t *events_state;
   ant_regex_state_t *regex_state;
@@ -756,8 +758,8 @@ static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
 }
 
-static inline bool lookup_symbol_prop_meta(ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {
-  return lookup_prop_meta(NULL, cur_obj, PROP_META_SYMBOL, NULL, 0, sym_off, out);
+static inline bool lookup_symbol_prop_meta(ant_t *js, ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {
+  return lookup_prop_meta(js, cur_obj, PROP_META_SYMBOL, NULL, 0, sym_off, out);
 }
 
 static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const char *key, size_t klen, prop_meta_t *out) {

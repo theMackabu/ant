@@ -8,9 +8,6 @@
 #include <assert.h>
 #include <string.h>
 
-// TODO: move to isolate
-descriptor_entry_t *desc_registry = NULL;
-
 static descriptor_entry_t arr_length_desc = {
   .key = 0,
   .obj_off = 0,
@@ -78,43 +75,43 @@ uint64_t make_sym_desc_key(ant_value_t obj, ant_offset_t sym_off) {
   return h;
 }
 
-static descriptor_entry_t *registry_lookup_desc(ant_value_t obj, const char *key, size_t klen) {
+static descriptor_entry_t *registry_lookup_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
   descriptor_entry_t *entry = NULL;
   uint64_t desc_key = make_desc_key(obj, key, klen);
-  HASH_FIND(hh, desc_registry, &desc_key, sizeof(uint64_t), entry);
+  HASH_FIND(hh, js->desc_registry, &desc_key, sizeof(uint64_t), entry);
   return entry;
 }
 
-static descriptor_entry_t *registry_lookup_sym_desc(ant_value_t obj, ant_offset_t sym_off) {
+static descriptor_entry_t *registry_lookup_sym_desc(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   descriptor_entry_t *entry = NULL;
   uint64_t k = make_sym_desc_key(obj, sym_off);
-  HASH_FIND(hh, desc_registry, &k, sizeof(uint64_t), entry);
+  HASH_FIND(hh, js->desc_registry, &k, sizeof(uint64_t), entry);
   return entry;
 }
 
-descriptor_entry_t *lookup_descriptor(ant_value_t obj, const char *key, size_t klen) {
-  assert(is_canonical_desc_obj(obj) && "lookup_descriptor expects js_as_obj(...)");
-  if (!is_canonical_desc_obj(obj)) return NULL;
+descriptor_entry_t *lookup_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
+  assert(js && is_canonical_desc_obj(obj) && "lookup_descriptor expects an isolate and js_as_obj(...)");
+  if (!js || !is_canonical_desc_obj(obj)) return NULL;
 
   ant_object_t *ptr = js_obj_ptr(obj);
   if (klen == 6 && memcmp(key, "length", 6) == 0 && ptr && ptr->type_tag == kTypeArray)
     return &arr_length_desc;
 
   if (!is_exotic_desc_obj(obj)) return NULL;
-  return registry_lookup_desc(obj, key, klen);
+  return registry_lookup_desc(js, obj, key, klen);
 }
 
-descriptor_entry_t *lookup_sym_descriptor(ant_value_t obj, ant_offset_t sym_off) {
-  assert(is_canonical_desc_obj(obj) && "lookup_sym_descriptor expects js_as_obj(...)");
-  if (!is_canonical_desc_obj(obj)) return NULL;
+descriptor_entry_t *lookup_sym_descriptor(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
+  assert(js && is_canonical_desc_obj(obj) && "lookup_sym_descriptor expects an isolate and js_as_obj(...)");
+  if (!js || !is_canonical_desc_obj(obj)) return NULL;
 
   if (!is_exotic_desc_obj(obj)) return NULL;
-  return registry_lookup_sym_desc(obj, sym_off);
+  return registry_lookup_sym_desc(js, obj, sym_off);
 }
 
 static descriptor_entry_t *get_or_create_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen) {
   if (!desc_registry_allowed(obj)) return NULL;
-  descriptor_entry_t *entry = registry_lookup_desc(obj, key, klen);
+  descriptor_entry_t *entry = registry_lookup_desc(js, obj, key, klen);
   if (entry) return entry;
 
   entry = (descriptor_entry_t *)calloc(1, sizeof(descriptor_entry_t) + klen + 1);
@@ -134,13 +131,13 @@ static descriptor_entry_t *get_or_create_desc(ant_t *js, ant_value_t obj, const 
   entry->getter = js_mkundef();
   entry->setter = js_mkundef();
 
-  HASH_ADD(hh, desc_registry, key, sizeof(uint64_t), entry);
+  HASH_ADD(hh, js->desc_registry, key, sizeof(uint64_t), entry);
   return entry;
 }
 
-static descriptor_entry_t *get_or_create_sym_desc(ant_value_t obj, ant_offset_t sym_off) {
+static descriptor_entry_t *get_or_create_sym_desc(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   if (!desc_registry_allowed(obj)) return NULL;
-  descriptor_entry_t *entry = registry_lookup_sym_desc(obj, sym_off);
+  descriptor_entry_t *entry = registry_lookup_sym_desc(js, obj, sym_off);
   if (entry) return entry;
 
   entry = (descriptor_entry_t *)calloc(1, sizeof(descriptor_entry_t));
@@ -157,7 +154,7 @@ static descriptor_entry_t *get_or_create_sym_desc(ant_value_t obj, ant_offset_t 
   entry->getter = js_mkundef();
   entry->setter = js_mkundef();
 
-  HASH_ADD(hh, desc_registry, key, sizeof(uint64_t), entry);
+  HASH_ADD(hh, js->desc_registry, key, sizeof(uint64_t), entry);
   return entry;
 }
 
@@ -309,7 +306,7 @@ void js_set_sym_descriptor(ant_t *js, ant_value_t obj, ant_value_t sym, int flag
   }
 
   if (!desc_registry_allowed(obj)) return;
-  descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
+  descriptor_entry_t *entry = get_or_create_sym_desc(js, obj, sym_off);
 
   apply_registry_desc_update(
     entry, flags, true,
@@ -445,7 +442,7 @@ void js_set_sym_getter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
   }
 
   if (!desc_registry_allowed(obj)) return;
-  descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
+  descriptor_entry_t *entry = get_or_create_sym_desc(js, obj, sym_off);
 
   apply_registry_desc_update(
     entry, flags, false,
@@ -478,11 +475,21 @@ void js_set_sym_setter_desc(ant_t *js, ant_value_t obj, ant_value_t sym, ant_val
   }
 
   if (!desc_registry_allowed(obj)) return;
-  descriptor_entry_t *entry = get_or_create_sym_desc(obj, sym_off);
+  descriptor_entry_t *entry = get_or_create_sym_desc(js, obj, sym_off);
 
   apply_registry_desc_update(
     entry, flags, false,
     false, false, js_mkundef(),
     true, true, setter
   );
+}
+
+void js_descriptor_registry_cleanup(ant_t *js) {
+  if (!js) return;
+
+  descriptor_entry_t *entry, *tmp;
+  HASH_ITER(hh, js->desc_registry, entry, tmp) {
+    HASH_DEL(js->desc_registry, entry);
+    free(entry);
+  }
 }

@@ -347,7 +347,7 @@ static inline bool sv_with_binding_is_unscopable(
         ant_object_t *cur_ptr = js_obj_ptr(cur_obj);
         if (cur_ptr && cur_ptr->flags.is_exotic) saw_exotic = true;
         prop_meta_t meta;
-        if (cur_ptr && cur_ptr->flags.is_exotic && lookup_symbol_prop_meta(cur_obj, sym_off, &meta)) {
+        if (cur_ptr && cur_ptr->flags.is_exotic && lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta)) {
           has_unscopables = true;
           break;
         }

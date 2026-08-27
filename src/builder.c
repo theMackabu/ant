@@ -58,7 +58,7 @@ static bool is_small_object(ant_t *js, ant_value_t obj, int *prop_count) {
   
   if (ptr && ptr->flags.is_exotic) {
     descriptor_entry_t *desc, *tmp;
-    HASH_ITER(hh, desc_registry, desc, tmp) {
+    HASH_ITER(hh, js->desc_registry, desc, tmp) {
       if (desc->obj_off != obj_off) continue;
       if (!desc->enumerable) continue;
       if (!desc->has_getter && !desc->has_setter) continue;
@@ -395,7 +395,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
       
       if (ptr && ptr->flags.is_exotic) {
         prop_meta_t meta;
-        if (lookup_symbol_prop_meta(as_obj, sym_off, &meta) && !meta.enumerable) continue;
+        if (lookup_symbol_prop_meta(js, as_obj, sym_off, &meta) && !meta.enumerable) continue;
       }
       
       ant_value_t sym = mkval(kTypeSymbol, sym_off);
@@ -458,7 +458,7 @@ bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj) {
 
   if (ptr && ptr->flags.is_exotic) {
     descriptor_entry_t *desc, *tmp;
-    HASH_ITER(hh, desc_registry, desc, tmp) {
+    HASH_ITER(hh, js->desc_registry, desc, tmp) {
       if (desc->obj_off != obj_off) continue;
       if (!desc->enumerable) continue;
       if (!desc->has_getter && !desc->has_setter) continue;

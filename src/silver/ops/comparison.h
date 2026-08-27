@@ -303,7 +303,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   
   if (
     lkp_sym(func_obj, has_instance_sym_off).obj ||
-    lookup_sym_descriptor(func_obj, has_instance_sym_off) != NULL
+    lookup_sym_descriptor(js, func_obj, has_instance_sym_off) != NULL
   ) return false;
 
   ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
@@ -313,7 +313,7 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   
   if (is_object_type(func_proto_obj) && (
     lkp_sym(func_proto_obj, has_instance_sym_off).obj ||
-    lookup_sym_descriptor(func_proto_obj, has_instance_sym_off) != NULL
+    lookup_sym_descriptor(js, func_proto_obj, has_instance_sym_off) != NULL
   )) return false;
 
   ant_prop_loc_t proto_off = lkp_interned(func_obj, js->intern.prototype);

@@ -3517,7 +3517,7 @@ bool lookup_prop_meta(
   ant_offset_t sym_off,
   prop_meta_t *out
 ) {
-  if (!out || !is_object_type(cur_obj)) return false;
+  if (!js || !out || !is_object_type(cur_obj)) return false;
   if (key_kind == PROP_META_STRING && !key) return false;
 
   prop_meta_defaults(out);
@@ -3555,15 +3555,13 @@ bool lookup_prop_meta(
 
   if (!cur_ptr->flags.is_exotic) return false;
 
-  descriptor_entry_t *desc = NULL;
-  if (key_kind == PROP_META_SYMBOL) {
-    desc = lookup_sym_descriptor(cur_obj, sym_off);
-  } else if (js) {
-    desc = lookup_descriptor(cur_obj, key, klen);
-  }
+  descriptor_entry_t *desc = key_kind == PROP_META_SYMBOL
+    ? lookup_sym_descriptor(js, cur_obj, sym_off)
+    : lookup_descriptor(js, cur_obj, key, klen);
 
   if (!desc) return false;
   prop_meta_from_desc(out, desc);
+
   return true;
 }
 
@@ -3661,7 +3659,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
     while (is_object_type(cur)) {
       ant_value_t cur_obj = js_as_obj(cur);
       prop_meta_t meta;
-      if (lookup_symbol_prop_meta(cur_obj, sym_off, &meta)) {
+      if (lookup_symbol_prop_meta(js, cur_obj, sym_off, &meta)) {
         if (meta.has_setter) {
           ant_value_t setter = meta.setter;
           if (vtype(setter) == kTypeFunction || vtype(setter) == kTypeBuiltin) {
@@ -3788,7 +3786,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
       }
 
       if (!found_here && cur_ptr->flags.is_exotic) {
-        descriptor_entry_t *desc = lookup_descriptor(cur_obj, key, klen);
+        descriptor_entry_t *desc = lookup_descriptor(js, cur_obj, key, klen);
         if (desc) {
           found_here = true;
           desc_has_getter = desc->has_getter;
@@ -3904,7 +3902,7 @@ ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size
     }
 
     if (!has_desc && ptr && ptr->flags.is_exotic) {
-      descriptor_entry_t *desc = lookup_descriptor(as_obj, key, klen);
+      descriptor_entry_t *desc = lookup_descriptor(js, as_obj, key, klen);
       if (desc) {
         has_desc = true;
         desc_writable = desc->writable;
@@ -4203,7 +4201,7 @@ static uintptr_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, si
     }
 
     if (ptr && ptr->flags.is_exotic) {
-      descriptor_entry_t *desc = lookup_descriptor(current, buf, len);
+      descriptor_entry_t *desc = lookup_descriptor(js, current, buf, len);
       if (desc && desc->has_getter) {
         *getter_out = desc->getter;
         *has_getter_out = true;
@@ -4246,7 +4244,7 @@ static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, si
     }
 
     if (ptr && ptr->flags.is_exotic) {
-      descriptor_entry_t *desc = lookup_descriptor(current, buf, len);
+      descriptor_entry_t *desc = lookup_descriptor(js, current, buf, len);
       if (desc && desc->has_setter) {
         *setter_out = desc->setter;
         *has_setter_out = true;
@@ -5277,7 +5275,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
   }
 
   if (ptr->flags.is_exotic) {
-    descriptor_entry_t *desc = lookup_descriptor(obj, key, len);
+    descriptor_entry_t *desc = lookup_descriptor(js, obj, key, len);
     if (desc && !desc->configurable) {
       if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
       return js_false;
@@ -6894,7 +6892,7 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
     
     bool should_include = (ant_shape_get_attrs(ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
     if (should_include && ptr->flags.is_exotic) {
-      descriptor_entry_t *desc = lookup_descriptor(js_as_obj(obj), key, (size_t)klen);
+      descriptor_entry_t *desc = lookup_descriptor(js, js_as_obj(obj), key, (size_t)klen);
       if (desc) should_include = desc->enumerable;
     }
     if (!should_include) continue;
@@ -6973,12 +6971,12 @@ static bool own_key_is_enumerable(ant_t *js, ant_value_t obj, ant_object_t *ptr,
 
   if (prop->type == ANT_SHAPE_KEY_SYMBOL) {
     prop_meta_t meta;
-    if (lookup_symbol_prop_meta(obj, prop->key.sym_off, &meta)) enumerable = meta.enumerable;
+    if (lookup_symbol_prop_meta(js, obj, prop->key.sym_off, &meta)) enumerable = meta.enumerable;
     return enumerable;
   }
 
   if (ptr->flags.is_exotic) {
-    descriptor_entry_t *desc = lookup_descriptor(js_as_obj(obj), prop->key.interned, intern_length(prop->key.interned));
+    descriptor_entry_t *desc = lookup_descriptor(js, js_as_obj(obj), prop->key.interned, intern_length(prop->key.interned));
     if (desc) enumerable = desc->enumerable;
   }
   return enumerable;
@@ -7225,7 +7223,7 @@ static bool proxy_target_key_is_nonconfigurable(ant_t *js, ant_value_t target, a
     ant_prop_loc_t off = lkp_sym(target, (ant_offset_t)vdata(key));
     if (off.obj && is_nonconfig_prop(off)) return true;
     prop_meta_t meta;
-    return lookup_symbol_prop_meta(js_as_obj(target), (ant_offset_t)vdata(key), &meta) && !meta.configurable;
+    return lookup_symbol_prop_meta(js, js_as_obj(target), (ant_offset_t)vdata(key), &meta) && !meta.configurable;
   }
 
   if (vtype(key) != kTypeString) return false;
@@ -8157,7 +8155,7 @@ static ant_value_t legacy_lookup_accessor(ant_t *js, ant_value_t this_val, ant_v
 
     prop_meta_t meta;
     bool has_meta = (vtype(key_val) == kTypeSymbol)
-      ? lookup_symbol_prop_meta(cur, sym_off, &meta)
+      ? lookup_symbol_prop_meta(js, cur, sym_off, &meta)
       : lookup_string_prop_meta(js, cur, key_str, (size_t)key_len, &meta);
     if (has_meta) {
       if (want_getter) return meta.has_getter ? meta.getter : js_mkundef();
@@ -8238,7 +8236,7 @@ static ant_value_t object_has_own_key(ant_t *js, ant_value_t obj, property_key_v
     ant_prop_loc_t off = lkp_sym(as_obj, sym_off);
     if (off.obj) return mkval(kTypeBool, 1);
     prop_meta_t meta;
-    return mkval(kTypeBool, lookup_symbol_prop_meta(as_obj, sym_off, &meta) ? 1 : 0);
+    return mkval(kTypeBool, lookup_symbol_prop_meta(js, as_obj, sym_off, &meta) ? 1 : 0);
   }
 
   const char *key_str = key->bytes;
@@ -8272,7 +8270,7 @@ static ant_value_t object_has_own_key(ant_t *js, ant_value_t obj, property_key_v
   ant_object_t *ptr = js_obj_ptr(as_obj);
   
   if (ptr && ptr->flags.is_exotic) {
-    descriptor_entry_t *desc = lookup_descriptor(as_obj, key_str, key_len);
+    descriptor_entry_t *desc = lookup_descriptor(js, as_obj, key_str, key_len);
     return mkval(kTypeBool, (desc && (desc->has_getter || desc->has_setter)) ? 1 : 0);
   }
 
@@ -8369,7 +8367,7 @@ static bool define_lookup_existing_meta(
   ant_prop_loc_t existing,
   prop_meta_t *out
 ) {
-  if (sym_key && lookup_symbol_prop_meta(obj, sym_off, out)) return true;
+  if (sym_key && lookup_symbol_prop_meta(js, obj, sym_off, out)) return true;
   if (!sym_key && lookup_string_prop_meta(js, obj, prop_str, (size_t)prop_len, out)) return true;
   if (!existing.obj || !existing.obj->shape) return false;
 
@@ -8996,7 +8994,7 @@ bool js_is_own_enumerable_prop(
   if (key->is_symbol) {
     if (!source_ptr || source_ptr->flags.is_exotic) {
       prop_meta_t meta;
-      return !lookup_symbol_prop_meta(js_as_obj(source), key->sym_off, &meta) || meta.enumerable;
+      return !lookup_symbol_prop_meta(js, js_as_obj(source), key->sym_off, &meta) || meta.enumerable;
     }
     return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
   }
@@ -9004,7 +9002,7 @@ bool js_is_own_enumerable_prop(
   if (!key->str) return false;
 
   if (!source_ptr || source_ptr->flags.is_exotic) {
-    descriptor_entry_t *desc = lookup_descriptor(js_as_obj(source), key->str, key->key_len);
+    descriptor_entry_t *desc = lookup_descriptor(js, js_as_obj(source), key->str, key->key_len);
     return !desc || desc->enumerable;
   }
 
@@ -9560,7 +9558,7 @@ static ant_value_t object_get_own_property_descriptor_keyed(
   ant_offset_t sym_off = is_sym ? (ant_offset_t)vdata(key->js_key) : 0;
   prop_meta_t sym_meta; prop_meta_t str_meta;
   
-  bool has_sym_meta = is_sym ? lookup_symbol_prop_meta(as_obj, sym_off, &sym_meta) : false;
+  bool has_sym_meta = is_sym ? lookup_symbol_prop_meta(js, as_obj, sym_off, &sym_meta) : false;
   bool has_str_meta = is_sym ? false : lookup_string_prop_meta(js, as_obj, key_str, (size_t)key_len, &str_meta);
 
   ant_prop_loc_t prop_off = is_sym ? lkp_sym(as_obj, sym_off) : lkp(js, as_obj, key_str, key_len);
@@ -9918,7 +9916,7 @@ static ant_value_t object_property_is_enumerable_key(
     ant_prop_loc_t off = lkp_sym(as_obj, sym_off);
     if (!off.obj) return mkval(kTypeBool, 0);
     prop_meta_t meta;
-    if (lookup_symbol_prop_meta(as_obj, sym_off, &meta))
+    if (lookup_symbol_prop_meta(js, as_obj, sym_off, &meta))
       return mkval(kTypeBool, meta.enumerable ? 1 : 0);
     return mkval(kTypeBool, 1);
   }
@@ -16677,7 +16675,7 @@ ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
       use_slow_has_instance = true;
     } else if (func_proto_ptr && func_proto_ptr->flags.is_exotic) {
       ant_value_t func_proto_obj = mkref(kTypeObject, func_proto_ptr);
-      if (lookup_sym_descriptor(func_proto_obj, has_instance_sym_off))
+      if (lookup_sym_descriptor(js, func_proto_obj, has_instance_sym_off))
         use_slow_has_instance = true;
     }
   }
@@ -18721,6 +18719,7 @@ void js_destroy(ant_t *js) {
   code_arena_reset();
   cleanup_rpc_module();
   cleanup_lmdb_module();
+  js_descriptor_registry_cleanup(js);
 
   ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
   for (int i = 0; i < 3; i++) for (ant_object_t *obj = lists[i]; obj;) {
@@ -19628,7 +19627,7 @@ ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t recei
     }
 
     if (!handled && cur_ptr && cur_ptr->flags.is_exotic) {
-      descriptor_entry_t *desc = lookup_descriptor(cur_obj, name, key_len);
+      descriptor_entry_t *desc = lookup_descriptor(js, cur_obj, name, key_len);
       if (desc) {
         if (desc->has_getter) {
           ant_value_t getter = desc->getter;
