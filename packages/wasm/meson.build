@@ -106,6 +106,11 @@ add_project_arguments(
   language: ['c', 'cpp'],
 )
 
+add_project_arguments(
+  '-Wno-unused-parameter',
+  language: 'c',
+)
+
 executable('ant', core_sources,
   include_directories: inc,
   dependencies: [

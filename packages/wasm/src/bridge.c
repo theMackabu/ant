@@ -371,7 +371,7 @@ static bool wire_decode_value(
         return false;
 
       GC_ROOT_SAVE(root_mark, js);
-      ant_value_t object = js_mkobj(js);
+      ant_value_t object = js_newobj(js);
       ant_value_t item = js_mkundef();
       GC_ROOT_PIN(js, object);
       GC_ROOT_PIN(js, item);

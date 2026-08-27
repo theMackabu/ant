@@ -383,6 +383,15 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   }
 }
 
+bool js_fire_unhandled_rejection(
+  ant_t *js, ant_value_t promise_val, ant_value_t reason
+) {
+  (void)js;
+  (void)promise_val;
+  (void)reason;
+  return false;
+}
+
 void js_fire_rejection_handled(
   ant_t *js, ant_value_t promise_val, ant_value_t reason
 ) {

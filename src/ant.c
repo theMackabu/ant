@@ -18154,10 +18154,12 @@ static inline bool isolate_arenas_init(ant_t *js) {
 }
 
 static ant_t *isolate_init(void *buf, size_t len) {
+  #if UINTPTR_MAX > 9007199254740991ULL
   ANT_ASSERT(
     (uintptr_t)buf <= ((1ULL << 53) - 1),
     "pointer exceeds 53-bit double-precision integer limit"
   );
+  #endif
   
   ant_t *js = NULL;
   

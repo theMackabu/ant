@@ -5,11 +5,11 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-
 import { readAbi, renderAbiHeader, renderAbiModule } from './abi.mjs';
 
 const WASI_SDK_RELEASE = '34';
 const WASI_SDK_VERSION = '34.0';
+
 const WASI_SDK_ASSETS = {
   'darwin-arm64': ['arm64-macos', '9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9'],
   'darwin-x64': ['x86_64-macos', '87d27fa8adc68dee59bfbf2e22a6d34ef717c34d6bf1d8af2a56fc929d9ce0eb'],
@@ -152,8 +152,7 @@ async function writeCrossFile(sdk) {
       `c = ${compiler('clang')}\n` +
       `cpp = ${compiler('clang++')}\n` +
       `ar = ${mesonString(binary('llvm-ar'))}\n` +
-      `strip = ${mesonString(binary('llvm-strip'))}\n` +
-      `pkg-config = 'false'\n\n` +
+      `strip = ${mesonString(binary('llvm-strip'))}\n\n` +
       `[host_machine]\n` +
       `system = 'wasi'\n` +
       `cpu_family = 'wasm32'\n` +
@@ -185,15 +184,12 @@ const abi = await readAbi();
 await mkdir(generatedDirectory, { recursive: true });
 await writeFile(`${generatedDirectory}/wasm_abi.h`, renderAbiHeader(abi));
 await ensureVendorDirectory();
+
 const sdk = await resolveWasiSdk();
 const crossFile = await writeCrossFile(sdk);
 const configurationStamp = `${buildDirectory}/.ant-wasi-toolchain`;
-const configuration = JSON.stringify({
-  abi,
-  node: process.execPath,
-  sdk,
-  target: 'wasm32-wasip1'
-});
+const configuration = JSON.stringify({ abi, node: process.execPath, sdk, target: 'wasm32-wasip1' });
+
 let configured = false;
 try {
   configured = (await readFile(configurationStamp, 'utf8')) === configuration;
@@ -213,6 +209,7 @@ await rm(distDirectory, { recursive: true, force: true });
 await mkdir(distDirectory, { recursive: true });
 await mkdir(`${distDirectory}/licenses`, { recursive: true });
 await writeFile(`${distDirectory}/abi.js`, renderAbiModule(abi));
+
 await Promise.all([
   cp(new URL('../src/index.js', import.meta.url), new URL('../dist/index.js', import.meta.url)),
   cp(new URL('../src/index.d.ts', import.meta.url), new URL('../dist/index.d.ts', import.meta.url)),
