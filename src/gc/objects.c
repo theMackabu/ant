@@ -18,8 +18,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifndef ANT_WASM_EMBED
 #include <setjmp.h>
 #include <sys/time.h>
+#else
+#include "wasm_embed.h"
+#endif
 #include <utarray.h>
 
 #if defined(__has_feature)
@@ -80,9 +84,13 @@ static_assert(
 );
 
 static uint64_t gc_now_ns(void) {
+#ifdef ANT_WASM_EMBED
+  return (uint64_t)(ant_wasm_now_ms() * 1000000.0);
+#else
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (uint64_t)tv.tv_sec * 1000000000ULL + (uint64_t)tv.tv_usec * 1000ULL;
+#endif
 }
 
 void gc_func_mark_profile_enable(bool enabled) {
@@ -709,8 +717,10 @@ void gc_mark_conservative_range(ant_t *js, const void *ptr, size_t size) {
 
 __attribute__((noinline))
 static void gc_scan_current_stack(ant_t *js) {
+#ifndef ANT_WASM_EMBED
   jmp_buf jb;
   if (setjmp(jb) != 0) return;
+#endif
   
   volatile uint8_t sp_marker = 0;
   uintptr_t lo, hi;

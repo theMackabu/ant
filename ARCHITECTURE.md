@@ -51,6 +51,13 @@ meant to answer "where should this change live?" before anyone starts editing.
 - `meson/` and the root [meson.build](meson.build) describe the build graph,
   dependency setup, and custom code generation targets.
 
+### Embedding packages
+
+- `packages/wasm/` builds the Silver parser, bytecode interpreter, and GC as a
+  `wasm32-wasip1` reactor. Its Ant-owned JavaScript loader supplies the small
+  reviewed WASI/host import set; the CLI, JIT, native modules, and generated
+  Emscripten runtime are outside that target.
+
 ## Tests and Validation
 
 - `tests/` contains focused runtime tests.
@@ -71,6 +78,8 @@ meant to answer "where should this change live?" before anyone starts editing.
   `src/streams/` unless it is only wiring.
 - Build graph changes should prefer `meson/` or `meson.build`; avoid burying
   build logic in ad-hoc shell scripts.
+- Browser and Node embedding changes belong in `packages/wasm/`; keep the C
+  ABI explicit and verify its complete import/export surface during the build.
 
 ## Boundaries To Preserve
 

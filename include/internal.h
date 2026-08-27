@@ -355,6 +355,11 @@ struct ant_isolate_t {
   uint32_t jit_active_depth;
   uint32_t vm_exec_depth;
 
+#ifdef ANT_WASM_EMBED
+  uint32_t wasm_interrupt_ticks;
+  bool wasm_interrupt_enabled;
+#endif
+
   bool microtasks_draining;
   struct coroutine *active_async_coro;
 
@@ -657,6 +662,12 @@ ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
+
+bool js_try_get_own_data_prop(
+  ant_t *js, ant_value_t obj, 
+  const char *key, size_t key_len,
+  ant_value_t *out
+);
 
 bool lookup_prop_meta(
   ant_t *js, ant_value_t cur_obj,

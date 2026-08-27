@@ -7,7 +7,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef _WIN32
+#if defined(ANT_WASM_EMBED)
+#elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
@@ -22,15 +23,14 @@ struct ant_pool_block {
   uint8_t data[];
 };
 
-// TODO: constexpr
-#define ANT_ROPE_FLAG_YOUNG 1u
+static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
 
 static constexpr size_t ANT_POOL_ROPE_BLOCK_SIZE   = 64u * 1024u;
 static constexpr size_t ANT_POOL_SYMBOL_BLOCK_SIZE = 32u * 1024u;
 static constexpr size_t ANT_POOL_BIGINT_BLOCK_SIZE = 64u * 1024u;
 static constexpr size_t ANT_POOL_STRING_BLOCK_SIZE = 128u * 1024u;
 
-static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
+static constexpr uint16_t ANT_ROPE_FLAG_YOUNG = 1u;
 static constexpr uint16_t ANT_ROPE_DEPTH_SATURATED = UINT16_MAX;
 
 typedef struct {
@@ -139,7 +139,9 @@ static inline ant_pool_block_t *pool_block_alloc(size_t cap) {
 }
 
 static inline void pool_block_madvise_free(ant_pool_block_t *block) {
-#ifndef _WIN32
+#if defined(ANT_WASM_EMBED)
+  (void)block;
+#elif !defined(_WIN32)
   const uintptr_t page = 4096;
   uintptr_t start = (uintptr_t)block->data + sizeof(void *);
   uintptr_t aligned = (start + page - 1) & ~(page - 1);

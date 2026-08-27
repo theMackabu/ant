@@ -6,7 +6,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif !defined(ANT_WASM_EMBED)
 #include <pthread.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -14,6 +14,35 @@
 
 uintptr_t ant_cage_base_address = 0;
 size_t ant_cage_reserved_size = 0;
+
+#ifdef ANT_WASM_EMBED
+
+static void *ant_wasm_aligned_alloc(size_t size, size_t align) {
+  if (align < sizeof(void *)) align = sizeof(void *);
+  size_t remainder = size % align;
+  if (remainder) size += align - remainder;
+  return aligned_alloc(align, size);
+}
+
+void *ant_cage_alloc(size_t size, size_t align) {
+  return size ? ant_wasm_aligned_alloc(size, align) : NULL;
+}
+
+void *ant_cage_reserve(size_t size, size_t align) {
+  return size ? ant_wasm_aligned_alloc(size, align) : NULL;
+}
+
+void ant_cage_free(void *ptr, size_t size) {
+  (void)size;
+  free(ptr);
+}
+
+_Noreturn void ant_cage_reject_pointer(const void *ptr) {
+  (void)ptr;
+  __builtin_trap();
+}
+
+#else
 
 typedef struct ant_cage_range {
   size_t offset;
@@ -241,3 +270,5 @@ _Noreturn void ant_cage_reject_pointer(const void *ptr) {
   fprintf(stderr, "ANT FATAL: pointer %p is outside the managed cage\n", ptr);
   abort();
 }
+
+#endif

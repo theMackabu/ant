@@ -7,9 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uthash.h>
+#ifndef ANT_WASM_EMBED
 #include <argtable3.h>
+#endif
 
-#ifdef _WIN32
+#if defined(ANT_WASM_EMBED)
+#define ant_getpid() 0
+#elif defined(_WIN32)
 #include <process.h>
 #define ant_getpid _getpid
 #else
@@ -290,7 +294,12 @@ void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   js->runtime.argc = argc;
   js->runtime.argv = argv;
   js->runtime.pid = (int)ant_getpid();
+#ifdef ANT_WASM_EMBED
+  (void)ls_p;
+  js->runtime.ls_fp = NULL;
+#else
   js->runtime.ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL;
+#endif
 
   js_set(js, global, "onerror", js_mknull());
   js_set_descriptor(js, global, "onerror", 7, JS_DESC_W | JS_DESC_C);

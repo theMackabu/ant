@@ -12,7 +12,8 @@
 #include <limits.h>
 #include <crprintf.h>
 
-#ifdef _WIN32
+#if defined(ANT_WASM_EMBED)
+#elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
@@ -340,7 +341,9 @@ static int error_span_cols_for_line(ant_offset_t src_pos, ant_offset_t span_len,
 }
 
 static int error_terminal_columns(void) {
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  return 120;
+#elif defined(_WIN32)
   HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
   if (h == NULL || h == INVALID_HANDLE_VALUE) h = GetStdHandle(STD_OUTPUT_HANDLE);
   if (h && h != INVALID_HANDLE_VALUE) {
@@ -360,12 +363,14 @@ static int error_terminal_columns(void) {
   }
 #endif
 
+#ifndef ANT_WASM_EMBED
   const char *cols_env = getenv("COLUMNS");
   if (cols_env && *cols_env) {
     char *end = NULL;
     long cols = strtol(cols_env, &end, 10);
     if (end != cols_env && cols > 0 && cols <= INT_MAX) return (int)cols;
   }
+#endif
   return 120;
 }
 

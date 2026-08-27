@@ -161,6 +161,19 @@ function main() {
       addRecommendation(recommendations, 'maid knowledge', 'tooling change touched the repo harness');
     }
 
+    if (filePath.startsWith('packages/wasm/')) {
+      addRecommendation(
+        recommendations,
+        'cd packages/wasm && npm test',
+        'the Clang/WASI package or its embedding contract changed'
+      );
+      addRecommendation(
+        recommendations,
+        'cd packages/wasm && npm pack --dry-run',
+        'the npm package contents should stay self-contained'
+      );
+    }
+
     if (filePath.startsWith('tests/')) {
       addRecommendation(recommendations, 'meson compile -C build', 'tests should run against a fresh binary');
       addRecommendation(recommendations, `./build/ant ${filePath}`, 'a focused regression test changed');

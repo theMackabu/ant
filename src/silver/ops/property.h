@@ -176,6 +176,15 @@ static inline void sv_ic_set_cached_shape(
   );
 }
 
+#ifdef ANT_WASM_EMBED
+static inline uint32_t sv_gf_ic_proto_id(const sv_ic_entry_t *ic) {
+  return ic->wasm32_proto_identity;
+}
+
+static inline void sv_gf_ic_set_proto_id(sv_ic_entry_t *ic, uint32_t id) {
+  ic->wasm32_proto_identity = id;
+}
+#else
 #define SV_GF_IC_PROTO_ID_MASK \
   ((uintptr_t)UINT32_MAX << SV_GF_IC_PROTO_ID_SHIFT)
 
@@ -184,14 +193,15 @@ static_assert(
   "property IC prototype identities require a 64-bit uintptr_t"
 );
 
-static inline uint32_t sv_gf_ic_proto_id(uintptr_t aux) {
-  return (uint32_t)(aux >> SV_GF_IC_PROTO_ID_SHIFT);
+static inline uint32_t sv_gf_ic_proto_id(const sv_ic_entry_t *ic) {
+  return (uint32_t)(ic->cached_aux >> SV_GF_IC_PROTO_ID_SHIFT);
 }
 
 static inline void sv_gf_ic_set_proto_id(sv_ic_entry_t *ic, uint32_t id) {
   ic->cached_aux = (ic->cached_aux & ~SV_GF_IC_PROTO_ID_MASK) |
     ((uintptr_t)id << SV_GF_IC_PROTO_ID_SHIFT);
 }
+#endif
 
 static inline uint32_t sv_ic_object_identity(ant_t *js, ant_object_t *obj) {
   if (!js || !obj) return 0;
@@ -226,7 +236,7 @@ static inline bool sv_ic_try_get_hit(
     if (receiver->proto != ic->guard.receiver_proto) return false;
     if (!is_object_type(receiver->proto)) return false;
     ant_object_t *proto = js_obj_ptr(js_as_obj(receiver->proto));
-    if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic->cached_aux))
+    if (!proto || proto->ic_identity != sv_gf_ic_proto_id(ic))
       return false;
     ant_object_t *holder = ic->cached_holder;
     if (!holder || holder->flags.is_exotic || !holder->shape) return false;

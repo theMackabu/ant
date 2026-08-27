@@ -94,7 +94,9 @@ static inline void pool_stats_add(ant_pool_stats_t *dst, ant_pool_stats_t src) {
 static inline size_t pool_page_size(void) {
   static size_t cached = 0;
   if (cached) return cached;
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  cached = 4096u;
+#elif defined(_WIN32)
   SYSTEM_INFO info;
   GetSystemInfo(&info);
   cached = info.dwPageSize ? (size_t)info.dwPageSize : 4096u;

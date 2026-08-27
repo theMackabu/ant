@@ -26,6 +26,7 @@ Store in-progress execution plans here.
 - [Silver Throughput: bench-v8 and Game of Life](silver-throughput-bench-v8-game-of-life.md)
 - [Stream Property Surface](stream-property-surface.md)
 - [WICG Observable Migration](wicg-observable.md)
+- [WebAssembly Embedding Package](wasm-embedding-package.md)
 
 Recommended sections:
 

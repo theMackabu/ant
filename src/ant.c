@@ -41,7 +41,9 @@
 #include "silver/ops/using.h"
 #include "modules/regex.h"
 
+#ifndef ANT_WASM_EMBED
 #include <uv.h>
+#endif
 #include <assert.h>
 #include <pcre2.h>
 #include <stdio.h>
@@ -51,15 +53,19 @@
 #include <utarray.h>
 #include <uthash.h>
 #include <float.h>
+#ifndef ANT_WASM_EMBED
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
+#endif
 
 #ifdef _WIN32
 #include <sys/stat.h>
 #else
 #include <sys/time.h>
 #include <sys/stat.h>
+#ifndef ANT_WASM_EMBED
 #include <sys/resource.h>
+#endif
 #endif
 
 #include "modules/atomics.h"

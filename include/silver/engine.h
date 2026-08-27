@@ -139,6 +139,10 @@ typedef struct {
   bool cached_is_own;
   uint8_t shape_ref_mask;
   uint32_t prototype_epoch;
+#ifdef ANT_WASM_EMBED
+  uint32_t wasm32_proto_identity;
+  uint8_t wasm32_cacheline_padding[12];
+#endif
 } sv_ic_entry_t;
 
 static_assert(
@@ -647,8 +651,13 @@ typedef struct {
 static_assert(SV_HANDLER_MAX <= UINT16_MAX,
   "frame handler indexes must fit in uint16_t");
 
+#ifdef ANT_WASM_EMBED
+#define SV_FRAMES_HARD_MAX 16384
+#define SV_STACK_HARD_MAX  131072
+#else
 #define SV_FRAMES_HARD_MAX 65536
 #define SV_STACK_HARD_MAX  524288
+#endif
 
 struct sv_vm {
   ant_t *js;

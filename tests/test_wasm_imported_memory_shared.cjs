@@ -17,6 +17,21 @@ const instance = new WebAssembly.Instance(new WebAssembly.Module(bytes), {
   env: { memory },
 });
 
+const widerImportMaximum = bytes.slice();
+widerImportMaximum[36] = 4;
+new WebAssembly.Instance(new WebAssembly.Module(widerImportMaximum), {
+  env: { memory },
+});
+
+const narrowerImportMaximum = bytes.slice();
+narrowerImportMaximum[36] = 1;
+assert.throws(
+  () => new WebAssembly.Instance(new WebAssembly.Module(narrowerImportMaximum), {
+    env: { memory },
+  }),
+  error => error?.name === 'LinkError',
+);
+
 const view = new DataView(memory.buffer);
 instance.exports.store(0x78563412);
 assert.strictEqual(view.getUint32(0, true), 0x78563412);

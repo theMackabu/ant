@@ -5,8 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef ANT_WASM_EMBED
+static constexpr size_t ANT_CAGE_MAX_SIZE = 1UL << 30;
+static constexpr size_t ANT_CAGE_MIN_SIZE = 1UL << 24;
+#else
 static constexpr size_t ANT_CAGE_MAX_SIZE = 1ULL << 35;
 static constexpr size_t ANT_CAGE_MIN_SIZE = 1ULL << 33;
+#endif
 
 extern uintptr_t ant_cage_base_address;
 extern size_t ant_cage_reserved_size;
@@ -22,19 +27,31 @@ static inline uintptr_t ant_cage_base(void) {
 }
 
 static inline bool ant_cage_contains(const void *ptr) {
+#ifdef ANT_WASM_EMBED
+  return ptr != NULL;
+#else
   uintptr_t value = (uintptr_t)ptr;
   uintptr_t base = ant_cage_base_address;
   return base && value >= base && value - base < ant_cage_reserved_size;
+#endif
 }
 
 static inline uint64_t ant_cage_encode(const void *ptr) {
   if (!ptr) return 0;
+#ifdef ANT_WASM_EMBED
+  return (uint64_t)(uintptr_t)ptr;
+#else
   if (!ant_cage_contains(ptr)) ant_cage_reject_pointer(ptr);
   return (uint64_t)((uintptr_t)ptr - ant_cage_base_address);
+#endif
 }
 
 static inline void *ant_cage_decode(uint64_t offset) {
+#ifdef ANT_WASM_EMBED
+  return (void *)(uintptr_t)offset;
+#else
   return offset ? (void *)(ant_cage_base_address + offset) : NULL;
+#endif
 }
 
 #endif

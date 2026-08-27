@@ -10,7 +10,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif !defined(ANT_WASM_EMBED)
 #include <sys/resource.h>
 #include <pthread.h>
 #endif
@@ -21,7 +21,9 @@
 int sv_user_stack_size_kb = 0;
 
 size_t os_thread_stack_size(void) {
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  return 1024 * 1024;
+#elif defined(_WIN32)
   ULONG_PTR low, high;
   GetCurrentThreadStackLimits(&low, &high);
   return (size_t)(high - low);

@@ -49,6 +49,19 @@ const tableImport = section(2, [
   2,
 ]);
 
+function boundedTableImport(maximum) {
+  return section(2, [
+    1,
+    ...str('env'),
+    ...str('table'),
+    1,
+    0x70,
+    1,
+    2,
+    maximum,
+  ]);
+}
+
 const producer = moduleBytes([
   typeI32,
   importsWithCallbackAndTable,
@@ -65,3 +78,16 @@ const callback = table.get(1);
 table.set(0, callback);
 assert.strictEqual(table.get(0), callback);
 assert.strictEqual(table.get(0)(), 42);
+
+new WebAssembly.Instance(
+  new WebAssembly.Module(moduleBytes([boundedTableImport(4)])),
+  { env: { table: new WebAssembly.Table({ element: 'anyfunc', initial: 2, maximum: 2 }) } },
+);
+
+assert.throws(
+  () => new WebAssembly.Instance(
+    new WebAssembly.Module(moduleBytes([boundedTableImport(2)])),
+    { env: { table: new WebAssembly.Table({ element: 'anyfunc', initial: 2, maximum: 4 }) } },
+  ),
+  error => error?.name === 'LinkError',
+);

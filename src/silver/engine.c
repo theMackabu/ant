@@ -6,7 +6,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif !defined(ANT_WASM_EMBED)
 #include <sys/mman.h>
 #endif
 
@@ -35,6 +35,10 @@
 #include "ops/using.h"
 #include "ops/objects.h"
 #include "ops/coercion.h"
+
+#ifdef ANT_WASM_EMBED
+#include "wasm_embed.h"
+#endif
 
 // TODO: constexpr
 enum {
@@ -78,7 +82,9 @@ void sv_ic_shape_refs_cleanup(ant_t *js) {
 }
 
 static void *sv_vm_reserve_storage(void) {
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  return calloc(1, SV_VM_RESERVE);
+#elif defined(_WIN32)
   return VirtualAlloc(NULL, SV_VM_RESERVE, MEM_RESERVE, PAGE_READWRITE);
 #else
   int flags = MAP_PRIVATE | MAP_ANON;
@@ -97,7 +103,9 @@ static void *sv_vm_reserve_storage(void) {
 
 static void sv_vm_release_storage(void *base) {
   if (!base) return;
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  free(base);
+#elif defined(_WIN32)
   VirtualFree(base, 0, MEM_RELEASE);
 #else
   munmap(base, SV_VM_RESERVE);
@@ -105,7 +113,11 @@ static void sv_vm_release_storage(void *base) {
 }
 
 static bool sv_vm_commit_storage(void *addr, size_t bytes) {
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  (void)addr;
+  (void)bytes;
+  return true;
+#elif defined(_WIN32)
   return VirtualAlloc(addr, bytes, MEM_COMMIT, PAGE_READWRITE) != NULL;
 #else
   (void)addr; (void)bytes;
@@ -1331,7 +1343,19 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (is_err(sv_err)) goto sv_throw; \
   })
 
+#ifdef ANT_WASM_EMBED
+  #define DISPATCH() do {                                                   \
+    if (js->wasm_interrupt_enabled &&                                       \
+        (++js->wasm_interrupt_ticks & 1023u) == 0 &&                        \
+        ant_wasm_should_interrupt(js)) {                                    \
+      vm_result = js_mkerr_typed(js, JS_ERR_RANGE, "Execution timed out");  \
+      goto sv_leave;                                                        \
+    }                                                                       \
+    goto *dispatch[*ip];                                                    \
+  } while (0)
+#else
   #define DISPATCH() goto *dispatch[*ip]
+#endif
   #define NEXT(n)    ({ ip += (n); DISPATCH(); })
 
   #define JIT_OSR_BACK_EDGE() do {                                          \

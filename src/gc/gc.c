@@ -8,6 +8,9 @@
 #include "gc/bigints.h"
 #include "gc/strings.h"
 #include "gc/ropes.h"
+#ifdef ANT_WASM_EMBED
+#include "wasm_embed.h"
+#endif
 
 bool gc_disabled = false;
 
@@ -25,9 +28,13 @@ static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
 
 static uint64_t gc_now_ms(void) {
+#ifdef ANT_WASM_EMBED
+  return (uint64_t)ant_wasm_now_ms();
+#else
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+#endif
 }
 
 static size_t gc_scaled_threshold(size_t base_live, uint32_t growth_x256, size_t floor) {

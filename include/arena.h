@@ -10,7 +10,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif !defined(ANT_WASM_EMBED)
 #include <sys/mman.h>
 #include <unistd.h>
 #include <errno.h>
@@ -27,13 +27,22 @@ typedef struct {
   void *free_list;
 } ant_fixed_arena_t;
 
+#ifdef ANT_WASM_EMBED
+static constexpr size_t ANT_ARENA_MAX         = 8ULL * 1024 * 1024;
+static constexpr size_t ANT_CLOSURE_ARENA_MAX = 4ULL * 1024 * 1024;
+static constexpr size_t ANT_UPVALUE_ARENA_MAX = 2ULL * 1024 * 1024;
+static constexpr size_t ARENA_GROW_INCREMENT  = 1ULL * 1024 * 1024;
+#else
 static constexpr size_t ANT_ARENA_MAX         = 4ULL * 1024 * 1024 * 1024;
 static constexpr size_t ANT_CLOSURE_ARENA_MAX = 512ULL * 1024 * 1024;
 static constexpr size_t ANT_UPVALUE_ARENA_MAX = 512ULL * 1024 * 1024;
 static constexpr size_t ARENA_GROW_INCREMENT  = 8ULL * 1024 * 1024;
+#endif
 
 static inline size_t ant_arena_page_size(void) {
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+  return 65536u;
+#elif defined(_WIN32)
   static size_t cached = 0;
   if (cached) return cached;
   SYSTEM_INFO info;
@@ -52,7 +61,23 @@ static inline size_t ant_arena_round_up_page(size_t size) {
   return ((size + page_size - 1) / page_size) * page_size;
 }
 
-#ifdef _WIN32
+#ifdef ANT_WASM_EMBED
+
+static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
+  (void)base;
+  (void)old_size;
+  (void)new_size;
+  return 0;
+}
+
+static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {
+  (void)base;
+  (void)old_size;
+  (void)new_size;
+  return 0;
+}
+
+#elif defined(_WIN32)
 
 static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
   if (new_size <= old_size) return 0;
