@@ -40,13 +40,6 @@
 #include "modules/domexception.h"
 #include "modules/websocket.h"
 
-typedef struct server_runtime_s    server_runtime_t;
-typedef struct server_request_s    server_request_t;
-typedef struct server_conn_state_s server_conn_state_t;
-typedef struct server_sse_state_s  server_sse_state_t;
-
-static server_runtime_t *g_server = NULL;
-
 enum {
   SERVER_REQUEST_NATIVE_TAG = 0x53524551u, // SREQ
   SERVER_RUNTIME_NATIVE_TAG = 0x5352544du, // SRTM
@@ -112,6 +105,7 @@ struct server_conn_state_s {
 
 struct server_runtime_s {
   ant_t *js;
+  server_runtime_t *next;
   
   ant_value_t export_obj;
   ant_value_t fetch_fn;
@@ -175,9 +169,40 @@ static ant_value_t server_mkruntimefun(
   ant_value_t (*fn)(ant_t *, ant_value_t *, int),
   server_runtime_t *server
 ) {
-  ant_value_t func = js_heavy_mkfun(js, fn, js_mkundef());
+  ant_value_t func = js_heavy_mkfun(js, fn, server->server_ctx);
   js_set_native(func, server, SERVER_RUNTIME_NATIVE_TAG);
   return func;
+}
+
+static void server_runtime_link(server_runtime_t *server) {
+  server->next = server->js->server_runtimes;
+  server->js->server_runtimes = server;
+}
+
+static void server_runtime_unlink(server_runtime_t *server) {
+  server_runtime_t **cursor = &server->js->server_runtimes;
+
+  while (*cursor) {
+    if (*cursor == server) {
+      *cursor = server->next;
+      server->next = NULL;
+      return;
+    }
+    cursor = &(*cursor)->next;
+  }
+}
+
+static void server_runtime_finalize(ant_t *js, ant_object_t *obj) {
+  ant_value_t value = js_obj_from_ptr(obj);
+  server_runtime_t *server = js_get_native(value, SERVER_RUNTIME_NATIVE_TAG);
+
+  if (!server) return;
+  js_clear_native(value, SERVER_RUNTIME_NATIVE_TAG);
+  server_runtime_unlink(server);
+  
+  free(server->unix_path);
+  free(server->hostname);
+  free(server);
 }
 
 static ant_value_t server_exception_reason(ant_t *js, ant_value_t value) {
@@ -370,8 +395,8 @@ static void server_maybe_finish_stop(server_runtime_t *server) {
   if (!server || !server->stopping) return;
   if (ant_listener_has_connections(&server->listener)) return;
   if (!ant_listener_is_closed(&server->listener) || !server->sigint_closed || !server->sigterm_closed) return;
-  if (g_server == server) g_server = NULL;
   stop_waiters_resolve(server);
+  server_runtime_unlink(server);
 }
 
 static void server_signal_close_cb(uv_handle_t *handle) {
@@ -1381,6 +1406,26 @@ static ant_value_t server_stop(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
+static ant_value_t server_reload(ant_t *js, ant_value_t *args, int nargs) {
+  server_runtime_t *server = server_current_runtime(js);
+  ant_value_t fetch = 0;
+
+  if (!server || server->stopping) return js_mkerr(js, "server is not running");
+  if (nargs < 1 || !is_object_type(args[0])) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "server reload options must be an object");
+  }
+
+  fetch = js_get(js, args[0], "fetch");
+  if (!is_callable(fetch)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "server reload fetch must be a function");
+  }
+
+  server->export_obj = args[0];
+  server->fetch_fn = fetch;
+  
+  return js_mkundef();
+}
+
 static void server_process_client_request(
   ant_conn_t *conn,
   ant_http1_parsed_request_t *parsed,
@@ -1629,9 +1674,11 @@ static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_expor
 
 int server_maybe_start_from_export(ant_t *js, ant_value_t default_export) {
   bool looks_like_server = false;
+  
   ant_value_t server_result = 0;
   const char *error = NULL;
 
+  if (js->server_runtimes) return EXIT_SUCCESS;
   if (!server_export_has_fetch_handler(js, default_export, &looks_like_server)) {
     if (!looks_like_server) return EXIT_SUCCESS;
     error = "Module does not export a fetch handler";
@@ -1669,7 +1716,6 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   ant_listener_callbacks_t callbacks = {0};
   int rc = 0;
 
-  if (g_server) return js_mkerr(js, "server is already running");
   if (!is_object_type(default_export)) return js_mkerr_typed(js, JS_ERR_TYPE, "Module does not export a fetch handler");
 
   server = malloc(sizeof(*server));
@@ -1911,6 +1957,10 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   uv_signal_start(&server->sigterm_handle, server_signal_cb, SIGTERM);
 
   server->server_ctx = js_mkobj(js);
+  js_set_native(server->server_ctx, server, SERVER_RUNTIME_NATIVE_TAG);
+  js_set_finalizer(server->server_ctx, server_runtime_finalize);
+  server_runtime_link(server);
+  
   if (server->hostname) js_set(
     js, server->server_ctx, "hostname",
     js_mkstr(js, server->hostname, strlen(server->hostname))
@@ -1920,47 +1970,46 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   if (server->unix_path) js_set(
     js, server->server_ctx, "unix",
     js_mkstr(js, server->unix_path, strlen(server->unix_path))
-  );
-  
-  else {
-  char *url = server_make_url(server);
-  if (url) {
-    js_set(js, server->server_ctx, "url", js_mkstr(js, url, strlen(url)));
-    free(url);
-  }}
+  ); else {
+    char *url = server_make_url(server);
+    if (url) {
+      js_set(js, server->server_ctx, "url", js_mkstr(js, url, strlen(url)));
+      free(url);
+    }
+  }
   
   js_set(js, server->server_ctx, "requestIP", server_mkruntimefun(js, server_request_ip, server));
   js_set(js, server->server_ctx, "timeout", server_mkruntimefun(js, server_timeout, server));
   js_set(js, server->server_ctx, "stop", server_mkruntimefun(js, server_stop, server));
+  js_set(js, server->server_ctx, "reload", server_mkruntimefun(js, server_reload, server));
   js_set(js, server->server_ctx, "upgradeWebSocket", server_mkruntimefun(js, server_upgrade_websocket, server));
   js_set(js, server->server_ctx, "eventSource", js_mkfun(server_event_source));
 
-  g_server = server;
   return server->server_ctx;
 }
 
 void gc_mark_server(ant_t *js, gc_mark_fn mark) {
-  server_request_t *req = NULL;
-  stop_waiter_t *waiter = NULL;
+  for (server_runtime_t *server = js->server_runtimes; server; server = server->next) {
+    mark(js, server->export_obj);
+    mark(js, server->fetch_fn);
+    mark(js, server->server_ctx);
 
-  if (!g_server) return;
-  mark(js, g_server->export_obj);
-  mark(js, g_server->fetch_fn);
-  mark(js, g_server->server_ctx);
+    for (server_request_t *req = server->requests; req; req = req->next) {
+      mark(js, req->request_obj);
+      mark(js, req->response_obj);
+      mark(js, req->response_promise);
+      mark(js, req->response_reader);
+      mark(js, req->response_read_promise);
+    }
 
-  for (req = g_server->requests; req; req = req->next) {
-    mark(js, req->request_obj);
-    mark(js, req->response_obj);
-    mark(js, req->response_promise);
-    mark(js, req->response_reader);
-    mark(js, req->response_read_promise);
+    for (ant_conn_t *conn = server->listener.connections; conn; conn = conn->next) {
+      server_conn_state_t *cs = (server_conn_state_t *)ant_conn_get_user_data(conn);
+      if (cs && is_object_type(cs->websocket_obj)) mark(js, cs->websocket_obj);
+    }
+
+    for (
+      stop_waiter_t *waiter = server->stop_waiters; 
+      waiter; waiter = waiter->next
+    ) mark(js, waiter->promise);
   }
-
-  for (ant_conn_t *conn = g_server->listener.connections; conn; conn = conn->next) {
-    server_conn_state_t *cs = (server_conn_state_t *)ant_conn_get_user_data(conn);
-    if (cs && is_object_type(cs->websocket_obj)) mark(js, cs->websocket_obj);
-  }
-
-  for (waiter = g_server->stop_waiters; waiter; waiter = waiter->next)
-    mark(js, waiter->promise);
 }

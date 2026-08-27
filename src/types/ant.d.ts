@@ -198,6 +198,10 @@ interface AntServeOptions {
   tls?: unknown;
 }
 
+interface AntServerReloadOptions {
+  fetch(request: Request, server: AntServer): Response | Promise<Response>;
+}
+
 interface AntRequestIP {
   address: string;
   port: number;
@@ -223,6 +227,7 @@ interface AntServer {
   requestIP(request: Request): AntRequestIP | null;
   timeout(request: Request, seconds: number): void;
   stop(force?: boolean): Promise<void>;
+  reload(options: AntServerReloadOptions): void;
   upgradeWebSocket(request: Request): AntWebSocketUpgrade;
   eventSource(): AntEventSourceStream;
 }

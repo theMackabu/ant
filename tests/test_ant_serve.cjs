@@ -36,48 +36,104 @@ function waitForLine(child) {
 
 async function waitForExit(child) {
   if (child.exitCode !== null) return child.exitCode;
-  return await new Promise(resolve => child.once('exit', resolve));
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error('timed out waiting for server process to exit'));
+    }, 2000);
+
+    child.once('exit', code => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
 }
 
 async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-serve-api-'));
   const serverPath = path.join(tmpDir, 'server.mjs');
 
-  fs.writeFileSync(serverPath, `
-const server = Ant.serve({
+  fs.writeFileSync(
+    serverPath,
+    `
+let firstServer;
+
+firstServer = Ant.serve({
   hostname: '127.0.0.1',
   port: 0,
   fetch(request, ctx) {
     const url = new URL(request.url);
-    if (ctx !== server) return new Response('ctx mismatch', { status: 500 });
-    if (server.hostname !== '127.0.0.1') return new Response('bad hostname', { status: 500 });
-    if (typeof server.port !== 'number' || server.port <= 0) return new Response('bad port', { status: 500 });
-    if (typeof server.stop !== 'function') return new Response('bad stop', { status: 500 });
-    if (url.pathname === '/stop') {
-      queueMicrotask(() => { server.stop(); });
-      return new Response('stopping');
+    if (ctx !== firstServer) return new Response('ctx mismatch', { status: 500 });
+    if (firstServer.hostname !== '127.0.0.1') return new Response('bad hostname', { status: 500 });
+    if (typeof firstServer.port !== 'number' || firstServer.port <= 0) return new Response('bad port', { status: 500 });
+    if (typeof firstServer.stop !== 'function') return new Response('bad stop', { status: 500 });
+    if (url.pathname === '/reload') {
+      queueMicrotask(() => {
+        firstServer.reload({
+          fetch(nextRequest, nextCtx) {
+            const nextUrl = new URL(nextRequest.url);
+            if (nextCtx !== firstServer) return new Response('reload ctx mismatch', { status: 500 });
+            if (nextUrl.pathname === '/stop') {
+              queueMicrotask(() => { firstServer.stop(); });
+              return new Response('first stopping');
+            }
+            return new Response('first reloaded');
+          },
+        });
+      });
+      return new Response('reload scheduled');
     }
     return new Response(JSON.stringify({
-      hostname: server.hostname,
-      port: server.port,
-      url: server.url,
-      requestIP: typeof server.requestIP,
-      timeout: typeof server.timeout,
-      upgradeWebSocket: typeof server.upgradeWebSocket,
-      eventSource: typeof server.eventSource,
+      hostname: firstServer.hostname,
+      port: firstServer.port,
+      url: firstServer.url,
+      requestIP: typeof firstServer.requestIP,
+      timeout: typeof firstServer.timeout,
+      reload: typeof firstServer.reload,
+      upgradeWebSocket: typeof firstServer.upgradeWebSocket,
+      eventSource: typeof firstServer.eventSource,
     }));
   },
 });
+
+const secondServer = Ant.serve({
+  hostname: '127.0.0.1',
+  port: 0,
+  fetch(request, ctx) {
+    if (ctx !== secondServer) return new Response('ctx mismatch', { status: 500 });
+    if (new URL(request.url).pathname === '/stop') {
+      queueMicrotask(() => { secondServer.stop(); });
+      return new Response('second stopping');
+    }
+    return new Response('second running');
+  },
+});
+
+let invalidReloadRejected = false;
+try {
+  firstServer.reload({ fetch: null });
+} catch (error) {
+  invalidReloadRejected = error instanceof TypeError;
+}
+
 console.log(JSON.stringify({
-  hostname: server.hostname,
-  port: server.port,
-  url: server.url,
-  stop: typeof server.stop,
+  hostname: firstServer.hostname,
+  port: firstServer.port,
+  url: firstServer.url,
+  stop: typeof firstServer.stop,
+  reload: typeof firstServer.reload,
+  secondPort: secondServer.port,
+  invalidReloadRejected,
 }));
-`);
+
+// An explicit Ant.serve() call takes precedence over default-export auto-start.
+// Frameworks commonly both listen imperatively and export their app instance.
+export default { fetch() { return new Response('unexpected auto-start'); } };
+`
+  );
 
   const child = spawn(process.execPath, [serverPath], {
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe']
   });
 
   try {
@@ -87,6 +143,11 @@ console.log(JSON.stringify({
     assert(metadata.port > 0);
     assert.equal(metadata.url, `http://127.0.0.1:${metadata.port}`);
     assert.equal(metadata.stop, 'function');
+    assert.equal(metadata.reload, 'function');
+    assert.equal(typeof metadata.secondPort, 'number');
+    assert(metadata.secondPort > 0);
+    assert.notEqual(metadata.secondPort, metadata.port);
+    assert.equal(metadata.invalidReloadRejected, true);
 
     const response = await fetch(`http://127.0.0.1:${metadata.port}/`);
     assert.equal(response.status, 200);
@@ -96,11 +157,27 @@ console.log(JSON.stringify({
     assert.equal(body.url, metadata.url);
     assert.equal(body.requestIP, 'function');
     assert.equal(body.timeout, 'function');
+    assert.equal(body.reload, 'function');
     assert.equal(body.upgradeWebSocket, 'function');
     assert.equal(body.eventSource, 'function');
 
-    const stop = await fetch(`http://127.0.0.1:${metadata.port}/stop`);
-    assert.equal(await stop.text(), 'stopping');
+    const second = await fetch(`http://127.0.0.1:${metadata.secondPort}/`);
+    assert.equal(await second.text(), 'second running');
+
+    const reload = await fetch(`http://127.0.0.1:${metadata.port}/reload`);
+    assert.equal(await reload.text(), 'reload scheduled');
+
+    const reloaded = await fetch(`http://127.0.0.1:${metadata.port}/`);
+    assert.equal(await reloaded.text(), 'first reloaded');
+
+    const stopFirst = await fetch(`http://127.0.0.1:${metadata.port}/stop`);
+    assert.equal(await stopFirst.text(), 'first stopping');
+
+    const secondAfterFirstStop = await fetch(`http://127.0.0.1:${metadata.secondPort}/`);
+    assert.equal(await secondAfterFirstStop.text(), 'second running');
+
+    const stopSecond = await fetch(`http://127.0.0.1:${metadata.secondPort}/stop`);
+    assert.equal(await stopSecond.text(), 'second stopping');
     assert.equal(await waitForExit(child), 0);
 
     console.log('ant:serve:ok');
