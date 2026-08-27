@@ -1,5 +1,5 @@
 {
-  "name": "@antjs.org/wasm",
+  "name": "@ant/wasm",
   "version": "0.0.1",
   "description": "Use the Ant Silver JavaScript engine through WebAssembly",
   "type": "module",

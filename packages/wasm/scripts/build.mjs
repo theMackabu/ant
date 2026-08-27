@@ -27,6 +27,7 @@ const packageVendorDirectory = fileURLToPath(new URL('../vendor', import.meta.ur
 const repositoryVendorDirectory = fileURLToPath(new URL('../../../vendor', import.meta.url));
 const generatedDirectory = fileURLToPath(new URL('../.cache/generated', import.meta.url));
 const executableSuffix = process.platform === 'win32' ? '.exe' : '';
+
 const EXPECTED_IMPORTS = [
   'ant.host_call:function',
   'ant.now_ms:function',
@@ -42,6 +43,7 @@ const EXPECTED_IMPORTS = [
   'wasi_snapshot_preview1.proc_exit:function',
   'wasi_snapshot_preview1.random_get:function'
 ].sort();
+
 const EXPECTED_EXPORTS = [
   '_initialize:function',
   'ant_alloc:function',
@@ -214,6 +216,7 @@ await Promise.all([
   cp(new URL('../src/index.js', import.meta.url), new URL('../dist/index.js', import.meta.url)),
   cp(new URL('../src/index.d.ts', import.meta.url), new URL('../dist/index.d.ts', import.meta.url)),
   cp(new URL('../build/ant.wasm', import.meta.url), new URL('../dist/ant.wasm', import.meta.url)),
+  cp(new URL('../licenses/themackabu.txt', import.meta.url), new URL('../dist/licenses/themackabu.txt', import.meta.url)),
   cp(new URL('../../../vendor/base64-0.5.2/LICENSE', import.meta.url), new URL('../dist/licenses/base64.txt', import.meta.url)),
   cp(new URL('../../../vendor/pcre2-10.47/COPYING', import.meta.url), new URL('../dist/licenses/pcre2.txt', import.meta.url)),
   cp(new URL('../../../vendor/utf8proc-2.10.0/LICENSE.md', import.meta.url), new URL('../dist/licenses/utf8proc.md', import.meta.url)),
