@@ -304,14 +304,14 @@ endif
 executable(
   'tlsuv-boringssl-smoke',
   files('tests/tlsuv_boringssl_smoke.c'),
-  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
+  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
   build_by_default: false
 )
 
 executable(
   'test-websocket-connect-cancel',
   files('tests/test_websocket_connect_cancel.c'),
-  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
+  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
   build_by_default: false
 )
 

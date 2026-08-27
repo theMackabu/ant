@@ -99,6 +99,7 @@
         "files": [
           "src/sandbox/backends/darwin/fdt.c",
           "src/sandbox/backends/darwin/gic.c",
+          "src/sandbox/backends/darwin/hypervisor.c",
           "src/sandbox/backends/darwin/mmio.c",
           "src/sandbox/backends/darwin/uart.c"
         ]

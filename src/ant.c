@@ -18154,7 +18154,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
     return NULL;
   }
   
-  if (!fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_CLOSURE_ARENA_MAX)) {
+  if (!fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_UPVALUE_ARENA_MAX)) {
     fixed_arena_destroy(&js->closure_arena);
     fixed_arena_destroy(&js->obj_arena);
     return NULL;

@@ -7,10 +7,10 @@ Built to carry more than it weighs without compromising performance.
 
 ```bash
 $ ls -lh ant
--rwxr-xr-x⠀8.7M⠀ant*
+-rwxr-xr-x⠀8.9M⠀ant*
 
 # built with -Os
--rwxr-xr-x⠀4.4M⠀ant*
+-rwxr-xr-x⠀4.5M⠀ant*
 ```
 
 ## Table of contents
@@ -29,7 +29,7 @@ $ ls -lh ant
 |                     | Ant        | Node    | Bun    | Deno   |
 | ------------------- | ---------- | ------- | ------ | ------ |
 | Binary size         | **~9 MB**  | ~140 MB | ~61 MB | ~77 MB |
-| Cold start          | **~5 ms**  | ~31 ms  | ~13 ms | ~25 ms |
+| Cold start          | **~4 ms**  | ~30 ms  | ~10 ms | ~18 ms |
 | Engine              | Ant Silver | V8      | JSC    | V8     |
 | JIT                 | ✓          | ✓       | ✓      | ✓      |
 | WinterTC conformant | ✓          | partial | ✓      | ✓      |
@@ -72,10 +72,10 @@ hyperfine --warmup 10 --runs 100 \
 
 | Runtime | Mean       | Min     | Max     | Relative     |
 | ------- | ---------- | ------- | ------- | ------------ |
-| **Ant** | **5.5 ms** | 4.9 ms  | 6.1 ms  | **1.00**     |
-| Bun     | 10.6 ms    | 9.5 ms  | 13.8 ms | 1.93× slower |
-| Deno    | 24.8 ms    | 22.2 ms | 29.4 ms | 4.51× slower |
-| Node    | 28.7 ms    | 27.1 ms | 31.2 ms | 5.22× slower |
+| **Ant** | **3.9 ms** | 2.1 ms  | 5.3 ms  | **1.00**     |
+| Bun     | 8.8 ms     | 6.7 ms  | 10.7 ms | 2.26× slower |
+| Deno    | 18.6 ms    | 16.2 ms | 20.8ms  | 4.74× slower |
+| Node    | 29.4 ms    | 27.3 ms | 32.6 ms | 7.50× slower |
 
 <details>
 <summary>Environment</summary>
@@ -83,11 +83,11 @@ hyperfine --warmup 10 --runs 100 \
 | Detail   | Value                             |
 | -------- | --------------------------------- |
 | Hardware | Apple M5 Pro, 64 GB RAM, 18 cores |
-| OS       | macOS 26.5.1 (arm64)              |
-| Ant      | 12.1.15dd25d.1                    |
-| Node     | 26.2.0                            |
-| Bun      | 1.3.14                            |
-| Deno     | 2.8.3                             |
+| OS       | macOS 27.0 Golden Gate (26A5406e) |
+| Ant      | 14.1.aa53d9d1.0                   |
+| Node     | 26.5.1                            |
+| Bun      | 1.4.0                             |
+| Deno     | 2.9.5                             |
 
 </details>
 

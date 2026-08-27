@@ -10,6 +10,7 @@ can reuse the decision history.
 
 ## Plans
 
+- [Darwin Lazy Framework Startup](darwin-lazy-framework-startup.md)
 - [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)
 - [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
 - [Module Import GC Flake](module-import-gc-flake.md)

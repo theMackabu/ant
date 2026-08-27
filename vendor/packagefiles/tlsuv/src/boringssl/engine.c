@@ -26,6 +26,7 @@
 
 #if __APPLE__
 #include <Security/Security.h>
+#include <dlfcn.h>
 #endif
 
 struct boringssl_ctx {
@@ -221,33 +222,84 @@ static const char *name_str(const X509_NAME *n) {
 }
 
 #if __APPLE__
+typedef struct {
+  __typeof__(&CFArrayAppendValue) array_append_value;
+  __typeof__(&CFArrayCreateMutable) array_create_mutable;
+  __typeof__(&CFDataCreate) data_create;
+  __typeof__(&CFRelease) release;
+  __typeof__(&SecCertificateCreateWithData) certificate_create_with_data;
+  __typeof__(&SecPolicyCreateBasicX509) policy_create_basic_x509;
+  __typeof__(&SecTrustCreateWithCertificates) trust_create_with_certificates;
+  __typeof__(&SecTrustEvaluateWithError) trust_evaluate_with_error;
+  const CFArrayCallBacks *array_callbacks;
+  int result;
+} apple_trust_api_t;
+
+static apple_trust_api_t apple_trust = { .result = -1 };
+static uv_once_t apple_trust_once;
+
+static void apple_trust_load(void) {
+  void *core_foundation = dlopen(
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+    RTLD_LAZY | RTLD_LOCAL
+  );
+  void *security = dlopen(
+    "/System/Library/Frameworks/Security.framework/Security",
+    RTLD_LAZY | RTLD_LOCAL
+  );
+  if (!core_foundation || !security) return;
+
+#define APPLE_TRUST_LOAD(handle, field, symbol) do { \
+  apple_trust.field = (__typeof__(apple_trust.field))dlsym(handle, symbol); \
+  if (!apple_trust.field) return; \
+} while (0)
+
+  APPLE_TRUST_LOAD(core_foundation, array_append_value, "CFArrayAppendValue");
+  APPLE_TRUST_LOAD(core_foundation, array_create_mutable, "CFArrayCreateMutable");
+  APPLE_TRUST_LOAD(core_foundation, data_create, "CFDataCreate");
+  APPLE_TRUST_LOAD(core_foundation, release, "CFRelease");
+  APPLE_TRUST_LOAD(security, certificate_create_with_data, "SecCertificateCreateWithData");
+  APPLE_TRUST_LOAD(security, policy_create_basic_x509, "SecPolicyCreateBasicX509");
+  APPLE_TRUST_LOAD(security, trust_create_with_certificates, "SecTrustCreateWithCertificates");
+  APPLE_TRUST_LOAD(security, trust_evaluate_with_error, "SecTrustEvaluateWithError");
+  APPLE_TRUST_LOAD(core_foundation, array_callbacks, "kCFTypeArrayCallBacks");
+
+#undef APPLE_TRUST_LOAD
+
+  apple_trust.result = 0;
+}
+
 static int apple_ca_verify(int pre_verify, X509_STORE_CTX *st) {
   (void)pre_verify;
-  CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 10, &kCFTypeArrayCallBacks);
+  uv_once(&apple_trust_once, apple_trust_load);
+  if (apple_trust.result != 0) return 0;
+
+  CFMutableArrayRef certs = apple_trust.array_create_mutable(NULL, 10, apple_trust.array_callbacks);
 
   STACK_OF(X509) *chain = X509_STORE_CTX_get1_chain(st);
   for (int i = 0; i < sk_X509_num(chain); i++) {
     X509 *x = sk_X509_value(chain, i);
     uint8_t *der = NULL;
     int der_len = i2d_X509(x, &der);
-    CFDataRef d = CFDataCreate(kCFAllocatorDefault, der, der_len);
+    CFDataRef d = apple_trust.data_create(NULL, der, der_len);
     OPENSSL_free(der);
 
-    SecCertificateRef c = SecCertificateCreateWithData(kCFAllocatorDefault, d);
-    CFArrayAppendValue(certs, c);
-    CFRelease(d);
-    CFRelease(c);
+    SecCertificateRef c = apple_trust.certificate_create_with_data(NULL, d);
+    apple_trust.array_append_value(certs, c);
+    apple_trust.release(d);
+    apple_trust.release(c);
   }
   sk_X509_pop_free(chain, X509_free);
 
-  SecTrustRef trust;
-  SecPolicyRef policy = SecPolicyCreateBasicX509();
+  SecTrustRef trust = NULL;
+  SecPolicyRef policy = apple_trust.policy_create_basic_x509();
   CFErrorRef err = NULL;
-  bool result = SecTrustCreateWithCertificates(certs, policy, &trust) == errSecSuccess &&
-                  SecTrustEvaluateWithError(trust, &err);
-  CFRelease(trust);
-  CFRelease(policy);
-  CFRelease(certs);
+  bool result = apple_trust.trust_create_with_certificates(certs, policy, &trust) == errSecSuccess &&
+                apple_trust.trust_evaluate_with_error(trust, &err);
+  if (err) apple_trust.release(err);
+  if (trust) apple_trust.release(trust);
+  apple_trust.release(policy);
+  apple_trust.release(certs);
   return result;
 }
 #endif

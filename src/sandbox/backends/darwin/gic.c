@@ -4,10 +4,6 @@
 
 ant_hvf_gic_api_t ant_hvf_gic;
 
-void *ant_hvf_sym(const char *name) {
-  return dlsym(RTLD_DEFAULT, name);
-}
-
 int ant_hvf_load_gic_api(void) {
   ant_hvf_gic.create = (ant_hvf_gic_create_fn)ant_hvf_sym("hv_gic_create");
   ant_hvf_gic.config_create = (ant_hvf_gic_config_create_fn)ant_hvf_sym("hv_gic_config_create");
@@ -83,7 +79,7 @@ done:
 }
 
 int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *name) {
-  int rc = ant_hvf_check(hv_vcpu_set_reg(vcpu, reg, value), name);
+  int rc = ant_hvf_check(ant_hvf_api.vcpu_set_reg(vcpu, reg, value), name);
   return rc;
 }
 
@@ -108,10 +104,11 @@ int ant_hvf_init_vcpu(ant_hvf_vm_t *vm) {
   if (rc != 0) return rc;
   rc = ant_hvf_set_reg(vm->vcpu, HV_REG_CPSR, 0x3c5, "hv_vcpu_set_reg(CPSR)");
   if (rc != 0) return rc;
-  rc = ant_hvf_check(hv_vcpu_set_sys_reg(vm->vcpu, HV_SYS_REG_MPIDR_EL1, 0),
+  rc = ant_hvf_check(ant_hvf_api.vcpu_set_sys_reg(vm->vcpu, HV_SYS_REG_MPIDR_EL1, 0),
                      "hv_vcpu_set_sys_reg(MPIDR_EL1)");
   if (rc != 0) return rc;
-  hv_return_t cntfrq_rc = hv_vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
+  hv_return_t cntfrq_rc =
+    ant_hvf_api.vcpu_set_sys_reg(vm->vcpu, ANT_HVF_SYS_REG_CNTFRQ_EL0, vm->cntfrq);
   if (cntfrq_rc == HV_SUCCESS) {
     ant_hvf_verbosef(vm, "seeded CNTFRQ_EL0=%llu", (unsigned long long)vm->cntfrq);
   } else {
@@ -119,7 +116,7 @@ int ant_hvf_init_vcpu(ant_hvf_vm_t *vm) {
                      "CNTFRQ_EL0 sysreg seed unavailable rc=%d; using timer frequency from device tree",
                      cntfrq_rc);
   }
-  return ant_hvf_check(hv_vcpu_set_vtimer_mask(vm->vcpu, false),
+  return ant_hvf_check(ant_hvf_api.vcpu_set_vtimer_mask(vm->vcpu, false),
                        "hv_vcpu_set_vtimer_mask(init)");
 }
 
@@ -128,7 +125,7 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
   uint64_t cval = 0;
   
   int rc = ant_hvf_check(
-    hv_vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CTL_EL0, &ctl),
+    ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CTL_EL0, &ctl),
     "hv_vcpu_get_sys_reg(CNTV_CTL_EL0)"
   );
   
@@ -139,7 +136,7 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
   if ((ctl & 1u) == 0 || (ctl & 2u) != 0) return 0;
 
   rc = ant_hvf_check(
-    hv_vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CVAL_EL0, &cval),
+    ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CVAL_EL0, &cval),
     "hv_vcpu_get_sys_reg(CNTV_CVAL_EL0)"
   );
   
@@ -165,8 +162,8 @@ int ant_hvf_handle_wfx(ant_hvf_vm_t *vm) {
 int ant_hvf_sync_vtimer(ant_hvf_vm_t *vm) {
   uint64_t ctl = 0;
   uint64_t cval = 0;
-  if (hv_vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CTL_EL0, &ctl) != HV_SUCCESS ||
-    hv_vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CVAL_EL0, &cval) != HV_SUCCESS
+  if (ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CTL_EL0, &ctl) != HV_SUCCESS ||
+    ant_hvf_api.vcpu_get_sys_reg(vm->vcpu, HV_SYS_REG_CNTV_CVAL_EL0, &cval) != HV_SUCCESS
   ) return 0;
   if ((ctl & 1u) == 0 || (ctl & 2u) != 0 || ant_hvf_host_cntvct() < cval) return 0;
   return ant_hvf_raise_vtimer(vm, "vtimer sync");
@@ -177,9 +174,9 @@ int ant_hvf_raise_vtimer(ant_hvf_vm_t *vm, const char *where) {
     vm->vcpu,
     (ant_hvf_gic_redistributor_reg_t)ANT_HVF_GICR_ISPENDR0,
     1ull << ANT_HVF_GIC_EL1_VIRTUAL_TIMER);
-  hv_vcpu_set_pending_interrupt(vm->vcpu, HV_INTERRUPT_TYPE_IRQ, true);
+  ant_hvf_api.vcpu_set_pending_interrupt(vm->vcpu, HV_INTERRUPT_TYPE_IRQ, true);
   return ant_hvf_check(
-    hv_vcpu_set_vtimer_mask(vm->vcpu, false),
+    ant_hvf_api.vcpu_set_vtimer_mask(vm->vcpu, false),
     "hv_vcpu_set_vtimer_mask(vtimer)"
   );
 }

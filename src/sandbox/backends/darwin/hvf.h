@@ -66,6 +66,30 @@
 #define ANT_HVF_UART_DIAGNOSTIC_DEFAULT_BYTES (16u * 1024u)
 
 typedef struct {
+  hv_return_t (*vcpus_exit)(hv_vcpu_t *, uint32_t);
+  hv_vcpu_config_t (*vcpu_config_create)(void);
+  hv_return_t (*vcpu_config_get_feature_reg)(hv_vcpu_config_t, hv_feature_reg_t, uint64_t *);
+  hv_return_t (*vcpu_create)(hv_vcpu_t *, hv_vcpu_exit_t **, hv_vcpu_config_t);
+  hv_return_t (*vcpu_run)(hv_vcpu_t);
+  hv_return_t (*vcpu_get_reg)(hv_vcpu_t, hv_reg_t, uint64_t *);
+  hv_return_t (*vcpu_get_sys_reg)(hv_vcpu_t, hv_sys_reg_t, uint64_t *);
+  hv_return_t (*vcpu_destroy)(hv_vcpu_t);
+  hv_return_t (*vcpu_set_reg)(hv_vcpu_t, hv_reg_t, uint64_t);
+  hv_return_t (*vcpu_set_sys_reg)(hv_vcpu_t, hv_sys_reg_t, uint64_t);
+  hv_return_t (*vcpu_set_vtimer_mask)(hv_vcpu_t, bool);
+  hv_return_t (*vcpu_set_pending_interrupt)(hv_vcpu_t, hv_interrupt_type_t, bool);
+  hv_vm_config_t (*vm_config_create)(void);
+  hv_return_t (*vm_create)(hv_vm_config_t);
+  hv_return_t (*vm_unmap)(hv_ipa_t, size_t);
+  hv_return_t (*vm_destroy)(void);
+  hv_return_t (*vm_map)(void *, hv_ipa_t, size_t, hv_memory_flags_t);
+} ant_hvf_api_t;
+
+extern ant_hvf_api_t ant_hvf_api;
+int ant_hvf_load_api(void);
+void *ant_hvf_sym(const char *name);
+
+typedef struct {
   unsigned char ident[ANT_HVF_ELF_IDENT_BYTES];
   uint16_t type;
   uint16_t machine;

@@ -63,10 +63,6 @@ if host_machine.system() == 'windows'
     iphlpapi_dep, pathcch_dep, dbghelp_dep,
     ole32_dep, oleaut32_dep, taskschd_dep
   ]
-elif host_machine.system() == 'darwin'
-  security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
-  hypervisor_dep = dependency('appleframeworks', modules: ['Hypervisor'], required: true)
-  win_deps = []
 else
   win_deps = []
 endif
@@ -284,14 +280,6 @@ ant_runtime_deps = [
 
 ant_deps = allocator_deps + ant_core_deps + ant_format_deps + ant_runtime_deps + win_deps + mir_dep
 
-if host_machine.system() == 'darwin'
-  ant_deps += [security_dep]
-endif
-
 ant_slim_deps = ant_deps
-
-if host_machine.system() == 'darwin'
-  ant_deps += [hypervisor_dep]
-endif
 
 subdir('temporal')

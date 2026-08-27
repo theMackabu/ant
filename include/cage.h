@@ -5,8 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static constexpr size_t ANT_CAGE_MAX_SIZE = 1ULL << 44;
-static constexpr size_t ANT_CAGE_MIN_SIZE = 1ULL << 37;
+static constexpr size_t ANT_CAGE_MAX_SIZE = 1ULL << 35;
+static constexpr size_t ANT_CAGE_MIN_SIZE = 1ULL << 33;
 
 extern uintptr_t ant_cage_base_address;
 extern size_t ant_cage_reserved_size;

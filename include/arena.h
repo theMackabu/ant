@@ -27,8 +27,9 @@ typedef struct {
   void *free_list;
 } ant_fixed_arena_t;
 
-static constexpr size_t ANT_ARENA_MAX         = 64ULL * 1024 * 1024 * 1024;
-static constexpr size_t ANT_CLOSURE_ARENA_MAX = 2ULL * 1024 * 1024 * 1024;
+static constexpr size_t ANT_ARENA_MAX         = 4ULL * 1024 * 1024 * 1024;
+static constexpr size_t ANT_CLOSURE_ARENA_MAX = 512ULL * 1024 * 1024;
+static constexpr size_t ANT_UPVALUE_ARENA_MAX = 512ULL * 1024 * 1024;
 static constexpr size_t ARENA_GROW_INCREMENT  = 8ULL * 1024 * 1024;
 
 static inline size_t ant_arena_page_size(void) {

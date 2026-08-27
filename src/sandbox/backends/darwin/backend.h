@@ -174,8 +174,6 @@ int ant_hvf_guest_read(ant_hvf_vm_t *vm, uint64_t guest_addr, void *out, size_t 
 int ant_hvf_guest_write(ant_hvf_vm_t *vm, uint64_t guest_addr, const void *src, size_t len);
 int ant_read_all(int fd, void *buf, size_t len, off_t off);
 int ant_hvf_load_kernel(ant_hvf_vm_t *vm, const char *path);
-
-void *ant_hvf_sym(const char *name);
 int ant_hvf_set_reg(hv_vcpu_t vcpu, hv_reg_t reg, uint64_t value, const char *name);
 
 uint64_t ant_hvf_host_cntfrq(void);
