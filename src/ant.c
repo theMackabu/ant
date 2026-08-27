@@ -18130,6 +18130,25 @@ static ant_value_t builtin_Proxy_revocable(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
+static inline void isolate_arenas_destroy(ant_t *js) {
+  fixed_arena_destroy(&js->upvalue_arena);
+  fixed_arena_destroy(&js->closure_arena);
+  fixed_arena_destroy(&js->obj_arena);
+}
+
+static inline bool isolate_arenas_init(ant_t *js) {
+  if (
+    !fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)           ||
+    !fixed_arena_init(&js->closure_arena, sizeof(sv_closure_t), offsetof(sv_closure_t, gc_epoch), ANT_CLOSURE_ARENA_MAX) ||
+    !fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_UPVALUE_ARENA_MAX)
+  ) {
+    isolate_arenas_destroy(js);
+    return false;
+  }
+
+  return true;
+}
+
 static ant_t *isolate_init(void *buf, size_t len) {
   ANT_ASSERT(
     (uintptr_t)buf <= ((1ULL << 53) - 1),
@@ -18147,27 +18166,15 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->rope_gc.young.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   js->rope_gc.old.block_size = ANT_POOL_ROPE_BLOCK_SIZE;
   js->gc_use_nursery_major_floor = true;
-  
-  if (!fixed_arena_init(&js->obj_arena, sizeof(ant_object_t), offsetof(ant_object_t, mark_epoch), ANT_ARENA_MAX)) return NULL;
-  if (!fixed_arena_init(&js->closure_arena, sizeof(sv_closure_t), offsetof(sv_closure_t, gc_epoch), ANT_CLOSURE_ARENA_MAX)) {
-    fixed_arena_destroy(&js->obj_arena);
-    return NULL;
-  }
-  
-  if (!fixed_arena_init(&js->upvalue_arena, sizeof(sv_upvalue_t), offsetof(sv_upvalue_t, gc_epoch), ANT_UPVALUE_ARENA_MAX)) {
-    fixed_arena_destroy(&js->closure_arena);
-    fixed_arena_destroy(&js->obj_arena);
-    return NULL;
-  }
+
+  if (!isolate_arenas_init(js)) return NULL;
 
   js->young_closure_trigger = GC_CLOSURE_NURSERY_THRESHOLD;
   js->c_root_cap = 64;
   js->c_roots = calloc(js->c_root_cap, sizeof(*js->c_roots));
   
   if (!js->c_roots) {
-    fixed_arena_destroy(&js->upvalue_arena);
-    fixed_arena_destroy(&js->closure_arena);
-    fixed_arena_destroy(&js->obj_arena);
+    isolate_arenas_destroy(js);
     return NULL;
   }
 
@@ -18730,10 +18737,7 @@ void js_destroy(ant_t *js) {
   cleanup_atomics_module(js);
   cleanup_events_module(js);
   cleanup_regex_module(js);
-
-  fixed_arena_destroy(&js->obj_arena);
-  fixed_arena_destroy(&js->closure_arena);
-  fixed_arena_destroy(&js->upvalue_arena);
+  isolate_arenas_destroy(js);
   
   free(js->c_roots);
   js->c_roots = NULL;

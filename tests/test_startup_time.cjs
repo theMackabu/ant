@@ -3,7 +3,7 @@ const { spawnSync } = require('node:child_process');
 
 const warmupRuns = 3;
 const measuredRuns = 11;
-const maxMedianMs = Number(process.env.ANT_STARTUP_MAX_MS || 30);
+const maxMedianMs = 8;
 const samples = [];
 
 for (let i = 0; i < warmupRuns + measuredRuns; i++) {
