@@ -11,6 +11,7 @@ typedef struct {
   char *key;
   uint8_t format;
   uint8_t kind;
+  uint16_t bundle_flags;
   bool lenient;
   bool lenient_text;
   uint8_t *data;

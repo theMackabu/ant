@@ -1763,6 +1763,9 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
       
       return esm_complete_namespace_module(js, mod, ns);
     }
+    case ESM_MODULE_KIND_ASSET:
+      mod->is_loading = false;
+      return js_mkerr(js, "Bundle asset is not a module: %s", mod->resolved_path);
     case ESM_MODULE_KIND_NONE:
     case ESM_MODULE_KIND_CODE:
     case ESM_MODULE_KIND_URL: break;
@@ -1942,8 +1945,10 @@ bool js_esm_bundle_activate(ant_t *js, const struct ant_bundle *bundle) {
 
   for (uint32_t i = 0; i < bundle->module_count; i++) {
     const ant_bundle_module_t *m = &bundle->modules[i];
+    if ((esm_module_kind_t)m->kind == ESM_MODULE_KIND_ASSET) continue;
+    const char *resolved_path = m->materialized_path ? m->materialized_path : m->key;
     esm_module_t *mod = esm_create_module(
-      js, m->key, m->key, m->key,
+      js, m->key, resolved_path, m->key,
       (ant_module_format_t)m->format,
       m->data, (size_t)m->data_len,
       false, (esm_module_kind_t)m->kind
@@ -2310,8 +2315,12 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
     return result;
   }
 
-  ant_value_t result = js_esm_make_file_url(js, resolved_path);
+  const ant_bundle_t *vfs = js && js->esm.state ? js->esm.state->bundle : NULL;
+  const char *materialized = vfs ? ant_bundle_materialized_path(vfs, resolved_path) : NULL;
+  
+  ant_value_t result = js_esm_make_file_url(js, materialized ? materialized : resolved_path);
   free(resolved_path);
+  
   return result;
 }
 
@@ -2357,7 +2366,10 @@ ant_value_t js_esm_resolve_specifier_require(ant_t *js, ant_value_t specifier, c
     return result;
   }
 
-  ant_value_t result = js_esm_make_file_url(js, resolved_path);
+  const ant_bundle_t *vfs = js && js->esm.state ? js->esm.state->bundle : NULL;
+  const char *materialized = vfs ? ant_bundle_materialized_path(vfs, resolved_path) : NULL;
+  
+  ant_value_t result = js_esm_make_file_url(js, materialized ? materialized : resolved_path);
   free(resolved_path);
   
   return result;

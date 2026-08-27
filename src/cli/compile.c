@@ -440,6 +440,7 @@ int ant_cmd_compile(int argc, char **argv) {
       .key = trace.modules[i].key,
       .format = trace.modules[i].format,
       .kind = trace.modules[i].kind,
+      .flags = trace.modules[i].bundle_flags,
       .data = trace.modules[i].data,
       .data_len = trace.modules[i].data_len,
     };

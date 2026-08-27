@@ -3,6 +3,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+
+#include <uv.h>
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 typedef struct {
   char magic[8];
@@ -27,7 +40,7 @@ typedef struct {
   uint32_t key_stroff;
   uint8_t format;
   uint8_t kind;
-  uint16_t reserved;
+  uint16_t flags;
   uint64_t data_off;
   uint64_t data_len;
 } ant_bundle_mod_rec_t;
@@ -131,6 +144,7 @@ int ant_bundle_write(FILE *f, const ant_bundle_build_t *build) {
     mods[i].key_stroff = (uint32_t)off;
     mods[i].format = build->modules[i].format;
     mods[i].kind = build->modules[i].kind;
+    mods[i].flags = build->modules[i].flags;
   }
 
   for (uint32_t i = 0; i < build->edge_count; i++) {
@@ -319,7 +333,11 @@ ant_bundle_status_t ant_bundle_open(const char *exe_path, const char *expected_a
 
   const ant_bundle_mod_rec_t *recs = (const ant_bundle_mod_rec_t *)(out->payload + mods_off);
   for (uint32_t i = 0; i < hdr.module_count; i++) {
+    uint16_t known_flags = ANT_BUNDLE_MODULE_MATERIALIZE | ANT_BUNDLE_MODULE_EXECUTABLE;
     if (!strtab_ref_ok(out, recs[i].key_stroff)) goto fail;
+    if ((recs[i].flags & ~known_flags) != 0 ||
+        ((recs[i].flags & ANT_BUNDLE_MODULE_EXECUTABLE) &&
+         !(recs[i].flags & ANT_BUNDLE_MODULE_MATERIALIZE))) goto fail;
     if (recs[i].data_off < hdr.data_off ||
         recs[i].data_off > out->payload_size ||
         recs[i].data_len >= out->payload_size - recs[i].data_off) goto fail;
@@ -328,6 +346,7 @@ ant_bundle_status_t ant_bundle_open(const char *exe_path, const char *expected_a
     out->modules[i].key = out->strtab + recs[i].key_stroff;
     out->modules[i].format = recs[i].format;
     out->modules[i].kind = recs[i].kind;
+    out->modules[i].flags = recs[i].flags;
     out->modules[i].data = out->payload + recs[i].data_off;
     out->modules[i].data_len = recs[i].data_len;
   }
@@ -346,7 +365,218 @@ fail:
   return status;
 }
 
+static void bundle_fs_cleanup(uv_fs_t *req) {
+  uv_fs_req_cleanup(req);
+}
+
+static void bundle_unlink(const char *path) {
+  uv_fs_t req;
+  (void)uv_fs_unlink(NULL, &req, path, NULL);
+  bundle_fs_cleanup(&req);
+}
+
+static void bundle_rmdir(const char *path) {
+  uv_fs_t req;
+  (void)uv_fs_rmdir(NULL, &req, path, NULL);
+  bundle_fs_cleanup(&req);
+}
+
+static void bundle_remove_materialized(ant_bundle_t *bundle) {
+  if (!bundle || !bundle->materialized_root) return;
+
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    if (bundle->modules[i].materialized_path)
+      bundle_unlink(bundle->modules[i].materialized_path);
+  }
+
+  size_t root_len = strlen(bundle->materialized_root);
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    char *path = bundle->modules[i].materialized_path;
+    if (!path) continue;
+
+    for (char *slash = strrchr(path, '/'); slash && (size_t)(slash - path) > root_len;
+         slash = strrchr(path, '/')) {
+      *slash = '\0';
+      bundle_rmdir(path);
+    }
+  }
+
+  bundle_rmdir(bundle->materialized_root);
+}
+
+static bool bundle_materialize_key_ok(const char *key) {
+  static const char prefix[] = ANT_BUNDLE_KEY_PREFIX;
+  size_t prefix_len = sizeof(prefix) - 1;
+  if (!key || strncmp(key, prefix, prefix_len) != 0 || !key[prefix_len]) return false;
+
+  const char *part = key + prefix_len;
+  while (*part) {
+    const char *slash = strchr(part, '/');
+    size_t len = slash ? (size_t)(slash - part) : strlen(part);
+    if (len == 0 || (len == 1 && part[0] == '.') ||
+        (len == 2 && part[0] == '.' && part[1] == '.')) return false;
+    if (!slash) break;
+    part = slash + 1;
+  }
+  return true;
+}
+
+static int bundle_mkdir(const char *path, char *err, size_t err_len) {
+  uv_fs_t req;
+  int rc = uv_fs_mkdir(NULL, &req, path, 0700, NULL);
+  bundle_fs_cleanup(&req);
+  if (rc == 0 || rc == UV_EEXIST) return 0;
+  snprintf(err, err_len, "cannot create native asset directory %s: %s", path, uv_strerror(rc));
+  return -1;
+}
+
+static int bundle_create_parent_dirs(
+  const char *root, const char *path, char *err, size_t err_len
+) {
+  char copy[PATH_MAX];
+  if ((size_t)snprintf(copy, sizeof(copy), "%s", path) >= sizeof(copy)) {
+    snprintf(err, err_len, "native asset path is too long");
+    return -1;
+  }
+
+  size_t root_len = strlen(root);
+  for (char *slash = copy + root_len + 1; (slash = strchr(slash, '/')); slash++) {
+    *slash = '\0';
+    int rc = bundle_mkdir(copy, err, err_len);
+    *slash = '/';
+    if (rc != 0) return -1;
+  }
+  return 0;
+}
+
+static int bundle_write_materialized_file(
+  const ant_bundle_module_t *module, const char *path,
+  char *err, size_t err_len
+) {
+  uv_fs_t req;
+  int mode = (module->flags & ANT_BUNDLE_MODULE_EXECUTABLE) ? 0700 : 0600;
+  int fd = uv_fs_open(
+    NULL, &req, path, O_CREAT | O_EXCL | O_WRONLY | O_BINARY, mode, NULL
+  );
+  bundle_fs_cleanup(&req);
+  if (fd < 0) {
+    snprintf(err, err_len, "cannot create native asset %s: %s", path, uv_strerror(fd));
+    return -1;
+  }
+
+  uint64_t offset = 0;
+  int rc = 0;
+  while (offset < module->data_len) {
+    size_t remaining = (size_t)(module->data_len - offset);
+    if (remaining > UINT_MAX) remaining = UINT_MAX;
+    uv_buf_t buf = uv_buf_init((char *)module->data + offset, (unsigned int)remaining);
+    int written = uv_fs_write(NULL, &req, fd, &buf, 1, (int64_t)offset, NULL);
+    bundle_fs_cleanup(&req);
+    if (written <= 0) {
+      snprintf(err, err_len, "cannot write native asset %s: %s", path,
+        written < 0 ? uv_strerror(written) : "short write");
+      rc = -1;
+      break;
+    }
+    offset += (uint64_t)written;
+  }
+
+  int close_rc = uv_fs_close(NULL, &req, fd, NULL);
+  bundle_fs_cleanup(&req);
+  if (rc == 0 && close_rc != 0) {
+    snprintf(err, err_len, "cannot close native asset %s: %s", path, uv_strerror(close_rc));
+    rc = -1;
+  }
+  return rc;
+}
+
+int ant_bundle_materialize(ant_bundle_t *bundle, char *err, size_t err_len) {
+  if (!bundle) return -1;
+  if (err && err_len) err[0] = '\0';
+
+  uint32_t materialized_count = 0;
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    if (bundle->modules[i].flags & ANT_BUNDLE_MODULE_MATERIALIZE)
+      materialized_count++;
+  }
+  if (!materialized_count) return 0;
+
+  char temp_base[PATH_MAX];
+  size_t temp_base_len = sizeof(temp_base);
+  int tmp_rc = uv_os_tmpdir(temp_base, &temp_base_len);
+  if (tmp_rc != 0) {
+    snprintf(err, err_len, "cannot locate temporary directory: %s", uv_strerror(tmp_rc));
+    return -1;
+  }
+
+  char root_template[PATH_MAX];
+  if ((size_t)snprintf(root_template, sizeof(root_template), "%s/ant-bundle-XXXXXX", temp_base) >= sizeof(root_template)) {
+    snprintf(err, err_len, "temporary directory path is too long");
+    return -1;
+  }
+
+  uv_fs_t req;
+  int mktemp_rc = uv_fs_mkdtemp(NULL, &req, root_template, NULL);
+  if (mktemp_rc != 0) {
+    snprintf(err, err_len, "cannot create native asset directory: %s", uv_strerror(mktemp_rc));
+    bundle_fs_cleanup(&req);
+    return -1;
+  }
+  bundle->materialized_root = strdup(req.path);
+  if (!bundle->materialized_root) {
+    snprintf(err, err_len, "out of memory creating native asset directory");
+    bundle_rmdir(req.path);
+    bundle_fs_cleanup(&req);
+    return -1;
+  }
+  bundle_fs_cleanup(&req);
+
+  static const char prefix[] = ANT_BUNDLE_KEY_PREFIX;
+  size_t prefix_len = sizeof(prefix) - 1;
+
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    ant_bundle_module_t *module = &bundle->modules[i];
+    if (!(module->flags & ANT_BUNDLE_MODULE_MATERIALIZE)) continue;
+    if (!bundle_materialize_key_ok(module->key)) {
+      snprintf(err, err_len, "unsafe native asset path in bundle: %s", module->key);
+      goto fail;
+    }
+
+    char path[PATH_MAX];
+    if ((size_t)snprintf(path, sizeof(path), "%s/%s", bundle->materialized_root,
+        module->key + prefix_len) >= sizeof(path)) {
+      snprintf(err, err_len, "native asset path is too long: %s", module->key);
+      goto fail;
+    }
+    if (bundle_create_parent_dirs(bundle->materialized_root, path, err, err_len) != 0)
+      goto fail;
+
+    module->materialized_path = strdup(path);
+    if (!module->materialized_path) {
+      snprintf(err, err_len, "out of memory recording native asset path");
+      goto fail;
+    }
+    if (bundle_write_materialized_file(module, path, err, err_len) != 0)
+      goto fail;
+  }
+  return 0;
+
+fail:
+  bundle_remove_materialized(bundle);
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    free(bundle->modules[i].materialized_path);
+    bundle->modules[i].materialized_path = NULL;
+  }
+  free(bundle->materialized_root);
+  bundle->materialized_root = NULL;
+  return -1;
+}
+
 void ant_bundle_close(ant_bundle_t *bundle) {
+  bundle_remove_materialized(bundle);
+  for (uint32_t i = 0; i < bundle->module_count; i++)
+    free(bundle->modules[i].materialized_path);
+  free(bundle->materialized_root);
   free(bundle->modules);
   free(bundle->payload);
   memset(bundle, 0, sizeof(*bundle));
@@ -363,6 +593,62 @@ static int bundle_find(const ant_bundle_t *bundle, const char *key) {
   return -1;
 }
 
+static const char *bundle_key_for_path(const ant_bundle_t *bundle, const char *path) {
+  if (!path) return NULL;
+  if (bundle_find(bundle, path) >= 0) return path;
+  for (uint32_t i = 0; i < bundle->module_count; i++) {
+    if (bundle->modules[i].materialized_path &&
+        strcmp(bundle->modules[i].materialized_path, path) == 0)
+      return bundle->modules[i].key;
+  }
+  return NULL;
+}
+
+static bool bundle_relative_key(
+  const char *parent_key, const char *spec, char *out, size_t out_len
+) {
+  if (!parent_key || !spec ||
+      !((spec[0] == '.' && spec[1] == '/') ||
+        (spec[0] == '.' && spec[1] == '.' && spec[2] == '/'))) return false;
+
+  const char *slash = strrchr(parent_key, '/');
+  if (!slash) return false;
+  size_t prefix_len = (size_t)(slash - parent_key + 1);
+  if (prefix_len >= out_len) return false;
+  memcpy(out, parent_key, prefix_len);
+  size_t pos = prefix_len;
+
+  const char *part = spec;
+  while (*part) {
+    const char *next = strchr(part, '/');
+    size_t len = next ? (size_t)(next - part) : strlen(part);
+
+    if (len == 0 || (len == 1 && part[0] == '.')) {
+      // Skip empty and current-directory components.
+    } else if (len == 2 && part[0] == '.' && part[1] == '.') {
+      if (pos <= sizeof(ANT_BUNDLE_KEY_PREFIX) - 1) return false;
+      if (pos > 0 && out[pos - 1] == '/') pos--;
+      while (pos > 0 && out[pos - 1] != '/') pos--;
+    } else {
+      if (pos && out[pos - 1] != '/') {
+        if (pos + 1 >= out_len) return false;
+        out[pos++] = '/';
+      }
+      if (len >= out_len - pos) return false;
+      memcpy(out + pos, part, len);
+      pos += len;
+      out[pos++] = '/';
+    }
+
+    if (!next) break;
+    part = next + 1;
+  }
+
+  if (pos > 0 && out[pos - 1] == '/') pos--;
+  out[pos] = '\0';
+  return true;
+}
+
 const ant_bundle_module_t *ant_bundle_get(const ant_bundle_t *bundle, const char *key) {
   int idx = bundle_find(bundle, key);
   return idx < 0 ? NULL : &bundle->modules[idx];
@@ -372,8 +658,17 @@ bool ant_bundle_has_key(const ant_bundle_t *bundle, const char *key) {
   return bundle_find(bundle, key) >= 0;
 }
 
+const char *ant_bundle_materialized_path(
+  const ant_bundle_t *bundle, const char *key
+) {
+  int idx = bundle_find(bundle, key);
+  return idx < 0 ? NULL : bundle->modules[idx].materialized_path;
+}
+
 const char *ant_bundle_resolve(const ant_bundle_t *bundle, const char *parent_key, const char *spec, bool is_require) {
   if (!parent_key || !spec) return NULL;
+  parent_key = bundle_key_for_path(bundle, parent_key);
+  if (!parent_key) return NULL;
   int parent = bundle_find(bundle, parent_key);
   if (parent < 0) return NULL;
 
@@ -396,7 +691,14 @@ const char *ant_bundle_resolve(const ant_bundle_t *bundle, const char *parent_ke
     if (edge_require == is_require) return bundle->modules[e->child_idx].key;
     fallback = e;
   }
-  return fallback ? bundle->modules[fallback->child_idx].key : NULL;
+  if (fallback) return bundle->modules[fallback->child_idx].key;
+
+  char relative[PATH_MAX];
+  if (bundle_relative_key(parent_key, spec, relative, sizeof(relative))) {
+    int child = bundle_find(bundle, relative);
+    if (child >= 0) return bundle->modules[child].key;
+  }
+  return NULL;
 }
 
 const char *ant_bundle_status_str(ant_bundle_status_t status) {

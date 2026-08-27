@@ -6,10 +6,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define ANT_BUNDLE_MAGIC "ANTBNDL\x01"
-#define ANT_BUNDLE_FORMAT_VERSION 1
+#define ANT_BUNDLE_MAGIC "ANTBNDL\x02"
+#define ANT_BUNDLE_FORMAT_VERSION 2
 #define ANT_BUNDLE_ABI_HASH_MAX 48
 #define ANT_BUNDLE_KEY_PREFIX "/$ant/"
+
+#define ANT_BUNDLE_MODULE_MATERIALIZE 0x1u
+#define ANT_BUNDLE_MODULE_EXECUTABLE  0x2u
 
 typedef enum {
   ANT_BUNDLE_OK = 0,
@@ -24,8 +27,10 @@ typedef struct {
   const char *key;
   uint8_t format;
   uint8_t kind;
+  uint16_t flags;
   const uint8_t *data;
   uint64_t data_len;
+  char *materialized_path;
 } ant_bundle_module_t;
 
 typedef struct ant_bundle {
@@ -41,12 +46,14 @@ typedef struct ant_bundle {
   uint32_t edge_count;
   const char *strtab;
   uint64_t strtab_len;
+  char *materialized_root;
 } ant_bundle_t;
 
 typedef struct {
   const char *key;
   uint8_t format;
   uint8_t kind;
+  uint16_t flags;
   const uint8_t *data;
   size_t data_len;
 } ant_bundle_build_module_t;
@@ -68,7 +75,10 @@ typedef struct {
 } ant_bundle_build_t;
 
 void ant_bundle_close(ant_bundle_t *bundle);
+bool ant_bundle_has_key(const ant_bundle_t *bundle, const char *key);
+
 int ant_bundle_write(FILE *f, const ant_bundle_build_t *build);
+int ant_bundle_materialize(ant_bundle_t *bundle, char *err, size_t err_len);
 
 ant_bundle_status_t ant_bundle_open(
   const char *exe_path,
@@ -78,8 +88,8 @@ ant_bundle_status_t ant_bundle_open(
 const ant_bundle_module_t *ant_bundle_entry(const ant_bundle_t *bundle);
 const ant_bundle_module_t *ant_bundle_get(const ant_bundle_t *bundle, const char *key);
 
-bool ant_bundle_has_key(const ant_bundle_t *bundle, const char *key);
 const char *ant_bundle_status_str(ant_bundle_status_t status);
+const char *ant_bundle_materialized_path(const ant_bundle_t *bundle, const char *key);
 
 const char *ant_bundle_resolve(
   const ant_bundle_t *bundle, const char *parent_key,

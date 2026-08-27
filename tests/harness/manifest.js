@@ -68,7 +68,8 @@ export function targets() {
     'test_ant_cron_linux.cjs',
     'test_ant_cron_os.cjs',
     'test_ant_cron_windows.cjs',
-    'test_compile_basic.cjs'
+    'test_compile_basic.cjs',
+    'test_compile_native_addon.cjs'
   ];
   for (const f of REGRESSION_TESTS) list.push({ group: 'tests', type: 'test', name: `tests/${f}`, entry: `tests/${f}` });
 

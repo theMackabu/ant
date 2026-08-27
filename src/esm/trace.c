@@ -12,12 +12,19 @@
 #include "runtime.h"
 #include "utils.h"
 #include "vfs_bundle.h"
+#include "tokens.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <uv.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 typedef struct {
   char *spec;
@@ -35,6 +42,13 @@ typedef struct {
 } trace_index_entry_t;
 
 typedef struct {
+  char *name;
+  uint32_t name_len;
+  char *value;
+  bool ambiguous;
+} trace_const_t;
+
+typedef struct {
   ant_trace_result_t *result;
   const char *root;
   size_t root_len;
@@ -46,7 +60,17 @@ typedef struct {
 
   trace_spec_t *specs;
   uint32_t spec_count, spec_cap;
+
+  trace_const_t *consts;
+  uint32_t const_count, const_cap;
+
+  char **materialize_roots;
+  uint32_t materialize_root_count, materialize_root_cap;
 } trace_ctx_t;
+
+static void trace_set_error(ant_trace_result_t *r, const char *fmt, ...);
+static int trace_find_module(trace_ctx_t *ctx, const char *abs_path);
+static int trace_add_module(trace_ctx_t *ctx, const char *abs_path, bool lenient);
 
 static void trace_index_free(trace_index_entry_t **map) {
   trace_index_entry_t *e, *tmp;
@@ -75,6 +99,19 @@ static bool trace_grow(void **items, uint32_t count, uint32_t *cap, size_t item_
   *items = grown;
   *cap = next;
   return true;
+}
+
+static bool trace_path_under(const char *path, const char *root) {
+  size_t root_len = strlen(root);
+  return strncmp(path, root, root_len) == 0 &&
+    (root_len == 1 || path[root_len] == '/' || path[root_len] == '\0');
+}
+
+static bool trace_path_is_materialized(trace_ctx_t *ctx, const char *path) {
+  for (uint32_t i = 0; i < ctx->materialize_root_count; i++) {
+    if (trace_path_under(path, ctx->materialize_roots[i])) return true;
+  }
+  return false;
 }
 
 __attribute__((format(printf, 2, 3)))
@@ -175,6 +212,8 @@ static int trace_add_module(trace_ctx_t *ctx, const char *abs_path, bool lenient
     .key = key,
     .format = MODULE_EVAL_FORMAT_UNKNOWN,
     .kind = (uint8_t)ESM_MODULE_KIND_CODE,
+    .bundle_flags = trace_path_is_materialized(ctx, abs_path)
+      ? ANT_BUNDLE_MODULE_MATERIALIZE : 0,
     .lenient = lenient,
     .data = NULL,
     .data_len = 0,
@@ -186,6 +225,193 @@ static int trace_add_module(trace_ctx_t *ctx, const char *abs_path, bool lenient
     return -1;
   }
   return (int)r->module_count++;
+}
+
+static bool trace_has_suffix(const char *path, const char *suffix) {
+  size_t path_len = strlen(path);
+  size_t suffix_len = strlen(suffix);
+  return path_len >= suffix_len &&
+    strcmp(path + path_len - suffix_len, suffix) == 0;
+}
+
+static bool trace_is_shared_library(const char *path) {
+  if (trace_has_suffix(path, ".dylib") || trace_has_suffix(path, ".dll")) return true;
+  const char *so = strstr(path, ".so");
+  return so && (so[3] == '\0' || so[3] == '.');
+}
+
+static bool trace_file_exists(const char *path) {
+  uv_fs_t req;
+  int rc = uv_fs_stat(NULL, &req, path, NULL);
+  uv_fs_req_cleanup(&req);
+  return rc == 0;
+}
+
+static bool trace_find_package_root(
+  const char *file, bool fallback_to_dir, char *out, size_t out_len
+) {
+  char dir[PATH_MAX];
+  if ((size_t)snprintf(dir, sizeof(dir), "%s", file) >= sizeof(dir)) return false;
+  char *slash = strrchr(dir, '/');
+  if (!slash) return false;
+  *slash = '\0';
+
+  char fallback[PATH_MAX];
+  if ((size_t)snprintf(fallback, sizeof(fallback), "%s", dir) >= sizeof(fallback)) return false;
+
+  for (;;) {
+    char package_json[PATH_MAX];
+    if ((size_t)snprintf(package_json, sizeof(package_json), "%s/package.json", dir) < sizeof(package_json) &&
+        trace_file_exists(package_json)) {
+      return (size_t)snprintf(out, out_len, "%s", dir) < out_len;
+    }
+
+    char *parent = strrchr(dir, '/');
+    if (!parent || parent == dir) break;
+    *parent = '\0';
+  }
+
+  return fallback_to_dir &&
+    (size_t)snprintf(out, out_len, "%s", fallback) < out_len;
+}
+
+static int trace_tree_has_native(trace_ctx_t *ctx, const char *dir) {
+  uv_fs_t req;
+  int rc = uv_fs_scandir(NULL, &req, dir, 0, NULL);
+  if (rc < 0) {
+    trace_set_error(ctx->result, "cannot scan native package %s: %s", dir, uv_strerror(rc));
+    uv_fs_req_cleanup(&req);
+    return -1;
+  }
+
+  uv_dirent_t entry;
+  while (uv_fs_scandir_next(&req, &entry) != UV_EOF) {
+    if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0 ||
+        strcmp(entry.name, "node_modules") == 0 || strcmp(entry.name, ".git") == 0)
+      continue;
+
+    char path[PATH_MAX];
+    if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir, entry.name) >= sizeof(path)) {
+      trace_set_error(ctx->result, "native package path is too long: %s/%s", dir, entry.name);
+      uv_fs_req_cleanup(&req);
+      return -1;
+    }
+
+    if (entry.type == UV_DIRENT_DIR) {
+      int found = trace_tree_has_native(ctx, path);
+      if (found != 0) {
+        uv_fs_req_cleanup(&req);
+        return found;
+      }
+    } else if (entry.type == UV_DIRENT_FILE && trace_has_suffix(path, ".node")) {
+      uv_fs_req_cleanup(&req);
+      return 1;
+    }
+  }
+
+  uv_fs_req_cleanup(&req);
+  return 0;
+}
+
+static int trace_add_asset(
+  trace_ctx_t *ctx, const char *abs_path, bool executable
+) {
+  int idx = trace_find_module(ctx, abs_path);
+  bool existing = idx >= 0;
+  if (!existing) idx = trace_add_module(ctx, abs_path, false);
+  if (idx < 0) return -1;
+
+  ant_trace_module_t *module = &ctx->result->modules[idx];
+  module->bundle_flags |= ANT_BUNDLE_MODULE_MATERIALIZE;
+  if (executable) module->bundle_flags |= ANT_BUNDLE_MODULE_EXECUTABLE;
+  if (!existing) module->kind = (uint8_t)ESM_MODULE_KIND_ASSET;
+  return idx;
+}
+
+static int trace_add_native_tree(trace_ctx_t *ctx, const char *dir) {
+  uv_fs_t req;
+  int rc = uv_fs_scandir(NULL, &req, dir, 0, NULL);
+  if (rc < 0) {
+    trace_set_error(ctx->result, "cannot scan native package %s: %s", dir, uv_strerror(rc));
+    uv_fs_req_cleanup(&req);
+    return -1;
+  }
+
+  uv_dirent_t entry;
+  while (uv_fs_scandir_next(&req, &entry) != UV_EOF) {
+    if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0 ||
+        strcmp(entry.name, "node_modules") == 0 || strcmp(entry.name, ".git") == 0)
+      continue;
+
+    char path[PATH_MAX];
+    if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir, entry.name) >= sizeof(path)) {
+      trace_set_error(ctx->result, "native package path is too long: %s/%s", dir, entry.name);
+      uv_fs_req_cleanup(&req);
+      return -1;
+    }
+
+    if (entry.type == UV_DIRENT_DIR) {
+      if (trace_add_native_tree(ctx, path) != 0) {
+        uv_fs_req_cleanup(&req);
+        return -1;
+      }
+      continue;
+    }
+    if (entry.type != UV_DIRENT_FILE) continue;
+
+    if (trace_has_suffix(path, ".node")) {
+      int idx = trace_add_module(ctx, path, false);
+      if (idx < 0) {
+        uv_fs_req_cleanup(&req);
+        return -1;
+      }
+      ctx->result->modules[idx].kind = (uint8_t)ESM_MODULE_KIND_NATIVE;
+      ctx->result->modules[idx].bundle_flags |= ANT_BUNDLE_MODULE_MATERIALIZE;
+      continue;
+    }
+
+    uv_fs_t stat_req;
+    int stat_rc = uv_fs_stat(NULL, &stat_req, path, NULL);
+    bool executable = stat_rc == 0 && (stat_req.statbuf.st_mode & 0111u) != 0;
+    uv_fs_req_cleanup(&stat_req);
+    if ((executable || trace_is_shared_library(path)) &&
+        trace_add_asset(ctx, path, executable) < 0) {
+      uv_fs_req_cleanup(&req);
+      return -1;
+    }
+  }
+
+  uv_fs_req_cleanup(&req);
+  return 0;
+}
+
+static int trace_register_native_package(
+  trace_ctx_t *ctx, const char *file, bool fallback_to_dir
+) {
+  char root[PATH_MAX];
+  if (!trace_find_package_root(file, fallback_to_dir, root, sizeof(root))) return 0;
+
+  for (uint32_t i = 0; i < ctx->materialize_root_count; i++) {
+    if (strcmp(ctx->materialize_roots[i], root) == 0) return 1;
+  }
+
+  int has_native = trace_tree_has_native(ctx, root);
+  if (has_native <= 0) return has_native;
+
+  if (!trace_grow(
+        (void **)&ctx->materialize_roots, ctx->materialize_root_count,
+        &ctx->materialize_root_cap, sizeof(*ctx->materialize_roots))) return -1;
+  char *root_copy = strdup(root);
+  if (!root_copy) return -1;
+  ctx->materialize_roots[ctx->materialize_root_count++] = root_copy;
+
+  for (uint32_t i = 0; i < ctx->result->module_count; i++) {
+    if (trace_path_under(ctx->result->modules[i].abs_path, root))
+      ctx->result->modules[i].bundle_flags |= ANT_BUNDLE_MODULE_MATERIALIZE;
+  }
+
+  if (trace_add_native_tree(ctx, root) != 0) return -1;
+  return 1;
 }
 
 static bool trace_add_edge(trace_ctx_t *ctx, uint32_t parent, const char *spec, uint32_t child, bool is_require) {
@@ -250,6 +476,215 @@ static bool node_is_require_ident(const sv_ast_t *node) {
   return node && node->type == N_IDENT && node->len == 7 && node->str && strncmp(node->str, "require", 7) == 0;
 }
 
+static const char *trace_target_platform(void) {
+#if defined(__APPLE__)
+  return "darwin";
+#elif defined(__linux__)
+  return "linux";
+#elif defined(_WIN32)
+  return "win32";
+#elif defined(__FreeBSD__)
+  return "freebsd";
+#else
+  return "unknown";
+#endif
+}
+
+static const char *trace_target_arch(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+  return "x64";
+#elif defined(__i386__) || defined(_M_IX86)
+  return "ia32";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  return "arm64";
+#elif defined(__arm__) || defined(_M_ARM)
+  return "arm";
+#else
+  return "unknown";
+#endif
+}
+
+static void trace_consts_clear(trace_ctx_t *ctx) {
+  for (uint32_t i = 0; i < ctx->const_count; i++) {
+    free(ctx->consts[i].name);
+    free(ctx->consts[i].value);
+  }
+  ctx->const_count = 0;
+}
+
+static const char *trace_const_lookup(
+  trace_ctx_t *ctx, const char *name, uint32_t name_len
+) {
+  for (uint32_t i = 0; i < ctx->const_count; i++) {
+    trace_const_t *entry = &ctx->consts[i];
+    if (entry->name_len == name_len && memcmp(entry->name, name, name_len) == 0)
+      return entry->ambiguous ? NULL : entry->value;
+  }
+  return NULL;
+}
+
+static bool trace_const_add(
+  trace_ctx_t *ctx, const char *name, uint32_t name_len, char *value
+) {
+  for (uint32_t i = 0; i < ctx->const_count; i++) {
+    trace_const_t *entry = &ctx->consts[i];
+    if (entry->name_len != name_len || memcmp(entry->name, name, name_len) != 0)
+      continue;
+    if (!entry->ambiguous && strcmp(entry->value, value) != 0) {
+      free(entry->value);
+      entry->value = NULL;
+      entry->ambiguous = true;
+    }
+    free(value);
+    return true;
+  }
+
+  if (!trace_grow(
+        (void **)&ctx->consts, ctx->const_count,
+        &ctx->const_cap, sizeof(*ctx->consts))) {
+    free(value);
+    return false;
+  }
+
+  char *name_copy = strndup(name, name_len);
+  if (!name_copy) {
+    free(value);
+    return false;
+  }
+  ctx->consts[ctx->const_count++] = (trace_const_t){
+    .name = name_copy,
+    .name_len = name_len,
+    .value = value,
+  };
+  return true;
+}
+
+static char *trace_join_strings(const char *left, const char *right) {
+  size_t left_len = strlen(left);
+  size_t right_len = strlen(right);
+  if (left_len > SIZE_MAX - right_len - 1) return NULL;
+  char *joined = malloc(left_len + right_len + 1);
+  if (!joined) return NULL;
+  memcpy(joined, left, left_len);
+  memcpy(joined + left_len, right, right_len + 1);
+  return joined;
+}
+
+static char *trace_eval_static_string(trace_ctx_t *ctx, const sv_ast_t *node) {
+  if (!node) return NULL;
+  if (node->type == N_STRING && node->str) return strndup(node->str, node->len);
+
+  if (node->type == N_IDENT && node->str) {
+    const char *value = trace_const_lookup(ctx, node->str, node->len);
+    return value ? strdup(value) : NULL;
+  }
+
+  if (node->type == N_MEMBER && node_is_ident(node->left, "process", 7)) {
+    if (node_prop_is(node->right, "platform", 8)) return strdup(trace_target_platform());
+    if (node_prop_is(node->right, "arch", 4)) return strdup(trace_target_arch());
+  }
+
+  if (node->type == N_BINARY && node->op == TOK_PLUS) {
+    char *left = trace_eval_static_string(ctx, node->left);
+    if (!left) return NULL;
+    char *right = trace_eval_static_string(ctx, node->right);
+    if (!right) {
+      free(left);
+      return NULL;
+    }
+    char *joined = trace_join_strings(left, right);
+    free(left);
+    free(right);
+    return joined;
+  }
+
+  if (node->type == N_TEMPLATE) {
+    char *result = strdup("");
+    if (!result) return NULL;
+    for (int i = 0; i < node->args.count; i++) {
+      char *part = trace_eval_static_string(ctx, node->args.items[i]);
+      if (!part) {
+        free(result);
+        return NULL;
+      }
+      char *joined = trace_join_strings(result, part);
+      free(result);
+      free(part);
+      if (!joined) return NULL;
+      result = joined;
+    }
+    return result;
+  }
+
+  return NULL;
+}
+
+static bool trace_eval_static_bool(
+  trace_ctx_t *ctx, const sv_ast_t *node, bool *out
+) {
+  if (!node) return false;
+  if (node->type == N_BOOL) {
+    *out = node->num != 0;
+    return true;
+  }
+  if (node->type == N_UNARY && node->op == TOK_NOT) {
+    bool value;
+    if (!trace_eval_static_bool(ctx, node->right ? node->right : node->left, &value))
+      return false;
+    *out = !value;
+    return true;
+  }
+  if (node->type != N_BINARY ||
+      (node->op != TOK_EQ && node->op != TOK_NE &&
+       node->op != TOK_SEQ && node->op != TOK_SNE)) return false;
+
+  char *left = trace_eval_static_string(ctx, node->left);
+  if (!left) return false;
+  char *right = trace_eval_static_string(ctx, node->right);
+  if (!right) {
+    free(left);
+    return false;
+  }
+
+  bool equal = strcmp(left, right) == 0;
+  free(left);
+  free(right);
+  *out = (node->op == TOK_EQ || node->op == TOK_SEQ) ? equal : !equal;
+  return true;
+}
+
+static bool trace_bytes_contain(
+  const char *value, uint32_t value_len, const char *needle
+) {
+  size_t needle_len = strlen(needle);
+  if (!value || value_len < needle_len) return false;
+  for (uint32_t i = 0; i <= value_len - needle_len; i++) {
+    if (memcmp(value + i, needle, needle_len) == 0) return true;
+  }
+  return false;
+}
+
+static bool trace_node_mentions_native_addon(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_STRING &&
+      (trace_bytes_contain(node->str, node->len, ".node") ||
+       trace_bytes_contain(node->aux, node->aux_len, ".node"))) return true;
+
+  if (trace_node_mentions_native_addon(node->left) ||
+      trace_node_mentions_native_addon(node->right) ||
+      trace_node_mentions_native_addon(node->cond) ||
+      trace_node_mentions_native_addon(node->body) ||
+      trace_node_mentions_native_addon(node->catch_param) ||
+      trace_node_mentions_native_addon(node->catch_body) ||
+      trace_node_mentions_native_addon(node->finally_body) ||
+      trace_node_mentions_native_addon(node->init) ||
+      trace_node_mentions_native_addon(node->update)) return true;
+  for (int i = 0; i < node->args.count; i++) {
+    if (trace_node_mentions_native_addon(node->args.items[i])) return true;
+  }
+  return false;
+}
+
 static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *node) {
   if (!node) return true;
 
@@ -267,23 +702,60 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
       break;
 
     case N_IMPORT:
-      if (node->right && node->right->type == N_STRING && node->right->str) {
-        if (!trace_push_spec(ctx, node->right->str, node->right->len, false, false, node->line)) return false;
-      } else if (ctx->try_depth == 0) {
-        trace_warn(ctx, "%s:%u: import() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled", file, node->line);
+      if (node->right) {
+        char *spec = trace_eval_static_string(ctx, node->right);
+        if (spec) {
+          bool pushed = trace_push_spec(ctx, spec, (uint32_t)strlen(spec), false, false, node->line);
+          free(spec);
+          if (!pushed) return false;
+        } else {
+          trace_warn(ctx, "%s:%u: import() with a non-constant specifier is not traced%s; it will fail at runtime unless the target is bundled",
+            file, node->line, ctx->try_depth > 0 ? " inside try/catch" : "");
+        }
       }
       break;
 
     case N_CALL:
       if (node_is_require_ident(node->left) && node->args.count >= 1) {
         const sv_ast_t *arg = node->args.items[0];
-        if (arg && arg->type == N_STRING && arg->str) {
-          if (!trace_push_spec(ctx, arg->str, arg->len, true, false, node->line)) return false;
-        } else if (ctx->try_depth == 0) {
-          trace_warn(ctx, "%s:%u: require() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled", file, node->line);
+        char *spec = trace_eval_static_string(ctx, arg);
+        if (spec) {
+          bool pushed = trace_push_spec(ctx, spec, (uint32_t)strlen(spec), true, false, node->line);
+          free(spec);
+          if (!pushed) return false;
+        } else {
+          int native_package = trace_node_mentions_native_addon(arg)
+            ? trace_register_native_package(ctx, file, false) : 0;
+          if (native_package < 0) return false;
+          if (native_package == 0) {
+            trace_warn(ctx, "%s:%u: require() with a non-constant specifier is not traced%s; it will fail at runtime unless the target is bundled",
+              file, node->line, ctx->try_depth > 0 ? " inside try/catch" : "");
+          }
         }
       }
       break;
+
+    case N_VAR:
+      if (node->var_kind == SV_VAR_CONST) {
+        for (int i = 0; i < node->args.count; i++) {
+          const sv_ast_t *decl = node->args.items[i];
+          if (!decl || decl->type != N_VARDECL || !decl->left ||
+              decl->left->type != N_IDENT || !decl->left->str || !decl->right) continue;
+          char *value = trace_eval_static_string(ctx, decl->right);
+          if (value && !trace_const_add(
+                ctx, decl->left->str, decl->left->len, value)) return false;
+        }
+      }
+      break;
+
+    case N_IF: {
+      bool condition;
+      if (trace_eval_static_bool(ctx, node->cond, &condition)) {
+        if (!trace_scan_ast(ctx, file, node->cond)) return false;
+        return trace_scan_ast(ctx, file, condition ? node->left : node->right);
+      }
+      break;
+    }
 
     case N_TRY: {
       ctx->try_depth++;
@@ -397,14 +869,15 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
 
   size_t rlen = strlen(resolved);
   if (rlen > 5 && strcmp(resolved + rlen - 5, ".node") == 0) {
-    if (sp->lenient || sp->optional) {
-      if (sp->optional) trace_warn(ctx, "%s:%u: native addon \"%s\" inside try/catch was not bundled; it will throw at runtime", parent_path, sp->line, spec);
+    int native_package = trace_register_native_package(ctx, resolved, true);
+    if (native_package <= 0) {
+      if (native_package == 0)
+        trace_set_error(r, "%s:%u: cannot determine native package assets for \"%s\"", parent_path, sp->line, spec);
+      else if (!r->error[0])
+        trace_set_error(r, "out of memory while tracing native package assets");
       free(resolved);
-      return 0;
+      return -1;
     }
-    trace_set_error(r, "%s:%u: native addon \"%s\" cannot be embedded in a compiled executable", parent_path, sp->line, spec);
-    free(resolved);
-    return -1;
   }
 
   int child = trace_add_module(ctx, resolved, sp->lenient);
@@ -425,8 +898,10 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   ant_trace_result_t *r = ctx->result;
   const char *abs_path = r->modules[idx].abs_path;
 
-  esm_module_kind_t kind = esm_classify_kind_for_path(abs_path);
-  if (kind == ESM_MODULE_KIND_NATIVE) {
+  esm_module_kind_t kind = r->modules[idx].kind == (uint8_t)ESM_MODULE_KIND_ASSET
+    ? ESM_MODULE_KIND_ASSET : esm_classify_kind_for_path(abs_path);
+  if (kind == ESM_MODULE_KIND_NATIVE &&
+      !(r->modules[idx].bundle_flags & ANT_BUNDLE_MODULE_MATERIALIZE)) {
     trace_set_error(r, "native addon %s cannot be embedded in a compiled executable", abs_path);
     return -1;
   }
@@ -514,12 +989,13 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   for (uint32_t i = 0; i < ctx->spec_count; i++) free(ctx->specs[i].spec);
   ctx->spec_count = 0;
   ctx->try_depth = 0;
+  trace_consts_clear(ctx);
 
   bool scan_ok = trace_scan_ast(ctx, abs_path, program);
   parse_arena_rewind(mark);
 
   if (!scan_ok) {
-    trace_set_error(r, "out of memory while tracing module graph");
+    if (!r->error[0]) trace_set_error(r, "out of memory while tracing module graph");
     return -1;
   }
 
@@ -583,6 +1059,11 @@ int ant_esm_trace_graph(ant_t *js, const char *entry_abs_path, const char *root_
 
   for (uint32_t i = 0; i < ctx.spec_count; i++) free(ctx.specs[i].spec);
   free(ctx.specs);
+  trace_consts_clear(&ctx);
+  free(ctx.consts);
+  for (uint32_t i = 0; i < ctx.materialize_root_count; i++)
+    free(ctx.materialize_roots[i]);
+  free(ctx.materialize_roots);
   trace_index_free(&ctx.module_map);
   trace_index_free(&ctx.edge_set);
   return 0;
@@ -590,6 +1071,11 @@ int ant_esm_trace_graph(ant_t *js, const char *entry_abs_path, const char *root_
 fail:
   for (uint32_t i = 0; i < ctx.spec_count; i++) free(ctx.specs[i].spec);
   free(ctx.specs);
+  trace_consts_clear(&ctx);
+  free(ctx.consts);
+  for (uint32_t i = 0; i < ctx.materialize_root_count; i++)
+    free(ctx.materialize_roots[i]);
+  free(ctx.materialize_roots);
   trace_index_free(&ctx.module_map);
   trace_index_free(&ctx.edge_set);
   return -1;

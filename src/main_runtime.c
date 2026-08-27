@@ -104,6 +104,13 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  char materialize_error[512];
+  if (ant_bundle_materialize(&bundle, materialize_error, sizeof(materialize_error)) != 0) {
+    fprintf(stderr, "ant-runtime: %s\n", materialize_error);
+    ant_bundle_close(&bundle);
+    return EXIT_FAILURE;
+  }
+
   const ant_bundle_module_t *entry_mod;
   if (run_key[0]) {
     entry_mod = ant_bundle_get(&bundle, run_key);
