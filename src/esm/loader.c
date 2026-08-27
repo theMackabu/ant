@@ -1509,6 +1509,42 @@ static void esm_module_record_cleanup(esm_module_record_t *record) {
   record->program = NULL;
 }
 
+static ant_value_t esm_eval_parsed_record(
+  ant_t *js, esm_module_record_t *record,
+  const char *source, size_t source_len
+) {
+  sv_func_t *func = js_compile_parsed_bytecode(
+    js, record->program, source,
+    source_len, SV_COMPILE_MODULE
+  );
+  
+  esm_module_record_cleanup(record);
+
+  if (func) return js_execute_compiled_bytecode(js, func, NULL);
+  if (js->thrown_exists) return mkval(kTypeError, 0);
+  
+  return js_mkerr_typed(
+    js, JS_ERR_INTERNAL | JS_ERR_NO_STACK,
+    "Unexpected compile error"
+  );
+}
+
+static void esm_handle_module_promise(
+  ant_t *js, esm_module_t *mod, ant_value_t result
+) {
+  if (vtype(result) != kTypePromise) return;
+
+  ant_esm_state_t *state = js->esm.state;
+  if (!state || state->dynamic_import_depth <= 0) {
+    js_run_event_loop(js);
+    return;
+  }
+
+  mod->has_tla = true;
+  mod->tla_promise = result;
+  state->last_tla_module = mod;
+}
+
 static ant_value_t esm_parse_module_record(
   ant_t *js,
   const char *resolved_path,
@@ -1827,6 +1863,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   );
   
   if (is_err(prep_res)) {
+    esm_module_record_cleanup(&record);
     free(content);
     mod->is_loading = false;
     return prep_res;
@@ -1834,8 +1871,8 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
 
   if (record.is_esm) {
     ant_value_t dep_res = esm_instantiate_static_dependencies(js, mod, record.program, ns);
-    esm_module_record_cleanup(&record);
     if (is_err(dep_res)) {
+      esm_module_record_cleanup(&record);
       free(content);
       mod->is_loading = false;
       return dep_res;
@@ -1845,21 +1882,15 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   js_set_filename(js, mod->resolved_path);
   js_module_eval_ctx_push(js, &eval_ctx);
 
-  ant_value_t result = esm_eval_module_with_format(
-    js, mod->resolved_path, js_code, 
-    js_len, ns, &mod->format
-  );
-  
+  ant_value_t result = record.is_esm
+    ? esm_eval_parsed_record(js, &record, js_code, js_len)
+    : esm_eval_module_with_format(
+      js, mod->resolved_path, js_code,
+      js_len, ns, &mod->format
+    );
+
   free(content);
-  if (vtype(result) == kTypePromise) {
-    if (js->esm.state && js->esm.state->dynamic_import_depth > 0) {
-      mod->has_tla = true;
-      mod->tla_promise = result;
-      js->esm.state->last_tla_module = mod;
-    } else {
-      js_run_event_loop(js);
-    }
-  }
+  esm_handle_module_promise(js, mod, result);
 
   js_module_eval_ctx_pop(js, &eval_ctx);
   js_set_filename(js, prev_filename);
@@ -1868,6 +1899,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
     mod->is_loading = false;
     return result;
   }
+  
   return esm_complete_namespace_module(js, mod, ns);
 }
 
