@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>@antjs.org/wasm browser smoke test</title>
+<body data-status="pending">
+  pending
+</body>
+<script type="module">
+  import { Ant } from '../dist/index.js';
+
+  try {
+    const ant = await Ant.create({
+      globals: { greet: name => `Hello, ${name}!` }
+    });
+    const value = await ant.eval(`greet("browser")`);
+    ant.dispose();
+    document.body.dataset.status = 'passed';
+    document.body.textContent = value;
+  } catch (error) {
+    document.body.dataset.status = 'failed';
+    document.body.textContent = error?.stack ?? String(error);
+  }
+</script>

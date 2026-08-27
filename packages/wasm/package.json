@@ -1,0 +1,51 @@
+{
+  "name": "@antjs.org/wasm",
+  "version": "0.0.1",
+  "description": "Use the Ant Silver JavaScript engine through WebAssembly",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "examples/",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "examples": "node examples/run-all.mjs",
+    "example:basic": "node examples/basic.mjs",
+    "example:host-functions": "node examples/host-functions.mjs",
+    "example:isolated-runtimes": "node examples/isolated-runtimes.mjs",
+    "example:limits": "node examples/limits-and-errors.mjs",
+    "example:rules-engine": "node examples/rules-engine.mjs",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theMackabu/ant.git",
+    "directory": "packages/wasm"
+  },
+  "keywords": [
+    "ant",
+    "javascript",
+    "runtime",
+    "sandbox",
+    "wasm",
+    "webassembly"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

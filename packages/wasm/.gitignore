@@ -1,0 +1,5 @@
+/.build-probe
+/.cache
+/build
+/dist
+/vendor

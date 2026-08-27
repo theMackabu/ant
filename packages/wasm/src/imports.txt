@@ -1,0 +1,3 @@
+ant_wasm_host_call
+ant_wasm_now_ms
+ant_wasm_random_fill
