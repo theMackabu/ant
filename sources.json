@@ -51,6 +51,7 @@
   },
   "runtime": {
     "files": [
+      "src/cli/version.c",
       "src/sandbox/policy.c",
       "src/modules/sandbox_stub.c"
     ],

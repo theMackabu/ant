@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "vfs_bundle.h"
 #include "silver/vm.h"
+#include "cli/version.h"
 #include "esm/loader.h"
 #include "modules/server.h"
 
@@ -71,6 +72,14 @@ int main(int argc, char *argv[]) {
   crprintf_var("fatal", "<bold+red>FATAL</bold>");
   crprintf_var("error", "<red>Error</red>");
   crprintf_var("warn", "<yellow>Warning</yellow>");
+
+  if (!run_key[0] && argc > 1) {
+    if (strcmp(argv[1], "--ant-version-raw") == 0) {
+      fputs(ANT_VERSION "\n", stdout);
+      return EXIT_SUCCESS;
+    }
+    if (strcmp(argv[1], "--ant-version") == 0) return ant_version_print();
+  }
 
   static char exe_path[4096];
   if (ant_get_exe_path(exe_path, sizeof(exe_path), argc, argv) != 0) {

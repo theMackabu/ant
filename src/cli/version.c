@@ -557,7 +557,7 @@ int ant_upgrade(int argc, char **argv) {
   return EXIT_SUCCESS;
 }
 
-int ant_version(void *argtable[]) {
+int ant_version_print(void) {
   time_t build_time = (time_t)ANT_BUILD_TIMESTAMP;
   time_t now = time(NULL);
   long diff = (long)difftime(now, build_time);
@@ -603,7 +603,11 @@ int ant_version(void *argtable[]) {
   );
   
   printf("built for %s\n", ANT_TARGET_TRIPLE);
-  arg_freetable(argtable, ARGTABLE_COUNT);
-  
   return EXIT_SUCCESS;
+}
+
+int ant_version(void *argtable[]) {
+  int rc = ant_version_print();
+  arg_freetable(argtable, ARGTABLE_COUNT);
+  return rc;
 }

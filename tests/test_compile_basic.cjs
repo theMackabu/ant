@@ -36,6 +36,21 @@ try {
   assert.ok(stdout.includes(`execPath: ${fs.realpathSync(out)}`), stdout);
   assert.ok(stdout.includes('dirname: /$ant'), stdout);
 
+  const versionEnv = { ...process.env, ANT_NO_VERSION_CHECK: '1' };
+  const antVersion = spawnSync(ant, ['--version'], { encoding: 'utf8', env: versionEnv });
+  assert.equal(antVersion.status, 0, antVersion.stderr);
+
+  r = spawnSync(out, ['--ant-version'], { encoding: 'utf8', env: versionEnv });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, antVersion.stdout);
+
+  const antVersionRaw = spawnSync(ant, ['--version-raw'], { encoding: 'utf8' });
+  assert.equal(antVersionRaw.status, 0, antVersionRaw.stderr);
+
+  r = spawnSync(out, ['--ant-version-raw'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, antVersionRaw.stdout);
+
   r = spawnSync(out, ['--throw'], { encoding: 'utf8', cwd: os.homedir() });
   assert.equal(r.status, 0, `unhandled TLA rejection exits 0 like plain ant, got ${r.status}`);
   assert.match(r.stderr, /\/\$ant\/lib\/util\.ts:\d+:\d+/, r.stderr);
