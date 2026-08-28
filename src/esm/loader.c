@@ -1164,6 +1164,13 @@ static inline bool esm_is_esm_extension(const char *path) {
     esm_has_suffix(path, ".mts");
 }
 
+static bool esm_is_extensionless(const char *path) {
+  if (!path || !path[0]) return false;
+  const char *basename = esm_path_last_sep_const(path);
+  basename = basename ? basename + 1 : path;
+  return basename[0] != '\0' && strchr(basename, '.') == NULL;
+}
+
 static bool esm_lookup_package_type(ant_t *js, const char *resolved_path, esm_package_type_t *out_type) {
   if (out_type) *out_type = ESM_PACKAGE_TYPE_NONE;
   if (!resolved_path || !resolved_path[0]) return false;
@@ -1196,7 +1203,7 @@ ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_pat
   if (esm_is_cjs_extension(resolved_path)) return MODULE_EVAL_FORMAT_CJS;
   if (esm_is_esm_extension(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
 
-  if (esm_has_suffix(resolved_path, ".js")) {
+  if (esm_has_suffix(resolved_path, ".js") || esm_is_extensionless(resolved_path)) {
     esm_package_type_t pkg_type = ESM_PACKAGE_TYPE_NONE;
     (void)esm_lookup_package_type(js, resolved_path, &pkg_type);
     if (pkg_type == ESM_PACKAGE_TYPE_MODULE) return MODULE_EVAL_FORMAT_ESM;
