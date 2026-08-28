@@ -178,6 +178,41 @@ function h(a, b, c, d) {}
 check('length folds', h.bind(0, 1).bind(0, 2).length, 2);
 check('name prefixes', f.bind({ x: 1 }, 10).bind({ x: 2 }, 20).name, 'bound bound f');
 
+// BoundFunctionCreate defines length as non-writable, non-enumerable, and
+// configurable. An enumerable length breaks wrappers such as pify: their
+// strict for-in copy tries to assign it onto another function's read-only
+// length property.
+{
+  const boundKinds = [
+    ['ordinary', function (a, b) {}.bind(null)],
+    ['native', Math.max.bind(null)],
+    ['proxy', new Proxy(function (a, b) {}, {}).bind(null)],
+  ];
+
+  for (const [kind, bound] of boundKinds) {
+    const descriptor = Object.getOwnPropertyDescriptor(bound, 'length');
+    check(`${kind} bound length writable`, descriptor.writable, false);
+    check(`${kind} bound length enumerable`, descriptor.enumerable, false);
+    check(`${kind} bound length configurable`, descriptor.configurable, true);
+    check(`${kind} bound enumerable keys`, Object.keys(bound), []);
+  }
+
+  (function () {
+    'use strict';
+    const input = function (value) {}.bind(null);
+    const output = function (...args) {};
+    let threw = false;
+
+    try {
+      for (const key in input) output[key] = input[key];
+    } catch {
+      threw = true;
+    }
+
+    check('strict bound-function property copy', threw, false);
+  })();
+}
+
 // Bound functions do not define their own prototype property. Construction
 // unwraps every bound layer when selecting the instance prototype, while
 // retaining all bound arguments.

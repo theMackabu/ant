@@ -6040,6 +6040,10 @@ static inline bool bound_argv_copy(
   return true;
 }
 
+static inline ant_value_t js_define_bound_function_length(ant_t *js, ant_value_t fn_obj, int length) {
+  return mkprop_interned_exact(js, fn_obj, js->intern.length, tov((double)length), ANT_PROP_ATTR_CONFIGURABLE);
+}
+
 static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t func = js->this_val;
   uint8_t func_type = vtype(func);
@@ -6116,12 +6120,15 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
         !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
       return js_mkerr(js, "oom");
 
-    js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+    ant_value_t length_result = js_define_bound_function_length(js, bound_func, bound_length);
+    if (is_err(length_result)) return length_result;
+    
     ant_value_t name_result = js_set_function_name_prefixed(
-      js, bound_func, "bound ", 6, target_name, target_name_len
+      js, bound_func, "bound ", 6, 
+      target_name, target_name_len
     );
+    
     if (is_err(name_result)) return name_result;
-
     js_mark_constructor(bound_func, js_is_constructor(func));
 
     return bound;
@@ -6146,10 +6153,14 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
         !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
       return js_mkerr(js, "oom");
     
-    js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+    ant_value_t length_result = js_define_bound_function_length(js, bound_func, bound_length);
+    if (is_err(length_result)) return length_result;
+    
     ant_value_t name_result = js_set_function_name_prefixed(
-      js, bound_func, "bound ", 6, target_name, target_name_len
+      js, bound_func, "bound ", 6, 
+      target_name, target_name_len
     );
+    
     if (is_err(name_result)) return name_result;
     js_mark_constructor(bound_func, js_is_constructor(func));
     
@@ -6253,7 +6264,9 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     set_slot(bound_func, SLOT_CFUNC, cfunc_slot);
   }
   
-  js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
+  ant_value_t length_result = js_define_bound_function_length(js, bound_func, bound_length);
+  if (is_err(length_result)) return length_result;
+  
   ant_value_t name_result = js_set_function_name_prefixed(
     js, bound_func, "bound ", 6, 
     target_name, target_name_len
