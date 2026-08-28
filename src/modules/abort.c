@@ -151,10 +151,7 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   ant_value_t call_args[1] = { event_obj };
 
   ant_value_t onabort = js_get(js, *cur, "onabort");
-  if (is_callable(onabort)) {
-    sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, false);
-    process_microtasks(js);
-  }
+  if (is_callable(onabort)) sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, false);
 
   for (unsigned int i = 0;;) {
     unsigned int n = abort_array_len(d->listeners);
@@ -169,7 +166,6 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
     if (!is_callable(cb)) continue;
     
     sv_vm_call(js->vm, js, cb, *cur, call_args, 1, NULL, false);
-    process_microtasks(js);
   }}
   
   utarray_free(to_fire);
