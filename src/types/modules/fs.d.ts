@@ -12,6 +12,7 @@ declare module 'fs' {
   }
 
   type Encoding = 'utf8' | 'utf-8' | 'utf16le' | 'ucs2' | 'ucs-2' | 'latin1' | 'binary' | 'base64' | 'base64url' | 'hex' | 'ascii';
+  type SymlinkType = 'dir' | 'file' | 'junction';
   type WatchEventType = 'rename' | 'change';
 
   interface FSWatcher {
@@ -145,6 +146,13 @@ declare module 'fs' {
   function realpathSync(path: string): string;
   function readlink(path: string): Promise<string>;
   function readlinkSync(path: string): string;
+  function symlink(target: string | URL, path: string | URL, callback: (err: Error | null) => void): void;
+  function symlink(
+    target: string | URL,
+    path: string | URL,
+    type: SymlinkType | null,
+    callback: (err: Error | null) => void
+  ): void;
   namespace realpathSync {
     function native(path: string): string;
   }
@@ -233,6 +241,7 @@ declare module 'fs/promises' {
   }
 
   type Encoding = 'utf8' | 'utf-8' | 'utf16le' | 'ucs2' | 'ucs-2' | 'latin1' | 'binary' | 'base64' | 'base64url' | 'hex' | 'ascii';
+  type SymlinkType = 'dir' | 'file' | 'junction';
 
   const constants: {
     F_OK: number;
@@ -267,6 +276,7 @@ declare module 'fs/promises' {
   function readdir(path: string): Promise<string[]>;
   function realpath(path: string): Promise<string>;
   function readlink(path: string): Promise<string>;
+  function symlink(target: string | URL, path: string | URL, type?: SymlinkType | null): Promise<void>;
 }
 
 declare module 'ant:fs/promises' {

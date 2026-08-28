@@ -66,6 +66,7 @@ typedef enum {
   FS_OP_MKDTEMP,
   FS_OP_CHMOD,
   FS_OP_RENAME,
+  FS_OP_SYMLINK,
   FS_OP_FSYNC
 } fs_op_type_t;
 
@@ -1849,6 +1850,18 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
 }
 
 static void on_rename_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+
+  if (uv_req->result < 0) {
+    fs_request_fail(req, (int)uv_req->result);
+  }
+
+  uv_fs_req_cleanup(uv_req);
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_symlink_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0) {
@@ -3756,6 +3769,41 @@ static ant_value_t builtin_fs_readlinkSync(ant_t *js, ant_value_t *args, int nar
   return link;
 }
 
+static ant_value_t fs_parse_symlink_type(
+  ant_t *js,
+  ant_value_t type_val,
+  const char *fn_name,
+  int *flags
+) {
+  *flags = 0;
+  if (vtype(type_val) == kTypeUndefined || vtype(type_val) == kTypeNull) return js_mkundef();
+
+  if (vtype(type_val) == kTypeString) {
+    size_t type_len = 0;
+    const char *type = js_getstr(js, type_val, &type_len);
+
+    if (type && type_len == 4 && memcmp(type, "file", 4) == 0) return js_mkundef();
+    if (type && type_len == 3 && memcmp(type, "dir", 3) == 0) {
+    #ifdef _WIN32
+      *flags = UV_FS_SYMLINK_DIR;
+    #endif
+      return js_mkundef();
+    }
+    if (type && type_len == 8 && memcmp(type, "junction", 8) == 0) {
+  #ifdef _WIN32
+      *flags = UV_FS_SYMLINK_JUNCTION;
+    #endif
+      return js_mkundef();
+    }
+  }
+
+  return js_mkerr_typed(
+    js,JS_ERR_TYPE,
+    "%s() type must be 'dir', 'file', 'junction', null, or undefined",
+    fn_name
+  );
+}
+
 static ant_value_t builtin_fs_symlinkSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "symlinkSync() requires target and path arguments");
 
@@ -3805,6 +3853,63 @@ static ant_value_t builtin_fs_symlinkSync(ant_t *js, ant_value_t *args, int narg
   free(target_cstr);
   free(path_cstr);
   return js_mkundef();
+}
+
+static ant_value_t builtin_fs_symlink(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "symlink() requires target and path arguments");
+
+  ant_value_t target_val = fs_coerce_path(js, args[0]);
+  ant_value_t path_val = fs_coerce_path(js, args[1]);
+  if (vtype(target_val) != kTypeString || vtype(path_val) != kTypeString) {
+    return js_mkerr(js, "symlink() target and path must be strings");
+  }
+
+  int flags = 0;
+  ant_value_t type_result = fs_parse_symlink_type(
+    js, nargs > 2 ? args[2] : js_mkundef(),
+    "symlink", &flags
+  );
+  
+  if (is_err(type_result)) return type_result;
+
+  size_t target_len = 0;
+  size_t path_len = 0;
+  
+  const char *target = js_getstr(js, target_val, &target_len);
+  const char *path = js_getstr(js, path_val, &path_len);
+  if (!target || !path) return js_mkerr(js, "Failed to get symlink path strings");
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_SYMLINK;
+  req->promise = js_mkpromise(js);
+  
+  ant_value_t promise = req->promise;
+  req->path = strndup(target, target_len);
+  req->path2 = strndup(path, path_len);
+  req->uv_req.data = req;
+
+  if (!req->path || !req->path2) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_symlink(
+    uv_default_loop(), &req->uv_req,
+    req->path, req->path2,
+    flags, on_symlink_complete
+  );
+
+  if (result < 0) {
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return promise;
 }
 
 static ant_value_t builtin_fs_readlink(ant_t *js, ant_value_t *args, int nargs) {
@@ -4903,33 +5008,68 @@ static ant_value_t fs_make_callback_wrapper(ant_t *js, ant_value_t original, boo
   return js_heavy_mkfun(js, fs_callback_wrapper_call, config);
 }
 
+static ant_value_t fs_promise_wrapper_call(ant_t *js, ant_value_t *args, int nargs) {
+  GC_ROOT_SAVE(root_mark, js);
+  
+  ant_value_t wrapper = js_getcurrentfunc(js);
+  ant_value_t original = js_get_slot(wrapper, SLOT_DATA);
+  ant_value_t this_arg = js_getthis(js);
+  ant_value_t result = js_mkundef();
+  ant_value_t error = js_mkundef();
+
+  GC_ROOT_PIN(js, original);
+  GC_ROOT_PIN(js, this_arg);
+
+  result = fs_call_value(js, original, this_arg, args, nargs);
+  GC_ROOT_PIN(js, result);
+
+  if (is_err(result) || js->thrown_exists) {
+    error = js->thrown_exists ? js->thrown_value : result;
+    GC_ROOT_PIN(js, error);
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    result = fs_rejected_promise(js, error);
+  } else if (vtype(result) != kTypePromise) {
+    result = fs_resolved_promise(js, result);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
+static ant_value_t fs_make_promise_wrapper(ant_t *js, ant_value_t original) {
+  return js_heavy_mkfun(js, fs_promise_wrapper_call, original);
+}
+
 static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
-  js_set(js, lib, "appendFile", js_mkfun(builtin_fs_appendFile));
-  js_set(js, lib, "cp", js_mkfun(builtin_fs_cp));
-  js_set(js, lib, "copyFile", js_mkfun(builtin_fs_copyFile));
-  js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
-  js_set(js, lib, "open", js_mkfun(builtin_fs_open_filehandle));
-  js_set(js, lib, "close", js_mkfun(builtin_fs_close_fd));
-  js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
-  js_set(js, lib, "write", js_mkfun(builtin_fs_write_fd));
-  js_set(js, lib, "writev", js_mkfun(builtin_fs_writev_fd));
-  js_set(js, lib, "rename", js_mkfun(builtin_fs_rename));
-  js_set(js, lib, "rm", js_mkfun(builtin_fs_rm));
-  js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
-  js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));
-  js_set(js, lib, "mkdtemp", js_mkfun(builtin_fs_mkdtemp));
-  js_set(js, lib, "rmdir", js_mkfun(builtin_fs_rmdir));
-  js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
-  js_set(js, lib, "lstat", js_mkfun(builtin_fs_lstat));
-  js_set(js, lib, "fstat", js_mkfun(builtin_fs_fstat));
-  js_set(js, lib, "utimes", js_mkfun(builtin_fs_utimes));
-  js_set(js, lib, "futimes", js_mkfun(builtin_fs_futimes));
-  js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
-  js_set(js, lib, "access", js_mkfun(builtin_fs_access));
-  js_set(js, lib, "chmod", js_mkfun(builtin_fs_chmod));
-  js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
-  js_set(js, lib, "realpath", js_mkfun(builtin_fs_realpath));
-  js_set(js, lib, "readlink", js_mkfun(builtin_fs_readlink));
+  js_set(js, lib, "appendFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_appendFile)));
+  js_set(js, lib, "cp", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_cp)));
+  js_set(js, lib, "copyFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_copyFile)));
+  js_set(js, lib, "readFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_readFile)));
+  js_set(js, lib, "open", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_open_filehandle)));
+  js_set(js, lib, "close", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_close_fd)));
+  js_set(js, lib, "writeFile", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_writeFile)));
+  js_set(js, lib, "write", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_write_fd)));
+  js_set(js, lib, "writev", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_writev_fd)));
+  js_set(js, lib, "rename", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_rename)));
+  js_set(js, lib, "rm", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_rm)));
+  js_set(js, lib, "unlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_unlink)));
+  js_set(js, lib, "mkdir", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_mkdir)));
+  js_set(js, lib, "mkdtemp", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_mkdtemp)));
+  js_set(js, lib, "rmdir", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_rmdir)));
+  js_set(js, lib, "stat", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_stat)));
+  js_set(js, lib, "lstat", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_lstat)));
+  js_set(js, lib, "fstat", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_fstat)));
+  js_set(js, lib, "utimes", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_utimes)));
+  js_set(js, lib, "futimes", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_futimes)));
+  js_set(js, lib, "exists", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_exists)));
+  js_set(js, lib, "access", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_access)));
+  js_set(js, lib, "chmod", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_chmod)));
+  js_set(js, lib, "readdir", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_readdir)));
+  js_set(js, lib, "realpath", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_realpath)));
+  js_set(js, lib, "readlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_readlink)));
+  js_set(js, lib, "symlink", fs_make_promise_wrapper(js, js_mkfun(builtin_fs_symlink)));
 }
 
 static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
@@ -4960,6 +5100,7 @@ static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "chmod", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_chmod), false));
   js_set(js, lib, "readdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readdir), false));
   js_set(js, lib, "readlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readlink), false));
+  js_set(js, lib, "symlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_symlink), false));
 
   js_set(js, realpath, "native", realpath);
   js_set(js, lib, "realpath", realpath);
