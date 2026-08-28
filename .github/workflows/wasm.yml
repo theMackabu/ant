@@ -1,20 +1,6 @@
 name: WebAssembly Package
 
 on:
-  push:
-    paths:
-      - '.github/workflows/wasm.yml'
-      - 'include/**'
-      - 'packages/wasm/**'
-      - 'src/**'
-      - 'vendor/**'
-  pull_request:
-    paths:
-      - '.github/workflows/wasm.yml'
-      - 'include/**'
-      - 'packages/wasm/**'
-      - 'src/**'
-      - 'vendor/**'
   workflow_dispatch:
 
 permissions:
@@ -26,13 +12,9 @@ concurrency:
 
 jobs:
   build:
-    name: Build / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-latest]
 
     steps:
       - name: Checkout
@@ -68,7 +50,7 @@ jobs:
       - name: Upload package build
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: wasm-dist-${{ matrix.os }}
+          name: wasm-dist
           path: packages/wasm/dist
           if-no-files-found: error
 
@@ -83,13 +65,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             node: 18
-            artifact: wasm-dist-ubuntu-24.04
           - os: ubuntu-24.04
             node: 22
-            artifact: wasm-dist-ubuntu-24.04
           - os: windows-latest
             node: 22
-            artifact: wasm-dist-windows-latest
 
     steps:
       - name: Checkout
@@ -103,7 +82,7 @@ jobs:
       - name: Download package build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ matrix.artifact }}
+          name: wasm-dist
           path: packages/wasm/dist
 
       - name: Test package

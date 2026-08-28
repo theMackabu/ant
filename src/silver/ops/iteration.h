@@ -367,6 +367,42 @@ static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
   vm->sp -= 3;
 }
 
+static inline ant_value_t sv_op_iter_close_async(sv_vm_t *vm, ant_t *js) {
+  ant_value_t result = SV_AITER_CLOSE_SKIP;
+  ant_value_t tag_val = vm->stack[vm->sp - 1];
+
+  if (vtype(tag_val) == kTypeNumber && (int)js_getnum(tag_val) == SV_ITER_GENERIC) {
+    ant_value_t iterator = vm->stack[vm->sp - 3];
+    ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
+    if (is_err(return_fn)) {
+      vm->sp -= 3;
+      return return_fn;
+    }
+    int return_type = vtype(return_fn);
+    if (return_type != kTypeUndefined && return_type != kTypeNull) {
+      if (!is_callable(return_fn)) {
+        vm->sp -= 3;
+        return js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
+      }
+      result = sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
+      if (is_err(result)) {
+        vm->sp -= 3;
+        return result;
+      }
+    }
+  }
+
+  vm->sp -= 3;
+  vm->stack[vm->sp++] = result;
+  return tov(0);
+}
+
+static inline ant_value_t sv_op_iter_close_check(sv_vm_t *vm, ant_t *js) {
+  ant_value_t result = vm->stack[--vm->sp];
+  if (result == SV_AITER_CLOSE_SKIP || is_object_type(result)) return tov(0);
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Async iterator return result is not an object");
+}
+
 static inline ant_value_t sv_op_destructure_init(sv_vm_t *vm, ant_t *js) {
   return sv_op_for_of(vm, js);
 }
@@ -461,12 +497,14 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
   bool has_resumed_value = vm->sp >= 5 &&
     vtype(vm->stack[vm->sp - 2]) == kTypeBool &&
-    vtype(vm->stack[vm->sp - 3]) == kTypeNumber &&
-    (int)js_getnum(vm->stack[vm->sp - 3]) == SV_ITER_GENERIC;
+    vm->stack[vm->sp - 3] == SV_AITER_STEP_MARK;
 
   if (has_resumed_value) {
     ant_value_t value = vm->stack[--vm->sp];
     ant_value_t done = vm->stack[--vm->sp];
+    vm->stack[vm->sp - 1] = js_truthy(js, done)
+      ? SV_AITER_STEP_MARK
+      : tov(SV_ITER_GENERIC);
     vm->stack[vm->sp++] = value;
     vm->stack[vm->sp++] = done;
     return out;
@@ -474,13 +512,13 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
 
   ant_value_t result = js_mkundef();
   bool has_resumed_result = vm->sp >= 4 &&
-    vtype(vm->stack[vm->sp - 2]) == kTypeNumber &&
-    (int)js_getnum(vm->stack[vm->sp - 2]) == SV_ITER_GENERIC;
+    vm->stack[vm->sp - 2] == SV_AITER_STEP_MARK;
 
   if (has_resumed_result) result = vm->stack[--vm->sp];
   else {
     ant_value_t next_method = vm->stack[vm->sp - 2];
     ant_value_t iterator = vm->stack[vm->sp - 3];
+    vm->stack[vm->sp - 1] = SV_AITER_STEP_MARK;
     if (!is_callable(next_method)) return (sv_await_result_t){ 
       .state = SV_AWAIT_ERROR,
       .value = js_mkerr(js, "iterator.next is not a function") 
@@ -538,8 +576,10 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     value = awaited_val.value;
   }
   
+  bool is_done = js_truthy(js, done);
+  vm->stack[vm->sp - 1] = is_done ? SV_AITER_STEP_MARK : tov(SV_ITER_GENERIC);
   vm->stack[vm->sp++] = value;
-  vm->stack[vm->sp++] = mkval(kTypeBool, js_truthy(js, done));
+  vm->stack[vm->sp++] = mkval(kTypeBool, is_done);
   
   return out;
 }

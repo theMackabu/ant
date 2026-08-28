@@ -225,6 +225,8 @@ OP_DEF(  FOR_AWAIT_OF,      1,   1,   3, none)      /* async iterable -> iter ne
 OP_DEF(  ITER_NEXT,         2,   3,   5, u8)        /* advance iterator (u8 hint) */
 OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_off value done */
 OP_DEF(  ITER_CLOSE,        1,   3,   0, none)      /* close iterator */
+OP_DEF(  ITER_CLOSE_ASYNC,  1,   3,   1, none)      /* close async iterator -> awaitable */
+OP_DEF(  ITER_CLOSE_CHECK,  1,   1,   0, none)      /* validate awaited async close result */
 OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */
 OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   4, none)      /* async iterator next */
 OP_DEF(  DESTRUCTURE_INIT,  1,   1,   3, none)      /* iterable -> iter next tag */

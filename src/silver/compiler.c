@@ -5663,8 +5663,12 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
       emit_u16(c, (uint16_t)break_close_slot);
       patch_jump(c, skip_break_cleanup);
     }
-    emit_op(c, OP_TRY_POP);   
-    emit_op(c, OP_ITER_CLOSE);
+    emit_op(c, OP_TRY_POP);
+    if (is_for_await) {
+      emit_op(c, OP_ITER_CLOSE_ASYNC);
+      emit_op(c, OP_AWAIT);
+      emit_op(c, OP_ITER_CLOSE_CHECK);
+    } else emit_op(c, OP_ITER_CLOSE);
     int end_jump = emit_jump(c, OP_JMP);
 
     patch_jump(c, try_jump_for_of);
@@ -5676,7 +5680,20 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
       emit_put_local(c, iter_err_local);
     }
     
-    emit_op(c, OP_ITER_CLOSE);          
+    if (is_for_await) {
+      int close_try = emit_jump(c, OP_TRY_PUSH);
+      emit_op(c, OP_ITER_CLOSE_ASYNC);
+      emit_op(c, OP_AWAIT);
+      emit_op(c, OP_ITER_CLOSE_CHECK);
+      emit_op(c, OP_TRY_POP);
+      int close_end = emit_jump(c, OP_JMP);
+
+      patch_jump(c, close_try);
+      int close_catch_tag = emit_jump(c, OP_CATCH);
+      emit_op(c, OP_POP);
+      patch_jump(c, close_catch_tag);
+      patch_jump(c, close_end);
+    } else emit_op(c, OP_ITER_CLOSE);
     emit_get_local(c, iter_err_local);  
     emit_op(c, OP_THROW);              
     patch_jump(c, catch_tag);

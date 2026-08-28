@@ -2268,6 +2268,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ITER_NEXT:        { VM_CHECK(sv_op_iter_next(vm, js, ip));    NEXT(2); }
   L_ITER_GET_VALUE:   { sv_op_iter_get_value(vm, js);             NEXT(1); }
   L_ITER_CLOSE:       { sv_op_iter_close(vm, js);                 NEXT(1); }
+  L_ITER_CLOSE_ASYNC: { VM_CHECK(sv_op_iter_close_async(vm, js)); NEXT(1); }
+  L_ITER_CLOSE_CHECK: { VM_CHECK(sv_op_iter_close_check(vm, js)); NEXT(1); }
   L_ITER_CALL:        { VM_CHECK(sv_op_iter_call(vm, js, ip));    NEXT(2); }
   
   L_AWAIT_ITER_NEXT:  {
