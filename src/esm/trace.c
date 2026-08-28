@@ -31,6 +31,7 @@ typedef struct {
   bool is_require;
   bool lenient;
   bool optional;
+  bool excluded;
   uint32_t line;
 } trace_spec_t;
 
@@ -63,9 +64,13 @@ typedef struct {
 
   trace_const_t *consts;
   uint32_t const_count, const_cap;
+  
+  uint32_t materialize_root_count, materialize_root_cap;
+  uint32_t native_fallback_warning_count, native_fallback_warning_cap;
 
   char **materialize_roots;
-  uint32_t materialize_root_count, materialize_root_cap;
+  char **native_fallback_warnings;
+  bool native_fallback_available;
 } trace_ctx_t;
 
 static void trace_set_error(ant_trace_result_t *r, const char *fmt, ...);
@@ -134,6 +139,44 @@ static void trace_warn(trace_ctx_t *ctx, const char *fmt, ...) {
   if (!trace_grow((void **)&r->warnings, r->warning_count, &r->warning_cap, sizeof(*r->warnings))) return;
   char *msg = strdup(buf);
   if (msg) r->warnings[r->warning_count++] = msg;
+}
+
+__attribute__((format(printf, 2, 3)))
+static void trace_warn_native_fallback(trace_ctx_t *ctx, const char *fmt, ...) {
+  char buf[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+
+  if (!trace_grow(
+        (void **)&ctx->native_fallback_warnings,
+        ctx->native_fallback_warning_count,
+        &ctx->native_fallback_warning_cap,
+        sizeof(*ctx->native_fallback_warnings))) return;
+  char *msg = strdup(buf);
+  if (msg) ctx->native_fallback_warnings[ctx->native_fallback_warning_count++] = msg;
+}
+
+static void trace_native_fallback_warnings_finish(trace_ctx_t *ctx) {
+  ant_trace_result_t *r = ctx->result;
+  for (uint32_t i = 0; i < ctx->native_fallback_warning_count; i++) {
+    char *msg = ctx->native_fallback_warnings[i];
+    if (!ctx->native_fallback_available &&
+        trace_grow((void **)&r->warnings, r->warning_count, &r->warning_cap, sizeof(*r->warnings))) {
+      r->warnings[r->warning_count++] = msg;
+    } else {
+      free(msg);
+    }
+  }
+  ctx->native_fallback_warning_count = 0;
+  ctx->native_fallback_available = false;
+}
+
+static void trace_native_fallback_warnings_free(trace_ctx_t *ctx) {
+  for (uint32_t i = 0; i < ctx->native_fallback_warning_count; i++)
+    free(ctx->native_fallback_warnings[i]);
+  free(ctx->native_fallback_warnings);
 }
 
 static const char *path_basename(const char *path) {
@@ -453,7 +496,13 @@ static bool trace_push_spec(trace_ctx_t *ctx, const char *spec, uint32_t len, bo
   if (!trace_grow((void **)&ctx->specs, ctx->spec_count, &ctx->spec_cap, sizeof(*ctx->specs))) return false;
   char *copy = strndup(spec, len);
   if (!copy) return false;
-  ctx->specs[ctx->spec_count++] = (trace_spec_t){ copy, is_require, lenient, ctx->try_depth > 0, line };
+  ctx->specs[ctx->spec_count++] = (trace_spec_t){
+    .spec = copy,
+    .is_require = is_require,
+    .lenient = lenient,
+    .optional = ctx->try_depth > 0,
+    .line = line,
+  };
   return true;
 }
 
@@ -502,6 +551,40 @@ static const char *trace_target_arch(void) {
 #else
   return "unknown";
 #endif
+}
+
+static char *trace_darwin_arch_spec(const char *spec) {
+  if (strcmp(trace_target_platform(), "darwin") != 0) return NULL;
+
+  static const char package_marker[] = "-darwin-universal";
+  static const char file_suffix[] = ".darwin-universal.node";
+  const char *marker = NULL;
+  const char *tail = NULL;
+  char replacement[64];
+
+  const char *package = strstr(spec, package_marker);
+  const char *package_tail = package ? package + strlen(package_marker) : NULL;
+  if (package && (*package_tail == '\0' || *package_tail == '/')) {
+    marker = package;
+    tail = package_tail;
+    snprintf(replacement, sizeof(replacement), "-darwin-%s", trace_target_arch());
+  } else if (trace_has_suffix(spec, file_suffix)) {
+    marker = spec + strlen(spec) - strlen(file_suffix);
+    tail = spec + strlen(spec);
+    snprintf(replacement, sizeof(replacement), ".darwin-%s.node", trace_target_arch());
+  } else {
+    return NULL;
+  }
+
+  size_t prefix_len = (size_t)(marker - spec);
+  size_t replacement_len = strlen(replacement);
+  size_t tail_len = strlen(tail);
+  char *target = malloc(prefix_len + replacement_len + tail_len + 1);
+  if (!target) return NULL;
+  memcpy(target, spec, prefix_len);
+  memcpy(target + prefix_len, replacement, replacement_len);
+  memcpy(target + prefix_len + replacement_len, tail, tail_len + 1);
+  return target;
 }
 
 static void trace_consts_clear(trace_ctx_t *ctx) {
@@ -709,8 +792,15 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
           free(spec);
           if (!pushed) return false;
         } else {
-          trace_warn(ctx, "%s:%u: import() with a non-constant specifier is not traced%s; it will fail at runtime unless the target is bundled",
-            file, node->line, ctx->try_depth > 0 ? " inside try/catch" : "");
+          if (ctx->try_depth > 0) {
+            trace_warn_native_fallback(ctx,
+              "%s:%u: import() with a non-constant specifier is not traced inside try/catch; it will fail at runtime unless the target is bundled",
+              file, node->line);
+          } else {
+            trace_warn(ctx,
+              "%s:%u: import() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled",
+              file, node->line);
+          }
         }
       }
       break;
@@ -727,9 +817,17 @@ static bool trace_scan_ast(trace_ctx_t *ctx, const char *file, const sv_ast_t *n
           int native_package = trace_node_mentions_native_addon(arg)
             ? trace_register_native_package(ctx, file, false) : 0;
           if (native_package < 0) return false;
+          if (native_package > 0) ctx->native_fallback_available = true;
           if (native_package == 0) {
-            trace_warn(ctx, "%s:%u: require() with a non-constant specifier is not traced%s; it will fail at runtime unless the target is bundled",
-              file, node->line, ctx->try_depth > 0 ? " inside try/catch" : "");
+            if (ctx->try_depth > 0) {
+              trace_warn_native_fallback(ctx,
+                "%s:%u: require() with a non-constant specifier is not traced inside try/catch; it will fail at runtime unless the target is bundled",
+                file, node->line);
+            } else {
+              trace_warn(ctx,
+                "%s:%u: require() with a non-constant specifier is not traced; it will fail at runtime unless the target is bundled",
+                file, node->line);
+            }
           }
         }
       }
@@ -826,6 +924,62 @@ static sv_ast_t *trace_parse_cjs_wrapped(ant_t *js, const char *code, size_t len
   return program;
 }
 
+static bool trace_spec_resolves_native(
+  ant_t *js, const char *parent_path, const trace_spec_t *sp
+) {
+  char *resolved = esm_resolve(
+    js, sp->spec, parent_path,
+    sp->is_require ? esm_resolve_path_require : esm_resolve_path
+  );
+  if (!resolved) return false;
+  bool native = trace_has_suffix(resolved, ".node");
+  free(resolved);
+  return native;
+}
+
+static bool trace_matching_spec_resolves_native(
+  ant_t *js, trace_ctx_t *ctx, const char *parent_path,
+  const char *spec, bool is_require
+) {
+  for (uint32_t i = 0; i < ctx->spec_count; i++) {
+    trace_spec_t *candidate = &ctx->specs[i];
+    if (candidate->is_require == is_require && strcmp(candidate->spec, spec) == 0)
+      return trace_spec_resolves_native(js, parent_path, candidate);
+  }
+  return false;
+}
+
+static void trace_exclude_redundant_universal_native(
+  ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx
+) {
+  const char *parent_path = ctx->result->modules[parent_idx].abs_path;
+
+  for (uint32_t i = 0; i < ctx->spec_count; i++) {
+    trace_spec_t *universal = &ctx->specs[i];
+    if (!universal->optional) continue;
+
+    char *target_spec = trace_darwin_arch_spec(universal->spec);
+    if (!target_spec) continue;
+
+    universal->excluded = trace_matching_spec_resolves_native(
+      js, ctx, parent_path, target_spec, universal->is_require
+    );
+
+    static const char package_json_suffix[] = "/package.json";
+    if (!universal->excluded && trace_has_suffix(target_spec, package_json_suffix)) {
+      size_t base_len = strlen(target_spec) - strlen(package_json_suffix);
+      char *target_base = strndup(target_spec, base_len);
+      if (target_base) {
+        universal->excluded = trace_matching_spec_resolves_native(
+          js, ctx, parent_path, target_base, universal->is_require
+        );
+        free(target_base);
+      }
+    }
+    free(target_spec);
+  }
+}
+
 static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, const trace_spec_t *sp) {
   ant_trace_result_t *r = ctx->result;
   const char *parent_path = r->modules[parent_idx].abs_path;
@@ -860,7 +1014,9 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
       return 0;
     }
     if (sp->optional) {
-      trace_warn(ctx, "%s:%u: optional module \"%s\" was not found; the require/import inside try/catch will throw at runtime", parent_path, sp->line, spec);
+      trace_warn_native_fallback(ctx,
+        "%s:%u: optional module \"%s\" was not found; the require/import inside try/catch will throw at runtime",
+        parent_path, sp->line, spec);
       return 0;
     }
     trace_set_error(r, "%s:%u: cannot resolve module \"%s\"", parent_path, sp->line, spec);
@@ -878,6 +1034,7 @@ static int trace_resolve_spec(ant_t *js, trace_ctx_t *ctx, uint32_t parent_idx, 
       free(resolved);
       return -1;
     }
+    ctx->native_fallback_available = true;
   }
 
   int child = trace_add_module(ctx, resolved, sp->lenient);
@@ -989,6 +1146,7 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
   for (uint32_t i = 0; i < ctx->spec_count; i++) free(ctx->specs[i].spec);
   ctx->spec_count = 0;
   ctx->try_depth = 0;
+  trace_native_fallback_warnings_finish(ctx);
   trace_consts_clear(ctx);
 
   bool scan_ok = trace_scan_ast(ctx, abs_path, program);
@@ -999,9 +1157,12 @@ static int trace_process_module(ant_t *js, trace_ctx_t *ctx, uint32_t idx) {
     return -1;
   }
 
+  trace_exclude_redundant_universal_native(js, ctx, idx);
   for (uint32_t i = 0; i < ctx->spec_count; i++) {
+    if (ctx->specs[i].excluded) continue;
     if (trace_resolve_spec(js, ctx, idx, &ctx->specs[i]) != 0) return -1;
   }
+  trace_native_fallback_warnings_finish(ctx);
   return 0;
 }
 
@@ -1064,6 +1225,7 @@ int ant_esm_trace_graph(ant_t *js, const char *entry_abs_path, const char *root_
   for (uint32_t i = 0; i < ctx.materialize_root_count; i++)
     free(ctx.materialize_roots[i]);
   free(ctx.materialize_roots);
+  trace_native_fallback_warnings_free(&ctx);
   trace_index_free(&ctx.module_map);
   trace_index_free(&ctx.edge_set);
   return 0;
@@ -1076,6 +1238,7 @@ fail:
   for (uint32_t i = 0; i < ctx.materialize_root_count; i++)
     free(ctx.materialize_roots[i]);
   free(ctx.materialize_roots);
+  trace_native_fallback_warnings_free(&ctx);
   trace_index_free(&ctx.module_map);
   trace_index_free(&ctx.edge_set);
   return -1;

@@ -1,7 +1,7 @@
 # Compiled Native Addon Assets
 
 Status: completed
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-28
 Owner: theMackabu
 
 ## Goal
@@ -56,6 +56,14 @@ Compiled programs must either embed the native package files needed by
 - Permit exact dynamic relative bundle lookup after recorded-edge lookup. This
   supports runtime-computed `.node` paths without reimplementing Node package
   resolution in the runtime.
+- Defer unresolved `try/catch` diagnostics within each module. Suppress them
+  when that module successfully contributes a native addon, so generated
+  NAPI-RS fallback loaders do not imply that their bundled native path is
+  missing. Dynamic imports in modules without a native fallback still warn.
+- Prefer a Darwin target-architecture native package over its optional
+  `-darwin-universal` fallback when both resolve directly to `.node` files.
+  The compiled loader falls through its existing `try/catch` to the smaller,
+  exact-architecture payload instead of embedding both binaries.
 - Advance the compiled bundle format to version 2. Versioned readers reject
   older records instead of interpreting the new flags field ambiguously.
 

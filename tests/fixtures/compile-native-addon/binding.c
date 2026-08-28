@@ -17,10 +17,13 @@ extern napi_status napi_set_named_property(
 #define NAPI_EXPORT __attribute__((visibility("default")))
 #endif
 
+#ifndef NATIVE_VALUE
+#define NATIVE_VALUE "native-ok"
+#endif
+
 NAPI_EXPORT napi_value napi_register_module_v1(napi_env env, napi_value exports) {
   napi_value value = NULL;
-  if (napi_create_string_utf8(env, "native-ok", 9, &value) == 0)
+  if (napi_create_string_utf8(env, NATIVE_VALUE, sizeof(NATIVE_VALUE) - 1, &value) == 0)
     (void)napi_set_named_property(env, exports, "value", value);
   return exports;
 }
-

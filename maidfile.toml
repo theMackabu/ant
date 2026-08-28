@@ -49,12 +49,6 @@ script = ['''
 #!/usr/bin/env bash
 set -euo pipefail
 
-install_binary() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    /usr/bin/ditto --hfsCompression "$1" "$2"
-  else cp "$1" "$2"; fi
-}
-
 meson compile -C build
 meson compile -C build ant-runtime
 
@@ -62,15 +56,15 @@ revision=$(./build/ant -e 'console.log(Ant.revision)')
 runtime_dir="$HOME/.ant/compile/$revision"
 
 mkdir -p "$runtime_dir"
-install_binary ./build/ant-runtime "$runtime_dir/ant-runtime"
+cp ./build/ant-runtime "$runtime_dir/ant-runtime"
 
 if which ant >/dev/null 2>&1; then
   dir=$(dirname "$(which ant)")
-  install_binary ./build/ant "$dir/ant"
+  cp ./build/ant "$dir/ant"
   ln -sf "$dir/ant" "$dir/antx"
 else
   mkdir -p ~/.ant/bin
-  install_binary ./build/ant ~/.ant/bin/ant
+  cp ./build/ant ~/.ant/bin/
   ln -sf ~/.ant/bin/ant ~/.ant/bin/antx
 fi
 ''']
