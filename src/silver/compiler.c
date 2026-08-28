@@ -5653,15 +5653,17 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     emit_op(c, OP_TRY_POP);
     unwind_pop(c);
 
-    int skip_break_cleanup = -1;
-    if (break_close_slot >= 0)
-      skip_break_cleanup = emit_jump(c, OP_JMP);
+    if (is_for_await) {
+      emit_op(c, OP_ITER_CLOSE_ASYNC);
+      emit_op(c, OP_AWAIT);
+      emit_op(c, OP_ITER_CLOSE_CHECK);
+    } else emit_op(c, OP_ITER_CLOSE);
+    int normal_end_jump = emit_jump(c, OP_JMP);
 
     pop_loop(c);
     if (break_close_slot >= 0) {
       emit_op(c, OP_CLOSE_UPVAL);
       emit_u16(c, (uint16_t)break_close_slot);
-      patch_jump(c, skip_break_cleanup);
     }
     emit_op(c, OP_TRY_POP);
     if (is_for_await) {
@@ -5699,6 +5701,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     patch_jump(c, catch_tag);
 
     patch_jump(c, end_jump);
+    patch_jump(c, normal_end_jump);
     c->try_depth--;
   } else {
     int skip_break_cleanup = -1;
