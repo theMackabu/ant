@@ -14,6 +14,10 @@ function assertThrows(fn, pattern, message) {
   throw new Error(`${message}: expected an exception`);
 }
 
+assert((true ? 0.5 : 0) === 0.5, 'conditional decimal consequent parses without whitespace');
+assert((false ? 0.5 : 0) === 0, 'conditional decimal alternate remains intact');
+assert({ value: 1 }?.value === 1, 'ordinary optional chaining still parses');
+
 function collectTypes(node, out = new Set()) {
   if (!node || typeof node !== 'object') return out;
   if (typeof node.type === 'string') out.add(node.type);
@@ -25,11 +29,14 @@ function collectTypes(node, out = new Set()) {
   return out;
 }
 
-const stripped = stripTypes(`
+const stripped = stripTypes(
+  `
 enum Color { Red, Blue }
 interface Hidden { value: number }
 const color: Color = Color.Red;
-`, { filename: 'colors.ts', sourceType: 'module' });
+`,
+  { filename: 'colors.ts', sourceType: 'module' }
+);
 
 assert(!stripped.includes('interface Hidden'), 'stripTypes removes interfaces');
 assert(!stripped.includes(': Color'), 'stripTypes removes annotations');
@@ -38,20 +45,12 @@ assert(stripped.includes('const color = Color.Red'), 'stripTypes preserves runti
 
 const commonjs = stripTypes('const value: number = 1;', {
   filename: 'value.cts',
-  sourceType: 'commonjs',
+  sourceType: 'commonjs'
 });
 assert(!commonjs.includes('export {};'), 'commonjs stripping does not add a module marker');
 
-assertThrows(
-  () => stripTypes(1),
-  /source must be a string/,
-  'stripTypes validates source',
-);
-assertThrows(
-  () => stripTypes('const x: number = 1', { sourceType: 'tsx' }),
-  /sourceType/,
-  'stripTypes validates sourceType',
-);
+assertThrows(() => stripTypes(1), /source must be a string/, 'stripTypes validates source');
+assertThrows(() => stripTypes('const x: number = 1', { sourceType: 'tsx' }), /sourceType/, 'stripTypes validates sourceType');
 
 const source = `
 import defaultValue, { named as local } from "pkg";
@@ -72,7 +71,7 @@ class Box extends Base {
 const tree = parseJavaScript(source, {
   filename: 'fixture.mjs',
   sourceType: 'module',
-  locations: true,
+  locations: true
 });
 
 assert(tree.schema === 'ant.syntax@1', 'parseJavaScript reports schema version');
@@ -99,8 +98,9 @@ for (const type of [
   'MethodDefinition',
   'PrivateIdentifier',
   'StaticBlock',
-  'ExpressionStatement',
-]) assert(types.has(type), `syntax tree includes ${type}`);
+  'ExpressionStatement'
+])
+  assert(types.has(type), `syntax tree includes ${type}`);
 
 const privateIdentifier = (function find(node) {
   if (!node || typeof node !== 'object') return null;
@@ -132,8 +132,14 @@ const literals = [];
   if (Array.isArray(node)) for (const value of node) visit(value);
   else for (const key of Object.keys(node)) visit(node[key]);
 })(literalTree);
-assert(literals.some(node => node.bigint === '123' && node.value === null), 'bigints are JSON safe');
-assert(literals.some(node => node.regex?.pattern === 'a+' && node.regex.flags === 'gi'), 'regexps are JSON safe');
+assert(
+  literals.some(node => node.bigint === '123' && node.value === null),
+  'bigints are JSON safe'
+);
+assert(
+  literals.some(node => node.regex?.pattern === 'a+' && node.regex.flags === 'gi'),
+  'regexps are JSON safe'
+);
 JSON.stringify(literalTree);
 
 const unicodeSource = 'const face = "💩";\nlet next = 1;';
@@ -148,23 +154,19 @@ assert(parseJavaScript('export const value = 1').sourceType === 'module', 'unamb
 assertThrows(
   () => parseJavaScript('export const value = 1', { sourceType: 'script' }),
   /import\/export syntax is not allowed/,
-  'script mode rejects module syntax',
+  'script mode rejects module syntax'
 );
 assertThrows(
   () => parseJavaScript('with (value) {}', { sourceType: 'module' }),
   /with statement not allowed in strict mode/,
-  'module mode parses strictly',
+  'module mode parses strictly'
 );
 assertThrows(
   () => parseJavaScript('import "pkg"; with (value) {}'),
   /with statement not allowed in strict mode/,
-  'unambiguous module detection reparses strictly',
+  'unambiguous module detection reparses strictly'
 );
-assertThrows(
-  () => parseJavaScript('const ='),
-  /SyntaxError/,
-  'parseJavaScript preserves syntax errors',
-);
+assertThrows(() => parseJavaScript('const ='), /SyntaxError/, 'parseJavaScript preserves syntax errors');
 
 const largeSource = Array.from({ length: 1500 }, (_, i) => `const value${i} = ${i};`).join('\n');
 const largeTree = parseJavaScript(largeSource);

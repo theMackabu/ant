@@ -1,7 +1,7 @@
 #include "silver/lexer.h"
 
-#include "escape.h"
 #include "internal.h"
+#include "escape.h"
 #include "tokens.h"
 #include "utf8.h"
 #include "errors.h"
@@ -1047,7 +1047,10 @@ static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset
   case '?':
     if (MATCH3('?','?','=')) { lx->st.tok = TOK_NULLISH_ASSIGN; lx->st.tlen = 3; }
     else if (MATCH2('?','?')) { lx->st.tok = TOK_NULLISH; lx->st.tlen = 2; }
-    else if (MATCH2('?','.')) { lx->st.tok = TOK_OPTIONAL_CHAIN; lx->st.tlen = 2; }
+    else if (MATCH2('?','.') && (rem < 3 || !is_digit((unsigned char)buf[2]))) {
+      lx->st.tok = TOK_OPTIONAL_CHAIN;
+      lx->st.tlen = 2;
+    }
     else { lx->st.tok = TOK_Q; lx->st.tlen = 1; }
     break;
 
