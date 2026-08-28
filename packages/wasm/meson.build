@@ -24,9 +24,6 @@ maximum_memory = run_command(
 inc = include_directories(
   '.cache/generated',
   '../../include',
-  '../../vendor/libuv-v1.52.0/include',
-  '../../vendor/tlsuv/include',
-  '../../vendor/tlsuv/deps/uv_link_t/include',
 )
 
 base64_dep = declare_dependency(
