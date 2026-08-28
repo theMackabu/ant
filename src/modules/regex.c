@@ -499,12 +499,66 @@ static size_t v_close_bracket(const char *src, size_t src_len, size_t open) {
   return src_len;
 }
 
-static size_t v_translate_part(const char *p, size_t len, char *out, size_t out_size) {
-  if (len && p[0] == '[') return js_to_pcre2_pattern(p, len, out, out_size, false);
-  char tmp[1024];
-  if (len >= sizeof(tmp) - 2) return 0;
-  tmp[0] = '['; memcpy(tmp + 1, p, len); tmp[len + 1] = ']';
-  return js_to_pcre2_pattern(tmp, len + 2, out, out_size, false);
+typedef struct {
+  char *data;
+  size_t capacity;
+  size_t length;
+} regexp_pattern_builder_t;
+
+static inline void regexp_pattern_builder_puts(
+  regexp_pattern_builder_t *builder,
+  const char *value,
+  size_t length
+) {
+  size_t offset = builder->length;
+  size_t available = offset < builder->capacity
+    ? builder->capacity - offset
+    : 0;
+  size_t copy_length = length < available ? length : available;
+  if (copy_length) memcpy(builder->data + offset, value, copy_length);
+  builder->length += length;
+}
+
+static inline void regexp_pattern_builder_put_any_char(
+  regexp_pattern_builder_t *builder
+) {
+  static const char any_char[] = "[\\s\\S]";
+  regexp_pattern_builder_puts(builder, any_char, sizeof(any_char) - 1);
+}
+
+static void js_to_pcre2_pattern_append(
+  const char *src,
+  size_t src_len,
+  regexp_pattern_builder_t *builder,
+  bool v_flag,
+  int initial_charclass_depth
+);
+
+static void v_translate_part_append(
+  const char *part,
+  size_t length,
+  regexp_pattern_builder_t *builder
+) {
+  if (length && part[0] == '[') {
+    js_to_pcre2_pattern_append(part, length, builder, false, 0);
+    return;
+  }
+
+  if (length == 1 && part[0] == '^') {
+    regexp_pattern_builder_put_any_char(builder);
+    return;
+  }
+
+  if (length >= 2 && part[0] == '^' && part[1] == ']') {
+    regexp_pattern_builder_put_any_char(builder);
+    js_to_pcre2_pattern_append(part + 2, length - 2, builder, false, 0);
+    regexp_pattern_builder_puts(builder, "]", 1);
+    return;
+  }
+
+  regexp_pattern_builder_puts(builder, "[", 1);
+  js_to_pcre2_pattern_append(part, length, builder, false, 1);
+  regexp_pattern_builder_puts(builder, "]", 1);
 }
 
 static int v_set_op(const char *src, size_t start, size_t end, size_t *op_pos) {
@@ -531,13 +585,24 @@ static int v_set_op(const char *src, size_t start, size_t end, size_t *op_pos) {
   return 0;
 }
 
-size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size, bool v_flag) {
-  size_t di = 0;
-  int charclass_depth = 0;
+static void js_to_pcre2_pattern_append(
+  const char *src,
+  size_t src_len,
+  regexp_pattern_builder_t *builder,
+  bool v_flag,
+  int initial_charclass_depth
+) {
+  int charclass_depth = initial_charclass_depth;
+  char *output = builder->data;
+  size_t output_capacity = builder->capacity;
+  size_t output_length = builder->length;
 
-#define OUT(ch) do { if (di < dst_size - 1) dst[di++] = (ch); } while(0)
+#define OUT(ch) do { \
+  size_t output_offset = output_length++; \
+  if (output_offset < output_capacity) output[output_offset] = (ch); \
+} while (0)
 
-  for (size_t si = 0; si < src_len && di < dst_size - 1; si++) {
+  for (size_t si = 0; si < src_len; si++) {
     if (src[si] == '[') {
       if (si + 2 < src_len && src[si + 1] == '^' && src[si + 2] == ']') {
         OUT('['); OUT('\\'); OUT('s'); OUT('\\'); OUT('S'); OUT(']');
@@ -550,15 +615,22 @@ size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t ds
         size_t op_pos;
         int op_type = v_set_op(src, si + 1, close, &op_pos);
         if (op_type && close < src_len) {
-          char ao[1024], bo[1024];
-          size_t aol = v_translate_part(&src[si + 1], op_pos - si - 1, ao, sizeof(ao));
-          size_t bol = v_translate_part(&src[op_pos + 2], close - op_pos - 2, bo, sizeof(bo));
-          const char *la = op_type == 1 ? ao : bo, *ra = op_type == 1 ? bo : ao;
-          size_t ll = op_type == 1 ? aol : bol, rl = op_type == 1 ? bol : aol;
+          const char *left = &src[si + 1];
+          size_t left_len = op_pos - si - 1;
+          const char *right = &src[op_pos + 2];
+          size_t right_len = close - op_pos - 2;
+          const char *lookahead = op_type == 1 ? left : right;
+          size_t lookahead_len = op_type == 1 ? left_len : right_len;
+          const char *match = op_type == 1 ? right : left;
+          size_t match_len = op_type == 1 ? right_len : left_len;
           OUT('('); OUT('?'); OUT(op_type == 1 ? '=' : '!');
-          for (size_t k = 0; k < ll; k++) OUT(la[k]);
+          builder->length = output_length;
+          v_translate_part_append(lookahead, lookahead_len, builder);
+          output_length = builder->length;
           OUT(')');
-          for (size_t k = 0; k < rl; k++) OUT(ra[k]);
+          builder->length = output_length;
+          v_translate_part_append(match, match_len, builder);
+          output_length = builder->length;
           si = close;
           continue;
         }
@@ -661,7 +733,7 @@ size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t ds
       if (advance > 1 || next == '0') {
         char hex[8];
         int hlen = snprintf(hex, sizeof(hex), "\\x{%02x}", octal);
-        for (int k = 0; k < hlen && di < dst_size - 1; k++) OUT(hex[k]);
+        for (int k = 0; k < hlen; k++) OUT(hex[k]);
         si += advance;
         continue;
       }
@@ -726,7 +798,7 @@ size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t ds
           };
           for (size_t m = 0; m < sizeof(sprops)/sizeof(sprops[0]); m++) {
             if (strlen(sprops[m].name) == prop_len && memcmp(sprops[m].name, prop, prop_len) == 0) {
-              for (const char *r = sprops[m].exp; *r && di < dst_size - 1; r++) OUT(*r);
+              for (const char *r = sprops[m].exp; *r; r++) OUT(*r);
               si = brace_end;
               goto next_char;
             }
@@ -831,8 +903,62 @@ size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t ds
   }
 
 #undef OUT
-  dst[di] = '\0';
-  return di;
+  builder->length = output_length;
+}
+
+size_t js_to_pcre2_pattern(
+  const char *src,
+  size_t src_len,
+  char *dst,
+  size_t dst_size,
+  bool v_flag
+) {
+  regexp_pattern_builder_t builder = {
+    .data = dst,
+    .capacity = dst_size ? dst_size - 1 : 0,
+  };
+  js_to_pcre2_pattern_append(src, src_len, &builder, v_flag, 0);
+  if (dst_size) {
+    size_t terminator = builder.length < dst_size
+      ? builder.length
+      : dst_size - 1;
+    dst[terminator] = '\0';
+  }
+  return builder.length;
+}
+
+js_cstr_t js_to_pcre2_pattern_cstr(
+  const char *src,
+  size_t src_len,
+  char *stack_buf,
+  size_t stack_size,
+  bool v_flag
+) {
+  js_cstr_t result = {0};
+  size_t required = js_to_pcre2_pattern(
+    src, src_len, stack_buf, stack_size, v_flag
+  );
+  if (required < stack_size) {
+    result.ptr = stack_buf;
+    result.len = required;
+    return result;
+  }
+  if (required == SIZE_MAX) return result;
+
+  char *allocated = malloc(required + 1);
+  if (!allocated) return result;
+  size_t translated = js_to_pcre2_pattern(
+    src, src_len, allocated, required + 1, v_flag
+  );
+  if (translated != required) {
+    free(allocated);
+    return result;
+  }
+
+  result.ptr = allocated;
+  result.len = translated;
+  result.needs_free = true;
+  return result;
 }
 
 #define REGEXP_SET_PROP(js, obj, key, klen, val, is_new) \
@@ -1134,11 +1260,12 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   );
   if (cached) return cached;
 
-  char pcre2_pattern[4096];
-  size_t pcre2_len = js_to_pcre2_pattern(
-    pattern, pattern_len, pcre2_pattern, sizeof(pcre2_pattern),
+  char pcre2_pattern_stack[4096];
+  js_cstr_t pcre2_pattern = js_to_pcre2_pattern_cstr(
+    pattern, pattern_len, pcre2_pattern_stack, sizeof(pcre2_pattern_stack),
     (flags_mask & REGEXP_FLAG_UNICODE_SET) != 0
   );
+  if (!pcre2_pattern.ptr) return NULL;
 
   uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
   if (flags_mask & REGEXP_FLAG_IGNORE_CASE) options |= PCRE2_CASELESS;
@@ -1149,8 +1276,12 @@ static compiled_regex_cache_entry_t *compiled_regex_cache_get_or_compile(
   PCRE2_SIZE erroffset;
   pcre2_compile_context *compile_ctx = pcre2_compile_context_create(NULL);
   if (compile_ctx) pcre2_set_newline(compile_ctx, PCRE2_NEWLINE_ANYCRLF);
-  pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, compile_ctx);
+  pcre2_code *re = pcre2_compile(
+    (PCRE2_SPTR)pcre2_pattern.ptr, pcre2_pattern.len,
+    options, &errcode, &erroffset, compile_ctx
+  );
   if (compile_ctx) pcre2_compile_context_free(compile_ctx);
+  if (pcre2_pattern.needs_free) free((void *)pcre2_pattern.ptr);
   if (re == NULL) return NULL;
 
   compiled_regex_cache_entry_t *entry = calloc(1, sizeof(compiled_regex_cache_entry_t));

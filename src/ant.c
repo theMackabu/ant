@@ -12994,13 +12994,23 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
       return mkval(kTypeArray, vdata(arr));
     }
 
-    char pcre2_pattern[512];
-    size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, plen, pcre2_pattern, sizeof(pcre2_pattern), false);
-
+    char pcre2_pattern_stack[512];
+    js_cstr_t pcre2_pattern = js_to_pcre2_pattern_cstr(
+      pattern_ptr, plen, pcre2_pattern_stack,
+      sizeof(pcre2_pattern_stack), false
+    );
+    
+    if (!pcre2_pattern.ptr) goto return_whole;
     uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF;
     int errcode;
+    
     PCRE2_SIZE erroffset;
-    pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
+    pcre2_code *re = pcre2_compile(
+      (PCRE2_SPTR)pcre2_pattern.ptr, pcre2_pattern.len,
+      options, &errcode, &erroffset, NULL
+    );
+
+    if (pcre2_pattern.needs_free) free((void *)pcre2_pattern.ptr);
     if (re == NULL) goto return_whole;
 
     pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);

@@ -2,6 +2,7 @@
 #define REGEX_H
 
 #include "types.h"
+#include "gc/strings.h"
 #include <string.h>
 
 typedef struct {
@@ -29,6 +30,11 @@ ant_value_t reject_regexp_arg(ant_t *js, ant_value_t value, const char *method_n
 size_t js_to_pcre2_pattern(
   const char *src, size_t src_len,
   char *dst, size_t dst_size, bool v_flag
+);
+
+js_cstr_t js_to_pcre2_pattern_cstr(
+  const char *src, size_t src_len,
+  char *stack_buf, size_t stack_size, bool v_flag
 );
 
 bool regexp_exec_truthy_try_fast(
