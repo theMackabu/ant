@@ -133,7 +133,7 @@ traced/invalidated key.
 
 | File                      | Verdict                                              | Evidence and action                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/modules/buffer.c`    | **O(1) unregister ported; audit semantics separately** | `registry_slot` plus swap-remove landed on 2026-08-29. Much of the encoding support exists, but the PR went through several correctness fixes and current UTF export has since changed. Reuse tests, not the stale encoding diff.                                                                                                                                                          |
+| `src/modules/buffer.c`    | **O(1) unregister and single-byte encoding ported** | `registry_slot` plus swap-remove landed on 2026-08-29. Latin-1/ASCII encode, decode, byte-length, write, and search semantics were recreated against the current UTF-16/WTF-8 APIs rather than copying the stale general encoder rewrite; Ant and Node pass the shared Buffer coverage. Audit any remaining encoding gaps separately.                                                                                                                           |
 | `src/modules/builtin.c`   | **Dependency only**                                  | The PR only accounts for/follows exotic sidecar storage. It has no independent optimization.                                                                                                                                                                                                                                                                                                              |
 | `src/modules/crypto.c`    | **Port separately**                                  | AES-GCM/HMAC `generateKey` and raw `exportKey`, extractability, usages, and cleansing are compatibility work, not the Elysia path. Current master still creates imported keys as non-extractable and lacks those APIs. Recreate with current WebCrypto validation and promise conventions.                                                                                                                |
 | `src/modules/fetch.c`     | **Ported with Headers**                              | Raw HTTP response headers now use the literal-byte append path, avoiding transient JS strings and preserving obs-text bytes.                                                                                                                                                                                                                                                                            |
@@ -224,6 +224,8 @@ without measurements.
 - The raw ByteString wire test, Response borrowed-body/clone pressure test,
   focused Buffer/fetch tests, regression manifest load, `maid preflight`, and
   `maid knowledge` all passed.
+- Latin-1/ASCII Buffer semantics and detached-ArrayBuffer `TypeError` assertions
+  pass all 215 focused checks under both Ant and Node.
 - LLVM discarded stale PGO counters for changed functions, so the resulting
   binary is not suitable for a comparative performance claim. No benchmark
   result is recorded here.
@@ -247,3 +249,6 @@ without measurements.
 - 2026-08-29: Ported only the Response string-body borrowing slice. Deferred
   lazy Headers and init-shape shortcuts because they broaden the fallible API
   and need profile evidence beyond construction-only microbenchmarks.
+- 2026-08-29: Recreated the PR's Latin-1/ASCII Buffer semantics with a targeted
+  current-tree encoder and portable detached-ArrayBuffer `TypeError` checks;
+  did not port the stale generalized encoder rewrite.
