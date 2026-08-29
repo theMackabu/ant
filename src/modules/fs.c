@@ -1879,17 +1879,28 @@ static int mkdirp(const char *path, mode_t mode) {
   if (!tmp) goto done;
 
   size_t len = strlen(tmp);
-  if (len > 0 && tmp[len - 1] == '/') tmp[len - 1] = '\0';
+  if (
+    len > 0 && (tmp[len - 1] == '/'
+  #ifdef _WIN32
+    || tmp[len - 1] == '\\'
+  #endif
+    )
+  ) tmp[len - 1] = '\0';
 
   for (char *p = tmp + 1; *p; p++) {
-    if (*p != '/') continue;
+    if (*p != '/'
+  #ifdef _WIN32
+      && *p != '\\'
+  #endif
+    ) continue;
+    char separator = *p;
     *p = '\0';
-#ifdef _WIN32
+  #ifdef _WIN32
     _mkdir(tmp);
-#else
+  #else
     mkdir(tmp, mode);
-#endif
-    *p = '/';
+  #endif
+    *p = separator;
   }
 
 #ifdef _WIN32
