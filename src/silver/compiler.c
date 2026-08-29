@@ -3402,6 +3402,8 @@ static bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 ) {
   if (!node || has_spread || node->args.count != 1) return false;
+  if (is_tail && (c->try_depth > 0 || c->using_cleanup_count > 0))
+    return false;
   sv_ast_t *callee = node->left;
   
   if (!callee || callee->type != N_MEMBER) return false;

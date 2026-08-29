@@ -2219,21 +2219,31 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
 
   tail_call_inline: {
-    ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
-    if (frame->bp && vm->open_upvalues) sv_close_upvalues_from_slot(vm, frame->bp);
-    sv_drop_frame_runtime_state(js, frame);
-    vm->sp = frame->prev_sp;
+    
     int arg_slots = (
       (int)tc_argc > closure->func->param_count)
       ? (int)tc_argc : closure->func->param_count;
+    
     int need = arg_slots + closure->func->max_locals;
+    while (frame->prev_sp + need > vm->stack_size) if (!sv_vm_grow_stack(vm)) {
+      sv_err = js_mkerr(js, "stack overflow");
+      goto sv_throw;
+    }
+
+    ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
+    if (frame->bp && vm->open_upvalues) sv_close_upvalues_from_slot(vm, frame->bp);
+    sv_drop_frame_runtime_state(js, frame);
+    vm->sp = frame->prev_sp;
+    
     ant_value_t *base = &vm->stack[vm->sp];
     memmove(base, call_args, (size_t)tc_argc * sizeof(ant_value_t));
     for (int i = (int)tc_argc; i < arg_slots; i++) base[i] = js_mkundef();
+    
     ant_value_t *new_lp = base + arg_slots;
     for (int i = 0; i < closure->func->max_locals; i++) new_lp[i] = js_mkundef();
+    
     vm->sp = frame->prev_sp + need;
     func = closure->func;
     frame->func = func;
@@ -2250,9 +2260,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->lp = new_lp;
     frame->upvalues = closure->upvalues;
     frame->upvalue_count = closure->func->upvalue_count;
+    
     bp = frame->bp;
     lp = frame->lp;
     ip = func->code;
+    
     DISPATCH();
   }
   

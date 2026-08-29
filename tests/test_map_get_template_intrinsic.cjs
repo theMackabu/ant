@@ -2,6 +2,25 @@ const assert = require('assert');
 const { spawnSync } = require('child_process');
 
 if (!process.env.ANT_MAP_TEMPLATE_CHILD) {
+  const stackChildLocals = Array.from(
+    { length: 2500 },
+    (_, i) => `v${i}`,
+  ).join(',');
+  const stackChildSource = [
+    `function get(key) { let ${stackChildLocals}; return key; }`,
+    'function lookup(target, left, right) {',
+    '  return target.get(`${left}-${right}`);',
+    '}',
+    'if (lookup({ get }, 1, 2) !== "1-2") process.exit(1);',
+  ].join('\n');
+  const stackChild = spawnSync(
+    process.execPath,
+    ['--stack-size=8', '-e', stackChildSource],
+    { encoding: 'utf8' },
+  );
+  assert.strictEqual(stackChild.status, 0,
+    stackChild.stdout + stackChild.stderr);
+
   const child = spawnSync(process.execPath, [__filename], {
     encoding: 'utf8',
     env: {
@@ -240,6 +259,31 @@ assert.strictEqual(
   optionalTailHas({ map: optionalMap }, 'left', 'right'),
   true,
 );
+
+let finallyCleanupCalls = 0;
+function lookupWithFinally(target, left, right) {
+  try {
+    return target.get(`${left}-${right}`);
+  } finally {
+    finallyCleanupCalls++;
+  }
+}
+assert.strictEqual(lookupWithFinally(optionalMap, 'left', 'right'),
+  'optional-value');
+assert.strictEqual(finallyCleanupCalls, 1);
+
+let disposeCalls = 0;
+function lookupWithUsing(target, left, right) {
+  using resource = {
+    [Symbol.dispose]() {
+      disposeCalls++;
+    },
+  };
+  return target.get(`${left}-${right}`);
+}
+assert.strictEqual(lookupWithUsing(optionalMap, 'left', 'right'),
+  'optional-value');
+assert.strictEqual(disposeCalls, 1);
 
 let tailCalls = 0;
 function tailLookup(target, left, right) {
