@@ -2736,7 +2736,9 @@ static ant_value_t alloc_array_with_proto_capacity(
   
   if (obj->u.array.data) {
     js->alloc_bytes.arrays += (size_t)obj->u.array.cap * sizeof(*obj->u.array.data);
-    uint32_t fill_start = MIN(overwritten_prefix, obj->u.array.cap);
+    uint32_t fill_start = overwritten_prefix < obj->u.array.cap
+      ? overwritten_prefix
+      : obj->u.array.cap;
     for (uint32_t i = fill_start; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->flags.fast_array = 1;
     obj->flags.may_have_holes = 0;
@@ -2772,8 +2774,10 @@ ant_value_t js_mkarr_dense_literal(
 
   ant_object_t *obj = array_obj_ptr(arr);
   if (!obj || !obj->flags.fast_array || !obj->u.array.data || obj->u.array.cap < count) {
-    if (obj && obj->u.array.data) 
-      for (uint32_t i = 0; i < MIN(count, obj->u.array.cap); i++) obj->u.array.data[i] = T_EMPTY;
+    if (obj && obj->u.array.data) {
+      uint32_t reset_count = count < obj->u.array.cap ? count : obj->u.array.cap;
+      for (uint32_t i = 0; i < reset_count; i++) obj->u.array.data[i] = T_EMPTY;
+    }
     for (uint32_t i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
     return arr;
   }

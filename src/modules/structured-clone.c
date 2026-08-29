@@ -202,13 +202,20 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       map_entry_t *ne = calloc(1, sizeof(map_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
       
-      ne->key = (unsigned char *)strdup((const char *)e->key);
+      ne->key = malloc(e->key_len);
+      if (!ne->key) {
+        free(ne);
+        return js_mkerr(js, "out of memory");
+      }
+
+      memcpy(ne->key, e->key, e->key_len);
+      ne->key_len = e->key_len;
       ne->key_val = e->key_val;
       ne->value = vc;
       
-      HASH_ADD_KEYPTR(
+      HASH_ADD_KEYPTR_BYHASHVALUE(
         hh, *new_head, ne->key, 
-        (unsigned)strlen((const char *)ne->key), ne
+        ne->key_len, e->hh.hashv, ne
       );
     }}
     
@@ -238,12 +245,19 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       set_entry_t *ne = calloc(1, sizeof(set_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
       
-      ne->key = (unsigned char *)strdup((const char *)e->key);
+      ne->key = malloc(e->key_len);
+      if (!ne->key) {
+        free(ne);
+        return js_mkerr(js, "out of memory");
+      }
+
+      memcpy(ne->key, e->key, e->key_len);
+      ne->key_len = e->key_len;
       ne->value = vc;
       
-      HASH_ADD_KEYPTR(
-        hh, *new_head, ne->key,
-        (unsigned)strlen((const char *)ne->key), ne
+      HASH_ADD_KEYPTR_BYHASHVALUE(
+        hh, *new_head, ne->key, 
+        ne->key_len, e->hh.hashv, ne
       );
     }}
 
