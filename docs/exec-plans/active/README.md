@@ -19,6 +19,7 @@ Store in-progress execution plans here.
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
 - [PCRE2 JIT Compiler Size Optimization](pcre2-jit-size-optimization.md)
+- [PR #44 Source Port Audit](pr-44-source-port-audit.md)
 - [REPL Evaluation Completions](repl-evaluation-completions.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
