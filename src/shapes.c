@@ -486,6 +486,16 @@ void ant_shape_release(ant_shape_t *shape) {
   free(shape);
 }
 
+void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape) {
+  if (!shape_pp || !*shape_pp || !to_shape || *shape_pp == to_shape) return;
+
+  ant_shape_t *from_shape = *shape_pp;
+  shape_invalidate_guarded_absence(from_shape);
+  ant_shape_retain(to_shape);
+  *shape_pp = to_shape;
+  ant_shape_release(from_shape);
+}
+
 size_t ant_shape_total_bytes(void) { return g_shape_bytes; }
 static uint16_t gc_shape_epoch = 0;
 

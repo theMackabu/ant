@@ -111,18 +111,47 @@ typedef union ant_object_flags {
     uint8_t generation: 1;
     uint8_t in_remember_set: 1;
   };
+  uint16_t raw;
   uint8_t bytes[2];
 } ant_object_flags_t;
 
-// TODO: constexpr
-#define ANT_OBJECT_FLAG_EXOTIC     (1u << 3)
-#define ANT_OBJECT_FLAG_GENERATION (1u << 10)
-#define ANT_OBJECT_FLAG_REMEMBERED (1u << 11)
+typedef enum : uint16_t {
+  ANT_OBJECT_FLAG_EXTENSIBLE = 1u << 0,
+  ANT_OBJECT_FLAG_FROZEN     = 1u << 1,
+  ANT_OBJECT_FLAG_SEALED     = 1u << 2,
+  ANT_OBJECT_FLAG_EXOTIC     = 1u << 3,
+  ANT_OBJECT_FLAG_FAST_ARRAY = 1u << 6,
+  ANT_OBJECT_FLAG_GENERATION = 1u << 10,
+  ANT_OBJECT_FLAG_REMEMBERED = 1u << 11,
+} ant_object_flag_mask_t;
 
 static_assert(
   sizeof(ant_object_flags_t) == 2,
   "ant_object_flags_t must cover the packed object bitfields"
 );
+
+static inline bool ant_object_flag_masks_match_layout(void) {
+  ant_object_flags_t flags = {.extensible = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_EXTENSIBLE) return false;
+
+  flags = (ant_object_flags_t){.frozen = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_FROZEN) return false;
+
+  flags = (ant_object_flags_t){.sealed = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_SEALED) return false;
+
+  flags = (ant_object_flags_t){.is_exotic = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_EXOTIC) return false;
+
+  flags = (ant_object_flags_t){.fast_array = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_FAST_ARRAY) return false;
+
+  flags = (ant_object_flags_t){.generation = 1};
+  if (flags.raw != ANT_OBJECT_FLAG_GENERATION) return false;
+
+  flags = (ant_object_flags_t){.in_remember_set = 1};
+  return flags.raw == ANT_OBJECT_FLAG_REMEMBERED;
+}
 
 typedef struct ant_object {
   struct ant_object *next;

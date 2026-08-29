@@ -134,6 +134,28 @@ assert(
 );
 assert(regexp.lastIndex === 0, 'global replace final lastIndex');
 
+regexp = /([a-z]+)(\d+)?/;
+regexp.lastIndex = 7;
+assert(
+  'ab12 cd34'.replace(regexp, '<$1|$2|$&>') === '<ab|12|ab12> cd34',
+  'non-global substitution replace'
+);
+assert(regexp.lastIndex === 7, 'non-global replace preserves lastIndex');
+assert(
+  RegExp.$1 === 'ab' && RegExp.$2 === '12' && RegExp.lastMatch === 'ab12',
+  'non-global replace updates RegExp statics'
+);
+
+regexp = /(?:)/;
+regexp.lastIndex = 4;
+assert('abc'.replace(regexp, '_') === '_abc', 'non-global empty replace');
+assert(regexp.lastIndex === 4, 'non-global empty replace preserves lastIndex');
+
+regexp = /b/y;
+regexp.lastIndex = 1;
+assert('abc'.replace(regexp, 'x') === 'axc', 'sticky replace fallback match');
+assert(regexp.lastIndex === 2, 'sticky replace fallback lastIndex');
+
 regexp = /(?:)/gu;
 assert('🎈x'.replace(regexp, '_') === '_🎈_x_', 'unicode empty global replace');
 assert(regexp.lastIndex === 0, 'unicode empty replace final lastIndex');

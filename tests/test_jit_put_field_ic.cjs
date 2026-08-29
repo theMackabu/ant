@@ -118,4 +118,84 @@ Object.defineProperty(lengthObject, "length", {
 writeLength(lengthObject, 12);
 assertEq(lengthSetterValue, 12, "non-array length setter");
 
+// Repeated constructor sites should reuse exact from-shape -> to-shape
+// transitions. Reference-valued fields are safe without a remembered-set
+// insertion while the freshly allocated receiver is still young.
+function Node(id, next, callback, items) {
+  this.id = id;
+  this.next = next;
+  this.callback = callback;
+  this.items = items;
+}
+
+function identity(value) {
+  return value;
+}
+
+let chain = null;
+for (let i = 0; i < 2000; i++) {
+  chain = new Node(i, chain, identity, [i, i + 1]);
+}
+assertEq(chain.id, 1999, "shape-transition numeric field");
+assertEq(chain.next.id, 1998, "shape-transition object field");
+assertEq(chain.callback(17), 17, "shape-transition function field");
+assertEq(chain.items[1], 2000, "shape-transition array field");
+
+let chainDepth = 0;
+for (let node = chain; node !== null; node = node.next) chainDepth++;
+assertEq(chainDepth, 2000, "shape-transition references survive allocation pressure");
+
+function addLate(object, value) {
+  object.late = value;
+}
+
+function strictAddLate(object, value) {
+  "use strict";
+  object.late = value;
+}
+
+for (let i = 0; i < 500; i++) addLate({}, i);
+
+// A negative lookup guard installed after the transition was learned must be
+// invalidated when another receiver takes that transition.
+function readLate(object) {
+  return object.late;
+}
+for (let i = 0; i < 500; i++) assertEq(readLate({}), undefined, "negative lookup warmup");
+const lateTarget = {};
+addLate(lateTarget, 77);
+assertEq(readLate(lateTarget), 77, "transition invalidates negative lookup");
+
+const nonExtensible = Object.preventExtensions({});
+addLate(nonExtensible, 1);
+assertEq(nonExtensible.late, undefined, "sloppy non-extensible add");
+let nonExtensibleError = "none";
+try {
+  strictAddLate(nonExtensible, 2);
+} catch (error) {
+  nonExtensibleError = error.name;
+}
+assertEq(nonExtensibleError, "TypeError", "strict non-extensible add");
+
+const sealed = Object.seal({});
+addLate(sealed, 3);
+assertEq(sealed.late, undefined, "sealed add excluded");
+const frozen = Object.freeze({});
+addLate(frozen, 4);
+assertEq(frozen.late, undefined, "frozen add excluded");
+
+const arrayProperty = [];
+addLate(arrayProperty, 5);
+assertEq(arrayProperty.late, 5, "array add stays semantic");
+
+function writeProto(object, proto) {
+  object.__proto__ = proto;
+}
+for (let i = 0; i < 500; i++) writeProto({}, null);
+const proto = { inherited: 91 };
+const protoTarget = {};
+writeProto(protoTarget, proto);
+assertEq(Object.getPrototypeOf(protoTarget), proto, "__proto__ setter excluded");
+assertEq(protoTarget.inherited, 91, "__proto__ inheritance preserved");
+
 console.log("OK: test_jit_put_field_ic");

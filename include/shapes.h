@@ -43,6 +43,7 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra);
 void ant_shape_retain(ant_shape_t *shape);
 void ant_shape_release(ant_shape_t *shape);
 void ant_shape_guard_absence(ant_shape_t *shape);
+void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape);
 
 uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape);
 int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned);

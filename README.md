@@ -7,10 +7,10 @@ Built to carry more than it weighs without compromising performance.
 
 ```bash
 $ ls -lh ant
--rwxr-xr-x⠀8.9M⠀ant*
+-rwxr-xr-x⠀9.0M⠀ant*
 
 # built with -Os
--rwxr-xr-x⠀4.5M⠀ant*
+-rwxr-xr-x⠀4.7M⠀ant*
 ```
 
 ## Table of contents
@@ -28,7 +28,7 @@ $ ls -lh ant
 
 |                     | Ant        | Node    | Bun    | Deno   |
 | ------------------- | ---------- | ------- | ------ | ------ |
-| Binary size         | **~9 MB**  | ~140 MB | ~61 MB | ~77 MB |
+| Binary size         | **9 MB**   | ~140 MB | ~61 MB | ~77 MB |
 | Cold start          | **~4 ms**  | ~30 ms  | ~10 ms | ~18 ms |
 | Engine              | Ant Silver | V8      | JSC    | V8     |
 | JIT                 | ✓          | ✓       | ✓      | ✓      |

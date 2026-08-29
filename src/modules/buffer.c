@@ -619,8 +619,9 @@ static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key,
   TypedArrayData *ta_data = buffer_get_typedarray_data(obj);
   if (!ta_data || index >= ta_data->length) return true;
   if (!ta_data->buffer || ta_data->buffer->is_detached) return true;
-
-  return !is_err(typedarray_write_value(js, ta_data, index, value));
+  (void)typedarray_write_value(js, ta_data, index, value);
+  
+  return true;
 }
 
 static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, double *out) {

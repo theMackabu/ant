@@ -2927,6 +2927,7 @@ static ant_value_t regexp_replace_batch_fast(
   ant_value_t rx,
   ant_value_t str,
   ant_value_t replacement,
+  bool global,
   bool full_unicode,
   bool *used_fast_path
 ) {
@@ -2934,19 +2935,26 @@ static ant_value_t regexp_replace_batch_fast(
 
   compiled_regex_cache_entry_t *compiled;
   uint8_t flags;
-  if (!regexp_prepare_batch_builtin_exec(js, rx, &compiled, &flags))
+  if (!regexp_prepare_builtin_exec(
+      js, rx, global ? REGEXP_FLAG_GLOBAL : 0,
+      &compiled, &flags, NULL, NULL))
+    return js_mkundef();
+  if (((flags & REGEXP_FLAG_GLOBAL) != 0) != global ||
+      (!global && (flags & REGEXP_FLAG_STICKY) != 0))
     return js_mkundef();
 
   *used_fast_path = true;
 
-  ant_value_t stored = regexp_set_lastindex(js, compiled, rx, tov(0));
-  if (is_err(stored)) return stored;
+  ant_value_t stored = js_mkundef();
+  if (global) {
+    stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+    if (is_err(stored)) return stored;
+  }
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (const char *)(uintptr_t)str_off;
-  ant_offset_t replacement_len, replacement_off = vstr(
-    js, replacement, &replacement_len
-  );
+  
+  ant_offset_t replacement_len, replacement_off = vstr(js, replacement, &replacement_len);
   const char *replacement_ptr = (const char *)(uintptr_t)replacement_off;
 
   size_t buf_cap = (size_t)str_len + 256;
@@ -3022,6 +3030,7 @@ static ant_value_t regexp_replace_batch_fast(
 
       match_count++;
       next_src_pos = end;
+      if (!global) break;
       offset = end;
       if (start == end) {
         offset = regexp_advance_empty_match(
@@ -3043,10 +3052,12 @@ static ant_value_t regexp_replace_batch_fast(
     return js_mkerr(js, "oom");
   }
 
-  stored = regexp_set_lastindex(js, compiled, rx, tov(0));
-  if (is_err(stored)) {
-    free(buf);
-    return stored;
+  if (global) {
+    stored = regexp_set_lastindex(js, compiled, rx, tov(0));
+    if (is_err(stored)) {
+      free(buf);
+      return stored;
+    }
   }
   if (match_count == 0) {
     free(buf);
@@ -3222,10 +3233,11 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     if (is_err(fast) || used_fast_path) return fast;
   }
 
-  if (global && !func_replace) {
+  if (!func_replace) {
     bool used_fast_path = false;
     ant_value_t fast = regexp_replace_batch_fast(
-      js, rx, str, replace_str, full_unicode, &used_fast_path
+      js, rx, str, replace_str, 
+      global, full_unicode, &used_fast_path
     );
     if (is_err(fast) || used_fast_path) return fast;
   }

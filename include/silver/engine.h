@@ -11,6 +11,7 @@
 #include "modules/timer.h"
 
 #include <stdbool.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -642,6 +643,8 @@ typedef struct {
   ant_value_t *locals;
   int n_locals;
   ant_value_t *lp;
+  ant_value_t *vstack;
+  int vstack_sp;
 } sv_jit_osr_t;
 
 #define SV_TRY_MAX  64
@@ -1239,14 +1242,33 @@ static inline ant_value_t sv_call_closure(
   return result;
 }
 
+// TODO: constexpr / enum
 #define SV_TFB_NUM   (1 << 0)
 #define SV_TFB_STR   (1 << 1)
 #define SV_TFB_BOOL  (1 << 2)
 #define SV_TFB_OTHER (1 << 3)
 
+#define SV_TFB_SPEC_COUNT_SHIFT 4
+#define SV_TFB_SPEC_MIN_SAMPLES 7u
+
+#define SV_TFB_SPEC_COUNT_MASK  (7u << SV_TFB_SPEC_COUNT_SHIFT)
+#define SV_TFB_SPEC_MISMATCH    (1u << 7)
+
+#define SV_TFB_CLASS_MASK (SV_TFB_NUM | SV_TFB_STR | SV_TFB_BOOL | SV_TFB_OTHER)
+
+static_assert(
+  SV_TFB_SPEC_MIN_SAMPLES <= (SV_TFB_SPEC_COUNT_MASK >> SV_TFB_SPEC_COUNT_SHIFT),
+  "specialization sample threshold must fit in the feedback counter"
+);
+
+static_assert(
+  (SV_TFB_CLASS_MASK & (SV_TFB_SPEC_COUNT_MASK | SV_TFB_SPEC_MISMATCH)) == 0,
+  "feedback value classes and specialization state must not overlap"
+);
+
 #define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
-#define SV_TFB_INOBJ_P90_NUMERATOR 9
-#define SV_TFB_INOBJ_P90_DENOMINATOR 10
+#define SV_TFB_INOBJ_P90_NUMERATOR     9
+#define SV_TFB_INOBJ_P90_DENOMINATOR   10
 
 #define SV_JIT_THRESHOLD       100
 #define SV_JIT_RECOMPILE_DELAY 50
@@ -1256,7 +1278,7 @@ static inline ant_value_t sv_call_closure(
 #define SV_JIT_BAILOUT_LIMIT    5
 #define SV_CALL_FB_MISS_DISABLE 4
 
-#define SV_JIT_RETRY_INTERP    mkval(kTypeError, 1)
+#define SV_JIT_RETRY_INTERP mkval(kTypeError, 1)
   
 extern const char *const sv_op_names[OP__COUNT];
   
@@ -1405,6 +1427,158 @@ static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
     type_feedback[off] = neu;
     func->tfb_version++;
   }}
+}
+
+static inline uint8_t sv_tfb_add_specialization_sample(
+  uint8_t old, uint8_t neu, bool matches
+) {
+  if (!matches) neu |= SV_TFB_SPEC_MISMATCH;
+  else {
+    uint8_t count = (uint8_t)((old & SV_TFB_SPEC_COUNT_MASK) >> SV_TFB_SPEC_COUNT_SHIFT);
+    if (count < SV_TFB_SPEC_MIN_SAMPLES) count++;
+    neu = (uint8_t)((neu & ~SV_TFB_SPEC_COUNT_MASK) | (count << SV_TFB_SPEC_COUNT_SHIFT));
+  }
+
+  return neu;
+}
+
+static inline uint8_t *sv_tfb_specialization_site(
+  sv_func_t *func, uint8_t *ip, uint8_t *old
+) {
+  uint8_t *type_feedback = sv_func_type_feedback(func);
+  if (!type_feedback) return NULL;
+
+  uint8_t *site = &type_feedback[(int)(ip - func->code)];
+  *old = *site;
+  
+  if (*old & SV_TFB_SPEC_MISMATCH) return NULL;
+  return site;
+}
+
+static inline void sv_tfb_record_specialization_at(
+  sv_func_t *func, uint8_t *site, uint8_t old, bool matches
+) {
+  uint8_t neu = sv_tfb_add_specialization_sample(old, old, matches);
+  if (neu != old) { *site = neu; func->tfb_version++; }
+}
+
+static inline bool sv_tfb_specialization_ready(uint8_t feedback) {
+  uint8_t count = (uint8_t)((feedback & SV_TFB_SPEC_COUNT_MASK) >> SV_TFB_SPEC_COUNT_SHIFT);
+  return count >= SV_TFB_SPEC_MIN_SAMPLES && (feedback & SV_TFB_SPEC_MISMATCH) == 0;
+}
+
+static inline bool sv_tfb_is_word32_number(ant_value_t value) {
+  if (vtype(value) != kTypeNumber) return false;
+  double number = tod(value);
+  return isfinite(number) && number >= (double)INT32_MIN && number <= (double)UINT32_MAX && trunc(number) == number;
+}
+
+static inline void sv_tfb_record2_spec(
+  sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r,
+  bool word32
+) {
+  uint8_t old;
+  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+  if (!site) return;
+
+  bool matches = word32
+    ? sv_tfb_is_word32_number(l) && sv_tfb_is_word32_number(r)
+    : vtype(l) == kTypeNumber && vtype(r) == kTypeNumber;
+  
+  uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
+  neu = sv_tfb_add_specialization_sample(old, neu, matches);
+  if (neu != old) { *site = neu; func->tfb_version++; }
+}
+
+static inline void sv_tfb_record1_word32_spec(
+  sv_func_t *func, uint8_t *ip, ant_value_t value
+) {
+  uint8_t old;
+  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+  if (!site) return;
+
+  uint8_t neu = old | sv_tfb_classify(value);
+  neu = sv_tfb_add_specialization_sample(old, neu, sv_tfb_is_word32_number(value));
+  if (neu != old) { *site = neu; func->tfb_version++; }
+}
+
+static inline bool sv_tfb_dense_numeric_element(
+  ant_value_t object, ant_value_t key, ant_value_t *slot
+) {
+  if (vtype(object) != kTypeArray || vtype(key) != kTypeNumber) return false;
+
+  double number = tod(key);
+  if (!isfinite(number) || number < 0 ||
+      number >= (double)UINT32_MAX || trunc(number) != number)
+    return false;
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(object));
+  if (!ptr || ptr->flags.is_exotic || !ptr->flags.fast_array ||
+      !ptr->u.array.data)
+    return false;
+
+  uint32_t index = (uint32_t)number;
+  if (index >= ptr->u.array.len || index >= ptr->u.array.cap) return false;
+
+  ant_value_t *candidate = &ptr->u.array.data[index];
+  if (vtype(*candidate) != kTypeNumber) return false;
+  if (slot) *slot = *candidate;
+  
+  return true;
+}
+
+static inline bool sv_tfb_dense_numeric_get(
+  ant_value_t object, ant_value_t key
+) {
+  return sv_tfb_dense_numeric_element(object, key, NULL);
+}
+
+static inline bool sv_tfb_dense_numeric_put(
+  ant_value_t object, ant_value_t key, ant_value_t value,
+  bool *tagged_old
+) {
+  if (vtype(value) != kTypeNumber || vtype(object) != kTypeArray ||
+      vtype(key) != kTypeNumber)
+    return false;
+
+  double number = tod(key);
+  if (!isfinite(number) || number < 0 ||
+      number >= (double)UINT32_MAX || trunc(number) != number)
+    return false;
+
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(object));
+  if (!ptr || ptr->flags.is_exotic || ptr->flags.frozen ||
+      !ptr->flags.fast_array || !ptr->u.array.data)
+    return false;
+
+  uint32_t index = (uint32_t)number;
+  if (index >= ptr->u.array.len || index >= ptr->u.array.cap ||
+      vtype(ptr->u.array.data[index]) == kTypeSentinel)
+    return false;
+
+  if (tagged_old)
+    *tagged_old = vtype(ptr->u.array.data[index]) != kTypeNumber;
+  return true;
+}
+
+static inline void sv_tfb_record_dense_numeric_put(
+  sv_func_t *func, uint8_t *ip,
+  ant_value_t object, ant_value_t key, ant_value_t value
+) {
+  uint8_t old;
+  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+  if (!site) return;
+
+  bool tagged_old = false;
+  bool matches = sv_tfb_dense_numeric_put(object, key, value, &tagged_old);
+
+  uint8_t neu = tagged_old ? (uint8_t)(old | SV_TFB_OTHER) : old;
+  neu = sv_tfb_add_specialization_sample(old, neu, matches);
+  if (neu != old) { *site = neu; func->tfb_version++; }
+}
+
+static inline bool sv_tfb_put_needs_tagged_old_guard(uint8_t feedback) {
+  return (feedback & SV_TFB_OTHER) != 0;
 }
 
 static inline void sv_tfb_ensure(sv_func_t *fn) {

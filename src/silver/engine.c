@@ -13,6 +13,7 @@
 #include "silver/engine.h"
 #include "silver/swarm.h"
 #include "modules/regex.h"
+#include "silver/glue.h"
 #include "ops/literals.h"
 #include "ops/stack.h"
 #include "ops/locals.h"
@@ -1336,6 +1337,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   
   ant_value_t sv_err;
   ant_value_t  tc_this = js_mkundef();
+  uint16_t tc_argc = 0;
   
   #define VM_CHECK(expr) ({            \
     frame->ip = ip;                    \
@@ -1469,17 +1471,41 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(2);
   }
 
-  L_GET_FIELD:     { VM_CHECK(sv_op_get_field(vm, js, func, ip));   NEXT(7); }
-  L_GET_FIELD2:    { VM_CHECK(sv_op_get_field2(vm, js, func, ip));  NEXT(7); }
-  L_PUT_FIELD:     { VM_CHECK(sv_op_put_field(vm, js, func, ip));   NEXT(7); }
-  L_GET_ELEM:      { VM_CHECK(sv_op_get_elem(vm, js, func, ip));    NEXT(1); }
-  L_GET_ELEM2:     { VM_CHECK(sv_op_get_elem2(vm, js, func, ip));   NEXT(1); }
-  L_PUT_ELEM:      { VM_CHECK(sv_op_put_elem(vm, js));              NEXT(1); }
-  L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip);          NEXT(5); }
-  L_DEFINE_SLOT:   { sv_op_define_slot(vm, js, func, ip);           NEXT(7); }
-  L_GET_LENGTH:    { VM_CHECK(sv_op_get_length(vm, js));            NEXT(1); }
+  L_GET_FIELD:     { VM_CHECK(sv_op_get_field(vm, js, func, ip));  NEXT(7); }
+  L_GET_FIELD2:    { VM_CHECK(sv_op_get_field2(vm, js, func, ip)); NEXT(7); }
+  L_PUT_FIELD:     { VM_CHECK(sv_op_put_field(vm, js, func, ip));  NEXT(7); }
+  
+  L_GET_ELEM: {
+    uint8_t old;
+    uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
+    if (site)sv_tfb_record_specialization_at(
+      func, site, old,
+      sv_tfb_dense_numeric_get(vm->stack[vm->sp - 2], vm->stack[vm->sp - 1])
+    );
+    VM_CHECK(sv_op_get_elem(vm, js, func, ip));
+    NEXT(1);
+  }
+  
+  L_GET_ELEM2: { 
+    VM_CHECK(sv_op_get_elem2(vm, js, func, ip));
+    NEXT(1);
+  }
+  
+  L_PUT_ELEM: {
+    sv_tfb_record_dense_numeric_put(
+      func, ip,
+      vm->stack[vm->sp - 3], vm->stack[vm->sp - 2],
+      vm->stack[vm->sp - 1]
+    );
+    VM_CHECK(sv_op_put_elem(vm, js));
+    NEXT(1);
+  }
+  
+  L_DEFINE_FIELD:  { sv_op_define_field(vm, js, func, ip); NEXT(5); }
+  L_DEFINE_SLOT:   { sv_op_define_slot(vm, js, func, ip);  NEXT(7); }
+  L_GET_LENGTH:    { VM_CHECK(sv_op_get_length(vm, js));   NEXT(1); }
 
-  L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));  NEXT(7); }
+  L_GET_FIELD_OPT:  { VM_CHECK(sv_op_get_field_opt(vm, js, func, ip));   NEXT(7); }
   L_GET_ELEM_OPT:   { VM_CHECK(sv_op_get_elem_opt(vm, js, func, ip));   NEXT(1); }
 
   L_GET_PRIVATE:      { VM_CHECK(sv_op_get_private(vm, js));       NEXT(1); }
@@ -1558,10 +1584,33 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_INC_LOCAL:  { VM_CHECK(sv_op_inc_local(lp, js, func, ip));  NEXT(2); }
   L_DEC_LOCAL:  { VM_CHECK(sv_op_dec_local(lp, js, func, ip));  NEXT(2); }
 
-  L_EQ:   { sv_op_eq(vm, js);   NEXT(1); }
-  L_NE:   { sv_op_ne(vm, js);   NEXT(1); }
-  L_SEQ:  { sv_op_seq(vm, js);  NEXT(1); }
-  L_SNE:  { sv_op_sne(vm, js);  NEXT(1); }
+  L_EQ: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, false);
+    sv_op_eq(vm, js); NEXT(1);
+  }
+  
+  L_NE: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, false);
+    sv_op_ne(vm, js); NEXT(1);
+  }
+  
+  L_SEQ: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, false);
+    sv_op_seq(vm, js); NEXT(1);
+  }
+  
+  L_SNE: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, false);
+    sv_op_sne(vm, js); NEXT(1);
+  }
   
   L_LT: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
@@ -1581,13 +1630,54 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_IS_NULLISH:        { sv_op_is_nullish(vm);                NEXT(1); }
   L_IS_UNDEF_OR_NULL:  { sv_op_is_undef_or_null(vm);          NEXT(1); }
 
-  L_BAND:  { VM_CHECK(sv_op_band(vm, js));  NEXT(1); }
-  L_BOR:   { VM_CHECK(sv_op_bor(vm, js));   NEXT(1); }
-  L_BXOR:  { VM_CHECK(sv_op_bxor(vm, js));  NEXT(1); }
-  L_BNOT:  { VM_CHECK(sv_op_bnot(vm, js));  NEXT(1); }
-  L_SHL:   { VM_CHECK(sv_op_shl(vm, js));   NEXT(1); }
-  L_SHR:   { VM_CHECK(sv_op_shr(vm, js));   NEXT(1); }
-  L_USHR:  { VM_CHECK(sv_op_ushr(vm, js));  NEXT(1); }
+  L_BAND: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_band(vm, js)); NEXT(1);
+  }
+  
+  L_BOR: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_bor(vm, js)); NEXT(1);
+  }
+  
+  L_BXOR: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_bxor(vm, js)); NEXT(1);
+  }
+  
+  L_SHL: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_shl(vm, js)); NEXT(1);
+  }
+  
+  L_SHR: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_shr(vm, js)); NEXT(1);
+  }
+  
+  L_USHR: {
+    ant_value_t l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1];
+    sv_tfb_record2_spec(func, ip, l, r, true);
+    VM_CHECK(sv_op_ushr(vm, js)); NEXT(1);
+  }
+  
+  L_BNOT: {
+    ant_value_t value = vm->stack[vm->sp - 1];
+    sv_tfb_record1_word32_spec(func, ip, value);
+    VM_CHECK(sv_op_bnot(vm, js));
+    NEXT(1);
+  }
 
   L_NOT:         { sv_op_not(vm, js);                   NEXT(1); }
   L_TYPEOF:      { sv_op_typeof(vm, js);                NEXT(1); }
@@ -1798,7 +1888,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
     ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
-    
+
     bool is_super_call =
       (vtype(frame->super_val) != kTypeUndefined && call_func == frame->super_val);
 
@@ -1907,6 +1997,30 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_MAP_GET_TEMPLATE2: {
+    uint32_t atom_idx = sv_get_u32(ip + 1);
+    if (atom_idx >= (uint32_t)func->atom_count) {
+      sv_err = js_mkerr(js, "invalid template separator");
+      goto sv_throw;
+    }
+    sv_atom_t *separator = &func->atoms[atom_idx];
+    ant_value_t right = vm->stack[vm->sp - 1];
+    ant_value_t left = vm->stack[vm->sp - 2];
+    ant_value_t call_func = vm->stack[vm->sp - 3];
+    ant_value_t call_this = vm->stack[vm->sp - 4];
+
+    frame->ip = ip;
+    ant_value_t call_result = jit_helper_call_map_get_template2(
+      vm, js, call_func, call_this, left, right,
+      separator->str, separator->len);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= 4;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(5);
+  }
+
   L_CALL_STABLE_BUILTIN: {
     sv_stable_builtin_t kind = (sv_stable_builtin_t)ip[1];
     uint16_t call_argc = sv_get_u16(ip + 2);
@@ -1967,6 +2081,21 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(1);
   }
 
+  L_RE_EXEC_DISCARD: {
+    ant_value_t call_arg  = vm->stack[vm->sp - 1];
+    ant_value_t call_func = vm->stack[vm->sp - 2];
+    ant_value_t call_this = vm->stack[vm->sp - 3];
+
+    frame->ip = ip;
+    ant_value_t call_result = jit_helper_regexp_exec_truthy(
+      vm, js, call_func, call_this, call_arg);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= 3;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    NEXT(1);
+  }
+
   L_RE_LITERAL_EXEC: {
     ant_value_t call_arg = vm->stack[vm->sp - 1];
     ant_value_t flags = vm->stack[vm->sp - 2];
@@ -1993,8 +2122,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
 
   L_TAIL_CALL: {
-    uint16_t call_argc = sv_get_u16(ip + 1);
-    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    tc_argc = sv_get_u16(ip + 1);
+    ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     tc_this = js_mkundef();
 
     if (vm->handler_depth == frame->handler_base &&
@@ -2010,21 +2139,56 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
       }
     }
-    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     frame->ip = ip;
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
+      vm, js, call_func, tc_this, call_args, tc_argc, NULL, false);
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
-    vm->sp -= call_argc + 1;
+    vm->sp -= tc_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
     goto L_RETURN;
   }
 
-  L_TAIL_CALL_METHOD: {
-    uint16_t call_argc = sv_get_u16(ip + 1);
-    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
-    tc_this = vm->stack[vm->sp - call_argc - 2];
+  L_TAIL_MAP_GET_TEMPLATE2: {
+    uint32_t atom_idx = sv_get_u32(ip + 1);
+    if (atom_idx >= (uint32_t)func->atom_count) {
+      sv_err = js_mkerr(js, "invalid template separator");
+      goto sv_throw;
+    }
+    sv_atom_t *separator = &func->atoms[atom_idx];
+    ant_value_t right = vm->stack[vm->sp - 1];
+    ant_value_t left = vm->stack[vm->sp - 2];
+    ant_value_t call_func = vm->stack[vm->sp - 3];
+    ant_value_t call_this = vm->stack[vm->sp - 4];
+
+    frame->ip = ip;
+    ant_value_t call_result = jit_helper_map_get_template2_fast(
+      js, call_func, call_this, left, right,
+      separator->str, separator->len);
+    if (!sv_is_jit_bailout(call_result)) {
+      vm->sp -= 4;
+      if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+      vm->stack[vm->sp++] = call_result;
+      goto L_RETURN;
+    }
+
+    ant_value_t key = jit_helper_map_get_template2_key(
+      js, left, right, separator->str, separator->len);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    if (is_err(key)) { sv_err = key; goto sv_throw; }
+    vm->stack[vm->sp - 2] = key;
+    vm->sp--;
+    tc_argc = 1;
+    goto tail_call_method_dispatch;
+  }
+
+  L_TAIL_CALL_METHOD:
+    tc_argc = sv_get_u16(ip + 1);
+
+  tail_call_method_dispatch: {
+    ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
+    tc_this = vm->stack[vm->sp - tc_argc - 2];
 
     if (vm->handler_depth == frame->handler_base &&
         vtype(frame->new_target) == kTypeUndefined &&
@@ -2039,31 +2203,30 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
       }
     }
-    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
+      vm, js, call_func, tc_this, call_args, tc_argc, NULL, false);
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
-    vm->sp -= call_argc + 2;
+    vm->sp -= tc_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
     goto L_RETURN;
   }
 
   tail_call_inline: {
-    uint16_t call_argc = sv_get_u16(ip + 1);
-    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
-    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
+    ant_value_t call_func = vm->stack[vm->sp - tc_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
     if (frame->bp && vm->open_upvalues) sv_close_upvalues_from_slot(vm, frame->bp);
     sv_drop_frame_runtime_state(js, frame);
     vm->sp = frame->prev_sp;
     int arg_slots = (
-      (int)call_argc > closure->func->param_count)
-      ? (int)call_argc : closure->func->param_count;
+      (int)tc_argc > closure->func->param_count)
+      ? (int)tc_argc : closure->func->param_count;
     int need = arg_slots + closure->func->max_locals;
     ant_value_t *base = &vm->stack[vm->sp];
-    memmove(base, call_args, (size_t)call_argc * sizeof(ant_value_t));
-    for (int i = (int)call_argc; i < arg_slots; i++) base[i] = js_mkundef();
+    memmove(base, call_args, (size_t)tc_argc * sizeof(ant_value_t));
+    for (int i = (int)tc_argc; i < arg_slots; i++) base[i] = js_mkundef();
     ant_value_t *new_lp = base + arg_slots;
     for (int i = 0; i < closure->func->max_locals; i++) new_lp[i] = js_mkundef();
     vm->sp = frame->prev_sp + need;
@@ -2073,7 +2236,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->this = sv_normalize_this_for_frame(js, func, tc_this);
     frame->new_target = js_mkundef();
     frame->super_val = js_mkundef();
-    frame->argc = call_argc;
+    frame->argc = tc_argc;
     frame->handler_base = (uint16_t)vm->handler_depth;
     frame->handler_top = (uint16_t)vm->handler_depth;
     frame->arguments_obj = js_mkundef();
@@ -2396,6 +2559,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_TO_OBJECT:   { VM_CHECK(sv_op_to_object(vm, js));  NEXT(1); }
   L_TO_PROPKEY:  { sv_op_to_propkey(vm, js);           NEXT(1); }
   L_TO_STRING:   { VM_CHECK(sv_op_to_string(vm, js));  NEXT(1); }
+  
+  L_TO_STRING_DEFER_NUMBER: {
+    if (vtype(vm->stack[vm->sp - 1]) != kTypeNumber)
+      VM_CHECK(sv_op_to_string(vm, js));
+    NEXT(1);
+  }
+  
   L_IS_UNDEF:    { sv_op_is_undef(vm);                 NEXT(1); }
   L_IS_NULL:     { sv_op_is_null(vm);                  NEXT(1); }
 

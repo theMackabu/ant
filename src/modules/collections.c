@@ -8,6 +8,8 @@
 #include "gc.h"
 #include "errors.h"
 #include "internal.h"
+#include "hash.h"
+#include "numbers.h"
 #include "gc/weak.h"
 #include "silver/engine.h"
 #include "descriptors.h"
@@ -86,12 +88,18 @@ static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *
   return true;
 }
 
+static inline unsigned collection_key_hash(const collection_key_t *key) {
+  return (unsigned)hash_key((const char *)key->bytes, key->len);
+}
+
 static map_entry_t *map_find_entry(ant_t *js, map_entry_t **map_ptr, ant_value_t key_val) {
   collection_key_t key;
   if (!collection_key_init(js, key_val, &key)) return NULL;
 
   map_entry_t *entry = NULL;
-  HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
+  unsigned key_hash = collection_key_hash(&key);
+  
+  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key.bytes, key.len, key_hash, entry);
   collection_key_free(&key);
   
   return entry;
@@ -102,7 +110,9 @@ static set_entry_t *set_find_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t
   if (!collection_key_init(js, value, &key)) return NULL;
   
   set_entry_t *entry = NULL;
-  HASH_FIND(hh, *set_ptr, key.bytes, key.len, entry);
+  unsigned key_hash = collection_key_hash(&key);
+  
+  HASH_FIND_BYHASHVALUE(hh, *set_ptr, key.bytes, key.len, key_hash, entry);
   collection_key_free(&key);
   
   return entry;
@@ -119,7 +129,9 @@ static bool map_store_entry(
   if (!collection_key_init(js, raw_key, &key)) return false;
 
   map_entry_t *entry = NULL;
-  HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
+  unsigned key_hash = collection_key_hash(&key);
+  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key.bytes, key.len, key_hash, entry);
+  
   if (entry) {
     entry->key_val = key_val;
     entry->value = value;
@@ -145,7 +157,7 @@ static bool map_store_entry(
   entry->key_val = key_val;
   entry->value = value;
   
-  HASH_ADD_KEYPTR(hh, *map_ptr, entry->key, entry->key_len, entry);
+  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *map_ptr, entry->key, entry->key_len, key_hash, entry);
   collection_key_free(&key);
   
   return true;
@@ -158,7 +170,9 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
   if (!collection_key_init(js, stored_value, &key)) return false;
 
   set_entry_t *entry = NULL;
-  HASH_FIND(hh, *set_ptr, key.bytes, key.len, entry);
+  unsigned key_hash = collection_key_hash(&key);
+  HASH_FIND_BYHASHVALUE(hh, *set_ptr, key.bytes, key.len, key_hash, entry);
+  
   if (entry) {
     collection_key_free(&key);
     return true;
@@ -181,7 +195,7 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
   entry->key_len = key.len;
   entry->value = stored_value;
   
-  HASH_ADD_KEYPTR(hh, *set_ptr, entry->key, entry->key_len, entry);
+  HASH_ADD_KEYPTR_BYHASHVALUE(hh, *set_ptr, entry->key, entry->key_len, key_hash, entry);
   collection_key_free(&key);
   
   return true;
@@ -433,6 +447,65 @@ static ant_value_t map_get(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_ptr) return js_mkundef();
 
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
+  return entry ? entry->value : js_mkundef();
+}
+
+bool collections_is_map_get_builtin(ant_value_t func) {
+  return vtype(func) == kTypeBuiltin && js_cfunc_same_entrypoint(func, map_get);
+}
+
+static size_t collection_number_to_string(double value, char *buf, size_t len) {
+  if (__builtin_expect(isnan(value), 0)) {
+    if (len >= 3) memcpy(buf, "NaN", 3);
+    return 3;
+  }
+  if (__builtin_expect(isinf(value), 0)) {
+    const char *text = value > 0 ? "Infinity" : "-Infinity";
+    size_t text_len = value > 0 ? 8 : 9;
+    if (len >= text_len) memcpy(buf, text, text_len);
+    return text_len;
+  }
+  return ant_number_to_shortest(value, buf, len);
+}
+
+ant_value_t collections_map_get_numeric_template(
+  ant_t *js, ant_value_t map,
+  ant_value_t left, const char *separator, size_t separator_len,
+  ant_value_t right
+) {
+  map_entry_t **map_ptr = get_map_from_obj(map);
+  if (!map_ptr) return js_mkundef();
+
+  char left_buf[32];
+  char right_buf[32];
+  size_t left_len = collection_number_to_string(tod(left), left_buf, sizeof(left_buf));
+  size_t right_len = collection_number_to_string(tod(right), right_buf, sizeof(right_buf));
+  if (left_len > sizeof(left_buf) || right_len > sizeof(right_buf) ||
+      separator_len > SIZE_MAX - 1 - left_len - right_len)
+    return js_mkerr(js, "out of memory");
+
+  size_t key_len = 1 + left_len + separator_len + right_len;
+  unsigned char inline_key[64];
+  unsigned char *key = inline_key;
+  if (key_len > sizeof(inline_key)) {
+    key = malloc(key_len);
+    if (!key) return js_mkerr(js, "out of memory");
+  }
+
+  unsigned char *out = key;
+  *out++ = (uint8_t)kTypeString;
+  memcpy(out, left_buf, left_len);
+  out += left_len;
+  if (separator_len > 0) {
+    memcpy(out, separator, separator_len);
+    out += separator_len;
+  }
+  memcpy(out, right_buf, right_len);
+
+  map_entry_t *entry = NULL;
+  unsigned key_hash = (unsigned)hash_key((const char *)key, key_len);
+  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key, key_len, key_hash, entry);
+  if (key != inline_key) free(key);
   return entry ? entry->value : js_mkundef();
 }
 

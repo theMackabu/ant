@@ -7,6 +7,8 @@
 #include "gc/roots.h"
 #include "tokens.h"
 #include "silver/glue.h"
+#include "modules/regex.h"
+#include "modules/collections.h"
 
 #include "ops/calls.h"
 #include "ops/literals.h"
@@ -287,6 +289,28 @@ ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which) {
   if (which == 2) return sv_vm_get_super_val(vm);
   if (which == 3) return js_get_module_import_binding(js);
   return js_mkundef();
+}
+
+ant_value_t jit_helper_strict_arguments(
+  sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  for (int i = 0; i < argc; i++) GC_ROOT_PIN(js, args[i]);
+
+  sv_frame_t frame = {
+    .bp = args,
+    .argc = argc,
+    .arguments_obj = js_mkundef(),
+    .eval_env = js_mkundef(),
+  };
+  
+  ant_value_t result = js_create_arguments_object(
+    js, vm, js_mkundef(), 
+    &frame, argc, 0, true
+  );
+    
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 void jit_helper_define_method_comp(
@@ -575,6 +599,23 @@ ant_value_t jit_helper_for_of(
   return tov(0);
 }
 
+ant_value_t jit_helper_iter_next(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf, int hint
+) {
+  ant_value_t value = js_mkundef();
+  bool done = false;
+  
+  ant_value_t status =
+    jit_iter_advance_from_buf(vm, js, iter_buf, hint, &value, &done);
+  if (is_err(status)) return status;
+
+  iter_buf[3] = value;
+  iter_buf[4] = done ? js_true : js_false;
+  
+  return status;
+}
+
 ant_value_t jit_helper_destructure_next(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *iter_buf
@@ -650,6 +691,114 @@ ant_value_t jit_helper_call_array_includes(
   if (js_is_array_includes_builtin(call_func))
     return js_array_includes_call(js, call_this, args, argc);
   return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
+}
+
+ant_value_t jit_helper_map_get_template2_fast(
+  ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t left, ant_value_t right,
+  const char *separator, uint32_t separator_len
+) {
+  if (collections_is_map_get_builtin(call_func) &&
+      vtype(left) == kTypeNumber && vtype(right) == kTypeNumber)
+    return collections_map_get_numeric_template(
+      js, call_this, left, separator, separator_len, right);
+  return SV_JIT_BAILOUT;
+}
+
+ant_value_t jit_helper_map_get_template2_key(
+  ant_t *js, ant_value_t left, ant_value_t right,
+  const char *separator, uint32_t separator_len
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, left);
+  GC_ROOT_PIN(js, right);
+
+  ant_value_t left_str = vtype(left) == kTypeString
+    ? left : js_template_to_string(js, left);
+  GC_ROOT_PIN(js, left_str);
+  
+  if (is_err(left_str)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return left_str;
+  }
+
+  ant_value_t right_str = vtype(right) == kTypeString
+    ? right : js_template_to_string(js, right);
+  GC_ROOT_PIN(js, right_str);
+  
+  if (is_err(right_str)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return right_str;
+  }
+
+  ant_value_t separator_str = js_mkstr(js, separator, separator_len);
+  GC_ROOT_PIN(js, separator_str);
+  
+  if (is_err(separator_str)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return separator_str;
+  }
+
+  ant_value_t key = do_string_op(js, TOK_PLUS, left_str, separator_str);
+  GC_ROOT_PIN(js, key);
+  
+  if (!is_err(key)) key = do_string_op(js, TOK_PLUS, key, right_str);
+  if (is_err(key)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return key;
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return key;
+}
+
+ant_value_t jit_helper_call_map_get_template2(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t left, ant_value_t right,
+  const char *separator, uint32_t separator_len
+) {
+  ant_value_t result = jit_helper_map_get_template2_fast(
+    js, call_func, call_this, left, right, separator, separator_len);
+  if (!sv_is_jit_bailout(result)) return result;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, call_func);
+  GC_ROOT_PIN(js, call_this);
+  
+  ant_value_t key = jit_helper_map_get_template2_key(
+    js, left, right, separator, separator_len);
+  GC_ROOT_PIN(js, key);
+  
+  if (is_err(key)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return key;
+  }
+
+  ant_value_t args[1] = { key };
+  result = sv_vm_call(
+    vm, js, call_func, call_this, args, 1, NULL, false);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return result;
+}
+
+ant_value_t jit_helper_regexp_exec_truthy(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this, ant_value_t arg
+) {
+  ant_value_t result;
+  if (regexp_exec_truthy_try_fast(
+      js, call_func, call_this, arg, &result))
+    return result;
+
+  ant_value_t args[1] = { arg };
+  ant_value_t raw = sv_vm_call(
+    vm, js, call_func, call_this, args, 1, NULL, false);
+  if (is_err(raw)) return raw;
+  
+  return js_bool(js_truthy(js, raw));
 }
 
 ant_value_t jit_helper_call_stable_builtin(
@@ -988,6 +1137,10 @@ ant_value_t jit_helper_put_field_ic(
   return sv_put_field_cached(js, obj, val, atom, ic);
 }
 
+void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
+  if (obj) ant_shape_transition_existing(&obj->shape, to_shape);
+}
+
 ant_value_t jit_helper_get_elem(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t key, sv_func_t *func, int32_t bc_off
@@ -1026,6 +1179,12 @@ ant_value_t jit_helper_put_elem(
   ant_value_t obj, ant_value_t key, ant_value_t val
 ) {
   if (vtype(key) == kTypeSymbol) return js_setprop(js, obj, key, val);
+  if (vtype(key) == kTypeNumber) {
+    double index = tod(key);
+    if (index >= 0.0 && index < (double)UINT32_MAX &&
+      index == (double)(uint32_t)index)
+    return js_setprop_index(js, obj, (uint32_t)index, val);
+  }
   ant_value_t key_jv = sv_key_to_propstr(js, key);
   return js_setprop(js, obj, key_jv, val);
 }
@@ -1056,6 +1215,14 @@ ant_value_t jit_helper_object(
   return obj;
 }
 
+ant_value_t jit_helper_regexp(
+  sv_vm_t *vm, ant_t *js, ant_value_t pattern, ant_value_t flags
+) {
+  // TODO: remove vm
+  (void)vm;
+  return sv_regexp_create(js, pattern, flags);
+}
+
 void jit_helper_define_slot(
   sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t val,
   const char *str, uint32_t len, uint32_t slot
@@ -1065,9 +1232,7 @@ void jit_helper_define_slot(
 }
 
 ant_value_t jit_helper_array(sv_vm_t *vm, ant_t *js, ant_value_t *elements, int count) {
-  ant_value_t arr = js_mkarr(js);
-  for (int i = 0; i < count; i++) js_arr_push(js, arr, elements[i]);
-  return arr;
+  return js_mkarr_dense_literal(js, elements, (uint32_t)count);
 }
 
 ant_value_t jit_helper_catch_value(sv_vm_t *vm, ant_t *js, ant_value_t err) {

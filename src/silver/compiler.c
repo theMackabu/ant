@@ -3336,6 +3336,43 @@ static bool compile_call_array_includes_intrinsic(
   return true;
 }
 
+static bool compile_call_map_get_template_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
+) {
+  if (!node || has_spread || node->args.count != 1) return false;
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "get", 3))
+    return false;
+
+  sv_ast_t *tpl = node->args.items[0];
+  if (!tpl || tpl->type != N_TEMPLATE || tpl->args.count != 5 ||
+      !template_has_valid_cooked_segments(tpl))
+    return false;
+
+  sv_ast_t *head = tpl->args.items[0];
+  sv_ast_t *separator = tpl->args.items[2];
+  sv_ast_t *tail = tpl->args.items[4];
+  if (!is_template_segment(head) || head->len != 0 ||
+      !is_template_segment(separator) ||
+      !is_template_segment(tail) || tail->len != 0)
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  compile_expr(c, tpl->args.items[1]);
+  emit_op(c, OP_TO_STRING_DEFER_NUMBER);
+  compile_expr(c, tpl->args.items[3]);
+  if (is_tail) emit_close_upvals(c);
+  emit_atom_op(
+    c, is_tail ? OP_TAIL_MAP_GET_TEMPLATE2 : OP_CALL_MAP_GET_TEMPLATE2,
+    separator->str, separator->len);
+  return true;
+}
+
 static bool compile_call_stable_builtin(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread
 ) {
@@ -3453,6 +3490,28 @@ static bool compile_regexp_exec_truthy_intrinsic(
   compile_expr(c, node->args.items[0]);
   emit_op(c, OP_RE_EXEC_TRUTHY);
   
+  return true;
+}
+
+static bool compile_regexp_exec_discard_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node
+) {
+  if (!node || node->type != N_CALL || call_has_spread_arg(node) ||
+      node->args.count != 1)
+    return false;
+
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "exec", 4))
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_RE_EXEC_DISCARD);
   return true;
 }
 
@@ -3932,6 +3991,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
 
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_call_map_get_template_intrinsic(c, node, has_spread, false))
     return;
 
   if (compile_call_stable_builtin(c, node, has_spread))
@@ -4564,6 +4626,11 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
     return;
   }
 
+  if (expr->type == N_CALL &&
+      compile_call_map_get_template_intrinsic(c, expr, false, true)) {
+    return;
+  }
+
   if (is_tail_callable(c, expr)) {
     compile_tail_call(c, expr);
     return;
@@ -4838,6 +4905,9 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     default:
+      if (!has_completion_accumulator(c) &&
+          compile_regexp_exec_discard_intrinsic(c, node))
+        break;
       compile_expr(c, node);
       emit_set_completion_from_stack(c);
       break;
