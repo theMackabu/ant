@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <yyjson.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -327,40 +328,22 @@ static bool has_js_extension(const char *filename) {
   return false;
 }
 
-char *resolve_js_file(const char *filename) {
-  extern bool esm_is_url(const char *path);
-  if (!filename) return NULL;
-  if (esm_is_url(filename)) return strdup(filename);
-  
-  struct stat st;
-  if (stat(filename, &st) == 0) {
-    if (S_ISREG(st.st_mode)) {
-      const char *slash = strrchr(filename, '/');
-      const char *base = slash ? slash + 1 : filename;
-      const char *dot = strrchr(base, '.');
-      if (dot && !has_js_extension(filename)) return NULL;
-      return strdup(filename);
-    }
-    if (!S_ISDIR(st.st_mode)) return NULL;
+static char *resolve_existing_entrypoint_file(const char *filename, const struct stat *st) {
+  if (!S_ISREG(st->st_mode)) return NULL;
 
-    size_t len = strlen(filename);
-    int has_slash = (len > 0 && filename[len - 1] == '/');
-    
-    for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
-      if (!is_entrypoint_script_extension(*ext)) continue;
-      size_t ext_len = strlen(*ext);
-      char *index_path = try_oom(len + 7 + ext_len + 1);
-      sprintf(index_path, "%s%sindex%s", filename, has_slash ? "" : "/", *ext);
-      if (stat(index_path, &st) == 0 && S_ISREG(st.st_mode)) return index_path;
-      free(index_path);
-    }
-    
-    return NULL;
-  }
+  const char *slash = strrchr(filename, '/');
+  const char *base = slash ? slash + 1 : filename;
+  const char *dot = strrchr(base, '.');
   
+  if (dot && !has_js_extension(filename)) return NULL;
+  return strdup(filename);
+}
+
+static char *resolve_entrypoint_file_extensions(const char *filename) {
+  struct stat st;
   if (has_js_extension(filename)) return NULL;
   size_t base_len = strlen(filename);
-  
+
   for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
     if (!is_entrypoint_script_extension(*ext)) continue;
     size_t ext_len = strlen(*ext);
@@ -375,6 +358,77 @@ char *resolve_js_file(const char *filename) {
   }
   
   return NULL;
+}
+
+static char *resolve_entrypoint_file(const char *filename) {
+  struct stat st;
+  if (stat(filename, &st) == 0) return resolve_existing_entrypoint_file(filename, &st);
+  return resolve_entrypoint_file_extensions(filename);
+}
+
+static char *resolve_directory_index(const char *directory) {
+  size_t len = strlen(directory);
+  bool has_slash = len > 0 && (directory[len - 1] == '/' || directory[len - 1] == '\\');
+  char *index_path = try_oom(len + (has_slash ? 0 : 1) + sizeof("index"));
+
+  sprintf(index_path, "%s%sindex", directory, has_slash ? "" : "/");
+  char *resolved = resolve_entrypoint_file(index_path);
+  free(index_path);
+  
+  return resolved;
+}
+
+static char *resolve_directory_main(const char *directory) {
+  size_t dir_len = strlen(directory);
+  bool has_slash = dir_len > 0 && (directory[dir_len - 1] == '/' || directory[dir_len - 1] == '\\');
+  
+  char *package_path = try_oom(dir_len + (has_slash ? 0 : 1) + sizeof("package.json"));
+  sprintf(package_path, "%s%spackage.json", directory, has_slash ? "" : "/");
+
+  yyjson_doc *doc = yyjson_read_file(package_path, 0, NULL, NULL);
+  free(package_path);
+  if (!doc) return NULL;
+
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  yyjson_val *main = root && yyjson_is_obj(root) ? yyjson_obj_get(root, "main") : NULL;
+  
+  const char *main_str = main && yyjson_is_str(main) ? yyjson_get_str(main) : NULL;
+  char *resolved = NULL;
+
+  if (main_str && main_str[0]) {
+    size_t main_len = strlen(main_str);
+    char *main_path = try_oom(dir_len + (has_slash ? 0 : 1) + main_len + 1);
+    sprintf(main_path, "%s%s%s", directory, has_slash ? "" : "/", main_str);
+
+    resolved = resolve_entrypoint_file(main_path);
+    if (!resolved) {
+      struct stat st;
+      if (stat(main_path, &st) == 0 && S_ISDIR(st.st_mode))
+        resolved = resolve_directory_index(main_path);
+    }
+
+    free(main_path);
+  }
+
+  yyjson_doc_free(doc);
+  return resolved;
+}
+
+char *resolve_js_file(const char *filename) {
+  extern bool esm_is_url(const char *path);
+  if (!filename) return NULL;
+  if (esm_is_url(filename)) return strdup(filename);
+
+  struct stat st;
+  if (stat(filename, &st) == 0) {
+    if (S_ISDIR(st.st_mode)) {
+      char *resolved = resolve_directory_main(filename);
+      return resolved ? resolved : resolve_directory_index(filename);
+    }
+    return resolve_existing_entrypoint_file(filename, &st);
+  }
+
+  return resolve_entrypoint_file_extensions(filename);
 }
 
 char *resolve_typescript_source_fallback(const char *filename) {
