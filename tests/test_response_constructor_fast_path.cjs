@@ -16,6 +16,16 @@ assert(
 );
 assert(await text.text() === "hello", "string body contents");
 
+let borrowedBody = "root";
+for (let i = 0; i < 64; i++) borrowedBody += `:${i}`;
+const borrowedExpected = borrowedBody;
+const borrowed = new Response(borrowedBody);
+const borrowedClone = borrowed.clone();
+borrowedBody = null;
+for (let i = 0; i < 100_000; i++) ({ value: `gc-${i}` });
+assert(await borrowed.text() === borrowedExpected, "borrowed string body survives GC pressure");
+assert(await borrowedClone.text() === borrowedExpected, "borrowed string clone contents");
+
 const sourceHeaders = new Headers({ "content-type": "text/plain", "x-source": "yes" });
 const copied = new Response("hello", { headers: sourceHeaders, status: 201, statusText: "Created" });
 sourceHeaders.set("x-source", "changed");

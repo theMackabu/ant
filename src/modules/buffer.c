@@ -226,7 +226,7 @@ static ant_value_t ta_entries(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void register_buffer(ArrayBufferData *data) {
-  if (!data) return;
+  if (!data || buffer_registry_count >= UINT32_MAX) return;
   
   if (!buffer_registry) {
     buffer_registry = calloc(BUFFER_REGISTRY_INITIAL_CAP, sizeof(ArrayBufferData *));
@@ -243,16 +243,19 @@ static void register_buffer(ArrayBufferData *data) {
   }
   
   buffer_registry[buffer_registry_count++] = data;
+  data->registry_slot = (uint32_t)buffer_registry_count;
 }
 
 static void unregister_buffer(ArrayBufferData *data) {
-  if (!data || !buffer_registry) return;
-  
-  for (size_t i = 0; i < buffer_registry_count; i++) {
-  if (buffer_registry[i] == data) { 
-    buffer_registry[i] = buffer_registry[--buffer_registry_count]; 
-    return; 
-  }}
+  if (!data || !buffer_registry || data->registry_slot == 0) return;
+
+  size_t idx = (size_t)data->registry_slot - 1;
+  if (idx >= buffer_registry_count || buffer_registry[idx] != data) return;
+
+  ArrayBufferData *last = buffer_registry[--buffer_registry_count];
+  buffer_registry[idx] = last;
+  last->registry_slot = (uint32_t)idx + 1;
+  data->registry_slot = 0;
 }
 
 static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {

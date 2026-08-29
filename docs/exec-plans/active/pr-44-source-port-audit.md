@@ -69,22 +69,48 @@ turn the raw equality guard into an ABA-style false hit and return the wrong
 property. Any renewed design needs a stable intern identity or an explicitly
 traced/invalidated key.
 
+## Port Status
+
+- [x] Cache `Request.method` and `Request.url` in rooted reserved slots. The
+  current-tree port also invalidates the private fetch Request's caches when a
+  redirect rewrites its method or URL. Completed 2026-08-29.
+- [x] Remove the heap allocation from property iteration by storing the isolate,
+  object, and offset directly in `ant_iter_t`. Completed 2026-08-29.
+- [x] Make Buffer registry removal O(1). The current-tree port uses a 32-bit
+  tail slot and narrows the two boolean fields, preserving the existing
+  40-byte 64-bit and 24-byte 32-bit `ArrayBufferData` layouts. Completed
+  2026-08-29.
+- [x] Redesign compact/fallible Headers storage. Entries now use one allocation
+  with a 96-byte inline first-entry buffer; copy, set, and append-if-missing
+  paths report allocation failure; JS values preserve ByteString semantics;
+  and raw HTTP ingestion no longer round-trips through a JS UTF-8 string.
+  Completed 2026-08-29.
+- [ ] Port Response optimizations in isolated ownership-safe slices after
+  Headers.
+  - [x] Borrow direct immutable JS string bodies through a rooted Response slot
+    and an explicit storage state, avoiding the body byte copy and content-type
+    allocation. `response_data_t` remains 136 bytes on the current 64-bit ABI.
+    Completed 2026-08-29.
+  - [ ] Lazy Headers materialization and the narrow init-shape fast path remain
+    unported. Keep them separate: server serialization materializes headers
+    immediately, so laziness alone needs current-tree profile evidence.
+
 ## File-by-File Verdicts
 
 ### Public and Runtime Headers
 
 | File                         | Verdict                                           | Evidence and action                                                                                                                                                                                                                                                                                                        |
 | ---------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `include/ant.h`              | **Port part**                                     | The allocation-free property iterator is still absent: current `ant_iter_t` owns a heap `ctx`. Recreate that small ABI change. Do not couple it to the PR's 256-byte native-data arena; measure Headers/Response first and choose ownership deliberately.                                                                  |
+| `include/ant.h`              | **Ported in part**                                | The allocation-free property iterator landed on 2026-08-29. The PR's 256-byte native-data arena remains intentionally unported; measure Headers/Response first and choose ownership deliberately.                                                                                                                   |
 | `include/arena.h`            | **Superseded**                                    | Current master already has `fixed_arena_alloc_uninit()` and uses it for initialized-on-write allocations. The spelling and surrounding arena implementation changed; nothing should be recovered.                                                                                                                          |
-| `include/common.h`           | **Dependency only**                               | The two request cache slots are absent and should land only with the `Request.method`/`url` cache. Reserving them without the getters adds per-object state for no benefit.                                                                                                                                                |
+| `include/common.h`           | **Ported dependency**                             | The two request cache slots landed with the `Request.method`/`url` cache on 2026-08-29.                                                                                                                                                                                                                                   |
 | `include/gc.h`               | **Reject**                                        | The PR lowers the pool floor from 8 MiB to 1 MiB and removes timing constants used by the fallback. It does not make array backing stores visible to pacing. Keep current policy until the array-pacing plan is resolved and benchmark a new policy independently.                                                         |
 | `include/gc/stats.h`         | **Port separately, optional**                     | Exit telemetry is useful for diagnosis but is not an Elysia optimization. If revived, keep it opt-in, use the current GC policy fields, and verify the timing API on Windows. Do not make it a prerequisite for runtime changes.                                                                                           |
 | `include/internal.h`         | **Mostly superseded; dependency only**            | Find-only interning, UTF validity state, fixed-arena evolution, and object-site shape work already exist in newer forms. Native constructor metadata, ASCII character caching, and intern-cache additions should be reconsidered only with their implementations. Do not copy this broad state-layout change.              |
-| `include/modules/buffer.h`   | **Port**                                          | `registry_slot` is still absent and current unregister remains a linear scan. Add the field together with swap-remove registration/unregistration and focused lifetime tests.                                                                                                                                              |
-| `include/modules/headers.h`  | **Redesign**                                      | Native pending-header APIs are still absent and are relevant to Response construction, but the PR mixes allocation policy, lazy materialization, and fallible operations. Define an explicit ownership/error contract before adding the APIs.                                                                              |
+| `include/modules/buffer.h`   | **Ported**                                        | `registry_slot` landed with swap-remove registration/unregistration on 2026-08-29. The current port preserves the previous struct size on both 64-bit and 32-bit targets.                                                                                                                                                  |
+| `include/modules/headers.h`  | **Ported in part**                                | The existing append-if-missing API is now fallible. Native pending-header ownership APIs remain intentionally absent until lazy Response materialization has current profile evidence.                                                                                                                                    |
 | `include/modules/regex.h`    | **Superseded**                                    | Regex subject validity, watched-property handling, and execution plumbing were substantially rewritten on current master. Mine old tests only; do not transplant the old interface.                                                                                                                                        |
-| `include/modules/response.h` | **Redesign**                                      | Lazy pending headers and borrowed body ownership are still absent, but the old `response_get_headers(js, obj)` becomes fallible without making all callers handle errors. Redesign the API after Headers lands.                                                                                                            |
+| `include/modules/response.h` | **Ported in part**                                | Borrowed string body ownership now has an explicit compact storage state without growing `response_data_t`. Lazy pending headers remain deferred because their fallible materialization contract still affects every caller.                                                                                              |
 | `include/object.h`           | **Measure before porting**                        | Current objects still keep `exotic_ops` and `exotic_keys` in the hot object rather than the sidecar, so the size reduction is not present. The object layout has otherwise changed heavily. Record `sizeof(ant_object_t)` and object/exotic population before moving fields; update GC/finalization atomically if it wins. |
 | `include/silver/engine.h`    | **Mostly superseded; redesign dynamic-key state** | Current object-site cache and 64-byte IC layout are newer. The PR's `cached_key`/accessor additions are not present and are not GC-safe as implemented. Native-constructor and no-JIT declarations are dependencies, not standalone ports.                                                                                 |
 | `include/silver/glue.h`      | **Dependency only**                               | All changes are helper signatures for the old IC, object-site, string-intrinsic, import, or constructor designs. Follow the corresponding implementation verdicts; do not grow the helper surface first.                                                                                                                   |
@@ -95,7 +121,7 @@ traced/invalidated key.
 
 | File               | Verdict                                                    | Evidence and action                                                                                                                                                                                                                                                                                                                         |
 | ------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ant.c`        | **Port two isolated ideas; otherwise superseded/redesign** | Port the allocation-free property iterator. Consider one-byte string caching only with allocation data. Find-only lookup interning, argument snapshots, UTF handling, and shared object shapes already landed in newer forms. The native-data arena and exotic sidecar move need independent size/profile evidence and must not be bundled. |
+| `src/ant.c`        | **One part ported; otherwise superseded/redesign**         | The allocation-free property iterator landed on 2026-08-29. Consider one-byte string caching only with allocation data. Find-only lookup interning, argument snapshots, UTF handling, and shared object shapes already landed in newer forms. The native-data arena and exotic sidecar move need independent size/profile evidence and must not be bundled. |
 | `src/gc/gc.c`      | **Reject**                                                 | The adaptive rewrite removes the tick/time fallback but still gates pool checks behind nursery conditions and ignores array backing stores. That converts an existing pacing blind spot into potentially unbounded growth. Rebuild policy only after the active array-pacing plan, with plateau and throughput tests.                       |
 | `src/gc/objects.c` | **Dependency only**                                        | The PR only marks/frees new cached roots and sidecar state and adds telemetry hooks. Current object-site shape marking is already newer. Revisit this file only with a chosen object-layout or telemetry change.                                                                                                                            |
 | `src/gc/stats.c`   | **Port separately, optional**                              | The JSON-at-exit diagnostics can be recreated against the current collector, but the file is observability rather than throughput. Preserve zero-cost disabled paths and validate Windows clocks/output before landing.                                                                                                                     |
@@ -107,15 +133,15 @@ traced/invalidated key.
 
 | File                      | Verdict                                              | Evidence and action                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/modules/buffer.c`    | **Port O(1) unregister; audit semantics separately** | Current unregister scans the entire global registry, so `registry_slot` plus swap-remove is still useful. Much of the encoding support exists, but the PR went through several correctness fixes and current UTF export has since changed. Reuse tests, not the stale encoding diff.                                                                                                                      |
+| `src/modules/buffer.c`    | **O(1) unregister ported; audit semantics separately** | `registry_slot` plus swap-remove landed on 2026-08-29. Much of the encoding support exists, but the PR went through several correctness fixes and current UTF export has since changed. Reuse tests, not the stale encoding diff.                                                                                                                                                          |
 | `src/modules/builtin.c`   | **Dependency only**                                  | The PR only accounts for/follows exotic sidecar storage. It has no independent optimization.                                                                                                                                                                                                                                                                                                              |
 | `src/modules/crypto.c`    | **Port separately**                                  | AES-GCM/HMAC `generateKey` and raw `exportKey`, extractability, usages, and cleansing are compatibility work, not the Elysia path. Current master still creates imported keys as non-extractable and lacks those APIs. Recreate with current WebCrypto validation and promise conventions.                                                                                                                |
-| `src/modules/fetch.c`     | **Port with Headers**                                | Avoiding transient JS strings while ingesting literal headers is sensible, and current code already has a fallible `headers_append_literal()` path in some places. Complete it only after the new Headers storage contract is fixed; do not make it a separate data representation.                                                                                                                       |
-| `src/modules/headers.c`   | **High-priority redesign**                           | The one-allocation entry layout, inline first entry, ByteString-preserving values, and native pending data are plausible HTTP wins. The PR's surface still has unchecked allocation paths such as a void `headers_data_append_if_missing`. Reimplement in stages: storage layout, fallible primitives, ByteString tests, then pending/lazy materialization.                                               |
+| `src/modules/fetch.c`     | **Ported with Headers**                              | Raw HTTP response headers now use the literal-byte append path, avoiding transient JS strings and preserving obs-text bytes.                                                                                                                                                                                                                                                                            |
+| `src/modules/headers.c`   | **Ported except pending data**                       | One-allocation entries, the inline first entry, fallible primitives, and ByteString-preserving JS/HTTP boundaries landed with focused and wire-level coverage. Native pending data remains deferred with lazy Response materialization.                                                                                                                                                                     |
 | `src/modules/path.c`      | **Port separately after Node differential tests**    | The PR fixes `relative(resolve(from), resolve(to))` behavior and Windows drive-relative/rooted cases. Current master again normalizes the raw inputs instead of resolving them against cwd, so the compatibility issue remains. It is not an Elysia optimization.                                                                                                                                         |
 | `src/modules/regex.c`     | **Superseded; mine tests only**                      | The file has undergone a much larger cache/statics/execution rewrite. Current master already caches validity and handles current UTF/lastIndex machinery. The old split fast path required multiple follow-up fixes, so porting it would reintroduce obsolete assumptions.                                                                                                                                |
-| `src/modules/request.c`   | **Port**                                             | Current `method` allocates a new JS string on every getter call; `url` rebuilds and allocates the href every time. The underlying request data is immutable after construction. Cache each value in a rooted reserved slot and measure the request benchmark in isolation.                                                                                                                                |
-| `src/modules/response.c`  | **High-priority redesign**                           | Lazy Headers creation and borrowing immutable JS string bodies can remove real per-response work. The PR implementation ignores failures in clone/header copy, uses fallible header materialization without a consistent caller contract, and has direct shape-slot assumptions requiring revalidation. Port only after Headers, in separate steps with GC ownership and subclass/getter semantics tests. |
+| `src/modules/request.c`   | **Ported**                                           | Rooted lazy caches for `method` and `url`, slot preallocation on every Request creation path, and redirect invalidation landed on 2026-08-29. A profile-matched request benchmark remains required before making a speed claim.                                                                                                                                                             |
+| `src/modules/response.c`  | **Ported in part**                                    | Direct immutable JS string bodies now borrow storage through a rooted owner and explicit ownership state; clone and allocation-pressure tests pass. Lazy Headers and direct init-shape assumptions remain deferred pending profile evidence and a complete fallible caller contract.                                                                                                                        |
 | `src/modules/server.c`    | **Do not port old hunk**                             | The PR updates calls to a now-fallible `response_get_headers(js, obj)` but does not check the returned error before enumeration/serialization. A redesigned Response API must make these two paths propagate failure before any use.                                                                                                                                                                      |
 | `src/modules/textcodec.c` | **Superseded**                                       | Current TextEncoder uses the newer string validity/export machinery and has separate Latin-1 work. Do not restore the PR's copy-and-patch helper.                                                                                                                                                                                                                                                         |
 
@@ -138,24 +164,24 @@ traced/invalidated key.
 Each step should be a separate commit and should be kept only if correctness
 gates pass and a profile-matched serial A/B test shows the intended benefit.
 
-1. **Request getter cache**
+1. [x] **Request getter cache** — completed 2026-08-29
    - Add the two slots and reserve them at Request creation.
    - Cache `method` and the built `url` string.
    - Validate clone/constructor/server requests and GC rooting.
-2. **Allocation-free property iterator**
+2. [x] **Allocation-free property iterator** — completed 2026-08-29
    - Put `js`, `obj`, and the index directly in `ant_iter_t`.
    - Verify nested iterators, empty/invalid inputs, symbols, deletion, and GC
      safety across value materialization.
-3. **O(1) Buffer registry removal**
+3. [x] **O(1) Buffer registry removal** — completed 2026-08-29
    - Add `registry_slot`; update the swapped last entry on removal.
    - Test first/middle/last removal and failed registration growth.
-4. **Headers storage layout**
+4. [x] **Headers storage layout** — completed 2026-08-29
    - First make all storage primitives explicitly fallible.
    - Then introduce the compact entry/inline-first-entry representation.
    - Preserve obs-text/ByteString values across JS and HTTP boundaries.
 5. **Response slices, not a rewrite**
-   - First borrow immutable JS string bodies with an explicit rooted owner and
-     ownership enum.
+   - [x] First borrow immutable JS string bodies with an explicit rooted owner
+     and ownership state. Completed 2026-08-29.
    - Then add lazy Headers materialization with one fallible API used by every
      server/fetch/clone caller.
    - Finally consider the narrow content-type init fast path after semantic
@@ -183,9 +209,24 @@ without measurements.
   implementations of the affected runtime/JIT/module paths.
 - Cross-checked the GC verdict with the active array backing-store pacing plan.
 - Confirmed all 42 changed source files have an explicit verdict in this file.
-- No source files were edited.
-- No build, benchmark, or runtime test was run; this report makes no measured
-  performance claim.
+- The first three isolated ports were implemented on 2026-08-29.
+- Compact/fallible Headers storage and ByteString-preserving JS/HTTP boundaries
+  were implemented on 2026-08-29. Focused Headers, Response-construction, and
+  raw wire-byte tests passed.
+- Direct JS string Response bodies now borrow rooted immutable storage instead
+  of copying it. The original and clone survive allocation pressure in the
+  focused Response test, and the data-structure size did not grow.
+- `meson compile -C build` passed.
+- Focused Request, property-iteration consumer, structured-clone, Buffer,
+  ArrayBuffer species, and WTF-8 tests passed.
+- The complete spec suite passed after the Headers/Response ports: 3991 tests
+  in 101 files, with zero failures.
+- The raw ByteString wire test, Response borrowed-body/clone pressure test,
+  focused Buffer/fetch tests, regression manifest load, `maid preflight`, and
+  `maid knowledge` all passed.
+- LLVM discarded stale PGO counters for changed functions, so the resulting
+  binary is not suitable for a comparative performance claim. No benchmark
+  result is recorded here.
 
 ## Decision Log
 
@@ -197,3 +238,12 @@ without measurements.
   GC key is not traced.
 - 2026-08-29: Prioritized Request caching, property-iterator allocation removal,
   Buffer registry removal, then staged Headers/Response work.
+- 2026-08-29: Ported and validated the first three isolated changes. Added
+  redirect cache invalidation absent from the PR and preserved
+  `ArrayBufferData` size on both supported pointer widths.
+- 2026-08-29: Ported compact Headers entries without adopting the PR's native
+  arena or lazy Response coupling. Made storage failure observable and added
+  JS and wire-level ByteString coverage before proceeding to Response work.
+- 2026-08-29: Ported only the Response string-body borrowing slice. Deferred
+  lazy Headers and init-shape shortcuts because they broaden the fallible API
+  and need profile evidence beyond construction-only microbenchmarks.
