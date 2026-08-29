@@ -1873,26 +1873,60 @@ static void on_symlink_complete(uv_fs_t *uv_req) {
   complete_request(req);
 }
 
+static bool mkdirp_is_separator(char ch) {
+#ifdef _WIN32
+  return ch == '/' || ch == '\\';
+#else
+  return ch == '/';
+#endif
+}
+
+static size_t mkdirp_root_length(const char *path, size_t len) {
+  if (len == 0) return 0;
+
+#ifdef _WIN32
+  if (len >= 2 && mkdirp_is_separator(path[0]) && mkdirp_is_separator(path[1])) {
+    size_t i = 2;
+    for (int parts = 0; parts < 2; parts++) {
+      while (i < len && mkdirp_is_separator(path[i])) i++;
+      size_t start = i;
+      while (i < len && !mkdirp_is_separator(path[i])) i++;
+      if (i == start) return 2;
+    }
+    while (i < len && mkdirp_is_separator(path[i])) i++;
+    return i;
+  }
+
+  if (len >= 2 && path[1] == ':')
+    return len >= 3 && mkdirp_is_separator(path[2]) ? 3 : 2;
+#endif
+
+  return mkdirp_is_separator(path[0]) ? 1 : 0;
+}
+
 static int mkdirp(const char *path, mode_t mode) {
   int result = -1;
   char *tmp = strdup(path);
   if (!tmp) goto done;
 
   size_t len = strlen(tmp);
-  if (
-    len > 0 && (tmp[len - 1] == '/'
-  #ifdef _WIN32
-    || tmp[len - 1] == '\\'
-  #endif
-    )
-  ) tmp[len - 1] = '\0';
+#ifdef _WIN32
+  if (len >= 2 && tmp[1] == ':' && (len == 2 || !mkdirp_is_separator(tmp[2]))) {
+    errno = EINVAL;
+    goto cleanup;
+  }
+#endif
 
-  for (char *p = tmp + 1; *p; p++) {
-    if (*p != '/'
-  #ifdef _WIN32
-      && *p != '\\'
-  #endif
-    ) continue;
+  size_t root_len = mkdirp_root_length(tmp, len);
+  while (len > root_len && mkdirp_is_separator(tmp[len - 1])) tmp[--len] = '\0';
+  if (len == 0) {
+    errno = ENOENT;
+    goto cleanup;
+  }
+
+  for (char *p = tmp + root_len; *p; p++) {
+    if (!mkdirp_is_separator(*p)) continue;
+    if (p == tmp + root_len || mkdirp_is_separator(p[-1])) continue;
     char separator = *p;
     *p = '\0';
   #ifdef _WIN32
@@ -1910,6 +1944,7 @@ static int mkdirp(const char *path, mode_t mode) {
 #endif
   if (result != 0 && errno == EEXIST) result = 0;
 
+cleanup:
   free(tmp);
 done:
   return result;

@@ -90,6 +90,11 @@ bool collections_is_map_get_builtin(ant_value_t func);
 bool collections_is_map_has_builtin(ant_value_t func);
 bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
 
+bool collections_map_store_cloned_entry(
+  ant_t *js, map_entry_t **map_ptr,
+  ant_value_t key, ant_value_t value
+);
+
 bool collections_weakmap_set(
   ant_t *js, ant_value_t weakmap,
   ant_value_t key, ant_value_t value

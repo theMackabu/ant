@@ -196,27 +196,14 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     if (src_head && *src_head) {
     map_entry_t *e, *tmp;
     HASH_ITER(hh, *src_head, e, tmp) {
+      ant_value_t kc = sc_clone_rec(js, e->key_val, seen, transfer);
+      if (is_err(kc)) return kc;
+
       ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
       if (is_err(vc)) return vc;
-      
-      map_entry_t *ne = calloc(1, sizeof(map_entry_t));
-      if (!ne) return js_mkerr(js, "out of memory");
-      
-      ne->key = malloc(e->key_len);
-      if (!ne->key) {
-        free(ne);
-        return js_mkerr(js, "out of memory");
-      }
 
-      memcpy(ne->key, e->key, e->key_len);
-      ne->key_len = e->key_len;
-      ne->key_val = e->key_val;
-      ne->value = vc;
-      
-      HASH_ADD_KEYPTR_BYHASHVALUE(
-        hh, *new_head, ne->key, 
-        ne->key_len, e->hh.hashv, ne
-      );
+      if (!collections_map_store_cloned_entry(js, new_head, kc, vc))
+        return js_mkerr(js, "out of memory");
     }}
     
     return clone;

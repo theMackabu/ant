@@ -201,6 +201,13 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
   return true;
 }
 
+bool collections_map_store_cloned_entry(
+  ant_t *js, map_entry_t **map_ptr, ant_value_t key, ant_value_t value
+) {
+  ant_value_t key_val = normalize_map_key(key);
+  return map_store_entry(js, map_ptr, key, key_val, value);
+}
+
 map_entry_t **get_map_from_obj(ant_value_t obj) {
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || ptr->type_tag != kTypeMap) return NULL;
