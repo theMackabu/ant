@@ -102,22 +102,40 @@ ant_value_t jit_helper_call_array_includes(
   ant_value_t *args, int argc
 );
 
-ant_value_t jit_helper_call_map_get_template2(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t call_func, ant_value_t call_this,
-  ant_value_t left, ant_value_t right,
-  const char *separator, uint32_t separator_len
+ant_value_t sv_map_template_try_fast(
+  ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
 );
 
-ant_value_t jit_helper_map_get_template2_fast(
+ant_value_t sv_map_template_build_key(
+  ant_t *js, const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t sv_op_call_map_template(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_call_map_template(
+  sv_vm_t *vm, ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  ant_value_t value0, ant_value_t value1, ant_value_t value2,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_map_template_fast(
+  ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  ant_value_t value0, ant_value_t value1, ant_value_t value2,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_map_numeric_pair_fast(
   ant_t *js,
   ant_value_t call_func, ant_value_t call_this,
   ant_value_t left, ant_value_t right,
-  const char *separator, uint32_t separator_len
-);
-
-ant_value_t jit_helper_map_get_template2_key(
-  ant_t *js, ant_value_t left, ant_value_t right,
   const char *separator, uint32_t separator_len
 );
 

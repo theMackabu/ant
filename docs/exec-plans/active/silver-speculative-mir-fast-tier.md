@@ -316,6 +316,84 @@ Completed on the numeric-index setter follow-up:
 `BigInt64Array` Number-assignment failure. The same failure reproduces on both
 pinned base builds, including no-PGO, so it is not attributed to this change.
 
+### Descriptor-driven Map template follow-up
+
+The fixed `CALL_MAP_GET_TEMPLATE2` and `TAIL_MAP_GET_TEMPLATE2` opcodes were
+replaced by `CALL_MAP_TEMPLATE` and `TAIL_MAP_TEMPLATE`. Each opcode references
+a descriptor containing the operation (`get` or `has`), one to three
+substitutions, and the constant template segments. The descriptors live in the
+same code-arena allocation immediately before an eight-byte header and the
+function bytecode; `func->code` still points at the first opcode. A spare
+`sv_func_t` bit records whether that sidecar exists, so removing the descriptor
+pointer and count reduced `sv_func_t` from 216 bytes back to its 200-byte
+pre-feature size. Functions without Map-template descriptors allocate no
+sidecar bytes. Templates with more than three substitutions continue through
+the ordinary compiler path. Property lookup and method identity remain
+observable: built-in numeric calls use the fast lookup, while overrides and
+nonnumeric substitutions call the method with the fully materialized key.
+
+The MIR ABI is fixed at three substitution value slots so arities one through
+three stay register-only on AArch64. There are two generic helper entrypoints
+(normal call and tail fast attempt) and one shared canonical numeric-pair fast
+leaf. The JIT recognizes the canonical pair descriptor at compile time and
+uses that leaf for both normal and tail calls; a normal-call guard miss branches
+to the generic helper without replaying expression evaluation. The fallback
+key builder performs one final string allocation instead of constructing an
+intermediate concatenation.
+
+The performance check used identical release, LTO, project-PGO-disabled builds
+from base `7b51fd332c09499f2f19fa4ea93028ea9d07a008` and the working-tree
+candidate. The checked-in PGO profile discarded counters for the changed
+interpreter/compiler/JIT functions, so it was deliberately excluded from this
+claim.
+
+- Base SHA-256:
+  `b20dbec0ca1e75c9d390103f42f2b58f0a2fa720c8cee9d5ad2ca4611b12f49c`
+- Candidate SHA-256:
+  `eda260b2471f920c8aab6b9bd9b3931db4bbabba95a4d4d7ba8181d97cafe8da`
+
+Two serial AB/BA process rounds, each with 11 samples, produced:
+
+| Map template shape | Base time GM (ms) | Candidate time GM (ms) | Throughput ratio |
+| --- | ---: | ---: | ---: |
+| Canonical short numeric pair | 219.397 | 217.487 | 1.009x |
+| Canonical long numeric pair | 685.255 | 682.242 | 1.004x |
+| Overridden `get` fallback | 181.093 | 160.944 | 1.125x |
+| String-key built-in fallback | 193.013 | 153.948 | 1.254x |
+
+The zero-growth sidecar was then compared directly with the pointer-and-count
+candidate above using the same no-PGO build configuration and serial AB/BA
+protocol. The pre-sidecar binary was
+`eda260b2471f920c8aab6b9bd9b3931db4bbabba95a4d4d7ba8181d97cafe8da`;
+the sidecar binary was
+`ebc019a2ea823b2d7f94bfa0310b6b3081500138f6bc0bccdca912f3f55a690e`.
+
+| Map template shape | Pre-sidecar time GM (ms) | Sidecar time GM (ms) | Throughput ratio |
+| --- | ---: | ---: | ---: |
+| Canonical short numeric pair | 219.347 | 218.283 | 1.005x |
+| Canonical long numeric pair | 687.429 | 688.093 | 0.999x |
+| Overridden `get` fallback | 168.701 | 165.326 | 1.020x |
+| String-key built-in fallback | 155.632 | 152.770 | 1.019x |
+
+The canonical rows include two complete serial AB/BA rounds (four processes
+per binary); the fallback rows include one complete round (two processes per
+binary). Every process took 11 samples. The canonical JIT path remained within
+0.5% in both directions, while both fallback shapes improved. The descriptor
+lookup happens at JIT compile time, not in the generated hot loop.
+
+Validation completed for this follow-up:
+
+- focused arity-one through arity-three `get` and `has` tests, arity-four
+  fallback, override behavior, coercion ordering, optional-base guards, and
+  tail recursion;
+- emitted MIR inspection confirming generic arities and the canonical
+  numeric-pair leaf;
+- neighboring Map, Map GC, string-concatenation JIT, upsert, and collection
+  constructor tests;
+- full spec suite: 3972 passed, 0 failed across 101 files;
+- configured-tree build and focused test. The build emitted the expected stale
+  PGO counter-discard warnings, which is why the benchmark used no-PGO builds.
+
 ## Follow-ups Required For 8000
 
 1. Correct generic indexed Set semantics before reconsidering direct array

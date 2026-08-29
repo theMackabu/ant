@@ -1997,25 +1997,28 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
-  L_CALL_MAP_GET_TEMPLATE2: {
-    uint32_t atom_idx = sv_get_u32(ip + 1);
-    if (atom_idx >= (uint32_t)func->atom_count) {
-      sv_err = js_mkerr(js, "invalid template separator");
+  L_CALL_MAP_TEMPLATE: {
+    uint32_t desc_idx = sv_get_u32(ip + 1);
+    const sv_map_template_desc_t *desc =
+      sv_map_template_desc_at(func, desc_idx);
+    
+    if (!desc || vm->sp < desc->substitution_count + 2) {
+      sv_err = js_mkerr(js, "invalid map template descriptor");
       goto sv_throw;
     }
-    sv_atom_t *separator = &func->atoms[atom_idx];
-    ant_value_t right = vm->stack[vm->sp - 1];
-    ant_value_t left = vm->stack[vm->sp - 2];
-    ant_value_t call_func = vm->stack[vm->sp - 3];
-    ant_value_t call_this = vm->stack[vm->sp - 4];
+    
+    int substitution_count = desc->substitution_count;
+    int base = vm->sp - substitution_count - 2;
+    ant_value_t call_this = vm->stack[base];
+    ant_value_t call_func = vm->stack[base + 1];
+    ant_value_t *substitutions = &vm->stack[base + 2];
 
     frame->ip = ip;
-    ant_value_t call_result = jit_helper_call_map_get_template2(
-      vm, js, call_func, call_this, left, right,
-      separator->str, separator->len);
+    ant_value_t call_result = sv_op_call_map_template(
+      vm, js, call_func, call_this, substitutions, desc);
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
 
-    vm->sp -= 4;
+    vm->sp -= substitution_count + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
     NEXT(5);
@@ -2150,35 +2153,37 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     goto L_RETURN;
   }
 
-  L_TAIL_MAP_GET_TEMPLATE2: {
-    uint32_t atom_idx = sv_get_u32(ip + 1);
-    if (atom_idx >= (uint32_t)func->atom_count) {
-      sv_err = js_mkerr(js, "invalid template separator");
+  L_TAIL_MAP_TEMPLATE: {
+    uint32_t desc_idx = sv_get_u32(ip + 1);
+    const sv_map_template_desc_t *desc =
+      sv_map_template_desc_at(func, desc_idx);
+    
+    if (!desc || vm->sp < desc->substitution_count + 2) {
+      sv_err = js_mkerr(js, "invalid map template descriptor");
       goto sv_throw;
     }
-    sv_atom_t *separator = &func->atoms[atom_idx];
-    ant_value_t right = vm->stack[vm->sp - 1];
-    ant_value_t left = vm->stack[vm->sp - 2];
-    ant_value_t call_func = vm->stack[vm->sp - 3];
-    ant_value_t call_this = vm->stack[vm->sp - 4];
+    
+    int substitution_count = desc->substitution_count;
+    int base = vm->sp - substitution_count - 2;
+    ant_value_t call_this = vm->stack[base];
+    ant_value_t call_func = vm->stack[base + 1];
+    ant_value_t *substitutions = &vm->stack[base + 2];
 
     frame->ip = ip;
-    ant_value_t call_result = jit_helper_map_get_template2_fast(
-      js, call_func, call_this, left, right,
-      separator->str, separator->len);
+    ant_value_t call_result = sv_map_template_try_fast(
+      js, call_func, call_this, substitutions, desc);
     if (!sv_is_jit_bailout(call_result)) {
-      vm->sp -= 4;
+      vm->sp -= substitution_count + 2;
       if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
       vm->stack[vm->sp++] = call_result;
       goto L_RETURN;
     }
 
-    ant_value_t key = jit_helper_map_get_template2_key(
-      js, left, right, separator->str, separator->len);
+    ant_value_t key = sv_map_template_build_key(js, substitutions, desc);
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     if (is_err(key)) { sv_err = key; goto sv_throw; }
-    vm->stack[vm->sp - 2] = key;
-    vm->sp--;
+    vm->stack[base + 2] = key;
+    vm->sp -= substitution_count - 1;
     tc_argc = 1;
     goto tail_call_method_dispatch;
   }

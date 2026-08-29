@@ -468,25 +468,27 @@ static size_t collection_number_to_string(double value, char *buf, size_t len) {
   return ant_number_to_shortest(value, buf, len);
 }
 
-ant_value_t collections_map_get_numeric_template(
-  ant_t *js, ant_value_t map,
-  ant_value_t left, const char *separator, size_t separator_len,
-  ant_value_t right
+__attribute__((aligned(64))) ant_value_t collections_map_get_numeric_pair(
+  ant_t *js, ant_value_t map, ant_value_t left, 
+  const char *separator, size_t separator_len, ant_value_t right
 ) {
   map_entry_t **map_ptr = get_map_from_obj(map);
   if (!map_ptr) return js_mkundef();
 
   char left_buf[32];
   char right_buf[32];
+  
   size_t left_len = collection_number_to_string(tod(left), left_buf, sizeof(left_buf));
   size_t right_len = collection_number_to_string(tod(right), right_buf, sizeof(right_buf));
+  
   if (left_len > sizeof(left_buf) || right_len > sizeof(right_buf) ||
-      separator_len > SIZE_MAX - 1 - left_len - right_len)
+    separator_len > SIZE_MAX - 1 - left_len - right_len)
     return js_mkerr(js, "out of memory");
 
   size_t key_len = 1 + left_len + separator_len + right_len;
   unsigned char inline_key[64];
   unsigned char *key = inline_key;
+  
   if (key_len > sizeof(inline_key)) {
     key = malloc(key_len);
     if (!key) return js_mkerr(js, "out of memory");
@@ -494,17 +496,21 @@ ant_value_t collections_map_get_numeric_template(
 
   unsigned char *out = key;
   *out++ = (uint8_t)kTypeString;
+  
   memcpy(out, left_buf, left_len);
   out += left_len;
+  
   if (separator_len > 0) {
     memcpy(out, separator, separator_len);
     out += separator_len;
   }
+  
   memcpy(out, right_buf, right_len);
-
   map_entry_t *entry = NULL;
+  
   unsigned key_hash = (unsigned)hash_key((const char *)key, key_len);
   HASH_FIND_BYHASHVALUE(hh, *map_ptr, key, key_len, key_hash, entry);
+  
   if (key != inline_key) free(key);
   return entry ? entry->value : js_mkundef();
 }
@@ -518,6 +524,98 @@ static ant_value_t map_has(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_ptr) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Map object");
   map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
   return js_bool(entry != NULL);
+}
+
+bool collections_is_map_has_builtin(ant_value_t func) {
+  return 
+    vtype(func) == kTypeBuiltin && 
+    js_cfunc_same_entrypoint(func, map_has);
+}
+
+static ant_value_t map_numeric_template_general(
+  ant_t *js, map_entry_t **map_ptr, bool return_presence,
+  const ant_value_t *substitutions, const sv_map_template_desc_t *desc
+) {
+  uint8_t substitution_count = desc->substitution_count;
+  char number_bufs[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS][32];
+  
+  size_t number_lens[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
+  size_t key_len = 1;
+  
+  for (uint8_t i = 0; i < substitution_count; i++) {
+    number_lens[i] = collection_number_to_string(
+      tod(substitutions[i]), number_bufs[i], sizeof(number_bufs[i]));
+    if (number_lens[i] > sizeof(number_bufs[i]) ||
+        desc->segments[i].len > SIZE_MAX - key_len ||
+        number_lens[i] > SIZE_MAX - key_len - desc->segments[i].len)
+      return js_mkerr(js, "out of memory");
+    key_len += desc->segments[i].len + number_lens[i];
+  }
+  
+  if (desc->segments[substitution_count].len > SIZE_MAX - key_len)
+    return js_mkerr(js, "out of memory");
+  key_len += desc->segments[substitution_count].len;
+
+  unsigned char inline_key[64];
+  unsigned char *key = inline_key;
+  
+  if (key_len > sizeof(inline_key)) {
+    key = malloc(key_len);
+    if (!key) return js_mkerr(js, "out of memory");
+  }
+
+  unsigned char *out = key;
+  *out++ = (uint8_t)kTypeString;
+  
+  for (uint8_t i = 0; i < substitution_count; i++) {
+    const sv_atom_t *segment = &desc->segments[i];
+    if (segment->len > 0) {
+      memcpy(out, segment->str, segment->len);
+      out += segment->len;
+    }
+    memcpy(out, number_bufs[i], number_lens[i]);
+    out += number_lens[i];
+  }
+  
+  const sv_atom_t *tail = &desc->segments[substitution_count];
+  if (tail->len > 0) memcpy(out, tail->str, tail->len);
+
+  map_entry_t *entry = NULL;
+  unsigned key_hash = (unsigned)hash_key((const char *)key, key_len);
+  
+  HASH_FIND_BYHASHVALUE(hh, *map_ptr, key, key_len, key_hash, entry);
+  if (key != inline_key) free(key);
+  
+  return return_presence 
+    ? js_bool(entry != NULL)
+    : (entry ? entry->value : js_mkundef());
+}
+
+ant_value_t collections_map_numeric_template(
+  ant_t *js, ant_value_t map, bool return_presence,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+) {
+  if (!substitutions || !desc || desc->substitution_count == 0 ||
+      desc->substitution_count > SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS)
+    return js_mkerr(js, "invalid numeric map template");
+  
+  for (uint8_t i = 0; i < desc->substitution_count; i++)
+    if (vtype(substitutions[i]) != kTypeNumber)
+      return js_mkerr(js, "invalid numeric map template substitution");
+
+  if (sv_map_template_is_canonical_pair_get(desc))
+    return collections_map_get_numeric_pair(
+      js, map, substitutions[0],
+      desc->segments[1].str, desc->segments[1].len, substitutions[1]);
+
+  map_entry_t **map_ptr = get_map_from_obj(map);
+  if (!map_ptr) return return_presence
+    ? js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Map object")
+    : js_mkundef();
+  
+  return map_numeric_template_general(
+    js, map_ptr, return_presence, substitutions, desc);
 }
 
 static ant_value_t map_upsert(ant_t *js, ant_value_t *args, int nargs) {

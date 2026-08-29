@@ -81,6 +81,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   free(ctx->code);
   free(ctx->constants);
   free(ctx->atoms);
+  free(ctx->map_templates);
   free(ctx->locals);
   free(ctx->local_lookup_heads);
   free(ctx->upval_descs);

@@ -87,6 +87,7 @@ set_iterator_state_t *get_set_iter_state(ant_value_t obj);
 bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out);
 bool collections_is_map_get_builtin(ant_value_t func);
+bool collections_is_map_has_builtin(ant_value_t func);
 bool weakmap_table_delete(weakmap_table_t *table, ant_value_t key);
 
 bool collections_weakmap_set(
@@ -98,9 +99,16 @@ ant_value_t collections_make_weakmap(ant_t *js);
 ant_value_t collections_weakmap_get(ant_value_t weakmap, ant_value_t key);
 weakmap_entry_t *weakmap_table_find(weakmap_table_t *table, ant_value_t key);
 
-ant_value_t collections_map_get_numeric_template(
-  ant_t *js, ant_value_t map, ant_value_t left,
-  const char *separator, size_t separator_len, ant_value_t right
+ant_value_t collections_map_numeric_template(
+  ant_t *js, ant_value_t map, bool return_presence,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t collections_map_get_numeric_pair(
+  ant_t *js, ant_value_t map,
+  ant_value_t left, const char *separator, size_t separator_len,
+  ant_value_t right
 );
 
 // key_obj 0 is an empty slot; key_obj 1 is a tombstone.

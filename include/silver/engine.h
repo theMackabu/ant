@@ -21,6 +21,9 @@
 static constexpr int SV_JIT_ARGS_BUF_CAP = 16;
 static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
 
+static constexpr uint8_t SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS = 3;
+static constexpr uint32_t SV_MAP_TEMPLATE_TABLE_MAGIC = UINT32_C(0x4d54504c);
+
 static constexpr uint8_t SV_CLASS_FLAG_HAS_NAME     = 1u << 0;
 static constexpr uint8_t SV_CLASS_FLAG_HAS_HERITAGE = 1u << 1;
 
@@ -82,6 +85,47 @@ typedef struct {
   const char *str;
   uint32_t    len;
 } sv_atom_t;
+
+typedef enum {
+  SV_MAP_TEMPLATE_GET = 0,
+  SV_MAP_TEMPLATE_HAS,
+} sv_map_template_operation_t;
+
+typedef struct sv_map_template_desc {
+  sv_atom_t segments[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS + 1];
+  uint8_t substitution_count;
+  uint8_t operation;
+} sv_map_template_desc_t;
+
+typedef struct {
+  uint32_t count;
+  uint32_t magic;
+} sv_map_template_table_header_t;
+
+
+static inline bool sv_map_template_is_canonical_pair_get(
+  const sv_map_template_desc_t *desc
+) {
+  return 
+    desc && desc->operation == SV_MAP_TEMPLATE_GET &&
+    desc->substitution_count == 2 &&
+    desc->segments[0].len == 0 && desc->segments[2].len == 0;
+}
+
+static_assert(
+  _Alignof(sv_map_template_desc_t) <= CODE_ARENA_ALIGNMENT,
+  "map template descriptor alignment exceeds the code arena guarantee"
+);
+
+static_assert(
+  sizeof(sv_map_template_table_header_t) % _Alignof(sv_map_template_desc_t) == 0,
+  "map template table header must preserve descriptor alignment"
+);
+
+static_assert(
+  UINT32_MAX <= SIZE_MAX / sizeof(sv_map_template_desc_t),
+  "map template descriptor table must fit in size_t"
+);
 
 typedef struct {
   uint16_t  index;
@@ -329,6 +373,7 @@ struct sv_func {
   bool jit_compile_failed: 1;
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
+  bool has_map_templates: 1;
 
   uint32_t call_count;
   uint32_t back_edge_count;
@@ -339,6 +384,36 @@ struct sv_func {
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
 };
+
+static inline const sv_map_template_desc_t *sv_map_template_desc_at(
+  const sv_func_t *func, uint32_t index
+) {
+  if (!func || !func->has_map_templates || !func->code) return NULL;
+
+  const sv_map_template_table_header_t *header =
+    (const sv_map_template_table_header_t *)(const void *)(
+      func->code - sizeof(sv_map_template_table_header_t));
+  if (header->magic != SV_MAP_TEMPLATE_TABLE_MAGIC ||
+      header->count == 0 || index >= header->count)
+    return NULL;
+
+  size_t table_size =
+    (size_t)header->count * sizeof(sv_map_template_desc_t);
+  
+  const sv_map_template_desc_t *table =
+    (const sv_map_template_desc_t *)(const void *)(
+    (const uint8_t *)header - table_size);
+  
+  const sv_map_template_desc_t *desc = &table[index];
+  if (desc->substitution_count == 0 ||
+      desc->substitution_count > SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS ||
+      desc->operation > SV_MAP_TEMPLATE_HAS)
+    return NULL;
+
+  for (uint8_t i = 0; i <= desc->substitution_count; i++)
+    if (desc->segments[i].len > 0 && !desc->segments[i].str) return NULL;
+  return desc;
+}
 
 static inline sv_obj_site_cache_t *sv_obj_site_for_offset(
   sv_func_t *func,

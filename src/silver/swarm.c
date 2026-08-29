@@ -52,8 +52,9 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call);
   LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_call_array_includes);
-  LOAD_EXT(jit_helper_call_map_get_template2);
-  LOAD_EXT(jit_helper_map_get_template2_fast);
+  LOAD_EXT(jit_helper_call_map_template);
+  LOAD_EXT(jit_helper_map_template_fast);
+  LOAD_EXT(jit_helper_map_numeric_pair_fast);
   LOAD_EXT(jit_helper_regexp_exec_truthy);
   LOAD_EXT(jit_helper_call_stable_builtin);
   LOAD_EXT(jit_helper_load_stable_builtin);
@@ -5248,21 +5249,33 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
 
-  MIR_item_t call_map_get_template_proto = MIR_new_proto(
-    ctx, "call_map_get_template_proto",
+  MIR_item_t call_map_template_proto = MIR_new_proto(
+    ctx, "call_map_template_proto",
     1, &call_ret,
     8,
     MIR_T_I64, "vm",
     MIR_T_I64, "js_p",
     MIR_JSVAL, "func",
     MIR_JSVAL, "this_val",
-    MIR_JSVAL, "left",
-    MIR_JSVAL, "right",
-    MIR_T_P,   "separator",
-    MIR_T_I32, "separator_len");
+    MIR_JSVAL, "value0",
+    MIR_JSVAL, "value1",
+    MIR_JSVAL, "value2",
+    MIR_T_P,   "descriptor");
 
-  MIR_item_t map_get_template_fast_proto = MIR_new_proto(
-    ctx, "map_get_template_fast_proto",
+  MIR_item_t map_template_fast_proto = MIR_new_proto(
+    ctx, "map_template_fast_proto",
+    1, &call_ret,
+    7,
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_JSVAL, "value0",
+    MIR_JSVAL, "value1",
+    MIR_JSVAL, "value2",
+    MIR_T_P,   "descriptor");
+
+  MIR_item_t map_numeric_pair_fast_proto = MIR_new_proto(
+    ctx, "map_numeric_pair_fast_proto",
     1, &call_ret,
     7,
     MIR_T_I64, "js_p",
@@ -5760,10 +5773,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call  = MIR_new_import(ctx, "jit_helper_call");
   MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
   MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
-  MIR_item_t imp_call_map_get_template =
-    MIR_new_import(ctx, "jit_helper_call_map_get_template2");
-  MIR_item_t imp_map_get_template_fast =
-    MIR_new_import(ctx, "jit_helper_map_get_template2_fast");
+  MIR_item_t imp_call_map_template =
+    MIR_new_import(ctx, "jit_helper_call_map_template");
+  MIR_item_t imp_map_template_fast =
+    MIR_new_import(ctx, "jit_helper_map_template_fast");
+  MIR_item_t imp_map_numeric_pair_fast =
+    MIR_new_import(ctx, "jit_helper_map_numeric_pair_fast");
   MIR_item_t imp_regexp_exec_truthy =
     MIR_new_import(ctx, "jit_helper_regexp_exec_truthy");
   MIR_item_t imp_load_stable_builtin = MIR_new_import(ctx, "jit_helper_load_stable_builtin");
@@ -12191,34 +12206,78 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_CALL_MAP_GET_TEMPLATE2: {
+      case OP_CALL_MAP_TEMPLATE: {
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
-        uint32_t atom_idx = sv_get_u32(ip + 1);
-        if (atom_idx >= (uint32_t)func->atom_count || vs.sp < 4) {
+        uint32_t desc_idx = sv_get_u32(ip + 1);
+        const sv_map_template_desc_t *desc =
+          sv_map_template_desc_at(func, desc_idx);
+        if (!desc || vs.sp < desc->substitution_count + 2) {
           ok = false;
           break;
         }
-        sv_atom_t *separator = &func->atoms[atom_idx];
 
-        MIR_reg_t r_right = vstack_pop(&vs);
-        MIR_reg_t r_left = vstack_pop(&vs);
+        MIR_reg_t r_values[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
+        for (int i = desc->substitution_count - 1; i >= 0; i--)
+          r_values[i] = vstack_pop(&vs);
         MIR_reg_t r_call_func = vstack_pop(&vs);
         MIR_reg_t r_call_this = vstack_pop(&vs);
         MIR_reg_t r_call_res = vstack_push(&vs);
+        MIR_op_t value_ops[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+        };
+        for (uint8_t i = 0; i < desc->substitution_count; i++)
+          value_ops[i] = MIR_new_reg_op(ctx, r_values[i]);
 
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 11,
-            MIR_new_ref_op(ctx, call_map_get_template_proto),
-            MIR_new_ref_op(ctx, imp_call_map_get_template),
-            MIR_new_reg_op(ctx, r_call_res),
-            MIR_new_reg_op(ctx, r_vm),
-            MIR_new_reg_op(ctx, r_js),
-            MIR_new_reg_op(ctx, r_call_func),
-            MIR_new_reg_op(ctx, r_call_this),
-            MIR_new_reg_op(ctx, r_left),
-            MIR_new_reg_op(ctx, r_right),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
-            MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+        if (sv_map_template_is_canonical_pair_get(desc)) {
+          const sv_atom_t *separator = &desc->segments[1];
+          MIR_label_t fast_done = MIR_new_label(ctx);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_bailout_val),
+              MIR_new_reg_op(ctx, r_call_this)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_numeric_pair_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_numeric_pair_fast),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
+              MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BNE,
+              MIR_new_label_op(ctx, fast_done),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_uint_op(ctx, (uint64_t)SV_JIT_BAILOUT)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 11,
+              MIR_new_ref_op(ctx, call_map_template_proto),
+              MIR_new_ref_op(ctx, imp_call_map_template),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_bailout_val),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+          MIR_append_insn(ctx, jit_func, fast_done);
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 11,
+              MIR_new_ref_op(ctx, call_map_template_proto),
+              MIR_new_ref_op(ctx, imp_call_map_template),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+        }
 
         if (has_captures) {
           for (int i = 0; i < n_locals; i++)
@@ -12234,33 +12293,55 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_TAIL_MAP_GET_TEMPLATE2: {
+      case OP_TAIL_MAP_TEMPLATE: {
         vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
-        uint32_t atom_idx = sv_get_u32(ip + 1);
+        uint32_t desc_idx = sv_get_u32(ip + 1);
         int pre_op_sp = vs.sp;
-        if (atom_idx >= (uint32_t)func->atom_count || vs.sp < 4) {
+        const sv_map_template_desc_t *desc =
+          sv_map_template_desc_at(func, desc_idx);
+        if (!desc || vs.sp < desc->substitution_count + 2) {
           ok = false;
           break;
         }
-        sv_atom_t *separator = &func->atoms[atom_idx];
 
-        MIR_reg_t r_right = vstack_pop(&vs);
-        MIR_reg_t r_left = vstack_pop(&vs);
+        MIR_reg_t r_values[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
+        for (int i = desc->substitution_count - 1; i >= 0; i--)
+          r_values[i] = vstack_pop(&vs);
         MIR_reg_t r_call_func = vstack_pop(&vs);
         MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_op_t value_ops[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+        };
+        for (uint8_t i = 0; i < desc->substitution_count; i++)
+          value_ops[i] = MIR_new_reg_op(ctx, r_values[i]);
 
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 10,
-            MIR_new_ref_op(ctx, map_get_template_fast_proto),
-            MIR_new_ref_op(ctx, imp_map_get_template_fast),
-            MIR_new_reg_op(ctx, r_err_tmp),
-            MIR_new_reg_op(ctx, r_js),
-            MIR_new_reg_op(ctx, r_call_func),
-            MIR_new_reg_op(ctx, r_call_this),
-            MIR_new_reg_op(ctx, r_left),
-            MIR_new_reg_op(ctx, r_right),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
-            MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+        if (sv_map_template_is_canonical_pair_get(desc)) {
+          const sv_atom_t *separator = &desc->segments[1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_numeric_pair_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_numeric_pair_fast),
+              MIR_new_reg_op(ctx, r_err_tmp),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
+              MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_template_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_template_fast),
+              MIR_new_reg_op(ctx, r_err_tmp),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+        }
 
         mir_emit_bailout_check(
           ctx, jit_func, r_err_tmp, 0,
