@@ -177,12 +177,15 @@ OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> resu
 OP_DEF(  CALL_SUPER,        3,   3,   1, npop)      /* this super new.target args... -> this */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
+OP_DEF(  CALL_MAP_TEMPLATE,   5,   2,   1, map_template) /* this func substitutions... -> result; descriptor:u32 */
 OP_DEF(  CALL_STABLE_BUILTIN, 4, 2,   1, u8_u16)    /* this func args... -> result (kind:u8 argc:u16) */
 OP_DEF(  CALL_CALL,         3,   1,   1, u8_u8)     /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
 OP_DEF(  CALL_CALL_SLOT,    3,   2,   1, loc)       /* X a -> X(a)(slot); slot read after X on fallback */
 OP_DEF(  RE_LITERAL_EXEC,   1,   3,   1, none)      /* pattern flags arg -> exec result */
 OP_DEF(  STR_RE_LITERAL_REPLACE, 1, 4, 1, none)     /* str pattern flags repl -> string */
 OP_DEF(  RE_EXEC_TRUTHY,    1,   3,   1, none)      /* this func arg -> bool */
+OP_DEF(  RE_EXEC_DISCARD,   1,   3,   0, none)      /* this func arg -> (exec side effects only) */
+OP_DEF(  TAIL_MAP_TEMPLATE,   5,   2,   0, map_template) /* tail Map.get/has with descriptor:u32 */
 OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
 OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */
@@ -280,6 +283,7 @@ OP_DEF(  DEBUGGER,          1,   0,   0, none)      /* debugger statement (break
 OP_DEF(  NOP,               1,   0,   0, none)      /* no operation */
 OP_DEF(  PUT_CONST,         5,   1,   0, const)     /* constant pool[idx] = TOS */
 OP_DEF(  TO_STRING,         1,   1,   1, none)      /* val -> toString(val) */
+OP_DEF(  TO_STRING_DEFER_NUMBER, 1, 1, 1, none)     /* val -> number | toString(val) */
 
 op_def(  LABEL,             5,   0,   0, label)     /* jump target marker */
 op_def(  LINE_NUM,          5,   0,   0, u32)       /* source line for debug info */
@@ -300,6 +304,7 @@ OP_FLAG(FALSE                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(THIS                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(OBJECT                , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(ARRAY                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(REGEXP                , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(CLOSURE               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_CLOSE_UPVAL)
 
 OP_FLAG(POP                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
@@ -348,9 +353,9 @@ OP_FLAG(EXPORT                , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(GET_FIELD2            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(PUT_FIELD             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
-OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
+OP_FLAG(GET_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_BAILOUT)
 OP_FLAG(GET_ELEM2             , SV_OPF_JIT_ELIGIBLE)
-OP_FLAG(PUT_ELEM              , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(PUT_ELEM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT)
 OP_FLAG(DEFINE_FIELD          , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(DEFINE_SLOT           , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(GET_LENGTH            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
@@ -420,9 +425,13 @@ OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(CALL_SUPER            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_MAP_TEMPLATE     , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(CALL_STABLE_BUILTIN   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_CALL_SLOT        , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)
+OP_FLAG(RE_EXEC_TRUTHY        , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(RE_EXEC_DISCARD       , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(TAIL_MAP_TEMPLATE     , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(TAIL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS | SV_OPF_JIT_INLINE_ARGC)
 OP_FLAG(TAIL_CALL_METHOD      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_TCO_ARGS | SV_OPF_JIT_INLINE_ARGC)
 OP_FLAG(NEW                   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
@@ -444,6 +453,8 @@ OP_FLAG(UNWIND_JMP            , SV_OPF_JIT_BRANCH32)
 OP_FLAG(NIP_CATCH             , SV_OPF_JIT_ELIGIBLE)
 
 OP_FLAG(FOR_OF                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
+OP_FLAG(ITER_NEXT             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
+OP_FLAG(ITER_CLOSE            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
 OP_FLAG(DESTRUCTURE_INIT      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
 OP_FLAG(DESTRUCTURE_NEXT      , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
 OP_FLAG(DESTRUCTURE_CLOSE     , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_ITER_ROOTS)
@@ -461,6 +472,7 @@ OP_FLAG(LABEL                 , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(LINE_NUM              , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(COL_NUM               , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(TO_STRING             , SV_OPF_JIT_ELIGIBLE)
+OP_FLAG(TO_STRING_DEFER_NUMBER, SV_OPF_JIT_ELIGIBLE)
 #undef OP_FLAG
 #endif
 

@@ -5,6 +5,8 @@
 
 int64_t jit_helper_stack_overflow(ant_t *js);
 int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
+
+void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape);
 ant_value_t jit_helper_normalize_sloppy_this(ant_t *js, ant_value_t value);
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
@@ -41,6 +43,7 @@ ant_value_t jit_helper_not(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 
+ant_value_t jit_helper_strict_arguments(sv_vm_t *vm, ant_t *js, ant_value_t *args, int argc);
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which);
@@ -99,6 +102,48 @@ ant_value_t jit_helper_call_array_includes(
   ant_value_t *args, int argc
 );
 
+ant_value_t sv_map_template_try_fast(
+  ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t sv_map_template_build_key(
+  ant_t *js, const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t sv_op_call_map_template(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  const ant_value_t *substitutions,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_call_map_template(
+  sv_vm_t *vm, ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  ant_value_t value0, ant_value_t value1, ant_value_t value2,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_map_template_fast(
+  ant_t *js, ant_value_t call_func, ant_value_t call_this,
+  ant_value_t value0, ant_value_t value1, ant_value_t value2,
+  const sv_map_template_desc_t *desc
+);
+
+ant_value_t jit_helper_map_numeric_pair_fast(
+  ant_t *js,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t left, ant_value_t right,
+  const char *separator, uint32_t separator_len
+);
+
+ant_value_t jit_helper_regexp_exec_truthy(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_func, ant_value_t call_this, ant_value_t arg
+);
+
 ant_value_t jit_helper_call_stable_builtin(
   sv_vm_t *vm, ant_t *js, int kind,
   ant_value_t call_func, ant_value_t call_this,
@@ -118,6 +163,11 @@ ant_value_t jit_helper_apply(
 ant_value_t jit_helper_object(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, sv_obj_site_cache_t *site
+);
+
+ant_value_t jit_helper_regexp(
+  sv_vm_t *vm, ant_t *js, 
+  ant_value_t pattern, ant_value_t flags
 );
 
 ant_value_t jit_helper_call_call(
@@ -263,6 +313,11 @@ ant_value_t jit_helper_array(
 ant_value_t jit_helper_for_of(
   sv_vm_t *vm, ant_t *js,
   ant_value_t iterable, ant_value_t *iter_buf
+);
+
+ant_value_t jit_helper_iter_next(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf, int hint
 );
 
 void jit_helper_destructure_close(

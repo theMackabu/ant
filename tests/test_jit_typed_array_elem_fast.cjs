@@ -58,6 +58,18 @@ try {
   bigintError = error.name;
 }
 assertEq(bigintError, "TypeError", "BigInt64Array rejects Number");
+assertEq(read(bigint, 0), 9n, "failed BigInt64Array write preserves value");
+
+const biguint = new BigUint64Array(1);
+write(biguint, 0, 11n);
+let biguintError = "none";
+try {
+  write(biguint, 0, 1);
+} catch (error) {
+  biguintError = error.name;
+}
+assertEq(biguintError, "TypeError", "BigUint64Array rejects Number");
+assertEq(read(biguint, 0), 11n, "failed BigUint64Array write preserves value");
 
 let proxyWrites = 0;
 const target = new Int32Array(1);

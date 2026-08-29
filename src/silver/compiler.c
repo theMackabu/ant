@@ -454,6 +454,68 @@ static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
   return c->atom_count++;
 }
 
+static uint32_t add_map_template_desc(
+  sv_compiler_t *c, sv_map_template_operation_t operation,
+  const sv_ast_t *tpl, uint8_t substitution_count
+) {
+  if (c->map_template_count >= c->map_template_cap) {
+    c->map_template_cap = c->map_template_cap ? c->map_template_cap * 2 : 8;
+    c->map_templates = realloc(
+    c->map_templates,
+    (size_t)c->map_template_cap * sizeof(sv_map_template_desc_t));
+  }
+
+  uint32_t index = (uint32_t)c->map_template_count++;
+  sv_map_template_desc_t *desc = &c->map_templates[index];
+  
+  memset(desc, 0, sizeof(*desc));
+  desc->operation = (uint8_t)operation;
+  desc->substitution_count = substitution_count;
+  
+  for (uint8_t i = 0; i <= substitution_count; i++) {
+    const sv_ast_t *segment = tpl->args.items[i * 2];
+    int atom_idx = add_atom(
+      c, segment->str ? segment->str : "", segment->len);
+    desc->segments[i] = c->atoms[atom_idx];
+  }
+  
+  return index;
+}
+
+static void sv_func_init_code_and_map_templates(
+  const sv_compiler_t *c, sv_func_t *func
+) {
+  ANT_ASSERT(c != NULL && func != NULL, "function code requires compiler state");
+  ANT_ASSERT(c->code_len > 0, "function bytecode cannot be empty");
+
+  size_t table_size =
+    (size_t)c->map_template_count * sizeof(sv_map_template_desc_t);
+  
+  size_t prefix_size = c->map_template_count > 0
+    ? table_size + sizeof(sv_map_template_table_header_t) : 0;
+  
+  ANT_ASSERT(
+    prefix_size <= SIZE_MAX - (size_t)c->code_len,
+    "function bytecode sidecar size overflow"
+  );
+
+  uint8_t *storage = code_arena_bump(prefix_size + (size_t)c->code_len);
+  ANT_ASSERT(storage != NULL, "failed to allocate function bytecode");
+  
+  if (c->map_template_count > 0) {
+    memcpy(storage, c->map_templates, table_size);
+    sv_map_template_table_header_t *header =
+    (sv_map_template_table_header_t *)(void *)(storage + table_size);
+    header->count = (uint32_t)c->map_template_count;
+    header->magic = SV_MAP_TEMPLATE_TABLE_MAGIC;
+    func->code = (uint8_t *)(void *)(header + 1);
+    func->has_map_templates = true;
+  } else func->code = storage;
+  
+  memcpy(func->code, c->code, (size_t)c->code_len);
+  func->code_len = c->code_len;
+}
+
 static uint16_t alloc_ic_idx(sv_compiler_t *c) {
   if (!c || c->ic_count >= (int)UINT16_MAX) return UINT16_MAX;
   return (uint16_t)c->ic_count++;
@@ -3336,6 +3398,55 @@ static bool compile_call_array_includes_intrinsic(
   return true;
 }
 
+static bool compile_call_map_template_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
+) {
+  if (!node || has_spread || node->args.count != 1) return false;
+  if (is_tail && (c->try_depth > 0 || c->using_cleanup_count > 0))
+    return false;
+  sv_ast_t *callee = node->left;
+  
+  if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  
+  sv_map_template_operation_t operation;
+  if (is_ident_str(callee->right->str, callee->right->len, "get", 3))
+    operation = SV_MAP_TEMPLATE_GET;
+  else if (is_ident_str(callee->right->str, callee->right->len, "has", 3))
+    operation = SV_MAP_TEMPLATE_HAS;
+  else return false;
+
+  sv_ast_t *tpl = node->args.items[0];
+  if (!tpl || tpl->type != N_TEMPLATE || tpl->args.count < 3 ||
+      tpl->args.count > 2 * SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS + 1 ||
+      (tpl->args.count & 1) == 0 ||
+      !template_has_valid_cooked_segments(tpl))
+    return false;
+
+  uint8_t substitution_count = (uint8_t)((tpl->args.count - 1) / 2);
+  for (uint8_t i = 0; i <= substitution_count; i++)
+    if (!is_template_segment(tpl->args.items[i * 2])) return false;
+
+  uint32_t desc_idx = add_map_template_desc(
+    c, operation, tpl, substitution_count);
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  for (uint8_t i = 0; i < substitution_count; i++) {
+    compile_expr(c, tpl->args.items[i * 2 + 1]);
+    if (i + 1 < substitution_count)
+      emit_op(c, OP_TO_STRING_DEFER_NUMBER);
+  }
+  
+  if (is_tail) emit_close_upvals(c);
+  emit_op(c, is_tail ? OP_TAIL_MAP_TEMPLATE : OP_CALL_MAP_TEMPLATE);
+  emit_u32(c, desc_idx);
+  
+  return true;
+}
+
 static bool compile_call_stable_builtin(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread
 ) {
@@ -3453,6 +3564,28 @@ static bool compile_regexp_exec_truthy_intrinsic(
   compile_expr(c, node->args.items[0]);
   emit_op(c, OP_RE_EXEC_TRUTHY);
   
+  return true;
+}
+
+static bool compile_regexp_exec_discard_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node
+) {
+  if (!node || node->type != N_CALL || call_has_spread_arg(node) ||
+      node->args.count != 1)
+    return false;
+
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "exec", 4))
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_RE_EXEC_DISCARD);
   return true;
 }
 
@@ -3932,6 +4065,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
 
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_call_map_template_intrinsic(c, node, has_spread, false))
     return;
 
   if (compile_call_stable_builtin(c, node, has_spread))
@@ -4564,6 +4700,11 @@ void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
     return;
   }
 
+  if (expr->type == N_CALL &&
+      compile_call_map_template_intrinsic(c, expr, false, true)) {
+    return;
+  }
+
   if (is_tail_callable(c, expr)) {
     compile_tail_call(c, expr);
     return;
@@ -4838,6 +4979,9 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     default:
+      if (!has_completion_accumulator(c) &&
+          compile_regexp_exec_discard_intrinsic(c, node))
+        break;
       compile_expr(c, node);
       emit_set_completion_from_stack(c);
       break;
@@ -6124,9 +6268,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   memset(fn, 0, sizeof(sv_func_t));
   fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
   memset(fn->debug, 0, sizeof(sv_func_debug_t));
-  fn->code = code_arena_bump((size_t)comp.code_len);
-  memcpy(fn->code, comp.code, (size_t)comp.code_len);
-  fn->code_len = comp.code_len;
+  sv_func_init_code_and_map_templates(&comp, fn);
   sv_func_init_obj_sites(&comp, fn);
 
   if (comp.const_count > 0) {
@@ -6359,9 +6501,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   fn->debug = code_arena_bump(sizeof(sv_func_debug_t));
   memset(fn->debug, 0, sizeof(sv_func_debug_t));
     fn->is_derived_ctor = node->left != NULL;
-    fn->code = code_arena_bump((size_t)comp.code_len);
-    memcpy(fn->code, comp.code, (size_t)comp.code_len);
-    fn->code_len = comp.code_len;
+    sv_func_init_code_and_map_templates(&comp, fn);
     sv_func_init_obj_sites(&comp, fn);
     if (comp.const_count > 0) {
       fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
@@ -6905,9 +7045,7 @@ sv_func_t *compile_function_body(
   func->debug = code_arena_bump(sizeof(sv_func_debug_t));
   memset(func->debug, 0, sizeof(sv_func_debug_t));
 
-  func->code = code_arena_bump((size_t)comp.code_len);
-  memcpy(func->code, comp.code, (size_t)comp.code_len);
-  func->code_len = comp.code_len;
+  sv_func_init_code_and_map_templates(&comp, func);
   sv_func_init_obj_sites(&comp, func);
 
   if (comp.const_count > 0) {
@@ -6922,7 +7060,6 @@ sv_func_t *compile_function_body(
     memcpy(func->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
     func->atom_count = comp.atom_count;
   }
-
   func->ic_count = (uint16_t)comp.ic_count;
   if (func->ic_count > 0) {
     func->ic_slots = code_arena_bump((size_t)func->ic_count * sizeof(sv_ic_entry_t));
@@ -7011,7 +7148,7 @@ const char *const sv_op_names[OP__COUNT] = {
 enum {
   SVF_none, SVF_u8, SVF_i8, SVF_u16, SVF_i16, SVF_u32, SVF_i32,
   SVF_u8_u8, SVF_u8_u16, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
-  SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref,
+  SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref, SVF_map_template,
 };
 
 static const uint8_t sv_op_fmts[OP__COUNT] = {
@@ -7137,6 +7274,18 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
     case SVF_npop:
       fprintf(stderr, " %d", sv_get_u16(func->code + pc + 1));
       break;
+    case SVF_map_template: {
+      uint32_t idx = sv_get_u32(func->code + pc + 1);
+      const sv_map_template_desc_t *desc = sv_map_template_desc_at(func, idx);
+      if (!desc) {
+        fprintf(stderr, " template[%u] (invalid)", idx);
+        break;
+      }
+      fprintf(stderr, " template[%u] %s/%u", idx,
+        desc->operation == SV_MAP_TEMPLATE_GET ? "get" : "has",
+        desc->substitution_count);
+      break;
+    }
     case SVF_var_ref:
       fprintf(stderr, " [%d]", sv_get_u16(func->code + pc + 1));
       break;

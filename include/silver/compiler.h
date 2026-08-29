@@ -131,6 +131,11 @@ typedef struct sv_compiler {
   sv_atom_t *atoms;
   int atom_count;
   int atom_cap;
+
+  sv_map_template_desc_t *map_templates;
+  int map_template_count;
+  int map_template_cap;
+
   int ic_count;
 
   sv_local_t *locals;

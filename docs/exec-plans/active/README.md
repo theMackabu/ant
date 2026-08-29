@@ -22,6 +22,7 @@ Store in-progress execution plans here.
 - [REPL Evaluation Completions](repl-evaluation-completions.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
+- [Silver Speculative MIR Fast Tier](silver-speculative-mir-fast-tier.md)
 - [Silver Shell Frontend](silver-shell-frontend.md)
 - [Silver Throughput: bench-v8 and Game of Life](silver-throughput-bench-v8-game-of-life.md)
 - [Stream Property Surface](stream-property-surface.md)

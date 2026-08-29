@@ -1,4 +1,20 @@
 const assert = require('assert');
+const { spawnSync } = require('child_process');
+
+if (!process.env.ANT_JIT_FOR_OF_CHILD) {
+  const child = spawnSync(process.execPath, [__filename], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ANT_DEBUG: 'dump/vm:op-warn',
+      ANT_JIT_FOR_OF_CHILD: '1',
+    },
+  });
+  assert.strictEqual(child.status, 0, child.stdout + child.stderr);
+  assert.doesNotMatch(child.stderr, /jit: ineligible op ITER_(?:NEXT|CLOSE)/);
+  process.stdout.write(child.stdout);
+  process.exit(0);
+}
 
 function collect(iterable) {
   const values = [];
@@ -85,5 +101,25 @@ function nestedForOfOsr() {
 }
 
 assert.strictEqual(nestedForOfOsr(), 718800);
+
+const osrCoercible = {
+  valueOf() {
+    return 7;
+  },
+};
+
+function nestedForOfOsrBailout() {
+  let total = 0;
+  for (const outer of [10, 20, 30]) {
+    let inner = 0;
+    for (let i = 0; i < 700; i++) {
+      inner += outer === 10 && i === 600 ? osrCoercible : 1;
+    }
+    total += outer + inner;
+  }
+  return total;
+}
+
+assert.strictEqual(nestedForOfOsrBailout(), 2166);
 
 console.log('JIT for-of tests passed');

@@ -110,11 +110,7 @@ static inline void sv_op_private_token(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
 static inline void sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t n = sv_get_u16(ip + 1);
-  ant_value_t arr = js_mkarr(js);
-  for (uint16_t i = 0; i < n; i++) {
-    ant_value_t val = vm->stack[vm->sp - n + i];
-    js_arr_push(js, arr, val);
-  }
+  ant_value_t arr = js_mkarr_dense_literal(js, &vm->stack[vm->sp - n], n);
   vm->sp -= n;
   vm->stack[vm->sp++] = arr;
 }
@@ -127,11 +123,7 @@ static inline void sv_op_set_brand(sv_vm_t *vm, uint8_t *ip) {
     js_set_slot(obj, SLOT_BRAND, js_mknum((double)brand));
 }
 
-static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
-  ant_value_t pattern = vm->stack[vm->sp - 2];
-  ant_value_t flags = vm->stack[vm->sp - 1];
-  vm->sp -= 2;
-
+static inline ant_value_t sv_regexp_create(ant_t *js, ant_value_t pattern, ant_value_t flags) {
   ant_value_t regexp_obj = mkobj(js, 0);
   ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
   if (vtype(regexp_proto) == kTypeObject) js_set_proto_init(regexp_obj, regexp_proto);
@@ -192,7 +184,14 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   js_set_slot(regexp_obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
   js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, js_mkundef());
 
-  vm->stack[vm->sp++] = regexp_obj;
+  return regexp_obj;
+}
+
+static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
+  ant_value_t pattern = vm->stack[vm->sp - 2];
+  ant_value_t flags = vm->stack[vm->sp - 1];
+  vm->sp -= 2;
+  vm->stack[vm->sp++] = sv_regexp_create(js, pattern, flags);
 }
 
 #endif

@@ -1,0 +1,15 @@
+{
+  "main": "src/index.js",
+  "scripts": {
+    "build": "ant build.js",
+    "start:ant": "ant src/index.js",
+    "start:workerd": "ant src/workerd.js"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

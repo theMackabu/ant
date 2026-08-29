@@ -52,6 +52,10 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call);
   LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_call_array_includes);
+  LOAD_EXT(jit_helper_call_map_template);
+  LOAD_EXT(jit_helper_map_template_fast);
+  LOAD_EXT(jit_helper_map_numeric_pair_fast);
+  LOAD_EXT(jit_helper_regexp_exec_truthy);
   LOAD_EXT(jit_helper_call_stable_builtin);
   LOAD_EXT(jit_helper_load_stable_builtin);
   LOAD_EXT(jit_helper_apply);
@@ -59,7 +63,9 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call_call_slot);
   LOAD_EXT(jit_helper_rest);
   LOAD_EXT(jit_helper_special_obj);
+  LOAD_EXT(jit_helper_strict_arguments);
   LOAD_EXT(jit_helper_for_of);
+  LOAD_EXT(jit_helper_iter_next);
   LOAD_EXT(jit_helper_destructure_close);
   LOAD_EXT(jit_helper_destructure_next);
   LOAD_EXT(jit_helper_get_global);
@@ -93,6 +99,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_sne);
   LOAD_EXT(jit_helper_put_field);
   LOAD_EXT(jit_helper_put_field_ic);
+  LOAD_EXT(jit_helper_shape_transition);
   LOAD_EXT(gc_remember_add);
   LOAD_EXT(jit_helper_get_elem);
   LOAD_EXT(jit_helper_get_elem2);
@@ -102,6 +109,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_put_private);
   LOAD_EXT(jit_helper_put_global);
   LOAD_EXT(jit_helper_object);
+  LOAD_EXT(jit_helper_regexp);
   LOAD_EXT(jit_helper_define_slot);
   LOAD_EXT(jit_helper_array);
   LOAD_EXT(jit_helper_catch_value);
@@ -130,6 +138,11 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
 
 void sv_jit_init(ant_t *js) {
   if (js->jit_ctx) return;
+
+  ANT_ASSERT(
+    ant_object_flag_masks_match_layout(),
+    "object flag bitfield layout does not match the JIT masks"
+  );
   
   sv_jit_ctx_t *jc = calloc(1, sizeof(*jc));
   if (!jc) return;
@@ -158,6 +171,12 @@ void sv_jit_destroy(ant_t *js) {
   free(jc);
   js->jit_ctx = NULL;
 }
+
+enum jit_slot_type {
+  SLOT_BOXED = 0,
+  SLOT_NUM,
+  SLOT_I32,
+};
 
 typedef struct {
   MIR_reg_t *regs;        
@@ -206,13 +225,13 @@ static void vstack_clear_value_info(jit_vstack_t *vs, int idx) {
 
 static MIR_reg_t vstack_push(jit_vstack_t *vs) {
   vstack_clear_value_info(vs, vs->sp);
-  if (vs->slot_type) vs->slot_type[vs->sp] = 0;
+  if (vs->slot_type) vs->slot_type[vs->sp] = SLOT_BOXED;
   return vs->regs[vs->sp++];
 }
 
 static MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
   vstack_clear_value_info(vs, vs->sp);
-  if (vs->slot_type) vs->slot_type[vs->sp] = 0;
+  if (vs->slot_type) vs->slot_type[vs->sp] = SLOT_BOXED;
   if (vs->has_const) { vs->has_const[vs->sp] = true; vs->known_const[vs->sp] = val; }
   return vs->regs[vs->sp++];
 }
@@ -504,15 +523,30 @@ static void mir_emit_get_length(
   MIR_append_insn(ctx, fn, done);
 }
 
+static void mir_emit_i32_to_num(MIR_context_t ctx, MIR_item_t fn,
+                                MIR_reg_t number, MIR_reg_t integer) {
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_I2D,
+      MIR_new_reg_op(ctx, number),
+      MIR_new_reg_op(ctx, integer)));
+}
 
-#define SLOT_BOXED 0
-#define SLOT_NUM   1
+static void mir_emit_slot_boxed(MIR_context_t ctx, MIR_item_t fn,
+                                MIR_reg_t boxed, MIR_reg_t number,
+                                uint8_t slot_type, MIR_reg_t d_slot) {
+  if (slot_type == SLOT_I32)
+    mir_emit_i32_to_num(ctx, fn, number, boxed);
+  if (slot_type == SLOT_NUM || slot_type == SLOT_I32)
+    mir_d_to_i64(ctx, fn, boxed, number, d_slot);
+}
 
 static void vstack_ensure_boxed(jit_vstack_t *vs, int idx,
                                 MIR_context_t ctx, MIR_item_t fn,
                                 MIR_reg_t d_slot) {
-  if (!vs->slot_type || vs->slot_type[idx] != SLOT_NUM) return;
-  mir_d_to_i64(ctx, fn, vs->regs[idx], vs->d_regs[idx], d_slot);
+  if (!vs->slot_type || vs->slot_type[idx] == SLOT_BOXED) return;
+  mir_emit_slot_boxed(
+    ctx, fn, vs->regs[idx], vs->d_regs[idx], vs->slot_type[idx], d_slot
+  );
   vs->slot_type[idx] = SLOT_BOXED;
 }
 
@@ -520,8 +554,19 @@ static void vstack_ensure_num(jit_vstack_t *vs, int idx,
                               MIR_context_t ctx, MIR_item_t fn,
                               MIR_reg_t d_slot) {
   if (!vs->slot_type || vs->slot_type[idx] == SLOT_NUM) return;
-  mir_i64_to_d(ctx, fn, vs->d_regs[idx], vs->regs[idx], d_slot);
+  if (vs->slot_type[idx] == SLOT_I32)
+    mir_emit_i32_to_num(ctx, fn, vs->d_regs[idx], vs->regs[idx]);
+  else mir_i64_to_d(ctx, fn, vs->d_regs[idx], vs->regs[idx], d_slot);
   vs->slot_type[idx] = SLOT_NUM;
+}
+
+static bool vstack_prepare_num(jit_vstack_t *vs, int idx,
+                               MIR_context_t ctx, MIR_item_t fn,
+                               MIR_reg_t d_slot) {
+  if (!vs->slot_type) return false;
+  if (vs->slot_type[idx] == SLOT_I32)
+    vstack_ensure_num(vs, idx, ctx, fn, d_slot);
+  return vs->slot_type[idx] == SLOT_NUM;
 }
 
 static void vstack_flush_to_boxed(jit_vstack_t *vs,
@@ -534,14 +579,13 @@ static void vstack_flush_to_boxed(jit_vstack_t *vs,
 
 static void vstack_rebox_binop_operands(
   jit_vstack_t *vs, MIR_context_t ctx, MIR_item_t fn,
-  bool lhs_is_num, bool rhs_is_num,
+  uint8_t lhs_type, uint8_t rhs_type,
   MIR_reg_t d_slot
 ) {
-  if (lhs_is_num)
-    mir_d_to_i64(ctx, fn, vs->regs[vs->sp - 1],
-                 vs->d_regs[vs->sp - 1], d_slot);
-  if (rhs_is_num)
-    mir_d_to_i64(ctx, fn, vs->regs[vs->sp], vs->d_regs[vs->sp], d_slot);
+  mir_emit_slot_boxed(ctx, fn, vs->regs[vs->sp - 1],
+                       vs->d_regs[vs->sp - 1], lhs_type, d_slot);
+  mir_emit_slot_boxed(ctx, fn, vs->regs[vs->sp],
+                       vs->d_regs[vs->sp], rhs_type, d_slot);
 }
 
 typedef struct {
@@ -559,12 +603,12 @@ typedef struct {
   MIR_reg_t d_slot;
 } jit_bailout_emit_t;
 
-static bool jit_bailout_slot_was_num(jit_vstack_t *vs, int idx,
-                                     int left_idx, bool left_is_num,
-                                     int right_idx, bool right_is_num) {
-  if (idx == left_idx) return left_is_num;
-  if (idx == right_idx) return right_is_num;
-  return vs->slot_type && vs->slot_type[idx] == SLOT_NUM;
+static uint8_t jit_bailout_slot_type(jit_vstack_t *vs, int idx,
+                                     int left_idx, uint8_t left_type,
+                                     int right_idx, uint8_t right_type) {
+  if (idx == left_idx) return left_type;
+  if (idx == right_idx) return right_type;
+  return vs->slot_type ? vs->slot_type[idx] : SLOT_BOXED;
 }
 
 static void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
@@ -579,13 +623,16 @@ static void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
 static void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
                                         int bc_off, int pre_op_sp,
                                         const jit_bailout_emit_t *bail,
-                                        int left_idx, bool left_is_num,
-                                        int right_idx, bool right_is_num) {
+                                        int left_idx, uint8_t left_type,
+                                        int right_idx, uint8_t right_type) {
   for (int i = 0; i < pre_op_sp; i++) {
-    if (jit_bailout_slot_was_num(bail->vstack, i, left_idx, left_is_num,
-                                 right_idx, right_is_num))
-      mir_d_to_i64(ctx, fn, bail->vstack->regs[i], bail->vstack->d_regs[i],
-                   bail->d_slot);
+    uint8_t slot_type = jit_bailout_slot_type(
+      bail->vstack, i, left_idx, left_type, right_idx, right_type
+    );
+    mir_emit_slot_boxed(
+      ctx, fn, bail->vstack->regs[i], bail->vstack->d_regs[i],
+      slot_type, bail->d_slot
+    );
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_MOV,
         MIR_new_mem_op(ctx, MIR_T_I64,
@@ -617,8 +664,8 @@ static void mir_emit_bailout_check_typed(MIR_context_t ctx, MIR_item_t fn,
                                          MIR_reg_t restore_val,
                                          int bc_off, int pre_op_sp,
                                          const jit_bailout_emit_t *bail,
-                                         int left_idx, bool left_is_num,
-                                         int right_idx, bool right_is_num) {
+                                         int left_idx, uint8_t left_type,
+                                         int right_idx, uint8_t right_type) {
   MIR_label_t no_bail = MIR_new_label(ctx);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_BNE,
@@ -631,7 +678,7 @@ static void mir_emit_bailout_check_typed(MIR_context_t ctx, MIR_item_t fn,
         MIR_new_reg_op(ctx, res),
         MIR_new_reg_op(ctx, restore_val)));
   mir_emit_bailout_jump_typed(ctx, fn, bc_off, pre_op_sp, bail,
-    left_idx, left_is_num, right_idx, right_is_num);
+    left_idx, left_type, right_idx, right_type);
   MIR_append_insn(ctx, fn, no_bail);
 }
 
@@ -1042,6 +1089,304 @@ static void mir_emit_is_num_guard(MIR_context_t ctx, MIR_item_t fn,
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, v),
       MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+}
+
+static int mir_next_reg_site(int *next_site) {
+  ANT_ASSERT(next_site != NULL, "missing MIR register site counter");
+  return (*next_site)++;
+}
+
+static MIR_reg_t mir_emit_exact_integer_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
+  MIR_reg_t d_slot, double minimum, double maximum,
+  MIR_label_t slow, int site
+) {
+  char double_name[48], integer_name[48], roundtrip_name[48];
+  snprintf(double_name, sizeof(double_name), "spec_d_%d", site);
+  snprintf(integer_name, sizeof(integer_name), "spec_i_%d", site);
+  snprintf(roundtrip_name, sizeof(roundtrip_name), "spec_rt_%d", site);
+
+  MIR_reg_t number = known_double;
+  if (!is_known_double) {
+    number = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, double_name);
+    mir_emit_is_num_guard(ctx, fn, 0, boxed, slow);
+    mir_i64_to_d(ctx, fn, number, boxed, d_slot);
+  }
+
+  MIR_reg_t integer = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, integer_name);
+  MIR_reg_t roundtrip = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, roundtrip_name);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DBNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, number),
+      MIR_new_reg_op(ctx, number)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DBLT,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, number),
+      MIR_new_double_op(ctx, minimum)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DBGT,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, number),
+      MIR_new_double_op(ctx, maximum)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_D2I,
+      MIR_new_reg_op(ctx, integer),
+      MIR_new_reg_op(ctx, number)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_I2D,
+      MIR_new_reg_op(ctx, roundtrip),
+      MIR_new_reg_op(ctx, integer)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DBNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, number),
+      MIR_new_reg_op(ctx, roundtrip)));
+
+  return integer;
+}
+
+static MIR_reg_t mir_emit_word32_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t boxed, MIR_reg_t known_double,
+  bool is_known_double, bool is_known_i32,
+  MIR_reg_t d_slot, MIR_label_t slow, int site
+) {
+  if (is_known_i32) return boxed;
+  return mir_emit_exact_integer_guard(
+    ctx, fn, boxed, known_double, is_known_double, d_slot,
+    (double)INT32_MIN, (double)UINT32_MAX, slow, site
+  );
+}
+
+static MIR_reg_t mir_emit_array_index_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
+  MIR_reg_t d_slot, MIR_label_t slow, int site
+) {
+  return mir_emit_exact_integer_guard(
+    ctx, fn, boxed, known_double, is_known_double, d_slot,
+    0.0, (double)UINT32_MAX - 1.0, slow, site
+  );
+}
+
+static MIR_reg_t mir_emit_dense_numeric_element_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t object, MIR_reg_t index, MIR_reg_t value,
+  bool writable, MIR_label_t slow, int site
+) {
+  char tag_name[48], ptr_name[48], flags_name[48];
+  char data_name[48], len_name[48], cap_name[48];
+  snprintf(tag_name, sizeof(tag_name), "elem_tag_%d", site);
+  snprintf(ptr_name, sizeof(ptr_name), "elem_ptr_%d", site);
+  snprintf(flags_name, sizeof(flags_name), "elem_flags_%d", site);
+  snprintf(data_name, sizeof(data_name), "elem_data_%d", site);
+  snprintf(len_name, sizeof(len_name), "elem_len_%d", site);
+  snprintf(cap_name, sizeof(cap_name), "elem_cap_%d", site);
+
+  MIR_reg_t tag = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, tag_name);
+  MIR_reg_t ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, ptr_name);
+  MIR_reg_t flags = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, flags_name);
+  MIR_reg_t data = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, data_name);
+  MIR_reg_t len = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, len_name);
+  MIR_reg_t cap = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, cap_name);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, object),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, NANBOX_TARR_TAG)));
+  mir_emit_decode_ref(ctx, fn, ptr, object);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, flags),
+      MIR_new_mem_op(ctx, MIR_T_U16,
+        (MIR_disp_t)offsetof(ant_object_t, flags), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_reg_op(ctx, flags),
+      MIR_new_uint_op(ctx,
+        ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY |
+        (writable ? ANT_OBJECT_FLAG_FROZEN : 0))));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, tag),
+      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_FAST_ARRAY)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, data),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(ant_object_t, u.array.data), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, data),
+      MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, len),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(ant_object_t, u.array.len), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, index),
+      MIR_new_reg_op(ctx, len)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, cap),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(ant_object_t, u.array.cap), ptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGE,
+      MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, index),
+      MIR_new_reg_op(ctx, cap)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, value),
+      MIR_new_mem_op(ctx, MIR_JSVAL, 0, data, index, sizeof(ant_value_t))));
+  if (!writable) {
+    mir_emit_is_num_guard(ctx, fn, 0, value, slow);
+  }
+
+  return data;
+}
+
+static void mir_emit_word32_binary(
+  MIR_context_t ctx, MIR_item_t fn, sv_op_t op,
+  MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,
+  MIR_reg_t result_double, bool materialize_double, int site
+) {
+  char shift_name[48];
+  snprintf(shift_name, sizeof(shift_name), "word_shift_%d", site);
+  MIR_reg_t shift = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, shift_name);
+  MIR_insn_code_t operation;
+
+  switch (op) {
+    case OP_BAND: operation = MIR_ANDS; break;
+    case OP_BOR:  operation = MIR_ORS;  break;
+    case OP_BXOR: operation = MIR_XORS; break;
+    case OP_SHL:  operation = MIR_LSHS; break;
+    case OP_SHR:  operation = MIR_RSHS; break;
+    default:      operation = MIR_URSHS; break;
+  }
+
+  if (op == OP_SHL || op == OP_SHR || op == OP_USHR) {
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_ANDS,
+        MIR_new_reg_op(ctx, shift),
+        MIR_new_reg_op(ctx, right),
+        MIR_new_int_op(ctx, 0x1f)));
+    right = shift;
+  }
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, operation,
+      MIR_new_reg_op(ctx, result),
+      MIR_new_reg_op(ctx, left),
+      MIR_new_reg_op(ctx, right)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, op == OP_USHR ? MIR_UEXT32 : MIR_EXT32,
+      MIR_new_reg_op(ctx, result),
+      MIR_new_reg_op(ctx, result)));
+  if (materialize_double)
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_I2D,
+        MIR_new_reg_op(ctx, result_double),
+        MIR_new_reg_op(ctx, result)));
+}
+
+static void mir_emit_numeric_equality(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,
+  MIR_reg_t scratch, bool invert
+) {
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_DEQ,
+      MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, left),
+      MIR_new_reg_op(ctx, right)));
+  if (invert)
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_XOR,
+        MIR_new_reg_op(ctx, scratch),
+        MIR_new_reg_op(ctx, scratch),
+        MIR_new_int_op(ctx, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_OR,
+      MIR_new_reg_op(ctx, result),
+      MIR_new_uint_op(ctx, js_false),
+      MIR_new_reg_op(ctx, scratch)));
+}
+
+static void mir_emit_strict_tagged_equality(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,
+  MIR_reg_t scratch, bool invert,
+  MIR_label_t slow, MIR_label_t done
+) {
+  MIR_label_t left_number = MIR_new_label(ctx);
+  MIR_label_t equal = MIR_new_label(ctx);
+  MIR_label_t not_equal = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, left_number),
+      MIR_new_reg_op(ctx, left), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBLE, MIR_new_label_op(ctx, not_equal),
+      MIR_new_reg_op(ctx, right), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, equal),
+      MIR_new_reg_op(ctx, left), MIR_new_reg_op(ctx, right)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_XOR, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, left), MIR_new_reg_op(ctx, right)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx, NANBOX_TYPE_MASK << NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, not_equal),
+      MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, left), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, scratch),
+      MIR_new_uint_op(ctx,
+        (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeBigInt)));
+
+  MIR_append_insn(ctx, fn, not_equal);
+  mir_load_imm(ctx, fn, result, invert ? js_true : js_false);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+
+  MIR_append_insn(ctx, fn, left_number);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, not_equal),
+      MIR_new_reg_op(ctx, right), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
+
+  MIR_append_insn(ctx, fn, equal);
+  mir_load_imm(ctx, fn, result, invert ? js_false : js_true);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
 
 static void mir_emit_branch_if_string_builder(
@@ -1963,11 +2308,213 @@ static void mir_emit_promise_protector_invalidation(
   MIR_append_insn(ctx, fn, done);
 }
 
+static MIR_reg_t mir_new_put_field_reg(
+  MIR_context_t ctx, MIR_item_t fn, const char *suffix,
+  int bc_off, uint16_t ic_idx
+) {
+  char name[48];
+  snprintf(name, sizeof(name), "pf_%s_%d_%u", suffix,
+           bc_off, (unsigned)ic_idx);
+  return MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
+}
+
+static MIR_reg_t mir_emit_put_field_add_guard(
+  MIR_context_t ctx, MIR_item_t fn, int bc_off, uint16_t ic_idx,
+  MIR_reg_t ric, MIR_reg_t rce, MIR_reg_t optr, MIR_reg_t flags,
+  MIR_reg_t shape, MIR_reg_t prop_count, MIR_reg_t idx, MIR_reg_t limit,
+  MIR_label_t slow
+) {
+  MIR_reg_t add_epoch = mir_new_put_field_reg(
+    ctx, fn, "add_epoch", bc_off, ic_idx
+  );
+  MIR_reg_t add_from = mir_new_put_field_reg(
+    ctx, fn, "add_from", bc_off, ic_idx
+  );
+  MIR_reg_t add_to = mir_new_put_field_reg(
+    ctx, fn, "add_to", bc_off, ic_idx
+  );
+  MIR_reg_t shape_refs = mir_new_put_field_reg(
+    ctx, fn, "shape_refs", bc_off, ic_idx
+  );
+  MIR_reg_t type_tag = mir_new_put_field_reg(
+    ctx, fn, "type_tag", bc_off, ic_idx
+  );
+  MIR_reg_t scratch = mir_new_put_field_reg(
+    ctx, fn, "add_scratch", bc_off, ic_idx
+  );
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, flags),
+      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_FROZEN | ANT_OBJECT_FLAG_SEALED)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, flags), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_EXTENSIBLE)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, type_tag),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(ant_object_t, type_tag), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, type_tag), MIR_new_uint_op(ctx, kTypeArray)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, shape_refs),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, shape_ref_mask), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, shape_refs),
+      MIR_new_reg_op(ctx, shape_refs),
+      MIR_new_uint_op(ctx, SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, shape_refs),
+      MIR_new_uint_op(ctx, SV_IC_SHAPE_REF_ADD_FROM | SV_IC_SHAPE_REF_ADD_TO)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, add_epoch),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.epoch), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, add_epoch), MIR_new_reg_op(ctx, rce)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, add_from),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.from_shape), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, add_from), MIR_new_reg_op(ctx, shape)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, add_to),
+      MIR_new_mem_op(ctx, MIR_T_P,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.to_shape), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, add_to), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, idx),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(sv_ic_entry_t, guard.add.slot), ric, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, prop_count)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit),
+      MIR_new_mem_op(ctx, MIR_T_U8,
+        (MIR_disp_t)offsetof(ant_object_t, inobj_limit), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, limit)));
+
+  return add_to;
+}
+
+static void mir_emit_put_field_value_guard(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t val, MIR_reg_t optr, MIR_reg_t flags,
+  MIR_reg_t scratch, MIR_reg_t vptr, MIR_reg_t rope_flags,
+  MIR_reg_t need_barrier, MIR_label_t slow, MIR_label_t store
+) {
+  MIR_label_t classify_tag = MIR_new_label(ctx);
+  MIR_label_t classify_string = MIR_new_label(ctx);
+  MIR_label_t classify_ref = MIR_new_label(ctx);
+
+  mir_load_imm(ctx, fn, need_barrier, 0);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, classify_tag),
+      MIR_new_reg_op(ctx, val), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
+  MIR_append_insn(ctx, fn, classify_tag);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, val), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, classify_string),
+      MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, JIT_STR_TAG)));
+  const uint64_t ref_tags[] = {
+    NANBOX_TFUNC_TAG, NANBOX_TOBJ_TAG, NANBOX_TARR_TAG, NANBOX_TPROM_TAG,
+    (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeGenerator
+  };
+  for (size_t i = 0; i < sizeof(ref_tags) / sizeof(ref_tags[0]); i++)
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, classify_ref),
+        MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, ref_tags[i])));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
+
+  MIR_append_insn(ctx, fn, classify_ref);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, flags), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+      MIR_new_reg_op(ctx, scratch), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
+
+  MIR_append_insn(ctx, fn, classify_string);
+  mir_emit_decode_ref(ctx, fn, vptr, val);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, scratch),
+      MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, store),
+      MIR_new_reg_op(ctx, scratch), MIR_new_uint_op(ctx, STR_HEAP_TAG_ROPE)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vptr),
+      MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, rope_flags),
+      MIR_new_mem_op(ctx, MIR_T_U16,
+        (MIR_disp_t)offsetof(ant_rope_heap_t, flags), vptr, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, rope_flags),
+      MIR_new_reg_op(ctx, rope_flags), MIR_new_uint_op(ctx, ANT_ROPE_FLAG_YOUNG)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, store),
+      MIR_new_reg_op(ctx, rope_flags), MIR_new_int_op(ctx, 0)));
+  mir_load_imm(ctx, fn, need_barrier, 1);
+  MIR_append_insn(ctx, fn, store);
+}
+
+static void mir_emit_put_field_barrier(
+  MIR_context_t ctx, MIR_item_t fn,
+  MIR_reg_t r_js, MIR_reg_t optr, MIR_reg_t flags,
+  MIR_reg_t need_barrier, MIR_label_t done,
+  MIR_item_t remember_proto, MIR_item_t imp_remember
+) {
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, need_barrier), MIR_new_int_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, flags),
+      MIR_new_reg_op(ctx, flags),
+      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION | ANT_OBJECT_FLAG_REMEMBERED)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, flags), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_call_insn(ctx, 4,
+      MIR_new_ref_op(ctx, remember_proto),
+      MIR_new_ref_op(ctx, imp_remember),
+      MIR_new_reg_op(ctx, r_js),
+      MIR_new_reg_op(ctx, optr)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+}
+
 static bool mir_emit_put_field_ic_fastpath(
   MIR_context_t ctx, MIR_item_t fn, ant_t *js,
   sv_func_t *func, int bc_off, uint16_t ic_idx, sv_atom_t *atom,
   MIR_reg_t r_js, MIR_reg_t obj, MIR_reg_t val,
   MIR_label_t slow, MIR_reg_t r_global_epoch,
+  MIR_item_t shape_transition_proto, MIR_item_t imp_shape_transition,
   MIR_item_t remember_proto, MIR_item_t imp_remember
 ) {
   if (!func || !func->ic_slots || !atom) return false;
@@ -1977,37 +2524,41 @@ static bool mir_emit_put_field_ic_fastpath(
     atom->str == js->intern.exec ||
     atom->str == js->intern.replace
   ) return false;
+  bool can_add = atom->len != sizeof("__proto__") - 1 ||
+    memcmp(atom->str, "__proto__", sizeof("__proto__") - 1) != 0;
 
   sv_ic_entry_t *ic = &func->ic_slots[ic_idx];
-  char names[14][48];
-  MIR_reg_t regs[14];
-  static const char *suffix[14] = {
-    "ric", "rice", "rce", "optr", "otag", "flags", "shape", "icshape",
-    "idx", "prop_count", "limit", "overflow", "overflow_idx", "vtag"
-  };
-  for (int i = 0; i < 14; i++) {
-    snprintf(names[i], sizeof(names[i]), "pf_%s_%d_%u", suffix[i],
-             bc_off, (unsigned)ic_idx);
-    regs[i] = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, names[i]);
-  }
-  MIR_reg_t ric = regs[0], rice = regs[1], rce = regs[2];
-  MIR_reg_t optr = regs[3], otag = regs[4], flags = regs[5];
-  MIR_reg_t shape = regs[6], icshape = regs[7];
-  MIR_reg_t idx = regs[8], prop_count = regs[9], limit = regs[10];
-  MIR_reg_t overflow = regs[11], overflow_idx = regs[12], vtag = regs[13];
-  char vp_name[48], rf_name[48], need_name[48];
-  snprintf(vp_name, sizeof(vp_name), "pf_vp_%d_%u", bc_off, (unsigned)ic_idx);
-  snprintf(rf_name, sizeof(rf_name), "pf_rf_%d_%u", bc_off, (unsigned)ic_idx);
-  snprintf(need_name, sizeof(need_name), "pf_need_%d_%u", bc_off, (unsigned)ic_idx);
-  MIR_reg_t vptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, vp_name);
-  MIR_reg_t rope_flags = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, rf_name);
-  MIR_reg_t need_barrier = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, need_name);
+  MIR_reg_t ric = mir_new_put_field_reg(ctx, fn, "ric", bc_off, ic_idx);
+  MIR_reg_t rice = mir_new_put_field_reg(ctx, fn, "rice", bc_off, ic_idx);
+  MIR_reg_t rce = mir_new_put_field_reg(ctx, fn, "rce", bc_off, ic_idx);
+  MIR_reg_t optr = mir_new_put_field_reg(ctx, fn, "optr", bc_off, ic_idx);
+  MIR_reg_t otag = mir_new_put_field_reg(ctx, fn, "otag", bc_off, ic_idx);
+  MIR_reg_t flags = mir_new_put_field_reg(ctx, fn, "flags", bc_off, ic_idx);
+  MIR_reg_t shape = mir_new_put_field_reg(ctx, fn, "shape", bc_off, ic_idx);
+  MIR_reg_t icshape = mir_new_put_field_reg(ctx, fn, "icshape", bc_off, ic_idx);
+  MIR_reg_t idx = mir_new_put_field_reg(ctx, fn, "idx", bc_off, ic_idx);
+  MIR_reg_t prop_count = mir_new_put_field_reg(
+    ctx, fn, "prop_count", bc_off, ic_idx
+  );
+  MIR_reg_t limit = mir_new_put_field_reg(ctx, fn, "limit", bc_off, ic_idx);
+  MIR_reg_t overflow = mir_new_put_field_reg(
+    ctx, fn, "overflow", bc_off, ic_idx
+  );
+  MIR_reg_t overflow_idx = mir_new_put_field_reg(
+    ctx, fn, "overflow_idx", bc_off, ic_idx
+  );
+  MIR_reg_t vtag = mir_new_put_field_reg(ctx, fn, "vtag", bc_off, ic_idx);
+  MIR_reg_t vptr = mir_new_put_field_reg(ctx, fn, "vp", bc_off, ic_idx);
+  MIR_reg_t rope_flags = mir_new_put_field_reg(ctx, fn, "rf", bc_off, ic_idx);
+  MIR_reg_t need_barrier = mir_new_put_field_reg(
+    ctx, fn, "need", bc_off, ic_idx
+  );
 
-  MIR_label_t classify_tag = MIR_new_label(ctx);
-  MIR_label_t classify_string = MIR_new_label(ctx);
-  MIR_label_t store = MIR_new_label(ctx);
+  MIR_label_t try_add = MIR_new_label(ctx);
+  MIR_label_t existing_store = MIR_new_label(ctx);
   MIR_label_t load_overflow = MIR_new_label(ctx);
-  MIR_label_t after_store = MIR_new_label(ctx);
+  MIR_label_t existing_after_store = MIR_new_label(ctx);
+  MIR_label_t add_store = MIR_new_label(ctx);
   MIR_label_t done = MIR_new_label(ctx);
 
   MIR_append_insn(ctx, fn,
@@ -2020,9 +2571,6 @@ static bool mir_emit_put_field_ic_fastpath(
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, rce),
       MIR_new_mem_op(ctx, MIR_T_U32, 0, r_global_epoch, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, rice), MIR_new_reg_op(ctx, rce)));
 
   mir_emit_value_to_objptr_or_jmp(ctx, fn, obj, optr, otag, slow);
   MIR_append_insn(ctx, fn,
@@ -2040,81 +2588,30 @@ static bool mir_emit_put_field_ic_fastpath(
       MIR_new_mem_op(ctx, MIR_T_P,
         (MIR_disp_t)offsetof(ant_object_t, shape), optr, 0, 1)));
   MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, prop_count),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(ant_object_t, prop_count), optr, 0, 1)));
+  MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, icshape),
       MIR_new_mem_op(ctx, MIR_T_P,
         (MIR_disp_t)offsetof(sv_ic_entry_t, cached_shape), ric, 0, 1)));
   MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, slow),
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, try_add),
       MIR_new_reg_op(ctx, shape), MIR_new_reg_op(ctx, icshape)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, try_add),
+      MIR_new_reg_op(ctx, rice), MIR_new_reg_op(ctx, rce)));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, idx),
       MIR_new_mem_op(ctx, MIR_T_U32,
         (MIR_disp_t)offsetof(sv_ic_entry_t, cached_index), ric, 0, 1)));
   MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, prop_count),
-      MIR_new_mem_op(ctx, MIR_T_U32,
-        (MIR_disp_t)offsetof(ant_object_t, prop_count), optr, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow),
+    MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, try_add),
       MIR_new_reg_op(ctx, idx), MIR_new_reg_op(ctx, prop_count)));
-
-  mir_load_imm(ctx, fn, need_barrier, 0);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_UBGT, MIR_new_label_op(ctx, classify_tag),
-      MIR_new_reg_op(ctx, val), MIR_new_uint_op(ctx, NANBOX_PREFIX)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
-  MIR_append_insn(ctx, fn, classify_tag);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_URSH, MIR_new_reg_op(ctx, vtag),
-      MIR_new_reg_op(ctx, val), MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, classify_string),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, JIT_STR_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, NANBOX_TFUNC_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, NANBOX_TOBJ_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, NANBOX_TARR_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, NANBOX_TPROM_TAG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, vtag),
-      MIR_new_uint_op(ctx,
-        (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeGenerator)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
-
-  MIR_append_insn(ctx, fn, classify_string);
-  mir_emit_decode_ref(ctx, fn, vptr, val);
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vtag),
-      MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, store),
-      MIR_new_reg_op(ctx, vtag), MIR_new_uint_op(ctx, STR_HEAP_TAG_ROPE)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, vptr),
-      MIR_new_reg_op(ctx, vptr), MIR_new_uint_op(ctx, ~STR_HEAP_TAG_MASK)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, rope_flags),
-      MIR_new_mem_op(ctx, MIR_T_U16,
-        (MIR_disp_t)offsetof(ant_rope_heap_t, flags), vptr, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, rope_flags),
-      MIR_new_reg_op(ctx, rope_flags), MIR_new_uint_op(ctx, ANT_ROPE_FLAG_YOUNG)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, store),
-      MIR_new_reg_op(ctx, rope_flags), MIR_new_int_op(ctx, 0)));
-  mir_load_imm(ctx, fn, need_barrier, 1);
-
-  MIR_append_insn(ctx, fn, store);
+  mir_emit_put_field_value_guard(
+    ctx, fn, val, optr, flags, vtag, vptr, rope_flags,
+    need_barrier, slow, existing_store
+  );
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, limit),
       MIR_new_mem_op(ctx, MIR_T_U8,
@@ -2128,7 +2625,7 @@ static bool mir_emit_put_field_ic_fastpath(
         (MIR_disp_t)offsetof(ant_object_t, inobj), optr, idx, 8),
       MIR_new_reg_op(ctx, val)));
   MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, after_store)));
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, existing_after_store)));
   MIR_append_insn(ctx, fn, load_overflow);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, overflow),
@@ -2144,24 +2641,50 @@ static bool mir_emit_put_field_ic_fastpath(
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_mem_op(ctx, MIR_JSVAL, 0, overflow, overflow_idx, 8),
       MIR_new_reg_op(ctx, val)));
-  MIR_append_insn(ctx, fn, after_store);
+  MIR_append_insn(ctx, fn, existing_after_store);
+  mir_emit_put_field_barrier(
+    ctx, fn, r_js, optr, flags, need_barrier, done,
+    remember_proto, imp_remember
+  );
 
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BEQ, MIR_new_label_op(ctx, done),
-      MIR_new_reg_op(ctx, need_barrier), MIR_new_int_op(ctx, 0)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_AND, MIR_new_reg_op(ctx, flags),
-      MIR_new_reg_op(ctx, flags),
-      MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION | ANT_OBJECT_FLAG_REMEMBERED)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE, MIR_new_label_op(ctx, done),
-      MIR_new_reg_op(ctx, flags), MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_GENERATION)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_call_insn(ctx, 4,
-      MIR_new_ref_op(ctx, remember_proto),
-      MIR_new_ref_op(ctx, imp_remember),
-      MIR_new_reg_op(ctx, r_js),
-      MIR_new_reg_op(ctx, optr)));
+  MIR_append_insn(ctx, fn, try_add);
+  if (!can_add) {
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
+  } else {
+    MIR_reg_t add_to = mir_emit_put_field_add_guard(
+      ctx, fn, bc_off, ic_idx, ric, rce, optr, flags,
+      shape, prop_count, idx, limit, slow
+    );
+    mir_emit_put_field_value_guard(
+      ctx, fn, val, optr, flags, vtag, vptr, rope_flags,
+      need_barrier, slow, add_store
+    );
+    MIR_append_insn(ctx, fn,
+      MIR_new_call_insn(ctx, 4,
+        MIR_new_ref_op(ctx, shape_transition_proto),
+        MIR_new_ref_op(ctx, imp_shape_transition),
+        MIR_new_reg_op(ctx, optr),
+        MIR_new_reg_op(ctx, add_to)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_ADD, MIR_new_reg_op(ctx, prop_count),
+        MIR_new_reg_op(ctx, idx), MIR_new_int_op(ctx, 1)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_T_U32,
+          (MIR_disp_t)offsetof(ant_object_t, prop_count), optr, 0, 1),
+        MIR_new_reg_op(ctx, prop_count)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_mem_op(ctx, MIR_JSVAL,
+          (MIR_disp_t)offsetof(ant_object_t, inobj), optr, idx, 8),
+        MIR_new_reg_op(ctx, val)));
+    mir_emit_put_field_barrier(
+      ctx, fn, r_js, optr, flags, need_barrier, done,
+      remember_proto, imp_remember
+    );
+  }
+
   MIR_append_insn(ctx, fn, done);
   mir_emit_promise_protector_invalidation(
     ctx, fn, js, atom, bc_off, ic_idx, r_js, optr
@@ -2236,7 +2759,6 @@ static bool mir_emit_get_field_ic_fastpath(
   MIR_reg_t r_proto_ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_pp_name);
   MIR_reg_t r_proto_id = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_pid_name);
   MIR_reg_t r_ic_proto_id = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, gf_ipid_name);
-
   MIR_label_t load_overflow = MIR_new_label(ctx);
   MIR_label_t fast_done = MIR_new_label(ctx);
   MIR_label_t own_path = MIR_new_label(ctx);
@@ -2269,7 +2791,9 @@ static bool mir_emit_get_field_ic_fastpath(
   {
     char ce_name[40];
     snprintf(ce_name, sizeof(ce_name), "gf_ce_%d_%u", bc_off, (unsigned)ic_idx);
-    MIR_reg_t r_cur_epoch = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, ce_name);
+    MIR_reg_t r_cur_epoch = MIR_new_func_reg(
+      ctx, fn->u.func, MIR_T_I64, ce_name
+    );
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_MOV,
         MIR_new_reg_op(ctx, r_cur_epoch),
@@ -2298,7 +2822,6 @@ static bool mir_emit_get_field_ic_fastpath(
       MIR_new_label_op(ctx, slow),
       MIR_new_reg_op(ctx, r_obj_shape),
       MIR_new_reg_op(ctx, r_ic_shape)));
-
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, r_is_own),
@@ -2758,6 +3281,7 @@ typedef struct {
   MIR_item_t helper1_proto, imp_get_length_inline;
   MIR_item_t imp_get_elem_inline;
   MIR_item_t put_field_proto, imp_put_field;
+  MIR_item_t shape_transition_proto, imp_shape_transition;
   MIR_item_t remember_obj_proto, imp_remember_obj;
   MIR_item_t call_proto, imp_call;
   MIR_item_t call_method_proto, imp_call_method;
@@ -2777,6 +3301,18 @@ static bool jit_op_inline_side_effect(sv_op_t op) {
     case OP_CALL_STABLE_BUILTIN:
     case OP_TAIL_CALL:
     case OP_TAIL_CALL_METHOD:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool jit_op_inline_restarts_callee_on_guard_failure(sv_op_t op) {
+  switch (op) {
+    case OP_GET_GLOBAL:
+    case OP_GET_ELEM:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_SHL: case OP_SHR: case OP_USHR:
       return true;
     default:
       return false;
@@ -2832,6 +3368,12 @@ static bool jit_inlineable(sv_func_t *f) {
     // the interpreter until JIT routes a real per-call activation/object
     // with matching lifetime and semantics.
     if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0) return false;
+
+    // These guards branch to the shared slow path, which invokes the whole
+    // callee. Never emit them after an operation that may already have had an
+    // observable effect.
+    if (seen_effect && jit_op_inline_restarts_callee_on_guard_failure(op))
+      return false;
 
     if (seen_effect) {
       if (op == OP_JMP) { if (sv_get_i32(ip + 1) < 0) return false; } 
@@ -2970,14 +3512,13 @@ static void jit_emit_inline_body(
   MIR_reg_t *arg_regs, int caller_argc,
   const uint8_t *arg_num, const MIR_reg_t *arg_d,
   MIR_reg_t result, MIR_label_t slow, MIR_label_t join,
-  MIR_reg_t r_bool, MIR_reg_t *p_d_slot, int id,
+  MIR_reg_t r_bool, MIR_reg_t *p_d_slot, int id, int *p_reg_site,
   MIR_reg_t r_inl_closure, MIR_reg_t r_inl_this,
   MIR_reg_t r_inl_new_target, MIR_reg_t r_inl_super,
   MIR_reg_t r_vm, MIR_reg_t r_js, MIR_reg_t r_ic_epoch,
   MIR_item_t helper2_proto, MIR_item_t imp_seq,
   MIR_item_t imp_sne, MIR_item_t imp_eq, MIR_item_t imp_ne,
   MIR_item_t gf_proto, MIR_item_t imp_get_field_inline,
-  MIR_item_t gg_proto, MIR_item_t imp_gg,
   MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
   const jit_inline_ext_t *ext
 ) {
@@ -3605,48 +4146,85 @@ static void jit_emit_inline_body(
         break;
       }
 
-      case OP_SEQ: {
-        INL_FLUSH_SLOT(isp - 1);
-        INL_FLUSH_SLOT(isp - 2);
-        MIR_reg_t rr = inl_vs[--isp];
-        MIR_reg_t rl = inl_vs[--isp];
-        MIR_reg_t rd = inl_vs[isp++];
-        mir_call_helper2(ctx, jit_func, rd,
-                         helper2_proto, imp_seq,
-                         r_vm, r_js, rl, rr);
-        break;
-      }
-      case OP_SNE: {
-        INL_FLUSH_SLOT(isp - 1);
-        INL_FLUSH_SLOT(isp - 2);
-        MIR_reg_t rr = inl_vs[--isp];
-        MIR_reg_t rl = inl_vs[--isp];
-        MIR_reg_t rd = inl_vs[isp++];
-        mir_call_helper2(ctx, jit_func, rd,
-                         helper2_proto, imp_sne,
-                         r_vm, r_js, rl, rr);
-        break;
-      }
-      case OP_EQ: {
-        INL_FLUSH_SLOT(isp - 1);
-        INL_FLUSH_SLOT(isp - 2);
-        MIR_reg_t rr = inl_vs[--isp];
-        MIR_reg_t rl = inl_vs[--isp];
-        MIR_reg_t rd = inl_vs[isp++];
-        mir_call_helper2(ctx, jit_func, rd,
-                         helper2_proto, imp_eq,
-                         r_vm, r_js, rl, rr);
-        break;
-      }
-      case OP_NE: {
-        INL_FLUSH_SLOT(isp - 1);
-        INL_FLUSH_SLOT(isp - 2);
-        MIR_reg_t rr = inl_vs[--isp];
-        MIR_reg_t rl = inl_vs[--isp];
-        MIR_reg_t rd = inl_vs[isp++];
-        mir_call_helper2(ctx, jit_func, rd,
-                         helper2_proto, imp_ne,
-                         r_vm, r_js, rl, rr);
+      case OP_SEQ: case OP_SNE: case OP_EQ: case OP_NE: {
+        uint8_t feedback = sv_func_type_feedback(callee)
+          ? sv_func_type_feedback(callee)[inl_bc_off] : 0;
+        if (sv_tfb_specialization_ready(feedback) &&
+            (feedback & SV_TFB_CLASS_MASK) == SV_TFB_NUM) {
+          int right_idx = isp - 1;
+          int left_idx = isp - 2;
+          MIR_reg_t rr = inl_vs[right_idx];
+          MIR_reg_t rl = inl_vs[left_idx];
+          MIR_label_t eq_slow = MIR_new_label(ctx);
+          MIR_label_t eq_done = MIR_new_label(ctx);
+          INL_ENSURE_D_SLOT();
+          if (!inl_num[left_idx]) {
+            mir_emit_is_num_guard(
+              ctx, jit_func, r_bool, rl, eq_slow
+            );
+            mir_i64_to_d(
+              ctx, jit_func, inl_d[left_idx], rl, *p_d_slot
+            );
+          }
+          if (!inl_num[right_idx]) {
+            mir_emit_is_num_guard(
+              ctx, jit_func, r_bool, rr, eq_slow
+            );
+            mir_i64_to_d(
+              ctx, jit_func, inl_d[right_idx], rr, *p_d_slot
+            );
+          }
+          isp -= 2;
+          MIR_reg_t rd = inl_vs[isp++];
+          mir_emit_numeric_equality(
+            ctx, jit_func, inl_d[left_idx], inl_d[right_idx], rd, r_bool,
+            op == OP_NE || op == OP_SNE
+          );
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, eq_done)));
+          MIR_append_insn(ctx, jit_func, eq_slow);
+          MIR_item_t helper = op == OP_SEQ ? imp_seq
+            : op == OP_EQ ? imp_eq : op == OP_NE ? imp_ne : imp_sne;
+          if (inl_num[left_idx])
+            mir_d_to_i64(
+              ctx, jit_func, rl, inl_d[left_idx], *p_d_slot
+            );
+          if (inl_num[right_idx])
+            mir_d_to_i64(
+              ctx, jit_func, rr, inl_d[right_idx], *p_d_slot
+            );
+          mir_call_helper2(ctx, jit_func, rd,
+                           helper2_proto, helper,
+                           r_vm, r_js, rl, rr);
+          MIR_append_insn(ctx, jit_func, eq_done);
+          inl_num[isp - 1] = 0;
+          inl_num[isp] = 0;
+        } else {
+          INL_FLUSH_SLOT(isp - 1);
+          INL_FLUSH_SLOT(isp - 2);
+          MIR_reg_t rr = inl_vs[--isp];
+          MIR_reg_t rl = inl_vs[--isp];
+          MIR_reg_t rd = inl_vs[isp++];
+          MIR_item_t helper = op == OP_SEQ ? imp_seq
+            : op == OP_EQ ? imp_eq : op == OP_NE ? imp_ne : imp_sne;
+          if (op == OP_SEQ || op == OP_SNE) {
+            MIR_label_t eq_slow = MIR_new_label(ctx);
+            MIR_label_t eq_done = MIR_new_label(ctx);
+            mir_emit_strict_tagged_equality(
+              ctx, jit_func, rl, rr, rd, r_bool, op == OP_SNE,
+              eq_slow, eq_done
+            );
+            MIR_append_insn(ctx, jit_func, eq_slow);
+            mir_call_helper2(ctx, jit_func, rd,
+                             helper2_proto, helper,
+                             r_vm, r_js, rl, rr);
+            MIR_append_insn(ctx, jit_func, eq_done);
+          } else {
+            mir_call_helper2(ctx, jit_func, rd,
+                             helper2_proto, helper,
+                             r_vm, r_js, rl, rr);
+          }
+        }
         break;
       }
 
@@ -3829,6 +4407,7 @@ static void jit_emit_inline_body(
         MIR_label_t nullish = MIR_new_label(ctx);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t value_ok = MIR_new_label(ctx);
+        MIR_label_t gf_slow = MIR_new_label(ctx);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_BEQ,
             MIR_new_label_op(ctx, nullish),
@@ -3839,6 +4418,16 @@ static void jit_emit_inline_body(
             MIR_new_label_op(ctx, nullish),
             MIR_new_reg_op(ctx, obj),
             MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
+        uint16_t gf_ic_idx = sv_get_u16(ip + 5);
+        bool gf_fast = r_ic_epoch != 0 &&
+          mir_emit_get_field_ic_fastpath(
+            ctx, jit_func, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
+            atom, obj, dst, gf_slow, r_ic_epoch);
+        if (gf_fast) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, no_err)));
+          MIR_append_insn(ctx, jit_func, gf_slow);
+        }
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, gf_proto),
@@ -3872,6 +4461,17 @@ static void jit_emit_inline_body(
         MIR_reg_t obj = inl_vs[isp - 1];
         MIR_reg_t dst = inl_vs[isp++];
         MIR_label_t value_ok = MIR_new_label(ctx);
+        MIR_label_t gf_slow = MIR_new_label(ctx);
+        uint16_t gf_ic_idx = sv_get_u16(ip + 5);
+        bool gf_fast = r_ic_epoch != 0 &&
+          mir_emit_get_field_ic_fastpath(
+            ctx, jit_func, callee, -(id * 100000 + inl_bc_off + 1), gf_ic_idx,
+            atom, obj, dst, gf_slow, r_ic_epoch);
+        if (gf_fast) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, value_ok)));
+          MIR_append_insn(ctx, jit_func, gf_slow);
+        }
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, gf_proto),
@@ -3894,35 +4494,15 @@ static void jit_emit_inline_body(
         uint32_t idx = sv_get_u32(ip + 1);
         ANT_ASSERT(idx < (uint32_t)callee->atom_count,
                    "invalid inline atom index");
-        sv_atom_t *atom = &callee->atoms[idx];
         MIR_reg_t dst = inl_vs[isp++];
-        MIR_label_t gg_ok = MIR_new_label(ctx);
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 7,
-            MIR_new_ref_op(ctx, gg_proto),
-            MIR_new_ref_op(ctx, imp_gg),
-            MIR_new_reg_op(ctx, dst),
-            MIR_new_reg_op(ctx, r_js),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)atom->str),
-            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)callee),
-            MIR_new_int_op(ctx, (int64_t)inl_bc_off)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_URSH,
-            MIR_new_reg_op(ctx, r_bool),
-            MIR_new_reg_op(ctx, dst),
-            MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_BNE,
-            MIR_new_label_op(ctx, gg_ok),
-            MIR_new_reg_op(ctx, r_bool),
-            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_MOV,
-            MIR_new_reg_op(ctx, result),
-            MIR_new_reg_op(ctx, dst)));
-        MIR_append_insn(ctx, jit_func,
-          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
-        MIR_append_insn(ctx, jit_func, gg_ok);
+        int gg_site = -(id * 100000 + inl_bc_off + 1);
+        bool gg_fast = r_ic_epoch != 0 &&
+          mir_emit_get_global_ic_fastpath(
+            ctx, jit_func, callee, gg_site,
+            r_js, dst, slow, r_ic_epoch, ip);
+        if (!gg_fast)
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, slow)));
         break;
       }
 
@@ -3971,6 +4551,7 @@ static void jit_emit_inline_body(
             ctx, jit_func, js, callee,
             pf_name_off, pf_ic_idx, pf_atom,
             r_js, pf_obj, pf_val, pf_slow, r_ic_epoch,
+            ext->shape_transition_proto, ext->imp_shape_transition,
             ext->remember_obj_proto, ext->imp_remember_obj
           );
         if (pf_fast) {
@@ -4006,11 +4587,39 @@ static void jit_emit_inline_body(
       }
 
       case OP_GET_ELEM: {
-        INL_FLUSH_SLOT(isp - 1);
         INL_FLUSH_SLOT(isp - 2);
+        uint8_t feedback = sv_func_type_feedback(callee)
+          ? sv_func_type_feedback(callee)[inl_bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
+        bool key_is_num = inl_num[isp - 1] != 0;
+
+        if (specialize) {
+          INL_ENSURE_D_SLOT();
+          MIR_reg_t ge_key = inl_vs[--isp];
+          MIR_reg_t ge_obj = inl_vs[--isp];
+          (void)inl_vs[isp++];
+          int index_site = mir_next_reg_site(p_reg_site);
+          int element_site = mir_next_reg_site(p_reg_site);
+          MIR_reg_t index = mir_emit_array_index_guard(
+            ctx, jit_func, ge_key, inl_d[isp], key_is_num,
+            *p_d_slot, slow, index_site
+          );
+          (void)mir_emit_dense_numeric_element_guard(
+            ctx, jit_func, ge_obj, index, r_bool, false, slow, element_site
+          );
+          mir_i64_to_d(
+            ctx, jit_func, inl_d[isp - 1], r_bool, *p_d_slot
+          );
+          inl_num[isp - 1] = 1;
+          inl_num[isp] = 0;
+          break;
+        }
+
+        INL_FLUSH_SLOT(isp - 1);
         MIR_reg_t ge_key = inl_vs[--isp];
         MIR_reg_t ge_obj = inl_vs[--isp];
         MIR_reg_t ge_dst = inl_vs[isp++];
+        inl_num[isp - 1] = 0;
         MIR_label_t ge_ok = MIR_new_label(ctx);
         mir_call_helper2(ctx, jit_func, ge_dst,
                          helper2_proto, ext->imp_get_elem_inline,
@@ -4044,6 +4653,37 @@ static void jit_emit_inline_body(
 
       case OP_BAND: case OP_BOR: case OP_BXOR:
       case OP_SHL:  case OP_SHR: case OP_USHR: {
+        uint8_t feedback = sv_func_type_feedback(callee)
+          ? sv_func_type_feedback(callee)[inl_bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
+        bool l_is_num = inl_num[isp - 2] != 0;
+        bool r_is_num = inl_num[isp - 1] != 0;
+
+        if (specialize) {
+          INL_ENSURE_D_SLOT();
+          MIR_reg_t bw_rr = inl_vs[--isp];
+          MIR_reg_t bw_rl = inl_vs[--isp];
+          MIR_reg_t bw_rd = inl_vs[isp++];
+          int left_site = mir_next_reg_site(p_reg_site);
+          int right_site = mir_next_reg_site(p_reg_site);
+          int result_site = mir_next_reg_site(p_reg_site);
+          MIR_reg_t left = mir_emit_word32_guard(
+            ctx, jit_func, bw_rl, inl_d[isp - 1], l_is_num, false,
+            *p_d_slot, slow, left_site
+          );
+          MIR_reg_t right = mir_emit_word32_guard(
+            ctx, jit_func, bw_rr, inl_d[isp], r_is_num, false,
+            *p_d_slot, slow, right_site
+          );
+          mir_emit_word32_binary(
+            ctx, jit_func, op, left, right, bw_rd,
+            inl_d[isp - 1], true, result_site
+          );
+          inl_num[isp - 1] = 1;
+          inl_num[isp] = 0;
+          break;
+        }
+
         INL_FLUSH_SLOT(isp - 1);
         INL_FLUSH_SLOT(isp - 2);
         mir_emit_is_num_guard(ctx, jit_func, r_bool, inl_vs[isp - 1], slow);
@@ -4051,6 +4691,7 @@ static void jit_emit_inline_body(
         MIR_reg_t bw_rr = inl_vs[--isp];
         MIR_reg_t bw_rl = inl_vs[--isp];
         MIR_reg_t bw_rd = inl_vs[isp++];
+        inl_num[isp - 1] = 0;
         MIR_item_t bw_imp;
         switch (op) {
           case OP_BAND: bw_imp = ext->imp_band; break;
@@ -4517,7 +5158,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       ant_value_t cv = func->constants[idx];
       if (vtype(cv) != kTypeFunctionInfo) return false;
     } else if (op == OP_SPECIAL_OBJ) {
-      if (sv_get_u8(ip + 1) == 0) {
+      if (sv_get_u8(ip + 1) == 0 && !func->is_strict) {
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
                   sv_get_u8(ip + 1),
@@ -4607,6 +5248,53 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_JSVAL,  "this_val",
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
+
+  MIR_item_t call_map_template_proto = MIR_new_proto(
+    ctx, "call_map_template_proto",
+    1, &call_ret,
+    8,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_JSVAL, "value0",
+    MIR_JSVAL, "value1",
+    MIR_JSVAL, "value2",
+    MIR_T_P,   "descriptor");
+
+  MIR_item_t map_template_fast_proto = MIR_new_proto(
+    ctx, "map_template_fast_proto",
+    1, &call_ret,
+    7,
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_JSVAL, "value0",
+    MIR_JSVAL, "value1",
+    MIR_JSVAL, "value2",
+    MIR_T_P,   "descriptor");
+
+  MIR_item_t map_numeric_pair_fast_proto = MIR_new_proto(
+    ctx, "map_numeric_pair_fast_proto",
+    1, &call_ret,
+    7,
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_JSVAL, "left",
+    MIR_JSVAL, "right",
+    MIR_T_P,   "separator",
+    MIR_T_I32, "separator_len");
+
+  MIR_item_t regexp_exec_truthy_proto = MIR_new_proto(
+    ctx, "regexp_exec_truthy_proto",
+    1, &call_ret,
+    5,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js_p",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_JSVAL, "arg");
 
   MIR_item_t stable_load_proto = MIR_new_proto(ctx, "stable_load_proto",
     1, &call_ret,
@@ -4935,6 +5623,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "js",
     MIR_T_P,   "obj");
 
+  MIR_item_t shape_transition_proto = MIR_new_proto(ctx, "shape_transition_proto",
+    0, NULL, 2,
+    MIR_T_P, "obj",
+    MIR_T_P, "to_shape");
+
   MIR_type_t pe_ret = MIR_JSVAL;
   MIR_item_t put_elem_proto = MIR_new_proto(ctx, "pe_proto",
     1, &pe_ret, 5,
@@ -4988,6 +5681,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,   "elements",
     MIR_T_I32, "count");
 
+  MIR_type_t regexp_ret = MIR_JSVAL;
+  MIR_item_t regexp_proto = MIR_new_proto(ctx, "regexp_proto",
+    1, &regexp_ret, 4,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_JSVAL, "pattern",
+    MIR_JSVAL, "flags");
+
   MIR_type_t te_ret = MIR_JSVAL;
   MIR_item_t throw_error_proto = MIR_new_proto(ctx, "te_proto",
     1, &te_ret, 5,
@@ -5014,6 +5715,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "js",
     MIR_T_I32, "which");
 
+  MIR_item_t strict_arguments_proto = MIR_new_proto(
+    ctx, "strict_arguments_proto",
+    1, &special_obj_ret,
+    4,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_T_P,   "args",
+    MIR_T_I32, "argc");
+
   MIR_type_t for_of_ret = MIR_JSVAL;
   MIR_item_t for_of_proto = MIR_new_proto(ctx, "fo_proto",
     1, &for_of_ret, 4,
@@ -5021,6 +5731,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "js",
     MIR_JSVAL, "iterable",
     MIR_T_P,   "iter_buf");
+
+  MIR_type_t iter_next_ret = MIR_JSVAL;
+  MIR_item_t iter_next_proto = MIR_new_proto(ctx, "inext_proto",
+    1, &iter_next_ret, 4,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_T_P,   "iter_buf",
+    MIR_T_I32, "hint");
 
   MIR_item_t destructure_close_proto = MIR_new_proto(ctx, "dclose_proto",
     0, NULL, 3,
@@ -5055,6 +5773,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call  = MIR_new_import(ctx, "jit_helper_call");
   MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
   MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
+  MIR_item_t imp_call_map_template =
+    MIR_new_import(ctx, "jit_helper_call_map_template");
+  MIR_item_t imp_map_template_fast =
+    MIR_new_import(ctx, "jit_helper_map_template_fast");
+  MIR_item_t imp_map_numeric_pair_fast =
+    MIR_new_import(ctx, "jit_helper_map_numeric_pair_fast");
+  MIR_item_t imp_regexp_exec_truthy =
+    MIR_new_import(ctx, "jit_helper_regexp_exec_truthy");
   MIR_item_t imp_load_stable_builtin = MIR_new_import(ctx, "jit_helper_load_stable_builtin");
   MIR_item_t imp_call_stable_builtin = MIR_new_import(ctx, "jit_helper_call_stable_builtin");
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
@@ -5062,7 +5788,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call_call_slot = MIR_new_import(ctx, "jit_helper_call_call_slot");
   MIR_item_t imp_rest  = MIR_new_import(ctx, "jit_helper_rest");
   MIR_item_t imp_special_obj = MIR_new_import(ctx, "jit_helper_special_obj");
+  MIR_item_t imp_strict_arguments =
+    MIR_new_import(ctx, "jit_helper_strict_arguments");
   MIR_item_t imp_for_of      = MIR_new_import(ctx, "jit_helper_for_of");
+  MIR_item_t imp_iter_next   = MIR_new_import(ctx, "jit_helper_iter_next");
   MIR_item_t imp_dnext       = MIR_new_import(ctx, "jit_helper_destructure_next");
   MIR_item_t imp_dclose      = MIR_new_import(ctx, "jit_helper_destructure_close");
   MIR_item_t imp_gg         = MIR_new_import(ctx, "jit_helper_get_global");
@@ -5098,6 +5827,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_ne          = MIR_new_import(ctx, "jit_helper_ne");
   MIR_item_t imp_sne         = MIR_new_import(ctx, "jit_helper_sne");
   MIR_item_t imp_put_field   = MIR_new_import(ctx, "jit_helper_put_field_ic");
+  MIR_item_t imp_shape_transition =
+    MIR_new_import(ctx, "jit_helper_shape_transition");
   MIR_item_t imp_remember_obj = MIR_new_import(ctx, "gc_remember_add");
   MIR_item_t imp_get_elem    = MIR_new_import(ctx, "jit_helper_get_elem");
   MIR_item_t imp_put_elem    = MIR_new_import(ctx, "jit_helper_put_elem");
@@ -5105,6 +5836,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_put_private = MIR_new_import(ctx, "jit_helper_put_private");
   MIR_item_t imp_put_global  = MIR_new_import(ctx, "jit_helper_put_global");
   MIR_item_t imp_object      = MIR_new_import(ctx, "jit_helper_object");
+  MIR_item_t imp_regexp      = MIR_new_import(ctx, "jit_helper_regexp");
   MIR_item_t imp_define_slot = MIR_new_import(ctx, "jit_helper_define_slot");
   MIR_item_t imp_array       = MIR_new_import(ctx, "jit_helper_array");
   MIR_item_t imp_catch_value = MIR_new_import(ctx, "jit_helper_catch_value");
@@ -5341,6 +6073,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     .imp_get_length_inline = imp_get_length_inline,
     .imp_get_elem_inline = imp_get_elem_inline,
     .put_field_proto = put_field_proto, .imp_put_field = imp_put_field,
+    .shape_transition_proto = shape_transition_proto,
+    .imp_shape_transition = imp_shape_transition,
     .remember_obj_proto = remember_obj_proto,
     .imp_remember_obj = imp_remember_obj,
     .call_proto = call_proto, .imp_call = imp_call,
@@ -5378,6 +6112,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
 
   MIR_reg_t r_iter_roots = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "iter_roots");
+  MIR_reg_t r_iter_buf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "iter_buf");
   if (feat.needs_iter_roots && vs.max > 0) {
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_ALLOCA,
@@ -5633,6 +6368,46 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, locals),
           r_vm, 0, 1)));
 
+    if (feat.needs_iter_roots && vs.max > 0) {
+      MIR_reg_t r_osr_vstack = MIR_new_func_reg(
+        ctx, jit_func->u.func, MIR_T_I64, "osr_vstack");
+      MIR_reg_t r_osr_vstack_sp = MIR_new_func_reg(
+        ctx, jit_func->u.func, MIR_T_I64, "osr_vstack_sp");
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_MOV,
+          MIR_new_reg_op(ctx, r_osr_vstack),
+          MIR_new_mem_op(ctx, MIR_T_P,
+            osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, vstack),
+            r_vm, 0, 1)));
+      MIR_append_insn(ctx, jit_func,
+        MIR_new_insn(ctx, MIR_MOV,
+          MIR_new_reg_op(ctx, r_osr_vstack_sp),
+          MIR_new_mem_op(ctx, MIR_T_I32,
+            osr_base + (MIR_disp_t)offsetof(sv_jit_osr_t, vstack_sp),
+            r_vm, 0, 1)));
+      for (int i = 0; i < vs.max; i++) {
+        MIR_label_t slot_done = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_UBLE,
+            MIR_new_label_op(ctx, slot_done),
+            MIR_new_reg_op(ctx, r_osr_vstack_sp),
+            MIR_new_int_op(ctx, i)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, vs.regs[i]),
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+              r_osr_vstack, 0, 1)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+              r_iter_roots, 0, 1),
+            MIR_new_reg_op(ctx, vs.regs[i])));
+        MIR_append_insn(ctx, jit_func, slot_done);
+      }
+    }
+
     for (int i = 0; i < n_locals; i++)
       MIR_append_insn(ctx, jit_func,
         MIR_new_insn(ctx, MIR_MOV,
@@ -5782,6 +6557,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   int  call_n  = 0; 
   int  upval_n = 0; 
   int  arith_n = 0; 
+  int  reg_site_n = 0;
 
 #define JIT_EMIT_EXIT_RET(ret_op)                          \
   mir_emit_exit_ret(ctx, jit_func,                         \
@@ -6247,7 +7023,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t idx = sv_get_u16(ip + 1);
         if (idx >= (uint16_t)n_locals) { ok = false; break; }
         sv_func_t *kf = vs.known_func[vs.sp - 1];
-        bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool src_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
         if (dnum_locals && dnum_locals[idx]) {
           if (!src_is_num)
@@ -6283,7 +7061,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
         sv_func_t *kf = vs.known_func[vs.sp - 1];
-        bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool src_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
         if (dnum_locals && dnum_locals[idx]) {
           if (!src_is_num)
@@ -6319,7 +7099,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_SET_LOCAL: {
         uint16_t idx = sv_get_u16(ip + 1);
         if (idx >= (uint16_t)n_locals) { ok = false; break; }
-        bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool src_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
         if (dnum_locals && dnum_locals[idx]) {
           if (!src_is_num)
@@ -6353,7 +7135,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_SET_LOCAL8: {
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
-        bool src_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool src_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t src_d = src_is_num ? vs.d_regs[vs.sp - 1] : 0;
         if (dnum_locals && dnum_locals[idx]) {
           if (!src_is_num)
@@ -6533,8 +7317,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
         bool fb_str_only = !force_num_only && fb && !(fb & ~SV_TFB_STR);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -6683,8 +7471,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -6810,8 +7602,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -6937,8 +7733,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
         bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -7075,7 +7875,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_NEG: {
         int top_idx = vs.sp - 1;
-        bool input_is_num = vs.slot_type && vs.slot_type[top_idx] == SLOT_NUM;
+        bool input_is_num = vstack_prepare_num(
+          &vs, top_idx, ctx, jit_func, r_d_slot
+        );
         vstack_clear_value_info(&vs, top_idx);
 
         if (input_is_num) {
@@ -7109,8 +7911,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
         MIR_append_insn(ctx, jit_func, slow);
         for (int i = 0; i < vs.sp; i++) {
-          if (vs.slot_type && vs.slot_type[i] == SLOT_NUM)
-            mir_d_to_i64(ctx, jit_func, vs.regs[i], vs.d_regs[i], r_d_slot);
+          mir_emit_slot_boxed(
+            ctx, jit_func, vs.regs[i], vs.d_regs[i],
+            vs.slot_type ? vs.slot_type[i] : SLOT_BOXED, r_d_slot
+          );
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
@@ -7143,7 +7947,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_INC:
       case OP_DEC: {
         int top_idx = vs.sp - 1;
-        bool input_is_num = vs.slot_type && vs.slot_type[top_idx] == SLOT_NUM;
+        bool input_is_num = vstack_prepare_num(
+          &vs, top_idx, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t rs = vstack_top(&vs);
 
         if (vs.known_func) vs.known_func[top_idx] = NULL;
@@ -7198,7 +8004,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_POST_DEC: {
         int old_idx = vs.sp - 1;
-        bool input_is_num = vs.slot_type && vs.slot_type[old_idx] == SLOT_NUM;
+        bool input_is_num = vstack_prepare_num(
+          &vs, old_idx, ctx, jit_func, r_d_slot
+        );
         MIR_reg_t rold = vstack_top(&vs);
         vstack_push(&vs);
         int new_idx = vs.sp - 1;
@@ -7288,8 +8096,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -7442,8 +8254,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -7775,8 +8591,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             uint8_t inl_arg_num[SV_JIT_ARGS_BUF_CAP] = {0};
             MIR_reg_t inl_arg_d[SV_JIT_ARGS_BUF_CAP] = {0};
             for (int i = 0; i < (int)call_argc; i++) {
-              inl_arg_num[i] = vs.slot_type &&
-                               vs.slot_type[inl_arg_base + i] == SLOT_NUM;
+              inl_arg_num[i] = vstack_prepare_num(
+                &vs, inl_arg_base + i, ctx, jit_func, r_d_slot
+              );
               inl_arg_d[i] = vs.d_regs[inl_arg_base + i];
             }
 
@@ -7899,12 +8716,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               inl_arg_regs, (int)call_argc,
               inl_arg_num, inl_arg_d,
               r_call_res, inl_slow, inl_join,
-              r_bool, &r_d_slot, cn,
+              r_bool, &r_d_slot, cn, &reg_site_n,
               r_inl_cl, r_inl_this, r_inl_new_target, r_inl_super,
               r_vm, r_js, r_ic_epoch_val,
               helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
               gf_proto, imp_get_field_inline,
-              gg_proto, imp_gg,
               special_obj_proto, imp_special_obj,
               &inline_ext);
 
@@ -8284,7 +9100,18 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_SPECIAL_OBJ: {
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (which == 1) {
+        if (which == 0 && func->is_strict) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 7,
+              MIR_new_ref_op(ctx, strict_arguments_proto),
+              MIR_new_ref_op(ctx, imp_strict_arguments),
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_args),
+              MIR_new_reg_op(ctx, r_argc)));
+          JIT_EMIT_THROW_IF_ERROR(dst);
+        } else if (which == 1) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, dst),
@@ -8723,8 +9550,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool loc_is_num = known_type_locals && local_d_regs &&
           known_type_locals[idx] == SV_TI_NUM &&
           (!captured_locals || !captured_locals[idx]);
-        bool rhs_is_num = vs.slot_type &&
-          vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool rhs_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         if (fb_num_only && loc_is_num) {
           int rhs_idx = vs.sp - 1;
@@ -9150,6 +9978,51 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
+      case OP_TO_STRING_DEFER_NUMBER: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        MIR_reg_t src = vstack_pop(&vs);
+        MIR_reg_t dst = vstack_push(&vs);
+        MIR_label_t td_done = MIR_new_label(ctx);
+        MIR_label_t td_helper = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_reg_op(ctx, src)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_UBLE,
+            MIR_new_label_op(ctx, td_done),
+            MIR_new_reg_op(ctx, src),
+            MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, src),
+            MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_AND,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, NANBOX_TYPE_MASK)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, td_helper),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_int_op(ctx, kTypeString)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, td_done)));
+        MIR_append_insn(ctx, jit_func, td_helper);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 5,
+            MIR_new_ref_op(ctx, to_string_proto),
+            MIR_new_ref_op(ctx, imp_to_string),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, src)));
+        MIR_append_insn(ctx, jit_func, td_done);
+        JIT_EMIT_THROW_IF_ERROR(dst);
+        break;
+      }
+
       case OP_GET_FIELD: {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->atom_count) { ok = false; break; }
@@ -9160,9 +10033,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t ic_idx = sv_get_u16(ip + 5);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
-        if (mir_emit_get_field_ic_fastpath(
+        bool fast = mir_emit_get_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
-          r_ic_epoch_val)) {
+          r_ic_epoch_val);
+        if (fast) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -9216,9 +10090,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t ic_idx = sv_get_u16(ip + 5);
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_label_t slow = MIR_new_label(ctx);
-        if (mir_emit_get_field_ic_fastpath(
+        bool fast = mir_emit_get_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
-          r_ic_epoch_val)) {
+          r_ic_epoch_val);
+        if (fast) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -9283,9 +10158,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_label_op(ctx, nullish),
             MIR_new_reg_op(ctx, obj),
             MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
-        if (mir_emit_get_field_ic_fastpath(
+        bool fast = mir_emit_get_field_ic_fastpath(
           ctx, jit_func, func, bc_off, ic_idx, atom, obj, dst, slow,
-          r_ic_epoch_val)) {
+          r_ic_epoch_val);
+        if (fast) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP,
               MIR_new_label_op(ctx, no_err)));
@@ -9345,11 +10221,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t obj = vstack_pop(&vs);
         MIR_label_t slow = MIR_new_label(ctx);
         MIR_label_t no_err = MIR_new_label(ctx);
-        if (mir_emit_put_field_ic_fastpath(
+        bool fast = mir_emit_put_field_ic_fastpath(
           ctx, jit_func, js, func, bc_off, pf_ic_idx, atom,
           r_js, obj, val, slow, r_ic_epoch_val,
+          shape_transition_proto, imp_shape_transition,
           remember_obj_proto, imp_remember_obj
-        )) {
+        );
+        if (fast) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, no_err)));
           MIR_append_insn(ctx, jit_func, slow);
@@ -9512,6 +10390,47 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_GET_ELEM: {
+        uint8_t feedback = sv_func_type_feedback(func)
+          ? sv_func_type_feedback(func)[bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
+        bool key_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
+        bool obj_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+
+        if (specialize && !obj_is_num) {
+          MIR_reg_t key = vstack_pop(&vs);
+          MIR_reg_t obj = vstack_pop(&vs);
+          (void)vstack_push(&vs);
+          MIR_label_t bail_direct = MIR_new_label(ctx);
+          MIR_label_t done = MIR_new_label(ctx);
+          int index_site = mir_next_reg_site(&reg_site_n);
+          int element_site = mir_next_reg_site(&reg_site_n);
+          MIR_reg_t index = mir_emit_array_index_guard(
+            ctx, jit_func, key, vs.d_regs[vs.sp], key_is_num,
+            r_d_slot, bail_direct, index_site
+          );
+          MIR_reg_t loaded = r_err_tmp;
+          (void)mir_emit_dense_numeric_element_guard(
+            ctx, jit_func, obj, index, loaded, false, bail_direct, element_site
+          );
+          mir_i64_to_d(
+            ctx, jit_func, vs.d_regs[vs.sp - 1], loaded, r_d_slot
+          );
+          vs.slot_type[vs.sp - 1] = SLOT_NUM;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, bail_direct);
+          mir_emit_bailout_jump_typed(
+            ctx, jit_func, bc_off, vs.sp + 1, &bailout_ctx,
+            vs.sp - 1, false, vs.sp, key_is_num
+          );
+          MIR_append_insn(ctx, jit_func, done);
+          break;
+        }
+
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         MIR_reg_t key = vstack_pop(&vs);
@@ -9603,6 +10522,87 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_PUT_ELEM: {
+        uint8_t feedback = sv_func_type_feedback(func)
+          ? sv_func_type_feedback(func)[bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
+        bool tagged_old_possible =
+          sv_tfb_put_needs_tagged_old_guard(feedback);
+        bool val_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
+        bool key_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool obj_is_num = vstack_prepare_num(
+          &vs, vs.sp - 3, ctx, jit_func, r_d_slot
+        );
+
+        if (specialize && !obj_is_num) {
+          MIR_reg_t val = vstack_pop(&vs);
+          MIR_reg_t key = vstack_pop(&vs);
+          MIR_reg_t obj = vstack_pop(&vs);
+          MIR_label_t bail_direct = MIR_new_label(ctx);
+          MIR_label_t done = MIR_new_label(ctx);
+          int index_site = mir_next_reg_site(&reg_site_n);
+          int element_site = mir_next_reg_site(&reg_site_n);
+
+          MIR_reg_t index = mir_emit_array_index_guard(
+            ctx, jit_func, key, vs.d_regs[vs.sp + 1], key_is_num,
+            r_d_slot, bail_direct, index_site
+          );
+          if (val_is_num)
+            mir_d_to_i64(
+              ctx, jit_func, val, vs.d_regs[vs.sp + 2], r_d_slot
+            );
+          else mir_emit_is_num_guard(ctx, jit_func, r_bool, val, bail_direct);
+
+          MIR_reg_t old_value = r_err_tmp;
+          MIR_reg_t data = mir_emit_dense_numeric_element_guard(
+            ctx, jit_func, obj, index, old_value,
+            true, bail_direct, element_site
+          );
+          MIR_label_t tagged_old_value = NULL;
+          MIR_label_t store = NULL;
+          if (tagged_old_possible) {
+            tagged_old_value = MIR_new_label(ctx);
+            store = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGT,
+                MIR_new_label_op(ctx, tagged_old_value),
+                MIR_new_reg_op(ctx, old_value),
+                MIR_new_uint_op(ctx, NANBOX_PREFIX)));
+            MIR_append_insn(ctx, jit_func, store);
+          } else {
+            mir_emit_is_num_guard(
+              ctx, jit_func, r_bool, old_value, bail_direct
+            );
+          }
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL, 0, data, index,
+                sizeof(ant_value_t)),
+              MIR_new_reg_op(ctx, val)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          if (tagged_old_possible) {
+            MIR_append_insn(ctx, jit_func, tagged_old_value);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGE,
+                MIR_new_label_op(ctx, bail_direct),
+                MIR_new_reg_op(ctx, old_value),
+                MIR_new_uint_op(ctx, ANT_SENTINEL_TAG)));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, store)));
+          }
+          MIR_append_insn(ctx, jit_func, bail_direct);
+          mir_emit_bailout_jump_typed(
+            ctx, jit_func, bc_off, vs.sp + 3, &bailout_ctx,
+            -1, false, -1, false
+          );
+          MIR_append_insn(ctx, jit_func, done);
+          break;
+        }
+
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, vs.sp - 3, ctx, jit_func, r_d_slot);
@@ -9685,6 +10685,60 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 (MIR_disp_t)((vs.sp - 1) * (int)sizeof(ant_value_t)), r_iter_roots, 0, 1),
               MIR_new_reg_op(ctx, dst)));
         }
+        break;
+      }
+
+      case OP_ITER_NEXT: {
+        int iter_base = vs.sp - 3;
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_ADD,
+            MIR_new_reg_op(ctx, r_iter_buf),
+            MIR_new_reg_op(ctx, r_iter_roots),
+            MIR_new_int_op(ctx,
+              (int64_t)iter_base * (int64_t)sizeof(ant_value_t))));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 7,
+            MIR_new_ref_op(ctx, iter_next_proto),
+            MIR_new_ref_op(ctx, imp_iter_next),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_iter_buf),
+            MIR_new_int_op(ctx, (int64_t)sv_get_u8(ip + 1))));
+        JIT_EMIT_THROW_IF_ERROR(r_err_tmp);
+        vstack_pop(&vs);
+        vstack_pop(&vs);
+        vstack_pop(&vs);
+        for (int i = 0; i < 5; i++) {
+          MIR_reg_t dst = vstack_push(&vs);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_mem_op(ctx, MIR_T_I64,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_iter_buf, 0, 1)));
+        }
+        if (vs.known_bool) vs.known_bool[vs.sp - 1] = true;
+        break;
+      }
+
+      case OP_ITER_CLOSE: {
+        int iter_base = vs.sp - 3;
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_ADD,
+            MIR_new_reg_op(ctx, r_iter_buf),
+            MIR_new_reg_op(ctx, r_iter_roots),
+            MIR_new_int_op(ctx,
+              (int64_t)iter_base * (int64_t)sizeof(ant_value_t))));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 5,
+            MIR_new_ref_op(ctx, destructure_close_proto),
+            MIR_new_ref_op(ctx, imp_dclose),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_iter_buf)));
+        vstack_pop(&vs);
+        vstack_pop(&vs);
+        vstack_pop(&vs);
         break;
       }
 
@@ -9834,6 +10888,24 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, r_args_buf),
             MIR_new_int_op(ctx, (int64_t)n)));
+        break;
+      }
+
+      case OP_REGEXP: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        MIR_reg_t flags = vstack_pop(&vs);
+        MIR_reg_t pattern = vstack_pop(&vs);
+        MIR_reg_t dst = vstack_push(&vs);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 7,
+            MIR_new_ref_op(ctx, regexp_proto),
+            MIR_new_ref_op(ctx, imp_regexp),
+            MIR_new_reg_op(ctx, dst),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, pattern),
+            MIR_new_reg_op(ctx, flags)));
         break;
       }
 
@@ -10424,151 +11496,137 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_SEQ: {
+      case OP_SEQ: case OP_EQ: case OP_NE: case OP_SNE: {
+        uint8_t feedback = sv_func_type_feedback(func)
+          ? sv_func_type_feedback(func)[bc_off] : 0;
+        bool numeric_only = sv_tfb_specialization_ready(feedback) &&
+          (feedback & SV_TFB_CLASS_MASK) == SV_TFB_NUM;
+        bool invert = op == OP_NE || op == OP_SNE;
         bool r_const = vs.has_const && vs.has_const[vs.sp - 1];
         bool l_const = vs.has_const && vs.has_const[vs.sp - 2];
         uint64_t cval = r_const ? vs.known_const[vs.sp - 1]
                       : l_const ? vs.known_const[vs.sp - 2] : 0;
-        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
-        MIR_reg_t rr = vstack_pop(&vs);
-        MIR_reg_t rl = vstack_pop(&vs);
-        MIR_reg_t dst = vstack_push(&vs);
-        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
-        if (r_const || l_const) {
-          MIR_reg_t other = r_const ? rl : rr;
-          MIR_label_t is_true = MIR_new_label(ctx);
-          MIR_label_t is_done = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_true),
-              MIR_new_reg_op(ctx, other),
-              MIR_new_uint_op(ctx, cval)));
-          mir_load_imm(ctx, jit_func, dst, js_false);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));
-          MIR_append_insn(ctx, jit_func, is_true);
-          mir_load_imm(ctx, jit_func, dst, js_true);
-          MIR_append_insn(ctx, jit_func, is_done);
-        } else {
-          mir_call_helper2(ctx, jit_func, dst,
-                           helper2_proto, imp_seq,
-                           r_vm, r_js, rl, rr);
-        }
-        break;
-      }
-
-      case OP_EQ: {
-        bool r_const = vs.has_const && vs.has_const[vs.sp - 1];
-        bool l_const = vs.has_const && vs.has_const[vs.sp - 2];
-        uint64_t cval = r_const ? vs.known_const[vs.sp - 1]
-                      : l_const ? vs.known_const[vs.sp - 2] : 0;
-        bool is_nullish = (r_const || l_const) &&
+        bool strict = op == OP_SEQ || op == OP_SNE;
+        bool is_nullish = !strict && (r_const || l_const) &&
           (cval == mkval(kTypeNull, 0) || cval == mkval(kTypeUndefined, 0));
-        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+
+        if (numeric_only) {
+          int right_idx = vs.sp - 1;
+          int left_idx = vs.sp - 2;
+          bool right_is_num = vstack_prepare_num(
+            &vs, right_idx, ctx, jit_func, r_d_slot
+          );
+          bool left_is_num = vstack_prepare_num(
+            &vs, left_idx, ctx, jit_func, r_d_slot
+          );
+          MIR_reg_t rr = vstack_pop(&vs);
+          MIR_reg_t rl = vstack_pop(&vs);
+          MIR_reg_t dst = vstack_push(&vs);
+          MIR_label_t eq_slow = MIR_new_label(ctx);
+          MIR_label_t done = MIR_new_label(ctx);
+
+          if (!left_is_num) {
+            mir_emit_is_num_guard(ctx, jit_func, r_bool, rl, eq_slow);
+            mir_i64_to_d(ctx, jit_func, vs.d_regs[left_idx], rl, r_d_slot);
+          }
+          if (!right_is_num) {
+            mir_emit_is_num_guard(ctx, jit_func, r_bool, rr, eq_slow);
+            mir_i64_to_d(ctx, jit_func, vs.d_regs[right_idx], rr, r_d_slot);
+          }
+          mir_emit_numeric_equality(
+            ctx, jit_func, vs.d_regs[left_idx], vs.d_regs[right_idx],
+            dst, r_bool, invert
+          );
+          if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, eq_slow);
+          if (left_is_num)
+            mir_d_to_i64(ctx, jit_func, rl, vs.d_regs[left_idx], r_d_slot);
+          if (right_is_num)
+            mir_d_to_i64(ctx, jit_func, rr, vs.d_regs[right_idx], r_d_slot);
+          MIR_item_t helper = op == OP_SEQ ? imp_seq
+            : op == OP_EQ ? imp_eq : op == OP_NE ? imp_ne : imp_sne;
+          mir_call_helper2(ctx, jit_func, dst,
+                           helper2_proto, helper,
+                           r_vm, r_js, rl, rr);
+          MIR_append_insn(ctx, jit_func, done);
+          break;
+        }
+
+        int right_idx = vs.sp - 1;
+        int left_idx = vs.sp - 2;
+        uint8_t right_type = vs.slot_type
+          ? vs.slot_type[right_idx] : SLOT_BOXED;
+        uint8_t left_type = vs.slot_type
+          ? vs.slot_type[left_idx] : SLOT_BOXED;
+        uint8_t singleton_other_type = r_const ? left_type : right_type;
+        bool known_number_vs_singleton = strict && (r_const || l_const) &&
+          singleton_other_type != SLOT_BOXED;
+        if (!known_number_vs_singleton) {
+          vstack_ensure_boxed(&vs, right_idx, ctx, jit_func, r_d_slot);
+          vstack_ensure_boxed(&vs, left_idx, ctx, jit_func, r_d_slot);
+        }
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t dst = vstack_push(&vs);
         if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
-        if (is_nullish) {
+
+        if (strict && (r_const || l_const)) {
+          if (known_number_vs_singleton) mir_load_imm(ctx, jit_func, dst, invert ? js_true : js_false);
+          else {
+            MIR_reg_t other = r_const ? rl : rr;
+            MIR_label_t matched = MIR_new_label(ctx);
+            MIR_label_t eq_done = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_BEQ,
+                MIR_new_label_op(ctx, matched),
+                MIR_new_reg_op(ctx, other),
+                MIR_new_uint_op(ctx, cval)));
+            mir_load_imm(ctx, jit_func, dst, invert ? js_true : js_false);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, eq_done)));
+            MIR_append_insn(ctx, jit_func, matched);
+            mir_load_imm(ctx, jit_func, dst, invert ? js_false : js_true);
+            MIR_append_insn(ctx, jit_func, eq_done);
+          }
+        } else if (strict) {
+          MIR_label_t eq_slow = MIR_new_label(ctx);
+          MIR_label_t eq_done = MIR_new_label(ctx);
+          mir_emit_strict_tagged_equality(
+            ctx, jit_func, rl, rr, dst, r_bool, invert, eq_slow, eq_done
+          );
+          MIR_append_insn(ctx, jit_func, eq_slow);
+          MIR_item_t helper = op == OP_SEQ ? imp_seq : imp_sne;
+          mir_call_helper2(ctx, jit_func, dst,
+                           helper2_proto, helper,
+                           r_vm, r_js, rl, rr);
+          MIR_append_insn(ctx, jit_func, eq_done);
+        } else if (is_nullish) {
           MIR_reg_t other = r_const ? rl : rr;
-          MIR_label_t is_true = MIR_new_label(ctx);
+          MIR_label_t matched = MIR_new_label(ctx);
           MIR_label_t is_done = MIR_new_label(ctx);
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_true),
+              MIR_new_label_op(ctx, matched),
               MIR_new_reg_op(ctx, other),
               MIR_new_uint_op(ctx, mkval(kTypeNull, 0))));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_true),
+              MIR_new_label_op(ctx, matched),
               MIR_new_reg_op(ctx, other),
               MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
-          mir_load_imm(ctx, jit_func, dst, js_false);
+          mir_load_imm(ctx, jit_func, dst, invert ? js_true : js_false);
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));
-          MIR_append_insn(ctx, jit_func, is_true);
-          mir_load_imm(ctx, jit_func, dst, js_true);
+          MIR_append_insn(ctx, jit_func, matched);
+          mir_load_imm(ctx, jit_func, dst, invert ? js_false : js_true);
           MIR_append_insn(ctx, jit_func, is_done);
         } else {
+          MIR_item_t helper = op == OP_SEQ ? imp_seq
+            : op == OP_EQ ? imp_eq : op == OP_NE ? imp_ne : imp_sne;
           mir_call_helper2(ctx, jit_func, dst,
-                           helper2_proto, imp_eq,
-                           r_vm, r_js, rl, rr);
-        }
-        break;
-      }
-
-      case OP_NE: {
-        bool r_const = vs.has_const && vs.has_const[vs.sp - 1];
-        bool l_const = vs.has_const && vs.has_const[vs.sp - 2];
-        uint64_t cval = r_const ? vs.known_const[vs.sp - 1]
-                      : l_const ? vs.known_const[vs.sp - 2] : 0;
-        bool is_nullish = (r_const || l_const) &&
-          (cval == mkval(kTypeNull, 0) || cval == mkval(kTypeUndefined, 0));
-        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
-        MIR_reg_t rr = vstack_pop(&vs);
-        MIR_reg_t rl = vstack_pop(&vs);
-        MIR_reg_t dst = vstack_push(&vs);
-        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
-        if (is_nullish) {
-          MIR_reg_t other = r_const ? rl : rr;
-          MIR_label_t is_false = MIR_new_label(ctx);
-          MIR_label_t is_done = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_false),
-              MIR_new_reg_op(ctx, other),
-              MIR_new_uint_op(ctx, mkval(kTypeNull, 0))));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_false),
-              MIR_new_reg_op(ctx, other),
-              MIR_new_uint_op(ctx, mkval(kTypeUndefined, 0))));
-          mir_load_imm(ctx, jit_func, dst, js_true);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));
-          MIR_append_insn(ctx, jit_func, is_false);
-          mir_load_imm(ctx, jit_func, dst, js_false);
-          MIR_append_insn(ctx, jit_func, is_done);
-        } else {
-          mir_call_helper2(ctx, jit_func, dst,
-                           helper2_proto, imp_ne,
-                           r_vm, r_js, rl, rr);
-        }
-        break;
-      }
-
-      case OP_SNE: {
-        bool r_const = vs.has_const && vs.has_const[vs.sp - 1];
-        bool l_const = vs.has_const && vs.has_const[vs.sp - 2];
-        uint64_t cval = r_const ? vs.known_const[vs.sp - 1]
-                      : l_const ? vs.known_const[vs.sp - 2] : 0;
-        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
-        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
-        MIR_reg_t rr = vstack_pop(&vs);
-        MIR_reg_t rl = vstack_pop(&vs);
-        MIR_reg_t dst = vstack_push(&vs);
-        if (vs.known_bool) vs.known_bool[vs.sp - 1] = 1;
-        if (r_const || l_const) {
-          MIR_reg_t other = r_const ? rl : rr;
-          MIR_label_t is_false = MIR_new_label(ctx);
-          MIR_label_t is_done = MIR_new_label(ctx);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BEQ,
-              MIR_new_label_op(ctx, is_false),
-              MIR_new_reg_op(ctx, other),
-              MIR_new_uint_op(ctx, cval)));
-          mir_load_imm(ctx, jit_func, dst, js_true);
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, is_done)));
-          MIR_append_insn(ctx, jit_func, is_false);
-          mir_load_imm(ctx, jit_func, dst, js_false);
-          MIR_append_insn(ctx, jit_func, is_done);
-        } else {
-          mir_call_helper2(ctx, jit_func, dst,
-                           helper2_proto, imp_sne,
+                           helper2_proto, helper,
                            r_vm, r_js, rl, rr);
         }
         break;
@@ -10579,8 +11637,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -10699,8 +11761,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
         bool fb_never_num = fb && !(fb & SV_TFB_NUM);
 
-        bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
-        bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
+        bool l_is_num = vstack_prepare_num(
+          &vs, vs.sp - 2, ctx, jit_func, r_d_slot
+        );
+        bool r_is_num = vstack_prepare_num(
+          &vs, vs.sp - 1, ctx, jit_func, r_d_slot
+        );
 
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
@@ -10815,8 +11881,50 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_BAND: case OP_BOR: case OP_BXOR:
       case OP_SHL:  case OP_SHR: case OP_USHR: {
+        uint8_t feedback = sv_func_type_feedback(func)
+          ? sv_func_type_feedback(func)[bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
         int rr_idx = vs.sp - 1;
         int rl_idx = vs.sp - 2;
+        uint8_t l_type = vs.slot_type ? vs.slot_type[rl_idx] : SLOT_BOXED;
+        uint8_t r_type = vs.slot_type ? vs.slot_type[rr_idx] : SLOT_BOXED;
+        bool l_is_num = l_type == SLOT_NUM;
+        bool r_is_num = r_type == SLOT_NUM;
+        bool l_is_i32 = l_type == SLOT_I32;
+        bool r_is_i32 = r_type == SLOT_I32;
+
+        if (specialize) {
+          MIR_reg_t rr = vstack_pop(&vs);
+          MIR_reg_t rl = vstack_pop(&vs);
+          MIR_reg_t rd = vstack_push(&vs);
+          MIR_label_t bail_direct = MIR_new_label(ctx);
+          MIR_label_t done = MIR_new_label(ctx);
+          int left_site = mir_next_reg_site(&reg_site_n);
+          int right_site = mir_next_reg_site(&reg_site_n);
+          int result_site = mir_next_reg_site(&reg_site_n);
+          MIR_reg_t left = mir_emit_word32_guard(
+            ctx, jit_func, rl, vs.d_regs[vs.sp - 1], l_is_num, l_is_i32,
+            r_d_slot, bail_direct, left_site
+          );
+          MIR_reg_t right = mir_emit_word32_guard(
+            ctx, jit_func, rr, vs.d_regs[vs.sp], r_is_num, r_is_i32,
+            r_d_slot, bail_direct, right_site
+          );
+          mir_emit_word32_binary(
+            ctx, jit_func, op, left, right, rd, 0, false, result_site
+          );
+          vs.slot_type[vs.sp - 1] = SLOT_I32;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, bail_direct);
+          mir_emit_bailout_jump_typed(
+            ctx, jit_func, bc_off, vs.sp + 1, &bailout_ctx,
+            vs.sp - 1, l_type, vs.sp, r_type
+          );
+          MIR_append_insn(ctx, jit_func, done);
+          break;
+        }
+
         vstack_ensure_boxed(&vs, rl_idx, ctx, jit_func, r_d_slot);
         vstack_ensure_boxed(&vs, rr_idx, ctx, jit_func, r_d_slot);
         MIR_reg_t rr = vstack_pop(&vs);
@@ -10843,6 +11951,46 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_BNOT: {
+        uint8_t feedback = sv_func_type_feedback(func)
+          ? sv_func_type_feedback(func)[bc_off] : 0;
+        bool specialize = sv_tfb_specialization_ready(feedback);
+        uint8_t input_type = vs.slot_type
+          ? vs.slot_type[vs.sp - 1] : SLOT_BOXED;
+        bool input_is_num = input_type == SLOT_NUM;
+        bool input_is_i32 = input_type == SLOT_I32;
+        vstack_clear_value_info(&vs, vs.sp - 1);
+
+        if (specialize) {
+          MIR_reg_t value = vstack_top(&vs);
+          MIR_label_t bail_direct = MIR_new_label(ctx);
+          MIR_label_t done = MIR_new_label(ctx);
+          int input_site = mir_next_reg_site(&reg_site_n);
+          MIR_reg_t integer = mir_emit_word32_guard(
+            ctx, jit_func, value, vs.d_regs[vs.sp - 1],
+            input_is_num, input_is_i32,
+            r_d_slot, bail_direct, input_site
+          );
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_XORS,
+              MIR_new_reg_op(ctx, value),
+              MIR_new_reg_op(ctx, integer),
+              MIR_new_int_op(ctx, -1)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_EXT32,
+              MIR_new_reg_op(ctx, value),
+              MIR_new_reg_op(ctx, value)));
+          vs.slot_type[vs.sp - 1] = SLOT_I32;
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+          MIR_append_insn(ctx, jit_func, bail_direct);
+          mir_emit_bailout_jump_typed(
+            ctx, jit_func, bc_off, vs.sp, &bailout_ctx,
+            vs.sp - 1, input_type, -1, SLOT_BOXED
+          );
+          MIR_append_insn(ctx, jit_func, done);
+          break;
+        }
+
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t rs = vstack_top(&vs);
         MIR_append_insn(ctx, jit_func,
@@ -10859,12 +12007,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_label_op(ctx, no_bail),
             MIR_new_reg_op(ctx, rs),
             MIR_new_uint_op(ctx, (uint64_t)SV_JIT_BAILOUT)));
-        for (int i = 0; i < vs.sp; i++)
+        for (int i = 0; i < vs.sp; i++) {
+          mir_emit_slot_boxed(
+            ctx, jit_func, vs.regs[i], vs.d_regs[i],
+            vs.slot_type ? vs.slot_type[i] : SLOT_BOXED, r_d_slot
+          );
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
                 (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
+        }
         mir_emit_dnum_rebox(ctx, jit_func, &bailout_ctx);
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
@@ -11038,6 +12191,186 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_call_this),
             MIR_new_reg_op(ctx, r_arg_arr),
             MIR_new_int_op(ctx, (int64_t)call_argc)));
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        JIT_EMIT_THROW_IF_ERROR(r_call_res);
+        break;
+      }
+
+      case OP_CALL_MAP_TEMPLATE: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        uint32_t desc_idx = sv_get_u32(ip + 1);
+        const sv_map_template_desc_t *desc =
+          sv_map_template_desc_at(func, desc_idx);
+        if (!desc || vs.sp < desc->substitution_count + 2) {
+          ok = false;
+          break;
+        }
+
+        MIR_reg_t r_values[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
+        for (int i = desc->substitution_count - 1; i >= 0; i--)
+          r_values[i] = vstack_pop(&vs);
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_reg_t r_call_res = vstack_push(&vs);
+        MIR_op_t value_ops[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+        };
+        for (uint8_t i = 0; i < desc->substitution_count; i++)
+          value_ops[i] = MIR_new_reg_op(ctx, r_values[i]);
+
+        if (sv_map_template_is_canonical_pair_get(desc)) {
+          const sv_atom_t *separator = &desc->segments[1];
+          MIR_label_t fast_done = MIR_new_label(ctx);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, r_bailout_val),
+              MIR_new_reg_op(ctx, r_call_this)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_numeric_pair_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_numeric_pair_fast),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
+              MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_BNE,
+              MIR_new_label_op(ctx, fast_done),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_uint_op(ctx, (uint64_t)SV_JIT_BAILOUT)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 11,
+              MIR_new_ref_op(ctx, call_map_template_proto),
+              MIR_new_ref_op(ctx, imp_call_map_template),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_bailout_val),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+          MIR_append_insn(ctx, jit_func, fast_done);
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 11,
+              MIR_new_ref_op(ctx, call_map_template_proto),
+              MIR_new_ref_op(ctx, imp_call_map_template),
+              MIR_new_reg_op(ctx, r_call_res),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+        }
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        JIT_EMIT_THROW_IF_ERROR(r_call_res);
+        break;
+      }
+
+      case OP_TAIL_MAP_TEMPLATE: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        uint32_t desc_idx = sv_get_u32(ip + 1);
+        int pre_op_sp = vs.sp;
+        const sv_map_template_desc_t *desc =
+          sv_map_template_desc_at(func, desc_idx);
+        if (!desc || vs.sp < desc->substitution_count + 2) {
+          ok = false;
+          break;
+        }
+
+        MIR_reg_t r_values[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {0};
+        for (int i = desc->substitution_count - 1; i >= 0; i--)
+          r_values[i] = vstack_pop(&vs);
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_op_t value_ops[SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS] = {
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+          MIR_new_uint_op(ctx, 0),
+        };
+        for (uint8_t i = 0; i < desc->substitution_count; i++)
+          value_ops[i] = MIR_new_reg_op(ctx, r_values[i]);
+
+        if (sv_map_template_is_canonical_pair_get(desc)) {
+          const sv_atom_t *separator = &desc->segments[1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_numeric_pair_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_numeric_pair_fast),
+              MIR_new_reg_op(ctx, r_err_tmp),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)separator->str),
+              MIR_new_uint_op(ctx, (uint64_t)separator->len)));
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 10,
+              MIR_new_ref_op(ctx, map_template_fast_proto),
+              MIR_new_ref_op(ctx, imp_map_template_fast),
+              MIR_new_reg_op(ctx, r_err_tmp),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_reg_op(ctx, r_call_func),
+              MIR_new_reg_op(ctx, r_call_this),
+              value_ops[0], value_ops[1], value_ops[2],
+              MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)desc)));
+        }
+
+        mir_emit_bailout_check(
+          ctx, jit_func, r_err_tmp, 0,
+          bc_off, pre_op_sp, &bailout_ctx);
+        JIT_EMIT_EXIT_RET(MIR_new_reg_op(ctx, r_err_tmp));
+        break;
+      }
+
+      case OP_RE_EXEC_TRUTHY:
+      case OP_RE_EXEC_DISCARD: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        if (vs.sp < 3) { ok = false; break; }
+
+        MIR_reg_t r_arg = vstack_pop(&vs);
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_reg_t r_call_res = op == OP_RE_EXEC_TRUTHY
+          ? vstack_push(&vs) : r_err_tmp;
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 8,
+            MIR_new_ref_op(ctx, regexp_exec_truthy_proto),
+            MIR_new_ref_op(ctx, imp_regexp_exec_truthy),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_reg_op(ctx, r_arg)));
 
         if (has_captures) {
           for (int i = 0; i < n_locals; i++)
@@ -11284,12 +12617,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               inl_arg_regs, (int)call_argc,
               NULL, NULL,
               r_inl_res, cm_devirt_slow, cm_devirt_join,
-              r_bool, &r_d_slot, mcn,
+              r_bool, &r_d_slot, mcn, &reg_site_n,
               r_inl_cl, r_inl_this, r_inl_nt, r_inl_sup,
               r_vm, r_js, r_ic_epoch_val,
               helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
               gf_proto, imp_get_field_inline,
-              gg_proto, imp_gg,
               special_obj_proto, imp_special_obj,
               &inline_ext);
 
@@ -12217,6 +13549,9 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.locals    = osr_locals;
   vm->jit_osr.n_locals  = nl;
   vm->jit_osr.lp        = frame->lp;
+  vm->jit_osr.vstack    = frame->lp + nl;
+  vm->jit_osr.vstack_sp =
+    vm->sp - (int)(vm->jit_osr.vstack - vm->stack);
 
   func->back_edge_count = 0;
   sv_jit_enter(js);

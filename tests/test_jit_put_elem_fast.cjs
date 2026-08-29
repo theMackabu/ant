@@ -12,9 +12,20 @@ function read(array, index) {
   return array[index];
 }
 
+function writeMixedExisting(array, count) {
+  for (let i = 0; i < count; i++) array[i & 3] = i + 0.25;
+}
+
 const hot = [0, 1, 2];
 for (let i = 0; i < 500; i++) write(hot, 1, i);
 assertEq(hot[1], 499, "hot dense write");
+
+const mixedExisting = ["old", true, null, {}];
+writeMixedExisting(mixedExisting, 500);
+assertEq(mixedExisting[0], 496.25, "string slot overwrite");
+assertEq(mixedExisting[1], 497.25, "boolean slot overwrite");
+assertEq(mixedExisting[2], 498.25, "null slot overwrite");
+assertEq(mixedExisting[3], 499.25, "object slot overwrite");
 
 const growing = [];
 for (let i = 0; i < 500; i++) write(growing, i, i + 1);
