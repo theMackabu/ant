@@ -7,6 +7,13 @@
 #include "types.h"
 #include "modules/url.h"
 
+typedef uint8_t response_body_storage_t;
+enum response_body_storage {
+  RESPONSE_BODY_STORAGE_NONE = 0,
+  RESPONSE_BODY_STORAGE_OWNED,
+  RESPONSE_BODY_STORAGE_BORROWED_STRING,
+};
+
 typedef struct {
   char *type;
   url_state_t url;
@@ -17,6 +24,7 @@ typedef struct {
   ant_value_t websocket;
   int url_list_size;
   int status;
+  response_body_storage_t body_storage;
   bool has_url;
   bool body_is_stream;
   bool has_body;
