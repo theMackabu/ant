@@ -1,3 +1,4 @@
 tests/** linguist-detectable=false
 examples/** -linguist-documentation
 *.html linguist-detectable=false
+vendor/node-compat/** linguist-vendored=true

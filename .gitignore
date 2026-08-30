@@ -19,6 +19,9 @@
 /todo/*
 /docs/private
 
+/differential-output
+/node-compat-output
+
 /packages/sandbox/out
 /packages/sandbox/.cache
 /packages/installer/dist
@@ -35,13 +38,18 @@ node_modules
 !/tests/fixtures/compile-app/node_modules
 
 /wpt
-/tools
+/tools/*
 /zoo.sh
 /test262.sh
+
+!/tools/arm64-bench/
+!/tools/arm64-bench/**
 
 /vendor/*/
 /vendor/.wraplock
 !/vendor/packagefiles
+!/vendor/node-compat/
+!/vendor/node-compat/**
 
 *.todo
 *.trace

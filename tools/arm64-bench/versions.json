@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "githubRunner": {
+    "version": "2.337.0",
+    "url": "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-osx-arm64-2.337.0.tar.gz",
+    "sha256": "5a2cd92908a93d7276a194e1de6008099f3e7946f3f8e14aa7a1a7b4a31fdec2"
+  }
+}
