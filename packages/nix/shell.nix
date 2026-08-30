@@ -24,6 +24,7 @@ pkgs.mkShellNoCC ({
     toolchain.bintools
     toolchain.clang
     toolchain.compilerRt
+    toolchain.llvm
   ];
 
   CFLAGS = optArgs;
