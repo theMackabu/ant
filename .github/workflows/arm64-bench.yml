@@ -1,0 +1,114 @@
+name: ARM64 Benchmarks
+
+on:
+  schedule:
+    - cron: '20 0 * * *'
+      timezone: America/Los_Angeles
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: Complete samples per engine
+        required: false
+        default: '5'
+        type: string
+      publish:
+        description: Publish the result to the benchmark API
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-bench
+  cancel-in-progress: false
+
+jobs:
+  bench-v8:
+    if: github.repository == 'theMackabu/ant'
+    runs-on: [self-hosted, macOS, ARM64, arm64-bench]
+    timeout-minutes: 720
+    env:
+      PATH: /nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+      ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
+      ANT_BENCH_NOT_BEFORE_LOCAL: '00:40'
+      BENCHMARK_API_URL: ${{ vars.BENCHMARK_API_URL || 'https://bench.antjs.org/v1/runs' }}
+
+    steps:
+      - name: Checkout Ant
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Build cached Nix/PGO/LTO Ant
+        run: caffeinate -dimsu tools/arm64-bench/build-ant.sh
+
+      - name: Synchronize current comparison engines
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: caffeinate -dimsu tools/arm64-bench/sync-engines.sh
+
+      - name: Verify resolved comparison engines
+        run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ENGINE_ROOT"
+
+      - name: Cool down host until 00:40 Pacific
+        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
+
+      - name: Run bench-v8 matrix
+        id: benchmark
+        env:
+          SAMPLES: ${{ inputs.samples || '5' }}
+        run: |
+          set +e
+          caffeinate -dimsu node tools/arm64-bench/run.mjs \
+            --engine-root "$ENGINE_ROOT" \
+            --samples "$SAMPLES" \
+            --output "$RUNNER_TEMP/arm64-bench-result.json" \
+            --strict
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish result
+        if: ${{ always() && (github.event_name == 'schedule' || inputs.publish) }}
+        env:
+          BENCHMARK_PUBLISH_TOKEN: ${{ secrets.BENCHMARK_PUBLISH_TOKEN }}
+        run: |
+          test -s "$RUNNER_TEMP/arm64-bench-result.json"
+          node tools/arm64-bench/publish.mjs "$RUNNER_TEMP/arm64-bench-result.json"
+
+      - name: Add job summary
+        if: ${{ always() }}
+        run: |
+          test -s "$RUNNER_TEMP/arm64-bench-result.json" || exit 0
+          {
+            echo '## ARM64 bench-v8'
+            echo
+            echo '| Engine | Mode | Channel | Resolved version | Status | Median | MAD | Samples |'
+            echo '|---|---|---|---|---|---:|---:|---:|'
+            jq -r '.engines[] | [
+              .name,
+              .mode,
+              .channel,
+              .resolvedVersion,
+              .status,
+              (.summary.score.median // "N/A"),
+              (.summary.score.mad // "N/A"),
+              .summary.sampleCount
+            ] | "| \(.[0]) | `\(.[1])` | `\(.[2])` | `\(.[3])` | \(.[4]) | \(.[5]) | \(.[6]) | \(.[7]) |"' "$RUNNER_TEMP/arm64-bench-result.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: arm64-bench-${{ github.run_id }}
+          path: ${{ runner.temp }}/arm64-bench-result.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce benchmark success
+        if: ${{ always() && steps.benchmark.outputs.status != '0' }}
+        run: exit 1

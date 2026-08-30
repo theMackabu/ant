@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "suite": "bench-v8",
+  "protocol": 1,
+  "engines": [
+    {
+      "id": "ant",
+      "name": "Ant",
+      "mode": "default-jit",
+      "executable": "{engineRoot}/ant-bench-build/ant",
+      "args": [],
+      "versionArgs": ["--version-raw"]
+    },
+    {
+      "id": "boa",
+      "name": "Boa",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/boa/current/boa",
+      "args": [],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "v8-jitless",
+      "name": "V8 jitless",
+      "mode": "jitless",
+      "executable": "{engineRoot}/engines/v8-jitless/current/d8",
+      "args": ["--jitless"],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "sm-jitless",
+      "name": "SpiderMonkey jitless",
+      "mode": "jitless",
+      "executable": "{engineRoot}/engines/sm-jitless/current/js",
+      "args": ["--no-jit-backend"],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "kiesel",
+      "name": "Kiesel",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/kiesel/current/kiesel",
+      "args": [],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "libjs",
+      "name": "LibJS",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/libjs/current/js",
+      "args": ["--disable-ansi-colors", "--raw-strings"],
+      "versionArgs": ["--version"]
+    },
+    {
+      "id": "duktape",
+      "name": "Duktape",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/duktape/current/duk",
+      "args": [],
+      "versionArgs": []
+    },
+    {
+      "id": "quickjs",
+      "name": "QuickJS",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/quickjs/current/qjs",
+      "args": ["--script"],
+      "versionArgs": []
+    },
+    {
+      "id": "porffor",
+      "name": "Porffor",
+      "mode": "default",
+      "executable": "{engineRoot}/engines/porffor/current/porf",
+      "args": [],
+      "versionArgs": ["--version"]
+    }
+  ]
+}

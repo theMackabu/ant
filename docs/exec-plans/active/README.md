@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)
 - [Dynamic Property Performance](dynamic-property-perf.md)
   - [Dynamic Property Performance Extras](dynamic-property-perf-extras.md)
