@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 720
     env:
       PATH: /Users/remote/.local/share/mise/installs/node/latest/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-      ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
+      ANT_BENCH_ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
       BENCHMARK_API_URL: ${{ vars.BENCHMARK_API_URL || 'https://bench.antjs.org/v1/runs' }}
 
     steps:
@@ -50,7 +50,7 @@ jobs:
         run: caffeinate -dimsu tools/arm64-bench/sync-engines.sh
 
       - name: Verify resolved comparison engines
-        run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ENGINE_ROOT"
+        run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ANT_BENCH_ENGINE_ROOT"
 
       - name: Cool down host until 00:40 Pacific
         if: ${{ github.event_name == 'schedule' }}
@@ -72,7 +72,7 @@ jobs:
         run: |
           set +e
           caffeinate -dimsu node tools/arm64-bench/run.mjs \
-            --engine-root "$ENGINE_ROOT" \
+            --engine-root "$ANT_BENCH_ENGINE_ROOT" \
             --samples "$SAMPLES" \
             --output "$RUNNER_TEMP/arm64-bench-result.json" \
             --strict
