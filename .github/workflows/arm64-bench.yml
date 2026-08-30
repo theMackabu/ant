@@ -30,7 +30,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, arm64-bench]
     timeout-minutes: 720
     env:
-      PATH: /nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+      PATH: /Users/remote/.local/share/mise/installs/node/latest/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
       ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
       BENCHMARK_API_URL: ${{ vars.BENCHMARK_API_URL || 'https://bench.antjs.org/v1/runs' }}
 
