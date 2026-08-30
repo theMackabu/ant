@@ -139,7 +139,7 @@ traced/invalidated key.
 | `src/modules/fetch.c`     | **Ported with Headers**                              | Raw HTTP response headers now use the literal-byte append path, avoiding transient JS strings and preserving obs-text bytes.                                                                                                                                                                                                                                                                            |
 | `src/modules/headers.c`   | **Ported except pending data**                       | One-allocation entries, the inline first entry, fallible primitives, and ByteString-preserving JS/HTTP boundaries landed with focused and wire-level coverage. Native pending data remains deferred with lazy Response materialization.                                                                                                                                                                     |
 | `src/modules/path.c`      | **Port separately after Node differential tests**    | The PR fixes `relative(resolve(from), resolve(to))` behavior and Windows drive-relative/rooted cases. Current master again normalizes the raw inputs instead of resolving them against cwd, so the compatibility issue remains. It is not an Elysia optimization.                                                                                                                                         |
-| `src/modules/regex.c`     | **Superseded; mine tests only**                      | The file has undergone a much larger cache/statics/execution rewrite. Current master already caches validity and handles current UTF/lastIndex machinery. The old split fast path required multiple follow-up fixes, so porting it would reintroduce obsolete assumptions.                                                                                                                                |
+| `src/modules/regex.c`     | **Targeted semantics ported; broad rewrite superseded** | Inherited `exec` lookup, `@@replace` index coercion/clamping, and the false-positive-prone `RGI_Emoji` expansion were fixed on 2026-08-29 using the current lookup, UTF-16, and pattern-translation machinery. The old cache/execution rewrite and split fast path remain superseded; the latter required multiple follow-up fixes and would reintroduce obsolete assumptions.                                |
 | `src/modules/request.c`   | **Ported**                                           | Rooted lazy caches for `method` and `url`, slot preallocation on every Request creation path, and redirect invalidation landed on 2026-08-29. A profile-matched request benchmark remains required before making a speed claim.                                                                                                                                                             |
 | `src/modules/response.c`  | **Ported in part**                                    | Direct immutable JS string bodies now borrow storage through a rooted owner and explicit ownership state; clone and allocation-pressure tests pass. Lazy Headers and direct init-shape assumptions remain deferred pending profile evidence and a complete fallible caller contract.                                                                                                                        |
 | `src/modules/server.c`    | **Do not port old hunk**                             | The PR updates calls to a now-fallible `response_get_headers(js, obj)` but does not check the returned error before enumeration/serialization. A redesigned Response API must make these two paths propagate failure before any use.                                                                                                                                                                      |
@@ -226,6 +226,9 @@ without measurements.
   `maid knowledge` all passed.
 - Latin-1/ASCII Buffer semantics and detached-ArrayBuffer `TypeError` assertions
   pass all 215 focused checks under both Ant and Node.
+- Inherited RegExp `exec` overrides and custom `@@replace` result-index
+  coercion, clamping, errors, UTF-16 slicing, and representative RGI emoji
+  string-property behavior pass all 45 focused checks under both Ant and Node.
 - LLVM discarded stale PGO counters for changed functions, so the resulting
   binary is not suitable for a comparative performance claim. No benchmark
   result is recorded here.
@@ -252,3 +255,9 @@ without measurements.
 - 2026-08-29: Recreated the PR's Latin-1/ASCII Buffer semantics with a targeted
   current-tree encoder and portable detached-ArrayBuffer `TypeError` checks;
   did not port the stale generalized encoder rewrite.
+- 2026-08-29: Ported only the still-valid RegExp semantic slices: prototype-aware
+  `exec` lookup and spec-shaped replacement-index handling. Kept the current
+  cache/execution architecture and rejected the old split fast path.
+- 2026-08-29: Tightened the existing structural `RGI_Emoji` translation so
+  keycap bases cannot match alone and keycap, modifier, tag, presentation, and
+  common ZWJ sequences retain support without affecting ordinary regexes.

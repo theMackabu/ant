@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <limits.h>
+#include <math.h>
 #include <pcre2.h>
 
 #include "silver/engine.h"
@@ -794,7 +795,16 @@ static void js_to_pcre2_pattern_append(
             {"Emoji_Keycap_Sequence",
              "(?:\\x{23}\\x{fe0f}\\x{20e3}|\\x{2a}\\x{fe0f}\\x{20e3}|[\\x{30}-\\x{39}]\\x{fe0f}\\x{20e3})"},
             {"RGI_Emoji",
-             "(?:[\\x{1f1e6}-\\x{1f1ff}]{2}|(?:\\p{Emoji}[\\x{1f3fb}-\\x{1f3ff}]?\\x{200d})+\\p{Emoji}[\\x{1f3fb}-\\x{1f3ff}]?|\\p{Emoji}[\\x{1f3fb}-\\x{1f3ff}]|\\p{Emoji}\\x{fe0f}?)"},
+             "(?:"
+             "[\\x{1f1e6}-\\x{1f1ff}]{2}"
+             "|(?:(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier}|(?!\\p{Emoji_Modifier})\\p{Emoji_Presentation}|(?![#*0-9]|\\p{Emoji_Presentation})\\p{Emoji}\\x{fe0f})\\x{200d})+"
+             "(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier}|(?!\\p{Emoji_Modifier})\\p{Emoji_Presentation}|(?![#*0-9]|\\p{Emoji_Presentation})\\p{Emoji}\\x{fe0f})"
+             "|\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier}"
+             "|[#*0-9]\\x{fe0f}\\x{20e3}"
+             "|\\x{1f3f4}\\x{e0067}\\x{e0062}(?:\\x{e0065}\\x{e006e}\\x{e0067}|\\x{e0073}\\x{e0063}\\x{e0074}|\\x{e0077}\\x{e006c}\\x{e0073})\\x{e007f}"
+             "|\\p{Emoji_Presentation}"
+             "|(?![#*0-9]|\\p{Emoji_Presentation})\\p{Emoji}\\x{fe0f}"
+             ")"},
           };
           for (size_t m = 0; m < sizeof(sprops)/sizeof(sprops[0]); m++) {
             if (strlen(sprops[m].name) == prop_len && memcmp(sprops[m].name, prop, prop_len) == 0) {
@@ -2331,7 +2341,7 @@ static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value
 }
 
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str) {
-  ant_value_t exec_fn = js_get(js, rx, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, rx, "exec");
   if (is_err(exec_fn)) return exec_fn;
   return regexp_exec_with_exec_fn(js, rx, str, exec_fn);
 }
@@ -2363,7 +2373,7 @@ static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) 
     return js_mkerr_typed(js, JS_ERR_TYPE, "test called on non-object");
   ant_value_t str_arg = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
   if (is_err(str_arg)) return str_arg;
-  ant_value_t exec_fn = js_get(js, regexp, "exec");
+  ant_value_t exec_fn = js_getprop_fallback(js, regexp, "exec");
   if (is_err(exec_fn)) return exec_fn;
 
   ant_value_t result;
@@ -3271,6 +3281,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
   }
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_units_len = str_utf16_len(js, str);
   size_t buf_cap = str_len + 256;
   char *buf = malloc(buf_cap);
   if (!buf) return js_mkerr(js, "oom");
@@ -3291,15 +3302,32 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     ant_value_t result = js_arr_get(js, results, i);
     ant_value_t matched = js_tostring_val(js, js_arr_get(js, result, 0));
     if (is_err(matched)) { free(buf); return matched; }
-    ant_offset_t matched_len; vstr(js, matched, &matched_len);
 
     ant_value_t pos_val = js_getprop_fallback(js, result, "index");
-    ant_offset_t position = 0;
-    if (!is_err(pos_val) && vtype(pos_val) == kTypeNumber) {
-      double d = tod(pos_val);
-      position = d < 0 ? 0 : (ant_offset_t)d;
+    if (is_err(pos_val)) { free(buf); return pos_val; }
+    if (is_object_type(pos_val) || vtype(pos_val) == kTypeBuiltin) {
+      pos_val = js_to_primitive(js, pos_val, 2);
+      if (is_err(pos_val)) { free(buf); return pos_val; }
     }
-    if (position > str_len) position = str_len;
+    if (vtype(pos_val) == kTypeBigInt || vtype(pos_val) == kTypeSymbol) {
+      free(buf);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert value to a number");
+    }
+
+    double position_units = js_to_number(js, pos_val);
+    position_units = isnan(position_units) ? 0 : trunc(position_units);
+    if (position_units < 0) position_units = 0;
+    if (position_units > (double)str_units_len)
+      position_units = (double)str_units_len;
+
+    str_off = vstr(js, str, &str_len);
+    int position_bytes = utf16_index_to_byte_offset(
+      (const char *)(uintptr_t)str_off, (size_t)str_len,
+      (size_t)position_units, NULL
+    );
+    ant_offset_t position = position_bytes < 0
+      ? str_len
+      : (ant_offset_t)position_bytes;
 
     ant_value_t replacement;
     if (func_replace) {
@@ -3320,7 +3348,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
       int ca = 0;
       for (ant_offset_t c = 0; c < ncaptures; c++)
         call_args[ca++] = js_arr_get(js, result, c);
-      call_args[ca++] = tov((double)position);
+      call_args[ca++] = tov(position_units);
       call_args[ca++] = str;
       replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, false);
       if (call_args != call_args_inline) free(call_args);
@@ -3365,7 +3393,17 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
           return js_mkerr(js, "oom");
         }
       }
-      next_src_pos = position + matched_len;
+      double match_end_units = position_units + (double)str_utf16_len(js, matched);
+      if (match_end_units > (double)str_units_len)
+        match_end_units = (double)str_units_len;
+      str_off = vstr(js, str, &str_len);
+      int match_end_bytes = utf16_index_to_byte_offset(
+        (const char *)(uintptr_t)str_off, (size_t)str_len,
+        (size_t)match_end_units, NULL
+      );
+      next_src_pos = match_end_bytes < 0
+        ? str_len
+        : (ant_offset_t)match_end_bytes;
     }
   }
 
