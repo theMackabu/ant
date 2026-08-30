@@ -37,8 +37,9 @@ publishes durable, queryable results through a public API.
 - Configure and compile Ant through the repository's pinned `nix develop`
   environment with the checked-in Darwin ARM64 PGO profile and full LTO. Keep
   the incremental Meson tree, Meson package cache, and ccache outside the
-  cleaned Actions checkout. Never begin measurement before 00:40 local, and
-  require at least five minutes of cooldown after any delayed build.
+  cleaned Actions checkout. Scheduled runs never begin measurement before
+  00:40 local. Manual dispatches use a fixed five-minute cooldown instead of
+  the scheduled clock gate.
 - The GitHub runner label is `arm64-bench`; hardware marketing names are not
   part of scheduling or public machine identity.
 - The upload endpoint is authenticated. Read endpoints are public and CORS
@@ -101,6 +102,9 @@ dispatches remain distinct measurements.
 - 2026-08-29: Add Porffor to the cohort while retaining LibJS. Follow V8 Canary,
   SpiderMonkey development releases, Kiesel and LibJS main snapshots, and the
   latest releases of Boa, Duktape, QuickJS, and Porffor.
+- 2026-08-29: Keep the 00:40 Pacific measurement gate exclusive to scheduled
+  runs. Manual dispatches use a fixed five-minute cooldown so an operator can
+  run the workflow at any time without waiting for the next clock gate.
 
 ## Validation Status
 
