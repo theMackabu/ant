@@ -70,7 +70,7 @@ fi
 finish_step
 
 start_step "Install LLVM $llvm_version"
-llvm_tools=(clang clang++ llvm-ar llvm-ranlib llvm-nm llvm-strip lld)
+llvm_tools=(clang clang++ llvm-ar llvm-ranlib llvm-nm llvm-profdata llvm-strip lld)
 missing_llvm=false
 for tool in "${llvm_tools[@]}"; do
   if ! command -v "$tool-$llvm_version" >/dev/null 2>&1; then
@@ -186,17 +186,19 @@ ln -sfn "$node_dir/bin/npm" "$tool_bin/npm"
 ln -sfn "$node_dir/bin/npx" "$tool_bin/npx"
 ln -sfn "$node_dir/bin/corepack" "$tool_bin/corepack"
 ln -sfn "$zig_dir/zig" "$tool_bin/zig"
+ln -sfn "$(command -v "llvm-profdata-$llvm_version")" "$tool_bin/llvm-profdata"
 
 profile_marker="# Ant orb toolchain"
-if ! grep -Fqx "$profile_marker" "$profile" 2>/dev/null; then
-  cat >> "$profile" <<EOF
+if grep -Fqx "$profile_marker" "$profile" 2>/dev/null; then
+  sed -i '/^# Ant orb toolchain$/,+3d' "$profile"
+fi
+cat >> "$profile" <<EOF
 
 $profile_marker
 if [[ "\${PWD:-}" == "$repo_root" || "\${PWD:-}" == "$repo_root/"* ]]; then
   source "$env_file"
 fi
 EOF
-fi
 
 # Make the toolchain available to the remainder of this setup run.
 # shellcheck disable=SC1090

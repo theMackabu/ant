@@ -28,8 +28,18 @@ BUILD_DIR="$ROOT/build"
 RAW_DIR="$BUILD_DIR/pgo-raw"
 
 case "$(uname -s)" in
-  Darwin) KERNEL=darwin ;;
-  Linux)  KERNEL=linux ;;
+  Darwin) PLATFORM=darwin ;;
+  Linux)
+    libc_version="$(ldd --version 2>&1 || true)"
+    if grep -qi 'musl' <<< "$libc_version"; then
+      PLATFORM=linux-musl
+    elif grep -Eqi 'glibc|gnu libc' <<< "$libc_version"; then
+      PLATFORM=linux-glibc
+    else
+      echo "error: unable to identify Linux libc from ldd --version" >&2
+      exit 1
+    fi
+    ;;
   *) echo "error: unsupported OS $(uname -s)" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
@@ -37,7 +47,7 @@ case "$(uname -m)" in
   x86_64|amd64)  CPU=x86_64 ;;
   *) echo "error: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
-PROFDATA="$PROFILE_DIR/ant-$KERNEL-$CPU.profdata"
+PROFDATA="$PROFILE_DIR/ant-$PLATFORM-$CPU.profdata"
 source "$PGO_DIR/flags.sh"
 
 LLVM_PROFDATA=""
