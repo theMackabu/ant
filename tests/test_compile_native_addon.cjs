@@ -46,6 +46,8 @@ const addon = require('native-wrapper');
 const napiAddon = require('napi-wrapper');
 console.log('native:', addon.native);
 console.log('napi:', napiAddon.value);
+console.log('napi scoped:', napiAddon.scoped);
+console.log('napi escaped:', napiAddon.escaped);
 console.log('helper:', addon.helper);
 console.log('dirname:', addon.dirname);
 console.log('helperPath:', addon.helperPath);
@@ -128,6 +130,8 @@ module.exports = loadNative();
   assert.equal(result.status, 0, `compiled native app failed: ${result.stderr}`);
   assert.match(result.stdout, /native: native-ok/);
   assert.match(result.stdout, /napi: native-ok/);
+  assert.match(result.stdout, /napi scoped: scope-ok/);
+  assert.match(result.stdout, /napi escaped: escape-ok/);
   assert.match(result.stdout, /helper: helper-ok/);
 
   const dirname = result.stdout.match(/^dirname: (.+)$/m)?.[1];
