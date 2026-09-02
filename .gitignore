@@ -5,8 +5,8 @@
 .superset
 
 .claude
-.agents
 .github/artifacts
+/.amp/portals/*
 
 *.so
 *.dylib

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tool_bin="$HOME/.local/share/ant-orb/bin"
+
+# Build output survives orb suspension. Repair its convenience link in case a
+# reconfigure replaced the binary after setup ran.
+if [[ -x "$repo_root/build/ant" ]]; then
+  mkdir -p "$tool_bin"
+  ln -sfn "$repo_root/build/ant" "$tool_bin/ant"
+fi
