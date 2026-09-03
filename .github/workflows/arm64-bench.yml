@@ -38,8 +38,15 @@ jobs:
       - name: Checkout Ant
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          clean: true
+          clean: false
           fetch-depth: 1
+
+      - name: Reset workspace while preserving generated dependencies
+        run: |
+          git reset --hard "$GITHUB_SHA"
+          git clean -ffdx \
+            -e /vendor/   \
+            -e /src/tools/node_modules/
 
       - name: Build cached Nix/PGO/LTO Ant
         run: caffeinate -dimsu tools/arm64-bench/build-ant.sh
