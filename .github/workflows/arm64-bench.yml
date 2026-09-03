@@ -59,18 +59,10 @@ jobs:
       - name: Verify resolved comparison engines
         run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ANT_BENCH_ENGINE_ROOT"
 
-      - name: Cool down host until 00:40 Pacific
-        if: ${{ github.event_name == 'schedule' }}
-        env:
-          ANT_BENCH_NOT_BEFORE_LOCAL: '00:40'
-        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
-
       - name: Cool down host for 5 minutes
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          ANT_BENCH_COOLDOWN_SECONDS: '300'
-          ANT_BENCH_COOLDOWN_MAX_SECONDS: '300'
-        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
+        run: |
+          caffeinate -dimsu sleep 300
+          pmset -g therm || true
 
       - name: Run bench-v8 matrix
         id: benchmark
