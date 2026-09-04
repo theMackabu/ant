@@ -143,16 +143,14 @@ sandbox_cache_image="$sandbox_cache_dir/ant-sandbox-${cache_arch}.img"
 sandbox_cache_kernel="$sandbox_cache_dir/ant-kernel-${cache_arch}.img"
 
 zig_version=${ZIG_VERSION:-}
-zlib_version=${ZLIB_VERSION:-}
 
-if [[ -z "$zig_version" || -z "$zlib_version" ]]; then
+if [[ -z "$zig_version" ]]; then
   if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required to read .github/versions.json" >&2
     exit 1
   fi
 
   zig_version=${zig_version:-$(jq -r '.tools.zig' "$repo_root/.github/versions.json")}
-  zlib_version=${zlib_version:-$(jq -r '.dependencies.zlib' "$repo_root/.github/versions.json")}
 fi
 
 if command -v ops >/dev/null 2>&1; then
@@ -224,9 +222,9 @@ else
     --build-arg "BUILD_TIMESTAMP=$build_timestamp" \
     --build-arg "BUILD_GIT_HASH=$build_git_hash" \
     --build-arg "ZIG_VERSION=$zig_version" \
-    --build-arg "ZLIB_VERSION=$zlib_version" \
+    --target export \
     --output "type=local,dest=$binary_dir" \
-    -f "$repo_root/packages/sandbox/Dockerfile" \
+    -f "$repo_root/Dockerfile" \
     "$repo_root"
 fi
 

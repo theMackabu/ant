@@ -44,6 +44,16 @@ Ant Silver is an independent engine, not a wrapper around V8, JSC, or SpiderMonk
 curl -fsSL https://antjs.org/install | bash
 ```
 
+### Docker
+
+Build the container from source. It contains the statically linked musl Ant binary, CA certificates, and time-zone data.
+
+```bash
+docker build -t ant .
+docker run --rm ant --version
+docker run --rm -v "$PWD:/app" ant index.js
+```
+
 ## Spec conformance
 
 Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
