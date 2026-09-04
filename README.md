@@ -20,6 +20,7 @@ $ ls -lh ant
 - [Benchmarks](#benchmarks)
 - [Spec conformance](#spec-conformance)
 - [Building Ant](#building-ant)
+- [Docker Images](#docker-images)
 - [Security](#security)
 - [Community](#community)
 - [Contributing to Ant](#contributing-to-ant)
@@ -95,9 +96,17 @@ hyperfine --warmup 10 --runs 100 \
 
 See [BUILDING.md](BUILDING.md) for instructions on how to build Ant from source and a list of supported platforms.
 
-### Docker
+## Docker Images
 
-You can build the container from source. It contains the statically linked musl Ant binary, CA certificates, and time-zone data.
+Pull the published image for `linux/amd64` or `linux/arm64`.
+
+```bash
+docker pull themackabu/ant:latest
+docker run --rm themackabu/ant:latest --version
+docker run --rm -v "$PWD:/app" themackabu/ant:latest index.js
+```
+
+You can also build the container from source:
 
 ```bash
 docker build -t ant .
