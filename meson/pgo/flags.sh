@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 
 if [ -z "${ANT_PGO_TUNE_FLAG:-}" ]; then
-  case "$(uname -m)" in
-    x86_64|i386|i686)
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64|Linux-amd64)
+      ANT_PGO_TUNE_FLAG="-march=x86-64"
+      ;;
+    Linux-arm64|Linux-aarch64)
+      ANT_PGO_TUNE_FLAG="-march=armv8-a"
+      ;;
+    Darwin-x86_64|Darwin-i386|Darwin-i686)
       ANT_PGO_TUNE_FLAG="-march=native"
       ;;
-    arm64|aarch64)
+    Darwin-arm64|Darwin-aarch64)
       ANT_PGO_TUNE_FLAG="-mcpu=native"
       ;;
     *)
-      echo "error: unsupported PGO architecture $(uname -m)" >&2
+      echo "error: unsupported PGO platform $(uname -s)-$(uname -m)" >&2
       return 1 2>/dev/null || exit 1
       ;;
   esac

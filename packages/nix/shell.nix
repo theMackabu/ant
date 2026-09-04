@@ -21,6 +21,7 @@ let
 in
 pkgs.mkShellNoCC ({
   packages = [
+    pkgs.nodejs_22
     toolchain.bintools
     toolchain.clang
     toolchain.compilerRt

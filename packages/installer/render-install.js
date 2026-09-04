@@ -6,12 +6,22 @@ import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '../..');
 const configPath = path.join(scriptDir, 'install.json');
-const templatePath = path.join(scriptDir, 'install.template.sh');
+
+const templatePaths = [
+  'install.template.sh',
+  'templates/status.template.sh',
+  'templates/download.template.sh',
+  'templates/shell.template.sh',
+  'templates/main.template.sh'
+].map(relativePath => path.join(scriptDir, relativePath));
+
 const outputPath = path.join(scriptDir, 'dist', 'install');
 const deploy = !process.argv.includes('--no-deploy');
-
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
-const template = readFileSync(templatePath, 'utf8');
+
+const template =
+  templatePaths.map(templatePath => readFileSync(templatePath, 'utf8').trimEnd())
+  .join('\n\n') + '\n';
 
 function gitHash() {
   try {

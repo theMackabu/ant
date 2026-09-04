@@ -30,17 +30,23 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, arm64-bench]
     timeout-minutes: 720
     env:
-      PATH: /nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-      ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
-      ANT_BENCH_NOT_BEFORE_LOCAL: '00:40'
+      PATH: /Users/remote/.local/share/mise/installs/node/latest/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+      ANT_BENCH_ENGINE_ROOT: ${{ vars.ARM64_BENCH_ENGINE_ROOT || '/Users/remote/.cache/ant-arm64-bench' }}
       BENCHMARK_API_URL: ${{ vars.BENCHMARK_API_URL || 'https://bench.antjs.org/v1/runs' }}
 
     steps:
       - name: Checkout Ant
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          clean: true
+          clean: false
           fetch-depth: 1
+
+      - name: Reset workspace while preserving generated dependencies
+        run: |
+          git reset --hard "$GITHUB_SHA"
+          git clean -ffdx \
+            -e /vendor/   \
+            -e /src/tools/node_modules/
 
       - name: Build cached Nix/PGO/LTO Ant
         run: caffeinate -dimsu tools/arm64-bench/build-ant.sh
@@ -51,10 +57,12 @@ jobs:
         run: caffeinate -dimsu tools/arm64-bench/sync-engines.sh
 
       - name: Verify resolved comparison engines
-        run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ENGINE_ROOT"
+        run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ANT_BENCH_ENGINE_ROOT"
 
-      - name: Cool down host until 00:40 Pacific
-        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
+      - name: Cool down host for 5 minutes
+        run: |
+          caffeinate -dimsu sleep 300
+          pmset -g therm || true
 
       - name: Run bench-v8 matrix
         id: benchmark
@@ -63,7 +71,7 @@ jobs:
         run: |
           set +e
           caffeinate -dimsu node tools/arm64-bench/run.mjs \
-            --engine-root "$ENGINE_ROOT" \
+            --engine-root "$ANT_BENCH_ENGINE_ROOT" \
             --samples "$SAMPLES" \
             --output "$RUNNER_TEMP/arm64-bench-result.json" \
             --strict

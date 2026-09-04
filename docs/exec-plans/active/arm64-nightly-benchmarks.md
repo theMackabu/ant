@@ -1,7 +1,7 @@
 # ARM64 Nightly Benchmarks
 
 Status: active
-Last reviewed: 2026-08-29
+Last reviewed: 2026-09-03
 Owner: theMackabu
 
 ## Goal
@@ -9,7 +9,7 @@ Owner: theMackabu
 Turn the dedicated macOS ARM64 host into a GitHub Actions self-hosted runner
 that benchmarks Ant, Boa, V8 in jitless mode, SpiderMonkey in jitless mode,
 Kiesel, LibJS, Duktape, QuickJS, and Porffor every day after cached builds and
-updates at 00:20 and a measurement gate at 00:40 America/Los_Angeles, then
+updates at 00:20 America/Los_Angeles and a fixed five-minute cooldown, then
 publishes durable, queryable results through a public API.
 
 ## Scope
@@ -37,8 +37,8 @@ publishes durable, queryable results through a public API.
 - Configure and compile Ant through the repository's pinned `nix develop`
   environment with the checked-in Darwin ARM64 PGO profile and full LTO. Keep
   the incremental Meson tree, Meson package cache, and ccache outside the
-  cleaned Actions checkout. Never begin measurement before 00:40 local, and
-  require at least five minutes of cooldown after any delayed build.
+  cleaned Actions checkout. Scheduled and manual runs use the same fixed
+  five-minute cooldown after build and engine synchronization.
 - The GitHub runner label is `arm64-bench`; hardware marketing names are not
   part of scheduling or public machine identity.
 - The upload endpoint is authenticated. Read endpoints are public and CORS
@@ -70,8 +70,8 @@ dispatches remain distinct measurements.
       host provisioning.
 - [x] Implement authenticated create and public latest/history/detail/series
       API routes with D1 migrations.
-- [x] Add the 00:20/00:40 America/Los_Angeles GitHub Actions workflow and manual
-      dispatch inputs.
+- [x] Add the 00:20 America/Los_Angeles GitHub Actions workflow, fixed cooldown,
+      and manual dispatch inputs.
 - [x] Document runner installation, labels, power settings, secrets,
       deployment, recovery, and update cadence.
 - [x] Run unit tests, API type checking, workflow validation, `maid preflight`,
@@ -83,6 +83,7 @@ dispatches remain distinct measurements.
   `self-hosted`, `macOS`, and `ARM64` labels.
 - 2026-08-29: Start the cached build at 00:20 in `America/Los_Angeles` and gate
   measurement until 00:40, using GitHub's timezone-aware schedule syntax.
+  Superseded by the fixed cooldown below.
 - 2026-08-29: Keep the Ant Meson tree, Meson package cache, and ccache under the
   engine root so checkout cleanup does not discard nightly build work.
 - 2026-08-29: Build Ant inside `nix develop` so the benchmark uses the pinned
@@ -101,6 +102,13 @@ dispatches remain distinct measurements.
 - 2026-08-29: Add Porffor to the cohort while retaining LibJS. Follow V8 Canary,
   SpiderMonkey development releases, Kiesel and LibJS main snapshots, and the
   latest releases of Boa, Duktape, QuickJS, and Porffor.
+- 2026-08-29: Keep the 00:40 Pacific measurement gate exclusive to scheduled
+  runs. Manual dispatches use a fixed five-minute cooldown so an operator can
+  run the workflow at any time without waiting for the next clock gate.
+  Superseded by the fixed cooldown below.
+- 2026-09-03: Replace the scheduled clock gate and load-based extension with
+  the same fixed five-minute cooldown for every run, regardless of when it
+  starts.
 
 ## Validation Status
 

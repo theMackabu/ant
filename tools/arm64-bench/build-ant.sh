@@ -20,7 +20,7 @@ if [[ $(uname -s) != Darwin || $(uname -m) != arm64 ]]; then
   exit 1
 fi
 
-for command in ccache jq meson ninja shasum llvm-nm; do
+for command in ccache jq meson ninja node npm shasum llvm-nm; do
   command -v "$command" >/dev/null || { echo "missing Nix dev-shell command: $command" >&2; exit 1; }
 done
 

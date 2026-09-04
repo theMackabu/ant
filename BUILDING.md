@@ -390,9 +390,14 @@ export CC_LD="$(which lld)"       # Linux
 #### Profile-guided optimization
 
 Release builds automatically use LLVM PGO data when a matching profile exists
-at `meson/pgo/profiles/ant-<system>-<cpu>.profdata` and the C/C++ compiler is
-Clang-compatible. For example, macOS ARM64 uses
-`meson/pgo/profiles/ant-darwin-aarch64.profdata`.
+at `meson/pgo/profiles/ant-<platform>-<cpu>.profdata` and the C/C++ compiler is
+Clang-compatible. Linux platform names include the libc so glibc and musl
+builds use separate profiles, such as `ant-linux-glibc-x86_64.profdata` and
+`ant-linux-musl-aarch64.profdata`. macOS ARM64 uses
+`ant-darwin-aarch64.profdata`.
+
+Linux AArch64 builds target the portable ARMv8-A baseline and use outlined
+atomics, selecting LSE instructions at runtime when the host supports them.
 
 To regenerate the profile and produce a final PGO build:
 
