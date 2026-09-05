@@ -1148,20 +1148,21 @@ static inline void sv_op_define_slot(
   sv_define_slot(js, obj, val, a->str, a->len, slot);
 }
 
+static inline ant_value_t sv_get_length_value(ant_t *js, ant_value_t obj) {
+  if (vtype(obj) == kTypeArray) return tov((double)(uint32_t)js_arr_len(js, obj));
+  if (vtype(obj) == kTypeString) return tov((double)str_utf16_len(js, obj));
+  
+  if (vtype(obj) == kTypeNull || vtype(obj) == kTypeUndefined) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "Cannot read properties of %s (reading 'length')",
+    vtype(obj) == kTypeNull ? "null" : "undefined"
+  );
+  
+  return js_getprop_fallback(js, obj, "length");
+}
+
 static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
-
-  if (vtype(obj) == kTypeArray) {
-    vm->stack[vm->sp++] = tov((double)(uint32_t)js_arr_len(js, obj));
-    return js_mkundef();
-  }
-  
-  if (vtype(obj) == kTypeString) {
-    vm->stack[vm->sp++] = tov((double)str_utf16_len(js, obj));
-    return js_mkundef();
-  }
-
-  ant_value_t res = js_getprop_fallback(js, obj, "length");
+  ant_value_t res = sv_get_length_value(js, obj);
   if (is_err(res)) return res;
   
   vm->stack[vm->sp++] = res;

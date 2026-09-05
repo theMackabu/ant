@@ -216,11 +216,20 @@ pub const TarParser = struct {
   strip_prefix: [128]u8,
   strip_prefix_len: usize,
   prefix_detected: bool,
-  path_buf: [256]u8,
+  path_buf: [4096]u8,
+  pax_data: [64 * 1024]u8 = undefined,
+  pax_len: usize = 0,
+  pax_path: [4096]u8 = undefined,
+  pax_path_len: usize = 0,
+  pax_link: [4096]u8 = undefined,
+  pax_link_len: usize = 0,
+  pax_size: ?u64 = null,
+  entry_size: u64 = 0,
 
   const State = enum {
     read_header,
     read_file_data,
+    read_pax_data,
     skip_padding,
   };
 
@@ -246,6 +255,7 @@ pub const TarParser = struct {
     mode: u32,
     size: u64,
     entry_type: Type,
+    link_target: []const u8,
 
     pub const Type = enum {
       file,
@@ -267,6 +277,37 @@ pub const TarParser = struct {
     };
   };
 
+  fn parsePax(self: *TarParser) ExtractError!void {
+    var records = self.pax_data[0..self.pax_len];
+    while (records.len > 0) {
+      const space = std.mem.indexOfScalar(u8, records, ' ') orelse return error.InvalidTarHeader;
+      const len = std.fmt.parseInt(usize, records[0..space], 10) catch return error.InvalidTarHeader;
+      if (len <= space + 1 or len > records.len or records[len - 1] != '\n') return error.InvalidTarHeader;
+      const record = records[space + 1 .. len - 1];
+      const equals = std.mem.indexOfScalar(u8, record, '=') orelse return error.InvalidTarHeader;
+      const key = record[0..equals];
+      const value = record[equals + 1 ..];
+      if (std.mem.eql(u8, key, "path")) {
+        try validatePath(value);
+        @memcpy(self.pax_path[0..value.len], value);
+        self.pax_path_len = value.len;
+      } else if (std.mem.eql(u8, key, "linkpath")) {
+        try validatePath(value);
+        @memcpy(self.pax_link[0..value.len], value);
+        self.pax_link_len = value.len;
+      } else if (std.mem.eql(u8, key, "size")) {
+        self.pax_size = std.fmt.parseInt(u64, value, 10) catch return error.InvalidTarHeader;
+      }
+      records = records[len..];
+    }
+  }
+
+  fn finishData(self: *TarParser) void {
+    const padding = (512 - (self.entry_size % 512)) % 512;
+    self.skip_bytes = @intCast(padding);
+    self.state = if (padding > 0) .skip_padding else .read_header;
+  }
+
   pub fn feed(self: *TarParser, data: []const u8) ParseResult {
     switch (self.state) {
       .read_header => {
@@ -283,7 +324,21 @@ pub const TarParser = struct {
 
         if (self.header.isZero()) {
           return .{ .kind = .end_of_archive, .consumed = to_copy };
-        } var path = self.header.getName(&self.path_buf) catch {
+        }
+        const header_size = self.header.getSize() catch return .{ .kind = .{ .err = error.InvalidTarHeader }, .consumed = to_copy };
+        if (self.header.typeflag == 'x') {
+          if (header_size > self.pax_data.len) return .{ .kind = .{ .err = error.UnsupportedFormat }, .consumed = to_copy };
+          self.pax_len = 0;
+          self.entry_size = header_size;
+          self.current_file_remaining = header_size;
+          self.state = if (header_size > 0) .read_pax_data else .read_header;
+          return .{ .kind = .need_more_data, .consumed = to_copy };
+        }
+        // Do not silently extract unsupported metadata using a truncated name.
+        if (!self.header.isFile() and !self.header.isDirectory() and !self.header.isSymlink()) {
+          return .{ .kind = .{ .err = error.UnsupportedFormat }, .consumed = to_copy };
+        }
+        var path = if (self.pax_path_len > 0) self.pax_path[0..self.pax_path_len] else self.header.getName(&self.path_buf) catch {
           return .{ .kind = .{ .err = ExtractError.InvalidPath }, .consumed = to_copy };
         };
 
@@ -307,7 +362,10 @@ pub const TarParser = struct {
           return .{ .kind = .{ .err = ExtractError.InvalidPath }, .consumed = to_copy };
         };
 
-        const size = self.header.getSize() catch return .{ .kind = .{ .err = ExtractError.InvalidTarHeader }, .consumed = to_copy };
+        const size = self.pax_size orelse header_size;
+        self.pax_path_len = 0;
+        self.pax_size = null;
+        self.entry_size = size;
         const mode = self.header.getMode() catch return .{ .kind = .{ .err = ExtractError.InvalidTarHeader }, .consumed = to_copy };
 
         const entry_type: Entry.Type = if (self.header.isDirectory()) .directory
@@ -324,8 +382,11 @@ pub const TarParser = struct {
           .mode = mode,
           .size = size,
           .entry_type = entry_type,
+          .link_target = if (self.pax_link_len > 0) self.pax_link[0..self.pax_link_len]
+            else std.mem.sliceTo(&self.header.linkname, 0),
         };
         
+        self.pax_link_len = 0;
         return .{ .consumed = to_copy, .kind = .{ .entry = entry } };
       },
 
@@ -333,16 +394,21 @@ pub const TarParser = struct {
         const to_read: usize = @min(self.current_file_remaining, data.len);
         self.current_file_remaining -= to_read;
 
-        if (self.current_file_remaining == 0) {
-          const size = self.header.getSize() catch return .{ .kind = .{ .err = ExtractError.InvalidTarHeader }, .consumed = to_read };
-          const padding = (512 - (size % 512)) % 512;
-          if (padding > 0) {
-            self.skip_bytes = @intCast(padding);
-            self.state = .skip_padding;
-          } else self.state = .read_header;
-        }
+        if (self.current_file_remaining == 0) self.finishData();
 
         return .{ .kind = .{ .file_data = data[0..to_read] }, .consumed = to_read };
+      },
+
+      .read_pax_data => {
+        const to_read: usize = @intCast(@min(self.current_file_remaining, data.len));
+        @memcpy(self.pax_data[self.pax_len..][0..to_read], data[0..to_read]);
+        self.pax_len += to_read;
+        self.current_file_remaining -= to_read;
+        if (self.current_file_remaining == 0) {
+          self.parsePax() catch |err| return .{ .kind = .{ .err = err }, .consumed = to_read };
+          self.finishData();
+        }
+        return .{ .kind = .need_more_data, .consumed = to_read };
       },
 
       .skip_padding => {
@@ -371,7 +437,7 @@ pub const Extractor = struct {
   parser: TarParser,
   decompressor: *GzipDecompressor,
   current_file: ?std.Io.File,
-  current_file_path: [256]u8,
+  current_file_path: [4096]u8,
   current_file_path_len: usize,
   current_file_mode: u32,
   files_extracted: u32,
@@ -425,7 +491,7 @@ pub const Extractor = struct {
     if (comptime builtin.os.tag != .windows) {
       if (self.current_file_mode & 0o111 != 0) {
         const path = self.current_file_path[0..self.current_file_path_len];
-        var path_buf: [257]u8 = undefined;
+        var path_buf: [4097]u8 = undefined;
         @memcpy(path_buf[0..path.len], path);
         path_buf[path.len] = 0;
         const path_z: [*:0]const u8 = path_buf[0..path.len :0];
@@ -452,7 +518,7 @@ pub const Extractor = struct {
       const result = self.parser.feed(remaining);
       remaining = remaining[result.consumed..];
       switch (result.kind) {
-        .need_more_data => return,
+        .need_more_data => if (result.consumed == 0) return,
         .entry => |entry| try self.handleEntry(entry),
         .file_data => |d| try self.writeFileData(d),
         .end_of_archive => {
@@ -483,7 +549,7 @@ pub const Extractor = struct {
       break :blk true;
     };
     self.current_file = try self.output_dir.createFile(io, entry.path, .{});
-    const len = @min(entry.path.len, 256);
+    const len = entry.path.len;
     @memcpy(self.current_file_path[0..len], entry.path[0..len]);
     self.current_file_path_len = len;
     self.current_file_mode = entry.mode;
@@ -491,8 +557,7 @@ pub const Extractor = struct {
   }
   
   inline fn createSymlink(self: *Extractor, entry: TarParser.Entry) !void {
-    const linkname_len = std.mem.indexOfScalar(u8, &self.parser.header.linkname, 0) orelse self.parser.header.linkname.len;
-    const target = self.parser.header.linkname[0..linkname_len];
+    const target = entry.link_target;
     
     if (entry.path.len == 0 or target.len == 0) return;
     try validatePath(target);
@@ -531,3 +596,147 @@ pub const Extractor = struct {
     return self.gzip_finished and self.archive_finished and self.files_extracted > 0;
   }
 };
+
+const TestTar = struct {
+  bytes: [16384]u8 = @splat(0),
+  len: usize = 0,
+
+  fn add(self: *TestTar, name: []const u8, kind: u8, body: []const u8) !void {
+    var header = std.mem.zeroes(TarHeader);
+    @memcpy(header.name[0..@min(name.len, 100)], name[0..@min(name.len, 100)]);
+    _ = try std.fmt.bufPrint(&header.size, "{o:0>11}", .{body.len});
+    _ = try std.fmt.bufPrint(&header.mode, "{o:0>7}", .{@as(u32, 0o644)});
+    header.typeflag = kind;
+    @memcpy(self.bytes[self.len..][0..512], std.mem.asBytes(&header));
+    self.len += 512;
+    @memcpy(self.bytes[self.len..][0..body.len], body);
+    self.len += (body.len + 511) / 512 * 512;
+  }
+
+  fn paxRecord(buf: []u8, key: []const u8, value: []const u8) ![]const u8 {
+    var len = key.len + value.len + 4;
+    while (true) {
+      const record = try std.fmt.bufPrint(buf, "{d} {s}={s}\n", .{ len, key, value });
+      if (record.len == len) return record;
+      len = record.len;
+    }
+  }
+};
+
+test "PAX source map paths survive arbitrary input boundaries and apply once" {
+  const name = "getchatcompletionfieldoptionscountsv1observabilitychatcompletionfieldsfieldnameoptionscountspost.js";
+  var tar = TestTar{};
+  try tar.add(name, '0', "module.exports = 1;");
+  var record_buf: [512]u8 = undefined;
+  try tar.add("PaxHeader/map", 'x', try TestTar.paxRecord(&record_buf, "path", "package/" ++ name ++ ".map"));
+  // npm's fallback header truncates .map away, colliding with the JS file.
+  try tar.add(name, '0', "{\"version\":3}");
+  try tar.add("package/after.js", '0', "after");
+  const paths = [_][]const u8{ name, name ++ ".map", "after.js" };
+  const bodies = [_][]const u8{ "module.exports = 1;", "{\"version\":3}", "after" };
+  for ([_]usize{ 1, 7, 511, 512, 513, 16384 }) |chunk_size| {
+    var parser = TarParser.init("package/");
+    var offset: usize = 0;
+    var count: usize = 0;
+    var body_offset: usize = 0;
+    while (offset < tar.len) {
+      const result = parser.feed(tar.bytes[offset..@min(offset + chunk_size, tar.len)]);
+      try std.testing.expect(result.consumed > 0);
+      offset += result.consumed;
+      switch (result.kind) {
+        .entry => |entry| {
+          if (count > 0) try std.testing.expectEqual(bodies[count - 1].len, body_offset);
+          try std.testing.expect(count < paths.len);
+          try std.testing.expectEqualStrings(paths[count], entry.path);
+          try std.testing.expectEqual(bodies[count].len, entry.size);
+          body_offset = 0;
+          count += 1;
+        },
+        .file_data => |data| {
+          try std.testing.expect(count > 0);
+          try std.testing.expectEqualStrings(bodies[count - 1][body_offset..][0..data.len], data);
+          body_offset += data.len;
+        },
+        .need_more_data => {},
+        else => return error.UnexpectedParseResult,
+      }
+    }
+    try std.testing.expectEqual(paths.len, count);
+    try std.testing.expectEqual(bodies[count - 1].len, body_offset);
+  }
+}
+
+test "PAX rejects malformed records and unsafe paths" {
+  for ([_][]const u8{ "999 path=a\n", "0 path=a\n", "12 path=abc!", "12 missing=\n" }) |bad| {
+    // The last record is a valid unknown key and must be ignored.
+    var parser = TarParser.init("package/");
+    @memcpy(parser.pax_data[0..bad.len], bad);
+    parser.pax_len = bad.len;
+    if (std.mem.eql(u8, bad, "12 missing=\n")) {
+      try parser.parsePax();
+    } else try std.testing.expectError(error.InvalidTarHeader, parser.parsePax());
+  }
+  for ([_][]const u8{ "../escape", "package/../../escape", "/absolute", "package/a\\b", "package/a\x00b" }) |path| {
+    var parser = TarParser.init("package/");
+    const record = try TestTar.paxRecord(&parser.pax_data, "path", path);
+    parser.pax_len = record.len;
+    try std.testing.expectError(error.InvalidPath, parser.parsePax());
+  }
+}
+
+test "PAX size and linkpath override one entry" {
+  var tar = TestTar{};
+  var buf: [512]u8 = undefined;
+  const first = try TestTar.paxRecord(&buf, "linkpath", "long/target");
+  const first_len = first.len;
+  const second = try TestTar.paxRecord(buf[first_len..], "size", "3");
+  try tar.add("PaxHeader/link", 'x', buf[0 .. first_len + second.len]);
+  const entry_offset = tar.len;
+  try tar.add("package/link", '2', "abc");
+  // The PAX size controls both data consumption and padding.
+  @memcpy(tar.bytes[entry_offset + 124 ..][0..11], "00000000000");
+  try tar.add("package/next", '0', "");
+  var parser = TarParser.init("package/");
+  var offset: usize = 0;
+  var count: usize = 0;
+  while (offset < tar.len) {
+    const result = parser.feed(tar.bytes[offset..tar.len]);
+    try std.testing.expect(result.consumed > 0);
+    offset += result.consumed;
+    switch (result.kind) {
+      .entry => |entry| {
+        try std.testing.expectEqualStrings(if (count == 0) "long/target" else "", entry.link_target);
+        try std.testing.expectEqual(@as(u64, if (count == 0) 3 else 0), entry.size);
+        count += 1;
+      },
+      .file_data => |data| try std.testing.expectEqualStrings("abc", data),
+      .need_more_data => {},
+      else => return error.UnexpectedParseResult,
+    }
+  }
+  try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "PAX accepts paths beyond the legacy buffer and rejects oversized metadata" {
+  var parser = TarParser.init("package/");
+  var path: [300]u8 = @splat('a');
+  path[100] = '/';
+  path[200] = '/';
+  const record = try TestTar.paxRecord(&parser.pax_data, "path", &path);
+  parser.pax_len = record.len;
+  try parser.parsePax();
+  try std.testing.expectEqualStrings(&path, parser.pax_path[0..parser.pax_path_len]);
+
+  var tar = TestTar{};
+  try tar.add("PaxHeader/large", 'x', "");
+  @memcpy(tar.bytes[124..][0..11], "00000200001"); // 64 KiB + 1
+  parser = TarParser.init("package/");
+  const result = parser.feed(tar.bytes[0..512]);
+  try std.testing.expectEqual(error.UnsupportedFormat, result.kind.err);
+  for ([_]u8{ 'g', 'L', 'K' }) |kind| {
+    tar.bytes[156] = kind;
+    parser = TarParser.init("package/");
+    const unsupported = parser.feed(tar.bytes[0..512]);
+    try std.testing.expectEqual(error.UnsupportedFormat, unsupported.kind.err);
+  }
+}

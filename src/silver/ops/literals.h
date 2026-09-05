@@ -14,6 +14,33 @@ static inline void sv_op_const_i8(sv_vm_t *vm, uint8_t *ip) {
   vm->stack[vm->sp++] = tov((double)val);
 }
 
+static inline int sv_literal_constant_at(sv_func_t *func, const uint8_t *ip, ant_value_t *value) {
+  if (ip >= func->code + func->code_len) return 0;
+  int size = sv_op_size[*ip];
+  if (!size || ip + size > func->code + func->code_len) return 0;
+  
+  switch (*ip) {
+    case OP_CONST: case OP_CONST8: {
+      uint32_t index = *ip == OP_CONST ? sv_get_u32(ip + 1) : ip[1];
+      if (index >= (uint32_t)func->const_count) return 0;
+      *value = func->constants[index];
+      uint8_t type = vtype(*value);
+      if (type != kTypeString && type != kTypeNumber && type != kTypeBool &&
+          type != kTypeNull && type != kTypeUndefined && type != kTypeBigInt) return 0;
+      break;
+    }
+    
+    case OP_CONST_I8: *value = tov((double)(int8_t)ip[1]); break;
+    case OP_TRUE: *value = js_true; break;
+    case OP_FALSE: *value = js_false; break;
+    case OP_NULL: *value = js_mknull(); break;
+    case OP_UNDEF: *value = js_mkundef(); break;
+    default: return 0;
+  }
+  
+  return size;
+}
+
 static inline void sv_op_const8(sv_vm_t *vm, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   vm->stack[vm->sp++] = func->constants[idx];

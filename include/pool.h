@@ -23,8 +23,6 @@ struct ant_pool_block {
   uint8_t data[];
 };
 
-static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
-
 static constexpr size_t ANT_POOL_ROPE_BLOCK_SIZE   = 64u * 1024u;
 static constexpr size_t ANT_POOL_SYMBOL_BLOCK_SIZE = 32u * 1024u;
 static constexpr size_t ANT_POOL_BIGINT_BLOCK_SIZE = 64u * 1024u;
@@ -49,6 +47,9 @@ typedef struct {
   uint8_t *end;
   size_t slot_stride;
 } ant_pool_bucket_t;
+
+static constexpr int ANT_POOL_SIZE_CLASS_COUNT = 32;
+int pool_size_class_index(size_t need);
 
 typedef struct {
   ant_pool_t base;

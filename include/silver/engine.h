@@ -210,6 +210,7 @@ typedef struct {
   const uint32_t *key_atoms;
   uint16_t key_count;
   bool shape_build_failed;
+  ant_value_t literal_template;
 } sv_obj_site_cache_t;
 
 static constexpr uint32_t SV_GF_IC_AUX_MISS_SHIFT = 8u;
@@ -583,6 +584,7 @@ static inline sv_upvalue_t *js_upvalue_alloc(ant_t *js) {
 #define SV_CALL_BORROWED_UPVALS  (1u << 4)
 #define SV_CALL_HAS_EVAL_ENV     (1u << 5)
 #define SV_CALL_HAS_BOUND_THIS   (1u << 6)
+#define SV_CALL_IS_UNCURRY       (1u << 7)
 
 static constexpr char SV_CLASS_CTOR_CALL_ERROR[] =
   "Class constructor cannot be invoked without 'new'";
@@ -941,6 +943,7 @@ typedef enum {
 
 typedef enum {
   SV_CALL_EXEC_NATIVE = 0,
+  SV_CALL_EXEC_UNCURRIED_NATIVE,
   SV_CALL_EXEC_PROXY_APPLY,
   SV_CALL_EXEC_PROXY_CONSTRUCT,
   SV_CALL_EXEC_DEFAULT_CTOR,
@@ -1139,6 +1142,16 @@ static inline ant_value_t sv_prepare_call(
     return js_mkundef();
   }
 
+  if (
+    !is_construct_call && js->vm_exec_depth != 0 &&
+    (closure->call_flags & SV_CALL_IS_UNCURRY) &&
+    vtype(closure->bound_this) == kTypeBuiltin
+  ) {
+    plan->kind = SV_CALL_EXEC_UNCURRIED_NATIVE;
+    plan->ctx.this_val = plan->ctx.argc ? plan->ctx.args[0] : js_mkundef();
+    if (plan->ctx.argc) { plan->ctx.args++; plan->ctx.argc--; }
+  }
+
   return js_mkundef();
 }
 
@@ -1166,6 +1179,18 @@ static inline ant_value_t sv_execute_call_plan(
     ant_value_t result = sv_call_native(
       js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
     );
+    sv_call_cleanup(js, &plan->ctx);
+    return result;
+  }
+
+  case SV_CALL_EXEC_UNCURRIED_NATIVE: {
+    ant_value_t saved_func = js->current_func;
+    js->current_func = plan->func;
+    ant_value_t result = sv_call_native(
+      js, plan->closure->bound_this, 
+      plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+    );
+    js->current_func = saved_func;
     sv_call_cleanup(js, &plan->ctx);
     return result;
   }}

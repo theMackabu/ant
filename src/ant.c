@@ -6288,13 +6288,17 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     if (vtype(func_proto) == kTypeFunction) js_set_proto_init(bound_func, func_proto);
 
     uint8_t bind_flags = SV_CALL_HAS_BOUND_THIS;
+    if (js_as_cfunc(func) == builtin_function_call) bind_flags |= SV_CALL_IS_UNCURRY;
     if (bound_argc > 0) bind_flags |= SV_CALL_HAS_BOUND_ARGS;
+    
     ant_value_t bound = js_obj_to_func_ex(js, bound_func, bind_flags);
     sv_closure_t *bc = js_func_closure(bound);
     bc->bound_this = this_arg;
-    if (bound_argc > 0 &&
-        !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0))
-      return js_mkerr(js, "oom");
+    
+    if (
+      bound_argc > 0 && 
+      !bound_argv_copy(bc, bound_args, bound_argc, NULL, 0)
+    ) return js_mkerr(js, "oom");
     
     ant_value_t length_result = js_define_bound_function_length(js, bound_func, bound_length);
     if (is_err(length_result)) return length_result;
@@ -13325,6 +13329,39 @@ static ant_value_t builtin_string_split(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t builtin_string_slice(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t receiver = js->this_val;
+  if (str_is_heap_rope(receiver)) receiver = rope_cached_flat(receiver);
+  ant_flat_string_t *flat = ant_str_flat_ptr(receiver);
+  
+  bool numeric_start = nargs == 0 || vtype(args[0]) == kTypeUndefined ||
+    (vtype(args[0]) == kTypeNumber && tod(args[0]) >= 0);
+    
+  bool numeric_end = nargs < 2 || vtype(args[1]) == kTypeUndefined ||
+    (vtype(args[1]) == kTypeNumber && tod(args[1]) >= 0);
+    
+  if (flat && str_flat_ascii_state(flat) == STR_ASCII_YES && numeric_start && numeric_end) {
+    size_t len = (size_t)flat->len;
+    double start_arg = nargs && vtype(args[0]) == kTypeNumber ? tod(args[0]) : 0;
+    double end_arg = nargs >= 2 && vtype(args[1]) == kTypeNumber ? tod(args[1]) : (double)len;
+    
+    size_t start = start_arg >= (double)len ? len : (size_t)start_arg;
+    size_t end = end_arg >= (double)len ? len : (size_t)end_arg;
+    
+    if (start == 0 && end == len) return receiver;
+    size_t result_len = end > start ? end - start : 0;
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, receiver);
+    
+    ant_value_t result = js_mkstr(js, NULL, result_len);
+    if (!is_err(result)) {
+      ant_flat_string_t *out = ant_str_flat_ptr(result);
+      memcpy(out->bytes, flat->bytes + start, result_len);
+      str_flat_init_meta(out, STR_ASCII_YES);
+    } GC_ROOT_RESTORE(js, mark);
+    
+    return result;
+  }
+
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
@@ -13660,13 +13697,16 @@ static ant_value_t builtin_string_sup(ant_t *js, ant_value_t *args, int nargs) {
   return builtin_string_html(js, args, nargs, "sup", NULL);
 }
 
-static ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t str = to_string_val(js, js->this_val);
+  
+  if (is_err(str)) return str;
   if (vtype(str) != kTypeString) return js_mkerr(js, "charCodeAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
+  if (js->thrown_exists) return mkval(kTypeError, 0);
   if (isnan(idx_d)) idx_d = 0.0;
-  if (isinf(idx_d) || idx_d > (double)LONG_MAX) return tov(JS_NAN);
+  if (idx_d >= (double)LONG_MAX || idx_d <= (double)LONG_MIN) return tov(JS_NAN);
   
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
@@ -13678,6 +13718,42 @@ static ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int n
   if (code_unit == 0xFFFFFFFF) return tov(JS_NAN);
   
   return tov((double) code_unit);
+}
+
+bool js_try_char_code_at(
+  ant_t *js, ant_value_t func, ant_value_t receiver,
+  ant_value_t *args, int argc, ant_value_t *result
+) {
+  if (vtype(func) == kTypeFunction) {
+    sv_closure_t *closure = js_func_closure(func);
+    if (closure->func || (closure->call_flags & SV_CALL_HAS_BOUND_ARGS)) return false;
+    func = get_slot(closure->func_obj, SLOT_CFUNC);
+    
+    if (closure->call_flags & SV_CALL_HAS_BOUND_THIS) receiver = closure->bound_this;
+    if (vtype(func) == kTypeBuiltin && js_as_cfunc(func) == builtin_function_call) {
+      if (argc == 0) return false;
+      func = receiver; receiver = *args++; argc--;
+    }
+  }
+  
+  if (vtype(func) != kTypeBuiltin || js_as_cfunc(func) != builtin_string_charCodeAt) return false;
+  if (vtype(receiver) != kTypeString) return false;
+  if (argc > 0 && vtype(args[0]) != kTypeNumber) return false;
+  if (str_is_heap_rope(receiver)) receiver = rope_cached_flat(receiver);
+  if (vtype(receiver) != kTypeString) return false;
+  if (str_is_heap_rope(receiver) || str_is_heap_builder(receiver)) return false;
+
+  ant_offset_t length;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, receiver, &length);
+  
+  if (!str_is_ascii(bytes)) return false;
+  double index = argc ? tod(args[0]) : 0;
+  
+  index = isnan(index) ? 0 : trunc(index);
+  *result = index < 0 || index >= (double)length
+    ? tov(JS_NAN) : tov((double)(unsigned char)bytes[(size_t)index]);
+  
+  return true;
 }
 
 static ant_value_t builtin_string_codePointAt(ant_t *js, ant_value_t *args, int nargs) {

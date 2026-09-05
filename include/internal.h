@@ -633,9 +633,16 @@ sv_func_t *js_compile_parsed_bytecode(
 
 bool is_proxy(ant_value_t obj);
 bool is_array_value(ant_value_t value);
+bool js_is_array_includes_builtin(ant_value_t func);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
+bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
+
+bool js_try_char_code_at(
+  ant_t *js, ant_value_t func, ant_value_t receiver,
+  ant_value_t *args, int argc, ant_value_t *result
+);
 
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   ant_t *js, const char *buf, size_t len,
@@ -660,11 +667,9 @@ ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
 
-bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
-
-bool js_is_array_includes_builtin(ant_value_t func);
+ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs);
 
 ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);

@@ -8,6 +8,8 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [JS Path Node Performance](path-node-performance.md)
+- [Guarded charCodeAt Opcode](charcode-intrinsic.md)
 - [Private Primordial Capture](private-primordials.md)
 - [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)

@@ -5,7 +5,7 @@
 #include "value.h"
 #include <stdbool.h>
 
-static constexpr int STR_SHORT_CONS_THRESHOLD = 13;
+static constexpr int STR_SHORT_CONS_THRESHOLD = 32;
 
 enum: uint64_t {
   STR_META_ASCII_SHIFT = 56,

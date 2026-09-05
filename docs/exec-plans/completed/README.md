@@ -18,6 +18,7 @@ can reuse the decision history.
 - [Promise Resolution and Await Semantics](promise-resolution-semantics.md)
 - [Promise Resolution Performance](promise-resolution-performance.md)
 - [Property Reference Table Removal](property-reference-table-removal.md)
+- [PAX Tar Extraction](tar-pax-extraction.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
 - [tlsuv HTTP Request Body Methods](tlsuv-http-request-body-methods.md)
 - [tlsuv WebSocket Buffered Read](tlsuv-websocket-buffered-read.md)

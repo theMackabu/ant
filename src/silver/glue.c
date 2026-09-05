@@ -683,6 +683,13 @@ ant_value_t jit_helper_call_is_proto(
   return sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, false);
 }
 
+ant_value_t jit_helper_call_char_code_at(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, 
+  ant_value_t receiver, ant_value_t *args, int argc
+) {
+  return sv_op_call_char_code_at(vm, js, func, receiver, args, argc);
+}
+
 ant_value_t jit_helper_call_array_includes(
   sv_vm_t *vm, ant_t *js,
   ant_value_t call_func, ant_value_t call_this,
@@ -1199,13 +1206,7 @@ void jit_helper_set_name(
 }
 
 ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
-  if (vtype(obj) == kTypeArray)
-    return tov((double)(uint32_t)js_arr_len(js, obj));
-
-  if (vtype(obj) == kTypeString)
-    return tov((double)str_utf16_len(js, obj));
-
-  return js_getprop_fallback(js, obj, "length");
+  return sv_get_length_value(js, obj);
 }
 
 ant_value_t jit_helper_get_length_inline(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
@@ -1307,6 +1308,7 @@ ant_value_t jit_helper_object(
   sv_obj_site_cache_t *site
 ) {
   ant_value_t obj = mkobj(js, 0);
+  if (is_err(obj)) return obj;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
   
   sv_obj_site_apply(js, func, site, ptr);
@@ -1314,6 +1316,36 @@ ant_value_t jit_helper_object(
   
   if (vtype(proto) == kTypeObject) js_set_proto_init(obj, proto);
   return obj;
+}
+
+ant_value_t jit_helper_object_template(sv_vm_t *vm, ant_t *js, sv_func_t *func, sv_obj_site_cache_t *site) {
+  if (vtype(site->literal_template) != kTypeObject) {
+    ant_value_t seed = jit_helper_object(vm, js, func, site);
+    if (is_err(seed)) return seed;
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, seed);
+    
+    uint8_t *ip = func->code + site->bc_off + sv_op_size[OP_OBJECT];
+    for (uint16_t i = 0; i < site->key_count; i++) {
+      ant_value_t value;
+      int size = sv_literal_constant_at(func, ip, &value);
+      ANT_ASSERT(size != 0, "invalid constant literal template");
+      
+      sv_atom_t *key = &func->atoms[site->key_atoms[i]];
+      sv_define_slot(js, seed, value, key->str, key->len, i);
+      
+      if (js->thrown_exists) {
+        GC_ROOT_RESTORE(js, mark);
+        return mkval(kTypeError, 0);
+      }
+      ip += size + sv_op_size[OP_DEFINE_SLOT];
+    }
+    
+    site->literal_template = seed;
+    GC_ROOT_RESTORE(js, mark);
+  }
+  
+  return js_mkobj_from_template(js, site->literal_template);
 }
 
 ant_value_t jit_helper_regexp(

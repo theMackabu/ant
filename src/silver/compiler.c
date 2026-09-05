@@ -1821,15 +1821,16 @@ static bool is_self_append_inplace_safe_expr(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 static void compile_template_items(sv_compiler_t *c, sv_ast_t *node, int start) {
-  compile_expr(c, node->args.items[start]);
-  if (!is_template_segment(node->args.items[start]))
-    emit_op(c, OP_TO_STRING);
-  for (int i = start + 1; i < node->args.count; i++) {
+  bool has_value = false;
+  for (int i = start; i < node->args.count; i++) {
     sv_ast_t *item = node->args.items[i];
+    if (is_template_segment(item) && item->len == 0) continue;
     compile_expr(c, item);
     if (!is_template_segment(item)) emit_op(c, OP_TO_STRING);
-    emit_op(c, OP_ADD);
+    if (has_value) emit_op(c, OP_ADD);
+    has_value = true;
   }
+  if (!has_value) emit_constant(c, js_mkstr_permanent(c->js, "", 0));
 }
 
 static void compile_self_append_rhs(
@@ -1878,6 +1879,19 @@ static inline bool is_ident_name(sv_ast_t *node, const char *name) {
     && memcmp(node->str, name, n) == 0;
 }
 
+static void mark_char_code_at_binding(sv_compiler_t *c, sv_ast_t *prop) {
+  if (!prop || prop->type != N_PROPERTY || (prop->flags & FN_COMPUTED)) return;
+  sv_ast_t *key = prop->left;
+  sv_ast_t *value = prop->right;
+  
+  if (!key || !key->str || !is_ident_str(key->str, key->len, "StringPrototypeCharCodeAt", 25)) return;
+  if (value && (value->type == N_ASSIGN_PAT || value->type == N_ASSIGN)) value = value->left;
+  if (!value || value->type != N_IDENT) return;
+  
+  int local = resolve_local(c, value->str, value->len);
+  if (local >= 0) c->locals[local].char_code_at_hint = true;
+}
+
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   if (!pat) return;
   switch (pat->type) {
@@ -1897,6 +1911,7 @@ static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
           hoist_var_pattern(c, prop->right);
         else if (prop->type == N_REST || prop->type == N_SPREAD)
           hoist_var_pattern(c, prop->right);
+        mark_char_code_at_binding(c, prop);
       }
       break;
     case N_ASSIGN_PAT:
@@ -1993,6 +2008,7 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
           hoist_lexical_pattern(c, prop->right, is_const);
         else if (prop->type == N_REST || prop->type == N_SPREAD)
           hoist_lexical_pattern(c, prop->right, is_const);
+        mark_char_code_at_binding(c, prop);
       }
       break;
     default:
@@ -2604,8 +2620,33 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type);
+
+static bool compile_primitive_type_compare(sv_compiler_t *c, sv_ast_t *node) {
+  if (node->op != TOK_SEQ && node->op != TOK_SNE && node->op != TOK_EQ && node->op != TOK_NE) return false;
+  sv_ast_t *type = node->left, *name = node->right;
+  
+  if (name->type == N_TYPEOF) { type = node->right; name = node->left; }
+  if (type->type != N_TYPEOF || name->type != N_STRING) return false;
+  
+  static const struct { const char *name; uint8_t type; } primitives[] = {
+    {"string", kTypeString}, {"number", kTypeNumber}, {"boolean", kTypeBool},
+    {"undefined", kTypeUndefined}, {"symbol", kTypeSymbol}, {"bigint", kTypeBigInt},
+  };
+  
+  for (size_t i = 0; i < sizeof(primitives) / sizeof(primitives[0]); i++) {
+    if (!is_ident_str(name->str, name->len, primitives[i].name, (uint32_t)strlen(primitives[i].name))) continue;
+    compile_typeof_op(c, type, primitives[i].type);
+    if (node->op == TOK_SNE || node->op == TOK_NE) emit_op(c, OP_NOT);
+    return true;
+  }
+  
+  return false;
+}
+
 void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
   uint8_t op = node->op;
+  if (compile_primitive_type_compare(c, node)) return;
 
   if (op == TOK_LAND) {
     compile_expr(c, node->left);
@@ -3063,14 +3104,14 @@ void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
   patch_jump(c, end_jump);
 }
 
-void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
+static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
   sv_ast_t *arg = node->right;
   if (arg->type == N_IDENT) {
     int local = resolve_local(c, arg->str, arg->len);
     if (local != -1) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
-      if (known && c->with_depth == 0 && c->locals[local].is_const) {
+      if (test_type < 0 && known && c->with_depth == 0 && c->locals[local].is_const) {
         emit_constant(c, js_mkstr_permanent(c->js, known, strlen(known)));
         return;
       }
@@ -3108,7 +3149,15 @@ void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
         arg->str, arg->len);
     }
   } else compile_expr(c, arg);
-  emit_op(c, OP_TYPEOF);
+  
+  if (test_type >= 0) {
+    emit_op(c, OP_IS_PRIMITIVE_TYPE);
+    emit(c, (uint8_t)test_type);
+  } else emit_op(c, OP_TYPEOF);
+}
+
+void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
+  compile_typeof_op(c, node, -1);
 }
 
 static bool sv_node_has_optional_base(sv_ast_t *n) {
@@ -3453,6 +3502,42 @@ static bool compile_call_array_includes_intrinsic(
   for (int i = 0; i < node->args.count; i++)
     compile_expr(c, node->args.items[i]);
   emit_op(c, OP_CALL_ARRAY_INCLUDES);
+  emit_u16(c, (uint16_t)node->args.count);
+  
+  return true;
+}
+
+static bool is_char_code_at_binding(sv_compiler_t *c, sv_ast_t *callee) {
+  if (!callee || callee->type != N_IDENT) return false;
+  for (sv_compiler_t *scope = c; scope; scope = scope->enclosing) {
+    int local = resolve_local(scope, callee->str, callee->len);
+    if (local >= 0) return scope->locals[local].char_code_at_hint;
+  }
+  return false;
+}
+
+static bool compile_call_char_code_at_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count > UINT16_MAX) return false;
+  sv_ast_t *callee = node->left;
+  
+  if (!callee) return false;
+  if (callee->type == N_MEMBER) {
+    if (member_call_needs_optional_base_guard(callee)) return false;
+    if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+    if (is_ident_name(callee->left, "super")) return false;
+    if (!is_ident_str(callee->right->str, callee->right->len, "charCodeAt", 10)) return false;
+  } else if (!is_char_code_at_binding(c, callee)) return false;
+
+  sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
+  if (kind == SV_CALL_DIRECT) {
+    emit_op(c, OP_UNDEF);
+    emit_op(c, OP_SWAP);
+  }
+  
+  for (int i = 0; i < node->args.count; i++) compile_expr(c, node->args.items[i]);
+  emit_op(c, OP_CALL_CHAR_CODE_AT);
   emit_u16(c, (uint16_t)node->args.count);
   
   return true;
@@ -4125,6 +4210,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
 
   if (compile_call_array_includes_intrinsic(c, node, has_spread))
+    return;
+
+  if (compile_call_char_code_at_intrinsic(c, node, has_spread))
     return;
 
   if (compile_call_map_template_intrinsic(c, node, has_spread, false))

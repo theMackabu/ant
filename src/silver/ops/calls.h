@@ -65,6 +65,18 @@ static inline ant_value_t sv_op_call_stable_builtin(
     vm, js, call_func, call_this, args, argc, NULL, false);
 }
 
+static inline ant_value_t sv_op_call_char_code_at(
+  sv_vm_t *vm, ant_t *js, ant_value_t func, ant_value_t receiver,
+  ant_value_t *args, int argc
+) {
+  ant_value_t result;
+  if (!js_try_char_code_at(js, func, receiver, args, argc, &result))
+    return sv_vm_call(vm, js, func, receiver, args, argc, NULL, false);
+  js->new_target = js_mkundef();
+  sv_vm_maybe_checkpoint_microtasks(js);
+  return result;
+}
+
 static inline void sv_call_args_reset(sv_call_args_t *a, ant_value_t *args, int argc) {
   a->args = args;
   a->argc = argc;

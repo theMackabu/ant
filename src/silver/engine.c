@@ -707,6 +707,35 @@ ant_value_t sv_string_builder_flush_slot(
   return out;
 }
 
+static bool sv_try_short_string_append(
+  ant_t *js, ant_value_t lhs, ant_value_t rhs, ant_value_t *result
+) {
+  ant_flat_string_t *left = sv_string_builder_flat_ptr(lhs);
+  ant_flat_string_t *right = sv_string_builder_flat_ptr(rhs);
+  
+  if (!left || !right) return false;
+  if (left->len > STR_BUILDER_TAIL_CAP || right->len > STR_BUILDER_TAIL_CAP - left->len) return false;
+  
+  if (left->len == 0) { *result = rhs; return true; }
+  if (right->len == 0) { *result = lhs; return true; }
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, lhs);
+  GC_ROOT_PIN(js, rhs);
+  size_t len = (size_t)(left->len + right->len);
+  *result = js_mkstr(js, NULL, len);
+  
+  if (!is_err(*result)) {
+    ant_flat_string_t *out = ant_str_flat_ptr(*result);
+    memcpy(out->bytes, left->bytes, (size_t)left->len);
+    memcpy(out->bytes + left->len, right->bytes, (size_t)right->len);
+    out->bytes[len] = '\0';
+    str_flat_init_meta(out, str_detect_ascii_bytes(out->bytes, len));
+  } GC_ROOT_RESTORE(js, mark);
+  
+  return true;
+}
+
 ant_value_t sv_string_builder_append_slot(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint16_t slot_idx, ant_value_t rhs
@@ -783,9 +812,17 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
   if (!slot) return js_mkerr(js, "invalid string builder slot");
 
-  // the snapshot path is only semantically required if the slot changed while
-  // evaluating the RHS. when it did not, delegate to the normal append path so
-  // active builders can keep appending in place instead of rebuilding.
+  // Snapshot-aware appends have already exposed the old immutable value.
+  // Keep short results flat instead of allocating and immediately reading a builder.
+  ant_value_t short_result;
+  if (sv_try_short_string_append(js, lhs, rhs, &short_result)) {
+    if (is_err(short_result)) return short_result;
+    *slot = short_result;
+    sv_record_slot_feedback(frame, func, slot_idx, *slot);
+    return js_mkundef();
+  }
+
+  // Reuse active builders when evaluating the RHS did not change the slot.
   if (*slot == lhs)
     return sv_string_builder_append_slot(vm, js, frame, func, slot_idx, rhs);
 
@@ -1681,6 +1718,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_NOT:         { sv_op_not(vm, js);                   NEXT(1); }
   L_TYPEOF:      { sv_op_typeof(vm, js);                NEXT(1); }
+  L_IS_PRIMITIVE_TYPE: {
+    vm->stack[vm->sp - 1] = js_bool(vtype(vm->stack[vm->sp - 1]) == ip[1]);
+    NEXT(2);
+  }
   L_VOID:        { sv_op_void(vm);                      NEXT(1); }
   L_DELETE:      { VM_CHECK(sv_op_delete(vm, js));      NEXT(1); }
   L_DELETE_VAR:  { sv_op_delete_var(vm, js, func, ip);  NEXT(5); }
@@ -1974,6 +2015,20 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_CALL_SUPER: {
     VM_CHECK(sv_op_call_super(vm, js, frame, ip));
+    NEXT(3);
+  }
+
+  L_CALL_CHAR_CODE_AT: {
+    uint16_t call_argc = sv_get_u16(ip + 1);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t target = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t receiver = vm->stack[vm->sp - call_argc - 2];
+    frame->ip = ip;
+    ant_value_t result = sv_op_call_char_code_at(vm, js, target, receiver, call_args, call_argc);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+    vm->sp -= call_argc + 2;
+    if (is_err(result)) { sv_err = result; goto sv_throw; }
+    vm->stack[vm->sp++] = result;
     NEXT(3);
   }
 

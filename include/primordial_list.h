@@ -17,6 +17,7 @@ PRIMORDIAL_DEF(StringPrototypeToLowerCase,  STRING_PROTO,   "toLowerCase", true)
 PRIMORDIAL_DEF(StringPrototypeToUpperCase,  STRING_PROTO,   "toUpperCase", true)
 PRIMORDIAL_DEF(JSONStringify,               JSON,           "stringify",   false)
 PRIMORDIAL_DEF(String,                      GLOBAL,         "String",      false)
+PRIMORDIAL_DEF(Error,                       GLOBAL,         "Error",       false)
 PRIMORDIAL_DEF(TypeError,                   GLOBAL,         "TypeError",   false)
 #undef PRIMORDIAL_DEF
 #endif
