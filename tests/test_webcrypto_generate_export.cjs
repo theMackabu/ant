@@ -286,6 +286,44 @@ async function testSizesAndSnapshots() {
 }
 
 async function testIteratorErrors() {
+  const algorithm = { name: 'AES-GCM', length: 128 };
+  const overridden = ['encrypt'];
+  overridden[Symbol.iterator] = function* () { yield 'decrypt'; };
+  const customKey = await crypto.subtle.generateKey(algorithm, true, overridden);
+  assert(customKey.usages.join(',') === 'decrypt', 'own array iterator override');
+
+  const iteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
+  const originalNext = iteratorProto.next;
+  let nextCalls = 0;
+  iteratorProto.next = function () {
+    nextCalls++;
+    return originalNext.call(this);
+  };
+  try {
+    await crypto.subtle.generateKey(algorithm, true, ['encrypt']);
+    assert(nextCalls > 0, 'array iterator next override observed');
+  } finally {
+    iteratorProto.next = originalNext;
+  }
+
+  const converted = [{ toString() { return 'encrypt'; } }];
+  const convertedKey = await crypto.subtle.generateKey(algorithm, true, converted);
+  assert(convertedKey.usages.join(',') === 'encrypt', 'array usage conversion');
+
+  const originalReturn = Object.getOwnPropertyDescriptor(iteratorProto, 'return');
+  let closed = false;
+  iteratorProto.return = function () { closed = true; return {}; };
+  try {
+    await rejectsAsPromise(
+      () => crypto.subtle.generateKey(algorithm, true, ['invalid']),
+      'TypeError', 'invalid dense usage'
+    );
+    assert(closed, 'invalid dense usage closes iterator');
+  } finally {
+    if (originalReturn) Object.defineProperty(iteratorProto, 'return', originalReturn);
+    else delete iteratorProto.return;
+  }
+
   const key = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 128 }, true, {
       [Symbol.iterator]() {
@@ -324,12 +362,65 @@ async function testIteratorErrors() {
   assert(getterRejection === original, 'getter exception identity');
 }
 
+async function testAlgorithmMembers() {
+  const seen = [];
+  const prototype = {
+    get name() { seen.push('name'); return 'HMAC'; },
+    get hash() { seen.push('hash'); return 'SHA-256'; },
+    get length() { seen.push('length'); return 128; }
+  };
+  const key = await crypto.subtle.importKey(
+    'raw', new Uint8Array(16), Object.create(prototype), true, ['sign']
+  );
+  assert(seen.join(',') === 'name,hash,length', 'inherited algorithm getters and order');
+  assert(key.algorithm.length === 128, 'inherited algorithm length');
+
+  seen.length = 0;
+  const options = new Proxy({ name: 'HMAC', hash: 'SHA-256' }, {
+    get(target, name) { seen.push(name); return target[name]; }
+  });
+  await crypto.subtle.importKey('raw', new Uint8Array(16), options, true, ['sign']);
+  assert(seen.join(',') === 'name,hash,length', 'algorithm proxy traps and order');
+}
+
 async function main() {
   await testAes();
   await testHmac();
   await testValidation();
   await testSizesAndSnapshots();
   await testIteratorErrors();
+  await testAlgorithmMembers();
+  const options = { name: 'HMAC', hash: 'SHA-256' };
+  const first = await crypto.subtle.importKey('raw', new Uint8Array(32), options, true, ['sign']);
+  const second = await crypto.subtle.importKey('raw', new Uint8Array(32), options, false, ['verify']);
+  assert(first.algorithm !== second.algorithm, 'independent algorithm objects');
+  assert(first.algorithm.hash !== second.algorithm.hash, 'independent hash objects');
+  assert(first.usages !== second.usages, 'independent usage arrays');
+  first.algorithm.hash.name = 'changed';
+  delete first.algorithm.length;
+  Object.defineProperty(first.algorithm, 'name', { enumerable: false });
+  first.usages.push('verify');
+  const third = await crypto.subtle.importKey('raw', new Uint8Array(32), options, true, ['sign']);
+  for (const key of [second, third]) {
+    assert(key.algorithm.hash.name === 'SHA-256', 'hash mutation is isolated');
+    assert(key.algorithm.length === 256, 'algorithm deletion is isolated');
+    assert(Object.keys(key.algorithm).join(',') === 'name,length,hash', 'descriptor mutation is isolated');
+    assert(key.usages.length === 1, 'usage mutation is isolated');
+    checkKeyProperties(key);
+  }
+  const retained = [];
+  for (let i = 0; i < 10000; i++) {
+    const bytes = new Uint8Array(32);
+    bytes[0] = i & 255;
+    bytes[1] = (i >> 8) & 255;
+    const key = await crypto.subtle.importKey('raw', bytes, options, true, ['sign']);
+    if (i % 97 === 0) retained.push([key, bytes]);
+  }
+  for (const [key, bytes] of retained) {
+    equalBytes(await crypto.subtle.exportKey('raw', key), bytes, 'retained key bytes after allocation churn');
+    assert(key.algorithm.hash.name === 'SHA-256', 'retained hash after allocation churn');
+    assert(key.usages.join(',') === 'sign', 'retained usages after allocation churn');
+  }
   console.log('webcrypto generateKey/exportKey tests passed');
 }
 

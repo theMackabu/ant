@@ -19,7 +19,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "base64.h"
-#include "descriptors.h"
 #include "errors.h"
 #include "gc/roots.h"
 #include "modules/crypto.h"
@@ -164,6 +163,7 @@ typedef enum {
 } crypto_name_kind_t;
 
 static ant_value_t crypto_webcrypto_string(ant_t *js, ant_value_t value) {
+  if (vtype(value) == kTypeString) return value;
   if (is_object_type(value) || vtype(value) == kTypeBuiltin)
     value = js_to_primitive(js, value, 1);
   if (is_err(value)) return value;
@@ -171,10 +171,35 @@ static ant_value_t crypto_webcrypto_string(ant_t *js, ant_value_t value) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol to a string");
   return js_tostring_val(js, value);
 }
+
+static ant_value_t crypto_algorithm_member(ant_t *js, ant_value_t object, const char *interned_name) {
+  if (!interned_name) return js_mkerr(js, "oom");
+  if (vtype(object) != kTypeObject) return js_get(js, object, interned_name);
+
+  ant_object_t *obj = js_obj_ptr(object);
+  if (obj->flags.is_exotic) return js_get(js, object, interned_name);
+
+  int32_t slot = ant_shape_lookup_interned(obj->shape, interned_name);
+  if (slot >= 0) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, (uint32_t)slot);
+    if (prop->has_getter || prop->has_setter) return js_get(js, object, interned_name);
+    return ant_object_prop_get_unchecked(obj, (uint32_t)slot);
+  }
+
+  if (js_get_proto(js, object) != js->sym.object_proto) return js_get(js, object, interned_name);
+  ant_object_t *proto = js_obj_ptr(js->sym.object_proto);
+  
+  if (proto->flags.is_exotic || ant_shape_lookup_interned(proto->shape, interned_name) >= 0 ||
+      vtype(js_get_proto(js, js->sym.object_proto)) != kTypeNull)
+    return js_get(js, object, interned_name);
+
+  return js_mkundef();
+}
+
 static ant_value_t crypto_subtle_get_algorithm_name(ant_t *js, ant_value_t algorithm) {
-  if (vtype(algorithm) == kTypeString) return js_tostring_val(js, algorithm);
+  if (vtype(algorithm) == kTypeString) return algorithm;
   if (is_object_type(algorithm)) {
-    ant_value_t name = js_get(js, algorithm, "name");
+    ant_value_t name = crypto_algorithm_member(js, algorithm, js->intern.name);
     if (is_err(name)) return name;
     if (vtype(name) == kTypeUndefined)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm.name is required");
@@ -215,10 +240,7 @@ static void crypto_hmac_finalize(ant_t *js, ant_object_t *obj) {
 
 static void crypto_key_free(ant_crypto_key_t *key) {
   if (!key) return;
-  if (key->key) {
-    OPENSSL_cleanse(key->key, key->key_len);
-    free(key->key);
-  }
+  OPENSSL_cleanse(key->key, key->key_len);
   free(key);
 }
 
@@ -476,14 +498,14 @@ static const EVP_MD *crypto_digest_from_algorithm(ant_t *js, ant_value_t algorit
   return crypto_digest_from_name(algo, algo_len);
 }
 
-static const char *crypto_webcrypto_digest_name(const EVP_MD *md) {
-  if (!md) return NULL;
+static unsigned crypto_hash_record_index(const EVP_MD *md) {
+  if (!md) return 0;
   switch (EVP_MD_type(md)) {
-    case NID_sha1: return "SHA-1";
-    case NID_sha256: return "SHA-256";
-    case NID_sha384: return "SHA-384";
-    case NID_sha512: return "SHA-512";
-    default: return NULL;
+    case NID_sha1: return 4;
+    case NID_sha256: return 5;
+    case NID_sha384: return 6;
+    case NID_sha512: return 7;
+    default: return 0;
   }
 }
 
@@ -494,7 +516,7 @@ static ant_value_t crypto_dom_exception_error(ant_t *js, const char *message, co
 static ant_value_t crypto_read_key_length(
   ant_t *js, ant_value_t object, bool required, uint32_t maximum, bool *present, uint32_t *result
 ) {
-  ant_value_t value = js_get(js, object, "length");
+  ant_value_t value = crypto_algorithm_member(js, object, js->intern.length);
   if (is_err(value)) return value;
   if (vtype(value) == kTypeUndefined) {
     *present = false;
@@ -527,7 +549,7 @@ static ant_value_t crypto_get_hmac_digest(
     return js_mkerr_typed(js, JS_ERR_TYPE, "HMAC algorithm must be an object");
   }
 
-  ant_value_t hash = js_get(js, algorithm, "hash");
+  ant_value_t hash = crypto_algorithm_member(js, algorithm, intern_string("hash", 4));
   if (is_err(hash)) return hash;
   if (vtype(hash) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "HMAC algorithm.hash is required");
@@ -541,9 +563,9 @@ static ant_value_t crypto_get_hmac_digest(
   const EVP_MD *md = NULL;
   
   if (len == 5 && strncasecmp(name, "SHA-1", len) == 0) md = EVP_sha1();
-  if (len == 7 && strncasecmp(name, "SHA-256", len) == 0) md = EVP_sha256();
-  if (len == 7 && strncasecmp(name, "SHA-384", len) == 0) md = EVP_sha384();
-  if (len == 7 && strncasecmp(name, "SHA-512", len) == 0) md = EVP_sha512();
+  else if (len == 7 && strncasecmp(name, "SHA-256", len) == 0) md = EVP_sha256();
+  else if (len == 7 && strncasecmp(name, "SHA-384", len) == 0) md = EVP_sha384();
+  else if (len == 7 && strncasecmp(name, "SHA-512", len) == 0) md = EVP_sha512();
   if (!md) return crypto_dom_exception_error(js, "Unsupported HMAC hash algorithm", "NotSupportedError");
 
   *result = md;
@@ -942,18 +964,25 @@ static const char *const crypto_key_usage_names[] = {
   "deriveKey", "deriveBits", "wrapKey", "unwrapKey"
 };
 
-static bool crypto_read_key_usage(ant_t *js, ant_value_t value, void *ctx) {
-  ant_value_t string = crypto_webcrypto_string(js, value);
-  if (is_err(string)) return false;
-  
+static uint8_t crypto_key_usage_bit(ant_t *js, ant_value_t string) {
   size_t len = 0;
   const char *name = js_getstr(js, string, &len);
   
   for (unsigned i = 0; i < 8; i++) if (
     strlen(crypto_key_usage_names[i]) == len && 
     memcmp(name, crypto_key_usage_names[i], len) == 0
-  ) {
-    *(uint8_t *)ctx |= (uint8_t)(1u << i);
+  ) return (uint8_t)(1u << i);
+  
+  return 0;
+}
+
+static bool crypto_read_key_usage(ant_t *js, ant_value_t value, void *ctx) {
+  ant_value_t string = crypto_webcrypto_string(js, value);
+  if (is_err(string)) return false;
+  uint8_t bit = crypto_key_usage_bit(js, string);
+  
+  if (bit) {
+    *(uint8_t *)ctx |= bit;
     return true;
   }
   
@@ -961,10 +990,45 @@ static bool crypto_read_key_usage(ant_t *js, ant_value_t value, void *ctx) {
   return false;
 }
 
+static bool crypto_read_dense_key_usages(ant_t *js, ant_value_t input, uint8_t *mask) {
+  if (vtype(input) != kTypeArray) return false;
+  ant_object_t *array = js_obj_ptr(input);
+  if (!array->flags.fast_array || array->flags.is_exotic || array->flags.may_have_holes ||
+      js_get_proto(js, input) != js->sym.array_proto) return false;
+
+  ant_offset_t symbol = (ant_offset_t)vdata(get_iterator_sym());
+  if (lkp_sym(input, symbol).obj) return false;
+  
+  ant_prop_loc_t method = lkp_sym(js->sym.array_proto, symbol);
+  if (!method.obj || js_prop_load(method) != js->sym.array_values_fn) return false;
+  
+  const ant_shape_prop_t *prop = ant_shape_prop_at(method.obj->shape, method.slot);
+  if (!prop || prop->has_getter || prop->has_setter || method.obj->flags.is_exotic) return false;
+  
+  ant_prop_loc_t next = lkp(js, js->sym.array_iterator_proto, "next", 4);
+  if (!next.obj || js_prop_load(next) != js->mutable_roots.crypto_array_iterator_next) return false;
+  
+  prop = ant_shape_prop_at(next.obj->shape, next.slot);
+  if (!prop || prop->has_getter || prop->has_setter || next.obj->flags.is_exotic) return false;
+
+  uint8_t usages = 0;
+  for (uint32_t i = 0; i < array->u.array.len; i++) {
+    ant_value_t value = array->u.array.data[i];
+    if (vtype(value) != kTypeString) return false;
+    uint8_t bit = crypto_key_usage_bit(js, value);
+    if (!bit) return false;
+    usages |= bit;
+  }
+  
+  *mask = usages;
+  return true;
+}
+
 static ant_value_t crypto_read_key_usages(ant_t *js, ant_value_t input, uint8_t *mask) {
   if (!is_object_type(input))
     return js_mkerr_typed(js, JS_ERR_TYPE, "keyUsages must be an iterable sequence");
   *mask = 0;
+  if (crypto_read_dense_key_usages(js, input, mask)) return js_mkundef();
   // TODO: align js_iter with WebCrypto sequence semantics (getters, cached next,
   // TypeError validation, and preserving conversion exceptions during IteratorClose).
   bool iterated = js_iter(js, input, crypto_read_key_usage, mask);
@@ -1042,48 +1106,82 @@ static ant_value_t crypto_read_key_format(ant_t *js, ant_value_t value, bool *ra
   return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CryptoKey format");
 }
 
+static ant_value_t crypto_new_key_record(ant_t *js, unsigned index) {
+  ant_value_t seed = js->mutable_roots.crypto_key_templates[index];
+  if (vtype(seed) != kTypeObject) {
+    seed = js_mkobj(js);
+    if (is_err(seed)) return seed;
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, seed);
+    if (index == 0) {
+      mkprop(js, seed, ANT_STRING("type"), ANT_STRING("secret"), ANT_PROP_ATTR_ENUMERABLE);
+      mkprop(js, seed, ANT_STRING("extractable"), js_false, ANT_PROP_ATTR_ENUMERABLE);
+      mkprop(js, seed, ANT_STRING("algorithm"), js_mkundef(), ANT_PROP_ATTR_ENUMERABLE);
+      mkprop(js, seed, ANT_STRING("usages"), js_mkundef(), ANT_PROP_ATTR_ENUMERABLE);
+      js_set_sym(js, seed, get_toStringTag_sym(), ANT_STRING("CryptoKey"));
+    } else {
+      static const char *const hashes[] = { "SHA-1", "SHA-256", "SHA-384", "SHA-512" };
+      ant_value_t name = index == CRYPTO_KEY_AES_GCM ? ANT_STRING("AES-GCM") :
+        index == CRYPTO_KEY_HMAC ? ANT_STRING("HMAC") :
+        index == CRYPTO_KEY_PBKDF2 ? ANT_STRING("PBKDF2") :
+        js_mkstr(js, hashes[index - 4], strlen(hashes[index - 4]));
+      js_mkprop_fast(js, seed, "name", 4, name);
+      if (index == CRYPTO_KEY_AES_GCM || index == CRYPTO_KEY_HMAC)
+        js_mkprop_fast(js, seed, "length", 6, js_mknum(0));
+      if (index == CRYPTO_KEY_HMAC)
+        js_mkprop_fast(js, seed, "hash", 4, js_mkundef());
+    }
+    GC_ROOT_RESTORE(js, mark);
+    if (js->thrown_exists) return mkval(kTypeError, 0);
+    js->mutable_roots.crypto_key_templates[index] = seed;
+  }
+
+  return js_mkobj_from_template(js, seed);
+}
+
+static inline void crypto_key_record_set(ant_t *js, ant_value_t obj, uint32_t slot, ant_value_t value) {
+  ant_object_t *target = js_obj_ptr(obj);
+  ant_object_prop_set_unchecked(target, slot, value);
+  gc_write_barrier(js, target, value);
+}
+
 static ant_value_t crypto_make_key_algorithm(
   ant_t *js, ant_crypto_key_kind_t kind, const EVP_MD *md, uint32_t key_bits
 ) {
-  ant_value_t algorithm = js_mkobj(js), hash = js_mkundef();
+  ant_value_t algorithm = crypto_new_key_record(js, (unsigned)kind), hash = js_mkundef();
   if (is_err(algorithm)) return algorithm;
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, algorithm);
   GC_ROOT_PIN(js, hash);
 
   if (kind == CRYPTO_KEY_AES_GCM) {
-    js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "AES-GCM", 7));
-    js_mkprop_fast(js, algorithm, "length", 6, js_mknum((double)key_bits));
+    crypto_key_record_set(js, algorithm, 1, js_mknum((double)key_bits));
   } else if (kind == CRYPTO_KEY_HMAC) {
-    const char *hash_name = crypto_webcrypto_digest_name(md);
-    if (!hash_name) {
-      ant_value_t error = crypto_dom_exception_error(
-        js, "Unsupported HMAC hash algorithm", "NotSupportedError"
-      );
+    unsigned hash_index = crypto_hash_record_index(md);
+    if (!hash_index) {
+      ant_value_t error = crypto_dom_exception_error(js, "Unsupported HMAC hash algorithm", "NotSupportedError");
       GC_ROOT_RESTORE(js, root_mark);
       return error;
     }
-    hash = js_mkobj(js);
+    hash = crypto_new_key_record(js, hash_index);
     if (is_err(hash)) {
       GC_ROOT_RESTORE(js, root_mark);
       return hash;
     }
-    js_mkprop_fast(js, hash, "name", 4, js_mkstr(js, hash_name, strlen(hash_name)));
-    js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "HMAC", 4));
-    js_mkprop_fast(js, algorithm, "length", 6, js_mknum((double)key_bits));
-    js_mkprop_fast(js, algorithm, "hash", 4, hash);
-  } else js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "PBKDF2", 6));
+    crypto_key_record_set(js, algorithm, 1, js_mknum((double)key_bits));
+    crypto_key_record_set(js, algorithm, 2, hash);
+  }
 
   GC_ROOT_RESTORE(js, root_mark);
   return algorithm;
 }
 
 static ant_crypto_key_t *crypto_key_alloc(size_t len) {
-  ant_crypto_key_t *key = calloc(1, sizeof(*key));
+  size_t capacity = len ? len : 1;
+  if (capacity > SIZE_MAX - sizeof(ant_crypto_key_t)) return NULL;
+  ant_crypto_key_t *key = malloc(sizeof(*key) + capacity);
   if (!key) return NULL;
-  key->key = malloc(len ? len : 1);
-  if (!key->key) { free(key); return NULL; }
-  key->key_len = len;
+  *key = (ant_crypto_key_t){ .key = (uint8_t *)(key + 1), .key_len = len };
   return key;
 }
 
@@ -1101,21 +1199,20 @@ static ant_value_t crypto_make_key_object(
   
   algorithm = crypto_make_key_algorithm(js, key->kind, key->md, bits);
   if (is_err(algorithm)) { obj = algorithm; goto cleanup; }
-  usages = js_mkarr(js);
-  if (is_err(usages)) { obj = usages; goto cleanup; }
-  
+  ant_value_t usage_values[8];
+  uint32_t usage_count = 0;
   for (unsigned i = 0; i < 8; i++) {
     if (key->usages & (1u << i))
-      js_arr_push(js, usages, js_mkstr(js, crypto_key_usage_names[i], strlen(crypto_key_usage_names[i])));
+      usage_values[usage_count++] = js->mutable_roots.crypto_usage_strings[i];
   }
+  usages = js_mkarr_dense_literal(js, usage_values, usage_count);
+  if (is_err(usages)) { obj = usages; goto cleanup; }
   
-  obj = js_mkobj(js);
+  obj = crypto_new_key_record(js, 0);
   if (is_err(obj)) goto cleanup;
-  mkprop(js, obj, js_mkstr(js, "type", 4), js_mkstr(js, "secret", 6), ANT_PROP_ATTR_ENUMERABLE);
-  mkprop(js, obj, js_mkstr(js, "extractable", 11), js_bool(key->extractable), ANT_PROP_ATTR_ENUMERABLE);
-  mkprop(js, obj, js_mkstr(js, "algorithm", 9), algorithm, ANT_PROP_ATTR_ENUMERABLE);
-  mkprop(js, obj, js_mkstr(js, "usages", 6), usages, ANT_PROP_ATTR_ENUMERABLE);
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "CryptoKey", 9));
+  crypto_key_record_set(js, obj, 1, js_bool(key->extractable));
+  crypto_key_record_set(js, obj, 2, algorithm);
+  crypto_key_record_set(js, obj, 3, usages);
   
   if (js->thrown_exists) { obj = mkval(kTypeError, 0); goto cleanup; }
   js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
@@ -2190,6 +2287,9 @@ static ant_value_t create_crypto_obj(ant_t *js) {
 }
 
 void init_crypto_module(ant_t *js) {
+  js->mutable_roots.crypto_array_iterator_next = js_get(js, js->sym.array_iterator_proto, "next");
+  for (unsigned i = 0; i < 8; i++)
+    js->mutable_roots.crypto_usage_strings[i] = js_mkstr(js, crypto_key_usage_names[i], strlen(crypto_key_usage_names[i]));
   ant_value_t crypto_obj = create_crypto_obj(js);
   js_set(js, js_glob(js), "crypto", crypto_obj);
 }
