@@ -8,11 +8,12 @@ const saved = {
   isArray: Array.isArray,
   stringify: JSON.stringify,
   String,
+  Error,
   TypeError,
 };
 let p, normalized;
 try {
-  const poisoned = () => { throw new Error('mutable builtin used'); };
+  const poisoned = () => { throw new saved.Error('mutable builtin used'); };
   delete String.prototype.slice;
   String.prototype.charCodeAt = poisoned;
   String.prototype.toLowerCase = poisoned;
@@ -21,11 +22,13 @@ try {
   Array.isArray = poisoned;
   JSON.stringify = poisoned;
   globalThis.String = poisoned;
+  globalThis.Error = poisoned;
   globalThis.TypeError = poisoned;
   p = require('ant:internal/primordials');
   normalized = require('node:path').normalize('/a/../b');
 } finally {
   globalThis.String = saved.String;
+  globalThis.Error = saved.Error;
   globalThis.TypeError = saved.TypeError;
   String.prototype.slice = saved.slice;
   String.prototype.charCodeAt = saved.charCodeAt;
@@ -40,10 +43,12 @@ assert.strictEqual(normalized, '/b');
 assert.strictEqual(Object.getPrototypeOf(p), null);
 assert.strictEqual(Object.isFrozen(p), true);
 assert.strictEqual(require('ant:internal/primordials'), p);
-assert.strictEqual(Object.keys(p).length, 19);
+assert.strictEqual(Object.keys(p).length, 20);
 assert.strictEqual(p.ArrayIsArray([]), true);
 assert.strictEqual(p.JSONStringify({ x: 1 }), '{"x":1}');
 assert.strictEqual(p.String(123), '123');
+assert.strictEqual(p.Error, saved.Error);
+assert.strictEqual(new p.Error('captured').message, 'captured');
 assert.strictEqual(p.TypeError, saved.TypeError);
 assert.strictEqual(p.StringPrototypeSlice('abcd', 1, 3), 'bc');
 assert.strictEqual(p.StringPrototypeCharCodeAt('abc', 1), 98);

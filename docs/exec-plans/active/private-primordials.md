@@ -14,8 +14,9 @@ hooks, compiler hints, or opcode changes.
 
 - `include/primordial_list.h` declares the supported captures in a re-includable
   definition table, used to generate IDs and capture metadata.
-- Before JS bootstrap, original values are copied into 20 per-runtime slots:
-  19 exported values plus the original Function.prototype.call for uncurrying.
+- Before JS bootstrap, original values are copied into 21 per-runtime slots:
+  20 exported values (including Error, also used by native assertion matching)
+  plus the original Function.prototype.call for uncurrying.
 - GC marks these slots even if public properties are overwritten or deleted.
 - `ant:internal/primordials` constructs and freezes one null-prototype object
   on first import. Uncurried methods use the existing bound-function machinery.
@@ -24,11 +25,13 @@ hooks, compiler hints, or opcode changes.
   API and does not expose a general capture/lookup facility.
 
 Startup capture is a fixed number of existing property lookups and stores, not
-a traversal of the builtin graph. Slot storage is 160 bytes per runtime on this
+a traversal of the builtin graph. Slot storage is 168 bytes per runtime on this
 64-bit build; this is not a claim about total process memory. Wrapper allocation
 is deferred until first import. Failure leaves the cached object unpublished.
 
 ## Verification and profiling
+
+The measurements below predate the additional Error capture.
 
 The release/PGO/LTO build passes, as do preflight, focused primordial/alias/cwd
 tests, 100 seeded Node path differential probes, and the full spec suite

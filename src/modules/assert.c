@@ -172,8 +172,7 @@ static ant_value_t assert_exception_matches(
     if (js_truthy(js, matches)) return js_mkundef();
   }
 
-  ant_value_t error_ctor = js_get(js, js_glob(js), "Error");
-  if (is_err(error_ctor)) return error_ctor;
+  ant_value_t error_ctor = js->primordial_values[ANT_PRIMORDIAL_Error];
   if (js_is_prototype_of(js, error_ctor, expected))
     return assertion_error(js, "The error is expected to be an instance of the specified constructor", message);
 
