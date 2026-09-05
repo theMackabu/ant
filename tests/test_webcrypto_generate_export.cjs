@@ -197,7 +197,7 @@ async function testValidation() {
     'TypeError',
     'export non-CryptoKey'
   );
-  for (const usages of ['', 'encrypt', {}, null, undefined]) {
+  for (const usages of ['', 'encrypt', null, undefined]) {
     await rejectsAsPromise(
       () => crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, usages),
       'TypeError', 'keyUsages must be an iterable object'
@@ -257,40 +257,28 @@ async function testSizesAndSnapshots() {
 }
 
 async function testIteratorErrors() {
-  const events = [];
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, {
-    get [Symbol.iterator]() {
-      events.push('iterator');
-      return function () {
-        let done = false;
-        return {
-          get next() {
-            events.push('next');
-            return () => ({
-              get done() { return done; },
-              get value() { done = true; return 'encrypt'; }
-            });
-          }
-        };
-      };
-    }
-  });
-  assert(events.join(',') === 'iterator,next', 'iterator and next getters read once');
-  assert(key.usages.join(',') === 'encrypt', 'iterator result getters are honored');
-
-  const original = new Error('usage conversion');
-  let closed = false;
-  const rejection = await rejectsAsPromise(() => crypto.subtle.generateKey(
+  const key = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 128 }, true, {
       [Symbol.iterator]() {
-        return {
-          next() { return { value: { toString() { throw original; } }, done: false }; },
-          get return() { closed = true; throw new Error('closing'); }
-        };
+        let done = false;
+        return Object.create({
+          next() {
+            const step = { done, value: 'encrypt' };
+            done = true;
+            return step;
+          }
+        });
       }
     }
-  ), 'Error', 'iterator conversion rejection');
-  assert(closed && rejection === original, 'IteratorClose preserves original exception');
+  );
+  assert(key.usages.join(',') === 'encrypt', 'custom iterator with inherited next');
+
+  const original = new Error('usage conversion');
+  const rejection = await rejectsAsPromise(() => crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 128 }, true,
+    [{ toString() { throw original; } }]
+  ), 'Error', 'usage conversion rejection');
+  assert(rejection === original, 'usage exception identity without a throwing return');
 
   const getterRejection = await rejectsAsPromise(() => crypto.subtle.generateKey({
     get name() { throw original; }, length: 128

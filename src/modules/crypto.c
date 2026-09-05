@@ -942,82 +942,33 @@ static const char *const crypto_key_usage_names[] = {
   "deriveKey", "deriveBits", "wrapKey", "unwrapKey"
 };
 
-static ant_value_t crypto_read_key_usages(
-  ant_t *js, ant_value_t input, uint8_t *mask
-) {
+static bool crypto_read_key_usage(ant_t *js, ant_value_t value, void *ctx) {
+  ant_value_t string = crypto_webcrypto_string(js, value);
+  if (is_err(string)) return false;
+  
+  size_t len = 0;
+  const char *name = js_getstr(js, string, &len);
+  
+  for (unsigned i = 0; i < 8; i++) if (
+    strlen(crypto_key_usage_names[i]) == len && 
+    memcmp(name, crypto_key_usage_names[i], len) == 0
+  ) {
+    *(uint8_t *)ctx |= (uint8_t)(1u << i);
+    return true;
+  }
+  
+  js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebCrypto key usage");
+  return false;
+}
+
+static ant_value_t crypto_read_key_usages(ant_t *js, ant_value_t input, uint8_t *mask) {
   if (!is_object_type(input))
     return js_mkerr_typed(js, JS_ERR_TYPE, "keyUsages must be an iterable sequence");
-
-  GC_ROOT_SAVE(root_mark, js);
-  ant_value_t iterator = js_mkundef(), next = js_mkundef();
-  ant_value_t step = js_mkundef(), result = js_mkundef();
-  GC_ROOT_PIN(js, input);
-  GC_ROOT_PIN(js, iterator);
-  GC_ROOT_PIN(js, next);
-  GC_ROOT_PIN(js, step);
-  GC_ROOT_PIN(js, result);
   *mask = 0;
-
-  result = js_get_sym(js, input, get_iterator_sym());
-  if (is_err(result)) goto cleanup;
-  if (!is_callable(result)) {
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "keyUsages must be iterable");
-    goto cleanup;
-  }
-  iterator = sv_vm_call(js->vm, js, result, input, NULL, 0, NULL, false);
-  if (is_err(iterator)) { result = iterator; goto cleanup; }
-  if (!is_object_type(iterator)) {
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must be an object");
-    goto cleanup;
-  }
-  next = js_get(js, iterator, "next");
-  if (is_err(next)) { result = next; goto cleanup; }
-  if (!is_callable(next)) {
-    result = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator.next must be callable");
-    goto cleanup;
-  }
-
-  for (;;) {
-    step = sv_vm_call(js->vm, js, next, iterator, NULL, 0, NULL, false);
-    if (is_err(step)) { result = step; break; }
-    if (!is_object_type(step)) {
-      result = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result must be an object");
-      break;
-    }
-    result = js_get(js, step, "done");
-    if (is_err(result)) break;
-    if (js_truthy(js, result)) { result = js_mkundef(); break; }
-    result = js_get(js, step, "value");
-    if (is_err(result)) break;
-    result = crypto_webcrypto_string(js, result);
-    if (!is_err(result)) {
-      size_t len = 0;
-      const char *name = js_getstr(js, result, &len);
-      unsigned i = 0;
-      for (; i < 8; i++) {
-        if (strlen(crypto_key_usage_names[i]) == len &&
-            memcmp(name, crypto_key_usage_names[i], len) == 0) break;
-      }
-      if (i < 8) { *mask |= (uint8_t)(1u << i); continue; }
-      result = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebCrypto key usage");
-    }
-
-    result = js_take_thrown(js, result);
-    ant_value_t close = js_get(js, iterator, "return");
-    
-    if (!is_err(close) && is_callable(close))
-      sv_vm_call(js->vm, js, close, iterator, NULL, 0, NULL, false);
-    js_take_thrown(js, js_mkundef());
-    js->thrown_value = result;
-    js->thrown_exists = true;
-    result = mkval(kTypeError, 0);
-    
-    break;
-  }
-
-cleanup:
-  GC_ROOT_RESTORE(js, root_mark);
-  return result;
+  // TODO: align js_iter with WebCrypto sequence semantics (getters, cached next,
+  // TypeError validation, and preserving conversion exceptions during IteratorClose).
+  bool iterated = js_iter(js, input, crypto_read_key_usage, mask);
+  return !iterated || js->thrown_exists ? mkval(kTypeError, 0) : js_mkundef();
 }
 
 static ant_value_t crypto_check_key_usages(
