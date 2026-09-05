@@ -162,6 +162,7 @@ typedef struct sv_compiler {
   int loop_cap;
 
   struct sv_compiler *enclosing;
+  struct sv_compiler *derived_field_owner;
   sv_ast_t **field_inits;
 
   int field_init_count;
