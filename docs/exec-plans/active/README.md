@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Private Primordial Capture](private-primordials.md)
 - [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)
 - [Dynamic Property Performance](dynamic-property-perf.md)
@@ -20,6 +21,7 @@ Store in-progress execution plans here.
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
 - [PCRE2 JIT Compiler Size Optimization](pcre2-jit-size-optimization.md)
+- [Cwd-aware Path Resolution](path-resolver.md)
 - [PR #44 Source Port Audit](pr-44-source-port-audit.md)
 - [REPL Evaluation Completions](repl-evaluation-completions.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)

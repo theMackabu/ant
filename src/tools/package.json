@@ -1,7 +1,8 @@
 {
   "type": "module",
   "dependencies": {
-    "esbuild": "^0.27.2"
+    "esbuild": "^0.27.2",
+    "minimatch": "10.2.5"
   },
   "allowScripts": {
     "esbuild@0.27.2": true

@@ -8,6 +8,7 @@
 #include "sugar.h"
 #include "errors.h"
 #include "arena.h"
+#include "primordials.h"
 
 #include "gc/strings.h"
 #include "silver/ast.h"
@@ -421,6 +422,9 @@ struct ant_isolate_t {
     size_t remembered_builder_len;
     size_t remembered_builder_cap;
   } rope_gc;
+  
+  ant_value_t primordials;
+  ant_value_t primordial_values[ANT_PRIMORDIAL_COUNT];
 };
 
 static inline void ant_prototype_write_epoch_bump(ant_t *js) {

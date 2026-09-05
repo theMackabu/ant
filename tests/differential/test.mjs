@@ -7,7 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { minimizeArrays, parseArgs, runEngine, sameResult } from './runner.mjs';
 
-assert.deepEqual(familyNames, ['property', 'regexp', 'promise', 'stream-shape']);
+assert.deepEqual(familyNames, ['property', 'regexp', 'promise', 'stream-shape', 'path']);
 
 const first = generateCases({ families: familyNames, seed: 42, casesPerFamily: 2 });
 const second = generateCases({ families: familyNames, seed: 42, casesPerFamily: 2 });
@@ -22,6 +22,16 @@ for (const testCase of first.filter(testCase => testCase.family === 'stream-shap
   assert.equal(typeof testCase.params.scenario.property, 'string');
   assert.deepEqual(testCase.shrinkKeys, [], 'stream cases must remain atomic');
 }
+for (const testCase of first.filter(testCase => testCase.family === 'path')) {
+  assert.ok(testCase.params.scenarios.some(scenario => scenario.method === 'relative'));
+  assert.ok(testCase.params.scenarios.some(scenario => scenario.method === 'resolve'));
+  assert.deepEqual(testCase.shrinkKeys, ['scenarios']);
+}
+const pathCases = first.filter(testCase => testCase.family === 'path');
+assert.notDeepEqual(
+  pathCases[0].params.scenarios.slice(-400), pathCases[1].params.scenarios.slice(-400),
+  'path probes must generate new input pairs, not just reorder fixed cases'
+);
 
 const parsed = parseArgs(['--family', 'regexp', '--cases', '3', '--seed', '9', '--timeout', '25', '--minimize', '--json']);
 assert.deepEqual(parsed.families, ['regexp']);

@@ -1,10 +1,8 @@
 import * as esbuild from 'esbuild';
 import path from 'node:path';
-import { writeFileSync } from 'node:fs';
 
-function cString(input) {
-  return JSON.stringify(input);
-}
+import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 function toSpecifier(rootDir, filePath) {
   const relativePath = path.relative(rootDir, filePath).replaceAll('\\', '/');
@@ -22,6 +20,10 @@ function toSpecifier(rootDir, filePath) {
 }
 
 function toAliasSpecifiers(specifier) {
+  if (specifier === 'node:path' || specifier === 'node:path/posix' || specifier === 'node:path/win32') {
+    const name = specifier.slice('node:'.length);
+    return [name, `ant:${name}`];
+  }
   if (specifier.startsWith('node:')) return [specifier.slice('node:'.length)];
   return [];
 }
@@ -72,26 +74,28 @@ async function bundleBootstrap(entryPath, replacements) {
   return output.outputFiles[0].contents;
 }
 
+const builtinExternals = {
+  name: 'builtin-externals',
+  setup(build) {
+    build.onResolve({ filter: /^(node:|ant:)/ }, args => ({
+      path: args.path,
+      external: true
+    }));
+  }
+};
+
 async function bundleBuiltin(entryPath, format) {
   const output = await esbuild.build({
     entryPoints: [entryPath],
     bundle: true,
     write: false,
     minify: true,
+    legalComments: 'eof',
+    nodePaths: [fileURLToPath(new URL('./node_modules/', import.meta.url))],
     platform: 'neutral',
     format: format === 'MODULE_EVAL_FORMAT_ESM' ? 'esm' : 'cjs',
     target: ['es2020'],
-    plugins: [
-      {
-        name: 'builtin-externals',
-        setup(build) {
-          build.onResolve({ filter: /^(node:|ant:)/ }, args => ({
-            path: args.path,
-            external: true
-          }));
-        }
-      }
-    ]
+    plugins: [builtinExternals]
   });
 
   if (output.outputFiles.length !== 1) {
@@ -135,7 +139,7 @@ function generateBuiltinHeader(rootDir, bundles) {
   lines.push('static const ant_builtin_bundle_alias_t ant_builtin_bundle_aliases[] = {');
   bundles.forEach((bundle, index) => {
     for (const specifier of bundle.specifiers) {
-      lines.push(`  { ${cString(specifier)}, ${specifier.length}, ${cString(bundle.specifier)}, ${index} },`);
+      lines.push(`  { ${JSON.stringify(specifier)}, ${specifier.length}, ${JSON.stringify(bundle.specifier)}, ${index} },`);
     }
   });
   lines.push('};');

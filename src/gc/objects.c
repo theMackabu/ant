@@ -793,11 +793,14 @@ static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) 
 
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
-
   for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) gc_mark_coroutine(js, c);
 
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->Ant);
+  gc_mark_value(js, js->primordials);
+  
+  for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
+    gc_mark_value(js, js->primordial_values[i]);
   
   gc_mark_value(js, js->esm.hooks);
   gc_mark_value(js, js->esm.import_meta);
