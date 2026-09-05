@@ -30,6 +30,7 @@ Store in-progress execution plans here.
 - [Stream Property Surface](stream-property-surface.md)
 - [WICG Observable Migration](wicg-observable.md)
 - [WebAssembly Embedding Package](wasm-embedding-package.md)
+- [WebCrypto Secret Keys](webcrypto-secret-keys.md)
 
 Recommended sections:
 

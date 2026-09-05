@@ -2714,6 +2714,45 @@ ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
   return mkobj_with_inobj_limit(js, 0, inobj_limit);
 }
 
+ant_value_t js_mkobj_from_template(ant_t *js, ant_value_t template) {
+  if (vtype(template) != kTypeObject) return js_mkerr(js, "invalid object template");
+  if (js->obj_arena.live_count >= gc_live_major_threshold(js)) {
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, template);
+    gc_maybe(js);
+    GC_ROOT_RESTORE(js, mark);
+  }
+
+  ant_object_t *source = js_obj_ptr(template);
+  if (source->flags.is_exotic || source->finalizer || source->native.ptr ||
+      source->extra_slots || source->promise_state)
+    return js_mkerr(js, "invalid object template state");
+
+  ant_value_t *overflow = NULL;
+  if (source->overflow_prop) {
+    size_t bytes = (size_t)ant_object_overflow_cap(source) * sizeof(*overflow);
+    overflow = malloc(bytes);
+    if (!overflow) return js_mkerr(js, "oom");
+    memcpy(overflow, source->overflow_prop, bytes);
+  }
+  
+  ant_object_t *target = fixed_arena_alloc_uninit(&js->obj_arena);
+  if (!target) { free(overflow); return js_mkerr(js, "oom"); }
+  
+  *target = *source;
+  target->overflow_prop = overflow;
+  ant_shape_retain(target->shape);
+  target->mark_epoch = 0;
+  target->ic_identity = 0;
+  target->flags.generation = 0;
+  target->flags.in_remember_set = 0;
+  target->flags.gc_permanent = 0;
+  target->next = js->objects;
+  js->objects = target;
+  
+  return mkref(kTypeObject, target);
+}
+
 static ant_value_t alloc_array_with_proto_capacity(
   ant_t *js, ant_value_t proto, uint32_t minimum_capacity,
   uint32_t overwritten_prefix
