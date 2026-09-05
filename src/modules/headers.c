@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -9,6 +10,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "utf8.h"
 #include "silver/engine.h"
 
 #include "modules/headers.h"
@@ -18,12 +20,20 @@ typedef struct hdr_entry {
   char *name;
   char *value;
   struct hdr_entry *next;
+  char storage[];
 } hdr_entry_t;
+
+enum { HEADERS_INLINE_ENTRY_BYTES = 96 };
 
 typedef struct {
   hdr_entry_t  *head;
   hdr_entry_t **tail;
   size_t count;
+  bool inline_used;
+  union {
+    max_align_t align;
+    unsigned char bytes[HEADERS_INLINE_ENTRY_BYTES];
+  } inline_entry;
 } hdr_list_t;
 
 typedef struct {
@@ -60,7 +70,7 @@ static void list_free(hdr_list_t *l) {
   if (!l) return;
   for (hdr_entry_t *e = l->head; e; ) {
     hdr_entry_t *n = e->next;
-    free(e->name); free(e->value); free(e);
+    if ((void *)e != (void *)l->inline_entry.bytes) free(e);
     e = n;
   }
   free(l);
@@ -92,45 +102,50 @@ bool headers_is_headers(ant_value_t obj) {
 }
 
 static bool is_token_char(unsigned char c) {
-  if (c > 127) return false;
-  static const char ok[] =
-    "!#$%&'*+-.^_`|~"
-    "0123456789"
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  return strchr(ok, (char)c) != NULL;
+  if ((c >= '0' && c <= '9') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= 'a' && c <= 'z')) return true;
+  switch (c) {
+  case '!': case '#': case '$': case '%': case '&': case '\'':
+  case '*': case '+': case '-': case '.': case '^': case '_':
+  case '`': case '|': case '~':
+    return true;
+  default:
+    return false;
+  }
+}
+
+static inline char ascii_lower(unsigned char c) {
+  return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : (char)c;
+}
+
+static bool ascii_case_equal(const char *a, const char *b) {
+  while (*a && *b) {
+    if (ascii_lower((unsigned char)*a) != ascii_lower((unsigned char)*b)) return false;
+    a++;
+    b++;
+  }
+  return *a == *b;
+}
+
+static bool is_valid_name_n(const char *s, size_t len) {
+  if (!s || len == 0) return false;
+  for (size_t i = 0; i < len; i++)
+    if (!is_token_char((unsigned char)s[i])) return false;
+  return true;
 }
 
 static bool is_valid_name(const char *s) {
-  if (!s || !*s) return false;
-  for (const unsigned char *p = (const unsigned char *)s; *p; p++)
-    if (!is_token_char(*p)) return false;
-  return true;
+  return s && is_valid_name_n(s, strlen(s));
 }
 
-static bool is_valid_value(const char *s) {
+static bool is_valid_value_n(const char *s, size_t len) {
   if (!s) return false;
-  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-    unsigned char c = *p;
-    if (c == 0 || c == '\r' || c == '\n' || c > 127) return false;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == 0 || c == '\r' || c == '\n') return false;
   }
   return true;
-}
-
-static char *normalize_value(const char *s) {
-  if (!s) return strdup("");
-  while (*s == ' ' || *s == '\t') s++;
-  
-  size_t len = strlen(s);
-  while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) len--;
-  
-  char *out = malloc(len + 1);
-  if (!out) return NULL;
-  
-  memcpy(out, s, len);
-  out[len] = '\0';
-  
-  return out;
 }
 
 static char *lowercase_dup(const char *s) {
@@ -148,14 +163,50 @@ static ant_value_t headers_require_mutable(ant_t *js, ant_value_t headers) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Headers are immutable");
 }
 
-static void list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
-  hdr_entry_t *e = calloc(1, sizeof(hdr_entry_t));
-  if (!e) return;
-  e->name  = strdup(lower_name);
-  e->value = strdup(value);
+static bool list_append_parts(
+  hdr_list_t *l,
+  const char *name, size_t name_len,
+  const char *value, size_t value_len,
+  bool lowercase_name
+) {
+  if (!l || !name || !value) return false;
+  if (name_len > SIZE_MAX - sizeof(hdr_entry_t) - 2) return false;
+  if (value_len > SIZE_MAX - sizeof(hdr_entry_t) - name_len - 2) return false;
+
+  size_t required = sizeof(hdr_entry_t) + name_len + value_len + 2;
+  hdr_entry_t *e = NULL;
+  if (!l->inline_used && required <= sizeof(l->inline_entry.bytes)) {
+    e = (hdr_entry_t *)l->inline_entry.bytes;
+    l->inline_used = true;
+  } else {
+    e = malloc(required);
+    if (!e) return false;
+  }
+
+  e->name = e->storage;
+  e->value = e->storage + name_len + 1;
+  e->next = NULL;
+  for (size_t i = 0; i < name_len; i++) {
+    unsigned char c = (unsigned char)name[i];
+    e->name[i] = lowercase_name ? ascii_lower(c) : (char)c;
+  }
+  e->name[name_len] = '\0';
+  memcpy(e->value, value, value_len);
+  e->value[value_len] = '\0';
+
   *l->tail = e;
   l->tail  = &e->next;
   l->count++;
+  return true;
+}
+
+static bool list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
+  if (!lower_name || !value) return false;
+  return list_append_parts(
+    l,
+    lower_name, strlen(lower_name),
+    value, strlen(value),
+    false);
 }
 
 static void list_delete_name(hdr_list_t *l, const char *lower_name) {
@@ -165,7 +216,8 @@ static void list_delete_name(hdr_list_t *l, const char *lower_name) {
   if (strcmp((*pp)->name, lower_name) == 0) {
     hdr_entry_t *dead = *pp;
     *pp = dead->next;
-    free(dead->name); free(dead->value); free(dead);
+    if ((void *)dead == (void *)l->inline_entry.bytes) l->inline_used = false;
+    else free(dead);
     l->count--;
   } else {
     l->tail = &(*pp)->next;
@@ -235,29 +287,127 @@ static void free_sorted_view(sorted_pair_t *v, size_t n) {
   free(v);
 }
 
-static ant_value_t headers_append_name_value(ant_t *js, hdr_list_t *l, const char *name, const char *value) {
-  if (!is_valid_name(name))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name: %s", name ? name : "");
+static ant_value_t headers_append_name_value_bytes_n(
+  ant_t *js, hdr_list_t *l,
+  const char *name, size_t name_len,
+  const char *value, size_t value_len
+) {
+  const char *value_start = value ? value : "";
 
-  char *norm = normalize_value(value);
-  if (!norm) return js_mkerr(js, "out of memory");
-  if (!is_valid_value(norm)) {
-    free(norm);
+  if (!is_valid_name_n(name, name_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
+
+  while (value_len > 0 && (*value_start == ' ' || *value_start == '\t')) {
+    value_start++;
+    value_len--;
+  }
+  while (value_len > 0 &&
+         (value_start[value_len - 1] == ' ' || value_start[value_len - 1] == '\t'))
+    value_len--;
+  if (!is_valid_value_n(value_start, value_len))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header value");
+
+  if (!list_append_parts(l, name, name_len, value_start, value_len, true))
+    return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
+static ant_value_t header_value_from_js(
+  ant_t *js,
+  const char *utf8, size_t utf8_len,
+  const char **out, size_t *out_len,
+  uint8_t **owned
+) {
+  *out = utf8 ? utf8 : "";
+  *out_len = utf8 ? utf8_len : 0;
+  *owned = NULL;
+
+  bool has_non_ascii = false;
+  for (size_t i = 0; i < utf8_len; i++) {
+    unsigned char c = (unsigned char)utf8[i];
+    if (c >= 0x80) has_non_ascii = true;
+    else if (c == 0 || c == '\r' || c == '\n')
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header value");
+  }
+  if (!utf8 || !has_non_ascii) return js_mkundef();
+
+  bool is_latin1 = true;
+  uint8_t *bytes = utf8_to_latin1(utf8, utf8_len, out_len, &is_latin1);
+  if (!bytes) {
+    if (!is_latin1)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header value");
+    return js_mkerr(js, "out of memory");
   }
 
-  char *lower = lowercase_dup(name);
-  if (!lower) { free(norm); return js_mkerr(js, "out of memory"); }
-
-  list_append_raw(l, lower, norm);
-  free(lower); free(norm);
+  *out = (const char *)bytes;
+  *owned = bytes;
   return js_mkundef();
+}
+
+static ant_value_t header_value_to_js(ant_t *js, const char *bytes, size_t len) {
+  bool ascii = true;
+  for (size_t i = 0; i < len; i++) {
+    if ((unsigned char)bytes[i] >= 0x80) {
+      ascii = false;
+      break;
+    }
+  }
+  if (ascii) return js_mkstr(js, bytes, len);
+
+  size_t utf8_len = 0;
+  char *utf8 = latin1_to_utf8((const uint8_t *)bytes, len, &utf8_len);
+  if (!utf8) return js_mkerr(js, "out of memory");
+  ant_value_t result = js_mkstr(js, utf8, utf8_len);
+  free(utf8);
+  return result;
+}
+
+static ant_value_t headers_append_name_value_js_n(
+  ant_t *js, hdr_list_t *l,
+  const char *name, size_t name_len,
+  const char *value, size_t value_len
+) {
+  const char *bytes = NULL;
+  size_t bytes_len = 0;
+  uint8_t *owned = NULL;
+  ant_value_t converted = header_value_from_js(
+    js, value, value_len, &bytes, &bytes_len, &owned);
+  if (is_err(converted)) return converted;
+
+  ant_value_t result = headers_append_name_value_bytes_n(
+    js, l, name, name_len, bytes, bytes_len);
+  free(owned);
+  return result;
+}
+
+static ant_value_t headers_append_name_value(
+  ant_t *js, hdr_list_t *l, const char *name, const char *value
+) {
+  return headers_append_name_value_bytes_n(
+    js, l,
+    name, name ? strlen(name) : 0,
+    value, value ? strlen(value) : 0);
+}
+
+static ant_value_t headers_append_record_value(
+  ant_t *js, hdr_list_t *l,
+  const char *name, size_t name_len, ant_value_t value_v
+) {
+  if (vtype(value_v) != kTypeString) {
+    value_v = js_tostring_val(js, value_v);
+    if (is_err(value_v)) return value_v;
+  }
+
+  size_t value_len = 0;
+  const char *value = js_getstr(js, value_v, &value_len);
+  return headers_append_name_value_js_n(js, l, name, name_len, value, value_len);
 }
 
 static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t name_v, ant_value_t value_v) {
   const char *name = NULL;
   const char *value = NULL;
-
+  size_t name_len = 0;
+  size_t value_len = 0;
   if (vtype(name_v) != kTypeString) {
     name_v = js_tostring_val(js, name_v);
     if (is_err(name_v)) return name_v;
@@ -268,9 +418,9 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
     if (is_err(value_v)) return value_v;
   }
 
-  name = js_getstr(js, name_v, NULL);
-  value = js_getstr(js, value_v, NULL);
-  return headers_append_name_value(js, l, name, value);
+  name = js_getstr(js, name_v, &name_len);
+  value = js_getstr(js, value_v, &value_len);
+  return headers_append_name_value_js_n(js, l, name, name_len, value, value_len);
 }
 
 ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v) {
@@ -326,7 +476,7 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
   ant_value_t val;
 
   while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-    ant_value_t r = headers_append_pair(js, l, js_mkstr(js, key, key_len), val);
+    ant_value_t r = headers_append_record_value(js, l, key, key_len, val);
     if (is_err(r)) { js_prop_iter_end(&it); return r; }
   }
   
@@ -352,12 +502,12 @@ bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
     *out = js_mkstr(js, e->name, strlen(e->name));
     break;
   case ITER_VALUES:
-    *out = js_mkstr(js, e->value, strlen(e->value));
+    *out = header_value_to_js(js, e->value, strlen(e->value));
     break;
   default: {
     *out = js_mkarr(js);
     js_arr_push(js, *out, js_mkstr(js, e->name,  strlen(e->name)));
-    js_arr_push(js, *out, js_mkstr(js, e->value, strlen(e->value)));
+    js_arr_push(js, *out, header_value_to_js(js, e->value, strlen(e->value)));
     break;
   }}
 
@@ -416,24 +566,49 @@ static ant_value_t js_headers_set(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(name_v)  != kTypeString) { name_v  = js_tostring_val(js, name_v);  if (is_err(name_v))  return name_v;  }
   if (vtype(value_v) != kTypeString) { value_v = js_tostring_val(js, value_v); if (is_err(value_v)) return value_v; }
 
-  const char *name  = js_getstr(js, name_v, NULL);
-  const char *value = js_getstr(js, value_v, NULL);
+  size_t name_len = 0;
+  size_t value_len = 0;
+  const char *name = js_getstr(js, name_v, &name_len);
+  const char *value = js_getstr(js, value_v, &value_len);
 
-  if (!is_valid_name(name))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name: %s", name ? name : "");
+  const char *value_bytes = NULL;
+  size_t value_bytes_len = 0;
+  uint8_t *owned_value = NULL;
+  ant_value_t converted = header_value_from_js(
+    js, value, value_len,
+    &value_bytes, &value_bytes_len, &owned_value);
+  if (is_err(converted)) return converted;
 
-  char *norm = normalize_value(value);
-  if (!norm) return js_mkerr(js, "out of memory");
-  if (!is_valid_value(norm)) { free(norm); return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header value"); }
+  if (!is_valid_name_n(name, name_len)) {
+    free(owned_value);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
+  }
+  while (value_bytes_len > 0 &&
+         (*value_bytes == ' ' || *value_bytes == '\t')) {
+    value_bytes++;
+    value_bytes_len--;
+  }
+  while (value_bytes_len > 0 &&
+         (value_bytes[value_bytes_len - 1] == ' ' ||
+          value_bytes[value_bytes_len - 1] == '\t'))
+    value_bytes_len--;
 
-  char *lower = lowercase_dup(name);
-  if (!lower) { free(norm); return js_mkerr(js, "out of memory"); }
+  char *lower = malloc(name_len + 1);
+  if (!lower) {
+    free(owned_value);
+    return js_mkerr(js, "out of memory");
+  }
+  for (size_t i = 0; i < name_len; i++)
+    lower[i] = ascii_lower((unsigned char)name[i]);
+  lower[name_len] = '\0';
 
   list_delete_name(l, lower);
-  list_append_raw(l, lower, norm);
-  
-  free(lower); 
-  free(norm);
+  bool appended = list_append_parts(
+    l, lower, name_len, value_bytes, value_bytes_len, false);
+
+  free(lower);
+  free(owned_value);
+  if (!appended) return js_mkerr(js, "out of memory");
   
   return js_mkundef();
 }
@@ -455,7 +630,7 @@ static ant_value_t js_headers_get(ant_t *js, ant_value_t *args, int nargs) {
   if (strcmp(lower, "set-cookie") == 0) {
     for (hdr_entry_t *e = l->head; e; e = e->next) {
       if (strcmp(e->name, lower) == 0) {
-        ant_value_t ret = js_mkstr(js, e->value, strlen(e->value));
+        ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
         free(lower);
         return ret;
       }
@@ -493,7 +668,7 @@ static ant_value_t js_headers_get(ant_t *js, ant_value_t *args, int nargs) {
   combined[pos] = '\0';
   free(lower);
 
-  ant_value_t ret = js_mkstr(js, combined, pos);
+  ant_value_t ret = header_value_to_js(js, combined, pos);
   free(combined);
   return ret;
 }
@@ -546,7 +721,7 @@ static ant_value_t js_headers_get_set_cookie(ant_t *js, ant_value_t *args, int n
   if (!l) return arr;
   for (hdr_entry_t *e = l->head; e; e = e->next) {
     if (strcmp(e->name, "set-cookie") == 0)
-      js_arr_push(js, arr, js_mkstr(js, e->value, strlen(e->value)));
+      js_arr_push(js, arr, header_value_to_js(js, e->value, strlen(e->value)));
   }
   return arr;
 }
@@ -570,7 +745,7 @@ static ant_value_t js_headers_for_each(ant_t *js, ant_value_t *args, int nargs) 
 
   for (size_t i = 0; i < count; i++) {
     ant_value_t call_args[3] = {
-      js_mkstr(js, view[i].value, strlen(view[i].value)),
+      header_value_to_js(js, view[i].value, strlen(view[i].value)),
       js_mkstr(js, view[i].name,  strlen(view[i].name)),
       this_obj
     };
@@ -624,14 +799,17 @@ static ant_value_t headers_inspect(ant_t *js, ant_value_t *args, int nargs) {
 
   for (hdr_entry_t *e = list->head; e; e = e->next) {
     ant_value_t existing = js_get(js, out, e->name);
+    ant_value_t value_js = header_value_to_js(js, e->value, strlen(e->value));
+    if (is_err(value_js)) return value_js;
     if (vtype(existing) == kTypeUndefined) {
-      js_set(js, out, e->name, js_mkstr(js, e->value, strlen(e->value)));
+      js_set(js, out, e->name, value_js);
       continue;
     }
     
     size_t existing_len = 0;
+    size_t value_len = 0;
     const char *existing_str = js_getstr(js, existing, &existing_len);
-    size_t value_len = strlen(e->value);
+    const char *value_str = js_getstr(js, value_js, &value_len);
     size_t combined_len = existing_len + 2 + value_len;
     char *combined = malloc(combined_len + 1);
     if (!combined) return js_mkerr(js, "out of memory");
@@ -639,7 +817,7 @@ static ant_value_t headers_inspect(ant_t *js, ant_value_t *args, int nargs) {
     memcpy(combined, existing_str, existing_len);
     combined[existing_len] = ',';
     combined[existing_len + 1] = ' ';
-    memcpy(combined + existing_len + 2, e->value, value_len);
+    memcpy(combined + existing_len + 2, value_str, value_len);
     combined[combined_len] = '\0';
     
     js_set(js, out, e->name, js_mkstr(js, combined, combined_len));
@@ -709,7 +887,7 @@ bool headers_copy_from(ant_t *js, ant_value_t dst, ant_value_t src) {
   if (!src_list) return true;
   
   for (hdr_entry_t *e = src_list->head; e; e = e->next)
-    list_append_raw(dst_list, e->name, e->value);
+    if (!list_append_raw(dst_list, e->name, e->value)) return false;
   return true;
 }
 
@@ -733,16 +911,14 @@ void headers_set_immutable(ant_value_t hdrs, bool immutable) {
   js_set_slot(hdrs, SLOT_HEADERS_GUARD, js_bool(immutable));
 }
 
-void headers_append_if_missing(ant_value_t hdrs, const char *name, const char *value) {
+bool headers_append_if_missing(ant_value_t hdrs, const char *name, const char *value) {
   hdr_list_t *l = get_list(hdrs);
-  if (!l || !name || !value) return;
-  char *lower = lowercase_dup(name);
-  if (!lower) return;
+  if (!l || !name || !value) return false;
   for (hdr_entry_t *e = l->head; e; e = e->next) {
-    if (strcmp(e->name, lower) == 0) { free(lower); return; }
+    if (ascii_case_equal(e->name, name)) return true;
   }
-  list_append_raw(l, lower, value);
-  free(lower);
+  return list_append_parts(
+    l, name, strlen(name), value, strlen(value), true);
 }
 
 void headers_for_each(ant_value_t hdrs, headers_foreach_cb cb, void *ctx) {
@@ -753,37 +929,36 @@ void headers_for_each(ant_value_t hdrs, headers_foreach_cb cb, void *ctx) {
 
 bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value) {
   hdr_list_t *l = get_list(hdrs);
-  char *norm = NULL;
   char *lower = NULL;
+  const char *value_start = value;
+  size_t value_len = value ? strlen(value) : 0;
 
   if (!l || !name || !value) return false;
   if (!is_valid_name(name)) return false;
-
-  norm = normalize_value(value);
-  if (!norm) return false;
-  if (!is_valid_value(norm)) {
-    free(norm);
-    return false;
+  while (value_len > 0 && (*value_start == ' ' || *value_start == '\t')) {
+    value_start++;
+    value_len--;
   }
+  while (value_len > 0 &&
+         (value_start[value_len - 1] == ' ' || value_start[value_len - 1] == '\t'))
+    value_len--;
+  if (!is_valid_value_n(value_start, value_len)) return false;
 
   lower = lowercase_dup(name);
-  if (!lower) {
-    free(norm);
-    return false;
-  }
+  if (!lower) return false;
 
   if (headers_is_immutable(hdrs)) {
     free(lower);
-    free(norm);
     return false;
   }
 
   list_delete_name(l, lower);
-  list_append_raw(l, lower, norm);
+  bool appended = list_append_parts(
+    l, lower, strlen(lower), value_start, value_len, false);
   free(lower);
-  free(norm);
-  
-  return true;
+
+  (void)js;
+  return appended;
 }
 
 ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
@@ -793,7 +968,7 @@ ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
   if (ht == kTypeUndefined) return js_mkundef();
 
   if (headers_is_headers(init)) {
-    headers_copy_from(js, hdrs, init);
+    if (!headers_copy_from(js, hdrs, init)) return js_mkerr(js, "out of memory");
     return js_mkundef();
   }
 
@@ -816,7 +991,7 @@ ant_value_t headers_init_from(ant_t *js, ant_value_t hdrs, ant_value_t init) {
     ant_value_t val = 0;
 
     while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-      ant_value_t r = headers_append_value(js, hdrs, js_mkstr(js, key, key_len), val);
+      ant_value_t r = headers_append_record_value(js, get_list(hdrs), key, key_len, val);
       if (is_err(r)) {
         js_prop_iter_end(&it);
         return r;
@@ -900,7 +1075,7 @@ ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name) {
   if (strcmp(lower, "set-cookie") == 0) {
     for (hdr_entry_t *e = l->head; e; e = e->next) {
     if (strcmp(e->name, lower) == 0) {
-      ant_value_t ret = js_mkstr(js, e->value, strlen(e->value));
+      ant_value_t ret = header_value_to_js(js, e->value, strlen(e->value));
       free(lower);
       return ret;
     }}
@@ -944,7 +1119,7 @@ ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name) {
   combined[pos] = '\0';
   free(lower);
 
-  ant_value_t ret = js_mkstr(js, combined, pos);
+  ant_value_t ret = header_value_to_js(js, combined, pos);
   free(combined);
   
   return ret;

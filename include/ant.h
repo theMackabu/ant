@@ -189,7 +189,8 @@ const char *js_str(ant_t *, ant_value_t val);
 const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_offset_t *out_len);
 
 typedef struct {
-  void *ctx;
+  ant_t *js;
+  ant_object_t *obj;
   ant_offset_t off;
 } ant_iter_t;
 

@@ -26,7 +26,10 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 
-enum { REQUEST_NATIVE_TAG = 0x52455153u }; // REQS
+enum {
+  REQUEST_NATIVE_TAG = 0x52455153u, // REQS
+  REQUEST_RESERVED_SLOTS = 7,
+};
 
 static request_data_t *get_data(ant_value_t obj) {
   return (request_data_t *)js_get_native(obj, REQUEST_NATIVE_TAG);
@@ -114,6 +117,7 @@ static request_data_t *data_new_server(const char *method) { return data_new_wit
 
 static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_value_t headers_obj, bool create_signal) {
   ant_value_t obj = js_mkobj(js);
+  (void)js_reserve_slots(obj, REQUEST_RESERVED_SLOTS);
   
   ant_value_t hdrs = is_object_type(headers_obj)
     ? headers_obj
@@ -670,7 +674,8 @@ static ant_value_t request_set_extracted_body(
   req->has_body = true;
 
   if (!req->body_is_stream) {
-    if (body_type && body_type[0]) headers_append_if_missing(headers, "content-type", body_type);
+    if (body_type && body_type[0] && !headers_append_if_missing(headers, "content-type", body_type))
+      return js_mkerr(js, "out of memory");
     return js_mkundef();
   }
 
@@ -684,7 +689,8 @@ static ant_value_t request_set_extracted_body(
   }
 
   js_set_slot_wb(js, req_obj, SLOT_REQUEST_BODY_STREAM, body_stream);
-  if (body_type && body_type[0]) headers_append_if_missing(headers, "content-type", body_type);
+  if (body_type && body_type[0] && !headers_append_if_missing(headers, "content-type", body_type))
+    return js_mkerr(js, "out of memory");
   return js_mkundef();
 }
 
@@ -746,15 +752,21 @@ static ant_value_t request_copy_source_body(ant_t *js, ant_value_t req_obj, ant_
 #define REQ_GETTER_END }
 
 REQ_GETTER_START(method)
-  return js_mkstr(js, d->method, strlen(d->method));
+  ant_value_t cached = js_get_slot(this, SLOT_REQUEST_METHOD);
+  if (vtype(cached) == kTypeString) return cached;
+  cached = js_mkstr(js, d->method, strlen(d->method));
+  if (!is_err(cached)) js_set_slot_wb(js, this, SLOT_REQUEST_METHOD, cached);
+  return cached;
 REQ_GETTER_END
 
 REQ_GETTER_START(url)
+  ant_value_t cached = js_get_slot(this, SLOT_REQUEST_URL);
+  if (vtype(cached) == kTypeString) return cached;
   char *href = build_href(&d->url);
-  if (!href) return js_mkstr(js, "", 0);
-  ant_value_t ret = js_mkstr(js, href, strlen(href));
+  cached = href ? js_mkstr(js, href, strlen(href)) : js_mkstr(js, "", 0);
   free(href);
-  return ret;
+  if (!is_err(cached)) js_set_slot_wb(js, this, SLOT_REQUEST_URL, cached);
+  return cached;
 REQ_GETTER_END
 
 REQ_GETTER_START(headers)
@@ -931,11 +943,16 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t new_headers = headers_create_empty(js);
   if (is_err(new_headers)) { data_free(nd); return new_headers; }
   
-  headers_copy_from(js, new_headers, src_headers);
+  if (!headers_copy_from(js, new_headers, src_headers)) {
+    data_free(nd);
+    return js_mkerr(js, "out of memory");
+  }
+  
   ant_value_t new_signal = abort_signal_create_dependent(js, src_signal);
   if (is_err(new_signal)) { data_free(nd); return new_signal; }
 
   ant_value_t obj = js_mkobj(js);
+  (void)js_reserve_slots(obj, REQUEST_RESERVED_SLOTS);
   js_set_proto_init(obj, js->builtins.request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, nd, REQUEST_NATIVE_TAG);
@@ -1169,7 +1186,7 @@ static ant_value_t request_create_ctor_headers(ant_t *js, ant_value_t input) {
   if (vtype(input) != kTypeObject) return headers;
 
   ant_value_t src_hdrs = js_get_slot(input, SLOT_REQUEST_HEADERS);
-  headers_copy_from(js, headers, src_hdrs);
+  if (!headers_copy_from(js, headers, src_hdrs)) return js_mkerr(js, "out of memory");
   return headers;
 }
 
@@ -1292,6 +1309,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   obj = js_mkobj(js);
+  (void)js_reserve_slots(obj, REQUEST_RESERVED_SLOTS);
   proto = js_instance_proto_from_new_target(js, js->builtins.request_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
@@ -1368,6 +1386,7 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   }
 
   obj = js_mkobj(js);
+  (void)js_reserve_slots(obj, REQUEST_RESERVED_SLOTS);
   js_set_proto_init(obj, js->builtins.request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_native(obj, req, REQUEST_NATIVE_TAG);

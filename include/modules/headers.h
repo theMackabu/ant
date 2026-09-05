@@ -17,7 +17,7 @@ size_t headers_find_literal(
 
 void init_headers_module(ant_t *js);
 void headers_set_immutable(ant_value_t hdrs, bool immutable);
-void headers_append_if_missing(ant_value_t hdrs, const char *name, const char *value);
+bool headers_append_if_missing(ant_value_t hdrs, const char *name, const char *value);
 void headers_for_each(ant_value_t hdrs, headers_foreach_cb cb, void *ctx);
 
 bool headers_is_headers(ant_value_t obj);

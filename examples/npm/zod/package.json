@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {},
+  "dependencies": {
+    "zod": "^4.5.2"
+  }
+}
