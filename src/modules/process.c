@@ -1764,7 +1764,7 @@ void init_process_module(ant_t *js) {
   process_set_string(js, features_obj, "tls", "BoringSSL");
   process_set_string(js, features_obj, "typescript", "transform");
   js_set(js, process_obj, "features", features_obj);
-  process_set_string(js, process_obj, "version", "v25.9.0");
+  process_set_string(js, process_obj, "version", "v26.8.1");
   
   ant_value_t versions_obj = js_newobj(js);
   process_set_string(js, versions_obj, "ant", ANT_VERSION);
@@ -1774,7 +1774,7 @@ void init_process_module(ant_t *js) {
   char uv_ver[32];
   snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
   process_set_string(js, versions_obj, "uv", uv_ver);
-  process_set_string(js, versions_obj, "node", "25.9.0");
+  process_set_string(js, versions_obj, "node", "26.8.1");
   process_set_string(js, versions_obj, "brotli", "1.1.0");
   process_set_string(js, versions_obj, "llhttp", "9.3.1");
   process_set_string(js, versions_obj, "nghttp2", "1.68.0");
@@ -1784,8 +1784,8 @@ void init_process_module(ant_t *js) {
   process_set_string(js, versions_obj, "lmdb", "0.9.33");
   process_set_string(js, versions_obj, "utf8proc", "2.10.0");
   process_set_string(js, versions_obj, "zlib", "2.3.3");
-  process_set_string(js, versions_obj, "v8", "14.1.146.11-node.25");
-  process_set_string(js, versions_obj, "modules", "141");
+  process_set_string(js, versions_obj, "v8", "14.6.202.34-node.28");
+  process_set_string(js, versions_obj, "modules", "147");
   process_set_string(js, versions_obj, "napi", "10");
   process_set_string(js, versions_obj, "wamr", "26756a5c5846c262c9e5c89f3fc8e1e693ee2539");
   process_set_string(js, versions_obj, "boringssl", "297b11798a0ed6bc7736aa57328909a4afbbf67a");
