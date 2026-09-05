@@ -2102,7 +2102,7 @@ ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_
 
   result = regexp_attach_exec_result(js, &(regexp_exec_result_ctx_t) {
     .array = result_arr,
-    .index = tov((double)ovector[0]),
+    .index = tov((double)byte_offset_to_utf16(str_ptr, ovector[0])),
     .input = str_arg,
     .groups_meta = groups_meta,
     .indices = indices,

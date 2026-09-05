@@ -18,12 +18,15 @@ assert(await text.text() === "hello", "string body contents");
 
 let borrowedBody = "root";
 for (let i = 0; i < 64; i++) borrowedBody += `:${i}`;
-const borrowedExpected = borrowedBody;
-const borrowed = new Response(borrowedBody);
+let borrowed = new Response(borrowedBody);
 const borrowedClone = borrowed.clone();
 borrowedBody = null;
+let borrowedExpected = "root";
+for (let i = 0; i < 64; i++) borrowedExpected += `:${i}`;
 for (let i = 0; i < 100_000; i++) ({ value: `gc-${i}` });
 assert(await borrowed.text() === borrowedExpected, "borrowed string body survives GC pressure");
+borrowed = null;
+for (let i = 0; i < 100_000; i++) ({ value: `gc-${i}` });
 assert(await borrowedClone.text() === borrowedExpected, "borrowed string clone contents");
 
 const sourceHeaders = new Headers({ "content-type": "text/plain", "x-source": "yes" });
