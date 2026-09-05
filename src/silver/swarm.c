@@ -11173,10 +11173,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
             MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)site)));
-        if (literal_span) {
-          JIT_EMIT_THROW_IF_ERROR(dst);
-          ip += literal_span;
-        }
+        JIT_EMIT_THROW_IF_ERROR(dst);
+        if (literal_span) ip += literal_span;
         break;
       }
 

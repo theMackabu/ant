@@ -18,6 +18,14 @@ scheduled.
 
 ## Open Items
 
+- Area: Reflect.set receiver and success semantics (`src/modules/reflect.c`, property-setting internals)
+  - Issue: Reflect.set ignores its optional receiver and returns true after js_setprop unless an exception occurs. js_setprop returns the assigned value even for some rejected writes, so its result cannot be interpreted as a success boolean. Existing own-property read-only checks do not cover inherited restrictions, non-extensible receivers, or falsy proxy set traps.
+  - Impact: Accessors can receive the wrong this value, data writes can modify the target instead of the receiver, and callers can observe success when nothing was written.
+  - Proposed fix: Address in a separate compatibility PR. Share a receiver-aware internal [[Set]] operation with explicit success/rejection/exception results; retain assignment-expression values and strict-mode throwing behavior at their callers. Avoid duplicating the property-definition and proxy machinery in a Reflect-only implementation. Preserve thrown-value identity and GC roots across callbacks.
+  - Validation: Compare with Node for inherited setters and read-only properties, distinct and primitive receivers, receiver-side accessors, frozen/non-extensible objects and arrays, proxy set/defineProperty traps and transparent fallbacks, revocation, SameValue invariants, and exception propagation. Run focused tests and the full spec suite before landing.
+  - Owner: theMackabu
+  - Status: backlog (2026-09-05); unfinished Reflect-specific implementation and test removed from this PR at user request. The earlier frozen-own-property fix remains. Recoverable local experiment: `/tmp/ant-reflect-deferred.0pgnxD` (not a validated implementation or durable dependency).
+
 - Area: JS path performance (`src/builtins/node/path.cjs`, Silver runtime)
   - Issue: The compatible JS implementation beats installed Ant on three of eight path microbenchmarks, but normalize, join, and relative remain 3.7-7.2x slower. Performance parity is deferred; Node-compatible correctness takes priority over speed. Keep primordial protection and do not trade semantics for benchmark gains.
   - Impact: Current timings are roughly 0.4-1.5 microseconds per call. This is a substantial microbenchmark gap, but does not establish an application-level regression. Profile representative applications before adding runtime complexity; path-heavy bundling, crawling, and module resolution are useful candidates.
