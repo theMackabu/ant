@@ -10,6 +10,7 @@ builtins_h = custom_target(
   input: builtin_files,
   output: ['builtin_bundle_data.h', 'snapshot_data.h'],
   depends: tools_npm_ci,
+  depend_files: files('../../src/tools/gen_builtins.js'),
   command: [
     node,
     src_root / 'src' / 'tools' / 'gen_builtins.js',

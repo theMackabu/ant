@@ -45,6 +45,7 @@ typedef struct {
   bool is_const;
   bool captured;
   bool is_tdz;
+  bool char_code_at_hint;
   uint8_t inferred_type;
   sv_binding_meta_t binding;
 } sv_local_t;

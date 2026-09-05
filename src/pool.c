@@ -18,10 +18,9 @@ static inline size_t align_up_size(size_t value, size_t align) {
   return (value + mask) & ~mask;
 }
 
-static inline int pool_size_class_index(size_t need) {
-  for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++) {
+int pool_size_class_index(size_t need) {
+  for (int i = 0; i < ANT_POOL_SIZE_CLASS_COUNT; i++)
     if (need <= g_size_classes[i]) return i;
-  }
   return -1;
 }
 

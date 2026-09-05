@@ -61,11 +61,23 @@ static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
   
   if (vtype(key) != kTypeString) return js_false;
   
-  char *key_str = js_getstr(js, key, NULL);
+  size_t key_len;
+  char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_false;
+
+  ant_value_t target_obj = js_as_obj(target);
+  prop_meta_t meta;
   
-  js_set(js, target, key_str, value);
-  return js_true; 
+  if (!is_proxy(target_obj) && lookup_string_prop_meta(js, target_obj, key_str, key_len, &meta)) {
+    bool writable = (meta.has_getter || meta.has_setter) ? meta.has_setter : meta.writable;
+    if (!writable) return js_false;
+  }
+
+  ant_value_t result = js_setprop(js, target, key, value);
+  if (is_err(result)) return result;
+  if (js->thrown_exists) return mkval(kTypeError, 0);
+  
+  return js_true;
 }
 
 static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {

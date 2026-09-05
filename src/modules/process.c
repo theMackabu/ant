@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <uthash.h>
 #include <uv.h>
@@ -76,6 +77,8 @@ typedef struct {
 
 struct ant_process_state {
   ant_value_t process_obj;
+  ant_value_t cached_cwd;
+  uint64_t cwd_epoch;
   ant_value_t stdin_obj;
   ant_value_t stdout_obj;
   ant_value_t stderr_obj;
@@ -100,6 +103,7 @@ struct ant_process_state {
   #endif
 };
 
+static atomic_uint_fast64_t process_cwd_epoch;
 static ant_process_state_t *process_state(ant_t *js) {
   if (js->process_state) return js->process_state;
 
@@ -109,6 +113,7 @@ static ant_process_state_t *process_state(ant_t *js) {
   ps->sandbox_tty_rows = 24;
   ps->sandbox_tty_cols = 80;
   ps->stdin_state.decoder = js_mkundef();
+  ps->cached_cwd = js_mkundef();
   ps->stdin_state.refed = true;
 
   js->process_state = ps;
@@ -1063,6 +1068,7 @@ static ant_value_t process_chdir(ant_t *js, ant_value_t *args, int nargs) {
   
   int result = uv_chdir(dir);
   if (result != 0) return js_mkerr(js, "ENOENT: no such file or directory, chdir");
+  atomic_fetch_add_explicit(&process_cwd_epoch, 1, memory_order_release);
   return js_mkundef();
 }
 
@@ -1461,6 +1467,12 @@ static ant_value_t env_keys(ant_t *js, ant_value_t obj) {
 }
 
 static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
+  ant_process_state_t *ps = process_state(js);
+  if (!ps) return js_mkerr(js, "Out of memory");
+  
+  uint64_t epoch = atomic_load_explicit(&process_cwd_epoch, memory_order_acquire);
+  if (ps->cwd_epoch == epoch && vtype(ps->cached_cwd) == kTypeString) return ps->cached_cwd;
+
   char inline_cwd[4096];
   char *cwd = inline_cwd;
   
@@ -1485,6 +1497,11 @@ static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   if (cwd != inline_cwd) free(cwd);
+  if (vtype(result) == kTypeString) {
+    ps->cached_cwd = result;
+    ps->cwd_epoch = epoch;
+  }
+  
   return result;
 }
 
@@ -1877,6 +1894,7 @@ bool has_active_stdin(ant_t *js) {
 void gc_mark_process(ant_t *js, gc_mark_fn mark) {
   ant_process_state_t *ps = js->process_state;
   if (!ps) return;
+  mark(js, ps->cached_cwd);
   if (is_object_type(ps->process_obj)) mark(js, ps->process_obj);
   if (is_object_type(ps->stdin_obj)) mark(js, ps->stdin_obj);
   if (is_object_type(ps->stdout_obj)) mark(js, ps->stdout_obj);

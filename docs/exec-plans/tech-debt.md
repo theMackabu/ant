@@ -18,6 +18,25 @@ scheduled.
 
 ## Open Items
 
+- Area: JS path performance (`src/builtins/node/path.cjs`, Silver runtime)
+  - Issue: The compatible JS implementation beats installed Ant on three of eight path microbenchmarks, but normalize, join, and relative remain 3.7-7.2x slower. Performance parity is deferred; Node-compatible correctness takes priority over speed. Keep primordial protection and do not trade semantics for benchmark gains.
+  - Impact: Current timings are roughly 0.4-1.5 microseconds per call. This is a substantial microbenchmark gap, but does not establish an application-level regression. Profile representative applications before adding runtime complexity; path-heavy bundling, crawling, and module resolution are useful candidates.
+  - Proposed fix: Revisit only with measured application impact. Profile the remaining JIT/string costs, retain only repeatable wins, add compatibility regressions, and compare pinned installed/current/Node binaries serially with ABBA ordering. Do not revive the removed hoisting, grouped-initializer, or register-argument experiments without new evidence.
+  - Owner: theMackabu
+  - Status: backlog (2026-09-05; accuracy first)
+  - Evidence: Accepted-only checkpoint, median milliseconds per 100,000 calls, 20,000 warmups, 12 samples per binary; lower is better. Hashes and raw runs are in `/tmp/ant-path-goal.KC4jj3/three-way-results.json`. These measurements predate the reserved-name compatibility fix. Details and experiment history: [path performance plan](active/path-node-performance.md). All 4,136 spec tests and 6,090 Node differential cases passed at this checkpoint; finite coverage is not proof of complete compatibility.
+
+  | Workload | Baseline `$(which ant)` | Current `./build/ant` | Node |
+  | --- | ---: | ---: | ---: |
+  | posix.normalize | 9.19 | 37.97 | 8.17 |
+  | win32.normalize | 10.38 | 74.28 | 14.72 |
+  | posix.join | 14.62 | 73.63 | 18.15 |
+  | posix.resolve (cwd) | 945.52 | 147.84 | 32.54 |
+  | posix.relative (absolute) | 25.30 | 93.40 | 31.88 |
+  | win32.resolve (absolute) | 960.83 | 113.88 | 20.72 |
+  | win32.relative (absolute) | 27.67 | 142.84 | 36.54 |
+  | posix.parse | 23.10 | 19.01 | 2.39 |
+
 - Area: module-level cached JS values (`g_*` statics)
   - Issue: RESOLVED for the 129 value caches audited on 2026-08-02: module-level `ant_value_t` caches migrated to per-isolate `js->builtins` / `js->mutable_roots` and are marked centrally in `gc_visit_roots` (see completed/module-import-gc-flake.md). The 2026-08-26 isolate audit found a broader remaining surface: a heuristic declaration scan reports 172 candidate mutable file-scope declarations in 58 source files. That raw count includes harmless startup configuration and intentionally shared native services, but it also includes active-resource lists, caches, native handles, root registries, and mutable library state. The global string-intern hash in `src/ant.c` is unguarded during insert/rehash and needs either isolate ownership or synchronization; the cage allocator and native-handle registry already use locks and can remain process-wide if their lifetime contracts survive a focused audit. Descriptors, builtins/mutable roots, normal ESM module state, events, regex, process state, rope mark metadata, and most heap rosters are already isolate-owned.
   - Impact: Same-process workers are now an intended consumer, so the remainder is no longer hypothetical. Any static that stores an isolate pointer, heap value, GC working state, libuv handle, or mutable ownership list can cause cross-isolate marking, callback dispatch through the wrong `ant_t`, teardown of another isolate's resources, or a data race.

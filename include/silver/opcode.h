@@ -157,6 +157,7 @@ OP_DEF(  USHR,              1,   2,   1, none)      /* >>> (matches TOK_ZSHR) */
 
 OP_DEF(  NOT,               1,   1,   1, none)      /* ! */
 OP_DEF(  TYPEOF,            1,   1,   1, none)
+OP_DEF(  IS_PRIMITIVE_TYPE, 2,   1,   1, u8)        /* typeof primitive comparison without a string */
 OP_DEF(  VOID,              1,   1,   1, none)      /* eval + push undefined */
 OP_DEF(  DELETE,            1,   2,   1, none)      /* obj key -> bool */
 OP_DEF(  DELETE_VAR,        5,   0,   1, atom)      /* delete unqualified name */
@@ -177,6 +178,7 @@ OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> resu
 OP_DEF(  CALL_SUPER,        3,   3,   1, npop)      /* this super new.target args... -> this */
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
+OP_DEF(  CALL_CHAR_CODE_AT,   3, 2,   1, npop)      /* this func args... -> result */
 OP_DEF(  CALL_MAP_TEMPLATE,   5,   2,   1, map_template) /* this func substitutions... -> result; descriptor:u32 */
 OP_DEF(  CALL_STABLE_BUILTIN, 4, 2,   1, u8_u16)    /* this func args... -> result (kind:u8 argc:u16) */
 OP_DEF(  CALL_CALL,         3,   1,   1, u8_u8)     /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
@@ -407,6 +409,7 @@ OP_FLAG(USHR                  , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 
 OP_FLAG(NOT                   , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(TYPEOF                , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_BAILOUT)
+OP_FLAG(IS_PRIMITIVE_TYPE     , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE)
 OP_FLAG(VOID                  , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(DELETE                , SV_OPF_JIT_ELIGIBLE)
 
@@ -425,6 +428,7 @@ OP_FLAG(CALL_METHOD           , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV
 OP_FLAG(CALL_SUPER            , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_IS_PROTO         , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_IC_EPOCH)
 OP_FLAG(CALL_ARRAY_INCLUDES   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
+OP_FLAG(CALL_CHAR_CODE_AT     , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_MAP_TEMPLATE     , SV_OPF_JIT_ELIGIBLE)
 OP_FLAG(CALL_STABLE_BUILTIN   , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_INLINEABLE | SV_OPF_JIT_NEEDS_ARGS_BUF)
 OP_FLAG(CALL_CALL             , SV_OPF_JIT_ELIGIBLE | SV_OPF_JIT_NEEDS_ARGS_BUF | SV_OPF_JIT_NEEDS_IC_EPOCH)

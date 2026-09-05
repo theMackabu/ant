@@ -3,6 +3,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+#include "gc/roots.h"
 
 #include "modules/assert.h"
 #include "silver/engine.h"
@@ -158,23 +159,59 @@ static ant_value_t assert_not_deep_strict_equal(ant_t *js, ant_value_t *args, in
   return js_mkundef();
 }
 
-static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != kTypeFunction)
-    return js_mkerr(js, "assert.throws: first argument must be a function");
-  ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false);
+static ant_value_t assert_exception_matches(
+  ant_t *js, ant_value_t thrown, ant_value_t expected, ant_value_t message
+) {
+  if (!is_callable(expected)) return js_mkundef();
+  ant_value_t prototype = js_get(js, expected, "prototype");
+  if (is_err(prototype)) return prototype;
   
-  if (!is_err(result))
-    return js_mkerr(js, "Missing expected exception");
-
-  ant_value_t thrown = js_take_thrown(js, result);
-  if (nargs >= 2 && is_callable(args[1])) {
-    ant_value_t valid = sv_vm_call(js->vm, js, args[1], js_mkundef(), &thrown, 1, NULL, false);
-    if (is_err(valid)) return valid;
-    if (valid != js_true)
-      return assertion_error(js, "The validation function is expected to return true", js_mkundef());
+  if (!is_undefined(prototype)) {
+    ant_value_t matches = do_instanceof(js, thrown, expected);
+    if (is_err(matches)) return matches;
+    if (js_truthy(js, matches)) return js_mkundef();
   }
 
+  ant_value_t error_ctor = js_get(js, js_glob(js), "Error");
+  if (is_err(error_ctor)) return error_ctor;
+  if (js_is_prototype_of(js, error_ctor, expected))
+    return assertion_error(js, "The error is expected to be an instance of the specified constructor", message);
+
+  ant_value_t receiver = js_mkobj(js);
+  if (is_err(receiver)) return receiver;
+  ant_value_t valid = sv_vm_call(js->vm, js, expected, receiver, &thrown, 1, NULL, false);
+  
+  if (is_err(valid)) return valid;
+  if (valid != js_true)
+    return assertion_error(js, "The validation function is expected to return true", message);
+  
   return js_mkundef();
+}
+
+static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_callable(args[0]))
+    return js_mkerr(js, "assert.throws: first argument must be a function");
+
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t fn = args[0];
+  ant_value_t expected = nargs >= 2 ? args[1] : js_mkundef();
+  ant_value_t message = nargs >= 3 ? args[2] : js_mkundef();
+  ant_value_t thrown = js_mkundef();
+  
+  GC_ROOT_PIN(js, fn);
+  GC_ROOT_PIN(js, expected);
+  GC_ROOT_PIN(js, message);
+  GC_ROOT_PIN(js, thrown);
+
+  ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), NULL, 0, NULL, false);
+  if (!is_err(result))
+    result = assertion_error(js, "Missing expected exception", message);
+  else {
+    thrown = js_take_thrown(js, result);
+    result = assert_exception_matches(js, thrown, expected, message);
+  } GC_ROOT_RESTORE(js, mark);
+  
+  return result;
 }
 
 static ant_value_t assert_does_not_throw(ant_t *js, ant_value_t *args, int nargs) {
