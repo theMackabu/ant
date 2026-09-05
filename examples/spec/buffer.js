@@ -157,22 +157,41 @@ test('TypedArray subarray byteOffset', subarrayed.byteOffset, 2);
 
 test('Int8Array.of length', Int8Array.of(1, 2).length, 2);
 test('Int8Array.of value', Int8Array.of(1, 2)[1], 2);
-test('Int32Array prototype BYTES_PER_ELEMENT own',
-     Object.getOwnPropertyNames(Int32Array.prototype).includes('BYTES_PER_ELEMENT'), true);
+test('Int32Array prototype BYTES_PER_ELEMENT own', Object.getOwnPropertyNames(Int32Array.prototype).includes('BYTES_PER_ELEMENT'), true);
 
 const methodSource = new Int8Array([3, 1, 2]);
 test('TypedArray map result', methodSource.map(x => x + 1).join(), '4,2,3');
 test('TypedArray filter result', methodSource.filter(x => x > 1).join(), '3,2');
-test('TypedArray find result', methodSource.find(x => x === 1), 1);
-test('TypedArray findIndex result', methodSource.findIndex(x => x === 2), 2);
+test(
+  'TypedArray find result',
+  methodSource.find(x => x === 1),
+  1
+);
+test(
+  'TypedArray findIndex result',
+  methodSource.findIndex(x => x === 2),
+  2
+);
 
 let typedForEachSum = 0;
-methodSource.forEach(x => typedForEachSum += x);
+methodSource.forEach(x => (typedForEachSum += x));
 test('TypedArray forEach result', typedForEachSum, 6);
 
-test('TypedArray reduce result', methodSource.reduce((prev, cur) => prev + cur, 0), 6);
-test('TypedArray reduceRight result', methodSource.reduceRight((prev, cur) => prev + String(cur), ''), '213');
-test('TypedArray some result', methodSource.some(x => x === 3), true);
+test(
+  'TypedArray reduce result',
+  methodSource.reduce((prev, cur) => prev + cur, 0),
+  6
+);
+test(
+  'TypedArray reduceRight result',
+  methodSource.reduceRight((prev, cur) => prev + String(cur), ''),
+  '213'
+);
+test(
+  'TypedArray some result',
+  methodSource.some(x => x === 3),
+  true
+);
 test('TypedArray lastIndexOf result', methodSource.lastIndexOf(1), 1);
 test('TypedArray reverse result', new Int8Array([3, 1, 2]).reverse().join(), '2,1,3');
 test('TypedArray sort result', new Int8Array([3, 1, 2]).sort().join(), '1,2,3');
@@ -369,23 +388,46 @@ const fixedTransferred = fixedBuf.transferToFixedLength(16);
 test('ArrayBuffer transferToFixedLength - old detached', fixedBuf.detached, true);
 test('ArrayBuffer transferToFixedLength - new byteLength', fixedTransferred.byteLength, 16);
 
-let transferError = null;
+let transferError = false;
 try {
   transferBuf.transfer();
 } catch (e) {
-  transferError = e.message;
+  transferError = e instanceof TypeError;
 }
-test('ArrayBuffer transfer detached throws', transferError, 'Cannot transfer a detached ArrayBuffer');
+test('ArrayBuffer transfer detached throws TypeError', transferError, true);
 
-let sliceError = null;
+let sliceError = false;
 try {
   transferBuf.slice(0, 10);
 } catch (e) {
-  sliceError = e.message;
+  sliceError = e instanceof TypeError;
 }
-test('ArrayBuffer slice detached throws', sliceError, 'Cannot slice a detached ArrayBuffer');
+test('ArrayBuffer slice detached throws TypeError', sliceError, true);
 
 const sharedBuf = new SharedArrayBuffer(16);
 test('SharedArrayBuffer detached', sharedBuf.detached, undefined);
+
+// latin1/ascii encode one byte per UTF-16 code unit (unit & 0xff); ascii
+// decode strips the high bit
+const l1 = Buffer.alloc(4);
+test('latin1 write é is one byte', l1.write('é', 0, 4, 'latin1'), 1);
+test('latin1 write é byte value', l1[0], 0xe9);
+test('ascii write é matches latin1', (l1.write('é', 1, 3, 'ascii'), l1[1]), 0xe9);
+test('latin1 write astral masks units', (l1.write('😀', 0, 4, 'latin1'), l1[0] * 256 + l1[1]), 0x3d00);
+test('latin1 byteLength is unit count', Buffer.byteLength('é😀', 'latin1'), 3);
+test('latin1 from é byte', Buffer.from('é', 'latin1')[0], 0xe9);
+test('latin1 round trip', Buffer.from('héllo', 'latin1').toString('latin1'), 'héllo');
+test('latin1 toString maps bytes', Buffer.from([0xe9, 0x41]).toString('latin1'), 'éA');
+test('ascii toString strips high bit', Buffer.from([0xe9, 0x41]).toString('ascii'), 'iA');
+test('latin1 indexOf encodes search string', Buffer.from([0xe9]).indexOf('é', 0, 'latin1'), 0);
+test('ascii indexOf encodes like latin1', Buffer.from([0xe9]).indexOf('é', 0, 'ascii'), 0);
+
+// utf8 write/from must emit U+FFFD for lone surrogates, never raw WTF-8
+const loneBuf = Buffer.alloc(4);
+test('utf8 write lone surrogate length', loneBuf.write('\uD800', 0, 4, 'utf8'), 3);
+test('utf8 write lone surrogate bytes', [loneBuf[0], loneBuf[1], loneBuf[2]].map(x => x.toString(16)).join(' '), 'ef bf bd');
+test('utf8 from lone surrogate', [...Buffer.from('a\uD800b', 'utf8')].map(x => x.toString(16)).join(' '), '61 ef bf bd 62');
+test('utf8 lone surrogate round trip', Buffer.from('\uD800', 'utf8').toString('utf8'), '�');
+test('utf8 real pair unchanged', [...Buffer.from('😀', 'utf8')].map(x => x.toString(16)).join(' '), 'f0 9f 98 80');
 
 summary();

@@ -35,6 +35,9 @@ endif
 if host_machine.system() == 'linux'
   add_project_arguments('-fno-pie', language: ['c', 'cpp'])
   add_project_link_arguments('-no-pie', language: ['c', 'cpp'])
+  if host_machine.cpu_family() == 'aarch64'
+    add_project_arguments('-moutline-atomics', language: ['c', 'cpp'])
+  endif
 endif
 
 native_tuning = get_option('native_tuning')
@@ -64,7 +67,12 @@ endif
 
 pgo = get_option('pgo')
 pgo_generate_dir = get_option('pgo_generate_dir')
-pgo_file = 'ant-' + host_machine.system() + '-' + host_machine.cpu_family() + '.profdata'
+pgo_platform = host_machine.system()
+if pgo_platform == 'linux'
+  pgo_glibc = cc.get_define('__GLIBC__', prefix: '#include <features.h>')
+  pgo_platform += pgo_glibc != '' ? '-glibc' : '-musl'
+endif
+pgo_file = 'ant-' + pgo_platform + '-' + host_machine.cpu_family() + '.profdata'
 pgo_profile = src_root / 'meson' / 'pgo' / 'profiles' / pgo_file
 pgo_profile_exists = fs.is_file(pgo_profile)
 
@@ -114,7 +122,7 @@ if pgo_use
 elif pgo_profile_exists
   message('  pgo: profile found but not used (' + pgo_profile + ')')
 else
-  message('  pgo: no profile for ' + host_machine.system() + '-' + host_machine.cpu_family())
+  message('  pgo: no profile for ' + pgo_platform + '-' + host_machine.cpu_family())
 endif
 
 subdir('deps')

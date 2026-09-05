@@ -245,8 +245,11 @@ static ant_value_t fetch_set_redirect_method(fetch_request_t *req, const char *m
   if (!request) return fetch_type_error(req->js, "Invalid Request object");
   dup = strdup(method);
   if (!dup) return js_mkerr(req->js, "out of memory");
+  
   free(request->method);
   request->method = dup;
+  js_set_slot(req->request_obj, SLOT_REQUEST_METHOD, js_mkundef());
+  
   return js_mkundef();
 }
 
@@ -268,6 +271,8 @@ static ant_value_t fetch_update_request_url(fetch_request_t *req, const char *lo
   free(base);
   url_state_clear(&request->url);
   request->url = next;
+  js_set_slot(req->request_obj, SLOT_REQUEST_URL, js_mkundef());
+  
   return js_mkundef();
 }
 
@@ -426,11 +431,7 @@ static ant_value_t fetch_headers_from_http(ant_t *js, const ant_http_header_t *h
   if (is_err(hdrs)) return hdrs;
 
   for (const ant_http_header_t *entry = headers; entry; entry = entry->next) {
-    ant_value_t step = headers_append_value(
-      js, hdrs,
-      js_mkstr(js, entry->name, strlen(entry->name)),
-      js_mkstr(js, entry->value, strlen(entry->value))
-    );
+    ant_value_t step = headers_append_literal(js, hdrs, entry->name, entry->value);
     if (is_err(step)) return step;
   }
 

@@ -27,6 +27,7 @@
 #include "streams/readable.h"
 
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
+static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=UTF-8";
 
 static response_data_t *get_data(ant_value_t obj) {
   return (response_data_t *)js_get_native(obj, RESPONSE_NATIVE_TAG);
@@ -55,8 +56,10 @@ static void data_free(response_data_t *d) {
   free(d->type);
   url_state_clear(&d->url);
   free(d->status_text);
-  free(d->body_data);
-  free(d->body_type);
+  if (d->body_storage == RESPONSE_BODY_STORAGE_OWNED) {
+    free(d->body_data);
+    free(d->body_type);
+  }
   free(d);
 }
 
@@ -97,6 +100,9 @@ static response_data_t *data_dup(const response_data_t *src) {
   d->body_used = src->body_used;
   d->body_size = src->body_size;
   d->body_type = src->body_type ? strdup(src->body_type) : NULL;
+  d->body_storage = (d->body_type || src->body_data)
+    ? RESPONSE_BODY_STORAGE_OWNED
+    : RESPONSE_BODY_STORAGE_NONE;
   d->websocket = js_mkundef();
 
   su = (url_state_t *)&src->url;
@@ -312,40 +318,40 @@ static bool response_content_type_has_charset(const char *value) {
   return false;
 }
 
-static void response_maybe_normalize_text_content_type(
+static bool response_maybe_normalize_text_content_type(
   ant_t *js, ant_value_t headers, const char *current, const char *body_type
 ) {
-  if (!body_type || !headers_is_headers(headers)) return;
-  if (!current) return;
-  if (strncasecmp(current, "text/", 5) != 0) return;
-  if (response_content_type_has_charset(current)) return;
-  if (!response_content_type_has_charset(body_type)) return;
+  if (!body_type || !headers_is_headers(headers)) return true;
+  if (!current) return true;
+  if (strncasecmp(current, "text/", 5) != 0) return true;
+  if (response_content_type_has_charset(current)) return true;
+  if (!response_content_type_has_charset(body_type)) return true;
 
-  headers_set_literal(js, headers, "content-type", body_type);
+  return headers_set_literal(js, headers, "content-type", body_type);
 }
 
-static void response_apply_content_type(
+static bool response_apply_content_type(
   ant_t *js, ant_value_t headers, const char *body_type
 ) {
   ant_value_t combined = js_mknull();
   const char *current = NULL;
   size_t count = 0;
 
-  if (!body_type) return;
+  if (!body_type) return true;
   count = headers_find_literal(headers, "content-type", &current);
   if (count == 0) {
-    headers_append_if_missing(headers, "content-type", body_type);
-    return;
+    return headers_append_if_missing(headers, "content-type", body_type);
   }
   if (count == 1) {
-    response_maybe_normalize_text_content_type(js, headers, current, body_type);
-    return;
+    return response_maybe_normalize_text_content_type(js, headers, current, body_type);
   }
 
   combined = headers_get_value(js, headers, "content-type");
-  if (!is_err(combined) && vtype(combined) == kTypeString)
-    response_maybe_normalize_text_content_type(
+  if (is_err(combined)) return false;
+  if (vtype(combined) == kTypeString)
+    return response_maybe_normalize_text_content_type(
       js, headers, js_getstr(js, combined, NULL), body_type);
+  return true;
 }
 
 enum {
@@ -690,6 +696,30 @@ static ant_value_t response_apply_body(
 
   if (vtype(body_val) == kTypeNull || vtype(body_val) == kTypeUndefined) return js_mkundef();
 
+  if (vtype(body_val) == kTypeString) {
+    if (is_null_body_status(resp->status)) {
+      return js_mkerr_typed(js, JS_ERR_TYPE,
+        "Failed to construct 'Response': Response with null body status cannot have body");
+    }
+
+    const char *body_string = js_getstr(js, body_val, &body_size);
+    if (resp->body_storage == RESPONSE_BODY_STORAGE_OWNED) {
+      free(resp->body_data);
+      free(resp->body_type);
+    }
+    resp->body_data = (uint8_t *)body_string;
+    resp->body_size = body_size;
+    resp->body_type = (char *)RESPONSE_TEXT_CONTENT_TYPE;
+    resp->body_storage = RESPONSE_BODY_STORAGE_BORROWED_STRING;
+    resp->body_is_stream = false;
+    resp->has_body = true;
+    js_set_slot_wb(js, resp_obj, SLOT_DATA, body_val);
+
+    if (!response_apply_content_type(js, headers, resp->body_type))
+      return js_mkerr(js, "out of memory");
+    return js_mkundef();
+  }
+
   if (!extract_body(js, body_val, &body_data, &body_size, &body_type, &body_stream, &body_err)) {
     return is_err(body_err) ? body_err : js_mkerr(js, "Failed to extract body");
   }
@@ -700,16 +730,22 @@ static ant_value_t response_apply_body(
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Response': Response with null body status cannot have body");
   }
 
-  free(resp->body_data);
-  free(resp->body_type);
+  if (resp->body_storage == RESPONSE_BODY_STORAGE_OWNED) {
+    free(resp->body_data);
+    free(resp->body_type);
+  }
   resp->body_data = body_data;
   resp->body_size = body_size;
   resp->body_type = body_type;
+  resp->body_storage = (body_data || body_type)
+    ? RESPONSE_BODY_STORAGE_OWNED
+    : RESPONSE_BODY_STORAGE_NONE;
   resp->body_is_stream = rs_is_stream(body_stream);
   resp->has_body = true;
 
   if (resp->body_is_stream) js_set_slot_wb(js, resp_obj, SLOT_RESPONSE_BODY_STREAM, body_stream);
-  response_apply_content_type(js, headers, body_type);
+  if (!response_apply_content_type(js, headers, body_type))
+    return js_mkerr(js, "out of memory");
 
   return js_mkundef();
 }
@@ -868,11 +904,17 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
 
   headers = js_get_slot(obj, SLOT_RESPONSE_HEADERS);
   headers_set_immutable(headers, false);
-  headers_append_if_missing(headers, "location", href);
+  if (!headers_append_if_missing(headers, "location", href)) {
+    headers_set_immutable(headers, true);
+    free(href);
+    url_state_clear(&parsed);
+    return js_mkerr(js, "out of memory");
+  }
+  
   headers_set_immutable(headers, true);
-
   free(href);
   url_state_clear(&parsed);
+  
   return obj;
 }
 
@@ -1071,7 +1113,10 @@ static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
     return new_headers;
   }
 
-  headers_copy_from(js, new_headers, src_headers);
+  if (!headers_copy_from(js, new_headers, src_headers)) {
+    data_free(nd);
+    return js_mkerr(js, "out of memory");
+  }
   headers_set_immutable(new_headers, headers_is_immutable(src_headers));
 
   obj = js_mkobj(js);
@@ -1141,6 +1186,9 @@ ant_value_t response_create(
 
   resp->body_size = body_len;
   resp->body_type = body_type ? strdup(body_type) : NULL;
+  resp->body_storage = (resp->body_data || resp->body_type)
+    ? RESPONSE_BODY_STORAGE_OWNED
+    : RESPONSE_BODY_STORAGE_NONE;
   resp->has_body = body || body_len > 0;
   resp->body_is_stream = false;
 
@@ -1151,7 +1199,10 @@ ant_value_t response_create(
   }
 
   headers_set_immutable(headers, immutable_headers);
-  response_apply_content_type(js, headers, body_type);
+  if (!response_apply_content_type(js, headers, body_type)) {
+    response_clear_and_free(obj, resp);
+    return js_mkerr(js, "out of memory");
+  }
   js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
   
   return obj;
@@ -1211,6 +1262,9 @@ ant_value_t response_create_fetched(
   }
 
   resp->body_type = body_type ? strdup(body_type) : NULL;
+  resp->body_storage = (resp->body_data || resp->body_type)
+    ? RESPONSE_BODY_STORAGE_OWNED
+    : RESPONSE_BODY_STORAGE_NONE;
   if (body_type && !resp->body_type) {
     response_clear_and_free(obj, resp);
     return js_mkerr(js, "out of memory");

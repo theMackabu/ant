@@ -10,9 +10,16 @@ typedef struct {
   size_t length;
   size_t capacity;
   int ref_count;
-  int is_shared;
-  int is_detached;
+  uint32_t registry_slot;
+  uint8_t is_shared;
+  uint8_t is_detached;
 } ArrayBufferData;
+
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(sizeof(ArrayBufferData) == 40, "registry slot must fit existing 64-bit padding");
+#elif UINTPTR_MAX == UINT32_MAX
+static_assert(sizeof(ArrayBufferData) == 24, "registry slot must fit existing 32-bit layout");
+#endif
 
 typedef enum {
   TYPED_ARRAY_INT8,

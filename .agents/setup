@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tool_root="$HOME/.local/share/ant-orb"
+tool_bin="$tool_root/bin"
+env_file="$tool_root/env"
+profile="$HOME/.bash_profile"
+
+step_started=0
+step_name=""
+
+start_step() {
+  step_name="$1"
+  step_started=$SECONDS
+  printf '\n==> %s\n' "$step_name"
+}
+
+finish_step() {
+  printf '<== %s (%ss)\n' "$step_name" "$((SECONDS - step_started))"
+}
+
+as_root() {
+  if ((EUID == 0)); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+package_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -Fqx 'install ok installed'
+}
+
+cd "$repo_root"
+mkdir -p "$tool_bin" "$HOME/.local/bin"
+
+llvm_version="$(jq -er '.tools.llvm' .github/versions.json)"
+node_version="$(jq -er '.tools.node' .github/versions.json)"
+zig_version="$(jq -er '.tools.zig' .github/versions.json)"
+
+start_step "Install CI system packages"
+apt_packages=(
+  ca-certificates
+  cmake
+  curl
+  git
+  gnupg
+  jq
+  ninja-build
+  pkg-config
+  python3-pip
+  software-properties-common
+  tzdata
+  wget
+  xz-utils
+)
+missing_packages=()
+for package in "${apt_packages[@]}"; do
+  if ! package_installed "$package"; then
+    missing_packages+=("$package")
+  fi
+done
+if ((${#missing_packages[@]})); then
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
+else
+  echo "System packages are already installed."
+fi
+finish_step
+
+start_step "Install LLVM $llvm_version"
+llvm_tools=(clang clang++ llvm-ar llvm-ranlib llvm-nm llvm-profdata llvm-strip lld)
+missing_llvm=false
+for tool in "${llvm_tools[@]}"; do
+  if ! command -v "$tool-$llvm_version" >/dev/null 2>&1; then
+    missing_llvm=true
+    break
+  fi
+done
+if "$missing_llvm"; then
+  # Amp orbs use Debian; derive the apt.llvm.org suite so this remains valid
+  # when the base image advances beyond Bookworm.
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  llvm_suite="${VERSION_CODENAME:?missing VERSION_CODENAME in /etc/os-release}"
+  curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+    | as_root tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+  printf 'deb https://apt.llvm.org/%s/ llvm-toolchain-%s-%s main\n' \
+    "$llvm_suite" "$llvm_suite" "$llvm_version" \
+    | as_root tee /etc/apt/sources.list.d/llvm.list >/dev/null
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get update
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    "clang-$llvm_version" "lld-$llvm_version" "llvm-$llvm_version"
+else
+  echo "LLVM $llvm_version is already installed."
+fi
+finish_step
+
+start_step "Install Node.js $node_version"
+node_dir="$tool_root/node-$node_version"
+if [[ ! -x "$node_dir/bin/node" ]] || [[ "$($node_dir/bin/node --version)" != v"$node_version".* ]]; then
+  case "$(uname -m)" in
+    x86_64) node_arch=x64 ;;
+    aarch64) node_arch=arm64 ;;
+    *) echo "Unsupported Node.js architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  node_shasums="$(mktemp)"
+  node_archive="$(mktemp --suffix=.tar.xz)"
+  trap 'rm -f "$node_shasums" "$node_archive"' EXIT
+  curl -fsSL "https://nodejs.org/dist/latest-v${node_version}.x/SHASUMS256.txt" -o "$node_shasums"
+  node_filename="$(awk -v suffix="linux-${node_arch}.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "$node_shasums")"
+  [[ -n "$node_filename" ]] || { echo "Could not find the Node.js $node_version Linux archive" >&2; exit 1; }
+  curl -fsSL "https://nodejs.org/dist/latest-v${node_version}.x/$node_filename" -o "$node_archive"
+  (cd "$(dirname "$node_archive")" && grep -F "  $node_filename" "$node_shasums" | sed "s|  $node_filename|  $(basename "$node_archive")|" | sha256sum -c -)
+  rm -rf "$node_dir"
+  mkdir -p "$node_dir"
+  tar -xJf "$node_archive" --strip-components=1 -C "$node_dir"
+  rm -f "$node_shasums" "$node_archive"
+  trap - EXIT
+else
+  echo "Node.js $node_version is already installed."
+fi
+finish_step
+
+start_step "Install Zig $zig_version"
+zig_dir="$tool_root/zig-$zig_version"
+if [[ ! -x "$zig_dir/zig" ]] || [[ "$($zig_dir/zig version)" != "$zig_version" ]]; then
+  case "$(uname -m)" in
+    x86_64) zig_arch=x86_64 ;;
+    aarch64) zig_arch=aarch64 ;;
+    *) echo "Unsupported Zig architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  zig_archive="$(mktemp --suffix=.tar.xz)"
+  trap 'rm -f "$zig_archive"' EXIT
+  curl -fsSL "https://ziglang.org/download/$zig_version/zig-$zig_arch-linux-$zig_version.tar.xz" -o "$zig_archive"
+  rm -rf "$zig_dir"
+  mkdir -p "$zig_dir"
+  tar -xJf "$zig_archive" --strip-components=1 -C "$zig_dir"
+  rm -f "$zig_archive"
+  trap - EXIT
+else
+  echo "Zig $zig_version is already installed."
+fi
+finish_step
+
+start_step "Install Meson"
+meson_version=1.10.1
+if [[ ! -x "$HOME/.local/bin/meson" ]] \
+  || [[ "$($HOME/.local/bin/meson --version)" != "$meson_version" ]] \
+  || ! /usr/bin/python3 -c 'import tomli' >/dev/null 2>&1; then
+  /usr/bin/python3 -m pip install --user --break-system-packages \
+    "meson==$meson_version" tomli
+else
+  echo "Meson $meson_version and tomli are already installed."
+fi
+finish_step
+
+cat > "$env_file" <<EOF
+# Generated by $repo_root/.agents/setup.
+case ":\$PATH:" in
+  *":$tool_bin:"*) ;;
+  *) export PATH="$tool_bin:\$PATH" ;;
+esac
+case ":\$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:\$PATH" ;;
+esac
+case ":\$PATH:" in
+  *":$HOME/.ant/bin:"*) ;;
+  *) export PATH="$HOME/.ant/bin:\$PATH" ;;
+esac
+export CC="clang-$llvm_version"
+export CXX="clang++-$llvm_version"
+export AR="llvm-ar-$llvm_version"
+export CMAKE_AR="llvm-ar-$llvm_version"
+export RANLIB="llvm-ranlib-$llvm_version"
+export CMAKE_RANLIB="llvm-ranlib-$llvm_version"
+export CC_LD="lld-$llvm_version"
+EOF
+
+ln -sfn "$node_dir/bin/node" "$tool_bin/node"
+ln -sfn "$node_dir/bin/npm" "$tool_bin/npm"
+ln -sfn "$node_dir/bin/npx" "$tool_bin/npx"
+ln -sfn "$node_dir/bin/corepack" "$tool_bin/corepack"
+ln -sfn "$zig_dir/zig" "$tool_bin/zig"
+ln -sfn "$(command -v "llvm-profdata-$llvm_version")" "$tool_bin/llvm-profdata"
+
+profile_marker="# Ant orb toolchain"
+if grep -Fqx "$profile_marker" "$profile" 2>/dev/null; then
+  sed -i '/^# Ant orb toolchain$/,+3d' "$profile"
+fi
+cat >> "$profile" <<EOF
+
+$profile_marker
+if [[ "\${PWD:-}" == "$repo_root" || "\${PWD:-}" == "$repo_root/"* ]]; then
+  source "$env_file"
+fi
+EOF
+
+# Make the toolchain available to the remainder of this setup run.
+# shellcheck disable=SC1090
+source "$env_file"
+
+start_step "Configure the build tree and dependencies"
+toolchain_fingerprint="llvm=$llvm_version node=$node_version zig=$zig_version meson=$meson_version"
+if [[ -f build/.orb-toolchain ]] && [[ "$(cat build/.orb-toolchain)" != "$toolchain_fingerprint" ]]; then
+  rm -rf build
+fi
+if [[ ! -f build/meson-private/coredata.dat ]]; then
+  meson setup build
+else
+  echo "The build tree is already configured."
+fi
+printf '%s\n' "$toolchain_fingerprint" > build/.orb-toolchain
+finish_step
+
+start_step "Build Ant"
+meson compile -C build
+ln -sfn "$repo_root/build/ant" "$tool_bin/ant"
+finish_step
+
+start_step "Install Maid"
+if ! command -v maid >/dev/null 2>&1; then
+  ant install -g land:maid
+else
+  echo "Maid is already installed."
+fi
+finish_step
+
+printf '\nOrb setup complete in %ss.\n' "$SECONDS"

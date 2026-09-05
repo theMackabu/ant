@@ -75,6 +75,8 @@
   X(SLOT_WS_SIGNAL)               \
   X(SLOT_HEADERS_GUARD)           \
   X(SLOT_REQUEST_HEADERS)         \
+  X(SLOT_REQUEST_METHOD)          \
+  X(SLOT_REQUEST_URL)             \
   X(SLOT_REQUEST_SIGNAL)          \
   X(SLOT_REQUEST_ABORT_REASON)    \
   X(SLOT_REQUEST_BODY_STREAM)     \

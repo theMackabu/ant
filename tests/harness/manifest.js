@@ -65,6 +65,8 @@ export function targets() {
     'test_websocket_close_during_connect.cjs',
     'test_intern_table_bounded.cjs',
     'test_buffer_wtf8_utf8.cjs',
+    'test_headers_bytestring_wire.cjs',
+    'test_response_constructor_fast_path.cjs',
     'test_utf16_random_access.cjs',
     'test_bigint.js',
     'test_temporal.js',

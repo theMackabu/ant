@@ -124,7 +124,13 @@ runs:
           MESON_ARGS+=(--prefer-static -Dstatic_link=true)
         fi
 
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          source "$GITHUB_WORKSPACE/meson/pgo/flags.sh"
+          MESON_ARGS+=(
+            "-Dc_args=$ANT_PGO_FLAGS"
+            "-Dcpp_args=$ANT_PGO_FLAGS"
+          )
+        elif [[ "$RUNNER_OS" == "macOS" ]]; then
           MESON_ARGS+=(-Dcodesign=false)
           if [[ "${{ inputs.extra_meson_args }}" == *"-Dpgo=enabled"* ]]; then
             ANT_PGO_TUNE_FLAG="-mcpu=apple-m1"

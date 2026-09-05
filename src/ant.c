@@ -20051,30 +20051,19 @@ ant_value_t sv_call_native(
   return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));
 }
 
-typedef struct {
-  ant_t *js;
-  ant_object_t *obj;
-  uint32_t index;
-} prop_iter_ctx_t;
-
 ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj) {
-  ant_iter_t iter = {.ctx = NULL, .off = 0};
+  ant_iter_t iter = {.js = NULL, .obj = NULL, .off = 0};
+  
   uint8_t t = vtype(obj);
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return iter;
 
-  prop_iter_ctx_t *ctx = calloc(1, sizeof(*ctx));
-  if (!ctx) return iter;
-  
-  ctx->js = js;
-  ctx->obj = js_obj_ptr(js_as_obj(obj));
-  ctx->index = 0;
-  
-  if (!ctx->obj || !ctx->obj->shape) {
-    free(ctx);
+  iter.obj = js_obj_ptr(js_as_obj(obj));
+  if (!iter.obj || !iter.obj->shape) {
+    iter.obj = NULL;
     return iter;
   }
   
-  iter.ctx = ctx;
+  iter.js = js;
   return iter;
 }
 
@@ -20092,19 +20081,17 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_
 }
 
 bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value) {
-  if (!iter || !iter->ctx) return false;
-  prop_iter_ctx_t *ctx = (prop_iter_ctx_t *)iter->ctx;
+  if (!iter || !iter->obj) return false;
+  ant_object_t *obj = iter->obj;
   
-  ant_object_t *obj = ctx->obj;
   if (!obj || !obj->shape) return false;
-
   uint32_t count = ant_shape_count(obj->shape);
-  while (ctx->index < count) {
-    uint32_t i = ctx->index++;
+  
+  while (iter->off < count) {
+    uint32_t i = (uint32_t)iter->off++;
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
     if (!prop) continue;
     if (i >= obj->prop_count) continue;
-    
     if (key_out) {
       key_out->slot = i;
       key_out->is_symbol = (prop->type == ANT_SHAPE_KEY_SYMBOL);
@@ -20120,8 +20107,6 @@ bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_
     }
     
     if (value) *value = ant_object_prop_get_unchecked(obj, i);
-    iter->off = i + 1;
-    
     return true;
   }
 
@@ -20130,15 +20115,13 @@ bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_
 
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value) {
   ant_iter_key_t meta = {0};
-  ant_t *js = NULL;
 
-  if (!iter || !iter->ctx) return false;
-  js = ((prop_iter_ctx_t *)iter->ctx)->js;
+  if (!iter || !iter->obj) return false;
   if (!js_prop_iter_next_key(iter, &meta, value)) return false;
 
   if (key_out) {
     if (meta.is_symbol) *key_out = mkval(kTypeSymbol, meta.sym_off);
-    else *key_out = js_mkstr(js, meta.str, meta.key_len);
+    else *key_out = js_mkstr(iter->js, meta.str, meta.key_len);
   }
 
   return true;
@@ -20146,9 +20129,9 @@ bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *
 
 void js_prop_iter_end(ant_iter_t *iter) {
   if (!iter) return;
-  free(iter->ctx);
+  iter->js = NULL;
+  iter->obj = NULL;
   iter->off = 0;
-  iter->ctx = NULL;
 }
 
 void js_check_unhandled_rejections(ant_t *js) {

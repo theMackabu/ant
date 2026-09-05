@@ -38,8 +38,15 @@ jobs:
       - name: Checkout Ant
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          clean: true
+          clean: false
           fetch-depth: 1
+
+      - name: Reset workspace while preserving generated dependencies
+        run: |
+          git reset --hard "$GITHUB_SHA"
+          git clean -ffdx \
+            -e /vendor/   \
+            -e /src/tools/node_modules/
 
       - name: Build cached Nix/PGO/LTO Ant
         run: caffeinate -dimsu tools/arm64-bench/build-ant.sh
@@ -52,18 +59,10 @@ jobs:
       - name: Verify resolved comparison engines
         run: node tools/arm64-bench/verify-engines.mjs --engine-root "$ANT_BENCH_ENGINE_ROOT"
 
-      - name: Cool down host until 00:40 Pacific
-        if: ${{ github.event_name == 'schedule' }}
-        env:
-          ANT_BENCH_NOT_BEFORE_LOCAL: '00:40'
-        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
-
       - name: Cool down host for 5 minutes
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          ANT_BENCH_COOLDOWN_SECONDS: '300'
-          ANT_BENCH_COOLDOWN_MAX_SECONDS: '300'
-        run: caffeinate -dimsu tools/arm64-bench/cooldown.sh
+        run: |
+          caffeinate -dimsu sleep 300
+          pmset -g therm || true
 
       - name: Run bench-v8 matrix
         id: benchmark

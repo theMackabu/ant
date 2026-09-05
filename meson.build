@@ -265,6 +265,11 @@ if not runtime_binary.disabled()
       '-Wl,-dead_strip',
     ]
     ant_runtime_link_depends += [ant_runtime_exports]
+  elif host_machine.system() == 'linux'
+    ant_runtime_link_args += [
+      '-Wl,--dynamic-list=' + meson.current_source_dir() / 'meson/ant.dynlist',
+    ]
+    ant_runtime_link_depends += files('meson/ant.dynlist')
   endif
 
   ant_runtime_exe = executable(
