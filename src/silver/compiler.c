@@ -3291,6 +3291,64 @@ static bool member_call_needs_optional_base_guard(const sv_ast_t *member) {
     sv_node_has_optional_base(member->left);
 }
 
+static inline bool is_class_method_def(const sv_ast_t *m) {
+  return
+    m && m->right && m->right->type == N_FUNC &&
+    (m->right->flags & FN_METHOD);
+}
+
+static int capture_field_key(sv_compiler_t *c, sv_compiler_t *owner, int local) {
+  if (c->enclosing == owner) {
+    owner->locals[local].captured = true;
+    return add_upvalue(c, (uint16_t)local_to_frame_slot(owner, local), true, false);
+  }
+  int uv = capture_field_key(c->enclosing, owner, local);
+  return add_upvalue(c, (uint16_t)uv, false, false);
+}
+
+static void emit_field_inits(
+  sv_compiler_t *c, sv_compiler_t *owner, sv_ast_t **fields, int count
+) {
+  for (int i = 0; i < count; i++) {
+    sv_ast_t *m = fields[i];
+    bool is_fn = is_class_method_def(m);
+    if (is_private_name_node(m->left)) {
+      emit_op(c, OP_THIS);
+      emit_private_token(c, m->left);
+      if (is_fn) compile_func_expr(c, m->right);
+      else if (m->right) compile_expr(c, m->right);
+      else emit_op(c, OP_UNDEF);
+      emit_op(c, OP_DEF_PRIVATE);
+      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
+      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
+      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
+      emit_op(c, OP_POP);
+      continue;
+    }
+
+    emit_op(c, OP_THIS);
+    if (m->right) compile_expr(c, m->right);
+    else emit_op(c, OP_UNDEF);
+    if (m->flags & FN_COMPUTED) {
+      int uv = capture_field_key(c, owner, owner->computed_key_locals[i]);
+      emit_op(c, OP_GET_UPVAL);
+      emit_u16(c, (uint16_t)uv);
+    } else {
+      compile_static_property_key(c, m->left);
+    }
+    emit_op(c, OP_SWAP);
+    emit_op(c, OP_DEFINE_METHOD_COMP);
+    emit(c, 0);
+    emit_op(c, OP_POP);
+  }
+}
+
+static void emit_derived_field_inits(sv_compiler_t *c) {
+  sv_compiler_t *owner = c->derived_field_owner;
+  if (owner && owner->field_init_count > 0) 
+    emit_field_inits(c, owner, owner->field_inits, owner->field_init_count);
+}
+
 static void compile_call_emit_invoke(
   sv_compiler_t *c, sv_ast_t *node,
   sv_call_kind_t kind, bool has_spread
@@ -3302,6 +3360,7 @@ static void compile_call_emit_invoke(
     compile_call_args_array(c, node);
     emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
+    if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
     return;
   }
 
@@ -3311,6 +3370,7 @@ static void compile_call_emit_invoke(
     kind == SV_CALL_SUPER ? OP_CALL_SUPER :
     kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
   emit_u16(c, (uint16_t)argc);
+  if (kind == SV_CALL_SUPER) emit_derived_field_inits(c);
 }
 
 static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t *callee) {
@@ -6111,52 +6171,6 @@ void compile_label(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static inline bool is_class_method_def(const sv_ast_t *m);
-static void emit_field_inits(sv_compiler_t *c, sv_ast_t **fields, int count) {
-  sv_compiler_t *enc = c->enclosing;
-  for (int i = 0; i < count; i++) {
-    sv_ast_t *m = fields[i];
-    bool is_fn = is_class_method_def(m);
-    if (is_private_name_node(m->left)) {
-      emit_op(c, OP_THIS);
-      emit_private_token(c, m->left);
-      if (is_fn) compile_func_expr(c, m->right);
-      else if (m->right) compile_expr(c, m->right);
-      else emit_op(c, OP_UNDEF);
-      emit_op(c, OP_DEF_PRIVATE);
-      if (m->flags & FN_GETTER) emit(c, SV_COMP_PRIVATE_GETTER);
-      else if (m->flags & FN_SETTER) emit(c, SV_COMP_PRIVATE_SETTER);
-      else emit(c, is_fn ? SV_COMP_PRIVATE_METHOD : SV_COMP_PRIVATE_FIELD);
-      emit_op(c, OP_POP);
-      continue;
-    }
-
-    emit_op(c, OP_THIS);
-    if (m->right) compile_expr(c, m->right);
-    else emit_op(c, OP_UNDEF);
-    if (m->flags & FN_COMPUTED) {
-      int key_local = enc->computed_key_locals[i];
-      enc->locals[key_local].captured = true;
-      uint16_t slot = (uint16_t)local_to_frame_slot(enc, key_local);
-      int uv = add_upvalue(c, slot, true, false);
-      emit_op(c, OP_GET_UPVAL);
-      emit_u16(c, (uint16_t)uv);
-    } else {
-      compile_static_property_key(c, m->left);
-    }
-    emit_op(c, OP_SWAP);
-    emit_op(c, OP_DEFINE_METHOD_COMP);
-    emit(c, 0);
-    emit_op(c, OP_POP);
-  }
-}
-
-static inline bool is_class_method_def(const sv_ast_t *m) {
-  return 
-    m && m->right && m->right->type == N_FUNC &&
-    (m->right->flags & FN_METHOD);
-}
-
 static void compile_static_initializer_value(sv_compiler_t *c, sv_ast_t *expr, int ctor_local);
 
 static void compile_class_method(
@@ -6493,7 +6507,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(&comp, OP_POP);
     }
 
-    emit_field_inits(&comp, field_inits, field_count);
+    emit_field_inits(&comp, c, field_inits, field_count);
     emit_op(&comp, OP_RETURN_UNDEF);
 
     sv_func_t *fn = code_arena_bump(sizeof(sv_func_t));
@@ -6730,6 +6744,8 @@ sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp;
   sv_compile_ctx_init_child(&comp, enclosing, node, mode);
+  if (node->flags & FN_DERIVED_CTOR) comp.derived_field_owner = enclosing;
+  else if (comp.is_arrow) comp.derived_field_owner = enclosing->derived_field_owner;
 
   bool has_own_use_strict = false;
   bool has_non_simple_params = false;
@@ -6958,8 +6974,9 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.super_local);
   }
 
-  if (enclosing->field_init_count > 0) {
-    emit_field_inits(&comp, enclosing->field_inits, enclosing->field_init_count);
+  if ((node->flags & FN_CLASS_CTOR) && !(node->flags & FN_DERIVED_CTOR) &&
+      enclosing->field_init_count > 0) {
+    emit_field_inits(&comp, enclosing, enclosing->field_inits, enclosing->field_init_count);
   }
 
   bool body_has_await_using = false;
