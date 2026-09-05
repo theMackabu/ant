@@ -13,6 +13,32 @@ function equalBytes(actual, expected, message) {
   }
 }
 
+function checkKeyProperties(key) {
+  assert(Object.keys(key).join(',') === 'type,extractable,algorithm,usages', 'key property order');
+  for (const name of ['type', 'extractable', 'algorithm', 'usages']) {
+    const descriptor = Object.getOwnPropertyDescriptor(key, name);
+    assert(descriptor.enumerable === true, `${name}: enumerable`);
+    assert(descriptor.writable === false, `${name}: read-only`);
+    assert(descriptor.configurable === false, `${name}: non-configurable`);
+    let assignmentError;
+    try {
+      key[name] = null;
+    } catch (error) {
+      assignmentError = error;
+    }
+    assert(assignmentError && assignmentError.name === 'TypeError', `${name}: cannot overwrite`);
+    assert(key[name] === descriptor.value, `${name}: value unchanged`);
+    let deletionError;
+    try {
+      delete key[name];
+    } catch (error) {
+      deletionError = error;
+    }
+    assert(deletionError && deletionError.name === 'TypeError', `${name}: cannot delete`);
+  }
+  assert(Object.prototype.toString.call(key) === '[object CryptoKey]', 'key tag');
+}
+
 async function rejectsAsPromise(factory, expectedName, message) {
   let promise;
   try {
@@ -40,6 +66,7 @@ async function testAes() {
   const aesAlgorithm = { name: 'aes-gcm', length: 256 };
   const aesUsages = ['encrypt', 'decrypt', 'encrypt'];
   const aesKey = await crypto.subtle.generateKey(aesAlgorithm, true, aesUsages);
+  checkKeyProperties(aesKey);
   assert(aesKey.type === 'secret', 'AES key type');
   assert(aesKey.extractable === true, 'AES extractability');
   assert(aesKey.algorithm.name === 'AES-GCM', 'AES normalized algorithm name');
@@ -66,6 +93,7 @@ async function testAes() {
     'raw', raw, { name: 'AES-GCM' }, false, ['decrypt']
   );
   assert(decryptKey.extractable === false, 'imported AES extractability');
+  checkKeyProperties(decryptKey);
   assert(decryptKey.algorithm.name === 'AES-GCM', 'imported AES algorithm name');
   assert(decryptKey.algorithm.length === 256, 'imported AES algorithm length');
   assert(decryptKey.usages.join(',') === 'decrypt', 'imported AES usages');
@@ -113,6 +141,7 @@ async function testHmac() {
   const hmacKey = await crypto.subtle.generateKey(
     { name: 'HMAC', hash: 'SHA-256' }, true, new Set(['sign', 'verify'])
   );
+  checkKeyProperties(hmacKey);
   assert(hmacKey.algorithm.name === 'HMAC', 'HMAC algorithm name');
   assert(hmacKey.algorithm.hash.name === 'SHA-256', 'HMAC hash name');
   assert(hmacKey.algorithm.length === 512, 'HMAC default block-size length');
@@ -274,6 +303,15 @@ async function testIteratorErrors() {
   assert(key.usages.join(',') === 'encrypt', 'custom iterator with inherited next');
 
   const original = new Error('usage conversion');
+  for (const usages of [
+    { [Symbol.iterator]() { throw original; } },
+    { [Symbol.iterator]() { return { next() { throw original; } }; } }
+  ]) {
+    const iteratorRejection = await rejectsAsPromise(() => crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 128 }, true, usages
+    ), 'Error', 'iterator failure rejection');
+    assert(iteratorRejection === original, 'iterator exception identity');
+  }
   const rejection = await rejectsAsPromise(() => crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 128 }, true,
     [{ toString() { throw original; } }]

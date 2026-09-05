@@ -968,7 +968,10 @@ static ant_value_t crypto_read_key_usages(ant_t *js, ant_value_t input, uint8_t 
   // TODO: align js_iter with WebCrypto sequence semantics (getters, cached next,
   // TypeError validation, and preserving conversion exceptions during IteratorClose).
   bool iterated = js_iter(js, input, crypto_read_key_usage, mask);
-  return !iterated || js->thrown_exists ? mkval(kTypeError, 0) : js_mkundef();
+  if (js->thrown_exists) return mkval(kTypeError, 0);
+  if (!iterated)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to iterate keyUsages");
+  return js_mkundef();
 }
 
 static ant_value_t crypto_check_key_usages(
@@ -1049,8 +1052,8 @@ static ant_value_t crypto_make_key_algorithm(
   GC_ROOT_PIN(js, hash);
 
   if (kind == CRYPTO_KEY_AES_GCM) {
-    js_set(js, algorithm, "name", js_mkstr(js, "AES-GCM", 7));
-    js_set(js, algorithm, "length", js_mknum((double)key_bits));
+    js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "AES-GCM", 7));
+    js_mkprop_fast(js, algorithm, "length", 6, js_mknum((double)key_bits));
   } else if (kind == CRYPTO_KEY_HMAC) {
     const char *hash_name = crypto_webcrypto_digest_name(md);
     if (!hash_name) {
@@ -1065,13 +1068,12 @@ static ant_value_t crypto_make_key_algorithm(
       GC_ROOT_RESTORE(js, root_mark);
       return hash;
     }
-    js_set(js, hash, "name", js_mkstr(js, hash_name, strlen(hash_name)));
-    js_set(js, algorithm, "name", js_mkstr(js, "HMAC", 4));
-    js_set(js, algorithm, "length", js_mknum((double)key_bits));
-    js_set(js, algorithm, "hash", hash);
-  } else {
-    js_set(js, algorithm, "name", js_mkstr(js, "PBKDF2", 6));
-  }
+    js_mkprop_fast(js, hash, "name", 4, js_mkstr(js, hash_name, strlen(hash_name)));
+    js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "HMAC", 4));
+    js_mkprop_fast(js, algorithm, "length", 6, js_mknum((double)key_bits));
+    js_mkprop_fast(js, algorithm, "hash", 4, hash);
+  } else js_mkprop_fast(js, algorithm, "name", 4, js_mkstr(js, "PBKDF2", 6));
+
   GC_ROOT_RESTORE(js, root_mark);
   return algorithm;
 }
@@ -1109,15 +1111,11 @@ static ant_value_t crypto_make_key_object(
   
   obj = js_mkobj(js);
   if (is_err(obj)) goto cleanup;
-  js_set(js, obj, "type", js_mkstr(js, "secret", 6));
-  js_set(js, obj, "extractable", js_bool(key->extractable));
-  js_set(js, obj, "algorithm", algorithm);
-  js_set(js, obj, "usages", usages);
+  mkprop(js, obj, js_mkstr(js, "type", 4), js_mkstr(js, "secret", 6), ANT_PROP_ATTR_ENUMERABLE);
+  mkprop(js, obj, js_mkstr(js, "extractable", 11), js_bool(key->extractable), ANT_PROP_ATTR_ENUMERABLE);
+  mkprop(js, obj, js_mkstr(js, "algorithm", 9), algorithm, ANT_PROP_ATTR_ENUMERABLE);
+  mkprop(js, obj, js_mkstr(js, "usages", 6), usages, ANT_PROP_ATTR_ENUMERABLE);
   js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "CryptoKey", 9));
-  js_set_descriptor(js, obj, "type", 4, JS_DESC_E);
-  js_set_descriptor(js, obj, "extractable", 11, JS_DESC_E);
-  js_set_descriptor(js, obj, "algorithm", 9, JS_DESC_E);
-  js_set_descriptor(js, obj, "usages", 6, JS_DESC_E);
   
   if (js->thrown_exists) { obj = mkval(kTypeError, 0); goto cleanup; }
   js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
