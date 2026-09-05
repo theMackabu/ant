@@ -23,8 +23,8 @@ static ant_value_t cjs_module_exports_setter(ant_t *js, ant_value_t *args, int n
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t state = js_get_slot(fn, SLOT_DATA);
+  
   if (!is_object_type(state)) return js_mkundef();
-
   js_set(js, state, "value", value);
 
   ant_value_t ns = js_get(js, state, "namespace");
@@ -166,11 +166,10 @@ static ant_value_t esm_eval_commonjs_function(
     SV_PARAM("__filename"),
     SV_PARAM("__dirname"),
   };
-
+  
+  int param_count = (int)(sizeof(cjs_params) / sizeof(cjs_params[0]));
   sv_func_t *compiled = sv_compile_function_with_params(
-    js, cjs_params,
-    (int)(sizeof(cjs_params) / sizeof(cjs_params[0])),
-    code, code_len, false
+    js, cjs_params, param_count, code, code_len, false
   );
 
   if (!compiled) {
@@ -180,7 +179,7 @@ static ant_value_t esm_eval_commonjs_function(
 
   js_clear_error_site(js);
   ant_value_t args[] = {require_fn, module_obj, exports_obj, filename_val, dirname_val};
-  return sv_execute_entry(js->vm, compiled, exports_obj, args, 5);
+  return sv_execute_entry(js->vm, compiled, exports_obj, args, param_count);
 }
 
 ant_value_t esm_load_commonjs_module(

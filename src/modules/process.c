@@ -1461,11 +1461,31 @@ static ant_value_t env_keys(ant_t *js, ant_value_t obj) {
 }
 
 static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
-  char cwd[4096];
-  if (getcwd(cwd, sizeof(cwd)) != NULL) {
-    return js_mkstr(js, cwd, strlen(cwd));
+  char inline_cwd[4096];
+  char *cwd = inline_cwd;
+  
+  size_t size = sizeof(inline_cwd);
+  int status = uv_cwd(cwd, &size);
+  
+  if (status == UV_ENOBUFS) {
+    cwd = malloc(size);
+    if (!cwd) return js_mkerr(js, "Out of memory");
+    status = uv_cwd(cwd, &size);
   }
-  return js_mkundef();
+  
+  ant_value_t result;
+  if (status == 0) result = js_mkstr(js, cwd, size);
+  else {
+    const char *code = uv_err_name(status);
+    ant_value_t props = js_mkobj(js);
+    js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+    js_set(js, props, "errno", js_mknum(status));
+    js_set(js, props, "syscall", js_mkstr(js, "uv_cwd", 6));
+    result = js_mkerr_props(js, JS_ERR_GENERIC, props, "%s: %s, uv_cwd", code, uv_strerror(status));
+  }
+  
+  if (cwd != inline_cwd) free(cwd);
+  return result;
 }
 
 static bool process_is_error_object(ant_value_t value) {

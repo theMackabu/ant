@@ -5,6 +5,7 @@
 #include "ant.h"
 #include "bootstrap.h"
 #include "snapshot.h"
+#include "primordials.h"
 #include "messages.h"
 #include "esm/library.h"
 
@@ -25,7 +26,6 @@
 #include "modules/syntax.h"
 #include "modules/process.h"
 #include "modules/tty.h"
-#include "modules/path.h"
 #include "modules/ffi.h"
 #include "modules/events.h"
 #include "modules/lmdb.h"
@@ -143,6 +143,7 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_register_library(syntax_library, "ant:syntax", NULL);
 
   ant_register_library(shell_ops_library, "ant:internal/shell_ops", NULL);
+  ant_register_library(primordial_library, "ant:internal/primordials", NULL);
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata", NULL);
@@ -156,7 +157,6 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_standard_library("assert", assert_library);
   ant_standard_library("module", module_library);
   ant_standard_library("buffer", buffer_library);
-  ant_standard_library("path", path_library);
   ant_standard_library("fs", fs_library);
   ant_standard_library("constants", fs_constants_library);
   ant_standard_library("os", os_library);
@@ -175,9 +175,6 @@ void ant_bootstrap_modules(ant_t *js) {
   ant_standard_library("string_decoder", string_decoder_library);
   ant_standard_library("stream", stream_library);
   ant_standard_library("timers", timers_library);
-
-  ant_register_library(path_posix_library, "path/posix", "ant:path/posix", "node:path/posix", NULL);
-  ant_register_library(path_win32_library, "path/win32", "ant:path/win32", "node:path/win32", NULL);
 
   ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("timers/promises", timers_promises_library);

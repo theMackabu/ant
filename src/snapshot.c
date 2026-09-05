@@ -10,7 +10,10 @@ ant_value_t ant_load_snapshot(ant_t *js) {
   if (!js) return js_mkundef();
   
   const char *src = (const char *)ant_snapshot_source;
-  ant_value_t result = js_eval_bytecode(js, src, ant_snapshot_source_len);
+  ant_value_t result = ant_capture_primordials(js);
+  
+  if (is_err(result)) return result;
+  result = js_eval_bytecode(js, src, ant_snapshot_source_len);
   
   gc_pin_existing_objects(js);
   builtin_object_freeze(js, &js->Ant, 1);

@@ -289,6 +289,9 @@ void code_arena_reset(void) {
 void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   ant_value_t global = js_glob(js);
 
+  js->primordials = js_mkundef();
+  for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
+    js->primordial_values[i] = js_mkundef();
   js->Ant = js_newobj(js);
   js->runtime.flags = 0;
   js->runtime.argc = argc;

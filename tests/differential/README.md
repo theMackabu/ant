@@ -6,10 +6,12 @@ timeout state, stdout, and stderr. Probe output uses a canonical JSON encoding
 for values that JSON normally loses, including `undefined`, non-finite numbers,
 BigInts, errors, functions, and cycles.
 
-The initial families cover property semantics, RegExp behavior, Promise and
-microtask timing, and readable/writable stream property shape. Stream probes
-are atomic: each generated case checks one property or one target's own keys,
-so a broad mismatch does not contaminate unrelated generated cases.
+The families cover property semantics, RegExp behavior, Promise and microtask
+timing, readable/writable stream property shape, and path resolution. Stream
+probes are atomic: each generated case checks one property or one target's own
+keys, so a broad mismatch does not contaminate unrelated generated cases. Path
+probes cover POSIX cwd resolution plus Win32 drive-relative, rooted, drive, and
+UNC behavior.
 
 Run one deterministic pass across every family:
 

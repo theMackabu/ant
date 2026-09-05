@@ -26,7 +26,8 @@ test('process toStringTag', Object.prototype.toString.call(process), '[object pr
 test('Buffer toStringTag', Object.prototype.toString.call(Buffer.alloc(0)), '[object Buffer]');
 test('crypto toStringTag', Object.prototype.toString.call(crypto), '[object Crypto]');
 
-test('path toStringTag', Object.prototype.toString.call(path), '[object path]');
+test('path namespace toStringTag', Object.prototype.toString.call(path), '[object Module]');
+test('path default is an ordinary object', Object.prototype.toString.call(path.default), '[object Object]');
 test('fs toStringTag', Object.prototype.toString.call(fs), '[object fs]');
 test('shell toStringTag', Object.prototype.toString.call(shell), '[object Module]');
 test('shell namespace tag', shell[Symbol.toStringTag], 'Module');

@@ -203,11 +203,104 @@ ${observation}`);
   };
 }
 
+const pathScenarios = [
+  { style: 'posix', method: 'matchesGlob', args: ['src/a.js', 'src/*.js'] },
+  { style: 'posix', method: 'matchesGlob', args: ['src/nested/a.js', '**/*.{js,ts}'] },
+  { style: 'posix', method: 'matchesGlob', args: ['src/a.ts', 'src/+(a|b).ts'] },
+  { style: 'posix', method: 'matchesGlob', args: ['src/.hidden', 'src/*'] },
+  { style: 'posix', method: 'matchesGlob', args: ['a.js', '!*.js'] },
+  { style: 'posix', method: 'matchesGlob', args: ['#file', '#file'] },
+  { style: 'win32', method: 'matchesGlob', args: ['C:\\src\\a.js', 'C:/src/*.js'] },
+  { style: 'win32', method: 'matchesGlob', args: ['C:\\src\\nested\\a.ts', 'C:/src/**/*.{js,ts}'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\\\..\\file.txt\\..\\b'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\server'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\server\\\\share\\a'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\server\\share\\a', '\\\\SERVER\\\\share\\b'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\?\\C:\\a\\..\\b'] },
+  { style: 'win32', method: 'relative', args: ['D:\\b', '\\'] },
+  { style: 'win32', method: 'relative', args: ['\\abc\\file.txt', '\\a'] },
+  { style: 'win32', method: 'relative', args: ['\\abx', '\\ab'] },
+  { style: 'win32', method: 'relative', args: ['\\ab', '\\abx'] },
+  { style: 'win32', method: 'relative', args: ['\\', '\\\\server\\share\\a'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share', '\\\\server\\other'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share', '\\\\server\\share\\a'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share\\a', '\\\\server\\share'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share', '\\\\other\\share'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a', '\\\\server\\share'] },
+  { style: 'posix', method: 'normalize', args: ['../../a/../b/'] },
+  { style: 'posix', method: 'normalize', args: ['/a/../../b//./'] },
+  { style: 'posix', method: 'normalize', args: ['./'] },
+  { style: 'win32', method: 'normalize', args: ['C:foo\\..\\..\\bar\\'] },
+  { style: 'posix', method: 'resolve', args: ['/', ...Array(40).fill('dir'), ...Array(39).fill('..'), 'file'] },
+  { style: 'posix', method: 'relative', args: ['/a', '/ab/file'] },
+  { style: 'posix', method: 'relative', args: ['/a/b/c', '/a'] },
+  { style: 'posix', method: 'relative', args: ['/' + Array(40).fill('dir').join('/'), '/other'] },
+  { style: 'posix', method: 'relative', args: ['.', 'm.js'] },
+  { style: 'posix', method: 'relative', args: ['', 'm.js'] },
+  { style: 'posix', method: 'relative', args: ['a/..', '.'] },
+  { style: 'posix', method: 'relative', args: ['a', 'a/b/c.js'] },
+  { style: 'posix', method: 'relative', args: ['a/b', 'a'] },
+  { style: 'posix', method: 'relative', args: ['a/../b', 'c'] },
+  { style: 'posix', method: 'resolve', args: ['foo', '..', 'bar'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a', 'C:foo'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a', '\\foo'] },
+  { style: 'win32', method: 'relative', args: ['\\a', '\\b'] },
+  { style: 'win32', method: 'relative', args: ['\\a\\x', '\\a\\y'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a', 'C:\\b'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a', 'D:\\b'] },
+  { style: 'win32', method: 'relative', args: ['C:foo', 'C:bar'] },
+  { style: 'win32', method: 'relative', args: ['C:\\a\\..', 'C:\\'] },
+  { style: 'win32', method: 'relative', args: ['C:\\A', 'c:\\a'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share\\a', '\\\\server\\share\\b'] },
+  { style: 'win32', method: 'relative', args: ['\\\\server\\share\\a', '\\\\server\\other\\b'] },
+  { style: 'win32', method: 'resolve', args: ['C:foo'] },
+  { style: 'win32', method: 'resolve', args: ['\\foo'] },
+  { style: 'win32', method: 'resolve', args: ['C:\\base', '\\foo'] },
+  { style: 'win32', method: 'resolve', args: ['C:\\base', 'D:foo'] },
+  { style: 'win32', method: 'resolve', args: ['C:base', '\\foo'] },
+  { style: 'win32', method: 'resolve', args: ['C:\\base', 'D:\\root', 'tail'] },
+  { style: 'win32', method: 'resolve', args: ['\\\\server\\share', 'dir', '..', 'file'] }
+];
+
+function pathCase(random, index) {
+  const rotation = Math.floor(random() * pathScenarios.length);
+  const scenarios = pathScenarios.slice(rotation).concat(pathScenarios.slice(0, rotation));
+  // Exercise root parsing and component boundaries beyond the fixed regressions.
+  const pick = values => values[Math.floor(random() * values.length)];
+  const components = ['a', 'b', 'abc', '.', '..', '', 'file.txt'];
+  for (const style of ['posix', 'win32']) {
+    const roots = style === 'posix' ? ['', '/'] : ['', 'C:\\', 'D:\\', 'C:', '\\', '\\\\server\\share\\'];
+    const makePath = () => pick(roots) + Array.from(
+      { length: 1 + Math.floor(random() * 12) }, () => pick(components)
+    ).join(style === 'posix' ? '/' : pick(['/', '\\']));
+    for (let i = 0; i < 100; i++) {
+      const args = [makePath(), makePath()];
+      scenarios.push({ style, method: 'resolve', args }, { style, method: 'relative', args });
+    }
+  }
+  return {
+    family: 'path',
+    id: `path-${index}`,
+    shrinkKeys: ['scenarios'],
+    params: { scenarios },
+    build(params) {
+      const observations = params.scenarios
+        .map(({ style, method, args }) => {
+          const label = `${style}.${method}(${args.map(literal).join(', ')})`;
+          return `__record(${literal(label)}, () => path.${style}.${method}(...${literal(args)}));`;
+        })
+        .join('\n');
+      return finish(`const path = require('node:path');\n${observations}`);
+    }
+  };
+}
+
 const builders = {
   property: propertyCase,
   regexp: regexpCase,
   promise: promiseCase,
-  'stream-shape': streamCase
+  'stream-shape': streamCase,
+  path: pathCase
 };
 
 export const familyNames = Object.freeze(Object.keys(builders));

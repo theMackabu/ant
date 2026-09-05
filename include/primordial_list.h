@@ -1,0 +1,22 @@
+#ifdef PRIMORDIAL_DEF
+PRIMORDIAL_DEF(ArrayIsArray,                ARRAY,          "isArray",     false)
+PRIMORDIAL_DEF(ArrayPrototypeIncludes,      ARRAY_PROTO,    "includes",    true)
+PRIMORDIAL_DEF(ArrayPrototypeJoin,          ARRAY_PROTO,    "join",        true)
+PRIMORDIAL_DEF(ArrayPrototypePush,          ARRAY_PROTO,    "push",        true)
+PRIMORDIAL_DEF(ArrayPrototypeSlice,         ARRAY_PROTO,    "slice",       true)
+PRIMORDIAL_DEF(FunctionPrototypeBind,       FUNCTION_PROTO, "bind",        true)
+PRIMORDIAL_DEF(StringPrototypeCharCodeAt,   STRING_PROTO,   "charCodeAt",  true)
+PRIMORDIAL_DEF(StringPrototypeIncludes,     STRING_PROTO,   "includes",    true)
+PRIMORDIAL_DEF(StringPrototypeIndexOf,      STRING_PROTO,   "indexOf",     true)
+PRIMORDIAL_DEF(StringPrototypeLastIndexOf,  STRING_PROTO,   "lastIndexOf", true)
+PRIMORDIAL_DEF(StringPrototypeRepeat,       STRING_PROTO,   "repeat",      true)
+PRIMORDIAL_DEF(StringPrototypeReplace,      STRING_PROTO,   "replace",     true)
+PRIMORDIAL_DEF(StringPrototypeSlice,        STRING_PROTO,   "slice",       true)
+PRIMORDIAL_DEF(StringPrototypeSplit,        STRING_PROTO,   "split",       true)
+PRIMORDIAL_DEF(StringPrototypeToLowerCase,  STRING_PROTO,   "toLowerCase", true)
+PRIMORDIAL_DEF(StringPrototypeToUpperCase,  STRING_PROTO,   "toUpperCase", true)
+PRIMORDIAL_DEF(JSONStringify,               JSON,           "stringify",   false)
+PRIMORDIAL_DEF(String,                      GLOBAL,         "String",      false)
+PRIMORDIAL_DEF(TypeError,                   GLOBAL,         "TypeError",   false)
+#undef PRIMORDIAL_DEF
+#endif
