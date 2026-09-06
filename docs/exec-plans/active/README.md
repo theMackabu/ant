@@ -1,13 +1,14 @@
 # Active Plans
 
 Status: active
-Last reviewed: 2026-08-14
+Last reviewed: 2026-09-06
 Owner: theMackabu
 
 Store in-progress execution plans here.
 
 ## Active
 
+- [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)
 - [Buffer Index Coercion Review Fixes](buffer-index-coercion.md)
 - [JS Path Node Performance](path-node-performance.md)
 - [Guarded charCodeAt Opcode](charcode-intrinsic.md)
