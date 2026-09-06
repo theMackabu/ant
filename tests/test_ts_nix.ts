@@ -47,9 +47,19 @@ assert.strictEqual(new NixFunction(['pkgs'], ({ pkgs }) => pkgs.get('mkShell').c
 })).render(), '{ pkgs }:\npkgs.mkShell {\n  packages = [ pkgs.hello ];\n}\n');
 assert.strictEqual(ref('f').call(1).call(2).render(), 'f 1 2\n');
 
+const inheritedSource = new NixFunction(['src'], ({ src }) => ({ src }));
+assert.strictEqual(inheritedSource.render(), '{ src }: {\n  inherit src;\n}\n');
+assert.strictEqual(render({ renamed: ref('src'), src: 'literal' }), '{\n  renamed = src;\n  src = "literal";\n}\n');
+const shadowedSource = new NixFunction(['src'], outer =>
+  new NixFunction(['src'], inner => ({ src: outer.src, inner: inner.src })),
+);
+assert.match(shadowedSource.render(), /src = src_1;/);
+
 // Nix evaluates the result, catching precedence and escaping errors beyond snapshots.
 if (process.argv.includes('--nix')) {
   const evaluate = (value: any) => JSON.parse(execFileSync('nix-instantiate', ['--eval', '--strict', '--json', '--expr', render(value)], { encoding: 'utf8' }));
+  assert.deepStrictEqual(evaluate(inheritedSource.call({ src: 'source' })), { src: 'source' });
+  assert.deepStrictEqual(evaluate(shadowedSource.call({ src: 'outer' }).call({ src: 'inner' })), { src: 'outer', inner: 'inner' });
   assert.deepStrictEqual(evaluate(literal), literal);
   assert.deepStrictEqual(evaluate({ nested: { text: nix`"first
 second"` } }), { nested: { text: 'first\nsecond' } });

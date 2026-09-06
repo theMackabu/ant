@@ -100,8 +100,8 @@ antStdenv.mkDerivation (finalAttrs:
   pname = "ant";
   src = ../../..;
   version = import ./version.nix {
-    lib = lib;
-    gitRev = gitRev;
+    inherit lib;
+    inherit gitRev;
   };
   nativeBuildInputs = [
     meson

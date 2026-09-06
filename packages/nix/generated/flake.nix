@@ -25,13 +25,13 @@
   flake-utils.lib.eachDefaultSystem (system:
   let
     pkgs = import nixpkgs {
-      system = system;
+      inherit system;
       overlays = [ rust-overlay.overlays.default ];
     };
 in
   let
     toolchain = import ./toolchain.nix {
-      pkgs = pkgs;
+      inherit pkgs;
     };
 
     rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ../../../src/temporal/rust-toolchain.toml;
@@ -44,19 +44,19 @@ in
     ant = pkgs.callPackage ./package.nix {
       gitRev = self.shortRev or (self.dirtyShortRev or "unknown");
       stdenv = toolchain.stdenv;
-      rustPlatform = rustPlatform;
-      rustToolchain = rustToolchain;
+      inherit rustPlatform;
+      inherit rustToolchain;
     };
 in
   {
     packages = {
-      ant = ant;
+      inherit ant;
       default = ant;
     };
     devShells = {
       default = import ./shell.nix {
-        pkgs = pkgs;
-        toolchain = toolchain;
+        inherit pkgs;
+        inherit toolchain;
       };
     };
   });

@@ -23,9 +23,9 @@
   };
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
   (import ./packages/nix/generated/flake.nix).outputs {
-    self = self;
-    nixpkgs = nixpkgs;
-    flake-utils = flake-utils;
-    rust-overlay = rust-overlay;
+    inherit self;
+    inherit nixpkgs;
+    inherit flake-utils;
+    inherit rust-overlay;
   };
 }

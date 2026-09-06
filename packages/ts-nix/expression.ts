@@ -219,7 +219,9 @@ export function render(value: Value): string {
         break;
       case 'attrs':
         text = node.entries.length ? '{\n' + node.entries.map(([name, value]) =>
-          entry(typeof name === 'string' ? key(name) :
+          typeof name === 'string' && value.kind === 'ref' && name === nameOf(value.name)
+            ? `${indent(depth + 1)}inherit ${key(name)};`
+            : entry(typeof name === 'string' ? key(name) :
             (name.kind === 'template' && name.string) || (name.kind === 'literal' && typeof name.value === 'string')
               ? print(name, depth + 1) : '${' + print(name, depth + 1) + '}', value, depth + 1)
         ).join('\n') + '\n' + indent(depth) + '}' : '{}';
