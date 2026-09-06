@@ -37,7 +37,10 @@ static bool http1_host_is_canonical(const char *host) {
       return false;
     }
   }
+  
   if (label_len == 0 || label_len > 63) return false;
+  const char *last_label = host_end - label_len;
+  if (!numeric_host && *last_label >= '0' && *last_label <= '9') return false;
 
   if (numeric_host) {
     const char *p = host;

@@ -20,6 +20,9 @@ test('indexOf positive infinity clamps high', 'abc'.indexOf('', Infinity), 3);
 test('indexOf negative infinity clamps low', 'abc'.indexOf('a', -Infinity), 0);
 test('indexOf leading surrogate', '𝄞'.indexOf('\uD834'), 0);
 test('indexOf trailing surrogate', '𝄞'.indexOf('\uDD1E'), 1);
+test('indexOf long Unicode first-unit mismatch', 'é'.repeat(100000).indexOf('x'.repeat(10000)), -1);
+test('indexOf Unicode match after rejected candidates', 'é'.repeat(1000).concat('xyz').indexOf('xyz'), 1000);
+test('indexOf trailing surrogate and suffix', 'é𝄞x'.indexOf('\uDD1Ex'), 2);
 
 let js = 'JavaScript';
 test('substring start end', js.substring(0, 4), 'Java');

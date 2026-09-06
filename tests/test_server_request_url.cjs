@@ -119,6 +119,9 @@ export default {
     const cases = [
       ['GET', '/', 'example.test:8080', true],
       ['GET', '/', '127.0.0.1:8080'],
+      ['GET', '/', '1.2.3.0xff'],
+      ['GET', '/', '0x7f.0.0.1:8080'],
+      ['GET', '/', 'example.123abc'],
       ['GET', '/a/../b?x=1', 'example.test'],
       ['GET', '/%E2%9C%93?q=%20', 'example.test:8080'],
       ['GET', '//other.test/x', 'example.test'],
@@ -169,6 +172,10 @@ export default {
         empty: '',
       });
     }
+    // A numeric final label triggers IPv4 parsing, which rejects this host.
+    // Request construction must fail before the fetch handler runs.
+    const invalidHost = await rawRequest(port, 'GET', '/', 'example.123');
+    assert.match(invalidHost, /^HTTP\/1\.1 500 /, invalidHost);
     assert.equal(child.exitCode, null, stderr);
     console.log('server Request URLs and shared defaults preserve semantics');
   } finally {

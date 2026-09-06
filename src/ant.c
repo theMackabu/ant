@@ -12994,11 +12994,13 @@ static ant_value_t string_index_of_strings(
     }
   } else {
     size_t last = str_utf16 - search_utf16;
-    for (size_t i = start; i <= last; i++)
-      if (utf16_range_equals_bytes(
-        str_ptr, (size_t)str_len, i, i + search_utf16,
-        search_ptr, (size_t)search_len))
-      return tov((double)i);
+    uint32_t first = utf16_code_unit_at(search_ptr, (size_t)search_len, 0);
+    for (size_t i = start; i <= last; i++) if (
+      utf16_code_unit_at(str_ptr, (size_t)str_len, i) == first && 
+      utf16_range_equals_bytes(
+        str_ptr, (size_t)str_len, i, i + 
+        search_utf16,search_ptr, (size_t)search_len)
+    ) return tov((double)i);
   }
 
   return tov(-1);
