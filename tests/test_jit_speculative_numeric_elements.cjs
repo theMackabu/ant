@@ -376,4 +376,50 @@ try {
   delete globalThis.inlineReplayData;
 }
 
+// Keep numeric work hot while the same sites also see growth, accessors and throws.
+function mixedElementRound(target, index, value) {
+  "use strict";
+  const before = target[index];
+  target[index] = value;
+  return before;
+}
+const mixedDense = [1, 2, 3];
+const mixedObject = { 0: 7 };
+for (let i = 0; i < 600; i++) {
+  assertSame(mixedElementRound(mixedObject, 0, 7), 7, "mixed object fallback");
+  assertSame(mixedElementRound(mixedDense, 0, i), i ? i - 1 : 1, "mixed dense rejoin");
+}
+let mixedGets = 0;
+let mixedSets = 0;
+const mixedAccessor = Object.defineProperty({}, "0", {
+  get() { mixedGets++; return 11; },
+  set(value) { mixedSets += value; },
+});
+for (let i = 0; i < 100; i++) {
+  assertSame(mixedElementRound(mixedAccessor, 0, 3), 11, "mixed accessor read");
+  assertSame(mixedElementRound(mixedDense, 1, 2), 2, "dense after accessor");
+}
+assertSame(mixedGets, 100, "fallback getter executes once");
+assertSame(mixedSets, 300, "fallback setter executes once");
+const mixedThrown = {};
+const mixedThrowing = Object.defineProperty({}, "0", {
+  get() { return 5; },
+  set() { throw mixedThrown; },
+});
+let mixedCaught = 0;
+for (let i = 0; i < 100; i++) {
+  try {
+    mixedElementRound(mixedThrowing, 0, 3);
+  } catch (error) {
+    assertSame(error, mixedThrown, "mixed fallback preserves thrown value");
+    mixedCaught++;
+  }
+  assertSame(mixedElementRound(mixedDense, 2, 3), 3, "dense after caught fallback");
+}
+assertSame(mixedCaught, 100, "every fallback exception caught");
+assertThrowsTypeError(
+  () => mixedElementRound(Object.freeze([1]), 0, 9),
+  "mixed fast path must respect frozen elements",
+);
+
 console.log("PASS");

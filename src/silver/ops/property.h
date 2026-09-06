@@ -1017,7 +1017,7 @@ static inline ant_value_t sv_op_get_elem(
 
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d) {
+    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
       vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
       return js_mkundef();
     }
@@ -1050,7 +1050,7 @@ static inline ant_value_t sv_op_get_elem2(
 
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d) {
+    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
       vm->stack[vm->sp++] = js_arr_get(js, obj, (uint32_t)d);
       return js_mkundef();
     }

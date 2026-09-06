@@ -1263,7 +1263,7 @@ ant_value_t jit_helper_get_elem(
   }
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d)
+    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
   }
   ant_value_t str_elem = js_mkundef();
@@ -1398,7 +1398,7 @@ ant_value_t jit_helper_throw_error(
 ant_value_t jit_helper_get_elem2(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key) {
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d)
+    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d)
       return js_arr_get(js, obj, (uint32_t)d);
   }
   ant_value_t str_elem = js_mkundef();
@@ -1414,7 +1414,7 @@ ant_value_t jit_helper_get_elem_inline(
 
   if (vtype(obj) == kTypeArray && vtype(key) == kTypeNumber) {
     double d = tod(key);
-    if (d >= 0 && d == (uint32_t)d) {
+    if (d >= 0 && d < (double)UINT32_MAX && d == (uint32_t)d) {
       // TODO: reduce nesting
       ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
       if (ptr && !ptr->flags.is_exotic && ptr->flags.fast_array && ptr->u.array.data) {
