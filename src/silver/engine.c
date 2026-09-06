@@ -2052,6 +2052,25 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(3);
   }
 
+  L_CALL_STRING_INTRINSIC: {
+    ant_string_intrinsic_kind_t kind =
+      (ant_string_intrinsic_kind_t)ip[1];
+    uint16_t call_argc = sv_get_u16(ip + 2);
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
+
+    frame->ip = ip;
+    ant_value_t call_result = sv_op_call_string_intrinsic(
+      vm, js, kind, call_func, call_this, call_args, call_argc);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+
+    vm->sp -= call_argc + 2;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(4);
+  }
+
   L_CALL_MAP_TEMPLATE: {
     uint32_t desc_idx = sv_get_u32(ip + 1);
     const sv_map_template_desc_t *desc =

@@ -11,6 +11,7 @@ typedef struct ant_http_header_s {
   char *name;
   char *value;
   struct ant_http_header_s *next;
+  char storage[];
 } ant_http_header_t;
 
 typedef enum {

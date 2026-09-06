@@ -12919,53 +12919,133 @@ static ant_value_t builtin_Array_of(ant_t *js, ant_value_t *args, int nargs) {
   return arr;
 }
 
-static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "indexOf called on non-string");
-  if (nargs == 0) return tov(-1);
+static ant_value_t js_mkstr_utf16_range(
+  ant_t *js, const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end
+);
+static inline bool utf16_range_equals_bytes(
+  const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end,
+  const char *expected, size_t expected_len
+);
 
-  ant_value_t search = args[0];
-  if (vtype(search) != kTypeString) return tov(-1);
+static inline double string_number_to_integer(double number) {
+  return isnan(number) || number == 0.0 ? 0.0 : trunc(number);
+}
 
-  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
-  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
+static ant_value_t string_to_integer_or_infinity(
+  ant_t *js, ant_value_t value, double *out
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
 
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  const char *search_ptr = (char *)(uintptr_t)(search_off);
-
-  ant_offset_t start_utf16 = 0;
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double pos = tod(args[1]);
-    if (pos < 0) pos = 0;
-    double utf16_len = D(str_utf16_len(js, str));
-    if (pos > utf16_len) pos = utf16_len;
-    start_utf16 = (ant_offset_t) pos;
-  }
-
-  if (search_len == 0) return tov(D(start_utf16));
-
-  size_t byte_start = 0;
-  if (start_utf16 > 0) {
-    int off = utf16_index_to_byte_offset(str_ptr, str_len, start_utf16, NULL);
-    if (off < 0) return tov(-1);
-    byte_start = (size_t)off;
-  }
-
-  if (byte_start + search_len > (size_t)str_len) return tov(-1);
-
-  const char *p = str_ptr + byte_start;
-  const char *last = str_ptr + str_len - search_len;
-
-  while (p <= last) {
-    p = memchr(p, search_ptr[0], (size_t)(last - p) + 1);
-    if (!p) return tov(-1);
-    if (search_len == 1 || memcmp(p + 1, search_ptr + 1, (size_t)search_len - 1) == 0) {
-      size_t i = (size_t)(p - str_ptr);
-      return tov(D(byte_offset_to_utf16(str_ptr, i)));
+  if (is_object_type(value) || vtype(value) == kTypeBuiltin) {
+    value = js_to_primitive(js, value, 2);
+    if (is_err(value)) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return value;
     }
-    p++;
   }
+
+  if (vtype(value) == kTypeSymbol || vtype(value) == kTypeBigInt) {
+    ant_value_t err = js_mkerr_typed(
+      js, JS_ERR_TYPE, "Cannot convert value to a number");
+    GC_ROOT_RESTORE(js, root_mark);
+    return err;
+  }
+
+  *out = string_number_to_integer(js_to_number(js, value));
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return js_mkundef();
+}
+
+static ant_value_t string_index_of_strings(
+  ant_t *js, ant_value_t str, ant_value_t search, double position
+) {
+  size_t str_utf16 = (size_t)str_utf16_len(js, str);
+  size_t search_utf16 = (size_t)str_utf16_len(js, search);
+  
+  size_t start = position <= 0.0
+    ? 0 : position >= (double)str_utf16
+    ? str_utf16 : (size_t)position;
+
+  if (search_utf16 == 0) return tov((double)start);
+  if (search_utf16 > str_utf16 - start) return tov(-1);
+
+  ant_offset_t str_len, search_len;
+  (void)vstr(js, str, &str_len);
+  
+  ant_offset_t search_off = vstr(js, search, &search_len);
+  ant_offset_t str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  const char *search_ptr = (const char *)(uintptr_t)search_off;
+
+  if (str_is_ascii(str_ptr) && str_is_ascii(search_ptr)) {
+    const char *p = str_ptr + start;
+    const char *last = str_ptr + str_len - search_len;
+    while (p <= last) {
+      p = memchr(p, search_ptr[0], (size_t)(last - p) + 1);
+      if (!p) break;
+      if (search_len == 1 ||
+          memcmp(p + 1, search_ptr + 1, (size_t)search_len - 1) == 0)
+        return tov((double)(p - str_ptr));
+      p++;
+    }
+  } else {
+    size_t last = str_utf16 - search_utf16;
+    uint32_t first = utf16_code_unit_at(search_ptr, (size_t)search_len, 0);
+    for (size_t i = start; i <= last; i++) if (
+      utf16_code_unit_at(str_ptr, (size_t)str_len, i) == first && 
+      utf16_range_equals_bytes(
+        str_ptr, (size_t)str_len, i, i + 
+        search_utf16,search_ptr, (size_t)search_len)
+    ) return tov((double)i);
+  }
+
   return tov(-1);
+}
+
+static ant_value_t string_index_of_impl(
+  ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t receiver = this_val;
+  ant_value_t search_arg = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t position_arg = nargs > 1 ? args[1] : js_mkundef();
+  
+  GC_ROOT_PIN(js, receiver);
+  GC_ROOT_PIN(js, search_arg);
+  GC_ROOT_PIN(js, position_arg);
+
+  ant_value_t result;
+  uint8_t receiver_type = vtype(receiver);
+  if (receiver_type == kTypeNull || receiver_type == kTypeUndefined) {
+    result = js_mkerr_typed(
+      js, JS_ERR_TYPE, "String.prototype.indexOf called on null or undefined");
+    goto done;
+  }
+
+  ant_value_t str = coerce_to_str_hint(js, receiver, 1);
+  GC_ROOT_PIN(js, str);
+  if (is_err(str)) { result = str; goto done; }
+
+  ant_value_t search = coerce_to_str_hint(js, search_arg, 1);
+  GC_ROOT_PIN(js, search);
+  if (is_err(search)) { result = search; goto done; }
+
+  double position = 0.0;
+  if (nargs > 1) {
+    ant_value_t status = string_to_integer_or_infinity(
+      js, position_arg, &position);
+    if (is_err(status)) { result = status; goto done; }
+  }
+
+  result = string_index_of_strings(js, str, search, position);
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
 }
 
 static ant_value_t js_mkstr_utf16_range(
@@ -13043,34 +13123,166 @@ static inline bool utf16_range_equals_bytes(
   return true;
 }
 
-static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t str = to_string_val(js, js->this_val);
-  if (vtype(str) != kTypeString) return js_mkerr(js, "substring called on non-string");
+static ant_value_t js_mk_ascii_char_cached(ant_t *js, unsigned char ch) {
+  ant_value_t cached = js->ascii_chars[ch];
+  if (cached != 0) return cached;
 
-  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  char byte = (char)ch;
+  cached = js_mkstr_permanent(js, &byte, 1);
+  if (!is_err(cached)) js->ascii_chars[ch] = cached;
+  return cached;
+}
+
+static ant_value_t js_mkstr_utf16_range_cached(
+  ant_t *js, const char *str, size_t byte_len,
+  size_t utf16_start, size_t utf16_end
+) {
+  if (utf16_end == utf16_start + 1) {
+    size_t byte_start, byte_end;
+    utf16_range_splits_t splits = utf16_range_to_byte_range(
+      str, byte_len, utf16_start, utf16_end, &byte_start, &byte_end);
+    if (!splits.prefix_surrogate && !splits.suffix_surrogate &&
+        byte_end == byte_start + 1 && (unsigned char)str[byte_start] < 128)
+      return js_mk_ascii_char_cached(js, (unsigned char)str[byte_start]);
+  }
+
+  return js_mkstr_utf16_range(
+    js, str, byte_len, utf16_start, utf16_end);
+}
+
+static size_t string_substring_index(double value, size_t length) {
+  if (value <= 0.0) return 0;
+  if (value >= (double)length) return length;
+  return (size_t)value;
+}
+
+static ant_value_t string_substring_strings(
+  ant_t *js, ant_value_t str,
+  double start_number, double end_number, bool default_end
+) {
   size_t utf16_len = (size_t)str_utf16_len(js, str);
+  if (default_end) end_number = (double)utf16_len;
 
-  ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
-  double dstr_len2 = D(utf16_len);
-
-  if (nargs >= 1 && vtype(args[0]) == kTypeNumber) {
-    double d = tod(args[0]);
-    start = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
-  }
-  
-  if (nargs >= 2 && vtype(args[1]) == kTypeNumber) {
-    double d = tod(args[1]);
-    end = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
-  }
+  size_t start = string_substring_index(start_number, utf16_len);
+  size_t end = string_substring_index(end_number, utf16_len);
   
   if (start > end) {
-    ant_offset_t tmp = start;
+    size_t tmp = start;
     start = end;
     end = tmp;
   }
+
+  if (start == 0 && end == utf16_len) return str;
+
+  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
+  const char *str_ptr = (const char *)(uintptr_t)str_off;
+  return js_mkstr_utf16_range_cached(
+    js, str_ptr, (size_t)byte_len, start, end);
+}
+
+static ant_value_t string_substring_impl(
+  ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t receiver = this_val;
+  ant_value_t start_arg = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t end_arg = nargs > 1 ? args[1] : js_mkundef();
   
-  return js_mkstr_utf16_range(js, str_ptr, byte_len, start, end);
+  GC_ROOT_PIN(js, receiver);
+  GC_ROOT_PIN(js, start_arg);
+  GC_ROOT_PIN(js, end_arg);
+
+  ant_value_t result;
+  uint8_t receiver_type = vtype(receiver);
+  if (receiver_type == kTypeNull || receiver_type == kTypeUndefined) {
+    result = js_mkerr_typed(
+      js, JS_ERR_TYPE, "String.prototype.substring called on null or undefined");
+    goto done;
+  }
+
+  ant_value_t str = coerce_to_str_hint(js, receiver, 1);
+  GC_ROOT_PIN(js, str);
+  if (is_err(str)) { result = str; goto done; }
+
+  double start_number = 0.0;
+  ant_value_t status = string_to_integer_or_infinity(
+    js, start_arg, &start_number);
+  if (is_err(status)) { result = status; goto done; }
+
+  bool default_end = nargs <= 1 || vtype(end_arg) == kTypeUndefined;
+  double end_number = 0.0;
+  if (!default_end) {
+    status = string_to_integer_or_infinity(js, end_arg, &end_number);
+    if (is_err(status)) { result = status; goto done; }
+  }
+
+  result = string_substring_strings(
+    js, str, start_number, end_number, default_end);
+
+done:
+  GC_ROOT_RESTORE(js, root_mark);
+  return result;
+}
+
+static bool string_fast_integer_arg(
+  ant_value_t *args, int nargs, int index, double *out
+) {
+  if (index >= nargs || vtype(args[index]) == kTypeUndefined) {
+    *out = 0.0;
+    return true;
+  }
+  if (vtype(args[index]) != kTypeNumber) return false;
+  *out = string_number_to_integer(tod(args[index]));
+  return true;
+}
+
+ant_value_t js_string_intrinsic_call(
+  ant_t *js, ant_string_intrinsic_kind_t kind,
+  ant_value_t this_val, ant_value_t *args, int nargs
+) {
+  switch (kind) {
+  case ANT_STRING_INTRINSIC_INDEX_OF: {
+    double position;
+    if (nargs > 0 && ant_str_flat_ptr(this_val) &&
+        ant_str_flat_ptr(args[0]) &&
+        string_fast_integer_arg(args, nargs, 1, &position))
+      return string_index_of_strings(js, this_val, args[0], position);
+    return string_index_of_impl(js, this_val, args, nargs);
+  }
+  case ANT_STRING_INTRINSIC_SUBSTRING: {
+    double start_number, end_number = 0.0;
+    bool default_end = nargs <= 1 || vtype(args[1]) == kTypeUndefined;
+    if (ant_str_flat_ptr(this_val) &&
+        string_fast_integer_arg(args, nargs, 0, &start_number) &&
+        (default_end ||
+         string_fast_integer_arg(args, nargs, 1, &end_number))) {
+      GC_ROOT_SAVE(root_mark, js);
+      GC_ROOT_PIN(js, this_val);
+      ant_value_t result = string_substring_strings(
+        js, this_val, start_number, end_number, default_end);
+      GC_ROOT_RESTORE(js, root_mark);
+      return result;
+    }
+    return string_substring_impl(js, this_val, args, nargs);
+  }}
+  return js_mkerr(js, "invalid string intrinsic");
+}
+
+static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int nargs) {
+  return js_string_intrinsic_call(js, ANT_STRING_INTRINSIC_INDEX_OF, js->this_val, args, nargs);
+}
+
+static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int nargs) {
+  return js_string_intrinsic_call(js, ANT_STRING_INTRINSIC_SUBSTRING, js->this_val, args, nargs);
+}
+
+bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_kind_t kind) {
+  if (vtype(func) != kTypeBuiltin) return false;
+  switch (kind) {
+    case ANT_STRING_INTRINSIC_INDEX_OF: return js_cfunc_same_entrypoint(func, builtin_string_indexOf);
+    case ANT_STRING_INTRINSIC_SUBSTRING: return js_cfunc_same_entrypoint(func, builtin_string_substring);
+  }
+  return false;
 }
 
 static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs) {

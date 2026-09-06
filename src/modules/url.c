@@ -258,8 +258,9 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
 }
 
 char *build_href(const url_state_t *s) {
-  if (!s || !s->protocol) return NULL;
+  if (!s) return NULL;
   if (s->href) return strdup(s->href);
+  if (!s->protocol) return NULL;
 
   bool has_authority =
     (s->hostname && *s->hostname) ||

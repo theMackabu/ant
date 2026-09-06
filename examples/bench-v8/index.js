@@ -3,7 +3,7 @@ import os from 'ant:os';
 import path from 'ant:path';
 import { spawn } from 'child_process';
 
-const benchmarkFiles = [
+const allBenchmarkFiles = [
   'tests/richards.js',
   'tests/deltablue.js',
   'tests/crypto.js',
@@ -14,9 +14,19 @@ const benchmarkFiles = [
   'tests/navier-stokes.js'
 ];
 
+const onlyArg = process.argv.find(arg => arg.startsWith('--only='));
+const onlyName = onlyArg ? onlyArg.slice('--only='.length).toLowerCase() : null;
+const benchmarkFiles = onlyName
+  ? allBenchmarkFiles.filter(file => path.basename(file, '.js').toLowerCase() === onlyName)
+  : allBenchmarkFiles;
+if (benchmarkFiles.length === 0) {
+  throw new Error(`unknown bench-v8 workload: ${onlyName}`);
+}
+
 const benchmarkDir = import.meta.dirname;
 const repoRoot = path.resolve(benchmarkDir, '..', '..');
 const scorePath = path.join(benchmarkDir, 'score.json');
+const reportStats = process.argv.includes('--stats');
 const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ant-bench-v8-'));
 const temporaryEntry = path.join(temporaryDir, 'bench-v8.js');
 
@@ -27,7 +37,12 @@ try {
   const rawScores = [];
 
   for (const benchmarkFile of benchmarkFiles) {
-    const source = base + fs.readFileSync(path.join(benchmarkDir, benchmarkFile), 'utf8') + harness;
+    const statsPrelude = reportStats
+      ? 'globalThis.__ANT_BENCH_REPORT_STATS__ = true;\n'
+      : '';
+    const source = statsPrelude + base
+      + fs.readFileSync(path.join(benchmarkDir, benchmarkFile), 'utf8')
+      + harness;
     fs.writeFileSync(temporaryEntry, source);
 
     console.log(`running ${benchmarkFile}`);
@@ -52,7 +67,9 @@ try {
   }
 
   const score = Number(formatScore(geometricMean(rawScores)));
-  fs.writeFileSync(scorePath, `${JSON.stringify({ score, results }, null, 2)}\n`);
+  if (!reportStats) {
+    fs.writeFileSync(scorePath, `${JSON.stringify({ score, results }, null, 2)}\n`);
+  }
 } finally {
   fs.rmSync(temporaryDir, { recursive: true, force: true });
 }

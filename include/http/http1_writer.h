@@ -42,7 +42,7 @@ bool ant_http1_write_response_head(
   ant_http1_buffer_t *buf,
   int status,
   const char *status_text,
-  ant_value_t headers,
+  const headers_data_t *headers,
   bool body_is_stream,
   size_t body_size,
   bool keep_alive

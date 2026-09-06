@@ -10,7 +10,7 @@
 #include "http/http1_writer.h"
 
 typedef struct {
-  char *method;
+  const char *method;
   char *target;
   char *host;
   char *content_type;
@@ -21,19 +21,21 @@ typedef struct {
   size_t consumed_len;
   uint8_t http_major;
   uint8_t http_minor;
+  bool canonical_host;
+  bool target_borrowed;
   bool absolute_target;
   bool keep_alive;
 } ant_http1_parsed_request_t;
 
 typedef struct {
   ant_http1_parsed_request_t req;
-  ant_http1_buffer_t method;
   ant_http1_buffer_t target;
   ant_http1_buffer_t header_field;
   ant_http1_buffer_t header_value;
   ant_http1_buffer_t body;
   ant_http_header_t **header_tail;
   bool message_complete;
+  bool target_root_candidate;
 } ant_http1_parser_ctx_t;
 
 typedef struct {
@@ -48,15 +50,13 @@ typedef enum {
   ANT_HTTP1_PARSE_ERROR,
 } ant_http1_parse_result_t;
 
-
 void ant_http1_free_parsed_request(ant_http1_parsed_request_t *req);
 void ant_http1_conn_parser_init(ant_http1_conn_parser_t *cp);
 void ant_http1_conn_parser_reset(ant_http1_conn_parser_t *cp);
 void ant_http1_conn_parser_free(ant_http1_conn_parser_t *cp);
 
 ant_http1_parse_result_t ant_http1_parse_request(
-  const char *data,
-  size_t len,
+  const char *data, size_t len,
   ant_http1_parsed_request_t *out,
   const char **error_reason,
   const char **error_code
@@ -64,8 +64,7 @@ ant_http1_parse_result_t ant_http1_parse_request(
 
 ant_http1_parse_result_t ant_http1_conn_parser_execute(
   ant_http1_conn_parser_t *cp,
-  const char *data,
-  size_t len,
+  const char *data, size_t len,
   ant_http1_parsed_request_t *out,
   size_t *consumed_out
 );

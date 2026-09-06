@@ -53,6 +53,7 @@ node_modules
 
 *.todo
 *.trace
+.DS_Store
 
 bun.lock
 pnpm-lock.yaml

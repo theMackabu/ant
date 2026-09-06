@@ -3543,6 +3543,36 @@ static bool compile_call_char_code_at_intrinsic(
   return true;
 }
 
+static bool compile_call_string_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count > UINT16_MAX) return false;
+  sv_ast_t *callee = node->left;
+
+  if (!callee || callee->type != N_MEMBER) return false;
+  if (member_call_needs_optional_base_guard(callee)) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+
+  ant_string_intrinsic_kind_t kind;
+  if (is_ident_str(callee->right->str, callee->right->len, "indexOf", 7))
+    kind = ANT_STRING_INTRINSIC_INDEX_OF;
+  else if (is_ident_str(callee->right->str, callee->right->len, "substring", 9))
+    kind = ANT_STRING_INTRINSIC_SUBSTRING;
+  else return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  for (int i = 0; i < node->args.count; i++)
+    compile_expr(c, node->args.items[i]);
+
+  emit_op(c, OP_CALL_STRING_INTRINSIC);
+  emit(c, (uint8_t)kind);
+  emit_u16(c, (uint16_t)node->args.count);
+
+  return true;
+}
+
 static bool compile_call_map_template_intrinsic(
   sv_compiler_t *c, sv_ast_t *node, bool has_spread, bool is_tail
 ) {
@@ -4215,6 +4245,9 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   if (compile_call_char_code_at_intrinsic(c, node, has_spread))
     return;
 
+  if (compile_call_string_intrinsic(c, node, has_spread))
+    return;
+
   if (compile_call_map_template_intrinsic(c, node, has_spread, false))
     return;
 
@@ -4252,7 +4285,6 @@ void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (compile_direct_eval_call(c, node, has_spread)) return;
-
   if (compile_call_try_fused_chain(c, node, callee, has_spread)) return;
 
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);

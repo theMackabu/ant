@@ -207,7 +207,7 @@ static ant_value_t fetch_replace_request_headers(fetch_request_t *req, bool drop
   };
 
   if (is_err(headers)) return headers;
-  headers_for_each(current, fetch_copy_redirect_header, &ctx);
+  headers_data_for_each(headers_get_data(current), fetch_copy_redirect_header, &ctx);
   
   if (ctx.failed) return js_mkerr(js, "out of memory");
   js_set_slot_wb(js, req->request_obj, SLOT_REQUEST_HEADERS, headers);
@@ -385,7 +385,8 @@ static ant_http_header_t *fetch_build_http_headers(ant_value_t request_obj) {
   char content_length[32] = {0};
 
   builder.tail = &builder.head;
-  headers_for_each(request_get_headers(request_obj), fetch_collect_header, &builder);
+  headers_data_for_each(
+    headers_get_data(request_get_headers(request_obj)), fetch_collect_header, &builder);
 
   if (builder.failed) {
     ant_http_headers_free(builder.head);
@@ -680,7 +681,7 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
     return true;
   }
 
-  headers_set_literal(js, headers, "content-type", content_type);
+  headers_set_literal(headers, "content-type", content_type);
   response = response_create_fetched(
     js, 200, "OK", url, 1, headers, 
     (const uint8_t *)body, len, js_mkundef(), content_type
@@ -720,7 +721,7 @@ static bool fetch_handle_blob_url(fetch_request_t *req) {
 
   ant_value_t headers = headers_create_empty(js);
   const char *content_type = data->type && *data->type ? data->type : NULL;
-  if (content_type) headers_set_literal(js, headers, "content-type", content_type);
+  if (content_type) headers_set_literal(headers, "content-type", content_type);
   
   ant_value_t response = response_create_fetched(
     js, 200, "OK", url, 1, headers,

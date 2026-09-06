@@ -7,12 +7,11 @@
 #include "types.h"
 #include "modules/url.h"
 
-typedef uint8_t response_body_storage_t;
-enum response_body_storage {
+typedef enum response_body_storage: uint8_t {
   RESPONSE_BODY_STORAGE_NONE = 0,
   RESPONSE_BODY_STORAGE_OWNED,
   RESPONSE_BODY_STORAGE_BORROWED_STRING,
-};
+} response_body_storage_t;
 
 typedef struct {
   char *type;
@@ -21,6 +20,7 @@ typedef struct {
   uint8_t *body_data;
   size_t body_size;
   char *body_type;
+  headers_data_t *pending_headers;
   ant_value_t websocket;
   int url_list_size;
   int status;
@@ -29,14 +29,17 @@ typedef struct {
   bool body_is_stream;
   bool has_body;
   bool body_used;
+  bool headers_immutable;
 } response_data_t;
-
-response_data_t *response_get_data(ant_value_t obj);
-ant_value_t response_get_headers(ant_value_t obj);
-ant_value_t response_get_websocket(ant_value_t obj);
 
 void init_response_module(ant_t *js);
 void response_set_websocket(ant_value_t obj, ant_value_t websocket);
+
+response_data_t *response_get_data(ant_value_t obj);
+const headers_data_t *response_get_header_data(ant_value_t obj);
+
+ant_value_t response_get_websocket(ant_value_t obj);
+ant_value_t response_materialize_headers(ant_t *js, ant_value_t obj);
 
 ant_value_t response_create(
   ant_t *js,

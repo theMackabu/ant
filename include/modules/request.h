@@ -26,6 +26,7 @@ typedef struct {
   bool body_is_stream;
   bool has_body;
   bool body_used;
+  bool shared_defaults;
 } request_data_t;
 
 void init_request_module(ant_t *js);
@@ -56,6 +57,7 @@ ant_value_t request_create_server(
   const char *target,
   bool absolute_target,
   const char *host,
+  bool canonical_host,
   const char *server_hostname,
   int server_port,
   ant_value_t headers,

@@ -700,6 +700,15 @@ ant_value_t jit_helper_call_array_includes(
   return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
 }
 
+ant_value_t jit_helper_call_string_intrinsic(
+  sv_vm_t *vm, ant_t *js, ant_string_intrinsic_kind_t kind,
+  ant_value_t call_func, ant_value_t call_this,
+  ant_value_t *args, int argc
+) {
+  return sv_op_call_string_intrinsic(
+    vm, js, kind, call_func, call_this, args, argc);
+}
+
 static bool map_template_builtin_matches(
   ant_value_t call_func, const sv_map_template_desc_t *desc
 ) {

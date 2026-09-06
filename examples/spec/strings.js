@@ -1,4 +1,4 @@
-import { test, testDeep, summary } from './helpers.js';
+import { test, testDeep, testThrows, summary } from './helpers.js';
 
 console.log('String Tests\n');
 
@@ -11,6 +11,18 @@ test('indexOf UTF-16 offset', 'a𝄞bé𝄞'.indexOf('𝄞'), 1);
 test('indexOf UTF-16 start', 'a𝄞bé𝄞'.indexOf('𝄞', 2), 5);
 test('indexOf non-ASCII prefix', 'éa'.indexOf('a'), 1);
 test('indexOf embedded NUL', 'a\0b\0c'.indexOf('\0b'), 1);
+test('indexOf coerces numeric search', 'a12b'.indexOf(12), 1);
+test('indexOf missing search is undefined', 'xundefinedy'.indexOf(), 1);
+test('indexOf coerces string position', 'abcabc'.indexOf('b', '2'), 4);
+test('indexOf truncates fractional position', 'abcabc'.indexOf('b', 1.9), 1);
+test('indexOf NaN position is zero', 'abc'.indexOf('a', NaN), 0);
+test('indexOf positive infinity clamps high', 'abc'.indexOf('', Infinity), 3);
+test('indexOf negative infinity clamps low', 'abc'.indexOf('a', -Infinity), 0);
+test('indexOf leading surrogate', '𝄞'.indexOf('\uD834'), 0);
+test('indexOf trailing surrogate', '𝄞'.indexOf('\uDD1E'), 1);
+test('indexOf long Unicode first-unit mismatch', 'é'.repeat(100000).indexOf('x'.repeat(10000)), -1);
+test('indexOf Unicode match after rejected candidates', 'é'.repeat(1000).concat('xyz').indexOf('xyz'), 1000);
+test('indexOf trailing surrogate and suffix', 'é𝄞x'.indexOf('\uDD1Ex'), 2);
 
 let js = 'JavaScript';
 test('substring start end', js.substring(0, 4), 'Java');
@@ -18,6 +30,107 @@ test('substring start only', js.substring(4), 'Script');
 test('substring swaps if end < start', js.substring(10, 4), 'Script');
 test('substring astral leading surrogate', '𝄞'.substring(0, 1), '\uD834');
 test('substring astral trailing surrogate', '𝄞'.substring(1, 2), '\uDD1E');
+test('substring coerces string indexes', 'abcdef'.substring('2', '4'), 'cd');
+test('substring truncates fractional indexes', 'abcdef'.substring(1.9, 4.9), 'bcd');
+test('substring NaN start is zero', 'abcdef'.substring(NaN, 2), 'ab');
+test('substring undefined end uses length', 'abcdef'.substring(2, undefined), 'cdef');
+test('substring infinities clamp', 'abcdef'.substring(Infinity, -Infinity), 'abcdef');
+
+let intrinsicOrder = [];
+let intrinsicReceiver = {
+  indexOf: String.prototype.indexOf,
+  substring: String.prototype.substring,
+  toString() {
+    intrinsicOrder.push('receiver');
+    return 'abcabc';
+  }
+};
+let intrinsicSearch = {
+  toString() {
+    intrinsicOrder.push('search');
+    return 'b';
+  }
+};
+let intrinsicPosition = {
+  valueOf() {
+    intrinsicOrder.push('position');
+    return 2;
+  }
+};
+test('indexOf intrinsic coerces receiver/search/position', intrinsicReceiver.indexOf(intrinsicSearch, intrinsicPosition), 4);
+testDeep('indexOf intrinsic coercion order', intrinsicOrder, ['receiver', 'search', 'position']);
+
+let substringOrder = [];
+let substringReceiver = {
+  substring: String.prototype.substring,
+  toString() {
+    substringOrder.push('receiver');
+    return 'abcdef';
+  }
+};
+let substringStart = {
+  valueOf() {
+    substringOrder.push('start');
+    return 1;
+  }
+};
+let substringEnd = {
+  valueOf() {
+    substringOrder.push('end');
+    return 3;
+  }
+};
+test('substring intrinsic coerces indexes', substringReceiver.substring(substringStart, substringEnd), 'bc');
+testDeep('substring intrinsic coercion order', substringOrder, ['receiver', 'start', 'end']);
+
+function hotStringCalls(value) {
+  return value.indexOf('/') + value.substring(0, 1).charCodeAt(0);
+}
+let hotStringResult = 0;
+for (let i = 0; i < 300; i++) hotStringResult = hotStringCalls('/path');
+test('hot string intrinsic result', hotStringResult, 47);
+
+function jitIndexOf(receiver, search, position) {
+  return receiver.indexOf(search, position);
+}
+for (let i = 0; i < 300; i++) jitIndexOf('abcabc', 'b', 0);
+function growIntrinsicStack(depth) {
+  if (depth === 0) return 0;
+  return 1 + growIntrinsicStack(depth - 1);
+}
+const relocatingSearch = {
+  toString() {
+    growIntrinsicStack(300);
+    const ballast = [];
+    for (let i = 0; i < 2_000; i++) ballast.push({ value: i });
+    if (ballast.length !== 2_000) throw new Error('allocation failed');
+    return 'b';
+  }
+};
+test('JIT string intrinsic snapshots args across stack growth', jitIndexOf('abcabc', relocatingSearch, 2), 4);
+
+const savedIndexOf = String.prototype.indexOf;
+String.prototype.indexOf = function () { return 77; };
+test('indexOf intrinsic observes overridden builtin', 'abc'.indexOf('b'), 77);
+String.prototype.indexOf = savedIndexOf;
+
+let customLookupCount = 0;
+let customReceiver = {
+  get indexOf() {
+    customLookupCount++;
+    return function (value) { return this.prefix + value; };
+  },
+  prefix: 'seen:'
+};
+test('indexOf intrinsic falls back to custom method', customReceiver.indexOf('x'), 'seen:x');
+test('indexOf intrinsic observes custom getter once', customLookupCount, 1);
+test('indexOf spelling on arrays falls back normally', [1, 2, 3].indexOf(2), 1);
+test('optional string call short-circuits', null?.indexOf('x'), undefined);
+testThrows('indexOf rejects null receiver', () => String.prototype.indexOf.call(null, 'x'));
+testThrows('substring rejects undefined receiver', () => String.prototype.substring.call(undefined, 0));
+testThrows('indexOf rejects Symbol search', () => 'abc'.indexOf(Symbol('x')));
+testThrows('indexOf rejects BigInt position', () => 'abc'.indexOf('a', 0n));
+testThrows('substring rejects Symbol start', () => 'abc'.substring(Symbol('x')));
 
 let fox = 'The quick brown fox';
 test('slice start end', fox.slice(0, 3), 'The');
