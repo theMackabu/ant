@@ -1,7 +1,7 @@
 { lib
 , llvmPackages_21
 , stdenv
-, ccacheStdenv
+, ccache
 , meson
 , ninja
 , cmake
@@ -33,19 +33,29 @@ let
         llvmPackages_21.stdenv.cc.override { bintools = llvmPackages_21.bintools; }
       )
     else stdenv;
-  antStdenv = ccacheStdenv.override {
-    stdenv = antBaseStdenv;
-    extraConfig = ''
-      export CCACHE_COMPRESS=1
-      export CCACHE_MAXSIZE=2G
-      export CCACHE_SLOPPINESS=random_seed,time_macros
-      if [ -d /tmp/ant-nix-ccache ] && [ -w /tmp/ant-nix-ccache ]; then
-        export CCACHE_DIR=/tmp/ant-nix-ccache
-      else
-        export CCACHE_DIR="$TMPDIR/ccache"
-      fi
-    '';
-  };
+
+  ccacheConfig = ''
+    export CCACHE_COMPRESS=1
+    export CCACHE_MAXSIZE=2G
+    export CCACHE_SLOPPINESS=random_seed,time_macros
+    if [ -d /tmp/ant-nix-ccache ] && [ -w /tmp/ant-nix-ccache ]; then
+      export CCACHE_DIR=/tmp/ant-nix-ccache
+    else
+      export CCACHE_DIR="$TMPDIR/ccache"
+    fi
+  '';
+
+  ccacheLinks = (ccache.links {
+    unwrappedCC = antBaseStdenv.cc.cc;
+    extraConfig = ccacheConfig;
+  }).overrideAttrs (prev: {
+    passthru = (prev.passthru or { }) // {
+      langC = antBaseStdenv.cc.cc.langC or true;
+      langCC = antBaseStdenv.cc.cc.langCC or true;
+    };
+  });
+
+  antStdenv = overrideCC antBaseStdenv (antBaseStdenv.cc.override { cc = ccacheLinks; });
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix {};
