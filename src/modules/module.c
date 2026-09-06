@@ -39,88 +39,10 @@ static ant_value_t resolve_strip_file_url(ant_t *js, ant_value_t resolved) {
   return resolved;
 }
 
-// require.resolve(specifier, options?)
-static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != kTypeString)
-    return js_mkerr(js, "require.resolve() expects a string specifier");
-
-  ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t data = js_get_slot(fn, SLOT_DATA);
-  const char *base_path = js_module_eval_active_filename(js);
-
-  if (vtype(data) == kTypeString) {
-    ant_offset_t dlen = 0;
-    ant_offset_t doff = vstr(js, data, &dlen);
-    base_path = (const char *)(uintptr_t)(doff);
-  }
-
-  ant_value_t paths_val = (nargs >= 2 && is_object_type(args[1]))
-    ? js_get(js, args[1], "paths") : js_mkundef();
-
-  if (vtype(paths_val) != kTypeArray) {
-    ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], base_path);
-    return resolve_strip_file_url(js, resolved);
-  }
-
-  ant_offset_t path_count = js_arr_len(js, paths_val);
-  for (ant_offset_t i = 0; i < path_count; i++) {
-    ant_value_t p = js_arr_get(js, paths_val, i);
-    if (vtype(p) != kTypeString) continue;
-    
-    char *dir = js_getstr(js, p, NULL);
-    if (!dir) continue;
-    
-    ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], dir);
-    if (!is_err(resolved) && vtype(resolved) == kTypeString)
-      return resolve_strip_file_url(js, resolved);
-  }
-
-  return js_mkerr(js, "Cannot resolve module");
-}
-
-// createRequire(filename)
 static ant_value_t builtin_createRequire(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "createRequire() requires a filename argument");
-
-  ant_value_t filename_val = args[0];
-  if (vtype(filename_val) != kTypeString)
-    return js_mkerr(js, "createRequire() filename must be a string");
-
-  size_t fname_len;
-  char *fname = js_getstr(js, filename_val, &fname_len);
-  if (!fname) return js_mkerr(js, "createRequire() invalid filename");
-
-  const char *path = fname;
-  size_t path_len = fname_len;
-  
-  static const char *file_prefix = "file://";
-  size_t prefix_len = strlen(file_prefix);
-
-  if (path_len >= prefix_len && strncmp(path, file_prefix, prefix_len) == 0) {
-    path += prefix_len;
-    path_len -= prefix_len;
-  }
-
-  GC_ROOT_SAVE(mark, js);
-  ant_value_t path_val = js_mkstr(js, path, path_len);
-  
-  GC_ROOT_PIN(js, path_val);
-  ant_value_t parent = esm_create_cjs_module(js, path, js_mkundef());
-  
-  GC_ROOT_PIN(js, parent);
-  ant_value_t require_fn = js_heavy_mkfun(js, esm_cjs_require_module, parent);
-  
-  GC_ROOT_PIN(js, require_fn);
-  ant_value_t resolve_fn = js_heavy_mkfun(js, builtin_createRequire_resolve, path_val);
-  
-  GC_ROOT_PIN(js, resolve_fn);
-  js_set(js, resolve_fn, "paths", js_heavy_mkfun(js, esm_cjs_require_paths, path_val));
-  js_set(js, require_fn, "resolve", resolve_fn);
-  js_set(js, require_fn, "cache", esm_require_cache(js));
-  js_set(js, require_fn, "main", js->modules.cjs.main);
-
-  GC_ROOT_RESTORE(js, mark);
-  return require_fn;
+  if (nargs < 1 || vtype(args[0]) != kTypeString)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "createRequire() requires a filename string");
+  return esm_create_require_from_path(js, js_getstr(js, args[0], NULL));
 }
 
 // Module._resolveFilename(request, parent)
@@ -229,11 +151,11 @@ static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, in
 }
 
 static ant_value_t builtin_module_constructor(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeString)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Module id must be a string");
+  if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Module requires an object receiver");
   const char *id = nargs && vtype(args[0]) == kTypeString ? js_getstr(js, args[0], NULL) : "";
-  ant_value_t obj = esm_create_cjs_module(js, id, nargs > 1 ? args[1] : js_mkundef());
-  js_set(js, obj, "filename", js_mknull());
-  js_delete_prop(js, obj, "paths", 5);
-  return obj;
+  return esm_init_cjs_module(js, js->this_val, id, nargs > 1 ? args[1] : js_mkundef());
 }
 
 ant_value_t module_library(ant_t *js) {
@@ -246,6 +168,7 @@ ant_value_t module_library(ant_t *js) {
   js->modules.cjs.constructor = lib;
   
   js_set(js, lib, "_cache", cache);
+  js->modules.cjs.cache = js_mkundef();
   js_set(js, lib, "Module", lib);
   js_set(js, proto, "require", js_mkfun(esm_cjs_require_module));
 

@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { createRequire, Module } from 'node:module';
 import { pathToFileURL } from 'node:url';
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ant-cache-interop-')));
 const require = createRequire(path.join(tmp, 'entry.cjs'));
@@ -36,6 +36,22 @@ try {
   fs.writeFileSync(json, '{"value":4}');
   const importedJSON = await import(pathToFileURL(json).href, { with: { type: 'json' } });
   assert.strictEqual(require(json), importedJSON.default);
+  const failingJSON = path.join(tmp, 'failing.json');
+  fs.writeFileSync(failingJSON, '{}');
+  const savedCache = Module._cache;
+  const sentinel = new Error('JSON cache lookup failed');
+  try {
+    Module._cache = new Proxy(savedCache, {
+      get(target, key) {
+        if (key === failingJSON) throw sentinel;
+        return target[key];
+      },
+    });
+    let caught;
+    try { await import(pathToFileURL(failingJSON).href, { with: { type: 'json' } }); }
+    catch (error) { caught = error; }
+    assert.strictEqual(caught, sentinel);
+  } finally { Module._cache = savedCache; }
   console.log('require.cache interop tests passed');
 } finally {
   for (const key of Object.keys(require.cache)) if (key.startsWith(tmp + path.sep)) delete require.cache[key];

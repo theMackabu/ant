@@ -169,6 +169,6 @@ typedef struct napi_module {
 
 napi_env ant_napi_get_env(ant_t *js);
 ant_value_t napi_process_dlopen_js(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_value_t ns);
+ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_value_t ns, ant_value_t module);
 
 #endif
