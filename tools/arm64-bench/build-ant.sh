@@ -38,6 +38,9 @@ ccache --zero-stats >/dev/null
 
 profile_path="$REPO_ROOT/meson/pgo/profiles/ant-darwin-aarch64.profdata"
 [[ -f "$profile_path" ]] || { echo "missing PGO profile: $profile_path" >&2; exit 1; }
+profile_sha=$(shasum -a 256 "$profile_path" | awk '{print $1}')
+manifest_path="$BUILD_DIR/arm64-bench-build.json"
+previous_profile_sha=$(jq -r '.pgoProfileSha256 // empty' "$manifest_path" 2>/dev/null || true)
 meson subprojects download >/dev/null 2>&1 || true
 
 build_timestamp=${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}
@@ -56,17 +59,21 @@ meson "${meson_setup[@]}" \
   "-Dbuild_timestamp=$build_timestamp" \
   "-Dllvm_nm=$(command -v llvm-nm)"
 
+if [[ "$previous_profile_sha" != "$profile_sha" ]]; then
+  echo "PGO profile changed or unverified; cleaning cached build objects"
+  meson compile -C "$BUILD_DIR" --clean
+fi
+rm -f "$manifest_path"
 meson compile -C "$BUILD_DIR"
 
 compiler_version=$($nix_cc --version | sed -n '1p')
-profile_sha=$(shasum -a 256 "$profile_path" | awk '{print $1}')
 jq -n \
   --arg type nix-develop-release-pgo-lto \
   --arg compiler "$compiler_version" \
   --arg tuning native-arm64 \
   --arg pgoProfileSha256 "$profile_sha" \
   '{type: $type, compiler: $compiler, tuning: $tuning, pgoProfileSha256: $pgoProfileSha256}' \
-  > "$BUILD_DIR/arm64-bench-build.json"
+  > "$manifest_path"
 
 ccache --show-stats
 "$BUILD_DIR/ant" --version

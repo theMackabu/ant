@@ -1,0 +1,45 @@
+--- a/src/unix/stream.c
++++ b/src/unix/stream.c
+@@ -515,20 +515,28 @@
+   assert(!(stream->flags & UV_HANDLE_CLOSING));
+ 
+   fd = uv__stream_fd(stream);
+-  err = uv__accept(fd);
+-
+-  if (err == UV_EMFILE || err == UV_ENFILE)
+-    err = uv__emfile_trick(loop, fd);  /* Shed load. */
+-
+-  if (err < 0)
+-    return;
+-
+-  stream->accepted_fd = err;
+-  stream->connection_cb(stream, 0);
+-
+-  if (stream->accepted_fd != -1)
+-    /* The user hasn't yet accepted called uv_accept() */
+-    uv__io_stop(loop, &stream->io_watcher, POLLIN);
++  /* Drain pending connections before returning to established socket traffic. */
++  while (!(stream->flags & UV_HANDLE_CLOSING)) {
++    err = uv__accept(fd);
++
++    if (err == UV_EMFILE || err == UV_ENFILE)
++      err = uv__emfile_trick(loop, fd);  /* Shed load. */
++
++    if (err < 0)
++      return;
++
++    stream->accepted_fd = err;
++    stream->connection_cb(stream, 0);
++
++    if (stream->flags & UV_HANDLE_CLOSING)
++      return;
++
++    if (stream->accepted_fd != -1) {
++      /* Wait for the user to consume this connection with uv_accept(). */
++      uv__io_stop(loop, &stream->io_watcher, POLLIN);
++      return;
++    }
++  }
+ }
+ 
+ 

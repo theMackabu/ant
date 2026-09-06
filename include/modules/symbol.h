@@ -62,17 +62,8 @@ static inline ant_value_t sym_this_cb(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static inline ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value) {
-  ant_value_t result = js_mkobj(js);
-  if (__builtin_expect(has_value, 1)) {
-    js_set(js, result, "done", js_false);
-    js_set(js, result, "value", value);
-  } else {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-  }
-  return result;
-}
+ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value);
+bool js_iter_is_array_values(ant_value_t iterator, ant_value_t next, ant_value_t source);
 
 static inline ant_value_t js_iter_next_result(ant_t *js, js_iter_advance_fn advance) {
   js_iter_t it = { .iterator = js->this_val };

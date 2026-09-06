@@ -14,6 +14,7 @@ can reuse the decision history.
 - [Darwin Lazy Framework Startup](darwin-lazy-framework-startup.md)
 - [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)
 - [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
+- [Listener Accept Bursts](listener-accept-burst.md)
 - [Module Import GC Flake](module-import-gc-flake.md)
 - [Promise Resolution and Await Semantics](promise-resolution-semantics.md)
 - [Promise Resolution Performance](promise-resolution-performance.md)

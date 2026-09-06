@@ -8,6 +8,7 @@
 #include "ptr.h"
 #include "utf8.h"
 #include "utils.h"
+#include "index.h"
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
@@ -285,12 +286,11 @@ static inline void buffer_string_bounds(
 }
 
 ArrayBufferData *create_array_buffer_data(size_t length) {
+  if (length > SIZE_MAX - sizeof(ArrayBufferData)) return NULL;
   ArrayBufferData *data = calloc(1, sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
   
   data->data = (uint8_t *)(data + 1);
-  memset(data->data, 0, length);
-  
   data->length = length;
   data->capacity = length;
   data->ref_count = 1;
@@ -383,18 +383,17 @@ static ant_value_t create_typed_array_like(
 }
 
 static ant_value_t js_arraybuffer_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined) {
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "ArrayBuffer constructor requires 'new'");
-  }
+
   size_t length = 0;
-  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
-    length = (size_t)js_getnum(args[0]);
+  if (nargs > 0) {
+    ant_value_t result = js_to_index_fast(js, args[0], &length);
+    if (is_err(result)) return result;
   }
   
   ArrayBufferData *data = create_array_buffer_data(length);
-  if (!data) {
-    return js_mkerr(js, "Failed to allocate ArrayBuffer");
-  }
+  if (!data) return js_mkerr(js, "Failed to allocate ArrayBuffer");
   
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
@@ -455,10 +454,14 @@ static ant_value_t js_arraybuffer_transfer(ant_t *js, ant_value_t *args, int nar
   }
   
   size_t new_length = data->length;
-  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
-    new_length = (size_t)js_getnum(args[0]);
+  if (nargs > 0 && vtype(args[0]) != kTypeUndefined) {
+    ant_value_t result = js_to_index_fast(js, args[0], &new_length);
+    if (is_err(result)) return result;
   }
   
+  if (data->is_detached)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot transfer a detached ArrayBuffer");
+
   ArrayBufferData *new_data = create_array_buffer_data(new_length);
   if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
   
@@ -964,109 +967,227 @@ ant_value_t create_dataview_with_buffer(
   return obj;
 }
 
-typedef struct {
-  ant_value_t *values;
-  size_t length;
-  size_t capacity;
-} iter_collect_ctx_t;
+static ant_value_t create_typed_array_for_length(
+  ant_t *js, TypedArrayType type, size_t length, const char *type_name
+) {
+  size_t element_size = get_element_size(type);
+  if (length > (SIZE_MAX - sizeof(ArrayBufferData)) / element_size)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
 
-static bool iter_collect_callback(ant_t *js, ant_value_t value, void *udata) {
-  iter_collect_ctx_t *ctx = (iter_collect_ctx_t *)udata;
-  if (ctx->length >= ctx->capacity) {
-    ctx->capacity *= 2;
-    ant_value_t *new_values = realloc(ctx->values, ctx->capacity * sizeof(ant_value_t));
-    if (!new_values) return false;
-    ctx->values = new_values;
-  }
-  ctx->values[ctx->length++] = value;
+  ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
+  if (!buffer) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
+
+  return create_typed_array(js, type, buffer, 0, length, type_name);
+}
+
+static bool typedarray_dense_number_source(ant_value_t source) {
+  if (vtype(source) != kTypeArray) return false;
+  ant_object_t *obj = js_obj_ptr(js_as_obj(source));
+  if (!obj->flags.fast_array || obj->flags.is_exotic ||
+      obj->u.array.len > obj->u.array.cap || obj->u.array.len >= 0x10000000) return false;
+  for (uint32_t i = 0; i < obj->u.array.len; i++)
+    if (vtype(obj->u.array.data[i]) != kTypeNumber) return false;
   return true;
 }
 
+static ant_value_t create_typed_array_from_iterable(
+  ant_t *js, TypedArrayType type, ant_value_t source,
+  ant_value_t iter_fn, const char *type_name
+) {
+  gc_temp_root_scope_t roots;
+  gc_temp_root_scope_begin(js, &roots);
+  
+  ant_value_t result = sv_vm_call(js->vm, js, iter_fn, source, NULL, 0, NULL, false);
+  if (is_err(result)) goto done;
+  
+  if (!is_object_type(result)) {
+    result = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must be an object");
+    goto done;
+  }
+  
+  ant_value_t iterator = result;
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&roots, iterator))) goto oom;
+  
+  ant_value_t next = js_getprop_fallback(js, iterator, "next");
+  if (is_err(next)) { result = next; goto done; }
+
+  if (js_iter_is_array_values(iterator, next, source) && typedarray_dense_number_source(source)) {
+    ant_object_t *array = js_obj_ptr(js_as_obj(source));
+    size_t length = array->u.array.len;
+
+    js_set_slot(iterator, SLOT_ITER_STATE, js_mknum(ITER_STATE_PACK(ARR_ITER_VALUES, length)));
+    result = create_typed_array_for_length(js, type, length, type_name);
+    if (is_err(result)) goto done;
+    
+    TypedArrayData *target = buffer_get_typedarray_data(result);
+    for (size_t i = 0; i < length; i++) {
+      ant_value_t written = typedarray_write_value(js, target, i, array->u.array.data[i]);
+      if (is_err(written)) { result = written; goto done; }
+    }
+    
+    goto done;
+  }
+  
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&roots, next))) goto oom;
+  size_t values_start = roots.len;
+
+  while (true) {
+    result = sv_vm_call(js->vm, js, next, iterator, NULL, 0, NULL, false);
+    if (is_err(result)) goto done;
+    
+    if (!is_object_type(result)) {
+      result = js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result must be an object");
+      goto done;
+    }
+    
+    gc_temp_root_handle_t step = gc_temp_root_add(&roots, result);
+    if (!gc_temp_root_handle_valid(step)) goto oom;
+    
+    ant_value_t done_value = js_getprop_fallback(js, result, "done");
+    if (is_err(done_value)) { result = done_value; goto done; }
+    
+    if (js_truthy(js, done_value)) {
+      gc_temp_root_truncate(&roots, step.index);
+      break;
+    }
+    
+    result = js_getprop_fallback(js, result, "value");
+    if (is_err(result)) goto done;
+    gc_temp_root_set(step, result);
+  }
+
+  size_t length = roots.len - values_start;
+  result = create_typed_array_for_length(js, type, length, type_name);
+  
+  if (is_err(result)) goto done;
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&roots, result))) goto oom;
+  
+  TypedArrayData *target = buffer_get_typedarray_data(result);
+  for (size_t i = 0; i < length; i++) {
+    ant_value_t written = typedarray_write_value(js, target, i, roots.items[values_start + i]);
+    if (is_err(written)) { result = written; goto done; }
+  }
+
+done:
+  gc_temp_root_scope_end(&roots);
+  return result;
+oom:
+  result = js_mkerr(js, "Failed to allocate TypedArray iterator values");
+  goto done;
+}
+
 static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int nargs, TypedArrayType type, const char *type_name) {
-  if (nargs == 0) {
-    ArrayBufferData *buffer = create_array_buffer_data(0);
-    return create_typed_array(js, type, buffer, 0, 0, type_name);
-  }
-  
-  if (vtype(args[0]) == kTypeNumber) {
-    size_t length = (size_t)js_getnum(args[0]);
-    size_t element_size = get_element_size(type);
-    ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
-    if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-    return create_typed_array(js, type, buffer, 0, length, type_name);
-  }
-  
+  if (nargs == 0) return create_typed_array_for_length(js, type, 0, type_name);
+
   ArrayBufferData *arraybuffer = buffer_get_arraybuffer_data(args[0]);
   if (arraybuffer) {
     ArrayBufferData *buffer = arraybuffer;
     size_t byte_offset = 0;
     size_t length = buffer->length;
-    
-    if (nargs > 1 && vtype(args[1]) == kTypeNumber) {
-      byte_offset = (size_t)js_getnum(args[1]);
-    }
-    
     size_t element_size = get_element_size(type);
-    
-    if (byte_offset > buffer->length) {
-      return js_mkerr(js, "Start offset is outside the bounds of the buffer");
+
+    if (nargs > 1) {
+      ant_value_t result = js_to_index_fast(js, args[1], &byte_offset);
+      if (is_err(result)) return result;
     }
-    
-    if (nargs > 2 && vtype(args[2]) == kTypeNumber) {
-      length = (size_t)js_getnum(args[2]);
-      size_t available = buffer->length - byte_offset;
-      if (length > available / element_size) {
-        return js_mkerr(js, "Invalid TypedArray length");
-      }
-    } else length = (buffer->length - byte_offset) / element_size;
-    
+
+    if (byte_offset % element_size != 0)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "Start offset is not aligned");
+
+    bool has_length = nargs > 2 && vtype(args[2]) != kTypeUndefined;
+    if (has_length) {
+      ant_value_t result = js_to_index_fast(js, args[2], &length);
+      if (is_err(result)) return result;
+    }
+
+    if (buffer->is_detached)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create a view of a detached ArrayBuffer");
+    if (byte_offset > buffer->length)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "Start offset is outside the bounds of the buffer");
+
+    size_t available = buffer->length - byte_offset;
+    if (has_length) {
+      if (length > available / element_size) 
+        return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
+    } else {
+      if (available % element_size != 0) 
+        return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid TypedArray length");
+      length = available / element_size;
+    }
+
     return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, args[0]);
   }
-  
-  if (is_special_object(args[0])) {
-    ant_value_t len_val = js_get(js, args[0], "length");
-    size_t length = 0; ant_value_t *values = NULL;
-    bool is_iterable = false;
-    
-    if (vtype(len_val) == kTypeNumber) length = (size_t)js_getnum(len_val); else {
-      iter_collect_ctx_t ctx = { .values = NULL, .length = 0, .capacity = 16 };
-      ctx.values = malloc(ctx.capacity * sizeof(ant_value_t));
-      if (!ctx.values) return js_mkerr(js, "Failed to allocate memory");
-      is_iterable = js_iter(js, args[0], iter_collect_callback, &ctx);
-      
-      if (is_iterable) {
-        values = ctx.values;
-        length = ctx.length;
-      } else free(ctx.values);
-    }
-    
-    if (length > 0 || is_iterable || vtype(len_val) == kTypeNumber) {
-      size_t element_size = get_element_size(type);
-      ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
-      if (!buffer) { if (values) free(values); return js_mkerr(js, "Failed to allocate buffer"); }
-      
-      ant_value_t result = create_typed_array(js, type, buffer, 0, length, type_name);
-      if (is_err(result)) { if (values) free(values); return result; }
-      TypedArrayData *result_ta = buffer_get_typedarray_data(result);
-      
-      for (size_t i = 0; i < length; i++) {
-        ant_value_t elem;
-        if (values) elem = values[i]; else {
-          char idx_str[16];
-          snprintf(idx_str, sizeof(idx_str), "%zu", i);
-          elem = js_get(js, args[0], idx_str);
-        }
-        ant_value_t write_result = typedarray_write_value(js, result_ta, i, elem);
-        if (is_err(write_result)) {
-          if (values) free(values);
-          return write_result;
-        }
-      }
-      if (values) free(values);
-      return result;
-    }
+
+  uint8_t arg_type = vtype(args[0]);
+  if (is_boxable_primitive_type(arg_type) ||
+      arg_type == kTypeNull || arg_type == kTypeUndefined) {
+    size_t length = 0;
+    ant_value_t result = js_to_index_fast(js, args[0], &length);
+    if (is_err(result)) return result;
+    return create_typed_array_for_length(js, type, length, type_name);
   }
-  
+
+  TypedArrayData *source = buffer_get_typedarray_data(args[0]);
+  if (source) {
+    if (!source->buffer || source->buffer->is_detached)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot copy a detached TypedArray");
+    
+    bool source_bigint = source->type == TYPED_ARRAY_BIGINT64 || source->type == TYPED_ARRAY_BIGUINT64;
+    bool target_bigint = type == TYPED_ARRAY_BIGINT64 || type == TYPED_ARRAY_BIGUINT64;
+    
+    if (source_bigint != target_bigint)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot mix BigInt and Number TypedArrays");
+    
+    ant_value_t result = create_typed_array_for_length(js, type, source->length, type_name);
+    if (is_err(result)) return result;
+    
+    TypedArrayData *target = buffer_get_typedarray_data(result);
+    if (source->type == type) memcpy(
+      target->buffer->data, 
+      source->buffer->data + source->byte_offset, 
+      source->byte_length
+    ); else for (size_t i = 0; i < source->length; i++) {
+      ant_value_t value = js_mkundef();
+      buffer_typedarray_data_read_index(js, source, i, &value);
+      ant_value_t written = typedarray_write_value(js, target, i, value);
+      if (is_err(written)) return written;
+    }
+    
+    return result;
+  }
+
+  if (is_special_object(args[0])) {
+    ant_value_t iter_fn = js_get_sym(js, args[0], get_iterator_sym());
+    if (is_err(iter_fn)) return iter_fn;
+    
+    if (vtype(iter_fn) != kTypeUndefined && vtype(iter_fn) != kTypeNull) {
+      if (!is_callable(iter_fn)) return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray source iterator is not callable");
+      return create_typed_array_from_iterable(js, type, args[0], iter_fn, type_name);
+    }
+
+    size_t length = 0;
+    ant_value_t len_val = js_get(js, args[0], "length");
+    if (is_err(len_val)) return len_val;
+    
+    ant_value_t result = js_to_length_fast(js, len_val, &length);
+    if (is_err(result)) return result;
+    
+    result = create_typed_array_for_length(js, type, length, type_name);
+    if (is_err(result)) return result;
+    
+    TypedArrayData *result_ta = buffer_get_typedarray_data(result);
+    for (size_t i = 0; i < length; i++) {
+      char idx_str[24];
+      snprintf(idx_str, sizeof(idx_str), "%zu", i);
+      ant_value_t elem = js_get(js, args[0], idx_str);
+      if (is_err(elem)) return elem;
+      ant_value_t written = typedarray_write_value(js, result_ta, i, elem);
+      if (is_err(written)) return written;
+    }
+    
+    return result;
+  }
+
   return js_mkerr(js, "Invalid TypedArray constructor arguments");
 }
 
@@ -1659,35 +1780,38 @@ DEFINE_TYPEDARRAY_OF(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_OF(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
 static ant_value_t js_dataview_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined) {
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "DataView constructor requires 'new'");
-  }
-  if (nargs < 1) {
-    return js_mkerr(js, "DataView requires an ArrayBuffer");
-  }
+  if (nargs < 1) return js_mkerr(js, "DataView requires an ArrayBuffer");
   
   ArrayBufferData *buffer = buffer_get_arraybuffer_data(args[0]);
-  if (!buffer) {
-    return js_mkerr(js, "First argument must be an ArrayBuffer");
-  }
+  if (!buffer) return js_mkerr(js, "First argument must be an ArrayBuffer");
+  
   size_t byte_offset = 0;
   size_t byte_length = buffer->length;
   
-  if (nargs > 1 && vtype(args[1]) == kTypeNumber) {
-    byte_offset = (size_t)js_getnum(args[1]);
+  if (nargs > 1) {
+    ant_value_t result = js_to_index_fast(js, args[1], &byte_offset);
+    if (is_err(result)) return result;
   }
   
-  if (byte_offset > buffer->length) {
-    return js_mkerr(js, "Start offset is outside the bounds of the buffer");
-  }
+  if (buffer->is_detached)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create a view of a detached ArrayBuffer");
   
-  if (nargs > 2 && vtype(args[2]) == kTypeNumber) {
-    byte_length = (size_t)js_getnum(args[2]);
-    if (byte_length > buffer->length - byte_offset) {
-      return js_mkerr(js, "Invalid DataView length");
-    }
-  } else byte_length = buffer->length - byte_offset;
+  size_t buffer_length = buffer->length;
+  if (byte_offset > buffer_length)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Start offset is outside the bounds of the buffer");
   
+  if (nargs > 2 && vtype(args[2]) != kTypeUndefined) {
+    ant_value_t result = js_to_index_fast(js, args[2], &byte_length);
+    if (is_err(result)) return result;
+    if (byte_length > buffer_length - byte_offset)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid DataView length");
+  } else byte_length = buffer_length - byte_offset;
+  
+  if (buffer->is_detached)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create a view of a detached ArrayBuffer");
+
   DataViewData *dv_data = ta_meta_alloc(sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
   
@@ -3663,18 +3787,17 @@ static ant_value_t js_buffer_compare(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_sharedarraybuffer_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined) {
+  if (vtype(js->new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "SharedArrayBuffer constructor requires 'new'");
-  }
+    
   size_t length = 0;
-  if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
-    length = (size_t)js_getnum(args[0]);
+  if (nargs > 0) {
+    ant_value_t result = js_to_index_fast(js, args[0], &length);
+    if (is_err(result)) return result;
   }
   
   ArrayBufferData *data = create_shared_array_buffer_data(length);
-  if (!data) {
-    return js_mkerr(js, "Failed to allocate SharedArrayBuffer");
-  }
+  if (!data) return js_mkerr(js, "Failed to allocate SharedArrayBuffer");
   
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "SharedArrayBuffer", 17);

@@ -1,7 +1,7 @@
 { lib
 , llvmPackages_21
 , stdenv
-, ccacheStdenv
+, ccache
 , meson
 , ninja
 , cmake
@@ -28,24 +28,34 @@
 let
   zigPkg = if zig_0_16 != null then zig_0_16 else zig;
   antBaseStdenv =
-    if stdenv.isLinux then
+    if stdenv.hostPlatform.isLinux then
       overrideCC llvmPackages_21.stdenv (
         llvmPackages_21.stdenv.cc.override { bintools = llvmPackages_21.bintools; }
       )
     else stdenv;
-  antStdenv = ccacheStdenv.override {
-    stdenv = antBaseStdenv;
-    extraConfig = ''
-      export CCACHE_COMPRESS=1
-      export CCACHE_MAXSIZE=2G
-      export CCACHE_SLOPPINESS=random_seed,time_macros
-      if [ -d /tmp/ant-nix-ccache ] && [ -w /tmp/ant-nix-ccache ]; then
-        export CCACHE_DIR=/tmp/ant-nix-ccache
-      else
-        export CCACHE_DIR="$TMPDIR/ccache"
-      fi
-    '';
-  };
+
+  ccacheConfig = ''
+    export CCACHE_COMPRESS=1
+    export CCACHE_MAXSIZE=2G
+    export CCACHE_SLOPPINESS=random_seed,time_macros
+    if [ -d /tmp/ant-nix-ccache ] && [ -w /tmp/ant-nix-ccache ]; then
+      export CCACHE_DIR=/tmp/ant-nix-ccache
+    else
+      export CCACHE_DIR="$TMPDIR/ccache"
+    fi
+  '';
+
+  ccacheLinks = (ccache.links {
+    unwrappedCC = antBaseStdenv.cc.cc;
+    extraConfig = ccacheConfig;
+  }).overrideAttrs (prev: {
+    passthru = (prev.passthru or { }) // {
+      langC = antBaseStdenv.cc.cc.langC or true;
+      langCC = antBaseStdenv.cc.cc.langCC or true;
+    };
+  });
+
+  antStdenv = overrideCC antBaseStdenv (antBaseStdenv.cc.override { cc = ccacheLinks; });
 
   antVersion = import ./version.nix { inherit lib gitRev; };
   antVendor = callPackage ./vendor.nix {};
@@ -119,7 +129,7 @@ antStdenv.mkDerivation (finalAttrs: {
     curl
     zigPkg
     rustPlatform.cargoSetupHook
-  ] ++ lib.optionals stdenv.isDarwin [
+  ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
     darwin.sigtool
     llvmPackages_21.llvm
   ];
@@ -139,7 +149,7 @@ antStdenv.mkDerivation (finalAttrs: {
     "-Dbuild_git_hash=${gitRev}"
     "-Db_lto_mode=default"
     "-Dembed_example=disabled"
-  ] ++ lib.optionals stdenv.isDarwin [
+  ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
     "-Dllvm_nm=${lib.getExe' llvmPackages_21.llvm "llvm-nm"}"
   ] ++ lib.optionals enableNativeTuning [
     "-Dnative_tuning=enabled"
@@ -173,7 +183,7 @@ antStdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  postFixup = lib.optionalString stdenv.isDarwin ''
+  postFixup = lib.optionalString stdenv.hostPlatform.isDarwin ''
     strip -S -x "$out/bin/ant"
     codesign --force --sign - --entitlements ${../../meson/ant.entitlements} "$out/bin/ant"
   '';

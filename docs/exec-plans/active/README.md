@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Buffer Index Coercion Review Fixes](buffer-index-coercion.md)
 - [JS Path Node Performance](path-node-performance.md)
 - [Guarded charCodeAt Opcode](charcode-intrinsic.md)
 - [Private Primordial Capture](private-primordials.md)
