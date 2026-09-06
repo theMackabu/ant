@@ -614,3 +614,140 @@ This plan is complete when:
   changed;
 - the plan is moved to `docs/exec-plans/completed/` with final binary identities
   and evidence tables.
+
+## 2026-09-06: Mixed numeric element sites
+
+Crypto profiling on an M4 Pro found 19.4% of main-thread self samples in
+`jit_helper_put_elem`, 13.4% in `jit_helper_get_elem`, and 4.2% in
+`get_array_length`. Three successive `am3` MIR compilations went from four
+inline element sites to none as specialization feedback became mismatched.
+The 35-second diagnostic sample extended harness windows to ten seconds;
+it is not a benchmark score or a balanced per-phase profile.
+
+Keep the existing monomorphic numeric specialization. In the main JIT emitter,
+add guarded in-bounds numeric array reads and numeric-to-numeric overwrites
+before the generic helpers at mixed sites. Misses call the existing helper and
+rejoin generated code, preserving all boxed operands and exception routing.
+Do not change feedback policy, shared helpers, integer lowering, or the inliner.
+The guards exclude holes, growth, exotic arrays and frozen writes; numeric
+stores require no reference write barrier. This avoids repeated specialization
+bailouts while retaining generic semantics for irregular accesses.
+
+Validation: release build, focused numeric-element/put/typed-array tests,
+Node differential for the expanded test, preflight, diff checks, and the full
+4,203-test / 102-file spec suite pass. Final candidate `am3` MIR retains four
+guarded element sites across all three compilations.
+
+Two serial AB/BA rounds (four samples per binary) measured Crypto median
+5,530.85 -> 7,261.29 (+31.3%). Baseline was reconstructed by compiling the
+original swarm.c with the configured compiler flags, replacing only that
+archive member in a copy of the candidate archive, and linking against the
+same remaining objects/libraries. Both use the same existing PGO profile and
+LTO flags; LLVM discards stale sv_jit_compile counts for the changed emitter.
+This is a local same-profile-input result, not a fresh-PGO or quiet-host result.
+Full-suite and Game of Life performance comparisons remain pending.
+
+- Baseline SHA256: `6245f920592a65286430d4b4fb274a1935be6dcfe063625b44ee7a3f410c3bfe`.
+- Candidate SHA256: `8d19aa8d46fe8bc0d30a241fb217959d177f3e29f2c06857ba94271ada2c1138`.
+- Artifacts: `/tmp/ant-crypto-profile/crypto-abba.json`, `matched-base/commands.json`,
+  `candidate-jit.mir`, and `spec.log`.
+
+An unrelated concurrent `vendor/skim.wrap` revision edit is excluded from this
+change and was left untouched.
+
+## 2026-09-06: Integer facts, index reuse, and duplicate reads
+
+The follow-up keeps integer shadows for uncaptured numeric locals within a
+basic block. Canonical double/boxed state remains available for bailout and
+OSR. Emitted writes to either canonical register invalidate the shadow; all
+bytecode control-flow joins clear it. This is deliberately not a claim of
+integer propagation across arbitrary loop edges.
+
+Mixed element sites reuse a proven numeric index for an identical numeric key.
+A word32 key can instead use an unsigned bounds check directly. The index cache
+is initialized before OSR dispatch. Non-numeric keys still undergo normal
+coercion on every access; negative zero remains a valid zero index.
+
+A successful numeric array read may be reused for an identical object and key
+inside the current block. A fallback clears its runtime validity. Other calls
+and non-frame memory writes invalidate availability in the emitted MIR scan;
+control-flow joins clear it too. Cached object references are never reused
+across GC-capable calls. The array and index caches are per invocation.
+
+Boundary coverage also found pre-existing numeric reads accepting UINT32_MAX
+as an array index. The interpreter and JIT read helpers now exclude that value
+before converting to uint32_t, letting the normal property lookup handle it.
+
+Focused Node differential tests cover local updates/merges, duplicate getters,
+proxy reads, alias writes, calls, coercion, caught exceptions, array length
+mutation, signed/unsigned index boundaries, and OSR. Focused tests, preflight,
+and the full 4,203-test suite pass.
+
+Four serial samples per variant in forward/reverse stage order measured:
+
+| Stage | Crypto median |
+|---|---:|
+| Array fix only | 7,506.97 |
+| Plus integer shadows | 7,475.78 |
+| Plus index reuse | 7,632.25 |
+| Plus duplicate-read reuse | 7,721.07 |
+
+The combined result is +2.85%; integer shadows alone did not establish a speed
+win. All variants were linked against identical remaining objects/libraries
+(including the index-boundary correction), with the same compiler/LTO and
+existing PGO inputs. Compare these stage numbers to each other, not to earlier
+absolute scores from other measurement windows. Sources and exact commands
+are preserved in `/tmp/ant-crypto-profile/matched-{array,integer,index}`;
+raw samples and binary hashes are in `/tmp/ant-crypto-profile/stages.json`.
+A full-suite serial AB/BA check (two samples per binary) measured geometric
+mean 6,522.62 -> 6,511.73 (-0.17%). Crypto was +3.71% in that window;
+EarleyBoyer -2.53%, NavierStokes -1.80%, and Splay -1.18%. These are observed
+tradeoffs, not a suite-wide speedup. No workload exceeded the existing 5%
+regression threshold. Full raw data: `/tmp/ant-crypto-profile/suite-abba.json`.
+Game of Life performance remains unmeasured for this Crypto-focused change.
+
+## 2026-09-06: Proven word ranges and loop invariants
+
+Preserve exact word32 constants and propagate integer intervals through masks,
+shifts, local shadows, and arithmetic. Uncaptured locals initialized once before
+any branch can retain integer shadows across loop backedges. OSR validates their
+numeric type and interval before populating those shadows. Reassigned, captured,
+and conditionally initialized locals are excluded. Canonical local state remains
+available for bailout.
+
+Emit integer add/subtract/multiply only when interval bounds prove the result
+fits the supported word range. Compute compile-time product bounds in int128;
+retain Number arithmetic outside those bounds and wherever multiplication might
+produce negative zero. This does not change the runtime value representation.
+
+Focused tests (including Node differential output for 720 arithmetic cases),
+local mutation/capture/OSR coverage, and all 4,203 specs pass. Four serial samples
+per binary in AB/BA order measured Crypto median 7,686.87 -> 9,836.90 (+28.0%).
+Baseline range: 7,649.67-7,753.32; candidate: 9,748.89-9,932.40. Same configured
+build, unchanged other objects, existing PGO input, and LTO flags; stale emitter
+profile counts were discarded. This is local evidence, not fresh-PGO evidence.
+
+- Baseline SHA256: `e9dd75e2a4f945748e24df61b8617a211254a93df3a828923235998364856a9a`.
+- Candidate SHA256: `80c92136ff622e9336d84d7d15a75a5dcdcdd261114102504491eb86c7cfcad8`.
+- Artifacts: `/tmp/ant-crypto-ranges/crypto-abba.json`, `spec.log`, and differential outputs.
+- The user accepted the result. The broader performance comparison stopped when
+  baseline EarleyBoyer timed out; full-suite candidate performance remains unverified.
+
+## 2026-09-06: Implementation-review follow-up
+
+Replace per-local bytecode scans with one pass that tracks each local's assignment
+and rejection state. Replace per-output local scans with a fixed MIR-register-to-local
+lookup; disable shadow reuse if that optional lookup cannot be allocated. These
+changes remove the newly introduced quadratic analysis work without widening the
+accepted invariant patterns. Share integer-constant classification and document
+the element cache's helper and private-frame invalidation exceptions.
+
+The integer-range test now asserts all 720 results against a versioned reference
+fixture generated with Node. Reference values encode negative zero, NaN and infinities
+as distinct strings, so ordinary focused-test invocation detects mismatches.
+Validation: incremental build, all three focused JIT tests, all 4,203 specs,
+`maid preflight`, and `maid knowledge` pass. The fixture also matches Node, and a
+/tmp-only corrupted reference correctly makes the focused test exit with an error.
+The JSON fixture is consumed by the test, rather than executed as JavaScript as
+suggested by the generic validation router. No new performance measurement was
+made; the build still reports discarded stale emitter PGO counts.
