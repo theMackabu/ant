@@ -22,6 +22,8 @@
 #define NAPI_DEFAULT_DLOPEN_FLAGS NAPI_RTLD_LAZY
 
 #include "napi_internal.h"
+#include "esm/commonjs.h"
+#include "gc/roots.h"
 
 static napi_native_lib_t *g_napi_native_libs = NULL;
 static napi_module *g_pending_napi_module = NULL;
@@ -109,12 +111,14 @@ ant_value_t napi_process_dlopen_js(ant_t *js, ant_value_t *args, int nargs) {
 ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_value_t ns) {
   if (!module_path) return js_mkerr(js, "native module path is null");
 
-  ant_value_t module_obj = js_mkobj(js);
-  ant_value_t exports_obj = js_mkobj(js);
-  js_set(js, module_obj, "exports", exports_obj);
-  js_set(js, module_obj, "filename", js_mkstr(js, module_path, strlen(module_path)));
-  js_set(js, module_obj, "id", js_mkstr(js, module_path, strlen(module_path)));
-  js_set(js, module_obj, "loaded", js_false);
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t module_obj = esm_create_cjs_module(js, module_path, js->modules.cjs.parent);
+  
+  GC_ROOT_PIN(js, module_obj);
+  js_set(js, esm_require_cache(js), module_path, module_obj);
+  
+  ant_value_t result = js_mkundef();
+  GC_ROOT_PIN(js, result);
 
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   ant_value_t dlopen_fn = is_object_type(process_obj) ? js_get(js, process_obj, "dlopen") : js_mkundef();
@@ -122,19 +126,21 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   if (is_callable(dlopen_fn)) {
     ant_value_t argv[2] = {module_obj, js_mkstr(js, module_path, strlen(module_path))};
     ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, false);
-    if (is_err(dl_res) || js->thrown_exists) return js_throw(js, js->thrown_value);
+    if (is_err(dl_res) || js->thrown_exists) { result = js_throw(js, js->thrown_value); goto cleanup; }
   } else {
     ant_value_t load_res = napi_dlopen_common(js, module_obj, module_path, NAPI_DEFAULT_DLOPEN_FLAGS);
-    if (is_err(load_res)) return load_res;
+    if (is_err(load_res)) { result = load_res; goto cleanup; }
   }
 
+  js_set(js, module_obj, "loaded", js_true);
   ant_value_t exports_val = js_get(js, module_obj, "exports");
-  if (!is_object_type(ns)) return exports_val;
+  result = exports_val;
+  if (!is_object_type(ns)) goto cleanup;
 
   setprop_cstr(js, ns, "default", 7, exports_val);
   js_set_slot(ns, SLOT_DEFAULT, exports_val);
 
-  if (!is_object_type(exports_val)) return exports_val;
+  if (!is_object_type(exports_val)) goto cleanup;
   ant_iter_t iter = js_prop_iter_begin(js, exports_val);
   const char *key = NULL;
   size_t key_len = 0;
@@ -143,10 +149,15 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     if (key_len == 7 && memcmp(key, "default", 7) == 0) continue;
     setprop_cstr(js, ns, key, key_len, value);
-  }
-  js_prop_iter_end(&iter);
+  } js_prop_iter_end(&iter);
 
-  return exports_val;
+cleanup:
+  if (is_err(result)) {
+    js_delete_prop(js, esm_require_cache(js), module_path, strlen(module_path));
+    esm_cjs_update_children(js, js->modules.cjs.parent, module_obj, true);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 NAPI_EXTERN void NAPI_CDECL napi_module_register(napi_module *mod) {

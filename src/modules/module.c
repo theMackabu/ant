@@ -21,31 +21,6 @@ static void push_builtin_name(const char *name, void *ud) {
   js_arr_push(ctx->js, ctx->arr, js_mkstr(ctx->js, name, strlen(name)));
 }
 
-static ant_value_t builtin_createRequire_call(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != kTypeString)
-    return js_mkerr(js, "require() expects a string specifier");
-
-  ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t data = js_get_slot(fn, SLOT_DATA);
-  const char *base_path = js_module_eval_active_filename(js);
-
-  if (vtype(data) == kTypeString) {
-    ant_offset_t plen = 0;
-    ant_offset_t poff = vstr(js, data, &plen);
-    base_path = (const char *)(uintptr_t)(poff);
-  }
-
-  ant_value_t ns = js_esm_import_sync_from_require(js, args[0], base_path);
-  if (is_err(ns)) return ns;
-
-  if (vtype(ns) == kTypeObject) {
-    ant_value_t default_export = js_get_slot(ns, SLOT_DEFAULT);
-    if (vtype(default_export) != kTypeUndefined) return default_export;
-  }
-  
-  return ns;
-}
-
 static ant_value_t resolve_strip_file_url(ant_t *js, ant_value_t resolved) {
   if (is_err(resolved) || vtype(resolved) != kTypeString) return resolved;
 
@@ -126,12 +101,25 @@ static ant_value_t builtin_createRequire(ant_t *js, ant_value_t *args, int nargs
     path_len -= prefix_len;
   }
 
+  GC_ROOT_SAVE(mark, js);
   ant_value_t path_val = js_mkstr(js, path, path_len);
-  ant_value_t require_fn = js_heavy_mkfun(js, builtin_createRequire_call, path_val);
+  
+  GC_ROOT_PIN(js, path_val);
+  ant_value_t parent = esm_create_cjs_module(js, path, js_mkundef());
+  
+  GC_ROOT_PIN(js, parent);
+  ant_value_t require_fn = js_heavy_mkfun(js, esm_cjs_require_module, parent);
+  
+  GC_ROOT_PIN(js, require_fn);
   ant_value_t resolve_fn = js_heavy_mkfun(js, builtin_createRequire_resolve, path_val);
+  
+  GC_ROOT_PIN(js, resolve_fn);
+  js_set(js, resolve_fn, "paths", js_heavy_mkfun(js, esm_cjs_require_paths, path_val));
   js_set(js, require_fn, "resolve", resolve_fn);
   js_set(js, require_fn, "cache", esm_require_cache(js));
+  js_set(js, require_fn, "main", js->modules.cjs.main);
 
+  GC_ROOT_RESTORE(js, mark);
   return require_fn;
 }
 
@@ -180,17 +168,17 @@ static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int na
 static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t self = js_getcurrentfunc(js);
   ant_value_t hook = js_get_slot(self, SLOT_DATA);
-  if (vtype(hook) == kTypeUndefined || vtype(js->esm.hooks) != kTypeArray) return js_mkundef();
+  if (vtype(hook) == kTypeUndefined || vtype(js->modules.hooks) != kTypeArray) return js_mkundef();
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t remaining = js_mkarr(js);
   GC_ROOT_PIN(js, remaining);
 
-  ant_offset_t len = js_arr_len(js, js->esm.hooks);
+  ant_offset_t len = js_arr_len(js, js->modules.hooks);
   bool removed = false;
 
   for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t entry = js_arr_get(js, js->esm.hooks, i);
+    ant_value_t entry = js_arr_get(js, js->modules.hooks, i);
     if (!removed && entry == hook) {
       removed = true;
       continue;
@@ -198,7 +186,7 @@ static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, 
     js_arr_push(js, remaining, entry);
   }
 
-  js->esm.hooks = remaining;
+  js->modules.hooks = remaining;
   js_set_slot(self, SLOT_DATA, js_mkundef());
 
   GC_ROOT_RESTORE(js, root_mark);
@@ -223,8 +211,8 @@ static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, in
   if (hook_member_invalid(load_fn))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The 'load' hook must be a function");
 
-  if (vtype(js->esm.hooks) != kTypeArray) js->esm.hooks = js_mkarr(js);
-  js_arr_push(js, js->esm.hooks, args[0]);
+  if (vtype(js->modules.hooks) != kTypeArray) js->modules.hooks = js_mkarr(js);
+  js_arr_push(js, js->modules.hooks, args[0]);
 
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t dereg_obj = js_mkobj(js);
@@ -240,9 +228,27 @@ static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, in
   return out;
 }
 
+static ant_value_t builtin_module_constructor(ant_t *js, ant_value_t *args, int nargs) {
+  const char *id = nargs && vtype(args[0]) == kTypeString ? js_getstr(js, args[0], NULL) : "";
+  ant_value_t obj = esm_create_cjs_module(js, id, nargs > 1 ? args[1] : js_mkundef());
+  js_set(js, obj, "filename", js_mknull());
+  js_delete_prop(js, obj, "paths", 5);
+  return obj;
+}
+
 ant_value_t module_library(ant_t *js) {
-  ant_value_t lib = js_mkobj(js);
+  if (is_object_type(js->modules.cjs.constructor)) return js->modules.cjs.constructor;
+  ant_value_t cache = esm_require_cache(js);
+  ant_value_t proto = js_mkobj(js);
   
+  js_set_proto_init(proto, js->sym.object_proto);
+  ant_value_t lib = js_make_ctor(js, builtin_module_constructor, proto, "Module", 6);
+  js->modules.cjs.constructor = lib;
+  
+  js_set(js, lib, "_cache", cache);
+  js_set(js, lib, "Module", lib);
+  js_set(js, proto, "require", js_mkfun(esm_cjs_require_module));
+
   js_set(js, lib, "createRequire", js_mkfun(builtin_createRequire));
   js_set(js, lib, "registerHooks", js_mkfun(builtin_module_registerHooks));
   js_set(js, lib, "isBuiltin", js_mkfun(builtin_module_isBuiltin));

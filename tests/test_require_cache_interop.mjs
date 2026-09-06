@@ -1,0 +1,43 @@
+import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ant-cache-interop-')));
+const require = createRequire(path.join(tmp, 'entry.cjs'));
+const file = path.join(tmp, 'value.cjs');
+const esm = path.join(tmp, 'value.mjs');
+try {
+  fs.writeFileSync(file, 'module.exports = { value: 1 };');
+  const imported = await import(pathToFileURL(file).href);
+  assert.strictEqual(require(file), imported.default);
+  fs.writeFileSync(file, 'module.exports = { value: 2 };');
+  delete require.cache[file];
+  assert.strictEqual(require(file).value, 2);
+  assert.strictEqual(await import(pathToFileURL(file).href), imported);
+  assert.strictEqual(imported.default.value, 1);
+  const later = path.join(tmp, 'later.cjs');
+  fs.writeFileSync(later, 'module.exports = { value: 3 };');
+  const required = require(later);
+  const laterImport = await import(pathToFileURL(later).href);
+  assert.strictEqual(laterImport.default, required);
+  fs.writeFileSync(esm, 'export default 42; export const value = 7;');
+  const requiredESM = require(esm);
+  assert.strictEqual(requiredESM.default, 42);
+  assert.strictEqual(requiredESM.value, 7);
+  assert.strictEqual(requiredESM.__esModule, true);
+  assert.strictEqual(require.cache[esm].exports, requiredESM);
+  delete require.cache[esm];
+  assert.strictEqual(require(esm).default, requiredESM.default);
+  const importedESM = await import(pathToFileURL(esm).href);
+  assert.strictEqual(Object.hasOwn(importedESM, '__esModule'), false);
+  const json = path.join(tmp, 'data.json');
+  fs.writeFileSync(json, '{"value":4}');
+  const importedJSON = await import(pathToFileURL(json).href, { with: { type: 'json' } });
+  assert.strictEqual(require(json), importedJSON.default);
+  console.log('require.cache interop tests passed');
+} finally {
+  for (const key of Object.keys(require.cache)) if (key.startsWith(tmp + path.sep)) delete require.cache[key];
+  fs.rmSync(tmp, { recursive: true, force: true });
+}

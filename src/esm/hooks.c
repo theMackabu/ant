@@ -25,7 +25,7 @@ static bool esm_has_url_scheme(const char *s) {
 }
 
 bool esm_hooks_present(ant_t *js) {
-  return vtype(js->esm.hooks) == kTypeArray && js_arr_len(js, js->esm.hooks) > 0;
+  return vtype(js->modules.hooks) == kTypeArray && js_arr_len(js, js->modules.hooks) > 0;
 }
 
 typedef struct {
@@ -372,7 +372,7 @@ ant_value_t esm_import_via_hooks(
   js_set(js, ctx, "conditions", conditions);
   js_set(js, ctx, "importAttributes", is_object_type(attrs) ? attrs : js_mkobj(js));
 
-  ant_value_t hooks = js->esm.hooks;
+  ant_value_t hooks = js->modules.hooks;
   GC_ROOT_PIN(js, hooks);
   int top = (int)js_arr_len(js, hooks) - 1;
 

@@ -181,10 +181,16 @@ struct ant_isolate_t {
   struct {
     ant_value_t hooks;
     ant_value_t import_meta;
-    ant_value_t require_cache;
+    struct {
+      ant_value_t cache;
+      ant_value_t parent;
+      ant_value_t main;
+      ant_value_t constructor;
+      uint64_t generation;
+    } cjs;
     ant_esm_state_t *state;
     ant_module_t *module_stack;
-  } esm;
+  } modules;
 
   struct {
     const char *length;
@@ -748,7 +754,7 @@ static inline ant_value_t js_current_func_module_ns(ant_t *js) {
 }
 
 static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
-  ant_module_t *ctx = js->esm.module_stack;
+  ant_module_t *ctx = js->modules.module_stack;
   if (ctx) return ctx->module_ns;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   if (ctx) return ctx->module_ns;
@@ -756,7 +762,7 @@ static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
 }
 
 static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
-  ant_module_t *ctx = js->esm.module_stack;
+  ant_module_t *ctx = js->modules.module_stack;
   if (ctx) return ctx->module_ctx;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   return ctx ? ctx->module_ctx : js_mkundef();
@@ -777,7 +783,7 @@ static inline const char *js_module_eval_active_filename(ant_t *js) {
 }
 
 static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
-  ant_module_t *ctx = js->esm.module_stack;
+  ant_module_t *ctx = js->modules.module_stack;
   if (ctx) return ctx->format;
   ctx = js->active_async_coro ? js_active_tla_module_ctx(js) : NULL;
   return ctx ? ctx->format : MODULE_EVAL_FORMAT_UNKNOWN;

@@ -4,12 +4,44 @@ import * as path from 'ant:path';
 import * as fs from 'ant:fs';
 import * as shell from 'ant:shell';
 import * as ffi from 'ant:ffi';
+import { createRequire, Module } from 'node:module';
 
 import testJson from './test.json';
 import { name, version, count } from './test.json';
 import textContent from './test.txt';
 
 console.log('Module Tests\n');
+
+const constructedParent = new Module('parent.cjs');
+const constructedChild = new Module('child.cjs', constructedParent);
+test('Module constructor name', Module.name, 'Module');
+test('new Module creates a Module instance', constructedChild instanceof Module, true);
+test('new Module uses Module.prototype', Object.getPrototypeOf(constructedChild) === Module.prototype, true);
+test('Module prototype constructor backlink', Module.prototype.constructor === Module, true);
+test('new Module preserves id', constructedChild.id, 'child.cjs');
+test('new Module starts without filename', constructedChild.filename, null);
+test('new Module starts unloaded', constructedChild.loaded, false);
+test('new Module starts with empty exports', Object.keys(constructedChild.exports).length, 0);
+test('new Module exports inherit Object.prototype', Object.getPrototypeOf(constructedChild.exports) === Object.prototype, true);
+test('new Module preserves parent', constructedChild.parent === constructedParent, true);
+test('new Module registers with parent', constructedParent.children[0] === constructedChild, true);
+test('new Module registers once with parent', constructedParent.children.length, 1);
+test('new Module starts without children', constructedChild.children.length, 0);
+test('new Module exposes require', typeof constructedChild.require, 'function');
+
+const requireForCache = createRequire(import.meta.url);
+test('createRequire shares Module._cache', requireForCache.cache === Module._cache, true);
+test('require.cache has null prototype', Object.getPrototypeOf(requireForCache.cache), null);
+const realFsForCache = requireForCache('node:fs');
+const fakeFsForCache = {};
+try {
+  requireForCache.cache.fs = { exports: fakeFsForCache };
+  test('require.cache overrides bare builtins', requireForCache('fs') === fakeFsForCache, true);
+  test('node prefix bypasses require.cache', requireForCache('node:fs') === realFsForCache, true);
+} finally {
+  delete requireForCache.cache.fs;
+}
+
 
 test('import.meta exists', typeof import.meta, 'object');
 test('import.meta.url exists', typeof import.meta.url, 'string');

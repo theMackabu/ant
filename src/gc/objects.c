@@ -804,9 +804,12 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
     gc_mark_value(js, js->primordial_values[i]);
   
-  gc_mark_value(js, js->esm.require_cache);
-  gc_mark_value(js, js->esm.hooks);
-  gc_mark_value(js, js->esm.import_meta);
+  gc_mark_value(js, js->modules.cjs.cache);
+  gc_mark_value(js, js->modules.cjs.parent);
+  gc_mark_value(js, js->modules.cjs.main);
+  gc_mark_value(js, js->modules.cjs.constructor);
+  gc_mark_value(js, js->modules.hooks);
+  gc_mark_value(js, js->modules.import_meta);
   
   gc_mark_value(js, js->sym.object_proto);
   gc_mark_value(js, js->sym.array_proto);
@@ -829,7 +832,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_value(js, js->thrown_stack);
   gc_mark_value(js, js->length_str);
 
-  for (ant_module_t *ctx = js->esm.module_stack; ctx; ctx = ctx->prev) {
+  for (ant_module_t *ctx = js->modules.module_stack; ctx; ctx = ctx->prev) {
     gc_mark_value(js, ctx->module_ns);
     gc_mark_value(js, ctx->module_ctx);
     gc_mark_value(js, ctx->prev_import_meta_prop);
