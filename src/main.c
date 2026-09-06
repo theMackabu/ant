@@ -307,7 +307,7 @@ static void eval_code(
     result = js_eval_bytecode(js, script, len);
   } else {
     ant_value_t ns = js_mkobj(js);
-    result = is_err(ns) ? ns : esm_load_commonjs_module(js, tag, script, len, ns);
+    result = is_err(ns) ? ns : esm_load_commonjs_module(js, tag, script, len, ns, js_mkundef());
   }
   
   js_run_event_loop(js);

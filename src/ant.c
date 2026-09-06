@@ -17420,7 +17420,7 @@ static void js_set_import_module_ctx(ant_t *js, ant_value_t module_ctx) {
 static ant_value_t js_get_current_import_meta(ant_t *js) {
   ant_value_t import_meta = js_get_module_ctx_import_meta(js, js_get_execution_module_ctx(js));
   if (vtype(import_meta) == kTypeObject) return import_meta;
-  return js->esm.import_meta;
+  return js->modules.import_meta;
 }
 
 static bool js_try_import_meta(ant_t *js, ant_value_t func_obj, ant_value_t *out) {
@@ -17618,26 +17618,26 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
   if (is_err(import_meta) || vtype(import_meta) == kTypeUndefined) return;
 
   js_set_import_module_ctx(js, module_ctx);
-  js->esm.import_meta = import_meta;
+  js->modules.import_meta = import_meta;
 }
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
-  ctx->prev = js->esm.module_stack;
-  ctx->prev_import_meta_prop = js->esm.import_meta;
-  js->esm.module_stack = ctx;
+  ctx->prev = js->modules.module_stack;
+  ctx->prev_import_meta_prop = js->modules.import_meta;
+  js->modules.module_stack = ctx;
 
   ant_value_t import_meta = js_get_module_ctx_import_meta(js, ctx->module_ctx);
-  if (vtype(import_meta) != kTypeUndefined) js->esm.import_meta = import_meta;
+  if (vtype(import_meta) != kTypeUndefined) js->modules.import_meta = import_meta;
 }
 
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx) {
   if (!js || !ctx) return;
 
-  if (js->esm.module_stack == ctx) {
-    js->esm.import_meta = ctx->prev_import_meta_prop;
-    js->esm.module_stack = ctx->prev;
+  if (js->modules.module_stack == ctx) {
+    js->modules.import_meta = ctx->prev_import_meta_prop;
+    js->modules.module_stack = ctx->prev;
   }
 }
 
@@ -18641,10 +18641,14 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->global = mkobj(js, 0);
   js->this_val = js->global;
   js->new_target = js_mkundef();
-  js->esm.require_cache = js_mkundef();
-  js->esm.hooks = js_mkundef();
-  js->esm.import_meta = js_mkundef();
-  js->esm.state = NULL;
+  js->modules.cjs.cache = js_mkundef();
+  js->modules.cjs.parent = js_mkundef();
+  js->modules.cjs.main = js_mkundef();
+  js->modules.cjs.constructor = js_mkundef();
+  js->modules.cjs.generation = 0;
+  js->modules.hooks = js_mkundef();
+  js->modules.import_meta = js_mkundef();
+  js->modules.state = NULL;
   js->length_str = ANT_STRING("length");
 
   ant_value_t glob = js->global;

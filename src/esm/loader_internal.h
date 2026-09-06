@@ -54,6 +54,7 @@ const char *esm_default_base_path(ant_t *js);
 
 char *esm_path_to_file_url(const char *path);
 char *esm_make_absolute_path(const char *path);
+char *esm_path_dirname(const char *path);
 char *esm_file_url_to_path(ant_t *js, const char *specifier);
 char *esm_resolve_path(ant_t *js, const char *specifier, const char *base_path);
 char *esm_resolve_path_require(ant_t *js, const char *specifier, const char *base_path);
@@ -61,6 +62,7 @@ char *esm_resolve_path_require(ant_t *js, const char *specifier, const char *bas
 ant_module_format_t esm_decide_module_format(ant_t *js, const char *resolved_path);
 esm_module_kind_t esm_classify_kind_for_path(const char *resolved_path);
 esm_module_t *esm_find_module(ant_t *js, const char *module_key);
+ant_value_t esm_node_module_paths(ant_t *js, const char *directory);
 
 ant_value_t esm_read_file(
   ant_t *js,

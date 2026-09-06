@@ -42,12 +42,12 @@ typedef struct esm_package_dir_cache_entry {
 
 ant_esm_state_t *esm_state(ant_t *js) {
   if (!js) return NULL;
-  if (js->esm.state) return js->esm.state;
+  if (js->modules.state) return js->modules.state;
 
   ant_esm_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
 
-  js->esm.state = st;
+  js->modules.state = st;
   return st;
 }
 
@@ -269,7 +269,7 @@ yyjson_doc *esm_package_json_cache_read(ant_t *js, const char *pkg_json_path, bo
 }
 
 void esm_loader_cache_cleanup(ant_t *js) {
-  ant_esm_state_t *st = js ? js->esm.state : NULL;
+  ant_esm_state_t *st = js ? js->modules.state : NULL;
   if (!st) return;
 
   esm_package_json_cache_entry_t *pkg_current, *pkg_tmp;
@@ -313,5 +313,5 @@ void esm_loader_cache_cleanup(ant_t *js) {
   }
 
   free(st);
-  js->esm.state = NULL;
+  js->modules.state = NULL;
 }
