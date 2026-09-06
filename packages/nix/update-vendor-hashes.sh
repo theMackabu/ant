@@ -43,11 +43,11 @@ replace_output_hash "$fake_hash"
 
 read -r -d '' vendor_expr <<'EOF' || true
 let
-  flake = builtins.getFlake (toString ./.);
+  flake = builtins.getFlake ("git+file://" + toString ./.);
   system = builtins.currentSystem;
   pkgs = import flake.inputs.nixpkgs { inherit system; };
 in
-pkgs.callPackage ./packages/nix/vendor.nix {}
+pkgs.callPackage (flake.outPath + "/packages/nix/vendor.nix") {}
 EOF
 
 echo "Computing ant-vendor Nix hash from the current vendor wraps..."
