@@ -306,6 +306,16 @@ if not runtime_binary.disabled()
 endif
 
 # move to meson/tests
+if host_machine.system() != 'windows'
+  executable(
+    'test-listener-accept-burst',
+    files('tests/test_listener_accept_burst.c'),
+    dependencies: libuv_dep,
+    c_args: ['-UNDEBUG'],
+    build_by_default: false
+  )
+endif
+
 executable(
   'tlsuv-boringssl-smoke',
   files('tests/tlsuv_boringssl_smoke.c'),

@@ -1922,7 +1922,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     rc = ant_listener_listen_pipe(
       &server->listener, server->loop,
       server->unix_path,
-      128, server->idle_timeout_ms, &callbacks, server
+      512, server->idle_timeout_ms, &callbacks, server
     );
   } else {
     if (!ant_sandbox_policy_port_forwarded(server->port)) {
@@ -1940,7 +1940,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     rc = ant_listener_listen_tcp(
       &server->listener, server->loop,
       server->hostname, server->port,
-      128, server->idle_timeout_ms, &callbacks, server
+      512, server->idle_timeout_ms, &callbacks, server
     );
   }
   
