@@ -161,11 +161,14 @@ static ant_value_t builtin_module_constructor(ant_t *js, ant_value_t *args, int 
 ant_value_t module_library(ant_t *js) {
   if (is_object_type(js->modules.cjs.constructor)) return js->modules.cjs.constructor;
   ant_value_t cache = esm_require_cache(js);
+  GC_ROOT_SAVE(root_mark, js);
   ant_value_t proto = js_mkobj(js);
+  GC_ROOT_PIN(js, proto);
   
   js_set_proto_init(proto, js->sym.object_proto);
   ant_value_t lib = js_make_ctor(js, builtin_module_constructor, proto, "Module", 6);
   js->modules.cjs.constructor = lib;
+  GC_ROOT_RESTORE(js, root_mark);
   
   js_set(js, lib, "_cache", cache);
   js->modules.cjs.cache = js_mkundef();
