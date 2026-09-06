@@ -2146,6 +2146,33 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     return err;
   }
 
+  ant_value_t cached = js_get(js, esm_require_cache(js), resolved_path);
+  if (is_err(cached)) {
+    free(resolved_path);
+    free(spec_copy);
+    return cached;
+  }
+  
+  if (is_object_type(cached)) {
+    ant_value_t exports = js_get(js, cached, "exports");
+    ant_value_t ns = is_err(exports) ? exports : esm_make_namespace_object(js);
+    if (!is_err(exports)) {
+      js_set_slot_wb(js, ns, SLOT_DEFAULT, exports);
+      setprop_cstr(js, ns, "default", 7, exports);
+    }
+    free(resolved_path);
+    free(spec_copy);
+    return ns;
+  }
+
+  esm_module_t *existing = esm_find_module(js, resolved_path);
+  if (existing && existing->is_loaded &&
+      (existing->format == MODULE_EVAL_FORMAT_CJS || existing->kind == ESM_MODULE_KIND_JSON)) {
+    existing->is_loaded = false;
+    existing->namespace_obj = js_mkundef();
+    existing->default_export = js_mkundef();
+  }
+
   ant_value_t ns = esm_get_or_load(
     js, spec_copy,
     resolved_path,
@@ -2154,6 +2181,16 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     NULL, 0
   );
   
+  esm_module_t *loaded_mod = esm_find_module(js, resolved_path);
+  if (!is_err(ns) && loaded_mod && loaded_mod->kind == ESM_MODULE_KIND_JSON) {
+    ant_value_t entry = js_mkobj(js);
+    js_set(js, entry, "id", js_mkstr(js, resolved_path, strlen(resolved_path)));
+    js_set(js, entry, "filename", js_mkstr(js, resolved_path, strlen(resolved_path)));
+    js_set(js, entry, "exports", js_get_slot(ns, SLOT_DEFAULT));
+    js_set(js, entry, "loaded", js_true);
+    js_set(js, esm_require_cache(js), resolved_path, entry);
+  }
+
   free(resolved_path);
   free(spec_copy);
   

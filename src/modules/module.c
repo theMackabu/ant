@@ -9,6 +9,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "esm/loader.h"
+#include "esm/commonjs.h"
 #include "esm/library.h"
 #include "gc/roots.h"
 #include "modules/symbol.h"
@@ -129,6 +130,7 @@ static ant_value_t builtin_createRequire(ant_t *js, ant_value_t *args, int nargs
   ant_value_t require_fn = js_heavy_mkfun(js, builtin_createRequire_call, path_val);
   ant_value_t resolve_fn = js_heavy_mkfun(js, builtin_createRequire_resolve, path_val);
   js_set(js, require_fn, "resolve", resolve_fn);
+  js_set(js, require_fn, "cache", esm_require_cache(js));
 
   return require_fn;
 }

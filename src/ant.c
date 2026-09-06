@@ -18641,6 +18641,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   js->global = mkobj(js, 0);
   js->this_val = js->global;
   js->new_target = js_mkundef();
+  js->esm.require_cache = js_mkundef();
   js->esm.hooks = js_mkundef();
   js->esm.import_meta = js_mkundef();
   js->esm.state = NULL;

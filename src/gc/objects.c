@@ -804,6 +804,7 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
     gc_mark_value(js, js->primordial_values[i]);
   
+  gc_mark_value(js, js->esm.require_cache);
   gc_mark_value(js, js->esm.hooks);
   gc_mark_value(js, js->esm.import_meta);
   

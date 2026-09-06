@@ -181,6 +181,7 @@ struct ant_isolate_t {
   struct {
     ant_value_t hooks;
     ant_value_t import_meta;
+    ant_value_t require_cache;
     ant_esm_state_t *state;
     ant_module_t *module_stack;
   } esm;

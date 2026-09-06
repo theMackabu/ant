@@ -12,6 +12,14 @@
 #include <string.h>
 #include <stdlib.h>
 
+ant_value_t esm_require_cache(ant_t *js) {
+  if (!is_object_type(js->esm.require_cache)) {
+    js->esm.require_cache = js_mkobj(js);
+    js_set_proto_init(js->esm.require_cache, js_mknull());
+  }
+  return js->esm.require_cache;
+}
+
 static ant_value_t cjs_module_exports_getter(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t state = js_get_slot(fn, SLOT_DATA);
@@ -233,6 +241,8 @@ ant_value_t esm_load_commonjs_module(
   );
   
   js_set(js, require_fn, "resolve", require_resolve_fn);
+  js_set(js, require_fn, "cache", esm_require_cache(js));
+  js_set(js, esm_require_cache(js), module_path, module_obj);
 
   char *dir = dirname(path_copy);
   ant_value_t dirname_val = js_mkstr(js, dir, strlen(dir));
@@ -248,13 +258,16 @@ ant_value_t esm_load_commonjs_module(
   );
   
   if (vtype(result) == kTypePromise) js_run_event_loop(js);
-  js_set(js, module_obj, "loaded", js_true);
+  if (!is_err(result) && !js->thrown_exists) js_set(js, module_obj, "loaded", js_true);
   ant_value_t exports_val = js_get(js, module_obj, "exports");
   
   if (!is_err(result) && !js->thrown_exists) {
     ant_value_t ns_res = esm_populate_cjs_namespace(js, ns, exports_val);
     if (is_err(ns_res)) result = ns_res;
   }
+
+  if (is_err(result) || js->thrown_exists)
+    js_delete_prop(js, esm_require_cache(js), module_path, strlen(module_path));
 
   js_set_filename(js, prev_filename);
   free(path_copy);
