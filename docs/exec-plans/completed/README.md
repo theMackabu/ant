@@ -10,6 +10,8 @@ can reuse the decision history.
 
 ## Plans
 
+- [TypeScript Nix Generation](ts-nix-generation.md)
+
 - [Compiled Native Addon Assets](compiled-native-addon-assets.md)
 - [Darwin Lazy Framework Startup](darwin-lazy-framework-startup.md)
 - [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)

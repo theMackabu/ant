@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.ts", "examples/*.ts", "../../tests/fixtures/ts-nix/types.ts"]
+}
