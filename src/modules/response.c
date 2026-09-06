@@ -28,7 +28,7 @@
 #include "streams/readable.h"
 
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
-static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=utf-8";
+static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=UTF-8";
 
 response_data_t *response_get_data(ant_value_t obj) {
   return (response_data_t *)js_get_native(obj, RESPONSE_NATIVE_TAG);
@@ -330,21 +330,6 @@ static bool response_plain_type_needs_charset(
   return current && body_type &&
     strcasecmp(current, "text/plain") == 0 &&
     strcasecmp(body_type, RESPONSE_TEXT_CONTENT_TYPE) == 0;
-}
-
-static bool response_apply_content_type(
-  ant_value_t headers, const char *body_type
-) {
-  const char *current = NULL;
-
-  if (!body_type) return true;
-  headers_data_t *data = headers_get_data(headers);
-  size_t count = headers_data_find_literal(data, "content-type", &current);
-  if (count == 0)
-    return headers_data_append_if_missing(data, "content-type", body_type);
-  if (count == 1 && response_plain_type_needs_charset(current, body_type))
-    return headers_set_literal(headers, "content-type", body_type);
-  return true;
 }
 
 static bool response_apply_content_type_data(
@@ -807,7 +792,7 @@ static ant_value_t response_apply_body(
       ? content_type_override
       : resp->body_type;
     if (headers_is_headers(headers)
-        ? !response_apply_content_type(headers, header_type)
+        ? !response_apply_content_type_data(headers_get_data(headers), header_type)
         : !response_apply_pending_content_type(resp, header_type))
       return js_mkerr(js, "out of memory");
     return js_mkundef();
@@ -841,7 +826,7 @@ static ant_value_t response_apply_body(
     ? content_type_override
     : body_type;
   if (headers_is_headers(headers)
-      ? !response_apply_content_type(headers, header_type)
+      ? !response_apply_content_type_data(headers_get_data(headers), header_type)
       : !response_apply_pending_content_type(resp, header_type))
     return js_mkerr(js, "out of memory");
 
@@ -1297,7 +1282,7 @@ ant_value_t response_create(
   if (is_object_type(headers_obj)) {
     headers = headers_obj;
     headers_set_immutable(headers, immutable_headers);
-    if (!response_apply_content_type(headers, body_type)) {
+    if (!response_apply_content_type_data(headers_get_data(headers), body_type)) {
       response_clear_and_free(obj, resp);
       return js_mkerr(js, "out of memory");
     }

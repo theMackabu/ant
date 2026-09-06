@@ -140,7 +140,7 @@ const normalizedTypeResponse = new Response('typed', {
 test(
   'Response adds charset to explicit plain-text content-type',
   normalizedTypeResponse.headers.get('content-type'),
-  'text/plain;charset=utf-8'
+  'text/plain;charset=UTF-8'
 );
 const customTextTypeResponse = new Response('typed', {
   headers: { 'content-type': 'text/custom' }

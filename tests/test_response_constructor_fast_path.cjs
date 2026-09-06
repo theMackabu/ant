@@ -11,7 +11,7 @@ assert(empty.body === null, "empty response body");
 
 const text = new Response("hello");
 assert(
-  text.headers.get("content-type") === "text/plain;charset=utf-8",
+  text.headers.get("content-type") === "text/plain;charset=UTF-8",
   "string body default content type",
 );
 assert(await text.text() === "hello", "string body contents");
@@ -37,7 +37,7 @@ assert(copied.status === 201, "initialized response status");
 assert(copied.statusText === "Created", "initialized response status text");
 assert(copied.headers.get("x-source") === "yes", "Headers init is copied");
 assert(
-  copied.headers.get("content-type") === "text/plain;charset=utf-8",
+  copied.headers.get("content-type") === "text/plain;charset=UTF-8",
   "provided plain text content type gains the default charset",
 );
 
