@@ -21,41 +21,43 @@
       };
     };
   };
-  outputs = ({ self, nixpkgs, flake-utils, rust-overlay }: (let
-  __tsnix_0_self = self;
-  __tsnix_1_nixpkgs = nixpkgs;
-  __tsnix_2_flake-utils = flake-utils;
-  __tsnix_3_rust-overlay = rust-overlay;
-in (((__tsnix_2_flake-utils).lib.eachDefaultSystem) ((__tsnix_4_system: (let
-  __tsnix_5_pkgs = ((import) (__tsnix_1_nixpkgs) ({
-  system = __tsnix_4_system;
-  overlays = [ ((__tsnix_3_rust-overlay).overlays.default) ];
-}));
-in (let
-  __tsnix_6_toolchain = ((import) (./toolchain.nix) ({
-  pkgs = __tsnix_5_pkgs;
-}));
-  __tsnix_7_rustToolchain = (((__tsnix_5_pkgs).rust-bin.fromRustupToolchainFile) (../../../src/temporal/rust-toolchain.toml));
-  __tsnix_8_rustPlatform = (((__tsnix_5_pkgs).makeRustPlatform) ({
-  cargo = __tsnix_7_rustToolchain;
-  rustc = __tsnix_7_rustToolchain;
-}));
-  __tsnix_9_ant = (((__tsnix_5_pkgs).callPackage) (./package.nix) ({
-  gitRev = ((__tsnix_0_self).shortRev or (((__tsnix_0_self).dirtyShortRev or ("unknown"))));
-  stdenv = (__tsnix_6_toolchain).stdenv;
-  rustPlatform = __tsnix_8_rustPlatform;
-  rustToolchain = __tsnix_7_rustToolchain;
-}));
-in {
-  packages = {
-    ant = __tsnix_9_ant;
-    default = __tsnix_9_ant;
-  };
-  devShells = {
-    default = ((import) (./shell.nix) ({
-  pkgs = __tsnix_5_pkgs;
-  toolchain = __tsnix_6_toolchain;
-}));
-  };
-})))))));
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  flake-utils.lib.eachDefaultSystem (system:
+  let
+    pkgs = import nixpkgs {
+      system = system;
+      overlays = [ rust-overlay.overlays.default ];
+    };
+in
+  let
+    toolchain = import ./toolchain.nix {
+      pkgs = pkgs;
+    };
+
+    rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ../../../src/temporal/rust-toolchain.toml;
+
+    rustPlatform = pkgs.makeRustPlatform {
+      cargo = rustToolchain;
+      rustc = rustToolchain;
+    };
+
+    ant = pkgs.callPackage ./package.nix {
+      gitRev = self.shortRev or (self.dirtyShortRev or "unknown");
+      stdenv = toolchain.stdenv;
+      rustPlatform = rustPlatform;
+      rustToolchain = rustToolchain;
+    };
+in
+  {
+    packages = {
+      ant = ant;
+      default = ant;
+    };
+    devShells = {
+      default = import ./shell.nix {
+        pkgs = pkgs;
+        toolchain = toolchain;
+      };
+    };
+  });
 }

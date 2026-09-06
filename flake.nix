@@ -21,15 +21,11 @@
       };
     };
   };
-  outputs = ({ self, nixpkgs, flake-utils, rust-overlay }: (let
-  __tsnix_0_self = self;
-  __tsnix_1_nixpkgs = nixpkgs;
-  __tsnix_2_flake-utils = flake-utils;
-  __tsnix_3_rust-overlay = rust-overlay;
-in (((((import) (./packages/nix/generated/flake.nix))).outputs) ({
-  self = __tsnix_0_self;
-  nixpkgs = __tsnix_1_nixpkgs;
-  flake-utils = __tsnix_2_flake-utils;
-  rust-overlay = __tsnix_3_rust-overlay;
-}))));
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  (import ./packages/nix/generated/flake.nix).outputs {
+    self = self;
+    nixpkgs = nixpkgs;
+    flake-utils = flake-utils;
+    rust-overlay = rust-overlay;
+  };
 }
