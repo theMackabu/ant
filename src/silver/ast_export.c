@@ -577,7 +577,7 @@ static syntax_exported_t syntax_export_node(
     return syntax_export_function(ctx, node, role, out);
   case N_YIELD:
     syntax_set_child(ctx, &out, "argument", node->right, SYNTAX_ROLE_EXPRESSION);
-    syntax_set_bool(ctx, out.value, "delegate", node->flags != 0);
+    syntax_set_bool(ctx, out.value, "delegate", (node->flags & FN_YIELD_STAR) != 0);
     syntax_add_common(ctx, &out, "YieldExpression");
     return out;
   case N_AWAIT:

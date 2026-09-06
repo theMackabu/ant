@@ -70,6 +70,43 @@ test('two way first', tw.next().value, 1);
 test('two way second', tw.next(10).value, 11);
 test('two way third', tw.next(20).value, 21);
 
+let shortCircuitResumed = false;
+function* shortCircuitYield(value) {
+  let t = value;
+  t === 'flex' && (yield { root: t });
+  shortCircuitResumed = true;
+}
+
+testDeep('short-circuit parenthesized yield', Array.from(shortCircuitYield('flex')), [{ root: 'flex' }]);
+test('short-circuit yield resumes', shortCircuitResumed, true);
+testDeep('short-circuit yield skipped', Array.from(shortCircuitYield('block')), []);
+
+function* ternaryYield(condition) {
+  let x = condition ? (yield 1) : 2;
+  return x;
+}
+
+const ternary = ternaryYield(true);
+testDeep('ternary parenthesized yield', ternary.next(), { value: 1, done: false });
+testDeep('ternary yield receives resume value', ternary.next(42), { value: 42, done: true });
+testDeep('ternary yield skipped', ternaryYield(false).next(), { value: 2, done: true });
+
+function* parenthesizedArrayYield() {
+  (yield [1, 2]);
+}
+
+testDeep('parenthesized yield preserves array', Array.from(parenthesizedArrayYield()), [[1, 2]]);
+
+function* parenthesizedYieldStar() {
+  return (yield* (function* () {
+    return yield 1;
+  })());
+}
+
+const parenthesizedDelegate = parenthesizedYieldStar();
+testDeep('parenthesized yield* delegates', parenthesizedDelegate.next(), { value: 1, done: false });
+testDeep('parenthesized yield* receives resume value', parenthesizedDelegate.next(42), { value: 42, done: true });
+
 function runDynamicBool(source) {
   try {
     return Function(source)();

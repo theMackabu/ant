@@ -124,6 +124,14 @@ const serialized = JSON.stringify(tree);
 assert(serialized.length > 0, 'syntax tree is JSON serializable');
 assert(JSON.parse(serialized).schema === 'ant.syntax@1', 'syntax tree JSON round trips');
 
+const yieldTree = parseJavaScript('function* g() { yield 1; (yield 1); yield* [1]; (yield* [1]); }');
+const yieldStatements = yieldTree.body[0].body.body;
+for (let i = 0; i < yieldStatements.length; i++) {
+  const expression = yieldStatements[i].expression;
+  assert(expression.type === 'YieldExpression', 'yield exports as YieldExpression');
+  assert(expression.delegate === (i >= 2), 'yield delegation ignores parentheses');
+}
+
 const literalTree = parseJavaScript('const values = [123n, /a+/gi];');
 const literals = [];
 (function visit(node) {

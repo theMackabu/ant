@@ -2520,7 +2520,7 @@ void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_YIELD:
-      if (node->flags) compile_yield_star_expr(c, node);
+      if (node->flags & FN_YIELD_STAR) compile_yield_star_expr(c, node);
       else {
         if (node->right) compile_expr(c, node->right);
         else emit_op(c, OP_UNDEF);

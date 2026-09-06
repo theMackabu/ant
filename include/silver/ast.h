@@ -109,6 +109,7 @@ enum {
   FN_DERIVED_CTOR     = 1 << 17,
   FN_CLASS_DECL       = 1 << 18,
   FN_CLASS_CTOR       = 1 << 19,
+  FN_YIELD_STAR       = 1 << 20,
 };
 
 enum {

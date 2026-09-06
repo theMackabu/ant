@@ -811,7 +811,7 @@ static sv_ast_t *parse_primary(P) {
     sv_ast_t *n = mk(N_YIELD);
     if (NEXT() == TOK_MUL) {
       CONSUME();
-      n->flags = 1;
+      n->flags |= FN_YIELD_STAR;
     }
     if (TOK != TOK_SEMICOLON && TOK != TOK_RBRACE &&
         TOK != TOK_RPAREN && TOK != TOK_RBRACKET &&
