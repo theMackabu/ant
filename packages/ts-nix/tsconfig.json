@@ -6,5 +6,10 @@
     "module": "NodeNext",
     "allowImportingTsExtensions": true
   },
-  "include": ["*.ts", "examples/*.ts", "../../tests/fixtures/ts-nix/types.ts"]
+  "include": [
+    "*.ts",
+    "examples/*.ts",
+    "../../tests/fixtures/ts-nix/types.ts",
+    "../nix/src/*.ts"
+  ]
 }

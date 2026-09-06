@@ -18,11 +18,12 @@ type Handles<Names extends string> = { readonly [Name in Names]: Expr };
 export function fn<const Names extends string | readonly string[]>(
   names: Names,
   body: (args: Names extends string ? Expr : Handles<Names[number]>) => Value,
+  defaults: Partial<Record<Names[number], Value>> = {},
 ): Expr {
   return building(() => {
     if (typeof names === 'string') {
       const name = fresh(names);
-      return lambda(name, (body as (arg: Expr) => Value)(ref(name)));
+      return lambda(name, (body as (arg: Expr) => Value)(ref(name)), defaults as Attrs);
     }
     if (new Set(names).size !== names.length) throw new TypeError('Duplicate function argument');
     const aliases: Record<string, Value> = {};
@@ -31,7 +32,7 @@ export function fn<const Names extends string | readonly string[]>(
       aliases[alias] = ref(name);
       return [name, ref(alias)];
     }));
-    return lambda(names, letIn(aliases, (body as (args: Handles<string>) => Value)(handles)));
+    return lambda(names, letIn(aliases, (body as (args: Handles<string>) => Value)(handles)), defaults as Attrs);
   });
 }
 
@@ -64,14 +65,19 @@ export class AttrSet extends Expr {
     super(render(attrs).trimEnd());
     this.attrs = { ...attrs };
   }
-  set(name: string, value: Value): AttrSet {
+  set(name: string | Expr, value: Value): Expr {
+    if (name instanceof Expr) return super.set(name, value);
     return new AttrSet({ ...this.attrs, [name]: value });
   }
 }
 
 export class NixFunction<const Names extends string | readonly string[]> extends Expr {
-  constructor(names: Names, body: (args: Names extends string ? Expr : Handles<Names[number]>) => Value) {
-    super(fn(names, body).source);
+  constructor(
+    names: Names,
+    body: (args: Names extends string ? Expr : Handles<Names[number]>) => Value,
+    defaults: Partial<Record<Names[number], Value>> = {},
+  ) {
+    super(fn(names, body, defaults).source);
   }
 }
 
@@ -215,8 +221,14 @@ export class Flake<Names extends string = never> {
     return new Flake(this.description, this.definitions, [...this.caches, ...caches]);
   }
   outputs(build: (inputs: Handles<Names | 'self'>) => Value): Expr {
+    const names = this.definitions.map(input => input.name);
+    return this.definition(fn(['self', ...names], build as (inputs: Handles<string>) => Value));
+  }
+  outputsFrom(file: string | Expr): Expr {
+    return this.outputs(inputs => new Import(file).get('outputs').call(inputs));
+  }
+  private definition(outputs: Expr): Expr {
     const inputs = Object.fromEntries(this.definitions.map(input => [input.name, input.toAttrs()]));
-    const outputs = fn(['self', ...Object.keys(inputs)], build as (inputs: Handles<string>) => Value);
     return new Expr(render({
       description: this.description,
       ...(this.caches.length ? { nixConfig: {

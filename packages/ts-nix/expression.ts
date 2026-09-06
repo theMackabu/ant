@@ -6,6 +6,10 @@ export class Expr {
   getOr(fallback: Value, ...names: string[]): Expr {
     return new Expr('(' + source(select(this, ...names)) + ' or (' + source(fallback) + '))');
   }
+  set(name: string | Expr, value: Value): Expr {
+    const attr = typeof name === 'string' ? key(name) : '${' + source(name) + '}';
+    return this.merge(new Expr('{ ' + attr + ' = ' + source(value) + '; }'));
+  }
   call(...args: Value[]): Expr { return call(this, ...args); }
   merge(value: Value): Expr { return new Expr('((' + this.source + ') // (' + source(value) + '))'); }
   concat(value: Value): Expr { return new Expr('((' + this.source + ') ++ (' + source(value) + '))'); }
@@ -82,9 +86,14 @@ export function call(fn: Value, ...args: Value[]): Expr {
   if (!args.length) throw new TypeError('call requires an argument');
   return new Expr('(' + [fn, ...args].map(value => '(' + source(value) + ')').join(' ') + ')');
 }
-export function lambda(args: string | readonly string[], body: Value): Expr {
+export function lambda(args: string | readonly string[], body: Value, defaults: Attrs = {}): Expr {
   if (Array.isArray(args) && new Set(args).size !== args.length) throw new TypeError('Duplicate function argument');
-  const pattern = typeof args === 'string' ? binding(args) : '{ ' + args.map(binding).join(', ') + ' }';
+  for (const name of Object.keys(defaults)) {
+    if (typeof args === 'string' || !args.includes(name)) throw new TypeError(`Unknown default argument: ${name}`);
+  }
+  const pattern = typeof args === 'string' ? binding(args) : '{ ' + args.map(name =>
+    binding(name) + (Object.hasOwn(defaults, name) ? ' ? (' + source(defaults[name]) + ')' : '')
+  ).join(', ') + ' }';
   return new Expr('(' + pattern + ': ' + source(body) + ')');
 }
 export function letIn(bindings: Attrs, body: Value): Expr {
@@ -93,4 +102,12 @@ export function letIn(bindings: Attrs, body: Value): Expr {
 }
 export function ifElse(condition: Value, yes: Value, no: Value): Expr {
   return new Expr(`(if (${source(condition)}) then (${source(yes)}) else (${source(no)}))`);
+}
+
+/** A Nix string template: literal text is escaped, expression holes interpolate in Nix. */
+export function str(parts: TemplateStringsArray, ...values: (string | Expr)[]): Expr {
+  const content = parts.map((part, i) =>
+    (i ? '${' + source(values[i - 1]) + '}' : '') + quote(part).slice(1, -1)
+  ).join('');
+  return new Expr('"' + content + '"');
 }
