@@ -68,6 +68,7 @@ export function targets() {
     'test_headers_bytestring_wire.cjs',
     'test_response_constructor_fast_path.cjs',
     'test_arraybuffer_length.cjs',
+    'test_iterator_result_template.cjs',
     'test_utf16_random_access.cjs',
     'test_bigint.js',
     'test_temporal.js',

@@ -20,6 +20,32 @@ WELLKNOWN_SYMBOLS(DECL_SYM)
 WELLKNOWN_SYMBOLS(DEF_GET_SYM)
 #undef DEF_GET_SYM
 
+ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value) {
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, value);
+  
+  ant_value_t seed = js->mutable_roots.iterator_result_template;
+  if (vtype(seed) != kTypeObject) {
+    seed = js_mkobj(js);
+    if (is_err(seed)) { GC_ROOT_RESTORE(js, mark); return seed; }
+    GC_ROOT_PIN(js, seed);
+    js_mkprop_fast(js, seed, "done", 4, js_false);
+    js_mkprop_fast(js, seed, "value", 5, js_mkundef());
+    if (js->thrown_exists) { GC_ROOT_RESTORE(js, mark); return mkval(kTypeError, 0); }
+    js->mutable_roots.iterator_result_template = seed;
+  }
+  
+  ant_value_t result = js_mkobj_from_template(js, seed);
+  if (!is_err(result)) {
+    ant_object_t *obj = js_obj_ptr(result);
+    ant_object_prop_set_unchecked(obj, 0, js_bool(!has_value));
+    ant_object_prop_set_unchecked(obj, 1, has_value ? value : js_mkundef());
+    gc_write_barrier(js, obj, has_value ? value : js_mkundef());
+  } GC_ROOT_RESTORE(js, mark);
+  
+  return result;
+}
+
 static ant_value_t builtin_Symbol(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol is not a constructor");
@@ -173,6 +199,13 @@ static bool advance_string(ant_t *js, js_iter_t *it, ant_value_t *out) {
 
 static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
   return js_iter_next_result(js, advance_array);
+}
+
+bool js_iter_is_array_values(ant_value_t iterator, ant_value_t next, ant_value_t source) {
+  return vtype(source) == kTypeArray && vtype(iterator) == kTypeObject &&
+    vtype(next) == kTypeBuiltin && js_as_cfunc(next) == arr_iter_next &&
+    js_get_slot(iterator, SLOT_DATA) == source &&
+    js_get_slot(iterator, SLOT_ITER_STATE) == js_mknum(ITER_STATE_PACK(ARR_ITER_VALUES, 0));
 }
 
 static ant_value_t get_array_iterator_prototype(ant_t *js) {

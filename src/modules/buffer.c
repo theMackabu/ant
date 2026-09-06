@@ -980,6 +980,16 @@ static ant_value_t create_typed_array_for_length(
   return create_typed_array(js, type, buffer, 0, length, type_name);
 }
 
+static bool typedarray_dense_number_source(ant_value_t source) {
+  if (vtype(source) != kTypeArray) return false;
+  ant_object_t *obj = js_obj_ptr(js_as_obj(source));
+  if (!obj->flags.fast_array || obj->flags.is_exotic ||
+      obj->u.array.len > obj->u.array.cap || obj->u.array.len >= 0x10000000) return false;
+  for (uint32_t i = 0; i < obj->u.array.len; i++)
+    if (vtype(obj->u.array.data[i]) != kTypeNumber) return false;
+  return true;
+}
+
 static ant_value_t create_typed_array_from_iterable(
   ant_t *js, TypedArrayType type, ant_value_t source,
   ant_value_t iter_fn, const char *type_name
@@ -1000,6 +1010,23 @@ static ant_value_t create_typed_array_from_iterable(
   
   ant_value_t next = js_getprop_fallback(js, iterator, "next");
   if (is_err(next)) { result = next; goto done; }
+
+  if (js_iter_is_array_values(iterator, next, source) && typedarray_dense_number_source(source)) {
+    ant_object_t *array = js_obj_ptr(js_as_obj(source));
+    size_t length = array->u.array.len;
+
+    js_set_slot(iterator, SLOT_ITER_STATE, js_mknum(ITER_STATE_PACK(ARR_ITER_VALUES, length)));
+    result = create_typed_array_for_length(js, type, length, type_name);
+    if (is_err(result)) goto done;
+    
+    TypedArrayData *target = buffer_get_typedarray_data(result);
+    for (size_t i = 0; i < length; i++) {
+      ant_value_t written = typedarray_write_value(js, target, i, array->u.array.data[i]);
+      if (is_err(written)) { result = written; goto done; }
+    }
+    
+    goto done;
+  }
   
   if (!gc_temp_root_handle_valid(gc_temp_root_add(&roots, next))) goto oom;
   size_t values_start = roots.len;

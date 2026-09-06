@@ -211,3 +211,64 @@ assert.deepStrictEqual([...new Uint8Array(objectValues)], Array.from({ length: 4
 assertThrowsName(() => new Uint8Array({ [Symbol.iterator]() { return { next: 1 }; } }), 'TypeError');
 
 console.log('buffer:coercion-reentrancy-and-iteration:ok');
+
+// The dense fast path must preserve iterator and conversion side effects.
+const numericArray = Array.from({ length: 4096 }, (_, i) => i & 255);
+assert.deepStrictEqual([...new Uint8Array(numericArray)], numericArray);
+const customArray = [1, 2];
+customArray[Symbol.iterator] = function* () { yield 9; };
+assert.deepStrictEqual([...new Uint8Array(customArray)], [9]);
+
+const objectArray = [{ valueOf() { objectArray[1] = 99; return 1; } }, 2];
+assert.deepStrictEqual([...new Uint8Array(objectArray)], [1, 2]);
+let indexGets = 0;
+const getterArray = [1, 2];
+Object.defineProperty(getterArray, '0', { get() { indexGets++; getterArray[1] = 8; return 7; } });
+assert.deepStrictEqual([...new Uint8Array(getterArray)], [7, 8]);
+assert.strictEqual(indexGets, 1);
+const holeArray = [1, , 3];
+const holeProto = Object.create(Array.prototype);
+holeProto[1] = 8;
+Object.setPrototypeOf(holeArray, holeProto);
+assert.deepStrictEqual([...new Uint8Array(holeArray)], [1, 8, 3]);
+
+const iteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
+const originalNext = Object.getOwnPropertyDescriptor(iteratorProto, 'next');
+let nextCalls = 0;
+let customNextCopy;
+try {
+  Object.defineProperty(iteratorProto, 'next', {
+    configurable: true, writable: true,
+    value() {
+      nextCalls++;
+      const step = originalNext.value.call(this);
+      if (!step.done) step.value += 10;
+      return step;
+    }
+  });
+  customNextCopy = new Uint8Array([1, 2]);
+} finally {
+  Object.defineProperty(iteratorProto, 'next', originalNext);
+}
+assert.strictEqual(nextCalls, 3);
+assert.deepStrictEqual([...customNextCopy], [11, 12]);
+
+let capturedIterator;
+const capturedArray = [3, 4];
+capturedArray[Symbol.iterator] = function () {
+  capturedIterator = Array.prototype.values.call(this);
+  return capturedIterator;
+};
+assert.deepStrictEqual([...new Uint8Array(capturedArray)], [3, 4]);
+assert.strictEqual(capturedIterator.next().done, true);
+const partiallyConsumed = [3, 4];
+partiallyConsumed[Symbol.iterator] = function () {
+  const iterator = Array.prototype.values.call(this);
+  iterator.next();
+  return iterator;
+};
+assert.deepStrictEqual([...new Uint8Array(partiallyConsumed)], [4]);
+const otherArray = [1, 2];
+otherArray[Symbol.iterator] = () => [8, 9][Symbol.iterator]();
+assert.deepStrictEqual([...new Uint8Array(otherArray)], [8, 9]);
+console.log('buffer:dense-array-fast-path:ok');

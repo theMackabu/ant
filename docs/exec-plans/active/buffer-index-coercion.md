@@ -56,3 +56,39 @@ ASan build or allocation-failure injection was run.
 The normal shell initially failed to locate libm and then llvm-nm. Building with
 `nix develop` and the SDKROOT from packages/nix/shell.nix restores the configured
 toolchain without changing repository build configuration.
+
+
+## Follow-up: dense arrays and iterator result templates
+
+The constructor now recognizes a native array-values iterator after calling the
+captured iterator method and retrieving next. It checks matching source, initial
+iterator state, native next identity, dense storage, and exclusively numeric
+elements. It updates the iterator state and copies directly without temporary
+iterator results or a collected-value list. Holes, indexed accessors, objects,
+custom next methods, and partially consumed iterators retain the general path.
+
+Native js_iter_result uses a lazy per-isolate rooted template, following the
+CryptoKey record pattern. Each call clones a fresh object and sets its done and
+value slots with a GC write barrier. It preserves existing descriptors, property
+order, and the existing native result prototype (null in Ant). Tests cover
+result mutation isolation and retained object-valued results across allocation
+pressure. An initial test incorrectly expected Object.prototype; both the old
+and new binaries returned null, so the test now checks prototype preservation.
+
+Validation: both focused tests pass; all 4,136 spec tests pass; preflight and
+diff whitespace checks pass. Seven interleaved fresh-process benchmark samples
+per case, using median times and matching checksums, measured:
+
+- Array to Uint8Array (4,096 elements): master 156 us, prior diff 333 us,
+  optimized 14.4 us per construction (10.9x faster than master).
+- Array to Uint8Array (65,536 elements): master 2,512 us, prior diff 5,395 us,
+  optimized 164 us (15.3x faster than master).
+- Native iterator next loops: 2.2–2.5x faster than the prior diff across arrays,
+  TypedArrays, and strings; this isolates result templates from constructor
+  fast paths.
+- Same-type TypedArray copies and custom JavaScript iterables are unchanged
+  relative to the prior diff.
+
+Benchmark scripts and samples are in /tmp/ant-buffer-optimized-bench.py,
+/tmp/ant-iterator-bench.cjs, and /tmp/ant-buffer-optimized-results.json. No ASan
+or forced allocator-failure testing was performed for this follow-up.
