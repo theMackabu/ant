@@ -22,3 +22,7 @@ new Shell(ref('pkgs')).env({ PORT: 123 });
 
 new Flake('constructor inputs', [new Input('utils', 'github:numtide/flake-utils')])
   .outputs(inputs => inputs.utils.get('lib'));
+
+new NixFunction(['value'], ({ value }) => value, { value: 'default' });
+// @ts-expect-error Defaults must name a declared function argument.
+new NixFunction(['value'], ({ value }) => value, { missing: 'default' });

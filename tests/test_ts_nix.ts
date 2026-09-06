@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { AttrSet, BinaryCache, DevShell, EachSystem, Flake, Input, Let, NixFunction, Outputs, Package, Shell, call, ifElse, lambda, letIn, nix, path, ref, render, select } from '../packages/ts-nix/index.ts';
+import { AttrSet, BinaryCache, DevShell, EachSystem, Flake, Input, Let, NixFunction, Outputs, Package, Shell, call, ifElse, lambda, letIn, nix, path, ref, render, select, str } from '../packages/ts-nix/index.ts';
 
 const literal = { 'a.b': '${notCode}', quote: '"\\\n\r\t', unicode: '🐜', values: [null, true, false, -42, 1.25, 1e-7] };
 assert.match(render(literal), /\\\$\{notCode\}/);
@@ -38,6 +38,9 @@ assert.throws(() => new Outputs(new DevShell('dev', 1), new DevShell('dev', 2)),
 let closedScope: any;
 new Let(scope => { closedScope = scope; return scope.bind('value', 1); });
 assert.throws(() => closedScope.bind('late', 2), /closed/);
+
+assert.throws(() => new NixFunction(['x'], ({ x }) => x, { missing: 1 } as any), /Unknown default/);
+assert.throws(() => str`bad\0${'value'}`, /NUL/);
 
 // Nix evaluates the result, catching precedence and escaping errors beyond snapshots.
 if (process.argv.includes('--nix')) {
@@ -92,6 +95,13 @@ second"` } }), { nested: { text: 'first\nsecond' } });
     self: {}, nixpkgs: { shell: 'dev' }, overlay: {},
     utils: { lib: { eachDefaultSystem: new NixFunction('build', build => build.call('test-system')) } },
   })), { packages: { ant: 'test-system', default: 'test-system' }, devShells: { default: 'dev' } });
+  const optional = new NixFunction(['value'], ({ value }) => value, { value: 'fallback' });
+  assert.strictEqual(evaluate(optional.call({})), 'fallback');
+  assert.strictEqual(evaluate(optional.call({ value: null })), null);
+  assert.strictEqual(evaluate(str`prefix ${new AttrSet({ value: 'middle' }).get('value')} suffix`), 'prefix middle suffix');
+  assert.strictEqual(evaluate(str`literal \${shell} ${'"\\\n'}`), 'literal ${shell} "\\\n');
+  assert.deepStrictEqual(evaluate(new AttrSet().set(str`CARGO_${'TARGET'}_LINKER`, 'clang')), { CARGO_TARGET_LINKER: 'clang' });
+  assert.deepStrictEqual(evaluate(new AttrSet({ value: 1 }).set(str`${'value'}`, 2)), { value: 2 });
   const empty = Object.create(null); empty.value = 'ok';
   assert.deepStrictEqual(evaluate(empty), { value: 'ok' });
 }
