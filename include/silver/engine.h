@@ -987,10 +987,29 @@ static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val
 static inline ant_value_t sv_construct_prototype_from(
   ant_t *js, ant_value_t proto_source
 ) {
-  ant_value_t proto = js_getprop_fallback(js, proto_source, "prototype");
+  ant_value_t proto = js_mkundef();
+  ant_value_t source_obj = js_mkundef();
+  uint8_t source_type = vtype(proto_source);
+
+  if (source_type == kTypeFunction) source_obj = js_func_obj(proto_source);
+  else if (source_type == kTypeObject) source_obj = proto_source;
+
+  ant_object_t *ptr = is_object_type(source_obj)
+    ? js_obj_ptr(source_obj) : NULL;
+
+  int32_t slot = ptr && !ptr->flags.is_exotic && ptr->shape
+    ? ant_shape_lookup_interned(ptr->shape, js->intern.prototype) : -1;
+
+  const ant_shape_prop_t *prop = slot >= 0
+    ? ant_shape_prop_at(ptr->shape, (uint32_t)slot) : NULL;
+
+  if (prop && !prop->has_getter && !prop->has_setter)
+    proto = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
+  else
+    proto = js_getprop_fallback(js, proto_source, "prototype");
+
   return (is_err(proto) || is_object_type(proto))
-    ? proto
-    : js->sym.object_proto;
+    ? proto : js->sym.object_proto;
 }
 
 static inline ant_value_t sv_prepare_construct_meta(

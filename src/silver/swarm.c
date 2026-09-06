@@ -54,6 +54,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_call_array_includes);
   LOAD_EXT(jit_helper_call_char_code_at);
+  LOAD_EXT(jit_helper_call_string_intrinsic);
   LOAD_EXT(jit_helper_call_map_template);
   LOAD_EXT(jit_helper_map_template_fast);
   LOAD_EXT(jit_helper_map_numeric_pair_fast);
@@ -5539,6 +5540,18 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
 
+  MIR_item_t call_string_intrinsic_proto = MIR_new_proto(
+    ctx, "call_string_intrinsic_proto",
+    1, &call_ret,
+    7,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js_p",
+    MIR_T_I32, "kind",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_T_P,   "args",
+    MIR_T_I32, "argc");
+
   MIR_item_t call_map_template_proto = MIR_new_proto(
     ctx, "call_map_template_proto",
     1, &call_ret,
@@ -6064,6 +6077,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
   MIR_item_t imp_call_array_includes = MIR_new_import(ctx, "jit_helper_call_array_includes");
   MIR_item_t imp_call_char_code_at = MIR_new_import(ctx, "jit_helper_call_char_code_at");
+  MIR_item_t imp_call_string_intrinsic =
+    MIR_new_import(ctx, "jit_helper_call_string_intrinsic");
   MIR_item_t imp_call_map_template =
     MIR_new_import(ctx, "jit_helper_call_map_template");
   MIR_item_t imp_map_template_fast =
@@ -12538,6 +12553,57 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
         JIT_EMIT_THROW_IF_ERROR(r_call_res);
         if (char_done) MIR_append_insn(ctx, jit_func, char_done);
+        break;
+      }
+
+      case OP_CALL_STRING_INTRINSIC: {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
+        ant_string_intrinsic_kind_t kind =
+          (ant_string_intrinsic_kind_t)ip[1];
+        uint16_t call_argc = sv_get_u16(ip + 2);
+        if (call_argc > SV_JIT_ARGS_BUF_CAP ||
+            vs.sp < (int)call_argc + 2) { ok = false; break; }
+
+        MIR_reg_t r_arg_arr = r_args_buf;
+        for (int i = (int)call_argc - 1; i >= 0; i--) {
+          MIR_reg_t areg = vstack_pop(&vs);
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_mem_op(ctx, MIR_JSVAL,
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                r_arg_arr, 0, 1),
+              MIR_new_reg_op(ctx, areg)));
+        }
+
+        MIR_reg_t r_call_func = vstack_pop(&vs);
+        MIR_reg_t r_call_this = vstack_pop(&vs);
+        MIR_reg_t r_call_res = vstack_push(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 10,
+            MIR_new_ref_op(ctx, call_string_intrinsic_proto),
+            MIR_new_ref_op(ctx, imp_call_string_intrinsic),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_int_op(ctx, (int64_t)kind),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_reg_op(ctx, r_arg_arr),
+            MIR_new_int_op(ctx, (int64_t)call_argc)));
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
+                    r_lbuf, 0, 1)));
+        }
+
+        JIT_EMIT_THROW_IF_ERROR(r_call_res);
         break;
       }
 

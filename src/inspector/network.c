@@ -51,6 +51,12 @@ static bool inspector_network_has_ready_client(void) {
   return false;
 }
 
+bool ant_inspector_network_active(void) {
+  return g_inspector.started &&
+    g_inspector.attached &&
+    inspector_network_has_ready_client();
+}
+
 static inspector_network_entry_t *inspector_network_entry_for_id(uint64_t id, bool create) {
   if (id == 0) return NULL;
   for (inspector_network_entry_t *entry = g_inspector.network_entries; entry; entry = entry->next) {
@@ -245,7 +251,7 @@ uint64_t ant_inspector_network_request(
   bool has_post_data,
   const ant_http_header_t *headers
 ) {
-  if (!g_inspector.started || !g_inspector.attached || !inspector_network_has_ready_client()) return 0;
+  if (!ant_inspector_network_active()) return 0;
   uint64_t request_id = ++g_inspector.next_network_request_id;
   if (request_id == 0) request_id = ++g_inspector.next_network_request_id;
   inspector_network_entry_for_id(request_id, true);

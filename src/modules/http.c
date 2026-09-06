@@ -31,8 +31,10 @@ struct ant_http_request_s {
 void ant_http_headers_free(ant_http_header_t *headers) {
 while (headers) {
   ant_http_header_t *next = headers->next;
-  free(headers->name);
-  free(headers->value);
+  if (headers->name != headers->storage) {
+    free(headers->name);
+    free(headers->value);
+  }
   free(headers);
   headers = next;
 }}

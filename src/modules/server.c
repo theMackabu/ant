@@ -311,6 +311,8 @@ static char *server_request_url(server_request_t *req) {
 }
 
 static void server_network_start(server_request_t *req) {
+  if (!ant_inspector_network_active()) return;
+
   request_data_t *data = req && is_object_type(req->request_obj) ? request_get_data(req->request_obj) : NULL;
   char *url = server_request_url(req);
   
@@ -343,6 +345,8 @@ static void server_network_response(
   const char *mime_type,
   const ant_http_header_t *headers
 ) {
+  if (!req || req->network_request_id == 0) return;
+
   char *url = server_request_url(req);
   if (!req || !url) {
     free(url);
@@ -431,16 +435,12 @@ static void server_signal_cb(uv_signal_t *handle, int signum) {
   server_begin_stop(server, false);
 }
 
-static ant_value_t server_headers_from_parsed(ant_t *js, const ant_http1_parsed_request_t *parsed) {
-  ant_value_t headers = headers_create_empty(js);
-  const ant_http_header_t *hdr = NULL;
-
-  if (is_err(headers)) return headers;
-  for (hdr = parsed->headers; hdr; hdr = hdr->next) {
-    ant_value_t step = headers_append_literal(js, headers, hdr->name, hdr->value);
-    if (is_err(step)) return step;
-  }
-  return headers;
+static ant_value_t server_headers_from_parsed(
+  ant_t *js, ant_http1_parsed_request_t *parsed
+) {
+  headers_data_t *data = headers_data_take_http_headers(&parsed->headers);
+  if (!data) return js_mkerr(js, "out of memory");
+  return headers_create_from_data(js, data);
 }
 
 static ant_http_header_t *server_copy_raw_headers(const ant_http_header_t *headers) {
@@ -501,15 +501,16 @@ static void server_capture_header(const char *name, const char *value, void *ctx
   capture->tail = &header->next;
 }
 
-static ant_http_header_t *server_capture_response_headers(
-  ant_value_t headers, bool body_is_stream, 
-  size_t body_size, bool keep_alive
+static bool server_capture_response_headers(
+  const headers_data_t *headers, bool body_is_stream,
+  size_t body_size, bool keep_alive, ant_http_header_t **out
 ) {
   server_header_capture_t capture = {0};
   char content_length[64];
 
+  *out = NULL;
   capture.tail = &capture.head;
-  headers_for_each(headers, server_capture_header, &capture);
+  headers_data_for_each(headers, server_capture_header, &capture);
   
   if (!capture.failed) {
   if (body_is_stream) server_capture_header("transfer-encoding", "chunked", &capture);
@@ -523,10 +524,11 @@ static ant_http_header_t *server_capture_response_headers(
 
   if (capture.failed) {
     ant_http_headers_free(capture.head);
-    return NULL;
+    return false;
   }
-  
-  return capture.head;
+
+  *out = capture.head;
+  return true;
 }
 
 static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t request_obj) {
@@ -700,6 +702,7 @@ static ant_value_t server_upgrade_websocket(ant_t *js, ant_value_t *args, int na
   server_request_t *req = NULL;
   
   ant_value_t request_obj = nargs > 0 ? args[0] : js_mkundef();
+  const ant_http_header_t *request_headers = NULL;
   const char *key = NULL;
   const char *extensions = NULL;
   char *accept = NULL;
@@ -714,14 +717,16 @@ static ant_value_t server_upgrade_websocket(ant_t *js, ant_value_t *args, int na
   if (!server || !is_object_type(request_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "upgradeWebSocket requires a Request");
   req = server_find_request(server, request_obj);
   if (!req || !req->conn) return js_mkerr_typed(js, JS_ERR_TYPE, "Request is no longer upgradeable");
+  request_headers = headers_data_http_view(
+    headers_get_data(request_get_headers(request_obj)));
 
-  if (!ant_ws_validate_client_handshake(req->raw_headers, &key)) {
+  if (!ant_ws_validate_client_handshake(request_headers, &key)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket upgrade request");
   }
 
   accept = ant_ws_accept_key(key);
   if (!accept) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket key");
-  extensions = ant_ws_find_header(req->raw_headers, "sec-websocket-extensions");
+  extensions = ant_ws_find_header(request_headers, "sec-websocket-extensions");
   per_message_deflate = server->websocket_per_message_deflate &&
     ant_ws_header_contains_extension(extensions, "permessage-deflate");
   ws_options.max_payload_len = server->websocket_max_payload_len;
@@ -944,7 +949,7 @@ static void server_append_upgrade_header(const char *name, const char *value, vo
 
 static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t response_obj, ant_value_t websocket_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  const headers_data_t *headers = response_get_header_data(response_obj);
   
   ant_http1_buffer_t buf;
   server_upgrade_header_ctx_t ctx;
@@ -963,7 +968,7 @@ static bool server_finish_websocket_upgrade(server_request_t *req, ant_value_t r
   ant_http1_buffer_appendf(&buf, "HTTP/1.1 %d %s\r\n", resp->status, status_text);
   ctx.buf = &buf;
   
-  headers_for_each(headers, server_append_upgrade_header, &ctx);
+  headers_data_for_each(headers, server_append_upgrade_header, &ctx);
   ant_http1_buffer_append_cstr(&buf, "\r\n");
   if (buf.failed) {
     ant_http1_buffer_free(&buf);
@@ -1050,7 +1055,7 @@ static void server_send_request_internal_error(server_request_t *req, const char
 
 static void server_finish_with_response(server_request_t *req, ant_value_t response_obj) {
   response_data_t *resp = response_get_data(response_obj);
-  ant_value_t headers = response_get_headers(response_obj);
+  const headers_data_t *headers = response_get_header_data(response_obj);
   ant_value_t websocket_obj = response_get_websocket(response_obj);
   
   ant_value_t stream = js_get_slot(response_obj, SLOT_RESPONSE_BODY_STREAM);
@@ -1082,11 +1087,22 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   head_only = strcasecmp(request_get_data(req->request_obj)->method, "HEAD") == 0;
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : ant_http1_default_status_text(resp->status);
   
-  network_headers = server_capture_response_headers(headers, body_is_stream && !head_only, resp->body_size, req->keep_alive);
-  server_network_response(req, resp->status, status_text, resp->body_type, network_headers);
-  ant_http_headers_free(network_headers);
+  if (req->network_request_id != 0) {
+    if (!server_capture_response_headers(
+          headers, body_is_stream && !head_only,
+          resp->body_size, req->keep_alive, &network_headers)) {
+      server_network_fail(req, "out of memory while serializing response headers");
+      ant_conn_close(req->conn);
+      return;
+    }
+    server_network_response(
+      req, resp->status, status_text, resp->body_type, network_headers);
+    ant_http_headers_free(network_headers);
+  }
   
-  if (!body_is_stream && !head_only && resp->body_data && resp->body_size > 0)
+  if (req->network_request_id != 0 &&
+      !body_is_stream && !head_only &&
+      resp->body_data && resp->body_size > 0)
     ant_inspector_network_append_response_body(req->network_request_id, resp->body_data, resp->body_size);
 
   ant_http1_buffer_init(&buf);
@@ -1441,6 +1457,7 @@ static void server_process_client_request(
   ant_value_t result = 0;
   ant_http_header_t *raw_headers = NULL;
   bool keep_alive = false;
+  bool capture_network = false;
 
   if (!server || !cs) {
     ant_http1_free_parsed_request(parsed);
@@ -1451,8 +1468,11 @@ static void server_process_client_request(
   js = server->js;
   req = &cs->request;
   keep_alive = parsed->keep_alive;
-  raw_headers = server_copy_raw_headers(parsed->headers);
-  if (parsed->headers && !raw_headers) {
+  capture_network = ant_inspector_network_active();
+  raw_headers = capture_network
+    ? server_copy_raw_headers(parsed->headers)
+    : NULL;
+  if (capture_network && parsed->headers && !raw_headers) {
     ant_http1_free_parsed_request(parsed);
     server_send_internal_error(conn, NULL);
     return;
@@ -1473,6 +1493,7 @@ static void server_process_client_request(
     parsed->target,
     parsed->absolute_target,
     parsed->host,
+    parsed->canonical_host,
     server->hostname,
     server->port,
     headers,

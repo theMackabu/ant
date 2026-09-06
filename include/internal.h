@@ -28,6 +28,11 @@ static constexpr int MAX_PROTO_CHAIN_DEPTH = 256;
 static constexpr int MAX_MULTIREF_OBJS     = 128;
 static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 
+typedef enum {
+  ANT_STRING_INTRINSIC_INDEX_OF = 0,
+  ANT_STRING_INTRINSIC_SUBSTRING,
+} ant_string_intrinsic_kind_t;
+
 static inline bool ant_value_stack_push_with_spill(
   ant_value_t **stack, size_t *sp, size_t *cap,
   ant_value_t *local, ant_value_t value
@@ -171,6 +176,7 @@ struct ant_isolate_t {
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
+  ant_value_t ascii_chars[128];
 
   struct {
     ant_value_t hooks;
@@ -636,6 +642,7 @@ bool is_array_value(ant_value_t value);
 bool js_is_array_includes_builtin(ant_value_t func);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
+bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_kind_t kind);
 bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 bool js_is_prototype_of(ant_t *js, ant_value_t proto_obj, ant_value_t obj);
 
@@ -676,6 +683,11 @@ ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
+
+ant_value_t js_string_intrinsic_call(
+  ant_t *js, ant_string_intrinsic_kind_t kind,
+  ant_value_t this_val, ant_value_t *args, int nargs
+);
 
 bool js_try_get_own_data_prop(
   ant_t *js, ant_value_t obj, 

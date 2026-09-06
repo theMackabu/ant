@@ -11,6 +11,7 @@
 #include "internal.h"
 #include "common.h"
 #include "descriptors.h"
+#include "gc/roots.h"
 #include "utf8.h"
 
 #include "modules/assert.h"
@@ -27,27 +28,45 @@
 #include "streams/readable.h"
 
 enum { RESPONSE_NATIVE_TAG = 0x52455350u }; // RESP
-static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=UTF-8";
+static const char RESPONSE_TEXT_CONTENT_TYPE[] = "text/plain;charset=utf-8";
 
-static response_data_t *get_data(ant_value_t obj) {
+response_data_t *response_get_data(ant_value_t obj) {
   return (response_data_t *)js_get_native(obj, RESPONSE_NATIVE_TAG);
 }
 
-response_data_t *response_get_data(ant_value_t obj) {
-  return get_data(obj);
+ant_value_t response_materialize_headers(ant_t *js, ant_value_t obj) {
+  response_data_t *resp = response_get_data(obj);
+  if (!resp) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
+
+  ant_value_t headers = js_get_slot(obj, SLOT_RESPONSE_HEADERS);
+  if (headers_is_headers(headers)) return headers;
+
+  headers = resp->pending_headers
+    ? headers_create_from_data(js, resp->pending_headers)
+    : headers_create_empty(js);
+  if (is_err(headers)) return headers;
+
+  resp->pending_headers = NULL;
+  headers_set_immutable(headers, resp->headers_immutable);
+  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
+  return headers;
 }
 
-ant_value_t response_get_headers(ant_value_t obj) {
-  return js_get_slot(obj, SLOT_RESPONSE_HEADERS);
+const headers_data_t *response_get_header_data(ant_value_t obj) {
+  response_data_t *resp = response_get_data(obj);
+  if (!resp) return NULL;
+
+  ant_value_t headers = js_get_slot(obj, SLOT_RESPONSE_HEADERS);
+  return resp->pending_headers ? resp->pending_headers : headers_get_data(headers);
 }
 
 ant_value_t response_get_websocket(ant_value_t obj) {
-  response_data_t *data = get_data(obj);
+  response_data_t *data = response_get_data(obj);
   return data ? data->websocket : js_mkundef();
 }
 
 void response_set_websocket(ant_value_t obj, ant_value_t websocket) {
-  response_data_t *data = get_data(obj);
+  response_data_t *data = response_get_data(obj);
   if (data) data->websocket = websocket;
 }
 
@@ -60,12 +79,13 @@ static void data_free(response_data_t *d) {
     free(d->body_data);
     free(d->body_type);
   }
+  headers_data_destroy(d->pending_headers);
   free(d);
 }
 
 static void response_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t value = js_obj_from_ptr(obj);
-  response_data_t *data = get_data(value);
+  response_data_t *data = response_get_data(value);
   data_free(data);
   js_clear_native(value, RESPONSE_NATIVE_TAG);
 }
@@ -104,6 +124,12 @@ static response_data_t *data_dup(const response_data_t *src) {
     ? RESPONSE_BODY_STORAGE_OWNED
     : RESPONSE_BODY_STORAGE_NONE;
   d->websocket = js_mkundef();
+  d->headers_immutable = src->headers_immutable;
+  d->pending_headers = headers_data_copy(src->pending_headers);
+  if (src->pending_headers && !d->pending_headers) {
+    data_free(d);
+    return NULL;
+  }
 
   su = (url_state_t *)&src->url;
   du = &d->url;
@@ -272,7 +298,7 @@ static bool extract_string_body(
 
   s = js_getstr(js, body_val, &len);
   if (!copy_body_bytes(js, (const uint8_t *)s, len, out_data, out_size, err_out)) return false;
-  *out_type = strdup("text/plain;charset=UTF-8");
+  *out_type = strdup(RESPONSE_TEXT_CONTENT_TYPE);
   
   return true;
 }
@@ -298,60 +324,53 @@ static bool extract_body(
   return extract_string_body(js, body_val, out_data, out_size, out_type, err_out);
 }
 
-static bool response_content_type_has_charset(const char *value) {
-  const char *p = NULL;
-
-  if (!value) return false;
-  p = strchr(value, ';');
-  
-  while (p) {
-    p++;
-    while (*p == ' ' || *p == '\t') p++;
-    if (strncasecmp(p, "charset", 7) == 0) {
-      p += 7;
-      while (*p == ' ' || *p == '\t') p++;
-      if (*p == '=') return true;
-    }
-    p = strchr(p, ';');
-  }
-
-  return false;
-}
-
-static bool response_maybe_normalize_text_content_type(
-  ant_t *js, ant_value_t headers, const char *current, const char *body_type
+static bool response_plain_type_needs_charset(
+  const char *current, const char *body_type
 ) {
-  if (!body_type || !headers_is_headers(headers)) return true;
-  if (!current) return true;
-  if (strncasecmp(current, "text/", 5) != 0) return true;
-  if (response_content_type_has_charset(current)) return true;
-  if (!response_content_type_has_charset(body_type)) return true;
-
-  return headers_set_literal(js, headers, "content-type", body_type);
+  return current && body_type &&
+    strcasecmp(current, "text/plain") == 0 &&
+    strcasecmp(body_type, RESPONSE_TEXT_CONTENT_TYPE) == 0;
 }
 
 static bool response_apply_content_type(
-  ant_t *js, ant_value_t headers, const char *body_type
+  ant_value_t headers, const char *body_type
 ) {
-  ant_value_t combined = js_mknull();
   const char *current = NULL;
-  size_t count = 0;
 
   if (!body_type) return true;
-  count = headers_find_literal(headers, "content-type", &current);
-  if (count == 0) {
-    return headers_append_if_missing(headers, "content-type", body_type);
-  }
-  if (count == 1) {
-    return response_maybe_normalize_text_content_type(js, headers, current, body_type);
-  }
-
-  combined = headers_get_value(js, headers, "content-type");
-  if (is_err(combined)) return false;
-  if (vtype(combined) == kTypeString)
-    return response_maybe_normalize_text_content_type(
-      js, headers, js_getstr(js, combined, NULL), body_type);
+  headers_data_t *data = headers_get_data(headers);
+  size_t count = headers_data_find_literal(data, "content-type", &current);
+  if (count == 0)
+    return headers_data_append_if_missing(data, "content-type", body_type);
+  if (count == 1 && response_plain_type_needs_charset(current, body_type))
+    return headers_set_literal(headers, "content-type", body_type);
   return true;
+}
+
+static bool response_apply_content_type_data(
+  headers_data_t *headers, const char *body_type
+) {
+  const char *current = NULL;
+
+  if (!body_type) return true;
+  size_t count = headers_data_find_literal(
+    headers, "content-type", &current);
+  if (count == 0)
+    return headers_data_append_if_missing(headers, "content-type", body_type);
+  if (count == 1 && response_plain_type_needs_charset(current, body_type))
+    return headers_data_set_literal(headers, "content-type", body_type);
+  return true;
+}
+
+static bool response_apply_pending_content_type(
+  response_data_t *resp, const char *body_type
+) {
+  if (!body_type) return true;
+  if (!resp->pending_headers) {
+    resp->pending_headers = headers_data_create();
+    if (!resp->pending_headers) return false;
+  }
+  return response_apply_content_type_data(resp->pending_headers, body_type);
 }
 
 enum {
@@ -363,12 +382,16 @@ enum {
   BODY_FORMDATA
 };
 
-static const char *response_effective_body_type(ant_t *js, ant_value_t resp_obj, response_data_t *d) {
-  ant_value_t headers = js_get_slot(resp_obj, SLOT_RESPONSE_HEADERS);
-  if (!headers_is_headers(headers)) return d ? d->body_type : NULL;
+static ant_value_t response_effective_body_type(
+  ant_t *js, ant_value_t resp_obj, response_data_t *d
+) {
+  ant_value_t headers = response_materialize_headers(js, resp_obj);
+  if (is_err(headers)) return headers;
   ant_value_t ct = headers_get_value(js, headers, "content-type");
-  if (vtype(ct) == kTypeString) return js_getstr(js, ct, NULL);
-  return d ? d->body_type : NULL;
+  if (is_err(ct) || vtype(ct) == kTypeString) return ct;
+  return d && d->body_type
+    ? js_mkstr(js, d->body_type, strlen(d->body_type))
+    : js_mkundef();
 }
 
 static void strip_utf8_bom(const uint8_t **data, size_t *size) {
@@ -563,18 +586,15 @@ static ant_value_t consume_body_from_stream(
 
 static ant_value_t consume_body(ant_t *js, int mode) {
   ant_value_t this = js_getthis(js);
-  response_data_t *d = get_data(this);
+  response_data_t *d = response_get_data(this);
   ant_value_t promise = js_mkpromise(js);
+  ant_value_t type_value = js_mkundef();
   ant_value_t stream = 0;
+  const char *body_type = NULL;
 
   if (!d) {
     js_reject_promise(js, promise, response_rejection_reason(js,
       js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object")));
-    return promise;
-  }
-
-  if (!d->has_body) {
-    resolve_body_promise(js, promise, NULL, 0, response_effective_body_type(js, this, d), mode, false);
     return promise;
   }
 
@@ -585,11 +605,36 @@ static ant_value_t consume_body(ant_t *js, int mode) {
     return promise;
   }
 
-  d->body_used = true;
-  if (rs_is_stream(stream))
-    return consume_body_from_stream(js, stream, promise, mode, response_effective_body_type(js, this, d));
+  type_value = response_effective_body_type(js, this, d);
+  if (is_err(type_value)) {
+    js_reject_promise(js, promise, response_rejection_reason(js, type_value));
+    return promise;
+  }
 
-  resolve_body_promise(js, promise, d->body_data, d->body_size, response_effective_body_type(js, this, d), mode, true);
+  GC_ROOT_SAVE(root_mark, js);
+  if (!gc_push_root(js, &type_value)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    js_reject_promise(js, promise, js_mkerr(js, "out of memory"));
+    return promise;
+  }
+  if (vtype(type_value) == kTypeString)
+    body_type = js_getstr(js, type_value, NULL);
+
+  if (!d->has_body) {
+    resolve_body_promise(js, promise, NULL, 0, body_type, mode, false);
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
+  }
+
+  d->body_used = true;
+  if (rs_is_stream(stream)) {
+    ant_value_t result = consume_body_from_stream(js, stream, promise, mode, body_type);
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  resolve_body_promise(js, promise, d->body_data, d->body_size, body_type, mode, true);
+  GC_ROOT_RESTORE(js, root_mark);
   return promise;
 }
 
@@ -645,9 +690,10 @@ static bool is_valid_reason_phrase(const char *str, size_t len) {
 }
 
 static ant_value_t response_init_status(ant_t *js, ant_value_t init, response_data_t *resp) {
-  ant_value_t status_v = js_get(js, init, "status");
+  ant_value_t status_v = js_getprop_fallback(js, init, "status");
   double status_num = 200;
 
+  if (is_err(status_v)) return status_v;
   if (vtype(status_v) != kTypeUndefined) {
     status_num = (vtype(status_v) == kTypeNumber) ? js_getnum(status_v) : js_to_number(js, status_v);
   }
@@ -661,12 +707,13 @@ static ant_value_t response_init_status(ant_t *js, ant_value_t init, response_da
 }
 
 static ant_value_t response_init_status_text(ant_t *js, ant_value_t init, response_data_t *resp) {
-  ant_value_t status_text_v = js_get(js, init, "statusText");
+  ant_value_t status_text_v = js_getprop_fallback(js, init, "statusText");
   size_t len = 0;
   const char *status_text = NULL;
   char *dup = NULL;
 
-  if (vtype(status_text_v) == kTypeUndefined) return js_mkundef();
+  if (is_err(status_text_v) || vtype(status_text_v) == kTypeUndefined)
+    return status_text_v;
   if (vtype(status_text_v) != kTypeString) {
     status_text_v = js_tostring_val(js, status_text_v);
     if (is_err(status_text_v)) return status_text_v;
@@ -684,9 +731,50 @@ static ant_value_t response_init_status_text(ant_t *js, ant_value_t init, respon
   return js_mkundef();
 }
 
+static bool response_init_direct_headers(
+  ant_t *js, ant_value_t init,
+  ant_value_t *headers_out, const ant_shape_t **shape_out
+) {
+  if (vtype(init) != kTypeObject) return false;
+
+  ant_object_t *ptr = js_obj_ptr(init);
+  const ant_shape_prop_t *prop = ptr && ptr->shape && ptr->prop_count == 1
+    ? ant_shape_prop_at(ptr->shape, 0)
+    : NULL;
+  if (!ptr || ptr->flags.is_exotic || ptr->proto != js->sym.object_proto ||
+      !prop || prop->type != ANT_SHAPE_KEY_STRING ||
+      prop->has_getter || prop->has_setter ||
+      intern_length(prop->key.interned) != 7 ||
+      memcmp(prop->key.interned, "headers", 7) != 0)
+    return false;
+
+  *headers_out = ant_object_prop_get_unchecked(ptr, 0);
+  *shape_out = ptr->shape;
+  return true;
+}
+
+static bool response_init_later_fields_absent(
+  ant_t *js, ant_value_t init, const ant_shape_t *original_shape
+) {
+  if (vtype(init) != kTypeObject) return false;
+
+  ant_object_t *ptr = js_obj_ptr(init);
+  ant_object_t *object_proto = js_obj_ptr(js->sym.object_proto);
+  if (!ptr || ptr->flags.is_exotic || ptr->shape != original_shape ||
+      ptr->proto != js->sym.object_proto || !object_proto ||
+      object_proto->flags.is_exotic ||
+      vtype(object_proto->proto) != kTypeNull)
+    return false;
+
+  const char *status = intern_find("status", 6);
+  const char *status_text = intern_find("statusText", 10);
+  return (!status || ant_shape_lookup_interned(object_proto->shape, status) < 0) &&
+    (!status_text || ant_shape_lookup_interned(object_proto->shape, status_text) < 0);
+}
+
 static ant_value_t response_apply_body(
   ant_t *js, ant_value_t resp_obj, ant_value_t headers, response_data_t *resp,
-  ant_value_t body_val
+  ant_value_t body_val, const char *content_type_override
 ) {
   ant_value_t body_err = js_mkundef();
   ant_value_t body_stream = js_mkundef();
@@ -715,7 +803,12 @@ static ant_value_t response_apply_body(
     resp->has_body = true;
     js_set_slot_wb(js, resp_obj, SLOT_DATA, body_val);
 
-    if (!response_apply_content_type(js, headers, resp->body_type))
+    const char *header_type = content_type_override
+      ? content_type_override
+      : resp->body_type;
+    if (headers_is_headers(headers)
+        ? !response_apply_content_type(headers, header_type)
+        : !response_apply_pending_content_type(resp, header_type))
       return js_mkerr(js, "out of memory");
     return js_mkundef();
   }
@@ -744,7 +837,12 @@ static ant_value_t response_apply_body(
   resp->has_body = true;
 
   if (resp->body_is_stream) js_set_slot_wb(js, resp_obj, SLOT_RESPONSE_BODY_STREAM, body_stream);
-  if (!response_apply_content_type(js, headers, body_type))
+  const char *header_type = content_type_override
+    ? content_type_override
+    : body_type;
+  if (headers_is_headers(headers)
+      ? !response_apply_content_type(headers, header_type)
+      : !response_apply_pending_content_type(resp, header_type))
     return js_mkerr(js, "out of memory");
 
   return js_mkundef();
@@ -752,78 +850,83 @@ static ant_value_t response_apply_body(
 
 static ant_value_t response_init_common(
   ant_t *js, ant_value_t resp_obj, ant_value_t init,
-  ant_value_t body_val, bool immutable_headers
+  ant_value_t body_val, bool immutable_headers,
+  const char *content_type_override
 ) {
-  response_data_t *resp = get_data(resp_obj);
+  response_data_t *resp = response_get_data(resp_obj);
   ant_value_t headers = js_get_slot(resp_obj, SLOT_RESPONSE_HEADERS);
   ant_value_t step = js_mkundef();
+  const ant_shape_t *direct_init_shape = NULL;
 
   if (!resp) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
+  resp->headers_immutable = immutable_headers;
   if (vtype(init) != kTypeUndefined) {
-    ant_value_t init_headers = js_get(js, init, "headers");
-    step = response_init_status(js, init, resp);
-    if (is_err(step)) return step;
-    step = response_init_status_text(js, init, resp);
-    if (is_err(step)) return step;
+    ant_value_t init_headers = js_mkundef();
+    bool direct_headers = response_init_direct_headers(
+      js, init, &init_headers, &direct_init_shape);
+    if (!direct_headers)
+      init_headers = js_getprop_fallback(js, init, "headers");
+    if (is_err(init_headers)) return init_headers;
     if (vtype(init_headers) != kTypeUndefined) {
-      step = headers_init_from(js, headers, init_headers);
+      resp->pending_headers = headers_data_create();
+      if (!resp->pending_headers) return js_mkerr(js, "out of memory");
+      step = headers_data_init_from(js, resp->pending_headers, init_headers);
       if (is_err(step)) return step;
     }
-    headers_set_immutable(headers, immutable_headers);
-    js_set_slot_wb(js, resp_obj, SLOT_RESPONSE_HEADERS, headers);
+    if (!direct_headers ||
+        !response_init_later_fields_absent(js, init, direct_init_shape)) {
+      step = response_init_status(js, init, resp);
+      if (is_err(step)) return step;
+      step = response_init_status_text(js, init, resp);
+      if (is_err(step)) return step;
+    }
   }
 
-  return response_apply_body(js, resp_obj, headers, resp, body_val);
+  return response_apply_body(
+    js, resp_obj, headers, resp, body_val, content_type_override);
 }
 
-static ant_value_t response_new(ant_t *js, bool immutable_headers) {
+static ant_value_t response_init_object(
+  ant_t *js, ant_value_t obj, bool immutable_headers
+) {
   response_data_t *resp = data_new();
-  
-  ant_value_t obj = 0;
-  ant_value_t headers = 0;
 
   if (!resp) return js_mkerr(js, "out of memory");
-  obj = js_mkobj(js);
   js_reserve_slots(obj, 3);
-  
-  js_set_proto_init(obj, js->builtins.response_proto);
+  resp->headers_immutable = immutable_headers;
+
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_RESPONSE));
   js_set_native(obj, resp, RESPONSE_NATIVE_TAG);
   js_set_finalizer(obj, response_finalize);
 
-  headers = headers_create_empty(js);
-  if (is_err(headers)) {
-    response_clear_and_free(obj, resp);
-    return headers;
-  }
-
-  headers_set_immutable(headers, immutable_headers);
-  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
+  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, js_mkundef());
   js_set_slot_wb(js, obj, SLOT_RESPONSE_BODY_STREAM, js_mkundef());
   
   return obj;
+}
+
+static ant_value_t response_new(ant_t *js, bool immutable_headers) {
+  ant_value_t obj = js_mkobj(js);
+  js_set_proto_init(obj, js->builtins.response_proto);
+  return response_init_object(js, obj, immutable_headers);
 }
 
 static ant_value_t js_response_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t body = (nargs >= 1) ? args[0] : js_mknull();
   ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t obj = 0;
-  ant_value_t proto = 0;
   ant_value_t step = 0;
 
   if (vtype(js->new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response constructor requires 'new'");
   }
 
-  obj = response_new(js, false);
+  obj = response_init_object(js, js->this_val, false);
   if (is_err(obj)) return obj;
 
-  proto = js_instance_proto_from_new_target(js, js->builtins.response_proto);
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
-  step = response_init_common(js, obj, init, body, false);
+  step = response_init_common(js, obj, init, body, false, NULL);
   if (is_err(step)) {
-    response_clear_and_free(obj, get_data(obj));
+    response_clear_and_free(obj, response_get_data(obj));
     return step;
   }
 
@@ -837,7 +940,7 @@ static ant_value_t response_create_static(
   response_data_t *resp = NULL;
 
   if (is_err(obj)) return obj;
-  resp = get_data(obj);
+  resp = response_get_data(obj);
 
   free(resp->type);
   resp->type = strdup(type ? type : "default");
@@ -902,9 +1005,14 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
     return obj;
   }
 
-  headers = js_get_slot(obj, SLOT_RESPONSE_HEADERS);
+  headers = response_materialize_headers(js, obj);
+  if (is_err(headers)) {
+    free(href);
+    url_state_clear(&parsed);
+    return headers;
+  }
   headers_set_immutable(headers, false);
-  if (!headers_append_if_missing(headers, "location", href)) {
+  if (!headers_data_append_if_missing(headers_get_data(headers), "location", href)) {
     headers_set_immutable(headers, true);
     free(href);
     url_state_clear(&parsed);
@@ -922,9 +1030,7 @@ static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nar
   ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t stringify = 0;
   ant_value_t obj = 0;
-  ant_value_t headers = 0;
   ant_value_t step = 0;
-  bool init_has_content_type = false;
 
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json requires 1 argument");
   stringify = json_stringify_value(js, args[0]);
@@ -933,27 +1039,21 @@ static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nar
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json data is not JSON serializable");
   }
 
-  init_has_content_type =
-    vtype(init) != kTypeUndefined &&
-    headers_init_has_name(js, js_get(js, init, "headers"), "content-type");
-
   obj = response_new(js, false);
   if (is_err(obj)) return obj;
 
-  step = response_init_common(js, obj, init, stringify, false);
+  step = response_init_common(
+    js, obj, init, stringify, false, "application/json");
   if (is_err(step)) {
-    response_clear_and_free(obj, get_data(obj));
+    response_clear_and_free(obj, response_get_data(obj));
     return step;
   }
-
-  headers = js_get_slot(obj, SLOT_RESPONSE_HEADERS);
-  if (!init_has_content_type) headers_set_literal(js, headers, "content-type", "application/json");
   return obj;
 }
 
 static ant_value_t res_body_pull(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t resp_obj = js_get_slot(js->current_func, SLOT_DATA);
-  response_data_t *d = get_data(resp_obj);
+  response_data_t *d = response_get_data(resp_obj);
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
 
   if (d && d->body_data && d->body_size > 0) {
@@ -972,8 +1072,8 @@ static ant_value_t res_body_pull(ant_t *js, ant_value_t *args, int nargs) {
 #define RES_GETTER_START(name)                                                    \
   static ant_value_t js_res_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
     ant_value_t this = js_getthis(js);                                            \
-    response_data_t *d = get_data(this);                                           \
-    if (!d) return js_mkundef();
+    response_data_t *d = response_get_data(this);                                  \
+    if (!d) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
 
 #define RES_GETTER_END }
 
@@ -1015,7 +1115,7 @@ RES_GETTER_START(status_text)
 RES_GETTER_END
 
 RES_GETTER_START(headers)
-  return js_get_slot(this, SLOT_RESPONSE_HEADERS);
+  return response_materialize_headers(js, this);
 RES_GETTER_END
 
 RES_GETTER_START(body)
@@ -1091,7 +1191,7 @@ static ant_value_t response_inspect(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
-  response_data_t *d = get_data(this);
+  response_data_t *d = response_get_data(this);
   response_data_t *nd = NULL;
   ant_value_t src_headers = 0;
   ant_value_t new_headers = 0;
@@ -1107,17 +1207,19 @@ static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
   if (!nd) return js_mkerr(js, "out of memory");
 
   src_headers = js_get_slot(this, SLOT_RESPONSE_HEADERS);
-  new_headers = headers_create_empty(js);
-  if (is_err(new_headers)) {
-    data_free(nd);
-    return new_headers;
+  new_headers = js_mkundef();
+  if (headers_is_headers(src_headers)) {
+    new_headers = headers_create_empty(js);
+    if (is_err(new_headers)) {
+      data_free(nd);
+      return new_headers;
+    }
+    if (!headers_copy_from(new_headers, src_headers)) {
+      data_free(nd);
+      return js_mkerr(js, "out of memory");
+    }
+    headers_set_immutable(new_headers, headers_is_immutable(src_headers));
   }
-
-  if (!headers_copy_from(js, new_headers, src_headers)) {
-    data_free(nd);
-    return js_mkerr(js, "out of memory");
-  }
-  headers_set_immutable(new_headers, headers_is_immutable(src_headers));
 
   obj = js_mkobj(js);
   js_reserve_slots(obj, 3);
@@ -1158,7 +1260,7 @@ ant_value_t response_create(
   response_data_t *resp = NULL;
 
   if (is_err(obj)) return obj;
-  resp = get_data(obj);
+  resp = response_get_data(obj);
 
   free(resp->type);
   resp->type = strdup(type ? type : "default");
@@ -1192,18 +1294,18 @@ ant_value_t response_create(
   resp->has_body = body || body_len > 0;
   resp->body_is_stream = false;
 
-  headers = is_object_type(headers_obj) ? headers_obj : headers_create_empty(js);
-  if (is_err(headers)) {
-    response_clear_and_free(obj, resp);
-    return headers;
-  }
-
-  headers_set_immutable(headers, immutable_headers);
-  if (!response_apply_content_type(js, headers, body_type)) {
+  if (is_object_type(headers_obj)) {
+    headers = headers_obj;
+    headers_set_immutable(headers, immutable_headers);
+    if (!response_apply_content_type(headers, body_type)) {
+      response_clear_and_free(obj, resp);
+      return js_mkerr(js, "out of memory");
+    }
+    js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
+  } else if (!response_apply_pending_content_type(resp, body_type)) {
     response_clear_and_free(obj, resp);
     return js_mkerr(js, "out of memory");
   }
-  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
   
   return obj;
 }
@@ -1226,7 +1328,7 @@ ant_value_t response_create_fetched(
   url_state_t parsed = {0};
 
   if (is_err(obj)) return obj;
-  resp = get_data(obj);
+  resp = response_get_data(obj);
 
   resp->status = status;
   free(resp->status_text);
@@ -1270,14 +1372,11 @@ ant_value_t response_create_fetched(
     return js_mkerr(js, "out of memory");
   }
 
-  headers = is_object_type(headers_obj) ? headers_obj : headers_create_empty(js);
-  if (is_err(headers)) {
-    response_clear_and_free(obj, resp);
-    return headers;
+  if (is_object_type(headers_obj)) {
+    headers = headers_obj;
+    headers_set_immutable(headers, true);
+    js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
   }
-
-  headers_set_immutable(headers, true);
-  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
   
   return obj;
 }

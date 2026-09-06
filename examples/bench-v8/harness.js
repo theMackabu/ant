@@ -28,6 +28,9 @@ function AddResult(name, result) {
 function AddScore(score) {
   print('raw-score', 100 * BenchmarkSuite.GeometricMean(BenchmarkSuite.scores));
   print('score', score);
+  if (globalThis.__ANT_BENCH_REPORT_STATS__) {
+    print('allocation-stats', JSON.stringify(Ant.stats().alloc));
+  }
 }
 
 try {

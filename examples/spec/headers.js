@@ -10,6 +10,21 @@ const h1 = new Headers({ 'Content-Type': 'text/html', 'x-custom': 'val' });
 test('init from record', h1.get('content-type'), 'text/html');
 test('record key case-folded', h1.get('Content-Type'), 'text/html');
 
+let recordGetterCalls = 0;
+const accessorRecord = {};
+Object.defineProperty(accessorRecord, 'X-Accessor', {
+  enumerable: true,
+  get() { recordGetterCalls++; return 'observed'; }
+});
+Object.defineProperty(accessorRecord, 'X-Hidden', {
+  enumerable: false,
+  value: 'ignored'
+});
+const accessorHeaders = new Headers(accessorRecord);
+test('record getter is observed once', recordGetterCalls, 1);
+test('record getter value is used', accessorHeaders.get('x-accessor'), 'observed');
+test('non-enumerable record key is included', accessorHeaders.get('x-hidden'), 'ignored');
+
 const h2 = new Headers([['x-a', '1'], ['x-b', '2']]);
 test('init from sequence', h2.get('x-a'), '1');
 test('init from sequence second', h2.get('x-b'), '2');

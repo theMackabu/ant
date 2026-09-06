@@ -18,7 +18,8 @@ const allFiles = fs
 
 const cliArgs = process.argv.slice(2);
 const runAll = cliArgs.includes('--all');
-const requestedSpecs = cliArgs.filter(arg => arg !== '--all');
+const reportStats = cliArgs.includes('--stats');
+const requestedSpecs = cliArgs.filter(arg => arg !== '--all' && arg !== '--stats');
 
 function normalizeSpecName(arg) {
   const base = path.basename(arg);
@@ -144,6 +145,11 @@ if (failedTests.length > 0) {
     for (const line of failures) console.log(`    ${line.trim()}`);
   }
   console.log();
+}
+
+if (reportStats) {
+  console.log(`${BOLD}Ant allocation stats:${RESET}`);
+  console.log(JSON.stringify(Ant.stats().alloc));
 }
 
 process.exit(totalFailed > 0 ? 1 : 0);
