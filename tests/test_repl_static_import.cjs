@@ -6,7 +6,8 @@ function fail(message) {
 
 function runInPty() {
   const script = `
-import os, select, signal, sys, time
+import os, re, select, signal, sys, time
+PROMPT = re.compile(rb'\\xe2\\x9d\\xaf(?:\\x1b\\[[0-9;]*m)* ')
 
 exec_path = sys.argv[1]
 pid, master = os.forkpty()
@@ -40,10 +41,10 @@ while time.time() < deadline:
         break
 
     buf.extend(chunk)
-    if (not sent_import) and b'\\xe2\\x9d\\xaf ' in buf:
+    if (not sent_import) and PROMPT.search(buf):
         os.write(master, b"import fs from 'node:fs/promises';\\r")
         sent_import = True
-    elif sent_import and (not sent_check) and b'\\xe2\\x9d\\xaf ' in buf:
+    elif sent_import and (not sent_check) and len(PROMPT.findall(buf)) >= 2:
         os.write(master, b"console.log('FS_READFILE', typeof fs.readFile);\\r")
         sent_check = True
     elif sent_check and (not sent_exit) and b'FS_READFILE function' in buf:

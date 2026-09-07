@@ -588,6 +588,15 @@ static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
   }
 }
 
+static ant_value_t process_exec_path(ant_t *js) {
+  char path[PATH_MAX];
+  if (ant_get_exe_path(path, sizeof(path), js->runtime.argc, js->runtime.argv) == 0 && path[0] != '\0')
+    return js_mkstr(js, path, strlen(path));
+  if (js->runtime.argc > 0) 
+    return js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0]));
+  return js_mkundef();
+}
+
 void process_refresh_sandbox_argv(ant_t *js) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
@@ -598,7 +607,7 @@ void process_refresh_sandbox_argv(ant_t *js) {
 
   js_set(js, process_obj, "argv", argv_arr);
   js_set(js, process_obj, "argv0", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkstr(js, "ant", 3));
-  js_set(js, process_obj, "execPath", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkundef());
+  js_set(js, process_obj, "execPath", process_exec_path(js));
 }
 
 void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t rows, uint16_t cols) {
@@ -1768,11 +1777,7 @@ void init_process_module(ant_t *js) {
     : js_mkstr(js, "ant", 3)
   );
   
-  js_set(js, process_obj, "execPath", js->runtime.argc > 0 
-    ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
-    : js_mkundef()
-  );
-  
+  js_set(js, process_obj, "execPath", process_exec_path(js));
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
 
