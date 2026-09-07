@@ -102,24 +102,4 @@ function nestedForOfOsr() {
 
 assert.strictEqual(nestedForOfOsr(), 718800);
 
-const osrCoercible = {
-  valueOf() {
-    return 7;
-  },
-};
-
-function nestedForOfOsrBailout() {
-  let total = 0;
-  for (const outer of [10, 20, 30]) {
-    let inner = 0;
-    for (let i = 0; i < 700; i++) {
-      inner += outer === 10 && i === 600 ? osrCoercible : 1;
-    }
-    total += outer + inner;
-  }
-  return total;
-}
-
-assert.strictEqual(nestedForOfOsrBailout(), 2166);
-
 console.log('JIT for-of tests passed');

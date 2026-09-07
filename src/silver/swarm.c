@@ -311,57 +311,92 @@ static void jit_emit_integer_constant(
   vs->integer_range[vs->sp - 1] = range;
 }
 
-// An uncaptured local initialized once before any branch dominates the loops.
-// Analyze all locals together; rejected writes stay rejected for the whole function.
-static void jit_entry_integer_ranges(sv_func_t *func, jit_integer_range_t *ranges, int count, int params) {
+static void jit_entry_integer_ranges(
+  sv_func_t *func, jit_integer_range_t *ranges,
+  int n_locals, int param_count
+) {
   enum { UNASSIGNED, ASSIGNED, REJECTED };
-  uint8_t *state = calloc((size_t)count, 1);
+  uint8_t *state = calloc((size_t)n_locals, sizeof(*state));
   if (!state) return;
+
   bool before_branch = true;
-  uint8_t *previous = NULL, *before_previous = NULL;
+  uint8_t *previous = NULL;
+  uint8_t *before_previous = NULL;
   uint8_t *end = func->code + func->code_len;
+
   for (uint8_t *ip = func->code; ip < end;) {
     sv_op_t op = (sv_op_t)*ip;
     int size = sv_op_size[op];
     if (!size || ip + size > end || op == OP_PUT_LOCAL_CHK) {
-      memset(ranges, 0, (size_t)count * sizeof(*ranges));
+      memset(ranges, 0, (size_t)n_locals * sizeof(*ranges));
       break;
     }
-    if (sv_op_flags[op] & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8)) before_branch = false;
+
+    uint16_t flags = sv_op_flags[op];
+    if (flags & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8))
+      before_branch = false;
+
     int index = -1;
-    if (op == OP_PUT_LOCAL || op == OP_SET_LOCAL || op == OP_PUT_LOCAL8 || op == OP_SET_LOCAL8) {
-      index = op == OP_PUT_LOCAL8 || op == OP_SET_LOCAL8 ? sv_get_u8(ip + 1) : sv_get_u16(ip + 1);
-      if (index < count) {
-        if (!before_branch || state[index] != UNASSIGNED) state[index] = REJECTED;
-        else {
-          state[index] = ASSIGNED;
-          ranges[index] = jit_constant_integer_range(func, previous);
-          if (previous && (*previous == OP_BAND || *previous == OP_BOR || *previous == OP_BXOR ||
-              *previous == OP_SHL || *previous == OP_SHR || *previous == OP_USHR)) {
-            uint8_t feedback = sv_func_type_feedback(func)
-              ? sv_func_type_feedback(func)[previous - func->code] : 0;
-            if (sv_tfb_specialization_ready(feedback))
-              ranges[index] = jit_word_range((sv_op_t)*previous, (jit_integer_range_t){0},
-                jit_constant_integer_range(func, before_previous));
-          }
+    switch (op) {
+      case OP_PUT_LOCAL:
+      case OP_SET_LOCAL:
+      case OP_PUT_LOCAL8:
+      case OP_SET_LOCAL8: {
+        bool short_op = (op == OP_PUT_LOCAL8 || op == OP_SET_LOCAL8);
+        index = short_op ? sv_get_u8(ip + 1) : sv_get_u16(ip + 1);
+        if (index >= n_locals) break;
+        if (!before_branch || state[index] != UNASSIGNED) {
+          state[index] = REJECTED;
+          break;
         }
+
+        state[index] = ASSIGNED;
+        ranges[index] = jit_constant_integer_range(func, previous);
+        if (!previous) break;
+
+        sv_op_t prev_op = (sv_op_t)*previous;
+        bool word_op = prev_op == OP_BAND || prev_op == OP_BOR || prev_op == OP_BXOR ||
+                       prev_op == OP_SHL || prev_op == OP_SHR || prev_op == OP_USHR;
+        if (!word_op) break;
+
+        uint8_t *type_feedback = sv_func_type_feedback(func);
+        uint8_t feedback = type_feedback ? type_feedback[previous - func->code] : 0;
+        if (sv_tfb_specialization_ready(feedback))
+          ranges[index] = jit_word_range(
+            prev_op, (jit_integer_range_t){0},
+            jit_constant_integer_range(func, before_previous));
+        break;
       }
-    } else if (op == OP_INC_LOCAL || op == OP_DEC_LOCAL || op == OP_ADD_LOCAL) {
-      index = sv_get_u8(ip + 1);
-      if (index < count) state[index] = REJECTED;
-    } else if (op == OP_SET_LOCAL_UNDEF) {
-      index = sv_get_u16(ip + 1);
-      if (index < count && (state[index] != UNASSIGNED || !before_branch)) state[index] = REJECTED;
-    } else if (sv_op_flags[op] & SV_OPF_BUILDER_TARGET) {
-      index = (int)sv_get_u16(ip + 1) - params;
-      if (index >= 0 && index < count) state[index] = REJECTED;
+
+      case OP_INC_LOCAL:
+      case OP_DEC_LOCAL:
+      case OP_ADD_LOCAL:
+        index = sv_get_u8(ip + 1);
+        if (index < n_locals) state[index] = REJECTED;
+        break;
+
+      case OP_SET_LOCAL_UNDEF:
+        index = sv_get_u16(ip + 1);
+        if (index < n_locals && (state[index] != UNASSIGNED || !before_branch))
+          state[index] = REJECTED;
+        break;
+
+      default:
+        if (flags & SV_OPF_BUILDER_TARGET) {
+          index = (int)sv_get_u16(ip + 1) - param_count;
+          if (index >= 0 && index < n_locals) state[index] = REJECTED;
+        }
+        break;
     }
-    if (index >= 0 && index < count && state[index] == REJECTED)
+
+    if (index >= 0 && index < n_locals && state[index] == REJECTED)
       ranges[index] = (jit_integer_range_t){0};
+
     before_previous = previous;
     previous = ip;
     ip += size;
   }
+
   free(state);
 }
 
@@ -379,7 +414,6 @@ static bool jit_emit_integer_arithmetic(
   } else if (op == OP_SUB || op == OP_SUB_NUM) {
     code = MIR_SUB; lo = (__int128)l.min - r.max; hi = (__int128)l.max - r.min;
   } else {
-    // Integer zero cannot represent the negative zero of 0 * a negative Number.
     if ((l.min < 0 && r.min <= 0 && r.max >= 0) ||
         (r.min < 0 && l.min <= 0 && l.max >= 0)) return false;
     code = MIR_MUL;
@@ -391,7 +425,6 @@ static bool jit_emit_integer_arithmetic(
       if (products[i] > hi) hi = products[i];
     }
   }
-  // Outside the proven word32 range, retain the existing Number lowering.
   if (lo < INT32_MIN || hi > UINT32_MAX) return false;
   MIR_reg_t right = vstack_pop(vs), left = vstack_pop(vs), dst = vstack_push(vs);
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, code,
@@ -1502,7 +1535,6 @@ static MIR_reg_t mir_emit_known_array_index_guard(
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
       MIR_new_reg_op(ctx, cached_index), MIR_new_reg_op(ctx, checked)));
     MIR_append_insn(ctx, fn, hit);
-    // Snapshot the cache: a later access may replace its shared registers.
     char name[48];
     snprintf(name, sizeof(name), "checked_index_%d", site);
     MIR_reg_t result = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, name);
@@ -7212,6 +7244,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
     for (int i = 0; i < lm.count; i++) {
       if (lm.entries[i].bc_off == bc_off) {
+        vstack_flush_to_boxed(&vs, ctx, jit_func, r_d_slot);
         element_available = false;
         if (integer_locals) {
           for (int li = 0; li < n_locals; li++)
