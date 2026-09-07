@@ -1,6 +1,6 @@
 # WebAssembly Embedding Package
 
-Status: active
+Status: completed
 Owner: theMackabu
 
 ## Problem

@@ -1,7 +1,7 @@
 # Guarded charCodeAt opcode
 
-Status: active
-Last reviewed: 2026-09-05
+Status: completed
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 ## Scope and design

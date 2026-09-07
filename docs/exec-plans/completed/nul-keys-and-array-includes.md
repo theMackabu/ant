@@ -1,7 +1,7 @@
 # NUL Property Keys and Array Includes Correctness
 
-Status: active
-Last reviewed: 2026-08-01
+Status: completed
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 Two unrelated correctness gaps that surfaced while validating PR #66 review findings.

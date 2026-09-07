@@ -1,7 +1,7 @@
 # Cwd-aware path resolution
 
-Status: active
-Last reviewed: 2026-09-04
+Status: completed
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 ## Scope

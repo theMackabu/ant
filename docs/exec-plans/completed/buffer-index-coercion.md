@@ -1,7 +1,7 @@
 # Buffer Index Coercion Review Fixes
 
-Status: active
-Last reviewed: 2026-09-05
+Status: completed
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 ## Problem and scope
@@ -50,7 +50,7 @@ exceptions or distinguish collection allocation failure from normal completion.
 - Full spec suite (`--all`): 4,136 tests passed across 102 files, zero failures.
 - Manifest module, maid preflight, maid knowledge, and git diff --check: passed.
 
-Implementation and validation are complete; changes remain uncommitted. No
+Implementation and validation are complete; landed on master in PR #92. No
 ASan build or allocation-failure injection was run.
 
 The normal shell initially failed to locate libm and then llvm-nm. Building with

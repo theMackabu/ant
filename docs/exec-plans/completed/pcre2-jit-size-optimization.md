@@ -1,7 +1,7 @@
 # PCRE2 JIT Compiler Size Optimization
 
-Status: active
-Last updated: 2026-08-14
+Status: completed
+Last updated: 2026-09-07
 
 ## Goal
 

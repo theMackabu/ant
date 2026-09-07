@@ -1,7 +1,7 @@
 # Active Plans
 
 Status: active
-Last reviewed: 2026-09-06
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 Store in-progress execution plans here.
@@ -9,11 +9,7 @@ Store in-progress execution plans here.
 ## Active
 
 - [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)
-- [Buffer Index Coercion Review Fixes](buffer-index-coercion.md)
 - [JS Path Node Performance](path-node-performance.md)
-- [Guarded charCodeAt Opcode](charcode-intrinsic.md)
-- [Private Primordial Capture](private-primordials.md)
-- [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)
 - [Dynamic Property Performance](dynamic-property-perf.md)
   - [Dynamic Property Performance Extras](dynamic-property-perf-extras.md)
@@ -24,11 +20,7 @@ Store in-progress execution plans here.
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
-- [NUL Property Keys and Array Includes Correctness](nul-keys-and-array-includes.md)
-- [PCRE2 JIT Compiler Size Optimization](pcre2-jit-size-optimization.md)
-- [Cwd-aware Path Resolution](path-resolver.md)
 - [PR #44 Source Port Audit](pr-44-source-port-audit.md)
-- [REPL Evaluation Completions](repl-evaluation-completions.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)
 - [Silver JIT Inline Arena Allocation](silver-jit-inline-arena-allocation.md)
 - [Silver Speculative MIR Fast Tier](silver-speculative-mir-fast-tier.md)
@@ -36,7 +28,6 @@ Store in-progress execution plans here.
 - [Silver Throughput: bench-v8 and Game of Life](silver-throughput-bench-v8-game-of-life.md)
 - [Stream Property Surface](stream-property-surface.md)
 - [WICG Observable Migration](wicg-observable.md)
-- [WebAssembly Embedding Package](wasm-embedding-package.md)
 - [WebCrypto Secret Keys](webcrypto-secret-keys.md)
 
 Recommended sections:

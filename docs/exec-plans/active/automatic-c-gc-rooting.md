@@ -953,7 +953,7 @@ Every retained exception needs an owner, reason, and checked contract.
 
 Related work that must remain consistent:
 
-- [Wasm embedding](wasm-embedding-package.md): shared runtime build, memory
+- [Wasm embedding](../completed/wasm-embedding-package.md): shared runtime build, memory
   limits, trap behavior, and explicit import/export surface.
 - [JIT inline allocation](silver-jit-inline-arena-allocation.md): collection
   ordering and live values at helper transitions.

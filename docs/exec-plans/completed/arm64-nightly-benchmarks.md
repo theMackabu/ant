@@ -1,7 +1,7 @@
 # ARM64 Nightly Benchmarks
 
-Status: active
-Last reviewed: 2026-09-03
+Status: completed
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 ## Goal
