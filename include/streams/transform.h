@@ -18,6 +18,6 @@ ant_value_t ts_stream_writable(ant_value_t ts_obj);
 
 ant_value_t ts_stream_controller(ant_value_t ts_obj);
 ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk);
-ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_ts_ctor(ant_params_t);
 
 #endif

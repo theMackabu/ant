@@ -60,7 +60,7 @@ static void example_basic_eval(void) {
   js_destroy(js);
 }
 
-static ant_value_t my_add(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t my_add(ant_params_t) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "add() expects two numbers");
   }
@@ -71,7 +71,7 @@ static ant_value_t my_add(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum(a + b);
 }
 
-static ant_value_t my_greet(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t my_greet(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "greet() expects a string");
   }
@@ -85,7 +85,7 @@ static ant_value_t my_greet(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, buf, strlen(buf));
 }
 
-static ant_value_t my_create_point(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t my_create_point(ant_params_t) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "createPoint() expects two numbers");
   }
@@ -226,7 +226,7 @@ static void example_call_js_from_c(void) {
   ant_value_t format_fn = js_get(js, ns, "formatName");
 
   ant_value_t args1[] = { js_mknum(6), js_mknum(7) };
-  ant_value_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, false);
+  ant_value_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, js_mkundef());
   printf("  multiply(6, 7) = %g\n", js_getnum(result1));
 
   ant_value_t args2[] = {
@@ -234,7 +234,7 @@ static void example_call_js_from_c(void) {
     js_mkstr(js, "Doe", 3)
   };
 
-  ant_value_t result2 = sv_vm_call(js->vm, js, format_fn, js_mkundef(), args2, 2, NULL, false);
+  ant_value_t result2 = sv_vm_call(js->vm, js, format_fn, js_mkundef(), args2, 2, NULL, js_mkundef());
   printf("  formatName('John', 'Doe') = %s\n", js_str(js, result2));
 
   js_destroy(js);
@@ -264,7 +264,7 @@ static void example_iterate_properties(void) {
   js_destroy(js);
 }
 
-static ant_value_t method_get_full_name(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t method_get_full_name(ant_params_t) {
   (void)args; (void)nargs;
 
   ant_value_t this_obj = js_getthis(js);
@@ -331,7 +331,7 @@ static void example_stateful_session(void) {
 
   ant_value_t increment = js_get(js, ns, "increment");
   for (int i = 0; i < 3; i++) {
-    ant_value_t call_result = sv_vm_call(js->vm, js, increment, js_mkundef(), NULL, 0, NULL, false);
+    ant_value_t call_result = sv_vm_call(js->vm, js, increment, js_mkundef(), NULL, 0, NULL, js_mkundef());
     if (vtype(call_result) == kTypeError) {
       printf("  Error in increment %d: %s\n", i + 1, js_str(js, call_result));
       js_destroy(js);
@@ -340,7 +340,7 @@ static void example_stateful_session(void) {
   }
 
   ant_value_t get_count = js_get(js, ns, "getCount");
-  ant_value_t result = sv_vm_call(js->vm, js, get_count, js_mkundef(), NULL, 0, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, get_count, js_mkundef(), NULL, 0, NULL, js_mkundef());
   printf("  Final count: %g\n", js_getnum(result));
 
   js_destroy(js);

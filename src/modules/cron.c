@@ -869,7 +869,7 @@ static cron_job_t *cron_job_from_this(ant_t *js, const char *member, ant_value_t
   return NULL;
 }
 
-static ant_value_t cron_handler_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_handler_fulfilled(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t object = js_get_slot(state, SLOT_DATA);
   cron_job_t *job = js_get_native(object, CRON_JOB_NATIVE_TAG);
@@ -880,7 +880,7 @@ static ant_value_t cron_handler_fulfilled(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t cron_handler_rejected(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_handler_rejected(ant_params_t) {
   ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t promise = js_get_slot(state, SLOT_AUX);
@@ -892,7 +892,7 @@ static ant_value_t cron_handler_rejected(ant_t *js, ant_value_t *args, int nargs
     js_reject_promise(js, report, reason);
     js->fatal_error = true;
   }
-  return cron_handler_fulfilled(js, NULL, 0);
+  return cron_handler_fulfilled(js, NULL, 0, call_new_target);
 }
 
 static void cron_timer_callback(uv_timer_t *timer) {
@@ -906,7 +906,7 @@ static void cron_timer_callback(uv_timer_t *timer) {
   GC_ROOT_PIN(js, job->object);
   GC_ROOT_PIN(js, job->handler);
   ant_value_t result = sv_vm_call(
-    js->vm, js, job->handler, job->object, NULL, 0, NULL, false
+    js->vm, js, job->handler, job->object, NULL, 0, NULL, js_mkundef()
   );
   GC_ROOT_PIN(js, result);
 
@@ -977,13 +977,13 @@ static bool cron_schedule_job(cron_job_t *job, ant_value_t *error) {
   return true;
 }
 
-static ant_value_t cron_job_get_cron(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_job_get_cron(ant_params_t) {
   ant_value_t error = js_mkundef();
   cron_job_t *job = cron_job_from_this(js, "cron getter", &error);
   return job ? js_mkstr(js, job->source, strlen(job->source)) : error;
 }
 
-static ant_value_t cron_job_stop(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_job_stop(ant_params_t) {
   ant_value_t object = js_getthis(js);
   ant_value_t error = js_mkundef();
   cron_job_t *job = cron_job_from_this(js, "stop()", &error);
@@ -992,7 +992,7 @@ static ant_value_t cron_job_stop(ant_t *js, ant_value_t *args, int nargs) {
   return object;
 }
 
-static ant_value_t cron_job_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_job_ref(ant_params_t) {
   ant_value_t object = js_getthis(js);
   ant_value_t error = js_mkundef();
   cron_job_t *job = cron_job_from_this(js, "ref()", &error);
@@ -1001,7 +1001,7 @@ static ant_value_t cron_job_ref(ant_t *js, ant_value_t *args, int nargs) {
   return object;
 }
 
-static ant_value_t cron_job_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_job_unref(ant_params_t) {
   ant_value_t object = js_getthis(js);
   ant_value_t error = js_mkundef();
   cron_job_t *job = cron_job_from_this(js, "unref()", &error);
@@ -1010,12 +1010,12 @@ static ant_value_t cron_job_unref(ant_t *js, ant_value_t *args, int nargs) {
   return object;
 }
 
-static ant_value_t cron_job_dispose(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t result = cron_job_stop(js, args, nargs);
+static ant_value_t cron_job_dispose(ant_params_t) {
+  ant_value_t result = cron_job_stop(js, args, nargs, call_new_target);
   return is_err(result) ? result : js_mkundef();
 }
 
-static ant_value_t cron_parse(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_parse(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron.parse() expects a string cron expression as the first argument");
 
@@ -2406,7 +2406,7 @@ static ant_value_t cron_queue_request(ant_t *js, cron_os_request_t *request) {
   return promise;
 }
 
-static ant_value_t cron_register_os(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_register_os(ant_params_t) {
   if (nargs < 3 || vtype(args[0]) != kTypeString || vtype(args[1]) != kTypeString || vtype(args[2]) != kTypeString) {
     if (nargs < 1 || vtype(args[0]) != kTypeString)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string path as the first argument");
@@ -2465,7 +2465,7 @@ static ant_value_t cron_register_os(ant_t *js, ant_value_t *args, int nargs) {
   return cron_queue_request(js, request);
 }
 
-static ant_value_t cron_remove_os(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_remove_os(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron.remove() expects a string title");
   size_t title_len = 0;
@@ -2489,7 +2489,7 @@ static ant_value_t cron_remove_os(ant_t *js, ant_value_t *args, int nargs) {
   return cron_queue_request(js, request);
 }
 
-static ant_value_t cron_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cron_call(ant_params_t) {
   if (nargs == 0)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string path as the first argument");
   if (nargs < 3 || (nargs > 1 && is_callable(args[1])))
@@ -2497,7 +2497,7 @@ static ant_value_t cron_call(ant_t *js, ant_value_t *args, int nargs) {
       js, args[0], nargs > 1 ? args[1] : js_mkundef(),
       nargs > 2 ? args[2] : js_mkundef()
     );
-  return cron_register_os(js, args, nargs);
+  return cron_register_os(js, args, nargs, call_new_target);
 }
 
 void init_cron_module(ant_t *js) {
@@ -2606,7 +2606,7 @@ int cron_run_scheduled_export(
   js_set(js, controller, "type", js_mkstr(js, "scheduled", 9));
   js_set(js, controller, "scheduledTime", js_mknum((double)scheduled_time));
   ant_value_t result = sv_vm_call(
-    js->vm, js, handler, default_export, &controller, 1, NULL, false
+    js->vm, js, handler, default_export, &controller, 1, NULL, js_mkundef()
   );
   if (is_err(result) || js->thrown_exists) {
     if (js->thrown_exists) print_uncaught_throw(js);

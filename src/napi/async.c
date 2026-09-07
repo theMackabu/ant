@@ -31,7 +31,7 @@ static void napi_tsfn_async_cb(uv_async_t *handle) {
     if (tsfn->call_js_cb) {
       tsfn->call_js_cb((napi_env)tsfn->env, (napi_value)cb, tsfn->context, item->data);
     } else if (is_callable(cb)) {
-      sv_vm_call(js->vm, js, cb, js_mkundef(), NULL, 0, NULL, false);
+      sv_vm_call(js->vm, js, cb, js_mkundef(), NULL, 0, NULL, js_mkundef());
     }
 
     free(item);

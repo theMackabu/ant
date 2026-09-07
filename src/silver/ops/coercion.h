@@ -116,7 +116,7 @@ static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
 
   if (vtype(import_fn) == kTypeFunction || vtype(import_fn) == kTypeBuiltin) {
     ant_value_t call_args[2] = { specifier, options };
-    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, call_args, 2, NULL, js_mkundef());
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }

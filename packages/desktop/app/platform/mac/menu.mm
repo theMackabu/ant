@@ -10,7 +10,7 @@ void RefreshApplicationMenu(ant_t *js, ant_value_t menu) {
   NSApp.mainMenu = BuildNativeMenu(js, template_value, @"");
 }
 
-ant_value_t DesktopMenuAppend(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopMenuAppend(ant_params_t) {
   ant_value_t menu = js_getthis(js);
   ant_value_t template_value = js_get(js, menu, "_template");
   if (!is_array_value(template_value) || nargs < 1 || !is_object_type(args[0])) {
@@ -21,7 +21,7 @@ ant_value_t DesktopMenuAppend(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t DesktopMenuInsert(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopMenuInsert(ant_params_t) {
   ant_value_t menu = js_getthis(js);
   ant_value_t template_value = js_get(js, menu, "_template");
   if (!is_array_value(template_value) || nargs < 2 || vtype(args[0]) != kTypeNumber || !is_object_type(args[1])) {
@@ -42,7 +42,7 @@ ant_value_t DesktopMenuInsert(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t DesktopMenuBuildFromTemplate(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopMenuBuildFromTemplate(ant_params_t) {
   if (nargs < 1 || !is_array_value(args[0])) {
     return js_mkerr(js, "Menu.buildFromTemplate(template) requires an array");
   }
@@ -57,14 +57,14 @@ ant_value_t DesktopMenuBuildFromTemplate(ant_t *js, ant_value_t *args, int nargs
   return menu;
 }
 
-ant_value_t DesktopGetApplicationMenu(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopGetApplicationMenu(ant_params_t) {
   (void)args;
   (void)nargs;
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   return state ? state->application_menu : js_mkundef();
 }
 
-ant_value_t DesktopSetApplicationMenu(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopSetApplicationMenu(ant_params_t) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid application menu receiver");
   if (nargs < 1 || vtype(args[0]) == kTypeNull || vtype(args[0]) == kTypeUndefined) {
@@ -84,7 +84,7 @@ ant_value_t DesktopSetApplicationMenu(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t DesktopMenuItemCtor(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopMenuItemCtor(ant_params_t) {
   ant_value_t item = js_getthis(js);
   if (!is_object_type(item)) item = js_newobj(js);
   if (nargs > 0 && is_object_type(args[0])) js_merge_obj(js, item, args[0]);

@@ -89,7 +89,7 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   return exports;
 }
 
-ant_value_t napi_process_dlopen_js(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t napi_process_dlopen_js(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "process.dlopen(module, filename) requires 2 arguments");
   if (!is_object_type(args[0])) return js_mkerr(js, "process.dlopen module must be an object");
   if (vtype(args[1]) != kTypeString) return js_mkerr(js, "process.dlopen filename must be a string");
@@ -129,7 +129,7 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
 
   if (is_callable(dlopen_fn)) {
     ant_value_t argv[2] = {module_obj, js_mkstr(js, module_path, strlen(module_path))};
-    ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, false);
+    ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, js_mkundef());
     if (is_err(dl_res) || js->thrown_exists) {
       result = js->thrown_exists ? js_throw(js, js->thrown_value) : dl_res;
       goto cleanup;

@@ -246,7 +246,7 @@ ant_value_t formdata_append_file(ant_t *js, ant_value_t fd, ant_value_t name_v, 
   return extract_file_entry(js, d, values_arr, name, blob_v, filename_v, false);
 }
 
-static ant_value_t js_formdata_append(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_append(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "FormData.append requires 2 arguments");
   fd_data_t *d = get_fd_data(js->this_val);
   if (!d) return js_mkerr(js, "Invalid FormData object");
@@ -266,7 +266,7 @@ static ant_value_t js_formdata_append(ant_t *js, ant_value_t *args, int nargs) {
   return fd_append_str(d, name, js_getstr(js, val, NULL)) ? js_mkundef() : js_mkerr(js, "out of memory");
 }
 
-static ant_value_t js_formdata_set(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_set(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "FormData.set requires 2 arguments");
   fd_data_t *d = get_fd_data(js->this_val);
   if (!d) return js_mkerr(js, "Invalid FormData object");
@@ -287,7 +287,7 @@ static ant_value_t js_formdata_set(ant_t *js, ant_value_t *args, int nargs) {
   return fd_append_str(d, name, js_getstr(js, val, NULL)) ? js_mkundef() : js_mkerr(js, "out of memory");
 }
 
-static ant_value_t js_formdata_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_get(ant_params_t) {
   if (nargs < 1) return js_mknull();
   fd_data_t *d = get_fd_data(js->this_val);
   if (!d) return js_mknull();
@@ -304,7 +304,7 @@ static ant_value_t js_formdata_get(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknull();
 }
 
-static ant_value_t js_formdata_get_all(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_get_all(ant_params_t) {
   ant_value_t result = js_mkarr(js);
   if (nargs < 1) return result;
   fd_data_t *d = get_fd_data(js->this_val);
@@ -324,7 +324,7 @@ static ant_value_t js_formdata_get_all(ant_t *js, ant_value_t *args, int nargs) 
   return result;
 }
 
-static ant_value_t js_formdata_has(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_has(ant_params_t) {
   if (nargs < 1) return js_false;
   fd_data_t *d = get_fd_data(js->this_val);
   if (!d) return js_false;
@@ -339,7 +339,7 @@ static ant_value_t js_formdata_has(ant_t *js, ant_value_t *args, int nargs) {
   return js_false;
 }
 
-static ant_value_t js_formdata_delete(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_delete(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   fd_data_t *d = get_fd_data(js->this_val);
   if (!d) return js_mkundef();
@@ -352,7 +352,7 @@ static ant_value_t js_formdata_delete(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_formdata_foreach(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_foreach(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData.forEach requires a function");
   fd_data_t *d = get_fd_data(js->this_val);
@@ -368,13 +368,13 @@ static ant_value_t js_formdata_foreach(ant_t *js, ant_value_t *args, int nargs) 
     if (is_err(val)) return val;
     ant_value_t name = js_mkstr(js, e->name, strlen(e->name));
     ant_value_t cb_args[3] = { val, name, self };
-    ant_value_t r = sv_vm_call(js->vm, js, fn, this_arg, cb_args, 3, NULL, false);
+    ant_value_t r = sv_vm_call(js->vm, js, fn, this_arg, cb_args, 3, NULL, js_mkundef());
     if (is_err(r)) return r;
   }
   return js_mkundef();
 }
 
-static ant_value_t formdata_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t formdata_iter_next(ant_params_t) {
   fd_iter_t *st = (fd_iter_t *)js_get_native(js->this_val, FORMDATA_ITER_NATIVE_TAG);
   if (!st) return js_iter_result(js, false, js_mkundef());
   ant_value_t fd_obj = js_get_slot(js->this_val, SLOT_DATA);
@@ -429,20 +429,20 @@ static ant_value_t make_formdata_iter(ant_t *js, ant_value_t fd_obj, int kind) {
   return iter;
 }
 
-static ant_value_t js_formdata_entries(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_entries(ant_params_t) {
   return make_formdata_iter(js, js->this_val, FD_ITER_ENTRIES);
 }
 
-static ant_value_t js_formdata_keys(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_keys(ant_params_t) {
   return make_formdata_iter(js, js->this_val, FD_ITER_KEYS);
 }
 
-static ant_value_t js_formdata_values(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_formdata_values(ant_params_t) {
   return make_formdata_iter(js, js->this_val, FD_ITER_VALUES);
 }
 
-static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_formdata_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData constructor requires 'new'");
   if (nargs >= 1 && vtype(args[0]) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData does not support a form element argument");
@@ -451,7 +451,7 @@ static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!d) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.formdata_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.formdata_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));

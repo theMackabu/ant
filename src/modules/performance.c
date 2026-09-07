@@ -26,7 +26,7 @@ static double get_current_time_ms(void) {
 }
 
 // performance.now()
-static ant_value_t js_performance_now(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_performance_now(ant_params_t) {
   double now = get_current_time_ms() - js->perf_time_origin_ms;
   return js_mknum(now);
 }

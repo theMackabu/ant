@@ -66,7 +66,7 @@ typedef struct {
 typedef struct {
   const char *name;
   size_t len;
-  ant_value_t (*fn)(ant_t *, ant_value_t *, int);
+  ant_cfunc_t fn;
 } date_method_entry_t;
 
 void init_date_module(ant_t *js);

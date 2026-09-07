@@ -302,7 +302,7 @@ static void ant_wasm_process_microtask(
     GC_ROOT_PIN(js, task->arguments[index]);
   sv_vm_call(
     js->vm, js, callback, js_mkundef(), task->arguments,
-    task->argument_count, NULL, false
+    task->argument_count, NULL, js_mkundef()
   );
   GC_ROOT_RESTORE(js, root_mark);
 }

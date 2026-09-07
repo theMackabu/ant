@@ -10,6 +10,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/blob.h"
@@ -166,33 +167,33 @@ ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char 
   return obj;
 }
 
-static ant_value_t blob_get_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t blob_get_size(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   return js_mknum(bd ? (double)bd->size : 0);
 }
 
-static ant_value_t blob_get_type(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t blob_get_type(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   if (!bd || !bd->type) return js_mkstr(js, "", 0);
   return js_mkstr(js, bd->type, strlen(bd->type));
 }
 
-static ant_value_t file_get_name(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t file_get_name(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   if (!bd || !bd->name) return js_mkstr(js, "", 0);
   return js_mkstr(js, bd->name, strlen(bd->name));
 }
 
-static ant_value_t file_get_last_modified(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t file_get_last_modified(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   return js_mknum(bd ? (double)bd->last_modified : 0);
 }
 
-static ant_value_t js_blob_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_blob_text(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
@@ -203,7 +204,7 @@ static ant_value_t js_blob_text(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t js_blob_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_blob_array_buffer(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
@@ -217,7 +218,7 @@ static ant_value_t js_blob_array_buffer(ant_t *js, ant_value_t *args, int nargs)
   return promise;
 }
 
-static ant_value_t js_blob_bytes(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_blob_bytes(ant_params_t) {
   (void)args; (void)nargs;
   blob_data_t *bd = blob_get_data(js->this_val);
   ant_value_t promise = js_mkpromise(js);
@@ -232,7 +233,7 @@ static ant_value_t js_blob_bytes(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_blob_slice(ant_params_t) {
   blob_data_t *bd = blob_get_data(js->this_val);
   size_t blob_size = bd ? bd->size : 0;
 
@@ -273,7 +274,7 @@ static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t blob_stream_pull(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t blob_stream_pull(ant_params_t) {
   ant_value_t blob_obj = js_get_slot(js->current_func, SLOT_DATA);
   blob_data_t *bd = blob_get_data(blob_obj);
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
@@ -289,13 +290,13 @@ static ant_value_t blob_stream_pull(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_blob_stream(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_blob_stream(ant_params_t) {
   ant_value_t pull_fn = js_heavy_mkfun(js, blob_stream_pull, js->this_val);
   return rs_create_stream(js, pull_fn, js_mkundef(), 1);
 }
 
-static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_blob_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Blob constructor requires 'new'");
 
   byte_buf_t buf = {NULL, 0, 0};
@@ -337,7 +338,7 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!bd) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.blob_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.blob_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
@@ -347,8 +348,8 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_file_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "File constructor requires 'new'");
   if (nargs < 2)
     return js_mkerr_typed(js, JS_ERR_TYPE, "File constructor requires at least 2 arguments");
@@ -408,7 +409,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   bd->last_modified = last_modified;
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.file_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.file_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FILE));

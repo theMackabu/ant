@@ -1,7 +1,7 @@
 #include "../platform/platform.h"
 #include "desktop_core.h"
 
-ant_value_t DesktopBrowserWindowOn(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowOn(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1]))
     return js_mkerr(js, "BrowserWindow.on(event, listener) requires a name and function");
 
@@ -31,7 +31,7 @@ static ant_desktop_window_state_t *RequireWindow(ant_t *js) {
   return ant_desktop_window_from_value(js, js_getthis(js));
 }
 
-ant_value_t DesktopBrowserWindowGetBounds(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowGetBounds(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_window_bounds_t bounds;
@@ -44,49 +44,49 @@ ant_value_t DesktopBrowserWindowGetBounds(ant_t *js, ant_value_t *args, int narg
   return result;
 }
 
-ant_value_t DesktopBrowserWindowClose(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowClose(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_close(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowShow(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowShow(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_show(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowHide(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowHide(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_hide(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowMinimize(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowMinimize(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_minimize(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowRestore(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowRestore(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_restore(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowMaximize(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowMaximize(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   ant_desktop_platform_maximize(window);
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowSetAlwaysOnTop(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowSetAlwaysOnTop(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeBool) { return js_mkerr(js, "setAlwaysOnTop(flag) requires a boolean"); }
@@ -94,7 +94,7 @@ ant_value_t DesktopBrowserWindowSetAlwaysOnTop(ant_t *js, ant_value_t *args, int
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowSetTitle(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowSetTitle(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeString) { return js_mkerr(js, "setTitle(title) requires a string"); }
@@ -104,7 +104,7 @@ ant_value_t DesktopBrowserWindowSetTitle(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-ant_value_t DesktopBrowserWindowSetFullScreen(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowSetFullScreen(ant_params_t) {
   ant_desktop_window_state_t *window = RequireWindow(js);
   if (!window) return js_mkerr(js, "invalid BrowserWindow receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeBool) { return js_mkerr(js, "setFullScreen(flag) requires a boolean"); }

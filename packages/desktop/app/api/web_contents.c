@@ -11,19 +11,19 @@ static ant_value_t DesktopWebContentsAction(ant_t *js, WebContentsAction action)
   return js_mkundef();
 }
 
-ant_value_t DesktopWebContentsOpenDevTools(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsOpenDevTools(ant_params_t) {
   return DesktopWebContentsAction(js, ant_desktop_platform_open_devtools);
 }
 
-ant_value_t DesktopWebContentsCloseDevTools(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsCloseDevTools(ant_params_t) {
   return DesktopWebContentsAction(js, ant_desktop_platform_close_devtools);
 }
 
-ant_value_t DesktopWebContentsToggleDevTools(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsToggleDevTools(ant_params_t) {
   return DesktopWebContentsAction(js, ant_desktop_platform_toggle_devtools);
 }
 
-ant_value_t DesktopWebContentsInspectElement(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsInspectElement(ant_params_t) {
   ant_desktop_window_state_t *window = ant_desktop_window_from_value(js, js_getthis(js));
   if (!window) return js_mkerr(js, "invalid WebContents receiver");
   if (nargs < 2 || vtype(args[0]) != kTypeNumber || vtype(args[1]) != kTypeNumber)
@@ -35,17 +35,17 @@ ant_value_t DesktopWebContentsInspectElement(ant_t *js, ant_value_t *args, int n
   return js_mkundef();
 }
 
-ant_value_t DesktopWebContentsIsDevToolsOpened(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsIsDevToolsOpened(ant_params_t) {
   ant_desktop_window_state_t *window = ant_desktop_window_from_value(js, js_getthis(js));
   if (!window) return js_mkerr(js, "invalid WebContents receiver");
   return window->devtools_open ? js_true : js_false;
 }
 
-ant_value_t DesktopWebContentsReload(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsReload(ant_params_t) {
   return DesktopWebContentsAction(js, ant_desktop_platform_reload);
 }
 
-ant_value_t DesktopWebContentsSend(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopWebContentsSend(ant_params_t) {
   ant_desktop_window_state_t *window = ant_desktop_window_from_value(js, js_getthis(js));
   if (!window) return js_mkerr(js, "invalid WebContents receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeString) return js_mkerr(js, "webContents.send(channel, value) requires a channel");

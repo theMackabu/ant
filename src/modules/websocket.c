@@ -135,8 +135,8 @@ static ant_value_t websocket_call(ant_t *js, ant_value_t fn, ant_value_t this_va
   ant_value_t saved_this = js->this_val;
   ant_value_t result = js_mkundef();
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
   return result;
 }
@@ -473,8 +473,8 @@ static ant_value_t websocket_create_object(ant_t *js) {
   return obj;
 }
 
-static ant_value_t js_websocket_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_websocket_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WebSocket constructor requires 'new'");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "WebSocket URL is required");
 
@@ -533,7 +533,7 @@ static bool websocket_bytes_from_value(ant_t *js, ant_value_t value, const uint8
   return *bytes != NULL;
 }
 
-static ant_value_t js_websocket_send(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_websocket_send(ant_params_t) {
   websocket_state_t *ws = websocket_data(js_getthis(js));
   const uint8_t *bytes = NULL;
   size_t len = 0;
@@ -582,7 +582,7 @@ static ant_value_t js_websocket_send(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_websocket_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_websocket_close(ant_params_t) {
   websocket_state_t *ws = websocket_data(js_getthis(js));
   uint16_t code = nargs > 0 && vtype(args[0]) == kTypeNumber ? (uint16_t)js_getnum(args[0]) : 1000;
   const char *reason = NULL;
@@ -608,8 +608,8 @@ static ant_value_t js_websocket_close(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_message_event_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_message_event_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "MessageEvent constructor requires 'new'");
   ant_value_t type_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "message", 7);
   if (is_err(type_val)) return type_val;
@@ -624,8 +624,8 @@ static ant_value_t js_message_event_ctor(ant_t *js, ant_value_t *args, int nargs
   return event;
 }
 
-static ant_value_t js_close_event_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_close_event_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CloseEvent constructor requires 'new'");
   ant_value_t type_val = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "close", 5);
   if (is_err(type_val)) return type_val;

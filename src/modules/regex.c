@@ -389,11 +389,11 @@ static inline ant_value_t regexp_static_set(ant_t *js) {
 }
 
 #define REGEXP_STATIC_ACCESSORS(name, idx) \
-  static ant_value_t regexp_static_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
+  static ant_value_t regexp_static_get_##name(ant_params_t) { \
     (void)args; (void)nargs; \
     return regexp_static_value(js, idx); \
   } \
-  static ant_value_t regexp_static_set_##name(ant_t *js, ant_value_t *args, int nargs) { \
+  static ant_value_t regexp_static_set_##name(ant_params_t) { \
     (void)args; (void)nargs; \
     return regexp_static_set(js); \
   }
@@ -1049,10 +1049,7 @@ static ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value
   if (is_err(proto)) return proto;
   if (is_object_type(proto)) js_set_proto_init(seed, proto);
 
-  ant_value_t saved = js->new_target;
-  js->new_target = ctor;
-  ant_value_t result = sv_vm_call(js->vm, js, ctor, seed, ctor_args, nargs, NULL, true);
-  js->new_target = saved;
+  ant_value_t result = sv_vm_call(js->vm, js, ctor, seed, ctor_args, nargs, NULL, ctor);
 
   if (is_err(result)) return result;
   if (!is_object_type(result))
@@ -1062,7 +1059,7 @@ static ant_value_t regexp_species_construct(ant_t *js, ant_value_t rx, ant_value
 }
 
 static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str);
-static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t builtin_regexp_exec(ant_params_t);
 
 static __attribute__((aligned(16)))
 pcre2_match_context *regex_get_match_context(ant_t *js) {
@@ -1500,7 +1497,7 @@ static bool regexp_can_use_internal_fast_path(ant_t *js, ant_value_t value) {
   return is_object_type(value) && !is_proxy(value) && regexp_has_internal_slots(js, value);
 }
 
-static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_RegExp(ant_params_t) {
   bool pattern_is_regexp = false;
   if (nargs > 0) {
     ant_value_t is_re = is_regexp_like(js, args[0]);
@@ -1508,7 +1505,7 @@ static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
     pattern_is_regexp = js_truthy(js, is_re);
   }
 
-  if (vtype(js->new_target) == kTypeUndefined && nargs > 0 && pattern_is_regexp) {
+  if (vtype(call_new_target) == kTypeUndefined && nargs > 0 && pattern_is_regexp) {
     if (nargs < 2 || vtype(args[1]) == kTypeUndefined) {
       ant_value_t ctor = js_getprop_fallback(js, args[0], "constructor");
       if (is_err(ctor)) return ctor;
@@ -1519,7 +1516,7 @@ static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t regexp_obj = js->this_val;
-  bool use_this = (vtype(js->new_target) != kTypeUndefined && vtype(regexp_obj) == kTypeObject);
+  bool use_this = (vtype(call_new_target) != kTypeUndefined && vtype(regexp_obj) == kTypeObject);
 
   if (!use_this) {
     regexp_obj = mkobj(js, 0);
@@ -1527,11 +1524,11 @@ static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
-  ant_value_t instance_proto = js_instance_proto_from_new_target(js, regexp_proto);
+  ant_value_t instance_proto = js_instance_proto_from_new_target(js, regexp_proto, call_new_target);
 
   if (is_object_type(instance_proto)) js_set_proto_init(regexp_obj, instance_proto);
-  if (vtype(js->new_target) == kTypeFunction || vtype(js->new_target) == kTypeBuiltin) {
-    js_set_slot(regexp_obj, SLOT_CTOR, js->new_target);
+  if (vtype(call_new_target) == kTypeFunction || vtype(call_new_target) == kTypeBuiltin) {
+    js_set_slot(regexp_obj, SLOT_CTOR, call_new_target);
   }
 
   ant_value_t pattern = js_mkstr(js, "", 0);
@@ -1569,7 +1566,7 @@ static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
   return regexp_obj;
 }
 
-static ant_value_t builtin_regexp_groups_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_groups_getter(ant_params_t) {
   ant_value_t result_arr = js->this_val;
   if (!is_object_type(result_arr)) return js_mkundef();
 
@@ -2114,7 +2111,7 @@ done:
   return result;
 }
 
-static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_exec(ant_params_t) {
   ant_value_t regexp = js->this_val;
   if (!regexp_has_internal_slots(js, regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.exec called on incompatible receiver");
@@ -2125,7 +2122,7 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
   return regexp_exec_internal(js, regexp, str_arg, false);
 }
 
-static ant_value_t builtin_regexp_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_toString(ant_params_t) {
   ant_value_t regexp = js->this_val;
   if (!is_object_type(regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "toString called on non-object");
@@ -2197,7 +2194,7 @@ static ant_value_t builtin_regexp_toString(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t builtin_regexp_compile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_compile(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "compile called on non-object");
@@ -2251,7 +2248,7 @@ static inline bool is_other_punctuator(char c) {
     c == '#' || c == '%' || c == '&' || c == '\'' || c == '`' || c == '~';
 }
 
-static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_escape(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.escape requires a string argument");
 
@@ -2324,7 +2321,7 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
 static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value_t str, ant_value_t exec_fn) {
   if (vtype(exec_fn) == kTypeFunction || vtype(exec_fn) == kTypeBuiltin) {
     ant_value_t call_args[1] = { str };
-    ant_value_t result = sv_vm_call(js->vm, js, exec_fn, rx, call_args, 1, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, exec_fn, rx, call_args, 1, NULL, js_mkundef());
     if (is_err(result)) return result;
     if (!is_object_type(result) && vtype(result) != kTypeNull)
       return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp exec returned non-object");
@@ -2334,7 +2331,7 @@ static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value
   ant_value_t call_args[1] = { str };
   ant_value_t saved = js->this_val;
   js->this_val = rx;
-  ant_value_t result = builtin_regexp_exec(js, call_args, 1);
+  ant_value_t result = builtin_regexp_exec(js, call_args, 1, js_mkundef());
   js->this_val = saved;
 
   return result;
@@ -2367,7 +2364,7 @@ bool regexp_exec_truthy_try_fast(
   return true;
 }
 
-static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_test(ant_params_t) {
   ant_value_t regexp = js->this_val;
   if (!is_object_type(regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "test called on non-object");
@@ -2385,7 +2382,7 @@ static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) 
   return mkval(kTypeBool, vtype(result) != kTypeNull ? 1 : 0);
 }
 
-static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_flags_getter(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.flags called on non-object");
@@ -2589,7 +2586,7 @@ static ant_value_t regexp_match_batch_fast(
   return count == 0 ? js_mknull() : matches;
 }
 
-static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_symbol_match(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@match] called on non-object");
@@ -2645,7 +2642,7 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
 }
 
 
-static ant_value_t regexp_matchall_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t regexp_matchall_next(ant_params_t) {
   ant_value_t iter = js->this_val;
   ant_value_t rx = js_get_slot(iter, SLOT_MATCHALL_RX);
   ant_value_t str = js_get_slot(iter, SLOT_MATCHALL_STR);
@@ -2678,7 +2675,7 @@ static ant_value_t regexp_matchall_next(ant_t *js, ant_value_t *args, int nargs)
   return js_iter_result(js, true, result);
 }
 
-static ant_value_t builtin_regexp_symbol_matchAll(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_symbol_matchAll(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@matchAll] called on non-object");
@@ -2696,7 +2693,7 @@ static ant_value_t builtin_regexp_symbol_matchAll(ant_t *js, ant_value_t *args, 
 
   ant_value_t ctor_args[2] = { source_val, flags_str };
   ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
-  ant_value_t new_rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, true);
+  ant_value_t new_rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, regexp_ctor);
   if (is_err(new_rx)) return new_rx;
 
   ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
@@ -2712,7 +2709,7 @@ static ant_value_t builtin_regexp_symbol_matchAll(ant_t *js, ant_value_t *args, 
   return iter;
 }
 
-static ant_value_t builtin_string_matchAll(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_string_matchAll(ant_params_t) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
@@ -2748,13 +2745,13 @@ static ant_value_t builtin_string_matchAll(ant_t *js, ant_value_t *args, int nar
 
   ant_value_t ctor_args[2] = { pattern_str, js_mkstr(js, "g", 1) };
   ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
-  ant_value_t rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, true);
+  ant_value_t rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, regexp_ctor);
   if (is_err(rx)) return rx;
 
   ant_value_t ma_args[1] = { str };
   js->this_val = rx;
   
-  return builtin_regexp_symbol_matchAll(js, ma_args, 1);
+  return builtin_regexp_symbol_matchAll(js, ma_args, 1, call_new_target);
 }
 
 static __attribute__((noinline)) const char *find_bytes_long(
@@ -3210,7 +3207,7 @@ ant_value_t regexp_literal_exec_call(
   return regexp_exec_abstract(js, regexp_obj, arg);
 }
 
-static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_symbol_replace(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@replace] called on non-object");
@@ -3350,7 +3347,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
         call_args[ca++] = js_arr_get(js, result, c);
       call_args[ca++] = tov(position_units);
       call_args[ca++] = str;
-      replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, false);
+      replacement = sv_vm_call(js->vm, js, replace_value, js_mkundef(), call_args, ca, NULL, js_mkundef());
       if (call_args != call_args_inline) free(call_args);
     } else {
       replacement = replace_str;
@@ -3418,7 +3415,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
   return ret;
 }
 
-static ant_value_t builtin_regexp_symbol_search(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_symbol_search(ant_params_t) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@search] called on non-object");
@@ -3558,7 +3555,7 @@ static ant_value_t regexp_split_batch_fast(
   return result;
 }
 
-static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
   ant_value_t rx = js_getthis(js);
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@split] called on non-object");
@@ -3795,7 +3792,7 @@ static inline ant_value_t emit_str_replacement(
 ) {
   if (is_func) {
     ant_value_t cb_args[3] = { js_mkstr(js, str_ptr + pos, match_len), tov((double)pos), str };
-    ant_value_t r = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 3, NULL, false);
+    ant_value_t r = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 3, NULL, js_mkundef());
     
     if (vtype(r) == kTypeError) return r;
     ant_value_t r_str = js_tostring_val(js, r);
@@ -3809,7 +3806,7 @@ static inline ant_value_t emit_str_replacement(
   return js_mkundef();
 }
 
-static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, bool replace_all) {
+static ant_value_t string_replace_impl(ant_params_t, bool replace_all) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   
@@ -3974,12 +3971,12 @@ static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, 
   }
 }
 
-static ant_value_t builtin_string_replace(ant_t *js, ant_value_t *args, int nargs) {
-  return string_replace_impl(js, args, nargs, false);
+static ant_value_t builtin_string_replace(ant_params_t) {
+  return string_replace_impl(js, args, nargs, call_new_target, false);
 }
 
-static ant_value_t builtin_string_replaceAll(ant_t *js, ant_value_t *args, int nargs) {
-  return string_replace_impl(js, args, nargs, true);
+static ant_value_t builtin_string_replaceAll(ant_params_t) {
+  return string_replace_impl(js, args, nargs, call_new_target, true);
 }
 
 static bool regexp_literal_replace_builtin_guard(ant_t *js) {
@@ -4077,10 +4074,10 @@ ant_value_t regexp_literal_replace_call(
   ant_value_t replace_fn = js_getprop_fallback(js, str, "replace");
   if (is_err(replace_fn)) return replace_fn;
   ant_value_t call_args[2] = { regexp_obj, replacement };
-  return sv_vm_call(js->vm, js, replace_fn, str, call_args, 2, NULL, false);
+  return sv_vm_call(js->vm, js, replace_fn, str, call_args, 2, NULL, js_mkundef());
 }
 
-static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_string_search(ant_params_t) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
@@ -4143,7 +4140,7 @@ search_string_pattern:;
   return tov(result);
 }
 
-static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_string_match(ant_params_t) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;

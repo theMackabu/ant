@@ -1495,6 +1495,11 @@ static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) 
   if (node->type == N_NEW_TARGET) return true;
   if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
 
+  if (
+    node->type == N_CALL && node->left && node->left->type == N_IDENT &&
+    node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
+  ) return true;
+
   bool lexical_arrow = in_arrow ||
     (node->type == N_FUNC && (node->flags & FN_ARROW));
   if (
@@ -1519,7 +1524,7 @@ static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) 
   return false;
 }
 
-static bool ast_references_new_target(const sv_ast_t *node) {
+bool ast_references_new_target(const sv_ast_t *node) {
   return ast_references_new_target_impl(node, false);
 }
 
@@ -1566,8 +1571,12 @@ static sv_ast_t *parse_func(P) {
   fn->src_end = (uint32_t)(TOFF + TLEN);
   if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
     fn->flags |= FN_USES_ARGS;
-  if (!(fn->flags & FN_ARROW) && ast_references_new_target(fn->body))
-    fn->flags |= FN_USES_NEW_TARGET;
+  if (!(fn->flags & FN_ARROW)) {
+    bool uses_new_target = ast_references_new_target(fn->body);
+    for (int i = 0; !uses_new_target && i < fn->args.count; i++)
+      uses_new_target = ast_references_new_target(fn->args.items[i]);
+    if (uses_new_target) fn->flags |= FN_USES_NEW_TARGET;
+  }
   return fn;
 }
 

@@ -4155,6 +4155,7 @@ static bool compile_direct_eval_call(
     emit_op(c, OP_POP);
   }
 
+  emit_lexical_new_target(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
   return true;
@@ -6902,6 +6903,14 @@ sv_func_t *compile_function_body(
   bool repl_top = is_repl_top_level(&comp);
 
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
+
+  if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
+    static const char nt_name[] = "\x01new.target";
+    comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, 1);
+    emit_put_local(&comp, comp.new_target_local);
+  }
   
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
@@ -7076,14 +7085,6 @@ sv_func_t *compile_function_body(
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, 0);
     emit_put_local(&comp, comp.strict_args_local);
-  }
-
-  if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
-    static const char nt_name[] = "\x01new.target";
-    comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 1);
-    emit_put_local(&comp, comp.new_target_local);
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
@@ -7518,6 +7519,8 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
   top_fn.body = sv_ast_new(N_BLOCK);
   top_fn.body->args = program->args;
+  if (mode == SV_COMPILE_EVAL && ast_references_new_target(program))
+    top_fn.flags |= FN_USES_NEW_TARGET;
 
   sv_compiler_t root;
   sv_compile_ctx_init_root(

@@ -151,7 +151,7 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   ant_value_t call_args[1] = { event_obj };
 
   ant_value_t onabort = js_get(js, *cur, "onabort");
-  if (is_callable(onabort)) sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, false);
+  if (is_callable(onabort)) sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, js_mkundef());
 
   for (unsigned int i = 0;;) {
     unsigned int n = abort_array_len(d->listeners);
@@ -165,7 +165,7 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
     if (once) { utarray_erase(d->listeners, i, 1); n--; } else i++;
     if (!is_callable(cb)) continue;
     
-    sv_vm_call(js->vm, js, cb, *cur, call_args, 1, NULL, false);
+    sv_vm_call(js->vm, js, cb, *cur, call_args, 1, NULL, js_mkundef());
   }}
   
   utarray_free(to_fire);
@@ -217,7 +217,7 @@ static ant_value_t make_new_signal(ant_t *js) {
 }
 
 // signal.addEventListener(type, listener, options?)
-static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_add_event_listener(ant_params_t) {
   if (nargs < 2) return js_mkundef();
 
   const char *type = js_getstr(js, args[0], NULL);
@@ -250,7 +250,7 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
 }
 
 // signal.removeEventListener(type, listener)
-static ant_value_t abort_signal_remove_event_listener(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_remove_event_listener(ant_params_t) {
   if (nargs < 2) return js_mkundef();
 
   const char *type = js_getstr(js, args[0], NULL);
@@ -271,7 +271,7 @@ static ant_value_t abort_signal_remove_event_listener(ant_t *js, ant_value_t *ar
 }
 
 // signal.dispatchEvent(event)
-static ant_value_t abort_signal_dispatch_event(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_dispatch_event(ant_params_t) {
   if (nargs < 1) return js_false;
 
   const char *type = NULL;
@@ -288,14 +288,14 @@ static ant_value_t abort_signal_dispatch_event(ant_t *js, ant_value_t *args, int
 }
 
 // signal.throwIfAborted()
-static ant_value_t abort_signal_throw_if_aborted(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_throw_if_aborted(ant_params_t) {
   abort_signal_data_t *data = get_signal_data(js_getthis(js));
   if (!data || !data->aborted) return js_mkundef();
   return js_throw(js, data->reason);
 }
 
 // AbortSignal.abort(reason?)
-static ant_value_t abort_signal_static_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_static_abort(ant_params_t) {
   ant_value_t reason = (nargs >= 1 && vtype(args[0]) != kTypeUndefined)
     ? args[0]
     : make_abort_error(js);
@@ -308,7 +308,7 @@ static ant_value_t abort_signal_static_abort(ant_t *js, ant_value_t *args, int n
 }
 
 // AbortSignal.any(signals)
-static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_static_any(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeArray)
     return js_mkerr(js, "AbortSignal.any: argument must be an array of AbortSignal objects");
 
@@ -385,7 +385,7 @@ static void abort_timeout_fire_cb(uv_timer_t *handle) {
 }
 
 // AbortSignal.timeout(milliseconds)
-static ant_value_t abort_signal_static_timeout(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_signal_static_timeout(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "AbortSignal.timeout: milliseconds argument required");
 
   double ms = js_getnum(args[0]);
@@ -411,7 +411,7 @@ static ant_value_t abort_signal_static_timeout(ant_t *js, ant_value_t *args, int
 }
 
 // new AbortController()
-static ant_value_t abort_controller_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_controller_ctor(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
 
   ant_value_t signal = make_new_signal(js);
@@ -425,7 +425,7 @@ static ant_value_t abort_controller_ctor(ant_t *js, ant_value_t *args, int nargs
 }
 
 // controller.abort(reason?)
-static ant_value_t abort_controller_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t abort_controller_abort(ant_params_t) {
   ant_value_t signal = js_get(js, js_getthis(js), "signal");
 
   abort_signal_data_t *data = get_signal_data(signal);
@@ -530,7 +530,7 @@ void abort_signal_add_listener(ant_t *js, ant_value_t signal, ant_value_t callba
     js_set(js, event_obj, "type", js_mkstr(js, "abort", 5));
     js_set(js, event_obj, "target", signal);
     ant_value_t call_args[1] = { event_obj };
-    sv_vm_call(js->vm, js, callback, signal, call_args, 1, NULL, false);
+    sv_vm_call(js->vm, js, callback, signal, call_args, 1, NULL, js_mkundef());
     return;
   }
 

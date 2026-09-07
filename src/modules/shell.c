@@ -412,7 +412,7 @@ static char *sh_resolve_path_text(
   return joined;
 }
 
-static ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_begin(ant_params_t) {
   if (nargs < 1 || !is_special_object(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell context");
   ant_value_t cwd_value = js_get(js, args[0], "cwd");
@@ -447,7 +447,7 @@ static ant_value_t sh_runtime_begin(ant_t *js, ant_value_t *args, int nargs) {
   return holder;
 }
 
-static ant_value_t sh_runtime_arg(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_arg(ant_params_t) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   if (!builder || nargs < 2 || vtype(args[1]) != kTypeString)
@@ -539,7 +539,7 @@ static ant_value_t sh_process_builder_add_builtin(
   return js_mkundef();
 }
 
-static ant_value_t sh_runtime_command(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_command(ant_params_t) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   size_t command_count = 0;
@@ -612,7 +612,7 @@ static ant_value_t sh_process_builder_add_redirect(
   return added ? js_mkundef() : js_mkerr(js, "Out of memory");
 }
 
-static ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_redirect(ant_params_t) {
   sh_process_builder_t *builder = nargs > 0
     ? sh_process_builder_get(args[0]) : NULL;
   size_t kind, command_index, command_count;
@@ -635,11 +635,9 @@ static ant_value_t sh_runtime_redirect(ant_t *js, ant_value_t *args, int nargs) 
   );
 }
 
-static ant_value_t sh_accumulate_fulfilled(
-  ant_t *js, ant_value_t *args, int nargs
-);
+static ant_value_t sh_accumulate_fulfilled(ant_params_t);
 
-static ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_submit(ant_params_t) {
   sh_process_builder_t *builder = nargs > 1
     ? sh_process_builder_get(args[1]) : NULL;
   if (!builder || nargs < 2 || !is_special_object(args[0]) || builder->argc)
@@ -663,9 +661,7 @@ static ant_value_t sh_runtime_submit(ant_t *js, ant_value_t *args, int nargs) {
   return accumulated;
 }
 
-static ant_value_t sh_accumulate_fulfilled(
-  ant_t *js, ant_value_t *args, int nargs
-) {
+static ant_value_t sh_accumulate_fulfilled(ant_params_t) {
   ant_value_t context = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t result = nargs > 0 ? args[0] : js_mkundef();
 
@@ -693,7 +689,7 @@ static ant_value_t sh_accumulate_fulfilled(
   return result;
 }
 
-static ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sh_runtime_finish(ant_params_t) {
   if (nargs < 1 || !is_special_object(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid shell accumulator");
   sh_output_accumulator_t *accumulator = js_get_native(
@@ -721,9 +717,7 @@ static ant_value_t sh_runtime_finish(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t sh_runtime_context(
-  ant_t *js, ant_value_t *args, int nargs
-) {
+static ant_value_t sh_runtime_context(ant_params_t) {
   bool needs_accumulator = nargs > 0 && js_truthy(js, args[0]);
   size_t capacity = 256;
   char *cwd = NULL;

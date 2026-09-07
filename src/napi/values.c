@@ -171,10 +171,7 @@ static napi_status napi_create_date_common(napi_env env, double time, napi_value
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   ant_value_t argv[1] = {js_mknum(time)};
-  ant_value_t saved = js->new_target;
-  js->new_target = ctor;
-  ant_value_t out = sv_vm_call(js->vm, js, ctor, obj, argv, 1, NULL, true);
-  js->new_target = saved;
+  ant_value_t out = sv_vm_call(js->vm, js, ctor, obj, argv, 1, NULL, ctor);
 
   if (is_err(out) || js->thrown_exists) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, is_object_type(out) ? out : obj);
@@ -1220,7 +1217,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   if (is_err(obj_ctor) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, obj_ctor);
   if (!is_callable(obj_ctor)) return napi_set_last(env, napi_generic_failure, "Object constructor missing");
   ant_value_t arg = (ant_value_t)value;
-  ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, js_mkundef(), &arg, 1, NULL, false);
+  ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, js_mkundef(), &arg, 1, NULL, js_mkundef());
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);

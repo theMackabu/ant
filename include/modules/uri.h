@@ -5,10 +5,10 @@
 
 void init_uri_module(ant_t *js);
 
-ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_encodeURI(ant_params_t);
+ant_value_t js_decodeURI(ant_params_t);
 
-ant_value_t js_encodeURIComponent(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t js_decodeURIComponent(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_encodeURIComponent(ant_params_t);
+ant_value_t js_decodeURIComponent(ant_params_t);
 
 #endif

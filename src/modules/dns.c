@@ -24,7 +24,7 @@
 #define DNS_TYPE_AAAA 28
 #define DNS_TYPE_SRV 33
 
-static ant_value_t dns_promises_lookup(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dns_promises_lookup(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "hostname is required");
 
   size_t len;
@@ -184,7 +184,7 @@ static ant_value_t dns_parse_txt(ant_t *js, const unsigned char *abuf, int alen)
   return arr;
 }
 
-static ant_value_t dns_promises_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dns_promises_resolve(ant_params_t) {
   if (nargs < 1) return dns_rejected_promise(js, "hostname is required");
 
   size_t len = 0;

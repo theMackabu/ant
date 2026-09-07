@@ -2,7 +2,7 @@
 
 #include "../platform/platform.h"
 
-ant_value_t DesktopNativeIpcReply(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopNativeIpcReply(ant_params_t) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid desktop IPC binding");
   (void)state;
@@ -27,7 +27,7 @@ static const char *IpcChannelArgument(ant_t *js, ant_value_t *args, int nargs, s
   return js_getstr(js, args[0], length);
 }
 
-ant_value_t DesktopIpcMainHandle(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopIpcMainHandle(ant_params_t) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid ipcMain receiver");
   size_t length = 0;
@@ -41,7 +41,7 @@ ant_value_t DesktopIpcMainHandle(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t DesktopIpcMainRemoveHandler(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopIpcMainRemoveHandler(ant_params_t) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid ipcMain receiver");
   size_t length = 0;
@@ -51,7 +51,7 @@ ant_value_t DesktopIpcMainRemoveHandler(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-ant_value_t DesktopIpcMainOn(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopIpcMainOn(ant_params_t) {
   ant_desktop_state_t *state = ant_desktop_state_from(js_getthis(js));
   if (!state) return js_mkerr(js, "invalid ipcMain receiver");
   size_t length = 0;

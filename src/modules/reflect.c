@@ -9,7 +9,7 @@
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 
-static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_get(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   
   ant_value_t target = args[0];
@@ -44,7 +44,7 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
   return js_getprop_super(js, target, receiver, key_str);
 }
 
-static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_set(ant_params_t) {
   if (nargs < 3) return js_false;
   
   ant_value_t target = args[0];
@@ -80,7 +80,7 @@ static ant_value_t reflect_set(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_has(ant_params_t) {
   if (nargs < 2) return js_false;
 
   ant_value_t target = args[0];
@@ -119,7 +119,7 @@ static ant_value_t reflect_has(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(lkp_proto(js, target, key_str, key_len).obj);
 }
 
-static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_delete_property(ant_params_t) {
   if (nargs < 2) return js_false;
   
   ant_value_t target = args[0];
@@ -143,7 +143,7 @@ static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nar
   return js_bool(deleted);
 }
 
-static ant_value_t reflect_own_keys(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_own_keys(ant_params_t) {
   if (nargs < 1) return js_mkarr(js);
   ant_value_t target = args[0];
   
@@ -155,7 +155,7 @@ static ant_value_t reflect_own_keys(ant_t *js, ant_value_t *args, int nargs) {
   return js_own_property_keys(js, target, true, false);
 }
 
-static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_construct(ant_params_t) {
   if (nargs < 2) {
     return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
   }
@@ -191,7 +191,6 @@ static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   ant_value_t result;
-  ant_value_t saved_new_target = js->new_target;
   if (vtype(target) == kTypeObject && is_proxy(target)) {
     result = js_proxy_construct(js, target, call_args, arg_count, new_target);
   } else {
@@ -201,29 +200,26 @@ static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
       js, target, new_target, &effective_new_target, &record_func
     );
     if (is_err(proto)) {
-      js->new_target = saved_new_target;
       if (call_args) free(call_args);
       return proto;
     }
 
     ant_value_t new_obj = js_mkobj(js);
     if (is_object_type(proto)) js_set_proto_init(new_obj, proto);
-    js->new_target = effective_new_target;
 
     ant_value_t ctor_this = new_obj;
     result = sv_vm_call(
-      js->vm, js, target, new_obj, call_args, arg_count, &ctor_this, true
+      js->vm, js, target, new_obj, call_args, arg_count, &ctor_this, effective_new_target
     );
     if (!is_err(result) && !is_object_type(result))
       result = is_object_type(ctor_this) ? ctor_this : new_obj;
   }
-  js->new_target = saved_new_target;
   
   if (call_args) free(call_args);
   return result;
 }
 
-static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_apply(ant_params_t) {
   if (nargs < 3) {
     return js_mkerr(js, "Reflect.apply requires 3 arguments");
   }
@@ -258,7 +254,7 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Reflect.apply: third argument must be an array-like object");
 }
 
-static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_get_own_property_descriptor(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   
   ant_value_t target = args[0];
@@ -269,15 +265,15 @@ static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *a
   ant_value_t get_desc = js_get(js, object_ctor, "getOwnPropertyDescriptor");
   if (!is_callable(get_desc)) return js_mkundef();
 
-  return sv_vm_call(js->vm, js, get_desc, object_ctor, args, 2, NULL, false);
+  return sv_vm_call(js->vm, js, get_desc, object_ctor, args, 2, NULL, js_mkundef());
 }
 
-static ant_value_t reflect_define_property(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_define_property(ant_params_t) {
   if (nargs < 3) return js_false;
   return js_define_property(js, args[0], args[1], args[2], true);
 }
 
-static ant_value_t reflect_get_prototype_of(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_get_prototype_of(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Reflect.getPrototypeOf requires an argument");
   }
@@ -295,7 +291,7 @@ static ant_value_t reflect_get_prototype_of(ant_t *js, ant_value_t *args, int na
   return js_get_proto(js, target);
 }
 
-static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_set_prototype_of(ant_params_t) {
   if (nargs < 2) return js_false;
   
   ant_value_t target = args[0];
@@ -318,7 +314,7 @@ static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int na
   return js_true;
 }
 
-static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_is_extensible(ant_params_t) {
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
@@ -332,7 +328,7 @@ static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs
   return js_bool(obj->flags.extensible);
 }
 
-static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t reflect_prevent_extensions(ant_params_t) {
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];

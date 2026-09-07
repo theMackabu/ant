@@ -17,7 +17,7 @@ ant_value_t esm_create_cjs_module(ant_t *js, const char *filename, ant_value_t p
 ant_value_t esm_init_cjs_module(ant_t *js, ant_value_t obj, const char *id, ant_value_t parent);
 ant_value_t esm_create_require(ant_t *js, ant_value_t module);
 ant_value_t esm_create_require_from_path(ant_t *js, const char *filename);
-ant_value_t esm_cjs_require_module(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t esm_cjs_require_module(ant_params_t);
 
 ant_value_t esm_load_commonjs_module(
   ant_t *js, const char *module_path,

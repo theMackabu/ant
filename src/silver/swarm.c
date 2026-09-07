@@ -1488,8 +1488,6 @@ static void mir_emit_uncurried_char_code_at(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_I2D,
     MIR_new_reg_op(ctx, number), MIR_new_reg_op(ctx, value)));
   mir_d_to_i64_non_nan(ctx, fn, result, number, d_slot);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV,
-    MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_t, new_target), js, 0, 1), MIR_new_uint_op(ctx, js_mkundef())));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
 
@@ -6024,10 +6022,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_type_t br_ret = MIR_JSVAL;
   MIR_item_t resume_proto = MIR_new_proto(ctx, "resume_proto",
-    1, &br_ret, 12,
+    1, &br_ret, 14,
     MIR_T_I64,  "vm",
     MIR_T_P,    "closure",
     MIR_JSVAL,  "this_val",
+    MIR_JSVAL,  "new_target",
+    MIR_JSVAL,  "super_val",
     MIR_T_P,    "args",
     MIR_T_I32,  "argc",
     MIR_T_P,    "vstack",
@@ -14211,13 +14211,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         ctx, jit_func, r_slotbuf, r_args, r_argc, captured_params, param_count);
     }
     MIR_append_insn(ctx, jit_func,
-      MIR_new_call_insn(ctx, 15,
+      MIR_new_call_insn(ctx, 17,
         MIR_new_ref_op(ctx, resume_proto),
         MIR_new_ref_op(ctx, imp_resume),
         MIR_new_reg_op(ctx, r_resume_res),
         MIR_new_reg_op(ctx, r_vm),
         MIR_new_reg_op(ctx, r_closure),
         MIR_new_reg_op(ctx, r_this_curr),
+        MIR_new_reg_op(ctx, r_new_target),
+        MIR_new_reg_op(ctx, r_super_val),
         MIR_new_reg_op(ctx, r_args),
         MIR_new_reg_op(ctx, r_argc),
         MIR_new_reg_op(ctx, r_args_buf),
@@ -14313,7 +14315,7 @@ ant_value_t sv_jit_try_compile_and_call(
   fn->jit_code = (void *)jit;
   sv_jit_enter(js);
   ant_value_t result = jit(
-    vm, ctx->this_val, js->new_target,
+    vm, ctx->this_val, ctx->new_target,
     ctx->super_val, ctx->args, ctx->argc, closure);
   sv_jit_leave(js);
   if (sv_is_jit_bailout(result)) {

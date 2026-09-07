@@ -156,7 +156,7 @@ static inline server_runtime_t *server_current_runtime(ant_t *js) {
 
 static ant_value_t server_mkreqfun(
   ant_t *js,
-  ant_value_t (*fn)(ant_t *, ant_value_t *, int),
+  ant_cfunc_t fn,
   server_request_t *req
 ) {
   ant_value_t func = js_heavy_mkfun(js, fn, js_mkundef());
@@ -166,7 +166,7 @@ static ant_value_t server_mkreqfun(
 
 static ant_value_t server_mkruntimefun(
   ant_t *js,
-  ant_value_t (*fn)(ant_t *, ant_value_t *, int),
+  ant_cfunc_t fn,
   server_runtime_t *server
 ) {
   ant_value_t func = js_heavy_mkfun(js, fn, server->server_ctx);
@@ -538,8 +538,8 @@ static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t reque
   ant_value_t result = js_mkundef();
 
   js->this_val = server->export_obj;
-  if (vtype(server->fetch_fn) == kTypeBuiltin) result = js_as_cfunc(server->fetch_fn)(js, args, 2);
-  else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, false);
+  if (vtype(server->fetch_fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(server->fetch_fn), args, 2, js_mkundef());
+  else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, js_mkundef());
   js->this_val = saved_this;
   
   return result;
@@ -575,7 +575,7 @@ static ant_value_t server_sse_enqueue(ant_t *js, server_sse_state_t *state, char
   return rs_controller_enqueue(js, state->controller_obj, chunk);
 }
 
-static ant_value_t server_sse_send(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_sse_send(ant_params_t) {
   server_sse_state_t *state = (server_sse_state_t *)js_get_native(js->current_func, SERVER_SSE_NATIVE_TAG);
   ant_value_t input = nargs > 0 ? args[0] : js_mkundef();
   
@@ -632,7 +632,7 @@ static ant_value_t server_sse_send(ant_t *js, ant_value_t *args, int nargs) {
   return server_sse_enqueue(js, state, out, out_len);
 }
 
-static ant_value_t server_sse_comment(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_sse_comment(ant_params_t) {
   server_sse_state_t *state = (server_sse_state_t *)js_get_native(js->current_func, SERVER_SSE_NATIVE_TAG);
   ant_value_t text_v = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   const char *text = NULL;
@@ -647,7 +647,7 @@ static ant_value_t server_sse_comment(ant_t *js, ant_value_t *args, int nargs) {
   return server_sse_enqueue(js, state, out, out_len);
 }
 
-static ant_value_t server_sse_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_sse_close(ant_params_t) {
   server_sse_state_t *state = (server_sse_state_t *)js_get_native(js->current_func, SERVER_SSE_NATIVE_TAG);
   if (!state || state->closed) return js_mkundef();
   state->closed = true;
@@ -655,7 +655,7 @@ static ant_value_t server_sse_close(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t server_event_source(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_event_source(ant_params_t) {
   server_sse_state_t *state = calloc(1, sizeof(*state));
   ant_value_t stream = 0;
   ant_value_t controller = 0;
@@ -697,7 +697,7 @@ static ant_value_t server_event_source(ant_t *js, ant_value_t *args, int nargs) 
   return obj;
 }
 
-static ant_value_t server_upgrade_websocket(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_upgrade_websocket(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   server_request_t *req = NULL;
   
@@ -757,7 +757,7 @@ static ant_value_t server_upgrade_websocket(ant_t *js, ant_value_t *args, int na
   return result;
 }
 
-static ant_value_t server_abort_signal_task(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_abort_signal_task(ant_params_t) {
   ant_value_t payload = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t signal = 0; ant_value_t reason = 0;
   if (vtype(payload) != kTypeObject) return js_mkundef();
@@ -1137,7 +1137,7 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   );
 }
 
-static ant_value_t server_on_response_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_on_response_reject(ant_params_t) {
   server_request_t *req = server_current_request(js);
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   const char *msg = NULL;
@@ -1154,7 +1154,7 @@ static ant_value_t server_on_response_reject(ant_t *js, ant_value_t *args, int n
   return js_mkundef();
 }
 
-static ant_value_t server_on_response_fulfill(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_on_response_fulfill(ant_params_t) {
   server_request_t *req = server_current_request(js);
   ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
 
@@ -1200,7 +1200,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   server_finish_with_response(req, result);
 }
 
-static ant_value_t server_stream_read_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_stream_read_reject(ant_params_t) {
   server_request_t *req = server_current_request(js);
   if (!req) return js_mkundef();
   
@@ -1211,7 +1211,7 @@ static ant_value_t server_stream_read_reject(ant_t *js, ant_value_t *args, int n
   return js_mkundef();
 }
 
-static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_stream_read_fulfill(ant_params_t) {
   server_request_t *req = server_current_request(js);
   ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -1368,7 +1368,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   free(wr);
 }
 
-static ant_value_t server_request_ip(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_request_ip(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   server_request_t *req = NULL;
   ant_value_t out = 0;
@@ -1383,7 +1383,7 @@ static ant_value_t server_request_ip(ant_t *js, ant_value_t *args, int nargs) {
   return out;
 }
 
-static ant_value_t server_timeout(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_timeout(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   server_request_t *req = NULL;
   int timeout = 0;
@@ -1398,7 +1398,7 @@ static ant_value_t server_timeout(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t server_stop(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_stop(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   stop_waiter_t *waiter = NULL;
   ant_value_t promise = js_mkpromise(js);
@@ -1422,7 +1422,7 @@ static ant_value_t server_stop(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t server_reload(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t server_reload(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   ant_value_t fetch = 0;
 

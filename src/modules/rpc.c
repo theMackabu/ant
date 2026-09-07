@@ -564,7 +564,7 @@ static void rpc_run_task(ant_t *js, rpc_deferred_task_t *task) {
   }
 
   ant_value_t call_args[] = { args_arr };
-  ant_value_t result = sv_vm_call(js->vm, js, task->route->handler, js_mkundef(), call_args, 1, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, task->route->handler, js_mkundef(), call_args, 1, NULL, js_mkundef());
   GC_ROOT_PIN(js, result);
 
   bool result_is_awaitable = vtype(result) == kTypePromise || (is_object_type(result) && is_callable(js_get(js, result, "then")));
@@ -734,14 +734,14 @@ static ant_value_t rpc_server_register_impl(ant_t *js, rpc_server_t *server, ant
   return js_getthis(js);
 }
 
-static ant_value_t rpc_server_register(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_server_register(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer.register requires name and handler");
   return rpc_server_register_impl(js, server, args[0], args[1]);
 }
 
-static ant_value_t rpc_server_unregister(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_server_unregister(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer.unregister requires a name");
@@ -757,7 +757,7 @@ static ant_value_t rpc_server_unregister(ant_t *js, ant_value_t *args, int nargs
   return js_getthis(js);
 }
 
-static ant_value_t rpc_server_port_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_server_port_getter(ant_params_t) {
   (void)args; (void)nargs;
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
@@ -765,7 +765,7 @@ static ant_value_t rpc_server_port_getter(ant_t *js, ant_value_t *args, int narg
   return js_mknum((double)server->port);
 }
 
-static ant_value_t rpc_server_listen(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_server_listen(ant_params_t) {
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
 
@@ -871,7 +871,7 @@ static void rpc_server_close_impl(rpc_server_t *server) {
   server->closing = false;
 }
 
-static ant_value_t rpc_server_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_server_close(ant_params_t) {
   (void)args; (void)nargs;
   rpc_server_t *server = rpc_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
@@ -881,8 +881,8 @@ static ant_value_t rpc_server_close(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t rpc_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t rpc_server_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcServer constructor requires new");
 
   rpc_server_t *server = calloc(1, sizeof(*server));
@@ -1078,7 +1078,7 @@ static rpc_client_t *rpc_require_client(ant_t *js, ant_value_t this_val) {
   return client;
 }
 
-static ant_value_t rpc_client_connect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_client_connect(ant_params_t) {
   (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return js->thrown_value;
@@ -1093,7 +1093,7 @@ static ant_value_t rpc_client_connect(ant_t *js, ant_value_t *args, int nargs) {
   return rpc_client_enqueue(client, op);
 }
 
-static ant_value_t rpc_client_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_client_call(ant_params_t) {
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return js->thrown_value;
   if (nargs < 2 || vtype(args[1]) != kTypeArray)
@@ -1120,7 +1120,7 @@ static ant_value_t rpc_client_call(ant_t *js, ant_value_t *args, int nargs) {
   return rpc_client_enqueue(client, op);
 }
 
-static ant_value_t rpc_client_ping(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_client_ping(ant_params_t) {
   (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return js->thrown_value;
@@ -1135,7 +1135,7 @@ static ant_value_t rpc_client_ping(ant_t *js, ant_value_t *args, int nargs) {
   return rpc_client_enqueue(client, op);
 }
 
-static ant_value_t rpc_client_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t rpc_client_close(ant_params_t) {
   (void)args; (void)nargs;
   rpc_client_t *client = rpc_require_client(js, js_getthis(js));
   if (!client) return js->thrown_value;
@@ -1207,8 +1207,8 @@ static void rpc_client_finalizer(ant_t *js, ant_object_t *obj) {
   free(client);
 }
 
-static ant_value_t rpc_client_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t rpc_client_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient constructor requires new");
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RpcClient requires options");

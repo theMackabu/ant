@@ -700,13 +700,13 @@ static inline ant_value_t js_as_obj(ant_value_t v) {
 ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm,sv_closure_t *closure,
   ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args,
-  int argc, ant_value_t *out_this
+  ant_value_t new_target, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t *out_this
 );
 
 ant_value_t sv_execute_eval_entry(
-  sv_vm_t *vm, sv_func_t *func,
-  ant_value_t this_val, ant_value_t eval_env
+  sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, 
+  ant_value_t eval_env, ant_value_t new_target
 );
 
 ant_value_t sv_call_compiled_zero_upvalues(
@@ -738,6 +738,11 @@ static_assert(SV_HANDLER_MAX <= UINT16_MAX,
 #define SV_FRAMES_HARD_MAX 65536
 #define SV_STACK_HARD_MAX  524288
 #endif
+
+typedef struct sv_native_frame {
+  struct sv_native_frame *caller;
+  ant_value_t new_target;
+} sv_native_frame_t;
 
 struct sv_vm {
   ant_t *js;
@@ -776,6 +781,7 @@ struct sv_vm {
   } jit_resume;
 
   sv_jit_osr_t jit_osr;
+  sv_native_frame_t *native_frame;
 };
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }
@@ -847,18 +853,32 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
-// TODO: use js->vm only
-static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
-  return js ? js->vm : NULL;
-}
-
 static inline bool sv_is_strict_context(ant_t *js) {
-  return sv_vm_is_strict(sv_vm_get_active(js));
+  return sv_vm_is_strict(js->vm);
 }
 
-static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm) {
   if (vm && vm->fp >= 0) return vm->frames[vm->fp].new_target;
-  return js->new_target;
+  return js_mkundef();
+}
+
+static inline ant_value_t sv_invoke_native(
+  ant_t *js, ant_cfunc_t fn, ant_value_t *args, 
+  int nargs, ant_value_t new_target
+) {
+  if (new_target == js_mkundef()) return fn(js, args, nargs, new_target);
+
+  sv_vm_t *vm = js->vm;
+  sv_native_frame_t frame = {
+    .caller = vm->native_frame, 
+    .new_target = new_target
+  };
+  
+  vm->native_frame = &frame;
+  ant_value_t result = fn(js, args, nargs, new_target);
+  vm->native_frame = frame.caller;
+  
+  return result;
 }
 
 static inline ant_value_t sv_vm_get_super_val(const sv_vm_t *vm) {
@@ -930,6 +950,7 @@ ant_value_t sv_string_builder_append_snapshot_slot(
 typedef struct {
   ant_value_t this_val;
   ant_value_t super_val;
+  ant_value_t new_target;
   ant_value_t *args;
   int argc;
   ant_value_t *alloc;
@@ -1099,7 +1120,8 @@ static inline ant_value_t sv_call_resolve_closure(
 static inline ant_value_t sv_prepare_call(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, sv_call_mode_t mode, sv_call_plan_t *plan
+  ant_value_t *out_this, sv_call_mode_t mode, 
+  ant_value_t new_target, sv_call_plan_t *plan
 ) {
   bool is_construct_call = sv_call_mode_is_construct(mode);
 
@@ -1110,12 +1132,12 @@ static inline ant_value_t sv_prepare_call(
   plan->ctx = (sv_call_ctx_t){
     .this_val = this_val,
     .super_val = js_mkundef(),
+    .new_target = new_target,
     .args = args,
     .argc = argc,
     .alloc = NULL,
   };
 
-  if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
   if (is_construct_call && vtype(func) == kTypeObject && is_proxy(func)) {
@@ -1179,24 +1201,29 @@ static inline ant_value_t sv_execute_call_plan(
 ) {
   switch (plan->kind) {
   case SV_CALL_EXEC_PROXY_APPLY: return js_proxy_apply(
-    js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+    js, plan->func, plan->ctx.this_val, 
+    plan->ctx.args, plan->ctx.argc
   );
   
   case SV_CALL_EXEC_PROXY_CONSTRUCT: return js_proxy_construct(
-    js, plan->func, plan->ctx.args, plan->ctx.argc, sv_vm_get_new_target(vm, js)
+    js, plan->func, plan->ctx.args, 
+    plan->ctx.argc, plan->ctx.new_target
   );
   
   case SV_CALL_EXEC_DEFAULT_CTOR: return sv_call_default_ctor(
-    vm, js, plan->closure, &plan->ctx, out_this
+    vm, js, plan->closure, 
+    &plan->ctx, out_this
   );
   
   case SV_CALL_EXEC_CLOSURE: return sv_call_resolve_closure(
-    vm, js, plan->closure, plan->func, &plan->ctx, out_this
+    vm, js, plan->closure, 
+    plan->func, &plan->ctx, out_this
   );
   
   case SV_CALL_EXEC_NATIVE: {
     ant_value_t result = sv_call_native(
-      js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+      js, plan->func, plan->ctx.this_val, 
+      plan->ctx.args, plan->ctx.argc, plan->ctx.new_target
     );
     sv_call_cleanup(js, &plan->ctx);
     return result;
@@ -1207,7 +1234,7 @@ static inline ant_value_t sv_execute_call_plan(
     js->current_func = plan->func;
     ant_value_t result = sv_call_native(
       js, plan->closure->bound_this, 
-      plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+      plan->ctx.this_val, plan->ctx.args, plan->ctx.argc, js_mkundef()
     );
     js->current_func = saved_func;
     sv_call_cleanup(js, &plan->ctx);
@@ -1231,30 +1258,47 @@ static inline bool sv_check_c_stack_overflow(ant_t *js) {
 static inline ant_value_t sv_vm_call(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, bool is_construct_call
+  ant_value_t *out_this, ant_value_t new_target
 ) {
   if (sv_check_c_stack_overflow(js))
     return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
 
+  bool is_construct_call = new_target != js_mkundef();
   sv_call_mode_t mode = is_construct_call
     ? SV_CALL_MODE_CONSTRUCT
     : SV_CALL_MODE_NORMAL;
 
   if (!is_construct_call && vtype(func) == kTypeBuiltin) {
-    js->new_target = js_mkundef();
     ant_value_t native_this = sv_call_normalize_this(js, this_val, mode);
     
     if (out_this) *out_this = native_this;
-    ant_value_t native_res = sv_call_native(js, func, native_this, args, argc);
-    sv_vm_maybe_checkpoint_microtasks(js);
+    ant_value_t saved_this = js->this_val;
     
+    js->this_val = native_this;
+    ant_value_t native_res = js_as_cfunc(func)(js, args, argc, js_mkundef());
+    js->this_val = saved_this;
+    
+    sv_vm_maybe_checkpoint_microtasks(js);
     return native_res;
+  }
+
+  if (vtype(func) == kTypeFunction) {
+    sv_closure_t *closure = js_func_closure(func);
+    if (closure->func == NULL && closure->call_flags == 0) {
+      if (is_construct_call && !js_is_constructor(func)) return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+      if (out_this) *out_this = this_val;
+      
+      ant_value_t result = sv_call_native(js, func, this_val, args, argc, new_target);
+      sv_vm_maybe_checkpoint_microtasks(js);
+      
+      return result;
+    }
   }
 
   sv_call_plan_t plan;
   ant_value_t err = sv_prepare_call(
     vm, js, func, this_val, args, argc,
-    out_this, mode, &plan
+    out_this, mode, new_target, &plan
   );
 
   if (is_err(err)) return err;
@@ -1274,7 +1318,7 @@ static inline ant_value_t sv_vm_call_explicit_this(
   sv_call_plan_t plan;
   ant_value_t err = sv_prepare_call(
     vm, js, func, this_val, args, argc, NULL,
-    SV_CALL_MODE_EXPLICIT_THIS, &plan
+    SV_CALL_MODE_EXPLICIT_THIS, js_mkundef(), &plan
   );
   
   if (is_err(err)) return err;
@@ -1288,7 +1332,7 @@ static inline ant_value_t sv_call_default_ctor(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
-  if (vtype(js->new_target) == kTypeUndefined) {
+  if (vtype(ctx->new_target) == kTypeUndefined) {
     sv_call_cleanup(js, ctx);
     return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
   }
@@ -1300,7 +1344,7 @@ static inline ant_value_t sv_call_default_ctor(
     ant_value_t super_this = ctx->this_val;
     ant_value_t result = sv_vm_call(
       vm, js, super_ctor, ctx->this_val,
-      ctx->args, ctx->argc, &super_this, true
+      ctx->args, ctx->argc, &super_this, ctx->new_target
     );
     
     if (out_this) *out_this = super_this;
@@ -1316,13 +1360,15 @@ static inline ant_value_t sv_call_default_ctor(
 ant_value_t sv_call_async_closure_dispatch(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args, int argc
+  ant_value_t new_target, ant_value_t this_val, 
+  ant_value_t *args, int argc
 );
 
 ant_value_t sv_call_generator_closure_dispatch(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args, int argc
+  ant_value_t new_target, ant_value_t this_val, 
+  ant_value_t *args, int argc
 );
 
 static inline ant_value_t sv_call_async_closure(
@@ -1331,7 +1377,8 @@ static inline ant_value_t sv_call_async_closure(
 ) {
   ant_value_t result = sv_call_async_closure_dispatch(
     vm, js, closure, callee_func,
-    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
+    ctx->super_val, ctx->new_target, 
+    ctx->this_val, ctx->args, ctx->argc
   );
   sv_call_cleanup(js, ctx);
   return result;
@@ -1343,7 +1390,8 @@ static inline ant_value_t sv_call_generator_closure(
 ) {
   ant_value_t result = sv_call_generator_closure_dispatch(
     vm, js, closure, callee_func,
-    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
+    ctx->super_val, ctx->new_target, 
+    ctx->this_val, ctx->args, ctx->argc
   );
   sv_call_cleanup(js, ctx);
   return result;
@@ -1354,7 +1402,7 @@ static inline ant_value_t sv_call_closure(
   ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   ant_value_t result = sv_execute_closure_entry(
-    vm, closure, callee_func, ctx->super_val,
+    vm, closure, callee_func, ctx->super_val, ctx->new_target,
     ctx->this_val, ctx->args, ctx->argc, out_this
   );
   sv_call_cleanup(js, ctx);
@@ -1876,7 +1924,7 @@ static inline ant_value_t sv_call_resolve_closure(
     if (fn->jit_code) {
       sv_jit_enter(js);
       ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
-        vm, ctx->this_val, js->new_target,
+        vm, ctx->this_val, ctx->new_target,
         ctx->super_val, ctx->args, ctx->argc, closure
       );
       sv_jit_leave(js);

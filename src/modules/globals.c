@@ -74,7 +74,7 @@ static ant_value_t make_global_location(ant_t *js) {
   return location;
 }
 
-ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_report_error(ant_params_t) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "reportError requires 1 argument");
   
   ant_value_t error  = args[0];
@@ -122,7 +122,7 @@ ant_value_t js_report_error(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t msg_str  = js_mkstr(js, msg, strlen(msg));
     ant_value_t file_str = js_mkstr(js, filename, strlen(filename));
     ant_value_t call_args[5] = { msg_str, file_str, js_mknum(lineno), js_mknum(colno), error };
-    sv_vm_call(js->vm, js, handler, global, call_args, 5, NULL, false);
+    sv_vm_call(js->vm, js, handler, global, call_args, 5, NULL, js_mkundef());
   }
 
   return js_mkundef();
@@ -141,7 +141,7 @@ bool js_fire_unhandled_rejection(ant_t *js, ant_value_t promise_val, ant_value_t
   js_set(js, event, "promise", promise_val);
   
   ant_value_t call_args[1] = { event };
-  sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, false);
+  sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, js_mkundef());
   
   return true;
 }
@@ -159,7 +159,7 @@ void js_fire_rejection_handled(ant_t *js, ant_value_t promise_val, ant_value_t r
   js_set(js, event, "promise", promise_val);
   
   ant_value_t call_args[1] = { event };
-  sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, false);
+  sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, js_mkundef());
 }
 
 void init_globals_module(ant_t *js) {

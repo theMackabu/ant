@@ -172,7 +172,7 @@ static void sandbox_guest_deliver_message(sandbox_guest_port_t *port, const void
   if (!is_callable(handler)) return;
 
   ant_value_t args[1] = { message };
-  sv_vm_call(js->vm, js, handler, port->obj, args, 1, NULL, false);
+  sv_vm_call(js->vm, js, handler, port->obj, args, 1, NULL, js_mkundef());
   js_maybe_drain_microtasks_after_async_settle(js);
 }
 
@@ -245,7 +245,7 @@ static void sandbox_guest_poll_cb(uv_poll_t *handle, int status, int events) {
 #endif
 }
 
-static ant_value_t sandbox_guest_send(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_guest_send(ant_params_t) {
   if (!ant_sandbox_is_guest_process()) return js_mkerr_typed(js, JS_ERR_TYPE, "parentPort is only available inside a sandbox");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "parentPort.send(value) requires a value");
   ant_value_t encoded = json_stringify_value(js, args[0]);
@@ -257,7 +257,7 @@ static ant_value_t sandbox_guest_send(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t sandbox_guest_on(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_guest_on(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "parentPort.on('message', handler) requires a handler");
   const char *event = js_getstr(js, args[0], NULL);
@@ -267,7 +267,7 @@ static ant_value_t sandbox_guest_on(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static ant_value_t sandbox_guest_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_guest_close(ant_params_t) {
   (void)js; (void)args; (void)nargs;
   sandbox_guest_port_close(&g_guest_port);
   return js_mkundef();
@@ -610,8 +610,8 @@ static ant_value_t sandbox_apply_options(ant_t *js, sandbox_state_t *state, ant_
   return js_mkundef();
 }
 
-static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t sandbox_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox constructor requires 'new'");
 
   if (ant_sandbox_is_guest_process())
@@ -664,7 +664,7 @@ static ant_value_t sandbox_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   state->self = obj;
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.sandbox_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.sandbox_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, state, SANDBOX_NATIVE_TAG);
@@ -914,7 +914,7 @@ static void sandbox_host_deliver_message(sandbox_state_t *state, const char *pay
   if (!is_callable(handler)) handler = js_get(js, state->self, "_messageHandler");
   if (!is_callable(handler)) return;
   ant_value_t args[1] = { message };
-  sv_vm_call(js->vm, js, handler, state->self, args, 1, NULL, false);
+  sv_vm_call(js->vm, js, handler, state->self, args, 1, NULL, js_mkundef());
 }
 
 static void sandbox_finish_waiters(sandbox_state_t *state) {
@@ -1055,7 +1055,7 @@ static void sandbox_async_cb(uv_async_t *handle) {
     uv_close((uv_handle_t *)&state->async, sandbox_async_closed);
 }
 
-static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_run(ant_params_t) {
   ant_value_t state_error = js_mkundef();
   sandbox_state_t *state = sandbox_require_open_state(js, &state_error);
   
@@ -1161,7 +1161,7 @@ static ant_value_t sandbox_run(ant_t *js, ant_value_t *args, int nargs) {
   return state->run_promise;
 }
 
-static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_eval(ant_params_t) {
   ant_value_t state_error = js_mkundef();
   sandbox_state_t *state = sandbox_require_open_state(js, &state_error);
   
@@ -1180,7 +1180,7 @@ static ant_value_t sandbox_eval(ant_t *js, ant_value_t *args, int nargs) {
   return sandbox_execute_request(js, state, request, request_len, true);
 }
 
-static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_close(ant_params_t) {
   sandbox_state_t *state = sandbox_get_state(js->this_val);
   ant_value_t promise = js_mkpromise(js);
   
@@ -1253,7 +1253,7 @@ static ant_value_t sandbox_close(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t sandbox_send(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_send(ant_params_t) {
   sandbox_state_t *state = sandbox_get_state(js->this_val);
   if (!state || state->closed) return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox is closed");
   if (!state->running || !state->session)
@@ -1317,12 +1317,12 @@ static ant_value_t sandbox_wait_for_message(
   return promise;
 }
 
-static ant_value_t sandbox_receive(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_receive(ant_params_t) {
   (void)args; (void)nargs;
   return sandbox_wait_for_message(js, sandbox_get_state(js->this_val), NULL, false);
 }
 
-static ant_value_t sandbox_once(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_once(ant_params_t) {
   sandbox_state_t *state = sandbox_get_state(js->this_val);
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return sandbox_rejected(js, js_mkerr_typed(js, JS_ERR_TYPE,
@@ -1332,15 +1332,15 @@ static ant_value_t sandbox_once(ant_t *js, ant_value_t *args, int nargs) {
   return sandbox_wait_for_message(js, state, type, false);
 }
 
-static ant_value_t sandbox_messages_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_messages_next(ant_params_t) {
   return sandbox_wait_for_message(js, sandbox_get_state(js->this_val), NULL, true);
 }
 
-static ant_value_t sandbox_messages_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_messages_getter(ant_params_t) {
   return js->this_val;
 }
 
-static ant_value_t sandbox_stats(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_stats(ant_params_t) {
   (void)args; (void)nargs;
   sandbox_state_t *state = sandbox_get_state(js->this_val);
   if (!state) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Sandbox receiver");
@@ -1362,7 +1362,7 @@ static ant_value_t sandbox_stats(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t sandbox_on(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_on(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Sandbox.on('message', handler) requires a handler");
   const char *event = js_getstr(js, args[0], NULL);
@@ -1372,7 +1372,7 @@ static ant_value_t sandbox_on(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static ant_value_t sandbox_terminate(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t sandbox_terminate(ant_params_t) {
   sandbox_state_t *state = sandbox_get_state(js->this_val);
   ant_value_t promise = js_mkpromise(js);
   

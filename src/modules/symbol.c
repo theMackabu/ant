@@ -46,8 +46,8 @@ ant_value_t js_iter_result(ant_t *js, bool has_value, ant_value_t value) {
   return result;
 }
 
-static ant_value_t builtin_Symbol(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) != kTypeUndefined)
+static ant_value_t builtin_Symbol(ant_params_t) {
+  if (vtype(call_new_target) != kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol is not a constructor");
 
   const char *desc = NULL;
@@ -57,7 +57,7 @@ static ant_value_t builtin_Symbol(ant_t *js, ant_value_t *args, int nargs) {
   return js_mksym(js, desc);
 }
 
-static ant_value_t builtin_Symbol_for(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_Symbol_for(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "Symbol.for requires a string argument");
   }
@@ -68,7 +68,7 @@ static ant_value_t builtin_Symbol_for(ant_t *js, ant_value_t *args, int nargs) {
   return js_mksym_for(js, key);
 }
 
-static ant_value_t builtin_Symbol_keyFor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_Symbol_keyFor(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeSymbol) {
     return js_mkundef();
   }
@@ -79,7 +79,7 @@ static ant_value_t builtin_Symbol_keyFor(ant_t *js, ant_value_t *args, int nargs
   return js_mkstr(js, key, strlen(key));
 }
 
-static ant_value_t builtin_Symbol_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_Symbol_toString(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
   
   if (vtype(this_val) != kTypeSymbol && is_object_type(this_val)) {
@@ -94,7 +94,7 @@ static ant_value_t builtin_Symbol_toString(ant_t *js, ant_value_t *args, int nar
   return js_symbol_to_string(js, this_val);
 }
 
-static ant_value_t builtin_Symbol_valueOf(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_Symbol_valueOf(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
 
   if (vtype(this_val) != kTypeSymbol && is_object_type(this_val)) {
@@ -106,7 +106,7 @@ static ant_value_t builtin_Symbol_valueOf(ant_t *js, ant_value_t *args, int narg
   return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol.prototype.valueOf requires a symbol");
 }
 
-static ant_value_t builtin_Symbol_description(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_Symbol_description(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
   ant_value_t sym = this_val;
 
@@ -197,7 +197,7 @@ static bool advance_string(ant_t *js, js_iter_t *it, ant_value_t *out) {
   return true;
 }
 
-static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t arr_iter_next(ant_params_t) {
   return js_iter_next_result(js, advance_array);
 }
 
@@ -228,7 +228,7 @@ ant_value_t make_array_iterator(ant_t *js, ant_value_t array, int kind) {
   return iter;
 }
 
-static ant_value_t str_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t str_iter_next(ant_params_t) {
   return js_iter_next_result(js, advance_string);
 }
 
@@ -244,7 +244,7 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
   return js->sym.string_iterator_proto;
 }
 
-static ant_value_t string_iterator(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t string_iterator(ant_params_t) {
   ant_value_t iter = js_mkobj(js);
   
   js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
@@ -272,7 +272,7 @@ bool js_iter_open(ant_t *js, ant_value_t iterable, js_iter_t *it) {
   ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
   if (!is_callable(iter_fn)) return false;
 
-  ant_value_t iterator = sv_vm_call(js->vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  ant_value_t iterator = sv_vm_call(js->vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) return false;
 
   it->iterator = iterator;
@@ -295,11 +295,11 @@ bool js_iter_next(ant_t *js, js_iter_t *it, ant_value_t *out) {
   if (vtype(next_fn) == kTypeBuiltin) {
     ant_value_t old_this = js->this_val;
     js->this_val = it->iterator;
-    result = js_as_cfunc(next_fn)(js, NULL, 0);
+    result = sv_invoke_native(js, js_as_cfunc(next_fn), NULL, 0, js_mkundef());
     js->this_val = old_this;
   }
   
-  else if (is_callable(next_fn)) result = sv_vm_call(js->vm, js, next_fn, it->iterator, NULL, 0, NULL, false);
+  else if (is_callable(next_fn)) result = sv_vm_call(js->vm, js, next_fn, it->iterator, NULL, 0, NULL, js_mkundef());
   else return false;
 
   if (is_err(result)) return false;
@@ -314,7 +314,7 @@ bool js_iter_next(ant_t *js, js_iter_t *it, ant_value_t *out) {
 void js_iter_close(ant_t *js, js_iter_t *it) {
   if (it->advance) return;
   ant_value_t return_fn = js_getprop_fallback(js, it->iterator, "return");
-  if (is_callable(return_fn)) sv_vm_call(js->vm, js, return_fn, it->iterator, NULL, 0, NULL, false);
+  if (is_callable(return_fn)) sv_vm_call(js->vm, js, return_fn, it->iterator, NULL, 0, NULL, js_mkundef());
 }
 
 ant_value_t maybe_call_symbol_method(
@@ -336,7 +336,7 @@ ant_value_t maybe_call_symbol_method(
   }
 
   *called = true;
-  return sv_vm_call(js->vm, js, method, this_arg, args, nargs, NULL, false);
+  return sv_vm_call(js->vm, js, method, this_arg, args, nargs, NULL, js_mkundef());
 }
 
 void js_define_species_getter(ant_t *js, ant_value_t ctor) {

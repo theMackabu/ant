@@ -147,7 +147,7 @@ static bool ant_c_append(
   return true;
 }
 
-static ant_value_t ant_c_template_source(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ant_c_template_source(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeArray)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
@@ -541,7 +541,7 @@ static bool ant_c_number_to_arg(
   return false;
 }
 
-static ant_value_t ant_c_function_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ant_c_function_call(ant_params_t) {
   ant_c_function_t *function = js_get_native(js->current_func, ANT_C_FUNCTION_NATIVE_TAG);
   if (!function) return js_mkerr(js, "Ant.unsafe.c() compiled function is no longer available");
   
@@ -812,15 +812,15 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
   return result;
 }
 
-static ant_value_t ant_c_configured_tag(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t source = ant_c_template_source(js, args, nargs);
+static ant_value_t ant_c_configured_tag(ant_params_t) {
+  ant_value_t source = ant_c_template_source(js, args, nargs, call_new_target);
   if (is_err(source)) return source;
   return ant_c_compile(js, source, js_get_slot(js->current_func, SLOT_DATA));
 }
 
-static ant_value_t js_unsafe_c(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_unsafe_c(ant_params_t) {
   if (nargs >= 1 && vtype(args[0]) == kTypeArray) {
-    ant_value_t source = ant_c_template_source(js, args, nargs);
+    ant_value_t source = ant_c_template_source(js, args, nargs, call_new_target);
     if (is_err(source)) return source;
     return ant_c_compile(js, source, js_mkundef());
   }

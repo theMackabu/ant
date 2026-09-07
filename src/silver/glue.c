@@ -168,7 +168,7 @@ ant_value_t jit_helper_call(
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc
 ) {
-  return sv_vm_call(vm, js, func, this_val, args, argc, NULL, false);
+  return sv_vm_call(vm, js, func, this_val, args, argc, NULL, js_mkundef());
 }
 
 ant_value_t jit_helper_call_method(
@@ -181,12 +181,10 @@ ant_value_t jit_helper_call_method(
   bool is_super_call = (vtype(super_val) != kTypeUndefined && func == super_val);
   ant_value_t call_this = this_val;
 
-  if (is_super_call) js->new_target = new_target;
-
   ant_value_t super_this = call_this;
   ant_value_t result = sv_vm_call(
     vm, js, func, call_this, args, argc,
-    is_super_call ? &super_this : NULL, is_super_call
+    is_super_call ? &super_this : NULL, is_super_call ? new_target : js_mkundef()
   );
 
   if (out_this) {
@@ -220,7 +218,7 @@ ant_value_t jit_helper_apply(
   sv_call_args_reset(&call, args, argc);
   ant_value_t norm = sv_apply_normalize_args(js, &call);
   if (is_err(norm)) return norm;
-  ant_value_t result = sv_vm_call(vm, js, func, this_val, call.args, call.argc, NULL, false);
+  ant_value_t result = sv_vm_call(vm, js, func, this_val, call.args, call.argc, NULL, js_mkundef());
   sv_call_args_release(&call);
   return result;
 }
@@ -285,7 +283,7 @@ ant_value_t jit_helper_delete_eval_var(
 }
 
 ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which) {
-  if (which == 1) return sv_vm_get_new_target(vm, js);
+  if (which == 1) return sv_vm_get_new_target(vm);
   if (which == 2) return sv_vm_get_super_val(vm);
   if (which == 3) return js_get_module_import_binding(js);
   return js_mkundef();
@@ -480,7 +478,7 @@ static ant_value_t jit_iter_advance_from_buf(
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "iterator.next is not a function");
     }
-    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, js_mkundef());
     if (is_err(result)) {
       GC_ROOT_RESTORE(js, root_mark);
       return result;
@@ -520,7 +518,7 @@ void jit_helper_destructure_close(
     ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
     GC_ROOT_PIN(js, return_fn);
     if (is_callable(return_fn))
-      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
+      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
   }
 
   GC_ROOT_RESTORE(js, root_mark);
@@ -563,7 +561,7 @@ ant_value_t jit_helper_for_of(
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkerr(js, "not iterable");
   }
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) {
     GC_ROOT_RESTORE(js, root_mark);
     return iterator;
@@ -680,7 +678,7 @@ ant_value_t jit_helper_call_is_proto(
     return sv_isproto_ic_eval(js, call_this, arg, func, ip);
   }
   ant_value_t args[1] = { arg };
-  return sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, false);
+  return sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, js_mkundef());
 }
 
 ant_value_t jit_helper_call_char_code_at(
@@ -697,7 +695,7 @@ ant_value_t jit_helper_call_array_includes(
 ) {
   if (js_is_array_includes_builtin(call_func))
     return js_array_includes_call(js, call_this, args, argc);
-  return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, false);
+  return sv_vm_call(vm, js, call_func, call_this, args, argc, NULL, js_mkundef());
 }
 
 ant_value_t jit_helper_call_string_intrinsic(
@@ -861,7 +859,7 @@ ant_value_t sv_op_call_map_template(
   }
 
   ant_value_t args[1] = { key };
-  result = sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, false);
+  result = sv_vm_call(vm, js, call_func, call_this, args, 1, NULL, js_mkundef());
   GC_ROOT_RESTORE(js, root_mark);
   
   return result;
@@ -912,7 +910,7 @@ ant_value_t jit_helper_regexp_exec_truthy(
 
   ant_value_t args[1] = { arg };
   ant_value_t raw = sv_vm_call(
-    vm, js, call_func, call_this, args, 1, NULL, false);
+    vm, js, call_func, call_this, args, 1, NULL, js_mkundef());
   if (is_err(raw)) return raw;
   
   return js_bool(js_truthy(js, raw));
@@ -1173,7 +1171,8 @@ void jit_helper_adopt_open_upvalues(sv_vm_t *vm, sv_upvalue_t **open_upvalues) {
 
 ant_value_t jit_helper_bailout_resume(
   sv_vm_t *vm, sv_closure_t *closure,
-  ant_value_t this_val, ant_value_t *args, int argc,
+  ant_value_t this_val, ant_value_t new_target, ant_value_t super_val,
+  ant_value_t *args, int argc,
   ant_value_t *vstack, int64_t vstack_sp,
   ant_value_t *params, int64_t n_params,
   ant_value_t *locals, int64_t n_locals,
@@ -1194,7 +1193,7 @@ ant_value_t jit_helper_bailout_resume(
 
   return sv_execute_closure_entry(
     vm, closure, mkref(kTypeFunction, closure),
-    js_mkundef(), this_val, args, argc, NULL
+    super_val, new_target, this_val, args, argc, NULL
   );
 }
 
@@ -1546,7 +1545,6 @@ ant_value_t jit_helper_new(
   ant_value_t effective_new_target = new_target;
 
   if (vtype(func) == kTypeObject && is_proxy(func)) {
-    js->new_target = new_target;
     return js_proxy_construct(js, func, args, argc, new_target);
   }
   if (!js_is_constructor(func))
@@ -1559,12 +1557,11 @@ ant_value_t jit_helper_new(
     );
     if (is_err(proto)) return proto;
   }
-  js->new_target = effective_new_target;
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, true);
+  ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
   ant_value_t final_obj =

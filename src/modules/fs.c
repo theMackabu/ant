@@ -216,8 +216,8 @@ static ant_value_t fs_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
   
   return result;
@@ -349,7 +349,7 @@ static int fs_stream_open_fd_sync(ant_t *js, ant_value_t stream_obj) {
   return result;
 }
 
-static ant_value_t fs_stream_destroy(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_stream_destroy(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   ant_value_t err = nargs > 0 ? args[0] : js_mknull();
   ant_value_t callback = nargs > 1 ? args[1] : js_mkundef();
@@ -362,7 +362,7 @@ static ant_value_t fs_stream_destroy(ant_t *js, ant_value_t *args, int nargs) {
   return fs_stream_callback(js, callback, err);
 }
 
-static ant_value_t fs_stream_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_stream_close(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
 
   if (nargs > 0 && is_callable(args[0])) {
@@ -379,7 +379,7 @@ static ant_value_t fs_stream_close(ant_t *js, ant_value_t *args, int nargs) {
   return stream_obj;
 }
 
-static ant_value_t fs_readstream__read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_readstream__read(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   ant_value_t pos_val = js_get(js, stream_obj, "pos");
   ant_value_t end_val = js_get(js, stream_obj, "end");
@@ -463,7 +463,7 @@ static ant_value_t fs_readstream__read(ant_t *js, ant_value_t *args, int nargs) 
   return js_mkundef();
 }
 
-static ant_value_t fs_writestream__write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_writestream__write(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   ant_value_t callback = nargs > 2 ? args[2] : js_mkundef();
   ant_value_t pos_val = js_get(js, stream_obj, "pos");
@@ -512,7 +512,7 @@ static ant_value_t fs_writestream__write(ant_t *js, ant_value_t *args, int nargs
   return fs_stream_callback(js, callback, js_mknull());
 }
 
-static ant_value_t fs_writestream__final(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_writestream__final(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   ant_value_t callback = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t value = js_mknull();
@@ -525,7 +525,7 @@ static ant_value_t fs_writestream__final(ant_t *js, ant_value_t *args, int nargs
   return fs_stream_callback(js, callback, value);
 }
 
-static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto) {
+static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t call_new_target) {
   ant_value_t path_val = fs_coerce_path(js, path_arg);
   ant_value_t options = is_object_type(options_arg) ? options_arg : js_mkobj(js);
   ant_value_t stream_options = js_mkobj(js);
@@ -545,7 +545,7 @@ static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, an
   if (vtype(path_val) != kTypeString) return js_mkerr(js, "ReadStream path must be a string");
   if (vtype(hwm) == kTypeNumber && js_getnum(hwm) > 0) js_set(js, stream_options, "highWaterMark", hwm);
 
-  stream_obj = stream_construct_readable(js, proto, stream_options);
+  stream_obj = stream_construct_readable(js, proto, stream_options, call_new_target);
   if (is_err(stream_obj)) return stream_obj;
 
   js_set(js, stream_obj, "_read", js_mkfun(fs_readstream__read));
@@ -567,7 +567,7 @@ static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, an
   return stream_obj;
 }
 
-static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto) {
+static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t call_new_target) {
   ant_value_t path_val = fs_coerce_path(js, path_arg);
   ant_value_t options = is_object_type(options_arg) ? options_arg : js_mkobj(js);
   ant_value_t stream_options = js_mkobj(js);
@@ -587,7 +587,7 @@ static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, a
   if (vtype(path_val) != kTypeString) return js_mkerr(js, "WriteStream path must be a string");
   if (vtype(hwm) == kTypeNumber && js_getnum(hwm) > 0) js_set(js, stream_options, "highWaterMark", hwm);
 
-  stream_obj = stream_construct_writable(js, proto, stream_options);
+  stream_obj = stream_construct_writable(js, proto, stream_options, call_new_target);
   if (is_err(stream_obj)) return stream_obj;
 
   js_set(js, stream_obj, "_write", js_mkfun(fs_writestream__write));
@@ -609,24 +609,24 @@ static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, a
   return stream_obj;
 }
 
-static ant_value_t js_readstream_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_readstream_ctor(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "ReadStream() requires a path argument");
-  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto);
+  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto, call_new_target);
 }
 
-static ant_value_t js_writestream_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_writestream_ctor(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "WriteStream() requires a path argument");
-  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto);
+  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto, call_new_target);
 }
 
-static ant_value_t builtin_fs_createReadStream(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_createReadStream(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "createReadStream() requires a path argument");
-  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto);
+  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto, call_new_target);
 }
 
-static ant_value_t builtin_fs_createWriteStream(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_createWriteStream(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "createWriteStream() requires a path argument");
-  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto);
+  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto, call_new_target);
 }
 
 static void fs_init_stream_constructors(ant_t *js) {
@@ -933,7 +933,7 @@ static void fs_watcher_on_poll(
   fs_watcher_invoke_watchfile_stats(watcher, curr, prev);
 }
 
-static ant_value_t js_fswatcher_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_fswatcher_close(ant_params_t) {
   fs_watcher_t *watcher = fs_watcher_data(js->this_val);
 
   if (!watcher) return js->this_val;
@@ -941,7 +941,7 @@ static ant_value_t js_fswatcher_close(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static ant_value_t js_fswatcher_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_fswatcher_ref(ant_params_t) {
   fs_watcher_t *watcher = fs_watcher_data(js->this_val);
   uv_handle_t *handle = NULL;
 
@@ -952,7 +952,7 @@ static ant_value_t js_fswatcher_ref(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static ant_value_t js_fswatcher_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_fswatcher_unref(ant_params_t) {
   fs_watcher_t *watcher = fs_watcher_data(js->this_val);
   uv_handle_t *handle = NULL;
 
@@ -963,7 +963,7 @@ static ant_value_t js_fswatcher_unref(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static ant_value_t js_fswatcher_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_fswatcher_ctor(ant_params_t) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "FSWatcher cannot be constructed directly");
 }
 
@@ -1002,7 +1002,7 @@ static void fs_init_watch_constructors(ant_t *js) {
   js->builtins.fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, js->builtins.fswatcher_proto, "FSWatcher", 9);
 }
 
-static bool fs_parse_watch_options(ant_t *js, ant_value_t *args, int nargs, fs_watch_options_t *out) {
+static bool fs_parse_watch_options(ant_params_t, fs_watch_options_t *out) {
   ant_value_t options = js_mkundef();
   ant_value_t persistent_val = js_mkundef();
 
@@ -1028,9 +1028,7 @@ static bool fs_parse_watch_options(ant_t *js, ant_value_t *args, int nargs, fs_w
 }
 
 static bool fs_parse_watchfile_options(
-  ant_t *js,
-  ant_value_t *args,
-  int nargs,
+  ant_params_t,
   fs_watchfile_options_t *out
 ) {
   ant_value_t options = js_mkundef();
@@ -1254,7 +1252,7 @@ static bool fs_parse_rm_options(ant_t *js, ant_value_t options, bool *recursive_
   return true;
 }
 
-static ant_value_t fs_rm_impl(ant_t *js, ant_value_t *args, int nargs, bool return_promise) {
+static ant_value_t fs_rm_impl(ant_params_t, bool return_promise) {
   ant_value_t promise = 0;
   ant_value_t path_val;
   size_t path_len = 0;
@@ -1442,7 +1440,7 @@ static void fs_filehandle_mark_closed(ant_t *js, ant_value_t handle_obj) {
   js_set(js, handle_obj, "fd", js_mknum(-1));
 }
 
-static ant_value_t builtin_fs_filehandle_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_close(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -1459,7 +1457,7 @@ static ant_value_t builtin_fs_filehandle_close(ant_t *js, ant_value_t *args, int
   return fs_resolved_promise(js, js_mkundef());
 }
 
-static ant_value_t builtin_fs_filehandle_stat(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_stat(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -1479,7 +1477,7 @@ static ant_value_t builtin_fs_filehandle_stat(ant_t *js, ant_value_t *args, int 
   return fs_resolved_promise(js, stat_obj);
 }
 
-static ant_value_t builtin_fs_filehandle_sync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_sync(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -1494,7 +1492,7 @@ static ant_value_t builtin_fs_filehandle_sync(ant_t *js, ant_value_t *args, int 
   return fs_resolved_promise(js, js_mkundef());
 }
 
-static ant_value_t builtin_fs_filehandle_read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_read(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -1533,7 +1531,7 @@ static ant_value_t builtin_fs_filehandle_read(ant_t *js, ant_value_t *args, int 
   return fs_resolved_promise(js, out);
 }
 
-static ant_value_t builtin_fs_filehandle_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_write(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -1594,7 +1592,7 @@ static ant_value_t builtin_fs_filehandle_write(ant_t *js, ant_value_t *args, int
   return fs_resolved_promise(js, out);
 }
 
-static ant_value_t builtin_fs_filehandle_writeFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_filehandle_writeFile(ant_params_t) {
   ant_value_t handle_obj = fs_filehandle_require_this(js);
   if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
 
@@ -2122,7 +2120,7 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static ant_value_t builtin_fs_readFileSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readFileSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readFileSync() requires a path argument");
   
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -2177,7 +2175,7 @@ static ant_value_t builtin_fs_readFileSync(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readFile(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -2210,7 +2208,7 @@ static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_stream(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_stream(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "stream() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "stream() path must be a string");
   
@@ -2240,9 +2238,7 @@ static ant_value_t builtin_fs_stream(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t fs_write_file_sync_impl(
-  ant_t *js,
-  ant_value_t *args,
-  int nargs,
+  ant_params_t,
   const char *fn_name,
   const char *mode
 ) {
@@ -2278,11 +2274,11 @@ static ant_value_t fs_write_file_sync_impl(
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_writeFileSync(ant_t *js, ant_value_t *args, int nargs) {
-  return fs_write_file_sync_impl(js, args, nargs, "writeFileSync", "wb");
+static ant_value_t builtin_fs_writeFileSync(ant_params_t) {
+  return fs_write_file_sync_impl(js, args, nargs, call_new_target, "writeFileSync", "wb");
 }
 
-static ant_value_t builtin_fs_copyFileSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_copyFileSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "copyFileSync() src must be a string");
@@ -2436,7 +2432,7 @@ static ant_value_t fs_copy_file_sync_impl(
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_copyFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_copyFile(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "copyFile() requires src and dest arguments");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "copyFile() src must be a string");
   if (vtype(args[1]) != kTypeString) return js_mkerr(js, "copyFile() dest must be a string");
@@ -2620,9 +2616,7 @@ static ant_value_t fs_copy_path_sync_impl(
 }
 
 static ant_value_t fs_cp_sync_common(
-  ant_t *js,
-  ant_value_t *args,
-  int nargs,
+  ant_params_t,
   const char *fn_name
 ) {
   if (nargs < 2) return js_mkerr(js, "%s() requires src and dest arguments", fn_name);
@@ -2651,19 +2645,19 @@ static ant_value_t fs_cp_sync_common(
   return result;
 }
 
-static ant_value_t builtin_fs_cpSync(ant_t *js, ant_value_t *args, int nargs) {
-  return fs_cp_sync_common(js, args, nargs, "cpSync");
+static ant_value_t builtin_fs_cpSync(ant_params_t) {
+  return fs_cp_sync_common(js, args, nargs, call_new_target, "cpSync");
 }
 
-static ant_value_t builtin_fs_cp(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_cp(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = fs_cp_sync_common(js, args, nargs, "cp");
+  ant_value_t result = fs_cp_sync_common(js, args, nargs, call_new_target, "cp");
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
   return promise;
 }
 
-static ant_value_t builtin_fs_renameSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_renameSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "renameSync() requires oldPath and newPath arguments");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "renameSync() oldPath must be a string");
@@ -2698,7 +2692,7 @@ static ant_value_t builtin_fs_renameSync(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_rename(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_rename(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "rename() requires oldPath and newPath arguments");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "rename() oldPath must be a string");
   if (vtype(args[1]) != kTypeString) return js_mkerr(js, "rename() newPath must be a string");
@@ -2743,7 +2737,7 @@ static double fs_time_arg_to_seconds(ant_t *js, ant_value_t v) {
   return js_to_number(js, v);
 }
 
-static ant_value_t builtin_fs_utimesSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_utimesSync(ant_params_t) {
   if (nargs < 3) return js_mkerr(js, "utimesSync() requires path, atime, and mtime");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "utimesSync() path must be a string");
 
@@ -2771,11 +2765,11 @@ static ant_value_t builtin_fs_utimesSync(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_utimes(ant_t *js, ant_value_t *args, int nargs) {
-  return builtin_fs_utimesSync(js, args, nargs);
+static ant_value_t builtin_fs_utimes(ant_params_t) {
+  return builtin_fs_utimesSync(js, args, nargs, call_new_target);
 }
 
-static ant_value_t builtin_fs_futimesSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_futimesSync(ant_params_t) {
   if (nargs < 3) return js_mkerr(js, "futimesSync() requires fd, atime, and mtime");
   int fd = (int)js_to_number(js, args[0]);
   double atime = fs_time_arg_to_seconds(js, args[1]);
@@ -2789,11 +2783,11 @@ static ant_value_t builtin_fs_futimesSync(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_futimes(ant_t *js, ant_value_t *args, int nargs) {
-  return builtin_fs_futimesSync(js, args, nargs);
+static ant_value_t builtin_fs_futimes(ant_params_t) {
+  return builtin_fs_futimesSync(js, args, nargs, call_new_target);
 }
 
-static ant_value_t builtin_fs_truncateSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_truncateSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "truncateSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "truncateSync() path must be a string");
 
@@ -2836,7 +2830,7 @@ static ant_value_t builtin_fs_truncateSync(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_ftruncateSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_ftruncateSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "ftruncateSync() requires an fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "ftruncateSync() fd must be a number");
 
@@ -2853,7 +2847,7 @@ static ant_value_t builtin_fs_ftruncateSync(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_fsyncSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_fsyncSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fsyncSync() requires an fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "fsyncSync() fd must be a number");
 
@@ -2866,19 +2860,19 @@ static ant_value_t builtin_fs_fsyncSync(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_appendFileSync(ant_t *js, ant_value_t *args, int nargs) {
-  return fs_write_file_sync_impl(js, args, nargs, "appendFileSync", "ab");
+static ant_value_t builtin_fs_appendFileSync(ant_params_t) {
+  return fs_write_file_sync_impl(js, args, nargs, call_new_target, "appendFileSync", "ab");
 }
 
-static ant_value_t builtin_fs_appendFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_appendFile(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, "appendFile", "ab");
+  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, call_new_target, "appendFile", "ab");
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
   return promise;
 }
 
-static ant_value_t builtin_fs_writeFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_writeFile(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "writeFile() requires path and data arguments");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "writeFile() path must be a string");
   
@@ -2920,7 +2914,7 @@ static ant_value_t builtin_fs_writeFile(ant_t *js, ant_value_t *args, int nargs)
   return req->promise;
 }
 
-static ant_value_t builtin_fs_unlinkSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_unlinkSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "unlinkSync() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "unlinkSync() path must be a string");
@@ -2943,7 +2937,7 @@ static ant_value_t builtin_fs_unlinkSync(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_unlink(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_unlink(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "unlink() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "unlink() path must be a string");
@@ -2974,7 +2968,7 @@ static ant_value_t builtin_fs_unlink(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_mkdirSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_mkdirSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "mkdirSync() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "mkdirSync() path must be a string");
@@ -3030,7 +3024,7 @@ do_mkdir:
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_mkdir(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "mkdir() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "mkdir() path must be a string");
@@ -3095,7 +3089,7 @@ static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_mkdtempSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_mkdtempSync(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "mkdtempSync() requires a prefix string");
 
@@ -3122,7 +3116,7 @@ static ant_value_t builtin_fs_mkdtempSync(ant_t *js, ant_value_t *args, int narg
   return ret;
 }
 
-static ant_value_t builtin_fs_mkdtemp(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_mkdtemp(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "mkdtemp() requires a prefix string");
 
@@ -3159,7 +3153,7 @@ static ant_value_t builtin_fs_mkdtemp(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_rmdirSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_rmdirSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "rmdirSync() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "rmdirSync() path must be a string");
@@ -3186,7 +3180,7 @@ static ant_value_t builtin_fs_rmdirSync(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_rmdir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_rmdir(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "rmdir() requires a path argument");
   
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "rmdir() path must be a string");
@@ -3217,64 +3211,64 @@ static ant_value_t builtin_fs_rmdir(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_rmSync(ant_t *js, ant_value_t *args, int nargs) {
-  return fs_rm_impl(js, args, nargs, false);
+static ant_value_t builtin_fs_rmSync(ant_params_t) {
+  return fs_rm_impl(js, args, nargs, call_new_target, false);
 }
 
-static ant_value_t builtin_fs_rm(ant_t *js, ant_value_t *args, int nargs) {
-  return fs_rm_impl(js, args, nargs, true);
+static ant_value_t builtin_fs_rm(ant_params_t) {
+  return fs_rm_impl(js, args, nargs, call_new_target, true);
 }
 
-static ant_value_t dirent_isFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isFile(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_FILE);
 }
 
-static ant_value_t dirent_isDirectory(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isDirectory(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_DIR);
 }
 
-static ant_value_t dirent_isSymbolicLink(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isSymbolicLink(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_LINK);
 }
 
-static ant_value_t dirent_isBlockDevice(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isBlockDevice(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_BLOCK);
 }
 
-static ant_value_t dirent_isCharacterDevice(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isCharacterDevice(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_CHAR);
 }
 
-static ant_value_t dirent_isFIFO(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isFIFO(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_FIFO);
 }
 
-static ant_value_t dirent_isSocket(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t dirent_isSocket(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t type_val = js_get_slot(this, SLOT_DATA);
   if (vtype(type_val) != kTypeNumber) return js_false;
   return js_bool((int)js_getnum(type_val) == UV_DIRENT_SOCKET);
 }
 
-static ant_value_t stat_isFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stat_isFile(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
@@ -3284,7 +3278,7 @@ static ant_value_t stat_isFile(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(S_ISREG(mode));
 }
 
-static ant_value_t stat_isDirectory(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stat_isDirectory(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
@@ -3294,7 +3288,7 @@ static ant_value_t stat_isDirectory(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(S_ISDIR(mode));
 }
 
-static ant_value_t stat_isSymbolicLink(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stat_isSymbolicLink(ant_params_t) {
   ant_value_t this = js_getthis(js);
   ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
@@ -3391,7 +3385,7 @@ static ant_value_t fs_mk_uv_error(
   );
 }
 
-static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_statSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "statSync() path must be a string");
   
@@ -3414,7 +3408,7 @@ static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) 
   return create_stats_object(js, &st);
 }
 
-static ant_value_t builtin_fs_stat(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_stat(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "stat() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "stat() path must be a string");
   
@@ -3444,7 +3438,7 @@ static ant_value_t builtin_fs_stat(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_lstatSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_lstatSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "lstatSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "lstatSync() path must be a string");
   
@@ -3472,7 +3466,7 @@ static ant_value_t builtin_fs_lstatSync(ant_t *js, ant_value_t *args, int nargs)
   return stat_obj;
 }
 
-static ant_value_t builtin_fs_lstat(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_lstat(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "lstat() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "lstat() path must be a string");
   
@@ -3502,7 +3496,7 @@ static ant_value_t builtin_fs_lstat(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_fstatSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_fstatSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fstatSync() requires an fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "fstatSync() fd must be a number");
 
@@ -3521,7 +3515,7 @@ static ant_value_t builtin_fs_fstatSync(ant_t *js, ant_value_t *args, int nargs)
   return stat_obj;
 }
 
-static ant_value_t builtin_fs_fstat(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_fstat(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fstat() requires an fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "fstat() fd must be a number");
 
@@ -3546,7 +3540,7 @@ static ant_value_t builtin_fs_fstat(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_existsSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_existsSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "existsSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "existsSync() path must be a string");
   
@@ -3564,7 +3558,7 @@ static ant_value_t builtin_fs_existsSync(ant_t *js, ant_value_t *args, int nargs
   return js_bool(result == 0);
 }
 
-static ant_value_t builtin_fs_exists(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_exists(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "exists() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "exists() path must be a string");
   
@@ -3595,7 +3589,7 @@ static ant_value_t builtin_fs_exists(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_accessSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_accessSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "accessSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "accessSync() path must be a string");
   
@@ -3621,7 +3615,7 @@ static ant_value_t builtin_fs_accessSync(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_chmodSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_chmodSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "chmodSync() requires a path argument");
   if (nargs < 2) return js_mkerr(js, "chmodSync() requires a mode argument");
 
@@ -3655,7 +3649,7 @@ static ant_value_t builtin_fs_chmodSync(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_chmod(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_chmod(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "chmod() requires a path argument");
   if (nargs < 2) return js_mkerr(js, "chmod() requires a mode argument");
 
@@ -3697,7 +3691,7 @@ static ant_value_t builtin_fs_chmod(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_access(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "access() path must be a string");
   
@@ -3732,7 +3726,7 @@ static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_realpathSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_realpathSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "realpathSync() requires a path argument");
 
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -3750,7 +3744,7 @@ static ant_value_t builtin_fs_realpathSync(ant_t *js, ant_value_t *args, int nar
   return result;
 }
 
-static ant_value_t builtin_fs_realpath(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_realpath(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "realpath() requires a path argument");
 
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -3786,7 +3780,7 @@ static ant_value_t builtin_fs_realpath(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_readlinkSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readlinkSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readlinkSync() requires a path argument");
 
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -3850,7 +3844,7 @@ static ant_value_t fs_parse_symlink_type(
   );
 }
 
-static ant_value_t builtin_fs_symlinkSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_symlinkSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "symlinkSync() requires target and path arguments");
 
   ant_value_t target_val = fs_coerce_path(js, args[0]);
@@ -3901,7 +3895,7 @@ static ant_value_t builtin_fs_symlinkSync(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_symlink(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_symlink(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "symlink() requires target and path arguments");
 
   ant_value_t target_val = fs_coerce_path(js, args[0]);
@@ -3958,7 +3952,7 @@ static ant_value_t builtin_fs_symlink(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t builtin_fs_readlink(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readlink(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readlink() requires a path argument");
 
   ant_value_t path_val = fs_coerce_path(js, args[0]);
@@ -3994,7 +3988,7 @@ static ant_value_t builtin_fs_readlink(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readdirSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "readdirSync() path must be a string");
   
@@ -4039,7 +4033,7 @@ static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int narg
   return arr;
 }
 
-static ant_value_t builtin_fs_readdir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readdir(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "readdir() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "readdir() path must be a string");
   
@@ -4092,7 +4086,7 @@ static void on_fsync_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static ant_value_t builtin_fs_fsync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_fsync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fsync() requires an fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "fsync() fd must be a number");
   if (nargs < 2 || !is_callable(args[1]))
@@ -4181,7 +4175,7 @@ static void on_read_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static ant_value_t builtin_fs_read_fd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_read_fd(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "read() requires fd and buffer arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "read() fd must be a number");
 
@@ -4243,7 +4237,7 @@ static ant_value_t builtin_fs_read_fd(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_readSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_readSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "readSync() requires fd and buffer arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "readSync() fd must be a number");
   
@@ -4287,7 +4281,7 @@ static ant_value_t builtin_fs_readSync(ant_t *js, ant_value_t *args, int nargs) 
   return js_mknum((double)result);
 }
 
-static ant_value_t builtin_fs_writeSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_writeSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "writeSync() requires fd and data arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "writeSync() fd must be a number");
   
@@ -4350,7 +4344,7 @@ static ant_value_t builtin_fs_writeSync(ant_t *js, ant_value_t *args, int nargs)
   return js_mknum((double)result);
 }
 
-static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_write_fd(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "write() requires fd and data arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "write() fd must be a number");
   
@@ -4432,7 +4426,7 @@ static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_writevSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_writevSync(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "writevSync() requires fd and buffers arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "writevSync() fd must be a number");
   
@@ -4466,7 +4460,7 @@ static ant_value_t builtin_fs_writevSync(ant_t *js, ant_value_t *args, int nargs
   return js_mknum((double)result);
 }
 
-static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_writev_fd(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "writev() requires fd and buffers arguments");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "writev() fd must be a number");
   
@@ -4552,7 +4546,7 @@ static int parse_open_flags(ant_t *js, ant_value_t arg) {
   return O_RDONLY;
 }
 
-static ant_value_t builtin_fs_openSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_openSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "openSync() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "openSync() path must be a string");
   
@@ -4582,7 +4576,7 @@ static ant_value_t builtin_fs_openSync(ant_t *js, ant_value_t *args, int nargs) 
   return js_mknum((double)result);
 }
 
-static ant_value_t builtin_fs_closeSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_closeSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "closeSync() requires a fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "closeSync() fd must be a number");
   
@@ -4632,7 +4626,7 @@ static void on_open_filehandle_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static ant_value_t builtin_fs_open_fd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_open_fd(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "open() path must be a string");
   
@@ -4664,7 +4658,7 @@ static ant_value_t builtin_fs_open_fd(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
-static ant_value_t builtin_fs_open_filehandle(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_open_filehandle(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "open() path must be a string");
 
@@ -4715,7 +4709,7 @@ static void on_close_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static ant_value_t builtin_fs_close_fd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_close_fd(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "close() requires a fd argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "close() fd must be a number");
   
@@ -4742,7 +4736,7 @@ static ant_value_t builtin_fs_close_fd(ant_t *js, ant_value_t *args, int nargs) 
   return req->promise;
 }
 
-static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_watch(ant_params_t) {
   ant_value_t path_val = 0;
   ant_value_t watcher_obj = 0;
   fs_watch_options_t opts;
@@ -4754,7 +4748,7 @@ static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
   int rc = 0;
 
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "watch() requires a path argument");
-  if (!fs_parse_watch_options(js, args, nargs, &opts))
+  if (!fs_parse_watch_options(js, args, nargs, call_new_target, &opts))
     return js_mkerr_typed(js, JS_ERR_TYPE, "watch() options must be a string, object, or callback");
 
   path_val = fs_coerce_path(js, args[0]);
@@ -4789,7 +4783,7 @@ static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
   return watcher_obj;
 }
 
-static ant_value_t builtin_fs_watchFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_watchFile(ant_params_t) {
   ant_value_t path_val = 0;
   fs_watchfile_options_t opts;
   
@@ -4802,7 +4796,7 @@ static ant_value_t builtin_fs_watchFile(ant_t *js, ant_value_t *args, int nargs)
 
   if (nargs < 2)
     return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a path and listener");
-  if (!fs_parse_watchfile_options(js, args, nargs, &opts))
+  if (!fs_parse_watchfile_options(js, args, nargs, call_new_target, &opts))
     return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a listener callback");
 
   path_val = fs_coerce_path(js, args[0]);
@@ -4831,7 +4825,7 @@ static ant_value_t builtin_fs_watchFile(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t builtin_fs_unwatchFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_unwatchFile(ant_params_t) {
   ant_value_t path_val = 0;
   ant_value_t listener = js_mkundef();
   
@@ -4894,7 +4888,7 @@ void init_fs_module(ant_t *js) {
   js_set_sym(js, js->builtins.dirent_proto, get_toStringTag_sym(), js_mkstr(js, "Dirent", 6));
 }
 
-static ant_value_t fs_callback_success_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_callback_success_handler(ant_params_t) {
   ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
 
@@ -4911,7 +4905,7 @@ static ant_value_t fs_callback_success_handler(ant_t *js, ant_value_t *args, int
   return js_mkundef();
 }
 
-static ant_value_t fs_callback_error_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_callback_error_handler(ant_params_t) {
   ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
   ant_value_t cb_args[1];
@@ -4992,7 +4986,7 @@ static ant_value_t fs_callback_attach_promise(
   return js_mkundef();
 }
 
-static ant_value_t fs_callback_wrapper_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_callback_wrapper_call(ant_params_t) {
   GC_ROOT_SAVE(root_mark, js);
   ant_value_t wrapper = js_getcurrentfunc(js);
   ant_value_t config = js_get_slot(wrapper, SLOT_DATA);
@@ -5054,7 +5048,7 @@ static ant_value_t fs_make_callback_wrapper(ant_t *js, ant_value_t original, boo
   return js_heavy_mkfun(js, fs_callback_wrapper_call, config);
 }
 
-static ant_value_t fs_promise_wrapper_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t fs_promise_wrapper_call(ant_params_t) {
   GC_ROOT_SAVE(root_mark, js);
   
   ant_value_t wrapper = js_getcurrentfunc(js);
@@ -5196,7 +5190,7 @@ ant_value_t fs_make_constants(ant_t *js) {
   return constants;
 }
 
-static ant_value_t builtin_fs_promises_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fs_promises_getter(ant_params_t) {
   ant_value_t getter_fn = js_getcurrentfunc(js);
   ant_value_t cached = js_get_slot(getter_fn, SLOT_DATA);
   if (is_object_type(cached)) return cached;

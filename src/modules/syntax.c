@@ -102,7 +102,7 @@ static ant_value_t syntax_read_options(
   return js_mkundef();
 }
 
-static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_syntax_strip_types(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "stripTypes", "source must be a string");
 
@@ -157,7 +157,7 @@ static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs
   return result;
 }
 
-static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "parseJavaScript", "source must be a string");
 

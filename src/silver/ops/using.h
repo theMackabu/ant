@@ -89,12 +89,12 @@ static inline ant_value_t sv_disposal_record_call(ant_t *js, ant_value_t record)
   if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = this_arg;
-    ant_value_t result = js_as_cfunc(method)(js, args, nargs);
+    ant_value_t result = sv_invoke_native(js, js_as_cfunc(method), args, nargs, js_mkundef());
     js->this_val = saved_this;
     return result;
   }
 
-  return sv_vm_call(js->vm, js, method, this_arg, args, nargs, NULL, false);
+  return sv_vm_call(js->vm, js, method, this_arg, args, nargs, NULL, js_mkundef());
 }
 
 static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, bool is_async) {
@@ -112,12 +112,12 @@ static inline ant_value_t sv_dispose_resource(ant_t *js, ant_value_t resource, b
   if (vtype(method) == kTypeBuiltin) {
     ant_value_t saved_this = js->this_val;
     js->this_val = resource;
-    ant_value_t result = js_as_cfunc(method)(js, NULL, 0);
+    ant_value_t result = sv_invoke_native(js, js_as_cfunc(method), NULL, 0, js_mkundef());
     js->this_val = saved_this;
     return result;
   }
 
-  return sv_vm_call(js->vm, js, method, resource, NULL, 0, NULL, false);
+  return sv_vm_call(js->vm, js, method, resource, NULL, 0, NULL, js_mkundef());
 }
 
 static inline ant_value_t sv_using_push(
@@ -233,16 +233,12 @@ static inline ant_value_t sv_async_dispose_continue(
   ant_value_t reason
 );
 
-static inline ant_value_t sv_async_dispose_on_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
+static inline ant_value_t sv_async_dispose_on_fulfilled(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   return sv_async_dispose_continue(js, state, false, js_mkundef());
 }
 
-static inline ant_value_t sv_async_dispose_on_rejected(
-  ant_t *js,
-  ant_value_t *args,
-  int nargs
-) {
+static inline ant_value_t sv_async_dispose_on_rejected(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   return sv_async_dispose_continue(js, state, true, nargs > 0 ? args[0] : js_mkundef());
 }

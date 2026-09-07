@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Test Sweep 2026-09-07](test-sweep-2026-09-07.md)
 - [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)
 - [JS Path Node Performance](path-node-performance.md)
 - [Array Backing Store GC Pacing](array-backing-store-gc-pacing.md)

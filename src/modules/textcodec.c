@@ -6,6 +6,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 #include "utf8.h"
 
@@ -93,7 +94,7 @@ static const char *trim_label(const char *s, size_t len, size_t *out_len) {
   return s;
 }
 
-static ant_value_t js_textencoder_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textencoder_get_encoding(ant_params_t) {
   return js_mkstr(js, "utf-8", 5);
 }
 
@@ -104,7 +105,7 @@ ant_value_t te_encode(ant_t *js, const char *str, size_t str_len) {
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, written, "Uint8Array");
 }
 
-static ant_value_t js_textencoder_encode(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textencoder_encode(ant_params_t) {
   size_t str_len = 0;
   const char *str = "";
   
@@ -121,7 +122,7 @@ static ant_value_t js_textencoder_encode(ant_t *js, ant_value_t *args, int nargs
   return te_encode(js, str, str_len);
 }
 
-static ant_value_t js_textencoder_encode_into(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textencoder_encode_into(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "encodeInto requires 2 arguments");
 
   size_t str_len = 0;
@@ -158,27 +159,27 @@ static ant_value_t js_textencoder_encode_into(ant_t *js, ant_value_t *args, int 
   return result;
 }
 
-static ant_value_t js_textencoder_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_textencoder_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextEncoder constructor requires 'new'");
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textencoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textencoder_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   return obj;
 }
 
-static ant_value_t js_textdecoder_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textdecoder_get_encoding(ant_params_t) {
   td_state_t *st = td_get_state(js->this_val);
   const char *name = encoding_name(st ? st->encoding : TD_ENC_UTF8);
   return js_mkstr(js, name, strlen(name));
 }
 
-static ant_value_t js_textdecoder_get_fatal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textdecoder_get_fatal(ant_params_t) {
   td_state_t *st = td_get_state(js->this_val);
   return (st && st->fatal) ? js_true : js_false;
 }
 
-static ant_value_t js_textdecoder_get_ignore_bom(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textdecoder_get_ignore_bom(ant_params_t) {
   td_state_t *st = td_get_state(js->this_val);
   return (st && st->ignore_bom) ? js_true : js_false;
 }
@@ -353,7 +354,7 @@ ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t in
   return result;
 }
 
-static ant_value_t js_textdecoder_decode(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_textdecoder_decode(ant_params_t) {
   td_state_t *st = td_get_state(js->this_val);
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoder");
 
@@ -371,8 +372,8 @@ static ant_value_t js_textdecoder_decode(ant_t *js, ant_value_t *args, int nargs
   return td_decode(js, st, input, input_len, stream_mode);
 }
 
-static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_textdecoder_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoder constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
@@ -411,7 +412,7 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textdecoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.textdecoder_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TEXT_DECODER_NATIVE_TAG);
