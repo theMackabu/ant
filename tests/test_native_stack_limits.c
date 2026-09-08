@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/resource.h>
 
 #include "silver/vm.h"
@@ -33,7 +34,11 @@ int main(void) {
   pthread_t worker;
   assert(pthread_attr_init(&attr) == 0);
   assert(pthread_attr_setstacksize(&attr, 256 * 1024) == 0);
-  assert(pthread_create(&worker, &attr, check_worker_stack, NULL) == 0);
+  int error = pthread_create(&worker, &attr, check_worker_stack, NULL);
+  if (error != 0) {
+    fprintf(stderr, "pthread_create: %s (%d)\n", strerror(error), error);
+    return 1;
+  }
   assert(pthread_attr_destroy(&attr) == 0);
   assert(pthread_join(worker, NULL) == 0);
 

@@ -222,8 +222,10 @@ jobs:
       - name: Test native stack limits
         if: startsWith(inputs.platform, 'linux-')
         shell: bash
+        env:
+          CC: ${{ steps.llvm.outputs.cc }}
         run: |
-          zig cc -std=gnu23 -Iinclude -pthread \
+          "$CC" -std=gnu23 -Iinclude -pthread \
             tests/test_native_stack_limits.c src/silver/limits.c \
             -o build/test-native-stack-limits
           ./build/test-native-stack-limits
