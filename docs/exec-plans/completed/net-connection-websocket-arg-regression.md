@@ -319,3 +319,31 @@ through the resulting eval call. Seven additional upstream eval-mode checks
 now recognize function-context eval too, preserving sloppy declarations and
 `arguments` lookup. Integration validation is pending; logs and layout dumps
 are under `/tmp/ant-func-layout`.
+
+## Native rooting and bailout liveness
+
+`sv_invoke_native` now uses `gc_value_is_heap_ref` to link a native rooting
+frame only for heap references. Builtin references and the boolean constructor
+sentinel bypass that frame; heap-backed constructor targets remain rooted.
+
+The existing JIT feature scan records target reads and conservatively retains
+method and derived-constructor context. The bailout epilogue passes undefined
+constants for unused context values, removing its otherwise unconditional
+register liveness. No fields were added to `sv_func_t`. MIR dumps confirm both
+constants for a plain constructor, the target register for a target-reading
+constructor, and both registers for a derived constructor.
+
+The native build, nine focused regressions, all 4,221 spec tests, and all 10 JIT
+files passed. `test_jit_bailout_call_context.cjs` changes arithmetic types after
+warmup and then exercises target identity and super dispatch. Nine alternating
+before/after timing pairs gave median changes of +1.03% for native construction,
++0.37% for plain construction, and -0.13% for arithmetic calls. These small
+measurements do not establish a speedup or a zero-slowdown guarantee. Logs,
+MIR dumps, and timing samples are under `/tmp/ant-call-context-perf`.
+
+Explicit target parameters in 15 private/shared helpers and their declarations
+now use `new_target`. `call_new_target` is reserved for the parameter introduced
+by `ant_params_t`; native entrypoints can still forward it to those helpers.
+This follow-up changes parameter names only.
+The rename rebuild, target/frame, bailout/context, and WebSocket regressions,
+and all 4,221 spec tests pass; `maid preflight` and `git diff --check` pass too.

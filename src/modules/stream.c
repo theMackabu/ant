@@ -505,9 +505,9 @@ static ant_value_t stream_construct(
   ant_value_t base_proto,
   ant_value_t raw_options,
   void (*init_fn)(ant_t *, ant_value_t, ant_value_t),
-  ant_value_t call_new_target
+  ant_value_t new_target
 ) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, base_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, base_proto, new_target);
   ant_value_t obj = stream_make_base_object(js, is_object_type(proto) ? proto : base_proto);
   init_fn(js, obj, raw_options);
   return obj;
@@ -2338,14 +2338,14 @@ ant_value_t stream_duplex_prototype(ant_t *js) {
   return js->builtins.duplex_proto;
 }
 
-ant_value_t stream_construct_readable(ant_t *js, ant_value_t base_proto, ant_value_t options, ant_value_t call_new_target) {
+ant_value_t stream_construct_readable(ant_t *js, ant_value_t base_proto, ant_value_t options, ant_value_t new_target) {
   stream_init_constructors(js);
-  return stream_construct(js, base_proto, options, stream_init_readable, call_new_target);
+  return stream_construct(js, base_proto, options, stream_init_readable, new_target);
 }
 
-ant_value_t stream_construct_writable(ant_t *js, ant_value_t base_proto, ant_value_t options, ant_value_t call_new_target) {
+ant_value_t stream_construct_writable(ant_t *js, ant_value_t base_proto, ant_value_t options, ant_value_t new_target) {
   stream_init_constructors(js);
-  return stream_construct(js, base_proto, options, stream_init_writable, call_new_target);
+  return stream_construct(js, base_proto, options, stream_init_writable, new_target);
 }
 
 void stream_init_readable_object(ant_t *js, ant_value_t obj, ant_value_t options) {

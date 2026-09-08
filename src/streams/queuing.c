@@ -36,8 +36,8 @@ static ant_value_t js_qs_get_size(ant_params_t) {
   return js_get_slot(proto, SLOT_DATA);
 }
 
-static ant_value_t qs_ctor(ant_native_params_t, ant_value_t call_new_target, ant_value_t proto, const char *name) {
-  if (vtype(call_new_target) == kTypeUndefined)
+static ant_value_t qs_ctor(ant_native_params_t, ant_value_t new_target, ant_value_t proto, const char *name) {
+  if (vtype(new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s constructor requires 'new'", name);
 
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined || is_null(args[0]))
@@ -54,7 +54,7 @@ static ant_value_t qs_ctor(ant_native_params_t, ant_value_t call_new_target, ant
   double hwm = js_to_number(js, hv);
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t resolved = js_instance_proto_from_new_target(js, proto, call_new_target);
+  ant_value_t resolved = js_instance_proto_from_new_target(js, proto, new_target);
   
   if (is_object_type(resolved)) js_set_proto_init(obj, resolved);
   js_set_slot(obj, SLOT_DATA, js_mknum(hwm));

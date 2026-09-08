@@ -194,7 +194,7 @@ static ant_value_t js_sd_end(ant_params_t) {
   return sd_do_write(js, st, src, len, true);
 }
 
-ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t call_new_target) {
+ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t new_target) {
   int enc = SD_ENC_UTF8;
   if (!is_undefined(encoding)) {
   ant_value_t label_val = (vtype(encoding) == kTypeString) ? encoding : coerce_to_str(js, encoding);
@@ -215,7 +215,7 @@ ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t c
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto, new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, STRING_DECODER_NATIVE_TAG);

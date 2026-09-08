@@ -3349,11 +3349,11 @@ static inline bool proto_walk_overflow_guard_hit_cycle(
   return g->fast_active && same_object_identity(cur, g->fast_cur);
 }
 
-ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t call_new_target) {
+ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target) {
   ant_value_t instance_proto = js_mkundef();
 
-  if (vtype(call_new_target) == kTypeFunction || vtype(call_new_target) == kTypeBuiltin) {
-    ant_value_t nt_obj = js_as_obj(call_new_target);
+  if (vtype(new_target) == kTypeFunction || vtype(new_target) == kTypeBuiltin) {
+    ant_value_t nt_obj = js_as_obj(new_target);
     ant_value_t nt_proto = lkp_interned_val(js, nt_obj, js->intern.prototype);
     if (is_object_type(nt_proto)) instance_proto = nt_proto;
   }
@@ -3381,8 +3381,8 @@ bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) 
   return false;
 }
 
-static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_value_t call_new_target) {
-  if (vtype(call_new_target) == kTypeUndefined) return false;
+static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_value_t new_target) {
+  if (vtype(new_target) == kTypeUndefined) return false;
   if (vtype(this_val) != kTypeObject) return false;
   if (vtype(get_slot(this_val, SLOT_PRIMITIVE)) != kTypeUndefined) return false;
   return true;
@@ -5697,7 +5697,7 @@ static ant_value_t builtin_Object(ant_params_t) {
 
 static ant_value_t builtin_function_empty(ant_params_t);
 
-static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t call_new_target, bool is_async, bool is_generator) {
+static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t new_target, bool is_async, bool is_generator) {
   if (nargs == 0) {
     ant_value_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
@@ -5722,7 +5722,7 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t call_
     
     else {
       ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
-      ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, call_new_target);
+      ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, new_target);
       if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
     }
     
@@ -5850,7 +5850,7 @@ static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t call_
   
   else {
     ant_value_t func_proto = get_slot(js_glob(js), SLOT_FUNC_PROTO);
-    ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, call_new_target);
+    ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto, new_target);
     if (is_object_type(instance_proto)) js_set_proto_init(func_obj, instance_proto);
   }
 
@@ -18518,8 +18518,8 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   return proxy_obj;
 }
 
-static ant_value_t create_proxy_checked(ant_native_params_t, ant_value_t call_new_target, bool require_new) {
-  if (require_new && vtype(call_new_target) == kTypeUndefined) {
+static ant_value_t create_proxy_checked(ant_native_params_t, ant_value_t new_target, bool require_new) {
+  if (require_new && vtype(new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy constructor requires 'new'");
   }
   if (nargs < 2) return js_mkerr(js, "Proxy requires two arguments: target and handler");

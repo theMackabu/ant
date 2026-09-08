@@ -21,9 +21,9 @@ typedef struct {
   const char *day_period;
 } intl_dtf_fields_t;
 
-static ant_value_t intl_create_instance(ant_t *js, ant_value_t fallback_proto, ant_value_t call_new_target) {
+static ant_value_t intl_create_instance(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, fallback_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, fallback_proto, new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   return obj;
 }

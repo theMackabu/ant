@@ -479,9 +479,9 @@ static void net_socket_schedule_connect_error(ant_t *js, net_socket_t *socket, i
   queue_microtask(js, js_heavy_mkfun(js, net_socket_emit_connect_error, state));
 }
 
-static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open, ant_value_t call_new_target) {
+static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open, ant_value_t new_target) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.net_socket_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.net_socket_proto, new_target);
   net_socket_t *socket = calloc(1, sizeof(*socket));
 
   if (!socket) return NULL;
@@ -523,9 +523,9 @@ static void net_socket_attach_conn(net_socket_t *socket, ant_conn_t *conn) {
   net_socket_sync_state(socket);
 }
 
-static net_server_t *net_server_create(ant_t *js, ant_value_t call_new_target) {
+static net_server_t *net_server_create(ant_t *js, ant_value_t new_target) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.net_server_proto, call_new_target);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.net_server_proto, new_target);
   net_server_t *server = calloc(1, sizeof(*server));
 
   if (!server) return NULL;

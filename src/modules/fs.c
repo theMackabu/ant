@@ -525,7 +525,7 @@ static ant_value_t fs_writestream__final(ant_params_t) {
   return fs_stream_callback(js, callback, value);
 }
 
-static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t call_new_target) {
+static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t new_target) {
   ant_value_t path_val = fs_coerce_path(js, path_arg);
   ant_value_t options = is_object_type(options_arg) ? options_arg : js_mkobj(js);
   ant_value_t stream_options = js_mkobj(js);
@@ -545,7 +545,7 @@ static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, an
   if (vtype(path_val) != kTypeString) return js_mkerr(js, "ReadStream path must be a string");
   if (vtype(hwm) == kTypeNumber && js_getnum(hwm) > 0) js_set(js, stream_options, "highWaterMark", hwm);
 
-  stream_obj = stream_construct_readable(js, proto, stream_options, call_new_target);
+  stream_obj = stream_construct_readable(js, proto, stream_options, new_target);
   if (is_err(stream_obj)) return stream_obj;
 
   js_set(js, stream_obj, "_read", js_mkfun(fs_readstream__read));
@@ -567,7 +567,7 @@ static ant_value_t fs_create_readstream_impl(ant_t *js, ant_value_t path_arg, an
   return stream_obj;
 }
 
-static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t call_new_target) {
+static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, ant_value_t options_arg, ant_value_t proto, ant_value_t new_target) {
   ant_value_t path_val = fs_coerce_path(js, path_arg);
   ant_value_t options = is_object_type(options_arg) ? options_arg : js_mkobj(js);
   ant_value_t stream_options = js_mkobj(js);
@@ -587,7 +587,7 @@ static ant_value_t fs_create_writestream_impl(ant_t *js, ant_value_t path_arg, a
   if (vtype(path_val) != kTypeString) return js_mkerr(js, "WriteStream path must be a string");
   if (vtype(hwm) == kTypeNumber && js_getnum(hwm) > 0) js_set(js, stream_options, "highWaterMark", hwm);
 
-  stream_obj = stream_construct_writable(js, proto, stream_options, call_new_target);
+  stream_obj = stream_construct_writable(js, proto, stream_options, new_target);
   if (is_err(stream_obj)) return stream_obj;
 
   js_set(js, stream_obj, "_write", js_mkfun(fs_writestream__write));
