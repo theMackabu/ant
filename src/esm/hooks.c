@@ -322,11 +322,13 @@ static ant_value_t esm_run_load_chain(ant_t *js, const esm_chain_t *chain, int l
   GC_ROOT_PIN(js, out);
 
   js_set(js, out, "source", js_mkstr(js, file.data, file.size));
-
   if (esm_is_json(path)) js_set(js, out, "format", js_mkstr(js, "json", 4));
-  else js_set(js, out, "format", esm_decide_module_format(js, path) == MODULE_EVAL_FORMAT_CJS
-    ? js_mkstr(js, "commonjs", 8)
-    : js_mkstr(js, "module", 6));
+  else {
+    ant_module_format_t fmt = esm_decide_module_format(js, path);
+    if (fmt == MODULE_EVAL_FORMAT_CJS) js_set(js, out, "format", js_mkstr(js, "commonjs", 8));
+    else if (fmt == MODULE_EVAL_FORMAT_ESM) js_set(js, out, "format", js_mkstr(js, "module", 6));
+    else js_set(js, out, "format", js_mknull());
+  }
 
   free(path);
   free(file.data);
