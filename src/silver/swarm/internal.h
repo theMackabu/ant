@@ -426,7 +426,7 @@ void jit_emit_inline_body(
     MIR_item_t gf_proto, MIR_item_t imp_get_field_inline,
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
     const jit_inline_ext_t *ext);
-void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx);
+bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx);
 jit_features_t jit_prescan_features(sv_func_t *func, int n_slots);
 bool jit_mark_self_binding_guards(
     ant_t *js, sv_func_t *func, sv_closure_t *hint_closure,

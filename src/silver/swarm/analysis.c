@@ -1,5 +1,5 @@
 #include "internal.h"
-void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx) {
+bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx) {
   uint8_t *ip = func->code;
   uint8_t *end = func->code + func->code_len;
   while (ip < end) {
@@ -9,13 +9,14 @@ void scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx
     uint16_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_BRANCH32) != 0) {
       int off = (int)(ip - func->code) + sv_get_i32(ip + 1) + sz;
-      label_for_offset(ctx, lm, off);
+      if (!label_for_offset(ctx, lm, off)) return false;
     } else if ((flags & SV_OPF_JIT_BRANCH8) != 0) {
       int off = (int)(ip - func->code) + (int8_t)sv_get_i8(ip + 1) + sz;
-      label_for_offset(ctx, lm, off);
+      if (!label_for_offset(ctx, lm, off)) return false;
     }
     ip += sz;
   }
+  return true;
 }
 
 static bool jit_local_has_numeric_hint(sv_func_t *func, int idx) {

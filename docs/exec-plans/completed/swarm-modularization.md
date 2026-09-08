@@ -172,3 +172,12 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   it now stays in that loop until the test timeout. Finite OSR and omitted
   captured arguments also pass, as do entry-rejection/strict-arguments tests,
   the build, preflight, and all 4,221 specs.
+
+- Branch-target scanning reports label-table exhaustion before opcode lowering
+  or OSR dispatch can use a null label. Setup discards the module, sets the
+  compilation-failed flag, and leaves execution in the interpreter. Unemitted
+  labels are attached before teardown, including allocation-failure paths, so
+  the module owns their cleanup. Regression coverage spans 1,023/1,024/1,025/
+  1,050 targets and verifies subsequent compilation still works. The previous
+  build crashed at 1,025; all cases now pass. Native build, all 61 focused JIT
+  and direct-eval entrypoints, preflight, and all 4,221 spec tests passed.

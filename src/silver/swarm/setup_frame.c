@@ -1,5 +1,14 @@
 #include "compile.h"
 
+static void jit_discard_setup_module(jit_compile_t *c) {
+  // Setup failures occur before the scanned labels are emitted.
+  for (int i = 0; i < c->lm.count; i++)
+    MIR_append_insn(c->ctx, c->jit_func, c->lm.entries[i].label);
+  MIR_finish_func(c->ctx);
+  MIR_finish_module(c->ctx);
+  MIR_remove_module(c->ctx, c->mod);
+}
+
 bool jit_setup_frame(jit_compile_t *c) {
   char fname[128];
   snprintf(fname, sizeof(fname), "jit_%s_%p",
@@ -20,6 +29,14 @@ bool jit_setup_frame(jit_compile_t *c) {
                              MIR_T_P, "args",
                              MIR_T_I32, "argc",
                              MIR_T_P, "closure");
+
+  c->lm = (jit_label_map_t){0};
+  if (!scan_branch_targets(c->func, &c->lm, c->ctx)) {
+    jit_discard_setup_module(c);
+    c->func->jit_compile_failed = true;
+    c->func->jit_compiling = false;
+    return false;
+  }
 
   c->r_vm = MIR_reg(c->ctx, "vm", c->jit_func->u.func);
   c->r_this = MIR_reg(c->ctx, "this_val", c->jit_func->u.func);
@@ -97,9 +114,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     free(c->vs.known_bool);
     free(c->vs.integer_range);
 
-    MIR_finish_func(c->ctx);
-    MIR_finish_module(c->ctx);
-    MIR_remove_module(c->ctx, c->mod);
+    jit_discard_setup_module(c);
 
     c->func->jit_compiling = false;
     return false;
@@ -141,9 +156,7 @@ bool jit_setup_frame(jit_compile_t *c) {
       free(c->known_func_locals);
       free(c->known_type_locals);
 
-      MIR_finish_func(c->ctx);
-      MIR_finish_module(c->ctx);
-      MIR_remove_module(c->ctx, c->mod);
+      jit_discard_setup_module(c);
 
       c->func->jit_compiling = false;
       return false;
@@ -478,8 +491,6 @@ bool jit_setup_frame(jit_compile_t *c) {
                                  MIR_new_uint_op(c->ctx, (uint64_t)SV_JIT_ARGS_BUF_CAP * sizeof(ant_value_t))));
   } else
     mir_load_imm(c->ctx, c->jit_func, c->r_tco_args, 0);
-  c->lm = (jit_label_map_t){0};
-  scan_branch_targets(c->func, &c->lm, c->ctx);
   c->self_tail_entry = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func, c->self_tail_entry);
 
