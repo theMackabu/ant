@@ -5616,6 +5616,10 @@ static ant_value_t builtin_eval(ant_params_t) {
   return js_eval_bytecode_eval_with_strict(js, code_str, (size_t)code_len, false);
 }
 
+ant_value_t js_builtin_eval(ant_t *js) {
+  return js_cfunc_expose_named(js, js_mkfun(builtin_eval), "eval", 4);
+}
+
 static ant_value_t builtin_Number_isInteger(ant_params_t) {
   if (nargs == 0) return mkval(kTypeBool, 0);
   ant_value_t arg = args[0];
@@ -19074,7 +19078,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);
-  defmethod(js, glob, "eval", 4, js_mkfun(builtin_eval));
+  defmethod(js, glob, "eval", 4, js_builtin_eval(js));
   defmethod(js, glob, "isNaN", 5, js_mkfun(builtin_global_isNaN));
   defmethod(js, glob, "isFinite", 8, js_mkfun(builtin_global_isFinite));
   defmethod(js, glob, "btoa", 4, js_mkfun(builtin_btoa));

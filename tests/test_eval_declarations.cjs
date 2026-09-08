@@ -220,11 +220,30 @@ function evalArguments(value) {
   assert.strictEqual(arguments, original);
   assert.strictEqual(arguments[0], value);
   assert.strictEqual((() => eval('arguments[0]'))(), value);
+  assert.strictEqual(typeof arguments, 'object');
+  assert.strictEqual(eval('typeof arguments'), 'object');
   eval('var arguments = 3;');
   assert.strictEqual(arguments, 3);
   assert.strictEqual(read(), 3);
+  assert.strictEqual(typeof arguments, 'number');
+  assert.strictEqual(typeof arguments === 'number', true);
+  assert.strictEqual(eval('typeof arguments'), 'number');
+  assert.strictEqual(eval('typeof arguments === "number"'), true);
 }
 evalArguments(17);
+
+function implicitArgumentsTypeof() {
+  assert.strictEqual(typeof arguments, 'object');
+  assert.strictEqual(typeof arguments === 'object', true);
+}
+implicitArgumentsTypeof();
+
+function strictArgumentsTypeof() {
+  'use strict';
+  assert.strictEqual(typeof arguments, 'object');
+  assert.strictEqual(typeof arguments === 'object', true);
+}
+strictArgumentsTypeof();
 
 function nestedLiteralEval(source) {
   eval('eval(source)');

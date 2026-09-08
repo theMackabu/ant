@@ -3229,7 +3229,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
           );
         }
       } else if (
-          has_implicit_arguments_obj(c) &&
+          !c->owns_eval_env && has_implicit_arguments_obj(c) &&
           is_ident_str(arg->str, arg->len, "arguments", 9)
         ) {
         if (c->strict_args_local >= 0) {
@@ -4225,6 +4225,36 @@ static bool compile_direct_eval_call(
   if (has_spread || !is_ident_name(callee, "eval") ||
       resolve_local(c, "eval", 4) != -1 ||
       resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+
+  if (c->inherits_eval_env) {
+    uint32_t eval_scope;
+    if (!capture_dynamic_eval_scope(c, &eval_scope)) return true;
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
+    emit_op(c, OP_DUP);
+    emit_constant(c, js_builtin_eval(c->js));
+    emit_op(c, OP_SEQ);
+    for (int i = 0; i < node->args.count; i++) {
+      compile_expr(c, node->args.items[i]);
+      emit_op(c, OP_SWAP);
+    }
+    int direct_jump = emit_jump(c, OP_JMP_TRUE);
+    emit_op(c, OP_CALL);
+    emit_u16(c, (uint16_t)node->args.count);
+    int end_jump = emit_jump(c, OP_JMP);
+    patch_jump(c, direct_jump);
+    if (node->args.count == 0) {
+      emit_op(c, OP_POP);
+      emit_op(c, OP_UNDEF);
+    } else {
+      for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
+      emit_op(c, OP_NIP);
+      emit_lexical_new_target(c);
+      emit_op(c, OP_EVAL);
+      emit_u32(c, eval_scope);
+    }
+    patch_jump(c, end_jump);
+    return true;
+  }
 
   if (node->args.count == 0) {
     emit_op(c, OP_UNDEF);
@@ -6962,9 +6992,74 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   return child->is_fusable_leaf;
 }
 
+static bool ast_pattern_binds_eval(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_IDENT: return is_ident_name(node, "eval");
+    case N_ASSIGN: case N_ASSIGN_PAT:
+      return ast_pattern_binds_eval(node->left);
+    case N_REST: case N_SPREAD: case N_PROPERTY:
+      return ast_pattern_binds_eval(node->right);
+    case N_ARRAY: case N_ARRAY_PAT: case N_OBJECT: case N_OBJECT_PAT:
+      for (int i = 0; i < node->args.count; i++)
+        if (ast_pattern_binds_eval(node->args.items[i])) return true;
+      return false;
+    default: return false;
+  }
+}
+
+static bool ast_decl_binds_eval(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_EXPORT) return ast_decl_binds_eval(node->left);
+  if (node->type == N_VAR) {
+    for (int i = 0; i < node->args.count; i++)
+      if (ast_pattern_binds_eval(node->args.items[i]->left)) return true;
+  }
+  if ((node->type == N_FUNC && !(node->flags & (FN_ARROW | FN_PAREN))) ||
+      (node->type == N_CLASS && (node->flags & FN_CLASS_DECL)))
+    return is_ident_str(node->str, node->len, "eval", 4);
+  return false;
+}
+
+static bool ast_has_eval_var(const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
+  if (node->type == N_VAR && node->var_kind == SV_VAR_VAR)
+    return ast_decl_binds_eval(node);
+  const sv_ast_t *children[] = {node->left, node->right, node->body,
+    node->catch_body, node->finally_body, node->init};
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_has_eval_var(children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_has_eval_var(node->args.items[i])) return true;
+  return false;
+}
+
 static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
   if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
-  if (node->type == N_CALL && is_ident_name(node->left, "eval") && node->args.count > 0) {
+  if (node->type == N_SWITCH && ast_has_own_eval(c, node->cond)) return true;
+  if (node->type == N_BLOCK || node->type == N_SWITCH) {
+    for (int i = 0; i < node->args.count; i++) {
+      const sv_ast_t *stmt = node->args.items[i];
+      if (node->type == N_BLOCK) {
+        if (ast_decl_binds_eval(stmt)) return false;
+      } else if (stmt) {
+        for (int j = 0; j < stmt->args.count; j++)
+          if (ast_decl_binds_eval(stmt->args.items[j])) return false;
+      }
+    }
+  }
+  if ((node->type == N_FOR && ast_decl_binds_eval(node->init)) ||
+      ((node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) &&
+       ast_decl_binds_eval(node->left))) return false;
+  if (node->type == N_TRY) {
+    return ast_has_own_eval(c, node->body) ||
+      (!ast_pattern_binds_eval(node->catch_param) && ast_has_own_eval(c, node->catch_body)) ||
+      ast_has_own_eval(c, node->finally_body);
+  }
+  if (node->type == N_CALL && !call_has_spread_arg(node) &&
+      is_ident_name(node->left, "eval") && node->args.count > 0 &&
+      resolve_local(c, "eval", 4) == -1 &&
+      resolve_upvalue_raw(c, "eval", 4) == -1) {
     sv_ast_t *arg = node->args.items[0];
     if (!eval_arg_is_definitely_non_string(arg)) {
       if (!arg || arg->type != N_STRING) return true;
@@ -6973,7 +7068,6 @@ static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
       ant_value_t saved_thrown_stack = c->js->thrown_stack;
       code_arena_mark_t mark = parse_arena_mark();
       sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, c->is_strict);
-      // Preserve the existing inline-expression path; nested eval can still declare vars.
       bool needs_env = !program || (program->args.count != 0 &&
         (program->args.count != 1 ||
          !is_inline_literal_eval_expr(program->args.items[0]) ||
@@ -7026,11 +7120,6 @@ sv_func_t *compile_function_body(
   }
 
   if (has_own_use_strict) comp.is_strict = true;
-  comp.owns_eval_env = mode != SV_COMPILE_EVAL && !comp.is_strict && ast_has_own_eval(&comp, node->body);
-  for (int i = 0; !comp.owns_eval_env && !comp.is_strict && i < node->args.count; i++)
-    comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
-  comp.inherits_eval_env |= comp.owns_eval_env;
-  if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *p = node->args.items[i];
     if (p->type == N_IDENT) {
@@ -7043,6 +7132,17 @@ sv_func_t *compile_function_body(
   }
 
   comp.param_locals = comp.local_count;
+  bool params_bind_eval = false;
+  for (int i = 0; i < node->args.count; i++)
+    params_bind_eval |= ast_pattern_binds_eval(node->args.items[i]);
+  if (mode != SV_COMPILE_EVAL && !comp.is_strict && !params_bind_eval) {
+    for (int i = 0; !comp.owns_eval_env && i < node->args.count; i++)
+      comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
+    if (!comp.owns_eval_env && !ast_has_eval_var(node->body))
+      comp.owns_eval_env = ast_has_own_eval(&comp, node->body);
+  }
+  comp.inherits_eval_env |= comp.owns_eval_env;
+  if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   bool repl_top = is_repl_top_level(&comp);
 
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
