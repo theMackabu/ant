@@ -305,38 +305,11 @@ static inline ant_value_t sv_eval_in_frame(
   sv_func_t *caller = frame ? frame->func : NULL;
   
   if (!caller) return js_eval_bytecode_eval_with_strict(js, source, source_len, false);
-  const sv_eval_scope_t *scope = sv_func_eval_scope(caller, scope_index);
-  ant_value_t parent_env = sv_frame_eval_env(js, frame);
-  
-  if (!scope) return js_eval_bytecode_eval_in_env_with_strict(
-    js, source, source_len, 
-    sv_frame_is_strict(frame), frame->this, parent_env, new_target
-  );
-
   GC_ROOT_SAVE(root_mark, js);
-  ant_value_t env = js_mkobj(js);
-  
-  if (is_err(env)) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return env;
-  }
-  
-  GC_ROOT_PIN(js, parent_env);
+  ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
+  if (is_err(env)) { GC_ROOT_RESTORE(js, root_mark); return env; }
   GC_ROOT_PIN(js, env);
-  js_set_proto_wb(js, env, parent_env);
 
-  sv_eval_env_state_t *state = sv_eval_env_state_create(vm, frame, scope);
-  if (!state) {
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr(js, "failed to capture direct eval bindings");
-  }
-
-  if (!sv_eval_env_state_attach(env, state)) {
-    free(state);
-    GC_ROOT_RESTORE(js, root_mark);
-    return js_mkerr(js, "failed to attach direct eval bindings");
-  }
-  
   ant_value_t result = js_eval_bytecode_eval_in_env_with_strict(
     js, source, source_len, 
     sv_frame_is_strict(frame), frame->this, env, new_target

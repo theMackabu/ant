@@ -3,6 +3,7 @@
 
 #include "internal.h"
 #include "silver/engine.h"
+#include "eval_env.h"
 
 static inline ant_value_t sv_mkprop_interned_exact_key(
   ant_t *js, ant_value_t obj,
@@ -242,10 +243,17 @@ static inline ant_value_t sv_op_closure(
   ant_value_t func_val = mkref(kTypeFunction, closure);
   vm->stack[vm->sp++] = func_val;
   ant_value_t eval_env = sv_frame_eval_env(js, frame);
+  if (*ip == OP_CLOSURE_EVAL) {
+    eval_env = sv_eval_capture_env(vm, js, frame, sv_get_u32(ip + 5));
+    if (is_err(eval_env)) return eval_env;
+  }
+  GC_ROOT_SAVE(mark, js);
+  if (*ip == OP_CLOSURE_EVAL) GC_ROOT_PIN(js, eval_env);
   sv_closure_finish_init(
     js, closure, func_val, frame->callee, NULL, 0,
     eval_env, eval_env != js->global
   );
+  GC_ROOT_RESTORE(js, mark);
 
   return js_mkundef();
 }

@@ -292,6 +292,9 @@ op_def(  LABEL,             5,   0,   0, label)     /* jump target marker */
 op_def(  LINE_NUM,          5,   0,   0, u32)       /* source line for debug info */
 op_def(  COL_NUM,           5,   0,   0, u32)       /* source column for debug info */
 
+OP_DEF(  INIT_EVAL_ENV,     1,   0,   0, none)
+OP_DEF(  CLOSURE_EVAL,      9,   0,   1, u32)
+OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 #undef OP_DEF
 #undef op_def
 #endif

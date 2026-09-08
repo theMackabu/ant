@@ -45,6 +45,7 @@ typedef struct {
   bool is_const;
   bool captured;
   bool is_tdz;
+  uint8_t eval_flags;
   bool char_code_at_hint;
   uint8_t inferred_type;
   sv_binding_meta_t binding;
@@ -174,6 +175,9 @@ typedef struct sv_compiler {
   bool is_async;
   bool is_strict;
   bool inherits_eval_env;
+  bool owns_eval_env;
+  sv_eval_decl_t *eval_vars;
+  uint32_t eval_var_count;
   sv_compile_mode_t mode;
 
   bool is_tla;

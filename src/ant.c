@@ -40,6 +40,7 @@
 #include "silver/swarm.h"
 #include "silver/ops/using.h"
 #include "silver/ops/async.h"
+#include "silver/ops/eval_env.h"
 #include "modules/regex.h"
 
 #ifndef ANT_WASM_EMBED
@@ -20201,7 +20202,14 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   js_clear_error_site(js);
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
-  return sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t compiled = mkref(kTypeFunctionInfo, func);
+  GC_ROOT_PIN(js, compiled);
+  ant_value_t result = sv_eval_declare_vars(js, func, eval_env);
+  if (!is_err(result))
+    result = sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 static inline js_eval_result_t js_eval_bytecode_mode_result(
