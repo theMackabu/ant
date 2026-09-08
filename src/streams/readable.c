@@ -741,7 +741,7 @@ static ant_value_t js_rs_async_iter_return(ant_params_t) {
 }
 
 static ant_value_t js_rs_values(ant_params_t) {
-  ant_value_t reader = js_rs_get_reader(js, NULL, 0, call_new_target);
+  ant_value_t reader = js_rs_get_reader(js, NULL, 0, js_mkundef());
   if (is_err(reader)) return reader;
 
   ant_value_t iterator = js_mkobj(js);

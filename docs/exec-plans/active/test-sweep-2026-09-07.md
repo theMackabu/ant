@@ -6,12 +6,14 @@ Owner: theMackabu
 
 Results of running every `tests/test_*` file, the JIT harness, the spec suite,
 the Node differential runner, and `maid preflight`. The first pass ran against
-`13e340d5`; the current numbers are from the working-tree build at `87077b56`
-plus the uncommitted `new.target` native-frame change. The v14 column is the
+`13e340d5`; the recorded full-sweep numbers are from the working-tree build
+at `87077b56` plus the constructor-context implementation later committed in
+`87c85b9c`. Subsequent focused validation is recorded in the completed plans;
+these totals are not a fresh sweep of HEAD. The v14 comparison uses the
 `v14.0.ff84a70d.0` release binary from 2026-08-17. Note that v14 is only
 useful for tests that existed unchanged at that tag; see the native addon row.
 
-## Current totals
+## Recorded totals
 
 | Suite | Result |
 | --- | --- |
@@ -26,14 +28,14 @@ useful for tests that existed unchanged at that tag; see the native addon row.
 | Test | Cause | Fix |
 | --- | --- | --- |
 | `test_jit_for_of.cjs` | PR #95 broke integer-range locals across an OSR bailout resume; the nested for-of case returned 1065 instead of 2166. | Repaired in 0bcab93b. The case moved to `examples/jit/bailout_resume.js` so the harness catches it. |
-| `test_websocket_client_buffered_frames.cjs` | `new.target` lived in one global slot on `ant_t`, so the WebSocket constructor's target leaked into the native accept callback. `net_socket_create` built the accepted socket with the WebSocket prototype and the connection listener got an object with no `.on`. The `module.exports` data-property change exposed the leak by removing an incidental getter call that cleared the slot. | JS/JIT frames now carry invocation state, and native callbacks receive explicit `call_new_target` through `ant_params_t`. Native constructor frames only root targets for GC; the native accept callback explicitly selects the default Socket prototype. Uncommitted; adds `tests/test_new_target_frames.cjs`. See [net-connection-websocket-arg-regression.md](net-connection-websocket-arg-regression.md). |
+| `test_websocket_client_buffered_frames.cjs` | `new.target` lived in one global slot on `ant_t`, so the WebSocket constructor's target leaked into the native accept callback. `net_socket_create` built the accepted socket with the WebSocket prototype and the connection listener got an object with no `.on`. The `module.exports` data-property change exposed the leak by removing an incidental getter call that cleared the slot. | JS/JIT frames now carry invocation state, and native callbacks receive explicit `call_new_target` through `ant_params_t`. Native constructor frames only root targets for GC; the native accept callback explicitly selects the default Socket prototype. Committed in `87c85b9c`, including `tests/test_new_target_frames.cjs`; header and internal-call follow-ups landed in `1bfe480e` and `a7b0be86`. See the [completed constructor-context plan](../completed/net-connection-websocket-arg-regression.md). |
 | `test_cli_file_arg_precedes_package_script.cjs` | `ant t.js` ran the package script named `t.js` instead of the file. | `src/main.c` skips the script shortcut when the positional names an existing regular file. Committed in 87077b56. |
 | `test_console_inspect_string_internals.cjs` | Stale. PR #90 raised `STR_SHORT_CONS_THRESHOLD` from 13 to 32, so the 13-char concat now copies flat by design. | Rope case uses two 16-char strings. Committed in 87077b56. |
 | `test_repl_static_import.cjs` | Stale. Since 671d8071 the prompt is dim `❯`, a reset escape, then a space, so the pty driver's literal `❯ ` marker never matched and it killed the REPL at its deadline. | Driver matches the prompt with SGR escapes allowed. Committed in 87077b56. |
 | `test_debug_error_trace.cjs` | Stale from birth. The `ANT_DEBUG=dump/errors:trace` channel and `[ant-debug:error]` marker never existed outside the commit that added the test. | Removed in 87077b56. |
 | `test_ffi_wrappers.cjs`, `test_rpc.cjs` | Stale. ESM `import` syntax in `.cjs` files. | Renamed to `.mjs` in fe9904d6. |
 
-## Still failing, 2
+## Unresolved at the sweep checkpoint, 2
 
 | Test | Verdict |
 | --- | --- |

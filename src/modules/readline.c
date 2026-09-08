@@ -1175,7 +1175,7 @@ static ant_value_t rl_async_iter_return(ant_params_t) {
     if (iface && !iface->closed) {
       ant_value_t old_this = js_getthis(js);
       js_setthis(js, iface_obj);
-      rl_interface_close(js, NULL, 0, call_new_target);
+      rl_interface_close(js, NULL, 0, js_mkundef());
       js_setthis(js, old_this);
     } else rl_async_iter_finish(js, state);
   }
@@ -1365,7 +1365,7 @@ static ant_value_t rl_create_interface(ant_params_t) {
 }
 
 static ant_value_t rl_create_interface_promises(ant_params_t) {
-  ant_value_t iface_obj = rl_create_interface(js, args, nargs, call_new_target);
+  ant_value_t iface_obj = rl_create_interface(js, args, nargs, js_mkundef());
   if (vtype(iface_obj) == kTypeError) return iface_obj;
   js_set(js, iface_obj, "question", js_mkfun(rl_interface_question_promise));
   

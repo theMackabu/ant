@@ -11,7 +11,7 @@ typedef struct {
 } ant_format_sink_t;
 
 int ant_format_walk(
-  ant_params_t, int fmt_index,
+  ant_native_params_t, int fmt_index,
   const ant_format_sink_t *sink, void *ctx
 );
 

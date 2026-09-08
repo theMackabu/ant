@@ -909,7 +909,7 @@ static ant_value_t date_get_field(ant_t *js, date_get_field_spec_t spec) {
   return tov(date_fields_get(&fields, spec.field));
 }
 
-static ant_value_t date_set_field(ant_params_t, date_set_field_spec_t spec) {
+static ant_value_t date_set_field(ant_native_params_t, date_set_field_spec_t spec) {
   date_fields_t fields;
   ant_value_t err;
   double d = JS_NAN;
@@ -943,7 +943,7 @@ static ant_value_t builtin_Date_valueOf(ant_params_t) {
 }
 
 static ant_value_t builtin_Date_getTime(ant_params_t) {
-  return builtin_Date_valueOf(js, args, nargs, call_new_target);
+  return builtin_Date_valueOf(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t builtin_Date_toUTCString(ant_params_t) {
@@ -1090,72 +1090,72 @@ static ant_value_t builtin_Date_getUTCDay(ant_params_t) {
 
 static ant_value_t builtin_Date_setMilliseconds(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, DATE_FIELD_DAY_OF_WEEK, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCMilliseconds(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, DATE_FIELD_DAY_OF_WEEK, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setSeconds(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_SECOND, DATE_FIELD_DAY_OF_WEEK, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCSeconds(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_SECOND, DATE_FIELD_DAY_OF_WEEK, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setMinutes(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MINUTE, DATE_FIELD_DAY_OF_WEEK, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCMinutes(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MINUTE, DATE_FIELD_DAY_OF_WEEK, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setHours(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_HOUR, DATE_FIELD_DAY_OF_WEEK, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCHours(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_HOUR, DATE_FIELD_DAY_OF_WEEK, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setDate(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, DATE_FIELD_HOUR, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCDate(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, DATE_FIELD_HOUR, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setMonth(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MONTH, DATE_FIELD_DAY_OF_MONTH, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCMonth(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MONTH, DATE_FIELD_DAY_OF_MONTH, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setFullYear(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_YEAR, DATE_FIELD_HOUR, true};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setUTCFullYear(ant_params_t) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_YEAR, DATE_FIELD_HOUR, false};
-  return date_set_field(js, args, nargs, call_new_target, kSpec);
+  return date_set_field(js, args, nargs, kSpec);
 }
 
 static ant_value_t builtin_Date_setYear(ant_params_t) {
@@ -1175,7 +1175,7 @@ static ant_value_t builtin_Date_setYear(ant_params_t) {
   static const date_set_field_spec_t kSetYearSpec = {
     DATE_FIELD_YEAR, DATE_FIELD_MONTH, true
   };
-  return date_set_field(js, &darg, 1, call_new_target, kSetYearSpec);
+  return date_set_field(js, &darg, 1, kSetYearSpec);
 }
 
 static ant_value_t date_to_primitive_number(ant_t *js, ant_value_t obj) {

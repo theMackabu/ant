@@ -386,7 +386,7 @@ static ant_value_t js_zlib_end(ant_params_t) {
 
   if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
     ant_value_t write_args[1] = { args[0] };
-    js_zlib_write(js, write_args, 1, call_new_target);
+    js_zlib_write(js, write_args, 1, js_mkundef());
   }
 
   ant_value_t r = zlib_do_process(js, st, NULL, 0, Z_FINISH);
@@ -479,7 +479,7 @@ static ant_value_t js_zlib_params(ant_params_t) {
 }
 
 static ant_value_t js_zlib_close(ant_params_t) {
-  ant_value_t self = js_zlib_destroy(js, NULL, 0, call_new_target);
+  ant_value_t self = js_zlib_destroy(js, NULL, 0, js_mkundef());
   if (nargs > 0 && is_callable(args[0]))
     sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef());
   return self;
@@ -746,7 +746,7 @@ static bool get_input_bytes(ant_t *js, ant_value_t val, const uint8_t **out_byte
   return false;
 }
 
-static ant_value_t zlib_sync_fn(ant_params_t, zlib_kind_t kind) {
+static ant_value_t zlib_sync_fn(ant_native_params_t, zlib_kind_t kind) {
   if (nargs < 1) return js_mkerr(js, "argument required");
   const uint8_t *bytes = NULL;
   size_t len = 0;
@@ -755,7 +755,7 @@ static ant_value_t zlib_sync_fn(ant_params_t, zlib_kind_t kind) {
   return zlib_sync_op(js, kind, bytes, len, nargs > 1 ? args[1] : js_mkundef());
 }
 
-static ant_value_t zlib_async_fn(ant_params_t, zlib_kind_t kind) {
+static ant_value_t zlib_async_fn(ant_native_params_t, zlib_kind_t kind) {
   if (nargs < 1) return js_mkerr(js, "argument required");
 
   const uint8_t *bytes = NULL;
@@ -784,10 +784,10 @@ static ant_value_t zlib_async_fn(ant_params_t, zlib_kind_t kind) {
 }
 
 #define ZLIB_SYNC_FN(name, kind) \
-  static ant_value_t js_##name##Sync(ant_params_t) { return zlib_sync_fn(js, args, nargs, call_new_target, kind); }
+  static ant_value_t js_##name##Sync(ant_params_t) { return zlib_sync_fn(js, args, nargs, kind); }
 
 #define ZLIB_ASYNC_FN(name, kind) \
-  static ant_value_t js_##name(ant_params_t) { return zlib_async_fn(js, args, nargs, call_new_target, kind); }
+  static ant_value_t js_##name(ant_params_t) { return zlib_async_fn(js, args, nargs, kind); }
 
 ZLIB_SYNC_FN(gzip,             ZLIB_KIND_GZIP)
 ZLIB_SYNC_FN(gunzip,           ZLIB_KIND_GUNZIP)

@@ -48,8 +48,9 @@ typedef struct {
   uint32_t slot;
 } ant_prop_loc_t;
 
-#define ant_bind_t   ant_value_t func, ant_value_t this_val
-#define ant_params_t ant_t *js, ant_value_t *args, int nargs, ant_value_t call_new_target
+#define ant_bind_t ant_value_t func, ant_value_t this_val
+#define ant_native_params_t ant_t *js, ant_value_t *args, int nargs
+#define ant_params_t ant_native_params_t, ant_value_t call_new_target
 
 typedef ant_value_t
   (*ant_cfunc_t)

@@ -194,7 +194,7 @@ static ant_value_t temporal_duration_negated(ant_params_t) {
 }
 
 static ant_value_t temporal_duration_binary(
-  ant_params_t, bool subtract
+  ant_native_params_t, bool subtract
 ) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js,
@@ -223,11 +223,11 @@ static ant_value_t temporal_duration_binary(
 }
 
 static ant_value_t temporal_duration_add(ant_params_t) {
-  return temporal_duration_binary(js, args, nargs, call_new_target, false);
+  return temporal_duration_binary(js, args, nargs, false);
 }
 
 static ant_value_t temporal_duration_subtract(ant_params_t) {
-  return temporal_duration_binary(js, args, nargs, call_new_target, true);
+  return temporal_duration_binary(js, args, nargs, true);
 }
 
 static ant_value_t temporal_duration_with(ant_params_t) {
@@ -278,7 +278,7 @@ static ant_value_t temporal_duration_to_string(ant_params_t) {
 }
 
 static ant_value_t temporal_duration_to_string_default(ant_params_t) {
-  (void)args; (void)nargs; return temporal_duration_to_string(js, NULL, 0, call_new_target);
+  (void)args; (void)nargs; return temporal_duration_to_string(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t temporal_duration_round(ant_params_t) {

@@ -892,7 +892,7 @@ static ant_value_t cron_handler_rejected(ant_params_t) {
     js_reject_promise(js, report, reason);
     js->fatal_error = true;
   }
-  return cron_handler_fulfilled(js, NULL, 0, call_new_target);
+  return cron_handler_fulfilled(js, NULL, 0, js_mkundef());
 }
 
 static void cron_timer_callback(uv_timer_t *timer) {
@@ -1011,7 +1011,7 @@ static ant_value_t cron_job_unref(ant_params_t) {
 }
 
 static ant_value_t cron_job_dispose(ant_params_t) {
-  ant_value_t result = cron_job_stop(js, args, nargs, call_new_target);
+  ant_value_t result = cron_job_stop(js, args, nargs, js_mkundef());
   return is_err(result) ? result : js_mkundef();
 }
 
@@ -2406,7 +2406,7 @@ static ant_value_t cron_queue_request(ant_t *js, cron_os_request_t *request) {
   return promise;
 }
 
-static ant_value_t cron_register_os(ant_params_t) {
+static ant_value_t cron_register_os(ant_native_params_t) {
   if (nargs < 3 || vtype(args[0]) != kTypeString || vtype(args[1]) != kTypeString || vtype(args[2]) != kTypeString) {
     if (nargs < 1 || vtype(args[0]) != kTypeString)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Ant.cron() expects a string path as the first argument");
@@ -2497,7 +2497,7 @@ static ant_value_t cron_call(ant_params_t) {
       js, args[0], nargs > 1 ? args[1] : js_mkundef(),
       nargs > 2 ? args[2] : js_mkundef()
     );
-  return cron_register_os(js, args, nargs, call_new_target);
+  return cron_register_os(js, args, nargs);
 }
 
 void init_cron_module(ant_t *js) {

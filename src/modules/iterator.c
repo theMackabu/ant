@@ -204,7 +204,7 @@ static ant_value_t iter_make_helper(ant_t *js, int kind, ant_value_t cb) {
 }
 
 static ant_value_t iter_make_callable_helper(
-  ant_params_t,
+  ant_native_params_t,
   int kind,
   const char *method
 ) {
@@ -214,7 +214,7 @@ static ant_value_t iter_make_callable_helper(
 }
 
 static ant_value_t iter_make_count_helper(
-  ant_params_t, int kind,
+  ant_native_params_t, int kind,
   const char *method
 ) {
   double limit = (nargs >= 1 && vtype(args[0]) == kTypeNumber) ? js_getnum(args[0]) : 0;
@@ -223,23 +223,23 @@ static ant_value_t iter_make_count_helper(
 }
 
 static ant_value_t iter_map(ant_params_t) {
-  return iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_MAP, "Iterator.prototype.map");
+  return iter_make_callable_helper(js, args, nargs, WRAP_MAP, "Iterator.prototype.map");
 }
 
 static ant_value_t iter_filter(ant_params_t) {
-  return iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_FILTER, "Iterator.prototype.filter");
+  return iter_make_callable_helper(js, args, nargs, WRAP_FILTER, "Iterator.prototype.filter");
 }
 
 static ant_value_t iter_take(ant_params_t) {
-  return iter_make_count_helper(js, args, nargs, call_new_target, WRAP_TAKE, "Iterator.prototype.take");
+  return iter_make_count_helper(js, args, nargs, WRAP_TAKE, "Iterator.prototype.take");
 }
 
 static ant_value_t iter_drop(ant_params_t) {
-  return iter_make_count_helper(js, args, nargs, call_new_target, WRAP_DROP, "Iterator.prototype.drop");
+  return iter_make_count_helper(js, args, nargs, WRAP_DROP, "Iterator.prototype.drop");
 }
 
 static ant_value_t iter_flatMap(ant_params_t) {
-  return iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_FLATMAP, "Iterator.prototype.flatMap");
+  return iter_make_callable_helper(js, args, nargs, WRAP_FLATMAP, "Iterator.prototype.flatMap");
 }
 
 static ant_value_t iter_every(ant_params_t) {
@@ -829,7 +829,7 @@ static ant_value_t async_iter_make_helper(ant_t *js, int kind, ant_value_t cb) {
 }
 
 static ant_value_t async_iter_make_callable_helper(
-  ant_params_t,
+  ant_native_params_t,
   int kind,
   const char *method
 ) {
@@ -839,7 +839,7 @@ static ant_value_t async_iter_make_callable_helper(
 }
 
 static ant_value_t async_iter_make_count_helper(
-  ant_params_t,
+  ant_native_params_t,
   int kind,
   const char *method
 ) {
@@ -849,23 +849,23 @@ static ant_value_t async_iter_make_count_helper(
 }
 
 static ant_value_t async_iter_map(ant_params_t) {
-  return async_iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_MAP, "AsyncIterator.prototype.map");
+  return async_iter_make_callable_helper(js, args, nargs, WRAP_MAP, "AsyncIterator.prototype.map");
 }
 
 static ant_value_t async_iter_filter(ant_params_t) {
-  return async_iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_FILTER, "AsyncIterator.prototype.filter");
+  return async_iter_make_callable_helper(js, args, nargs, WRAP_FILTER, "AsyncIterator.prototype.filter");
 }
 
 static ant_value_t async_iter_take(ant_params_t) {
-  return async_iter_make_count_helper(js, args, nargs, call_new_target, WRAP_TAKE, "AsyncIterator.prototype.take");
+  return async_iter_make_count_helper(js, args, nargs, WRAP_TAKE, "AsyncIterator.prototype.take");
 }
 
 static ant_value_t async_iter_drop(ant_params_t) {
-  return async_iter_make_count_helper(js, args, nargs, call_new_target, WRAP_DROP, "AsyncIterator.prototype.drop");
+  return async_iter_make_count_helper(js, args, nargs, WRAP_DROP, "AsyncIterator.prototype.drop");
 }
 
 static ant_value_t async_iter_flatMap(ant_params_t) {
-  return async_iter_make_callable_helper(js, args, nargs, call_new_target, WRAP_FLATMAP, "AsyncIterator.prototype.flatMap");
+  return async_iter_make_callable_helper(js, args, nargs, WRAP_FLATMAP, "AsyncIterator.prototype.flatMap");
 }
 
 static ant_value_t async_terminal_advance(ant_t *js, ant_value_t state);
@@ -1163,7 +1163,7 @@ for (;;) {
   if (!async_terminal_handle_step(js, state, next_result)) return js_mkundef();
 }}
 
-static ant_value_t async_iter_terminal(ant_params_t, int mode) {
+static ant_value_t async_iter_terminal(ant_native_params_t, int mode) {
   if (mode != ASYNC_TERM_TOARRAY && (nargs < 1 || !is_callable(args[0])))
     return js_mkerr_typed(js, JS_ERR_TYPE, "AsyncIterator helper requires a callable");
 
@@ -1198,27 +1198,27 @@ static ant_value_t async_iter_terminal(ant_params_t, int mode) {
 }
 
 static ant_value_t async_iter_every(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_EVERY);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_EVERY);
 }
 
 static ant_value_t async_iter_some(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_SOME);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_SOME);
 }
 
 static ant_value_t async_iter_find(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_FIND);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_FIND);
 }
 
 static ant_value_t async_iter_forEach(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_FOREACH);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_FOREACH);
 }
 
 static ant_value_t async_iter_reduce(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_REDUCE);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_REDUCE);
 }
 
 static ant_value_t async_iter_toArray(ant_params_t) {
-  return async_iter_terminal(js, args, nargs, call_new_target, ASYNC_TERM_TOARRAY);
+  return async_iter_terminal(js, args, nargs, ASYNC_TERM_TOARRAY);
 }
 
 void init_iterator_module(ant_t *js) {

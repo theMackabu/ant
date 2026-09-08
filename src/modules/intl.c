@@ -292,10 +292,10 @@ static ant_value_t intl_numberformat_format(ant_params_t) {
 }
 
 static ant_value_t intl_numberformat_resolved_options(ant_params_t) {
-  return intl_collator_resolved_options(js, args, nargs, call_new_target);
+  return intl_collator_resolved_options(js, args, nargs, js_mkundef());
 }
 
-static void intl_dtf_extract_fields(ant_params_t, intl_dtf_fields_t *out) {
+static void intl_dtf_extract_fields(ant_native_params_t, intl_dtf_fields_t *out) {
   time_t t = time(NULL);
   if (nargs >= 1) t = (time_t)(js_to_number(js, args[0]) / 1000.0);
 
@@ -315,7 +315,7 @@ static void intl_dtf_extract_fields(ant_params_t, intl_dtf_fields_t *out) {
 
 static ant_value_t intl_dtf_format(ant_params_t) {
   intl_dtf_fields_t fields;
-  intl_dtf_extract_fields(js, args, nargs, call_new_target, &fields);
+  intl_dtf_extract_fields(js, args, nargs, &fields);
 
   char buf[64];
   snprintf(
@@ -351,7 +351,7 @@ static ant_value_t intl_dtf_make_part(ant_t *js, const char *type, const char *v
 
 static ant_value_t intl_dtf_format_to_parts(ant_params_t) {
   intl_dtf_fields_t fields;
-  intl_dtf_extract_fields(js, args, nargs, call_new_target, &fields);
+  intl_dtf_extract_fields(js, args, nargs, &fields);
 
   char hour[8];
   char minute[8];

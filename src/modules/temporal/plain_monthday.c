@@ -155,7 +155,7 @@ static ant_value_t temporal_plain_monthday_to_string(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_monthday_to_string_default(ant_params_t) {
-  (void)args; (void)nargs; return temporal_plain_monthday_to_string(js, NULL, 0, call_new_target);
+  (void)args; (void)nargs; return temporal_plain_monthday_to_string(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t temporal_plain_monthday_value_of(ant_params_t) {

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: to be rewritten
+Status: active
 Last reviewed: 2026-09-07
 Owner: theMackabu
 
@@ -31,6 +31,38 @@ meant to answer "where should this change live?" before anyone starts editing.
 - `src/gc/` contains memory management primitives and object/string handling.
 - Files like `src/errors.c`, `src/descriptors.c`, and `src/shapes.c` support
   core engine behavior shared across subsystems.
+
+Silver's headers separate data definitions from execution helpers:
+
+- `include/silver/engine.h` defines VM, frame, closure, and function layouts,
+  basic accessors, and runtime entry declarations.
+- `include/silver/feedback.h` contains type feedback, specialization tracking,
+  and JIT tiering helpers; it depends on the engine definitions.
+- `src/silver/ops/async.h` implements async/TLA entry and await operations;
+  it also depends on the engine definitions.
+- `include/silver/call.h` owns call preparation, dispatch, and cleanup. It
+  includes the feedback and async helpers before defining call dispatch.
+- `src/silver/ops/calls.h` implements call bytecodes using those shared helpers.
+
+Consumers include the header for the operations they use. Keep `engine.h`
+independent of call, feedback, and opcode implementation headers so consumers
+of VM definitions do not create an include cycle. See the completed
+[header boundary plan](docs/exec-plans/completed/silver-header-boundaries.md).
+
+Constructor context belongs to an invocation. JS frames and JIT invocation
+arguments carry `new.target`; native callbacks receive it explicitly through
+`ant_params_t`. Ordinary internal calls pass `js_mkundef()`, helpers delegating
+the same construction preserve its target, and separate constructions use
+their own target. Native constructors link a C-stack frame to root the target
+across GC and re-entry. Direct eval receives the lexical target explicitly.
+Reserve `ant_params_t` for callbacks using the `ant_cfunc_t` ABI. Internal
+helpers use `ant_native_params_t` for the shared `js`, `args`, and `nargs`
+parameters, followed by any helper-specific parameters. Include an explicit
+constructor target only when the implementation needs it. `ant_params_t`
+extends that shared prefix with `call_new_target` for the callback ABI.
+There is no ambient `ant_t::new_target` field. The
+[constructor-context plan](docs/exec-plans/completed/net-connection-websocket-arg-regression.md)
+records the regression, implementation, and validation.
 
 ### Host platform surface
 

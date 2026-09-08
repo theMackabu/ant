@@ -699,7 +699,7 @@ static bool console_write_args_to_stream(
   ant_value_t *args, int nargs, bool color_values
 ) {
   console_format_ctx_t ctx = { js, out, color_values, true };
-  int start = ant_format_walk(js, args, nargs, js_mkundef(), 0, &console_format_sink, &ctx);
+  int start = ant_format_walk(js, args, nargs, 0, &console_format_sink, &ctx);
   if (!ctx.ok) return false;
 
   for (int i = start; i < nargs; i++) {
@@ -943,7 +943,7 @@ static ant_value_t js_console_group_end(ant_params_t) {
 }
 
 static ant_value_t js_console_group_collapsed(ant_params_t) {
-  return js_console_group(js, args, nargs, call_new_target);
+  return js_console_group(js, args, nargs, js_mkundef());
 }
 
 static const char *get_slot_name(internal_slot_t slot) {
@@ -1322,17 +1322,17 @@ static ant_value_t js_console_inspect(ant_params_t) {
 
 // TODO: replace stub with real
 static ant_value_t js_console_dir(ant_params_t) {
-  return js_console_log(js, args, nargs, call_new_target);
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 // TODO: replace stub with real
 static ant_value_t js_console_dirxml(ant_params_t) {
-  return js_console_log(js, args, nargs, call_new_target);
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 // TODO: replace stub with real
 static ant_value_t js_console_table(ant_params_t) {
-  return js_console_log(js, args, nargs, call_new_target);
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 static void console_apply_methods(ant_t *js, ant_value_t console_obj) {

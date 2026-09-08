@@ -802,7 +802,7 @@ static ant_value_t js_eventtarget_ctor(ant_params_t) {
   return js_mkundef();
 }
 
-static bool parse_addEventListener_options(ant_params_t, bool *once, bool *capture, ant_value_t *signal) {
+static bool parse_addEventListener_options(ant_native_params_t, bool *once, bool *capture, ant_value_t *signal) {
   *once = false; *capture = false; *signal = js_mkundef();
   if (nargs < 3) return true;
   ant_value_t opts = args[2];
@@ -826,12 +826,12 @@ static bool parse_addEventListener_options(ant_params_t, bool *once, bool *captu
   return true;
 }
 
-static ant_value_t add_listener_to(ant_params_t, EventType *evt) {
+static ant_value_t add_listener_to(ant_native_params_t, EventType *evt) {
   if (!evt) return js_mkerr(js, "failed to create event type");
 
   bool once, capture;
   ant_value_t signal;
-  if (!parse_addEventListener_options(js, args, nargs, call_new_target, &once, &capture, &signal))
+  if (!parse_addEventListener_options(js, args, nargs, &once, &capture, &signal))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to execute 'addEventListener': signal is not an AbortSignal");
 
   if (vtype(signal) != kTypeUndefined && abort_signal_is_aborted(signal)) return js_mkundef();
@@ -864,7 +864,7 @@ static ant_value_t add_listener_to(ant_params_t, EventType *evt) {
   return js_mkundef();
 }
 
-static ant_value_t remove_listener_from(ant_params_t, EventType *evt) {
+static ant_value_t remove_listener_from(ant_native_params_t, EventType *evt) {
   if (!evt) return js_mkundef();
 
   bool capture = false;
@@ -939,7 +939,7 @@ static ant_value_t js_add_event_listener_method(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkundef();
-  return add_listener_to(js, args, nargs, call_new_target,
+  return add_listener_to(js, args, nargs,
     find_or_create_emitter_event_type(js, js_getthis(js), key));
 }
 
@@ -947,14 +947,14 @@ static ant_value_t js_add_event_listener(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkundef();
-  return add_listener_to(js, args, nargs, call_new_target, find_or_create_global_event_type(js, key));
+  return add_listener_to(js, args, nargs, find_or_create_global_event_type(js, key));
 }
 
 static ant_value_t js_remove_event_listener_method(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkundef();
-  return remove_listener_from(js, args, nargs, call_new_target,
+  return remove_listener_from(js, args, nargs,
     find_emitter_event_type(js, js_getthis(js), key));
 }
 
@@ -962,7 +962,7 @@ static ant_value_t js_remove_event_listener(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkundef();
-  return remove_listener_from(js, args, nargs, call_new_target, find_global_event_type(js, key));
+  return remove_listener_from(js, args, nargs, find_global_event_type(js, key));
 }
 
 static ant_value_t js_dispatch_event_method(ant_params_t) {
@@ -1112,7 +1112,7 @@ static ant_value_t js_eventemitter_off(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   
   remove_listener_from(
-    js, args, nargs, call_new_target,
+    js, args, nargs,
     find_emitter_event_type(js, this_obj, key)
   );
   
@@ -1293,7 +1293,7 @@ ant_offset_t eventemitter_listener_count(
   return (ant_offset_t)evt_live_count(evt_list_find_cstr(events, event_type, strlen(event_type)));
 }
 
-static ant_value_t js_eventemitter_add(ant_params_t, bool once, bool prepend) {
+static ant_value_t js_eventemitter_add(ant_native_params_t, bool once, bool prepend) {
   if (nargs < 2) return js_mkerr(js, "requires 2 arguments (event, listener)");
   ant_value_t key = evt_key_from_arg(args[0]);
   
@@ -1305,19 +1305,19 @@ static ant_value_t js_eventemitter_add(ant_params_t, bool once, bool prepend) {
 }
 
 static ant_value_t js_eventemitter_on(ant_params_t) {
-  return js_eventemitter_add(js, args, nargs, call_new_target, false, false);
+  return js_eventemitter_add(js, args, nargs, false, false);
 }
 
 static ant_value_t js_eventemitter_once(ant_params_t) {
-  return js_eventemitter_add(js, args, nargs, call_new_target, true, false);
+  return js_eventemitter_add(js, args, nargs, true, false);
 }
 
 static ant_value_t js_eventemitter_prepend_listener(ant_params_t) {
-  return js_eventemitter_add(js, args, nargs, call_new_target, false, true);
+  return js_eventemitter_add(js, args, nargs, false, true);
 }
 
 static ant_value_t js_eventemitter_prepend_once_listener(ant_params_t) {
-  return js_eventemitter_add(js, args, nargs, call_new_target, true, true);
+  return js_eventemitter_add(js, args, nargs, true, true);
 }
 
 static ant_value_t js_eventemitter_removeAllListeners(ant_params_t) {
@@ -1507,7 +1507,7 @@ static ant_value_t js_events_once_attach(
     if (abort_signal_is_signal(signal)) js_set(js, listener_options, "signal", signal);
     
     ant_value_t call_args[3] = { key, listener, listener_options };
-    ant_value_t result = add_listener_to(js, call_args, 3, js_mkundef(), find_or_create_emitter_event_type(js, target, key));
+    ant_value_t result = add_listener_to(js, call_args, 3, find_or_create_emitter_event_type(js, target, key));
     
     if (is_err(result)) js_reject_promise(js, promise, result);
     return promise;

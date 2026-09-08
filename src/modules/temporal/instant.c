@@ -105,7 +105,7 @@ static ant_value_t temporal_instant_get_epoch_nanoseconds(ant_params_t) {
 }
 
 static ant_value_t temporal_instant_binary_duration(
-  ant_params_t, bool subtract
+  ant_native_params_t, bool subtract
 ) {
   ant_value_t err = js_mkundef();
   Instant *self = temporal_instant_this(js,
@@ -132,11 +132,11 @@ static ant_value_t temporal_instant_binary_duration(
 }
 
 static ant_value_t temporal_instant_add(ant_params_t) {
-  return temporal_instant_binary_duration(js, args, nargs, call_new_target, false);
+  return temporal_instant_binary_duration(js, args, nargs, false);
 }
 
 static ant_value_t temporal_instant_subtract(ant_params_t) {
-  return temporal_instant_binary_duration(js, args, nargs, call_new_target, true);
+  return temporal_instant_binary_duration(js, args, nargs, true);
 }
 
 static ant_value_t temporal_instant_equals(ant_params_t) {
@@ -152,7 +152,7 @@ static ant_value_t temporal_instant_equals(ant_params_t) {
 }
 
 static ant_value_t temporal_instant_difference(
-  ant_params_t, bool since
+  ant_native_params_t, bool since
 ) {
   ant_value_t err = js_mkundef();
   Instant *self = temporal_instant_this(js,
@@ -183,11 +183,11 @@ static ant_value_t temporal_instant_difference(
 }
 
 static ant_value_t temporal_instant_since(ant_params_t) {
-  return temporal_instant_difference(js, args, nargs, call_new_target, true);
+  return temporal_instant_difference(js, args, nargs, true);
 }
 
 static ant_value_t temporal_instant_until(ant_params_t) {
-  return temporal_instant_difference(js, args, nargs, call_new_target, false);
+  return temporal_instant_difference(js, args, nargs, false);
 }
 
 static ant_value_t temporal_instant_to_string(ant_params_t) {
@@ -214,7 +214,7 @@ static ant_value_t temporal_instant_to_string(ant_params_t) {
 }
 
 static ant_value_t temporal_instant_to_string_default(ant_params_t) {
-  (void)args; (void)nargs; return temporal_instant_to_string(js, NULL, 0, call_new_target);
+  (void)args; (void)nargs; return temporal_instant_to_string(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t temporal_instant_round(ant_params_t) {

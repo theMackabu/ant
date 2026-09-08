@@ -1242,7 +1242,7 @@ static ant_value_t js_wasm_global_value_setter(ant_params_t) {
 }
 
 static ant_value_t js_wasm_global_value_of(ant_params_t) {
-  return js_wasm_global_value_getter(js, NULL, 0, call_new_target);
+  return js_wasm_global_value_getter(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t js_wasm_global_ctor(ant_params_t) {

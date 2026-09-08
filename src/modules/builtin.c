@@ -406,7 +406,7 @@ static ant_value_t js_match(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t hl_get_tagged(ant_params_t) {
+static ant_value_t hl_get_tagged(ant_native_params_t) {
   size_t input_len;
   char *input = js_getstr(js, args[0], &input_len);
 
@@ -440,7 +440,7 @@ static ant_value_t js_highlight(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight() requires 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight() argument must be a string");
 
-  ant_value_t tagged = hl_get_tagged(js, args, nargs, call_new_target);
+  ant_value_t tagged = hl_get_tagged(js, args, nargs);
   if (is_err(tagged)) return tagged;
   return hl_render_tagged(js, tagged);
 }
@@ -454,7 +454,7 @@ static ant_value_t js_highlight_render(ant_params_t) {
 static ant_value_t js_highlight_tags(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight.tags() requires 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight.tags() argument must be a string");
-  return hl_get_tagged(js, args, nargs, call_new_target);
+  return hl_get_tagged(js, args, nargs);
 }
 
 void init_builtin_module(ant_t *js) {

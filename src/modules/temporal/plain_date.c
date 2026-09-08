@@ -178,7 +178,7 @@ static ant_value_t temporal_plain_date_get_era_year(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_date_binary_duration(
-  ant_params_t, bool subtract
+  ant_native_params_t, bool subtract
 ) {
   ant_value_t err = js_mkundef();
   PlainDate *self = temporal_plain_date_this(js,
@@ -207,10 +207,10 @@ static ant_value_t temporal_plain_date_binary_duration(
 }
 
 static ant_value_t temporal_plain_date_add(ant_params_t) {
-  return temporal_plain_date_binary_duration(js, args, nargs, call_new_target, false);
+  return temporal_plain_date_binary_duration(js, args, nargs, false);
 }
 static ant_value_t temporal_plain_date_subtract(ant_params_t) {
-  return temporal_plain_date_binary_duration(js, args, nargs, call_new_target, true);
+  return temporal_plain_date_binary_duration(js, args, nargs, true);
 }
 
 static ant_value_t temporal_plain_date_equals(ant_params_t) {
@@ -226,7 +226,7 @@ static ant_value_t temporal_plain_date_equals(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_date_difference(
-  ant_params_t, bool since
+  ant_native_params_t, bool since
 ) {
   ant_value_t err = js_mkundef();
   PlainDate *self = temporal_plain_date_this(js,
@@ -253,10 +253,10 @@ static ant_value_t temporal_plain_date_difference(
 }
 
 static ant_value_t temporal_plain_date_since(ant_params_t) {
-  return temporal_plain_date_difference(js, args, nargs, call_new_target, true);
+  return temporal_plain_date_difference(js, args, nargs, true);
 }
 static ant_value_t temporal_plain_date_until(ant_params_t) {
-  return temporal_plain_date_difference(js, args, nargs, call_new_target, false);
+  return temporal_plain_date_difference(js, args, nargs, false);
 }
 
 static ant_value_t temporal_plain_date_with(ant_params_t) {
@@ -360,7 +360,7 @@ static ant_value_t temporal_plain_date_to_string(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_date_to_string_default(ant_params_t) {
-  (void)args; (void)nargs; return temporal_plain_date_to_string(js, NULL, 0, call_new_target);
+  (void)args; (void)nargs; return temporal_plain_date_to_string(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t temporal_plain_date_value_of(ant_params_t) {

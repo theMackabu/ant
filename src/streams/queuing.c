@@ -36,7 +36,7 @@ static ant_value_t js_qs_get_size(ant_params_t) {
   return js_get_slot(proto, SLOT_DATA);
 }
 
-static ant_value_t qs_ctor(ant_params_t, ant_value_t proto, const char *name) {
+static ant_value_t qs_ctor(ant_native_params_t, ant_value_t call_new_target, ant_value_t proto, const char *name) {
   if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s constructor requires 'new'", name);
 

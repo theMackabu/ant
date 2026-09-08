@@ -161,7 +161,7 @@ static int timer_copy_args_from_object(ant_t *js, timer_entry_t *entry, ant_valu
   return 0;
 }
 
-static ant_value_t timer_make_args_array(ant_params_t) {
+static ant_value_t timer_make_args_array(ant_native_params_t) {
   ant_value_t arr = js_mkundef();
   int arg_count = nargs > 2 ? nargs - 2 : 0;
 
@@ -347,7 +347,7 @@ static ant_value_t js_set_timeout(ant_params_t) {
   ant_value_t callback = args[0];
   double delay_ms = nargs > 1 ? js_getnum(args[1]) : 0;
   uint64_t ms = delay_ms >= 1 ? (uint64_t)delay_ms : 0;
-  ant_value_t timer_args = timer_make_args_array(js, args, nargs, call_new_target);
+  ant_value_t timer_args = timer_make_args_array(js, args, nargs);
   
   timer_entry_t *entry = calloc(1, sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
@@ -383,7 +383,7 @@ static ant_value_t js_set_interval(ant_params_t) {
   ant_value_t callback = args[0];
   double delay_ms = nargs > 1 ? js_getnum(args[1]) : 0;
   uint64_t ms = delay_ms >= 1 ? (uint64_t)delay_ms : 1;
-  ant_value_t timer_args = timer_make_args_array(js, args, nargs, call_new_target);
+  ant_value_t timer_args = timer_make_args_array(js, args, nargs);
   
   timer_entry_t *entry = calloc(1, sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
@@ -547,8 +547,8 @@ static ant_value_t timers_promises_on_abort(ant_params_t) {
 
   if (vtype(handle) != kTypeUndefined && vtype(handle) != kTypeNull) {
     clear_args[0] = handle;
-    if (js_truthy(js, is_immediate)) js_clear_immediate(js, clear_args, 1, call_new_target);
-    else js_clear_timeout(js, clear_args, 1, call_new_target);
+    if (js_truthy(js, is_immediate)) js_clear_immediate(js, clear_args, 1, js_mkundef());
+    else js_clear_timeout(js, clear_args, 1, js_mkundef());
   }
 
   if (abort_signal_is_signal(signal)) reason = timers_promises_abort_reason(js, signal);
@@ -661,11 +661,11 @@ static ant_value_t js_timers_promises_setInterval(ant_params_t) {
 }
 
 static ant_value_t js_timers_promises_scheduler_wait(ant_params_t) {
-  return js_timers_promises_setTimeout(js, args, nargs, call_new_target);
+  return js_timers_promises_setTimeout(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t js_timers_promises_scheduler_yield(ant_params_t) {
-  return js_timers_promises_setImmediate(js, args, nargs, call_new_target);
+  return js_timers_promises_setImmediate(js, args, nargs, js_mkundef());
 }
 
 static void queue_microtask_entry(

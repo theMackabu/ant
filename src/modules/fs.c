@@ -621,12 +621,12 @@ static ant_value_t js_writestream_ctor(ant_params_t) {
 
 static ant_value_t builtin_fs_createReadStream(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "createReadStream() requires a path argument");
-  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto, call_new_target);
+  return fs_create_readstream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.readstream_proto, js_mkundef());
 }
 
 static ant_value_t builtin_fs_createWriteStream(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "createWriteStream() requires a path argument");
-  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto, call_new_target);
+  return fs_create_writestream_impl(js, args[0], nargs > 1 ? args[1] : js_mkundef(), js->builtins.writestream_proto, js_mkundef());
 }
 
 static void fs_init_stream_constructors(ant_t *js) {
@@ -1002,7 +1002,7 @@ static void fs_init_watch_constructors(ant_t *js) {
   js->builtins.fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, js->builtins.fswatcher_proto, "FSWatcher", 9);
 }
 
-static bool fs_parse_watch_options(ant_params_t, fs_watch_options_t *out) {
+static bool fs_parse_watch_options(ant_native_params_t, fs_watch_options_t *out) {
   ant_value_t options = js_mkundef();
   ant_value_t persistent_val = js_mkundef();
 
@@ -1028,7 +1028,7 @@ static bool fs_parse_watch_options(ant_params_t, fs_watch_options_t *out) {
 }
 
 static bool fs_parse_watchfile_options(
-  ant_params_t,
+  ant_native_params_t,
   fs_watchfile_options_t *out
 ) {
   ant_value_t options = js_mkundef();
@@ -1252,7 +1252,7 @@ static bool fs_parse_rm_options(ant_t *js, ant_value_t options, bool *recursive_
   return true;
 }
 
-static ant_value_t fs_rm_impl(ant_params_t, bool return_promise) {
+static ant_value_t fs_rm_impl(ant_native_params_t, bool return_promise) {
   ant_value_t promise = 0;
   ant_value_t path_val;
   size_t path_len = 0;
@@ -2238,7 +2238,7 @@ static ant_value_t builtin_fs_stream(ant_params_t) {
 }
 
 static ant_value_t fs_write_file_sync_impl(
-  ant_params_t,
+  ant_native_params_t,
   const char *fn_name,
   const char *mode
 ) {
@@ -2275,7 +2275,7 @@ static ant_value_t fs_write_file_sync_impl(
 }
 
 static ant_value_t builtin_fs_writeFileSync(ant_params_t) {
-  return fs_write_file_sync_impl(js, args, nargs, call_new_target, "writeFileSync", "wb");
+  return fs_write_file_sync_impl(js, args, nargs, "writeFileSync", "wb");
 }
 
 static ant_value_t builtin_fs_copyFileSync(ant_params_t) {
@@ -2616,7 +2616,7 @@ static ant_value_t fs_copy_path_sync_impl(
 }
 
 static ant_value_t fs_cp_sync_common(
-  ant_params_t,
+  ant_native_params_t,
   const char *fn_name
 ) {
   if (nargs < 2) return js_mkerr(js, "%s() requires src and dest arguments", fn_name);
@@ -2646,12 +2646,12 @@ static ant_value_t fs_cp_sync_common(
 }
 
 static ant_value_t builtin_fs_cpSync(ant_params_t) {
-  return fs_cp_sync_common(js, args, nargs, call_new_target, "cpSync");
+  return fs_cp_sync_common(js, args, nargs, "cpSync");
 }
 
 static ant_value_t builtin_fs_cp(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = fs_cp_sync_common(js, args, nargs, call_new_target, "cp");
+  ant_value_t result = fs_cp_sync_common(js, args, nargs, "cp");
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
   return promise;
@@ -2766,7 +2766,7 @@ static ant_value_t builtin_fs_utimesSync(ant_params_t) {
 }
 
 static ant_value_t builtin_fs_utimes(ant_params_t) {
-  return builtin_fs_utimesSync(js, args, nargs, call_new_target);
+  return builtin_fs_utimesSync(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t builtin_fs_futimesSync(ant_params_t) {
@@ -2784,7 +2784,7 @@ static ant_value_t builtin_fs_futimesSync(ant_params_t) {
 }
 
 static ant_value_t builtin_fs_futimes(ant_params_t) {
-  return builtin_fs_futimesSync(js, args, nargs, call_new_target);
+  return builtin_fs_futimesSync(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t builtin_fs_truncateSync(ant_params_t) {
@@ -2861,12 +2861,12 @@ static ant_value_t builtin_fs_fsyncSync(ant_params_t) {
 }
 
 static ant_value_t builtin_fs_appendFileSync(ant_params_t) {
-  return fs_write_file_sync_impl(js, args, nargs, call_new_target, "appendFileSync", "ab");
+  return fs_write_file_sync_impl(js, args, nargs, "appendFileSync", "ab");
 }
 
 static ant_value_t builtin_fs_appendFile(ant_params_t) {
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, call_new_target, "appendFile", "ab");
+  ant_value_t result = fs_write_file_sync_impl(js, args, nargs, "appendFile", "ab");
   if (is_err(result)) js_reject_promise(js, promise, result);
   else js_resolve_promise(js, promise, js_mkundef());
   return promise;
@@ -3212,11 +3212,11 @@ static ant_value_t builtin_fs_rmdir(ant_params_t) {
 }
 
 static ant_value_t builtin_fs_rmSync(ant_params_t) {
-  return fs_rm_impl(js, args, nargs, call_new_target, false);
+  return fs_rm_impl(js, args, nargs, false);
 }
 
 static ant_value_t builtin_fs_rm(ant_params_t) {
-  return fs_rm_impl(js, args, nargs, call_new_target, true);
+  return fs_rm_impl(js, args, nargs, true);
 }
 
 static ant_value_t dirent_isFile(ant_params_t) {
@@ -4748,7 +4748,7 @@ static ant_value_t builtin_fs_watch(ant_params_t) {
   int rc = 0;
 
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "watch() requires a path argument");
-  if (!fs_parse_watch_options(js, args, nargs, call_new_target, &opts))
+  if (!fs_parse_watch_options(js, args, nargs, &opts))
     return js_mkerr_typed(js, JS_ERR_TYPE, "watch() options must be a string, object, or callback");
 
   path_val = fs_coerce_path(js, args[0]);
@@ -4796,7 +4796,7 @@ static ant_value_t builtin_fs_watchFile(ant_params_t) {
 
   if (nargs < 2)
     return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a path and listener");
-  if (!fs_parse_watchfile_options(js, args, nargs, call_new_target, &opts))
+  if (!fs_parse_watchfile_options(js, args, nargs, &opts))
     return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a listener callback");
 
   path_val = fs_coerce_path(js, args[0]);

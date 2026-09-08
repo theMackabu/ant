@@ -13,6 +13,7 @@ can reuse the decision history.
 - [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Buffer Index Coercion Review Fixes](buffer-index-coercion.md)
 - [Compiled Native Addon Assets](compiled-native-addon-assets.md)
+- [Constructor Context and Accepted Socket Prototypes](net-connection-websocket-arg-regression.md)
 - [Cwd-aware Path Resolution](path-resolver.md)
 - [Darwin Lazy Framework Startup](darwin-lazy-framework-startup.md)
 - [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)

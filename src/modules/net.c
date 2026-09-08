@@ -206,7 +206,7 @@ static net_socket_t *net_require_socket(ant_t *js, ant_value_t this_val) {
   return socket;
 }
 
-static bool net_parse_write_args(ant_params_t, net_write_args_t *out) {
+static bool net_parse_write_args(ant_native_params_t, net_write_args_t *out) {
   ant_value_t value = 0;
 
   if (!out) return false;
@@ -242,7 +242,7 @@ static bool net_parse_write_args(ant_params_t, net_write_args_t *out) {
   return true;
 }
 
-static bool net_parse_listen_args(ant_params_t, net_listen_args_t *out) {
+static bool net_parse_listen_args(ant_native_params_t, net_listen_args_t *out) {
   if (!out) return false;
   
   memset(out, 0, sizeof(*out));
@@ -303,7 +303,7 @@ static bool net_parse_listen_args(ant_params_t, net_listen_args_t *out) {
   return true;
 }
 
-static bool net_parse_connect_args(ant_params_t, net_connect_args_t *out) {
+static bool net_parse_connect_args(ant_native_params_t, net_connect_args_t *out) {
   ant_value_t value = 0;
 
   if (!out) return false;
@@ -561,12 +561,12 @@ static ant_value_t net_isIP(ant_params_t) {
 }
 
 static ant_value_t net_isIPv4(ant_params_t) {
-  if (js_getnum(net_isIP(js, args, nargs, call_new_target)) == 4.0) return js_true;
+  if (js_getnum(net_isIP(js, args, nargs, js_mkundef())) == 4.0) return js_true;
   return js_false;
 }
 
 static ant_value_t net_isIPv6(ant_params_t) {
-  if (js_getnum(net_isIP(js, args, nargs, call_new_target)) == 6.0) return js_true;
+  if (js_getnum(net_isIP(js, args, nargs, js_mkundef())) == 6.0) return js_true;
   return js_false;
 }
 
@@ -822,7 +822,7 @@ static ant_value_t js_net_socket_write(ant_params_t) {
 
   if (!socket) return js->thrown_value;
   if (!socket->conn) return js_false;
-  if (!net_parse_write_args(js, args, nargs, call_new_target, &parsed)) return parsed.error;
+  if (!net_parse_write_args(js, args, nargs, &parsed)) return parsed.error;
   if (parsed.len == 0) return js_true;
 
   copy = malloc(parsed.len);
@@ -848,13 +848,13 @@ static ant_value_t js_net_socket_end(ant_params_t) {
 
   if (!socket) return js->thrown_value;
   if (!socket->conn) return result;
-  if (!net_parse_write_args(js, args, nargs, call_new_target, &parsed)) return parsed.error;
+  if (!net_parse_write_args(js, args, nargs, &parsed)) return parsed.error;
   
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, parsed.callback);
   
   if (parsed.len > 0) {
-  ant_value_t write_result = js_net_socket_write(js, args, nargs, call_new_target);
+  ant_value_t write_result = js_net_socket_write(js, args, nargs, js_mkundef());
   if (is_err(write_result)) {
     GC_ROOT_RESTORE(js, root_mark);
     return write_result;
@@ -939,7 +939,7 @@ static ant_value_t js_net_socket_connect(ant_params_t) {
   net_connect_args_t parsed;
 
   if (!socket) return js->thrown_value;
-  if (!net_parse_connect_args(js, args, nargs, call_new_target, &parsed)) return parsed.error;
+  if (!net_parse_connect_args(js, args, nargs, &parsed)) return parsed.error;
   return net_socket_connect_parsed(js, socket, &parsed);
 }
 
@@ -996,7 +996,7 @@ static ant_value_t js_net_server_listen(ant_params_t) {
 
   if (!server) return js->thrown_value;
   if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
-  if (!net_parse_listen_args(js, args, nargs, call_new_target, &parsed)) return parsed.error;
+  if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
   
   if (!parsed.path && parsed.port == 0 && ant_sandbox_policy_forward_restricted()) return js_mkerr_typed(
     js, JS_ERR_TYPE | JS_ERR_NO_STACK,
@@ -1142,22 +1142,22 @@ static ant_value_t js_net_server_unref(ant_params_t) {
 }
 
 static ant_value_t js_net_createServer(ant_params_t) {
-  return js_net_server_ctor(js, args, nargs, call_new_target);
+  return js_net_server_ctor(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t js_net_createConnection(ant_params_t) {
   net_connect_args_t parsed;
   net_socket_t *socket = NULL;
 
-  if (!net_parse_connect_args(js, args, nargs, call_new_target, &parsed)) return parsed.error;
-  socket = net_socket_create(js, parsed.allow_half_open, call_new_target);
+  if (!net_parse_connect_args(js, args, nargs, &parsed)) return parsed.error;
+  socket = net_socket_create(js, parsed.allow_half_open, js_mkundef());
   if (!socket) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
 
   return net_socket_connect_parsed(js, socket, &parsed);
 }
 
 static ant_value_t js_net_connect(ant_params_t) {
-  return js_net_createConnection(js, args, nargs, call_new_target);
+  return js_net_createConnection(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t js_net_getDefaultAutoSelectFamily(ant_params_t) {

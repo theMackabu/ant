@@ -487,7 +487,7 @@ static ant_value_t generator_async_dispose(ant_params_t) {
     "AsyncGenerator.prototype[Symbol.asyncDispose] called on incompatible receiver"
   );
 
-  return generator_return(js, NULL, 0, call_new_target);
+  return generator_return(js, NULL, 0, js_mkundef());
 }
 
 void init_generator_module(ant_t *js) {

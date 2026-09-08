@@ -5692,7 +5692,7 @@ static ant_value_t builtin_Object(ant_params_t) {
 
 static ant_value_t builtin_function_empty(ant_params_t);
 
-static ant_value_t build_dynamic_function(ant_params_t, bool is_async, bool is_generator) {
+static ant_value_t build_dynamic_function(ant_native_params_t, ant_value_t call_new_target, bool is_async, bool is_generator) {
   if (nargs == 0) {
     ant_value_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
@@ -9978,19 +9978,19 @@ static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_params_t) {
   uint8_t t = vtype(obj);
   
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) {
-    obj = builtin_Object(js, &obj, 1, call_new_target);
+    obj = builtin_Object(js, &obj, 1, js_mkundef());
     if (is_err(obj)) return obj;
     t = vtype(obj);
   }
   
   if (t != kTypeObject && t != kTypeArray && t != kTypeFunction) return result;
-  ant_value_t names = builtin_object_getOwnPropertyNames(js, &obj, 1, call_new_target);
+  ant_value_t names = builtin_object_getOwnPropertyNames(js, &obj, 1, js_mkundef());
   if (is_err(names)) return names;
   
   ant_value_t err = object_add_descriptors_for_keys(js, result, obj, names);
   if (is_err(err)) return err;
   
-  ant_value_t symbols = builtin_object_getOwnPropertySymbols(js, &obj, 1, call_new_target);
+  ant_value_t symbols = builtin_object_getOwnPropertySymbols(js, &obj, 1, js_mkundef());
   if (is_err(symbols)) return symbols;
   
   err = object_add_descriptors_for_keys(js, result, obj, symbols);
@@ -10194,7 +10194,7 @@ static ant_value_t builtin_object_toLocaleString(ant_params_t) {
   return result;
 }
 
-static inline ant_value_t require_callback(ant_params_t, const char *name) {
+static inline ant_value_t require_callback(ant_native_params_t, const char *name) {
   if (nargs == 0 || !is_callable(args[0]))
     return js_mkerr(js, "%s requires a function argument", name);
   return args[0];
@@ -10684,7 +10684,7 @@ static inline ant_offset_t array_includes_length_from_number(double len_num) {
   return (ant_offset_t)len_num;
 }
 
-static inline ant_offset_t array_includes_start_index(ant_params_t, ant_offset_t len) {
+static inline ant_offset_t array_includes_start_index(ant_native_params_t, ant_offset_t len) {
   int64_t start = 0;
   
   if (nargs >= 2 && vtype(args[1]) != kTypeUndefined) {
@@ -10911,7 +10911,7 @@ static ant_value_t array_includes_generic(
   ant_offset_t len = array_includes_length_from_number(js_to_number(js, len_val));
   if (len == 0) return mkval(kTypeBool, 0);
   
-  ant_offset_t start = array_includes_start_index(js, args, nargs, js_mkundef(), len);
+  ant_offset_t start = array_includes_start_index(js, args, nargs, len);
   if (start >= len) return mkval(kTypeBool, 0);
 
   for (ant_offset_t i = start; i < len; i++) {
@@ -10938,7 +10938,7 @@ ant_value_t js_array_includes_call(ant_t *js, ant_value_t arr, ant_value_t *args
     ant_offset_t len = get_array_length(js, arr);
     if (len == 0) return mkval(kTypeBool, 0);
     
-    ant_offset_t start = array_includes_start_index(js, args, nargs, js_mkundef(), len);
+    ant_offset_t start = array_includes_start_index(js, args, nargs, len);
     if (start >= len) return mkval(kTypeBool, 0);
     
     ant_value_t fast = array_includes_dense_fast(js, arr, &query, len, start);
@@ -10964,7 +10964,7 @@ static ant_value_t builtin_array_every(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "every called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "every");
+  ant_value_t callback = require_callback(js, args, nargs, "every");
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -10991,7 +10991,7 @@ static ant_value_t builtin_array_forEach(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "forEach called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "forEach");
+  ant_value_t callback = require_callback(js, args, nargs, "forEach");
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -11089,7 +11089,7 @@ static ant_value_t builtin_array_map(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "map called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "map");
+  ant_value_t callback = require_callback(js, args, nargs, "map");
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -11118,7 +11118,7 @@ static ant_value_t builtin_array_filter(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "filter called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "filter");
+  ant_value_t callback = require_callback(js, args, nargs, "filter");
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -11150,7 +11150,7 @@ static ant_value_t builtin_array_reduce(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "reduce called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "reduce");
+  ant_value_t callback = require_callback(js, args, nargs, "reduce");
   if (is_err(callback)) return callback;
   bool has_initial = (nargs >= 2);
   
@@ -11388,13 +11388,13 @@ static ant_value_t builtin_array_fill(ant_params_t) {
   return arr;
 }
 
-static ant_value_t array_find_impl(ant_params_t, bool return_index, const char *name) {
+static ant_value_t array_find_impl(ant_native_params_t, bool return_index, const char *name) {
   ant_value_t arr = js->this_val;
   
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "%s called on non-array", name);
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, name);
+  ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -11416,20 +11416,20 @@ static ant_value_t array_find_impl(ant_params_t, bool return_index, const char *
 }
 
 static ant_value_t builtin_array_find(ant_params_t) {
-  return array_find_impl(js, args, nargs, call_new_target, false, "find");
+  return array_find_impl(js, args, nargs, false, "find");
 }
 
 static ant_value_t builtin_array_findIndex(ant_params_t) {
-  return array_find_impl(js, args, nargs, call_new_target, true, "findIndex");
+  return array_find_impl(js, args, nargs, true, "findIndex");
 }
 
-static ant_value_t array_find_last_impl(ant_params_t, bool return_index, const char *name) {
+static ant_value_t array_find_last_impl(ant_native_params_t, bool return_index, const char *name) {
   ant_value_t arr = js->this_val;
   
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "%s called on non-array", name);
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, name);
+  ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -11451,11 +11451,11 @@ static ant_value_t array_find_last_impl(ant_params_t, bool return_index, const c
 }
 
 static ant_value_t builtin_array_findLast(ant_params_t) {
-  return array_find_last_impl(js, args, nargs, call_new_target, false, "findLast");
+  return array_find_last_impl(js, args, nargs, false, "findLast");
 }
 
 static ant_value_t builtin_array_findLastIndex(ant_params_t) {
-  return array_find_last_impl(js, args, nargs, call_new_target, true, "findLastIndex");
+  return array_find_last_impl(js, args, nargs, true, "findLastIndex");
 }
 
 static ant_value_t builtin_array_flatMap(ant_params_t) {
@@ -11805,7 +11805,7 @@ static ant_value_t builtin_array_some(ant_params_t) {
   if (vtype(arr) != kTypeArray && vtype(arr) != kTypeObject)
     return js_mkerr(js, "some called on non-array");
   
-  ant_value_t callback = require_callback(js, args, nargs, call_new_target, "some");
+  ant_value_t callback = require_callback(js, args, nargs, "some");
   if (is_err(callback)) return callback;
   ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
@@ -12327,7 +12327,7 @@ static ant_value_t builtin_array_toSorted(ant_params_t) {
   
   ant_value_t saved_this = js->this_val;
   js->this_val = result;
-  ant_value_t sorted = builtin_array_sort(js, args, nargs, call_new_target);
+  ant_value_t sorted = builtin_array_sort(js, args, nargs, js_mkundef());
   js->this_val = saved_this;
   
   if (is_err(sorted)) return sorted;
@@ -12345,7 +12345,7 @@ static ant_value_t builtin_array_toReversed(ant_params_t) {
   
   ant_value_t saved_this = js->this_val;
   js->this_val = result;
-  ant_value_t reversed = builtin_array_reverse(js, NULL, 0, call_new_target);
+  ant_value_t reversed = builtin_array_reverse(js, NULL, 0, js_mkundef());
   js->this_val = saved_this;
   
   if (is_err(reversed)) return reversed;
@@ -12362,7 +12362,7 @@ static ant_value_t builtin_array_toSpliced(ant_params_t) {
   
   ant_value_t saved_this = js->this_val;
   js->this_val = result;
-  builtin_array_splice(js, args, nargs, call_new_target);
+  builtin_array_splice(js, args, nargs, js_mkundef());
   js->this_val = saved_this;
   
   return mkval(kTypeArray, vdata(result));
@@ -12420,7 +12420,7 @@ static ant_value_t builtin_array_toString(ant_params_t) {
     return join_result;
   }
   
-  return builtin_object_toString(js, args, nargs, call_new_target);
+  return builtin_object_toString(js, args, nargs, js_mkundef());
 }
 
 static bool array_locale_uses_default_string_methods(ant_t *js) {
@@ -13794,7 +13794,7 @@ static void html_attr_append_escaped(char *out, size_t *pos, const char *s, ant_
   } else out[(*pos)++] = s[i];
 }
 
-static ant_value_t builtin_string_html(ant_params_t, const char *tag, const char *attr) {
+static ant_value_t builtin_string_html(ant_native_params_t, const char *tag, const char *attr) {
   ant_value_t str = js_tostring_val(js, unwrap_primitive(js, js->this_val));
   if (is_err(str)) return str;
 
@@ -13852,51 +13852,51 @@ static ant_value_t builtin_string_html(ant_params_t, const char *tag, const char
 }
 
 static ant_value_t builtin_string_anchor(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "a", "name");
+  return builtin_string_html(js, args, nargs, "a", "name");
 }
 
 static ant_value_t builtin_string_big(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "big", NULL);
+  return builtin_string_html(js, args, nargs, "big", NULL);
 }
 
 static ant_value_t builtin_string_bold(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "b", NULL);
+  return builtin_string_html(js, args, nargs, "b", NULL);
 }
 
 static ant_value_t builtin_string_fixed(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "tt", NULL);
+  return builtin_string_html(js, args, nargs, "tt", NULL);
 }
 
 static ant_value_t builtin_string_fontcolor(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "font", "color");
+  return builtin_string_html(js, args, nargs, "font", "color");
 }
 
 static ant_value_t builtin_string_fontsize(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "font", "size");
+  return builtin_string_html(js, args, nargs, "font", "size");
 }
 
 static ant_value_t builtin_string_italics(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "i", NULL);
+  return builtin_string_html(js, args, nargs, "i", NULL);
 }
 
 static ant_value_t builtin_string_link(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "a", "href");
+  return builtin_string_html(js, args, nargs, "a", "href");
 }
 
 static ant_value_t builtin_string_small(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "small", NULL);
+  return builtin_string_html(js, args, nargs, "small", NULL);
 }
 
 static ant_value_t builtin_string_strike(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "strike", NULL);
+  return builtin_string_html(js, args, nargs, "strike", NULL);
 }
 
 static ant_value_t builtin_string_sub(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "sub", NULL);
+  return builtin_string_html(js, args, nargs, "sub", NULL);
 }
 
 static ant_value_t builtin_string_sup(ant_params_t) {
-  return builtin_string_html(js, args, nargs, call_new_target, "sup", NULL);
+  return builtin_string_html(js, args, nargs, "sup", NULL);
 }
 
 ant_value_t builtin_string_charCodeAt(ant_params_t) {
@@ -14860,7 +14860,7 @@ static ant_value_t builtin_string_valueOf(ant_params_t) {
 }
 
 static ant_value_t builtin_string_toString(ant_params_t) {
-  return builtin_string_valueOf(js, args, nargs, call_new_target);
+  return builtin_string_valueOf(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t builtin_boolean_valueOf(ant_params_t) {
@@ -15955,7 +15955,7 @@ static ant_value_t builtin_promise_then(ant_params_t) {
 
 static ant_value_t builtin_promise_catch(ant_params_t) {
   ant_value_t args_then[] = { js_mkundef(), nargs > 0 ? args[0] : js_mkundef() };
-  return builtin_promise_then(js, args_then, 2, call_new_target);
+  return builtin_promise_then(js, args_then, 2, js_mkundef());
 }
 
 static ant_value_t finally_value_thunk(ant_params_t) {
@@ -16098,14 +16098,14 @@ static ant_value_t builtin_promise_finally(ant_params_t) {
   }
 
   ant_value_t args_then[] = { fulfilled_fn, rejected_fn };
-  ant_value_t ret = builtin_promise_then(js, args_then, 2, call_new_target);
+  ant_value_t ret = builtin_promise_then(js, args_then, 2, js_mkundef());
   GC_ROOT_RESTORE(js, root_mark);
   
   return ret;
 }
 
 static ant_value_t builtin_Promise_try(ant_params_t) {
-  if (nargs == 0) return builtin_Promise_resolve(js, args, 0, call_new_target);
+  if (nargs == 0) return builtin_Promise_resolve(js, args, 0, js_mkundef());
   
   ant_value_t fn = args[0];
   ant_value_t *call_args = nargs > 1 ? &args[1] : NULL;
@@ -16119,11 +16119,11 @@ static ant_value_t builtin_Promise_try(ant_params_t) {
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
     ant_value_t rej_args[] = { reject_val };
-    return builtin_Promise_reject(js, rej_args, 1, call_new_target);
+    return builtin_Promise_reject(js, rej_args, 1, js_mkundef());
   }
   
   ant_value_t res_args[] = { res };
-  return builtin_Promise_resolve(js, res_args, 1, call_new_target);
+  return builtin_Promise_resolve(js, res_args, 1, js_mkundef());
 }
 
 static ant_value_t builtin_Promise_withResolvers(ant_params_t) {
@@ -17385,7 +17385,7 @@ ant_value_t js_builtin_import(ant_params_t) {
     js->this_val = tla_promise;
     ant_value_t then_args[] = { resolve_fn };
     
-    ant_value_t result = builtin_promise_then(js, then_args, 1, call_new_target);
+    ant_value_t result = builtin_promise_then(js, then_args, 1, js_mkundef());
     js->this_val = saved;
     
     return result;
@@ -18513,7 +18513,7 @@ static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
   return proxy_obj;
 }
 
-static ant_value_t create_proxy_checked(ant_params_t, bool require_new) {
+static ant_value_t create_proxy_checked(ant_native_params_t, ant_value_t call_new_target, bool require_new) {
   if (require_new && vtype(call_new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy constructor requires 'new'");
   }
@@ -18553,7 +18553,7 @@ static ant_value_t proxy_revoke_fn(ant_params_t) {
 }
 
 static ant_value_t builtin_Proxy_revocable(ant_params_t) {
-  ant_value_t proxy = create_proxy_checked(js, args, nargs, call_new_target, false);
+  ant_value_t proxy = create_proxy_checked(js, args, nargs, js_mkundef(), false);
   if (is_err(proxy)) return proxy;
   
   ant_value_t revoke_obj = mkobj(js, 0);

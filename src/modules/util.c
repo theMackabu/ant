@@ -436,7 +436,7 @@ static inline bool format_spec_is_known(char spec) {
 }
 
 int ant_format_walk(
-  ant_params_t, int fmt_index,
+  ant_native_params_t, int fmt_index,
   const ant_format_sink_t *sink, void *ctx
 ) {
   size_t fmt_len = 0;
@@ -530,11 +530,11 @@ static const ant_format_sink_t util_format_sink = {
   util_format_value 
 };
 
-static ant_value_t util_format_impl(ant_params_t, int fmt_index) {
+static ant_value_t util_format_impl(ant_native_params_t, int fmt_index) {
   util_sb_t sb = {0};
   util_format_ctx_t ctx = { js, &sb };
   
-  int start = ant_format_walk(js, args, nargs, call_new_target, fmt_index, &util_format_sink, &ctx);
+  int start = ant_format_walk(js, args, nargs, fmt_index, &util_format_sink, &ctx);
   ant_value_t out;
 
   for (int i = start; i < nargs; i++) {
@@ -549,12 +549,12 @@ static ant_value_t util_format_impl(ant_params_t, int fmt_index) {
 }
 
 static ant_value_t util_format(ant_params_t) {
-  return util_format_impl(js, args, nargs, call_new_target, 0);
+  return util_format_impl(js, args, nargs, 0);
 }
 
 static ant_value_t util_format_with_options(ant_params_t) {
   if (nargs <= 1) return js_mkstr(js, "", 0);
-  return util_format_impl(js, args, nargs, call_new_target, 1);
+  return util_format_impl(js, args, nargs, 1);
 }
 
 static ant_value_t util_inspect(ant_params_t) {

@@ -345,7 +345,7 @@ static ant_value_t js_observable_of(ant_params_t) {
   ant_value_t subscriber_func = js_heavy_mkfun(js, js_of_subscriber, items);
   ant_value_t ctor_args[1] = {subscriber_func};
   
-  return js_observable_constructor(js, ctor_args, 1, call_new_target);
+  return js_observable_constructor(js, ctor_args, 1, js_mkundef());
 }
 
 static ant_value_t js_from_delegating(ant_params_t) {
@@ -437,7 +437,7 @@ static ant_value_t js_observable_from(ant_params_t) {
     ant_value_t subscriber_func = js_heavy_mkfun(js, js_from_delegating, observable);
     ant_value_t ctor_args[1] = {subscriber_func};
     
-    return js_observable_constructor(js, ctor_args, 1, call_new_target);
+    return js_observable_constructor(js, ctor_args, 1, js_mkundef());
   }
   
   ant_value_t iteratorMethod = js_get_sym(js, x, get_iterator_sym());
@@ -450,7 +450,7 @@ static ant_value_t js_observable_from(ant_params_t) {
   ant_value_t subscriber_func = js_heavy_mkfun(js, js_from_iteration, data);
   ant_value_t ctor_args[1] = {subscriber_func};
   
-  return js_observable_constructor(js, ctor_args, 1, call_new_target);
+  return js_observable_constructor(js, ctor_args, 1, js_mkundef());
 }
 
 void init_observable_module(ant_t *js) {  

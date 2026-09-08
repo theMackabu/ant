@@ -147,7 +147,7 @@ static bool ant_c_append(
   return true;
 }
 
-static ant_value_t ant_c_template_source(ant_params_t) {
+static ant_value_t ant_c_template_source(ant_native_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeArray)
     return js_mkerr(js, "Ant.unsafe.c must be used as a tagged template");
 
@@ -813,14 +813,14 @@ static ant_value_t ant_c_compile(ant_t *js, ant_value_t source_value, ant_value_
 }
 
 static ant_value_t ant_c_configured_tag(ant_params_t) {
-  ant_value_t source = ant_c_template_source(js, args, nargs, call_new_target);
+  ant_value_t source = ant_c_template_source(js, args, nargs);
   if (is_err(source)) return source;
   return ant_c_compile(js, source, js_get_slot(js->current_func, SLOT_DATA));
 }
 
 static ant_value_t js_unsafe_c(ant_params_t) {
   if (nargs >= 1 && vtype(args[0]) == kTypeArray) {
-    ant_value_t source = ant_c_template_source(js, args, nargs, call_new_target);
+    ant_value_t source = ant_c_template_source(js, args, nargs);
     if (is_err(source)) return source;
     return ant_c_compile(js, source, js_mkundef());
   }

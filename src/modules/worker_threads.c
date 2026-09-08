@@ -789,7 +789,7 @@ static ant_value_t worker_threads_worker_ctor(ant_params_t) {
     ant_value_t worker_data = js_get(js, args[1], "workerData");
     if (!is_undefined(worker_data)) {
       ant_value_t stringify_args[1] = {worker_data};
-      ant_value_t json = js_json_stringify(js, stringify_args, 1, call_new_target);
+      ant_value_t json = js_json_stringify(js, stringify_args, 1, js_mkundef());
       if (vtype(json) != kTypeString) {
         free(script_path);
         return js_mkerr(js, "Worker options.workerData must be JSON-serializable");
@@ -811,7 +811,7 @@ static ant_value_t worker_threads_worker_ctor(ant_params_t) {
 
   ant_value_t env_store = wt_get_or_create_env_store(js);
   ant_value_t env_stringify_args[1] = {env_store};
-  ant_value_t env_json = js_json_stringify(js, env_stringify_args, 1, call_new_target);
+  ant_value_t env_json = js_json_stringify(js, env_stringify_args, 1, js_mkundef());
   if (vtype(env_json) != kTypeString) {
     free(script_path);
     free(worker_data_heap);
@@ -866,7 +866,7 @@ static ant_value_t worker_threads_worker_ctor(ant_params_t) {
 static ant_value_t worker_threads_parent_post_message(ant_params_t) {
   ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t stringify_args[1] = {value};
-  ant_value_t json = js_json_stringify(js, stringify_args, 1, call_new_target);
+  ant_value_t json = js_json_stringify(js, stringify_args, 1, js_mkundef());
   if (vtype(json) != kTypeString) return js_mkerr(js, "parentPort.postMessage payload must be JSON-serializable");
 
   size_t json_len = 0;
@@ -914,11 +914,11 @@ static ant_value_t worker_threads_set_environment_data(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "setEnvironmentData(key, value) requires 2 arguments");
 
   ant_value_t key_stringify_args[1] = {args[0]};
-  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, call_new_target);
+  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, js_mkundef());
   if (vtype(key_json) != kTypeString) return js_mkerr(js, "setEnvironmentData key must be JSON-serializable");
 
   ant_value_t value_stringify_args[1] = {args[1]};
-  ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1, call_new_target);
+  ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1, js_mkundef());
   if (vtype(value_json) != kTypeString) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
 
   ant_value_t cloned = json_parse_value(js, value_json);
@@ -939,7 +939,7 @@ static ant_value_t worker_threads_get_environment_data(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   ant_value_t key_stringify_args[1] = {args[0]};
-  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, call_new_target);
+  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, js_mkundef());
   if (vtype(key_json) != kTypeString) return js_mkundef();
 
   size_t key_len = 0;

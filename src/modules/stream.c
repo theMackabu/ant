@@ -1012,7 +1012,7 @@ static ant_value_t js_readable_set_encoding(ant_params_t) {
   state = stream_readable_state(js, stream_obj);
   if (!is_object_type(state)) return stream_obj;
 
-  decoder = string_decoder_create(js, encoding, call_new_target);
+  decoder = string_decoder_create(js, encoding, js_mkundef());
   if (is_err(decoder)) return decoder;
   encoding_str = js_tostring_val(js, encoding);
   if (is_err(encoding_str)) return encoding_str;
@@ -1024,7 +1024,7 @@ static ant_value_t js_readable_set_encoding(ant_params_t) {
   return stream_obj;
 }
 
-static ant_value_t js_readable_add(ant_params_t, bool once) {
+static ant_value_t js_readable_add(ant_native_params_t, bool once) {
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "Readable");
   ant_value_t key = 0; ant_value_t state = 0;
 
@@ -1046,11 +1046,11 @@ static ant_value_t js_readable_add(ant_params_t, bool once) {
 }
 
 static ant_value_t js_readable_on(ant_params_t) {
-  return js_readable_add(js, args, nargs, call_new_target, false);
+  return js_readable_add(js, args, nargs, false);
 }
 
 static ant_value_t js_readable_once(ant_params_t) {
-  return js_readable_add(js, args, nargs, call_new_target, true);
+  return js_readable_add(js, args, nargs, true);
 }
 
 static ant_value_t js_readable_resume(ant_params_t) {
@@ -1061,7 +1061,7 @@ static ant_value_t js_readable_resume(ant_params_t) {
   state = stream_readable_state(js, stream_obj);
   if (is_object_type(state)) js_set(js, state, "flowing", js_true);
   
-  js_stream_resume(js, NULL, 0, call_new_target);
+  js_stream_resume(js, NULL, 0, js_mkundef());
   stream_readable_schedule_flowing_tick(js, stream_obj);
   
   return stream_obj;
@@ -1074,7 +1074,7 @@ static ant_value_t js_readable_pause(ant_params_t) {
 
   state = stream_readable_state(js, stream_obj);
   if (is_object_type(state)) js_set(js, state, "flowing", js_false);
-  return js_stream_pause(js, args, nargs, call_new_target);
+  return js_stream_pause(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t js_writable__write(ant_params_t) {
@@ -1238,7 +1238,7 @@ static ant_value_t stream_writable_write_done(ant_params_t) {
 
     saved_this = js->this_val;
     js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, call_new_target);
+    js_stream_destroy(js, destroy_args, 1, js_mkundef());
     js->this_val = saved_this;
 
     return js_mkundef();
@@ -1471,7 +1471,7 @@ static ant_value_t stream_writable_finish_tick(ant_params_t) {
     if (is_undefined(auto_destroy) || js_truthy(js, auto_destroy)) {
       ant_value_t saved_this = js->this_val;
       js->this_val = stream_obj;
-      js_stream_destroy(js, NULL, 0, call_new_target);
+      js_stream_destroy(js, NULL, 0, js_mkundef());
       js->this_val = saved_this;
     }
   }
@@ -1489,7 +1489,7 @@ static ant_value_t stream_writable_end_done(ant_params_t) {
     ant_value_t destroy_args[1] = { err };
     ant_value_t saved_this = js->this_val;
     js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, call_new_target);
+    js_stream_destroy(js, destroy_args, 1, js_mkundef());
     js->this_val = saved_this;
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     return js_mkundef();
@@ -1537,7 +1537,7 @@ static ant_value_t stream_writable_end_after_write(ant_params_t) {
     ant_value_t destroy_args[1] = { err };
     ant_value_t saved_this = js->this_val;
     js->this_val = stream_obj;
-    js_stream_destroy(js, destroy_args, 1, call_new_target);
+    js_stream_destroy(js, destroy_args, 1, js_mkundef());
     js->this_val = saved_this;
     if (is_callable(callback)) stream_call_callback(js, callback, &err, 1);
     return js_mkundef();
@@ -1689,7 +1689,7 @@ static ant_value_t js_transform__final(ant_params_t) {
 }
 
 static ant_value_t js_passthrough__transform(ant_params_t) {
-  return js_transform__transform(js, args, nargs, call_new_target);
+  return js_transform__transform(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t stream_finished_cleanup(ant_t *js, ant_value_t state_obj) {
@@ -1825,7 +1825,7 @@ static ant_value_t js_stream_pipeline(ant_params_t) {
     
     finished_args[0] = args[i];
     finished_args[1] = error_cb;
-    js_stream_finished(js, finished_args, 2, call_new_target);
+    js_stream_finished(js, finished_args, 2, js_mkundef());
     
     ant_value_t pipe_args[2];
     pipe_args[0] = args[i + 1];
@@ -1837,7 +1837,7 @@ static ant_value_t js_stream_pipeline(ant_params_t) {
     ant_value_t finished_args[2];
     finished_args[0] = args[stream_count - 1];
     finished_args[1] = done;
-    js_stream_finished(js, finished_args, 2, call_new_target);
+    js_stream_finished(js, finished_args, 2, js_mkundef());
   }
 
   return args[stream_count - 1];
@@ -1859,7 +1859,7 @@ static ant_value_t js_stream_promises_finished(ant_params_t) {
   }
   finished_args[0] = args[0];
   finished_args[1] = js_heavy_mkfun(js, stream_promise_callback, promise);
-  js_stream_finished(js, finished_args, 2, call_new_target);
+  js_stream_finished(js, finished_args, 2, js_mkundef());
   return promise;
 }
 
@@ -1880,7 +1880,7 @@ static ant_value_t js_stream_promises_pipeline(ant_params_t) {
 
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
   call_args[nargs] = js_heavy_mkfun(js, stream_promise_callback, promise);
-  js_stream_pipeline(js, call_args, nargs + 1, call_new_target);
+  js_stream_pipeline(js, call_args, nargs + 1, js_mkundef());
   free(call_args);
   return promise;
 }
@@ -1969,7 +1969,7 @@ static ant_value_t stream_readable_from_step(ant_params_t) {
   }
 
   ant_value_t one_arg[1] = { next_result };
-  return stream_readable_from_handle_result(js, one_arg, 1, call_new_target);
+  return stream_readable_from_handle_result(js, one_arg, 1, js_mkundef());
 }
 
 static ant_value_t stream_readable_from_start(ant_params_t) {
@@ -2028,7 +2028,7 @@ static ant_value_t js_readable_from(ant_params_t) {
   ant_value_t state_obj = 0;
 
   ctor_args[0] = nargs > 1 ? args[1] : js_mkundef();
-  readable = stream_construct(js, js->builtins.readable_proto, ctor_args[0], stream_init_readable, call_new_target);
+  readable = stream_construct(js, js->builtins.readable_proto, ctor_args[0], stream_init_readable, js_mkundef());
   if (is_err(readable)) return readable;
 
   state_obj = js_mkobj(js);
@@ -2043,7 +2043,7 @@ static ant_value_t js_readable_from(ant_params_t) {
 }
 
 static ant_value_t js_readable_from_web(ant_params_t) {
-  return js_readable_from(js, args, nargs, call_new_target);
+  return js_readable_from(js, args, nargs, js_mkundef());
 }
 
 static bool stream_to_web_closed(ant_t *js, ant_value_t state_obj) {

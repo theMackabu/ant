@@ -485,7 +485,7 @@ static ant_value_t js_arraybuffer_transfer(ant_params_t) {
 
 // ArrayBuffer.prototype.transferToFixedLength(newLength)
 static ant_value_t js_arraybuffer_transferToFixedLength(ant_params_t) {
-  return js_arraybuffer_transfer(js, args, nargs, call_new_target);
+  return js_arraybuffer_transfer(js, args, nargs, js_mkundef());
 }
 
 // ArrayBuffer.prototype.detached getter
@@ -843,7 +843,7 @@ static ant_value_t js_typedarray_filter(ant_params_t) {
   return out;
 }
 
-static ant_value_t js_typedarray_reduce_common(ant_params_t, bool right) {
+static ant_value_t js_typedarray_reduce_common(ant_native_params_t, bool right) {
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "TypedArray.prototype.reduce requires a callable");
 
@@ -877,11 +877,11 @@ static ant_value_t js_typedarray_reduce_common(ant_params_t, bool right) {
 }
 
 static ant_value_t js_typedarray_reduce(ant_params_t) {
-  return js_typedarray_reduce_common(js, args, nargs, call_new_target, false);
+  return js_typedarray_reduce_common(js, args, nargs, false);
 }
 
 static ant_value_t js_typedarray_reduceRight(ant_params_t) {
-  return js_typedarray_reduce_common(js, args, nargs, call_new_target, true);
+  return js_typedarray_reduce_common(js, args, nargs, true);
 }
 
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
@@ -1076,7 +1076,7 @@ oom:
   goto done;
 }
 
-static ant_value_t js_typedarray_constructor(ant_params_t, TypedArrayType type, const char *type_name) {
+static ant_value_t js_typedarray_constructor(ant_native_params_t, TypedArrayType type, const char *type_name) {
   if (nargs == 0) return create_typed_array_for_length(js, type, 0, type_name);
 
   ArrayBufferData *arraybuffer = buffer_get_arraybuffer_data(args[0]);
@@ -1602,7 +1602,7 @@ static ant_value_t js_typedarray_with(ant_params_t) {
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
   static ant_value_t js_##name##_constructor(ant_params_t) { \
     if (vtype(call_new_target) == kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, #name " constructor requires 'new'"); \
-    return js_typedarray_constructor(js, args, nargs, call_new_target, type, #name); \
+    return js_typedarray_constructor(js, args, nargs, type, #name); \
   }
 
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Int8Array, TYPED_ARRAY_INT8)
@@ -1618,7 +1618,7 @@ DEFINE_TYPEDARRAY_CONSTRUCTOR(Float64Array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
-static ant_value_t js_typedarray_from(ant_params_t, TypedArrayType type, const char *type_name) {
+static ant_value_t js_typedarray_from(ant_native_params_t, TypedArrayType type, const char *type_name) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "%s.from requires at least 1 argument", type_name);
 
   ant_value_t source = args[0];
@@ -1727,7 +1727,7 @@ oom:
 
 #define DEFINE_TYPEDARRAY_FROM(name, type) \
   static ant_value_t js_##name##_from(ant_params_t) { \
-    return js_typedarray_from(js, args, nargs, call_new_target, type, #name); \
+    return js_typedarray_from(js, args, nargs, type, #name); \
   }
 
 DEFINE_TYPEDARRAY_FROM(Int8Array, TYPED_ARRAY_INT8)
@@ -1743,7 +1743,7 @@ DEFINE_TYPEDARRAY_FROM(Float64Array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPEDARRAY_FROM(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_FROM(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
-static ant_value_t js_typedarray_of(ant_params_t, TypedArrayType type, const char *type_name) {
+static ant_value_t js_typedarray_of(ant_native_params_t, TypedArrayType type, const char *type_name) {
   size_t count = (size_t)nargs;
   size_t elem_size = get_element_size(type);
   ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
@@ -1763,7 +1763,7 @@ static ant_value_t js_typedarray_of(ant_params_t, TypedArrayType type, const cha
 
 #define DEFINE_TYPEDARRAY_OF(name, type) \
   static ant_value_t js_##name##_of(ant_params_t) { \
-    return js_typedarray_of(js, args, nargs, call_new_target, type, #name); \
+    return js_typedarray_of(js, args, nargs, type, #name); \
   }
 
 DEFINE_TYPEDARRAY_OF(Int8Array, TYPED_ARRAY_INT8)
@@ -2773,7 +2773,7 @@ static ant_value_t js_buffer_allocUnsafe(ant_params_t) {
 }
 
 static ant_value_t js_buffer_allocUnsafeSlow(ant_params_t) {
-  return js_buffer_allocUnsafe(js, args, nargs, call_new_target);
+  return js_buffer_allocUnsafe(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t typedarray_join_with(ant_t *js, ant_value_t this_val, const char *sep, size_t sep_len) {
@@ -3060,7 +3060,7 @@ static ant_value_t js_typedarray_sort(ant_params_t) {
 
 // Buffer.prototype.toString(encoding)
 static ant_value_t js_buffer_slice(ant_params_t) {
-  return js_typedarray_subarray(js, args, nargs, call_new_target);
+  return js_typedarray_subarray(js, args, nargs, js_mkundef());
 }
 
 // Buffer.prototype.toString(encoding)
@@ -3209,7 +3209,7 @@ static ant_value_t js_buffer_toBase64(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t encoding_arg = js_mkstr(js, "base64", 6);
   ant_value_t new_args[1] = {encoding_arg};
-  return js_buffer_toString(js, new_args, 1, call_new_target);
+  return js_buffer_toString(js, new_args, 1, js_mkundef());
 }
 
 static size_t buffer_normalize_indexof_offset(size_t len, double offset) {

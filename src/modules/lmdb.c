@@ -647,7 +647,7 @@ static ant_value_t lmdb_env_info_method(ant_params_t) {
   return out;
 }
 
-static ant_value_t lmdb_txn_get_impl(ant_params_t, bool as_string) {
+static ant_value_t lmdb_txn_get_impl(ant_native_params_t, bool as_string) {
   if (nargs < 2) return js_mkerr(js, "txn.getBytes/getString(db, key) requires db and key");
 
   lmdb_txn_handle_t *txn = get_txn_handle(js, js_getthis(js), true);
@@ -676,15 +676,15 @@ static ant_value_t lmdb_txn_get(ant_params_t) {
   if (nargs > 2 && !parse_get_encoding(js, args[2], &as_string)) {
     return js_mkerr(js, "txn.get encoding must be 'utf8' or 'bytes'");
   }
-  return lmdb_txn_get_impl(js, args, nargs, call_new_target, as_string);
+  return lmdb_txn_get_impl(js, args, nargs, as_string);
 }
 
 static ant_value_t lmdb_txn_get_bytes(ant_params_t) {
-  return lmdb_txn_get_impl(js, args, nargs, call_new_target, false);
+  return lmdb_txn_get_impl(js, args, nargs, false);
 }
 
 static ant_value_t lmdb_txn_get_string(ant_params_t) {
-  return lmdb_txn_get_impl(js, args, nargs, call_new_target, true);
+  return lmdb_txn_get_impl(js, args, nargs, true);
 }
 
 static ant_value_t lmdb_txn_put(ant_params_t) {
@@ -777,7 +777,7 @@ static ant_value_t lmdb_txn_abort(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_db_get_impl(ant_params_t, bool as_string) {
+static ant_value_t lmdb_db_get_impl(ant_native_params_t, bool as_string) {
   if (nargs < 1) return js_mkerr(js, "db.getBytes/getString(key) requires key");
   lmdb_db_handle_t *db = get_db_handle(js, js_getthis(js), true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
@@ -814,15 +814,15 @@ static ant_value_t lmdb_db_get(ant_params_t) {
   if (nargs > 1 && !parse_get_encoding(js, args[1], &as_string)) {
     return js_mkerr(js, "db.get encoding must be 'utf8' or 'bytes'");
   }
-  return lmdb_db_get_impl(js, args, nargs, call_new_target, as_string);
+  return lmdb_db_get_impl(js, args, nargs, as_string);
 }
 
 static ant_value_t lmdb_db_get_bytes(ant_params_t) {
-  return lmdb_db_get_impl(js, args, nargs, call_new_target, false);
+  return lmdb_db_get_impl(js, args, nargs, false);
 }
 
 static ant_value_t lmdb_db_get_string(ant_params_t) {
-  return lmdb_db_get_impl(js, args, nargs, call_new_target, true);
+  return lmdb_db_get_impl(js, args, nargs, true);
 }
 
 static ant_value_t lmdb_db_put(ant_params_t) {

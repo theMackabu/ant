@@ -106,7 +106,7 @@ PLAIN_TIME_GETTER(microsecond, temporal_rs_PlainTime_microsecond)
 PLAIN_TIME_GETTER(nanosecond, temporal_rs_PlainTime_nanosecond)
 
 static ant_value_t temporal_plain_time_binary_duration(
-  ant_params_t, bool subtract
+  ant_native_params_t, bool subtract
 ) {
   ant_value_t err = js_mkundef();
   PlainTime *self = temporal_plain_time_this(js,
@@ -131,11 +131,11 @@ static ant_value_t temporal_plain_time_binary_duration(
 }
 
 static ant_value_t temporal_plain_time_add(ant_params_t) {
-  return temporal_plain_time_binary_duration(js, args, nargs, call_new_target, false);
+  return temporal_plain_time_binary_duration(js, args, nargs, false);
 }
 
 static ant_value_t temporal_plain_time_subtract(ant_params_t) {
-  return temporal_plain_time_binary_duration(js, args, nargs, call_new_target, true);
+  return temporal_plain_time_binary_duration(js, args, nargs, true);
 }
 
 static ant_value_t temporal_plain_time_equals(ant_params_t) {
@@ -151,7 +151,7 @@ static ant_value_t temporal_plain_time_equals(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_time_difference(
-  ant_params_t, bool since
+  ant_native_params_t, bool since
 ) {
   ant_value_t err = js_mkundef();
   PlainTime *self = temporal_plain_time_this(js,
@@ -180,11 +180,11 @@ static ant_value_t temporal_plain_time_difference(
 }
 
 static ant_value_t temporal_plain_time_since(ant_params_t) {
-  return temporal_plain_time_difference(js, args, nargs, call_new_target, true);
+  return temporal_plain_time_difference(js, args, nargs, true);
 }
 
 static ant_value_t temporal_plain_time_until(ant_params_t) {
-  return temporal_plain_time_difference(js, args, nargs, call_new_target, false);
+  return temporal_plain_time_difference(js, args, nargs, false);
 }
 
 static ant_value_t temporal_plain_time_with(ant_params_t) {
@@ -225,7 +225,7 @@ static ant_value_t temporal_plain_time_to_string(ant_params_t) {
 }
 
 static ant_value_t temporal_plain_time_to_string_default(ant_params_t) {
-  (void)args; (void)nargs; return temporal_plain_time_to_string(js, NULL, 0, call_new_target);
+  (void)args; (void)nargs; return temporal_plain_time_to_string(js, NULL, 0, js_mkundef());
 }
 
 static ant_value_t temporal_plain_time_round(ant_params_t) {

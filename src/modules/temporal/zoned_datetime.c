@@ -389,7 +389,7 @@ static ant_value_t temporal_zdt_get_hours_in_day(ant_params_t) {
   return r.is_ok ? js_mknum(r.ok) : temporal_error(js, r.err);
 }
 
-static ant_value_t temporal_zdt_binary_duration(ant_params_t, bool subtract) {
+static ant_value_t temporal_zdt_binary_duration(ant_native_params_t, bool subtract) {
   ant_value_t err = js_mkundef();
   ZonedDateTime *self = temporal_zdt_this(
     js, subtract ? "Temporal.ZonedDateTime.prototype.subtract" : "Temporal.ZonedDateTime.prototype.add", &err
@@ -424,10 +424,10 @@ static ant_value_t temporal_zdt_binary_duration(ant_params_t, bool subtract) {
   return temporal_wrap(js, TEMPORAL_ZONED_DATETIME, value);
 }
 static ant_value_t temporal_zdt_add(ant_params_t) {
-  return temporal_zdt_binary_duration(js, args, nargs, call_new_target, false);
+  return temporal_zdt_binary_duration(js, args, nargs, false);
 }
 static ant_value_t temporal_zdt_subtract(ant_params_t) {
-  return temporal_zdt_binary_duration(js, args, nargs, call_new_target, true);
+  return temporal_zdt_binary_duration(js, args, nargs, true);
 }
 static ant_value_t temporal_zdt_equals(ant_params_t) {
   ant_value_t err = js_mkundef();
@@ -441,7 +441,7 @@ static ant_value_t temporal_zdt_equals(ant_params_t) {
   temporal_rs_ZonedDateTime_destroy(other);
   return r.is_ok ? js_bool(r.ok) : temporal_error(js, r.err);
 }
-static ant_value_t temporal_zdt_difference(ant_params_t, bool since) {
+static ant_value_t temporal_zdt_difference(ant_native_params_t, bool since) {
   ant_value_t err = js_mkundef();
   ZonedDateTime *self = temporal_zdt_this(
     js, since ? "Temporal.ZonedDateTime.prototype.since" : "Temporal.ZonedDateTime.prototype.until", &err
@@ -476,10 +476,10 @@ static ant_value_t temporal_zdt_difference(ant_params_t, bool since) {
   return temporal_wrap(js, TEMPORAL_DURATION, value);
 }
 static ant_value_t temporal_zdt_since(ant_params_t) {
-  return temporal_zdt_difference(js, args, nargs, call_new_target, true);
+  return temporal_zdt_difference(js, args, nargs, true);
 }
 static ant_value_t temporal_zdt_until(ant_params_t) {
-  return temporal_zdt_difference(js, args, nargs, call_new_target, false);
+  return temporal_zdt_difference(js, args, nargs, false);
 }
 static ant_value_t temporal_zdt_start_of_day(ant_params_t) {
   (void)args;
@@ -634,7 +634,7 @@ static ant_value_t temporal_zdt_to_string(ant_params_t) {
 static ant_value_t temporal_zdt_to_string_default(ant_params_t) {
   (void)args;
   (void)nargs;
-  return temporal_zdt_to_string(js, NULL, 0, call_new_target);
+  return temporal_zdt_to_string(js, NULL, 0, js_mkundef());
 }
 static ant_value_t temporal_zdt_round(ant_params_t) {
   ant_value_t err = js_mkundef();

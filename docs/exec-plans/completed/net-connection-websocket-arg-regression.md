@@ -1,25 +1,48 @@
 # Constructor Context and Accepted Socket Prototypes
 
-Status: constructor fix committed; async entry cleanup uncommitted
+Status: completed
 Last reviewed: 2026-09-07
 Owner: theMackabu
 
-## Problem
+## Outcome
 
-`tests/test_websocket_client_buffered_frames.cjs` times out because the accepted
-socket has `WebSocket.prototype`. Its own properties and native socket state
-are correct. This is constructor-context leakage, not object-shape corruption.
+The accepted-socket regression and its constructor-context cleanup are
+complete:
 
-## Verified cause
+- `87c85b9c` moved `new.target` into explicit invocation/frame state and fixed
+  direct eval's lexical target handling.
+- `1bfe480e` removed the async entry wrappers and separated VM definitions,
+  call dispatch, and feedback headers.
+- `c0c6c299` regenerated the Darwin ARM64 PGO profile.
+- `a7b0be86` made ordinary internal native invocations pass an undefined
+  target while preserving constructor delegation.
+
+The final native build, 12 focused regressions, 4,221 spec tests across 102
+files, all 10 JIT files, and repo preflight passed. No implementation items
+remain in this plan. Independent failures recorded by the
+[test sweep](../active/test-sweep-2026-09-07.md) are tracked separately.
+
+## Original problem
+
+Before the fix, `tests/test_websocket_client_buffered_frames.cjs` timed out
+because the accepted socket had `WebSocket.prototype`. Its own properties and
+native socket state were correct. Constructor-context leakage caused the
+failure; object shapes were not corrupted.
+
+## Verified cause in the pre-fix implementation
+
+The ambient field described below existed in the failing revision. It was
+deleted in `87c85b9c`; these are historical findings, not current code paths.
 
 - `sv_op_new` and `sv_op_new_apply` in `src/silver/ops/calls.h`, and
-  `jit_helper_new` in `src/silver/glue.c`, assign `js->new_target` before
-  construction and leave it behind after returning.
-- Ordinary calls clear that field in `sv_prepare_call` / `sv_vm_call` in
-  `include/silver/engine.h`; returning from a constructor does not clear it.
-- `net_socket_create` in `src/modules/net.c` calls
+  `jit_helper_new` in `src/silver/glue.c`, assigned `js->new_target` before
+  construction and left it behind after returning.
+- Ordinary calls cleared that field in `sv_prepare_call` / `sv_vm_call`, then
+  located in `include/silver/engine.h`; returning from a constructor did not
+  clear it.
+- `net_socket_create` in `src/modules/net.c` called
   `js_instance_proto_from_new_target`, including when reached directly from
-  the native accept callback. It consumes the preceding WebSocket constructor.
+  the native accept callback. It consumed the preceding WebSocket constructor.
 - Native logging showed distinct WebSocket and Socket object addresses, with
   the same WebSocket constructor still in `js->new_target` at socket creation.
   JavaScript inspection confirmed Socket own keys and `WebSocket.prototype`.
@@ -28,8 +51,8 @@ are correct. This is constructor-context leakage, not object-shape corruption.
 
 Commit `12f88d69` (node module parity, #96) replaced the `module.exports`
 accessor with a data property. After executing a CommonJS module, the loader
-reads `module.exports`. Previously that getter call incidentally cleared
-`js->new_target`. The data-property read no longer does so.
+read `module.exports`. The old getter call had incidentally cleared
+`js->new_target`; a data-property read did not perform that incidental call.
 
 Both directions were verified using the released binaries:
 
@@ -43,8 +66,9 @@ The underlying constructor-context defect predates that change.
 
 ## Implementation
 
-Invocation/frame state now owns `new.target`. The ambient `ant_t::new_target`
-field is removed. Calls pass an explicit target into `sv_call_ctx_t`, then
+Invocation/frame state owns `new.target`. The ambient `ant_t::new_target`
+field was removed. Calls pass an explicit target into `sv_call_ctx_t` in
+`include/silver/call.h`, then
 into the existing `sv_frame_t::new_target` or JIT invocation register. Ordinary
 calls supply `undefined`. Bound construction, Proxy, Reflect, super, async and
 generator entry paths propagate the appropriate invocation value. JIT bailout
@@ -83,9 +107,9 @@ of [PerformEval](https://tc39.es/ecma262/multipage/global-object.html#sec-perfor
 without an ambient save/restore or hidden global property lookup. Ordinary
 functions that use neither eval nor `new.target` acquire no extra runtime work.
 
-## Validation and current state
+## Validation at implementation checkpoints
 
-- The original regression fails with `TypeError: undefined is not a function`
+- The original regression failed with `TypeError: undefined is not a function`
   at `socket.on`, followed by the buffered-message timeout.
 - The existing test now explicitly asserts `net.Socket.prototype`.
 - An explicit-prototype change confined to net passed the regression 10/10
@@ -106,7 +130,7 @@ functions that use neither eval nor `new.target` acquire no extra runtime work.
 - Embed and desktop callback syntax checks pass. The Wasm test build and
   `npm pack --dry-run` prepack build are blocked by the existing 32-bit
   `sv_map_template_desc_t` static assertion in
-  `include/silver/engine.h`, unchanged from HEAD.
+  `include/silver/engine.h`, unchanged from the baseline used for those checks.
 - The three review axes found no introduced correctness defect. Native ABI
   helper cleanup is optional; some private helpers now accept unused target
   parameters through `ant_params_t`.
@@ -114,19 +138,21 @@ functions that use neither eval nor `new.target` acquire no extra runtime work.
   remaining `Math.imul` case measured +0.8%. With the checked-in PGO profile,
   `Math.abs` measured +2.0% and `Math.imul` +1.7%, while most other cases
   improved. The build reports discarded profile counters for changed hot
-  functions. These results do not establish zero slowdown; fresh matched PGO
-  training remains outstanding. Training was not started when the user moved
-  the task to implementation review.
+  functions. These initial results do not establish zero slowdown. The profile
+  was subsequently regenerated in `c0c6c299`; this plan records no matched
+  rerun of the constructor migration with that regenerated profile. The
+  separate header cleanup's code-generation comparison is recorded in the
+  [header boundary plan](silver-header-boundaries.md).
 - `maid preflight` and `git diff --check` pass after the eval repair. A final
   independent correctness pass found no introduced issue in the eval change.
 
 ## Async entry wrappers and inlining
 
 The constructor-context migration was committed in `87c85b9c`. Follow-up
-cleanup removes `sv_call_async_closure_dispatch` and `sv_execute_entry_tla`:
+cleanup in `1bfe480e` removed `sv_call_async_closure_dispatch` and `sv_execute_entry_tla`:
 their callers use `sv_start_async_closure` and `sv_start_tla` directly. The
 implementations stay in `src/silver/ops/async.h`. The subsequent
-[header boundary cleanup](../completed/silver-header-boundaries.md) separates VM definitions
+[header boundary cleanup](silver-header-boundaries.md) separates VM definitions
 in `engine.h`, type feedback in `feedback.h`, and inline call dispatch in
 `call.h`. Both `src/ant.c` and the VM include the async operations directly;
 `call.h` also includes them before its dispatch helpers. This removes the
@@ -187,3 +213,69 @@ Final validation with that selection passes the normal build, eight focused
 async/TLA/constructor/WebSocket tests, the new async-entry benchmark's result
 checks, all 4,221 spec tests, all 10 JIT files, embed syntax checking, and
 `maid preflight`.
+
+## Internal invocation target rule
+
+The follow-up review found ordinary builtin-to-builtin calls forwarding
+`call_new_target` inconsistently. Commit `a7b0be86` established the convention
+for helpers using `ant_params_t`: an internal ordinary invocation passes
+`js_mkundef()`; forwarding is reserved for delegation of the current
+constructor invocation. A separate construction uses its own target. This
+convention implements the call/construct distinction; ECMAScript does not
+prescribe the signatures of private C helpers.
+
+The audit updated 242 call sites across 36 source files, including shared
+helpers using `ant_params_t`. This covers Object descriptor helpers, stream
+methods and factories, timer methods, promise methods, and the same pattern
+in the other native modules. Each source change substitutes only the target
+argument. Native signatures, helper structure, and ambient `this` handling
+are outside this consistency fix.
+
+Constructor implementation helpers retain forwarding, including dynamic
+functions, typed arrays, stream/FS/TTY constructors, Intl and Temporal
+constructors, queuing strategies, and proxy construction. Factories such as
+`net.createServer`, `fs.createReadStream`, and `Readable.from` use an undefined
+target for their internal allocation. The N-API callback adapter retains the
+actual invocation target for `napi_get_new_target`.
+
+This is a preventive consistency change; no new user-visible failure is
+claimed for callees that currently ignore the argument. Validation uses the
+existing constructor-context, WebSocket, stream, FS, child-process, and
+promise regressions rather than a test that merely repeats the call-site
+spelling.
+
+Validation passes the configured native build, 12 focused regression files,
+all 4,221 spec tests across 102 files, all 10 JIT files, `maid preflight`, and
+`git diff --check`. Logs and the audited call-site inventory are under
+`/tmp/ant-internal-new-target`.
+
+## Private helper signatures
+
+The next review distinguished native callback entrypoints from private C
+helpers. The migration had increased declarations combining `ant_params_t`
+with extra parameters from 3 to 61. Those covered 60 helper definitions, of
+which 57 never read `call_new_target`.
+
+Helpers now use `ant_native_params_t` for `ant_t *js`, `ant_value_t *args`,
+and `int nargs`, with any additional parameters declared explicitly. Only
+`build_dynamic_function`, `create_proxy_checked`, and `qs_ctor` retain an
+explicit target parameter because their implementations consume it. Four
+additional private helpers without trailing parameters were narrowed too:
+`cron_register_os`, `hl_get_tagged`, `ant_c_template_source`, and
+`timer_make_args_array`. In total, 159 dead arguments were removed from calls.
+The `ant_format_walk` declaration was updated with its implementation and
+callers. `ant_params_t` extends the shared three-parameter macro with
+`call_new_target`. Native callback signatures and `ant_cfunc_t` remain unchanged;
+ordinary calls through that ABI still supply `js_mkundef()`.
+
+The optimized build already eliminated the unused target from
+`intl_dtf_extract_fields`: its output pointer arrived in ARM64 register `x3`
+instead of `x4`. This cleanup makes the source express the helper's actual
+contract; it does not claim a measured runtime speedup.
+
+Validation passed the native build, 11 focused regressions, all 4,221 spec
+tests, and all 10 JIT files. After introducing the shared parameter macro,
+the rebuilt executable's code, data, and section layout were identical to
+the explicit-signature build. Constructor-context, Intl, embedded C, spec,
+and JIT checks passed again. `maid preflight` and `git diff --check` pass.
+Validation artifacts are under `/tmp/ant-thin-helpers`.

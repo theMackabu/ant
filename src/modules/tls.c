@@ -424,7 +424,7 @@ static ant_value_t tls_stream_error(ant_tls_socket_t *socket, int status, const 
 }
 
 static bool tls_parse_write_args(
-  ant_params_t,
+  ant_native_params_t,
   const uint8_t **bytes_out,
   size_t *len_out,
   ant_value_t *callback_out,
@@ -656,7 +656,7 @@ static ant_value_t js_tls_socket_unshift(ant_params_t) {
   ant_value_t err = js_mkundef();
 
   if (!socket) return js->thrown_value;
-  if (!tls_parse_write_args(js, args, nargs, call_new_target, &bytes, &len, NULL, &err)) return err;
+  if (!tls_parse_write_args(js, args, nargs, &bytes, &len, NULL, &err)) return err;
   if (len > 0) {
     if (!tls_socket_push_read(socket, (const char *)bytes, len, true))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
@@ -677,7 +677,7 @@ static ant_value_t js_tls_socket_write(ant_params_t) {
 
   if (!socket) return js->thrown_value;
   if (socket->destroyed || socket->closing) return js_false;
-  if (!tls_parse_write_args(js, args, nargs, call_new_target, &bytes, &len, &callback, &err)) return err;
+  if (!tls_parse_write_args(js, args, nargs, &bytes, &len, &callback, &err)) return err;
   if (len == 0) {
     if (is_callable(callback)) tls_call_value(js, callback, js_mkundef(), NULL, 0);
     return js_true;
@@ -715,7 +715,7 @@ static ant_value_t js_tls_socket_end(ant_params_t) {
 
   if (!socket) return js->thrown_value;
   if (nargs > 0 && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeNull) {
-    result = js_tls_socket_write(js, args, nargs, call_new_target);
+    result = js_tls_socket_write(js, args, nargs, js_mkundef());
     if (is_err(result)) return result;
   }
   socket->write_ended = true;
@@ -1053,7 +1053,7 @@ static ant_value_t js_tls_is_context(ant_params_t) {
 }
 
 static ant_value_t js_tls_secure_context_ctor(ant_params_t) {
-  return js_tls_create_context(js, args, nargs, call_new_target);
+  return js_tls_create_context(js, args, nargs, js_mkundef());
 }
 
 static ant_value_t js_tls_set_config_path(ant_params_t) {
@@ -1120,7 +1120,7 @@ static void tls_copy_connect_options(ant_t *js, ant_value_t dst, ant_value_t src
 }
 
 static ant_value_t tls_normalize_connect_options(
-  ant_params_t,
+  ant_native_params_t,
   ant_value_t *callback_out
 ) {
   int argc = nargs;
@@ -1242,7 +1242,7 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
 
 static ant_value_t js_tls_connect(ant_params_t) {
   ant_value_t callback = js_mkundef();
-  ant_value_t options = tls_normalize_connect_options(js, args, nargs, call_new_target, &callback);
+  ant_value_t options = tls_normalize_connect_options(js, args, nargs, &callback);
   return js_tls_connect_options(js, options, callback);
 }
 

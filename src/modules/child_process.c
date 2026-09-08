@@ -1707,7 +1707,7 @@ static ant_value_t builtin_execFile(ant_params_t) {
   spawn_args[1] = argv;
   spawn_args[2] = options;
 
-  child = builtin_spawn(js, spawn_args, 3, call_new_target);
+  child = builtin_spawn(js, spawn_args, 3, js_mkundef());
   if (vtype(child) != kTypeObject || !is_callable(callback)) return child;
 
   {
@@ -2000,7 +2000,7 @@ static ant_value_t sync_make_output(ant_t *js, const char *bytes, size_t len, bo
 }
 
 #ifdef _WIN32
-static ant_value_t spawn_sync_impl(ant_params_t, bool force_shell) {
+static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
@@ -2175,7 +2175,7 @@ static ant_value_t spawn_sync_impl(ant_params_t, bool force_shell) {
 }
 
 static ant_value_t builtin_spawnSync(ant_params_t) {
-  return spawn_sync_impl(js, args, nargs, call_new_target, false);
+  return spawn_sync_impl(js, args, nargs, false);
 }
 #else
 static void close_if_valid(int fd) {
@@ -2613,7 +2613,7 @@ static ant_value_t sync_build_result(
 
   return result;
 }
-static ant_value_t spawn_sync_impl(ant_params_t, bool force_shell) {
+static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
@@ -2701,7 +2701,7 @@ static ant_value_t spawn_sync_impl(ant_params_t, bool force_shell) {
 
 
 static ant_value_t builtin_spawnSync(ant_params_t) {
-  return spawn_sync_impl(js, args, nargs, call_new_target, false);
+  return spawn_sync_impl(js, args, nargs, false);
 }
 #endif
 
@@ -2769,7 +2769,7 @@ static ant_value_t builtin_execSync(ant_params_t) {
   spawn_args[1] = js_mkundef();
   spawn_args[2] = nargs >= 2 ? args[1] : js_mkundef();
 
-  ant_value_t result = spawn_sync_impl(js, spawn_args, 3, call_new_target, true);
+  ant_value_t result = spawn_sync_impl(js, spawn_args, 3, true);
   if (vtype(result) != kTypeObject) return result;
 
   ant_value_t options = spawn_args[2];
@@ -2814,7 +2814,7 @@ static ant_value_t builtin_execFileSync(ant_params_t) {
   spawn_args[1] = argv;
   spawn_args[2] = options;
 
-  ant_value_t result = builtin_spawnSync(js, spawn_args, 3, call_new_target);
+  ant_value_t result = builtin_spawnSync(js, spawn_args, 3, js_mkundef());
   if (vtype(result) != kTypeObject) return result;
 
   ant_value_t command = child_process_command_value(js, args[0], argv);
@@ -2865,7 +2865,7 @@ static ant_value_t builtin_fork(ant_params_t) {
   spawn_args[2] = js_mkobj(js);
 
   if (bundled) uv_os_setenv(ANT_INTERNAL_RUN_ENV, path_str);
-  ant_value_t result = builtin_spawn(js, spawn_args, 3, call_new_target);
+  ant_value_t result = builtin_spawn(js, spawn_args, 3, js_mkundef());
   if (bundled) uv_os_unsetenv(ANT_INTERNAL_RUN_ENV);
 
   free(path_str);

@@ -2751,7 +2751,7 @@ static ant_value_t builtin_string_matchAll(ant_params_t) {
   ant_value_t ma_args[1] = { str };
   js->this_val = rx;
   
-  return builtin_regexp_symbol_matchAll(js, ma_args, 1, call_new_target);
+  return builtin_regexp_symbol_matchAll(js, ma_args, 1, js_mkundef());
 }
 
 static __attribute__((noinline)) const char *find_bytes_long(
@@ -3806,7 +3806,7 @@ static inline ant_value_t emit_str_replacement(
   return js_mkundef();
 }
 
-static ant_value_t string_replace_impl(ant_params_t, bool replace_all) {
+static ant_value_t string_replace_impl(ant_native_params_t, bool replace_all) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
   
@@ -3972,11 +3972,11 @@ static ant_value_t string_replace_impl(ant_params_t, bool replace_all) {
 }
 
 static ant_value_t builtin_string_replace(ant_params_t) {
-  return string_replace_impl(js, args, nargs, call_new_target, false);
+  return string_replace_impl(js, args, nargs, false);
 }
 
 static ant_value_t builtin_string_replaceAll(ant_params_t) {
-  return string_replace_impl(js, args, nargs, call_new_target, true);
+  return string_replace_impl(js, args, nargs, true);
 }
 
 static bool regexp_literal_replace_builtin_guard(ant_t *js) {

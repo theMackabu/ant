@@ -833,7 +833,7 @@ static ant_value_t js_stdin_set_encoding(ant_params_t) {
   if (!ps) return js_mkerr(js, "out of memory");
   
   ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
-  ant_value_t decoder = string_decoder_create(js, encoding, call_new_target);
+  ant_value_t decoder = string_decoder_create(js, encoding, js_mkundef());
   ant_value_t encoding_str = 0;
 
   if (is_err(decoder)) return decoder;
@@ -880,7 +880,7 @@ static ant_value_t js_stdin_unref(ant_params_t) {
   return js_getthis(js);
 }
 
-static ant_value_t process_write_stream(ant_params_t, FILE *stream, int fd) {
+static ant_value_t process_write_stream(ant_native_params_t, FILE *stream, int fd) {
   if (nargs < 1) return js_false;
 
   size_t len = 0;
@@ -903,7 +903,7 @@ static ant_value_t process_write_stream(ant_params_t, FILE *stream, int fd) {
 }
 
 static ant_value_t js_stdout_write(ant_params_t) {
-  return process_write_stream(js, args, nargs, call_new_target, stdout, STDOUT_FILENO);
+  return process_write_stream(js, args, nargs, stdout, STDOUT_FILENO);
 }
 
 static ant_value_t js_stdout_get_window_size(ant_params_t) {
@@ -930,7 +930,7 @@ static ant_value_t js_stdout_columns_getter(ant_params_t) {
 }
 
 static ant_value_t js_stderr_write(ant_params_t) {
-  return process_write_stream(js, args, nargs, call_new_target, stderr, STDERR_FILENO);
+  return process_write_stream(js, args, nargs, stderr, STDERR_FILENO);
 }
 
 static ant_value_t process_uptime(ant_params_t) {
