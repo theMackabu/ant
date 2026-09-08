@@ -141,3 +141,10 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   before subsequent comparisons can consume it. The regression failed on the
   first JIT call before the fix and now covers equality, inequality, operand
   order, and several constant types. Build, preflight, and all 4,221 specs passed.
+
+- Inline conditional branches retain direct boolean comparisons and send every
+  non-boolean value to the normal call fallback. The inlineability policy
+  already rejects these branches after observable side effects, so fallback
+  cannot replay such effects. The failing regression now passes for falsy and
+  truthy numbers, strings, objects, BigInts, and booleans through if/and/or.
+  Native build, focused inline tests, preflight, and all 4,221 specs passed.

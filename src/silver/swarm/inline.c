@@ -1109,8 +1109,6 @@ void jit_emit_inline_body(
         ANT_ASSERT(lbl != NULL, "inline label map exhausted");
 
         uint64_t cmp_bool = is_false_branch ? js_false : js_true;
-        MIR_label_t lbl_not_bool = MIR_new_label(ctx);
-        MIR_label_t lbl_done = MIR_new_label(ctx);
 
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_URSH,
@@ -1119,7 +1117,7 @@ void jit_emit_inline_body(
                                      MIR_new_uint_op(ctx, NANBOX_TYPE_SHIFT)));
         MIR_append_insn(ctx, jit_func,
                         MIR_new_insn(ctx, MIR_BNE,
-                                     MIR_new_label_op(ctx, lbl_not_bool),
+                                     MIR_new_label_op(ctx, slow),
                                      MIR_new_reg_op(ctx, r_bool),
                                      MIR_new_uint_op(ctx, js_false >> NANBOX_TYPE_SHIFT)));
         MIR_append_insn(ctx, jit_func,
@@ -1127,24 +1125,6 @@ void jit_emit_inline_body(
                                      MIR_new_label_op(ctx, lbl),
                                      MIR_new_reg_op(ctx, cond),
                                      MIR_new_uint_op(ctx, cmp_bool)));
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_done)));
-
-        MIR_append_insn(ctx, jit_func, lbl_not_bool);
-        MIR_append_insn(ctx, jit_func,
-                        MIR_new_insn(ctx, MIR_UBGT,
-                                     MIR_new_label_op(ctx, is_false_branch ? lbl_done : lbl),
-                                     MIR_new_reg_op(ctx, cond),
-                                     MIR_new_uint_op(ctx, NANBOX_PREFIX)));
-        if (is_false_branch) {
-          MIR_append_insn(ctx, jit_func,
-                          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_done)));
-        } else {
-          MIR_append_insn(ctx, jit_func,
-                          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_done)));
-        }
-
-        MIR_append_insn(ctx, jit_func, lbl_done);
         break;
       }
 
