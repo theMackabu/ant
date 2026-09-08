@@ -2296,14 +2296,19 @@ ant_value_t js_esm_import_sync_cstr_from_require(
   }
 
   const char *module_key = reload_key ? reload_key : resolved_path;
+  const char *module_filename = existing && existing->resolved_path ? existing->resolved_path : resolved_path;
+  
   GC_ROOT_SAVE(mark, js);
-  ant_value_t entry = esm_create_cjs_module(js, resolved_path, js->modules.cjs.parent);
+  ant_value_t entry = esm_create_cjs_module(js, module_filename, js->modules.cjs.parent);
+  
   GC_ROOT_PIN(js, entry);
   ant_value_t ns = entry;
   GC_ROOT_PIN(js, ns);
+  
   esm_module_t *loaded_mod = NULL;
   if (is_err(entry)) goto require_done;
   ns = esm_require_cache_store(js, resolved_path, entry);
+  
   if (is_err(ns)) {
     esm_cjs_update_children(js, js->modules.cjs.parent, entry, true);
     goto require_done;
@@ -2315,6 +2320,7 @@ ant_value_t js_esm_import_sync_cstr_from_require(
     MODULE_EVAL_FORMAT_UNKNOWN, NULL, 0, false, ESM_MODULE_KIND_NONE
   );
   ns = loaded_mod ? esm_load_module(js, loaded_mod, entry) : js_mkerr(js, "Cannot create module");
+  
   if (is_err(ns)) {
     js_delete_prop(js, esm_require_cache(js), resolved_path, strlen(resolved_path));
     esm_cjs_update_children(js, js->modules.cjs.parent, entry, true);

@@ -43,8 +43,24 @@ the rerun.
 
 | Test | Cause | Fix |
 | --- | --- | --- |
-| `test_compile_native_addon.cjs` | **Regression from PR #96.** `require()` pre-creates the module object in `js_esm_import_sync_cstr_from_require` keyed on the resolver's virtual `/$ant/...` path. `esm_load_commonjs_module` then read `__dirname` and `__filename` from that pending object instead of from its `module_path` argument, which is the real materialized directory, and nothing rewrote them. Inside a materialized native package the fixture spawned its helper at the virtual path and got exit 127 with empty stderr, reported as "helper failed". `require.resolve` was unaffected because it already maps through `ant_bundle_materialized_path` (`loader.c:2504`). The earlier "pre-existing, fails on v14" verdict was wrong: the test and fixture were rewritten after v14, so v14 fails on assertions that did not exist when it was built. | `esm_load_commonjs_module` rewrites `filename` and `path` on a pending, non-builtin module object when its `filename` differs from `module_path`. 16 lines in `src/esm/commonjs.c`, uncommitted. Passes three runs in a row; spec suite and every `test_*require*`, `test_cjs_*`, `test_module_*`, `test_compile_*`, `test_esm_*` file pass on the rebuilt binary. The test silently skips when `build/ant-runtime` is missing, so build it with `meson compile -C build ant-runtime` before trusting a pass. |
+| `test_compile_native_addon.cjs` | **Regression from PR #96.** `require()` pre-creates the module object in `js_esm_import_sync_cstr_from_require` keyed on the resolver's virtual `/$ant/...` path. `esm_load_commonjs_module` then read `__dirname` and `__filename` from that pending object instead of from its `module_path` argument, which is the real materialized directory, and nothing rewrote them. Inside a materialized native package the fixture spawned its helper at the virtual path and got exit 127 with empty stderr, reported as "helper failed". `require.resolve` was unaffected because it already maps through `ant_bundle_materialized_path` (`loader.c:2504`). The earlier "pre-existing, fails on v14" verdict was wrong: the test and fixture were rewritten after v14, so v14 fails on assertions that did not exist when it was built. | Fixed at the source in `js_esm_import_sync_cstr_from_require` (`src/esm/loader.c`): the pre-created module object is now built from the registered module record's `resolved_path`, which is the real materialized file, while the require cache and module key keep the virtual path. That makes `filename`, `path`, and `paths` consistent from creation instead of patching them at load time. Six lines, uncommitted. Passes three runs in a row; spec suite and every `test_*require*`, `test_cjs_*`, `test_module_*`, `test_compile_*`, `test_esm_*`, `test_import_*` file pass on the rebuilt binary. The test silently skips when `build/ant-runtime` is missing, so build it with `meson compile -C build ant-runtime` before trusting a pass. |
 | `test_eval.cjs` | Engine gap: sloppy-mode direct eval did not leak `var` or function declarations into the caller's scope. Node 26 and Bun 1.4.0 leak both. | Fixed in the working tree; the spec-faithful test from fe9904d6 passes. |
+
+## Fresh sweep after the fixes
+
+Run on 2026-09-07 evening against the working-tree build at `828a9b2f` with
+the uncommitted loader fix for the native addon test. Same runner, 90s per
+file, six in parallel. Seven test files were added between the checkpoint
+and this run.
+
+| Suite | Result |
+| --- | --- |
+| `tests/test_*` (576 files) | 572 pass, 0 fail, 3 exit non-zero by design, 1 expected timeout |
+| Spec suite (`examples/spec/run.js --all`) | 4221 tests, 102 files, 0 failures |
+| Module, require, compile, esm, import test families | all pass |
+
+The only non-passing files are the three by-design exits and the GC stress
+loop listed below.
 
 ## Exit non-zero by design, 3
 

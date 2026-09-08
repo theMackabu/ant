@@ -396,7 +396,7 @@ static ant_value_t js_arraybuffer_constructor(ant_params_t) {
   if (!data) return js_mkerr(js, "Failed to allocate ArrayBuffer");
   
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js_get_ctor_proto(js, "ArrayBuffer", 11), call_new_target);
 
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, data, BUFFER_ARRAYBUFFER_NATIVE_TAG);
@@ -1602,7 +1602,11 @@ static ant_value_t js_typedarray_with(ant_params_t) {
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
   static ant_value_t js_##name##_constructor(ant_params_t) { \
     if (vtype(call_new_target) == kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, #name " constructor requires 'new'"); \
-    return js_typedarray_constructor(js, args, nargs, type, #name); \
+    ant_value_t result = js_typedarray_constructor(js, args, nargs, type, #name); \
+    if (is_err(result)) return result; \
+    ant_value_t proto = js_instance_proto_from_new_target(js, js_get_proto(js, result), call_new_target); \
+    if (is_special_object(proto)) js_set_proto_wb(js, result, proto); \
+    return result; \
   }
 
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Int8Array, TYPED_ARRAY_INT8)
@@ -1821,7 +1825,7 @@ static ant_value_t js_dataview_constructor(ant_params_t) {
   buffer->ref_count++;
   
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_get_ctor_proto(js, "DataView", 8);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js_get_ctor_proto(js, "DataView", 8), call_new_target);
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, dv_data, BUFFER_DATAVIEW_NATIVE_TAG);
