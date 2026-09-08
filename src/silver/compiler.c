@@ -7771,8 +7771,12 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
   top_fn.body = sv_ast_new(N_BLOCK);
   top_fn.body->args = program->args;
-  if (sv_compile_mode_is_eval(mode) && ast_references_new_target(program))
-    top_fn.flags |= FN_USES_NEW_TARGET;
+  
+  if (
+    sv_compile_mode_is_eval(mode) && 
+    (ast_references_new_target(program) || 
+    ast_contains_direct_eval(program))
+  ) top_fn.flags |= FN_USES_NEW_TARGET;
 
   sv_compiler_t root;
   sv_compile_ctx_init_root(

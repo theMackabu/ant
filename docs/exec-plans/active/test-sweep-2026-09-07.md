@@ -35,12 +35,16 @@ useful for tests that existed unchanged at that tag; see the native addon row.
 | `test_debug_error_trace.cjs` | Stale from birth. The `ANT_DEBUG=dump/errors:trace` channel and `[ant-debug:error]` marker never existed outside the commit that added the test. | Removed in 87077b56. |
 | `test_ffi_wrappers.cjs`, `test_rpc.cjs` | Stale. ESM `import` syntax in `.cjs` files. | Renamed to `.mjs` in fe9904d6. |
 
-## Unresolved at the sweep checkpoint, 2
+## Unresolved at the sweep checkpoint, now fixed
 
-| Test | Verdict |
-| --- | --- |
-| `test_compile_native_addon.cjs` | **Regression from PR #96, unfixed.** Inside a materialized native package, `__dirname` and `__filename` are the virtual `/$ant/...` path while `require.resolve` correctly returns the extracted directory. The fixture spawns a helper at `path.resolve(__dirname, ...)`, gets exit 127, and throws "helper failed". Cause: PR #96 made `require()` pre-create the module object in `js_esm_import_sync_cstr_from_require` keyed on the resolver's virtual path; `esm_load_commonjs_module` then reads `path` and `filename` from that pending object instead of from its `module_path` argument, which is the real materialized path. Fix options: rewrite `id`, `path`, and `filename` on a pending module object when `module_path` differs, or map `resolved_path` through `ant_bundle_materialized_path` in the require path as `require.resolve` already does at `loader.c:2504`. The earlier "pre-existing, fails on v14" verdict was wrong: the test and fixture were rewritten after v14, so v14 fails on assertions that did not exist when it was built. |
-| `test_eval.cjs` | **Engine gap.** Rewritten in fe9904d6 to assert spec behavior. Sloppy-mode direct eval does not leak `var` or function declarations into the caller's scope. Node 26 and Bun 1.4.0 pass the test; ant fails at the `var leaked = 42` assertion. Everything else in the test passes. |
+Both were open when the totals above were recorded. Both are fixed in the
+working tree as of 2026-09-07 evening; the fresh-sweep section below records
+the rerun.
+
+| Test | Cause | Fix |
+| --- | --- | --- |
+| `test_compile_native_addon.cjs` | **Regression from PR #96.** `require()` pre-creates the module object in `js_esm_import_sync_cstr_from_require` keyed on the resolver's virtual `/$ant/...` path. `esm_load_commonjs_module` then read `__dirname` and `__filename` from that pending object instead of from its `module_path` argument, which is the real materialized directory, and nothing rewrote them. Inside a materialized native package the fixture spawned its helper at the virtual path and got exit 127 with empty stderr, reported as "helper failed". `require.resolve` was unaffected because it already maps through `ant_bundle_materialized_path` (`loader.c:2504`). The earlier "pre-existing, fails on v14" verdict was wrong: the test and fixture were rewritten after v14, so v14 fails on assertions that did not exist when it was built. | `esm_load_commonjs_module` rewrites `filename` and `path` on a pending, non-builtin module object when its `filename` differs from `module_path`. 16 lines in `src/esm/commonjs.c`, uncommitted. Passes three runs in a row; spec suite and every `test_*require*`, `test_cjs_*`, `test_module_*`, `test_compile_*`, `test_esm_*` file pass on the rebuilt binary. The test silently skips when `build/ant-runtime` is missing, so build it with `meson compile -C build ant-runtime` before trusting a pass. |
+| `test_eval.cjs` | Engine gap: sloppy-mode direct eval did not leak `var` or function declarations into the caller's scope. Node 26 and Bun 1.4.0 leak both. | Fixed in the working tree; the spec-faithful test from fe9904d6 passes. |
 
 ## Exit non-zero by design, 3
 

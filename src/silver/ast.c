@@ -1517,15 +1517,30 @@ bool ast_contains_lexical_new_target(const sv_ast_t *node) {
   return false;
 }
 
-static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {
-  if (!node) return false;
-  if (node->type == N_NEW_TARGET) return true;
-  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
-
+bool ast_contains_direct_eval(const sv_ast_t *node) {
+  if (!node || (node->type == N_FUNC && !(node->flags & FN_ARROW))) return false;
   if (
     node->type == N_CALL && node->left && node->left->type == N_IDENT &&
     node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
   ) return true;
+
+  const sv_ast_t *children[] = {
+    node->left, node->right, node->cond, node->body, node->catch_body,
+    node->finally_body, node->catch_param, node->init, node->update
+  };
+  
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_contains_direct_eval(children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_direct_eval(node->args.items[i])) return true;
+  
+  return false;
+}
+
+static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {
+  if (!node) return false;
+  if (node->type == N_NEW_TARGET) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
 
   bool lexical_arrow = in_arrow ||
     (node->type == N_FUNC && (node->flags & FN_ARROW));
@@ -1599,9 +1614,9 @@ static sv_ast_t *parse_func(P) {
   if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
     fn->flags |= FN_USES_ARGS;
   if (!(fn->flags & FN_ARROW)) {
-    bool uses_new_target = ast_references_new_target(fn->body);
+    bool uses_new_target = ast_references_new_target(fn->body) || ast_contains_direct_eval(fn->body);
     for (int i = 0; !uses_new_target && i < fn->args.count; i++)
-      uses_new_target = ast_references_new_target(fn->args.items[i]);
+      uses_new_target = ast_references_new_target(fn->args.items[i]) || ast_contains_direct_eval(fn->args.items[i]);
     if (uses_new_target) fn->flags |= FN_USES_NEW_TARGET;
   }
   return fn;
