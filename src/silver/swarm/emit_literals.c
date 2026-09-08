@@ -48,7 +48,7 @@ void jit_emit_literals(jit_compile_t *c) {
 
     case OP_CONST8: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->func->const_count) {
+      if (idx >= c->func->const_count) {
         c->ok = false;
         break;
       }

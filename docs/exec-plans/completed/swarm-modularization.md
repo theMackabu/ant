@@ -156,3 +156,10 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   build failed the regression at call 101; rest, maximum-capacity, omitted, and
   zero-parameter cases now pass. Build, strict-arguments regressions, preflight,
   and all 4,221 specs passed.
+
+- Narrow local and constant indices are compared with full-width counts, rather
+  than truncating counts at 256. Regressions at 255/256/257 entries check correct
+  execution and that emitted MIR reaches the return; a module dump alone also
+  appears for failed compilation and would hide this fallback bug. Local
+  coverage includes initialization, reads, assignments, increment/decrement,
+  and compound addition. Build, preflight, and all 4,221 specs passed.

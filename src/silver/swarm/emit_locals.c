@@ -4,7 +4,7 @@ void jit_emit_locals(jit_compile_t *c) {
   switch (c->op) {
     case OP_DEC_LOCAL: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
@@ -46,7 +46,7 @@ void jit_emit_locals(jit_compile_t *c) {
 
     case OP_ADD_LOCAL: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
@@ -317,7 +317,7 @@ void jit_emit_locals(jit_compile_t *c) {
     }
     case OP_GET_LOCAL8: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
@@ -462,7 +462,7 @@ void jit_emit_locals(jit_compile_t *c) {
     }
     case OP_PUT_LOCAL8: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
@@ -541,7 +541,7 @@ void jit_emit_locals(jit_compile_t *c) {
     }
     case OP_SET_LOCAL8: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
@@ -597,7 +597,7 @@ void jit_emit_locals(jit_compile_t *c) {
 
     case OP_INC_LOCAL: {
       uint8_t idx = sv_get_u8(c->ip + 1);
-      if (idx >= (uint8_t)c->n_locals) {
+      if (idx >= c->n_locals) {
         c->ok = false;
         break;
       }
