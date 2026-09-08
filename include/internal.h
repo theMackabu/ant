@@ -685,6 +685,7 @@ ant_value_t builtin_object_isPrototypeOf(ant_params_t);
 ant_value_t builtin_object_freeze(ant_params_t);
 ant_value_t builtin_string_charCodeAt(ant_params_t);
 ant_value_t builtin_array_includes(ant_params_t);
+ant_value_t js_builtin_eval(ant_t *js);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);

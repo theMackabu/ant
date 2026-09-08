@@ -40,6 +40,7 @@
 #include "silver/swarm.h"
 #include "silver/ops/using.h"
 #include "silver/ops/async.h"
+#include "silver/ops/eval_env.h"
 #include "modules/regex.h"
 
 #ifndef ANT_WASM_EMBED
@@ -5613,6 +5614,10 @@ static ant_value_t builtin_eval(ant_params_t) {
   ant_offset_t code_off = vstr(js, code, &code_len);
   const char *code_str = (const char *)(uintptr_t)(code_off);
   return js_eval_bytecode_eval_with_strict(js, code_str, (size_t)code_len, false);
+}
+
+ant_value_t js_builtin_eval(ant_t *js) {
+  return js_cfunc_expose_named(js, js_mkfun(builtin_eval), "eval", 4);
 }
 
 static ant_value_t builtin_Number_isInteger(ant_params_t) {
@@ -19073,7 +19078,7 @@ static ant_t *isolate_init(void *buf, size_t len) {
   
   defalias(js, glob, "parseInt", 8, number_parse_int);
   defalias(js, glob, "parseFloat", 10, number_parse_float);
-  defmethod(js, glob, "eval", 4, js_mkfun(builtin_eval));
+  defmethod(js, glob, "eval", 4, js_builtin_eval(js));
   defmethod(js, glob, "isNaN", 5, js_mkfun(builtin_global_isNaN));
   defmethod(js, glob, "isFinite", 8, js_mkfun(builtin_global_isFinite));
   defmethod(js, glob, "btoa", 4, js_mkfun(builtin_btoa));
@@ -20201,7 +20206,14 @@ static ant_value_t js_execute_compiled_eval_bytecode(
   js_clear_error_site(js);
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
-  return sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t compiled = mkref(kTypeFunctionInfo, func);
+  GC_ROOT_PIN(js, compiled);
+  ant_value_t result = sv_eval_declare_vars(js, func, eval_env);
+  if (!is_err(result))
+    result = sv_execute_eval_entry(js->vm, func, this_val, eval_env, new_target);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
 }
 
 static inline js_eval_result_t js_eval_bytecode_mode_result(

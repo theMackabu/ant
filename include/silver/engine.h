@@ -280,6 +280,8 @@ typedef struct {
   uint16_t index;
   uint8_t kind;
   bool is_const;
+  const char *import_name;
+  uint32_t import_len;
 } sv_runtime_binding_t;
 
 typedef struct {
@@ -291,11 +293,24 @@ enum {
   SV_EVAL_BIND_PARAM = 0,
   SV_EVAL_BIND_LOCAL = 1,
   SV_EVAL_BIND_UPVALUE = 2,
+  SV_EVAL_BIND_KIND_MASK = 3,
+  SV_EVAL_BIND_LEXICAL = 4,
+  SV_EVAL_BIND_CATCH = 8,
+  SV_EVAL_BIND_IMPORT_DEFAULT = 16,
+  SV_EVAL_BIND_IMPORT_NAMED = 32,
 };
+
+typedef struct {
+  const char *str;
+  uint32_t len;
+  bool annex_b;
+} sv_eval_decl_t;
 
 typedef struct {
   sv_eval_scope_t *eval_scopes;
   uint32_t eval_scope_count;
+  sv_eval_decl_t *eval_vars;
+  uint32_t eval_var_count;
   sv_type_info_t local_types[];
 } sv_func_metadata_t;
 
@@ -384,6 +399,9 @@ struct sv_func {
 
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
+
+  bool needs_eval_env: 1;
+  bool is_eval: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
