@@ -12,7 +12,7 @@ static inline ant_value_t sv_invoke_native(
   ant_t *js, ant_cfunc_t fn, ant_value_t *args,
   int nargs, ant_value_t new_target
 ) {
-  if (new_target == js_mkundef()) return fn(js, args, nargs, new_target);
+  if (!gc_value_is_heap_ref(new_target)) return fn(js, args, nargs, new_target);
 
   sv_vm_t *vm = js->vm;
   sv_native_frame_t frame = {
