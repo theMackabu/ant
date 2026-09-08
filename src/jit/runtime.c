@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 void jit_load_externals_once(sv_jit_ctx_t *jc) {
   if (jc == NULL || jc->externals_loaded) return;
 #define LOAD_EXT(name)                           \

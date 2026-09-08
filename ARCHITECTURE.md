@@ -28,6 +28,8 @@ meant to answer "where should this change live?" before anyone starts editing.
 
 - `src/silver/` contains the language pipeline: lexer, parser, compiler,
   directives, VM glue, and bytecode operations.
+- `src/jit/` contains Silver's native JIT compiler, MIR emission, and JIT/OSR
+  runtime entrypoints. Its Silver-facing interface is `include/silver/jit.h`.
 - `src/gc/` contains memory management primitives and object/string handling.
 - Files like `src/errors.c`, `src/descriptors.c`, and `src/shapes.c` support
   core engine behavior shared across subsystems.
@@ -100,8 +102,9 @@ records the regression, implementation, and validation.
 
 ## Change Placement Guidelines
 
-- Parser, bytecode, execution semantics, or JIT-adjacent work belongs under
-  `src/silver/`.
+- Parser, bytecode, and interpreter execution semantics belong under `src/silver/`.
+- Native JIT analysis, lowering, and runtime integration belong under `src/jit/`.
+  The JIT depends on Silver bytecode, frame, closure, and feedback definitions.
 - Heap, string, or lifetime bugs usually belong under `src/gc/`.
 - Built-in API behavior should land in `src/modules/`, `src/builtins/`, or
   `src/esm/` depending on whether the change is C runtime code, bundled JS, or

@@ -87,7 +87,7 @@ core_sources = files(
   '../../src/modules/symbol.c',
   'src/bridge.c',
   'src/stubs.c',
-  'src/swarm_stub.c',
+  'src/jit_stub.c',
   'src/utils.c',
 )
 

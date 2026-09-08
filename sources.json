@@ -15,7 +15,7 @@
       "src/modules/**/*.c",
       "src/streams/*.c",
       "src/silver/*.c",
-      "src/silver/swarm/*.c",
+      "src/jit/*.c",
       "src/http/*.c",
       "src/net/*.c"
     ],
@@ -43,7 +43,7 @@
       "src/modules/**/*.c",
       "src/streams/*.c",
       "src/silver/*.c",
-      "src/silver/swarm/*.c",
+      "src/jit/*.c",
       "src/http/*.c",
       "src/net/*.c"
     ],
@@ -71,7 +71,7 @@
       "src/modules/**/*.c",
       "src/streams/*.c",
       "src/silver/*.c",
-      "src/silver/swarm/*.c",
+      "src/jit/*.c",
       "src/http/*.c",
       "src/net/*.c"
     ],

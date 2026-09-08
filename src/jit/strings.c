@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 void mir_emit_branch_if_string_builder(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t value, MIR_reg_t scratch, MIR_label_t builder) {

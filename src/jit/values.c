@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx) {
   jit_value_info_t info = {0};
   if (vs->known_func) info.known_func = vs->known_func[idx];

@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 void mir_emit_value_to_objptr_or_jmp(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t v, MIR_reg_t out_ptr,

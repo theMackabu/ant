@@ -24,7 +24,7 @@ This guide keeps validation proportional to the change while still protecting ru
 - Run `./build/ant examples/spec/run.js <spec_name>` when the change affects shared runtime
   semantics or built-ins used broadly across the platform.
 
-### Engine behavior in `src/silver/`, `src/gc/`, or runtime core files
+### Engine behavior in `src/silver/`, `src/jit/`, `src/gc/`, or runtime core files
 
 - Rebuild with `maid build`.
 - Run focused regression tests first.

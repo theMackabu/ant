@@ -1,14 +1,15 @@
 # Swarm JIT Modularization
 
 Status: completed
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-08
 Owner: theMackabu
 
 ## Outcome
 
 Replace the 14,406-line `src/silver/swarm.c`, including its 8,603-line
 compiler function, with responsibility-based translation units in
-`src/silver/swarm/`. The public `include/silver/swarm.h` API is unchanged.
+`src/jit/` (initially `src/silver/swarm/`). The public interface is now
+`include/silver/jit.h`; its `sv_jit_*` declarations are unchanged.
 
 ## Boundaries
 
@@ -23,10 +24,10 @@ compiler function, with responsibility-based translation units in
 - `analysis.c`, `values.c`, `guards.c`, `strings.c`, `properties.c`,
   `closures.c`, and `inline.c`: existing analysis and MIR-emission helpers.
 - `compile.h`: private per-compilation state and opcode-emitter declarations.
-- `internal.h`: shared private JIT types and helper declarations.
+- `jit_internal.h`: shared private JIT types and helper declarations.
 
 The engine, library, and runtime source groups in `sources.json` explicitly
-include `src/silver/swarm/*.c`. Files are compiled separately, not included as
+include `src/jit/*.c`. Files are compiled separately, not included as
 source fragments. No generated build files are versioned.
 
 ## Invariants
@@ -190,3 +191,22 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   16/17-entry regressions verify results and use MIR to distinguish immediate
   rejection from the previous late rejection. Native build, preflight, and all
   4,221 spec tests passed.
+
+## JIT directory move (2026-09-08)
+
+Moved the 26 JIT translation units and two private headers to `src/jit/`.
+The private header is `jit_internal.h` to avoid ambiguity with the runtime
+`include/internal.h`. The public header is `include/silver/jit.h`, and the
+interpreter-only WASM stub is `packages/wasm/src/jit_stub.c`. Silver bytecode, frame, closure, and
+feedback dependencies remain explicit; the directory move does not change
+the JIT API or generated instructions. All three native source groups,
+WASM source selection, relative includes, and validation routing use the
+new paths. Historical monolith references elsewhere in these plans retain
+their original names.
+
+Validation: all 28 moved files match their original contents after the
+include-path and header-guard renames. Each native source group selects all
+26 JIT C files, and validation routing recognizes `src/jit/`. Native build,
+64 focused JIT/direct-eval tests, all 4,221 specs across 102 files, and
+repository preflight passed. The WASM build, all 14 package tests, and
+`npm pack --dry-run` passed.

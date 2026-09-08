@@ -1,13 +1,13 @@
-#ifndef ANT_SILVER_SWARM_INTERNAL_H
-#define ANT_SILVER_SWARM_INTERNAL_H
+#ifndef ANT_JIT_INTERNAL_H
+#define ANT_JIT_INTERNAL_H
 
-#include "silver/swarm.h"
+#include "silver/jit.h"
 #include "silver/glue.h"
 #include "silver/call.h"
 #include "silver/feedback.h"
 #include "silver/opcode.h"
-#include "../ops/globals.h"
-#include "../ops/literals.h"
+#include "../silver/ops/globals.h"
+#include "../silver/ops/literals.h"
 #include "debug.h"
 #include "shapes.h"
 #include "gc/roots.h"

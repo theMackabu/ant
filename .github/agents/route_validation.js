@@ -112,6 +112,7 @@ function main() {
 
     if (
       filePath.startsWith('src/silver/') ||
+      filePath.startsWith('src/jit/') ||
       filePath.startsWith('src/gc/') ||
       filePath === 'src/runtime.c' ||
       filePath === 'src/ant.c' ||

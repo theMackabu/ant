@@ -71,6 +71,7 @@ src/
 ├── core/       # Bundled snapshot code
 ├── esm/        # ES module system (loader, resolver, cache)
 ├── highlight/  # Syntax highlighting (emit, iterators)
+├── jit/        # Native JIT compiler for Silver
 ├── modules/    # Built-in JS modules (fs, path, shell, etc.)
 ├── pkg/        # Zig-based package manager
 ├── silver/     # Silver bytecode compiler and VM

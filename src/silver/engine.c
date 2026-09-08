@@ -12,7 +12,7 @@
 
 #include "silver/call.h"
 #include "silver/feedback.h"
-#include "silver/swarm.h"
+#include "silver/jit.h"
 #include "modules/regex.h"
 #include "silver/glue.h"
 #include "ops/literals.h"

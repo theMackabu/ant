@@ -1,7 +1,7 @@
-#ifndef ANT_SILVER_SWARM_COMPILE_H
-#define ANT_SILVER_SWARM_COMPILE_H
+#ifndef ANT_JIT_COMPILE_H
+#define ANT_JIT_COMPILE_H
 
-#include "internal.h"
+#include "jit_internal.h"
 
 #define JIT_TRY_MAX 16
 typedef struct {

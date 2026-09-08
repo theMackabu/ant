@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 static uint8_t jit_bailout_slot_type(jit_vstack_t *vs, int idx,
                                      int left_idx, uint8_t left_type,
                                      int right_idx, uint8_t right_type) {

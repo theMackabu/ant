@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx) {
   uint8_t *ip = func->code;
   uint8_t *end = func->code + func->code_len;

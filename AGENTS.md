@@ -30,8 +30,8 @@ entire repository into context.
 
 - `src/main.c`, `src/ant.c`, and `src/runtime.c` wire process startup and the
   runtime entrypoints.
-- `src/silver/` contains the parser, compiler, VM, and JIT-facing execution
-  logic for the Ant Silver engine.
+- `src/silver/` contains the parser, compiler, and VM for the Ant Silver engine.
+- `src/jit/` contains Silver's native JIT compiler and runtime integration.
 - `src/gc/` contains heap layout, roots, strings, ropes, and collection logic.
 - `src/modules/` and `src/builtins/` implement built-in modules and host APIs.
 - `src/http/`, `src/net/`, and `src/streams/` are the transport and I/O stack.

@@ -37,7 +37,7 @@
 #include "silver/compiler.h"
 #include "silver/call.h"
 #include "silver/glue.h"
-#include "silver/swarm.h"
+#include "silver/jit.h"
 #include "silver/ops/using.h"
 #include "silver/ops/async.h"
 #include "silver/ops/eval_env.h"

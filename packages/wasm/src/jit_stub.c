@@ -1,6 +1,6 @@
 #include "silver/call.h"
 #include "silver/feedback.h"
-#include "silver/swarm.h"
+#include "silver/jit.h"
 
 void sv_jit_init(ant_t *js) {
   (void)js;

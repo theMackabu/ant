@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 static bool jit_op_inline_side_effect(sv_op_t op) {
   switch (op) {
     case OP_PUT_FIELD:

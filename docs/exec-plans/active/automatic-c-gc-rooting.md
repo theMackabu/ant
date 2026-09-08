@@ -131,7 +131,7 @@ as `packages/wasm/` and do not count direct helper calls.
 | [Blocking await](../../../src/reactor.c) | C holds values while pumping the event loop | Native frames can remain active across extensive nested work |
 | [JSON](../../../src/modules/json.c) | Temporary handles preserve values in algorithm state | Generated stack roots do not replace dynamic container ownership by themselves |
 | [Inspector](../../../src/inspector/runtime.c) and [N-API scopes](../../../src/napi/references.c) | Some direct root-stack uses represent longer-lived handles | A global search-and-replace would confuse distinct lifetimes |
-| [JIT generation](../../../src/silver/swarm.c) | MIR emits its own value storage and selected root-related spill slots | A C compiler pass does not automatically instrument generated MIR code |
+| [JIT generation](../../../src/jit/) | MIR emits its own value storage and selected root-related spill slots | A C compiler pass does not automatically instrument generated MIR code |
 | [Wasm build](../../../packages/wasm/meson.build) | A separate build compiles shared runtime C with `ANT_WASM_EMBED` | Both build graphs must participate |
 
 Reproduce and extend the census with:

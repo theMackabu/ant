@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "jit_internal.h"
 void mir_emit_call_stable_builtin(
     MIR_context_t ctx, MIR_item_t fn, ant_t *js,
     MIR_reg_t r_vm, MIR_reg_t r_js,
