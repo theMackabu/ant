@@ -247,20 +247,20 @@ void jit_emit_control(jit_compile_t *c) {
     case OP_LABEL:
       break;
     case OP_TRY_PUSH: {
+      if (c->jit_try_depth >= JIT_TRY_MAX || c->catch_sp_count >= JIT_TRY_MAX) {
+        c->ok = false;
+        break;
+      }
       int32_t off = sv_get_i32(c->ip + 1);
       int catch_off = c->bc_off + c->sz + off;
       MIR_label_t catch_lbl = label_for_branch(c->ctx, &c->lm, catch_off, c->vs.sp);
-      if (c->jit_try_depth < JIT_TRY_MAX) {
-        c->jit_try_stack[c->jit_try_depth].catch_label = catch_lbl;
-        c->jit_try_stack[c->jit_try_depth].catch_bc_off = catch_off;
-        c->jit_try_stack[c->jit_try_depth].saved_sp = c->vs.sp;
-        c->jit_try_depth++;
-      }
-      if (c->catch_sp_count < JIT_TRY_MAX) {
-        c->catch_sp_map[c->catch_sp_count].bc_off = catch_off;
-        c->catch_sp_map[c->catch_sp_count].saved_sp = c->vs.sp;
-        c->catch_sp_count++;
-      }
+      c->jit_try_stack[c->jit_try_depth].catch_label = catch_lbl;
+      c->jit_try_stack[c->jit_try_depth].catch_bc_off = catch_off;
+      c->jit_try_stack[c->jit_try_depth].saved_sp = c->vs.sp;
+      c->jit_try_depth++;
+      c->catch_sp_map[c->catch_sp_count].bc_off = catch_off;
+      c->catch_sp_map[c->catch_sp_count].saved_sp = c->vs.sp;
+      c->catch_sp_count++;
       break;
     }
 

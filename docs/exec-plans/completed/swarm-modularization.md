@@ -181,3 +181,12 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   1,050 targets and verifies subsequent compilation still works. The previous
   build crashed at 1,025; all cases now pass. Native build, all 61 focused JIT
   and direct-eval entrypoints, preflight, and all 4,221 spec tests passed.
+
+- Approved defensive cleanup: TRY_PUSH rejects either full try/catch table
+  before changing labels or inserting entries. Previously the missing CATCH
+  mapping rejected compilation later; early rejection keeps both tables
+  consistent and avoids emitting the discarded body. These checks run during
+  compilation and add no generated runtime instructions. Nested and sequential
+  16/17-entry regressions verify results and use MIR to distinguish immediate
+  rejection from the previous late rejection. Native build, preflight, and all
+  4,221 spec tests passed.
