@@ -47,7 +47,7 @@ bool sv_ast_can_be_expression_statement(const sv_ast_t *node) {
     [N_ARRAY] = 1, [N_OBJECT] = 1, [N_PROPERTY] = 1, [N_SPREAD] = 1,
     [N_SEQUENCE] = 1, [N_ARROW] = 1, [N_YIELD] = 1, [N_AWAIT] = 1,
     [N_TYPEOF] = 1, [N_DELETE] = 1, [N_VOID] = 1, [N_TAGGED_TEMPLATE] = 1,
-    [N_IMPORT] = 1,
+    [N_IMPORT] = 1, [N_NEW_TARGET] = 1,
   };
 
   if (node->type == N_FUNC)
@@ -1487,6 +1487,33 @@ bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender)
   for (int i = 0; i < node->args.count; i++)
     if (ast_contains_own_yield(node->args.items[i], out_offender)) return true;
 
+  return false;
+}
+
+bool ast_contains_lexical_new_target(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_NEW_TARGET) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+  if (node->type == N_CLASS) {
+    if (ast_contains_lexical_new_target(node->left)) return true;
+    for (int i = 0; i < node->args.count; i++) {
+      const sv_ast_t *member = node->args.items[i];
+      if (member->type == N_METHOD && (member->flags & FN_COMPUTED) &&
+          ast_contains_lexical_new_target(member->left)) return true;
+    }
+    return false;
+  }
+  if (ast_contains_lexical_new_target(node->left) ||
+      ast_contains_lexical_new_target(node->right) ||
+      ast_contains_lexical_new_target(node->cond) ||
+      ast_contains_lexical_new_target(node->body) ||
+      ast_contains_lexical_new_target(node->catch_body) ||
+      ast_contains_lexical_new_target(node->finally_body) ||
+      ast_contains_lexical_new_target(node->catch_param) ||
+      ast_contains_lexical_new_target(node->init) ||
+      ast_contains_lexical_new_target(node->update)) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_lexical_new_target(node->args.items[i])) return true;
   return false;
 }
 

@@ -279,3 +279,43 @@ the rebuilt executable's code, data, and section layout were identical to
 the explicit-signature build. Constructor-context, Intl, embedded C, spec,
 and JIT checks passed again. `maid preflight` and `git diff --check` pass.
 Validation artifacts are under `/tmp/ant-thin-helpers`.
+
+## `new.target` syntax context
+
+A follow-up found that scripts and indirect eval accepted `new.target` and
+compiled it to `undefined`. Syntax permission is distinct from the runtime
+value: an ordinary function permits direct eval of `new.target` even when
+its target is undefined, while a global arrow does not establish permission.
+
+Compilation now rejects lexical `new.target` in script, module, REPL, and
+global eval programs, including unreachable expressions and arrow bodies.
+The AST check stops at ordinary functions and class initialization contexts;
+class heritage and computed keys retain the surrounding context. The
+`ant:syntax` parser API uses the same check.
+
+Compiled functions retain `allows_new_target` for direct eval. Function-context
+eval has a distinct compile mode; indirect eval always uses global eval mode.
+Arrows inherit permission, and synthetic class initializer functions establish
+it. Literal eval inlining defers invalid sources to runtime eval so the syntax
+error occurs when eval is called and can be caught. Ordinary call dispatch and
+runtime target ownership are unchanged.
+
+Validation passes the native build, all four focused regression files, all
+4,221 spec tests across 102 files, and all 10 JIT files. The new syntax test
+also passes in Node. The pre-fix Ant binary fails its first assertion that
+indirect eval of `let value = new.target;` must throw; script stdin prints
+`undefined` before the fix and reports `SyntaxError` after it. `maid preflight`
+and `git diff --check` pass. Artifacts are under `/tmp/ant-new-target-syntax`.
+
+After integrating the sloppy-eval environment changes, `allows_new_target`
+shares the trailing flag byte with `needs_eval_env` and `is_eval`. Clang's
+record-layout comparison against the upstream header confirms `sv_func_t`
+remains 200 bytes with 8-byte alignment on Darwin ARM64, and every existing
+field retains its offset. Placing the flag after `has_map_templates` would
+instead shift the counters and grow the structure to 208 bytes.
+
+The stash conflict keeps `sv_eval_capture_env` and forwards syntax permission
+through the resulting eval call. Seven additional upstream eval-mode checks
+now recognize function-context eval too, preserving sloppy declarations and
+`arguments` lookup. Integration validation is pending; logs and layout dumps
+are under `/tmp/ant-func-layout`.

@@ -20255,7 +20255,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
   }
 
   js_async_entry_t *async_entry = NULL;
-  ant_value_t value = mode == SV_COMPILE_EVAL
+  ant_value_t value = sv_compile_mode_is_eval(mode)
     ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target)
     : js_execute_compiled_bytecode(js, func, mode == SV_COMPILE_REPL ? &async_entry : NULL);
   
@@ -20308,10 +20308,10 @@ ant_value_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   ant_t *js, const char *buf, size_t len,
   bool inherit_strict, ant_value_t this_val, ant_value_t eval_env,
-  ant_value_t new_target
+  ant_value_t new_target, bool allows_new_target
 ) {
   return js_eval_bytecode_mode(
-    js, buf, len, SV_COMPILE_EVAL, 
+    js, buf, len, allows_new_target ? SV_COMPILE_EVAL_FUNCTION : SV_COMPILE_EVAL,
     inherit_strict, this_val, eval_env, new_target
   );
 }

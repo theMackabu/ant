@@ -659,7 +659,8 @@ bool js_try_char_code_at(
 
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
   ant_t *js, const char *buf, size_t len, bool inherit_strict, 
-  ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
+  ant_value_t this_val, ant_value_t eval_env, 
+  ant_value_t new_target, bool allows_new_target
 );
 
 ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);

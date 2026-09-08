@@ -400,8 +400,9 @@ struct sv_func {
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
 
-  bool needs_eval_env: 1;
   bool is_eval: 1;
+  bool needs_eval_env: 1;
+  bool allows_new_target: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(

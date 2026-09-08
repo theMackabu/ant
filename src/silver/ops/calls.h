@@ -298,21 +298,24 @@ static inline ant_value_t sv_op_new_apply(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 }
 
 static inline ant_value_t sv_eval_in_frame(
-  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
-  const char *source, ant_offset_t source_len, uint32_t scope_index,
-  ant_value_t new_target
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, const char *source,
+  ant_offset_t source_len, uint32_t scope_index, ant_value_t new_target
 ) {
   sv_func_t *caller = frame ? frame->func : NULL;
   
   if (!caller) return js_eval_bytecode_eval_with_strict(js, source, source_len, false);
   GC_ROOT_SAVE(root_mark, js);
+  
   ant_value_t env = sv_eval_capture_env(vm, js, frame, scope_index);
-  if (is_err(env)) { GC_ROOT_RESTORE(js, root_mark); return env; }
+  if (is_err(env)) { 
+    GC_ROOT_RESTORE(js, root_mark); 
+    return env;
+  }
+  
   GC_ROOT_PIN(js, env);
-
   ant_value_t result = js_eval_bytecode_eval_in_env_with_strict(
-    js, source, source_len, 
-    sv_frame_is_strict(frame), frame->this, env, new_target
+    js, source, source_len, sv_frame_is_strict(frame), 
+    frame->this, env, new_target, caller->allows_new_target
   );
   
   GC_ROOT_RESTORE(js, root_mark);

@@ -10,7 +10,14 @@ typedef enum {
   SV_COMPILE_EVAL   = 1,
   SV_COMPILE_MODULE = 2,
   SV_COMPILE_REPL   = 3,
+  SV_COMPILE_EVAL_FUNCTION = 4,
 } sv_compile_mode_t;
+
+static inline bool sv_compile_mode_is_eval(sv_compile_mode_t mode) {
+  return 
+    mode == SV_COMPILE_EVAL || 
+    mode == SV_COMPILE_EVAL_FUNCTION;
+}
 
 typedef struct { 
   const char *name;
@@ -174,6 +181,8 @@ typedef struct sv_compiler {
   bool is_arrow;
   bool is_async;
   bool is_strict;
+  
+  bool allows_new_target;
   bool inherits_eval_env;
   bool owns_eval_env;
   sv_eval_decl_t *eval_vars;

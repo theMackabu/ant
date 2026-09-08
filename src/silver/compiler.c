@@ -652,7 +652,7 @@ static inline bool is_repl_top_level(const sv_compiler_t *c) {
 }
 
 static inline bool has_completion_value(const sv_compiler_t *c) {
-  return c && (c->mode == SV_COMPILE_EVAL || c->mode == SV_COMPILE_REPL);
+  return c && (sv_compile_mode_is_eval(c->mode) || c->mode == SV_COMPILE_REPL);
 }
 
 static inline bool is_completion_top_level(const sv_compiler_t *c) {
@@ -684,7 +684,7 @@ static inline bool has_active_with_scope(const sv_compiler_t *c) {
 }
 
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
-  return c && !c->is_arrow && c->enclosing && c->mode != SV_COMPILE_EVAL;
+  return c && !c->is_arrow && c->enclosing && !sv_compile_mode_is_eval(c->mode);
 }
 
 static void emit_import_binding_resolve(
@@ -969,7 +969,7 @@ static int resolve_super_upvalue(sv_compiler_t *c) {
 static int resolve_arguments_upvalue(sv_compiler_t *c) {
   if (!c->enclosing) return -1;
   sv_compiler_t *enc = c->enclosing;
-  if (enc->owns_eval_env || enc->mode == SV_COMPILE_EVAL) return -1;
+  if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
 
   if (!enc->is_arrow) {
     if (enc->strict_args_local < 0) return -1;
@@ -1007,7 +1007,7 @@ static int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len)
 
 static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
   if (name && len && name[0] != '\x01') {
-    if (!c->is_arrow && c->mode != SV_COMPILE_EVAL && is_ident_str(name, len, "arguments", 9)) return -1;
+    if (!c->is_arrow && !sv_compile_mode_is_eval(c->mode) && is_ident_str(name, len, "arguments", 9)) return -1;
     if (c->owns_eval_env) return -1;
     for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
       if (resolve_local(enc, name, len) >= 0) break;
@@ -1243,7 +1243,7 @@ static void sv_func_finalize_type_data(
   );
 
   func->needs_eval_env = comp->inherits_eval_env;
-  func->is_eval = comp->mode == SV_COMPILE_EVAL;
+  func->is_eval = sv_compile_mode_is_eval(comp->mode);
   func->local_type_count = local_type_count;
   if (comp->eval_scope_count > 0 || comp->eval_var_count > 0) {
     size_t metadata_size = offsetof(sv_func_metadata_t, local_types) +
@@ -1551,7 +1551,7 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   }
   
   if (is_ident_str(name, len, "arguments", 9)) {
-    if (c->owns_eval_env || c->mode == SV_COMPILE_EVAL) {
+    if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
       emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
       return;
     }
@@ -1903,7 +1903,7 @@ static bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static inline bool is_ident_name(sv_ast_t *node, const char *name) {
+static inline bool is_ident_name(const sv_ast_t *node, const char *name) {
   size_t n = strlen(name);
   return node 
     && node->type == N_IDENT && node->len == (uint32_t)n 
@@ -1924,7 +1924,7 @@ static void mark_char_code_at_binding(sv_compiler_t *c, sv_ast_t *prop) {
 }
 
 static bool is_sloppy_eval(const sv_compiler_t *c) {
-  return c->mode == SV_COMPILE_EVAL && !c->is_strict;
+  return sv_compile_mode_is_eval(c->mode) && !c->is_strict;
 }
 
 static void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool annex_b) {
@@ -4178,6 +4178,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   } else if (
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
+    (c->allows_new_target || !ast_contains_lexical_new_target(program)) &&
     inline_eval_can_compile_without_early_errors(c, program->args.items[0]) &&
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
@@ -6572,6 +6573,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   sv_func_finalize_type_data(fn, &comp, fn->max_locals);
   fn->param_count = 0;
   fn->function_length = 0;
+  fn->allows_new_target = true;
   fn->is_strict = true;
   fn->is_static = true;
   fn->debug->filename = c->filename ? c->filename : c->js->filename;
@@ -6801,6 +6803,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->param_count = (uint16_t)comp.param_count;
     fn->function_length = (uint16_t)comp.param_count;
     fn->is_strict = comp.is_strict;
+    fn->allows_new_target = comp.allows_new_target;
     fn->debug->filename = c->js->filename;
     fn->debug->source_line = (int)node->line;
     
@@ -7135,7 +7138,7 @@ sv_func_t *compile_function_body(
   bool params_bind_eval = false;
   for (int i = 0; i < node->args.count; i++)
     params_bind_eval |= ast_pattern_binds_eval(node->args.items[i]);
-  if (mode != SV_COMPILE_EVAL && !comp.is_strict && !params_bind_eval) {
+  if (!sv_compile_mode_is_eval(mode) && !comp.is_strict && !params_bind_eval) {
     for (int i = 0; !comp.owns_eval_env && i < node->args.count; i++)
       comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
     if (!comp.owns_eval_env && !ast_has_eval_var(node->body))
@@ -7477,6 +7480,7 @@ sv_func_t *compile_function_body(
   func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
   func->is_arrow = comp.is_arrow;
+  func->allows_new_target = comp.allows_new_target;
   
   func->is_async = !!(node->flags & FN_ASYNC);
   func->has_await = false;
@@ -7717,8 +7721,12 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
 sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
+  if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
+    js_mkerr_typed(js, JS_ERR_SYNTAX, "new.target is only valid in functions");
+    return NULL;
+  }
 
-  if (mode == SV_COMPILE_EVAL) {
+  if (sv_compile_mode_is_eval(mode)) {
     const sv_ast_t *offender = NULL;
     for (int i = 0; i < program->args.count; i++)
       if (ast_contains_direct_suspend(program->args.items[i], &offender)) break;
@@ -7745,6 +7753,7 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   
   switch (mode) {
     case SV_COMPILE_MODULE: top_name = k_top_name_module; break;
+    case SV_COMPILE_EVAL_FUNCTION:
     case SV_COMPILE_EVAL:   top_name = k_top_name_eval; break;
     case SV_COMPILE_REPL:   top_name = k_top_name_repl; break;
     case SV_COMPILE_SCRIPT:
@@ -7762,7 +7771,7 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
   top_fn.body = sv_ast_new(N_BLOCK);
   top_fn.body->args = program->args;
-  if (mode == SV_COMPILE_EVAL && ast_references_new_target(program))
+  if (sv_compile_mode_is_eval(mode) && ast_references_new_target(program))
     top_fn.flags |= FN_USES_NEW_TARGET;
 
   sv_compiler_t root;
@@ -7837,6 +7846,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
   
+  root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)wrapped_len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
   
@@ -7937,6 +7947,7 @@ sv_func_t *sv_compile_function_with_params(
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
   
+  root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   
