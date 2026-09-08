@@ -3,14 +3,13 @@
 
 #include "silver/vm.h"
 #include "internal.h"
-#include "gc.h"
 #include "runtime.h"
 #include "errors.h"
-#include "debug.h"
+
+#include "gc.h"
 #include "gc/objects.h"
 
 #include <stdbool.h>
-#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -122,10 +121,12 @@ static_assert(
   "map template table header must preserve descriptor alignment"
 );
 
+#ifndef ANT_WASM_EMBED
 static_assert(
   UINT32_MAX <= SIZE_MAX / sizeof(sv_map_template_desc_t),
   "map template descriptor table must fit in size_t"
 );
+#endif
 
 typedef struct {
   uint16_t  index;

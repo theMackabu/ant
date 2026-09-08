@@ -14,6 +14,7 @@
 #include "modules/math.h"
 #include "modules/regex.h"
 #include "modules/symbol.h"
+#include "modules/timer.h"
 #include "runtime.h"
 #include "silver/engine.h"
 #include "wasm_embed.h"
