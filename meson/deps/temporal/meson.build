@@ -89,6 +89,7 @@ if temporal_opt.enabled() or temporal_opt.auto()
         src_root / 'src/temporal/rust-toolchain.toml',
       ) + temporal_capi_inputs,
       output: temporal_lib_name,
+      build_by_default: true,
       command: [
         python, files(src_root / 'meson/temporal.py'),
         '--crate', src_root / 'src/temporal',

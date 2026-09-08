@@ -207,6 +207,10 @@ interface AntRequestIP {
   port: number;
 }
 
+interface AntUpgradeWebSocketOptions {
+  protocol?: string;
+}
+
 interface AntWebSocketUpgrade {
   socket: WebSocket;
   response: Response;
@@ -228,7 +232,7 @@ interface AntServer {
   timeout(request: Request, seconds: number): void;
   stop(force?: boolean): Promise<void>;
   reload(options: AntServerReloadOptions): void;
-  upgradeWebSocket(request: Request): AntWebSocketUpgrade;
+  upgradeWebSocket(request: Request, options?: AntUpgradeWebSocketOptions): AntWebSocketUpgrade;
   eventSource(): AntEventSourceStream;
 }
 

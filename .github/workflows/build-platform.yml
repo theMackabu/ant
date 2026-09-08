@@ -219,6 +219,15 @@ jobs:
         shell: bash
         run: ./build/${{ steps.config.outputs.binary_name }} tests/test_upgrade_replace.cjs
 
+      - name: Test native stack limits
+        if: startsWith(inputs.platform, 'linux-')
+        shell: bash
+        run: |
+          zig cc -std=gnu23 -Iinclude -pthread \
+            tests/test_native_stack_limits.c src/silver/limits.c \
+            -o build/test-native-stack-limits
+          ./build/test-native-stack-limits
+
       - name: Run bench-v8
         id: bench_v8
         shell: bash

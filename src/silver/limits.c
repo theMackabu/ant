@@ -15,6 +15,11 @@
 #include <pthread.h>
 #endif
 
+#if defined(__linux__) && !defined(ANT_WASM_EMBED)
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 #define SV_DEFAULT_STACK_KB  984
 #define SV_BYTES_PER_SLOT    ((int)sizeof(uint64_t))
 
@@ -30,6 +35,15 @@ size_t os_thread_stack_size(void) {
 #elif defined(__APPLE__)
   return pthread_get_stacksize_np(pthread_self());
 #else
+  struct rlimit rl;
+#if defined(__linux__)
+  // musl reports only the current mapping for the growable main-thread stack.
+  // Worker stacks are fixed allocations and must retain their pthread size.
+  if (syscall(SYS_gettid) == getpid() && getrlimit(RLIMIT_STACK, &rl) == 0) {
+    return rl.rlim_cur == RLIM_INFINITY ? 8 * 1024 * 1024 : (size_t)rl.rlim_cur;
+  }
+#endif
+
   pthread_attr_t attr;
   size_t sz = 0;
   if (pthread_getattr_np(pthread_self(), &attr) == 0) {
@@ -38,9 +52,10 @@ size_t os_thread_stack_size(void) {
     if (sz > 0) return sz;
   }
 
-  struct rlimit rl;
-  if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
-    return (size_t)rl.rlim_cur;
+  if (
+    getrlimit(RLIMIT_STACK, &rl) == 0 && 
+    rl.rlim_cur != RLIM_INFINITY
+  ) return (size_t)rl.rlim_cur;
 
   return 8 * 1024 * 1024;
 #endif
