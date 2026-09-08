@@ -6,7 +6,8 @@ void jit_emit_exit_ret(jit_compile_t *c, MIR_op_t ret_op) {
                     c->adopt_open_upvalues_proto, c->imp_adopt_open_upvalues,
                     c->r_vm, c->r_slotbuf, c->r_lbuf, c->r_jit_open_upvalues,
                     c->has_captured_slots, c->captured_params, c->param_count,
-                    c->has_captures, c->captured_locals, c->n_locals, ret_op);
+                    c->has_captures, c->captured_locals, c->n_locals,
+                    &c->reg_site_n, ret_op);
 }
 
 void jit_emit_throw_if_error(jit_compile_t *c, MIR_reg_t value_reg) {

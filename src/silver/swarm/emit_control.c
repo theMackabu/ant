@@ -166,11 +166,13 @@ void jit_emit_control(jit_compile_t *c) {
       if (c->has_captured_slots)
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count);
+                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count,
+                                    mir_next_reg_site(&c->reg_site_n));
       if (c->has_captures)
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals);
+                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
+                                    mir_next_reg_site(&c->reg_site_n));
       if (c->func->is_derived_ctor) {
         MIR_label_t dctor_replace = MIR_new_label(c->ctx);
         MIR_label_t dctor_keep = MIR_new_label(c->ctx);
@@ -222,11 +224,13 @@ void jit_emit_control(jit_compile_t *c) {
       if (c->has_captured_slots)
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count);
+                                    c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues, c->captured_params, 0, c->param_count,
+                                    mir_next_reg_site(&c->reg_site_n));
       if (c->has_captures)
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
-                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals);
+                                    c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals, 0, c->n_locals,
+                                    mir_next_reg_site(&c->reg_site_n));
       if (c->func->is_derived_ctor) {
         // implicit ctor return: hand the (possibly super-rebound) this
         // back to the caller, which has no other channel to receive it

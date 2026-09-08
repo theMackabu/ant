@@ -252,7 +252,7 @@ void mir_emit_close_marked_slots(
     MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
     MIR_reg_t r_vm, MIR_reg_t r_slots,
     MIR_reg_t r_open_upvalues,
-    bool *captured, int start_idx, int slot_count) {
+    bool *captured, int start_idx, int slot_count, int site_id) {
   if (!captured || start_idx >= slot_count || slot_count <= 0 || !r_slots) return;
   if (start_idx < 0) start_idx = 0;
 
@@ -264,9 +264,8 @@ void mir_emit_close_marked_slots(
     }
   if (first_captured < 0) return;
 
-  static uint32_t close_guard_seq = 0;
   char open_name[32];
-  snprintf(open_name, sizeof(open_name), "open_upvals_%u", close_guard_seq++);
+  snprintf(open_name, sizeof(open_name), "open_upvals_%d", site_id);
   MIR_reg_t r_open = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, open_name);
   MIR_label_t no_open = MIR_new_label(ctx);
   MIR_append_insn(ctx, fn,
@@ -344,15 +343,17 @@ static void mir_emit_exit_upvalue_cleanup(
     MIR_reg_t r_vm, MIR_reg_t r_slotbuf, MIR_reg_t r_lbuf,
     MIR_reg_t r_jit_open_upvalues,
     bool has_captured_slots, bool *captured_params, int param_count,
-    bool has_captures, bool *captured_locals, int n_locals) {
+    bool has_captures, bool *captured_locals, int n_locals, int *next_site) {
   if (has_captured_slots)
     mir_emit_close_marked_slots(ctx, fn,
                                 close_upval_proto, imp_close_upval,
-                                r_vm, r_slotbuf, r_jit_open_upvalues, captured_params, 0, param_count);
+                                r_vm, r_slotbuf, r_jit_open_upvalues, captured_params, 0, param_count,
+                                mir_next_reg_site(next_site));
   if (has_captures)
     mir_emit_close_marked_slots(ctx, fn,
                                 close_upval_proto, imp_close_upval,
-                                r_vm, r_lbuf, r_jit_open_upvalues, captured_locals, 0, n_locals);
+                                r_vm, r_lbuf, r_jit_open_upvalues, captured_locals, 0, n_locals,
+                                mir_next_reg_site(next_site));
   if (r_jit_open_upvalues) {
     MIR_append_insn(ctx, fn,
                     MIR_new_call_insn(ctx, 4,
@@ -371,13 +372,13 @@ void mir_emit_exit_ret(
     MIR_reg_t r_jit_open_upvalues,
     bool has_captured_slots, bool *captured_params, int param_count,
     bool has_captures, bool *captured_locals, int n_locals,
-    MIR_op_t ret_op) {
+    int *next_site, MIR_op_t ret_op) {
   mir_emit_exit_upvalue_cleanup(ctx, fn,
                                 close_upval_proto, imp_close_upval,
                                 adopt_open_upvalues_proto, imp_adopt_open_upvalues,
                                 r_vm, r_slotbuf, r_lbuf, r_jit_open_upvalues,
                                 has_captured_slots, captured_params, param_count,
-                                has_captures, captured_locals, n_locals);
+                                has_captures, captured_locals, n_locals, next_site);
   MIR_append_insn(ctx, fn, MIR_new_ret_insn(ctx, 1, ret_op));
 }
 

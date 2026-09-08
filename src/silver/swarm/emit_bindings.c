@@ -158,12 +158,14 @@ void jit_emit_bindings(jit_compile_t *c) {
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
                                     c->r_vm, c->r_slotbuf, c->r_jit_open_upvalues,
-                                    c->captured_params, (int)idx, c->param_count);
+                                    c->captured_params, (int)idx, c->param_count,
+                                    mir_next_reg_site(&c->reg_site_n));
       if (c->has_captures)
         mir_emit_close_marked_slots(c->ctx, c->jit_func,
                                     c->close_upval_proto, c->imp_close_upval,
                                     c->r_vm, c->r_lbuf, c->r_jit_open_upvalues, c->captured_locals,
-                                    idx >= (uint16_t)c->param_count ? (int)idx - c->param_count : 0, c->n_locals);
+                                    idx >= (uint16_t)c->param_count ? (int)idx - c->param_count : 0, c->n_locals,
+                                    mir_next_reg_site(&c->reg_site_n));
       break;
     }
 

@@ -247,7 +247,7 @@ void mir_emit_close_marked_slots(
     MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
     MIR_reg_t r_vm, MIR_reg_t r_slots,
     MIR_reg_t r_open_upvalues,
-    bool *captured, int start_idx, int slot_count);
+    bool *captured, int start_idx, int slot_count, int site_id);
 void mir_emit_upval_write_barrier(
     MIR_context_t ctx, MIR_item_t jit_func,
     MIR_item_t upval_barrier_proto, MIR_item_t imp_upval_barrier,
@@ -260,7 +260,7 @@ void mir_emit_exit_ret(
     MIR_reg_t r_jit_open_upvalues,
     bool has_captured_slots, bool *captured_params, int param_count,
     bool has_captures, bool *captured_locals, int n_locals,
-    MIR_op_t ret_op);
+    int *next_site, MIR_op_t ret_op);
 void mir_emit_self_tail(
     MIR_context_t ctx, MIR_item_t fn,
     int call_argc, int param_count,
