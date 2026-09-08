@@ -1,7 +1,12 @@
 {
   "name": "@ant/hono",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Hono adapter helpers for Ant's native server runtime",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theMackabu/ant.git",
+    "directory": "packages/hono"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,21 +15,48 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./adapter": {
-      "types": "./dist/adapter.d.ts",
-      "import": "./dist/adapter.js"
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
     },
-    "./helper": {
-      "types": "./dist/helper.d.ts",
-      "import": "./dist/helper.js"
+    "./websocket": {
+      "types": "./dist/websocket.d.ts",
+      "import": "./dist/websocket.js"
+    },
+    "./conninfo": {
+      "types": "./dist/conninfo.d.ts",
+      "import": "./dist/conninfo.js"
+    },
+    "./serve-static": {
+      "types": "./dist/serve-static.d.ts",
+      "import": "./dist/serve-static.js"
     }
+  },
+  "scripts": {
+    "build": "rimraf dist && tsc",
+    "prepack": "npm run build"
   },
   "files": [
     "dist/",
     "README.md"
   ],
+  "keywords": [
+    "ant",
+    "hono",
+    "adapter",
+    "websocket"
+  ],
   "publishConfig": {
     "access": "public"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "peerDependencies": {
+    "hono": ">=4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "hono": "^4.12.27",
+    "rimraf": "^5.0.5",
+    "typescript": "^6.0.3"
+  }
 }

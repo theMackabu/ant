@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { upgradeWebSocket } from '@ant/hono';
+import { serve, upgradeWebSocket } from '@ant/hono';
 
 const app = new Hono();
 

@@ -1,12 +1,16 @@
-[Hono](https://hono.dev) WebSockets helpers for Ant's native server runtime.
+[Hono](https://hono.dev) adapter for the Ant runtime: start a server with
+`Ant.serve`, upgrade WebSockets, read connection info, and serve static files.
 
 ## Usage
 
 ```js
 import { Hono } from 'hono';
-import { upgradeWebSocket } from '@ant/hono';
+import { upgradeWebSocket, getConnInfo, serveStatic } from '@ant/hono';
 
 const app = new Hono();
+
+app.get('/', c => c.text(`hello from ${getConnInfo(c).remote.address}`));
+app.use('/static/*', serveStatic({ root: './public' }));
 
 app.get(
   '/ws',
@@ -26,24 +30,42 @@ app.get(
 export default app;
 ```
 
+Exporting `{ fetch: app.fetch, port }` as the module's default export also
+works; Ant starts the server from the default export automatically.
+
 ## API
 
-The middleware that upgrades a request to a WebSocket.
+Starts an Ant server for a Hono app and returns it. Accepts every
+`Ant.serve` option; `port` may be a string such as `process.env.PORT`.
+
+<Symbol name="serve"/>
+
+The middleware that upgrades a request to a WebSocket. The subprotocol
+defaults to the first entry the client offered; pass `{ protocol }` as the
+second argument to choose explicitly.
 
 <Symbol name="upgradeWebSocket"/>
 
-The lifecycle handlers returned by `createEvents`.
+Returns the remote address and port of the current request via
+`server.requestIP`.
 
-<Symbol name="WSEvents"/>
+<Symbol name="getConnInfo"/>
 
-Hono's per-socket API, passed as the second argument to each handler.
+Serves files from disk. Accepts Hono's usual `root`, `path`, `rewriteRequestPath`,
+`onFound`, and `onNotFound` options.
 
-<Symbol name="WSContext"/>
+<Symbol name="serveStatic"/>
 
-Wraps a native Ant socket in a `WSContext` for adapter internals and tests.
+Returns the Ant server handling the current request. Ant passes the server as
+the second argument to `fetch`, so it is available as `c.env` when `app.fetch`
+is passed directly, or as `c.env.server` when wrapped.
+
+<Symbol name="getAntServer"/>
+
+Wraps a native Ant socket in a Hono `WSContext` for adapter internals and tests.
 
 <Symbol name="createWSContext"/>
 
-The upgrade is backed by Ant's native `server.upgradeWebSocket(request)`. Ant
-exposes the server context as the second argument to `fetch`, so the Hono app
-must forward it via `c.env`. `app.fetch` does this by default.
+The Ant server type, also available as `c.env`.
+
+<Symbol name="AntServer"/>
