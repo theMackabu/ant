@@ -13,7 +13,7 @@
 #include "internal.h"
 #include "numbers.h"
 #include "esm/library.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/buffer.h"
 #include "modules/date.h"

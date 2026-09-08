@@ -2,7 +2,8 @@
 #define SV_CALLS_H
 
 #include <limits.h>
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "gc/roots.h"
 #include "eval_env.h"
 

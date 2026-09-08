@@ -14,7 +14,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "inspector.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "http/eventsource.h"
 #include "modules/eventsource.h"

@@ -2,6 +2,8 @@
 #include <stdlib.h>
 
 #include "utf8.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "internal.h"
 #include "errors.h"
 #include "gc/roots.h"

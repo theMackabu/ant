@@ -10,7 +10,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/formdata.h"
 #include "modules/blob.h"
 #include "modules/symbol.h"

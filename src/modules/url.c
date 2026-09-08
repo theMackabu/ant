@@ -14,7 +14,7 @@
 
 #include "modules/blob.h"
 #include "modules/crypto.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/url.h"
 #include "modules/symbol.h"
 #include "url/url_internal.h"

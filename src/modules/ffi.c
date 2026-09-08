@@ -22,7 +22,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/buffer.h"
 #include "modules/ffi.h"

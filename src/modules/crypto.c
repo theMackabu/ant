@@ -25,7 +25,7 @@
 #include "modules/buffer.h"
 #include "modules/domexception.h"
 #include "modules/symbol.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 typedef enum {
   CRYPTO_TEXT_UTF8 = 0,

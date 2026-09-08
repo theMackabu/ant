@@ -1,7 +1,7 @@
 #ifndef SV_USING_H
 #define SV_USING_H
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "errors.h"
 #include "gc/roots.h"
 #include "modules/symbol.h"

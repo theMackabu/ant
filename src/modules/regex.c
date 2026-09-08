@@ -17,7 +17,7 @@
 #include <math.h>
 #include <pcre2.h>
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/regex.h"
 #include "modules/symbol.h"
 

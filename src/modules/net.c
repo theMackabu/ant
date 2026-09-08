@@ -22,7 +22,7 @@
 #include "net/connection.h"
 #include "net/listener.h"
 #include "sandbox/policy.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/buffer.h"
 #include "modules/events.h"

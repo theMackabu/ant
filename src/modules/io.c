@@ -25,7 +25,7 @@
 #include "internal.h"
 #include "utils.h"
 #include "inspector.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/io.h"
 #include "modules/util.h"
 #include "sandbox/sandbox.h"

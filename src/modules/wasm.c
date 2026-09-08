@@ -21,7 +21,7 @@
 #include "descriptors.h"
 
 #include "gc/modules.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/buffer.h"
 #include "modules/wasm.h"
 #include "modules/wasi.h"

@@ -5,6 +5,7 @@
 #include "sugar.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
+#include "modules/timer.h"
 
 typedef enum {
   SV_AWAIT_READY = 0,

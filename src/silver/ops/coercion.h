@@ -7,7 +7,7 @@
 #include "property.h"
 
 #include "esm/loader.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 
 static inline ant_value_t sv_module_export_to_ns(

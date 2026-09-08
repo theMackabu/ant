@@ -18,7 +18,7 @@
 #include "internal.h"
 #include "errors.h"
 #include "descriptors.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/date.h"
 #include "modules/symbol.h"
 

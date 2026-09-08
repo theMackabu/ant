@@ -10,7 +10,7 @@
 #include "internal.h"
 #include "descriptors.h"
 #include "utf8.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/headers.h"
 #include "modules/http.h"

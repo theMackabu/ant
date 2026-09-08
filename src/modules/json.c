@@ -10,7 +10,7 @@
 #include "errors.h"
 #include "internal.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 

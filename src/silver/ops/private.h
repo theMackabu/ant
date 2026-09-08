@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include "gc.h"
 #include "object.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 enum {
   SV_PRIVATE_FIELD = 0,

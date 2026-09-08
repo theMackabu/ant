@@ -10,7 +10,7 @@
 #include "gc/roots.h"
 #include "internal.h"
 #include "modules/buffer.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include <ctype.h>
 #include <stdio.h>

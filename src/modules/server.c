@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <uv.h>
 
+#include "silver/call.h"
 #include "ant.h"
 #include "errors.h"
 #include "inspector.h"

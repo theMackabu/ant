@@ -1,6 +1,7 @@
 #include "silver/swarm.h"
 #include "silver/glue.h"
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "silver/opcode.h"
 #include "ops/globals.h"
 #include "ops/literals.h"

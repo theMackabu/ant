@@ -22,6 +22,7 @@
 #define NAPI_DEFAULT_DLOPEN_FLAGS NAPI_RTLD_LAZY
 
 #include "napi_internal.h"
+#include "silver/call.h"
 #include "esm/commonjs.h"
 #include "gc/roots.h"
 

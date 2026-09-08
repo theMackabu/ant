@@ -30,7 +30,7 @@ extern char **environ;
 #include "internal.h"
 #include "descriptors.h"
 #include "esm/loader.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 #include "modules/worker_threads.h"

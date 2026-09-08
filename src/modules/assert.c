@@ -6,7 +6,7 @@
 #include "gc/roots.h"
 
 #include "modules/assert.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 static ant_value_t assertion_error(ant_t *js, const char *msg, ant_value_t msg_val) {
   if (vtype(msg_val) == kTypeString) {

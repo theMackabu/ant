@@ -7,7 +7,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 #include "modules/assert.h"
 #include "streams/readable.h"

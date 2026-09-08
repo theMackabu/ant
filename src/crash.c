@@ -15,7 +15,7 @@
 #include "reactor.h"
 #include "utils.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/assert.h"
 #include "modules/fetch.h"
 #include "modules/json.h"

@@ -17,7 +17,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "descriptors.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/events.h"
 #include "modules/globals.h"

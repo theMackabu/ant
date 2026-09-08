@@ -1,7 +1,7 @@
 #include "internal.h"
 #include "primordials.h"
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 typedef enum {
   ARRAY_PROTO,

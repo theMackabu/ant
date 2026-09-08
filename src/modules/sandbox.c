@@ -14,7 +14,7 @@
 #include "sandbox/sandbox.h"
 #include "sandbox/transport.h"
 #include "sandbox/vm.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 
 #include <errno.h>

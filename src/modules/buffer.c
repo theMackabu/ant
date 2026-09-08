@@ -15,7 +15,7 @@
 #include "gc/roots.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/bigint.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"

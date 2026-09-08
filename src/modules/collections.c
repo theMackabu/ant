@@ -11,7 +11,7 @@
 #include "hash.h"
 #include "numbers.h"
 #include "gc/weak.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "descriptors.h"
 
 #include "modules/bigint.h"

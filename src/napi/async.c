@@ -1,3 +1,4 @@
+#include "silver/call.h"
 #include "napi_internal.h"
 
 void ant_napi_link_async(void) {}

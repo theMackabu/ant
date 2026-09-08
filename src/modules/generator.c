@@ -8,7 +8,7 @@
 #include "sugar.h"
 
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/generator.h"
 #include "modules/iterator.h"
 #include "modules/symbol.h"

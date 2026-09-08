@@ -23,7 +23,8 @@
 #include "highlight.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
 #include "modules/cjit.h"

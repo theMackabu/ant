@@ -26,7 +26,7 @@
 
 #include "gc/roots.h"
 #include "gc/modules.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/fs.h"
 #include "modules/date.h"

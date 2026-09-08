@@ -10,7 +10,7 @@
 #include "modules/buffer.h"
 #include "modules/date.h"
 #include "sugar.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "wasm_embed.h"
 
 #include <stdint.h>

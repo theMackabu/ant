@@ -8,7 +8,9 @@ typedef struct sv_func sv_func_t;
 size_t os_thread_stack_size(void);
 
 extern int sv_user_stack_size_kb;
+
 sv_vm_t *sv_vm_create(ant_t *js);
+ant_value_t sv_resume_suspended(sv_vm_t *vm);
 
 void sv_vm_destroy(sv_vm_t *vm);
 void sv_vm_limits(int *out_stack_size, int *out_max_frames);
@@ -27,13 +29,5 @@ ant_value_t sv_execute_entry(
   ant_value_t this_val,
   ant_value_t *args, int argc
 );
-
-ant_value_t sv_execute_entry_tla(
-  ant_t *js, sv_func_t *func, 
-  ant_value_t this_val,
-  js_async_entry_t **async_entry_out
-);
-
-ant_value_t sv_resume_suspended(sv_vm_t *vm);
 
 #endif

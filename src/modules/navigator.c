@@ -14,7 +14,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/navigator.h"
 #include "modules/symbol.h"
 #include "gc/modules.h"

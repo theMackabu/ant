@@ -4,7 +4,7 @@
 #include "ant.h"
 #include "ptr.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "esm/loader.h"
 #include "gc/roots.h"
 

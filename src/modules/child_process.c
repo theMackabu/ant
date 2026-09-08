@@ -33,7 +33,7 @@
 
 #include "esm/loader.h"
 #include "gc/modules.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "process_plan.h"
 #include "process_stage.h"

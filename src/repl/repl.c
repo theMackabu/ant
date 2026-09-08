@@ -14,7 +14,7 @@
 #include "descriptors.h"
 
 #include "silver/ast.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include <crprintf.h>
 #include "modules/io.h"

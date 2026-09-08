@@ -35,10 +35,11 @@
 
 #include "silver/lexer.h"
 #include "silver/compiler.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "silver/glue.h"
 #include "silver/swarm.h"
 #include "silver/ops/using.h"
+#include "silver/ops/async.h"
 #include "modules/regex.h"
 
 #ifndef ANT_WASM_EMBED
@@ -20186,7 +20187,7 @@ ant_value_t js_execute_compiled_bytecode(
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla)
-    result = sv_execute_entry_tla(js, func, js->this_val, async_entry_out);
+    result = sv_start_tla(js, func, js->this_val, async_entry_out);
   else result = sv_execute_entry(js->vm, func, js->this_val, NULL, 0);
 
   js->this_val = saved_this;

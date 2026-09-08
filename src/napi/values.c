@@ -1,3 +1,4 @@
+#include "silver/call.h"
 #include "napi_internal.h"
 
 #if defined(__has_include)

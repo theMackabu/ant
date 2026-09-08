@@ -9,7 +9,7 @@
 #include "errors.h"
 #include "builder.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "gc/weak.h"
 #include "gc/roots.h"

@@ -15,7 +15,7 @@
 #include "modules/timer.h"
 #include "modules/abort.h"
 #include "modules/domexception.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 typedef struct {
   ant_value_t callback;

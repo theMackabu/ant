@@ -41,7 +41,7 @@ extern char **environ;
 #include "modules/date.h"
 #include "modules/process.h"
 #include "modules/symbol.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #ifdef ANT_HAVE_TEMPORAL
 #include "temporal/temporal_internal.h"

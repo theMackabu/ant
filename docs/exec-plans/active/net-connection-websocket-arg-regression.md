@@ -1,6 +1,6 @@
 # Constructor Context and Accepted Socket Prototypes
 
-Status: resolved, fix uncommitted
+Status: constructor fix committed; async entry cleanup uncommitted
 Last reviewed: 2026-09-07
 Owner: theMackabu
 
@@ -119,3 +119,71 @@ functions that use neither eval nor `new.target` acquire no extra runtime work.
   the task to implementation review.
 - `maid preflight` and `git diff --check` pass after the eval repair. A final
   independent correctness pass found no introduced issue in the eval change.
+
+## Async entry wrappers and inlining
+
+The constructor-context migration was committed in `87c85b9c`. Follow-up
+cleanup removes `sv_call_async_closure_dispatch` and `sv_execute_entry_tla`:
+their callers use `sv_start_async_closure` and `sv_start_tla` directly. The
+implementations stay in `src/silver/ops/async.h`. The subsequent
+[header boundary cleanup](../completed/silver-header-boundaries.md) separates VM definitions
+in `engine.h`, type feedback in `feedback.h`, and inline call dispatch in
+`call.h`. Both `src/ant.c` and the VM include the async operations directly;
+`call.h` also includes them before its dispatch helpers. This removes the
+temporary circular include through `engine.h`.
+
+The user requested measurement before adding `noinline`. The comparison uses
+four source-identical variants apart from the two functions' attributes:
+default inline behavior, async entry forced out of line, TLA entry forced out
+of line, and both forced out of line. Each is built with Clang 21.1.8, `-O3`
+and LTO on an Apple M5 Pro, first without PGO and then with the configured
+Darwin ARM64 profile. The latter uses the existing profile, not fresh training.
+
+The confirmation run uses 12 balanced process-order rounds, comparing each
+workload back to back across variants. Workloads are:
+
+- `tests/bench_async_entry.cjs 1000000 5 <case>` for no-await, dead-await, and
+  actual suspension, with result checks in every sample.
+- `tests/bench_call_fallback.js` for ordinary JS and native-call controls.
+- Importing 1,500 distinct local modules per fresh process, with either
+  `await 0` or an untaken await branch in each module; the exported-value sum
+  is checked. Module files are created before timing.
+
+Builds and timing runs are serialized. All four no-PGO variants pass the
+focused async fast-path, TLA, re-entry, and constructor-context tests.
+Measurement artifacts are under `/tmp/ant-async-inlining` and
+`/tmp/ant-async-inlining-pgo` (`results.json` contains the confirmation samples).
+
+Configured-PGO confirmation medians follow. Percentages compare against the
+default inline variant; positive means slower.
+
+| Workload | Inline median | Async `noinline` | TLA `noinline` | Both `noinline` |
+| --- | ---: | ---: | ---: | ---: |
+| Async, no await | 75.106 ms | +2.50% | +0.83% | +1.66% |
+| Async, untaken await | 104.226 ms | -3.85% | -0.06% | -5.28% |
+| Async, suspension | 192.613 ms | +1.72% | +2.20% | +1.75% |
+| JS direct calls | 8.690 ms | +2.36% | +0.17% | +4.14% |
+| Native `Math.abs` calls | 36.615 ms | +0.34% | -2.80% | +3.76% |
+| Native `Math.imul` calls | 45.820 ms | +1.11% | +1.18% | +2.86% |
+| TLA modules, suspension | 31.320 ms | +4.41% | +4.03% | +4.74% |
+| TLA modules, untaken await | 31.959 ms | +2.91% | +1.05% | -2.37% |
+
+The no-PGO confirmation also had tradeoffs: forcing async entry out of line
+improved the three async medians by 1.7–3.9%, but slowed JS direct calls by
+2.4% and suspended TLA imports by 4.2%. Forcing both functions out of line
+improved async medians by 3.4–6.8%, but slowed the JS direct-call control by
+12.1%. Some apparent gains in the initial scouting run changed direction in
+the balanced confirmation run; small timing differences should not be treated
+as universal improvements.
+
+Decision: retain `static inline` for both functions. Neither `noinline`
+attribute produced a consistent benefit across builds and workloads. Both
+functions were fully inlined in the default binaries. Forcing async entry out
+of line also introduced multiple local function copies: binary size grew by
+35,344 bytes without PGO and 2,560 bytes with the configured PGO profile.
+The implementations remain unchanged in `src/silver/ops/async.h`.
+
+Final validation with that selection passes the normal build, eight focused
+async/TLA/constructor/WebSocket tests, the new async-entry benchmark's result
+checks, all 4,221 spec tests, all 10 JIT files, embed syntax checking, and
+`maid preflight`.

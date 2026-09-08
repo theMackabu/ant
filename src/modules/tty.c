@@ -34,7 +34,7 @@
 #include "internal.h"
 #include "sandbox/sandbox.h"
 #include "tty_ctrl.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/stream.h"
 #include "modules/buffer.h"

@@ -5,7 +5,7 @@
 #include "property.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 
 static inline void sv_op_define_method(

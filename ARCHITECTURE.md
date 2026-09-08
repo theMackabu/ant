@@ -1,7 +1,7 @@
 # Architecture
 
-Status: active
-Last reviewed: 2026-04-09
+Status: to be rewritten
+Last reviewed: 2026-09-07
 Owner: theMackabu
 
 This document is the top-level map for Ant's runtime and build graph. It is

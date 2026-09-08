@@ -1,3 +1,4 @@
+#include "silver/call.h"
 #include "napi_internal.h"
 
 static napi_external_entry_t *g_napi_externals = NULL;

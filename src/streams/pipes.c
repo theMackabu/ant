@@ -7,7 +7,7 @@
 #include "descriptors.h"
 
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/assert.h"
 #include "modules/abort.h"
 #include "streams/pipes.h"
