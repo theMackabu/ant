@@ -173,7 +173,6 @@ struct ant_isolate_t {
   ant_value_t Ant;
   ant_value_t global;
   ant_value_t this_val;
-  ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
   ant_value_t ascii_chars[128];
@@ -575,11 +574,11 @@ ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
-ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
+ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target);
 ant_value_t js_construct_native(ant_t *js, ant_cfunc_t ctor, ant_value_t *args, int nargs);
 
 ant_value_t js_get_module_import_binding(ant_t *js);
-ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_builtin_import(ant_params_t);
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_arguments_object(ant_t *js, sv_vm_t *vm, ant_value_t callee, sv_frame_t *frame, int argc, int mapped_count, bool is_strict);
@@ -659,8 +658,9 @@ bool js_try_char_code_at(
 );
 
 ant_value_t js_eval_bytecode_eval_in_env_with_strict(
-  ant_t *js, const char *buf, size_t len,
-  bool inherit_strict, ant_value_t this_val, ant_value_t eval_env
+  ant_t *js, const char *buf, size_t len, bool inherit_strict, 
+  ant_value_t this_val, ant_value_t eval_env, 
+  ant_value_t new_target, bool allows_new_target
 );
 
 ant_value_t js_primitive_prototype(ant_t *js, uint8_t type);
@@ -670,7 +670,8 @@ ant_value_t js_resolve_bound_target_known_bound(ant_value_t value);
 ant_value_t js_execute_compiled_bytecode(ant_t *js, sv_func_t *func, js_async_entry_t **async_entry_out);
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);
-ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs);
+ant_value_t sv_call_native(ant_t *js, ant_value_t func, ant_value_t this_val, ant_value_t *args, int nargs, ant_value_t new_target);
+ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
 
 const char *typestr(ant_value_type_t t);
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val);
@@ -681,12 +682,11 @@ ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
 
-ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs);
-
-ant_value_t js_array_includes_call(ant_t *js, ant_value_t this_val, ant_value_t *args, int nargs);
-ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t builtin_object_isPrototypeOf(ant_params_t);
+ant_value_t builtin_object_freeze(ant_params_t);
+ant_value_t builtin_string_charCodeAt(ant_params_t);
+ant_value_t builtin_array_includes(ant_params_t);
+ant_value_t js_builtin_eval(ant_t *js);
 
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);

@@ -62,3 +62,19 @@ cleanup and MIR instruction ordering remain unchanged.
 This is a source-organization refactor, not an optimization. No new language
 behavior or performance claim is introduced. Cross-platform builds and
 performance benchmarks were not run in this Linux orb.
+
+## Master merge (2026-09-07)
+
+Kept the modular source layout and transferred master's changes from the
+deleted monolith to the corresponding modules: call/feedback headers,
+invocation-owned constructor targets, feature scanning for constructor and
+super context, and the expanded interpreter-resume ABI. Removed the obsolete
+ambient constructor-target write.
+
+Validation: repository preflight and conflict-resolution whitespace checks passed.
+The full staged diff reports existing trailing whitespace in incoming master files.
+Native build regeneration initially could not find libm; supplying the Xcode SDKROOT
+resolved that check, but regeneration then stopped because llvm-nm is missing.
+Focused constructor/JIT regressions and the spec suite were not run against a
+rebuilt binary. Broader WASM/package checks recommended for incoming master
+changes were not run; conflict resolution only changes the native Swarm modules.

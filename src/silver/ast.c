@@ -47,7 +47,7 @@ bool sv_ast_can_be_expression_statement(const sv_ast_t *node) {
     [N_ARRAY] = 1, [N_OBJECT] = 1, [N_PROPERTY] = 1, [N_SPREAD] = 1,
     [N_SEQUENCE] = 1, [N_ARROW] = 1, [N_YIELD] = 1, [N_AWAIT] = 1,
     [N_TYPEOF] = 1, [N_DELETE] = 1, [N_VOID] = 1, [N_TAGGED_TEMPLATE] = 1,
-    [N_IMPORT] = 1,
+    [N_IMPORT] = 1, [N_NEW_TARGET] = 1,
   };
 
   if (node->type == N_FUNC)
@@ -1490,6 +1490,53 @@ bool ast_contains_own_yield(const sv_ast_t *node, const sv_ast_t **out_offender)
   return false;
 }
 
+bool ast_contains_lexical_new_target(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_NEW_TARGET) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+  if (node->type == N_CLASS) {
+    if (ast_contains_lexical_new_target(node->left)) return true;
+    for (int i = 0; i < node->args.count; i++) {
+      const sv_ast_t *member = node->args.items[i];
+      if (member->type == N_METHOD && (member->flags & FN_COMPUTED) &&
+          ast_contains_lexical_new_target(member->left)) return true;
+    }
+    return false;
+  }
+  if (ast_contains_lexical_new_target(node->left) ||
+      ast_contains_lexical_new_target(node->right) ||
+      ast_contains_lexical_new_target(node->cond) ||
+      ast_contains_lexical_new_target(node->body) ||
+      ast_contains_lexical_new_target(node->catch_body) ||
+      ast_contains_lexical_new_target(node->finally_body) ||
+      ast_contains_lexical_new_target(node->catch_param) ||
+      ast_contains_lexical_new_target(node->init) ||
+      ast_contains_lexical_new_target(node->update)) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_lexical_new_target(node->args.items[i])) return true;
+  return false;
+}
+
+bool ast_contains_direct_eval(const sv_ast_t *node) {
+  if (!node || (node->type == N_FUNC && !(node->flags & FN_ARROW))) return false;
+  if (
+    node->type == N_CALL && node->left && node->left->type == N_IDENT &&
+    node->left->len == 4 && memcmp(node->left->str, "eval", 4) == 0
+  ) return true;
+
+  const sv_ast_t *children[] = {
+    node->left, node->right, node->cond, node->body, node->catch_body,
+    node->finally_body, node->catch_param, node->init, node->update
+  };
+  
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_contains_direct_eval(children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_contains_direct_eval(node->args.items[i])) return true;
+  
+  return false;
+}
+
 static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) {
   if (!node) return false;
   if (node->type == N_NEW_TARGET) return true;
@@ -1519,7 +1566,7 @@ static bool ast_references_new_target_impl(const sv_ast_t *node, bool in_arrow) 
   return false;
 }
 
-static bool ast_references_new_target(const sv_ast_t *node) {
+bool ast_references_new_target(const sv_ast_t *node) {
   return ast_references_new_target_impl(node, false);
 }
 
@@ -1566,8 +1613,12 @@ static sv_ast_t *parse_func(P) {
   fn->src_end = (uint32_t)(TOFF + TLEN);
   if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
     fn->flags |= FN_USES_ARGS;
-  if (!(fn->flags & FN_ARROW) && ast_references_new_target(fn->body))
-    fn->flags |= FN_USES_NEW_TARGET;
+  if (!(fn->flags & FN_ARROW)) {
+    bool uses_new_target = ast_references_new_target(fn->body) || ast_contains_direct_eval(fn->body);
+    for (int i = 0; !uses_new_target && i < fn->args.count; i++)
+      uses_new_target = ast_references_new_target(fn->args.items[i]) || ast_contains_direct_eval(fn->args.items[i]);
+    if (uses_new_target) fn->flags |= FN_USES_NEW_TARGET;
+  }
   return fn;
 }
 

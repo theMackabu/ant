@@ -5,7 +5,7 @@
 #include "property.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 
 static inline void sv_op_define_method(
@@ -232,7 +232,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   if (ft != kTypeFunction && ft != kTypeBuiltin)
     return js_mkerr(js, "not iterable");
 
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) return iterator;
   if (!is_object_type(iterator))
     return js_mkerr(js, "not iterable");
@@ -247,7 +247,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
       break;
     }
 
-    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, js_mkundef());
     if (is_err(result)) {
       status = result;
       break;

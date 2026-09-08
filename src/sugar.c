@@ -188,7 +188,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   coroutine_retain(coro);
 
   if (coro->act && coro->act->frame_count > 0) {
-    sv_vm_t *vm = sv_vm_get_active(js);
+    sv_vm_t *vm = js->vm;
     coroutine_activate(js, coro);
 
     ant_value_t result;
@@ -228,7 +228,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   coroutine_release(coro);
 }
 
-ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t resume_coroutine_wrapper(ant_params_t) {
   ant_value_t me = js->current_func;
   ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
   if (vtype(coro_val) != kTypeNumber) return js_mkundef();
@@ -242,7 +242,7 @@ ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t reject_coroutine_wrapper(ant_params_t) {
   ant_value_t me = js->current_func;
   ant_value_t coro_val = js_get_slot(me, SLOT_CORO);
   

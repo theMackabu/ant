@@ -157,7 +157,7 @@ void esm_cjs_update_children(ant_t *js, ant_value_t parent, ant_value_t child, b
   if (!remove) js_arr_push(js, children, child);
 }
 
-ant_value_t esm_cjs_require_module(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t esm_cjs_require_module(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "require() expects a string specifier");
   ant_value_t parent = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
@@ -174,7 +174,7 @@ ant_value_t esm_cjs_require_module(ant_t *js, ant_value_t *args, int nargs) {
   return esm_require_unwrap(js, ns);
 }
 
-static ant_value_t esm_cjs_require_paths(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t esm_cjs_require_paths(ant_params_t) {
   if (!nargs || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "require.resolve.paths expects a string");
   size_t len;
@@ -194,7 +194,7 @@ static ant_value_t esm_cjs_require_paths(ant_t *js, ant_value_t *args, int nargs
   return paths;
 }
 
-static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t esm_cjs_require_resolve(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "require.resolve() expects a string specifier");
   ant_value_t module = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);

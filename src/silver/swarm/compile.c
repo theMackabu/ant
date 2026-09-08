@@ -346,13 +346,17 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           c->ctx, c->jit_func, c->r_slotbuf, c->r_args, c->r_argc, c->captured_params, c->param_count);
     }
     MIR_append_insn(c->ctx, c->jit_func,
-                    MIR_new_call_insn(c->ctx, 15,
+                    MIR_new_call_insn(c->ctx, 17,
                                       MIR_new_ref_op(c->ctx, c->resume_proto),
                                       MIR_new_ref_op(c->ctx, c->imp_resume),
                                       MIR_new_reg_op(c->ctx, r_resume_res),
                                       MIR_new_reg_op(c->ctx, c->r_vm),
                                       MIR_new_reg_op(c->ctx, c->r_closure),
                                       MIR_new_reg_op(c->ctx, c->r_this_curr),
+                                      c->feat.needs_new_target ? MIR_new_reg_op(c->ctx, c->r_new_target)
+                                        : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
+                                      c->feat.needs_super ? MIR_new_reg_op(c->ctx, c->r_super_val)
+                                        : MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)),
                                       MIR_new_reg_op(c->ctx, c->r_args),
                                       MIR_new_reg_op(c->ctx, c->r_argc),
                                       MIR_new_reg_op(c->ctx, c->r_args_buf),

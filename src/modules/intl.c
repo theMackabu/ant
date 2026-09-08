@@ -21,9 +21,9 @@ typedef struct {
   const char *day_period;
 } intl_dtf_fields_t;
 
-static ant_value_t intl_create_instance(ant_t *js, ant_value_t fallback_proto) {
+static ant_value_t intl_create_instance(ant_t *js, ant_value_t fallback_proto, ant_value_t new_target) {
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, fallback_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, fallback_proto, new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -163,7 +163,7 @@ static ant_value_t intl_get_option_string(ant_t *js, ant_value_t options, const 
   return str;
 }
 
-static ant_value_t intl_collator_compare(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_collator_compare(ant_params_t) {
   ant_value_t left = js_tostring_val(js, nargs > 0 ? args[0] : js_mkstr(js, "", 0));
   if (is_err(left)) return left;
 
@@ -184,7 +184,7 @@ static inline bool intl_ascii_is_digit_byte(char c) {
   return c >= '0' && c <= '9';
 }
 
-static ant_value_t intl_collator_compare_numeric(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_collator_compare_numeric(ant_params_t) {
   ant_value_t left = js_tostring_val(js, nargs > 0 ? args[0] : js_mkstr(js, "", 0));
   if (is_err(left)) return left;
 
@@ -238,7 +238,7 @@ static ant_value_t intl_collator_compare_numeric(ant_t *js, ant_value_t *args, i
   return js_mknum(0);
 }
 
-static ant_value_t intl_collator_resolved_options(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_collator_resolved_options(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t this_obj = js_getthis(js);
   
@@ -252,7 +252,7 @@ static ant_value_t intl_collator_resolved_options(ant_t *js, ant_value_t *args, 
   return obj;
 }
 
-static ant_value_t intl_numberformat_format(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_numberformat_format(ant_params_t) {
   double number = nargs > 0 ? js_to_number(js, args[0]) : 0.0;
   ant_value_t raw_val = js_tostring_val(js, js_mknum(number));
   if (is_err(raw_val)) return raw_val;
@@ -291,11 +291,11 @@ static ant_value_t intl_numberformat_format(ant_t *js, ant_value_t *args, int na
   return js_mkstr(js, buf, pos);
 }
 
-static ant_value_t intl_numberformat_resolved_options(ant_t *js, ant_value_t *args, int nargs) {
-  return intl_collator_resolved_options(js, args, nargs);
+static ant_value_t intl_numberformat_resolved_options(ant_params_t) {
+  return intl_collator_resolved_options(js, args, nargs, js_mkundef());
 }
 
-static void intl_dtf_extract_fields(ant_t *js, ant_value_t *args, int nargs, intl_dtf_fields_t *out) {
+static void intl_dtf_extract_fields(ant_native_params_t, intl_dtf_fields_t *out) {
   time_t t = time(NULL);
   if (nargs >= 1) t = (time_t)(js_to_number(js, args[0]) / 1000.0);
 
@@ -313,7 +313,7 @@ static void intl_dtf_extract_fields(ant_t *js, ant_value_t *args, int nargs, int
   out->day_period = local.tm_hour < 12 ? "AM" : "PM";
 }
 
-static ant_value_t intl_dtf_format(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_dtf_format(ant_params_t) {
   intl_dtf_fields_t fields;
   intl_dtf_extract_fields(js, args, nargs, &fields);
 
@@ -326,7 +326,7 @@ static ant_value_t intl_dtf_format(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, buf, strlen(buf));
 }
 
-static ant_value_t intl_dtf_resolved_options(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_dtf_resolved_options(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t this_obj = js_getthis(js);
   
@@ -349,7 +349,7 @@ static ant_value_t intl_dtf_make_part(ant_t *js, const char *type, const char *v
   return obj;
 }
 
-static ant_value_t intl_dtf_format_to_parts(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_dtf_format_to_parts(ant_params_t) {
   intl_dtf_fields_t fields;
   intl_dtf_extract_fields(js, args, nargs, &fields);
 
@@ -412,7 +412,7 @@ static const char *intl_segmenter_granularity(ant_t *js, ant_value_t segmenter, 
   return js_getstr(js, granularity, len);
 }
 
-static ant_value_t intl_segmenter_segment(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_segmenter_segment(ant_params_t) {
   ant_value_t input = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   if (is_err(input)) return input;
 
@@ -445,7 +445,7 @@ static ant_value_t intl_segmenter_segment(ant_t *js, ant_value_t *args, int narg
   return segments;
 }
 
-static ant_value_t intl_segmenter_resolved_options(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_segmenter_resolved_options(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   ant_value_t this_obj = js_getthis(js);
 
@@ -461,11 +461,11 @@ static ant_value_t intl_segmenter_resolved_options(ant_t *js, ant_value_t *args,
   return obj;
 }
 
-static ant_value_t intl_collator_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_collator_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : js_mkundef());
   if (is_err(locale)) return locale;
 
-  ant_value_t obj = intl_create_instance(js, js->builtins.intl_collator_proto);
+  ant_value_t obj = intl_create_instance(js, js->builtins.intl_collator_proto, call_new_target);
   js_set(js, obj, "locale", locale);
 
   if (nargs > 1 && vtype(args[1]) == kTypeObject && js_truthy(js, js_get(js, args[1], "numeric"))) {
@@ -476,17 +476,17 @@ static ant_value_t intl_collator_constructor(ant_t *js, ant_value_t *args, int n
   return obj;
 }
 
-static ant_value_t intl_numberformat_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_numberformat_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : js_mkundef());
   if (is_err(locale)) return locale;
 
-  ant_value_t obj = intl_create_instance(js, js->builtins.intl_numberformat_proto);
+  ant_value_t obj = intl_create_instance(js, js->builtins.intl_numberformat_proto, call_new_target);
   js_set(js, obj, "locale", locale);
   
   return obj;
 }
 
-static ant_value_t intl_dtf_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_dtf_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : js_mkundef());
   if (is_err(locale)) return locale;
 
@@ -496,14 +496,14 @@ static ant_value_t intl_dtf_constructor(ant_t *js, ant_value_t *args, int nargs)
   );
   if (is_err(time_zone)) return time_zone;
 
-  ant_value_t obj = intl_create_instance(js, js->builtins.intl_datetimeformat_proto);
+  ant_value_t obj = intl_create_instance(js, js->builtins.intl_datetimeformat_proto, call_new_target);
   js_set(js, obj, "locale", locale);
   js_set(js, obj, "timeZone", time_zone);
   
   return obj;
 }
 
-static ant_value_t intl_segmenter_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t intl_segmenter_constructor(ant_params_t) {
   ant_value_t locale = intl_resolve_locale(js, nargs > 0 ? args[0] : js_mkundef());
   if (is_err(locale)) return locale;
 
@@ -513,7 +513,7 @@ static ant_value_t intl_segmenter_constructor(ant_t *js, ant_value_t *args, int 
   );
   if (is_err(granularity)) return granularity;
 
-  ant_value_t obj = intl_create_instance(js, js->builtins.intl_segmenter_proto);
+  ant_value_t obj = intl_create_instance(js, js->builtins.intl_segmenter_proto, call_new_target);
   js_set(js, obj, "locale", locale);
   js_set(js, obj, "granularity", granularity);
   

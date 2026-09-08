@@ -6,7 +6,7 @@
 #include "gc/roots.h"
 
 #include "modules/assert.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 static ant_value_t assertion_error(ant_t *js, const char *msg, ant_value_t msg_val) {
   if (vtype(msg_val) == kTypeString) {
@@ -17,14 +17,14 @@ static ant_value_t assertion_error(ant_t *js, const char *msg, ant_value_t msg_v
 }
 
 // assert(value, message) / assert.ok
-static ant_value_t assert_ok(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_ok(ant_params_t) {
   if (nargs < 1 || !js_truthy(js, args[0]))
     return assertion_error(js, "The expression evaluated to a falsy value", nargs >= 2 ? args[1] : js_mkundef());
   return js_mkundef();
 }
 
 // assert.fail(message)
-static ant_value_t assert_fail(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_fail(ant_params_t) {
   if (nargs >= 1 && vtype(args[0]) == kTypeString) {
     char *msg = js_getstr(js, args[0], NULL);
     if (msg) return js_mkerr(js, "%s", msg);
@@ -33,7 +33,7 @@ static ant_value_t assert_fail(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // assert.ifError(value)
-static ant_value_t assert_if_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_if_error(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   uint8_t t = vtype(args[0]);
   if (t == kTypeNull || t == kTypeUndefined) return js_mkundef();
@@ -103,56 +103,56 @@ bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict) {
   return deep_equal_impl(js, a, b, strict, 0);
 }
 
-static ant_value_t assert_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (!values_loose_equal(js, args[0], args[1]))
     return assertion_error(js, "Expected values to be equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_not_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_not_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (values_loose_equal(js, args[0], args[1]))
     return assertion_error(js, "Expected values to not be equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_strict_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (!same_value_values(js, args[0], args[1]))
     return assertion_error(js, "Expected values to be strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_not_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_not_strict_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (same_value_values(js, args[0], args[1]))
     return assertion_error(js, "Expected values to not be strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_deep_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_deep_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (!js_deep_equal(js, args[0], args[1], false))
     return assertion_error(js, "Expected values to be deeply equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_not_deep_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_not_deep_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (js_deep_equal(js, args[0], args[1], false))
     return assertion_error(js, "Expected values to not be deeply equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_deep_strict_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (!js_deep_equal(js, args[0], args[1], true))
     return assertion_error(js, "Expected values to be deeply strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_not_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_not_deep_strict_equal(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   if (js_deep_equal(js, args[0], args[1], true))
     return assertion_error(js, "Expected values to not be deeply strictly equal", nargs >= 3 ? args[2] : js_mkundef());
@@ -178,7 +178,7 @@ static ant_value_t assert_exception_matches(
 
   ant_value_t receiver = js_mkobj(js);
   if (is_err(receiver)) return receiver;
-  ant_value_t valid = sv_vm_call(js->vm, js, expected, receiver, &thrown, 1, NULL, false);
+  ant_value_t valid = sv_vm_call(js->vm, js, expected, receiver, &thrown, 1, NULL, js_mkundef());
   
   if (is_err(valid)) return valid;
   if (valid != js_true)
@@ -187,7 +187,7 @@ static ant_value_t assert_exception_matches(
   return js_mkundef();
 }
 
-static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_throws(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0]))
     return js_mkerr(js, "assert.throws: first argument must be a function");
 
@@ -202,7 +202,7 @@ static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
   GC_ROOT_PIN(js, message);
   GC_ROOT_PIN(js, thrown);
 
-  ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), NULL, 0, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), NULL, 0, NULL, js_mkundef());
   if (!is_err(result))
     result = assertion_error(js, "Missing expected exception", message);
   else {
@@ -213,20 +213,20 @@ static ant_value_t assert_throws(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t assert_does_not_throw(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_does_not_throw(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeFunction)
     return js_mkerr(js, "assert.doesNotThrow: first argument must be a function");
-  ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef());
   if (is_err(result))
     return js_mkerr(js, "Got unwanted exception: %s", js_str(js, result));
   return js_mkundef();
 }
 
-static ant_value_t assert_rejects(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_rejects(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "assert.rejects: first argument required");
   ant_value_t promise = js_mkpromise(js);
   ant_value_t result = vtype(args[0]) == kTypeFunction
-    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false)
+    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef())
     : args[0];
   if (is_err(result) || promise_was_rejected(result)) {
     promise_mark_handled(result);
@@ -235,11 +235,11 @@ static ant_value_t assert_rejects(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t assert_does_not_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_does_not_reject(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "assert.doesNotReject: first argument required");
   ant_value_t promise = js_mkpromise(js);
   ant_value_t result = vtype(args[0]) == kTypeFunction
-    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false)
+    ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, js_mkundef())
     : args[0];
   if (is_err(result) || promise_was_rejected(result)) {
     promise_mark_handled(result);
@@ -248,29 +248,29 @@ static ant_value_t assert_does_not_reject(ant_t *js, ant_value_t *args, int narg
   return promise;
 }
 
-static ant_value_t assert_match(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_match(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
   if (vtype(test_fn) != kTypeFunction && vtype(test_fn) != kTypeBuiltin) return js_mkerr(js, "assert.match: second argument must be a RegExp");
   ant_value_t test_args[1] = {args[0]};
-  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, js_mkundef());
   if (!js_truthy(js, result))
     return assertion_error(js, "Value does not match the regular expression", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_does_not_match(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_does_not_match(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
   if (vtype(test_fn) != kTypeFunction && vtype(test_fn) != kTypeBuiltin) return js_mkerr(js, "assert.doesNotMatch: second argument must be a RegExp");
   ant_value_t test_args[1] = {args[0]};
-  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, js_mkundef());
   if (js_truthy(js, result))
     return assertion_error(js, "Value matches the regular expression", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t assert_assertion_error_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t assert_assertion_error_ctor(ant_params_t) {
   ant_value_t self = js_getthis(js);
   js_set(js, self, "name", js_mkstr(js, "AssertionError", 14));
   if (nargs >= 1 && vtype(args[0]) == kTypeObject) {

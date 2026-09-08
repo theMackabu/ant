@@ -95,8 +95,8 @@ bool temporal_duration_from_value(
   return true;
 }
 
-static ant_value_t temporal_duration_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.Duration");
+static ant_value_t temporal_duration_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined) return temporal_require_new(js, "Temporal.Duration");
   int64_t fields[8] = {0};
   double microseconds = 0, nanoseconds = 0;
   ant_value_t err = js_mkundef();
@@ -116,10 +116,10 @@ static ant_value_t temporal_duration_ctor(ant_t *js, ant_value_t *args, int narg
     fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
     fields[7], microseconds, nanoseconds);
   if (!result.is_ok) return temporal_error(js, result.err);
-  return temporal_wrap_constructed(js, TEMPORAL_DURATION, result.ok);
+  return temporal_wrap_constructed(js, TEMPORAL_DURATION, result.ok, call_new_target);
 }
 
-static ant_value_t temporal_duration_from(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_from(ant_params_t) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.Duration.from requires an argument");
   Duration *duration;
   ant_value_t err = js_mkundef();
@@ -127,7 +127,7 @@ static ant_value_t temporal_duration_from(ant_t *js, ant_value_t *args, int narg
   return temporal_wrap(js, TEMPORAL_DURATION, duration);
 }
 
-static ant_value_t temporal_duration_compare(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_compare(ant_params_t) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Temporal.Duration.compare requires two arguments");
   Duration *one = NULL, *two = NULL;
   ant_value_t err = js_mkundef();
@@ -154,7 +154,7 @@ static Duration *temporal_duration_this(ant_t *js, const char *method, ant_value
 }
 
 #define DURATION_NUMBER_GETTER(name, capi) \
-  static ant_value_t temporal_duration_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
+  static ant_value_t temporal_duration_get_##name(ant_params_t) { \
     (void)args; (void)nargs; ant_value_t err = js_mkundef(); \
     Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype." #name, &err); \
     return self ? js_mknum((double)capi(self)) : err; \
@@ -172,21 +172,21 @@ DURATION_NUMBER_GETTER(microseconds, temporal_rs_Duration_microseconds)
 DURATION_NUMBER_GETTER(nanoseconds, temporal_rs_Duration_nanoseconds)
 DURATION_NUMBER_GETTER(sign, temporal_rs_Duration_sign)
 
-static ant_value_t temporal_duration_get_blank(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_get_blank(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.blank", &err);
   return self ? js_bool(temporal_rs_Duration_is_zero(self)) : err;
 }
 
-static ant_value_t temporal_duration_abs(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_abs(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.abs", &err);
   return self ? temporal_wrap(js, TEMPORAL_DURATION, temporal_rs_Duration_abs(self)) : err;
 }
 
-static ant_value_t temporal_duration_negated(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_negated(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.negated", &err);
@@ -194,7 +194,7 @@ static ant_value_t temporal_duration_negated(ant_t *js, ant_value_t *args, int n
 }
 
 static ant_value_t temporal_duration_binary(
-  ant_t *js, ant_value_t *args, int nargs, bool subtract
+  ant_native_params_t, bool subtract
 ) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js,
@@ -222,15 +222,15 @@ static ant_value_t temporal_duration_binary(
   return temporal_wrap(js, TEMPORAL_DURATION, value);
 }
 
-static ant_value_t temporal_duration_add(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_add(ant_params_t) {
   return temporal_duration_binary(js, args, nargs, false);
 }
 
-static ant_value_t temporal_duration_subtract(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_subtract(ant_params_t) {
   return temporal_duration_binary(js, args, nargs, true);
 }
 
-static ant_value_t temporal_duration_with(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_with(ant_params_t) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.with", &err);
   if (!self) return err;
@@ -256,7 +256,7 @@ static ant_value_t temporal_duration_with(ant_t *js, ant_value_t *args, int narg
   return temporal_wrap(js, TEMPORAL_DURATION, result.ok);
 }
 
-static ant_value_t temporal_duration_to_string(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_to_string(ant_params_t) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.toString", &err);
   if (!self) return err;
@@ -277,11 +277,11 @@ static ant_value_t temporal_duration_to_string(ant_t *js, ant_value_t *args, int
   return temporal_string_from_write(js, write);
 }
 
-static ant_value_t temporal_duration_to_string_default(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs; return temporal_duration_to_string(js, NULL, 0);
+static ant_value_t temporal_duration_to_string_default(ant_params_t) {
+  (void)args; (void)nargs; return temporal_duration_to_string(js, NULL, 0, js_mkundef());
 }
 
-static ant_value_t temporal_duration_round(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_round(ant_params_t) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.round", &err);
   if (!self) return err;
@@ -376,7 +376,7 @@ static bool temporal_duration_exact_integral_total(
   return true;
 }
 
-static ant_value_t temporal_duration_total(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_total(ant_params_t) {
   ant_value_t err = js_mkundef();
   Duration *self = temporal_duration_this(js, "Temporal.Duration.prototype.total", &err);
   if (!self) return err;
@@ -412,7 +412,7 @@ static ant_value_t temporal_duration_total(ant_t *js, ant_value_t *args, int nar
   return result.is_ok ? js_mknum(result.ok) : temporal_error(js, result.err);
 }
 
-static ant_value_t temporal_duration_value_of(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t temporal_duration_value_of(ant_params_t) {
   (void)args; (void)nargs;
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert Temporal.Duration to a primitive value");
 }

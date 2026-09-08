@@ -309,10 +309,12 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
 
   MIR_type_t br_ret = MIR_JSVAL;
   c->resume_proto = MIR_new_proto(c->ctx, "resume_proto",
-                                  1, &br_ret, 12,
+                                  1, &br_ret, 14,
                                   MIR_T_I64, "vm",
                                   MIR_T_P, "closure",
                                   MIR_JSVAL, "this_val",
+                                  MIR_JSVAL, "new_target",
+                                  MIR_JSVAL, "super_val",
                                   MIR_T_P, "args",
                                   MIR_T_I32, "argc",
                                   MIR_T_P, "vstack",

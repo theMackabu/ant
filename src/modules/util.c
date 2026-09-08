@@ -13,7 +13,7 @@
 #include "internal.h"
 #include "numbers.h"
 #include "esm/library.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/buffer.h"
 #include "modules/date.h"
@@ -186,7 +186,7 @@ static void util_free_parse_options(util_parse_arg_option_t *options, size_t opt
   free(options);
 }
 
-static ant_value_t util_parse_args(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_parse_args(ant_params_t) {
   ant_value_t config = nargs > 0 ? args[0] : js_mkundef();
   if (!is_object_type(config)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "parseArgs(config) requires an options object");
@@ -436,8 +436,7 @@ static inline bool format_spec_is_known(char spec) {
 }
 
 int ant_format_walk(
-  ant_t *js,
-  ant_value_t *args, int nargs, int fmt_index,
+  ant_native_params_t, int fmt_index,
   const ant_format_sink_t *sink, void *ctx
 ) {
   size_t fmt_len = 0;
@@ -531,7 +530,7 @@ static const ant_format_sink_t util_format_sink = {
   util_format_value 
 };
 
-static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int fmt_index) {
+static ant_value_t util_format_impl(ant_native_params_t, int fmt_index) {
   util_sb_t sb = {0};
   util_format_ctx_t ctx = { js, &sb };
   
@@ -549,16 +548,16 @@ static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int
   return out;
 }
 
-static ant_value_t util_format(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_format(ant_params_t) {
   return util_format_impl(js, args, nargs, 0);
 }
 
-static ant_value_t util_format_with_options(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_format_with_options(ant_params_t) {
   if (nargs <= 1) return js_mkstr(js, "", 0);
   return util_format_impl(js, args, nargs, 1);
 }
 
-static ant_value_t util_inspect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_inspect(ant_params_t) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   char cbuf[512];
   js_cstr_t cstr = js_inspect_cstr(js, args[0], cbuf, sizeof(cbuf));
@@ -614,44 +613,44 @@ static bool util_is_arguments_object_value(ant_t *js, ant_value_t value) {
   return js_try_get_own_data_prop(js, value, "callee", 6, &callee);
 }
 
-static ant_value_t util_types_is_any_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_any_array_buffer(ant_params_t) {
   ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL);
 }
 
-static ant_value_t util_types_is_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_array_buffer(ant_params_t) {
   ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL && !buffer->is_shared);
 }
 
-static ant_value_t util_types_is_shared_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_shared_array_buffer(ant_params_t) {
   ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL && buffer->is_shared);
 }
 
-static ant_value_t util_types_is_array_buffer_view(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_array_buffer_view(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(buffer_is_dataview(args[0]) || buffer_get_typedarray_data(args[0]) != NULL);
 }
 
-static ant_value_t util_types_is_data_view(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_data_view(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(buffer_is_dataview(args[0]));
 }
 
-static ant_value_t util_types_is_typed_array(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_typed_array(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(buffer_get_typedarray_data(args[0]) != NULL);
 }
 
-static ant_value_t util_types_is_float16_array(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_float16_array(ant_params_t) {
   TypedArrayData *typed_array = (nargs > 0) ? buffer_get_typedarray_data(args[0]) : NULL;
   if (!typed_array) return js_false;
   return js_bool(typed_array != NULL && typed_array->type == TYPED_ARRAY_FLOAT16);
 }
 
 #define DEFINE_TYPED_ARRAY_CHECK(fn_name, typed_array_kind)                                   \
-  static ant_value_t fn_name(ant_t *js, ant_value_t *args, int nargs) {                       \
+  static ant_value_t fn_name(ant_params_t) {                       \
     TypedArrayData *typed_array = (nargs > 0) ? buffer_get_typedarray_data(args[0]) : NULL;   \
     if (!typed_array) return js_false;                                                        \
     return js_bool(typed_array != NULL && typed_array->type == typed_array_kind);             \
@@ -669,56 +668,56 @@ DEFINE_TYPED_ARRAY_CHECK(util_types_is_bigint64_array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_biguint64_array, TYPED_ARRAY_BIGUINT64)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_clamped_array, TYPED_ARRAY_UINT8_CLAMPED)
 
-static ant_value_t util_types_is_promise(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_promise(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(vtype(args[0]) == kTypePromise);
 }
 
-static ant_value_t util_types_is_proxy(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_proxy(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   return js_bool(is_proxy(args[0]));
 }
 
-static ant_value_t util_types_is_regexp(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_regexp(ant_params_t) {
   ant_value_t regexp_proto;
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
   return js_bool(util_has_proto_in_chain(js, args[0], regexp_proto));
 }
 
-static ant_value_t util_types_is_date(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_date(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(is_date_instance(args[0]));
 }
 
-static ant_value_t util_types_is_map(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_map(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeObject) return js_false;
   return js_bool(js_obj_ptr(args[0])->type_tag == kTypeMap);
 }
 
-static ant_value_t util_types_is_set(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_set(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeObject) return js_false;
   return js_bool(js_obj_ptr(args[0])->type_tag == kTypeSet);
 }
 
-static ant_value_t util_types_is_weak_map(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_weak_map(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeObject) return js_false;
   return js_bool(js_obj_ptr(args[0])->type_tag == kTypeWeakMap);
 }
 
-static ant_value_t util_types_is_weak_set(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_weak_set(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeObject) return js_false;
   return js_bool(js_obj_ptr(args[0])->type_tag == kTypeWeakSet);
 }
 
-static ant_value_t util_types_is_async_function(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_async_function(ant_params_t) {
   ant_value_t func_obj;
   if (nargs < 1 || vtype(args[0]) != kTypeFunction) return js_false;
   func_obj = js_func_obj(args[0]);
   return js_bool(js_get_slot(func_obj, SLOT_ASYNC) == js_true);
 }
 
-static ant_value_t util_types_is_generator_function(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_generator_function(ant_params_t) {
   sv_closure_t *closure;
 
   if (nargs < 1 || vtype(args[0]) != kTypeFunction) return js_false;
@@ -727,61 +726,61 @@ static ant_value_t util_types_is_generator_function(ant_t *js, ant_value_t *args
   return js_bool(closure != NULL && closure->func != NULL && closure->func->is_generator);
 }
 
-static ant_value_t util_types_is_generator_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_generator_object(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(vtype(args[0]) == kTypeGenerator);
 }
 
-static ant_value_t util_types_is_arguments_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_arguments_object(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(util_is_arguments_object_value(js, args[0]));
 }
 
-static ant_value_t util_types_is_native_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_native_error(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   return js_bool(js_get_slot(args[0], SLOT_ERROR_BRAND) == js_true);
 }
 
-static ant_value_t util_types_is_boxed_primitive(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_boxed_primitive(ant_params_t) {
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], NULL));
 }
 
-static ant_value_t util_types_is_boolean_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_boolean_object(ant_params_t) {
   uint8_t type = kTypeUndefined;
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == kTypeBool);
 }
 
-static ant_value_t util_types_is_number_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_number_object(ant_params_t) {
   uint8_t type = kTypeUndefined;
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == kTypeNumber);
 }
 
-static ant_value_t util_types_is_string_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_string_object(ant_params_t) {
   uint8_t type = kTypeUndefined;
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == kTypeString);
 }
 
-static ant_value_t util_types_is_symbol_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_symbol_object(ant_params_t) {
   uint8_t type = kTypeUndefined;
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == kTypeSymbol);
 }
 
-static ant_value_t util_types_is_bigint_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_bigint_object(ant_params_t) {
   uint8_t type = kTypeUndefined;
   return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == kTypeBigInt);
 }
 
-static ant_value_t util_types_is_map_iterator(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_map_iterator(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.map_iter_proto));
 }
 
-static ant_value_t util_types_is_set_iterator(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_set_iterator(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   return js_bool(util_has_proto_in_chain(js, args[0], js->builtins.set_iter_proto));
 }
 
-static ant_value_t util_types_is_module_namespace_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_types_is_module_namespace_object(ant_params_t) {
   if (nargs < 1) return js_false;
   return js_bool(js_check_brand(args[0], BRAND_MODULE_NAMESPACE));
 }
@@ -849,14 +848,14 @@ static ant_value_t util_debuglog(ant_params_t) {
 
   if (nargs >= 2 && is_callable(args[1])) {
     ant_value_t cb_args[1] = { logger };
-    ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), cb_args, 1, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), cb_args, 1, NULL, js_mkundef());
     if (is_err(result) || js->thrown_exists) return result;
   }
 
   return logger;
 }
 
-static ant_value_t util_strip_vt_control_characters(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_strip_vt_control_characters(ant_params_t) {
   if (nargs < 1) return js_mkstr(js, "", 0);
 
   char cbuf[512];
@@ -1038,7 +1037,7 @@ done:
   return js_mkstr(js, src + value_start, value_end - value_start);
 }
 
-static ant_value_t util_parse_env(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_parse_env(ant_params_t) {
   ant_value_t out = js_mkobj(js);
   if (nargs < 1) return out;
 
@@ -1099,7 +1098,7 @@ static const util_style_entry_t *util_find_style(const char *name) {
   return NULL;
 }
 
-static ant_value_t util_style_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_style_text(ant_params_t) {
   if (nargs < 2) return js_mkstr(js, "", 0);
 
   char text_buf[512];
@@ -1144,7 +1143,7 @@ static ant_value_t util_style_text(ant_t *js, ant_value_t *args, int nargs) {
   return out;
 }
 
-static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_promisify_callback(ant_params_t) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
   if (!is_object_type(ctx)) return js_mkundef();
@@ -1177,7 +1176,7 @@ static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_promisified_call(ant_params_t) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t original = js_get_slot(fn, SLOT_DATA);
   if (!is_callable(original)) return js_mkerr(js, "promisified target is not callable");
@@ -1198,7 +1197,7 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
 
   ant_value_t this_arg = js_getthis(js);
   ant_value_t call_result = sv_vm_call(
-    js->vm, js, original, this_arg, call_args, nargs + 1, NULL, false
+    js->vm, js, original, this_arg, call_args, nargs + 1, NULL, js_mkundef()
   );
   free(call_args);
 
@@ -1216,7 +1215,7 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
   return promise;
 }
 
-static ant_value_t util_callbackify_success(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_callbackify_success(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_object_type(state)) return js_mkundef();
 
@@ -1228,10 +1227,10 @@ static ant_value_t util_callbackify_success(ant_t *js, ant_value_t *args, int na
     nargs > 0 ? args[0] : js_mkundef()
   };
   
-  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
+  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, js_mkundef());
 }
 
-static ant_value_t util_callbackify_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_callbackify_error(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_object_type(state)) return js_mkundef();
 
@@ -1240,10 +1239,10 @@ static ant_value_t util_callbackify_error(ant_t *js, ant_value_t *args, int narg
 
   ant_value_t err = nargs > 0 ? args[0] : js_mkerr(js, "Promise was rejected");
   ant_value_t cb_args[1] = { err };
-  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, false);
+  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
 }
 
-static ant_value_t util_callbackified_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_callbackified_call(ant_params_t) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t original = js_get_slot(fn, SLOT_DATA);
   
@@ -1261,7 +1260,7 @@ static ant_value_t util_callbackified_call(ant_t *js, ant_value_t *args, int nar
     for (int i = 0; i < call_nargs; i++) call_args[i] = args[i];
   }
 
-  ant_value_t result = sv_vm_call(js->vm, js, original, js_getthis(js), call_args, call_nargs, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, original, js_getthis(js), call_args, call_nargs, NULL, js_mkundef());
   free(call_args);
 
   if (is_err(result) || js->thrown_exists) {
@@ -1270,13 +1269,13 @@ static ant_value_t util_callbackified_call(ant_t *js, ant_value_t *args, int nar
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
     ant_value_t cb_args[1] = { ex };
-    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, false);
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, js_mkundef());
     return js_mkundef();
   }
 
   if (vtype(result) != kTypePromise) {
     ant_value_t cb_args[2] = { js_mknull(), result };
-    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, js_mkundef());
     return js_mkundef();
   }
 
@@ -1289,7 +1288,7 @@ static ant_value_t util_callbackified_call(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t util_deprecated_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_deprecated_call(ant_params_t) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
   if (!is_object_type(ctx)) return js_mkundef();
@@ -1304,10 +1303,10 @@ static ant_value_t util_deprecated_call(ant_t *js, ant_value_t *args, int nargs)
 
   ant_value_t original = js_get_slot(ctx, SLOT_DATA);
   ant_value_t this_arg = js_getthis(js);
-  return sv_vm_call(js->vm, js, original, this_arg, args, nargs, NULL, false);
+  return sv_vm_call(js->vm, js, original, this_arg, args, nargs, NULL, js_mkundef());
 }
 
-static ant_value_t util_deprecate(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_deprecate(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "deprecate(fn, msg) requires a function");
   }
@@ -1320,7 +1319,7 @@ static ant_value_t util_deprecate(ant_t *js, ant_value_t *args, int nargs) {
   return js_heavy_mkfun(js, util_deprecated_call, ctx);
 }
 
-static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_promisify(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "promisify(fn) requires a function");
   }
@@ -1331,20 +1330,20 @@ static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
-static ant_value_t util_callbackify(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_callbackify(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "callbackify(fn) requires a function");
   }
   return js_heavy_mkfun(js, util_callbackified_call, args[0]);
 }
 
-static ant_value_t util_aborted_listener(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_aborted_listener(ant_params_t) {
   ant_value_t promise = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (vtype(promise) == kTypePromise) js_resolve_promise(js, promise, js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t util_aborted(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_aborted(ant_params_t) {
   if (nargs < 1 || !abort_signal_is_signal(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal");
 
@@ -1358,7 +1357,7 @@ static ant_value_t util_aborted(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_inherits(ant_params_t) {
   if (nargs < 2 || !is_callable(args[0]) || !is_callable(args[1])) {
     return js_mkerr(js, "inherits(ctor, superCtor) requires constructor functions");
   }
@@ -1378,7 +1377,7 @@ static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t util_is_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t util_is_deep_strict_equal(ant_params_t) {
   if (nargs < 2) return js_bool(true);
   return js_bool(js_deep_equal(js, args[0], args[1], true));
 }

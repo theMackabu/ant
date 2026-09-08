@@ -124,13 +124,13 @@ static bool http_writer_parse_bytes(
   return true;
 }
 
-static ant_value_t js_http_writer_default_status_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_writer_default_status_text(ant_params_t) {
   int status = nargs > 0 ? (int)js_getnum(args[0]) : 200;
   const char *text = ant_http1_default_status_text(status);
   return js_mkstr(js, text, strlen(text));
 }
 
-static ant_value_t js_http_writer_write_chunk(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_writer_write_chunk(ant_params_t) {
   ant_http1_buffer_t buf;
   const uint8_t *bytes = NULL;
   size_t len = 0;
@@ -146,7 +146,7 @@ static ant_value_t js_http_writer_write_chunk(ant_t *js, ant_value_t *args, int 
   return http_writer_make_buffer_value(js, &buf);
 }
 
-static ant_value_t js_http_writer_write_final_chunk(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_writer_write_final_chunk(ant_params_t) {
   ant_http1_buffer_t buf;
 
   ant_http1_buffer_init(&buf);
@@ -158,7 +158,7 @@ static ant_value_t js_http_writer_write_final_chunk(ant_t *js, ant_value_t *args
   return http_writer_make_buffer_value(js, &buf);
 }
 
-static ant_value_t js_http_writer_write_basic_response(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_writer_write_basic_response(ant_params_t) {
   ant_http1_buffer_t buf;
   ant_value_t error = js_mkundef();
   const uint8_t *body = NULL;
@@ -194,7 +194,7 @@ static ant_value_t js_http_writer_write_basic_response(ant_t *js, ant_value_t *a
   return http_writer_make_buffer_value(js, &buf);
 }
 
-static ant_value_t js_http_writer_write_head(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_writer_write_head(ant_params_t) {
   ant_http1_buffer_t buf;
   ant_value_t error = js_mkundef();
   

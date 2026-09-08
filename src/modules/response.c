@@ -9,6 +9,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "common.h"
 #include "descriptors.h"
 #include "gc/roots.h"
@@ -497,8 +498,8 @@ static uint8_t *concat_uint8_chunks(
   return buf;
 }
 
-static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t stream_body_rejected(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stream_body_read(ant_params_t);
+static ant_value_t stream_body_rejected(ant_params_t) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t promise = js_get(js, state, "promise");
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
@@ -514,7 +515,7 @@ static void stream_schedule_next_read(ant_t *js, ant_value_t state, ant_value_t 
   promise_mark_handled(then_result);
 }
 
-static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stream_body_read(ant_params_t) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t promise = js_get(js, state, "promise");
@@ -623,27 +624,27 @@ static ant_value_t consume_body(ant_t *js, int mode) {
   return promise;
 }
 
-static ant_value_t js_res_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_text(ant_params_t) {
   return consume_body(js, BODY_TEXT);
 }
 
-static ant_value_t js_res_json(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_json(ant_params_t) {
   return consume_body(js, BODY_JSON);
 }
 
-static ant_value_t js_res_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_array_buffer(ant_params_t) {
   return consume_body(js, BODY_ARRAYBUFFER);
 }
 
-static ant_value_t js_res_blob(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_blob(ant_params_t) {
   return consume_body(js, BODY_BLOB);
 }
 
-static ant_value_t js_res_bytes(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_bytes(ant_params_t) {
   return consume_body(js, BODY_BYTES);
 }
 
-static ant_value_t js_res_form_data(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_res_form_data(ant_params_t) {
   return consume_body(js, BODY_FORMDATA);
 }
 
@@ -896,13 +897,13 @@ static ant_value_t response_new(ant_t *js, bool immutable_headers) {
   return response_init_object(js, obj, immutable_headers);
 }
 
-static ant_value_t js_response_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_response_ctor(ant_params_t) {
   ant_value_t body = (nargs >= 1) ? args[0] : js_mknull();
   ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t obj = 0;
   ant_value_t step = 0;
 
-  if (vtype(js->new_target) == kTypeUndefined) {
+  if (vtype(call_new_target) == kTypeUndefined) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response constructor requires 'new'");
   }
 
@@ -945,13 +946,13 @@ static ant_value_t response_create_static(
   return obj;
 }
 
-static ant_value_t js_response_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_response_error(ant_params_t) {
   ant_value_t obj = response_create_static(js, "error", 0, "", true);
   if (is_err(obj)) return obj;
   return obj;
 }
 
-static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_response_redirect(ant_params_t) {
   ant_value_t url_v = (nargs >= 1) ? args[0] : js_mkundef();
   ant_value_t status_v = (nargs >= 2) ? args[1] : js_mknum(302);
   ant_value_t obj = 0;
@@ -1011,7 +1012,7 @@ static ant_value_t js_response_redirect(ant_t *js, ant_value_t *args, int nargs)
   return obj;
 }
 
-static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_response_json_static(ant_params_t) {
   ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
   ant_value_t stringify = 0;
   ant_value_t obj = 0;
@@ -1036,7 +1037,7 @@ static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nar
   return obj;
 }
 
-static ant_value_t res_body_pull(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t res_body_pull(ant_params_t) {
   ant_value_t resp_obj = js_get_slot(js->current_func, SLOT_DATA);
   response_data_t *d = response_get_data(resp_obj);
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
@@ -1055,7 +1056,7 @@ static ant_value_t res_body_pull(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 #define RES_GETTER_START(name)                                                    \
-  static ant_value_t js_res_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
+  static ant_value_t js_res_get_##name(ant_params_t) { \
     ant_value_t this = js_getthis(js);                                            \
     response_data_t *d = response_get_data(this);                                  \
     if (!d) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid Response object");
@@ -1158,23 +1159,23 @@ static bool response_inspect_set(
   return true;
 }
 
-static ant_value_t response_inspect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t response_inspect(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t out = js_mkobj(js);
   ant_value_t err = 0;
 
-  if (!response_inspect_set(js, out, "type", js_res_get_type(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "url", js_res_get_url(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "redirected", js_res_get_redirected(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "status", js_res_get_status(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "ok", js_res_get_ok(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "statusText", js_res_get_status_text(js, NULL, 0), &err)) return err;
-  if (!response_inspect_set(js, out, "headers", js_res_get_headers(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "type", js_res_get_type(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "url", js_res_get_url(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "redirected", js_res_get_redirected(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "status", js_res_get_status(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "ok", js_res_get_ok(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "statusText", js_res_get_status_text(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!response_inspect_set(js, out, "headers", js_res_get_headers(js, NULL, 0, js_mkundef()), &err)) return err;
 
   return response_inspect_finish(js, this_obj, out);
 }
 
-static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_response_clone(ant_params_t) {
   ant_value_t this = js_getthis(js);
   response_data_t *d = response_get_data(this);
   response_data_t *nd = NULL;

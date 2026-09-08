@@ -1,3 +1,4 @@
+#include "silver/call.h"
 #include "napi_internal.h"
 
 static napi_external_entry_t *g_napi_externals = NULL;
@@ -49,7 +50,7 @@ static int napi_desc_flags(napi_property_attributes attributes) {
   return flags;
 }
 
-static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t napi_callback_trampoline(ant_params_t) {
   ant_value_t current = js_getcurrentfunc(js);
   napi_callback_binding_t *binding = (napi_callback_binding_t *)js_get_native(current, NAPI_CALLBACK_NATIVE_TAG);
   if (!binding || !binding->cb) return js_mkundef();
@@ -62,7 +63,7 @@ static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int na
     .argv = (const napi_value *)args,
     .argc = (size_t)(nargs < 0 ? 0 : nargs),
     .this_arg = (napi_value)js_getthis(js),
-    .new_target = (napi_value)sv_vm_get_new_target(js->vm, js),
+    .new_target = (napi_value)call_new_target,
     .data = binding->data,
   };
 
@@ -731,7 +732,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
     (ant_value_t *)argv,
     (int)argc,
     NULL,
-    false
+    js_mkundef()
   );
 
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
@@ -756,8 +757,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_new_instance(
   ant_value_t proto = js_get(nenv->js, ctor, "prototype");
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
-  ant_value_t saved = nenv->js->new_target;
-  nenv->js->new_target = ctor;
   ant_value_t out = sv_vm_call(
     nenv->js->vm,
     nenv->js,
@@ -766,9 +765,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_new_instance(
     (ant_value_t *)argv,
     (int)argc,
     NULL,
-    true
+    ctor
   );
-  nenv->js->new_target = saved;
 
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, (is_object_type(out) ? out : obj));

@@ -16,6 +16,7 @@
 #include "descriptors.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "ptr.h"
 #include "modules/bigint.h"
 
@@ -109,7 +110,7 @@ ant_value_t temporal_make_function(
 ant_value_t temporal_require_new(ant_t *js, const char *name);
 ant_value_t temporal_error(ant_t *js, TemporalError err);
 ant_value_t temporal_wrap(ant_t *js, temporal_kind_t kind, void *ptr);
-ant_value_t temporal_wrap_constructed(ant_t *js, temporal_kind_t kind, void *ptr);
+ant_value_t temporal_wrap_constructed(ant_t *js, temporal_kind_t kind, void *ptr, ant_value_t new_target);
 ant_value_t temporal_string_from_write(ant_t *js, DiplomatWrite *write);
 ant_value_t temporal_calendar_identifier(ant_t *js, const Calendar *calendar);
 ant_value_t temporal_i128_to_bigint(ant_t *js, I128Nanoseconds value);

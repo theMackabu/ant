@@ -5,6 +5,7 @@
 #include "sugar.h"
 #include "gc/roots.h"
 #include "silver/engine.h"
+#include "modules/timer.h"
 
 typedef enum {
   SV_AWAIT_READY = 0,
@@ -169,7 +170,7 @@ static inline ant_value_t sv_start_tla(
 
 static inline ant_value_t sv_start_async_closure(
   sv_vm_t *caller_vm, ant_t *js,
-  sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
+  sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val, ant_value_t new_target,
   ant_value_t this_val, ant_value_t *args, int argc
 ) {
   if (caller_vm && closure && closure->func && !closure->func->has_await) {
@@ -186,7 +187,7 @@ static inline ant_value_t sv_start_async_closure(
     GC_ROOT_PIN(js, promise);
     
     ant_value_t result = sv_execute_closure_entry(
-      caller_vm, closure, callee_func, super_val, this_val, args, argc, NULL
+      caller_vm, closure, callee_func, super_val, new_target, this_val, args, argc, NULL
     );
     
     if (is_err(result)) {
@@ -220,13 +221,13 @@ static inline ant_value_t sv_start_async_closure(
 
     sv_async_init_activation(
       coro, js, promise, this_val,
-      super_val, js->new_target, callee_func, argc
+      super_val, new_target, callee_func, argc
     );
     
     sv_async_link_activation(js, coro);
     ant_value_t result = sv_execute_closure_entry(
       caller_vm, closure, callee_func, 
-      super_val, this_val, args, argc, NULL
+      super_val, new_target, this_val, args, argc, NULL
     );
     sv_async_unlink_activation(js, coro);
   

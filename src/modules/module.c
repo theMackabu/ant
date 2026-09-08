@@ -39,14 +39,14 @@ static ant_value_t resolve_strip_file_url(ant_t *js, ant_value_t resolved) {
   return resolved;
 }
 
-static ant_value_t builtin_createRequire(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_createRequire(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "createRequire() requires a filename string");
   return esm_create_require_from_path(js, js_getstr(js, args[0], NULL));
 }
 
 // Module._resolveFilename(request, parent)
-static ant_value_t builtin_resolveFilename(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_resolveFilename(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "Module._resolveFilename() requires a string request");
 
@@ -74,7 +74,7 @@ static void match_builtin_name(const char *name, void *ud) {
   if (!ctx->found && strcmp(name, ctx->name) == 0) ctx->found = true;
 }
 
-static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_module_isBuiltin(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) return js_false;
 
   size_t name_len = 0;
@@ -87,7 +87,7 @@ static ant_value_t builtin_module_isBuiltin(ant_t *js, ant_value_t *args, int na
   return js_bool(ctx.found);
 }
 
-static ant_value_t builtin_module_deregisterHooks(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_module_deregisterHooks(ant_params_t) {
   ant_value_t self = js_getcurrentfunc(js);
   ant_value_t hook = js_get_slot(self, SLOT_DATA);
   if (vtype(hook) == kTypeUndefined || vtype(js->modules.hooks) != kTypeArray) return js_mkundef();
@@ -119,7 +119,7 @@ static bool hook_member_invalid(ant_value_t fn) {
   return vtype(fn) != kTypeUndefined && vtype(fn) != kTypeFunction && vtype(fn) != kTypeBuiltin;
 }
 
-static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_module_registerHooks(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "registerHooks requires an options object");
 
@@ -150,7 +150,7 @@ static ant_value_t builtin_module_registerHooks(ant_t *js, ant_value_t *args, in
   return out;
 }
 
-static ant_value_t builtin_module_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_module_constructor(ant_params_t) {
   if (nargs && vtype(args[0]) != kTypeUndefined && vtype(args[0]) != kTypeString)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Module id must be a string");
   if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Module requires an object receiver");

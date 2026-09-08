@@ -527,7 +527,7 @@ static bool stderr_is_tty(ant_t *js) {
   return uv_guess_handle(STDERR_FILENO) == UV_TTY;
 }
 
-static ant_value_t process_binding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_binding(ant_params_t) {
   const char *name;
   ant_value_t constants;
 
@@ -588,6 +588,15 @@ static void process_update_sandbox_env(ant_t *js, ant_value_t process_obj) {
   }
 }
 
+static ant_value_t process_exec_path(ant_t *js) {
+  char path[PATH_MAX];
+  if (ant_get_exe_path(path, sizeof(path), js->runtime.argc, js->runtime.argv) == 0 && path[0] != '\0')
+    return js_mkstr(js, path, strlen(path));
+  if (js->runtime.argc > 0) 
+    return js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0]));
+  return js_mkundef();
+}
+
 void process_refresh_sandbox_argv(ant_t *js) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
@@ -598,7 +607,7 @@ void process_refresh_sandbox_argv(ant_t *js) {
 
   js_set(js, process_obj, "argv", argv_arr);
   js_set(js, process_obj, "argv0", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkstr(js, "ant", 3));
-  js_set(js, process_obj, "execPath", js->runtime.argc > 0 ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) : js_mkundef());
+  js_set(js, process_obj, "execPath", process_exec_path(js));
 }
 
 void process_set_sandbox_terminal(ant_t *js, uint32_t capabilities, uint16_t rows, uint16_t cols) {
@@ -813,18 +822,18 @@ static void stop_sigwinch_handler(ant_t *js) {
 #endif
 }
 
-static ant_value_t js_stdin_set_raw_mode(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdin_set_raw_mode(ant_params_t) {
   bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
   return js_bool(stdin_set_raw_mode(enable));
 }
 
-static ant_value_t js_stdin_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdin_set_encoding(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_process_state_t *ps = process_state(js);
   if (!ps) return js_mkerr(js, "out of memory");
   
   ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
-  ant_value_t decoder = string_decoder_create(js, encoding);
+  ant_value_t decoder = string_decoder_create(js, encoding, js_mkundef());
   ant_value_t encoding_str = 0;
 
   if (is_err(decoder)) return decoder;
@@ -871,7 +880,7 @@ static ant_value_t js_stdin_unref(ant_params_t) {
   return js_getthis(js);
 }
 
-static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs, FILE *stream, int fd) {
+static ant_value_t process_write_stream(ant_native_params_t, FILE *stream, int fd) {
   if (nargs < 1) return js_false;
 
   size_t len = 0;
@@ -893,11 +902,11 @@ static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs,
   return ant_output_stream_flush(out) ? js_true : js_false;
 }
 
-static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdout_write(ant_params_t) {
   return process_write_stream(js, args, nargs, stdout, STDOUT_FILENO);
 }
 
-static ant_value_t js_stdout_get_window_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdout_get_window_size(ant_params_t) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(js, STDOUT_FILENO, &rows, &cols);
@@ -907,24 +916,24 @@ static ant_value_t js_stdout_get_window_size(ant_t *js, ant_value_t *args, int n
   return arr;
 }
 
-static ant_value_t js_stdout_rows_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdout_rows_getter(ant_params_t) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(js, STDOUT_FILENO, &rows, &cols);
   return js_mknum(rows);
 }
 
-static ant_value_t js_stdout_columns_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stdout_columns_getter(ant_params_t) {
   int rows = 0, cols = 0;
   get_tty_size(js, STDOUT_FILENO, &rows, &cols);
   return js_mknum(cols);
 }
 
-static ant_value_t js_stderr_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stderr_write(ant_params_t) {
   return process_write_stream(js, args, nargs, stderr, STDERR_FILENO);
 }
 
-static ant_value_t process_uptime(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_uptime(ant_params_t) {
   (void)args; (void)nargs;
   ant_process_state_t *ps = process_state(js);
   if (!ps) return js_mkerr(js, "out of memory");
@@ -933,7 +942,7 @@ static ant_value_t process_uptime(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum(seconds);
 }
 
-static ant_value_t process_hrtime(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_hrtime(ant_params_t) {
   uint64_t now = uv_hrtime();
   
   if (nargs > 0 && vtype(args[0]) == kTypeArray) {
@@ -956,7 +965,7 @@ static ant_value_t process_hrtime(ant_t *js, ant_value_t *args, int nargs) {
   return arr;
 }
 
-static ant_value_t process_hrtime_bigint(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_hrtime_bigint(ant_params_t) {
   (void)args; (void)nargs;
   uint64_t now = uv_hrtime();
   char buf[32];
@@ -964,7 +973,7 @@ static ant_value_t process_hrtime_bigint(ant_t *js, ant_value_t *args, int nargs
   return js_mkbigint(js, buf, strlen(buf), false);
 }
 
-static ant_value_t process_memory_usage(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_memory_usage(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t obj = js_mkobj(js);
   
@@ -998,14 +1007,14 @@ static ant_value_t process_memory_usage(ant_t *js, ant_value_t *args, int nargs)
   return obj;
 }
 
-static ant_value_t process_memory_usage_rss(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_memory_usage_rss(ant_params_t) {
   (void)args; (void)nargs;
   size_t rss = 0;
   uv_resident_set_memory(&rss);
   return js_mknum((double)rss);
 }
 
-static ant_value_t process_cpu_usage(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_cpu_usage(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   uv_rusage_t rusage;
   
@@ -1030,7 +1039,7 @@ static ant_value_t process_cpu_usage(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t process_kill(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_kill(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.kill requires at least 1 argument");
   if (vtype(args[0]) != kTypeNumber) return js_mkerr(js, "pid must be a number");
   
@@ -1060,7 +1069,7 @@ static ant_value_t process_abort(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t process_chdir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_chdir(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.chdir requires 1 argument");
   
   char *dir = js_getstr(js, args[0], NULL);
@@ -1072,7 +1081,7 @@ static ant_value_t process_chdir(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_umask(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_umask(ant_params_t) {
 #ifdef _WIN32
   (void)args; (void)nargs;
   return js_mknum(0);
@@ -1089,27 +1098,27 @@ static ant_value_t process_umask(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 #ifndef _WIN32
-static ant_value_t process_getuid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_getuid(ant_params_t) {
   (void)args; (void)nargs;
   return js_mknum((double)getuid());
 }
 
-static ant_value_t process_geteuid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_geteuid(ant_params_t) {
   (void)args; (void)nargs;
   return js_mknum((double)geteuid());
 }
 
-static ant_value_t process_getgid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_getgid(ant_params_t) {
   (void)args; (void)nargs;
   return js_mknum((double)getgid());
 }
 
-static ant_value_t process_getegid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_getegid(ant_params_t) {
   (void)args; (void)nargs;
   return js_mknum((double)getegid());
 }
 
-static ant_value_t process_getgroups(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_getgroups(ant_params_t) {
   (void)args; (void)nargs;
   int ngroups = getgroups(0, NULL);
   if (ngroups < 0) return js_mkarr(js);
@@ -1126,7 +1135,7 @@ static ant_value_t process_getgroups(ant_t *js, ant_value_t *args, int nargs) {
   return arr;
 }
 
-static ant_value_t process_setuid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_setuid(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.setuid requires 1 argument");
   
   uid_t uid;
@@ -1145,7 +1154,7 @@ static ant_value_t process_setuid(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_setgid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_setgid(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.setgid requires 1 argument");
   
   gid_t gid;
@@ -1164,7 +1173,7 @@ static ant_value_t process_setgid(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_seteuid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_seteuid(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.seteuid requires 1 argument");
   
   uid_t uid;
@@ -1183,7 +1192,7 @@ static ant_value_t process_seteuid(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_setegid(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_setegid(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "process.setegid requires 1 argument");
   
   gid_t gid;
@@ -1202,7 +1211,7 @@ static ant_value_t process_setegid(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_setgroups(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_setgroups(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeArray) {
     return js_mkerr(js, "process.setgroups requires an array");
   }
@@ -1238,7 +1247,7 @@ static ant_value_t process_setgroups(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_initgroups(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_initgroups(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "process.initgroups requires 2 arguments");
   
   char *user = js_getstr(js, args[0], NULL);
@@ -1348,7 +1357,7 @@ static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
   fclose(fp);
 }
 
-static ant_value_t process_exit(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_exit(ant_params_t) {
   int code = 0;
   
   if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
@@ -1417,7 +1426,7 @@ static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const c
   cstr_free(&buf);
 }
 
-static ant_value_t env_to_object(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t env_to_object(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   env_foreach(js, js->this_val, env_to_object_cb, &obj);
   return obj;
@@ -1443,7 +1452,7 @@ static void env_tostring_cb(ant_t *js, const char *key, size_t key_len, const ch
   c->pos += val_len;
 }
 
-static ant_value_t env_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t env_toString(ant_params_t) {
   env_str_ctx ctx = { .buf = malloc(4096), .pos = 0, .cap = 4096 };
   if (!ctx.buf) return js_mkstr(js, "", 0);
   
@@ -1466,7 +1475,7 @@ static ant_value_t env_keys(ant_t *js, ant_value_t obj) {
   return arr;
 }
 
-static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_cwd(ant_params_t) {
   ant_process_state_t *ps = process_state(js);
   if (!ps) return js_mkerr(js, "Out of memory");
   
@@ -1543,7 +1552,7 @@ static ant_value_t process_make_warning_object(
   return warning_obj;
 }
 
-static ant_value_t process_emit_warning(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_emit_warning(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   ant_value_t warning = args[0];
@@ -1596,7 +1605,7 @@ static ant_value_t process_emit_warning(ant_t *js, ant_value_t *args, int nargs)
 }
 
 
-static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_next_tick(ant_params_t) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick requires a callback");
     
   ant_value_t cb = args[0];
@@ -1768,11 +1777,7 @@ void init_process_module(ant_t *js) {
     : js_mkstr(js, "ant", 3)
   );
   
-  js_set(js, process_obj, "execPath", js->runtime.argc > 0 
-    ? js_mkstr(js, js->runtime.argv[0], strlen(js->runtime.argv[0])) 
-    : js_mkundef()
-  );
-  
+  js_set(js, process_obj, "execPath", process_exec_path(js));
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
 

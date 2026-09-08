@@ -1,7 +1,7 @@
 #ifndef SV_LOCALS_H
 #define SV_LOCALS_H
 
-#include "silver/engine.h"
+#include "silver/feedback.h"
 #include "errors.h"
 
 static inline ant_value_t sv_op_get_local(

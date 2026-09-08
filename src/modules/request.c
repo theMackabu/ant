@@ -9,6 +9,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "common.h"
 #include "descriptors.h"
 
@@ -592,9 +593,9 @@ static uint8_t *concat_chunks(ant_t *js, ant_value_t chunks, size_t *out_size) {
   return buf;
 }
 
-static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t stream_body_read(ant_params_t);
 
-static ant_value_t stream_body_rejected(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stream_body_rejected(ant_params_t) {
   ant_value_t state   = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t promise = js_get(js, state, "promise");
   ant_value_t reason  = (nargs > 0) ? args[0] : js_mkundef();
@@ -610,7 +611,7 @@ static void stream_schedule_next_read(ant_t *js, ant_value_t state, ant_value_t 
   promise_mark_handled(then_result);
 }
 
-static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t stream_body_read(ant_params_t) {
   ant_value_t state   = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t result  = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t promise = js_get(js, state, "promise");
@@ -693,27 +694,27 @@ static ant_value_t consume_body(ant_t *js, int mode) {
   return promise;
 }
 
-static ant_value_t js_req_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_text(ant_params_t) {
   return consume_body(js, BODY_TEXT);
 }
 
-static ant_value_t js_req_json(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_json(ant_params_t) {
   return consume_body(js, BODY_JSON);
 }
 
-static ant_value_t js_req_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_array_buffer(ant_params_t) {
   return consume_body(js, BODY_ARRAYBUFFER);
 }
 
-static ant_value_t js_req_blob(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_blob(ant_params_t) {
   return consume_body(js, BODY_BLOB);
 }
 
-static ant_value_t js_req_bytes(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_bytes(ant_params_t) {
   return consume_body(js, BODY_BYTES);
 }
 
-static ant_value_t js_req_form_data(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_req_form_data(ant_params_t) {
   return consume_body(js, BODY_FORMDATA);
 }
 
@@ -804,7 +805,7 @@ static ant_value_t request_copy_source_body(ant_t *js, ant_value_t req_obj, ant_
 }
 
 #define REQ_GETTER_START(name)                                                    \
-  static ant_value_t js_req_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
+  static ant_value_t js_req_get_##name(ant_params_t) { \
     ant_value_t this = js_getthis(js);                                            \
     request_data_t *d = request_get_data(this);                                  \
     if (!d) return js_mkundef();
@@ -897,7 +898,7 @@ REQ_GETTER_START(duplex)
   return js_mkstr(js, "half", 4);
 REQ_GETTER_END
 
-static ant_value_t req_body_pull(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t req_body_pull(ant_params_t) {
   ant_value_t req_obj = js_get_slot(js->current_func, SLOT_DATA);
   request_data_t *d = request_get_data(req_obj);
   ant_value_t ctrl = (nargs > 0) ? args[0] : js_mkundef();
@@ -967,31 +968,31 @@ static bool request_inspect_set(
   return true;
 }
 
-static ant_value_t request_inspect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t request_inspect(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t out = js_mkobj(js);
   ant_value_t err = 0;
 
-  if (!request_inspect_set(js, out, "method", js_req_get_method(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "url", js_req_get_url(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "headers", js_req_get_headers(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "destination", js_req_get_destination(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "referrer", js_req_get_referrer(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "referrerPolicy", js_req_get_referrer_policy(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "mode", js_req_get_mode(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "credentials", js_req_get_credentials(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "cache", js_req_get_cache(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "redirect", js_req_get_redirect(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "integrity", js_req_get_integrity(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "keepalive", js_req_get_keepalive(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "isReloadNavigation", js_req_get_is_reload_navigation(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "isHistoryNavigation", js_req_get_is_history_navigation(js, NULL, 0), &err)) return err;
-  if (!request_inspect_set(js, out, "signal", js_req_get_signal(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "method", js_req_get_method(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "url", js_req_get_url(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "headers", js_req_get_headers(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "destination", js_req_get_destination(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "referrer", js_req_get_referrer(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "referrerPolicy", js_req_get_referrer_policy(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "mode", js_req_get_mode(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "credentials", js_req_get_credentials(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "cache", js_req_get_cache(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "redirect", js_req_get_redirect(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "integrity", js_req_get_integrity(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "keepalive", js_req_get_keepalive(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "isReloadNavigation", js_req_get_is_reload_navigation(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "isHistoryNavigation", js_req_get_is_history_navigation(js, NULL, 0, js_mkundef()), &err)) return err;
+  if (!request_inspect_set(js, out, "signal", js_req_get_signal(js, NULL, 0, js_mkundef()), &err)) return err;
 
   return request_inspect_finish(js, this_obj, out);
 }
 
-static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_request_clone(ant_params_t) {
   ant_value_t this = js_getthis(js);
   request_data_t *d = request_get_data(this);
   
@@ -1332,10 +1333,10 @@ static ant_value_t request_apply_ctor_body(
   return request_copy_source_body(js, req_obj, input, req, src);
 }
 
-static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_request_ctor(ant_params_t) {
   ant_value_t init = (nargs >= 2 && vtype(args[1]) != kTypeUndefined) ? args[1] : js_mkundef();
 
-  if (vtype(js->new_target) == kTypeUndefined)
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires at least 1 argument");
@@ -1375,7 +1376,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   obj = js_mkobj(js);
   (void)js_reserve_slots(obj, REQUEST_RESERVED_SLOTS);
-  proto = js_instance_proto_from_new_target(js, js->builtins.request_proto);
+  proto = js_instance_proto_from_new_target(js, js->builtins.request_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   else js_set_proto_init(obj, js->builtins.request_proto);

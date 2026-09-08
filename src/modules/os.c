@@ -50,7 +50,7 @@
 #define OS_DEVNULL "/dev/null"
 #endif
 
-static ant_value_t os_arch(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_arch(ant_params_t) {
   (void)args; (void)nargs;
 #if defined(__x86_64__) || defined(_M_X64)
   return js_mkstr(js, "x64", 3);
@@ -77,7 +77,7 @@ static ant_value_t os_arch(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_platform(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_platform(ant_params_t) {
   (void)args; (void)nargs;
 #if defined(__APPLE__)
   return js_mkstr(js, "darwin", 6);
@@ -98,7 +98,7 @@ static ant_value_t os_platform(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_type(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_type(ant_params_t) {
   (void)args; (void)nargs;
 #if defined(__APPLE__)
   return js_mkstr(js, "Darwin", 6);
@@ -115,7 +115,7 @@ static ant_value_t os_type(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_release(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_release(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   OSVERSIONINFOA osvi;
@@ -139,7 +139,7 @@ static ant_value_t os_release(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_version(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_version(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   OSVERSIONINFOA osvi;
@@ -163,7 +163,7 @@ static ant_value_t os_version(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_machine(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_machine(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   SYSTEM_INFO sysinfo;
@@ -184,7 +184,7 @@ static ant_value_t os_machine(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_hostname(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_hostname(ant_params_t) {
   (void)args; (void)nargs;
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -193,7 +193,7 @@ static ant_value_t os_hostname(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, "", 0);
 }
 
-static ant_value_t os_homedir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_homedir(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   const char *userprofile = getenv("USERPROFILE");
@@ -221,7 +221,7 @@ static ant_value_t os_homedir(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_tmpdir(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_tmpdir(ant_params_t) {
   (void)args; (void)nargs;
   const char *tmpdir = getenv("TMPDIR");
   if (!tmpdir) tmpdir = getenv("TMP");
@@ -230,7 +230,7 @@ static ant_value_t os_tmpdir(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, tmpdir, strlen(tmpdir));
 }
 
-static ant_value_t os_endianness(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_endianness(ant_params_t) {
   (void)args; (void)nargs;
   uint16_t test = 1;
   if (*(uint8_t *)&test == 1) {
@@ -239,7 +239,7 @@ static ant_value_t os_endianness(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, "BE", 2);
 }
 
-static ant_value_t os_uptime(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_uptime(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   return js_mknum((double)GetTickCount64() / 1000.0);
@@ -263,7 +263,7 @@ static ant_value_t os_uptime(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_totalmem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_totalmem(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   MEMORYSTATUSEX memInfo;
@@ -290,7 +290,7 @@ static ant_value_t os_totalmem(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_freemem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_freemem(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   MEMORYSTATUSEX memInfo;
@@ -321,7 +321,7 @@ static ant_value_t os_freemem(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_availableParallelism(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_availableParallelism(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   SYSTEM_INFO sysinfo;
@@ -463,7 +463,7 @@ read_stat:
 }
 #endif
 
-static ant_value_t os_cpus(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_cpus(ant_params_t) {
   (void)args; (void)nargs;
 #ifdef __APPLE__
   return os_cpus_darwin(js);
@@ -474,7 +474,7 @@ static ant_value_t os_cpus(ant_t *js, ant_value_t *args, int nargs) {
 #endif
 }
 
-static ant_value_t os_loadavg(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_loadavg(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t arr = js_mkarr(js);
   
@@ -500,7 +500,7 @@ static ant_value_t os_loadavg(ant_t *js, ant_value_t *args, int nargs) {
 
 #ifdef _WIN32
 
-static ant_value_t os_networkInterfaces(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_networkInterfaces(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t result = js_mkobj(js);
   
@@ -577,7 +577,7 @@ static ant_value_t os_networkInterfaces(ant_t *js, ant_value_t *args, int nargs)
   return result;
 }
 
-static ant_value_t os_userInfo(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_userInfo(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t info = js_mkobj(js);
   
@@ -604,12 +604,12 @@ static ant_value_t os_userInfo(ant_t *js, ant_value_t *args, int nargs) {
   return info;
 }
 
-static ant_value_t os_getPriority(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_getPriority(ant_params_t) {
   (void)args; (void)nargs;
   return js_mknum(0);
 }
 
-static ant_value_t os_setPriority(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_setPriority(ant_params_t) {
   (void)args; (void)nargs;
   return js_mkundef();
 }
@@ -720,7 +720,7 @@ static void apply_mac_to_iface(ant_t *js, ant_value_t result, const char *name, 
   }
 }
 
-static ant_value_t os_networkInterfaces(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_networkInterfaces(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t result = js_mkobj(js);
   
@@ -754,7 +754,7 @@ static ant_value_t os_networkInterfaces(ant_t *js, ant_value_t *args, int nargs)
   return result;
 }
 
-static ant_value_t os_userInfo(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_userInfo(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t info = js_mkobj(js);
   
@@ -783,7 +783,7 @@ static ant_value_t os_userInfo(ant_t *js, ant_value_t *args, int nargs) {
   return info;
 }
 
-static ant_value_t os_getPriority(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_getPriority(ant_params_t) {
   int pid = 0;
   if (nargs > 0 && vtype(args[0]) == kTypeNumber) {
     pid = (int)js_getnum(args[0]);
@@ -797,7 +797,7 @@ static ant_value_t os_getPriority(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)priority);
 }
 
-static ant_value_t os_setPriority(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t os_setPriority(ant_params_t) {
   int pid = 0;
   int priority = 0;
   

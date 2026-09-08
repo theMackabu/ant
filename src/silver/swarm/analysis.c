@@ -33,7 +33,10 @@ static bool jit_local_has_numeric_hint(sv_func_t *func, int idx) {
 }
 
 jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
-  jit_features_t f = {0};
+  jit_features_t f = {
+    .needs_new_target = func->is_derived_ctor,
+    .needs_super = func->is_method || func->is_static || func->is_derived_ctor,
+  };
   if (n_slots > 0)
     f.builder_target_slots = calloc((size_t)n_slots, sizeof(bool));
   uint8_t *ip = func->code;
@@ -42,6 +45,16 @@ jit_features_t jit_prescan_features(sv_func_t *func, int n_slots) {
     sv_op_t op = (sv_op_t)*ip;
     int sz = sv_op_size[op];
     if (sz == 0) break;
+    if (op == OP_CHECK_CTOR) f.needs_new_target = true;
+    if (op == OP_SPECIAL_OBJ) {
+      uint8_t which = sv_get_u8(ip + 1);
+      if (which == 1) f.needs_new_target = true;
+      if (which == 2) f.needs_super = true;
+    }
+    if (op == OP_GET_GLOBAL) {
+      const sv_atom_t *atom = &func->atoms[sv_get_u32(ip + 1)];
+      if (atom->len == 5 && memcmp(atom->str, "super", 5) == 0) f.needs_super = true;
+    }
     uint16_t flags = sv_op_flags[op];
     if ((flags & SV_OPF_JIT_NEEDS_BAILOUT) != 0) f.needs_bailout = true;
     if ((flags & SV_OPF_JIT_NEEDS_INC_LOCAL) != 0) f.needs_inc_local = true;

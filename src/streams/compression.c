@@ -6,6 +6,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/symbol.h"
@@ -125,7 +126,7 @@ static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t
 
 #define ZCHUNK_SIZE 16384
 
-static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cs_transform(ant_params_t) {
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   
@@ -165,7 +166,7 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t cs_flush(ant_params_t) {
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
 
   brotli_stream_state_t *brotli_st = (brotli_stream_state_t *)js_get_native(js->current_func, CS_BROTLI_NATIVE_TAG);
@@ -194,20 +195,20 @@ static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_cs_get_readable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_cs_get_readable(ant_params_t) {
   ant_value_t ts_obj = get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CompressionStream");
   return ts_stream_readable(ts_obj);
 }
 
-static ant_value_t js_cs_get_writable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_cs_get_writable(ant_params_t) {
   ant_value_t ts_obj = get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid CompressionStream");
   return ts_stream_writable(ts_obj);
 }
 
-static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_cs_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "CompressionStream constructor requires 'new'");
 
   if (nargs < 1)
@@ -232,7 +233,7 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.cs_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.cs_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? CS_BROTLI_NATIVE_TAG : CS_Z_NATIVE_TAG);
@@ -268,7 +269,7 @@ static ant_value_t js_cs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ds_transform(ant_params_t) {
   ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
@@ -308,7 +309,7 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t ds_flush(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ds_flush(ant_params_t) {
   ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
   brotli_stream_state_t *st = (brotli_stream_state_t *)js_get_native(js->current_func, DS_BROTLI_NATIVE_TAG);
   if (st)
@@ -316,20 +317,20 @@ static ant_value_t ds_flush(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_ds_get_readable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ds_get_readable(ant_params_t) {
   ant_value_t ts_obj = get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid DecompressionStream");
   return ts_stream_readable(ts_obj);
 }
 
-static ant_value_t js_ds_get_writable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ds_get_writable(ant_params_t) {
   ant_value_t ts_obj = get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid DecompressionStream");
   return ts_stream_writable(ts_obj);
 }
 
-static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_ds_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "DecompressionStream constructor requires 'new'");
 
   if (nargs < 1)
@@ -353,7 +354,7 @@ static ant_value_t js_ds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ds_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ds_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, fmt == ZFMT_BROTLI ? (void *)brotli : (void *)st, fmt == ZFMT_BROTLI ? DS_BROTLI_NATIVE_TAG : DS_Z_NATIVE_TAG);

@@ -742,7 +742,6 @@ void mir_emit_uncurried_char_code_at(
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, value), MIR_new_mem_op(ctx, MIR_T_U8, offsetof(ant_flat_string_t, bytes), ptr, integer, 1)));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_I2D, MIR_new_reg_op(ctx, number), MIR_new_reg_op(ctx, value)));
   mir_d_to_i64_non_nan(ctx, fn, result, number, d_slot);
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_mem_op(ctx, MIR_JSVAL, offsetof(ant_t, new_target), js, 0, 1), MIR_new_uint_op(ctx, js_mkundef())));
   MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
 }
 

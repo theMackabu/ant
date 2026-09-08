@@ -180,7 +180,7 @@ ant_value_t sv_jit_try_compile_and_call(
   fn->jit_code = (void *)jit;
   sv_jit_enter(js);
   ant_value_t result = jit(
-      vm, ctx->this_val, js->new_target,
+      vm, ctx->this_val, ctx->new_target,
       ctx->super_val, ctx->args, ctx->argc, closure);
   sv_jit_leave(js);
   if (sv_is_jit_bailout(result)) {

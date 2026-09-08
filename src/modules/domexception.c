@@ -83,7 +83,7 @@ for (size_t i = 0; i < DOMEX_CONSTANTS_LEN; i++) {
 }}
 
 // new DOMException(message?, name?)
-static ant_value_t domexception_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t domexception_ctor(ant_params_t) {
   ant_value_t self = js_getthis(js);
 
   const char *msg;

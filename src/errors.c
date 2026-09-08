@@ -447,7 +447,7 @@ static void error_visit_vm_stack_frames(
   ant_t *js, const char *fallback_file, js_vm_frame_visitor_fn visitor, void *ctx
 ) {
   if (!js || !visitor) return;
-  sv_vm_t *vm = sv_vm_get_active(js);
+  sv_vm_t *vm = js->vm;
   if (!vm) return;
 
   int depth = vm->fp;
@@ -488,7 +488,7 @@ ant_value_t js_capture_raw_stack(ant_t *js) {
     ? js->errsite.filename
     : (js->filename ? js->filename : "<eval>");
 
-  sv_vm_t *vm = sv_vm_get_active(js);
+  sv_vm_t *vm = js->vm;
   if (vm && vm->fp >= 0) {
     error_frame_errbuf_ctx_t ctx = { &eb, &n, remaining_capacity(n, eb.size), "", "" };
     error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx);
@@ -607,7 +607,7 @@ static void format_error_stack(errbuf_t *eb, ant_t *js, size_t *n, int line, int
       ? js->errsite.filename
       : (js->filename ? js->filename : "<eval>");
       
-    sv_vm_t *vm = sv_vm_get_active(js);
+    sv_vm_t *vm = js->vm;
     int depth = vm ? vm->fp : -1;
     
     if (depth >= 0) {
@@ -923,22 +923,22 @@ static ant_value_t callsite_field(ant_t *js, int field) {
   return js_arr_get(js, data, field);
 }
 
-static ant_value_t callsite_getFileName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_FILE); }
-static ant_value_t callsite_getLineNumber(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_LINE); }
-static ant_value_t callsite_getColumnNumber(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_COL); }
-static ant_value_t callsite_getFunctionName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_NAME); }
+static ant_value_t callsite_getFileName(ant_params_t) { return callsite_field(js, CS_FILE); }
+static ant_value_t callsite_getLineNumber(ant_params_t) { return callsite_field(js, CS_LINE); }
+static ant_value_t callsite_getColumnNumber(ant_params_t) { return callsite_field(js, CS_COL); }
+static ant_value_t callsite_getFunctionName(ant_params_t) { return callsite_field(js, CS_NAME); }
 
-static ant_value_t callsite_getTypeName(ant_t *js, ant_value_t *args, int nargs) { return js_mknull(); }
-static ant_value_t callsite_getMethodName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_NAME); }
+static ant_value_t callsite_getTypeName(ant_params_t) { return js_mknull(); }
+static ant_value_t callsite_getMethodName(ant_params_t) { return callsite_field(js, CS_NAME); }
 
-static ant_value_t callsite_isNative(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
-static ant_value_t callsite_isToplevel(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
-static ant_value_t callsite_isEval(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
-static ant_value_t callsite_isConstructor(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
-static ant_value_t callsite_getEvalOrigin(ant_t *js, ant_value_t *args, int nargs) { return js_mkundef(); }
-static ant_value_t callsite_getThis(ant_t *js, ant_value_t *args, int nargs) { return js_mkundef(); }
+static ant_value_t callsite_isNative(ant_params_t) { return js_false; }
+static ant_value_t callsite_isToplevel(ant_params_t) { return js_false; }
+static ant_value_t callsite_isEval(ant_params_t) { return js_false; }
+static ant_value_t callsite_isConstructor(ant_params_t) { return js_false; }
+static ant_value_t callsite_getEvalOrigin(ant_params_t) { return js_mkundef(); }
+static ant_value_t callsite_getThis(ant_params_t) { return js_mkundef(); }
 
-static ant_value_t callsite_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t callsite_toString(ant_params_t) {
   ant_value_t name = callsite_field(js, CS_NAME);
   ant_value_t file = callsite_field(js, CS_FILE);
   ant_value_t line = callsite_field(js, CS_LINE);

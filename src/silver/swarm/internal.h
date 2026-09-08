@@ -3,7 +3,8 @@
 
 #include "silver/swarm.h"
 #include "silver/glue.h"
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "silver/opcode.h"
 #include "../ops/globals.h"
 #include "../ops/literals.h"
@@ -131,6 +132,7 @@ typedef struct {
 typedef struct {
   bool needs_bailout, needs_inc_local, needs_args_buf, needs_iter_roots;
   bool needs_close_upval, needs_tco_args, needs_ic_epoch, needs_this;
+  bool needs_new_target, needs_super;
   bool *builder_target_slots;
 } jit_features_t;
 

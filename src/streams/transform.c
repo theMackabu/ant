@@ -8,7 +8,7 @@
 #include "descriptors.h"
 
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/assert.h"
 #include "modules/symbol.h"
 #include "streams/transform.h"
@@ -304,13 +304,13 @@ void ts_ctrl_terminate(ant_t *js, ant_value_t ctrl_obj) {
   }
 }
 
-static ant_value_t ts_transform_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_transform_resolve(ant_params_t) {
   ant_value_t p = js_get_slot(js->current_func, SLOT_DATA);
   js_resolve_promise(js, p, js_mkundef());
   return js_mkundef();
 }
 
-static ant_value_t ts_transform_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_transform_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -328,7 +328,7 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
 
   if (is_callable(transform_fn)) {
     ant_value_t call_args[2] = { chunk, ctrl_obj };
-    ant_value_t result = sv_vm_call(js->vm, js, transform_fn, ts_ctrl_transformer(ctrl_obj), call_args, 2, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, transform_fn, ts_ctrl_transformer(ctrl_obj), call_args, 2, NULL, js_mkundef());
 
     if (is_err(result)) {
       ant_value_t err = ts_take_thrown_or(js, result);
@@ -357,7 +357,7 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
   return p;
 }
 
-static ant_value_t ts_cancel_base_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_cancel_base_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -366,7 +366,7 @@ static ant_value_t ts_cancel_base_resolve(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t ts_cancel_base_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_cancel_base_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -388,7 +388,7 @@ static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_va
   ant_value_t result = js_mkundef();
   if (is_callable(cancel_fn)) {
     ant_value_t cancel_args[1] = { reason };
-    result = sv_vm_call(js->vm, js, cancel_fn, ts_ctrl_transformer(ts_controller(ts_obj)), cancel_args, 1, NULL, false);
+    result = sv_vm_call(js->vm, js, cancel_fn, ts_ctrl_transformer(ts_controller(ts_obj)), cancel_args, 1, NULL, js_mkundef());
   }
 
   if (is_err(result)) {
@@ -409,7 +409,7 @@ static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_va
   return p;
 }
 
-static ant_value_t ts_source_cancel_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_source_cancel_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -436,7 +436,7 @@ static ant_value_t ts_source_cancel_resolve(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
-static ant_value_t ts_source_cancel_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_source_cancel_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -446,7 +446,7 @@ static ant_value_t ts_source_cancel_reject(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t ts_abort_cancel_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_abort_cancel_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -469,7 +469,7 @@ static ant_value_t ts_abort_cancel_resolve(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t ts_abort_cancel_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_abort_cancel_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -479,7 +479,7 @@ static ant_value_t ts_abort_cancel_reject(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t ts_close_cancel_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_close_cancel_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -498,7 +498,7 @@ static ant_value_t ts_close_cancel_resolve(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t ts_close_cancel_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_close_cancel_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t err = (nargs > 0) ? args[0] : js_mkundef();
@@ -506,7 +506,7 @@ static ant_value_t ts_close_cancel_reject(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t ts_sink_write_bp_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_write_bp_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t ctrl_obj = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t chunk = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -535,7 +535,7 @@ static ant_value_t ts_sink_write_bp_resolve(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
-static ant_value_t ts_sink_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_write(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t ctrl_obj = ts_controller(ts_obj);
@@ -569,7 +569,7 @@ static ant_value_t ts_sink_write(ant_t *js, ant_value_t *args, int nargs) {
   return finish_p;
 }
 
-static ant_value_t ts_sink_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_abort(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t ctrl_obj = ts_controller(ts_obj);
   ant_value_t cancel_fn = ts_ctrl_cancel_fn(ctrl_obj);
@@ -594,7 +594,7 @@ static ant_value_t ts_sink_abort(ant_t *js, ant_value_t *args, int nargs) {
   return p;
 }
 
-static ant_value_t ts_sink_close_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_close_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -618,7 +618,7 @@ static ant_value_t ts_sink_close_resolve(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t ts_sink_close_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_close_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -629,7 +629,7 @@ static ant_value_t ts_sink_close_reject(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_sink_close(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t ctrl_obj = ts_controller(ts_obj);
   ant_value_t readable = ts_readable(ts_obj);
@@ -654,7 +654,7 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_callable(flush_fn)) {
     ant_value_t flush_args[1] = { ctrl_obj };
-    ant_value_t result = sv_vm_call(js->vm, js, flush_fn, ts_ctrl_transformer(ctrl_obj), flush_args, 1, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, flush_fn, ts_ctrl_transformer(ctrl_obj), flush_args, 1, NULL, js_mkundef());
 
     if (is_err(result)) {
       ant_value_t err = ts_take_thrown_or(js, result);
@@ -687,7 +687,7 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
   return p;
 }
 
-static ant_value_t ts_source_pull(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_source_pull(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
 
   if (ts_get_backpressure(ts_obj)) {
@@ -702,7 +702,7 @@ static ant_value_t ts_source_pull(ant_t *js, ant_value_t *args, int nargs) {
   return p;
 }
 
-static ant_value_t ts_source_cancel(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_source_cancel(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t ctrl_obj = ts_controller(ts_obj);
   ant_value_t cancel_fn = ts_ctrl_cancel_fn(ctrl_obj);
@@ -727,7 +727,7 @@ static ant_value_t ts_source_cancel(ant_t *js, ant_value_t *args, int nargs) {
   return p;
 }
 
-static ant_value_t js_ts_ctrl_get_desired_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_ctrl_get_desired_size(ant_params_t) {
   ant_value_t ts_obj = ts_ctrl_stream(js->this_val);
   ant_value_t readable = ts_readable(ts_obj);
   ant_value_t rs_ctrl = rs_stream_controller(js, readable);
@@ -739,7 +739,7 @@ static ant_value_t js_ts_ctrl_get_desired_size(ant_t *js, ant_value_t *args, int
   return js_mknum(rc->strategy_hwm - rc->queue_total_size);
 }
 
-static ant_value_t js_ts_ctrl_enqueue(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_ctrl_enqueue(ant_params_t) {
   ant_value_t ts_obj = ts_ctrl_stream(js->this_val);
   ant_value_t readable = ts_readable(ts_obj);
   rs_stream_t *rs = rs_get_stream(readable);
@@ -750,28 +750,28 @@ static ant_value_t js_ts_ctrl_enqueue(ant_t *js, ant_value_t *args, int nargs) {
   return ts_ctrl_enqueue(js, js->this_val, chunk);
 }
 
-static ant_value_t js_ts_ctrl_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_ctrl_error(ant_params_t) {
   ant_value_t e = (nargs > 0) ? args[0] : js_mkundef();
   ts_ctrl_error(js, js->this_val, e);
   return js_mkundef();
 }
 
-static ant_value_t js_ts_ctrl_terminate(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_ctrl_terminate(ant_params_t) {
   ts_ctrl_terminate(js, js->this_val);
   return js_mkundef();
 }
 
-static ant_value_t js_ts_get_readable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_get_readable(ant_params_t) {
   if (!ts_is_stream(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStream");
   return ts_readable(js->this_val);
 }
 
-static ant_value_t js_ts_get_writable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_get_writable(ant_params_t) {
   if (!ts_is_stream(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStream");
   return ts_writable(js->this_val);
 }
 
-static ant_value_t ts_start_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_start_resolve(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t writable = ts_writable(ts_obj);
   ant_value_t ws_ctrl = ws_stream_controller(writable);
@@ -792,7 +792,7 @@ static ant_value_t ts_start_resolve(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t ts_start_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ts_start_reject(ant_params_t) {
   ant_value_t ts_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t e = (nargs > 0) ? args[0] : js_mkundef();
 
@@ -817,8 +817,8 @@ static ant_value_t ts_start_reject(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+ant_value_t js_ts_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream constructor requires 'new'");
 
   ant_value_t transformer = js_mkundef();
@@ -911,7 +911,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t ts_obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ts_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ts_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(ts_obj, proto);
   js_set_slot(ts_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM));
   js_set_slot(ts_obj, SLOT_DATA, js_mknum(0));
@@ -1007,7 +1007,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_callable(start_fn)) {
     ant_value_t start_args[1] = { ctrl_obj };
-    ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, transformer, start_args, 1, NULL, false);
+    ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, transformer, start_args, 1, NULL, js_mkundef());
     if (is_err(start_result)) { return start_result; }
 
     if (vtype(start_result) == kTypePromise) {
@@ -1034,7 +1034,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return ts_obj;
 }
 
-static ant_value_t js_ts_ctrl_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ts_ctrl_ctor(ant_params_t) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStreamDefaultController cannot be constructed directly");
 }
 

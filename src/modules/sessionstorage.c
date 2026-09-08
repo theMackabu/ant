@@ -83,7 +83,7 @@ static char *storage_key(size_t index) {
 }
 
 // sessionStorage.setItem(key, value)
-static ant_value_t js_sessionstorage_setItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sessionstorage_setItem(ant_params_t) {
   if (nargs < 2) {
     return js_mkerr(js, "Failed to execute 'setItem' on 'Storage': 2 arguments required");
   }
@@ -98,7 +98,7 @@ static ant_value_t js_sessionstorage_setItem(ant_t *js, ant_value_t *args, int n
 }
 
 // sessionStorage.getItem(key)
-static ant_value_t js_sessionstorage_getItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sessionstorage_getItem(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'getItem' on 'Storage': 1 argument required");
   }
@@ -113,7 +113,7 @@ static ant_value_t js_sessionstorage_getItem(ant_t *js, ant_value_t *args, int n
 }
 
 // sessionStorage.removeItem(key)
-static ant_value_t js_sessionstorage_removeItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sessionstorage_removeItem(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'removeItem' on 'Storage': 1 argument required");
   }
@@ -132,7 +132,7 @@ static ant_value_t js_sessionstorage_clear(ant_params_t) {
 }
 
 // sessionStorage.key(index)
-static ant_value_t js_sessionstorage_key(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sessionstorage_key(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'key' on 'Storage': 1 argument required");
   }

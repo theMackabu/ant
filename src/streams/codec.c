@@ -5,6 +5,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/symbol.h"
@@ -79,7 +80,7 @@ static ant_value_t codec_flush_controller(ant_value_t *args, int nargs) {
   return (nargs > 0) ? args[0] : js_mkundef();
 }
 
-static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tes_transform(ant_params_t) {
   tes_state_t *st = (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
@@ -164,7 +165,7 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
     : js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
 }
 
-static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tes_flush(ant_params_t) {
   tes_state_t *st = (tes_state_t *)js_get_native(js->current_func, TES_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
@@ -186,31 +187,31 @@ static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_tes_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tes_get_encoding(ant_params_t) {
   return js_mkstr(js, "utf-8", 5);
 }
 
-static ant_value_t js_tes_get_readable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tes_get_readable(ant_params_t) {
   ant_value_t ts_obj = tes_get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   return ts_stream_readable(ts_obj);
 }
 
-static ant_value_t js_tes_get_writable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tes_get_writable(ant_params_t) {
   ant_value_t ts_obj = tes_get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextEncoderStream");
   return ts_stream_writable(ts_obj);
 }
 
-static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_tes_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextEncoderStream constructor requires 'new'");
 
   tes_state_t *st = calloc(1, sizeof(tes_state_t));
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.tes_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.tes_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TES_NATIVE_TAG);
   js_set_finalizer(obj, tes_state_finalize);
@@ -232,7 +233,7 @@ static ant_value_t js_tes_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tds_transform(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
@@ -259,7 +260,7 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tds_flush(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(js->current_func, TDS_NATIVE_TAG);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
@@ -279,7 +280,7 @@ static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_tds_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tds_get_encoding(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(js->this_val, TDS_NATIVE_TAG);
   if (!st) return js_mkstr(js, "utf-8", 5);
   switch (st->encoding) {
@@ -291,23 +292,23 @@ static ant_value_t js_tds_get_encoding(ant_t *js, ant_value_t *args, int nargs) 
   }
 }
 
-static ant_value_t js_tds_get_fatal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tds_get_fatal(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(js->this_val, TDS_NATIVE_TAG);
   return (st && st->fatal) ? js_true : js_false;
 }
 
-static ant_value_t js_tds_get_ignore_bom(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tds_get_ignore_bom(ant_params_t) {
   td_state_t *st = (td_state_t *)js_get_native(js->this_val, TDS_NATIVE_TAG);
   return (st && st->ignore_bom) ? js_true : js_false;
 }
 
-static ant_value_t js_tds_get_readable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tds_get_readable(ant_params_t) {
   ant_value_t ts_obj = tds_get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   return ts_stream_readable(ts_obj);
 }
 
-static ant_value_t js_tds_get_writable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_tds_get_writable(ant_params_t) {
   ant_value_t ts_obj = tds_get_ts(js->this_val);
   if (!ts_is_stream(ts_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TextDecoderStream");
   return ts_stream_writable(ts_obj);
@@ -340,8 +341,8 @@ static int tds_resolve_encoding(const char *s, size_t len) {
   return -1;
 }
 
-static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_tds_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoderStream constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
@@ -378,7 +379,7 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (!st) return js_mkerr(js, "out of memory");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.tds_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.tds_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, TDS_NATIVE_TAG);
   js_set_finalizer(obj, tds_state_finalize);

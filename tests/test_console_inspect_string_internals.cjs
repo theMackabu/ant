@@ -29,7 +29,7 @@ assert(
   `expected tiny concatenation to copy flat, got ${JSON.stringify(shortConcat)}`
 );
 
-const rope = run('console.inspect("abcdefgh" + "ijklm")');
+const rope = run('console.inspect("abcdefghijklmnop" + "qrstuvwxyz012345")');
 assert(rope.includes('<String rope '), `expected rope string internals, got ${JSON.stringify(rope)}`);
 assert(rope.includes('depth=1'), `expected rope depth, got ${JSON.stringify(rope)}`);
 assert(rope.includes('cached=undefined'), `expected untouched rope cache, got ${JSON.stringify(rope)}`);

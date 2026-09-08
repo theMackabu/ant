@@ -48,9 +48,12 @@ typedef struct {
   uint32_t slot;
 } ant_prop_loc_t;
 
-typedef ant_value_t 
-  (*ant_cfunc_t) 
-  (ant_t *, ant_value_t *, int);
+#define ant_native_params_t ant_t *js, ant_value_t *args, int nargs
+#define ant_params_t ant_native_params_t, ant_value_t call_new_target
+
+typedef ant_value_t
+  (*ant_cfunc_t)
+  (ant_params_t);
 
 typedef struct ant_cfunc_meta {
   ant_cfunc_t fn;
@@ -61,8 +64,5 @@ typedef struct ant_cfunc_meta {
 
 constexpr uintptr_t ant_sidecar = 1u;
 constexpr ant_prop_loc_t ANT_PROP_LOC_NONE = {NULL, 0};
-
-#define ant_bind_t   ant_value_t func, ant_value_t this_val
-#define ant_params_t ant_t *js, ant_value_t *args, int nargs
 
 #endif

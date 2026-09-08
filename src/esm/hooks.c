@@ -10,7 +10,7 @@
 #include "gc/roots.h"
 #include "internal.h"
 #include "modules/buffer.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -64,7 +64,7 @@ static bool esm_hook_next_was_called(ant_t *js, ant_value_t next) {
   return js_truthy(js, js_get(js, data, "called"));
 }
 
-static ant_value_t builtin_esm_next_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_esm_next_resolve(ant_params_t) {
   ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   js_set(js, data, "called", js_true);
 
@@ -96,7 +96,7 @@ static ant_value_t builtin_esm_next_resolve(ant_t *js, ant_value_t *args, int na
   return result;
 }
 
-static ant_value_t builtin_esm_next_load(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_esm_next_load(ant_params_t) {
   ant_value_t data = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   js_set(js, data, "called", js_true);
 
@@ -125,7 +125,7 @@ static ant_value_t esm_run_hook_level(
   GC_ROOT_PIN(js, next);
 
   ant_value_t call_args[3] = { arg0, ctx, next };
-  ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, 3, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, 3, NULL, js_mkundef());
   GC_ROOT_PIN(js, result);
 
   if (!is_err(result)) {

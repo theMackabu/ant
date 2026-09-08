@@ -5,7 +5,7 @@
 #include "tokens.h"
 #include "errors.h"
 
-#include "silver/engine.h"
+#include "silver/feedback.h"
 #include "modules/bigint.h"
 
 static inline ant_value_t sv_add_to_primitive(ant_t *js, ant_value_t value) {

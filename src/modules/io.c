@@ -25,7 +25,7 @@
 #include "internal.h"
 #include "utils.h"
 #include "inspector.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/io.h"
 #include "modules/util.h"
 #include "sandbox/sandbox.h"
@@ -559,8 +559,8 @@ static ant_value_t console_call_value(
   ant_value_t result = js_mkundef();
 
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
 
   return result;
@@ -779,32 +779,32 @@ ant_value_t console_emit_current(
   return console_emit_with_this(js, js_getthis(js), use_stderr, prefix, args, nargs);
 }
 
-static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_log(ant_params_t) {
   ant_inspector_console_api_called(js, "log", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
-static ant_value_t js_console_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_error(ant_params_t) {
   ant_inspector_console_api_called(js, "error", args, nargs);
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
-static ant_value_t js_console_warn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_warn(ant_params_t) {
   ant_inspector_console_api_called(js, "warning", args, nargs);
   return console_emit_current(js, true, NULL, args, nargs);
 }
 
-static ant_value_t js_console_info(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_info(ant_params_t) {
   ant_inspector_console_api_called(js, "info", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
-static ant_value_t js_console_debug(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_debug(ant_params_t) {
   ant_inspector_console_api_called(js, "debug", args, nargs);
   return console_emit_current(js, false, NULL, args, nargs);
 }
 
-static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_assert(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
@@ -812,7 +812,7 @@ static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
   return console_emit_current(js, true, "Assertion failed:", args + 1, nargs - 1);
 }
 
-static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_trace(ant_params_t) {
   ant_value_t this_obj = console_get_effective_this(js, js_getthis(js));
   ant_inspector_console_api_called(js, "trace", args, nargs);
   console_emit_current(js, true, "Trace:", args, nargs);
@@ -825,13 +825,13 @@ static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_console_clear(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_clear(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!io_no_color) console_write_string(js, this_obj, false, "\033[2J\033[H", 7);
   return js_mkundef();
 }
 
-static ant_value_t js_console_time(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_time(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
@@ -846,7 +846,7 @@ static ant_value_t js_console_time(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_timeEnd(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
@@ -869,7 +869,7 @@ static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
   return console_emit_current(js, false, NULL, out_args, 1);
 }
 
-static ant_value_t js_console_timeLog(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_timeLog(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   int extra_start = 0;
@@ -902,7 +902,7 @@ static ant_value_t js_console_timeLog(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t js_console_count(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_count(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   
@@ -920,7 +920,7 @@ static ant_value_t js_console_count(ant_t *js, ant_value_t *args, int nargs) {
   return console_emit_current(js, false, NULL, out_args, 1);
 }
 
-static ant_value_t js_console_countReset(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_countReset(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   const char *label = "default";
   if (nargs > 0 && vtype(args[0]) == kTypeString) label = js_getstr(js, args[0], NULL);
@@ -929,21 +929,21 @@ static ant_value_t js_console_countReset(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t js_console_group(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_group(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs > 0) console_emit_current(js, false, NULL, args, nargs);
   console_set_group_level(js, this_obj, console_get_group_level(js, this_obj) + 1);
   return js_mkundef();
 }
 
-static ant_value_t js_console_group_end(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_group_end(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   console_set_group_level(js, this_obj, console_get_group_level(js, this_obj) - 1);
   return js_mkundef();
 }
 
-static ant_value_t js_console_group_collapsed(ant_t *js, ant_value_t *args, int nargs) {
-  return js_console_group(js, args, nargs);
+static ant_value_t js_console_group_collapsed(ant_params_t) {
+  return js_console_group(js, args, nargs, js_mkundef());
 }
 
 static const char *get_slot_name(internal_slot_t slot) {
@@ -1305,7 +1305,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
   fprintf(stream, "}");
 }
 
-static ant_value_t js_console_inspect(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_console_inspect(ant_params_t) {
   FILE *stream = stdout;
   inspect_visited_t visited = {0};
   
@@ -1321,18 +1321,18 @@ static ant_value_t js_console_inspect(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // TODO: replace stub with real
-static ant_value_t js_console_dir(ant_t *js, ant_value_t *args, int nargs) {
-  return js_console_log(js, args, nargs);
+static ant_value_t js_console_dir(ant_params_t) {
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 // TODO: replace stub with real
-static ant_value_t js_console_dirxml(ant_t *js, ant_value_t *args, int nargs) {
-  return js_console_log(js, args, nargs);
+static ant_value_t js_console_dirxml(ant_params_t) {
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 // TODO: replace stub with real
-static ant_value_t js_console_table(ant_t *js, ant_value_t *args, int nargs) {
-  return js_console_log(js, args, nargs);
+static ant_value_t js_console_table(ant_params_t) {
+  return js_console_log(js, args, nargs, js_mkundef());
 }
 
 static void console_apply_methods(ant_t *js, ant_value_t console_obj) {
@@ -1358,8 +1358,8 @@ static void console_apply_methods(ant_t *js, ant_value_t console_obj) {
   js_set(js, console_obj, "inspect", js_mkfun(js_console_inspect));
 }
 
-static ant_value_t js_console_constructor(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.console_proto);
+static ant_value_t js_console_constructor(ant_params_t) {
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.console_proto, call_new_target);
   ant_value_t console_obj = js_mkobj(js);
   js_set_proto_init(console_obj, is_special_object(proto) ? proto : js->builtins.console_proto);
 

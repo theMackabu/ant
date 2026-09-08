@@ -130,7 +130,7 @@ static bool ser_val(ant_t *js, enc_t *e, ant_value_t val, int depth) {
   return enc_u8(e, 'U');
 }
 
-static ant_value_t v8_serialize(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_serialize(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "serialize: value required");
 
   enc_t e = {0};
@@ -230,7 +230,7 @@ static ant_value_t des_val(ant_t *js, dec_t *d, int depth) {
   }
 }
 
-static ant_value_t v8_deserialize(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_deserialize(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "deserialize: Buffer required");
 
   TypedArrayData *ta = buffer_get_typedarray_data(args[0]);
@@ -246,7 +246,7 @@ static ant_value_t v8_deserialize(ant_t *js, ant_value_t *args, int nargs) {
   return des_val(js, &d, 0);
 }
 
-static ant_value_t v8_get_heap_statistics(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_get_heap_statistics(ant_params_t) {
   size_t rss = 0;
   uv_resident_set_memory(&rss);
 
@@ -287,7 +287,7 @@ static ant_value_t v8_get_heap_statistics(ant_t *js, ant_value_t *args, int narg
   return obj;
 }
 
-static ant_value_t v8_get_heap_space_statistics(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_get_heap_space_statistics(ant_params_t) {
   ant_value_t nursery = js_mkobj(js);
   size_t arena_committed  = js->obj_arena.committed;
   size_t arena_live_bytes = js->obj_arena.live_count * js->obj_arena.elem_size;
@@ -316,23 +316,23 @@ static ant_value_t v8_get_heap_space_statistics(ant_t *js, ant_value_t *args, in
   return arr;
 }
 
-static ant_value_t v8_noop(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_noop(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t v8_noop_false(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_noop_false(ant_params_t) {
   return js_false;
 }
 
-static ant_value_t v8_write_heap_snapshot(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_write_heap_snapshot(ant_params_t) {
   return js_mkstr(js, "", 0);
 }
 
-static ant_value_t v8_get_heap_snapshot(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_get_heap_snapshot(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t v8_get_heap_code_statistics(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_get_heap_code_statistics(ant_params_t) {
   size_t closure_structs = js->closure_arena.live_count * js->closure_arena.elem_size;
   size_t bytecode_alloc  = js->alloc_bytes.closures;
 
@@ -347,7 +347,7 @@ static ant_value_t v8_get_heap_code_statistics(ant_t *js, ant_value_t *args, int
   return obj;
 }
 
-static ant_value_t v8_cached_data_version_tag(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t v8_cached_data_version_tag(ant_params_t) {
   return js_mknum(0xA0A0A0);
 }
 

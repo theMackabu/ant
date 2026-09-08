@@ -58,7 +58,7 @@ ant_value_t maybe_call_symbol_method(
 WELLKNOWN_SYMBOLS(DECL_GET_SYM)
 #undef DECL_GET_SYM
 
-static inline ant_value_t sym_this_cb(ant_t *js, ant_value_t *args, int nargs) {
+static inline ant_value_t sym_this_cb(ant_params_t) {
   return js->this_val;
 }
 

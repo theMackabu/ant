@@ -191,6 +191,11 @@ static bool is_valued_flag(const char *arg) {
     strcmp(arg, "--cron-period") == 0;
 }
 
+static bool positional_is_regular_file(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
 static int find_argv_token_index(int argc, char **argv, const char *token) {
   if (!token) return -1;
   for (int i = 1; i < argc; i++) if (argv[i] == token) return i;
@@ -717,7 +722,7 @@ int main(int argc, char *argv[]) {
       return exitcode;
     }
 
-    if (pkg_script_exists("package.json", positional)) {
+    if (!positional_is_regular_file(positional) && pkg_script_exists("package.json", positional)) {
       if (watch->count > 0) {
         crfprintf(stderr, msg.watch_subcommand_error);
         CLEANUP_ARGS_AND_ARGV();

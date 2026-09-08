@@ -8,7 +8,7 @@
 #include "descriptors.h"
 
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 #include "modules/assert.h"
 #include "modules/abort.h"
@@ -289,7 +289,7 @@ static void ws_reject_close_and_closed(ant_t *js, ant_value_t stream_obj) {
     ws_writer_reject_closed_promise(js, writer_obj, stored_error);
 }
 
-static ant_value_t ws_finish_erroring_abort_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_finish_erroring_abort_resolve(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t stream_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -298,7 +298,7 @@ static ant_value_t ws_finish_erroring_abort_resolve(ant_t *js, ant_value_t *args
   return js_mkundef();
 }
 
-static ant_value_t ws_finish_erroring_abort_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_finish_erroring_abort_reject(ant_params_t) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t stream_obj = js_get_slot(wrapper, SLOT_ENTRIES);
@@ -349,7 +349,7 @@ void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
     ant_value_t result = js_mkundef();
     if (is_callable(saved_abort_fn)) {
       ant_value_t abort_args[1] = { stored_error };
-      result = sv_vm_call(js->vm, js, saved_abort_fn, saved_sink, abort_args, 1, NULL, false);
+      result = sv_vm_call(js->vm, js, saved_abort_fn, saved_sink, abort_args, 1, NULL, js_mkundef());
     }
 
     if (is_err(result)) {
@@ -456,7 +456,7 @@ static void writable_stream_mark_close_in_flight(ant_t *js, ant_value_t stream_o
   js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
 }
 
-static ant_value_t ws_process_write_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_process_write_resolve(ant_params_t) {
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
   if (!ctrl) return js_mkundef();
@@ -485,7 +485,7 @@ static ant_value_t ws_process_write_resolve(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
-static ant_value_t ws_process_write_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_process_write_reject(ant_params_t) {
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t stream_obj = ws_ctrl_stream(ctrl_obj);
   ws_stream_t *stream = ws_get_stream(stream_obj);
@@ -508,7 +508,7 @@ static void ws_default_controller_process_write(ant_t *js, ant_value_t ctrl_obj,
   ant_value_t result = js_mkundef();
   if (is_callable(write_fn)) {
     ant_value_t write_args[2] = { chunk, ctrl_obj };
-    result = sv_vm_call(js->vm, js, write_fn, sink, write_args, 2, NULL, false);
+    result = sv_vm_call(js->vm, js, write_fn, sink, write_args, 2, NULL, js_mkundef());
   }
 
   if (is_err(result)) {
@@ -525,13 +525,13 @@ static void ws_default_controller_process_write(ant_t *js, ant_value_t ctrl_obj,
   }
 }
 
-static ant_value_t ws_process_close_resolve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_process_close_resolve(ant_params_t) {
   ant_value_t stream_obj = js_get_slot(js->current_func, SLOT_DATA);
   writable_stream_finish_in_flight_close(js, stream_obj);
   return js_mkundef();
 }
 
-static ant_value_t ws_process_close_reject(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_process_close_reject(ant_params_t) {
   ant_value_t stream_obj = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   writable_stream_finish_in_flight_close_with_error(js, stream_obj, reason);
@@ -555,7 +555,7 @@ static void ws_default_controller_process_close(ant_t *js, ant_value_t ctrl_obj)
 
   ant_value_t result = js_mkundef();
   if (is_callable(close_fn))
-    result = sv_vm_call(js->vm, js, close_fn, sink, NULL, 0, NULL, false);
+    result = sv_vm_call(js->vm, js, close_fn, sink, NULL, 0, NULL, js_mkundef());
 
   if (is_err(result)) {
     ant_value_t thrown = js->thrown_value;
@@ -748,7 +748,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   
   if (is_callable(size_fn)) {
     ant_value_t size_args[1] = { chunk };
-    ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, false);
+    ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, js_mkundef());
     if (is_err(size_result)) {
       ant_value_t thrown = js->thrown_value;
       ant_value_t err = is_object_type(thrown) ? thrown : size_result;
@@ -778,7 +778,7 @@ ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk
   return p;
 }
 
-static ant_value_t ws_start_resolve_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_start_resolve_handler(ant_params_t) {
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
   if (!ctrl) return js_mkundef();
@@ -787,7 +787,7 @@ static ant_value_t ws_start_resolve_handler(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
-static ant_value_t ws_start_reject_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ws_start_reject_handler(ant_params_t) {
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
   if (!ctrl) return js_mkundef();
@@ -797,13 +797,13 @@ static ant_value_t ws_start_reject_handler(ant_t *js, ant_value_t *args, int nar
   return js_mkundef();
 }
 
-static ant_value_t js_ws_controller_get_signal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_controller_get_signal(ant_params_t) {
   ant_value_t signal_ctrl = ws_ctrl_signal(js->this_val);
   if (!is_object_type(signal_ctrl)) return js_mkundef();
   return js_get(js, signal_ctrl, "signal");
 }
 
-static ant_value_t js_ws_controller_error(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_controller_error(ant_params_t) {
   ws_controller_t *ctrl = ws_get_controller(js->this_val);
   if (!ctrl) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStreamDefaultController");
   ant_value_t stream_obj = ws_ctrl_stream(js->this_val);
@@ -814,15 +814,15 @@ static ant_value_t js_ws_controller_error(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-static ant_value_t js_ws_writer_get_closed(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_get_closed(ant_params_t) {
   return ws_writer_closed(js->this_val);
 }
 
-static ant_value_t js_ws_writer_get_ready(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_get_ready(ant_params_t) {
   return ws_writer_ready(js->this_val);
 }
 
-static ant_value_t js_ws_writer_get_desired_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_get_desired_size(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Writer has no stream");
@@ -836,7 +836,7 @@ static ant_value_t js_ws_writer_get_desired_size(ant_t *js, ant_value_t *args, i
   return js_mknum(ws_default_controller_get_desired_size(ctrl));
 }
 
-static ant_value_t js_ws_writer_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_abort(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
@@ -848,7 +848,7 @@ static ant_value_t js_ws_writer_abort(ant_t *js, ant_value_t *args, int nargs) {
   return writable_stream_abort(js, stream_obj, reason);
 }
 
-static ant_value_t js_ws_writer_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_close(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
@@ -865,7 +865,7 @@ static ant_value_t js_ws_writer_close(ant_t *js, ant_value_t *args, int nargs) {
   return writable_stream_close(js, stream_obj);
 }
 
-static ant_value_t js_ws_writer_release_lock(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_release_lock(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) return js_mkundef();
   ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
@@ -885,7 +885,7 @@ static ant_value_t js_ws_writer_release_lock(ant_t *js, ant_value_t *args, int n
   return js_mkundef();
 }
 
-static ant_value_t js_ws_writer_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_writer_write(ant_params_t) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!ws_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
@@ -897,8 +897,8 @@ static ant_value_t js_ws_writer_write(ant_t *js, ant_value_t *args, int nargs) {
   return ws_writer_write(js, js->this_val, chunk);
 }
 
-ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+ant_value_t js_ws_writer_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultWriter requires a stream argument");
@@ -911,7 +911,7 @@ ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is already locked to a writer");
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_writer_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_writer_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_WRITER));
@@ -949,13 +949,13 @@ ant_value_t ws_acquire_writer(ant_t *js, ant_value_t stream_obj) {
   return js_construct_native(js, js_ws_writer_ctor, writer_args, 1);
 }
 
-static ant_value_t js_ws_get_locked(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_get_locked(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   return js_bool(ws_is_writer(ws_stream_writer(js->this_val)));
 }
 
-static ant_value_t js_ws_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_abort(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
@@ -968,7 +968,7 @@ static ant_value_t js_ws_abort(ant_t *js, ant_value_t *args, int nargs) {
   return writable_stream_abort(js, js->this_val, reason);
 }
 
-static ant_value_t js_ws_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_close(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
   if (ws_is_writer(ws_stream_writer(js->this_val))) {
@@ -986,7 +986,7 @@ static ant_value_t js_ws_close(ant_t *js, ant_value_t *args, int nargs) {
   return writable_stream_close(js, js->this_val);
 }
 
-static ant_value_t js_ws_get_writer(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_get_writer(ant_params_t) {
   ws_stream_t *stream = ws_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
 
@@ -1022,10 +1022,7 @@ static ant_value_t setup_ws_default_controller(
     ant_value_t ac_proto = js_get(js, ac_ctor, "prototype");
     ac = js_mkobj(js);
     if (is_object_type(ac_proto)) js_set_proto_init(ac, ac_proto);
-    ant_value_t saved = js->new_target;
-    js->new_target = ac_ctor;
-    ant_value_t result = sv_vm_call(js->vm, js, ac_ctor, ac, NULL, 0, NULL, false);
-    js->new_target = saved;
+    ant_value_t result = sv_vm_call(js->vm, js, ac_ctor, ac, NULL, 0, NULL, ac_ctor);
     if (is_err(result)) ac = js_mkundef();
   }
   
@@ -1038,8 +1035,8 @@ static ant_value_t setup_ws_default_controller(
   return ctrl_obj;
 }
 
-static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_ws_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream constructor requires 'new'");
 
   ant_value_t underlying_sink = js_mkundef();
@@ -1084,7 +1081,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
   st->state = WS_STATE_WRITABLE;
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.ws_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
@@ -1132,7 +1129,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_callable(start_fn)) {
     ant_value_t start_args[1] = { ctrl_obj };
-    ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, underlying_sink, start_args, 1, NULL, false);
+    ant_value_t start_result = sv_vm_call(js->vm, js, start_fn, underlying_sink, start_args, 1, NULL, js_mkundef());
     if (is_err(start_result)) return start_result;
 
     if (vtype(start_result) == kTypePromise) {
@@ -1159,7 +1156,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t js_ws_controller_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_ws_controller_ctor(ant_params_t) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStreamDefaultController cannot be constructed directly");
 }
 

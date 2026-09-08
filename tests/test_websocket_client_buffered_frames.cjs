@@ -1,6 +1,6 @@
+const net = require('node:net');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
-const net = require('node:net');
 
 function acceptKey(key) {
   return crypto
@@ -26,6 +26,7 @@ function closeFrame() {
 }
 
 const server = net.createServer((socket) => {
+  assert.strictEqual(Object.getPrototypeOf(socket), net.Socket.prototype);
   let request = '';
   socket.on('data', (chunk) => {
     request += chunk.toString('latin1');

@@ -390,7 +390,7 @@ static bool parse_get_encoding(ant_t *js, ant_value_t encoding, bool *as_string)
   return false;
 }
 
-static ant_value_t lmdb_open(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_open(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString) {
     return js_mkerr(js, "lmdb.open(path, options?) requires a string path");
   }
@@ -477,7 +477,7 @@ static ant_value_t lmdb_open(ant_t *js, ant_value_t *args, int nargs) {
   return make_env_obj(js, handle);
 }
 
-static ant_value_t lmdb_env_open_db(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_open_db(ant_params_t) {
   lmdb_env_handle_t *env = get_env_handle(js, js_getthis(js), true);
   if (!env) return js_mkerr(js, "Invalid or closed LMDB env");
 
@@ -547,7 +547,7 @@ static ant_value_t lmdb_env_open_db(ant_t *js, ant_value_t *args, int nargs) {
   return make_db_obj(js, db, js_getthis(js));
 }
 
-static ant_value_t lmdb_env_begin_txn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_begin_txn(ant_params_t) {
   lmdb_env_handle_t *env = get_env_handle(js, js_getthis(js), true);
   if (!env) return js_mkerr(js, "Invalid or closed LMDB env");
 
@@ -581,7 +581,7 @@ static ant_value_t lmdb_env_begin_txn(ant_t *js, ant_value_t *args, int nargs) {
   return make_txn_obj(js, handle, js_getthis(js));
 }
 
-static ant_value_t lmdb_env_close_method(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_close_method(ant_params_t) {
   (void)args;
   (void)nargs;
   ant_value_t self = js_getthis(js);
@@ -593,7 +593,7 @@ static ant_value_t lmdb_env_close_method(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t lmdb_env_sync_method(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_sync_method(ant_params_t) {
   lmdb_env_handle_t *env = get_env_handle(js, js_getthis(js), true);
   if (!env) return js_mkerr(js, "Invalid or closed LMDB env");
 
@@ -605,7 +605,7 @@ static ant_value_t lmdb_env_sync_method(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t lmdb_env_stat_method(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_stat_method(ant_params_t) {
   lmdb_env_handle_t *env = get_env_handle(js, js_getthis(js), true);
   if (!env) return js_mkerr(js, "Invalid or closed LMDB env");
 
@@ -629,7 +629,7 @@ static ant_value_t lmdb_env_stat_method(ant_t *js, ant_value_t *args, int nargs)
   return out;
 }
 
-static ant_value_t lmdb_env_info_method(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_info_method(ant_params_t) {
   lmdb_env_handle_t *env = get_env_handle(js, js_getthis(js), true);
   if (!env) return js_mkerr(js, "Invalid or closed LMDB env");
 
@@ -647,7 +647,7 @@ static ant_value_t lmdb_env_info_method(ant_t *js, ant_value_t *args, int nargs)
   return out;
 }
 
-static ant_value_t lmdb_txn_get_impl(ant_t *js, ant_value_t *args, int nargs, bool as_string) {
+static ant_value_t lmdb_txn_get_impl(ant_native_params_t, bool as_string) {
   if (nargs < 2) return js_mkerr(js, "txn.getBytes/getString(db, key) requires db and key");
 
   lmdb_txn_handle_t *txn = get_txn_handle(js, js_getthis(js), true);
@@ -670,7 +670,7 @@ static ant_value_t lmdb_txn_get_impl(ant_t *js, ant_value_t *args, int nargs, bo
   return mdb_val_to_js(js, &value, as_string);
 }
 
-static ant_value_t lmdb_txn_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_get(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "txn.get(db, key, encoding?) requires db and key");
   bool as_string = false;
   if (nargs > 2 && !parse_get_encoding(js, args[2], &as_string)) {
@@ -679,15 +679,15 @@ static ant_value_t lmdb_txn_get(ant_t *js, ant_value_t *args, int nargs) {
   return lmdb_txn_get_impl(js, args, nargs, as_string);
 }
 
-static ant_value_t lmdb_txn_get_bytes(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_get_bytes(ant_params_t) {
   return lmdb_txn_get_impl(js, args, nargs, false);
 }
 
-static ant_value_t lmdb_txn_get_string(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_get_string(ant_params_t) {
   return lmdb_txn_get_impl(js, args, nargs, true);
 }
 
-static ant_value_t lmdb_txn_put(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_put(ant_params_t) {
   if (nargs < 3) return js_mkerr(js, "txn.put(db, key, value, options?) requires db, key, and value");
 
   lmdb_txn_handle_t *txn = get_txn_handle(js, js_getthis(js), true);
@@ -716,7 +716,7 @@ static ant_value_t lmdb_txn_put(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t lmdb_txn_del(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_del(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "txn.del(db, key, value?) requires db and key");
 
   lmdb_txn_handle_t *txn = get_txn_handle(js, js_getthis(js), true);
@@ -743,7 +743,7 @@ static ant_value_t lmdb_txn_del(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t lmdb_txn_commit(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_commit(ant_params_t) {
   ant_value_t self = js_getthis(js);
   lmdb_txn_handle_t *txn = get_txn_handle(js, self, true);
   if (!txn) return js_mkerr(js, "Invalid or closed LMDB transaction");
@@ -760,7 +760,7 @@ static ant_value_t lmdb_txn_commit(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_txn_abort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_abort(ant_params_t) {
   ant_value_t self = js_getthis(js);
   lmdb_txn_handle_t *txn = get_txn_handle(js, self, false);
   if (!txn) return js_mkerr(js, "Invalid LMDB transaction");
@@ -777,7 +777,7 @@ static ant_value_t lmdb_txn_abort(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_db_get_impl(ant_t *js, ant_value_t *args, int nargs, bool as_string) {
+static ant_value_t lmdb_db_get_impl(ant_native_params_t, bool as_string) {
   if (nargs < 1) return js_mkerr(js, "db.getBytes/getString(key) requires key");
   lmdb_db_handle_t *db = get_db_handle(js, js_getthis(js), true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
@@ -808,7 +808,7 @@ static ant_value_t lmdb_db_get_impl(ant_t *js, ant_value_t *args, int nargs, boo
   return out;
 }
 
-static ant_value_t lmdb_db_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_get(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "db.get(key, encoding?) requires key");
   bool as_string = false;
   if (nargs > 1 && !parse_get_encoding(js, args[1], &as_string)) {
@@ -817,15 +817,15 @@ static ant_value_t lmdb_db_get(ant_t *js, ant_value_t *args, int nargs) {
   return lmdb_db_get_impl(js, args, nargs, as_string);
 }
 
-static ant_value_t lmdb_db_get_bytes(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_get_bytes(ant_params_t) {
   return lmdb_db_get_impl(js, args, nargs, false);
 }
 
-static ant_value_t lmdb_db_get_string(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_get_string(ant_params_t) {
   return lmdb_db_get_impl(js, args, nargs, true);
 }
 
-static ant_value_t lmdb_db_put(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_put(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "db.put(key, value, options?) requires key and value");
   lmdb_db_handle_t *db = get_db_handle(js, js_getthis(js), true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
@@ -864,7 +864,7 @@ static ant_value_t lmdb_db_put(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t lmdb_db_del(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_del(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "db.del(key, value?) requires key");
   lmdb_db_handle_t *db = get_db_handle(js, js_getthis(js), true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
@@ -905,7 +905,7 @@ static ant_value_t lmdb_db_del(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t lmdb_db_clear(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_clear(ant_params_t) {
   lmdb_db_handle_t *db = get_db_handle(js, js_getthis(js), true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
   if (db->env->read_only) return js_mkerr(js, "Cannot clear on read-only LMDB env");
@@ -925,7 +925,7 @@ static ant_value_t lmdb_db_clear(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_db_drop(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_drop(ant_params_t) {
   ant_value_t self = js_getthis(js);
   lmdb_db_handle_t *db = get_db_handle(js, self, true);
   if (!db) return js_mkerr(js, "Invalid or closed LMDB database handle");
@@ -959,7 +959,7 @@ static ant_value_t lmdb_db_drop(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_db_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_close(ant_params_t) {
   (void)args;
   (void)nargs;
   ant_value_t self = js_getthis(js);
@@ -980,7 +980,7 @@ static ant_value_t lmdb_db_close(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lmdb_strerror_fn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_strerror_fn(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeNumber) {
     return js_mkerr(js, "lmdb.strerror(code) requires a numeric code");
   }
@@ -989,15 +989,15 @@ static ant_value_t lmdb_strerror_fn(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, err, strlen(err));
 }
 
-static ant_value_t lmdb_env_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_env_constructor(ant_params_t) {
   return js_mkerr(js, "LMDBEnv cannot be constructed directly; use lmdb.open()");
 }
 
-static ant_value_t lmdb_db_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_db_constructor(ant_params_t) {
   return js_mkerr(js, "LMDBDatabase cannot be constructed directly; use env.openDB()");
 }
 
-static ant_value_t lmdb_txn_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lmdb_txn_constructor(ant_params_t) {
   return js_mkerr(js, "LMDBTxn cannot be constructed directly; use env.beginTxn()");
 }
 
