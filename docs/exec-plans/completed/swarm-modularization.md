@@ -136,3 +136,8 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   failed at call 101 before the fix; strings, coercible objects, and BigInts
   now pass, including exactly-once coercion. Native build, preflight, and all
   4,221 spec tests passed.
+
+- TYPEOF clears the overwritten slot's constant/function/boolean/range metadata
+  before subsequent comparisons can consume it. The regression failed on the
+  first JIT call before the fix and now covers equality, inequality, operand
+  order, and several constant types. Build, preflight, and all 4,221 specs passed.

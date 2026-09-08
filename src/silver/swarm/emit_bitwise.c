@@ -224,6 +224,7 @@ void jit_emit_bitwise(jit_compile_t *c) {
                                         MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, rs)));
+      vstack_clear_value_info(&c->vs, c->vs.sp - 1);
       break;
     }
 
