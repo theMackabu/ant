@@ -2,6 +2,7 @@
 #define SILVER_FEEDBACK_H
 
 #include "silver/engine.h"
+#include "debug.h"
 
 // TODO: constexpr / enum
 #define SV_TFB_NUM   (1 << 0)

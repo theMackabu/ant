@@ -119,3 +119,14 @@ The direct branch-to-master diff also contains unrelated changes in
 Swarm correction. In particular, the missing `ANT_WASM_EMBED` guard around
 the map-template size assertion remains a separate WASM compilation issue.
 No WASM build or performance benchmark was run.
+
+## Review follow-up fixes (2026-09-08)
+
+The seven confirmed CodeRabbit findings in PR #98 are preexisting master
+bugs. Each correction has its own focused regression and commit; they change
+runtime behavior independently of the source-equivalent modularization.
+
+Build prerequisite: `silver/feedback.h` now includes `debug.h` directly for
+`sv_jit_warn_unlikely`. Removing the incidental debug include from
+`silver/engine.h` exposed this missing dependency in consumers of `call.h`.
+Validation: native build, repository preflight, and all 4,221 spec tests passed.
