@@ -47,7 +47,7 @@ static ant_value_t http_parser_raw_headers_array(ant_t *js, const ant_http1_pars
   return raw_headers;
 }
 
-static ant_value_t js_http_parser_parse_request(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_http_parser_parse_request(ant_params_t) {
   ant_http1_parsed_request_t parsed = {0};
   ant_http1_parse_result_t result = ANT_HTTP1_PARSE_INCOMPLETE;
   ant_value_t input = 0;

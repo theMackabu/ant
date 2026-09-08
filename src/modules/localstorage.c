@@ -156,7 +156,7 @@ static char *storage_key(size_t index) {
   }
 
 // localStorage.setItem(key, value)
-static ant_value_t js_localstorage_setItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_setItem(ant_params_t) {
   CHECK_FILE_SET(js);
   
   if (nargs < 2) {
@@ -173,7 +173,7 @@ static ant_value_t js_localstorage_setItem(ant_t *js, ant_value_t *args, int nar
 }
 
 // localStorage.getItem(key)
-static ant_value_t js_localstorage_getItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_getItem(ant_params_t) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -190,7 +190,7 @@ static ant_value_t js_localstorage_getItem(ant_t *js, ant_value_t *args, int nar
 }
 
 // localStorage.removeItem(key)
-static ant_value_t js_localstorage_removeItem(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_removeItem(ant_params_t) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -205,7 +205,7 @@ static ant_value_t js_localstorage_removeItem(ant_t *js, ant_value_t *args, int 
 }
 
 // localStorage.clear()
-static ant_value_t js_localstorage_clear(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_clear(ant_params_t) {
   CHECK_FILE_SET(js);
   (void)args; (void)nargs;
   storage_clear();
@@ -214,7 +214,7 @@ static ant_value_t js_localstorage_clear(ant_t *js, ant_value_t *args, int nargs
 }
 
 // localStorage.key(index)
-static ant_value_t js_localstorage_key(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_key(ant_params_t) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -237,14 +237,14 @@ static ant_value_t js_localstorage_key(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 // localStorage.length
-static ant_value_t js_localstorage_length(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_length(ant_params_t) {
   (void)args; (void)nargs;
   CHECK_FILE_SET(js)
   return js_mknum((double)storage_length());
 }
 
 // localStorage.setFile(path)
-static ant_value_t js_localstorage_setFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_localstorage_setFile(ant_params_t) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'setFile' on 'Storage': 1 argument required");
   }

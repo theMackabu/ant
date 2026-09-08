@@ -221,7 +221,7 @@ static ant_value_t wasi_handle_proc_exit(wasm_module_inst_t inst) {
   return js_mkundef();
 }
 
-static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t wasi_exported_func_call(ant_params_t) {
   wasi_func_env_t *env = (wasi_func_env_t *)js_get_native(js->current_func, WASI_FUNC_TAG);
   if (!env) return js_mkerr(js, "Invalid WASI function");
 

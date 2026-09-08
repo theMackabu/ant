@@ -14,7 +14,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/navigator.h"
 #include "modules/symbol.h"
 #include "gc/modules.h"
@@ -130,7 +130,7 @@ static ant_value_t make_lock_handler(ant_t *js, ant_value_t cfunc, ant_value_t l
   return js_obj_to_func(js, fn_obj);
 }
 
-static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lock_then_handler(ant_params_t) {
   ant_value_t current_func = js_getcurrentfunc(js);
   ant_value_t data_obj = js_get_slot(current_func, SLOT_DATA);
   
@@ -148,7 +148,7 @@ static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t lock_catch_handler(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t lock_catch_handler(ant_params_t) {
   ant_value_t current_func = js_getcurrentfunc(js);
   ant_value_t data_obj = js_get_slot(current_func, SLOT_DATA);
   
@@ -173,7 +173,7 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   js_set(js, lock_obj, "mode", js_mkstr(js, mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
   js_set_sym(js, lock_obj, get_toStringTag_sym(), js_mkstr(js, "Lock", 4));
   
-  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, js_mkundef());
   
   if (vtype(result) == kTypeError) {
     release_lock(name);
@@ -229,7 +229,7 @@ static void process_pending_requests(ant_t *js) {
   }
 }
 
-static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t locks_request(ant_params_t) {
   if (nargs < 2) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "locks.request requires at least 2 arguments");
   }
@@ -271,7 +271,7 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
   
   if (if_available && !can_acquire_lock(name, mode)) {
     ant_value_t null_val = js_mknull();
-    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, js_mkundef());
     
     if (vtype(result) == kTypePromise) {
       ant_value_t on_resolve = make_lock_handler(
@@ -316,7 +316,7 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static ant_value_t locks_query(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t locks_query(ant_params_t) {
   (void)args;
   (void)nargs;
   

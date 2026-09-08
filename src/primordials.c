@@ -1,7 +1,7 @@
 #include "internal.h"
 #include "primordials.h"
 #include "gc/roots.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 typedef enum {
   ARRAY_PROTO,
@@ -72,7 +72,7 @@ ant_value_t primordial_library(ant_t *js) {
     if (js->thrown_exists) { result = mkval(kTypeError, 0); goto done; }
   }
 
-  captured = builtin_object_freeze(js, &result, 1);
+  captured = builtin_object_freeze(js, &result, 1, js_mkundef());
   if (is_err(captured)) { result = captured; goto done; }
   js->primordials = result;
 done:

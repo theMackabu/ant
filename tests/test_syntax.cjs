@@ -176,6 +176,14 @@ assertThrows(
 );
 assertThrows(() => parseJavaScript('const ='), /SyntaxError/, 'parseJavaScript preserves syntax errors');
 
+for (const sourceType of ['script', 'module', 'unambiguous']) {
+  for (const source of ['new.target;', '() => new.target', 'class C { [new.target]() {} }']) {
+    assertThrows(() => parseJavaScript(source, { sourceType }), /SyntaxError/, 'reject lexical new.target');
+  }
+  parseJavaScript('function f() { new.target; }', { sourceType });
+  parseJavaScript('class C { field = new.target; static { new.target; } }', { sourceType });
+}
+
 const largeSource = Array.from({ length: 1500 }, (_, i) => `const value${i} = ${i};`).join('\n');
 const largeTree = parseJavaScript(largeSource);
 assert(largeTree.body.length === 1500, 'large syntax trees survive allocation and GC pressure');

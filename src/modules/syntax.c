@@ -102,7 +102,7 @@ static ant_value_t syntax_read_options(
   return js_mkundef();
 }
 
-static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_syntax_strip_types(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "stripTypes", "source must be a string");
 
@@ -157,7 +157,7 @@ static ant_value_t js_syntax_strip_types(ant_t *js, ant_value_t *args, int nargs
   return result;
 }
 
-static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_syntax_parse_javascript(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return syntax_type_error(js, "parseJavaScript", "source must be a string");
 
@@ -188,6 +188,13 @@ static ant_value_t js_syntax_parse_javascript(ant_t *js, ant_value_t *args, int 
     js->filename = saved_filename;
     if (js->thrown_exists) return mkval(kTypeError, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL, "ant:syntax parser failed without an error");
+  }
+
+  if (ast_contains_lexical_new_target(program)) {
+    parse_arena_rewind(mark);
+    ant_value_t error = js_mkerr_typed(js, JS_ERR_SYNTAX, "new.target is only valid in functions");
+    js->filename = saved_filename;
+    return error;
   }
 
   bool has_module_syntax = (program->flags & FN_MODULE_SYNTAX) != 0;

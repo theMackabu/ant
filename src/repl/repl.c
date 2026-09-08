@@ -14,7 +14,7 @@
 #include "descriptors.h"
 
 #include "silver/ast.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include <crprintf.h>
 #include "modules/io.h"
@@ -693,7 +693,7 @@ static cmd_result_t cmd_save(ant_t *js, ant_history_t *history, const char *arg)
 
 static cmd_result_t cmd_stats(ant_t *js, ant_history_t *history, const char *arg) {
   ant_value_t stats_fn = js_get(js, js->Ant, "stats");
-  ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, js_mkundef());
   console_emit(js, false, NULL, &result, 1);
   return CMD_OK;
 }

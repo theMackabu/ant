@@ -3,16 +3,17 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/symbol.h"
 #include "streams/queuing.h"
 
-static ant_value_t js_count_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_count_size(ant_params_t) {
   return js_mknum(1);
 }
 
-static ant_value_t js_bytelength_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_bytelength_size(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined || is_null(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot get property 'byteLength' of undefined or null");
   if (!is_object_type(args[0])) return js_mkundef();
@@ -24,19 +25,19 @@ static ant_value_t js_bytelength_size(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_qs_get_highwatermark(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_qs_get_highwatermark(ant_params_t) {
   ant_value_t s = js_get_slot(js->this_val, SLOT_DATA);
   if (vtype(s) == kTypeNumber) return s;
   return js_mkundef();
 }
 
-static ant_value_t js_qs_get_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_qs_get_size(ant_params_t) {
   ant_value_t proto = js_get_proto(js, js->this_val);
   return js_get_slot(proto, SLOT_DATA);
 }
 
-static ant_value_t qs_ctor(ant_t *js, ant_value_t *args, int nargs, ant_value_t proto, const char *name) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t qs_ctor(ant_native_params_t, ant_value_t call_new_target, ant_value_t proto, const char *name) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s constructor requires 'new'", name);
 
   if (nargs < 1 || vtype(args[0]) == kTypeUndefined || is_null(args[0]))
@@ -53,7 +54,7 @@ static ant_value_t qs_ctor(ant_t *js, ant_value_t *args, int nargs, ant_value_t 
   double hwm = js_to_number(js, hv);
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t resolved = js_instance_proto_from_new_target(js, proto);
+  ant_value_t resolved = js_instance_proto_from_new_target(js, proto, call_new_target);
   
   if (is_object_type(resolved)) js_set_proto_init(obj, resolved);
   js_set_slot(obj, SLOT_DATA, js_mknum(hwm));
@@ -61,12 +62,12 @@ static ant_value_t qs_ctor(ant_t *js, ant_value_t *args, int nargs, ant_value_t 
   return obj;
 }
 
-static ant_value_t js_count_qs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return qs_ctor(js, args, nargs, js->builtins.count_qs_proto, "CountQueuingStrategy");
+static ant_value_t js_count_qs_ctor(ant_params_t) {
+  return qs_ctor(js, args, nargs, call_new_target, js->builtins.count_qs_proto, "CountQueuingStrategy");
 }
 
-static ant_value_t js_bytelength_qs_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  return qs_ctor(js, args, nargs, js->builtins.bytelength_qs_proto, "ByteLengthQueuingStrategy");
+static ant_value_t js_bytelength_qs_ctor(ant_params_t) {
+  return qs_ctor(js, args, nargs, call_new_target, js->builtins.bytelength_qs_proto, "ByteLengthQueuingStrategy");
 }
 
 static ant_value_t make_size_fn(ant_t *js, ant_cfunc_t cfunc, int length) {

@@ -30,7 +30,7 @@ extern char **environ;
 #include "internal.h"
 #include "descriptors.h"
 #include "esm/loader.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 #include "modules/worker_threads.h"
@@ -182,7 +182,7 @@ static void wt_port_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t f
   if (!is_callable(fn)) return;
   ant_value_t argv[1] = {arg};
   
-  sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, false);
+  sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, js_mkundef());
 }
 
 static bool wt_port_should_deliver(ant_t *js, ant_value_t port) {
@@ -234,7 +234,7 @@ static void wt_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t fn, an
   if (!is_callable(fn)) return;
   ant_value_t argv[1] = {arg};
 
-  sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, false);
+  sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, js_mkundef());
 }
 
 static void wt_emit(ant_worker_thread_t *wt, const char *event, ant_value_t arg) {
@@ -575,7 +575,7 @@ static int wt_spawn_worker(
   return rc;
 }
 
-static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_on(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.on(event, listener) requires (string, function)");
   }
@@ -596,7 +596,7 @@ static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int na
   return this_obj;
 }
 
-static ant_value_t worker_threads_worker_once(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_once(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.once(event, listener) requires (string, function)");
   }
@@ -617,7 +617,7 @@ static ant_value_t worker_threads_worker_once(ant_t *js, ant_value_t *args, int 
   return this_obj;
 }
 
-static ant_value_t worker_threads_worker_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_unref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_worker_thread_t *wt = wt_get_worker(js, this_obj);
   if (!wt) return js_mkerr(js, "invalid Worker receiver");
@@ -629,7 +629,7 @@ static ant_value_t worker_threads_worker_unref(ant_t *js, ant_value_t *args, int
   return this_obj;
 }
 
-static ant_value_t worker_threads_worker_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_ref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_worker_thread_t *wt = wt_get_worker(js, this_obj);
   if (!wt) return js_mkerr(js, "invalid Worker receiver");
@@ -641,7 +641,7 @@ static ant_value_t worker_threads_worker_ref(ant_t *js, ant_value_t *args, int n
   return this_obj;
 }
 
-static ant_value_t worker_threads_worker_terminate(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_terminate(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_worker_thread_t *wt = wt_get_worker(js, this_obj);
   if (!wt) return js_mkerr(js, "invalid Worker receiver");
@@ -666,11 +666,11 @@ static ant_value_t worker_threads_worker_terminate(ant_t *js, ant_value_t *args,
   return wt->terminate_val;
 }
 
-static ant_value_t worker_threads_worker_post_message(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_post_message(ant_params_t) {
   return js_mkerr(js, "Worker.postMessage is not implemented yet");
 }
 
-static ant_value_t worker_threads_message_port_post_message(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_post_message(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
   if (wt_port_is_closed(js, this_obj)) return js_mkundef();
@@ -684,7 +684,7 @@ static ant_value_t worker_threads_message_port_post_message(ant_t *js, ant_value
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_on(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.on(event, listener) requires (string, function)");
   }
@@ -702,7 +702,7 @@ static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, 
   return this_obj;
 }
 
-static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_once(ant_params_t) {
   if (nargs < 2 || vtype(args[0]) != kTypeString || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.once(event, listener) requires (string, function)");
   }
@@ -720,7 +720,7 @@ static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args
   return this_obj;
 }
 
-static ant_value_t worker_threads_message_port_start(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_start(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
   js_set_slot(this_obj, SLOT_WT_PORT_STARTED, js_true);
@@ -728,7 +728,7 @@ static ant_value_t worker_threads_message_port_start(ant_t *js, ant_value_t *arg
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_message_port_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_close(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
   wt_port_set_closed(js, this_obj, true);
@@ -739,20 +739,20 @@ static ant_value_t worker_threads_message_port_close(ant_t *js, ant_value_t *arg
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_message_port_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_ref(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_message_port_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_unref(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_message_port_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_message_port_ctor(ant_params_t) {
   return js_mkerr(js, "MessagePort constructor is not public");
 }
 
-static ant_value_t worker_threads_message_channel_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined) {
+static ant_value_t worker_threads_message_channel_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined) {
     return js_mkerr(js, "MessageChannel constructor requires 'new'");
   }
 
@@ -766,11 +766,11 @@ static ant_value_t worker_threads_message_channel_ctor(ant_t *js, ant_value_t *a
   return this_obj;
 }
 
-static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_worker_ctor(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js_mkundef());
+  ant_value_t proto = js_instance_proto_from_new_target(js, js_mkundef(), call_new_target);
 
-  if (vtype(js->new_target) == kTypeUndefined)
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr(js, "Worker constructor requires 'new'");
   
   if (nargs < 1) return js_mkerr(js, "Worker() requires a filename or URL");
@@ -789,7 +789,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
     ant_value_t worker_data = js_get(js, args[1], "workerData");
     if (!is_undefined(worker_data)) {
       ant_value_t stringify_args[1] = {worker_data};
-      ant_value_t json = js_json_stringify(js, stringify_args, 1);
+      ant_value_t json = js_json_stringify(js, stringify_args, 1, js_mkundef());
       if (vtype(json) != kTypeString) {
         free(script_path);
         return js_mkerr(js, "Worker options.workerData must be JSON-serializable");
@@ -811,7 +811,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
 
   ant_value_t env_store = wt_get_or_create_env_store(js);
   ant_value_t env_stringify_args[1] = {env_store};
-  ant_value_t env_json = js_json_stringify(js, env_stringify_args, 1);
+  ant_value_t env_json = js_json_stringify(js, env_stringify_args, 1, js_mkundef());
   if (vtype(env_json) != kTypeString) {
     free(script_path);
     free(worker_data_heap);
@@ -863,10 +863,10 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   return this_obj;
 }
 
-static ant_value_t worker_threads_parent_post_message(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_parent_post_message(ant_params_t) {
   ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
   ant_value_t stringify_args[1] = {value};
-  ant_value_t json = js_json_stringify(js, stringify_args, 1);
+  ant_value_t json = js_json_stringify(js, stringify_args, 1, js_mkundef());
   if (vtype(json) != kTypeString) return js_mkerr(js, "parentPort.postMessage payload must be JSON-serializable");
 
   size_t json_len = 0;
@@ -889,16 +889,16 @@ static ant_value_t worker_threads_parent_post_message(ant_t *js, ant_value_t *ar
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_parent_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_parent_unref(ant_params_t) {
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_mark_as_untransferable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_mark_as_untransferable(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   return args[0];
 }
 
-static ant_value_t worker_threads_receive_message_on_port(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_receive_message_on_port(ant_params_t) {
   if (nargs < 1 || !wt_is_message_port(js, args[0])) {
     return js_mkerr(js, "receiveMessageOnPort(port) requires a MessagePort");
   }
@@ -910,15 +910,15 @@ static ant_value_t worker_threads_receive_message_on_port(ant_t *js, ant_value_t
   return out;
 }
 
-static ant_value_t worker_threads_set_environment_data(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_set_environment_data(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "setEnvironmentData(key, value) requires 2 arguments");
 
   ant_value_t key_stringify_args[1] = {args[0]};
-  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1);
+  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, js_mkundef());
   if (vtype(key_json) != kTypeString) return js_mkerr(js, "setEnvironmentData key must be JSON-serializable");
 
   ant_value_t value_stringify_args[1] = {args[1]};
-  ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1);
+  ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1, js_mkundef());
   if (vtype(value_json) != kTypeString) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
 
   ant_value_t cloned = json_parse_value(js, value_json);
@@ -935,11 +935,11 @@ static ant_value_t worker_threads_set_environment_data(ant_t *js, ant_value_t *a
   return js_mkundef();
 }
 
-static ant_value_t worker_threads_get_environment_data(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_get_environment_data(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   ant_value_t key_stringify_args[1] = {args[0]};
-  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1);
+  ant_value_t key_json = js_json_stringify(js, key_stringify_args, 1, js_mkundef());
   if (vtype(key_json) != kTypeString) return js_mkundef();
 
   size_t key_len = 0;
@@ -961,7 +961,7 @@ static ant_value_t worker_threads_get_environment_data(ant_t *js, ant_value_t *a
   return value;
 }
 
-static ant_value_t worker_threads_move_message_port_to_context(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t worker_threads_move_message_port_to_context(ant_params_t) {
   if (nargs < 1 || !wt_is_message_port(js, args[0])) {
     return js_mkerr(js, "moveMessagePortToContext(port, context) requires a MessagePort");
   }

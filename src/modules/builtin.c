@@ -23,7 +23,8 @@
 #include "highlight.h"
 #include "descriptors.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
 #include "modules/cjit.h"
@@ -42,14 +43,14 @@ static void general_signal_handler(int signum) {
   
   if (js && vtype(handler) != kTypeUndefined) {
     ant_value_t args[] = {js_mknum(signum)};
-    sv_vm_call(js->vm, js, handler, js_mkundef(), args, 1, NULL, false);
+    sv_vm_call(js->vm, js, handler, js_mkundef(), args, 1, NULL, js_mkundef());
   }
   
   exit(0);
 }
 
 // Ant.signal(signal, handler)
-static ant_value_t js_signal(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_signal(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "Ant.signal() requires 2 arguments");
   
   int signum = (int)js_getnum(args[0]);
@@ -65,19 +66,19 @@ static ant_value_t js_signal(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // Ant.raw.stack()
-static ant_value_t js_raw_stack(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_stack(ant_params_t) {
   return js_capture_raw_stack(js);
 }
 
 // Ant.raw.typeof(ant_value_t)
-static ant_value_t js_raw_typeof(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_typeof(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return js_mknum((double)type);
 }
 
 // Ant.raw.ctorPropFeedback(constructorFn)
-static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_ctor_prop_feedback(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.ctorPropFeedback() requires 1 argument");
   if (vtype(args[0]) != kTypeFunction) return js_mkerr(js, "constructor must be a function");
 
@@ -108,7 +109,7 @@ static ant_value_t js_raw_ctor_prop_feedback(ant_t *js, ant_value_t *args, int n
   return out;
 }
 
-static ant_value_t js_raw_gc_mark_profile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_gc_mark_profile(ant_params_t) {
   gc_func_mark_profile_t p = gc_func_mark_profile_get();
   ant_value_t out = js_newobj(js);
   
@@ -123,20 +124,20 @@ static ant_value_t js_raw_gc_mark_profile(ant_t *js, ant_value_t *args, int narg
   return out;
 }
 
-static ant_value_t js_raw_gc_mark_profile_enable(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_gc_mark_profile_enable(ant_params_t) {
   bool enabled = true;
   if (nargs > 0) enabled = js_truthy(js, args[0]);
   gc_func_mark_profile_enable(enabled);
   return js_bool(enabled);
 }
 
-static ant_value_t js_raw_gc_mark_profile_reset(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_raw_gc_mark_profile_reset(ant_params_t) {
   gc_func_mark_profile_reset();
   return js_mkundef();
 }
 
 // Ant.sleep(seconds)
-static ant_value_t js_sleep(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sleep(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.sleep() requires 1 argument");
   unsigned int seconds = (unsigned int)js_getnum(args[0]);
   sleep(seconds);
@@ -144,7 +145,7 @@ static ant_value_t js_sleep(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // Ant.msleep(milliseconds)
-static ant_value_t js_msleep(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_msleep(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.msleep() requires 1 argument");
   long ms = (long)js_getnum(args[0]);
   struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
@@ -154,7 +155,7 @@ static ant_value_t js_msleep(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // Ant.usleep(microseconds)
-static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_usleep(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.usleep() requires 1 argument");
   useconds_t us = (useconds_t)js_getnum(args[0]);
   usleep(us);
@@ -162,19 +163,19 @@ static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 // Ant.suppressReporting()
-static ant_value_t js_suppress_reporting(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_suppress_reporting(ant_params_t) {
   ant_crash_suppress_reporting();
   return js_mkundef();
 }
 
 // Ant.serve(options)
-static ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_serve(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.serve() requires 1 argument");
   return server_start_from_export(js, args[0]);
 }
 
 // Ant.stats()
-static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_stats_fn(ant_params_t) {
   ant_value_t result = js_newobj(js);
   
   ant_pool_stats_t rope_s = js_rope_pool_stats(js);
@@ -305,7 +306,7 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, intern, "bytes", js_mknum((double)intern_stats.bytes));
   js_set(js, result, "intern", intern);
   
-  sv_vm_t *vm = sv_vm_get_active(js);
+  sv_vm_t *vm = js->vm;
   if (vm) {
     ant_value_t vmobj = js_newobj(js);
     js_set(js, vmobj, "stackSize", js_mknum((double)vm->stack_size));
@@ -355,17 +356,17 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
 
 static inline ant_value_t match_resolve_arm(ant_t *js, ant_value_t arm, ant_value_t value) {
   if (!is_callable(arm)) return arm;
-  return sv_vm_call(js->vm, js, arm, js_mkundef(), &value, 1, NULL, false);
+  return sv_vm_call(js->vm, js, arm, js_mkundef(), &value, 1, NULL, js_mkundef());
 }
 
-static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_match(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "Ant.match() requires 2 arguments");
 
   ant_value_t value = args[0];
   ant_value_t arms = args[1];
 
   if (is_callable(arms)) {
-    arms = sv_vm_call(js->vm, js, arms, js_mkundef(), &value, 1, NULL, false);
+    arms = sv_vm_call(js->vm, js, arms, js_mkundef(), &value, 1, NULL, js_mkundef());
     if (is_err(arms)) return arms;
   }
 
@@ -405,7 +406,7 @@ static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t hl_get_tagged(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t hl_get_tagged(ant_native_params_t) {
   size_t input_len;
   char *input = js_getstr(js, args[0], &input_len);
 
@@ -435,7 +436,7 @@ static ant_value_t hl_render_tagged(ant_t *js, ant_value_t tagged) {
   return result;
 }
 
-static ant_value_t js_highlight(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_highlight(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight() requires 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight() argument must be a string");
 
@@ -444,13 +445,13 @@ static ant_value_t js_highlight(ant_t *js, ant_value_t *args, int nargs) {
   return hl_render_tagged(js, tagged);
 }
 
-static ant_value_t js_highlight_render(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_highlight_render(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight.render() requires 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight.render() argument must be a string");
   return hl_render_tagged(js, args[0]);
 }
 
-static ant_value_t js_highlight_tags(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_highlight_tags(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "Ant.highlight.tags() requires 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Ant.highlight.tags() argument must be a string");
   return hl_get_tagged(js, args, nargs);

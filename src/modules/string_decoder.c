@@ -9,6 +9,7 @@
 #include "base64.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "descriptors.h"
 
 #include "modules/buffer.h"
@@ -154,14 +155,14 @@ switch (st->encoding) {
     return js_mkstr(js, "", 0);
 }}
 
-static ant_value_t js_sd_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sd_get_encoding(ant_params_t) {
   sd_state_t *st = sd_get_state(js->this_val);
   if (!st) return js_mkstr(js, "utf-8", 5);
   const char *name = sd_encoding_name(st->encoding);
   return js_mkstr(js, name, strlen(name));
 }
 
-static ant_value_t js_sd_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sd_write(ant_params_t) {
   sd_state_t *st = sd_get_state(js->this_val);
   
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
@@ -181,7 +182,7 @@ static ant_value_t js_sd_write(ant_t *js, ant_value_t *args, int nargs) {
   return sd_do_write(js, st, src, len, false);
 }
 
-static ant_value_t js_sd_end(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_sd_end(ant_params_t) {
   sd_state_t *st = sd_get_state(js->this_val);
   if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
 
@@ -193,7 +194,7 @@ static ant_value_t js_sd_end(ant_t *js, ant_value_t *args, int nargs) {
   return sd_do_write(js, st, src, len, true);
 }
 
-ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
+ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding, ant_value_t call_new_target) {
   int enc = SD_ENC_UTF8;
   if (!is_undefined(encoding)) {
   ant_value_t label_val = (vtype(encoding) == kTypeString) ? encoding : coerce_to_str(js, encoding);
@@ -214,7 +215,7 @@ ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.string_decoder_proto, call_new_target);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_native(obj, st, STRING_DECODER_NATIVE_TAG);
@@ -253,12 +254,12 @@ ant_value_t string_decoder_decode_value(
   return sd_do_write(js, st, src, len, flush);
 }
 
-static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_sd_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "StringDecoder constructor requires 'new'");
     
   ant_value_t encoding = nargs > 0 ? args[0] : js_mkundef();
-  return string_decoder_create(js, encoding);
+  return string_decoder_create(js, encoding, call_new_target);
 }
 
 ant_value_t string_decoder_library(ant_t *js) {

@@ -14,7 +14,7 @@
 
 #include "modules/blob.h"
 #include "modules/crypto.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/url.h"
 #include "modules/symbol.h"
 #include "url/url_internal.h"
@@ -471,7 +471,7 @@ static ant_value_t make_usp_for_url(ant_t *js, ant_value_t url_obj, const char *
   return usp;
 }
 
-static ant_value_t url_get_href(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_href(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   char *href = build_href(s);
@@ -481,25 +481,25 @@ static ant_value_t url_get_href(ant_t *js, ant_value_t *args, int nargs) {
   return ret;
 }
 
-static ant_value_t url_get_protocol(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_protocol(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->protocol, strlen(s->protocol));
 }
 
-static ant_value_t url_get_username(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_username(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->username, strlen(s->username));
 }
 
-static ant_value_t url_get_password(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_password(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->password, strlen(s->password));
 }
 
-static ant_value_t url_get_host(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_host(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   if (s->port && *s->port) {
@@ -513,39 +513,39 @@ static ant_value_t url_get_host(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, s->hostname, strlen(s->hostname));
 }
 
-static ant_value_t url_get_hostname(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_hostname(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->hostname, strlen(s->hostname));
 }
 
-static ant_value_t url_get_port(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_port(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->port, strlen(s->port));
 }
 
-static ant_value_t url_get_pathname(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_pathname(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return js_mkstr(js, s->pathname, strlen(s->pathname));
 }
 
-static ant_value_t url_get_search(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_search(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   if (s->search[0] == '?' && s->search[1] == '\0') return js_mkstr(js, "", 0);
   return js_mkstr(js, s->search, strlen(s->search));
 }
 
-static ant_value_t url_get_hash(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_hash(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   if (s->hash[0] == '#' && s->hash[1] == '\0') return js_mkstr(js, "", 0);
   return js_mkstr(js, s->hash, strlen(s->hash));
 }
 
-static ant_value_t url_get_origin(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_origin(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
 
@@ -567,7 +567,7 @@ static ant_value_t url_get_origin(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t url_get_searchParams(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_get_searchParams(ant_params_t) {
   if (!url_get_state(js->this_val))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   ant_value_t usp = js_get_slot(js->this_val, SLOT_ENTRIES);
@@ -575,7 +575,7 @@ static ant_value_t url_get_searchParams(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t url_set_href(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_href(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
 
@@ -598,49 +598,49 @@ static ant_value_t url_set_href(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t url_set_protocol(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_protocol(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_protocol);
 }
 
-static ant_value_t url_set_username(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_username(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_username);
 }
 
-static ant_value_t url_set_password(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_password(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_password);
 }
 
-static ant_value_t url_set_host(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_host(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_host);
 }
 
-static ant_value_t url_set_hostname(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_hostname(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_hostname);
 }
 
-static ant_value_t url_set_port(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_port(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_port);
 }
 
-static ant_value_t url_set_pathname(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_pathname(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_pathname);
 }
 
-static ant_value_t url_set_search(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_search(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   ant_value_t result = url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_search_bool);
@@ -650,13 +650,13 @@ static ant_value_t url_set_search(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t url_set_hash(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_set_hash(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   return url_apply_setter(js, s, nargs ? args[0] : js_mkundef(), ada_set_hash_bool);
 }
 
-static ant_value_t url_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_toString(ant_params_t) {
   url_state_t *s = url_get_state(js->this_val);
   if (!s) return js_mkerr_typed(js, JS_ERR_TYPE, "Illegal invocation");
   char *href = build_href(s);
@@ -666,8 +666,8 @@ static ant_value_t url_toString(ant_t *js, ant_value_t *args, int nargs) {
   return ret;
 }
 
-static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
-  if (is_undefined(js->new_target))
+static ant_value_t js_URL(ant_params_t) {
+  if (is_undefined(call_new_target))
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Failed to construct 'URL': Please use the 'new' operator.");
   if (nargs < 1)
@@ -698,7 +698,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.url_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js->builtins.url_proto, call_new_target);
   js_set_proto_init(obj, is_object_type(proto) ? proto : js->builtins.url_proto);
   js_set_native(obj, s, URL_NATIVE_TAG);
   js_set_finalizer(obj, url_finalize);
@@ -721,7 +721,7 @@ ant_value_t make_url_obj(ant_t *js, url_state_t *s) {
   return obj;
 }
 
-static ant_value_t url_canParse(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_canParse(ant_params_t) {
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "URL.canParse requires at least 1 argument");
   ant_value_t url_sv = url_string_value(js, args[0]);
@@ -743,7 +743,7 @@ static ant_value_t url_canParse(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t url_parse(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_parse(ant_params_t) {
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "URL.parse requires at least 1 argument");
   ant_value_t url_sv = url_string_value(js, args[0]);
@@ -794,7 +794,7 @@ ant_value_t url_resolve_object_url(ant_t *js, const char *url) {
   return js_mkundef();
 }
 
-static ant_value_t url_create_object_url(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_create_object_url(ant_params_t) {
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "URL.createObjectURL requires at least 1 argument");
   if (!blob_is_blob(js, args[0]))
@@ -820,7 +820,7 @@ static ant_value_t url_create_object_url(ant_t *js, ant_value_t *args, int nargs
   return url_value;
 }
 
-static ant_value_t url_revoke_object_url(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t url_revoke_object_url(ant_params_t) {
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "URL.revokeObjectURL requires at least 1 argument");
 
@@ -848,7 +848,7 @@ static ant_value_t url_revoke_object_url(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_get(ant_params_t) {
   if (nargs < 1) return js_mknull();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   if (is_err(key_sv)) return js_mknull();
@@ -865,7 +865,7 @@ static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknull();
 }
 
-static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_getAll(ant_params_t) {
   ant_value_t result = js_mkarr(js);
   if (nargs < 1) return result;
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
@@ -884,7 +884,7 @@ static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_has(ant_params_t) {
   if (nargs < 1) return js_false;
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   if (is_err(key_sv)) return js_false;
@@ -909,7 +909,7 @@ static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
   return js_false;
 }
 
-static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_set(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
@@ -952,7 +952,7 @@ static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_append(ant_params_t) {
   if (nargs < 2) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
@@ -973,7 +973,7 @@ static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_delete(ant_params_t) {
   if (nargs < 1) return js_mkundef();
   ant_value_t key_sv = (vtype(args[0]) == kTypeString) ? args[0] : js_tostring_val(js, args[0]);
   
@@ -1009,14 +1009,14 @@ static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t usp_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_toString(ant_params_t) {
   char *s = usp_serialize(js, js->this_val);
   ant_value_t ret = js_mkstr(js, s, strlen(s));
   free(s);
   return ret;
 }
 
-static ant_value_t usp_forEach(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_forEach(ant_params_t) {
   if (nargs < 1 || !is_callable(args[0])) return js_mkundef();
   
   ant_value_t cb = args[0];
@@ -1032,20 +1032,20 @@ static ant_value_t usp_forEach(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t k = js_arr_get(js, entry, 0);
     ant_value_t v = js_arr_get(js, entry, 1);
     ant_value_t cb_args[3] = { v, k, self };
-    ant_value_t r = sv_vm_call(js->vm, js, cb, this_arg, cb_args, 3, NULL, false);
+    ant_value_t r = sv_vm_call(js->vm, js, cb, this_arg, cb_args, 3, NULL, js_mkundef());
     if (is_err(r)) return r;
   }
   
   return js_mkundef();
 }
 
-static ant_value_t usp_size_get(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_size_get(ant_params_t) {
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_mknum(0);
   return js_mknum((double)js_arr_len(js, entries));
 }
 
-static ant_value_t usp_sort(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_sort(ant_params_t) {
   ant_value_t entries = js_get_slot(js->this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_mkundef();
   ant_offset_t len = js_arr_len(js, entries);
@@ -1079,7 +1079,7 @@ static ant_value_t usp_sort(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t usp_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_iter_next(ant_params_t) {
   ant_value_t state_v = js_get_slot(js->this_val, SLOT_ITER_STATE);
   if (vtype(state_v) != kTypeNumber) return js_iter_result(js, false, js_mkundef());
 
@@ -1120,20 +1120,20 @@ static ant_value_t make_usp_iter(ant_t *js, ant_value_t usp, int kind) {
   return iter;
 }
 
-static ant_value_t usp_entries_fn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_entries_fn(ant_params_t) {
   return make_usp_iter(js, js->this_val, USP_ITER_ENTRIES);
 }
 
-static ant_value_t usp_keys_fn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_keys_fn(ant_params_t) {
   return make_usp_iter(js, js->this_val, USP_ITER_KEYS);
 }
 
-static ant_value_t usp_values_fn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t usp_values_fn(ant_params_t) {
   return make_usp_iter(js, js->this_val, USP_ITER_VALUES);
 }
 
-static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
-  if (is_undefined(js->new_target))
+static ant_value_t js_URLSearchParams(ant_params_t) {
+  if (is_undefined(call_new_target))
     return js_mkerr_typed(js, JS_ERR_TYPE,
     "Failed to construct 'URLSearchParams': Please use the 'new' operator.");
 
@@ -1312,7 +1312,7 @@ void init_url_module(ant_t *js) {
   js_set_global_builtin(js, "URL", js->builtins.url_ctor);
 }
 
-static ant_value_t builtin_fileURLToPath(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fileURLToPath(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
   
   size_t len;
@@ -1336,7 +1336,7 @@ static ant_value_t builtin_fileURLToPath(ant_t *js, ant_value_t *args, int nargs
   return ret;
 }
 
-static ant_value_t builtin_pathToFileURL(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_pathToFileURL(ant_params_t) {
   if (nargs < 1 || vtype(args[0]) != kTypeString)
     return js_mkerr(js, "pathToFileURL requires a string argument");
     
@@ -1454,7 +1454,7 @@ static bool url_fmt_protocol_needs_slashes(const char *protocol, size_t len) {
     (len == 3 && memcmp(protocol, "wss", 3) == 0);
 }
 
-static ant_value_t builtin_url_parse(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_url_parse(ant_params_t) {
   size_t len = 0;
   const char *value = NULL;
 
@@ -1471,7 +1471,7 @@ static ant_value_t builtin_url_parse(ant_t *js, ant_value_t *args, int nargs) {
   );
 }
 
-static ant_value_t builtin_url_format(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_url_format(ant_params_t) {
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "url.format() requires a URL or object argument");
 

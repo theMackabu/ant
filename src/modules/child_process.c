@@ -33,7 +33,7 @@
 
 #include "esm/loader.h"
 #include "gc/modules.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "process_plan.h"
 #include "process_stage.h"
@@ -382,7 +382,7 @@ static void check_completion(child_process_t *cp) {
   }
 }
 
-static ant_value_t child_spawn_failure_cb(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_spawn_failure_cb(ant_params_t) {
   ant_value_t child = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   child_process_t *cp = get_child_process(child);
   if (!cp) return js_mkundef();
@@ -568,7 +568,7 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   on_child_read(stream, CHILD_STREAM_STDERR, nread, buf);
 }
 
-static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_kill(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   
   child_process_t *cp = get_child_process(this_obj);
@@ -715,7 +715,7 @@ static ant_value_t child_end_impl(child_process_t *cp) {
   return js_mkundef();
 }
 
-static ant_value_t child_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_write(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
   
@@ -724,7 +724,7 @@ static ant_value_t child_write(ant_t *js, ant_value_t *args, int nargs) {
   return child_write_impl(js, cp, args[0], js_mkundef());
 }
 
-static ant_value_t child_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_ref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   child_process_t *cp = get_child_process(this_obj);
   
@@ -740,7 +740,7 @@ static ant_value_t child_ref(ant_t *js, ant_value_t *args, int nargs) {
   return this_obj;
 }
 
-static ant_value_t child_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_unref(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   child_process_t *cp = get_child_process(this_obj);
   
@@ -756,7 +756,7 @@ static ant_value_t child_unref(ant_t *js, ant_value_t *args, int nargs) {
   return this_obj;
 }
 
-static ant_value_t child_end(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_end(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   
   child_process_t *cp = get_child_process(this_obj);
@@ -764,7 +764,7 @@ static ant_value_t child_end(ant_t *js, ant_value_t *args, int nargs) {
   return child_end_impl(cp);
 }
 
-static ant_value_t child_process_ctor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_process_ctor(ant_params_t) {
   ant_value_t obj = js_mkobj(js);
   if (is_object_type(js->builtins.child_process_proto)) js_set_proto_init(obj, js->builtins.child_process_proto);
 
@@ -806,7 +806,7 @@ static uv_handle_t *child_stream_handle(child_process_t *cp, child_stream_kind_t
   }
 }
 
-static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream_ref(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
@@ -817,7 +817,7 @@ static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
   return this_obj;
 }
 
-static ant_value_t child_stream_unref(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream_unref(ant_params_t) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
@@ -830,7 +830,7 @@ static ant_value_t child_stream_unref(ant_t *js, ant_value_t *args, int nargs) {
 
 static void child_stream_call_callback(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
   if (!is_callable(callback)) return;
-  sv_vm_call(js->vm, js, callback, js_mkundef(), args, nargs, NULL, false);
+  sv_vm_call(js->vm, js, callback, js_mkundef(), args, nargs, NULL, js_mkundef());
 }
 
 static void child_stream_close(child_stream_ctx_t *ctx) {
@@ -849,7 +849,7 @@ static void child_stream_close(child_stream_ctx_t *ctx) {
   }
 }
 
-static ant_value_t child_stream__destroy(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream__destroy(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t error = nargs > 0 ? args[0] : js_mknull();
   ant_value_t callback = nargs > 1 ? args[1] : js_mkundef();
@@ -860,7 +860,7 @@ static ant_value_t child_stream__destroy(ant_t *js, ant_value_t *args, int nargs
   return js_mkundef();
 }
 
-static ant_value_t child_stream__read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream__read(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
   child_process_t *cp = NULL;
@@ -882,7 +882,7 @@ static ant_value_t child_stream__read(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t child_stream__write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream__write(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t callback = nargs > 2 ? args[2] : js_mkundef();
   child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
@@ -900,7 +900,7 @@ static ant_value_t child_stream__write(ant_t *js, ant_value_t *args, int nargs) 
   return js_mkundef();
 }
 
-static ant_value_t child_stream__final(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t child_stream__final(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t callback = nargs > 0 ? args[0] : js_mkundef();
   child_stream_ctx_t *ctx = get_child_stream_ctx(this_obj);
@@ -1172,7 +1172,7 @@ if (vtype(stdio_val) == kTypeString) {
     modes[i] = parse_stdio_mode(js, js_arr_get(js, stdio_val, i));
 }}
 
-static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_spawn(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
   
@@ -1361,9 +1361,9 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   return cp->child_obj;
 }
 
-static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t exec_spawn_error_capture(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t exec_file_close_callback(ant_params_t);
+static ant_value_t exec_spawn_error_capture(ant_params_t);
+static ant_value_t builtin_exec(ant_params_t) {
   ant_value_t callback = js_mkundef();
 
   if (nargs < 1) return js_mkerr(js, "exec() requires a command");
@@ -1498,13 +1498,13 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   return cp->promise;
 }
 
-static ant_value_t exec_spawn_error_capture(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t exec_spawn_error_capture(ant_params_t) {
   ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (nargs > 0) js_set(js, ctx, "spawnError", args[0]);
   return js_mkundef();
 }
 
-static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t exec_file_close_callback(ant_params_t) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
   
@@ -1530,7 +1530,7 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
     cb_args[0] = spawn_error;
     cb_args[1] = js_mkstr(js, "", 0);
     cb_args[2] = js_mkstr(js, "", 0);
-    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, js_mkundef());
     return js_mkundef();
   }
 
@@ -1603,12 +1603,12 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   cb_args[1] = stdout_val;
   cb_args[2] = stderr_val;
 
-  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, js_mkundef());
   if (vtype(result) == kTypeError) log_listener_error(js, "execFile", result);
   return js_mkundef();
 }
 
-static ant_value_t exec_file_promisify_callback(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t exec_file_promisify_callback(ant_params_t) {
   ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_object_type(state)) return js_mkundef();
 
@@ -1639,7 +1639,7 @@ static ant_value_t exec_file_promisify_callback(ant_t *js, ant_value_t *args, in
   return js_mkundef();
 }
 
-static ant_value_t exec_callback_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t exec_callback_promisified_call(ant_params_t) {
   ant_value_t original = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_callable(original)) return js_mkerr(js, "exec promisify target is not callable");
 
@@ -1662,7 +1662,7 @@ static ant_value_t exec_callback_promisified_call(ant_t *js, ant_value_t *args, 
 
   ant_value_t call_result = sv_vm_call(
     js->vm, js, original, js_getthis(js), 
-    call_args, nargs + 1, NULL, false
+    call_args, nargs + 1, NULL, js_mkundef()
   ); free(call_args);
 
   ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
@@ -1680,7 +1680,7 @@ static ant_value_t exec_callback_promisified_call(ant_t *js, ant_value_t *args, 
   return promise;
 }
 
-static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_execFile(ant_params_t) {
   ant_value_t argv = js_mkundef();
   ant_value_t options = js_mkundef();
   ant_value_t callback = js_mkundef();
@@ -1707,7 +1707,7 @@ static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   spawn_args[1] = argv;
   spawn_args[2] = options;
 
-  child = builtin_spawn(js, spawn_args, 3);
+  child = builtin_spawn(js, spawn_args, 3, js_mkundef());
   if (vtype(child) != kTypeObject || !is_callable(callback)) return child;
 
   {
@@ -2000,7 +2000,7 @@ static ant_value_t sync_make_output(ant_t *js, const char *bytes, size_t len, bo
 }
 
 #ifdef _WIN32
-static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
+static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
@@ -2174,7 +2174,7 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
   return result;
 }
 
-static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_spawnSync(ant_params_t) {
   return spawn_sync_impl(js, args, nargs, false);
 }
 #else
@@ -2613,7 +2613,7 @@ static ant_value_t sync_build_result(
 
   return result;
 }
-static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool force_shell) {
+static ant_value_t spawn_sync_impl(ant_native_params_t, bool force_shell) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
@@ -2700,7 +2700,7 @@ static ant_value_t spawn_sync_impl(ant_t *js, ant_value_t *args, int nargs, bool
 }
 
 
-static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_spawnSync(ant_params_t) {
   return spawn_sync_impl(js, args, nargs, false);
 }
 #endif
@@ -2760,7 +2760,7 @@ static ant_value_t sync_result_error(
   return error;
 }
 
-static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_execSync(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Command must be a string");
 
@@ -2795,7 +2795,7 @@ static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
   return js_throw(js, error);
 }
 
-static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_execFileSync(ant_params_t) {
   ant_value_t argv = js_mkundef();
   ant_value_t options = js_mkundef();
   ant_value_t spawn_args[3];
@@ -2814,7 +2814,7 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
   spawn_args[1] = argv;
   spawn_args[2] = options;
 
-  ant_value_t result = builtin_spawnSync(js, spawn_args, 3);
+  ant_value_t result = builtin_spawnSync(js, spawn_args, 3, js_mkundef());
   if (vtype(result) != kTypeObject) return result;
 
   ant_value_t command = child_process_command_value(js, args[0], argv);
@@ -2826,7 +2826,7 @@ static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs)
   return js_get(js, result, "stdout");
 }
 
-static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_fork(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "Module path must be a string");
   size_t path_len;
@@ -2865,7 +2865,7 @@ static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   spawn_args[2] = js_mkobj(js);
 
   if (bundled) uv_os_setenv(ANT_INTERNAL_RUN_ENV, path_str);
-  ant_value_t result = builtin_spawn(js, spawn_args, 3);
+  ant_value_t result = builtin_spawn(js, spawn_args, 3, js_mkundef());
   if (bundled) uv_os_unsetenv(ANT_INTERNAL_RUN_ENV);
 
   free(path_str);

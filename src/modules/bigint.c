@@ -5,6 +5,7 @@
 
 #include "ant.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "errors.h"
 #include "gc/roots.h"
 #include "utils.h"
@@ -1618,8 +1619,8 @@ ant_value_t bigint_from_value(ant_t *js, ant_value_t arg) {
   return js_mkerr(js, "Cannot convert to BigInt");
 }
 
-static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) != kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
+static ant_value_t builtin_BigInt(ant_params_t) {
+  if (vtype(call_new_target) != kTypeUndefined) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
   if (nargs < 1) return js_mkbigint(js, "0", 1, false);
 
   return bigint_from_value(js, args[0]);
@@ -1648,7 +1649,7 @@ ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out) {
   return js_mkundef();
 }
 
-static ant_value_t builtin_BigInt_asIntN(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_BigInt_asIntN(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "BigInt.asIntN requires 2 arguments");
 
   uint64_t bits = 0;
@@ -1682,7 +1683,7 @@ static ant_value_t builtin_BigInt_asIntN(ant_t *js, ant_value_t *args, int nargs
   return res;
 }
 
-static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_BigInt_asUintN(ant_params_t) {
   if (nargs < 2) return js_mkerr(js, "BigInt.asUintN requires 2 arguments");
 
   uint64_t bits = 0;
@@ -1707,7 +1708,7 @@ static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int narg
   return res;
 }
 
-static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_bigint_toString(ant_params_t) {
   ant_value_t val = js->this_val;
   if (vtype(val) != kTypeBigInt) {
     val = unwrap_primitive(js, val);
@@ -1754,7 +1755,7 @@ static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nar
   return out;
 }
 
-static ant_value_t builtin_bigint_valueOf(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t builtin_bigint_valueOf(ant_params_t) {
   ant_value_t val = js->this_val;
   if (vtype(val) != kTypeBigInt) {
     val = unwrap_primitive(js, val);

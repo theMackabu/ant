@@ -22,7 +22,7 @@
 #include "ptr.h"
 #include "errors.h"
 #include "internal.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/buffer.h"
 #include "modules/ffi.h"
@@ -891,7 +891,7 @@ static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *
     return;
   }
 
-  result = sv_vm_call(callback->js->vm, callback->js, fn, js_mkundef(), js_args, (int)argc, NULL, false);
+  result = sv_vm_call(callback->js->vm, callback->js, fn, js_mkundef(), js_args, (int)argc, NULL, js_mkundef());
   if (is_err(result)) {
     fprintf(stderr, "ant:ffi callback threw an exception; returning a zero value\n");
     callback->js->thrown_exists = 0;
@@ -942,7 +942,7 @@ static void ffi_init_prototypes(ant_t *js) {
   js_set(js, js->builtins.ffi_function_proto, "address", js_mkfun(ffi_function_address));
 }
 
-static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ffi_dlopen(ant_params_t) {
   ant_value_t path_val = js_mkundef();
   const char *path = NULL;
   
@@ -989,7 +989,7 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-ant_value_t ffi_library_close(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_library_close(ant_params_t) {
   ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -998,7 +998,7 @@ ant_value_t ffi_library_close(ant_t *js, ant_value_t *args, int nargs) {
   return js_getthis(js);
 }
 
-ant_value_t ffi_library_define(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_library_define(ant_params_t) {
   ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
   ffi_signature_t signature;
   
@@ -1036,7 +1036,7 @@ ant_value_t ffi_library_define(ant_t *js, ant_value_t *args, int nargs) {
   return fn;
 }
 
-ant_value_t ffi_library_call(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_library_call(ant_params_t) {
   ant_value_t fn = js_mkundef();
   ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
 
@@ -1051,10 +1051,10 @@ ant_value_t ffi_library_call(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol '%s' has not been defined", js_getstr(js, args[0], NULL));
   }
 
-  return sv_vm_call(js->vm, js, fn, js_mkundef(), args + 1, nargs - 1, NULL, false);
+  return sv_vm_call(js->vm, js, fn, js_mkundef(), args + 1, nargs - 1, NULL, js_mkundef());
 }
 
-ant_value_t ffi_function_call(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_function_call(ant_params_t) {
   ffi_function_handle_t *function = ffi_function_data(js->current_func);
   ffi_type **call_types = NULL;
   ffi_value_box_t *values = NULL;
@@ -1161,7 +1161,7 @@ cleanup:
   }
 }
 
-ant_value_t ffi_function_address(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_function_address(ant_params_t) {
   ffi_function_handle_t *function = ffi_function_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -1169,7 +1169,7 @@ ant_value_t ffi_function_address(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)(uintptr_t)function->func_ptr);
 }
 
-static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ffi_alloc_memory(ant_params_t) {
   ffi_pointer_region_t *region = NULL;
   size_t size = 0;
 
@@ -1196,7 +1196,7 @@ static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs) {
   return ffi_make_pointer(js, region, 0);
 }
 
-static ant_value_t ffi_pointer_value(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ffi_pointer_value(ant_params_t) {
   ffi_pointer_region_t *region = NULL;
   ant_value_t error = js_mkundef();
   char *str_copy = NULL;
@@ -1238,7 +1238,7 @@ static ant_value_t ffi_pointer_value(ant_t *js, ant_value_t *args, int nargs) {
   return ffi_make_pointer(js, region, 0);
 }
 
-ant_value_t ffi_pointer_address(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_address(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -1246,7 +1246,7 @@ ant_value_t ffi_pointer_address(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)(uintptr_t)ffi_pointer_address_raw(handle));
 }
 
-ant_value_t ffi_pointer_is_null(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_is_null(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -1254,7 +1254,7 @@ ant_value_t ffi_pointer_is_null(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(ffi_pointer_address_raw(handle) == NULL);
 }
 
-ant_value_t ffi_pointer_read(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_read(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   ffi_marshaled_type_t type;
 
@@ -1266,7 +1266,7 @@ ant_value_t ffi_pointer_read(ant_t *js, ant_value_t *args, int nargs) {
   return ffi_read_from_pointer(js, handle, type);
 }
 
-ant_value_t ffi_pointer_write(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_write(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   ffi_marshaled_type_t type;
 
@@ -1283,7 +1283,7 @@ ant_value_t ffi_pointer_write(ant_t *js, ant_value_t *args, int nargs) {
   return ffi_write_to_pointer(js, handle, type, args[1]);
 }
 
-ant_value_t ffi_pointer_offset(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_offset(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   ffi_pointer_handle_t *next = NULL;
   ant_value_t out = 0;
@@ -1307,7 +1307,7 @@ ant_value_t ffi_pointer_offset(ant_t *js, ant_value_t *args, int nargs) {
   return out;
 }
 
-ant_value_t ffi_pointer_free(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_pointer_free(ant_params_t) {
   ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -1321,7 +1321,7 @@ ant_value_t ffi_pointer_free(ant_t *js, ant_value_t *args, int nargs) {
   return js_getthis(js);
 }
 
-static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ffi_create_callback(ant_params_t) {
   ant_value_t signature_val = js_mkundef();
   ant_value_t fn = js_mkundef();
   ant_value_t obj = 0;
@@ -1391,7 +1391,7 @@ static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) 
   return obj;
 }
 
-ant_value_t ffi_callback_address(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_callback_address(ant_params_t) {
   ffi_callback_handle_t *callback = ffi_callback_data(js_getthis(js));
   (void)args;
   (void)nargs;
@@ -1399,7 +1399,7 @@ ant_value_t ffi_callback_address(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)(uintptr_t)callback->code_ptr);
 }
 
-ant_value_t ffi_callback_close(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t ffi_callback_close(ant_params_t) {
   ffi_callback_handle_t *callback = ffi_callback_data(js_getthis(js));
   (void)args;
   (void)nargs;

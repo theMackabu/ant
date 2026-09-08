@@ -8,7 +8,6 @@
 #include "errors.h"
 #include "debug.h"
 #include "gc/objects.h"
-#include "modules/timer.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -19,7 +18,6 @@
 #include <stdio.h>
 
 static constexpr int SV_JIT_ARGS_BUF_CAP = 16;
-static constexpr int SV_CALL_INLINE_ARGS_CAP = 4;
 
 static constexpr uint8_t SV_MAP_TEMPLATE_MAX_SUBSTITUTIONS = 3;
 static constexpr uint32_t SV_MAP_TEMPLATE_TABLE_MAGIC = UINT32_C(0x4d54504c);
@@ -61,6 +59,8 @@ typedef enum {
 typedef enum {
   SV_STABLE_BUILTIN_PROMISE_RESOLVE = 0,
 } sv_stable_builtin_t;
+
+extern const char *const sv_op_names[OP__COUNT];
 
 static const uint8_t sv_op_size[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (size),
@@ -280,6 +280,8 @@ typedef struct {
   uint16_t index;
   uint8_t kind;
   bool is_const;
+  const char *import_name;
+  uint32_t import_len;
 } sv_runtime_binding_t;
 
 typedef struct {
@@ -291,11 +293,24 @@ enum {
   SV_EVAL_BIND_PARAM = 0,
   SV_EVAL_BIND_LOCAL = 1,
   SV_EVAL_BIND_UPVALUE = 2,
+  SV_EVAL_BIND_KIND_MASK = 3,
+  SV_EVAL_BIND_LEXICAL = 4,
+  SV_EVAL_BIND_CATCH = 8,
+  SV_EVAL_BIND_IMPORT_DEFAULT = 16,
+  SV_EVAL_BIND_IMPORT_NAMED = 32,
 };
+
+typedef struct {
+  const char *str;
+  uint32_t len;
+  bool annex_b;
+} sv_eval_decl_t;
 
 typedef struct {
   sv_eval_scope_t *eval_scopes;
   uint32_t eval_scope_count;
+  sv_eval_decl_t *eval_vars;
+  uint32_t eval_var_count;
   sv_type_info_t local_types[];
 } sv_func_metadata_t;
 
@@ -384,6 +399,10 @@ struct sv_func {
 
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
+
+  bool is_eval: 1;
+  bool needs_eval_env: 1;
+  bool allows_new_target: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
@@ -697,16 +716,25 @@ static inline ant_value_t js_as_obj(ant_value_t v) {
   return mkval(kTypeObject, vdata(v));
 }
 
+typedef ant_value_t (*sv_jit_func_t)(
+  sv_vm_t *,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t *,
+  int, sv_closure_t *
+);
+
 ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm,sv_closure_t *closure,
   ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args,
-  int argc, ant_value_t *out_this
+  ant_value_t new_target, ant_value_t this_val,
+  ant_value_t *args, int argc, ant_value_t *out_this
 );
 
 ant_value_t sv_execute_eval_entry(
-  sv_vm_t *vm, sv_func_t *func,
-  ant_value_t this_val, ant_value_t eval_env
+  sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, 
+  ant_value_t eval_env, ant_value_t new_target
 );
 
 ant_value_t sv_call_compiled_zero_upvalues(
@@ -738,6 +766,11 @@ static_assert(SV_HANDLER_MAX <= UINT16_MAX,
 #define SV_FRAMES_HARD_MAX 65536
 #define SV_STACK_HARD_MAX  524288
 #endif
+
+typedef struct sv_native_frame {
+  struct sv_native_frame *caller;
+  ant_value_t new_target;
+} sv_native_frame_t;
 
 struct sv_vm {
   ant_t *js;
@@ -776,6 +809,7 @@ struct sv_vm {
   } jit_resume;
 
   sv_jit_osr_t jit_osr;
+  sv_native_frame_t *native_frame;
 };
 
 static inline uint8_t sv_get_u8(const uint8_t *ip)  { return ip[0]; }
@@ -847,18 +881,13 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
-// TODO: use js->vm only
-static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
-  return js ? js->vm : NULL;
-}
-
 static inline bool sv_is_strict_context(ant_t *js) {
-  return sv_vm_is_strict(sv_vm_get_active(js));
+  return sv_vm_is_strict(js->vm);
 }
 
-static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm) {
   if (vm && vm->fp >= 0) return vm->frames[vm->fp].new_target;
-  return js->new_target;
+  return js_mkundef();
 }
 
 static inline ant_value_t sv_vm_get_super_val(const sv_vm_t *vm) {
@@ -903,11 +932,6 @@ static inline uint16_t sv_frame_total_slots(const sv_frame_t *frame) {
   return total > 0 ? (uint16_t)total : 0;
 }
 
-static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
-  if (!js || js->microtasks_draining || js->vm_exec_depth != 0) return;
-  js_maybe_drain_microtasks(js);
-}
-
 ant_value_t sv_string_builder_read_value(
   ant_t *js, ant_value_t value
 );
@@ -926,975 +950,5 @@ ant_value_t sv_string_builder_append_snapshot_slot(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint16_t slot_idx, ant_value_t lhs, ant_value_t rhs
 );
-
-typedef struct {
-  ant_value_t this_val;
-  ant_value_t super_val;
-  ant_value_t *args;
-  int argc;
-  ant_value_t *alloc;
-} sv_call_ctx_t;
-
-typedef enum {
-  SV_CALL_MODE_NORMAL = 0,
-  SV_CALL_MODE_EXPLICIT_THIS,
-  SV_CALL_MODE_CONSTRUCT,
-} sv_call_mode_t;
-
-typedef enum {
-  SV_CALL_EXEC_NATIVE = 0,
-  SV_CALL_EXEC_UNCURRIED_NATIVE,
-  SV_CALL_EXEC_PROXY_APPLY,
-  SV_CALL_EXEC_PROXY_CONSTRUCT,
-  SV_CALL_EXEC_DEFAULT_CTOR,
-  SV_CALL_EXEC_CLOSURE,
-} sv_call_exec_kind_t;
-
-typedef struct {
-  sv_call_exec_kind_t kind;
-  ant_value_t func;
-  sv_closure_t *closure;
-  sv_call_ctx_t ctx;
-  ant_value_t inline_args[SV_CALL_INLINE_ARGS_CAP];
-} sv_call_plan_t;
-
-static inline ant_value_t *sv_prepend_bound_args(
-  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total,
-  ant_value_t *inline_args
-) {
-  int total = closure->bound_argc + argc;
-  ant_value_t *combined = total <= SV_CALL_INLINE_ARGS_CAP
-    ? inline_args
-    : malloc(sizeof(ant_value_t) * (size_t)total);
-  
-  if (!combined) { *out_total = argc; return NULL; }
-  memcpy(combined, closure->u.bound.argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
-  memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
-  
-  *out_total = total;
-  return combined;
-}
-
-static inline bool sv_call_mode_is_construct(sv_call_mode_t mode) {
-  return mode == SV_CALL_MODE_CONSTRUCT;
-}
-
-static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val, sv_call_mode_t mode) {
-  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->global;
-  return this_val;
-}
-
-static inline ant_value_t sv_construct_prototype_from(
-  ant_t *js, ant_value_t proto_source
-) {
-  ant_value_t proto = js_mkundef();
-  ant_value_t source_obj = js_mkundef();
-  uint8_t source_type = vtype(proto_source);
-
-  if (source_type == kTypeFunction) source_obj = js_func_obj(proto_source);
-  else if (source_type == kTypeObject) source_obj = proto_source;
-
-  ant_object_t *ptr = is_object_type(source_obj)
-    ? js_obj_ptr(source_obj) : NULL;
-
-  int32_t slot = ptr && !ptr->flags.is_exotic && ptr->shape
-    ? ant_shape_lookup_interned(ptr->shape, js->intern.prototype) : -1;
-
-  const ant_shape_prop_t *prop = slot >= 0
-    ? ant_shape_prop_at(ptr->shape, (uint32_t)slot) : NULL;
-
-  if (prop && !prop->has_getter && !prop->has_setter)
-    proto = ant_object_prop_get_unchecked(ptr, (uint32_t)slot);
-  else
-    proto = js_getprop_fallback(js, proto_source, "prototype");
-
-  return (is_err(proto) || is_object_type(proto))
-    ? proto : js->sym.object_proto;
-}
-
-static inline ant_value_t sv_prepare_construct_meta(
-  ant_t *js,
-  ant_value_t func,
-  ant_value_t requested_new_target,
-  ant_value_t *effective_new_target,
-  ant_value_t *record_func
-) {
-  sv_closure_t *closure = NULL;
-  if (vtype(func) == kTypeFunction) {
-    closure = js_func_closure(func);
-    if (closure && !(closure->call_flags & (SV_CALL_HAS_BOUND_THIS | SV_CALL_HAS_BOUND_ARGS))) {
-      if (effective_new_target) *effective_new_target = requested_new_target;
-      if (record_func) *record_func = func;
-      return sv_construct_prototype_from(js, requested_new_target);
-    }
-  }
-
-  ant_value_t target = closure 
-    ? js_resolve_bound_target_known_bound(func) : func;
-  ant_value_t new_target =
-    requested_new_target == func ? target : requested_new_target;
-
-  if (effective_new_target) *effective_new_target = new_target;
-  if (record_func && vtype(target) == kTypeFunction) *record_func = target;
-
-  if (
-    requested_new_target == func &&
-    vtype(target) == kTypeObject && is_proxy(target)
-  ) return js_mkundef();
-
-  ant_value_t proto_source =
-    requested_new_target == func 
-    ? target : requested_new_target;
-  
-  uint8_t source_type = vtype(proto_source);
-  
-  if (
-    source_type != kTypeFunction && source_type != kTypeBuiltin &&
-    !is_object_type(proto_source)
-  ) return js_mkundef();
-  
-  return sv_construct_prototype_from(js, proto_source);
-}
-
-static inline ant_value_t sv_call_resolve_bound(
-  ant_t *js, sv_closure_t *closure,
-  sv_call_ctx_t *ctx, sv_call_mode_t mode, ant_value_t *inline_args
-) {
-  uint32_t flags = closure->call_flags;
-
-  if (flags & SV_CALL_IS_ARROW) ctx->this_val = closure->bound_this;
-  else if (!sv_call_mode_is_construct(mode) && (flags & SV_CALL_HAS_BOUND_THIS))
-    ctx->this_val = closure->bound_this;
-
-  if ((flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
-    int total;
-    ant_value_t *combined = sv_prepend_bound_args(
-      closure, ctx->args, ctx->argc, 
-      &total, inline_args
-    );
-    if (!combined) return js_mkerr(js, "out of memory");
-    ctx->args  = combined;
-    ctx->argc  = total;
-    if (combined != inline_args) ctx->alloc = combined;
-  }
-
-  if (flags & SV_CALL_HAS_SUPER) ctx->super_val = closure->super_val;
-  return js_mkundef();
-}
-
-static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
-  if (ctx->alloc) { free(ctx->alloc); ctx->alloc = NULL; }
-}
-
-static inline ant_value_t sv_call_default_ctor(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  sv_call_ctx_t *ctx, ant_value_t *out_this
-);
-
-static inline ant_value_t sv_call_resolve_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
-);
-
-static inline ant_value_t sv_prepare_call(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, sv_call_mode_t mode, sv_call_plan_t *plan
-) {
-  bool is_construct_call = sv_call_mode_is_construct(mode);
-
-  plan->kind = SV_CALL_EXEC_NATIVE;
-  plan->func = func;
-  plan->closure = NULL;
-  
-  plan->ctx = (sv_call_ctx_t){
-    .this_val = this_val,
-    .super_val = js_mkundef(),
-    .args = args,
-    .argc = argc,
-    .alloc = NULL,
-  };
-
-  if (!is_construct_call) js->new_target = js_mkundef();
-  if (out_this) *out_this = this_val;
-
-  if (is_construct_call && vtype(func) == kTypeObject && is_proxy(func)) {
-    plan->kind = SV_CALL_EXEC_PROXY_CONSTRUCT;
-    return js_mkundef();
-  }
-
-  if (is_construct_call && !js_is_constructor(func))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-
-  if (!is_construct_call && vtype(func) == kTypeObject && is_proxy(func)) {
-    plan->kind = SV_CALL_EXEC_PROXY_APPLY;
-    return js_mkundef();
-  }
-
-  if (vtype(func) == kTypeBuiltin) {
-    plan->ctx.this_val = sv_call_normalize_this(js, this_val, mode);
-    if (out_this) *out_this = plan->ctx.this_val;
-    return js_mkundef();
-  }
-
-  if (vtype(func) != kTypeFunction)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));
-
-  sv_closure_t *closure = js_func_closure(func);
-  plan->closure = closure;
-
-  ant_value_t err = sv_call_resolve_bound(
-    js, closure, &plan->ctx, mode, plan->inline_args
-  );
-  if (is_err(err)) return err;
-
-  if (is_construct_call) plan->ctx.this_val = this_val;
-  if (out_this) *out_this = plan->ctx.this_val;
-
-  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR) {
-    plan->kind = SV_CALL_EXEC_DEFAULT_CTOR;
-    return js_mkundef();
-  }
-
-  if (closure->func != NULL) {
-    plan->kind = SV_CALL_EXEC_CLOSURE;
-    return js_mkundef();
-  }
-
-  if (
-    !is_construct_call && js->vm_exec_depth != 0 &&
-    (closure->call_flags & SV_CALL_IS_UNCURRY) &&
-    vtype(closure->bound_this) == kTypeBuiltin
-  ) {
-    plan->kind = SV_CALL_EXEC_UNCURRIED_NATIVE;
-    plan->ctx.this_val = plan->ctx.argc ? plan->ctx.args[0] : js_mkundef();
-    if (plan->ctx.argc) { plan->ctx.args++; plan->ctx.argc--; }
-  }
-
-  return js_mkundef();
-}
-
-static inline ant_value_t sv_execute_call_plan(
-  sv_vm_t *vm, ant_t *js, sv_call_plan_t *plan, ant_value_t *out_this
-) {
-  switch (plan->kind) {
-  case SV_CALL_EXEC_PROXY_APPLY: return js_proxy_apply(
-    js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
-  );
-  
-  case SV_CALL_EXEC_PROXY_CONSTRUCT: return js_proxy_construct(
-    js, plan->func, plan->ctx.args, plan->ctx.argc, sv_vm_get_new_target(vm, js)
-  );
-  
-  case SV_CALL_EXEC_DEFAULT_CTOR: return sv_call_default_ctor(
-    vm, js, plan->closure, &plan->ctx, out_this
-  );
-  
-  case SV_CALL_EXEC_CLOSURE: return sv_call_resolve_closure(
-    vm, js, plan->closure, plan->func, &plan->ctx, out_this
-  );
-  
-  case SV_CALL_EXEC_NATIVE: {
-    ant_value_t result = sv_call_native(
-      js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
-    );
-    sv_call_cleanup(js, &plan->ctx);
-    return result;
-  }
-
-  case SV_CALL_EXEC_UNCURRIED_NATIVE: {
-    ant_value_t saved_func = js->current_func;
-    js->current_func = plan->func;
-    ant_value_t result = sv_call_native(
-      js, plan->closure->bound_this, 
-      plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
-    );
-    js->current_func = saved_func;
-    sv_call_cleanup(js, &plan->ctx);
-    return result;
-  }}
-
-  return js_mkerr(js, "invalid call plan");
-}
-
-static inline bool sv_check_c_stack_overflow(ant_t *js) {
-  volatile char marker;
-  if (js->cstk.limit == 0 || js->cstk.base == NULL) return false;
-  
-  uintptr_t base = (uintptr_t)js->cstk.base;
-  uintptr_t curr = (uintptr_t)&marker;
-  
-  size_t used = (base > curr) ? (base - curr) : (curr - base);
-  return used > js->cstk.limit;
-}
-
-static inline ant_value_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, bool is_construct_call
-) {
-  if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
-
-  sv_call_mode_t mode = is_construct_call
-    ? SV_CALL_MODE_CONSTRUCT
-    : SV_CALL_MODE_NORMAL;
-
-  if (!is_construct_call && vtype(func) == kTypeBuiltin) {
-    js->new_target = js_mkundef();
-    ant_value_t native_this = sv_call_normalize_this(js, this_val, mode);
-    
-    if (out_this) *out_this = native_this;
-    ant_value_t native_res = sv_call_native(js, func, native_this, args, argc);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    
-    return native_res;
-  }
-
-  sv_call_plan_t plan;
-  ant_value_t err = sv_prepare_call(
-    vm, js, func, this_val, args, argc,
-    out_this, mode, &plan
-  );
-
-  if (is_err(err)) return err;
-  ant_value_t result = sv_execute_call_plan(vm, js, &plan, out_this);
-  sv_vm_maybe_checkpoint_microtasks(js);
-
-  return result;
-}
-
-static inline ant_value_t sv_vm_call_explicit_this(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc
-) {
-  if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
-
-  sv_call_plan_t plan;
-  ant_value_t err = sv_prepare_call(
-    vm, js, func, this_val, args, argc, NULL,
-    SV_CALL_MODE_EXPLICIT_THIS, &plan
-  );
-  
-  if (is_err(err)) return err;
-  ant_value_t result = sv_execute_call_plan(vm, js, &plan, NULL);
-  sv_vm_maybe_checkpoint_microtasks(js);
-  
-  return result;
-}
-
-static inline ant_value_t sv_call_default_ctor(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  sv_call_ctx_t *ctx, ant_value_t *out_this
-) {
-  if (vtype(js->new_target) == kTypeUndefined) {
-    sv_call_cleanup(js, ctx);
-    return js_mkerr_typed(js, JS_ERR_TYPE, SV_CLASS_CTOR_CALL_ERROR);
-  }
-
-  ant_value_t super_ctor = closure->super_val;
-  uint8_t st = vtype(super_ctor);
-  
-  if (st == kTypeFunction || st == kTypeBuiltin) {
-    ant_value_t super_this = ctx->this_val;
-    ant_value_t result = sv_vm_call(
-      vm, js, super_ctor, ctx->this_val,
-      ctx->args, ctx->argc, &super_this, true
-    );
-    
-    if (out_this) *out_this = super_this;
-    sv_call_cleanup(js, ctx);
-    
-    return result;
-  }
-
-  sv_call_cleanup(js, ctx);
-  return js_mkundef();
-}
-
-ant_value_t sv_call_async_closure_dispatch(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args, int argc
-);
-
-ant_value_t sv_call_generator_closure_dispatch(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args, int argc
-);
-
-static inline ant_value_t sv_call_async_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx
-) {
-  ant_value_t result = sv_call_async_closure_dispatch(
-    vm, js, closure, callee_func,
-    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
-  );
-  sv_call_cleanup(js, ctx);
-  return result;
-}
-
-static inline ant_value_t sv_call_generator_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx
-) {
-  ant_value_t result = sv_call_generator_closure_dispatch(
-    vm, js, closure, callee_func,
-    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
-  );
-  sv_call_cleanup(js, ctx);
-  return result;
-}
-
-static inline ant_value_t sv_call_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
-) {
-  ant_value_t result = sv_execute_closure_entry(
-    vm, closure, callee_func, ctx->super_val,
-    ctx->this_val, ctx->args, ctx->argc, out_this
-  );
-  sv_call_cleanup(js, ctx);
-  return result;
-}
-
-// TODO: constexpr / enum
-#define SV_TFB_NUM   (1 << 0)
-#define SV_TFB_STR   (1 << 1)
-#define SV_TFB_BOOL  (1 << 2)
-#define SV_TFB_OTHER (1 << 3)
-
-#define SV_TFB_SPEC_COUNT_SHIFT 4
-#define SV_TFB_SPEC_MIN_SAMPLES 7u
-
-#define SV_TFB_SPEC_COUNT_MASK  (7u << SV_TFB_SPEC_COUNT_SHIFT)
-#define SV_TFB_SPEC_MISMATCH    (1u << 7)
-
-#define SV_TFB_CLASS_MASK (SV_TFB_NUM | SV_TFB_STR | SV_TFB_BOOL | SV_TFB_OTHER)
-
-static_assert(
-  SV_TFB_SPEC_MIN_SAMPLES <= (SV_TFB_SPEC_COUNT_MASK >> SV_TFB_SPEC_COUNT_SHIFT),
-  "specialization sample threshold must fit in the feedback counter"
-);
-
-static_assert(
-  (SV_TFB_CLASS_MASK & (SV_TFB_SPEC_COUNT_MASK | SV_TFB_SPEC_MISMATCH)) == 0,
-  "feedback value classes and specialization state must not overlap"
-);
-
-#define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
-#define SV_TFB_INOBJ_P90_NUMERATOR     9
-#define SV_TFB_INOBJ_P90_DENOMINATOR   10
-
-#define SV_JIT_THRESHOLD       100
-#define SV_JIT_RECOMPILE_DELAY 50
-#define SV_TFB_ALLOC_THRESHOLD 2
-
-#define SV_CALL_FB_MAX_SLOTS    32
-#define SV_JIT_BAILOUT_LIMIT    5
-#define SV_CALL_FB_MISS_DISABLE 4
-
-#define SV_JIT_RETRY_INTERP mkval(kTypeError, 1)
-  
-extern const char *const sv_op_names[OP__COUNT];
-  
-static inline bool sv_is_jit_bailout(ant_value_t v) { 
-  return v == SV_JIT_BAILOUT;
-}
-
-static inline void sv_jit_enter(ant_t *js) {
-  if (js) js->jit_active_depth++;
-}
-
-static inline void sv_jit_leave(ant_t *js) {
-  if (js && js->jit_active_depth > 0) js->jit_active_depth--;
-}
-
-static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int bc_off) {
-  if (!fn) return;
-  
-  if (fn->jit_bailout_tfb_ver != fn->tfb_version) {
-    fn->jit_bailout_tfb_ver = fn->tfb_version;
-    fn->jit_bailout_count = 0;
-  }
-  
-  if (fn->jit_bailout_count < UINT8_MAX) 
-    fn->jit_bailout_count++;
-  
-  fn->jit_code = NULL;
-  fn->back_edge_count = 0;
-  
-  if (sv_jit_warn_unlikely) {
-    const char *op_name = "entry";
-    if (bc_off >= 0 && bc_off < fn->code_len) {
-      uint8_t op = fn->code[bc_off];
-      if (op < OP__COUNT && sv_op_names[op]) op_name = sv_op_names[op];
-    }
-    
-    uint32_t line = 0, col = 0;
-    (void)sv_lookup_srcpos(fn, bc_off, &line, &col);
-    
-    fprintf(stderr,
-      "jit: bailout %u/%u tfb=%u func=%s op=%s bc=%d at %s:%u:%u reason=%s\n",
-      (unsigned)fn->jit_bailout_count, (unsigned)SV_JIT_BAILOUT_LIMIT,
-      fn->tfb_version, fn->debug->name ? fn->debug->name : "<anonymous>",
-      op_name, bc_off, fn->debug->filename ? fn->debug->filename : "<unknown>",
-      line, col, reason ? reason : "unknown"
-    );
-  }
-  
-  if (fn->jit_bailout_count >= SV_JIT_BAILOUT_LIMIT) {
-    fn->jit_compile_failed = true;
-    fn->call_count = 0;
-    if (sv_jit_warn_unlikely) fprintf(
-      stderr, "jit: disabling %s after %u bailouts at tfb=%u\n",
-      fn->debug->name ? fn->debug->name : "<anonymous>",
-      (unsigned)fn->jit_bailout_count, fn->tfb_version
-    );
-    return;
-  }
-  
-  fn->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
-}
-
-static inline void sv_jit_on_bailout(sv_func_t *fn) {
-  sv_jit_on_bailout_at(fn, "direct", -1);
-}
-
-typedef ant_value_t (*sv_jit_func_t)(
-  sv_vm_t *,
-  ant_value_t,
-  ant_value_t,
-  ant_value_t,
-  ant_value_t *,
-  int, sv_closure_t *
-);
-
-ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
-  sv_closure_t *closure, ant_value_t callee_func,
-  sv_call_ctx_t *ctx, ant_value_t *out_this
-);
-
-static inline uint8_t sv_tfb_classify(ant_value_t v) {
-  if (vtype(v) == kTypeNumber) return SV_TFB_NUM;
-  if (vtype(v) == kTypeString) return SV_TFB_STR;
-  if (vtype(v) == kTypeBool) return SV_TFB_BOOL;
-  return SV_TFB_OTHER;
-}
-
-static inline bool sv_func_has_sidecar(const sv_func_t *func) {
-  return func && (((uintptr_t)func->type_feedback & ant_sidecar) != 0);
-}
-
-static inline sv_func_sidecar_t *sv_func_sidecar(const sv_func_t *func) {
-  if (!func) return NULL;
-  uintptr_t raw = (uintptr_t)func->type_feedback;
-  if ((raw & ant_sidecar) == 0) return NULL;
-  return (sv_func_sidecar_t *)(raw & ~ant_sidecar);
-}
-
-static inline uint8_t *sv_func_type_feedback(const sv_func_t *func) {
-  if (!func) return NULL;
-  uintptr_t raw = (uintptr_t)func->type_feedback;
-  if ((raw & ant_sidecar) == 0) return func->type_feedback;
-  return ((sv_func_sidecar_t *)(raw & ~ant_sidecar))->type_feedback;
-}
-
-static inline sv_func_sidecar_t *sv_func_ensure_sidecar(sv_func_t *func) {
-  if (!func) return NULL;
-
-  uintptr_t raw = (uintptr_t)func->type_feedback;
-  if ((raw & ant_sidecar) != 0)
-    return (sv_func_sidecar_t *)(raw & ~ant_sidecar);
-
-  sv_func_sidecar_t *sidecar = (sv_func_sidecar_t *)calloc(1, sizeof(*sidecar));
-  if (!sidecar) return NULL;
-
-  sidecar->type_feedback = func->type_feedback;
-  func->type_feedback = (uint8_t *)((uintptr_t)sidecar | ant_sidecar);
-
-  return sidecar;
-}
-
-static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
-  uint8_t *type_feedback = sv_func_type_feedback(func);
-  
-  if (type_feedback) {
-  int off = (int)(ip - func->code);
-  
-  uint8_t old = type_feedback[off];
-  uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
-  
-  if (neu != old) { 
-    type_feedback[off] = neu;
-    func->tfb_version++; 
-  }}
-}
-
-static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
-  uint8_t *type_feedback = sv_func_type_feedback(func);
-  if (type_feedback) {
-  int off = (int)(ip - func->code);
-  
-  uint8_t old = type_feedback[off];
-  uint8_t neu = old | sv_tfb_classify(v);
-  
-  if (neu != old) { 
-    type_feedback[off] = neu;
-    func->tfb_version++;
-  }}
-}
-
-static inline uint8_t sv_tfb_add_specialization_sample(
-  uint8_t old, uint8_t neu, bool matches
-) {
-  if (!matches) neu |= SV_TFB_SPEC_MISMATCH;
-  else {
-    uint8_t count = (uint8_t)((old & SV_TFB_SPEC_COUNT_MASK) >> SV_TFB_SPEC_COUNT_SHIFT);
-    if (count < SV_TFB_SPEC_MIN_SAMPLES) count++;
-    neu = (uint8_t)((neu & ~SV_TFB_SPEC_COUNT_MASK) | (count << SV_TFB_SPEC_COUNT_SHIFT));
-  }
-
-  return neu;
-}
-
-static inline uint8_t *sv_tfb_specialization_site(
-  sv_func_t *func, uint8_t *ip, uint8_t *old
-) {
-  uint8_t *type_feedback = sv_func_type_feedback(func);
-  if (!type_feedback) return NULL;
-
-  uint8_t *site = &type_feedback[(int)(ip - func->code)];
-  *old = *site;
-  
-  if (*old & SV_TFB_SPEC_MISMATCH) return NULL;
-  return site;
-}
-
-static inline void sv_tfb_record_specialization_at(
-  sv_func_t *func, uint8_t *site, uint8_t old, bool matches
-) {
-  uint8_t neu = sv_tfb_add_specialization_sample(old, old, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
-}
-
-static inline bool sv_tfb_specialization_ready(uint8_t feedback) {
-  uint8_t count = (uint8_t)((feedback & SV_TFB_SPEC_COUNT_MASK) >> SV_TFB_SPEC_COUNT_SHIFT);
-  return count >= SV_TFB_SPEC_MIN_SAMPLES && (feedback & SV_TFB_SPEC_MISMATCH) == 0;
-}
-
-static inline bool sv_tfb_is_word32_number(ant_value_t value) {
-  if (vtype(value) != kTypeNumber) return false;
-  double number = tod(value);
-  return isfinite(number) && number >= (double)INT32_MIN && number <= (double)UINT32_MAX && trunc(number) == number;
-}
-
-static inline void sv_tfb_record2_spec(
-  sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r,
-  bool word32
-) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
-  if (!site) return;
-
-  bool matches = word32
-    ? sv_tfb_is_word32_number(l) && sv_tfb_is_word32_number(r)
-    : vtype(l) == kTypeNumber && vtype(r) == kTypeNumber;
-  
-  uint8_t neu = old | sv_tfb_classify(l) | sv_tfb_classify(r);
-  neu = sv_tfb_add_specialization_sample(old, neu, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
-}
-
-static inline void sv_tfb_record1_word32_spec(
-  sv_func_t *func, uint8_t *ip, ant_value_t value
-) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
-  if (!site) return;
-
-  uint8_t neu = old | sv_tfb_classify(value);
-  neu = sv_tfb_add_specialization_sample(old, neu, sv_tfb_is_word32_number(value));
-  if (neu != old) { *site = neu; func->tfb_version++; }
-}
-
-static inline bool sv_tfb_dense_numeric_element(
-  ant_value_t object, ant_value_t key, ant_value_t *slot
-) {
-  if (vtype(object) != kTypeArray || vtype(key) != kTypeNumber) return false;
-
-  double number = tod(key);
-  if (!isfinite(number) || number < 0 ||
-      number >= (double)UINT32_MAX || trunc(number) != number)
-    return false;
-
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(object));
-  if (!ptr || ptr->flags.is_exotic || !ptr->flags.fast_array ||
-      !ptr->u.array.data)
-    return false;
-
-  uint32_t index = (uint32_t)number;
-  if (index >= ptr->u.array.len || index >= ptr->u.array.cap) return false;
-
-  ant_value_t *candidate = &ptr->u.array.data[index];
-  if (vtype(*candidate) != kTypeNumber) return false;
-  if (slot) *slot = *candidate;
-  
-  return true;
-}
-
-static inline bool sv_tfb_dense_numeric_get(
-  ant_value_t object, ant_value_t key
-) {
-  return sv_tfb_dense_numeric_element(object, key, NULL);
-}
-
-static inline bool sv_tfb_dense_numeric_put(
-  ant_value_t object, ant_value_t key, ant_value_t value,
-  bool *tagged_old
-) {
-  if (vtype(value) != kTypeNumber || vtype(object) != kTypeArray ||
-      vtype(key) != kTypeNumber)
-    return false;
-
-  double number = tod(key);
-  if (!isfinite(number) || number < 0 ||
-      number >= (double)UINT32_MAX || trunc(number) != number)
-    return false;
-
-  ant_object_t *ptr = js_obj_ptr(js_as_obj(object));
-  if (!ptr || ptr->flags.is_exotic || ptr->flags.frozen ||
-      !ptr->flags.fast_array || !ptr->u.array.data)
-    return false;
-
-  uint32_t index = (uint32_t)number;
-  if (index >= ptr->u.array.len || index >= ptr->u.array.cap ||
-      vtype(ptr->u.array.data[index]) == kTypeSentinel)
-    return false;
-
-  if (tagged_old)
-    *tagged_old = vtype(ptr->u.array.data[index]) != kTypeNumber;
-  return true;
-}
-
-static inline void sv_tfb_record_dense_numeric_put(
-  sv_func_t *func, uint8_t *ip,
-  ant_value_t object, ant_value_t key, ant_value_t value
-) {
-  uint8_t old;
-  uint8_t *site = sv_tfb_specialization_site(func, ip, &old);
-  if (!site) return;
-
-  bool tagged_old = false;
-  bool matches = sv_tfb_dense_numeric_put(object, key, value, &tagged_old);
-
-  uint8_t neu = tagged_old ? (uint8_t)(old | SV_TFB_OTHER) : old;
-  neu = sv_tfb_add_specialization_sample(old, neu, matches);
-  if (neu != old) { *site = neu; func->tfb_version++; }
-}
-
-static inline bool sv_tfb_put_needs_tagged_old_guard(uint8_t feedback) {
-  return (feedback & SV_TFB_OTHER) != 0;
-}
-
-static inline void sv_tfb_ensure(sv_func_t *fn) {
-  if (!sv_func_type_feedback(fn) && fn->code_len > 0) {
-    uint8_t *type_feedback = calloc((size_t)fn->code_len, 1);
-    if (sv_func_has_sidecar(fn)) sv_func_sidecar(fn)->type_feedback = type_feedback;
-    else fn->type_feedback = type_feedback;
-  }
-  if (!fn->local_type_feedback && fn->max_locals > 0)
-    fn->local_type_feedback = calloc((size_t)fn->max_locals, 1);
-}
-
-static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
-  if (!callee) return;
-  sv_call_target_fb_t *fb = func->call_target_fb;
-  int count = func->call_target_fb_count;
-  for (int i = 0; i < count; i++) {
-    if (fb[i].bc_off != (uint16_t)bc_off) continue;
-    if (fb[i].disabled) return;
-    if (fb[i].target == callee) return;
-    if (fb[i].target == NULL) { fb[i].target = callee; return; }
-    fb[i].miss_count++;
-    if (fb[i].miss_count >= SV_CALL_FB_MISS_DISABLE) {
-      fb[i].disabled = 1;
-      fb[i].target = NULL;
-    } else fb[i].target = callee;
-    func->tfb_version++;
-    return;
-  }
-  if (count >= SV_CALL_FB_MAX_SLOTS) return;
-  if (!fb) {
-    fb = calloc(SV_CALL_FB_MAX_SLOTS, sizeof(sv_call_target_fb_t));
-    if (!fb) return;
-    func->call_target_fb = fb;
-  }
-  fb[count].bc_off = (uint16_t)bc_off;
-  fb[count].target = callee;
-  fb[count].miss_count = 0;
-  fb[count].disabled = 0;
-  func->call_target_fb_count = (uint8_t)(count + 1);
-}
-
-static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
-  sv_call_target_fb_t *fb = func->call_target_fb;
-  int count = func->call_target_fb_count;
-  for (int i = 0; i < count; i++) {
-    if (fb[i].bc_off == (uint16_t)bc_off && !fb[i].disabled)
-      return fb[i].target;
-  }
-  return NULL;
-}
-
-static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) {
-  if (func->local_type_feedback && idx >= 0 && idx < func->max_locals) {
-    uint8_t old = func->local_type_feedback[idx];
-    uint8_t neu = old | sv_tfb_classify(v);
-    if (neu != old) { func->local_type_feedback[idx] = neu; func->tfb_version++; }
-  }
-}
-
-static inline uint8_t sv_tfb_clamp_inobj_limit(uint32_t limit) {
-  return (limit > ANT_INOBJ_MAX_SLOTS) ? (uint8_t)ANT_INOBJ_MAX_SLOTS : (uint8_t)limit;
-}
-
-static inline sv_ctor_prop_fb_t *sv_tfb_ctor_prop_fb(sv_func_t *func, bool create) {
-  if (!func) return NULL;
-  sv_func_sidecar_t *sidecar = create ? sv_func_ensure_sidecar(func) : sv_func_sidecar(func);
-  return sidecar ? &sidecar->ctor_prop_fb : NULL;
-}
-
-static inline uint64_t sv_tfb_ctor_prop_samples(const sv_func_t *func) {
-  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
-  return fb ? fb->samples : 0;
-}
-
-static inline uint64_t sv_tfb_ctor_prop_bin(const sv_func_t *func, uint32_t bin) {
-  sv_ctor_prop_fb_t *fb = func ? sv_tfb_ctor_prop_fb((sv_func_t *)func, false) : NULL;
-  if (!fb || bin >= SV_TFB_CTOR_PROP_BINS) return 0;
-  return fb->hist[bin];
-}
-
-static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t samples) {
-  if (!func || samples == 0) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb((sv_func_t *)func, false);
-  if (!fb) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-
-  uint64_t target = (
-    (samples * SV_TFB_INOBJ_P90_NUMERATOR)
-    + (SV_TFB_INOBJ_P90_DENOMINATOR - 1)
-  ) / SV_TFB_INOBJ_P90_DENOMINATOR;
-  if (target == 0) target = 1;
-
-  uint64_t seen = 0;
-  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) {
-    seen += fb->hist[i];
-    if (seen < target) continue;
-    if (i >= SV_TFB_CTOR_PROP_OVERFLOW_FROM) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-    return sv_tfb_clamp_inobj_limit(i);
-  }
-
-  return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-}
-
-static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
-  if (vtype(ctor_func) != kTypeFunction) return;
-  if (!is_object_type(instance)) return;
-  
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return;
-  
-  ant_object_t *obj = js_obj_ptr(js_as_obj(instance));
-  if (!obj) return;
-
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, true);
-  if (!fb) return;
-
-  uint32_t count = obj->prop_count;
-  uint32_t bin = (count < SV_TFB_CTOR_PROP_OVERFLOW_FROM)
-    ? count
-    : SV_TFB_CTOR_PROP_OVERFLOW_FROM;
-  
-  fb->hist[bin]++;
-  uint64_t samples = ++fb->samples;
-  
-  if (!fb->inobj_frozen && samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) {
-    fb->inobj_limit = sv_tfb_infer_inobj_limit(func, samples);
-    fb->inobj_frozen = 1;
-  }
-}
-
-static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
-  
-  if (!fb || !fb->inobj_frozen) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
-  return sv_tfb_clamp_inobj_limit(fb->inobj_limit);
-}
-
-static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return false;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  if (!closure || !closure->func) return false;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(closure->func, false);
-  return fb && fb->inobj_frozen != 0;
-}
-
-static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
-  if (vtype(ctor_func) != kTypeFunction) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  sv_closure_t *closure = js_func_closure(ctor_func);
-  
-  if (!closure || !closure->func) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  sv_func_t *func = closure->func;
-  sv_ctor_prop_fb_t *fb = sv_tfb_ctor_prop_fb(func, false);
-  
-  if (!fb) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
-  if (fb->inobj_frozen || fb->samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) return 0;
-  
-  return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - fb->samples);
-}
-
-static inline ant_value_t sv_call_resolve_closure(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
-) {
-  if (closure->func->is_generator)
-    return sv_call_generator_closure(vm, js, closure, callee_func, ctx);
-  if (closure->func->is_async)
-    return sv_call_async_closure(vm, js, closure, callee_func, ctx);
-  if (!closure->func->is_generator) {
-    sv_func_t *fn = closure->func;
-    if (fn->jit_code) {
-      sv_jit_enter(js);
-      ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
-        vm, ctx->this_val, js->new_target,
-        ctx->super_val, ctx->args, ctx->argc, closure
-      );
-      sv_jit_leave(js);
-      if (sv_is_jit_bailout(result)) {
-        sv_jit_on_bailout(fn);
-      } else { sv_call_cleanup(js, ctx); return result; }
-    }
-    {
-      uint32_t cc = ++fn->call_count;
-      if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
-        sv_tfb_ensure(fn);
-      if (!fn->jit_compile_failed && cc > SV_JIT_THRESHOLD) {
-        ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
-        if (result != SV_JIT_RETRY_INTERP) return result;
-      }
-    }
-  }
-  return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
-}
 
 #endif

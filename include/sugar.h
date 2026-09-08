@@ -79,8 +79,8 @@ ant_value_t start_async_in_coroutine(
   ant_value_t closure_scope, ant_value_t *args, int nargs
 );
 
-ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t resume_coroutine_wrapper(ant_params_t);
+ant_value_t reject_coroutine_wrapper(ant_params_t);
 
 js_async_entry_t *js_eval_async_entry_create(coroutine_t *coro);
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);

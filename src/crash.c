@@ -15,7 +15,7 @@
 #include "reactor.h"
 #include "utils.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/assert.h"
 #include "modules/fetch.h"
 #include "modules/json.h"
@@ -575,7 +575,7 @@ static void crash_report_print_upload_error(const char *message) {
   if (message && *message) fprintf(stderr, "%s\n", message);
 }
 
-static ant_value_t crash_report_noop(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t crash_report_noop(ant_params_t) {
   if (crash_report_status_printed) return js_mkundef();
   crash_report_status_printed = true;
 
@@ -585,7 +585,7 @@ static ant_value_t crash_report_noop(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t crash_report_print_url(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t crash_report_print_url(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   size_t len = 0;
@@ -606,7 +606,7 @@ static ant_value_t crash_report_print_url(ant_t *js, ant_value_t *args, int narg
   return args[0];
 }
 
-static ant_value_t crash_report_response_text(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t crash_report_response_text(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   ant_value_t text_fn = js_getprop_fallback(js, args[0], "text");
@@ -619,7 +619,7 @@ static ant_value_t crash_report_response_text(ant_t *js, ant_value_t *args, int 
     return js_mkundef();
   }
 
-  ant_value_t text_promise = sv_vm_call(js->vm, js, text_fn, args[0], NULL, 0, NULL, false);
+  ant_value_t text_promise = sv_vm_call(js->vm, js, text_fn, args[0], NULL, 0, NULL, js_mkundef());
   if (is_err(text_promise)) return text_promise;
 
   ant_value_t print_promise = js_promise_then(
@@ -855,7 +855,7 @@ int ant_crash_run_internal_report(ant_t *js) {
     return EXIT_SUCCESS;
   }
 
-  ant_value_t report_json = js_json_stringify(js, &report, 1);
+  ant_value_t report_json = js_json_stringify(js, &report, 1, js_mkundef());
   if (vtype(report_json) != kTypeString) {
     crash_report_print_upload_failed();
     free(payload);
@@ -883,7 +883,7 @@ int ant_crash_run_internal_report(ant_t *js) {
   js_set(js, init, "body", js_mkstr(js, report_payload, report_payload_len));
 
   ant_value_t fetch_args[2] = { js_mkstr(js, url, strlen(url)), init };
-  ant_value_t fetch_promise = ant_fetch(js, fetch_args, 2);
+  ant_value_t fetch_promise = ant_fetch(js, fetch_args, 2, js_mkundef());
 
   if (is_err(fetch_promise)) {
     crash_report_status_printed = true;

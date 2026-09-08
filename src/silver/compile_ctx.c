@@ -37,7 +37,8 @@ void sv_compile_ctx_init_root(
   ctx->source = source;
   ctx->source_len = source_len;
   ctx->mode = mode;
-  ctx->inherits_eval_env = mode == SV_COMPILE_EVAL;
+  ctx->inherits_eval_env = sv_compile_mode_is_eval(mode);
+  ctx->allows_new_target = mode == SV_COMPILE_EVAL_FUNCTION;
   ctx->is_strict = is_strict;
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;
@@ -63,11 +64,13 @@ void sv_compile_ctx_init_child(
   ctx->enclosing = enclosing;
   ctx->scope_depth = 0;
   ctx->is_arrow = node && !!(node->flags & FN_ARROW);
+  ctx->allows_new_target = (!enclosing->enclosing || ctx->is_arrow)
+    ? enclosing->allows_new_target : true;
   ctx->is_async = node && !!(node->flags & FN_ASYNC);
   ctx->is_strict = enclosing->is_strict || (node && !!(node->flags & FN_CLASS_BODY));
   ctx->mode = mode;
   ctx->inherits_eval_env =
-    enclosing->inherits_eval_env || mode == SV_COMPILE_EVAL;
+    enclosing->inherits_eval_env || sv_compile_mode_is_eval(mode);
   ctx->completion_local = -1;
   ctx->strict_args_local = -1;
   ctx->new_target_local = -1;
@@ -89,6 +92,7 @@ void sv_compile_ctx_cleanup(sv_compiler_t *ctx) {
   for (int i = 0; i < ctx->eval_scope_count; i++)
     free(ctx->eval_scopes[i].bindings);
   free(ctx->eval_scopes);
+  free(ctx->eval_vars);
   free(ctx->loops);
   free(ctx->unwind_kinds);
   free(ctx->srcpos);

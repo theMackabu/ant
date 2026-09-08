@@ -5,7 +5,7 @@
 #include "async.h"
 #include "utf8.h"
 #include "property.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/symbol.h"
 #include "modules/collections.h"
 
@@ -101,7 +101,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
     return js_mkerr(js, "not iterable");
   }
   
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) {
     GC_ROOT_RESTORE(js, root_mark);
     return iterator;
@@ -169,7 +169,7 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
     }
   }
 
-  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, js_mkundef());
   if (is_err(iterator)) {
     GC_ROOT_RESTORE(js, root_mark);
     return iterator;
@@ -315,7 +315,7 @@ static inline ant_value_t sv_iter_advance(
     ant_value_t iterator = vm->stack[vm->sp - 3];
     if (!is_callable(next_method))
       return js_mkerr(js, "iterator.next is not a function");
-    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, js_mkundef());
     if (is_err(result)) return result;
     if (!is_object_type(result))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result is not an object");
@@ -362,7 +362,7 @@ static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
     ant_value_t iterator = vm->stack[vm->sp - 3];
     ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
     if (is_callable(return_fn))
-      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
+      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
   }
   vm->sp -= 3;
 }
@@ -384,7 +384,7 @@ static inline ant_value_t sv_op_iter_close_async(sv_vm_t *vm, ant_t *js) {
         vm->sp -= 3;
         return js_mkerr_typed(js, JS_ERR_TYPE, "iterator.return is not a function");
       }
-      result = sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
+      result = sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, js_mkundef());
       if (is_err(result)) {
         vm->sp -= 3;
         return result;
@@ -441,7 +441,7 @@ static inline ant_value_t sv_op_iter_call(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t iterator = vm->stack[vm->sp - 4];
   if (!is_callable(method))
     return js_mkerr(js, "iterator method is not callable");
-  ant_value_t result = sv_vm_call(vm, js, method, iterator, NULL, 0, NULL, false);
+  ant_value_t result = sv_vm_call(vm, js, method, iterator, NULL, 0, NULL, js_mkundef());
   if (is_err(result)) return result;
   vm->stack[vm->sp++] = result;
   return tov(0);
@@ -527,7 +527,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     result = sv_vm_call(
       vm, js,
       next_method, iterator,
-      NULL, 0, NULL, false
+      NULL, 0, NULL, js_mkundef()
     );
     
     if (is_err(result)) return (sv_await_result_t){ 

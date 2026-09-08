@@ -652,7 +652,7 @@ static inline bool is_repl_top_level(const sv_compiler_t *c) {
 }
 
 static inline bool has_completion_value(const sv_compiler_t *c) {
-  return c && (c->mode == SV_COMPILE_EVAL || c->mode == SV_COMPILE_REPL);
+  return c && (sv_compile_mode_is_eval(c->mode) || c->mode == SV_COMPILE_REPL);
 }
 
 static inline bool is_completion_top_level(const sv_compiler_t *c) {
@@ -684,7 +684,7 @@ static inline bool has_active_with_scope(const sv_compiler_t *c) {
 }
 
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
-  return c && !c->is_arrow && c->enclosing;
+  return c && !c->is_arrow && c->enclosing && !sv_compile_mode_is_eval(c->mode);
 }
 
 static void emit_import_binding_resolve(
@@ -716,6 +716,7 @@ static uint8_t import_spec_binding(sv_ast_t *spec, const char **name, uint32_t *
 
 static void mark_import_binding(sv_compiler_t *c, int idx, sv_ast_t *spec) {
   if (idx < 0) return;
+  c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
   sv_binding_meta_t *binding = &c->locals[idx].binding;
   binding->import_kind = import_spec_binding(spec, &binding->import_name, &binding->import_name_len);
 }
@@ -968,6 +969,7 @@ static int resolve_super_upvalue(sv_compiler_t *c) {
 static int resolve_arguments_upvalue(sv_compiler_t *c) {
   if (!c->enclosing) return -1;
   sv_compiler_t *enc = c->enclosing;
+  if (enc->owns_eval_env || sv_compile_mode_is_eval(enc->mode)) return -1;
 
   if (!enc->is_arrow) {
     if (enc->strict_args_local < 0) return -1;
@@ -982,7 +984,7 @@ static int resolve_arguments_upvalue(sv_compiler_t *c) {
   return add_upvalue(c, (uint16_t)upvalue, false, false);
 }
 
-static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
+static int resolve_upvalue_raw(sv_compiler_t *c, const char *name, uint32_t len) {
   if (!c->enclosing) return -1;
 
   int local = resolve_local(c->enclosing, name, len);
@@ -993,7 +995,7 @@ static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
     return add_upvalue_binding(c, slot, true, loc->is_const, &loc->binding);
   }
 
-  int upvalue = resolve_upvalue(c->enclosing, name, len);
+  int upvalue = resolve_upvalue_raw(c->enclosing, name, len);
   if (upvalue != -1) {
     sv_upval_desc_t *uv = &c->enclosing->upval_descs[upvalue];
     sv_binding_meta_t *meta = &c->enclosing->upval_bindings[upvalue];
@@ -1001,6 +1003,18 @@ static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
   }
 
   return -1;
+}
+
+static int resolve_upvalue(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (name && len && name[0] != '\x01') {
+    if (!c->is_arrow && !sv_compile_mode_is_eval(c->mode) && is_ident_str(name, len, "arguments", 9)) return -1;
+    if (c->owns_eval_env) return -1;
+    for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing) {
+      if (resolve_local(enc, name, len) >= 0) break;
+      if (enc->owns_eval_env) return -1;
+    }
+  }
+  return resolve_upvalue_raw(c, name, len);
 }
 
 typedef struct {
@@ -1077,7 +1091,7 @@ static bool eval_scope_builder_add_binding(
   sv_compiler_t *c, sv_eval_scope_builder_t *scope,
   sv_eval_binding_set_t *set,
   const char *name, uint32_t len,
-  uint8_t kind, uint16_t index, bool is_const
+  uint8_t kind, uint16_t index, bool is_const, const sv_binding_meta_t *meta
 ) {
   if (!name || len == 0 || name[0] == '\x01') return true;
   uint32_t *lookup_slot = eval_binding_set_slot(set, scope, name, len);
@@ -1096,8 +1110,12 @@ static bool eval_scope_builder_add_binding(
     scope->capacity = capacity;
   }
   uint32_t binding_index = scope->count++;
+  if (meta->import_kind == SV_IMPORT_BIND_DEFAULT) kind |= SV_EVAL_BIND_IMPORT_DEFAULT;
+  if (meta->import_kind == SV_IMPORT_BIND_NAMED) kind |= SV_EVAL_BIND_IMPORT_NAMED;
   scope->bindings[binding_index] = (sv_runtime_binding_t){
-    name, len, index, kind, is_const
+    name, len, index, kind, is_const,
+    meta->import_name ? intern_string(meta->import_name, meta->import_name_len) : NULL,
+    meta->import_name_len
   };
   *lookup_slot = binding_index;
   return true;
@@ -1123,7 +1141,8 @@ static bool eval_scope_builder_capture_local(
 
   if (!eval_scope_builder_add_binding(
         c, scope, set, local->name, local->name_len,
-        kind, index, local->is_const)) return false;
+        kind | local->eval_flags,
+        index, local->is_const, &local->binding)) return false;
   local->captured = true;
   return true;
 }
@@ -1135,12 +1154,12 @@ static bool eval_scope_builder_capture_upvalue(
   if (!eval_local_is_visible(local) || eval_scope_builder_has_binding(
         set, scope, local->name, local->name_len)) return true;
 
-  int upvalue = resolve_upvalue(c, local->name, local->name_len);
+  int upvalue = resolve_upvalue_raw(c, local->name, local->name_len);
   if (upvalue < 0) return true;
   return eval_scope_builder_add_binding(
     c, scope, set, local->name, local->name_len,
     SV_EVAL_BIND_UPVALUE, (uint16_t)upvalue,
-    c->upval_descs[upvalue].is_const);
+    c->upval_descs[upvalue].is_const, &c->upval_bindings[upvalue]);
 }
 
 static bool eval_scope_builder_capture_locals(
@@ -1198,7 +1217,7 @@ static bool capture_dynamic_eval_scope(
   if (!eval_scope_builder_capture_locals(
         c, scope, &binding_set)) goto capture_failed;
 
-  for (sv_compiler_t *enc = c->enclosing; enc; enc = enc->enclosing)
+  for (sv_compiler_t *enc = c->inherits_eval_env ? NULL : c->enclosing; enc; enc = enc->enclosing)
     if (!eval_scope_builder_capture_upvalues(
           c, scope, &binding_set, enc)) goto capture_failed;
   free(binding_set.slots);
@@ -1223,8 +1242,10 @@ static void sv_func_finalize_type_data(
     "function local types cannot be replaced"
   );
 
+  func->needs_eval_env = comp->inherits_eval_env;
+  func->is_eval = sv_compile_mode_is_eval(comp->mode);
   func->local_type_count = local_type_count;
-  if (comp->eval_scope_count > 0) {
+  if (comp->eval_scope_count > 0 || comp->eval_var_count > 0) {
     size_t metadata_size = offsetof(sv_func_metadata_t, local_types) +
       (size_t)local_type_count * sizeof(sv_type_info_t);
     sv_func_metadata_t *metadata = code_arena_bump(metadata_size);
@@ -1239,6 +1260,12 @@ static void sv_func_finalize_type_data(
     ANT_ASSERT(eval_scopes != NULL, "failed to allocate eval scopes");
     metadata->eval_scopes = eval_scopes;
     metadata->eval_scope_count = (uint32_t)comp->eval_scope_count;
+    metadata->eval_var_count = comp->eval_var_count;
+    if (comp->eval_var_count) {
+      size_t size = (size_t)comp->eval_var_count * sizeof(sv_eval_decl_t);
+      metadata->eval_vars = code_arena_bump(size);
+      memcpy(metadata->eval_vars, comp->eval_vars, size);
+    }
 
     size_t binding_count = 0;
     for (int i = 0; i < comp->eval_scope_count; i++)
@@ -1524,6 +1551,10 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   }
   
   if (is_ident_str(name, len, "arguments", 9)) {
+    if (c->owns_eval_env || sv_compile_mode_is_eval(c->mode)) {
+      emit_atom_op(c, OP_GET_EVAL_GLOBAL, name, len);
+      return;
+    }
     if (has_implicit_arguments_obj(c)) {
       if (c->strict_args_local >= 0) {
         emit_get_local(c, c->strict_args_local);
@@ -1872,7 +1903,7 @@ static bool compile_self_append_stmt(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static inline bool is_ident_name(sv_ast_t *node, const char *name) {
+static inline bool is_ident_name(const sv_ast_t *node, const char *name) {
   size_t n = strlen(name);
   return node 
     && node->type == N_IDENT && node->len == (uint32_t)n 
@@ -1892,10 +1923,30 @@ static void mark_char_code_at_binding(sv_compiler_t *c, sv_ast_t *prop) {
   if (local >= 0) c->locals[local].char_code_at_hint = true;
 }
 
+static bool is_sloppy_eval(const sv_compiler_t *c) {
+  return sv_compile_mode_is_eval(c->mode) && !c->is_strict;
+}
+
+static void add_eval_var(sv_compiler_t *c, const char *name, uint32_t len, bool annex_b) {
+  int local = resolve_local_at_depth(c, name, len, 0);
+  if (annex_b && local >= 0 && (c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) return;
+  for (uint32_t i = 0; i < c->eval_var_count; i++)
+    if (c->eval_vars[i].len == len && !memcmp(c->eval_vars[i].str, name, len)) {
+      c->eval_vars[i].annex_b &= annex_b;
+      return;
+    }
+  sv_eval_decl_t *vars = realloc(c->eval_vars, ((size_t)c->eval_var_count + 1) * sizeof(*vars));
+  if (!vars) { js_mkerr(c->js, "out of memory while declaring eval variables"); return; }
+  c->eval_vars = vars;
+  int atom = add_atom(c, name, len);
+  c->eval_vars[c->eval_var_count++] = (sv_eval_decl_t){c->atoms[atom].str, len, annex_b};
+}
+
 static void hoist_var_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   if (!pat) return;
   switch (pat->type) {
     case N_IDENT:
+      if (is_sloppy_eval(c)) { add_eval_var(c, pat->str, pat->len, false); break; }
       if (resolve_local(c, pat->str, pat->len) == -1)
         add_local(c, pat->str, pat->len, false, 0);
       break;
@@ -1983,9 +2034,11 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
   if (!pat) return;
 
   switch (pat->type) {
-    case N_IDENT:
-      ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
+    case N_IDENT: {
+      int local = ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
+      c->locals[local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       break;
+    }
     case N_ASSIGN_PAT:
     case N_ASSIGN:
       hoist_lexical_pattern(c, pat->left, is_const);
@@ -2168,7 +2221,8 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       (decl_node->flags & FN_CLASS_DECL)
     ) {
       int lb = c->local_count;
-      ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+      int class_local = ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+      c->locals[class_local].eval_flags |= SV_EVAL_BIND_LEXICAL;
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
         set_local_inferred_type(c, c->local_count - 1, SV_TI_UNKNOWN);
@@ -2183,7 +2237,12 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
           mark_export_binding(c, decl_node->str, decl_node->len);
       }
     } else if (decl_node->type == N_FUNC && decl_node->str && !(decl_node->flags & (FN_ARROW | FN_PAREN))) {
-      ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+      if (is_sloppy_eval(c) && c->scope_depth == 0)
+        add_eval_var(c, decl_node->str, decl_node->len, false);
+      else {
+        int local = ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
+        c->locals[local].eval_flags |= c->scope_depth > 0 ? SV_EVAL_BIND_LEXICAL : 0;
+      }
       if (node->type == N_EXPORT) {
         if (node->flags & EX_DEFAULT)
           mark_export_binding_as(c, decl_node->str, decl_node->len, "default", 7);
@@ -2196,7 +2255,8 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       annex_b_collect_funcs(decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
-        if (resolve_local(c, fn->str, fn->len) == -1)
+        if (is_sloppy_eval(c) && c->scope_depth == 0) add_eval_var(c, fn->str, fn->len, true);
+        else if (resolve_local(c, fn->str, fn->len) == -1)
           add_local(c, fn->str, fn->len, false, c->scope_depth);
       }
     }
@@ -2205,9 +2265,24 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       annex_b_collect_block_var_funcs(decl_node, &funcs);
       for (int j = 0; j < funcs.count; j++) {
         sv_ast_t *fn = funcs.items[j];
-        if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1)
+        if (is_sloppy_eval(c)) add_eval_var(c, fn->str, fn->len, true);
+        else if (resolve_local_at_depth(c, fn->str, fn->len, 0) == -1)
           add_local(c, fn->str, fn->len, false, 0);
       }
+    }
+  }
+
+  if (is_sloppy_eval(c) && c->scope_depth == 0) {
+    for (uint32_t i = 0; i < c->eval_var_count;) {
+      sv_eval_decl_t *decl = &c->eval_vars[i];
+      int local = resolve_local_at_depth(c, decl->str, decl->len, 0);
+      if (local < 0 || !(c->locals[local].eval_flags & SV_EVAL_BIND_LEXICAL)) { i++; continue; }
+      if (!decl->annex_b) {
+        js_mkerr_typed(c->js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared",
+          (int)decl->len, decl->str);
+        return;
+      }
+      memmove(decl, decl + 1, (--c->eval_var_count - i) * sizeof(*decl));
     }
   }
 
@@ -2238,22 +2313,43 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
   }
 }
 
+static void emit_closure(sv_compiler_t *c, int index) {
+  sv_func_t *child = (sv_func_t *)vptr(c->constants[index]);
+  uint32_t scope = 0;
+  if (child->needs_eval_env && !capture_dynamic_eval_scope(c, &scope)) return;
+  emit_op(c, child->needs_eval_env ? OP_CLOSURE_EVAL : OP_CLOSURE);
+  emit_u32(c, (uint32_t)index);
+  if (child->needs_eval_env) emit_u32(c, scope);
+}
+
 static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node, bool annex_b_update_var) {
   sv_func_t *fn = compile_function_body(c, node, SV_COMPILE_SCRIPT);
   if (!fn) return;
   int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
-  emit_op(c, OP_CLOSURE);
-  emit_u32(c, (uint32_t)idx);
+  emit_closure(c, idx);
   emit_set_function_name(c, node->str, node->len);
-  int annex_var = annex_b_update_var ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
-  if (annex_var >= 0) emit_op(c, OP_DUP);
-  if (is_repl_top_level(c)) {
+  int annex_var = annex_b_update_var && !is_sloppy_eval(c) ? resolve_local_at_depth(c, node->str, node->len, 0) : -1;
+  bool eval_annex_var = false;
+  if (annex_b_update_var && is_sloppy_eval(c))
+    for (uint32_t i = 0; i < c->eval_var_count; i++)
+      if (c->eval_vars[i].len == node->len && !memcmp(c->eval_vars[i].str, node->str, node->len))
+        eval_annex_var = true;
+  if (annex_var >= 0 || eval_annex_var) emit_op(c, OP_DUP);
+  if (is_sloppy_eval(c) && c->scope_depth == 0) {
+    bool declared = false;
+    for (uint32_t i = 0; i < c->eval_var_count; i++)
+      if (c->eval_vars[i].len == node->len && !memcmp(c->eval_vars[i].str, node->str, node->len))
+        declared = true;
+    if (declared) emit_atom_op(c, OP_PUT_EVAL_FUNCTION, node->str, node->len);
+    else emit_op(c, OP_POP);
+  } else if (is_repl_top_level(c)) {
     emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
   } else {
     int local = resolve_local(c, node->str, node->len);
     emit_put_local(c, local);
   }
   if (annex_var >= 0) emit_put_local(c, annex_var);
+  if (eval_annex_var) emit_atom_op(c, OP_PUT_EVAL_FUNCTION, node->str, node->len);
 }
 
 static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
@@ -3133,7 +3229,7 @@ static void compile_typeof_op(sv_compiler_t *c, sv_ast_t *node, int test_type) {
           );
         }
       } else if (
-          has_implicit_arguments_obj(c) &&
+          !c->owns_eval_env && has_implicit_arguments_obj(c) &&
           is_ident_str(arg->str, arg->len, "arguments", 9)
         ) {
         if (c->strict_args_local >= 0) {
@@ -4082,6 +4178,7 @@ static bool compile_inline_literal_eval(sv_compiler_t *c, sv_ast_t *node) {
   } else if (
     program->args.count == 1 &&
     is_inline_literal_eval_expr(program->args.items[0]) &&
+    (c->allows_new_target || !ast_contains_lexical_new_target(program)) &&
     inline_eval_can_compile_without_early_errors(c, program->args.items[0]) &&
     !ast_contains_direct_suspend(program->args.items[0], NULL)
   ) expr = program->args.items[0]; else {
@@ -4128,7 +4225,37 @@ static bool compile_direct_eval_call(
   sv_ast_t *callee = node->left;
   if (has_spread || !is_ident_name(callee, "eval") ||
       resolve_local(c, "eval", 4) != -1 ||
-      resolve_upvalue(c, "eval", 4) != -1) return false;
+      resolve_upvalue_raw(c, "eval", 4) != -1) return false;
+
+  if (c->inherits_eval_env) {
+    uint32_t eval_scope;
+    if (!capture_dynamic_eval_scope(c, &eval_scope)) return true;
+    emit_atom_op(c, OP_GET_EVAL_GLOBAL, "eval", 4);
+    emit_op(c, OP_DUP);
+    emit_constant(c, js_builtin_eval(c->js));
+    emit_op(c, OP_SEQ);
+    for (int i = 0; i < node->args.count; i++) {
+      compile_expr(c, node->args.items[i]);
+      emit_op(c, OP_SWAP);
+    }
+    int direct_jump = emit_jump(c, OP_JMP_TRUE);
+    emit_op(c, OP_CALL);
+    emit_u16(c, (uint16_t)node->args.count);
+    int end_jump = emit_jump(c, OP_JMP);
+    patch_jump(c, direct_jump);
+    if (node->args.count == 0) {
+      emit_op(c, OP_POP);
+      emit_op(c, OP_UNDEF);
+    } else {
+      for (int i = 1; i < node->args.count; i++) emit_op(c, OP_POP);
+      emit_op(c, OP_NIP);
+      emit_lexical_new_target(c);
+      emit_op(c, OP_EVAL);
+      emit_u32(c, eval_scope);
+    }
+    patch_jump(c, end_jump);
+    return true;
+  }
 
   if (node->args.count == 0) {
     emit_op(c, OP_UNDEF);
@@ -4155,6 +4282,7 @@ static bool compile_direct_eval_call(
     emit_op(c, OP_POP);
   }
 
+  emit_lexical_new_target(c);
   emit_op(c, OP_EVAL);
   emit_u32(c, eval_scope);
   return true;
@@ -4580,8 +4708,7 @@ void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
   }
   
   int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
-  emit_op(c, OP_CLOSURE);
-  emit_u32(c, (uint32_t)idx);
+  emit_closure(c, idx);
 
   if (node->str && node->len > 0) {
     emit_set_function_name(c, node->str, node->len);
@@ -4656,6 +4783,7 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
       kind == SV_VAR_AWAIT_USING
     );
     int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
+    if (kind != SV_VAR_VAR) c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
     emit_put_local(c, idx);
     c->locals[idx].is_tdz = false;
     set_local_inferred_type(c, idx, SV_TI_UNKNOWN);
@@ -5434,6 +5562,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
     } else {
       if (target->type == N_IDENT) {
         int idx = ensure_local_at_depth(c, target->str, target->len, is_const, c->scope_depth);
+        c->locals[idx].eval_flags |= SV_EVAL_BIND_LEXICAL;
         uint8_t init_type = SV_TI_UNKNOWN;
         if (decl->right) {
           init_type = infer_expr_type(c, decl->right);
@@ -5667,6 +5796,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     sv_local_t outer = c->locals[outer_idx];
     emit_get_local(c, outer_idx);
     int inner_idx = add_local(c, outer.name, outer.name_len, outer.is_const, c->scope_depth);
+    c->locals[inner_idx].eval_flags = outer.eval_flags;
     emit_put_local(c, inner_idx);
   }}
 
@@ -5743,6 +5873,10 @@ static void compile_for_each_assign_target(sv_compiler_t *c, sv_ast_t *lhs) {
     sv_ast_t *decl = lhs->args.items[0];
     sv_ast_t *target = decl->left ? decl->left : decl;
     if (target->type == N_IDENT) {
+      if (lhs->var_kind == SV_VAR_VAR && is_sloppy_eval(c)) {
+        emit_set_var(c, target->str, target->len, false);
+        return;
+      }
       int loc = resolve_local(c, target->str, target->len);
       if (loc == -1) {
         bool is_const = (lhs->var_kind == SV_VAR_CONST ||
@@ -5835,7 +5969,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     if (decl && decl->right) {
       compile_expr(c, decl->right);
       sv_ast_t *target = decl->left ? decl->left : decl;
-      if (target->type == N_IDENT) {
+      if (target->type == N_IDENT && !is_sloppy_eval(c)) {
         int loc = resolve_local(c, target->str, target->len);
         if (loc == -1)
           loc = add_local(c, target->str, target->len, false, c->scope_depth);
@@ -5927,6 +6061,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
       emit_get_local(c, outer_idx);
       int inner_idx = add_local(c, outer.name, outer.name_len,
                                 outer.is_const, c->scope_depth);
+      c->locals[inner_idx].eval_flags = outer.eval_flags;
       emit_put_local(c, inner_idx);
     }
   }
@@ -6132,6 +6267,7 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
   begin_scope(c);
   if (node->catch_param && node->catch_param->type == N_IDENT) {
     int loc = add_local(c, node->catch_param->str, node->catch_param->len, false, c->scope_depth);
+    c->locals[loc].eval_flags |= SV_EVAL_BIND_CATCH;
     emit_put_local(c, loc);
   } else if (node->catch_param && is_destructure_pattern_node(node->catch_param)) {
     compile_destructure_binding(c, node->catch_param, SV_VAR_LET);
@@ -6437,6 +6573,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   sv_func_finalize_type_data(fn, &comp, fn->max_locals);
   fn->param_count = 0;
   fn->function_length = 0;
+  fn->allows_new_target = true;
   fn->is_strict = true;
   fn->is_static = true;
   fn->debug->filename = c->filename ? c->filename : c->js->filename;
@@ -6448,8 +6585,7 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
 }
 
 static void emit_static_child_call(sv_compiler_t *c, int func_idx, int ctor_local) {
-  emit_op(c, OP_CLOSURE);
-  emit_u32(c, (uint32_t)func_idx);
+  emit_closure(c, func_idx);
   emit_get_local(c, ctor_local);
   emit_op(c, OP_SET_HOME_OBJ);
   emit_op(c, OP_SWAP);
@@ -6667,6 +6803,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->param_count = (uint16_t)comp.param_count;
     fn->function_length = (uint16_t)comp.param_count;
     fn->is_strict = comp.is_strict;
+    fn->allows_new_target = comp.allows_new_target;
     fn->debug->filename = c->js->filename;
     fn->debug->source_line = (int)node->line;
     
@@ -6679,8 +6816,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     
     sv_compile_ctx_cleanup(&comp);
     int idx = add_constant(c, mkref(kTypeFunctionInfo, fn));
-    emit_op(c, OP_CLOSURE);
-    emit_u32(c, (uint32_t)idx);
+    emit_closure(c, idx);
   } else emit_op(c, OP_UNDEF);
   
   free(field_inits);
@@ -6791,6 +6927,8 @@ static bool sv_func_compute_fusable_leaf(sv_func_t *func) {
   while (ip < end) {
     sv_op_t op = (sv_op_t)*ip;
     switch (op) {
+      case OP_CLOSURE_EVAL:
+      case OP_INIT_EVAL_ENV:
       case OP_CLOSURE:
       case OP_THIS:
       case OP_SPECIAL_OBJ:
@@ -6857,6 +6995,104 @@ static bool sv_func_compute_curried_step(sv_func_t *func) {
   return child->is_fusable_leaf;
 }
 
+static bool ast_pattern_binds_eval(const sv_ast_t *node) {
+  if (!node) return false;
+  switch (node->type) {
+    case N_IDENT: return is_ident_name(node, "eval");
+    case N_ASSIGN: case N_ASSIGN_PAT:
+      return ast_pattern_binds_eval(node->left);
+    case N_REST: case N_SPREAD: case N_PROPERTY:
+      return ast_pattern_binds_eval(node->right);
+    case N_ARRAY: case N_ARRAY_PAT: case N_OBJECT: case N_OBJECT_PAT:
+      for (int i = 0; i < node->args.count; i++)
+        if (ast_pattern_binds_eval(node->args.items[i])) return true;
+      return false;
+    default: return false;
+  }
+}
+
+static bool ast_decl_binds_eval(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_EXPORT) return ast_decl_binds_eval(node->left);
+  if (node->type == N_VAR) {
+    for (int i = 0; i < node->args.count; i++)
+      if (ast_pattern_binds_eval(node->args.items[i]->left)) return true;
+  }
+  if ((node->type == N_FUNC && !(node->flags & (FN_ARROW | FN_PAREN))) ||
+      (node->type == N_CLASS && (node->flags & FN_CLASS_DECL)))
+    return is_ident_str(node->str, node->len, "eval", 4);
+  return false;
+}
+
+static bool ast_has_eval_var(const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
+  if (node->type == N_VAR && node->var_kind == SV_VAR_VAR)
+    return ast_decl_binds_eval(node);
+  const sv_ast_t *children[] = {node->left, node->right, node->body,
+    node->catch_body, node->finally_body, node->init};
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_has_eval_var(children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_has_eval_var(node->args.items[i])) return true;
+  return false;
+}
+
+static bool ast_has_own_eval(sv_compiler_t *c, const sv_ast_t *node) {
+  if (!node || node->type == N_FUNC || node->type == N_CLASS) return false;
+  if (node->type == N_SWITCH && ast_has_own_eval(c, node->cond)) return true;
+  if (node->type == N_BLOCK || node->type == N_SWITCH) {
+    for (int i = 0; i < node->args.count; i++) {
+      const sv_ast_t *stmt = node->args.items[i];
+      if (node->type == N_BLOCK) {
+        if (ast_decl_binds_eval(stmt)) return false;
+      } else if (stmt) {
+        for (int j = 0; j < stmt->args.count; j++)
+          if (ast_decl_binds_eval(stmt->args.items[j])) return false;
+      }
+    }
+  }
+  if ((node->type == N_FOR && ast_decl_binds_eval(node->init)) ||
+      ((node->type == N_FOR_IN || node->type == N_FOR_OF || node->type == N_FOR_AWAIT_OF) &&
+       ast_decl_binds_eval(node->left))) return false;
+  if (node->type == N_TRY) {
+    return ast_has_own_eval(c, node->body) ||
+      (!ast_pattern_binds_eval(node->catch_param) && ast_has_own_eval(c, node->catch_body)) ||
+      ast_has_own_eval(c, node->finally_body);
+  }
+  if (node->type == N_CALL && !call_has_spread_arg(node) &&
+      is_ident_name(node->left, "eval") && node->args.count > 0 &&
+      resolve_local(c, "eval", 4) == -1 &&
+      resolve_upvalue_raw(c, "eval", 4) == -1) {
+    sv_ast_t *arg = node->args.items[0];
+    if (!eval_arg_is_definitely_non_string(arg)) {
+      if (!arg || arg->type != N_STRING) return true;
+      bool saved_thrown_exists = c->js->thrown_exists;
+      ant_value_t saved_thrown_value = c->js->thrown_value;
+      ant_value_t saved_thrown_stack = c->js->thrown_stack;
+      code_arena_mark_t mark = parse_arena_mark();
+      sv_ast_t *program = sv_parse(c->js, arg->str ? arg->str : "", arg->len, c->is_strict);
+      bool needs_env = !program || (program->args.count != 0 &&
+        (program->args.count != 1 ||
+         !is_inline_literal_eval_expr(program->args.items[0]) ||
+         !inline_eval_can_compile_without_early_errors(c, program->args.items[0]) ||
+         ast_contains_direct_suspend(program->args.items[0], NULL) ||
+         ast_has_own_eval(c, program->args.items[0])));
+      parse_arena_rewind(mark);
+      c->js->thrown_exists = saved_thrown_exists;
+      c->js->thrown_value = saved_thrown_value;
+      c->js->thrown_stack = saved_thrown_stack;
+      if (needs_env) return true;
+    }
+  }
+  const sv_ast_t *children[] = {node->left, node->right, node->cond, node->body,
+    node->catch_body, node->finally_body, node->catch_param, node->init, node->update};
+  for (size_t i = 0; i < sizeof(children) / sizeof(children[0]); i++)
+    if (ast_has_own_eval(c, children[i])) return true;
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_has_own_eval(c, node->args.items[i])) return true;
+  return false;
+}
+
 sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
@@ -6899,9 +7135,28 @@ sv_func_t *compile_function_body(
   }
 
   comp.param_locals = comp.local_count;
+  bool params_bind_eval = false;
+  for (int i = 0; i < node->args.count; i++)
+    params_bind_eval |= ast_pattern_binds_eval(node->args.items[i]);
+  if (!sv_compile_mode_is_eval(mode) && !comp.is_strict && !params_bind_eval) {
+    for (int i = 0; !comp.owns_eval_env && i < node->args.count; i++)
+      comp.owns_eval_env = ast_has_own_eval(&comp, node->args.items[i]);
+    if (!comp.owns_eval_env && !ast_has_eval_var(node->body))
+      comp.owns_eval_env = ast_has_own_eval(&comp, node->body);
+  }
+  comp.inherits_eval_env |= comp.owns_eval_env;
+  if (comp.owns_eval_env) emit_op(&comp, OP_INIT_EVAL_ENV);
   bool repl_top = is_repl_top_level(&comp);
 
   if (node->flags & FN_CLASS_CTOR) emit_op(&comp, OP_CHECK_CTOR);
+
+  if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
+    static const char nt_name[] = "\x01new.target";
+    comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, 1);
+    emit_put_local(&comp, comp.new_target_local);
+  }
   
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
@@ -6930,7 +7185,7 @@ sv_func_t *compile_function_body(
           emit_op(&comp, OP_PUT_ARG);
           emit_u16(&comp, (uint16_t)i);
         } else if (p->left) {
-          compile_destructure_binding(&comp, p->left, SV_VAR_LET);
+          compile_destructure_binding(&comp, p->left, SV_VAR_VAR);
           emit_op(&comp, OP_POP);
         } else emit_op(&comp, OP_POP);
       } else if (
@@ -6938,7 +7193,7 @@ sv_func_t *compile_function_body(
         p->type == N_OBJECT_PAT || p->type == N_OBJECT) {
         emit_op(&comp, OP_GET_ARG);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p, SV_VAR_LET);
+        compile_destructure_binding(&comp, p, SV_VAR_VAR);
         emit_op(&comp, OP_POP);
       } else if (p->type == N_REST && p->right && p->right->type == N_IDENT) {
         emit_op(&comp, OP_REST);
@@ -6951,7 +7206,7 @@ sv_func_t *compile_function_body(
       } else if (p->type == N_REST && p->right) {
         emit_op(&comp, OP_REST);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p->right, SV_VAR_LET);
+        compile_destructure_binding(&comp, p->right, SV_VAR_VAR);
         emit_op(&comp, OP_POP);
       }
     }
@@ -7025,7 +7280,7 @@ sv_func_t *compile_function_body(
           else { emit_op(&comp, OP_PUT_LOCAL); emit_u16(&comp, (uint16_t)slot); }
           set_local_inferred_type(&comp, bind_lb, SV_TI_UNKNOWN);
         } else if (p->left) {
-          compile_destructure_binding(&comp, p->left, SV_VAR_LET);
+          compile_destructure_binding(&comp, p->left, SV_VAR_VAR);
           emit_op(&comp, OP_POP);
         } else {
           emit_op(&comp, OP_POP);
@@ -7035,7 +7290,7 @@ sv_func_t *compile_function_body(
         p->type == N_OBJECT_PAT || p->type == N_OBJECT) {
         emit_op(&comp, OP_GET_ARG);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p, SV_VAR_LET);
+        compile_destructure_binding(&comp, p, SV_VAR_VAR);
         emit_op(&comp, OP_POP);
       } else if (
         p->type == N_REST && p->right && p->right->type == N_IDENT &&
@@ -7050,7 +7305,7 @@ sv_func_t *compile_function_body(
       } else if (p->type == N_REST && p->right) {
         emit_op(&comp, OP_REST);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p->right, SV_VAR_LET);
+        compile_destructure_binding(&comp, p->right, SV_VAR_VAR);
         emit_op(&comp, OP_POP);
       }
     }
@@ -7076,14 +7331,6 @@ sv_func_t *compile_function_body(
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, 0);
     emit_put_local(&comp, comp.strict_args_local);
-  }
-
-  if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
-    static const char nt_name[] = "\x01new.target";
-    comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 1);
-    emit_put_local(&comp, comp.new_target_local);
   }
 
   if (!comp.is_arrow && comp.enclosing && (node->flags & (FN_METHOD | FN_GETTER | FN_SETTER | FN_STATIC))) {
@@ -7233,6 +7480,7 @@ sv_func_t *compile_function_body(
   func->function_length = function_length_from_params(node);
   func->is_strict = comp.is_strict;
   func->is_arrow = comp.is_arrow;
+  func->allows_new_target = comp.allows_new_target;
   
   func->is_async = !!(node->flags & FN_ASYNC);
   func->has_await = false;
@@ -7473,8 +7721,12 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
 sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
+  if (mode != SV_COMPILE_EVAL_FUNCTION && ast_contains_lexical_new_target(program)) {
+    js_mkerr_typed(js, JS_ERR_SYNTAX, "new.target is only valid in functions");
+    return NULL;
+  }
 
-  if (mode == SV_COMPILE_EVAL) {
+  if (sv_compile_mode_is_eval(mode)) {
     const sv_ast_t *offender = NULL;
     for (int i = 0; i < program->args.count; i++)
       if (ast_contains_direct_suspend(program->args.items[i], &offender)) break;
@@ -7501,6 +7753,7 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   
   switch (mode) {
     case SV_COMPILE_MODULE: top_name = k_top_name_module; break;
+    case SV_COMPILE_EVAL_FUNCTION:
     case SV_COMPILE_EVAL:   top_name = k_top_name_eval; break;
     case SV_COMPILE_REPL:   top_name = k_top_name_repl; break;
     case SV_COMPILE_SCRIPT:
@@ -7518,6 +7771,8 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   top_fn.src_end = (source_len > 0) ? (uint32_t)source_len : 0;
   top_fn.body = sv_ast_new(N_BLOCK);
   top_fn.body->args = program->args;
+  if (sv_compile_mode_is_eval(mode) && ast_references_new_target(program))
+    top_fn.flags |= FN_USES_NEW_TARGET;
 
   sv_compiler_t root;
   sv_compile_ctx_init_root(
@@ -7591,6 +7846,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
   
+  root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)wrapped_len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
   
@@ -7691,6 +7947,7 @@ sv_func_t *sv_compile_function_with_params(
     (program->flags & FN_PARSE_STRICT) != 0, NULL
   );
   
+  root.allows_new_target = true;
   root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   

@@ -10,7 +10,8 @@
 #include <sys/mman.h>
 #endif
 
-#include "silver/engine.h"
+#include "silver/call.h"
+#include "silver/feedback.h"
 #include "silver/swarm.h"
 #include "modules/regex.h"
 #include "silver/glue.h"
@@ -479,7 +480,7 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
 }
 
 void js_set_error_site_from_vm_top(ant_t *js) {
-  sv_vm_t *vm = sv_vm_get_active(js);
+  sv_vm_t *vm = js->vm;
   if (!js || !vm || vm->fp < 0) return;
   
   sv_frame_t *frame = &vm->frames[vm->fp];
@@ -873,23 +874,6 @@ void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), 
   for (int i = 0; i <= vm->fp; i++) if (vm->frames[i].func) visitor(ctx, vm->frames[i].func);
 }
 
-// TODO: move to header?
-ant_value_t sv_call_async_closure_dispatch(
-  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  ant_value_t callee_func, ant_value_t super_val,
-  ant_value_t this_val, ant_value_t *args, int argc
-) {
-  return sv_start_async_closure(vm, js, closure, callee_func, super_val, this_val, args, argc);
-}
-
-// TODO: move to header?
-ant_value_t sv_execute_entry_tla(
-  ant_t *js, sv_func_t *func, ant_value_t this_val,
-  js_async_entry_t **async_entry_out
-) {
-  return sv_start_tla(js, func, this_val, async_entry_out);
-}
-
 static inline void sv_sync_frame_locals(
   sv_vm_t *vm, sv_frame_t **frame, sv_func_t **func,
   ant_value_t **bp, ant_value_t **lp
@@ -978,7 +962,7 @@ static inline ant_value_t sv_yield_star_call_method(
   }
 
   ant_value_t call_args[1] = { arg };
-  ant_value_t result = sv_vm_call(vm, js, method, iterator, call_args, 1, NULL, false);
+  ant_value_t result = sv_vm_call(vm, js, method, iterator, call_args, 1, NULL, js_mkundef());
   if (is_err(result)) return result;
   
   return sv_yield_star_unpack_result(js, result, out_value, out_done);
@@ -1015,7 +999,7 @@ static inline ant_value_t sv_yield_star_next(
     ant_value_t call_args[1] = { sent };
     ant_value_t result = sv_vm_call(
       vm, js, next_method, iterator, first ? NULL : call_args, first ? 0 : 1,
-      NULL, false
+      NULL, js_mkundef()
     );
     
     if (is_err(result)) return result;
@@ -1050,7 +1034,7 @@ static inline ant_value_t sv_yield_star_throw(
   }
 
   ant_value_t call_args[1] = { thrown };
-  ant_value_t result = sv_vm_call(vm, js, throw_method, iterator, call_args, 1, NULL, false);
+  ant_value_t result = sv_vm_call(vm, js, throw_method, iterator, call_args, 1, NULL, js_mkundef());
   if (is_err(result)) return result;
   
   return sv_yield_star_unpack_result(js, result, out_value, out_done);
@@ -1073,7 +1057,7 @@ static inline ant_value_t sv_yield_star_return(
 
 static inline ant_value_t sv_execute_entry_common(
   sv_vm_t *vm, sv_func_t *func, sv_upvalue_t **upvalues, int upvalue_count,
-  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t callee_func, ant_value_t super_val, ant_value_t new_target,
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t eval_env, ant_value_t *out_this
 ) {
@@ -1088,6 +1072,7 @@ static inline ant_value_t sv_execute_entry_common(
   vm->frames[vm->fp].upvalue_count = upvalue_count;
   vm->frames[vm->fp].callee = callee_func;
   vm->frames[vm->fp].eval_env = eval_env;
+  vm->frames[vm->fp].new_target = new_target;
 
   ant_value_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
   if (out_this) *out_this = vm->frames[vm->fp].this;
@@ -1167,7 +1152,7 @@ ant_value_t sv_execute_entry(
   sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc
 ) {
   return sv_execute_entry_common(
-    vm, func, NULL, 0, js_mkundef(), js_mkundef(),
+    vm, func, NULL, 0, js_mkundef(), js_mkundef(), js_mkundef(),
     this_val, args, argc, js_mkundef(), NULL
   );
 }
@@ -1199,7 +1184,7 @@ ant_value_t sv_call_compiled_zero_upvalues(
   
   ant_value_t result = sv_vm_call(
     js->vm, js, func_val, this_val, 
-    args, argc, NULL, false
+    args, argc, NULL, js_mkundef()
   );
   GC_ROOT_RESTORE(js, root_mark);
   return result;
@@ -1207,22 +1192,22 @@ ant_value_t sv_call_compiled_zero_upvalues(
 
 ant_value_t sv_execute_eval_entry(
   sv_vm_t *vm, sv_func_t *func,
-  ant_value_t this_val, ant_value_t eval_env
+  ant_value_t this_val, ant_value_t eval_env, ant_value_t new_target
 ) {
   return sv_execute_entry_common(
-    vm, func, NULL, 0, js_mkundef(), js_mkundef(),
+    vm, func, NULL, 0, js_mkundef(), js_mkundef(), new_target,
     this_val, NULL, 0, eval_env, NULL
   );
 }
 
 ant_value_t sv_execute_closure_entry(
-  sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
+  sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val, ant_value_t new_target,
   ant_value_t this_val, ant_value_t *args, int argc, ant_value_t *out_this
 ) {
   if (!closure || !closure->func) return mkval(kTypeError, 0);
   return sv_execute_entry_common(
     vm, closure->func, closure->upvalues, closure->func->upvalue_count, callee_func,
-    super_val, this_val, args, argc, sv_closure_eval_env(closure), out_this
+    super_val, new_target, this_val, args, argc, sv_closure_eval_env(closure), out_this
   );
 }
 
@@ -1249,7 +1234,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->ip = ip;
     frame->func = func;
     frame->this = sv_normalize_this_for_frame(js, func, this);
-    frame->new_target = js->new_target;
     frame->super_val = super_val;
     frame->prev_sp = vm->sp;
     frame->handler_base = (uint16_t)vm->handler_depth;
@@ -1454,9 +1438,22 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ARRAY:     { sv_op_array(vm, js, ip);         NEXT(3); }
   L_SET_BRAND: { sv_op_set_brand(vm, ip);         NEXT(2); }
   
-  L_REGEXP:        { sv_op_regexp(vm, js);                              NEXT(1); }
-  L_CLOSURE:       { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));  NEXT(5); }
-  L_PRIVATE_TOKEN: { sv_op_private_token(vm, js, ip);                   NEXT(5); }
+  L_REGEXP:        { sv_op_regexp(vm, js);                               NEXT(1); }
+  L_CLOSURE:       { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));   NEXT(5); }
+  L_CLOSURE_EVAL:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));   NEXT(9); }
+  L_INIT_EVAL_ENV: { VM_CHECK(sv_eval_init_variable_env(vm, js, frame)); NEXT(1); }
+  
+  L_PUT_EVAL_FUNCTION: {
+    sv_atom_t *name = &func->atoms[sv_get_u32(ip + 1)];
+    VM_CHECK(sv_eval_store_function(js, sv_frame_eval_env(js, frame),
+      name->str, name->len, vm->stack[--vm->sp]));
+    NEXT(5);
+  }
+  
+  L_PRIVATE_TOKEN: { 
+    sv_op_private_token(vm, js, ip);
+    NEXT(5);
+  }
 
   L_POP:      { sv_op_pop(vm);      NEXT(1); }
   L_DUP:      { sv_op_dup(vm);      NEXT(1); }
@@ -1885,7 +1882,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t super_this_c = call_this;
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
-      is_super_call ? &super_this_c : NULL, is_super_call);
+      is_super_call ? &super_this_c : NULL, is_super_call ? frame->new_target : js_mkundef());
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -1999,11 +1996,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     call_method_fallback:;
     frame->ip = ip;
-    if (is_super_call) js->new_target = frame->new_target;
     ant_value_t super_this_cm = call_this;
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
-      is_super_call ? &super_this_cm : NULL, is_super_call);
+      is_super_call ? &super_this_cm : NULL, is_super_call ? frame->new_target : js_mkundef());
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -2042,7 +2038,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->ip = ip;
     if (js_is_array_includes_builtin(call_func)) {
       call_result = js_array_includes_call(js, call_this, call_args, call_argc);
-    } else call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, false);
+    } else call_result = sv_vm_call(vm, js, call_func, call_this, call_args, call_argc, NULL, js_mkundef());
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     
     vm->sp -= call_argc + 2;
@@ -2128,7 +2124,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ) call_result = sv_isproto_ic_eval(js, call_this, call_arg, func, ip); else {
       ant_value_t call_args[1] = { call_arg };
       frame->ip = ip;
-      call_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);
+      call_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, js_mkundef());
       sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     }
 
@@ -2146,7 +2142,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
     if (!regexp_exec_truthy_try_fast(js, call_func, call_this, call_arg, &call_result)) {
       ant_value_t call_args[1] = { call_arg }; frame->ip = ip;
-      ant_value_t raw_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);
+      ant_value_t raw_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, js_mkundef());
       sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
       if (is_err(raw_result)) call_result = raw_result;
       else call_result = mkval(kTypeBool, js_truthy(js, raw_result) ? 1 : 0);
@@ -2219,7 +2215,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     frame->ip = ip;
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, tc_this, call_args, tc_argc, NULL, false);
+      vm, js, call_func, tc_this, call_args, tc_argc, NULL, js_mkundef());
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= tc_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -2284,7 +2280,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     ant_value_t *call_args = &vm->stack[vm->sp - tc_argc];
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, tc_this, call_args, tc_argc, NULL, false);
+      vm, js, call_func, tc_this, call_args, tc_argc, NULL, js_mkundef());
     sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= tc_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }

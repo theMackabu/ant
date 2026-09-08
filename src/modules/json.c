@@ -10,7 +10,7 @@
 #include "errors.h"
 #include "internal.h"
 
-#include "silver/engine.h"
+#include "silver/call.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 
@@ -418,7 +418,7 @@ static ant_value_t json_apply_tojson(
   ant_value_t transformed = sv_vm_call(
     js->vm, js,
     toJSON, val,
-    args, 1, NULL, false
+    args, 1, NULL, js_mkundef()
   );
   
   if (is_err(transformed)) {
@@ -448,7 +448,7 @@ static ant_value_t json_apply_replacer(
   ant_value_t transformed = sv_vm_call(
     js->vm, js, 
     ctx->replacer_func, ctx->holder, 
-    args, 2, NULL, false
+    args, 2, NULL, js_mkundef()
   );
   
   if (is_err(transformed)) {
@@ -776,7 +776,7 @@ static ant_value_t apply_reviver_call(
   
   ant_value_t result = sv_vm_call(
     js->vm, js, reviver, holder,
-    call_args, 2, NULL, false
+    call_args, 2, NULL, js_mkundef()
   );
   if (!is_err(result) && !json_temp_pin(roots, result)) return json_parse_oom(js);
   
@@ -841,7 +841,7 @@ static ant_value_t apply_reviver(
   return apply_reviver_call(js, holder, key, reviver, roots);
 }
 
-ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_json_parse(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (vtype(args[0]) != kTypeString) return js_mkerr(js, "JSON.parse() argument must be a string");
   
@@ -890,7 +890,7 @@ ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
 
 ant_value_t json_parse_value(ant_t *js, ant_value_t value) {
   ant_value_t args[1] = { value };
-  return js_json_parse(js, args, 1);
+  return js_json_parse(js, args, 1, js_mkundef());
 }
 
 static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, int nargs) {
@@ -944,7 +944,7 @@ static bool json_set_indent(ant_t *js, json_cycle_ctx *ctx, ant_value_t *args, i
   return true;
 }
 
-ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_json_stringify(ant_params_t) {
   ant_value_t result;
   json_out_t out = {0};
   
@@ -1065,7 +1065,7 @@ cleanup:
 
 ant_value_t json_stringify_value(ant_t *js, ant_value_t value) {
   ant_value_t args[1] = { value };
-  return js_json_stringify(js, args, 1);
+  return js_json_stringify(js, args, 1, js_mkundef());
 }
 
 void init_json_module(ant_t *js) {

@@ -34,7 +34,7 @@
 #include "internal.h"
 #include "sandbox/sandbox.h"
 #include "tty_ctrl.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "modules/stream.h"
 #include "modules/buffer.h"
@@ -62,7 +62,7 @@ typedef struct tty_read_stream_state {
 static void invoke_callback_if_needed(ant_t *js, ant_value_t cb, ant_value_t arg) {
   if (!is_callable(cb)) return;
   ant_value_t cb_args[1] = { arg };
-  sv_vm_call(js->vm, js, cb, js_mkundef(), cb_args, 1, NULL, false);
+  sv_vm_call(js->vm, js, cb, js_mkundef(), cb_args, 1, NULL, js_mkundef());
 }
 
 static bool parse_fd(ant_value_t value, int *fd_out) {
@@ -187,7 +187,7 @@ cleanup:
   if (buf->base) free(buf->base);
 }
 
-static ant_value_t tty_readstream__read(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_readstream__read(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   tty_read_stream_state_t *state = tty_read_stream_state_from_obj(stream_obj);
   int rc = 0;
@@ -217,7 +217,7 @@ static ant_value_t tty_readstream__read(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
-static ant_value_t tty_readstream__destroy(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_readstream__destroy(ant_params_t) {
   ant_value_t stream_obj = js_getthis(js);
   tty_read_stream_state_t *state = tty_read_stream_state_from_obj(stream_obj);
   ant_value_t cb = nargs > 1 ? args[1] : js_mkundef();
@@ -526,7 +526,7 @@ static void ensure_stream_common_props(ant_t *js, ant_value_t stream, int fd) {
   js_set(js, stream, "isTTY", js_bool(is_tty_fd(fd)));
 }
 
-static ant_value_t tty_isatty(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_isatty(ant_params_t) {
   if (nargs < 1) return js_false;
 
   int fd = 0;
@@ -534,7 +534,7 @@ static ant_value_t tty_isatty(ant_t *js, ant_value_t *args, int nargs) {
   return js_bool(is_tty_fd(fd));
 }
 
-static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_stream_write(ant_params_t) {
   if (nargs < 1) return js_false;
 
   size_t len = 0;
@@ -568,7 +568,7 @@ static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
-static ant_value_t tty_write_stream_rows_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_rows_getter(ant_params_t) {
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
   if (!is_tty_fd(fd)) return js_mkundef();
 
@@ -578,7 +578,7 @@ static ant_value_t tty_write_stream_rows_getter(ant_t *js, ant_value_t *args, in
   return js_mknum((double)rows);
 }
 
-static ant_value_t tty_write_stream_columns_getter(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_columns_getter(ant_params_t) {
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
   if (!is_tty_fd(fd)) return js_mkundef();
 
@@ -588,7 +588,7 @@ static ant_value_t tty_write_stream_columns_getter(ant_t *js, ant_value_t *args,
   return js_mknum((double)cols);
 }
 
-static ant_value_t tty_write_stream_get_window_size(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_get_window_size(ant_params_t) {
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
   int rows = 0;
   int cols = 0;
@@ -600,7 +600,7 @@ static ant_value_t tty_write_stream_get_window_size(ant_t *js, ant_value_t *args
   return arr;
 }
 
-static ant_value_t tty_write_stream_clear_line(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_clear_line(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
 
   int dir = 0;
@@ -620,7 +620,7 @@ static ant_value_t tty_write_stream_clear_line(ant_t *js, ant_value_t *args, int
   return maybe_callback_or_throw(js, this_obj, cb, ok, "clearLine", fd);
 }
 
-static ant_value_t tty_write_stream_clear_screen_down(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_clear_screen_down(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
 
   ant_value_t cb = js_mkundef();
@@ -635,7 +635,7 @@ static ant_value_t tty_write_stream_clear_screen_down(ant_t *js, ant_value_t *ar
   return maybe_callback_or_throw(js, this_obj, cb, ok, "clearScreenDown", fd);
 }
 
-static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_cursor_to(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   int x = 0;
   
@@ -674,7 +674,7 @@ static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int 
   return maybe_callback_or_throw(js, this_obj, cb, ok, "cursorTo", fd);
 }
 
-static ant_value_t tty_write_stream_move_cursor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_move_cursor(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "moveCursor(dx, dy[, callback]) requires dx and dy");
@@ -713,7 +713,7 @@ static ant_value_t tty_write_stream_move_cursor(ant_t *js, ant_value_t *args, in
   return maybe_callback_or_throw(js, this_obj, cb, ok, "moveCursor", fd);
 }
 
-static ant_value_t tty_write_stream_get_color_depth(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_get_color_depth(ant_params_t) {
   ant_value_t env_obj = js_mkundef();
   if (nargs > 0 && is_special_object(args[0])) env_obj = args[0];
 
@@ -722,7 +722,7 @@ static ant_value_t tty_write_stream_get_color_depth(ant_t *js, ant_value_t *args
   return js_mknum((double)depth);
 }
 
-static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_has_colors(ant_params_t) {
   int count = 16;
   ant_value_t env_obj = js_mkundef();
 
@@ -749,7 +749,7 @@ static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int
   return js_bool(max_colors >= count);
 }
 
-static ant_value_t tty_read_stream_set_raw_mode(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_read_stream_set_raw_mode(ant_params_t) {
   ant_value_t this_obj = js_getthis(js);
   if (!is_special_object(this_obj)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "setRawMode() requires a ReadStream receiver");
@@ -764,7 +764,7 @@ static ant_value_t tty_read_stream_set_raw_mode(ant_t *js, ant_value_t *args, in
   return this_obj;
 }
 
-static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_read_stream_constructor(ant_params_t) {
   tty_read_stream_state_t *state = NULL;
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "ReadStream(fd) requires a file descriptor");
 
@@ -784,7 +784,7 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
     return stdin_obj;
   }}
 
-  ant_value_t obj = stream_construct_readable(js, js->builtins.tty_readstream_proto, js_mkundef());
+  ant_value_t obj = stream_construct_readable(js, js->builtins.tty_readstream_proto, js_mkundef(), call_new_target);
   if (is_err(obj)) return obj;
 
   state = calloc(1, sizeof(*state));
@@ -803,7 +803,7 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
   return obj;
 }
 
-static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t tty_write_stream_constructor(ant_params_t) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "WriteStream(fd) requires a file descriptor");
 
   int fd = 0;
@@ -822,7 +822,7 @@ static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, in
     }
   }
 
-  ant_value_t obj = stream_construct_writable(js, js->builtins.tty_writestream_proto, js_mkundef());
+  ant_value_t obj = stream_construct_writable(js, js->builtins.tty_writestream_proto, js_mkundef(), call_new_target);
   if (is_err(obj)) return obj;
 
   ensure_stream_common_props(js, obj, fd);

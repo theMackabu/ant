@@ -316,7 +316,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   return clone;
 }
 
-ant_value_t js_structured_clone(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_structured_clone(ant_params_t) {
   if (nargs < 1) return js_mkundef();
 
   sc_entry_t *transfer = NULL;

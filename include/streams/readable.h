@@ -57,11 +57,12 @@ ant_value_t rs_stream_reader(ant_value_t stream_obj);
 ant_value_t rs_reader_stream(ant_value_t reader_obj);
 ant_value_t rs_reader_closed(ant_value_t reader_obj);
 
+ant_value_t rs_cancel_reject(ant_params_t);
+ant_value_t js_rs_reader_ctor(ant_params_t);
+ant_value_t rs_cancel_resolve(ant_params_t);
+
 ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj);
 ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj);
-ant_value_t rs_cancel_reject(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs);
-ant_value_t rs_cancel_resolve(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason);
 ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_fn, double hwm);
 ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk);

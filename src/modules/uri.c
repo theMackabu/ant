@@ -74,7 +74,7 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
 }
 
 // encodeURIComponent()
-ant_value_t js_encodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_encodeURIComponent(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
@@ -127,7 +127,7 @@ malformed:
 }
 
 // encodeURI()
-ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_encodeURI(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
@@ -180,7 +180,7 @@ malformed:
 }
 
 // decodeURIComponent()
-ant_value_t js_decodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_decodeURIComponent(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
@@ -229,7 +229,7 @@ malformed:
 }
 
 // decodeURI()
-ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_decodeURI(ant_params_t) {
   ant_value_t result;
   char *out = NULL;
   
@@ -299,7 +299,7 @@ static int is_escape_unreserved(unsigned char c) {
          c == '-' || c == '.' || c == '/';
 }
 
-static ant_value_t js_escape(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_escape(ant_params_t) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);
@@ -326,7 +326,7 @@ static ant_value_t js_escape(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
-static ant_value_t js_unescape(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_unescape(ant_params_t) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);

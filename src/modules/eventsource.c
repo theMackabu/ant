@@ -14,7 +14,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "inspector.h"
-#include "silver/engine.h"
+#include "silver/call.h"
 
 #include "http/eventsource.h"
 #include "modules/eventsource.h"
@@ -93,8 +93,8 @@ static ant_value_t eventsource_call(ant_t *js, ant_value_t fn, ant_value_t this_
   ant_value_t saved_this = js->this_val;
   ant_value_t result = js_mkundef();
   js->this_val = this_val;
-  if (vtype(fn) == kTypeBuiltin) result = js_as_cfunc(fn)(js, args, nargs);
-  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  if (vtype(fn) == kTypeBuiltin) result = sv_invoke_native(js, js_as_cfunc(fn), args, nargs, js_mkundef());
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, js_mkundef());
   js->this_val = saved_this;
   return result;
 }
@@ -394,8 +394,8 @@ static ant_value_t eventsource_create_object(ant_t *js) {
   return obj;
 }
 
-static ant_value_t js_eventsource_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == kTypeUndefined)
+static ant_value_t js_eventsource_ctor(ant_params_t) {
+  if (vtype(call_new_target) == kTypeUndefined)
     return js_mkerr_typed(js, JS_ERR_TYPE, "EventSource constructor requires 'new'");
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "EventSource URL is required");
 
@@ -439,7 +439,7 @@ static ant_value_t js_eventsource_ctor(ant_t *js, ant_value_t *args, int nargs) 
   return obj;
 }
 
-static ant_value_t js_eventsource_close(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t js_eventsource_close(ant_params_t) {
   eventsource_state_t *es = eventsource_data(js_getthis(js));
   if (!es) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid EventSource");
   eventsource_close(es);

@@ -195,7 +195,7 @@ OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> o
 OP_DEF(  APPLY,             3,   3,   1, u16)       /* func this [args] -> result */
 OP_DEF(  SUPER_APPLY,       3,   4,   1, u16)       /* this super new.target [args] -> this */
 OP_DEF(  NEW_APPLY,         3,   2,   1, u16)       /* func new.target [args] -> obj */
-OP_DEF(  EVAL,              5,   1,   1, npop)      /* direct eval */
+OP_DEF(  EVAL,              5,   2,   1, npop)      /* direct eval: source, lexical new.target */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
 OP_DEF(  RETURN_ASYNC,      1,   1,   0, none)      /* return from async func */
@@ -292,6 +292,9 @@ op_def(  LABEL,             5,   0,   0, label)     /* jump target marker */
 op_def(  LINE_NUM,          5,   0,   0, u32)       /* source line for debug info */
 op_def(  COL_NUM,           5,   0,   0, u32)       /* source column for debug info */
 
+OP_DEF(  INIT_EVAL_ENV,     1,   0,   0, none)
+OP_DEF(  CLOSURE_EVAL,      9,   0,   1, u32)
+OP_DEF(  PUT_EVAL_FUNCTION, 5,   1,   0, atom)
 #undef OP_DEF
 #undef op_def
 #endif

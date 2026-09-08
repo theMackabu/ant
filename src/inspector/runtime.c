@@ -614,7 +614,7 @@ static uint32_t inspector_current_await_id(ant_t *js) {
   return id > 0 && id <= UINT32_MAX ? (uint32_t)id : 0;
 }
 
-static ant_value_t inspector_await_fulfilled(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t inspector_await_fulfilled(ant_params_t) {
   inspector_await_t *pending = inspector_take_pending_await(inspector_current_await_id(js));
   if (!pending) return js_mkundef();
 
@@ -629,7 +629,7 @@ static ant_value_t inspector_await_fulfilled(ant_t *js, ant_value_t *args, int n
   return js_mkundef();
 }
 
-static ant_value_t inspector_await_rejected(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t inspector_await_rejected(ant_params_t) {
   inspector_await_t *pending = inspector_take_pending_await(inspector_current_await_id(js));
   if (!pending) return js_mkundef();
 

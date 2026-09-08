@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-ant_value_t DesktopBrowserWindowCtor(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowCtor(ant_params_t) {
   ant_value_t receiver = js_getthis(js);
   ant_desktop_state_t *desktop = is_object_type(receiver) ? ant_desktop_state_from(js_get_proto(js, receiver)) : NULL;
   if (!desktop) return js_mkerr(js, "invalid BrowserWindow constructor");
@@ -230,7 +230,7 @@ ant_value_t DesktopBrowserWindowCtor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t object = js_getthis(js);
   if (!is_object_type(object)) object = js_newobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, desktop->browser_window_proto);
+  ant_value_t proto = js_instance_proto_from_new_target(js, desktop->browser_window_proto, call_new_target);
   if (is_object_type(proto)) js_set_proto_init(object, proto);
   js_set(js, object, "_nativeId", js_mknum((double)identifier));
   js_set(js, object, "_events", js_mkobj(js));
@@ -275,7 +275,7 @@ ant_value_t LoadURL(ant_t *js, ant_desktop_window_state_t *state, NSString *url,
   return promise;
 }
 
-ant_value_t DesktopBrowserWindowLoadURL(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowLoadURL(ant_params_t) {
   ant_desktop_window_state_t *state = ant_desktop_window_from_value(js, js_getthis(js));
   if (!state) return js_mkerr(js, "invalid BrowserWindow receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeString) { return js_mkerr(js, "loadURL(url) requires a string"); }
@@ -285,7 +285,7 @@ ant_value_t DesktopBrowserWindowLoadURL(ant_t *js, ant_value_t *args, int nargs)
   return LoadURL(js, state, url, nil);
 }
 
-ant_value_t DesktopBrowserWindowLoadFile(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t DesktopBrowserWindowLoadFile(ant_params_t) {
   ant_desktop_window_state_t *state = ant_desktop_window_from_value(js, js_getthis(js));
   if (!state) return js_mkerr(js, "invalid BrowserWindow receiver");
   if (nargs < 1 || vtype(args[0]) != kTypeString) { return js_mkerr(js, "loadFile(path) requires a string"); }
