@@ -78,3 +78,44 @@ resolved that check, but regeneration then stopped because llvm-nm is missing.
 Focused constructor/JIT regressions and the spec suite were not run against a
 rebuilt binary. Broader WASM/package checks recommended for incoming master
 changes were not run; conflict resolution only changes the native Swarm modules.
+
+## Master equivalence audit (2026-09-08)
+
+Compared branch commit `758b5622a36fb451865451ff875925e52bdf3410` with
+local master `5f2b207f88253e19b2160c827bdc52b9edd791f8`, then applied the
+following corrections:
+
+- Restored master's ARM64/x86-64 `SV_JIT_HAS_BITCAST` condition. Testing
+  `defined(MIR_F2I)` and `defined(MIR_I2F)` incorrectly disabled the direct
+  bitcast path because these identifiers are enum constants, not macros.
+- Restored the original `jit_child_kind_t` enumerator values/order.
+- Removed the redundant `jit_slot_type` definition from `runtime.c`; the
+  shared header owns it. The configured GNU23 compiler accepted both copies.
+
+Mechanical comparison accounted for all 112 extracted helper definitions
+and all 161 opcode cases. Helper tokens match after removing comments,
+whitespace, line continuations, and linkage differences. Opcode tokens match
+after additionally normalizing context member access and the two extracted
+macro helpers. Setup/prototype code matches across 9,865 normalized tokens;
+all 263 compilation-context fields retain the original variable types.
+Coordinator entry, predispatch, and postdispatch/cleanup match across 123,
+613, and 825 normalized tokens respectively. Dispatch covers each opcode
+exactly once; both extracted macro bodies preserve their original operations.
+Grouped declarations, lifted initializers, and context storage are expected
+structural differences. This is a source-equivalence audit, not a comparison
+of native binaries or generated machine-code bytes.
+
+Validation after correction:
+
+- All 26 Swarm C translation units passed compiler syntax checks.
+- Native preprocessing reports `SV_JIT_HAS_BITCAST 1` on this ARM64 host.
+- `meson compile -C build` passed, including linking and signing.
+- 54 focused JIT/direct-eval test entrypoints passed.
+- Full spec suite: 4,221 tests across 102 files passed; zero failures.
+- `maid preflight` and `git diff --check` passed.
+
+The direct branch-to-master diff also contains unrelated changes in
+`include/silver/engine.h` and two WASM files. These were left outside this
+Swarm correction. In particular, the missing `ANT_WASM_EMBED` guard around
+the map-template size assertion remains a separate WASM compilation issue.
+No WASM build or performance benchmark was run.

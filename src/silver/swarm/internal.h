@@ -73,7 +73,7 @@ typedef struct {
 #define JIT_ERR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeError)
 #define JIT_STR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeString)
 #define NANBOX_TARR_TAG ((NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | (uint64_t)kTypeArray)
-#if defined(MIR_F2I) && defined(MIR_I2F)
+#if defined(__aarch64__) || defined(__x86_64__)
 #define SV_JIT_HAS_BITCAST 1
 #else
 #define SV_JIT_HAS_BITCAST 0
@@ -98,10 +98,10 @@ typedef struct {
   int count;
 } osr_entry_map_t;
 typedef enum {
-  JIT_CHILD_PLAIN,
+  JIT_CHILD_PLAIN = 0,
   JIT_CHILD_INHERITED_ONLY,
-  JIT_CHILD_PARAM_ONLY,
   JIT_CHILD_LOCAL_ONLY,
+  JIT_CHILD_PARAM_ONLY,
   JIT_CHILD_MIXED,
 } jit_child_kind_t;
 #define JIT_INLINE_MAX_BYTECODE 192

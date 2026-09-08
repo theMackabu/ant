@@ -144,12 +144,6 @@ void sv_jit_destroy(ant_t *js) {
   js->jit_ctx = NULL;
 }
 
-enum jit_slot_type {
-  SLOT_BOXED = 0,
-  SLOT_NUM,
-  SLOT_I32,
-};
-
 static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
   sv_call_target_fb_t *fb = func->call_target_fb;
   int count = func->call_target_fb_count;
