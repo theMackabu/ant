@@ -698,15 +698,49 @@ static ant_value_t server_event_source(ant_params_t) {
   return obj;
 }
 
+static ant_value_t server_upgrade_websocket_protocol(
+  ant_t *js, ant_value_t options, const ant_http_header_t *request_headers, char **out
+) {
+  ant_value_t protocol_v = 0;
+  ant_value_t protocol_s = 0;
+  const char *protocol = NULL;
+  const char *offered = NULL;
+
+  *out = NULL;
+  if (!is_object_type(options)) return js_mkundef();
+
+  protocol_v = js_get(js, options, "protocol");
+  if (vtype(protocol_v) == kTypeUndefined || vtype(protocol_v) == kTypeNull) return js_mkundef();
+
+  protocol_s = js_tostring_val(js, protocol_v);
+  if (is_err(protocol_s)) return protocol_s;
+
+  protocol = js_getstr(js, protocol_s, NULL);
+  if (!protocol || !*protocol) return js_mkundef();
+
+  offered = ant_ws_find_header(request_headers, "sec-websocket-protocol");
+  if (!ant_ws_header_contains_token(offered, protocol))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WebSocket subprotocol was not offered by the client");
+
+  *out = strdup(protocol);
+  if (!*out) return js_mkerr(js, "out of memory");
+  return js_mkundef();
+}
+
 static ant_value_t server_upgrade_websocket(ant_params_t) {
   server_runtime_t *server = server_current_runtime(js);
   server_request_t *req = NULL;
   
   ant_value_t request_obj = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t options_obj = nargs > 1 ? args[1] : js_mkundef();
+  
   const ant_http_header_t *request_headers = NULL;
   const char *key = NULL;
   const char *extensions = NULL;
+  
   char *accept = NULL;
+  char *protocol = NULL;
+  ant_value_t protocol_err = 0;
   bool per_message_deflate = false;
   ant_websocket_server_options_t ws_options = {0};
   
@@ -725,28 +759,37 @@ static ant_value_t server_upgrade_websocket(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket upgrade request");
   }
 
+  protocol_err = server_upgrade_websocket_protocol(js, options_obj, request_headers, &protocol);
+  if (is_err(protocol_err)) return protocol_err;
+
   accept = ant_ws_accept_key(key);
-  if (!accept) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket key");
+  if (!accept) { free(protocol); return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WebSocket key"); }
+  
   extensions = ant_ws_find_header(request_headers, "sec-websocket-extensions");
   per_message_deflate = server->websocket_per_message_deflate &&
     ant_ws_header_contains_extension(extensions, "permessage-deflate");
+  
   ws_options.max_payload_len = server->websocket_max_payload_len;
   ws_options.per_message_deflate = per_message_deflate;
-  socket = ant_websocket_accept_server(js, req->conn, request_obj, NULL, &ws_options);
-  if (is_err(socket)) { free(accept); return socket; }
+  
+  socket = ant_websocket_accept_server(js, req->conn, request_obj, protocol, &ws_options);
+  if (is_err(socket)) { free(accept); free(protocol); return socket; }
 
   response_headers = headers_create_empty(js);
-  if (is_err(response_headers)) { free(accept); return response_headers; }
+  if (is_err(response_headers)) { free(accept); free(protocol); return response_headers; }
   headers_append_literal(js, response_headers, "Upgrade", "websocket");
   headers_append_literal(js, response_headers, "Connection", "Upgrade");
   headers_append_literal(js, response_headers, "Sec-WebSocket-Accept", accept);
-  if (per_message_deflate)
-    headers_append_literal(
-      js, response_headers,
-      "Sec-WebSocket-Extensions",
-      "permessage-deflate; server_no_context_takeover; client_no_context_takeover"
-    );
+  
+  if (protocol) headers_append_literal(js, response_headers, "Sec-WebSocket-Protocol", protocol);
+  if (per_message_deflate) headers_append_literal(
+    js, response_headers,
+    "Sec-WebSocket-Extensions",
+    "permessage-deflate; server_no_context_takeover; client_no_context_takeover"
+  );
+  
   free(accept);
+  free(protocol);
 
   response = response_create_fetched(js, 101, "Switching Protocols", NULL, 0, response_headers, NULL, 0, js_mkundef(), NULL);
   if (is_err(response)) return response;
@@ -755,6 +798,7 @@ static ant_value_t server_upgrade_websocket(ant_params_t) {
   result = js_mkobj(js);
   js_set(js, result, "socket", socket);
   js_set(js, result, "response", response);
+  
   return result;
 }
 

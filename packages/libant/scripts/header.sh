@@ -22,6 +22,8 @@ HEADERS=(
   "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
   "utarray.h:$VENDOR_DIR/uthash-2.3.0/src/utarray.h"
   "types.h:$INCLUDE_DIR/types.h"
+  "cage.h:$INCLUDE_DIR/cage.h"
+  "value.h:$INCLUDE_DIR/value.h"
   "debug.h:$INCLUDE_DIR/debug.h"
   "common.h:$INCLUDE_DIR/common.h"
   "shapes.h:$INCLUDE_DIR/shapes.h"
@@ -31,6 +33,8 @@ HEADERS=(
   "ant.h:$INCLUDE_DIR/ant.h"
   "arena.h:$INCLUDE_DIR/arena.h"
   "pool.h:$INCLUDE_DIR/pool.h"
+  "gc/strings.h:$INCLUDE_DIR/gc/strings.h"
+  "primordials.h:$INCLUDE_DIR/primordials.h"
   "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
   "esm/loader.h:$INCLUDE_DIR/esm/loader.h"
   "esm/library.h:$INCLUDE_DIR/esm/library.h"
@@ -68,6 +72,9 @@ HEADERS=(
 
 for f in "$INCLUDE_DIR"/modules/*.h; do
   name="modules/$(basename "$f")"
+  if [ "$name" = "modules/temporal_capi_ext.h" ]; then
+    continue
+  fi
   HEADERS+=("$name:$f")
 done
 
@@ -93,6 +100,11 @@ emit_header_file() {
 
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/opcode\.h\" ]]; then
       cat "$INCLUDE_DIR/silver/opcode.h" >> "$OUTPUT"
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"primordial_list\.h\" ]]; then
+      cat "$INCLUDE_DIR/primordial_list.h" >> "$OUTPUT"
       continue
     fi
 

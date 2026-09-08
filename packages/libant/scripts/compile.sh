@@ -29,7 +29,7 @@ elif [ "$#" -gt 0 ]; then
   setup_args=(build --reconfigure --prefer-static -Ddeps_prefix_cmake="$tlsuv_prefix")
 else
   coredata=build/meson-private/coredata.dat
-  for config_input in meson.build meson_options.txt ../../sources.json ../../meson/meson.build ../../meson/deps/meson.build; do
+  for config_input in meson.build meson_options.txt ../../sources.json ../../meson/meson.build ../../meson/deps/meson.build ../../meson/deps/temporal/meson.build; do
     if [ "$config_input" -nt "$coredata" ]; then
       setup_args=(build --reconfigure --prefer-static -Ddeps_prefix_cmake="$tlsuv_prefix")
       break

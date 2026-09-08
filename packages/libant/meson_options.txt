@@ -4,6 +4,7 @@ option('build_git_hash', type: 'string', value: '', description: 'git hash for v
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
 option('lto', type: 'boolean', value: true, description: 'also build LTO version (libant-lto.a)')
 option('allocator', type: 'combo', choices: ['mimalloc', 'system'], value: 'system', description: 'runtime malloc implementation')
+option('temporal', type: 'feature', value: 'enabled', description: 'build the Temporal API from temporal_capi')
 option('native_tuning', type: 'feature', value: 'disabled', description: 'optimize generated code for the current build host CPU')
 option('pgo', type: 'feature', value: 'disabled', description: 'use profile-guided optimization data when available')
 option('pgo_generate_dir', type: 'string', value: '', description: 'emit LLVM PGO raw profiles into this directory')
