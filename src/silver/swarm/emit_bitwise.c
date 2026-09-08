@@ -181,6 +181,10 @@ void jit_emit_bitwise(jit_compile_t *c) {
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       MIR_reg_t rs = vstack_top(&c->vs);
       MIR_append_insn(c->ctx, c->jit_func,
+                      MIR_new_insn(c->ctx, MIR_MOV,
+                                   MIR_new_reg_op(c->ctx, c->r_bailout_val),
+                                   MIR_new_reg_op(c->ctx, rs)));
+      MIR_append_insn(c->ctx, c->jit_func,
                       MIR_new_call_insn(c->ctx, 6,
                                         MIR_new_ref_op(c->ctx, c->helper1_proto),
                                         MIR_new_ref_op(c->ctx, c->imp_bnot),
@@ -188,41 +192,9 @@ void jit_emit_bitwise(jit_compile_t *c) {
                                         MIR_new_reg_op(c->ctx, c->r_vm),
                                         MIR_new_reg_op(c->ctx, c->r_js),
                                         MIR_new_reg_op(c->ctx, rs)));
-      MIR_label_t no_bail = MIR_new_label(c->ctx);
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_BNE,
-                                   MIR_new_label_op(c->ctx, no_bail),
-                                   MIR_new_reg_op(c->ctx, rs),
-                                   MIR_new_uint_op(c->ctx, (uint64_t)SV_JIT_BAILOUT)));
-      for (int i = 0; i < c->vs.sp; i++) {
-        mir_emit_slot_boxed(
-            c->ctx, c->jit_func, c->vs.regs[i], c->vs.d_regs[i],
-            c->vs.slot_type ? c->vs.slot_type[i] : SLOT_BOXED, c->r_d_slot);
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
-                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_args_buf, 0, 1),
-                                     MIR_new_reg_op(c->ctx, c->vs.regs[i])));
-      }
-      mir_emit_dnum_rebox(c->ctx, c->jit_func, &c->bailout_ctx);
-      for (int i = 0; i < c->n_locals; i++)
-        MIR_append_insn(c->ctx, c->jit_func,
-                        MIR_new_insn(c->ctx, MIR_MOV,
-                                     MIR_new_mem_op(c->ctx, MIR_T_I64,
-                                                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), c->r_lbuf, 0, 1),
-                                     MIR_new_reg_op(c->ctx, c->local_regs[i])));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, c->r_bailout_off),
-                                   MIR_new_int_op(c->ctx, c->bc_off)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_MOV,
-                                   MIR_new_reg_op(c->ctx, c->r_bailout_sp),
-                                   MIR_new_int_op(c->ctx, c->vs.sp)));
-      MIR_append_insn(c->ctx, c->jit_func,
-                      MIR_new_insn(c->ctx, MIR_JMP,
-                                   MIR_new_label_op(c->ctx, c->bailout_tramp)));
-      MIR_append_insn(c->ctx, c->jit_func, no_bail);
+      mir_emit_bailout_check(c->ctx, c->jit_func, rs,
+                             c->r_bailout_val, c->bc_off, c->vs.sp,
+                             &c->bailout_ctx);
       break;
     }
 

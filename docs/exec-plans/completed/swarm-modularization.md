@@ -130,3 +130,9 @@ Build prerequisite: `silver/feedback.h` now includes `debug.h` directly for
 `sv_jit_warn_unlikely`. Removing the incidental debug include from
 `silver/engine.h` exposed this missing dependency in consumers of `call.h`.
 Validation: native build, repository preflight, and all 4,221 spec tests passed.
+
+- BNOT bailout now saves the original operand before the helper overwrites its
+  register and restores it through the common bailout emitter. The regression
+  failed at call 101 before the fix; strings, coercible objects, and BigInts
+  now pass, including exactly-once coercion. Native build, preflight, and all
+  4,221 spec tests passed.
