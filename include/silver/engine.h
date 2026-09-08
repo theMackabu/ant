@@ -383,8 +383,6 @@ struct sv_func {
   bool is_tla: 1;
   bool is_derived_ctor: 1;
   bool has_dynamic_eval: 1;
-  bool needs_eval_env: 1;
-  bool is_eval: 1;
   bool is_curried_step: 1;
   bool is_fusable_leaf: 1;
 
@@ -401,6 +399,9 @@ struct sv_func {
 
   uint8_t jit_bailout_count;
   uint8_t call_target_fb_count;
+
+  bool needs_eval_env: 1;
+  bool is_eval: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(
