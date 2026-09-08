@@ -1,5 +1,6 @@
 #include "ant.h"
 #include "errors.h"
+#include "esm/exports.h"
 #include "esm/loader.h"
 #include "gc/modules.h"
 #include "gc/objects.h"
@@ -418,6 +419,12 @@ ant_value_t js_esm_import_dynamic_ex(
   return js_mkerr_typed(
     js, JS_ERR_TYPE, "module imports are not available in @antjs.org/wasm"
   );
+}
+
+void esm_predeclare_exports(ant_t *js, sv_ast_t *program, ant_value_t ns) {
+  (void)js;
+  (void)program;
+  (void)ns;
 }
 
 void js_esm_cleanup_module_cache(ant_t *js) { (void)js; }
