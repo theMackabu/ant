@@ -7,7 +7,7 @@ Built to carry more than it weighs without compromising performance.
 
 ```bash
 $ ls -lh ant
--rwxr-xr-x⠀9.0M⠀ant*
+-rwxr-xr-x⠀9.2M⠀ant*
 
 # built with -Os
 -rwxr-xr-x⠀4.7M⠀ant*
