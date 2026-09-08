@@ -391,7 +391,7 @@ void mir_emit_self_tail(
     bool fill_all_params,
     bool has_captures, bool *captured_locals,
     MIR_reg_t r_lbuf, MIR_label_t entry) {
-  for (int i = 0; i < call_argc && i < param_count; i++)
+  for (int i = 0; i < call_argc; i++)
     MIR_append_insn(ctx, fn,
                     MIR_new_insn(ctx, MIR_MOV,
                                  MIR_new_mem_op(ctx, MIR_T_I64,

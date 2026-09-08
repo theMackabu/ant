@@ -148,3 +148,11 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   cannot replay such effects. The failing regression now passes for falsy and
   truthy numbers, strings, objects, BigInts, and booleans through if/and/or.
   Native build, focused inline tests, preflight, and all 4,221 specs passed.
+
+- Self-tail calls allocate `SV_JIT_ARGS_BUF_CAP` values even with zero named
+  parameters, and copy all `call_argc` values. Call emission already rejects
+  counts above this cap. Keeping the full argc preserves rest and strict
+  arguments semantics while omitted parameters remain undefined. The previous
+  build failed the regression at call 101; rest, maximum-capacity, omitted, and
+  zero-parameter cases now pass. Build, strict-arguments regressions, preflight,
+  and all 4,221 specs passed.

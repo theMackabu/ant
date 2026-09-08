@@ -471,11 +471,11 @@ bool jit_setup_frame(jit_compile_t *c) {
       .d_slot = c->r_d_slot,
   };
 
-  if (c->feat.needs_tco_args && c->param_count > 0) {
+  if (c->feat.needs_tco_args) {
     MIR_append_insn(c->ctx, c->jit_func,
                     MIR_new_insn(c->ctx, MIR_ALLOCA,
                                  MIR_new_reg_op(c->ctx, c->r_tco_args),
-                                 MIR_new_uint_op(c->ctx, (uint64_t)c->param_count * sizeof(ant_value_t))));
+                                 MIR_new_uint_op(c->ctx, (uint64_t)SV_JIT_ARGS_BUF_CAP * sizeof(ant_value_t))));
   } else
     mir_load_imm(c->ctx, c->jit_func, c->r_tco_args, 0);
   c->lm = (jit_label_map_t){0};
