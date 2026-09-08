@@ -255,6 +255,7 @@ ant_value_t sv_jit_try_osr(
   ant_value_t result = jit(
       vm, frame->this, frame->new_target, frame->super_val,
       frame->bp, frame->argc, closure);
+  vm->jit_osr = (sv_jit_osr_t){0};
   sv_jit_leave(js);
   if (synthetic_closure) gc_pop_roots(js, root_mark);
 

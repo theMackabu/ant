@@ -163,3 +163,12 @@ Validation: native build, repository preflight, and all 4,221 spec tests passed.
   appears for failed compilation and would hide this fallback bug. Local
   coverage includes initialization, reads, assignments, increment/decrement,
   and compound addition. Build, preflight, and all 4,221 specs passed.
+
+- OSR scans include self-loop targets (`target == src`), matching interpreter
+  back-edge eligibility. This prevents OSR from restarting a function prologue
+  instead of entering its loop. The runtime clears the full saved OSR state
+  after the native call, including pointers to temporary stack storage. A
+  bounded child-process regression previously returned from an infinite loop;
+  it now stays in that loop until the test timeout. Finite OSR and omitted
+  captured arguments also pass, as do entry-rejection/strict-arguments tests,
+  the build, preflight, and all 4,221 specs.

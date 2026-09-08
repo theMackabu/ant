@@ -227,7 +227,7 @@ void scan_osr_entries(sv_func_t *func, osr_entry_map_t *osr) {
       else if ((flags & SV_OPF_JIT_BRANCH8) != 0)
         target = src + sz + (int8_t)sv_get_i8(ip + 1);
     }
-    if (target >= 0 && target < src) {
+    if (target >= 0 && target <= src) {
       bool found = false;
       for (int i = 0; i < osr->count; i++)
         if (osr->offsets[i] == target) {
