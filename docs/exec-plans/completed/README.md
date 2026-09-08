@@ -31,6 +31,7 @@ can reuse the decision history.
 - [REPL Evaluation Completions](repl-evaluation-completions.md)
 - [Silver Header Boundaries](silver-header-boundaries.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
+- [Swarm JIT Modularization](swarm-modularization.md)
 - [tlsuv HTTP Request Body Methods](tlsuv-http-request-body-methods.md)
 - [tlsuv WebSocket Buffered Read](tlsuv-websocket-buffered-read.md)
 - [UTF-16 Random-Access Index (fable carry-back)](utf16-random-access-index.md)
