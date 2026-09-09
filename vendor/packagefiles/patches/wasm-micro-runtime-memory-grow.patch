@@ -1,0 +1,51 @@
+diff --git a/core/iwasm/common/wasm_c_api.c b/core/iwasm/common/wasm_c_api.c
+--- a/core/iwasm/common/wasm_c_api.c
++++ b/core/iwasm/common/wasm_c_api.c
+@@ -4843,8 +4843,21 @@
+     if (memory && memory->host_memory)
+         return wasm_enlarge_memory_internal(NULL, memory->host_memory, delta);
+ 
+-    LOG_WARNING("Calling wasm_memory_grow() by host is not supported."
+-                "Only allow growing a memory via the opcode memory.grow");
++    if (!memory || !memory->inst_comm_rt)
++        return false;
++
++#if WASM_ENABLE_INTERP != 0
++    if (memory->inst_comm_rt->module_type == Wasm_Module_Bytecode)
++        return wasm_enlarge_memory_with_idx(
++            (WASMModuleInstance *)memory->inst_comm_rt, delta,
++            memory->memory_idx_rt);
++#endif
++#if WASM_ENABLE_AOT != 0
++    if (memory->inst_comm_rt->module_type == Wasm_Module_AoT)
++        return aot_enlarge_memory_with_idx(
++            (AOTModuleInstance *)memory->inst_comm_rt, delta,
++            memory->memory_idx_rt);
++#endif
+     return false;
+ }
+ 
+diff --git a/core/iwasm/interpreter/wasm_loader.c b/core/iwasm/interpreter/wasm_loader.c
+--- a/core/iwasm/interpreter/wasm_loader.c
++++ b/core/iwasm/interpreter/wasm_loader.c
+@@ -4554,6 +4554,8 @@
+                                       "unknown memory");
+                         return false;
+                     }
++                    /* Exported memory can grow through the host C API. */
++                    module->possible_memory_grow = true;
+                     break;
+ #if WASM_ENABLE_TAGS != 0
+                 /* export tag */
+diff --git a/core/iwasm/interpreter/wasm_mini_loader.c b/core/iwasm/interpreter/wasm_mini_loader.c
+--- a/core/iwasm/interpreter/wasm_mini_loader.c
++++ b/core/iwasm/interpreter/wasm_mini_loader.c
+@@ -1645,6 +1645,8 @@
+                 case EXPORT_KIND_MEMORY:
+                     bh_assert(index < module->memory_count
+                                           + module->import_memory_count);
++                    /* Exported memory can grow through the host C API. */
++                    module->possible_memory_grow = true;
+                     break;
+                 /* global index */
+                 case EXPORT_KIND_GLOBAL:

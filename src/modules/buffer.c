@@ -504,6 +504,27 @@ static ant_value_t js_arraybuffer_byteLength_getter(ant_params_t) {
   return js_mknum((double)data->length);
 }
 
+static ant_value_t js_typedarray_length_getter(ant_params_t) {
+  TypedArrayData *data = buffer_get_typedarray_data(js_getthis(js));
+  if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a TypedArray");
+  if (!data->buffer || data->buffer->is_detached) return js_mknum(0);
+  return js_mknum((double)data->length);
+}
+
+static ant_value_t js_typedarray_byteLength_getter(ant_params_t) {
+  TypedArrayData *data = buffer_get_typedarray_data(js_getthis(js));
+  if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a TypedArray");
+  if (!data->buffer || data->buffer->is_detached) return js_mknum(0);
+  return js_mknum((double)data->byte_length);
+}
+
+static ant_value_t js_typedarray_byteOffset_getter(ant_params_t) {
+  TypedArrayData *data = buffer_get_typedarray_data(js_getthis(js));
+  if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "Not a TypedArray");
+  if (!data->buffer || data->buffer->is_detached) return js_mknum(0);
+  return js_mknum((double)data->byte_offset);
+}
+
 static ant_value_t js_dataview_buffer_getter(ant_params_t) {
   ant_value_t this_val = js_getthis(js);
   DataViewData *dv = buffer_get_dataview_data(this_val);
@@ -917,9 +938,6 @@ ant_value_t create_typed_array_with_buffer(
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
   js_set_native(obj, ta_data, BUFFER_TYPEDARRAY_NATIVE_TAG);
-  js_set(js, obj, "length", js_mknum((double)length));
-  js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
-  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
   js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
   js_set(js, obj, "buffer", arraybuffer_obj);
   
@@ -3867,6 +3885,10 @@ void init_buffer_module(ant_t *js) {
   
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
+
+  js_set_getter_desc(js, typedarray_proto, "length", 6, js_mkfun(js_typedarray_length_getter), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "byteLength", 10, js_mkfun(js_typedarray_byteLength_getter), JS_DESC_C);
+  js_set_getter_desc(js, typedarray_proto, "byteOffset", 10, js_mkfun(js_typedarray_byteOffset_getter), JS_DESC_C);
   
   js_set(js, typedarray_proto, "at", js_mkfun(js_typedarray_at));
   js_set(js, typedarray_proto, "set", js_mkfun(js_typedarray_set));
