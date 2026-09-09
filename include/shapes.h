@@ -71,6 +71,9 @@ uint32_t ant_shape_count(const ant_shape_t *shape);
 uint32_t ant_shape_compact(ant_shape_t *shape);
 uint8_t ant_shape_get_attrs(const ant_shape_t *shape, uint32_t slot);
 
+// Borrowed metadata: appending on another shape sharing the descriptor table
+// can relocate it. Copy needed fields or resolve the slot again across calls
+// that can add properties. Slot numbers remain stable until compaction.
 const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slot);
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot);
 

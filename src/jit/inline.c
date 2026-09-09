@@ -1356,6 +1356,7 @@ void jit_emit_inline_body(
                                : 0;
         bool specialize = sv_tfb_specialization_ready(feedback);
         bool key_is_num = inl_num[isp - 1] != 0;
+        MIR_reg_t key_double = inl_d[isp - 1];
 
         if (specialize) {
           INL_ENSURE_D_SLOT();
@@ -1365,7 +1366,7 @@ void jit_emit_inline_body(
           int index_site = mir_next_reg_site(p_reg_site);
           int element_site = mir_next_reg_site(p_reg_site);
           MIR_reg_t index = mir_emit_array_index_guard(
-              ctx, jit_func, ge_key, inl_d[isp], key_is_num,
+              ctx, jit_func, ge_key, key_double, key_is_num,
               *p_d_slot, slow, index_site);
           (void)mir_emit_dense_element_guard(
               ctx, jit_func, ge_obj, index, r_bool, JIT_ELEMENT_NUMERIC_READ, slow, element_site);
@@ -1385,7 +1386,7 @@ void jit_emit_inline_body(
         MIR_label_t ge_slow = MIR_new_label(ctx);
         INL_ENSURE_D_SLOT();
         MIR_reg_t ge_index = mir_emit_array_index_guard(
-            ctx, jit_func, ge_key, 0, false, *p_d_slot, ge_slow,
+            ctx, jit_func, ge_key, key_double, key_is_num, *p_d_slot, ge_slow,
             mir_next_reg_site(p_reg_site));
         (void)mir_emit_dense_element_guard(
             ctx, jit_func, ge_obj, ge_index, r_bool, JIT_ELEMENT_READ,

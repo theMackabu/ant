@@ -995,3 +995,12 @@ The JS regression `tests/test_jit_object_absence_guard.cjs` covers warm constant
 computed, descriptor, and accessor additions shadowing intermediate prototypes,
 rearming after deletion, and late well-known-symbol overrides. Nine focused
 regressions and all 4221 specs pass after the configured-tree build.
+
+Inline numeric-key follow-up: `INL_FLUSH_SLOT` boxes into `inl_vs` and clears
+`inl_num`, but preserves the source `inl_d` register. Generic inline element
+reads now retain that register and its pre-flush numeric flag for the index
+guard, avoiding a repeated number-tag check and unbox. Range, exactness, and
+NaN guards remain; the boxed key remains available for the helper fallback.
+The new code-generation test fails before the fix and passes afterward.
+Eight focused tests and all 4221 specs across 102 files pass; the behavior
+fixture also passes under Node. Throughput has not been remeasured.
