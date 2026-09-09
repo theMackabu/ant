@@ -1,5 +1,65 @@
 #include "compile.h"
 
+static void jit_emit_forward_arguments_call(jit_compile_t *c, bool is_tail) {
+  (void)vstack_pop(&c->vs); // Deferred arguments object.
+  MIR_reg_t receiver = vstack_pop(&c->vs);
+  MIR_reg_t apply = vstack_pop(&c->vs);
+  MIR_reg_t target = vstack_pop(&c->vs);
+  MIR_reg_t result = vstack_push(&c->vs);
+  MIR_label_t slow = MIR_new_label(c->ctx), done = MIR_new_label(c->ctx);
+  MIR_reg_t meta = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "forward_meta");
+  MIR_reg_t closure = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "forward_closure");
+  MIR_reg_t function = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "forward_function");
+  MIR_reg_t code = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "forward_code");
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_URSH,
+    MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_reg_op(c->ctx, apply),
+    MIR_new_uint_op(c->ctx, NANBOX_TYPE_SHIFT)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE,
+    MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, c->r_bool),
+    MIR_new_uint_op(c->ctx, (NANBOX_PREFIX >> NANBOX_TYPE_SHIFT) | kTypeBuiltin)));
+  mir_emit_decode_ref(c->ctx, c->jit_func, meta, apply);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+    MIR_new_reg_op(c->ctx, c->r_bool),
+    MIR_new_mem_op(c->ctx, MIR_T_P, offsetof(ant_cfunc_meta_t, fn), meta, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE,
+    MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, c->r_bool),
+    MIR_new_uint_op(c->ctx, (uintptr_t)builtin_function_apply)));
+  mir_emit_get_closure(c->ctx, c->jit_func, closure, target, c->r_bool, slow);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+    MIR_new_reg_op(c->ctx, c->r_bool),
+    MIR_new_mem_op(c->ctx, MIR_T_U32, offsetof(sv_closure_t, call_flags), closure, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BNE,
+    MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, c->r_bool), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+    MIR_new_reg_op(c->ctx, function),
+    MIR_new_mem_op(c->ctx, MIR_T_P, offsetof(sv_closure_t, func), closure, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+    MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, function), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV,
+    MIR_new_reg_op(c->ctx, code),
+    MIR_new_mem_op(c->ctx, MIR_T_P, offsetof(sv_func_t, jit_code), function, 0, 1)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_BEQ,
+    MIR_new_label_op(c->ctx, slow), MIR_new_reg_op(c->ctx, code), MIR_new_int_op(c->ctx, 0)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 10,
+    MIR_new_ref_op(c->ctx, c->self_proto), MIR_new_reg_op(c->ctx, code),
+    MIR_new_reg_op(c->ctx, result), MIR_new_reg_op(c->ctx, c->r_vm),
+    MIR_new_reg_op(c->ctx, receiver), MIR_new_uint_op(c->ctx, js_mkundef()),
+    MIR_new_uint_op(c->ctx, js_mkundef()), MIR_new_reg_op(c->ctx, c->r_args),
+    MIR_new_reg_op(c->ctx, c->r_argc), MIR_new_reg_op(c->ctx, closure)));
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_JMP, MIR_new_label_op(c->ctx, done)));
+  MIR_append_insn(c->ctx, c->jit_func, slow);
+  MIR_append_insn(c->ctx, c->jit_func, MIR_new_call_insn(c->ctx, 10,
+    MIR_new_ref_op(c->ctx, c->forward_arguments_proto),
+    MIR_new_ref_op(c->ctx, c->imp_forward_arguments),
+    MIR_new_reg_op(c->ctx, result), MIR_new_reg_op(c->ctx, c->r_vm),
+    MIR_new_reg_op(c->ctx, c->r_js), MIR_new_reg_op(c->ctx, apply),
+    MIR_new_reg_op(c->ctx, target), MIR_new_reg_op(c->ctx, receiver),
+    MIR_new_reg_op(c->ctx, c->r_args), MIR_new_reg_op(c->ctx, c->r_argc)));
+  MIR_append_insn(c->ctx, c->jit_func, done);
+  jit_emit_throw_if_error(c, result);
+  if (is_tail) jit_emit_exit_ret(c, MIR_new_reg_op(c->ctx, result));
+}
+
 void jit_emit_methods(jit_compile_t *c) {
   switch (c->op) {
     case OP_CALL_SUPER: {
@@ -75,6 +135,11 @@ void jit_emit_methods(jit_compile_t *c) {
       if (call_argc > SV_JIT_ARGS_BUF_CAP ||
           c->vs.sp < (int)call_argc + 2) {
         c->ok = false;
+        break;
+      }
+
+      if (c->forward_arguments) {
+        jit_emit_forward_arguments_call(c, is_tail);
         break;
       }
 

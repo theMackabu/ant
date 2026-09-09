@@ -72,6 +72,8 @@ typedef struct jit_compile {
   MIR_item_t new_proto;
   MIR_item_t special_obj_proto;
   MIR_item_t strict_arguments_proto;
+  MIR_item_t forward_arguments_proto;
+  MIR_item_t imp_forward_arguments;
   MIR_item_t for_of_proto;
   MIR_item_t iter_next_proto;
   MIR_item_t destructure_close_proto;
@@ -265,6 +267,7 @@ typedef struct jit_compile {
   jit_integer_range_t *integer_local_ranges;
   int *local_by_reg;
   int integer_local_site;
+  bool forward_arguments;
   bool element_available;
   bool ok;
   int call_n;

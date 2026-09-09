@@ -217,7 +217,7 @@ static inline bool sv_tfb_specialization_ready(uint8_t feedback) {
 static inline bool sv_tfb_is_word32_number(ant_value_t value) {
   if (vtype(value) != kTypeNumber) return false;
   double number = tod(value);
-  return isfinite(number) && number >= (double)INT32_MIN && number <= (double)UINT32_MAX && trunc(number) == number;
+  return isfinite(number) && number >= (double)INT32_MIN && number <= (double)UINT32_MAX;
 }
 
 static inline void sv_tfb_record2_spec(

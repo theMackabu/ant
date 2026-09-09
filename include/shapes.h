@@ -10,11 +10,14 @@
 #define ANT_INOBJ_MAX_SLOTS 4u
 #endif
 
-// TODO: constexpr
-#define ANT_PROP_ATTR_WRITABLE     (1u << 0)
-#define ANT_PROP_ATTR_ENUMERABLE   (1u << 1)
-#define ANT_PROP_ATTR_CONFIGURABLE (1u << 2)
-#define ANT_PROP_ATTR_DEFAULT      (ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_ENUMERABLE | ANT_PROP_ATTR_CONFIGURABLE)
+static constexpr unsigned ANT_PROP_ATTR_WRITABLE     = 1u << 0;
+static constexpr unsigned ANT_PROP_ATTR_ENUMERABLE   = 1u << 1;
+static constexpr unsigned ANT_PROP_ATTR_CONFIGURABLE = 1u << 2;
+
+static constexpr unsigned ANT_PROP_ATTR_DEFAULT = 
+  ANT_PROP_ATTR_WRITABLE   | 
+  ANT_PROP_ATTR_ENUMERABLE | 
+  ANT_PROP_ATTR_CONFIGURABLE;
 
 typedef enum {
   ANT_SHAPE_KEY_STRING = 0,
@@ -39,10 +42,10 @@ ant_shape_t *ant_shape_new(void);
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit);
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape);
 ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra);
+ant_shape_t *ant_shape_clone_bulk(const ant_shape_t *shape, uint32_t extra);
 
 void ant_shape_retain(ant_shape_t *shape);
 void ant_shape_release(ant_shape_t *shape);
-void ant_shape_guard_absence(ant_shape_t *shape);
 void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape);
 
 uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape);
@@ -54,6 +57,8 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
 
 bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot);
 bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);
+bool ant_shape_add_interned_keyed_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot);
+bool ant_shape_add_symbol_keyed_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot);
 
 // Marks a slot deleted without moving later properties. Slot order is property order,
 // and the spec requires string keys in insertion order. Reusing or swapping the hole
@@ -84,6 +89,8 @@ void ant_gc_shapes_mark(ant_shape_t *shape);
 bool ant_gc_shapes_sweep(void);
 
 size_t ant_shape_total_bytes(void);
+size_t ant_shape_storage_bytes(const ant_shape_t *shape);
+
 extern uint32_t ant_ic_epoch_counter;
 extern uint32_t ant_ic_obj_epoch_counter;
 

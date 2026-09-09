@@ -169,6 +169,7 @@ static bool ensure_string_shape_slot(ant_t *js, ant_value_t obj, const char *key
   if (slot < 0) {
     uint32_t added_slot = 0;
     if (!ant_shape_add_interned_tr(&ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &added_slot)) return false;
+    ant_object_invalidate_guarded_absence(ptr);
     if (!ensure_added_shape_slot_storage(ptr, added_slot)) return false;
     slot = (int32_t)added_slot;
   }

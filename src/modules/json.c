@@ -7,6 +7,7 @@
 #include "gc/roots.h"
 #include "utf8.h"
 #include "numbers.h"
+#include "hash.h"
 #include "errors.h"
 #include "internal.h"
 
@@ -38,7 +39,132 @@ static inline ant_value_t json_stringify_oom(ant_t *js) {
   return js_mkerr(js, "JSON.stringify() failed: out of memory");
 }
 
-static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scope_t *roots) {
+static bool json_shape_matches(ant_shape_t *shape, yyjson_val *val) {
+  if (!shape || ant_shape_count(shape) != yyjson_obj_size(val)) return false;
+  size_t idx, max;
+  yyjson_val *key, *item;
+  
+  yyjson_obj_foreach(val, idx, max, key, item) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(shape, (uint32_t)idx);
+    if (!prop || prop->type != ANT_SHAPE_KEY_STRING ||
+        prop->attrs != ANT_PROP_ATTR_DEFAULT || prop->has_getter || prop->has_setter ||
+        intern_length(prop->key.interned) != yyjson_get_len(key) ||
+        memcmp(prop->key.interned, yyjson_get_str(key), yyjson_get_len(key)) != 0)
+      return false;
+  }
+  
+  return true;
+}
+
+void json_layout_cache_clear(ant_t *js) {
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return;
+  for (unsigned i = 0; i < cache->count; i++) 
+    ant_shape_release(cache->entries[i].shape);
+  free(cache);
+  js->json_layout_cache = NULL;
+}
+
+static uint64_t json_layout_hash(yyjson_val *val, size_t *key_bytes) {
+  uint64_t hash = yyjson_obj_size(val);
+  *key_bytes = 0;
+  size_t idx, max;
+  yyjson_val *key, *item;
+  yyjson_obj_foreach(val, idx, max, key, item) {
+    size_t len = yyjson_get_len(key);
+    hash = ant_hash_mix(hash ^ hash_key(yyjson_get_str(key), len), len + 1);
+    if (len >= JSON_LAYOUT_CACHE_BYTES - *key_bytes) *key_bytes = JSON_LAYOUT_CACHE_BYTES;
+    else *key_bytes += len + 1;
+  }
+  return hash;
+}
+
+static ant_shape_t *json_layout_cache_find(ant_t *js, yyjson_val *val, uint64_t hash) {
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return NULL;
+  for (unsigned i = 0; i < cache->count; i++) {
+    json_layout_cache_entry_t entry = cache->entries[i];
+    if (entry.hash != hash || !json_shape_matches(entry.shape, val)) continue;
+    memmove(cache->entries + 1, cache->entries, i * sizeof(entry));
+    cache->entries[0] = entry;
+    return entry.shape;
+  }
+  return NULL;
+}
+
+static void json_layout_cache_insert(ant_t *js, ant_shape_t *shape, uint64_t hash, size_t key_bytes) {
+  size_t bytes = ant_shape_storage_bytes(shape);
+  if (key_bytes >= JSON_LAYOUT_CACHE_BYTES || bytes > JSON_LAYOUT_CACHE_BYTES - key_bytes) return;
+  bytes += key_bytes;
+  if (!js->json_layout_cache) js->json_layout_cache = calloc(1, sizeof(json_layout_cache_t));
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return;
+  while (cache->count && (cache->count == JSON_LAYOUT_CACHE_ENTRIES || cache->bytes + bytes > JSON_LAYOUT_CACHE_BYTES)) {
+    json_layout_cache_entry_t *entry = &cache->entries[--cache->count];
+    cache->bytes -= entry->bytes;
+    ant_shape_release(entry->shape);
+  }
+  memmove(cache->entries + 1, cache->entries, cache->count * sizeof(*cache->entries));
+  ant_shape_retain(shape);
+  cache->entries[0] = (json_layout_cache_entry_t){ .shape = shape, .hash = hash, .bytes = bytes };
+  cache->count++;
+  cache->bytes += bytes;
+}
+
+static bool json_prepare_object(
+  ant_t *js, ant_object_t *obj, yyjson_val *val,
+  ant_shape_t *expected, bool *duplicates
+) {
+  *duplicates = false;
+  if (json_shape_matches(expected, val)) {
+    ant_shape_transition_existing(&obj->shape, expected);
+    return js_obj_ensure_prop_capacity(obj, ant_shape_count(expected));
+  }
+
+  size_t count = yyjson_obj_size(val);
+  bool bulk = count >= JSON_BULK_LAYOUT_MIN_PROPS;
+  uint64_t hash = 0;
+  size_t key_bytes = 0;
+  
+  if (bulk) {
+    hash = json_layout_hash(val, &key_bytes);
+    ant_shape_t *cached = json_layout_cache_find(js, val, hash);
+    if (cached) {
+      ant_shape_transition_existing(&obj->shape, cached);
+      return js_obj_ensure_prop_capacity(obj, ant_shape_count(cached));
+    }
+    ant_shape_t *shape = ant_shape_clone_bulk(obj->shape, (uint32_t)count);
+    if (!shape) return false;
+    ant_shape_release(obj->shape);
+    obj->shape = shape;
+  }
+
+  size_t idx, max;
+  yyjson_val *key, *item;
+  yyjson_obj_foreach(val, idx, max, key, item) {
+    const char *interned = intern_string(yyjson_get_str(key), yyjson_get_len(key));
+    if (!interned) return false;
+    uint32_t slot;
+    int32_t found = ant_shape_lookup_interned(obj->shape, interned);
+    if (found >= 0) slot = (uint32_t)found;
+    else {
+      bool added = bulk
+        ? ant_shape_add_interned(obj->shape, interned, ANT_PROP_ATTR_DEFAULT, &slot)
+        : ant_shape_add_interned_tr(&obj->shape, interned, ANT_PROP_ATTR_DEFAULT, &slot);
+      if (!added) return false;
+    }
+    if (slot != idx) *duplicates = true;
+  }
+  
+  if (!js_obj_ensure_prop_capacity(obj, ant_shape_count(obj->shape))) return false;
+  if (bulk && !*duplicates) json_layout_cache_insert(js, obj->shape, hash, key_bytes);
+  
+  return true;
+}
+
+static ant_value_t yyjson_to_jsval(
+  ant_t *js, yyjson_val *val, gc_temp_root_scope_t *roots, ant_shape_t *expected
+) {
   if (!val) return js_mkundef();
   
   switch (yyjson_get_type(val)) {
@@ -69,14 +195,25 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     size_t idx, max;
     yyjson_val *item;
     size_t mark = roots->len;
+    ant_shape_t *previous = NULL;
 
     yyjson_arr_foreach(val, idx, max, item) {
-      ant_value_t elem = yyjson_to_jsval(js, item, roots);
-      if (is_err(elem)) return elem;
+      ant_value_t elem = yyjson_to_jsval(js, item, roots, previous);
+      if (is_err(elem)) {
+        ant_shape_release(previous);
+        return elem;
+      }
       js_arr_push(js, arr, elem);
+      if (vtype(elem) == kTypeObject) {
+        ant_shape_t *next = js_obj_ptr(elem)->shape;
+        ant_shape_retain(next);
+        ant_shape_release(previous);
+        previous = next;
+      }
       gc_temp_root_truncate(roots, mark);
     }
 
+    ant_shape_release(previous);
     return arr;
   }
   
@@ -85,17 +222,38 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val, gc_temp_root_scop
     if (is_err(obj)) return obj;
     if (!json_temp_pin(roots, obj)) return json_parse_oom(js);
 
-    size_t count = yyjson_obj_size(val);
     ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
-    if (ptr && count > 1) (void)js_obj_ensure_prop_capacity(ptr, (uint32_t)count);
+    size_t count = yyjson_obj_size(val);
+    if (count > UINT32_MAX) return json_parse_oom(js);
+    
+    bool prepared = expected || count >= JSON_BULK_LAYOUT_MIN_PROPS;
+    bool duplicates = false;
+    
+    if (prepared) {
+      if (!json_prepare_object(js, ptr, val, expected, &duplicates)) return json_parse_oom(js);
+    } else if (count > 1 && !js_obj_ensure_prop_capacity(ptr, (uint32_t)count)) return json_parse_oom(js);
 
     size_t idx, max; yyjson_val *key, *item;
     size_t mark = roots->len;
 
     yyjson_obj_foreach(val, idx, max, key, item) {
-      ant_value_t v = yyjson_to_jsval(js, item, roots);
+      ant_value_t v = yyjson_to_jsval(js, item, roots, NULL);
       if (is_err(v)) return v;
-      if (is_err(mkprop_append_fast(js, obj, yyjson_get_str(key), yyjson_get_len(key), v))) return json_parse_oom(js);
+      if (!prepared) {
+        if (is_err(mkprop_append_fast(js, obj, yyjson_get_str(key), yyjson_get_len(key), v)))
+          return json_parse_oom(js);
+        gc_temp_root_truncate(roots, mark);
+        continue;
+      }
+      uint32_t slot = (uint32_t)idx;
+      if (duplicates) {
+        const char *interned = intern_find(yyjson_get_str(key), yyjson_get_len(key));
+        int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
+        assert(found >= 0);
+        slot = (uint32_t)found;
+      }
+      ant_object_prop_set_unchecked(ptr, slot, v);
+      gc_write_barrier(js, ptr, v);
       gc_temp_root_truncate(roots, mark);
     }
 
@@ -858,7 +1016,7 @@ ant_value_t js_json_parse(ant_params_t) {
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "JSON.parse: unexpected character");
   }
   
-  ant_value_t result = yyjson_to_jsval(js, yyjson_doc_get_root(doc), &temp_roots);
+  ant_value_t result = yyjson_to_jsval(js, yyjson_doc_get_root(doc), &temp_roots, NULL);
   yyjson_doc_free(doc);
   if (is_err(result)) {
     gc_temp_root_scope_end(&temp_roots);

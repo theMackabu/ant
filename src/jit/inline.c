@@ -1356,6 +1356,7 @@ void jit_emit_inline_body(
                                : 0;
         bool specialize = sv_tfb_specialization_ready(feedback);
         bool key_is_num = inl_num[isp - 1] != 0;
+        MIR_reg_t key_double = inl_d[isp - 1];
 
         if (specialize) {
           INL_ENSURE_D_SLOT();
@@ -1365,10 +1366,10 @@ void jit_emit_inline_body(
           int index_site = mir_next_reg_site(p_reg_site);
           int element_site = mir_next_reg_site(p_reg_site);
           MIR_reg_t index = mir_emit_array_index_guard(
-              ctx, jit_func, ge_key, inl_d[isp], key_is_num,
+              ctx, jit_func, ge_key, key_double, key_is_num,
               *p_d_slot, slow, index_site);
-          (void)mir_emit_dense_numeric_element_guard(
-              ctx, jit_func, ge_obj, index, r_bool, false, slow, element_site);
+          (void)mir_emit_dense_element_guard(
+              ctx, jit_func, ge_obj, index, r_bool, JIT_ELEMENT_NUMERIC_READ, slow, element_site);
           mir_i64_to_d(
               ctx, jit_func, inl_d[isp - 1], r_bool, *p_d_slot);
           inl_num[isp - 1] = 1;
@@ -1382,6 +1383,20 @@ void jit_emit_inline_body(
         MIR_reg_t ge_dst = inl_vs[isp++];
         inl_num[isp - 1] = 0;
         MIR_label_t ge_ok = MIR_new_label(ctx);
+        MIR_label_t ge_slow = MIR_new_label(ctx);
+        INL_ENSURE_D_SLOT();
+        MIR_reg_t ge_index = mir_emit_array_index_guard(
+            ctx, jit_func, ge_key, key_double, key_is_num, *p_d_slot, ge_slow,
+            mir_next_reg_site(p_reg_site));
+        (void)mir_emit_dense_element_guard(
+            ctx, jit_func, ge_obj, ge_index, r_bool, JIT_ELEMENT_READ,
+            ge_slow, mir_next_reg_site(p_reg_site));
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_reg_op(ctx, ge_dst), MIR_new_reg_op(ctx, r_bool)));
+        MIR_append_insn(ctx, jit_func,
+                        MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, ge_ok)));
+        MIR_append_insn(ctx, jit_func, ge_slow);
         mir_call_helper2(ctx, jit_func, ge_dst,
                          helper2_proto, ext->imp_get_elem_inline,
                          r_vm, r_js, ge_obj, ge_key);

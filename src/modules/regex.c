@@ -358,9 +358,8 @@ static ant_value_t regexp_static_value(ant_t *js, size_t idx) {
     );
     if (end < start || end > subject_len)
       return js_mkerr(js, "invalid regexp static snapshot");
-    value = js_mkstr(
-      js,
-      (const char *)(uintptr_t)subject_off + start,
+    value = js_mkstr_byte_range(
+      js, (const char *)(uintptr_t)subject_off, start,
       end - start
     );
     if (is_err(value)) return value;
@@ -428,7 +427,7 @@ static __attribute__((noinline, cold)) void update_regexp_statics_eager(
       if (
         start != PCRE2_UNSET && end >= start && end <= subject_len
       ) {
-        val = js_mkstr(js, str_ptr + start, end - start);
+        val = js_mkstr_byte_range(js, str_ptr, start, end - start);
         if (is_err(val)) val = empty;
       }
     }
@@ -440,7 +439,7 @@ static __attribute__((noinline, cold)) void update_regexp_statics_eager(
     ovector[1] >= ovector[0] && ovector[1] <= subject_len
   );
   ant_value_t match0 = has_match0
-    ? js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0])
+    ? js_mkstr_byte_range(js, str_ptr, ovector[0], ovector[1] - ovector[0])
     : empty;
   if (is_err(match0)) match0 = empty;
   js->mutable_roots.regexp_static_values[REGEXP_STATIC_IDX_LAST_MATCH] = match0;
@@ -1732,12 +1731,12 @@ static ant_value_t regexp_exec_plain_literal_fast(
   ant_value_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) return result_arr;
 
-  ant_value_t match_str = js_mkstr(js, match, needle_len);
+  ant_value_t match_str = js_mkstr_byte_range(js, str_ptr, (size_t)(match - str_ptr), needle_len);
   if (is_err(match_str)) return match_str;
   js_arr_push(js, result_arr, match_str);
 
   return regexp_attach_plain_exec_result(
-    js, result_arr, tov((double)ovector[0]), str_arg
+    js, result_arr, tov((double)byte_offset_to_utf16(str_ptr, ovector[0])), str_arg
   );
 }
 
@@ -1958,7 +1957,7 @@ static ant_value_t regexp_exec_shared_fast(
     if (start == PCRE2_UNSET) {
       js_arr_push(js, result_arr, js_mkundef());
     } else {
-      ant_value_t match_str = js_mkstr(js, str_ptr + start, end - start);
+      ant_value_t match_str = js_mkstr_byte_range(js, str_ptr, start, end - start);
       if (is_err(match_str)) {
         result = match_str;
         goto done;
@@ -1968,7 +1967,7 @@ static ant_value_t regexp_exec_shared_fast(
   }
 
   result = regexp_attach_plain_exec_result(
-    js, result_arr, tov((double)ovector[0]), str_arg
+    js, result_arr, tov((double)byte_offset_to_utf16(str_ptr, ovector[0])), str_arg
   );
 
 done:
@@ -2079,7 +2078,7 @@ ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_
     if (start == PCRE2_UNSET) {
       js_arr_push(js, result_arr, js_mkundef());
     } else {
-      ant_value_t match_str = js_mkstr(js, str_ptr + start, end - start);
+      ant_value_t match_str = js_mkstr_byte_range(js, str_ptr, start, end - start);
       if (is_err(match_str)) {
         result = match_str;
         goto done;
@@ -2563,7 +2562,7 @@ static ant_value_t regexp_match_batch_fast(
       PCRE2_SIZE start = ovector[0];
       PCRE2_SIZE end = ovector[1];
       update_regexp_statics(js, str, ovector, ovcount);
-      ant_value_t match = js_mkstr(js, str_ptr + start, end - start);
+      ant_value_t match = js_mkstr_byte_range(js, str_ptr, start, end - start);
       if (is_err(match)) {
         regex_match_scope_end(&scope);
         return match;
@@ -3192,12 +3191,12 @@ ant_value_t regexp_literal_exec_call(
       ant_value_t result_arr = js_mkarr(js);
       if (is_err(result_arr)) return result_arr;
 
-      ant_value_t match_str = js_mkstr(js, match, needle_len);
+      ant_value_t match_str = js_mkstr_byte_range(js, str_ptr, (size_t)(match - str_ptr), needle_len);
       if (is_err(match_str)) return match_str;
       js_arr_push(js, result_arr, match_str);
 
       return regexp_attach_plain_exec_result(
-        js, result_arr, tov((double)ovector[0]), arg
+        js, result_arr, tov((double)byte_offset_to_utf16(str_ptr, ovector[0])), arg
       );
     }
   }
@@ -3509,8 +3508,8 @@ static ant_value_t regexp_split_batch_fast(
       continue;
     }
 
-    ant_value_t piece = js_mkstr(
-      js, str_ptr + p, (ant_offset_t)(start - p)
+    ant_value_t piece = js_mkstr_byte_range(
+      js, str_ptr, p, (ant_offset_t)(start - p)
     );
     if (is_err(piece)) {
       regex_match_scope_end(&scope);
@@ -3527,8 +3526,8 @@ static ant_value_t regexp_split_batch_fast(
       PCRE2_SIZE capture_end = ovector[2 * i + 1];
       ant_value_t capture = capture_start == PCRE2_UNSET
         ? js_mkundef()
-        : js_mkstr(
-            js, str_ptr + capture_start,
+        : js_mkstr_byte_range(
+            js, str_ptr, capture_start,
             (ant_offset_t)(capture_end - capture_start)
           );
       if (is_err(capture)) {
@@ -3548,7 +3547,7 @@ static ant_value_t regexp_split_batch_fast(
 
   ant_value_t trailing = p == 0
     ? str
-    : js_mkstr(js, str_ptr + p, (ant_offset_t)(size - p));
+    : js_mkstr_byte_range(js, str_ptr, p, (ant_offset_t)(size - p));
   regex_match_scope_end(&scope);
   if (is_err(trailing)) return trailing;
   js_arr_push(js, result, trailing);
@@ -3668,7 +3667,7 @@ static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
     }
 
     str_off = vstr(js, str, NULL);
-    ant_value_t T_val = js_mkstr(js, (char *)(uintptr_t)(str_off + p), q - p);
+    ant_value_t T_val = js_mkstr_byte_range(js, (const char *)(uintptr_t)str_off, p, q - p);
     js_arr_push(js, A, T_val);
     lengthA++;
     if (lengthA == lim) return mkval(kTypeArray, vdata(A));
@@ -3686,7 +3685,7 @@ static ant_value_t builtin_regexp_symbol_split(ant_params_t) {
   }
 
   str_off = vstr(js, str, &str_len);
-  ant_value_t trailing = js_mkstr(js, (char *)(uintptr_t)(str_off + p), str_len - p);
+  ant_value_t trailing = js_mkstr_byte_range(js, (const char *)(uintptr_t)str_off, p, str_len - p);
   js_arr_push(js, A, trailing);
   return mkval(kTypeArray, vdata(A));
 }
@@ -3729,7 +3728,7 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
     PCRE2_SIZE match_end = ovector[1];
 
     if (args.global) {
-      ant_value_t match_str = js_mkstr(js, args.str_ptr + match_start, match_end - match_start);
+      ant_value_t match_str = js_mkstr_byte_range(js, args.str_ptr, match_start, match_end - match_start);
       if (is_err(match_str)) {
         regex_match_scope_end(&scope);
         compiled_regex_cache_release(compiled);
@@ -3743,7 +3742,7 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
         if (start == PCRE2_UNSET) {
           js_arr_push(js, result_arr, js_mkundef());
         } else {
-          ant_value_t match_str = js_mkstr(js, args.str_ptr + start, end - start);
+          ant_value_t match_str = js_mkstr_byte_range(js, args.str_ptr, start, end - start);
           if (is_err(match_str)) {
             regex_match_scope_end(&scope);
             compiled_regex_cache_release(compiled);
@@ -3752,7 +3751,7 @@ ant_value_t do_regex_match_pcre2(ant_t *js, regex_match_args_t args) {
           js_arr_push(js, result_arr, match_str);
         }
       }
-      js_setprop(js, result_arr, js_mkstr(js, "index", 5), tov((double)match_start));
+      js_setprop(js, result_arr, js_mkstr(js, "index", 5), tov((double)byte_offset_to_utf16(args.str_ptr, match_start)));
     }
     match_count++;
 
@@ -3791,7 +3790,7 @@ static inline ant_value_t emit_str_replacement(
   char **buf, size_t *buf_len, size_t *buf_cap
 ) {
   if (is_func) {
-    ant_value_t cb_args[3] = { js_mkstr(js, str_ptr + pos, match_len), tov((double)pos), str };
+    ant_value_t cb_args[3] = { js_mkstr_byte_range(js, str_ptr, pos, match_len), tov((double)pos), str };
     ant_value_t r = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 3, NULL, js_mkundef());
     
     if (vtype(r) == kTypeError) return r;

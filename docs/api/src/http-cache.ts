@@ -1,4 +1,4 @@
-import { cacheTtl } from './config';
+import { cacheTtl, GITHUB_REPOSITORY } from './config';
 import type { Env } from './types';
 
 export async function cachedJson(
@@ -9,7 +9,7 @@ export async function cachedJson(
   producer: () => Promise<unknown>,
 ): Promise<Response> {
   const cache = defaultCache();
-  const cacheKey = new Request(`https://ant-api-cache.local/${encodeURIComponent(key)}`, {
+  const cacheKey = new Request(`https://ant-api-cache.local/${GITHUB_REPOSITORY}/${encodeURIComponent(key)}`, {
     method: 'GET',
   });
   const cached = await cache.match(cacheKey);

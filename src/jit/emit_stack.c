@@ -104,7 +104,9 @@ void jit_emit_stack(jit_compile_t *c) {
         break;
       }
       vstack_ensure_boxed(&c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
+      bool integer_key = c->vs.slot_type[c->vs.sp - 2] == SLOT_I32;
+      if (!integer_key)
+        vstack_ensure_boxed(&c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
       vstack_ensure_boxed(&c->vs, c->vs.sp - 3, c->ctx, c->jit_func, c->r_d_slot);
       jit_value_info_t ia = vstack_value_info(&c->vs, c->vs.sp - 1);
       jit_value_info_t iprop = vstack_value_info(&c->vs, c->vs.sp - 2);
@@ -129,6 +131,8 @@ void jit_emit_stack(jit_compile_t *c) {
                                    MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 3]),
                                    MIR_new_reg_op(c->ctx, c->r_tmp)));
       MIR_reg_t dup = vstack_push(&c->vs);
+      c->vs.slot_type[c->vs.sp - 3] = SLOT_BOXED;
+      c->vs.slot_type[c->vs.sp - 2] = integer_key ? SLOT_I32 : SLOT_BOXED;
       vstack_set_value_info(&c->vs, c->vs.sp - 4, ia);
       vstack_set_value_info(&c->vs, c->vs.sp - 3, io);
       vstack_set_value_info(&c->vs, c->vs.sp - 2, iprop);

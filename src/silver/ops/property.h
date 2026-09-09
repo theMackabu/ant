@@ -254,7 +254,7 @@ static inline bool sv_ic_try_get_hit(
   return true;
 }
 
-static inline bool sv_ic_probe_get_chain(
+static inline __attribute__((always_inline)) bool sv_ic_probe_get_chain(
   ant_value_t obj,
   const char *interned,
   ant_object_t **out_holder,
@@ -277,6 +277,7 @@ static inline bool sv_ic_probe_get_chain(
 
     int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
     if (slot < 0) {
+      if (cur != obj) ant_object_guard_absence(ptr);
       ant_value_t next = ptr->proto;
       if (!is_object_type(next)) break;
       cur = next;
@@ -394,7 +395,7 @@ static inline void sv_ic_guard_absent_prefix(
   while (is_object_type(cur)) {
     ant_object_t *ptr = js_obj_ptr(js_as_obj(cur));
     if (!ptr || ptr == holder) return;
-    ant_shape_guard_absence(ptr->shape);
+    ant_object_guard_absence(ptr);
 
     ant_value_t next = ptr->proto;
     if (!is_object_type(next)) return;
@@ -718,8 +719,7 @@ static inline bool sv_prim_ic_lookup(
   ant_shape_t *shape2 = NULL;
   
   if (sv_ic_probe_chain_absent(proto, a->str, &holder1, &shape2)) {
-    ant_shape_guard_absence(holder1->shape);
-    ant_shape_guard_absence(shape2);
+    sv_ic_guard_absent_prefix(proto, NULL);
     ic->cached_holder = holder1;
     sv_ic_set_cached_shape(js, ic, holder1->shape);
     ic->cached_index = 0;
@@ -734,7 +734,7 @@ static inline bool sv_prim_ic_lookup(
   return false;
 }
 
-static inline bool sv_try_prop_get_field_ic_no_effect(
+static inline __attribute__((always_inline)) bool sv_try_prop_get_field_ic_no_effect(
   ant_t *js,
   ant_value_t obj,
   sv_atom_t *a,
@@ -919,6 +919,7 @@ static inline ant_value_t sv_put_field_cached(
       ant_shape_retain(ic->guard.add.to_shape);
       ptr->shape = ic->guard.add.to_shape;
       ant_shape_release(old_shape);
+      ant_object_invalidate_guarded_absence(ptr);
       ant_property_mutation_invalidate(js, ptr, a->str);
       if (ic->guard.add.slot >= ptr->prop_count &&
           !js_obj_ensure_prop_capacity(ptr, ic->guard.add.slot + 1)) {
@@ -1074,7 +1075,7 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
   ant_value_t prop_key = sv_key_to_property_key(js, key);
   if (is_err(prop_key)) return prop_key;
-  return js_setprop(js, obj, prop_key, val);
+  return js_setprop_keyed(js, obj, prop_key, val);
 }
 
 static inline bool sv_try_define_field_fast(

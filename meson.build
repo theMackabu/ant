@@ -306,7 +306,63 @@ if not runtime_binary.disabled()
 endif
 
 # move to meson/tests
+shape_transition_test = executable(
+  'test-shape-transition-identity',
+  files('tests/test_shape_transition_identity.c', 'src/shapes.c'),
+  include_directories: include,
+  dependencies: uthash_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('shape-transition-identity', shape_transition_test)
+
+shape_oom_test = executable(
+  'test-shape-descriptor-oom',
+  files('tests/test_shape_descriptor_oom.c'),
+  include_directories: include,
+  dependencies: uthash_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('shape-descriptor-oom', shape_oom_test)
+
+keyed_store_test = executable(
+  'test-keyed-store-policy',
+  files('tests/test_keyed_store_policy.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('keyed-store-policy', keyed_store_test)
+
+json_layout_test = executable(
+  'test-json-layout-cache',
+  files('tests/test_json_layout_cache.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('json-layout-cache', json_layout_test)
+
+array_dense_length_test = executable(
+  'test-array-dense-length',
+  files('tests/test_array_dense_length.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('array-dense-length', array_dense_length_test)
+
 if host_machine.system() != 'windows'
+  ascii_scan_test = executable(
+    'test-string-ascii-scan',
+    files('tests/test_string_ascii_scan.c'),
+    include_directories: include,
+    c_args: ['-UNDEBUG'],
+    build_by_default: false
+  )
+  test('string-ascii-scan', ascii_scan_test)
+
   executable(
     'test-listener-accept-burst',
     files('tests/test_listener_accept_burst.c'),

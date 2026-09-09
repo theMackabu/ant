@@ -751,3 +751,256 @@ Validation: incremental build, all three focused JIT tests, all 4,203 specs,
 The JSON fixture is consumed by the test, rather than executed as JavaScript as
 suggested by the generic validation router. No new performance measurement was
 made; the build still reports discarded stale emitter PGO counts.
+
+## 2026-09-08: RayTrace argument forwarding and construction
+
+Pinned baseline binary d67e83c26666f63ba2544d3e8d8b6dceda8e4cb75376769db8b1d1cbf65012a3
+scores 4041.65 median (five runs). A native profile places 68.9% of samples inside
+construction, including 32.2% in arguments materialization and 22.8% in apply.
+These inclusive categories overlap. Artifacts: /tmp/ant-raytrace-20260908.
+
+First experiment recognizes strict zero-parameter method-forwarding wrappers
+whose sole arguments use is a terminal apply call. No branches, closures, writes,
+or other argument observations are accepted. Field reads retain their order;
+a helper guards original builtin apply identity and forwards the incoming span,
+materializing a fresh strict arguments object for an overridden apply. This
+avoids introducing a generally lazy arguments representation or changing bytecode.
+Constructor optimization and serial comparison follow this stage's validation.
+
+Forwarding stage: four samples per binary in AB/BA order measured 4115.15 ->
+7793.24 (+89.4%); candidate range 7781.63-7902.08. MIR contains the forwarding
+helper and no arguments-materialization call in the constructor wrapper. The
+second profile reduces construction's inclusive share to 44.5% and GC to 3.45%.
+
+The second experiment avoids repeated call-plan resolution only for ordinary
+compiled constructors with no special closure flags, inside active VM execution.
+It uses the existing closure dispatcher (including bailout handling), keeps the
+stack-overflow check, and retains prototype lookup, allocation and constructor
+return selection. Bound/default/proxy/derived/native paths remain general.
+
+Final dispatch stage also bypasses call-plan setup for ordinary compiled initializer
+calls after the builtin-apply guard. Bound, native, async and generator calls keep
+the existing general dispatcher. Four serial samples per binary measured RayTrace
+4014.57 baseline, 7771.87 forwarding-only, and 7988.98 final (+99.0% vs baseline,
++2.79% vs forwarding-only). Final range: 7672.87-8115.53; the target is approximately
+8k, not an assurance every run exceeds 8000. Results: dispatch-abba.json.
+
+All five focused tests (new forwarding/constructor coverage and prior integer/array
+regressions), all 4221 specs, preflight and knowledge checks pass. Build inputs use
+the existing PGO profile and LTO; changed helper profile counts are discarded, so
+this is not fresh-PGO evidence. Full-suite results are recorded below.
+
+- forward binary SHA256: `5c8a5445b1c3231dee582002899f233a19ea5d4f1d0484ad439038409af14e59`.
+
+- base binary SHA256: `d67e83c26666f63ba2544d3e8d8b6dceda8e4cb75376769db8b1d1cbf65012a3`.
+
+- candidate binary SHA256: `0d538564565e8f6ceb3e93a6a7dcba6bdf584554315672dd5f7a0b8cb4cf9dad`.
+
+Full suite (two samples per binary/workload, ABBA) geometric mean 6502.73 ->
+7059.50 (+8.56%). Deltas: Richards -1.25%, DeltaBlue -0.67%, Crypto +2.27%,
+RayTrace +90.55%, EarleyBoyer -3.07%, RegExp +0.45%, Splay +1.78%, NavierStokes
++1.86%. RayTrace in this later round was 4058.16 -> 7732.89, so report the
+approximately-8k result with load/run variability, not as a guaranteed floor.
+
+The initial EarleyBoyer decline did not reproduce in four additional samples per
+binary: 9429.18 -> 9510.33 (+0.86%); ranges 9071.57-9690.78 and 9242.60-9733.33.
+No repeatable regression was established. Artifacts: suite-abba.json and
+earley-abba.json under /tmp/ant-raytrace-20260908. No benchmark sources changed.
+
+## 2026-09-08: Porffor comparison and allocation optimization
+
+Restored the latest Porffor release, alpha-4; SHA256 matches the original comparison
+c8c5c38f5dcb379c31afb586570d0c736de770dcf5378e5bdd62c9eb16de9422. Six samples per
+engine on identical RayTrace.js measured Porffor 8357.70 vs Ant 8131.75. A direct
+MIR call for guarded ordinary initializer closures alone still trailed: Porffor
+8336.87 vs Ant 8156.34. Common forwarding now uses the same direct-JIT ABI as other
+method calls, retaining the existing helper for builtin/closure guard misses.
+
+A further allocation experiment replaces fixed_arena_alloc's whole-object clear
+with fixed_arena_alloc_uninit in obj_alloc, whose existing initialization overwrites
+nearly every field. Explicitly reset ic_identity, both remaining union words and
+the entire flags word, in addition to all existing field initialization. Every
+ant_object_t field must be initialized before publication; future fields must be
+added to this initialization. Padding is not object state. The new arena-reuse
+test exercises fresh and recycled constructor objects/arrays, frozen flags,
+accessors and stale property state.
+
+Final six-round comparison, alternating engine order on the unchanged RayTrace.js,
+measured Ant 8705.79 vs Porffor 8488.67 (+2.56%). Ant won five of six paired rounds.
+Ranges overlap: Ant 8295.51-9139.31, Porffor 8107.45-8509.87; this establishes a
+lead in this sample, not a guaranteed win under variable system load. Raw samples,
+binary identities and order are in /tmp/ant-raytrace-20260908/porffor-allocation-abba.json.
+Ant candidate SHA256: `00c1b0aaee0b81d9f9258286cecadb98bdb5c870fa8b1fd8dcf46dc50b1406a1`.
+
+The candidate builds successfully with the existing PGO/LTO configuration. The
+forwarding, constructor and arena-reuse regressions pass; all 4221 specs pass with
+zero failures. Preflight passes. Full-suite performance numbers above belong to
+the earlier dispatch candidate; other workloads have not been remeasured after
+the direct-MIR and allocation changes.
+
+## 2026-09-08: RayTrace 10k investigation
+
+The allocation candidate's 25-second native profile identifies field reads as
+the largest named leaf hotspot (2579 samples), ahead of constructor setup.
+Temporary helper instrumentation on the unchanged workload records 9,722,626
+wrapper `apply` fallbacks, of which 9,722,436 hit the interpreter property cache.
+The instrumentation was removed before rebuilding the comparison baseline.
+
+The generated prototype identity guard decoded a function-tagged prototype as
+an object directly. `Function.prototype` instead points to a closure whose
+`func_obj` owns the object identity, so this guard needlessly missed. Resolve
+function-tagged prototypes through that field, matching the interpreter's
+`js_obj_ptr(js_as_obj(proto))`. Epoch, receiver shape, prototype equality,
+prototype identity, holder and slot checks remain in place. Focused coverage in
+`tests/test_jit_callable_prototype_ic.cjs` exercises callable prototypes, inherited
+data updates, prototype changes, accessors, shadowing and replacement of `apply`.
+That coverage also exposes a pre-existing failure on the rebuilt baseline:
+adding a shadowing property to an intermediate prototype leaves the inherited
+read stale. Cache population now marks absent intermediate prototype shapes,
+using the existing absence guard mechanism already used by primitive caches.
+The receiver itself needs no absence guard because its shape is checked on every
+hit. Direct-prototype holders need no additional guards. Comparison and
+validation results follow after measurement.
+
+The general value decoder regressed RayTrace (8512.79 -> 8094.76); a narrower
+function-tag adjustment recovered most of that (8541.20 -> 8398.19). Keep the
+correct object identity and absence guards while reducing unrelated hot-path
+work. A warmed own in-object slot now uses compact MIR with a constant slot
+offset. It still checks the mutable cache's own mode/index, global epoch,
+receiver shape and both storage bounds; inherited/index/layout misses retain
+the helper. No shape pointers are embedded or extra GC roots introduced.
+Four alternating samples per binary measured 8464.46 -> 9535.15 (+12.65%), with
+candidate range 9479.50-9600.66. Focused slot, callable prototype, invalidation,
+minor-GC ABA and forwarding coverage passes. Raw samples are in
+/tmp/ant-raytrace-20260908/own-slot-abba.json.
+
+The own-slot path's runtime validity depends on epoch, shape, own mode, index and
+bounds, not the cache warmup counter. The active bit selects this specialization
+at compilation; later miss-counter changes do not invalidate a still-matching
+data-property entry. On little-endian hosts the adjacent uint32 index and epoch
+words are loaded together and compared against the current epoch plus the fixed
+index. A layout assertion and separate-word fallback preserve other byte orders.
+
+Constructor setup additionally reads the constructor flag directly from an
+already-materialized function object, retains the general check for lazy/native
+callables, and writes the fresh ordinary object's prototype directly. Native JIT
+constructor entry borrows outer JIT root protection only when jit_active_depth is
+positive; native callers and entry bailouts use the existing closure dispatcher.
+Bound, derived, async, generator and proxy handling remains on the prior paths.
+This stage measured 9788.04 -> 9940.19; packed field guards then measured
+9780.37 -> 10166.10, range 10137.85-10201.65 (four alternating samples per binary).
+First six-round 10k comparison on the same M4 Pro and unchanged RayTrace.js measured:
+
+- Rebuilt starting Ant: 8545.42, SHA256 `f7e4b3aaa7b3911387ad7539c1ad043eb5db205d9fbfaa73221dd3c674bc6a87`.
+- Porffor alpha-4: 8389.73, using the previously verified release binary.
+- Final Ant: 10075.52, SHA256 `2041d60a15b52618d45ab078d96bb5084db44636adb0b3577e4cfe57d1ab1598`.
+
+This Ant candidate is +17.91% over the starting build and +20.09% over Porffor, winning
+all six paired comparisons. Its range is 9397.86-10349.50; 10k is a measured
+median, not a floor under variable load. Each round reverses engine order, and
+no other agent-started builds, tests or benchmarks run concurrently. The
+benchmark source SHA256 is `3b9907aea4acfd14dd89749e4bea7f3a0c3f6b430ddd5174341d0b998ba7d3fe`.
+Raw samples and identities: /tmp/ant-raytrace-20260908/final-10k-abba.json.
+The same existing PGO profile and LTO configuration are used throughout; changed
+function profiles are discarded by the compiler rather than regenerated.
+
+The broad benchmark check then caught a Richards regression (3927.35 -> 3563.74,
+-9.26%). A three-sample-per-stage comparison traced it to the prototype-cache
+correction stage, before the own-slot optimization. Moving guard collection into
+the chain probe and specializing prototype decoding did not recover it. A
+temporary diagnostic build removing only the new absence guard restored Richards
+to 4066.79 vs 4001.48 baseline. That diagnostic is not retained: the shadowing
+correctness fix is required.
+
+Five-second native Richards profiles show the changed build calling
+`sv_try_prop_get_field_ic_no_effect` and `sv_ic_probe_get_chain` out of line
+(534 and 442 leaf samples), whereas the baseline attributes that work to the
+inlined JIT helpers. Preserve inlining of both lookup helpers explicitly. Mark
+absent intermediate prototype shapes during the existing lookup walk, avoiding
+a second chain walk and keeping own/direct-prototype hits small. A probe that
+ultimately fails can conservatively mark an intermediate shape; this affects
+invalidation frequency, not returned values. Prototype MIR specializes callable
+versus ordinary representations with a guard and helper fallback for kind changes.
+
+This revision passes all 4221 specs and thirteen focused regressions, including
+the new callable/own-slot tests and prior constructor, GC, integer and numeric
+array coverage.
+
+The retained revision's six alternating runs per engine measured RayTrace:
+Ant 10634.47, Porffor 8501.38, starting Ant 8881.34. All six candidate scores
+were above 10k (10137.85-10760.80). This is +25.09% vs Porffor and +19.74% vs
+the starting binary, using the same source and host as above. Candidate SHA256:
+`74fb4083b04933a59519499481af949a61bb748d43b8c10426e1d9d5edfbc51a`.
+Results: /tmp/ant-raytrace-20260908/final-10k-v2-abba.json.
+
+Full-suite ABBA, two samples per binary/workload, measured geometric mean
+7531.56 -> 7745.75 (+2.84%). Deltas: Richards -1.85%, DeltaBlue +1.91%, Crypto
++0.30%, RayTrace +22.75%, EarleyBoyer +3.37%, RegExp -0.45%, Splay -1.56%,
+NavierStokes +0.33%. The focused four-pair Richards recheck was -1.32%; its
+initial ~9% loss was reduced substantially but not eliminated. The small
+Richards/Splay declines remain explicit tradeoffs, not a claim of universal
+improvement. Results: /tmp/ant-raytrace-20260908/suite-10k-v2-abba.json.
+
+Build, preflight, knowledge and diff checks pass. MIR inspection confirms the
+packed epoch/index guard and fixed-offset own-slot load. The current build/ant
+matches the pinned retained binary. Preflight's manual Meson reconfigure advice
+also covers concurrent build/automation edits outside this performance change;
+the existing configured tree was rebuilt (and automatically regenerated when
+Meson required it), without an additional manual reconfigure of those edits.
+
+### Return-form argument forwarding correction
+
+The forwarding matcher incorrectly required the ten-op return wrapper to end in
+`RETURN`. The compiler emits `TAIL_CALL_METHOD` followed by the unused
+`RETURN_UNDEF` epilogue. Match that pair explicitly; the eleven-op ordinary-call
+form accepts `POP` or `RETURN` before its epilogue. The existing strictness,
+argument-use and call-arity guards remain required.
+
+`tests/test_jit_forward_arguments_codegen.cjs` runs the behavioral fixture with
+`ANT_DEBUG="dump/vm:jit"` and checks actual forwarding calls, incoming argument
+reuse, no eager arguments materialization, and the tail result return. Mutated
+and escaped arguments must still materialize. It fails on the pre-fix binary
+with "forward: missing guarded argument forwarding" and passes after the fix.
+The fresh dump confirms that the formerly unreachable tail emission runs.
+
+Validation: configured-tree build, seven focused regressions, and all 4221 specs
+across 102 files pass. Dump and validation logs are under
+`/tmp/ant-raytrace-20260908/tail-forward.*` and `tail-forward-*.log`.
+The earlier benchmark results describe the pre-correction pinned binary; this
+matcher correction has not been benchmarked.
+
+### Object-specific absence guards
+
+Move absence guarding from shared shapes to the spare `guards_absence` object
+flag. A missing property on an intermediate prototype must guard that object;
+marking its shape can invalidate every cached read when unrelated objects add
+their first property from the same root shape. Primitive hit/miss caches,
+`instanceof`, and `Symbol.toPrimitive` absence proofs now use the same object
+guard. The object layout does not grow, and allocation clears the flag with the
+existing complete flags initialization.
+
+Successful string/symbol property additions consume the guard and bump the
+global epoch in the ordinary property creation, append, descriptor, interpreter
+add-cache, and JIT shape-transition paths. Existing-property stores do not
+consume it. Literal/result shape construction operates on fresh, unexposed
+objects and does not require an absence invalidation. A guard can survive an
+unrelated epoch bump; its next addition may conservatively bump once, but it
+cannot invalidate on additions to other objects sharing its shape.
+
+The native `tests/test_object_absence_guard.c` check verifies that repeated
+guarding of an empty prototype and 1000 sibling property additions leave the
+epoch unchanged, while a guarded-object addition consumes the flag and
+invalidates. It also covers rearming, epoch wrap, and preserving GC flag bits.
+The JS regression `tests/test_jit_object_absence_guard.cjs` covers warm constant,
+computed, descriptor, and accessor additions shadowing intermediate prototypes,
+rearming after deletion, and late well-known-symbol overrides. Nine focused
+regressions and all 4221 specs pass after the configured-tree build.
+
+Inline numeric-key follow-up: `INL_FLUSH_SLOT` boxes into `inl_vs` and clears
+`inl_num`, but preserves the source `inl_d` register. Generic inline element
+reads now retain that register and its pre-flush numeric flag for the index
+guard, avoiding a repeated number-tag check and unbox. Range, exactness, and
+NaN guards remain; the boxed key remains available for the helper fallback.
+The new code-generation test fails before the fix and passes afterward.
+Eight focused tests and all 4221 specs across 102 files pass; the behavior
+fixture also passes under Node. Throughput has not been remeasured.

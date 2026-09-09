@@ -4,6 +4,8 @@ set -e
 REPO="${ANT_DOWNLOAD_REPO:-theMackabu/ant}"
 WORKFLOW="${ANT_DOWNLOAD_WORKFLOW:-build.yml}"
 OUT_DIR="${ANT_DOWNLOAD_OUT_DIR:-$(dirname "${BASH_SOURCE[0]}")/artifacts}"
+DOWNLOAD_ALL=false
+if [[ "${1:-}" == --all ]]; then DOWNLOAD_ALL=true; fi
 
 LATEST=$(gh run list \
   --repo "$REPO" \
@@ -39,9 +41,13 @@ echo
 echo "Run completed successfully. Downloading artifacts..."
 mkdir -p "$OUT_DIR"
 
-gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[] | "\(.id) \(.name)"' | \
+gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --paginate --jq '.artifacts[] | "\(.id) \(.name)"' | \
 while read -r id name; do
-  if [[ "$name" == version-* ]]; then continue; fi
+  if [[ "$DOWNLOAD_ALL" == false ]]; then
+    case "$name" in
+      version-*|ant-runtime-*|bench-v8-*) continue ;;
+    esac
+  fi
   echo "  Downloading $name..."
   gh api "repos/${REPO}/actions/artifacts/${id}/zip" > "${OUT_DIR}/${name}.zip"
 done

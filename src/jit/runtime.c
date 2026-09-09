@@ -31,6 +31,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_call_stable_builtin);
   LOAD_EXT(jit_helper_load_stable_builtin);
   LOAD_EXT(jit_helper_apply);
+  LOAD_EXT(jit_helper_forward_arguments);
   LOAD_EXT(jit_helper_call_call);
   LOAD_EXT(jit_helper_call_call_slot);
   LOAD_EXT(jit_helper_rest);

@@ -8,6 +8,7 @@ Store in-progress execution plans here.
 
 ## Active
 
+- [Shared Shape Descriptors and JSON Construction](shared-shape-descriptors-json.md)
 - [Sloppy Direct Eval Declarations](sloppy-eval-declarations.md)
 - [Test Sweep 2026-09-07](test-sweep-2026-09-07.md)
 - [Automatic GC Rooting for C Runtime Code](automatic-c-gc-rooting.md)

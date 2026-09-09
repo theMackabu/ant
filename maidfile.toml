@@ -11,7 +11,7 @@ path = "build"
 script = "strip ant"
 
 [tasks.download]
-script = [".github/download.sh", "open .github/artifacts"]
+script = ['.github/download.sh "%{arg.1}"', "open .github/artifacts"]
 
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]

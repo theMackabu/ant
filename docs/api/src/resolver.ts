@@ -5,7 +5,7 @@ import {
   canDownloadActionsArtifacts,
   DEFAULT_BRANCH,
   MUSL_SANDBOX_WORKFLOW,
-  releaseRepository,
+  GITHUB_REPOSITORY,
 } from './config';
 import type { RequestOptions } from './config';
 import { HttpError, isNotFound } from './errors';
@@ -101,18 +101,6 @@ export async function versionManifest(env: Env, version: string) {
     ),
   );
 
-  const runtime = antTargets.map(target =>
-    resolveManifestEntry(
-      {
-        target: target.key,
-        os: target.os,
-        arch: target.arch,
-        libc: target.libc,
-      },
-      () => resolveReleaseAsset(env, release, 'runtime', `ant-runtime-${target.key}`),
-    ),
-  );
-
   const sandbox = arches.map(arch =>
     resolveManifestEntry({ arch }, () =>
       resolveReleaseAsset(env, release, 'sandbox', `ant-sandbox-${arch}`),
@@ -130,7 +118,6 @@ export async function versionManifest(env: Env, version: string) {
     version: releaseInfo(release),
     generated_at: new Date().toISOString(),
     ant: await Promise.all(ant),
-    runtime: await Promise.all(runtime),
     sandbox: await Promise.all(sandbox),
     kernel: await Promise.all(kernel),
   };
@@ -161,6 +148,8 @@ type VersionCheckQuery = {
   current: string;
   buildTimestamp?: number;
 };
+
+type ReleaseArtifactKind = Exclude<ArtifactKind, 'runtime'>;
 
 const arches = ['x64', 'aarch64'];
 
@@ -217,7 +206,7 @@ export async function resolveAnt(
   }
 
   try {
-    return await resolveActionAnt(env, target, url, options);
+    return await resolveActionBinary(env, target, url, options, 'ant');
   } catch (error) {
     if (!isNotFound(error)) throw error;
     return resolveReleaseArtifact(env, 'ant', target.artifact, target.key, url, options);
@@ -230,35 +219,15 @@ export async function resolveRuntime(
   url: URL,
   options: RequestOptions = {},
 ): Promise<ResolvedArtifact> {
-  const filename = target.os === 'windows' ? 'ant-runtime.exe' : 'ant-runtime';
-  const ant = await resolveAnt(env, target, url, options);
-
-  if (ant.source.type === 'actions') {
-    const download = new URL(ant.download_url);
-    download.pathname = `/v1/download/runtime/${encodeURIComponent(target.key)}`;
-    return {
-      ...ant,
-      kind: 'runtime',
-      name: `ant-runtime-${target.key}`,
-      download_url: download.toString(),
-      zip_entry: filename,
-      filename,
-    };
+  if (!canDownloadActionsArtifacts(env)) {
+    throw new HttpError('runtime artifacts require GITHUB_TOKEN for Actions downloads', 404);
   }
-
-  return resolveReleaseArtifact(
-    env,
-    'runtime',
-    `ant-runtime-${target.key}`,
-    target.key,
-    url,
-    options,
-  );
+  return resolveActionBinary(env, target, url, options, 'runtime');
 }
 
 export async function resolveNamedArtifact(
   env: Env,
-  kind: ArtifactKind,
+  kind: ReleaseArtifactKind,
   workflow: string,
   artifactName: string,
   url: URL,
@@ -331,7 +300,7 @@ export async function resolveNanosArtifact(
 
 export async function fetchDownload(env: Env, artifact: ResolvedArtifact): Promise<Response> {
   if (artifact.source.type === 'actions') {
-    return fetchArtifactDownload(env, artifact.source.repository, artifact.artifact.id);
+    return fetchArtifactDownload(env, artifact.artifact.id);
   }
 
   const releaseUrl =
@@ -367,64 +336,68 @@ function gzipUrl(downloadUrl: string): string {
   return url.toString();
 }
 
-async function resolveActionAnt(
+async function resolveActionBinary(
   env: Env,
   target: AntTarget,
   url: URL,
   options: RequestOptions,
+  kind: 'ant' | 'runtime',
 ): Promise<ResolvedArtifact> {
   const runId = actionsRunId(env, options);
   if (runId) {
     try {
-      return await resolveActionAntFromRun(env, target, url, runId, options);
+      return await resolveActionBinaryFromRun(env, target, url, runId, options, kind);
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
   }
 
   const match = await findLatestRunWithArtifacts(env, BUILD_WORKFLOW, branch(env, options), [
-    target.artifact,
+    kind === 'runtime' ? `ant-runtime-${target.key}` : target.artifact,
   ]);
-  return resolveActionAntFromArtifacts(
+  return resolveActionBinaryFromArtifacts(
     env,
     target,
     url,
-    match.repository,
     match.run,
     match.artifacts,
     options,
+    kind,
   );
 }
 
-async function resolveActionAntFromRun(
+async function resolveActionBinaryFromRun(
   env: Env,
   target: AntTarget,
   url: URL,
   runId: number,
   options: RequestOptions,
+  kind: 'ant' | 'runtime',
 ): Promise<ResolvedArtifact> {
-  const match = await findRunWithArtifacts(env, runId, [target.artifact]);
-  return resolveActionAntFromArtifacts(
+  const artifactName = kind === 'runtime' ? `ant-runtime-${target.key}` : target.artifact;
+  const match = await findRunWithArtifacts(env, runId, [artifactName]);
+  return resolveActionBinaryFromArtifacts(
     env,
     target,
     url,
-    match.repository,
     match.run,
     match.artifacts,
     options,
+    kind,
   );
 }
 
-async function resolveActionAntFromArtifacts(
+async function resolveActionBinaryFromArtifacts(
   env: Env,
   target: AntTarget,
   url: URL,
-  sourceRepository: string,
   run: WorkflowRun,
   artifacts: Artifact[],
   options: RequestOptions,
+  kind: 'ant' | 'runtime',
 ): Promise<ResolvedArtifact> {
-  const artifact = requireArtifact(artifacts, target.artifact);
+  const artifactName = kind === 'runtime' ? `ant-runtime-${target.key}` : target.artifact;
+  const artifact = requireArtifact(artifacts, artifactName);
   const versionArtifact = artifacts.find(
     item => item.name === `version-${target.artifact}` && !item.expired,
   );
@@ -433,7 +406,7 @@ async function resolveActionAntFromArtifacts(
 
   if (versionArtifact) {
     try {
-      const info = await readVersionArtifact(env, sourceRepository, versionArtifact);
+      const info = await readVersionArtifact(env, versionArtifact);
       version = info.version;
       buildTimestamp = info.buildTimestamp;
     } catch (error) {
@@ -442,17 +415,18 @@ async function resolveActionAntFromArtifacts(
   }
 
   const resolved = resolvedAction(
-    'ant',
+    kind,
     artifact,
     version,
     buildTimestamp,
     options.revision || run.head_sha,
-    actionSourceInfo(sourceRepository, BUILD_WORKFLOW, run),
-    downloadUrl(url, 'ant', target.key, branch(env, options), run.id),
+    actionSourceInfo(BUILD_WORKFLOW, run),
+    downloadUrl(url, kind, target.key, branch(env, options), run.id),
   );
 
-  resolved.zip_entry = target.os === 'windows' ? 'ant.exe' : 'ant';
-  resolved.filename = target.os === 'windows' ? 'ant.exe' : 'ant';
+  const binary = kind === 'runtime' ? 'ant-runtime' : 'ant';
+  resolved.zip_entry = target.os === 'windows' ? `${binary}.exe` : binary;
+  resolved.filename = resolved.zip_entry;
 
   return resolved;
 }
@@ -477,7 +451,7 @@ async function resolveActionNamedArtifact(
         undefined,
         undefined,
         options.revision || match.run.head_sha,
-        actionSourceInfo(match.repository, match.run.path || workflow, match.run),
+        actionSourceInfo(match.run.path || workflow, match.run),
         downloadUrl(url, kind, arch, branch(env, options), runId),
       );
     } catch (error) {
@@ -493,7 +467,7 @@ async function resolveActionNamedArtifact(
     undefined,
     undefined,
     options.revision || match.run.head_sha,
-    actionSourceInfo(match.repository, workflow, match.run),
+    actionSourceInfo(workflow, match.run),
     downloadUrl(url, kind, arch, branch(env, options), match.run.id),
   );
 }
@@ -514,7 +488,7 @@ async function resolveAnyActionNamedArtifact(
     undefined,
     undefined,
     options.revision || match.run.head_sha,
-    actionSourceInfo(match.repository, match.run.path || match.run.name, match.run),
+    actionSourceInfo(match.run.path || match.run.name, match.run),
     downloadUrl(url, kind, arch, branch(env, options), match.run.id),
   );
 }
@@ -531,8 +505,8 @@ function resolvedAction(
   return {
     kind,
     name: artifact.name,
-    version: kind === 'ant' ? version : undefined,
-    build_timestamp: kind === 'ant' ? buildTimestamp : undefined,
+    version: kind === 'ant' || kind === 'runtime' ? version : undefined,
+    build_timestamp: kind === 'ant' || kind === 'runtime' ? buildTimestamp : undefined,
     revision,
     download_url,
     artifact: {
@@ -549,7 +523,7 @@ function resolvedAction(
 
 async function resolveReleaseArtifact(
   env: Env,
-  kind: ArtifactKind,
+  kind: ReleaseArtifactKind,
   artifactName: string,
   downloadName: string,
   url: URL,
@@ -577,14 +551,14 @@ async function resolveReleaseArtifact(
       api_url: asset.url,
       browser_download_url: asset.browser_download_url,
     },
-    source: releaseSourceInfo(env, release),
+    source: releaseSourceInfo(release),
   };
 }
 
 async function resolveReleaseAsset(
   env: Env,
   release: GitHubRelease,
-  kind: ArtifactKind,
+  kind: ReleaseArtifactKind,
   artifactName: string,
 ): Promise<ResolvedArtifact> {
   const asset = findReleaseAsset(release, artifactName);
@@ -608,13 +582,13 @@ async function resolveReleaseAsset(
       api_url: asset.url,
       browser_download_url: asset.browser_download_url,
     },
-    source: releaseSourceInfoFromRelease(release, releaseRepository(env)),
+    source: releaseSourceInfo(release),
   };
 }
 
 async function resolveReleaseAfterActionsMiss(
   env: Env,
-  kind: ArtifactKind,
+  kind: ReleaseArtifactKind,
   artifactName: string,
   downloadName: string,
   url: URL,
@@ -630,10 +604,10 @@ async function resolveReleaseAfterActionsMiss(
   }
 }
 
-function actionSourceInfo(repo: string, workflow: string, run: WorkflowRun): ActionSourceInfo {
+function actionSourceInfo(workflow: string, run: WorkflowRun): ActionSourceInfo {
   return {
     type: 'actions',
-    repository: repo,
+    repository: GITHUB_REPOSITORY,
     workflow,
     run_id: run.id,
     run_number: run.run_number,
@@ -645,17 +619,10 @@ function actionSourceInfo(repo: string, workflow: string, run: WorkflowRun): Act
   };
 }
 
-function releaseSourceInfo(env: Env, release: GitHubRelease): ReleaseSourceInfo {
-  return releaseSourceInfoFromRelease(release, releaseRepository(env));
-}
-
-function releaseSourceInfoFromRelease(
-  release: GitHubRelease,
-  repo = 'theMackabu/ant',
-): ReleaseSourceInfo {
+function releaseSourceInfo(release: GitHubRelease): ReleaseSourceInfo {
   return {
     type: 'release',
-    repository: repo,
+    repository: GITHUB_REPOSITORY,
     release_id: release.id,
     tag_name: release.tag_name,
     name: release.name,

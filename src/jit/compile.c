@@ -37,6 +37,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                          c->func->back_edge_count >= JIT_HOT_COMPILE_BACKEDGE_THRESHOLD;
   c->ctx = jit_compile_hot ? c->jc->ctx_hot : c->jc->ctx;
 
+  c->forward_arguments = jit_can_forward_arguments(func);
   if (!jit_setup_frame(c)) return NULL;
 
   while (c->ip < c->end) {
