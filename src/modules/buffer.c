@@ -1164,7 +1164,8 @@ static ant_value_t js_typedarray_constructor(ant_native_params_t, TypedArrayType
       target->buffer->data, 
       source->buffer->data + source->byte_offset, 
       source->byte_length
-    ); else for (size_t i = 0; i < source->length; i++) {
+    ); 
+    else for (size_t i = 0; i < source->length; i++) {
       ant_value_t value = js_mkundef();
       buffer_typedarray_data_read_index(js, source, i, &value);
       ant_value_t written = typedarray_write_value(js, target, i, value);
@@ -3469,6 +3470,90 @@ static bool buffer_checked_byte_offset(
   return true;
 }
 
+static ant_value_t buffer_bigint64_ptr(ant_t *js, ant_value_t offset_value, uint8_t **ptr, size_t *offset) {
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+  
+  if (!ta->buffer || ta->buffer->is_detached)
+    return js_mkerr(js, "Cannot operate on a detached TypedArray");
+
+  if (vtype(offset_value) != kTypeUndefined && vtype(offset_value) != kTypeNumber)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "offset must be a number");
+
+  double n = vtype(offset_value) == kTypeNumber ? js_getnum(offset_value) : 0.0;
+  if (floor(n) != n || !buffer_checked_byte_offset(offset_value, ta->byte_length, 8, offset))
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Offset out of bounds");
+
+  *ptr = ta->buffer->data + ta->byte_offset + *offset;
+  return js_mkundef();
+}
+
+static ant_value_t buffer_write_bigint64(ant_native_params_t, bool little_endian, bool is_signed) {
+  ant_value_t value = buffer_require_bigint_value(js, nargs > 0 ? args[0] : js_mkundef());
+  if (is_err(value)) return value;
+
+  uint64_t bits;
+  if (is_signed) {
+    int64_t signed_value;
+    if (!bigint_to_int64_checked(js, value, &signed_value))
+      return js_mkerr_typed(js, JS_ERR_RANGE, "value out of range for signed 64-bit integer");
+    bits = (uint64_t)signed_value;
+  }
+  else if (!bigint_to_uint64_checked(js, value, &bits))
+    return js_mkerr_typed(js, JS_ERR_RANGE, "value out of range for unsigned 64-bit integer");
+  
+  size_t offset; uint8_t *ptr;
+  ant_value_t error = buffer_bigint64_ptr(js, nargs > 1 ? args[1] : js_mkundef(), &ptr, &offset);
+  
+  if (is_err(error)) return error;
+  for (size_t i = 0; i < 8; i++, bits >>= 8) ptr[little_endian ? i : 7 - i] = (uint8_t)bits;
+  
+  return js_mknum((double)(offset + 8));
+}
+
+static ant_value_t buffer_read_bigint64(ant_native_params_t, bool little_endian, bool is_signed) {
+  size_t offset; uint8_t *ptr;
+  ant_value_t error = buffer_bigint64_ptr(js, nargs > 0 ? args[0] : js_mkundef(), &ptr, &offset);
+  
+  if (is_err(error)) return error;
+  uint64_t bits = 0;
+  
+  for (size_t i = 0; i < 8; i++) bits = (bits << 8) | ptr[little_endian ? 7 - i : i];
+  return is_signed ? bigint_from_int64(js, (int64_t)bits) : bigint_from_uint64(js, bits);
+}
+
+static ant_value_t js_buffer_writeBigInt64LE(ant_params_t) {
+  return buffer_write_bigint64(js, args, nargs, true, true);
+}
+
+static ant_value_t js_buffer_writeBigInt64BE(ant_params_t) {
+  return buffer_write_bigint64(js, args, nargs, false, true);
+}
+
+static ant_value_t js_buffer_writeBigUInt64LE(ant_params_t) {
+  return buffer_write_bigint64(js, args, nargs, true, false);
+}
+
+static ant_value_t js_buffer_writeBigUInt64BE(ant_params_t) {
+  return buffer_write_bigint64(js, args, nargs, false, false);
+}
+
+static ant_value_t js_buffer_readBigInt64LE(ant_params_t) {
+  return buffer_read_bigint64(js, args, nargs, true, true);
+}
+
+static ant_value_t js_buffer_readBigInt64BE(ant_params_t) {
+  return buffer_read_bigint64(js, args, nargs, false, true);
+}
+
+static ant_value_t js_buffer_readBigUInt64LE(ant_params_t) {
+  return buffer_read_bigint64(js, args, nargs, true, false);
+}
+
+static ant_value_t js_buffer_readBigUInt64BE(ant_params_t) {
+  return buffer_read_bigint64(js, args, nargs, false, false);
+}
+
 static ant_value_t js_buffer_writeInt16BE(ant_params_t) {
   if (nargs < 1) return js_mkerr(js, "writeInt16BE requires a value");
 
@@ -4069,6 +4154,46 @@ void init_buffer_module(ant_t *js) {
   js_set(js, buffer_proto, "readUInt16BE", js_mkfun(js_buffer_readUInt16BE));
   js_set(js, buffer_proto, "readInt32BE", js_mkfun(js_buffer_readInt32BE));
   js_set(js, buffer_proto, "readUInt32BE", js_mkfun(js_buffer_readUInt32BE));
+  js_set(js, buffer_proto, "writeBigInt64LE", js_mkfun(js_buffer_writeBigInt64LE));
+  js_set(js, buffer_proto, "writeBigInt64BE", js_mkfun(js_buffer_writeBigInt64BE));
+  
+  ant_value_t write_biguint64_le = js_cfunc_expose_named(
+    js, js_mkfun(js_buffer_writeBigUInt64LE),
+    "writeBigUInt64LE", sizeof("writeBigUInt64LE") - 1
+  );
+  
+  write_biguint64_le = js_cfunc_promote(js, write_biguint64_le);
+  js_set(js, buffer_proto, "writeBigUInt64LE", write_biguint64_le);
+  js_set(js, buffer_proto, "writeBigUint64LE", write_biguint64_le);
+  
+  ant_value_t write_biguint64_be = js_cfunc_expose_named(
+    js, js_mkfun(js_buffer_writeBigUInt64BE),
+    "writeBigUInt64BE", sizeof("writeBigUInt64BE") - 1
+  );
+  
+  write_biguint64_be = js_cfunc_promote(js, write_biguint64_be);
+  js_set(js, buffer_proto, "writeBigUInt64BE", write_biguint64_be);
+  js_set(js, buffer_proto, "writeBigUint64BE", write_biguint64_be);
+  js_set(js, buffer_proto, "readBigInt64LE", js_mkfun(js_buffer_readBigInt64LE));
+  js_set(js, buffer_proto, "readBigInt64BE", js_mkfun(js_buffer_readBigInt64BE));
+  
+  ant_value_t read_biguint64_le = js_cfunc_expose_named(
+    js, js_mkfun(js_buffer_readBigUInt64LE),
+    "readBigUInt64LE", sizeof("readBigUInt64LE") - 1
+  );
+  
+  read_biguint64_le = js_cfunc_promote(js, read_biguint64_le);
+  js_set(js, buffer_proto, "readBigUInt64LE", read_biguint64_le);
+  js_set(js, buffer_proto, "readBigUint64LE", read_biguint64_le);
+  
+  ant_value_t read_biguint64_be = js_cfunc_expose_named(
+    js, js_mkfun(js_buffer_readBigUInt64BE),
+    "readBigUInt64BE", sizeof("readBigUInt64BE") - 1
+  );
+  
+  read_biguint64_be = js_cfunc_promote(js, read_biguint64_be);
+  js_set(js, buffer_proto, "readBigUInt64BE", read_biguint64_be);
+  js_set(js, buffer_proto, "readBigUint64BE", read_biguint64_be);
   
   js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
   js_set(js, buffer_proto, "values", js_get(js, typedarray_proto, "values"));

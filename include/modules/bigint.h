@@ -28,6 +28,8 @@ ant_value_t bigint_from_value(ant_t *js, ant_value_t arg);
 
 bool bigint_to_int64_wrapping(ant_t *js, ant_value_t value, int64_t *out);
 bool bigint_to_uint64_wrapping(ant_t *js, ant_value_t value, uint64_t *out);
+bool bigint_to_uint64_checked(ant_t *js, ant_value_t value, uint64_t *out);
+bool bigint_to_int64_checked(ant_t *js, ant_value_t value, int64_t *out);
 
 bool bigint_is_negative(ant_t *js, ant_value_t v);
 bool bigint_is_zero(ant_t *js, ant_value_t v);

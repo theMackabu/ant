@@ -5,7 +5,6 @@
 
 #include "ant.h"
 #include "internal.h"
-#include "silver/engine.h"
 #include "errors.h"
 #include "gc/roots.h"
 #include "utils.h"
@@ -397,17 +396,32 @@ static bool bigint_parse_abs_u64(ant_t *js, ant_value_t value, uint64_t *out) {
   const uint32_t *limbs = bigint_limbs(js, value, &count);
 
   if (count > 2) return false;
-
   uint64_t acc = limbs[0];
+  
   if (count == 2) acc |= ((uint64_t)limbs[1] << 32);
-
   *out = acc;
+  
   return true;
 }
 
 static bool bigint_parse_u64(ant_t *js, ant_value_t value, uint64_t *out) {
   if (bigint_is_negative(js, value)) return false;
   return bigint_parse_abs_u64(js, value, out);
+}
+
+bool bigint_to_uint64_checked(ant_t *js, ant_value_t value, uint64_t *out) {
+  return out && vtype(value) == kTypeBigInt && bigint_parse_u64(js, value, out);
+}
+
+bool bigint_to_int64_checked(ant_t *js, ant_value_t value, int64_t *out) {
+  uint64_t magnitude;
+  if (!out || vtype(value) != kTypeBigInt || !bigint_parse_abs_u64(js, value, &magnitude)) return false;
+  
+  bool negative = bigint_is_negative(js, value);
+  if (magnitude > (uint64_t)INT64_MAX + (negative ? 1 : 0)) return false;
+  *out = negative && magnitude ? -(int64_t)(magnitude - 1) - 1 : (int64_t)magnitude;
+  
+  return true;
 }
 
 static int bigint_cmp_abs_limbs(const uint32_t *a, size_t alen, const uint32_t *b, size_t blen) {

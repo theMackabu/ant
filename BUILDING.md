@@ -145,7 +145,8 @@ meson setup build -Dtemporal=disabled
 
 Nix builds provide the same pinned toolchain and Cargo dependency set as
 fixed Nix inputs. They invoke the Temporal build in offline mode, so the Ant
-derivation does not need network access.
+derivation does not need network access. After changing vendor wraps or patches,
+stage new files with `git add` and run `./packages/nix/update-vendor-hashes.js`
 
 ### Unix and macOS
 
