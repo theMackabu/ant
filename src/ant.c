@@ -429,7 +429,10 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->ic_identity = 0;
   obj->type_tag = type_tag;
   obj->proto = js_mkundef();
-  obj->u.data.value = js_mkundef();
+  
+  if (type_tag == kTypeArray) obj->u.array.data = NULL;
+  else obj->u.data.value = js_mkundef();
+  
   obj->u.array.len = 0;
   obj->u.array.cap = 0;
   

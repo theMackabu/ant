@@ -307,10 +307,15 @@ MIR_reg_t mir_emit_known_array_index_guard(
     MIR_context_t ctx, MIR_item_t fn, MIR_reg_t boxed,
     MIR_reg_t integer, MIR_label_t slow, MIR_reg_t d_slot, int site,
     MIR_reg_t cached_key, MIR_reg_t cached_index);
-MIR_reg_t mir_emit_dense_numeric_element_guard(
+typedef enum {
+  JIT_ELEMENT_NUMERIC_READ,
+  JIT_ELEMENT_READ,
+  JIT_ELEMENT_WRITE,
+} jit_element_access_t;
+MIR_reg_t mir_emit_dense_element_guard(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t object, MIR_reg_t index, MIR_reg_t value,
-    bool writable, MIR_label_t slow, int site);
+    jit_element_access_t access, MIR_label_t slow, int site);
 void mir_emit_word32_binary(
     MIR_context_t ctx, MIR_item_t fn, sv_op_t op,
     MIR_reg_t left, MIR_reg_t right, MIR_reg_t result,

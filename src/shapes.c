@@ -28,6 +28,7 @@ static constexpr uint64_t SHAPE_IDX_TOMB = UINT64_MAX;
 
 static constexpr uint32_t SHAPE_IDX_MIN_CAP = 8;
 static constexpr uint32_t SHAPE_COMPACT_MIN_TOMBSTONES = 32;
+static constexpr uint32_t SHAPE_TRANSITION_MAX_PROPS = 32;
 
 static constexpr size_t SHAPE_ENTRY_POOL_MAX = 1024;
 static constexpr size_t SHAPE_ENTRY_SIZE = sizeof(shape_child_entry_t);
@@ -298,8 +299,19 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
   ant_shape_t *shape = *shape_pp;
   
   if (!shape) return false;
-  if (!shape_is_in_tree(shape)) {
+  if (!shape_is_in_tree(shape))
     return shape_add_key(shape, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
+  
+  if (shape->count >= SHAPE_TRANSITION_MAX_PROPS) {
+    ant_shape_t *copy = ant_shape_clone(shape);
+    if (!copy) return false;
+    if (!shape_add_key(copy, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot)) {
+      ant_shape_release(copy);
+      return false;
+    }
+    ant_shape_release(shape);
+    *shape_pp = copy;
+    return true;
   }
 
   uint64_t prop_key = shape_key_interned(interned);
@@ -323,13 +335,8 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
   }
   
   shape_record_child(shape, ckey, shared);
-  ant_shape_release(shared);
-
-  ant_shape_t *next = ant_shape_clone(shared);
-  if (!next) return false;
-
   ant_shape_release(shape);
-  *shape_pp = next;
+  *shape_pp = shared;
   
   return true;
 }
@@ -338,8 +345,19 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
   ant_shape_t *shape = *shape_pp;
   
   if (!shape) return false;
-  if (!shape_is_in_tree(shape)) {
+  if (!shape_is_in_tree(shape))
     return shape_add_key(shape, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
+
+  if (shape->count >= SHAPE_TRANSITION_MAX_PROPS) {
+    ant_shape_t *copy = ant_shape_clone(shape);
+    if (!copy) return false;
+    if (!shape_add_key(copy, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot)) {
+      ant_shape_release(copy);
+      return false;
+    }
+    ant_shape_release(shape);
+    *shape_pp = copy;
+    return true;
   }
 
   uint64_t prop_key = shape_key_symbol(sym_off);
@@ -363,13 +381,8 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
   }
   
   shape_record_child(shape, ckey, shared);
-  ant_shape_release(shared);
-
-  ant_shape_t *next = ant_shape_clone(shared);
-  if (!next) return false;
-
   ant_shape_release(shape);
-  *shape_pp = next;
+  *shape_pp = shared;
   
   return true;
 }

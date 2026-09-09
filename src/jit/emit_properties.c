@@ -425,7 +425,7 @@ void jit_emit_properties(jit_compile_t *c) {
                              : 0;
       bool specialize = sv_tfb_specialization_ready(feedback);
       MIR_reg_t integer_index = 0;
-      if (!specialize && c->vs.slot_type[c->vs.sp - 1] == SLOT_I32) {
+      if (c->vs.slot_type[c->vs.sp - 1] == SLOT_I32) {
         char name[48];
         snprintf(name, sizeof(name), "integer_index_%d", mir_next_reg_site(&c->reg_site_n));
         integer_index = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
@@ -445,12 +445,16 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_label_t done = MIR_new_label(c->ctx);
         int index_site = mir_next_reg_site(&c->reg_site_n);
         int element_site = mir_next_reg_site(&c->reg_site_n);
-        MIR_reg_t index = mir_emit_array_index_guard(
-            c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp], key_is_num,
-            c->r_d_slot, bail_direct, index_site);
+        MIR_reg_t index = integer_index
+            ? mir_emit_known_array_index_guard(
+                c->ctx, c->jit_func, key, integer_index, bail_direct,
+                c->r_d_slot, index_site, c->cached_index_key, c->cached_index_value)
+            : mir_emit_array_index_guard(
+                c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp], key_is_num,
+                c->r_d_slot, bail_direct, index_site);
         MIR_reg_t loaded = c->r_err_tmp;
-        (void)mir_emit_dense_numeric_element_guard(
-            c->ctx, c->jit_func, obj, index, loaded, false, bail_direct, element_site);
+        (void)mir_emit_dense_element_guard(
+            c->ctx, c->jit_func, obj, index, loaded, JIT_ELEMENT_NUMERIC_READ, bail_direct, element_site);
         mir_i64_to_d(
             c->ctx, c->jit_func, c->vs.d_regs[c->vs.sp - 1], loaded, c->r_d_slot);
         c->vs.slot_type[c->vs.sp - 1] = SLOT_NUM;
@@ -486,8 +490,8 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_reg_t index = mir_emit_known_array_index_guard(
             c->ctx, c->jit_func, key, integer_index, slow, c->r_d_slot,
             mir_next_reg_site(&c->reg_site_n), c->cached_index_key, c->cached_index_value);
-        (void)mir_emit_dense_numeric_element_guard(
-            c->ctx, c->jit_func, obj, index, c->r_err_tmp, false, slow,
+        (void)mir_emit_dense_element_guard(
+            c->ctx, c->jit_func, obj, index, c->r_err_tmp, JIT_ELEMENT_READ, slow,
             mir_next_reg_site(&c->reg_site_n));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->cached_element_object), MIR_new_reg_op(c->ctx, obj)));
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->cached_element_key), MIR_new_reg_op(c->ctx, key)));
@@ -595,7 +599,7 @@ void jit_emit_properties(jit_compile_t *c) {
                              : 0;
       bool specialize = sv_tfb_specialization_ready(feedback);
       MIR_reg_t integer_index = 0;
-      if (!specialize && c->vs.slot_type[c->vs.sp - 2] == SLOT_I32) {
+      if (c->vs.slot_type[c->vs.sp - 2] == SLOT_I32) {
         char name[48];
         snprintf(name, sizeof(name), "integer_index_%d", mir_next_reg_site(&c->reg_site_n));
         integer_index = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
@@ -619,9 +623,13 @@ void jit_emit_properties(jit_compile_t *c) {
         int index_site = mir_next_reg_site(&c->reg_site_n);
         int element_site = mir_next_reg_site(&c->reg_site_n);
 
-        MIR_reg_t index = mir_emit_array_index_guard(
-            c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp + 1], key_is_num,
-            c->r_d_slot, bail_direct, index_site);
+        MIR_reg_t index = integer_index
+            ? mir_emit_known_array_index_guard(
+                c->ctx, c->jit_func, key, integer_index, bail_direct,
+                c->r_d_slot, index_site, c->cached_index_key, c->cached_index_value)
+            : mir_emit_array_index_guard(
+                c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp + 1], key_is_num,
+                c->r_d_slot, bail_direct, index_site);
         if (val_is_num)
           mir_d_to_i64(
               c->ctx, c->jit_func, val, c->vs.d_regs[c->vs.sp + 2], c->r_d_slot);
@@ -629,9 +637,9 @@ void jit_emit_properties(jit_compile_t *c) {
           mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, val, bail_direct);
 
         MIR_reg_t old_value = c->r_err_tmp;
-        MIR_reg_t data = mir_emit_dense_numeric_element_guard(
+        MIR_reg_t data = mir_emit_dense_element_guard(
             c->ctx, c->jit_func, obj, index, old_value,
-            true, bail_direct, element_site);
+            JIT_ELEMENT_WRITE, bail_direct, element_site);
         MIR_label_t tagged_old_value = NULL;
         MIR_label_t store = NULL;
         if (tagged_old_possible) {
@@ -686,8 +694,8 @@ void jit_emit_properties(jit_compile_t *c) {
             c->ctx, c->jit_func, key, integer_index, slow, c->r_d_slot,
             mir_next_reg_site(&c->reg_site_n), c->cached_index_key, c->cached_index_value);
         mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, val, slow);
-        MIR_reg_t data = mir_emit_dense_numeric_element_guard(
-            c->ctx, c->jit_func, obj, index, c->r_err_tmp, true, slow,
+        MIR_reg_t data = mir_emit_dense_element_guard(
+            c->ctx, c->jit_func, obj, index, c->r_err_tmp, JIT_ELEMENT_WRITE, slow,
             mir_next_reg_site(&c->reg_site_n));
         mir_emit_is_num_guard(c->ctx, c->jit_func, c->r_bool, c->r_err_tmp, slow);
         MIR_append_insn(c->ctx, c->jit_func,

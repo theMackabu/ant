@@ -622,11 +622,11 @@ int mir_next_reg_site(int *next_site) {
   return (*next_site)++;
 }
 
-MIR_reg_t mir_emit_exact_integer_guard(
+static MIR_reg_t mir_emit_integer_conversion_guard(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
     MIR_reg_t d_slot, double minimum, double maximum,
-    MIR_label_t slow, int site) {
+    MIR_label_t slow, int site, bool exact) {
   char double_name[48], integer_name[48], roundtrip_name[48];
   snprintf(double_name, sizeof(double_name), "spec_d_%d", site);
   snprintf(integer_name, sizeof(integer_name), "spec_i_%d", site);
@@ -640,7 +640,6 @@ MIR_reg_t mir_emit_exact_integer_guard(
   }
 
   MIR_reg_t integer = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, integer_name);
-  MIR_reg_t roundtrip = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, roundtrip_name);
 
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_DBNE,
@@ -661,6 +660,8 @@ MIR_reg_t mir_emit_exact_integer_guard(
                   MIR_new_insn(ctx, MIR_D2I,
                                MIR_new_reg_op(ctx, integer),
                                MIR_new_reg_op(ctx, number)));
+  if (!exact) return integer;
+  MIR_reg_t roundtrip = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, roundtrip_name);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_I2D,
                                MIR_new_reg_op(ctx, roundtrip),
@@ -672,6 +673,16 @@ MIR_reg_t mir_emit_exact_integer_guard(
                                MIR_new_reg_op(ctx, roundtrip)));
 
   return integer;
+}
+
+MIR_reg_t mir_emit_exact_integer_guard(
+    MIR_context_t ctx, MIR_item_t fn,
+    MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
+    MIR_reg_t d_slot, double minimum, double maximum,
+    MIR_label_t slow, int site) {
+  return mir_emit_integer_conversion_guard(
+      ctx, fn, boxed, known_double, is_known_double, d_slot,
+      minimum, maximum, slow, site, true);
 }
 
 void mir_emit_primitive_type_test(
@@ -751,9 +762,9 @@ MIR_reg_t mir_emit_word32_guard(
     bool is_known_double, bool is_known_i32,
     MIR_reg_t d_slot, MIR_label_t slow, int site) {
   if (is_known_i32) return boxed;
-  return mir_emit_exact_integer_guard(
+  return mir_emit_integer_conversion_guard(
       ctx, fn, boxed, known_double, is_known_double, d_slot,
-      (double)INT32_MIN, (double)UINT32_MAX, slow, site);
+      (double)INT32_MIN, (double)UINT32_MAX, slow, site, false);
 }
 
 MIR_reg_t mir_emit_array_index_guard(
@@ -788,10 +799,11 @@ MIR_reg_t mir_emit_known_array_index_guard(
   return integer;
 }
 
-MIR_reg_t mir_emit_dense_numeric_element_guard(
+MIR_reg_t mir_emit_dense_element_guard(
     MIR_context_t ctx, MIR_item_t fn,
     MIR_reg_t object, MIR_reg_t index, MIR_reg_t value,
-    bool writable, MIR_label_t slow, int site) {
+    jit_element_access_t access, MIR_label_t slow, int site) {
+  bool writable = access == JIT_ELEMENT_WRITE;
   char tag_name[48], ptr_name[48], flags_name[48];
   char data_name[48], len_name[48], cap_name[48];
   snprintf(tag_name, sizeof(tag_name), "elem_tag_%d", site);
@@ -870,8 +882,12 @@ MIR_reg_t mir_emit_dense_numeric_element_guard(
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, value),
                                MIR_new_mem_op(ctx, MIR_JSVAL, 0, data, index, sizeof(ant_value_t))));
-  if (!writable) {
+  if (access == JIT_ELEMENT_NUMERIC_READ) {
     mir_emit_is_num_guard(ctx, fn, 0, value, slow);
+  } else if (access == JIT_ELEMENT_READ) {
+    MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE,
+        MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, value),
+        MIR_new_uint_op(ctx, ANT_SENTINEL_TAG)));
   }
 
   return data;

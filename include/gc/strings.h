@@ -4,6 +4,7 @@
 #include "pool.h"
 #include "value.h"
 #include <stdbool.h>
+#include <string.h>
 
 static constexpr int STR_SHORT_CONS_THRESHOLD = 32;
 
@@ -140,9 +141,16 @@ static inline ant_large_string_alloc_t *large_string_alloc_from_flat(ant_flat_st
 
 static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   const unsigned char *s = (const unsigned char *)str;
-  for (size_t i = 0; i < len; i++) {
-    if (s[i] >= 0x80) return STR_ASCII_NO;
+  while (len >= sizeof(uint64_t)) {
+    uint64_t word;
+    memcpy(&word, s, sizeof(word));
+    if (word & UINT64_C(0x8080808080808080)) return STR_ASCII_NO;
+    s += sizeof(word);
+    len -= sizeof(word);
   }
+  
+  for (size_t i = 0; i < len; i++) 
+    if (s[i] >= 0x80) return STR_ASCII_NO;
   return STR_ASCII_YES;
 }
 
