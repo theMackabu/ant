@@ -67,6 +67,7 @@ static inline void shape_entry_pool_trim(void) {
 typedef struct shape_descriptors {
   uint32_t ref_count;
   uint32_t count;
+  bool tail_dirty;
   uint32_t cap;
   uint32_t index_mask;
   uint32_t index_used;
@@ -126,6 +127,7 @@ static void shape_link_descriptors(ant_shape_t *shape, shape_descriptors_t *desc
 }
 
 static void shape_unlink_descriptors(ant_shape_t *shape) {
+  if (shape->count == shape->descriptors->count) shape->descriptors->tail_dirty = true;
   if (shape->descriptor_prev)
     shape->descriptor_prev->descriptor_next = shape->descriptor_next;
   else shape->descriptors->owners = shape->descriptor_next;
@@ -194,9 +196,41 @@ static inline void shape_index_put(shape_index_entry_t *tab, uint32_t mask, uint
   tab[i].slot = slot;
 }
 
-static bool shape_index_resize(ant_shape_t *shape, uint32_t needed) {
+static uint32_t shape_index_capacity(uint32_t needed) {
   uint32_t cap = SHAPE_IDX_MIN_CAP;
   while (cap <= needed * 2) cap *= 2;
+  return cap;
+}
+
+static void shape_reclaim_descriptor_tail(shape_descriptors_t *descriptors) {
+  if (!descriptors->tail_dirty) return;
+  descriptors->tail_dirty = false;
+  
+  uint32_t count = 0;
+  for (ant_shape_t *owner = descriptors->owners; owner; owner = owner->descriptor_next) {
+    if (owner->count > count) count = owner->count;
+    if (count == descriptors->count) return;
+  }
+  
+  descriptors->count = count;
+  if (!descriptors->index) return;
+  
+  memset(descriptors->index, 0, (size_t)(descriptors->index_mask + 1) * sizeof(*descriptors->index));
+  descriptors->index_used = 0;
+  
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = &descriptors->props[i];
+    if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
+    uint64_t key = prop->type == ANT_SHAPE_KEY_SYMBOL
+      ? shape_key_symbol(prop->key.sym_off) 
+      : shape_key_interned(prop->key.interned);
+    shape_index_put(descriptors->index, descriptors->index_mask, key, i);
+    descriptors->index_used++;
+  }
+}
+
+static bool shape_index_resize(ant_shape_t *shape, uint32_t needed) {
+  uint32_t cap = shape_index_capacity(needed);
 
   shape_index_entry_t *tab = calloc(cap, sizeof(*tab));
   if (!tab) return false;
@@ -231,29 +265,6 @@ static bool shape_index_add(ant_shape_t *shape, uint64_t key, uint32_t slot) {
   return true;
 }
 
-static bool shape_rebuild_index(ant_shape_t *shape, uint32_t reserve) {
-  if (!shape) return false;
-
-  shape_index_free(shape);
-  if (reserve < shape->count) reserve = shape->count;
-  if (reserve == 0) return true;
-  if (!shape_index_resize(shape, reserve)) return false;
-
-  for (uint32_t i = 0; i < shape->count; i++) {
-    const ant_shape_prop_t *prop = &shape->props[i];
-    if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
-
-    uint64_t key = (prop->type == ANT_SHAPE_KEY_SYMBOL)
-      ? shape_key_symbol(prop->key.sym_off)
-      : shape_key_interned(prop->key.interned);
-
-    shape_index_put(shape->descriptors->index, shape->descriptors->index_mask, key, i);
-    shape->descriptors->index_used++;
-  }
-
-  return true;
-}
-
 static bool shape_props_reserve(ant_shape_t *shape, uint32_t cap) {
   shape_descriptors_t *descriptors = shape->descriptors;
   if (cap <= descriptors->cap) return true;
@@ -279,18 +290,70 @@ static bool shape_ensure_capacity(ant_shape_t *shape, uint32_t needed) {
   return shape_props_reserve(shape, new_cap);
 }
 
-static bool shape_prepare_write(ant_shape_t *shape, bool append) {
-  shape_descriptors_t *descriptors = shape->descriptors;
-  if (descriptors->count == shape->count && (append || descriptors->ref_count == 1)) return true;
-  ant_shape_t *copy = shape_clone_reserve(shape, append ? 1 : 0);
+static shape_descriptors_t *shape_descriptors_copy_prefix(const ant_shape_t *shape, uint32_t extra) {
+  shape_descriptors_t *copy = shape_descriptors_new();
+  if (!copy) return NULL;
+
+  uint32_t count = shape->count;
+  uint32_t capacity = count + extra;
+  if (capacity == 0) return copy;
+
+  size_t property_bytes = (size_t)capacity * sizeof(*copy->props);
+  copy->props = malloc(property_bytes);
+  if (!copy->props) goto oom;
+
+  copy->cap = capacity;
+  g_shape_bytes += property_bytes;
+
+  uint32_t index_capacity = shape_index_capacity(capacity);
+  copy->index = calloc(index_capacity, sizeof(*copy->index));
+  if (!copy->index) goto oom;
+
+  copy->index_mask = index_capacity - 1;
+  g_shape_bytes += (size_t)index_capacity * sizeof(*copy->index);
+
+  copy->count = count;
+  if (count != 0) {
+    memcpy(copy->props, shape->props, (size_t)count * sizeof(*copy->props));
+  }
+
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = &copy->props[i];
+    if (prop->type == ANT_SHAPE_KEY_DELETED) continue;
+
+    uint64_t key = prop->type == ANT_SHAPE_KEY_SYMBOL
+      ? shape_key_symbol(prop->key.sym_off)
+      : shape_key_interned(prop->key.interned);
+
+    shape_index_put(copy->index, copy->index_mask, key, i);
+    copy->index_used++;
+  }
+  return copy;
+
+oom:
+  shape_descriptors_release(copy);
+  return NULL;
+}
+
+static bool shape_detach_descriptors(ant_shape_t *shape, uint32_t extra) {
+  shape_descriptors_t *copy = shape_descriptors_copy_prefix(shape, extra);
   if (!copy) return false;
-  
-  copy->descriptors->ref_count++;
   shape_unlink_descriptors(shape);
-  shape_link_descriptors(shape, copy->descriptors);
-  ant_shape_release(copy);
-  
+  shape_link_descriptors(shape, copy);
   return true;
+}
+
+static bool shape_prepare_append(ant_shape_t *shape) {
+  shape_reclaim_descriptor_tail(shape->descriptors);
+  return shape->descriptors->count == shape->count || shape_detach_descriptors(shape, 1);
+}
+
+static bool shape_prepare_metadata_write(ant_shape_t *shape) {
+  shape_reclaim_descriptor_tail(shape->descriptors);
+  return (
+    shape->descriptors->count == shape->count && 
+    shape->descriptors->ref_count == 1
+  ) || shape_detach_descriptors(shape, 0);
 }
 
 static bool shape_add_key(
@@ -310,7 +373,7 @@ static bool shape_add_key(
   if (found) {
     uint32_t slot = found->slot;
     if (shape->props[slot].attrs != attrs) {
-      if (!shape_prepare_write(shape, false)) return false;
+      if (!shape_prepare_metadata_write(shape)) return false;
       shape->props[slot].attrs = attrs;
       ant_ic_epoch_bump();
     }
@@ -318,7 +381,7 @@ static bool shape_add_key(
     return true;
   }
 
-  if (!shape_prepare_write(shape, true)) return false;
+  if (!shape_prepare_append(shape)) return false;
   if (!shape_ensure_capacity(shape, shape->count + 1)) return false;
   uint32_t slot = shape->count++;
   ant_shape_prop_t *prop = &shape->props[slot];
@@ -396,6 +459,7 @@ static inline bool shape_is_in_tree(const ant_shape_t *shape) {
 }
 
 static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
+  shape_reclaim_descriptor_tail(shape->descriptors);
   if (shape->count == 0 || shape->deleted_count || shape->count != shape->descriptors->count)
     return shape_clone_reserve(shape, 1);
   ant_shape_t *copy = calloc(1, sizeof(*copy));
@@ -504,30 +568,15 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   ant_shape_t *copy = calloc(1, sizeof(*copy));
   if (!copy) return NULL;
 
-  copy->descriptors = shape_descriptors_new();
-  if (!copy->descriptors) { free(copy); return NULL; }
-  shape_link_descriptors(copy, copy->descriptors);
+  shape_descriptors_t *descriptors = shape_descriptors_copy_prefix(shape, extra);
+  if (!descriptors) { free(copy); return NULL; }
+  shape_link_descriptors(copy, descriptors);
   g_shape_bytes += sizeof(*copy);
   copy->ref_count = 1;
+  copy->count = shape->count;
   copy->deleted_count = shape->deleted_count;
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
   copy->bulk_layout = shape->bulk_layout;
-
-  if (!shape_props_reserve(copy, shape->count + extra)) {
-    ant_shape_release(copy);
-    return NULL;
-  }
-
-  if (shape->count > 0) {
-    memcpy(copy->props, shape->props, sizeof(*shape->props) * shape->count);
-    copy->count = shape->count;
-    copy->descriptors->count = shape->count;
-  }
-
-  if (!shape_rebuild_index(copy, shape->count + extra)) {
-    ant_shape_release(copy);
-    return NULL;
-  }
 
   return copy;
 }
@@ -678,7 +727,7 @@ bool ant_shape_add_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attr
 
 bool ant_shape_remove_slot(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return false;
-  if (!shape_prepare_write(shape, false)) return false;
+  if (!shape_prepare_metadata_write(shape)) return false;
 
   const ant_shape_prop_t *dp = &shape->props[slot];
   if (dp->type == ANT_SHAPE_KEY_DELETED) return false;
@@ -718,7 +767,7 @@ bool ant_shape_should_compact(const ant_shape_t *shape) {
 
 uint32_t ant_shape_compact(ant_shape_t *shape) {
   if (!shape || shape->deleted_count == 0) return shape ? shape->count : 0;
-  if (!shape_prepare_write(shape, false)) return shape->count;
+  if (!shape_prepare_metadata_write(shape)) return shape->count;
 
   uint32_t dst = 0;
   for (uint32_t src = 0; src < shape->count; src++) {
@@ -755,14 +804,14 @@ const ant_shape_prop_t *ant_shape_prop_at(const ant_shape_t *shape, uint32_t slo
 ant_shape_prop_t *ant_shape_prop_mut_at(ant_shape_t *shape, uint32_t slot) {
   if (!shape || slot >= shape->count) return NULL;
   if (shape->props[slot].type == ANT_SHAPE_KEY_DELETED) return NULL;
-  if (!shape_prepare_write(shape, false)) return NULL;
+  if (!shape_prepare_metadata_write(shape)) return NULL;
   return &shape->props[slot];
 }
 
 bool ant_shape_set_attrs_interned(ant_shape_t *shape, const char *interned, uint8_t attrs) {
   int32_t slot = ant_shape_lookup_interned(shape, interned);
   if (slot < 0) return false;
-  if (!shape_prepare_write(shape, false)) return false;
+  if (!shape_prepare_metadata_write(shape)) return false;
   shape->props[(uint32_t)slot].attrs = attrs;
   ant_ic_epoch_bump();
   return true;
@@ -771,7 +820,7 @@ bool ant_shape_set_attrs_interned(ant_shape_t *shape, const char *interned, uint
 bool ant_shape_set_attrs_symbol(ant_shape_t *shape, ant_offset_t sym_off, uint8_t attrs) {
   int32_t slot = ant_shape_lookup_symbol(shape, sym_off);
   if (slot < 0) return false;
-  if (!shape_prepare_write(shape, false)) return false;
+  if (!shape_prepare_metadata_write(shape)) return false;
   shape->props[(uint32_t)slot].attrs = attrs;
   ant_ic_epoch_bump();
   return true;
