@@ -326,6 +326,24 @@ shape_oom_test = executable(
 )
 test('shape-descriptor-oom', shape_oom_test)
 
+keyed_store_test = executable(
+  'test-keyed-store-policy',
+  files('tests/test_keyed_store_policy.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('keyed-store-policy', keyed_store_test)
+
+json_layout_test = executable(
+  'test-json-layout-cache',
+  files('tests/test_json_layout_cache.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('json-layout-cache', json_layout_test)
+
 if host_machine.system() != 'windows'
   ascii_scan_test = executable(
     'test-string-ascii-scan',

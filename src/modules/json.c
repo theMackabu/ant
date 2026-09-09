@@ -7,6 +7,7 @@
 #include "gc/roots.h"
 #include "utf8.h"
 #include "numbers.h"
+#include "hash.h"
 #include "errors.h"
 #include "internal.h"
 
@@ -55,8 +56,63 @@ static bool json_shape_matches(ant_shape_t *shape, yyjson_val *val) {
   return true;
 }
 
+void json_layout_cache_clear(ant_t *js) {
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return;
+  for (unsigned i = 0; i < cache->count; i++) 
+    ant_shape_release(cache->entries[i].shape);
+  free(cache);
+  js->json_layout_cache = NULL;
+}
+
+static uint64_t json_layout_hash(yyjson_val *val, size_t *key_bytes) {
+  uint64_t hash = yyjson_obj_size(val);
+  *key_bytes = 0;
+  size_t idx, max;
+  yyjson_val *key, *item;
+  yyjson_obj_foreach(val, idx, max, key, item) {
+    size_t len = yyjson_get_len(key);
+    hash = ant_hash_mix(hash ^ hash_key(yyjson_get_str(key), len), len + 1);
+    if (len >= JSON_LAYOUT_CACHE_BYTES - *key_bytes) *key_bytes = JSON_LAYOUT_CACHE_BYTES;
+    else *key_bytes += len + 1;
+  }
+  return hash;
+}
+
+static ant_shape_t *json_layout_cache_find(ant_t *js, yyjson_val *val, uint64_t hash) {
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return NULL;
+  for (unsigned i = 0; i < cache->count; i++) {
+    json_layout_cache_entry_t entry = cache->entries[i];
+    if (entry.hash != hash || !json_shape_matches(entry.shape, val)) continue;
+    memmove(cache->entries + 1, cache->entries, i * sizeof(entry));
+    cache->entries[0] = entry;
+    return entry.shape;
+  }
+  return NULL;
+}
+
+static void json_layout_cache_insert(ant_t *js, ant_shape_t *shape, uint64_t hash, size_t key_bytes) {
+  size_t bytes = ant_shape_storage_bytes(shape);
+  if (key_bytes >= JSON_LAYOUT_CACHE_BYTES || bytes > JSON_LAYOUT_CACHE_BYTES - key_bytes) return;
+  bytes += key_bytes;
+  if (!js->json_layout_cache) js->json_layout_cache = calloc(1, sizeof(json_layout_cache_t));
+  json_layout_cache_t *cache = js->json_layout_cache;
+  if (!cache) return;
+  while (cache->count && (cache->count == JSON_LAYOUT_CACHE_ENTRIES || cache->bytes + bytes > JSON_LAYOUT_CACHE_BYTES)) {
+    json_layout_cache_entry_t *entry = &cache->entries[--cache->count];
+    cache->bytes -= entry->bytes;
+    ant_shape_release(entry->shape);
+  }
+  memmove(cache->entries + 1, cache->entries, cache->count * sizeof(*cache->entries));
+  ant_shape_retain(shape);
+  cache->entries[0] = (json_layout_cache_entry_t){ .shape = shape, .hash = hash, .bytes = bytes };
+  cache->count++;
+  cache->bytes += bytes;
+}
+
 static bool json_prepare_object(
-  ant_object_t *obj, yyjson_val *val, 
+  ant_t *js, ant_object_t *obj, yyjson_val *val,
   ant_shape_t *expected, bool *duplicates
 ) {
   *duplicates = false;
@@ -66,11 +122,18 @@ static bool json_prepare_object(
   }
 
   size_t count = yyjson_obj_size(val);
-  if (count > UINT32_MAX) return false;
+  bool bulk = count >= JSON_BULK_LAYOUT_MIN_PROPS;
+  uint64_t hash = 0;
+  size_t key_bytes = 0;
   
-  bool bulk = count > 32;
   if (bulk) {
-    ant_shape_t *shape = shape_clone_reserve(obj->shape, (uint32_t)count);
+    hash = json_layout_hash(val, &key_bytes);
+    ant_shape_t *cached = json_layout_cache_find(js, val, hash);
+    if (cached) {
+      ant_shape_transition_existing(&obj->shape, cached);
+      return js_obj_ensure_prop_capacity(obj, ant_shape_count(cached));
+    }
+    ant_shape_t *shape = ant_shape_clone_bulk(obj->shape, (uint32_t)count);
     if (!shape) return false;
     ant_shape_release(obj->shape);
     obj->shape = shape;
@@ -92,7 +155,11 @@ static bool json_prepare_object(
     }
     if (slot != idx) *duplicates = true;
   }
-  return js_obj_ensure_prop_capacity(obj, ant_shape_count(obj->shape));
+  
+  if (!js_obj_ensure_prop_capacity(obj, ant_shape_count(obj->shape))) return false;
+  if (bulk && !*duplicates) json_layout_cache_insert(js, obj->shape, hash, key_bytes);
+  
+  return true;
 }
 
 static ant_value_t yyjson_to_jsval(
@@ -159,11 +226,11 @@ static ant_value_t yyjson_to_jsval(
     size_t count = yyjson_obj_size(val);
     if (count > UINT32_MAX) return json_parse_oom(js);
     
-    bool prepared = expected || count > 32;
+    bool prepared = expected || count >= JSON_BULK_LAYOUT_MIN_PROPS;
     bool duplicates = false;
     
     if (prepared) {
-      if (!json_prepare_object(ptr, val, expected, &duplicates)) return json_parse_oom(js);
+      if (!json_prepare_object(js, ptr, val, expected, &duplicates)) return json_parse_oom(js);
     } else if (count > 1 && !js_obj_ensure_prop_capacity(ptr, (uint32_t)count)) return json_parse_oom(js);
 
     size_t idx, max; yyjson_val *key, *item;

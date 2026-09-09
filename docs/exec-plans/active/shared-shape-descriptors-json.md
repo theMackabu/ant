@@ -38,8 +38,8 @@ transition growth.
 V8 shallow checkout `/tmp/v8`, commit
 `79ec23a5e9e0486df87af5d23cd95bc629dbb714`, demonstrates shared descriptor
 prefixes, separate keyed-store limits, and dedicated JSON object construction.
-Ant's earlier 32-child cutoff is an unvalidated experiment and will be replaced
-by the structural work, not treated as an established policy.
+V8 searches for an existing transition before applying its keyed-store growth
+policy. Ant follows that ordering; its property-count limits are its own policy.
 
 ## Implementation
 
@@ -49,19 +49,24 @@ visible prefix. Existing metadata writes detach shared storage. The lookup
 rejects index entries outside the shape's prefix. Cached descriptor/index
 pointers keep ordinary reads direct; an intrusive owner list refreshes them
 only when storage grows. Borrowed descriptor pointers must be reacquired across
-property additions, as documented in `include/shapes.h`.
+property additions and metadata mutations, as documented in `include/shapes.h`.
 
-The transition depth limit is now 1024 rather than 32. Beyond it, private shapes
-still bound tree depth. The former experimental 32-child fan-out cutoff was
-removed. No distinct named/keyed-store API is added in this change: the measured
-keyed workloads already benefit from sharing. A streaming workload with new
-keys on every iteration remains a useful separate policy test; the unique-key
-benchmark here repeats a finite collection of 1000 distinct layouts.
+New named-store transitions have a 1024-property depth limit; computed-key
+stores fork privately after 32 properties. Existing transitions are reused
+before either limit is applied, preserving stable named layouts when accessed
+through keyed stores. Numeric, string, and symbol stores use the keyed policy
+in both VM and JIT paths, as does Object.fromEntries. The first child is stored
+inline; only additional children require a hash table. These policies bound
+new dictionary chains without penalizing linear stable layouts with a hash
+allocation at each node.
 
 JSON conversion checks the previous record's layout within an array, reserves
 value slots once, and fills matching layouts directly. On a miss, wide objects
-build a private final layout without intermediate transitions. Tiny standalone
-objects retain single-pass construction. Duplicates use lookup while filling,
+with at least 128 keys build a private final layout without intermediate
+transitions. The cutoff is defined once; sibling layout feedback is checked
+first. Repeated standalone bulk objects can reuse completed layouts through
+the bounded per-runtime cache described below.
+Tiny standalone objects retain single-pass construction. Duplicates use lookup while filling,
 preserving first-key insertion order and the last value. Temporary object roots,
 strong layout references, initialized slots, and write barriers protect recursive
 conversion and GC.
@@ -71,7 +76,10 @@ register saves in `ant_shape_release` on reference-count-only calls. Keeping
 destruction in a separate non-inlined function recovered it. Profiles and
 rejected intermediate binaries are retained with the measurement artifacts.
 
-## Validation and measurements
+## Original descriptor-sharing validation and measurements
+
+These artifacts predate the keyed-store and inline-child follow-up; they are
+not measurements of the current working tree.
 
 Artifacts are retained in `/tmp/ant-shared-descriptors`. The pinned baseline
 SHA-256 is `93b5e5ae935a9696117bfce9d09dbb3b4355a52a88a43881e7433b73f86a0e05`.
@@ -128,9 +136,100 @@ Validation on the final binary:
   test invocations were handled as native compilations, not JavaScript inputs.
 - `git diff --check` passed. Prior inline numeric-key edits were preserved.
 
+## Keyed-policy follow-up validation
+
+Added native checks for numeric/symbol store routing, reuse of named transitions
+past the keyed cutoff, and failed deletion with both live and collected descriptor
+tails. Updated the validation router to run registered C tests through Meson.
+Validation on 2026-09-08:
+
+- Configured Meson build succeeded; existing PGO reports control-flow mismatches.
+- Four Meson native tests passed with assertions enabled, including keyed-store
+  policy, transition identity, descriptor OOM, and ASCII scanning.
+- All 76 JIT files and 33 focused property, JSON, string, and RegExp files passed.
+- Spec suite: 4221 tests passed across 102 files, zero failures.
+- Router assertions passed under Node and Ant for registered native, unregistered
+  native, and JavaScript test files.
+- `maid preflight` and `git diff --check` passed.
+
+Logs are in `/tmp/ant-keyed-policy-fixes` and `/tmp/ant-keyed-{build,native,preflight}.log`.
+No benchmarks or PGO regeneration were performed; no new performance claim is made.
+
 ## Known independent issue
 
 The pinned baseline and candidate both turn `JSON.parse('-0')` into positive
 zero; `JSON.parse('-0.0')` preserves negative zero. This comes from the existing
 integer conversion path and is outside descriptor/layout construction. The
 new duplicate-key test uses the real-number form to check sign preservation.
+
+
+## Completed JSON layout cache
+
+The 128-key cutoff chooses bulk construction, without requiring distinct shapes
+for repeated standalone parses. Bulk layouts are eligible for a per-runtime LRU
+cache with at most 16 entries and 256 KiB of accounted shape, descriptor, index,
+and key-byte storage. The fixed cache bookkeeping and allocator overhead are
+additional; the entry and byte limits bound retention independently of input
+layout diversity. Oversized and duplicate-key inputs are not admitted.
+
+Lookups hash the ordered keys and verify all keys and descriptor attributes on
+a fingerprint match. Existing array-sibling feedback is still checked first.
+Cache entries retain shapes, not object values, and are released on eviction or
+runtime destruction. These detached layouts have no transition-tree parents or
+children, so tree GC cannot reclaim cache-held shapes. Their interned string
+keys have the same lifetime as other shape keys. Cache allocation failure simply
+skips admission.
+
+A bulk-layout flag survives cloning. Shared bulk layouts detach on additions
+without recording child transitions; unshared bulk layouts grow in place.
+Metadata writes continue using existing object-level copy-on-write. This keeps
+cached shapes immutable while allowing parsed records to mutate independently.
+A rooted parent object owns its shape even if recursive parsing evicts its cache
+entry before values have finished initialization.
+
+Validation on 2026-09-08: configured build, five native Meson tests with
+assertions enabled, all 76 JIT files, 35 focused files, and all 4221 specs across
+102 files passed. Native checks cover shape identity, forced hash collisions,
+private appends, both cache budgets, eviction, oversized admission rejection,
+GC, and cache cleanup. JavaScript checks cover metadata mutation, key ordering,
+duplicates, special keys, revivers, and eviction during recursive value filling.
+`maid preflight` and `git diff --check` passed.
+
+Artifacts and scripts: `/tmp/ant-json-layout-cache`. The baseline is the exact
+pre-cache binary from the preceding keyed-policy fix, with its working-tree diff
+saved alongside it. The source PGO is unchanged; Clang reports mismatched profile
+counts for changed control flow. These are binary comparisons with existing PGO.
+
+- Baseline SHA-256: `13a56028511cdd0b228e188d2dcab0da1bb0a15911fa6d7405701d0f2b7a3719`.
+- Candidate SHA-256: `7a4cd53b71518cfcf29bd1f8ab0880658863f55c6ae26e6efa64d387c462eefb`.
+- PGO SHA-256: `8faf005fd978c0b0c4343545c8938e58401ad61c165727a72ca0e9c4db6ab9fc`.
+
+Each case ran serially ABBA twice, four samples per binary, on this M4 Pro.
+The main fixture retains 2000 separately parsed records, then performs two
+million calls reading two named fields. RSS is sampled after parsing; it includes
+runtime, input, and object memory and is not an isolated cache-size measurement.
+Medians below are elapsed milliseconds and MiB; smaller is better.
+
+| Record layout | Parse baseline → candidate | Read baseline → candidate | RSS baseline → candidate |
+| --- | ---: | ---: | ---: |
+| 128 keys, repeated | 6.98 → 4.02 | 131.82 → 64.07 | 36.2 → 9.0 |
+| 256 keys, repeated | 14.04 → 7.55 | 168.68 → 65.33 | 66.2 → 11.1 |
+| 500 keys, repeated | 25.85 → 14.21 | 185.43 → 65.72 | 92.4 → 15.3 |
+| 256 keys, alternating | 15.14 → 7.67 | 168.81 → 89.42 | 66.5 → 11.5 |
+| 500 keys, unique | 111.67 → 113.67 | 191.11 → 188.50 | 257.3 → 256.9 |
+
+Longer controls used 200000 four-key records, 20000 repeated 127-key records,
+and 4000 unique 500-key records, each with the same ABBA-twice ordering. The
+first two read 20 million times; the unique case read four million times.
+
+| Control | Parse time change | Read time change | RSS change |
+| --- | ---: | ---: | ---: |
+| 4 keys, repeated | -1.30% | -0.77% | +0.21% |
+| 127 keys, repeated | +1.30% | +2.28% | +0.32% |
+| 500 keys, unique | +2.78% | -0.31% | -0.20% |
+
+The repeated bulk-layout gains are clear. Unique-layout parsing pays about 2.8%
+for cache probing in the longer control; its memory is effectively unchanged.
+The 127-key control was 1.3% slower parsing and 2.3% slower reading; that path does
+not enter the cache. These controls do not establish zero regression everywhere.
+No overall bench-v8 speedup or fresh-PGO result is claimed.

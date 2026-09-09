@@ -1075,7 +1075,7 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
   ant_value_t prop_key = sv_key_to_property_key(js, key);
   if (is_err(prop_key)) return prop_key;
-  return js_setprop(js, obj, prop_key, val);
+  return js_setprop_keyed(js, obj, prop_key, val);
 }
 
 static inline bool sv_try_define_field_fast(

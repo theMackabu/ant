@@ -49,3 +49,17 @@ for (let i = 0; i < 1000; i++) {
   assert.strictEqual((long + ',' + long).split(',')[1].length, long.length);
 }
 console.log('PASS ASCII substring metadata, mixed Unicode, captures, trim and split');
+
+// substring, substr and slice inherit the parent's ASCII state without a rescan.
+for (const parent of ['plain ascii text', 'éalpha😀betaz']) {
+  const chars = Array.from(parent);
+  check(parent.substring(1, 6), Array.from(parent).slice(1, 6).join(''));
+  check(parent.substr(2, 4), chars.slice(2, 6).join('').slice(0, parent.substr(2, 4).length));
+  check(parent.slice(-5), parent.slice(parent.length - 5));
+  check(parent.substr(), parent);
+  check(parent.substring(0), parent);
+  assert.strictEqual(parent.substring(3, 3), '');
+}
+check('é😀'.substring(1, 2), '\ud83d');
+check('é😀'.slice(-1), '\ude00');
+console.log('PASS substring, substr and slice inherit ASCII metadata');

@@ -1335,7 +1335,7 @@ ant_value_t jit_helper_put_elem(
   sv_vm_t *vm, ant_t *js,
   ant_value_t obj, ant_value_t key, ant_value_t val
 ) {
-  if (vtype(key) == kTypeSymbol) return js_setprop(js, obj, key, val);
+  if (vtype(key) == kTypeSymbol) return js_setprop_keyed(js, obj, key, val);
   if (vtype(key) == kTypeNumber) {
     double index = tod(key);
     if (index >= 0.0 && index < (double)UINT32_MAX &&
@@ -1343,7 +1343,7 @@ ant_value_t jit_helper_put_elem(
     return js_setprop_index(js, obj, (uint32_t)index, val);
   }
   ant_value_t key_jv = sv_key_to_propstr(js, key);
-  return js_setprop(js, obj, key_jv, val);
+  return js_setprop_keyed(js, obj, key_jv, val);
 }
 
 ant_value_t jit_helper_put_global(

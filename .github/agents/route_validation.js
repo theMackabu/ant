@@ -5,6 +5,14 @@ import path from 'node:path';
 import { repoRoot } from './util_repo_root.js';
 import childProcess from 'node:child_process';
 
+const nativeTests = new Map([
+  ['tests/test_shape_transition_identity.c', 'shape-transition-identity'],
+  ['tests/test_shape_descriptor_oom.c', 'shape-descriptor-oom'],
+  ['tests/test_string_ascii_scan.c', 'string-ascii-scan'],
+  ['tests/test_keyed_store_policy.c', 'keyed-store-policy'],
+  ['tests/test_json_layout_cache.c', 'json-layout-cache']
+]);
+
 function parseArgs(argv) {
   const result = {
     files: [],
@@ -177,7 +185,14 @@ function main() {
 
     if (filePath.startsWith('tests/')) {
       addRecommendation(recommendations, 'meson compile -C build', 'tests should run against a fresh binary');
-      addRecommendation(recommendations, `./build/ant ${filePath}`, 'a focused regression test changed');
+      const nativeTest = nativeTests.get(filePath);
+      if (nativeTest) {
+        addRecommendation(recommendations, `meson test -C build ${nativeTest} --print-errorlogs`, 'a native regression test changed');
+      } else if (/\.(c|cc|cpp)$/.test(filePath)) {
+        notes.push(`Run ${filePath} through its native build target or documented compiler command; it is not a JavaScript test.`);
+      } else if (/\.(js|cjs|mjs)$/.test(filePath)) {
+        addRecommendation(recommendations, `./build/ant ${filePath}`, 'a focused regression test changed');
+      }
     }
   }
 

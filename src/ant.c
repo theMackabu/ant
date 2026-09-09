@@ -42,6 +42,7 @@
 #include "silver/ops/async.h"
 #include "silver/ops/eval_env.h"
 #include "modules/regex.h"
+#include "modules/json.h"
 
 #ifndef ANT_WASM_EMBED
 #include <uv.h>
@@ -2921,6 +2922,7 @@ static void js_init_intern_cache(ant_t *js) {
 typedef enum {
   MKPROP_USE_DEFAULT_ATTRS = 1 << 0,
   MKPROP_EXPOSE_CFUNC = 1 << 1,
+  MKPROP_KEYED_STORE = 1 << 2,
 } mkprop_mode_t;
 
 static ant_value_t mkprop_interned_attrs_impl(
@@ -2947,7 +2949,10 @@ static ant_value_t mkprop_interned_attrs_impl(
     if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
     ant_shape_set_attrs_interned(ptr->shape, interned_key, attrs);
   } else {
-    if (!ant_shape_add_interned_tr(&ptr->shape, interned_key, attrs, &slot)) return js_mkerr(js, "oom");
+    bool transitioned = (mode & MKPROP_KEYED_STORE)
+      ? ant_shape_add_interned_keyed_tr(&ptr->shape, interned_key, attrs, &slot)
+      : ant_shape_add_interned_tr(&ptr->shape, interned_key, attrs, &slot);
+    if (!transitioned) return js_mkerr(js, "oom");
     ant_object_invalidate_guarded_absence(ptr);
     added = true;
   }
@@ -2991,13 +2996,13 @@ static inline ant_value_t mkprop_bytes(
 
 static ant_value_t mkprop_symbol_attrs_impl(
   ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v,
-  uint8_t attrs, bool default_attrs
+  uint8_t attrs, mkprop_mode_t mode
 ) {
   obj = js_as_obj(obj);
   ant_object_t *ptr = js_obj_ptr(obj);
 
   if (!ptr || !ptr->shape) return js_mkerr(js, "invalid object");
-  if (default_attrs && !attrs) attrs = ANT_PROP_ATTR_DEFAULT;
+  if ((mode & MKPROP_USE_DEFAULT_ATTRS) && !attrs) attrs = ANT_PROP_ATTR_DEFAULT;
 
   uint32_t slot = 0;
   bool added = false;
@@ -3008,8 +3013,10 @@ static ant_value_t mkprop_symbol_attrs_impl(
     if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
     ant_shape_set_attrs_symbol(ptr->shape, sym_off, attrs);
   } else {
-    if (!ant_shape_add_symbol_tr(&ptr->shape, sym_off, attrs, &slot))
-      return js_mkerr(js, "oom");
+    bool transitioned = (mode & MKPROP_KEYED_STORE)
+      ? ant_shape_add_symbol_keyed_tr(&ptr->shape, sym_off, attrs, &slot)
+      : ant_shape_add_symbol_tr(&ptr->shape, sym_off, attrs, &slot);
+    if (!transitioned) return js_mkerr(js, "oom");
     ant_object_invalidate_guarded_absence(ptr);
     added = true;
   }
@@ -3028,8 +3035,10 @@ static inline ant_value_t mkprop_impl(
   ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v,
   uint8_t attrs, bool default_attrs
 ) {
-  if (vtype(k) == kTypeSymbol)
-    return mkprop_symbol_attrs_impl(js, obj, k, v, attrs, default_attrs);
+  if (vtype(k) == kTypeSymbol) return mkprop_symbol_attrs_impl(
+    js, obj, k, v, attrs, 
+    default_attrs ? MKPROP_USE_DEFAULT_ATTRS : 0
+  );
 
   ant_offset_t key_len = 0;
   ant_offset_t key_off = vstr(js, k, &key_len);
@@ -3059,15 +3068,17 @@ ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key
   );
 }
 
-/* "exact" here means the value is stored as given: unlike mkprop_interned this
- skips MKPROP_EXPOSE_CFUNC, so a cfunc keeps whatever .name it already had.
- attribute handling is identical to mkprop_interned, zero attrs still become
- ANT_PROP_ATTR_DEFAULT. it is not the interned counterpart of
- mkprop_exact_attrs, which is the one that suppresses the defaults. */
 ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs) {
   return mkprop_interned_attrs_impl(
     js, obj, interned_key, 0, v,
     attrs, MKPROP_USE_DEFAULT_ATTRS
+  );
+}
+
+static ant_value_t mkprop_interned_keyed(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v) {
+  return mkprop_interned_attrs_impl(
+    js, obj, interned_key, 0, v,
+    0, MKPROP_USE_DEFAULT_ATTRS | MKPROP_KEYED_STORE
   );
 }
 
@@ -3726,12 +3737,12 @@ static ant_value_t call_proto_accessor(
 }
 
 // TODO: decompose into smaller helpers
-ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
+static ant_value_t setprop_impl(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, bool keyed) {
   uint8_t ot = vtype(obj);
 
   if (ot == kTypeBuiltin) {
     ant_value_t promoted = js_cfunc_promote(js, obj);
-    return js_setprop(js, promoted, k, v);
+    return setprop_impl(js, promoted, k, v, keyed);
   }
 
   if (ot == kTypeString || ot == kTypeNumber || ot == kTypeBool) {
@@ -3808,7 +3819,10 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
       if (extensibility_error == js_false) return v;
     }
     
-    return mkprop(js, obj, k, v, 0);
+    return mkprop_symbol_attrs_impl(
+      js, obj, k, v, 0, 
+      MKPROP_USE_DEFAULT_ATTRS | (keyed ? MKPROP_KEYED_STORE : 0)
+    );
   }
 
   ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
@@ -3963,11 +3977,21 @@ create_new:
 
   const char *interned_key = intern_string(key, (size_t)klen);
   if (!interned_key) return js_mkerr(js, "oom");
-  ant_value_t result = mkprop_interned_exact(js, obj, interned_key, v, 0);
+  ant_value_t result = keyed
+    ? mkprop_interned_keyed(js, obj, interned_key, v)
+    : mkprop_interned_exact(js, obj, interned_key, v, 0);
   if (is_err(result)) return result;
   array_define_or_set_index(js, obj, key, (size_t)klen);
   
   return v;
+}
+
+ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
+  return setprop_impl(js, obj, k, v, false);
+}
+
+ant_value_t js_setprop_keyed(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
+  return setprop_impl(js, obj, k, v, true);
 }
 
 ant_value_t js_setprop_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value) {
@@ -4007,7 +4031,7 @@ ant_value_t js_setprop_index(ant_t *js, ant_value_t obj, uint32_t idx, ant_value
   ant_value_t property = js_mkstr(js, key, key_len);
   if (is_err(property)) return property;
   
-  return js_setprop(js, obj, property, value);
+  return js_setprop_keyed(js, obj, property, value);
 }
 
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
@@ -5434,7 +5458,8 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
 
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
-  if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
+  if (!ant_shape_prop_at(ptr->shape, slot)) return js_true;
+  if (!ant_shape_remove_slot(ptr->shape, slot)) return js_mkerr(js, "oom");
   ant_property_mutation_invalidate(js, ptr, interned);
   obj_delete_prop_slot(ptr, slot);
   
@@ -5470,7 +5495,8 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
 
   uint32_t slot = (uint32_t)shape_slot;
   if (!js_obj_ensure_unique_shape(ptr)) return js_mkerr(js, "oom");
-  if (!ant_shape_remove_slot(ptr->shape, slot)) return js_true;
+  if (!ant_shape_prop_at(ptr->shape, slot)) return js_true;
+  if (!ant_shape_remove_slot(ptr->shape, slot)) return js_mkerr(js, "oom");
   ant_symbol_property_mutation_invalidate(js, ptr, sym_off);
   obj_delete_prop_slot(ptr, slot);
   
@@ -9609,11 +9635,13 @@ static iter_action_t object_from_entries_iter_cb(ant_t *js, ant_value_t entry, v
     GC_ROOT_PIN(js, key_view.js_key);
 
   ant_value_t added;
-  if (key_view.is_symbol) added = mkprop(js, *result, key_view.js_key, val, 0);
+  if (key_view.is_symbol) added = mkprop_symbol_attrs_impl(
+    js, *result, key_view.js_key, val, 0, MKPROP_USE_DEFAULT_ATTRS | MKPROP_KEYED_STORE
+  );
   else {
     const char *interned = intern_string(key_view.bytes, key_view.length);
     added = interned
-      ? mkprop_interned_exact(js, *result, interned, val, 0)
+      ? mkprop_interned_keyed(js, *result, interned, val)
       : js_mkerr(js, "oom");
   }
     
@@ -13067,7 +13095,7 @@ static ant_value_t js_mkstr_utf16_range(
   );
 
   if (!splits.prefix_surrogate && !splits.suffix_surrogate)
-    return js_mkstr(js, str + byte_start, byte_end - byte_start);
+    return js_mkstr_byte_range(js, str, byte_start, byte_end - byte_start);
 
   string_builder_t sb;
   char static_buf[64]; char encoded[4];
@@ -13301,7 +13329,7 @@ static ant_value_t builtin_string_substr(ant_params_t) {
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   size_t utf16_len = (size_t)str_utf16_len(js, str);
   
-  if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
+  if (nargs < 1) return str;
   
   double d_start = js_to_number(js, args[0]);
   if (isnan(d_start)) d_start = 0;
@@ -19170,6 +19198,8 @@ ant_t *ant_create() {
 
 void js_destroy(ant_t *js) {
   if (js == NULL) return;
+  
+  json_layout_cache_clear(js);
   cleanup_cron_module(js);
   reap_retired_coroutines(js);
   gc_weak_cleanup(js);

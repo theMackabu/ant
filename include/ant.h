@@ -173,6 +173,7 @@ void js_set_proto_init(ant_value_t obj, ant_value_t proto);
 
 ant_value_t js_prop_load(ant_prop_loc_t loc);
 ant_value_t js_setprop(ant_t *, ant_value_t obj, ant_value_t key, ant_value_t val);
+ant_value_t js_setprop_keyed(ant_t *, ant_value_t obj, ant_value_t key, ant_value_t val);
 ant_value_t js_setprop_nonconfigurable(ant_t *, ant_value_t obj, const char *key, size_t keylen, ant_value_t val);
 
 ant_value_t js_get_proto(ant_t *, ant_value_t obj);

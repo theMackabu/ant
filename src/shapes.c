@@ -29,6 +29,7 @@ static constexpr uint64_t SHAPE_IDX_TOMB = UINT64_MAX;
 static constexpr uint32_t SHAPE_IDX_MIN_CAP = 8;
 static constexpr uint32_t SHAPE_COMPACT_MIN_TOMBSTONES = 32;
 static constexpr uint32_t SHAPE_TRANSITION_MAX_PROPS = 1024;
+static constexpr uint32_t SHAPE_KEYED_TRANSITION_MAX_PROPS = 32;
 
 static constexpr size_t SHAPE_ENTRY_POOL_MAX = 1024;
 static constexpr size_t SHAPE_ENTRY_SIZE = sizeof(shape_child_entry_t);
@@ -79,11 +80,14 @@ struct ant_shape {
   uint32_t count;
   uint32_t deleted_count;
   uint8_t inobj_limit;
+  bool bulk_layout;
   uint16_t gc_mark;
   shape_descriptors_t *descriptors;
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
   uint32_t index_mask;
+  uint64_t first_child_key;
+  ant_shape_t *first_child;
   shape_child_entry_t *children;
   ant_shape_t *parent;
   uint64_t parent_key;
@@ -192,7 +196,7 @@ static inline void shape_index_put(shape_index_entry_t *tab, uint32_t mask, uint
 
 static bool shape_index_resize(ant_shape_t *shape, uint32_t needed) {
   uint32_t cap = SHAPE_IDX_MIN_CAP;
-  while (cap < needed * 2) cap *= 2;
+  while (cap <= needed * 2) cap *= 2;
 
   shape_index_entry_t *tab = calloc(cap, sizeof(*tab));
   if (!tab) return false;
@@ -227,12 +231,13 @@ static bool shape_index_add(ant_shape_t *shape, uint64_t key, uint32_t slot) {
   return true;
 }
 
-static bool shape_rebuild_index(ant_shape_t *shape) {
+static bool shape_rebuild_index(ant_shape_t *shape, uint32_t reserve) {
   if (!shape) return false;
 
   shape_index_free(shape);
-  if (shape->count == 0) return true;
-  if (!shape_index_resize(shape, shape->count)) return false;
+  if (reserve < shape->count) reserve = shape->count;
+  if (reserve == 0) return true;
+  if (!shape_index_resize(shape, reserve)) return false;
 
   for (uint32_t i = 0; i < shape->count; i++) {
     const ant_shape_prop_t *prop = &shape->props[i];
@@ -249,37 +254,29 @@ static bool shape_rebuild_index(ant_shape_t *shape) {
   return true;
 }
 
-static bool shape_reserve_exact(ant_shape_t *shape, uint32_t needed) {
-  if (!shape) return false;
-  if (needed <= shape->descriptors->cap) return true;
+static bool shape_props_reserve(ant_shape_t *shape, uint32_t cap) {
+  shape_descriptors_t *descriptors = shape->descriptors;
+  if (cap <= descriptors->cap) return true;
 
-  ant_shape_prop_t *next = realloc(shape->descriptors->props, sizeof(*next) * needed);
+  ant_shape_prop_t *next = realloc(descriptors->props, sizeof(*next) * cap);
   if (!next) return false;
 
-  g_shape_bytes += (needed - shape->descriptors->cap) * sizeof(*next);
-  shape->descriptors->props = next;
-  shape_refresh_descriptor_pointers(shape->descriptors);
-  shape->descriptors->cap = needed;
+  g_shape_bytes += (cap - descriptors->cap) * sizeof(*next);
+  descriptors->props = next;
+  descriptors->cap = cap;
+  shape_refresh_descriptor_pointers(descriptors);
   
   return true;
 }
 
 static bool shape_ensure_capacity(ant_shape_t *shape, uint32_t needed) {
   if (!shape) return false;
-  if (needed <= shape->descriptors->cap) return true;
+  uint32_t cap = shape->descriptors->cap;
+  if (needed <= cap) return true;
 
-  uint32_t new_cap = shape->descriptors->cap ? shape->descriptors->cap * 2 : 8;
+  uint32_t new_cap = cap ? cap * 2 : 8;
   while (new_cap < needed) new_cap *= 2;
-
-  ant_shape_prop_t *next = realloc(shape->descriptors->props, sizeof(*next) * new_cap);
-  if (!next) return false;
-
-  g_shape_bytes += (new_cap - shape->descriptors->cap) * sizeof(*next);
-  shape->descriptors->props = next;
-  shape_refresh_descriptor_pointers(shape->descriptors);
-  shape->descriptors->cap = new_cap;
-  
-  return true;
+  return shape_props_reserve(shape, new_cap);
 }
 
 static bool shape_prepare_write(ant_shape_t *shape, bool append) {
@@ -346,27 +343,51 @@ static bool shape_add_key(
   return true;
 }
 
+static inline bool shape_has_children(const ant_shape_t *shape) {
+  return shape->first_child || shape->children;
+}
+
 static ant_shape_t *shape_find_child(ant_shape_t *shape, uint64_t ckey) {
-  if (!shape || !shape->children) return NULL;
+  if (!shape) return NULL;
+  if (shape->first_child && shape->first_child_key == ckey) return shape->first_child;
+  if (!shape->children) return NULL;
   shape_child_entry_t *entry = NULL;
   HASH_FIND(hh, shape->children, &ckey, sizeof(ckey), entry);
   return entry ? entry->child : NULL;
 }
 
 static void shape_record_child(ant_shape_t *parent, uint64_t ckey, ant_shape_t *child) {
-  shape_child_entry_t *existing = NULL;
-  HASH_FIND(hh, parent->children, &ckey, sizeof(ckey), existing);
-  if (existing) return;
+  if (shape_find_child(parent, ckey)) return;
 
-  shape_child_entry_t *entry = shape_entry_alloc();
-  if (!entry) return;
+  if (!parent->first_child) {
+    parent->first_child_key = ckey;
+    parent->first_child = child;
+  } else {
+    shape_child_entry_t *entry = shape_entry_alloc();
+    if (!entry) return;
+    entry->key = ckey;
+    entry->child = child;
+    HASH_ADD(hh, parent->children, key, sizeof(entry->key), entry);
+  }
 
-  entry->key = ckey;
-  entry->child = child;
   ant_shape_retain(child);
-  HASH_ADD(hh, parent->children, key, sizeof(entry->key), entry);
   child->parent = parent;
   child->parent_key = ckey;
+}
+
+static void shape_detach_child(ant_shape_t *parent, ant_shape_t *child) {
+  child->parent = NULL;
+  if (parent->first_child == child) {
+    parent->first_child = NULL;
+    parent->first_child_key = 0;
+    return;
+  }
+  if (!parent->children) return;
+  shape_child_entry_t *entry = NULL;
+  HASH_FIND(hh, parent->children, &child->parent_key, sizeof(child->parent_key), entry);
+  if (!entry) return;
+  HASH_DEL(parent->children, entry);
+  shape_entry_free(entry);
 }
 
 
@@ -390,7 +411,7 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
 
 static bool shape_add_tr(
   ant_shape_t **shape_pp, ant_shape_key_type_t type, const char *interned,
-  ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot
+  ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot, uint32_t max_tree_props
 ) {
   ant_shape_t *shape = *shape_pp;
   
@@ -398,18 +419,6 @@ static bool shape_add_tr(
   if (!shape_is_in_tree(shape))
     return shape_add_key(shape, type, interned, sym_off, attrs, out_slot);
   
-  if (shape->count >= SHAPE_TRANSITION_MAX_PROPS) {
-    ant_shape_t *copy = shape_clone_reserve(shape, 1);
-    if (!copy) return false;
-    if (!shape_add_key(copy, type, interned, sym_off, attrs, out_slot)) {
-      ant_shape_release(copy);
-      return false;
-    }
-    ant_shape_release(shape);
-    *shape_pp = copy;
-    return true;
-  }
-
   uint64_t prop_key = type == ANT_SHAPE_KEY_SYMBOL
     ? shape_key_symbol(sym_off) : shape_key_interned(interned);
   uint64_t ckey = shape_child_key(prop_key, attrs);
@@ -422,6 +431,18 @@ static bool shape_add_tr(
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
+  }
+
+  if (shape->bulk_layout || shape->count >= max_tree_props) {
+    ant_shape_t *copy = shape_clone_reserve(shape, 1);
+    if (!copy) return false;
+    if (!shape_add_key(copy, type, interned, sym_off, attrs, out_slot)) {
+      ant_shape_release(copy);
+      return false;
+    }
+    ant_shape_release(shape);
+    *shape_pp = copy;
+    return true;
   }
 
   ant_shape_t *shared = shape_copy_for_transition(shape);
@@ -439,11 +460,19 @@ static bool shape_add_tr(
 }
 
 bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot) {
-  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot, SHAPE_TRANSITION_MAX_PROPS);
+}
+
+bool ant_shape_add_interned_keyed_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot) {
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot, SHAPE_KEYED_TRANSITION_MAX_PROPS);
 }
 
 bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot) {
-  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot, SHAPE_TRANSITION_MAX_PROPS);
+}
+
+bool ant_shape_add_symbol_keyed_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot) {
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot, SHAPE_KEYED_TRANSITION_MAX_PROPS);
 }
 
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit) {
@@ -482,27 +511,42 @@ ant_shape_t *shape_clone_reserve(const ant_shape_t *shape, uint32_t extra) {
   copy->ref_count = 1;
   copy->deleted_count = shape->deleted_count;
   copy->inobj_limit = shape_clamp_inobj_limit(shape->inobj_limit);
+  copy->bulk_layout = shape->bulk_layout;
 
-  if (!shape_reserve_exact(copy, shape->count + extra)) {
+  if (!shape_props_reserve(copy, shape->count + extra)) {
     ant_shape_release(copy);
     return NULL;
   }
 
   if (shape->count > 0) {
-  memcpy(copy->props, shape->props, sizeof(*shape->props) * shape->count);
-  copy->count = shape->count;
-  copy->descriptors->count = shape->count;
-  
-  if (!shape_rebuild_index(copy)) {
+    memcpy(copy->props, shape->props, sizeof(*shape->props) * shape->count);
+    copy->count = shape->count;
+    copy->descriptors->count = shape->count;
+  }
+
+  if (!shape_rebuild_index(copy, shape->count + extra)) {
     ant_shape_release(copy);
     return NULL;
-  }}
+  }
 
   return copy;
 }
 
 ant_shape_t *ant_shape_clone(const ant_shape_t *shape) {
   return shape_clone_reserve(shape, 0);
+}
+
+ant_shape_t *ant_shape_clone_bulk(const ant_shape_t *shape, uint32_t extra) {
+  ant_shape_t *copy = shape_clone_reserve(shape, extra);
+  if (copy) copy->bulk_layout = true;
+  return copy;
+}
+
+size_t ant_shape_storage_bytes(const ant_shape_t *shape) {
+  const shape_descriptors_t *descriptors = shape->descriptors;
+  return sizeof(*shape) + sizeof(*descriptors) +
+    (size_t)descriptors->cap * sizeof(*descriptors->props) +
+    (descriptors->index ? (size_t)(descriptors->index_mask + 1) * sizeof(*descriptors->index) : 0);
 }
 
 bool ant_shape_is_shared(const ant_shape_t *shape) {
@@ -515,14 +559,13 @@ void ant_shape_retain(ant_shape_t *shape) {
 }
 
 static __attribute__((noinline)) void shape_destroy(ant_shape_t *shape) {
-  if (shape->parent) {
-    shape_child_entry_t *entry = NULL;
-    HASH_FIND(hh, shape->parent->children, &shape->parent_key, sizeof(shape->parent_key), entry);
-    if (entry) {
-      HASH_DEL(shape->parent->children, entry);
-      shape_entry_free(entry);
-    }
-    shape->parent = NULL;
+  if (shape->parent) shape_detach_child(shape->parent, shape);
+
+  if (shape->first_child) {
+    ant_shape_t *child = shape->first_child;
+    shape->first_child = NULL;
+    child->parent = NULL;
+    ant_shape_release(child);
   }
 
   shape_child_entry_t *ce, *ctmp;
@@ -569,14 +612,28 @@ for (; shape; shape = shape->parent) {
   shape->gc_mark = gc_shape_epoch;
 }}
 
+static inline bool shape_child_is_dead(const ant_shape_t *child) {
+  return child->gc_mark != gc_shape_epoch && !shape_has_children(child);
+}
+
 static bool shape_prune_dead_children(ant_shape_t *shape) {
   bool freed_any = false;
-  shape_child_entry_t *ce, *ctmp;
 
+  if (shape->first_child) {
+    ant_shape_t *child = shape->first_child;
+    if (shape_prune_dead_children(child)) freed_any = true;
+    if (shape_child_is_dead(child)) {
+      shape_detach_child(shape, child);
+      ant_shape_release(child);
+      freed_any = true;
+    }
+  }
+
+  shape_child_entry_t *ce, *ctmp;
   HASH_ITER(hh, shape->children, ce, ctmp) {
-  if (shape_prune_dead_children(ce->child)) freed_any = true;
-  if (ce->child->gc_mark != gc_shape_epoch && !ce->child->children) {
-    ant_shape_t *child = ce->child;
+  ant_shape_t *child = ce->child;
+  if (shape_prune_dead_children(child)) freed_any = true;
+  if (shape_child_is_dead(child)) {
     child->parent = NULL;
     HASH_DEL(shape->children, ce);
     shape_entry_free(ce);
