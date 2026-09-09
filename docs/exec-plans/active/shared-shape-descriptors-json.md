@@ -233,3 +233,48 @@ for cache probing in the longer control; its memory is effectively unchanged.
 The 127-key control was 1.3% slower parsing and 2.3% slower reading; that path does
 not enter the cache. These controls do not establish zero regression everywhere.
 No overall bench-v8 speedup or fresh-PGO result is claimed.
+
+
+## Remaining shape, array, and string review follow-up
+
+Verified against the committed tree before edits:
+
+- Clone index reservation already used `count + extra`; retained and added a
+  native regression that checks the following append performs no allocation.
+- Descriptor copies now use one descriptor-only prefix copier; append and
+  metadata-write preparation have named entry points. OOM preserves original
+  owners, property metadata, and shape accounting.
+- Unlinking a tail owner marks its table dirty. On reuse, one owner-list scan
+  lowers the visible backing count and rebuilds the existing index in place.
+  Deferring this until reuse avoids quadratic owner scans while pruning a chain.
+- Known integer element indices rely on the following unsigned comparison with
+  a 32-bit array length, which rejects negatives and values at least UINT32_MAX.
+- Array logical length can exceed dense capacity for sparse arrays. A spare flag
+  proves `len <= cap` for JIT accesses; allocation, dense growth, and the length
+  setter maintain it. Direct length writes elsewhere initialize a fully reserved
+  literal or reduce length, so they cannot invalidate a true proof. A false flag
+  after such a reduction is conservative. The existing flags guard now includes
+  this proof and the separate capacity load/comparison is removed.
+- JSON duplicate-slot lookup asserts its preparation invariant instead of
+  misreporting a missing prepared slot as OOM.
+- Empty string separators split into UTF-16 code units, preserving BMP characters
+  and lone surrogates and dividing supplementary characters into surrogate halves.
+  The implementation scans bytes once and preserves the ASCII metadata path.
+
+Validation on 2026-09-09:
+
+- Configured build passed; existing PGO reports control-flow mismatches.
+- All six native Meson tests passed, including allocation-failure injection,
+  reclaimed-tail sharing, clone index reservation, and the dense-length flag.
+- All 77 JIT files and 36 focused string/property/JSON/RegExp files passed.
+- All 4221 specs passed across 102 files.
+- New split and sparse-length tests also passed under Node.
+- MIR dumps confirm read/write guards test the new flag and use unsigned
+  `index < len`, without an element capacity register/load or redundant known-int
+  UINT32_MAX comparison.
+- `maid preflight` and `git diff --check` passed.
+
+Artifacts: `/tmp/ant-review-followups`. No benchmark result is claimed for these
+follow-up edits. Sparse arrays whose length exceeds capacity take the JIT slow
+path even for indices within the allocated prefix; their logical length is never
+used to force a potentially enormous dense allocation.

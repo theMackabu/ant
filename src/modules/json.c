@@ -249,7 +249,7 @@ static ant_value_t yyjson_to_jsval(
       if (duplicates) {
         const char *interned = intern_find(yyjson_get_str(key), yyjson_get_len(key));
         int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
-        if (found < 0) return json_parse_oom(js);
+        assert(found >= 0);
         slot = (uint32_t)found;
       }
       ant_object_prop_set_unchecked(ptr, slot, v);

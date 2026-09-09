@@ -186,5 +186,46 @@ int main(void) {
   ant_shape_release(root);
   ant_gc_shapes_begin();
   ant_gc_shapes_sweep();
-  puts("PASS shared descriptor prefixes, branching, mutation and GC");
+  // A collected tail no longer forces surviving prefixes to copy their table.
+  prefix = ant_shape_new();
+  for (unsigned i = 0; i < 8; i++)
+    assert(ant_shape_add_interned_tr(&prefix, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+  first = prefix;
+  ant_shape_retain(first);
+  for (unsigned i = 8; i < 12; i++)
+    assert(ant_shape_add_interned_tr(&first, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+  ant_shape_release(first);
+  ant_gc_shapes_begin();
+  ant_gc_shapes_mark(prefix);
+  ant_gc_shapes_sweep();
+  const ant_shape_prop_t *backing = ant_shape_prop_at(prefix, 0);
+  first = prefix;
+  ant_shape_retain(first);
+  // Reusing a dead tail key also verifies removal of stale index entries.
+  assert(ant_shape_add_interned_tr(&first, keys[10], ANT_PROP_ATTR_DEFAULT, NULL));
+  assert(ant_shape_prop_at(first, 0) == backing);
+  assert(ant_shape_prop_at(prefix, 0) == backing);
+  assert(ant_shape_lookup_interned(first, keys[10]) == 8);
+  assert(ant_shape_lookup_interned(prefix, keys[10]) == -1);
+  assert(ant_shape_lookup_interned(first, keys[8]) == -1);
+  ant_shape_release(first);
+  ant_shape_release(prefix);
+  ant_gc_shapes_begin();
+  ant_gc_shapes_sweep();
+
+  // Branch reservation includes the index capacity needed by the next append.
+  first = ant_shape_new();
+  for (unsigned i = 0; i < 32; i++) {
+    ant_shape_t *copy = shape_clone_reserve(first, 1);
+    assert(copy);
+    size_t reserved = ant_shape_storage_bytes(copy);
+    assert(ant_shape_add_interned(copy, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+    assert(ant_shape_storage_bytes(copy) == reserved);
+    ant_shape_release(copy);
+    assert(ant_shape_add_interned_tr(&first, keys[i], ANT_PROP_ATTR_DEFAULT, NULL));
+  }
+  ant_shape_release(first);
+  ant_gc_shapes_begin();
+  ant_gc_shapes_sweep();
+  puts("PASS shared descriptors, tail reclamation, index reservation, mutation and GC");
 }

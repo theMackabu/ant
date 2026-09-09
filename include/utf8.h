@@ -18,6 +18,12 @@ typedef struct {
   uint16_t suffix_surrogate;
 } utf16_range_splits_t;
 
+typedef struct {
+  const unsigned char *next;
+  const unsigned char *end;
+  uint16_t trailing_surrogate;
+} utf16_iterator_t;
+
 utf8proc_ssize_t utf8_whatwg_decode(
   utf8_dec_t *dec, const uint8_t *src, size_t len,
   char *out, bool fatal, bool stream
@@ -53,6 +59,7 @@ size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 char *latin1_to_utf8(const uint8_t *src, size_t len, size_t *out_len);
 
+bool utf16_next_code_unit(utf16_iterator_t *iterator, uint16_t *unit);
 bool utf8_validate_bytes(const char *str, size_t byte_len);
 uint8_t *utf8_to_latin1(const char *src, size_t len, size_t *out_len, bool *is_latin1);
 
@@ -73,10 +80,14 @@ static inline int utf8_encode(uint32_t cp, char *out) {
     (utf8proc_uint8_t *)out);
 }
 
+static inline utf16_iterator_t utf16_iterator(const char *str, size_t byte_len) {
+  const unsigned char *bytes = (const unsigned char *)str;
+  return (utf16_iterator_t){ .next = bytes, .end = bytes + byte_len };
+}
+
 static inline utf8proc_ssize_t utf8_next(
   const utf8proc_uint8_t *p,
-  utf8proc_ssize_t len,
-  utf8proc_int32_t *cp
+  utf8proc_ssize_t len, utf8proc_int32_t *cp
 ) {
   utf8proc_ssize_t n = utf8proc_iterate(p, len, cp);
   return n > 0 ? n : 1;

@@ -796,7 +796,6 @@ MIR_reg_t mir_emit_known_array_index_guard(
     MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, result), MIR_new_reg_op(ctx, cached_index)));
     return result;
   }
-  MIR_append_insn(ctx, fn, MIR_new_insn(ctx, MIR_UBGE, MIR_new_label_op(ctx, slow), MIR_new_reg_op(ctx, integer), MIR_new_uint_op(ctx, UINT32_MAX)));
   return integer;
 }
 
@@ -806,20 +805,18 @@ MIR_reg_t mir_emit_dense_element_guard(
     jit_element_access_t access, MIR_label_t slow, int site) {
   bool writable = access == JIT_ELEMENT_WRITE;
   char tag_name[48], ptr_name[48], flags_name[48];
-  char data_name[48], len_name[48], cap_name[48];
+  char data_name[48], len_name[48];
   snprintf(tag_name, sizeof(tag_name), "elem_tag_%d", site);
   snprintf(ptr_name, sizeof(ptr_name), "elem_ptr_%d", site);
   snprintf(flags_name, sizeof(flags_name), "elem_flags_%d", site);
   snprintf(data_name, sizeof(data_name), "elem_data_%d", site);
   snprintf(len_name, sizeof(len_name), "elem_len_%d", site);
-  snprintf(cap_name, sizeof(cap_name), "elem_cap_%d", site);
 
   MIR_reg_t tag = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, tag_name);
   MIR_reg_t ptr = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, ptr_name);
   MIR_reg_t flags = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, flags_name);
   MIR_reg_t data = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, data_name);
   MIR_reg_t len = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, len_name);
-  MIR_reg_t cap = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, cap_name);
 
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_URSH,
@@ -842,13 +839,13 @@ MIR_reg_t mir_emit_dense_element_guard(
                                MIR_new_reg_op(ctx, tag),
                                MIR_new_reg_op(ctx, flags),
                                MIR_new_uint_op(ctx,
-                                               ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY |
+                                               ANT_OBJECT_FLAG_EXOTIC | ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS |
                                                    (writable ? ANT_OBJECT_FLAG_FROZEN : 0))));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_BNE,
                                MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, tag),
-                               MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_FAST_ARRAY)));
+                               MIR_new_uint_op(ctx, ANT_OBJECT_FLAG_FAST_ARRAY | ANT_OBJECT_FLAG_DENSE_LENGTH_FITS)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, data),
@@ -869,16 +866,6 @@ MIR_reg_t mir_emit_dense_element_guard(
                                MIR_new_label_op(ctx, slow),
                                MIR_new_reg_op(ctx, index),
                                MIR_new_reg_op(ctx, len)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_MOV,
-                               MIR_new_reg_op(ctx, cap),
-                               MIR_new_mem_op(ctx, MIR_T_U32,
-                                              (MIR_disp_t)offsetof(ant_object_t, u.array.cap), ptr, 0, 1)));
-  MIR_append_insn(ctx, fn,
-                  MIR_new_insn(ctx, MIR_UBGE,
-                               MIR_new_label_op(ctx, slow),
-                               MIR_new_reg_op(ctx, index),
-                               MIR_new_reg_op(ctx, cap)));
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_MOV,
                                MIR_new_reg_op(ctx, value),

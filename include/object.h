@@ -111,20 +111,31 @@ typedef union ant_object_flags {
     uint8_t generation: 1;
     uint8_t in_remember_set: 1;
     uint8_t guards_absence: 1;
+    uint8_t dense_length_fits: 1;
   };
   uint16_t raw;
   uint8_t bytes[2];
 } ant_object_flags_t;
 
-typedef enum : uint16_t {
-  ANT_OBJECT_FLAG_EXTENSIBLE     = 1u << 0,
-  ANT_OBJECT_FLAG_FROZEN         = 1u << 1,
-  ANT_OBJECT_FLAG_SEALED         = 1u << 2,
-  ANT_OBJECT_FLAG_EXOTIC         = 1u << 3,
-  ANT_OBJECT_FLAG_FAST_ARRAY     = 1u << 6,
-  ANT_OBJECT_FLAG_GENERATION     = 1u << 10,
-  ANT_OBJECT_FLAG_REMEMBERED     = 1u << 11,
-  ANT_OBJECT_FLAG_GUARDS_ABSENCE = 1u << 12,
+typedef enum: uint16_t {
+  ANT_OBJECT_FLAG_EXTENSIBLE =
+    1u << 0,
+  ANT_OBJECT_FLAG_FROZEN =
+    1u << 1,
+  ANT_OBJECT_FLAG_SEALED =
+    1u << 2,
+  ANT_OBJECT_FLAG_EXOTIC =
+    1u << 3,
+  ANT_OBJECT_FLAG_FAST_ARRAY =
+    1u << 6,
+  ANT_OBJECT_FLAG_GENERATION =
+    1u << 10,
+  ANT_OBJECT_FLAG_REMEMBERED =
+    1u << 11,
+  ANT_OBJECT_FLAG_GUARDS_ABSENCE =
+    1u << 12,
+  ANT_OBJECT_FLAG_DENSE_LENGTH_FITS =
+    1u << 13,
 } ant_object_flag_mask_t;
 
 static_assert(
@@ -155,7 +166,10 @@ static inline bool ant_object_flag_masks_match_layout(void) {
   if (flags.raw != ANT_OBJECT_FLAG_REMEMBERED) return false;
 
   flags = (ant_object_flags_t){.guards_absence = 1};
-  return flags.raw == ANT_OBJECT_FLAG_GUARDS_ABSENCE;
+  if (flags.raw != ANT_OBJECT_FLAG_GUARDS_ABSENCE) return false;
+
+  flags = (ant_object_flags_t){.dense_length_fits = 1};
+  return flags.raw == ANT_OBJECT_FLAG_DENSE_LENGTH_FITS;
 }
 
 typedef struct ant_object {

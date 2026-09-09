@@ -10,7 +10,8 @@ const nativeTests = new Map([
   ['tests/test_shape_descriptor_oom.c', 'shape-descriptor-oom'],
   ['tests/test_string_ascii_scan.c', 'string-ascii-scan'],
   ['tests/test_keyed_store_policy.c', 'keyed-store-policy'],
-  ['tests/test_json_layout_cache.c', 'json-layout-cache']
+  ['tests/test_json_layout_cache.c', 'json-layout-cache'],
+  ['tests/test_array_dense_length.c', 'array-dense-length']
 ]);
 
 function parseArgs(argv) {

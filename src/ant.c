@@ -2287,6 +2287,7 @@ static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) 
 
   obj->u.array.data = next;
   obj->u.array.cap = (uint32_t)new_cap;
+  obj->flags.dense_length_fits = obj->u.array.len <= obj->u.array.cap;
   obj->flags.fast_array = 1;
   
   return (ant_offset_t)(uintptr_t)obj;
@@ -2787,6 +2788,7 @@ static ant_value_t alloc_array_with_proto_capacity(
       : obj->u.array.cap;
     for (uint32_t i = fill_start; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->flags.fast_array = 1;
+    obj->flags.dense_length_fits = 1;
     obj->flags.may_have_holes = 0;
     obj->flags.may_have_dense_elements = 0;
   } else {
@@ -3537,6 +3539,7 @@ static inline void array_len_set(ant_t *js, ant_value_t obj, ant_offset_t new_le
   if (arr_ptr) {
     if (new_len > (ant_offset_t)UINT32_MAX) new_len = (ant_offset_t)UINT32_MAX;
     arr_ptr->u.array.len = (uint32_t)new_len;
+    arr_ptr->flags.dense_length_fits = new_len <= arr_ptr->u.array.cap;
     return;
   }
 
@@ -13356,6 +13359,34 @@ static ant_value_t builtin_string_substr(ant_params_t) {
   return js_mkstr_utf16_range(js, str_ptr, byte_len, start, start + len);
 }
 
+static ant_value_t string_split_code_units(ant_t *js, ant_value_t str, ant_value_t arr, uint32_t limit) {
+  GC_ROOT_SAVE(roots, js);
+  GC_ROOT_PIN(js, str);
+  GC_ROOT_PIN(js, arr);
+  
+  ant_value_t part = js_mkundef();
+  GC_ROOT_PIN(js, part);
+
+  ant_offset_t len;
+  const char *bytes = (const char *)(uintptr_t)vstr(js, str, &len);
+  utf16_iterator_t iterator = utf16_iterator(bytes, len);
+  bool ascii = str_is_ascii(bytes);
+  
+  uint16_t unit;
+  for (uint32_t index = 0; index < limit && utf16_next_code_unit(&iterator, &unit); index++) {
+    part = ascii 
+      ? js_mkstr_byte_range(js, bytes, index, 1)
+      : js_string_from_utf16_code_unit(js, unit);
+    if (is_err(part)) break;
+    arr_set(js, arr, index, part);
+  }
+
+  ant_value_t result = is_err(part) ? part : arr;
+  GC_ROOT_RESTORE(js, roots);
+  
+  return result;
+}
+
 static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *args, int nargs) {
   if (vtype(str) != kTypeString) return js_mkerr(js, "split called on non-string");
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
@@ -13522,14 +13553,8 @@ split_string_separator:;
   const char *sep_ptr = (char *)(uintptr_t)(sep_off);
   ant_offset_t idx = 0, start = 0;
 
-  if (sep_len == 0) {
-    for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
-      ant_value_t part = js_mkstr_byte_range(js, str_ptr, i, 1);
-      arr_set(js, arr, idx, part);
-      idx++;
-    }
-    return mkval(kTypeArray, vdata(arr));
-  }
+  if (sep_len == 0)
+    return string_split_code_units(js, str, arr, limit);
 
   for (ant_offset_t i = 0; i + sep_len <= str_len && idx < limit; i++) {
     if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;

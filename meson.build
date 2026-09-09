@@ -344,6 +344,15 @@ json_layout_test = executable(
 )
 test('json-layout-cache', json_layout_test)
 
+array_dense_length_test = executable(
+  'test-array-dense-length',
+  files('tests/test_array_dense_length.c'),
+  dependencies: libant_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('array-dense-length', array_dense_length_test)
+
 if host_machine.system() != 'windows'
   ascii_scan_test = executable(
     'test-string-ascii-scan',

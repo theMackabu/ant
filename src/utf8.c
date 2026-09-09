@@ -1,6 +1,5 @@
 #include "utf8.h"
 #include "utils.h"
-#include "internal.h"
 #include "gc/strings.h"
 
 #include <stdlib.h>
@@ -833,6 +832,28 @@ size_t byte_offset_to_utf16(const char *str, size_t byte_off) {
 
   if (ended_on_boundary) utf16_scan_cursor_store(&cursor);
   return cursor.utf16_pos;
+}
+
+bool utf16_next_code_unit(utf16_iterator_t *iterator, uint16_t *unit) {
+  if (iterator->trailing_surrogate) {
+    *unit = iterator->trailing_surrogate;
+    iterator->trailing_surrogate = 0;
+    return true;
+  }
+  
+  if (iterator->next == iterator->end) return false;
+  size_t bytes, units; uint32_t codepoint;
+  
+  utf16_scan_decode(iterator->next, iterator->end, &bytes, &units, &codepoint);
+  iterator->next += bytes;
+  
+  if (units == 2) {
+    codepoint -= 0x10000;
+    iterator->trailing_surrogate = (uint16_t)(0xDC00 + (codepoint & 0x3FF));
+    *unit = (uint16_t)(0xD800 + (codepoint >> 10));
+  } else *unit = (uint16_t)codepoint;
+  
+  return true;
 }
 
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) {
