@@ -1,9 +1,12 @@
 interface ImportMeta {
   url: string;
-  filename: boolean;
+  filename: string;
   dirname: string;
+  dir: string;
+  path: string;
+  file: string;
   main: boolean;
   resolve(specifier: string): string;
 
-  readonly env: { [key: string]: string };
+  env: ProcessEnv;
 }

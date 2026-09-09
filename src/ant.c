@@ -17492,7 +17492,6 @@ static ant_value_t js_create_import_meta_for_context(
 
   ant_value_t import_meta = mkobj(js, 0);
   if (is_err(import_meta)) return import_meta;
-
   js_set_slot_wb(js, import_meta, SLOT_MODULE_CTX, module_ctx);
 
   bool is_url = esm_is_url(filename);
@@ -17504,12 +17503,28 @@ static ant_value_t js_create_import_meta_for_context(
   if (!is_err(url_val)) setprop_cstr(js, import_meta, "url", 3, url_val);
 
   ant_value_t filename_val = js_get(js, module_ctx, "filename");
-  if (vtype(filename_val) == kTypeString)
+  if (vtype(filename_val) == kTypeString) {
     setprop_cstr(js, import_meta, "filename", 8, filename_val);
+    setprop_cstr(js, import_meta, "path", 4, filename_val);
+  }
 
   if (is_url || is_builtin) js_set_import_meta_special_dirname(js, import_meta, filename, is_builtin);
   else js_set_import_meta_path_dirname(js, import_meta, filename);
 
+  ant_value_t dirname_val = js_get(js, import_meta, "dirname");
+  if (vtype(dirname_val) == kTypeString)
+    setprop_cstr(js, import_meta, "dir", 3, dirname_val);
+
+  char *filename_copy = strdup(filename);
+  if (filename_copy) {
+    char *file = (is_url || is_builtin) ? strrchr(filename_copy, '/') : NULL;
+    file = (is_url || is_builtin) ? (file ? file + 1 : filename_copy) : basename(filename_copy);
+    ant_value_t file_val = js_mkstr(js, file, strlen(file));
+    if (!is_err(file_val)) setprop_cstr(js, import_meta, "file", 4, file_val);
+    free(filename_copy);
+  }
+
+  setprop_cstr(js, import_meta, "env", 3, js->builtins.process_env);
   setprop_cstr(js, import_meta, "main", 4, is_main ? js_true : js_false);
 
   ant_value_t resolve_fn = js_heavy_mkfun(js, builtin_import_meta_resolve, js_mkundef());
