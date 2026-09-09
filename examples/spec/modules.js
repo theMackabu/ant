@@ -47,6 +47,10 @@ test('import.meta exists', typeof import.meta, 'object');
 test('import.meta.url exists', typeof import.meta.url, 'string');
 test('import.meta.url is file', import.meta.url.startsWith('file:'), true);
 test('import.meta.url points to modules.js', /\/modules\.js$/.test(import.meta.url), true);
+test('import.meta.dir aliases dirname', import.meta.dir, import.meta.dirname);
+test('import.meta.path aliases filename', import.meta.path, import.meta.filename);
+test('import.meta.file is the basename', import.meta.file, 'modules.js');
+test('import.meta.env aliases process.env', import.meta.env === process.env, true);
 
 test('module imported test', typeof test, 'function');
 test('module imported summary', typeof summary, 'function');

@@ -1742,6 +1742,7 @@ void init_process_module(ant_t *js) {
 
   ant_value_t process_obj = js_mkobj(js);
   ant_value_t env_obj = js_newobj(js);
+  js->builtins.process_env = env_obj;
   
   js_set_proto_init(process_obj, process_proto);
   ps->process_obj = process_obj;
