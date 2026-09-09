@@ -141,6 +141,16 @@ static inline ant_large_string_alloc_t *large_string_alloc_from_flat(ant_flat_st
 
 static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
   const unsigned char *s = (const unsigned char *)str;
+  
+  while (len >= 4 * sizeof(uint64_t)) {
+    uint64_t words[4];
+    memcpy(words, s, sizeof(words));
+    if ((words[0] | words[1] | words[2] | words[3]) & UINT64_C(0x8080808080808080))
+      return STR_ASCII_NO;
+    s += sizeof(words);
+    len -= sizeof(words);
+  }
+  
   while (len >= sizeof(uint64_t)) {
     uint64_t word;
     memcpy(&word, s, sizeof(word));
@@ -149,8 +159,7 @@ static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
     len -= sizeof(word);
   }
   
-  for (size_t i = 0; i < len; i++) 
-    if (s[i] >= 0x80) return STR_ASCII_NO;
+  for (size_t i = 0; i < len; i++) if (s[i] >= 0x80) return STR_ASCII_NO;
   return STR_ASCII_YES;
 }
 
@@ -242,6 +251,7 @@ ant_offset_t str_utf16_len(ant_t *js, ant_value_t str);
 
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_value_t str_materialize(ant_t *js, ant_value_t value);
+ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len);
 
 size_t utf8_export_into(
   const char *str, size_t str_len, uint8_t *dst, 

@@ -1,4 +1,4 @@
-// cc -std=gnu23 -Iinclude -Ivendor/uthash-2.3.0/src tests/test_shape_descriptor_oom.c -o /tmp/test-shape-oom
+// meson test -C build shape-descriptor-oom
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -6,7 +6,7 @@
 static unsigned fail_at;
 static unsigned allocation;
 static bool fail_allocation(void) { return fail_at && ++allocation == fail_at; }
-static void *test_malloc(size_t size) { return fail_allocation() ? NULL : malloc(size); }
+static inline void *test_malloc(size_t size) { return fail_allocation() ? NULL : malloc(size); }
 static void *test_calloc(size_t count, size_t size) { return fail_allocation() ? NULL : calloc(count, size); }
 static void *test_realloc(void *ptr, size_t size) { return fail_allocation() ? NULL : realloc(ptr, size); }
 // uthash has a separate fatal-OOM policy; inject only recoverable shape failures.

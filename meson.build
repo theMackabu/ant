@@ -306,7 +306,36 @@ if not runtime_binary.disabled()
 endif
 
 # move to meson/tests
+shape_transition_test = executable(
+  'test-shape-transition-identity',
+  files('tests/test_shape_transition_identity.c', 'src/shapes.c'),
+  include_directories: include,
+  dependencies: uthash_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('shape-transition-identity', shape_transition_test)
+
+shape_oom_test = executable(
+  'test-shape-descriptor-oom',
+  files('tests/test_shape_descriptor_oom.c'),
+  include_directories: include,
+  dependencies: uthash_dep,
+  c_args: ['-UNDEBUG'],
+  build_by_default: false
+)
+test('shape-descriptor-oom', shape_oom_test)
+
 if host_machine.system() != 'windows'
+  ascii_scan_test = executable(
+    'test-string-ascii-scan',
+    files('tests/test_string_ascii_scan.c'),
+    include_directories: include,
+    c_args: ['-UNDEBUG'],
+    build_by_default: false
+  )
+  test('string-ascii-scan', ascii_scan_test)
+
   executable(
     'test-listener-accept-burst',
     files('tests/test_listener_accept_burst.c'),

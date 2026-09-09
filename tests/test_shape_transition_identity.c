@@ -1,4 +1,4 @@
-// cc -std=gnu23 -Iinclude -Ivendor/uthash-2.3.0/src tests/test_shape_transition_identity.c src/shapes.c -o /tmp/test-shape-transitions
+// meson test -C build shape-transition-identity
 #include "shapes.h"
 #include <assert.h>
 #include <stdio.h>

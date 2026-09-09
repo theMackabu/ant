@@ -1,4 +1,4 @@
-// cc -std=gnu23 -Iinclude tests/test_string_ascii_scan.c -o /tmp/test-string-ascii-scan
+// meson test -C build string-ascii-scan
 #include "gc/strings.h"
 #include <assert.h>
 #include <stdio.h>

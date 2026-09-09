@@ -627,10 +627,9 @@ static MIR_reg_t mir_emit_integer_conversion_guard(
     MIR_reg_t boxed, MIR_reg_t known_double, bool is_known_double,
     MIR_reg_t d_slot, double minimum, double maximum,
     MIR_label_t slow, int site, bool exact) {
-  char double_name[48], integer_name[48], roundtrip_name[48];
+  char double_name[48], integer_name[48];
   snprintf(double_name, sizeof(double_name), "spec_d_%d", site);
   snprintf(integer_name, sizeof(integer_name), "spec_i_%d", site);
-  snprintf(roundtrip_name, sizeof(roundtrip_name), "spec_rt_%d", site);
 
   MIR_reg_t number = known_double;
   if (!is_known_double) {
@@ -661,6 +660,8 @@ static MIR_reg_t mir_emit_integer_conversion_guard(
                                MIR_new_reg_op(ctx, integer),
                                MIR_new_reg_op(ctx, number)));
   if (!exact) return integer;
+  char roundtrip_name[48];
+  snprintf(roundtrip_name, sizeof(roundtrip_name), "spec_rt_%d", site);
   MIR_reg_t roundtrip = MIR_new_func_reg(ctx, fn->u.func, MIR_T_D, roundtrip_name);
   MIR_append_insn(ctx, fn,
                   MIR_new_insn(ctx, MIR_I2D,

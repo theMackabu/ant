@@ -388,17 +388,20 @@ static ant_shape_t *shape_copy_for_transition(const ant_shape_t *shape) {
   return copy;
 }
 
-bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot) {
+static bool shape_add_tr(
+  ant_shape_t **shape_pp, ant_shape_key_type_t type, const char *interned,
+  ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot
+) {
   ant_shape_t *shape = *shape_pp;
   
   if (!shape) return false;
   if (!shape_is_in_tree(shape))
-    return shape_add_key(shape, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
+    return shape_add_key(shape, type, interned, sym_off, attrs, out_slot);
   
   if (shape->count >= SHAPE_TRANSITION_MAX_PROPS) {
-    ant_shape_t *copy = ant_shape_clone(shape);
+    ant_shape_t *copy = shape_clone_reserve(shape, 1);
     if (!copy) return false;
-    if (!shape_add_key(copy, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot)) {
+    if (!shape_add_key(copy, type, interned, sym_off, attrs, out_slot)) {
       ant_shape_release(copy);
       return false;
     }
@@ -407,14 +410,15 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
     return true;
   }
 
-  uint64_t prop_key = shape_key_interned(interned);
+  uint64_t prop_key = type == ANT_SHAPE_KEY_SYMBOL
+    ? shape_key_symbol(sym_off) : shape_key_interned(interned);
   uint64_t ckey = shape_child_key(prop_key, attrs);
   ant_shape_t *child = shape_find_child(shape, ckey);
 
   if (child) {
-    int32_t slot = ant_shape_lookup_interned(child, interned);
-    if (slot >= 0) {
-      if (out_slot) *out_slot = (uint32_t)slot;
+    shape_index_entry_t *entry = shape_lookup(child, prop_key);
+    if (entry) {
+      if (out_slot) *out_slot = entry->slot;
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -422,7 +426,7 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
 
   ant_shape_t *shared = shape_copy_for_transition(shape);
   if (!shared) return false;
-  if (!shape_add_key(shared, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot)) {
+  if (!shape_add_key(shared, type, interned, sym_off, attrs, out_slot)) {
     ant_shape_release(shared);
     return false;
   }
@@ -434,50 +438,12 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
   return true;
 }
 
+bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uint8_t attrs, uint32_t *out_slot) {
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_STRING, interned, 0, attrs, out_slot);
+}
+
 bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8_t attrs, uint32_t *out_slot) {
-  ant_shape_t *shape = *shape_pp;
-  
-  if (!shape) return false;
-  if (!shape_is_in_tree(shape))
-    return shape_add_key(shape, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
-
-  if (shape->count >= SHAPE_TRANSITION_MAX_PROPS) {
-    ant_shape_t *copy = ant_shape_clone(shape);
-    if (!copy) return false;
-    if (!shape_add_key(copy, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot)) {
-      ant_shape_release(copy);
-      return false;
-    }
-    ant_shape_release(shape);
-    *shape_pp = copy;
-    return true;
-  }
-
-  uint64_t prop_key = shape_key_symbol(sym_off);
-  uint64_t ckey = shape_child_key(prop_key, attrs);
-  ant_shape_t *child = shape_find_child(shape, ckey);
-
-  if (child) {
-    int32_t slot = ant_shape_lookup_symbol(child, sym_off);
-    if (slot >= 0) {
-      if (out_slot) *out_slot = (uint32_t)slot;
-      ant_shape_retain(child); ant_shape_release(shape);
-      *shape_pp = child; return true;
-    }
-  }
-
-  ant_shape_t *shared = shape_copy_for_transition(shape);
-  if (!shared) return false;
-  if (!shape_add_key(shared, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot)) {
-    ant_shape_release(shared);
-    return false;
-  }
-  
-  shape_record_child(shape, ckey, shared);
-  ant_shape_release(shape);
-  *shape_pp = shared;
-  
-  return true;
+  return shape_add_tr(shape_pp, ANT_SHAPE_KEY_SYMBOL, NULL, sym_off, attrs, out_slot);
 }
 
 ant_shape_t *ant_shape_new_with_inobj_limit(uint8_t inobj_limit) {

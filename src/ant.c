@@ -2631,7 +2631,7 @@ static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   js_delete_prop(js, arr, idxstr, idxlen);
 }
 
-ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
+static inline ant_value_t mkstr_with_ascii(ant_t *js, const void *ptr, size_t len, bool known_ascii) {
   ant_flat_string_t *flat = (ant_flat_string_t *)js_type_alloc(
     js, ANT_ALLOC_STRING, sizeof(*flat) + len + 1, _Alignof(ant_flat_string_t)
   );
@@ -2642,12 +2642,21 @@ ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
   
   flat->bytes[len] = '\0';
   str_flat_init_meta(
-    flat, (ptr || len == 0)
+    flat, known_ascii ? STR_ASCII_YES : ((ptr || len == 0)
       ? str_detect_ascii_bytes(flat->bytes, len)
-      : STR_ASCII_UNKNOWN
+      : STR_ASCII_UNKNOWN)
   );
 
   return mkref(kTypeString, flat);
+}
+
+ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
+  return mkstr_with_ascii(js, ptr, len, false);
+}
+
+ant_value_t js_mkstr_byte_range(ant_t *js, const char *parent, size_t start, size_t len) {
+  bool known_ascii = str_flat_ascii_state(str_flat_from_bytes(parent)) == STR_ASCII_YES;
+  return mkstr_with_ascii(js, parent + start, len, known_ascii);
 }
 
 ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
@@ -13359,7 +13368,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
     if (plen == 0 || (plen == 4 && memcmp(pattern_ptr, "(?:)", 4) == 0)) {
       ant_offset_t idx = 0;
       for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
-        ant_value_t part = js_mkstr(js, str_ptr + i, 1);
+        ant_value_t part = js_mkstr_byte_range(js, str_ptr, i, 1);
         arr_set(js, arr, idx, part);
         idx++;
       }
@@ -13435,7 +13444,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
       
       had_any_split = true;
 
-      ant_value_t part = js_mkstr(js, str_ptr + segment_start, match_start - segment_start);
+      ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, match_start - segment_start);
       arr_set(js, arr, idx, part);
       idx++;
 
@@ -13445,7 +13454,7 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
         if (cap_start == PCRE2_UNSET) {
           arr_set(js, arr, idx, js_mkundef());
         } else {
-          part = js_mkstr(js, str_ptr + cap_start, cap_end - cap_start);
+          part = js_mkstr_byte_range(js, str_ptr, cap_start, cap_end - cap_start);
           arr_set(js, arr, idx, part);
         }
         idx++;
@@ -13463,12 +13472,12 @@ static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *ar
     if (!had_any_split) {
       pcre2_match_data_free(match_data);
       pcre2_code_free(re);
-      arr_set(js, arr, 0, js_mkstr(js, str_ptr, str_len));
+      arr_set(js, arr, 0, js_mkstr_byte_range(js, str_ptr, 0, str_len));
       return mkval(kTypeArray, vdata(arr));
     }
 
     if (idx < limit) {
-      ant_value_t part = js_mkstr(js, str_ptr + segment_start, str_len - segment_start);
+      ant_value_t part = js_mkstr_byte_range(js, str_ptr, segment_start, str_len - segment_start);
       arr_set(js, arr, idx, part);
       idx++;
     }
@@ -13487,7 +13496,7 @@ split_string_separator:;
 
   if (sep_len == 0) {
     for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
-      ant_value_t part = js_mkstr(js, str_ptr + i, 1);
+      ant_value_t part = js_mkstr_byte_range(js, str_ptr, i, 1);
       arr_set(js, arr, idx, part);
       idx++;
     }
@@ -13496,14 +13505,14 @@ split_string_separator:;
 
   for (ant_offset_t i = 0; i + sep_len <= str_len && idx < limit; i++) {
     if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;
-    ant_value_t part = js_mkstr(js, str_ptr + start, i - start);
+    ant_value_t part = js_mkstr_byte_range(js, str_ptr, start, i - start);
     arr_set(js, arr, idx, part);
     idx++;
     start = i + sep_len;
     i += sep_len - 1;
   }
   if (idx < limit && start <= str_len) {
-    ant_value_t part = js_mkstr(js, str_ptr + start, str_len - start);
+    ant_value_t part = js_mkstr_byte_range(js, str_ptr, start, str_len - start);
     arr_set(js, arr, idx, part);
     idx++;
   }
@@ -14110,7 +14119,7 @@ static ant_value_t builtin_string_trim(ant_params_t) {
   while (start < end && is_space(str_ptr[start])) start++;
   while (end > start && is_space(str_ptr[end - 1])) end--;
   
-  return js_mkstr(js, str_ptr + start, end - start);
+  return js_mkstr_byte_range(js, str_ptr, start, end - start);
 }
 
 static ant_value_t builtin_string_trimStart(ant_params_t) {
@@ -14123,7 +14132,7 @@ static ant_value_t builtin_string_trimStart(ant_params_t) {
   ant_offset_t start = 0;
   while (start < str_len && is_space(str_ptr[start])) start++;
   
-  return js_mkstr(js, str_ptr + start, str_len - start);
+  return js_mkstr_byte_range(js, str_ptr, start, str_len - start);
 }
 
 static ant_value_t builtin_string_trimEnd(ant_params_t) {
@@ -14136,7 +14145,7 @@ static ant_value_t builtin_string_trimEnd(ant_params_t) {
   ant_offset_t end = str_len;
   while (end > 0 && is_space(str_ptr[end - 1])) end--;
   
-  return js_mkstr(js, str_ptr, end);
+  return js_mkstr_byte_range(js, str_ptr, 0, end);
 }
 
 static ant_value_t builtin_string_repeat(ant_params_t) {

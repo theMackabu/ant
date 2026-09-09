@@ -1,5 +1,17 @@
 #include "compile.h"
 
+static MIR_reg_t jit_emit_element_index_guard(
+    jit_compile_t *c, MIR_reg_t key, MIR_reg_t integer_index,
+    MIR_reg_t double_key, bool key_is_num, MIR_label_t slow, int site) {
+  if (integer_index)
+    return mir_emit_known_array_index_guard(
+        c->ctx, c->jit_func, key, integer_index, slow,
+        c->r_d_slot, site, c->cached_index_key, c->cached_index_value);
+  return mir_emit_array_index_guard(
+      c->ctx, c->jit_func, key, double_key, key_is_num,
+      c->r_d_slot, slow, site);
+}
+
 void jit_emit_properties(jit_compile_t *c) {
   switch (c->op) {
     case OP_TO_PROPKEY: {
@@ -445,13 +457,9 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_label_t done = MIR_new_label(c->ctx);
         int index_site = mir_next_reg_site(&c->reg_site_n);
         int element_site = mir_next_reg_site(&c->reg_site_n);
-        MIR_reg_t index = integer_index
-            ? mir_emit_known_array_index_guard(
-                c->ctx, c->jit_func, key, integer_index, bail_direct,
-                c->r_d_slot, index_site, c->cached_index_key, c->cached_index_value)
-            : mir_emit_array_index_guard(
-                c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp], key_is_num,
-                c->r_d_slot, bail_direct, index_site);
+        MIR_reg_t index = jit_emit_element_index_guard(
+            c, key, integer_index, c->vs.d_regs[c->vs.sp], key_is_num,
+            bail_direct, index_site);
         MIR_reg_t loaded = c->r_err_tmp;
         (void)mir_emit_dense_element_guard(
             c->ctx, c->jit_func, obj, index, loaded, JIT_ELEMENT_NUMERIC_READ, bail_direct, element_site);
@@ -624,13 +632,9 @@ void jit_emit_properties(jit_compile_t *c) {
         int index_site = mir_next_reg_site(&c->reg_site_n);
         int element_site = mir_next_reg_site(&c->reg_site_n);
 
-        MIR_reg_t index = integer_index
-            ? mir_emit_known_array_index_guard(
-                c->ctx, c->jit_func, key, integer_index, bail_direct,
-                c->r_d_slot, index_site, c->cached_index_key, c->cached_index_value)
-            : mir_emit_array_index_guard(
-                c->ctx, c->jit_func, key, c->vs.d_regs[c->vs.sp + 1], key_is_num,
-                c->r_d_slot, bail_direct, index_site);
+        MIR_reg_t index = jit_emit_element_index_guard(
+            c, key, integer_index, c->vs.d_regs[c->vs.sp + 1], key_is_num,
+            bail_direct, index_site);
         if (val_is_num)
           mir_d_to_i64(
               c->ctx, c->jit_func, val, c->vs.d_regs[c->vs.sp + 2], c->r_d_slot);
