@@ -229,36 +229,43 @@ ant_value_t jit_helper_forward_arguments(
   sv_vm_t *vm, ant_t *js, ant_value_t apply, ant_value_t target,
   ant_value_t receiver, ant_value_t *args, int argc
 ) {
-  if (js_is_function_apply_builtin(apply) && (vtype(target) == kTypeFunction || vtype(target) == kTypeBuiltin)) {
-    sv_closure_t *closure = vtype(target) == kTypeFunction ? js_func_closure(target) : NULL;
-    if (sv_closure_is_plain_sync(closure) && js->vm_exec_depth != 0) {
-      if (sv_check_c_stack_overflow(js))
-        return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
-      sv_call_ctx_t call = {
-        .this_val = receiver, .super_val = js_mkundef(),
-        .new_target = js_mkundef(), .args = args, .argc = argc,
-      };
-      return sv_call_resolve_closure(vm, js, closure, target, &call, NULL);
+  uint8_t target_type = vtype(target);
+  
+  if (
+    !js_is_function_apply_builtin(apply) ||
+    (target_type != kTypeFunction && target_type != kTypeBuiltin)
+  ) {
+    GC_ROOT_SAVE(root_mark, js);
+    GC_ROOT_PIN(js, apply);
+    GC_ROOT_PIN(js, target);
+    GC_ROOT_PIN(js, receiver);
+
+    ant_value_t arguments = jit_helper_strict_arguments(vm, js, args, argc);
+    ant_value_t result = arguments;
+
+    if (!is_err(arguments)) {
+      GC_ROOT_PIN(js, arguments);
+      ant_value_t call_args[] = {receiver, arguments};
+      result = sv_vm_call_explicit_this(vm, js, apply, target, call_args, 2);
     }
-    return sv_vm_call_explicit_this(vm, js, target, receiver, args, argc);
+    
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
   }
 
-  GC_ROOT_SAVE(root_mark, js);
-  GC_ROOT_PIN(js, apply);
-  GC_ROOT_PIN(js, target);
-  GC_ROOT_PIN(js, receiver);
+  sv_closure_t *closure = target_type == kTypeFunction ? js_func_closure(target) : NULL;
+  if (!sv_closure_is_plain_sync(closure) || js->vm_exec_depth == 0)
+    return sv_vm_call_explicit_this(vm, js, target, receiver, args, argc);
+
+  if (sv_check_c_stack_overflow(js))
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
   
-  ant_value_t arguments = jit_helper_strict_arguments(vm, js, args, argc);
-  ant_value_t result = arguments;
+  sv_call_ctx_t call = {
+    .this_val = receiver, .super_val = js_mkundef(),
+    .new_target = js_mkundef(), .args = args, .argc = argc,
+  };
   
-  if (!is_err(arguments)) {
-    GC_ROOT_PIN(js, arguments);
-    ant_value_t call_args[] = {receiver, arguments};
-    result = sv_vm_call_explicit_this(vm, js, apply, target, call_args, 2);
-  }
-  GC_ROOT_RESTORE(js, root_mark);
-  
-  return result;
+  return sv_call_resolve_closure(vm, js, closure, target, &call, NULL);
 }
 
 ant_value_t jit_helper_rest(
@@ -1604,9 +1611,13 @@ ant_value_t jit_helper_new(
   ant_value_t ctor_this = obj;
   ant_value_t result;
   
-  if (sv_closure_is_plain_sync(closure) && !closure->func->is_derived_ctor && js->vm_exec_depth != 0) {
+  if (
+    sv_closure_is_plain_sync(closure) &&
+    !closure->func->is_derived_ctor && js->vm_exec_depth != 0
+  ) {
     if (sv_check_c_stack_overflow(js))
       return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    
     sv_call_ctx_t call = {
       .this_val = obj, .super_val = js_mkundef(),
       .new_target = effective_new_target, .args = args, .argc = argc,
@@ -1620,5 +1631,6 @@ ant_value_t jit_helper_new(
     is_object_type(result) ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
   sv_tfb_record_ctor_prop_count(record_func, final_obj);
+  
   return final_obj;
 }

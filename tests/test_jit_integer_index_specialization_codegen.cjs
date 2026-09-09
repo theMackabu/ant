@@ -14,5 +14,13 @@ for (const name of ['read', 'write', 'unsignedRead', 'unsignedWrite']) {
   assert.ok(mirModule, 'missing compilation for ' + name);
   assert.match(mirModule[0], /integer_index_/, 'keep the integer representation for ' + name);
   assert.doesNotMatch(mirModule[0], /\bi2d\s+spec_rt_/, 'no repeated integer exactness check for ' + name);
+  const indexGuard = mirModule[0].match(
+    /\bmov\s+(integer_index_\d+),\s*(s\d+)[\s\S]*?\bubge\s+(L\d+),\s*\1,/);
+  assert.ok(indexGuard, 'missing integer index guard for ' + name);
+  const bailoutStart = mirModule[0].indexOf('\n' + indexGuard[3] + ':', indexGuard.index);
+  assert.ok(bailoutStart > indexGuard.index, 'missing index bailout for ' + name);
+  const fastPath = mirModule[0].slice(indexGuard.index, bailoutStart);
+  assert.doesNotMatch(fastPath, new RegExp('\\bi2d\\s+\\w+,\\s*' + indexGuard[2] + '\\b'),
+    'box the integer key only on bailout for ' + name);
 }
 console.log('PASS specialized array access preserves integer indices');

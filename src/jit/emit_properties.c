@@ -431,7 +431,7 @@ void jit_emit_properties(jit_compile_t *c) {
         integer_index = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, name);
         MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, integer_index), MIR_new_reg_op(c->ctx, c->vs.regs[c->vs.sp - 1])));
       }
-      bool key_is_num = vstack_prepare_num(
+      bool key_is_num = !integer_index && vstack_prepare_num(
           &c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
       bool obj_is_num = vstack_prepare_num(
           &c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
@@ -463,7 +463,8 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, bail_direct);
         mir_emit_bailout_jump_typed(
             c->ctx, c->jit_func, c->bc_off, c->vs.sp + 1, &c->bailout_ctx,
-            c->vs.sp - 1, false, c->vs.sp, key_is_num);
+            c->vs.sp - 1, SLOT_BOXED, c->vs.sp,
+            integer_index ? SLOT_I32 : (key_is_num ? SLOT_NUM : SLOT_BOXED));
         MIR_append_insn(c->ctx, c->jit_func, done);
         break;
       }
@@ -609,7 +610,7 @@ void jit_emit_properties(jit_compile_t *c) {
           sv_tfb_put_needs_tagged_old_guard(feedback);
       bool val_is_num = vstack_prepare_num(
           &c->vs, c->vs.sp - 1, c->ctx, c->jit_func, c->r_d_slot);
-      bool key_is_num = vstack_prepare_num(
+      bool key_is_num = !integer_index && vstack_prepare_num(
           &c->vs, c->vs.sp - 2, c->ctx, c->jit_func, c->r_d_slot);
       bool obj_is_num = vstack_prepare_num(
           &c->vs, c->vs.sp - 3, c->ctx, c->jit_func, c->r_d_slot);
@@ -675,7 +676,8 @@ void jit_emit_properties(jit_compile_t *c) {
         MIR_append_insn(c->ctx, c->jit_func, bail_direct);
         mir_emit_bailout_jump_typed(
             c->ctx, c->jit_func, c->bc_off, c->vs.sp + 3, &c->bailout_ctx,
-            -1, false, -1, false);
+            -1, SLOT_BOXED, c->vs.sp + 1,
+            integer_index ? SLOT_I32 : (key_is_num ? SLOT_NUM : SLOT_BOXED));
         MIR_append_insn(c->ctx, c->jit_func, done);
         break;
       }
