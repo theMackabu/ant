@@ -322,8 +322,8 @@ static inline bool sv_instanceof_rhs_ordinary_proto(
   ant_value_t proto = js_prop_load(proto_off);
   if (!is_object_type(proto)) return false;
 
-  ant_shape_guard_absence(func_ptr->shape);
-  ant_shape_guard_absence(func_proto_ptr->shape);
+  ant_object_guard_absence(func_ptr);
+  ant_object_guard_absence(func_proto_ptr);
   if (out_proto) *out_proto = proto;
   
   return true;

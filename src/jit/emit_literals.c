@@ -99,7 +99,9 @@ void jit_emit_literals(jit_compile_t *c) {
     case OP_SPECIAL_OBJ: {
       uint8_t which = sv_get_u8(c->ip + 1);
       MIR_reg_t dst = vstack_push(&c->vs);
-      if (which == 0 && c->func->is_strict) {
+      if (which == 0 && c->forward_arguments) {
+        mir_load_imm(c->ctx, c->jit_func, dst, js_mkundef());
+      } else if (which == 0 && c->func->is_strict) {
         MIR_append_insn(c->ctx, c->jit_func,
                         MIR_new_call_insn(c->ctx, 7,
                                           MIR_new_ref_op(c->ctx, c->strict_arguments_proto),

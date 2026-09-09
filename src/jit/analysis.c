@@ -1,4 +1,56 @@
 #include "jit_internal.h"
+
+static const uint8_t forward_arguments_prefix[] = {
+  OP_SPECIAL_OBJ,  // arguments object (operand 0)
+  OP_PUT_LOCAL8,   // -> local 0
+  OP_THIS,
+  OP_GET_FIELD,    // this.method
+  OP_DUP,
+  OP_GET_FIELD,    // .apply
+  OP_THIS,
+  OP_GET_LOCAL8,   // arguments (local 0)
+};
+enum {
+  FORWARD_PREFIX_OPS = sizeof forward_arguments_prefix,
+  FORWARD_CALL_OP = FORWARD_PREFIX_OPS,
+  FORWARD_RETURN_FORM_OPS = FORWARD_CALL_OP + 2,
+  FORWARD_STATEMENT_FORM_OPS = FORWARD_CALL_OP + 3,
+};
+static const char forward_apply_name[] = "apply";
+
+bool jit_can_forward_arguments(sv_func_t *func) {
+  if (!func->is_strict || func->is_async || func->is_generator ||
+      func->is_derived_ctor || func->param_count != 0 || func->max_locals != 1)
+    return false;
+
+  const uint8_t *ops[FORWARD_STATEMENT_FORM_OPS];
+  int count = 0;
+  for (const uint8_t *ip = func->code, *end = ip + func->code_len; ip < end;) {
+    int size = sv_op_size[*ip];
+    if (!size || ip + size > end || count == FORWARD_STATEMENT_FORM_OPS) return false;
+    ops[count++] = ip;
+    ip += size;
+  }
+  if (count != FORWARD_RETURN_FORM_OPS && count != FORWARD_STATEMENT_FORM_OPS) return false;
+
+  for (int i = 0; i < FORWARD_PREFIX_OPS; i++)
+    if (*ops[i] != forward_arguments_prefix[i]) return false;
+  if (ops[0][1] != 0 || ops[1][1] != 0 || ops[7][1] != 0) return false;
+  uint32_t atom = sv_get_u32(ops[5] + 1);
+  if (atom >= (uint32_t)func->atom_count ||
+      func->atoms[atom].len != sizeof forward_apply_name - 1 ||
+      memcmp(func->atoms[atom].str, forward_apply_name, sizeof forward_apply_name - 1))
+    return false;
+
+  const uint8_t *call = ops[FORWARD_CALL_OP];
+  if (sv_get_u16(call + 1) != 2) return false;  // apply(this, arguments)
+  if (count == FORWARD_RETURN_FORM_OPS)
+    return *call == OP_TAIL_CALL_METHOD && *ops[FORWARD_CALL_OP + 1] == OP_RETURN_UNDEF;
+  return *call == OP_CALL_METHOD &&
+    (*ops[FORWARD_CALL_OP + 1] == OP_POP || *ops[FORWARD_CALL_OP + 1] == OP_RETURN) &&
+    *ops[FORWARD_CALL_OP + 2] == OP_RETURN_UNDEF;
+}
+
 bool scan_branch_targets(sv_func_t *func, jit_label_map_t *lm, MIR_context_t ctx) {
   uint8_t *ip = func->code;
   uint8_t *end = func->code + func->code_len;

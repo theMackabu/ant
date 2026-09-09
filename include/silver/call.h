@@ -207,6 +207,12 @@ static inline ant_value_t sv_call_resolve_closure(
   ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 );
 
+static inline bool sv_closure_is_plain_sync(const sv_closure_t *closure) {
+  return 
+    closure && closure->call_flags == 0 && closure->func &&
+    !closure->func->is_async && !closure->func->is_generator;
+}
+
 static inline ant_value_t sv_prepare_call(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t this_val, ant_value_t *args, int argc,

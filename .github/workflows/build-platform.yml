@@ -150,6 +150,7 @@ jobs:
 
           ARTIFACT_NAME=$(echo $CONFIG | jq -r '.artifact_name')
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "runtime_artifact_name=ant-runtime-${ARTIFACT_NAME#ant-}" >> $GITHUB_OUTPUT
 
           DEPS_LIST=$(echo $CONFIG | jq -r '.deps | join(" ")')
           echo "deps=$DEPS_LIST" >> $GITHUB_OUTPUT
@@ -274,9 +275,16 @@ jobs:
           name: ${{ steps.config.outputs.artifact_name }}
           path: |
             build/${{ steps.config.outputs.binary_name }}
+            build/*.dll
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ steps.config.outputs.runtime_artifact_name }}
+          if-no-files-found: error
+          path: |
             build/ant-runtime
             build/ant-runtime.exe
-            build/*.dll
 
       - name: Save version info
         shell: bash

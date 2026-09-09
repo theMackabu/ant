@@ -5,7 +5,7 @@ import type { Context } from 'hono';
 import { HttpError } from './errors';
 import { cachedJson } from './http-cache';
 import { routeIndex } from './route-index';
-import { branch, repository } from './config';
+import { branch, GITHUB_REPOSITORY } from './config';
 import type { RequestOptions } from './config';
 import {
   annotateGzipSizes,
@@ -34,7 +34,7 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
-const MANIFEST_KEY = 'manifests/latest.json';
+const MANIFEST_KEY = `manifests/${GITHUB_REPOSITORY}/latest.json`;
 
 app.options('*', c => {
   c.header('Access-Control-Allow-Origin', '*');
@@ -97,7 +97,7 @@ app.post('/v1/refresh', async c => {
       cacheControl: 'public, max-age=60',
     },
     customMetadata: {
-      repository: repository(c.env),
+      repository: GITHUB_REPOSITORY,
       branch: branch(c.env, options),
       cached_at: new Date().toISOString(),
     },
@@ -184,7 +184,7 @@ app.get('/v1/version', c => versionRoute(c));
 app.get('/v1/check', c => versionRoute(c));
 
 app.get('/v1/version/get-tag', c => {
-  const cacheKey = `version-latest:${repository(c.env)}:release`;
+  const cacheKey = `version-latest:${GITHUB_REPOSITORY}:release`;
   return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () => latestAntVersion(c.env));
 });
 
@@ -194,7 +194,7 @@ app.get('/v1/version/:version', c => {
     throw new HttpError('latest is not a version route; use /v1/version/get-tag', 404);
   }
 
-  const cacheKey = `version-manifest:${repository(c.env)}:${version}`;
+  const cacheKey = `version-manifest:${GITHUB_REPOSITORY}:${version}`;
   return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () =>
     versionManifest(c.env, version),
   );
@@ -224,7 +224,7 @@ async function versionRoute(c: AppContext) {
     build_timestamp: rawQuery.build_timestamp || headerBuildTimestamp,
   });
   const options = requestOptions(c);
-  const cacheKey = `version:${repository(c.env)}:${branch(c.env, options)}:${query.target}:${query.current}:${query.buildTimestamp || ''}`;
+  const cacheKey = `version:${GITHUB_REPOSITORY}:${branch(c.env, options)}:${query.target}:${query.current}:${query.buildTimestamp || ''}`;
 
   return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () =>
     versionCheck(new URL(c.req.url), c.env, query, options),

@@ -397,4 +397,10 @@ ant_value_t jit_helper_str_flush_local(
   ant_value_t *locals, uint16_t slot_idx
 );
 
+ant_value_t jit_helper_forward_arguments(
+  sv_vm_t *vm, ant_t *js, ant_value_t apply, 
+  ant_value_t target, ant_value_t receiver, 
+  ant_value_t *args, int argc
+);
+
 #endif

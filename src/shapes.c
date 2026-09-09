@@ -69,7 +69,6 @@ struct ant_shape {
   uint32_t deleted_count;
   uint8_t inobj_limit;
   uint16_t gc_mark;
-  uint32_t absence_guard_epoch;
   
   ant_shape_prop_t *props;
   shape_index_entry_t *index;
@@ -81,16 +80,6 @@ struct ant_shape {
   ant_shape_t *parent;
   uint64_t parent_key;
 };
-
-static inline void shape_invalidate_guarded_absence(ant_shape_t *shape) {
-  if (!shape || shape->absence_guard_epoch == 0) return;
-  if (shape->absence_guard_epoch != ant_ic_epoch_counter) {
-    shape->absence_guard_epoch = 0;
-    return;
-  }
-  shape->absence_guard_epoch = 0;
-  ant_ic_epoch_bump();
-}
 
 static ant_shape_t *g_root_shapes[ANT_INOBJ_MAX_SLOTS + 1];
 static inline uint8_t shape_clamp_inobj_limit(uint8_t limit) {
@@ -273,9 +262,6 @@ static bool shape_add_key(
     return false;
   }
 
-  if (type == ANT_SHAPE_KEY_STRING)
-    shape_invalidate_guarded_absence(shape);
-
   if (out_slot) *out_slot = slot;
   return true;
 }
@@ -324,7 +310,6 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
     int32_t slot = ant_shape_lookup_interned(child, interned);
     if (slot >= 0) {
       if (out_slot) *out_slot = (uint32_t)slot;
-      shape_invalidate_guarded_absence(shape);
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -343,7 +328,6 @@ bool ant_shape_add_interned_tr(ant_shape_t **shape_pp, const char *interned, uin
   ant_shape_t *next = ant_shape_clone(shared);
   if (!next) return false;
 
-  shape_invalidate_guarded_absence(shape);
   ant_shape_release(shape);
   *shape_pp = next;
   
@@ -366,7 +350,6 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
     int32_t slot = ant_shape_lookup_symbol(child, sym_off);
     if (slot >= 0) {
       if (out_slot) *out_slot = (uint32_t)slot;
-      shape_invalidate_guarded_absence(shape);
       ant_shape_retain(child); ant_shape_release(shape);
       *shape_pp = child; return true;
     }
@@ -385,7 +368,6 @@ bool ant_shape_add_symbol_tr(ant_shape_t **shape_pp, ant_offset_t sym_off, uint8
   ant_shape_t *next = ant_shape_clone(shared);
   if (!next) return false;
 
-  shape_invalidate_guarded_absence(shape);
   ant_shape_release(shape);
   *shape_pp = next;
   
@@ -490,7 +472,6 @@ void ant_shape_transition_existing(ant_shape_t **shape_pp, ant_shape_t *to_shape
   if (!shape_pp || !*shape_pp || !to_shape || *shape_pp == to_shape) return;
 
   ant_shape_t *from_shape = *shape_pp;
-  shape_invalidate_guarded_absence(from_shape);
   ant_shape_retain(to_shape);
   *shape_pp = to_shape;
   ant_shape_release(from_shape);
@@ -550,10 +531,6 @@ int32_t ant_shape_lookup_interned(const ant_shape_t *shape, const char *interned
 int32_t ant_shape_lookup_symbol(const ant_shape_t *shape, ant_offset_t sym_off) {
   shape_index_entry_t *entry = shape_lookup(shape, shape_key_symbol(sym_off));
   return entry ? (int32_t)entry->slot : -1;
-}
-
-void ant_shape_guard_absence(ant_shape_t *shape) {
-  if (shape) shape->absence_guard_epoch = ant_ic_epoch_counter;
 }
 
 bool ant_shape_add_interned(ant_shape_t *shape, const char *interned, uint8_t attrs, uint32_t *out_slot) {

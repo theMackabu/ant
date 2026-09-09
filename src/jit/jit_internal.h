@@ -410,6 +410,7 @@ jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child
 bool *scan_captured_locals(sv_func_t *func, int n_locals);
 bool *scan_captured_params(sv_func_t *func);
 bool jit_inlineable(sv_func_t *f);
+bool jit_can_forward_arguments(sv_func_t *func);
 bool jit_has_immediate_numeric_local_init(sv_func_t *func, uint8_t *ip, uint8_t *end, uint16_t local_idx);
 void jit_emit_inline_body(
     MIR_context_t ctx, MIR_item_t jit_func, ant_t *js,

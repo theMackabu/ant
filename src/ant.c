@@ -423,12 +423,15 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   size_t threshold = gc_live_major_threshold(js);
   if (js->obj_arena.live_count >= threshold) gc_maybe(js);
 
-  ant_object_t *obj = (ant_object_t *)fixed_arena_alloc(&js->obj_arena);
+  ant_object_t *obj = (ant_object_t *)fixed_arena_alloc_uninit(&js->obj_arena);
   if (!obj) return NULL;
 
+  obj->ic_identity = 0;
   obj->type_tag = type_tag;
   obj->proto = js_mkundef();
   obj->u.data.value = js_mkundef();
+  obj->u.array.len = 0;
+  obj->u.array.cap = 0;
   
   obj->shape = ant_shape_new_with_inobj_limit(inobj_limit);
   if (!obj->shape) {
@@ -457,18 +460,7 @@ static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit)
   obj->native.tag = 0;
   
   obj->mark_epoch = 0;
-  obj->flags.extensible = 1;
-  obj->flags.frozen = 0;
-  obj->flags.sealed = 0;
-  obj->flags.is_exotic = 0;
-  obj->flags.is_constructor = 0;
-  obj->flags.is_callable = 0;
-  obj->flags.fast_array = 0;
-  obj->flags.may_have_holes = 0;
-  obj->flags.may_have_dense_elements = 0;
-  obj->flags.gc_permanent = 0;
-  obj->flags.generation = 0;
-  obj->flags.in_remember_set = 0;
+  obj->flags = (ant_object_flags_t){.extensible = 1};
 
   obj->next = js->objects;
   js->objects = obj;
@@ -2944,6 +2936,7 @@ static ant_value_t mkprop_interned_attrs_impl(
     ant_shape_set_attrs_interned(ptr->shape, interned_key, attrs);
   } else {
     if (!ant_shape_add_interned_tr(&ptr->shape, interned_key, attrs, &slot)) return js_mkerr(js, "oom");
+    ant_object_invalidate_guarded_absence(ptr);
     added = true;
   }
 
@@ -3005,6 +2998,7 @@ static ant_value_t mkprop_symbol_attrs_impl(
   } else {
     if (!ant_shape_add_symbol_tr(&ptr->shape, sym_off, attrs, &slot))
       return js_mkerr(js, "oom");
+    ant_object_invalidate_guarded_absence(ptr);
     added = true;
   }
 
@@ -3083,8 +3077,10 @@ ant_value_t mkprop_append_fast(ant_t *js, ant_value_t obj, const char *key, size
   int32_t found = ant_shape_lookup_interned(ptr->shape, interned);
   
   if (found >= 0) slot = (uint32_t)found;
-  else if (!ant_shape_add_interned_tr(&ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &slot))
-    return js_mkerr(js, "oom");
+  else {
+    if (!ant_shape_add_interned_tr(&ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &slot)) return js_mkerr(js, "oom");
+    ant_object_invalidate_guarded_absence(ptr);
+  }
 
   if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape)))
     return js_mkerr(js, "oom");
@@ -5106,7 +5102,7 @@ static bool js_guard_to_primitive_absence(ant_t *js, ant_value_t value) {
     if (is_proxy(cur)) return false;
     ant_object_t *obj = js_obj_ptr(js_as_obj(cur));
     if (!obj) break;
-    ant_shape_guard_absence(obj->shape);
+    ant_object_guard_absence(obj);
 
     ant_value_t proto = get_proto(js, cur);
     if (!is_object_type(proto)) break;
@@ -6060,7 +6056,7 @@ static ant_value_t builtin_function_toString(ant_params_t) {
   return result;
 }
 
-static ant_value_t builtin_function_apply(ant_params_t) {
+ant_value_t builtin_function_apply(ant_params_t) {
   ant_value_t func = js->this_val;
   if (vtype(func) != kTypeFunction && vtype(func) != kTypeBuiltin) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.apply requires that 'this' be a Function");
@@ -6083,6 +6079,12 @@ static ant_value_t builtin_function_apply(ant_params_t) {
   if (call_args) free(call_args);
   
   return result;
+}
+
+bool js_is_function_apply_builtin(ant_value_t func) {
+  return 
+    vtype(func) == kTypeBuiltin && 
+    js_as_cfunc(func) == builtin_function_apply;
 }
 
 static ant_value_t builtin_bound_proxy_call(ant_params_t) {

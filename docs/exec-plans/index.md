@@ -30,6 +30,23 @@ decisions, checkpoints, or follow-up changes.
 `todo/` can still hold scratch notes, but durable execution history belongs in
 this directory.
 
+## Separate runtime artifacts
+
+The platform workflow uploads `ant-runtime-<target>` separately from `ant-<target>`.
+Derive the runtime artifact name from the configured Ant artifact name so musl
+target naming stays consistent. `maid download` skips runtime artifacts; the API
+resolves their own artifact IDs and extracts `ant-runtime` (or `ant-runtime.exe`).
+The runtime resolver retains run selection and release fallback, including ZIP
+extraction for runtime release assets. Version metadata still comes from the
+matching `version-ant-<target>` artifact. Default downloads also skip bench-v8
+scores; `maid download -- --all` downloads every artifact, including runtime,
+version, and score ZIPs. Artifact enumeration follows all API pages.
+
+Validation: `cd docs/api && bun test` passes 18 tests covering all targets,
+explicit/latest runs, extraction, release fallback, and download filtering.
+Native build/reconfigure and spec runs do not validate this packaging-only change;
+the next CI build must produce the new artifacts before the updated API is deployed.
+
 ## Eval binding fixes
 
 - `typeof arguments` skips the implicit object when the function owns an eval

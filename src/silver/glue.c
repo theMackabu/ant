@@ -225,6 +225,42 @@ ant_value_t jit_helper_apply(
   return result;
 }
 
+ant_value_t jit_helper_forward_arguments(
+  sv_vm_t *vm, ant_t *js, ant_value_t apply, ant_value_t target,
+  ant_value_t receiver, ant_value_t *args, int argc
+) {
+  if (js_is_function_apply_builtin(apply) && (vtype(target) == kTypeFunction || vtype(target) == kTypeBuiltin)) {
+    sv_closure_t *closure = vtype(target) == kTypeFunction ? js_func_closure(target) : NULL;
+    if (sv_closure_is_plain_sync(closure) && js->vm_exec_depth != 0) {
+      if (sv_check_c_stack_overflow(js))
+        return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+      sv_call_ctx_t call = {
+        .this_val = receiver, .super_val = js_mkundef(),
+        .new_target = js_mkundef(), .args = args, .argc = argc,
+      };
+      return sv_call_resolve_closure(vm, js, closure, target, &call, NULL);
+    }
+    return sv_vm_call_explicit_this(vm, js, target, receiver, args, argc);
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, apply);
+  GC_ROOT_PIN(js, target);
+  GC_ROOT_PIN(js, receiver);
+  
+  ant_value_t arguments = jit_helper_strict_arguments(vm, js, args, argc);
+  ant_value_t result = arguments;
+  
+  if (!is_err(arguments)) {
+    GC_ROOT_PIN(js, arguments);
+    ant_value_t call_args[] = {receiver, arguments};
+    result = sv_vm_call_explicit_this(vm, js, apply, target, call_args, 2);
+  }
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return result;
+}
+
 ant_value_t jit_helper_rest(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *args, int argc, int start
@@ -1250,7 +1286,9 @@ ant_value_t jit_helper_put_field_ic(
 }
 
 void jit_helper_shape_transition(ant_object_t *obj, ant_shape_t *to_shape) {
-  if (obj) ant_shape_transition_existing(&obj->shape, to_shape);
+  if (!obj || !obj->shape || !to_shape || obj->shape == to_shape) return;
+  ant_shape_transition_existing(&obj->shape, to_shape);
+  ant_object_invalidate_guarded_absence(obj);
 }
 
 ant_value_t jit_helper_get_elem(
@@ -1546,24 +1584,36 @@ ant_value_t jit_helper_new(
   ant_value_t record_func = func;
   ant_value_t effective_new_target = new_target;
 
-  if (vtype(func) == kTypeObject && is_proxy(func)) {
+  if (vtype(func) == kTypeObject && is_proxy(func))
     return js_proxy_construct(js, func, args, argc, new_target);
-  }
-  if (!js_is_constructor(func))
+  
+  sv_closure_t *closure = vtype(func) == kTypeFunction ? js_func_closure(func) : NULL;
+  ant_object_t *func_obj = closure && closure->func_obj ? js_obj_ptr(closure->func_obj) : NULL;
+  
+  if (func_obj ? !func_obj->flags.is_constructor : !js_is_constructor(func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
   ant_value_t proto = js_mkundef();
   if (vtype(func) == kTypeFunction || vtype(func) == kTypeBuiltin) {
-    proto = sv_prepare_construct_meta(
-      js, func, new_target, &effective_new_target, &record_func
-    );
+    proto = sv_prepare_construct_meta(js, func, new_target, &effective_new_target, &record_func);
     if (is_err(proto)) return proto;
   }
 
   ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
-  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  if (vtype(obj) == kTypeObject && is_object_type(proto)) js_obj_ptr(obj)->proto = proto;
   ant_value_t ctor_this = obj;
-  ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
+  ant_value_t result;
+  
+  if (sv_closure_is_plain_sync(closure) && !closure->func->is_derived_ctor && js->vm_exec_depth != 0) {
+    if (sv_check_c_stack_overflow(js))
+      return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    sv_call_ctx_t call = {
+      .this_val = obj, .super_val = js_mkundef(),
+      .new_target = effective_new_target, .args = args, .argc = argc,
+    };
+    
+    result = sv_call_resolve_closure(vm, js, closure, func, &call, &ctor_this);
+  } else result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, effective_new_target);
 
   if (is_err(result)) return result;
   ant_value_t final_obj =

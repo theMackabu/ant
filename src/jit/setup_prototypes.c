@@ -530,6 +530,12 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
       MIR_T_P, "args",
       MIR_T_I32, "argc");
 
+  c->forward_arguments_proto = MIR_new_proto(c->ctx, "forward_arguments_proto",
+      1, &special_obj_ret, 7, MIR_T_I64, "vm", MIR_T_I64, "js",
+      MIR_T_I64, "apply", MIR_T_I64, "target", MIR_T_I64, "receiver",
+      MIR_T_P, "args", MIR_T_I32, "argc");
+  c->imp_forward_arguments = MIR_new_import(c->ctx, "jit_helper_forward_arguments");
+
   MIR_type_t for_of_ret = MIR_JSVAL;
   c->for_of_proto = MIR_new_proto(c->ctx, "fo_proto",
                                   1, &for_of_ret, 4,

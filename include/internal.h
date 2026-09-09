@@ -646,6 +646,7 @@ sv_func_t *js_compile_parsed_bytecode(
 bool is_proxy(ant_value_t obj);
 bool is_array_value(ant_value_t value);
 bool js_is_array_includes_builtin(ant_value_t func);
+bool js_is_function_apply_builtin(ant_value_t func);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool same_value_values(ant_t *js, ant_value_t l, ant_value_t r);
 bool js_string_intrinsic_builtin_matches(ant_value_t func, ant_string_intrinsic_kind_t kind);
@@ -682,6 +683,7 @@ ant_value_t js_is_array_value_checked(ant_t *js, ant_value_t value, bool *out);
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
 
+ant_value_t builtin_function_apply(ant_params_t);
 ant_value_t builtin_object_isPrototypeOf(ant_params_t);
 ant_value_t builtin_object_freeze(ant_params_t);
 ant_value_t builtin_string_charCodeAt(ant_params_t);
