@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 #include <stdio.h>
-#include <stddef.h>
 
 bool ant_version_print_update_hint(FILE *out);
 const char *ant_release_platform_target(void);
