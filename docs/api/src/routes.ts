@@ -25,6 +25,7 @@ import {
   BranchQuerySchema,
   ChannelQuerySchema,
   DownloadParamsSchema,
+  LatestQuerySchema,
   ReleaseNotesQuerySchema,
   RefreshQuerySchema,
   VersionQuerySchema,
@@ -72,6 +73,9 @@ app.notFound(c => c.json({ error: 'not found' }, 404));
 app.get('/', c => c.json(routeIndex(new URL(c.req.url))));
 
 app.get('/v1/latest', async c => {
+  const query = LatestQuerySchema.parse(c.req.query());
+  if (query.revision) return manifestByRevision(c, query.revision);
+
   const channel = requestChannel(c);
   const key = manifestKey(channel);
   const manifest = await c.env.DOWNLOADS.get(key);
@@ -260,6 +264,67 @@ function requestOptions(c: AppContext): RequestOptions {
     branch: requestedBranch,
     runId: requestedRunId ? Number(requestedRunId) : undefined,
   };
+}
+
+async function manifestByRevision(c: AppContext, revision: string): Promise<Response> {
+  const wanted = revision.toLowerCase();
+
+  for (const channel of CHANNELS) {
+    const key = manifestKey(channel);
+    const object = await c.env.DOWNLOADS.get(key);
+    if (!object) continue;
+
+    const body = await object.text();
+    if (!manifestHasRevision(body, wanted)) continue;
+
+    const headers = new Headers({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'public, max-age=60',
+      'Access-Control-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff',
+    });
+
+    object.writeHttpMetadata(headers);
+    headers.set('X-Ant-Manifest-Key', key);
+    headers.set('X-Ant-Manifest-Channel', channel);
+    headers.set('X-Ant-Manifest-Revision', wanted);
+    headers.set('X-Ant-Manifest-Cached-At', object.customMetadata?.cached_at || '');
+
+    return new Response(body, { status: 200, headers });
+  }
+
+  return c.json(
+    {
+      error: `no published build matches revision ${wanted}`,
+      revision: wanted,
+      channels: [...CHANNELS],
+    },
+    404,
+  );
+}
+
+function manifestHasRevision(json: string, revision: string): boolean {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(json);
+  } catch {
+    return false;
+  }
+
+  if (!isMutableRecord(manifest)) return false;
+  const sections = [manifest.ant, manifest.runtime];
+
+  return sections.some(
+    section =>
+      Array.isArray(section) &&
+      section.some(
+        entry =>
+          isMutableRecord(entry) &&
+          entry.available === true &&
+          typeof entry.revision === 'string' &&
+          entry.revision.toLowerCase() === revision,
+      ),
+  );
 }
 
 function requestChannel(c: AppContext): Channel {

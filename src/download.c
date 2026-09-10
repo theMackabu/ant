@@ -223,8 +223,28 @@ int ant_manifest_channel_url(const char *channel, char *out, size_t out_len) {
   return written < 0 || (size_t)written >= out_len ? -ENAMETOOLONG : 0;
 }
 
-int ant_manifest_fetch(char **body_out, size_t *body_len_out, char *err, size_t err_len) {
-  return ant_download_get(ant_manifest_url(), NULL, NULL, NULL, body_out, body_len_out, err, err_len);
+int ant_manifest_revision_url(const char *revision, char *out, size_t out_len) {
+  if (!out || out_len == 0) return -EINVAL;
+  const char *base = ant_manifest_url();
+  int written;
+  if (!revision || !revision[0]) written = snprintf(out, out_len, "%s", base);
+  else written = snprintf(out, out_len, "%s%crevision=%s", base, strchr(base, '?') ? '&' : '?', revision);
+  return written < 0 || (size_t)written >= out_len ? -ENAMETOOLONG : 0;
+}
+
+int ant_manifest_fetch(
+  const char *revision, char **body_out, size_t *body_len_out,
+  char *err, size_t err_len
+) {
+  char url[2048];
+  if (ant_manifest_revision_url(revision, url, sizeof(url)) != 0) {
+    snprintf(err, err_len, "manifest url is too long");
+    return -ENAMETOOLONG;
+  }
+
+  int rc = ant_download_get(url, NULL, NULL, NULL, body_out, body_len_out, err, err_len);
+  if (rc != 0 && revision && strstr(err, "HTTP 404")) snprintf(err, err_len, ANT_UNPUBLISHED_BUILD_HINT);
+  return rc;
 }
 
 int ant_http_download_file(const char *url, FILE *file, const char *label, char *err, size_t err_len) {

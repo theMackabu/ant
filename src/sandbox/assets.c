@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "assets.h"
+#include "download.h"
 #include "modules/http.h"
 #include "progress.h"
 #include "sandbox/host.h"
@@ -627,17 +628,29 @@ static uint64_t sandbox_manifest_gzip_size(yyjson_val *entry) {
 static int sandbox_manifest_url(char *out, size_t out_len) {
   const char *base = getenv("ANT_SANDBOX_MANIFEST_URL");
   const char *branch = getenv("ANT_SANDBOX_MANIFEST_BRANCH");
+  const char *revision = ant_sandbox_assets_bypass_manifest ? NULL : ANT_GIT_LONGHASH;
 
   if (!base || !base[0]) base = ANT_SANDBOX_MANIFEST_URL;
-  if (!branch || !branch[0]) {
-    int written = snprintf(out, out_len, "%s", base);
-    return written < 0 || (size_t)written >= out_len ? -ENAMETOOLONG : 0;
+
+  int written = snprintf(out, out_len, "%s", base);
+  if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
+
+  size_t pos = (size_t)written;
+  bool query = strchr(base, '?') != NULL;
+
+  if (revision && revision[0]) {
+    written = snprintf(out + pos, out_len - pos, "%crevision=%s", query ? '&' : '?', revision);
+    if (written < 0 || (size_t)written >= out_len - pos) return -ENAMETOOLONG;
+    pos += (size_t)written;
+    query = true;
   }
 
-  int written = snprintf(out, out_len, "%s%cbranch=", base, strchr(base, '?') ? '&' : '?');
-  if (written < 0 || (size_t)written >= out_len) return -ENAMETOOLONG;
-  
-  size_t pos = (size_t)written;
+  if (!branch || !branch[0]) return 0;
+
+  written = snprintf(out + pos, out_len - pos, "%cbranch=", query ? '&' : '?');
+  if (written < 0 || (size_t)written >= out_len - pos) return -ENAMETOOLONG;
+
+  pos += (size_t)written;
   static const char hex[] = "0123456789ABCDEF";
   
   for (const unsigned char *p = (const unsigned char *)branch; *p; p++) {
@@ -961,7 +974,11 @@ static int sandbox_assets_download_missing_direct(
   size_t manifest_len = 0;
   rc = sandbox_http_get(manifest_url, NULL, NULL, 0, progress_ptr, &manifest, &manifest_len, err, err_len);
   if (progress_ptr) progress_stop(progress_ptr);
-  if (rc != 0) return rc;
+  if (rc != 0) {
+    if (!ant_sandbox_assets_bypass_manifest && err && strstr(err, "HTTP 404"))
+      sandbox_asset_error(err, err_len, "%s", ANT_UNPUBLISHED_BUILD_HINT);
+    return rc;
+  }
 
   sandbox_manifest_selection_t selection = {0};
   rc = sandbox_manifest_select(manifest, manifest_len, &selection, err, err_len);

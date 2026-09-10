@@ -6,6 +6,7 @@ export function routeIndex(url: URL) {
     schema: 1,
     routes: {
       latest: route(url, '/v1/latest?channel={channel}'),
+      latest_by_revision: route(url, '/v1/latest?revision={full_git_hash}'),
       refresh: route(
         url,
         '/v1/refresh?branch={branch}&run_id={run_id}&revision={full_git_hash}&channel={channel}',

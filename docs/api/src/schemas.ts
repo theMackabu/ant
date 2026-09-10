@@ -60,6 +60,11 @@ export const ChannelQuerySchema = z.object({
   channel: ChannelSchema.optional(),
 });
 
+export const LatestQuerySchema = z.object({
+  channel: ChannelSchema.optional(),
+  revision: ArtifactRevisionSchema.optional(),
+});
+
 export const DownloadParamsSchema = z.object({
   kind: z.enum(['ant', 'runtime', 'sandbox', 'kernel']),
   name: z.string().min(1),

@@ -143,7 +143,9 @@ static bool compile_runtime_cache_path(char *out, size_t out_len) {
 static int compile_download_runtime(FILE *dst, char *err, size_t err_len) {
   char *manifest = NULL;
   size_t manifest_len = 0;
-  if (ant_manifest_fetch(&manifest, &manifest_len, err, err_len) != 0) return -1;
+  
+  const char *revision = ant_compile_bypass_revision ? NULL : ANT_GIT_LONGHASH;
+  if (ant_manifest_fetch(revision, &manifest, &manifest_len, err, err_len) != 0) return -1;
 
   compile_runtime_info_t info;
   int rc = compile_manifest_select_runtime(manifest, manifest_len, &info, err, err_len);
