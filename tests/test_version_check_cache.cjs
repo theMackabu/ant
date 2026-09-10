@@ -38,7 +38,7 @@ const server = http.createServer((req, res) => {
       available: true,
       version: latestVersion,
       download_url: `http://127.0.0.1:${server.address().port}/ant`,
-      build_timestamp: Math.floor(Date.now() / 1000),
+      build_timestamp: Number(Ant.buildDate),
     })),
   });
   res.writeHead(200, {
@@ -132,12 +132,13 @@ async function main() {
     result = await runAnt(['upgrade']);
     assert.strictEqual(result.status, 0, result.stderr);
     assert.match(result.stdout, /Ant is already up to date\./);
-    assert.strictEqual(requestCount, 3, 'ant upgrade should always make a fresh request');
+    const upgradeRequests = Ant.channel === 'canary' ? 4 : 3;
+    assert.strictEqual(requestCount, upgradeRequests, 'ant upgrade should always make a fresh request for each checked channel');
 
     result = await runAnt(['--no-color', '--help']);
     assert.strictEqual(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout, /update available:/);
-    assert.strictEqual(requestCount, 3, 'ant upgrade should refresh the version cache');
+    assert.strictEqual(requestCount, upgradeRequests, 'ant upgrade should refresh the stable version cache');
 
     console.log('version check cache ok');
   } finally {

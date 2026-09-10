@@ -35,6 +35,7 @@ try {
   assert.ok(stdout.includes('argv: ["a","b"]'), stdout);
   assert.ok(stdout.includes(`execPath: ${fs.realpathSync(out)}`), stdout);
   assert.ok(stdout.includes('dirname: /$ant'), stdout);
+  assert.ok(stdout.includes(`version: ${JSON.stringify([Ant.version, 'string', Ant.channel])}`), stdout);
 
   const versionEnv = { ...process.env, ANT_NO_VERSION_CHECK: '1' };
   const antVersion = spawnSync(ant, ['--version'], { encoding: 'utf8', env: versionEnv });
@@ -50,6 +51,14 @@ try {
   r = spawnSync(out, ['--ant-version-raw'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, antVersionRaw.stdout);
+
+  const antChannel = spawnSync(ant, ['--version-channel'], { encoding: 'utf8' });
+  assert.equal(antChannel.status, 0, antChannel.stderr);
+  assert.equal(antChannel.stdout, `${Ant.channel}\n`);
+
+  r = spawnSync(out, ['--ant-version-channel'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, antChannel.stdout);
 
   r = spawnSync(out, ['--throw'], { encoding: 'utf8', cwd: os.homedir() });
   assert.equal(r.status, 0, `unhandled TLA rejection exits 0 like plain ant, got ${r.status}`);

@@ -614,6 +614,7 @@ int main(int argc, char *argv[]) {
     X(struct arg_file *, file, arg_filen(NULL, NULL, NULL, 0, argc, NULL)) \
     X(struct arg_lit *, version, arg_lit0("v", "version", "display version information and exit")) \
     X(struct arg_lit *, version_raw, arg_lit0(NULL, "version-raw", "raw version number for scripts")) \
+    X(struct arg_lit *, version_channel, arg_lit0(NULL, "version-channel", "release channel (stable or canary)")) \
     X(struct arg_lit *, help, arg_lit0("h", "help", "display this help and exit")) \
     X(struct arg_end *, end, arg_end(20))
   
@@ -641,6 +642,12 @@ int main(int argc, char *argv[]) {
   
   if (version_raw->count > 0) {
     fputs(ANT_VERSION "\n", stdout);
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_SUCCESS;
+  }
+
+  if (version_channel->count > 0) {
+    puts(ant_version_channel());
     CLEANUP_ARGS_AND_ARGV();
     return EXIT_SUCCESS;
   }

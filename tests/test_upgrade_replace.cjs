@@ -29,8 +29,23 @@ const targets = [
   'windows-x64',
 ];
 
+const currentVersion = process.versions.ant;
+const currentTimestamp = Number(Ant.buildDate);
+const isCanary = Ant.channel === 'canary';
+assert.strictEqual(typeof Ant.version, 'string');
+assert.strictEqual(Ant.version, currentVersion);
+assert.match(currentVersion, /^\d+\.\d+\.[^.]+\.\d+$/);
+const stableVersion = currentVersion;
+const canaryVersion = currentVersion;
+const requests = [];
+let stableRelease = { version: '999.0.fixture.0', build_timestamp: currentTimestamp - 1 };
+let canaryRelease = { version: '999.0.fixture.0', build_timestamp: currentTimestamp + 1 };
+let stableMissing = false;
+let canaryMissing = false;
+
 const server = http.createServer((req, res) => {
-  if (req.url === '/ant') {
+  requests.push(req.url);
+  if (req.url === '/ant' || req.url === '/ant-canary') {
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
       'content-length': executable.length,
@@ -40,13 +55,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  const canary = req.url.includes('channel=canary');
+  if (canary ? canaryMissing : stableMissing) {
+    res.writeHead(404, { connection: 'close' });
+    res.end('missing');
+    return;
+  }
+
   const body = JSON.stringify({
     ant: targets.map(target => ({
       target,
       available: true,
-      version: '999.0.fixture.0',
-      download_url: `http://127.0.0.1:${server.address().port}/ant`,
-      build_timestamp: Math.floor(Date.now() / 1000) + 1,
+      ...(canary ? canaryRelease : stableRelease),
+      download_url: `http://127.0.0.1:${server.address().port}/${canary ? 'ant-canary' : 'ant'}`,
     })),
   });
   res.writeHead(200, {
@@ -87,6 +108,15 @@ function runAnt(args, extraEnv = {}) {
   });
 }
 
+async function checkUpgrade(flags, expectedRequests, message, status = 0) {
+  requests.length = 0;
+  const result = await runAnt(['--no-color', 'upgrade', ...flags]);
+  assert.strictEqual(result.timedOut, false);
+  assert.strictEqual(result.status, status, result.stderr);
+  assert.match(result.stdout + result.stderr, message);
+  assert.deepStrictEqual(requests, expectedRequests);
+}
+
 async function main() {
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -105,10 +135,65 @@ async function main() {
     assert.strictEqual(result.status, 0, result.stderr);
     assert.match(result.stdout, /Upgraded successfully to Ant 999\.0\.fixture\.0/);
 
-    result = await runAnt(['--version-raw'], { ANT_NO_VERSION_CHECK: '1' });
+    result = await runAnt(['--version-raw'], {
+      ANT_NO_VERSION_CHECK: '1', ANT_CANARY: isCanary ? '0' : '1',
+    });
     assert.strictEqual(result.timedOut, false);
     assert.strictEqual(result.status, 0, result.stderr);
-    assert.strictEqual(result.stdout.trim(), process.versions.ant);
+    assert.strictEqual(result.stdout, `${currentVersion}\n`);
+
+    const beforeChannelRequests = requests.length;
+    result = await runAnt(['--version-channel'], { ANT_CANARY: isCanary ? '0' : '1' });
+    assert.strictEqual(result.timedOut, false);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.strictEqual(result.stdout, `${Ant.channel}\n`);
+    assert.strictEqual(requests.length, beforeChannelRequests, 'channel lookup should not use the network');
+
+    result = await runAnt(['--no-color', '-e', 'console.log(Ant.version)']);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.strictEqual(result.stdout, `${currentVersion}\n`);
+
+    result = await runAnt(['--no-color', '--version'], { ANT_NO_VERSION_CHECK: '1' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes(`${currentVersion}${isCanary ? ' (canary)' : ''} (released `));
+
+    await checkUpgrade([], ['/manifest', '/ant'], /Upgraded successfully/);
+    await checkUpgrade(['--canary'], ['/manifest?channel=canary', '/ant-canary'], /Upgraded successfully.*\(canary\)/);
+    await checkUpgrade(['--canary', '--stable'], [], /cannot be combined/, 1);
+
+    stableRelease = { version: stableVersion, build_timestamp: currentTimestamp };
+    canaryRelease = { version: canaryVersion, build_timestamp: currentTimestamp };
+    await checkUpgrade(['--stable'], isCanary ? ['/manifest', '/ant'] : ['/manifest'],
+      isCanary ? /Upgraded successfully/ : /already up to date/);
+    await checkUpgrade(['--canary'], isCanary ? ['/manifest?channel=canary'] : ['/manifest?channel=canary', '/ant-canary'],
+      isCanary ? /already up to date/ : /Upgraded successfully/);
+    await checkUpgrade([], isCanary ? ['/manifest', '/manifest?channel=canary'] : ['/manifest'], /already up to date/);
+
+    stableRelease = { version: '0.0.00000000.0', build_timestamp: currentTimestamp + 1 };
+    await checkUpgrade(['--stable'], ['/manifest', '/ant'], /Downgraded successfully/);
+    await checkUpgrade([], isCanary ? ['/manifest', '/manifest?channel=canary'] : ['/manifest'], /already up to date/);
+
+    // Same release, different commit: timestamps decide.
+    const parts = stableVersion.split('.');
+    parts[2] = parts[2] === 'ffffffff' ? '00000000' : 'ffffffff';
+    canaryRelease = { version: parts.join('.'), build_timestamp: currentTimestamp + 1 };
+    await checkUpgrade([], isCanary ? ['/manifest', '/manifest?channel=canary', '/ant-canary'] : ['/manifest'],
+      isCanary ? /Upgraded successfully.*\(canary\)/ : /already up to date/);
+
+    canaryRelease.build_timestamp = currentTimestamp - 1;
+    await checkUpgrade([], isCanary ? ['/manifest', '/manifest?channel=canary'] : ['/manifest'], /already up to date/);
+    await checkUpgrade(['--canary'], ['/manifest?channel=canary', '/ant-canary'], /Downgraded successfully/);
+
+    if (isCanary) {
+      stableRelease = { version: stableVersion, build_timestamp: currentTimestamp + 1 };
+      await checkUpgrade([], ['/manifest', '/ant'], /Upgraded successfully/);
+
+      stableMissing = true;
+      canaryRelease = { version: canaryVersion, build_timestamp: currentTimestamp };
+      await checkUpgrade([], ['/manifest', '/manifest?channel=canary'], /already up to date/);
+      canaryMissing = true;
+      await checkUpgrade([], ['/manifest', '/manifest?channel=canary'], /no canary build has been published/, 1);
+    }
 
     console.log('upgrade replace ok');
   } finally {

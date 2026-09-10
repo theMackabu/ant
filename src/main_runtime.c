@@ -78,6 +78,10 @@ int main(int argc, char *argv[]) {
       fputs(ANT_VERSION "\n", stdout);
       return EXIT_SUCCESS;
     }
+    if (strcmp(argv[1], "--ant-version-channel") == 0) {
+      puts(ant_version_channel());
+      return EXIT_SUCCESS;
+    }
     if (strcmp(argv[1], "--ant-version") == 0) return ant_version_print();
   }
 

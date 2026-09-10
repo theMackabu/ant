@@ -76,6 +76,8 @@ runs:
 
     - name: Configure and build
       shell: bash
+      env:
+        ANT_CANARY: ${{ github.event.inputs.channel == 'canary' && '1' || '0' }}
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/clang64/bin")
@@ -116,6 +118,7 @@ runs:
           --buildtype=release
           -Druntime_binary=enabled
           "-Dbuild_timestamp=${{ inputs.build_timestamp }}"
+          "-Dc_args=-DANT_CANARY=$ANT_CANARY"
           "-Ddeps_prefix_cmake=$DEPS_PREFIX"
           "-Dllvm_nm=${{ inputs.nm }}"
         )
@@ -127,7 +130,7 @@ runs:
         if [[ "$RUNNER_OS" == "Linux" ]]; then
           source "$GITHUB_WORKSPACE/meson/pgo/flags.sh"
           MESON_ARGS+=(
-            "-Dc_args=$ANT_PGO_FLAGS"
+            "-Dc_args=$ANT_PGO_FLAGS -DANT_CANARY=$ANT_CANARY"
             "-Dcpp_args=$ANT_PGO_FLAGS"
           )
         elif [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -136,7 +139,7 @@ runs:
             ANT_PGO_TUNE_FLAG="-mcpu=apple-m1"
             source "$GITHUB_WORKSPACE/meson/pgo/flags.sh"
             MESON_ARGS+=(
-              "-Dc_args=$ANT_PGO_FLAGS"
+              "-Dc_args=$ANT_PGO_FLAGS -DANT_CANARY=$ANT_CANARY"
               "-Dcpp_args=$ANT_PGO_FLAGS"
             )
           fi

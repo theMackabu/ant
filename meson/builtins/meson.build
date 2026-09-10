@@ -18,7 +18,6 @@ builtins_h = custom_target(
     '@OUTPUT0@',
     '@OUTPUT1@',
     src_root / 'src' / 'builtins' / 'bootstrap' / 'index.ts',
-    'VERSION=' + ant_version,
     'GIT_HASH=' + git_longhash,
     'BUILD_TIMESTAMP=' + timestamp,
     'TARGET=' + target_triple,

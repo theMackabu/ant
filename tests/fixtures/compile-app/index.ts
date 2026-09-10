@@ -14,6 +14,7 @@ console.log("cjs:", cjs.default.tag);
 console.log("argv:", JSON.stringify(process.argv.slice(2)));
 console.log("execPath:", process.execPath);
 console.log("dirname:", __dirname);
+console.log("version:", JSON.stringify([Ant.version, typeof Ant.version, Ant.channel]));
 
 if (process.argv.includes("--throw")) boom();
 
