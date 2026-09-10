@@ -1,7 +1,7 @@
 # Repo Knowledge Index
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 This directory is the durable, versioned knowledge base for Ant's repository
@@ -14,6 +14,7 @@ workflow. Start with the smallest document that answers the task at hand.
 - Build instructions: [../../BUILDING.md](../../BUILDING.md)
 - Contribution guide: [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
 - Test selection guide: [testing.md](testing.md)
+- JIT and GC invariants: [runtime-invariants.md](runtime-invariants.md)
 - Execution plans and tech debt: [../exec-plans/index.md](../exec-plans/index.md)
 
 ## How To Use This Knowledge Base
@@ -22,6 +23,8 @@ workflow. Start with the smallest document that answers the task at hand.
   scratch notes.
 - Use execution plans for work that spans multiple commits, decisions, or
   checkpoints.
+- Read completed plans only for relevant history. Current guidance belongs in
+  reference docs; archive checkpoints do not establish current behavior.
 - Keep `AGENTS.md` short and link into this directory rather than expanding it.
 - Run `maid knowledge` after updating these docs so stale links or missing
   metadata fail fast.

@@ -1,22 +1,30 @@
 # Completed Plans
 
 Status: active
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
-Move finished execution plans here once the associated work has landed. Keep
-the final validation notes and follow-up references intact so future changes
-can reuse the decision history.
+This is a historical archive. Open an individual plan only when its decision
+history or regression evidence is relevant to the task; do not load the archive
+at session startup or treat old checkpoints as current instructions.
+
+Before moving a finished plan here, condense it to the outcome, key decisions,
+final validation and limitations, and follow-up links. Promote current rules
+into `docs/repo/` or `ARCHITECTURE.md`. Preserve a Git revision for detailed logs
+removed during condensation. See the [plan lifecycle](../index.md).
 
 ## Plans
 
+- [Ant Cron API](ant-cron.md)
 - [ARM64 Nightly Benchmarks](arm64-nightly-benchmarks.md)
 - [Buffer Index Coercion Review Fixes](buffer-index-coercion.md)
 - [Compiled Native Addon Assets](compiled-native-addon-assets.md)
 - [Constructor Context and Accepted Socket Prototypes](net-connection-websocket-arg-regression.md)
+- [Crypto Import Performance](crypto-import-performance.md)
 - [Cwd-aware Path Resolution](path-resolver.md)
 - [Darwin Lazy Framework Startup](darwin-lazy-framework-startup.md)
 - [EventEmitter, Process, and Child Stream Unification](event-emitter-process-child-streams.md)
+- [Eval Binding Fixes](eval-binding-fixes.md)
 - [fable-perf-fixes Landing](fable-perf-fixes-landing.md)
 - [Guarded charCodeAt Opcode](charcode-intrinsic.md)
 - [Listener Accept Bursts](listener-accept-burst.md)
@@ -29,6 +37,7 @@ can reuse the decision history.
 - [Promise Resolution Performance](promise-resolution-performance.md)
 - [Property Reference Table Removal](property-reference-table-removal.md)
 - [REPL Evaluation Completions](repl-evaluation-completions.md)
+- [Separate Runtime Artifacts](separate-runtime-artifacts.md)
 - [Silver Header Boundaries](silver-header-boundaries.md)
 - [Static c-ares Release Portability](static-cares-release-portability.md)
 - [Swarm JIT Modularization](swarm-modularization.md)

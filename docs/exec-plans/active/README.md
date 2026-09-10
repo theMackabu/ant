@@ -1,7 +1,7 @@
 # Active Plans
 
 Status: active
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 Store in-progress execution plans here.
@@ -22,6 +22,9 @@ Store in-progress execution plans here.
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)
 - [Microtask Checkpoint Timing](microtask-checkpoint-timing.md)
+- [Nanos Sandbox](nanos-sandbox.md)
+- [Node–Ant Differential Runner](node-ant-differential-runner.md)
+- [Vendored Node.js Compatibility Suite](node-compat-suite.md)
 - [Node Core JavaScript Shims](node-core-js-shims.md)
 - [PR #44 Source Port Audit](pr-44-source-port-audit.md)
 - [Silver Recursive JIT Performance](silver-recursive-jit-perf.md)

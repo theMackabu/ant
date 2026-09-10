@@ -1,7 +1,7 @@
 # Architecture
 
 Status: active
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 This document is the top-level map for Ant's runtime and build graph. It is
@@ -65,6 +65,9 @@ extends that shared prefix with `call_new_target` for the callback ABI.
 There is no ambient `ant_t::new_target` field. The
 [constructor-context plan](docs/exec-plans/completed/net-connection-websocket-arg-regression.md)
 records the regression, implementation, and validation.
+
+For JIT fallback, inline-cache lifetime, and GC ownership rules, read the
+focused [runtime invariants](docs/repo/runtime-invariants.md) reference.
 
 ### Host platform surface
 

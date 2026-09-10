@@ -1,7 +1,7 @@
 # Testing Guide
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 This guide keeps validation proportional to the change while still protecting runtime behavior.
@@ -36,6 +36,28 @@ This guide keeps validation proportional to the change while still protecting ru
   `maid build`).
 - Validate any new repo-knowledge or workflow checks locally with
   `maid knowledge` and `maid structure`.
+
+### Documentation only
+
+- Run `maid preflight` and any documentation checks it recommends.
+- Check links in edited plans as well; `maid knowledge` checks the core
+  entrypoints, not every archived document.
+- Runtime builds and spec runs are unnecessary when only documentation changes.
+
+## Performance Comparisons
+
+- Pin baseline and candidate binaries and alternate their run order on the same
+  host. Check identical work and output before comparing timings.
+- Verify child processes use the intended binary, including benchmark runners
+  and commands that resolve executables through `PATH`.
+- Match build configuration and PGO conditions. Stale or discarded profile
+  counts can change unrelated hot code; separate that effect from the source
+  change before claiming a regression or improvement.
+- Use whole-run counters to test a suspected mechanism. A short profile sample
+  or a synthetic microbenchmark does not establish a whole-program speedup.
+- Record the tested revision, configuration, workload, result, and limits in
+  the relevant plan. Old suite counts, host timings, and temporary binary paths
+  are historical evidence, not current acceptance thresholds.
 
 ## Notes
 

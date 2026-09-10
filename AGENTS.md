@@ -1,12 +1,15 @@
 # AGENTS.md
 
 Status: active
-Last reviewed: 2026-04-09
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 This file is the table of contents for agent work in Ant. Start here, then
 open the smallest linked document that matches the task instead of loading the
 entire repository into context.
+
+Completed execution plans are historical references; open one only for a
+relevant decision or regression, not as routine startup context.
 
 ## Start Here
 
@@ -54,9 +57,9 @@ guidance.
 - Keep durable design notes and execution history in versioned markdown under
   `docs/`. Treat `todo/` as scratch space, not the source of truth.
 - Add or update tests when behavior changes.
-- When touching build or runtime invariants, document the reasoning in
-  [docs/exec-plans/index.md](docs/exec-plans/index.md) or a linked plan if the
-  work spans multiple steps.
+- When touching build or runtime invariants across multiple steps, document
+  the reasoning in an individual plan under
+  [docs/exec-plans/](docs/exec-plans/index.md). Keep the index for navigation.
 - Builds and broad validation runs (for example `maid build` or
   spec runs with `--all`) may need broader system access; pause and get
   explicit user approval before proceeding when sandbox escalation is required.

@@ -1,7 +1,7 @@
 # Technical Debt Tracker
 
 Status: active
-Last reviewed: 2026-08-30
+Last reviewed: 2026-09-10
 Owner: theMackabu
 
 Use this file to record debt that is important enough to preserve but not yet
@@ -71,7 +71,7 @@ scheduled.
 
 - Area: `src/modules/worker_threads.c` — spawn-failure path
   - Issue: The `new Worker(...)` synchronous failure branch calls `wt_cleanup(wt)` (plain `free`) while `wt` is still linked on `active_workers_head` (so `gc_mark_worker_threads` walks freed memory on every GC) and while `wt_spawn_worker`'s failure branches have `uv_close`d the embedded `stdout_pipe` with a NULL callback (uv still owns a closing handle inside the freed struct).
-  - Impact: Use-after-free on GC mark and on uv close completion — but only reachable when uv_spawn fails synchronously (EMFILE-class errors; missing binaries report asynchronously via exit_cb), which also makes a fix hard to test. The 2026-08-02 `ANT_GC_STRESS=3` full-spec crash previously attributed to this path was falsified on 2026-08-06: it was a WebSocket transport lifetime bug triggered before the worker exit path began, and is now fixed (see `completed/fable-perf-fixes-landing.md`). The spawn-failure audit finding remains open independently.
+  - Impact: Use-after-free on GC mark and on uv close completion — but only reachable when uv_spawn fails synchronously (EMFILE-class errors; missing binaries report asynchronously via exit_cb), which also makes a fix hard to test. The 2026-08-02 `ANT_GC_STRESS=3` full-spec crash previously attributed to this path was falsified on 2026-08-06: it was a WebSocket transport lifetime bug triggered before the worker exit path began, and is now fixed (see the [WebSocket lifetime resolution](completed/fable-perf-fixes-landing.md#websocket-lifetime)). The spawn-failure audit finding remains open independently.
   - Proposed fix: Mirror the success path — `wt_detach` + close handles with `wt_on_handle_closed` and `close_pending` accounting; drop `wt_cleanup` entirely (the success path deliberately leaks the struct; the failure path should match).
   - Status: backlog
 
@@ -184,13 +184,6 @@ scheduled.
   - Proposed fix: Only if per-function registration data is wanted in several more places, add a QuickJS-style `magic` int to `ant_cfunc_meta_t` and pass it through to callbacks, letting one generic `iter_next` dispatch through a static advance table with no runtime pointer chasing. This is an engine-wide ABI change — every builtin signature, the call dispatcher, and the JIT native-call convention — so it must not be done just to delete the six iterator trampolines.
   - Owner: theMackabu
   - Status: backlog (deliberately deferred; revisit only alongside a broader cfunc ABI change)
-
-- Area: Generational GC / open upvalues into suspended coroutine stacks
-  - Issue: The closed-upvalue write barrier (`gc_upvalue_write_barrier`) covers closed cells only. An OPEN upvalue whose `location` was relocated into a materialized coroutine's heap-allocated VM stack (`sv_async_move_open_upvalues`) is not covered: if the owning generator/async object is promoted to old, minor GC scans neither the object (old objects are not traversed) nor the suspended VM stack (only `pending_coroutines` and mco stacks are scanned), so a young value written through such a cell between suspension and resumption is invisible to minor GC and can be freed while reachable.
-  - Impact: Use-after-free requiring a specific interleaving: closure escapes a generator, generator suspends and is promoted, escaped closure writes a fresh heap value through the still-open relocated cell, minor GC runs before resumption. Pre-existing (predates the closed-cell barrier); no known in-the-wild repro.
-  - Proposed fix: A per-isolate registry of live materialized VMs (`sv_vm_create(SV_VM_ASYNC)` / `sv_vm_destroy`), with minor GC scanning suspended VM stacks the way it scans `pending_coroutines`. Barrier-side alternatives are unsafe: remembering open cells and marking `*location` reads freed memory if the target VM is destroyed before the next GC (`sv_vm_destroy` does not close upvalues pointing into its stack).
-  - Owner: theMackabu
-  - Status: backlog
 
 - Area: `src/streams/readable.c`
   - Issue: `ReadableStreamBYOBReader` is still explicitly unimplemented, and byte-source support is still called out as incomplete.
