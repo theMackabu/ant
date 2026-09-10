@@ -2,6 +2,9 @@ name: Build Native Dependencies
 description: Build zlib as needed
 
 inputs:
+  platform:
+    description: Target platform key used to isolate compiled dependencies
+    required: true
   deps:
     description: Space-separated list of deps to build (zlib)
     required: true
@@ -43,7 +46,7 @@ runs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
         path: ${{ inputs.prefix }}
-        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.deps-hash.outputs.hash }}-${{ hashFiles('.github/versions.json') }}-v1
+        key: deps-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.deps-hash.outputs.hash }}-${{ hashFiles('.github/versions.json') }}-v1
 
     - name: Prepare build environment
       id: prep

@@ -13,10 +13,10 @@ on:
     outputs:
       version:
         description: Build version
-        value: ${{ jobs.build.outputs.version }}
+        value: ${{ inputs.platform == 'macos-x64' && jobs.validate_macos_x64.outputs.version || jobs.build.outputs.version }}
       bench_v8_score:
         description: bench-v8 geometric-mean score
-        value: ${{ jobs.build.outputs.bench_v8_score }}
+        value: ${{ inputs.platform == 'macos-x64' && jobs.validate_macos_x64.outputs.bench_v8_score || jobs.build.outputs.bench_v8_score }}
 
 jobs:
   build:
@@ -30,7 +30,7 @@ jobs:
         inputs.platform == 'linux-glibc-aarch64', 'ubuntu-24.04-arm',
         inputs.platform == 'linux-musl-x64', 'ubuntu-24.04',
         inputs.platform == 'linux-musl-aarch64', 'ubuntu-24.04-arm',
-        inputs.platform == 'macos-x64', 'macos-15-intel',
+        inputs.platform == 'macos-x64', 'macos-15',
         inputs.platform == 'macos-aarch64', 'macos-15',
         inputs.platform == 'windows-x64', 'windows-latest',
         'ubuntu-24.04'
@@ -176,6 +176,7 @@ jobs:
       - name: Build native dependencies
         uses: ./.github/actions/build-native-deps
         with:
+          platform: ${{ inputs.platform }}
           deps: ${{ steps.config.outputs.deps }}
           prefix: ${{ github.workspace }}/.deps-cache
           cc: ${{ steps.llvm.outputs.cc }}
@@ -191,6 +192,7 @@ jobs:
         uses: ./.github/actions/build-project
         with:
           platform: ${{ inputs.platform }}
+          cross_file: ${{ inputs.platform == 'macos-x64' && 'meson/cross/macos-x64.ini' || '' }}
           cc: ${{ steps.llvm.outputs.cc }}
           cxx: ${{ steps.llvm.outputs.cxx }}
           ar: ${{ steps.llvm.outputs.ar }}
@@ -205,6 +207,7 @@ jobs:
           binary_name: ${{ steps.config.outputs.binary_name }}
 
       - name: Test cron scheduler backend
+        if: inputs.platform != 'macos-x64'
         shell: bash
         run: |
           ANT_BIN="./build/${{ steps.config.outputs.binary_name }}"
@@ -233,40 +236,11 @@ jobs:
 
       - name: Run bench-v8
         id: bench_v8
-        shell: bash
-        run: |
-          RESULT_DIR="bench-v8-results"
-          RESULT_PATH="$RESULT_DIR/${{ inputs.platform }}.json"
-          ANT_BIN="./build/${{ steps.config.outputs.binary_name }}"
-
-          mkdir -p "$RESULT_DIR"
-          "$ANT_BIN" examples/bench-v8/index.js
-          cp examples/bench-v8/score.json "$RESULT_PATH"
-
-          SCORE=$(jq -er '
-            [
-              .score,
-              .results.Richards,
-              .results.DeltaBlue,
-              .results.Crypto,
-              .results.RayTrace,
-              .results.EarleyBoyer,
-              .results.RegExp,
-              .results.Splay,
-              .results.NavierStokes
-            ]
-            | if all(.[]; type == "number") then .[0]
-              else error("bench-v8 result contains missing or non-numeric scores")
-              end
-          ' "$RESULT_PATH")
-          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
-
-      - name: Upload bench-v8 score
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: inputs.platform != 'macos-x64'
+        uses: ./.github/actions/bench-v8
         with:
-          name: bench-v8-${{ inputs.platform }}
-          path: bench-v8-results/${{ inputs.platform }}.json
-          if-no-files-found: error
+          platform: ${{ inputs.platform }}
+          binary_name: ${{ steps.config.outputs.binary_name }}
 
       # === UPLOAD ARTIFACTS ===
       - name: Upload binary
@@ -287,15 +261,75 @@ jobs:
             build/ant-runtime.exe
 
       - name: Save version info
+        if: inputs.platform != 'macos-x64'
         shell: bash
         run: |
           echo "${{ steps.build.outputs.version }}" > version.txt
           echo "${{ inputs.build_timestamp }}" > build-timestamp.txt
 
       - name: Upload version info
+        if: inputs.platform != 'macos-x64'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: version-${{ steps.config.outputs.artifact_name }}
+          path: |
+            version.txt
+            build-timestamp.txt
+          retention-days: 1
+
+  validate_macos_x64:
+    name: Validate macOS x64 on Intel
+    needs: build
+    if: inputs.platform == 'macos-x64'
+    runs-on: macos-15-intel
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bench_v8_score: ${{ steps.bench_v8.outputs.score }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Download x64 binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ant*-darwin-x64
+          merge-multiple: true
+          path: build
+
+      - name: Verify x64 binaries
+        id: version
+        shell: bash
+        run: |
+          [[ "$(uname -m)" == "x86_64" ]]
+          for bin in build/ant build/ant-runtime; do
+            [[ "$(lipo -archs "$bin")" == "x86_64" ]]
+            chmod +x "$bin"
+            codesign --verify --verbose "$bin"
+          done
+          VERSION=$(./build/ant --version-raw)
+          echo "Version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "$VERSION" > version.txt
+          echo "${{ inputs.build_timestamp }}" > build-timestamp.txt
+
+      - name: Test x64 runtime
+        shell: bash
+        run: |
+          ./build/ant tests/test_ant_cron.cjs
+          ./build/ant tests/test_ant_cron_os.cjs
+          ./build/ant tests/test_compile_basic.cjs
+          ./build/ant tests/test_temporal.js
+
+      - name: Run bench-v8
+        id: bench_v8
+        uses: ./.github/actions/bench-v8
+        with:
+          platform: ${{ inputs.platform }}
+
+      - name: Upload version info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: version-ant-darwin-x64
           path: |
             version.txt
             build-timestamp.txt

@@ -1,0 +1,57 @@
+name: Run bench-v8
+description: Run the target binary and upload its benchmark scores
+
+inputs:
+  platform:
+    description: Target platform key
+    required: true
+  binary_name:
+    description: Binary filename inside build/
+    required: false
+    default: ant
+
+outputs:
+  score:
+    description: bench-v8 geometric-mean score
+    value: ${{ steps.bench_v8.outputs.score }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run bench-v8
+      id: bench_v8
+      shell: bash
+      run: |
+        RESULT_DIR="bench-v8-results"
+        RESULT_PATH="$RESULT_DIR/${{ inputs.platform }}.json"
+        ANT_BIN="./build/${{ inputs.binary_name }}"
+
+        mkdir -p "$RESULT_DIR"
+        "$ANT_BIN" examples/bench-v8/index.js
+        cp examples/bench-v8/score.json "$RESULT_PATH"
+
+        SCORE=$(jq -er '
+          [
+            .score,
+            .results.Richards,
+            .results.DeltaBlue,
+            .results.Crypto,
+            .results.RayTrace,
+            .results.EarleyBoyer,
+            .results.RegExp,
+            .results.Splay,
+            .results.NavierStokes
+          ]
+          | if all(.[]; type == "number") then .[0]
+            else error("bench-v8 result contains missing or non-numeric scores")
+            end
+        ' "$RESULT_PATH")
+        echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+
+    - name: Upload bench-v8 score
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      with:
+        name: bench-v8-${{ inputs.platform }}
+        path: bench-v8-results/${{ inputs.platform }}.json
+        if-no-files-found: error
+

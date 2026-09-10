@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const process_env = @import("process_env.zig");
 const io = std.Io.Threaded.global_single_threaded.io();
 
+pub const std_options: std.Options = .{ .signal_stack_size = null };
+
 pub const cli = @import("cli.zig");
 pub const lockfile = @import("lockfile.zig");
 pub const cache = @import("cache.zig");

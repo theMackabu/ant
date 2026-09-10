@@ -95,14 +95,20 @@ pkg_sources = files(
   'src/pkg/uv.zig',
 )
 
+pkg_zig_args = []
+if meson.is_cross_build() and host_machine.system() == 'darwin'
+  pkg_zig_args += ['-Dtarget=' + host_machine.cpu_family() + '-macos.15.0']
+endif
+
 pkg_lib = custom_target(
   'pkg_zig',
   input: pkg_sources,
   output: 'libpkg.a',
   command: [
     'sh', '-c',
-    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/$PKG_LIB_NAME" "@OUTPUT@"'
-  ],
+    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" "$@" && cp "$PKG_BUILD_DIR/lib/$PKG_LIB_NAME" "@OUTPUT@"',
+    'pkg-zig',
+  ] + pkg_zig_args,
   env: {
     'ZIG': zig.full_path(),
     'ANT_VERSION': ant_version,

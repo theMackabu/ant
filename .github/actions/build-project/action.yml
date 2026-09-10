@@ -13,6 +13,10 @@ inputs:
   cc:
     description: C compiler
     required: true
+  cross_file:
+    description: Optional Meson cross file; executable validation is deferred to the target runner
+    required: false
+    default: ''
   cxx:
     description: C++ compiler
     required: false
@@ -64,15 +68,15 @@ runs:
         path: |
           vendor/*/
           build/vendor
-        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap', 'vendor/packagefiles/**', 'meson/deps/meson.build') }}
+        key: vendor-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap', 'vendor/packagefiles/**', 'meson/deps/meson.build', 'meson/cross/**') }}
 
     - name: Cache Temporal Rust toolchain and crates
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
       with:
         path: .cache/temporal-rust
-        key: temporal-rust-${{ inputs.platform }}-${{ hashFiles('src/temporal/Cargo.toml', 'src/temporal/Cargo.lock', 'src/temporal/rust-toolchain.toml', 'vendor/temporal_capi.wrap', 'vendor/packagefiles/temporal_capi/**', 'vendor/packagefiles/patches/temporal-capi-fs-provider.patch', 'meson/temporal.py') }}
+        key: temporal-rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/temporal/Cargo.toml', 'src/temporal/Cargo.lock', 'src/temporal/rust-toolchain.toml', 'vendor/temporal_capi.wrap', 'vendor/packagefiles/temporal_capi/**', 'vendor/packagefiles/patches/temporal-capi-fs-provider.patch', 'meson/temporal.py') }}
         restore-keys: |
-          temporal-rust-${{ inputs.platform }}-
+          temporal-rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Configure and build
       shell: bash
@@ -115,6 +119,7 @@ runs:
 
         MESON_ARGS=(
           -Db_lto=true
+          -Db_lto_mode=default
           --buildtype=release
           -Druntime_binary=enabled
           "-Dbuild_timestamp=${{ inputs.build_timestamp }}"
@@ -122,6 +127,14 @@ runs:
           "-Ddeps_prefix_cmake=$DEPS_PREFIX"
           "-Dllvm_nm=${{ inputs.nm }}"
         )
+
+        if [[ -n "${{ inputs.cross_file }}" ]]; then
+          export PATH="$(dirname "$CC"):$PATH"
+          export CC_FOR_BUILD="$CC"
+          export CXX_FOR_BUILD="$CXX"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          MESON_ARGS+=(--cross-file "${{ inputs.cross_file }}")
+        fi
 
         if [[ "${{ inputs.static_link }}" == "true" ]]; then
           MESON_ARGS+=(--prefer-static -Dstatic_link=true)
@@ -158,6 +171,7 @@ runs:
 
     - name: Verify build
       id: version
+      if: inputs.cross_file == ''
       shell: bash
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -168,20 +182,23 @@ runs:
         echo "Version: $VERSION"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
-          for bin in build/${{ inputs.binary_name }} build/ant-runtime; do
-            [[ -f "$bin" ]] || continue
-            NON_SYSTEM_DYLIBS=$(otool -L "$bin" \
-              | tail -n +2 \
-              | awk '{print $1}' \
-              | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
-            if [[ -n "$NON_SYSTEM_DYLIBS" ]]; then
-              echo "Error: macOS release binary $bin references non-system libraries:"
-              echo "$NON_SYSTEM_DYLIBS"
-              exit 1
-            fi
-          done
-        fi
+    - name: Verify macOS artifacts
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        EXPECTED_ARCH="${{ inputs.platform == 'macos-x64' && 'x86_64' || 'arm64' }}"
+        for bin in build/${{ inputs.binary_name }} build/ant-runtime; do
+          [[ "$(lipo -archs "$bin")" == "$EXPECTED_ARCH" ]]
+          NON_SYSTEM_DYLIBS=$(otool -L "$bin" \
+            | tail -n +2 \
+            | awk '{print $1}' \
+            | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+          if [[ -n "$NON_SYSTEM_DYLIBS" ]]; then
+            echo "Error: macOS release binary $bin references non-system libraries:"
+            echo "$NON_SYSTEM_DYLIBS"
+            exit 1
+          fi
+        done
 
     - name: Strip binary
       shell: bash
