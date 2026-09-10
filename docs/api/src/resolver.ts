@@ -5,10 +5,11 @@ import {
   canDownloadActionsArtifacts,
   DEFAULT_BRANCH,
   DEFAULT_CHANNEL,
+  manifestKey,
   MUSL_SANDBOX_WORKFLOW,
   GITHUB_REPOSITORY,
 } from './config';
-import type { RequestOptions } from './config';
+import type { Channel, RequestOptions } from './config';
 import { HttpError, isNotFound } from './errors';
 import {
   fetchArtifactDownload,
@@ -36,6 +37,47 @@ import type {
   ResolvedArtifact,
   WorkflowRun,
 } from './types';
+
+export async function resolveFromManifest(
+  env: Env,
+  kind: ArtifactKind,
+  name: string,
+  channel: Channel,
+  options: RequestOptions = {},
+): Promise<ResolvedArtifact | null> {
+  const object = await env.DOWNLOADS.get(manifestKey(channel));
+  if (!object) return null;
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await object.text());
+  } catch {
+    return null;
+  }
+
+  if (!manifest || typeof manifest !== 'object') return null;
+  const section = (manifest as Record<string, unknown>)[kind];
+  if (!Array.isArray(section)) return null;
+
+  const field = kind === 'ant' || kind === 'runtime' ? 'target' : 'arch';
+  const entry = section.find(
+    item =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      (item as Record<string, unknown>).available === true &&
+      (item as Record<string, unknown>)[field] === name,
+  ) as ResolvedArtifact | undefined;
+
+  if (!entry || !entry.artifact || !entry.source) return null;
+
+  // An explicit pin must match, otherwise fall through to a live lookup.
+  if (entry.source.type === 'actions') {
+    if (options.runId && entry.source.run_id !== options.runId) return null;
+    if (options.branch && entry.source.head_branch !== options.branch) return null;
+  } else if (options.runId) return null;
+
+  return entry;
+}
 
 export async function latestManifest(url: URL, env: Env, options: RequestOptions = {}) {
   const ant = await Promise.all(
@@ -68,7 +110,9 @@ export async function latestManifest(url: URL, env: Env, options: RequestOptions
 
   const sandbox = await Promise.all(
     ['x64', 'aarch64'].map(arch =>
-      resolveManifestEntry({ arch }, () => resolveNanosArtifact(env, 'sandbox', arch, url, options)),
+      resolveManifestEntry({ arch }, () =>
+        resolveNanosArtifact(env, 'sandbox', arch, url, options),
+      ),
     ),
   );
 
@@ -169,10 +213,14 @@ export async function versionCheck(
   env: Env,
   query: VersionCheckQuery,
   options: RequestOptions = {},
+  channel: Channel = DEFAULT_CHANNEL,
 ) {
+  const target = resolveTarget(query.target || '');
   const [release, latest] = await Promise.all([
     latestRelease(env),
-    resolveAnt(env, resolveTarget(query.target || ''), url, options),
+    resolveFromManifest(env, 'ant', target.key, channel, options).then(
+      entry => entry ?? resolveAnt(env, target, url, options),
+    ),
   ]);
   const current = normalizeVersion(query.current);
   const latestVersion = normalizeVersion(release.tag_name);
@@ -183,7 +231,8 @@ export async function versionCheck(
     target: query.target,
     current: current || null,
     latest: latestVersion,
-    latest_sha: latest.revision || (latest.source.type === 'actions' ? latest.source.head_sha : null),
+    latest_sha:
+      latest.revision || (latest.source.type === 'actions' ? latest.source.head_sha : null),
     latest_build_timestamp: latest.build_timestamp ?? null,
     out_of_date: isOutOfDate(
       current,
@@ -461,7 +510,9 @@ async function resolveActionNamedArtifact(
     }
   }
 
-  const match = await findLatestRunWithArtifacts(env, workflow, branch(env, options), [artifactName]);
+  const match = await findLatestRunWithArtifacts(env, workflow, branch(env, options), [
+    artifactName,
+  ]);
   const artifact = requireArtifact(match.artifacts, artifactName);
   return resolvedAction(
     kind,
@@ -542,7 +593,13 @@ async function resolveReleaseArtifact(
     name: asset.name,
     version: kind === 'ant' ? version : undefined,
     revision,
-    download_url: downloadUrl(url, kind, downloadName, branch(env, options), actionsRunId(env, options)),
+    download_url: downloadUrl(
+      url,
+      kind,
+      downloadName,
+      branch(env, options),
+      actionsRunId(env, options),
+    ),
     artifact: {
       id: asset.id,
       name: asset.name,

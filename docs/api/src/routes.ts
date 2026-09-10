@@ -35,6 +35,7 @@ import {
   latestAntVersion,
   latestManifest,
   resolveAnt,
+  resolveFromManifest,
   resolveNanosArtifact,
   resolveRuntime,
   versionCheck,
@@ -223,14 +224,20 @@ app.on(['GET', 'HEAD'], '/v1/download/:kind/:name', async c => {
   const options = requestOptions(c);
   const params = DownloadParamsSchema.parse(c.req.param());
   const url = new URL(c.req.url);
+  const isBinary = params.kind === 'ant' || params.kind === 'runtime';
+  const name = isBinary ? resolveTarget(params.name).key : resolveArch(params.name);
+
+  const published = await resolveFromManifest(c.env, params.kind, name, requestChannel(c), options);
+
   const artifact =
-    params.kind === 'ant'
+    published ||
+    (params.kind === 'ant'
       ? await resolveAnt(c.env, resolveTarget(params.name), url, options)
       : params.kind === 'runtime'
         ? await resolveRuntime(c.env, resolveTarget(params.name), url, options)
         : params.kind === 'sandbox'
           ? await resolveNanosArtifact(c.env, 'sandbox', resolveArch(params.name), url, options)
-          : await resolveNanosArtifact(c.env, 'kernel', resolveArch(params.name), url, options);
+          : await resolveNanosArtifact(c.env, 'kernel', resolveArch(params.name), url, options));
 
   return downloadArtifact(c.req.raw, c.env, c.executionCtx, artifact);
 });
@@ -243,10 +250,11 @@ async function versionRoute(c: AppContext) {
     build_timestamp: rawQuery.build_timestamp || headerBuildTimestamp,
   });
   const options = requestOptions(c);
-  const cacheKey = `version:${GITHUB_REPOSITORY}:${branch(c.env, options)}:${query.target}:${query.current}:${query.buildTimestamp || ''}`;
+  const channel = requestChannel(c);
+  const cacheKey = `version:${GITHUB_REPOSITORY}:${branch(c.env, options)}:${channel}:${query.target}:${query.current}:${query.buildTimestamp || ''}`;
 
   return cachedJson(c.req.raw, c.executionCtx, c.env, cacheKey, () =>
-    versionCheck(new URL(c.req.url), c.env, query, options),
+    versionCheck(new URL(c.req.url), c.env, query, options, channel),
   );
 }
 
