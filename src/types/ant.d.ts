@@ -287,7 +287,9 @@ interface AntCron {
 }
 
 interface AntStatic {
-  version: string;
+  version: `${number}.${number}.${string}.${number}`;
+  channel: 'stable' | 'canary';
+  
   target: string;
   revision: string;
   buildDate: string;
