@@ -145,6 +145,14 @@ static bool ant_latest_is_newer(const ant_latest_info_t *latest) {
   return latest->build_timestamp > (uint64_t)ANT_BUILD_TIMESTAMP;
 }
 
+static bool ant_latest_is_older(const ant_latest_info_t *latest) {
+  if (!latest || !latest->version[0]) return false;
+  int cmp = ant_version_compare(ANT_VERSION, latest->version);
+  if (cmp != 0) return cmp > 0;
+  if (strcmp(ANT_VERSION, latest->version) == 0) return false;
+  return latest->build_timestamp < (uint64_t)ANT_BUILD_TIMESTAMP;
+}
+
 static bool ant_latest_is_current_build(const ant_latest_info_t *latest) {
   if (!latest || !latest->version[0]) return false;
   if (strcmp(ANT_VERSION, latest->version) != 0) return false;
@@ -492,14 +500,17 @@ static int ant_install_downloaded(
 
 int ant_upgrade(int argc, char **argv) {
   struct arg_lit *canary = arg_lit0(NULL, "canary", "install the latest canary build instead of the stable release");
+  struct arg_lit *stable = arg_lit0(NULL, "stable", "install the latest stable release, downgrading from canary if needed");
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_end *end = arg_end(20);
 
-  void *argtable[] = { canary, help, end };
+  void *argtable[] = { canary, stable, help, end };
   int nerrors = arg_parse(argc, argv, argtable);
+  bool conflict = canary->count > 0 && stable->count > 0;
 
-  if (help->count > 0 || nerrors > 0) {
-    if (help->count == 0) print_errors(stderr, end);
+  if (help->count > 0 || nerrors > 0 || conflict) {
+    if (conflict) crfprintf(stderr, "{error}: --canary and --stable cannot be combined\n\n");
+    else if (help->count == 0) print_errors(stderr, end);
 
     crprintf("<bold>Usage:</> ant upgrade [flags]\n\n");
     crprintf("Upgrade Ant to the latest version.\n\n");
@@ -513,10 +524,13 @@ int ant_upgrade(int argc, char **argv) {
   }
 
   bool use_canary = canary->count > 0;
+  bool pinned = use_canary || stable->count > 0;
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
 
   const char *channel = use_canary ? ANT_CANARY_CHANNEL : NULL;
-  const char *channel_label = use_canary ? "canary" : "latest";
+  const char *channel_label = use_canary ? "canary" : pinned ? "stable" : "latest";
+  const char *channel_note = use_canary ? ", canary" : pinned ? ", stable" : "";
+  
   char err[512] = {0};
   ant_latest_info_t latest;
   progress_t progress;
@@ -532,15 +546,17 @@ int ant_upgrade(int argc, char **argv) {
   }
   
   if (!use_canary) ant_version_cache_store_latest(&latest);
-  if (use_canary ? ant_latest_is_current_build(&latest) : !ant_latest_is_newer(&latest)) {
+  if (pinned ? ant_latest_is_current_build(&latest) : !ant_latest_is_newer(&latest)) {
     crprintf("<bright_green>Ant is already up to date.</> <dim>(%s for %s%s)</>\n",
-      ANT_VERSION, latest.target, use_canary ? ", canary" : "");
+      ANT_VERSION, latest.target, channel_note);
     return EXIT_SUCCESS;
   }
 
+  bool downgrade = ant_latest_is_older(&latest);
   crprintf("Found %s version <green>%s</>\n\n", channel_label, latest.version);
   crprintf("Downloading <bright_green>%s</>\n", latest.download_url);
-  crprintf("Ant is upgrading to %sversion <green>%s</>\n\n", use_canary ? "canary " : "", latest.version);
+  crprintf("Ant is %s to %sversion <green>%s</>\n\n",
+    downgrade ? "downgrading" : "upgrading", use_canary ? "canary " : "", latest.version);
   fflush(stdout);
 
   char install_path[4096];
@@ -588,7 +604,8 @@ int ant_upgrade(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  crprintf("<bright_green>Upgraded successfully to Ant %s%s</>\n", latest.version, use_canary ? " (canary)" : "");
+  crprintf("<bright_green>%s successfully to Ant %s%s</>\n",
+    downgrade ? "Downgraded" : "Upgraded", latest.version, use_canary ? " (canary)" : "");
   crprintf("<dim>Installed at %s</>\n", install_path);
 
   if (latest.release_notes_url[0]) {
