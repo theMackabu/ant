@@ -8,7 +8,21 @@ export const GITHUB_REPOSITORY = 'theMackabu/ant';
 
 export const DEFAULT_CACHE_TTL_SECONDS = 300;
 
+export const CHANNELS = ['stable', 'canary'] as const;
+export type Channel = (typeof CHANNELS)[number];
+export const DEFAULT_CHANNEL: Channel = 'stable';
+
+export function manifestKey(channel: Channel = DEFAULT_CHANNEL): string {
+  const name = channel === DEFAULT_CHANNEL ? 'latest' : channel;
+  return `manifests/${GITHUB_REPOSITORY}/${name}.json`;
+}
+
+export function manifestKeys(): string[] {
+  return CHANNELS.map(channel => manifestKey(channel));
+}
+
 export type RequestOptions = {
+  channel?: Channel;
   branch?: string;
   runId?: number;
   revision?: string;

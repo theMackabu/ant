@@ -1,4 +1,5 @@
 #include "cli/version.h"
+#include "cli/misc.h"
 #include "download.h"
 
 #include "progress.h"
@@ -29,8 +30,9 @@
 #define strcasecmp _stricmp
 #endif
 
-#define ANT_VERSION_CHECK_INTERVAL_SECONDS (72u * 60u * 60u)
+#define ANT_CANARY_CHANNEL "canary"
 #define ANT_VERSION_CHECK_CACHE_FILE "version-check.json"
+#define ANT_VERSION_CHECK_INTERVAL_SECONDS (72u * 60u * 60u)
 
 typedef struct {
   char target[64];
@@ -143,6 +145,12 @@ static bool ant_latest_is_newer(const ant_latest_info_t *latest) {
   return latest->build_timestamp > (uint64_t)ANT_BUILD_TIMESTAMP;
 }
 
+static bool ant_latest_is_current_build(const ant_latest_info_t *latest) {
+  if (!latest || !latest->version[0]) return false;
+  if (strcmp(ANT_VERSION, latest->version) != 0) return false;
+  return latest->build_timestamp == 0 || latest->build_timestamp == (uint64_t)ANT_BUILD_TIMESTAMP;
+}
+
 static int ant_manifest_select_latest(const char *json, size_t json_len, ant_latest_info_t *latest, char *err, size_t err_len) {
   if (!latest) return -EINVAL;
   memset(latest, 0, sizeof(*latest));
@@ -191,8 +199,16 @@ static int ant_manifest_select_latest(const char *json, size_t json_len, ant_lat
   return rc;
 }
 
-static int ant_fetch_latest(ant_latest_info_t *latest, progress_t *progress, char *err, size_t err_len) {
-  const char *url = ant_manifest_url();
+static int ant_fetch_latest(
+  ant_latest_info_t *latest, progress_t *progress,
+  const char *channel, char *err, size_t err_len
+) {
+  char url[2048];
+  if (ant_manifest_channel_url(channel, url, sizeof(url)) != 0) {
+    snprintf(err, err_len, "manifest url is too long");
+    return -ENAMETOOLONG;
+  }
+
   char *manifest = NULL;
   size_t manifest_len = 0;
   
@@ -351,7 +367,7 @@ bool ant_version_print_update_hint(FILE *out) {
   if (!cache_matches || !ant_version_cache_is_fresh(&cache, now)) {
     char err[256] = {0};
     ant_latest_info_t latest;
-    int rc = ant_fetch_latest(&latest, NULL, err, sizeof(err));
+    int rc = ant_fetch_latest(&latest, NULL, NULL, err, sizeof(err));
 
     cache.checked_at = now;
     snprintf(cache.manifest_url, sizeof(cache.manifest_url), "%s", manifest_url);
@@ -475,30 +491,56 @@ static int ant_install_downloaded(
 }
 
 int ant_upgrade(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+  struct arg_lit *canary = arg_lit0(NULL, "canary", "install the latest canary build instead of the stable release");
+  struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
+  struct arg_end *end = arg_end(20);
+
+  void *argtable[] = { canary, help, end };
+  int nerrors = arg_parse(argc, argv, argtable);
+
+  if (help->count > 0 || nerrors > 0) {
+    if (help->count == 0) print_errors(stderr, end);
+
+    crprintf("<bold>Usage:</> ant upgrade [flags]\n\n");
+    crprintf("Upgrade Ant to the latest version.\n\n");
+    crprintf("<bold>Flags:</>\n");
+    print_flags_help(stdout, argtable);
+
+    int rc = help->count > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    
+    return rc;
+  }
+
+  bool use_canary = canary->count > 0;
+  arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+
+  const char *channel = use_canary ? ANT_CANARY_CHANNEL : NULL;
+  const char *channel_label = use_canary ? "canary" : "latest";
   char err[512] = {0};
   ant_latest_info_t latest;
   progress_t progress;
 
   crprintf("<bold>Current Ant version:</> <bright_green>%s</>\n", ANT_VERSION);
-  crprintf("<dim>Looking up latest version</>\n\n");
+  crprintf("<dim>Looking up %s version</>\n\n", channel_label);
 
-  int rc = ant_fetch_latest(&latest, NULL, err, sizeof(err));
+  int rc = ant_fetch_latest(&latest, NULL, channel, err, sizeof(err));
   if (rc != 0) {
     fprintf(stderr, "ant upgrade: %s\n", err[0] ? err : "failed to check latest version");
+    if (use_canary && strstr(err, "HTTP 404")) fprintf(stderr, "ant upgrade: no canary build has been published yet\n");
     return EXIT_FAILURE;
   }
-  ant_version_cache_store_latest(&latest);
-
-  if (!ant_latest_is_newer(&latest)) {
-    crprintf("<bright_green>Ant is already up to date.</> <dim>(%s for %s)</>\n", ANT_VERSION, latest.target);
+  
+  if (!use_canary) ant_version_cache_store_latest(&latest);
+  if (use_canary ? ant_latest_is_current_build(&latest) : !ant_latest_is_newer(&latest)) {
+    crprintf("<bright_green>Ant is already up to date.</> <dim>(%s for %s%s)</>\n",
+      ANT_VERSION, latest.target, use_canary ? ", canary" : "");
     return EXIT_SUCCESS;
   }
 
-  crprintf("Found latest version <green>%s</>\n\n", latest.version);
+  crprintf("Found %s version <green>%s</>\n\n", channel_label, latest.version);
   crprintf("Downloading <bright_green>%s</>\n", latest.download_url);
-  crprintf("Ant is upgrading to version <green>%s</>\n\n", latest.version);
+  crprintf("Ant is upgrading to %sversion <green>%s</>\n\n", use_canary ? "canary " : "", latest.version);
   fflush(stdout);
 
   char install_path[4096];
@@ -546,7 +588,7 @@ int ant_upgrade(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  crprintf("<bright_green>Upgraded successfully to Ant %s</>\n", latest.version);
+  crprintf("<bright_green>Upgraded successfully to Ant %s%s</>\n", latest.version, use_canary ? " (canary)" : "");
   crprintf("<dim>Installed at %s</>\n", install_path);
 
   if (latest.release_notes_url[0]) {

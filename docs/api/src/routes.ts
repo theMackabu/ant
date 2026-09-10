@@ -5,8 +5,15 @@ import type { Context } from 'hono';
 import { HttpError } from './errors';
 import { cachedJson } from './http-cache';
 import { routeIndex } from './route-index';
-import { branch, GITHUB_REPOSITORY } from './config';
-import type { RequestOptions } from './config';
+import {
+  branch,
+  CHANNELS,
+  DEFAULT_CHANNEL,
+  GITHUB_REPOSITORY,
+  manifestKey,
+  manifestKeys,
+} from './config';
+import type { Channel, RequestOptions } from './config';
 import {
   annotateGzipSizes,
   downloadArtifact,
@@ -16,6 +23,7 @@ import {
 import { resolveArch, resolveTarget } from './targets';
 import {
   BranchQuerySchema,
+  ChannelQuerySchema,
   DownloadParamsSchema,
   ReleaseNotesQuerySchema,
   RefreshQuerySchema,
@@ -34,7 +42,6 @@ import {
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
-const MANIFEST_KEY = `manifests/${GITHUB_REPOSITORY}/latest.json`;
 
 app.options('*', c => {
   c.header('Access-Control-Allow-Origin', '*');
@@ -65,8 +72,10 @@ app.notFound(c => c.json({ error: 'not found' }, 404));
 app.get('/', c => c.json(routeIndex(new URL(c.req.url))));
 
 app.get('/v1/latest', async c => {
-  const manifest = await c.env.DOWNLOADS.get(MANIFEST_KEY);
-  if (!manifest) return c.json({ error: 'manifest missing', key: MANIFEST_KEY }, 404);
+  const channel = requestChannel(c);
+  const key = manifestKey(channel);
+  const manifest = await c.env.DOWNLOADS.get(key);
+  if (!manifest) return c.json({ error: `${channel} manifest missing`, channel, key }, 404);
 
   const headers = new Headers({
     'Content-Type': 'application/json; charset=utf-8',
@@ -76,7 +85,8 @@ app.get('/v1/latest', async c => {
   });
 
   manifest.writeHttpMetadata(headers);
-  headers.set('X-Ant-Manifest-Key', MANIFEST_KEY);
+  headers.set('X-Ant-Manifest-Key', key);
+  headers.set('X-Ant-Manifest-Channel', channel);
   headers.set('X-Ant-Manifest-Cached-At', manifest.customMetadata?.cached_at || '');
 
   return new Response(manifest.body, { status: 200, headers });
@@ -88,10 +98,12 @@ app.post('/v1/refresh', async c => {
   const expected = c.env.MANIFEST_REFRESH_TOKEN;
   if (!expected || auth !== `Bearer ${expected}`) return c.json({ error: 'unauthorized' }, 401);
 
+  const channel = options.channel || DEFAULT_CHANNEL;
+  const key = manifestKey(channel);
   const manifest = await latestManifest(new URL(c.req.url), c.env, options);
   await prefetchArtifacts(c.env, manifestArtifacts(manifest));
   const annotated = await annotateGzipSizes(c.env, manifest);
-  await c.env.DOWNLOADS.put(MANIFEST_KEY, JSON.stringify(annotated, null, 2) + '\n', {
+  await c.env.DOWNLOADS.put(key, JSON.stringify(annotated, null, 2) + '\n', {
     httpMetadata: {
       contentType: 'application/json; charset=utf-8',
       cacheControl: 'public, max-age=60',
@@ -99,15 +111,17 @@ app.post('/v1/refresh', async c => {
     customMetadata: {
       repository: GITHUB_REPOSITORY,
       branch: branch(c.env, options),
+      channel,
       cached_at: new Date().toISOString(),
     },
   });
-  await pruneR2ToLatest(c.env, annotated);
+  await pruneR2ToLatest(c.env, channel, annotated);
 
   return c.json({
     ok: true,
     refreshed: true,
-    key: MANIFEST_KEY,
+    channel,
+    key,
     artifact_count: manifestArtifacts(annotated).length,
   });
 });
@@ -129,8 +143,9 @@ app.post('/v1/refresh-release-notes', async c => {
     );
   }
 
-  const object = await c.env.DOWNLOADS.get(MANIFEST_KEY);
-  if (!object) return c.json({ error: 'manifest missing', key: MANIFEST_KEY }, 404);
+  const key = manifestKey(DEFAULT_CHANNEL);
+  const object = await c.env.DOWNLOADS.get(key);
+  if (!object) return c.json({ error: 'manifest missing', key }, 404);
 
   const manifest = parseMutableManifest(await object.text());
   const ant = Array.isArray(manifest.ant) ? manifest.ant : [];
@@ -154,7 +169,7 @@ app.post('/v1/refresh-release-notes', async c => {
     throw new HttpError(`manifest does not contain Ant revision ${releaseRevision}`, 409);
   }
 
-  await c.env.DOWNLOADS.put(MANIFEST_KEY, JSON.stringify(manifest, null, 2) + '\n', {
+  await c.env.DOWNLOADS.put(key, JSON.stringify(manifest, null, 2) + '\n', {
     httpMetadata: {
       contentType: 'application/json; charset=utf-8',
       cacheControl: 'public, max-age=60',
@@ -169,7 +184,7 @@ app.post('/v1/refresh-release-notes', async c => {
   return c.json({
     ok: true,
     refreshed: true,
-    key: MANIFEST_KEY,
+    key,
     release: {
       tag_name: release.tag_name,
       html_url: release.html_url,
@@ -247,9 +262,20 @@ function requestOptions(c: AppContext): RequestOptions {
   };
 }
 
+function requestChannel(c: AppContext): Channel {
+  const query = ChannelQuerySchema.parse(c.req.query());
+  const header = c.req.header('X-Ant-Channel');
+  return (
+    query.channel ||
+    (header ? ChannelQuerySchema.parse({ channel: header }).channel : undefined) ||
+    DEFAULT_CHANNEL
+  );
+}
+
 function refreshOptions(c: AppContext): RequestOptions {
   const options = requestOptions(c);
   const query = RefreshQuerySchema.parse(c.req.query());
+  const channel = query.channel || requestChannel(c);
   const headerVersion = c.req.header('X-Ant-Version');
   const headerRevision = c.req.header('X-Ant-Revision');
   const requestedVersion =
@@ -260,16 +286,26 @@ function refreshOptions(c: AppContext): RequestOptions {
     (headerRevision ? RefreshQuerySchema.parse({ revision: headerRevision }).revision : undefined);
   return {
     ...options,
+    channel,
     version: requestedVersion,
     revision: requestedRevision,
   };
 }
 
-async function pruneR2ToLatest(env: Env, manifest: unknown): Promise<void> {
+async function pruneR2ToLatest(env: Env, channel: Channel, manifest: unknown): Promise<void> {
   try {
-    const keep = new Set<string>([MANIFEST_KEY]);
+    const keep = new Set<string>(manifestKeys());
     for (const artifact of manifestArtifacts(manifest)) {
       for (const key of downloadCacheKeys(artifact)) keep.add(key);
+    }
+
+    for (const other of CHANNELS) {
+      if (other === channel) continue;
+      const object = await env.DOWNLOADS.get(manifestKey(other));
+      if (!object) continue;
+      for (const artifact of manifestArtifacts(parseMutableManifest(await object.text()))) {
+        for (const key of downloadCacheKeys(artifact)) keep.add(key);
+      }
     }
 
     await prunePrefix(env, 'manifest/', keep);

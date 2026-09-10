@@ -3,6 +3,15 @@ name: Build All Platforms
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Manifest channel to publish this build to'
+        required: false
+        type: choice
+        default: stable
+        options:
+          - stable
+          - canary
 
 permissions:
   actions: read
@@ -84,6 +93,8 @@ jobs:
 
       - name: Generate build summary
         id: version
+        env:
+          CHANNEL: ${{ inputs.channel || 'stable' }}
         run: |
           VERSIONS=()
           for dir in versions/version-*; do
@@ -103,6 +114,8 @@ jobs:
 
           echo "value=${UNIQUE[0]}" >> "$GITHUB_OUTPUT"
           echo "## Build Version: \`${UNIQUE[0]}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Channel: \`${CHANNEL}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate bench-v8 summary
         id: bench_v8_summary
@@ -182,10 +195,12 @@ jobs:
       - name: Refresh manifest
         env:
           MANIFEST_REFRESH_TOKEN: ${{ secrets.MANIFEST_REFRESH_TOKEN }}
+          CHANNEL: ${{ inputs.channel || 'stable' }}
         if: ${{ env.MANIFEST_REFRESH_TOKEN != '' }}
         run: |
           curl -fsS -X POST -G https://manifest.antjs.org/v1/refresh \
             --data-urlencode "branch=${GITHUB_REF_NAME}" \
             --data-urlencode "run_id=${GITHUB_RUN_ID}" \
             --data-urlencode "revision=${GITHUB_SHA}" \
+            --data-urlencode "channel=${CHANNEL}" \
             -H "Authorization: Bearer ${MANIFEST_REFRESH_TOKEN}"

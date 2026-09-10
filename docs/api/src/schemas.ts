@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHANNELS } from './config';
 
 const BranchSchema = z
   .string()
@@ -53,6 +54,12 @@ export const VersionQuerySchema = z
     target: query.target || '',
   }));
 
+export const ChannelSchema = z.enum(CHANNELS);
+
+export const ChannelQuerySchema = z.object({
+  channel: ChannelSchema.optional(),
+});
+
 export const DownloadParamsSchema = z.object({
   kind: z.enum(['ant', 'runtime', 'sandbox', 'kernel']),
   name: z.string().min(1),
@@ -67,6 +74,7 @@ export const BranchQuerySchema = z.object({
 });
 
 export const RefreshQuerySchema = BranchQuerySchema.extend({
+  channel: ChannelSchema.optional(),
   version: ArtifactVersionSchema.optional(),
   revision: ArtifactRevisionSchema.optional(),
 });

@@ -18,6 +18,7 @@ int ant_download_get(
   size_t err_len
 );
 
+int ant_manifest_channel_url(const char *channel, char *out, size_t out_len);
 int ant_manifest_fetch(char **body_out, size_t *body_len_out, char *err, size_t err_len);
 int ant_http_download_file(const char *url, FILE *file, const char *label, char *err, size_t err_len);
 

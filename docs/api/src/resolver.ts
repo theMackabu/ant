@@ -4,6 +4,7 @@ import {
   BUILD_WORKFLOW,
   canDownloadActionsArtifacts,
   DEFAULT_BRANCH,
+  DEFAULT_CHANNEL,
   MUSL_SANDBOX_WORKFLOW,
   GITHUB_REPOSITORY,
 } from './config';
@@ -79,6 +80,7 @@ export async function latestManifest(url: URL, env: Env, options: RequestOptions
 
   return {
     schema: 1,
+    channel: options.channel || DEFAULT_CHANNEL,
     generated_at: new Date().toISOString(),
     ant,
     runtime,

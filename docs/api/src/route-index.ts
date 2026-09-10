@@ -1,11 +1,15 @@
 import { antTargets } from './targets';
+import { CHANNELS } from './config';
 
 export function routeIndex(url: URL) {
   return {
     schema: 1,
     routes: {
-      latest: route(url, '/v1/latest'),
-      refresh: route(url, '/v1/refresh?branch={branch}&run_id={run_id}&revision={full_git_hash}'),
+      latest: route(url, '/v1/latest?channel={channel}'),
+      refresh: route(
+        url,
+        '/v1/refresh?branch={branch}&run_id={run_id}&revision={full_git_hash}&channel={channel}',
+      ),
       refresh_release_notes: route(url, '/v1/refresh-release-notes?version={version}'),
       version: {
         get_tag: route(url, '/v1/version/get-tag'),
@@ -47,6 +51,7 @@ export function routeIndex(url: URL) {
       })),
     },
     arches: ['x64', 'aarch64'],
+    channels: [...CHANNELS],
   };
 }
 
