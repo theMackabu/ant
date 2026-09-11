@@ -69,13 +69,19 @@ the background compile both engines rely on.
 2. One absolute ceiling, `SV_JIT_MAX_CODE_BYTES` (64 KiB), lives in
    `jit_is_eligible` so the OSR and call paths agree.
 3. OSR compiles of bodies over `JIT_OSR_COLD_COMPILE_MIN_BYTES` (512) use the
-   level-1 MIR context (`SV_JIT_TIER_COLD`) and set `jit_code_cold`. Both
-   call-path entry points call `sv_jit_maybe_tier_up()`, which recompiles on
-   the hot context (`SV_JIT_TIER_HOT`) once `call_count` passes
-   `SV_JIT_THRESHOLD`. Call-path compiles that happen to use the cheap
-   context are *not* marked cold; an earlier draft did, and every such
-   function re-tiered every 100 calls forever (Richards fell from 5775 to
-   183).
+   level-1 MIR context (`SV_JIT_TIER_COLD`) and set `jit_code_cold`. The
+   cold code promotes itself: `jit_setup_frame` emits a prologue that bumps
+   `call_count` on every entry and, past `SV_JIT_THRESHOLD`, calls
+   `jit_helper_tier_up` and tail-calls the hot entry it returns. The first
+   cut hooked the interpreter's two call paths instead, which missed direct
+   calls from compiled code entirely (post-merge review of #102: a compiled
+   driver called the cold kernel 200 times without promotion). Call-path
+   compiles that happen to use the cheap context are *not* marked cold; an
+   earlier draft did, and every such function re-tiered every 100 calls
+   forever (Richards fell from 5775 to 183).
+   `sv_jit_osr_threshold_for` is a static inline in `silver/jit.h` because
+   the bytecode compiler calls it on builds without the native JIT
+   (`packages/wasm` links `jit_stub.c`; the first cut broke that build).
 
 Compile cost that motivated step 3 (MIR, this machine):
 

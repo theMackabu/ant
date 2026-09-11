@@ -174,6 +174,8 @@ typedef struct jit_compile {
   MIR_item_t imp_delete;
   MIR_item_t imp_set_name;
   MIR_item_t imp_stack_ovf_err;
+  MIR_item_t imp_tier_up;
+  MIR_item_t tier_up_proto;
   MIR_item_t imp_normalize_this;
   MIR_item_t jit_func;
   MIR_reg_t r_vm;
@@ -268,6 +270,7 @@ typedef struct jit_compile {
   int *local_by_reg;
   int integer_local_site;
   bool forward_arguments;
+  bool cold_tier;
   bool element_available;
   bool ok;
   int call_n;

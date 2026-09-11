@@ -26,10 +26,7 @@
 
 static constexpr int JIT_VSTACK_SLACK = 4;
 static constexpr int JIT_PARAM_HOIST_CAP = 8;
-
-static constexpr int JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
 static constexpr int JIT_OSR_COLD_COMPILE_MIN_BYTES = 512;
-
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 
 typedef struct {
