@@ -390,10 +390,11 @@ struct sv_func {
   bool jit_compile_failed: 1;
   bool jit_compiling: 1;
   bool jit_loop_hot: 1;
-  bool has_map_templates: 1;
+  bool jit_code_cold: 1;
 
   uint32_t call_count;
   uint32_t back_edge_count;
+  uint32_t jit_osr_threshold;
   uint32_t jit_bailout_tfb_ver;
   uint32_t tfb_version;
   uint32_t jit_compiled_tfb_ver;
@@ -404,6 +405,7 @@ struct sv_func {
   bool is_eval: 1;
   bool needs_eval_env: 1;
   bool allows_new_target: 1;
+  bool has_map_templates: 1;
 };
 
 static inline const sv_map_template_desc_t *sv_map_template_desc_at(

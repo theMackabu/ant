@@ -102,8 +102,12 @@ static inline void sv_jit_on_bailout_at(sv_func_t *fn, const char *reason, int b
   fn->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
 }
 
-static inline void sv_jit_on_bailout(sv_func_t *fn) {
-  sv_jit_on_bailout_at(fn, "direct", -1);
+void sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure);
+static inline void sv_jit_on_bailout(sv_func_t *fn) { sv_jit_on_bailout_at(fn, "direct", -1); }
+
+static inline void sv_jit_maybe_tier_up(ant_t *js, sv_func_t *fn, sv_closure_t *closure) {
+  if (__builtin_expect(fn->jit_code_cold, 0) && ++fn->call_count > SV_JIT_THRESHOLD)
+    sv_jit_tier_up(js, fn, closure);
 }
 
 static inline uint8_t sv_tfb_classify(ant_value_t v) {

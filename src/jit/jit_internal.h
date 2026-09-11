@@ -26,7 +26,9 @@
 
 static constexpr int JIT_PARAM_HOIST_CAP = 8;
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
-static constexpr int JIT_OSR_MAX_CODE_BYTES = 512;
+
+static constexpr int JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
+static constexpr int JIT_OSR_COLD_COMPILE_MIN_BYTES = 512;
 
 typedef struct {
   MIR_context_t ctx;

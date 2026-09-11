@@ -44,6 +44,17 @@ snapshots; see [emit_locals.c](../../src/jit/emit_locals.c) and
 [OSR entry regression](../../tests/test_jit_osr_entry_reject.cjs) covers locals
 that are still uninitialized at an earlier loop header.
 
+OSR is never refused on bytecode size alone. Each function's back-edge
+threshold (`jit_osr_threshold`) is scaled by its size in
+[runtime.c](../../src/jit/runtime.c); the only size ceiling is
+`SV_JIT_MAX_CODE_BYTES` in `jit_is_eligible`, shared by the OSR and call
+paths. Large OSR compiles use the cheap MIR context and set `jit_code_cold`;
+only `sv_jit_maybe_tier_up()` may recompile such code hot, and only code
+compiled with `SV_JIT_TIER_COLD` may carry the flag, otherwise the call path
+re-tiers forever. See the
+[OSR size-scaled tiering plan](../exec-plans/active/osr-size-scaled-tiering.md)
+and [its regression](../../tests/test_jit_osr_large_function.cjs).
+
 ## Inline-Cache Ownership And Invalidation
 
 Property ICs survive minor collections. Their cached shapes require retained

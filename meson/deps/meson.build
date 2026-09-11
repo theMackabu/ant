@@ -137,13 +137,13 @@ base64_dep = declare_dependency(
 
 mir_dep = subproject('mir').get_variable('mir_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
-yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 ada_dep = subproject('ada').get_variable('ada_dep')
 wamr_dep = subproject('wasm-micro-runtime').get_variable('wamr_dep')
 double_conversion_dep = subproject('double-conversion').get_variable('double_conversion_dep')
+yyjson_dep = subproject('yyjson', default_options: ['non-standard-json=disabled',]).get_variable('yyjson_dep')
 
 wirecall = dependency('wirecall', default_options: [
   'b_lto=' + get_option('b_lto').to_string(),

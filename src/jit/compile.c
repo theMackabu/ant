@@ -1,6 +1,10 @@
 #include "compile.h"
 
 sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure) {
+  return sv_jit_compile_tier(js, func, hint_closure, SV_JIT_TIER_AUTO);
+}
+
+sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint_closure, sv_jit_tier_t tier) {
   jit_compile_t compile = {
       .js = js,
       .func = func,
@@ -33,8 +37,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
 
   jit_load_externals_once(c->jc);
-  bool jit_compile_hot = c->func->jit_loop_hot ||
-                         c->func->back_edge_count >= JIT_HOT_COMPILE_BACKEDGE_THRESHOLD;
+  bool jit_compile_hot =
+    tier == SV_JIT_TIER_HOT ||
+    (tier == SV_JIT_TIER_AUTO &&
+    (c->func->jit_loop_hot ||
+    c->func->back_edge_count >= JIT_HOT_COMPILE_BACKEDGE_THRESHOLD));
   c->ctx = jit_compile_hot ? c->jc->ctx_hot : c->jc->ctx;
 
   c->forward_arguments = jit_can_forward_arguments(func);
@@ -416,5 +423,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   }
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
+  c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
+  
   return generated;
 }

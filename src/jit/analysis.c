@@ -196,6 +196,15 @@ bool jit_mark_self_binding_guards(
 
 bool jit_is_eligible(sv_func_t *func) {
   if (func->is_async || func->is_generator) return false;
+  
+  if (func->code_len > SV_JIT_MAX_CODE_BYTES) {
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: %s too large (%d bytes > %d)\n",
+      func->debug->name ? func->debug->name : "<anonymous>",
+      func->code_len, SV_JIT_MAX_CODE_BYTES
+    );
+    return false;
+  }
 
   bool eligible = true;
   uint8_t *ip = func->code;
