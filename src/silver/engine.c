@@ -1092,6 +1092,7 @@ static inline ant_value_t sv_try_direct_closure_jit(
     sv_tfb_record_call_target(caller_func, (int)(caller_ip - caller_func->code), callee);
 
   if (callee->jit_code) {
+    sv_jit_maybe_tier_up(js, callee, closure);
     if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
     sv_jit_enter(js);
     ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
@@ -1384,7 +1385,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   #define JIT_OSR_BACK_EDGE() do {                                          \
     if (!func->jit_compile_failed) {                                        \
       if (!sv_func_type_feedback(func)) sv_tfb_ensure(func);                \
-      if (++func->back_edge_count >= SV_JIT_OSR_THRESHOLD) {                \
+      if (++func->back_edge_count >= func->jit_osr_threshold) {             \
       ant_value_t osr_r = sv_jit_try_osr(                                   \
         vm, js, frame, func,                                                \
          (int)(ip - func->code));                                           \

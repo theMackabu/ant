@@ -18,6 +18,7 @@ Store in-progress execution plans here.
   - [Dynamic Property Performance Extras](dynamic-property-perf-extras.md)
 - [Elysia 200k RPS](elysia-200k-rps.md)
 - [for-of JIT Ineligibility](for-of-jit-ineligibility.md)
+- [OSR Size-Scaled Tiering](osr-size-scaled-tiering.md)
 - [Hash Seed Randomization](hash-seed-randomization.md)
 - [Large AST Workload Performance](large-ast-workload-perf.md)
 - [LLVM 21 Codegen Investigation](llvm-21-codegen-investigation.md)

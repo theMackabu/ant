@@ -187,16 +187,31 @@ ant_value_t sv_jit_try_compile_and_call(
   return result;
 }
 
+uint32_t sv_jit_osr_threshold_for(int code_len) {
+  if (code_len <= 0) return SV_JIT_OSR_THRESHOLD;
+  uint64_t t = (uint64_t)SV_JIT_OSR_THRESHOLD * (uint64_t)code_len /
+               (uint64_t)JIT_OSR_THRESHOLD_SCALE_BYTES;
+  if (t < SV_JIT_OSR_THRESHOLD) t = SV_JIT_OSR_THRESHOLD;
+  if (t > UINT32_MAX / 2) t = UINT32_MAX / 2;
+  return (uint32_t)t;
+}
+
+void sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
+  func->jit_code_cold = false;
+  sv_jit_func_t hot = sv_jit_compile_tier(js, func, closure, SV_JIT_TIER_HOT);
+  if (sv_jit_warn_unlikely) fprintf(
+    stderr, "jit: tier-up %s func=%s code_len=%d\n",
+    hot ? "compiled" : "compile-failed",
+    func->debug->name ? func->debug->name : "<anonymous>", func->code_len
+  );
+  if (hot) func->jit_code = (void *)hot;
+}
+
 ant_value_t sv_jit_try_osr(
     sv_vm_t *vm, ant_t *js,
     sv_frame_t *frame, sv_func_t *func,
     int bc_offset) {
   func->jit_loop_hot = true;
-  if (!func->jit_code && func->code_len > JIT_OSR_MAX_CODE_BYTES) {
-    func->call_count = SV_JIT_THRESHOLD + 1;
-    func->back_edge_count = 0;
-    return SV_JIT_RETRY_INTERP;
-  }
 
   sv_closure_t *closure;
   ant_value_t osr_closure_value = js_mkundef();
@@ -228,7 +243,16 @@ ant_value_t sv_jit_try_osr(
   if (func->jit_code) {
     jit = (sv_jit_func_t)func->jit_code;
   } else {
-    jit = sv_jit_compile(js, func, closure);
+    bool prefer_cold = func->code_len > JIT_OSR_COLD_COMPILE_MIN_BYTES;
+    jit = sv_jit_compile_tier(js, func, closure,
+                              prefer_cold ? SV_JIT_TIER_COLD : SV_JIT_TIER_AUTO);
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: osr %s func=%s code_len=%d threshold=%u tier=%s\n",
+      jit ? "compiled" : "compile-failed",
+      func->debug->name ? func->debug->name : "<anonymous>",
+      func->code_len, func->jit_osr_threshold,
+      prefer_cold ? "cold" : "auto"
+    );
     if (!jit) {
       if (synthetic_closure) gc_pop_roots(js, root_mark);
       return SV_JIT_RETRY_INTERP;

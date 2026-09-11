@@ -509,6 +509,7 @@ static inline ant_value_t sv_call_resolve_closure(
   if (!closure->func->is_generator) {
     sv_func_t *fn = closure->func;
     if (fn->jit_code) {
+      sv_jit_maybe_tier_up(js, fn, closure);
       sv_jit_enter(js);
       ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
         vm, ctx->this_val, ctx->new_target,

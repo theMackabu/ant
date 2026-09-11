@@ -1,4 +1,5 @@
 #include "silver/ast.h"
+#include "silver/jit.h"
 #include "silver/compile_ctx.h"
 #include "silver/engine.h"
 #include "silver/compiler.h"
@@ -514,6 +515,7 @@ static void sv_func_init_code_and_map_templates(
   
   memcpy(func->code, c->code, (size_t)c->code_len);
   func->code_len = c->code_len;
+  func->jit_osr_threshold = sv_jit_osr_threshold_for(func->code_len);
 }
 
 static uint16_t alloc_ic_idx(sv_compiler_t *c) {
