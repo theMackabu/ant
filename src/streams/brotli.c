@@ -3,6 +3,7 @@
 
 #include <brotli/encode.h>
 #include <brotli/decode.h>
+#include <brotli/shared_dictionary.h>
 
 #include "ant.h"
 #include "errors.h"
@@ -11,14 +12,14 @@
 #include "streams/brotli.h"
 #include "streams/transform.h"
 
-#define BROTLI_CHUNK_SIZE (32 * 1024)
-
 struct brotli_stream_state {
   bool decompress;
   union {
     BrotliEncoderState *enc;
     BrotliDecoderState *dec;
   } u;
+  uint8_t *dict;
+  BrotliEncoderPreparedDictionary *prepared_dict;
 };
 
 static int brotli_emit_chunk(
@@ -106,30 +107,88 @@ static int brotli_decoder_step(
   return 0;
 }
 
-brotli_stream_state_t *brotli_stream_state_new(bool decompress) {
+static bool brotli_set_param(brotli_stream_state_t *st, int id, uint32_t value) {
+  return st->decompress
+    ? BrotliDecoderSetParameter(st->u.dec, (BrotliDecoderParameter)id, value)
+    : BrotliEncoderSetParameter(st->u.enc, (BrotliEncoderParameter)id, value);
+}
+
+static bool brotli_attach_dict(brotli_stream_state_t *st, size_t len) {
+  if (st->decompress)
+    return BrotliDecoderAttachDictionary(
+      st->u.dec, BROTLI_SHARED_DICTIONARY_RAW, len, st->dict);
+
+  st->prepared_dict = BrotliEncoderPrepareDictionary(
+    BROTLI_SHARED_DICTIONARY_RAW, len, st->dict, BROTLI_MAX_QUALITY, NULL, NULL, NULL);
+
+  return st->prepared_dict
+    && BrotliEncoderAttachPreparedDictionary(st->u.enc, st->prepared_dict);
+}
+
+static brotli_stream_state_t *brotli_new_failed(
+  brotli_stream_state_t *st, int *bad_id, int id
+) {
+  if (bad_id) *bad_id = id;
+  brotli_stream_state_destroy(st);
+  return NULL;
+}
+
+brotli_stream_state_t *brotli_stream_state_new_params(
+  bool decompress, const brotli_params_t *params,
+  const uint8_t *dictionary, size_t dictionary_len, int *bad_id
+) {
+  if (bad_id) *bad_id = -1;
+
   brotli_stream_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
 
   st->decompress = decompress;
-  if (decompress) {
-  st->u.dec = BrotliDecoderCreateInstance(NULL, NULL, NULL);
-  if (!st->u.dec) {
+  void *instance = decompress
+    ? (void *)(st->u.dec = BrotliDecoderCreateInstance(NULL, NULL, NULL))
+    : (void *)(st->u.enc = BrotliEncoderCreateInstance(NULL, NULL, NULL));
+
+  if (!instance) {
     free(st);
     return NULL;
-  }} else {
-  st->u.enc = BrotliEncoderCreateInstance(NULL, NULL, NULL);
-  if (!st->u.enc) {
-    free(st);
-    return NULL;
-  }}
+  }
+
+  bool quality_set = params && params->set[BROTLI_PARAM_QUALITY];
+  if (!decompress && !quality_set
+      && !brotli_set_param(st, BROTLI_PARAM_QUALITY, ANT_BROTLI_DEFAULT_QUALITY))
+    return brotli_new_failed(st, bad_id, BROTLI_PARAM_QUALITY);
+
+  for (int id = 0; params && id <= BROTLI_MAX_PARAM_ID; id++) {
+    if (!params->set[id]) continue;
+    if (!brotli_set_param(st, id, params->value[id]))
+      return brotli_new_failed(st, bad_id, id);
+  }
+
+  if (!dictionary || dictionary_len == 0) return st;
+
+  st->dict = malloc(dictionary_len);
+  if (!st->dict) return brotli_new_failed(st, bad_id, -1);
+  memcpy(st->dict, dictionary, dictionary_len);
+
+  if (!brotli_attach_dict(st, dictionary_len))
+    return brotli_new_failed(st, bad_id, -1);
 
   return st;
 }
 
+brotli_stream_state_t *brotli_stream_state_new(bool decompress) {
+  return brotli_stream_state_new_params(decompress, NULL, NULL, 0, NULL);
+}
+
 void brotli_stream_state_destroy(brotli_stream_state_t *st) {
   if (!st) return;
+  
   if (st->decompress) BrotliDecoderDestroyInstance(st->u.dec);
   else BrotliEncoderDestroyInstance(st->u.enc);
+  
+  if (st->prepared_dict) 
+    BrotliEncoderDestroyPreparedDictionary(st->prepared_dict);
+  
+  free(st->dict);
   free(st);
 }
 

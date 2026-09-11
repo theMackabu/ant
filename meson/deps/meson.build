@@ -114,6 +114,7 @@ brotli_sub = subproject('google-brotli', default_options: [
   'default_library=static',
   'b_lto=false',
   'warning_level=0',
+  'optimization=s',
 ])
 
 brotli_common_dep = brotli_sub.get_variable('brotli_common_dep')

@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
+#include <brotli/encode.h>
+#include <brotli/decode.h>
 
 #include "ant.h"
 #include "ptr.h"
@@ -45,6 +47,10 @@ typedef struct {
   int strategy;
   int chunk_size;
   int finish_flush;
+  size_t max_output_length;
+  const uint8_t *dictionary;
+  size_t dictionary_len;
+  brotli_params_t brotli_params;
 } zlib_options_t;
 
 typedef struct zlib_stream_s {
@@ -55,6 +61,7 @@ typedef struct zlib_stream_s {
   zlib_kind_t kind;
   zlib_options_t opts;
   uint32_t bytes_written;
+  uint8_t *owned_dict;
   bool initialized;
   bool ended;
   bool destroyed;
@@ -109,6 +116,45 @@ static bool zlib_option_int(ant_t *js, ant_value_t opts, const char *key, int *o
   return true;
 }
 
+static ant_value_t zlib_read_brotli_params(
+  ant_t *js, ant_value_t opts_val, brotli_params_t *out
+) {
+  ant_value_t params = js_get(js, opts_val, "params");
+  if (vtype(params) == kTypeUndefined || vtype(params) == kTypeNull)
+    return js_mkundef();
+  
+  if (!is_object_type(params))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "options.params must be an object");
+
+  ant_value_t keys = js_for_in_keys(js, params);
+  ant_offset_t n = js_arr_len(js, keys);
+
+  for (ant_offset_t i = 0; i < n; i++) {
+    ant_value_t key = js_arr_get(js, keys, i);
+    size_t klen = 0;
+    const char *kstr = js_getstr(js, key, &klen);
+    if (!kstr || klen == 0)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "invalid brotli param");
+
+    char *end = NULL;
+    long id = strtol(kstr, &end, 10);
+    if (!end || *end != '\0' || id < 0 || id > BROTLI_MAX_PARAM_ID || out->set[id])
+      return js_mkerr_typed(js, JS_ERR_RANGE, "invalid brotli param");
+
+    ant_value_t v = js_get(js, params, kstr);
+    uint32_t value;
+    
+    if (vtype(v) == kTypeNumber) value = (uint32_t)js_to_number(js, v);
+    else if (vtype(v) == kTypeBool) value = js_truthy(js, v) ? 1 : 0;
+    else return js_mkerr_typed(js, JS_ERR_TYPE, "options.params values must be numbers");
+
+    out->set[id] = true;
+    out->value[id] = value;
+  }
+
+  return js_mkundef();
+}
+
 static ant_value_t zlib_read_options(
   ant_t *js,
   zlib_kind_t kind,
@@ -130,7 +176,27 @@ static ant_value_t zlib_read_options(
   if (out->chunk_size < 64)
     return js_mkerr_typed(js, JS_ERR_RANGE, "chunkSize must be >= 64");
 
-  if (zlib_is_brotli_kind(kind)) return js_mkundef();
+  ant_value_t max_out = js_get(js, opts_val, "maxOutputLength");
+  if (vtype(max_out) == kTypeNumber) {
+    double v = js_to_number(js, max_out);
+    if (v < 0 || v != v) return js_mkerr_typed(js, JS_ERR_RANGE, "maxOutputLength out of range");
+    out->max_output_length = (size_t)v;
+  } else if (vtype(max_out) != kTypeUndefined && vtype(max_out) != kTypeNull) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "maxOutputLength must be a number");
+  }
+
+  ant_value_t dict = js_get(js, opts_val, "dictionary");
+  if (vtype(dict) != kTypeUndefined && vtype(dict) != kTypeNull) {
+    size_t dlen = 0;
+    const uint8_t *dptr = NULL;
+    if (!is_object_type(dict) || !buffer_source_get_bytes(js, dict, &dptr, &dlen))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "dictionary must be a buffer");
+    out->dictionary = dptr;
+    out->dictionary_len = dlen;
+  }
+
+  if (zlib_is_brotli_kind(kind))
+    return zlib_read_brotli_params(js, opts_val, &out->brotli_params);
 
   if (out->level < Z_DEFAULT_COMPRESSION || out->level > Z_BEST_COMPRESSION)
     return js_mkerr_typed(js, JS_ERR_RANGE, "level out of range");
@@ -140,10 +206,10 @@ static ant_value_t zlib_read_options(
   if (kind == ZLIB_KIND_GZIP && out->window_bits > 0 && out->window_bits <= 15)
     out->window_bits += 16;
   else if ((kind == ZLIB_KIND_GUNZIP || kind == ZLIB_KIND_UNZIP) &&
-           out->window_bits > 0 && out->window_bits <= 15)
+    out->window_bits > 0 && out->window_bits <= 15)
     out->window_bits += 32;
   else if ((kind == ZLIB_KIND_DEFLATE_RAW || kind == ZLIB_KIND_INFLATE_RAW) &&
-           out->window_bits > 0)
+    out->window_bits > 0)
     out->window_bits = -out->window_bits;
 
   int base_window = out->window_bits < 0 ? -out->window_bits : out->window_bits;
@@ -172,6 +238,12 @@ static void zlib_add_active(zlib_stream_t *st) {
 
 static void zlib_stream_release(zlib_stream_t *st) {
   if (!st) return;
+  
+  free(st->owned_dict);
+  st->owned_dict = NULL;
+  st->opts.dictionary = NULL;
+  st->opts.dictionary_len = 0;
+  
   if (st->brotli) {
     brotli_stream_state_destroy(st->brotli);
     st->brotli = NULL;
@@ -249,6 +321,13 @@ static ant_value_t zlib_do_process(
       if (ret == Z_STREAM_ERROR) { result = js_mkerr(js, "zlib deflate error"); break; }
     } else {
       ret = inflate(&st->strm, flush);
+      if (ret == Z_NEED_DICT && st->opts.dictionary) {
+        if (inflateSetDictionary(&st->strm, st->opts.dictionary, (uInt)st->opts.dictionary_len) == Z_OK) {
+          size_t got = chunk_size - st->strm.avail_out;
+          if (got > 0) zlib_emit_data(js, st->obj, out, got);
+          continue;
+        }
+      }
       if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
         result = js_mkerr(js, "zlib inflate error");
         break;
@@ -447,7 +526,8 @@ static ant_value_t js_zlib_reset(ant_params_t) {
   if (st->brotli) {
     bool decompress = st->kind == ZLIB_KIND_BROTLI_DECOMPRESS;
     brotli_stream_state_destroy(st->brotli);
-    st->brotli = brotli_stream_state_new(decompress);
+    st->brotli = brotli_stream_state_new_params(decompress, &st->opts.brotli_params,
+      st->opts.dictionary, st->opts.dictionary_len, NULL);
     if (!st->brotli) return js_mkerr(js, "brotli init failed");
   } else if (zlib_kind_is_compress(st->kind)) {
     if (deflateReset(&st->strm) != Z_OK) return js_mkerr(js, "zlib reset failed");
@@ -569,9 +649,27 @@ static ant_value_t zlib_create_stream(ant_t *js, zlib_kind_t kind, ant_value_t o
   st->js = js;
   st->opts = opts;
 
+  if (opts.dictionary && opts.dictionary_len > 0) {
+    st->owned_dict = malloc(opts.dictionary_len);
+    if (!st->owned_dict) { free(st); return js_mkerr(js, "out of memory"); }
+    memcpy(st->owned_dict, opts.dictionary, opts.dictionary_len);
+    st->opts.dictionary = st->owned_dict;
+  } else {
+    st->opts.dictionary = NULL;
+    st->opts.dictionary_len = 0;
+  }
+
   if (kind == ZLIB_KIND_BROTLI_COMPRESS || kind == ZLIB_KIND_BROTLI_DECOMPRESS) {
-    st->brotli = brotli_stream_state_new(kind == ZLIB_KIND_BROTLI_DECOMPRESS);
-    if (!st->brotli) { free(st); return js_mkerr(js, "brotli init failed"); }
+    int bad_id = -1;
+    st->brotli = brotli_stream_state_new_params(
+      kind == ZLIB_KIND_BROTLI_DECOMPRESS, &opts.brotli_params,
+      opts.dictionary, opts.dictionary_len, &bad_id);
+    if (!st->brotli) {
+      free(st->owned_dict);
+      free(st);
+      if (bad_id >= 0) return js_mkerr_typed(js, JS_ERR_RANGE, "invalid brotli param");
+      return js_mkerr(js, "brotli init failed");
+    }
     st->initialized = true;
   } else {
     int ret;
@@ -579,8 +677,19 @@ static ant_value_t zlib_create_stream(ant_t *js, zlib_kind_t kind, ant_value_t o
       ret = deflateInit2(&st->strm, opts.level, Z_DEFLATED, opts.window_bits, opts.mem_level, opts.strategy);
     } else ret = inflateInit2(&st->strm, opts.window_bits);
 
-    if (ret != Z_OK) { free(st); return js_mkerr(js, "zlib init failed"); }
+    if (ret != Z_OK) { free(st->owned_dict); free(st); return js_mkerr(js, "zlib init failed"); }
     st->initialized = true;
+
+    if (st->opts.dictionary && (compress || st->opts.window_bits < 0)) {
+      ret = compress
+        ? deflateSetDictionary(&st->strm, st->opts.dictionary, (uInt)st->opts.dictionary_len)
+        : inflateSetDictionary(&st->strm, st->opts.dictionary, (uInt)st->opts.dictionary_len);
+      if (ret != Z_OK) {
+        zlib_stream_release(st);
+        free(st);
+        return js_mkerr(js, "zlib dictionary load failed");
+      }
+    }
   }
 
   ant_value_t obj = js_mkobj(js);
@@ -644,9 +753,12 @@ typedef struct {
   size_t len;
   size_t cap;
   int error;
+  size_t limit;
+  int overflow;
 } zbuf_t;
 
 static int zbuf_append(zbuf_t *b, const uint8_t *chunk, size_t n) {
+  if (b->limit && b->len + n > b->limit) { b->overflow = 1; return -1; }
   if (b->len + n > b->cap) {
     size_t newcap = b->cap ? b->cap * 2 : 4096;
     while (newcap < b->len + n) newcap *= 2;
@@ -667,6 +779,13 @@ static int zbuf_brotli_cb(void *ctx, const uint8_t *chunk, size_t n) {
   return zbuf_append((zbuf_t *)ctx, chunk, n);
 }
 
+static ant_value_t zlib_too_large(ant_t *js, size_t limit) {
+  ant_value_t props = js_mkobj(js);
+  js_set(js, props, "code", js_mkstr(js, "ERR_BUFFER_TOO_LARGE", 20));
+  return js_mkerr_props(js, JS_ERR_RANGE, props,
+    "Cannot create a Buffer larger than %zu bytes", limit);
+}
+
 static ant_value_t zlib_sync_op(
   ant_t *js, zlib_kind_t kind,
   const uint8_t *input, size_t input_len,
@@ -677,18 +796,31 @@ static ant_value_t zlib_sync_op(
   zlib_options_t opts;
   ant_value_t opt_err = zlib_read_options(js, kind, opts_val, &opts);
   if (is_err(opt_err)) return opt_err;
+  out.limit = opts.max_output_length;
   uint8_t *tmp = malloc((size_t)opts.chunk_size);
   if (!tmp) return js_mkerr(js, "out of memory");
 
   if (kind == ZLIB_KIND_BROTLI_COMPRESS || kind == ZLIB_KIND_BROTLI_DECOMPRESS) {
-    brotli_stream_state_t *bs = brotli_stream_state_new(kind == ZLIB_KIND_BROTLI_DECOMPRESS);
-    if (!bs) { free(tmp); return js_mkerr(js, "brotli init failed"); }
+    int bad_id = -1;
+    brotli_stream_state_t *bs = brotli_stream_state_new_params(
+      kind == ZLIB_KIND_BROTLI_DECOMPRESS, &opts.brotli_params,
+      opts.dictionary, opts.dictionary_len, &bad_id);
+    if (!bs) {
+      free(tmp);
+      if (bad_id >= 0) return js_mkerr_typed(js, JS_ERR_RANGE, "invalid brotli param");
+      return js_mkerr(js, "brotli init failed");
+    }
     
     int rc = brotli_stream_process(bs, input, input_len, zbuf_brotli_cb, &out);
     if (rc >= 0) rc = brotli_stream_finish(bs, zbuf_brotli_cb, &out);
     
     brotli_stream_state_destroy(bs);
-    if (rc < 0 || out.error) { free(tmp); free(out.data); return js_mkerr(js, "brotli operation failed"); }
+    if (rc < 0 || out.error || out.overflow) {
+      int over = out.overflow;
+      free(tmp); free(out.data);
+      if (over) return zlib_too_large(js, opts.max_output_length);
+      return js_mkerr(js, "brotli operation failed");
+    }
     ant_value_t buf = zlib_make_buffer(js, out.data, out.len);
     free(tmp);
     free(out.data);
@@ -703,6 +835,17 @@ static ant_value_t zlib_sync_op(
   else ret = inflateInit2(&strm, opts.window_bits);
   if (ret != Z_OK) { free(tmp); return js_mkerr(js, "zlib init failed"); }
 
+  if (opts.dictionary && (compress || opts.window_bits < 0)) {
+    ret = compress
+      ? deflateSetDictionary(&strm, opts.dictionary, (uInt)opts.dictionary_len)
+      : inflateSetDictionary(&strm, opts.dictionary, (uInt)opts.dictionary_len);
+    if (ret != Z_OK) {
+      if (compress) deflateEnd(&strm); else inflateEnd(&strm);
+      free(tmp);
+      return js_mkerr(js, "zlib dictionary load failed");
+    }
+  }
+
   strm.next_in = (Bytef *)input;
   strm.avail_in = (uInt)input_len;
 
@@ -711,7 +854,20 @@ static ant_value_t zlib_sync_op(
     strm.avail_out = (uInt)opts.chunk_size;
     if (compress) ret = deflate(&strm, Z_FINISH);
     else ret = inflate(&strm, opts.finish_flush);
-    if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
+    if (ret == Z_NEED_DICT && opts.dictionary) {
+      ret = inflateSetDictionary(&strm, opts.dictionary, (uInt)opts.dictionary_len);
+      if (ret == Z_OK) {
+        size_t got = (size_t)opts.chunk_size - strm.avail_out;
+        if (got > 0 && zbuf_append(&out, tmp, got) < 0) {
+          int over = out.overflow;
+          inflateEnd(&strm); free(tmp); free(out.data);
+          if (over) return zlib_too_large(js, opts.max_output_length);
+          return js_mkerr(js, "out of memory");
+        }
+        continue;
+      }
+    }
+    if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR || ret == Z_NEED_DICT) {
       if (compress) deflateEnd(&strm);
       else inflateEnd(&strm);
       free(tmp);
@@ -720,10 +876,12 @@ static ant_value_t zlib_sync_op(
     }
     size_t have = (size_t)opts.chunk_size - strm.avail_out;
     if (have > 0 && zbuf_append(&out, tmp, have) < 0) {
+      int over = out.overflow;
       if (compress) deflateEnd(&strm);
       else inflateEnd(&strm);
       free(tmp);
       free(out.data);
+      if (over) return zlib_too_large(js, opts.max_output_length);
       return js_mkerr(js, "out of memory");
     }
     if (ret == Z_STREAM_END) break;
@@ -886,23 +1044,34 @@ static void zlib_install_constants(ant_t *js, ant_value_t c) {
   zlib_set_num(js, c, "BROTLI_OPERATION_FLUSH", 1);
   zlib_set_num(js, c, "BROTLI_OPERATION_FINISH", 2);
   zlib_set_num(js, c, "BROTLI_OPERATION_EMIT_METADATA", 3);
-  zlib_set_num(js, c, "BROTLI_PARAM_MODE", 0);
+  zlib_set_num(js, c, "BROTLI_PARAM_MODE", BROTLI_PARAM_MODE);
   zlib_set_num(js, c, "BROTLI_MODE_GENERIC", 0);
   zlib_set_num(js, c, "BROTLI_MODE_TEXT", 1);
   zlib_set_num(js, c, "BROTLI_MODE_FONT", 2);
   zlib_set_num(js, c, "BROTLI_DEFAULT_MODE", 0);
-  zlib_set_num(js, c, "BROTLI_PARAM_QUALITY", 1);
+  zlib_set_num(js, c, "BROTLI_PARAM_QUALITY", BROTLI_PARAM_QUALITY);
   zlib_set_num(js, c, "BROTLI_MIN_QUALITY", 0);
   zlib_set_num(js, c, "BROTLI_MAX_QUALITY", 11);
   zlib_set_num(js, c, "BROTLI_DEFAULT_QUALITY", 11);
-  zlib_set_num(js, c, "BROTLI_PARAM_LGWIN", 2);
+  zlib_set_num(js, c, "BROTLI_PARAM_LGWIN", BROTLI_PARAM_LGWIN);
   zlib_set_num(js, c, "BROTLI_MIN_WINDOW_BITS", 10);
   zlib_set_num(js, c, "BROTLI_MAX_WINDOW_BITS", 24);
   zlib_set_num(js, c, "BROTLI_DEFAULT_WINDOW", 22);
-  zlib_set_num(js, c, "BROTLI_PARAM_SIZE_HINT", 3);
-  zlib_set_num(js, c, "BROTLI_PARAM_LARGE_WINDOW", 4);
-  zlib_set_num(js, c, "BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION", 0);
-  zlib_set_num(js, c, "BROTLI_DECODER_PARAM_LARGE_WINDOW", 1);
+  zlib_set_num(js, c, "BROTLI_LARGE_MAX_WINDOW_BITS", BROTLI_LARGE_MAX_WINDOW_BITS);
+  zlib_set_num(js, c, "BROTLI_PARAM_LGBLOCK", BROTLI_PARAM_LGBLOCK);
+  zlib_set_num(js, c, "BROTLI_MIN_INPUT_BLOCK_BITS", BROTLI_MIN_INPUT_BLOCK_BITS);
+  zlib_set_num(js, c, "BROTLI_MAX_INPUT_BLOCK_BITS", BROTLI_MAX_INPUT_BLOCK_BITS);
+  zlib_set_num(js, c, "BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING", BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING);
+  zlib_set_num(js, c, "BROTLI_PARAM_SIZE_HINT", BROTLI_PARAM_SIZE_HINT);
+  zlib_set_num(js, c, "BROTLI_PARAM_LARGE_WINDOW", BROTLI_PARAM_LARGE_WINDOW);
+  zlib_set_num(js, c, "BROTLI_PARAM_NPOSTFIX", BROTLI_PARAM_NPOSTFIX);
+  zlib_set_num(js, c, "BROTLI_PARAM_NDIRECT", BROTLI_PARAM_NDIRECT);
+  zlib_set_num(js, c, "BROTLI_DECODER_RESULT_ERROR", BROTLI_DECODER_RESULT_ERROR);
+  zlib_set_num(js, c, "BROTLI_DECODER_RESULT_SUCCESS", BROTLI_DECODER_RESULT_SUCCESS);
+  zlib_set_num(js, c, "BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT", BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT);
+  zlib_set_num(js, c, "BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT", BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
+  zlib_set_num(js, c, "BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION", BROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION);
+  zlib_set_num(js, c, "BROTLI_DECODER_PARAM_LARGE_WINDOW", BROTLI_DECODER_PARAM_LARGE_WINDOW);
 
   zlib_set_num(js, c, "ZSTD_e_continue", 0);
   zlib_set_num(js, c, "ZSTD_e_flush", 1);
