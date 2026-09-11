@@ -73,3 +73,22 @@ This guide keeps validation proportional to the change while still protecting ru
   change does not need networked coverage.
 - If the right validation is expensive or unavailable, document the gap in the
   associated [execution plan](../exec-plans/index.md).
+
+## Verifying operand-stack depth
+
+The bytecode compiler computes each function's maximum operand depth from
+the `n_pop` / `n_push` columns of `OP_DEF` in `include/silver/opcode.h`. A
+wrong row, or an emitter that leaves a loop unbalanced, makes the analysis
+reject the function; the release binary then logs
+`jit: operand depth analysis failed` under `ANT_DEBUG=dump/vm:op-warn` and
+falls back to a generous bound. `tools/check_stack_depth.sh` runs the spec
+suite, the runtime tests and the JIT examples that way and fails if any
+function is rejected:
+
+```console
+$ tools/check_stack_depth.sh            # uses ./build/ant
+$ tools/check_stack_depth.sh /path/ant  # or another binary
+```
+
+Run it after touching `include/silver/opcode.h`, an interpreter handler in
+`src/silver/ops/`, or the loop/try emitters in `src/silver/compiler.c`.

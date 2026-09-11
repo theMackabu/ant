@@ -231,7 +231,7 @@ void jit_emit_inline_body(
     MIR_item_t gf_proto, MIR_item_t imp_get_field_inline,
     MIR_item_t special_obj_proto, MIR_item_t imp_special_obj,
     const jit_inline_ext_t *ext) {
-  int inl_max_stack = callee->max_stack > 0 ? callee->max_stack : 4;
+  int inl_max_stack = callee->max_stack + JIT_VSTACK_SLACK;
   MIR_reg_t inl_vs[inl_max_stack];
   for (int i = 0; i < inl_max_stack; i++) {
     char rn[32];

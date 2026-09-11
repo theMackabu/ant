@@ -327,6 +327,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
       c->integer_locals[c->integer_store] = c->integer_value;
       c->integer_local_ranges[c->integer_store] = c->integer_range;
     }
+    if (c->vs.overflow) c->ok = false;
     if (!c->ok) break;
     c->ip += c->sz;
   }

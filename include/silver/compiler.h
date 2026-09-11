@@ -84,6 +84,8 @@ typedef struct {
   const char *label;
   uint32_t label_len;
   bool is_switch;
+  int iter_unwind_index;
+  bool iter_async;
 } sv_loop_t;
 
 typedef struct const_dedup_entry {

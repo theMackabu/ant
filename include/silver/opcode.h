@@ -6,8 +6,8 @@ OP_FMT(u16)
 OP_FMT(i16)
 OP_FMT(u32)
 OP_FMT(i32)
-OP_FMT(u8_u8)
-OP_FMT(u8_u16)
+OP_FMT(u8_npop)
+OP_FMT(npop_u8_u8)
 OP_FMT(atom)
 OP_FMT(atom_u8)
 OP_FMT(label)
@@ -20,6 +20,7 @@ OP_FMT(const)
 OP_FMT(const8)
 OP_FMT(npop)
 OP_FMT(var_ref)
+OP_FMT(map_template)
 #undef OP_FMT
 #endif
 
@@ -179,10 +180,10 @@ OP_DEF(  CALL_SUPER,        3,   3,   1, npop)      /* this super new.target arg
 OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  CALL_ARRAY_INCLUDES, 3, 2,   1, npop)      /* this func args... -> bool */
 OP_DEF(  CALL_CHAR_CODE_AT,   3, 2,   1, npop)      /* this func args... -> result */
-OP_DEF(  CALL_STRING_INTRINSIC, 4, 2, 1, u8_u16)    /* this func args... -> result (kind:u8 argc:u16) */
+OP_DEF(  CALL_STRING_INTRINSIC, 4, 2, 1, u8_npop)   /* this func args... -> result (kind:u8 argc:u16) */
 OP_DEF(  CALL_MAP_TEMPLATE,   5,   2,   1, map_template) /* this func substitutions... -> result; descriptor:u32 */
-OP_DEF(  CALL_STABLE_BUILTIN, 4, 2,   1, u8_u16)    /* this func args... -> result (kind:u8 argc:u16) */
-OP_DEF(  CALL_CALL,         3,   1,   1, u8_u8)     /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
+OP_DEF(  CALL_STABLE_BUILTIN, 4, 2,   1, u8_npop)   /* this func args... -> result (kind:u8 argc:u16) */
+OP_DEF(  CALL_CALL,         3,   1,   1, npop_u8_u8) /* X a... b... -> X(a...)(b...); n1:u8 n2:u8 — fuses curried steps */
 OP_DEF(  CALL_CALL_SLOT,    3,   2,   1, loc)       /* X a -> X(a)(slot); slot read after X on fallback */
 OP_DEF(  RE_LITERAL_EXEC,   1,   3,   1, none)      /* pattern flags arg -> exec result */
 OP_DEF(  STR_RE_LITERAL_REPLACE, 1, 4, 1, none)     /* str pattern flags repl -> string */
@@ -192,10 +193,10 @@ OP_DEF(  TAIL_MAP_TEMPLATE,   5,   2,   0, map_template) /* tail Map.get/has wit
 OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
 OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */
-OP_DEF(  APPLY,             3,   3,   1, u16)       /* func this [args] -> result */
-OP_DEF(  SUPER_APPLY,       3,   4,   1, u16)       /* this super new.target [args] -> this */
-OP_DEF(  NEW_APPLY,         3,   2,   1, u16)       /* func new.target [args] -> obj */
-OP_DEF(  EVAL,              5,   2,   1, npop)      /* direct eval: source, lexical new.target */
+OP_DEF(  APPLY,             3,   2,   1, npop)      /* func this args... -> result */
+OP_DEF(  SUPER_APPLY,       3,   3,   1, npop)      /* this super new.target args... -> this */
+OP_DEF(  NEW_APPLY,         3,   2,   1, npop)      /* func new.target args... -> obj */
+OP_DEF(  EVAL,              5,   2,   1, u32)       /* source new.target -> result (scope:u32) */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)
 OP_DEF(  RETURN_ASYNC,      1,   1,   0, none)      /* return from async func */
@@ -208,9 +209,9 @@ OP_DEF(  THROW_ERROR,       6,   0,   0, atom_u8)   /* throw built-in error */
 OP_DEF(  TRY_PUSH,          5,   0,   0, label)     /* push catch handler */
 OP_DEF(  TRY_PUSH_FINALLY,  5,   0,   0, label)     /* push finally-protecting handler */
 OP_DEF(  TRY_POP,           1,   0,   0, none)      /* pop catch handler */
-OP_DEF(  CATCH,             5,   0,   1, label)     /* push caught value + finally addr */
+OP_DEF(  CATCH,             5,   0,   0, label)     /* caught value already pushed by unwinder; finally addr */
 OP_DEF(  FINALLY,           5,   0,   0, label)     /* enter finally block */
-OP_DEF(  FINALLY_RET,       1,   1,   0, none)      /* return from finally */
+OP_DEF(  FINALLY_RET,       1,   0,   0, none)      /* return from finally (consumes the unwinder's completion, if any) */
 OP_DEF(  FINALLY_DISCARD,   1,   0,   0, none)      /* pop finally handler, drop completion */
 OP_DEF(  UNWIND_JMP,        7,   0,   0, label)     /* jump running n finally blocks */
 OP_DEF(  NIP_CATCH,         1,   2,   1, none)      /* catch ... a -> a */
@@ -234,18 +235,18 @@ OP_DEF(  ITER_CLOSE,        1,   3,   0, none)      /* close iterator */
 OP_DEF(  ITER_CLOSE_ASYNC,  1,   3,   1, none)      /* close async iterator -> awaitable */
 OP_DEF(  ITER_CLOSE_CHECK,  1,   1,   0, none)      /* validate awaited async close result */
 OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */
-OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   4, none)      /* async iterator next */
+OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   5, none)      /* async iterator next -> iter next tag value done */
 OP_DEF(  DESTRUCTURE_INIT,  1,   1,   3, none)      /* iterable -> iter next tag */
 OP_DEF(  DESTRUCTURE_NEXT,  1,   3,   4, none)      /* iter next tag -> iter next tag value|undef */
 OP_DEF(  DESTRUCTURE_REST,  1,   3,   4, none)      /* iter next tag -> iter next tag array */
 OP_DEF(  DESTRUCTURE_CLOSE, 1,   3,   0, none)      /* close destructuring iterator */
 
 OP_DEF(  AWAIT,             1,   1,   1, none)      /* promise -> resolved value */
-OP_DEF(  YIELD,             1,   1,   2, none)      /* val -> received */
+OP_DEF(  YIELD,             1,   1,   1, none)      /* val -> received */
 OP_DEF(  YIELD_STAR_INIT,   3,   1,   0, loc)       /* iterable -> delegate locals */
-OP_DEF(  YIELD_STAR_NEXT,   3,   1,   2, loc)       /* sent -> final value | suspend */
-OP_DEF(  YIELD_STAR_THROW,  3,   1,   2, loc)       /* thrown -> final value | suspend */
-OP_DEF(  YIELD_STAR_RETURN, 3,   1,   2, loc)       /* return value -> final value | suspend */
+OP_DEF(  YIELD_STAR_NEXT,   3,   1,   1, loc)       /* sent -> final value | suspend */
+OP_DEF(  YIELD_STAR_THROW,  3,   1,   1, loc)       /* thrown -> final value | suspend */
+OP_DEF(  YIELD_STAR_RETURN, 3,   1,   1, loc)       /* return value -> final value | suspend */
 OP_DEF(  SPREAD,            1,   1,   0, none)      /* arr iterable -> arr */
 
 OP_DEF(  DEFINE_METHOD,     6,   2,   1, atom_u8)   /* obj func -> obj (flags: get/set/static) */
@@ -255,7 +256,7 @@ OP_DEF(  SET_NAME_COMP,     1,   2,   2, none)      /* set .name from computed k
 OP_DEF(  SET_PROTO,         1,   2,   1, none)      /* obj proto -> obj */
 OP_DEF(  SET_HOME_OBJ,      1,   2,   2, none)      /* func home -> func home */
 OP_DEF(  APPEND,            1,   3,   2, none)      /* append to array, update length */
-OP_DEF(  COPY_DATA_PROPS,   2,   3,   3, u8)        /* Object.assign-like */
+OP_DEF(  COPY_DATA_PROPS,   2,   2,   2, u8)        /* dst src -> dst src (Object.assign-like) */
 
 OP_DEF(  DEFINE_CLASS,      14,  2,   2, atom_u8)   /* parent ctor -> ctor proto */
 OP_DEF(  DEFINE_CLASS_COMP, 14,  3,   3, atom_u8)   /* computed name variant */

@@ -127,11 +127,80 @@ NavierStokes 1 / 0 (its once-called driver stays on level-1 code, no
 measurable score change), Richards, DeltaBlue, RayTrace, Splay 0.
 
 
+## Operand-stack depth (`max_stack`) made real
+
+Reviewing `sv_func_t` for dead fields showed `max_stack` was always
+`max_locals + 64`: a guess, not a bound. The JIT sized its virtual stack
+from it with no bounds check in `vstack_push`, so any expression holding
+more than 64 pending operands (a 120-argument call, a 120-element literal)
+wrote past the arrays `setup_frame.c` allocates: MIR reported an undeclared
+register and guard-malloc crashed. The interpreter had the same hole in
+principle, since its frame reservation only covered args and locals.
+
+Design, mirroring QuickJS's `compute_stack_size`:
+
+1. The `n_pop` / `n_push` columns of `OP_DEF` in `include/silver/opcode.h`
+   are now authoritative and consumed. `sv_op_stack_effect()` (compiler.c)
+   returns an op's effect from the table plus its count operand, which the
+   format column declares: `npop` (u16 at +1), `u8_npop` (u16 at +2),
+   `npop_u8_u8` (two u8 counts), `map_template` (descriptor count). Rows
+   that had drifted were corrected: `CATCH` (the unwinder pushes the caught
+   value), `FINALLY_RET`, `COPY_DATA_PROPS`, `AWAIT_ITER_NEXT`, the `YIELD`
+   family, and the `APPLY` family plus `CALL_STRING_INTRINSIC`,
+   `CALL_STABLE_BUILTIN` and `CALL_CALL`, whose counts were not declared.
+2. `sv_func_compute_max_stack()` runs once when bytecode is finalized: a
+   worklist over offsets that processes each at its highest incoming depth.
+   It adds only control flow: label targets, the terminal set, handler entry
+   at the saved depth plus one, and no edge for `CATCH`'s bookkeeping label.
+   A loop head re-entered deeper than first seen, an underflow, or a bad
+   jump fails the analysis; release builds then fall back to
+   `code_len + 64`, verification builds exit.
+3. `sv_stage_frame_args` reserves `max_stack` on top of args and locals
+   without moving `sp`; the JIT sizes `vs.max` as `max_stack +
+   JIT_VSTACK_SLACK` and `vstack_push` sets an overflow flag that abandons
+   the compile instead of writing out of bounds.
+4. `tools/check_stack_depth.sh` runs the spec suite, `tests/` and the JIT
+   examples under `ANT_DEBUG=dump/vm:op-warn` and fails if the analysis
+   rejects any function. During this work a throwaway in-tree verification
+   build also compared every dispatched op's real `sp` delta with its table
+   row; it was removed once the table was correct, since a drifted row
+   shows up as an analysis rejection anyway. (`AWAIT_ITER_NEXT` re-executes
+   after a resume with the resume value already pushed; its row lists the
+   combined effect.)
+
+The verification pass ran the spec suite (102 files), all `tests/`, the
+JIT examples and bench-v8 with zero diagnostics. It found one real
+compiler bug on the way:
+
+**Labeled jumps across `for...of` leaked and skipped IteratorClose.**
+`emit_loop_exit_jump` popped the handler entries of crossed loops but never
+closed a crossed for-of iterator or dropped its three stack slots. So
+`continue outer` from an inner for-of leaked three slots per iteration,
+never called the inner iterator's `return()`, produced extra iterations
+once the VM stack grew, and hung the release binary on a generator inner
+loop; `break outer` landed on the outer loop's close sequence with the inner
+triple on top and closed the wrong iterator. The emitter now retires unwind
+entries one by one, innermost first: pop a try/catch or for-of handler and
+close that loop's iterator at its exact position, discard a finally body we
+are inside, and run a try/finally's block right there through a
+one-handler `UNWIND_JMP` landing on the next instruction. That keeps spec
+order (an inner iterator closes before an outer finally runs), which node
+confirms. Regression: `tests/test_labeled_jump_for_of_close.cjs`.
+
+`sizeof(sv_func_t)` is 208 (was 200): `jit_osr_threshold` plus one
+bitfield spill. `max_stack` stays because it now carries real information.
+
 ## Validation status
 
 - `tests/test_jit_osr_large_function.cjs` (new): once-called >512-byte body
   is OSR-compiled on the cold tier and re-tiered hot after 150 calls, with
   checksums matching node.
+- `tests/test_jit_vstack_depth.cjs` (new): 120-operand calls, literals and
+  expressions compile and run correctly through the JIT.
+- `tests/test_labeled_jump_for_of_close.cjs` (new): labeled break/continue
+  across for-of and for-await-of close the crossed iterators in spec order.
+- `tools/check_stack_depth.sh`: every function in the spec suite, `tests/`
+  and the JIT examples accepted by the analysis.
 - `tests/test_jit_*.cjs`: 70 pass (plus the two `.mjs` JIT tests).
 - `examples/jit/run.js --all`: pass.
 - `examples/spec/run.js --all`: see checkpoint below.
@@ -144,3 +213,13 @@ measurable score change), Richards, DeltaBlue, RayTrace, Splay 0.
   worth profiling before raising `JIT_OSR_COLD_COMPILE_MIN_BYTES`.
 - Tier-up only fires from the call path. A once-called function that stays in
   its OSR'd cold loop never re-tiers; V8 solves this with OSR-from-Maglev.
+- Ant closes abandoned generators only through GC pressure (~850 MB RSS for
+  2M short generator loops vs 58 MB in node); unrelated to this plan but
+  visible in its probes.
+- The committed PGO profile no longer matches seven changed functions
+  (`sv_execute_frame`, `sv_stage_frame_args` callers, `vstack_push`,
+  `compile_for_each`, ...); the release flow should re-profile. An
+  interleaved A/B against the installed release showed no difference beyond
+  run-to-run noise on the kernels or bench-v8.
+- Pre-existing failures on the release binary too: `test_hono_adapter`,
+  `test_throw_stack`, `test_wasm_exported_memory_grow`, `test_with_strict`.

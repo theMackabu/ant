@@ -26,13 +26,21 @@ void vstack_clear_value_info(jit_vstack_t *vs, int idx) {
   vstack_set_value_info(vs, idx, (jit_value_info_t){0});
 }
 
+static inline bool vstack_check_push(jit_vstack_t *vs) {
+  if (vs->sp < vs->max) return true;
+  vs->overflow = true;
+  return false;
+}
+
 MIR_reg_t vstack_push(jit_vstack_t *vs) {
+  if (!vstack_check_push(vs)) return vs->regs[vs->max - 1];
   vstack_clear_value_info(vs, vs->sp);
   if (vs->slot_type) vs->slot_type[vs->sp] = SLOT_BOXED;
   return vs->regs[vs->sp++];
 }
 
 MIR_reg_t vstack_push_const(jit_vstack_t *vs, uint64_t val) {
+  if (!vstack_check_push(vs)) return vs->regs[vs->max - 1];
   vstack_clear_value_info(vs, vs->sp);
   if (vs->slot_type) vs->slot_type[vs->sp] = SLOT_BOXED;
   if (vs->has_const) {

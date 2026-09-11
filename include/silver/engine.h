@@ -80,6 +80,11 @@ static inline bool sv_op_has_ic_slot(sv_op_t op) {
   return (unsigned)op < OP__COUNT && sv_op_ic_slots[op];
 }
 
+bool sv_op_stack_effect(
+  const struct sv_func *func,
+  const uint8_t *ip, int *pops, int *pushes
+);
+
 typedef struct {
   const char *str;
   uint32_t    len;
