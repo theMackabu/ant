@@ -35,9 +35,8 @@ if host_machine.system() == 'windows'
 endif
 
 boringssl_opts.set_override_option('warning_level', '0')
-boringssl_opts.set_override_option('optimization', 's')
-
 boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
+
 ssl_dep = boringssl_sub.dependency('ssl')
 crypto_dep = boringssl_sub.dependency('crypto')
 

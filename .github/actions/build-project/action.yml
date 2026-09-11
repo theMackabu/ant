@@ -78,6 +78,18 @@ runs:
         restore-keys: |
           temporal-rust-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-
 
+    - name: Cache Windows compilation
+      if: runner.os == 'Windows'
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+      with:
+        path: |
+          .cache/ccache
+          .cache/zig-local
+          .cache/zig-global
+        key: compilation-v1-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-${{ github.sha }}
+        restore-keys: |
+          compilation-v1-${{ inputs.platform }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-
+
     - name: Configure and build
       shell: bash
       env:
@@ -104,6 +116,18 @@ runs:
         pkg-config --variable pc_path pkg-config || true
         if [[ -n "${{ inputs.cxx }}" ]]; then
           export CXX="${{ inputs.cxx }}"
+        fi
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          CCACHE_BASEDIR=$(cygpath -m "$GITHUB_WORKSPACE")
+          export CCACHE_BASEDIR
+          export CCACHE_DIR="$CCACHE_BASEDIR/.cache/ccache"
+          export CCACHE_COMPILERCHECK=content
+          export CCACHE_MAXSIZE=1G
+          export ZIG_LOCAL_CACHE_DIR="$CCACHE_BASEDIR/.cache/zig-local"
+          export ZIG_GLOBAL_CACHE_DIR="$CCACHE_BASEDIR/.cache/zig-global"
+          export CC="ccache $CC"
+          export CXX="ccache ${CXX:-clang++}"
+          ccache --zero-stats
         fi
         if [[ -n "${{ inputs.ar }}" ]]; then
           export AR="${{ inputs.ar }}"
@@ -168,6 +192,9 @@ runs:
         printf '\n'
         meson setup build "${MESON_ARGS[@]}"
         meson compile -C build
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          ccache --show-stats
+        fi
 
     - name: Verify build
       id: version

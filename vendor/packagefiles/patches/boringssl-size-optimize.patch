@@ -1,0 +1,36 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -73,6 +73,11 @@
+ foreach(VAR CMAKE_C_FLAGS CMAKE_CXX_FLAGS CMAKE_ASM_FLAGS)
+   string(REGEX REPLACE "(^| )[/-]DNDEBUG( |$)" " " "${VAR}_RELWITHASSERTS"
+          "${${VAR}_RELEASE}")
++endforeach()
++
++foreach(VAR CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE)
++  string(REGEX REPLACE "(^| )[/-]O[0-9a-z]+( |$)" " " "${VAR}" "${${VAR}}")
++  set("${VAR}" "${${VAR}} -Os")
+ endforeach()
+ 
+ if(BORINGSSL_PREFIX)
+@@ -633,7 +638,20 @@
+   set(CRYPTO_FIPS_OBJECTS $<TARGET_OBJECTS:fipsmodule>)
+ endif()
+ 
+-add_library(crypto ${CRYPTO_SOURCES} ${CRYPTO_FIPS_OBJECTS} ${CRYPTO_SOURCES_ASM_USED})
++set(CRYPTO_HOT_SOURCES
++  crypto/mem.cc
++  crypto/evp/scrypt.cc
++  crypto/evp/pbkdf.cc
++)
++list(REMOVE_ITEM CRYPTO_SOURCES ${CRYPTO_HOT_SOURCES})
++
++add_library(crypto_hot OBJECT ${CRYPTO_HOT_SOURCES})
++target_compile_options(crypto_hot PRIVATE -O3)
++target_compile_options(crypto_hot PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${NO_CXX_RUNTIME_FLAGS}>)
++target_include_directories(crypto_hot PRIVATE ${PROJECT_SOURCE_DIR}/include)
++target_compile_definitions(crypto_hot PRIVATE -DBORINGSSL_IMPLEMENTATION)
++
++add_library(crypto ${CRYPTO_SOURCES} $<TARGET_OBJECTS:crypto_hot> ${CRYPTO_FIPS_OBJECTS} ${CRYPTO_SOURCES_ASM_USED})
+   # The C++ code in libcrypto shouldn't depend on libstdc++.
+ target_compile_options(crypto PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${NO_CXX_RUNTIME_FLAGS}>)
+ target_include_directories(crypto PUBLIC
