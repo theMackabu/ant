@@ -387,6 +387,13 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
                                          MIR_T_I64, "vm",
                                          MIR_T_I64, "js");
 
+  MIR_type_t tier_ret = MIR_T_I64;
+  c->tier_up_proto = MIR_new_proto(c->ctx, "tier_up_proto",
+                                   1, &tier_ret, 3,
+                                   MIR_T_I64, "js",
+                                   MIR_T_I64, "func",
+                                   MIR_T_P, "closure");
+
   c->define_field_proto = MIR_new_proto(c->ctx, "df_proto",
                                         0, NULL, 6,
                                         MIR_T_I64, "vm",
@@ -633,8 +640,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_closure = MIR_new_import(c->ctx, "jit_helper_closure");
   c->imp_in = MIR_new_import(c->ctx, "jit_helper_in");
   c->imp_get_length = MIR_new_import(c->ctx, "jit_helper_get_length");
-  c->imp_get_length_inline =
-      MIR_new_import(c->ctx, "jit_helper_get_length_inline");
+  c->imp_get_length_inline = MIR_new_import(c->ctx, "jit_helper_get_length_inline");
   c->imp_define_field = MIR_new_import(c->ctx, "jit_helper_define_field");
   c->imp_define_method_comp = MIR_new_import(c->ctx, "jit_helper_define_method_comp");
   c->imp_seq = MIR_new_import(c->ctx, "jit_helper_seq");
@@ -642,8 +648,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_ne = MIR_new_import(c->ctx, "jit_helper_ne");
   c->imp_sne = MIR_new_import(c->ctx, "jit_helper_sne");
   c->imp_put_field = MIR_new_import(c->ctx, "jit_helper_put_field_ic");
-  c->imp_shape_transition =
-      MIR_new_import(c->ctx, "jit_helper_shape_transition");
+  c->imp_shape_transition = MIR_new_import(c->ctx, "jit_helper_shape_transition");
   c->imp_remember_obj = MIR_new_import(c->ctx, "gc_remember_add");
   c->imp_get_elem = MIR_new_import(c->ctx, "jit_helper_get_elem");
   c->imp_put_elem = MIR_new_import(c->ctx, "jit_helper_put_elem");
@@ -660,8 +665,7 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_throw_error = MIR_new_import(c->ctx, "jit_helper_throw_error");
   c->imp_set_proto = MIR_new_import(c->ctx, "jit_helper_set_proto");
   c->imp_get_elem2 = MIR_new_import(c->ctx, "jit_helper_get_elem2");
-  c->imp_get_elem_inline =
-      MIR_new_import(c->ctx, "jit_helper_get_elem_inline");
+  c->imp_get_elem_inline = MIR_new_import(c->ctx, "jit_helper_get_elem_inline");
   c->imp_band = MIR_new_import(c->ctx, "jit_helper_band");
   c->imp_bor = MIR_new_import(c->ctx, "jit_helper_bor");
   c->imp_bxor = MIR_new_import(c->ctx, "jit_helper_bxor");
@@ -678,6 +682,6 @@ void jit_setup_prototypes(jit_compile_t *c, MIR_type_t ret_type) {
   c->imp_delete = MIR_new_import(c->ctx, "jit_helper_delete");
   c->imp_set_name = MIR_new_import(c->ctx, "jit_helper_set_name");
   c->imp_stack_ovf_err = MIR_new_import(c->ctx, "jit_helper_stack_overflow_error");
-  c->imp_normalize_this =
-      MIR_new_import(c->ctx, "jit_helper_normalize_sloppy_this");
+  c->imp_tier_up = MIR_new_import(c->ctx, "jit_helper_tier_up");
+  c->imp_normalize_this = MIR_new_import(c->ctx, "jit_helper_normalize_sloppy_this");
 }

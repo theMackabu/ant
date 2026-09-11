@@ -1093,7 +1093,6 @@ static inline ant_value_t sv_try_direct_closure_jit(
     sv_tfb_record_call_target(caller_func, (int)(caller_ip - caller_func->code), callee);
 
   if (callee->jit_code) {
-    sv_jit_maybe_tier_up(js, callee, closure);
     if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
     sv_jit_enter(js);
     ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(

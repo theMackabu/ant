@@ -1,9 +1,12 @@
 // Regression for issue #101: a once-called function whose bytecode exceeds
 // the old 512-byte OSR gate must still be OSR-compiled from its hot loop,
 // on the cheap tier first, and re-tiered hot once it is also hot by calls.
+// Promotion is driven by the cold code's own prologue, so it must also
+// happen when every call comes from compiled code (direct JIT calls never
+// pass through the interpreter's call path).
 const { spawnSync } = require('child_process');
 
-const source = String.raw`
+const kernel = String.raw`
 function benchNbody(n, steps) {
   var bodies = [];
   for (var i = 0; i < n; i++) {
@@ -40,28 +43,51 @@ function benchNbody(n, steps) {
   for (var i = 0; i < n; i++) e += bodies[i][0] * bodies[i][0] + bodies[i][1] * bodies[i][1];
   return Math.round(e * 1000) / 1000;
 }
+`;
+
+const source = kernel + String.raw`
 if (benchNbody(300, 30) !== 209259.692) throw new Error('nbody checksum mismatch');
 for (let i = 0; i < 150; i++) benchNbody(4, 1);
 if (benchNbody(300, 3) !== 209250.582) throw new Error('nbody checksum mismatch after tier-up');
 console.log('done');
 `;
 
-const result = spawnSync(process.execPath, ['-e', source], {
-  env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
-  encoding: 'utf8',
-});
+function run(source) {
+  const result = spawnSync(process.execPath, ['-e', source], {
+    env: { ...process.env, ANT_DEBUG: 'dump/vm:op-warn' },
+    encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`child failed:\n${result.stderr}\n${result.stdout}`);
+  return result.stderr.split('\n');
+}
 
-if (result.error) throw result.error;
-if (result.status !== 0) throw new Error(`child failed:\n${result.stderr}\n${result.stdout}`);
+function expectTierUp(lines, label) {
+  const osr = lines.find(line => line.startsWith('jit: osr compiled func=benchNbody'));
+  if (!osr) throw new Error(`${label}: expected an OSR compile of benchNbody, got:\n${lines.join('\n')}`);
+  const size = Number(/code_len=(\d+)/.exec(osr)[1]);
+  if (!(size > 512)) throw new Error(`${label}: fixture must exceed the old 512-byte gate, got ${size}`);
+  if (!osr.includes('tier=cold')) throw new Error(`${label}: large OSR compile should use the cold tier: ${osr}`);
+  if (!lines.some(line => line.startsWith('jit: tier-up compiled func=benchNbody')))
+    throw new Error(`${label}: expected a hot re-tier of benchNbody, got:\n${lines.join('\n')}`);
+  if (lines.some(line => line.includes('jit: bailout') && line.includes('benchNbody')))
+    throw new Error(`${label}: unexpected bailout:\n${lines.join('\n')}`);
+}
 
-const lines = result.stderr.split('\n');
-const osr = lines.find(line => line.startsWith('jit: osr compiled func=benchNbody'));
-if (!osr) throw new Error(`expected an OSR compile of benchNbody, got:\n${result.stderr}`);
-const size = Number(/code_len=(\d+)/.exec(osr)[1]);
-if (!(size > 512)) throw new Error(`fixture must exceed the old 512-byte gate, got ${size}`);
-if (!osr.includes('tier=cold')) throw new Error(`large OSR compile should use the cold tier: ${osr}`);
-if (!lines.some(line => line.startsWith('jit: tier-up compiled func=benchNbody')))
-  throw new Error(`expected a hot re-tier of benchNbody after 150 calls, got:\n${result.stderr}`);
-if (lines.some(line => line.includes('jit: bailout') && line.includes('benchNbody')))
-  throw new Error(`unexpected bailout:\n${result.stderr}`);
+expectTierUp(run(source), 'interpreter caller');
+
+// Same kernel, but every call after the first comes from a JIT-compiled
+// driver that calls benchNbody's code pointer directly.
+const compiledCaller = kernel + String.raw`
+function compiledDriver() {
+  var checksum = 0;
+  for (var i = 0; i < 1000; i++) checksum += i;
+  checksum += benchNbody(300, 30);
+  for (var j = 0; j < 200; j++) checksum += benchNbody(4, 1);
+  return checksum;
+}
+if (Math.round(compiledDriver() * 1000) / 1000 !== 791187.692) throw new Error('compiled driver checksum mismatch');
+console.log('done');
+`;
+expectTierUp(run(compiledCaller), 'compiled caller');
 console.log('jit-osr-large-function: ok');

@@ -1,4 +1,7 @@
 #include "jit_internal.h"
+
+void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure);
+
 void jit_load_externals_once(sv_jit_ctx_t *jc) {
   if (jc == NULL || jc->externals_loaded) return;
 #define LOAD_EXT(name)                           \
@@ -105,6 +108,7 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_set_name);
   LOAD_EXT(jit_helper_stack_overflow);
   LOAD_EXT(jit_helper_stack_overflow_error);
+  LOAD_EXT(jit_helper_tier_up);
   LOAD_EXT(jit_helper_normalize_sloppy_this);
 #undef LOAD_EXT
   jc->externals_loaded = true;
@@ -187,24 +191,23 @@ ant_value_t sv_jit_try_compile_and_call(
   return result;
 }
 
-uint32_t sv_jit_osr_threshold_for(int code_len) {
-  if (code_len <= 0) return SV_JIT_OSR_THRESHOLD;
-  uint64_t t = (uint64_t)SV_JIT_OSR_THRESHOLD * (uint64_t)code_len /
-               (uint64_t)JIT_OSR_THRESHOLD_SCALE_BYTES;
-  if (t < SV_JIT_OSR_THRESHOLD) t = SV_JIT_OSR_THRESHOLD;
-  if (t > UINT32_MAX / 2) t = UINT32_MAX / 2;
-  return (uint32_t)t;
-}
-
-void sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
+sv_jit_func_t sv_jit_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
   func->jit_code_cold = false;
   sv_jit_func_t hot = sv_jit_compile_tier(js, func, closure, SV_JIT_TIER_HOT);
+  
   if (sv_jit_warn_unlikely) fprintf(
     stderr, "jit: tier-up %s func=%s code_len=%d\n",
     hot ? "compiled" : "compile-failed",
     func->debug->name ? func->debug->name : "<anonymous>", func->code_len
   );
+  
   if (hot) func->jit_code = (void *)hot;
+  return hot;
+}
+
+void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
+  if (!func->jit_code_cold) return NULL;
+  return (void *)sv_jit_tier_up(js, func, closure);
 }
 
 ant_value_t sv_jit_try_osr(

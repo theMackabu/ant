@@ -9,9 +9,12 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
       .js = js,
       .func = func,
       .hint_closure = hint_closure,
+      .cold_tier = tier == SV_JIT_TIER_COLD,
   };
+  
   jit_compile_t *c = &compile;
   if (c->func->jit_compile_failed || c->func->jit_compiling) return NULL;
+  
   if (c->func->jit_code == NULL && c->func->jit_compiled_tfb_ver != 0 &&
       c->func->tfb_version == c->func->jit_compiled_tfb_ver) {
     c->func->jit_compile_failed = true;
