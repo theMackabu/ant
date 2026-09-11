@@ -1,7 +1,6 @@
 #include "compile.h"
 
 static void jit_discard_setup_module(jit_compile_t *c) {
-  // Setup failures occur before the scanned labels are emitted.
   for (int i = 0; i < c->lm.count; i++)
     MIR_append_insn(c->ctx, c->jit_func, c->lm.entries[i].label);
   MIR_finish_func(c->ctx);
@@ -94,7 +93,7 @@ bool jit_setup_frame(jit_compile_t *c) {
   }
 
   c->vs = (jit_vstack_t){0};
-  c->vs.max = c->func->max_stack > 0 ? c->func->max_stack : 32;
+  c->vs.max = c->func->max_stack + JIT_VSTACK_SLACK;
   c->vs.regs = calloc((size_t)c->vs.max, sizeof(MIR_reg_t));
   c->vs.known_func = calloc((size_t)c->vs.max, sizeof(sv_func_t *));
   c->vs.d_regs = calloc((size_t)c->vs.max, sizeof(MIR_reg_t));

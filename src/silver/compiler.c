@@ -483,6 +483,8 @@ static uint32_t add_map_template_desc(
   return index;
 }
 
+static int sv_func_compute_max_stack(const sv_func_t *func);
+
 static void sv_func_init_code_and_map_templates(
   const sv_compiler_t *c, sv_func_t *func
 ) {
@@ -516,6 +518,16 @@ static void sv_func_init_code_and_map_templates(
   memcpy(func->code, c->code, (size_t)c->code_len);
   func->code_len = c->code_len;
   func->jit_osr_threshold = sv_jit_osr_threshold_for(func->code_len);
+
+  int max_stack = sv_func_compute_max_stack(func);
+  if (max_stack < 0) {
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: operand depth analysis failed for %s\n",
+      func->debug && func->debug->name ? func->debug->name : "<anonymous>"
+    );
+    max_stack = func->code_len + 64;
+  }
+  func->max_stack = max_stack;
 }
 
 static uint16_t alloc_ic_idx(sv_compiler_t *c) {
@@ -1392,6 +1404,7 @@ static void push_loop(
     .unwind_depth = c->unwind_count,
     .label = label, .label_len = label_len,
     .is_switch = is_switch,
+    .iter_unwind_index = -1,
   };
 }
 
@@ -6026,6 +6039,11 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
+  
+  if (is_for_of) {
+    c->loops[c->loop_count - 1].iter_unwind_index = c->unwind_count - 1;
+    c->loops[c->loop_count - 1].iter_async = is_for_await;
+  }
 
   if (is_using_loop) {
     emit_empty_disposal_stack(c);
@@ -6192,31 +6210,31 @@ for (int i = c->local_count - 1; i >= 0; i--) {
   }
 }}
 
+static void emit_iter_close_seq(sv_compiler_t *c, bool is_async) {
+  if (is_async) {
+    emit_op(c, OP_ITER_CLOSE_ASYNC);
+    emit_op(c, OP_AWAIT);
+    emit_op(c, OP_ITER_CLOSE_CHECK);
+  } else emit_op(c, OP_ITER_CLOSE);
+}
+
 static void emit_loop_exit_jump(sv_compiler_t *c, sv_loop_t *loop, sv_patch_list_t *pl) {
-  int n_pop = c->unwind_count - loop->unwind_depth;
-  int n_fin = 0;
-  for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--)
-    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) n_fin++;
-
-  if (n_pop <= 0) {
-    patch_list_add(pl, emit_jump(c, OP_JMP));
-    return;
-  }
-
-  if (n_fin == 0) {
-    for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--)
-      emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
-    patch_list_add(pl, emit_jump(c, OP_JMP));
-    return;
-  }
-
-  if (n_fin > 255) n_fin = 255;
-  if (n_pop > 255) n_pop = 255;
+  int target = (int)(loop - c->loops);
   
-  int offset = emit_jump(c, OP_UNWIND_JMP);
-  emit(c, (uint8_t)n_fin);
-  emit(c, (uint8_t)n_pop);
-  patch_list_add(pl, offset);
+  for (int i = c->unwind_count - 1; i >= loop->unwind_depth; i--) {
+    if (c->unwind_kinds[i] == UNW_TRY_FINALLY) {
+      int offset = emit_jump(c, OP_UNWIND_JMP);
+      emit(c, 1);
+      emit(c, 1);
+      patch_jump(c, offset);
+      continue;
+    }
+    emit_op(c, c->unwind_kinds[i] == UNW_FINALLY_BODY ? OP_FINALLY_DISCARD : OP_TRY_POP);
+    for (int j = c->loop_count - 1; j > target; j--)
+      if (c->loops[j].iter_unwind_index == i) emit_iter_close_seq(c, c->loops[j].iter_async);
+  }
+  
+  patch_list_add(pl, emit_jump(c, OP_JMP));
 }
 
 void compile_break(sv_compiler_t *c, sv_ast_t *node) {
@@ -6571,7 +6589,6 @@ static int compile_static_child_function(sv_compiler_t *c, sv_ast_t *node, bool 
   }
 
   fn->max_locals = comp.max_local_count;
-  fn->max_stack = fn->max_locals + 64;
   sv_func_finalize_type_data(fn, &comp, fn->max_locals);
   fn->param_count = 0;
   fn->function_length = 0;
@@ -6799,7 +6816,6 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       fn->upvalue_count = comp.upvalue_count;
     }
     fn->max_locals = comp.max_local_count;
-    fn->max_stack = fn->max_locals + 64;
     sv_func_finalize_type_data(fn, &comp, fn->max_locals);
     
     fn->param_count = (uint16_t)comp.param_count;
@@ -7475,7 +7491,6 @@ sv_func_t *compile_function_body(
   }
 
   func->max_locals = max_locals;
-  func->max_stack = max_locals + 64;
   sv_func_finalize_type_data(func, &comp, max_locals);
   
   func->param_count = (uint16_t)comp.param_count;
@@ -7533,15 +7548,149 @@ const char *const sv_op_names[OP__COUNT] = {
 };
 
 enum {
-  SVF_none, SVF_u8, SVF_i8, SVF_u16, SVF_i16, SVF_u32, SVF_i32,
-  SVF_u8_u8, SVF_u8_u16, SVF_atom, SVF_atom_u8, SVF_label, SVF_label8, SVF_loc, SVF_loc8,
-  SVF_loc_atom, SVF_arg, SVF_const, SVF_const8, SVF_npop, SVF_var_ref, SVF_map_template,
+#define OP_FMT(name) SVF_##name,
+#include "silver/opcode.h"
+  SVF__COUNT,
 };
 
 static const uint8_t sv_op_fmts[OP__COUNT] = {
 #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = SVF_##f,
 #include "silver/opcode.h"
 };
+
+static const uint8_t sv_op_npop[OP__COUNT] = {
+#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (n_pop),
+#include "silver/opcode.h"
+};
+
+static const uint8_t sv_op_npush[OP__COUNT] = {
+#define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = (n_push),
+#include "silver/opcode.h"
+};
+
+static bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
+  uint8_t op = *ip;
+  if (op >= OP__COUNT || sv_op_size[op] == 0) return false;
+  
+  int n = sv_op_npop[op];
+  switch (sv_op_fmts[op]) {
+    case SVF_npop:       n += sv_get_u16(ip + 1); break;
+    case SVF_u8_npop:    n += sv_get_u16(ip + 2); break;
+    case SVF_npop_u8_u8: n += ip[1] + ip[2]; break;
+    
+    case SVF_map_template: {
+      const sv_map_template_desc_t *desc =
+          sv_map_template_desc_at(func, sv_get_u32(ip + 1));
+      if (!desc) return false;
+      n += (int)desc->substitution_count;
+      break;
+    }
+    
+    default: break;
+  }
+  
+  *pops = n;
+  *pushes = sv_op_npush[op];
+  
+  return true;
+}
+
+static int sv_func_compute_max_stack(const sv_func_t *func) {
+  const int len = func->code_len;
+  const uint8_t *code = func->code;
+  if (len <= 0) return 0;
+
+  int *depth = malloc((size_t)len * sizeof(int));
+  int *work = malloc((size_t)len * sizeof(int));
+  uint8_t *queued = calloc((size_t)len, sizeof(uint8_t));
+  
+  if (!depth || !work || !queued) {
+    free(depth);
+    free(work);
+    free(queued);
+    return -1;
+  }
+  
+  for (int i = 0; i < len; i++) depth[i] = -1;
+  int wn = 0, max = 0, off = -1;
+  
+  bool ok = true;
+  long budget = 16L * len + 4096;
+  
+  #define VISIT(off_, d_) do {                                 \
+    int vo_ = (off_), vd_ = (d_);                              \
+    if (vo_ < 0 || vo_ >= len) { ok = false; break; }          \
+    if (depth[vo_] < vd_) {                                    \
+      depth[vo_] = vd_;                                        \
+      if (!queued[vo_]) { queued[vo_] = 1; work[wn++] = vo_; } \
+    }                                                          \
+  } while (0)
+
+  VISIT(0, 0);
+  while (ok && wn > 0) {
+    if (--budget < 0) { ok = false; break; }
+    
+    off = work[--wn];
+    queued[off] = 0;
+    
+    int d = depth[off];
+    uint8_t op = code[off];
+    int sz = sv_op_size[op];
+    if (sz == 0 || off + sz > len) { ok = false; break; }
+    const uint8_t *ip = code + off;
+
+    int pops, pushes;
+    if (!sv_op_stack_effect(func, ip, &pops, &pushes)) { ok = false; break; }
+    if (d < pops) { ok = false; break; }
+    int after = d - pops + pushes;
+    if (after > max) max = after;
+
+    switch (op) {
+      case OP_TRY_PUSH:
+      case OP_TRY_PUSH_FINALLY:
+        VISIT(off + sz + sv_get_i32(ip + 1), after + 1);
+        break;
+      case OP_CATCH:
+        break;
+      case OP_UNWIND_JMP:
+        VISIT(off + 5 + sv_get_i32(ip + 1), after);
+        break;
+      default:
+        if (sv_op_fmts[op] == SVF_label)
+          VISIT(off + sz + sv_get_i32(ip + 1), after);
+        else if (sv_op_fmts[op] == SVF_label8)
+          VISIT(off + sz + (int8_t)sv_get_i8(ip + 1), after);
+        break;
+    }
+    if (!ok) break;
+    if (!(sv_op_flags[op] & SV_OPF_TERMINAL)) VISIT(off + sz, after);
+  }
+  #undef VISIT
+
+  if (ok) {
+    // TODO: cleaner
+    int cur = 0;
+    for (int o = 0; o < len; ) {
+      uint8_t op = code[o];
+      int sz = sv_op_size[op];
+      int pops, pushes;
+      if (sz == 0 || o + sz > len || !sv_op_stack_effect(func, code + o, &pops, &pushes)) { 
+        ok = false;
+        break;
+      }
+      if (depth[o] >= 0) cur = depth[o];
+      else if (cur < pops) cur = pops;
+      cur = cur - pops + pushes;
+      if (cur > max) max = cur;
+      o += sz;
+    }
+  }
+
+  free(depth);
+  free(work);
+  free(queued);
+  return ok ? max : -1;
+}
 
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   const char *fname = func->debug->name ? func->debug->name : "";
@@ -7595,10 +7744,10 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
     case SVF_i32:
       fprintf(stderr, " [%d]", (int32_t)sv_get_u32(func->code + pc + 1));
       break;
-    case SVF_u8_u8:
+    case SVF_npop_u8_u8:
       fprintf(stderr, " [%u], [%u]", func->code[pc + 1], func->code[pc + 2]);
       break;
-    case SVF_u8_u16:
+    case SVF_u8_npop:
       fprintf(stderr, " [%u], [%u]", func->code[pc + 1],
         sv_get_u16(func->code + pc + 2));
       break;

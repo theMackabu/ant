@@ -44,6 +44,7 @@ node_modules
 
 !/tools/arm64-bench/
 !/tools/arm64-bench/**
+!/tools/check_stack_depth.sh
 
 /vendor/*/
 /vendor/.wraplock

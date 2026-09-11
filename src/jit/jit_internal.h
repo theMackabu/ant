@@ -24,11 +24,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
+static constexpr int JIT_VSTACK_SLACK = 4;
 static constexpr int JIT_PARAM_HOIST_CAP = 8;
-static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 
 static constexpr int JIT_OSR_THRESHOLD_SCALE_BYTES = 512;
 static constexpr int JIT_OSR_COLD_COMPILE_MIN_BYTES = 512;
+
+static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
 
 typedef struct {
   MIR_context_t ctx;
@@ -36,13 +38,17 @@ typedef struct {
   bool externals_loaded;
 } sv_jit_ctx_t;
 
-enum jit_slot_type { SLOT_BOXED = 0,
-                     SLOT_NUM,
-                     SLOT_I32 };
+enum jit_slot_type { 
+  SLOT_BOXED = 0,
+  SLOT_NUM,
+  SLOT_I32
+};
+
 typedef struct {
   int64_t min, max;
   bool known;
 } jit_integer_range_t;
+
 typedef struct {
   MIR_reg_t *regs, *d_regs;
   sv_func_t **known_func;
@@ -52,7 +58,9 @@ typedef struct {
   uint8_t *known_bool;
   jit_integer_range_t *integer_range;
   int sp, max;
+  bool overflow;
 } jit_vstack_t;
+
 typedef struct {
   sv_func_t *known_func;
   uint64_t known_const;

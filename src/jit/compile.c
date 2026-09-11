@@ -327,6 +327,7 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
       c->integer_locals[c->integer_store] = c->integer_value;
       c->integer_local_ranges[c->integer_store] = c->integer_range;
     }
+    if (c->vs.overflow) c->ok = false;
     if (!c->ok) break;
     c->ip += c->sz;
   }
@@ -406,9 +407,16 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   free(c->feat.builder_target_slots);
 
   if (!c->ok) {
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: compile-failed func=%s code_len=%d%s\n",
+      c->func->debug->name ? c->func->debug->name : "<anonymous>",
+      c->func->code_len, c->vs.overflow ? " reason=vstack-overflow" : ""
+    );
+    
     MIR_remove_module(c->ctx, c->mod);
     c->func->jit_compile_failed = true;
     c->func->jit_compiling = false;
+    
     return NULL;
   }
 
@@ -424,6 +432,12 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
+  
+  if (sv_jit_warn_unlikely) fprintf(
+    stderr, "jit: compiled func=%s code_len=%d max_stack=%d tier=%s\n",
+    c->func->debug->name ? c->func->debug->name : "<anonymous>",
+    c->func->code_len, c->func->max_stack, jit_compile_hot ? "hot" : "cheap"
+  );
   
   return generated;
 }

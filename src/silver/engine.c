@@ -888,13 +888,14 @@ static inline ant_value_t sv_stage_frame_args(
 ) {
   int arg_slots = (argc > func->param_count) ? argc : func->param_count;
   int need = arg_slots + func->max_locals;
-  if (vm->sp + need > vm->stack_size) {
+  int reserve = need + func->max_stack;
+  
+  if (vm->sp + reserve > vm->stack_size) {
     int args_idx = (
       args && args >= vm->stack && args < vm->stack + vm->stack_size)
       ? (int)(args - vm->stack) : -1;
-    while (vm->sp + need > vm->stack_size) {
+    while (vm->sp + reserve > vm->stack_size)
       if (!sv_vm_grow_stack(vm)) return js_mkerr(js, "stack overflow");
-    }
     if (args_idx >= 0) args = &vm->stack[args_idx];
   }
 
@@ -2298,7 +2299,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       ? (int)tc_argc : closure->func->param_count;
     
     int need = arg_slots + closure->func->max_locals;
-    while (frame->prev_sp + need > vm->stack_size) if (!sv_vm_grow_stack(vm)) {
+    int reserve = need + closure->func->max_stack;
+    
+    while (frame->prev_sp + reserve > vm->stack_size) if (!sv_vm_grow_stack(vm)) {
       sv_err = js_mkerr(js, "stack overflow");
       goto sv_throw;
     }

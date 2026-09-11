@@ -44,6 +44,24 @@ snapshots; see [emit_locals.c](../../src/jit/emit_locals.c) and
 [OSR entry regression](../../tests/test_jit_osr_entry_reject.cjs) covers locals
 that are still uninitialized at an earlier loop header.
 
+The `n_pop` / `n_push` columns of `OP_DEF` in
+[opcode.h](../../include/silver/opcode.h) are the authoritative operand-stack
+effect of every op, including the count operand its format declares. They
+feed `sv_func_t.max_stack` through `sv_op_stack_effect()` and
+`sv_func_compute_max_stack()` in [compiler.c](../../src/silver/compiler.c),
+which sizes the interpreter's frame reservation and the JIT virtual stack.
+Change a handler's stack behaviour and the row together, then run
+`tools/check_stack_depth.sh` (see [testing.md](testing.md)); it fails if the
+analysis rejects any function in the test corpus. `vstack_push`
+must never write past `vs.max`; it sets `overflow` and the compile is
+abandoned. See [the vstack regression](../../tests/test_jit_vstack_depth.cjs).
+
+A jump that leaves a `for...of` or `for await...of` must close that loop's
+iterator and drop its three stack slots at the point the loop is crossed,
+innermost first and before any outer finally runs; `emit_loop_exit_jump`
+retires unwind entries one at a time for this reason. See
+[the labeled-jump regression](../../tests/test_labeled_jump_for_of_close.cjs).
+
 OSR is never refused on bytecode size alone. Each function's back-edge
 threshold (`jit_osr_threshold`) is scaled by its size in
 [runtime.c](../../src/jit/runtime.c); the only size ceiling is

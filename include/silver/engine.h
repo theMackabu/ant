@@ -47,6 +47,7 @@ typedef enum {
   SV_OPF_JIT_OSR_BACKEDGE           = 1u << 12,
   SV_OPF_BUILDER_TARGET             = 1u << 13,
   SV_OPF_JIT_INLINE_ARGC            = 1u << 14,
+  SV_OPF_TERMINAL                   = 1u << 15,
 } sv_opcode_flags_t;
 
 typedef enum {
