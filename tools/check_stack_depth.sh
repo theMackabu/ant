@@ -7,7 +7,9 @@
 #
 # usage: tools/check_stack_depth.sh [path/to/ant]
 # exit:  0 clean, 1 analysis rejected a function or a compile overflowed,
-#        2 the binary or a suite runner could not run (coverage incomplete)
+#        2 the binary, a suite runner, or any test exited non-zero (coverage
+#          incomplete; a function in a failed run may not have been reached)
+
 set -u
 cd "$(dirname "$0")/.."
 ANT=${1:-./build/ant}
@@ -45,11 +47,12 @@ if [ "$rejected" != "0" ] || [ "$overflow" != "0" ]; then
   status=1
 fi
 if [ ${#failed_runs[@]} -ne 0 ]; then
-  echo "stack-depth: ${#failed_runs[@]} run(s) exited non-zero, coverage may be incomplete:" >&2
+  echo "stack-depth: ${#failed_runs[@]} run(s) exited non-zero, coverage incomplete:" >&2
   printf '  %s\n' "${failed_runs[@]}" >&2
+  incomplete=1
 fi
 if [ $incomplete -ne 0 ]; then
-  echo "stack-depth: a suite runner failed; coverage incomplete" >&2
+  echo "stack-depth: coverage incomplete; not reporting success" >&2
   [ $status -eq 0 ] && status=2
 fi
 [ $status -eq 0 ] && echo "stack-depth: analysis accepted every function, no JIT overflow"
