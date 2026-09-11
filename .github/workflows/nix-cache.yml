@@ -6,6 +6,22 @@ on:
       - master
     tags:
       - '*'
+    paths:
+      - '.github/workflows/nix-cache.yml'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'packages/nix/**'
+      - 'src/**'
+      - 'include/**'
+      - 'vendor/**'
+      - 'meson/**'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'sources.json'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'tests/*.c'
+      - '!**/*.md'
   workflow_dispatch:
 
 permissions:
