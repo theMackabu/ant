@@ -190,6 +190,21 @@ confirms. Regression: `tests/test_labeled_jump_for_of_close.cjs`.
 `sizeof(sv_func_t)` is 208 (was 200): `jit_osr_threshold` plus one
 bitfield spill. `max_stack` stays because it now carries real information.
 
+### Review fix: unreachable bytecode
+
+Review of the first cut found that the analysis only walked reachable
+code while the JIT and the inliner walk bytecode linearly, resetting their
+virtual stack only at branch targets. A deep expression after `return`
+therefore exceeded the inliner's arrays and crashed with `undeclared reg`.
+The pass now has two phases: the reachable worklist (exact, underflow is an
+error) and a linear sweep in which unreachable ops inherit the depth of the
+op before them and never fail the analysis. The release build also reports
+`jit: compiled` and `jit: compile-failed ... reason=vstack-overflow` on the
+op-warn channel, `tools/check_stack_depth.sh` fails on either an analysis
+rejection or an overflow and refuses to report success for a binary it
+cannot run, and `tests/test_jit_vstack_depth.cjs` asserts that each
+JIT-eligible case actually compiled.
+
 ## Validation status
 
 - `tests/test_jit_osr_large_function.cjs` (new): once-called >512-byte body

@@ -45,6 +45,7 @@ typedef enum {
   SV_OPF_JIT_BRANCH32               = 1u << 10,
   SV_OPF_JIT_BRANCH8                = 1u << 11,
   SV_OPF_JIT_OSR_BACKEDGE           = 1u << 12,
+  SV_OPF_TERMINAL                   = 1u << 13,
   SV_OPF_BUILDER_TARGET             = 1u << 13,
   SV_OPF_JIT_INLINE_ARGC            = 1u << 14,
 } sv_opcode_flags_t;
@@ -79,11 +80,6 @@ static const bool sv_op_ic_slots[OP__COUNT] = {
 static inline bool sv_op_has_ic_slot(sv_op_t op) {
   return (unsigned)op < OP__COUNT && sv_op_ic_slots[op];
 }
-
-bool sv_op_stack_effect(
-  const struct sv_func *func,
-  const uint8_t *ip, int *pops, int *pushes
-);
 
 typedef struct {
   const char *str;

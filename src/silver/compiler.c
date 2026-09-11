@@ -7568,14 +7568,16 @@ static const uint8_t sv_op_npush[OP__COUNT] = {
 #include "silver/opcode.h"
 };
 
-bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
+static bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int *pushes) {
   uint8_t op = *ip;
   if (op >= OP__COUNT || sv_op_size[op] == 0) return false;
+  
   int n = sv_op_npop[op];
   switch (sv_op_fmts[op]) {
-    case SVF_npop:        n += sv_get_u16(ip + 1); break;
-    case SVF_u8_npop:     n += sv_get_u16(ip + 2); break;
-    case SVF_npop_u8_u8:  n += ip[1] + ip[2]; break;
+    case SVF_npop:       n += sv_get_u16(ip + 1); break;
+    case SVF_u8_npop:    n += sv_get_u16(ip + 2); break;
+    case SVF_npop_u8_u8: n += ip[1] + ip[2]; break;
+    
     case SVF_map_template: {
       const sv_map_template_desc_t *desc =
           sv_map_template_desc_at(func, sv_get_u32(ip + 1));
@@ -7583,22 +7585,14 @@ bool sv_op_stack_effect(const sv_func_t *func, const uint8_t *ip, int *pops, int
       n += (int)desc->substitution_count;
       break;
     }
+    
     default: break;
   }
+  
   *pops = n;
   *pushes = sv_op_npush[op];
+  
   return true;
-}
-
-static bool sv_op_is_terminal(uint8_t op) {
-  switch (op) {
-    case OP_JMP: case OP_JMP8: case OP_UNWIND_JMP:
-    case OP_RETURN: case OP_RETURN_UNDEF: case OP_RETURN_ASYNC: case OP_HALT:
-    case OP_THROW: case OP_THROW_ERROR:
-    case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD: case OP_TAIL_MAP_TEMPLATE:
-    case OP_FINALLY_RET: return true;
-    default: return false;
-  }
 }
 
 static int sv_func_compute_max_stack(const sv_func_t *func) {
@@ -7608,22 +7602,37 @@ static int sv_func_compute_max_stack(const sv_func_t *func) {
 
   int *depth = malloc((size_t)len * sizeof(int));
   int *work = malloc((size_t)len * sizeof(int));
-  if (!depth || !work) { free(depth); free(work); return -1; }
+  uint8_t *queued = calloc((size_t)len, sizeof(uint8_t));
+  
+  if (!depth || !work || !queued) {
+    free(depth);
+    free(work);
+    free(queued);
+    return -1;
+  }
+  
   for (int i = 0; i < len; i++) depth[i] = -1;
-
   int wn = 0, max = 0, off = -1;
+  
   bool ok = true;
   long budget = 16L * len + 4096;
-  #define VISIT(off_, d_) do {                                            \
-    int vo_ = (off_), vd_ = (d_);                                         \
-    if (vo_ < 0 || vo_ >= len) { ok = false; break; }                     \
-    if (depth[vo_] < vd_) { depth[vo_] = vd_; work[wn++] = vo_; }         \
+  
+  #define VISIT(off_, d_) do {                                 \
+    int vo_ = (off_), vd_ = (d_);                              \
+    if (vo_ < 0 || vo_ >= len) { ok = false; break; }          \
+    if (depth[vo_] < vd_) {                                    \
+      depth[vo_] = vd_;                                        \
+      if (!queued[vo_]) { queued[vo_] = 1; work[wn++] = vo_; } \
+    }                                                          \
   } while (0)
 
   VISIT(0, 0);
   while (ok && wn > 0) {
     if (--budget < 0) { ok = false; break; }
+    
     off = work[--wn];
+    queued[off] = 0;
+    
     int d = depth[off];
     uint8_t op = code[off];
     int sz = sv_op_size[op];
@@ -7642,13 +7651,8 @@ static int sv_func_compute_max_stack(const sv_func_t *func) {
         VISIT(off + sz + sv_get_i32(ip + 1), after + 1);
         break;
       case OP_CATCH:
-        // Its label is bookkeeping for the enclosing finally; every path to
-        // it is also reached through the catch body or a TRY_PUSH_FINALLY
-        // entry, so it adds no edge.
         break;
       case OP_UNWIND_JMP:
-        // n_fin/n_pop count handlers, not stack values; the target sees at
-        // most the current depth.
         VISIT(off + 5 + sv_get_i32(ip + 1), after);
         break;
       default:
@@ -7659,12 +7663,32 @@ static int sv_func_compute_max_stack(const sv_func_t *func) {
         break;
     }
     if (!ok) break;
-    if (!sv_op_is_terminal(op)) VISIT(off + sz, after);
+    if (!(sv_op_flags[op] & SV_OPF_TERMINAL)) VISIT(off + sz, after);
   }
   #undef VISIT
 
+  if (ok) {
+    // TODO: cleaner
+    int cur = 0;
+    for (int o = 0; o < len; ) {
+      uint8_t op = code[o];
+      int sz = sv_op_size[op];
+      int pops, pushes;
+      if (sz == 0 || o + sz > len || !sv_op_stack_effect(func, code + o, &pops, &pushes)) { 
+        ok = false;
+        break;
+      }
+      if (depth[o] >= 0) cur = depth[o];
+      else if (cur < pops) cur = pops;
+      cur = cur - pops + pushes;
+      if (cur > max) max = cur;
+      o += sz;
+    }
+  }
+
   free(depth);
   free(work);
+  free(queued);
   return ok ? max : -1;
 }
 
