@@ -339,6 +339,74 @@ sweep never lined up before.
 Regression test: `tests/test_jit_open_upvalue_gc.cjs` (hangs the unfixed
 binary, passes with the fix).
 
+**JIT compile memory (RSS step after a hot compile).** A report measured
+35 → 57 MiB RSS across the promotion of a 541-byte function. Reproduced on
+the N-body kernel: 9 MiB peak on the stable build, which never compiles it,
+33 MiB after the cold and hot compiles. This is not new cost, it is new
+reach: the stable build peaks at 41 MiB compiling the same function on the
+call path, and every call-compiled large function has always paid it. Since
+#102, once-called functions that only get hot through their loop pay it too.
+Per-zone heap inspection split the retained memory into three pools:
+
+- MIR's generator tables (live ranges, SSA, register allocator free lists),
+  ~10 MB live, sized for the largest function seen and never shrunk.
+  `jit_release_gen_scratch` tears the generator down and re-creates it after
+  every compile. The teardown costs what the compile allocated (0.8–1.4 ms
+  after the 15–20 ms kernel compiles, 0.01 ms after a tiny one) and the
+  re-init about 0.03 ms, so tiny compiles are unaffected.
+- The MIR IR of each compiled function, ~2 MB per 600-byte body, kept
+  forever although never read after `MIR_gen`. Dropped with
+  `MIR_remove_insn` right after generation.
+- Freed-but-dirty allocator pages, ~17 MiB, from MIR's churn interleaved
+  with Ant's long-lived objects. MIR now allocates from its own malloc zone
+  (`MIR_init2` with a `MIR_alloc_t`), so the churn stays out of Ant's heap.
+  On glibc `malloc_trim` returns the pages after a compile. macOS libmalloc
+  ignores `malloc_zone_pressure_relief` (measured: 0 bytes, and a destroyed
+  zone still keeps ~10 MiB of regions cached), so there the resident number
+  follows only as far as its own large-span release goes.
+
+| | before | after |
+|---|---|---|
+| live malloc after cold+hot compile of the kernel | 14.4 MB | 1.0 MB |
+| peak RSS, kernel cold+hot | 34.4 MiB | 31.4 MiB |
+| peak RSS, 30 functions × 3 loops | 35.4 MiB | 21.2 MiB |
+| peak RSS, 30 functions × 12 loops | 49.2 MiB | 27.3 MiB |
+| live malloc held after the kernel compiles, no reset / reset | 13.3 MB | 3.9 MB |
+| total compile time, 30 × 12 loops (3 interleaved rounds) | 264–300 ms | 288–306 ms |
+| cheap-tier compile (6-byte body) | 0.1 ms | 0.1 ms |
+
+The peak-RSS win is the zone plus the IR drop; the reset takes the held
+live set from ~10 MB to 3.9 MB (what remains without it is VARR and bitmap
+capacity sized for the largest function).
+
+**Generator node arena (MIR fork, `mir-gen.c`).** The reset's teardown used
+to cost 0.8–1.4 ms after the kernel and 73 ms after a 12.9 KB body: the
+generator allocated every bb, bb_insn, edge, SSA edge, live range, dead var
+and GVN expr with malloc (5.2 M blocks for that body), parked them on free
+lists across functions, and `MIR_gen_finish` freed 3.4 M of them one at a
+time. Those node types now come from a per-function arena: 1 MiB bump
+chunks with per-size free lists so mid-function frees still recycle, the
+three cross-function free lists reset with it, and the chunks released in
+bulk after each function's code is published (the oldest chunk is kept).
+Context-level structures and the lazy bb-version path stay on malloc. A
+scratch-zone design on Ant's side was ruled out first: about one 16-byte
+block per insn allocated during link is persistent (temporary register names
+interned in the context string table), so nothing outside MIR can discard
+the generator's allocations wholesale.
+
+| compile | before arena | with arena |
+|---|---|---|
+| kernel cold+hot | 30.5–32.2 ms | 27.0–27.3 ms |
+| 2.7 KB body, hot | 34–36 ms | 28 ms |
+| 6.1 KB body, hot | 139–142 ms | 116–118 ms |
+| 12.9 KB body, hot | 645–652 ms | 574–575 ms |
+| 30 functions × 12 loops | 292 ms | 208–218 ms |
+
+Every compile is now faster than the pre-change binary with no reset at all;
+peak RSS is unchanged (+1 MiB for the retained chunk per context). The same
+change is in `~/Developer/mir` (`mir-gen.c`), byte-identical to the vendored
+copy.
+
 Seen on the way, not fixed: a numeric local read inside the loop before its
 post-loop declaration (`t = s` before `var s = 0`) returns register garbage
 from JIT code on a normal entry as well; the interpreter returns `undefined`.

@@ -437,6 +437,20 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
 
   sv_jit_func_t generated = MIR_gen(c->ctx, c->jit_func);
   c->func->jit_compiling = false;
+
+  MIR_insn_t insn;
+  while ((insn = DLIST_HEAD(MIR_insn_t, c->jit_func->u.func->insns)) != NULL)
+    MIR_remove_insn(c->ctx, c->jit_func, insn);
+
+  jit_release_gen_scratch(c->jc, c->ctx);
+
+  struct timespec compile_t1;
+  clock_gettime(CLOCK_MONOTONIC, &compile_t1);
+  
+  int64_t compile_ns = 
+    (int64_t)(compile_t1.tv_sec - compile_t0.tv_sec) * 1000000000LL +
+    (compile_t1.tv_nsec - compile_t0.tv_nsec);
+
   if (!generated) {
     c->func->jit_compile_failed = true;
     return NULL;
@@ -444,13 +458,6 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
-  
-  struct timespec compile_t1;
-  clock_gettime(CLOCK_MONOTONIC, &compile_t1);
-  
-  int64_t compile_ns = 
-    (int64_t)(compile_t1.tv_sec - compile_t0.tv_sec) * 1000000000LL +
-    (compile_t1.tv_nsec - compile_t0.tv_nsec);
   
   if (tier == SV_JIT_TIER_COLD && c->cold_ns_item && c->cold_ns_item->addr) {
     ((int64_t *)c->cold_ns_item->addr)[1] = JIT_COLD_PROMOTE_COMPILE_MULTIPLE * JIT_HOT_COMPILE_COLD_RATIO * compile_ns;

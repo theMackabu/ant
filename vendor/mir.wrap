@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/themackabu/mir.git
-revision = d89ca1d079576924c0c7e2d38e5845a7e75b1f30
+revision = f7837cb110ae56faf3fc585358f6ced4afce6c99
 depth = 1
 
 [provide]
