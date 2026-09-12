@@ -1,6 +1,7 @@
 #ifndef ANT_JIT_INTERNAL_H
 #define ANT_JIT_INTERNAL_H
 
+#include "heap.h"
 #include "silver/jit.h"
 #include "silver/opcode.h"
 
@@ -24,8 +25,6 @@ static constexpr int64_t JIT_COLD_PROMOTE_COMPILE_MULTIPLE = 20;
 static constexpr int64_t JIT_COLD_PROMOTE_CHECK_EVERY = 4096;
 
 static constexpr uint32_t JIT_HOT_COMPILE_BACKEDGE_THRESHOLD = SV_JIT_OSR_THRESHOLD / 8;
-
-typedef struct MIR_heap *MIR_heap_t;
 
 typedef struct {
   MIR_context_t ctx;
@@ -145,10 +144,6 @@ typedef struct {
 
 void jit_load_externals_once(sv_jit_ctx_t *jc);
 void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx);
-MIR_heap_t jit_heap_create(void);
-MIR_alloc_t jit_heap_mir_alloc(MIR_heap_t h);
-void jit_heap_release(MIR_heap_t h);
-void jit_heap_destroy(MIR_heap_t h);
 jit_value_info_t vstack_value_info(const jit_vstack_t *vs, int idx);
 void vstack_set_value_info(
     jit_vstack_t *vs, int idx, jit_value_info_t info);
