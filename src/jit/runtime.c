@@ -1,15 +1,11 @@
+#include <time.h>
+
 #include "gc/roots.h"
 #include "jit_internal.h"
-#include "silver/feedback.h"
+
 #include "silver/call.h"
 #include "silver/glue.h"
-
-#include <time.h>
-#if defined(__APPLE__)
-#include <malloc/malloc.h>
-#elif defined(__GLIBC__)
-#include <malloc.h>
-#endif
+#include "silver/feedback.h"
 
 void *jit_helper_tier_up(ant_t *js, sv_func_t *func, sv_closure_t *closure) {
   if (!func->jit_code_cold) return NULL;
@@ -148,40 +144,24 @@ void jit_load_externals_once(sv_jit_ctx_t *jc) {
   jc->externals_loaded = true;
 }
 
-#if defined(__APPLE__)
-static void *jit_zone_malloc(size_t size, void *zone) { return malloc_zone_malloc(zone, size); }
-static void *jit_zone_calloc(size_t n, size_t size, void *zone) { return malloc_zone_calloc(zone, n, size); }
-static void *jit_zone_realloc(void *p, size_t old_size, size_t size, void *zone) { (void)old_size; return malloc_zone_realloc(zone, p, size); }
-static void jit_zone_free(void *p, void *zone) { malloc_zone_free(zone, p); }
-#endif
-
 void sv_jit_init(ant_t *js) {
   if (js->jit_ctx) return;
 
   ANT_ASSERT(
-      ant_object_flag_masks_match_layout(),
-      "object flag bitfield layout does not match the JIT masks");
+    ant_object_flag_masks_match_layout(),
+    "object flag bitfield layout does not match the JIT masks"
+  );
 
   sv_jit_ctx_t *jc = calloc(1, sizeof(*jc));
   if (!jc) return;
 
-#if defined(__APPLE__)
-  jc->mir_zone = malloc_create_zone(0, 0);
-  if (jc->mir_zone) {
-    malloc_set_zone_name(jc->mir_zone, "ant mir");
-    jc->mir_alloc = malloc(sizeof(*jc->mir_alloc));
-  }
-  if (jc->mir_alloc) *jc->mir_alloc = (struct MIR_alloc){
-    .malloc = jit_zone_malloc, .calloc = jit_zone_calloc,
-    .realloc = jit_zone_realloc, .free = jit_zone_free, .user_data = jc->mir_zone,
-  };
-#endif
-
-  jc->ctx = MIR_init2(jc->mir_alloc, NULL);
+  jc->mir_heap = jit_heap_create();
+  jc->ctx = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
+  
   MIR_gen_init(jc->ctx);
   MIR_gen_set_optimize_level(jc->ctx, 1);
 
-  jc->ctx_hot = MIR_init2(jc->mir_alloc, NULL);
+  jc->ctx_hot = MIR_init2(jit_heap_mir_alloc(jc->mir_heap), NULL);
   MIR_gen_init(jc->ctx_hot);
   MIR_gen_set_optimize_level(jc->ctx_hot, 3);
 
@@ -193,9 +173,7 @@ void jit_release_gen_scratch(sv_jit_ctx_t *jc, MIR_context_t ctx) {
   MIR_gen_finish(ctx);
   MIR_gen_init(ctx);
   MIR_gen_set_optimize_level(ctx, ctx == jc->ctx_hot ? 3 : 1);
-#if defined(__GLIBC__)
-  malloc_trim(0);
-#endif
+  jit_heap_release(jc->mir_heap);
 }
 
 void sv_jit_destroy(ant_t *js) {
@@ -206,10 +184,7 @@ void sv_jit_destroy(ant_t *js) {
   MIR_finish(jc->ctx);
   MIR_gen_finish(jc->ctx_hot);
   MIR_finish(jc->ctx_hot);
-#if defined(__APPLE__)
-  if (jc->mir_zone) malloc_destroy_zone(jc->mir_zone);
-#endif
-  free(jc->mir_alloc);
+  jit_heap_destroy(jc->mir_heap);
 
   free(jc);
   js->jit_ctx = NULL;
@@ -230,9 +205,10 @@ static void sv_jit_compile_callees(ant_t *js, sv_func_t *func) {
 }
 
 ant_value_t sv_jit_try_compile_and_call(
-    sv_vm_t *vm, ant_t *js,
-    sv_closure_t *closure, ant_value_t callee_func,
-    sv_call_ctx_t *ctx, ant_value_t *out_this) {
+  sv_vm_t *vm, ant_t *js,
+  sv_closure_t *closure, ant_value_t callee_func,
+  sv_call_ctx_t *ctx, ant_value_t *out_this
+) {
   sv_func_t *fn = closure->func;
 
   sv_jit_func_t jit = sv_jit_compile(js, fn, closure);
