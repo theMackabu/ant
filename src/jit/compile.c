@@ -440,7 +440,6 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
 
   c->func->jit_compiled_tfb_ver = c->func->tfb_version;
   c->func->jit_code_cold = tier == SV_JIT_TIER_COLD;
-  if (tier == SV_JIT_TIER_COLD) c->func->jit_cold_ns = 0;
   
   if (sv_jit_warn_unlikely) fprintf(
     stderr, "jit: compiled func=%s code_len=%d max_stack=%d tier=%s\n",

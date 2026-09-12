@@ -217,8 +217,8 @@ A once-called function that never leaves its OSR'd cold loop used to stay
 on level-1 code for the whole call. Cold-tier code now reads the monotonic
 clock at entry, counts back-edges in a register (`r_promote`,
 `emit_control.c`), and every 4096 of them calls `jit_helper_promote_due`,
-which banks the cold time since the last check on `sv_func_t.jit_cold_ns`
-(reset at each cold compile) and hands back a fresh `t0`, or 0 once the
+which banks the cold time since the last check in an 8-byte bss item of
+the cold code's own MIR module (zeroed on load, discarded with the code) and hands back a fresh `t0`, or 0 once the
 function has spent `JIT_COLD_PROMOTE_COMPILE_MULTIPLE` (8) estimated
 hot-compile times (`JIT_HOT_COMPILE_NS_PER_BYTE` x `code_len`) on cold
 code across any number of activations. Banking per check rather than per
@@ -227,8 +227,9 @@ the common driver-loop shape: eight 120-step calls went from 1329 ms cold
 to 1195 ms, promoting during the second call, against 1092 ms hot from
 the start. Idle time between calls is never charged. When the budget is
 spent it takes a second resume trampoline into `jit_helper_promote_resume`.
-`sizeof(sv_func_t)` is 216 for the field; a saturating 32-bit variant in
-64 ns units fit the tail padding but was rejected for its truncation. That unpublishes the cold code,
+The counter is state of the cold code, not of the function, so it lives in
+the code's module and `sizeof(sv_func_t)` stays 208; an `int64_t` field
+(216) and a saturating 32-bit tail-padding variant were both tried first. That unpublishes the cold code,
 leaves `jit_code_cold` set as the "next compile is hot" mark, primes
 `back_edge_count` to one below the OSR threshold and resumes the interpreter
 at the jump. The interpreter re-executes the back-edge, `sv_jit_try_osr`

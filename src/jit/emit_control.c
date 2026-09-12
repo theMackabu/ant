@@ -13,12 +13,15 @@ static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop) {
                   MIR_new_insn(c->ctx, MIR_BNE, MIR_new_label_op(c->ctx, loop),
                                MIR_new_reg_op(c->ctx, r_due), MIR_new_int_op(c->ctx, 0)));
   MIR_append_insn(c->ctx, c->jit_func,
-                  MIR_new_call_insn(c->ctx, 5,
+                  MIR_new_call_insn(c->ctx, 6,
                                     MIR_new_ref_op(c->ctx, c->promote_due_proto),
                                     MIR_new_ref_op(c->ctx, c->imp_promote_due),
                                     MIR_new_reg_op(c->ctx, r_due),
-                                    MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->func),
-                                    MIR_new_reg_op(c->ctx, c->r_promote_t0)));
+                                    MIR_new_ref_op(c->ctx, c->cold_ns_item),
+                                    MIR_new_reg_op(c->ctx, c->r_promote_t0),
+                                    MIR_new_int_op(c->ctx, JIT_COLD_PROMOTE_COMPILE_MULTIPLE *
+                                                           JIT_HOT_COMPILE_NS_PER_BYTE *
+                                                           (int64_t)c->func->code_len)));
   MIR_label_t due = MIR_new_label(c->ctx);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_BEQ, MIR_new_label_op(c->ctx, due),

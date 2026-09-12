@@ -48,6 +48,7 @@ typedef struct jit_compile {
   MIR_item_t truthy_proto;
   MIR_item_t resume_proto;
   MIR_item_t promote_now_proto;
+  MIR_item_t cold_ns_item;
   MIR_item_t promote_due_proto;
   MIR_item_t closure_proto;
   MIR_item_t close_upval_proto;
