@@ -371,6 +371,7 @@ bool jit_setup_frame(jit_compile_t *c) {
   c->r_bailout_off = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "bail_off");
   c->r_bailout_sp = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "bail_sp");
   c->bailout_tramp = c->needs_bailout ? MIR_new_label(c->ctx) : NULL;
+  c->bailout_spill = c->needs_bailout ? MIR_new_label(c->ctx) : NULL;
 
   c->param_count = c->func->param_count;
   c->writes_params = func_writes_params(c->func);
@@ -529,6 +530,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     .off = c->r_bailout_off,
     .sp = c->r_bailout_sp,
     .tramp = c->bailout_tramp,
+    .spill = c->bailout_spill,
     .args_buf = c->r_args_buf,
     .vstack = &c->vs,
     .local_regs = c->local_regs,
@@ -543,6 +545,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->promote_tramp = MIR_new_label(c->ctx);
     c->promote_ctx = c->bailout_ctx;
     c->promote_ctx.tramp = c->promote_tramp;
+    c->promote_ctx.spill = MIR_new_label(c->ctx);
 
     c->promote_sites = calloc((size_t)c->func->code_len, 1);
     if (c->promote_sites) {

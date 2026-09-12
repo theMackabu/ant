@@ -217,6 +217,7 @@ typedef struct jit_compile {
   MIR_reg_t r_bailout_off;
   MIR_reg_t r_bailout_sp;
   MIR_label_t bailout_tramp;
+  MIR_label_t bailout_spill;
   MIR_label_t promote_tramp;
   MIR_reg_t r_promote;
   MIR_reg_t cached_index_key;

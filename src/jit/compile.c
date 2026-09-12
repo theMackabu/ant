@@ -387,8 +387,15 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
-  if (c->needs_bailout) jit_emit_resume_tramp(c, c->bailout_tramp, c->imp_resume, "resume_res");
-  if (c->needs_promote) jit_emit_resume_tramp(c, c->promote_tramp, c->imp_promote_resume, "promote_res");
+  if (c->needs_bailout) {
+    mir_emit_bailout_spill_block(c->ctx, c->jit_func, &c->bailout_ctx);
+    jit_emit_resume_tramp(c, c->bailout_tramp, c->imp_resume, "resume_res");
+  }
+  
+  if (c->needs_promote) {
+    mir_emit_bailout_spill_block(c->ctx, c->jit_func, &c->promote_ctx);
+    jit_emit_resume_tramp(c, c->promote_tramp, c->imp_promote_resume, "promote_res");
+  }
 
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);
