@@ -21,7 +21,7 @@ typedef enum {
   CORO_HOLD_AWAIT     = 1u << 3,
 } coroutine_hold_t;
 
-typedef struct coroutine {
+struct coroutine {
   ant_t *js;
 
   ant_value_t this_val;
@@ -50,7 +50,7 @@ typedef struct coroutine {
   uint64_t gc_epoch;
   uint32_t refcount;
   uint32_t remember_index;
-} coroutine_t;
+};
 
 typedef enum {
   JS_AWAIT_PENDING = 0,
@@ -62,14 +62,14 @@ typedef struct {
   ant_value_t value;
 } js_await_result_t;
 
+bool coroutine_cancel(coroutine_t *coro);
+
 void coroutine_retain(coroutine_t *coro);
 void coroutine_release(coroutine_t *coro);
+void coroutine_clear_await_registration(coroutine_t *coro);
 
 void coroutine_hold(coroutine_t *coro, uint8_t hold);
 void coroutine_unhold(coroutine_t *coro, uint8_t hold);
-
-void free_coroutine(coroutine_t *coro);
-void coroutine_clear_await_registration(coroutine_t *coro);
 
 ant_value_t start_async_in_coroutine(
   ant_t *js, const char *code, size_t code_len,
@@ -79,7 +79,7 @@ ant_value_t start_async_in_coroutine(
 ant_value_t resume_coroutine_wrapper(ant_params_t);
 ant_value_t reject_coroutine_wrapper(ant_params_t);
 
-js_async_entry_t *js_eval_async_entry_create(coroutine_t *coro);
+// TODO: move to promise.c
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
 
 void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);

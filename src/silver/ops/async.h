@@ -97,9 +97,9 @@ static inline ant_value_t sv_capture_tla_module_ctx(ant_t *js, coroutine_t *coro
 
 static inline ant_value_t sv_start_tla(
   ant_t *js, sv_func_t *func, ant_value_t this_val,
-  js_async_entry_t **async_entry_out
+  coroutine_t **async_coro_out
 ) {
-  if (async_entry_out) *async_entry_out = NULL;
+  if (async_coro_out) *async_coro_out = NULL;
   ant_value_t promise = js_mkpromise(js);
   
   if (func) {
@@ -125,40 +125,28 @@ static inline ant_value_t sv_start_tla(
       return module_res;
     }
     
-    js_async_entry_t *async_entry = async_entry_out
-      ? js_eval_async_entry_create(coro)
-      : NULL;
-    
-    if (async_entry_out && !async_entry) {
-      coroutine_release(coro);
-      GC_ROOT_RESTORE(js, root_mark);
-      return js_mkerr(js, "out of memory for async entry handle");
-    }
-    
+    if (async_coro_out) coroutine_retain(coro);
     sv_async_link_activation(js, coro);
-    ant_value_t result = sv_execute_entry(
-      js->vm, func,
-      this_val, NULL, 0
-    );
+    
+    ant_value_t result = sv_execute_entry(js->vm, func, this_val, NULL, 0);
     sv_async_unlink_activation(js, coro);
     
     if (coro->act && coro->act->frame_count > 0) {
-      if (async_entry_out) *async_entry_out = async_entry;
+      if (async_coro_out) *async_coro_out = coro;
       coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
     }
     
-    js_eval_async_entry_release(async_entry);
+    if (async_coro_out) coroutine_release(coro);
     
     if (is_err(result)) {
       ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
       js_reject_promise(js, promise, reject_value);
-    } else {
-      js_resolve_promise(js, promise, result);
-    }
+    } else js_resolve_promise(js, promise, result);
+
     coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
     

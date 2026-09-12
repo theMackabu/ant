@@ -756,7 +756,7 @@ void inspector_eval(inspector_client_t *client, int id, yyjson_val *params) {
   js_set_filename(client->js, prev_filename);
   
   inspector_send_eval_completion(client, id, evaluation.value, await_promise);
-  js_eval_async_entry_release(evaluation.async_entry);
+  coroutine_release(evaluation.async_coro);
 }
 
 void inspector_get_heap_usage(inspector_client_t *client, int id) {

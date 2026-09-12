@@ -570,16 +570,16 @@ static repl_eval_status_t repl_evaluate(
       repl_eval_interrupt_pending, NULL
     );
     if (await_status == JS_REACTOR_AWAIT_INTERRUPTED) {
-      (void)js_eval_async_entry_cancel(evaluation.async_entry);
-      js_eval_async_entry_release(evaluation.async_entry);
+      coroutine_cancel(evaluation.async_coro);
+      coroutine_release(evaluation.async_coro);
       ant_readline_clear_interrupt();
       return REPL_EVAL_INTERRUPTED;
     }
-    js_eval_async_entry_release(evaluation.async_entry);
+    coroutine_release(evaluation.async_coro);
     if (await_status == JS_REACTOR_AWAIT_REJECTED) js_throw(js, result);
     else if (await_status == JS_REACTOR_AWAIT_INVALID) result = js_mkerr(js, "invalid top-level await completion");
   } else {
-    js_eval_async_entry_release(evaluation.async_entry);
+    coroutine_release(evaluation.async_coro);
     js_reactor_pump_repl_nowait(js);
   }
 

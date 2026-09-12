@@ -20266,9 +20266,9 @@ sv_func_t *js_compile_parsed_bytecode(
 
 ant_value_t js_execute_compiled_bytecode(
   ant_t *js, sv_func_t *func,
-  js_async_entry_t **async_entry_out
+  coroutine_t **async_coro_out
 ) {
-  if (async_entry_out) *async_entry_out = NULL;
+  if (async_coro_out) *async_coro_out = NULL;
   js_clear_error_site(js);
 
   ant_value_t result;
@@ -20277,7 +20277,7 @@ ant_value_t js_execute_compiled_bytecode(
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla)
-    result = sv_start_tla(js, func, js->this_val, async_entry_out);
+    result = sv_start_tla(js, func, js->this_val, async_coro_out);
   else result = sv_execute_entry(js->vm, func, js->this_val, NULL, 0);
 
   js->this_val = saved_this;
@@ -20319,7 +20319,7 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
     
     return (js_eval_result_t){
       .value = value,
-      .async_entry = NULL,
+      .async_coro = NULL,
       .kind = JS_EVAL_COMPLETE,
     };
   }
@@ -20334,20 +20334,20 @@ static inline js_eval_result_t js_eval_bytecode_mode_result(
     
     return (js_eval_result_t){
       .value = value,
-      .async_entry = NULL,
+      .async_coro = NULL,
       .kind = JS_EVAL_COMPLETE,
     };
   }
 
-  js_async_entry_t *async_entry = NULL;
+  coroutine_t *async_coro = NULL;
   ant_value_t value = sv_compile_mode_is_eval(mode)
     ? js_execute_compiled_eval_bytecode(js, func, eval_this, eval_env, new_target)
-    : js_execute_compiled_bytecode(js, func, mode == SV_COMPILE_REPL ? &async_entry : NULL);
+    : js_execute_compiled_bytecode(js, func, mode == SV_COMPILE_REPL ? &async_coro : NULL);
   
   return (js_eval_result_t){
     .value = value,
-    .async_entry = async_entry,
-    .kind = async_entry ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
+    .async_coro = async_coro,
+    .kind = async_coro ? JS_EVAL_ASYNC_ENTRY : JS_EVAL_COMPLETE,
   };
 }
 

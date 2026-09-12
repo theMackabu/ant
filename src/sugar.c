@@ -5,8 +5,6 @@
 #include "modules/timer.h"
 #include "silver/engine.h"
 
-struct js_async_entry { coroutine_t *coro; };
-
 static void destroy_coroutine_resources(coroutine_t *coro) {
   if (!coro) return;
   if (coro->js) gc_forget_coroutine(coro->js, coro);
@@ -61,37 +59,14 @@ void coroutine_unhold(coroutine_t *coro, uint8_t hold) {
   coroutine_release(coro);
 }
 
-js_async_entry_t *js_eval_async_entry_create(coroutine_t *coro) {
-  if (!coro) return NULL;
+bool coroutine_cancel(coroutine_t *coro) {
+  if (!coro) return false;
 
-  js_async_entry_t *entry = malloc(sizeof(*entry));
-  if (!entry) return NULL;
-
-  entry->coro = coro;
-  coroutine_retain(coro);
-  
-  return entry;
-}
-
-bool js_eval_async_entry_cancel(js_async_entry_t *entry) {
-  if (!entry || !entry->coro) return false;
-
-  coroutine_t *coro = entry->coro;
-  entry->coro = NULL;
-  
   bool suspended = coro->await_registered ||
     (coro->act && coro->act->frame_count > 0);
-    
-  coroutine_clear_await_registration(coro);
-  coroutine_release(coro);
-  
-  return suspended;
-}
 
-void js_eval_async_entry_release(js_async_entry_t *entry) {
-  if (!entry) return;
-  if (entry->coro) coroutine_release(entry->coro);
-  free(entry);
+  coroutine_clear_await_registration(coro);
+  return suspended;
 }
 
 void coroutine_clear_await_registration(coroutine_t *coro) {
@@ -106,12 +81,6 @@ void coroutine_clear_await_registration(coroutine_t *coro) {
     js_promise_clear_await_coroutine(js, promise, coro);
 
   coroutine_unhold(coro, CORO_HOLD_AWAIT);
-}
-
-void free_coroutine(coroutine_t *coro) {
-  if (!coro) return;
-  coroutine_clear_await_registration(coro);
-  coroutine_release(coro);
 }
 
 static void coroutine_activate(ant_t *js, coroutine_t *coro) {
