@@ -7,13 +7,10 @@ static uint8_t jit_bailout_slot_type(jit_vstack_t *vs, int idx,
   return vs->slot_type ? vs->slot_type[idx] : SLOT_BOXED;
 }
 
-void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
-                         const jit_bailout_emit_t *bail) {
+static void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn, const jit_bailout_emit_t *bail) {
   if (!bail->dnum_locals) return;
   for (int i = 0; i < bail->n_locals; i++)
-    if (bail->dnum_locals[i])
-      mir_d_to_i64(ctx, fn, bail->local_regs[i], bail->local_d_regs[i],
-                   bail->d_slot);
+    if (bail->dnum_locals[i]) mir_d_to_i64(ctx, fn, bail->local_regs[i], bail->local_d_regs[i], bail->d_slot);
 }
 
 void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,

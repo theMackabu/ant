@@ -1,9 +1,9 @@
 #include "compile.h"
 #include <time.h>
 
-static void jit_emit_resume_tramp(jit_compile_t *c, MIR_label_t tramp, MIR_item_t imp,
-                                const char *res_name) {
-  MIR_append_insn(c->ctx, c->jit_func, tramp);
+static void jit_emit_resume_tramp(jit_compile_t *c, const jit_bailout_emit_t *bail, MIR_item_t imp, const char *res_name) {
+  mir_emit_bailout_spill_block(c->ctx, c->jit_func, bail);
+  MIR_append_insn(c->ctx, c->jit_func, bail->tramp);
 
   if (c->r_jit_open_upvalues) {
     MIR_append_insn(c->ctx, c->jit_func,
@@ -387,15 +387,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
-  if (c->needs_bailout) {
-    mir_emit_bailout_spill_block(c->ctx, c->jit_func, &c->bailout_ctx);
-    jit_emit_resume_tramp(c, c->bailout_tramp, c->imp_resume, "resume_res");
-  }
-  
-  if (c->needs_promote) {
-    mir_emit_bailout_spill_block(c->ctx, c->jit_func, &c->promote_ctx);
-    jit_emit_resume_tramp(c, c->promote_tramp, c->imp_promote_resume, "promote_res");
-  }
+  if (c->needs_bailout) jit_emit_resume_tramp(c, &c->bailout_ctx, c->imp_resume, "resume_res");
+  if (c->needs_promote) jit_emit_resume_tramp(c, &c->promote_ctx, c->imp_promote_resume, "promote_res");
 
   MIR_finish_func(c->ctx);
   MIR_finish_module(c->ctx);

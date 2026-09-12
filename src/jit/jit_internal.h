@@ -210,8 +210,6 @@ void vstack_rebox_binop_operands(
     jit_vstack_t *vs, MIR_context_t ctx, MIR_item_t fn,
     uint8_t lhs_type, uint8_t rhs_type,
     MIR_reg_t d_slot);
-void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
-                         const jit_bailout_emit_t *bail);
 void mir_emit_bailout_spill_block(MIR_context_t ctx, MIR_item_t fn,
                                   const jit_bailout_emit_t *bail);
 void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
