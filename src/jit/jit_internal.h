@@ -94,6 +94,7 @@ typedef struct {
 typedef struct {
   MIR_reg_t val, off, sp;
   MIR_label_t tramp;
+  MIR_label_t spill;
   MIR_reg_t args_buf;
   jit_vstack_t *vstack;
   MIR_reg_t *local_regs, *local_d_regs;
@@ -209,8 +210,8 @@ void vstack_rebox_binop_operands(
     jit_vstack_t *vs, MIR_context_t ctx, MIR_item_t fn,
     uint8_t lhs_type, uint8_t rhs_type,
     MIR_reg_t d_slot);
-void mir_emit_dnum_rebox(MIR_context_t ctx, MIR_item_t fn,
-                         const jit_bailout_emit_t *bail);
+void mir_emit_bailout_spill_block(MIR_context_t ctx, MIR_item_t fn,
+                                  const jit_bailout_emit_t *bail);
 void mir_emit_bailout_jump_typed(MIR_context_t ctx, MIR_item_t fn,
                                  int bc_off, int pre_op_sp,
                                  const jit_bailout_emit_t *bail,

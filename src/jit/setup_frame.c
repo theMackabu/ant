@@ -529,6 +529,7 @@ bool jit_setup_frame(jit_compile_t *c) {
     .off = c->r_bailout_off,
     .sp = c->r_bailout_sp,
     .tramp = c->bailout_tramp,
+    .spill = c->needs_bailout ? MIR_new_label(c->ctx) : NULL,
     .args_buf = c->r_args_buf,
     .vstack = &c->vs,
     .local_regs = c->local_regs,
@@ -543,13 +544,15 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->promote_tramp = MIR_new_label(c->ctx);
     c->promote_ctx = c->bailout_ctx;
     c->promote_ctx.tramp = c->promote_tramp;
+    c->promote_ctx.spill = MIR_new_label(c->ctx);
 
     c->promote_sites = calloc((size_t)c->func->code_len, 1);
     if (c->promote_sites) {
       uint8_t *code = c->func->code;
       int n = 0, cap = 16;
       int (*edges)[2] = malloc((size_t)cap * sizeof(*edges));
-      for (int off = 0; edges && off < c->func->code_len; ) {
+      bool edges_ok = edges != NULL;
+      for (int off = 0; edges_ok && off < c->func->code_len; ) {
         uint8_t op = code[off];
         int sz = sv_op_size[op];
         if (sz == 0) break;
@@ -558,19 +561,29 @@ bool jit_setup_frame(jit_compile_t *c) {
         if (flags & SV_OPF_JIT_BRANCH32) target = off + sz + sv_get_i32(code + off + 1);
         else if (flags & SV_OPF_JIT_BRANCH8) target = off + sz + (int8_t)sv_get_i8(code + off + 1);
         if (target >= 0 && target <= off) {
-          if (n == cap) { cap *= 2; edges = realloc(edges, (size_t)cap * sizeof(*edges)); if (!edges) break; }
+          if (n == cap) {
+            int (*grown)[2] = realloc(edges, (size_t)cap * 2 * sizeof(*edges));
+            if (!grown) { edges_ok = false; break; }
+            edges = grown;
+            cap *= 2;
+          }
           edges[n][0] = target; edges[n][1] = off; n++;
         }
         off += sz;
       }
-      for (int i = 0; edges && i < n; i++) {
-        bool nested = false, has_inner = false;
-        for (int j = 0; j < n; j++) {
-          if (j == i) continue;
-          if (edges[j][0] <= edges[i][0] && edges[j][1] >= edges[i][1]) nested = true;
-          if (edges[i][0] <= edges[j][0] && edges[j][1] <= edges[i][1]) has_inner = true;
+      if (edges_ok) {
+        for (int i = 0; i < n; i++) {
+          bool nested = false, has_inner = false;
+          for (int j = 0; j < n; j++) {
+            if (j == i) continue;
+            if (edges[j][0] <= edges[i][0] && edges[j][1] >= edges[i][1]) nested = true;
+            if (edges[i][0] <= edges[j][0] && edges[j][1] <= edges[i][1]) has_inner = true;
+          }
+          c->promote_sites[edges[i][1]] = nested ? 0 : has_inner ? 2 : 1;
         }
-        c->promote_sites[edges[i][1]] = nested ? 0 : has_inner ? 2 : 1;
+      } else {
+        free(c->promote_sites);
+        c->promote_sites = NULL;
       }
       free(edges);
     }

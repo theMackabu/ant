@@ -182,8 +182,7 @@ void jit_emit_strings(jit_compile_t *c) {
             (!c->known_type_locals || c->known_type_locals[local_idx] != SV_TI_NUM)) {
           MIR_label_t flat_append_slow = MIR_new_label(c->ctx);
           flat_append_done = MIR_new_label(c->ctx);
-          mir_emit_string_concat_fastpath(c->ctx, c->jit_func, c->r_js, lhs, rhs, c->r_tmp,
-                                          flat_append_slow, 0, c->bc_off, true);
+          mir_emit_string_concat_fastpath(c->ctx, c->jit_func, c->r_js, lhs, rhs, c->r_tmp, flat_append_slow, -1, c->bc_off, true);
           MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_reg_op(c->ctx, c->local_regs[local_idx]), MIR_new_reg_op(c->ctx, c->r_tmp)));
           MIR_append_insn(c->ctx, c->jit_func, MIR_new_insn(c->ctx, MIR_MOV, MIR_new_mem_op(c->ctx, MIR_JSVAL, (MIR_disp_t)((size_t)local_idx * sizeof(ant_value_t)), c->r_lbuf, 0, 1), MIR_new_reg_op(c->ctx, c->r_tmp)));
           mir_load_imm(c->ctx, c->jit_func, c->r_err_tmp, js_mkundef());
