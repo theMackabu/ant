@@ -17561,7 +17561,7 @@ static ant_value_t js_create_import_meta_for_context(
   if (is_err(import_meta)) return import_meta;
   js_set_slot_wb(js, import_meta, SLOT_MODULE_CTX, module_ctx);
 
-  bool is_url = esm_is_url(filename);
+  bool is_url = esm_is_url(filename) || esm_is_data_url(filename);
   bool is_builtin = esm_has_builtin_scheme(filename);
 
   ant_value_t url_val = (is_url || is_builtin)
@@ -17586,8 +17586,10 @@ static ant_value_t js_create_import_meta_for_context(
   if (filename_copy) {
     char *file = (is_url || is_builtin) ? strrchr(filename_copy, '/') : NULL;
     file = (is_url || is_builtin) ? (file ? file + 1 : filename_copy) : basename(filename_copy);
-    ant_value_t file_val = js_mkstr(js, file, strlen(file));
-    if (!is_err(file_val)) setprop_cstr(js, import_meta, "file", 4, file_val);
+    if (file) {
+      ant_value_t file_val = js_mkstr(js, file, strlen(file));
+      if (!is_err(file_val)) setprop_cstr(js, import_meta, "file", 4, file_val);
+    }
     free(filename_copy);
   }
 
