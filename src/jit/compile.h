@@ -270,6 +270,10 @@ typedef struct jit_compile {
   bool use_jit_upvalue_list;
   jit_bailout_emit_t bailout_ctx;
   jit_bailout_emit_t promote_ctx;
+  uint8_t *loop_ops;
+  int promote_inline_ops, promote_helper_ops;
+  struct { MIR_insn_t start, end; } *promote_checks;
+  int promote_check_count, promote_check_cap;
   jit_label_map_t lm;
   osr_entry_map_t osr_map;
   jit_try_entry_t jit_try_stack[JIT_TRY_MAX];

@@ -266,9 +266,25 @@ allocated when a deopt-capable op exists, so a cold loop of plain method
 calls segfaulted at the budget (cold tier now forces both); a cold-code
 deopt left `jit_code_cold` set and so bought a hot recompile of the same
 bailout (cleared on deopt, predicate named `sv_jit_promote_pending`).
-Known limits left open: promotion is a pure ~40 ms loss on loops the hot tier cannot
-speed up (helper-bound bodies such as integer `%`); each backward jump
-emits a full spill block, +12% cold compile time at 12 loops.
+Promotion is skipped where it cannot pay. Hot and cold code differ only
+in MIR's optimization level, so the hot tier only speeds up loops whose
+time is in inline code; a loop dominated by calls into C helpers (integer
+`%`, `Math.*`, string and regexp ops) runs at the same speed on both, and
+promoting it cost a 40 ms hot compile for nothing (11% on a 340 ms modulo
+loop). The cold compile now weighs each op inside a loop by its emitted
+MIR: an op with a call before its first unconditional jump is on a helper
+path and counts `JIT_PROMOTE_HELPER_WEIGHT` (16) inline ops; if helper
+weight reaches inline weight the emitted promote checks are removed again
+and the function never promotes (`jit: promote disabled` under op-warn).
+Reading the emitted code rather than an opcode list keeps the estimate
+true as emitters change. Calibration: the modulo loop is 12 inline ops to
+1 helper (disabled), the N-body inner loop ~40 to 1 (promotes); on
+bench-v8 it declines only the regexp blocks and Crypto's string parser.
+The modulo loop now matches the cold-only binary (200 to 214 ms against
+204 to 218). Regression: the helper-bound case in the test.
+
+Known limit left open: each backward jump emits a full spill block, +12%
+cold compile time at 12 loops.
 
 Two pre-existing cliffs surfaced while probing this, neither caused here
 and both left as follow-ups:

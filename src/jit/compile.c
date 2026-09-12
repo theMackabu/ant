@@ -353,6 +353,17 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
         break;
     }
 
+    if (c->loop_ops && c->loop_ops[c->bc_off] && !(sv_op_flags[c->op] & (SV_OPF_JIT_BRANCH32 | SV_OPF_JIT_BRANCH8))) {
+      bool helper = false;
+      
+      for (MIR_insn_t insn = DLIST_NEXT(MIR_insn_t, c->previous_insn); insn; insn = DLIST_NEXT(MIR_insn_t, insn)) {
+        if (insn->code == MIR_JMP) break;
+        if (MIR_call_code_p(insn->code)) { helper = true; break; }
+      }
+      
+      if (helper) c->promote_helper_ops++; else c->promote_inline_ops++;
+    }
+    
     for (MIR_insn_t insn = DLIST_NEXT(MIR_insn_t, c->previous_insn); insn;
          insn = DLIST_NEXT(MIR_insn_t, insn)) {
       if (c->op != OP_GET_ELEM && MIR_call_code_p(insn->code)) c->element_available = false;
@@ -384,6 +395,26 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
     jit_emit_exit_ret(c, MIR_new_uint_op(c->ctx, mkval(kTypeUndefined, 0)));
   }
 
+  if (c->needs_promote &&
+      c->promote_inline_ops <= c->promote_helper_ops * JIT_PROMOTE_HELPER_WEIGHT) {
+    for (int i = 0; i < c->promote_check_count; i++) {
+      MIR_insn_t insn = DLIST_NEXT(MIR_insn_t, c->promote_checks[i].start);
+      MIR_insn_t last = c->promote_checks[i].end;
+      while (insn) {
+        MIR_insn_t next = insn == last ? NULL : DLIST_NEXT(MIR_insn_t, insn);
+        MIR_remove_insn(c->ctx, c->jit_func, insn);
+        insn = next;
+      }
+    }
+    
+    if (sv_jit_warn_unlikely) fprintf(
+      stderr, "jit: promote disabled func=%s inline=%d helper=%d\n",
+      c->func->debug->name ? c->func->debug->name : "<anonymous>",
+      c->promote_inline_ops, c->promote_helper_ops
+    );
+    
+    c->needs_promote = false;
+  }
   if (c->needs_bailout) jit_emit_resume_tramp(c, c->bailout_tramp, c->imp_resume, "resume_res");
   if (c->needs_promote) jit_emit_resume_tramp(c, c->promote_tramp, c->imp_promote_resume, "promote_res");
 
@@ -413,6 +444,8 @@ sv_jit_func_t sv_jit_compile_tier(ant_t *js, sv_func_t *func, sv_closure_t *hint
   free(c->captured_params);
   free(c->captured_locals);
   free(c->feat.builder_target_slots);
+  free(c->loop_ops);
+  free(c->promote_checks);
 
   if (!c->ok) {
     if (sv_jit_warn_unlikely) fprintf(

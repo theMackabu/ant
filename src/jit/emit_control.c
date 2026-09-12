@@ -2,6 +2,7 @@
 
 static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop) {
   MIR_reg_t r_due = c->r_tmp2;
+  MIR_insn_t start = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
   MIR_append_insn(c->ctx, c->jit_func,
                   MIR_new_insn(c->ctx, MIR_ADD, MIR_new_reg_op(c->ctx, c->r_promote),
                                MIR_new_reg_op(c->ctx, c->r_promote), MIR_new_int_op(c->ctx, 1)));
@@ -35,6 +36,14 @@ static void jit_emit_promote_check(jit_compile_t *c, MIR_label_t loop) {
   mir_emit_bailout_jump_typed(c->ctx, c->jit_func, c->bc_off, c->vs.sp, &c->promote_ctx,
                               -1, SLOT_BOXED, -1, SLOT_BOXED);
   c->needs_promote = true;
+  if (c->promote_check_count == c->promote_check_cap) {
+    c->promote_check_cap = c->promote_check_cap ? c->promote_check_cap * 2 : 8;
+    c->promote_checks = realloc(c->promote_checks,
+                                (size_t)c->promote_check_cap * sizeof(*c->promote_checks));
+  }
+  c->promote_checks[c->promote_check_count].start = start;
+  c->promote_checks[c->promote_check_count].end = DLIST_TAIL(MIR_insn_t, c->jit_func->u.func->insns);
+  c->promote_check_count++;
 }
 
 void jit_emit_control(jit_compile_t *c) {

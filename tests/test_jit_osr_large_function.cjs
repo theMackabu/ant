@@ -128,4 +128,26 @@ console.log('done');
   if (!lines.some(line => line.startsWith('jit: osr compiled func=benchNbody') && line.includes('tier=hot')))
     throw new Error(`repeated calls: expected a hot OSR recompile, got:\n${lines.join('\n')}`);
 }
+
+// A loop whose time is in helper calls (integer % has no inline path) gains
+// nothing from the hot tier, so the cold compile must not emit the promote
+// check at all, however long the loop runs. The body is padded past 512
+// bytes so the function takes the cold tier; 40M iterations is ~700 ms,
+// three times the budget.
+const pad = Array.from({ length: 56 }, (_, i) => `var p${i} = s * ${i + 2};`).join(' ') +
+  ' var z = (' + Array.from({ length: 56 }, (_, i) => `p${i}`).join(' + ') + ') * 0;';
+const helperBound = String.raw`
+function modLoop(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + i * 7) % 1000003; ${pad} return s + z; }
+if (modLoop(40000000) !== 50820) throw new Error('mod loop checksum mismatch');
+console.log('done');
+`;
+{
+  const lines = run(helperBound);
+  if (!lines.some(line => line.startsWith('jit: osr compiled func=modLoop') && line.includes('tier=cold')))
+    throw new Error(`helper-bound: expected a cold OSR compile, got:\n${lines.join('\n')}`);
+  if (!lines.some(line => line.startsWith('jit: promote disabled func=modLoop')))
+    throw new Error(`helper-bound: expected promotion to be disabled, got:\n${lines.join('\n')}`);
+  if (lines.some(line => line.startsWith('jit: promote func=modLoop')))
+    throw new Error(`helper-bound: must not promote:\n${lines.join('\n')}`);
+}
 console.log('jit-osr-large-function: ok');

@@ -543,6 +543,22 @@ bool jit_setup_frame(jit_compile_t *c) {
     c->promote_tramp = MIR_new_label(c->ctx);
     c->promote_ctx = c->bailout_ctx;
     c->promote_ctx.tramp = c->promote_tramp;
+    c->loop_ops = calloc((size_t)c->func->code_len, 1);
+    if (c->loop_ops) {
+      uint8_t *code = c->func->code;
+      for (int off = 0; off < c->func->code_len; ) {
+        uint8_t op = code[off];
+        int sz = sv_op_size[op];
+        if (sz == 0) break;
+        uint16_t flags = sv_op_flags[op];
+        int target = -1;
+        if (flags & SV_OPF_JIT_BRANCH32) target = off + sz + sv_get_i32(code + off + 1);
+        else if (flags & SV_OPF_JIT_BRANCH8) target = off + sz + (int8_t)sv_get_i8(code + off + 1);
+        if (target >= 0 && target <= off)
+          memset(c->loop_ops + target, 1, (size_t)(off - target + 1));
+        off += sz;
+      }
+    }
     c->r_promote = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_edges");
     c->r_promote_t0 = MIR_new_func_reg(c->ctx, c->jit_func->u.func, MIR_T_I64, "promote_t0");
     MIR_append_insn(c->ctx, c->jit_func,
